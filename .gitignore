@@ -1,0 +1,6 @@
+
+*.pdf
+
+/test_events
+*/__pycache__
+/autodiff_datasets
