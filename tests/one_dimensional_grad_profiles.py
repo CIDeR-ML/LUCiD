@@ -55,7 +55,7 @@ def one_dimensional_grad_profiles(detector, true_indices, true_times, detector_p
         
         return results
 
-    Nsteps = 2
+    Nsteps = 11
 
     # Test 1: Cone opening angle
     cone_results = test_parameter('cone_opening', true_params, jnp.linspace(20, 60, Nsteps))

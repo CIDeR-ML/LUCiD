@@ -16,7 +16,7 @@ from tools.visualization import *
 # Set default values
 default_evt_ID = 0
 default_filename = 'datasets/sim_mode_0_dataset_0_events.h5'
-default_json_filename = 'confg/cyl_geom_config.json'
+default_json_filename = 'config/cyl_geom_config.json'
 
 # Parse command-line arguments
 parser = argparse.ArgumentParser(description='Description of your program')

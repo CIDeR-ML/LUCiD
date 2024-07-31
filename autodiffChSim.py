@@ -31,11 +31,11 @@ directory = 'output_plots'
 if not os.path.exists(directory):
     os.makedirs(directory)
 
-Nphot = 200
+Nphot = 2000
 
 def main():
     # Set default values
-    default_json_filename = 'confg/cyl_geom_config.json'
+    default_json_filename = 'config/cyl_geom_config.json'
     output_filename = 'autodiff_datasets/data_events.h5'
     
     # Parse command-line arguments
