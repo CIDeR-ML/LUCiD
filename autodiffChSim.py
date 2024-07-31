@@ -31,7 +31,7 @@ directory = 'output_plots'
 if not os.path.exists(directory):
     os.makedirs(directory)
 
-Nphot = 2000
+Nphot = 10000
 
 def main():
     # Set default values
