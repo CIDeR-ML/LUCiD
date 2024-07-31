@@ -57,9 +57,9 @@ def show_2D_display(ID_to_position, ID_to_PE, ID_to_case, cyl_sensor_radius, cyl
     margin = 0.05
 
     all_pos = np.array(all_pos)
-    print(min(all_pos[:,0]),max(all_pos[:,0]))
-    print(min(all_pos[:,1]),max(all_pos[:,1]))
-    print(min(all_pos[:,2]),max(all_pos[:,2]))
+    # print(min(all_pos[:,0]),max(all_pos[:,0]))
+    # print(min(all_pos[:,1]),max(all_pos[:,1]))
+    # print(min(all_pos[:,2]),max(all_pos[:,2]))
 
     ax.set_facecolor("black")
 
