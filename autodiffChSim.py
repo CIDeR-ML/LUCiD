@@ -69,12 +69,13 @@ def main():
         true_indices, _, true_times, true_cone_opening, true_track_origin, true_track_direction = load_data(output_filename)
         
         detector_points = jnp.array(detector.all_points)
-        detector_radius = detector.S_radius
+        detector_radius = detector.r
+        detector_height = detector.H
         
         true_params = [true_cone_opening, true_track_origin, true_track_direction]
 
         one_dimensional_grad_profiles(
-            detector, true_indices, true_times, detector_points, detector_radius, Nphot, true_params
+            detector, true_indices, true_times, detector_points, detector_radius, detector_height, Nphot, true_params
         )
 
     else:

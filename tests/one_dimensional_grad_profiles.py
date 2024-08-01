@@ -5,10 +5,10 @@ import jax
 from tools.losses import *
 from jax import random
 
-def one_dimensional_grad_profiles(detector, true_indices, true_times, detector_points, detector_radius, Nphot, true_params, use_time_loss):
+def one_dimensional_grad_profiles(detector, true_indices, true_times, detector_points, detector_radius, detector_height, Nphot, true_params):
     def test_parameter(param_name, true_params, param_range, param_index=None):
         results = []
-        loss_and_grad = jax.value_and_grad(combined_loss_function, argnums=(2, 3, 4))
+        loss_and_grad = jax.value_and_grad(smooth_combined_loss_function, argnums=(2, 3, 4))
         
         for i, param_value in enumerate(param_range):
             print(i)
@@ -32,7 +32,7 @@ def one_dimensional_grad_profiles(detector, true_indices, true_times, detector_p
             
             key = random.PRNGKey(0)
             loss, (grad_cone, grad_origin, grad_direction) = loss_and_grad(
-                true_indices, true_times, *params, detector_points, detector_radius, Nphot, key, use_time_loss
+                true_indices, true_times, *params, detector_points, detector_radius, detector_height, Nphot, key
             )
 
             if param_name == 'cone_opening':
@@ -55,10 +55,10 @@ def one_dimensional_grad_profiles(detector, true_indices, true_times, detector_p
         
         return results
 
-    Nsteps = 11
+    Nsteps = 51
 
     # Test 1: Cone opening angle
-    cone_results = test_parameter('cone_opening', true_params, jnp.linspace(20, 60, Nsteps))
+    cone_results = test_parameter('cone_opening', true_params, jnp.linspace(30, 50, Nsteps))
 
     # Test 2: X component of track origin
     origin_x_results = test_parameter('track_origin_x', true_params, jnp.linspace(0, 2, Nsteps), 0)
@@ -70,6 +70,8 @@ def one_dimensional_grad_profiles(detector, true_indices, true_times, detector_p
         param_values = [r['param_value'] for r in results]
         losses = [r['loss'] for r in results]
         grads = [r['grad'] for r in results]
+        print(min(grads), max(grads))
+        print(grads)
 
         fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(6, 6), sharex=True)
         
@@ -96,9 +98,9 @@ def one_dimensional_grad_profiles(detector, true_indices, true_times, detector_p
     true_track_direction = true_params[2]
 
     # In the main function, modify the calls to plot_results:
-    plot_results('output_plots/test1.pdf', cone_results, 'Cone Opening Angle Test', 'Cone Opening Angle (degrees)', true_cone_opening)
-    plot_results('output_plots/test2.pdf', origin_x_results, 'Track Origin X Test', 'Track Origin X', true_track_origin[0])
-    plot_results('output_plots/test3.pdf', direction_y_results, 'Track Direction Y Test', 'Track Direction Y', true_track_direction[1])
+    plot_results('output_plots/test1.png', cone_results, 'Cone Opening Angle Test', 'Cone Opening Angle (degrees)', true_cone_opening)
+    plot_results('output_plots/test2.png', origin_x_results, 'Track Origin X Test', 'Track Origin X', true_track_origin[0])
+    plot_results('output_plots/test3.png', direction_y_results, 'Track Direction Y Test', 'Track Direction Y', true_track_direction[1])
 
 
 

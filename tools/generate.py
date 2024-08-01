@@ -80,12 +80,14 @@ def generate_and_store_event(filename, cone_opening, track_origin, track_directi
     track_origin_jax = jnp.array(track_origin)
     track_direction_jax = jnp.array(track_direction)
     detector_points_jax = jnp.array(detector.all_points)
-    detector_radius_jax = jnp.array(detector.S_radius)
+    detector_radius_jax = jnp.array(detector.r)
+    detector_height_jax = jnp.array(detector.H)
     jax_conversion_end = time.time()
     
     photon_generation_start = time.time()
     closest_points, closest_detector_indices, photon_times = differentiable_photon_pmt_distance(
-        cone_opening_jax, track_origin_jax, track_direction_jax, detector_points_jax, detector_radius_jax, Nphot, key)
+        cone_opening_jax, track_origin_jax, track_direction_jax, detector_points_jax, detector_radius_jax, detector_height_jax , Nphot, key)
+    
     jax.block_until_ready(closest_points)
     jax.block_until_ready(closest_detector_indices)
     jax.block_until_ready(photon_times)
@@ -133,43 +135,116 @@ def generate_and_store_event(filename, cone_opening, track_origin, track_directi
     
     return filename
 
-
-@partial(jax.jit, static_argnums=(5,))
-def differentiable_photon_pmt_distance(cone_opening, track_origin, track_direction, detector_points, detector_radius, Nphot, key):
-    ray_vectors, ray_origins = differentiable_get_rays(track_origin, track_direction, cone_opening, Nphot, key)
-    
-    # closest_points = ray_origins
-    # closest_detector_indices = jnp.ones(Nphot, dtype=jnp.int32)
-    # photon_times = jnp.linalg.norm(closest_points - ray_origins, axis=-1)
-
+@jax.jit
+def propagate_single_photon(ray_vector, ray_origin, detector_points):
     # Calculate the vector from ray origin to each detector
-    ray_to_detector = detector_points[None, :, :] - ray_origins[:, None, :]
+    ray_to_detector = detector_points - ray_origin
     
     # Calculate the dot product of ray vector and ray-to-detector vector
-    dot_product = jnp.sum(ray_vectors[:, None, :] * ray_to_detector, axis=-1)
+    dot_product = jnp.sum(ray_vector * ray_to_detector, axis=-1)
     
-    # Calculate the squared magnitude of ray vectors
-    ray_mag_squared = jnp.sum(ray_vectors ** 2, axis=-1)[:, None]
+    # Calculate the squared magnitude of ray vector
+    ray_mag_squared = jnp.sum(ray_vector ** 2)
     
-    # Calculate the parameter t for the closest point on each ray
+    # Calculate the parameter t for the closest point on the ray
     t = dot_product / ray_mag_squared
     
     # Ensure t is non-negative (closest point is in the direction of the ray)
     t = jnp.maximum(t, 0)
     
     # Calculate the closest points
-    closest_points = ray_origins[:, None, :] + t[:, :, None] * ray_vectors[:, None, :]
+    closest_points = ray_origin + t[:, None] * ray_vector
     
     # Calculate the distances to the closest points
-    distances = jnp.linalg.norm(closest_points - detector_points[None, :, :], axis=-1)
+    distances = jnp.linalg.norm(closest_points - detector_points, axis=-1)
     
-    # Find the closest detector for each photon
-    closest_detector_indices = jnp.argmin(distances, axis=1)
+    # Find the closest detector for this photon
+    closest_detector_index = jnp.argmin(distances)
     
-    # Get the actual closest points
-    closest_points = closest_points[jnp.arange(Nphot), closest_detector_indices]
+    # Get the actual closest point
+    closest_point = closest_points[closest_detector_index]
     
-    # Calculate photon times
-    photon_times = jnp.linalg.norm(closest_points - ray_origins, axis=-1)
+    # Calculate photon time
+    photon_time = jnp.linalg.norm(closest_point - ray_origin)
     
-    return closest_points, closest_detector_indices, photon_times
+    return closest_point, closest_detector_index, photon_time
+
+@jax.jit
+def propagate(ray_vectors, ray_origins, detector_points):
+    # Use vmap to apply the single-photon function to all photons
+    return jax.vmap(propagate_single_photon, in_axes=(0, 0, None))(ray_vectors, ray_origins, detector_points)
+
+@partial(jax.jit, static_argnums=(6,))
+def differentiable_photon_pmt_distance(cone_opening, track_origin, track_direction, detector_points, detector_radius, detector_height_jax, Nphot, key):
+    ray_vectors, ray_origins = differentiable_get_rays(track_origin, track_direction, cone_opening, Nphot, key)
+
+    closest_points, closest_detector_indices, photon_times = propagate(ray_vectors, ray_origins, detector_points)
+    
+    enable_reflections = True
+    if not enable_reflections:
+        return closest_points, closest_detector_indices, photon_times
+    
+    # Create masks for different surfaces
+    barrel_mask = (closest_detector_indices < 6720)
+    top_cap_mask = (closest_detector_indices >= 6720) & (closest_detector_indices < 6720 + 1613)
+    bottom_cap_mask = (closest_detector_indices >= 6720 + 1613)
+    
+    # For barrel
+    a = jnp.sum(ray_vectors[:, :2]**2, axis=1)
+    b = 2 * jnp.sum(ray_origins[:, :2] * ray_vectors[:, :2], axis=1)
+    c = jnp.sum(ray_origins[:, :2]**2, axis=1) - detector_radius**2
+    discriminant = b**2 - 4*a*c
+    t_barrel = jnp.where(discriminant >= 0, (-b + jnp.sqrt(discriminant)) / (2*a), jnp.inf)
+    barrel_intersection_points = ray_origins + t_barrel[:, None] * ray_vectors
+    normal_vectors = barrel_intersection_points[:, :2] / detector_radius
+    normal_vectors = jnp.concatenate([normal_vectors, jnp.zeros((Nphot, 1))], axis=1)
+    dot_product = jnp.sum(ray_vectors * normal_vectors, axis=1, keepdims=True)
+    new_ray_vectors_barrel = ray_vectors - 2 * dot_product * normal_vectors
+    
+    # For top cap
+    top_cap_z = detector_height_jax / 2
+    t_top = (top_cap_z - ray_origins[:, 2]) / ray_vectors[:, 2]
+    top_cap_intersection_points = ray_origins + t_top[:, None] * ray_vectors
+    new_ray_vectors_top = ray_vectors.at[:, 2].multiply(-1)
+    
+    # For bottom cap
+    bottom_cap_z = -detector_height_jax / 2
+    t_bottom = (bottom_cap_z - ray_origins[:, 2]) / ray_vectors[:, 2]
+    bottom_cap_intersection_points = ray_origins + t_bottom[:, None] * ray_vectors
+    new_ray_vectors_bottom = ray_vectors.at[:, 2].multiply(-1)
+    
+    # Combine new ray vectors and intersection points
+    new_ray_vectors = jnp.where(barrel_mask[:, None], new_ray_vectors_barrel,
+                                jnp.where(top_cap_mask[:, None], new_ray_vectors_top,
+                                          jnp.where(bottom_cap_mask[:, None], new_ray_vectors_bottom,
+                                                    ray_vectors)))
+    
+    new_ray_origins = jnp.where(barrel_mask[:, None], barrel_intersection_points,
+                                jnp.where(top_cap_mask[:, None], top_cap_intersection_points,
+                                          jnp.where(bottom_cap_mask[:, None], bottom_cap_intersection_points,
+                                                    ray_origins)))
+    
+    # Define a small step size
+    delta = 0.2  # Adjust as needed
+    
+    # Take a small step along the new ray vector direction
+    new_ray_origins = jnp.where(barrel_mask[:, None] | top_cap_mask[:, None] | bottom_cap_mask[:, None], 
+                                new_ray_origins + delta * new_ray_vectors, 
+                                new_ray_origins)
+    
+    # Propagate again for all photons
+    new_closest_points, new_closest_detector_indices, new_photon_times = propagate(new_ray_vectors, new_ray_origins, detector_points)
+    
+    # Calculate the time to reach the reflection point
+    time_to_reflection = jnp.where(barrel_mask, t_barrel,
+                                   jnp.where(top_cap_mask, t_top,
+                                             jnp.where(bottom_cap_mask, t_bottom, 0.0)))
+    
+    # Use the masks to update the results
+    reflection_mask = barrel_mask | top_cap_mask | bottom_cap_mask
+    final_closest_points = jnp.where(reflection_mask[:, None], new_closest_points, closest_points)
+    final_closest_detector_indices = jnp.where(reflection_mask, new_closest_detector_indices, closest_detector_indices)
+    final_photon_times = jnp.where(reflection_mask, time_to_reflection + new_photon_times, photon_times)
+    
+    return final_closest_points, final_closest_detector_indices, final_photon_times
+
