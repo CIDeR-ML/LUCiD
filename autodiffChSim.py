@@ -31,7 +31,7 @@ directory = 'output_plots'
 if not os.path.exists(directory):
     os.makedirs(directory)
 
-Nphot = 10000
+Nphot = 1000
 
 def main():
     # Set default values
@@ -74,7 +74,7 @@ def main():
         true_params = [true_cone_opening, true_track_origin, true_track_direction]
 
         one_dimensional_grad_profiles(
-            detector, true_indices, true_times, detector_points, detector_radius, Nphot, true_params, args.use_time_loss
+            detector, true_indices, true_times, detector_points, detector_radius, Nphot, true_params
         )
 
     else:

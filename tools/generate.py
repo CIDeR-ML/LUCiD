@@ -12,30 +12,6 @@ import time
 def normalize(vector):
     return vector / jnp.linalg.norm(vector)
 
-# @partial(jax.jit, static_argnums=(2,))
-# def generate_vectors_on_cone_surface_jax(R, theta, num_vectors=10, key=random.PRNGKey(0)):
-#     """ Generate vectors on the surface of a cone around R (much faster version). """
-#     R = R / jnp.linalg.norm(R)
-    
-#     # Generate random azimuthal angles from 0 to 2pi
-#     phi_values = random.uniform(key, (num_vectors,), minval=0, maxval=2 * jnp.pi)
-    
-#     # Generate vectors in a plane perpendicular to R
-#     v1 = jnp.array([1.0, 0.0, 0.0])
-#     v1 = v1 - jnp.dot(v1, R) * R
-#     v1 = v1 / jnp.linalg.norm(v1)
-#     v2 = jnp.cross(R, v1)
-    
-#     # Generate vectors on the cone surface
-#     sin_theta, cos_theta = jnp.sin(theta), jnp.cos(theta)
-#     sin_phi, cos_phi = jnp.sin(phi_values), jnp.cos(phi_values)
-    
-#     vectors = (sin_theta * cos_phi[:, None] * v1 +
-#                sin_theta * sin_phi[:, None] * v2 +
-#                cos_theta * R)
-    
-#     return vectors
-
 @partial(jax.jit, static_argnums=(2,3))
 def generate_vectors_on_cone_surface_jax(R, theta, num_vectors=10, key=random.PRNGKey(0)):
     """ Generate vectors on the surface of a cone around R. """
@@ -66,65 +42,6 @@ def generate_vectors_on_cone_surface_jax(R, theta, num_vectors=10, key=random.PR
     return rotated_vectors
 
 
-# def time_function(func, *args, **kwargs):
-#     start_time = time.time()
-#     result = func(*args, **kwargs)
-#     end_time = time.time()
-#     jax.block_until_ready(result)
-#     return result, end_time - start_time
-
-# def check_hits_vectorized_per_track_jax(ray_origin, ray_direction, sensor_radius, points):
-#     # Ensure inputs are JAX arrays
-#     ray_origin_jax = jnp.array(ray_origin, dtype=jnp.float32)
-#     ray_direction_jax = jnp.array(ray_direction, dtype=jnp.float32)
-#     points_jax = jnp.array(points, dtype=jnp.float32)
-
-#     # Calculate vectors from ray origin to all points
-#     vectors_to_points = points_jax - ray_origin_jax[:, None, :]
-
-#     # Project all vectors onto the ray direction
-#     dot_products_numerator = jnp.einsum('ijk,ik->ij', vectors_to_points, ray_direction_jax)
-#     dot_products_denominator = jnp.sum(ray_direction_jax * ray_direction_jax, axis=-1)
-
-#     # Calculate t_values
-#     t_values = dot_products_numerator / dot_products_denominator[:, None]
-
-#     # Calculate the points on the ray closest to the given points
-#     closest_points_on_ray = ray_origin_jax[:, None, :] + t_values[:, :, None] * ray_direction_jax[:, None, :]
-
-#     # Calculate the Euclidean distances between all points and their closest points on the ray
-#     distances = jnp.linalg.norm(points_jax - closest_points_on_ray, axis=2)
-
-#     # Apply the mask
-#     mask = t_values < 0
-#     distances = jnp.where(mask, 999.0, distances)
-
-#     # Find the indices of the minimum distances
-#     indices = jnp.argmin(distances, axis=1)
-
-#     # True if the photon is on the photosensor False otherwise
-#     hit_flag = distances[jnp.arange(indices.size), indices] < sensor_radius
-
-#     # Get the good indices based on sensor_radius
-#     sensor_indices = indices[hit_flag]
-
-#     return sensor_indices, hit_flag, closest_points_on_ray
-
-
-# @partial(jax.jit, static_argnums=(3,))
-# def differentiable_get_rays(track_origin, track_direction, cone_opening, Nphot, key):
-#     # Generate ray vectors
-#     key, subkey = random.split(key)
-#     ray_vectors = generate_vectors_on_cone_surface_jax(track_direction, jnp.radians(cone_opening), Nphot, key=subkey)
-    
-#     # Generate ray origins
-#     key, subkey = random.split(key)
-#     random_lengths = random.uniform(subkey, (Nphot, 1), minval=0, maxval=1)
-#     ray_origins = jnp.ones((Nphot, 3)) * track_origin + random_lengths * track_direction
-    
-#     return ray_vectors, ray_origins
-
-
 @partial(jax.jit, static_argnums=(3,))
 def differentiable_get_rays(track_origin, track_direction, cone_opening, Nphot, key):
     # Generate ray vectors
@@ -137,31 +54,6 @@ def differentiable_get_rays(track_origin, track_direction, cone_opening, Nphot, 
     ray_origins = jnp.ones((Nphot, 3)) * track_origin + random_lengths * track_direction
     
     return ray_vectors, ray_origins
-
-
-
-# @jax.jit
-# def generate_rotation_matrix(vector):
-#     v = normalize(vector)
-#     z = jnp.array([0., 0., 1.])
-#     axis = jnp.cross(z, v)
-#     cos_theta = jnp.dot(z, v)
-#     sin_theta = jnp.linalg.norm(axis)
-    
-#     # Instead of using an if statement, use jnp.where
-#     identity = jnp.eye(3)
-#     flipped = jnp.diag(jnp.array([1., 1., -1.]))
-    
-#     axis = jnp.where(sin_theta > 1e-6, axis / sin_theta, axis)
-#     K = jnp.array([[0, -axis[2], axis[1]],
-#                    [axis[2], 0, -axis[0]],
-#                    [-axis[1], axis[0], 0]])
-    
-#     rotation = identity + sin_theta * K + (1 - cos_theta) * jnp.dot(K, K)
-    
-#     return jnp.where(sin_theta > 1e-6, 
-#                      rotation, 
-#                      jnp.where(cos_theta > 0, identity, flipped))
 
 
 import time

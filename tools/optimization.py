@@ -6,13 +6,8 @@ import time
 from tools.losses import *
 from tools.utils import *
 
-@partial(jit, static_argnums=(7,))
-def jitted_combined_loss_function(true_indices, true_times, cone_opening, track_origin, track_direction, 
-                                  detector_points, detector_radius, Nphot, key, return_individual=False):
-    return combined_loss_function(true_indices, true_times, cone_opening, track_origin, track_direction, 
-                                  detector_points, detector_radius, Nphot, key, return_individual)
 
-loss_and_grad = jax.value_and_grad(jitted_combined_loss_function, argnums=(2, 3, 4))
+loss_and_grad = jax.value_and_grad(smooth_combined_loss_function, argnums=(2, 3, 4))
 
 def optimize_params(detector, true_indices, true_times, true_cone_opening, true_track_origin, true_track_direction, cone_opening, track_origin, track_direction, Nphot):
     log = Logger()
@@ -33,7 +28,7 @@ def optimize_params(detector, true_indices, true_times, true_cone_opening, true_
         A = time.time()
         loss, (grad_cone, grad_origin, grad_direction) = loss_and_grad(
             true_indices, true_times, cone_opening, track_origin, track_direction, 
-            detector_points, detector_radius, Nphot, key, False
+            detector_points, detector_radius, Nphot, key
         )
         print('this iteration time: ', time.time()-A, ' seconds.')
         Scale = 1
