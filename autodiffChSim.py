@@ -31,7 +31,7 @@ directory = 'output_plots'
 if not os.path.exists(directory):
     os.makedirs(directory)
 
-Nphot = 1000
+Nphot = 2000
 
 def main():
     # Set default values
@@ -86,9 +86,10 @@ def main():
         log = Logger()
 
         # Start with random parameters for inference
-        cone_opening = np.random.uniform(48., 52)
+        cone_opening = np.random.uniform(42., 46)
         track_origin = np.random.uniform(0., 0., size=3)
         track_direction = normalize(np.random.uniform(-1., 1., size=3))
+        track_direction = normalize(np.array([1., 0.3, 0.3]))
 
         optimize_params(detector, true_indices, true_times, true_cone_opening, true_track_origin, true_track_direction, cone_opening, track_origin, track_direction, Nphot)
 
