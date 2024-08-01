@@ -12,7 +12,7 @@ def softmin(x, alpha=1.0):
 
 @partial(jax.jit, static_argnums=(8,))
 def smooth_combined_loss_function(true_indices, true_times, cone_opening, track_origin, track_direction, detector_points, detector_radius, detector_height, Nphot, key):
-    simulated_points, closest_detector_indices, photon_times = differentiable_photon_pmt_distance(
+    simulated_points, closest_detector_indices, photon_times, _ = differentiable_photon_pmt_distance(
         cone_opening, track_origin, track_direction, detector_points, detector_radius, detector_height, Nphot, key
     )
     
