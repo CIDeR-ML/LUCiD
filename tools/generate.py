@@ -98,7 +98,7 @@ def generate_and_store_event(filename, reflection_prob, cone_opening, track_orig
     
     photon_generation_start = time.time()
     closest_points, closest_detector_indices, photon_times, same_detector_count, ray_weights = differentiable_photon_pmt_distance(
-        cone_opening, reflection_prob, track_origin, track_direction, detector_points, detector_radius, detector_height, Nphot, key)
+        reflection_prob, cone_opening, track_origin, track_direction, detector_points, detector_radius, detector_height, Nphot, key)
 
     print(f"Number of photons hitting the same detector after reflection: {same_detector_count}")
     
@@ -174,7 +174,7 @@ def propagate(ray_vectors, ray_origins, detector_points):
 
 
 @partial(jax.jit, static_argnums=(7,))
-def differentiable_photon_pmt_distance(cone_opening, reflection_prob, track_origin, track_direction, detector_points, detector_radius, detector_height, Nphot, key):
+def differentiable_photon_pmt_distance(reflection_prob, cone_opening, track_origin, track_direction, detector_points, detector_radius, detector_height, Nphot, key):
     epsilon = 1e-4  # Small value to prevent division by zero
 
     ray_vectors, ray_origins = differentiable_get_rays(track_origin, track_direction, cone_opening, Nphot, key)
@@ -266,6 +266,6 @@ def differentiable_photon_pmt_distance(cone_opening, reflection_prob, track_orig
     
     # Count how many photons hit the same detector after reflection
     same_detector_count = jnp.sum(reflection_mask & same_detector_mask)
-    ray_weights = vmap(lambda k: gumbel_softmax_sample(0.4, 0.1, k))(keys)
+    ray_weights = vmap(lambda k: gumbel_softmax_sample(reflection_prob, 0.1, k))(keys)
     
     return final_closest_points, final_closest_detector_indices, final_photon_times, same_detector_count, ray_weights
