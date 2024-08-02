@@ -16,6 +16,7 @@ loss_and_grad = jax.value_and_grad(smooth_combined_loss_function, argnums=(2, 3,
 
 def optimize_params(detector, true_indices, true_times, true_reflection_prob, true_cone_opening, true_track_origin, true_track_direction, reflection_prob, cone_opening, track_origin, track_direction, Nphot):
     log = Logger()
+    log.true_ref_prob = true_reflection_prob
     key = random.PRNGKey(0)
     filename = 'test_events/optimization_start.h5'
     generate_and_store_event(filename, reflection_prob, cone_opening, track_origin, track_direction, detector, Nphot, key)
@@ -24,7 +25,7 @@ def optimize_params(detector, true_indices, true_times, true_reflection_prob, tr
     detector_height = detector.H
     
     # Optimization parameters
-    num_iterations = 50
+    num_iterations = 1
     
     best_params = None
     patience_counter = 0
@@ -57,7 +58,8 @@ def optimize_params(detector, true_indices, true_times, true_reflection_prob, tr
         cone_opening -= Scale*10*grad_cone
         track_origin -= Scale*0.05*grad_origin
         track_direction -= Scale*0.02*grad_direction
-        log.add_data(track_origin, track_direction, true_track_direction, true_track_origin, cone_opening, true_cone_opening, loss)
+
+        log.add_data(track_origin, track_direction, true_track_direction, true_track_origin, cone_opening, reflection_prob, loss)
 
 
     print("\nOptimization complete.")

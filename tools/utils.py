@@ -85,27 +85,31 @@ def relative_angle(vector1, vector2):
     return angle_degrees
 
 
+import numpy as np
+import matplotlib.pyplot as plt
+
 class Logger:
     def __init__(self):
         self.reset()
 
     def reset(self):
-        self.origins         = []
-        self.directions      = []
-        self.losses          = []
-        self.dir_err         = []
-        self.ori_err         = []
-        self.ch_angles       = []
-        self.ch_angles_err   = []
+        self.origins = []
+        self.directions = []
+        self.losses = []
+        self.dir_err = []
+        self.ori_err = []
+        self.ch_angles = []
+        self.ref_probs = []
+        self.true_ref_prob = None 
 
-    def add_data(self, origin, direction, true_dir, true_ori, ch_angle, true_ch_angle, loss):
+    def add_data(self, origin, direction, true_dir, true_ori, ch_angle, ref_prob, loss):
         self.origins.append(origin)
         self.directions.append(direction)
         self.losses.append(float(loss))
         self.dir_err.append(relative_angle(true_dir, direction))
         self.ori_err.append(np.linalg.norm(true_ori-origin))
         self.ch_angles.append(ch_angle)
-        self.ch_angles_err.append(true_ch_angle-ch_angle)
+        self.ref_probs.append(ref_prob) 
 
     def plot_angle_err(self):
         plt.plot(range(len(self.dir_err[:])), self.dir_err[:], label='Direction angle error', color='darkorange')
@@ -123,8 +127,8 @@ class Logger:
 
     def plot_ch_angle(self):
         self.expected_cone_opening = 40
-        plt.plot(range(len(self.ch_angles[:])), self.ch_angles[:], color='hotpink')
-        plt.axhline(self.expected_cone_opening, color='darkgray', linestyle='--', label='expected')
+        plt.plot(range(len(self.ch_angles[:])), self.ch_angles[:], label='Reco', color='hotpink')
+        plt.axhline(self.expected_cone_opening, color='darkgray', linestyle='--', label='True')
         plt.xlim(1, len(self.losses))
         plt.ylim(bottom=min(self.expected_cone_opening, min(self.ch_angles[:])) / 1.43, top=max(self.expected_cone_opening, max(self.ch_angles[:])) * 1.3)
         plt.gca().set_xlabel('Iterations')
@@ -138,22 +142,29 @@ class Logger:
         plt.xlim(0, len(self.losses))
         plt.yscale('log')
 
+    def plot_ref_prob(self):
+        plt.plot(range(len(self.ref_probs[:])), self.ref_probs[:], label='Reco', color='limegreen')
+        if self.true_ref_prob is not None:
+            plt.axhline(self.true_ref_prob, color='darkgreen', linestyle='--', label='True')
+        plt.gca().set_xlabel('Iterations')
+        plt.gca().set_ylabel('Reflection Probability')
+        plt.legend(frameon=False, loc='best')
+        plt.ylim(0, 1)
+
     def plot_all(self):
-        plt.figure(figsize=(12, 9))
-
-        plt.subplot(2, 2, 1)
+        plt.figure(figsize=(12, 6))
+        plt.subplot(2, 3, 1)
         self.plot_angle_err()
-
-        plt.subplot(2, 2, 2)
+        plt.subplot(2, 3, 2)
         self.plot_distance_err()
-
-        plt.subplot(2, 2, 3)
+        plt.subplot(2, 3, 3)
         self.plot_ch_angle()
-
-        plt.subplot(2, 2, 4)
+        plt.subplot(2, 3, 4)
+        self.plot_ref_prob()
+        plt.subplot(2, 3, 5)
         self.plot_loss()
-
+        
         plt.tight_layout()
-        plt.savefig('output_plots/optimization_results.pdf')
+        plt.savefig('output_plots/optimization_results.png')
         plt.show()
 
