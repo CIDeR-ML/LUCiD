@@ -53,10 +53,13 @@ def main():
     if args.is_data:
         print('Using data mode')
         # Use specific parameters for data generation
-        true_cone_opening = 40.
-        true_track_origin = np.array([1., 0., 0.])
-        true_track_direction = np.array([1., 0., 0.])
-        #generate_data(json_filename, output_filename, true_cone_opening, true_track_origin, true_track_direction)
+        # true_cone_opening = 40.
+        # true_track_origin = np.array([1., 0., 0.])
+        # true_track_direction = np.array([1., 0., 0.])
+
+        true_cone_opening = np.random.uniform(37., 43)
+        true_track_origin = np.random.uniform(-1., 1., size=3)
+        true_track_direction = normalize(np.random.uniform(-1., 1., size=3))
 
         detector = generate_detector(json_filename)
         key = random.PRNGKey(0)
@@ -80,18 +83,38 @@ def main():
 
     else:
         print('Inference mode')
+
         detector = generate_detector(json_filename)
         true_indices, _, true_times, true_cone_opening, true_track_origin, true_track_direction = load_data(output_filename)
         
-        log = Logger()
+        print('--------------------')
+        print('true_cone_opening: ', true_cone_opening)
+        print('true_track_origin: ', true_track_origin)
+        print('true_track_direction: ', true_track_direction)
+        print('--------------------')
+
 
         # Start with random parameters for inference
         cone_opening = np.random.uniform(42., 46)
         track_origin = np.random.uniform(0., 0., size=3)
         track_direction = normalize(np.random.uniform(-1., 1., size=3))
-        track_direction = normalize(np.array([1., 0.3, 0.3]))
+        
+        use_new_method = True
+        if use_new_method:
+            grid_result  = loss_search_in_grid(detector, output_filename)
+            cone_opening = grid_result[0]
+            track_origin = np.array([grid_result[1], grid_result[2], grid_result[3]])
+            track_direction = np.array([grid_result[4], grid_result[5], grid_result[6]])
+
+            print('--------------------')
+            print('guessed_cone_opening: ',    cone_opening)
+            print('guessed_track_origin: ',    track_origin)
+            print('guessed_track_direction: ', track_direction)
+            print('--------------------')
 
         optimize_params(detector, true_indices, true_times, true_cone_opening, true_track_origin, true_track_direction, cone_opening, track_origin, track_direction, Nphot)
+
+
 
 if __name__ == "__main__":
     stime = time.perf_counter()

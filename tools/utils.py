@@ -3,6 +3,63 @@ import h5py
 import numpy as np
 import matplotlib.pyplot as plt
 
+
+import jax.numpy as jnp
+from itertools import product
+from tqdm import tqdm
+from jax import random
+import jax
+
+from tools.geometry import *
+from tools.losses import *
+
+
+def loss_search_in_grid(detector, true_event_filename='autodiff_datasets/data_events.h5'):
+
+    loss_and_grad = jax.value_and_grad(smooth_combined_loss_function, argnums=(2, 3, 4))
+
+    true_indices, _, true_times, true_cone_opening, true_track_origin, true_track_direction = load_data(true_event_filename)
+
+    detector_points = jnp.array(detector.all_points)
+    detector_radius = detector.r
+    detector_height = detector.H
+
+    key = random.PRNGKey(0)
+
+    # Define grid ranges
+    cone_opening_range = np.linspace(36., 44., 3)
+    track_origin_range = np.linspace(-1., 1., 3)
+    track_direction_range = np.linspace(-1., 1., 3)
+
+    # Create grid
+    grid = list(product(cone_opening_range, 
+                        track_origin_range, track_origin_range, track_origin_range,
+                        track_direction_range, track_direction_range, track_direction_range))
+
+    # Calculate loss for each grid point
+    losses = []
+    for params in tqdm(grid, desc="Calculating grid losses"):
+        cone_opening = params[0]
+        track_origin = np.array(params[1:4])
+        track_direction = normalize(np.array(params[4:]))
+        
+        Nphot = 50
+        loss, _ = loss_and_grad(
+            true_indices, true_times, cone_opening, track_origin, track_direction,
+            detector_points, detector_radius, detector_height, Nphot, key
+        )
+        if loss>0:
+            losses.append(loss)
+        else:
+            losses.append(1000000)
+
+    # Convert to numpy array for easier analysis
+    losses = np.array(losses)
+
+    return np.array(grid)[np.argsort(losses)][0]
+
+
+
 def load_data(filename):
     with h5py.File(filename, 'r') as f:
         hit_pmt = np.array(f['hit_pmt'])
