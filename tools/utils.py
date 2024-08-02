@@ -18,7 +18,7 @@ def loss_search_in_grid(detector, true_event_filename='autodiff_datasets/data_ev
 
     loss_and_grad = jax.value_and_grad(smooth_combined_loss_function, argnums=(2, 3, 4))
 
-    true_indices, _, true_times, true_cone_opening, true_track_origin, true_track_direction = load_data(true_event_filename)
+    true_indices, _, true_times, _, true_cone_opening, true_track_origin, true_track_direction = load_data(true_event_filename)
 
     detector_points = jnp.array(detector.all_points)
     detector_radius = detector.r
@@ -65,11 +65,13 @@ def load_data(filename):
         hit_pmt = np.array(f['hit_pmt'])
         hit_charge = np.array(f['hit_charge'])
         hit_time = np.array(f['hit_time'])
-        true_cone_opening = np.array(f['true_cone_opening'])[0]
-        true_track_origin = np.array(f['true_track_origin'])
-        true_track_direction = np.array(f['true_track_direction'])
 
-    return hit_pmt, hit_charge, hit_time, true_cone_opening, true_track_origin, true_track_direction
+        reflection_prob = np.array(f['reflection_prob'])[0]
+        cone_opening = np.array(f['cone_opening'])[0]
+        track_origin = np.array(f['track_origin'])
+        track_direction = np.array(f['track_direction'])
+
+    return hit_pmt, hit_charge, hit_time, reflection_prob, cone_opening, track_origin, track_direction
 
 def relative_angle(vector1, vector2):
     dot_product = np.dot(vector1, vector2)
