@@ -68,7 +68,7 @@ def differentiable_get_rays(track_origin, track_direction, cone_opening, Nphot, 
 import time
 import jax
 
-def generate_and_store_event(filename, reflection_prob, cone_opening, track_origin, track_direction, detector, Nphot, key):
+def generate_and_store_event(filename, reflection_prob, cone_opening, track_origin, track_direction, num_photons, att_L, trk_L, scatt_L, detector, Nphot, key):
     start_time = time.time()
     
     N_photosensors = len(detector.all_points)
@@ -83,34 +83,43 @@ def generate_and_store_event(filename, reflection_prob, cone_opening, track_orig
         f_outfile.create_dataset("cone_opening", data=np.array([cone_opening]))
         f_outfile.create_dataset("track_origin", data=track_origin)
         f_outfile.create_dataset("track_direction", data=track_direction)
+
+        f_outfile.create_dataset("num_photons", data=num_photons)
+        f_outfile.create_dataset("att_L", data=att_L)
+        f_outfile.create_dataset("trk_L", data=trk_L)
+        f_outfile.create_dataset("scatt_L", data=scatt_L)
+
     file_creation_end = time.time()
     
-    # cone_opening_jax = jnp.array(cone_opening)
-    # track_origin_jax = jnp.array(track_origin)
-    # track_direction_jax = jnp.array(track_direction)
-    # detector_points_jax = jnp.array(detector.all_points)
-    # detector_radius_jax = jnp.array(detector.r)
-    # detector_height_jax = jnp.array(detector.H)
-
     detector_points = jnp.array(detector.all_points)
     detector_radius = jnp.array(detector.r)
     detector_height = jnp.array(detector.H)
     
     photon_generation_start = time.time()
-    closest_points, closest_detector_indices, photon_times, same_detector_count, ray_weights = differentiable_photon_pmt_distance(
+    final_closest_points, final_closest_detector_indices, final_photon_times, same_detector_count, closest_points, closest_detector_indices, photon_times, ray_weights = differentiable_photon_pmt_distance(
         reflection_prob, cone_opening, track_origin, track_direction, detector_points, detector_radius, detector_height, Nphot, key)
 
     print(f"Number of photons hitting the same detector after reflection: {same_detector_count}")
     
+    jax.block_until_ready(final_closest_points)
+    jax.block_until_ready(final_closest_detector_indices)
+    jax.block_until_ready(final_photon_times)
     jax.block_until_ready(closest_points)
     jax.block_until_ready(closest_detector_indices)
     jax.block_until_ready(photon_times)
+    jax.block_until_ready(ray_weights)
     photon_generation_end = time.time()
     
     hit_calculation_start = time.time()
-    hit_flag = jnp.linalg.norm(closest_points - detector_points[closest_detector_indices], axis=1) < detector_radius
-    valid_indices = closest_detector_indices[hit_flag]
-    valid_photon_times = photon_times[hit_flag]
+    # Use ray_weights to choose between reflected and non-reflected data
+    reflection_mask = ray_weights > 0.5
+    selected_points = jnp.where(reflection_mask[:, None], final_closest_points, closest_points)
+    selected_detector_indices = jnp.where(reflection_mask, final_closest_detector_indices, closest_detector_indices)
+    selected_photon_times = jnp.where(reflection_mask, final_photon_times, photon_times)
+
+    hit_flag = jnp.linalg.norm(selected_points - detector_points[selected_detector_indices], axis=1) < detector_radius
+    valid_indices = selected_detector_indices[hit_flag]
+    valid_photon_times = selected_photon_times[hit_flag]
     jax.block_until_ready(hit_flag)
     jax.block_until_ready(valid_indices)
     jax.block_until_ready(valid_photon_times)
@@ -182,13 +191,7 @@ def differentiable_photon_pmt_distance(reflection_prob, cone_opening, track_orig
 
     ray_weights = jnp.ones_like(closest_detector_indices)
     keys = jax.random.split(key, len(ray_weights))
-    
-    enable_reflections = True
-    if not enable_reflections:
-        ray_weights = jnp.ones_like(closest_detector_indices)
-        same_detector_count = 0
-        return closest_points, closest_detector_indices, photon_times, same_detector_count, ray_weights
-    
+
     # Create masks for different surfaces
     barrel_mask = (closest_detector_indices < 6720)
     top_cap_mask = (closest_detector_indices >= 6720) & (closest_detector_indices < 6720 + 1613)
@@ -266,6 +269,8 @@ def differentiable_photon_pmt_distance(reflection_prob, cone_opening, track_orig
     
     # Count how many photons hit the same detector after reflection
     same_detector_count = jnp.sum(reflection_mask & same_detector_mask)
-    ray_weights = vmap(lambda k: gumbel_softmax_sample(reflection_prob, 0.1, k))(keys)
+    ray_weights = vmap(lambda k: gumbel_softmax_sample(reflection_prob, 0.005, k))(keys)
     
-    return final_closest_points, final_closest_detector_indices, final_photon_times, same_detector_count, ray_weights
+    return final_closest_points, final_closest_detector_indices, final_photon_times, same_detector_count, closest_points, closest_detector_indices, photon_times, ray_weights
+
+

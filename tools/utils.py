@@ -16,9 +16,9 @@ from tools.losses import *
 
 def loss_search_in_grid(detector, true_event_filename='autodiff_datasets/data_events.h5'):
 
-    loss_and_grad = jax.value_and_grad(smooth_combined_loss_function, argnums=(2, 3, 4))
+    loss_and_grad = jax.value_and_grad(smooth_combined_loss_function, argnums=(2, 3, 4, 5))
 
-    true_indices, _, true_times, _, true_cone_opening, true_track_origin, true_track_direction = load_data(true_event_filename)
+    true_indices, _, true_times, reflection_prob, cone_opening, track_origin, track_direction = load_data(true_event_filename)
 
     detector_points = jnp.array(detector.all_points)
     detector_radius = detector.r
@@ -44,8 +44,8 @@ def loss_search_in_grid(detector, true_event_filename='autodiff_datasets/data_ev
         track_direction = normalize(np.array(params[4:]))
         
         Nphot = 50
-        loss, _ = loss_and_grad(
-            true_indices, true_times, cone_opening, track_origin, track_direction,
+        loss, (grad_refl_prob, grad_cone, grad_origin, grad_direction) = loss_and_grad(
+            true_indices, true_times, reflection_prob, cone_opening, track_origin, track_direction,
             detector_points, detector_radius, detector_height, Nphot, key
         )
         if loss>0:
@@ -71,7 +71,12 @@ def load_data(filename):
         track_origin = np.array(f['track_origin'])
         track_direction = np.array(f['track_direction'])
 
-    return hit_pmt, hit_charge, hit_time, reflection_prob, cone_opening, track_origin, track_direction
+        num_photons = np.array(f['num_photons'])
+        att_L = np.array(f['att_L'])
+        trk_L = np.array(f['trk_L'])
+        scatt_L = np.array(f['scatt_L'])
+
+    return hit_pmt, hit_charge, hit_time, reflection_prob, cone_opening, track_origin, track_direction, num_photons, att_L, trk_L, scatt_L
 
 def relative_angle(vector1, vector2):
     dot_product = np.dot(vector1, vector2)
@@ -84,10 +89,6 @@ def relative_angle(vector1, vector2):
 
     return angle_degrees
 
-
-import numpy as np
-import matplotlib.pyplot as plt
-
 class Logger:
     def __init__(self):
         self.reset()
@@ -96,51 +97,62 @@ class Logger:
         self.origins = []
         self.directions = []
         self.losses = []
-        self.dir_err = []
-        self.ori_err = []
         self.ch_angles = []
         self.ref_probs = []
-        self.true_ref_prob = None 
+        self.num_photons = []
+        self.att_Ls = []
+        self.trk_Ls = []
+        self.scatt_Ls = []
+        
+        self.true_dir = None
+        self.true_ori = None
+        self.ch_angle = None
+        self.true_ref_prob = None
+        self.true_num_photons = None
+        self.true_att_L = None
+        self.true_trk_L = None
+        self.true_scatt_L = None
 
-    def add_data(self, origin, direction, true_dir, true_ori, ch_angle, ref_prob, loss):
+    #def add_data(self, origin, direction, true_dir, true_ori, ch_angle, ref_prob, num_photons, att_L, trk_L, scatt_L, loss):
+    def add_data(self, origin, direction, ch_angle, ref_prob, att_L, trk_L, scatt_L, num_photons, loss):
         self.origins.append(origin)
         self.directions.append(direction)
         self.losses.append(float(loss))
-        self.dir_err.append(relative_angle(true_dir, direction))
-        self.ori_err.append(np.linalg.norm(true_ori-origin))
         self.ch_angles.append(ch_angle)
-        self.ref_probs.append(ref_prob) 
+        self.ref_probs.append(ref_prob)
+        self.num_photons.append(num_photons)
+        self.att_Ls.append(att_L)
+        self.trk_Ls.append(trk_L)
+        self.scatt_Ls.append(scatt_L)
 
     def plot_angle_err(self):
-        plt.plot(range(len(self.dir_err[:])), self.dir_err[:], label='Direction angle error', color='darkorange')
+        print(np.shape(self.directions))
+        print(np.shape(self.true_dir))
+        print(np.array(self.directions)-np.array(self.true_dir))
+        print( np.linalg.norm(np.array(self.directions)-np.array(self.true_dir), axis=1))
+
+
+        plt.plot(range(len(self.directions[:])), np.linalg.norm(np.array(self.directions)-np.array(self.true_dir), axis=1), label='Direction angle error', color='darkorange')
         plt.gca().set_xlabel('Iterations')
         plt.gca().set_ylabel('Angle Error (degrees)')
         plt.legend(frameon=False, loc='best')
         plt.ylim(bottom=0.)
 
     def plot_distance_err(self):
-        plt.plot(range(len(self.ori_err[:])), self.ori_err[:], label='Origin distance error', color='cornflowerblue')
+        plt.plot(range(len(self.origins[:])), np.linalg.norm(np.array(self.origins)-np.array(self.true_ori), axis=1), label='Origin distance error', color='cornflowerblue')
         plt.gca().set_xlabel('Iterations')
         plt.gca().set_ylabel('Distance Error (meters)')
         plt.legend(frameon=False, loc='best')
         plt.ylim(bottom=0.)
 
     def plot_ch_angle(self):
-        self.expected_cone_opening = 40
         plt.plot(range(len(self.ch_angles[:])), self.ch_angles[:], label='Reco', color='hotpink')
-        plt.axhline(self.expected_cone_opening, color='darkgray', linestyle='--', label='True')
+        plt.axhline(self.ch_angle, color='darkgray', linestyle='--', label='True')
         plt.xlim(1, len(self.losses))
-        plt.ylim(bottom=min(self.expected_cone_opening, min(self.ch_angles[:])) / 1.43, top=max(self.expected_cone_opening, max(self.ch_angles[:])) * 1.3)
+        plt.ylim(bottom=min(self.ch_angle, min(self.ch_angles[:])) / 1.43, top=max(self.ch_angle, max(self.ch_angles[:])) * 1.3)
         plt.gca().set_xlabel('Iterations')
         plt.gca().set_ylabel('Cone Opening')
         plt.legend(frameon=False, loc='best')
-
-    def plot_loss(self):
-        plt.plot(range(len(self.losses[:])), self.losses[:], color='k')
-        plt.gca().set_xlabel('Iterations')
-        plt.gca().set_ylabel('Loss')
-        plt.xlim(0, len(self.losses))
-        plt.yscale('log')
 
     def plot_ref_prob(self):
         plt.plot(range(len(self.ref_probs[:])), self.ref_probs[:], label='Reco', color='limegreen')
@@ -151,20 +163,70 @@ class Logger:
         plt.legend(frameon=False, loc='best')
         plt.ylim(0, 1)
 
+    def plot_num_photons(self):
+        plt.plot(range(len(self.num_photons[:])), self.num_photons[:], label='Reco', color='purple')
+        if self.true_num_photons is not None:
+            plt.axhline(self.true_num_photons, color='darkviolet', linestyle='--', label='True')
+        plt.gca().set_xlabel('Iterations')
+        plt.gca().set_ylabel('Number of Photons')
+        plt.legend(frameon=False, loc='best')
+        plt.ylim(bottom=0)
+
+    def plot_att_L(self):
+        plt.plot(range(len(self.att_Ls[:])), self.att_Ls[:], label='Reco', color='brown')
+        if self.true_att_L is not None:
+            plt.axhline(self.true_att_L, color='darkred', linestyle='--', label='True')
+        plt.gca().set_xlabel('Iterations')
+        plt.gca().set_ylabel('Attenuation Length (m)')
+        plt.legend(frameon=False, loc='best')
+        plt.ylim(bottom=0)
+
+    def plot_trk_L(self):
+        plt.plot(range(len(self.trk_Ls[:])), self.trk_Ls[:], label='Reco', color='teal')
+        if self.true_trk_L is not None:
+            plt.axhline(self.true_trk_L, color='darkcyan', linestyle='--', label='True')
+        plt.gca().set_xlabel('Iterations')
+        plt.gca().set_ylabel('Track Length (m)')
+        plt.legend(frameon=False, loc='best')
+        plt.ylim(bottom=0)
+
+    def plot_scatt_L(self):
+        plt.plot(range(len(self.scatt_Ls[:])), self.scatt_Ls[:], label='Reco', color='olive')
+        if self.true_scatt_L is not None:
+            plt.axhline(self.true_scatt_L, color='darkolivegreen', linestyle='--', label='True')
+        plt.gca().set_xlabel('Iterations')
+        plt.gca().set_ylabel('Scattering Length (m)')
+        plt.legend(frameon=False, loc='best')
+        plt.ylim(bottom=0)
+
+    def plot_loss(self):
+        plt.plot(range(len(self.losses[:])), self.losses[:], color='k')
+        plt.gca().set_xlabel('Iterations')
+        plt.gca().set_ylabel('Loss')
+        plt.xlim(0, len(self.losses))
+        plt.yscale('log')
+
     def plot_all(self):
-        plt.figure(figsize=(12, 6))
-        plt.subplot(2, 3, 1)
+        plt.figure(figsize=(12, 9))
+        plt.subplot(3, 3, 1)
         self.plot_angle_err()
-        plt.subplot(2, 3, 2)
+        plt.subplot(3, 3, 2)
         self.plot_distance_err()
-        plt.subplot(2, 3, 3)
+        plt.subplot(3, 3, 3)
         self.plot_ch_angle()
-        plt.subplot(2, 3, 4)
+        plt.subplot(3, 3, 4)
         self.plot_ref_prob()
-        plt.subplot(2, 3, 5)
+        plt.subplot(3, 3, 5)
+        self.plot_num_photons()
+        plt.subplot(3, 3, 6)
+        self.plot_att_L()
+        plt.subplot(3, 3, 7)
+        self.plot_trk_L()
+        plt.subplot(3, 3, 8)
+        self.plot_scatt_L()
+        plt.subplot(3, 3, 9)
         self.plot_loss()
         
         plt.tight_layout()
         plt.savefig('output_plots/optimization_results.png')
         plt.show()
-
