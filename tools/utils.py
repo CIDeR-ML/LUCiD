@@ -106,7 +106,7 @@ class Logger:
         
         self.true_dir = None
         self.true_ori = None
-        self.ch_angle = None
+        self.true_ch_angle = None
         self.true_ref_prob = None
         self.true_num_photons = None
         self.true_att_L = None
@@ -126,84 +126,86 @@ class Logger:
         self.scatt_Ls.append(scatt_L)
 
     def plot_angle_err(self):
-        print(np.shape(self.directions))
-        print(np.shape(self.true_dir))
-        print(np.array(self.directions)-np.array(self.true_dir))
-        print( np.linalg.norm(np.array(self.directions)-np.array(self.true_dir), axis=1))
-
-
-        plt.plot(range(len(self.directions[:])), np.linalg.norm(np.array(self.directions)-np.array(self.true_dir), axis=1), label='Direction angle error', color='darkorange')
+        plt.plot(range(len(self.directions)), np.linalg.norm(np.array(self.directions)-np.array(self.true_dir), axis=1), label='Direction angle error', color='darkorange')
         plt.gca().set_xlabel('Iterations')
         plt.gca().set_ylabel('Angle Error (degrees)')
         plt.legend(frameon=False, loc='best')
         plt.ylim(bottom=0.)
+        plt.xlim(0, len(self.directions))  # Add this line
 
     def plot_distance_err(self):
-        plt.plot(range(len(self.origins[:])), np.linalg.norm(np.array(self.origins)-np.array(self.true_ori), axis=1), label='Origin distance error', color='cornflowerblue')
+        plt.plot(range(len(self.origins)), np.linalg.norm(np.array(self.origins)-np.array(self.true_ori), axis=1), label='Origin distance error', color='cornflowerblue')
         plt.gca().set_xlabel('Iterations')
         plt.gca().set_ylabel('Distance Error (meters)')
         plt.legend(frameon=False, loc='best')
         plt.ylim(bottom=0.)
+        plt.xlim(0, len(self.origins))  # Add this line
 
     def plot_ch_angle(self):
-        plt.plot(range(len(self.ch_angles[:])), self.ch_angles[:], label='Reco', color='hotpink')
-        plt.axhline(self.ch_angle, color='darkgray', linestyle='--', label='True')
-        plt.xlim(1, len(self.losses))
-        plt.ylim(bottom=min(self.ch_angle, min(self.ch_angles[:])) / 1.43, top=max(self.ch_angle, max(self.ch_angles[:])) * 1.3)
+        plt.plot(range(len(self.ch_angles)), self.ch_angles, label='Reco', color='hotpink')
+        plt.axhline(self.true_ch_angle, color='darkgray', linestyle='--', label='True')
+        plt.xlim(0, len(self.ch_angles))  # Modify this line
+        plt.ylim(bottom=min(self.true_ch_angle, min(self.ch_angles)) / 1.43, top=max(self.true_ch_angle, max(self.ch_angles)) * 1.3)
         plt.gca().set_xlabel('Iterations')
         plt.gca().set_ylabel('Cone Opening')
         plt.legend(frameon=False, loc='best')
 
     def plot_ref_prob(self):
-        plt.plot(range(len(self.ref_probs[:])), self.ref_probs[:], label='Reco', color='limegreen')
+        plt.plot(range(len(self.ref_probs)), self.ref_probs, label='Reco', color='limegreen')
         if self.true_ref_prob is not None:
             plt.axhline(self.true_ref_prob, color='darkgreen', linestyle='--', label='True')
         plt.gca().set_xlabel('Iterations')
         plt.gca().set_ylabel('Reflection Probability')
         plt.legend(frameon=False, loc='best')
         plt.ylim(0, 1)
+        plt.xlim(0, len(self.ref_probs))  # Add this line
 
     def plot_num_photons(self):
-        plt.plot(range(len(self.num_photons[:])), self.num_photons[:], label='Reco', color='purple')
+        plt.plot(range(len(self.num_photons)), self.num_photons, label='Reco', color='purple')
         if self.true_num_photons is not None:
             plt.axhline(self.true_num_photons, color='darkviolet', linestyle='--', label='True')
+        plt.ylim(bottom=min(self.true_num_photons, min(self.num_photons)) / 1.43, top=max(self.true_num_photons, max(self.num_photons)) * 2)
         plt.gca().set_xlabel('Iterations')
         plt.gca().set_ylabel('Number of Photons')
         plt.legend(frameon=False, loc='best')
         plt.ylim(bottom=0)
+        plt.xlim(0, len(self.num_photons))  # Add this line
 
     def plot_att_L(self):
-        plt.plot(range(len(self.att_Ls[:])), self.att_Ls[:], label='Reco', color='brown')
+        plt.plot(range(len(self.att_Ls)), self.att_Ls, label='Reco', color='brown')
         if self.true_att_L is not None:
             plt.axhline(self.true_att_L, color='darkred', linestyle='--', label='True')
         plt.gca().set_xlabel('Iterations')
         plt.gca().set_ylabel('Attenuation Length (m)')
         plt.legend(frameon=False, loc='best')
         plt.ylim(bottom=0)
+        plt.xlim(0, len(self.att_Ls))  # Add this line
 
     def plot_trk_L(self):
-        plt.plot(range(len(self.trk_Ls[:])), self.trk_Ls[:], label='Reco', color='teal')
+        plt.plot(range(len(self.trk_Ls)), self.trk_Ls, label='Reco', color='teal')
         if self.true_trk_L is not None:
             plt.axhline(self.true_trk_L, color='darkcyan', linestyle='--', label='True')
         plt.gca().set_xlabel('Iterations')
         plt.gca().set_ylabel('Track Length (m)')
         plt.legend(frameon=False, loc='best')
         plt.ylim(bottom=0)
+        plt.xlim(0, len(self.trk_Ls))  # Add this line
 
     def plot_scatt_L(self):
-        plt.plot(range(len(self.scatt_Ls[:])), self.scatt_Ls[:], label='Reco', color='olive')
+        plt.plot(range(len(self.scatt_Ls)), self.scatt_Ls, label='Reco', color='olive')
         if self.true_scatt_L is not None:
             plt.axhline(self.true_scatt_L, color='darkolivegreen', linestyle='--', label='True')
         plt.gca().set_xlabel('Iterations')
         plt.gca().set_ylabel('Scattering Length (m)')
         plt.legend(frameon=False, loc='best')
         plt.ylim(bottom=0)
+        plt.xlim(0, len(self.scatt_Ls))  # Add this line
 
     def plot_loss(self):
-        plt.plot(range(len(self.losses[:])), self.losses[:], color='k')
+        plt.plot(range(len(self.losses)), self.losses, color='k')
         plt.gca().set_xlabel('Iterations')
         plt.gca().set_ylabel('Loss')
-        plt.xlim(0, len(self.losses))
+        plt.xlim(0, len(self.losses))  # This line is already correct
         plt.yscale('log')
 
     def plot_all(self):

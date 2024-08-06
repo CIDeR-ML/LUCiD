@@ -31,7 +31,7 @@ directory = 'output_plots'
 if not os.path.exists(directory):
     os.makedirs(directory)
 
-Nphot = 50
+Nphot = 500
 
 def main():
     # Set default values
@@ -91,7 +91,7 @@ def main():
         key = random.PRNGKey(0)
         generate_and_store_event(output_filename, *true_params, detector, Nphot, key)
 
-        true_indices, _, true_times, true_reflection_prob, true_cone_opening, true_track_origin, true_track_direction,  \
+        true_indices, true_cts, true_times, true_reflection_prob, true_cone_opening, true_track_origin, true_track_direction,  \
         true_num_photons, true_att_L, true_trk_L, true_scatt_L = load_data(output_filename)
         
         detector_points = jnp.array(detector.all_points)
@@ -102,14 +102,14 @@ def main():
         true_num_photons, true_att_L, true_trk_L, true_scatt_L]
 
         one_dimensional_grad_profiles(
-            detector, true_indices, true_times, detector_points, detector_radius, detector_height, Nphot, true_params
+            detector, true_indices, true_cts, true_times, detector_points, detector_radius, detector_height, Nphot, true_params
         )
 
     else:
         print('Inference mode')
 
         detector = generate_detector(json_filename)
-        true_indices, _, true_times, true_reflection_prob, true_cone_opening, true_track_origin, true_track_direction,  \
+        true_indices, true_cts, true_times, true_reflection_prob, true_cone_opening, true_track_origin, true_track_direction,  \
         true_num_photons, true_att_L, true_trk_L, true_scatt_L = load_data(output_filename)
         
         true_params = [true_reflection_prob, true_cone_opening, true_track_origin, true_track_direction, \
@@ -127,16 +127,26 @@ def main():
         print('--------------------')
 
 
-        # Start with random parameters for inference
-        reflection_prob = 0.35
-        cone_opening = np.random.uniform(42., 46)
-        track_origin = np.random.uniform(0., 0., size=3)
-        track_direction = normalize(np.random.uniform(-1., 1., size=3))
+        # # Start with random parameters for inference
+        # reflection_prob = 0.35
+        # cone_opening = np.random.uniform(42., 46)
+        # track_origin = np.random.uniform(0., 0., size=3)
+        # track_direction = normalize(np.random.uniform(-1., 1., size=3))
 
-        num_photons = float(Nphot)  # needs to e differentiated!
-        att_L       = float(10.)    # [meters]
-        trk_L       = float(1.)     # [meters]
-        scatt_L     = float(10.)    # [meters]
+        # num_photons = float(Nphot)*1.2  # needs to e differentiated!
+        # att_L       = float(10.)    # [meters]
+        # trk_L       = float(1.)     # [meters]
+        # scatt_L     = float(10.)    # [meters]
+
+        reflection_prob = 0.3
+        cone_opening = 40.
+        track_origin = np.array([1., 0., 0.])
+        track_direction = np.array([1., 0., 0.])
+
+        num_photons = 2
+        att_L = 10.    # [meters]
+        trk_L = 1.     # [meters]
+        scatt_L = 10.  # [meters]
 
         params = [reflection_prob, cone_opening, track_origin, track_direction, \
         num_photons, att_L, trk_L, scatt_L]
@@ -155,7 +165,7 @@ def main():
             print('guessed_track_direction: ', track_direction)
             print('--------------------')
 
-        optimize_params(detector, true_indices, true_times, *true_params, *params, Nphot)
+        optimize_params(detector, true_cts, true_indices, true_times, *true_params, *params, Nphot)
 
 
 

@@ -5,10 +5,10 @@ import jax
 from tools.losses import *
 from jax import random
 
-def one_dimensional_grad_profiles(detector, true_indices, true_times, detector_points, detector_radius, detector_height, Nphot, true_params):
+def one_dimensional_grad_profiles(detector, true_indices, true_cts, true_times, detector_points, detector_radius, detector_height, Nphot, true_params):
     def test_parameter(param_name, true_params, param_range, param_index=None):
         results = []
-        loss_and_grad = jax.value_and_grad(smooth_combined_loss_function, argnums=(2, 3, 4, 5, 6, 7, 8, 9))
+        loss_and_grad = jax.value_and_grad(smooth_combined_loss_function, argnums=(3, 4, 5, 6, 7, 8, 9, 10))
         
         for i, param_value in enumerate(param_range):
             print(i)
@@ -41,8 +41,10 @@ def one_dimensional_grad_profiles(detector, true_indices, true_times, detector_p
                 params[7] = param_value
             
             key = random.PRNGKey(0)
+            true_hits = np.zeros(len(detector.all_points))
+            true_hits[true_indices] = true_cts
             loss, (grad_refl_prob, grad_cone, grad_origin, grad_direction, grad_num_photons, grad_att_L, grad_trk_L, grad_scatt_L) = loss_and_grad(
-                true_indices, true_times, *params, detector_points, detector_radius, detector_height, Nphot, key
+                true_indices, true_hits, true_times, *params, detector_points, detector_radius, detector_height, Nphot, key
             )
 
             if param_name == 'reflection_prob':
