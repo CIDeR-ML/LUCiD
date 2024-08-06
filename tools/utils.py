@@ -71,12 +71,12 @@ def load_data(filename):
         track_origin = np.array(f['track_origin'])
         track_direction = np.array(f['track_direction'])
 
-        num_photons = np.array(f['num_photons'])
+        photon_norm = np.array(f['photon_norm'])
         att_L = np.array(f['att_L'])
         trk_L = np.array(f['trk_L'])
         scatt_L = np.array(f['scatt_L'])
 
-    return hit_pmt, hit_charge, hit_time, reflection_prob, cone_opening, track_origin, track_direction, num_photons, att_L, trk_L, scatt_L
+    return hit_pmt, hit_charge, hit_time, reflection_prob, cone_opening, track_origin, track_direction, photon_norm, att_L, trk_L, scatt_L
 
 def relative_angle(vector1, vector2):
     dot_product = np.dot(vector1, vector2)
@@ -99,7 +99,7 @@ class Logger:
         self.losses = []
         self.ch_angles = []
         self.ref_probs = []
-        self.num_photons = []
+        self.photon_norm = []
         self.att_Ls = []
         self.trk_Ls = []
         self.scatt_Ls = []
@@ -108,19 +108,19 @@ class Logger:
         self.true_ori = None
         self.true_ch_angle = None
         self.true_ref_prob = None
-        self.true_num_photons = None
+        self.true_photon_norm = None
         self.true_att_L = None
         self.true_trk_L = None
         self.true_scatt_L = None
 
-    #def add_data(self, origin, direction, true_dir, true_ori, ch_angle, ref_prob, num_photons, att_L, trk_L, scatt_L, loss):
-    def add_data(self, origin, direction, ch_angle, ref_prob, att_L, trk_L, scatt_L, num_photons, loss):
+    #def add_data(self, origin, direction, true_dir, true_ori, ch_angle, ref_prob, photon_norm, att_L, trk_L, scatt_L, loss):
+    def add_data(self, origin, direction, ch_angle, ref_prob, att_L, trk_L, scatt_L, photon_norm, loss):
         self.origins.append(origin)
         self.directions.append(direction)
         self.losses.append(float(loss))
         self.ch_angles.append(ch_angle)
         self.ref_probs.append(ref_prob)
-        self.num_photons.append(num_photons)
+        self.photon_norm.append(photon_norm)
         self.att_Ls.append(att_L)
         self.trk_Ls.append(trk_L)
         self.scatt_Ls.append(scatt_L)
@@ -160,16 +160,16 @@ class Logger:
         plt.ylim(0, 1)
         plt.xlim(0, len(self.ref_probs))  # Add this line
 
-    def plot_num_photons(self):
-        plt.plot(range(len(self.num_photons)), self.num_photons, label='Reco', color='purple')
-        if self.true_num_photons is not None:
-            plt.axhline(self.true_num_photons, color='darkviolet', linestyle='--', label='True')
-        plt.ylim(bottom=min(self.true_num_photons, min(self.num_photons)) / 1.43, top=max(self.true_num_photons, max(self.num_photons)) * 2)
+    def plot_photon_norm(self):
+        plt.plot(range(len(self.photon_norm)), self.photon_norm, label='Reco', color='purple')
+        if self.true_photon_norm is not None:
+            plt.axhline(self.true_photon_norm, color='darkviolet', linestyle='--', label='True')
+        plt.ylim(bottom=min(self.true_photon_norm, min(self.photon_norm)) / 1.43, top=max(self.true_photon_norm, max(self.photon_norm)) * 2)
         plt.gca().set_xlabel('Iterations')
         plt.gca().set_ylabel('Number of Photons')
         plt.legend(frameon=False, loc='best')
         plt.ylim(bottom=0)
-        plt.xlim(0, len(self.num_photons))  # Add this line
+        plt.xlim(0, len(self.photon_norm))  # Add this line
 
     def plot_att_L(self):
         plt.plot(range(len(self.att_Ls)), self.att_Ls, label='Reco', color='brown')
@@ -219,7 +219,7 @@ class Logger:
         plt.subplot(3, 3, 4)
         self.plot_ref_prob()
         plt.subplot(3, 3, 5)
-        self.plot_num_photons()
+        self.plot_photon_norm()
         plt.subplot(3, 3, 6)
         self.plot_att_L()
         plt.subplot(3, 3, 7)

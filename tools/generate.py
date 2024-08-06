@@ -68,7 +68,7 @@ def differentiable_get_rays(track_origin, track_direction, cone_opening, Nphot, 
 import time
 import jax
 
-def generate_and_store_event(filename, reflection_prob, cone_opening, track_origin, track_direction, num_photons, att_L, trk_L, scatt_L, detector, Nphot, key):
+def generate_and_store_event(filename, reflection_prob, cone_opening, track_origin, track_direction, photon_norm, att_L, trk_L, scatt_L, detector, Nphot, key):
     start_time = time.time()
     
     N_photosensors = len(detector.all_points)
@@ -84,7 +84,7 @@ def generate_and_store_event(filename, reflection_prob, cone_opening, track_orig
         f_outfile.create_dataset("track_origin", data=track_origin)
         f_outfile.create_dataset("track_direction", data=track_direction)
 
-        f_outfile.create_dataset("num_photons", data=num_photons)
+        f_outfile.create_dataset("photon_norm", data=photon_norm)
         f_outfile.create_dataset("att_L", data=att_L)
         f_outfile.create_dataset("trk_L", data=trk_L)
         f_outfile.create_dataset("scatt_L", data=scatt_L)
@@ -269,7 +269,7 @@ def differentiable_photon_pmt_distance(reflection_prob, cone_opening, track_orig
     
     # Count how many photons hit the same detector after reflection
     same_detector_count = jnp.sum(reflection_mask & same_detector_mask)
-    ray_weights = vmap(lambda k: gumbel_softmax_sample(reflection_prob, 0.005, k))(keys)
+    ray_weights = vmap(lambda k: gumbel_softmax_sample(reflection_prob, 0.1, k))(keys)
     
     return final_closest_points, final_closest_detector_indices, final_photon_times, same_detector_count, closest_points, closest_detector_indices, photon_times, ray_weights
 
