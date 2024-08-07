@@ -125,10 +125,7 @@ def main():
         trk_L = 1.     # [meters]
         scatt_L = 10.  # [meters]
 
-        params = [reflection_prob, true_cone_opening, true_track_origin, np.array([1., 0., -1]), \
-        true_photon_norm*1.2, true_att_L, true_trk_L, true_scatt_L]
-        
-        use_new_method = False
+        use_new_method = True
         if use_new_method:
             grid_result  = loss_search_in_grid(detector, output_filename)
             cone_opening = grid_result[0]
@@ -141,6 +138,9 @@ def main():
             print('guessed_track_origin: ',    track_origin)
             print('guessed_track_direction: ', track_direction)
             print('--------------------')
+
+        params = [reflection_prob, true_cone_opening, track_origin, np.array([1., 0., -1]), \
+        true_photon_norm*1.2, true_att_L, true_trk_L, true_scatt_L]
 
         optimize_params(detector, true_cts, true_indices, true_times, *true_params, *params, Nphot)
 

@@ -28,12 +28,12 @@ def loss_search_in_grid(detector, true_event_filename='autodiff_datasets/data_ev
     key = random.PRNGKey(0)
 
     # Define grid ranges
-    cone_opening_range = np.linspace(36., 44., 1)
+    cone_opening_range = np.linspace(40., 40., 1)
     track_origin_range = np.linspace(-1., 1., 3)
     track_direction_range = np.linspace(-1., 1., 3)
 
-    reflection_prob = 0.3
-    photon_norm = 1.
+    reflection_prob = 0.2
+    photon_norm = 1.3
     att_L = 10.    # [meters]
     trk_L = 1.     # [meters]
     scatt_L = 10.  # [meters]
@@ -121,7 +121,6 @@ class Logger:
         self.true_trk_L = None
         self.true_scatt_L = None
 
-    #def add_data(self, origin, direction, true_dir, true_ori, ch_angle, ref_prob, photon_norm, att_L, trk_L, scatt_L, loss):
     def add_data(self, origin, direction, ch_angle, ref_prob, att_L, trk_L, scatt_L, photon_norm, loss):
         self.origins.append(origin)
         self.directions.append(direction)
@@ -134,7 +133,7 @@ class Logger:
         self.scatt_Ls.append(scatt_L)
 
     def plot_angle_err(self):
-        plt.plot(range(len(self.directions)), np.linalg.norm(np.array(self.directions)-np.array(self.true_dir), axis=1), label='Direction angle error', color='darkorange')
+        plt.plot(range(len(self.directions)), [relative_angle(reco_dir, self.true_dir) for reco_dir in self.directions], label='Direction angle error', color='darkorange')
         plt.gca().set_xlabel('Iterations')
         plt.gca().set_ylabel('Angle Error (degrees)')
         plt.legend(frameon=False, loc='best')
