@@ -16,9 +16,10 @@ from tools.losses import *
 
 def loss_search_in_grid(detector, true_event_filename='autodiff_datasets/data_events.h5'):
 
-    loss_and_grad = jax.value_and_grad(smooth_combined_loss_function, argnums=(2, 3, 4, 5))
+    loss_and_grad = jax.value_and_grad(smooth_combined_loss_function, argnums=(3, 4, 5, 6, 7, 8, 9, 10))
 
-    true_indices, _, true_times, reflection_prob, cone_opening, track_origin, track_direction = load_data(true_event_filename)
+    true_indices, true_cts, true_times, true_reflection_prob, true_cone_opening, true_track_origin, true_track_direction,  \
+    true_photon_norm, true_att_L, true_trk_L, true_scatt_L = load_data(true_event_filename)
 
     detector_points = jnp.array(detector.all_points)
     detector_radius = detector.r
@@ -27,9 +28,15 @@ def loss_search_in_grid(detector, true_event_filename='autodiff_datasets/data_ev
     key = random.PRNGKey(0)
 
     # Define grid ranges
-    cone_opening_range = np.linspace(36., 44., 3)
+    cone_opening_range = np.linspace(36., 44., 1)
     track_origin_range = np.linspace(-1., 1., 3)
     track_direction_range = np.linspace(-1., 1., 3)
+
+    reflection_prob = 0.3
+    photon_norm = 1.
+    att_L = 10.    # [meters]
+    trk_L = 1.     # [meters]
+    scatt_L = 10.  # [meters]
 
     # Create grid
     grid = list(product(cone_opening_range, 
@@ -44,9 +51,10 @@ def loss_search_in_grid(detector, true_event_filename='autodiff_datasets/data_ev
         track_direction = normalize(np.array(params[4:]))
         
         Nphot = 50
-        loss, (grad_refl_prob, grad_cone, grad_origin, grad_direction) = loss_and_grad(
-            true_indices, true_times, reflection_prob, cone_opening, track_origin, track_direction,
-            detector_points, detector_radius, detector_height, Nphot, key
+        true_hits = np.zeros(len(detector.all_points))
+        true_hits[true_indices] = true_cts
+        loss, (grad_refl_prob, grad_cone, grad_origin, grad_direction, grad_photon_norm, grad_att_L, grad_trk_L, grad_scatt_L) = loss_and_grad(
+            true_indices, true_hits, true_times, reflection_prob, cone_opening, track_origin, track_direction, float(photon_norm), att_L, trk_L, scatt_L, detector_points, detector_radius, detector_height, Nphot, key
         )
         if loss>0:
             losses.append(loss)

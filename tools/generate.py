@@ -94,6 +94,7 @@ def generate_and_store_event(filename, reflection_prob, cone_opening, track_orig
     detector_points = jnp.array(detector.all_points)
     detector_radius = jnp.array(detector.r)
     detector_height = jnp.array(detector.H)
+    detector_sensor_radius = jnp.array(detector.S_radius)
     
     photon_generation_start = time.time()
     final_closest_points, final_closest_detector_indices, final_photon_times, same_detector_count, closest_points, closest_detector_indices, photon_times, ray_weights = differentiable_photon_pmt_distance(
@@ -117,7 +118,7 @@ def generate_and_store_event(filename, reflection_prob, cone_opening, track_orig
     selected_detector_indices = jnp.where(reflection_mask, final_closest_detector_indices, closest_detector_indices)
     selected_photon_times = jnp.where(reflection_mask, final_photon_times, photon_times)
 
-    hit_flag = jnp.linalg.norm(selected_points - detector_points[selected_detector_indices], axis=1) < detector_radius
+    hit_flag = jnp.linalg.norm(selected_points - detector_points[selected_detector_indices], axis=1) < 0.04 # this needs to be read from geometry file!!
     valid_indices = selected_detector_indices[hit_flag]
     valid_photon_times = selected_photon_times[hit_flag]
     jax.block_until_ready(hit_flag)

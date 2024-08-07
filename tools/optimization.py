@@ -23,6 +23,29 @@ def optimize_params(detector, true_cts, true_indices, true_times, true_reflectio
     log.true_trk_L = true_trk_L
     log.true_scatt_L = true_scatt_L
 
+    print('--------------------')
+    print('true_refl_prob:     ',  true_reflection_prob)
+    print('true_ch_angle:      ',  true_cone_opening)
+    print('true_photon_norm:   ',  true_photon_norm)
+    print('true_att_L:         ',  true_att_L)
+    print('true_trk_L:         ',  true_trk_L)
+    print('true_scatt_L:       ',  true_scatt_L)
+    print('true_trk_origin:    ',  true_track_origin)
+    print('true_trk_direction: ',  true_track_direction)
+    print('--------------------')
+
+    print('--------------------')
+    print('refl_prob:     ',  reflection_prob)
+    print('ch_angle:      ',  cone_opening)
+    print('photon_norm:   ',  photon_norm)
+    print('att_L:         ',  att_L)
+    print('trk_L:         ',  trk_L)
+    print('scatt_L:       ',  scatt_L)
+    print('trk_origin:    ',  track_origin)
+    print('trk_direction: ',  track_direction)
+    print('--------------------')
+
+
     key = random.PRNGKey(0)
     filename = 'test_events/optimization_start.h5'
     generate_and_store_event(filename, reflection_prob, cone_opening, track_origin, track_direction, \
@@ -32,7 +55,7 @@ def optimize_params(detector, true_cts, true_indices, true_times, true_reflectio
     detector_height = detector.H
     
     # Optimization parameters
-    num_iterations = 100
+    num_iterations = 300
     
     best_params = None
     patience_counter = 0
@@ -47,7 +70,7 @@ def optimize_params(detector, true_cts, true_indices, true_times, true_reflectio
         true_hits = np.zeros(len(detector.all_points))
         true_hits[true_indices] = true_cts
         # ---------
-        print('sum true hits: ', np.sum(true_hits), photon_norm, Nphot)
+        #print('sum true hits: ', np.sum(true_hits), photon_norm, Nphot)
         loss, (grad_refl_prob, grad_cone, grad_origin, grad_direction, grad_photon_norm, grad_att_L, grad_trk_L, grad_scatt_L) = loss_and_grad(
             true_indices, true_hits, true_times, *params, detector_points, detector_radius, detector_height, Nphot, key
         )
@@ -71,14 +94,18 @@ def optimize_params(detector, true_cts, true_indices, true_times, true_reflectio
             print()
 
         print('grad num phot": ', grad_photon_norm)
+        print('grad refl prob": ', grad_refl_prob)
         print(photon_norm, Nphot)
 
         Scale = 1
         cone_opening -= Scale*10*grad_cone
         track_origin -= Scale*0.05*grad_origin
         track_direction -= Scale*0.02*grad_direction
-        reflection_prob -= Scale*1e-4*grad_refl_prob
-        photon_norm -= Scale*1e-6*grad_photon_norm
+        reflection_prob -= Scale*1*grad_refl_prob
+
+        # if i>50:
+        photon_norm -= Scale*10.*grad_photon_norm
+
 
         att_L = 1
         trk_L = 1

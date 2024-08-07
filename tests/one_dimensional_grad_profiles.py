@@ -89,11 +89,11 @@ def one_dimensional_grad_profiles(detector, true_indices, true_cts, true_times, 
     # # Test 3: Y component of track direction
     # direction_y_results = test_parameter('track_direction_y', true_params, jnp.linspace(-0.4, 0.4, Nsteps), 1)
 
-    # Test 4: Reflection probability
+    # # Test 4: Reflection probability
     refl_prob_results = test_parameter('reflection_prob', true_params, jnp.linspace(0.15, 0.55, Nsteps), 1)
 
     # # Test 5: Number of photons
-    # photon_norm_results = test_parameter('photon_norm', true_params, jnp.linspace(0.5, 1.5, Nsteps))
+    photon_norm_results = test_parameter('photon_norm', true_params, jnp.linspace(0.5, 1.5, Nsteps))
 
     # # Test 6: Attenuation length (att_L)
     # att_L_results = test_parameter('att_L', true_params, jnp.linspace(1, 5, Nsteps))
@@ -139,7 +139,7 @@ def one_dimensional_grad_profiles(detector, true_indices, true_cts, true_times, 
     # plot_results('output_plots/test1.png', cone_results, 'Cone Opening Angle Test', 'Cone Opening Angle (degrees)', true_cone_opening)
     # plot_results('output_plots/test2.png', origin_x_results, 'Track Origin X Test', 'Track Origin X', true_track_origin[0])
     # plot_results('output_plots/test3.png', direction_y_results, 'Track Direction Y Test', 'Track Direction Y', true_track_direction[1])
-    # plot_results('output_plots/test4.png', photon_norm_results, 'Number of Photons Test', 'Number of Photons', true_photon_norm)
+    plot_results('output_plots/test4.png', photon_norm_results, 'Number of Photons Test', 'Number of Photons', true_photon_norm)
     # plot_results('output_plots/test5.png', att_L_results, 'Attenuation Length Test', 'Attenuation Length', true_att_L)
     # plot_results('output_plots/test6.png', trk_L_results, 'Track Length Test', 'Track Length', true_trk_L)
     # plot_results('output_plots/test7.png', scatt_L_results, 'Scattering Length Test', 'Scattering Length', true_scatt_L)
