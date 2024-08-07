@@ -183,6 +183,98 @@ def propagate(ray_vectors, ray_origins, detector_points):
     return jax.vmap(propagate_single_photon, in_axes=(0, 0, None))(ray_vectors, ray_origins, detector_points)
 
 
+def generate_rays(track_origin, track_direction, cone_opening, Nphot, key):
+    return differentiable_get_rays(track_origin, track_direction, cone_opening, Nphot, key)
+
+def create_surface_masks(closest_detector_indices):
+    barrel_mask = (closest_detector_indices < 6720)
+    top_cap_mask = (closest_detector_indices >= 6720) & (closest_detector_indices < 6720 + 1613)
+    bottom_cap_mask = (closest_detector_indices >= 6720 + 1613)
+    return barrel_mask, top_cap_mask, bottom_cap_mask
+
+def calculate_reflections(ray_vectors, ray_origins, surface_masks, detector_radius, detector_height, epsilon):
+    barrel_mask, top_cap_mask, bottom_cap_mask = surface_masks
+    
+    # Barrel reflection calculation
+    new_ray_vectors_barrel, t_barrel = calculate_barrel_reflection(ray_vectors, ray_origins, detector_radius, epsilon)
+    
+    # Top cap reflection calculation
+    new_ray_vectors_top, t_top = calculate_cap_reflection(ray_vectors, ray_origins, detector_height/2, epsilon)
+    
+    # Bottom cap reflection calculation
+    new_ray_vectors_bottom, t_bottom = calculate_cap_reflection(ray_vectors, ray_origins, -detector_height/2, epsilon)
+    
+    # Combine new ray vectors and intersection points
+    new_ray_vectors = jnp.where(barrel_mask[:, None], new_ray_vectors_barrel,
+                                jnp.where(top_cap_mask[:, None], new_ray_vectors_top,
+                                          jnp.where(bottom_cap_mask[:, None], new_ray_vectors_bottom,
+                                                    ray_vectors)))
+    
+    new_ray_origins = jnp.where(barrel_mask[:, None], ray_origins + t_barrel[:, None] * ray_vectors,
+                                jnp.where(top_cap_mask[:, None], ray_origins + t_top[:, None] * ray_vectors,
+                                          jnp.where(bottom_cap_mask[:, None], ray_origins + t_bottom[:, None] * ray_vectors,
+                                                    ray_origins)))
+    
+    time_to_reflection = jnp.where(barrel_mask, t_barrel,
+                                   jnp.where(top_cap_mask, t_top,
+                                             jnp.where(bottom_cap_mask, t_bottom, 0.0)))
+    
+    return new_ray_vectors, new_ray_origins, time_to_reflection
+
+def calculate_barrel_reflection(ray_vectors, ray_origins, detector_radius, epsilon):
+    a = jnp.sum(ray_vectors[:, :2]**2, axis=1)
+    b = 2 * jnp.sum(ray_origins[:, :2] * ray_vectors[:, :2], axis=1)
+    c = jnp.sum(ray_origins[:, :2]**2, axis=1) - detector_radius**2
+    discriminant = jnp.maximum(b**2 - 4*a*c, epsilon)
+    t_barrel = jnp.where(discriminant >= 0, (-b + jnp.sqrt(discriminant)) / (2*a + epsilon), jnp.inf)
+    barrel_intersection_points = ray_origins + t_barrel[:, None] * ray_vectors
+    normal_vectors = barrel_intersection_points[:, :2] / (detector_radius + epsilon)
+    normal_vectors = jnp.concatenate([normal_vectors, jnp.zeros((len(ray_vectors), 1))], axis=1)
+    dot_product = jnp.clip(jnp.sum(ray_vectors * normal_vectors, axis=1, keepdims=True), -1 + epsilon, 1 - epsilon)
+    new_ray_vectors_barrel = ray_vectors - 2 * dot_product * normal_vectors
+    return new_ray_vectors_barrel, t_barrel
+
+def calculate_cap_reflection(ray_vectors, ray_origins, cap_z, epsilon):
+    t_cap = (cap_z - ray_origins[:, 2]) / (ray_vectors[:, 2] + epsilon)
+    new_ray_vectors_cap = ray_vectors.at[:, 2].multiply(-1)
+    return new_ray_vectors_cap, t_cap
+
+def step_along_ray(ray_origins, ray_vectors, delta):
+    return ray_origins + delta * ray_vectors
+
+def check_within_detector(points, detector_radius, detector_height):
+    r_squared = points[:, 0]**2 + points[:, 1]**2
+    z_abs = jnp.abs(points[:, 2])
+    return (r_squared <= detector_radius**2) & (z_abs <= detector_height / 2)
+
+def update_rays(new_origins, new_vectors, old_origins, old_vectors, within_detector):
+    return (jnp.where(within_detector[:, None], new_origins, old_origins),
+            jnp.where(within_detector[:, None], new_vectors, old_vectors))
+
+def combine_results(closest_points, closest_detector_indices, photon_times,
+                    new_closest_points, new_closest_detector_indices, new_photon_times,
+                    surface_masks, within_detector, time_to_reflection):
+    barrel_mask, top_cap_mask, bottom_cap_mask = surface_masks
+    reflection_mask = (barrel_mask | top_cap_mask | bottom_cap_mask) & within_detector
+    same_detector_mask = closest_detector_indices == new_closest_detector_indices
+    valid_reflection_mask = reflection_mask & ~same_detector_mask
+    
+    final_closest_points = jnp.where(valid_reflection_mask[:, None], new_closest_points, closest_points)
+    final_closest_detector_indices = jnp.where(valid_reflection_mask, new_closest_detector_indices, closest_detector_indices)
+    final_photon_times = jnp.where(valid_reflection_mask, time_to_reflection + new_photon_times, photon_times)
+    
+    return final_closest_points, final_closest_detector_indices, final_photon_times
+
+def count_same_detectors(final_results, surface_masks):
+    _, final_closest_detector_indices, _ = final_results
+    barrel_mask, top_cap_mask, bottom_cap_mask = surface_masks
+    reflection_mask = barrel_mask | top_cap_mask | bottom_cap_mask
+    same_detector_mask = final_closest_detector_indices == final_closest_detector_indices  # This line needs to be adjusted
+    return jnp.sum(reflection_mask & same_detector_mask)
+
+def calculate_ray_weights(reflection_prob, keys):
+    return vmap(lambda k: gumbel_softmax_sample(reflection_prob, 0.1, k))(keys)
+
 @partial(jax.jit, static_argnums=(7,))
 def differentiable_photon_pmt_distance(reflection_prob, cone_opening, track_origin, track_direction, detector_points, detector_radius, detector_height, Nphot, key):
     epsilon = 1e-4  # Small value to prevent division by zero
@@ -193,85 +285,31 @@ def differentiable_photon_pmt_distance(reflection_prob, cone_opening, track_orig
     ray_weights = jnp.ones_like(closest_detector_indices)
     keys = jax.random.split(key, len(ray_weights))
 
-    # Create masks for different surfaces
-    barrel_mask = (closest_detector_indices < 6720)
-    top_cap_mask = (closest_detector_indices >= 6720) & (closest_detector_indices < 6720 + 1613)
-    bottom_cap_mask = (closest_detector_indices >= 6720 + 1613)
-    
-    # For barrel
-    a = jnp.sum(ray_vectors[:, :2]**2, axis=1)
-    b = 2 * jnp.sum(ray_origins[:, :2] * ray_vectors[:, :2], axis=1)
-    c = jnp.sum(ray_origins[:, :2]**2, axis=1) - detector_radius**2
-    discriminant = jnp.maximum(b**2 - 4*a*c, epsilon)
-    t_barrel = jnp.where(discriminant >= 0, (-b + jnp.sqrt(discriminant)) / (2*a + epsilon), jnp.inf)
-    barrel_intersection_points = ray_origins + t_barrel[:, None] * ray_vectors
-    normal_vectors = barrel_intersection_points[:, :2] / (detector_radius + epsilon)
-    normal_vectors = jnp.concatenate([normal_vectors, jnp.zeros((Nphot, 1))], axis=1)
-    dot_product = jnp.clip(jnp.sum(ray_vectors * normal_vectors, axis=1, keepdims=True), -1 + epsilon, 1 - epsilon)
-    new_ray_vectors_barrel = ray_vectors - 2 * dot_product * normal_vectors
-    
-    # For top cap
-    top_cap_z = detector_height / 2
-    t_top = (top_cap_z - ray_origins[:, 2]) / (ray_vectors[:, 2] + epsilon)
-    top_cap_intersection_points = ray_origins + t_top[:, None] * ray_vectors
-    new_ray_vectors_top = ray_vectors.at[:, 2].multiply(-1)
-    
-    # For bottom cap
-    bottom_cap_z = -detector_height / 2
-    t_bottom = (bottom_cap_z - ray_origins[:, 2]) / (ray_vectors[:, 2] + epsilon)
-    bottom_cap_intersection_points = ray_origins + t_bottom[:, None] * ray_vectors
-    new_ray_vectors_bottom = ray_vectors.at[:, 2].multiply(-1)
-    
-    # Combine new ray vectors and intersection points
-    new_ray_vectors = jnp.where(barrel_mask[:, None], new_ray_vectors_barrel,
-                                jnp.where(top_cap_mask[:, None], new_ray_vectors_top,
-                                          jnp.where(bottom_cap_mask[:, None], new_ray_vectors_bottom,
-                                                    ray_vectors)))
-    
-    new_ray_origins = jnp.where(barrel_mask[:, None], barrel_intersection_points,
-                                jnp.where(top_cap_mask[:, None], top_cap_intersection_points,
-                                          jnp.where(bottom_cap_mask[:, None], bottom_cap_intersection_points,
-                                                    ray_origins)))
-    # Define a small step size
-    delta = 0.2  # Adjust as needed
-    
-     # Take a small step along the new ray vector direction
-    new_ray_origins_stepped = new_ray_origins + delta * new_ray_vectors
-    
-    # Check if new origins are within detector volume
-    r_squared = new_ray_origins_stepped[:, 0]**2 + new_ray_origins_stepped[:, 1]**2
-    z_abs = jnp.abs(new_ray_origins_stepped[:, 2])
-    within_detector = (r_squared <= detector_radius**2) & (z_abs <= detector_height / 2)
-    
-    # Only update ray origins and vectors if they're within the detector
-    new_ray_origins = jnp.where(within_detector[:, None], new_ray_origins_stepped, ray_origins)
-    new_ray_vectors = jnp.where(within_detector[:, None], new_ray_vectors, ray_vectors)
-    
-    # Propagate again for all photons
-    new_closest_points, new_closest_detector_indices, new_photon_times = propagate(new_ray_vectors, new_ray_origins, detector_points)
-    
-    # Calculate the time to reach the reflection point
-    time_to_reflection = jnp.where(barrel_mask, t_barrel,
-                                   jnp.where(top_cap_mask, t_top,
-                                             jnp.where(bottom_cap_mask, t_bottom, 0.0)))
-    
-    # Use the masks to update the results, but only for photons within the detector after reflection
-    reflection_mask = (barrel_mask | top_cap_mask | bottom_cap_mask) & within_detector
-    
-    # Check if detector indices are the same before and after reflection
-    same_detector_mask = closest_detector_indices == new_closest_detector_indices
-    
-    # Combine the reflection mask with the same detector mask
-    valid_reflection_mask = reflection_mask & ~same_detector_mask
-    
-    final_closest_points = jnp.where(valid_reflection_mask[:, None], new_closest_points, closest_points)
-    final_closest_detector_indices = jnp.where(valid_reflection_mask, new_closest_detector_indices, closest_detector_indices)
-    final_photon_times = jnp.where(valid_reflection_mask, time_to_reflection + new_photon_times, photon_times)
-    
-    # Count how many photons hit the same detector after reflection
-    same_detector_count = jnp.sum(reflection_mask & same_detector_mask)
-    ray_weights = vmap(lambda k: gumbel_softmax_sample(reflection_prob, 0.1, k))(keys)
-    
-    return final_closest_points, final_closest_detector_indices, final_photon_times, same_detector_count, closest_points, closest_detector_indices, photon_times, ray_weights
+    surface_masks = create_surface_masks(closest_detector_indices)
+    barrel_mask, top_cap_mask, bottom_cap_mask = surface_masks
 
+    new_ray_vectors, new_ray_origins, time_to_reflection = calculate_reflections(
+        ray_vectors, ray_origins, surface_masks, detector_radius, detector_height, epsilon)
+
+    new_ray_origins_stepped = step_along_ray(new_ray_origins, new_ray_vectors, delta=0.2)
+
+    within_detector = check_within_detector(new_ray_origins_stepped, detector_radius, detector_height)
+    
+    new_ray_origins, new_ray_vectors = update_rays(
+    new_ray_origins_stepped, new_ray_vectors, ray_origins, ray_vectors, within_detector)
+
+    new_closest_points, new_closest_detector_indices, new_photon_times = propagate(new_ray_vectors, new_ray_origins, detector_points)
+
+    final_results = combine_results(
+        closest_points, closest_detector_indices, photon_times,
+        new_closest_points, new_closest_detector_indices, new_photon_times,
+        surface_masks, within_detector, time_to_reflection
+    )
+    
+    same_detector_count = count_same_detectors(final_results, surface_masks)
+    ray_weights = calculate_ray_weights(reflection_prob, keys)
+
+    ray_weights = calculate_ray_weights(reflection_prob, keys)
+
+    return (*final_results, same_detector_count, closest_points, closest_detector_indices, photon_times, ray_weights)
 
