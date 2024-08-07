@@ -31,7 +31,7 @@ directory = 'output_plots'
 if not os.path.exists(directory):
     os.makedirs(directory)
 
-Nphot = 1000
+Nphot = 10000
 
 def main():
     # Set default values
@@ -58,10 +58,10 @@ def main():
         true_track_origin = np.random.uniform(-1., 1., size=3)
         true_track_direction = normalize(np.random.uniform(-1., 1., size=3))
 
-        # true_reflection_prob = 0.
-        # true_cone_opening = 40.
-        # true_track_origin = np.array([1,0,0])
-        # true_track_direction = np.array([1,0,0])
+        true_reflection_prob = 0.
+        true_cone_opening = 40.
+        true_track_origin = np.array([0,0,0])
+        true_track_direction = np.array([1,0,0])
 
         true_photon_norm = 1.
         true_att_L = 10    # [meters]

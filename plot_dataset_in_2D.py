@@ -23,6 +23,7 @@ parser = argparse.ArgumentParser(description='Description of your program')
 parser.add_argument('--evt_ID', type=int, default=default_evt_ID, help='The event ID to plot')
 parser.add_argument('--filename', type=str, default=default_filename, help='The input filename')
 parser.add_argument('--json_filename', type=str, default=default_json_filename, help='The JSON filename')
+parser.add_argument('--plot_time', type=bool, default=False, help='Plot the time of the hits')
 
 args = parser.parse_args()
 
@@ -70,18 +71,17 @@ else:
 print("Number of PMTs: ", len(detector.all_points))
 
 ID_to_PE = np.zeros(len(detector.all_points))
-ID_to_PE[IDs] = Qs
+if args.plot_time:
+    ID_to_PE[IDs] = Ts
+else:
+    ID_to_PE[IDs] = Qs
 ID_to_position = {i:x for i,x in enumerate(detector.all_points)}
 ID_to_case = detector.ID_to_case
 ID_to_PE = {i:x for i,x in enumerate(ID_to_PE)}
 # -----------------------------
 
 # do the 2D plot.
-show_2D_display(ID_to_position, ID_to_PE, ID_to_case, cyl_sensor_radius, cyl_radius, cyl_height)#, file_name='evt_example.pdf')
-
-
-
-
-
-
-
+if args.plot_time:
+    show_2D_display(ID_to_position, ID_to_PE, ID_to_case, cyl_radius, cyl_height, file_name='evt_example_time.pdf', plot_time=True)
+else:
+    show_2D_display(ID_to_position, ID_to_PE, ID_to_case, cyl_radius, cyl_height, file_name='evt_example.pdf')
