@@ -55,7 +55,7 @@ def optimize_params(detector, true_cts, true_indices, true_times, true_reflectio
     detector_height = detector.H
     
     # Optimization parameters
-    num_iterations = 300
+    num_iterations = 200
     
     best_params = None
     patience_counter = 0

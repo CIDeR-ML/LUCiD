@@ -67,6 +67,36 @@ def differentiable_get_rays(track_origin, track_direction, cone_opening, Nphot, 
 import time
 import jax
 
+@jax.jit
+def calculate_selected_points(
+    direct_closest_points, direct_closest_detector_indices, direct_photon_times,
+    reflected_closest_points, reflected_closest_detector_indices, reflected_photon_times,
+    scattered_closest_points, scattered_closest_detector_indices, scattered_photon_times,
+    ray_weights, scatter_mask, detector_points
+):
+    # Determine which points to use based on ray_weights
+    reflection_mask = ray_weights > 0.5
+    
+    # Select between direct and reflected results
+    selected_points = jnp.where(reflection_mask[:, None], reflected_closest_points, direct_closest_points)
+    selected_detector_indices = jnp.where(reflection_mask, reflected_closest_detector_indices, direct_closest_detector_indices)
+    selected_photon_times = jnp.where(reflection_mask, reflected_photon_times, direct_photon_times)
+    
+    # Incorporate scattered results
+    selected_points = jnp.where(scatter_mask[:, None], scattered_closest_points, selected_points)
+    selected_detector_indices = jnp.where(scatter_mask, scattered_closest_detector_indices, selected_detector_indices)
+    selected_photon_times = jnp.where(scatter_mask, scattered_photon_times, selected_photon_times)
+
+    hit_flag_direct  = jnp.linalg.norm(direct_closest_points - detector_points[direct_closest_detector_indices], axis=1) < 0.04
+    hit_flag_reflec  = jnp.linalg.norm(reflected_closest_points - detector_points[reflected_closest_detector_indices], axis=1) < 0.04
+    hit_flag_scatter = jnp.linalg.norm(scattered_closest_points - detector_points[scattered_closest_detector_indices], axis=1) < 0.04
+
+    global_hit_flag  = jnp.linalg.norm(selected_points - detector_points[selected_detector_indices], axis=1) < 0.04
+    
+    return selected_points, selected_detector_indices, selected_photon_times, hit_flag_direct, hit_flag_reflec, hit_flag_scatter, global_hit_flag
+
+
+
 def generate_and_store_event(filename, reflection_prob, cone_opening, track_origin, track_direction, photon_norm, att_L, trk_L, scatt_L, detector, Nphot, key):
     start_time = time.time()
     
@@ -96,31 +126,35 @@ def generate_and_store_event(filename, reflection_prob, cone_opening, track_orig
     detector_sensor_radius = jnp.array(detector.S_radius)
     
     photon_generation_start = time.time()
-    final_closest_points, final_closest_detector_indices, final_photon_times, same_detector_count, closest_points, closest_detector_indices, photon_times, ray_weights = differentiable_photon_pmt_distance(
-        reflection_prob, cone_opening, track_origin, track_direction, detector_points, detector_radius, detector_height, Nphot, key)
-
-    print(f"Number of photons hitting the same detector after reflection: {same_detector_count}")
-    
-    jax.block_until_ready(final_closest_points)
-    jax.block_until_ready(final_closest_detector_indices)
-    jax.block_until_ready(final_photon_times)
-    jax.block_until_ready(closest_points)
-    jax.block_until_ready(closest_detector_indices)
-    jax.block_until_ready(photon_times)
-    jax.block_until_ready(ray_weights)
+    direct_closest_points, direct_closest_detector_indices, direct_photon_times, \
+    reflected_closest_points, reflected_closest_detector_indices, reflected_photon_times, \
+    scattered_closest_points, scattered_closest_detector_indices, scattered_photon_times, \
+    ray_weights, scattering_distances, scatter_mask = differentiable_photon_pmt_distance(
+        reflection_prob, cone_opening, track_origin, track_direction, detector_points, detector_radius, detector_height, Nphot, key
+    )
     photon_generation_end = time.time()
     
-    hit_calculation_start = time.time()
-    # Use ray_weights to choose between reflected and non-reflected data
-    reflection_mask = ray_weights > 0.5
-    selected_points = jnp.where(reflection_mask[:, None], final_closest_points, closest_points)
-    selected_detector_indices = jnp.where(reflection_mask, final_closest_detector_indices, closest_detector_indices)
-    selected_photon_times = jnp.where(reflection_mask, final_photon_times, photon_times)
+    
+    # # Use ray_weights to choose between reflected and non-reflected data
+    # reflection_mask = ray_weights > 0.5
+    # selected_points = jnp.where(reflection_mask[:, None], final_closest_points, closest_points)
+    # selected_detector_indices = jnp.where(reflection_mask, final_closest_detector_indices, closest_detector_indices)
+    # selected_photon_times = jnp.where(reflection_mask, final_photon_times, photon_times)
 
-    hit_flag = jnp.linalg.norm(selected_points - detector_points[selected_detector_indices], axis=1) < 0.04 # this needs to be read from geometry file!!
-    valid_indices = selected_detector_indices[hit_flag]
-    valid_photon_times = selected_photon_times[hit_flag]
-    jax.block_until_ready(hit_flag)
+    hit_calculation_start = time.time()
+    selected_points, selected_detector_indices, selected_photon_times, hit_flag_direct, hit_flag_reflec, hit_flag_scatter, global_hit_flag =  calculate_selected_points(
+        direct_closest_points, direct_closest_detector_indices, direct_photon_times,
+        reflected_closest_points, reflected_closest_detector_indices, reflected_photon_times,
+        scattered_closest_points, scattered_closest_detector_indices, scattered_photon_times,
+        ray_weights, scatter_mask, detector_points
+    )
+
+    fraction_of_scattered_photons = jnp.sum(scatter_mask>0)/Nphot
+    print('fraction_of_scattered_photons: ', fraction_of_scattered_photons)
+
+    valid_indices = selected_detector_indices[global_hit_flag]
+    valid_photon_times = selected_photon_times[global_hit_flag]
+    jax.block_until_ready(global_hit_flag)
     jax.block_until_ready(valid_indices)
     jax.block_until_ready(valid_photon_times)
     hit_calculation_end = time.time()
@@ -149,11 +183,11 @@ def generate_and_store_event(filename, reflection_prob, cone_opening, track_orig
     end_time = time.time()
     
     print(f"Total execution time: {end_time - start_time:.4f} seconds")
-    print(f"File creation time: {file_creation_end - file_creation_start:.4f} seconds")
-    print(f"Photon generation time: {photon_generation_end - photon_generation_start:.4f} seconds")
-    print(f"Hit calculation time: {hit_calculation_end - hit_calculation_start:.4f} seconds")
-    print(f"Unique calculation time: {unique_calculation_end - unique_calculation_start:.4f} seconds")
-    print(f"Data storage time: {data_storage_end - data_storage_start:.4f} seconds")
+    # print(f"File creation time: {file_creation_end - file_creation_start:.4f} seconds")
+    # print(f"Photon generation time: {photon_generation_end - photon_generation_start:.4f} seconds")
+    # print(f"Hit calculation time: {hit_calculation_end - hit_calculation_start:.4f} seconds")
+    # print(f"Unique calculation time: {unique_calculation_end - unique_calculation_start:.4f} seconds")
+    # print(f"Data storage time: {data_storage_end - data_storage_start:.4f} seconds")
     
     return filename
 
@@ -281,85 +315,65 @@ def differentiable_photon_pmt_distance(
     reflection_prob, cone_opening, track_origin, track_direction, 
     detector_points, detector_radius, detector_height, Nphot, key):
     
-    attenuation_length = 10
+    scattering_length = 10
     epsilon = 1e-4  # Small value to prevent division by zero
     
     # Generate initial rays
     ray_vectors, ray_origins = differentiable_get_rays(track_origin, track_direction, cone_opening, Nphot, key)
     
-    # First propagation
-    closest_points, closest_detector_indices, photon_times = propagate(ray_vectors, ray_origins, detector_points)
+    # Case 1: Direct without reflection
+    direct_closest_points, direct_closest_detector_indices, direct_photon_times = propagate(ray_vectors, ray_origins, detector_points)
     
     # Calculate ray lengths
-    ray_lengths = jnp.linalg.norm(closest_points - ray_origins, axis=-1)
+    ray_lengths = jnp.linalg.norm(direct_closest_points - ray_origins, axis=-1)
     
-    # Sample scattering distances
-    key, subkey1, subkey2 = random.split(key,3)
-    scattering_distances = random.exponential(subkey1, shape=(Nphot,)) * attenuation_length
+    # Sample scattering distances for all photons
+    key, subkey1, subkey2 = random.split(key, 3)
+    scattering_distances = random.exponential(subkey1, shape=(Nphot,)) * scattering_length
     
-    # Determine which rays scatter
+    # Determine which rays would scatter (but calculate for all)
     scatter_mask = scattering_distances < ray_lengths
     
-    # Calculate new origins for scattered rays
-    scattered_origins = ray_origins + scatter_mask[:, None] * ray_vectors * scattering_distances[:, None]
-    
-    # Generate new directions for scattered rays
-    # phi = random.uniform(subkey1, shape=(Nphot,), minval=0, maxval=2 * jnp.pi)
-    y = random.uniform(subkey2, shape=(Nphot,))
-    theta = inverse_theta_cdf(y)
-
-    scattered_vectors = jax.vmap(generate_vectors_on_cone_surface_jax)(ray_vectors, theta).reshape(len(ray_vectors),3)
-
-    keys = random.split(key, Nphot)
-    # Use vmap to apply the function over the rays and keys
-    scattered_vectors = jax.vmap(generate_vectors_on_cone_surface_jax, in_axes=(0, 0, None, 0))(ray_vectors, theta, 1, keys).reshape(Nphot, 3)
-
-    # Combine scattered and non-scattered rays
-    new_ray_origins = jnp.where(scatter_mask[:, jnp.newaxis], scattered_origins, ray_origins)
-    new_ray_vectors = jnp.where(scatter_mask[:, jnp.newaxis], scattered_vectors, ray_vectors)
-    
-    # Second propagation with potentially scattered rays
-    new_closest_points, new_closest_detector_indices, new_photon_times = propagate(new_ray_vectors, new_ray_origins, detector_points)
-    
-    # Handle reflections
-    keys = jax.random.split(key, len(new_closest_detector_indices))
-    surface_masks = create_surface_masks(new_closest_detector_indices)
-    
-    barrel_mask, top_cap_mask, bottom_cap_mask = surface_masks
+    # Case 2: Reflection (same as before, but renamed variables)
+    reflection_surface_masks = create_surface_masks(direct_closest_detector_indices)
     reflected_ray_vectors, reflected_ray_origins, time_to_reflection = calculate_reflections(
-        new_ray_vectors, new_ray_origins, surface_masks, detector_radius, detector_height, epsilon)
+        ray_vectors, ray_origins, reflection_surface_masks, detector_radius, detector_height, epsilon)
     reflected_ray_origins_stepped = step_along_ray(reflected_ray_origins, reflected_ray_vectors, delta=0.2)
     within_detector = check_within_detector(reflected_ray_origins_stepped, detector_radius, detector_height)
-    final_ray_origins, final_ray_vectors = update_rays(
-        reflected_ray_origins_stepped, reflected_ray_vectors, new_ray_origins, new_ray_vectors, within_detector)
-    final_closest_points, final_closest_detector_indices, final_photon_times = propagate(final_ray_vectors, final_ray_origins, detector_points)
-    final_results = combine_results(
-        new_closest_points, new_closest_detector_indices, new_photon_times,
-        final_closest_points, final_closest_detector_indices, final_photon_times,
-        surface_masks, within_detector, time_to_reflection
-    )
-    same_detector_count = count_same_detectors(final_results, surface_masks)
+    final_reflected_ray_origins, final_reflected_ray_vectors = update_rays(
+        reflected_ray_origins_stepped, reflected_ray_vectors, ray_origins, ray_vectors, within_detector)
+    reflected_closest_points, reflected_closest_detector_indices, reflected_photon_times = propagate(final_reflected_ray_vectors, final_reflected_ray_origins, detector_points)
+    
+    # Case 3: Scattering without reflection (now calculated for all photons)
+    scattered_origins = ray_origins + ray_vectors * scattering_distances[:, None]
+    
+    # Generate new directions for scattered rays
+    y = random.uniform(subkey2, shape=(Nphot,))
+    theta = inverse_theta_cdf(y)
+    keys = random.split(key, Nphot)
+    scattered_vectors = jax.vmap(generate_vectors_on_cone_surface_jax, in_axes=(0, 0, None, 0))(ray_vectors, theta, 1, keys).reshape(Nphot, 3)
+    
+    # Propagate scattered rays
+    scattered_closest_points, scattered_closest_detector_indices, scattered_photon_times = propagate(scattered_vectors, scattered_origins, detector_points)
+    
+    # Calculate ray weights for all photons
+    keys = jax.random.split(key, Nphot)
     ray_weights = calculate_ray_weights(reflection_prob, keys)
-    #return (*final_results, same_detector_count, new_closest_points, new_closest_detector_indices, new_photon_times, ray_weights, scatter_mask)
-    return (*final_results, same_detector_count, new_closest_points, new_closest_detector_indices, new_photon_times, ray_weights)
+    
+    return (
+        direct_closest_points, direct_closest_detector_indices, direct_photon_times,
+        reflected_closest_points, reflected_closest_detector_indices, reflected_photon_times,
+        scattered_closest_points, scattered_closest_detector_indices, scattered_photon_times,
+        ray_weights, scattering_distances, scatter_mask
+    )
 
-
-
-
-
-
-
-
-
-# import jax
-# import jax.numpy as jnp
-# from functools import partial
 
 # @partial(jax.jit, static_argnums=(7,))
 # def differentiable_photon_pmt_distance(
 #     reflection_prob, cone_opening, track_origin, track_direction, 
 #     detector_points, detector_radius, detector_height, Nphot, key):
-#     attenuation_length = 0.1
+    
+#     scattering_length = 20000
 #     epsilon = 1e-4  # Small value to prevent division by zero
     
 #     # Generate initial rays
@@ -372,8 +386,8 @@ def differentiable_photon_pmt_distance(
 #     ray_lengths = jnp.linalg.norm(closest_points - ray_origins, axis=-1)
     
 #     # Sample scattering distances
-#     key, subkey = jax.random.split(key)
-#     scattering_distances = jax.random.exponential(subkey, shape=(Nphot,)) * attenuation_length
+#     key, subkey1, subkey2 = random.split(key,3)
+#     scattering_distances = random.exponential(subkey1, shape=(Nphot,)) * scattering_length
     
 #     # Determine which rays scatter
 #     scatter_mask = scattering_distances < ray_lengths
@@ -382,17 +396,19 @@ def differentiable_photon_pmt_distance(
 #     scattered_origins = ray_origins + scatter_mask[:, None] * ray_vectors * scattering_distances[:, None]
     
 #     # Generate new directions for scattered rays
-#     key, subkey1, subkey2 = jax.random.split(key, 3)
-#     phi = jax.random.uniform(subkey1, shape=(Nphot,), minval=0, maxval=2 * jnp.pi)
-#     y = jax.random.uniform(subkey2, shape=(Nphot,))
+#     # phi = random.uniform(subkey1, shape=(Nphot,), minval=0, maxval=2 * jnp.pi)
+#     y = random.uniform(subkey2, shape=(Nphot,))
 #     theta = inverse_theta_cdf(y)
-    
-#     # Use vmap to vectorize generate_vectors_on_cone_surface_jax
-#     scattered_vectors = jax.vmap(generate_vectors_on_cone_surface_jax)(ray_vectors, theta)
-    
+
+#     scattered_vectors = jax.vmap(generate_vectors_on_cone_surface_jax)(ray_vectors, theta).reshape(len(ray_vectors),3)
+
+#     keys = random.split(key, Nphot)
+#     # Use vmap to apply the function over the rays and keys
+#     scattered_vectors = jax.vmap(generate_vectors_on_cone_surface_jax, in_axes=(0, 0, None, 0))(ray_vectors, theta, 1, keys).reshape(Nphot, 3)
+
 #     # Combine scattered and non-scattered rays
-#     new_ray_origins = jnp.where(scatter_mask[:, None], scattered_origins, ray_origins)
-#     new_ray_vectors = jnp.where(scatter_mask[:, None], scattered_vectors, ray_vectors)
+#     new_ray_origins = jnp.where(scatter_mask[:, jnp.newaxis], scattered_origins, ray_origins)
+#     new_ray_vectors = jnp.where(scatter_mask[:, jnp.newaxis], scattered_vectors, ray_vectors)
     
 #     # Second propagation with potentially scattered rays
 #     new_closest_points, new_closest_detector_indices, new_photon_times = propagate(new_ray_vectors, new_ray_origins, detector_points)
@@ -400,30 +416,21 @@ def differentiable_photon_pmt_distance(
 #     # Handle reflections
 #     keys = jax.random.split(key, len(new_closest_detector_indices))
 #     surface_masks = create_surface_masks(new_closest_detector_indices)
+    
 #     barrel_mask, top_cap_mask, bottom_cap_mask = surface_masks
-    
-#     # Use vmap for calculate_reflections
-#     reflected_ray_vectors, reflected_ray_origins, time_to_reflection = jax.vmap(calculate_reflections)(
+#     reflected_ray_vectors, reflected_ray_origins, time_to_reflection = calculate_reflections(
 #         new_ray_vectors, new_ray_origins, surface_masks, detector_radius, detector_height, epsilon)
-    
 #     reflected_ray_origins_stepped = step_along_ray(reflected_ray_origins, reflected_ray_vectors, delta=0.2)
 #     within_detector = check_within_detector(reflected_ray_origins_stepped, detector_radius, detector_height)
-    
 #     final_ray_origins, final_ray_vectors = update_rays(
 #         reflected_ray_origins_stepped, reflected_ray_vectors, new_ray_origins, new_ray_vectors, within_detector)
-    
 #     final_closest_points, final_closest_detector_indices, final_photon_times = propagate(final_ray_vectors, final_ray_origins, detector_points)
-    
 #     final_results = combine_results(
 #         new_closest_points, new_closest_detector_indices, new_photon_times,
 #         final_closest_points, final_closest_detector_indices, final_photon_times,
 #         surface_masks, within_detector, time_to_reflection
 #     )
-    
 #     same_detector_count = count_same_detectors(final_results, surface_masks)
 #     ray_weights = calculate_ray_weights(reflection_prob, keys)
-    
 #     return (*final_results, same_detector_count, new_closest_points, new_closest_detector_indices, new_photon_times, ray_weights, scatter_mask)
-
-
-
+#     #return (*final_results, same_detector_count, new_closest_points, new_closest_detector_indices, new_photon_times, ray_weights)
