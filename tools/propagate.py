@@ -469,8 +469,9 @@ def find_intersected_detectors_differentiable(ray_origins, ray_directions, detec
         Number of height divisions
     inverted_detector_map : ndarray
         Mapping from grid cells to detector indices
-    scale : float, optional
-        Smoothing scale for differentiable approximation, default 0.1
+    temperature : float, optional
+        Smoothing scale for differentiable approximation, default 100
+        Higher values will make the approximation closer to a hard assignment
 
     Returns
     -------
