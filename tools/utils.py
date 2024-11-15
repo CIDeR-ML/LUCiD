@@ -172,7 +172,7 @@ def load_single_event(filename, num_detectors, sparse=True):
         return params, dense_charges, dense_times
 
 
-def generate_random_params(key, L=1):
+def generate_random_params(key, L=2):
     """
     Generate random parameters for event simulation.
 
@@ -209,8 +209,8 @@ def generate_random_params(key, L=1):
     # Generate initial direction: random unit vector from normal distribution
     param3 = jax.random.normal(key3, shape=(3,))
 
-    # Generate initial intensity: uniform random in [1, 4]
-    param4 = jax.random.uniform(key4, minval=1, maxval=4)
+    # Generate initial intensity: uniform random in [2, 10]
+    param4 = jax.random.uniform(key4, minval=2, maxval=10)
 
     return param1, param2, param3, param4
 
