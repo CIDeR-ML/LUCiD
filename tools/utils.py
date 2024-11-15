@@ -1,6 +1,7 @@
 import h5py
 import numpy as np
 import jax.numpy as jnp
+import jax
 
 def full_to_sparse(charges, times):
     """Convert full arrays to sparse representation by removing zero elements.
@@ -162,10 +163,100 @@ def load_single_event(filename, num_detectors, sparse=True):
         times = jnp.array(event_group['times'][()])
 
     if sparse:
-        return params, event_number, indices, charges, times
+        return params, indices, charges, times
     else:
         # Convert sparse arrays to full dense arrays
         dense_charges = sparse_to_full(indices, charges, num_detectors)
         dense_times = sparse_to_full(indices, times, num_detectors)
 
-        return params, event_number, dense_charges, dense_times
+        return params, dense_charges, dense_times
+
+
+def generate_random_params(key, L=1):
+    """
+    Generate random parameters for event simulation.
+
+    Parameters
+    ----------
+    key : jax.random.PRNGKey
+        JAX random number generator key
+    L : float, optional
+        Boundary limit for position coordinates, default=1
+        Position will be generated in cube [-L, L]^3
+
+    Returns
+    -------
+    tuple
+        (opening_angle, position, direction, intensity)
+        - opening_angle : float32
+            Cone opening angle in degrees (1-90)
+        - position : array(3,)
+            Initial position coordinates in range [-L, L]
+        - direction : array(3,)
+            Initial direction vector (randomly sampled from normal distribution)
+        - intensity : float
+            Initial intensity value in range [1, 4]
+    """
+    # Split the key for independent random operations
+    key1, key2, key3, key4 = jax.random.split(key, 4)
+
+    # Generate opening angle: uniform random int from [1, 90] degrees
+    param1 = jax.random.randint(key1, shape=(), minval=1, maxval=91).astype(jnp.float32)
+
+    # Generate initial position: uniform random in [-L, L] cube
+    param2 = jax.random.uniform(key2, shape=(3,), minval=-L, maxval=L)
+
+    # Generate initial direction: random unit vector from normal distribution
+    param3 = jax.random.normal(key3, shape=(3,))
+
+    # Generate initial intensity: uniform random in [1, 4]
+    param4 = jax.random.uniform(key4, minval=1, maxval=4)
+
+    return param1, param2, param3, param4
+
+
+def print_params(params):
+    """
+    Pretty print the event simulation parameters.
+
+    Parameters
+    ----------
+    params : tuple
+        Tuple containing (opening_angle, initial_position, initial_direction, initial_intensity)
+        - opening_angle: float
+            Cone opening angle in degrees
+        - initial_position: array(3,)
+            Starting position coordinates (x, y, z)
+        - initial_direction: array(3,)
+            Initial direction vector
+        - initial_intensity: float
+            Initial intensity value
+
+    Returns
+    -------
+    None
+        Prints formatted parameter information to stdout
+
+    Example
+    -------
+     params = (30.0, jnp.array([1., 0., 0.]), jnp.array([0., 1., 0.]), 2.5)
+     print_params(params)
+    Event Parameters:
+    ────────────────
+    Opening Angle: 30.00 degrees
+    Initial Position: (1.00, 0.00, 0.00)
+    Initial Direction: (0.00, 1.00, 0.00)
+    Initial Intensity: 2.50
+    ────────────────
+    """
+    # Unpack the parameter tuple
+    opening_angle, initial_position, initial_direction, initial_intensity = params
+
+    # Create formatted output with consistent decimal places
+    print("Event Parameters:")
+    print("─" * 20)
+    print(f"Opening Angle: {opening_angle:.2f} degrees")
+    print(f"Initial Position: ({initial_position[0]:.2f}, {initial_position[1]:.2f}, {initial_position[2]:.2f})")
+    print(f"Initial Direction: ({initial_direction[0]:.2f}, {initial_direction[1]:.2f}, {initial_direction[2]:.2f})")
+    print(f"Initial Intensity: {initial_intensity:.2f}")
+    print("─" * 20)
