@@ -12,8 +12,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from tools.geometry import generate_detector
 from tools.utils import generate_random_params
-from tools.losses import (compute_loss, compute_loss_with_precomputed,
-                          create_detector_similarity_matrix)
+from tools.losses import compute_loss
 from tools.simulation import setup_event_simulator
 
 
@@ -57,17 +56,12 @@ def do_throwaway_runs(simulate_event, loss_fn, loss_and_grad_fn, n_throwaway, n_
 
 
 def benchmark_operations(photon_counts, n_runs=20, n_throwaway=5, temperature=100.0,
-                         json_filename='config/cyl_geom_config.json', use_cpu_loss=False):
+                         json_filename='config/cyl_geom_config.json'):
     detector = generate_detector(json_filename)
     detector_points = jnp.array(detector.all_points)
 
     device_type = jax.devices()[0].device_kind
     print(f"Running on {device_type}")
-
-    # Initialize similarity matrix if using CPU loss
-    if use_cpu_loss:
-        normalized_similarity = create_detector_similarity_matrix(detector_points)
-        print("Using precomputed similarity matrix for CPU loss")
 
     times = {
         'simulate': [],
@@ -80,15 +74,9 @@ def benchmark_operations(photon_counts, n_runs=20, n_throwaway=5, temperature=10
 
         simulate_event = setup_event_simulator(json_filename, n_photons, temperature)
 
-        # Create loss function based on mode
-        if use_cpu_loss:
-            def loss_fn(params, key, true_data):
-                simulated_data = simulate_event(params, key)
-                return compute_loss_with_precomputed(*true_data, *simulated_data, normalized_similarity)
-        else:
-            def loss_fn(params, key, true_data):
-                simulated_data = simulate_event(params, key)
-                return compute_loss(detector_points, *true_data, *simulated_data)
+        def loss_fn(params, key, true_data):
+            simulated_data = simulate_event(params, key)
+            return compute_loss(*true_data, *simulated_data)
 
         loss_and_grad_fn = jax.value_and_grad(loss_fn)
 
@@ -173,7 +161,7 @@ def main():
     photon_counts = photon_counts_cpu if backend == "cpu" else photon_counts_gpu
 
     # Use CPU loss function if in CPU mode
-    times = benchmark_operations(photon_counts, use_cpu_loss=(backend == "cpu"))
+    times = benchmark_operations(photon_counts)
     plot_benchmark_results(photon_counts, times, backend)
 
 
