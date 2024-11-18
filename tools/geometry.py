@@ -1,6 +1,13 @@
 import numpy as np
 import json
 from scipy.spatial.transform import Rotation
+from scipy.spatial import cKDTree
+from mpl_toolkits.mplot3d import Axes3D
+import matplotlib.pyplot as plt
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+import plotly.colors as pc
+
 
 def generate_dataset_origins(center, heights, radii, divisions):
     """Creates a collection of origins for the dataset generation."""
@@ -106,15 +113,89 @@ def rotate_vector_batch(vectors, axes, angles):
 
 class Cylinder:
     """Manage the detector geometry"""
-    def __init__(self, center, axis, radius, height, barrel_grid, cap_rings, cyl_sensor_radius):
-
+    def __init__(self, center, axis, radius, height, barrel_grid, cap_rings, cyl_sensor_radius, n_ref_points=5):
         self.C = center
         self.A = axis
         self.r = radius
         self.H = height 
         self.S_radius = cyl_sensor_radius
+        self.n_ref_points = n_ref_points
 
-        self.place_photosensors(barrel_grid,cap_rings)
+        self.place_photosensors(barrel_grid, cap_rings)
+        self.create_reference_points()
+        self.segment_detectors()
+
+    def create_reference_points(self):
+        """Create reference points for segmentation"""
+        phi = np.linspace(0, 2*np.pi, self.n_ref_points, endpoint=False)
+        r = self.r  # Place reference points at half the cylinder radius
+        x = r * np.cos(phi) + self.C[0]
+        y = r * np.sin(phi) + self.C[1]
+        z = np.linspace(-self.H/2, self.H/2, 3) + self.C[2]  # 3 layers of reference points
+
+        self.ref_points = np.array([(x_, y_, z_) for z_ in z for x_, y_ in zip(x, y)])
+
+    def segment_detectors(self):
+        """Group detector points based on nearest reference point"""
+        tree = cKDTree(self.ref_points)
+        _, self.detector_groups = tree.query(self.all_points)
+        
+        self.grouped_detectors = [[] for _ in range(len(self.ref_points))]
+        for i, group in enumerate(self.detector_groups):
+            self.grouped_detectors[group].append(i)
+
+    def visualize_groups_plotly(self):
+        """Visualize the detector groups in 3D using Plotly"""
+        fig = make_subplots(rows=1, cols=1, specs=[[{'type': 'scene'}]])
+
+        # Generate a color scale
+        n_colors = len(self.grouped_detectors)
+        colors = pc.qualitative.Plotly * (n_colors // len(pc.qualitative.Plotly) + 1)
+        colors = colors[:n_colors]  # Truncate to the number of groups
+
+        for i, group in enumerate(self.grouped_detectors):
+            group_points = self.all_points[group]
+            fig.add_trace(go.Scatter3d(
+                x=group_points[:, 0], y=group_points[:, 1], z=group_points[:, 2],
+                mode='markers',
+                marker=dict(size=5, color=colors[i], opacity=0.8),
+                name=f'Group {i}'
+            ))
+
+        fig.add_trace(go.Scatter3d(
+            x=self.ref_points[:, 0], y=self.ref_points[:, 1], z=self.ref_points[:, 2],
+            mode='markers',
+            marker=dict(size=10, color='black', symbol='diamond'),
+            name='Reference Points'
+        ))
+
+        fig.update_layout(
+            scene=dict(
+                xaxis_title='X',
+                yaxis_title='Y',
+                zaxis_title='Z'
+            ),
+            title='Detector Groups',
+            height=800,
+            legend=dict(itemsizing='constant')  # This ensures all legend items are the same size
+        )
+
+        fig.show()
+
+    def plot_pmts_per_reference_plotly(self):
+        """Plot the number of PMTs for each reference point using Plotly"""
+        pmts_per_ref = [len(group) for group in self.grouped_detectors]
+        
+        fig = go.Figure(data=[go.Bar(x=list(range(len(pmts_per_ref))), y=pmts_per_ref)])
+        
+        fig.update_layout(
+            xaxis_title='Reference Point Index',
+            yaxis_title='Number of PMTs',
+            title='Number of PMTs per Reference Point'
+        )
+        
+        fig.show()
+
 
     def place_photosensors(self, barrel_grid, cap_rings):
         """Position the photo sensor centers in the cylinder surface."""
