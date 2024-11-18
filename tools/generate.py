@@ -120,13 +120,13 @@ def differentiable_get_rays(track_origin, track_direction, cone_opening, Nphot, 
     key, subkey = random.split(key)
 
     # track length
-    length = 0.25
+    length = 1.0
 
     # # Generate uniformly distributed lengths
-    # random_lengths = random.uniform(subkey, (Nphot, 1), minval=0, maxval=1) * length
+    random_lengths = random.uniform(subkey, (Nphot, 1), minval=-0.5, maxval=0.5) * length
 
     # Generate normally distributed lengths, clipped to [-1, 1]
-    random_lengths = random.normal(subkey, (Nphot, 1)) * length
+    # random_lengths = random.normal(subkey, (Nphot, 1)) * length
     random_lengths = jnp.clip(random_lengths, -1.0, 1.0)
 
     ray_origins = jnp.ones((Nphot, 3)) * track_origin + random_lengths * track_direction
