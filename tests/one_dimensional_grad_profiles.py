@@ -1,158 +1,232 @@
-
-import matplotlib.pyplot as plt
-import jax.numpy as jnp
 import jax
-from tools.losses import *
-from jax import random
+import jax.numpy as jnp
+from jax import jit, value_and_grad
+import matplotlib.pyplot as plt
+import os, sys
+import time
 
-def one_dimensional_grad_profiles(detector, true_indices, true_cts, true_times, detector_points, detector_radius, detector_height, Nphot, true_params):
-    def test_parameter(param_name, true_params, param_range, param_index=None):
-        results = []
-        loss_and_grad = jax.value_and_grad(smooth_combined_loss_function, argnums=(3, 4, 5, 6, 7, 8, 9, 10))
-        
-        for i, param_value in enumerate(param_range):
-            print(i)
-            params = list(true_params)
-            
-            if param_name == 'reflection_prob':
-                params[0] = param_value
-            elif param_name == 'cone_opening':
-                params[1] = param_value
-            elif param_name.startswith('track_origin'):
-                if isinstance(params[2], jnp.ndarray):
-                    params[2] = params[2].at[param_index].set(param_value)
-                else:  # NumPy array
-                    params[2] = params[2].copy()
-                    params[2][param_index] = param_value
-            elif param_name.startswith('track_direction'):
-                if isinstance(params[3], jnp.ndarray):
-                    params[3] = params[3].at[param_index].set(param_value)
-                else:  # NumPy array
-                    params[3] = params[3].copy()
-                    params[3][param_index] = param_value
-                params[3] = normalize(params[3])
-            elif param_name == 'photon_norm':
-                params[4] = param_value
-            elif param_name == 'att_L':
-                params[5] = param_value
-            elif param_name == 'trk_L':
-                params[6] = param_value
-            elif param_name == 'scatt_L':
-                params[7] = param_value
-            
-            key = random.PRNGKey(0)
-            true_hits = np.zeros(len(detector.all_points))
-            true_hits[true_indices] = true_cts
-            loss, (grad_refl_prob, grad_cone, grad_origin, grad_direction, grad_photon_norm, grad_att_L, grad_trk_L, grad_scatt_L) = loss_and_grad(
-                true_indices, true_hits, true_times, *params, detector_points, detector_radius, detector_height, Nphot, key
-            )
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-            if param_name == 'reflection_prob':
-                grad = grad_refl_prob
-            elif param_name == 'cone_opening':
-                grad = grad_cone
-            elif param_name.startswith('track_origin'):
-                grad = grad_origin[param_index]
-            elif param_name.startswith('track_direction'):
-                grad = grad_direction[param_index]
-            elif param_name == 'photon_norm':
-                grad = grad_photon_norm
-            elif param_name == 'att_L':
-                grad = grad_att_L
-            elif param_name == 'trk_L':
-                grad = grad_trk_L
-            elif param_name == 'scatt_L':
-                grad = grad_scatt_L
-            
-            # Generate and store event
-            event_filename = f'test_events/{param_name}_step_{i}.h5'
-            generate_and_store_event(event_filename, *params, detector, Nphot, key)
-            
-            results.append({
-                'param_value': param_value,
-                'loss': loss,
-                'grad': grad,
-                'event_filename': event_filename
-            })
-        
-        return results
-
-    Nsteps = 11
+from tools.propagate import create_photon_propagator
+from tools.geometry import generate_detector
+from tools.utils import load_single_event, save_single_event, generate_random_params, print_params
+from tools.losses import compute_loss
+from tools.simulation import setup_event_simulator
 
 
-    # # Test 1: Cone opening angle
-    # cone_results = test_parameter('cone_opening', true_params, jnp.linspace(30, 50, Nsteps))
+def analyze_gradient_profiles(true_params, param_changes, simulate_event, detector_points,
+                              true_data, filename_prefix, num_points=121):
+    """Analyze and save gradient profiles for different parameters.
 
-    # # Test 2: X component of track origin
-    # origin_x_results = test_parameter('track_origin_x', true_params, jnp.linspace(0, 2, Nsteps), 0)
+    Parameters
+    ----------
+    true_params : tuple
+        Tuple containing (opening_angle, position, direction, intensity)
+        where opening_angle and intensity are scalars,
+        position and direction are 3D vectors
+    param_changes : tuple
+        Tuple containing variations for each parameter in same format as true_params
+    simulate_event : callable
+        Function that simulates events given parameters
+    detector_points : ndarray
+        Array of detector point coordinates
+    true_data : tuple
+        Tuple containing (indices, charges, times) of true event data
+    filename_prefix : str
+        Prefix for saved files. Will save as prefix_parameter.npy and prefix_plots.png
+    num_points : int, optional
+        Number of points to sample for each parameter, default 121
 
-    # # Test 3: Y component of track direction
-    # direction_y_results = test_parameter('track_direction_y', true_params, jnp.linspace(-0.4, 0.4, Nsteps), 1)
+    Returns
+    -------
+    None
+        Saves files:
+            - {prefix}_opening_angle_data.npy
+            - {prefix}_position_x_data.npy
+            - {prefix}_direction_x_data.npy
+            - {prefix}_intensity_data.npy
+            - {prefix}_gradient_profiles.png
 
-    # # Test 4: Reflection probability
-    refl_prob_results = test_parameter('reflection_prob', true_params, jnp.linspace(0.15, 0.55, Nsteps), 1)
+    Notes
+    -----
+    Each .npy file contains a dictionary with:
+        - parameter_values: The x-axis values
+        - losses: The corresponding loss values 
+        - gradients: The corresponding gradient values
+    """
+    # Create directory if it doesn't exist
 
-    # # Test 5: Number of photons
-    photon_norm_results = test_parameter('photon_norm', true_params, jnp.linspace(0.5, 1.5, Nsteps))
+    key = jax.random.PRNGKey(0)
 
-    # # Test 6: Attenuation length (att_L)
-    # att_L_results = test_parameter('att_L', true_params, jnp.linspace(1, 5, Nsteps))
+    @jit
+    def loss_and_grad(params):
+        """Compute loss and gradient for given parameters."""
 
-    # # Test 7: Track length (trk_L)
-    # trk_L_results = test_parameter('trk_L', true_params, jnp.linspace(0.5, 1.5, Nsteps))
+        def loss_fn(params):
+            simulated_data = simulate_event(params, key)
+            return compute_loss(*true_data, *simulated_data)
 
-    # # Test 8: Scattering length (scatt_L)
-    # scatt_L_results = test_parameter('scatt_L', true_params, jnp.linspace(1, 5, Nsteps))
+        return value_and_grad(loss_fn)(params)
 
-    def plot_results(figname, results, title, xlabel, true_value):
-        param_values = [r['param_value'] for r in results]
-        losses = [r['loss'] for r in results]
-        grads = [r['grad'] for r in results]
-        print(min(grads), max(grads))
-        print(grads)
+    def generate_param_ranges(true_params, param_changes, num_points):
+        """Generate parameter ranges for analysis."""
+        param_ranges = []
+        for i, (true_param, change) in enumerate(zip(true_params, param_changes)):
+            if i in [1, 2]:  # position and direction
+                start = true_param[0] - change[0]
+                end = true_param[0] + change[0]
+            else:  # opening angle and intensity
+                start = true_param - change
+                end = true_param + change
+            param_ranges.append(jnp.linspace(start, end, num_points))
+        return param_ranges
 
-        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(6, 6), sharex=True)
-        
-        # Plot loss
-        ax1.plot(param_values, losses)
-        ax1.set_ylabel('Loss')
-        ax1.set_title(title)
-        ax1.axvline(x=true_value, color='r', linestyle='--', label='True Value')
-        ax1.legend()
-        
-        # Plot gradient
-        ax2.plot(param_values, grads)
-        ax2.set_ylabel('Gradient')
-        ax2.set_xlabel(xlabel)
-        ax2.axvline(x=true_value, color='r', linestyle='--')
-        
-        plt.tight_layout()
-        plt.savefig(figname)
-        plt.close(fig)  # Close the figure to free up memory
+    def generate_plot_data(param_index, param_values):
+        """Generate loss and gradient data for plotting."""
+        losses = []
+        gradients = []
+
+        for new_value in param_values:
+            new_params = list(true_params)
+            if param_index in [1, 2]:  # position and direction
+                new_params[param_index] = new_params[param_index].at[0].set(new_value)
+            else:  # opening angle and intensity
+                new_params[param_index] = new_value
+            new_params = tuple(new_params)
+
+            loss, grad = loss_and_grad(new_params)
+            gradient = grad[param_index]
+            if param_index in [1, 2]:
+                gradient = gradient[0]
+
+            losses.append(loss)
+            gradients.append(gradient)
+
+        return jnp.array(losses), jnp.array(gradients)
+
+    # Generate parameter ranges
+    param_ranges = generate_param_ranges(true_params, param_changes, num_points)
+    param_names = ['Opening Angle', 'Position X', 'Direction X', 'Intensity']
+
+    # Create figure
+    fig, axs = plt.subplots(2, 2, figsize=(18, 12))
+
+    # Analyze each parameter
+    for i, (row, col) in enumerate([(0, 0), (0, 1), (1, 0), (1, 1)]):
+        param_values = param_ranges[i]
+        losses, gradients = generate_plot_data(i, param_values)
+
+        # Save numerical data
+        data_dict = {
+            'parameter_values': param_values,
+            'losses': losses,
+            'gradients': gradients
+        }
+        save_path = f"{filename_prefix}_{param_names[i].lower().replace(' ', '_')}_data.npy"
+        jnp.save(save_path, data_dict)
+
+        # Plot
+        ax1 = axs[row, col]
+        ax2 = ax1.twinx()
+
+        ax1.plot(param_values, losses, 'b-', label='Loss')
+        ax2.plot(param_values, gradients, 'm-', label='Gradient')
+
+        # Add vertical line at the center (true parameter value)
+        true_value = true_params[i] if i not in [1, 2] else true_params[i][0]
+        ax1.axvline(x=true_value, color='b', linestyle='--', label='True Value')
+
+        # Add horizontal line for gradient at zero
+        ax2.axhline(y=0, color='m', linestyle=':', label='Gradient = 0')
+
+        ax1.set_xlabel(f'{param_names[i]} Value')
+        ax1.set_ylabel('Loss', color='b')
+        ax2.set_ylabel('Gradient', color='m')
+
+        ax1.tick_params(axis='y', labelcolor='b')
+        ax2.tick_params(axis='y', labelcolor='m')
+
+        ax1.set_title(f'Loss and Gradient for {param_names[i]}')
+
+        lines1, labels1 = ax1.get_legend_handles_labels()
+        lines2, labels2 = ax2.get_legend_handles_labels()
+        ax1.legend(lines1 + lines2, labels1 + labels2, loc='lower right')
+
+    plt.tight_layout()
+    plt.savefig(f"{filename_prefix}_gradient_profiles.png")
+    plt.close()
 
 
-    true_reflection_prob, true_cone_opening, true_track_origin, true_track_direction, \
-    true_photon_norm, true_att_L, true_trk_L, true_scatt_L = true_params
+def main(random_params=False):
+    """Run gradient profile analysis.
 
-    # In the main function, modify the calls to plot_results:
-    plot_results('output_plots/test0.png', refl_prob_results, 'True Reflection Prob Test', 'Reflection Probability', true_reflection_prob)
-    # plot_results('output_plots/test1.png', cone_results, 'Cone Opening Angle Test', 'Cone Opening Angle (degrees)', true_cone_opening)
-    # plot_results('output_plots/test2.png', origin_x_results, 'Track Origin X Test', 'Track Origin X', true_track_origin[0])
-    # plot_results('output_plots/test3.png', direction_y_results, 'Track Direction Y Test', 'Track Direction Y', true_track_direction[1])
-    plot_results('output_plots/test4.png', photon_norm_results, 'Number of Photons Test', 'Number of Photons', true_photon_norm)
-    # plot_results('output_plots/test5.png', att_L_results, 'Attenuation Length Test', 'Attenuation Length', true_att_L)
-    # plot_results('output_plots/test6.png', trk_L_results, 'Track Length Test', 'Track Length', true_trk_L)
-    # plot_results('output_plots/test7.png', scatt_L_results, 'Scattering Length Test', 'Scattering Length', true_scatt_L)
+    Parameters
+    ----------
+    random_params : bool, optional
+        If True, generate random parameters for true values, default False
+    """
+    # Setup parameters
+    default_json_filename = 'config/cyl_geom_config.json'
+
+    detector = generate_detector(default_json_filename)
+    detector_points = jnp.array(detector.all_points)
+    NUM_DETECTORS = len(detector_points)
+    Nphot = 1_000_000
+    temperature = 100.0
+
+    # Setup simulator
+    simulate_event = setup_event_simulator(default_json_filename, Nphot, temperature)
+
+    # Define parameters based on random flag
+    current_time = int(time.time() * 1e9)
+
+    # Create a PRNGKey using the current time
+    key = jax.random.PRNGKey(current_time)
+    if random_params:
+        true_params = generate_random_params(key, L=2)
+        print_params(true_params)
+    else:
+        true_params = (
+            jnp.array(40.0),  # opening angle
+            jnp.array([0.5, 0.0, 1.0]),  # position
+            jnp.array([0.0, 1.0, 0.0]),  # direction
+            jnp.array(5.0)  # intensity
+        )
+
+    # Define parameter changes
+    param_changes = (
+        jnp.array(10.0),  # opening angle
+        jnp.array([1.0, 0.0, 0.0]),  # position (only changing first component)
+        jnp.array([1.0, 0.0, 0.0]),  # direction (only changing first component)
+        jnp.array(2.0)  # intensity
+    )
+
+    # Generate and save true data
+    key = jax.random.PRNGKey(0)
+    true_data_temp = jax.lax.stop_gradient(simulate_event(true_params, key))
+
+    # Save data
+    save_single_event(true_data_temp, true_params, filename='events/true_event_data.h5')
+
+    # Load data (excluding true_params)
+    true_data = load_single_event('events/true_event_data.h5', NUM_DETECTORS, sparse=False)[1:]
+
+    # Analyze and save gradient profiles
+    analyze_gradient_profiles(
+        true_params=true_params,
+        param_changes=param_changes,
+        simulate_event=simulate_event,
+        detector_points=detector_points,
+        true_data=true_data,
+        filename_prefix='outputs'
+    )
 
 
+if __name__ == "__main__":
+    import argparse
 
+    parser = argparse.ArgumentParser(description='Generate gradient profiles')
+    parser.add_argument('--random_params', action='store_true', help='Use random parameters for true values')
+    args = parser.parse_args()
 
-
-
-
-
-
-
-
-
-
+    main(random_params=args.random_params)

@@ -1,5 +1,4 @@
 import numpy as np
-import torch
 import json
 from scipy.spatial.transform import Rotation
 from scipy.spatial import cKDTree
@@ -112,45 +111,6 @@ def rotate_vector_batch(vectors, axes, angles):
     return rotated_vectors
 
 
-def check_hits_vectorized_per_track_torch(ray_origin, ray_direction, sensor_radius, points):
-    """ For a collection of photons calculate the list of ID of the PMTs that get hit."""
-
-    device = torch.device("cpu")
-
-    # Convert NumPy arrays to PyTorch tensors and move to "mps" device
-    ray_origin_torch = torch.tensor(ray_origin, dtype=torch.float32, device=device)
-    ray_direction_torch = torch.tensor(ray_direction, dtype=torch.float32, device=device)
-    points_torch = torch.tensor(points, dtype=torch.float32, device=device)
-
-    # Calculate vectors from ray origin to all points
-    vectors_to_points = points_torch - ray_origin_torch[:, None, :]
-
-    # Project all vectors onto the ray direction using einsum
-    dot_products_numerator = torch.einsum('ijk,ik->ij', vectors_to_points, ray_direction_torch)
-    dot_products_denominator = torch.sum(ray_direction_torch * ray_direction_torch, dim=-1)
-
-    # Calculate t_values
-    t_values = dot_products_numerator / dot_products_denominator[:, None]
-
-    # Calculate the points on the ray closest to the given points
-    closest_points_on_ray = ray_origin_torch[:, None, :] + t_values[:, :, None] * ray_direction_torch[:, None, :]
-
-    # Calculate the Euclidean distances between all points and their closest points on the ray
-    distances = torch.norm(points_torch - closest_points_on_ray, dim=2)
-
-    # Apply the mask
-    mask = t_values < 0
-    distances = torch.where(mask, torch.tensor(999.0, device=device), distances)
-
-    # Find the indices of the minimum distances
-    indices = torch.argmin(distances, dim=1)
-
-    # Get the good indices based on sensor_radius
-    good_indices = indices[distances[torch.arange(indices.size(0)), indices] < sensor_radius]
-
-    return good_indices.cpu().numpy()
-
-
 class Cylinder:
     """Manage the detector geometry"""
     def __init__(self, center, axis, radius, height, barrel_grid, cap_rings, cyl_sensor_radius, n_ref_points=5):
@@ -260,7 +220,7 @@ class Cylinder:
         tcap_points = []
         bcap_points = []
         for i_ring, N_sensors_in_ring in enumerate(cap_rings):
-            theta = np.linspace(0, 2*np.pi, N_sensors_in_ring, endpoint=False)  # Generate N angles from 0 to 2pi
+            theta = np.linspace(0, 2*np.pi, N_sensors_in_ring, endpoint=False) + 2*np.pi / N_sensors_in_ring  # Generate N angles from 0 to 2pi
             x = self.r*((Nrings-(i_ring+1))/Nrings)* np.cos(theta) + self.C[0]
             y = self.r*((Nrings-(i_ring+1))/Nrings)* np.sin(theta) + self.C[1]
             top_z = [ self.H/2 + self.C[2] for i in range(N_sensors_in_ring)]
