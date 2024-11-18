@@ -64,7 +64,7 @@ def analyze_gradient_profiles(true_params, param_changes, simulate_event, detect
 
         def loss_fn(params):
             simulated_data = simulate_event(params, key)
-            return compute_loss(detector_points, *true_data, *simulated_data)
+            return compute_loss(*true_data, *simulated_data)
 
         return value_and_grad(loss_fn)(params)
 
