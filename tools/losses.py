@@ -3,6 +3,52 @@ from jax import jit
 
 @jit
 def compute_loss(
+        true_charge: jnp.ndarray,
+        true_time: jnp.ndarray,
+        simulated_charge: jnp.ndarray,
+        simulated_time: jnp.ndarray,
+        sigma_time: float = 100.0,
+        eps: float = 1e-8,
+) -> float:
+    """Compute loss between true and simulated detector measurements.
+
+    Calculates loss between true and simulated detectors comparing PMT charge and time measurements. (same PMTs)
+
+    Parameters
+    ----------
+    true_charge : ndarray
+        Array of shape (N_detectors,) containing true charge measurements
+    true_time : ndarray
+        Array of shape (N_detectors,) containing true timing measurements. Not used in this loss
+    simulated_charge : ndarray
+        Array of shape (N_detectors,) containing simulated charge predictions
+    simulated_time : ndarray
+        Array of shape (N_detectors,) containing simulated timing predictions. Not used in this loss
+    sigma_time : float, optional
+        Scale factor for temporal differences, by default 0.1
+    eps : float, optional
+        Small constant to prevent division by zero, by default 1e-8
+
+    Returns
+    -------
+    float
+        Combined loss value from charge distribution and total intensity
+    """
+    # Loss component based on charge spatial distribution
+    delta_charge = jnp.abs(simulated_charge - true_charge)
+    charge_loss = jnp.sum(delta_charge)
+
+    simulated_time = simulated_time - jnp.min(simulated_time) / (jnp.std(simulated_time) + eps)
+    true_time = true_time - jnp.min(true_time) / (jnp.std(true_time) + eps)
+
+    # Loss component based on time distribution
+    delta_time = jnp.abs(simulated_time - true_time) / sigma_time
+    time_loss = jnp.sum(delta_time)
+
+    return charge_loss + time_loss
+
+@jit
+def compute_loss_gaussian(
     detector_points: jnp.ndarray,
     true_charge: jnp.ndarray,
     true_time: jnp.ndarray,
@@ -153,100 +199,3 @@ def compute_loss_with_time(
     temporal_loss = jnp.sum(weights * delta_time) / (jnp.sum(weights) + eps)
 
     return distribution_loss + intensity_loss + temporal_loss
-
-
-
-# if running on CPU, please use this precomputed loss.
-@jit
-def create_detector_similarity_matrix(
-        detector_points: jnp.ndarray,
-        sigma_position: float = 0.1,
-        eps: float = 1e-8,
-) -> tuple[jnp.ndarray, float]:
-    """
-    Precompute the detector similarity matrix that remains constant across calls.
-
-    Parameters
-    ----------
-    detector_points : ndarray
-        Array of shape (N_detectors, 3) containing detector point coordinates
-    sigma_position : float, optional
-        Scale factor for spatial distances, by default 0.1
-    eps : float, optional
-        Small constant to prevent division by zero, by default 1e-8
-
-    Returns
-    -------
-    tuple[ndarray, float]
-        Normalized similarity matrix and epsilon value
-    """
-    # Calculate pairwise distances between detector points, normalized by sigma
-    spatial_dist = jnp.linalg.norm(
-        detector_points[:, jnp.newaxis, :] - detector_points[jnp.newaxis, :, :],
-        axis=2
-    ) / sigma_position
-
-    # Convert distances to similarities using inverse quadratic function
-    similarity_matrix = 1 / (1 + spatial_dist ** 2)
-    sums = jnp.sum(similarity_matrix, axis=1, keepdims=True)
-
-    # Normalize similarities to sum to 1
-    normalized_similarity = similarity_matrix / (sums + eps)
-
-    return normalized_similarity
-
-
-@jit
-def compute_loss_with_precomputed(
-        true_charge: jnp.ndarray,
-        true_time: jnp.ndarray,
-        simulated_charge: jnp.ndarray,
-        simulated_time: jnp.ndarray,
-        normalized_similarity: jnp.ndarray,
-        eps: float = 1e-8,
-) -> float:
-    """
-    Compute loss between true and simulated detector measurements using precomputed similarity matrix.
-
-    Parameters
-    ----------
-    true_charge : ndarray
-        Array of shape (N_detectors,) containing true charge measurements
-    simulated_charge : ndarray
-        Array of shape (N_detectors,) containing simulated charge predictions
-    normalized_similarity : ndarray
-        Precomputed normalized similarity matrix
-    eps : float, optional
-        Small constant to prevent division by zero, by default 1e-8
-
-    Returns
-    -------
-    float
-        Combined loss value from charge distribution and total intensity
-    """
-    # Loss component based on total charge conservation
-    total_true_charge = jnp.sum(true_charge)
-    total_sim_charge = jnp.sum(simulated_charge)
-    intensity_loss = jnp.abs(jnp.log(total_sim_charge / (total_true_charge + eps)))
-
-    # Loss component based on charge spatial distribution
-    delta_charge = jnp.abs(simulated_charge[jnp.newaxis, :] - true_charge[:, jnp.newaxis])
-    distribution_loss = jnp.sum(normalized_similarity * delta_charge)
-
-    return distribution_loss + intensity_loss
-
-
-# Example usage:
-"""
-# First, precompute the similarity matrix (do this once):
-detector_points = ... # Your detector points array
-normalized_similarity, eps = create_detector_similarity_matrix(detector_points)
-
-# Then use it in your loss computations (do this many times):
-loss = compute_loss_with_precomputed(
-    true_charge,
-    simulated_charge,
-    normalized_similarity,
-    eps
-)
-"""
