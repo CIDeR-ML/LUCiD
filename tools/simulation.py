@@ -133,13 +133,13 @@ def create_event_simulator(propagate_photons, Nphot, NUM_DETECTORS, detector_poi
         )
 
         # time alignment - currently not needed but can be used for additional analysis
-        # # Calculate and subtract global mean time for time alignment
+        # Calculate and subtract global mean time for time alignment
         # weighted_sum = jnp.sum(average_times * detector_weight_totals)
         # total_weights = jnp.sum(detector_weight_totals) + eps
         # mean_time = weighted_sum / total_weights
-        #
+
         # # Return mean-subtracted times
-        # average_times = average_times - mean_time
+        # average_times = average_times
 
         # # Position calculation - currently not needed but can be used for additional analysis
         # flat_positions = hit_positions.reshape(-1, 3)  # [max_detectors * n_rays, 3]
