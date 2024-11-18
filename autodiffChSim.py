@@ -31,7 +31,7 @@ directory = 'output_plots'
 if not os.path.exists(directory):
     os.makedirs(directory)
 
-Nphot = 10000
+Nphot = 1000
 
 def main():
     # Set default values
@@ -52,44 +52,104 @@ def main():
 
     if args.is_data:
         print('Using data mode')
-        # Use specific parameters for data generation
-        true_cone_opening = 40.
-        true_track_origin = np.array([1., 0., 0.])
-        true_track_direction = np.array([1., 0., 0.])
-        #generate_data(json_filename, output_filename, true_cone_opening, true_track_origin, true_track_direction)
+
+        true_reflection_prob = 0.3
+        true_cone_opening = np.random.uniform(37., 43)
+        true_track_origin = np.random.uniform(-1., 1., size=3)
+        true_track_direction = normalize(np.random.uniform(-1., 1., size=3))
+
+        # true_reflection_prob = 0.
+        # true_cone_opening = 40.
+        # true_track_origin = np.array([1., -0.2, 0.3])
+        # true_track_direction = normalize(np.array([0.4, 0.7, 1.]))
+
+        true_photon_norm = 1.
+        true_att_L = 10    # [meters]
+        true_trk_L = 1     # [meters]
+        true_scatt_L = 10  # [meters]
+
+        true_params = [true_reflection_prob, true_cone_opening, true_track_origin, true_track_direction, \
+        true_photon_norm, true_att_L, true_trk_L, true_scatt_L]
 
         detector = generate_detector(json_filename)
         key = random.PRNGKey(0)
-        generate_and_store_event(output_filename, true_cone_opening, true_track_origin, true_track_direction, detector, Nphot, key)
+        generate_and_store_event(output_filename, *true_params, detector, Nphot, key)
 
     elif args.test:
 
         print('Running tests')
+
+        true_reflection_prob = 0.33
+        true_cone_opening = 40.
+        true_track_origin = np.array([1., 0., 0.])
+        true_track_direction = np.array([1., 0., 0.])
+
+        true_photon_norm = 1.
+        true_att_L = 10.    # [meters]
+        true_trk_L = 1.     # [meters]
+        true_scatt_L = 10.  # [meters]
+
+        true_params = [true_reflection_prob, true_cone_opening, true_track_origin, true_track_direction, \
+        float(true_photon_norm), true_att_L, true_trk_L, true_scatt_L]
+
         detector = generate_detector(json_filename)
-        true_indices, _, true_times, true_cone_opening, true_track_origin, true_track_direction = load_data(output_filename)
+        key = random.PRNGKey(0)
+        generate_and_store_event(output_filename, *true_params, detector, Nphot, key)
+
+        true_indices, true_cts, true_times, true_reflection_prob, true_cone_opening, true_track_origin, true_track_direction,  \
+        true_photon_norm, true_att_L, true_trk_L, true_scatt_L = load_data(output_filename)
         
         detector_points = jnp.array(detector.all_points)
-        detector_radius = detector.S_radius
+        detector_radius = detector.r
+        detector_height = detector.H
         
-        true_params = [true_cone_opening, true_track_origin, true_track_direction]
+        true_params = [true_reflection_prob, true_cone_opening, true_track_origin, true_track_direction, \
+        true_photon_norm, true_att_L, true_trk_L, true_scatt_L]
 
         one_dimensional_grad_profiles(
-            detector, true_indices, true_times, detector_points, detector_radius, Nphot, true_params, args.use_time_loss
+            detector, true_indices, true_cts, true_times, detector_points, detector_radius, detector_height, Nphot, true_params
         )
 
     else:
         print('Inference mode')
+
         detector = generate_detector(json_filename)
-        true_indices, _, true_times, true_cone_opening, true_track_origin, true_track_direction = load_data(output_filename)
+        true_indices, true_cts, true_times, true_reflection_prob, true_cone_opening, true_track_origin, true_track_direction,  \
+        true_photon_norm, true_att_L, true_trk_L, true_scatt_L = load_data(output_filename)
         
-        log = Logger()
+        true_params = [true_reflection_prob, true_cone_opening, true_track_origin, true_track_direction, \
+        true_photon_norm, true_att_L, true_trk_L, true_scatt_L]
 
-        # Start with random parameters for inference
-        cone_opening = np.random.uniform(48., 52)
-        track_origin = np.random.uniform(0., 0., size=3)
-        track_direction = normalize(np.random.uniform(-1., 1., size=3))
+        reflection_prob = 0.2
+        cone_opening = 40.
+        track_origin = np.array([1., 0., 0.])
+        track_direction = np.array([1., 0., 0.])
 
-        optimize_params(detector, true_indices, true_times, true_cone_opening, true_track_origin, true_track_direction, cone_opening, track_origin, track_direction, Nphot)
+        photon_norm = 1.
+        att_L = 10.    # [meters]
+        trk_L = 1.     # [meters]
+        scatt_L = 10.  # [meters]
+
+        use_new_method = True
+        if use_new_method:
+            grid_result  = loss_search_in_grid(detector, output_filename)
+            cone_opening = grid_result[0]
+            track_origin = np.array([grid_result[1], grid_result[2], grid_result[3]])
+            track_direction = np.array([grid_result[4], grid_result[5], grid_result[6]])
+
+            #let's not guess all the parameters (no calibration nor normalization --maybe add num photons in the future--)
+            print('--------------------')
+            print('guessed_cone_opening: ',    cone_opening)
+            print('guessed_track_origin: ',    track_origin)
+            print('guessed_track_direction: ', track_direction)
+            print('--------------------')
+
+        params = [reflection_prob, true_cone_opening, track_origin, track_direction, \
+        true_photon_norm*1.2, true_att_L, true_trk_L, true_scatt_L]
+
+        optimize_params(detector, true_cts, true_indices, true_times, *true_params, *params, Nphot)
+
+
 
 if __name__ == "__main__":
     stime = time.perf_counter()
