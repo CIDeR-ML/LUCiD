@@ -131,12 +131,17 @@ def benchmark_operations(photon_counts, n_runs=20, n_throwaway=5, temperature=10
 def plot_benchmark_results(photon_counts, times, backend):
     plt.figure(figsize=(12, 8))
 
+    # multiply by 1000 to convert to ms
+    times['simulate'] = np.array(times['simulate']) * 1000
+    times['simulate_loss'] = np.array(times['simulate_loss']) * 1000
+    times['simulate_loss_grad'] = np.array(times['simulate_loss_grad']) * 1000
+
     plt.loglog(photon_counts, times['simulate'], 'bo-', label='Simulate Only')
     plt.loglog(photon_counts, times['simulate_loss'], 'ro-', label='Simulate + Loss')
     plt.loglog(photon_counts, times['simulate_loss_grad'], 'go-', label='Simulate + Loss + Grad')
 
     plt.xlabel('Number of Photons')
-    plt.ylabel('Time (seconds)')
+    plt.ylabel('Time (ms)')
     plt.title(f'JAX Photon Simulation Operations Benchmark on {backend}')
     plt.legend()
     plt.grid(True)
