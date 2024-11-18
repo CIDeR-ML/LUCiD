@@ -1,87 +1,73 @@
-import h5py
-import numpy as np
-import pandas as pd
-import matplotlib.pyplot as plt
-from matplotlib.patches import Circle
-from matplotlib.colors import LinearSegmentedColormap, Normalize
 import argparse
-
-import sys, os
+import sys
+import os
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 
-from tools.geometry import *
-from tools.visualization import *
+from tools.utils import load_single_event
+from tools.visualization import create_detector_display
+from tools.geometry import generate_detector
 
+def main():
+    # Set default values
+    default_filename = 'events/single_event_data.h5'
+    default_json_filename = 'config/cyl_geom_config.json'
 
-# Set default values
-default_evt_ID = 0
-default_filename = 'datasets/sim_mode_0_dataset_0_events.h5'
-default_json_filename = 'config/cyl_geom_config.json'
+    # Parse command-line arguments
+    parser = argparse.ArgumentParser(description='Display detector event visualization')
+    parser.add_argument('--filename', type=str, default=default_filename,
+                      help='The input h5 file containing event data')
+    parser.add_argument('--json_filename', type=str, default=default_json_filename,
+                      help='The JSON file containing detector geometry')
+    parser.add_argument('--plot_time', action='store_true',
+                      help='Plot hit times instead of charges')
+    parser.add_argument('--output', type=str, default=None,
+                      help='Output filename for the plot')
 
-# Parse command-line arguments
-parser = argparse.ArgumentParser(description='Description of your program')
-parser.add_argument('--evt_ID', type=int, default=default_evt_ID, help='The event ID to plot')
-parser.add_argument('--filename', type=str, default=default_filename, help='The input filename')
-parser.add_argument('--json_filename', type=str, default=default_json_filename, help='The JSON filename')
-parser.add_argument('--plot_time', type=bool, default=False, help='Plot the time of the hits')
+    args = parser.parse_args()
 
-args = parser.parse_args()
+    # Generate detector to get number of PMTs
+    detector = generate_detector(args.json_filename)
+    NUM_DETECTORS = len(detector.all_points)
 
-# Access the values
-evt_ID = args.evt_ID
-filename = args.filename
-json_filename = args.json_filename
+    # Load event data
+    try:
+        params, indices, charges, times = load_single_event(
+            args.filename,
+            NUM_DETECTORS,
+            sparse=True
+        )
+    except Exception as e:
+        print(f"Error loading event data: {e}")
+        return
 
-cyl_center, cyl_axis, cyl_radius, cyl_radius, cyl_height, cyl_barrel_grid, cyl_cap_rings, cyl_sensor_radius = load_cyl_geom(json_filename)
-detector = generate_detector(json_filename)
+    # Print event parameters
+    print("\nEvent Parameters:")
+    print("─" * 20)
+    print(f"Opening Angle: {params[0]:.2f} degrees")
+    print(f"Initial Position: ({params[1][0]:.2f}, {params[1][1]:.2f}, {params[1][2]:.2f})")
+    print(f"Initial Direction: ({params[2][0]:.2f}, {params[2][1]:.2f}, {params[2][2]:.2f})")
+    print(f"Initial Intensity: {params[3]:.2f}")
+    print("─" * 20)
 
+    # Create detector display
+    detector_display = create_detector_display(args.json_filename)
 
-# Extract info from h5 file
-with h5py.File(filename, 'r') as f:
+    # Generate output filename if not provided
+    if args.output is None:
+        output_base = os.path.splitext(args.filename)[0]
+        output_suffix = '_time' if args.plot_time else '_charge'
+        args.output = f"{output_base}{output_suffix}.png"
 
-    # Access datasets
-    h5_evt_ids = f['evt_id']
-    h5_evt_pos = f['positions']
-    h5_evt_hit_idx = f['event_hits_index']
-    h5_evt_hit_IDs = f['hit_pmt']
-    h5_evt_hit_Qs = f['hit_charge']
-    h5_evt_hit_Ts = f['hit_time']
+    # Create visualization
+    detector_display(
+        indices,
+        charges,
+        times,
+        file_name=args.output,
+        plot_time=args.plot_time
+    )
 
-    # Access data
-    evt_ids = h5_evt_ids[:]
-    evt_pos = h5_evt_pos[:]
-    evt_hit_idx = h5_evt_hit_idx[:]
-    evt_hit_IDs = h5_evt_hit_IDs[:]
-    evt_hit_Qs = h5_evt_hit_Qs[:]
-    evt_hit_Ts = h5_evt_hit_Ts[:]
-# -----------------------------
+    print(f"\nPlot saved to: {args.output}")
 
-
-# Process info to make it compatible with event display format
-IDs = None
-if evt_ID == 0:
-    IDs = evt_hit_IDs[0:evt_hit_idx[0]]
-    Qs  = evt_hit_Qs[0:evt_hit_idx[0]]
-    Ts  = evt_hit_Ts[0:evt_hit_idx[0]]
-else:
-    IDs = evt_hit_IDs[evt_hit_idx[evt_ID-1]:evt_hit_idx[evt_ID]]
-    Qs  = evt_hit_Qs[evt_hit_idx[evt_ID-1]:evt_hit_idx[evt_ID]]
-    Ts  = evt_hit_Ts[evt_hit_idx[evt_ID-1]:evt_hit_idx[evt_ID]]
-
-print("Number of PMTs: ", len(detector.all_points))
-
-ID_to_PE = np.zeros(len(detector.all_points))
-if args.plot_time:
-    ID_to_PE[IDs] = Ts
-else:
-    ID_to_PE[IDs] = Qs
-ID_to_position = {i:x for i,x in enumerate(detector.all_points)}
-ID_to_case = detector.ID_to_case
-ID_to_PE = {i:x for i,x in enumerate(ID_to_PE)}
-# -----------------------------
-
-# do the 2D plot.
-if args.plot_time:
-    show_2D_display(ID_to_position, ID_to_PE, ID_to_case, cyl_radius, cyl_height, file_name='evt_example_time.pdf', plot_time=True)
-else:
-    show_2D_display(ID_to_position, ID_to_PE, ID_to_case, cyl_radius, cyl_height, file_name='evt_example.pdf')
+if __name__ == "__main__":
+    main()
