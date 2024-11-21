@@ -45,7 +45,11 @@ def compute_loss(
     delta_time = jnp.abs(simulated_time - true_time) / sigma_time
     time_loss = jnp.sum(delta_time)
 
-    return charge_loss + time_loss
+    intensity_loss = jnp.abs(jnp.log(jnp.sum(simulated_charge) / (jnp.sum(true_charge) + eps)))
+
+    return charge_loss + time_loss + intensity_loss
+
+
 
 @jit
 def compute_loss_gaussian(
