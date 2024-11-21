@@ -172,17 +172,23 @@ def load_single_event(filename, num_detectors, sparse=True):
         return params, dense_charges, dense_times
 
 
-def generate_random_params(key, L=2):
+import jax
+import jax.numpy as jnp
+
+def generate_random_params(key, h=2, r=1, intensity_range=(2, 10)):
     """
-    Generate random parameters for event simulation.
+    Generate random parameters for event simulation with position inside a cylinder.
 
     Parameters
     ----------
     key : jax.random.PRNGKey
         JAX random number generator key
-    L : float, optional
-        Boundary limit for position coordinates, default=1
-        Position will be generated in cube [-L, L]^3
+    h : float, optional
+        Height of the cylinder, default=2
+        Position will be generated in range [-h/2, h/2] for z-coordinate
+    r : float, optional
+        Radius of the cylinder, default=1
+        Position will be generated within circle of radius r in xy-plane
 
     Returns
     -------
@@ -191,26 +197,38 @@ def generate_random_params(key, L=2):
         - opening_angle : float32
             Cone opening angle in degrees (1-90)
         - position : array(3,)
-            Initial position coordinates in range [-L, L]
+            Initial position coordinates inside cylinder of height h and radius r
         - direction : array(3,)
             Initial direction vector (randomly sampled from normal distribution)
         - intensity : float
-            Initial intensity value in range [1, 4]
+            Initial intensity value in range [2, 10]
     """
     # Split the key for independent random operations
-    key1, key2, key3, key4 = jax.random.split(key, 4)
+    key1, key2, key3, key4, key5 = jax.random.split(key, 5)
 
     # Generate opening angle: uniform random int from [1, 90] degrees
     param1 = jax.random.randint(key1, shape=(), minval=1, maxval=91).astype(jnp.float32)
 
-    # Generate initial position: uniform random in [-L, L] cube
-    param2 = jax.random.uniform(key2, shape=(3,), minval=-L, maxval=L)
+    # Generate cylindrical coordinates
+    # Random radius from 0 to r (using square root for uniform distribution in circle)
+    radius = r * jnp.sqrt(jax.random.uniform(key2, shape=()))
+    # Random angle from 0 to 2π
+    theta = jax.random.uniform(key3, shape=(), minval=0, maxval=2*jnp.pi)
+    # Random height from -h/2 to h/2
+    z = jax.random.uniform(key4, shape=(), minval=-h/2, maxval=h/2)
+
+    # Convert cylindrical to Cartesian coordinates
+    param2 = jnp.array([
+        radius * jnp.cos(theta),  # x
+        radius * jnp.sin(theta),  # y
+        z                         # z
+    ])
 
     # Generate initial direction: random unit vector from normal distribution
-    param3 = jax.random.normal(key3, shape=(3,))
+    param3 = jax.random.normal(key5, shape=(3,))
 
-    # Generate initial intensity: uniform random in [2, 10]
-    param4 = jax.random.uniform(key4, minval=2, maxval=10)
+    # Generate initial intensity: uniform random in the defined range
+    param4 = jax.random.uniform(key5, minval=intensity_range[0], maxval=intensity_range[1])
 
     return param1, param2, param3, param4
 
