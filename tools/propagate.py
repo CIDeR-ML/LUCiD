@@ -385,67 +385,173 @@ def assign_and_map_detectors(detectors, detector_radius, r, h, n_cap, n_angular,
     detector_grid_map = create_detector_grid_map(assignments, n_cap, n_angular, n_height)
     return assignments, detector_grid_map
 
+@partial(jax.jit, static_argnums=(1, 2, 3, 4))
+def calculate_grid_centers(r, h, n_cap, n_angular, n_height):
+    """Calculate center points of all grid cells"""
+    # Wall centers
+    angular_step = 2 * jnp.pi / n_angular
+    height_step = h / n_height
 
-def create_inverted_detector_map(assignments, n_cap, n_angular, n_height, max_detectors_per_cell, num_detectors):
-    """
-    Creates an inverted mapping from grid cells to detector indices.
+    angular_centers = (jnp.arange(n_angular) + 0.5) * angular_step
+    height_centers = (jnp.arange(n_height) - n_height / 2 + 0.5) * height_step
 
-    Parameters
-    ----------
-    assignments : ndarray
-        Array of detector assignments to grid cells
-    n_cap : int
-        Number of cells along each dimension in cap regions
-    n_angular : int
-        Number of angular divisions
-    n_height : int
-        Number of height divisions
-    max_detectors_per_cell : int
-        Maximum number of detectors that can be assigned to a single cell
-    num_detectors : int
-        Total number of detectors
+    ang_grid, h_grid = jnp.meshgrid(angular_centers, height_centers, indexing='ij')
 
-    Returns
-    -------
-    ndarray
-        2D array where each row represents a cell and contains indices of assigned detectors
-    """
-    max_detectors_per_cell = int(max_detectors_per_cell)
+    wall_x = r * jnp.cos(ang_grid)
+    wall_y = r * jnp.sin(ang_grid)
+    wall_centers = jnp.stack([
+        wall_x.reshape(-1),
+        wall_y.reshape(-1),
+        h_grid.reshape(-1)
+    ], axis=1)
 
-    @partial(jax.jit, static_argnums=(1, 2, 3, 4, 5))
-    def create_map(assignments, n_cap, n_angular, n_height, max_detectors_per_cell, num_detectors):
-        total_cells = n_angular * n_height + 2 * n_cap * n_cap
-        inverted_map = jnp.full((total_cells, max_detectors_per_cell), -1, dtype=jnp.int32)
+    # Cap centers
+    cap_step = 2 * r / n_cap
+    cap_positions = (jnp.arange(n_cap) - n_cap / 2 + 0.5) * cap_step
+    x_grid, y_grid = jnp.meshgrid(cap_positions, cap_positions, indexing='ij')
 
-        def update_inverted_map(i, inv_map):
-            detector_assignments = assignments[i]
+    # Top and bottom cap centers
+    top_z = jnp.full(n_cap * n_cap, h / 2)
+    bottom_z = jnp.full(n_cap * n_cap, -h / 2)
 
-            def update_cell(j, im):
-                cell = detector_assignments[j]
-                is_valid = (cell[0] != -1) & (cell[1] != -1) & (cell[2] != -1)
+    cap_centers = jnp.concatenate([
+        jnp.stack([
+            x_grid.reshape(-1),
+            y_grid.reshape(-1),
+            top_z
+        ], axis=1),
+        jnp.stack([
+            x_grid.reshape(-1),
+            y_grid.reshape(-1),
+            bottom_z
+        ], axis=1)
+    ], axis=0)
 
-                # Convert 3D cell coordinates to linear index
-                idx = jnp.where(cell[2] == 0,
-                                cell[0] * n_height + cell[1],  # Wall cell
-                                n_angular * n_height + (cell[2] - 1) * n_cap * n_cap + cell[0] * n_cap + cell[
-                                    1])  # Cap cell
+    return jnp.concatenate([wall_centers, cap_centers], axis=0)
 
-                current_count = jnp.sum(im[idx] != -1)
-                update = jnp.where((current_count < max_detectors_per_cell) & is_valid, i, -1)
-                return im.at[idx, current_count].set(update)
 
-            return jax.lax.fori_loop(0, detector_assignments.shape[0], update_cell, inv_map)
+@partial(jax.jit, static_argnums=(2,))
+def find_closest_detectors(grid_centers, detector_positions, max_detectors_per_cell):
+    """Find closest detectors to each grid cell center"""
+    squared_distances = jnp.sum(
+        (grid_centers[:, None, :] - detector_positions[None, :, :]) ** 2,
+        axis=2
+    )
+    return jax.lax.top_k(-squared_distances, max_detectors_per_cell)[1]
 
-        return jax.lax.fori_loop(0, num_detectors, update_inverted_map, inverted_map)
 
-    return create_map(assignments, n_cap, n_angular, n_height, max_detectors_per_cell, num_detectors)
+@partial(jax.jit, static_argnums=(2, 3, 4, 5, 6), device=jax.devices('cpu')[0])
+def create_inverted_detector_map(assignments_geometric, assignments_distance, n_cap, n_angular, n_height,
+                                 max_detectors_per_cell, num_detectors):
+    """Create inverted detector map prioritizing geometric intersections then closest detectors"""
+    total_cells = n_angular * n_height + 2 * n_cap * n_cap
+
+    # Initialize map
+    inverted_map = jnp.full((total_cells, max_detectors_per_cell), -1, dtype=jnp.int32)
+
+    def update_cell(carry, i):
+        inv_map = carry
+
+        def add_geometric(carry, j):
+            curr_map, curr_count = carry
+
+            # Convert linear index i back to 3D coordinates using jnp.where instead of if/else
+            is_wall_cell = i < n_angular * n_height
+            is_top_cap_cell = (i >= n_angular * n_height) & (i < n_angular * n_height + n_cap * n_cap)
+
+            # Wall cell calculations
+            wall_i = i // n_height
+            wall_j = i % n_height
+
+            # Cap cell calculations
+            cap_offset = i - n_angular * n_height
+            cap_idx = cap_offset % (n_cap * n_cap)
+            cap_i = cap_idx // n_cap
+            cap_j = cap_idx % n_cap
+
+            # Select correct indices based on cell type
+            cell_i = jnp.where(is_wall_cell, wall_i, cap_i)
+            cell_j = jnp.where(is_wall_cell, wall_j, cap_j)
+            cell_k = jnp.where(is_wall_cell,
+                               0,
+                               jnp.where(is_top_cap_cell, 1, 2))
+
+            # Check if detector j intersects with this cell in 3D coordinates
+            detector_assignments = assignments_geometric[j]
+            matches = (detector_assignments[:, 0] == cell_i) & \
+                      (detector_assignments[:, 1] == cell_j) & \
+                      (detector_assignments[:, 2] == cell_k)
+
+            cell_matches = jnp.any(matches)
+            should_add = cell_matches & (curr_count < max_detectors_per_cell)
+
+            new_map = jnp.where(
+                should_add,
+                curr_map.at[i, curr_count].set(j),
+                curr_map
+            )
+
+            return (new_map, curr_count + should_add), None
+
+        # Add geometric intersections
+        (new_map, geom_count), _ = jax.lax.scan(
+            add_geometric,
+            (inv_map, 0),
+            jnp.arange(len(assignments_geometric))
+        )
+
+        # Get closest detectors for this cell
+        closest = assignments_distance[i]
+
+        # Add closest detectors if there's room
+        def add_closest(carry, j):
+            curr_map, curr_count = carry
+            detector_idx = closest[j]
+
+            # Check for duplicates
+            def check_duplicate(k, is_dup):
+                return is_dup | (curr_map[i, k] == detector_idx)
+
+            is_duplicate = jax.lax.fori_loop(
+                0, curr_count,
+                check_duplicate,
+                False
+            )
+
+            # Add if not duplicate and have space
+            should_add = (~is_duplicate) & (curr_count < max_detectors_per_cell)
+
+            new_map = jnp.where(
+                should_add,
+                curr_map.at[i, curr_count].set(detector_idx),
+                curr_map
+            )
+
+            return (new_map, curr_count + should_add), None
+
+        # Fill remaining slots with closest detectors
+        (final_map, _), _ = jax.lax.scan(
+            add_closest,
+            (new_map, geom_count),
+            jnp.arange(len(closest))
+        )
+
+        return final_map, None
+
+    final_map, _ = jax.lax.scan(
+        update_cell,
+        inverted_map,
+        jnp.arange(total_cells)
+    )
+
+    return final_map
 
 
 def find_intersected_detectors_differentiable(ray_origins, ray_directions, detector_positions, detector_radius, r, h,
                                               n_cap, n_angular, n_height, inverted_detector_map,
                                               temperature):
     """
-    Finds detectors intersected by rays using a differentiable approximation.
+    Finds detectors intersected by rays using a differentiable approximation with temperature-aware minimum weights.
 
     Parameters
     ----------
@@ -469,8 +575,8 @@ def find_intersected_detectors_differentiable(ray_origins, ray_directions, detec
         Number of height divisions
     inverted_detector_map : ndarray
         Mapping from grid cells to detector indices
-    temperature : float, optional
-        Smoothing scale for differentiable approximation, default 100
+    temperature : float
+        Smoothing scale for differentiable approximation
         Higher values will make the approximation closer to a hard assignment
 
     Returns
@@ -491,11 +597,30 @@ def find_intersected_detectors_differentiable(ray_origins, ray_directions, detec
     # Convert to linear indices for wall and cap regions
     wall_idx = wall_indices[:, 0] * n_height + wall_indices[:, 1]
     cap_idx = cap_indices[:, 0] * n_cap + cap_indices[:, 1]
-    idx = jnp.where(is_wall,
-                    wall_idx,
-                    jnp.where(is_top_cap,
-                              n_angular * n_height + cap_idx,
-                              n_angular * n_height + n_cap * n_cap + cap_idx))
+
+    def calculate_linear_index(wall_indices, cap_indices, is_wall, is_top_cap):
+        # Wall indexing
+        wall_linear = jnp.clip(wall_indices[:, 0] * n_height + wall_indices[:, 1],
+                               0, n_angular * n_height - 1)
+
+        # Cap indexing
+        cap_linear = jnp.clip(cap_indices[:, 0] * n_cap + cap_indices[:, 1],
+                              0, n_cap * n_cap - 1)
+
+        # Combine with base offsets
+        idx = jnp.where(is_wall,
+                        wall_linear,
+                        jnp.where(is_top_cap,
+                                  n_angular * n_height + cap_linear,
+                                  n_angular * n_height + n_cap * n_cap + cap_linear))
+
+        # Final bounds check
+        total_cells = n_angular * n_height + 2 * n_cap * n_cap
+        return jnp.clip(idx, 0, total_cells - 1)
+
+    # Use this function instead of direct indexing
+    idx = calculate_linear_index(wall_indices, cap_indices, is_wall, is_top_cap)
+
     potential_detectors = jax.lax.stop_gradient(inverted_detector_map[idx])
 
     def compute_detector_intersections(detector_idx):
@@ -508,12 +633,16 @@ def find_intersected_detectors_differentiable(ray_origins, ray_directions, detec
         t = -jnp.sum(oc * ray_d, axis=1, keepdims=True)
         closest = ray_origins + t * ray_d
 
-        # Calculate smoothed intersection weights
+        # Calculate smoothed intersection weights with temperature-aware minimum
         to_detector = closest - sphere_centers
         distance = jnp.linalg.norm(to_detector, axis=1)
         min_distance = jnp.maximum(distance - detector_radius, 0.0)
+
+        # Temperature-aware weighting function
+        base_weight = detector_radius / (detector_radius + (min_distance * temperature) ** 2)
+
         raw_weights = jnp.where(valid,
-                                detector_radius / (detector_radius + (min_distance * temperature) ** 2),
+                                base_weight,
                                 0.0)
 
         return raw_weights, t, detector_idx
@@ -548,8 +677,8 @@ def find_intersected_detectors_differentiable(ray_origins, ray_directions, detec
     return result if not single_ray else jax.tree_map(lambda x: x[0], result)
 
 
-def create_photon_propagator(detector_positions, detector_radius, r=4.0, h=6.0, n_cap=39, n_angular=168, n_height=28,
-                             temperature=100):
+def create_photon_propagator(detector_positions, detector_radius, r=4.0, h=6.0, n_cap=73, n_angular=168, n_height=82,
+                             temperature=100, max_detectors_per_cell=4):
     """
     Creates a JIT-compiled function for efficient photon propagation simulation.
 
@@ -571,6 +700,8 @@ def create_photon_propagator(detector_positions, detector_radius, r=4.0, h=6.0, 
         Number of height divisions, default 28
     temperature : float, optional
         Temperature parameter for smoothing, default 100
+    max_detectors_per_cell : int, optional
+        Maximum number of detectors per grid cell, default 4
 
     Returns
     -------
@@ -582,16 +713,22 @@ def create_photon_propagator(detector_positions, detector_radius, r=4.0, h=6.0, 
 
     detector_grid_map = create_detector_grid_map(
         assignments_geometric, n_cap, n_angular, n_height)
-    max_detectors_per_cell = jnp.max(detector_grid_map)
+
+    assignments_distance = find_closest_detectors(
+        calculate_grid_centers(r, h, n_cap, n_angular, n_height),
+        detector_positions,
+        max_detectors_per_cell
+    )
 
     inverted_detector_map = create_inverted_detector_map(
         assignments_geometric,
+        assignments_distance,
         n_cap, n_angular, n_height,
         max_detectors_per_cell, detector_positions.shape[0]
     )
 
-    @partial(jax.jit, static_argnames=['temperature'])
-    def propagate_photons(photon_origins, photon_directions, temperature=temperature):
+    @jax.jit
+    def propagate_photons(photon_origins, photon_directions):
         return find_intersected_detectors_differentiable(
             photon_origins, photon_directions, detector_positions, detector_radius,
             r, h, n_cap, n_angular, n_height, inverted_detector_map,
