@@ -156,7 +156,7 @@ def jax_linear_interp(x_data, y_data, x):
     return y0 + slope * (x - x0)
 
 @partial(jax.jit, static_argnums=(3))
-def new_differentiable_get_rays(track_origin, track_direction, energy, new_Nphot, table_data, model_params, key):
+def new_differentiable_get_rays(track_origin, track_direction, energy, Nphot, table_data, model_params, key):
     key, subkey = random.split(key)
     cos_bins, trk_bins, cos_trk_mesh, (x_data, y_data), grid_shape = table_data
     
@@ -179,35 +179,61 @@ def new_differentiable_get_rays(track_origin, track_direction, energy, new_Nphot
     
     # Apply SIREN model
     photon_weights, _ = model.apply(model_params, evaluation_grid)
-    # Get indices of top Nphot weights (using JAX operations)
-    top_indices = jnp.argsort(-photon_weights.squeeze())[:new_Nphot]
     
-    # Get the cos and trk values for these indices
-    cos_trk_mesh = jnp.array(cos_trk_mesh)  # Ensure it's a JAX array
-    selected_cos_trk = cos_trk_mesh[top_indices]
+    # After getting selected_cos and selected_trk:
+    key, sampling_key = random.split(key)
+    key, noise_key_cos = random.split(key)
+    key, noise_key_trk = random.split(key)
     
-    # # Split into separate cos and trk arrays
-    selected_cos = selected_cos_trk[:, 0]
-    selected_trk = selected_cos_trk[:, 1]
-    photon_thetas = jnp.arccos(selected_cos)
+    # this calculate the number of good seeds based on linear
+    # interpolation given the trained SIREN model under evaluation
+    # with the specific grid settings in create_siren_grid
+    # if you change create_siren_grid, change also the numbers below.
+    num_seeds = jnp.int32(energy*7.28535714-1293.35714286)
     
-    # # Generate ray vectors and origins
+    seed_indices = random.randint(sampling_key, (Nphot,), 0, num_seeds)
+    indices_by_weight = jnp.argsort(-photon_weights.squeeze())[seed_indices]
+    
+    cos_trk_mesh = jnp.array(cos_trk_mesh)
+    selected_cos_trk = cos_trk_mesh[indices_by_weight]
+    
+    # Split into separate cos and trk arrays
+    sampled_cos = selected_cos_trk[:, 0]
+    sampled_trk = selected_cos_trk[:, 1]
+    
+    # Add Gaussian noise
+    # You can adjust the standard deviation (sigma) as needed
+    sigma_cos = 0.02  # example value
+    sigma_trk = 0.02  # example value
+    
+    noise_cos = random.normal(noise_key_cos, (Nphot,)) * sigma_cos
+    noise_trk = random.normal(noise_key_trk, (Nphot,)) * sigma_trk
+    
+    smeared_cos = jnp.clip(sampled_cos + noise_cos, -1, 1)  # clip cos to valid range
+    smeared_trk = sampled_trk + noise_trk
+
+    # Create new evaluation grid with smeared values
+    energy_interp = jax_linear_interp(x_data, y_data, energy)
+    new_evaluation_grid = jnp.stack([
+        jnp.full_like(smeared_cos, energy_interp),
+        smeared_cos,
+        smeared_trk,
+    ], axis=1)
+
+    # Run the model with new grid
+    new_photon_weights, _ = model.apply(model_params, new_evaluation_grid)
+        
+    photon_thetas = jnp.arccos(smeared_cos)
+    
+    # Generate ray vectors and origins
     subkey, subkey2 = random.split(subkey)
-    ray_vectors = generate_random_cone_vectors(track_direction, photon_thetas, new_Nphot, subkey)
+    ray_vectors = generate_random_cone_vectors(track_direction, photon_thetas, Nphot, subkey)
     
     # Convert ranges to meters and compute ray origins
-    ranges = (selected_trk * 300 + 300) / 100
-    ray_origins = jnp.ones((new_Nphot, 3)) * track_origin[None, :] + ranges[:, None] * track_direction[None, :]
+    ranges = (smeared_trk * 300 + 300) / 100
+    ray_origins = jnp.ones((Nphot, 3)) * track_origin[None, :] + ranges[:, None] * track_direction[None, :]
     
-    return ray_vectors, ray_origins, jnp.squeeze(photon_weights[top_indices])
-
-    #return jnp.ones((new_Nphot, 3)), jnp.ones((new_Nphot, 3)), jnp.ones((new_Nphot, 1))
-
-
-
-
-
-
+    return ray_vectors, ray_origins, jnp.squeeze(new_photon_weights)
 
 
 
