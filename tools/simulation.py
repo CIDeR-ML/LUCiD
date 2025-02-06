@@ -66,8 +66,8 @@ def setup_event_simulator(json_filename, n_photons=1_000_000, temperature=100):
 
 def create_siren_grid(table):
     ene_bins = table.normalize(0, table.binning[0])
-    cos_bins = table.normalize(1, np.linspace(0.3, max(table.binning[1]), 1500))
-    trk_bins = table.normalize(2, np.linspace(min(table.binning[2]), max(table.binning[2]), 1500))
+    cos_bins = table.normalize(1, np.linspace(0.3, max(table.binning[1]), 200))
+    trk_bins = table.normalize(2, np.linspace(min(table.binning[2]), 400, 200))
     cos_trk_mesh = np.array([[x,y] for x in cos_bins for y in trk_bins])
     x_data = table.binning[0]
     y_data = ene_bins
@@ -112,8 +112,7 @@ def create_event_simulator(propagate_photons, Nphot, NUM_DETECTORS, detector_poi
         # prop_results = propagate_photons(photon_origins, photon_directions)
 
         energy=500
-        reduced_Nphot = 50000
-        photon_directions, photon_origins, photon_weights = new_differentiable_get_rays(track_origin, track_direction, energy, reduced_Nphot, grid_data, model_params, key)
+        photon_directions, photon_origins, photon_weights = new_differentiable_get_rays(track_origin, track_direction, energy, Nphot, grid_data, model_params, key)
         prop_results = propagate_photons(photon_origins, photon_directions)
 
         # Extract results - each array includes data for all possible detector-ray combinations
