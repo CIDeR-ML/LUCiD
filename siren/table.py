@@ -78,7 +78,6 @@ class Table(Dataset):
             w = normrange[axis,-1] - m
             mean.append(m)
             width.append(w)
-        print(mean)
         self.mean = np.array(mean)
         self.width = np.array(width)
         

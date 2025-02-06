@@ -6,6 +6,8 @@ import h5py
 import numpy as np
 import jax.numpy as jnp
 import time
+from siren.siren import *
+from siren.table import *
 
 def normalize(v, epsilon=1e-8):
     """Normalize a vector with numerical stability.
@@ -132,3 +134,85 @@ def differentiable_get_rays(track_origin, track_direction, cone_opening, Nphot, 
     ray_origins = jnp.ones((Nphot, 3)) * track_origin + random_lengths * track_direction
 
     return ray_vectors, ray_origins
+
+@jax.jit
+def jax_linear_interp(x_data, y_data, x):
+    """
+    Simple linear interpolation implementation using JAX
+    """
+    # Find the index of the closest point below x for each point
+    idx = jnp.searchsorted(x_data, x, side='right') - 1
+    # Clip index to valid range
+    idx = jnp.clip(idx, 0, len(x_data)-2)
+    
+    # Get x and y values for interpolation
+    x0 = x_data[idx]
+    x1 = x_data[idx + 1]
+    y0 = y_data[idx]
+    y1 = y_data[idx + 1]
+    
+    # Linear interpolation
+    slope = (y1 - y0) / (x1 - x0)
+    return y0 + slope * (x - x0)
+
+@partial(jax.jit, static_argnums=(3))
+def new_differentiable_get_rays(track_origin, track_direction, energy, new_Nphot, table_data, model_params, key):
+    key, subkey = random.split(key)
+    cos_bins, trk_bins, cos_trk_mesh, (x_data, y_data), grid_shape = table_data
+    
+    # Create the evaluation grid using JAX operations - using efficient meshgrid
+    energy_interp = jax_linear_interp(x_data, y_data, energy)
+    cos_mesh, trk_mesh = jnp.meshgrid(cos_bins, trk_bins, indexing='ij')  # Note the indexing='ij'
+    evaluation_grid = jnp.stack([
+        jnp.full_like(cos_mesh, energy_interp).ravel(),
+        cos_mesh.ravel(),  # Maintain correct order: cos first
+        trk_mesh.ravel(),  # trk second
+    ], axis=1)
+    
+    # Initialize SIREN model
+    model = SIREN(
+        hidden_features=256,
+        hidden_layers=3,
+        out_features=1,
+        outermost_linear=True
+    )
+    
+    # Apply SIREN model
+    photon_weights, _ = model.apply(model_params, evaluation_grid)
+    # Get indices of top Nphot weights (using JAX operations)
+    top_indices = jnp.argsort(-photon_weights.squeeze())[:new_Nphot]
+    
+    # Get the cos and trk values for these indices
+    cos_trk_mesh = jnp.array(cos_trk_mesh)  # Ensure it's a JAX array
+    selected_cos_trk = cos_trk_mesh[top_indices]
+    
+    # # Split into separate cos and trk arrays
+    selected_cos = selected_cos_trk[:, 0]
+    selected_trk = selected_cos_trk[:, 1]
+    photon_thetas = jnp.arccos(selected_cos)
+    
+    # # Generate ray vectors and origins
+    subkey, subkey2 = random.split(subkey)
+    ray_vectors = generate_random_cone_vectors(track_direction, photon_thetas, new_Nphot, subkey)
+    
+    # Convert ranges to meters and compute ray origins
+    ranges = (selected_trk * 300 + 300) / 100
+    ray_origins = jnp.ones((new_Nphot, 3)) * track_origin[None, :] + ranges[:, None] * track_direction[None, :]
+    
+    return ray_vectors, ray_origins, jnp.squeeze(photon_weights[top_indices])
+
+    #return jnp.ones((new_Nphot, 3)), jnp.ones((new_Nphot, 3)), jnp.ones((new_Nphot, 1))
+
+
+
+
+
+
+
+
+
+
+
+
+
+

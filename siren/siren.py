@@ -108,33 +108,6 @@ def convert_pytorch_to_jax(pytorch_state_dict: dict, jax_model: SIREN, input_sha
     
     return freeze({'params': params})
 
-# def load_siren_jax(pytorch_weights_path: str, input_shape: Sequence[int]):
-#     """
-#     Load PyTorch SIREN weights and create equivalent JAX model
-    
-#     Args:
-#         pytorch_weights_path: Path to saved PyTorch weights
-#         input_shape: Shape of input tensor (batch_size, features)
-    
-#     Returns:
-#         Tuple of (jax_model, jax_params)
-#     """
-#     # Load PyTorch weights
-#     pytorch_state = torch.load(pytorch_weights_path, weights_only=True)
-    
-#     # Initialize JAX model with same architecture
-#     jax_model = SIREN(
-#         hidden_features=256,
-#         hidden_layers=3,
-#         out_features=1,
-#         outermost_linear=True
-#     )
-    
-#     # Convert weights
-#     jax_params = convert_pytorch_to_jax(pytorch_state, jax_model, input_shape)
-    
-#     return jax_model, jax_params
-
 def load_siren_jax(pytorch_weights_path: str, input_shape: Sequence[int]):
     """
     Load PyTorch SIREN weights and create equivalent JAX model. Works with both CPU and GPU-saved weights.
