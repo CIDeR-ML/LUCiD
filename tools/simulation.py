@@ -5,8 +5,8 @@ from tools.geometry import generate_detector
 import jax
 import jax.numpy as jnp
 
-from siren.siren import *
-from siren.table import *
+from tools.siren import *
+from tools.table import *
 
 def setup_event_simulator(json_filename, n_photons=1_000_000, temperature=100):
     """
@@ -120,16 +120,6 @@ def create_event_simulator(propagate_photons, Nphot, NUM_DETECTORS, detector_poi
         detector_indices = prop_results['detector_indices']  # [max_detectors]
         hit_times = prop_results['times']  # [max_detectors, n_rays]
         hit_positions = prop_results['positions']  # [max_detectors, n_rays, 3]
-
-        # # Calculate charge deposits using competitive normalized weights
-        # photon_intensity = initial_intensity / Nphot
-        # flat_weights = weights.reshape(-1)
-        # flat_indices = detector_indices.reshape(-1)
-        # charges = jax.ops.segment_sum(
-        #     flat_weights * photon_intensity,
-        #     flat_indices,
-        #     num_segments=NUM_DETECTORS
-        # )
 
         # Expand photon_weights to match weights dimension
         expanded_photon_weights = jnp.broadcast_to(photon_weights, weights.shape)  # [max_detectors, n_rays]

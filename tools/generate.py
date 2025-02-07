@@ -6,8 +6,8 @@ import h5py
 import numpy as np
 import jax.numpy as jnp
 import time
-from siren.siren import *
-from siren.table import *
+from tools.siren import *
+from tools.table import *
 
 def normalize(v, epsilon=1e-8):
     """Normalize a vector with numerical stability.
@@ -231,7 +231,7 @@ def new_differentiable_get_rays(track_origin, track_direction, energy, Nphot, ta
     
     # Convert ranges to meters and compute ray origins
     ranges = (smeared_trk * 300 + 300) / 100
-    ray_origins = jnp.ones((Nphot, 3)) * track_origin[None, :] + ranges[:, None] * track_direction[None, :]
+    ray_origins = jnp.ones((Nphot, 3)) * track_origin[None, :] + ranges[:, None] * normalize(track_direction[None, :])
     
     return ray_vectors, ray_origins, jnp.squeeze(new_photon_weights)
 
