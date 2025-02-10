@@ -1,8 +1,9 @@
 import jax.numpy as jnp
 from jax import jit
+import jax
 
 @jit
-def compute_loss(
+def compute_simple_loss(
         true_charge: jnp.ndarray,
         true_time: jnp.ndarray,
         simulated_charge: jnp.ndarray,
@@ -10,7 +11,7 @@ def compute_loss(
         sigma_time: float = 100.0,
         eps: float = 1e-8,
 ) -> float:
-    """Compute loss between true and simulated detector measurements.
+    """Compute point-wise loss between true and simulated detector measurements.
 
     Calculates loss between true and simulated detectors comparing PMT charge and time measurements. (same PMTs)
 
@@ -50,156 +51,209 @@ def compute_loss(
     return charge_loss + time_loss + intensity_loss
 
 
-
-@jit
-def compute_loss_gaussian(
-    detector_points: jnp.ndarray,
-    true_charge: jnp.ndarray,
-    true_time: jnp.ndarray,
-    simulated_charge: jnp.ndarray,
-    simulated_time: jnp.ndarray,
-    sigma_position: float = 0.1,
-    eps: float = 1e-8,
-) -> float:
-    """Compute loss between true and simulated detector measurements.
-
-    Calculates loss based on spatial distribution and total charge, using
-    an inverse quadratic distance metric for spatial similarity.
-
-    Parameters
-    ----------
-    detector_points : ndarray
-        Array of shape (N_detectors, 3) containing detector point coordinates
-    true_charge : ndarray
-        Array of shape (N_detectors,) containing true charge measurements
-    true_time : ndarray
-        Array of shape (N_detectors,) containing true timing measurements. Not used in this loss
-    simulated_charge : ndarray
-        Array of shape (N_detectors,) containing simulated charge predictions
-    simulated_time : ndarray
-        Array of shape (N_detectors,) containing simulated timing predictions. Not used in this loss
-    sigma_position : float, optional
-        Scale factor for spatial distances, by default 0.1
-        This is used to control how far apart detector points are weighted in the loss
-    eps : float, optional
-        Small constant to prevent division by zero, by default 1e-8
-
-    Returns
-    -------
-    float
-        Combined loss value from charge distribution and total intensity
-    """
-    # Calculate pairwise distances between detector points, normalized by sigma
-    spatial_dist = jnp.linalg.norm(
-        detector_points[:, jnp.newaxis, :] - detector_points[jnp.newaxis, :, :],
-        axis=2
-    ) / sigma_position
-
-    # Convert distances to similarities using inverse quadratic function
-    similarity_matrix = 1/(1+spatial_dist**2)
-    sums = jnp.sum(similarity_matrix, axis=1, keepdims=True)
-
-    # Normalize similarities to sum to 1
-    normalized_similarity = similarity_matrix / (sums + eps)
-
-    # Loss component based on total charge conservation
-    total_true_charge = jnp.sum(true_charge)
-    total_sim_charge = jnp.sum(simulated_charge)
-    intensity_loss = jnp.abs(jnp.log(total_sim_charge / (total_true_charge + eps)))
-
-    # Loss component based on charge spatial distribution
-    delta_charge = jnp.abs(simulated_charge[jnp.newaxis, :] - true_charge[:, jnp.newaxis])
-    distribution_loss = jnp.sum(normalized_similarity * delta_charge)
-
-    return distribution_loss + intensity_loss
+import jax.numpy as jnp
 
 
-# This loss is not used as the times and final positions are embedded in the simulated_charge calculation.
-# Something like this can be used when stochasticity is added to the simulation.
-@jit
 def compute_loss_with_time(
         detector_points: jnp.ndarray,
         true_charge: jnp.ndarray,
         true_time: jnp.ndarray,
         simulated_charge: jnp.ndarray,
         simulated_time: jnp.ndarray,
-        simulated_positions: jnp.ndarray,
-        sigma_position: float = 0.1,
-        sigma_time: float = 1.0,
+        tau_position: float = 0.08,
+        tau_time: float = 0.08,
+        lambda_time: float = 1.0,
         eps: float = 1e-8,
+        threshold: float = 1e-8,
 ) -> float:
-    """Compute loss between true and simulated detector measurements with timing.
+    """
+    Compute loss using a Euclidean combination of spatial and temporal distances.
 
-    Extended version that includes temporal information and uses simulated positions
-    instead of detector points for spatial comparisons.
+    The joint squared distance is:
+        d_total^2 = (d_space)^2 + lambda_time * (d_time)^2,
+    with:
+        d_space = ||x_i - x_j|| / tau_position,
+        d_time  = |t_i' - T_j'| / tau_time,  (after subtracting the mean over active detectors)
+    and similarity:
+        S = 1 / (1 + d_total^2).
+
+    The overall loss is the sum of:
+      - intensity loss: |log(total_sim_charge / total_true_charge)|
+      - distribution loss: sum(normalized similarity * |simulated_charge - true_charge|).
+
+    Only pairs where both true and simulated charges are above threshold contribute.
 
     Parameters
     ----------
-    detector_points : ndarray
-        Array of shape (N_detectors, 3) containing detector point coordinates
-    true_charge : ndarray
-        Array of shape (N_detectors,) containing true charge measurements
-    true_time : ndarray
-        Array of shape (N_detectors,) containing true timing measurements
-    simulated_charge : ndarray
-        Array of shape (N_detectors,) containing simulated charge predictions
-    simulated_time : ndarray
-        Array of shape (N_detectors,) containing simulated timing predictions
-    simulated_positions : ndarray
-        Array of shape (N_detectors, 3)
-        Contains simulated final positions of each photon aggregated over each detector
-    sigma_position : float, optional
-        Scale factor for spatial distances, by default 0.1
-        This is used to control how far apart detector points are weighted in the loss
-    sigma_time : float, optional
-        Scale factor for temporal differences, by default 1.0
-        This is used to control how far apart timing values are weighted in the loss
+    detector_points : jnp.ndarray
+        Array of shape (N_detectors, 3) with detector coordinates.
+    true_charge : jnp.ndarray
+        Array of shape (N_detectors,) with true charges.
+    true_time : jnp.ndarray
+        Array of shape (N_detectors,) with true times.
+    simulated_charge : jnp.ndarray
+        Array of shape (N_detectors,) with simulated charges.
+    simulated_time : jnp.ndarray
+        Array of shape (N_detectors,) with simulated times.
+    tau_position : float, optional
+        Scale factor for spatial distances, by default 0.05.
+    tau_time : float, optional
+        Scale factor for temporal distances, by default 0.05.
+    lambda_time : float, optional
+        Weight for mixing temporal and spatial distances, by default 1.0.
     eps : float, optional
-        Small constant to prevent division by zero, by default 1e-8
+        Small constant to prevent division by zero, by default 1e-8.
+    threshold : float, optional
+        Threshold for considering a detector active, by default 1e-8.
 
     Returns
     -------
     float
-        Combined loss value from charge distribution, total intensity, and timing
+        Loss value.
     """
-    # Calculate pairwise distances between detector and simulated points
+    # --- Spatial distances ---
     spatial_dist = jnp.linalg.norm(
-        detector_points[:, jnp.newaxis, :] - simulated_positions[jnp.newaxis, :, :],
+        detector_points[:, jnp.newaxis, :] - detector_points[jnp.newaxis, :, :],
         axis=2
-    ) / sigma_position
+    ) / tau_position
+    spatial_dist_sq = spatial_dist ** 2
 
-    # Convert distances to similarities using inverse quadratic function
-    similarity_matrix = 1 / (1 + spatial_dist ** 2)
-    sums = jnp.sum(similarity_matrix, axis=1, keepdims=True)
+    # --- Active masks ---
+    true_active = true_charge > threshold
+    sim_active = simulated_charge > threshold
 
-    # Normalize similarities to sum to 1
-    normalized_similarity = similarity_matrix / (sums + eps)
+    # --- Time normalization (only for active detectors) ---
+    mean_true_time = jnp.sum(jnp.where(true_active, true_time, 0.0)) / (jnp.sum(true_active) + eps)
+    mean_sim_time = jnp.sum(jnp.where(sim_active, simulated_time, 0.0)) / (jnp.sum(sim_active) + eps)
+    true_time_normalized = jnp.where(true_active, true_time - mean_true_time, 0.0)
+    sim_time_normalized = jnp.where(sim_active, simulated_time - mean_sim_time, 0.0)
 
-    # Loss component based on total charge conservation
+    # --- Temporal distances ---
+    temporal_dist = jnp.abs(
+        true_time_normalized[:, jnp.newaxis] - sim_time_normalized[jnp.newaxis, :]
+    ) / tau_time
+    temporal_dist_sq = temporal_dist ** 2
+
+    # --- Combined distance and similarity ---
+    combined_dist_sq = spatial_dist_sq + lambda_time * temporal_dist_sq
+    similarity_matrix = 1 / (1 + combined_dist_sq)
+
+    # --- Mask inactive pairs ---
+    active_pairs = true_active[:, jnp.newaxis] & sim_active[jnp.newaxis, :]
+    similarity_matrix = jnp.where(active_pairs, similarity_matrix, 0.0)
+
+    # --- Normalize similarity ---
+    sums_per_row = jnp.sum(similarity_matrix, axis=1)
+    sums_per_col = jnp.sum(similarity_matrix, axis=0)
+    normalized_similarity = similarity_matrix / (jnp.sqrt((sums_per_row[:, jnp.newaxis] *
+                                                           sums_per_col[jnp.newaxis, :]) + eps))
+
+    # # --- Intensity loss --- include for more sharp total charge difference
+    # total_true_charge = jnp.sum(true_charge)
+    # total_sim_charge = jnp.sum(simulated_charge)
+    # intensity_loss = jnp.abs(jnp.log(total_sim_charge / (total_true_charge + eps)))
+
+    # --- Distribution loss ---
+    delta_charge = jnp.abs(simulated_charge[jnp.newaxis, :] - true_charge[:, jnp.newaxis])
+    distribution_loss = jnp.sum(normalized_similarity * delta_charge)
+
+    return distribution_loss
+
+
+@jit
+def compute_softmin_loss(
+        detector_points: jnp.ndarray,
+        true_charge: jnp.ndarray,
+        true_time: jnp.ndarray,
+        simulated_charge: jnp.ndarray,
+        simulated_time: jnp.ndarray,
+        tau: float = 0.01,
+        eps: float = 1e-8,
+        lambda_time: float = 1.0
+) -> float:
+    """
+    Compute a differentiable loss using soft assignments between simulated and true detectors.
+    Times are mean-subtracted considering only active (non-zero charge) locations.
+    This version uses absolute distance scales where the distance between detector differences is controlled by tau
+
+    Parameters
+    ----------
+    detector_points : jnp.ndarray
+        Array of shape (N, 3) with detector coordinates.
+    true_charge : jnp.ndarray
+        Array of shape (N,) of true charges.
+    true_time : jnp.ndarray
+        Array of shape (N,) of true times.
+    simulated_charge : jnp.ndarray
+        Array of shape (N,) of simulated charges.
+    simulated_time : jnp.ndarray
+        Array of shape (N,) of simulated times.
+    tau : float, optional
+        Temperature parameter for the softmin. Smaller tau => sharper assignments.
+    eps : float, optional
+        Small constant to prevent division by zero, by default 1e-8
+    lambda_time : float, optional
+        Scaling factor for time loss, by default 1.0.
+
+    Returns
+    -------
+    float
+        Total loss.
+    """
+    # Compute mean times for active locations
+    true_active_mask = true_charge > eps
+    sim_active_mask = simulated_charge > eps
+
+    # Compute mean times only for active locations
+    true_mean_time = jnp.sum(true_time * true_active_mask) / (
+                jnp.sum(true_active_mask) + eps)
+    sim_mean_time = jnp.sum(simulated_time * sim_active_mask) / (
+                jnp.sum(sim_active_mask) + eps)
+
+    # Subtract means from times
+    true_time_centered = jnp.where(true_active_mask, true_time - true_mean_time, 0.0)
+    sim_time_centered = jnp.where(sim_active_mask, simulated_time - sim_mean_time, 0.0)
+
     total_true_charge = jnp.sum(true_charge)
     total_sim_charge = jnp.sum(simulated_charge)
     intensity_loss = jnp.abs(jnp.log(total_sim_charge / (total_true_charge + eps)))
 
-    # Loss component based on charge spatial distribution
-    delta_charge = jnp.abs(simulated_charge[jnp.newaxis, :] - true_charge[:, jnp.newaxis])
-    distribution_loss = jnp.sum(normalized_similarity * delta_charge)
+    # Compute distance matrix d[i,j] = ||x_i - x_j||
+    N = detector_points.shape[0]
+    dist = jnp.linalg.norm(
+        detector_points[:, None, :] - detector_points[None, :, :],
+        axis=-1
+    )  # Shape (N, N)
 
-    # Normalize timing values to account for different time scales
-    true_time_std = jnp.std(true_time) + eps
-    sim_time_std = jnp.std(simulated_time) + eps
+    # Soft assignments Sim -> True
+    logits_s2t = -dist / tau
+    w_s2t = jax.nn.softmax(logits_s2t, axis=1)   # shape (N, N)
 
-    true_time_normalized = (true_time - jnp.mean(true_time)) / true_time_std
-    sim_time_normalized = (simulated_time - jnp.mean(simulated_time)) / sim_time_std
+    # Aggregated charges (Sim->True)
+    Q_sim_per_true = w_s2t.T @ simulated_charge  # shape (N,)
+    # Charge-weighted centered times:
+    qt_sim_per_true = w_s2t.T @ (simulated_charge * sim_time_centered)  # shape (N,)
+    avg_sim_time_per_true = qt_sim_per_true / (Q_sim_per_true + eps)
 
-    # Calculate normalized temporal differences
-    delta_time = jnp.abs(
-        true_time_normalized[:, jnp.newaxis] - sim_time_normalized[jnp.newaxis, :]
-    ) / sigma_time
+    # Loss terms S->T
+    L_charge_s2t = jnp.sum(jnp.abs(Q_sim_per_true - true_charge))
+    L_time_s2t = jnp.sum(jnp.abs(avg_sim_time_per_true - true_time_centered) * Q_sim_per_true)
 
-    # Combine spatial similarity with charge information for temporal weighting
-    weights = normalized_similarity * jnp.sqrt(
-        (true_charge[:, jnp.newaxis] * simulated_charge[jnp.newaxis, :]) + eps
-    )
-    temporal_loss = jnp.sum(weights * delta_time) / (jnp.sum(weights) + eps)
+    # Soft assignments True -> Sim
+    logits_t2s = -dist.T / tau
+    w_t2s = jax.nn.softmax(logits_t2s, axis=1) # shape (N, N)
 
-    return distribution_loss + intensity_loss + temporal_loss
+    # Aggregated charges (True->Sim)
+    Q_true_per_sim = w_t2s.T @ true_charge  # shape (N,)
+    qt_true_per_sim = w_t2s.T @ (true_charge * true_time_centered)
+    avg_true_time_per_sim = qt_true_per_sim / (Q_true_per_sim + eps)
+
+    # Loss terms T->S
+    L_charge_t2s = jnp.sum(jnp.abs(Q_true_per_sim - simulated_charge))
+    L_time_t2s = jnp.sum(jnp.abs(avg_true_time_per_sim - sim_time_centered) * Q_true_per_sim)
+
+    # Combine losses
+    L_charge = L_charge_s2t + L_charge_t2s
+    L_time = (L_time_s2t + L_time_t2s) * lambda_time
+
+    return L_charge + L_time + intensity_loss
