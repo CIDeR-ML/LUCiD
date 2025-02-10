@@ -5,6 +5,7 @@ from scipy.spatial.distance import pdist
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 from tools.geometry import load_cyl_geom, generate_detector
 from tools.utils import sparse_to_full
+from matplotlib.colors import LinearSegmentedColormap
 
 def create_color_gradient(max_cnts, colormap='viridis'):
     cmap = plt.get_cmap(colormap)
@@ -89,6 +90,7 @@ def create_detector_display(json_filename='config/cyl_geom_config.json', sparse=
         # Select which values to plot based on plot_time
         all_values = all_times if plot_time else all_charges
 
+
         max_value = np.max(all_values)
         color_gradient = create_color_gradient(max_value)
 
@@ -146,7 +148,8 @@ def create_detector_display(json_filename='config/cyl_geom_config.json', sparse=
         ells = EllipseCollection(widths=circle_diameter, heights=circle_diameter, angles=0, units='x',
                                  facecolors=color_gradient.to_rgba(all_values),
                                  offsets=transformed_positions,
-                                 transOffset=ax.transData)
+                                 transOffset=ax.transData,
+                                 edgecolors='none')
 
         ax.add_collection(ells)
 
@@ -175,7 +178,6 @@ def create_detector_display(json_filename='config/cyl_geom_config.json', sparse=
         plt.show()
 
     return display_detector_data
-
 
 def create_detector_comparison_display(json_filename='config/cyl_geom_config.json', sparse=True):
     """
@@ -207,56 +209,85 @@ def create_detector_comparison_display(json_filename='config/cyl_geom_config.jso
     detector_cases = np.array([detector.ID_to_case[i] for i in range(len(detector.all_points))])
     n_detectors = len(detector_positions)
 
-    def display_detector_data(*args, file_name=None, plot_time=False):
+    def display_detector_data(true_data, sim_data, file_name=None, plot_time=False, align_time=False):
         """
-        Process and display detector comparison data in either sparse or dense format.
+        Process and display detector comparison data, handling both true and simulated data.
 
-        Parameters (for sparse=True):
-        ---------------------------
-        loaded_indices : array-like
-            Indices of non-zero hits
-        loaded_charges : array-like
-            Difference values at non-zero indices
-        loaded_times : array-like
-            Time difference values at non-zero indices
-
-        Parameters (for sparse=False):
-        ---------------------------
-        charges : array-like
-            Full array of difference values
-        times : array-like
-            Full array of time difference values
-
-        Other Parameters:
-        ----------------
+        Parameters:
+        -----------
+        true_data : tuple
+            For sparse=True: (indices, charges, times)
+            For sparse=False: (charges, times)
+        sim_data : tuple
+            Same format as true_data
         file_name : str, optional
             If provided, saves the plot to this file
         plot_time : bool
             If True, plot time differences instead of charge differences
+        align_time : bool
+            If True, subtract mean from both times arrays respectively
         """
         if sparse:
-            if len(args) != 3:
-                raise ValueError("Sparse format requires three arguments: indices, charges, and times")
-            loaded_indices, loaded_charges, loaded_times = args
+            # Unpack sparse data
+            true_indices, true_charges, true_times = true_data
+            sim_indices, sim_charges, sim_times = sim_data
 
-            # Convert sparse to full arrays
-            all_charges = sparse_to_full(loaded_indices, loaded_charges, n_detectors)
-            all_times = sparse_to_full(loaded_indices, loaded_times, n_detectors)
+            # Convert to full arrays
+            true_charges_full = sparse_to_full(true_indices, true_charges, n_detectors)
+            sim_charges_full = sparse_to_full(sim_indices, sim_charges, n_detectors)
+            true_times_full = sparse_to_full(true_indices, true_times, n_detectors)
+            sim_times_full = sparse_to_full(sim_indices, sim_times, n_detectors)
         else:
-            if len(args) != 2:
-                raise ValueError("Dense format requires two arguments: charges and times arrays")
-            all_charges, all_times = args
+            # Data is already in full format
+            true_charges_full, true_times_full = true_data
+            sim_charges_full, sim_times_full = sim_data
 
-        # Select which values to plot based on plot_time
-        all_values = all_times if plot_time else all_charges
+        # Calculate charge differences
+        charge_diff = sim_charges_full - true_charges_full
+
+        # Handle time differences with alignment if requested
+        if align_time:
+            # Find active time points
+            active_times_true = true_times_full > 0
+            active_times_sim = sim_times_full > 0
+
+            # Calculate means for active times
+            true_time_mean = np.mean(true_times_full[active_times_true]) if np.any(active_times_true) else 0
+            sim_time_mean = np.mean(sim_times_full[active_times_sim]) if np.any(active_times_sim) else 0
+
+            # Subtract means from active times
+            true_times_aligned = np.where(active_times_true, true_times_full - true_time_mean, 0)
+            sim_times_aligned = np.where(active_times_sim, sim_times_full - sim_time_mean, 0)
+
+            time_diff = sim_times_aligned - true_times_aligned
+        else:
+            time_diff = sim_times_full - true_times_full
+
+        # Select which values to plot
+        all_values = time_diff if plot_time else charge_diff
 
         # Find maximum absolute value for symmetric color scale
         max_abs_value = np.max(np.abs(all_values))
 
-        # Create diverging colormap centered at zero
+        # Create colors array: viridis(0) for non-active, diverging colormap for active
+        viridis = plt.cm.viridis
+        diverging_cmap = plt.cm.seismic
+
+        # Create color array
+        colors = np.zeros((len(all_values), 4))  # RGBA array
+        active_mask = all_values != 0
+
+        # Set non-active detectors to viridis(0)
+        colors[~active_mask] = viridis(0)
+
+        # Set active detectors using diverging colormap
+        norm = plt.Normalize(-max_abs_value, max_abs_value)
+        colors[active_mask] = diverging_cmap(norm(all_values[active_mask]))
+
+        # Create color gradient for colorbar only (using only the diverging colormap)
         color_gradient = plt.cm.ScalarMappable(
-            norm=plt.Normalize(-max_abs_value, max_abs_value),
-            cmap='seismic'
+            norm=norm,
+            cmap=diverging_cmap
         )
 
         corr = cyl_radius / cyl_height
@@ -309,11 +340,12 @@ def create_detector_comparison_display(json_filename='config/cyl_geom_config.jso
 
         fig, ax = plt.subplots(figsize=(fig_width, fig_height), facecolor='black')
 
-        # Create EllipseCollection
+        # Create EllipseCollection with the combined colors
         ells = EllipseCollection(widths=circle_diameter, heights=circle_diameter, angles=0, units='x',
-                                 facecolors=color_gradient.to_rgba(all_values),
+                                 facecolors=colors,
                                  offsets=transformed_positions,
-                                 transOffset=ax.transData)
+                                 transOffset=ax.transData,
+                                 edgecolors='black')
 
         ax.add_collection(ells)
 
@@ -325,13 +357,13 @@ def create_detector_comparison_display(json_filename='config/cyl_geom_config.jso
         # Remove axes
         ax.axis('off')
 
-        # Add colorbar
+        # Add colorbar with explicit scientific notation
         divider = make_axes_locatable(ax)
         cax = divider.append_axes("right", size="5%", pad=0.1)
-        cbar = plt.colorbar(color_gradient, cax=cax)
+        cbar = plt.colorbar(color_gradient, cax=cax, format='%.1e')
         label_text = 'Time Difference' if plot_time else 'Photoelectron Count Difference (a.u.)'
         cbar.set_label(label_text, color='white', fontsize=18)
-        cbar.ax.yaxis.set_tick_params(color='white')
+        cbar.ax.yaxis.set_tick_params(color='white', labelsize=10)
         cbar.outline.set_edgecolor('white')
         plt.setp(plt.getp(cbar.ax.axes, 'yticklabels'), color='white')
 
@@ -339,7 +371,8 @@ def create_detector_comparison_display(json_filename='config/cyl_geom_config.jso
         plt.tight_layout()
 
         if file_name:
-            plt.savefig(file_name, bbox_inches='tight', pad_inches=0.1, facecolor='black', edgecolor='none')
+            plt.savefig(file_name, bbox_inches='tight', pad_inches=0.1,
+                        facecolor='black', edgecolor='none')
         plt.show()
 
     return display_detector_data
