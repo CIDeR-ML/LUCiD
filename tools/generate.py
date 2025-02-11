@@ -189,7 +189,9 @@ def new_differentiable_get_rays(track_origin, track_direction, energy, Nphot, ta
     # interpolation given the trained SIREN model under evaluation
     # with the specific grid settings in create_siren_grid
     # if you change create_siren_grid, change also the numbers below.
-    num_seeds = jnp.int32(energy*7.28535714-1293.35714286)
+    # you can use code in siren/cut_off_study notebook.
+    #num_seeds = jnp.int32(energy*7.28535714-1293.35714286) # using 200 x 200 binning
+    num_seeds = jnp.int32(energy*.44142857-77.85714286)     # using 50 x 50 binning
     
     seed_indices = random.randint(sampling_key, (Nphot,), 0, num_seeds)
     indices_by_weight = jnp.argsort(-photon_weights.squeeze())[seed_indices]
@@ -234,10 +236,6 @@ def new_differentiable_get_rays(track_origin, track_direction, energy, Nphot, ta
     ray_origins = jnp.ones((Nphot, 3)) * track_origin[None, :] + ranges[:, None] * normalize(track_direction[None, :])
     
     return ray_vectors, ray_origins, jnp.squeeze(new_photon_weights)
-
-
-
-
 
 
 
