@@ -66,8 +66,8 @@ def setup_event_simulator(json_filename, n_photons=1_000_000, temperature=100):
 
 def create_siren_grid(table):
     ene_bins = table.normalize(0, table.binning[0])
-    cos_bins = table.normalize(1, np.linspace(0.3, max(table.binning[1]), 200))
-    trk_bins = table.normalize(2, np.linspace(min(table.binning[2]), 400, 200))
+    cos_bins = table.normalize(1, np.linspace(0.3, max(table.binning[1]), 50))
+    trk_bins = table.normalize(2, np.linspace(min(table.binning[2]), 400, 50))
     cos_trk_mesh = np.array([[x,y] for x in cos_bins for y in trk_bins])
     x_data = table.binning[0]
     y_data = ene_bins
@@ -99,7 +99,7 @@ def create_event_simulator(propagate_photons, Nphot, NUM_DETECTORS, detector_poi
     table = Table('siren/cprof_mu_train_10000ev.h5')
     grid_data = create_siren_grid(table)
     #grid_shape = grid_data[4]
-    siren_model, model_params = load_siren_jax('siren/siren_cprof_mu.pkl')#, grid_shape)
+    siren_model, model_params = load_siren_jax('siren/siren_cprof_mu.pkl')
 
     @jax.jit
     def _simulate_event_core(params, key):
@@ -122,7 +122,7 @@ def create_event_simulator(propagate_photons, Nphot, NUM_DETECTORS, detector_poi
         hit_positions = prop_results['positions']  # [max_detectors, n_rays, 3]
 
         # Expand photon_weights to match weights dimension
-        expanded_photon_weights = jnp.broadcast_to(photon_weights, weights.shape)  # [max_detectors, n_rays]
+        expanded_photon_weights = initial_intensity*jnp.broadcast_to(photon_weights, weights.shape)/Nphot  # [max_detectors, n_rays]
 
         # Element-wise multiplication of all components
         flat_weights = (weights * expanded_photon_weights).reshape(-1)  # Flatten after multiplication
