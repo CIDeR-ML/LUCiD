@@ -8,7 +8,7 @@ import jax.numpy as jnp
 from tools.siren import *
 from tools.table import *
 
-def setup_event_simulator(json_filename, n_photons=1_000_000, temperature=100):
+def setup_event_simulator(json_filename, n_photons=1_000_000, temperature=0.2, is_data=False):
     """
     Sets up and returns an event simulator with the specified configuration.
 
@@ -20,6 +20,8 @@ def setup_event_simulator(json_filename, n_photons=1_000_000, temperature=100):
         Number of photons to simulate per event, default 1,000,000
     temperature : float, optional
         Temperature parameter for photon propagation, default 100
+    is_data : bool, optional
+        If true, subtract min times such that t0 = 0
 
     Returns
     -------
@@ -58,11 +60,11 @@ def setup_event_simulator(json_filename, n_photons=1_000_000, temperature=100):
         propagate_photons,
         n_photons,
         NUM_DETECTORS,
-        detector_points
+        detector_points,
+        is_data
     )
 
     return simulate_event
-
 
 def create_siren_grid(table):
     ene_bins = table.normalize(0, table.binning[0])
@@ -74,7 +76,7 @@ def create_siren_grid(table):
     grid_shape = (np.shape(cos_bins)[0]*np.shape(trk_bins)[0],3)
     return cos_bins, trk_bins, cos_trk_mesh, (x_data, y_data), grid_shape
 
-def create_event_simulator(propagate_photons, Nphot, NUM_DETECTORS, detector_points):
+def create_event_simulator(propagate_photons, Nphot, NUM_DETECTORS, detector_points, is_data):
     """
     Creates a memory-efficient differentiable event simulator with fixed time calculation.
 
@@ -88,6 +90,8 @@ def create_event_simulator(propagate_photons, Nphot, NUM_DETECTORS, detector_poi
         Total number of detectors in the system
     detector_points : array_like
         Array of detector positions, shape (NUM_DETECTORS, 3)
+    is_data : bool
+        If true, subtract min times such that t0 = 0
 
     Returns
     -------
@@ -98,20 +102,14 @@ def create_event_simulator(propagate_photons, Nphot, NUM_DETECTORS, detector_poi
 
     table = Table('siren/cprof_mu_train_10000ev.h5')
     grid_data = create_siren_grid(table)
-    #grid_shape = grid_data[4]
     siren_model, model_params = load_siren_jax('siren/siren_cprof_mu.pkl')
 
+
     @jax.jit
-    def _simulate_event_core(params, key):
+    def _simulation_core(params, key):
         # Unpack simulation parameters
-        cone_opening, track_origin, track_direction, initial_intensity = params
+        energy, track_origin, track_direction, initial_intensity = params
 
-        # # Generate and propagate photons
-        # photon_directions, photon_origins = differentiable_get_rays(
-        #     track_origin, track_direction, cone_opening, Nphot, key)
-        # prop_results = propagate_photons(photon_origins, photon_directions)
-
-        energy=500
         photon_directions, photon_origins, photon_weights = new_differentiable_get_rays(track_origin, track_direction, energy, Nphot, grid_data, model_params, key)
         prop_results = propagate_photons(photon_origins, photon_directions)
 
@@ -159,30 +157,37 @@ def create_event_simulator(propagate_photons, Nphot, NUM_DETECTORS, detector_poi
             jnp.zeros_like(detector_weight_totals)
         )
 
-        # time alignment - currently not needed but can be used for additional analysis
-        # Calculate and subtract global mean time for time alignment
-        # weighted_sum = jnp.sum(average_times * detector_weight_totals)
-        # total_weights = jnp.sum(detector_weight_totals) + eps
-        # mean_time = weighted_sum / total_weights
+        return charges, average_times, detector_weight_totals, eps
 
-        # # Return mean-subtracted times
-        # average_times = average_times
+    @jax.jit
+    def _simulate_event_core(params, key):
+        charges, average_times, detector_weight_totals, eps = _simulation_core(params, key)
+        return charges, average_times
 
-        # # Position calculation - currently not needed but can be used for additional analysis
-        # flat_positions = hit_positions.reshape(-1, 3)  # [max_detectors * n_rays, 3]
-        #
-        # detector_position_totals = jax.ops.segment_sum(
-        #     flat_weights[:, None] * flat_positions,
-        #     flat_indices,
-        #     num_segments=NUM_DETECTORS
-        # )
-        #
-        # average_positions = jnp.where(
-        #     detector_weight_totals[:, None] > eps,
-        #     detector_position_totals / (detector_weight_totals[:, None] + eps),
-        #     detector_points
-        # )
+    @jax.jit
+    def _simulate_event_core_data(params, key):
+        charges, average_times, detector_weight_totals, eps = _simulation_core(params, key)
 
-        return charges, average_times#, weights
+        # Find minimum non-zero time
+        # Create a mask for non-zero times and weights
+        nonzero_mask = (average_times > eps) & (detector_weight_totals > eps)
+        # Get minimum of non-zero times, defaulting to 0 if no valid times exist
+        min_nonzero_time = jnp.where(
+            jnp.any(nonzero_mask),
+            jnp.min(jnp.where(nonzero_mask, average_times, jnp.inf)),
+            0.0
+        )
 
-    return jax.jit(lambda p, k: _simulate_event_core(p, k))
+        # Subtract minimum time from non-zero times only
+        aligned_times = jnp.where(
+            nonzero_mask,
+            average_times - min_nonzero_time,
+            average_times
+        )
+
+        return charges, aligned_times
+
+    if is_data:
+        return jax.jit(lambda p, k: _simulate_event_core_data(p, k))
+    else:
+        return jax.jit(lambda p, k: _simulate_event_core(p, k))
