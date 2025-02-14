@@ -2,6 +2,124 @@ import jax
 import jax.numpy as jnp
 from functools import partial
 
+from launchpadlib.testing.helpers import NoNetworkLaunchpad
+from tools.overlap import create_overlap_prob
+
+# @jax.jit
+# def intersect_cylinder_wall(ray_origin, ray_direction, r, h):
+#     """Calculate intersection of a ray with a cylinder's wall.
+#
+#     Parameters
+#     ----------
+#     ray_origin : jnp.ndarray
+#         Starting point of the ray [x, y, z]
+#     ray_direction : jnp.ndarray
+#         Direction vector of the ray [dx, dy, dz]
+#     r : float
+#         Radius of the cylinder
+#     h : float
+#         Height of the cylinder
+#
+#     Returns
+#     -------
+#     tuple
+#         (bool, float) - (whether intersection exists, distance to intersection)
+#     """
+#     # Quadratic equation coefficients for cylinder intersection
+#     a = ray_direction[0] ** 2 + ray_direction[1] ** 2
+#     b = 2 * (ray_origin[0] * ray_direction[0] + ray_origin[1] * ray_direction[1])
+#     c = ray_origin[0] ** 2 + ray_origin[1] ** 2 - r ** 2
+#
+#     discriminant = b ** 2 - 4 * a * c
+#
+#     epsilon = 1e-6
+#
+#     t1 = (-b - jnp.sqrt(jnp.maximum(0, discriminant))) / (2 * a)
+#     t2 = (-b + jnp.sqrt(jnp.maximum(0, discriminant))) / (2 * a)
+#
+#     t1, t2 = jnp.minimum(t1, t2), jnp.maximum(t1, t2)
+#
+#     valid_t = (t1 > 0) | (t2 > 0)
+#
+#     t = jnp.where(t1 > 0, t1, t2)
+#
+#     intersection_point = ray_origin + t * ray_direction
+#     within_height = jnp.abs(intersection_point[2]) <= h / 2
+#
+#     intersects = (discriminant >= -epsilon) & valid_t & within_height
+#     return intersects, jnp.where(intersects, t, jnp.inf)
+#
+#
+# @jax.jit
+# def intersect_cylinder_cap(ray_origin, ray_direction, r, z):
+#     """Calculate intersection of a ray with one of the cylinder's caps.
+#
+#     Parameters
+#     ----------
+#     ray_origin : jnp.ndarray
+#         Starting point of the ray [x, y, z]
+#     ray_direction : jnp.ndarray
+#         Direction vector of the ray [dx, dy, dz]
+#     r : float
+#         Radius of the cylinder
+#     z : float
+#         Z-coordinate of the cap plane
+#
+#     Returns
+#     -------
+#     tuple
+#         (bool, float) - (whether intersection exists, distance to intersection)
+#     """
+#     t = jnp.where(ray_direction[2] != 0, (z - ray_origin[2]) / ray_direction[2], jnp.inf)
+#
+#     intersection_point = ray_origin + t * ray_direction
+#     within_circle = (intersection_point[0] ** 2 + intersection_point[1] ** 2) <= r ** 2
+#
+#     intersects = (t > 0) & within_circle
+#     return intersects, jnp.where(intersects, t, jnp.inf)
+#
+# #
+# @jax.jit
+# def intersect_cylinder(ray_origin, ray_direction, r, h):
+#     """Find the closest intersection point with any part of the cylinder.
+#
+#     Parameters
+#     ----------
+#     ray_origin : jnp.ndarray
+#         Starting point of the ray [x, y, z]
+#     ray_direction : jnp.ndarray
+#         Direction vector of the ray [dx, dy, dz]
+#     r : float
+#         Radius of the cylinder
+#     h : float
+#         Height of the cylinder
+#
+#     Returns
+#     -------
+#     tuple
+#         (bool, float, int) - (whether intersection exists, distance, part index)
+#         part index: 0=wall, 1=top cap, 2=bottom cap
+#     """
+#     wall_intersects, wall_t = intersect_cylinder_wall(ray_origin, ray_direction, r, h)
+#     top_intersects, top_t = intersect_cylinder_cap(ray_origin, ray_direction, r, h / 2)
+#     bottom_intersects, bottom_t = intersect_cylinder_cap(ray_origin, ray_direction, r, -h / 2)
+#
+#     ts = jnp.array([wall_t, top_t, bottom_t])
+#     intersects = jnp.array([wall_intersects, top_intersects, bottom_intersects])
+#
+#     min_t_index = jnp.argmin(ts)
+#     min_t = jnp.min(ts)
+#
+#     any_intersects = jnp.any(intersects)
+#     return any_intersects, min_t, min_t_index
+
+
+import jax
+import jax.numpy as jnp
+
+# We'll need this import:
+from jax import lax
+
 @jax.jit
 def intersect_cylinder_wall(ray_origin, ray_direction, r, h):
     """Calculate intersection of a ray with a cylinder's wall.
@@ -22,29 +140,43 @@ def intersect_cylinder_wall(ray_origin, ray_direction, r, h):
     tuple
         (bool, float) - (whether intersection exists, distance to intersection)
     """
+    LARGE = 1e10
+
     # Quadratic equation coefficients for cylinder intersection
-    a = ray_direction[0] ** 2 + ray_direction[1] ** 2
-    b = 2 * (ray_origin[0] * ray_direction[0] + ray_origin[1] * ray_direction[1])
-    c = ray_origin[0] ** 2 + ray_origin[1] ** 2 - r ** 2
+    a = ray_direction[0]**2 + ray_direction[1]**2
+    b = 2.0 * (ray_origin[0]*ray_direction[0] + ray_origin[1]*ray_direction[1])
+    c = ray_origin[0]**2 + ray_origin[1]**2 - r**2
 
-    discriminant = b ** 2 - 4 * a * c
-
+    discriminant = b**2 - 4*a*c
     epsilon = 1e-6
 
-    t1 = (-b - jnp.sqrt(jnp.maximum(0, discriminant))) / (2 * a)
-    t2 = (-b + jnp.sqrt(jnp.maximum(0, discriminant))) / (2 * a)
+    def side_branch(_):
+        sqrt_disc = jnp.sqrt(jnp.maximum(0.0, discriminant))
+        t1 = (-b - sqrt_disc) / (2*a)
+        t2 = (-b + sqrt_disc) / (2*a)
+        t1, t2 = jnp.minimum(t1, t2), jnp.maximum(t1, t2)
 
-    t1, t2 = jnp.minimum(t1, t2), jnp.maximum(t1, t2)
+        valid_t = (t1 > 0) | (t2 > 0)
+        t_candidate = jnp.where(t1 > 0, t1, t2)
 
-    valid_t = (t1 > 0) | (t2 > 0)
+        ipt = ray_origin + t_candidate * ray_direction
+        within_height = jnp.abs(ipt[2]) <= (h / 2)
+        intersects_ = (discriminant >= -epsilon) & valid_t & within_height
 
-    t = jnp.where(t1 > 0, t1, t2)
+        tval_ = jnp.where(intersects_, t_candidate, LARGE)
+        return (intersects_, tval_)
 
-    intersection_point = ray_origin + t * ray_direction
-    within_height = jnp.abs(intersection_point[2]) <= h / 2
+    def parallel_side_branch(_):
+        # Direction is purely along z => no side intersection
+        return (False, jnp.array(LARGE, dtype=jnp.float32))
 
-    intersects = (discriminant >= -epsilon) & valid_t & within_height
-    return intersects, jnp.where(intersects, t, jnp.inf)
+    use_parallel = jnp.abs(a) < 1e-12
+    intersects, tval = lax.cond(use_parallel,
+                                parallel_side_branch,
+                                side_branch,
+                                operand=None)
+
+    return intersects, tval
 
 
 @jax.jit
@@ -67,13 +199,31 @@ def intersect_cylinder_cap(ray_origin, ray_direction, r, z):
     tuple
         (bool, float) - (whether intersection exists, distance to intersection)
     """
-    t = jnp.where(ray_direction[2] != 0, (z - ray_origin[2]) / ray_direction[2], jnp.inf)
+    LARGE = 1e10
 
-    intersection_point = ray_origin + t * ray_direction
-    within_circle = (intersection_point[0] ** 2 + intersection_point[1] ** 2) <= r ** 2
+    def normal_cap_branch(_):
+        t_plane = (z - ray_origin[2]) / ray_direction[2]
+        ipt = ray_origin + t_plane * ray_direction
+        within_circle = (ipt[0]**2 + ipt[1]**2) <= r**2
 
-    intersects = (t > 0) & within_circle
-    return intersects, jnp.where(intersects, t, jnp.inf)
+        intersects_ = (t_plane > 0) & within_circle
+        tval_ = jnp.where(intersects_, t_plane, LARGE)
+        return (intersects_, tval_)
+
+    def parallel_cap_branch(_):
+        # If dz == 0 => parallel. Check if we're exactly on the plane
+        same_plane = jnp.abs(ray_origin[2] - z) < 1e-12
+        intersects_ = same_plane
+        tval_ = jnp.where(same_plane, 0.0, LARGE)
+        return (intersects_, tval_)
+
+    use_parallel = jnp.abs(ray_direction[2]) < 1e-12
+    intersects, tval = lax.cond(use_parallel,
+                                parallel_cap_branch,
+                                normal_cap_branch,
+                                operand=None)
+
+    return intersects, tval
 
 
 @jax.jit
@@ -101,14 +251,16 @@ def intersect_cylinder(ray_origin, ray_direction, r, h):
     top_intersects, top_t = intersect_cylinder_cap(ray_origin, ray_direction, r, h / 2)
     bottom_intersects, bottom_t = intersect_cylinder_cap(ray_origin, ray_direction, r, -h / 2)
 
-    ts = jnp.array([wall_t, top_t, bottom_t])
-    intersects = jnp.array([wall_intersects, top_intersects, bottom_intersects])
+    # Combine them into shape (3,) arrays
+    ts = jnp.stack([wall_t, top_t, bottom_t], axis=0)
+    intersects = jnp.stack([wall_intersects, top_intersects, bottom_intersects], axis=0)
 
     min_t_index = jnp.argmin(ts)
     min_t = jnp.min(ts)
-
     any_intersects = jnp.any(intersects)
+
     return any_intersects, min_t, min_t_index
+
 
 
 @partial(jax.jit, static_argnums=(2, 3, 4, 5, 6))
@@ -548,10 +700,10 @@ def create_inverted_detector_map(assignments_geometric, assignments_distance, n_
 
 
 def find_intersected_detectors_differentiable(ray_origins, ray_directions, detector_positions, detector_radius, r, h,
-                                              n_cap, n_angular, n_height, inverted_detector_map,
-                                              temperature):
+                                           n_cap, n_angular, n_height, inverted_detector_map,
+                                           temperature, overlap_prob):
     """
-    Finds detectors intersected by rays using a differentiable approximation with temperature-aware minimum weights.
+    Finds detectors intersected by rays using a differentiable approximation with overlap-based weights.
 
     Parameters
     ----------
@@ -576,8 +728,9 @@ def find_intersected_detectors_differentiable(ray_origins, ray_directions, detec
     inverted_detector_map : ndarray
         Mapping from grid cells to detector indices
     temperature : float
-        Smoothing scale for differentiable approximation
-        Higher values will make the approximation closer to a hard assignment
+        Width parameter for overlap function (sigma)
+    overlap_prob : callable
+        Function that calculates overlap probability
 
     Returns
     -------
@@ -590,13 +743,9 @@ def find_intersected_detectors_differentiable(ray_origins, ray_directions, detec
         ray_directions = ray_directions[None, :]
 
     # Get cylinder intersection points and grid indices
-    intersects, t_cylinder, is_wall, is_top_cap, wall_indices, cap_indices, intersection_point = jax.lax.stop_gradient(
-        batch_intersect_cylinder_with_grid(ray_origins, ray_directions, r, h, n_cap, n_angular, n_height)
-    )
+    intersects, t_cylinder, is_wall, is_top_cap, wall_indices, cap_indices, intersection_point = (
+        batch_intersect_cylinder_with_grid(ray_origins, ray_directions, r, h, n_cap, n_angular, n_height))
 
-    # Convert to linear indices for wall and cap regions
-    wall_idx = wall_indices[:, 0] * n_height + wall_indices[:, 1]
-    cap_idx = cap_indices[:, 0] * n_cap + cap_indices[:, 1]
 
     def calculate_linear_index(wall_indices, cap_indices, is_wall, is_top_cap):
         # Wall indexing
@@ -633,44 +782,63 @@ def find_intersected_detectors_differentiable(ray_origins, ray_directions, detec
         t = -jnp.sum(oc * ray_d, axis=1, keepdims=True)
         closest = ray_origins + t * ray_d
 
-        # Calculate smoothed intersection weights with temperature-aware minimum
+        # Calculate distances and weights using overlap function
         to_detector = closest - sphere_centers
         distance = jnp.linalg.norm(to_detector, axis=1)
-        min_distance = jnp.maximum(distance - detector_radius, 0.0)
 
-        # Temperature-aware weighting function
-        base_weight = detector_radius / (detector_radius + (min_distance * temperature) ** 2)
+        # Apply overlap function to get weights
+        weights = jnp.where(valid,
+                          overlap_prob(distance),
+                          0.0)
 
-        raw_weights = jnp.where(valid,
-                                base_weight,
-                                0.0)
+        return weights, t, detector_idx
 
-        return raw_weights, t, detector_idx
+    # def compute_detector_intersections(detector_idx):
+    #     valid = (detector_idx != -1)
+    #
+    #     # shape: (max_detectors_per_cell, 3)
+    #     sphere_centers = jnp.where(valid[:, None],
+    #                                detector_positions[detector_idx],
+    #                                jnp.zeros(3))
+    #
+    #     # intersection_point = origin + t * direction
+    #     p_wall = ray_origins + t_cylinder[:, None] * ray_directions
+    #
+    #     # 3) Distance from wall intersection to each detector center
+    #     dist_wall_to_detector = jnp.linalg.norm(p_wall - sphere_centers, axis=1)
+    #
+    #     # 4) total distance (two segments: origin->wall + wall->detector)
+    #     #    Since ray_direction is normalized, t_cylinder_local is the direct distance for origin->wall
+    #     dist_total = t_cylinder + dist_wall_to_detector
+    #
+    #     # 5) overlap probability is based on the distance from the cylinder to the center
+    #     weights = jnp.where(
+    #         valid,
+    #         overlap_prob(dist_wall_to_detector),
+    #         0.0
+    #     )
+    #
+    #     # Keep an extra dimension so shapes match what the outside code expects
+    #     dist_total = dist_total[..., None]
+    #
+    #     return weights, dist_total, detector_idx
 
     detector_results = jax.vmap(compute_detector_intersections)(potential_detectors.T)
-    raw_weights = detector_results[0]
+    weights = detector_results[0]
     detector_times = detector_results[1]
     detector_indices = detector_results[2]
-
-    # Normalize weights only when their sum exceeds 1
-    sum_weights = jnp.sum(raw_weights, axis=0) + 1e-10
-    final_weights = jnp.where(
-        sum_weights > 1.0,
-        raw_weights / sum_weights[None, :],
-        raw_weights
-    )
 
     # Calculate intersection positions
     detector_times_expanded = detector_times
     ray_directions_expanded = ray_directions[None, :, :]
     ray_origins_expanded = ray_origins[None, :, :]
     hit_positions = (ray_origins_expanded +
-                     detector_times_expanded * ray_directions_expanded)
+                    detector_times_expanded * ray_directions_expanded)
 
     result = {
         'times': detector_times,
         'positions': hit_positions,
-        'detector_weights': final_weights,
+        'detector_weights': weights,
         'detector_indices': detector_indices
     }
 
@@ -678,9 +846,9 @@ def find_intersected_detectors_differentiable(ray_origins, ray_directions, detec
 
 
 def create_photon_propagator(detector_positions, detector_radius, r=4.0, h=6.0, n_cap=73, n_angular=168, n_height=82,
-                             temperature=100, max_detectors_per_cell=4):
+                           temperature=0.2, max_detectors_per_cell=4):
     """
-    Creates a JIT-compiled function for efficient photon propagation simulation.
+    Creates a JIT-compiled function for efficient photon propagation simulation with overlap-based weights.
 
     Parameters
     ----------
@@ -699,7 +867,8 @@ def create_photon_propagator(detector_positions, detector_radius, r=4.0, h=6.0, 
     n_height : int, optional
         Number of height divisions, default 28
     temperature : float, optional
-        Temperature parameter for smoothing, default 100
+        Width parameter for overlap function (sigma), default 0.2 [* detector_radius]. Set to None for sharp overlap.
+        Also sets to sharp overlap if temperature < 0.02 due to numerical instability.
     max_detectors_per_cell : int, optional
         Maximum number of detectors per grid cell, default 4
 
@@ -727,11 +896,17 @@ def create_photon_propagator(detector_positions, detector_radius, r=4.0, h=6.0, 
         max_detectors_per_cell, detector_positions.shape[0]
     )
 
+    if temperature is None:
+        overlap_prob = create_overlap_prob(temperature, detector_radius)
+    else:
+        # Create overlap probability function
+        overlap_prob = create_overlap_prob(temperature * detector_radius, detector_radius)
+
     @jax.jit
     def propagate_photons(photon_origins, photon_directions):
         return find_intersected_detectors_differentiable(
             photon_origins, photon_directions, detector_positions, detector_radius,
             r, h, n_cap, n_angular, n_height, inverted_detector_map,
-            temperature)
+            temperature, overlap_prob)
 
     return propagate_photons
