@@ -175,7 +175,7 @@ def load_single_event(filename, num_detectors, sparse=True):
 import jax
 import jax.numpy as jnp
 
-def generate_random_params(key, opening_range=(10, 90), h=2, r=1, intensity_range=(2, 10), offset = 0.1):
+def generate_random_params(key, energy_range=(500, 700), h=2, r=1, intensity_range=(2, 10), offset = 0.1):
     """
     Generate random parameters for event simulation with position inside a cylinder.
 
@@ -183,7 +183,7 @@ def generate_random_params(key, opening_range=(10, 90), h=2, r=1, intensity_rang
     ----------
     key : jax.random.PRNGKey
         JAX random number generator key
-    opening_range : tuple, optional
+    energy_range : tuple, optional
         Range for cone opening angle in degrees, default=(10, 90)
     h : float, optional
         Height of the cylinder, default=2
@@ -213,7 +213,7 @@ def generate_random_params(key, opening_range=(10, 90), h=2, r=1, intensity_rang
     key1, key2, key3, key4, key5 = jax.random.split(key, 5)
 
     # Generate opening angle: uniform random int from [1, 90] degrees
-    random_opening_angle = jax.random.uniform(key1, minval=opening_range[0], maxval=opening_range[1])
+    random_opening_angle = jax.random.uniform(key1, minval=energy_range[0], maxval=energy_range[1])
 
     # Generate random position inside the cylinder
     random_position = generate_random_point_inside_cylinder(key2, h, r, offset)
@@ -311,7 +311,7 @@ def print_params(params):
     # Create formatted output with consistent decimal places
     print("Event Parameters:")
     print("─" * 20)
-    print(f"Opening Angle: {opening_angle:.2f} degrees")
+    print(f"Energy: {opening_angle:.2f} MeV")
     print(f"Initial Position: ({initial_position[0]:.2f}, {initial_position[1]:.2f}, {initial_position[2]:.2f})")
     print(f"Initial Direction: ({initial_direction[0]:.2f}, {initial_direction[1]:.2f}, {initial_direction[2]:.2f})")
     print(f"Initial Intensity: {initial_intensity:.2f}")

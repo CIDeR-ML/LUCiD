@@ -190,9 +190,11 @@ def new_differentiable_get_rays(track_origin, track_direction, energy, Nphot, ta
     # with the specific grid settings in create_siren_grid
     # if you change create_siren_grid, change also the numbers below.
     # you can use code in siren/cut_off_study notebook.
-    #num_seeds = jnp.int32(energy*7.28535714-1293.35714286) # using 200 x 200 binning
-    num_seeds = jnp.int32(energy*.44142857-77.85714286)     # using 50 x 50 binning
-    
+    #num_seeds = jnp.int32(energy*94.14714286-17750.)          # using 500 x 500 binning and 0.008  cut-off value
+    #num_seeds = jnp.int32(energy*84.77857143-15115.71428571)  # using 500 x 500 binning and 0.01  cut-off value
+    #num_seeds = jnp.int32(energy*75.0525-12907.35714286)      # using 500 x 500 binning and 0.015 cut-off value
+    num_seeds = jnp.int32(energy*69.77142857-11980.42857143)   # using 500 x 500 binning and 0.02  cut-off value
+
     seed_indices = random.randint(sampling_key, (Nphot,), 0, num_seeds)
     indices_by_weight = jnp.argsort(-photon_weights.squeeze())[seed_indices]
     
@@ -202,17 +204,25 @@ def new_differentiable_get_rays(track_origin, track_direction, energy, Nphot, ta
     # Split into separate cos and trk arrays
     sampled_cos = selected_cos_trk[:, 0]
     sampled_trk = selected_cos_trk[:, 1]
-    
+
     # Add Gaussian noise
-    # You can adjust the standard deviation (sigma) as needed
-    sigma_cos = 0.02  # example value
-    sigma_trk = 0.02  # example value
-    
+    sigma_cos = 0.001 
+    sigma_trk = 0.001
+
     noise_cos = random.normal(noise_key_cos, (Nphot,)) * sigma_cos
     noise_trk = random.normal(noise_key_trk, (Nphot,)) * sigma_trk
-    
-    smeared_cos = jnp.clip(sampled_cos + noise_cos, -1, 1)  # clip cos to valid range
+
+    smeared_cos = sampled_cos + noise_cos
     smeared_trk = sampled_trk + noise_trk
+
+    # kill those events sampled outside of the normalized SIREN binning
+    # the sigma and binning are chosen such that the fraction of those events is negligibly small.
+    smeared_trk = jnp.where(smeared_trk<-1, 0, smeared_trk)
+    smeared_trk = jnp.where(smeared_trk> 1, 0, smeared_trk)
+
+    smeared_cos = jnp.where(smeared_cos<-1, 0, smeared_cos)
+    smeared_cos = jnp.where(smeared_cos> 1, 0, smeared_cos)
+
 
     # Create new evaluation grid with smeared values
     energy_interp = jax_linear_interp(x_data, y_data, energy)
