@@ -68,8 +68,8 @@ def setup_event_simulator(json_filename, n_photons=1_000_000, temperature=0.2, i
 
 def create_siren_grid(table):
     ene_bins = table.normalize(0, table.binning[0])
-    cos_bins = table.normalize(1, np.linspace(0.3, max(table.binning[1]), 50))
-    trk_bins = table.normalize(2, np.linspace(min(table.binning[2]), 400, 50))
+    cos_bins = table.normalize(1, np.linspace(0.3, max(table.binning[1]), 500))
+    trk_bins = table.normalize(2, np.linspace(min(table.binning[2]), 400, 500))
     cos_trk_mesh = np.array([[x,y] for x in cos_bins for y in trk_bins])
     x_data = table.binning[0]
     y_data = ene_bins
@@ -119,8 +119,17 @@ def create_event_simulator(propagate_photons, Nphot, NUM_DETECTORS, detector_poi
         hit_times = prop_results['times']  # [max_detectors, n_rays]
         hit_positions = prop_results['positions']  # [max_detectors, n_rays, 3]
 
-        # Expand photon_weights to match weights dimension
-        expanded_photon_weights = initial_intensity*jnp.broadcast_to(photon_weights, weights.shape)/Nphot  # [max_detectors, n_rays]
+
+        tot_real_photons = energy*6.22880349e-05-1.15486596e-02
+
+        physics_normalization_for_siren = 11.95e6 # talking with Matsumoto-san to ensure normalization is good
+
+        #photon_count_normalization = tot_real_photons/jnp.sum(photon_weights)*physics_normalization_for_siren
+        photon_count_normalization = tot_real_photons/(jax.lax.stop_gradient(jnp.sum(photon_weights)))*physics_normalization_for_siren
+
+
+        expanded_photon_weights = jnp.broadcast_to(photon_weights, weights.shape)*photon_count_normalization  # [max_detectors, n_rays]
+
 
         # Element-wise multiplication of all components
         flat_weights = (weights * expanded_photon_weights).reshape(-1)  # Flatten after multiplication
@@ -170,7 +179,7 @@ def create_event_simulator(propagate_photons, Nphot, NUM_DETECTORS, detector_poi
 
         # Find minimum non-zero time
         # Create a mask for non-zero times and weights
-        nonzero_mask = (average_times > eps) & (detector_weight_totals > eps)
+        nonzero_mask = (average_times > eps) & (detector_weight_totals > eps) & (charges>0.5)
         # Get minimum of non-zero times, defaulting to 0 if no valid times exist
         min_nonzero_time = jnp.where(
             jnp.any(nonzero_mask),
@@ -182,10 +191,16 @@ def create_event_simulator(propagate_photons, Nphot, NUM_DETECTORS, detector_poi
         aligned_times = jnp.where(
             nonzero_mask,
             average_times - min_nonzero_time,
-            average_times
+            0
         )
 
-        return charges, aligned_times
+        corrected_q = jnp.where(
+            nonzero_mask,
+            charges,
+            0
+        )
+
+        return corrected_q, aligned_times
 
     if is_data:
         return jax.jit(lambda p, k: _simulate_event_core_data(p, k))
