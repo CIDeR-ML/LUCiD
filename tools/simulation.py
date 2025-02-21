@@ -120,16 +120,17 @@ def create_event_simulator(propagate_photons, Nphot, NUM_DETECTORS, detector_poi
         hit_positions = prop_results['positions']  # [max_detectors, n_rays, 3]
 
 
-        tot_real_photons = energy*6.22880349e-05-1.15486596e-02
+        tot_real_photons_norm = (energy*852.97855369-148646.90865158)/Nphot
 
-        physics_normalization_for_siren = 11.95e6 # talking with Matsumoto-san to ensure normalization is good
-
-        #photon_count_normalization = tot_real_photons/jnp.sum(photon_weights)*physics_normalization_for_siren
-        photon_count_normalization = tot_real_photons/(jax.lax.stop_gradient(jnp.sum(photon_weights)))*physics_normalization_for_siren
+        expanded_photon_weights = jnp.broadcast_to(photon_weights, weights.shape)*tot_real_photons_norm  # [max_detectors, n_rays]
 
 
-        expanded_photon_weights = jnp.broadcast_to(photon_weights, weights.shape)*photon_count_normalization  # [max_detectors, n_rays]
+        # tot_real_photons = energy*6.22880349e-05-1.15486596e-02
 
+        # physics_normalization_for_siren = 11.95e6 # talking with Matsumoto-san to ensure normalization is good
+
+        # #photon_count_normalization = tot_real_photons/jnp.sum(photon_weights)*physics_normalization_for_siren
+        # photon_count_normalization = tot_real_photons/(jax.lax.stop_gradient(jnp.sum(photon_weights)))*physics_normalization_for_siren
 
         # Element-wise multiplication of all components
         flat_weights = (weights * expanded_photon_weights).reshape(-1)  # Flatten after multiplication
