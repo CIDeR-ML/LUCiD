@@ -68,6 +68,10 @@ def normalize(v, epsilon=1e-6):
     norm = jnp.linalg.norm(v, axis=-1, keepdims=True)
     return v / (norm + epsilon)
 
+def compute_reflection_direction(incident_dir, normal):
+    """Compute reflection direction given an incident direction and surface normal."""
+    return normalize(incident_dir - 2 * jnp.dot(incident_dir, normal) * normal)
+
 
 def create_local_frame(z):
     """Create a local coordinate frame given a z-axis vector."""
@@ -94,11 +98,6 @@ def sample_scatter_distance(D, S, rng_key):
     return -S * jnp.log(1 - u * (1 - jnp.exp(-D / S)))
 
 
-def compute_reflection_direction(incident_dir, normal):
-    """Compute reflection direction given an incident direction and surface normal."""
-    return normalize(incident_dir - 2 * jnp.dot(incident_dir, normal) * normal)
-
-
 def compute_scatter_direction(incident_dir, rng_key):
     """Compute a new scattering direction based on a Rayleigh phase function."""
     k1, k2 = jax.random.split(rng_key)
@@ -114,21 +113,94 @@ def compute_scatter_direction(incident_dir, rng_key):
     return normalize(frame @ local_dir)
 
 
+# def photon_iteration_update_factors(position, direction, time, surface_distance,
+#                                     normal, scatter_length, reflection_rate,
+#                                     absorption_length, temperature, rng_key):
+#     """
+#     A vectorized version of the scattering update that returns scaling factors instead of applying intensity.
+#
+#     Parameters:
+#       - position, direction: (3,) arrays for the photon's current state.
+#       - time: scalar, current photon time.
+#       - surface_distance: scalar, computed from norm(hit_position - position).
+#       - normal: (3,) array, the surface normal at the hit position.
+#       - scatter_length: scalar, mean free path for scattering.
+#       - reflection_rate: scalar, probability of reflection at the surface.
+#       - absorption_length: scalar, mean free path for absorption.
+#       - temperature: scalar, temperature for gumbel-softmax sampling.
+#       - rng_key: JAX PRNG key.
+#
+#     Returns:
+#       - new_pos: (3,) array, updated photon position.
+#       - new_dir: (3,) array, updated photon direction.
+#       - new_time: scalar, updated photon time.
+#       - detect_prob: scalar, probability of detection.
+#       - reflection_attenuation: scalar, attenuation factor.
+#       - continuing_factor: scalar, factor for continuation (reflection or scatter).
+#     """
+#     k1, k2, k3 = jax.random.split(rng_key, 3)
+#
+#     # Sample the distance along the ray where scattering might occur.
+#     scatter_distance = sample_scatter_distance(surface_distance, scatter_length, k2)
+#
+#     # Core probabilities
+#     # Probability of reaching the surface without scattering
+#     reach_surface_prob = jnp.exp(-surface_distance / scatter_length)
+#     # Probability of scattering before reaching the surface
+#     scatter_prob = 1 - reach_surface_prob
+#
+#     # Total probabilities for each possible outcome
+#     # 1. Reflection: reach surface AND reflect
+#     reflect_prob = reach_surface_prob * reflection_rate
+#     # 2. Detection: reach surface AND NOT reflect
+#     detect_prob = reach_surface_prob * (1 - reflection_rate)
+#
+#     # Attenuation factors (only affect intensity, not probabilities)
+#     reflection_attenuation = jnp.exp(-surface_distance / absorption_length)
+#     scatter_attenuation = jnp.exp(-scatter_distance / absorption_length)
+#
+#     # Use gumbel-softmax to get soft weights for reflection and scatter.
+#     # We only consider continuing paths (not detector absorption)
+#     probs = jnp.array([reflect_prob, scatter_prob])
+#     action_weights = gumbel_softmax(probs, temperature, k1)
+#     reflection_weight = action_weights[0]
+#     scatter_weight = action_weights[1]
+#
+#     # Compute the candidate positions and directions.
+#     reflection_pos = position + surface_distance * direction
+#     scatter_pos = position + scatter_distance * direction
+#     reflection_dir = compute_reflection_direction(direction, normal)
+#     scatter_dir = compute_scatter_direction(direction, k3)
+#
+#     # Blend the two possibilities for continuing paths.
+#     new_pos = reflection_weight * reflection_pos + scatter_weight * scatter_pos
+#     new_dir = normalize(reflection_weight * reflection_dir + scatter_weight * scatter_dir)
+#
+#     # Calculate the continuing factor (reflection + scatter)
+#     continuing_factor = reflect_prob * reflection_attenuation + scatter_prob * scatter_attenuation
+#
+#     # Time increment based on distance traveled along the weighted path
+#     time_increment = reflection_weight * surface_distance + scatter_weight * scatter_distance
+#     new_time = time + time_increment
+#
+#     return new_pos, new_dir, new_time, detect_prob, reflection_attenuation, continuing_factor
+
 def photon_iteration_update_factors(position, direction, time, surface_distance,
                                     normal, scatter_length, reflection_rate,
                                     absorption_length, temperature, rng_key):
     """
-    A vectorized version of the scattering update that returns scaling factors instead of applying intensity.
+    Reflection-only variant that returns scaling factors instead of applying intensity.
+    This variant only handles reflection (no scattering).
 
     Parameters:
       - position, direction: (3,) arrays for the photon's current state.
       - time: scalar, current photon time.
       - surface_distance: scalar, computed from norm(hit_position - position).
       - normal: (3,) array, the surface normal at the hit position.
-      - scatter_length: scalar, mean free path for scattering.
+      - scatter_length: scalar, ignored in this variant.
       - reflection_rate: scalar, probability of reflection at the surface.
       - absorption_length: scalar, mean free path for absorption.
-      - temperature: scalar, temperature for gumbel-softmax sampling.
+      - temperature: scalar, ignored in this variant.
       - rng_key: JAX PRNG key.
 
     Returns:
@@ -137,52 +209,36 @@ def photon_iteration_update_factors(position, direction, time, surface_distance,
       - new_time: scalar, updated photon time.
       - detect_prob: scalar, probability of detection.
       - reflection_attenuation: scalar, attenuation factor.
-      - continuing_factor: scalar, factor for continuation (reflection or scatter).
+      - continuing_factor: scalar, factor for continuation (always reflection).
     """
-    k1, k2, k3 = jax.random.split(rng_key, 3)
+    # In reflection-only mode, we always reach the surface
+    # No need to split the RNG key for scatter distance or direction
 
-    # Sample the distance along the ray where scattering might occur.
-    scatter_distance = sample_scatter_distance(surface_distance, scatter_length, k2)
+    # In this variant, photons always reach the surface
+    reach_surface_prob = 1.0
 
-    # Core probabilities
-    # Probability of reaching the surface without scattering
-    reach_surface_prob = jnp.exp(-surface_distance / scatter_length)
-    # Probability of scattering before reaching the surface
-    scatter_prob = 1 - reach_surface_prob
+    # No scattering in this variant
+    scatter_prob = 0.0
 
     # Total probabilities for each possible outcome
-    # 1. Reflection: reach surface AND reflect
+    # 1. Reflection: reach surface AND reflect (based on reflection_rate)
     reflect_prob = reach_surface_prob * reflection_rate
     # 2. Detection: reach surface AND NOT reflect
-    detect_prob = reach_surface_prob * (1 - reflection_rate)
+    detect_prob = reach_surface_prob * (1.0 - reflection_rate)
 
-    # Attenuation factors (only affect intensity, not probabilities)
+    # Attenuation factor (only affects intensity, not probabilities)
     reflection_attenuation = jnp.exp(-surface_distance / absorption_length)
-    scatter_attenuation = jnp.exp(-scatter_distance / absorption_length)
 
-    # Use gumbel-softmax to get soft weights for reflection and scatter.
-    # We only consider continuing paths (not detector absorption)
-    probs = jnp.array([reflect_prob, scatter_prob])
-    action_weights = gumbel_softmax(probs, temperature, k1)
-    reflection_weight = action_weights[0]
-    scatter_weight = action_weights[1]
+    # Since we're only reflecting, we don't need Gumbel-softmax
+    # Compute the reflection position and direction directly
+    new_pos = position + surface_distance * direction
+    new_dir = compute_reflection_direction(direction, normal)
 
-    # Compute the candidate positions and directions.
-    reflection_pos = position + surface_distance * direction
-    scatter_pos = position + scatter_distance * direction
-    reflection_dir = compute_reflection_direction(direction, normal)
-    scatter_dir = compute_scatter_direction(direction, k3)
+    # Calculate the continuing factor (only reflection)
+    continuing_factor = reflect_prob * reflection_attenuation
 
-    # Blend the two possibilities for continuing paths.
-    new_pos = reflection_weight * reflection_pos + scatter_weight * scatter_pos
-    new_dir = normalize(reflection_weight * reflection_dir + scatter_weight * scatter_dir)
-
-    # Calculate the continuing factor (reflection + scatter)
-    continuing_factor = reflect_prob * reflection_attenuation + scatter_prob * scatter_attenuation
-
-    # Time increment based on distance traveled along the weighted path
-    time_increment = reflection_weight * surface_distance + scatter_weight * scatter_distance
-    new_time = time + time_increment
+    # Time increment based on distance traveled to surface
+    new_time = time + surface_distance
 
     return new_pos, new_dir, new_time, detect_prob, reflection_attenuation, continuing_factor
 
