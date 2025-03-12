@@ -935,6 +935,62 @@ def find_intersected_detectors_differentiable(ray_origins, ray_directions, detec
     idx = calculate_linear_index(wall_indices, cap_indices, is_wall, is_top_cap)
     potential_detectors = jax.lax.stop_gradient(inverted_detector_map[idx])
 
+    # def compute_detector_intersections(detector_idx):
+    #     valid = detector_idx != -1
+    #     sphere_centers = jnp.where(valid[:, None], detector_positions[detector_idx], jnp.zeros(3))
+    #
+    #     # Find closest approach of ray to detector center
+    #     oc = ray_origins - sphere_centers
+    #     ray_d = ray_directions / (jnp.linalg.norm(ray_directions, axis=1, keepdims=True) + 1e-10)
+    #
+    #     # Ray-sphere intersection coefficients
+    #     a = jnp.sum(ray_d * ray_d, axis=1)  # Should be 1 for normalized directions
+    #     b = 2.0 * jnp.sum(oc * ray_d, axis=1)
+    #     c = jnp.sum(oc * oc, axis=1) - detector_radius ** 2
+    #
+    #     # Discriminant determines if intersection exists
+    #     discriminant = b ** 2 - 4 * a * c
+    #
+    #     # Calculate closest approach for all rays (stable for gradients)
+    #     t_closest = -jnp.sum(oc * ray_d, axis=1, keepdims=True)
+    #     closest = ray_origins + t_closest * ray_d
+    #     to_detector = closest - sphere_centers
+    #     distance = jnp.linalg.norm(to_detector, axis=1)
+    #
+    #     # Calculate normal vectors for closest approach
+    #     normals_closest = to_detector / (jnp.linalg.norm(to_detector, axis=1, keepdims=True) + 1e-10)
+    #
+    #     # Calculate actual intersection for rays that hit the detector
+    #     sqrt_term = jnp.sqrt(jnp.maximum(0.0, discriminant))
+    #     t1 = (-b - sqrt_term) / (2.0 * a)
+    #     t2 = (-b + sqrt_term) / (2.0 * a)
+    #
+    #     # Choose the smallest positive t as entry point
+    #     t_intersect = jnp.where((t1 > 0), t1, t2)
+    #
+    #     # Calculate intersection points
+    #     intersection_points = ray_origins + t_intersect[:, None] * ray_d
+    #
+    #     # Calculate normals at intersection points
+    #     to_intersection = intersection_points - sphere_centers
+    #     normals_intersect = to_intersection / (jnp.linalg.norm(to_intersection, axis=1, keepdims=True) + 1e-10)
+    #
+    #     # Determine if ray intersects with detector (add small epsilon for stability)
+    #     intersects = (discriminant > 1e-6) & (t_intersect > 0)
+    #
+    #     # Use correct normals based on whether ray intersects or not
+    #     normals = jnp.where(intersects[:, None], normals_intersect, normals_closest)
+    #
+    #     # Check if point is inside detector
+    #     inside_detector = distance < detector_radius
+    #
+    #     # Apply overlap function to get weights
+    #     weights = jnp.where(valid, overlap_prob(distance), 0.0)
+    #
+    #     # Always use the stable closest point and time for hit calculation
+    #     # This is the key change to maintain gradient stability
+    #     return weights, t_closest, detector_idx, normals, inside_detector, closest
+
     def compute_detector_intersections(detector_idx):
         valid = detector_idx != -1
         sphere_centers = jnp.where(valid[:, None], detector_positions[detector_idx], jnp.zeros(3))
@@ -961,9 +1017,17 @@ def find_intersected_detectors_differentiable(ray_origins, ray_directions, detec
         normals_closest = to_detector / (jnp.linalg.norm(to_detector, axis=1, keepdims=True) + 1e-10)
 
         # Calculate actual intersection for rays that hit the detector
-        sqrt_term = jnp.sqrt(jnp.maximum(0.0, discriminant))
-        t1 = (-b - sqrt_term) / (2.0 * a)
-        t2 = (-b + sqrt_term) / (2.0 * a)
+        # CHANGE 1: Add small epsilon inside sqrt to prevent infinite gradients
+        sqrt_term = jnp.sqrt(jnp.maximum(1e-10, discriminant))
+
+        # CHANGE 2: Use numerically stable quadratic formula to prevent NaN gradients
+        q = jnp.where(
+            b > 0,
+            -0.5 * (b + sqrt_term),
+            -0.5 * (b - sqrt_term)
+        )
+        t1 = q / (a + 1e-10)
+        t2 = c / (q + jnp.sign(q) * 1e-10)
 
         # Choose the smallest positive t as entry point
         t_intersect = jnp.where((t1 > 0), t1, t2)
@@ -981,14 +1045,13 @@ def find_intersected_detectors_differentiable(ray_origins, ray_directions, detec
         # Use correct normals based on whether ray intersects or not
         normals = jnp.where(intersects[:, None], normals_intersect, normals_closest)
 
-        # Check if point is inside detector
+        # Check if point is inside detector (keep as boolean - no change needed)
         inside_detector = distance < detector_radius
 
         # Apply overlap function to get weights
         weights = jnp.where(valid, overlap_prob(distance), 0.0)
 
         # Always use the stable closest point and time for hit calculation
-        # This is the key change to maintain gradient stability
         return weights, t_closest, detector_idx, normals, inside_detector, closest
 
     # Process all potential detectors
