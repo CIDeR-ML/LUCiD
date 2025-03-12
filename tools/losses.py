@@ -149,15 +149,15 @@ def compute_loss_with_time(
                                                            sums_per_col[jnp.newaxis, :]) + eps))
 
     # # --- Intensity loss --- include for more sharp total charge difference
-    # total_true_charge = jnp.sum(true_charge)
-    # total_sim_charge = jnp.sum(simulated_charge)
-    # intensity_loss = jnp.abs(jnp.log(total_sim_charge / (total_true_charge + eps)))
+    total_true_charge = jnp.sum(true_charge)
+    total_sim_charge = jnp.sum(simulated_charge)
+    intensity_loss = jnp.abs(jnp.log(total_sim_charge / (total_true_charge + eps)))
 
     # --- Distribution loss ---
     delta_charge = jnp.abs(simulated_charge[jnp.newaxis, :] - true_charge[:, jnp.newaxis])
     distribution_loss = jnp.sum(normalized_similarity * delta_charge)
 
-    return distribution_loss
+    return distribution_loss + intensity_loss
 
 
 @jit
