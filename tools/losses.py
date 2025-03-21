@@ -168,7 +168,8 @@ def compute_softmin_loss(
         simulated_time: jnp.ndarray,
         tau: float = 0.01,
         eps: float = 1e-8,
-        lambda_time: float = 1.0
+        lambda_time: float = 1.0,
+        lambda_intensity: float = 1.0
 ) -> float:
     """
     Compute a differentiable loss using soft assignments between simulated and true detectors.
@@ -193,6 +194,8 @@ def compute_softmin_loss(
         Small constant to prevent division by zero, by default 1e-8
     lambda_time : float, optional
         Scaling factor for time loss, by default 1.0.
+    lambda_intensity : float, optional
+        Scaling factor for intensity loss, by default 1.0.
 
     Returns
     -------
@@ -254,5 +257,97 @@ def compute_softmin_loss(
     # Combine losses
     L_charge = L_charge_s2t + L_charge_t2s
     L_time = (L_time_s2t + L_time_t2s) * lambda_time
+    L_intensity = intensity_loss * lambda_intensity
 
-    return L_charge + L_time + intensity_loss
+    return L_charge + L_time + L_intensity
+
+
+@jit
+def compute_simplified_loss(
+        detector_points: jnp.ndarray,
+        true_charge: jnp.ndarray,
+        true_time: jnp.ndarray,
+        simulated_charge: jnp.ndarray,
+        simulated_time: jnp.ndarray,
+        eps: float = 1e-8,
+        lambda_centroid: float = 1.0,
+        lambda_time: float = 1.0,
+        lambda_intensity: float = 0.5
+) -> float:
+    """
+    Compute a simplified loss function with three components:
+    1. Centroid loss: Distance between charge-weighted centroids
+    2. Intensity loss: Difference in total charge
+    3. Time loss: Simple time spread (standard deviation) comparison
+
+    Parameters
+    ----------
+    detector_points : jnp.ndarray
+        Array of shape (N, 3) with detector coordinates.
+    true_charge : jnp.ndarray
+        Array of shape (N,) of true charges.
+    true_time : jnp.ndarray
+        Array of shape (N,) of true times.
+    simulated_charge : jnp.ndarray
+        Array of shape (N,) of simulated charges.
+    simulated_time : jnp.ndarray
+        Array of shape (N,) of simulated times.
+    eps : float, optional
+        Small constant to prevent division by zero, by default 1e-8
+    lambda_centroid : float, optional
+        Scaling factor for centroid loss, by default 1.0.
+    lambda_time : float, optional
+        Scaling factor for time loss, by default 1.0.
+    lambda_intensity : float, optional
+        Scaling factor for intensity loss, by default 1.0.
+
+    Returns
+    -------
+    float
+        Total loss.
+    """
+    # Compute active masks for non-zero charges
+    true_active_mask = true_charge > eps
+    sim_active_mask = simulated_charge > eps
+
+    # Calculate total charges
+    total_true_charge = jnp.sum(true_charge)
+    total_sim_charge = jnp.sum(simulated_charge)
+
+    # --------------------------------------
+    # 1. Intensity Loss
+    # --------------------------------------
+    # Log ratio of total charges (same as original)
+    L_intensity = jnp.abs(jnp.log(total_sim_charge / (total_true_charge + eps))) * lambda_intensity
+
+    # --------------------------------------
+    # 2. Centroid Loss
+    # --------------------------------------
+    # Calculate charge-weighted centroids
+    true_centroid = jnp.sum(true_charge[:, None] * detector_points, axis=0) / (total_true_charge + eps)
+    sim_centroid = jnp.sum(simulated_charge[:, None] * detector_points, axis=0) / (total_sim_charge + eps)
+
+    # Euclidean distance between centroids
+    L_centroid = jnp.linalg.norm(true_centroid - sim_centroid) * lambda_centroid
+
+    # --------------------------------------
+    # 3. Simple Time Spread Loss
+    # --------------------------------------
+    # Calculate mean times only for active locations
+    true_mean_time = jnp.sum(true_time * true_charge) / (total_true_charge + eps)
+    sim_mean_time = jnp.sum(simulated_time * simulated_charge) / (total_sim_charge + eps)
+
+    # Subtract means from times to account for arbitrary time offsets
+    true_time_centered = true_time - true_mean_time
+    sim_time_centered = simulated_time - sim_mean_time
+
+    # Simple time spread comparison (standard deviation)
+    true_time_var = jnp.sum(true_charge * jnp.square(true_time_centered)) / (total_true_charge + eps)
+    sim_time_var = jnp.sum(simulated_charge * jnp.square(sim_time_centered)) / (total_sim_charge + eps)
+    L_time_spread = jnp.abs(jnp.sqrt(true_time_var) - jnp.sqrt(sim_time_var))
+
+    # Time loss is just the spread comparison
+    L_time = L_time_spread * lambda_time
+
+    # Total loss
+    return L_centroid + L_intensity + L_time
