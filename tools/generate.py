@@ -135,6 +135,7 @@ def differentiable_get_rays(track_origin, track_direction, cone_opening, Nphot, 
 
     return ray_vectors, ray_origins
 
+
 @jax.jit
 def jax_linear_interp(x_data, y_data, x):
     """
@@ -143,54 +144,21 @@ def jax_linear_interp(x_data, y_data, x):
     # Find the index of the closest point below x for each point
     idx = jnp.searchsorted(x_data, x, side='right') - 1
     # Clip index to valid range
-    idx = jnp.clip(idx, 0, len(x_data)-2)
-    
+    idx = jnp.clip(idx, 0, len(x_data) - 2)
+
     # Get x and y values for interpolation
     x0 = x_data[idx]
     x1 = x_data[idx + 1]
     y0 = y_data[idx]
     y1 = y_data[idx + 1]
-    
+
     # Linear interpolation
     slope = (y1 - y0) / (x1 - x0)
     return y0 + slope * (x - x0)
 
-@partial(jax.jit, static_argnums=(3, 7, 8))
-def new_differentiable_get_rays(track_origin, track_direction, energy, Nphot, table_data, model_params, key,
-                                sample_denominator=10, sampling_breadth=1.5):
-    """Generate rays using a SIREN model for photon propagation.
 
-    Parameters
-    ----------
-    track_origin : jnp.ndarray
-        Starting point of the track
-    track_direction : jnp.ndarray
-        Direction vector of the track
-    energy : float
-        Energy of the particle
-    Nphot : int
-        Number of rays to generate
-    table_data : tuple
-        Data for interpolation tables
-    model_params : dict
-        Parameters for the SIREN model
-    key : jax.random.PRNGKey
-        Random number generator key
-    sample_denominator : int, optional
-        Factor by which to reduce the initial sample size, by default 10
-    sampling_breadth : float, optional
-        Parameter controlling how broadly to sample across the probability distribution, by default 1.5
-        Values > 1 flatten the distribution, giving better representation to low-probability events
-
-    Returns
-    -------
-    tuple
-        (ray_vectors, ray_origins, scaled_photon_weights) where each is an array of shape (Nphot, 3)
-        except for scaled_photon_weights which has shape (Nphot,)
-    """
-    # Calculate reduced number of photons, assuming Nphot is divisible by sample_denominator
-    Nphot_sample = Nphot // sample_denominator
-
+@partial(jax.jit, static_argnums=(3))
+def new_differentiable_get_rays(track_origin, track_direction, energy, Nphot, table_data, model_params, key):
     key, subkey = random.split(key)
     cos_bins, trk_bins, cos_trk_mesh, (x_data, y_data), grid_shape = table_data
 
@@ -219,11 +187,17 @@ def new_differentiable_get_rays(track_origin, track_direction, energy, Nphot, ta
     key, noise_key_cos = random.split(key)
     key, noise_key_trk = random.split(key)
 
-    # Calculate num_seeds based on energy as before
-    num_seeds = jnp.int32(energy * 69.77142857 - 11980.42857143)  # using 500 x 500 binning and 0.02 cut-off value
+    # this calculate the number of good seeds based on linear
+    # interpolation given the trained SIREN model under evaluation
+    # with the specific grid settings in create_siren_grid
+    # if you change create_siren_grid, change also the numbers below.
+    # you can use code in siren/cut_off_study notebook.
+    # num_seeds = jnp.int32(energy*94.14714286-17750.)          # using 500 x 500 binning and 0.008  cut-off value
+    # num_seeds = jnp.int32(energy*84.77857143-15115.71428571)  # using 500 x 500 binning and 0.01  cut-off value
+    # num_seeds = jnp.int32(energy*75.0525-12907.35714286)      # using 500 x 500 binning and 0.015 cut-off value
+    num_seeds = jnp.int32(energy * 69.77142857 - 11980.42857143)  # using 500 x 500 binning and 0.02  cut-off value
 
-    # Use Nphot_sample instead of Nphot
-    seed_indices = random.randint(sampling_key, (Nphot_sample,), 0, num_seeds)
+    seed_indices = random.randint(sampling_key, (Nphot,), 0, num_seeds)
     indices_by_weight = jnp.argsort(-photon_weights.squeeze())[seed_indices]
 
     cos_trk_mesh = jnp.array(cos_trk_mesh)
@@ -237,14 +211,14 @@ def new_differentiable_get_rays(track_origin, track_direction, energy, Nphot, ta
     sigma_cos = 0.001
     sigma_trk = 0.001
 
-    # Use Nphot_sample for noise size
-    noise_cos = random.normal(noise_key_cos, (Nphot_sample,)) * sigma_cos
-    noise_trk = random.normal(noise_key_trk, (Nphot_sample,)) * sigma_trk
+    noise_cos = random.normal(noise_key_cos, (Nphot,)) * sigma_cos
+    noise_trk = random.normal(noise_key_trk, (Nphot,)) * sigma_trk
 
     smeared_cos = sampled_cos + noise_cos
     smeared_trk = sampled_trk + noise_trk
 
     # kill those events sampled outside of the normalized SIREN binning
+    # the sigma and binning are chosen such that the fraction of those events is negligibly small.
     smeared_trk = jnp.where(smeared_trk < -1, 0, smeared_trk)
     smeared_trk = jnp.where(smeared_trk > 1, 0, smeared_trk)
 
@@ -266,41 +240,14 @@ def new_differentiable_get_rays(track_origin, track_direction, energy, Nphot, ta
 
     # Generate ray vectors and origins
     subkey, subkey2 = random.split(subkey)
-    ray_vectors_sample = generate_random_cone_vectors(track_direction, photon_thetas, Nphot_sample, subkey)
+    ray_vectors = generate_random_cone_vectors(track_direction, photon_thetas, Nphot, subkey)
 
     # Convert ranges to meters and compute ray origins
     ranges = (smeared_trk * 300 + 300) / 100
-    ray_origins_sample = jnp.ones((Nphot_sample, 3)) * track_origin[None, :] + ranges[:, None] * normalize(
-        track_direction[None, :])
+    ray_origins = jnp.ones((Nphot, 3)) * track_origin[None, :] + ranges[:, None] * normalize(track_direction[None, :])
 
-    # Use weighted sampling with sampling_breadth to better represent small probability events
-    weights = jnp.squeeze(new_photon_weights)
+    return ray_vectors, ray_origins, jnp.squeeze(new_photon_weights)
 
-    # Apply sampling_breadth scaling to flatten the probability distribution
-    # sampling_breadth > 1 makes the distribution more uniform, giving low-probability events better representation
-    # Apply sampling_breadth: raise weights to power of 1/sampling_breadth
-    scaled_for_sampling = weights ** (1 / sampling_breadth)
-    probs = scaled_for_sampling / jnp.sum(scaled_for_sampling)
 
-    # Sample with replacement according to the temperature-scaled probability distribution
-    key, sampling_key = random.split(key)
-    selected_indices = random.choice(
-        sampling_key,
-        jnp.arange(Nphot_sample),
-        shape=(Nphot,),
-        p=probs
-    )
 
-    # Count occurrences using segment_sum
-    ones = jnp.ones_like(selected_indices)
-    counts = jax.ops.segment_sum(ones, selected_indices, Nphot_sample)
 
-    # First scale the weights by their respective counts
-    scaled_weights = weights / jnp.maximum(counts, 1)  # Avoid division by zero
-
-    # Then select ray vectors, origins, and scaled weights based on sampled indices
-    ray_vectors = ray_vectors_sample[selected_indices]
-    ray_origins = ray_origins_sample[selected_indices]
-    scaled_photon_weights = scaled_weights[selected_indices]
-
-    return ray_vectors, ray_origins, scaled_photon_weights
