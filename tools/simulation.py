@@ -32,10 +32,9 @@ def setup_event_simulator(json_filename, n_photons=1_000_000, temperature=0.2, i
     -------
      simulate_event = setup_event_simulator("config.json")
      true_params = (
-    ...     jnp.array(90.0),  # opening angle
-    ...     jnp.array([0.0, 0.0, 0.0]),  # position
-    ...     jnp.array([0.0, 1.0, 0.0]),  # direction
-    ...     jnp.array(5000.0)  # intensity
+            jnp.array([100.0]),  # Energy
+            jnp.array([0.0, 0.0, 0.0]),  # Track origin
+            jnp.array([1.0, 1.0, 1.0])   # Track direction
     ... )
      key = jax.random.PRNGKey(42)
      event_data = simulate_event(true_params, key)
@@ -108,7 +107,7 @@ def create_event_simulator(propagate_photons, Nphot, NUM_DETECTORS, detector_poi
     @jax.jit
     def _simulation_core(params, key):
         # Unpack simulation parameters
-        energy, track_origin, track_direction, initial_intensity = params
+        energy, track_origin, track_direction = params
 
         photon_directions, photon_origins, photon_weights = new_differentiable_get_rays(track_origin, track_direction, energy, Nphot, grid_data, model_params, key)
         prop_results = propagate_photons(photon_origins, photon_directions)
@@ -118,7 +117,6 @@ def create_event_simulator(propagate_photons, Nphot, NUM_DETECTORS, detector_poi
         detector_indices = prop_results['detector_indices']  # [max_detectors]
         hit_times = prop_results['times']  # [max_detectors, n_rays]
         hit_positions = prop_results['positions']  # [max_detectors, n_rays, 3]
-
 
         tot_real_photons_norm = (energy*852.97855369-148646.90865158)/Nphot
 
@@ -171,11 +169,11 @@ def create_event_simulator(propagate_photons, Nphot, NUM_DETECTORS, detector_poi
     @jax.jit
     def _simulate_event_core(params, key):
         charges, average_times, detector_weight_totals, eps = _simulation_core(params, key)
-        return charges, average_times
+        return charges, average_times,
 
     @jax.jit
     def _simulate_event_core_data(params, key):
-        charges, average_times, detector_weight_totals, eps = _simulation_core(params, key)
+        charges, average_times, detector_weight_totals,  eps = _simulation_core(params, key)
 
         # Find minimum non-zero time
         # Create a mask for non-zero times and weights
