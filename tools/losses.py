@@ -168,6 +168,7 @@ def compute_softmin_loss(
         simulated_time: jnp.ndarray,
         tau: float = 0.01,
         eps: float = 1e-8,
+        threshold: float = 1e-8,
         lambda_time: float = 1.0,
         lambda_intensity: float = 1.0
 ) -> float:
@@ -192,6 +193,8 @@ def compute_softmin_loss(
         Temperature parameter for the softmin. Smaller tau => sharper assignments.
     eps : float, optional
         Small constant to prevent division by zero, by default 1e-8
+    threshold : float, optional
+        Threshold for considering a detector active, by default 1e-8
     lambda_time : float, optional
         Scaling factor for time loss, by default 1.0.
     lambda_intensity : float, optional
@@ -203,8 +206,8 @@ def compute_softmin_loss(
         Total loss.
     """
     # Compute mean times for active locations
-    true_active_mask = true_charge > eps
-    sim_active_mask = simulated_charge > eps
+    true_active_mask = true_charge > threshold
+    sim_active_mask = simulated_charge > threshold
 
     # Compute mean times only for active locations
     true_mean_time = jnp.sum(true_time * true_active_mask) / (
@@ -270,6 +273,7 @@ def compute_simplified_loss(
         simulated_charge: jnp.ndarray,
         simulated_time: jnp.ndarray,
         eps: float = 1e-8,
+        threshold: float = 1e-8,
         lambda_centroid: float = 1.0,
         lambda_time: float = 1.0,
         lambda_intensity: float = 0.5
@@ -294,6 +298,8 @@ def compute_simplified_loss(
         Array of shape (N,) of simulated times.
     eps : float, optional
         Small constant to prevent division by zero, by default 1e-8
+    threshold : float, optional
+        Threshold for considering a detector active, by default 1e-8
     lambda_centroid : float, optional
         Scaling factor for centroid loss, by default 1.0.
     lambda_time : float, optional
@@ -307,8 +313,8 @@ def compute_simplified_loss(
         Total loss.
     """
     # Compute active masks for non-zero charges
-    true_active_mask = true_charge > eps
-    sim_active_mask = simulated_charge > eps
+    true_active_mask = true_charge > threshold
+    sim_active_mask = simulated_charge > threshold
 
     # Calculate total charges
     total_true_charge = jnp.sum(true_charge)
