@@ -325,6 +325,11 @@ def create_event_simulator(propagate_photons, Nphot, NUM_DETECTORS, detector_poi
 
         # Loop over K scattering iterations.
         for i in range(K):
+            if i == K-1:
+                scatter_length = 10e20
+                reflection_rate = 0
+                absorption_length = 10e20
+
             key, subkey = jax.random.split(key)
             # Propagate photons from the current state.
             prop_results = propagate_photons(current_positions, current_directions)
@@ -365,10 +370,12 @@ def create_event_simulator(propagate_photons, Nphot, NUM_DETECTORS, detector_poi
             new_intensities = current_intensities * continuing_factors
 
             # Update photon state for the next iteration.
-            current_positions = new_positions
-            current_directions = new_directions
+            current_positions = jax.lax.stop_gradient(new_positions)
+            current_directions = jax.lax.stop_gradient(new_directions)
             current_intensities = new_intensities
-            current_times = new_times
+            current_times = jax.lax.stop_gradient(new_times)
+
+
 
         # Compute average hit times for each detector using weighted averages
         flat_weights = all_weights.reshape(-1)
@@ -396,20 +403,9 @@ def create_event_simulator(propagate_photons, Nphot, NUM_DETECTORS, detector_poi
             jnp.zeros_like(total_charge_weighted)
         )
 
-        return total_charge_weighted, average_times
-
-    @jax.jit
-    def _simulate_event_core(params, key):
-        total_charge_weighted, average_times = _simulation_core(params, key)
-        return total_charge_weighted, average_times,
-
-    @jax.jit
-    def _simulate_event_core_data(params, key):
-        total_charge_weighted, average_times = _simulation_core(params, key)
-
         # Find minimum non-zero time
         # Create a mask for non-zero times and weights
-        nonzero_mask = total_charge_weighted>0.5
+        nonzero_mask = total_charge_weighted>1e-5
         # Get minimum of non-zero times, defaulting to 0 if no valid times exist
         min_nonzero_time = jnp.where(
             jnp.any(nonzero_mask),
@@ -431,6 +427,17 @@ def create_event_simulator(propagate_photons, Nphot, NUM_DETECTORS, detector_poi
         )
 
         return corrected_q, aligned_times
+
+    @jax.jit
+    def _simulate_event_core(params, key):
+        total_charge_weighted, average_times = _simulation_core(params, key)
+        return total_charge_weighted, average_times
+
+    @jax.jit
+    def _simulate_event_core_data(params, key):
+        total_charge_weighted, average_times = _simulation_core(params, key)
+        # this allows to implement additional conditions for data that are not applied to the simulation
+        return total_charge_weighted, average_times
 
     if is_data:
         return jax.jit(lambda p, k: _simulate_event_core_data(p, k))
