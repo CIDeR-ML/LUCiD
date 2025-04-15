@@ -1,6 +1,13 @@
 .DS_Store
 *.pdf
+*.pkl
+*.h5
+*.png
+*.npy
 
 /test_events
 */__pycache__
+__pycache__/
 /autodiff_datasets
+.ipynb_checkpoints/
+old_tests/

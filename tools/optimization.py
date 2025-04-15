@@ -9,10 +9,11 @@ from typing import Tuple
 def get_initial_guess(
         charges: jnp.ndarray,
         detector_points: jnp.ndarray,
-        intensity_scale: float = 5.0,
+        energy_scaling_factor: float = 0.0213,
+        energy_scale_intercept: float = 213.11,
         key: jnp.ndarray = None,
         offset: float = 0.5
-) -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+) -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
     """
     Generate initial parameter guesses from detector hits.
     Assumes photons originate from center and form a cone to the detector wall.
@@ -37,7 +38,6 @@ def get_initial_guess(
         opening_angle : jnp.ndarray (scalar)
         position : jnp.ndarray (3,)
         direction : jnp.ndarray (3,)
-        intensity : jnp.ndarray (scalar)
     """
     if key is not None:
         position = generate_random_point_inside_cylinder(key, offset=offset)
@@ -55,20 +55,11 @@ def get_initial_guess(
     direction = jnp.sum(vectors_to_hits * charge_weights[:, None], axis=0)
     direction = direction / (jnp.linalg.norm(direction) + 1e-8)
 
-    # Calculate angles
-    cos_angles = jnp.clip(jnp.dot(vectors_to_hits, direction), -1.0, 1.0)
-    angles = jnp.arccos(cos_angles)
-
-    # Weighted RMS angle
-    opening_angle = jnp.degrees(jnp.sqrt(jnp.sum(angles ** 2 * charge_weights)))
-    opening_angle = jnp.clip(opening_angle, 1.0, 80.0)
-
-    # Intensity is just total charge scaled
-    intensity = total_charge * intensity_scale
+    total_energy = total_charge * energy_scaling_factor + energy_scale_intercept
+    total_energy = jnp.maximum(total_energy, 180.0)  # Ensure minimum energy is 180.0
 
     return (
-        opening_angle,
+        total_energy,
         position,
-        direction,
-        intensity
+        direction
     )

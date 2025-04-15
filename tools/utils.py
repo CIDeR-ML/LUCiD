@@ -57,7 +57,7 @@ def save_single_event(event_data, params, event_number=0, filename=None):
     event_data : tuple
         (charges, average_times) arrays for the event
     params : tuple
-        (cone_opening, track_origin, track_direction, initial_intensity)
+        (track_energy, track_origin, track_direction)
     event_number : int, optional
         Event identifier number, defaults to 0
     filename : str, optional
@@ -98,10 +98,9 @@ def save_single_event(event_data, params, event_number=0, filename=None):
     with h5py.File(filename, 'w') as f:
         # Save simulation parameters
         params_group = f.create_group('params')
-        params_group.create_dataset('cone_opening', data=np.array(params[0]))
+        params_group.create_dataset('track_energy', data=np.array(params[0]))
         params_group.create_dataset('track_origin', data=np.array(params[1]))
         params_group.create_dataset('track_direction', data=np.array(params[2]))
-        params_group.create_dataset('initial_intensity', data=np.array(params[3]))
 
         # Save event data and number
         event_group = f.create_group('event')
@@ -129,7 +128,7 @@ def load_single_event(filename, num_detectors, sparse=True):
     Returns
     -------
     params : tuple
-        (cone_opening, track_origin, track_direction, initial_intensity)
+        (track_energy, track_origin, track_direction)
     event_number : int
         Event identifier number
     If sparse=True:
@@ -148,12 +147,11 @@ def load_single_event(filename, num_detectors, sparse=True):
     with h5py.File(filename, 'r') as f:
         # Load parameters
         params_group = f['params']
-        cone_opening = float(params_group['cone_opening'][()])
+        track_energy = jnp.array(params_group['track_energy'][()])
         track_origin = jnp.array(params_group['track_origin'][()])
         track_direction = jnp.array(params_group['track_direction'][()])
-        initial_intensity = float(params_group['initial_intensity'][()])
 
-        params = (cone_opening, track_origin, track_direction, initial_intensity)
+        params = (track_energy, track_origin, track_direction)
 
         # Load event data
         event_group = f['event']
@@ -175,7 +173,7 @@ def load_single_event(filename, num_detectors, sparse=True):
 import jax
 import jax.numpy as jnp
 
-def generate_random_params(key, opening_range=(10, 90), h=2, r=1, intensity_range=(2, 10), offset = 0.1):
+def generate_random_params(key, energy_range=(180, 1000), h=2, r=1, offset = 0.1):
     """
     Generate random parameters for event simulation with position inside a cylinder.
 
@@ -183,48 +181,42 @@ def generate_random_params(key, opening_range=(10, 90), h=2, r=1, intensity_rang
     ----------
     key : jax.random.PRNGKey
         JAX random number generator key
-    opening_range : tuple, optional
-        Range for cone opening angle in degrees, default=(10, 90)
+    energy_range : tuple, optional
+        Range for energy values in MeV, default=(50, 1000)
     h : float, optional
         Height of the cylinder, default=2
         Position will be generated in range [-h/2, h/2] for z-coordinate
     r : float, optional
         Radius of the cylinder, default=1
         Position will be generated within circle of radius r in xy-plane
-    intensity_range : tuple, optional
-        Range for initial intensity value, default=(2, 10)
     offset : float, optional
         Offset to avoid generating points on the cylinder surface, default=0.1
 
     Returns
     -------
     tuple
-        (opening_angle, position, direction, intensity)
-        - opening_angle : float32
-            Cone opening angle in degrees (10-90)
-        - position : array(3,)
-            Initial position coordinates inside cylinder of height h and radius r
-        - direction : array(3,)
-            Initial direction vector (randomly sampled from normal distribution)
-        - intensity : float
-            Initial intensity value in range [2, 10]
+        Random parameters for event simulation
+        - random_energy: float
+            Random energy value in MeV
+        - initial_position: array(3,)
+            Starting position coordinates (x, y, z)
+        - initial_direction: array(3,)
+            Initial direction vector
     """
     # Split the key for independent random operations
     key1, key2, key3, key4, key5 = jax.random.split(key, 5)
 
-    # Generate opening angle: uniform random int from [1, 90] degrees
-    random_opening_angle = jax.random.uniform(key1, minval=opening_range[0], maxval=opening_range[1])
+    # Generate random energy within the specified range
+    random_energy = jax.random.uniform(key1, minval=energy_range[0], maxval=energy_range[1])
 
     # Generate random position inside the cylinder
     random_position = generate_random_point_inside_cylinder(key2, h, r, offset)
 
     # Generate initial direction: random unit vector from normal distribution
     random_direction = jax.random.normal(key5, shape=(3,))
+    random_direction /= jnp.linalg.norm(random_direction)  # Normalize to unit vector
 
-    # Generate initial intensity: uniform random in the defined range
-    random_intensity = jax.random.uniform(key5, minval=intensity_range[0], maxval=intensity_range[1])
-
-    return random_opening_angle, random_position, random_direction, random_intensity
+    return random_energy, random_position, random_direction
 
 @jax.jit
 def generate_random_point_inside_cylinder(key, h=2, r=1, offset = 0.1):
@@ -278,15 +270,13 @@ def print_params(params):
     Parameters
     ----------
     params : tuple
-        Tuple containing (opening_angle, initial_position, initial_direction, initial_intensity)
-        - opening_angle: float
-            Cone opening angle in degrees
+        Tuple containing (initial_energy, initial_position, initial_direction)
+        - initial_energy: float
+            Energy in MeV
         - initial_position: array(3,)
             Starting position coordinates (x, y, z)
         - initial_direction: array(3,)
             Initial direction vector
-        - initial_intensity: float
-            Initial intensity value
 
     Returns
     -------
@@ -295,24 +285,22 @@ def print_params(params):
 
     Example
     -------
-     params = (30.0, jnp.array([1., 0., 0.]), jnp.array([0., 1., 0.]), 2.5)
+     params = (30.0, jnp.array([1., 0., 0.]), jnp.array([0., 1., 0.]))
      print_params(params)
     Event Parameters:
     ────────────────
-    Opening Angle: 30.00 degrees
+    Energy: 30.00 MeV
     Initial Position: (1.00, 0.00, 0.00)
     Initial Direction: (0.00, 1.00, 0.00)
-    Initial Intensity: 2.50
     ────────────────
     """
     # Unpack the parameter tuple
-    opening_angle, initial_position, initial_direction, initial_intensity = params
+    initial_energy, initial_position, initial_direction = params
 
     # Create formatted output with consistent decimal places
     print("Event Parameters:")
     print("─" * 20)
-    print(f"Opening Angle: {opening_angle:.2f} degrees")
+    print(f"Energy: {initial_energy:.2f} MeV")
     print(f"Initial Position: ({initial_position[0]:.2f}, {initial_position[1]:.2f}, {initial_position[2]:.2f})")
     print(f"Initial Direction: ({initial_direction[0]:.2f}, {initial_direction[1]:.2f}, {initial_direction[2]:.2f})")
-    print(f"Initial Intensity: {initial_intensity:.2f}")
     print("─" * 20)
