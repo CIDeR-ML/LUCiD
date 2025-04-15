@@ -26,49 +26,9 @@ class Table(Dataset):
         self.binning = [np.array(grp_scat['binning0']),
                         np.array(grp_scat['binning1']),
                         np.array(grp_scat['binning2'])]
-
-        #---
-        #self.weight[self.dataset>0.0001] = 1./self.dataset[self.dataset>0.0001]/self.dataset[self.dataset>0.0001]
-        #---
-        #self.weight[0:10,260:300,0:25] *= 10
-
-        #---
-        #self.weight = np.load('./HeightDistribution.npy')
-        #---
-        
-        
-        """        
-        #=== weight 0-25bins(5cm, 600cm/3000bins)
-        is_track_weighted = is_train
-        if is_track_weighted:
-            n_repeat = 99
-            init_tracks = self.dataset[:,:,0:25]
-            repeat_tracks = np.tile(init_tracks, (1,1,n_repeat))
-            self.dataset = np.concatenate([self.dataset, repeat_tracks], axis=-1)
-
-            init_tracks_w = self.weight[:,:,0:25]
-            repeat_tracks_w = np.tile(init_tracks_w, (1,1,n_repeat))
-            self.weight = np.concatenate([self.weight, repeat_tracks_w], axis=-1)
-        
-            init_tracks_axis = grp_scat['binning2'][0:25]
-            repeat_tracks_axis = np.tile(init_tracks_axis, (n_repeat))
-            modified_axis = np.concatenate([grp_scat['binning2'], repeat_tracks_axis])
-            
-            self.binning = [np.array(grp_scat['binning0']),
-                            np.array(grp_scat['binning1']),
-                            modified_axis]
-        """     
         
         self.tableshape = self.dataset.shape
         
-
-        # weight by track length
-        #track = self.binning[2]
-        #w = np.exp(-track/5)
-        #w[w<0.1] = 0.1
-        #w = w.reshape(1,1,-1)
-        #self.weight *= w 
-
         # normalize axis scale (mom, cos, track) as [-1,1]
         normrange= np.array([[50, 1000],[-1,1],[0,600]])
         mean=[]
