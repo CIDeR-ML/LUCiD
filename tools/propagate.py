@@ -5,115 +5,6 @@ from functools import partial
 from launchpadlib.testing.helpers import NoNetworkLaunchpad
 from tools.overlap import create_overlap_prob
 
-# @jax.jit
-# def intersect_cylinder_wall(ray_origin, ray_direction, r, h):
-#     """Calculate intersection of a ray with a cylinder's wall.
-#
-#     Parameters
-#     ----------
-#     ray_origin : jnp.ndarray
-#         Starting point of the ray [x, y, z]
-#     ray_direction : jnp.ndarray
-#         Direction vector of the ray [dx, dy, dz]
-#     r : float
-#         Radius of the cylinder
-#     h : float
-#         Height of the cylinder
-#
-#     Returns
-#     -------
-#     tuple
-#         (bool, float) - (whether intersection exists, distance to intersection)
-#     """
-#     # Quadratic equation coefficients for cylinder intersection
-#     a = ray_direction[0] ** 2 + ray_direction[1] ** 2
-#     b = 2 * (ray_origin[0] * ray_direction[0] + ray_origin[1] * ray_direction[1])
-#     c = ray_origin[0] ** 2 + ray_origin[1] ** 2 - r ** 2
-#
-#     discriminant = b ** 2 - 4 * a * c
-#
-#     epsilon = 1e-6
-#
-#     t1 = (-b - jnp.sqrt(jnp.maximum(0, discriminant))) / (2 * a)
-#     t2 = (-b + jnp.sqrt(jnp.maximum(0, discriminant))) / (2 * a)
-#
-#     t1, t2 = jnp.minimum(t1, t2), jnp.maximum(t1, t2)
-#
-#     valid_t = (t1 > 0) | (t2 > 0)
-#
-#     t = jnp.where(t1 > 0, t1, t2)
-#
-#     intersection_point = ray_origin + t * ray_direction
-#     within_height = jnp.abs(intersection_point[2]) <= h / 2
-#
-#     intersects = (discriminant >= -epsilon) & valid_t & within_height
-#     return intersects, jnp.where(intersects, t, jnp.inf)
-#
-#
-# @jax.jit
-# def intersect_cylinder_cap(ray_origin, ray_direction, r, z):
-#     """Calculate intersection of a ray with one of the cylinder's caps.
-#
-#     Parameters
-#     ----------
-#     ray_origin : jnp.ndarray
-#         Starting point of the ray [x, y, z]
-#     ray_direction : jnp.ndarray
-#         Direction vector of the ray [dx, dy, dz]
-#     r : float
-#         Radius of the cylinder
-#     z : float
-#         Z-coordinate of the cap plane
-#
-#     Returns
-#     -------
-#     tuple
-#         (bool, float) - (whether intersection exists, distance to intersection)
-#     """
-#     t = jnp.where(ray_direction[2] != 0, (z - ray_origin[2]) / ray_direction[2], jnp.inf)
-#
-#     intersection_point = ray_origin + t * ray_direction
-#     within_circle = (intersection_point[0] ** 2 + intersection_point[1] ** 2) <= r ** 2
-#
-#     intersects = (t > 0) & within_circle
-#     return intersects, jnp.where(intersects, t, jnp.inf)
-#
-# #
-# @jax.jit
-# def intersect_cylinder(ray_origin, ray_direction, r, h):
-#     """Find the closest intersection point with any part of the cylinder.
-#
-#     Parameters
-#     ----------
-#     ray_origin : jnp.ndarray
-#         Starting point of the ray [x, y, z]
-#     ray_direction : jnp.ndarray
-#         Direction vector of the ray [dx, dy, dz]
-#     r : float
-#         Radius of the cylinder
-#     h : float
-#         Height of the cylinder
-#
-#     Returns
-#     -------
-#     tuple
-#         (bool, float, int) - (whether intersection exists, distance, part index)
-#         part index: 0=wall, 1=top cap, 2=bottom cap
-#     """
-#     wall_intersects, wall_t = intersect_cylinder_wall(ray_origin, ray_direction, r, h)
-#     top_intersects, top_t = intersect_cylinder_cap(ray_origin, ray_direction, r, h / 2)
-#     bottom_intersects, bottom_t = intersect_cylinder_cap(ray_origin, ray_direction, r, -h / 2)
-#
-#     ts = jnp.array([wall_t, top_t, bottom_t])
-#     intersects = jnp.array([wall_intersects, top_intersects, bottom_intersects])
-#
-#     min_t_index = jnp.argmin(ts)
-#     min_t = jnp.min(ts)
-#
-#     any_intersects = jnp.any(intersects)
-#     return any_intersects, min_t, min_t_index
-
-
 import jax
 import jax.numpy as jnp
 
@@ -699,6 +590,182 @@ def create_inverted_detector_map(assignments_geometric, assignments_distance, n_
     return final_map
 
 
+def calculate_wall_normals(intersection_point):
+    """
+    Calculate normals for cylinder walls.
+
+    Parameters
+    ----------
+    intersection_point : ndarray
+        Points of intersection on the cylinder wall
+
+    Returns
+    -------
+    ndarray
+        Normal vectors for wall intersections
+    """
+    wall_normals = -intersection_point[:, :2] / (
+            jnp.linalg.norm(intersection_point[:, :2], axis=1, keepdims=True) + 1e-10)
+    return jnp.concatenate([wall_normals, jnp.zeros_like(intersection_point[:, :1])], axis=1)
+
+
+def get_cap_normals():
+    """
+    Get the normal vectors for cylinder caps.
+
+    Returns
+    -------
+    tuple
+        Normal vectors for top and bottom caps
+    """
+    return jnp.array([0., 0., 1.]), jnp.array([0., 0., -1.])
+
+
+def calculate_weighted_detector_properties(detector_normals, detector_hit_positions,
+                                           inside_detector):
+    """
+    Calculate weighted normals and positions for detector hits.
+
+    Parameters
+    ----------
+    detector_normals : ndarray
+        Normal vectors for all potential detector intersections
+    detector_hit_positions : ndarray
+        Hit positions for all potential detector intersections
+    inside_detector : ndarray
+        Boolean array indicating which rays hit inside detectors
+
+    Returns
+    -------
+    tuple
+        Weighted detector normals and positions
+    """
+    detector_weights = inside_detector[..., None]
+
+    # Calculate weighted normals
+    weighted_normals = jnp.sum(detector_normals * detector_weights, axis=0)
+    detector_weights_sum = jnp.sum(inside_detector, axis=0)[..., None]
+    weighted_normals = weighted_normals / (detector_weights_sum + 1e-10)
+
+    # Calculate weighted positions
+    weighted_positions = jnp.sum(detector_hit_positions * detector_weights, axis=0)
+    weighted_positions = weighted_positions / (detector_weights_sum + 1e-10)
+
+    return weighted_normals, weighted_positions
+
+
+
+def calculate_hit_properties(ray_origins, ray_directions, t_cylinder, inside_detector,
+                             weighted_detector_normals, weighted_detector_positions,
+                             wall_normals, is_wall, is_top_cap):
+    """
+    Calculate final hit positions and normals based on intersection type.
+
+    Parameters
+    ----------
+    ray_origins : ndarray
+        Starting points of rays
+    ray_directions : ndarray
+        Direction vectors of rays
+    t_cylinder : ndarray
+        Intersection times with cylinder
+    inside_detector : ndarray
+        Boolean array indicating which rays hit inside detectors
+    weighted_detector_normals : ndarray
+        Weighted normal vectors for detector hits
+    weighted_detector_positions : ndarray
+        Weighted positions for detector hits
+    wall_normals : ndarray
+        Normal vectors for wall hits
+    is_wall : ndarray
+        Boolean array indicating wall hits
+    is_top_cap : ndarray
+        Boolean array indicating top cap hits
+
+    Returns
+    -------
+    tuple
+        Final hit positions and normals
+    """
+    # Calculate cylinder hit positions
+    cylinder_hit_positions = ray_origins + t_cylinder[:, None] * ray_directions
+
+    # Determine if any detector was hit
+    hit_detector = jnp.any(inside_detector, axis=0)
+
+    outside_detector = weighted_detector_positions
+
+    # Select appropriate hit position
+    hit_positions = jnp.where(hit_detector[:, None],
+                              weighted_detector_positions,
+                              cylinder_hit_positions)
+
+    # Get cap normals
+    top_cap_normal, bottom_cap_normal = get_cap_normals()
+
+    # Select appropriate normal
+    final_normals = jnp.where(hit_detector[:, None],
+                              weighted_detector_normals,
+                              jnp.where(is_wall[:, None],
+                                        wall_normals,
+                                        jnp.where(is_top_cap[:, None],
+                                                  top_cap_normal,
+                                                  bottom_cap_normal)))
+
+    return hit_positions, final_normals
+
+
+def process_intersection_normals(ray_origins, ray_directions, intersection_point,
+                                 t_cylinder, detector_normals, detector_hit_positions,
+                                 inside_detector, is_wall, is_top_cap):
+    """
+    Main function to process all normal and position calculations for intersections.
+
+    Parameters
+    ----------
+    ray_origins : ndarray
+        Starting points of rays
+    ray_directions : ndarray
+        Direction vectors of rays
+    intersection_point : ndarray
+        Points of intersection
+    t_cylinder : ndarray
+        Intersection times with cylinder
+    detector_normals : ndarray
+        Normal vectors for detector intersections
+    detector_hit_positions : ndarray
+        Hit positions for detector intersections
+    inside_detector : ndarray
+        Boolean array indicating which rays hit inside detectors
+    is_wall : ndarray
+        Boolean array indicating wall hits
+    is_top_cap : ndarray
+        Boolean array indicating top cap hits
+
+    Returns
+    -------
+    dict
+        Contains hit positions and normals
+    """
+    # Calculate wall normals
+    wall_normals = calculate_wall_normals(intersection_point)
+
+    # Calculate weighted detector properties
+    weighted_detector_normals, weighted_detector_positions = calculate_weighted_detector_properties(
+        detector_normals, detector_hit_positions, inside_detector)
+
+    # Calculate final hit properties
+    hit_positions, final_normals = calculate_hit_properties(
+        ray_origins, ray_directions, t_cylinder, inside_detector,
+        weighted_detector_normals, weighted_detector_positions,
+        wall_normals, is_wall, is_top_cap)
+
+    return {
+        'positions': hit_positions,
+        'normals': final_normals
+    }
+
+
 def find_intersected_detectors_differentiable(ray_origins, ray_directions, detector_positions, detector_radius, r, h,
                                            n_cap, n_angular, n_height, inverted_detector_map,
                                            temperature, overlap_prob):
@@ -746,30 +813,20 @@ def find_intersected_detectors_differentiable(ray_origins, ray_directions, detec
     intersects, t_cylinder, is_wall, is_top_cap, wall_indices, cap_indices, intersection_point = (
         batch_intersect_cylinder_with_grid(ray_origins, ray_directions, r, h, n_cap, n_angular, n_height))
 
-
     def calculate_linear_index(wall_indices, cap_indices, is_wall, is_top_cap):
-        # Wall indexing
         wall_linear = jnp.clip(wall_indices[:, 0] * n_height + wall_indices[:, 1],
                                0, n_angular * n_height - 1)
-
-        # Cap indexing
         cap_linear = jnp.clip(cap_indices[:, 0] * n_cap + cap_indices[:, 1],
                               0, n_cap * n_cap - 1)
-
-        # Combine with base offsets
         idx = jnp.where(is_wall,
                         wall_linear,
                         jnp.where(is_top_cap,
                                   n_angular * n_height + cap_linear,
                                   n_angular * n_height + n_cap * n_cap + cap_linear))
-
-        # Final bounds check
         total_cells = n_angular * n_height + 2 * n_cap * n_cap
         return jnp.clip(idx, 0, total_cells - 1)
 
-    # Use this function instead of direct indexing
     idx = calculate_linear_index(wall_indices, cap_indices, is_wall, is_top_cap)
-
     potential_detectors = jax.lax.stop_gradient(inverted_detector_map[idx])
 
     def compute_detector_intersections(detector_idx):
@@ -779,67 +836,117 @@ def find_intersected_detectors_differentiable(ray_origins, ray_directions, detec
         # Find closest approach of ray to detector center
         oc = ray_origins - sphere_centers
         ray_d = ray_directions / (jnp.linalg.norm(ray_directions, axis=1, keepdims=True) + 1e-10)
-        t = -jnp.sum(oc * ray_d, axis=1, keepdims=True)
-        closest = ray_origins + t * ray_d
 
-        # Calculate distances and weights using overlap function
+        # Calculate closest approach for all rays (stable for gradients)
+        t_closest = -jnp.sum(oc * ray_d, axis=1, keepdims=True)
+        closest = ray_origins + t_closest * ray_d
         to_detector = closest - sphere_centers
         distance = jnp.linalg.norm(to_detector, axis=1)
 
+        # Calculate normal vectors for closest approach
+        normals_closest = to_detector / (jnp.linalg.norm(to_detector, axis=1, keepdims=True) + 1e-10)
+
+        # Ray-sphere intersection coefficients
+        a = jnp.sum(ray_d * ray_d, axis=1)  # Should be 1 for normalized directions
+        b = 2.0 * jnp.sum(oc * ray_d, axis=1)
+        c = jnp.sum(oc * oc, axis=1) - detector_radius ** 2
+
+        # Discriminant determines if intersection exists
+        discriminant = b ** 2 - 4 * a * c
+
+        # Calculate actual intersection for rays that hit the PMT
+        sqrt_term = jnp.sqrt(jnp.maximum(1e-10, discriminant))
+
+        # Use numerically stable quadratic formula to prevent NaN gradients
+        q = jnp.where(
+            b > 0,
+            -0.5 * (b + sqrt_term),
+            -0.5 * (b - sqrt_term)
+        )
+        t1 = q / (a + 1e-10)
+        t2 = c / (q + jnp.sign(q) * 1e-10)
+
+        t_intersect = jnp.where((t1 > 0) & (t2 > 0), 
+                        jnp.minimum(t1, t2),  # Both positive - take smaller
+                        jnp.where(t1 > 0, t1,  # Only t1 positive
+                               jnp.where(t2 > 0, t2, -1)))  # Only t2 positive or neither
+
+        #t_intersect = jnp.where((t1 > 0), t1, t2)
+
+        # Calculate intersection points
+        intersection_points = ray_origins + t_intersect[:, None] * ray_d
+
+        # Calculate normals at intersection points
+        to_intersection = intersection_points - sphere_centers
+        normals_intersect = to_intersection / (jnp.linalg.norm(to_intersection, axis=1, keepdims=True) + 1e-10)
+
+        # Determine if ray intersects with detector (add small epsilon for stability)
+        intersects = (discriminant > 1e-6) & (t_intersect > 0)
+
+        # Use correct normals based on whether ray intersects or not
+        normals = jnp.where(intersects[:, None], normals_intersect, normals_closest)
+
+        # Check if point is inside detector (keep as boolean - no change needed)
+        # Original condition for spherical detector
+        inside_spherical_detector = distance < detector_radius
+
+        # Get x, y, z coordinates of intersection points
+        x, y, z = intersection_points[:, 0], intersection_points[:, 1], intersection_points[:, 2]
+
+        # Check if point is inside cylinder with x=4, y=4, z=6
+        # For x,y: check if point is within circle with radius 2
+        inside_xy_circle = (x**2 + y**2) <= 16.  # radius is 2, so radius^2 = 4
+        # For z: check if |z| ≤ 3
+        inside_z_bounds = (z >= -3.) & (z <= 3.)
+        # Combine conditions
+        inside_cylinder = inside_xy_circle & inside_z_bounds
+
+        # Final detector condition - point must be inside both original detector and cylinder
+        inside_detector = inside_spherical_detector# & inside_cylinder
+
         # Apply overlap function to get weights
-        weights = jnp.where(valid,
-                          overlap_prob(distance),
-                          0.0)
+        weights = jnp.where(valid, overlap_prob(distance), 0.0)
 
-        return weights, t, detector_idx
+        # times  = jnp.where(intersects[:, None] & inside_detector, t_intersect, t_closest)
+        # points = jnp.where(intersects[:, None] & inside_detector, intersection_points, closest)
 
-    # def compute_detector_intersections(detector_idx):
-    #     valid = (detector_idx != -1)
-    #
-    #     # shape: (max_detectors_per_cell, 3)
-    #     sphere_centers = jnp.where(valid[:, None],
-    #                                detector_positions[detector_idx],
-    #                                jnp.zeros(3))
-    #
-    #     # intersection_point = origin + t * direction
-    #     p_wall = ray_origins + t_cylinder[:, None] * ray_directions
-    #
-    #     # 3) Distance from wall intersection to each detector center
-    #     dist_wall_to_detector = jnp.linalg.norm(p_wall - sphere_centers, axis=1)
-    #
-    #     # 4) total distance (two segments: origin->wall + wall->detector)
-    #     #    Since ray_direction is normalized, t_cylinder_local is the direct distance for origin->wall
-    #     dist_total = t_cylinder + dist_wall_to_detector
-    #
-    #     # 5) overlap probability is based on the distance from the cylinder to the center
-    #     weights = jnp.where(
-    #         valid,
-    #         overlap_prob(dist_wall_to_detector),
-    #         0.0
-    #     )
-    #
-    #     # Keep an extra dimension so shapes match what the outside code expects
-    #     dist_total = dist_total[..., None]
-    #
-    #     return weights, dist_total, detector_idx
+        # Combine boolean conditions first, then add dimension
+        intersects_and_inside = (intersects & inside_detector)[:, None]
 
+        # Now use this combined condition
+        times = jnp.where(intersects_and_inside, t_intersect[:, None], t_closest)
+        points = jnp.where(intersects_and_inside, intersection_points, closest)
+
+        # Always use the stable closest point and time for hit calculation
+        return weights, t_closest, detector_idx, normals, inside_detector, points
+
+    # Process all potential detectors
     detector_results = jax.vmap(compute_detector_intersections)(potential_detectors.T)
-    weights = detector_results[0]
-    detector_times = detector_results[1]
-    detector_indices = detector_results[2]
+    weights = detector_results[0]  # shape: (max_detectors_per_cell, num_photons)
+    detector_times = detector_results[1]  # shape: (max_detectors_per_cell, num_photons, 1)
+    detector_indices = detector_results[2]  # shape: (max_detectors_per_cell, num_photons)
+    detector_normals = detector_results[3]  # shape: (max_detectors_per_cell, num_photons, 3)
+    inside_detector = detector_results[4]  # shape: (max_detectors_per_cell, num_photons)
+    detector_hit_positions = detector_results[5]  # shape: (max_detectors_per_cell, num_photons, 3)
 
-    # Calculate intersection positions
-    detector_times_expanded = detector_times
-    ray_directions_expanded = ray_directions[None, :, :]
-    ray_origins_expanded = ray_origins[None, :, :]
-    hit_positions = (ray_origins_expanded +
-                    detector_times_expanded * ray_directions_expanded)
+    intersection_results = process_intersection_normals(
+        ray_origins, ray_directions, intersection_point,
+        t_cylinder, detector_normals, detector_hit_positions,
+        inside_detector, is_wall, is_top_cap
+    )
+
+    hit_positions = intersection_results['positions']
+    final_normals = intersection_results['normals']
 
     result = {
         'times': detector_times,
-        'positions': hit_positions,
         'detector_weights': weights,
-        'detector_indices': detector_indices
+        'detector_indices': detector_indices,
+        'per_detector_positions': detector_hit_positions,
+        'positions': hit_positions,
+        'normals': final_normals,
+        'detector_normals': detector_normals,
+        'inside_detector': inside_detector
     }
 
     return result if not single_ray else jax.tree_map(lambda x: x[0], result)
