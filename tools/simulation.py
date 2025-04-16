@@ -8,6 +8,8 @@ import jax.numpy as jnp
 from tools.siren import *
 from tools.table import *
 
+base_dir_path = os.path.dirname(os.path.abspath(__file__))+'/'
+
 def setup_event_simulator(json_filename, n_photons=1_000_000, temperature=0.2, K=2, is_data=False, max_detectors_per_cell=4):
     """
     Sets up and returns an event simulator with the specified configuration.
@@ -208,9 +210,9 @@ def create_event_simulator(propagate_photons, Nphot, NUM_DETECTORS, detector_poi
     Keeps the same structure as the working implementation but with different array organization.
     """
 
-    table = Table('siren/cprof_mu_train_10000ev.h5')
+    table = Table(base_dir_path+'../siren/cprof_mu_train_10000ev.h5')
     grid_data = create_siren_grid(table)
-    siren_model, model_params = load_siren_jax('siren/siren_cprof_mu.pkl')
+    siren_model, model_params = load_siren_jax(base_dir_path+'../siren/siren_cprof_mu.pkl')
 
     @jax.jit
     def _simulation_core(params, key):
