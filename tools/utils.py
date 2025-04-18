@@ -2,6 +2,8 @@ import h5py
 import numpy as np
 import jax.numpy as jnp
 import jax
+from glob import glob
+import os
 
 def full_to_sparse(charges, times):
     """Convert full arrays to sparse representation by removing zero elements.
@@ -102,7 +104,7 @@ def save_single_event(event_data, params, event_number=0, filename=None):
         params_group.create_dataset('track_origin', data=np.array(params[1]))
         params_group.create_dataset('track_direction', data=np.array(params[2]))
 
-        # Save event data and number
+        # # Save event data and number
         event_group = f.create_group('event')
         event_group.create_dataset('event_number', data=np.array(event_number))
         event_group.create_dataset('indices', data=np.array(indices))
@@ -304,3 +306,459 @@ def print_params(params):
     print(f"Initial Position: ({initial_position[0]:.2f}, {initial_position[1]:.2f}, {initial_position[2]:.2f})")
     print(f"Initial Direction: ({initial_direction[0]:.2f}, {initial_direction[1]:.2f}, {initial_direction[2]:.2f})")
     print("─" * 20)
+
+def read_photon_data_from_root(root_file_path, entry_index, particle_type='muon'):
+    """
+    Read photon data from a ROOT file for a specific entry.
+    
+    Parameters
+    ----------
+    root_file_path : str
+        Path to the ROOT file
+    entry_index : int
+        Entry index to read from the file
+    particle_type : str, optional
+        Type of particle ('muon' or 'pion'), by default 'muon'
+        
+    Returns
+    -------
+    dict
+        Dictionary containing photon_ranges, photon_cos, and energy
+    """
+    import uproot
+    import numpy as np
+    
+    # Open the ROOT file
+    root_file = uproot.open(root_file_path)
+    
+    # Access the tree
+    tree = root_file['v_photon']
+    
+    # Read specific branches for the given entry
+    tracklength = tree['tracklength'].array(entry_start=entry_index, entry_stop=entry_index+1)[0]
+    cos = tree['cos'].array(entry_start=entry_index, entry_stop=entry_index+1)[0]
+    initmom = float(tree['initmom'].array(entry_start=entry_index, entry_stop=entry_index+1)[0])
+    
+    # Convert initmom (momentum) to kinetic energy based on particle type
+    if particle_type.lower() == 'muon':
+        mass = 105.7  # MeV/c^2 (muon rest mass)
+    elif particle_type.lower() == 'pion':
+        mass = 139.6  # MeV/c^2 (charged pion rest mass)
+    else:
+        raise ValueError(f"Unsupported particle type: {particle_type}")
+    
+    # E_kinetic = sqrt(p^2 + m^2) - m
+    energy = np.sqrt(initmom**2 + mass**2) - mass
+    
+    return {
+        'photon_ranges': jnp.array(tracklength)/1000,
+        'photon_cos': jnp.array(cos),
+        'energy': float(energy)
+    }
+
+def superimpose_multiple_events(charges_list, times_list):
+    """
+    Superimpose multiple events by summing charges and calculating weighted average of times.
+    
+    Parameters
+    ----------
+    charges_list : list of jnp.ndarray
+        List of charge arrays from each event
+    times_list : list of jnp.ndarray
+        List of time arrays from each event
+        
+    Returns
+    -------
+    tuple
+        (combined_charges, combined_times)
+    """
+    if not charges_list or not times_list:
+        raise ValueError("Empty charges or times list")
+    
+    if len(charges_list) != len(times_list):
+        raise ValueError("charges_list and times_list must have the same length")
+    
+    # Initialize with the first event
+    combined_charges = charges_list[0]
+    combined_times = times_list[0]
+    
+    # Iteratively combine with subsequent events
+    for i in range(1, len(charges_list)):
+        # Sum the charges
+        combined_charges = combined_charges + charges_list[i]
+        
+        # Calculate weighted average of times
+        # Start with the product of the previous combined values
+        time_product = combined_times * (combined_charges - charges_list[i])
+        
+        # Add the product for the current event
+        time_product = time_product + times_list[i] * charges_list[i]
+        
+        # Divide by combined charges to get weighted average
+        # When charge is 0, use 0 for time to avoid division by zero
+        nonzero_mask = combined_charges > 0
+        
+        # Initialize combined times with zeros
+        new_combined_times = jnp.zeros_like(combined_times)
+        
+        # Only calculate weighted average where there are non-zero charges
+        weighted_times = jnp.where(
+            nonzero_mask,
+            time_product / combined_charges,
+            0.0
+        )
+        
+        # Apply the weighted times only where we have non-zero charges
+        combined_times = jnp.where(nonzero_mask, weighted_times, new_combined_times)
+    
+    return combined_charges, combined_times
+
+def get_random_root_entry_index(root_file_path):
+    """
+    Get a random valid entry index from a ROOT file.
+    
+    Parameters
+    ----------
+    root_file_path : str
+        Path to the ROOT file
+        
+    Returns
+    -------
+    int
+        Random valid entry index
+    """
+    import uproot
+    
+    root_file = uproot.open(root_file_path)
+    tree = root_file['v_photon']
+    total_entries = tree.num_entries
+    
+    return np.random.randint(0, total_entries - 1)
+
+def save_single_event_with_extended_info(charges, times, params, extended_info=None, event_number=0, filename=None):
+    """
+    Save a single event to an HDF5 file with the following structure:
+    - PDG (shape N, ): The PDG code of each track (particle)
+    - Q (shape N, L): The observed charge for each track in each PMT
+    - Q_tot (shape N, ): The total observed charge for each track
+    - T (shape N, ): The observed time for each track
+    - P (shape N, 3): The 3D particle momentum
+    - V (shape N, 3): The 3D origin of each particle
+    
+    Where N is the number of tracks and L is the number of detectors.
+    """
+    import h5py
+    
+    # If no filename is provided, generate one
+    if filename is None:
+        filename = f'event_{event_number}.h5'
+    
+    # Get number of tracks and detectors
+    n_tracks = extended_info['n_rings']
+    n_detectors = charges[0].shape[0]  # Assuming all charge arrays have the same shape
+    
+    # Create PDG array - use standard PDG codes
+    pdg_array = jnp.array([13 if pt == 'muon' else 211 for pt in extended_info['particle_types']])
+    
+    # Create Q array (charge for each track in each PMT)
+    q_array = jnp.zeros((n_tracks, n_detectors))
+    for i in range(n_tracks):
+        q_array = q_array.at[i].set(charges[i])
+    
+    # Calculate Q_tot (total observed charge for each track)
+    q_tot = jnp.sum(q_array, axis=1)
+    
+    # Extract timing information (average time for each track)
+    t_array = jnp.zeros((n_tracks,))
+    for i in range(n_tracks):
+        valid_times = times[i][times[i] > 0]
+        if valid_times.size > 0:
+            t_array = t_array.at[i].set(jnp.mean(valid_times))
+    
+    # Create momentum array
+    p_array = jnp.zeros((n_tracks, 3))
+    for i in range(n_tracks):
+        energy = extended_info['energies'][i]
+        direction = jnp.array(extended_info['directions'][i])
+        
+        # For relativistic particles, we need to convert energy to momentum
+        if extended_info['particle_types'][i] == 'muon':
+            mass = 105.7  # MeV/c^2 (muon rest mass)
+        elif extended_info['particle_types'][i] == 'pion':
+            mass = 139.6  # MeV/c^2 (charged pion rest mass)
+        
+        # Calculate momentum magnitude: |p| = sqrt(E^2 - m^2)
+        # E_kinetic = E_total - m, so E_total = E_kinetic + m
+        total_energy = energy + mass
+        momentum_mag = jnp.sqrt(total_energy**2 - mass**2)
+        
+        # Calculate momentum vector
+        p_array = p_array.at[i].set(momentum_mag * direction)
+    
+    # Create vertex array (same vertex for all tracks)
+    vertex = jnp.array(extended_info['vertex'])
+    v_array = jnp.tile(vertex, (n_tracks, 1))
+    
+    with h5py.File(filename, 'w') as f:
+        # Save data in the requested format
+        f.create_dataset('PDG', data=pdg_array)  # shape (N,)
+        f.create_dataset('Q', data=q_array)      # shape (N, L)
+        f.create_dataset('Q_tot', data=q_tot)    # shape (N,)
+        f.create_dataset('T', data=t_array)      # shape (N,)
+        f.create_dataset('P', data=p_array)      # shape (N, 3)
+        f.create_dataset('V', data=v_array)      # shape (N, 3)
+        
+        # Also save event number for reference
+        f.create_dataset('event_number', data=event_number)
+    
+    return filename
+
+def read_multi_folder_events(folder_names, max_files_per_folder=None, summary_only=True):
+    """
+    Read events from multiple folders.
+    
+    Parameters
+    ----------
+    folder_names : list of str
+        List of folder names containing event files
+    max_files_per_folder : int, optional
+        Maximum number of files to read per folder, by default None (all files)
+    summary_only : bool, optional
+        Whether to print only summary statistics and not individual files, by default True
+        
+    Returns
+    -------
+    dict
+        Dictionary mapping folder names to lists of data dictionaries
+    """
+    results = {}
+    
+    total_events = 0
+    total_tracks = 0
+    total_muons = 0
+    total_pions = 0
+    
+    print(f"\nReading events from {len(folder_names)} folders:")
+    for folder_idx, folder_name in enumerate(folder_names):
+        print(f"\n{'-'*50}")
+        print(f"Folder {folder_idx+1}/{len(folder_names)}: {folder_name}")
+        print(f"{'-'*50}")
+        
+        data_list = analyze_event_directory(
+            directory=folder_name,
+            pattern="event_*.h5",
+            max_files=max_files_per_folder,
+            summary_only=summary_only
+        )
+        
+        results[folder_name] = data_list
+        
+        # Accumulate statistics
+        folder_tracks = sum(data['PDG'].shape[0] for data in data_list)
+        folder_muons = sum(np.sum(data['PDG'] == 13) for data in data_list)
+        folder_pions = sum(np.sum(data['PDG'] == 211) for data in data_list)
+        
+        total_events += len(data_list)
+        total_tracks += folder_tracks
+        total_muons += folder_muons
+        total_pions += folder_pions
+    
+    # Print overall summary
+    print("\n" + "="*60)
+    print(f"Overall Summary for {len(folder_names)} Folders")
+    print("="*60)
+    print(f"Total events: {total_events}")
+    print(f"Total tracks: {total_tracks}")
+    print(f"Total muons: {total_muons} ({total_muons/total_tracks*100:.1f}%)")
+    print(f"Total pions: {total_pions} ({total_pions/total_tracks*100:.1f}%)")
+    
+    # Print folder comparison
+    print("\nFolder Comparison:")
+    print("-" * 80)
+    print(f"{'Folder':<20}{'Events':<10}{'Tracks':<10}{'Muons':<10}{'Pions':<10}")
+    print("-" * 80)
+    
+    for folder_name, data_list in results.items():
+        folder_tracks = sum(data['PDG'].shape[0] for data in data_list)
+        folder_muons = sum(np.sum(data['PDG'] == 13) for data in data_list)
+        folder_pions = sum(np.sum(data['PDG'] == 211) for data in data_list)
+        
+        print(f"{folder_name:<20}{len(data_list):<10}{folder_tracks:<10}{folder_muons:<10}{folder_pions:<10}")
+    
+    return results
+
+def read_event_file(filename, verbose=True):
+    """
+    Read an event file in the new format and print its contents.
+    
+    Parameters
+    ----------
+    filename : str
+        Path to the HDF5 file
+    verbose : bool, optional
+        Whether to print detailed information, by default True
+        
+    Returns
+    -------
+    dict
+        Dictionary containing the event data
+    """
+    with h5py.File(filename, 'r') as f:
+        # Read all datasets
+        pdg = np.array(f['PDG'])
+        q = np.array(f['Q'])
+        q_tot = np.array(f['Q_tot'])
+        t = np.array(f['T'])
+        p = np.array(f['P'])
+        v = np.array(f['V'])
+        
+        # Check if event_number is present
+        event_number = np.array(f['event_number']) if 'event_number' in f else None
+        
+        data = {
+            'PDG': pdg,
+            'Q': q,
+            'Q_tot': q_tot,
+            'T': t,
+            'P': p,
+            'V': v,
+            'event_number': event_number,
+            'filename': filename
+        }
+    
+    # Print information if verbose
+    if verbose:
+        print(f"\n{'='*50}")
+        print(f"File: {os.path.basename(filename)}")
+        if event_number is not None:
+            print(f"Event Number: {event_number}")
+        print(f"{'='*50}")
+        
+        n_tracks = pdg.shape[0]
+        n_detectors = q.shape[1]
+        
+        print(f"Number of tracks: {n_tracks}")
+        print(f"Number of detectors: {n_detectors}")
+        print(f"\nParticle Information:")
+        print("-" * 80)
+        print(f"{'Track #':<8}{'PDG':<8}{'Q_tot':<12}{'P_mag (MeV/c)':<16}{'Direction':<25}{'Vertex':<25}")
+        print("-" * 80)
+        
+        for i in range(n_tracks):
+            # Convert PDG code to particle name
+            particle = "Muon" if pdg[i] == 13 else "Pion" if pdg[i] == 211 else f"Unknown ({pdg[i]})"
+            
+            # Calculate momentum magnitude
+            p_mag = np.sqrt(np.sum(p[i]**2))
+            
+            # Normalize direction
+            direction = p[i] / (p_mag if p_mag > 0 else 1)
+            
+            print(f"{i:<8}{particle:<8}{q_tot[i]:<12.2f}{p_mag:<16.2f}{str(direction):<25}{str(v[i]):<25}")
+        
+        print("\nDetector Statistics:")
+        print(f"Total charge detected: {np.sum(q_tot):.2f}")
+        print(f"Mean charge per track: {np.mean(q_tot):.2f}")
+        print(f"Mean charge per PMT: {np.mean(np.sum(q, axis=0)):.2f}")
+        print(f"Number of PMTs with signal: {np.sum(np.sum(q, axis=0) > 0)}")
+        
+        # Print Q values for each track
+        print("\nCharge Matrix (Q) - First 10 PMTs:")
+        print("-" * 80)
+        header = "Track #  "
+        for j in range(min(10, n_detectors)):
+            header += f"PMT-{j:<5} "
+        print(header)
+        print("-" * 80)
+        
+        for i in range(n_tracks):
+            row = f"{i:<8}  "
+            for j in range(min(10, n_detectors)):
+                row += f"{q[i,j]:<7.2f} "
+            row += f"... (showing 10/{n_detectors} PMTs)"
+            print(row)
+        
+        # Print timing information
+        print("\nTiming Information:")
+        print(f"Mean detection time: {np.mean(t[t > 0]):.2f} ns")
+    
+    return data
+
+def analyze_event_directory(directory, pattern="*.h5", max_files=None, summary_only=False):
+    """
+    Analyze multiple event files in a directory.
+    
+    Parameters
+    ----------
+    directory : str
+        Directory containing HDF5 event files
+    pattern : str, optional
+        File pattern to match, by default "*.h5"
+    max_files : int, optional
+        Maximum number of files to analyze, by default None (all files)
+    summary_only : bool, optional
+        Whether to print only summary statistics and not individual files, by default False
+        
+    Returns
+    -------
+    list of dict
+        List of data dictionaries for each event
+    """
+    # Find all files matching the pattern
+    file_paths = glob(os.path.join(directory, pattern))
+    
+    if max_files is not None:
+        file_paths = file_paths[:max_files]
+    
+    print(f"Found {len(file_paths)} files to analyze")
+    
+    # Read all files
+    all_data = []
+    for file_path in file_paths:
+        data = read_event_file(file_path, verbose=not summary_only)
+        all_data.append(data)
+    
+    # Calculate summary statistics
+    total_tracks = sum(data['PDG'].shape[0] for data in all_data)
+    muon_count = sum(np.sum(data['PDG'] == 13) for data in all_data)
+    pion_count = sum(np.sum(data['PDG'] == 211) for data in all_data)
+    
+    # Print summary
+    print("\n" + "="*60)
+    print(f"Summary Statistics for {len(file_paths)} Events")
+    print("="*60)
+    print(f"Total number of tracks: {total_tracks}")
+    print(f"Total muons: {muon_count} ({muon_count/total_tracks*100:.1f}%)")
+    print(f"Total pions: {pion_count} ({pion_count/total_tracks*100:.1f}%)")
+    
+    # Calculate charge statistics
+    all_q_tot = np.concatenate([data['Q_tot'] for data in all_data])
+    print(f"\nCharge Statistics:")
+    print(f"Mean charge per track: {np.mean(all_q_tot):.2f}")
+    print(f"Min charge: {np.min(all_q_tot):.2f}")
+    print(f"Max charge: {np.max(all_q_tot):.2f}")
+    
+    # Calculate momentum statistics
+    all_p_mag = np.concatenate([
+        np.sqrt(np.sum(data['P']**2, axis=1)) for data in all_data
+    ])
+    print(f"\nMomentum Statistics:")
+    print(f"Mean momentum magnitude: {np.mean(all_p_mag):.2f} MeV/c")
+    print(f"Min momentum: {np.min(all_p_mag):.2f} MeV/c")
+    print(f"Max momentum: {np.max(all_p_mag):.2f} MeV/c")
+    
+    # PMT statistics across all events
+    if all_data:
+        n_detectors = all_data[0]['Q'].shape[1]
+        all_pmt_charges = np.zeros(n_detectors)
+        
+        for data in all_data:
+            all_pmt_charges += np.sum(data['Q'], axis=0)
+        
+        active_pmts = np.where(all_pmt_charges > 0)[0]
+        print(f"\nPMT Statistics Across All Events:")
+        print(f"Number of active PMTs: {len(active_pmts)} / {n_detectors}")
+        print(f"Mean charge per active PMT: {np.mean(all_pmt_charges[active_pmts]):.2f}")
+        
+    
+    return all_data

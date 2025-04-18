@@ -1,4 +1,5 @@
-from tools.generate import differentiable_get_rays, new_differentiable_get_rays
+from tools.generate import differentiable_get_rays, new_differentiable_get_rays, get_rays_from_file_inputs
+
 from tools.propagate import create_photon_propagator
 from tools.geometry import generate_detector
 
@@ -203,33 +204,58 @@ def photon_iteration_update_factors(position, direction, time, surface_distance,
     return new_pos, new_dir, new_time, detect_prob, reflection_attenuation, continuing_factor
 
 
-def create_event_simulator(propagate_photons, Nphot, NUM_DETECTORS, detector_points, K, is_data,
-                           max_detectors_per_cell):
-    """
-    Creates a simulator that accumulates all depositions in structured arrays and performs segment_sum at the end.
-    Keeps the same structure as the working implementation but with different array organization.
-    """
 
-    table = Table(base_dir_path+'../siren/cprof_mu_train_10000ev.h5')
-    grid_data = create_siren_grid(table)
-    siren_model, model_params = load_siren_jax(base_dir_path+'../siren/siren_cprof_mu.pkl')
+def create_event_simulator(propagate_photons, Nphot, NUM_DETECTORS, detector_points, K, is_data,
+                          max_detectors_per_cell):
+    """
+    Creates a simulator that can work in both differentiable and file-based modes.
+    """
+    
+    # Only load SIREN model if not using data
+    if not is_data:
+        table = Table(base_dir_path+'../siren/cprof_mu_train_10000ev.h5')
+        grid_data = create_siren_grid(table)
+        siren_model, model_params = load_siren_jax(base_dir_path+'../siren/siren_cprof_mu.pkl')
+    else:
+        grid_data = None
+        model_params = None
 
     @jax.jit
-    def _simulation_core(params, key):
+    def _simulation_core(params, key, photon_data=None):
         # Unpack simulation parameters
         (energy, track_origin, track_direction, initial_intensity,
          scatter_length, reflection_rate, absorption_length, sim_temperature) = params
 
-        photon_directions, photon_origins, photon_weights = new_differentiable_get_rays(track_origin, track_direction, energy, Nphot, grid_data, model_params, key)
-        tot_real_photons_norm = (energy*852.97855369-148646.90865158)
-        expanded_photon_weights = tot_real_photons_norm * photon_weights
+        if is_data and photon_data is not None:
+            # Use data from file
+            n_photons = jnp.int32(photon_data['N'])
+            photon_directions, photon_origins, photon_weights = get_rays_from_file_inputs(
+                track_origin, 
+                track_direction, 
+                photon_data['photon_ranges'],
+                photon_data['photon_cos'],
+                n_photons,
+                key
+            )
+            # Use weights directly
+            expanded_photon_weights = photon_weights
+        else:
+            # Use differentiable generation
+            photon_directions, photon_origins, photon_weights = new_differentiable_get_rays(
+                track_origin, track_direction, energy, Nphot, grid_data, model_params, key
+            )
+            tot_real_photons_norm = (energy*852.97855369-148646.90865158)
+            expanded_photon_weights = tot_real_photons_norm * photon_weights
 
         n_rays = photon_origins.shape[0]
-        # Set the initial intensity per photon.
-        photon_intensities = jnp.full((n_rays,), initial_intensity * expanded_photon_weights / Nphot)
+        # Set the initial intensity per photon
+        if is_data and photon_data is not None:
+            photon_intensities = jnp.full((n_rays,), initial_intensity * expanded_photon_weights)
+        else:
+            photon_intensities = jnp.full((n_rays,), initial_intensity * expanded_photon_weights / n_rays)
         photon_times = jnp.zeros((n_rays,))
 
-        # Initialize photon state.
+        # Initialize photon state
         current_positions = photon_origins
         current_directions = photon_directions
         current_intensities = photon_intensities
@@ -240,7 +266,7 @@ def create_event_simulator(propagate_photons, Nphot, NUM_DETECTORS, detector_poi
         all_indices = jnp.zeros((K, max_detectors_per_cell, n_rays), dtype=jnp.int32)
         all_times = jnp.zeros((K, max_detectors_per_cell, n_rays))
 
-        # Loop over K scattering iterations.
+        # Loop over K scattering iterations
         for i in range(K):
             if i == K-1:
                 scatter_length = 10e20
@@ -248,7 +274,7 @@ def create_event_simulator(propagate_photons, Nphot, NUM_DETECTORS, detector_poi
                 absorption_length = 10e20
 
             key, subkey = jax.random.split(key)
-            # Propagate photons from the current state.
+            # Propagate photons from the current state
             prop_results = propagate_photons(current_positions, current_directions)
             depositions = prop_results['detector_weights']
             detector_indices = prop_results['detector_indices']
@@ -256,14 +282,14 @@ def create_event_simulator(propagate_photons, Nphot, NUM_DETECTORS, detector_poi
             hit_positions = prop_results['positions']
             normals = prop_results['normals']
 
-            # Compute distance each photon traveled (used for scattering).
+            # Compute distance each photon traveled (used for scattering)
             surface_distances = jnp.linalg.norm(hit_positions - current_positions, axis=1)
 
-            # Generate independent RNG keys per photon.
+            # Generate independent RNG keys per photon
             key, subkey = jax.random.split(key)
             rng_keys = jax.random.split(subkey, n_rays)
 
-            # Run the scattering update for each photon.
+            # Run the scattering update for each photon
             new_positions, new_directions, new_times, detect_probs, reflection_attenuations, continuing_factors = jax.vmap(
                 photon_iteration_update_factors,
                 in_axes=(0, 0, 0, 0, 0, None, None, None, None, 0)
@@ -286,13 +312,11 @@ def create_event_simulator(propagate_photons, Nphot, NUM_DETECTORS, detector_poi
             # Scale intensities for continuing paths
             new_intensities = current_intensities * continuing_factors
 
-            # Update photon state for the next iteration.
+            # Update photon state for the next iteration
             current_positions = jax.lax.stop_gradient(new_positions)
             current_directions = jax.lax.stop_gradient(new_directions)
             current_intensities = new_intensities
             current_times = jax.lax.stop_gradient(new_times)
-
-
 
         # Compute average hit times for each detector using weighted averages
         flat_weights = all_weights.reshape(-1)
@@ -321,9 +345,7 @@ def create_event_simulator(propagate_photons, Nphot, NUM_DETECTORS, detector_poi
         )
 
         # Find minimum non-zero time
-        # Create a mask for non-zero times and weights
-        nonzero_mask = total_charge_weighted>1e-5
-        # Get minimum of non-zero times, defaulting to 0 if no valid times exist
+        nonzero_mask = total_charge_weighted > 1e-5
         min_nonzero_time = jnp.where(
             jnp.any(nonzero_mask),
             jnp.min(jnp.where(nonzero_mask, average_times, jnp.inf)),
@@ -345,18 +367,367 @@ def create_event_simulator(propagate_photons, Nphot, NUM_DETECTORS, detector_poi
 
         return corrected_q, aligned_times
 
-    @jax.jit
-    def _simulate_event_core(params, key):
-        total_charge_weighted, average_times = _simulation_core(params, key)
-        return total_charge_weighted, average_times
-
-    @jax.jit
-    def _simulate_event_core_data(params, key):
-        total_charge_weighted, average_times = _simulation_core(params, key)
-        # this allows to implement additional conditions for data that are not applied to the simulation
-        return total_charge_weighted, average_times
-
     if is_data:
-        return jax.jit(lambda p, k: _simulate_event_core_data(p, k))
+        # For data mode, create a function that accepts photon data
+        return jax.jit(lambda p, k, d: _simulation_core(p, k, d))
     else:
-        return jax.jit(lambda p, k: _simulate_event_core(p, k))
+        # For simulation mode, create a function with standard parameters
+        return jax.jit(lambda p, k: _simulation_core(p, k, None))
+
+
+# def create_event_simulator(propagate_photons, Nphot, NUM_DETECTORS, detector_points, K, is_data,
+#                           max_detectors_per_cell):
+#     """
+#     Creates a simulator that can work in both differentiable and file-based modes.
+#     """
+    
+#     # Only load SIREN model if not using data
+#     if not is_data:
+#         table = Table(base_dir_path+'../siren/cprof_mu_train_10000ev.h5')
+#         grid_data = create_siren_grid(table)
+#         siren_model, model_params = load_siren_jax(base_dir_path+'../siren/siren_cprof_mu.pkl')
+#     else:
+#         grid_data = None
+#         model_params = None
+
+#     @jax.jit
+#     def _simulation_core(params, key):
+#         # Unpack simulation parameters
+#         (energy, track_origin, track_direction, initial_intensity,
+#          scatter_length, reflection_rate, absorption_length, sim_temperature) = params
+
+#         if is_data:
+#             # Use data from file
+#             photon_directions, photon_origins, photon_weights = get_rays_from_file_inputs(
+#                 track_origin, 
+#                 track_direction, 
+#                 photon_data['photon_ranges'], 
+#                 photon_data['photon_cos'],
+#                 key
+#             )
+#             # Use weights directly
+#             expanded_photon_weights = photon_weights
+#         else:
+#             # Use differentiable generation
+#             photon_directions, photon_origins, photon_weights = new_differentiable_get_rays(
+#                 track_origin, track_direction, energy, Nphot, grid_data, model_params, key
+#             )
+#             tot_real_photons_norm = (energy*852.97855369-148646.90865158)
+#             expanded_photon_weights = tot_real_photons_norm * photon_weights
+
+#         n_rays = photon_origins.shape[0]
+#         # Set the initial intensity per photon
+#         photon_intensities = jnp.full((n_rays,), initial_intensity * expanded_photon_weights / n_rays)
+#         photon_times = jnp.zeros((n_rays,))
+
+#         # Initialize photon state
+#         current_positions = photon_origins
+#         current_directions = photon_directions
+#         current_intensities = photon_intensities
+#         current_times = photon_times
+
+#         # Initialize arrays with shape (K, max_detectors_per_cell, n_rays)
+#         all_weights = jnp.zeros((K, max_detectors_per_cell, n_rays))
+#         all_indices = jnp.zeros((K, max_detectors_per_cell, n_rays), dtype=jnp.int32)
+#         all_times = jnp.zeros((K, max_detectors_per_cell, n_rays))
+
+#         # Loop over K scattering iterations
+#         for i in range(K):
+#             if i == K-1:
+#                 scatter_length = 10e20
+#                 reflection_rate = 0
+#                 absorption_length = 10e20
+
+#             key, subkey = jax.random.split(key)
+#             # Propagate photons from the current state
+#             prop_results = propagate_photons(current_positions, current_directions)
+#             depositions = prop_results['detector_weights']
+#             detector_indices = prop_results['detector_indices']
+#             times = prop_results['times']
+#             hit_positions = prop_results['positions']
+#             normals = prop_results['normals']
+
+#             # Compute distance each photon traveled (used for scattering)
+#             surface_distances = jnp.linalg.norm(hit_positions - current_positions, axis=1)
+
+#             # Generate independent RNG keys per photon
+#             key, subkey = jax.random.split(key)
+#             rng_keys = jax.random.split(subkey, n_rays)
+
+#             # Run the scattering update for each photon
+#             new_positions, new_directions, new_times, detect_probs, reflection_attenuations, continuing_factors = jax.vmap(
+#                 photon_iteration_update_factors,
+#                 in_axes=(0, 0, 0, 0, 0, None, None, None, None, 0)
+#             )(current_positions, current_directions, current_times,
+#               surface_distances, normals, scatter_length, reflection_rate,
+#               absorption_length, sim_temperature, rng_keys)
+
+#             # Calculate the detected intensity for each photon
+#             detected_intensity_factors = detect_probs * reflection_attenuations
+
+#             # Scale the propagation weights by current intensities and detection factors
+#             updated_weights = depositions * current_intensities[None, :] * detected_intensity_factors[None, :]
+#             total_times = times + current_times[:, None]
+
+#             # Store data in the i-th slice of our 3D arrays
+#             all_weights = all_weights.at[i].set(updated_weights)
+#             all_indices = all_indices.at[i].set(detector_indices)
+#             all_times = all_times.at[i].set(total_times.squeeze(-1))
+
+#             # Scale intensities for continuing paths
+#             new_intensities = current_intensities * continuing_factors
+
+#             # Update photon state for the next iteration
+#             current_positions = jax.lax.stop_gradient(new_positions)
+#             current_directions = jax.lax.stop_gradient(new_directions)
+#             current_intensities = new_intensities
+#             current_times = jax.lax.stop_gradient(new_times)
+
+#         # Compute average hit times for each detector using weighted averages
+#         flat_weights = all_weights.reshape(-1)
+#         flat_indices = all_indices.reshape(-1)
+#         flat_times = all_times.reshape(-1)
+
+#         # Calculate numerator and denominator for weighted average time
+#         total_time_weighted = jax.ops.segment_sum(
+#             flat_weights * flat_times,
+#             flat_indices,
+#             num_segments=NUM_DETECTORS
+#         )
+
+#         total_charge_weighted = jax.ops.segment_sum(
+#             flat_weights,
+#             flat_indices,
+#             num_segments=NUM_DETECTORS
+#         )
+
+#         # Compute average times with protection against division by zero
+#         eps = 1e-10
+#         average_times = jnp.where(
+#             total_charge_weighted > eps,
+#             total_time_weighted / (total_charge_weighted + eps),
+#             jnp.zeros_like(total_charge_weighted)
+#         )
+
+#         # Find minimum non-zero time
+#         nonzero_mask = total_charge_weighted > 1e-5
+#         min_nonzero_time = jnp.where(
+#             jnp.any(nonzero_mask),
+#             jnp.min(jnp.where(nonzero_mask, average_times, jnp.inf)),
+#             0.0
+#         )
+
+#         # Subtract minimum time from non-zero times only
+#         aligned_times = jnp.where(
+#             nonzero_mask,
+#             average_times - min_nonzero_time,
+#             0
+#         )
+
+#         corrected_q = jnp.where(
+#             nonzero_mask,
+#             total_charge_weighted,
+#             0
+#         )
+
+#         return corrected_q, aligned_times
+
+#     @jax.jit
+#     def _simulate_event_core(params, key):
+#         total_charge_weighted, average_times = _simulation_core(params, key)
+#         return total_charge_weighted, average_times
+
+#     @jax.jit
+#     def _simulate_event_core_data(params, key):
+#         total_charge_weighted, average_times = _simulation_core(params, key)
+#         # this allows to implement additional conditions for data that are not applied to the simulation, 
+#         # e.g. one could add Poisson fluctuations here or similar
+#         return total_charge_weighted, average_times
+
+#     if is_data:
+#         return jax.jit(lambda p, k: _simulate_event_core_data(p, k))
+#     else:
+#         return jax.jit(lambda p, k: _simulate_event_core(p, k))
+
+
+# def create_event_simulator(propagate_photons, Nphot, NUM_DETECTORS, detector_points, K, is_data,
+#                           max_detectors_per_cell):
+#     """
+#     Creates a simulator that can work in both differentiable and file-based modes.
+#     """
+    
+#     # Only load SIREN model if not using data
+#     if not is_data:
+#         table = Table(base_dir_path+'../siren/cprof_mu_train_10000ev.h5')
+#         grid_data = create_siren_grid(table)
+#         siren_model, model_params = load_siren_jax(base_dir_path+'../siren/siren_cprof_mu.pkl')
+#     else:
+#         grid_data = None
+#         model_params = None
+
+#     @jax.jit
+#     def _simulation_core(params, key, photon_data=None):
+#         # Unpack simulation parameters
+#         (energy, track_origin, track_direction, initial_intensity,
+#          scatter_length, reflection_rate, absorption_length, sim_temperature) = params
+
+#         if is_data and photon_data is not None:
+#             # Use data from file
+#             photon_directions, photon_origins, photon_weights = get_rays_from_file_inputs(
+#                 track_origin, 
+#                 track_direction, 
+#                 photon_data['photon_ranges'], 
+#                 photon_data['photon_cos'],
+#                 key
+#             )
+#             # Use weights directly
+#             expanded_photon_weights = photon_weights
+#         else:
+#             # Use differentiable generation
+#             photon_directions, photon_origins, photon_weights = new_differentiable_get_rays(
+#                 track_origin, track_direction, energy, Nphot, grid_data, model_params, key
+#             )
+#             tot_real_photons_norm = (energy*852.97855369-148646.90865158)
+#             expanded_photon_weights = tot_real_photons_norm * photon_weights
+
+#         n_rays = photon_origins.shape[0]
+#         # Set the initial intensity per photon
+#         photon_intensities = jnp.full((n_rays,), initial_intensity * expanded_photon_weights / n_rays)
+#         photon_times = jnp.zeros((n_rays,))
+
+#         # Initialize photon state
+#         current_positions = photon_origins
+#         current_directions = photon_directions
+#         current_intensities = photon_intensities
+#         current_times = photon_times
+
+#         # Initialize arrays with shape (K, max_detectors_per_cell, n_rays)
+#         all_weights = jnp.zeros((K, max_detectors_per_cell, n_rays))
+#         all_indices = jnp.zeros((K, max_detectors_per_cell, n_rays), dtype=jnp.int32)
+#         all_times = jnp.zeros((K, max_detectors_per_cell, n_rays))
+
+#         # Loop over K scattering iterations
+#         for i in range(K):
+#             if i == K-1:
+#                 scatter_length = 10e20
+#                 reflection_rate = 0
+#                 absorption_length = 10e20
+
+#             key, subkey = jax.random.split(key)
+#             # Propagate photons from the current state
+#             prop_results = propagate_photons(current_positions, current_directions)
+#             depositions = prop_results['detector_weights']
+#             detector_indices = prop_results['detector_indices']
+#             times = prop_results['times']
+#             hit_positions = prop_results['positions']
+#             normals = prop_results['normals']
+
+#             # Compute distance each photon traveled (used for scattering)
+#             surface_distances = jnp.linalg.norm(hit_positions - current_positions, axis=1)
+
+#             # Generate independent RNG keys per photon
+#             key, subkey = jax.random.split(key)
+#             rng_keys = jax.random.split(subkey, n_rays)
+
+#             # Run the scattering update for each photon
+#             new_positions, new_directions, new_times, detect_probs, reflection_attenuations, continuing_factors = jax.vmap(
+#                 photon_iteration_update_factors,
+#                 in_axes=(0, 0, 0, 0, 0, None, None, None, None, 0)
+#             )(current_positions, current_directions, current_times,
+#               surface_distances, normals, scatter_length, reflection_rate,
+#               absorption_length, sim_temperature, rng_keys)
+
+#             # Calculate the detected intensity for each photon
+#             detected_intensity_factors = detect_probs * reflection_attenuations
+
+#             # Scale the propagation weights by current intensities and detection factors
+#             updated_weights = depositions * current_intensities[None, :] * detected_intensity_factors[None, :]
+#             total_times = times + current_times[:, None]
+
+#             # Store data in the i-th slice of our 3D arrays
+#             all_weights = all_weights.at[i].set(updated_weights)
+#             all_indices = all_indices.at[i].set(detector_indices)
+#             all_times = all_times.at[i].set(total_times.squeeze(-1))
+
+#             # Scale intensities for continuing paths
+#             new_intensities = current_intensities * continuing_factors
+
+#             # Update photon state for the next iteration
+#             current_positions = jax.lax.stop_gradient(new_positions)
+#             current_directions = jax.lax.stop_gradient(new_directions)
+#             current_intensities = new_intensities
+#             current_times = jax.lax.stop_gradient(new_times)
+
+#         # Compute average hit times for each detector using weighted averages
+#         flat_weights = all_weights.reshape(-1)
+#         flat_indices = all_indices.reshape(-1)
+#         flat_times = all_times.reshape(-1)
+
+#         # Calculate numerator and denominator for weighted average time
+#         total_time_weighted = jax.ops.segment_sum(
+#             flat_weights * flat_times,
+#             flat_indices,
+#             num_segments=NUM_DETECTORS
+#         )
+
+#         total_charge_weighted = jax.ops.segment_sum(
+#             flat_weights,
+#             flat_indices,
+#             num_segments=NUM_DETECTORS
+#         )
+
+#         # Compute average times with protection against division by zero
+#         eps = 1e-10
+#         average_times = jnp.where(
+#             total_charge_weighted > eps,
+#             total_time_weighted / (total_charge_weighted + eps),
+#             jnp.zeros_like(total_charge_weighted)
+#         )
+
+#         # Find minimum non-zero time
+#         nonzero_mask = total_charge_weighted > 1e-5
+#         min_nonzero_time = jnp.where(
+#             jnp.any(nonzero_mask),
+#             jnp.min(jnp.where(nonzero_mask, average_times, jnp.inf)),
+#             0.0
+#         )
+
+#         # Subtract minimum time from non-zero times only
+#         aligned_times = jnp.where(
+#             nonzero_mask,
+#             average_times - min_nonzero_time,
+#             0
+#         )
+
+#         corrected_q = jnp.where(
+#             nonzero_mask,
+#             total_charge_weighted,
+#             0
+#         )
+
+#         return corrected_q, aligned_times
+
+#     @jax.jit
+#     def _simulate_event_core(params, key, d):
+#         total_charge_weighted, average_times = _simulation_core(params, key, d)
+#         return total_charge_weighted, average_times
+
+#     @jax.jit
+#     def _simulate_event_core_data(params, key, d):
+#         total_charge_weighted, average_times = _simulation_core(params, key, d)
+#         # this allows to implement additional conditions for data that are not applied to the simulation, 
+#         # e.g. one could add Poisson fluctuations here or similar
+#         return total_charge_weighted, average_times
+
+#     if is_data:
+#         return jax.jit(lambda p, k: _simulate_event_core_data(p, k, d))
+#     else:
+#         return jax.jit(lambda p, k: _simulate_event_core(p, k))
+
+
+
+
+
+
+
+
