@@ -254,48 +254,50 @@ def new_differentiable_get_rays(track_origin, track_direction, energy, Nphot, ta
 
     return ray_vectors, ray_origins, jnp.squeeze(new_photon_weights)
 
-@jax.jit
-def get_rays_from_file_inputs(track_origin, track_direction, photon_ranges, photon_cos, Nphot, key):
-    """
-    Generate ray origins and directions from provided photon data.
+# @jax.jit
+# def get_rays_from_file_inputs(track_origin, track_direction, photon_ranges, photon_cos, Nphot, key):
+#     """
+#     Generate ray origins and directions from provided photon data.
     
-    Parameters
-    ----------
-    track_origin : jnp.ndarray
-        Starting point of the track
-    track_direction : jnp.ndarray
-        Direction vector of the track
-    photon_ranges : jnp.ndarray
-        Distances from track origin for each photon (fixed size array)
-    photon_cos : jnp.ndarray
-        Cosine of angle for each photon (fixed size array)
-    Nphot : jnp.ndarray
-        Number of active photons to use
-    key : jax.random.PRNGKey
-        Random number generator key
+#     Parameters
+#     ----------
+#     track_origin : jnp.ndarray
+#         Starting point of the track
+#     track_direction : jnp.ndarray
+#         Direction vector of the track
+#     photon_ranges : jnp.ndarray
+#         Distances from track origin for each photon (fixed size array)
+#     photon_cos : jnp.ndarray
+#         Cosine of angle for each photon (fixed size array)
+#     Nphot : int
+#         Number of active photons to use
+#     key : jax.random.PRNGKey
+#         Random number generator key
         
-    Returns
-    -------
-    tuple
-        (ray_vectors, ray_origins, photon_weights)
-    """
-    # Create a mask for relevant photons (fixed size computation)
-    MAX_PHOTONS = 1_000_000  # Same as your fixed array size
-    mask = jnp.arange(MAX_PHOTONS) < Nphot
+#     Returns
+#     -------
+#     tuple
+#         (ray_vectors, ray_origins, photon_weights)
+#     """
+#     # Fixed size for computation to avoid JIT recompilation
+#     MAX_PHOTONS = 1_000_000
     
-    # Convert cos to thetas for all photons
-    photon_thetas = jnp.arccos(photon_cos)
+#     # Create photon thetas from cosines
+#     photon_thetas = jnp.arccos(photon_cos)
     
-    ray_vectors = generate_random_cone_vectors(track_direction, photon_thetas, MAX_PHOTONS, key)
+#     # Important: Make sure this function also generates MAX_PHOTONS vectors
+#     # not just Nphot, to keep shapes consistent
+#     ray_vectors = generate_random_cone_vectors(track_direction, photon_thetas, MAX_PHOTONS, key)
     
-    # Compute ray origins for all photons
-    normalized_dir = normalize(track_direction[None, :])
-    ray_origins = track_origin[None, :] + photon_ranges[:, None] * normalized_dir
+#     # Compute ray origins for all photons (also maintaining MAX_PHOTONS size)
+#     normalized_dir = normalize(track_direction[None, :])
+#     ray_origins = track_origin[None, :] + photon_ranges[:, None] * normalized_dir
     
-    # Set weights (1 for relevant photons, 0 for irrelevant)
-    photon_weights = mask.astype(jnp.float32)
+#     # Create weights mask (1 for active photons, 0 for padding)
+#     mask = jnp.arange(MAX_PHOTONS) < Nphot
+#     photon_weights = mask.astype(jnp.float32)
     
-    return ray_vectors, ray_origins, photon_weights
+#     return ray_vectors, ray_origins, photon_weights
 
 def generate_random_direction(key):
     """
@@ -476,18 +478,27 @@ def generate_events_from_root(event_simulator, root_file_path, output_dir='event
             sim_key, master_key = jax.random.split(master_key)
 
             # Process muon data
-            photon_ranges = muon_data['photon_ranges']
-            photon_cos = muon_data['photon_cos']
-            N = len(muon_data['photon_ranges'])
+            photon_origins = muon_data['photon_origins']  # Now contains direct origins (cm)
+            photon_directions = muon_data['photon_directions']  # Now contains direct directions
+            N = len(photon_origins)
 
             # the number 1_000_000 is hard coded in get_rays_from_file_inputs
             padding_size = max(0, 1_000_000-N)
 
-            # Pad the array with zeros
-            muon_data['photon_ranges'] = jnp.pad(photon_ranges, (0, padding_size), mode='constant', constant_values=0)
-            muon_data['photon_cos'] = jnp.pad(photon_cos, (0, padding_size), mode='constant', constant_values=0.5)
+            # Pad the origins array (2D array with shape [N,3])
+            muon_data['photon_origins'] = jnp.pad(photon_origins, ((0, padding_size), (0, 0)), 
+                                                mode='constant', constant_values=0)
+
+            # Pad the directions array with a default unit vector [0,0,1]
+            default_direction = jnp.array([0.0, 0.0, 1.0])
+            padding_directions = jnp.tile(default_direction, (padding_size, 1))
+            if padding_size > 0:
+                muon_data['photon_directions'] = jnp.concatenate([photon_directions, padding_directions], axis=0)
+            else:
+                muon_data['photon_directions'] = photon_directions
+                
             muon_data['N'] = N
-            
+                        
             # Run simulation for muon
             muon_charges, muon_times = event_simulator(muon_params, sim_key, muon_data)
             
@@ -506,16 +517,25 @@ def generate_events_from_root(event_simulator, root_file_path, output_dir='event
                 # Read photon data for pion
                 pion_data = read_photon_data_from_root(pion_root_file_path, random_idx, 'pion')
 
-                photon_ranges = pion_data['photon_ranges']
-                photon_cos = pion_data['photon_cos']
-                N = len(pion_data['photon_ranges'])
-                
+                photon_origins = pion_data['photon_origins']
+                photon_directions = pion_data['photon_directions']
+                N = len(photon_origins)
+
                 # the number 1_000_000 is hard coded in get_rays_from_file_inputs
                 padding_size = max(0, 1_000_000-N)
-    
-                # Pad the array with zeros
-                pion_data['photon_ranges'] = jnp.pad(photon_ranges, (0, padding_size), mode='constant', constant_values=0)
-                pion_data['photon_cos'] = jnp.pad(photon_cos, (0, padding_size), mode='constant', constant_values=0.5)
+
+                # Pad the origins array (2D array with shape [N,3])
+                pion_data['photon_origins'] = jnp.pad(photon_origins, ((0, padding_size), (0, 0)), 
+                                                     mode='constant', constant_values=0)
+
+                # Pad the directions array with a default unit vector [0,0,1]
+                default_direction = jnp.array([0.0, 0.0, 1.0])
+                padding_directions = jnp.tile(default_direction, (padding_size, 1))
+                if padding_size > 0:
+                    pion_data['photon_directions'] = jnp.concatenate([photon_directions, padding_directions], axis=0)
+                else:
+                    pion_data['photon_directions'] = photon_directions
+                    
                 pion_data['N'] = N
                 
                 # Generate a new random direction for the pion
