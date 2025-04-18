@@ -307,9 +307,10 @@ def print_params(params):
     print(f"Initial Direction: ({initial_direction[0]:.2f}, {initial_direction[1]:.2f}, {initial_direction[2]:.2f})")
     print("─" * 20)
 
+
 def read_photon_data_from_root(root_file_path, entry_index, particle_type='muon'):
     """
-    Read photon data from a ROOT file for a specific entry.
+    Read photon data from a ROOT file for a specific entry, using the component vectors.
     
     Parameters
     ----------
@@ -323,7 +324,7 @@ def read_photon_data_from_root(root_file_path, entry_index, particle_type='muon'
     Returns
     -------
     dict
-        Dictionary containing photon_ranges, photon_cos, and energy
+        Dictionary containing photon_origins, photon_directions, and energy
     """
     import uproot
     import numpy as np
@@ -334,10 +335,22 @@ def read_photon_data_from_root(root_file_path, entry_index, particle_type='muon'
     # Access the tree
     tree = root_file['v_photon']
     
-    # Read specific branches for the given entry
-    tracklength = tree['tracklength'].array(entry_start=entry_index, entry_stop=entry_index+1)[0]
-    cos = tree['cos'].array(entry_start=entry_index, entry_stop=entry_index+1)[0]
+    # Read position components
+    photon_posx = tree['photon_posx'].array(entry_start=entry_index, entry_stop=entry_index+1)[0]
+    photon_posy = tree['photon_posy'].array(entry_start=entry_index, entry_stop=entry_index+1)[0]
+    photon_posz = tree['photon_posz'].array(entry_start=entry_index, entry_stop=entry_index+1)[0]
+    
+    # Read direction components
+    photon_dirx = tree['photon_dirx'].array(entry_start=entry_index, entry_stop=entry_index+1)[0]
+    photon_diry = tree['photon_diry'].array(entry_start=entry_index, entry_stop=entry_index+1)[0]
+    photon_dirz = tree['photon_dirz'].array(entry_start=entry_index, entry_stop=entry_index+1)[0]
+    
+    # Read momentum
     initmom = float(tree['initmom'].array(entry_start=entry_index, entry_stop=entry_index+1)[0])
+    
+    # Stack the components to form position and direction arrays
+    photon_positions = np.column_stack((photon_posx, photon_posy, photon_posz))
+    photon_directions = np.column_stack((photon_dirx, photon_diry, photon_dirz))
     
     # Convert initmom (momentum) to kinetic energy based on particle type
     if particle_type.lower() == 'muon':
@@ -350,9 +363,12 @@ def read_photon_data_from_root(root_file_path, entry_index, particle_type='muon'
     # E_kinetic = sqrt(p^2 + m^2) - m
     energy = np.sqrt(initmom**2 + mass**2) - mass
     
+    # Convert to JAX arrays
+    import jax.numpy as jnp
+    
     return {
-        'photon_ranges': jnp.array(tracklength)/1000,
-        'photon_cos': jnp.array(cos),
+        'photon_origins': jnp.array(photon_positions),     # Combined position vectors
+        'photon_directions': jnp.array(photon_directions), # Combined direction vectors
         'energy': float(energy)
     }
 
