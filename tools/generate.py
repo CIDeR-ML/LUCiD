@@ -203,7 +203,7 @@ def new_differentiable_get_rays(track_origin, track_direction, energy, Nphot, ta
     # num_seeds = jnp.int32(energy*75.0525-12907.35714286)      # using 500 x 500 binning and 0.015 cut-off value
     num_seeds = jnp.int32(energy * 69.77142857 - 11980.42857143)  # using 500 x 500 binning and 0.02  cut-off value
 
-    seed_indices = np.random.randint(sampling_key, (Nphot,), 0, num_seeds)
+    seed_indices = random.randint(sampling_key, (Nphot,), 0, num_seeds)
     indices_by_weight = jnp.argsort(-photon_weights.squeeze())[seed_indices]
 
     cos_trk_mesh = jnp.array(cos_trk_mesh)
@@ -253,51 +253,6 @@ def new_differentiable_get_rays(track_origin, track_direction, energy, Nphot, ta
     ray_origins = jnp.ones((Nphot, 3)) * track_origin[None, :] + ranges[:, None] * normalize(track_direction[None, :])
 
     return ray_vectors, ray_origins, jnp.squeeze(new_photon_weights)
-
-# @jax.jit
-# def get_rays_from_file_inputs(track_origin, track_direction, photon_ranges, photon_cos, Nphot, key):
-#     """
-#     Generate ray origins and directions from provided photon data.
-    
-#     Parameters
-#     ----------
-#     track_origin : jnp.ndarray
-#         Starting point of the track
-#     track_direction : jnp.ndarray
-#         Direction vector of the track
-#     photon_ranges : jnp.ndarray
-#         Distances from track origin for each photon (fixed size array)
-#     photon_cos : jnp.ndarray
-#         Cosine of angle for each photon (fixed size array)
-#     Nphot : int
-#         Number of active photons to use
-#     key : jax.random.PRNGKey
-#         Random number generator key
-        
-#     Returns
-#     -------
-#     tuple
-#         (ray_vectors, ray_origins, photon_weights)
-#     """
-#     # Fixed size for computation to avoid JIT recompilation
-#     MAX_PHOTONS = 1_000_000
-    
-#     # Create photon thetas from cosines
-#     photon_thetas = jnp.arccos(photon_cos)
-    
-#     # Important: Make sure this function also generates MAX_PHOTONS vectors
-#     # not just Nphot, to keep shapes consistent
-#     ray_vectors = generate_random_cone_vectors(track_direction, photon_thetas, MAX_PHOTONS, key)
-    
-#     # Compute ray origins for all photons (also maintaining MAX_PHOTONS size)
-#     normalized_dir = normalize(track_direction[None, :])
-#     ray_origins = track_origin[None, :] + photon_ranges[:, None] * normalized_dir
-    
-#     # Create weights mask (1 for active photons, 0 for padding)
-#     mask = jnp.arange(MAX_PHOTONS) < Nphot
-#     photon_weights = mask.astype(jnp.float32)
-    
-#     return ray_vectors, ray_origins, photon_weights
 
 def generate_random_direction(key):
     """
@@ -482,7 +437,7 @@ def generate_events_from_root(event_simulator, root_file_path, output_dir='event
             photon_directions = muon_data['photon_directions']  # Now contains direct directions
             N = len(photon_origins)
 
-            # the number 1_000_000 is hard coded in get_rays_from_file_inputs
+            # the number 1_000_000 is hard coded also in _simulation_core
             padding_size = max(0, 1_000_000-N)
 
             # Pad the origins array (2D array with shape [N,3])
@@ -521,7 +476,7 @@ def generate_events_from_root(event_simulator, root_file_path, output_dir='event
                 photon_directions = pion_data['photon_directions']
                 N = len(photon_origins)
 
-                # the number 1_000_000 is hard coded in get_rays_from_file_inputs
+                # the number 1_000_000 is hard coded also in _simulation_core
                 padding_size = max(0, 1_000_000-N)
 
                 # Pad the origins array (2D array with shape [N,3])
