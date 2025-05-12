@@ -254,6 +254,42 @@ def new_differentiable_get_rays(track_origin, track_direction, energy, Nphot, ta
 
     return ray_vectors, ray_origins, jnp.squeeze(new_photon_weights)
 
+
+@partial(jax.jit, static_argnums=(2,))
+def get_isotropic_rays(source_position, source_intensity, Nphot, key):
+    """
+    Generate photons isotropically from a point source.
+
+    Args:
+        source_position: A 3D vector representing the source position
+        source_intensity: Scalar intensity of the source
+        Nphot: Number of photons to generate
+        key: JAX random key
+
+    Returns:
+        ray_vectors: Direction vectors for the photons
+        ray_origins: Origin points for the photons
+        photon_weights: Weights for each photon
+    """
+    # Generate random direction vectors
+    key, subkey = random.split(key)
+
+    # Generate random vectors with Gaussian distribution
+    # This creates uniform distribution on a sphere when normalized
+    random_vectors = random.normal(subkey, (Nphot, 3))
+
+    # Normalize to get uniform distribution on the unit sphere
+    ray_vectors = normalize(random_vectors)
+
+    # All ray origins are at the source position
+    ray_origins = jnp.ones((Nphot, 3)) * source_position[None, :]
+
+    # Uniform weights
+    photon_weights = jnp.ones(Nphot) * (source_intensity / Nphot)
+
+    return ray_vectors, ray_origins, photon_weights
+
+
 def generate_random_direction(key):
     """
     Generate a random direction uniformly distributed on a unit sphere.
