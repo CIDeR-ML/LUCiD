@@ -1,4 +1,4 @@
-from tools.generate import differentiable_get_rays, new_differentiable_get_rays
+from tools.generate import differentiable_get_rays, new_differentiable_get_rays, get_isotropic_rays
 
 from tools.propagate import create_photon_propagator
 from tools.geometry import generate_detector
@@ -9,9 +9,11 @@ import jax.numpy as jnp
 from tools.siren import *
 from tools.table import *
 
+from functools import partial
+
 base_dir_path = os.path.dirname(os.path.abspath(__file__))+'/'
 
-def setup_event_simulator(json_filename, n_photons=1_000_000, temperature=0.2, K=2, is_data=False, max_detectors_per_cell=4):
+def setup_event_simulator(json_filename, n_photons=1_000_000, temperature=0.2, K=2, is_data=False, is_calibration=False, max_detectors_per_cell=4):
     """
     Sets up and returns an event simulator with the specified configuration.
 
@@ -26,7 +28,9 @@ def setup_event_simulator(json_filename, n_photons=1_000_000, temperature=0.2, K
     K : int, optional
         Number of scattering iterations to simulate per event.
     is_data : bool, optional
-        If true, subtract minimum times such that t0 = 0.
+        If true, runs in data mode, loading photon data from a file, if false, uses the SIREN model.
+    is_calibration : bool, optional
+        If true, runs in calibration mode, simulating isotropic photon generation, if false, uses the SIREN model.
     max_detectors_per_cell : int, optional
         Maximum number of detectors per cell in the detector configuration. Default is 4.
 
@@ -36,7 +40,7 @@ def setup_event_simulator(json_filename, n_photons=1_000_000, temperature=0.2, K
         simulate_event: a JIT-compiled function that takes (params, key) and returns event data.
         The parameter tuple for the simulation function is expected to be:
            (cone_opening, track_origin, track_direction, initial_intensity,
-            scatter_length, reflection_rate, absorption_length, sim_temperature)
+            scatter_length, reflection_rate, absorption_length, tau_gs)
         and K is precompiled as part of the simulator.
     """
     # Initialize detector configuration.
@@ -63,6 +67,7 @@ def setup_event_simulator(json_filename, n_photons=1_000_000, temperature=0.2, K
         detector_points,
         K,
         is_data,
+        is_calibration,
         max_detectors_per_cell
     )
 
@@ -133,7 +138,7 @@ def create_siren_grid(table):
 
 def photon_iteration_update_factors(position, direction, time, surface_distance,
                                     normal, scatter_length, reflection_rate,
-                                    absorption_length, temperature, rng_key):
+                                    absorption_length, tau_gs, rng_key):
     """
     A vectorized version of the scattering update that returns scaling factors instead of applying intensity.
 
@@ -145,7 +150,7 @@ def photon_iteration_update_factors(position, direction, time, surface_distance,
       - scatter_length: scalar, mean free path for scattering.
       - reflection_rate: scalar, probability of reflection at the surface.
       - absorption_length: scalar, mean free path for absorption.
-      - temperature: scalar, temperature for gumbel-softmax sampling.
+      - tau_gs: scalar, temperature for Gumbel-softmax sampling.
       - rng_key: JAX PRNG key.
 
     Returns:
@@ -180,7 +185,7 @@ def photon_iteration_update_factors(position, direction, time, surface_distance,
     # Use gumbel-softmax to get soft weights for reflection and scatter.
     # We only consider continuing paths (not detector absorption)
     probs = jnp.array([reflect_prob, scatter_prob])
-    action_weights = gumbel_softmax(probs, temperature, k1)
+    action_weights = gumbel_softmax(probs, tau_gs, k1)
     reflection_weight = action_weights[0]
     scatter_weight = action_weights[1]
 
@@ -219,175 +224,199 @@ def jax_rotate_vector(vector, axis, angle):
     return cos_angle * vector + sin_angle * cross_product + dot_product * axis
 
 
-def create_event_simulator(propagate_photons, Nphot, NUM_DETECTORS, detector_points, K, is_data,
-                          max_detectors_per_cell):
+def create_event_simulator(propagate_photons, Nphot, NUM_DETECTORS, detector_points, K, is_data, is_calibration,
+                           max_detectors_per_cell):
     """
     Creates a simulator that can work in both differentiable and file-based modes.
     """
-    
-    # Only load SIREN model if not using data
-    if not is_data:
-        table = Table(base_dir_path+'../siren/cprof_mu_train_10000ev.h5')
-        grid_data = create_siren_grid(table)
-        siren_model, model_params = load_siren_jax(base_dir_path+'../siren/siren_cprof_mu.pkl')
-    else:
-        grid_data = None
-        model_params = None
-
     @jax.jit
-    def _simulation_core(params, key, photon_data=None):
+    def _simulation_with_data(particle_params, detector_params, key, photon_data):
         # Unpack simulation parameters
-        (energy, track_origin, track_direction, initial_intensity,
-         scatter_length, reflection_rate, absorption_length, sim_temperature) = params
+        energy, track_origin, track_direction, initial_intensity = particle_params
 
-        if is_data and photon_data is not None:
-            # The original direction in the ROOT file
-            original_track_dir = jnp.array([0.0, 0.0, 1.0])
-            
-            # Lets assume that in our strange worls 1 unit are 1 meters.
-            photon_origins = photon_data['photon_origins'] / 100.0 
-            photon_directions = photon_data['photon_directions']
-            
-            # Find rotation axis and angle to rotate from [0,0,1] to track_direction
-            # Use JAX-compatible normalize function
-            track_direction_norm = jax_normalize(track_direction)
-            
-            # Cross product to get rotation axis
-            rotation_axis = jnp.cross(original_track_dir, track_direction_norm)
-            axis_norm = jnp.linalg.norm(rotation_axis)
-            
-            # If track direction is parallel/anti-parallel to [0,0,1], use a default axis
-            rotation_axis = jnp.where(
-                axis_norm < 1e-6,
-                jnp.array([1.0, 0.0, 0.0]),  # Default axis if parallel
-                rotation_axis / (axis_norm + 1e-8)  # Normalized rotation axis with epsilon
-            )
-            
-            # Calculate rotation angle (cosine of angle between directions)
-            cos_angle = jnp.dot(original_track_dir, track_direction_norm)
-            cos_angle = jnp.clip(cos_angle, -1.0, 1.0)  # Ensure numerical stability
-            rotation_angle = jnp.arccos(cos_angle)
-            
-            # Use JAX-compatible rotate_vector function (via vmap to apply to all vectors)
-            # For photon directions
-            rotated_directions = jax.vmap(
-                lambda v: jax_rotate_vector(v, rotation_axis, rotation_angle)
-            )(photon_directions)
-            
-            # For photon origins
-            rotated_origins = jax.vmap(
-                lambda v: jax_rotate_vector(v, rotation_axis, rotation_angle)
-            )(photon_origins)
-            
-            # Add track origin to position the photons in space
-            final_origins = rotated_origins + track_origin[None, :]
-            
-            # Create mask for fixed-size computation
-            mask = jnp.arange(1_000_000) < jnp.int32(photon_data['N'])
-            photon_weights = mask.astype(jnp.float32)
-            
-            # Use the rotated vectors for simulation
-            photon_directions = rotated_directions
-            photon_origins = final_origins
+        # The original direction in the ROOT file
+        original_track_dir = jnp.array([0.0, 0.0, 1.0])
 
-        else:
-            # Use differentiable generation
-            photon_directions, photon_origins, photon_weights = new_differentiable_get_rays(
-                track_origin, track_direction, energy, Nphot, grid_data, model_params, key
-            )
-            tot_real_photons_norm = (energy*852.97855369-148646.90865158)
-            photon_weights = tot_real_photons_norm * photon_weights
+        # Lets assume that in our strange worls 1 unit are 1 meters.
+        photon_origins = photon_data['photon_origins'] / 100.0
+        photon_directions = photon_data['photon_directions']
+
+        # Find rotation axis and angle to rotate from [0,0,1] to track_direction
+        track_direction_norm = jax_normalize(track_direction)
+
+        # Cross product to get rotation axis
+        rotation_axis = jnp.cross(original_track_dir, track_direction_norm)
+        axis_norm = jnp.linalg.norm(rotation_axis)
+
+        # If track direction is parallel/anti-parallel to [0,0,1], use a default axis
+        rotation_axis = jnp.where(
+            axis_norm < 1e-6,
+            jnp.array([1.0, 0.0, 0.0]),  # Default axis if parallel
+            rotation_axis / (axis_norm + 1e-8)  # Normalized rotation axis with epsilon
+        )
+
+        # Calculate rotation angle
+        cos_angle = jnp.dot(original_track_dir, track_direction_norm)
+        cos_angle = jnp.clip(cos_angle, -1.0, 1.0)  # Ensure numerical stability
+        rotation_angle = jnp.arccos(cos_angle)
+
+        # Rotate vectors
+        rotated_directions = jax.vmap(
+            lambda v: jax_rotate_vector(v, rotation_axis, rotation_angle)
+        )(photon_directions)
+
+        rotated_origins = jax.vmap(
+            lambda v: jax_rotate_vector(v, rotation_axis, rotation_angle)
+        )(photon_origins)
+
+        # Add track origin
+        final_origins = rotated_origins + track_origin[None, :]
+
+        # Create mask
+        mask = jnp.arange(1_000_000) < jnp.int32(photon_data['N'])
+        photon_weights = mask.astype(jnp.float32)
+
+        # Set paths
+        photon_directions = rotated_directions
+        photon_origins = final_origins
 
         n_rays = photon_origins.shape[0]
-        # Set the initial intensity per photon
-        if is_data and photon_data is not None:
-            photon_intensities = jnp.full((n_rays,), initial_intensity * photon_weights)
-        else:
-            photon_intensities = jnp.full((n_rays,), initial_intensity * photon_weights / n_rays)
+        # Set intensities
+        photon_intensities = jnp.full((n_rays,), initial_intensity * photon_weights)
         photon_times = jnp.zeros((n_rays,))
 
-        # Initialize photon state
-        current_positions = photon_origins
-        current_directions = photon_directions
-        current_intensities = photon_intensities
-        current_times = photon_times
+        # Continue with common code (propagation etc.)
+        return _common_propagation(
+            photon_origins, photon_directions, photon_intensities, photon_times,
+            n_rays, detector_params, key, NUM_DETECTORS, K, max_detectors_per_cell, propagate_photons
+        )
 
-        # Initialize arrays with shape (K, max_detectors_per_cell, n_rays)
+    # Modified to accept grid_data and model_params as parameters
+    @jax.jit
+    def _simulation_without_data(particle_params, detector_params, key, grid_data, model_params):
+        # Unpack simulation parameters
+        energy, track_origin, track_direction = particle_params
+
+        # Use differentiable generation
+        photon_directions, photon_origins, photon_weights = new_differentiable_get_rays(
+            track_origin, track_direction, energy, Nphot, grid_data, model_params, key
+        )
+        tot_real_photons_norm = (energy * 852.97855369 - 148646.90865158)
+        photon_weights = tot_real_photons_norm * photon_weights
+
+        n_rays = photon_origins.shape[0]
+        # Set intensities for simulation mode
+        photon_intensities = jnp.full((n_rays,), photon_weights / n_rays)
+        photon_times = jnp.zeros((n_rays,))
+
+        # Continue with common code (propagation etc.)
+        return _common_propagation(
+            photon_origins, photon_directions, photon_intensities, photon_times,
+            n_rays, detector_params, key, NUM_DETECTORS, K, max_detectors_per_cell, propagate_photons
+        )
+
+    @jax.jit
+    def _simulation_detector_calibration(source_params, detector_params, key):
+        # Unpack simulation parameters
+        source_origin, source_intensity = source_params
+
+        # Use isotropic generation
+        photon_directions, photon_origins, photon_intensities = get_isotropic_rays(
+            source_origin, source_intensity, Nphot, key
+        )
+
+        photon_times = jnp.zeros((Nphot,))
+
+        return _common_propagation(
+            photon_origins, photon_directions, photon_intensities, photon_times,
+            Nphot, detector_params, key, NUM_DETECTORS, K, max_detectors_per_cell, propagate_photons
+        )
+
+    def _common_propagation(positions, directions, intensities, times, n_rays, detector_params, key,
+                            num_detectors, K, max_detectors_per_cell, propagate_fn):
+        """
+        Common photon propagation code, extracted to avoid duplication.
+        """
+        scatter_length, reflection_rate, absorption_length, tau_gs = detector_params
+
+        # Initialize arrays
         all_weights = jnp.zeros((K, max_detectors_per_cell, n_rays))
         all_indices = jnp.zeros((K, max_detectors_per_cell, n_rays), dtype=jnp.int32)
         all_times = jnp.zeros((K, max_detectors_per_cell, n_rays))
 
+        # Current state
+        current_positions = positions
+        current_directions = directions
+        current_intensities = intensities
+        current_times = times
+
         # Loop over K scattering iterations
         for i in range(K):
-            if i == K-1:
+            if i == K - 1:
                 scatter_length = 10e20
                 reflection_rate = 0
                 absorption_length = 10e20
 
             key, subkey = jax.random.split(key)
-            # Propagate photons from the current state
-            prop_results = propagate_photons(current_positions, current_directions)
+            # Propagate photons
+            prop_results = propagate_fn(current_positions, current_directions)
             depositions = prop_results['detector_weights']
             detector_indices = prop_results['detector_indices']
             times = prop_results['times']
             hit_positions = prop_results['positions']
             normals = prop_results['normals']
 
-            # Compute distance each photon traveled (used for scattering)
+            # Compute distances
             surface_distances = jnp.linalg.norm(hit_positions - current_positions, axis=1)
 
-            # Generate independent RNG keys per photon
+            # Generate RNG keys
             key, subkey = jax.random.split(key)
             rng_keys = jax.random.split(subkey, n_rays)
 
-            # Run the scattering update for each photon
+            # Scattering update
             new_positions, new_directions, new_times, detect_probs, reflection_attenuations, continuing_factors = jax.vmap(
                 photon_iteration_update_factors,
                 in_axes=(0, 0, 0, 0, 0, None, None, None, None, 0)
             )(current_positions, current_directions, current_times,
               surface_distances, normals, scatter_length, reflection_rate,
-              absorption_length, sim_temperature, rng_keys)
+              absorption_length, tau_gs, rng_keys)
 
-            # Calculate the detected intensity for each photon
+            # Calculate intensities
             detected_intensity_factors = detect_probs * reflection_attenuations
-
-            # Scale the propagation weights by current intensities and detection factors
             updated_weights = depositions * current_intensities[None, :] * detected_intensity_factors[None, :]
             total_times = times + current_times[:, None]
 
-            # Store data in the i-th slice of our 3D arrays
+            # Store data
             all_weights = all_weights.at[i].set(updated_weights)
             all_indices = all_indices.at[i].set(detector_indices)
             all_times = all_times.at[i].set(total_times.squeeze(-1))
 
-            # Scale intensities for continuing paths
+            # Update for next iteration
             new_intensities = current_intensities * continuing_factors
-
-            # Update photon state for the next iteration
             current_positions = jax.lax.stop_gradient(new_positions)
             current_directions = jax.lax.stop_gradient(new_directions)
             current_intensities = new_intensities
             current_times = jax.lax.stop_gradient(new_times)
 
-        # Compute average hit times for each detector using weighted averages
+        # Flatten arrays
         flat_weights = all_weights.reshape(-1)
         flat_indices = all_indices.reshape(-1)
         flat_times = all_times.reshape(-1)
 
-        # Calculate numerator and denominator for weighted average time
+        # Calculate weighted averages
         total_time_weighted = jax.ops.segment_sum(
             flat_weights * flat_times,
             flat_indices,
-            num_segments=NUM_DETECTORS
+            num_segments=num_detectors
         )
 
         total_charge_weighted = jax.ops.segment_sum(
             flat_weights,
             flat_indices,
-            num_segments=NUM_DETECTORS
+            num_segments=num_detectors
         )
 
-        # Compute average times with protection against division by zero
+        # Compute average times
         eps = 1e-10
         average_times = jnp.where(
             total_charge_weighted > eps,
@@ -403,7 +432,7 @@ def create_event_simulator(propagate_photons, Nphot, NUM_DETECTORS, detector_poi
             0.0
         )
 
-        # Subtract minimum time from non-zero times only
+        # Subtract minimum time
         aligned_times = jnp.where(
             nonzero_mask,
             average_times - min_nonzero_time,
@@ -418,13 +447,19 @@ def create_event_simulator(propagate_photons, Nphot, NUM_DETECTORS, detector_poi
 
         return corrected_q, aligned_times
 
+    # Return the appropriate function based on mode
     if is_data:
-        # For data mode, create a function that accepts photon data
-        return jax.jit(lambda p, k, d: _simulation_core(p, k, d))
+        return _simulation_with_data
+    elif is_calibration:
+        return _simulation_detector_calibration
     else:
-        # For simulation mode, create a function with standard parameters
-        return jax.jit(lambda p, k: _simulation_core(p, k, None))
+        # Load the table and model only when needed
+        table = Table('../siren/cprof_mu_train_10000ev.h5')
+        grid_data = create_siren_grid(table)
+        siren_model, model_params = load_siren_jax('../siren/siren_cprof_mu.pkl')
 
+        # Partially apply grid_data and model_params to freeze them in the function
+        return partial(_simulation_without_data, grid_data=grid_data, model_params=model_params)
 
 
 
