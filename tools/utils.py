@@ -51,20 +51,26 @@ def sparse_to_full(sparse_indices, sparse_values, full_size):
     return full_data.at[sparse_indices].set(sparse_values)
 
 
-def save_single_event(event_data, params, event_number=0, filename=None):
+def save_single_event(event_data, particle_params, detector_params, event_number=0, filename=None, calibration_mode=False):
     """Save single event simulation data to an HDF5 file in sparse format.
 
     Parameters
     ----------
     event_data : tuple
         (charges, average_times) arrays for the event
-    params : tuple
-        (track_energy, track_origin, track_direction)
+    particle_params : tuple
+        if calibration_mode is True:
+            (source_position, source_intensity)
+        if calibration_mode is False:
+            (track_energy, track_origin, track_direction)
+    detector_params : tuple
+        (scatter_length, reflection_rate, absorption_length, sim_temperature)
     event_number : int, optional
         Event identifier number, defaults to 0
     filename : str, optional
         Custom path to output HDF5 file. If None, auto-generates name
         in 'events' folder as 'event_X.h5' or 'event_X_TIMESTAMP.h5'
+
 
     Returns
     -------
@@ -99,10 +105,22 @@ def save_single_event(event_data, params, event_number=0, filename=None):
 
     with h5py.File(filename, 'w') as f:
         # Save simulation parameters
-        params_group = f.create_group('params')
-        params_group.create_dataset('track_energy', data=np.array(params[0]))
-        params_group.create_dataset('track_origin', data=np.array(params[1]))
-        params_group.create_dataset('track_direction', data=np.array(params[2]))
+        if calibration_mode:
+            params_group = f.create_group('calibration_params')
+            params_group.create_dataset('source_position', data=np.array(particle_params[0]))
+            params_group.create_dataset('source_intensity', data=np.array(particle_params[1]))
+
+        else:
+            params_group = f.create_group('particle_params')
+            params_group.create_dataset('track_energy', data=np.array(particle_params[0]))
+            params_group.create_dataset('track_origin', data=np.array(particle_params[1]))
+            params_group.create_dataset('track_direction', data=np.array(particle_params[2]))
+
+        params_group = f.create_group('detector_params')
+        params_group.create_dataset('scatter_length', data=np.array(detector_params[0]))
+        params_group.create_dataset('reflection_rate', data=np.array(detector_params[1]))
+        params_group.create_dataset('absorption_length', data=np.array(detector_params[2]))
+        params_group.create_dataset('sim_temperature', data=np.array(detector_params[3]))
 
         # # Save event data and number
         event_group = f.create_group('event')
@@ -114,7 +132,7 @@ def save_single_event(event_data, params, event_number=0, filename=None):
     return filename
 
 
-def load_single_event(filename, num_detectors, sparse=True):
+def load_single_event(filename, num_detectors, sparse=True, calibration_mode=False):
     """Load single event simulation data from an HDF5 file.
 
     Parameters
@@ -126,11 +144,18 @@ def load_single_event(filename, num_detectors, sparse=True):
     sparse : bool, default=True
         If True, returns data in sparse format
         If False, converts to dense arrays
+    calibration_mode : bool, default=False
+        If True, loads calibration parameters instead of particle parameters
 
     Returns
     -------
-    params : tuple
-        (track_energy, track_origin, track_direction)
+    particle_params : tuple
+        if calibration_mode is True:
+            (source_position, source_intensity)
+        if calibration_mode is False:
+            (track_energy, track_origin, track_direction)
+    detector_params : tuple
+        (scatter_length, reflection_rate, absorption_length, sim_temperature)
     event_number : int
         Event identifier number
     If sparse=True:
@@ -147,13 +172,30 @@ def load_single_event(filename, num_detectors, sparse=True):
             Full array of times for all detectors
     """
     with h5py.File(filename, 'r') as f:
-        # Load parameters
-        params_group = f['params']
-        track_energy = jnp.array(params_group['track_energy'][()])
-        track_origin = jnp.array(params_group['track_origin'][()])
-        track_direction = jnp.array(params_group['track_direction'][()])
+        if calibration_mode:
+            # Load calibration parameters
+            params_group = f['calibration_params']
+            source_position = jnp.array(params_group['source_position'][()])
+            source_intensity = jnp.array(params_group['source_intensity'][()])
 
-        params = (track_energy, track_origin, track_direction)
+            particle_params = (source_position, source_intensity)
+        else:
+            # Load particle parameters
+            params_group = f['particle_params']
+            track_energy = jnp.array(params_group['track_energy'][()])
+            track_origin = jnp.array(params_group['track_origin'][()])
+            track_direction = jnp.array(params_group['track_direction'][()])
+
+            particle_params = (track_energy, track_origin, track_direction)
+
+        # Load detector parameters
+        detector_group = f['detector_params']
+        scatter_length = jnp.array(detector_group['scatter_length'][()])
+        reflection_rate = jnp.array(detector_group['reflection_rate'][()])
+        absorption_length = jnp.array(detector_group['absorption_length'][()])
+        sim_temperature = jnp.array(detector_group['sim_temperature'][()])
+
+        detector_params = (scatter_length, reflection_rate, absorption_length, sim_temperature)
 
         # Load event data
         event_group = f['event']
@@ -163,13 +205,13 @@ def load_single_event(filename, num_detectors, sparse=True):
         times = jnp.array(event_group['times'][()])
 
     if sparse:
-        return params, indices, charges, times
+        return particle_params, detector_params, indices, charges, times
     else:
         # Convert sparse arrays to full dense arrays
         dense_charges = sparse_to_full(indices, charges, num_detectors)
         dense_times = sparse_to_full(indices, times, num_detectors)
 
-        return params, dense_charges, dense_times
+        return particle_params, detector_params, dense_charges, dense_times
 
 
 import jax
@@ -177,7 +219,7 @@ import jax.numpy as jnp
 
 def generate_random_params(key, energy_range=(180, 1000), h=2, r=1, offset = 0.1):
     """
-    Generate random parameters for event simulation with position inside a cylinder.
+    Generate random particle parameters for event simulation with position inside a cylinder.
 
     Parameters
     ----------
@@ -265,7 +307,7 @@ def generate_random_point_inside_cylinder(key, h=2, r=1, offset = 0.1):
     ])
 
 
-def print_params(params):
+def print_particle_params(params):
     """
     Pretty print the event simulation parameters.
 
@@ -305,6 +347,49 @@ def print_params(params):
     print(f"Energy: {initial_energy:.2f} MeV")
     print(f"Initial Position: ({initial_position[0]:.2f}, {initial_position[1]:.2f}, {initial_position[2]:.2f})")
     print(f"Initial Direction: ({initial_direction[0]:.2f}, {initial_direction[1]:.2f}, {initial_direction[2]:.2f})")
+    print("─" * 20)
+
+def print_detector_params(detector_params):
+    """
+    Pretty print the detector parameters.
+
+    Parameters
+    ----------
+    detector_params : dict
+        Dictionary containing detector parameters
+
+    Returns
+    -------
+    None
+        Prints formatted parameter information to stdout
+
+    Example
+    -------
+     detector_params = (
+        jnp.array(10.),         # scatter_length
+        jnp.array(0.1),         # reflection_rate
+        jnp.array(10.),         # absorption_length
+        jnp.array(0.1)         # sim_temperature
+    )
+        print_detector_params(detector_params)
+    Detector Parameters:
+    ───────────────────────
+    Scatter Length: 10.00 m
+    Reflection Rate: 0.10
+    Absorption Length: 10.00 m
+    Simulation Temperature for Gumbel-Softmax: 0.10
+    ───────────────────────
+    """
+    # Unpack the parameter tuple
+    scatter_length, reflection_rate, absorption_length, sim_temperature = detector_params
+
+    # Create formatted output with consistent decimal places
+    print("Detector Parameters:")
+    print("─" * 20)
+    print(f"Scatter Length: {scatter_length:.2f} m")
+    print(f"Reflection Rate: {reflection_rate:.2f}")
+    print(f"Absorption Length: {absorption_length:.2f} m")
+    print(f"Simulation Temperature for Gumbel-Softmax: {sim_temperature:.4f}")
     print("─" * 20)
 
 
