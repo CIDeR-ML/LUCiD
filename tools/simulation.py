@@ -336,28 +336,27 @@ def create_event_simulator(propagate_photons, Nphot, NUM_DETECTORS, detector_poi
                             num_detectors, K, max_detectors_per_cell, propagate_fn):
         """
         Common photon propagation code, extracted to avoid duplication.
+        Reimplemented using lax.scan for JIT compatibility.
         """
-        scatter_length, reflection_rate, absorption_length, tau_gs = detector_params
-
+        original_scatter_length, original_reflection_rate, original_absorption_length, tau_gs = detector_params
+    
         # Initialize arrays
         all_weights = jnp.zeros((K, max_detectors_per_cell, n_rays))
         all_indices = jnp.zeros((K, max_detectors_per_cell, n_rays), dtype=jnp.int32)
         all_times = jnp.zeros((K, max_detectors_per_cell, n_rays))
-
-        # Current state
-        current_positions = positions
-        current_directions = directions
-        current_intensities = intensities
-        current_times = times
-
-        # Loop over K scattering iterations
-        for i in range(K):
-            if i == K - 1:
-                scatter_length = 10e20
-                reflection_rate = 0
-                absorption_length = 10e20
-
-            key, subkey = jax.random.split(key)
+    
+        # Define the step function for lax.scan
+        def propagation_step(carry, i):
+            current_positions, current_directions, current_intensities, current_times, key = carry
+            
+            # Handle special case for last iteration using pure functional approach
+            scatter_length = jnp.where(i == K - 1, 1e20, original_scatter_length)
+            reflection_rate = jnp.where(i == K - 1, 0.0, original_reflection_rate)
+            absorption_length = jnp.where(i == K - 1, 1e20, original_absorption_length)
+            
+            # Split keys deterministically 
+            key, prop_key = jax.random.split(key)
+            
             # Propagate photons
             prop_results = propagate_fn(current_positions, current_directions)
             depositions = prop_results['detector_weights']
@@ -365,14 +364,14 @@ def create_event_simulator(propagate_photons, Nphot, NUM_DETECTORS, detector_poi
             times = prop_results['times']
             hit_positions = prop_results['positions']
             normals = prop_results['normals']
-
+    
             # Compute distances
             surface_distances = jnp.linalg.norm(hit_positions - current_positions, axis=1)
-
+    
             # Generate RNG keys
-            key, subkey = jax.random.split(key)
-            rng_keys = jax.random.split(subkey, n_rays)
-
+            key, update_key = jax.random.split(key)
+            rng_keys = jax.random.split(update_key, n_rays)
+    
             # Scattering update
             new_positions, new_directions, new_times, detect_probs, reflection_attenuations, continuing_factors = jax.vmap(
                 photon_iteration_update_factors,
@@ -380,42 +379,64 @@ def create_event_simulator(propagate_photons, Nphot, NUM_DETECTORS, detector_poi
             )(current_positions, current_directions, current_times,
               surface_distances, normals, scatter_length, reflection_rate,
               absorption_length, tau_gs, rng_keys)
-
+    
             # Calculate intensities
             detected_intensity_factors = detect_probs * reflection_attenuations
             updated_weights = depositions * current_intensities[None, :] * detected_intensity_factors[None, :]
             total_times = times + current_times[:, None]
-
-            # Store data
-            all_weights = all_weights.at[i].set(updated_weights)
-            all_indices = all_indices.at[i].set(detector_indices)
-            all_times = all_times.at[i].set(total_times.squeeze(-1))
-
+    
+            # Create weights, indices, and times for this iteration
+            iteration_weights = updated_weights
+            iteration_indices = detector_indices
+            iteration_times = total_times.squeeze(-1)
+    
             # Update for next iteration
             new_intensities = current_intensities * continuing_factors
-            current_positions = jax.lax.stop_gradient(new_positions)
-            current_directions = jax.lax.stop_gradient(new_directions)
-            current_intensities = new_intensities
-            current_times = jax.lax.stop_gradient(new_times)
-
-        # Flatten arrays
+            # Apply stop_gradient to all state variables
+            next_positions = jax.lax.stop_gradient(new_positions)
+            next_directions = jax.lax.stop_gradient(new_directions)
+            next_intensities = jax.lax.stop_gradient(new_intensities)
+            next_times = jax.lax.stop_gradient(new_times)
+            
+            # Return updated state and outputs for this iteration
+            new_carry = (next_positions, next_directions, next_intensities, next_times, key)
+            outputs = (iteration_weights, iteration_indices, iteration_times)
+            
+            return new_carry, outputs
+    
+        # Initial state
+        init_carry = (positions, directions, intensities, times, key)
+        
+        # Run the loop using lax.scan
+        _, (all_iter_weights, all_iter_indices, all_iter_times) = jax.lax.scan(
+            propagation_step,
+            init_carry,
+            jnp.arange(K)
+        )
+        
+        # Update the output arrays
+        all_weights = all_iter_weights
+        all_indices = all_iter_indices
+        all_times = all_iter_times
+    
+        # Flatten arrays (remaining code is unchanged)
         flat_weights = all_weights.reshape(-1)
         flat_indices = all_indices.reshape(-1)
         flat_times = all_times.reshape(-1)
-
+    
         # Calculate weighted averages
         total_time_weighted = jax.ops.segment_sum(
             flat_weights * flat_times,
             flat_indices,
             num_segments=num_detectors
         )
-
+    
         total_charge_weighted = jax.ops.segment_sum(
             flat_weights,
             flat_indices,
             num_segments=num_detectors
         )
-
+    
         # Compute average times
         eps = 1e-10
         average_times = jnp.where(
@@ -423,7 +444,7 @@ def create_event_simulator(propagate_photons, Nphot, NUM_DETECTORS, detector_poi
             total_time_weighted / (total_charge_weighted + eps),
             jnp.zeros_like(total_charge_weighted)
         )
-
+    
         # Find minimum non-zero time
         nonzero_mask = total_charge_weighted > 1e-5
         min_nonzero_time = jnp.where(
@@ -431,21 +452,22 @@ def create_event_simulator(propagate_photons, Nphot, NUM_DETECTORS, detector_poi
             jnp.min(jnp.where(nonzero_mask, average_times, jnp.inf)),
             0.0
         )
-
+    
         # Subtract minimum time
         aligned_times = jnp.where(
             nonzero_mask,
             average_times - min_nonzero_time,
             0
         )
-
+    
         corrected_q = jnp.where(
             nonzero_mask,
             total_charge_weighted,
             0
         )
-
+    
         return corrected_q, aligned_times
+
 
     # Return the appropriate function based on mode
     if is_data:
