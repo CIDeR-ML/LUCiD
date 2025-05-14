@@ -395,7 +395,6 @@ def create_event_simulator(propagate_photons, Nphot, NUM_DETECTORS, detector_poi
             # Apply stop_gradient to all state variables
             next_positions = jax.lax.stop_gradient(new_positions)
             next_directions = jax.lax.stop_gradient(new_directions)
-            next_intensities = jax.lax.stop_gradient(new_intensities)
             next_times = jax.lax.stop_gradient(new_times)
             
             # Return updated state and outputs for this iteration
