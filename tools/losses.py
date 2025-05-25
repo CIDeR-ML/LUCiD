@@ -123,8 +123,8 @@ def compute_loss_with_time(
     sim_active = simulated_charge > threshold
 
     # --- Time normalization (only for active detectors) ---
-    mean_true_time = jnp.sum(jnp.where(true_active, true_time, 0.0)) / (jnp.sum(true_active) + eps)
-    mean_sim_time = jnp.sum(jnp.where(sim_active, simulated_time, 0.0)) / (jnp.sum(sim_active) + eps)
+    mean_true_time = jax.lax.stop_gradient(jnp.sum(jnp.where(true_active, true_time, 0.0)) / (jnp.sum(true_active) + eps))
+    mean_sim_time = jax.lax.stop_gradient(jnp.sum(jnp.where(sim_active, simulated_time, 0.0)) / (jnp.sum(sim_active) + eps))
     true_time_normalized = jnp.where(true_active, true_time - mean_true_time, 0.0)
     sim_time_normalized = jnp.where(sim_active, simulated_time - mean_sim_time, 0.0)
 
@@ -210,10 +210,10 @@ def compute_softmin_loss(
     sim_active_mask = simulated_charge > threshold
 
     # Compute mean times only for active locations
-    true_mean_time = jnp.sum(true_time * true_active_mask) / (
-                jnp.sum(true_active_mask) + eps)
-    sim_mean_time = jnp.sum(simulated_time * sim_active_mask) / (
-                jnp.sum(sim_active_mask) + eps)
+    true_mean_time = jax.lax.stop_gradient(jnp.sum(true_time * true_active_mask) / (
+                jnp.sum(true_active_mask) + eps))
+    sim_mean_time = jax.lax.stop_gradient(jnp.sum(simulated_time * sim_active_mask) / (
+                jnp.sum(sim_active_mask) + eps))
 
     # Subtract means from times
     true_time_centered = jnp.where(true_active_mask, true_time - true_mean_time, 0.0)
@@ -340,8 +340,8 @@ def compute_simplified_loss(
     # 3. Simple Time Spread Loss
     # --------------------------------------
     # Calculate mean times only for active locations
-    true_mean_time = jnp.sum(true_time * true_charge) / (total_true_charge + eps)
-    sim_mean_time = jnp.sum(simulated_time * simulated_charge) / (total_sim_charge + eps)
+    true_mean_time = jax.lax.stop_gradient(jnp.sum(true_time * true_charge) / (total_true_charge + eps))
+    sim_mean_time = jax.lax.stop_gradient(jnp.sum(simulated_time * simulated_charge) / (total_sim_charge + eps))
 
     # Subtract means from times to account for arbitrary time offsets
     true_time_centered = true_time - true_mean_time
