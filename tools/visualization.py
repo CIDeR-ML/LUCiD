@@ -114,8 +114,8 @@ def create_detector_display(json_filename='config/cyl_geom_config.json', sparse=
             color_gradient = plt.cm.ScalarMappable(norm=norm, cmap=cmap)
             plot_values = all_values
 
-        corr = cyl_radius / cyl_height
-        caps_offset = -0.1
+        corr = 1.
+        caps_offset = cyl_height
 
         # Calculate positions for all cases
         x = np.zeros(n_detectors)
@@ -125,18 +125,18 @@ def create_detector_display(json_filename='config/cyl_geom_config.json', sparse=
         barrel_mask = detector_cases == 0
         theta = np.arctan2(detector_positions[barrel_mask, 1], detector_positions[barrel_mask, 0])
         theta = (theta + np.pi * 3 / 2) % (2 * np.pi) / 2
-        x[barrel_mask] = theta
-        y[barrel_mask] = detector_positions[barrel_mask, 2] / cyl_height
+        x[barrel_mask] = theta * cyl_radius*2
+        y[barrel_mask] = detector_positions[barrel_mask, 2]
 
         # Top cap case (1)
         top_mask = detector_cases == 1
-        x[top_mask] = corr * detector_positions[top_mask, 0] / cyl_height + np.pi / 2
-        y[top_mask] = 1 + corr * (caps_offset + detector_positions[top_mask, 1] / cyl_height)
+        x[top_mask] = corr * detector_positions[top_mask, 0] + np.pi * cyl_radius
+        y[top_mask] = 1 + corr * (caps_offset + detector_positions[top_mask, 1])
 
         # Bottom cap case (2)
         bottom_mask = detector_cases == 2
-        x[bottom_mask] = corr * detector_positions[bottom_mask, 0] / cyl_height + np.pi / 2
-        y[bottom_mask] = -1 + corr * (-caps_offset - detector_positions[bottom_mask, 1] / cyl_height)
+        x[bottom_mask] = corr * detector_positions[bottom_mask, 0] + np.pi * cyl_radius
+        y[bottom_mask] = -1 + corr * (-caps_offset - detector_positions[bottom_mask, 1] )
 
         # Calculate the minimum distance between points in the transformed space
         transformed_positions = np.column_stack((x, y))
@@ -231,7 +231,7 @@ def create_detector_comparison_display(json_filename='config/cyl_geom_config.jso
     detector_cases = np.array([detector.ID_to_case[i] for i in range(len(detector.all_points))])
     n_detectors = len(detector_positions)
 
-    def display_detector_data(true_data, sim_data, file_name=None, plot_time=False, align_time=False):
+    def display_detector_data(true_data, sim_data, file_name=None, plot_time=False, align_time=False, colorbar_range=None):
         """
         Process and display detector comparison data, handling both true and simulated data.
 
@@ -248,6 +248,9 @@ def create_detector_comparison_display(json_filename='config/cyl_geom_config.jso
             If True, plot time differences instead of charge differences
         align_time : bool
             If True, subtract mean from both times arrays respectively
+        colorbar_range : float, optional
+            If provided, sets the symmetric colorbar range to [-colorbar_range, +colorbar_range]
+            If None, calculates range from current data (default behavior)
         """
         if sparse:
             # Unpack sparse data
@@ -288,8 +291,12 @@ def create_detector_comparison_display(json_filename='config/cyl_geom_config.jso
         # Select which values to plot
         all_values = time_diff if plot_time else charge_diff
 
-        # Find maximum absolute value for symmetric color scale
-        max_abs_value = np.max(np.abs(all_values))
+        # Determine colorbar range
+        if colorbar_range is not None:
+            max_abs_value = colorbar_range
+        else:
+            # Find maximum absolute value for symmetric color scale (original behavior)
+            max_abs_value = np.max(np.abs(all_values))
 
         # Create colors array: viridis(0) for non-active, diverging colormap for active
         viridis = plt.cm.viridis
@@ -312,8 +319,8 @@ def create_detector_comparison_display(json_filename='config/cyl_geom_config.jso
             cmap=diverging_cmap
         )
 
-        corr = cyl_radius / cyl_height
-        caps_offset = -0.1
+        corr = 1.
+        caps_offset = cyl_height
 
         # Calculate positions for all cases
         x = np.zeros(n_detectors)
@@ -323,18 +330,18 @@ def create_detector_comparison_display(json_filename='config/cyl_geom_config.jso
         barrel_mask = detector_cases == 0
         theta = np.arctan2(detector_positions[barrel_mask, 1], detector_positions[barrel_mask, 0])
         theta = (theta + np.pi * 3 / 2) % (2 * np.pi) / 2
-        x[barrel_mask] = theta
-        y[barrel_mask] = detector_positions[barrel_mask, 2] / cyl_height
+        x[barrel_mask] = theta * cyl_radius*2
+        y[barrel_mask] = detector_positions[barrel_mask, 2]
 
         # Top cap case (1)
         top_mask = detector_cases == 1
-        x[top_mask] = corr * detector_positions[top_mask, 0] / cyl_height + np.pi / 2
-        y[top_mask] = 1 + corr * (caps_offset + detector_positions[top_mask, 1] / cyl_height)
+        x[top_mask] = corr * detector_positions[top_mask, 0] + np.pi * cyl_radius
+        y[top_mask] = 1 + corr * (caps_offset + detector_positions[top_mask, 1])
 
         # Bottom cap case (2)
         bottom_mask = detector_cases == 2
-        x[bottom_mask] = corr * detector_positions[bottom_mask, 0] / cyl_height + np.pi / 2
-        y[bottom_mask] = -1 + corr * (-caps_offset - detector_positions[bottom_mask, 1] / cyl_height)
+        x[bottom_mask] = corr * detector_positions[bottom_mask, 0] + np.pi * cyl_radius
+        y[bottom_mask] = -1 + corr * (-caps_offset - detector_positions[bottom_mask, 1] )
 
         # Calculate the minimum distance between points in the transformed space
         transformed_positions = np.column_stack((x, y))
