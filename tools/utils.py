@@ -5,6 +5,28 @@ import jax
 from glob import glob
 import os
 
+def spherical_to_cartesian(theta, phi):
+    """
+    Convert spherical coordinates to Cartesian coordinates.
+    
+    Parameters:
+    theta (float): Inclination angle in radians (0 = z-axis, pi/2 = xy-plane)
+    phi (float): Azimuthal angle in radians (0 = x-axis, pi/2 = y-axis)
+    
+    Returns:
+    jnp.array: Unit vector [x, y, z] in Cartesian coordinates
+    """
+    sin_theta = jnp.sin(theta)
+    cos_theta = jnp.cos(theta)
+    sin_phi = jnp.sin(phi)
+    cos_phi = jnp.cos(phi)
+    
+    x = sin_theta * cos_phi
+    y = sin_theta * sin_phi
+    z = cos_theta
+    
+    return jnp.array([x, y, z])
+
 def full_to_sparse(charges, times):
     """Convert full arrays to sparse representation by removing zero elements.
 
@@ -217,50 +239,35 @@ def load_single_event(filename, num_detectors, sparse=True, calibration_mode=Fal
 import jax
 import jax.numpy as jnp
 
-def generate_random_params(key, energy_range=(180, 1000), h=2, r=1, offset = 0.1):
+def generate_random_params(key, h=2, r=1):
     """
-    Generate random particle parameters for event simulation with position inside a cylinder.
-
-    Parameters
-    ----------
-    key : jax.random.PRNGKey
-        JAX random number generator key
-    energy_range : tuple, optional
-        Range for energy values in MeV, default=(50, 1000)
-    h : float, optional
-        Height of the cylinder, default=2
-        Position will be generated in range [-h/2, h/2] for z-coordinate
-    r : float, optional
-        Radius of the cylinder, default=1
-        Position will be generated within circle of radius r in xy-plane
-    offset : float, optional
-        Offset to avoid generating points on the cylinder surface, default=0.1
-
-    Returns
-    -------
-    tuple
-        Random parameters for event simulation
-        - random_energy: float
-            Random energy value in MeV
-        - initial_position: array(3,)
-            Starting position coordinates (x, y, z)
-        - initial_direction: array(3,)
-            Initial direction vector
+    Generate random parameters for particle simulation using angles for direction.
+    
+    Parameters:
+    key: JAX PRNG key
+    
+    Returns:
+    tuple: (energy, position, direction_angles, intensity)
+        - energy: scalar energy value in MeV
+        - position: 3D position vector [x, y, z]
+        - direction_angles: tuple of (theta, phi) in radians
     """
-    # Split the key for independent random operations
-    key1, key2, key3, key4, key5 = jax.random.split(key, 5)
-
-    # Generate random energy within the specified range
-    random_energy = jax.random.uniform(key1, minval=energy_range[0], maxval=energy_range[1])
-
-    # Generate random position inside the cylinder
-    random_position = generate_random_point_inside_cylinder(key2, h, r, offset)
-
-    # Generate initial direction: random unit vector from normal distribution
-    random_direction = jax.random.normal(key5, shape=(3,))
-    random_direction /= jnp.linalg.norm(random_direction)  # Normalize to unit vector
-
-    return random_energy, random_position, random_direction
+    k1, k2, k3, k4 = jax.random.split(key, 4)
+    
+    # Generate energy between 100 and 1000 MeV
+    energy = 300. + 600. * jax.random.uniform(k1)
+    
+    # Generate random position inside detector volume (approximated as cylinder)
+    position = generate_random_point_inside_cylinder(k2, h, r)
+    
+    # Generate random direction angles
+    # theta: inclination angle (0 to pi)
+    # phi: azimuthal angle (0 to 2*pi)
+    theta = jnp.pi * jax.random.uniform(k3)
+    phi = 2.0 * jnp.pi * jax.random.uniform(k4)
+    direction_angles = jnp.array([theta, phi])
+    
+    return energy, position, direction_angles
 
 @jax.jit
 def generate_random_point_inside_cylinder(key, h=2, r=1, offset = 0.1):
@@ -307,47 +314,24 @@ def generate_random_point_inside_cylinder(key, h=2, r=1, offset = 0.1):
     ])
 
 
-def print_particle_params(params):
+def print_particle_params(trk_params):
     """
-    Pretty print the event simulation parameters.
-
-    Parameters
-    ----------
-    params : tuple
-        Tuple containing (initial_energy, initial_position, initial_direction)
-        - initial_energy: float
-            Energy in MeV
-        - initial_position: array(3,)
-            Starting position coordinates (x, y, z)
-        - initial_direction: array(3,)
-            Initial direction vector
-
-    Returns
-    -------
-    None
-        Prints formatted parameter information to stdout
-
-    Example
-    -------
-     params = (30.0, jnp.array([1., 0., 0.]), jnp.array([0., 1., 0.]))
-     print_params(params)
-    Event Parameters:
-    ────────────────
-    Energy: 30.00 MeV
-    Initial Position: (1.00, 0.00, 0.00)
-    Initial Direction: (0.00, 1.00, 0.00)
-    ────────────────
+    Print particle parameters in a readable format.
+    
+    Parameters:
+    trk_params: tuple of (energy, position, direction_angles)
     """
-    # Unpack the parameter tuple
-    initial_energy, initial_position, initial_direction = params
-
-    # Create formatted output with consistent decimal places
-    print("Event Parameters:")
-    print("─" * 20)
-    print(f"Energy: {initial_energy:.2f} MeV")
-    print(f"Initial Position: ({initial_position[0]:.2f}, {initial_position[1]:.2f}, {initial_position[2]:.2f})")
-    print(f"Initial Direction: ({initial_direction[0]:.2f}, {initial_direction[1]:.2f}, {initial_direction[2]:.2f})")
-    print("─" * 20)
+    energy, position, direction_angles = trk_params
+    theta, phi = direction_angles
+    
+    # Convert angles to Cartesian for display
+    direction = spherical_to_cartesian(theta, phi)
+    
+    print("Particle Parameters:")
+    print(f"  Energy: {energy:.2f} MeV")
+    print(f"  Position: [{position[0]:.2f}, {position[1]:.2f}, {position[2]:.2f}] m")
+    print(f"  Direction angles: theta={theta:.2f} rad, phi={phi:.2f} rad")
+    print(f"  Direction vector: [{direction[0]:.2f}, {direction[1]:.2f}, {direction[2]:.2f}]")
 
 def print_detector_params(detector_params):
     """
