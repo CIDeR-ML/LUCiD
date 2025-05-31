@@ -5,6 +5,1171 @@ import jax.numpy as jnp
 from jax import jit
 from typing import Tuple
 
+import jax
+import jax.numpy as jnp
+from jax import jit, value_and_grad
+import optax
+
+import matplotlib.pyplot as plt
+from tqdm import tqdm
+
+from tools.utils import generate_random_params
+
+from tools.simulation import setup_event_simulator
+
+def create_multi_objective_optimizer(
+    simulate_event,
+    detector_points,
+    detector_params,
+    energy_lr,
+    spatial_lr,
+    lambda_time,
+    tau=0.01
+):
+    """Create optimizers for different parameter groups."""
+    
+    # Create separate loss functions within this scope
+    def energy_loss_fn(params, true_event_data, event_key):
+        """Energy-focused loss function."""
+
+        true_charge, true_time = true_event_data
+        
+        simulated_data = simulate_event(params, detector_params, event_key)
+        simulated_charge, _ = simulated_data
+        
+        total_true_charge = jnp.sum(true_charge)
+        total_sim_charge = jnp.sum(simulated_charge)
+        
+        eps = 1e-8
+        intensity_loss = jnp.abs(jnp.log(total_sim_charge / (total_true_charge + eps)))
+        return intensity_loss
+    
+    def spatial_loss_fn(params, true_event_data, event_key):
+        """Spatial/temporal-focused loss function."""
+
+        true_charge, true_time = true_event_data
+        
+        simulated_data = simulate_event(params, detector_params, event_key)
+        simulated_charge, simulated_time = simulated_data
+        
+        # Use the spatial loss computation from your original softmin loss
+        eps = 1e-8
+        threshold = 1e-8
+        
+        # Compute mean times for active locations
+        true_active_mask = true_charge > threshold
+        sim_active_mask = simulated_charge > threshold
+
+        true_mean_time = jnp.sum(true_time * true_active_mask) / (jnp.sum(true_active_mask) + eps)
+        sim_mean_time = jnp.sum(simulated_time * sim_active_mask) / (jnp.sum(sim_active_mask) + eps)
+
+        true_time_centered = jnp.where(true_active_mask, true_time - true_mean_time, 0.0)
+        sim_time_centered = jnp.where(sim_active_mask, simulated_time - sim_mean_time, 0.0)
+
+        # Distance matrix and soft assignments
+        N = detector_points.shape[0]
+        dist = jnp.linalg.norm(
+            detector_points[:, None, :] - detector_points[None, :, :], axis=-1
+        )
+
+        # Soft assignments Sim -> True
+        logits_s2t = -dist / tau
+        w_s2t = jax.nn.softmax(logits_s2t, axis=1)
+        
+        Q_sim_per_true = w_s2t.T @ simulated_charge
+        qt_sim_per_true = w_s2t.T @ (simulated_charge * sim_time_centered)
+        avg_sim_time_per_true = qt_sim_per_true / (Q_sim_per_true + eps)
+        
+        L_charge_s2t = jnp.sum(jnp.abs(Q_sim_per_true - true_charge))
+        L_time_s2t = jnp.sum(jnp.abs(avg_sim_time_per_true - true_time_centered) * Q_sim_per_true)
+        
+        # Soft assignments True -> Sim
+        logits_t2s = -dist.T / tau
+        w_t2s = jax.nn.softmax(logits_t2s, axis=1)
+        
+        Q_true_per_sim = w_t2s.T @ true_charge
+        qt_true_per_sim = w_t2s.T @ (true_charge * true_time_centered)
+        avg_true_time_per_sim = qt_true_per_sim / (Q_true_per_sim + eps)
+        
+        L_charge_t2s = jnp.sum(jnp.abs(Q_true_per_sim - simulated_charge))
+        L_time_t2s = jnp.sum(jnp.abs(avg_true_time_per_sim - sim_time_centered) * Q_true_per_sim)
+        
+        L_charge = L_charge_s2t + L_charge_t2s
+        L_time = (L_time_s2t + L_time_t2s) * lambda_time
+        
+        return L_charge + L_time
+    
+    # JIT compile gradient functions
+    energy_grad_fn = jit(value_and_grad(energy_loss_fn))
+    spatial_grad_fn = jit(value_and_grad(spatial_loss_fn))
+    
+    # Create optimizers
+    energy_optimizer = optax.adam(energy_lr)
+    spatial_optimizer = optax.adam(spatial_lr)
+    
+    return energy_grad_fn, spatial_grad_fn, energy_optimizer, spatial_optimizer
+
+def run_multi_objective_optimization(
+    params,
+    energy_grad_fn,
+    spatial_grad_fn,
+    energy_optimizer,
+    spatial_optimizer,
+    event_key,
+    true_event_data,
+    n_iterations,
+    position_scale,
+    patience = 100
+):
+    """Run optimization with separate objectives."""
+    
+    # Initialize optimizer states
+    energy_opt_state = energy_optimizer.init(params)
+    spatial_opt_state = spatial_optimizer.init(params)
+    
+    # Store losses separately
+    loss_history = {
+        'total': [],
+        'energy': [],
+        'spatial': []
+    }
+    param_history = {
+        'energy': [],
+        'position_x': [],
+        'position_y': [], 
+        'position_z': [],
+        'theta': [],
+        'phi': []
+    }
+    
+    # For learning rate reduction with shared patience
+    best_energy_loss = float('inf')
+    best_spatial_loss = float('inf')
+    energy_patience_counter = 0
+    spatial_patience_counter = 0
+    energy_lr_multiplier = 1.0
+    spatial_lr_multiplier = 1.0
+    
+    for i in range(n_iterations):
+        # Compute gradients for each objective
+        energy_loss, energy_grads = energy_grad_fn(params, true_event_data, event_key)
+        spatial_loss, spatial_grads = spatial_grad_fn(params, true_event_data, event_key)
+        
+        total_loss = energy_loss + spatial_loss
+        loss_history['total'].append(float(total_loss))
+        loss_history['energy'].append(float(energy_loss))
+        loss_history['spatial'].append(float(spatial_loss))
+        
+        # Store parameters
+        energy, position, direction_angles = params
+        param_history['energy'].append(float(energy))
+        param_history['position_x'].append(float(position[0]))
+        param_history['position_y'].append(float(position[1]))
+        param_history['position_z'].append(float(position[2]))
+        param_history['theta'].append(float(direction_angles[0]))
+        param_history['phi'].append(float(direction_angles[1]))
+        
+        # Check if energy loss improved
+        if energy_loss < best_energy_loss:
+            best_energy_loss = energy_loss
+            energy_patience_counter = 0
+        else:
+            energy_patience_counter += 1
+
+        # Check if spatial loss improved
+        if spatial_loss < best_spatial_loss:
+            best_spatial_loss = spatial_loss
+            spatial_patience_counter = 0
+        else:
+            spatial_patience_counter += 1
+        
+        # Update energy parameter
+        energy_updates, energy_opt_state = energy_optimizer.update(
+            energy_grads, energy_opt_state
+        )
+        
+        # Update spatial parameters  
+        spatial_updates, spatial_opt_state = spatial_optimizer.update(
+            spatial_grads, spatial_opt_state
+        )
+        
+        # Reduce learning rate if patience exceeded
+        if energy_patience_counter >= patience/4:
+            energy_lr_multiplier *= 0.5
+            energy_patience_counter = 0
+            #print(f"Reducing energy learning rate to {energy_lr_multiplier} of original")
+
+        if spatial_patience_counter >= patience:
+            spatial_lr_multiplier *= 0.5
+            spatial_patience_counter = 0
+            #print(f"Reducing spatial learning rate to {spatial_lr_multiplier} of original")
+        
+        # Combine updates - energy gets energy updates, spatial gets spatial updates
+        energy_update, _, _ = energy_updates
+        _, position_update, direction_update = spatial_updates
+        
+        # Scale updates based on learning rate multipliers
+        energy_update = jax.tree.map(lambda x: x * energy_lr_multiplier, energy_update)
+        position_update = jax.tree.map(lambda x: x * spatial_lr_multiplier, position_update)
+        direction_update = jax.tree.map(lambda x: x * spatial_lr_multiplier, direction_update)
+        
+        # # let's not update the spatial parameters until we have a good guess for the energy
+        w = 1.
+        # if i<20:
+        #     w = 0.
+
+        combined_updates = (energy_update, position_update*position_scale*w, direction_update*w)
+        params = optax.apply_updates(params, combined_updates)
+    
+    return params, loss_history, param_history
+
+def grid_scan_initial_guess(spatial_grad_fn, energy_grad_fn, true_event_data, event_key):
+    """
+    Perform 8x8 grid scan on theta and phi angles to find best initial guess.
+    """
+    energy_guess = 500.
+    position_guess = jnp.array([0.,0.,0.])
+    
+    # Create 8x8 grid for theta (0 to pi) and phi (0 to 2*pi)
+    theta_grid = jnp.linspace(0, jnp.pi, 8)
+    phi_grid = jnp.linspace(0, 2*jnp.pi, 8)
+    
+    best_loss = float('inf')
+    best_angles = jnp.array([0., 0.])
+    
+    for theta in theta_grid:
+        for phi in phi_grid:
+            angles_candidate = jnp.array([theta, phi])
+            params_candidate = (energy_guess, position_guess, angles_candidate)
+            
+            # Evaluate spatial loss using spatial_grad_fn
+            loss_val, _ = spatial_grad_fn(params_candidate, true_event_data, event_key)
+            
+            if loss_val < best_loss:
+                best_loss = loss_val
+                best_angles = angles_candidate
+
+    best_loss = float('inf')
+    best_energy = 500
+
+    energies = jnp.linspace(300, 900, 15)
+    for energy in energies:
+        params_candidate = (energy, position_guess, best_angles)
+        loss_val, _ = energy_grad_fn(params_candidate, true_event_data, event_key)
+        
+        if loss_val < best_loss:
+            best_loss = loss_val
+            best_energy = energy
+
+    return (best_energy, position_guess, best_angles)
+    
+def run_multi_event_optimization(
+    detector_points,
+    N_events=10,
+    default_json_filename='../config/cyl_geom_config.json',
+    Nphot=1_000_000,
+    K=2,
+    loss_function='multi_objective',  # New option
+    lambda_time=1e3,
+    energy_lr=1.0,     
+    spatial_lr=1.0,
+    position_scale=1.0,
+    n_iterations=200,
+    patience=100,
+    base_seed=None,
+    verbose=True
+):
+    """
+    Enhanced version with multi-objective optimization capability.
+    """
+    
+    print(f"Running parameter optimization on {N_events} events...")
+    print(f"Configuration: {loss_function} loss, {n_iterations} iterations each")
+    
+    simulate_event = setup_event_simulator(default_json_filename, Nphot, temperature=0.05, K=K, is_calibration=False)
+    
+    if base_seed is None:
+        base_seed = int(time.time())
+    
+    detector_params = (
+        jnp.array(4.),         # scatter_length
+        jnp.array(0.2),        # reflection_rate
+        jnp.array(6.),         # absorption_length
+        jnp.array(0.001)       # gumbel_softmax_temp
+    )
+    
+    all_results = {
+        'loss_histories': [],
+        'param_histories': [],
+        'true_params': [],
+        'initial_guesses': [],
+        'final_params': [],
+        'final_errors': [],
+        'seeds': []
+    }
+
+    energy_grad_fn, spatial_grad_fn, energy_optimizer, spatial_optimizer = create_multi_objective_optimizer(
+        simulate_event=simulate_event,
+        detector_points=detector_points,
+        detector_params=detector_params,
+        energy_lr=energy_lr,
+        spatial_lr=spatial_lr,
+        lambda_time=lambda_time,
+        tau=0.01
+    )
+    
+    # Process each event
+    for event_idx in tqdm(range(N_events), desc="Processing events"):
+        event_seed = base_seed + event_idx
+        all_results['seeds'].append(event_seed)
+        
+        key = jax.random.PRNGKey(event_seed)
+        key, subkey1, subkey2 = jax.random.split(key, 3)
+        
+        if verbose and event_idx % max(1, N_events // 10) == 0:
+            print(f"\nProcessing event {event_idx + 1}/{N_events} (seed: {event_seed})")
+        
+        # Generate true parameters and simulate event
+        true_energy, true_position, true_direction_angles = generate_random_params(subkey1)
+        true_params = (true_energy, true_position, true_direction_angles)
+        all_results['true_params'].append(true_params)
+        
+        true_event_data = jax.lax.stop_gradient(simulate_event(true_params, detector_params, subkey1))
+        
+        # Generate initial guess using grid scan
+        initial_params = grid_scan_initial_guess(spatial_grad_fn, energy_grad_fn, true_event_data, subkey1)
+        if verbose:
+            print('Initial params: ', initial_params)
+            print('True params: ', true_params)
+
+        all_results['initial_guesses'].append(initial_params)
+        
+        params, loss_history, param_history = run_multi_objective_optimization(
+            params=initial_params,
+            energy_grad_fn=energy_grad_fn,
+            spatial_grad_fn=spatial_grad_fn,
+            energy_optimizer=energy_optimizer,
+            spatial_optimizer=spatial_optimizer,
+            true_event_data=true_event_data,
+            event_key=subkey1,
+            n_iterations=n_iterations,
+            patience=patience,
+            position_scale=position_scale
+        )
+            
+        # Store results (same as before)
+        all_results['loss_histories'].append(loss_history)
+        all_results['param_histories'].append(param_history)
+        all_results['final_params'].append(params)
+        
+        # Calculate errors
+        true_energy, true_position, true_angles = true_params
+        final_energy, final_position, final_angles = params
+        
+        energy_error = abs(final_energy - true_energy) / true_energy
+        position_error = jnp.linalg.norm(final_position - true_position) / jnp.linalg.norm(true_position)
+        angle_error_theta = abs(final_angles[0] - true_angles[0]) / (true_angles[0] if true_angles[0] != 0 else 1.0)
+        angle_error_phi = jnp.mod(abs(final_angles[1] - true_angles[1]) / (true_angles[1] if true_angles[1] != 0 else 1.0), 2 * jnp.pi)
+        
+        event_errors = {
+            'energy': float(energy_error),
+            'position': float(position_error),
+            'theta': float(angle_error_theta),
+            'phi': float(angle_error_phi)
+        }
+        all_results['final_errors'].append(event_errors)
+    
+    if verbose:
+        print(f"\nCompleted optimization for all {N_events} events!")
+    
+    return all_results
+
+def filter_inf_results(results):
+    """
+    Filter out events that have 'inf' values in their loss histories.
+    Detect whether infinities appear in energy loss, spatial loss, or both.
+    
+    Args:
+        results: Dictionary containing optimization results with keys:
+                'loss_histories', 'param_histories', 'true_params', 
+                'initial_guesses', 'final_params', 'final_errors', 'seeds'
+    
+    Returns:
+        new_results: Dictionary with same structure but inf events removed
+    """
+    
+    # Find events without inf values in loss histories
+    valid_event_indices = []
+    
+    # Track infinity occurrences
+    energy_inf_count = 0
+    spatial_inf_count = 0
+    both_inf_count = 0
+    total_inf_count = 0
+    
+    for i, loss_history in enumerate(results['loss_histories']):
+        # Check for inf in each component
+        has_inf_energy = np.any(np.isinf(loss_history['energy']))
+        has_inf_spatial = np.any(np.isinf(loss_history['spatial']))
+        has_inf_total = np.any(np.isinf(loss_history['total']))
+        
+        # Count which type of infinity occurred
+        if has_inf_energy and has_inf_spatial:
+            both_inf_count += 1
+        elif has_inf_energy:
+            energy_inf_count += 1
+        elif has_inf_spatial:
+            spatial_inf_count += 1
+            
+        # Event is valid only if it has no infinities in any component
+        if not (has_inf_energy or has_inf_spatial or has_inf_total):
+            valid_event_indices.append(i)
+        else:
+            total_inf_count += 1
+    
+    # Create new results dictionary with only valid events
+    new_results = {
+        'loss_histories': [results['loss_histories'][i] for i in valid_event_indices],
+        'param_histories': [results['param_histories'][i] for i in valid_event_indices],
+        'true_params': [results['true_params'][i] for i in valid_event_indices],
+        'initial_guesses': [results['initial_guesses'][i] for i in valid_event_indices],
+        'final_params': [results['final_params'][i] for i in valid_event_indices],
+        'final_errors': [results['final_errors'][i] for i in valid_event_indices],
+        'seeds': [results['seeds'][i] for i in valid_event_indices]
+    }
+    
+    print(f"Filtered out {total_inf_count} events with inf values.")
+    print(f"Infinity breakdown: {energy_inf_count} energy-only, {spatial_inf_count} spatial-only, {both_inf_count} both components")
+    print(f"Remaining events: {len(valid_event_indices)}")
+    
+    return new_results
+
+def angular_distance(angle1, angle2):
+    """
+    Calculate the minimum angular distance between two angles in radians.
+    Accounts for 2π periodicity.
+    
+    Args:
+        angle1, angle2: Angles in radians
+        
+    Returns:
+        Minimum angular distance (always between 0 and π)
+    """
+    # Calculate the absolute difference
+    diff = abs(angle1 - angle2) % (2 * np.pi)
+    # Return the minimum of diff and 2π - diff
+    return min(diff, 2 * np.pi - diff)
+
+def angular_distance_jax(angle1, angle2):
+    """JAX version of angular_distance for use in optimization."""
+    diff = jnp.abs(angle1 - angle2) % (2 * jnp.pi)
+    return jnp.minimum(diff, 2 * jnp.pi - diff)
+
+# Updated error calculation in run_multi_event_optimization
+def calculate_phi_error(final_phi, true_phi, true_phi_value):
+    """
+    Calculate phi error accounting for 2π periodicity.
+    Returns relative error as a fraction.
+    """
+    angular_diff = angular_distance_jax(final_phi, true_phi)
+    # For relative error, use angular difference divided by π (maximum possible angular distance)
+    # or you could use a different normalization if preferred
+    relative_error = angular_diff / jnp.pi
+    return relative_error
+
+def calculate_parameter_error(param_value, true_param, param_name):
+    """
+    Calculate error for a parameter, handling angular parameters properly.
+    
+    Args:
+        param_value: Current parameter value
+        true_param: True parameter value
+        param_name: Name of the parameter
+        
+    Returns:
+        Absolute error (angular distance for phi, regular difference for others)
+    """
+    if param_name == 'phi':
+        return angular_distance(param_value, true_param)
+    else:
+        return abs(param_value - true_param)
+
+def get_true_param_value(true_params, param_name):
+    """Helper function to extract parameter values from true_params tuple."""
+    true_energy, true_position, true_angles = true_params
+    
+    if param_name == 'energy':
+        return float(true_energy)
+    elif param_name == 'position_x':
+        return float(true_position[0])
+    elif param_name == 'position_y':
+        return float(true_position[1])
+    elif param_name == 'position_z':
+        return float(true_position[2])
+    elif param_name == 'theta':
+        return float(true_angles[0])
+    elif param_name == 'phi':
+        return float(true_angles[1])
+    else:
+        raise ValueError(f"Unknown parameter name: {param_name}")
+
+def plot_multi_event_convergence(results, save_path=None, show_individual=True, show_statistics=True, figsize=(9, 6)):
+    """
+    Create comprehensive visualization of multi-event optimization convergence.
+    Shows parameter errors in a 3x3 grid layout.
+    """
+    
+    N_events = len(results['loss_histories'])
+    n_iterations = len(results['loss_histories'][0]['total'])
+    
+    # Create figure with subplots
+    fig = plt.figure(figsize=figsize)
+    
+    # Top row: Energy absolute error, Euclidean distance, Angle opening
+    
+    # Plot 1: Energy absolute error
+    ax1 = plt.subplot(3, 3, 1)
+    
+    if show_individual:
+        for i in range(N_events):
+            param_hist = results['param_histories'][i]['energy']
+            true_param = get_true_param_value(results['true_params'][i], 'energy')
+            
+            abs_error = [calculate_parameter_error(p, true_param, 'energy') for p in param_hist]
+            plt.plot(abs_error, alpha=0.3, color='blue', linewidth=0.5)
+    
+    if show_statistics:
+        all_abs_errors = []
+        for i in range(N_events):
+            param_hist = results['param_histories'][i]['energy']
+            true_param = get_true_param_value(results['true_params'][i], 'energy')
+            
+            abs_error = [calculate_parameter_error(p, true_param, 'energy') for p in param_hist]
+            all_abs_errors.append(abs_error)
+        
+        abs_error_array = np.array(all_abs_errors)
+        mean_abs_error = np.mean(abs_error_array, axis=0)
+        std_abs_error = np.std(abs_error_array, axis=0)
+        median_abs_error = np.median(abs_error_array, axis=0)
+        
+        iterations = range(n_iterations)
+        plt.plot(iterations, mean_abs_error, 'r-', linewidth=2, label=f'Mean (N={N_events})')
+        plt.fill_between(iterations, mean_abs_error - std_abs_error, 
+                       mean_abs_error + std_abs_error, alpha=0.2, color='red', label='±1σ')
+        plt.plot(iterations, median_abs_error, 'g--', linewidth=2, label='Median')
+    
+    plt.xlabel('Iteration')
+    plt.ylabel('Absolute Error')
+    plt.title('Energy Convergence')
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+    
+    # Plot 2: Euclidean distance
+    ax2 = plt.subplot(3, 3, 2)
+    
+    if show_individual:
+        for i in range(N_events):
+            param_hist = results['param_histories'][i]
+            true_pos = results['true_params'][i][1]
+            
+            pos_distances = []
+            for j in range(n_iterations):
+                reconstructed_pos = np.array([
+                    param_hist['position_x'][j],
+                    param_hist['position_y'][j],
+                    param_hist['position_z'][j]
+                ])
+                distance = np.linalg.norm(reconstructed_pos - np.array(true_pos))
+                pos_distances.append(distance)
+            
+            plt.plot(pos_distances, alpha=0.3, color='blue', linewidth=0.5)
+    
+    if show_statistics:
+        all_pos_distances = []
+        for i in range(N_events):
+            param_hist = results['param_histories'][i]
+            true_pos = results['true_params'][i][1]
+            
+            pos_distances = []
+            for j in range(n_iterations):
+                reconstructed_pos = np.array([
+                    param_hist['position_x'][j],
+                    param_hist['position_y'][j],
+                    param_hist['position_z'][j]
+                ])
+                distance = np.linalg.norm(reconstructed_pos - np.array(true_pos))
+                pos_distances.append(distance)
+            
+            all_pos_distances.append(pos_distances)
+        
+        pos_distance_array = np.array(all_pos_distances)
+        mean_pos_distance = np.mean(pos_distance_array, axis=0)
+        std_pos_distance = np.std(pos_distance_array, axis=0)
+        median_pos_distance = np.median(pos_distance_array, axis=0)
+        
+        iterations = range(n_iterations)
+        plt.plot(iterations, mean_pos_distance, 'r-', linewidth=2, label='Mean')
+        plt.fill_between(iterations, mean_pos_distance - std_pos_distance, 
+                       mean_pos_distance + std_pos_distance, alpha=0.2, color='red')
+        plt.plot(iterations, median_pos_distance, 'g--', linewidth=2, label='Median')
+    
+    plt.xlabel('Iteration')
+    plt.ylabel('Euclidean Distance')
+    plt.title('Position Distance Convergence')
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+    
+    # Plot 3: Angle opening from true track direction
+    ax3 = plt.subplot(3, 3, 3)
+    
+    if show_individual:
+        for i in range(N_events):
+            param_hist = results['param_histories'][i]
+            true_theta = get_true_param_value(results['true_params'][i], 'theta')
+            true_phi = get_true_param_value(results['true_params'][i], 'phi')
+            
+            # Calculate true direction vector
+            true_dir = np.array([
+                np.sin(true_theta) * np.cos(true_phi),
+                np.sin(true_theta) * np.sin(true_phi),
+                np.cos(true_theta)
+            ])
+            
+            angle_openings = []
+            for j in range(n_iterations):
+                # Calculate reconstructed direction vector
+                recon_theta = param_hist['theta'][j]
+                recon_phi = param_hist['phi'][j]
+                recon_dir = np.array([
+                    np.sin(recon_theta) * np.cos(recon_phi),
+                    np.sin(recon_theta) * np.sin(recon_phi),
+                    np.cos(recon_theta)
+                ])
+                
+                # Calculate angle between vectors
+                cos_angle = np.clip(np.dot(true_dir, recon_dir), -1.0, 1.0)
+                angle_opening = np.arccos(cos_angle)
+                angle_openings.append(angle_opening)
+            
+            plt.plot(angle_openings, alpha=0.3, color='blue', linewidth=0.5)
+    
+    if show_statistics:
+        all_angle_openings = []
+        for i in range(N_events):
+            param_hist = results['param_histories'][i]
+            true_theta = get_true_param_value(results['true_params'][i], 'theta')
+            true_phi = get_true_param_value(results['true_params'][i], 'phi')
+            
+            # Calculate true direction vector
+            true_dir = np.array([
+                np.sin(true_theta) * np.cos(true_phi),
+                np.sin(true_theta) * np.sin(true_phi),
+                np.cos(true_theta)
+            ])
+            
+            angle_openings = []
+            for j in range(n_iterations):
+                # Calculate reconstructed direction vector
+                recon_theta = param_hist['theta'][j]
+                recon_phi = param_hist['phi'][j]
+                recon_dir = np.array([
+                    np.sin(recon_theta) * np.cos(recon_phi),
+                    np.sin(recon_theta) * np.sin(recon_phi),
+                    np.cos(recon_theta)
+                ])
+                
+                # Calculate angle between vectors
+                cos_angle = np.clip(np.dot(true_dir, recon_dir), -1.0, 1.0)
+                angle_opening = np.arccos(cos_angle)
+                angle_openings.append(angle_opening)
+            
+            all_angle_openings.append(angle_openings)
+        
+        angle_opening_array = np.array(all_angle_openings)
+        mean_angle_opening = np.mean(angle_opening_array, axis=0)
+        std_angle_opening = np.std(angle_opening_array, axis=0)
+        median_angle_opening = np.median(angle_opening_array, axis=0)
+        
+        iterations = range(n_iterations)
+        plt.plot(iterations, mean_angle_opening, 'r-', linewidth=2, label='Mean')
+        plt.fill_between(iterations, mean_angle_opening - std_angle_opening, 
+                       mean_angle_opening + std_angle_opening, alpha=0.2, color='red')
+        plt.plot(iterations, median_angle_opening, 'g--', linewidth=2, label='Median')
+    
+    plt.xlabel('Iteration')
+    plt.ylabel('Angle Opening (rad)')
+    plt.title('Track Direction Convergence')
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+    
+    # Mid row: X, Y, Z absolute errors
+    
+    # Plot 4: X absolute error
+    ax4 = plt.subplot(3, 3, 4)
+    
+    if show_individual:
+        for i in range(N_events):
+            param_hist = results['param_histories'][i]['position_x']
+            true_param = get_true_param_value(results['true_params'][i], 'position_x')
+            
+            abs_error = [calculate_parameter_error(p, true_param, 'position_x') for p in param_hist]
+            plt.plot(abs_error, alpha=0.3, color='blue', linewidth=0.5)
+    
+    if show_statistics:
+        all_abs_errors = []
+        for i in range(N_events):
+            param_hist = results['param_histories'][i]['position_x']
+            true_param = get_true_param_value(results['true_params'][i], 'position_x')
+            
+            abs_error = [calculate_parameter_error(p, true_param, 'position_x') for p in param_hist]
+            all_abs_errors.append(abs_error)
+        
+        abs_error_array = np.array(all_abs_errors)
+        mean_abs_error = np.mean(abs_error_array, axis=0)
+        std_abs_error = np.std(abs_error_array, axis=0)
+        median_abs_error = np.median(abs_error_array, axis=0)
+        
+        iterations = range(n_iterations)
+        plt.plot(iterations, mean_abs_error, 'r-', linewidth=2, label='Mean')
+        plt.fill_between(iterations, mean_abs_error - std_abs_error, 
+                       mean_abs_error + std_abs_error, alpha=0.2, color='red')
+        plt.plot(iterations, median_abs_error, 'g--', linewidth=2, label='Median')
+    
+    plt.xlabel('Iteration')
+    plt.ylabel('Absolute Error')
+    plt.title('Position X Convergence')
+    plt.grid(True, alpha=0.3)
+    
+    # Plot 5: Y absolute error
+    ax5 = plt.subplot(3, 3, 5)
+    
+    if show_individual:
+        for i in range(N_events):
+            param_hist = results['param_histories'][i]['position_y']
+            true_param = get_true_param_value(results['true_params'][i], 'position_y')
+            
+            abs_error = [calculate_parameter_error(p, true_param, 'position_y') for p in param_hist]
+            plt.plot(abs_error, alpha=0.3, color='blue', linewidth=0.5)
+    
+    if show_statistics:
+        all_abs_errors = []
+        for i in range(N_events):
+            param_hist = results['param_histories'][i]['position_y']
+            true_param = get_true_param_value(results['true_params'][i], 'position_y')
+            
+            abs_error = [calculate_parameter_error(p, true_param, 'position_y') for p in param_hist]
+            all_abs_errors.append(abs_error)
+        
+        abs_error_array = np.array(all_abs_errors)
+        mean_abs_error = np.mean(abs_error_array, axis=0)
+        std_abs_error = np.std(abs_error_array, axis=0)
+        median_abs_error = np.median(abs_error_array, axis=0)
+        
+        iterations = range(n_iterations)
+        plt.plot(iterations, mean_abs_error, 'r-', linewidth=2, label='Mean')
+        plt.fill_between(iterations, mean_abs_error - std_abs_error, 
+                       mean_abs_error + std_abs_error, alpha=0.2, color='red')
+        plt.plot(iterations, median_abs_error, 'g--', linewidth=2, label='Median')
+    
+    plt.xlabel('Iteration')
+    plt.ylabel('Absolute Error')
+    plt.title('Position Y Convergence')
+    plt.grid(True, alpha=0.3)
+    
+    # Plot 6: Z absolute error
+    ax6 = plt.subplot(3, 3, 6)
+    
+    if show_individual:
+        for i in range(N_events):
+            param_hist = results['param_histories'][i]['position_z']
+            true_param = get_true_param_value(results['true_params'][i], 'position_z')
+            
+            abs_error = [calculate_parameter_error(p, true_param, 'position_z') for p in param_hist]
+            plt.plot(abs_error, alpha=0.3, color='blue', linewidth=0.5)
+    
+    if show_statistics:
+        all_abs_errors = []
+        for i in range(N_events):
+            param_hist = results['param_histories'][i]['position_z']
+            true_param = get_true_param_value(results['true_params'][i], 'position_z')
+            
+            abs_error = [calculate_parameter_error(p, true_param, 'position_z') for p in param_hist]
+            all_abs_errors.append(abs_error)
+        
+        abs_error_array = np.array(all_abs_errors)
+        mean_abs_error = np.mean(abs_error_array, axis=0)
+        std_abs_error = np.std(abs_error_array, axis=0)
+        median_abs_error = np.median(abs_error_array, axis=0)
+        
+        iterations = range(n_iterations)
+        plt.plot(iterations, mean_abs_error, 'r-', linewidth=2, label='Mean')
+        plt.fill_between(iterations, mean_abs_error - std_abs_error, 
+                       mean_abs_error + std_abs_error, alpha=0.2, color='red')
+        plt.plot(iterations, median_abs_error, 'g--', linewidth=2, label='Median')
+    
+    plt.xlabel('Iteration')
+    plt.ylabel('Absolute Error')
+    plt.title('Position Z Convergence')
+    plt.grid(True, alpha=0.3)
+    
+    # Bottom row: Theta and Phi errors
+    
+    # Plot 7: Theta error
+    ax7 = plt.subplot(3, 3, 7)
+    
+    if show_individual:
+        for i in range(N_events):
+            param_hist = results['param_histories'][i]['theta']
+            true_param = get_true_param_value(results['true_params'][i], 'theta')
+            
+            abs_error = [calculate_parameter_error(p, true_param, 'theta') for p in param_hist]
+            plt.plot(abs_error, alpha=0.3, color='blue', linewidth=0.5)
+    
+    if show_statistics:
+        all_abs_errors = []
+        for i in range(N_events):
+            param_hist = results['param_histories'][i]['theta']
+            true_param = get_true_param_value(results['true_params'][i], 'theta')
+            
+            abs_error = [calculate_parameter_error(p, true_param, 'theta') for p in param_hist]
+            all_abs_errors.append(abs_error)
+        
+        abs_error_array = np.array(all_abs_errors)
+        mean_abs_error = np.mean(abs_error_array, axis=0)
+        std_abs_error = np.std(abs_error_array, axis=0)
+        median_abs_error = np.median(abs_error_array, axis=0)
+        
+        iterations = range(n_iterations)
+        plt.plot(iterations, mean_abs_error, 'r-', linewidth=2, label='Mean')
+        plt.fill_between(iterations, mean_abs_error - std_abs_error, 
+                       mean_abs_error + std_abs_error, alpha=0.2, color='red')
+        plt.plot(iterations, median_abs_error, 'g--', linewidth=2, label='Median')
+    
+    plt.xlabel('Iteration')
+    plt.ylabel('Absolute Error')
+    plt.title('θ Convergence')
+    plt.grid(True, alpha=0.3)
+    
+    # Plot 8: Phi error
+    ax8 = plt.subplot(3, 3, 8)
+    
+    if show_individual:
+        for i in range(N_events):
+            param_hist = results['param_histories'][i]['phi']
+            true_param = get_true_param_value(results['true_params'][i], 'phi')
+            
+            abs_error = [calculate_parameter_error(p, true_param, 'phi') for p in param_hist]
+            plt.plot(abs_error, alpha=0.3, color='blue', linewidth=0.5)
+    
+    if show_statistics:
+        all_abs_errors = []
+        for i in range(N_events):
+            param_hist = results['param_histories'][i]['phi']
+            true_param = get_true_param_value(results['true_params'][i], 'phi')
+            
+            abs_error = [calculate_parameter_error(p, true_param, 'phi') for p in param_hist]
+            all_abs_errors.append(abs_error)
+        
+        abs_error_array = np.array(all_abs_errors)
+        mean_abs_error = np.mean(abs_error_array, axis=0)
+        std_abs_error = np.std(abs_error_array, axis=0)
+        median_abs_error = np.median(abs_error_array, axis=0)
+        
+        iterations = range(n_iterations)
+        plt.plot(iterations, mean_abs_error, 'r-', linewidth=2, label='Mean')
+        plt.fill_between(iterations, mean_abs_error - std_abs_error, 
+                       mean_abs_error + std_abs_error, alpha=0.2, color='red')
+        plt.plot(iterations, median_abs_error, 'g--', linewidth=2, label='Median')
+    
+    plt.xlabel('Iteration')
+    plt.ylabel('Angular Distance (rad)')
+    plt.title('φ Convergence (Angular Distance)')
+    plt.grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        print(f"Plot saved to: {save_path}")
+    
+    plt.show()
+
+
+import numpy as np
+import matplotlib.pyplot as plt
+
+
+def plot_single_event_convergence(event_idx, results, save_path=None, figsize=(12, 9)):
+    """
+    Create comprehensive visualization of single-event optimization convergence.
+    Shows parameter convergence for one specific event in a 3x3 grid.
+    
+    Args:
+        event_idx (int): Index of the event to plot (0-based)
+        results (dict): Results dictionary from multi-event optimization
+        save_path (str, optional): Path to save the plot
+        figsize (tuple): Figure size (width, height)
+    """
+    
+    # Validate event index
+    N_events = len(results['loss_histories'])
+    if event_idx >= N_events or event_idx < 0:
+        raise ValueError(f"Event index {event_idx} out of range. Available events: 0 to {N_events-1}")
+    
+    # Extract data for the specific event
+    param_hist = results['param_histories'][event_idx]
+    true_params = results['true_params'][event_idx]
+    
+    n_iterations = len(param_hist['energy'])
+    iterations = range(n_iterations)
+    
+    # Create figure with subplots
+    fig = plt.figure(figsize=figsize)
+    fig.suptitle(f'Event {event_idx} Parameter Convergence', y=0.98)
+    
+    # Top row: Energy, Euclidean distance, Angle opening
+    
+    # Plot 1: Energy convergence
+    ax1 = plt.subplot(3, 3, 1)
+    true_energy = get_true_param_value(true_params, 'energy')
+    energy_errors = [abs(e - true_energy) for e in param_hist['energy']]
+    
+    plt.plot(iterations, energy_errors, 'b-', linewidth=2)
+    plt.xlabel('Iteration')
+    plt.ylabel('Absolute Error')
+    plt.title('Energy Convergence')
+    plt.grid(True, alpha=0.3)
+    
+    # Plot 2: Position Distance (Euclidean)
+    ax2 = plt.subplot(3, 3, 2)
+    true_pos = np.array(true_params[1])
+    pos_distances = []
+    for j in range(n_iterations):
+        reconstructed_pos = np.array([
+            param_hist['position_x'][j],
+            param_hist['position_y'][j],
+            param_hist['position_z'][j]
+        ])
+        distance = np.linalg.norm(reconstructed_pos - true_pos)
+        pos_distances.append(distance)
+    
+    plt.plot(iterations, pos_distances, 'g-', linewidth=2)
+    plt.xlabel('Iteration')
+    plt.ylabel('Euclidean Distance')
+    plt.title('Position Distance from Truth')
+    plt.grid(True, alpha=0.3)
+    
+    # Plot 3: Angle opening from true track direction
+    ax3 = plt.subplot(3, 3, 3)
+    true_theta = get_true_param_value(true_params, 'theta')
+    true_phi = get_true_param_value(true_params, 'phi')
+    
+    # Calculate true direction vector
+    true_dir = np.array([
+        np.sin(true_theta) * np.cos(true_phi),
+        np.sin(true_theta) * np.sin(true_phi),
+        np.cos(true_theta)
+    ])
+    
+    angle_openings = []
+    for j in range(n_iterations):
+        # Calculate reconstructed direction vector
+        recon_theta = param_hist['theta'][j]
+        recon_phi = param_hist['phi'][j]
+        recon_dir = np.array([
+            np.sin(recon_theta) * np.cos(recon_phi),
+            np.sin(recon_theta) * np.sin(recon_phi),
+            np.cos(recon_theta)
+        ])
+        
+        # Calculate angle between vectors
+        cos_angle = np.clip(np.dot(true_dir, recon_dir), -1.0, 1.0)
+        angle_opening = np.arccos(cos_angle)
+        angle_openings.append(angle_opening)
+    
+    plt.plot(iterations, angle_openings, 'm-', linewidth=2)
+    plt.xlabel('Iteration')
+    plt.ylabel('Angle Opening (rad)')
+    plt.title('Track Direction Convergence')
+    plt.grid(True, alpha=0.3)
+    
+    # Mid row: X, Y, Z absolute errors
+    
+    # Plot 4: X position convergence
+    ax4 = plt.subplot(3, 3, 4)
+    true_x = get_true_param_value(true_params, 'position_x')
+    x_errors = [abs(x - true_x) for x in param_hist['position_x']]
+    
+    plt.plot(iterations, x_errors, 'r-', linewidth=2)
+    plt.xlabel('Iteration')
+    plt.ylabel('Absolute Error')
+    plt.title('Position X Convergence')
+    plt.grid(True, alpha=0.3)
+    
+    # Plot 5: Y position convergence
+    ax5 = plt.subplot(3, 3, 5)
+    true_y = get_true_param_value(true_params, 'position_y')
+    y_errors = [abs(y - true_y) for y in param_hist['position_y']]
+    
+    plt.plot(iterations, y_errors, 'orange', linewidth=2)
+    plt.xlabel('Iteration')
+    plt.ylabel('Absolute Error')
+    plt.title('Position Y Convergence')
+    plt.grid(True, alpha=0.3)
+    
+    # Plot 6: Z position convergence
+    ax6 = plt.subplot(3, 3, 6)
+    true_z = get_true_param_value(true_params, 'position_z')
+    z_errors = [abs(z - true_z) for z in param_hist['position_z']]
+    
+    plt.plot(iterations, z_errors, 'purple', linewidth=2)
+    plt.xlabel('Iteration')
+    plt.ylabel('Absolute Error')
+    plt.title('Position Z Convergence')
+    plt.grid(True, alpha=0.3)
+    
+    # Bottom row: Theta, Phi, Summary
+    
+    # Plot 7: Theta convergence
+    ax7 = plt.subplot(3, 3, 7)
+    theta_errors = [calculate_parameter_error(theta, true_theta, 'theta') for theta in param_hist['theta']]
+    
+    plt.plot(iterations, theta_errors, 'c-', linewidth=2)
+    plt.xlabel('Iteration')
+    plt.ylabel('Absolute Error')
+    plt.title('θ Convergence')
+    plt.grid(True, alpha=0.3)
+    
+    # Plot 8: Phi convergence
+    ax8 = plt.subplot(3, 3, 8)
+    phi_errors = [calculate_parameter_error(phi, true_phi, 'phi') for phi in param_hist['phi']]
+    
+    plt.plot(iterations, phi_errors, 'brown', linewidth=2)
+    plt.xlabel('Iteration')
+    plt.ylabel('Angular Distance (rad)')
+    plt.title('φ Convergence (Angular Distance)')
+    plt.grid(True, alpha=0.3)
+    
+    # Plot 9: Summary Statistics
+    ax9 = plt.subplot(3, 3, 9)
+    ax9.axis('off')  # Turn off axes
+    
+    # Calculate final errors for top row quantities only
+    final_energy_error = energy_errors[-1]
+    final_pos_error = pos_distances[-1]
+    final_angle_opening = angle_openings[-1]
+    
+    # Create summary text for top row only
+    summary_text = f"""Final Results Summary:
+
+Top Row Convergence:
+Energy Error: {final_energy_error:.4f}
+Position Distance: {final_pos_error:.4f}
+Angle Opening: {final_angle_opening:.4f} rad
+
+True Parameters:
+Energy: {true_energy:.4f}
+Position: ({true_params[1][0]:.2f}, {true_params[1][1]:.2f}, {true_params[1][2]:.2f})
+θ: {true_theta:.4f} rad
+φ: {true_phi:.4f} rad"""
+    
+    ax9.text(0.05, 0.95, summary_text, transform=ax9.transAxes, fontsize=10,
+              verticalalignment='top', fontfamily='monospace',
+              bbox=dict(boxstyle='round', facecolor='lightgray', alpha=0.8))
+    
+    plt.tight_layout()
+    
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        print(f"Single event plot saved to: {save_path}")
+    
+    plt.show()
+    
+    # Print summary to console as well
+    print(f"\n=== Event {event_idx} Summary ===")
+    print(f"Final Parameter Errors (Top Row):")
+    print(f"  Energy: {final_energy_error:.4f}")
+    print(f"  Position Distance: {final_pos_error:.4f}")
+    print(f"  Angle Opening: {final_angle_opening:.4f} rad")
+
+def plot_single_event_comparison(event_indices, results, save_path=None, figsize=(14, 8)):
+    """
+    Compare convergence of multiple single events side by side.
+    
+    Args:
+        event_indices (list): List of event indices to compare
+        results (dict): Results dictionary from multi-event optimization
+        save_path (str, optional): Path to save the plot
+        figsize (tuple): Figure size (width, height)
+    """
+    
+    n_events = len(event_indices)
+    fig, axes = plt.subplots(2, n_events, figsize=figsize)
+    if n_events == 1:
+        axes = axes.reshape(2, 1)
+    
+    fig.suptitle(f'Event Comparison: {event_indices}')
+    
+    colors = ['blue', 'red', 'green', 'orange', 'purple', 'brown', 'pink', 'gray']
+    
+    for i, event_idx in enumerate(event_indices):
+        # Validate event index
+        N_events = len(results['loss_histories'])
+        if event_idx >= N_events or event_idx < 0:
+            print(f"Warning: Event index {event_idx} out of range. Skipping.")
+            continue
+            
+        loss_hist = results['loss_histories'][event_idx]
+        param_hist = results['param_histories'][event_idx]
+        true_params = results['true_params'][event_idx]
+        
+        n_iterations = len(loss_hist['total'])
+        iterations = range(n_iterations)
+        
+        # Top row: Loss convergence
+        ax_top = axes[0, i]
+        ax_top.plot(iterations, loss_hist['total'], color=colors[i % len(colors)], 
+                   linewidth=2, label='Total')
+        ax_top.plot(iterations, loss_hist['energy'], color=colors[i % len(colors)], 
+                   linewidth=1, linestyle='--', alpha=0.7, label='Energy')
+        ax_top.plot(iterations, loss_hist['spatial'], color=colors[i % len(colors)], 
+                   linewidth=1, linestyle=':', alpha=0.7, label='Spatial')
+        ax_top.set_yscale('log')
+        ax_top.set_xlabel('Iteration')
+        ax_top.set_ylabel('Loss')
+        ax_top.set_title(f'Event {event_idx} - Loss')
+        ax_top.legend()
+        ax_top.grid(True, alpha=0.3)
+        
+        # Bottom row: Position distance
+        ax_bottom = axes[1, i]
+        true_pos = np.array(true_params[1])
+        pos_distances = []
+        for j in range(n_iterations):
+            reconstructed_pos = np.array([
+                param_hist['position_x'][j],
+                param_hist['position_y'][j],
+                param_hist['position_z'][j]
+            ])
+            distance = np.linalg.norm(reconstructed_pos - true_pos)
+            pos_distances.append(distance)
+        
+        ax_bottom.plot(iterations, pos_distances, color=colors[i % len(colors)], linewidth=2)
+        ax_bottom.set_xlabel('Iteration')
+        ax_bottom.set_ylabel('Position Distance')
+        ax_bottom.set_title(f'Event {event_idx} - Position Error')
+        ax_bottom.grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        print(f"Event comparison plot saved to: {save_path}")
+    
+    plt.show()
+
+
+
 @jit
 def get_initial_guess(
         charges: jnp.ndarray,
@@ -63,3 +1228,442 @@ def get_initial_guess(
         position,
         direction
     )
+
+
+def plot_simple_event_convergence(event_idx, results, save_path=None, figsize=(15, 4)):
+    """
+    Create simple visualization of single-event optimization convergence.
+    Shows only the three key convergence metrics in a horizontal layout.
+    
+    Args:
+        event_idx (int): Index of the event to plot (0-based)
+        results (dict): Results dictionary from multi-event optimization
+        save_path (str, optional): Path to save the plot
+        figsize (tuple): Figure size (width, height)
+    """
+    
+    # Validate event index
+    N_events = len(results['loss_histories'])
+    if event_idx >= N_events or event_idx < 0:
+        raise ValueError(f"Event index {event_idx} out of range. Available events: 0 to {N_events-1}")
+    
+    # Extract data for the specific event
+    param_hist = results['param_histories'][event_idx]
+    true_params = results['true_params'][event_idx]
+    
+    n_iterations = len(param_hist['energy'])
+    iterations = range(n_iterations)
+    
+    # Create figure with 1x3 subplots
+    fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=figsize)
+    #fig.suptitle(f'Event {event_idx} - Key Convergence Metrics', fontsize=14, y=1.02)
+    
+    # Plot 1: Energy convergence
+    true_energy = get_true_param_value(true_params, 'energy')
+    energy_errors = [abs(e - true_energy) for e in param_hist['energy']]
+    
+    ax1.plot(iterations, energy_errors, 'b-', linewidth=2)
+    ax1.set_xlabel('Iteration')
+    ax1.set_ylabel('Absolute Error')
+    ax1.set_title('Energy Convergence')
+    ax1.grid(True, alpha=0.3)
+    
+    # Plot 2: Position Distance (Euclidean)
+    true_pos = np.array(true_params[1])
+    pos_distances = []
+    for j in range(n_iterations):
+        reconstructed_pos = np.array([
+            param_hist['position_x'][j],
+            param_hist['position_y'][j],
+            param_hist['position_z'][j]
+        ])
+        distance = np.linalg.norm(reconstructed_pos - true_pos)
+        pos_distances.append(distance)
+    
+    ax2.plot(iterations, pos_distances, 'g-', linewidth=2)
+    ax2.set_xlabel('Iteration')
+    ax2.set_ylabel('Euclidean Distance')
+    ax2.set_title('Position Distance from Truth')
+    ax2.grid(True, alpha=0.3)
+    
+    # Plot 3: Angle opening from true track direction
+    true_theta = get_true_param_value(true_params, 'theta')
+    true_phi = get_true_param_value(true_params, 'phi')
+    
+    # Calculate true direction vector
+    true_dir = np.array([
+        np.sin(true_theta) * np.cos(true_phi),
+        np.sin(true_theta) * np.sin(true_phi),
+        np.cos(true_theta)
+    ])
+    
+    angle_openings = []
+    for j in range(n_iterations):
+        # Calculate reconstructed direction vector
+        recon_theta = param_hist['theta'][j]
+        recon_phi = param_hist['phi'][j]
+        recon_dir = np.array([
+            np.sin(recon_theta) * np.cos(recon_phi),
+            np.sin(recon_theta) * np.sin(recon_phi),
+            np.cos(recon_theta)
+        ])
+        
+        # Calculate angle between vectors
+        cos_angle = np.clip(np.dot(true_dir, recon_dir), -1.0, 1.0)
+        angle_opening = np.arccos(cos_angle)
+        angle_openings.append(angle_opening)
+    
+    ax3.plot(iterations, angle_openings, 'm-', linewidth=2)
+    ax3.set_xlabel('Iteration')
+    ax3.set_ylabel('Angle Opening (rad)')
+    ax3.set_title('Track Direction Convergence')
+    ax3.grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        print(f"Simple convergence plot saved to: {save_path}")
+    
+    plt.show()
+    
+    # Calculate and print final errors
+    final_energy_error = energy_errors[-1]
+    final_pos_error = pos_distances[-1]
+    final_angle_opening = angle_openings[-1]
+    
+    print(f"\n=== Event {event_idx} Final Results ===")
+    print(f"Energy Error: {final_energy_error:.4f}")
+    print(f"Position Distance: {final_pos_error:.4f}")
+    print(f"Angle Opening: {final_angle_opening:.4f} rad ({np.degrees(final_angle_opening):.2f}°)")
+    
+    return final_energy_error, final_pos_error, final_angle_opening
+
+
+def plot_simple_multi_event_convergence(results, save_path=None, show_individual=True, 
+                                       show_statistics=True, show_histograms=False, figsize=None):
+    """
+    Create simple visualization of multi-event optimization convergence.
+    Shows only the three key convergence metrics with optional histograms.
+    
+    Args:
+        results (dict): Results dictionary from multi-event optimization
+        save_path (str, optional): Path to save the plot
+        show_individual (bool): Show individual event traces
+        show_statistics (bool): Show mean/median/std statistics
+        show_histograms (bool): Show histograms of final iteration values
+        figsize (tuple, optional): Figure size (width, height). Auto-calculated if None.
+    """
+    
+    N_events = len(results['loss_histories'])
+    n_iterations = len(results['loss_histories'][0]['total'])
+    
+    # Determine layout and figure size
+    if show_histograms:
+        nrows, ncols = 2, 3
+        if figsize is None:
+            figsize = (15, 8)
+    else:
+        nrows, ncols = 1, 3
+        if figsize is None:
+            figsize = (15, 4)
+    
+    # Create figure with subplots
+    fig, axes = plt.subplots(nrows, ncols, figsize=figsize)
+    
+    fig.suptitle(f'Multi-Event Convergence Summary (N={N_events} events)', fontsize=14, y=0.98)
+    
+    # Convergence plots (top row)
+    if show_histograms:
+        convergence_axes = axes[0]  # First row of 2D array
+    else:
+        convergence_axes = axes     # 1D array of 3 axes
+    
+    # Plot 1: Energy absolute error
+    ax1 = convergence_axes[0]
+    all_energy_errors = []
+    
+    if show_individual:
+        for i in range(N_events):
+            param_hist = results['param_histories'][i]['energy']
+            true_param = get_true_param_value(results['true_params'][i], 'energy')
+            
+            abs_error = [calculate_parameter_error(p, true_param, 'energy') for p in param_hist]
+            all_energy_errors.append(abs_error)
+            ax1.plot(abs_error, alpha=0.3, color='blue', linewidth=0.5)
+    else:
+        for i in range(N_events):
+            param_hist = results['param_histories'][i]['energy']
+            true_param = get_true_param_value(results['true_params'][i], 'energy')
+            abs_error = [calculate_parameter_error(p, true_param, 'energy') for p in param_hist]
+            all_energy_errors.append(abs_error)
+    
+    if show_statistics:
+        abs_error_array = np.array(all_energy_errors)
+        mean_abs_error = np.mean(abs_error_array, axis=0)
+        std_abs_error = np.std(abs_error_array, axis=0)
+        median_abs_error = np.median(abs_error_array, axis=0)
+        
+        iterations = range(n_iterations)
+        ax1.plot(iterations, mean_abs_error, 'r-', linewidth=2, label=f'Mean (N={N_events})')
+        ax1.fill_between(iterations, mean_abs_error - std_abs_error, 
+                        mean_abs_error + std_abs_error, alpha=0.2, color='red', label='±1σ')
+        ax1.plot(iterations, median_abs_error, 'g--', linewidth=2, label='Median')
+        ax1.legend()
+    
+    ax1.set_xlabel('Iteration')
+    ax1.set_ylabel('Absolute Error')
+    ax1.set_title('Energy Convergence')
+    ax1.grid(True, alpha=0.3)
+    
+    # Plot 2: Euclidean distance
+    ax2 = convergence_axes[1]
+    all_pos_distances = []
+    
+    if show_individual:
+        for i in range(N_events):
+            param_hist = results['param_histories'][i]
+            true_pos = results['true_params'][i][1]
+            
+            pos_distances = []
+            for j in range(n_iterations):
+                reconstructed_pos = np.array([
+                    param_hist['position_x'][j],
+                    param_hist['position_y'][j],
+                    param_hist['position_z'][j]
+                ])
+                distance = np.linalg.norm(reconstructed_pos - np.array(true_pos))
+                pos_distances.append(distance)
+            
+            all_pos_distances.append(pos_distances)
+            ax2.plot(pos_distances, alpha=0.3, color='blue', linewidth=0.5)
+    else:
+        for i in range(N_events):
+            param_hist = results['param_histories'][i]
+            true_pos = results['true_params'][i][1]
+            
+            pos_distances = []
+            for j in range(n_iterations):
+                reconstructed_pos = np.array([
+                    param_hist['position_x'][j],
+                    param_hist['position_y'][j],
+                    param_hist['position_z'][j]
+                ])
+                distance = np.linalg.norm(reconstructed_pos - np.array(true_pos))
+                pos_distances.append(distance)
+            all_pos_distances.append(pos_distances)
+    
+    if show_statistics:
+        pos_distance_array = np.array(all_pos_distances)
+        mean_pos_distance = np.mean(pos_distance_array, axis=0)
+        std_pos_distance = np.std(pos_distance_array, axis=0)
+        median_pos_distance = np.median(pos_distance_array, axis=0)
+        
+        iterations = range(n_iterations)
+        ax2.plot(iterations, mean_pos_distance, 'r-', linewidth=2, label='Mean')
+        ax2.fill_between(iterations, mean_pos_distance - std_pos_distance, 
+                        mean_pos_distance + std_pos_distance, alpha=0.2, color='red')
+        ax2.plot(iterations, median_pos_distance, 'g--', linewidth=2, label='Median')
+        ax2.legend()
+    
+    ax2.set_xlabel('Iteration')
+    ax2.set_ylabel('Euclidean Distance')
+    ax2.set_title('Position Distance Convergence')
+    ax2.grid(True, alpha=0.3)
+    
+    # Plot 3: Angle opening from true track direction
+    ax3 = convergence_axes[2]
+    all_angle_openings = []
+    
+    if show_individual:
+        for i in range(N_events):
+            param_hist = results['param_histories'][i]
+            true_theta = get_true_param_value(results['true_params'][i], 'theta')
+            true_phi = get_true_param_value(results['true_params'][i], 'phi')
+            
+            # Calculate true direction vector
+            true_dir = np.array([
+                np.sin(true_theta) * np.cos(true_phi),
+                np.sin(true_theta) * np.sin(true_phi),
+                np.cos(true_theta)
+            ])
+            
+            angle_openings = []
+            for j in range(n_iterations):
+                # Calculate reconstructed direction vector
+                recon_theta = param_hist['theta'][j]
+                recon_phi = param_hist['phi'][j]
+                recon_dir = np.array([
+                    np.sin(recon_theta) * np.cos(recon_phi),
+                    np.sin(recon_theta) * np.sin(recon_phi),
+                    np.cos(recon_theta)
+                ])
+                
+                # Calculate angle between vectors
+                cos_angle = np.clip(np.dot(true_dir, recon_dir), -1.0, 1.0)
+                angle_opening = np.arccos(cos_angle)
+                angle_openings.append(angle_opening)
+            
+            all_angle_openings.append(angle_openings)
+            ax3.plot(angle_openings, alpha=0.3, color='blue', linewidth=0.5)
+    else:
+        for i in range(N_events):
+            param_hist = results['param_histories'][i]
+            true_theta = get_true_param_value(results['true_params'][i], 'theta')
+            true_phi = get_true_param_value(results['true_params'][i], 'phi')
+            
+            # Calculate true direction vector
+            true_dir = np.array([
+                np.sin(true_theta) * np.cos(true_phi),
+                np.sin(true_theta) * np.sin(true_phi),
+                np.cos(true_theta)
+            ])
+            
+            angle_openings = []
+            for j in range(n_iterations):
+                # Calculate reconstructed direction vector
+                recon_theta = param_hist['theta'][j]
+                recon_phi = param_hist['phi'][j]
+                recon_dir = np.array([
+                    np.sin(recon_theta) * np.cos(recon_phi),
+                    np.sin(recon_theta) * np.sin(recon_phi),
+                    np.cos(recon_theta)
+                ])
+                
+                # Calculate angle between vectors
+                cos_angle = np.clip(np.dot(true_dir, recon_dir), -1.0, 1.0)
+                angle_opening = np.arccos(cos_angle)
+                angle_openings.append(angle_opening)
+            
+            all_angle_openings.append(angle_openings)
+    
+    if show_statistics:
+        angle_opening_array = np.array(all_angle_openings)
+        mean_angle_opening = np.mean(angle_opening_array, axis=0)
+        std_angle_opening = np.std(angle_opening_array, axis=0)
+        median_angle_opening = np.median(angle_opening_array, axis=0)
+        
+        iterations = range(n_iterations)
+        ax3.plot(iterations, mean_angle_opening, 'r-', linewidth=2, label='Mean')
+        ax3.fill_between(iterations, mean_angle_opening - std_angle_opening, 
+                        mean_angle_opening + std_angle_opening, alpha=0.2, color='red')
+        ax3.plot(iterations, median_angle_opening, 'g--', linewidth=2, label='Median')
+        ax3.legend()
+    
+    ax3.set_xlabel('Iteration')
+    ax3.set_ylabel('Angle Opening (rad)')
+    ax3.set_title('Track Direction Convergence')
+    ax3.grid(True, alpha=0.3)
+    
+    # Histograms (bottom row) - only if requested
+    if show_histograms:
+        # Extract final iteration values
+        final_energy_errors = [errors[-1] for errors in all_energy_errors]
+        final_pos_distances = [distances[-1] for distances in all_pos_distances]
+        final_angle_openings = [openings[-1] for openings in all_angle_openings]
+        
+        # Histogram 1: Final energy errors
+        hist_ax1 = axes[1][0]
+        hist_ax1.hist(final_energy_errors, bins=min(15, N_events//2), alpha=0.7, color='blue', edgecolor='black')
+        hist_ax1.axvline(np.mean(final_energy_errors), color='red', linestyle='--', linewidth=2, label=f'Mean: {np.mean(final_energy_errors):.3f}')
+        hist_ax1.axvline(np.median(final_energy_errors), color='green', linestyle='--', linewidth=2, label=f'Median: {np.median(final_energy_errors):.3f}')
+        hist_ax1.set_xlabel('Final Energy Error')
+        hist_ax1.set_ylabel('Count')
+        hist_ax1.set_title('Final Energy Error Distribution')
+        hist_ax1.legend()
+        hist_ax1.grid(True, alpha=0.3)
+        
+        # Histogram 2: Final position distances
+        hist_ax2 = axes[1][1]
+        hist_ax2.hist(final_pos_distances, bins=min(15, N_events//2), alpha=0.7, color='green', edgecolor='black')
+        hist_ax2.axvline(np.mean(final_pos_distances), color='red', linestyle='--', linewidth=2, label=f'Mean: {np.mean(final_pos_distances):.3f}')
+        hist_ax2.axvline(np.median(final_pos_distances), color='darkgreen', linestyle='--', linewidth=2, label=f'Median: {np.median(final_pos_distances):.3f}')
+        hist_ax2.set_xlabel('Final Position Distance')
+        hist_ax2.set_ylabel('Count')
+        hist_ax2.set_title('Final Position Distance Distribution')
+        hist_ax2.legend()
+        hist_ax2.grid(True, alpha=0.3)
+        
+        # Histogram 3: Final angle openings
+        hist_ax3 = axes[1][2]
+        hist_ax3.hist(final_angle_openings, bins=min(15, N_events//2), alpha=0.7, color='magenta', edgecolor='black')
+        hist_ax3.axvline(np.mean(final_angle_openings), color='red', linestyle='--', linewidth=2, label=f'Mean: {np.mean(final_angle_openings):.3f}')
+        hist_ax3.axvline(np.median(final_angle_openings), color='purple', linestyle='--', linewidth=2, label=f'Median: {np.median(final_angle_openings):.3f}')
+        hist_ax3.set_xlabel('Final Angle Opening (rad)')
+        hist_ax3.set_ylabel('Count')
+        hist_ax3.set_title('Final Angle Opening Distribution')
+        hist_ax3.legend()
+        hist_ax3.grid(True, alpha=0.3)
+        
+        # Print final statistics
+        print(f"\n=== Final Iteration Statistics (N={N_events} events) ===")
+        print(f"Energy Error - Mean: {np.mean(final_energy_errors):.4f}, Std: {np.std(final_energy_errors):.4f}")
+        print(f"Position Distance - Mean: {np.mean(final_pos_distances):.4f}, Std: {np.std(final_pos_distances):.4f}")
+        print(f"Angle Opening - Mean: {np.mean(final_angle_openings):.4f} rad ({np.degrees(np.mean(final_angle_openings)):.2f}°), Std: {np.std(final_angle_openings):.4f} rad")
+    
+    plt.tight_layout()
+    
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        print(f"Plot saved to: {save_path}")
+    
+    plt.show()
+    
+    # Return final values for further analysis
+    if show_histograms:
+        return {
+            'final_energy_errors': final_energy_errors,
+            'final_pos_distances': final_pos_distances, 
+            'final_angle_openings': final_angle_openings
+        }
+    else:
+        return None
+
+
+
+
+def get_error_at_iteration(results, ID, iteration):
+
+    def get_opening_angle(true_theta, true_phi, recon_theta, recon_phi):
+        true_dir = np.array([
+            np.sin(true_theta) * np.cos(true_phi),
+            np.sin(true_theta) * np.sin(true_phi),
+            np.cos(true_theta)
+        ])
+        recon_dir = np.array([
+            np.sin(recon_theta) * np.cos(recon_phi),
+            np.sin(recon_theta) * np.sin(recon_phi),
+            np.cos(recon_theta)
+        ])
+
+        cos_angle = np.clip(np.dot(true_dir, recon_dir), -1.0, 1.0)
+        angle_opening = np.arccos(cos_angle)
+
+        return angle_opening
+
+    best_spatial_it = np.argmin(results['loss_histories'][ID]['spatial'])
+
+    final_E_err = results['final_errors'][ID]['energy']
+    final_dist_err = results['final_errors'][ID]['position']
+    final_phi_err = results['final_errors'][ID]['theta']
+    final_theta_err = results['final_errors'][ID]['phi']
+
+    E_reco_final = results['param_histories'][ID]['energy'][iteration]
+    E_true = results['true_params'][ID][0]
+    E_err_final = abs(E_reco_final-E_true)
+
+    P_reco =  np.array([results['param_histories'][ID]['position_x'][iteration], results['param_histories'][ID]['position_y'][iteration], results['param_histories'][ID]['position_z'][iteration]])
+    P_true = results['true_params'][ID][1]
+    P_err_final = np.linalg.norm(P_reco - np.array(P_true))
+
+    theta_true = results['true_params'][ID][2][0]
+    phi_true = results['true_params'][ID][2][1]
+
+    theta_reco = results['param_histories'][ID]['theta'][iteration]
+    phi_reco = results['param_histories'][ID]['phi'][iteration]
+
+    A_err_final = get_opening_angle(theta_true, phi_true, theta_reco, phi_reco)
+
+    return E_err_final, P_err_final, A_err_final
+
+
