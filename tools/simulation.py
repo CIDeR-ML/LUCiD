@@ -11,6 +11,8 @@ from tools.table import *
 
 from functools import partial
 
+from tools.utils import spherical_to_cartesian
+
 base_dir_path = os.path.dirname(os.path.abspath(__file__))+'/'
 
 def setup_event_simulator(json_filename, n_photons=1_000_000, temperature=0.2, K=2, is_data=False, is_calibration=False, max_detectors_per_cell=4):
@@ -295,7 +297,11 @@ def create_event_simulator(propagate_photons, Nphot, NUM_DETECTORS, detector_poi
     @jax.jit
     def _simulation_without_data(particle_params, detector_params, key, grid_data, model_params):
         # Unpack simulation parameters
-        energy, track_origin, track_direction = particle_params
+        energy, track_origin, direction_angles = particle_params
+        
+        # Convert theta and phi angles to direction vector
+        theta, phi = direction_angles
+        track_direction = spherical_to_cartesian(theta, phi)
 
         # Use differentiable generation
         photon_directions, photon_origins, photon_weights = new_differentiable_get_rays(
