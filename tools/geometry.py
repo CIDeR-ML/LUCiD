@@ -182,6 +182,202 @@ class Cylinder:
 
         fig.show()
 
+    def visualize_event_data_plotly(self, loaded_indices, loaded_charges, loaded_times, 
+                                   plot_time=False, log_scale=False, title=None, 
+                                   show_all_detectors=False, marker_size=6, show_colorbar=True,
+                                   opacity=1.0, dark_theme=True):
+        """
+        Visualize detector event data in 3D using Plotly with colors proportional to charge or time.
+        
+        Parameters:
+        -----------
+        loaded_indices : array-like
+            Indices of non-zero hits
+        loaded_charges : array-like
+            Charge values at non-zero indices
+        loaded_times : array-like
+            Time values at non-zero indices
+        plot_time : bool, default=False
+            If True, color by time values; if False, color by charge values
+        log_scale : bool, default=False
+            If True, apply logarithmic scaling to the color gradient
+        title : str, optional
+            Title for the plot. If None, auto-generates title.
+        show_all_detectors : bool, default=False
+            If True, shows all detector positions as light gray background points
+        marker_size : int, default=6
+            Size of the markers for hit detectors
+        show_colorbar : bool, default=True
+            If True, shows the colorbar; if False, creates minimal display with just sensors
+        opacity : float, default=1.0
+            Opacity of the markers (1.0 = fully opaque, avoids depth sorting issues)
+        dark_theme : bool, default=True
+            If True, use black background; if False, use white background
+        """
+        import plotly.graph_objects as go
+        import numpy as np
+        
+        # Set color scheme based on theme
+        if dark_theme:
+            bg_color = 'black'
+            paper_color = 'black'
+            colorbar_color = 'white'
+        else:
+            bg_color = 'white'
+            paper_color = 'white'
+            colorbar_color = 'black'
+        
+        # Convert inputs to numpy arrays if not already
+        loaded_indices = np.array(loaded_indices)
+        loaded_charges = np.array(loaded_charges)
+        loaded_times = np.array(loaded_times)
+        
+        # Validate inputs
+        if len(loaded_indices) != len(loaded_charges) or len(loaded_indices) != len(loaded_times):
+            raise ValueError("loaded_indices, loaded_charges, and loaded_times must have the same length")
+        
+        if len(loaded_indices) == 0:
+            print("No event data to display")
+            return
+        
+        # Get positions of hit detectors
+        hit_positions = self.all_points[loaded_indices]
+        
+        # Select which values to use for coloring
+        color_values = loaded_times if plot_time else loaded_charges
+        
+        # Handle log scaling
+        if log_scale:
+            # Handle zero/negative values for log scale
+            positive_mask = color_values > 0
+            if not np.any(positive_mask):
+                print("Warning: No positive values found for log scale. Using linear scale instead.")
+                log_scale = False
+            else:
+                min_positive = np.min(color_values[positive_mask])
+                color_values_log = np.copy(color_values)
+                color_values_log[~positive_mask] = min_positive * 0.1
+                color_values_log = np.log10(color_values_log)
+                colorbar_title = f"{'Time' if plot_time else 'Charge'} (log₁₀ scale)"
+                plot_color_values = color_values_log
+        
+        if not log_scale:
+            colorbar_title = 'Time (ns)' if plot_time else 'Charge (PE)'
+            plot_color_values = color_values
+        
+        # Create the plot
+        fig = go.Figure()
+        
+        # Optionally add all detector positions as background
+        if show_all_detectors:
+            fig.add_trace(go.Scatter3d(
+                x=self.all_points[:, 0], 
+                y=self.all_points[:, 1], 
+                z=self.all_points[:, 2],
+                mode='markers',
+                marker=dict(
+                    size=2, 
+                    color='lightgray', 
+                    opacity=0.3
+                ),
+                name='All Detectors',
+                showlegend=True,
+                hoverinfo='skip'
+            ))
+        
+        # Sort points by depth (z-coordinate) to improve transparency rendering
+        # Sort from back to front for better depth rendering
+        depth_order = np.argsort(hit_positions[:, 2])
+        hit_positions_sorted = hit_positions[depth_order]
+        plot_color_values_sorted = plot_color_values[depth_order]
+        sorted_indices = loaded_indices[depth_order]
+        sorted_charges = loaded_charges[depth_order] 
+        sorted_times = loaded_times[depth_order]
+        
+        # Create marker dictionary with full opacity to avoid transparency issues
+        marker_dict = dict(
+            size=marker_size,
+            color=plot_color_values_sorted,
+            colorscale='viridis',
+            opacity=opacity,  # Use parameter-controlled opacity
+            line=dict(width=0, color='rgba(0,0,0,0)')  # Remove outlines for cleaner look
+        )
+        
+        # Add colorbar only if requested
+        if show_colorbar:
+            marker_dict['colorbar'] = dict(
+                title=dict(
+                    text=colorbar_title,
+                    font=dict(color=colorbar_color)
+                ),
+                tickfont=dict(color=colorbar_color),
+                thickness=20,
+                len=0.7,
+                x=1.02
+            )
+        
+        # Add scatter plot for hit detectors
+        fig.add_trace(go.Scatter3d(
+            x=hit_positions_sorted[:, 0], 
+            y=hit_positions_sorted[:, 1], 
+            z=hit_positions_sorted[:, 2],
+            mode='markers',
+            marker=marker_dict,
+            name=f'Event Data ({len(loaded_indices)} hits)',
+            text=[f'Detector ID: {idx}<br>Charge: {charge:.3f} PE<br>Time: {time:.3f} ns' 
+                  for idx, charge, time in zip(sorted_indices, sorted_charges, sorted_times)],
+            hovertemplate='%{text}<extra></extra>'
+        ))
+        
+        # Calculate reasonable axis ranges based on data
+        all_x = hit_positions_sorted[:, 0]
+        all_y = hit_positions_sorted[:, 1]
+        all_z = hit_positions_sorted[:, 2]
+        
+        margin = 0.1 * max(np.ptp(all_x), np.ptp(all_y), np.ptp(all_z))
+        
+        # Update layout for full black display
+        margin_right = 80 if show_colorbar else 0
+        fig.update_layout(
+            scene=dict(
+                xaxis=dict(
+                    visible=False,  # Hide x-axis completely
+                    showgrid=False,
+                    showline=False,
+                    showticklabels=False,
+                    title='',
+                    range=[np.min(all_x) - margin, np.max(all_x) + margin]
+                ),
+                yaxis=dict(
+                    visible=False,  # Hide y-axis completely
+                    showgrid=False,
+                    showline=False,
+                    showticklabels=False,
+                    title='',
+                    range=[np.min(all_y) - margin, np.max(all_y) + margin]
+                ),
+                zaxis=dict(
+                    visible=False,  # Hide z-axis completely
+                    showgrid=False,
+                    showline=False,
+                    showticklabels=False,
+                    title='',
+                    range=[np.min(all_z) - margin, np.max(all_z) + margin]
+                ),
+                aspectmode='data',
+                bgcolor=paper_color,  # Pure black background
+            ),
+            height=800,
+            width=1000,
+            showlegend=False,  # Remove legend for cleaner look
+            paper_bgcolor=paper_color,  # Theme-based paper background
+            plot_bgcolor=paper_color,   # Theme-based plot background
+            margin=dict(l=0, r=margin_right, t=0, b=0)  # Minimal margins, space for colorbar if needed
+        )
+        
+        fig.show()
+    
+
     def plot_pmts_per_reference_plotly(self):
         """Plot the number of PMTs for each reference point using Plotly"""
         pmts_per_ref = [len(group) for group in self.grouped_detectors]
