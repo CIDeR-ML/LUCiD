@@ -18,7 +18,7 @@ def calculate_min_distance(positions):
     return np.min(distances) if len(distances) > 0 else 1.0
 
 
-def create_detector_display(json_filename='config/cyl_geom_config.json', sparse=True):
+def create_detector_display(json_filename='../config/cyl_geom_config.json', sparse=True):
     """
     Create a detector display function that can handle both sparse and dense data formats.
 
@@ -159,7 +159,7 @@ def create_detector_display(json_filename='config/cyl_geom_config.json', sparse=
         y_range = y_max - y_min
 
         # Set figure size based on data range, accounting for colorbar
-        fig_width = 12
+        fig_width = 8
         fig_height = fig_width * (y_range / x_range)
 
         fig, ax = plt.subplots(figsize=(fig_width, fig_height), facecolor='black')
@@ -364,7 +364,7 @@ def create_detector_comparison_display(json_filename='config/cyl_geom_config.jso
         y_range = y_max - y_min
 
         # Set figure size based on data range, accounting for colorbar
-        fig_width = 12
+        fig_width = 8
         fig_height = fig_width * (y_range / x_range)
 
         fig, ax = plt.subplots(figsize=(fig_width, fig_height), facecolor='black')
