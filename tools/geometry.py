@@ -110,16 +110,174 @@ def rotate_vector_batch(vectors, axes, angles):
     return rotated_vectors
 
 
+def generate_concentric_hexagons(n_sensors, radius_eff):
+    """Generate hexagonal pattern using concentric rings.
+    
+    Returns exact number of sensors in a regular hexagonal pattern.
+    Pattern: center (1) + rings of 6k sensors each, where k is ring number.
+    Total sensors for n rings: 1 + 6(1 + 2 + ... + n) = 1 + 3n(n+1)
+    """
+    if n_sensors == 0:
+        return np.array([]).reshape(0, 2)
+    
+    if n_sensors == 1:
+        return np.array([[0, 0]])
+    
+    # Find how many complete rings we can fit
+    # Solve: 1 + 3n(n+1) <= n_sensors for largest n
+    n_rings = 0
+    while 1 + 3 * (n_rings + 1) * (n_rings + 2) <= n_sensors:
+        n_rings += 1
+    
+    # Calculate spacing to fit the outermost ring within radius_eff
+    if n_rings == 0:
+        spacing = radius_eff  # Single sensor at center
+    else:
+        spacing = radius_eff / n_rings
+    
+    points = []
+    
+    # Center point
+    points.append([0, 0])
+    
+    # Generate concentric hexagonal rings
+    for ring in range(1, n_rings + 1):
+        ring_radius = ring * spacing
+        n_sensors_in_ring = 6 * ring
+        
+        # Generate points around the ring
+        for i in range(n_sensors_in_ring):
+            angle = 2 * np.pi * i / n_sensors_in_ring
+            x = ring_radius * np.cos(angle)
+            y = ring_radius * np.sin(angle)
+            points.append([x, y])
+    
+    # If we need more sensors and have space, add partial outer ring
+    current_count = len(points)
+    if current_count < n_sensors and n_rings * spacing < radius_eff:
+        remaining = n_sensors - current_count
+        next_ring = n_rings + 1
+        next_ring_radius = next_ring * spacing
+        
+        if next_ring_radius <= radius_eff:
+            # Add sensors from the next ring
+            sensors_to_add = min(remaining, 6 * next_ring)
+            for i in range(sensors_to_add):
+                angle = 2 * np.pi * i / (6 * next_ring)
+                x = next_ring_radius * np.cos(angle)
+                y = next_ring_radius * np.sin(angle)
+                points.append([x, y])
+    
+    return np.array(points[:n_sensors])  # Ensure exact count
+
+
 class Cylinder:
     """Manage the detector geometry"""
-    def __init__(self, center, axis, radius, height, barrel_grid, cap_rings, cyl_sensor_radius):
-        self.C = center
-        self.A = axis
+    def __init__(self, radius, height, n_sensors, sensor_radius):
+        self.C = np.array([0.0, 0.0, 0.0])  # Fixed at origin
         self.r = radius
         self.H = height 
-        self.S_radius = cyl_sensor_radius
+        self.n_sensors = n_sensors
+        self.S_radius = sensor_radius
 
-        self.place_photosensors(barrel_grid, cap_rings)
+        self.place_photosensors()
+
+    def place_photosensors(self):
+        """Position the photo sensor centers proportionally by surface area."""
+        # Calculate surface areas
+        barrel_area = 2 * np.pi * self.r * self.H
+        caps_area = 2 * np.pi * self.r**2  # Both caps combined
+        total_area = barrel_area + caps_area
+        
+        # Distribute sensors proportionally
+        n_barrel = int(self.n_sensors * barrel_area / total_area)
+        n_caps = self.n_sensors - n_barrel
+        n_per_cap = n_caps // 2  # Split equally between top and bottom
+        
+        # Place barrel sensors
+        self.barr_points = self._place_barrel_sensors(n_barrel)
+        
+        # Place cap sensors
+        self.tcap_points = self._place_cap_sensors(n_per_cap, self.H/2)  # Top cap
+        self.bcap_points = self._place_cap_sensors(n_per_cap, -self.H/2)  # Bottom cap
+        
+        # Combine all points
+        self.all_points = np.concatenate([self.barr_points, self.tcap_points, self.bcap_points], axis=0)
+        
+        # Create ID mappings
+        self.ID_to_position = {i: self.all_points[i] for i in range(len(self.all_points))}
+        
+        # Create case mappings (0=barrel, 1=top cap, 2=bottom cap)
+        self.ID_to_case = {}
+        n_barr = len(self.barr_points)
+        n_tcap = len(self.tcap_points)
+        n_bcap = len(self.bcap_points)
+        
+        for i in range(len(self.all_points)):
+            if i < n_barr:
+                self.ID_to_case[i] = 0
+            elif i < n_barr + n_tcap:
+                self.ID_to_case[i] = 1
+            else:
+                self.ID_to_case[i] = 2
+
+    def _place_barrel_sensors(self, n_sensors):
+        """Place sensors on barrel surface with rectangular grid."""
+        if n_sensors == 0:
+            return np.array([]).reshape(0, 3)
+            
+        # Calculate effective dimensions (with margins)
+        height_eff = self.H - 3 * self.S_radius  # Top and bottom margins
+        circumference_eff = 2 * np.pi * self.r
+        
+        # Find optimal rows and columns for approximately square spacing
+        aspect_ratio = height_eff / circumference_eff
+        n_rows = int(np.sqrt(n_sensors * aspect_ratio))
+        n_cols = n_sensors // n_rows
+        
+        # Adjust to get closer to target
+        while n_rows * n_cols < n_sensors and n_rows > 1:
+            if (n_rows + 1) * n_cols <= n_sensors:
+                n_rows += 1
+            elif n_rows * (n_cols + 1) <= n_sensors:
+                n_cols += 1
+            else:
+                break
+        
+        # Generate grid
+        z_positions = np.linspace(-height_eff/2, height_eff/2, n_rows) + self.C[2]
+        theta_positions = np.linspace(0, 2*np.pi, n_cols, endpoint=False)
+        
+        points = []
+        for z in z_positions:
+            for theta in theta_positions:
+                x = self.r * np.cos(theta) + self.C[0]
+                y = self.r * np.sin(theta) + self.C[1]
+                points.append([x, y, z])
+        
+        return np.array(points[:n_sensors])  # Trim to exact count
+
+    def _place_cap_sensors(self, n_sensors, z_position):
+        """Place sensors on cap surface with concentric hexagonal rings."""
+        if n_sensors == 0:
+            return np.array([]).reshape(0, 3)
+            
+        # Calculate effective radius (with margin)
+        radius_eff = self.r - 1.5 * self.S_radius
+        
+        if radius_eff <= 0:
+            return np.array([]).reshape(0, 3)
+        
+        # Generate concentric hexagonal pattern
+        hex_points = generate_concentric_hexagons(n_sensors, radius_eff)
+        
+        # Convert to 3D and translate
+        points_3d = np.zeros((len(hex_points), 3))
+        points_3d[:, 0] = hex_points[:, 0] + self.C[0]
+        points_3d[:, 1] = hex_points[:, 1] + self.C[1]
+        points_3d[:, 2] = z_position + self.C[2]
+        
+        return points_3d
 
     def visualize_event_data_plotly(self, loaded_indices, loaded_charges, loaded_times, 
                                    plot_time=False, log_scale=False, title=None, 
@@ -316,107 +474,110 @@ class Cylinder:
         
         fig.show()
 
-    def place_photosensors(self, barrel_grid, cap_rings):
-        """Position the photo sensor centers in the cylinder surface."""
-        # barrel ----
-        b_rows = barrel_grid[0]
-        b_cols = barrel_grid[1]
+    def visualize_cylinder_wireframe(self, show_detectors=True):
+        """Visualize the cylinder as a wireframe with detectors"""
+        fig = go.Figure()
 
-        theta = np.linspace(0, 2*np.pi, b_cols, endpoint=False)  # Generate N angles from 0 to 2pi
-        x = self.r * np.cos(theta) + self.C[0]
-        y = self.r * np.sin(theta) + self.C[1]
-        z = [(i+1)*self.H/(b_rows+1)-self.H/2 + self.C[2] for i in range(b_rows)]
+        # Create cylinder wireframe
+        # Barrel surface
+        theta = np.linspace(0, 2 * np.pi, 50)
+        z_barrel = np.linspace(-self.H/2, self.H/2, 20)
+        theta_mesh, z_mesh = np.meshgrid(theta, z_barrel)
+        
+        x_barrel = self.r * np.cos(theta_mesh) + self.C[0]
+        y_barrel = self.r * np.sin(theta_mesh) + self.C[1]
+        z_barrel_mesh = z_mesh + self.C[2]
 
-        barr_points = np.array([[x[j],y[j],z[i]] for i in range(b_rows) for j in range(b_cols)])
-        self.barr_points = barr_points
+        # Add barrel wireframe
+        fig.add_trace(go.Surface(
+            x=x_barrel, y=y_barrel, z=z_barrel_mesh,
+            opacity=0.1,
+            showscale=False,
+            colorscale=[[0, 'lightblue'], [1, 'lightblue']],
+            name='Barrel Surface'
+        ))
 
-        del x,y,z,theta # ensure no values are passed to the caps.
-        # -----------
+        # Top cap
+        r_cap = np.linspace(0, self.r, 20)
+        theta_cap = np.linspace(0, 2 * np.pi, 50)
+        r_mesh, theta_mesh = np.meshgrid(r_cap, theta_cap)
+        
+        x_top = r_mesh * np.cos(theta_mesh) + self.C[0]
+        y_top = r_mesh * np.sin(theta_mesh) + self.C[1]
+        z_top = np.full_like(x_top, self.H/2 + self.C[2])
 
-        # caps ----
-        Nrings = len(cap_rings)
+        # Add top cap wireframe
+        fig.add_trace(go.Surface(
+            x=x_top, y=y_top, z=z_top,
+            opacity=0.1,
+            showscale=False,
+            colorscale=[[0, 'lightgreen'], [1, 'lightgreen']],
+            name='Top Cap'
+        ))
 
-        tcap_points = []
-        bcap_points = []
-        for i_ring, N_sensors_in_ring in enumerate(cap_rings):
-            theta = np.linspace(0, 2*np.pi, N_sensors_in_ring, endpoint=False) + 2*np.pi / N_sensors_in_ring  # Generate N angles from 0 to 2pi
-            x = self.r*((Nrings-(i_ring+1))/Nrings)* np.cos(theta) + self.C[0]
-            y = self.r*((Nrings-(i_ring+1))/Nrings)* np.sin(theta) + self.C[1]
-            top_z = [ self.H/2 + self.C[2] for i in range(N_sensors_in_ring)]
-            bot_z = [-self.H/2 + self.C[2] for i in range(N_sensors_in_ring)]
+        # Bottom cap
+        z_bottom = np.full_like(x_top, -self.H/2 + self.C[2])
 
-            for i_sensor in range(N_sensors_in_ring):
-                tcap_points.append([x[i_sensor],y[i_sensor],top_z[i_sensor]])
-                bcap_points.append([x[i_sensor],y[i_sensor],bot_z[i_sensor]])
+        # Add bottom cap wireframe
+        fig.add_trace(go.Surface(
+            x=x_top, y=y_top, z=z_bottom,
+            opacity=0.1,
+            showscale=False,
+            colorscale=[[0, 'lightcoral'], [1, 'lightcoral']],
+            name='Bottom Cap'
+        ))
 
-        self.tcap_points = np.array(tcap_points)
-        self.bcap_points = np.array(bcap_points)
+        if show_detectors:
+            # Color code detectors by type
+            barrel_indices = [i for i, case in self.ID_to_case.items() if case == 0]
+            tcap_indices = [i for i, case in self.ID_to_case.items() if case == 1]
+            bcap_indices = [i for i, case in self.ID_to_case.items() if case == 2]
+            
+            if barrel_indices:
+                barrel_points = self.all_points[barrel_indices]
+                fig.add_trace(go.Scatter3d(
+                    x=barrel_points[:, 0], 
+                    y=barrel_points[:, 1], 
+                    z=barrel_points[:, 2],
+                    mode='markers',
+                    marker=dict(size=4, color='blue', opacity=0.8),
+                    name=f'Barrel Detectors ({len(barrel_indices)})'
+                ))
+            
+            if tcap_indices:
+                tcap_points = self.all_points[tcap_indices]
+                fig.add_trace(go.Scatter3d(
+                    x=tcap_points[:, 0], 
+                    y=tcap_points[:, 1], 
+                    z=tcap_points[:, 2],
+                    mode='markers',
+                    marker=dict(size=4, color='green', opacity=0.8),
+                    name=f'Top Cap Detectors ({len(tcap_indices)})'
+                ))
+            
+            if bcap_indices:
+                bcap_points = self.all_points[bcap_indices]
+                fig.add_trace(go.Scatter3d(
+                    x=bcap_points[:, 0], 
+                    y=bcap_points[:, 1], 
+                    z=bcap_points[:, 2],
+                    mode='markers',
+                    marker=dict(size=4, color='red', opacity=0.8),
+                    name=f'Bottom Cap Detectors ({len(bcap_indices)})'
+                ))
 
-        self.all_points = np.concatenate([self.barr_points, self.tcap_points, self.bcap_points],axis=0)
+        fig.update_layout(
+            scene=dict(
+                xaxis_title='X',
+                yaxis_title='Y',
+                zaxis_title='Z',
+                aspectmode='data'
+            ),
+            title=f'Cylindrical Detector Geometry (R={self.r}, H={self.H})',
+            height=800
+        )
 
-        # let's make this generic format... ID to 3D pos dictionary
-        self.ID_to_position = {i:self.all_points[i] for i in range(len(self.all_points))}
-
-        self.ID_to_case = {}
-        Nbarr = len(self.barr_points)
-        Ntcap = len(self.tcap_points)
-        Nbcap = len(self.bcap_points)
-        for i in range(len(self.all_points)):
-            if i<Nbarr:
-                self.ID_to_case[i] = 0
-            elif Nbarr<=i<Ntcap+Nbarr:
-                self.ID_to_case[i] = 1
-            elif Ntcap+Nbarr<=i<Nbcap+Ntcap+Nbarr:
-                self.ID_to_case[i] = 2
-            else:
-                print("check: place_photosensors! this should not be happening: ", Nbarr, Ntcap, Nbcap, i)
-
-        # -----------
-
-# 
-def load_config(file_path):
-    """Function to load configuration from JSON file"""
-    with open(file_path, 'r') as file:
-        config = json.load(file)
-    return config
-
-def load_cyl_geom(file_path):
-    
-    # Load configuration from JSON file
-    config = load_config(file_path)
-
-    # Extract values from the loaded configuration
-    cyl_center            = np.array(config['geometry_definitions']['center'])
-    cyl_axis              = np.array(config['geometry_definitions']['axis'])
-    cyl_radius            = config['geometry_definitions']['radius']
-    cyl_height            = config['geometry_definitions']['height']
-    cyl_barrel_grid       = config['geometry_definitions']['barrel_grid']
-    cyl_cap_rings         = config['geometry_definitions']['cap_rings']
-    cyl_sensor_radius     = config['geometry_definitions']['sensor_radius']
-
-    return cyl_center, cyl_axis, cyl_radius, cyl_radius, cyl_height, cyl_barrel_grid, cyl_cap_rings, cyl_sensor_radius
-
-
-def generate_detector(file_path):
-    """Function to generate cylinder from json config"""
-    cyl_center, cyl_axis, cyl_radius, cyl_radius, cyl_height, cyl_barrel_grid, cyl_cap_rings, cyl_sensor_radius = load_cyl_geom(file_path)
-    return Cylinder(cyl_center, cyl_axis, cyl_radius, cyl_height, cyl_barrel_grid, cyl_cap_rings, cyl_sensor_radius)
-
-
-def generate_dataset_point_grid(file_path):
-    """Function to generate dataset point grid from json config"""
-    
-    # Load configuration from JSON file
-    config = load_config(file_path)
-
-    # Extract values from the loaded configuration
-    cylinder_center       = config['cylinder_parameters']['center']
-    cylinder_heights      = config['cylinder_parameters']['heights']
-    cylinder_radii        = config['cylinder_parameters']['radii']
-    cylinder_divisions    = config['cylinder_parameters']['divisions']
-
-    return generate_dataset_origins(cylinder_center, cylinder_heights, cylinder_radii, cylinder_divisions)
-
+        fig.show()
 
 
 def fibonacci_sphere_points_numpy(n_points, radius=1.0):
@@ -579,6 +740,7 @@ class Sphere:
             ))
         
         # Sort points by depth (distance from center) for better transparency rendering
+        #distances = np.linalg.norm(hit_positions - self.C, axis=1)
         depth_order = np.argsort(hit_positions[:, 2])
         hit_positions_sorted = hit_positions[depth_order]
         plot_color_values_sorted = plot_color_values[depth_order]
@@ -713,31 +875,48 @@ class Sphere:
         fig.show()
 
 
-# Utility functions for sphere geometry
+# Unified configuration and generation functions
 
-def load_sphere_config(file_path):
-    """Function to load sphere configuration from JSON file"""
+def load_detector_config(file_path):
+    """Function to load detector configuration from JSON file"""
     with open(file_path, 'r') as file:
         config = json.load(file)
     return config
 
-def load_sphere_geom(file_path):
-    """Load sphere geometry from JSON config"""
-    # Load configuration from JSON file
-    config = load_sphere_config(file_path)
+def load_detector_geom(file_path):
+    """Load detector geometry from JSON config"""
+    config = load_detector_config(file_path)
+    
+    detector_type = config['detector_type']
+    geom_def = config['geometry_definitions']
+    
+    if detector_type == 'cylinder':
+        return (detector_type, geom_def['radius'], geom_def['height'], 
+                geom_def['n_sensors'], geom_def['sensor_radius'])
+    elif detector_type == 'sphere':
+        return (detector_type, geom_def['radius'], None, 
+                geom_def['n_sensors'], geom_def['sensor_radius'])
+    else:
+        raise ValueError(f"Unknown detector type: {detector_type}")
 
-    # Extract values from the loaded configuration
-    sphere_radius = config['geometry_definitions']['radius']
-    n_sensors = config['geometry_definitions']['n_sensors']
-    sensor_radius = config['geometry_definitions']['sensor_radius']
+def generate_detector(file_path):
+    """Function to generate detector from json config"""
+    detector_type, radius, height, n_sensors, sensor_radius = load_detector_geom(file_path)
+    
+    if detector_type == 'cylinder':
+        return Cylinder(radius, height, n_sensors, sensor_radius)
+    elif detector_type == 'sphere':
+        return Sphere(radius, n_sensors, sensor_radius)
+    else:
+        raise ValueError(f"Unknown detector type: {detector_type}")
 
-    return sphere_radius, n_sensors, sensor_radius
-
-def generate_sphere_detector(file_path):
-    """Function to generate sphere from json config"""
-    sphere_radius, n_sensors, sensor_radius = load_sphere_geom(file_path)
-    return Sphere(sphere_radius, n_sensors, sensor_radius)
-
-def generate_sphere_detector_direct(radius=4.0, n_sensors=1000, sensor_radius=0.1):
-    """Function to generate sphere directly with parameters"""
-    return Sphere(radius, n_sensors, sensor_radius)
+def generate_detector_direct(detector_type, radius, n_sensors, sensor_radius, height=None):
+    """Function to generate detector directly with parameters"""
+    if detector_type == 'cylinder':
+        if height is None:
+            raise ValueError("Height must be specified for cylinder detector")
+        return Cylinder(radius, height, n_sensors, sensor_radius)
+    elif detector_type == 'sphere':
+        return Sphere(radius, n_sensors, sensor_radius)
+    else:
+        raise ValueError(f"Unknown detector type: {detector_type}")

@@ -1,7 +1,7 @@
 from tools.generate import differentiable_get_rays, new_differentiable_get_rays, get_isotropic_rays
 
 from tools.propagate import create_photon_propagator, create_sphere_photon_propagator
-from tools.geometry import generate_detector, generate_sphere_detector
+from tools.geometry import generate_detector
 
 import jax
 import jax.numpy as jnp
@@ -67,15 +67,15 @@ def setup_event_simulator(json_filename, n_photons=1_000_000, temperature=0.2, K
         propagate_photons = create_photon_propagator(
             detector_points,
             photosensor_radius,
-            # r=cylinder_radius, 
-            # h=cylinder_height,
+            r=cylinder_radius, 
+            h=cylinder_height,
             temperature=temperature,
             max_detectors_per_cell=max_detectors_per_cell
         )
         
     elif detector_type == 'Sphere':
         # Use sphere implementation
-        detector = generate_sphere_detector(json_filename)
+        detector = generate_detector(json_filename)
         detector_points = jnp.array(detector.all_points)
         photosensor_radius = detector.S_radius
         sphere_radius = detector.r
