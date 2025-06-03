@@ -1,7 +1,6 @@
 import numpy as np
 import json
 from scipy.spatial.transform import Rotation
-from scipy.spatial import cKDTree
 from mpl_toolkits.mplot3d import Axes3D
 import matplotlib.pyplot as plt
 import plotly.graph_objects as go
@@ -113,74 +112,14 @@ def rotate_vector_batch(vectors, axes, angles):
 
 class Cylinder:
     """Manage the detector geometry"""
-    def __init__(self, center, axis, radius, height, barrel_grid, cap_rings, cyl_sensor_radius, n_ref_points=5):
+    def __init__(self, center, axis, radius, height, barrel_grid, cap_rings, cyl_sensor_radius):
         self.C = center
         self.A = axis
         self.r = radius
         self.H = height 
         self.S_radius = cyl_sensor_radius
-        self.n_ref_points = n_ref_points
 
         self.place_photosensors(barrel_grid, cap_rings)
-        self.create_reference_points()
-        self.segment_detectors()
-
-    def create_reference_points(self):
-        """Create reference points for segmentation"""
-        phi = np.linspace(0, 2*np.pi, self.n_ref_points, endpoint=False)
-        r = self.r  # Place reference points at half the cylinder radius
-        x = r * np.cos(phi) + self.C[0]
-        y = r * np.sin(phi) + self.C[1]
-        z = np.linspace(-self.H/2, self.H/2, 3) + self.C[2]  # 3 layers of reference points
-
-        self.ref_points = np.array([(x_, y_, z_) for z_ in z for x_, y_ in zip(x, y)])
-
-    def segment_detectors(self):
-        """Group detector points based on nearest reference point"""
-        tree = cKDTree(self.ref_points)
-        _, self.detector_groups = tree.query(self.all_points)
-        
-        self.grouped_detectors = [[] for _ in range(len(self.ref_points))]
-        for i, group in enumerate(self.detector_groups):
-            self.grouped_detectors[group].append(i)
-
-    def visualize_groups_plotly(self):
-        """Visualize the detector groups in 3D using Plotly"""
-        fig = make_subplots(rows=1, cols=1, specs=[[{'type': 'scene'}]])
-
-        # Generate a color scale
-        n_colors = len(self.grouped_detectors)
-        colors = pc.qualitative.Plotly * (n_colors // len(pc.qualitative.Plotly) + 1)
-        colors = colors[:n_colors]  # Truncate to the number of groups
-
-        for i, group in enumerate(self.grouped_detectors):
-            group_points = self.all_points[group]
-            fig.add_trace(go.Scatter3d(
-                x=group_points[:, 0], y=group_points[:, 1], z=group_points[:, 2],
-                mode='markers',
-                marker=dict(size=5, color=colors[i], opacity=0.8),
-                name=f'Group {i}'
-            ))
-
-        fig.add_trace(go.Scatter3d(
-            x=self.ref_points[:, 0], y=self.ref_points[:, 1], z=self.ref_points[:, 2],
-            mode='markers',
-            marker=dict(size=10, color='black', symbol='diamond'),
-            name='Reference Points'
-        ))
-
-        fig.update_layout(
-            scene=dict(
-                xaxis_title='X',
-                yaxis_title='Y',
-                zaxis_title='Z'
-            ),
-            title='Detector Groups',
-            height=800,
-            legend=dict(itemsizing='constant')  # This ensures all legend items are the same size
-        )
-
-        fig.show()
 
     def visualize_event_data_plotly(self, loaded_indices, loaded_charges, loaded_times, 
                                    plot_time=False, log_scale=False, title=None, 
@@ -376,22 +315,6 @@ class Cylinder:
         )
         
         fig.show()
-    
-
-    def plot_pmts_per_reference_plotly(self):
-        """Plot the number of PMTs for each reference point using Plotly"""
-        pmts_per_ref = [len(group) for group in self.grouped_detectors]
-        
-        fig = go.Figure(data=[go.Bar(x=list(range(len(pmts_per_ref))), y=pmts_per_ref)])
-        
-        fig.update_layout(
-            xaxis_title='Reference Point Index',
-            yaxis_title='Number of PMTs',
-            title='Number of PMTs per Reference Point'
-        )
-        
-        fig.show()
-
 
     def place_photosensors(self, barrel_grid, cap_rings):
         """Position the photo sensor centers in the cylinder surface."""
@@ -534,16 +457,13 @@ def fibonacci_sphere_points_numpy(n_points, radius=1.0):
 
 class Sphere:
     """Manage the spherical detector geometry"""
-    def __init__(self, radius, n_sensors, sensor_radius, n_ref_points=12):
+    def __init__(self, radius, n_sensors, sensor_radius):
         self.C = np.array([0.0, 0.0, 0.0])  # Always centered at origin
         self.r = radius
         self.n_sensors = n_sensors
         self.S_radius = sensor_radius
-        self.n_ref_points = n_ref_points
 
         self.place_photosensors()
-        self.create_reference_points()
-        self.segment_detectors()
 
     def place_photosensors(self):
         """Position the photo sensor centers on the sphere surface using Fibonacci spiral."""
@@ -554,72 +474,6 @@ class Sphere:
         
         # For sphere, all sensors are on surface (case 0)
         self.ID_to_case = {i: 0 for i in range(len(self.all_points))}
-
-    def create_reference_points(self):
-        """Create reference points for segmentation using icosahedral vertices"""
-        # Use icosahedral vertices for more uniform distribution
-        # Golden ratio
-        phi = (1.0 + np.sqrt(5.0)) / 2.0
-        
-        # Icosahedral vertices (normalized)
-        vertices = np.array([
-            [-1, phi, 0], [1, phi, 0], [-1, -phi, 0], [1, -phi, 0],
-            [0, -1, phi], [0, 1, phi], [0, -1, -phi], [0, 1, -phi],
-            [phi, 0, -1], [phi, 0, 1], [-phi, 0, -1], [-phi, 0, 1]
-        ])
-        
-        # Normalize to unit sphere then scale and translate
-        vertices = vertices / np.linalg.norm(vertices, axis=1, keepdims=True)
-        self.ref_points = vertices * self.r * 0.8 + self.C  # Place slightly inside sphere
-
-    def segment_detectors(self):
-        """Group detector points based on nearest reference point"""
-        tree = cKDTree(self.ref_points)
-        _, self.detector_groups = tree.query(self.all_points)
-        
-        self.grouped_detectors = [[] for _ in range(len(self.ref_points))]
-        for i, group in enumerate(self.detector_groups):
-            self.grouped_detectors[group].append(i)
-
-    def visualize_groups_plotly(self):
-        """Visualize the detector groups in 3D using Plotly"""
-        fig = make_subplots(rows=1, cols=1, specs=[[{'type': 'scene'}]])
-
-        # Generate a color scale
-        n_colors = len(self.grouped_detectors)
-        colors = pc.qualitative.Plotly * (n_colors // len(pc.qualitative.Plotly) + 1)
-        colors = colors[:n_colors]  # Truncate to the number of groups
-
-        for i, group in enumerate(self.grouped_detectors):
-            if len(group) > 0:  # Only plot non-empty groups
-                group_points = self.all_points[group]
-                fig.add_trace(go.Scatter3d(
-                    x=group_points[:, 0], y=group_points[:, 1], z=group_points[:, 2],
-                    mode='markers',
-                    marker=dict(size=5, color=colors[i], opacity=0.8),
-                    name=f'Group {i} ({len(group)} sensors)'
-                ))
-
-        fig.add_trace(go.Scatter3d(
-            x=self.ref_points[:, 0], y=self.ref_points[:, 1], z=self.ref_points[:, 2],
-            mode='markers',
-            marker=dict(size=10, color='black', symbol='diamond'),
-            name='Reference Points'
-        ))
-
-        fig.update_layout(
-            scene=dict(
-                xaxis_title='X',
-                yaxis_title='Y',
-                zaxis_title='Z',
-                aspectmode='cube'
-            ),
-            title=f'Spherical Detector Groups ({self.n_sensors} sensors)',
-            height=800,
-            legend=dict(itemsizing='constant')
-        )
-
-        fig.show()
 
     def visualize_event_data_plotly(self, loaded_indices, loaded_charges, loaded_times, 
                                    plot_time=False, log_scale=False, title=None, 
@@ -725,7 +579,6 @@ class Sphere:
             ))
         
         # Sort points by depth (distance from center) for better transparency rendering
-        #distances = np.linalg.norm(hit_positions - self.C, axis=1)
         depth_order = np.argsort(hit_positions[:, 2])
         hit_positions_sorted = hit_positions[depth_order]
         plot_color_values_sorted = plot_color_values[depth_order]
@@ -816,21 +669,7 @@ class Sphere:
         
         fig.show()
 
-    def plot_pmts_per_reference_plotly(self):
-        """Plot the number of PMTs for each reference point using Plotly"""
-        pmts_per_ref = [len(group) for group in self.grouped_detectors]
-        
-        fig = go.Figure(data=[go.Bar(x=list(range(len(pmts_per_ref))), y=pmts_per_ref)])
-        
-        fig.update_layout(
-            xaxis_title='Reference Point Index',
-            yaxis_title='Number of PMTs',
-            title=f'Number of PMTs per Reference Point (Sphere with {self.n_sensors} sensors)'
-        )
-        
-        fig.show()
-
-    def visualize_sphere_wireframe(self, show_detectors=True, show_ref_points=True):
+    def visualize_sphere_wireframe(self, show_detectors=True):
         """Visualize the sphere as a wireframe with detectors"""
         fig = go.Figure()
 
@@ -858,16 +697,6 @@ class Sphere:
                 mode='markers',
                 marker=dict(size=4, color='red', opacity=0.8),
                 name=f'Detectors ({self.n_sensors})'
-            ))
-
-        if show_ref_points:
-            fig.add_trace(go.Scatter3d(
-                x=self.ref_points[:, 0], 
-                y=self.ref_points[:, 1], 
-                z=self.ref_points[:, 2],
-                mode='markers',
-                marker=dict(size=8, color='black', symbol='diamond'),
-                name='Reference Points'
             ))
 
         fig.update_layout(
