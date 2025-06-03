@@ -3,7 +3,7 @@ import matplotlib.pyplot as plt
 from matplotlib.collections import EllipseCollection
 from scipy.spatial.distance import pdist
 from mpl_toolkits.axes_grid1 import make_axes_locatable
-from tools.geometry import load_cyl_geom, generate_detector
+from tools.geometry import load_detector_geom, generate_detector
 from tools.utils import sparse_to_full
 from matplotlib.colors import LinearSegmentedColormap
 
@@ -38,9 +38,12 @@ def create_detector_display(json_filename='../config/cyl_geom_config.json', spar
     # Generate detector
     detector = generate_detector(json_filename)
 
-    # Load geometry data
-    cyl_center, cyl_axis, cyl_radius, _, cyl_height, cyl_barrel_grid, cyl_cap_rings, cyl_sensor_radius = load_cyl_geom(
-        json_filename)
+    # Load geometry data using new unified function
+    detector_type, radius, height, n_sensors, sensor_radius = load_detector_geom(json_filename)
+    
+    # Check if it's a cylinder (this visualization is designed for cylinders)
+    if detector_type != 'cylinder':
+        raise ValueError(f"This visualization is designed for cylinders, got {detector_type}")
 
     # Set up detector information
     detector_positions = np.array(detector.all_points)
@@ -115,7 +118,7 @@ def create_detector_display(json_filename='../config/cyl_geom_config.json', spar
             plot_values = all_values
 
         corr = 1.
-        caps_offset = cyl_height
+        caps_offset = 1.05*height/2 +radius
 
         # Calculate positions for all cases
         x = np.zeros(n_detectors)
@@ -125,18 +128,18 @@ def create_detector_display(json_filename='../config/cyl_geom_config.json', spar
         barrel_mask = detector_cases == 0
         theta = np.arctan2(detector_positions[barrel_mask, 1], detector_positions[barrel_mask, 0])
         theta = (theta + np.pi * 3 / 2) % (2 * np.pi) / 2
-        x[barrel_mask] = theta * cyl_radius*2
+        x[barrel_mask] = theta * radius * 2
         y[barrel_mask] = detector_positions[barrel_mask, 2]
 
         # Top cap case (1)
         top_mask = detector_cases == 1
-        x[top_mask] = corr * detector_positions[top_mask, 0] + np.pi * cyl_radius
-        y[top_mask] = 1 + corr * (caps_offset + detector_positions[top_mask, 1])
+        x[top_mask] = corr * detector_positions[top_mask, 0] + np.pi * radius
+        y[top_mask] = corr * (caps_offset + detector_positions[top_mask, 1])
 
         # Bottom cap case (2)
         bottom_mask = detector_cases == 2
-        x[bottom_mask] = corr * detector_positions[bottom_mask, 0] + np.pi * cyl_radius
-        y[bottom_mask] = -1 + corr * (-caps_offset - detector_positions[bottom_mask, 1] )
+        x[bottom_mask] = corr * detector_positions[bottom_mask, 0] + np.pi * radius
+        y[bottom_mask] = corr * (-caps_offset - detector_positions[bottom_mask, 1])
 
         # Calculate the minimum distance between points in the transformed space
         transformed_positions = np.column_stack((x, y))
@@ -222,9 +225,12 @@ def create_detector_comparison_display(json_filename='config/cyl_geom_config.jso
     # Generate detector
     detector = generate_detector(json_filename)
 
-    # Load geometry data
-    cyl_center, cyl_axis, cyl_radius, _, cyl_height, cyl_barrel_grid, cyl_cap_rings, cyl_sensor_radius = load_cyl_geom(
-        json_filename)
+    # Load geometry data using new unified function
+    detector_type, radius, height, n_sensors, sensor_radius = load_detector_geom(json_filename)
+    
+    # Check if it's a cylinder (this visualization is designed for cylinders)
+    if detector_type != 'cylinder':
+        raise ValueError(f"This visualization is designed for cylinders, got {detector_type}")
 
     # Set up detector information
     detector_positions = np.array(detector.all_points)
@@ -320,7 +326,7 @@ def create_detector_comparison_display(json_filename='config/cyl_geom_config.jso
         )
 
         corr = 1.
-        caps_offset = cyl_height
+        caps_offset = 1.05*height/2 +radius
 
         # Calculate positions for all cases
         x = np.zeros(n_detectors)
@@ -330,18 +336,18 @@ def create_detector_comparison_display(json_filename='config/cyl_geom_config.jso
         barrel_mask = detector_cases == 0
         theta = np.arctan2(detector_positions[barrel_mask, 1], detector_positions[barrel_mask, 0])
         theta = (theta + np.pi * 3 / 2) % (2 * np.pi) / 2
-        x[barrel_mask] = theta * cyl_radius*2
+        x[barrel_mask] = theta * radius * 2
         y[barrel_mask] = detector_positions[barrel_mask, 2]
 
         # Top cap case (1)
         top_mask = detector_cases == 1
-        x[top_mask] = corr * detector_positions[top_mask, 0] + np.pi * cyl_radius
+        x[top_mask] = corr * detector_positions[top_mask, 0] + np.pi * radius
         y[top_mask] = 1 + corr * (caps_offset + detector_positions[top_mask, 1])
 
         # Bottom cap case (2)
         bottom_mask = detector_cases == 2
-        x[bottom_mask] = corr * detector_positions[bottom_mask, 0] + np.pi * cyl_radius
-        y[bottom_mask] = -1 + corr * (-caps_offset - detector_positions[bottom_mask, 1] )
+        x[bottom_mask] = corr * detector_positions[bottom_mask, 0] + np.pi * radius
+        y[bottom_mask] = -1 + corr * (-caps_offset - detector_positions[bottom_mask, 1])
 
         # Calculate the minimum distance between points in the transformed space
         transformed_positions = np.column_stack((x, y))

@@ -1,8 +1,0 @@
-{
-    "geometry_definitions": {
-        "center": [0.0, 0.0, 0.0],
-        "radius": 8.0,
-        "n_sensors": 5000,
-        "sensor_radius": 0.2
-    }
-}

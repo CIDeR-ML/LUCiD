@@ -1,0 +1,9 @@
+{
+  "detector_type": "cylinder",
+  "geometry_definitions": {
+    "radius": 2.0,
+    "height": 3.0,
+    "n_sensors": 200,
+    "sensor_radius": 0.2
+  }
+}
