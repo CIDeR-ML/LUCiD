@@ -1,7 +1,7 @@
 from tools.generate import differentiable_get_rays, new_differentiable_get_rays, get_isotropic_rays
 
-from tools.propagate import create_photon_propagator
-from tools.geometry import generate_detector
+from tools.propagate import create_photon_propagator, create_sphere_photon_propagator
+from tools.geometry import generate_detector, generate_sphere_detector
 
 import jax
 import jax.numpy as jnp
@@ -15,7 +15,9 @@ from tools.utils import spherical_to_cartesian
 
 base_dir_path = os.path.dirname(os.path.abspath(__file__))+'/'
 
-def setup_event_simulator(json_filename, n_photons=1_000_000, temperature=0.2, K=2, is_data=False, is_calibration=False, max_detectors_per_cell=4):
+def setup_event_simulator(json_filename, n_photons=1_000_000, temperature=0.2, K=2, 
+                         is_data=False, is_calibration=False, max_detectors_per_cell=4,
+                         detector_type='Cylinder'):
     """
     Sets up and returns an event simulator with the specified configuration.
 
@@ -35,6 +37,8 @@ def setup_event_simulator(json_filename, n_photons=1_000_000, temperature=0.2, K
         If true, runs in calibration mode, simulating isotropic photon generation, if false, uses the SIREN model.
     max_detectors_per_cell : int, optional
         Maximum number of detectors per cell in the detector configuration. Default is 4.
+    detector_type : str, optional
+        Type of detector geometry: 'Cylinder' or 'Sphere'. Default is 'Cylinder' for backward compatibility.
 
     Returns
     -------
@@ -45,23 +49,51 @@ def setup_event_simulator(json_filename, n_photons=1_000_000, temperature=0.2, K
             scatter_length, reflection_rate, absorption_length, tau_gs)
         and K is precompiled as part of the simulator.
     """
-    # Initialize detector configuration.
-    detector = generate_detector(json_filename)
-    detector_points = jnp.array(detector.all_points)
-    detector_radius = detector.S_radius
+    
+    # Validate detector type
+    if detector_type not in ['Cylinder', 'Sphere']:
+        raise ValueError(f"detector_type must be 'Cylinder' or 'Sphere', got {detector_type}")
+    
+    # Initialize detector configuration based on type
+    if detector_type == 'Cylinder':
+        # Use cylinder implementation
+        detector = generate_detector(json_filename)
+        detector_points = jnp.array(detector.all_points)
+        photosensor_radius = detector.S_radius
+        cylinder_height = detector.H
+        cylinder_radius = detector.r
 
-    # Setup photon propagator with specified parameters.
-    propagate_photons = create_photon_propagator(
-        detector_points,
-        detector_radius,
-        temperature=temperature,
-        max_detectors_per_cell=max_detectors_per_cell
-    )
+        # Setup cylinder photon propagator
+        propagate_photons = create_photon_propagator(
+            detector_points,
+            photosensor_radius,
+            # r=cylinder_radius, 
+            # h=cylinder_height,
+            temperature=temperature,
+            max_detectors_per_cell=max_detectors_per_cell
+        )
+        
+    elif detector_type == 'Sphere':
+        # Use sphere implementation
+        detector = generate_sphere_detector(json_filename)
+        detector_points = jnp.array(detector.all_points)
+        photosensor_radius = detector.S_radius
+        sphere_radius = detector.r
+        
+        # Setup sphere photon propagator
+        propagate_photons = create_sphere_photon_propagator(
+            detector_points,
+            photosensor_radius,
+            sphere_radius=sphere_radius,
+            temperature=temperature,
+            max_detectors_per_cell=max_detectors_per_cell
+        )
 
-    # Get number of detectors from the points array.
+    # Get number of detectors from the points array (common for both types)
     NUM_DETECTORS = len(detector_points)
 
-    # Create the event simulator with a fixed number of scattering iterations K.
+    # Create the event simulator with a fixed number of scattering iterations K
+    # (This part remains the same for both detector types)
     simulate_event = create_event_simulator(
         propagate_photons,
         n_photons,
@@ -74,6 +106,67 @@ def setup_event_simulator(json_filename, n_photons=1_000_000, temperature=0.2, K
     )
 
     return simulate_event
+
+
+# def setup_event_simulator(json_filename, n_photons=1_000_000, temperature=0.2, K=2, is_data=False, is_calibration=False, max_detectors_per_cell=4):
+#     """
+#     Sets up and returns an event simulator with the specified configuration.
+
+#     Parameters
+#     ----------
+#     json_filename : str
+#         Path to the JSON file containing detector configuration.
+#     n_photons : int, optional
+#         Number of photons to simulate per event, default 1,000,000.
+#     temperature : float, optional
+#         Temperature parameter for photon propagation, default 0.2.
+#     K : int, optional
+#         Number of scattering iterations to simulate per event.
+#     is_data : bool, optional
+#         If true, runs in data mode, loading photon data from a file, if false, uses the SIREN model.
+#     is_calibration : bool, optional
+#         If true, runs in calibration mode, simulating isotropic photon generation, if false, uses the SIREN model.
+#     max_detectors_per_cell : int, optional
+#         Maximum number of detectors per cell in the detector configuration. Default is 4.
+
+#     Returns
+#     -------
+#     callable
+#         simulate_event: a JIT-compiled function that takes (params, key) and returns event data.
+#         The parameter tuple for the simulation function is expected to be:
+#            (cone_opening, track_origin, track_direction, initial_intensity,
+#             scatter_length, reflection_rate, absorption_length, tau_gs)
+#         and K is precompiled as part of the simulator.
+#     """
+#     # Initialize detector configuration.
+#     detector = generate_detector(json_filename)
+#     detector_points = jnp.array(detector.all_points)
+#     detector_radius = detector.S_radius
+
+#     # Setup photon propagator with specified parameters.
+#     propagate_photons = create_photon_propagator(
+#         detector_points,
+#         detector_radius,
+#         temperature=temperature,
+#         max_detectors_per_cell=max_detectors_per_cell
+#     )
+
+#     # Get number of detectors from the points array.
+#     NUM_DETECTORS = len(detector_points)
+
+#     # Create the event simulator with a fixed number of scattering iterations K.
+#     simulate_event = create_event_simulator(
+#         propagate_photons,
+#         n_photons,
+#         NUM_DETECTORS,
+#         detector_points,
+#         K,
+#         is_data,
+#         is_calibration,
+#         max_detectors_per_cell
+#     )
+
+#     return simulate_event
 
 
 def normalize(v, epsilon=1e-6):

@@ -496,16 +496,419 @@ def generate_dataset_point_grid(file_path):
 
 
 
+def fibonacci_sphere_points_numpy(n_points, radius=1.0):
+    """Generate approximately equidistant points on sphere surface using Fibonacci spiral.
+    
+    Parameters
+    ----------
+    n_points : int
+        Number of points to generate
+    radius : float, optional
+        Radius of the sphere, default 1.0
+        
+    Returns
+    -------
+    np.ndarray
+        Array of shape (n_points, 3) containing point coordinates
+    """
+    center = np.array([0.0, 0.0, 0.0])
+    
+    indices = np.arange(0, n_points, dtype=float)
+    
+    # Golden ratio
+    golden_ratio = (1 + np.sqrt(5)) / 2
+    
+    # Fibonacci spiral algorithm
+    theta = 2 * np.pi * indices / golden_ratio
+    phi = np.arccos(1 - 2 * indices / n_points)
+    
+    # Convert to Cartesian coordinates
+    x = radius * np.sin(phi) * np.cos(theta)
+    y = radius * np.sin(phi) * np.sin(theta)
+    z = radius * np.cos(phi)
+    
+    points = np.stack([x, y, z], axis=1) + center
+    
+    return points
 
 
+class Sphere:
+    """Manage the spherical detector geometry"""
+    def __init__(self, radius, n_sensors, sensor_radius, n_ref_points=12):
+        self.C = np.array([0.0, 0.0, 0.0])  # Always centered at origin
+        self.r = radius
+        self.n_sensors = n_sensors
+        self.S_radius = sensor_radius
+        self.n_ref_points = n_ref_points
+
+        self.place_photosensors()
+        self.create_reference_points()
+        self.segment_detectors()
+
+    def place_photosensors(self):
+        """Position the photo sensor centers on the sphere surface using Fibonacci spiral."""
+        self.all_points = fibonacci_sphere_points_numpy(self.n_sensors, self.r) + self.C
+        
+        # Create ID to position dictionary
+        self.ID_to_position = {i: self.all_points[i] for i in range(len(self.all_points))}
+        
+        # For sphere, all sensors are on surface (case 0)
+        self.ID_to_case = {i: 0 for i in range(len(self.all_points))}
+
+    def create_reference_points(self):
+        """Create reference points for segmentation using icosahedral vertices"""
+        # Use icosahedral vertices for more uniform distribution
+        # Golden ratio
+        phi = (1.0 + np.sqrt(5.0)) / 2.0
+        
+        # Icosahedral vertices (normalized)
+        vertices = np.array([
+            [-1, phi, 0], [1, phi, 0], [-1, -phi, 0], [1, -phi, 0],
+            [0, -1, phi], [0, 1, phi], [0, -1, -phi], [0, 1, -phi],
+            [phi, 0, -1], [phi, 0, 1], [-phi, 0, -1], [-phi, 0, 1]
+        ])
+        
+        # Normalize to unit sphere then scale and translate
+        vertices = vertices / np.linalg.norm(vertices, axis=1, keepdims=True)
+        self.ref_points = vertices * self.r * 0.8 + self.C  # Place slightly inside sphere
+
+    def segment_detectors(self):
+        """Group detector points based on nearest reference point"""
+        tree = cKDTree(self.ref_points)
+        _, self.detector_groups = tree.query(self.all_points)
+        
+        self.grouped_detectors = [[] for _ in range(len(self.ref_points))]
+        for i, group in enumerate(self.detector_groups):
+            self.grouped_detectors[group].append(i)
+
+    def visualize_groups_plotly(self):
+        """Visualize the detector groups in 3D using Plotly"""
+        fig = make_subplots(rows=1, cols=1, specs=[[{'type': 'scene'}]])
+
+        # Generate a color scale
+        n_colors = len(self.grouped_detectors)
+        colors = pc.qualitative.Plotly * (n_colors // len(pc.qualitative.Plotly) + 1)
+        colors = colors[:n_colors]  # Truncate to the number of groups
+
+        for i, group in enumerate(self.grouped_detectors):
+            if len(group) > 0:  # Only plot non-empty groups
+                group_points = self.all_points[group]
+                fig.add_trace(go.Scatter3d(
+                    x=group_points[:, 0], y=group_points[:, 1], z=group_points[:, 2],
+                    mode='markers',
+                    marker=dict(size=5, color=colors[i], opacity=0.8),
+                    name=f'Group {i} ({len(group)} sensors)'
+                ))
+
+        fig.add_trace(go.Scatter3d(
+            x=self.ref_points[:, 0], y=self.ref_points[:, 1], z=self.ref_points[:, 2],
+            mode='markers',
+            marker=dict(size=10, color='black', symbol='diamond'),
+            name='Reference Points'
+        ))
+
+        fig.update_layout(
+            scene=dict(
+                xaxis_title='X',
+                yaxis_title='Y',
+                zaxis_title='Z',
+                aspectmode='cube'
+            ),
+            title=f'Spherical Detector Groups ({self.n_sensors} sensors)',
+            height=800,
+            legend=dict(itemsizing='constant')
+        )
+
+        fig.show()
+
+    def visualize_event_data_plotly(self, loaded_indices, loaded_charges, loaded_times, 
+                                   plot_time=False, log_scale=False, title=None, 
+                                   show_all_detectors=False, marker_size=6, show_colorbar=True,
+                                   opacity=1.0, dark_theme=True):
+        """
+        Visualize detector event data in 3D using Plotly with colors proportional to charge or time.
+        
+        Parameters:
+        -----------
+        loaded_indices : array-like
+            Indices of non-zero hits
+        loaded_charges : array-like
+            Charge values at non-zero indices
+        loaded_times : array-like
+            Time values at non-zero indices
+        plot_time : bool, default=False
+            If True, color by time values; if False, color by charge values
+        log_scale : bool, default=False
+            If True, apply logarithmic scaling to the color gradient
+        title : str, optional
+            Title for the plot. If None, auto-generates title.
+        show_all_detectors : bool, default=False
+            If True, shows all detector positions as light gray background points
+        marker_size : int, default=6
+            Size of the markers for hit detectors
+        show_colorbar : bool, default=True
+            If True, shows the colorbar; if False, creates minimal display with just sensors
+        opacity : float, default=1.0
+            Opacity of the markers (1.0 = fully opaque, avoids depth sorting issues)
+        dark_theme : bool, default=True
+            If True, use black background; if False, use white background
+        """
+        import plotly.graph_objects as go
+        import numpy as np
+        
+        # Set color scheme based on theme
+        if dark_theme:
+            bg_color = 'black'
+            paper_color = 'black'
+            colorbar_color = 'white'
+        else:
+            bg_color = 'white'
+            paper_color = 'white'
+            colorbar_color = 'black'
+        
+        # Convert inputs to numpy arrays if not already
+        loaded_indices = np.array(loaded_indices)
+        loaded_charges = np.array(loaded_charges)
+        loaded_times = np.array(loaded_times)
+        
+        # Validate inputs
+        if len(loaded_indices) != len(loaded_charges) or len(loaded_indices) != len(loaded_times):
+            raise ValueError("loaded_indices, loaded_charges, and loaded_times must have the same length")
+        
+        if len(loaded_indices) == 0:
+            print("No event data to display")
+            return
+        
+        # Get positions of hit detectors
+        hit_positions = self.all_points[loaded_indices]
+        
+        # Select which values to use for coloring
+        color_values = loaded_times if plot_time else loaded_charges
+        
+        # Handle log scaling
+        if log_scale:
+            # Handle zero/negative values for log scale
+            positive_mask = color_values > 0
+            if not np.any(positive_mask):
+                print("Warning: No positive values found for log scale. Using linear scale instead.")
+                log_scale = False
+            else:
+                min_positive = np.min(color_values[positive_mask])
+                color_values_log = np.copy(color_values)
+                color_values_log[~positive_mask] = min_positive * 0.1
+                color_values_log = np.log10(color_values_log)
+                colorbar_title = f"{'Time' if plot_time else 'Charge'} (log₁₀ scale)"
+                plot_color_values = color_values_log
+        
+        if not log_scale:
+            colorbar_title = 'Time (ns)' if plot_time else 'Charge (PE)'
+            plot_color_values = color_values
+        
+        # Create the plot
+        fig = go.Figure()
+        
+        # Optionally add all detector positions as background
+        if show_all_detectors:
+            fig.add_trace(go.Scatter3d(
+                x=self.all_points[:, 0], 
+                y=self.all_points[:, 1], 
+                z=self.all_points[:, 2],
+                mode='markers',
+                marker=dict(
+                    size=2, 
+                    color='lightgray', 
+                    opacity=0.3
+                ),
+                name='All Detectors',
+                showlegend=True,
+                hoverinfo='skip'
+            ))
+        
+        # Sort points by depth (distance from center) for better transparency rendering
+        #distances = np.linalg.norm(hit_positions - self.C, axis=1)
+        depth_order = np.argsort(hit_positions[:, 2])
+        hit_positions_sorted = hit_positions[depth_order]
+        plot_color_values_sorted = plot_color_values[depth_order]
+        sorted_indices = loaded_indices[depth_order]
+        sorted_charges = loaded_charges[depth_order] 
+        sorted_times = loaded_times[depth_order]
+        
+        # Create marker dictionary with full opacity to avoid transparency issues
+        marker_dict = dict(
+            size=marker_size,
+            color=plot_color_values_sorted,
+            colorscale='viridis',
+            opacity=opacity,  # Use parameter-controlled opacity
+            line=dict(width=0, color='rgba(0,0,0,0)')  # Remove outlines for cleaner look
+        )
+        
+        # Add colorbar only if requested
+        if show_colorbar:
+            marker_dict['colorbar'] = dict(
+                title=dict(
+                    text=colorbar_title,
+                    font=dict(color=colorbar_color)
+                ),
+                tickfont=dict(color=colorbar_color),
+                thickness=20,
+                len=0.7,
+                x=1.02
+            )
+        
+        # Add scatter plot for hit detectors
+        fig.add_trace(go.Scatter3d(
+            x=hit_positions_sorted[:, 0], 
+            y=hit_positions_sorted[:, 1], 
+            z=hit_positions_sorted[:, 2],
+            mode='markers',
+            marker=marker_dict,
+            name=f'Event Data ({len(loaded_indices)} hits)',
+            text=[f'Detector ID: {idx}<br>Charge: {charge:.3f} PE<br>Time: {time:.3f} ns' 
+                  for idx, charge, time in zip(sorted_indices, sorted_charges, sorted_times)],
+            hovertemplate='%{text}<extra></extra>'
+        ))
+        
+        # Calculate reasonable axis ranges based on data
+        all_x = hit_positions_sorted[:, 0]
+        all_y = hit_positions_sorted[:, 1]
+        all_z = hit_positions_sorted[:, 2]
+        
+        margin = 0.1 * max(np.ptp(all_x), np.ptp(all_y), np.ptp(all_z))
+        
+        # Update layout for clean display
+        margin_right = 80 if show_colorbar else 0
+        fig.update_layout(
+            scene=dict(
+                xaxis=dict(
+                    visible=False,  # Hide x-axis completely
+                    showgrid=False,
+                    showline=False,
+                    showticklabels=False,
+                    title='',
+                    range=[np.min(all_x) - margin, np.max(all_x) + margin]
+                ),
+                yaxis=dict(
+                    visible=False,  # Hide y-axis completely
+                    showgrid=False,
+                    showline=False,
+                    showticklabels=False,
+                    title='',
+                    range=[np.min(all_y) - margin, np.max(all_y) + margin]
+                ),
+                zaxis=dict(
+                    visible=False,  # Hide z-axis completely
+                    showgrid=False,
+                    showline=False,
+                    showticklabels=False,
+                    title='',
+                    range=[np.min(all_z) - margin, np.max(all_z) + margin]
+                ),
+                aspectmode='cube',  # Important for sphere to maintain shape
+                bgcolor=paper_color,  # Theme-based background
+            ),
+            height=800,
+            width=1000,
+            showlegend=False,  # Remove legend for cleaner look
+            paper_bgcolor=paper_color,  # Theme-based paper background
+            plot_bgcolor=paper_color,   # Theme-based plot background
+            margin=dict(l=0, r=margin_right, t=0, b=0)  # Minimal margins, space for colorbar if needed
+        )
+        
+        fig.show()
+
+    def plot_pmts_per_reference_plotly(self):
+        """Plot the number of PMTs for each reference point using Plotly"""
+        pmts_per_ref = [len(group) for group in self.grouped_detectors]
+        
+        fig = go.Figure(data=[go.Bar(x=list(range(len(pmts_per_ref))), y=pmts_per_ref)])
+        
+        fig.update_layout(
+            xaxis_title='Reference Point Index',
+            yaxis_title='Number of PMTs',
+            title=f'Number of PMTs per Reference Point (Sphere with {self.n_sensors} sensors)'
+        )
+        
+        fig.show()
+
+    def visualize_sphere_wireframe(self, show_detectors=True, show_ref_points=True):
+        """Visualize the sphere as a wireframe with detectors"""
+        fig = go.Figure()
+
+        # Create sphere wireframe
+        u = np.linspace(0, 2 * np.pi, 50)
+        v = np.linspace(0, np.pi, 50)
+        x_sphere = self.r * np.outer(np.cos(u), np.sin(v)) + self.C[0]
+        y_sphere = self.r * np.outer(np.sin(u), np.sin(v)) + self.C[1]
+        z_sphere = self.r * np.outer(np.ones(np.size(u)), np.cos(v)) + self.C[2]
+
+        # Add wireframe
+        fig.add_trace(go.Surface(
+            x=x_sphere, y=y_sphere, z=z_sphere,
+            opacity=0.1,
+            showscale=False,
+            colorscale=[[0, 'lightblue'], [1, 'lightblue']],
+            name='Sphere Surface'
+        ))
+
+        if show_detectors:
+            fig.add_trace(go.Scatter3d(
+                x=self.all_points[:, 0], 
+                y=self.all_points[:, 1], 
+                z=self.all_points[:, 2],
+                mode='markers',
+                marker=dict(size=4, color='red', opacity=0.8),
+                name=f'Detectors ({self.n_sensors})'
+            ))
+
+        if show_ref_points:
+            fig.add_trace(go.Scatter3d(
+                x=self.ref_points[:, 0], 
+                y=self.ref_points[:, 1], 
+                z=self.ref_points[:, 2],
+                mode='markers',
+                marker=dict(size=8, color='black', symbol='diamond'),
+                name='Reference Points'
+            ))
+
+        fig.update_layout(
+            scene=dict(
+                xaxis_title='X',
+                yaxis_title='Y',
+                zaxis_title='Z',
+                aspectmode='cube'
+            ),
+            title=f'Spherical Detector Geometry (R={self.r})',
+            height=800
+        )
+
+        fig.show()
 
 
+# Utility functions for sphere geometry
 
+def load_sphere_config(file_path):
+    """Function to load sphere configuration from JSON file"""
+    with open(file_path, 'r') as file:
+        config = json.load(file)
+    return config
 
+def load_sphere_geom(file_path):
+    """Load sphere geometry from JSON config"""
+    # Load configuration from JSON file
+    config = load_sphere_config(file_path)
 
+    # Extract values from the loaded configuration
+    sphere_radius = config['geometry_definitions']['radius']
+    n_sensors = config['geometry_definitions']['n_sensors']
+    sensor_radius = config['geometry_definitions']['sensor_radius']
 
+    return sphere_radius, n_sensors, sensor_radius
 
+def generate_sphere_detector(file_path):
+    """Function to generate sphere from json config"""
+    sphere_radius, n_sensors, sensor_radius = load_sphere_geom(file_path)
+    return Sphere(sphere_radius, n_sensors, sensor_radius)
 
-
-
-
+def generate_sphere_detector_direct(radius=4.0, n_sensors=1000, sensor_radius=0.1):
+    """Function to generate sphere directly with parameters"""
+    return Sphere(radius, n_sensors, sensor_radius)
