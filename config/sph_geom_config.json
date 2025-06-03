@@ -4,14 +4,5 @@
         "radius": 8.0,
         "n_sensors": 5000,
         "sensor_radius": 0.2
-    },
-    "propagation_parameters": {
-        "n_divisions": 50,
-        "temperature": 0.2,
-        "max_detectors_per_cell": 4
-    },
-    "simulation_parameters": {
-        "n_photons": 10000,
-        "origin_inside_sphere": true
     }
 }
