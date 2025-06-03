@@ -1136,42 +1136,6 @@ batch_intersect_sphere_with_grid = jax.vmap(intersect_sphere_with_grid,
                                            in_axes=(0, 0, None, None))
 
 
-def fibonacci_sphere_points(n_points, radius=1.0):
-    """Generate approximately equidistant points on sphere surface using Fibonacci spiral.
-    
-    Parameters
-    ----------
-    n_points : int
-        Number of points to generate
-    radius : float, optional
-        Radius of the sphere, default 1.0
-        
-    Returns
-    -------
-    jnp.ndarray
-        Array of shape (n_points, 3) containing point coordinates
-    """
-    center = jnp.array([0.0, 0.0, 0.0])
-    
-    indices = jnp.arange(0, n_points, dtype=jnp.float32)
-    
-    # Golden ratio
-    golden_ratio = (1 + jnp.sqrt(5)) / 2
-    
-    # Fibonacci spiral algorithm
-    theta = 2 * jnp.pi * indices / golden_ratio
-    phi = jnp.arccos(1 - 2 * indices / n_points)
-    
-    # Convert to Cartesian coordinates
-    x = radius * jnp.sin(phi) * jnp.cos(theta)
-    y = radius * jnp.sin(phi) * jnp.sin(theta)
-    z = radius * jnp.cos(phi)
-    
-    points = jnp.stack([x, y, z], axis=1) + center
-    
-    return points
-
-
 @partial(jax.jit, static_argnums=(2, 3))
 def assign_detectors_to_sphere_grid(detectors, detector_radius, radius, n_divisions):
     """Assign detectors to spherical grid cells, handling overlap across cell boundaries.
