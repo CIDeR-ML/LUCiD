@@ -258,35 +258,33 @@ def new_differentiable_get_rays(track_origin, track_direction, energy, Nphot, ta
 @partial(jax.jit, static_argnums=(2,))
 def get_isotropic_rays(source_position, source_intensity, Nphot, key):
     """
-    Generate photons isotropically from a point source.
-
-    Args:
-        source_position: A 3D vector representing the source position
-        source_intensity: Scalar intensity of the source
-        Nphot: Number of photons to generate
-        key: JAX random key
-
-    Returns:
-        ray_vectors: Direction vectors for the photons
-        ray_origins: Origin points for the photons
-        photon_weights: Weights for each photon
+    Generate photons isotropically from a point source using spherical coordinates.
     """
-    # Generate random direction vectors
-    key, subkey = random.split(key)
-
-    # Generate random vectors with Gaussian distribution
-    # This creates uniform distribution on a sphere when normalized
-    random_vectors = random.normal(subkey, (Nphot, 3))
-
-    # Normalize to get uniform distribution on the unit sphere
-    ray_vectors = normalize(random_vectors)
-
+    # Split the random key
+    key, key_phi, key_theta = random.split(key, 3)
+    
+    # Generate spherically isotropic directions
+    phi = random.uniform(key_phi, (Nphot,)) * 2 * jnp.pi
+    cos_theta = random.uniform(key_theta, (Nphot,)) * 2 - 1
+    sin_theta = jnp.sqrt(1 - cos_theta**2)
+    
+    # Convert to Cartesian coordinates
+    x = sin_theta * jnp.cos(phi)
+    y = sin_theta * jnp.sin(phi)
+    z = cos_theta
+    
+    # Stack into direction vectors
+    ray_vectors_unnormalized = jnp.stack([x, y, z], axis=1)
+    
+    # Normalize using vmap (even though they should already be unit vectors)
+    ray_vectors = jax.vmap(normalize)(ray_vectors_unnormalized)
+    
     # All ray origins are at the source position
-    ray_origins = jnp.ones((Nphot, 3)) * source_position[None, :]
-
+    ray_origins = jnp.tile(source_position, (Nphot, 1))
+    
     # Uniform weights
     photon_weights = jnp.ones(Nphot) * (source_intensity / Nphot)
-
+    
     return ray_vectors, ray_origins, photon_weights
 
 
