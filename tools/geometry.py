@@ -503,6 +503,7 @@ class Detector(ABC):
                     color_values_log = np.copy(color_values)
                     color_values_log[~positive_mask] = min_positive * 0.1
                     color_values_log = np.log10(color_values_log)
+                    print(min_positive, np.max(color_values[positive_mask]))
                     colorbar_title = f"{'Time' if plot_time else 'Charge'} (log₁₀ scale)"
                     plot_color_values = color_values_log
             

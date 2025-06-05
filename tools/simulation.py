@@ -206,12 +206,47 @@ def sample_scatter_distance(D, S, rng_key):
     return -S * jnp.log(1 - u * (1 - jnp.exp(-D / S)))
 
 
+def solve_rayleigh_inverse_cdf(u):
+    """
+    Solve the inverse CDF for Rayleigh scattering: P(μ) ∝ (1 + μ²)
+    Uses Cardano's formula to solve: μ³ + 3μ - (8u - 4) = 0
+    """
+    # Transform to standard form: t³ + pt + q = 0 where μ = t
+    p = 3.0
+    q = -(8.0 * u - 4.0)
+    
+    # Cardano's formula
+    discriminant = -(4 * p**3 + 27 * q**2)
+    
+    # Use JAX-compatible conditional
+    # Three real roots case (rare in our range)
+    sqrt_disc_pos = jnp.sqrt(jnp.abs(discriminant))
+    rho = jnp.sqrt(-p**3 / 27)
+    theta = jnp.arccos(jnp.clip(-q / (2 * rho), -1, 1))
+    mu_three_roots = 2 * jnp.cbrt(rho) * jnp.cos(theta / 3)
+    
+    # One real root case (typical)
+    sqrt_disc_neg = jnp.sqrt(-discriminant)
+    A = jnp.cbrt((-q + sqrt_disc_neg / (3 * jnp.sqrt(3))) / 2)
+    B = jnp.cbrt((-q - sqrt_disc_neg / (3 * jnp.sqrt(3))) / 2)
+    mu_one_root = A + B
+    
+    # Select based on discriminant sign
+    mu = jnp.where(discriminant >= 0, mu_three_roots, mu_one_root)
+    
+    # Clamp to valid range due to numerical precision
+    return jnp.clip(mu, -1.0, 1.0)
+
 def compute_scatter_direction(incident_dir, rng_key):
     """Compute a new scattering direction based on a Rayleigh phase function."""
     k1, k2 = jax.random.split(rng_key)
     u1 = jax.random.uniform(k1)
     u2 = jax.random.uniform(k2)
-    cos_theta = jnp.cbrt(2 * u1 - 1)
+    
+    # FIXED: Use correct Rayleigh inverse CDF instead of cbrt
+    cos_theta = solve_rayleigh_inverse_cdf(u1)
+    
+    # Everything else stays the same
     sin_theta = jnp.sqrt(1 - cos_theta ** 2)
     phi = 2 * jnp.pi * u2
     local_dir = normalize(jnp.array([sin_theta * jnp.cos(phi),
@@ -219,7 +254,6 @@ def compute_scatter_direction(incident_dir, rng_key):
                                      cos_theta]))
     frame = create_local_frame(incident_dir)
     return normalize(frame @ local_dir)
-
 
 def create_siren_grid(table):
     ene_bins = table.normalize(0, table.binning[0])
