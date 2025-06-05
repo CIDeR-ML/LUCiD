@@ -359,7 +359,7 @@ class Detector(ABC):
                                      show_all_detectors=True, marker_size=6, show_colorbar=True,
                                      opacity=1.0, dark_theme=True, n_disc_segments=12, 
                                      colorscale='viridis', surface_color='gray', 
-                                     inactive_color='red', inactive_opacity=0.3):
+                                     inactive_color='red', inactive_opacity=0.3, figname=None):
         """
         Visualize detector event data in 3D using circular discs oriented according to surface normals.
         Shows red discs for sensors without charge and color-coded discs for sensors with hits.
@@ -675,6 +675,9 @@ class Detector(ABC):
             margin=dict(l=0, r=margin_right, t=0, b=0)
         )
         
+        if figname:
+            fig.write_image(figname)
+
         fig.show()
 
     def _add_detector_surface(self, fig, surface_color='gray'):

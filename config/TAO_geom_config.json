@@ -3,6 +3,6 @@
   "geometry_definitions": {
     "radius": 1.8,
     "n_sensors": 4000,
-    "sensor_radius": 0.025
+    "sensor_radius": 0.05
   }
 }

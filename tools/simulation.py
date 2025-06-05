@@ -86,6 +86,7 @@ def setup_event_simulator(json_filename, n_photons=1_000_000, temperature=0.2, K
             photosensor_radius,
             sphere_radius=sphere_radius,
             temperature=temperature,
+            n_divisions=100,
             max_detectors_per_cell=max_detectors_per_cell
         )
 
@@ -474,6 +475,35 @@ def create_event_simulator(propagate_photons, Nphot, NUM_DETECTORS, detector_poi
               surface_distances, normals, scatter_length, reflection_rate,
               absorption_length, tau_gs, rng_keys)
 
+            # NaN SAFETY LAYER - Detect and neutralize problematic rays (this happens once every several million rays, but causes problems if not dealt with)
+            nan_pos_mask = jnp.any(jnp.isnan(new_positions), axis=1)
+            nan_dir_mask = jnp.any(jnp.isnan(new_directions), axis=1)
+            nan_factors_mask = jnp.isnan(continuing_factors)
+            problematic_rays = nan_pos_mask | nan_dir_mask | nan_factors_mask
+
+            # Count problematic rays for monitoring (just for debuging purposes)
+            # nan_count = jnp.sum(problematic_rays)
+            #jax.debug.print("Iteration {}: Found {} problematic rays with NaN", i, nan_count)
+
+            # Replace NaN outputs with safe values
+            safe_new_positions = jnp.where(
+                problematic_rays[:, None], 
+                current_positions,  # Keep original position
+                new_positions       # Use computed position
+            )
+
+            safe_new_directions = jnp.where(
+                problematic_rays[:, None],
+                current_directions, # Keep original direction  
+                new_directions      # Use computed direction
+            )
+
+            safe_continuing_factors = jnp.where(
+                problematic_rays,
+                0.0,                # Kill the ray (zero intensity)
+                continuing_factors  # Use computed factor
+            )
+
             # Calculate intensities
             detected_intensity_factors = detect_probs * reflection_attenuations
             updated_weights = depositions * current_intensities[None, :] * detected_intensity_factors[None, :]
@@ -484,11 +514,11 @@ def create_event_simulator(propagate_photons, Nphot, NUM_DETECTORS, detector_poi
             iteration_indices = detector_indices
             iteration_times = total_times.squeeze(-1)
 
-            # Update for next iteration
-            new_intensities = current_intensities * continuing_factors
+            # Update for next iteration using safe values
+            new_intensities = current_intensities * safe_continuing_factors
             # Apply stop_gradient to all state variables
-            next_positions = jax.lax.stop_gradient(new_positions)
-            next_directions = jax.lax.stop_gradient(new_directions)
+            next_positions = jax.lax.stop_gradient(safe_new_positions)
+            next_directions = jax.lax.stop_gradient(safe_new_directions)
             next_intensities = new_intensities
             next_times = jax.lax.stop_gradient(new_times)
 
@@ -561,6 +591,7 @@ def create_event_simulator(propagate_photons, Nphot, NUM_DETECTORS, detector_poi
         )
 
         return corrected_q, aligned_times
+
 
     # Return the appropriate function based on mode
     if is_data:
