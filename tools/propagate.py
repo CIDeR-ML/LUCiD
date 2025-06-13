@@ -1017,3 +1017,663 @@ def create_photon_propagator(detector_positions, detector_radius, r=4.0, h=6.0, 
             temperature, overlap_prob)
 
     return propagate_photons
+
+import jax
+import jax.numpy as jnp
+from functools import partial
+import numpy as np
+
+# We'll need this import:
+from jax import lax
+
+@jax.jit
+def intersect_sphere(ray_origin, ray_direction, center, radius):
+    """Calculate intersection of a ray with a sphere.
+
+    Parameters
+    ----------
+    ray_origin : jnp.ndarray
+        Starting point of the ray [x, y, z]
+    ray_direction : jnp.ndarray
+        Direction vector of the ray [dx, dy, dz]
+    center : jnp.ndarray
+        Center of the sphere [x, y, z]
+    radius : float
+        Radius of the sphere
+
+    Returns
+    -------
+    tuple
+        (bool, float) - (whether intersection exists, distance to intersection)
+    """
+    LARGE = 1e10
+    
+    # Vector from ray origin to sphere center
+    oc = ray_origin - center
+    
+    # Quadratic equation coefficients for sphere intersection
+    a = jnp.sum(ray_direction * ray_direction)
+    b = 2.0 * jnp.sum(oc * ray_direction)
+    c = jnp.sum(oc * oc) - radius**2
+    
+    discriminant = b**2 - 4*a*c
+    epsilon = 1e-6
+    
+    def intersection_branch(_):
+        sqrt_disc = jnp.sqrt(jnp.maximum(0.0, discriminant))
+        t1 = (-b - sqrt_disc) / (2*a)
+        t2 = (-b + sqrt_disc) / (2*a)
+        
+        # We want the intersection from inside the sphere going outward
+        # So we take the positive t (exit point)
+        t_candidate = jnp.maximum(t1, t2)
+        
+        valid_t = t_candidate > 0
+        intersects_ = (discriminant >= -epsilon) & valid_t
+        tval_ = jnp.where(intersects_, t_candidate, LARGE)
+        
+        return (intersects_, tval_)
+    
+    def no_intersection_branch(_):
+        return (False, jnp.array(LARGE, dtype=jnp.float32))
+    
+    has_intersection = discriminant >= -epsilon
+    intersects, tval = lax.cond(has_intersection,
+                                intersection_branch,
+                                no_intersection_branch,
+                                operand=None)
+    
+    return intersects, tval
+
+
+@partial(jax.jit, static_argnums=(2, 3))
+def intersect_sphere_with_grid(ray_origin, ray_direction, radius, n_divisions):
+    """Find intersection with sphere and compute grid cell indices.
+
+    Parameters
+    ----------
+    ray_origin : jnp.ndarray
+        Starting point of the ray [x, y, z]
+    ray_direction : jnp.ndarray
+        Direction vector of the ray [dx, dy, dz]
+    radius : float
+        Radius of the sphere
+    n_divisions : int
+        Number of divisions for grid resolution
+
+    Returns
+    -------
+    tuple
+        (intersects, t, theta_idx, phi_idx, intersection_point)
+    """
+    center = jnp.array([0.0, 0.0, 0.0])
+    intersects, t = intersect_sphere(ray_origin, ray_direction, center, radius)
+    intersection_point = ray_origin + t * ray_direction
+    
+    # Convert intersection point to spherical coordinates relative to sphere center
+    relative_point = intersection_point - center
+    
+    # Calculate spherical coordinates
+    r = jnp.linalg.norm(relative_point)
+    theta = jnp.arccos(jnp.clip(relative_point[2] / (r + 1e-10), -1.0, 1.0))  # polar angle [0, π]
+    phi = jnp.arctan2(relative_point[1], relative_point[0]) % (2 * jnp.pi)  # azimuthal angle [0, 2π]
+    
+    # Convert to grid indices
+    n_theta = n_divisions
+    n_phi = 2 * n_divisions  # More divisions in phi for roughly uniform cells
+    
+    theta_idx = jnp.floor(theta / jnp.pi * n_theta).astype(jnp.int32)
+    phi_idx = jnp.floor(phi / (2 * jnp.pi) * n_phi).astype(jnp.int32)
+    
+    # Clamp indices to valid range
+    theta_idx = jnp.clip(theta_idx, 0, n_theta - 1)
+    phi_idx = jnp.clip(phi_idx, 0, n_phi - 1)
+    
+    return intersects, t, theta_idx, phi_idx, intersection_point
+
+
+batch_intersect_sphere_with_grid = jax.vmap(intersect_sphere_with_grid,
+                                           in_axes=(0, 0, None, None))
+
+
+@partial(jax.jit, static_argnums=(2, 3))
+def assign_detectors_to_sphere_grid(detectors, detector_radius, radius, n_divisions):
+    """Assign detectors to spherical grid cells, handling overlap across cell boundaries.
+
+    Parameters
+    ----------
+    detectors : jnp.ndarray
+        Array of detector positions, shape (n_detectors, 3)
+    detector_radius : float
+        Radius of each detector
+    radius : float
+        Sphere radius
+    n_divisions : int
+        Grid resolution parameter
+
+    Returns
+    -------
+    jnp.ndarray
+        Array of shape (n_detectors, 4, 2) containing up to 4 grid cell assignments
+        per detector. -1 indicates no assignment.
+    """
+    
+    def assign_single_detector(detector):
+        # Convert detector position to spherical coordinates relative to sphere center
+        center = jnp.array([0.0, 0.0, 0.0])
+        relative_pos = detector - center
+        r = jnp.linalg.norm(relative_pos)
+        
+        # Check if detector is approximately on sphere surface
+        on_surface = jnp.abs(r - radius) <= detector_radius
+        
+        def assign_surface():
+            theta = jnp.arccos(jnp.clip(relative_pos[2] / (r + 1e-10), -1.0, 1.0))
+            phi = jnp.arctan2(relative_pos[1], relative_pos[0]) % (2 * jnp.pi)
+            
+            n_theta = n_divisions
+            n_phi = 2 * n_divisions
+            
+            theta_idx = jnp.floor(theta / jnp.pi * n_theta).astype(jnp.int32)
+            phi_idx = jnp.floor(phi / (2 * jnp.pi) * n_phi).astype(jnp.int32)
+            
+            # Calculate overlap with neighboring cells
+            theta_frac = (theta / jnp.pi * n_theta) % 1
+            phi_frac = (phi / (2 * jnp.pi) * n_phi) % 1
+            
+            # Angular size of detector relative to grid cell size
+            theta_cell_size = jnp.pi / n_theta
+            phi_cell_size = 2 * jnp.pi / n_phi
+            
+            # Approximate angular size of detector on sphere surface
+            angular_size = detector_radius / radius
+            
+            include_theta_up = theta_frac >= 1 - angular_size / theta_cell_size
+            include_theta_down = theta_frac <= angular_size / theta_cell_size
+            include_phi_right = phi_frac >= 1 - angular_size / phi_cell_size
+            include_phi_left = phi_frac <= angular_size / phi_cell_size
+            
+            indices = jnp.array([
+                [theta_idx, phi_idx],  # Central cell
+                [(theta_idx + 1) % n_theta, phi_idx],  # Theta up
+                [(theta_idx - 1) % n_theta, phi_idx],  # Theta down
+                [theta_idx, (phi_idx + 1) % n_phi],  # Phi right
+                [theta_idx, (phi_idx - 1) % n_phi],  # Phi left
+                [(theta_idx + 1) % n_theta, (phi_idx + 1) % n_phi],  # Diagonal
+                [(theta_idx + 1) % n_theta, (phi_idx - 1) % n_phi],  # Diagonal
+                [(theta_idx - 1) % n_theta, (phi_idx + 1) % n_phi],  # Diagonal
+                [(theta_idx - 1) % n_theta, (phi_idx - 1) % n_phi]   # Diagonal
+            ])
+            
+            selection = jnp.array([
+                1.0,  # Central cell always included
+                include_theta_up,
+                include_theta_down,
+                include_phi_right,
+                include_phi_left,
+                include_theta_up * include_phi_right,
+                include_theta_up * include_phi_left,
+                include_theta_down * include_phi_right,
+                include_theta_down * include_phi_left
+            ])
+            
+            sorted_indices = indices[jnp.argsort(-selection)]
+            
+            return jnp.where(jnp.arange(4)[:, None] < jnp.sum(selection), sorted_indices[:4], -1)
+        
+        def assign_off_surface():
+            return jnp.full((4, 2), -1, dtype=jnp.int32)
+        
+        return lax.cond(on_surface, assign_surface, assign_off_surface)
+    
+    return jax.vmap(assign_single_detector)(detectors)
+
+
+@partial(jax.jit, static_argnums=(1,))
+def create_detector_sphere_grid_map(assignments, n_divisions):
+    """
+    Creates a grid map counting the number of detectors in each cell of the spherical detector grid.
+
+    Parameters
+    ----------
+    assignments : ndarray
+        Array of detector assignments to grid cells, where each assignment is (theta_idx, phi_idx)
+    n_divisions : int
+        Grid resolution parameter
+
+    Returns
+    -------
+    ndarray
+        1D array containing detector counts for each cell in the grid
+    """
+    n_theta = n_divisions
+    n_phi = 2 * n_divisions
+    total_cells = n_theta * n_phi
+    grid = jnp.zeros(total_cells, dtype=jnp.int32)
+    
+    def update_grid(detector_assignments):
+        def update_cell(cell, g):
+            theta_idx, phi_idx = cell
+            is_valid = (theta_idx != -1) & (phi_idx != -1)
+            
+            # Calculate linear index
+            idx = theta_idx * n_phi + phi_idx
+            
+            return g.at[idx].add(is_valid)
+        
+        return jax.lax.fori_loop(0, detector_assignments.shape[0], 
+                                lambda i, g: update_cell(detector_assignments[i], g), grid)
+    
+    all_updates = jax.vmap(update_grid)(assignments)
+    return all_updates.sum(axis=0)
+
+
+@partial(jax.jit, static_argnums=(2, 3))
+def assign_and_map_sphere_detectors(detectors, detector_radius, radius, n_divisions):
+    """
+    Assigns detectors to spherical grid cells and creates a detector density map.
+
+    Parameters
+    ----------
+    detectors : ndarray
+        Array of detector positions
+    detector_radius : float
+        Radius of each detector
+    radius : float
+        Sphere radius
+    n_divisions : int
+        Grid resolution parameter
+
+    Returns
+    -------
+    tuple
+        (detector assignments, detector grid map)
+    """
+    assignments = assign_detectors_to_sphere_grid(detectors, detector_radius, radius, n_divisions)
+    detector_grid_map = create_detector_sphere_grid_map(assignments, n_divisions)
+    return assignments, detector_grid_map
+
+
+@partial(jax.jit, static_argnums=(1,))
+def calculate_sphere_grid_centers(radius, n_divisions):
+    """Calculate center points of all spherical grid cells"""
+    center = jnp.array([0.0, 0.0, 0.0])
+    n_theta = n_divisions
+    n_phi = 2 * n_divisions
+    
+    # Grid cell centers in spherical coordinates
+    theta_step = jnp.pi / n_theta
+    phi_step = 2 * jnp.pi / n_phi
+    
+    theta_centers = (jnp.arange(n_theta) + 0.5) * theta_step
+    phi_centers = (jnp.arange(n_phi) + 0.5) * phi_step
+    
+    theta_grid, phi_grid = jnp.meshgrid(theta_centers, phi_centers, indexing='ij')
+    
+    # Convert to Cartesian coordinates
+    x = radius * jnp.sin(theta_grid) * jnp.cos(phi_grid) + center[0]
+    y = radius * jnp.sin(theta_grid) * jnp.sin(phi_grid) + center[1]
+    z = radius * jnp.cos(theta_grid) + center[2]
+    
+    centers = jnp.stack([
+        x.reshape(-1),
+        y.reshape(-1),
+        z.reshape(-1)
+    ], axis=1)
+    
+    return centers
+
+
+@partial(jax.jit, static_argnums=(2,))
+def find_closest_sphere_detectors(grid_centers, detector_positions, max_detectors_per_cell):
+    """Find closest detectors to each spherical grid cell center"""
+    squared_distances = jnp.sum(
+        (grid_centers[:, None, :] - detector_positions[None, :, :]) ** 2,
+        axis=2
+    )
+    return jax.lax.top_k(-squared_distances, max_detectors_per_cell)[1]
+
+
+@partial(jax.jit, static_argnums=(2, 3, 4), device=jax.devices('cpu')[0])
+def create_inverted_sphere_detector_map(assignments_geometric, assignments_distance, n_divisions,
+                                       max_detectors_per_cell, num_detectors):
+    """Create inverted detector map for sphere prioritizing geometric intersections then closest detectors"""
+    n_theta = n_divisions
+    n_phi = 2 * n_divisions
+    total_cells = n_theta * n_phi
+    
+    # Initialize map
+    inverted_map = jnp.full((total_cells, max_detectors_per_cell), -1, dtype=jnp.int32)
+    
+    def update_cell(carry, i):
+        inv_map = carry
+        
+        def add_geometric(carry, j):
+            curr_map, curr_count = carry
+            
+            # Convert linear index i back to theta, phi coordinates
+            theta_idx = i // n_phi
+            phi_idx = i % n_phi
+            
+            # Check if detector j intersects with this cell
+            detector_assignments = assignments_geometric[j]
+            matches = (detector_assignments[:, 0] == theta_idx) & \
+                     (detector_assignments[:, 1] == phi_idx)
+            
+            cell_matches = jnp.any(matches)
+            should_add = cell_matches & (curr_count < max_detectors_per_cell)
+            
+            new_map = jnp.where(
+                should_add,
+                curr_map.at[i, curr_count].set(j),
+                curr_map
+            )
+            
+            return (new_map, curr_count + should_add), None
+        
+        # Add geometric intersections
+        (new_map, geom_count), _ = jax.lax.scan(
+            add_geometric,
+            (inv_map, 0),
+            jnp.arange(len(assignments_geometric))
+        )
+        
+        # Get closest detectors for this cell
+        closest = assignments_distance[i]
+        
+        # Add closest detectors if there's room
+        def add_closest(carry, j):
+            curr_map, curr_count = carry
+            detector_idx = closest[j]
+            
+            # Check for duplicates
+            def check_duplicate(k, is_dup):
+                return is_dup | (curr_map[i, k] == detector_idx)
+            
+            is_duplicate = jax.lax.fori_loop(
+                0, curr_count,
+                check_duplicate,
+                False
+            )
+            
+            # Add if not duplicate and have space
+            should_add = (~is_duplicate) & (curr_count < max_detectors_per_cell)
+            
+            new_map = jnp.where(
+                should_add,
+                curr_map.at[i, curr_count].set(detector_idx),
+                curr_map
+            )
+            
+            return (new_map, curr_count + should_add), None
+        
+        # Fill remaining slots with closest detectors
+        (final_map, _), _ = jax.lax.scan(
+            add_closest,
+            (new_map, geom_count),
+            jnp.arange(len(closest))
+        )
+        
+        return final_map, None
+    
+    final_map, _ = jax.lax.scan(
+        update_cell,
+        inverted_map,
+        jnp.arange(total_cells)
+    )
+    
+    return final_map
+
+
+def calculate_sphere_normals(intersection_point):
+    """
+    Calculate normals for sphere surface.
+
+    Parameters
+    ----------
+    intersection_point : ndarray
+        Points of intersection on the sphere surface
+
+    Returns
+    -------
+    ndarray
+        Normal vectors for sphere intersections (pointing outward)
+    """
+    # For sphere, normal at any point is the vector from center to point
+    center = jnp.array([0.0, 0.0, 0.0])
+    normals = intersection_point - center
+    # Normalize
+    normals = normals / (jnp.linalg.norm(normals, axis=1, keepdims=True) + 1e-10)
+    return normals
+
+
+def find_intersected_sphere_detectors_differentiable(ray_origins, ray_directions, detector_positions, detector_radius,
+                                                    radius, n_divisions, inverted_detector_map,
+                                                    temperature, overlap_prob):
+    """
+    Finds detectors intersected by rays using a differentiable approximation with overlap-based weights.
+
+    Parameters
+    ----------
+    ray_origins : ndarray
+        Starting points of rays
+    ray_directions : ndarray
+        Direction vectors of rays
+    detector_positions : ndarray
+        Positions of all detectors
+    detector_radius : float
+        Radius of each detector
+    radius : float
+        Sphere radius
+    n_divisions : int
+        Grid resolution parameter
+    inverted_detector_map : ndarray
+        Mapping from grid cells to detector indices
+    temperature : float
+        Width parameter for overlap function (sigma)
+    overlap_prob : callable
+        Function that calculates overlap probability
+
+    Returns
+    -------
+    dict
+        Contains intersection times, positions, weights, and indices
+    """
+    single_ray = ray_origins.ndim == 1
+    if single_ray:
+        ray_origins = ray_origins[None, :]
+        ray_directions = ray_directions[None, :]
+
+    # Get sphere intersection points and grid indices
+    center = jnp.array([0.0, 0.0, 0.0])
+    intersects, t_sphere, theta_idx, phi_idx, intersection_point = (
+        batch_intersect_sphere_with_grid(ray_origins, ray_directions, radius, n_divisions))
+
+    def calculate_linear_index(theta_idx, phi_idx):
+        n_theta = n_divisions
+        n_phi = 2 * n_divisions
+        idx = theta_idx * n_phi + phi_idx
+        total_cells = n_theta * n_phi
+        return jnp.clip(idx, 0, total_cells - 1)
+
+    idx = calculate_linear_index(theta_idx, phi_idx)
+    potential_detectors = jax.lax.stop_gradient(inverted_detector_map[idx])
+
+    def compute_detector_intersections(detector_idx):
+        valid = detector_idx != -1
+        sphere_centers = jnp.where(valid[:, None], detector_positions[detector_idx], jnp.zeros(3))
+
+        # Find closest approach of ray to detector center
+        oc = ray_origins - sphere_centers
+        ray_d = ray_directions / (jnp.linalg.norm(ray_directions, axis=1, keepdims=True) + 1e-10)
+
+        # Calculate closest approach for all rays (stable for gradients)
+        t_closest = -jnp.sum(oc * ray_d, axis=1, keepdims=True)
+        closest = ray_origins + t_closest * ray_d
+        to_detector = closest - sphere_centers
+        distance = jnp.linalg.norm(to_detector, axis=1)
+
+        # Calculate normal vectors for closest approach
+        normals_closest = to_detector / (jnp.linalg.norm(to_detector, axis=1, keepdims=True) + 1e-10)
+
+        # Ray-sphere intersection coefficients
+        a = jnp.sum(ray_d * ray_d, axis=1)  # Should be 1 for normalized directions
+        b = 2.0 * jnp.sum(oc * ray_d, axis=1)
+        c = jnp.sum(oc * oc, axis=1) - detector_radius ** 2
+
+        # Discriminant determines if intersection exists
+        discriminant = b ** 2 - 4 * a * c
+
+        # Calculate actual intersection for rays that hit the detector
+        sqrt_term = jnp.sqrt(jnp.maximum(1e-10, discriminant))
+
+        # Use numerically stable quadratic formula
+        q = jnp.where(
+            b > 0,
+            -0.5 * (b + sqrt_term),
+            -0.5 * (b - sqrt_term)
+        )
+        t1 = q / (a + 1e-10)
+        t2 = c / (q + jnp.sign(q) * 1e-10)
+
+        t_intersect = jnp.where((t1 > 0) & (t2 > 0), 
+                        jnp.minimum(t1, t2),  # Both positive - take smaller
+                        jnp.where(t1 > 0, t1,  # Only t1 positive
+                               jnp.where(t2 > 0, t2, -1)))  # Only t2 positive or neither
+
+        # Calculate intersection points
+        intersection_points = ray_origins + t_intersect[:, None] * ray_d
+
+        # Calculate normals at intersection points
+        to_intersection = intersection_points - sphere_centers
+        normals_intersect = to_intersection / (jnp.linalg.norm(to_intersection, axis=1, keepdims=True) + 1e-10)
+
+        # Determine if ray intersects with detector
+        intersects = (discriminant > 1e-6) & (t_intersect > 0)
+
+        # Use correct normals based on whether ray intersects or not
+        normals = jnp.where(intersects[:, None], normals_intersect, normals_closest)
+
+        # Check if point is inside detector
+        inside_detector = distance < detector_radius
+
+        # Apply overlap function to get weights
+        weights = jnp.where(valid, overlap_prob(distance), 0.0)
+
+        # Combine boolean conditions first, then add dimension
+        intersects_and_inside = (intersects & inside_detector)[:, None]
+
+        # Now use this combined condition
+        times = jnp.where(intersects_and_inside, t_intersect[:, None], t_closest)
+        points = jnp.where(intersects_and_inside, intersection_points, closest)
+
+        return weights, t_closest, detector_idx, normals, inside_detector, points
+
+    # Process all potential detectors
+    detector_results = jax.vmap(compute_detector_intersections)(potential_detectors.T)
+    weights = detector_results[0]  # shape: (max_detectors_per_cell, num_photons)
+    detector_times = detector_results[1]  # shape: (max_detectors_per_cell, num_photons, 1)
+    detector_indices = detector_results[2]  # shape: (max_detectors_per_cell, num_photons)
+    detector_normals = detector_results[3]  # shape: (max_detectors_per_cell, num_photons, 3)
+    inside_detector = detector_results[4]  # shape: (max_detectors_per_cell, num_photons)
+    detector_hit_positions = detector_results[5]  # shape: (max_detectors_per_cell, num_photons, 3)
+
+    # Calculate sphere surface normals
+    sphere_normals = calculate_sphere_normals(intersection_point)
+
+    # Calculate weighted detector properties
+    detector_weights = inside_detector[..., None]
+    weighted_normals = jnp.sum(detector_normals * detector_weights, axis=0)
+    detector_weights_sum = jnp.sum(inside_detector, axis=0)[..., None]
+    weighted_normals = weighted_normals / (detector_weights_sum + 1e-10)
+
+    weighted_positions = jnp.sum(detector_hit_positions * detector_weights, axis=0)
+    weighted_positions = weighted_positions / (detector_weights_sum + 1e-10)
+
+    # Calculate final hit properties
+    sphere_hit_positions = ray_origins + t_sphere[:, None] * ray_directions
+    hit_detector = jnp.any(inside_detector, axis=0)
+
+    hit_positions = jnp.where(hit_detector[:, None],
+                              weighted_positions,
+                              sphere_hit_positions)
+
+    final_normals = jnp.where(hit_detector[:, None],
+                              weighted_normals,
+                              sphere_normals)
+
+    result = {
+        'times': detector_times,
+        'detector_weights': weights,
+        'detector_indices': detector_indices,
+        'per_detector_positions': detector_hit_positions,
+        'positions': hit_positions,
+        'normals': final_normals,
+        'detector_normals': detector_normals,
+        'inside_detector': inside_detector
+    }
+
+    return result if not single_ray else jax.tree_map(lambda x: x[0], result)
+
+
+def create_sphere_photon_propagator(detector_positions, detector_radius, sphere_radius=4.0, n_divisions=50,
+                                   temperature=0.2, max_detectors_per_cell=4):
+    """
+    Creates a JIT-compiled function for efficient photon propagation simulation in sphere geometry.
+
+    Parameters
+    ----------
+    detector_positions : ndarray
+        Array of detector positions
+    detector_radius : float
+        Radius of each detector
+    sphere_radius : float, optional
+        Sphere radius, default 4.0
+    n_divisions : int, optional
+        Grid resolution parameter, default 50
+    temperature : float, optional
+        Width parameter for overlap function (sigma), default 0.2 [* detector_radius]
+    max_detectors_per_cell : int, optional
+        Maximum number of detectors per grid cell, default 4
+
+    Returns
+    -------
+    callable
+        JIT-compiled function for photon propagation simulation
+    """
+
+    assignments_geometric = assign_detectors_to_sphere_grid(
+        detector_positions, detector_radius, sphere_radius, n_divisions)
+
+    detector_grid_map = create_detector_sphere_grid_map(
+        assignments_geometric, n_divisions)
+
+    assignments_distance = find_closest_sphere_detectors(
+        calculate_sphere_grid_centers(sphere_radius, n_divisions),
+        detector_positions,
+        max_detectors_per_cell
+    )
+
+    inverted_detector_map = create_inverted_sphere_detector_map(
+        assignments_geometric,
+        assignments_distance,
+        n_divisions,
+        max_detectors_per_cell, detector_positions.shape[0]
+    )
+
+    # Import the overlap function (assuming it exists from your cylinder code)
+    from tools.overlap import create_overlap_prob
+
+    if temperature is None:
+        overlap_prob = create_overlap_prob(temperature, detector_radius)
+    else:
+        overlap_prob = create_overlap_prob(temperature * detector_radius, detector_radius)
+
+    @jax.jit
+    def propagate_photons(photon_origins, photon_directions):
+        return find_intersected_sphere_detectors_differentiable(
+            photon_origins, photon_directions, detector_positions, detector_radius,
+            sphere_radius, n_divisions, inverted_detector_map,
+            temperature, overlap_prob)
+
+    return propagate_photons
