@@ -597,11 +597,9 @@ def create_event_simulator(propagate_photons, Nphot, NUM_DETECTORS, detector_poi
         def propagation_step(carry, i):
             current_positions, current_directions, current_intensities, current_times, key = carry
 
-            # Handle special case for last iteration
-            # Force all remaining photons to be detected while maintaining absorption
-            scatter_length = jnp.where(i == K - 1, 1e20, original_scatter_length)
-            reflection_rate = jnp.where(i == K - 1, 0.0, original_reflection_rate)
-            absorption_length = original_absorption_length  # Keep absorption even in last iteration
+            scatter_length = original_scatter_length
+            reflection_rate = original_reflection_rate
+            absorption_length = original_absorption_length
 
             # Split keys
             key, prop_key = jax.random.split(key)
