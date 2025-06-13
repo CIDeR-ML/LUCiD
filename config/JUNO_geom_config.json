@@ -1,0 +1,8 @@
+{
+  "detector_type": "sphere",
+  "geometry_definitions": {
+    "radius": 17.5,
+    "n_sensors": 15000,
+    "sensor_radius": 0.25
+  }
+}

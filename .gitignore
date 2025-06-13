@@ -11,3 +11,6 @@ __pycache__/
 /autodiff_datasets
 .ipynb_checkpoints/
 old_tests/
+
+
+notebooks/figures/*

@@ -1,6 +1,6 @@
 from tools.generate import differentiable_get_rays, new_differentiable_get_rays, get_isotropic_rays
 
-from tools.propagate import create_photon_propagator
+from tools.propagate import create_photon_propagator, create_sphere_photon_propagator
 from tools.geometry import generate_detector
 
 import jax
@@ -15,8 +15,10 @@ from tools.utils import spherical_to_cartesian
 
 base_dir_path = os.path.dirname(os.path.abspath(__file__))+'/'
 
-def setup_event_simulator(json_filename, n_photons=1_000_000, temperature=0.2, K=2, is_data=False, is_calibration=False,
-                          max_detectors_per_cell=4, use_expected_value=True):
+
+def setup_event_simulator(json_filename, n_photons=1_000_000, temperature=0.2, K=2, 
+                         is_data=False, is_calibration=False, max_detectors_per_cell=4,
+                         detector_type='Cylinder', use_expected_value=True):
     """
     Sets up and returns an event simulator with the specified configuration.
 
@@ -41,6 +43,8 @@ def setup_event_simulator(json_filename, n_photons=1_000_000, temperature=0.2, K
         - True: Expected value (differentiable)
         - False: Monte Carlo sampling
         - None: Auto-select based on mode
+    detector_type : str, optional
+        Type of detector geometry: 'Cylinder' or 'Sphere'. Default is 'Cylinder' for backward compatibility.
 
     Returns
     -------
@@ -51,23 +55,52 @@ def setup_event_simulator(json_filename, n_photons=1_000_000, temperature=0.2, K
             scatter_length, reflection_rate, absorption_length, tau_gs)
         and K is precompiled as part of the simulator.
     """
-    # Initialize detector configuration.
-    detector = generate_detector(json_filename)
-    detector_points = jnp.array(detector.all_points)
-    detector_radius = detector.S_radius
+    
+    # Validate detector type
+    if detector_type not in ['Cylinder', 'Sphere']:
+        raise ValueError(f"detector_type must be 'Cylinder' or 'Sphere', got {detector_type}")
+    
+    # Initialize detector configuration based on type
+    if detector_type == 'Cylinder':
+        # Use cylinder implementation
+        detector = generate_detector(json_filename)
+        detector_points = jnp.array(detector.all_points)
+        photosensor_radius = detector.S_radius
+        cylinder_height = detector.H
+        cylinder_radius = detector.r
 
-    # Setup photon propagator with specified parameters.
-    propagate_photons = create_photon_propagator(
-        detector_points,
-        detector_radius,
-        temperature=temperature,
-        max_detectors_per_cell=max_detectors_per_cell
-    )
+        # Setup cylinder photon propagator
+        propagate_photons = create_photon_propagator(
+            detector_points,
+            photosensor_radius,
+            r=cylinder_radius, 
+            h=cylinder_height,
+            temperature=temperature,
+            max_detectors_per_cell=max_detectors_per_cell
+        )
+        
+    elif detector_type == 'Sphere':
+        # Use sphere implementation
+        detector = generate_detector(json_filename)
+        detector_points = jnp.array(detector.all_points)
+        photosensor_radius = detector.S_radius
+        sphere_radius = detector.r
+        
+        # Setup sphere photon propagator
+        propagate_photons = create_sphere_photon_propagator(
+            detector_points,
+            photosensor_radius,
+            sphere_radius=sphere_radius,
+            temperature=temperature,
+            n_divisions=100,
+            max_detectors_per_cell=max_detectors_per_cell
+        )
 
-    # Get number of detectors from the points array.
+    # Get number of detectors from the points array (common for both types)
     NUM_DETECTORS = len(detector_points)
 
-    # Create the event simulator with a fixed number of scattering iterations K.
+    # Create the event simulator with a fixed number of scattering iterations K
+    # (This part remains the same for both detector types)
     simulate_event = create_event_simulator(
         propagate_photons,
         n_photons,
@@ -119,12 +152,47 @@ def sample_scatter_distance(D, S, rng_key):
     return -S * jnp.log(1 - u * (1 - jnp.exp(-D / S)))
 
 
+def solve_rayleigh_inverse_cdf(u):
+    """
+    Solve the inverse CDF for Rayleigh scattering: P(μ) ∝ (1 + μ²)
+    Uses Cardano's formula to solve: μ³ + 3μ - (8u - 4) = 0
+    """
+    # Transform to standard form: t³ + pt + q = 0 where μ = t
+    p = 3.0
+    q = -(8.0 * u - 4.0)
+    
+    # Cardano's formula
+    discriminant = -(4 * p**3 + 27 * q**2)
+    
+    # Use JAX-compatible conditional
+    # Three real roots case (rare in our range)
+    sqrt_disc_pos = jnp.sqrt(jnp.abs(discriminant))
+    rho = jnp.sqrt(-p**3 / 27)
+    theta = jnp.arccos(jnp.clip(-q / (2 * rho), -1, 1))
+    mu_three_roots = 2 * jnp.cbrt(rho) * jnp.cos(theta / 3)
+    
+    # One real root case (typical)
+    sqrt_disc_neg = jnp.sqrt(-discriminant)
+    A = jnp.cbrt((-q + sqrt_disc_neg / (3 * jnp.sqrt(3))) / 2)
+    B = jnp.cbrt((-q - sqrt_disc_neg / (3 * jnp.sqrt(3))) / 2)
+    mu_one_root = A + B
+    
+    # Select based on discriminant sign
+    mu = jnp.where(discriminant >= 0, mu_three_roots, mu_one_root)
+    
+    # Clamp to valid range due to numerical precision
+    return jnp.clip(mu, -1.0, 1.0)
+
 def compute_scatter_direction(incident_dir, rng_key):
     """Compute a new scattering direction based on a Rayleigh phase function."""
     k1, k2 = jax.random.split(rng_key)
     u1 = jax.random.uniform(k1)
     u2 = jax.random.uniform(k2)
-    cos_theta = jnp.cbrt(2 * u1 - 1)
+    
+    # FIXED: Use correct Rayleigh inverse CDF instead of cbrt
+    cos_theta = solve_rayleigh_inverse_cdf(u1)
+    
+    # Everything else stays the same
     sin_theta = jnp.sqrt(1 - cos_theta ** 2)
     phi = 2 * jnp.pi * u2
     local_dir = normalize(jnp.array([sin_theta * jnp.cos(phi),
@@ -132,7 +200,6 @@ def compute_scatter_direction(incident_dir, rng_key):
                                      cos_theta]))
     frame = create_local_frame(incident_dir)
     return normalize(frame @ local_dir)
-
 
 def create_siren_grid(table):
     ene_bins = table.normalize(0, table.binning[0])
@@ -562,7 +629,36 @@ def create_event_simulator(propagate_photons, Nphot, NUM_DETECTORS, detector_poi
               surface_distances, normals, scatter_length, reflection_rate,
               absorption_length, tau_gs, rng_keys)
 
-            # Calculate detected intensities
+            # NaN SAFETY LAYER - Detect and neutralize problematic rays (this happens once every several million rays, but causes problems if not dealt with)
+            nan_pos_mask = jnp.any(jnp.isnan(new_positions), axis=1)
+            nan_dir_mask = jnp.any(jnp.isnan(new_directions), axis=1)
+            nan_factors_mask = jnp.isnan(continuing_factors)
+            problematic_rays = nan_pos_mask | nan_dir_mask | nan_factors_mask
+
+            # Count problematic rays for monitoring (just for debuging purposes)
+            # nan_count = jnp.sum(problematic_rays)
+            #jax.debug.print("Iteration {}: Found {} problematic rays with NaN", i, nan_count)
+
+            # Replace NaN outputs with safe values
+            safe_new_positions = jnp.where(
+                problematic_rays[:, None], 
+                current_positions,  # Keep original position
+                new_positions       # Use computed position
+            )
+
+            safe_new_directions = jnp.where(
+                problematic_rays[:, None],
+                current_directions, # Keep original direction  
+                new_directions      # Use computed direction
+            )
+
+            safe_continuing_factors = jnp.where(
+                problematic_rays,
+                0.0,                # Kill the ray (zero intensity)
+                continuing_factors  # Use computed factor
+            )
+
+            # Calculate intensities
             detected_intensity_factors = detect_probs * reflection_attenuations
             updated_weights = depositions * current_intensities[None, :] * detected_intensity_factors[None, :]
             total_times = times + current_times[:, None]
@@ -572,12 +668,12 @@ def create_event_simulator(propagate_photons, Nphot, NUM_DETECTORS, detector_poi
             iteration_indices = detector_indices
             iteration_times = total_times.squeeze(-1)
 
-            # Update intensities for next iteration
-            new_intensities = current_intensities * continuing_factors
+            # Update for next iteration using safe values
+            new_intensities = current_intensities * safe_continuing_factors
+            # Apply stop_gradient to all state variables
+            next_positions = jax.lax.stop_gradient(safe_new_positions)
+            next_directions = jax.lax.stop_gradient(safe_new_directions)
 
-            # Apply stop_gradient to prevent backpropagation through iterations
-            next_positions = jax.lax.stop_gradient(new_positions)
-            next_directions = jax.lax.stop_gradient(new_directions)
             next_intensities = new_intensities
             next_times = jax.lax.stop_gradient(new_times)
 
