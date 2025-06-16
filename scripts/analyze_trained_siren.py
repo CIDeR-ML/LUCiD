@@ -13,7 +13,7 @@ import jax.numpy as jnp
 sys.path.insert(0, str(Path(__file__).parent.parent / "tools"))
 
 from siren import PhotonSimSIREN
-from photonsim_sampled_dataset import PhotonSimSampledDataset
+from photonsim_h5_dataset import PhotonSimH5Dataset
 
 def load_trained_model(model_path):
     """Load the trained SIREN model."""
@@ -247,7 +247,7 @@ def main():
     
     # Load dataset for comparison
     print(f"\nLoading dataset from {args.dataset_path}")
-    dataset = PhotonSimSampledDataset(args.dataset_path, batch_size=args.n_samples)
+    dataset = PhotonSimH5Dataset(args.dataset_path, batch_size=args.n_samples)
     
     # Compare model vs data
     comparison_data = compare_model_vs_data(model, dataset, args.n_samples)
