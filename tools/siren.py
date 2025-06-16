@@ -38,6 +38,14 @@ class SIREN(nn.Module):
     outermost_linear: bool = False
     first_omega_0: float = 30.0
     hidden_omega_0: float = 30.0
+    output_squared: bool = False  # For PhotonSim compatibility
+    w0: float = 30.0  # Alternative parameter name for compatibility
+    
+    def setup(self):
+        # Use w0 as alias for omega_0 parameters if provided
+        if hasattr(self, 'w0') and self.w0 != 30.0:
+            self.first_omega_0 = self.w0
+            self.hidden_omega_0 = self.w0
     
     @nn.compact
     def __call__(self, inputs):
@@ -72,8 +80,12 @@ class SIREN(nn.Module):
                 omega_0=self.hidden_omega_0,
                 name='SineLayer_final'
             )(x)
+        
+        # Apply squaring if requested (for PhotonSim compatibility)
+        if self.output_squared:
+            x = x * x
             
-        return x * x, inputs
+        return x, inputs
 
 def torch_to_jax(tensor):
     """Convert a PyTorch tensor to JAX array, handling CUDA tensors."""
@@ -134,3 +146,214 @@ def load_siren_jax(pytorch_weights_path: str):
     jax_params = convert_pytorch_to_jax(pytorch_state, jax_model)
     
     return jax_model, jax_params
+
+
+def load_photonsim_siren(model_path: str):
+    """
+    Load PhotonSim-trained SIREN model (native JAX format).
+    
+    Args:
+        model_path: Path to saved PhotonSim SIREN model (.npz file)
+    
+    Returns:
+        Tuple of (jax_model, jax_params, normalization_params, metadata)
+    """
+    # Load model data
+    data = np.load(model_path, allow_pickle=True)
+    
+    # Extract model configuration
+    model_config = data['model_config'].item()
+    
+    # Create SIREN model with PhotonSim configuration
+    jax_model = SIREN(**model_config)
+    
+    # Extract parameters (convert back to JAX format)
+    jax_params = freeze({'params': jax.tree.map(lambda x: jnp.array(x), data['params'].item())})
+    
+    # Extract normalization parameters
+    normalization_params = data['normalization_params'].item()
+    
+    # Extract metadata
+    metadata = {
+        'dataset_stats': data['dataset_stats'].item(),
+        'final_step': int(data['final_step']),
+        'final_train_loss': float(data['final_train_loss']) if data['final_train_loss'] is not None else None,
+        'final_val_loss': float(data['final_val_loss']) if data['final_val_loss'] is not None else None,
+    }
+    
+    return jax_model, jax_params, normalization_params, metadata
+
+
+def normalize_photonsim_inputs(inputs: jnp.ndarray, normalization_params: dict) -> jnp.ndarray:
+    """
+    Normalize inputs according to PhotonSim training normalization.
+    
+    Args:
+        inputs: Input array [N, 3] with [energy, angle, distance]
+        normalization_params: Normalization parameters from training
+    
+    Returns:
+        Normalized inputs in [-1, 1] range
+    """
+    if not normalization_params['normalize_inputs']:
+        return inputs
+    
+    energy_range = normalization_params['energy_range']
+    angle_range = normalization_params['angle_range']
+    distance_range = normalization_params['distance_range']
+    
+    normalized = jnp.zeros_like(inputs)
+    
+    # Energy: [min_energy, max_energy] -> [-1, 1]
+    normalized = normalized.at[:, 0].set(
+        2 * (inputs[:, 0] - energy_range[0]) / (energy_range[1] - energy_range[0]) - 1
+    )
+    
+    # Angle: [0, max_angle] -> [-1, 1]
+    normalized = normalized.at[:, 1].set(
+        2 * (inputs[:, 1] - angle_range[0]) / (angle_range[1] - angle_range[0]) - 1
+    )
+    
+    # Distance: [0, max_distance] -> [-1, 1]
+    normalized = normalized.at[:, 2].set(
+        2 * (inputs[:, 2] - distance_range[0]) / (distance_range[1] - distance_range[0]) - 1
+    )
+    
+    return normalized
+
+
+def denormalize_photonsim_output(normalized_output: jnp.ndarray, normalization_params: dict) -> jnp.ndarray:
+    """
+    Denormalize output according to PhotonSim training normalization.
+    
+    Args:
+        normalized_output: Normalized output from model
+        normalization_params: Normalization parameters from training
+    
+    Returns:
+        Denormalized output (photon counts)
+    """
+    if not normalization_params['normalize_output']:
+        return normalized_output
+    
+    output_scale = normalization_params['output_scale']
+    return normalized_output * output_scale
+
+
+class PhotonSimSIREN:
+    """
+    Wrapper class for PhotonSim-trained SIREN models.
+    
+    This class provides a convenient interface for using PhotonSim-trained
+    SIREN models with automatic normalization and denormalization.
+    """
+    
+    def __init__(self, model_path: str):
+        """
+        Initialize PhotonSim SIREN model.
+        
+        Args:
+            model_path: Path to saved PhotonSim SIREN model
+        """
+        self.model, self.params, self.normalization_params, self.metadata = load_photonsim_siren(model_path)
+        self.model_path = model_path
+    
+    def __call__(self, inputs: jnp.ndarray) -> jnp.ndarray:
+        """
+        Evaluate the model on inputs.
+        
+        Args:
+            inputs: Input array [N, 3] with [energy, angle, distance]
+        
+        Returns:
+            Photon counts [N,]
+        """
+        # Normalize inputs
+        normalized_inputs = normalize_photonsim_inputs(inputs, self.normalization_params)
+        
+        # Forward pass
+        output, _ = self.model.apply(self.params, normalized_inputs)
+        
+        # Ensure correct shape
+        if output.ndim > 1:
+            output = output.squeeze()
+        
+        # Denormalize output
+        denormalized_output = denormalize_photonsim_output(output, self.normalization_params)
+        
+        return denormalized_output
+    
+    def get_model_info(self) -> dict:
+        """Get information about the model."""
+        return {
+            'model_path': self.model_path,
+            'model_config': {
+                'hidden_features': self.model.hidden_features,
+                'hidden_layers': self.model.hidden_layers,
+                'out_features': self.model.out_features,
+                'output_squared': self.model.output_squared,
+                'w0': self.model.w0,
+            },
+            'normalization_params': self.normalization_params,
+            'metadata': self.metadata,
+        }
+    
+    def save_for_inference(self, output_path: str):
+        """
+        Save model in a format optimized for inference.
+        
+        Args:
+            output_path: Path to save inference-ready model
+        """
+        inference_data = {
+            'params': self.params,
+            'model_config': {
+                'hidden_features': self.model.hidden_features,
+                'hidden_layers': self.model.hidden_layers,
+                'out_features': self.model.out_features,
+                'output_squared': self.model.output_squared,
+                'w0': self.model.w0,
+            },
+            'normalization_params': self.normalization_params,
+        }
+        
+        # Convert JAX arrays to numpy for saving
+        inference_data_np = jax.tree.map(lambda x: np.array(x) if hasattr(x, 'shape') else x, inference_data)
+        
+        np.savez(output_path, **inference_data_np)
+        print(f"Saved inference model to {output_path}")
+
+
+# Backward compatibility function
+def load_siren_model(model_path: str, model_type: str = "auto"):
+    """
+    Load SIREN model with automatic type detection.
+    
+    Args:
+        model_path: Path to model file
+        model_type: "pytorch", "photonsim", or "auto" for automatic detection
+    
+    Returns:
+        Appropriate model object
+    """
+    if model_type == "auto":
+        # Detect model type based on file extension and contents
+        if model_path.endswith('.pkl'):
+            model_type = "pytorch"
+        elif model_path.endswith('.npz'):
+            # Check if it contains PhotonSim-specific keys
+            try:
+                data = np.load(model_path, allow_pickle=True)
+                if 'model_config' in data and 'normalization_params' in data:
+                    model_type = "photonsim"
+                else:
+                    model_type = "pytorch"
+            except:
+                model_type = "pytorch"
+        else:
+            model_type = "pytorch"
+    
+    if model_type == "photonsim":
+        return PhotonSimSIREN(model_path)
+    else:
+        return load_siren_jax(model_path)
