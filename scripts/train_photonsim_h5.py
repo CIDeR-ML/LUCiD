@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-Train JAXSiren on PhotonSim sampled dataset.
+Train JAXSiren on PhotonSim HDF5 lookup table.
 
-This script trains a SIREN network on pre-sampled PhotonSim density data,
-using the dataset created by PhotonSim's create_siren_dataset.py tool.
+This script trains a SIREN network on PhotonSim HDF5 lookup tables or
+pre-sampled datasets, providing a unified interface for both data types.
 """
 
 import os
@@ -14,7 +14,7 @@ from pathlib import Path
 # Add tools to path
 sys.path.insert(0, str(Path(__file__).parent.parent / "tools"))
 
-from photonsim_sampled_dataset import PhotonSimSampledDataset
+from photonsim_h5_dataset import PhotonSimH5Dataset
 from train_photonsim_siren import PhotonSimSIRENTrainer
 
 # Set up logging
@@ -24,10 +24,10 @@ logger = logging.getLogger(__name__)
 def main():
     import argparse
     
-    parser = argparse.ArgumentParser(description='Train SIREN on PhotonSim sampled data')
-    parser.add_argument('--dataset-path', required=True,
-                       help='Path to PhotonSim sampled dataset directory')
-    parser.add_argument('--output-dir', default='output/photonsim_siren_training',
+    parser = argparse.ArgumentParser(description='Train SIREN on PhotonSim HDF5 data')
+    parser.add_argument('--data-path', required=True,
+                       help='Path to HDF5 lookup table or sampled dataset directory')
+    parser.add_argument('--output-dir', default='output/photonsim_h5_training',
                        help='Output directory for training results')
     parser.add_argument('--num-steps', type=int, default=2000,
                        help='Number of training steps')
@@ -41,14 +41,26 @@ def main():
                        help='Batch size')
     parser.add_argument('--w0', type=float, default=30.0,
                        help='SIREN frequency parameter')
+    parser.add_argument('--val-split', type=float, default=0.1,
+                       help='Validation split fraction')
     
     args = parser.parse_args()
     
+    # Determine data type
+    data_path = Path(args.data_path)
+    if data_path.is_file() and data_path.suffix == '.h5':
+        data_type = "HDF5 lookup table"
+    elif data_path.is_dir():
+        data_type = "sampled dataset"
+    else:
+        raise ValueError(f"Invalid data path: {data_path}")
+    
     # Create dataset
-    logger.info(f"Loading PhotonSim sampled dataset from {args.dataset_path}")
-    dataset = PhotonSimSampledDataset(
-        dataset_path=args.dataset_path,
+    logger.info(f"Loading PhotonSim {data_type} from {args.data_path}")
+    dataset = PhotonSimH5Dataset(
+        data_path=args.data_path,
         batch_size=args.batch_size,
+        val_split=args.val_split,
     )
     
     # Print dataset stats
