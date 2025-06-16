@@ -1,8 +1,7 @@
 """
 JAX-based SIREN Training for PhotonSim Data
 
-This script trains SIREN networks directly on PhotonSim 3D lookup tables
-using JAX/Flax, bypassing the need for PyTorch and CProfSiren.
+This module provides the trainer class for SIREN networks on PhotonSim data.
 """
 
 import os
@@ -21,11 +20,9 @@ from flax.training import train_state
 from flax.core import freeze, unfreeze
 import matplotlib.pyplot as plt
 
-from photonsim_dataset import PhotonSimDataset
 from siren import SIREN, SineLayer
 
 # Set up logging
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 class PhotonSimSIRENTrainer:
@@ -35,7 +32,7 @@ class PhotonSimSIRENTrainer:
     
     def __init__(
         self,
-        dataset: PhotonSimDataset,
+        dataset,
         hidden_features: int = 256,
         hidden_layers: int = 3,
         w0: float = 30.0,
@@ -48,7 +45,7 @@ class PhotonSimSIRENTrainer:
         Initialize SIREN trainer.
         
         Args:
-            dataset: PhotonSim dataset
+            dataset: PhotonSim dataset (either PhotonSimDataset or PhotonSimSampledDataset)
             hidden_features: Number of hidden units
             hidden_layers: Number of hidden layers
             w0: Frequency parameter for SIREN
@@ -162,7 +159,7 @@ class PhotonSimSIRENTrainer:
         log_every: int = 100,
         eval_every: int = 200,
         save_every: int = 500,
-        output_dir: str = "siren_training",
+        output_dir: str = "output/siren_training",
     ):
         """
         Train the SIREN model.
@@ -181,7 +178,6 @@ class PhotonSimSIRENTrainer:
         val_inputs, val_targets = self.dataset.get_validation_data()
         
         logger.info(f"Starting training for {num_steps} steps...")
-        logger.info(f"Training samples: {self.dataset.n_samples:,}")
         logger.info(f"Validation samples: {len(val_targets):,}")
         
         start_time = time.time()
@@ -268,7 +264,7 @@ class PhotonSimSIRENTrainer:
                 'out_features': 1,
                 'output_squared': True
             },
-            'normalization_params': self.dataset.normalization_params,
+            'normalization_params': getattr(self.dataset, 'normalization_params', {}),
             'dataset_stats': self.dataset.get_stats(),
             'final_step': self.state.step,
             'final_train_loss': self.train_losses[-1] if self.train_losses else None,
@@ -283,6 +279,14 @@ class PhotonSimSIRENTrainer:
     
     def _save_training_config(self, path: Path):
         """Save training configuration."""
+        dataset_config = {}
+        if hasattr(self.dataset, 'table_path'):
+            dataset_config['table_path'] = str(self.dataset.table_path)
+        if hasattr(self.dataset, 'dataset_path'):
+            dataset_config['dataset_path'] = str(self.dataset.dataset_path)
+        if hasattr(self.dataset, 'batch_size'):
+            dataset_config['batch_size'] = self.dataset.batch_size
+        
         config = {
             'hidden_features': self.hidden_features,
             'hidden_layers': self.hidden_layers,
@@ -291,15 +295,7 @@ class PhotonSimSIRENTrainer:
             'weight_decay': self.weight_decay,
             'scheduler_step_size': self.scheduler_step_size,
             'scheduler_gamma': self.scheduler_gamma,
-            'dataset_config': {
-                'table_path': str(self.dataset.table_path),
-                'batch_size': self.dataset.batch_size,
-                'normalize_inputs': self.dataset.normalize_inputs,
-                'normalize_output': self.dataset.normalize_output,
-                'min_photon_count': self.dataset.min_photon_count,
-                'max_distance': self.dataset.max_distance,
-                'max_angle': self.dataset.max_angle,
-            },
+            'dataset_config': dataset_config,
             'n_parameters': self._count_parameters(),
         }
         
@@ -439,71 +435,3 @@ def load_trained_model(model_path: str) -> Tuple[SIREN, Dict, Dict]:
     }
     
     return model, params, metadata
-
-
-def main():
-    """Main training script."""
-    import argparse
-    
-    parser = argparse.ArgumentParser(description='Train SIREN on PhotonSim data')
-    parser.add_argument('--data-path', required=True,
-                       help='Path to PhotonSim 3D lookup table directory')
-    parser.add_argument('--output-dir', default='siren_training_output',
-                       help='Output directory for training results')
-    parser.add_argument('--num-steps', type=int, default=2000,
-                       help='Number of training steps')
-    parser.add_argument('--hidden-features', type=int, default=256,
-                       help='Number of hidden features')
-    parser.add_argument('--hidden-layers', type=int, default=3,
-                       help='Number of hidden layers')
-    parser.add_argument('--learning-rate', type=float, default=1e-4,
-                       help='Learning rate')
-    parser.add_argument('--batch-size', type=int, default=16384,
-                       help='Batch size')
-    parser.add_argument('--max-distance', type=float, default=3000.0,
-                       help='Maximum distance to include (mm)')
-    parser.add_argument('--max-angle', type=float, default=0.1,
-                       help='Maximum angle to include (radians)')
-    parser.add_argument('--min-photon-count', type=float, default=10.0,
-                       help='Minimum photon count to include')
-    
-    args = parser.parse_args()
-    
-    # Create dataset
-    logger.info(f"Loading dataset from {args.data_path}")
-    dataset = PhotonSimDataset(
-        table_path=args.data_path,
-        batch_size=args.batch_size,
-        min_photon_count=args.min_photon_count,
-        max_distance=args.max_distance,
-        max_angle=args.max_angle,
-    )
-    
-    # Print dataset stats
-    stats = dataset.get_stats()
-    logger.info("Dataset statistics:")
-    for key, value in stats.items():
-        logger.info(f"  {key}: {value}")
-    
-    # Create trainer
-    trainer = PhotonSimSIRENTrainer(
-        dataset=dataset,
-        hidden_features=args.hidden_features,
-        hidden_layers=args.hidden_layers,
-        learning_rate=args.learning_rate,
-    )
-    
-    # Train model
-    trainer.train(
-        num_steps=args.num_steps,
-        output_dir=args.output_dir,
-    )
-    
-    # Final evaluation
-    metrics = trainer.evaluate_model()
-    
-    logger.info("Training completed successfully!")
-
-
-if __name__ == "__main__":
-    main()

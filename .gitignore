@@ -12,5 +12,7 @@ __pycache__/
 .ipynb_checkpoints/
 old_tests/
 
+# Training outputs
+output/
 
 notebooks/figures/*

@@ -353,7 +353,7 @@ if __name__ == "__main__":
     plt.tight_layout()
 
     # Save the figure
-    plt.savefig('overlap_probability.png', dpi=300, bbox_inches='tight')
+    plt.savefig('output/overlap_probability.png', dpi=300, bbox_inches='tight')
 
     # Show plot
     plt.show()
