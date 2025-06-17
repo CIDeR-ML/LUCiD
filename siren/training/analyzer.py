@@ -590,170 +590,239 @@ class TrainingAnalyzer:
         return fig
         
     def _plot_angular_profile_for_energy(self, ax, energy, inputs_denorm, targets, predictions):
-        """Plot angular profile (distance averaged) for a specific energy."""
-        energy_tolerance = 50  # MeV - tighter tolerance for better energy selection
+        """Plot angular profile (distance averaged) for a specific energy using original lookup table grid."""
         
-        # Filter data near the specified energy
-        energy_mask = np.abs(inputs_denorm[:, 0] - energy) < energy_tolerance
+        # Use the original lookup table grid from the dataset
+        if not hasattr(self.dataset, 'data_type') or self.dataset.data_type != 'h5_lookup':
+            ax.text(0.5, 0.5, 'Lookup table grid\nnot available', 
+                   ha='center', va='center', transform=ax.transAxes)
+            ax.set_title(f'{energy} MeV')
+            return
+            
+        # Load the original HDF5 file to get the full lookup table grid
+        import h5py
+        with h5py.File(self.dataset.data_path, 'r') as f:
+            # Load full density table and coordinates
+            density_table = f['data/photon_table_density'][:]  # Shape: (n_energy, n_angle, n_distance)
+            energy_centers = f['coordinates/energy_centers'][:]
+            angle_centers = f['coordinates/angle_centers'][:]
+            distance_centers = f['coordinates/distance_centers'][:]
         
-        if np.sum(energy_mask) < 50:
-            ax.text(0.5, 0.5, f'Insufficient data\nnear {energy} MeV', 
+        # Find the closest energy index
+        energy_idx = np.argmin(np.abs(energy_centers - energy))
+        actual_energy = energy_centers[energy_idx]
+        
+        if np.abs(actual_energy - energy) > 100:  # More than 100 MeV difference
+            ax.text(0.5, 0.5, f'No data near\n{energy} MeV', 
                    ha='center', va='center', transform=ax.transAxes)
             ax.set_title(f'{energy} MeV')
             return
         
-        # Get data for this energy
-        angles = np.degrees(inputs_denorm[energy_mask, 1])
-        targets_slice = targets[energy_mask]
-        predictions_slice = predictions[energy_mask]
+        # Get the 2D slice for this energy and average over distance
+        table_slice = density_table[energy_idx, :, :]  # Shape: (n_angle, n_distance)
         
-        # Create MORE angle bins for smoother curves
-        angle_bins = np.linspace(10, 80, 71)  # 70 bins = 1 degree resolution
-        angle_centers = (angle_bins[:-1] + angle_bins[1:]) / 2
+        # Average over distance for each angle (distance-averaged angular profile)
+        # Only average where values are significant
+        mask_3d = table_slice > 1e-10
+        table_profile = np.zeros(len(angle_centers))
         
-        # Bin and average the data (distance averaged)
-        data_profile = []
-        siren_profile = []
-        data_std = []
-        siren_std = []
-        
-        for i in range(len(angle_bins) - 1):
-            angle_mask = ((angles >= angle_bins[i]) & (angles < angle_bins[i+1]))
-            
-            if np.sum(angle_mask) > 3:  # Lower threshold for more points
-                # Average over all distances for this angle bin
-                data_vals = targets_slice[angle_mask]
-                siren_vals = predictions_slice[angle_mask]
-                data_profile.append(np.mean(data_vals))
-                siren_profile.append(np.mean(siren_vals))
-                data_std.append(np.std(data_vals))
-                siren_std.append(np.std(siren_vals))
+        for i in range(len(angle_centers)):
+            valid_distances = mask_3d[i, :]
+            if np.sum(valid_distances) > 0:
+                table_profile[i] = np.mean(table_slice[i, valid_distances])
             else:
-                data_profile.append(np.nan)
-                siren_profile.append(np.nan)
-                data_std.append(np.nan)
-                siren_std.append(np.nan)
+                table_profile[i] = np.nan
         
-        # Convert to arrays
-        data_profile = np.array(data_profile)
-        siren_profile = np.array(siren_profile)
+        # Create coordinate grid for SIREN evaluation at this energy
+        angle_grid = angle_centers
+        distance_grid = distance_centers
+        
+        # Create full 2D grid
+        angle_mesh, distance_mesh = np.meshgrid(angle_grid, distance_grid, indexing='ij')
+        energy_grid = np.full_like(angle_mesh, actual_energy)
+        
+        # Flatten for SIREN prediction
+        eval_coords = np.stack([
+            energy_grid.flatten(),
+            angle_mesh.flatten(),
+            distance_mesh.flatten()
+        ], axis=-1)
+        
+        # Normalize coordinates for SIREN
+        input_min = self.dataset.normalized_bounds['input_min']
+        input_max = self.dataset.normalized_bounds['input_max']
+        eval_coords_norm = 2 * (
+            (eval_coords - input_min) / (input_max - input_min)
+        ) - 1
+        
+        # Get SIREN predictions and denormalize from log space to linear space
+        siren_predictions_log = self.trainer.predict(eval_coords_norm)
+        siren_predictions_linear = self.dataset.denormalize_targets(siren_predictions_log)
+        siren_2d = siren_predictions_linear.reshape(angle_mesh.shape)
+        
+        # Average SIREN predictions over distance (same masking as table)
+        siren_profile = np.zeros(len(angle_centers))
+        for i in range(len(angle_centers)):
+            valid_distances = mask_3d[i, :]
+            if np.sum(valid_distances) > 0:
+                siren_profile[i] = np.mean(siren_2d[i, valid_distances])
+            else:
+                siren_profile[i] = np.nan
+        
+        # Convert angles to degrees for plotting
+        angle_degrees = np.degrees(angle_centers)
         
         # Remove NaN values
-        valid_mask = ~(np.isnan(data_profile) | np.isnan(siren_profile))
-        if np.sum(valid_mask) > 10:
-            # Plot with error bands (optional)
-            ax.plot(angle_centers[valid_mask], data_profile[valid_mask], 
-                   'o-', alpha=0.8, label='Lookup Table', markersize=3, linewidth=2)
-            ax.plot(angle_centers[valid_mask], siren_profile[valid_mask], 
-                   's--', alpha=0.8, label='SIREN Model', markersize=2, linewidth=2)
+        valid_mask = ~(np.isnan(table_profile) | np.isnan(siren_profile)) & (table_profile > 0) & (siren_profile > 0)
+        
+        if np.sum(valid_mask) > 5:
+            # Plot both profiles
+            ax.plot(angle_degrees[valid_mask], table_profile[valid_mask], 
+                   'o-', alpha=0.8, label='Lookup Table', markersize=3, linewidth=2, color='blue')
+            ax.plot(angle_degrees[valid_mask], siren_profile[valid_mask], 
+                   's--', alpha=0.8, label='SIREN Model', markersize=2, linewidth=2, color='red')
             
             # Mark Cherenkov angle
-            ax.axvline(43, color='red', linestyle=':', alpha=0.7, label='Cherenkov angle')
+            ax.axvline(43, color='black', linestyle=':', alpha=0.7, linewidth=1.5)
+            ax.text(43.5, ax.get_ylim()[1]*0.8, 'Cherenkov', rotation=90, 
+                   va='bottom', ha='left', fontsize=8, alpha=0.7)
             
             ax.set_xlabel('Angle (degrees)')
             ax.set_ylabel('Avg Photon Density')
-            ax.set_title(f'{energy} MeV')
+            ax.set_title(f'{actual_energy:.0f} MeV')
             ax.set_yscale('log')
-            ax.set_xlim(10, 80)
+            ax.set_xlim(np.degrees(angle_centers.min()), np.degrees(angle_centers.max()))
             ax.set_ylim(1e-2, None)  # Set minimum y-axis to 10^-2
             ax.grid(True, alpha=0.3)
             if energy == 200:  # Only show legend for first plot
                 ax.legend(fontsize=8, loc='upper right')
         else:
-            ax.text(0.5, 0.5, f'Insufficient data\nnear {energy} MeV', 
+            ax.text(0.5, 0.5, f'No valid data\nnear {energy} MeV', 
                    ha='center', va='center', transform=ax.transAxes)
             ax.set_title(f'{energy} MeV')
             
     def _plot_2d_angle_distance_for_energy(self, ax, energy, inputs_denorm, targets, predictions):
-        """Plot 2D histogram (angle vs distance) for a specific energy using REGULAR GRID."""
-        energy_tolerance = 50  # MeV - tighter tolerance
+        """Plot 2D histogram (angle vs distance) for a specific energy using original lookup table grid."""
         
-        # Filter data near the specified energy
-        energy_mask = np.abs(inputs_denorm[:, 0] - energy) < energy_tolerance
+        # Use the original lookup table grid from the dataset
+        if not hasattr(self.dataset, 'data_type') or self.dataset.data_type != 'h5_lookup':
+            ax.text(0.5, 0.5, 'Lookup table grid\nnot available', 
+                   ha='center', va='center', transform=ax.transAxes)
+            ax.set_title(f'{energy} MeV - 2D Map')
+            return
+            
+        # Load the original HDF5 file to get the full lookup table grid
+        import h5py
+        with h5py.File(self.dataset.data_path, 'r') as f:
+            # Load full density table and coordinates
+            density_table = f['data/photon_table_density'][:]  # Shape: (n_energy, n_angle, n_distance)
+            energy_centers = f['coordinates/energy_centers'][:]
+            angle_centers = f['coordinates/angle_centers'][:]
+            distance_centers = f['coordinates/distance_centers'][:]
         
-        if np.sum(energy_mask) < 100:
-            ax.text(0.5, 0.5, f'Insufficient data\nnear {energy} MeV', 
+        # Find the closest energy index
+        energy_idx = np.argmin(np.abs(energy_centers - energy))
+        actual_energy = energy_centers[energy_idx]
+        
+        if np.abs(actual_energy - energy) > 100:  # More than 100 MeV difference
+            ax.text(0.5, 0.5, f'No data near\n{energy} MeV', 
                    ha='center', va='center', transform=ax.transAxes)
             ax.set_title(f'{energy} MeV - 2D Map')
             return
         
-        # Get data for this energy - no need to filter by existing data points
-        # We'll create a regular grid and evaluate both table and SIREN on it
+        # Get the 2D slice for this energy
+        table_slice = density_table[energy_idx, :, :]  # Shape: (n_angle, n_distance)
         
-        # Create REGULAR 2D grid
-        angle_grid = np.linspace(20, 70, 30)  # 30 points for angles
-        distance_grid = np.linspace(500, 5000, 30)  # 30 points for distances
+        # Create meshgrid for visualization (convert angles to degrees)
+        angle_mesh, distance_mesh = np.meshgrid(
+            np.degrees(angle_centers), 
+            distance_centers, 
+            indexing='ij'
+        )
         
-        # Create meshgrid
-        angle_mesh, distance_mesh = np.meshgrid(angle_grid, distance_grid)
+        # Create coordinate grid for SIREN evaluation
+        angle_grid_flat = angle_mesh.flatten()
+        distance_grid_flat = distance_mesh.flatten()
+        energy_grid_flat = np.full_like(angle_grid_flat, actual_energy)
         
-        # Create ratio array
-        ratio_grid = np.zeros_like(angle_mesh)
+        # Stack coordinates for SIREN prediction
+        eval_coords = np.stack([
+            energy_grid_flat,
+            np.radians(angle_grid_flat),  # Convert back to radians for SIREN
+            distance_grid_flat
+        ], axis=-1)
         
-        # For each grid point, find nearby data and compute ratio
-        for i in range(len(angle_grid)):
-            for j in range(len(distance_grid)):
-                angle_val = angle_grid[i]
-                dist_val = distance_grid[j]
-                
-                # Find nearby points in the data
-                angle_tol = 2.0  # degrees
-                dist_tol = 200   # mm
-                
-                # Get data near this energy
-                angles = np.degrees(inputs_denorm[energy_mask, 1])
-                distances = inputs_denorm[energy_mask, 2]
-                targets_slice = targets[energy_mask]
-                predictions_slice = predictions[energy_mask]
-                
-                angle_mask = np.abs(angles - angle_val) < angle_tol
-                dist_mask = np.abs(distances - dist_val) < dist_tol
-                combined_mask = angle_mask & dist_mask
-                
-                if np.sum(combined_mask) > 2:
-                    data_val = np.mean(targets_slice[combined_mask])
-                    siren_val = np.mean(predictions_slice[combined_mask])
-                    
-                    if data_val > 1e-6 and siren_val > 1e-6:
-                        ratio = siren_val / data_val
-                        ratio_grid[j, i] = ratio
-                    else:
-                        ratio_grid[j, i] = np.nan
-                else:
-                    ratio_grid[j, i] = np.nan
+        # Normalize coordinates for SIREN (same logic as in dataset._normalize_data)
+        input_min = self.dataset.normalized_bounds['input_min']
+        input_max = self.dataset.normalized_bounds['input_max']
+        eval_coords_norm = 2 * (
+            (eval_coords - input_min) / (input_max - input_min)
+        ) - 1
         
-        # Plot as image/contour instead of scatter
-        valid_mask = ~np.isnan(ratio_grid)
-        if np.sum(valid_mask) > 50:
-            # Use pcolormesh for regular grid visualization
-            im = ax.pcolormesh(angle_mesh, distance_mesh, ratio_grid, 
-                              cmap='RdBu_r', vmin=0.5, vmax=2.0, 
-                              shading='auto', alpha=0.8)
-            
-            # Add contour lines at key ratio values
+        # Get SIREN predictions and denormalize from log space to linear space
+        siren_predictions_log = self.trainer.predict(eval_coords_norm)
+        siren_predictions_linear = self.dataset.denormalize_targets(siren_predictions_log)
+        siren_slice = siren_predictions_linear.reshape(angle_mesh.shape)
+        
+        # Compute ratio: SIREN/Table
+        # Add small epsilon to avoid division by zero
+        ratio_slice = siren_slice / (table_slice + 1e-12)
+        
+        # Mask out very low density regions for cleaner visualization
+        mask = table_slice > 1e-10
+        ratio_slice_masked = np.where(mask, ratio_slice, np.nan)
+        
+        # Plot using clean contour levels only (no fine grid visualization)
+        valid_mask = ~np.isnan(ratio_slice_masked)
+        if np.sum(valid_mask) > 10:  # Need at least some valid points
+            # Clean contour visualization with multiple levels
             try:
-                contours = ax.contour(angle_mesh, distance_mesh, ratio_grid, 
-                                    levels=[0.5, 0.75, 1.0, 1.25, 1.5, 2.0],
-                                    colors='black', alpha=0.3, linewidths=0.5)
-                ax.clabel(contours, inline=True, fontsize=8, fmt='%.2f')
-            except:
-                pass
+                # Main contour levels
+                levels = [0.5, 0.7, 0.85, 1.0, 1.15, 1.3, 1.5, 2.0]
+                
+                # Filled contours for background
+                contourf = ax.contourf(angle_mesh, distance_mesh, ratio_slice_masked, 
+                                     levels=levels, cmap='RdBu_r', alpha=0.6, extend='both')
+                
+                # Line contours for clarity
+                contours = ax.contour(angle_mesh, distance_mesh, ratio_slice_masked, 
+                                    levels=levels, colors='black', linewidths=0.8, alpha=0.8)
+                
+                # Label key contours (perfect match and significant deviations)
+                key_levels = [0.5, 0.85, 1.0, 1.15, 1.5]
+                ax.clabel(contours, levels=key_levels, inline=True, fontsize=9, fmt='%.2f')
+                
+                # Add colorbar for filled contours
+                if energy == 1000:  # Only add colorbar for last plot
+                    cbar = plt.colorbar(contourf, ax=ax)
+                    cbar.set_label('SIREN/Table Ratio')
+                    
+            except Exception as e:
+                # Fallback: simple scatter if contours fail
+                valid_points = valid_mask
+                if np.sum(valid_points) > 0:
+                    scatter = ax.scatter(angle_mesh[valid_points], distance_mesh[valid_points], 
+                                       c=ratio_slice_masked[valid_points], cmap='RdBu_r', 
+                                       s=10, vmin=0.5, vmax=2.0, alpha=0.7)
+                    if energy == 1000:
+                        cbar = plt.colorbar(scatter, ax=ax)
+                        cbar.set_label('SIREN/Table Ratio')
             
-            # Mark Cherenkov angle
-            ax.axvline(43, color='black', linestyle='--', alpha=0.7, linewidth=2)
+            # Mark Cherenkov angle (approximately 43 degrees for water)
+            ax.axvline(43, color='white', linestyle='--', alpha=0.9, linewidth=2)
+            ax.text(43.5, ax.get_ylim()[1]*0.95, 'Cherenkov', rotation=90, 
+                   va='top', ha='left', color='white', fontweight='bold', fontsize=8)
             
             ax.set_xlabel('Angle (degrees)')
             ax.set_ylabel('Distance (mm)')
-            ax.set_title(f'{energy} MeV\nSIREN/Table Ratio')
-            ax.set_xlim(20, 70)
-            ax.set_ylim(500, 5000)
+            ax.set_title(f'{actual_energy:.0f} MeV\nSIREN/Table Ratio')
             
-            # Add colorbar
-            if energy == 1000:  # Only add colorbar for last plot
-                cbar = plt.colorbar(im, ax=ax)
-                cbar.set_label('SIREN/Table Ratio')
+            # Set limits based on actual data range
+            ax.set_xlim(np.degrees(angle_centers.min()), np.degrees(angle_centers.max()))
+            ax.set_ylim(distance_centers.min(), distance_centers.max())
+            ax.grid(True, alpha=0.3)
         else:
-            ax.text(0.5, 0.5, f'Insufficient data\nnear {energy} MeV', 
+            ax.text(0.5, 0.5, f'No valid data\nnear {energy} MeV', 
                    ha='center', va='center', transform=ax.transAxes)
             ax.set_title(f'{energy} MeV - 2D Map')
         
