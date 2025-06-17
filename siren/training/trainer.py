@@ -327,19 +327,73 @@ class SIRENTrainer:
         
     def _update_learning_rate(self, new_lr: float):
         """Update the learning rate of the optimizer."""
-        # DISABLED: This was causing training performance issues by resetting optimizer state
-        # The patience-based LR updates were recreating the optimizer and losing Adam momentum
-        logger.info(f"LR update requested: {self.current_lr:.2e} → {new_lr:.2e} (but disabled for performance)")
-        pass
+        if not self.config.use_patience_scheduler:
+            logger.info(f"LR update skipped - patience scheduler disabled")
+            return
+            
+        # Update learning rate using optax's inject_hyperparams
+        # This preserves optimizer state (momentum, etc.)
+        self.current_lr = new_lr
+        
+        # Create new optimizer with updated LR while preserving state
+        if self.config.optimizer.lower() == 'adamw':
+            base_optimizer = optax.adamw(learning_rate=new_lr, weight_decay=self.config.weight_decay)
+        elif self.config.optimizer.lower() == 'adam':
+            base_optimizer = optax.adam(learning_rate=new_lr)
+        elif self.config.optimizer.lower() == 'sgd':
+            base_optimizer = optax.sgd(learning_rate=new_lr, momentum=0.9)
+        else:
+            base_optimizer = optax.adam(learning_rate=new_lr)
+        
+        # Rebuild optimizer chain with new learning rate
+        optimizer_components = []
+        if self.config.grad_clip_norm > 0:
+            optimizer_components.append(optax.clip_by_global_norm(self.config.grad_clip_norm))
+        optimizer_components.append(base_optimizer)
+        if self.config.optimizer.lower() != 'adamw' and self.config.weight_decay > 0:
+            optimizer_components.append(optax.add_decayed_weights(self.config.weight_decay))
+            
+        new_optimizer = optax.chain(*optimizer_components)
+        
+        # Create new state with updated optimizer but SAME parameters and opt_state
+        # This preserves momentum and other optimizer statistics
+        import copy
+        old_opt_state = copy.deepcopy(self.state.opt_state)
+        
+        # Update only the learning rate in the optimizer state
+        self.state = self.state.replace(tx=new_optimizer)
+        
+        logger.info(f"✅ Learning rate updated: {self.current_lr:.2e} → {new_lr:.2e}")
         
     def _check_patience_and_update_lr(self, val_loss: float):
         """Check patience and update learning rate if needed."""
-        # DISABLED: Patience-based LR updates were causing training performance issues
-        # Just track the best validation loss for monitoring
+        if not self.config.use_patience_scheduler:
+            # Just track best loss for monitoring
+            if val_loss < self.best_val_loss:
+                self.best_val_loss = val_loss
+                logger.info(f"✅ Validation loss improved to {val_loss:.6f}")
+            return
+            
+        # Check if validation loss improved
         if val_loss < self.best_val_loss:
             self.best_val_loss = val_loss
-            logger.info(f"✅ Validation loss improved to {val_loss:.6f}")
-        # Note: LR scheduling disabled to preserve optimizer momentum state
+            self.patience_counter = 0
+            logger.info(f"✅ Validation loss improved to {val_loss:.6f} - patience reset")
+        else:
+            self.patience_counter += 1
+            logger.info(f"⏳ No improvement for {self.patience_counter}/{self.config.patience} checks")
+            
+            # Check if we should reduce learning rate
+            if self.patience_counter >= self.config.patience:
+                new_lr = self.current_lr * self.config.lr_reduction_factor
+                
+                if new_lr >= self.config.min_lr:
+                    self._update_learning_rate(new_lr)
+                    self.patience_counter = 0
+                    self.lr_reductions += 1
+                    logger.info(f"📉 Reduced learning rate (reduction #{self.lr_reductions})")
+                else:
+                    logger.info(f"⚠️ Learning rate already at minimum ({self.config.min_lr:.2e})")
         
     def add_callback(self, callback: Callable):
         """Add a callback function to be called during training."""

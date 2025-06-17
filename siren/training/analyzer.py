@@ -591,7 +591,7 @@ class TrainingAnalyzer:
         
     def _plot_angular_profile_for_energy(self, ax, energy, inputs_denorm, targets, predictions):
         """Plot angular profile (distance averaged) for a specific energy."""
-        energy_tolerance = 100  # MeV
+        energy_tolerance = 50  # MeV - tighter tolerance for better energy selection
         
         # Filter data near the specified energy
         energy_mask = np.abs(inputs_denorm[:, 0] - energy) < energy_tolerance
@@ -607,32 +607,45 @@ class TrainingAnalyzer:
         targets_slice = targets[energy_mask]
         predictions_slice = predictions[energy_mask]
         
-        # Create angle bins
-        angle_bins = np.linspace(10, 80, 30)
+        # Create MORE angle bins for smoother curves
+        angle_bins = np.linspace(10, 80, 71)  # 70 bins = 1 degree resolution
         angle_centers = (angle_bins[:-1] + angle_bins[1:]) / 2
         
         # Bin and average the data (distance averaged)
         data_profile = []
         siren_profile = []
+        data_std = []
+        siren_std = []
         
         for i in range(len(angle_bins) - 1):
             angle_mask = ((angles >= angle_bins[i]) & (angles < angle_bins[i+1]))
             
-            if np.sum(angle_mask) > 5:
+            if np.sum(angle_mask) > 3:  # Lower threshold for more points
                 # Average over all distances for this angle bin
-                data_profile.append(np.mean(targets_slice[angle_mask]))
-                siren_profile.append(np.mean(predictions_slice[angle_mask]))
+                data_vals = targets_slice[angle_mask]
+                siren_vals = predictions_slice[angle_mask]
+                data_profile.append(np.mean(data_vals))
+                siren_profile.append(np.mean(siren_vals))
+                data_std.append(np.std(data_vals))
+                siren_std.append(np.std(siren_vals))
             else:
                 data_profile.append(np.nan)
                 siren_profile.append(np.nan)
+                data_std.append(np.nan)
+                siren_std.append(np.nan)
+        
+        # Convert to arrays
+        data_profile = np.array(data_profile)
+        siren_profile = np.array(siren_profile)
         
         # Remove NaN values
         valid_mask = ~(np.isnan(data_profile) | np.isnan(siren_profile))
-        if np.sum(valid_mask) > 5:
-            ax.plot(angle_centers[valid_mask], np.array(data_profile)[valid_mask], 
-                   'o-', alpha=0.8, label='Lookup Table', markersize=4, linewidth=2)
-            ax.plot(angle_centers[valid_mask], np.array(siren_profile)[valid_mask], 
-                   's--', alpha=0.8, label='SIREN Model', markersize=3, linewidth=2)
+        if np.sum(valid_mask) > 10:
+            # Plot with error bands (optional)
+            ax.plot(angle_centers[valid_mask], data_profile[valid_mask], 
+                   'o-', alpha=0.8, label='Lookup Table', markersize=3, linewidth=2)
+            ax.plot(angle_centers[valid_mask], siren_profile[valid_mask], 
+                   's--', alpha=0.8, label='SIREN Model', markersize=2, linewidth=2)
             
             # Mark Cherenkov angle
             ax.axvline(43, color='red', linestyle=':', alpha=0.7, label='Cherenkov angle')
@@ -642,6 +655,7 @@ class TrainingAnalyzer:
             ax.set_title(f'{energy} MeV')
             ax.set_yscale('log')
             ax.set_xlim(10, 80)
+            ax.set_ylim(1e-2, None)  # Set minimum y-axis to 10^-2
             ax.grid(True, alpha=0.3)
             if energy == 200:  # Only show legend for first plot
                 ax.legend(fontsize=8, loc='upper right')
@@ -651,8 +665,8 @@ class TrainingAnalyzer:
             ax.set_title(f'{energy} MeV')
             
     def _plot_2d_angle_distance_for_energy(self, ax, energy, inputs_denorm, targets, predictions):
-        """Plot 2D histogram (angle vs distance) for a specific energy."""
-        energy_tolerance = 100  # MeV
+        """Plot 2D histogram (angle vs distance) for a specific energy using REGULAR GRID."""
+        energy_tolerance = 50  # MeV - tighter tolerance
         
         # Filter data near the specified energy
         energy_mask = np.abs(inputs_denorm[:, 0] - energy) < energy_tolerance
@@ -663,41 +677,67 @@ class TrainingAnalyzer:
             ax.set_title(f'{energy} MeV - 2D Map')
             return
         
-        # Get data for this energy
-        angles = np.degrees(inputs_denorm[energy_mask, 1])
-        distances = inputs_denorm[energy_mask, 2]
-        targets_slice = targets[energy_mask]
-        predictions_slice = predictions[energy_mask]
+        # Get data for this energy - no need to filter by existing data points
+        # We'll create a regular grid and evaluate both table and SIREN on it
         
-        # Create 2D bins
-        angle_bins = np.linspace(20, 70, 25)
-        distance_bins = np.linspace(500, 5000, 25)
+        # Create REGULAR 2D grid
+        angle_grid = np.linspace(20, 70, 30)  # 30 points for angles
+        distance_grid = np.linspace(500, 5000, 30)  # 30 points for distances
         
-        # Calculate ratio: SIREN / Lookup Table
-        ratio_data = []
-        angle_centers = []
-        distance_centers = []
+        # Create meshgrid
+        angle_mesh, distance_mesh = np.meshgrid(angle_grid, distance_grid)
         
-        for i in range(len(angle_bins) - 1):
-            for j in range(len(distance_bins) - 1):
-                angle_mask = ((angles >= angle_bins[i]) & (angles < angle_bins[i+1]))
-                dist_mask = ((distances >= distance_bins[j]) & (distances < distance_bins[j+1]))
+        # Create ratio array
+        ratio_grid = np.zeros_like(angle_mesh)
+        
+        # For each grid point, find nearby data and compute ratio
+        for i in range(len(angle_grid)):
+            for j in range(len(distance_grid)):
+                angle_val = angle_grid[i]
+                dist_val = distance_grid[j]
+                
+                # Find nearby points in the data
+                angle_tol = 2.0  # degrees
+                dist_tol = 200   # mm
+                
+                # Get data near this energy
+                angles = np.degrees(inputs_denorm[energy_mask, 1])
+                distances = inputs_denorm[energy_mask, 2]
+                targets_slice = targets[energy_mask]
+                predictions_slice = predictions[energy_mask]
+                
+                angle_mask = np.abs(angles - angle_val) < angle_tol
+                dist_mask = np.abs(distances - dist_val) < dist_tol
                 combined_mask = angle_mask & dist_mask
                 
-                if np.sum(combined_mask) > 3:
+                if np.sum(combined_mask) > 2:
                     data_val = np.mean(targets_slice[combined_mask])
                     siren_val = np.mean(predictions_slice[combined_mask])
                     
-                    if data_val > 0 and siren_val > 0:
+                    if data_val > 1e-6 and siren_val > 1e-6:
                         ratio = siren_val / data_val
-                        ratio_data.append(ratio)
-                        angle_centers.append((angle_bins[i] + angle_bins[i+1]) / 2)
-                        distance_centers.append((distance_bins[j] + distance_bins[j+1]) / 2)
+                        ratio_grid[j, i] = ratio
+                    else:
+                        ratio_grid[j, i] = np.nan
+                else:
+                    ratio_grid[j, i] = np.nan
         
-        if len(ratio_data) > 10:
-            # Create scatter plot showing ratio
-            scatter = ax.scatter(angle_centers, distance_centers, c=ratio_data, 
-                               cmap='RdBu_r', vmin=0.5, vmax=2.0, alpha=0.7, s=20)
+        # Plot as image/contour instead of scatter
+        valid_mask = ~np.isnan(ratio_grid)
+        if np.sum(valid_mask) > 50:
+            # Use pcolormesh for regular grid visualization
+            im = ax.pcolormesh(angle_mesh, distance_mesh, ratio_grid, 
+                              cmap='RdBu_r', vmin=0.5, vmax=2.0, 
+                              shading='auto', alpha=0.8)
+            
+            # Add contour lines at key ratio values
+            try:
+                contours = ax.contour(angle_mesh, distance_mesh, ratio_grid, 
+                                    levels=[0.5, 0.75, 1.0, 1.25, 1.5, 2.0],
+                                    colors='black', alpha=0.3, linewidths=0.5)
+                ax.clabel(contours, inline=True, fontsize=8, fmt='%.2f')
+            except:
+                pass
             
             # Mark Cherenkov angle
             ax.axvline(43, color='black', linestyle='--', alpha=0.7, linewidth=2)
@@ -710,7 +750,7 @@ class TrainingAnalyzer:
             
             # Add colorbar
             if energy == 1000:  # Only add colorbar for last plot
-                cbar = plt.colorbar(scatter, ax=ax)
+                cbar = plt.colorbar(im, ax=ax)
                 cbar.set_label('SIREN/Table Ratio')
         else:
             ax.text(0.5, 0.5, f'Insufficient data\nnear {energy} MeV', 
