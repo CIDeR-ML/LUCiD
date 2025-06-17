@@ -239,6 +239,14 @@ class SIRENTrainer:
             logger.info(f"Retrying with default input shape: {sample_input.shape}")
             params = self.model.init(self.rng, sample_input)
         
+        # CRITICAL: Force parameters to be concrete (not traced)
+        # This prevents the traced array issue that causes checkpoint loading errors
+        def make_concrete(tree):
+            return jax.tree_map(lambda x: jax.block_until_ready(x) if hasattr(x, 'shape') else x, tree)
+        
+        params = make_concrete(params)
+        logger.info("✅ Model parameters forced to concrete arrays")
+        
         # Create optimizer with fixed learning rate
         # The patience LR updates were causing issues by resetting optimizer state
         if self.config.optimizer.lower() == 'adamw':
@@ -489,9 +497,46 @@ class SIRENTrainer:
         checkpoint_name = 'final_model.npz' if final else f'checkpoint_step_{step}.npz'
         checkpoint_path = self.output_dir / checkpoint_name
         
-        # Unfreeze parameters and save with pickle support
+        # CRITICAL: Force evaluation of traced arrays by blocking until concrete
+        # This ensures we don't save traced arrays from JAX transformations
+        import jax
+        
+        # Get parameters and force them to be concrete (not traced)
         params_dict = unfreeze(self.state.params)
-        np.savez(checkpoint_path, params=params_dict)
+        
+        # Convert JAX arrays to numpy arrays recursively and force evaluation
+        def jax_to_numpy_concrete(tree):
+            def convert_leaf(x):
+                if hasattr(x, 'shape'):
+                    # Force evaluation by using jax.block_until_ready
+                    concrete_x = jax.block_until_ready(x)
+                    return np.asarray(concrete_x)
+                else:
+                    return x
+            return jax.tree_map(convert_leaf, tree)
+        
+        params_numpy = jax_to_numpy_concrete(params_dict)
+        
+        # Double-check: ensure no traced arrays remain
+        def check_no_traced(tree):
+            def check_leaf(x):
+                if hasattr(x, '__class__') and 'Traced' in str(type(x)):
+                    raise ValueError(f"Still have traced array: {type(x)}")
+                return x
+            return jax.tree_map(check_leaf, tree, is_leaf=lambda x: hasattr(x, '__class__'))
+        
+        try:
+            check_no_traced(params_numpy)
+        except ValueError as e:
+            logger.error(f"ERROR: Traced arrays detected during save: {e}")
+            logger.error("Attempting to force concrete evaluation...")
+            # Fallback: try to force evaluation again
+            params_numpy = jax.tree_map(
+                lambda x: np.array(jax.block_until_ready(x)) if hasattr(x, 'shape') else x, 
+                params_dict
+            )
+        
+        np.savez(checkpoint_path, params=params_numpy)
             
         logger.info(f"Saved checkpoint to {checkpoint_path}")
         
@@ -520,9 +565,28 @@ class SIRENTrainer:
                     # Old format with multiple keys (backward compatibility)
                     params_dict = {k: checkpoint_data[k] for k in checkpoint_data.files}
             
-            # Recreate state with loaded parameters
-            self.state = self.state.replace(params=freeze(params_dict))
+            # Convert numpy arrays back to JAX arrays and freeze
+            def numpy_to_jax(tree):
+                return jax.tree_map(lambda x: jnp.asarray(x) if hasattr(x, 'shape') else x, tree)
+            
+            params_jax = numpy_to_jax(params_dict)
+            loaded_params = freeze(params_jax)
+            
+            # CRITICAL FIX: Reinitialize the entire training state with loaded parameters
+            # This ensures the optimizer state matches the parameter tree structure
+            
+            # Get the current optimizer
+            current_optimizer = self.state.tx
+            
+            # Create new training state with loaded parameters and fresh optimizer state
+            self.state = train_state.TrainState.create(
+                apply_fn=self.model.apply,
+                params=loaded_params,
+                tx=current_optimizer
+            )
+            
             logger.info(f"Loaded checkpoint from {checkpoint_path}")
+            logger.info("✅ Training state rebuilt with fresh optimizer state")
             
         except Exception as e:
             logger.error(f"Failed to load checkpoint from {checkpoint_path}: {e}")
