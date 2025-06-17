@@ -42,17 +42,19 @@ class SIREN(nn.Module):
     w0: float = 30.0  # Alternative parameter name for compatibility
     
     def setup(self):
-        # Use w0 as alias for omega_0 parameters if provided
-        if hasattr(self, 'w0') and self.w0 != 30.0:
-            self.first_omega_0 = self.w0
-            self.hidden_omega_0 = self.w0
+        # Setup method - no attribute modification needed
+        pass
     
     @nn.compact
     def __call__(self, inputs):
+        # Use w0 parameter directly, falling back to separate omega_0 parameters
+        first_omega = self.w0 if self.w0 != 30.0 else self.first_omega_0
+        hidden_omega = self.w0 if self.w0 != 30.0 else self.hidden_omega_0
+        
         x = SineLayer(
             features=self.hidden_features,
             is_first=True,
-            omega_0=self.first_omega_0,
+            omega_0=first_omega,
             name='SineLayer_0'
         )(inputs)
         
@@ -60,12 +62,12 @@ class SIREN(nn.Module):
             x = SineLayer(
                 features=self.hidden_features,
                 is_first=False,
-                omega_0=self.hidden_omega_0,
+                omega_0=hidden_omega,
                 name=f'SineLayer_{i+1}'
             )(x)
             
         if self.outermost_linear:
-            scale = np.sqrt(6/self.hidden_features) / self.hidden_omega_0
+            scale = np.sqrt(6/self.hidden_features) / hidden_omega
             init = nn.initializers.uniform(scale=scale)
             x = nn.Dense(
                 features=self.out_features,
@@ -77,7 +79,7 @@ class SIREN(nn.Module):
             x = SineLayer(
                 features=self.out_features,
                 is_first=False,
-                omega_0=self.hidden_omega_0,
+                omega_0=hidden_omega,
                 name='SineLayer_final'
             )(x)
         

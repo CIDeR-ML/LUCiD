@@ -25,6 +25,23 @@ from siren import SIREN, SineLayer
 # Set up logging
 logger = logging.getLogger(__name__)
 
+# Print JAX device info
+def print_device_info():
+    """Print information about JAX devices."""
+    devices = jax.devices()
+    logger.info(f"JAX devices available: {len(devices)}")
+    for i, device in enumerate(devices):
+        logger.info(f"  Device {i}: {device.device_kind} - {device}")
+    
+    # Check which device will be used
+    default_device = jax.devices()[0]
+    logger.info(f"Default device: {default_device.device_kind} - {default_device}")
+    
+    # Test a simple computation to verify device usage
+    test_array = jnp.array([1.0, 2.0, 3.0])
+    logger.info(f"Test array device: {test_array.device()}")
+    return default_device
+
 class PhotonSimSIRENTrainer:
     """
     Trainer class for SIREN networks on PhotonSim data.
@@ -71,6 +88,9 @@ class PhotonSimSIRENTrainer:
             w0=w0,
             output_squared=True  # Ensure positive output like CProfSiren
         )
+        
+        # Print device information
+        self.device = print_device_info()
         
         # Initialize training state
         self._init_training_state()
