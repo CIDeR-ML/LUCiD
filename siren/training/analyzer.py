@@ -538,19 +538,20 @@ class TrainingAnalyzer:
     def plot_lookup_table_slices(
         self,
         save_path: Optional[Path] = None,
-        figsize: Tuple[int, int] = (20, 12),
+        figsize: Tuple[int, int] = (20, 18),
         n_samples_pred: int = 10000
     ) -> plt.Figure:
         """
-        Plot angular profiles and 2D histograms for different energies.
+        Plot angular profiles, distance profiles, and 2D difference maps for different energies.
         
         Shows:
-        1. Angular profiles (distance averaged) for energies 200, 400, 600, 800, 1000 MeV
-        2. Side-by-side 2D histograms (angle vs distance) for lookup table and SIREN predictions
+        1. Row 1: Angular profiles (distance averaged) for energies 200, 400, 600, 800, 1000 MeV
+        2. Row 2: Distance profiles (angle averaged) for the same energies  
+        3. Row 3: 2D difference maps (SIREN - Table) showing angle vs distance
         
         Args:
             save_path: Optional path to save plot
-            figsize: Figure size
+            figsize: Figure size (automatically scaled for 3 rows)
             n_samples_pred: Number of samples for prediction evaluation
             
         Returns:
@@ -564,9 +565,9 @@ class TrainingAnalyzer:
         targets = self.comparison_data['targets'].flatten()
         predictions = self.comparison_data['predictions'].flatten()
         
-        # Create figure with subplots: 2 rows, 5 columns
-        fig, axes = plt.subplots(2, 5, figsize=figsize)
-        fig.suptitle('Lookup Table vs SIREN Model: Angular Profiles and 2D Comparisons', fontsize=16)
+        # Create figure with subplots: 3 rows, 5 columns
+        fig, axes = plt.subplots(3, 5, figsize=(figsize[0], figsize[1] * 1.5))
+        fig.suptitle('Lookup Table vs SIREN Model: Angular Profiles, Distance Profiles, and 2D Difference Maps', fontsize=16)
         
         # Define energy values
         energies = [200, 400, 600, 800, 1000]  # MeV
@@ -576,9 +577,14 @@ class TrainingAnalyzer:
             ax = axes[0, i]
             self._plot_angular_profile_for_energy(ax, energy, inputs_denorm, targets, predictions)
             
-        # Row 2: 2D histograms (angle vs distance) for each energy
+        # Row 2: Distance profiles (angle averaged) for each energy
         for i, energy in enumerate(energies):
             ax = axes[1, i]
+            self._plot_distance_profile_for_energy(ax, energy, inputs_denorm, targets, predictions)
+            
+        # Row 3: 2D difference maps (angle vs distance) for each energy
+        for i, energy in enumerate(energies):
+            ax = axes[2, i]
             self._plot_2d_angle_distance_for_energy(ax, energy, inputs_denorm, targets, predictions)
         
         plt.tight_layout()
@@ -697,16 +703,131 @@ class TrainingAnalyzer:
             ax.plot(angle_degrees[valid_mask], siren_profile[valid_mask], 
                    's--', alpha=0.8, label='SIREN Model', markersize=2, linewidth=2, color='red')
             
-            # Mark Cherenkov angle
-            ax.axvline(43, color='black', linestyle=':', alpha=0.7, linewidth=1.5)
-            ax.text(43.5, ax.get_ylim()[1]*0.8, 'Cherenkov', rotation=90, 
-                   va='bottom', ha='left', fontsize=8, alpha=0.7)
-            
             ax.set_xlabel('Angle (degrees)')
             ax.set_ylabel('Avg Photon Density')
             ax.set_title(f'{actual_energy:.0f} MeV')
             ax.set_yscale('log')
             ax.set_xlim(np.degrees(angle_centers.min()), np.degrees(angle_centers.max()))
+            ax.set_ylim(1e-2, None)  # Set minimum y-axis to 10^-2
+            ax.grid(True, alpha=0.3)
+            if energy == 200:  # Only show legend for first plot
+                ax.legend(fontsize=8, loc='upper right')
+        else:
+            ax.text(0.5, 0.5, f'No valid data\nnear {energy} MeV', 
+                   ha='center', va='center', transform=ax.transAxes)
+            ax.set_title(f'{energy} MeV')
+            
+    def _plot_distance_profile_for_energy(self, ax, energy, inputs_denorm, targets, predictions):
+        """Plot distance profile (angle averaged) for a specific energy using original lookup table grid."""
+        
+        # Use the original lookup table grid from the dataset
+        if not hasattr(self.dataset, 'data_type') or self.dataset.data_type != 'h5_lookup':
+            ax.text(0.5, 0.5, 'Lookup table grid\nnot available', 
+                   ha='center', va='center', transform=ax.transAxes)
+            ax.set_title(f'{energy} MeV')
+            return
+            
+        # Load the original HDF5 file to get the full lookup table grid
+        import h5py
+        with h5py.File(self.dataset.data_path, 'r') as f:
+            # Load full density table and coordinates
+            density_table = f['data/photon_table_density'][:]  # Shape: (n_energy, n_angle, n_distance)
+            energy_centers = f['coordinates/energy_centers'][:]
+            angle_centers = f['coordinates/angle_centers'][:]
+            distance_centers = f['coordinates/distance_centers'][:]
+        
+        # Find the closest energy index
+        energy_idx = np.argmin(np.abs(energy_centers - energy))
+        actual_energy = energy_centers[energy_idx]
+        
+        if np.abs(actual_energy - energy) > 100:  # More than 100 MeV difference
+            ax.text(0.5, 0.5, f'No data near\n{energy} MeV', 
+                   ha='center', va='center', transform=ax.transAxes)
+            ax.set_title(f'{energy} MeV')
+            return
+        
+        # Get the 2D slice for this energy and average over angle
+        table_slice = density_table[energy_idx, :, :]  # Shape: (n_angle, n_distance)
+        
+        # Average over angle for each distance (angle-averaged distance profile)
+        # Only average where values are significant
+        mask_3d = table_slice > 1e-10
+        table_profile = np.zeros(len(distance_centers))
+        
+        for j in range(len(distance_centers)):
+            valid_angles = mask_3d[:, j]
+            if np.sum(valid_angles) > 0:
+                table_profile[j] = np.mean(table_slice[valid_angles, j])
+            else:
+                table_profile[j] = np.nan
+        
+        # Create coordinate grid for SIREN evaluation at this energy
+        # Use the exact same grid as the table for consistency
+        angle_mesh, distance_mesh = np.meshgrid(angle_centers, distance_centers, indexing='ij')
+        energy_grid = np.full_like(angle_mesh, actual_energy)
+        
+        # Flatten for SIREN prediction
+        eval_coords = np.stack([
+            energy_grid.flatten(),
+            angle_mesh.flatten(),
+            distance_mesh.flatten()
+        ], axis=-1)
+        
+        # DEBUG: Check coordinate ranges
+        print(f"DEBUG - Distance profile coordinate ranges:")
+        print(f"  Energy: {actual_energy:.0f} MeV")
+        print(f"  Angle range: {angle_centers.min():.3f} to {angle_centers.max():.3f} rad")
+        print(f"  Distance range: {distance_centers.min():.0f} to {distance_centers.max():.0f} mm")
+        
+        # Normalize coordinates for SIREN
+        input_min = self.dataset.normalized_bounds['input_min']
+        input_max = self.dataset.normalized_bounds['input_max']
+        eval_coords_norm = 2 * (
+            (eval_coords - input_min) / (input_max - input_min)
+        ) - 1
+        
+        # Get SIREN predictions (normalized [0,1] range)
+        siren_predictions_norm = self.trainer.predict(eval_coords_norm)
+        
+        # Denormalize SIREN predictions back to original photon density scale
+        if hasattr(self.dataset, 'denormalize_targets_from_normalized'):
+            # New normalization scheme: denormalize from [0,1] to original scale
+            siren_predictions = self.dataset.denormalize_targets_from_normalized(siren_predictions_norm)
+        else:
+            # Fallback for older datasets
+            siren_predictions = siren_predictions_norm
+            
+        siren_2d = siren_predictions.reshape(angle_mesh.shape)
+        
+        # DEBUG: Check prediction scales
+        print(f"DEBUG - Distance profile scales:")
+        print(f"  Table slice range: {table_slice.min():.2e} to {table_slice.max():.2e}")
+        print(f"  SIREN slice range: {siren_2d.min():.2e} to {siren_2d.max():.2e}")
+        
+        # Average SIREN predictions over angle (same masking as table)
+        siren_profile = np.zeros(len(distance_centers))
+        for j in range(len(distance_centers)):
+            valid_angles = mask_3d[:, j]
+            if np.sum(valid_angles) > 0:
+                siren_profile[j] = np.mean(siren_2d[valid_angles, j])
+            else:
+                siren_profile[j] = np.nan
+        
+        # Remove NaN values
+        valid_mask = ~(np.isnan(table_profile) | np.isnan(siren_profile)) & (table_profile > 0) & (siren_profile > 0)
+        
+        if np.sum(valid_mask) > 5:
+            # Plot both profiles
+            ax.plot(distance_centers[valid_mask], table_profile[valid_mask], 
+                   'o-', alpha=0.8, label='Lookup Table', markersize=3, linewidth=2, color='blue')
+            ax.plot(distance_centers[valid_mask], siren_profile[valid_mask], 
+                   's--', alpha=0.8, label='SIREN Model', markersize=2, linewidth=2, color='red')
+            
+            ax.set_xlabel('Distance (mm)')
+            ax.set_ylabel('Avg Photon Density')
+            ax.set_title(f'{actual_energy:.0f} MeV')
+            ax.set_yscale('log')
+            ax.set_xlim(distance_centers.min(), distance_centers.max())
             ax.set_ylim(1e-2, None)  # Set minimum y-axis to 10^-2
             ax.grid(True, alpha=0.3)
             if energy == 200:  # Only show legend for first plot
@@ -788,63 +909,78 @@ class TrainingAnalyzer:
         siren_slice = siren_predictions.reshape(angle_mesh.shape)
         
         # DEBUG: Check prediction scales for 2D plots
-        print(f"DEBUG - Energy {actual_energy:.0f} MeV 2D ratio:")
+        print(f"DEBUG - Energy {actual_energy:.0f} MeV 2D difference:")
         print(f"  Table 2D range: {table_slice.min():.2e} to {table_slice.max():.2e}")
         print(f"  SIREN 2D range: {siren_slice.min():.2e} to {siren_slice.max():.2e}")
         print(f"  Scale ratio (SIREN/Table): {siren_slice.mean()/table_slice.mean():.2e}")
         
-        # Compute ratio: SIREN/Table
-        # Add small epsilon to avoid division by zero
-        ratio_slice = siren_slice / (table_slice + 1e-12)
+        # Compute difference: SIREN - Table
+        diff_slice = siren_slice - table_slice
         
-        # Mask out very low density regions for cleaner visualization
-        mask = table_slice > 1e-10
-        ratio_slice_masked = np.where(mask, ratio_slice, np.nan)
+        # For difference plots, we want to see all regions including where table=0
+        # No masking needed for difference plots - show complete grid
         
-        # Plot using clean contour levels only (no fine grid visualization)
-        valid_mask = ~np.isnan(ratio_slice_masked)
+        # Plot using pcolormesh for complete grid visualization
+        # Check for any NaN/invalid values in the difference
+        valid_mask = ~(np.isnan(diff_slice) | np.isinf(diff_slice))
         if np.sum(valid_mask) > 10:  # Need at least some valid points
-            # Clean contour visualization with multiple levels
             try:
-                # Main contour levels
-                levels = [0.5, 0.7, 0.85, 1.0, 1.15, 1.3, 1.5, 2.0]
-                
-                # Filled contours for background
-                contourf = ax.contourf(angle_mesh, distance_mesh, ratio_slice_masked, 
-                                     levels=levels, cmap='RdBu_r', alpha=0.6, extend='both')
-                
-                # Line contours for clarity
-                contours = ax.contour(angle_mesh, distance_mesh, ratio_slice_masked, 
-                                    levels=levels, colors='black', linewidths=0.8, alpha=0.8)
-                
-                # Label key contours (perfect match and significant deviations)
-                key_levels = [0.5, 0.85, 1.0, 1.15, 1.5]
-                ax.clabel(contours, levels=key_levels, inline=True, fontsize=9, fmt='%.2f')
-                
-                # Add colorbar for filled contours
-                if energy == 1000:  # Only add colorbar for last plot
-                    cbar = plt.colorbar(contourf, ax=ax)
-                    cbar.set_label('SIREN/Table Ratio')
+                # Determine reasonable difference levels based on the data range
+                diff_range = np.nanmax(np.abs(diff_slice))
+                if diff_range > 0:
+                    # Use pcolormesh for complete grid coverage
+                    max_diff = min(diff_range, 10.0)  # Cap at reasonable value
+                    
+                    # Convert angles to degrees for better readability
+                    angle_mesh_deg = np.degrees(angle_mesh)
+                    
+                    # Create pcolormesh plot (shows all evaluation points)
+                    pcol = ax.pcolormesh(angle_mesh_deg, distance_mesh, diff_slice, 
+                                       cmap='RdBu_r', vmin=-max_diff, vmax=max_diff, 
+                                       shading='auto', alpha=0.8)
+                    
+                    # Add contour lines for key levels (optional, for reference)
+                    key_levels = np.linspace(-max_diff, max_diff, 7)
+                    contours = ax.contour(angle_mesh_deg, distance_mesh, diff_slice, 
+                                        levels=key_levels, colors='black', linewidths=0.5, alpha=0.6)
+                    
+                    # Label zero contour line if it exists
+                    zero_levels = [l for l in key_levels if abs(l) < max_diff/20]
+                    if zero_levels:
+                        ax.clabel(contours, levels=zero_levels, inline=True, fontsize=8, fmt='%.1f')
+                    
+                    # Add colorbar for the pcolormesh
+                    if energy == 1000:  # Only add colorbar for last plot
+                        cbar = plt.colorbar(pcol, ax=ax)
+                        cbar.set_label('SIREN - Table Difference')
+                        
+                    # DEBUG: Print grid coverage info
+                    print(f"DEBUG - 2D plot coverage for {actual_energy:.0f} MeV:")
+                    print(f"  Grid shape: {diff_slice.shape}")
+                    print(f"  Valid points: {np.sum(valid_mask)}/{diff_slice.size}")
+                    print(f"  Difference range: {-max_diff:.2e} to {max_diff:.2e}")
+                    print(f"  Zero table values: {np.sum(table_slice < 1e-10)}/{table_slice.size}")
+                else:
+                    # If no difference range, show uniform field
+                    ax.text(0.5, 0.5, 'No significant\ndifference', 
+                           ha='center', va='center', transform=ax.transAxes)
                     
             except Exception as e:
-                # Fallback: simple scatter if contours fail
+                print(f"DEBUG - 2D plotting failed: {e}")
+                # Fallback: simple scatter if main plot fails
                 valid_points = valid_mask
                 if np.sum(valid_points) > 0:
-                    scatter = ax.scatter(angle_mesh[valid_points], distance_mesh[valid_points], 
-                                       c=ratio_slice_masked[valid_points], cmap='RdBu_r', 
-                                       s=10, vmin=0.5, vmax=2.0, alpha=0.7)
+                    diff_range = np.nanmax(np.abs(diff_slice[valid_points]))
+                    scatter = ax.scatter(np.degrees(angle_mesh[valid_points]), distance_mesh[valid_points], 
+                                       c=diff_slice[valid_points], cmap='RdBu_r', 
+                                       s=10, vmin=-diff_range, vmax=diff_range, alpha=0.7)
                     if energy == 1000:
                         cbar = plt.colorbar(scatter, ax=ax)
-                        cbar.set_label('SIREN/Table Ratio')
-            
-            # Mark Cherenkov angle (approximately 43 degrees for water)
-            ax.axvline(43, color='white', linestyle='--', alpha=0.9, linewidth=2)
-            ax.text(43.5, ax.get_ylim()[1]*0.95, 'Cherenkov', rotation=90, 
-                   va='top', ha='left', color='white', fontweight='bold', fontsize=8)
+                        cbar.set_label('SIREN - Table Difference')
             
             ax.set_xlabel('Angle (degrees)')
             ax.set_ylabel('Distance (mm)')
-            ax.set_title(f'{actual_energy:.0f} MeV\nSIREN/Table Ratio')
+            ax.set_title(f'{actual_energy:.0f} MeV\nSIREN - Table Difference')
             
             # Set limits based on actual data range
             ax.set_xlim(np.degrees(angle_centers.min()), np.degrees(angle_centers.max()))
