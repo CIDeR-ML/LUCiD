@@ -928,26 +928,13 @@ class TrainingAnalyzer:
                 # Determine reasonable difference levels based on the data range
                 diff_range = np.nanmax(np.abs(diff_slice))
                 if diff_range > 0:
-                    # Use pcolormesh for complete grid coverage
-                    max_diff = min(diff_range, 10.0)  # Cap at reasonable value
-                    
                     # Convert angles to degrees for better readability
                     angle_mesh_deg = np.degrees(angle_mesh)
                     
-                    # Create pcolormesh plot (shows all evaluation points)
+                    # Create pcolormesh plot with fixed [-1, 1] color range
                     pcol = ax.pcolormesh(angle_mesh_deg, distance_mesh, diff_slice, 
-                                       cmap='RdBu_r', vmin=-max_diff, vmax=max_diff, 
+                                       cmap='RdBu_r', vmin=-1.0, vmax=1.0, 
                                        shading='auto', alpha=0.8)
-                    
-                    # Add contour lines for key levels (optional, for reference)
-                    key_levels = np.linspace(-max_diff, max_diff, 7)
-                    contours = ax.contour(angle_mesh_deg, distance_mesh, diff_slice, 
-                                        levels=key_levels, colors='black', linewidths=0.5, alpha=0.6)
-                    
-                    # Label zero contour line if it exists
-                    zero_levels = [l for l in key_levels if abs(l) < max_diff/20]
-                    if zero_levels:
-                        ax.clabel(contours, levels=zero_levels, inline=True, fontsize=8, fmt='%.1f')
                     
                     # Add colorbar for the pcolormesh
                     if energy == 1000:  # Only add colorbar for last plot
@@ -958,7 +945,8 @@ class TrainingAnalyzer:
                     print(f"DEBUG - 2D plot coverage for {actual_energy:.0f} MeV:")
                     print(f"  Grid shape: {diff_slice.shape}")
                     print(f"  Valid points: {np.sum(valid_mask)}/{diff_slice.size}")
-                    print(f"  Difference range: {-max_diff:.2e} to {max_diff:.2e}")
+                    print(f"  Data difference range: {diff_slice.min():.2e} to {diff_slice.max():.2e}")
+                    print(f"  Color range (fixed): -1.0 to 1.0")
                     print(f"  Zero table values: {np.sum(table_slice < 1e-10)}/{table_slice.size}")
                 else:
                     # If no difference range, show uniform field
@@ -970,10 +958,9 @@ class TrainingAnalyzer:
                 # Fallback: simple scatter if main plot fails
                 valid_points = valid_mask
                 if np.sum(valid_points) > 0:
-                    diff_range = np.nanmax(np.abs(diff_slice[valid_points]))
                     scatter = ax.scatter(np.degrees(angle_mesh[valid_points]), distance_mesh[valid_points], 
                                        c=diff_slice[valid_points], cmap='RdBu_r', 
-                                       s=10, vmin=-diff_range, vmax=diff_range, alpha=0.7)
+                                       s=10, vmin=-1.0, vmax=1.0, alpha=0.7)
                     if energy == 1000:
                         cbar = plt.colorbar(scatter, ax=ax)
                         cbar.set_label('SIREN - Table Difference')

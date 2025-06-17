@@ -208,6 +208,13 @@ class SIRENTrainer:
                         if self.history.get('step'):
                             self.start_step = max(self.history['step']) + 1
                             logger.info(f"Training history loaded, resuming from step {self.start_step}")
+                            
+                            # Restore the last learning rate from history
+                            if self.history.get('learning_rate'):
+                                last_lr = self.history['learning_rate'][-1]
+                                self.current_lr = last_lr
+                                logger.info(f"Restored learning rate: {last_lr:.2e}")
+                            
                 except Exception as e:
                     logger.warning(f"Failed to load training history: {e}")
             
