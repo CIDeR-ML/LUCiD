@@ -323,7 +323,7 @@ class PhotonSimTableDataset(PhotonSimDataset):
         self, 
         data_path: Union[str, Path], 
         val_split: float = 0.1,
-        importance_sampling: bool = True,
+        importance_sampling: bool = False,  # Changed default to uniform sampling
         log_transform_targets: bool = True
     ):
         """
@@ -332,7 +332,7 @@ class PhotonSimTableDataset(PhotonSimDataset):
         Args:
             data_path: Path to HDF5 lookup table
             val_split: Validation split fraction
-            importance_sampling: Whether to use importance sampling
+            importance_sampling: Whether to use balanced importance sampling (50% uniform + 50% value-weighted)
             log_transform_targets: Whether to log-transform targets
         """
         self.importance_sampling = importance_sampling
@@ -344,17 +344,28 @@ class PhotonSimTableDataset(PhotonSimDataset):
             self._compute_sampling_weights()
             
     def _compute_sampling_weights(self):
-        """Compute importance sampling weights based on target values."""
-        # Use target values as sampling weights (higher values = higher probability)
-        weights = self.data['targets'][:, 0]
+        """Compute balanced sampling weights for better coverage of all regions."""
+        targets = self.data['targets'][:, 0]
         
-        # Apply sqrt to reduce extreme weighting
-        weights = np.sqrt(weights)
+        # Create more balanced sampling strategy
+        # 1. Basic weight from target values (but heavily dampened)
+        value_weights = np.power(targets, 0.2)  # Much less aggressive than sqrt
+        
+        # 2. Add uniform component for better coverage of low-value regions
+        uniform_weights = np.ones_like(targets)
+        
+        # 3. Combine with 50% uniform sampling for balanced coverage
+        combined_weights = 0.5 * uniform_weights + 0.5 * value_weights
         
         # Normalize
-        self.sampling_weights = weights / weights.sum()
+        self.sampling_weights = combined_weights / combined_weights.sum()
         
-        logger.info("Computed importance sampling weights")
+        # Log statistics
+        logger.info("Computed balanced sampling weights")
+        logger.info(f"  Uniform component: 50%, Value component: 50%")
+        logger.info(f"  Min weight: {self.sampling_weights.min():.2e}")
+        logger.info(f"  Max weight: {self.sampling_weights.max():.2e}")
+        logger.info(f"  Weight ratio (max/min): {self.sampling_weights.max()/self.sampling_weights.min():.1f}")
         
     def get_batch(
         self, 
