@@ -145,6 +145,12 @@ class PhotonSimDataset:
         self.normalized_bounds['target_min'] = self.data['targets_log'].min()
         self.normalized_bounds['target_max'] = self.data['targets_log'].max()
         
+        # Normalize log targets to [0, 1] range to match SIREN output_squared constraint
+        self.data['targets_log_normalized'] = (
+            (self.data['targets_log'] - self.normalized_bounds['target_min']) / 
+            (self.normalized_bounds['target_max'] - self.normalized_bounds['target_min'])
+        )
+        
         # Create train/val split
         n_samples = len(self.data['inputs'])
         n_val = int(n_samples * self.val_split)
@@ -194,7 +200,7 @@ class PhotonSimDataset:
         # Get data
         if normalized:
             inputs = self.data['inputs_normalized'][batch_indices]
-            targets = self.data['targets_log'][batch_indices]
+            targets = self.data['targets_log_normalized'][batch_indices]
         else:
             inputs = self.data['inputs'][batch_indices]
             targets = self.data['targets'][batch_indices]
@@ -242,6 +248,16 @@ class PhotonSimDataset:
         
     def denormalize_targets(self, targets_log: np.ndarray) -> np.ndarray:
         """Convert log-normalized targets back to original scale."""
+        return 10 ** targets_log - 1e-10
+        
+    def denormalize_targets_from_normalized(self, targets_normalized: np.ndarray) -> np.ndarray:
+        """Convert normalized log targets [0,1] back to original scale."""
+        # First denormalize from [0,1] to log scale
+        targets_log = (
+            targets_normalized * (self.normalized_bounds['target_max'] - self.normalized_bounds['target_min']) +
+            self.normalized_bounds['target_min']
+        )
+        # Then convert from log to linear scale
         return 10 ** targets_log - 1e-10
         
     @property

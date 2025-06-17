@@ -452,7 +452,18 @@ class SIRENTrainer:
                 self.history['step'].append(step)
                 self.history['learning_rate'].append(float(self.current_lr))
                 
+                # DEBUG: Print target and prediction statistics
+                inputs, targets = train_batch
+                predictions = self.state.apply_fn(self.state.params, inputs)
+                if isinstance(predictions, (tuple, list)):
+                    predictions = predictions[0]
+                predictions = jnp.atleast_2d(predictions)
+                if predictions.ndim == 1:
+                    predictions = predictions[:, None]
+                
                 logger.info(f"Step {step:4d}/{total_steps}: Loss={train_loss:.6f}, LR={self.current_lr:.2e}")
+                logger.info(f"       Targets: min={targets.min():.6f}, max={targets.max():.6f}, mean={targets.mean():.6f}")
+                logger.info(f"       Predictions: min={predictions.min():.6f}, max={predictions.max():.6f}, mean={predictions.mean():.6f}")
                 
             # Validation and patience checking
             if step % self.config.val_every == 0 and hasattr(self.dataset, 'has_validation'):
