@@ -655,10 +655,25 @@ class TrainingAnalyzer:
             (eval_coords - input_min) / (input_max - input_min)
         ) - 1
         
-        # Get SIREN predictions and denormalize from log space to linear space
-        siren_predictions_log = self.trainer.predict(eval_coords_norm)
-        siren_predictions_linear = self.dataset.denormalize_targets(siren_predictions_log)
-        siren_2d = siren_predictions_linear.reshape(angle_mesh.shape)
+        # Get SIREN predictions (normalized [0,1] range)
+        siren_predictions_norm = self.trainer.predict(eval_coords_norm)
+        
+        # Denormalize SIREN predictions back to original photon density scale
+        if hasattr(self.dataset, 'denormalize_targets_from_normalized'):
+            # New normalization scheme: denormalize from [0,1] to original scale
+            siren_predictions = self.dataset.denormalize_targets_from_normalized(siren_predictions_norm)
+        else:
+            # Fallback for older datasets
+            siren_predictions = siren_predictions_norm
+            
+        siren_2d = siren_predictions.reshape(angle_mesh.shape)
+        
+        # DEBUG: Check prediction scales
+        print(f"DEBUG - Energy {actual_energy:.0f} MeV angular profile:")
+        print(f"  Table slice range: {table_slice.min():.2e} to {table_slice.max():.2e}")
+        print(f"  SIREN slice range: {siren_2d.min():.2e} to {siren_2d.max():.2e}")
+        print(f"  Scale ratio (SIREN/Table): {siren_2d.mean()/table_slice.mean():.2e}")
+        print(f"  Scaling factor to match: {table_slice.mean()/siren_2d.mean():.2f}")
         
         # Average SIREN predictions over distance (same masking as table)
         siren_profile = np.zeros(len(angle_centers))
@@ -759,10 +774,24 @@ class TrainingAnalyzer:
             (eval_coords - input_min) / (input_max - input_min)
         ) - 1
         
-        # Get SIREN predictions and denormalize from log space to linear space
-        siren_predictions_log = self.trainer.predict(eval_coords_norm)
-        siren_predictions_linear = self.dataset.denormalize_targets(siren_predictions_log)
-        siren_slice = siren_predictions_linear.reshape(angle_mesh.shape)
+        # Get SIREN predictions (normalized [0,1] range)
+        siren_predictions_norm = self.trainer.predict(eval_coords_norm)
+        
+        # Denormalize SIREN predictions back to original photon density scale
+        if hasattr(self.dataset, 'denormalize_targets_from_normalized'):
+            # New normalization scheme: denormalize from [0,1] to original scale
+            siren_predictions = self.dataset.denormalize_targets_from_normalized(siren_predictions_norm)
+        else:
+            # Fallback for older datasets
+            siren_predictions = siren_predictions_norm
+            
+        siren_slice = siren_predictions.reshape(angle_mesh.shape)
+        
+        # DEBUG: Check prediction scales for 2D plots
+        print(f"DEBUG - Energy {actual_energy:.0f} MeV 2D ratio:")
+        print(f"  Table 2D range: {table_slice.min():.2e} to {table_slice.max():.2e}")
+        print(f"  SIREN 2D range: {siren_slice.min():.2e} to {siren_slice.max():.2e}")
+        print(f"  Scale ratio (SIREN/Table): {siren_slice.mean()/table_slice.mean():.2e}")
         
         # Compute ratio: SIREN/Table
         # Add small epsilon to avoid division by zero
