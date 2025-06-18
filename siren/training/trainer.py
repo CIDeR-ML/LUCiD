@@ -294,18 +294,18 @@ class SIRENTrainer:
             def loss_fn(params):
                 predictions = state.apply_fn(params, inputs)
                 
-                # Handle case where model returns tuple or other structure
+                # Handle SIREN output format (tuple with output and coords)
                 if isinstance(predictions, (tuple, list)):
-                    predictions = predictions[0]  # Take first element
-                elif hasattr(predictions, '__getitem__') and not hasattr(predictions, 'shape'):
-                    predictions = predictions[0]  # Handle other sequence types
+                    output = predictions[0]  # Take first element like CProfSiren
+                else:
+                    output = predictions
                 
-                # Ensure predictions have the right shape
-                predictions = jnp.atleast_2d(predictions)
-                if predictions.ndim == 1:
-                    predictions = predictions[:, None]
-                
-                loss = jnp.mean((predictions - targets) ** 2)
+                # Ensure proper shape
+                if output.ndim == 1:
+                    output = output[:, None]
+                    
+                # CProfSiren-style MSE loss with 1000x scaling for better numerical stability
+                loss = jnp.mean((output - targets) ** 2) * 1000.0
                 return loss
                 
             loss, grads = jax.value_and_grad(loss_fn)(state.params)
@@ -323,18 +323,18 @@ class SIRENTrainer:
             inputs, targets = batch
             predictions = state.apply_fn(state.params, inputs)
             
-            # Handle case where model returns tuple or other structure
+            # Handle SIREN output format (tuple with output and coords)
             if isinstance(predictions, (tuple, list)):
-                predictions = predictions[0]  # Take first element
-            elif hasattr(predictions, '__getitem__') and not hasattr(predictions, 'shape'):
-                predictions = predictions[0]  # Handle other sequence types
+                output = predictions[0]  # Take first element like CProfSiren
+            else:
+                output = predictions
             
-            # Ensure predictions have the right shape
-            predictions = jnp.atleast_2d(predictions)
-            if predictions.ndim == 1:
-                predictions = predictions[:, None]
-            
-            loss = jnp.mean((predictions - targets) ** 2)
+            # Ensure proper shape
+            if output.ndim == 1:
+                output = output[:, None]
+                
+            # CProfSiren-style MSE loss with 1000x scaling (same as training)
+            loss = jnp.mean((output - targets) ** 2) * 1000.0
             return loss
             
         return eval_step
@@ -858,7 +858,8 @@ class SIRENTrainer:
                 'final_step': int(self.state.step) if self.state else 0,
                 'final_train_loss': float(self.history['train_loss'][-1]) if self.history['train_loss'] else None,
                 'final_val_loss': float(self.history['val_loss'][-1]) if self.history['val_loss'] else None,
-                'trained_on_log_scale': False  # We're training on linear scale now
+                'trained_on_log_scale': True,  # Now using consistent log-normalized targets by default
+                'loss_scaling_factor': 1000.0  # CProfSiren-style loss scaling
             }
         }
         

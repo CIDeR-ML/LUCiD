@@ -197,9 +197,10 @@ class PhotonSimDataset:
         # Random sampling
         batch_indices = jax.random.choice(rng, indices, shape=(batch_size,))
         
-        # Get data
+        # Get data with consistent normalization
         if normalized:
             inputs = self.data['inputs_normalized'][batch_indices]
+            # Always use log-normalized targets for consistency
             targets = self.data['targets_log_normalized'][batch_indices]
         else:
             inputs = self.data['inputs'][batch_indices]
@@ -231,7 +232,8 @@ class PhotonSimDataset:
             
         if normalized:
             inputs = self.data['inputs_normalized'][indices]
-            targets = self.data['targets_log'][indices]
+            # Use log-normalized targets for consistency with get_batch
+            targets = self.data['targets_log_normalized'][indices]
         else:
             inputs = self.data['inputs'][indices]
             targets = self.data['targets'][indices]
