@@ -38,7 +38,6 @@ class SIREN(nn.Module):
     outermost_linear: bool = False
     first_omega_0: float = 30.0
     hidden_omega_0: float = 30.0
-    output_squared: bool = False  # For PhotonSim compatibility
     w0: float = 30.0  # Alternative parameter name for compatibility
     
     def setup(self):
@@ -83,9 +82,8 @@ class SIREN(nn.Module):
                 name='SineLayer_final'
             )(x)
         
-        # Apply squaring if requested (for PhotonSim compatibility)
-        if self.output_squared:
-            x = x * x
+        # Always square the output for compatibility with trained models
+        x = x * x
             
         return x, inputs
 
@@ -293,7 +291,6 @@ class PhotonSimSIREN:
                 'hidden_features': self.model.hidden_features,
                 'hidden_layers': self.model.hidden_layers,
                 'out_features': self.model.out_features,
-                'output_squared': self.model.output_squared,
                 'w0': self.model.w0,
             },
             'normalization_params': self.normalization_params,
@@ -313,7 +310,6 @@ class PhotonSimSIREN:
                 'hidden_features': self.model.hidden_features,
                 'hidden_layers': self.model.hidden_layers,
                 'out_features': self.model.out_features,
-                'output_squared': self.model.output_squared,
                 'w0': self.model.w0,
             },
             'normalization_params': self.normalization_params,

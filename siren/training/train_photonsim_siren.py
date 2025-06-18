@@ -85,8 +85,7 @@ class PhotonSimSIRENTrainer:
             hidden_features=hidden_features,
             hidden_layers=hidden_layers,
             out_features=1,
-            w0=w0,
-            output_squared=True  # Ensure positive output like CProfSiren
+            w0=w0
         )
         
         # Print device information
@@ -281,8 +280,7 @@ class PhotonSimSIRENTrainer:
                 'hidden_features': self.hidden_features,
                 'hidden_layers': self.hidden_layers,
                 'w0': self.w0,
-                'out_features': 1,
-                'output_squared': True
+                'out_features': 1
             },
             'normalization_params': getattr(self.dataset, 'normalization_params', {}),
             'dataset_stats': self.dataset.get_stats(),
