@@ -70,7 +70,81 @@ class SIRENPredictor:
             weights_path = f"{self.model_path}.npz"
             
         weights_data = np.load(weights_path, allow_pickle=True)
-        self.params = freeze(jax.tree.map(jnp.array, weights_data['params'].item()))
+        
+        # Debug: Check what's actually in the file
+        logger.info(f"Keys in weights file: {list(weights_data.keys())}")
+        
+        # Reconstruct the nested parameter structure
+        def reconstruct_nested_params(flat_params):
+            """Reconstruct nested parameter structure from flattened keys."""
+            nested = {}
+            for key, value in flat_params.items():
+                # Handle keys like: params_SineLayer_0_Dense_0_bias
+                # Should become: params -> SineLayer_0 -> Dense_0 -> bias
+                
+                if key.startswith('params_'):
+                    # Remove the 'params_' prefix
+                    remaining_key = key[7:]  # Remove 'params_'
+                    
+                    # Split by underscore, but be smart about it
+                    # Pattern: SineLayer_X_Dense_Y_paramname
+                    parts = remaining_key.split('_')
+                    
+                    if len(parts) >= 4:  # SineLayer, X, Dense, Y, paramname
+                        layer_name = f"{parts[0]}_{parts[1]}"  # e.g., "SineLayer_0"
+                        dense_name = f"{parts[2]}_{parts[3]}"  # e.g., "Dense_0"
+                        param_name = parts[4] if len(parts) > 4 else parts[-1]  # e.g., "bias" or "kernel"
+                        
+                        # Create nested structure: params -> SineLayer_0 -> Dense_0 -> bias
+                        if 'params' not in nested:
+                            nested['params'] = {}
+                        if layer_name not in nested['params']:
+                            nested['params'][layer_name] = {}
+                        if dense_name not in nested['params'][layer_name]:
+                            nested['params'][layer_name][dense_name] = {}
+                        
+                        nested['params'][layer_name][dense_name][param_name] = jnp.array(value)
+                    else:
+                        # Fallback: just split by underscore
+                        current = nested
+                        for part in parts[:-1]:
+                            if part not in current:
+                                current[part] = {}
+                            current = current[part]
+                        current[parts[-1]] = jnp.array(value)
+                else:
+                    # Direct key
+                    nested[key] = jnp.array(value)
+            return nested
+        
+        # Check if we have flattened parameters (like params_SineLayer_0_Dense_0_bias)
+        if any(key.startswith('params_') for key in weights_data.keys()):
+            # Flattened format: reconstruct the nested structure
+            logger.info("Detected flattened parameter format")
+            nested_params = reconstruct_nested_params(weights_data)
+            self.params = freeze(nested_params)
+            logger.info("Reconstructed nested parameter structure from flattened format")
+            
+        elif 'params' in weights_data and len(weights_data.keys()) == 1:
+            # Old format: single 'params' key containing nested structure
+            try:
+                if isinstance(weights_data['params'], np.ndarray) and weights_data['params'].dtype == 'O':
+                    params_numpy = weights_data['params'].item()
+                else:
+                    params_numpy = weights_data['params']
+                self.params = freeze(jax.tree.map(jnp.array, params_numpy))
+                logger.info("Loaded params from old nested format")
+            except Exception as e:
+                logger.error(f"Failed to load old format: {e}")
+                raise
+                
+        else:
+            # Direct format: parameters saved as individual keys
+            params_dict = {k: jnp.array(v) for k, v in weights_data.items()}
+            self.params = freeze(params_dict)
+            logger.info("Loaded params from direct format")
+            
+        logger.info(f"Final params structure: {jax.tree.map(lambda x: x.shape if hasattr(x, 'shape') else type(x), self.params)}")
         
         # Initialize model
         self._init_model()
@@ -135,7 +209,13 @@ class SIRENPredictor:
             Photon density in photons/mm^2
         """
         inputs = np.array([[energy, angle, distance]])
-        return float(self.predict_batch(inputs)[0])
+        result = self.predict_batch(inputs)
+        
+        # Handle both scalar and array results
+        if np.isscalar(result):
+            return float(result)
+        else:
+            return float(result[0])
     
     def predict_batch(self, inputs: np.ndarray) -> np.ndarray:
         """
@@ -154,8 +234,8 @@ class SIRENPredictor:
         # Convert to JAX array
         inputs_jax = jnp.array(inputs_norm)
         
-        # Run model
-        output = self.model.apply({'params': self.params}, inputs_jax)
+        # Run model - the params should now have the correct structure
+        output = self.model.apply(self.params, inputs_jax)
         
         # Handle tuple output from SIREN
         if isinstance(output, tuple):
