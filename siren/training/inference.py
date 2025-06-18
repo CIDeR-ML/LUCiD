@@ -234,8 +234,26 @@ class SIRENPredictor:
         # Convert to JAX array
         inputs_jax = jnp.array(inputs_norm)
         
-        # Run model - the params should now have the correct structure
-        output = self.model.apply(self.params, inputs_jax)
+        # Run model - wrap params in the expected format
+        # The model expects {'params': param_dict} structure
+        logger.info(f"DEBUG: self.params type: {type(self.params)}")
+        logger.info(f"DEBUG: self.params keys: {list(self.params.keys()) if hasattr(self.params, 'keys') else 'No keys'}")
+        logger.info(f"DEBUG: 'params' in self.params: {'params' in self.params if hasattr(self.params, 'keys') else False}")
+        
+        # Based on the debug output, self.params has structure like:
+        # FrozenDict({ SineLayer_0: {...}, SineLayer_1: {...}, ... })
+        # But the model needs: {'params': { SineLayer_0: {...}, ... }}
+        if hasattr(self.params, 'keys') and 'params' not in self.params:
+            # Wrap in the expected 'params' structure
+            model_params = {'params': self.params}
+            logger.info("DEBUG: Wrapped params in 'params' structure")
+        else:
+            # Use as-is if already has 'params' key
+            model_params = self.params
+            logger.info("DEBUG: Using params as-is")
+            
+        logger.info(f"DEBUG: Final model_params structure: {jax.tree.map(lambda x: x.shape if hasattr(x, 'shape') else type(x), model_params)}")
+        output = self.model.apply(model_params, inputs_jax)
         
         # Handle tuple output from SIREN
         if isinstance(output, tuple):
