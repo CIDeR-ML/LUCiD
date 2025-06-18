@@ -145,7 +145,7 @@ class PhotonSimDataset:
         self.normalized_bounds['target_min'] = self.data['targets_log'].min()
         self.normalized_bounds['target_max'] = self.data['targets_log'].max()
         
-        # Normalize log targets to [0, 1] range to match SIREN output_squared constraint
+        # Normalize log targets to [0, 1] range for training
         self.data['targets_log_normalized'] = (
             (self.data['targets_log'] - self.normalized_bounds['target_min']) / 
             (self.normalized_bounds['target_max'] - self.normalized_bounds['target_min'])

@@ -128,8 +128,7 @@ class SIRENTrainer:
             hidden_features=config.hidden_features,
             hidden_layers=config.hidden_layers,
             out_features=1,
-            w0=config.w0,
-            output_squared=True
+            w0=config.w0
         )
         
         # Check JAX devices
@@ -770,7 +769,6 @@ class SIRENTrainer:
             hidden_layers: int
             out_features: int
             w0: float = 30.0
-            output_squared: bool = False
             
             @nn.compact
             def __call__(self, inputs):
@@ -794,9 +792,89 @@ class SIRENTrainer:
                 # Output layer
                 x = nn.Dense(features=self.out_features)(x)
                 
-                if self.output_squared:
-                    x = x ** 2
+                # Always square the output for compatibility
+                x = x ** 2
                     
                 return x
         
         return MinimalSIREN
+    
+    def save_trained_model(self, output_dir: Path, model_name: str = "siren_model"):
+        """
+        Save the trained SIREN model with all necessary metadata for inference.
+        
+        This saves:
+        - Model weights (.npz file)
+        - Model metadata including normalization parameters (.json file)
+        
+        Args:
+            output_dir: Directory to save the model
+            model_name: Base name for the model files (without extension)
+        """
+        output_dir = Path(output_dir)
+        output_dir.mkdir(exist_ok=True, parents=True)
+        
+        # Prepare model metadata
+        metadata = {
+            'model_config': {
+                'hidden_features': self.config.hidden_features,
+                'hidden_layers': self.config.hidden_layers,
+                'out_features': 1,
+                'w0': self.config.w0
+            },
+            'input_normalization': {
+                'scheme': 'linear_to_range',
+                'target_range': [-1, 1],
+                'input_min': self.dataset.normalized_bounds['input_min'].tolist(),
+                'input_max': self.dataset.normalized_bounds['input_max'].tolist()
+            },
+            'dataset_info': {
+                'data_type': getattr(self.dataset, 'data_type', 'unknown'),
+                'energy_range': [float(self.dataset.energy_range[0]), float(self.dataset.energy_range[1])],
+                'angle_range': [float(self.dataset.angle_range[0]), float(self.dataset.angle_range[1])],
+                'distance_range': [float(self.dataset.distance_range[0]), float(self.dataset.distance_range[1])],
+                'units': {
+                    'energy': 'MeV',
+                    'angle': 'radians',
+                    'distance': 'mm',
+                    'photon_density': 'photons/mm^2'
+                }
+            },
+            'training_info': {
+                'final_step': self.state.step if self.state else 0,
+                'final_train_loss': float(self.history['train_loss'][-1]) if self.history['train_loss'] else None,
+                'final_val_loss': float(self.history['val_loss'][-1]) if self.history['val_loss'] else None,
+                'trained_on_log_scale': False  # We're training on linear scale now
+            }
+        }
+        
+        # If the dataset has denormalization info for targets, include it
+        if hasattr(self.dataset, 'normalized_bounds'):
+            if 'target_min' in self.dataset.normalized_bounds:
+                metadata['target_normalization'] = {
+                    'scheme': 'log_normalized_to_01',
+                    'log_min': float(self.dataset.normalized_bounds['target_min']),
+                    'log_max': float(self.dataset.normalized_bounds['target_max'])
+                }
+            # Check for linear target normalization (from LinearPhotonSimDataset)
+            if 'linear_target_min' in self.dataset.normalized_bounds:
+                metadata['target_normalization'] = {
+                    'scheme': 'linear_normalized_to_01',
+                    'linear_min': float(self.dataset.normalized_bounds['linear_target_min']),
+                    'linear_max': float(self.dataset.normalized_bounds['linear_target_max'])
+                }
+        
+        # Save metadata as JSON
+        metadata_path = output_dir / f"{model_name}_metadata.json"
+        with open(metadata_path, 'w') as f:
+            json.dump(metadata, f, indent=2)
+        
+        # Save model weights
+        weights_path = output_dir / f"{model_name}_weights.npz"
+        np.savez(weights_path, params=jax.tree.map(lambda x: np.array(x), self.state.params))
+        
+        logger.info(f"Saved trained model to:")
+        logger.info(f"  Weights: {weights_path}")
+        logger.info(f"  Metadata: {metadata_path}")
+        
+        return weights_path, metadata_path
