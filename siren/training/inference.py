@@ -71,9 +71,6 @@ class SIRENPredictor:
             
         weights_data = np.load(weights_path, allow_pickle=True)
         
-        # Debug: Check what's actually in the file
-        logger.info(f"Keys in weights file: {list(weights_data.keys())}")
-        
         # Reconstruct the nested parameter structure
         def reconstruct_nested_params(flat_params):
             """Reconstruct nested parameter structure from flattened keys."""
@@ -120,10 +117,8 @@ class SIRENPredictor:
         # Check if we have flattened parameters (like params_SineLayer_0_Dense_0_bias)
         if any(key.startswith('params_') for key in weights_data.keys()):
             # Flattened format: reconstruct the nested structure
-            logger.info("Detected flattened parameter format")
             nested_params = reconstruct_nested_params(weights_data)
             self.params = freeze(nested_params)
-            logger.info("Reconstructed nested parameter structure from flattened format")
             
         elif 'params' in weights_data and len(weights_data.keys()) == 1:
             # Old format: single 'params' key containing nested structure
@@ -133,7 +128,6 @@ class SIRENPredictor:
                 else:
                     params_numpy = weights_data['params']
                 self.params = freeze(jax.tree.map(jnp.array, params_numpy))
-                logger.info("Loaded params from old nested format")
             except Exception as e:
                 logger.error(f"Failed to load old format: {e}")
                 raise
@@ -142,9 +136,6 @@ class SIRENPredictor:
             # Direct format: parameters saved as individual keys
             params_dict = {k: jnp.array(v) for k, v in weights_data.items()}
             self.params = freeze(params_dict)
-            logger.info("Loaded params from direct format")
-            
-        logger.info(f"Final params structure: {jax.tree.map(lambda x: x.shape if hasattr(x, 'shape') else type(x), self.params)}")
         
         # Initialize model
         self._init_model()
@@ -236,23 +227,13 @@ class SIRENPredictor:
         
         # Run model - wrap params in the expected format
         # The model expects {'params': param_dict} structure
-        logger.info(f"DEBUG: self.params type: {type(self.params)}")
-        logger.info(f"DEBUG: self.params keys: {list(self.params.keys()) if hasattr(self.params, 'keys') else 'No keys'}")
-        logger.info(f"DEBUG: 'params' in self.params: {'params' in self.params if hasattr(self.params, 'keys') else False}")
-        
-        # Based on the debug output, self.params has structure like:
-        # FrozenDict({ SineLayer_0: {...}, SineLayer_1: {...}, ... })
-        # But the model needs: {'params': { SineLayer_0: {...}, ... }}
         if hasattr(self.params, 'keys') and 'params' not in self.params:
             # Wrap in the expected 'params' structure
             model_params = {'params': self.params}
-            logger.info("DEBUG: Wrapped params in 'params' structure")
         else:
             # Use as-is if already has 'params' key
             model_params = self.params
-            logger.info("DEBUG: Using params as-is")
             
-        logger.info(f"DEBUG: Final model_params structure: {jax.tree.map(lambda x: x.shape if hasattr(x, 'shape') else type(x), model_params)}")
         output = self.model.apply(model_params, inputs_jax)
         
         # Handle tuple output from SIREN
