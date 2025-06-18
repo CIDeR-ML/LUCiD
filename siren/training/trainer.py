@@ -814,19 +814,33 @@ class SIRENTrainer:
         output_dir = Path(output_dir)
         output_dir.mkdir(exist_ok=True, parents=True)
         
-        # Prepare model metadata
+        # Helper function to ensure JSON serializable values
+        def make_json_serializable(obj):
+            """Convert numpy/JAX arrays and types to JSON serializable Python types."""
+            if hasattr(obj, 'tolist'):  # numpy arrays
+                return obj.tolist()
+            elif hasattr(obj, 'item'):  # numpy scalars
+                return obj.item()
+            elif isinstance(obj, (np.integer, np.floating)):
+                return obj.item()
+            elif hasattr(obj, '__float__'):  # JAX arrays/scalars
+                return float(obj)
+            else:
+                return obj
+
+        # Prepare model metadata with proper type conversion
         metadata = {
             'model_config': {
-                'hidden_features': self.config.hidden_features,
-                'hidden_layers': self.config.hidden_layers,
+                'hidden_features': int(self.config.hidden_features),
+                'hidden_layers': int(self.config.hidden_layers),
                 'out_features': 1,
-                'w0': self.config.w0
+                'w0': float(self.config.w0)
             },
             'input_normalization': {
                 'scheme': 'linear_to_range',
                 'target_range': [-1, 1],
-                'input_min': self.dataset.normalized_bounds['input_min'].tolist(),
-                'input_max': self.dataset.normalized_bounds['input_max'].tolist()
+                'input_min': make_json_serializable(self.dataset.normalized_bounds['input_min']),
+                'input_max': make_json_serializable(self.dataset.normalized_bounds['input_max'])
             },
             'dataset_info': {
                 'data_type': getattr(self.dataset, 'data_type', 'unknown'),
@@ -841,7 +855,7 @@ class SIRENTrainer:
                 }
             },
             'training_info': {
-                'final_step': self.state.step if self.state else 0,
+                'final_step': int(self.state.step) if self.state else 0,
                 'final_train_loss': float(self.history['train_loss'][-1]) if self.history['train_loss'] else None,
                 'final_val_loss': float(self.history['val_loss'][-1]) if self.history['val_loss'] else None,
                 'trained_on_log_scale': False  # We're training on linear scale now
@@ -853,15 +867,15 @@ class SIRENTrainer:
             if 'target_min' in self.dataset.normalized_bounds:
                 metadata['target_normalization'] = {
                     'scheme': 'log_normalized_to_01',
-                    'log_min': float(self.dataset.normalized_bounds['target_min']),
-                    'log_max': float(self.dataset.normalized_bounds['target_max'])
+                    'log_min': make_json_serializable(self.dataset.normalized_bounds['target_min']),
+                    'log_max': make_json_serializable(self.dataset.normalized_bounds['target_max'])
                 }
             # Check for linear target normalization (from LinearPhotonSimDataset)
             if 'linear_target_min' in self.dataset.normalized_bounds:
                 metadata['target_normalization'] = {
                     'scheme': 'linear_normalized_to_01',
-                    'linear_min': float(self.dataset.normalized_bounds['linear_target_min']),
-                    'linear_max': float(self.dataset.normalized_bounds['linear_target_max'])
+                    'linear_min': make_json_serializable(self.dataset.normalized_bounds['linear_target_min']),
+                    'linear_max': make_json_serializable(self.dataset.normalized_bounds['linear_target_max'])
                 }
         
         # Save metadata as JSON
@@ -869,9 +883,11 @@ class SIRENTrainer:
         with open(metadata_path, 'w') as f:
             json.dump(metadata, f, indent=2)
         
-        # Save model weights
+        # Save model weights - flatten the tree structure properly
         weights_path = output_dir / f"{model_name}_weights.npz"
-        np.savez(weights_path, params=jax.tree.map(lambda x: np.array(x), self.state.params))
+        # Convert JAX parameters to numpy arrays while preserving structure
+        params_numpy = jax.tree.map(lambda x: np.array(x), self.state.params)
+        np.savez(weights_path, **params_numpy)  # Save each parameter separately
         
         logger.info(f"Saved trained model to:")
         logger.info(f"  Weights: {weights_path}")
