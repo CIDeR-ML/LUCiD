@@ -75,34 +75,34 @@ class SIRENPredictor:
         def reconstruct_nested_params(flat_params):
             """Reconstruct nested parameter structure from flattened keys."""
             nested = {}
+            
             for key, value in flat_params.items():
-                # Handle keys like: params_SineLayer_0_Dense_0_bias
-                # Should become: params -> SineLayer_0 -> Dense_0 -> bias
-                
                 if key.startswith('params_'):
-                    # Remove the 'params_' prefix
-                    remaining_key = key[7:]  # Remove 'params_'
+                    # Remove 'params_' prefix
+                    remaining = key[7:]  # Remove 'params_'
                     
-                    # Split by underscore, but be smart about it
-                    # Pattern: SineLayer_X_Dense_Y_paramname
-                    parts = remaining_key.split('_')
+                    # Split and reconstruct: SineLayer_0_Dense_0_kernel -> SineLayer_0/Dense_0/kernel
+                    parts = remaining.split('_')
                     
-                    if len(parts) >= 4:  # SineLayer, X, Dense, Y, paramname
-                        layer_name = f"{parts[0]}_{parts[1]}"  # e.g., "SineLayer_0"
-                        dense_name = f"{parts[2]}_{parts[3]}"  # e.g., "Dense_0"
-                        param_name = parts[4] if len(parts) > 4 else parts[-1]  # e.g., "bias" or "kernel"
+                    # Reconstruct layer names: SineLayer_0, Dense_0, etc.
+                    if len(parts) >= 3:
+                        # Pattern: SineLayer_X_Dense_Y_paramname
+                        layer_part = f"{parts[0]}_{parts[1]}"  # SineLayer_0
+                        if len(parts) >= 5:
+                            dense_part = f"{parts[2]}_{parts[3]}"  # Dense_0  
+                            param_name = parts[4]  # kernel/bias
+                        else:
+                            dense_part = parts[2]  # fallback
+                            param_name = parts[3] if len(parts) > 3 else parts[-1]
                         
-                        # Create nested structure: params -> SineLayer_0 -> Dense_0 -> bias
-                        if 'params' not in nested:
-                            nested['params'] = {}
-                        if layer_name not in nested['params']:
-                            nested['params'][layer_name] = {}
-                        if dense_name not in nested['params'][layer_name]:
-                            nested['params'][layer_name][dense_name] = {}
-                        
-                        nested['params'][layer_name][dense_name][param_name] = jnp.array(value)
+                        # Create nested structure
+                        if layer_part not in nested:
+                            nested[layer_part] = {}
+                        if dense_part not in nested[layer_part]:
+                            nested[layer_part][dense_part] = {}
+                        nested[layer_part][dense_part][param_name] = jnp.array(value)
                     else:
-                        # Fallback: just split by underscore
+                        # Fallback for unexpected patterns
                         current = nested
                         for part in parts[:-1]:
                             if part not in current:
@@ -110,24 +110,40 @@ class SIRENPredictor:
                             current = current[part]
                         current[parts[-1]] = jnp.array(value)
                 else:
-                    # Direct key
+                    # Handle keys that don't start with 'params_'
                     nested[key] = jnp.array(value)
+            
             return nested
         
-        # Check if we have flattened parameters (like params_SineLayer_0_Dense_0_bias)
-        if any(key.startswith('params_') for key in weights_data.keys()):
+        # Check if we have flattened parameters (any key with underscores indicating nested structure)
+        has_flattened = any('_' in key and not key.startswith('.') for key in weights_data.keys())
+        
+        if has_flattened:
             # Flattened format: reconstruct the nested structure
             nested_params = reconstruct_nested_params(weights_data)
-            self.params = freeze(nested_params)
+            
+            # Wrap in 'params' key as expected by Flax
+            self.params = freeze({'params': nested_params})
             
         elif 'params' in weights_data and len(weights_data.keys()) == 1:
             # Old format: single 'params' key containing nested structure
             try:
-                if isinstance(weights_data['params'], np.ndarray) and weights_data['params'].dtype == 'O':
-                    params_numpy = weights_data['params'].item()
+                params_data = weights_data['params']
+                
+                # Check if it's a string array (corrupted save)
+                if isinstance(params_data, np.ndarray) and params_data.dtype.kind in ['U', 'S']:
+                    logger.error(f"Corrupted model file: contains string array instead of parameters")
+                    logger.error(f"The model needs to be re-saved with the fixed trainer")
+                    raise ValueError(f"Corrupted parameters: got string array instead of numeric data. Please re-save the model.")
+                
+                if isinstance(params_data, np.ndarray) and params_data.dtype == 'O':
+                    params_numpy = params_data.item()
                 else:
-                    params_numpy = weights_data['params']
-                self.params = freeze(jax.tree.map(jnp.array, params_numpy))
+                    params_numpy = params_data
+                
+                # Convert to JAX arrays
+                self.params = freeze(jax.tree_map(jnp.array, params_numpy))
+                
             except Exception as e:
                 logger.error(f"Failed to load old format: {e}")
                 raise

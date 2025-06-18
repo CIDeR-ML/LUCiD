@@ -884,11 +884,32 @@ class SIRENTrainer:
         with open(metadata_path, 'w') as f:
             json.dump(metadata, f, indent=2)
         
-        # Save model weights - flatten the tree structure properly
+        # Save model weights - flatten structure for reliable saving
         weights_path = output_dir / f"{model_name}_weights.npz"
-        # Convert JAX parameters to numpy arrays while preserving structure
-        params_numpy = jax.tree.map(lambda x: np.array(x), self.state.params)
-        np.savez(weights_path, **params_numpy)  # Save each parameter separately
+        
+        # Flatten the parameter tree to avoid nested structure issues
+        def flatten_params(params):
+            """Flatten nested parameter dict with descriptive keys."""
+            flat_params = {}
+            
+            def _flatten(tree, prefix=""):
+                for key, value in tree.items():
+                    new_key = f"{prefix}_{key}" if prefix else key
+                    if isinstance(value, dict):
+                        _flatten(value, new_key)
+                    else:
+                        # Convert to numpy array
+                        flat_params[new_key] = np.array(value)
+            
+            _flatten(params)
+            return flat_params
+        
+        # Get parameters and flatten them
+        params_dict = unfreeze(self.state.params)
+        flat_params = flatten_params(params_dict)
+        
+        # Save flattened parameters
+        np.savez(weights_path, **flat_params)
         
         logger.info(f"Saved trained model to:")
         logger.info(f"  Weights: {weights_path}")

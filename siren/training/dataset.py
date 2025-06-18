@@ -73,11 +73,6 @@ class PhotonSimDataset:
         
         self.data['targets'] = density_table.flatten()[:, np.newaxis].astype(np.float32)
         
-        # Remove zero or very small values (optional, for better training)
-        mask = self.data['targets'][:, 0] > 1e-10
-        self.data['inputs'] = self.data['inputs'][mask]
-        self.data['targets'] = self.data['targets'][mask]
-        
         # Store metadata
         self.metadata = metadata
         self.energy_range = (energy_centers.min(), energy_centers.max())
@@ -150,6 +145,31 @@ class PhotonSimDataset:
             (self.data['targets_log'] - self.normalized_bounds['target_min']) / 
             (self.normalized_bounds['target_max'] - self.normalized_bounds['target_min'])
         )
+        
+        # Filter data but keep 0.2% of zero values for better training coverage
+        mask = self.data['targets'][:, 0] > 1e-10
+        zero_mask = ~mask
+        
+        # Randomly select 0.2% of zero values to keep
+        zero_indices = np.where(zero_mask)[0]
+        if len(zero_indices) > 0:
+            n_zeros_to_keep = max(1, int(len(zero_indices) * 0.002))
+            rng = np.random.RandomState(42)
+            zeros_to_keep = rng.choice(zero_indices, size=n_zeros_to_keep, replace=False)
+            
+            # Create final mask: all non-zeros + 0.2% of zeros
+            final_mask = mask.copy()
+            final_mask[zeros_to_keep] = True
+            
+            logger.info(f"Filtered data: keeping {mask.sum():,} non-zero values + {len(zeros_to_keep):,} zero values ({len(zeros_to_keep)/len(zero_indices)*100:.1f}% of zeros)")
+            logger.info(f"Total data points: {final_mask.sum():,} / {len(final_mask):,} ({final_mask.sum()/len(final_mask)*100:.1f}%)")
+            
+            # Apply the filter
+            self.data['inputs'] = self.data['inputs'][final_mask]
+            self.data['targets'] = self.data['targets'][final_mask]
+            self.data['inputs_normalized'] = self.data['inputs_normalized'][final_mask]
+            self.data['targets_log'] = self.data['targets_log'][final_mask]
+            self.data['targets_log_normalized'] = self.data['targets_log_normalized'][final_mask]
         
         # Create train/val split
         n_samples = len(self.data['inputs'])
