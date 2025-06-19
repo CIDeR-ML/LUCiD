@@ -50,8 +50,8 @@ class PhotonSimDataset:
         self.data_type = 'h5_lookup'
         
         with h5py.File(self.data_path, 'r') as f:
-            # Load density table
-            density_table = f['data/photon_table_density'][:]
+            # Load average table (photons per event)
+            average_table = f['data/photon_table_average'][:]
             
             # Load coordinates
             energy_centers = f['coordinates/energy_centers'][:]
@@ -71,7 +71,7 @@ class PhotonSimDataset:
             D.flatten()
         ], axis=-1).astype(np.float32)
         
-        self.data['targets'] = density_table.flatten()[:, np.newaxis].astype(np.float32)
+        self.data['targets'] = average_table.flatten()[:, np.newaxis].astype(np.float32)
         
         # Store metadata
         self.metadata = metadata
@@ -83,6 +83,7 @@ class PhotonSimDataset:
         logger.info(f"Energy range: {self.energy_range[0]:.0f}-{self.energy_range[1]:.0f} MeV")
         logger.info(f"Angle range: {np.degrees(self.angle_range[0]):.1f}-{np.degrees(self.angle_range[1]):.1f} degrees")
         logger.info(f"Distance range: {self.distance_range[0]:.0f}-{self.distance_range[1]:.0f} mm")
+        logger.info(f"Table type: {metadata.get('normalization', 'unknown')} ({metadata.get('average_units', 'unknown units')})") 
         
         # Normalize inputs and prepare bounds
         self._normalize_data()
@@ -334,105 +335,35 @@ class PhotonSimDataset:
             
         logger.info(f"Saved sampled dataset to {output_dir}")
         
-
-class PhotonSimTableDataset(PhotonSimDataset):
-    """
-    Specialized dataset for PhotonSim lookup tables with additional
-    features for importance sampling and adaptive batch generation.
-    """
-    
-    def __init__(
-        self, 
-        data_path: Union[str, Path], 
-        val_split: float = 0.1,
-        importance_sampling: bool = False,  # Changed default to uniform sampling
-        log_transform_targets: bool = True
-    ):
+    def get_total_counts_for_energy(self, energy: float) -> float:
         """
-        Initialize table dataset with advanced features.
+        Get total table counts for a given energy.
         
         Args:
-            data_path: Path to HDF5 lookup table
-            val_split: Validation split fraction
-            importance_sampling: Whether to use balanced importance sampling (50% uniform + 50% value-weighted)
-            log_transform_targets: Whether to log-transform targets
-        """
-        self.importance_sampling = importance_sampling
-        self.log_transform_targets = log_transform_targets
-        
-        super().__init__(data_path, val_split)
-        
-        if importance_sampling:
-            self._compute_sampling_weights()
-            
-    def _compute_sampling_weights(self):
-        """Compute balanced sampling weights for better coverage of all regions."""
-        targets = self.data['targets'][:, 0]
-        
-        # Create more balanced sampling strategy
-        # 1. Basic weight from target values (but heavily dampened)
-        value_weights = np.power(targets, 0.2)  # Much less aggressive than sqrt
-        
-        # 2. Add uniform component for better coverage of low-value regions
-        uniform_weights = np.ones_like(targets)
-        
-        # 3. Combine with 50% uniform sampling for balanced coverage
-        combined_weights = 0.5 * uniform_weights + 0.5 * value_weights
-        
-        # Normalize
-        self.sampling_weights = combined_weights / combined_weights.sum()
-        
-        # Log statistics
-        logger.info("Computed balanced sampling weights")
-        logger.info(f"  Uniform component: 50%, Value component: 50%")
-        logger.info(f"  Min weight: {self.sampling_weights.min():.2e}")
-        logger.info(f"  Max weight: {self.sampling_weights.max():.2e}")
-        logger.info(f"  Weight ratio (max/min): {self.sampling_weights.max()/self.sampling_weights.min():.1f}")
-        
-    def get_batch(
-        self, 
-        batch_size: int, 
-        rng: jax.random.PRNGKey,
-        split: str = 'train',
-        normalized: bool = True,
-        use_importance: Optional[bool] = None
-    ) -> Tuple[jnp.ndarray, jnp.ndarray]:
-        """
-        Get batch with optional importance sampling.
-        
-        Args:
-            batch_size: Batch size
-            rng: Random key
-            split: Data split
-            normalized: Use normalized data
-            use_importance: Override importance sampling setting
+            energy: Energy value in MeV
             
         Returns:
-            Batch of (inputs, targets)
+            Total sum of all table values for the closest energy bin
         """
-        use_importance = use_importance if use_importance is not None else self.importance_sampling
+        if self.data_type != 'h5_lookup':
+            raise ValueError("This method only works with H5 lookup tables")
+            
+        # Load the necessary data if not already cached
+        if not hasattr(self, '_cached_lookup_data'):
+            with h5py.File(self.data_path, 'r') as f:
+                self._cached_lookup_data = {
+                    'average_table': f['data/photon_table_average'][:],
+                    'energy_centers': f['coordinates/energy_centers'][:]
+                }
+                
+        # Find the closest energy index
+        energy_centers = self._cached_lookup_data['energy_centers']
+        energy_idx = np.argmin(np.abs(energy_centers - energy))
         
-        if use_importance and hasattr(self, 'sampling_weights'):
-            # Importance sampling
-            indices = self.train_indices if split == 'train' else self.val_indices
-            weights = self.sampling_weights[indices]
-            weights = weights / weights.sum()
-            
-            batch_indices = np.random.choice(
-                indices, 
-                size=batch_size, 
-                p=weights
-            )
-        else:
-            # Regular sampling
-            return super().get_batch(batch_size, rng, split, normalized)
-            
-        # Get data
-        if normalized:
-            inputs = self.data['inputs_normalized'][batch_indices]
-            targets = self.data['targets_log'][batch_indices]
-        else:
-            inputs = self.data['inputs'][batch_indices]
-            targets = self.data['targets'][batch_indices]
-            
-        return jnp.array(inputs), jnp.array(targets)
+        # Sum all values for this energy slice
+        average_table = self._cached_lookup_data['average_table']
+        total_counts = np.sum(average_table[energy_idx, :, :])
+        
+        logger.info(f"Energy {energy:.1f} MeV (closest bin: {energy_centers[energy_idx]:.1f} MeV) - Total average counts: {total_counts:.2e}")
+        
+        return total_counts
