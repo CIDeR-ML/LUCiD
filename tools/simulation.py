@@ -212,6 +212,35 @@ def create_siren_grid(table):
     return cos_bins, trk_bins, cos_trk_mesh, (x_data, y_data), grid_shape
 
 
+def create_photonsim_siren_grid(photonsim_predictor, n_bins):
+    # Get the actual ranges from PhotonSim training metadata
+    dataset_info = photonsim_predictor.dataset_info
+    energy_min, energy_max = dataset_info['energy_range']
+    angle_min, angle_max = dataset_info['angle_range']  # In radians
+    distance_min, distance_max = dataset_info['distance_range']  # In mm
+    
+    # Validate target normalization scheme
+    target_norm = photonsim_predictor.metadata['target_normalization']
+    if target_norm['scheme'] != 'log_normalized_to_01':
+        raise ValueError(f"Expected target normalization scheme 'log_normalized_to_01', "
+                        f"but got '{target_norm['scheme']}'")
+    
+    # Create n_bins x n_bins binning using actual PhotonSim training ranges
+    angle_bins = jnp.linspace(angle_min, angle_max, n_bins)
+    distance_bins = jnp.linspace(distance_min, distance_max, n_bins)
+    angle_dist_grid = jnp.column_stack([
+        jnp.repeat(angle_bins, n_bins),
+        jnp.tile(distance_bins, n_bins)
+    ])
+        
+    # Create meshgrid using actual PhotonSim ranges
+    angle_mesh, distance_mesh = jnp.meshgrid(angle_bins, distance_bins, indexing='ij')
+    log_min = target_norm['log_min']
+    log_max = target_norm['log_max']
+
+    return n_bins, energy_min, energy_max, angle_min, angle_max, distance_min, distance_max, angle_bins, \
+    distance_bins, angle_dist_grid, angle_mesh, distance_mesh, log_min, log_max
+
 def photon_iteration_sample(position, direction, time, surface_distance,
                             normal, scatter_length, reflection_rate,
                             absorption_length, tau_gs, rng_key):
