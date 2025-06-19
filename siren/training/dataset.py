@@ -333,3 +333,36 @@ class PhotonSimDataset:
             json.dump(metadata, f, indent=2)
             
         logger.info(f"Saved sampled dataset to {output_dir}")
+        
+    def get_total_counts_for_energy(self, energy: float) -> float:
+        """
+        Get total table counts for a given energy.
+        
+        Args:
+            energy: Energy value in MeV
+            
+        Returns:
+            Total sum of all table values for the closest energy bin
+        """
+        if self.data_type != 'h5_lookup':
+            raise ValueError("This method only works with H5 lookup tables")
+            
+        # Load the necessary data if not already cached
+        if not hasattr(self, '_cached_lookup_data'):
+            with h5py.File(self.data_path, 'r') as f:
+                self._cached_lookup_data = {
+                    'density_table': f['data/photon_table_density'][:],
+                    'energy_centers': f['coordinates/energy_centers'][:]
+                }
+                
+        # Find the closest energy index
+        energy_centers = self._cached_lookup_data['energy_centers']
+        energy_idx = np.argmin(np.abs(energy_centers - energy))
+        
+        # Sum all values for this energy slice
+        density_table = self._cached_lookup_data['density_table']
+        total_counts = np.sum(density_table[energy_idx, :, :])
+        
+        logger.info(f"Energy {energy:.1f} MeV (closest bin: {energy_centers[energy_idx]:.1f} MeV) - Total counts: {total_counts:.2e}")
+        
+        return total_counts
