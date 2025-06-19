@@ -255,6 +255,127 @@ def new_differentiable_get_rays(track_origin, track_direction, energy, Nphot, ta
     return ray_vectors, ray_origins, jnp.squeeze(new_photon_weights)
 
 
+import jax.numpy as jnp
+
+@jax.jit
+def denormalize_log_predictions(predictions, log_max, log_min):
+    log_predictions = predictions * (log_max - log_min) + log_min 
+    return 10 ** log_predictions - 1e-10
+
+@jax.jit
+def normalize_inputs_jit(inputs, energy_min, energy_max, angle_min, angle_max, distance_min, distance_max):
+    """
+    Normalize inputs to the range [-1, 1] in all dimensions.
+    
+    Args:
+        inputs: Array of shape (..., 3) containing [energy, angle, distance] values.
+        energy_min, energy_max: The minimum and maximum energy values.
+        angle_min, angle_max: The minimum and maximum angle values.
+        distance_min, distance_max: The minimum and maximum distance values.
+    
+    Returns:
+        Array of shape (..., 3) with normalized values in the range [-1, 1].
+    """
+    # Extract the individual components
+    energy = inputs[:, 0]
+    angle = inputs[:, 1]
+    distance = inputs[:, 2]
+    
+    # Normalize each component to [-1, 1]
+    normalized_energy = 2.0 * (energy - energy_min) / (energy_max - energy_min) - 1.0
+    normalized_angle = 2.0 * (angle - angle_min) / (angle_max - angle_min) - 1.0
+    normalized_distance = 2.0 * (distance - distance_min) / (distance_max - distance_min) - 1.0
+    
+    # Stack the normalized components back together
+    normalized_inputs = jnp.stack([normalized_energy, normalized_angle, normalized_distance], axis=1)
+    
+    return normalized_inputs
+
+@partial(jax.jit, static_argnums=(3))
+def photonsim_differentiable_get_rays(track_origin, track_direction, energy, Nphot, 
+                                     table_data, model_params, key):
+
+    key, subkey = random.split(key)
+    
+    n_bins, energy_min, energy_max, angle_min, angle_max, distance_min, distance_max, angle_bins, distance_bins, angle_dist_grid, angle_mesh, distance_mesh, log_min, log_max = table_data
+
+    # Create evaluation grid for PhotonSim model: [energy, angle, distance]
+    evaluation_grid = jnp.stack([
+        jnp.full_like(angle_mesh, energy).ravel(),  # Energy (MeV)
+        angle_mesh.ravel(),                         # Angle (radians)
+        distance_mesh.ravel(),                      # Distance (mm)
+    ], axis=1)
+
+    normalized_grid = normalize_inputs_jit(evaluation_grid, energy_min, energy_max, angle_min, angle_max, distance_min, distance_max)
+
+    # Initialize SIREN model
+    model = SIREN(
+        hidden_features=256,
+        hidden_layers=3,
+        out_features=1,
+    )
+    
+    photon_weights, _ = model.apply(model_params, normalized_grid)
+
+    # After getting selected_cos and selected_trk:
+    key, sampling_key = random.split(key)
+    key, noise_key_angle = random.split(key)
+    key, noise_key_dist = random.split(key)
+
+    num_seeds = jnp.int32(energy * 9.50855 - 507.800)
+
+    seed_indices = random.randint(sampling_key, (Nphot,), 0, num_seeds)
+    indices_by_weight = jnp.argsort(-photon_weights.squeeze())[seed_indices]
+
+    angle_dist_mesh = jnp.array(angle_dist_grid)
+    selected_angle_dist = angle_dist_mesh[indices_by_weight]
+
+    # Split into separate cos and trk arrays
+    sampled_angle = selected_angle_dist[:, 0]
+    sampled_dist  = selected_angle_dist[:, 1]
+
+    # Add Gaussian noise
+    sigma_angle = (angle_max-angle_min)/(2*n_bins)
+    sigma_dist = (distance_max-distance_min)/(2*n_bins)
+
+    noise_angle = random.normal(noise_key_angle, (Nphot,)) * sigma_angle
+    noise_dist = random.normal(noise_key_dist, (Nphot,)) * sigma_dist
+
+    smeared_angle = sampled_angle + noise_angle
+    smeared_dist = sampled_dist + noise_dist
+
+    # Create new evaluation grid with smeared values
+    new_evaluation_grid = jnp.stack([
+        jnp.full_like(smeared_angle, energy),
+        smeared_angle,
+        smeared_dist,
+    ], axis=1)
+
+    new_normalized_grid = normalize_inputs_jit(new_evaluation_grid, energy_min, energy_max, angle_min, angle_max, distance_min, distance_max)
+    
+    # Run the model with new grid
+    new_photon_weights, _ = model.apply(model_params, new_normalized_grid)
+
+    photon_thetas = smeared_angle
+    #photon_thetas = jnp.arccos(smeared_cos)
+
+    # Generate ray vectors and origins
+    subkey, subkey2 = random.split(subkey)
+    ray_vectors = generate_random_cone_vectors(track_direction, photon_thetas, Nphot, subkey)
+
+    # Convert ranges to meters and compute ray origins
+    ranges = smeared_dist/1000
+    ray_origins = jnp.ones((Nphot, 3)) * track_origin[None, :] + ranges[:, None] * normalize(track_direction[None, :])
+
+    new_photon_weights = jnp.squeeze(new_photon_weights)
+    new_photon_weights = jnp.where(smeared_angle < angle_min, 0, new_photon_weights)
+    new_photon_weights = jnp.where(smeared_angle > angle_max, 0, new_photon_weights)
+    new_photon_weights = jnp.where(smeared_dist < distance_min, 0, new_photon_weights)
+    new_photon_weights = jnp.where(smeared_dist > distance_max, 0, new_photon_weights)
+
+    return ray_vectors, ray_origins, denormalize_log_predictions(new_photon_weights, log_max, log_min)
+
+
 @partial(jax.jit, static_argnums=(2,))
 def get_isotropic_rays(source_position, source_intensity, Nphot, key):
     """
