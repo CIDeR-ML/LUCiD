@@ -16,3 +16,5 @@ old_tests/
 output/
 
 notebooks/figures/*
+
+sftp-config.json

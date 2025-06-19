@@ -8,7 +8,7 @@ on PhotonSim lookup tables and datasets.
 from .trainer import SIRENTrainer, TrainingConfig
 from .monitor import TrainingMonitor, LiveTrainingCallback
 from .analyzer import TrainingAnalyzer
-from .dataset import PhotonSimDataset, PhotonSimTableDataset
+from .dataset import PhotonSimDataset
 
 __all__ = [
     'SIRENTrainer',
@@ -17,5 +17,4 @@ __all__ = [
     'LiveTrainingCallback',
     'TrainingAnalyzer',
     'PhotonSimDataset',
-    'PhotonSimTableDataset'
 ]
