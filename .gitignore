@@ -3,7 +3,7 @@
 *.pkl
 *.h5
 *.png
-!figures/repo_img.png
+!figures/det_repo_img.png
 *.npy
 
 /test_events
