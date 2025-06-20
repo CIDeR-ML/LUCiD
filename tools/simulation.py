@@ -816,12 +816,7 @@ def create_event_simulator(propagate_photons, Nphot, NUM_DETECTORS, detector_poi
         photonsim_predictor = SIRENPredictor(model_base_path)
         grid_data = create_photonsim_siren_grid(photonsim_predictor, 500)
         model_params = photonsim_predictor.params
-
-        # # Load SIREN model data
-        # table = Table('../siren/cprof_mu_train_10000ev.h5')
-        # grid_data = create_siren_grid(table)
-        # siren_model, model_params = load_siren_jax('../siren/siren_cprof_mu.pkl')
-
+        
         # Return partially applied function with model data
         return partial(_simulation_without_data,
                        grid_data=grid_data,
