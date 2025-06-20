@@ -531,6 +531,38 @@ def create_event_simulator(propagate_photons, Nphot, NUM_DETECTORS, detector_poi
             propagate_photons, photon_update_fn
         )
 
+    @jax.jit
+    def tot_n_photons_normalization(x):
+        """ Translates unphysical SIREN output units into number of physical photons.
+            the numbers are calculated using photonsim_n_photon_integral notebook. """
+        return 12.281581*x -781.924247
+
+    # New photonsim forward
+    @jax.jit
+    def _simulation_without_data(particle_params, detector_params, key, grid_data, model_params):
+        """Simulate events using SIREN model for photon generation."""
+        energy, track_origin, direction_angles = particle_params
+        
+        # Convert theta and phi angles to direction vector
+        theta, phi = direction_angles
+        track_direction = spherical_to_cartesian(theta, phi)
+
+        # Generate photons using SIREN
+        photon_directions, photon_origins, photon_weights = new_differentiable_get_rays(
+            track_origin, track_direction, energy, Nphot, grid_data, model_params, key
+        )
+
+        # Scale weights to physical photon count
+        total_photons = energy * 852.97855369 - 148646.90865158
+        photon_intensities = (total_photons * photon_weights) / Nphot
+        photon_times = jnp.zeros((Nphot,))
+
+        return _common_propagation(
+            photon_origins, photon_directions, photon_intensities, photon_times,
+            Nphot, detector_params, key, NUM_DETECTORS, K, max_detectors_per_cell,
+            propagate_photons, photon_update_fn
+        )
+
     # Define simulation function for SIREN model
     @jax.jit
     def _simulation_without_data(particle_params, detector_params, key, grid_data, model_params):

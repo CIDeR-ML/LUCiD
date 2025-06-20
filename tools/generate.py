@@ -322,7 +322,8 @@ def photonsim_differentiable_get_rays(track_origin, track_direction, energy, Nph
     key, noise_key_angle = random.split(key)
     key, noise_key_dist = random.split(key)
 
-    num_seeds = jnp.int32(energy * 9.50855 - 507.800)
+    # calculated for 500x500 bins and cut-off of 2 using photonsim_cut_off_study
+    num_seeds = jnp.int32(energy * 11.136 -720.3)
 
     seed_indices = random.randint(sampling_key, (Nphot,), 0, num_seeds)
     indices_by_weight = jnp.argsort(-photon_weights.squeeze())[seed_indices]

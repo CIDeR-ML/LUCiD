@@ -137,7 +137,7 @@ class PhotonSimDataset:
         ) - 1
         
         # Log-normalize targets for better training stability
-        self.data['targets_log'] = np.log10(self.data['targets'] + 1e-10)
+        self.data['targets_log'] = np.log10(self.data['targets'] + 1e-2)
         self.normalized_bounds['target_min'] = self.data['targets_log'].min()
         self.normalized_bounds['target_max'] = self.data['targets_log'].max()
         
@@ -148,7 +148,7 @@ class PhotonSimDataset:
         )
         
         # Filter data but keep 0.2% of zero values for better training coverage
-        mask = self.data['targets'][:, 0] > 1e-10
+        mask = self.data['targets'][:, 0] > 1e-2
         zero_mask = ~mask
         
         # Randomly select 0.2% of zero values to keep
@@ -271,7 +271,7 @@ class PhotonSimDataset:
         
     def denormalize_targets(self, targets_log: np.ndarray) -> np.ndarray:
         """Convert log-normalized targets back to original scale."""
-        return 10 ** targets_log - 1e-10
+        return 10 ** targets_log - 1e-2
         
     def denormalize_targets_from_normalized(self, targets_normalized: np.ndarray) -> np.ndarray:
         """Convert normalized log targets [0,1] back to original scale."""
@@ -281,7 +281,7 @@ class PhotonSimDataset:
             self.normalized_bounds['target_min']
         )
         # Then convert from log to linear scale
-        return 10 ** targets_log - 1e-10
+        return 10 ** targets_log - 1e-2
         
     @property
     def has_validation(self) -> bool:
