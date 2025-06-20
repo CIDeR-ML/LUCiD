@@ -95,33 +95,8 @@ class SIRENTrainer:
         self.output_dir = Path(output_dir) if output_dir else None
         self.resume_from_checkpoint = resume_from_checkpoint
         
-        # Import SIREN model with multiple fallback strategies
-        if model_class is None:
-            siren_model = None
-            
-            # Try different import strategies for SIREN
-            try:
-                # Strategy 1: From tools directory
-                from tools.siren import SIREN
-                siren_model = SIREN
-            except ImportError:
-                try:
-                    # Strategy 2: From parent tools directory
-                    import sys
-                    tools_path = Path(__file__).parent.parent.parent / 'tools'
-                    if str(tools_path) not in sys.path:
-                        sys.path.insert(0, str(tools_path))
-                    from siren import SIREN
-                    siren_model = SIREN
-                except ImportError:
-                    try:
-                        # Strategy 3: Create a minimal SIREN implementation
-                        logger.warning("Could not import SIREN, using minimal implementation")
-                        siren_model = self._create_minimal_siren()
-                    except Exception as e:
-                        raise ImportError(f"Could not import or create SIREN model: {e}")
-            
-            model_class = siren_model
+        from tools.siren import SIREN
+        model_class = siren_model
             
         # Initialize model
         self.model = model_class(
@@ -738,66 +713,6 @@ class SIRENTrainer:
             plt.show()
             
         return fig
-        
-    def _create_minimal_siren(self):
-        """Create a minimal SIREN implementation for testing."""
-        class MinimalSineLayer(nn.Module):
-            features: int
-            is_first: bool = False
-            omega_0: float = 30.0
-            
-            @nn.compact
-            def __call__(self, inputs):
-                input_dim = inputs.shape[-1]
-                
-                if self.is_first:
-                    weight_init = nn.initializers.uniform(scale=1/input_dim)
-                else:
-                    scale = jnp.sqrt(6/input_dim) / self.omega_0
-                    weight_init = nn.initializers.uniform(scale=scale)
-                    
-                x = nn.Dense(
-                    features=self.features,
-                    kernel_init=weight_init,
-                    bias_init=nn.initializers.uniform(scale=1)
-                )(inputs)
-                
-                return jnp.sin(self.omega_0 * x)
-        
-        class MinimalSIREN(nn.Module):
-            hidden_features: int
-            hidden_layers: int
-            out_features: int
-            w0: float = 30.0
-            
-            @nn.compact
-            def __call__(self, inputs):
-                x = inputs
-                
-                # First layer
-                x = MinimalSineLayer(
-                    features=self.hidden_features,
-                    is_first=True,
-                    omega_0=self.w0
-                )(x)
-                
-                # Hidden layers
-                for _ in range(self.hidden_layers - 1):
-                    x = MinimalSineLayer(
-                        features=self.hidden_features,
-                        is_first=False,
-                        omega_0=self.w0
-                    )(x)
-                
-                # Output layer
-                x = nn.Dense(features=self.out_features)(x)
-                
-                # Always square the output for compatibility
-                x = x ** 2
-                    
-                return x
-        
-        return MinimalSIREN
     
     def save_trained_model(self, output_dir: Path, model_name: str = "siren_model"):
         """
