@@ -1,4 +1,4 @@
-from tools.generate import differentiable_get_rays, new_differentiable_get_rays, get_isotropic_rays
+from tools.generate import get_isotropic_rays, photonsim_differentiable_get_rays
 
 from tools.propagate import create_photon_propagator, create_sphere_photon_propagator
 from tools.geometry import generate_detector
@@ -8,6 +8,11 @@ import jax.numpy as jnp
 
 from tools.siren import *
 from tools.table import *
+
+import sys
+sys.path.append('../siren/training')
+
+from inference import SIRENPredictor
 
 from functools import partial
 
@@ -548,13 +553,13 @@ def create_event_simulator(propagate_photons, Nphot, NUM_DETECTORS, detector_poi
         track_direction = spherical_to_cartesian(theta, phi)
 
         # Generate photons using SIREN
-        photon_directions, photon_origins, photon_weights = new_differentiable_get_rays(
+        photon_directions, photon_origins, photon_weights = photonsim_differentiable_get_rays(
             track_origin, track_direction, energy, Nphot, grid_data, model_params, key
         )
 
         # Scale weights to physical photon count
-        total_photons = energy * 852.97855369 - 148646.90865158
-        photon_intensities = (total_photons * photon_weights) / Nphot
+        total_photons_norm = tot_n_photons_normalization(energy)
+        photon_intensities = (total_photons_norm * photon_weights) / Nphot
         photon_times = jnp.zeros((Nphot,))
 
         return _common_propagation(
@@ -563,31 +568,31 @@ def create_event_simulator(propagate_photons, Nphot, NUM_DETECTORS, detector_poi
             propagate_photons, photon_update_fn
         )
 
-    # Define simulation function for SIREN model
-    @jax.jit
-    def _simulation_without_data(particle_params, detector_params, key, grid_data, model_params):
-        """Simulate events using SIREN model for photon generation."""
-        energy, track_origin, direction_angles = particle_params
+    # # Define simulation function for SIREN model
+    # @jax.jit
+    # def _simulation_without_data(particle_params, detector_params, key, grid_data, model_params):
+    #     """Simulate events using SIREN model for photon generation."""
+    #     energy, track_origin, direction_angles = particle_params
         
-        # Convert theta and phi angles to direction vector
-        theta, phi = direction_angles
-        track_direction = spherical_to_cartesian(theta, phi)
+    #     # Convert theta and phi angles to direction vector
+    #     theta, phi = direction_angles
+    #     track_direction = spherical_to_cartesian(theta, phi)
 
-        # Generate photons using SIREN
-        photon_directions, photon_origins, photon_weights = new_differentiable_get_rays(
-            track_origin, track_direction, energy, Nphot, grid_data, model_params, key
-        )
+    #     # Generate photons using SIREN
+    #     photon_directions, photon_origins, photon_weights = new_differentiable_get_rays(
+    #         track_origin, track_direction, energy, Nphot, grid_data, model_params, key
+    #     )
 
-        # Scale weights to physical photon count
-        total_photons = energy * 852.97855369 - 148646.90865158
-        photon_intensities = (total_photons * photon_weights) / Nphot
-        photon_times = jnp.zeros((Nphot,))
+    #     # Scale weights to physical photon count
+    #     total_photons = energy * 852.97855369 - 148646.90865158
+    #     photon_intensities = (total_photons * photon_weights) / Nphot
+    #     photon_times = jnp.zeros((Nphot,))
 
-        return _common_propagation(
-            photon_origins, photon_directions, photon_intensities, photon_times,
-            Nphot, detector_params, key, NUM_DETECTORS, K, max_detectors_per_cell,
-            propagate_photons, photon_update_fn
-        )
+    #     return _common_propagation(
+    #         photon_origins, photon_directions, photon_intensities, photon_times,
+    #         Nphot, detector_params, key, NUM_DETECTORS, K, max_detectors_per_cell,
+    #         propagate_photons, photon_update_fn
+    #     )
 
     # Define calibration simulation function
     @jax.jit
@@ -808,10 +813,15 @@ def create_event_simulator(propagate_photons, Nphot, NUM_DETECTORS, detector_poi
     elif is_calibration:
         return _simulation_detector_calibration
     else:
-        # Load SIREN model data
-        table = Table('../siren/cprof_mu_train_10000ev.h5')
-        grid_data = create_siren_grid(table)
-        siren_model, model_params = load_siren_jax('../siren/siren_cprof_mu.pkl')
+        model_base_path = '../notebooks/output/photonsim_siren_training/trained_model/photonsim_siren'
+        photonsim_predictor = SIRENPredictor(model_base_path)
+        grid_data = create_photonsim_siren_grid(photonsim_predictor, 500)
+        model_params = photonsim_predictor.params
+
+        # # Load SIREN model data
+        # table = Table('../siren/cprof_mu_train_10000ev.h5')
+        # grid_data = create_siren_grid(table)
+        # siren_model, model_params = load_siren_jax('../siren/siren_cprof_mu.pkl')
 
         # Return partially applied function with model data
         return partial(_simulation_without_data,
