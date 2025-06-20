@@ -1,4 +1,4 @@
-# OPTIC: LUCiD: a Light-based Unified Calibration and trackIng Differentiable simulation
+# LUCiD: a Light-based Unified Calibration and trackIng Differentiable simulation
 
 A high-performance, differentiable simulation framework to simulate optical particle detectors. This project enables gradient-based optimization of calibration parameters and particle reconstruction using automatic differentiation.
 
