@@ -2,7 +2,7 @@
 
 A high-performance, differentiable simulation framework to simulate optical particle detectors. This project enables gradient-based optimization of calibration parameters and particle reconstruction using automatic differentiation.
 
-![Repository Overview](figures/repo_img.png)
+![Repository Overview](figures/repo_img.png?v=2)
 
 ## PhotonSim Integration
 
