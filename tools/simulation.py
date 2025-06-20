@@ -7,7 +7,6 @@ import jax
 import jax.numpy as jnp
 
 from tools.siren import *
-from tools.table import *
 
 import sys
 sys.path.append('../siren/training')
