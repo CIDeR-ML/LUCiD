@@ -18,3 +18,5 @@ output/
 notebooks/figures/*
 
 sftp-config.json
+
+notebooks/spatial_overlap_integrals/
