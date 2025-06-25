@@ -6,6 +6,8 @@ from tools.geometry import generate_detector
 import jax
 import jax.numpy as jnp
 
+import os
+
 from tools.siren import *
 
 import sys
