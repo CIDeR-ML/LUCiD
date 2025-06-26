@@ -1,4 +1,3 @@
-from pandas.tests.tseries.offsets.test_business_day import offset
 from tools.utils import generate_random_point_inside_cylinder
 from functools import partial
 from tools.geometry import generate_detector
@@ -14,6 +13,8 @@ import optax
 
 import matplotlib.pyplot as plt
 from tqdm import tqdm
+import time
+import numpy as np
 
 from tools.utils import generate_random_params
 
@@ -227,6 +228,57 @@ def run_multi_objective_optimization(
 
 
 @partial(jax.jit, static_argnums=(0, 1))
+def generate_random_initial_guess(spatial_grad_fn, energy_grad_fn, true_event_data, event_key, detector_points):
+    """
+    Generate random initial parameters within reasonable bounds.
+    
+    Parameters:
+        spatial_grad_fn: Spatial gradient function (not used, kept for consistency)
+        energy_grad_fn: Energy gradient function (not used, kept for consistency)
+        true_event_data: True event data (not used, kept for consistency)
+        event_key: JAX random key
+        detector_points: Array of detector positions to infer cylinder dimensions
+    
+    Returns:
+        (energy, position, angles) tuple with random initial values
+    """
+    # Split key for different random components
+    key_energy, key_position, key_theta, key_phi = jax.random.split(event_key, 4)
+    
+    # Random energy between 200 and 800 MeV
+    energy_guess = jax.random.uniform(key_energy, shape=(), minval=200., maxval=800.)
+    
+    # Infer cylinder dimensions from detector points
+    # Calculate radius as maximum distance from origin in xy-plane
+    xy_distances = jnp.sqrt(detector_points[:, 0]**2 + detector_points[:, 1]**2)
+    max_radius = jnp.max(xy_distances)
+    
+    # Calculate height as z-range
+    z_min = jnp.min(detector_points[:, 2])
+    z_max = jnp.max(detector_points[:, 2])
+    height = z_max - z_min
+    
+    # Use 80% of the inferred dimensions
+    r_80 = 0.8 * max_radius
+    h_80 = 0.8 * height
+    
+    # Note: Print statements won't work inside JIT-compiled functions
+    # The cylinder dimensions will be printed from the main function if needed
+    
+    # Random position inside cylinder with 80% of detector dimensions
+    position_guess = generate_random_point_inside_cylinder(key_position, h=h_80, r=r_80)
+    
+    # Random theta between 0 and pi
+    theta_guess = jax.random.uniform(key_theta, shape=(), minval=0., maxval=jnp.pi)
+    
+    # Random phi between 0 and 2*pi
+    phi_guess = jax.random.uniform(key_phi, shape=(), minval=0., maxval=2*jnp.pi)
+    
+    angles_guess = jnp.array([theta_guess, phi_guess])
+    
+    return (energy_guess, position_guess, angles_guess)
+
+@partial(jax.jit, static_argnums=(0, 1))
 def grid_scan_initial_guess_vectorized(spatial_grad_fn, energy_grad_fn, true_event_data, event_key):
     """
     Vectorized 8x8 grid scan - much faster for JIT compilation.
@@ -356,10 +408,18 @@ def run_multi_event_optimization(
     n_iterations=200,
     patience=100,
     base_seed=None,
-    verbose=True
+    verbose=True,
+    initial_guess_method='grid_scan'
 ):
     """
     Main optimization loop - NOT JIT compiled due to Python control flow and I/O.
+    
+    Parameters
+    ----------
+    initial_guess_method : str, optional
+        Method for generating initial parameter guesses. Options are:
+        - 'grid_scan': Use grid scan to find best initial angles and energy (default)
+        - 'random': Generate random initial parameters within bounds
     """
     
     # Setup code (same as before)
@@ -369,6 +429,17 @@ def run_multi_event_optimization(
     if verbose:
         print(f"Running parameter optimization on {N_events} events...")
         print(f"Configuration: {loss_function} loss, {n_iterations} iterations each")
+        print(f"Initial guess method: {initial_guess_method}")
+        
+        if initial_guess_method == 'random':
+            # Calculate and display detector dimensions for random initialization
+            xy_distances = jnp.sqrt(detector_points[:, 0]**2 + detector_points[:, 1]**2)
+            max_radius = jnp.max(xy_distances)
+            z_min = jnp.min(detector_points[:, 2])
+            z_max = jnp.max(detector_points[:, 2])
+            height = z_max - z_min
+            print(f"Detector dimensions: radius={float(max_radius):.2f}m, height={float(height):.2f}m")
+            print(f"Random initialization will use 80% of these dimensions: radius={float(0.8*max_radius):.2f}m, height={float(0.8*height):.2f}m")
     
     simulate_event = setup_event_simulator(json_filename, Nphot, temperature=0.05, K=K, is_calibration=False)
     
@@ -408,7 +479,7 @@ def run_multi_event_optimization(
         all_results['seeds'].append(event_seed)
         
         key = jax.random.PRNGKey(event_seed)
-        key, subkey1, subkey2 = jax.random.split(key, 3)
+        key, subkey1, subkey2, subkey3 = jax.random.split(key, 4)
         
         # Generate true parameters and simulate event
         true_energy, true_position, true_direction_angles = generate_random_params(subkey1)
@@ -417,15 +488,48 @@ def run_multi_event_optimization(
         
         true_event_data = jax.lax.stop_gradient(simulate_event(true_params, detector_params, subkey1))
         
-        # Generate initial guess using JIT-compiled grid scan
-        initial_params = grid_scan_initial_guess_vectorized(spatial_grad_fn, energy_grad_fn, true_event_data, subkey1)
+        # Generate initial guess using the selected method
+        if initial_guess_method == 'grid_scan':
+            initial_params = grid_scan_initial_guess_vectorized(spatial_grad_fn, energy_grad_fn, true_event_data, subkey2)
+        elif initial_guess_method == 'random':
+            initial_params = generate_random_initial_guess(spatial_grad_fn, energy_grad_fn, true_event_data, subkey3, detector_points)
+        else:
+            raise ValueError(f"Unknown initial_guess_method: {initial_guess_method}. Must be 'grid_scan' or 'random'.")
         
         if verbose:
             # Convert to Python types for printing (outside JIT context)
             init_energy, init_pos, init_angles = initial_params
             true_energy, true_pos, true_angles = true_params
-            print(f'Initial params: ({float(init_energy)}, {[float(x) for x in init_pos]}, {[float(x) for x in init_angles]})')
-            print(f'True params: ({float(true_energy)}, {[float(x) for x in true_pos]}, {[float(x) for x in true_angles]})')
+            
+            print(f"\n--- Event {event_idx} ---")
+            print(f"Initial guess method: {initial_guess_method}")
+            
+            # True parameters
+            print(f"True parameters:")
+            print(f"  Energy: {float(true_energy):.2f} MeV")
+            print(f"  Position: [{float(true_pos[0]):.3f}, {float(true_pos[1]):.3f}, {float(true_pos[2]):.3f}] m")
+            print(f"  Angles: θ={float(true_angles[0]):.3f} rad ({float(true_angles[0])*180/jnp.pi:.1f}°), φ={float(true_angles[1]):.3f} rad ({float(true_angles[1])*180/jnp.pi:.1f}°)")
+            
+            # Initial guess
+            print(f"Initial guess:")
+            print(f"  Energy: {float(init_energy):.2f} MeV (error: {abs(float(init_energy) - float(true_energy)):.2f} MeV)")
+            print(f"  Position: [{float(init_pos[0]):.3f}, {float(init_pos[1]):.3f}, {float(init_pos[2]):.3f}] m (distance: {float(jnp.linalg.norm(init_pos - true_pos)):.3f} m)")
+            print(f"  Angles: θ={float(init_angles[0]):.3f} rad ({float(init_angles[0])*180/jnp.pi:.1f}°), φ={float(init_angles[1]):.3f} rad ({float(init_angles[1])*180/jnp.pi:.1f}°)")
+            
+            # Calculate angle opening
+            true_dir = jnp.array([
+                jnp.sin(true_angles[0]) * jnp.cos(true_angles[1]),
+                jnp.sin(true_angles[0]) * jnp.sin(true_angles[1]),
+                jnp.cos(true_angles[0])
+            ])
+            init_dir = jnp.array([
+                jnp.sin(init_angles[0]) * jnp.cos(init_angles[1]),
+                jnp.sin(init_angles[0]) * jnp.sin(init_angles[1]),
+                jnp.cos(init_angles[0])
+            ])
+            cos_angle = jnp.clip(jnp.dot(true_dir, init_dir), -1.0, 1.0)
+            angle_opening = jnp.arccos(cos_angle)
+            print(f"  Direction angle opening: {float(angle_opening):.3f} rad ({float(angle_opening)*180/jnp.pi:.1f}°)")
 
         all_results['initial_guesses'].append(initial_params)
         
