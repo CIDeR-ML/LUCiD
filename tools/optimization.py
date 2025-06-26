@@ -225,46 +225,6 @@ def run_multi_objective_optimization(
     
     return params, loss_history, param_history
 
-# @partial(jax.jit, static_argnums=(0, 1, 2, 3))
-# def grid_scan_initial_guess(spatial_grad_fn, energy_grad_fn, true_event_data, event_key):
-#     """
-#     Perform 8x8 grid scan on theta and phi angles to find best initial guess.
-#     """
-#     energy_guess = 500.
-#     position_guess = jnp.array([0.,0.,0.])
-    
-#     # Create 8x8 grid for theta (0 to pi) and phi (0 to 2*pi)
-#     theta_grid = jnp.linspace(0, jnp.pi, 8)
-#     phi_grid = jnp.linspace(0, 2*jnp.pi, 8)
-    
-#     best_loss = float('inf')
-#     best_angles = jnp.array([0., 0.])
-    
-#     for theta in theta_grid:
-#         for phi in phi_grid:
-#             angles_candidate = jnp.array([theta, phi])
-#             params_candidate = (energy_guess, position_guess, angles_candidate)
-            
-#             # Evaluate spatial loss using spatial_grad_fn
-#             loss_val, _ = spatial_grad_fn(params_candidate, true_event_data, event_key)
-            
-#             if loss_val < best_loss:
-#                 best_loss = loss_val
-#                 best_angles = angles_candidate
-
-#     best_loss = float('inf')
-#     best_energy = 500
-
-#     energies = jnp.linspace(300, 900, 15)
-#     for energy in energies:
-#         params_candidate = (energy, position_guess, best_angles)
-#         loss_val, _ = energy_grad_fn(params_candidate, true_event_data, event_key)
-        
-#         if loss_val < best_loss:
-#             best_loss = loss_val
-#             best_energy = energy
-
-#     return (best_energy, position_guess, best_angles)
 
 @partial(jax.jit, static_argnums=(0, 1))
 def grid_scan_initial_guess_vectorized(spatial_grad_fn, energy_grad_fn, true_event_data, event_key):
@@ -383,67 +343,9 @@ def run_single_optimization_step(params, energy_grad_fn, spatial_grad_fn, energy
     
     return new_params, energy_loss, spatial_loss, total_loss
 
-# @partial(jax.jit, static_argnums=(1, 2, 3, 4))
-# def run_multi_objective_optimization_jit_compatible(
-#     params, energy_grad_fn, spatial_grad_fn, energy_optimizer, spatial_optimizer,
-#     true_event_data, event_key, n_iterations=200, patience=100, position_scale=1.0):
-#     """
-#     JIT-compatible optimization loop that returns all necessary data as arrays.
-#     """
-    
-#     # Pre-allocate arrays for storing history
-#     loss_history = {
-#         'energy': jnp.zeros(n_iterations),
-#         'spatial': jnp.zeros(n_iterations),
-#         'total': jnp.zeros(n_iterations)
-#     }
-    
-#     # Store parameter history as separate arrays
-#     energy_history = jnp.zeros(n_iterations)
-#     position_history = jnp.zeros((n_iterations, 3))
-#     angles_history = jnp.zeros((n_iterations, 2))
-    
-#     current_params = params
-#     best_loss = jnp.inf
-#     patience_counter = 0
-    
-#     for i in range(n_iterations):
-#         # Single optimization step
-#         current_params, energy_loss, spatial_loss, total_loss = run_single_optimization_step(
-#             current_params, energy_grad_fn, spatial_grad_fn, energy_optimizer, spatial_optimizer,
-#             true_event_data, event_key, position_scale
-#         )
-        
-#         # Store losses
-#         loss_history['energy'] = loss_history['energy'].at[i].set(energy_loss)
-#         loss_history['spatial'] = loss_history['spatial'].at[i].set(spatial_loss)
-#         loss_history['total'] = loss_history['total'].at[i].set(total_loss)
-        
-#         # Store parameters
-#         energy_history = energy_history.at[i].set(current_params[0])
-#         position_history = position_history.at[i].set(current_params[1])
-#         angles_history = angles_history.at[i].set(current_params[2])
-        
-#         # Early stopping logic using JAX operations
-#         is_better = total_loss < best_loss
-#         best_loss = jnp.where(is_better, total_loss, best_loss)
-#         patience_counter = jnp.where(is_better, 0, patience_counter + 1)
-        
-#         # Note: Early stopping with break statements isn't JIT compatible
-#         # You'll need to run full iterations or implement with jax.lax.cond
-    
-#     param_history = {
-#         'energy': energy_history,
-#         'position': position_history,
-#         'angles': angles_history
-#     }
-    
-#     return current_params, loss_history, param_history
-
-
 def run_multi_event_optimization(
     N_events=10,
-    default_json_filename='../config/cyl_geom_config.json',
+    json_filename='../config/IWCD_geom_config.json',
     Nphot=1_000_000,
     K=2,
     loss_function='multi_objective',
@@ -461,14 +363,14 @@ def run_multi_event_optimization(
     """
     
     # Setup code (same as before)
-    detector = generate_detector(default_json_filename)
+    detector = generate_detector(json_filename)
     detector_points = jnp.array(detector.all_points)
     
     if verbose:
         print(f"Running parameter optimization on {N_events} events...")
         print(f"Configuration: {loss_function} loss, {n_iterations} iterations each")
     
-    simulate_event = setup_event_simulator(default_json_filename, Nphot, temperature=0.05, K=K, is_calibration=False)
+    simulate_event = setup_event_simulator(json_filename, Nphot, temperature=0.05, K=K, is_calibration=False)
     
     if base_seed is None:
         base_seed = int(time.time())
@@ -723,220 +625,6 @@ def run_multi_objective_optimization_jit_compatible(
     }
     
     return final_params, final_loss_hist, param_history
-
-
-# @partial(jax.jit, static_argnums=(1, 2, 3, 4, 7))
-# def run_multi_objective_optimization_jit_compatible(
-#     params, energy_grad_fn, spatial_grad_fn, energy_optimizer, spatial_optimizer,
-#     true_event_data, event_key, n_iterations=200, patience=100, position_scale=1.0):
-#     """
-#     JIT-compatible optimization loop using jax.lax.while_loop for early stopping.
-#     """
-    
-#     # Pre-allocate arrays for storing history
-#     loss_history = {
-#         'energy': jnp.zeros(n_iterations),
-#         'spatial': jnp.zeros(n_iterations),
-#         'total': jnp.zeros(n_iterations)
-#     }
-    
-#     # Store parameter history as separate arrays
-#     energy_history = jnp.zeros(n_iterations)
-#     position_history = jnp.zeros((n_iterations, 3))
-#     angles_history = jnp.zeros((n_iterations, 2))
-    
-#     # State for the while loop
-#     initial_state = {
-#         'params': params,
-#         'iteration': 0,
-#         'best_loss': jnp.inf,
-#         'patience_counter': 0,
-#         'loss_history': loss_history,
-#         'energy_history': energy_history,
-#         'position_history': position_history,
-#         'angles_history': angles_history
-#     }
-    
-#     def condition_fn(state):
-#         """Continue if we haven't reached max iterations and haven't run out of patience."""
-#         return (state['iteration'] < n_iterations)# & (state['patience_counter'] < patience)
-    
-#     def body_fn(state):
-#         """Single optimization step."""
-#         i = state['iteration']
-#         current_params = state['params']
-        
-#         # Single optimization step
-#         new_params, energy_loss, spatial_loss, total_loss = run_single_optimization_step(
-#             current_params, energy_grad_fn, spatial_grad_fn, energy_optimizer, spatial_optimizer,
-#             true_event_data, event_key, position_scale
-#         )
-        
-#         # Update loss history
-#         new_loss_history = {
-#             'energy': state['loss_history']['energy'].at[i].set(energy_loss),
-#             'spatial': state['loss_history']['spatial'].at[i].set(spatial_loss),
-#             'total': state['loss_history']['total'].at[i].set(total_loss)
-#         }
-        
-#         # Update parameter history
-#         new_energy_history = state['energy_history'].at[i].set(new_params[0])
-#         new_position_history = state['position_history'].at[i].set(new_params[1])
-#         new_angles_history = state['angles_history'].at[i].set(new_params[2])
-        
-#         # Early stopping logic
-#         is_better = total_loss < state['best_loss']
-#         new_best_loss = jnp.where(is_better, total_loss, state['best_loss'])
-#         new_patience_counter = jnp.where(is_better, 0, state['patience_counter'] + 1)
-        
-#         return {
-#             'params': new_params,
-#             'iteration': i + 1,
-#             'best_loss': new_best_loss,
-#             'patience_counter': new_patience_counter,
-#             'loss_history': new_loss_history,
-#             'energy_history': new_energy_history,
-#             'position_history': new_position_history,
-#             'angles_history': new_angles_history
-#         }
-    
-#     # Run the optimization loop
-#     final_state = jax.lax.while_loop(condition_fn, body_fn, initial_state)
-    
-#     # Reconstruct outputs
-#     param_history = {
-#         'energy': final_state['energy_history'],
-#         'position': final_state['position_history'],
-#         'angles': final_state['angles_history']
-#     }
-    
-#     return final_state['params'], final_state['loss_history'], param_history
-
-
-# @partial(jax.jit, static_argnums=(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12))
-# def run_multi_event_optimization(
-#     N_events=10,
-#     default_json_filename='../config/cyl_geom_config.json',
-#     Nphot=1_000_000,
-#     K=2,
-#     loss_function='multi_objective',  # New option
-#     lambda_time=1e3,
-#     energy_lr=1.0,     
-#     spatial_lr=1.0,
-#     position_scale=1.0,
-#     n_iterations=200,
-#     patience=100,
-#     base_seed=None,
-#     verbose=True
-# ):
-#     """
-#     Enhanced version with multi-objective optimization capability.
-#     """
-    
-#     default_json_filename='../config/cyl_geom_config.json'
-#     detector = generate_detector(default_json_filename)
-#     detector_points = jnp.array(detector.all_points)
-
-#     print(f"Running parameter optimization on {N_events} events...")
-#     print(f"Configuration: {loss_function} loss, {n_iterations} iterations each")
-    
-#     simulate_event = setup_event_simulator(default_json_filename, Nphot, temperature=0.05, K=K, is_calibration=False)
-    
-#     if base_seed is None:
-#         base_seed = int(time.time())
-    
-#     detector_params = (
-#         jnp.array(4.),         # scatter_length
-#         jnp.array(0.2),        # reflection_rate
-#         jnp.array(6.),         # absorption_length
-#         jnp.array(0.001)       # gumbel_softmax_temp
-#     )
-    
-#     all_results = {
-#         'loss_histories': [],
-#         'param_histories': [],
-#         'true_params': [],
-#         'initial_guesses': [],
-#         'final_params': [],
-#         'final_errors': [],
-#         'seeds': []
-#     }
-
-#     energy_grad_fn, spatial_grad_fn, energy_optimizer, spatial_optimizer = create_multi_objective_optimizer(
-#         simulate_event=simulate_event,
-#         detector_points=detector_points,
-#         detector_params=detector_params,
-#         energy_lr=energy_lr,
-#         spatial_lr=spatial_lr,
-#         lambda_time=lambda_time,
-#         tau=0.01
-#     )
-    
-#     # Process each event
-#     for event_idx in tqdm(range(N_events), desc="Processing events"):
-#         event_seed = base_seed + event_idx
-#         all_results['seeds'].append(event_seed)
-        
-#         key = jax.random.PRNGKey(event_seed)
-#         key, subkey1, subkey2 = jax.random.split(key, 3)
-        
-#         if verbose and event_idx % max(1, N_events // 10) == 0:
-#             print(f"\nProcessing event {event_idx + 1}/{N_events} (seed: {event_seed})")
-        
-#         # Generate true parameters and simulate event
-#         true_energy, true_position, true_direction_angles = generate_random_params(subkey1)
-#         true_params = (true_energy, true_position, true_direction_angles)
-#         all_results['true_params'].append(true_params)
-        
-#         true_event_data = jax.lax.stop_gradient(simulate_event(true_params, detector_params, subkey1))
-        
-#         # Generate initial guess using grid scan
-#         initial_params = grid_scan_initial_guess(spatial_grad_fn, energy_grad_fn, true_event_data, subkey1)
-#         if verbose:
-#             print('Initial params: ', initial_params)
-#             print('True params: ', true_params)
-
-#         all_results['initial_guesses'].append(initial_params)
-        
-#         params, loss_history, param_history = run_multi_objective_optimization(
-#             params=initial_params,
-#             energy_grad_fn=energy_grad_fn,
-#             spatial_grad_fn=spatial_grad_fn,
-#             energy_optimizer=energy_optimizer,
-#             spatial_optimizer=spatial_optimizer,
-#             true_event_data=true_event_data,
-#             event_key=subkey1,
-#             n_iterations=n_iterations,
-#             patience=patience,
-#             position_scale=position_scale
-#         )
-            
-#         # Store results (same as before)
-#         all_results['loss_histories'].append(loss_history)
-#         all_results['param_histories'].append(param_history)
-#         all_results['final_params'].append(params)
-        
-#         # Calculate errors
-#         true_energy, true_position, true_angles = true_params
-#         final_energy, final_position, final_angles = params
-        
-#         energy_error = abs(final_energy - true_energy) / true_energy
-#         position_error = jnp.linalg.norm(final_position - true_position) / jnp.linalg.norm(true_position)
-#         angle_error_theta = abs(final_angles[0] - true_angles[0]) / (true_angles[0] if true_angles[0] != 0 else 1.0)
-#         angle_error_phi = jnp.mod(abs(final_angles[1] - true_angles[1]) / (true_angles[1] if true_angles[1] != 0 else 1.0), 2 * jnp.pi)
-        
-#         event_errors = {
-#             'energy': float(energy_error),
-#             'position': float(position_error),
-#             'theta': float(angle_error_theta),
-#             'phi': float(angle_error_phi)
-#         }
-#         all_results['final_errors'].append(event_errors)
-    
-#     if verbose:
-#         print(f"\nCompleted optimization for all {N_events} events!")
-    
-#     return all_results
 
 def filter_inf_results(results):
     """
@@ -2172,9 +1860,6 @@ def plot_simple_multi_event_convergence(results, save_path=None, show_individual
         }
     else:
         return None
-
-
-
 
 def get_error_at_iteration(results, ID, iteration):
 
