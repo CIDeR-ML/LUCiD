@@ -1,8 +1,8 @@
-from tools.generate import get_isotropic_rays, photonsim_differentiable_get_rays
+from tools.generate import get_isotropic_rays, photonsim_differentiable_get_rays, predict_t0
 
 from tools.propagate import create_photon_propagator, create_sphere_photon_propagator
 from tools.geometry import generate_detector
-
+from tools.utils import unpack_t0_params
 import jax
 import jax.numpy as jnp
 
@@ -552,8 +552,13 @@ def create_event_simulator(propagate_photons, Nphot, NUM_DETECTORS, detector_poi
         photon_intensities = (total_photons_norm * photon_weights) / Nphot
         photon_times = jnp.zeros((Nphot,))
 
+        distances_to_vertex = jnp.linalg.norm(photon_origins, axis=1) # this is in mm (consistent with predict_t0_vectorized parametrization)
+        predict_t0_vectorized = jax.vmap(predict_t0, in_axes=(0, None, None, None, None, None, None, None, None))
+        baseline_slope, baseline_intercept, A_slope, A_intercept, B_slope, B_intercept, offset = t0_params
+        t0 = 0#jax.lax.stop_gradient(predict_t0_vectorized(distances_to_vertex, energy, baseline_slope, baseline_intercept, A_slope, A_intercept, B_slope, B_intercept, offset))
+        
         return _common_propagation(
-            photon_origins, photon_directions, photon_intensities, photon_times,
+            photon_origins, photon_directions, photon_intensities, photon_times+t0,
             Nphot, detector_params, key, NUM_DETECTORS, K, max_detectors_per_cell,
             propagate_photons, photon_update_fn
         )
@@ -781,7 +786,8 @@ def create_event_simulator(propagate_photons, Nphot, NUM_DETECTORS, detector_poi
         photonsim_predictor = SIRENPredictor(model_base_path)
         grid_data = create_photonsim_siren_grid(photonsim_predictor, 500)
         model_params = photonsim_predictor.params
-        
+        t0_params = unpack_t0_params()
+
         # Return partially applied function with model data
         return partial(_simulation_without_data,
                        grid_data=grid_data,

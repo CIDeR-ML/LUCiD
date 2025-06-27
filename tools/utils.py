@@ -4,6 +4,22 @@ import jax.numpy as jnp
 import jax
 from glob import glob
 import os
+import json
+
+def unpack_t0_params(particle_type='muon', material='water'):
+    with open('../data/'+particle_type+'_'+material+'_t0.json', 'r') as f:
+        t0_params = json.load(f)
+
+    """Extract individual parameters from nested dict structure"""
+    return (
+        t0_params['baseline']['slope'],
+        t0_params['baseline']['intercept'],
+        t0_params['delta_parameterization']['A_slope'],
+        t0_params['delta_parameterization']['A_intercept'],
+        t0_params['delta_parameterization']['B_slope'],
+        t0_params['delta_parameterization']['B_intercept'],
+        t0_params['delta_parameterization']['offset']
+    )
 
 def spherical_to_cartesian(theta, phi):
     """
