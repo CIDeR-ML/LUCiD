@@ -10,7 +10,7 @@ from tqdm import tqdm
 from tools.siren import *
 from tools.utils import read_photon_data_from_root
 from tools.utils import save_single_event_with_extended_info, get_random_root_entry_index, superimpose_multiple_events
-
+from jax import jit
 
 def normalize(v, epsilon=1e-8):
     """Normalize a vector with numerical stability.
@@ -297,6 +297,37 @@ def generate_random_vertex(key):
         3D point within the volume [-1,1]^3
     """
     return jax.random.uniform(key, shape=(3,), minval=-0.1, maxval=0.1)
+
+@jit
+def predict_t0(distance, energy, baseline_slope, baseline_intercept, 
+                   A_slope, A_intercept, B_slope, B_intercept, offset):
+    """
+    JAX JIT-compatible version of predict_t0.
+    Parameters are passed as individual arrays/scalars instead of nested dict.
+    """
+    # Baseline from 1000 MeV linear fit
+    baseline = baseline_slope * distance + baseline_intercept
+    
+    # Calculate delta timing
+    log10_A = A_slope * energy + A_intercept
+    B = B_slope * energy + B_intercept
+    delta = 10**log10_A * jnp.power(distance, B) + offset
+    
+    return baseline + delta
+
+# Helper function to unpack your existing params dict
+def predict_t0_wrapper(distance, energy, params):
+    """Wrapper to use your existing params dict structure"""
+    return predict_t0(
+        distance, energy,
+        params['baseline_1000MeV']['slope'],
+        params['baseline_1000MeV']['intercept'],
+        params['delta_parameterization']['A_slope'],
+        params['delta_parameterization']['A_intercept'],
+        params['delta_parameterization']['B_slope'],
+        params['delta_parameterization']['B_intercept'],
+        params['delta_parameterization']['offset']
+    )
 
 
 def generate_events_from_root(event_simulator, root_file_path, output_dir='events', n_events=None, 
