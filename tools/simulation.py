@@ -481,11 +481,11 @@ def create_event_simulator(propagate_photons, Nphot, NUM_DETECTORS, detector_poi
     @jax.jit
     def _simulation_with_data(particle_params, detector_params, key, photon_data):
         """Simulate events using photon data from ROOT files."""
-        energy, track_origin, track_direction, initial_intensity = particle_params
+        energy, track_origin, track_direction = particle_params
 
         # Transform photons from ROOT coordinate system
         original_track_dir = jnp.array([0.0, 0.0, 1.0])
-        photon_origins = photon_data['photon_origins'] / 100.0  # cm to m
+        photon_origins = photon_data['photon_origins'] / 1000.0  # mm to m
         photon_directions = photon_data['photon_directions']
 
         # Calculate rotation to align with track direction
@@ -517,7 +517,7 @@ def create_event_simulator(propagate_photons, Nphot, NUM_DETECTORS, detector_poi
         # Create mask for valid photons
         n_rays = photon_origins.shape[0]
         mask = jnp.arange(n_rays) < photon_data['N']
-        photon_intensities = initial_intensity * mask.astype(jnp.float32)
+        photon_intensities = 1. * mask.astype(jnp.float32)
         photon_times = jnp.zeros((n_rays,))
 
         return _common_propagation(
@@ -555,7 +555,7 @@ def create_event_simulator(propagate_photons, Nphot, NUM_DETECTORS, detector_poi
         distances_to_vertex = jnp.linalg.norm(photon_origins, axis=1) # this is in mm (consistent with predict_t0_vectorized parametrization)
         predict_t0_vectorized = jax.vmap(predict_t0, in_axes=(0, None, None, None, None, None, None, None, None))
         baseline_slope, baseline_intercept, A_slope, A_intercept, B_slope, B_intercept, offset = t0_params
-        t0 = 0#jax.lax.stop_gradient(predict_t0_vectorized(distances_to_vertex, energy, baseline_slope, baseline_intercept, A_slope, A_intercept, B_slope, B_intercept, offset))
+        t0 = jax.lax.stop_gradient(predict_t0_vectorized(distances_to_vertex, energy, baseline_slope, baseline_intercept, A_slope, A_intercept, B_slope, B_intercept, offset))
         
         return _common_propagation(
             photon_origins, photon_directions, photon_intensities, photon_times+t0,

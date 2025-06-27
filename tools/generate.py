@@ -704,3 +704,236 @@ def generate_multi_folder_events(event_simulator, root_file_path, folder_names, 
         print(f"  - {folder_name}: {len(files)} events")
     
     return results
+
+
+def read_photon_data_from_photonsim(root_file_path, entry_index):
+    """
+    Read photon data from a PhotonSim ROOT file for a specific entry.
+    
+    Parameters
+    ----------
+    root_file_path : str
+        Path to the PhotonSim ROOT file
+    entry_index : int
+        Entry index to read from the file
+        
+    Returns
+    -------
+    dict
+        Dictionary containing photon_origins, photon_directions, and energy
+    """
+    import uproot
+    import numpy as np
+    import jax.numpy as jnp
+    
+    # Open the ROOT file
+    root_file = uproot.open(root_file_path)
+    
+    # Access the tree
+    tree = root_file['OpticalPhotons']
+    
+    # Read the data for the specified entry
+    tree_data = tree.arrays(['PrimaryEnergy', 'PhotonPosX', 'PhotonPosY', 'PhotonPosZ', 
+                           'PhotonDirX', 'PhotonDirY', 'PhotonDirZ'], 
+                          entry_start=entry_index, entry_stop=entry_index+1, library='np')
+    
+    # Extract primary energy (already in MeV)
+    energy = float(tree_data['PrimaryEnergy'][0])
+    
+    # Extract photon positions (convert mm to cm)
+    photon_posx = tree_data['PhotonPosX'][0] / 10.0  # mm to cm
+    photon_posy = tree_data['PhotonPosY'][0] / 10.0
+    photon_posz = tree_data['PhotonPosZ'][0] / 10.0
+    
+    # Extract photon directions
+    photon_dirx = tree_data['PhotonDirX'][0]
+    photon_diry = tree_data['PhotonDirY'][0]
+    photon_dirz = tree_data['PhotonDirZ'][0]
+    
+    # Stack the components to form position and direction arrays
+    photon_positions = np.column_stack((photon_posx, photon_posy, photon_posz))
+    photon_directions = np.column_stack((photon_dirx, photon_diry, photon_dirz))
+    
+    return {
+        'photon_origins': jnp.array(photon_positions),     # Combined position vectors in cm
+        'photon_directions': jnp.array(photon_directions), # Combined direction vectors
+        'energy': energy  # Energy in MeV
+    }
+
+
+def generate_events_from_photonsim(event_simulator, root_file_path, detector_params, output_dir='output/', 
+                                  n_events=None, batch_size=100):
+    """
+    Generate and save events from a PhotonSim ROOT file.
+    Events are saved with sequential numbering: event_0.h5, event_1.h5, etc.
+    
+    Parameters
+    ----------
+    event_simulator : function
+        The event simulation function to use
+    detector_params: tuple
+        scattering length, reflection rate, absorption length and gumbel_softmax
+    root_file_path : str
+        Path to the PhotonSim ROOT file
+    output_dir : str, optional
+        Directory to save output files, by default 'events'
+    n_events : int, optional
+        Number of events to process (None for all), by default None
+    batch_size : int, optional
+        Number of events to accumulate before saving in parallel, by default 100
+        
+    Returns
+    -------
+    list
+        List of saved file paths
+    """
+    import uproot
+    import concurrent.futures
+    
+    # Create output directory if it doesn't exist
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # Open ROOT file to get number of entries
+    root_file = uproot.open(root_file_path)
+    tree = root_file['OpticalPhotons']
+    total_entries = tree.num_entries
+    
+    if n_events is None:
+        n_events = total_entries
+    else:
+        n_events = min(n_events, total_entries)
+    
+    print(f"Processing {n_events} events from PhotonSim ROOT file...")
+    print(f"Using batch size of {batch_size} events for multithreaded I/O")
+    print(f"Saving events to directory: {output_dir}")
+
+    saved_files = []
+    
+    # Create batches
+    num_batches = (n_events + batch_size - 1) // batch_size
+    
+    # Process each batch
+    for batch_idx in range(num_batches):
+        start_idx = batch_idx * batch_size
+        end_idx = min(start_idx + batch_size, n_events)
+        batch_size_actual = end_idx - start_idx
+        
+        print(f"Processing batch {batch_idx+1}/{num_batches} (events {start_idx} to {end_idx-1})")
+        
+        # Lists to accumulate batch data
+        batch_data = []
+        batch_track_params = []
+        batch_detector_params = []
+        batch_filenames = []
+        batch_indices = []
+        
+        # Process each entry in the current batch
+        for i in tqdm(range(start_idx, end_idx), desc=f"Generating batch {batch_idx+1}", unit="event"):
+            # Initialize master random key for this event
+            master_key = jax.random.PRNGKey(i * 1000)
+            
+            # Generate a random vertex
+            vertex_key, master_key = jax.random.split(master_key)
+            vertex = generate_random_vertex(vertex_key)
+            
+            # Read photon data from PhotonSim
+            photon_data = read_photon_data_from_photonsim(root_file_path, i)
+            
+            # Set up parameters
+            muon_energy = photon_data['energy']
+
+            # Generate random direction
+            dir_key, master_key = jax.random.split(master_key)
+            direction = generate_random_direction(dir_key)
+            
+            # Create parameters tuple
+            track_params = (
+                muon_energy,
+                vertex,
+                direction
+            )
+            
+            # Get a key for the simulation
+            sim_key, master_key = jax.random.split(master_key)
+
+            # Process photon data
+            photon_origins = photon_data['photon_origins']
+            photon_directions = photon_data['photon_directions']
+            N = len(photon_origins)
+
+            # the number 1_000_000 is hard coded also in _simulation_core
+            padding_size = max(0, 1_000_000-N)
+
+            # Pad the origins array (2D array with shape [N,3])
+            photon_data['photon_origins'] = jnp.pad(photon_origins, ((0, padding_size), (0, 0)), 
+                                                mode='constant', constant_values=0)
+
+            # Pad the directions array with a default unit vector [0,0,1]
+            default_direction = jnp.array([0.0, 0.0, 1.0])
+            padding_directions = jnp.tile(default_direction, (padding_size, 1))
+            if padding_size > 0:
+                photon_data['photon_directions'] = jnp.concatenate([photon_directions, padding_directions], axis=0)
+            else:
+                photon_data['photon_directions'] = photon_directions
+                
+            photon_data['N'] = N
+                        
+            # Run simulation
+            charges, times = event_simulator(track_params, detector_params, sim_key, photon_data)
+            
+            # Create filename with sequential numbering (event_0.h5, event_1.h5, etc.)
+            event_number = i
+            filename = os.path.join(output_dir, f'event_{event_number}.h5')
+            
+            # Extended info for compatibility with save function
+            extended_info = {
+                'n_rings': 1,
+                'particle_types': ['muon'],
+                'energies': [muon_energy],
+                'directions': [direction.tolist()],
+                'indices': [i],
+                'vertex': vertex.tolist(),
+                'original_indices': [i],
+                'source': 'PhotonSim'
+            }
+                
+            # Store the event data for batch processing
+            batch_data.append(([charges], [times], extended_info))
+            batch_track_params.append(track_params)
+            batch_detector_params.append(detector_params)
+            batch_filenames.append(filename)
+            batch_indices.append(event_number)
+        
+        # Now save all the events in the batch using multithreading
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            # Create a list of future objects
+            futures = [
+                executor.submit(
+                    save_single_event_with_extended_info, 
+                    data[0], data[1],  # lists of individual charges and times
+                    t_params,
+                    extended_info=data[2],  # extended info
+                    event_number=idx, 
+                    filename=filename
+                )
+                for data, t_params, filename, idx in zip(
+                    batch_data, batch_track_params, batch_filenames, batch_indices
+                )
+            ]
+            
+            # Collect results as they complete
+            for future in tqdm(
+                concurrent.futures.as_completed(futures), 
+                desc=f"Saving batch {batch_idx+1}", 
+                total=len(futures),
+                unit="file"
+            ):
+                try:
+                    saved_file = future.result()
+                    saved_files.append(saved_file)
+                except Exception as e:
+                    print(f"Error saving file: {e}")
+    
+    print(f"Successfully processed {len(saved_files)} events.")
+    print(f"All events saved to {output_dir} with sequential naming (event_0.h5, event_1.h5, ...)")
+    return saved_files
