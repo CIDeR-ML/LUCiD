@@ -20,6 +20,278 @@ from tools.utils import generate_random_params
 
 from tools.simulation import setup_event_simulator
 
+# ========================================
+# DEBUG FUNCTIONS FOR ENERGY GRADIENT INVESTIGATION
+# ========================================
+
+def create_debug_multi_objective_optimizer(
+    simulate_event,
+    detector_points,
+    detector_params,
+    energy_lr,
+    spatial_lr,
+    lambda_time,
+    tau=0.01,
+    debug_mode=True
+):
+    """
+    Debug version of multi-objective optimizer with detailed logging.
+    """
+    
+    def debug_energy_loss_fn(params, true_event_data, event_key):
+        """Debug energy loss function with extensive logging."""
+        
+        true_charge, true_time = true_event_data
+        energy, position, angles = params
+        
+        if debug_mode:
+            print(f"\n=== DEBUG ENERGY LOSS ===")
+            print(f"Input energy: {energy:.4f}")
+            print(f"Input position: {position}")
+            print(f"Input angles: {angles} (theta={jnp.degrees(angles[0]):.1f}°, phi={jnp.degrees(angles[1]):.1f}°)")
+            print(f"True total charge: {jnp.sum(true_charge):.2f}")
+        
+        # Simulate event
+        try:
+            simulated_data = simulate_event(params, detector_params, event_key)
+            simulated_charge, _ = simulated_data
+        except Exception as e:
+            if debug_mode:
+                print(f"ERROR in simulate_event: {e}")
+            return jnp.array(1e10)
+        
+        # Calculate totals
+        total_true_charge = jnp.sum(true_charge)
+        total_sim_charge = jnp.sum(simulated_charge)
+        
+        if debug_mode:
+            print(f"Simulated total charge: {total_sim_charge:.2f}")
+            print(f"Charge ratio (sim/true): {total_sim_charge / (total_true_charge + 1e-8):.6f}")
+            print(f"Non-zero sim charges: {jnp.sum(simulated_charge > 0)}")
+            print(f"Max sim charge: {jnp.max(simulated_charge):.6f}")
+            print(f"Min non-zero sim charge: {jnp.min(jnp.where(simulated_charge > 0, simulated_charge, jnp.inf)):.8f}")
+        
+        # Check for degenerate cases
+        eps = 1e-8
+        if total_sim_charge < eps:
+            if debug_mode:
+                print(f"WARNING: Simulated charge too small ({total_sim_charge:.2e})")
+            return jnp.array(1e8)
+        
+        if total_true_charge < eps:
+            if debug_mode:
+                print(f"WARNING: True charge too small ({total_true_charge:.2e})")
+            return jnp.array(1e8)
+        
+        # Compute loss
+        ratio = total_sim_charge / (total_true_charge + eps)
+        log_ratio = jnp.log(ratio + eps)
+        intensity_loss = jnp.abs(log_ratio)
+        
+        if debug_mode:
+            print(f"Ratio: {ratio:.8f}")
+            print(f"Log ratio: {log_ratio:.8f}")
+            print(f"Intensity loss: {intensity_loss:.8f}")
+            print(f"Loss is finite: {jnp.isfinite(intensity_loss)}")
+            print(f"Loss has NaN: {jnp.isnan(intensity_loss)}")
+        
+        return intensity_loss
+    
+    def debug_spatial_loss_fn(params, true_event_data, event_key):
+        """Debug spatial loss function."""
+        
+        true_charge, true_time = true_event_data
+        energy, position, angles = params
+        
+        if debug_mode:
+            print(f"\n=== DEBUG SPATIAL LOSS ===")
+            print(f"Input params: E={energy:.2f}, pos={position}, angles={angles}")
+        
+        try:
+            simulated_data = simulate_event(params, detector_params, event_key)
+            simulated_charge, simulated_time = simulated_data
+        except Exception as e:
+            if debug_mode:
+                print(f"ERROR in simulate_event: {e}")
+            return jnp.array(1e10)
+        
+        # Use the spatial loss computation from original
+        eps = 1e-8
+        threshold = 1e-8
+        
+        # Compute mean times for active locations
+        true_active_mask = true_charge > threshold
+        sim_active_mask = simulated_charge > threshold
+        
+        if debug_mode:
+            print(f"True active PMTs: {jnp.sum(true_active_mask)}")
+            print(f"Sim active PMTs: {jnp.sum(sim_active_mask)}")
+        
+        true_mean_time = jnp.sum(true_time * true_active_mask) / (jnp.sum(true_active_mask) + eps)
+        sim_mean_time = jnp.sum(simulated_time * sim_active_mask) / (jnp.sum(sim_active_mask) + eps)
+        
+        true_time_centered = jnp.where(true_active_mask, true_time - true_mean_time, 0.0)
+        sim_time_centered = jnp.where(sim_active_mask, simulated_time - sim_mean_time, 0.0)
+        
+        # Distance matrix and soft assignments
+        N = detector_points.shape[0]
+        dist = jnp.linalg.norm(
+            detector_points[:, None, :] - detector_points[None, :, :], axis=-1
+        )
+        
+        # Soft assignments Sim -> True
+        logits_s2t = -dist / tau
+        w_s2t = jax.nn.softmax(logits_s2t, axis=1)
+        
+        Q_sim_per_true = w_s2t.T @ simulated_charge
+        qt_sim_per_true = w_s2t.T @ (simulated_charge * sim_time_centered)
+        avg_sim_time_per_true = qt_sim_per_true / (Q_sim_per_true + eps)
+        
+        L_charge_s2t = jnp.sum(jnp.abs(Q_sim_per_true - true_charge))
+        L_time_s2t = jnp.sum(jnp.abs(avg_sim_time_per_true - true_time_centered) * Q_sim_per_true)
+        
+        # Soft assignments True -> Sim
+        logits_t2s = -dist.T / tau
+        w_t2s = jax.nn.softmax(logits_t2s, axis=1)
+        
+        Q_true_per_sim = w_t2s.T @ true_charge
+        qt_true_per_sim = w_t2s.T @ (true_charge * true_time_centered)
+        avg_true_time_per_sim = qt_true_per_sim / (Q_true_per_sim + eps)
+        
+        L_charge_t2s = jnp.sum(jnp.abs(Q_true_per_sim - simulated_charge))
+        L_time_t2s = jnp.sum(jnp.abs(avg_true_time_per_sim - sim_time_centered) * Q_true_per_sim)
+        
+        L_charge = L_charge_s2t + L_charge_t2s
+        L_time = (L_time_s2t + L_time_t2s) * lambda_time
+        
+        total_loss = L_charge + L_time
+        
+        if debug_mode:
+            print(f"Charge loss (s2t): {L_charge_s2t:.6f}")
+            print(f"Charge loss (t2s): {L_charge_t2s:.6f}")
+            print(f"Time loss (s2t): {L_time_s2t:.6f}")
+            print(f"Time loss (t2s): {L_time_t2s:.6f}")
+            print(f"Total charge loss: {L_charge:.6f}")
+            print(f"Total time loss: {L_time:.6f}")
+            print(f"Total spatial loss: {total_loss:.6f}")
+        
+        return total_loss
+    
+    # Create gradient functions (conditionally JIT based on debug mode)
+    if debug_mode:
+        energy_grad_fn = value_and_grad(debug_energy_loss_fn)
+        spatial_grad_fn = value_and_grad(debug_spatial_loss_fn)
+    else:
+        energy_grad_fn = jit(value_and_grad(debug_energy_loss_fn))
+        spatial_grad_fn = jit(value_and_grad(debug_spatial_loss_fn))
+    
+    # Create optimizers
+    energy_optimizer = optax.adam(energy_lr)
+    spatial_optimizer = optax.adam(spatial_lr)
+    
+    return energy_grad_fn, spatial_grad_fn, energy_optimizer, spatial_optimizer
+
+def debug_single_gradient_step(params, energy_grad_fn, spatial_grad_fn, true_event_data, event_key):
+    """
+    Debug a single gradient step to understand what's happening.
+    """
+    print(f"\n{'='*60}")
+    print(f"DEBUG SINGLE GRADIENT STEP")
+    print(f"{'='*60}")
+    
+    energy, position, angles = params
+    print(f"Input parameters:")
+    print(f"  Energy: {energy:.4f} MeV")
+    print(f"  Position: [{position[0]:.4f}, {position[1]:.4f}, {position[2]:.4f}] m")
+    print(f"  Angles: [{jnp.degrees(angles[0]):.2f}°, {jnp.degrees(angles[1]):.2f}°]")
+    
+    # Test energy gradient
+    print(f"\n--- ENERGY GRADIENT ---")
+    try:
+        energy_loss, energy_grads = energy_grad_fn(params, true_event_data, event_key)
+        energy_grad = energy_grads[0]
+        
+        print(f"Energy loss: {energy_loss:.8f}")
+        print(f"Energy gradient: {energy_grad:.12f}")
+        print(f"Energy grad magnitude: {jnp.abs(energy_grad):.2e}")
+        print(f"Energy grad is zero: {energy_grad == 0.0}")
+        print(f"Energy grad is finite: {jnp.isfinite(energy_grad)}")
+        
+    except Exception as e:
+        print(f"ERROR computing energy gradient: {e}")
+        energy_loss, energy_grad = None, None
+    
+    # Test spatial gradient  
+    print(f"\n--- SPATIAL GRADIENT ---")
+    try:
+        spatial_loss, spatial_grads = spatial_grad_fn(params, true_event_data, event_key)
+        _, position_grad, angles_grad = spatial_grads
+        
+        print(f"Spatial loss: {spatial_loss:.8f}")
+        print(f"Position gradient: {position_grad}")
+        print(f"Position grad norm: {jnp.linalg.norm(position_grad):.8f}")
+        print(f"Angles gradient: {angles_grad}")
+        print(f"Angles grad norm: {jnp.linalg.norm(angles_grad):.8f}")
+        
+    except Exception as e:
+        print(f"ERROR computing spatial gradient: {e}")
+        spatial_loss = None
+    
+    # Combined analysis
+    if energy_loss is not None and spatial_loss is not None:
+        total_loss = energy_loss + spatial_loss
+        print(f"\n--- COMBINED ANALYSIS ---")
+        print(f"Total loss: {total_loss:.8f}")
+        print(f"Energy loss fraction: {energy_loss/total_loss:.4f}")
+        print(f"Spatial loss fraction: {spatial_loss/total_loss:.4f}")
+    
+    print(f"{'='*60}\n")
+    
+    return energy_loss, spatial_loss
+
+def test_energy_sensitivity(params, simulate_event, detector_params, true_event_data, energy_deltas=[0.1, 1.0, 10.0]):
+    """
+    Test energy sensitivity using finite differences.
+    """
+    print(f"\n{'='*50}")
+    print(f"TESTING ENERGY SENSITIVITY")
+    print(f"{'='*50}")
+    
+    base_energy, position, angles = params
+    true_charge, _ = true_event_data
+    true_total = jnp.sum(true_charge)
+    
+    print(f"Base energy: {base_energy:.2f} MeV")
+    print(f"True total charge: {true_total:.2f}")
+    
+    for delta in energy_deltas:
+        print(f"\n--- Delta = {delta:.1f} MeV ---")
+        
+        # Test different energies
+        energies_test = [base_energy - delta, base_energy, base_energy + delta]
+        charges_test = []
+        
+        for i, energy in enumerate(energies_test):
+            test_params = (jnp.array(energy), position, angles)
+            key = jax.random.PRNGKey(12345 + i)  # Use different keys
+            
+            sim_charge, _ = simulate_event(test_params, detector_params, key)
+            total_sim = jnp.sum(sim_charge)
+            charges_test.append(float(total_sim))
+            
+            print(f"  E={energy:6.1f} MeV -> Total charge: {total_sim:8.2f}")
+        
+        # Compute finite difference
+        if len(charges_test) == 3:
+            grad_fd = (charges_test[2] - charges_test[0]) / (2 * delta)
+            print(f"  Finite diff gradient: {grad_fd:.6f} charge/MeV")
+            
+            # Relative sensitivity
+            rel_sensitivity = grad_fd / charges_test[1] * 100
+            print(f"  Relative sensitivity: {rel_sensitivity:.4f} %/MeV")
+    
+    print(f"{'='*50}\n")
+
 def create_multi_objective_optimizer(
     simulate_event,
     detector_points,
@@ -100,7 +372,7 @@ def create_multi_objective_optimizer(
         L_charge = L_charge_s2t + L_charge_t2s
         L_time = (L_time_s2t + L_time_t2s) * lambda_time
         
-        return L_charge + L_time
+        return L_time #L_charge + L_time
     
     # JIT compile gradient functions
     energy_grad_fn = jit(value_and_grad(energy_loss_fn))
