@@ -431,6 +431,117 @@ def jax_rotate_vector(vector, axis, angle):
     return cos_angle * vector + sin_angle * cross_product + dot_product * axis
 
 
+def make_hits_fn(flat_weights, flat_indices, flat_times, num_detectors, beta=1000.1):
+    """
+    Compute detector charges and aligned times using softmin first-photon timing.
+    
+    Combines two types of weighting:
+    1. Temporal weighting (softmin): prioritizes earlier arrival times
+    2. Intensity weighting (flat_weights): weights by photon charge/intensity
+    
+    Parameters
+    ----------
+    flat_weights : jnp.ndarray
+        Flattened array of photon weights/intensities reaching each detector
+    flat_indices : jnp.ndarray
+        Flattened array of detector indices corresponding to each weight
+    flat_times : jnp.ndarray
+        Flattened array of photon arrival times
+    num_detectors : int
+        Total number of detectors in the system
+    beta : float
+        Softmin temperature parameter (smaller = closer to first photon)
+        
+    Returns
+    -------
+    corrected_q : jnp.ndarray
+        Total charge deposited at each detector, shape (num_detectors,)
+    aligned_times : jnp.ndarray
+        Softmin-weighted detection times aligned to earliest detection, shape (num_detectors,)
+    """
+    
+    # Accumulate total charges (same as before)
+    total_charge_weighted = jax.ops.segment_sum(
+        flat_weights,
+        flat_indices,
+        num_segments=num_detectors
+    )
+    
+    # Filter out zero-weight photons for timing calculation
+    timing_mask = flat_weights > 1e-10
+    filtered_weights = jnp.where(timing_mask, flat_weights, 0.0)
+    filtered_times = jnp.where(timing_mask, flat_times, jnp.inf)
+    filtered_indices = flat_indices
+    
+    # ===== COMBINED SOFTMIN + INTENSITY WEIGHTING =====
+    
+    # Step 1: Compute temporal softmin weights (earlier photons get higher weight)
+    neg_times_over_beta = -filtered_times / beta
+    safe_neg_times = jnp.where(jnp.isfinite(neg_times_over_beta), 
+                               neg_times_over_beta, 
+                               -1e10)
+    
+    # Find max in each segment for numerical stability
+    segment_max = jax.ops.segment_max(
+        safe_neg_times,
+        filtered_indices,
+        num_segments=num_detectors
+    )
+    
+    # Compute stable softmin weights
+    temporal_weights = jnp.exp(safe_neg_times - segment_max[filtered_indices])
+    
+    # Step 2: Combine temporal weights with photon intensity weights
+    combined_weights = temporal_weights * filtered_weights
+    
+    # Step 3: Compute weighted timing calculation
+    weighted_time_sum = jax.ops.segment_sum(
+        combined_weights * flat_times,
+        filtered_indices,
+        num_segments=num_detectors
+    )
+    
+    total_combined_weights = jax.ops.segment_sum(
+        combined_weights,
+        filtered_indices,
+        num_segments=num_detectors
+    )
+    
+    # Compute combined-weighted times
+    eps = 1e-10
+    softmin_times = jnp.where(
+        total_combined_weights > eps,
+        weighted_time_sum / (total_combined_weights + eps),
+        0.0
+    )
+    
+    # ===== END COMBINED WEIGHTING =====
+    
+    # Find minimum non-zero time for alignment
+    nonzero_mask = total_charge_weighted > 1e-5
+    min_nonzero_time = jnp.where(
+        jnp.any(nonzero_mask),
+        jnp.min(jnp.where(nonzero_mask, softmin_times, jnp.inf)),
+        0.0
+    )
+    
+    # Align times to earliest detection
+    aligned_times = jnp.where(
+        nonzero_mask,
+        softmin_times - min_nonzero_time,
+        0
+    )
+    
+    # Zero out charges below threshold
+    corrected_q = jnp.where(
+        nonzero_mask,
+        total_charge_weighted,
+        0
+    )
+    
+    return corrected_q, aligned_times
+
+
 def create_event_simulator(propagate_photons, Nphot, NUM_DETECTORS, detector_points, K,
                            is_data, is_calibration, max_detectors_per_cell, use_expected_value=None):
     """
@@ -731,49 +842,9 @@ def create_event_simulator(propagate_photons, Nphot, NUM_DETECTORS, detector_poi
         flat_indices = all_iter_indices.reshape(-1)
         flat_times = all_iter_times.reshape(-1)
 
-        # Accumulate charges and times at each detector
-        total_time_weighted = jax.ops.segment_sum(
-            flat_weights * flat_times,
-            flat_indices,
-            num_segments=num_detectors
-        )
-
-        total_charge_weighted = jax.ops.segment_sum(
-            flat_weights,
-            flat_indices,
-            num_segments=num_detectors
-        )
-
-        # Compute average times
-        eps = 1e-10
-        average_times = jnp.where(
-            total_charge_weighted > eps,
-            total_time_weighted / (total_charge_weighted + eps),
-            jnp.zeros_like(total_charge_weighted)
-        )
-
-        # Find minimum non-zero time for alignment
-        nonzero_mask = total_charge_weighted > 1e-5
-        min_nonzero_time = jnp.where(
-            jnp.any(nonzero_mask),
-            jnp.min(jnp.where(nonzero_mask, average_times, jnp.inf)),
-            0.0
-        )
-
-        # Align times to earliest detection
-        aligned_times = jnp.where(
-            nonzero_mask,
-            average_times - min_nonzero_time,
-            0
-        )
-
-        # Zero out charges below threshold
-        corrected_q = jnp.where(
-            nonzero_mask,
-            total_charge_weighted,
-            0
-        )
-
+        # Use make_hits_fn to compute charges and times
+        corrected_q, aligned_times = make_hits_fn(flat_weights, flat_indices, flat_times, num_detectors)
+        
         return corrected_q, aligned_times
 
     # Return appropriate simulation function
