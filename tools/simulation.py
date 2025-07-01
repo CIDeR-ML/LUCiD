@@ -10,16 +10,15 @@ import os
 
 from tools.siren import *
 
-import sys
-sys.path.append('../siren/training')
-
-from inference import SIRENPredictor
-
 from functools import partial
 
 from tools.utils import spherical_to_cartesian
 
 base_dir_path = os.path.dirname(os.path.abspath(__file__))+'/'
+import sys
+sys.path.append(base_dir_path+'../siren/training')
+
+from inference import SIRENPredictor
 
 
 def setup_event_simulator(json_filename, n_photons=1_000_000, temperature=0.2, K=2, 
@@ -431,7 +430,7 @@ def jax_rotate_vector(vector, axis, angle):
     return cos_angle * vector + sin_angle * cross_product + dot_product * axis
 
 
-def make_hits_fn(flat_weights, flat_indices, flat_times, num_detectors, beta=1000.1):
+def make_hits_fn(flat_weights, flat_indices, flat_times, num_detectors, beta=1.):
     """
     Compute detector charges and aligned times using softmin first-photon timing.
     
@@ -468,7 +467,7 @@ def make_hits_fn(flat_weights, flat_indices, flat_times, num_detectors, beta=100
     )
     
     # Filter out zero-weight photons for timing calculation
-    timing_mask = flat_weights > 1e-10
+    timing_mask = flat_times > 1e-10
     filtered_weights = jnp.where(timing_mask, flat_weights, 0.0)
     filtered_times = jnp.where(timing_mask, flat_times, jnp.inf)
     filtered_indices = flat_indices
@@ -492,7 +491,7 @@ def make_hits_fn(flat_weights, flat_indices, flat_times, num_detectors, beta=100
     temporal_weights = jnp.exp(safe_neg_times - segment_max[filtered_indices])
     
     # Step 2: Combine temporal weights with photon intensity weights
-    combined_weights = temporal_weights * filtered_weights
+    combined_weights = jax.lax.stop_gradient(temporal_weights * filtered_weights)
     
     # Step 3: Compute weighted timing calculation
     weighted_time_sum = jax.ops.segment_sum(
@@ -780,8 +779,8 @@ def create_event_simulator(propagate_photons, Nphot, NUM_DETECTORS, detector_poi
             problematic_rays = nan_pos_mask | nan_dir_mask | nan_factors_mask
 
             # Count problematic rays for monitoring (just for debuging purposes)
-            # nan_count = jnp.sum(problematic_rays)
-            #jax.debug.print("Iteration {}: Found {} problematic rays with NaN", i, nan_count)
+            nan_count = jnp.sum(problematic_rays)
+            jax.debug.print("Iteration {}: Found {} problematic rays with NaN", i, nan_count)
 
             # Replace NaN outputs with safe values
             safe_new_positions = jnp.where(
@@ -853,7 +852,7 @@ def create_event_simulator(propagate_photons, Nphot, NUM_DETECTORS, detector_poi
     elif is_calibration:
         return _simulation_detector_calibration
     else:
-        model_base_path = '../notebooks/output/photonsim_siren_training/trained_model/photonsim_siren'
+        model_base_path = base_dir_path+'../notebooks/output/photonsim_siren_training/trained_model/photonsim_siren'
         photonsim_predictor = SIRENPredictor(model_base_path)
         grid_data = create_photonsim_siren_grid(photonsim_predictor, 500)
         model_params = photonsim_predictor.params
