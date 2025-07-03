@@ -704,7 +704,7 @@ def calculate_hit_properties(ray_origins, ray_directions, t_cylinder, inside_det
     top_cap_normal, bottom_cap_normal = get_cap_normals()
 
     # Select appropriate normal
-    final_normals = jnp.where(hit_detector[:, None],
+    final_normals = jnp.where(False,#hit_detector[:, None],
                               weighted_detector_normals,
                               jnp.where(is_wall[:, None],
                                         wall_normals,
@@ -871,7 +871,20 @@ def find_intersected_detectors_differentiable(ray_origins, ray_directions, detec
                         jnp.where(t1 > 0, t1,  # Only t1 positive
                                jnp.where(t2 > 0, t2, -1)))  # Only t2 positive or neither
 
+
+        # Convert negative t values to -1 (indicating invalid)
+        t1_valid = jnp.where(t1 > 0, t1, -1)
+        t2_valid = jnp.where(t2 > 0, t2, -1)
+
+        # If both positive, use minimum; if only one positive, use that one
+        t_intersect = jnp.where(
+            (t1 > 0) & (t2 > 0),  # Both positive
+            jnp.minimum(t1, t2),   # Use smaller one
+            jnp.maximum(t1_valid, t2_valid)  # Either the positive one or -1 if both negative
+        )
+        
         #t_intersect = jnp.where((t1 > 0), t1, t2)
+        #jax.debug.print("Found {} t1 t2 Neg", jnp.sum((t1<0) & (t2<0)))
 
         # Calculate intersection points
         intersection_points = ray_origins + t_intersect[:, None] * ray_d
@@ -893,16 +906,15 @@ def find_intersected_detectors_differentiable(ray_origins, ray_directions, detec
         # Get x, y, z coordinates of intersection points
         x, y, z = intersection_points[:, 0], intersection_points[:, 1], intersection_points[:, 2]
 
-        # Check if point is inside cylinder with x=4, y=4, z=6
-        # For x,y: check if point is within circle with radius 2
-        inside_xy_circle = (x**2 + y**2) <= 16.  # radius is 2, so radius^2 = 4
-        # For z: check if |z| ≤ 3
-        inside_z_bounds = (z >= -3.) & (z <= 3.)
+        # For x,y: check if point is within circle with radius r
+        inside_xy_circle = (x**2 + y**2) <= r**2.
+        # For z: check if |z| ≤ h/2
+        inside_z_bounds = (z >= -h/2.) & (z <= h/2.)
         # Combine conditions
         inside_cylinder = inside_xy_circle & inside_z_bounds
 
         # Final detector condition - point must be inside both original detector and cylinder
-        inside_detector = inside_spherical_detector# & inside_cylinder
+        inside_detector = inside_spherical_detector & inside_cylinder
 
         # Apply overlap function to get weights
         weights = jnp.where(valid, overlap_prob(distance), 0.0)
@@ -917,8 +929,10 @@ def find_intersected_detectors_differentiable(ray_origins, ray_directions, detec
         times = jnp.where(intersects_and_inside, t_intersect[:, None], t_closest)
         points = jnp.where(intersects_and_inside, intersection_points, closest)
 
+        jax.debug.print("Found {} Neg times", jnp.sum(times<0))
+
         # Always use the stable closest point and time for hit calculation
-        return weights, t_closest, detector_idx, normals, inside_detector, points
+        return weights, times, detector_idx, normals, inside_detector, points
 
     # Process all potential detectors
     detector_results = jax.vmap(compute_detector_intersections)(potential_detectors.T)
@@ -952,7 +966,10 @@ def find_intersected_detectors_differentiable(ray_origins, ray_directions, detec
     return result if not single_ray else jax.tree_map(lambda x: x[0], result)
 
 
-def create_photon_propagator(detector_positions, detector_radius, r=4.0, h=6.0, n_cap=73, n_angular=168, n_height=82,
+# def create_photon_propagator(detector_positions, detector_radius, r=4.0, h=6.0, n_cap=73, n_angular=168, n_height=82,
+#                            temperature=0.2, max_detectors_per_cell=4):
+
+def create_photon_propagator(detector_positions, detector_radius, r=4.0, h=6.0, n_cap=200, n_angular=500, n_height=200,
                            temperature=0.2, max_detectors_per_cell=4):
     """
     Creates a JIT-compiled function for efficient photon propagation simulation with overlap-based weights.
@@ -1567,7 +1584,10 @@ def find_intersected_sphere_detectors_differentiable(ray_origins, ray_directions
         times = jnp.where(intersects_and_inside, t_intersect[:, None], t_closest)
         points = jnp.where(intersects_and_inside, intersection_points, closest)
 
-        return weights, t_closest, detector_idx, normals, inside_detector, points
+        normals = jnp.where(times>0, normals, -1.*normals)
+        times = jnp.where(times>0, times, -1.*times)
+
+        return weights, times, detector_idx, normals, inside_detector, points
 
     # Process all potential detectors
     detector_results = jax.vmap(compute_detector_intersections)(potential_detectors.T)

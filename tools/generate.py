@@ -761,7 +761,7 @@ def read_photon_data_from_photonsim(root_file_path, entry_index):
     }
 
 
-def generate_events_from_photonsim(event_simulator, root_file_path, detector_params, output_dir='output/', 
+def generate_events_from_photonsim(event_simulator, root_file_path, detector_params, output_dir=None, 
                                   n_events=None, batch_size=100):
     """
     Generate and save events from a PhotonSim ROOT file.
