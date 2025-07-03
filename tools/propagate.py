@@ -186,13 +186,17 @@ def intersect_cylinder_with_grid(ray_origin, ray_direction, r, h, n_cap, n_angul
     # Calculate wall grid indices using polar coordinates
     angle = jnp.arctan2(intersection_point[1], intersection_point[0]) % (2 * jnp.pi)
     angular_idx = jnp.floor(angle / (2 * jnp.pi) * n_angular).astype(jnp.int32)
+    angular_idx = angular_idx % n_angular  # Handle wraparound for angular dimension
     height_idx = jnp.floor((intersection_point[2] + h / 2) / h * n_height).astype(jnp.int32)
+    height_idx = jnp.clip(height_idx, 0, n_height - 1)  # Clamp to valid range
 
     # Calculate cap grid indices using Cartesian coordinates
     cap_x = (intersection_point[0] + r) / (2 * r)
     cap_y = (intersection_point[1] + r) / (2 * r)
     cap_x_idx = jnp.floor(cap_x * n_cap).astype(jnp.int32)
     cap_y_idx = jnp.floor(cap_y * n_cap).astype(jnp.int32)
+    cap_x_idx = jnp.clip(cap_x_idx, 0, n_cap - 1)  # Clamp to valid range
+    cap_y_idx = jnp.clip(cap_y_idx, 0, n_cap - 1)  # Clamp to valid range
 
     wall_indices = jnp.array([angular_idx, height_idx])
     cap_indices = jnp.array([cap_x_idx, cap_y_idx])
@@ -252,7 +256,9 @@ def assign_detectors_to_grid(detectors, detector_radius, r, h, n_cap, n_angular,
             wall_height = jnp.clip(z, -h / 2, h / 2)
 
             angular_idx = jnp.floor(wall_angle / (2 * jnp.pi) * n_angular).astype(jnp.int32)
+            angular_idx = angular_idx % n_angular  # Handle wraparound for angular dimension
             height_idx = jnp.floor((wall_height + h / 2) / h * n_height).astype(jnp.int32)
+            height_idx = jnp.clip(height_idx, 0, n_height - 1)  # Clamp to valid range
 
             # Calculate overlap with neighboring cells
             angular_frac = (wall_angle / (2 * jnp.pi) * n_angular) % 1
@@ -263,16 +269,20 @@ def assign_detectors_to_grid(detectors, detector_radius, r, h, n_cap, n_angular,
             include_top = height_frac >= 1 - detector_radius / (h / n_height)
             include_bottom = height_frac <= detector_radius / (h / n_height)
 
+            # Calculate valid height neighbors (don't wrap at boundaries)
+            height_up = jnp.clip(height_idx + 1, 0, n_height - 1)
+            height_down = jnp.clip(height_idx - 1, 0, n_height - 1)
+            
             indices = jnp.array([
                 [angular_idx, height_idx, 0],
                 [(angular_idx + 1) % n_angular, height_idx, 0],
-                [angular_idx, (height_idx + 1) % n_height, 0],
-                [(angular_idx + 1) % n_angular, (height_idx + 1) % n_height, 0],
-                [angular_idx, (height_idx - 1) % n_height, 0],
-                [(angular_idx + 1) % n_angular, (height_idx - 1) % n_height, 0],
+                [angular_idx, height_up, 0],
+                [(angular_idx + 1) % n_angular, height_up, 0],
+                [angular_idx, height_down, 0],
+                [(angular_idx + 1) % n_angular, height_down, 0],
                 [(angular_idx - 1) % n_angular, height_idx, 0],
-                [(angular_idx - 1) % n_angular, (height_idx + 1) % n_height, 0],
-                [(angular_idx - 1) % n_angular, (height_idx - 1) % n_height, 0]
+                [(angular_idx - 1) % n_angular, height_up, 0],
+                [(angular_idx - 1) % n_angular, height_down, 0]
             ])
 
             selection = jnp.array([
@@ -296,7 +306,9 @@ def assign_detectors_to_grid(detectors, detector_radius, r, h, n_cap, n_angular,
             cap_y = y
 
             x_idx = jnp.floor((cap_x + r) / (2 * r) * n_cap).astype(jnp.int32)
+            x_idx = jnp.clip(x_idx, 0, n_cap - 1)  # Clamp to valid range
             y_idx = jnp.floor((cap_y + r) / (2 * r) * n_cap).astype(jnp.int32)
+            y_idx = jnp.clip(y_idx, 0, n_cap - 1)  # Clamp to valid range
 
             # Calculate overlap with neighboring cells
             x_frac = ((cap_x + r) / (2 * r) * n_cap) % 1
@@ -307,16 +319,22 @@ def assign_detectors_to_grid(detectors, detector_radius, r, h, n_cap, n_angular,
             include_top = y_frac >= 1 - detector_radius / (2 * r / n_cap)
             include_bottom = y_frac <= detector_radius / (2 * r / n_cap)
 
+            # Calculate valid cap neighbors (don't wrap at boundaries)
+            x_right = jnp.clip(x_idx + 1, 0, n_cap - 1)
+            x_left = jnp.clip(x_idx - 1, 0, n_cap - 1)
+            y_up = jnp.clip(y_idx + 1, 0, n_cap - 1)
+            y_down = jnp.clip(y_idx - 1, 0, n_cap - 1)
+            
             indices = jnp.array([
                 [x_idx, y_idx, 1 if is_top else 2],
-                [(x_idx + 1) % n_cap, y_idx, 1 if is_top else 2],
-                [x_idx, (y_idx + 1) % n_cap, 1 if is_top else 2],
-                [(x_idx + 1) % n_cap, (y_idx + 1) % n_cap, 1 if is_top else 2],
-                [x_idx, (y_idx - 1) % n_cap, 1 if is_top else 2],
-                [(x_idx + 1) % n_cap, (y_idx - 1) % n_cap, 1 if is_top else 2],
-                [(x_idx - 1) % n_cap, y_idx, 1 if is_top else 2],
-                [(x_idx - 1) % n_cap, (y_idx + 1) % n_cap, 1 if is_top else 2],
-                [(x_idx - 1) % n_cap, (y_idx - 1) % n_cap, 1 if is_top else 2]
+                [x_right, y_idx, 1 if is_top else 2],
+                [x_idx, y_up, 1 if is_top else 2],
+                [x_right, y_up, 1 if is_top else 2],
+                [x_idx, y_down, 1 if is_top else 2],
+                [x_right, y_down, 1 if is_top else 2],
+                [x_left, y_idx, 1 if is_top else 2],
+                [x_left, y_up, 1 if is_top else 2],
+                [x_left, y_down, 1 if is_top else 2]
             ])
 
             selection = jnp.array([
@@ -704,7 +722,7 @@ def calculate_hit_properties(ray_origins, ray_directions, t_cylinder, inside_det
     top_cap_normal, bottom_cap_normal = get_cap_normals()
 
     # Select appropriate normal
-    final_normals = jnp.where(False,#hit_detector[:, None],
+    final_normals = jnp.where(hit_detector[:, None],
                               weighted_detector_normals,
                               jnp.where(is_wall[:, None],
                                         wall_normals,
@@ -969,8 +987,9 @@ def find_intersected_detectors_differentiable(ray_origins, ray_directions, detec
 # def create_photon_propagator(detector_positions, detector_radius, r=4.0, h=6.0, n_cap=73, n_angular=168, n_height=82,
 #                            temperature=0.2, max_detectors_per_cell=4):
 
-def create_photon_propagator(detector_positions, detector_radius, r=4.0, h=6.0, n_cap=200, n_angular=500, n_height=200,
+def create_photon_propagator(detector_positions, detector_radius, r=4.0, h=6.0, n_cap=150, n_angular=250, n_height=150,
                            temperature=0.2, max_detectors_per_cell=4):
+
     """
     Creates a JIT-compiled function for efficient photon propagation simulation with overlap-based weights.
 
