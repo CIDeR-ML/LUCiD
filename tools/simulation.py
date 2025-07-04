@@ -107,6 +107,7 @@ def setup_event_simulator(json_filename, n_photons=1_000_000, temperature=0.2, K
     # Create the event simulator with a fixed number of scattering iterations K
     # (This part remains the same for both detector types)
     simulate_event = create_event_simulator(
+        detector,
         propagate_photons,
         n_photons,
         NUM_DETECTORS,
@@ -381,9 +382,9 @@ def photon_iteration_update_factors(position, direction, time, surface_distance,
 
     # Core probabilities
     # Probability of reaching the surface without scattering
-    reach_surface_prob = 1.#jnp.exp(-surface_distance / scatter_length)
+    reach_surface_prob = jnp.exp(-surface_distance / scatter_length)
     # Probability of scattering before reaching the surface
-    scatter_prob = 0#1 - reach_surface_prob
+    scatter_prob = 1 - reach_surface_prob
 
     # Total probabilities for each possible outcome
     # 1. Reflection: reach surface AND reflect
@@ -392,15 +393,15 @@ def photon_iteration_update_factors(position, direction, time, surface_distance,
     detect_prob = reach_surface_prob * (1 - reflection_rate)
 
     # Attenuation factors (only affect intensity, not probabilities)
-    reflection_attenuation = 1#jnp.exp(-surface_distance / absorption_length)
+    reflection_attenuation = jnp.exp(-surface_distance / absorption_length)
     scatter_attenuation = jnp.exp(-scatter_distance / absorption_length)
 
     # Use gumbel-softmax to get soft weights for reflection and scatter.
     # We only consider continuing paths (not detector absorption)
     probs = jnp.array([reflect_prob, scatter_prob])
     action_weights = gumbel_softmax(probs, tau_gs, k1)
-    reflection_weight = 1.#action_weights[0]
-    scatter_weight = 0.#action_weights[1]
+    reflection_weight = action_weights[0]
+    scatter_weight = action_weights[1]
 
     # Compute the candidate positions and directions.
     reflection_pos = position + surface_distance * direction
@@ -409,15 +410,14 @@ def photon_iteration_update_factors(position, direction, time, surface_distance,
     scatter_dir = compute_scatter_direction(direction, k3)
 
     # Blend the two possibilities for continuing paths.
-    new_pos = reflection_weight * reflection_pos# + jnp.array([-1., 0., 0.])*1.0 #+ scatter_weight * scatter_pos
-    #new_dir = jnp.array([-1., 0., 0.])#reflection_dir#-1.*normalize(reflection_weight * reflection_dir) #+ scatter_weight * scatter_dir)
-    new_dir = reflection_dir#jnp.array([-1., 0., 0.])#reflection_dir
+    new_pos = reflection_weight * reflection_pos + scatter_weight * scatter_pos
+    new_dir = reflection_dir
 
     # Calculate the continuing factor (reflection + scatter)
-    continuing_factor = 1.#reflect_prob #* reflection_attenuation + scatter_prob * scatter_attenuation
+    continuing_factor = reflect_prob * reflection_attenuation + scatter_prob * scatter_attenuation
 
     # Time increment based on distance traveled along the weighted path
-    time_increment = reflection_weight * surface_distance #+ scatter_weight * scatter_distance
+    time_increment = reflection_weight * surface_distance + scatter_weight * scatter_distance
     new_time = time + time_increment
 
     return new_pos, new_dir, new_time, detect_prob, reflection_attenuation, continuing_factor
@@ -437,8 +437,7 @@ def jax_rotate_vector(vector, axis, angle):
     dot_product = jnp.dot(axis, vector) * (1 - cos_angle)
     return cos_angle * vector + sin_angle * cross_product + dot_product * axis
 
-
-# def make_hits_fn(flat_weights, flat_indices, flat_times, num_detectors, beta=100.):
+# def make_hits_fn(flat_weights, flat_indices, flat_times, num_detectors, beta=0.01):
 #     """
 #     Compute detector charges and aligned times using softmin first-photon timing.
     
@@ -467,45 +466,96 @@ def jax_rotate_vector(vector, axis, angle):
 #         Softmin-weighted detection times aligned to earliest detection, shape (num_detectors,)
 #     """
     
-#     charge = jax.ops.segment_sum(
+#     # Accumulate total charges (same as before)
+#     total_charge_weighted = jax.ops.segment_sum(
 #         flat_weights,
 #         flat_indices,
 #         num_segments=num_detectors
 #     )
-
-#     jax.debug.print("Found {} Neg flat_weights", jnp.sum(flat_weights<0))
-#     jax.debug.print("Found {} Neg flat_times", jnp.sum(flat_times<0))
-#     #flat_times = jnp.where(flat_times>0, flat_times, -1*flat_times)
-
-#     timing_mask = (flat_weights> 0)#(flat_times > 0)# & (flat_weights> 0)
+    
+#     # Filter out zero-weight photons for timing calculation
+#     timing_mask = True#(flat_times > 0)
 #     filtered_weights = jnp.where(timing_mask, flat_weights, 0.0)
 #     filtered_times = jnp.where(timing_mask, flat_times, jnp.inf)
+#     filtered_indices = flat_indices
+    
+#     # ===== COMBINED SOFTMIN + INTENSITY WEIGHTING =====
+#     # Step 1: Compute temporal softmin weights (earlier photons get higher weight)
+#     neg_times_over_beta = -filtered_times / beta
+#     safe_neg_times = jnp.where(jnp.isfinite(neg_times_over_beta), 
+#                                neg_times_over_beta, 
+#                                -1e10)
+#     jax.debug.print("Found {} Nan time_over_beta", jnp.sum(jnp.isnan(neg_times_over_beta)))
 
-#     min_times = jax.ops.segment_min(
-#         filtered_times,
-#         flat_indices,
+#     # Find max in each segment for numerical stability
+#     segment_max = jax.ops.segment_max(
+#         safe_neg_times,
+#         filtered_indices,
 #         num_segments=num_detectors
 #     )
     
-#     nonzero_mask = (charge > 0) & (min_times>0)
+
+    
+#     jax.debug.print("Found {} Nan temporal_weights", jnp.sum(safe_neg_times - segment_max[filtered_indices]<0))
+
+#     # Compute stable softmin weights
+#     temporal_weights = jnp.exp(safe_neg_times - segment_max[filtered_indices])
+    
+#     jax.debug.print("Found {} Nan temporal_weights", jnp.sum(jnp.isnan(temporal_weights)))
+
+
+#     # Step 2: Combine temporal weights with photon intensity weights
+#     combined_weights = jax.lax.stop_gradient(temporal_weights * filtered_weights)
+
+#     # small_we = (flat_times > 1e-10)
+#     # filtered_weights = jnp.where(timing_mask, flat_weights, 0.0)
+#     # filtered_times = jnp.where(timing_mask, flat_times, jnp.inf)
+#     # filtered_indices = flat_indices
+    
+#     # Step 3: Compute weighted timing calculation
+#     weighted_time_sum = jax.ops.segment_sum(
+#         combined_weights * flat_times,
+#         filtered_indices,
+#         num_segments=num_detectors
+#     )
+    
+#     total_combined_weights = jax.ops.segment_sum(
+#         combined_weights,
+#         filtered_indices,
+#         num_segments=num_detectors
+#     )
+    
+#     # Compute combined-weighted times
+#     eps = 0#1e-10
+#     softmin_times = jnp.where(
+#         total_combined_weights > eps,
+#         weighted_time_sum / (total_combined_weights + eps),
+#         0.0
+#     )
+    
+#     # ===== END COMBINED WEIGHTING =====
+#     # Find minimum non-zero time for alignment
+
+#     nonzero_mask = softmin_times>0
 
 #     min_nonzero_time = jnp.where(
 #         jnp.any(nonzero_mask),
-#         jnp.min(jnp.where(nonzero_mask, min_times, jnp.inf)),
+#         jnp.min(jnp.where(nonzero_mask, softmin_times, jnp.inf)),
 #         0.0
 #     )
     
 #     # Align times to earliest detection
 #     aligned_times = jnp.where(
 #         nonzero_mask,
-#         min_times - min_nonzero_time,
+#         softmin_times - min_nonzero_time,
 #         0
 #     )
     
+#     nonzero_mask = total_charge_weighted > 0#1e-10
 #     # Zero out charges below threshold
 #     corrected_q = jnp.where(
 #         nonzero_mask,
-#         charge,
+#         total_charge_weighted,
 #         0
 #     )
     
@@ -513,184 +563,48 @@ def jax_rotate_vector(vector, axis, angle):
 
 
 def make_hits_fn(flat_weights, flat_indices, flat_times, num_detectors, beta=0.1):
-    """
-    Compute detector charges and aligned times using softmin first-photon timing.
-    
-    Combines two types of weighting:
-    1. Temporal weighting (softmin): prioritizes earlier arrival times
-    2. Intensity weighting (flat_weights): weights by photon charge/intensity
-    
-    Parameters
-    ----------
-    flat_weights : jnp.ndarray
-        Flattened array of photon weights/intensities reaching each detector
-    flat_indices : jnp.ndarray
-        Flattened array of detector indices corresponding to each weight
-    flat_times : jnp.ndarray
-        Flattened array of photon arrival times
-    num_detectors : int
-        Total number of detectors in the system
-    beta : float
-        Softmin temperature parameter (smaller = closer to first photon)
         
-    Returns
-    -------
-    corrected_q : jnp.ndarray
-        Total charge deposited at each detector, shape (num_detectors,)
-    aligned_times : jnp.ndarray
-        Softmin-weighted detection times aligned to earliest detection, shape (num_detectors,)
-    """
-    
-    # Accumulate total charges (same as before)
-    total_charge_weighted = jax.ops.segment_sum(
-        flat_weights,
-        flat_indices,
-        num_segments=num_detectors
-    )
-    
-    # Filter out zero-weight photons for timing calculation
-    timing_mask = (flat_times > 0)# & (flat_weights> 1e-10)
-    filtered_weights = jnp.where(timing_mask, flat_weights, 0.0)
-    filtered_times = jnp.where(timing_mask, flat_times, jnp.inf)
-    filtered_indices = flat_indices
-    
-    # ===== COMBINED SOFTMIN + INTENSITY WEIGHTING =====
-    # Step 1: Compute temporal softmin weights (earlier photons get higher weight)
-    neg_times_over_beta = -filtered_times / beta
-    safe_neg_times = jnp.where(jnp.isfinite(neg_times_over_beta), 
-                               neg_times_over_beta, 
-                               -1e10)
-    jax.debug.print("Found {} Nan time_over_beta", jnp.sum(jnp.isnan(neg_times_over_beta)))
+        timing_mask = (flat_weights>0) #(flat_times>0) & (flat_weights>0)
+        filtered_times = jnp.where(timing_mask, flat_times, jnp.inf)
 
-    # Find max in each segment for numerical stability
-    segment_max = jax.ops.segment_max(
-        safe_neg_times,
-        filtered_indices,
-        num_segments=num_detectors
-    )
-    
+        segment_min_time = jax.ops.segment_min(
+            filtered_times,
+            flat_indices,
+            num_segments=num_detectors
+        )
 
-    
-    jax.debug.print("Found {} Nan temporal_weights", jnp.sum(safe_neg_times - segment_max[filtered_indices]<0))
+        total_charge = jax.ops.segment_sum(
+            flat_weights,
+            flat_indices,
+            num_segments=num_detectors
+        )
 
-    # Compute stable softmin weights
-    temporal_weights = jnp.exp(safe_neg_times - segment_max[filtered_indices])
-    
-    jax.debug.print("Found {} Nan temporal_weights", jnp.sum(jnp.isnan(temporal_weights)))
+        # Find minimum non-zero time for alignment
+        nonzero_mask = segment_min_time > 0
+        min_nonzero_time = jnp.where(
+            jnp.any(nonzero_mask),
+            jnp.min(jnp.where(nonzero_mask, segment_min_time, jnp.inf)),
+            0.0
+        )
+
+        # Align times to earliest detection
+        aligned_times = jnp.where(
+            nonzero_mask,
+            segment_min_time - min_nonzero_time,
+            0
+        )
+
+        # Zero out charges below threshold
+        corrected_q = jnp.where(
+            nonzero_mask,
+            total_charge,
+            0
+        )
+
+        return corrected_q, aligned_times
 
 
-    # Step 2: Combine temporal weights with photon intensity weights
-    combined_weights = jax.lax.stop_gradient(temporal_weights * filtered_weights)
-    
-    # Step 3: Compute weighted timing calculation
-    weighted_time_sum = jax.ops.segment_sum(
-        combined_weights * flat_times,
-        filtered_indices,
-        num_segments=num_detectors
-    )
-    
-    total_combined_weights = jax.ops.segment_sum(
-        combined_weights,
-        filtered_indices,
-        num_segments=num_detectors
-    )
-    
-    # Compute combined-weighted times
-    eps = 0#1e-10
-    softmin_times = jnp.where(
-        total_combined_weights > eps,
-        weighted_time_sum / (total_combined_weights + eps),
-        0.0
-    )
-    
-    # ===== END COMBINED WEIGHTING =====
-    
-    # Find minimum non-zero time for alignment
-    jax.debug.print("Found {} Zero weighted_time_sum", jnp.sum(weighted_time_sum==0))
-    jax.debug.print("Found {} Zero total_combined_weights", jnp.sum(total_combined_weights==0))
-    jax.debug.print("Found {} Zero softmin_times", jnp.sum(softmin_times==0))
-    jax.debug.print("Found {} Neg weighted_time_sum", jnp.sum(weighted_time_sum<0))
-    jax.debug.print("Found {} Neg total_combined_weights", jnp.sum(total_combined_weights<0))
-    jax.debug.print("Found {} Neg softmin_times", jnp.sum(softmin_times<0))
-    jax.debug.print("Found {} Neg total_charge_weighted", jnp.sum(total_charge_weighted<1e-3))
-    jax.debug.print("Found {} Min softmin_times", jnp.min(softmin_times))
-
-    # Find minimum non-zero time for alignment
-
-    nonzero_mask = softmin_times>0# (total_charge_weighted > 1e-5) & (softmin_times>0)
-
-    min_nonzero_time = jnp.where(
-        jnp.any(nonzero_mask),
-        jnp.min(jnp.where(nonzero_mask, softmin_times, jnp.inf)),
-        0.0
-    )
-    
-    # Align times to earliest detection
-    aligned_times = jnp.where(
-        nonzero_mask,
-        softmin_times - min_nonzero_time,
-        0
-    )
-    
-    nonzero_mask = total_charge_weighted > 0#1e-10
-    # Zero out charges below threshold
-    corrected_q = jnp.where(
-        nonzero_mask,
-        total_charge_weighted,
-        0
-    )
-    
-    return corrected_q, aligned_times
-
-
-# def make_hits_fn(flat_weights, flat_indices, flat_times, num_detectors, beta=0.1):
-#         # Accumulate charges and times at each detector
-#         total_time_weighted = jax.ops.segment_sum(
-#             flat_weights * flat_times,
-#             flat_indices,
-#             num_segments=num_detectors
-#         )
-
-#         total_charge_weighted = jax.ops.segment_sum(
-#             flat_weights,
-#             flat_indices,
-#             num_segments=num_detectors
-#         )
-
-#         # Compute average times
-#         eps = 1e-10
-#         average_times = jnp.where(
-#             total_charge_weighted > eps,
-#             total_time_weighted / (total_charge_weighted + eps),
-#             jnp.zeros_like(total_charge_weighted)
-#         )
-
-#         # Find minimum non-zero time for alignment
-#         nonzero_mask = total_charge_weighted > 1e-5
-#         min_nonzero_time = jnp.where(
-#             jnp.any(nonzero_mask),
-#             jnp.min(jnp.where(nonzero_mask, average_times, jnp.inf)),
-#             0.0
-#         )
-
-#         # Align times to earliest detection
-#         aligned_times = jnp.where(
-#             nonzero_mask,
-#             average_times - min_nonzero_time,
-#             0
-#         )
-
-#         # Zero out charges below threshold
-#         corrected_q = jnp.where(
-#             nonzero_mask,
-#             total_charge_weighted,
-#             0
-#         )
-
-#         return corrected_q, aligned_times
-
-
-def create_event_simulator(propagate_photons, Nphot, NUM_DETECTORS, detector_points, K,
+def create_event_simulator(detector, propagate_photons, Nphot, NUM_DETECTORS, detector_points, K,
                            is_data, is_calibration, max_detectors_per_cell, use_expected_value=None):
     """
     Create an event simulator with the appropriate configuration.
@@ -840,6 +754,17 @@ def create_event_simulator(propagate_photons, Nphot, NUM_DETECTORS, detector_poi
             propagate_photons, photon_update_fn
         )
 
+    @partial(jax.jit, static_argnames=('r', 'h'))
+    def get_inside_detector_flag(positions, r, h):
+        x, y, z = positions[:, 0], positions[:, 1], positions[:, 2]
+        eps = 0 # It works
+        inside_xy_circle = (x**2 + y**2) <= (r+eps)**2
+        # For z: check if |z| ≤ h/2
+        inside_z_bounds = (z >= -h/2-eps) & (z <= h/2+eps)
+        # Combine conditions
+        inside_cylinder = inside_xy_circle & inside_z_bounds
+        return inside_cylinder
+
     @partial(jax.jit, static_argnames=(
     'n_rays', 'K', 'max_detectors_per_cell', 'num_detectors', 'propagate_fn', 'photon_update_fn'))
     def _common_propagation(positions, directions, intensities, times, n_rays, detector_params, key,
@@ -921,16 +846,24 @@ def create_event_simulator(propagate_photons, Nphot, NUM_DETECTORS, detector_poi
               surface_distances, normals, scatter_length, reflection_rate,
               absorption_length, tau_gs, rng_keys)
 
-            # NaN SAFETY LAYER - Detect and neutralize problematic rays (this happens once every several million rays, but causes problems if not dealt with)
+
             nan_pos_mask = jnp.any(jnp.isnan(new_positions), axis=1)
             nan_dir_mask = jnp.any(jnp.isnan(new_directions), axis=1)
-            nan_time_mask = jnp.any(jnp.isnan(new_times))
+
+            # Fix: Ensure nan_time_mask is per-ray, not scalar
+            nan_time_scalar = jnp.isnan(new_times)
+            nan_time_mask = jnp.broadcast_to(nan_time_scalar, nan_pos_mask.shape)
+
             nan_factors_mask = jnp.isnan(continuing_factors)
             problematic_rays = nan_pos_mask | nan_dir_mask | nan_time_mask | nan_factors_mask
 
-            # Count problematic rays for monitoring (just for debuging purposes)
-            nan_count = jnp.sum(problematic_rays)
-            jax.debug.print("Iteration {}: Found {} problematic rays with NaN", i, nan_count)
+            # jax.debug.print("AAA - Iteration {}: Found {} problematic new times with NaN", i, jnp.sum(nan_time_mask))
+            # jax.debug.print("AAA - Iteration {}: Found {} problematic new pos NaN", i, jnp.sum(nan_pos_mask))
+            # jax.debug.print("AAA - Iteration {}: Found {} problematic new direc NaN", i, jnp.sum(nan_dir_mask))
+            # jax.debug.print("AAA - Iteration {}: Found {} problematic new cont fact NaN", i, jnp.sum(nan_factors_mask))
+
+            # nan_count = jnp.sum(problematic_rays)
+            # jax.debug.print("Iteration {}: Found {} problematic rays with NaN", i, nan_count)
 
             # Replace NaN outputs with safe values
             safe_new_positions = jnp.where(
@@ -951,8 +884,9 @@ def create_event_simulator(propagate_photons, Nphot, NUM_DETECTORS, detector_poi
                 new_times      # Use computed direction
             )
 
+            inside_detector = get_inside_detector_flag(new_positions, detector.r, detector.H)
             safe_continuing_factors = jnp.where(
-                problematic_rays,
+                (problematic_rays) | (inside_detector==False),
                 0.0,                # Kill the ray (zero intensity)
                 continuing_factors  # Use computed factor
             )
@@ -962,9 +896,8 @@ def create_event_simulator(propagate_photons, Nphot, NUM_DETECTORS, detector_poi
             updated_weights = depositions * current_intensities[None, :] * detected_intensity_factors[None, :]
             
             total_times = times + current_times[:, None]
-            jax.debug.print("Found {} Neg times", jnp.sum(times<0))
-            jax.debug.print("Found {} Neg current_times", jnp.sum(current_times<0))
-
+            # jax.debug.print("Found {} Neg times", jnp.sum(times<0))
+            # jax.debug.print("Found {} Neg current_times", jnp.sum(current_times<0))
 
             # Create outputs for this iteration
             iteration_weights = updated_weights
@@ -978,15 +911,15 @@ def create_event_simulator(propagate_photons, Nphot, NUM_DETECTORS, detector_poi
             next_directions = jax.lax.stop_gradient(safe_new_directions)
 
             next_intensities = new_intensities
-            next_times = jax.lax.stop_gradient(new_times)
+            next_times = jax.lax.stop_gradient(safe_new_times)
 
             # Return updated state and outputs
             new_carry = (next_positions, next_directions, next_intensities, next_times, key)
             outputs = (iteration_weights, iteration_indices, iteration_times)
 
-            nan_factors_mask = jnp.isnan(next_times)
-            nan_count = jnp.sum(nan_factors_mask)
-            jax.debug.print("XXX - Iteration {}: Found {} problematic rays with NaN", i, nan_count)
+            # jax.debug.print("ZZZ - Iteration {}: Found {} problematic next times with NaN", i, jnp.sum(jnp.isnan(next_times)))
+            # jax.debug.print("ZZZ - Iteration {}: Found {} problematic next pos NaN", i, jnp.sum(jnp.isnan(next_positions)))
+            # jax.debug.print("ZZZ - Iteration {}: Found {} problematic next direc NaN", i, jnp.sum(jnp.isnan(next_directions)))
 
             return new_carry, outputs
 

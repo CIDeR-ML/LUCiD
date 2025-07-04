@@ -925,9 +925,10 @@ def find_intersected_detectors_differentiable(ray_origins, ray_directions, detec
         x, y, z = intersection_points[:, 0], intersection_points[:, 1], intersection_points[:, 2]
 
         # For x,y: check if point is within circle with radius r
-        inside_xy_circle = (x**2 + y**2) <= r**2.
+        eps = 0 # Dont change without validations
+        inside_xy_circle = (x**2 + y**2) <= (r+eps)**2
         # For z: check if |z| ≤ h/2
-        inside_z_bounds = (z >= -h/2.) & (z <= h/2.)
+        inside_z_bounds = (z >= -h/2-eps) & (z <= h/2+eps)
         # Combine conditions
         inside_cylinder = inside_xy_circle & inside_z_bounds
 
@@ -947,7 +948,7 @@ def find_intersected_detectors_differentiable(ray_origins, ray_directions, detec
         times = jnp.where(intersects_and_inside, t_intersect[:, None], t_closest)
         points = jnp.where(intersects_and_inside, intersection_points, closest)
 
-        jax.debug.print("Found {} Neg times", jnp.sum(times<0))
+        #jax.debug.print("Found {} Neg times", jnp.sum(times<0))
 
         # Always use the stable closest point and time for hit calculation
         return weights, times, detector_idx, normals, inside_detector, points
@@ -1602,9 +1603,6 @@ def find_intersected_sphere_detectors_differentiable(ray_origins, ray_directions
         # Now use this combined condition
         times = jnp.where(intersects_and_inside, t_intersect[:, None], t_closest)
         points = jnp.where(intersects_and_inside, intersection_points, closest)
-
-        normals = jnp.where(times>0, normals, -1.*normals)
-        times = jnp.where(times>0, times, -1.*times)
 
         return weights, times, detector_idx, normals, inside_detector, points
 
