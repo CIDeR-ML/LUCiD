@@ -12,11 +12,11 @@ from tools.siren import *
 
 from functools import partial
 
-from tools.utils import spherical_to_cartesian
+from tools.utils import spherical_to_cartesian, base_dir_path
 
-base_dir_path = os.path.dirname(os.path.abspath(__file__))+'/'
+# base_dir_path = os.path.dirname(os.path.abspath(__file__))+'/'
 import sys
-sys.path.append(base_dir_path+'../siren/training')
+sys.path.append(base_dir_path()+'/siren/training')
 
 from inference import SIRENPredictor
 
@@ -107,6 +107,7 @@ def setup_event_simulator(json_filename, n_photons=1_000_000, temperature=0.2, K
     # Create the event simulator with a fixed number of scattering iterations K
     # (This part remains the same for both detector types)
     simulate_event = create_event_simulator(
+        detector,
         propagate_photons,
         n_photons,
         NUM_DETECTORS,
@@ -127,10 +128,17 @@ def normalize(v, epsilon=1e-6):
     return v / (norm + epsilon)
 
 
+# def compute_reflection_direction(incident_dir, normal):
+#     """Compute reflection direction given an incident direction and surface normal."""
+#     return normalize(incident_dir - 2 * jnp.dot(incident_dir, normal) * normal)
+
+
 def compute_reflection_direction(incident_dir, normal):
     """Compute reflection direction given an incident direction and surface normal."""
-    return normalize(incident_dir - 2 * jnp.dot(incident_dir, normal) * normal)
-
+    # Compute dot product along the last axis for batched vectors
+    normal = normalize(normal)
+    dot_product = jnp.sum(incident_dir * normal, axis=-1, keepdims=True)
+    return normalize(incident_dir - 2 * dot_product * normal)
 
 def create_local_frame(z):
     """Create a local coordinate frame given a z-axis vector."""
@@ -403,7 +411,7 @@ def photon_iteration_update_factors(position, direction, time, surface_distance,
 
     # Blend the two possibilities for continuing paths.
     new_pos = reflection_weight * reflection_pos + scatter_weight * scatter_pos
-    new_dir = normalize(reflection_weight * reflection_dir + scatter_weight * scatter_dir)
+    new_dir = reflection_dir
 
     # Calculate the continuing factor (reflection + scatter)
     continuing_factor = reflect_prob * reflection_attenuation + scatter_prob * scatter_attenuation
@@ -429,8 +437,7 @@ def jax_rotate_vector(vector, axis, angle):
     dot_product = jnp.dot(axis, vector) * (1 - cos_angle)
     return cos_angle * vector + sin_angle * cross_product + dot_product * axis
 
-
-def make_hits_fn(flat_weights, flat_indices, flat_times, num_detectors, beta=1.):
+def make_hits_simulation(flat_weights, flat_indices, flat_times, num_detectors, beta=0.01):
     """
     Compute detector charges and aligned times using softmin first-photon timing.
     
@@ -467,19 +474,18 @@ def make_hits_fn(flat_weights, flat_indices, flat_times, num_detectors, beta=1.)
     )
     
     # Filter out zero-weight photons for timing calculation
-    timing_mask = flat_times > 1e-10
+    timing_mask = (flat_weights>0) & (flat_times>0)
     filtered_weights = jnp.where(timing_mask, flat_weights, 0.0)
     filtered_times = jnp.where(timing_mask, flat_times, jnp.inf)
     filtered_indices = flat_indices
     
     # ===== COMBINED SOFTMIN + INTENSITY WEIGHTING =====
-    
     # Step 1: Compute temporal softmin weights (earlier photons get higher weight)
     neg_times_over_beta = -filtered_times / beta
     safe_neg_times = jnp.where(jnp.isfinite(neg_times_over_beta), 
                                neg_times_over_beta, 
                                -1e10)
-    
+
     # Find max in each segment for numerical stability
     segment_max = jax.ops.segment_max(
         safe_neg_times,
@@ -507,7 +513,7 @@ def make_hits_fn(flat_weights, flat_indices, flat_times, num_detectors, beta=1.)
     )
     
     # Compute combined-weighted times
-    eps = 1e-10
+    eps = 1e-10 # Dont change without validations
     softmin_times = jnp.where(
         total_combined_weights > eps,
         weighted_time_sum / (total_combined_weights + eps),
@@ -515,9 +521,9 @@ def make_hits_fn(flat_weights, flat_indices, flat_times, num_detectors, beta=1.)
     )
     
     # ===== END COMBINED WEIGHTING =====
-    
     # Find minimum non-zero time for alignment
-    nonzero_mask = total_charge_weighted > 1e-5
+    nonzero_mask = softmin_times>0
+
     min_nonzero_time = jnp.where(
         jnp.any(nonzero_mask),
         jnp.min(jnp.where(nonzero_mask, softmin_times, jnp.inf)),
@@ -531,6 +537,7 @@ def make_hits_fn(flat_weights, flat_indices, flat_times, num_detectors, beta=1.)
         0
     )
     
+    nonzero_mask = total_charge_weighted > 1e-10
     # Zero out charges below threshold
     corrected_q = jnp.where(
         nonzero_mask,
@@ -541,7 +548,50 @@ def make_hits_fn(flat_weights, flat_indices, flat_times, num_detectors, beta=1.)
     return corrected_q, aligned_times
 
 
-def create_event_simulator(propagate_photons, Nphot, NUM_DETECTORS, detector_points, K,
+def make_hits_data(flat_weights, flat_indices, flat_times, num_detectors):
+        
+        timing_mask = (flat_weights>0)
+        filtered_times = jnp.where(timing_mask, flat_times, jnp.inf)
+
+        segment_min_time = jax.ops.segment_min(
+            filtered_times,
+            flat_indices,
+            num_segments=num_detectors
+        )
+
+        total_charge = jax.ops.segment_sum(
+            flat_weights,
+            flat_indices,
+            num_segments=num_detectors
+        )
+
+        # Find minimum non-zero time for alignment
+        nonzero_mask = segment_min_time > 0
+        min_nonzero_time = jnp.where(
+            jnp.any(nonzero_mask),
+            jnp.min(jnp.where(nonzero_mask, segment_min_time, jnp.inf)),
+            0.0
+        )
+
+        # Align times to earliest detection
+        aligned_times = jnp.where(
+            nonzero_mask,
+            segment_min_time - min_nonzero_time,
+            0
+        )
+
+        nonzero_mask = total_charge > 1e-10
+        # Zero out charges below threshold
+        corrected_q = jnp.where(
+            nonzero_mask,
+            total_charge,
+            0
+        )
+
+        return corrected_q, aligned_times
+
+
+def create_event_simulator(detector, propagate_photons, Nphot, NUM_DETECTORS, detector_points, K,
                            is_data, is_calibration, max_detectors_per_cell, use_expected_value=None):
     """
     Create an event simulator with the appropriate configuration.
@@ -691,6 +741,17 @@ def create_event_simulator(propagate_photons, Nphot, NUM_DETECTORS, detector_poi
             propagate_photons, photon_update_fn
         )
 
+    @partial(jax.jit, static_argnames=('r', 'h'))
+    def get_inside_detector_flag(positions, r, h):
+        x, y, z = positions[:, 0], positions[:, 1], positions[:, 2]
+        eps = 0 # Dont change without validations
+        inside_xy_circle = (x**2 + y**2) <= (r+eps)**2
+        # For z: check if |z| ≤ h/2
+        inside_z_bounds = (z >= -h/2-eps) & (z <= h/2+eps)
+        # Combine conditions
+        inside_cylinder = inside_xy_circle & inside_z_bounds
+        return inside_cylinder
+
     @partial(jax.jit, static_argnames=(
     'n_rays', 'K', 'max_detectors_per_cell', 'num_detectors', 'propagate_fn', 'photon_update_fn'))
     def _common_propagation(positions, directions, intensities, times, n_rays, detector_params, key,
@@ -772,15 +833,24 @@ def create_event_simulator(propagate_photons, Nphot, NUM_DETECTORS, detector_poi
               surface_distances, normals, scatter_length, reflection_rate,
               absorption_length, tau_gs, rng_keys)
 
-            # NaN SAFETY LAYER - Detect and neutralize problematic rays (this happens once every several million rays, but causes problems if not dealt with)
+
             nan_pos_mask = jnp.any(jnp.isnan(new_positions), axis=1)
             nan_dir_mask = jnp.any(jnp.isnan(new_directions), axis=1)
-            nan_factors_mask = jnp.isnan(continuing_factors)
-            problematic_rays = nan_pos_mask | nan_dir_mask | nan_factors_mask
 
-            # Count problematic rays for monitoring (just for debuging purposes)
-            nan_count = jnp.sum(problematic_rays)
-            jax.debug.print("Iteration {}: Found {} problematic rays with NaN", i, nan_count)
+            # Fix: Ensure nan_time_mask is per-ray, not scalar
+            nan_time_scalar = jnp.isnan(new_times)
+            nan_time_mask = jnp.broadcast_to(nan_time_scalar, nan_pos_mask.shape)
+
+            nan_factors_mask = jnp.isnan(continuing_factors)
+            problematic_rays = nan_pos_mask | nan_dir_mask | nan_time_mask | nan_factors_mask
+
+            # jax.debug.print("AAA - Iteration {}: Found {} problematic new times with NaN", i, jnp.sum(nan_time_mask))
+            # jax.debug.print("AAA - Iteration {}: Found {} problematic new pos NaN", i, jnp.sum(nan_pos_mask))
+            # jax.debug.print("AAA - Iteration {}: Found {} problematic new direc NaN", i, jnp.sum(nan_dir_mask))
+            # jax.debug.print("AAA - Iteration {}: Found {} problematic new cont fact NaN", i, jnp.sum(nan_factors_mask))
+
+            # nan_count = jnp.sum(problematic_rays)
+            # jax.debug.print("Iteration {}: Found {} problematic rays with NaN", i, nan_count)
 
             # Replace NaN outputs with safe values
             safe_new_positions = jnp.where(
@@ -795,8 +865,15 @@ def create_event_simulator(propagate_photons, Nphot, NUM_DETECTORS, detector_poi
                 new_directions      # Use computed direction
             )
 
-            safe_continuing_factors = jnp.where(
+            safe_new_times = jnp.where(
                 problematic_rays,
+                current_times, # Keep original direction  
+                new_times      # Use computed direction
+            )
+
+            inside_detector = get_inside_detector_flag(new_positions, detector.r, detector.H)
+            safe_continuing_factors = jnp.where(
+                (problematic_rays) | (inside_detector==False),
                 0.0,                # Kill the ray (zero intensity)
                 continuing_factors  # Use computed factor
             )
@@ -804,7 +881,10 @@ def create_event_simulator(propagate_photons, Nphot, NUM_DETECTORS, detector_poi
             # Calculate intensities
             detected_intensity_factors = detect_probs * reflection_attenuations
             updated_weights = depositions * current_intensities[None, :] * detected_intensity_factors[None, :]
+            
             total_times = times + current_times[:, None]
+            # jax.debug.print("Found {} Neg times", jnp.sum(times<0))
+            # jax.debug.print("Found {} Neg current_times", jnp.sum(current_times<0))
 
             # Create outputs for this iteration
             iteration_weights = updated_weights
@@ -818,11 +898,15 @@ def create_event_simulator(propagate_photons, Nphot, NUM_DETECTORS, detector_poi
             next_directions = jax.lax.stop_gradient(safe_new_directions)
 
             next_intensities = new_intensities
-            next_times = jax.lax.stop_gradient(new_times)
+            next_times = jax.lax.stop_gradient(safe_new_times)
 
             # Return updated state and outputs
             new_carry = (next_positions, next_directions, next_intensities, next_times, key)
             outputs = (iteration_weights, iteration_indices, iteration_times)
+
+            # jax.debug.print("ZZZ - Iteration {}: Found {} problematic next times with NaN", i, jnp.sum(jnp.isnan(next_times)))
+            # jax.debug.print("ZZZ - Iteration {}: Found {} problematic next pos NaN", i, jnp.sum(jnp.isnan(next_positions)))
+            # jax.debug.print("ZZZ - Iteration {}: Found {} problematic next direc NaN", i, jnp.sum(jnp.isnan(next_directions)))
 
             return new_carry, outputs
 
@@ -842,9 +926,14 @@ def create_event_simulator(propagate_photons, Nphot, NUM_DETECTORS, detector_poi
         flat_times = all_iter_times.reshape(-1)
 
         # Use make_hits_fn to compute charges and times
-        corrected_q, aligned_times = make_hits_fn(flat_weights, flat_indices, flat_times, num_detectors)
+        corrected_q, aligned_times = _make_hits_fn(flat_weights, flat_indices, flat_times, num_detectors)
         
         return corrected_q, aligned_times
+
+    if is_data:
+        _make_hits_fn = make_hits_data
+    else:
+        _make_hits_fn = make_hits_simulation
 
     # Return appropriate simulation function
     if is_data:
@@ -852,7 +941,7 @@ def create_event_simulator(propagate_photons, Nphot, NUM_DETECTORS, detector_poi
     elif is_calibration:
         return _simulation_detector_calibration
     else:
-        model_base_path = base_dir_path+'../notebooks/output/photonsim_siren_training/trained_model/photonsim_siren'
+        model_base_path = base_dir_path()+'/notebooks/output/photonsim_siren_training/trained_model/photonsim_siren'
         photonsim_predictor = SIRENPredictor(model_base_path)
         grid_data = create_photonsim_siren_grid(photonsim_predictor, 500)
         model_params = photonsim_predictor.params

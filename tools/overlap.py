@@ -5,7 +5,7 @@ from jax import vmap, jit
 from functools import partial
 import os
 import json
-
+from tools.utils import base_dir_path
 
 def gaussian_kernel(rho: float, theta: float, d: float, r: float, sigma: float) -> float:
     """2D Gaussian distribution centered at the origin with std sigma.
@@ -90,7 +90,7 @@ def save_overlap_values(r: float, sigma: float, d_values: jnp.ndarray, f_values:
         Array of overlap probabilities
     """
     # Create cache directory if it doesn't exist
-    os.makedirs('spatial_overlap_integrals', exist_ok=True)
+    os.makedirs(base_dir_path()+'/spatial_overlap_integrals/', exist_ok=True)
 
     # Convert to Python lists for JSON serialization
     cache_data = {
@@ -100,7 +100,7 @@ def save_overlap_values(r: float, sigma: float, d_values: jnp.ndarray, f_values:
         'f_values': f_values.tolist()
     }
 
-    filename = os.path.join('spatial_overlap_integrals', get_cache_filename(r, sigma))
+    filename = os.path.join(base_dir_path()+'/spatial_overlap_integrals/', get_cache_filename(r, sigma))
     with open(filename, 'w') as f:
         json.dump(cache_data, f)
 
@@ -120,7 +120,8 @@ def load_overlap_values(r: float, sigma: float) -> Optional[Tuple[jnp.ndarray, j
     Optional[Tuple[jnp.ndarray, jnp.ndarray]]
         Cached values if they exist, None otherwise
     """
-    filename = os.path.join('spatial_overlap_integrals', get_cache_filename(r, sigma))
+    print(base_dir_path()+'/spatial_overlap_integrals/')
+    filename = os.path.join(base_dir_path()+'/spatial_overlap_integrals/', get_cache_filename(r, sigma))
 
     if os.path.exists(filename):
         with open(filename, 'r') as f:

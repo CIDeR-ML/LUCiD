@@ -190,7 +190,7 @@ def create_detector_display(json_filename='../config/cyl_geom_config.json', spar
         cbar = plt.colorbar(color_gradient, cax=cax)
         value_label = 'Time' if plot_time else 'Photoelectron Count (a.u.)'
         scale_label = ' (log scale)' if log_scale else ''
-        cbar.set_label(f'{value_label}{scale_label}', color='white', fontsize=18)
+        cbar.set_label(f'{value_label}{scale_label}', color='white', fontsize=14)
         cbar.ax.yaxis.set_tick_params(color='white')
         cbar.outline.set_edgecolor('white')
         plt.setp(plt.getp(cbar.ax.axes, 'yticklabels'), color='white')

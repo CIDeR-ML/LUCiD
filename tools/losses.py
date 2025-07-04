@@ -262,7 +262,7 @@ def compute_softmin_loss(
     L_time = (L_time_s2t + L_time_t2s) * lambda_time
     L_intensity = intensity_loss * lambda_intensity
 
-    return L_charge + L_time + L_intensity
+    return L_time # L_charge + L_time + L_intensity
 
 
 @jit
