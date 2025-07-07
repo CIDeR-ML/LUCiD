@@ -21,3 +21,4 @@ notebooks/figures/*
 sftp-config.json
 
 spatial_overlap_integrals/*
+*.root

@@ -7,7 +7,7 @@ from tools.geometry import load_detector_geom, generate_detector
 from tools.utils import sparse_to_full
 from matplotlib.colors import LinearSegmentedColormap
 
-def create_color_gradient(max_cnts, colormap='viridis'):
+def create_color_gradient(max_cnts, colormap='gnuplot'):
     cmap = plt.get_cmap(colormap)
     norm = plt.Normalize(vmin=0, vmax=max_cnts)
     return plt.cm.ScalarMappable(norm=norm, cmap=cmap)
@@ -50,7 +50,7 @@ def create_detector_display(json_filename='../config/cyl_geom_config.json', spar
     detector_cases = np.array([detector.ID_to_case[i] for i in range(len(detector.all_points))])
     n_detectors = len(detector_positions)
 
-    def display_detector_data(*args, file_name=None, plot_time=False, log_scale=False):
+    def display_detector_data(*args, file_name=None, plot_time=False, log_scale=False, vmin=None, vmax=None):
         """
         Process and display detector data in either sparse or dense format.
 
@@ -78,6 +78,8 @@ def create_detector_display(json_filename='../config/cyl_geom_config.json', spar
             If True, plot time instead of charge
         log_scale : bool
             If True, apply logarithmic scaling to the color gradient
+        vmin : float, optional
+            Minimum value for colormap. Values below this but > 0 will be shown in a distinct color
         """
         if sparse:
             if len(args) != 3:
@@ -96,24 +98,38 @@ def create_detector_display(json_filename='../config/cyl_geom_config.json', spar
         all_values = all_times if plot_time else all_charges
 
         # Generate color gradient based on scale type
-        max_value = np.max(all_values)
+        max_value = np.max(all_values[all_charges>0])
+        if vmax:
+            max_value = np.min((max_value, vmax))
+        
+        # Create masks for different value categories
+        zero_mask = all_values == 0
+        
         if log_scale:
             # Handle zero values for log scale - set to small positive number
             min_positive = np.min(all_values[all_values > 0]) if np.any(all_values > 0) else 1.0
-            vmin = min_positive * 0.1  # Set minimum to fraction of smallest positive value
+            if vmin is None:
+                vmin = min_positive * 0.1  # Set minimum to fraction of smallest positive value
+            
+            below_vmin_mask = (all_values > 0) & (all_values < vmin)
 
             # Create a copy of values for color mapping
             plot_values = np.copy(all_values)
             plot_values[plot_values <= 0] = vmin  # Replace zeros/negatives with minimum
 
             # Use LogNorm for logarithmic color scaling
-            cmap = plt.get_cmap('viridis')
+            cmap = plt.get_cmap('gnuplot_r') if plot_time else plt.get_cmap('gnuplot')
             norm = plt.matplotlib.colors.LogNorm(vmin=vmin, vmax=max_value)
             color_gradient = plt.cm.ScalarMappable(norm=norm, cmap=cmap)
         else:
-            # Linear scaling (original behavior)
-            cmap = plt.get_cmap('viridis')
-            norm = plt.Normalize(vmin=0, vmax=max_value)
+            # Linear scaling
+            if vmin is None:
+                vmin = 0
+            
+            below_vmin_mask = (all_values > 0) & (all_values < vmin)
+            
+            cmap = plt.get_cmap('gnuplot_r') if plot_time else plt.get_cmap('gnuplot')
+            norm = plt.Normalize(vmin=vmin, vmax=max_value)
             color_gradient = plt.cm.ScalarMappable(norm=norm, cmap=cmap)
             plot_values = all_values
 
@@ -167,9 +183,18 @@ def create_detector_display(json_filename='../config/cyl_geom_config.json', spar
 
         fig, ax = plt.subplots(figsize=(fig_width, fig_height), facecolor='black')
 
+        # Create color array with special handling for below-vmin values
+        colors = color_gradient.to_rgba(plot_values)
+        
+        # Apply special colors for different categories
+        # Zero values: keep as is (will be at the bottom of the colormap)
+        # Below vmin values: use a distinct gray color with transparency
+        if vmin is not None and vmin > 0:
+            colors[below_vmin_mask] = [0., 0., 0., 0.]
+        
         # Create EllipseCollection
         ells = EllipseCollection(widths=circle_diameter, heights=circle_diameter, angles=0, units='x',
-                                 facecolors=color_gradient.to_rgba(plot_values),
+                                 facecolors=colors,
                                  offsets=transformed_positions,
                                  transOffset=ax.transData,
                                  edgecolors='none')
@@ -276,23 +301,23 @@ def create_detector_comparison_display(json_filename='config/cyl_geom_config.jso
         # Calculate charge differences
         charge_diff = sim_charges_full - true_charges_full
 
-        # Handle time differences with alignment if requested
-        if align_time:
-            # Find active time points
-            active_times_true = true_times_full > 0
-            active_times_sim = sim_times_full > 0
+        # # Handle time differences with alignment if requested
+        # if align_time:
+        #     # Find active time points
+        #     active_times_true = true_times_full > 0
+        #     active_times_sim = sim_times_full > 0
 
-            # Calculate means for active times
-            true_time_mean = np.mean(true_times_full[active_times_true]) if np.any(active_times_true) else 0
-            sim_time_mean = np.mean(sim_times_full[active_times_sim]) if np.any(active_times_sim) else 0
+        #     # Calculate means for active times
+        #     true_time_mean = np.mean(true_times_full[active_times_true]) if np.any(active_times_true) else 0
+        #     sim_time_mean = np.mean(sim_times_full[active_times_sim]) if np.any(active_times_sim) else 0
 
-            # Subtract means from active times
-            true_times_aligned = np.where(active_times_true, true_times_full - true_time_mean, 0)
-            sim_times_aligned = np.where(active_times_sim, sim_times_full - sim_time_mean, 0)
+        #     # Subtract means from active times
+        #     true_times_aligned = np.where(active_times_true, true_times_full - true_time_mean, 0)
+        #     sim_times_aligned = np.where(active_times_sim, sim_times_full - sim_time_mean, 0)
 
-            time_diff = sim_times_aligned - true_times_aligned
-        else:
-            time_diff = sim_times_full - true_times_full
+        #     time_diff = sim_times_aligned - true_times_aligned
+        # else:
+        time_diff = sim_times_full - true_times_full
 
         # Select which values to plot
         all_values = time_diff if plot_time else charge_diff
@@ -302,18 +327,21 @@ def create_detector_comparison_display(json_filename='config/cyl_geom_config.jso
             max_abs_value = colorbar_range
         else:
             # Find maximum absolute value for symmetric color scale (original behavior)
-            max_abs_value = np.max(np.abs(all_values))
+            max_abs_value = np.max(np.abs(all_values[all_values<1e5]))
+            print('MAX ABS VALUE: ', np.max(true_times_full))
+            print('MAX ABS VALUE: ', np.max(sim_times_full))
+            print('MAX ABS VALUE: ', max_abs_value)
 
-        # Create colors array: viridis(0) for non-active, diverging colormap for active
-        viridis = plt.cm.viridis
+        # Create colors array: gnuplot(0) for non-active, diverging colormap for active
+        gnuplot = plt.cm.gnuplot
         diverging_cmap = plt.cm.seismic
 
         # Create color array
         colors = np.zeros((len(all_values), 4))  # RGBA array
         active_mask = all_values != 0
 
-        # Set non-active detectors to viridis(0)
-        colors[~active_mask] = viridis(0)
+        # Set non-active detectors to gnuplot(0)
+        colors[~active_mask] = gnuplot(0)
 
         # Set active detectors using diverging colormap
         norm = plt.Normalize(-max_abs_value, max_abs_value)

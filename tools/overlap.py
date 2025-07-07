@@ -120,7 +120,6 @@ def load_overlap_values(r: float, sigma: float) -> Optional[Tuple[jnp.ndarray, j
     Optional[Tuple[jnp.ndarray, jnp.ndarray]]
         Cached values if they exist, None otherwise
     """
-    print(base_dir_path()+'/spatial_overlap_integrals/')
     filename = os.path.join(base_dir_path()+'/spatial_overlap_integrals/', get_cache_filename(r, sigma))
 
     if os.path.exists(filename):

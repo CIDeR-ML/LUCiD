@@ -548,6 +548,42 @@ def make_hits_simulation(flat_weights, flat_indices, flat_times, num_detectors, 
     return corrected_q, aligned_times
 
 
+# def time_digitizer(times, time_resolution=1):
+#     time_window = 100 # nanoseconds
+#     nbins = int(time_window/time_resolution)
+#     bins = np.linspace(0, time_window, int(nbins+1))
+#     counts, edges = np.histogram(times, bins)
+#     bin_centers = edges[:-1]+(edges[1]-edges[0])/2
+
+#     binned_times = []
+#     for x,y in zip(bin_centers, counts):
+#         binned_times += [x]*y
+
+#     return binned_times
+
+def time_digitizer(times, time_resolution=0.2):
+    """
+    Digitize input times to bin centers.
+    
+    Args:
+        times: Input array of times to digitize
+        time_resolution: Time resolution for binning (default=1)
+        
+    Returns:
+        Array with same shape as input where each time is replaced 
+        by its corresponding bin center
+    """
+    time_window = 500  # nanoseconds
+    nbins = int(time_window/time_resolution)
+    bins = jnp.linspace(0, time_window, int(nbins+1))
+    bin_centers = bins[:-1] + (bins[1] - bins[0]) / 2
+    
+    # Find which bin each time falls into
+    bin_indices = jnp.digitize(times, bins) - 1
+    digitized_times = jnp.where((jnp.isfinite(times)), bin_centers[bin_indices], 1e6)
+    
+    return digitized_times
+
 def make_hits_data(flat_weights, flat_indices, flat_times, num_detectors):
         
         timing_mask = (flat_weights>0)
@@ -565,30 +601,32 @@ def make_hits_data(flat_weights, flat_indices, flat_times, num_detectors):
             num_segments=num_detectors
         )
 
+
+        measured_time = time_digitizer(segment_min_time)
+
         # Find minimum non-zero time for alignment
-        nonzero_mask = segment_min_time > 0
+        nonzero_mask = (total_charge > 1e-10) & (segment_min_time > 0)
         min_nonzero_time = jnp.where(
             jnp.any(nonzero_mask),
-            jnp.min(jnp.where(nonzero_mask, segment_min_time, jnp.inf)),
+            jnp.min(jnp.where(nonzero_mask, measured_time, jnp.inf)),
             0.0
         )
 
         # Align times to earliest detection
         aligned_times = jnp.where(
             nonzero_mask,
-            segment_min_time - min_nonzero_time,
-            0
+            measured_time - min_nonzero_time,
+            1e6
         )
 
-        nonzero_mask = total_charge > 1e-10
         # Zero out charges below threshold
-        corrected_q = jnp.where(
+        measured_charge = jnp.where(
             nonzero_mask,
             total_charge,
             0
         )
 
-        return corrected_q, aligned_times
+        return measured_charge, aligned_times
 
 
 def create_event_simulator(detector, propagate_photons, Nphot, NUM_DETECTORS, detector_points, K,
@@ -927,7 +965,7 @@ def create_event_simulator(detector, propagate_photons, Nphot, NUM_DETECTORS, de
 
         # Use make_hits_fn to compute charges and times
         corrected_q, aligned_times = _make_hits_fn(flat_weights, flat_indices, flat_times, num_detectors)
-        
+
         return corrected_q, aligned_times
 
     if is_data:
