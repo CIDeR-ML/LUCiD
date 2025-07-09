@@ -153,7 +153,6 @@ def normalize(v, epsilon=1e-6):
     norm = jnp.linalg.norm(v, axis=-1, keepdims=True)
     return v / (norm + epsilon)
 
-
 # def compute_reflection_direction(incident_dir, normal):
 #     """Compute reflection direction given an incident direction and surface normal."""
 #     return normalize(incident_dir - 2 * jnp.dot(incident_dir, normal) * normal)
@@ -584,19 +583,6 @@ def make_hits_simulation(flat_weights, flat_indices, flat_times, num_detectors, 
     return corrected_q, aligned_times
 
 
-# def time_digitizer(times, time_resolution=1):
-#     time_window = 100 # nanoseconds
-#     nbins = int(time_window/time_resolution)
-#     bins = np.linspace(0, time_window, int(nbins+1))
-#     counts, edges = np.histogram(times, bins)
-#     bin_centers = edges[:-1]+(edges[1]-edges[0])/2
-
-#     binned_times = []
-#     for x,y in zip(bin_centers, counts):
-#         binned_times += [x]*y
-
-#     return binned_times
-
 def time_digitizer(times, time_resolution=0.2):
     """
     Digitize input times to bin centers.
@@ -965,9 +951,9 @@ def create_event_simulator(detector, propagate_photons, Nphot, NUM_DETECTORS, de
 
             inside_detector = get_inside_detector_flag(new_positions)
             
-            jax.debug.print("Rays summary:")
-            jax.debug.print("A - NotIn Rays: {}", jnp.sum( get_inside_detector_flag(new_positions)==False))
-            jax.debug.print("B - NotIn Rays: {}", jnp.sum(get_inside_detector_flag(current_positions)==False))
+            # jax.debug.print("Rays summary:")
+            # jax.debug.print("Current Positions Out of Detector Volume:  {}", jnp.sum(get_inside_detector_flag(current_positions)==False))
+            # jax.debug.print("New Positions Out of Detector Volume: {}", jnp.sum(get_inside_detector_flag(new_positions)==False))
             
 
             safe_continuing_factors = jnp.where(
