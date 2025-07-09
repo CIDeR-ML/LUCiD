@@ -11,11 +11,11 @@ from tools.propagate_cylinder import (
     intersect_cylinder,
     intersect_cylinder_with_grid,
     batch_intersect_cylinder_with_grid,
-    find_intersected_detectors_differentiable as find_intersected_cylinder_detectors_differentiable,
-    assign_detectors_to_grid as assign_detectors_to_cylinder_grid,
-    create_detector_grid_map as create_cylinder_detector_grid_map,
+    find_intersected_sensors_differentiable as find_intersected_cylinder_sensors_differentiable,
+    assign_sensors_to_grid as assign_sensors_to_cylinder_grid,
+    create_sensor_grid_map as create_cylinder_sensor_grid_map,
     calculate_grid_centers as calculate_cylinder_grid_centers,
-    create_inverted_detector_map as create_cylinder_inverted_detector_map
+    create_inverted_sensor_map as create_cylinder_inverted_sensor_map
 )
 
 from tools.propagate_sphere import (
@@ -23,11 +23,11 @@ from tools.propagate_sphere import (
     intersect_sphere,
     intersect_sphere_with_grid,
     batch_intersect_sphere_with_grid,
-    find_intersected_sphere_detectors_differentiable,
-    assign_detectors_to_sphere_grid,
-    create_detector_sphere_grid_map,
+    find_intersected_sphere_sensors_differentiable,
+    assign_sensors_to_sphere_grid,
+    create_sensor_sphere_grid_map,
     calculate_sphere_grid_centers,
-    create_inverted_sphere_detector_map
+    create_inverted_sphere_sensor_map
 )
 
 from tools.propagate_box import (
@@ -35,31 +35,31 @@ from tools.propagate_box import (
     intersect_box,
     intersect_box_with_grid,
     batch_intersect_box_with_grid,
-    find_intersected_box_detectors_differentiable,
-    assign_detectors_to_box_grid,
-    create_detector_box_grid_map,
+    find_intersected_box_sensors_differentiable,
+    assign_sensors_to_box_grid,
+    create_sensor_box_grid_map,
     calculate_box_grid_centers
 )
 
 from tools.propagate_base import (
     process_intersection_normals,
-    calculate_weighted_detector_properties,
+    calculate_weighted_sensor_properties,
     calculate_hit_properties,
-    compute_detector_intersections_base,
-    find_closest_detectors
+    compute_sensor_intersections_base,
+    find_closest_sensors
 )
 
 # For backward compatibility, maintain the original interface
 # These aliases preserve the existing API
 create_photon_propagator = create_cylinder_photon_propagator
-find_intersected_detectors_differentiable = find_intersected_cylinder_detectors_differentiable
-assign_detectors_to_grid = assign_detectors_to_cylinder_grid
-create_detector_grid_map = create_cylinder_detector_grid_map
+find_intersected_sensors_differentiable = find_intersected_cylinder_sensors_differentiable
+assign_sensors_to_grid = assign_sensors_to_cylinder_grid
+create_sensor_grid_map = create_cylinder_sensor_grid_map
 calculate_grid_centers = calculate_cylinder_grid_centers
-create_inverted_detector_map = create_cylinder_inverted_detector_map
+create_inverted_sensor_map = create_cylinder_inverted_sensor_map
 
 
-def create_propagator_by_geometry(geometry_type, detector_positions, detector_radius, **kwargs):
+def create_propagator_by_geometry(geometry_type, sensor_positions, sensor_radius, **kwargs):
     """
     Factory function to create the appropriate propagator based on geometry type.
     
@@ -67,10 +67,10 @@ def create_propagator_by_geometry(geometry_type, detector_positions, detector_ra
     ----------
     geometry_type : str
         Type of geometry ('cylinder', 'sphere', or 'box')
-    detector_positions : ndarray
-        Array of detector positions
-    detector_radius : float
-        Radius of each detector
+    sensor_positions : ndarray
+        Array of sensor positions
+    sensor_radius : float
+        Radius of each sensor
     **kwargs : dict
         Geometry-specific parameters
         
@@ -85,11 +85,11 @@ def create_propagator_by_geometry(geometry_type, detector_positions, detector_ra
         If geometry_type is not recognized
     """
     if geometry_type.lower() == 'cylinder':
-        return create_cylinder_photon_propagator(detector_positions, detector_radius, **kwargs)
+        return create_cylinder_photon_propagator(sensor_positions, sensor_radius, **kwargs)
     elif geometry_type.lower() == 'sphere':
-        return create_sphere_photon_propagator(detector_positions, detector_radius, **kwargs)
+        return create_sphere_photon_propagator(sensor_positions, sensor_radius, **kwargs)
     elif geometry_type.lower() == 'box':
-        return create_box_photon_propagator(detector_positions, detector_radius, **kwargs)
+        return create_box_photon_propagator(sensor_positions, sensor_radius, **kwargs)
     else:
         raise ValueError(f"Unknown geometry type: {geometry_type}. "
                         "Supported types are: 'cylinder', 'sphere', 'box'")
@@ -102,50 +102,50 @@ __all__ = [
     
     # Backward compatibility - Cylinder (default)
     'create_photon_propagator',
-    'find_intersected_detectors_differentiable', 
-    'assign_detectors_to_grid',
-    'create_detector_grid_map',
+    'find_intersected_sensors_differentiable', 
+    'assign_sensors_to_grid',
+    'create_sensor_grid_map',
     'calculate_grid_centers',
-    'create_inverted_detector_map',
+    'create_inverted_sensor_map',
     'intersect_cylinder',
     'intersect_cylinder_with_grid',
     'batch_intersect_cylinder_with_grid',
     
     # Cylinder-specific
     'create_cylinder_photon_propagator',
-    'find_intersected_cylinder_detectors_differentiable',
-    'assign_detectors_to_cylinder_grid',
-    'create_cylinder_detector_grid_map',
+    'find_intersected_cylinder_sensors_differentiable',
+    'assign_sensors_to_cylinder_grid',
+    'create_cylinder_sensor_grid_map',
     'calculate_cylinder_grid_centers',
-    'create_cylinder_inverted_detector_map',
+    'create_cylinder_inverted_sensor_map',
     
     # Sphere-specific
     'create_sphere_photon_propagator',
     'intersect_sphere',
     'intersect_sphere_with_grid',
     'batch_intersect_sphere_with_grid',
-    'find_intersected_sphere_detectors_differentiable',
-    'assign_detectors_to_sphere_grid',
-    'create_detector_sphere_grid_map',
+    'find_intersected_sphere_sensors_differentiable',
+    'assign_sensors_to_sphere_grid',
+    'create_sensor_sphere_grid_map',
     'calculate_sphere_grid_centers',
-    'create_inverted_sphere_detector_map',
+    'create_inverted_sphere_sensor_map',
     
     # Box-specific
     'create_box_photon_propagator',
     'intersect_box',
     'intersect_box_with_grid',
     'batch_intersect_box_with_grid',
-    'find_intersected_box_detectors_differentiable',
-    'assign_detectors_to_box_grid',
-    'create_detector_box_grid_map',
+    'find_intersected_box_sensors_differentiable',
+    'assign_sensors_to_box_grid',
+    'create_sensor_box_grid_map',
     'calculate_box_grid_centers',
     
     # Base functions
     'process_intersection_normals',
-    'calculate_weighted_detector_properties',
+    'calculate_weighted_sensor_properties',
     'calculate_hit_properties',
-    'compute_detector_intersections_base',
-    'find_closest_detectors'
+    'compute_sensor_intersections_base',
+    'find_closest_sensors'
 ]
 
 

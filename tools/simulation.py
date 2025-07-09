@@ -27,7 +27,7 @@ from inference import SIRENPredictor
 
 
 def setup_event_simulator(json_filename, n_photons=1_000_000, temperature=0.2, K=2, 
-                         is_data=False, is_calibration=False, max_detectors_per_cell=4,
+                         is_data=False, is_calibration=False, max_sensors_per_cell=4,
                          detector_type='Cylinder', use_expected_value=True):
     """
     Sets up and returns an event simulator with the specified configuration.
@@ -46,8 +46,8 @@ def setup_event_simulator(json_filename, n_photons=1_000_000, temperature=0.2, K
         True for ROOT file data mode (default: False)
     is_calibration : bool, optional
         True for isotropic calibration mode (default: False)
-    max_detectors_per_cell : int, optional
-        Grid cell detector limit (default: 4)
+    max_sensors_per_cell : int, optional
+        Grid cell sensor limit (default: 4)
     use_expected_value : bool, optional
         Propagation mode selection:
         - True: Expected value (differentiable)
@@ -74,42 +74,42 @@ def setup_event_simulator(json_filename, n_photons=1_000_000, temperature=0.2, K
     if detector_type == 'Cylinder':
         # Use cylinder implementation
         detector = generate_detector(json_filename)
-        detector_points = jnp.array(detector.all_points)
+        sensor_points = jnp.array(detector.all_points)
         photosensor_radius = detector.S_radius
         cylinder_height = detector.H
         cylinder_radius = detector.r
 
         # Setup cylinder photon propagator
         propagate_photons = create_photon_propagator(
-            detector_points,
+            sensor_points,
             photosensor_radius,
             r=cylinder_radius, 
             h=cylinder_height,
             temperature=temperature,
-            max_detectors_per_cell=max_detectors_per_cell
+            max_sensors_per_cell=max_sensors_per_cell
         )
         
     elif detector_type == 'Sphere':
         # Use sphere implementation
         detector = generate_detector(json_filename)
-        detector_points = jnp.array(detector.all_points)
+        sensor_points = jnp.array(detector.all_points)
         photosensor_radius = detector.S_radius
         sphere_radius = detector.r
         
         # Setup sphere photon propagator
         propagate_photons = create_sphere_photon_propagator(
-            detector_points,
+            sensor_points,
             photosensor_radius,
             sphere_radius=sphere_radius,
             temperature=temperature,
             n_divisions=100,
-            max_detectors_per_cell=max_detectors_per_cell
+            max_sensors_per_cell=max_sensors_per_cell
         )
         
     elif detector_type == 'Box':
         # Use box implementation
         detector = generate_detector(json_filename)
-        detector_points = jnp.array(detector.all_points)
+        sensor_points = jnp.array(detector.all_points)
         photosensor_radius = detector.S_radius
         box_length = detector.L
         box_width = detector.W
@@ -117,17 +117,17 @@ def setup_event_simulator(json_filename, n_photons=1_000_000, temperature=0.2, K
         
         # Setup box photon propagator
         propagate_photons = create_box_photon_propagator(
-            detector_points,
+            sensor_points,
             photosensor_radius,
             length=box_length,
             width=box_width,
             height=box_height,
             temperature=temperature,
-            max_detectors_per_cell=max_detectors_per_cell
+            max_sensors_per_cell=max_sensors_per_cell
         )
 
-    # Get number of detectors from the points array (common for all types)
-    NUM_DETECTORS = len(detector_points)
+    # Get number of sensors from the points array (common for all types)
+    NUM_SENSORS = len(sensor_points)
 
     # Create the event simulator with a fixed number of scattering iterations K
     # (This part remains the same for all detector types)
@@ -135,12 +135,12 @@ def setup_event_simulator(json_filename, n_photons=1_000_000, temperature=0.2, K
         detector,
         propagate_photons,
         n_photons,
-        NUM_DETECTORS,
-        detector_points,
+        NUM_SENSORS,
+        sensor_points,
         K,
         is_data,
         is_calibration,
-        max_detectors_per_cell,
+        max_sensors_per_cell,
         use_expected_value,
         detector_type
     )
@@ -651,8 +651,8 @@ def make_hits_data(flat_weights, flat_indices, flat_times, num_detectors):
         return measured_charge, aligned_times
 
 
-def create_event_simulator(detector, propagate_photons, Nphot, NUM_DETECTORS, detector_points, K,
-                           is_data, is_calibration, max_detectors_per_cell, use_expected_value=None, detector_type='Cylinder'):
+def create_event_simulator(detector, propagate_photons, Nphot, NUM_SENSORS, sensor_points, K,
+                           is_data, is_calibration, max_sensors_per_cell, use_expected_value=None, detector_type='Cylinder'):
     """
     Create an event simulator with the appropriate configuration.
 
@@ -666,18 +666,18 @@ def create_event_simulator(detector, propagate_photons, Nphot, NUM_DETECTORS, de
         Function to propagate photons through the detector geometry
     Nphot : int
         Number of photons to simulate per event
-    NUM_DETECTORS : int
-        Total number of detectors in the system
-    detector_points : jnp.ndarray
-        Array of detector positions, shape (NUM_DETECTORS, 3)
+    NUM_SENSORS : int
+        Total number of sensors in the system
+    sensor_points : jnp.ndarray
+        Array of sensor positions, shape (NUM_SENSORS, 3)
     K : int
         Number of scattering iterations before forcing detection
     is_data : bool
         If True, simulator reads photon data from ROOT files
     is_calibration : bool
         If True, simulator uses isotropic point source
-    max_detectors_per_cell : int
-        Maximum number of detectors per grid cell
+    max_sensors_per_cell : int
+        Maximum number of sensors per grid cell
     use_expected_value : bool, optional
         Propagation mode selection:
         - True: Expected value mode (differentiable)
@@ -742,7 +742,7 @@ def create_event_simulator(detector, propagate_photons, Nphot, NUM_DETECTORS, de
 
         return _common_propagation(
             final_origins, rotated_directions, photon_intensities, photon_times,
-            n_rays, detector_params, key, NUM_DETECTORS, K, max_detectors_per_cell,
+            n_rays, detector_params, key, NUM_SENSORS, K, max_sensors_per_cell,
             propagate_photons, photon_update_fn
         )
 
@@ -779,13 +779,13 @@ def create_event_simulator(detector, propagate_photons, Nphot, NUM_DETECTORS, de
         
         return _common_propagation(
             photon_origins, photon_directions, photon_intensities, photon_times+t0,
-            Nphot, detector_params, key, NUM_DETECTORS, K, max_detectors_per_cell,
+            Nphot, detector_params, key, NUM_SENSORS, K, max_sensors_per_cell,
             propagate_photons, photon_update_fn
         )
 
     # Define calibration simulation function
     @jax.jit
-    def _simulation_detector_calibration(source_params, detector_params, key):
+    def _simulation_sensor_calibration(source_params, detector_params, key):
         """Simulate isotropic point source for detector calibration."""
         source_origin, source_intensity = source_params
 
@@ -797,7 +797,7 @@ def create_event_simulator(detector, propagate_photons, Nphot, NUM_DETECTORS, de
 
         return _common_propagation(
             photon_origins, photon_directions, photon_intensities, photon_times,
-            Nphot, detector_params, key, NUM_DETECTORS, K, max_detectors_per_cell,
+            Nphot, detector_params, key, NUM_SENSORS, K, max_sensors_per_cell,
             propagate_photons, photon_update_fn
         )
 
@@ -827,9 +827,9 @@ def create_event_simulator(detector, propagate_photons, Nphot, NUM_DETECTORS, de
             return jnp.ones(positions.shape[0], dtype=bool)
 
     @partial(jax.jit, static_argnames=(
-    'n_rays', 'K', 'max_detectors_per_cell', 'num_detectors', 'propagate_fn', 'photon_update_fn'))
+    'n_rays', 'K', 'max_sensors_per_cell', 'num_sensors', 'propagate_fn', 'photon_update_fn'))
     def _common_propagation(positions, directions, intensities, times, n_rays, detector_params, key,
-                            num_detectors, K, max_detectors_per_cell, propagate_fn, photon_update_fn):
+                            num_sensors, K, max_sensors_per_cell, propagate_fn, photon_update_fn):
         """
         Common photon propagation logic for all simulation modes.
 
@@ -853,23 +853,23 @@ def create_event_simulator(detector, propagate_photons, Nphot, NUM_DETECTORS, de
             (scatter_length, reflection_rate, absorption_length, tau_gs)
         key : jax.random.PRNGKey
             Random key for stochastic operations
-        num_detectors : int
-            Total number of detectors in the system
+        num_sensors : int
+            Total number of sensors in the system
         K : int
             Number of scattering iterations
-        max_detectors_per_cell : int
-            Maximum detectors per grid cell
+        max_sensors_per_cell : int
+            Maximum sensors per grid cell
         propagate_fn : callable
-            Function to propagate photons and find detector intersections
+            Function to propagate photons and find sensor intersections
         photon_update_fn : callable
             Either photon_iteration_update_factors or photon_iteration_sample
 
         Returns
         -------
         corrected_q : jnp.ndarray
-            Total charge deposited at each detector, shape (num_detectors,)
+            Total charge deposited at each sensor, shape (num_sensors,)
         aligned_times : jnp.ndarray
-            Average detection times aligned to earliest detection, shape (num_detectors,)
+            Average detection times aligned to earliest detection, shape (num_sensors,)
         """
         original_scatter_length, original_reflection_rate, original_absorption_length, tau_gs = detector_params
 
@@ -887,7 +887,7 @@ def create_event_simulator(detector, propagate_photons, Nphot, NUM_DETECTORS, de
             # Propagate photons to find intersections
             prop_results = propagate_fn(current_positions, current_directions)
             depositions = prop_results['detector_weights']
-            detector_indices = prop_results['detector_indices']
+            sensor_indices = prop_results['sensor_indices']
             times = prop_results['times']
             hit_positions = prop_results['positions']
             normals = prop_results['normals']
@@ -974,7 +974,7 @@ def create_event_simulator(detector, propagate_photons, Nphot, NUM_DETECTORS, de
 
             # Create outputs for this iteration
             iteration_weights = updated_weights
-            iteration_indices = detector_indices
+            iteration_indices = sensor_indices
             iteration_times = total_times.squeeze(-1)
 
             # Update for next iteration using safe values
@@ -1012,7 +1012,7 @@ def create_event_simulator(detector, propagate_photons, Nphot, NUM_DETECTORS, de
         flat_times = all_iter_times.reshape(-1)
 
         # Use make_hits_fn to compute charges and times
-        corrected_q, aligned_times = _make_hits_fn(flat_weights, flat_indices, flat_times, num_detectors)
+        corrected_q, aligned_times = _make_hits_fn(flat_weights, flat_indices, flat_times, num_sensors)
 
         return corrected_q, aligned_times
 
@@ -1025,7 +1025,7 @@ def create_event_simulator(detector, propagate_photons, Nphot, NUM_DETECTORS, de
     if is_data:
         return _simulation_with_data
     elif is_calibration:
-        return _simulation_detector_calibration
+        return _simulation_sensor_calibration
     else:
         model_base_path = base_dir_path()+'/notebooks/output/photonsim_siren_training/trained_model/photonsim_siren'
         photonsim_predictor = SIRENPredictor(model_base_path)

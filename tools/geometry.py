@@ -275,7 +275,7 @@ def create_disc_mesh(center, normal, radius, n_segments=20):
     
     return vertices, np.array(faces)
 
-def calculate_surface_normals(detector, detector_indices):
+def calculate_surface_normals(detector, sensor_indices):
     """
     Calculate surface normal vectors for detector positions.
     
@@ -283,19 +283,19 @@ def calculate_surface_normals(detector, detector_indices):
     -----------
     detector : Detector (Cylinder, Sphere, or Box)
         Detector geometry object
-    detector_indices : array-like
-        Indices of detectors to calculate normals for
+    sensor_indices : array-like
+        Indices of sensors to calculate normals for
         
     Returns:
     --------
     normals : np.ndarray
-        Array of shape (len(detector_indices), 3) containing normal vectors
+        Array of shape (len(sensor_indices), 3) containing normal vectors
     """
-    positions = detector.all_points[detector_indices]
+    positions = detector.all_points[sensor_indices]
     normals = np.zeros_like(positions)
     
     if isinstance(detector, Cylinder):
-        for i, idx in enumerate(detector_indices):
+        for i, idx in enumerate(sensor_indices):
             pos = positions[i]
             case = detector.ID_to_case[idx]
             
@@ -314,7 +314,7 @@ def calculate_surface_normals(detector, detector_indices):
             normal = pos - detector.C
             normals[i] = normal / np.linalg.norm(normal)
     elif isinstance(detector, Box):
-        for i, idx in enumerate(detector_indices):
+        for i, idx in enumerate(sensor_indices):
             case = detector.ID_to_case[idx]
             
             # Box faces: 0=front(+y), 1=back(-y), 2=left(-x), 3=right(+x), 4=top(+z), 5=bottom(-z)
@@ -367,13 +367,13 @@ class Detector(ABC):
         pass
 
     @abstractmethod
-    def visualize_geometry_wireframe(self, show_detectors=True):
+    def visualize_geometry_wireframe(self, show_sensors=True):
         """Visualize the detector geometry as wireframe. Must be implemented by subclasses."""
         pass
 
     def visualize_event_data_plotly_discs(self, loaded_indices, loaded_charges, loaded_times, 
                                      plot_time=False, log_scale=False, title=None, 
-                                     show_all_detectors=True, marker_size=6, show_colorbar=True,
+                                     show_all_sensors=True, marker_size=6, show_colorbar=True,
                                      opacity=1.0, dark_theme=True, n_disc_segments=12, 
                                      colorscale='viridis', surface_color='gray', 
                                      inactive_color='red', inactive_opacity=0.3, figname=None):
@@ -395,8 +395,8 @@ class Detector(ABC):
             If True, apply logarithmic scaling to the color gradient
         title : str, optional
             Title for the plot. If None, auto-generates title.
-        show_all_detectors : bool, default=True
-            If True, shows all detector positions as red discs for inactive sensors
+        show_all_sensors : bool, default=True
+            If True, shows all sensor positions as red discs for inactive sensors
         marker_size : int, default=6
             Size scaling factor for the disc radius
         show_colorbar : bool, default=True
@@ -448,14 +448,14 @@ class Detector(ABC):
         # Calculate disc radius based on sensor radius and marker_size scaling
         disc_radius = self.S_radius * (marker_size / 6.0)  # Scale relative to default marker_size
         
-        # Show all detectors as red discs if requested
-        if show_all_detectors:
-            # Find inactive detector indices (all indices not in loaded_indices)
+        # Show all sensors as red discs if requested
+        if show_all_sensors:
+            # Find inactive sensor indices (all indices not in loaded_indices)
             all_indices = np.arange(len(self.all_points))
             inactive_indices = np.setdiff1d(all_indices, loaded_indices)
             
             if len(inactive_indices) > 0:
-                # Get positions and normals for inactive detectors
+                # Get positions and normals for inactive sensors
                 inactive_positions = self.all_points[inactive_indices]
                 inactive_normals = calculate_surface_normals(self, inactive_indices)
                 
@@ -500,9 +500,9 @@ class Detector(ABC):
                     
                     fig.add_trace(inactive_mesh_trace)
         
-        # Process hit detectors if any exist
+        # Process hit sensors if any exist
         if len(loaded_indices) > 0:
-            # Get positions of hit detectors
+            # Get positions of hit sensors
             hit_positions = self.all_points[loaded_indices]
             
             # Select which values to use for coloring
@@ -536,7 +536,7 @@ class Detector(ABC):
             sorted_charges = loaded_charges[depth_order] 
             sorted_times = loaded_times[depth_order]
             
-            # Calculate surface normals for sorted detectors
+            # Calculate surface normals for sorted sensors
             normals_sorted = calculate_surface_normals(self, sorted_indices)
             
             # Normalize color values for colorscale mapping (0 to 1)
@@ -549,7 +549,7 @@ class Detector(ABC):
             else:
                 color_normalized = np.array([0.5])
             
-            # Create individual disc meshes for hit detectors
+            # Create individual disc meshes for hit sensors
             all_vertices = []
             all_faces = []
             all_intensities = []
@@ -573,13 +573,13 @@ class Detector(ABC):
                 
                 vertex_offset += len(vertices)
             
-            # Combine all vertices and faces for hit detectors
+            # Combine all vertices and faces for hit sensors
             if all_vertices:
                 combined_vertices = np.vstack(all_vertices)
                 combined_faces = np.vstack(all_faces)
                 combined_intensities = np.array(all_intensities)
                 
-                # Create mesh trace for hit detectors
+                # Create mesh trace for hit sensors
                 mesh_trace = go.Mesh3d(
                     x=combined_vertices[:, 0],
                     y=combined_vertices[:, 1], 
@@ -616,7 +616,7 @@ class Detector(ABC):
                 
                 fig.add_trace(mesh_trace)
                 
-                # Add invisible scatter trace for hover information on hit detectors only
+                # Add invisible scatter trace for hover information on hit sensors only
                 fig.add_trace(go.Scatter3d(
                     x=hit_positions_sorted[:, 0],
                     y=hit_positions_sorted[:, 1], 
@@ -626,7 +626,7 @@ class Detector(ABC):
                         size=1,
                         opacity=0,  # Invisible
                     ),
-                    text=[f'Detector ID: {idx}<br>Charge: {charge:.3f} PE<br>Time: {time:.3f} ns' 
+                    text=[f'Sensor ID: {idx}<br>Charge: {charge:.3f} PE<br>Time: {time:.3f} ns' 
                           for idx, charge, time in zip(sorted_indices, sorted_charges, sorted_times)],
                     hovertemplate='%{text}<extra></extra>',
                     showlegend=False,
@@ -638,7 +638,7 @@ class Detector(ABC):
             all_y = hit_positions_sorted[:, 1]
             all_z = hit_positions_sorted[:, 2]
         else:
-            # If no hits, use all detector positions for range calculation
+            # If no hits, use all sensor positions for range calculation
             print("No event data to display - showing only inactive sensors")
             all_x = self.all_points[:, 0]
             all_y = self.all_points[:, 1]
@@ -1019,7 +1019,7 @@ class Cylinder(Detector):
         
         return points_3d
 
-    def visualize_geometry_wireframe(self, show_detectors=True):
+    def visualize_geometry_wireframe(self, show_sensors=True):
         """Visualize the cylinder as a wireframe with detectors"""
         fig = go.Figure()
 
@@ -1072,8 +1072,8 @@ class Cylinder(Detector):
             name='Bottom Cap'
         ))
 
-        if show_detectors:
-            # Color code detectors by type
+        if show_sensors:
+            # Color code sensors by type
             barrel_indices = [i for i, case in self.ID_to_case.items() if case == 0]
             tcap_indices = [i for i, case in self.ID_to_case.items() if case == 1]
             bcap_indices = [i for i, case in self.ID_to_case.items() if case == 2]
@@ -1086,7 +1086,7 @@ class Cylinder(Detector):
                     z=barrel_points[:, 2],
                     mode='markers',
                     marker=dict(size=4, color='blue', opacity=0.8),
-                    name=f'Barrel Detectors ({len(barrel_indices)})'
+                    name=f'Barrel Sensors ({len(barrel_indices)})'
                 ))
             
             if tcap_indices:
@@ -1097,7 +1097,7 @@ class Cylinder(Detector):
                     z=tcap_points[:, 2],
                     mode='markers',
                     marker=dict(size=4, color='green', opacity=0.8),
-                    name=f'Top Cap Detectors ({len(tcap_indices)})'
+                    name=f'Top Cap Sensors ({len(tcap_indices)})'
                 ))
             
             if bcap_indices:
@@ -1108,7 +1108,7 @@ class Cylinder(Detector):
                     z=bcap_points[:, 2],
                     mode='markers',
                     marker=dict(size=4, color='red', opacity=0.8),
-                    name=f'Bottom Cap Detectors ({len(bcap_indices)})'
+                    name=f'Bottom Cap Sensors ({len(bcap_indices)})'
                 ))
 
         fig.update_layout(
@@ -1159,7 +1159,7 @@ class Sphere(Detector):
         # For sphere, all sensors are on surface (case 0)
         self.ID_to_case = {i: 0 for i in range(len(self.all_points))}
 
-    def visualize_geometry_wireframe(self, show_detectors=True):
+    def visualize_geometry_wireframe(self, show_sensors=True):
         """Visualize the sphere as a wireframe with detectors"""
         fig = go.Figure()
 
@@ -1186,7 +1186,7 @@ class Sphere(Detector):
                 z=self.all_points[:, 2],
                 mode='markers',
                 marker=dict(size=4, color='red', opacity=0.8),
-                name=f'Detectors ({self.n_sensors})'
+                name=f'Sensors ({self.n_sensors})'
             ))
 
         fig.update_layout(
@@ -1340,7 +1340,7 @@ class Box(Detector):
         
         return np.array(points[:n_sensors])  # Trim to exact count
 
-    def visualize_geometry_wireframe(self, show_detectors=True):
+    def visualize_geometry_wireframe(self, show_sensors=True):
         """Visualize the box as a wireframe with detectors"""
         fig = go.Figure()
 
@@ -1400,7 +1400,7 @@ class Box(Detector):
         ))
 
         if show_detectors:
-            # Color code detectors by face
+            # Color code sensors by face
             colors = ['blue', 'darkblue', 'green', 'darkgreen', 'red', 'darkred']
             face_names_full = ['Front', 'Back', 'Left', 'Right', 'Top', 'Bottom']
             
@@ -1414,7 +1414,7 @@ class Box(Detector):
                         z=face_points[:, 2],
                         mode='markers',
                         marker=dict(size=4, color=colors[case], opacity=0.8),
-                        name=f'{face_names_full[case]} Detectors ({len(indices)})'
+                        name=f'{face_names_full[case]} Sensors ({len(indices)})'
                     ))
 
         fig.update_layout(
