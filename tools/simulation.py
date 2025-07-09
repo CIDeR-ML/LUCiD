@@ -1,6 +1,11 @@
 from tools.generate import get_isotropic_rays, photonsim_differentiable_get_rays, predict_t0
 
-from tools.propagate import create_photon_propagator, create_sphere_photon_propagator
+from tools.propagate import (
+    create_photon_propagator, 
+    create_sphere_photon_propagator,
+    create_box_photon_propagator,
+    create_propagator_by_geometry
+)
 from tools.geometry import generate_detector
 from tools.utils import unpack_t0_params
 import jax
@@ -49,7 +54,7 @@ def setup_event_simulator(json_filename, n_photons=1_000_000, temperature=0.2, K
         - False: Monte Carlo sampling
         - None: Auto-select based on mode
     detector_type : str, optional
-        Type of detector geometry: 'Cylinder' or 'Sphere'. Default is 'Cylinder' for backward compatibility.
+        Type of detector geometry: 'Cylinder', 'Sphere', or 'Box'. Default is 'Cylinder' for backward compatibility.
 
     Returns
     -------
@@ -62,8 +67,8 @@ def setup_event_simulator(json_filename, n_photons=1_000_000, temperature=0.2, K
     """
     
     # Validate detector type
-    if detector_type not in ['Cylinder', 'Sphere']:
-        raise ValueError(f"detector_type must be 'Cylinder' or 'Sphere', got {detector_type}")
+    if detector_type not in ['Cylinder', 'Sphere', 'Box']:
+        raise ValueError(f"detector_type must be 'Cylinder', 'Sphere', or 'Box', got {detector_type}")
     
     # Initialize detector configuration based on type
     if detector_type == 'Cylinder':
@@ -100,12 +105,32 @@ def setup_event_simulator(json_filename, n_photons=1_000_000, temperature=0.2, K
             n_divisions=100,
             max_detectors_per_cell=max_detectors_per_cell
         )
+        
+    elif detector_type == 'Box':
+        # Use box implementation
+        detector = generate_detector(json_filename)
+        detector_points = jnp.array(detector.all_points)
+        photosensor_radius = detector.S_radius
+        box_length = detector.L
+        box_width = detector.W
+        box_height = detector.H
+        
+        # Setup box photon propagator
+        propagate_photons = create_box_photon_propagator(
+            detector_points,
+            photosensor_radius,
+            length=box_length,
+            width=box_width,
+            height=box_height,
+            temperature=temperature,
+            max_detectors_per_cell=max_detectors_per_cell
+        )
 
-    # Get number of detectors from the points array (common for both types)
+    # Get number of detectors from the points array (common for all types)
     NUM_DETECTORS = len(detector_points)
 
     # Create the event simulator with a fixed number of scattering iterations K
-    # (This part remains the same for both detector types)
+    # (This part remains the same for all detector types)
     simulate_event = create_event_simulator(
         detector,
         propagate_photons,
@@ -116,7 +141,8 @@ def setup_event_simulator(json_filename, n_photons=1_000_000, temperature=0.2, K
         is_data,
         is_calibration,
         max_detectors_per_cell,
-        use_expected_value
+        use_expected_value,
+        detector_type
     )
 
     return simulate_event
@@ -410,8 +436,9 @@ def photon_iteration_update_factors(position, direction, time, surface_distance,
     scatter_dir = compute_scatter_direction(direction, k3)
 
     # Blend the two possibilities for continuing paths.
+    #new_pos = reflection_weight * reflection_pos + scatter_weight * scatter_pos
     new_pos = reflection_weight * reflection_pos + scatter_weight * scatter_pos
-    new_dir = reflection_dir
+    new_dir = normalize(reflection_weight * reflection_dir + scatter_weight * scatter_dir)
 
     # Calculate the continuing factor (reflection + scatter)
     continuing_factor = reflect_prob * reflection_attenuation + scatter_prob * scatter_attenuation
@@ -630,7 +657,7 @@ def make_hits_data(flat_weights, flat_indices, flat_times, num_detectors):
 
 
 def create_event_simulator(detector, propagate_photons, Nphot, NUM_DETECTORS, detector_points, K,
-                           is_data, is_calibration, max_detectors_per_cell, use_expected_value=None):
+                           is_data, is_calibration, max_detectors_per_cell, use_expected_value=None, detector_type='Cylinder'):
     """
     Create an event simulator with the appropriate configuration.
 
@@ -779,16 +806,30 @@ def create_event_simulator(detector, propagate_photons, Nphot, NUM_DETECTORS, de
             propagate_photons, photon_update_fn
         )
 
-    @partial(jax.jit, static_argnames=('r', 'h'))
-    def get_inside_detector_flag(positions, r, h):
-        x, y, z = positions[:, 0], positions[:, 1], positions[:, 2]
-        eps = 0 # Dont change without validations
-        inside_xy_circle = (x**2 + y**2) <= (r+eps)**2
-        # For z: check if |z| ≤ h/2
-        inside_z_bounds = (z >= -h/2-eps) & (z <= h/2+eps)
-        # Combine conditions
-        inside_cylinder = inside_xy_circle & inside_z_bounds
-        return inside_cylinder
+    # Create geometry-specific bounds check function
+    if detector_type == 'Cylinder':
+        def get_inside_detector_flag(positions):
+            """Cylinder bounds check function."""
+            x, y, z = positions[:, 0], positions[:, 1], positions[:, 2]
+            eps = 0 # Dont change without validations
+            inside_xy_circle = (x**2 + y**2) <= (detector.r+eps)**2
+            inside_z_bounds = (z >= -detector.H/2-eps) & (z <= detector.H/2+eps)
+            return inside_xy_circle & inside_z_bounds
+    elif detector_type == 'Sphere':
+        def get_inside_detector_flag(positions):
+            """Sphere bounds check function."""
+            distances = jnp.linalg.norm(positions, axis=1)
+            eps = 0 # Dont change without validations
+            return distances <= detector.r + eps
+    elif detector_type == 'Box':
+        from tools.propagate_box import box_bounds_check
+        def get_inside_detector_flag(positions):
+            """Box bounds check function."""
+            return box_bounds_check(positions, detector.L, detector.W, detector.H)
+    else:
+        def get_inside_detector_flag(positions):
+            """Fallback bounds check function."""
+            return jnp.ones(positions.shape[0], dtype=bool)
 
     @partial(jax.jit, static_argnames=(
     'n_rays', 'K', 'max_detectors_per_cell', 'num_detectors', 'propagate_fn', 'photon_update_fn'))
@@ -887,8 +928,8 @@ def create_event_simulator(detector, propagate_photons, Nphot, NUM_DETECTORS, de
             # jax.debug.print("AAA - Iteration {}: Found {} problematic new direc NaN", i, jnp.sum(nan_dir_mask))
             # jax.debug.print("AAA - Iteration {}: Found {} problematic new cont fact NaN", i, jnp.sum(nan_factors_mask))
 
-            # nan_count = jnp.sum(problematic_rays)
-            # jax.debug.print("Iteration {}: Found {} problematic rays with NaN", i, nan_count)
+            nan_count = jnp.sum(problematic_rays)
+            jax.debug.print("Iteration {}: Found {} problematic rays with NaN", i, nan_count)
 
             # Replace NaN outputs with safe values
             safe_new_positions = jnp.where(
@@ -909,12 +950,25 @@ def create_event_simulator(detector, propagate_photons, Nphot, NUM_DETECTORS, de
                 new_times      # Use computed direction
             )
 
-            inside_detector = get_inside_detector_flag(new_positions, detector.r, detector.H)
+
+            # jax.debug.print("A - Zero Cont Fact: {}", jnp.sum(continuing_factors==0))
+            # jax.debug.print("A - Problem Rays: {}", jnp.sum(problematic_rays))
+
+            inside_detector = get_inside_detector_flag(new_positions)
+            
+            jax.debug.print("Rays summary:")
+            jax.debug.print("A - NotIn Rays: {}", jnp.sum( get_inside_detector_flag(new_positions)==False))
+            jax.debug.print("C - NotIn Rays: {}", jnp.sum(get_inside_detector_flag(hit_positions)==False))
+            jax.debug.print("B - NotIn Rays: {}", jnp.sum(get_inside_detector_flag(current_positions)==False))
+            
+
             safe_continuing_factors = jnp.where(
                 (problematic_rays) | (inside_detector==False),
                 0.0,                # Kill the ray (zero intensity)
                 continuing_factors  # Use computed factor
             )
+
+            # jax.debug.print("Z - Zero Cont Fact: {}", jnp.sum(safe_continuing_factors==0))
 
             # Calculate intensities
             detected_intensity_factors = detect_probs * reflection_attenuations
