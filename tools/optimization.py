@@ -26,8 +26,8 @@ from tools.simulation import setup_event_simulator
 
 # def create_debug_multi_objective_optimizer(
 #     simulate_event,
-#     detector_points,
-#     detector_params,
+#     sensor_points,
+#     sensor_params,
 #     energy_lr,
 #     spatial_lr,
 #     lambda_time,
@@ -53,7 +53,7 @@ from tools.simulation import setup_event_simulator
         
 #         # Simulate event
 #         try:
-#             simulated_data = simulate_event(params, detector_params, event_key)
+#             simulated_data = simulate_event(params, sensor_params, event_key)
 #             simulated_charge, _ = simulated_data
 #         except Exception as e:
 #             if debug_mode:
@@ -108,7 +108,7 @@ from tools.simulation import setup_event_simulator
 #             print(f"Input params: E={energy:.2f}, pos={position}, angles={angles}")
         
 #         try:
-#             simulated_data = simulate_event(params, detector_params, event_key)
+#             simulated_data = simulate_event(params, sensor_params, event_key)
 #             simulated_charge, simulated_time = simulated_data
 #         except Exception as e:
 #             if debug_mode:
@@ -134,9 +134,9 @@ from tools.simulation import setup_event_simulator
 #         sim_time_centered = jnp.where(sim_active_mask, simulated_time - sim_mean_time, 0.0)
         
 #         # Distance matrix and soft assignments
-#         N = detector_points.shape[0]
+#         N = sensor_points.shape[0]
 #         dist = jnp.linalg.norm(
-#             detector_points[:, None, :] - detector_points[None, :, :], axis=-1
+#             sensor_points[:, None, :] - sensor_points[None, :, :], axis=-1
 #         )
         
 #         # Soft assignments Sim -> True
@@ -249,7 +249,7 @@ from tools.simulation import setup_event_simulator
     
 #     return energy_loss, spatial_loss
 
-# def test_energy_sensitivity(params, simulate_event, detector_params, true_event_data, energy_deltas=[0.1, 1.0, 10.0]):
+# def test_energy_sensitivity(params, simulate_event, sensor_params, true_event_data, energy_deltas=[0.1, 1.0, 10.0]):
 #     """
 #     Test energy sensitivity using finite differences.
 #     """
@@ -275,7 +275,7 @@ from tools.simulation import setup_event_simulator
 #             test_params = (jnp.array(energy), position, angles)
 #             key = jax.random.PRNGKey(12345 + i)  # Use different keys
             
-#             sim_charge, _ = simulate_event(test_params, detector_params, key)
+#             sim_charge, _ = simulate_event(test_params, sensor_params, key)
 #             total_sim = jnp.sum(sim_charge)
 #             charges_test.append(float(total_sim))
             
@@ -294,8 +294,8 @@ from tools.simulation import setup_event_simulator
 
 def create_multi_objective_optimizer(
     simulate_event,
-    detector_points,
-    detector_params,
+    sensor_points,
+    sensor_params,
     energy_lr,
     spatial_lr,
     lambda_time,
@@ -309,7 +309,7 @@ def create_multi_objective_optimizer(
 
         true_charge, true_time = true_event_data
         
-        simulated_data = simulate_event(params, detector_params, event_key)
+        simulated_data = simulate_event(params, sensor_params, event_key)
         simulated_charge, _ = simulated_data
         
         total_true_charge = jnp.sum(true_charge)
@@ -324,7 +324,7 @@ def create_multi_objective_optimizer(
 
         true_charge, true_time = true_event_data
         
-        simulated_data = simulate_event(params, detector_params, event_key)
+        simulated_data = simulate_event(params, sensor_params, event_key)
         simulated_charge, simulated_time = simulated_data
         
         # Use the spatial loss computation from your original softmin loss
@@ -342,9 +342,9 @@ def create_multi_objective_optimizer(
         sim_time_centered = jnp.where(sim_active_mask, simulated_time - sim_mean_time, 0.0)
 
         # Distance matrix and soft assignments
-        N = detector_points.shape[0]
+        N = sensor_points.shape[0]
         dist = jnp.linalg.norm(
-            detector_points[:, None, :] - detector_points[None, :, :], axis=-1
+            sensor_points[:, None, :] - sensor_points[None, :, :], axis=-1
         )
 
         # Soft assignments Sim -> True
@@ -500,7 +500,7 @@ def run_multi_objective_optimization(
 
 
 @partial(jax.jit, static_argnums=(0, 1))
-def generate_random_initial_guess(spatial_grad_fn, energy_grad_fn, true_event_data, event_key, detector_points):
+def generate_random_initial_guess(spatial_grad_fn, energy_grad_fn, true_event_data, event_key, sensor_points):
     """
     Generate random initial parameters within reasonable bounds.
     
@@ -509,7 +509,7 @@ def generate_random_initial_guess(spatial_grad_fn, energy_grad_fn, true_event_da
         energy_grad_fn: Energy gradient function (not used, kept for consistency)
         true_event_data: True event data (not used, kept for consistency)
         event_key: JAX random key
-        detector_points: Array of detector positions to infer cylinder dimensions
+        sensor_points: Array of sensor positions to infer cylinder dimensions
     
     Returns:
         (energy, position, angles) tuple with random initial values
@@ -520,14 +520,14 @@ def generate_random_initial_guess(spatial_grad_fn, energy_grad_fn, true_event_da
     # Random energy between 200 and 800 MeV
     energy_guess = jax.random.uniform(key_energy, shape=(), minval=200., maxval=800.)
     
-    # Infer cylinder dimensions from detector points
+    # Infer cylinder dimensions from sensor points
     # Calculate radius as maximum distance from origin in xy-plane
-    xy_distances = jnp.sqrt(detector_points[:, 0]**2 + detector_points[:, 1]**2)
+    xy_distances = jnp.sqrt(sensor_points[:, 0]**2 + sensor_points[:, 1]**2)
     max_radius = jnp.max(xy_distances)
     
     # Calculate height as z-range
-    z_min = jnp.min(detector_points[:, 2])
-    z_max = jnp.max(detector_points[:, 2])
+    z_min = jnp.min(sensor_points[:, 2])
+    z_max = jnp.max(sensor_points[:, 2])
     height = z_max - z_min
     
     # Use 80% of the inferred dimensions
@@ -696,7 +696,7 @@ def run_multi_event_optimization(
     
     # Setup code (same as before)
     detector = generate_detector(json_filename)
-    detector_points = jnp.array(detector.all_points)
+    sensor_points = jnp.array(detector.all_points)
     
     if verbose:
         print(f"Running parameter optimization on {N_events} events...")
@@ -705,10 +705,10 @@ def run_multi_event_optimization(
         
         if initial_guess_method == 'random':
             # Calculate and display detector dimensions for random initialization
-            xy_distances = jnp.sqrt(detector_points[:, 0]**2 + detector_points[:, 1]**2)
+            xy_distances = jnp.sqrt(sensor_points[:, 0]**2 + sensor_points[:, 1]**2)
             max_radius = jnp.max(xy_distances)
-            z_min = jnp.min(detector_points[:, 2])
-            z_max = jnp.max(detector_points[:, 2])
+            z_min = jnp.min(sensor_points[:, 2])
+            z_max = jnp.max(sensor_points[:, 2])
             height = z_max - z_min
             print(f"Detector dimensions: radius={float(max_radius):.2f}m, height={float(height):.2f}m")
             print(f"Random initialization will use 80% of these dimensions: radius={float(0.8*max_radius):.2f}m, height={float(0.8*height):.2f}m")
@@ -718,7 +718,7 @@ def run_multi_event_optimization(
     if base_seed is None:
         base_seed = int(time.time())
     
-    detector_params = (
+    sensor_params = (
         jnp.array(4.),
         jnp.array(0.2),
         jnp.array(6.),
@@ -737,8 +737,8 @@ def run_multi_event_optimization(
 
     energy_grad_fn, spatial_grad_fn, energy_optimizer, spatial_optimizer = create_multi_objective_optimizer(
         simulate_event=simulate_event,
-        detector_points=detector_points,
-        detector_params=detector_params,
+        sensor_points=sensor_points,
+        sensor_params=sensor_params,
         energy_lr=energy_lr,
         spatial_lr=spatial_lr,
         lambda_time=lambda_time,
@@ -758,13 +758,13 @@ def run_multi_event_optimization(
         true_params = (true_energy, true_position, true_direction_angles)
         all_results['true_params'].append(true_params)
         
-        true_event_data = jax.lax.stop_gradient(simulate_event(true_params, detector_params, subkey1))
+        true_event_data = jax.lax.stop_gradient(simulate_event(true_params, sensor_params, subkey1))
         
         # Generate initial guess using the selected method
         if initial_guess_method == 'grid_scan':
             initial_params = grid_scan_initial_guess_vectorized(spatial_grad_fn, energy_grad_fn, true_event_data, subkey2)
         elif initial_guess_method == 'random':
-            initial_params = generate_random_initial_guess(spatial_grad_fn, energy_grad_fn, true_event_data, subkey3, detector_points)
+            initial_params = generate_random_initial_guess(spatial_grad_fn, energy_grad_fn, true_event_data, subkey3, sensor_points)
         else:
             raise ValueError(f"Unknown initial_guess_method: {initial_guess_method}. Must be 'grid_scan' or 'random'.")
         
@@ -1791,7 +1791,7 @@ def plot_single_event_comparison(event_indices, results, save_path=None, figsize
 @jit
 def get_initial_guess(
         charges: jnp.ndarray,
-        detector_points: jnp.ndarray,
+        sensor_points: jnp.ndarray,
         energy_scaling_factor: float = 0.0213,
         energy_scale_intercept: float = 213.11,
         key: jnp.ndarray = None,
@@ -1806,8 +1806,8 @@ def get_initial_guess(
     ----------
     charges : jnp.ndarray
         Array of charge values for detector hits
-    detector_points : jnp.ndarray
-        Array of detector positions where hits occurred
+    sensor_points : jnp.ndarray
+        Array of sensor positions where hits occurred
     intensity_scale : float
         Scale factor for intensity estimation
     key : jnp.ndarray
@@ -1827,11 +1827,11 @@ def get_initial_guess(
     else:
         position = jnp.zeros(3)
 
-    # Get average direction by weighting detector positions by charge
+    # Get average direction by weighting sensor positions by charge
     total_charge = jnp.sum(charges)
     charge_weights = charges / (total_charge + 1e-8)
 
-    vectors_to_hits = detector_points - position
+    vectors_to_hits = sensor_points - position
     vectors_to_hits = vectors_to_hits / (jnp.linalg.norm(vectors_to_hits, axis=1, keepdims=True) + 1e-8)
 
     # Get direction from vectors

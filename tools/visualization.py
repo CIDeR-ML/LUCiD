@@ -46,9 +46,9 @@ def create_detector_display(json_filename='../config/cyl_geom_config.json', spar
         raise ValueError(f"This visualization is designed for cylinders, got {detector_type}")
 
     # Set up detector information
-    detector_positions = np.array(detector.all_points)
-    detector_cases = np.array([detector.ID_to_case[i] for i in range(len(detector.all_points))])
-    n_detectors = len(detector_positions)
+    sensor_positions = np.array(detector.all_points)
+    sensor_cases = np.array([detector.ID_to_case[i] for i in range(len(detector.all_points))])
+    n_sensors = len(sensor_positions)
 
     def display_detector_data(*args, file_name=None, plot_time=False, log_scale=False, vmin=None, vmax=None):
         """
@@ -87,8 +87,8 @@ def create_detector_display(json_filename='../config/cyl_geom_config.json', spar
             loaded_indices, loaded_charges, loaded_times = args
 
             # Convert sparse to full arrays
-            all_charges = sparse_to_full(loaded_indices, loaded_charges, n_detectors)
-            all_times = sparse_to_full(loaded_indices, loaded_times, n_detectors)
+            all_charges = sparse_to_full(loaded_indices, loaded_charges, n_sensors)
+            all_times = sparse_to_full(loaded_indices, loaded_times, n_sensors)
         else:
             if len(args) != 2:
                 raise ValueError("Dense format requires two arguments: charges and times arrays")
@@ -137,25 +137,25 @@ def create_detector_display(json_filename='../config/cyl_geom_config.json', spar
         caps_offset = 1.05*height/2 +radius
 
         # Calculate positions for all cases
-        x = np.zeros(n_detectors)
-        y = np.zeros(n_detectors)
+        x = np.zeros(n_sensors)
+        y = np.zeros(n_sensors)
 
         # Barrel case (0)
-        barrel_mask = detector_cases == 0
-        theta = np.arctan2(detector_positions[barrel_mask, 1], detector_positions[barrel_mask, 0])
+        barrel_mask = sensor_cases == 0
+        theta = np.arctan2(sensor_positions[barrel_mask, 1], sensor_positions[barrel_mask, 0])
         theta = (theta + np.pi * 3 / 2) % (2 * np.pi) / 2
         x[barrel_mask] = theta * radius * 2
-        y[barrel_mask] = detector_positions[barrel_mask, 2]
+        y[barrel_mask] = sensor_positions[barrel_mask, 2]
 
         # Top cap case (1)
-        top_mask = detector_cases == 1
-        x[top_mask] = corr * detector_positions[top_mask, 0] + np.pi * radius
-        y[top_mask] = corr * (caps_offset + detector_positions[top_mask, 1])
+        top_mask = sensor_cases == 1
+        x[top_mask] = corr * sensor_positions[top_mask, 0] + np.pi * radius
+        y[top_mask] = corr * (caps_offset + sensor_positions[top_mask, 1])
 
         # Bottom cap case (2)
-        bottom_mask = detector_cases == 2
-        x[bottom_mask] = corr * detector_positions[bottom_mask, 0] + np.pi * radius
-        y[bottom_mask] = corr * (-caps_offset - detector_positions[bottom_mask, 1])
+        bottom_mask = sensor_cases == 2
+        x[bottom_mask] = corr * sensor_positions[bottom_mask, 0] + np.pi * radius
+        y[bottom_mask] = corr * (-caps_offset - sensor_positions[bottom_mask, 1])
 
         # Calculate the minimum distance between points in the transformed space
         transformed_positions = np.column_stack((x, y))
@@ -258,9 +258,9 @@ def create_detector_comparison_display(json_filename='config/cyl_geom_config.jso
         raise ValueError(f"This visualization is designed for cylinders, got {detector_type}")
 
     # Set up detector information
-    detector_positions = np.array(detector.all_points)
-    detector_cases = np.array([detector.ID_to_case[i] for i in range(len(detector.all_points))])
-    n_detectors = len(detector_positions)
+    sensor_positions = np.array(detector.all_points)
+    sensor_cases = np.array([detector.ID_to_case[i] for i in range(len(detector.all_points))])
+    n_sensors = len(sensor_positions)
 
     def display_detector_data(true_data, sim_data, file_name=None, plot_time=False, align_time=False, colorbar_range=None):
         """
@@ -289,10 +289,10 @@ def create_detector_comparison_display(json_filename='config/cyl_geom_config.jso
             sim_indices, sim_charges, sim_times = sim_data
 
             # Convert to full arrays
-            true_charges_full = sparse_to_full(true_indices, true_charges, n_detectors)
-            sim_charges_full = sparse_to_full(sim_indices, sim_charges, n_detectors)
-            true_times_full = sparse_to_full(true_indices, true_times, n_detectors)
-            sim_times_full = sparse_to_full(sim_indices, sim_times, n_detectors)
+            true_charges_full = sparse_to_full(true_indices, true_charges, n_sensors)
+            sim_charges_full = sparse_to_full(sim_indices, sim_charges, n_sensors)
+            true_times_full = sparse_to_full(true_indices, true_times, n_sensors)
+            sim_times_full = sparse_to_full(sim_indices, sim_times, n_sensors)
         else:
             # Data is already in full format
             true_charges_full, true_times_full = true_data
@@ -357,25 +357,25 @@ def create_detector_comparison_display(json_filename='config/cyl_geom_config.jso
         caps_offset = 1.05*height/2 +radius
 
         # Calculate positions for all cases
-        x = np.zeros(n_detectors)
-        y = np.zeros(n_detectors)
+        x = np.zeros(n_sensors)
+        y = np.zeros(n_sensors)
 
         # Barrel case (0)
-        barrel_mask = detector_cases == 0
-        theta = np.arctan2(detector_positions[barrel_mask, 1], detector_positions[barrel_mask, 0])
+        barrel_mask = sensor_cases == 0
+        theta = np.arctan2(sensor_positions[barrel_mask, 1], sensor_positions[barrel_mask, 0])
         theta = (theta + np.pi * 3 / 2) % (2 * np.pi) / 2
         x[barrel_mask] = theta * radius * 2
-        y[barrel_mask] = detector_positions[barrel_mask, 2]
+        y[barrel_mask] = sensor_positions[barrel_mask, 2]
 
         # Top cap case (1)
-        top_mask = detector_cases == 1
-        x[top_mask] = corr * detector_positions[top_mask, 0] + np.pi * radius
-        y[top_mask] = 1 + corr * (caps_offset + detector_positions[top_mask, 1])
+        top_mask = sensor_cases == 1
+        x[top_mask] = corr * sensor_positions[top_mask, 0] + np.pi * radius
+        y[top_mask] = 1 + corr * (caps_offset + sensor_positions[top_mask, 1])
 
         # Bottom cap case (2)
-        bottom_mask = detector_cases == 2
-        x[bottom_mask] = corr * detector_positions[bottom_mask, 0] + np.pi * radius
-        y[bottom_mask] = -1 + corr * (-caps_offset - detector_positions[bottom_mask, 1])
+        bottom_mask = sensor_cases == 2
+        x[bottom_mask] = corr * sensor_positions[bottom_mask, 0] + np.pi * radius
+        y[bottom_mask] = -1 + corr * (-caps_offset - sensor_positions[bottom_mask, 1])
 
         # Calculate the minimum distance between points in the transformed space
         transformed_positions = np.column_stack((x, y))

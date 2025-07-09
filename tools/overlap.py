@@ -237,7 +237,7 @@ def create_overlap_prob(sigma: Optional[float],
                         num_sparse: int = 50,
                         d_max_factor: float = 10.0,
                         use_cache: bool = True) -> Callable[[float], float]:
-    """Creates a function that calculates overlap probability between detector and photon.
+    """Creates a function that calculates overlap probability between sensor and photon.
 
     Parameters
     ----------
