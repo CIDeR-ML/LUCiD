@@ -340,10 +340,15 @@ def photon_iteration_sample(position, direction, time, surface_distance,
     scatters = ~reaches_surface
 
     # Calculate new position based on outcome
+    epsilon = 1e-4  # Small value to stay inside
+    # the fraction of 'errors' for a given epislon change with the detector size.
+    # this is because the numerical error in direction over a large distance translates into a relatively larger deviation
+    # for HK-size epsilon 1e-4 translates into a few tens of rays going out of the detector per each million after several steps.
+    # The rule of thumb is that epsilon needs to go down/up proportionally to the detector size.
     new_pos = jnp.where(
         scatters,
-        position + scatter_distance * direction,
-        position + surface_distance * direction
+        position + scatter_distance * normalize(direction),
+        position + (surface_distance - epsilon) * normalize(direction)  # Pull back from boundary
     )
 
     # Calculate new direction
@@ -430,13 +435,17 @@ def photon_iteration_update_factors(position, direction, time, surface_distance,
     scatter_weight = action_weights[1]
 
     # Compute the candidate positions and directions.
-    reflection_pos = position + surface_distance * direction
-    scatter_pos = position + scatter_distance * direction
+    epsilon = 1e-4  # Small value to stay inside
+    # the fraction of 'errors' for a given epislon change with the detector size.
+    # this is because the numerical error in direction over a large distance translates into a relatively larger deviation
+    # for HK-size epsilon 1e-4 translates into a few tens of rays going out of the detector per each million after several steps.
+    # The rule of thumb is that epsilon needs to go down/up proportionally to the detector size.
+    reflection_pos = position + (surface_distance - epsilon) * normalize(direction)  # Pull back from boundary
+    scatter_pos = position + scatter_distance * normalize(direction)
     reflection_dir = compute_reflection_direction(direction, normal)
     scatter_dir = compute_scatter_direction(direction, k3)
 
     # Blend the two possibilities for continuing paths.
-    #new_pos = reflection_weight * reflection_pos + scatter_weight * scatter_pos
     new_pos = reflection_weight * reflection_pos + scatter_weight * scatter_pos
     new_dir = normalize(reflection_weight * reflection_dir + scatter_weight * scatter_dir)
 
@@ -898,7 +907,7 @@ def create_event_simulator(detector, propagate_photons, Nphot, NUM_DETECTORS, de
             normals = prop_results['normals']
 
             # Compute distances to intersection points
-            surface_distances = jnp.linalg.norm(hit_positions - current_positions, axis=1)
+            surface_distances = jnp.linalg.norm(hit_positions - current_positions, axis=1)-1e-6
 
             # Generate RNG keys for each photon
             key, subkey = jax.random.split(key)
@@ -958,7 +967,6 @@ def create_event_simulator(detector, propagate_photons, Nphot, NUM_DETECTORS, de
             
             jax.debug.print("Rays summary:")
             jax.debug.print("A - NotIn Rays: {}", jnp.sum( get_inside_detector_flag(new_positions)==False))
-            jax.debug.print("C - NotIn Rays: {}", jnp.sum(get_inside_detector_flag(hit_positions)==False))
             jax.debug.print("B - NotIn Rays: {}", jnp.sum(get_inside_detector_flag(current_positions)==False))
             
 
@@ -968,7 +976,7 @@ def create_event_simulator(detector, propagate_photons, Nphot, NUM_DETECTORS, de
                 continuing_factors  # Use computed factor
             )
 
-            # jax.debug.print("Z - Zero Cont Fact: {}", jnp.sum(safe_continuing_factors==0))
+            jax.debug.print("Z - Zero Cont Fact: {}", jnp.sum(safe_continuing_factors==0))
 
             # Calculate intensities
             detected_intensity_factors = detect_probs * reflection_attenuations
