@@ -11,20 +11,20 @@ def compute_simple_loss(
         sigma_time: float = 100.0,
         eps: float = 1e-8,
 ) -> float:
-    """Compute point-wise loss between true and simulated detector measurements.
+    """Compute point-wise loss between true and simulated sensor measurements.
 
-    Calculates loss between true and simulated detectors comparing PMT charge and time measurements. (same PMTs)
+    Calculates loss between true and simulated sensors comparing PMT charge and time measurements. (same PMTs)
 
     Parameters
     ----------
     true_charge : ndarray
-        Array of shape (N_detectors,) containing true charge measurements
+        Array of shape (N_sensors,) containing true charge measurements
     true_time : ndarray
-        Array of shape (N_detectors,) containing true timing measurements. Not used in this loss
+        Array of shape (N_sensors,) containing true timing measurements. Not used in this loss
     simulated_charge : ndarray
-        Array of shape (N_detectors,) containing simulated charge predictions
+        Array of shape (N_sensors,) containing simulated charge predictions
     simulated_time : ndarray
-        Array of shape (N_detectors,) containing simulated timing predictions. Not used in this loss
+        Array of shape (N_sensors,) containing simulated timing predictions. Not used in this loss
     sigma_time : float, optional
         Scale factor for temporal differences, by default 0.1
     eps : float, optional
@@ -55,7 +55,7 @@ import jax.numpy as jnp
 
 
 def compute_loss_with_time(
-        detector_points: jnp.ndarray,
+        sensor_points: jnp.ndarray,
         true_charge: jnp.ndarray,
         true_time: jnp.ndarray,
         simulated_charge: jnp.ndarray,
@@ -73,7 +73,7 @@ def compute_loss_with_time(
         d_total^2 = (d_space)^2 + lambda_time * (d_time)^2,
     with:
         d_space = ||x_i - x_j|| / tau_position,
-        d_time  = |t_i' - T_j'| / tau_time,  (after subtracting the mean over active detectors)
+        d_time  = |t_i' - T_j'| / tau_time,  (after subtracting the mean over active sensors)
     and similarity:
         S = 1 / (1 + d_total^2).
 
@@ -85,16 +85,16 @@ def compute_loss_with_time(
 
     Parameters
     ----------
-    detector_points : jnp.ndarray
-        Array of shape (N_detectors, 3) with detector coordinates.
+    sensor_points : jnp.ndarray
+        Array of shape (N_sensors, 3) with sensor coordinates.
     true_charge : jnp.ndarray
-        Array of shape (N_detectors,) with true charges.
+        Array of shape (N_sensors,) with true charges.
     true_time : jnp.ndarray
-        Array of shape (N_detectors,) with true times.
+        Array of shape (N_sensors,) with true times.
     simulated_charge : jnp.ndarray
-        Array of shape (N_detectors,) with simulated charges.
+        Array of shape (N_sensors,) with simulated charges.
     simulated_time : jnp.ndarray
-        Array of shape (N_detectors,) with simulated times.
+        Array of shape (N_sensors,) with simulated times.
     tau_position : float, optional
         Scale factor for spatial distances, by default 0.05.
     tau_time : float, optional
@@ -104,7 +104,7 @@ def compute_loss_with_time(
     eps : float, optional
         Small constant to prevent division by zero, by default 1e-8.
     threshold : float, optional
-        Threshold for considering a detector active, by default 1e-8.
+        Threshold for considering a sensor active, by default 1e-8.
 
     Returns
     -------
@@ -113,7 +113,7 @@ def compute_loss_with_time(
     """
     # --- Spatial distances ---
     spatial_dist = jnp.linalg.norm(
-        detector_points[:, jnp.newaxis, :] - detector_points[jnp.newaxis, :, :],
+        sensor_points[:, jnp.newaxis, :] - sensor_points[jnp.newaxis, :, :],
         axis=2
     ) / tau_position
     spatial_dist_sq = spatial_dist ** 2
@@ -122,7 +122,7 @@ def compute_loss_with_time(
     true_active = true_charge > threshold
     sim_active = simulated_charge > threshold
 
-    # --- Time normalization (only for active detectors) ---
+    # --- Time normalization (only for active sensors) ---
     mean_true_time = jax.lax.stop_gradient(jnp.sum(jnp.where(true_active, true_time, 0.0)) / (jnp.sum(true_active) + eps))
     mean_sim_time = jax.lax.stop_gradient(jnp.sum(jnp.where(sim_active, simulated_time, 0.0)) / (jnp.sum(sim_active) + eps))
     true_time_normalized = jnp.where(true_active, true_time - mean_true_time, 0.0)
@@ -161,7 +161,7 @@ def compute_loss_with_time(
     
 @jit
 def compute_softmin_loss(
-        detector_points: jnp.ndarray,
+        sensor_points: jnp.ndarray,
         true_charge: jnp.ndarray,
         true_time: jnp.ndarray,
         simulated_charge: jnp.ndarray,
@@ -173,14 +173,14 @@ def compute_softmin_loss(
         lambda_intensity: float = 1.0
 ) -> float:
     """
-    Compute a differentiable loss using soft assignments between simulated and true detectors.
+    Compute a differentiable loss using soft assignments between simulated and true sensors.
     Times are mean-subtracted considering only active (non-zero charge) locations.
-    This version uses absolute distance scales where the distance between detector differences is controlled by tau
+    This version uses absolute distance scales where the distance between sensor differences is controlled by tau
 
     Parameters
     ----------
-    detector_points : jnp.ndarray
-        Array of shape (N, 3) with detector coordinates.
+    sensor_points : jnp.ndarray
+        Array of shape (N, 3) with sensor coordinates.
     true_charge : jnp.ndarray
         Array of shape (N,) of true charges.
     true_time : jnp.ndarray
@@ -194,7 +194,7 @@ def compute_softmin_loss(
     eps : float, optional
         Small constant to prevent division by zero, by default 1e-8
     threshold : float, optional
-        Threshold for considering a detector active, by default 1e-8
+        Threshold for considering a sensor active, by default 1e-8
     lambda_time : float, optional
         Scaling factor for time loss, by default 1.0.
     lambda_intensity : float, optional
@@ -224,9 +224,9 @@ def compute_softmin_loss(
     intensity_loss = jnp.abs(jnp.log(total_sim_charge / (total_true_charge + eps)))
 
     # Compute distance matrix d[i,j] = ||x_i - x_j||
-    N = detector_points.shape[0]
+    N = sensor_points.shape[0]
     dist = jnp.linalg.norm(
-        detector_points[:, None, :] - detector_points[None, :, :],
+        sensor_points[:, None, :] - sensor_points[None, :, :],
         axis=-1
     )  # Shape (N, N)
 
@@ -267,7 +267,7 @@ def compute_softmin_loss(
 
 @jit
 def compute_simplified_loss(
-        detector_points: jnp.ndarray,
+        sensor_points: jnp.ndarray,
         true_charge: jnp.ndarray,
         true_time: jnp.ndarray,
         simulated_charge: jnp.ndarray,
@@ -286,8 +286,8 @@ def compute_simplified_loss(
 
     Parameters
     ----------
-    detector_points : jnp.ndarray
-        Array of shape (N, 3) with detector coordinates.
+    sensor_points : jnp.ndarray
+        Array of shape (N, 3) with sensor coordinates.
     true_charge : jnp.ndarray
         Array of shape (N,) of true charges.
     true_time : jnp.ndarray
@@ -299,7 +299,7 @@ def compute_simplified_loss(
     eps : float, optional
         Small constant to prevent division by zero, by default 1e-8
     threshold : float, optional
-        Threshold for considering a detector active, by default 1e-8
+        Threshold for considering a sensor active, by default 1e-8
     lambda_centroid : float, optional
         Scaling factor for centroid loss, by default 1.0.
     lambda_time : float, optional
@@ -330,8 +330,8 @@ def compute_simplified_loss(
     # 2. Centroid Loss
     # --------------------------------------
     # Calculate charge-weighted centroids
-    true_centroid = jnp.sum(true_charge[:, None] * detector_points, axis=0) / (total_true_charge + eps)
-    sim_centroid = jnp.sum(simulated_charge[:, None] * detector_points, axis=0) / (total_sim_charge + eps)
+    true_centroid = jnp.sum(true_charge[:, None] * sensor_points, axis=0) / (total_true_charge + eps)
+    sim_centroid = jnp.sum(simulated_charge[:, None] * sensor_points, axis=0) / (total_sim_charge + eps)
 
     # Euclidean distance between centroids
     L_centroid = jnp.linalg.norm(true_centroid - sim_centroid) * lambda_centroid

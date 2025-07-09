@@ -332,7 +332,7 @@ def predict_t0_wrapper(distance, energy, params):
 
 def generate_events_from_root(event_simulator, root_file_path, output_dir='events', n_events=None, 
                             n_rings=1, pion_root_file_path=None,
-                            max_detectors_per_cell=4, batch_size=100):
+                            max_sensors_per_cell=4, batch_size=100):
     """
     Generate and save events from a ROOT file, with support for N rings of particles.
     Ring 1 (N=1) is always a muon, and additional rings (N>1) are pions.
@@ -351,8 +351,8 @@ def generate_events_from_root(event_simulator, root_file_path, output_dir='event
         First ring is always a muon, additional rings are pions
     pion_root_file_path : str, optional
         Path to ROOT file for pions, required if n_rings > 1, by default None
-    max_detectors_per_cell : int, optional
-        Maximum detectors per cell, by default 4
+    max_sensors_per_cell : int, optional
+        Maximum sensors per cell, by default 4
     batch_size : int, optional
         Number of events to accumulate before saving in parallel, by default 100
         
@@ -622,7 +622,7 @@ def generate_events_from_root(event_simulator, root_file_path, output_dir='event
 
 def generate_multi_folder_events(event_simulator, root_file_path, folder_names, events_per_folder, 
                                n_rings_list=None, pion_root_file_path=None,
-                               max_detectors_per_cell=4, batch_size=100):
+                               max_sensors_per_cell=4, batch_size=100):
     """
     Generate events across multiple folders, each with sequentially numbered events.
     
@@ -639,8 +639,8 @@ def generate_multi_folder_events(event_simulator, root_file_path, folder_names, 
         Number of rings for each folder, by default None (1 ring for all folders)
     pion_root_file_path : str, optional
         Path to ROOT file for pions, required if n_rings > 1 in any folder, by default None
-    max_detectors_per_cell : int, optional
-        Maximum detectors per cell, by default 4
+    max_sensors_per_cell : int, optional
+        Maximum sensors per cell, by default 4
     batch_size : int, optional
         Number of events to accumulate before saving in parallel, by default 100
         
@@ -689,7 +689,7 @@ def generate_multi_folder_events(event_simulator, root_file_path, folder_names, 
             n_events=n_events,
             n_rings=n_rings,
             pion_root_file_path=pion_root_file_path,
-            max_detectors_per_cell=max_detectors_per_cell,
+            max_sensors_per_cell=max_sensors_per_cell,
             batch_size=batch_size
         )
         
@@ -761,7 +761,7 @@ def read_photon_data_from_photonsim(root_file_path, entry_index):
     }
 
 
-def generate_events_from_photonsim(event_simulator, root_file_path, detector_params, output_dir=None, 
+def generate_events_from_photonsim(event_simulator, root_file_path, sensor_params, output_dir=None, 
                                   n_events=None, batch_size=100):
     """
     Generate and save events from a PhotonSim ROOT file.
@@ -771,7 +771,7 @@ def generate_events_from_photonsim(event_simulator, root_file_path, detector_par
     ----------
     event_simulator : function
         The event simulation function to use
-    detector_params: tuple
+    sensor_params: tuple
         scattering length, reflection rate, absorption length and gumbel_softmax
     root_file_path : str
         Path to the PhotonSim ROOT file
@@ -823,7 +823,7 @@ def generate_events_from_photonsim(event_simulator, root_file_path, detector_par
         # Lists to accumulate batch data
         batch_data = []
         batch_track_params = []
-        batch_detector_params = []
+        batch_sensor_params = []
         batch_filenames = []
         batch_indices = []
         
@@ -879,7 +879,7 @@ def generate_events_from_photonsim(event_simulator, root_file_path, detector_par
             photon_data['N'] = N
                         
             # Run simulation
-            charges, times = event_simulator(track_params, detector_params, sim_key, photon_data)
+            charges, times = event_simulator(track_params, sensor_params, sim_key, photon_data)
             
             # Create filename with sequential numbering (event_0.h5, event_1.h5, etc.)
             event_number = i
@@ -900,7 +900,7 @@ def generate_events_from_photonsim(event_simulator, root_file_path, detector_par
             # Store the event data for batch processing
             batch_data.append(([charges], [times], extended_info))
             batch_track_params.append(track_params)
-            batch_detector_params.append(detector_params)
+            batch_sensor_params.append(sensor_params)
             batch_filenames.append(filename)
             batch_indices.append(event_number)
         
