@@ -10,8 +10,8 @@ from tools.overlap import create_overlap_prob
 
 
 def process_intersection_normals(ray_origins, ray_directions, intersection_point,
-                                 t_geometry, detector_normals, detector_hit_positions,
-                                 inside_detector, geometry_normals):
+                                 t_geometry, sensor_normals, sensor_hit_positions,
+                                 inside_sensor, geometry_normals):
     """
     Main function to process all normal and position calculations for intersections.
     
@@ -27,12 +27,12 @@ def process_intersection_normals(ray_origins, ray_directions, intersection_point
         Points of intersection with geometry
     t_geometry : ndarray
         Intersection times with geometry
-    detector_normals : ndarray
-        Normal vectors for detector intersections
-    detector_hit_positions : ndarray
-        Hit positions for detector intersections
-    inside_detector : ndarray
-        Boolean array indicating which rays hit inside detectors
+    sensor_normals : ndarray
+        Normal vectors for sensor intersections
+    sensor_hit_positions : ndarray
+        Hit positions for sensor intersections
+    inside_sensor : ndarray
+        Boolean array indicating which rays hit inside sensors
     geometry_normals : ndarray
         Normal vectors for the geometry surface
         
@@ -41,14 +41,14 @@ def process_intersection_normals(ray_origins, ray_directions, intersection_point
     dict
         Contains hit positions and normals
     """
-    # Calculate weighted detector properties
-    weighted_detector_normals, weighted_detector_positions = calculate_weighted_detector_properties(
-        detector_normals, detector_hit_positions, inside_detector)
+    # Calculate weighted sensor properties
+    weighted_sensor_normals, weighted_sensor_positions = calculate_weighted_sensor_properties(
+        sensor_normals, sensor_hit_positions, inside_sensor)
 
     # Calculate final hit properties
     hit_positions, final_normals = calculate_hit_properties(
-        ray_origins, ray_directions, t_geometry, inside_detector,
-        weighted_detector_normals, weighted_detector_positions,
+        ray_origins, ray_directions, t_geometry, inside_sensor,
+        weighted_sensor_normals, weighted_sensor_positions,
         geometry_normals)
     
     return {
@@ -57,41 +57,41 @@ def process_intersection_normals(ray_origins, ray_directions, intersection_point
     }
 
 
-def calculate_weighted_detector_properties(detector_normals, detector_hit_positions,
-                                           inside_detector):
+def calculate_weighted_sensor_properties(sensor_normals, sensor_hit_positions,
+                                           inside_sensor):
     """
-    Calculate weighted normals and positions for detector hits.
+    Calculate weighted normals and positions for sensor hits.
     
     Parameters
     ----------
-    detector_normals : ndarray
-        Normal vectors for all potential detector intersections
-    detector_hit_positions : ndarray
-        Hit positions for all potential detector intersections
-    inside_detector : ndarray
-        Boolean array indicating which rays hit inside detectors
+    sensor_normals : ndarray
+        Normal vectors for all potential sensor intersections
+    sensor_hit_positions : ndarray
+        Hit positions for all potential sensor intersections
+    inside_sensor : ndarray
+        Boolean array indicating which rays hit inside sensors
         
     Returns
     -------
     tuple
-        Weighted detector normals and positions
+        Weighted sensor normals and positions
     """
-    detector_weights = inside_detector[..., None]
+    sensor_weights = inside_sensor[..., None]
     
     # Calculate weighted normals
-    weighted_normals = jnp.sum(detector_normals * detector_weights, axis=0)
-    detector_weights_sum = jnp.sum(inside_detector, axis=0)[..., None]
-    weighted_normals = weighted_normals / (detector_weights_sum + 1e-10)
+    weighted_normals = jnp.sum(sensor_normals * sensor_weights, axis=0)
+    sensor_weights_sum = jnp.sum(inside_sensor, axis=0)[..., None]
+    weighted_normals = weighted_normals / (sensor_weights_sum + 1e-10)
     
     # Calculate weighted positions
-    weighted_positions = jnp.sum(detector_hit_positions * detector_weights, axis=0)
-    weighted_positions = weighted_positions / (detector_weights_sum + 1e-10)
+    weighted_positions = jnp.sum(sensor_hit_positions * sensor_weights, axis=0)
+    weighted_positions = weighted_positions / (sensor_weights_sum + 1e-10)
     
     return weighted_normals, weighted_positions
 
 
-def calculate_hit_properties(ray_origins, ray_directions, t_geometry, inside_detector,
-                             weighted_detector_normals, weighted_detector_positions,
+def calculate_hit_properties(ray_origins, ray_directions, t_geometry, inside_sensor,
+                             weighted_sensor_normals, weighted_sensor_positions,
                              geometry_normals):
     """
     Calculate final hit positions and normals based on intersection type.
@@ -104,12 +104,12 @@ def calculate_hit_properties(ray_origins, ray_directions, t_geometry, inside_det
         Direction vectors of rays
     t_geometry : ndarray
         Intersection times with geometry
-    inside_detector : ndarray
-        Boolean array indicating which rays hit inside detectors
-    weighted_detector_normals : ndarray
-        Weighted normal vectors for detector hits
-    weighted_detector_positions : ndarray
-        Weighted positions for detector hits
+    inside_sensor : ndarray
+        Boolean array indicating which rays hit inside sensors
+    weighted_sensor_normals : ndarray
+        Weighted normal vectors for sensor hits
+    weighted_sensor_positions : ndarray
+        Weighted positions for sensor hits
     geometry_normals : ndarray
         Normal vectors for geometry hits
         
@@ -121,23 +121,23 @@ def calculate_hit_properties(ray_origins, ray_directions, t_geometry, inside_det
     # Calculate geometry hit positions
     geometry_hit_positions = ray_origins + t_geometry[:, None] * ray_directions
     
-    # Determine if any detector was hit
-    hit_detector = jnp.any(inside_detector, axis=0)
+    # Determine if any sensor was hit
+    hit_sensor = jnp.any(inside_sensor, axis=0)
     
     # Select appropriate hit position
-    hit_positions = jnp.where(hit_detector[:, None],
-                              weighted_detector_positions,
+    hit_positions = jnp.where(hit_sensor[:, None],
+                              weighted_sensor_positions,
                               geometry_hit_positions)
     
     # Select appropriate normal
-    final_normals = jnp.where(hit_detector[:, None],
-                              weighted_detector_normals,
+    final_normals = jnp.where(hit_sensor[:, None],
+                              weighted_sensor_normals,
                               geometry_normals)
     
     return hit_positions, final_normals
 
 
-def compute_detector_intersections_base(sensor_idx, sensor_positions, sensor_radius,
+def compute_sensor_intersections_base(sensor_idx, sensor_positions, sensor_radius,
                                         ray_origins, ray_directions, geometry_bounds_check,
                                         overlap_prob):
     """
@@ -267,10 +267,10 @@ def calculate_linear_index_base(indices, grid_dims, index_map):
 
 
 @partial(jax.jit, static_argnums=(2,))
-def find_closest_detectors(grid_centers, detector_positions, max_detectors_per_cell):
-    """Find closest detectors to each grid cell center"""
+def find_closest_sensors(grid_centers, sensor_positions, max_sensors_per_cell):
+    """Find closest sensors to each grid cell center"""
     squared_distances = jnp.sum(
-        (grid_centers[:, None, :] - detector_positions[None, :, :]) ** 2,
+        (grid_centers[:, None, :] - sensor_positions[None, :, :]) ** 2,
         axis=2
     )
-    return jax.lax.top_k(-squared_distances, max_detectors_per_cell)[1]
+    return jax.lax.top_k(-squared_distances, max_sensors_per_cell)[1]

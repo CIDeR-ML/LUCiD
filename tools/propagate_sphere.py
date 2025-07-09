@@ -8,8 +8,8 @@ from functools import partial
 from jax import lax
 
 from tools.propagate_base import (
-    process_intersection_normals, compute_detector_intersections_base,
-    find_closest_detectors
+    process_intersection_normals, compute_sensor_intersections_base,
+    find_closest_sensors
 )
 from tools.overlap import create_overlap_prob
 
@@ -168,15 +168,15 @@ def sphere_bounds_check(points, radius):
 
 
 @partial(jax.jit, static_argnums=(2, 3))
-def assign_detectors_to_sphere_grid(detectors, detector_radius, radius, n_divisions):
-    """Assign detectors to spherical grid cells, handling overlap across cell boundaries.
+def assign_sensors_to_sphere_grid(sensors, sensor_radius, radius, n_divisions):
+    """Assign sensors to spherical grid cells, handling overlap across cell boundaries.
 
     Parameters
     ----------
     detectors : jnp.ndarray
-        Array of detector positions, shape (n_detectors, 3)
-    detector_radius : float
-        Radius of each detector
+        Array of sensor positions, shape (n_detectors, 3)
+    sensor_radius : float
+        Radius of each sensor
     radius : float
         Sphere radius
     n_divisions : int
@@ -196,7 +196,7 @@ def assign_detectors_to_sphere_grid(detectors, detector_radius, radius, n_divisi
         r = jnp.linalg.norm(relative_pos)
         
         # Check if detector is approximately on sphere surface
-        on_surface = jnp.abs(r - radius) <= detector_radius
+        on_surface = jnp.abs(r - radius) <= sensor_radius
         
         def assign_surface():
             theta = jnp.arccos(jnp.clip(relative_pos[2] / (r + 1e-10), -1.0, 1.0))
@@ -212,12 +212,12 @@ def assign_detectors_to_sphere_grid(detectors, detector_radius, radius, n_divisi
             theta_frac = (theta / jnp.pi * n_theta) % 1
             phi_frac = (phi / (2 * jnp.pi) * n_phi) % 1
             
-            # Angular size of detector relative to grid cell size
+            # Angular size of sensor relative to grid cell size
             theta_cell_size = jnp.pi / n_theta
             phi_cell_size = 2 * jnp.pi / n_phi
             
-            # Approximate angular size of detector on sphere surface
-            angular_size = detector_radius / radius
+            # Approximate angular size of sensor on sphere surface
+            angular_size = sensor_radius / radius
             
             include_theta_up = theta_frac >= 1 - angular_size / theta_cell_size
             include_theta_down = theta_frac <= angular_size / theta_cell_size
@@ -263,20 +263,20 @@ def assign_detectors_to_sphere_grid(detectors, detector_radius, radius, n_divisi
         
         return lax.cond(on_surface, assign_surface, assign_off_surface)
     
-    return jax.vmap(assign_single_detector)(detectors)
+    return jax.vmap(assign_single_sensor)(sensors)
 
 
 @partial(jax.jit, static_argnums=(1,))
-def create_detector_sphere_grid_map(assignments, n_divisions):
+def create_sensor_sphere_grid_map(assignments, n_divisions):
     """
-    Creates a grid map counting the number of detectors in each cell of the spherical detector grid.
+    Creates a grid map counting the number of sensors in each cell of the spherical sensor grid.
     """
     n_theta = n_divisions
     n_phi = 2 * n_divisions
     total_cells = n_theta * n_phi
     grid = jnp.zeros(total_cells, dtype=jnp.int32)
     
-    def update_grid(detector_assignments):
+    def update_grid(sensor_assignments):
         def update_cell(cell, g):
             theta_idx, phi_idx = cell
             is_valid = (theta_idx != -1) & (phi_idx != -1)
@@ -324,15 +324,15 @@ def calculate_sphere_grid_centers(radius, n_divisions):
 
 
 @partial(jax.jit, static_argnums=(2, 3, 4), device=jax.devices('cpu')[0])
-def create_inverted_sphere_detector_map(assignments_geometric, assignments_distance, n_divisions,
-                                       max_detectors_per_cell, num_detectors):
+def create_inverted_sphere_sensor_map(assignments_geometric, assignments_distance, n_divisions,
+                                       max_sensors_per_cell, num_detectors):
     """Create inverted detector map for sphere prioritizing geometric intersections then closest detectors"""
     n_theta = n_divisions
     n_phi = 2 * n_divisions
     total_cells = n_theta * n_phi
     
     # Initialize map
-    inverted_map = jnp.full((total_cells, max_detectors_per_cell), -1, dtype=jnp.int32)
+    inverted_map = jnp.full((total_cells, max_sensors_per_cell), -1, dtype=jnp.int32)
     
     def update_cell(carry, i):
         inv_map = carry
@@ -350,7 +350,7 @@ def create_inverted_sphere_detector_map(assignments_geometric, assignments_dista
                      (detector_assignments[:, 1] == phi_idx)
             
             cell_matches = jnp.any(matches)
-            should_add = cell_matches & (curr_count < max_detectors_per_cell)
+            should_add = cell_matches & (curr_count < max_sensors_per_cell)
             
             new_map = jnp.where(
                 should_add,
@@ -386,7 +386,7 @@ def create_inverted_sphere_detector_map(assignments_geometric, assignments_dista
             )
             
             # Add if not duplicate and have space
-            should_add = (~is_duplicate) & (curr_count < max_detectors_per_cell)
+            should_add = (~is_duplicate) & (curr_count < max_sensors_per_cell)
             
             new_map = jnp.where(
                 should_add,
@@ -414,8 +414,8 @@ def create_inverted_sphere_detector_map(assignments_geometric, assignments_dista
     return final_map
 
 
-def find_intersected_sphere_detectors_differentiable(ray_origins, ray_directions, detector_positions, detector_radius,
-                                                    radius, n_divisions, inverted_detector_map,
+def find_intersected_sphere_sensors_differentiable(ray_origins, ray_directions, sensor_positions, sensor_radius,
+                                                    radius, n_divisions, inverted_sensor_map,
                                                     temperature, overlap_prob):
     """
     Finds detectors intersected by rays using a differentiable approximation with overlap-based weights.
@@ -438,25 +438,25 @@ def find_intersected_sphere_detectors_differentiable(ray_origins, ray_directions
         return jnp.clip(idx, 0, total_cells - 1)
 
     idx = calculate_linear_index(theta_idx, phi_idx)
-    potential_detectors = jax.lax.stop_gradient(inverted_detector_map[idx])
+    potential_sensors = jax.lax.stop_gradient(inverted_sensor_map[idx])
 
     # Create bounds check function
     bounds_check = lambda points: sphere_bounds_check(points, radius)
 
     # Process all potential detectors
-    detector_results = jax.vmap(
-        lambda det_idx: compute_detector_intersections_base(
-            det_idx, detector_positions, detector_radius,
+    sensor_results = jax.vmap(
+        lambda det_idx: compute_sensor_intersections_base(
+            det_idx, sensor_positions, sensor_radius,
             ray_origins, ray_directions, bounds_check, overlap_prob
         )
-    )(potential_detectors.T)
+    )(potential_sensors.T)
     
-    weights = detector_results[0]
-    detector_times = detector_results[1]
-    detector_indices = detector_results[2]
-    detector_normals = detector_results[3]
-    inside_detector = detector_results[4]
-    detector_hit_positions = detector_results[5]
+    weights = sensor_results[0]
+    sensor_times = sensor_results[1]
+    sensor_indices = sensor_results[2]
+    detector_normals = sensor_results[3]
+    inside_detector = sensor_results[4]
+    detector_hit_positions = sensor_results[5]
 
     # Calculate sphere surface normals
     sphere_normals = calculate_sphere_normals(intersection_point)
@@ -471,10 +471,10 @@ def find_intersected_sphere_detectors_differentiable(ray_origins, ray_directions
     final_normals = intersection_results['normals']
 
     result = {
-        'times': detector_times,
+        'times': sensor_times,
         'detector_weights': weights,
-        'detector_indices': detector_indices,
-        'per_detector_positions': detector_hit_positions,
+        'sensor_indices': sensor_indices,
+        'per_sensor_positions': detector_hit_positions,
         'positions': hit_positions,
         'normals': final_normals,
         'detector_normals': detector_normals,
@@ -484,41 +484,41 @@ def find_intersected_sphere_detectors_differentiable(ray_origins, ray_directions
     return result if not single_ray else jax.tree_map(lambda x: x[0], result)
 
 
-def create_sphere_photon_propagator(detector_positions, detector_radius, sphere_radius=4.0, n_divisions=50,
-                                   temperature=0.2, max_detectors_per_cell=4):
+def create_sphere_photon_propagator(sensor_positions, sensor_radius, sphere_radius=4.0, n_divisions=50,
+                                   temperature=0.2, max_sensors_per_cell=4):
     """
     Creates a JIT-compiled function for efficient photon propagation simulation in sphere geometry.
     """
 
-    assignments_geometric = assign_detectors_to_sphere_grid(
-        detector_positions, detector_radius, sphere_radius, n_divisions)
+    assignments_geometric = assign_sensors_to_sphere_grid(
+        sensor_positions, sensor_radius, sphere_radius, n_divisions)
 
-    detector_grid_map = create_detector_sphere_grid_map(
+    detector_grid_map = create_sensor_sphere_grid_map(
         assignments_geometric, n_divisions)
 
-    assignments_distance = find_closest_detectors(
+    assignments_distance = find_closest_sensors(
         calculate_sphere_grid_centers(sphere_radius, n_divisions),
-        detector_positions,
-        max_detectors_per_cell
+        sensor_positions,
+        max_sensors_per_cell
     )
 
-    inverted_detector_map = create_inverted_sphere_detector_map(
+    inverted_sensor_map = create_inverted_sphere_sensor_map(
         assignments_geometric,
         assignments_distance,
         n_divisions,
-        max_detectors_per_cell, detector_positions.shape[0]
+        max_sensors_per_cell, sensor_positions.shape[0]
     )
 
     if temperature is None:
-        overlap_prob = create_overlap_prob(temperature, detector_radius)
+        overlap_prob = create_overlap_prob(temperature, sensor_radius)
     else:
-        overlap_prob = create_overlap_prob(temperature * detector_radius, detector_radius)
+        overlap_prob = create_overlap_prob(temperature * sensor_radius, sensor_radius)
 
     @jax.jit
     def propagate_photons(photon_origins, photon_directions):
-        return find_intersected_sphere_detectors_differentiable(
-            photon_origins, photon_directions, detector_positions, detector_radius,
-            sphere_radius, n_divisions, inverted_detector_map,
+        return find_intersected_sphere_sensors_differentiable(
+            photon_origins, photon_directions, sensor_positions, sensor_radius,
+            sphere_radius, n_divisions, inverted_sensor_map,
             temperature, overlap_prob)
 
     return propagate_photons
