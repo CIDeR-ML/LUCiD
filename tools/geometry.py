@@ -281,7 +281,7 @@ def calculate_surface_normals(detector, detector_indices):
     
     Parameters:
     -----------
-    detector : Detector (Cylinder or Sphere)
+    detector : Detector (Cylinder, Sphere, or Box)
         Detector geometry object
     detector_indices : array-like
         Indices of detectors to calculate normals for
@@ -294,7 +294,7 @@ def calculate_surface_normals(detector, detector_indices):
     positions = detector.all_points[detector_indices]
     normals = np.zeros_like(positions)
     
-    if hasattr(detector, 'H'):  # Cylinder
+    if isinstance(detector, Cylinder):
         for i, idx in enumerate(detector_indices):
             pos = positions[i]
             case = detector.ID_to_case[idx]
@@ -308,11 +308,28 @@ def calculate_surface_normals(detector, detector_indices):
                 normals[i] = np.array([0, 0, 1])
             elif case == 2:  # Bottom cap  
                 normals[i] = np.array([0, 0, -1])
-    else:  # Sphere
+    elif isinstance(detector, Sphere):
         for i, pos in enumerate(positions):
             # Normal points radially outward from sphere center
             normal = pos - detector.C
             normals[i] = normal / np.linalg.norm(normal)
+    elif isinstance(detector, Box):
+        for i, idx in enumerate(detector_indices):
+            case = detector.ID_to_case[idx]
+            
+            # Box faces: 0=front(+y), 1=back(-y), 2=left(-x), 3=right(+x), 4=top(+z), 5=bottom(-z)
+            if case == 0:  # Front face (+y)
+                normals[i] = np.array([0, 1, 0])
+            elif case == 1:  # Back face (-y)
+                normals[i] = np.array([0, -1, 0])
+            elif case == 2:  # Left face (-x)
+                normals[i] = np.array([-1, 0, 0])
+            elif case == 3:  # Right face (+x)
+                normals[i] = np.array([1, 0, 0])
+            elif case == 4:  # Top face (+z)
+                normals[i] = np.array([0, 0, 1])
+            elif case == 5:  # Bottom face (-z)
+                normals[i] = np.array([0, 0, -1])
     
     return normals
 
@@ -676,17 +693,19 @@ class Detector(ABC):
             margin=dict(l=0, r=margin_right, t=0, b=0)
         )
         
-        if figname:
-            fig.write_image(figname)
+        # if figname:
+        #     fig.write_image(figname)
 
         fig.show()
 
     def _add_detector_surface(self, fig, surface_color='gray'):
         """Add detector surface to the plot"""
-        if hasattr(self, 'H'):  # Cylinder
+        if isinstance(self, Cylinder):
             self._add_cylinder_surface(fig, surface_color)
-        else:  # Sphere
+        elif isinstance(self, Sphere):
             self._add_sphere_surface(fig, surface_color)
+        elif isinstance(self, Box):
+            self._add_box_surface(fig, surface_color)
     
     def _add_cylinder_surface(self, fig, surface_color='gray'):
         """Add cylindrical surface to the plot with offset to avoid disc overlap"""
@@ -773,6 +792,106 @@ class Detector(ABC):
             hoverinfo='skip',
             hovertemplate=None,
             hoverlabel=None
+        ))
+    
+    def _add_box_surface(self, fig, surface_color='gray'):
+        """Add box surface to the plot with offset to avoid disc overlap"""
+        # Offset to avoid overlap with discs
+        offset = 0.995
+        
+        # Define box vertices with offset
+        x_min, x_max = -offset*self.L/2 + self.C[0], offset*self.L/2 + self.C[0]
+        y_min, y_max = -offset*self.W/2 + self.C[1], offset*self.W/2 + self.C[1]
+        z_min, z_max = -offset*self.H/2 + self.C[2], offset*self.H/2 + self.C[2]
+        
+        # Front face (+y)
+        x_front = [x_min, x_max, x_max, x_min, x_min]
+        z_front = [z_min, z_min, z_max, z_max, z_min]
+        y_front = [y_max] * 5
+        
+        fig.add_trace(go.Mesh3d(
+            x=x_front, y=y_front, z=z_front,
+            i=[0, 0], j=[1, 2], k=[2, 3],
+            opacity=1.0,
+            color=surface_color,
+            showscale=False,
+            name='Front Face',
+            showlegend=False,
+            hoverinfo='skip'
+        ))
+        
+        # Back face (-y)
+        y_back = [y_min] * 5
+        
+        fig.add_trace(go.Mesh3d(
+            x=x_front, y=y_back, z=z_front,
+            i=[0, 0], j=[1, 2], k=[2, 3],
+            opacity=1.0,
+            color=surface_color,
+            showscale=False,
+            name='Back Face',
+            showlegend=False,
+            hoverinfo='skip'
+        ))
+        
+        # Left face (-x)
+        x_left = [x_min] * 5
+        y_left = [y_min, y_max, y_max, y_min, y_min]
+        z_left = [z_min, z_min, z_max, z_max, z_min]
+        
+        fig.add_trace(go.Mesh3d(
+            x=x_left, y=y_left, z=z_left,
+            i=[0, 0], j=[1, 2], k=[2, 3],
+            opacity=1.0,
+            color=surface_color,
+            showscale=False,
+            name='Left Face',
+            showlegend=False,
+            hoverinfo='skip'
+        ))
+        
+        # Right face (+x)
+        x_right = [x_max] * 5
+        
+        fig.add_trace(go.Mesh3d(
+            x=x_right, y=y_left, z=z_left,
+            i=[0, 0], j=[1, 2], k=[2, 3],
+            opacity=1.0,
+            color=surface_color,
+            showscale=False,
+            name='Right Face',
+            showlegend=False,
+            hoverinfo='skip'
+        ))
+        
+        # Top face (+z)
+        x_top = [x_min, x_max, x_max, x_min, x_min]
+        y_top = [y_min, y_min, y_max, y_max, y_min]
+        z_top = [z_max] * 5
+        
+        fig.add_trace(go.Mesh3d(
+            x=x_top, y=y_top, z=z_top,
+            i=[0, 0], j=[1, 2], k=[2, 3],
+            opacity=1.0,
+            color=surface_color,
+            showscale=False,
+            name='Top Face',
+            showlegend=False,
+            hoverinfo='skip'
+        ))
+        
+        # Bottom face (-z)
+        z_bottom = [z_min] * 5
+        
+        fig.add_trace(go.Mesh3d(
+            x=x_top, y=y_top, z=z_bottom,
+            i=[0, 0], j=[1, 2], k=[2, 3],
+            opacity=1.0,
+            color=surface_color,
+            showscale=False,
+            name='Bottom Face',
+            showlegend=False,
+            hoverinfo='skip'
         ))
 
 
@@ -1085,6 +1204,234 @@ class Sphere(Detector):
 
 
 # ============================================================================
+# BOX DETECTOR CLASS
+# ============================================================================
+
+class Box(Detector):
+    """Box (rectangular prism) detector geometry"""
+    
+    def __init__(self, length, width, height, n_sensors, sensor_radius):
+        """
+        Initialize box detector.
+        
+        Parameters:
+        -----------
+        length : float
+            Length of the box (x-dimension)
+        width : float
+            Width of the box (y-dimension)
+        height : float
+            Height of the box (z-dimension)
+        n_sensors : int
+            Number of photosensors
+        sensor_radius : float
+            Radius of individual sensors
+        """
+        super().__init__(n_sensors, sensor_radius)
+        self.L = length
+        self.W = width
+        self.H = height
+        self.place_photosensors()
+
+    def place_photosensors(self):
+        """Position the photo sensor centers proportionally by surface area."""
+        # Calculate surface areas for each face
+        front_back_area = 2 * self.L * self.H
+        left_right_area = 2 * self.W * self.H
+        top_bottom_area = 2 * self.L * self.W
+        total_area = front_back_area + left_right_area + top_bottom_area
+        
+        # Distribute sensors proportionally
+        n_front_back = int(self.n_sensors * front_back_area / total_area)
+        n_left_right = int(self.n_sensors * left_right_area / total_area)
+        n_top_bottom = self.n_sensors - n_front_back - n_left_right
+        
+        n_per_front_back = n_front_back // 2
+        n_per_left_right = n_left_right // 2
+        n_per_top_bottom = n_top_bottom // 2
+        
+        # Place sensors on each face
+        self.front_points = self._place_face_sensors(n_per_front_back, self.L, self.H, 'front')
+        self.back_points = self._place_face_sensors(n_per_front_back, self.L, self.H, 'back')
+        self.left_points = self._place_face_sensors(n_per_left_right, self.W, self.H, 'left')
+        self.right_points = self._place_face_sensors(n_per_left_right, self.W, self.H, 'right')
+        self.top_points = self._place_face_sensors(n_per_top_bottom, self.L, self.W, 'top')
+        self.bottom_points = self._place_face_sensors(n_per_top_bottom, self.L, self.W, 'bottom')
+        
+        # Combine all points
+        self.all_points = np.concatenate([
+            self.front_points, self.back_points,
+            self.left_points, self.right_points,
+            self.top_points, self.bottom_points
+        ], axis=0)
+        
+        # Create ID mappings
+        self.ID_to_position = {i: self.all_points[i] for i in range(len(self.all_points))}
+        
+        # Create case mappings (0=front, 1=back, 2=left, 3=right, 4=top, 5=bottom)
+        self.ID_to_case = {}
+        n_front = len(self.front_points)
+        n_back = len(self.back_points)
+        n_left = len(self.left_points)
+        n_right = len(self.right_points)
+        n_top = len(self.top_points)
+        n_bottom = len(self.bottom_points)
+        
+        cumulative = 0
+        for i in range(len(self.all_points)):
+            if i < n_front:
+                self.ID_to_case[i] = 0
+            elif i < n_front + n_back:
+                self.ID_to_case[i] = 1
+            elif i < n_front + n_back + n_left:
+                self.ID_to_case[i] = 2
+            elif i < n_front + n_back + n_left + n_right:
+                self.ID_to_case[i] = 3
+            elif i < n_front + n_back + n_left + n_right + n_top:
+                self.ID_to_case[i] = 4
+            else:
+                self.ID_to_case[i] = 5
+
+    def _place_face_sensors(self, n_sensors, dim1, dim2, face):
+        """Place sensors on a rectangular face with regular grid."""
+        if n_sensors == 0:
+            return np.array([]).reshape(0, 3)
+            
+        # Calculate effective dimensions (with margins)
+        dim1_eff = dim1 - 3 * self.S_radius
+        dim2_eff = dim2 - 3 * self.S_radius
+        
+        if dim1_eff <= 0 or dim2_eff <= 0:
+            return np.array([]).reshape(0, 3)
+        
+        # Find optimal rows and columns for approximately square spacing
+        aspect_ratio = dim1_eff / dim2_eff
+        n_rows = int(np.sqrt(n_sensors / aspect_ratio))
+        n_cols = n_sensors // n_rows if n_rows > 0 else n_sensors
+        
+        # Adjust to get closer to target
+        while n_rows * n_cols < n_sensors and n_rows > 1:
+            if (n_rows + 1) * n_cols <= n_sensors:
+                n_rows += 1
+            elif n_rows * (n_cols + 1) <= n_sensors:
+                n_cols += 1
+            else:
+                break
+        
+        # Generate grid
+        pos1 = np.linspace(-dim1_eff/2, dim1_eff/2, n_cols)
+        pos2 = np.linspace(-dim2_eff/2, dim2_eff/2, n_rows)
+        
+        points = []
+        for p2 in pos2:
+            for p1 in pos1:
+                if face == 'front':  # +y face
+                    points.append([p1 + self.C[0], self.W/2 + self.C[1], p2 + self.C[2]])
+                elif face == 'back':  # -y face
+                    points.append([p1 + self.C[0], -self.W/2 + self.C[1], p2 + self.C[2]])
+                elif face == 'left':  # -x face
+                    points.append([-self.L/2 + self.C[0], p1 + self.C[1], p2 + self.C[2]])
+                elif face == 'right':  # +x face
+                    points.append([self.L/2 + self.C[0], p1 + self.C[1], p2 + self.C[2]])
+                elif face == 'top':  # +z face
+                    points.append([p1 + self.C[0], p2 + self.C[1], self.H/2 + self.C[2]])
+                elif face == 'bottom':  # -z face
+                    points.append([p1 + self.C[0], p2 + self.C[1], -self.H/2 + self.C[2]])
+        
+        return np.array(points[:n_sensors])  # Trim to exact count
+
+    def visualize_geometry_wireframe(self, show_detectors=True):
+        """Visualize the box as a wireframe with detectors"""
+        fig = go.Figure()
+
+        # Define box vertices
+        x_min, x_max = -self.L/2 + self.C[0], self.L/2 + self.C[0]
+        y_min, y_max = -self.W/2 + self.C[1], self.W/2 + self.C[1]
+        z_min, z_max = -self.H/2 + self.C[2], self.H/2 + self.C[2]
+        
+        # Create box edges
+        edges = [
+            # Bottom face edges
+            [[x_min, x_max], [y_min, y_min], [z_min, z_min]],
+            [[x_max, x_max], [y_min, y_max], [z_min, z_min]],
+            [[x_max, x_min], [y_max, y_max], [z_min, z_min]],
+            [[x_min, x_min], [y_max, y_min], [z_min, z_min]],
+            # Top face edges
+            [[x_min, x_max], [y_min, y_min], [z_max, z_max]],
+            [[x_max, x_max], [y_min, y_max], [z_max, z_max]],
+            [[x_max, x_min], [y_max, y_max], [z_max, z_max]],
+            [[x_min, x_min], [y_max, y_min], [z_max, z_max]],
+            # Vertical edges
+            [[x_min, x_min], [y_min, y_min], [z_min, z_max]],
+            [[x_max, x_max], [y_min, y_min], [z_min, z_max]],
+            [[x_max, x_max], [y_max, y_max], [z_min, z_max]],
+            [[x_min, x_min], [y_max, y_max], [z_min, z_max]],
+        ]
+        
+        # Add edges as lines
+        for edge in edges:
+            fig.add_trace(go.Scatter3d(
+                x=edge[0], y=edge[1], z=edge[2],
+                mode='lines',
+                line=dict(color='gray', width=2),
+                showlegend=False
+            ))
+
+        # Add semi-transparent faces
+        face_colors = ['lightblue', 'lightblue', 'lightgreen', 'lightgreen', 'lightcoral', 'lightcoral']
+        face_names = ['Front', 'Back', 'Left', 'Right', 'Top', 'Bottom']
+        
+        # Front face (+y)
+        x_face = [x_min, x_max, x_max, x_min, x_min]
+        z_face = [z_min, z_min, z_max, z_max, z_min]
+        fig.add_trace(go.Scatter3d(
+            x=x_face, y=[y_max]*5, z=z_face,
+            mode='lines', fill='toself',
+            line=dict(color='lightblue', width=1),
+            opacity=0.1, name='Front Face'
+        ))
+        
+        # Back face (-y)
+        fig.add_trace(go.Scatter3d(
+            x=x_face, y=[y_min]*5, z=z_face,
+            mode='lines', fill='toself',
+            line=dict(color='lightblue', width=1),
+            opacity=0.1, name='Back Face'
+        ))
+
+        if show_detectors:
+            # Color code detectors by face
+            colors = ['blue', 'darkblue', 'green', 'darkgreen', 'red', 'darkred']
+            face_names_full = ['Front', 'Back', 'Left', 'Right', 'Top', 'Bottom']
+            
+            for case in range(6):
+                indices = [i for i, c in self.ID_to_case.items() if c == case]
+                if indices:
+                    face_points = self.all_points[indices]
+                    fig.add_trace(go.Scatter3d(
+                        x=face_points[:, 0], 
+                        y=face_points[:, 1], 
+                        z=face_points[:, 2],
+                        mode='markers',
+                        marker=dict(size=4, color=colors[case], opacity=0.8),
+                        name=f'{face_names_full[case]} Detectors ({len(indices)})'
+                    ))
+
+        fig.update_layout(
+            scene=dict(
+                xaxis_title='X',
+                yaxis_title='Y',
+                zaxis_title='Z',
+                aspectmode='data'
+            ),
+            title=f'Box Detector Geometry (L={self.L}, W={self.W}, H={self.H})',
+            height=800
+        )
+
+        fig.show()
+
+
+# ============================================================================
 # CONFIGURATION AND GENERATION FUNCTIONS
 # ============================================================================
 
@@ -1107,27 +1454,63 @@ def load_detector_geom(file_path):
     elif detector_type == 'sphere':
         return (detector_type, geom_def['radius'], None, 
                 geom_def['n_sensors'], geom_def['sensor_radius'])
+    elif detector_type == 'box':
+        return (detector_type, geom_def['length'], geom_def['width'], 
+                geom_def['height'], geom_def['n_sensors'], geom_def['sensor_radius'])
     else:
         raise ValueError(f"Unknown detector type: {detector_type}")
 
 def generate_detector(file_path):
     """Function to generate detector from json config"""
-    detector_type, radius, height, n_sensors, sensor_radius = load_detector_geom(file_path)
+    geom_data = load_detector_geom(file_path)
+    detector_type = geom_data[0]
     
     if detector_type == 'cylinder':
+        _, radius, height, n_sensors, sensor_radius = geom_data
         return Cylinder(radius, height, n_sensors, sensor_radius)
     elif detector_type == 'sphere':
+        _, radius, _, n_sensors, sensor_radius = geom_data
         return Sphere(radius, n_sensors, sensor_radius)
+    elif detector_type == 'box':
+        _, length, width, height, n_sensors, sensor_radius = geom_data
+        return Box(length, width, height, n_sensors, sensor_radius)
     else:
         raise ValueError(f"Unknown detector type: {detector_type}")
 
-def generate_detector_direct(detector_type, radius, n_sensors, sensor_radius, height=None):
-    """Function to generate detector directly with parameters"""
+def generate_detector_direct(detector_type, n_sensors, sensor_radius, **kwargs):
+    """Function to generate detector directly with parameters
+    
+    Parameters:
+    -----------
+    detector_type : str
+        Type of detector ('cylinder', 'sphere', or 'box')
+    n_sensors : int
+        Number of photosensors
+    sensor_radius : float
+        Radius of individual sensors
+    **kwargs : dict
+        Additional parameters specific to detector type:
+        - cylinder: radius, height
+        - sphere: radius
+        - box: length, width, height
+    """
     if detector_type == 'cylinder':
-        if height is None:
-            raise ValueError("Height must be specified for cylinder detector")
+        radius = kwargs.get('radius')
+        height = kwargs.get('height')
+        if radius is None or height is None:
+            raise ValueError("Radius and height must be specified for cylinder detector")
         return Cylinder(radius, height, n_sensors, sensor_radius)
     elif detector_type == 'sphere':
+        radius = kwargs.get('radius')
+        if radius is None:
+            raise ValueError("Radius must be specified for sphere detector")
         return Sphere(radius, n_sensors, sensor_radius)
+    elif detector_type == 'box':
+        length = kwargs.get('length')
+        width = kwargs.get('width')
+        height = kwargs.get('height')
+        if length is None or width is None or height is None:
+            raise ValueError("Length, width, and height must be specified for box detector")
+        return Box(length, width, height, n_sensors, sensor_radius)
     else:
         raise ValueError(f"Unknown detector type: {detector_type}")

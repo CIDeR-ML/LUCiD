@@ -1,0 +1,10 @@
+{
+  "detector_type": "box",
+  "geometry_definitions": {
+    "length": 10.0,
+    "width":  7.0,
+    "height": 5.0,
+    "n_sensors": 12000,
+    "sensor_radius": 0.075
+  }
+}
