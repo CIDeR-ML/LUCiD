@@ -16,6 +16,9 @@ old_tests/
 # Training outputs
 output/
 
+# Generated data from scripts
+scripts/single_ring_initial_guess_development/generated_data/
+
 notebooks/figures/*
 
 sftp-config.json
