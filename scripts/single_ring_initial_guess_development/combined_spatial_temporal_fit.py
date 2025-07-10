@@ -23,6 +23,14 @@ from tools.utils import base_dir_path
 from tools.geometry import generate_detector
 
 
+def load_reconstruction_config(config_name="IWCD_combined_reconstruction_config.json"):
+    """Load reconstruction configuration from JSON file."""
+    config_path = os.path.join(base_dir_path(), 'config', 'reconstruction', config_name)
+    with open(config_path, 'r') as f:
+        config = json.load(f)
+    return config
+
+
 def compute_cone_cylinder_intersection(cone_vertex, cone_direction, cone_angle, 
                                      cylinder_radius, cylinder_height, n_points=1000):
     """
@@ -198,7 +206,7 @@ def identify_outer_edge_hits(hit_positions, hit_charges, percentile=85):
     return outer_edge_mask
 
 
-def fit_combined_spatial_temporal(hit_positions, hit_times, hit_charges, detector_radius=5.0, detector_height=8.0):
+def fit_combined_spatial_temporal(hit_positions, hit_times, hit_charges, detector_radius=5.0, detector_height=8.0, config=None):
     """
     Fit track parameters using BOTH spatial and temporal constraints.
     
@@ -214,6 +222,8 @@ def fit_combined_spatial_temporal(hit_positions, hit_times, hit_charges, detecto
         Radius of cylindrical detector
     detector_height : float
         Height of cylindrical detector
+    config : dict
+        Reconstruction configuration parameters
     
     Returns:
     --------
@@ -229,20 +239,23 @@ def fit_combined_spatial_temporal(hit_positions, hit_times, hit_charges, detecto
         Whether fitting was successful
     """
     
-    # Cherenkov angle (fixed)
-    n_water = 1.33
-    cherenkov_angle = np.arccos(1.0 / n_water)
+    # Load config if not provided
+    if config is None:
+        config = load_reconstruction_config()
     
-    # Physical constants (simulation units)
-    c_water = 1.0  # Speed of light in water (simulation units)
-    v_particle = 1.0  # Particle speed ≈ c
+    # Physics parameters from config
+    n_water = config['physics_parameters']['water_refractive_index']
+    cherenkov_angle = np.arccos(1.0 / n_water)
+    c_water = config['physics_parameters']['speed_of_light_water']
+    v_particle = config['physics_parameters']['particle_speed']
     
     print(f"Combined spatial-temporal fit to {len(hit_positions)} hits...")
     print(f"Using fixed Cherenkov angle: {np.degrees(cherenkov_angle):.1f}°")
     print(f"Time range (before t0 correction): {np.min(hit_times):.3f} to {np.max(hit_times):.3f}")
     
     # Identify outer edge hits for spatial weighting
-    outer_edge_mask = identify_outer_edge_hits(hit_positions, hit_charges, percentile=85)
+    outer_edge_percentile = config['hit_filtering']['outer_edge_percentile']
+    outer_edge_mask = identify_outer_edge_hits(hit_positions, hit_charges, percentile=outer_edge_percentile)
 
     def objective_function(params):
         """
@@ -298,16 +311,15 @@ def fit_combined_spatial_temporal(hit_positions, hit_times, hit_charges, detecto
             expected_time = t_emission + t_photon + t0
             temporal_residual = abs(hit_time - expected_time)
             
-            # COMBINED RESIDUAL with weighting
-            # Weight spatial more heavily for outer edge hits, temporal for all hits
+            # COMBINED RESIDUAL with weighting from config
             if outer_edge_mask[i]:
-                # Outer edge hits: strong spatial constraint, moderate temporal
-                spatial_weight = 1.0
-                temporal_weight = 0.5
+                # Outer edge hits
+                spatial_weight = config['weighting_scheme']['outer_edge_hits']['spatial_weight']
+                temporal_weight = config['weighting_scheme']['outer_edge_hits']['temporal_weight']
             else:
-                # Inner hits: moderate spatial constraint, strong temporal
-                spatial_weight = 0.1
-                temporal_weight = 0.1
+                # Inner hits
+                spatial_weight = config['weighting_scheme']['inner_hits']['spatial_weight']
+                temporal_weight = config['weighting_scheme']['inner_hits']['temporal_weight']
             
             combined_residual = (spatial_weight * spatial_residual + 
                                temporal_weight * temporal_residual) * np.sqrt(charge)
@@ -358,43 +370,54 @@ def fit_combined_spatial_temporal(hit_positions, hit_times, hit_charges, detecto
             initial_vertex = vertex_option2
             initial_direction = direction_option2
     
-    # Final safety check: ensure vertex is inside detector
+    # Final safety check: ensure vertex is inside detector (using config)
+    safety_factor = config['optimization']['initial_guess']['vertex_safety_factor']
     vertex_r = np.sqrt(initial_vertex[0]**2 + initial_vertex[1]**2)
-    if vertex_r > detector_radius * 0.9:
-        scale_factor = (detector_radius * 0.8) / vertex_r
+    if vertex_r > detector_radius * safety_factor:
+        scale_factor = (detector_radius * (safety_factor - 0.1)) / vertex_r
         initial_vertex = initial_vertex * scale_factor
-    if abs(initial_vertex[2]) > detector_height/2 * 0.9:
-        initial_vertex[2] = np.sign(initial_vertex[2]) * detector_height/2 * 0.8
+    if abs(initial_vertex[2]) > detector_height/2 * safety_factor:
+        initial_vertex[2] = np.sign(initial_vertex[2]) * detector_height/2 * (safety_factor - 0.1)
     
-    # Initial t0 guess: use value from time-only analysis
-    initial_t0 = -6.5  # From our previous analysis
+    # Initial t0 guess from config
+    initial_t0 = config['optimization']['initial_guess']['t0_offset']
     
     initial_params = np.concatenate([initial_vertex, [initial_t0], initial_direction])
     
     print(f"Initial guess - Vertex: {initial_vertex}, t0: {initial_t0:.3f}, Direction: {initial_direction}")
     
-    # Parameter bounds
+    # Parameter bounds from config
+    bounds_config = config['optimization']['parameter_bounds']
+    vertex_factor = bounds_config['vertex_x']['factor'] if bounds_config['vertex_x']['relative_to_detector_radius'] else 1.0
+    height_factor = bounds_config['vertex_z']['factor'] if bounds_config['vertex_z']['relative_to_detector_height'] else 1.0
+    t0_range = bounds_config['t0_range']
+    dir_range = bounds_config['direction_range']
+    
     bounds = [
-        (-detector_radius*0.9, detector_radius*0.9),      # x0
-        (-detector_radius*0.9, detector_radius*0.9),      # y0
-        (-detector_height/2*0.9, detector_height/2*0.9),  # z0
-        (-25.0, 0.0),  # t0 (time offset)
-        (-1.0, 1.0),  # dx
-        (-1.0, 1.0),  # dy
-        (-1.0, 1.0),  # dz
+        (-detector_radius*vertex_factor, detector_radius*vertex_factor),      # x0
+        (-detector_radius*vertex_factor, detector_radius*vertex_factor),      # y0
+        (-detector_height/2*height_factor, detector_height/2*height_factor),  # z0
+        (t0_range[0], t0_range[1]),  # t0 (time offset)
+        (dir_range[0], dir_range[1]),  # dx
+        (dir_range[0], dir_range[1]),  # dy
+        (dir_range[0], dir_range[1]),  # dz
     ]
     
     # Optimize with multiple attempts
     best_result = None
     best_loss = float('inf')
     
-    # Try just the best method from previous tests
-    methods = ['SLSQP']
+    # Optimization method and settings from config
+    opt_method = config['optimization']['method']
+    max_iter = config['optimization']['max_iterations']
+    success_threshold = config['optimization']['convergence_criteria']['success_loss_threshold']
+    
+    methods = [opt_method]
     
     for method in methods:
         try:
             result = minimize(objective_function, initial_params, bounds=bounds, 
-                             method=method, options={'maxiter': 500})
+                             method=method, options={'maxiter': max_iter})
             
             if result.success and result.fun < best_loss:
                 best_result = result
@@ -406,7 +429,7 @@ def fit_combined_spatial_temporal(hit_positions, hit_times, hit_charges, detecto
         except Exception as e:
             print(f"  {method} error: {e}")
     
-    if best_result is not None and best_result.fun < 1e6:
+    if best_result is not None and best_result.fun < success_threshold:
         fitted_vertex = best_result.x[:3]
         fitted_t0 = best_result.x[3]
         fitted_direction_unnorm = best_result.x[4:7]
@@ -439,14 +462,19 @@ def create_cylinder_surface(radius, height, center=(0, 0, 0), n_points=20):
 
 def main():
     """Main function for combined spatial-temporal reconstruction."""
-    # Load detector configuration
-    detector = generate_detector(base_dir_path() + 'config/IWCD_geom_config.json')
+    # Load reconstruction configuration
+    config = load_reconstruction_config()
+    
+    # Load detector configuration from config
+    detector_config_path = base_dir_path() + config['detector_config']
+    detector = generate_detector(detector_config_path)
     sensor_positions = jnp.array(detector.all_points)
     
     print(f"Detector geometry:")
     print(f"  Radius: {detector.r:.1f} m")
     print(f"  Height: {detector.H:.1f} m")
     print(f"  Total sensors: {len(sensor_positions)}")
+    print(f"Using reconstruction config for {config['detector_name']}")
     
     # Load generated data
     local_data_dir = os.path.join(os.path.dirname(__file__), 'generated_data')
@@ -486,8 +514,8 @@ def main():
         track_angle_to_z = np.degrees(np.arccos(np.abs(true_direction[2])))
         print(f"Track angle to Z-axis: {track_angle_to_z:.1f}° (perpendicular = 90°)")
         
-        # Filter significant hits
-        min_charge = 50.0
+        # Filter significant hits using config
+        min_charge = config['hit_filtering']['min_charge_threshold']
         significant_mask = hit_charges >= min_charge
         significant_positions = sensor_positions[significant_mask]
         significant_charges = hit_charges[significant_mask]
@@ -500,9 +528,9 @@ def main():
         
         print(f"Using {len(hit_positions)} significant hits (charge >= {min_charge})")
         
-        # Perform combined spatial-temporal reconstruction
+        # Perform combined spatial-temporal reconstruction with config
         fitted_vertex, fitted_direction, fitted_t0, fitted_cherenkov_angle, success = fit_combined_spatial_temporal(
-            hit_positions, hit_times_array, hit_charges_array, detector.r, detector.H
+            hit_positions, hit_times_array, hit_charges_array, detector.r, detector.H, config
         )
         
         if success:
@@ -549,7 +577,7 @@ def main():
             print(f"  RMS temporal residual: {np.sqrt(np.mean(temporal_residuals**2)):.3f} ns")
             
             # Compute theoretical curves for visualization
-            n_curve_points = 300  # High resolution curves
+            n_curve_points = config['visualization']['curve_resolution_points']
             
             print(f"Computing intersection curves with {n_curve_points} points...")
             print(f"Using Cherenkov angle: {np.degrees(fitted_cherenkov_angle):.1f}°")
