@@ -24,6 +24,14 @@ from tools.utils import base_dir_path
 from tools.geometry import generate_detector
 
 
+def load_reconstruction_config(config_name="IWCD_combined_reconstruction_config.json"):
+    """Load reconstruction configuration from JSON file."""
+    config_path = os.path.join(base_dir_path(), 'config', 'reconstruction', config_name)
+    with open(config_path, 'r') as f:
+        config = json.load(f)
+    return config
+
+
 def compute_cone_cylinder_intersection(cone_vertex, cone_direction, cone_angle, 
                                      cylinder_radius, cylinder_height, n_points=200):
     """
@@ -197,22 +205,25 @@ def identify_outer_edge_hits(hit_positions, hit_charges, percentile=85):
     return outer_edge_mask
 
 
-def fit_combined_spatial_temporal(hit_positions, hit_times, hit_charges, detector_radius=5.0, detector_height=8.0):
+def fit_combined_spatial_temporal(hit_positions, hit_times, hit_charges, detector_radius=5.0, detector_height=8.0, config=None):
     """
     Fit track parameters using BOTH spatial and temporal constraints.
-    Uses the same approach as your edited combined_spatial_temporal_fit.py
+    Uses the same approach as combined_spatial_temporal_fit.py with config support.
     """
     
-    # Cherenkov angle (fixed)
-    n_water = 1.33
-    cherenkov_angle = np.arccos(1.0 / n_water)
+    # Load config if not provided
+    if config is None:
+        config = load_reconstruction_config()
     
-    # Physical constants (simulation units)
-    c_water = 1.0  # Speed of light in water (simulation units)
-    v_particle = 1.0  # Particle speed ≈ c
+    # Physics parameters from config
+    n_water = config['physics_parameters']['water_refractive_index']
+    cherenkov_angle = np.arccos(1.0 / n_water)
+    c_water = config['physics_parameters']['speed_of_light_water']
+    v_particle = config['physics_parameters']['particle_speed']
     
     # Identify outer edge hits for spatial weighting
-    outer_edge_mask = identify_outer_edge_hits(hit_positions, hit_charges, percentile=85)
+    outer_edge_percentile = config['hit_filtering']['outer_edge_percentile']
+    outer_edge_mask = identify_outer_edge_hits(hit_positions, hit_charges, percentile=outer_edge_percentile)
 
     def objective_function(params):
         """
@@ -266,15 +277,15 @@ def fit_combined_spatial_temporal(hit_positions, hit_times, hit_charges, detecto
             expected_time = t_emission + t_photon + t0
             temporal_residual = abs(hit_time - expected_time)
             
-            # COMBINED RESIDUAL with your edited weighting scheme
+            # COMBINED RESIDUAL with weighting from config
             if outer_edge_mask[i]:
-                # Outer edge hits: strong spatial constraint, moderate temporal
-                spatial_weight = 1.0
-                temporal_weight = 0.5
+                # Outer edge hits
+                spatial_weight = config['weighting_scheme']['outer_edge_hits']['spatial_weight']
+                temporal_weight = config['weighting_scheme']['outer_edge_hits']['temporal_weight']
             else:
-                # Inner hits: moderate spatial constraint, strong temporal
-                spatial_weight = 0.1
-                temporal_weight = 0.1
+                # Inner hits
+                spatial_weight = config['weighting_scheme']['inner_hits']['spatial_weight']
+                temporal_weight = config['weighting_scheme']['inner_hits']['temporal_weight']
             
             combined_residual = (spatial_weight * spatial_residual + 
                                temporal_weight * temporal_residual) * np.sqrt(charge)
@@ -323,36 +334,47 @@ def fit_combined_spatial_temporal(hit_positions, hit_times, hit_charges, detecto
             initial_vertex = vertex_option2
             initial_direction = direction_option2
     
-    # Final safety check: ensure vertex is inside detector
+    # Final safety check: ensure vertex is inside detector (using config)
+    safety_factor = config['optimization']['initial_guess']['vertex_safety_factor']
     vertex_r = np.sqrt(initial_vertex[0]**2 + initial_vertex[1]**2)
-    if vertex_r > detector_radius * 0.9:
-        scale_factor = (detector_radius * 0.8) / vertex_r
+    if vertex_r > detector_radius * safety_factor:
+        scale_factor = (detector_radius * (safety_factor - 0.1)) / vertex_r
         initial_vertex = initial_vertex * scale_factor
-    if abs(initial_vertex[2]) > detector_height/2 * 0.9:
-        initial_vertex[2] = np.sign(initial_vertex[2]) * detector_height/2 * 0.8
+    if abs(initial_vertex[2]) > detector_height/2 * safety_factor:
+        initial_vertex[2] = np.sign(initial_vertex[2]) * detector_height/2 * (safety_factor - 0.1)
     
-    # Initial t0 guess
-    initial_t0 = -6.5
+    # Initial t0 guess from config
+    initial_t0 = config['optimization']['initial_guess']['t0_offset']
     
     initial_params = np.concatenate([initial_vertex, [initial_t0], initial_direction])
     
-    # Parameter bounds (using your edited bounds)
+    # Parameter bounds from config
+    bounds_config = config['optimization']['parameter_bounds']
+    vertex_factor = bounds_config['vertex_x']['factor'] if bounds_config['vertex_x']['relative_to_detector_radius'] else 1.0
+    height_factor = bounds_config['vertex_z']['factor'] if bounds_config['vertex_z']['relative_to_detector_height'] else 1.0
+    t0_range = bounds_config['t0_range']
+    dir_range = bounds_config['direction_range']
+    
     bounds = [
-        (-detector_radius*0.9, detector_radius*0.9),      # x0
-        (-detector_radius*0.9, detector_radius*0.9),      # y0
-        (-detector_height/2*0.9, detector_height/2*0.9),  # z0
-        (-25.0, 0.0),  # t0 (time offset)
-        (-1.00, 1.00),  # dx
-        (-1.00, 1.00),  # dy
-        (-1.00, 1.00),  # dz
+        (-detector_radius*vertex_factor, detector_radius*vertex_factor),      # x0
+        (-detector_radius*vertex_factor, detector_radius*vertex_factor),      # y0
+        (-detector_height/2*height_factor, detector_height/2*height_factor),  # z0
+        (t0_range[0], t0_range[1]),  # t0 (time offset)
+        (dir_range[0], dir_range[1]),  # dx
+        (dir_range[0], dir_range[1]),  # dy
+        (dir_range[0], dir_range[1]),  # dz
     ]
     
-    # Optimize
+    # Optimize using config settings
+    opt_method = config['optimization']['method']
+    max_iter = config['optimization']['max_iterations']
+    success_threshold = config['optimization']['convergence_criteria']['success_loss_threshold']
+    
     try:
         result = minimize(objective_function, initial_params, bounds=bounds, 
-                         method='SLSQP', options={'maxiter': 100})
+                         method=opt_method, options={'maxiter': max_iter})
         
-        if result.success and result.fun < 1e6:
+        if result.success and result.fun < success_threshold:
             fitted_vertex = result.x[:3]
             fitted_t0 = result.x[3]
             fitted_direction_unnorm = result.x[4:7]
@@ -379,7 +401,7 @@ def create_cylinder_surface(radius, height, center=(0, 0, 0), n_points=15):
     return x_mesh, y_mesh, z_mesh
 
 
-def process_single_event(event, sensor_positions, detector, min_charge=50.0, save_plot=True, output_dir='generated_data/batch_combined_reconstruction'):
+def process_single_event(event, sensor_positions, detector, config, save_plot=True, output_dir='generated_data/batch_combined_reconstruction'):
     """Process a single event and return combined reconstruction results."""
     event_id = event['event_id']
     true_position = jnp.array(event['vertex_position'])
@@ -388,7 +410,8 @@ def process_single_event(event, sensor_positions, detector, min_charge=50.0, sav
     hit_times = jnp.array(event['hit_times'])
     hit_charges = jnp.array(event['hit_charges'])
     
-    # Filter significant hits
+    # Filter significant hits using config
+    min_charge = config['hit_filtering']['min_charge_threshold']
     significant_mask = hit_charges >= min_charge
     significant_positions = sensor_positions[significant_mask]
     significant_charges = hit_charges[significant_mask]
@@ -412,9 +435,9 @@ def process_single_event(event, sensor_positions, detector, min_charge=50.0, sav
         hit_charges_array = np.array(significant_charges)
         hit_times_array = np.array(significant_times)
         
-        # Perform combined spatial-temporal reconstruction
+        # Perform combined spatial-temporal reconstruction with config
         fitted_vertex, fitted_direction, fitted_t0, fitted_cherenkov_angle, success = fit_combined_spatial_temporal(
-            hit_positions, hit_times_array, hit_charges_array, detector.r, detector.H
+            hit_positions, hit_times_array, hit_charges_array, detector.r, detector.H, config
         )
         
         if not success:
@@ -837,8 +860,12 @@ def save_detailed_results(results, output_dir):
 
 def main():
     """Main function to process all events with combined reconstruction."""
-    # Load detector configuration
-    detector = generate_detector(base_dir_path() + 'config/IWCD_geom_config.json')
+    # Load reconstruction configuration
+    config = load_reconstruction_config()
+    
+    # Load detector configuration from config
+    detector_config_path = base_dir_path() + config['detector_config']
+    detector = generate_detector(detector_config_path)
     sensor_positions = jnp.array(detector.all_points)
     
     print(f"Detector geometry:")
@@ -872,8 +899,8 @@ def main():
     results = []
     for i, event in enumerate(events[:test_n_events]):
         print(f"\\nProcessing event {i+1}/{test_n_events} (ID: {event['event_id']})...")
-        result = process_single_event(event, sensor_positions, detector, 
-                                    min_charge=50.0, save_plot=True, output_dir=output_dir)
+        result = process_single_event(event, sensor_positions, detector, config, 
+                                    save_plot=True, output_dir=output_dir)
         results.append(result)
         
         if result['success']:
