@@ -178,7 +178,7 @@ def generate_simulation_data(config_file=None,
 if __name__ == "__main__":
     # Generate data with default parameters (paths will be set automatically using base_dir_path)
     output_file = generate_simulation_data(
-        n_events=5  # Generate 5 events for testing
+        n_events=50  # Generate 5 events for testing
     )
     
     print(f"\nSimulation complete! Generated data saved to: {output_file}")

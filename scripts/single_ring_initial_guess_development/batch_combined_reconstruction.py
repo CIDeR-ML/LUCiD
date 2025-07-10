@@ -269,12 +269,12 @@ def fit_combined_spatial_temporal(hit_positions, hit_times, hit_charges, detecto
             # COMBINED RESIDUAL with your edited weighting scheme
             if outer_edge_mask[i]:
                 # Outer edge hits: strong spatial constraint, moderate temporal
-                spatial_weight = 2.0
-                temporal_weight = 0.1
+                spatial_weight = 1.0
+                temporal_weight = 0.5
             else:
-                # Inner hits: no spatial constraint, weak temporal
-                spatial_weight = 0.0
-                temporal_weight = 0.025
+                # Inner hits: moderate spatial constraint, strong temporal
+                spatial_weight = 0.1
+                temporal_weight = 0.1
             
             combined_residual = (spatial_weight * spatial_residual + 
                                temporal_weight * temporal_residual) * np.sqrt(charge)
@@ -338,13 +338,13 @@ def fit_combined_spatial_temporal(hit_positions, hit_times, hit_charges, detecto
     
     # Parameter bounds (using your edited bounds)
     bounds = [
-        (-detector_radius*0.9, detector_radius*0.9),  # x0
-        (-detector_radius*0.9, detector_radius*0.9),  # y0
+        (-detector_radius*0.9, detector_radius*0.9),      # x0
+        (-detector_radius*0.9, detector_radius*0.9),      # y0
         (-detector_height/2*0.9, detector_height/2*0.9),  # z0
-        (-15.0, 0.0),  # t0 (time offset)
-        (-0.75, 0.75),  # dx
-        (-0.75, 0.75),  # dy
-        (-0.75, 0.75),  # dz
+        (-25.0, 0.0),  # t0 (time offset)
+        (-1.00, 1.00),  # dx
+        (-1.00, 1.00),  # dy
+        (-1.00, 1.00),  # dz
     ]
     
     # Optimize
@@ -379,7 +379,7 @@ def create_cylinder_surface(radius, height, center=(0, 0, 0), n_points=15):
     return x_mesh, y_mesh, z_mesh
 
 
-def process_single_event(event, sensor_positions, detector, min_charge=30.0, save_plot=True, output_dir='generated_data/batch_combined_reconstruction'):
+def process_single_event(event, sensor_positions, detector, min_charge=50.0, save_plot=True, output_dir='generated_data/batch_combined_reconstruction'):
     """Process a single event and return combined reconstruction results."""
     event_id = event['event_id']
     true_position = jnp.array(event['vertex_position'])
@@ -823,7 +823,7 @@ def save_detailed_results(results, output_dir):
         'total_events': len(results),
         'successful_events': len([r for r in results if r['success']]),
         'reconstruction_method': 'combined_spatial_temporal',
-        'min_charge_threshold': 30.0,
+        'min_charge_threshold': 50.0,
         'results': json_results
     }
     
@@ -868,13 +868,12 @@ def main():
     output_dir = os.path.join(os.path.dirname(__file__), 'generated_data', 'batch_combined_reconstruction')
     os.makedirs(output_dir, exist_ok=True)
     
-    # Process first 5 events for testing
-    test_n_events = min(5, n_events)
+    test_n_events = n_events #min(5, n_events)
     results = []
     for i, event in enumerate(events[:test_n_events]):
         print(f"\\nProcessing event {i+1}/{test_n_events} (ID: {event['event_id']})...")
         result = process_single_event(event, sensor_positions, detector, 
-                                    min_charge=30.0, save_plot=True, output_dir=output_dir)
+                                    min_charge=50.0, save_plot=True, output_dir=output_dir)
         results.append(result)
         
         if result['success']:
