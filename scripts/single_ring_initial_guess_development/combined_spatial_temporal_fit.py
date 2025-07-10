@@ -302,14 +302,12 @@ def fit_combined_spatial_temporal(hit_positions, hit_times, hit_charges, detecto
             # Weight spatial more heavily for outer edge hits, temporal for all hits
             if outer_edge_mask[i]:
                 # Outer edge hits: strong spatial constraint, moderate temporal
-                spatial_weight = 2.0
-                temporal_weight = 0.1
-                # spatial_weight = 0.5
-                # temporal_weight = 1.5
+                spatial_weight = 1.0
+                temporal_weight = 0.5
             else:
                 # Inner hits: moderate spatial constraint, strong temporal
-                spatial_weight = 0.
-                temporal_weight = 0.025
+                spatial_weight = 0.1
+                temporal_weight = 0.1
             
             combined_residual = (spatial_weight * spatial_residual + 
                                temporal_weight * temporal_residual) * np.sqrt(charge)
@@ -377,13 +375,13 @@ def fit_combined_spatial_temporal(hit_positions, hit_times, hit_charges, detecto
     
     # Parameter bounds
     bounds = [
-        (-detector_radius*0.9, detector_radius*0.9),  # x0
-        (-detector_radius*0.9, detector_radius*0.9),  # y0
+        (-detector_radius*0.9, detector_radius*0.9),      # x0
+        (-detector_radius*0.9, detector_radius*0.9),      # y0
         (-detector_height/2*0.9, detector_height/2*0.9),  # z0
-        (-15.0, 0.0),  # t0 (time offset)
-        (-0.75, 0.75),  # dx
-        (-0.75, 0.75),  # dy
-        (-0.75, 0.75),  # dz
+        (-25.0, 0.0),  # t0 (time offset)
+        (-1.0, 1.0),  # dx
+        (-1.0, 1.0),  # dy
+        (-1.0, 1.0),  # dz
     ]
     
     # Optimize with multiple attempts
@@ -464,9 +462,11 @@ def main():
     events = data['events']
     
     # Test on available events
-    available_events = min(len(events), 3)  # Test first 3 events or all if fewer
-    test_events = list(range(available_events))
+    # available_events = min(len(events), 3)  # Test first 3 events or all if fewer
+    # test_events = list(range(available_events))
     
+
+    test_events = [33]
     for event_idx in test_events:
         event = events[event_idx]
         event_id = event['event_id']
@@ -487,7 +487,7 @@ def main():
         print(f"Track angle to Z-axis: {track_angle_to_z:.1f}° (perpendicular = 90°)")
         
         # Filter significant hits
-        min_charge = 30.0
+        min_charge = 50.0
         significant_mask = hit_charges >= min_charge
         significant_positions = sensor_positions[significant_mask]
         significant_charges = hit_charges[significant_mask]
