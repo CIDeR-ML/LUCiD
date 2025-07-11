@@ -17,11 +17,13 @@ old_tests/
 output/
 
 # Generated data from scripts
-scripts/single_ring_initial_guess_development/generated_data/
+**/generated_data/*
+**/figures/*
+**/spatial_overlap_integrals/*
 
-notebooks/figures/*
 
 sftp-config.json
 
-spatial_overlap_integrals/*
+
 *.root
+
