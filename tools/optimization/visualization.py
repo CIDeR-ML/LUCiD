@@ -17,8 +17,19 @@ from .utils import (
 def create_event_visualization(true_position, true_direction, true_energy, best_match, 
                               true_charges, true_times, sensor_positions, detector_bounds,
                               position_error, direction_error_deg, energy_error, energy_error_percent,
-                              event_idx=0, figures_dir=None, verbose=True):
+                              event_idx=0, figures_dir=None, verbose=True, config_file=None):
     """Create visualization for a single event."""
+    # Extract detector name from config file path
+    detector_name = "Unknown"
+    if config_file:
+        # Extract detector name from config filename
+        # e.g., "config/IWCD_geom_config.json" -> "IWCD"
+        config_basename = os.path.basename(config_file)
+        if '_geom_config.json' in config_basename:
+            detector_name = config_basename.replace('_geom_config.json', '')
+        elif '.json' in config_basename:
+            detector_name = config_basename.replace('.json', '')
+    
     # Filter hits with charge > 30
     min_charge = 30.0
     significant_mask = true_charges > min_charge
@@ -135,7 +146,7 @@ def create_event_visualization(true_position, true_direction, true_energy, best_
     ax.set_xlabel('X (m)', fontsize=12)
     ax.set_ylabel('Y (m)', fontsize=12)
     ax.set_zlabel('Z (m)', fontsize=12)
-    ax.set_title(f'Adaptive Search Results - Event {event_idx + 1}\n' +
+    ax.set_title(f'{detector_name} Detector - Event {event_idx + 1}\n' +
                 f'Energy Error: {energy_error:.1f} MeV, ' +
                 f'Position Error: {position_error:.2f} m, ' +
                 f'Direction Error: {direction_error_deg:.1f}°',
@@ -145,19 +156,25 @@ def create_event_visualization(true_position, true_direction, true_energy, best_
     plt.colorbar(scatter, ax=ax, label='Hit Time', shrink=0.6)
     ax.legend(loc='upper right', fontsize=10)
     
-    # Set axis limits based on detector type
+    # Set axis limits based on detector type with equal aspect ratio
     if detector_bounds['type'] == 'cylinder':
-        ax.set_xlim([-detector_bounds['r']*1.2, detector_bounds['r']*1.2])
-        ax.set_ylim([-detector_bounds['r']*1.2, detector_bounds['r']*1.2])
-        ax.set_zlim([-detector_bounds['H']/2*1.2, detector_bounds['H']/2*1.2])
+        max_extent = max(detector_bounds['r'], detector_bounds['H']/2) * 1.2
+        ax.set_xlim([-max_extent, max_extent])
+        ax.set_ylim([-max_extent, max_extent])
+        ax.set_zlim([-max_extent, max_extent])
     elif detector_bounds['type'] == 'sphere':
-        ax.set_xlim([-detector_bounds['r']*1.2, detector_bounds['r']*1.2])
-        ax.set_ylim([-detector_bounds['r']*1.2, detector_bounds['r']*1.2])
-        ax.set_zlim([-detector_bounds['r']*1.2, detector_bounds['r']*1.2])
+        max_extent = detector_bounds['r'] * 1.2
+        ax.set_xlim([-max_extent, max_extent])
+        ax.set_ylim([-max_extent, max_extent])
+        ax.set_zlim([-max_extent, max_extent])
     elif detector_bounds['type'] == 'box':
-        ax.set_xlim([-detector_bounds['x']/2*1.2, detector_bounds['x']/2*1.2])
-        ax.set_ylim([-detector_bounds['y']/2*1.2, detector_bounds['y']/2*1.2])
-        ax.set_zlim([-detector_bounds['z']/2*1.2, detector_bounds['z']/2*1.2])
+        max_extent = max(detector_bounds['x']/2, detector_bounds['y']/2, detector_bounds['z']/2) * 1.2
+        ax.set_xlim([-max_extent, max_extent])
+        ax.set_ylim([-max_extent, max_extent])
+        ax.set_zlim([-max_extent, max_extent])
+    
+    # Set equal aspect ratio
+    ax.set_box_aspect([1,1,1])
     
     ax.grid(True, alpha=0.3)
     ax.view_init(elev=20, azim=-60)
@@ -165,7 +182,7 @@ def create_event_visualization(true_position, true_direction, true_energy, best_
     plt.tight_layout()
     
     # Save figure
-    output_file = f'adaptive_search_event_{event_idx + 1:03d}.png'
+    output_file = f'{detector_name}_adaptive_search_event_{event_idx + 1:03d}.png'
     if figures_dir:
         output_file = os.path.join(figures_dir, output_file)
     plt.savefig(output_file, dpi=150, bbox_inches='tight')
@@ -216,11 +233,20 @@ def print_summary_statistics(results, total_search_time):
     print(f"  Success rate: {n_successful/n_total*100:.1f}%")
 
 
-def create_convergence_plots(event_histories, figures_dir=None, show_individual=True, show_statistics=True):
+def create_convergence_plots(event_histories, figures_dir=None, show_individual=True, show_statistics=True, config_file=None):
     """
     Create comprehensive visualization of multi-event optimization convergence.
     Shows parameter errors evolution during iterations.
     """
+    # Extract detector name from config file path
+    detector_name = "Unknown"
+    if config_file:
+        config_basename = os.path.basename(config_file)
+        if '_geom_config.json' in config_basename:
+            detector_name = config_basename.replace('_geom_config.json', '')
+        elif '.json' in config_basename:
+            detector_name = config_basename.replace('.json', '')
+    
     if not event_histories:
         print("No convergence histories to plot.")
         return
@@ -385,7 +411,7 @@ def create_convergence_plots(event_histories, figures_dir=None, show_individual=
     plt.tight_layout()
     
     # Save figure
-    output_file = 'adaptive_search_convergence.png'
+    output_file = f'{detector_name}_adaptive_search_convergence.png'
     if figures_dir:
         output_file = os.path.join(figures_dir, output_file)
     plt.savefig(output_file, dpi=150, bbox_inches='tight')
@@ -393,8 +419,17 @@ def create_convergence_plots(event_histories, figures_dir=None, show_individual=
     plt.close()
 
 
-def create_summary_plots(results, figures_dir=None):
+def create_summary_plots(results, figures_dir=None, config_file=None):
     """Create summary histogram plots for multiple events."""
+    # Extract detector name from config file path
+    detector_name = "Unknown"
+    if config_file:
+        config_basename = os.path.basename(config_file)
+        if '_geom_config.json' in config_basename:
+            detector_name = config_basename.replace('_geom_config.json', '')
+        elif '.json' in config_basename:
+            detector_name = config_basename.replace('.json', '')
+    
     successful_results = [r for r in results if r['success']]
     
     if len(successful_results) == 0:
@@ -433,7 +468,7 @@ def create_summary_plots(results, figures_dir=None):
     plt.tight_layout()
     
     # Save figure
-    output_file = 'adaptive_search_summary.png'
+    output_file = f'{detector_name}_adaptive_search_summary.png'
     if figures_dir:
         output_file = os.path.join(figures_dir, output_file)
     plt.savefig(output_file, dpi=150, bbox_inches='tight')

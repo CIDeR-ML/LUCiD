@@ -42,12 +42,12 @@ def get_detector_bounds(detector):
             'r': detector.r
         }
     elif 'Box' in detector_type:
-        # Assuming the box detector has attributes for dimensions
+        # Box detector uses L, W, H attributes for length, width, height
         return {
             'type': 'box',
-            'x': detector.x_size,
-            'y': detector.y_size,
-            'z': detector.z_size
+            'x': detector.L,
+            'y': detector.W,
+            'z': detector.H
         }
     else:
         raise ValueError(f"Unknown detector type: {detector_type}")
@@ -128,7 +128,7 @@ def main(config_file=None, detector_type='Cylinder', verbose=True, n_events=1,
     """
     
     # Configuration
-    random_seed = 43
+    random_seed = 1234567
     if config_file is None:
         config_file = base_dir_path() + 'config/IWCD_geom_config.json'
     
@@ -280,7 +280,7 @@ def main(config_file=None, detector_type='Cylinder', verbose=True, n_events=1,
                     best_match, true_charges, true_times, 
                     sensor_positions, detector_bounds,
                     position_error, direction_error_deg, energy_error, energy_error_percent,
-                    event_idx, figures_dir, verbose
+                    event_idx, figures_dir, verbose, config_file
                 )
         else:
             result = {
@@ -295,11 +295,11 @@ def main(config_file=None, detector_type='Cylinder', verbose=True, n_events=1,
     # Print summary statistics and create plots
     if n_events > 1:
         print_summary_statistics(results, total_search_time)
-        create_summary_plots(results, figures_dir)
+        create_summary_plots(results, figures_dir, config_file)
         
         # Create convergence plots if we have event histories
         if event_histories:
-            create_convergence_plots(event_histories, figures_dir)
+            create_convergence_plots(event_histories, figures_dir, config_file)
 
 
 if __name__ == "__main__":

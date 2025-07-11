@@ -222,9 +222,21 @@ def adaptive_search(true_charges, true_times, simulate_event, sensor_params, sen
             
             # Adaptive standard deviations (decrease over iterations)
             progress = (iteration + 1) / n_iterations
-            position_std = 0.5 * (1 - 0.7 * progress)  # Start at 0.5, end at 0.15
-            direction_std = 0.2 * (1 - 0.7 * progress)  # Start at 0.2, end at 0.06
-            energy_std = 100.0 * (1 - 0.7 * progress)  # Start at 100, end at 30
+            
+            # Scale position std based on detector size
+            if detector_bounds['type'] == 'cylinder':
+                # Use fraction of detector radius and height
+                detector_scale = max(detector_bounds['r'], detector_bounds['H']/2)
+            elif detector_bounds['type'] == 'sphere':
+                # Use fraction of detector radius
+                detector_scale = detector_bounds['r']
+            elif detector_bounds['type'] == 'box':
+                # Use fraction of largest dimension
+                detector_scale = max(detector_bounds['x']/2, detector_bounds['y']/2, detector_bounds['z']/2)
+            
+            position_std = detector_scale * 0.3 * (1 - 0.9 * progress) # Start with ~30% of detector size, end with ~3%
+            direction_std = 0.4 * (1 - 0.9 * progress)   # Start at 0.4, end at 0.04
+            energy_std = 200.0 * (1 - 0.75 * progress)   # Start at 200, end at 50
             
             for i in range(remaining_slots):
                 # Select parent from elite (with bias towards better ones)
