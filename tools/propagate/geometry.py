@@ -298,3 +298,53 @@ def compute_surface_normal(intersection_point, geometry_type, geometry_params):
         [sphere_normal, cylinder_normal, box_normal],
         geometry_params
     )
+
+
+def unified_bounds_check(points, geometry_type, geometry_params):
+    """
+    Unified bounds checking for all detector geometries.
+    
+    Parameters:
+    -----------
+    points : array (N, 3)
+        Points to check
+    geometry_type : int
+        Geometry type constant (SPHERE=0, CYLINDER=1, BOX=2)
+    geometry_params : dict
+        Geometry-specific parameters
+        
+    Returns:
+    --------
+    valid : array (N,)
+        Boolean array indicating which points are inside
+    """
+    def sphere_bounds(params):
+        center = params.get('center', jnp.zeros(3))
+        radius = params['radius']
+        distances = jnp.linalg.norm(points - center, axis=1)
+        return distances <= radius
+    
+    def cylinder_bounds(params):
+        radius = params['radius']
+        height = params['height']
+        x, y, z = points[:, 0], points[:, 1], points[:, 2]
+        inside_xy_circle = (x**2 + y**2) <= radius**2
+        inside_z_bounds = (z >= -height/2) & (z <= height/2)
+        return inside_xy_circle & inside_z_bounds
+    
+    def box_bounds(params):
+        x_size = params.get('x', params.get('length', 1.0))
+        y_size = params.get('y', params.get('width', 1.0))
+        z_size = params.get('z', params.get('height', 1.0))
+        
+        x, y, z = points[:, 0], points[:, 1], points[:, 2]
+        inside_x = (x >= -x_size/2) & (x <= x_size/2)
+        inside_y = (y >= -y_size/2) & (y <= y_size/2)
+        inside_z = (z >= -z_size/2) & (z <= z_size/2)
+        return inside_x & inside_y & inside_z
+    
+    return jax.lax.switch(
+        geometry_type,
+        [sphere_bounds, cylinder_bounds, box_bounds],
+        geometry_params
+    )
