@@ -295,12 +295,11 @@ def main(config_file=None, detector_type='Cylinder', verbose=True, n_events=1,
     # Print summary statistics and create plots
     if n_events > 1:
         print_summary_statistics(results, total_search_time)
-        create_summary_plots(results, figures_dir, config_file)
+        create_summary_plots(results, figures_dir, config_file=config_file)
         
         # Create convergence plots if we have event histories
         if event_histories:
-            create_convergence_plots(event_histories, figures_dir, config_file)
-
+            create_convergence_plots(event_histories, figures_dir, config_file=config_file)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Adaptive search for LUCiD reconstruction')

@@ -234,9 +234,9 @@ def adaptive_search(true_charges, true_times, simulate_event, sensor_params, sen
                 # Use fraction of largest dimension
                 detector_scale = max(detector_bounds['x']/2, detector_bounds['y']/2, detector_bounds['z']/2)
             
-            position_std = detector_scale * 0.3 * (1 - 0.9 * progress) # Start with ~30% of detector size, end with ~3%
-            direction_std = 0.4 * (1 - 0.9 * progress)   # Start at 0.4, end at 0.04
-            energy_std = 200.0 * (1 - 0.75 * progress)   # Start at 200, end at 50
+            position_std = detector_scale * 0.1 * (1 - 0.7 * progress)
+            direction_std = 0.2 * (1 - 0.7 * progress)
+            energy_std = 50.0
             
             for i in range(remaining_slots):
                 # Select parent from elite (with bias towards better ones)
