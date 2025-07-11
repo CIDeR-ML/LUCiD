@@ -286,14 +286,14 @@ def box_bounds_check(points, length, width, height):
 
 
 @partial(jax.jit, static_argnums=(2, 3, 4, 5, 6, 7))
-def assign_sensors_to_box_grid(detectors, sensor_radius, length, width, height,
+def assign_sensors_to_box_grid(sensors, sensor_radius, length, width, height,
                                 n_x, n_y, n_z):
     """Assign sensors to box grid cells, handling overlap across cell boundaries.
 
     Parameters
     ----------
-    detectors : jnp.ndarray
-        Array of sensor positions, shape (n_detectors, 3)
+    sensors : jnp.ndarray
+        Array of sensor positions, shape (n_sensors, 3)
     sensor_radius : float
         Radius of each sensor
     length : float
@@ -312,14 +312,14 @@ def assign_sensors_to_box_grid(detectors, sensor_radius, length, width, height,
     Returns
     -------
     jnp.ndarray
-        Array of shape (n_detectors, 4, 3) containing up to 4 grid cell assignments
-        per detector. -1 indicates no assignment.
+        Array of shape (n_sensors, 4, 3) containing up to 4 grid cell assignments
+        per sensor. -1 indicates no assignment.
     """
 
-    def assign_single_detector(detector):
-        x, y, z = detector
+    def assign_single_sensor(sensor):
+        x, y, z = sensor
         
-        # Determine which face the detector is closest to
+        # Determine which face the sensor is closest to
         dist_to_faces = jnp.array([
             jnp.abs(y - width/2),   # Front face
             jnp.abs(y + width/2),   # Back face
@@ -332,7 +332,7 @@ def assign_sensors_to_box_grid(detectors, sensor_radius, length, width, height,
         closest_face = jnp.argmin(dist_to_faces)
         min_distance = jnp.min(dist_to_faces)
         
-        # Check if detector is close enough to any face
+        # Check if sensor is close enough to any face
         on_surface = min_distance <= sensor_radius
         
         def assign_surface():
@@ -465,13 +465,13 @@ def assign_sensors_to_box_grid(detectors, sensor_radius, length, width, height,
         
         return lax.cond(on_surface, assign_surface, assign_off_surface)
     
-    return jax.vmap(assign_single_detector)(detectors)
+    return jax.vmap(assign_single_sensor)(sensors)
 
 
 @partial(jax.jit, static_argnums=(1, 2, 3))
 def create_sensor_box_grid_map(assignments, n_x, n_y, n_z):
     """
-    Creates a grid map counting the number of detectors in each cell of the box detector grid.
+    Creates a grid map counting the number of sensors in each cell of the box sensor grid.
     """
     # Each face has different grid sizes
     front_back_cells = n_x * n_z
@@ -481,7 +481,7 @@ def create_sensor_box_grid_map(assignments, n_x, n_y, n_z):
     total_cells = 2 * (front_back_cells + left_right_cells + top_bottom_cells)
     grid = jnp.zeros(total_cells, dtype=jnp.int32)
     
-    def update_grid(detector_assignments):
+    def update_grid(sensor_assignments):
         def update_cell(cell, g):
             i, j, k = cell
             is_valid = (i != -1) & (j != -1) & (k != -1)
@@ -512,8 +512,8 @@ def create_sensor_box_grid_map(assignments, n_x, n_y, n_z):
             
             return g.at[idx].add(is_valid)
         
-        return jax.lax.fori_loop(0, detector_assignments.shape[0], 
-                                lambda i, g: update_cell(detector_assignments[i], g), grid)
+        return jax.lax.fori_loop(0, sensor_assignments.shape[0], 
+                                lambda i, g: update_cell(sensor_assignments[i], g), grid)
     
     all_updates = jax.vmap(update_grid)(assignments)
     return all_updates.sum(axis=0)
@@ -568,7 +568,7 @@ def find_intersected_box_sensors_differentiable(ray_origins, ray_directions, sen
                                                   length, width, height, n_x, n_y, n_z, 
                                                   inverted_sensor_map, temperature, overlap_prob):
     """
-    Finds detectors intersected by rays using a differentiable approximation with overlap-based weights.
+    Finds sensors intersected by rays using a differentiable approximation with overlap-based weights.
     """
     single_ray = ray_origins.ndim == 1
     if single_ray:
@@ -617,7 +617,7 @@ def find_intersected_box_sensors_differentiable(ray_origins, ray_directions, sen
     # Create bounds check function
     bounds_check = lambda points: box_bounds_check(points, length, width, height)
 
-    # Process all potential detectors
+    # Process all potential sensors
     sensor_results = jax.vmap(
         lambda det_idx: compute_sensor_intersections_base(
             det_idx, sensor_positions, sensor_radius,
@@ -628,16 +628,16 @@ def find_intersected_box_sensors_differentiable(ray_origins, ray_directions, sen
     weights = sensor_results[0]
     sensor_times = sensor_results[1]
     sensor_indices = sensor_results[2]
-    detector_normals = sensor_results[3]
+    sensor_normals = sensor_results[3]
     inside_detector = sensor_results[4]
-    detector_hit_positions = sensor_results[5]
+    sensor_hit_positions = sensor_results[5]
 
     # Calculate box face normals
     box_normals = calculate_box_normals(face_indices)
 
     intersection_results = process_intersection_normals(
         ray_origins, ray_directions, intersection_point,
-        t_box, detector_normals, detector_hit_positions,
+        t_box, sensor_normals, sensor_hit_positions,
         inside_detector, box_normals
     )
 
@@ -646,12 +646,12 @@ def find_intersected_box_sensors_differentiable(ray_origins, ray_directions, sen
 
     result = {
         'times': sensor_times,
-        'detector_weights': weights,
+        'sensor_weights': weights,
         'sensor_indices': sensor_indices,
-        'per_sensor_positions': detector_hit_positions,
+        'per_sensor_positions': sensor_hit_positions,
         'positions': hit_positions,
         'normals': final_normals,
-        'detector_normals': detector_normals,
+        'sensor_normals': sensor_normals,
         'inside_detector': inside_detector
     }
 
@@ -660,7 +660,7 @@ def find_intersected_box_sensors_differentiable(ray_origins, ray_directions, sen
 
 def create_inverted_box_sensor_map(assignments_geometric, assignments_distance, 
                                     n_x, n_y, n_z, max_sensors_per_cell):
-    """Create inverted detector map for box geometry with proper grid indexing."""
+    """Create inverted sensor map for box geometry with proper grid indexing."""
     front_back_cells = n_x * n_z
     left_right_cells = n_y * n_z
     top_bottom_cells = n_x * n_y
@@ -669,7 +669,7 @@ def create_inverted_box_sensor_map(assignments_geometric, assignments_distance,
     inverted_map = jnp.full((total_cells, max_sensors_per_cell), -1, dtype=jnp.int32)
     
     def update_cell(inv_map, i):
-        # Update cell i with detectors that geometrically intersect with it
+        # Update cell i with sensors that geometrically intersect with it
         def add_geometric(carry, j):
             curr_map, curr_count = carry
             
@@ -706,11 +706,11 @@ def create_inverted_box_sensor_map(assignments_geometric, assignments_distance,
             cell_k = jnp.where(is_front_back, face_idx_fb,
                               jnp.where(is_left_right, face_idx_lr, face_idx_tb))
             
-            # Check if detector j intersects with this cell
-            detector_assignments = assignments_geometric[j]
-            matches = (detector_assignments[:, 0] == cell_i) & \
-                     (detector_assignments[:, 1] == cell_j) & \
-                     (detector_assignments[:, 2] == cell_k)
+            # Check if sensor j intersects with this cell
+            sensor_assignments = assignments_geometric[j]
+            matches = (sensor_assignments[:, 0] == cell_i) & \
+                     (sensor_assignments[:, 1] == cell_j) & \
+                     (sensor_assignments[:, 2] == cell_k)
             
             cell_matches = jnp.any(matches)
             should_add = cell_matches & (curr_count < max_sensors_per_cell)
@@ -730,17 +730,17 @@ def create_inverted_box_sensor_map(assignments_geometric, assignments_distance,
             jnp.arange(len(assignments_geometric))
         )
         
-        # Get closest detectors for this cell
+        # Get closest sensors for this cell
         closest = assignments_distance[i]
         
-        # Add closest detectors if there's room
+        # Add closest sensors if there's room
         def add_closest(carry, j):
             curr_map, curr_count = carry
-            detector_idx = closest[j]
+            sensor_idx = closest[j]
             
             # Check for duplicates
             def check_duplicate(k, is_dup):
-                return is_dup | (curr_map[i, k] == detector_idx)
+                return is_dup | (curr_map[i, k] == sensor_idx)
             
             is_duplicate = jax.lax.fori_loop(
                 0, curr_count,
@@ -753,13 +753,13 @@ def create_inverted_box_sensor_map(assignments_geometric, assignments_distance,
             
             new_map = jnp.where(
                 should_add,
-                curr_map.at[i, curr_count].set(detector_idx),
+                curr_map.at[i, curr_count].set(sensor_idx),
                 curr_map
             )
             
             return (new_map, curr_count + should_add), None
         
-        # Fill remaining slots with closest detectors
+        # Fill remaining slots with closest sensors
         (final_map, _), _ = jax.lax.scan(
             add_closest,
             (new_map, geom_count),
@@ -788,10 +788,10 @@ def create_box_photon_propagator(sensor_positions, sensor_radius, length=4.0, wi
     else:
         overlap_prob = create_overlap_prob(temperature * sensor_radius, sensor_radius)
 
-    # Convert detector positions to JAX array
+    # Convert sensor positions to JAX array
     sensor_positions_jax = jnp.array(sensor_positions)
     
-    # Create detector grid assignments
+    # Create sensor grid assignments
     assignments_geometric = assign_sensors_to_box_grid(
         sensor_positions_jax, sensor_radius, length, width, height, n_x, n_y, n_z
     )
@@ -800,14 +800,14 @@ def create_box_photon_propagator(sensor_positions, sensor_radius, length=4.0, wi
     grid_centers = calculate_box_grid_centers(length, width, height, n_x, n_y, n_z)
     assignments_distance = find_closest_sensors(grid_centers, sensor_positions_jax, max_sensors_per_cell)
     
-    # Create inverted detector map
+    # Create inverted sensor map
     inverted_sensor_map = create_inverted_box_sensor_map(
         assignments_geometric, assignments_distance, n_x, n_y, n_z, max_sensors_per_cell
     )
 
     def propagate_photons(photon_origins, photon_directions):
         """
-        Box propagation using proper grid-based detector lookup.
+        Box propagation using proper grid-based sensor lookup.
         """
         return find_intersected_box_sensors_differentiable(
             photon_origins, photon_directions, sensor_positions_jax, sensor_radius,
