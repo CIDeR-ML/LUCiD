@@ -10,6 +10,9 @@ import numpy as np
 import os
 import sys
 from datetime import datetime
+import matplotlib.pyplot as plt
+from mpl_toolkits.mplot3d import Axes3D
+import argparse
 
 # Add parent directories to path to access tools
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..'))
@@ -18,6 +21,23 @@ from tools.utils import base_dir_path, spherical_to_cartesian
 from tools.geometry import generate_detector
 from tools.simulation import setup_event_simulator
 from tools.losses import compute_softmin_loss
+
+# Import cone-cylinder utilities  
+from cone_cylinder_utils import get_cherenkov_angle
+from visualize_cone_cylinder_intersection import compute_cone_cylinder_intersection
+
+
+def create_cylinder_surface(radius, height, center=(0, 0, 0), n_points=20):
+    """Create a transparent cylinder surface for detector boundaries."""
+    theta = np.linspace(0, 2*np.pi, n_points)
+    z = np.linspace(-height/2, height/2, n_points)
+    theta_mesh, z_mesh = np.meshgrid(theta, z)
+    
+    x_mesh = center[0] + radius * np.cos(theta_mesh)
+    y_mesh = center[1] + radius * np.sin(theta_mesh)
+    z_mesh = center[2] + z_mesh
+    
+    return x_mesh, y_mesh, z_mesh
 
 
 def sample_around_point(key, center_position, center_direction, center_energy, 
@@ -55,8 +75,9 @@ def sample_around_point(key, center_position, center_direction, center_energy,
 
 
 def adaptive_search(true_charges, true_times, simulate_event, sensor_params, sensor_positions,
-                   detector_bounds, n_iterations=20, population_size=50, elite_fraction=0.2,
-                   random_seed=42):
+                   detector_bounds, true_position, true_direction, true_energy,
+                   n_iterations=20, population_size=50, elite_fraction=0.2,
+                   random_seed=42, verbose=True):
     """
     Adaptive search algorithm that focuses on promising regions.
     
@@ -68,12 +89,15 @@ def adaptive_search(true_charges, true_times, simulate_event, sensor_params, sen
         Number of candidates per iteration
     elite_fraction : float
         Fraction of best candidates to keep for next generation
+    verbose : bool
+        Whether to print detailed progress during iterations
     """
     key = jax.random.PRNGKey(random_seed)
     n_elite = int(population_size * elite_fraction)
     
     # Initialize with random population
-    print("Initializing random population...")
+    if verbose:
+        print("Initializing random population...")
     population = []
     
     for i in range(population_size):
@@ -112,7 +136,8 @@ def adaptive_search(true_charges, true_times, simulate_event, sensor_params, sen
     best_overall_loss = float('inf')
     
     for iteration in range(n_iterations):
-        print(f"\nIteration {iteration + 1}/{n_iterations}")
+        if verbose:
+            print(f"\nIteration {iteration + 1}/{n_iterations}")
         
         # Evaluate population
         for i, candidate in enumerate(population):
@@ -147,9 +172,17 @@ def adaptive_search(true_charges, true_times, simulate_event, sensor_params, sen
             best_overall = population[0].copy()
             best_overall_loss = population[0]['loss']
         
-        print(f"  Best loss this iteration: {population[0]['loss']:.6f}")
-        print(f"  Best overall loss: {best_overall_loss:.6f}")
-        print(f"  Population loss range: [{population[0]['loss']:.6f}, {population[-1]['loss']:.6f}]")
+        if verbose:
+            # Calculate errors for best candidate this iteration
+            best_pos_error = float(jnp.linalg.norm(population[0]['position'] - true_position))
+            best_dir_error = float(jnp.arccos(jnp.clip(jnp.abs(jnp.dot(population[0]['direction'], true_direction)), 0, 1)))
+            best_dir_error_deg = np.degrees(best_dir_error)
+            best_energy_error = float(jnp.abs(population[0]['energy'] - true_energy))
+            
+            print(f"  Best loss this iteration: {population[0]['loss']:.6f}")
+            print(f"  Best overall loss: {best_overall_loss:.6f}")
+            print(f"  Population loss range: [{population[0]['loss']:.6f}, {population[-1]['loss']:.6f}]")
+            print(f"  Best candidate errors: Pos={best_pos_error:.3f}m, Dir={best_dir_error_deg:.1f}°, Energy={best_energy_error:.1f}MeV")
         
         # Create next generation
         if iteration < n_iterations - 1:  # Don't create new generation on last iteration
@@ -194,7 +227,7 @@ def adaptive_search(true_charges, true_times, simulate_event, sensor_params, sen
     return best_overall, population
 
 
-def main():
+def main(verbose=True):
     """Run adaptive search for best parameters."""
     
     # Configuration
@@ -230,7 +263,7 @@ def main():
         json_filename=config_file,
         max_sensors_per_cell=4,
         n_photons=1_000_000,
-        temperature=0.2,
+        temperature=0.0,
         K=2,
         detector_type='Cylinder'
     )
@@ -276,10 +309,14 @@ def main():
     
     # Run adaptive search
     print(f"\nStarting adaptive search...")
+    search_start_time = datetime.now()
     best_match, final_population = adaptive_search(
         true_charges, true_times, simulate_event, sensor_params, sensor_positions,
-        detector_bounds, n_iterations=100, population_size=20, elite_fraction=0.2
+        detector_bounds, true_position, true_direction, true_energy,
+        n_iterations=20, population_size=20, elite_fraction=0.2, verbose=verbose
     )
+    search_duration = (datetime.now() - search_start_time).total_seconds()
+    print(f"Adaptive search completed in {search_duration:.1f} seconds")
     
     # Calculate errors
     if best_match:
@@ -319,7 +356,116 @@ def main():
         print(f"\nTop 5 candidates from final population:")
         for i in range(min(5, len(final_population))):
             print(f"  {i+1}. Loss: {final_population[i]['loss']:.6f}")
+        
+        # Create visualization
+        print(f"\nCreating visualization...")
+        
+        # Filter hits with charge > 30
+        min_charge = 30.0
+        significant_mask = true_charges > min_charge
+        hit_positions = sensor_positions[significant_mask]
+        hit_charges_vis = true_charges[significant_mask]
+        hit_times_vis = true_times[significant_mask]
+        
+        print(f"Visualizing {len(hit_positions)} hits with charge > {min_charge}")
+        
+        # Create figure
+        fig = plt.figure(figsize=(16, 10))
+        ax = fig.add_subplot(111, projection='3d')
+        
+        # Plot detector hits (color by time, size by charge)
+        scatter = ax.scatter(hit_positions[:, 0], hit_positions[:, 1], hit_positions[:, 2], 
+                            c=hit_times_vis, s=hit_charges_vis*2, cmap='plasma', alpha=0.6,
+                            label='Detector Hits (colored by time)')
+        
+        # Plot true track
+        t_vals = np.linspace(0, 8, 100)
+        true_track_points = true_position[:, np.newaxis] + t_vals[np.newaxis, :] * true_direction[:, np.newaxis]
+        ax.plot(true_track_points[0], true_track_points[1], true_track_points[2], 
+                'blue', linewidth=5, label='True Track', zorder=30)
+        ax.scatter(true_position[0], true_position[1], true_position[2], 
+                   c='blue', s=400, marker='*', edgecolors='black', linewidth=3, 
+                   label='True Origin', zorder=35)
+        
+        # Plot best fitted track
+        fitted_track_points = best_match['position'][:, np.newaxis] + t_vals[np.newaxis, :] * best_match['direction'][:, np.newaxis]
+        ax.plot(fitted_track_points[0], fitted_track_points[1], fitted_track_points[2], 
+                'red', linewidth=5, label='Best Fitted Track', zorder=30)
+        ax.scatter(best_match['position'][0], best_match['position'][1], best_match['position'][2], 
+                   c='red', s=400, marker='*', edgecolors='black', linewidth=3, 
+                   label='Best Fitted Origin', zorder=35)
+        
+        # Add Cherenkov cone intersections
+        cherenkov_angle = get_cherenkov_angle(1.33)  # Water refractive index
+        
+        # True cone intersection
+        true_intersection = compute_cone_cylinder_intersection(
+            true_position, true_direction, cherenkov_angle,
+            detector_bounds['r'], detector_bounds['H']
+        )
+        if len(true_intersection) > 0:
+            ax.plot(true_intersection[:, 0], true_intersection[:, 1], true_intersection[:, 2],
+                   'cyan', linewidth=3, alpha=0.8, label='True Cherenkov Ring', zorder=25)
+        
+        # Fitted cone intersection
+        fitted_intersection = compute_cone_cylinder_intersection(
+            best_match['position'], best_match['direction'], cherenkov_angle,
+            detector_bounds['r'], detector_bounds['H']
+        )
+        if len(fitted_intersection) > 0:
+            ax.plot(fitted_intersection[:, 0], fitted_intersection[:, 1], fitted_intersection[:, 2],
+                   'orange', linewidth=3, alpha=0.8, label='Fitted Cherenkov Ring', zorder=25)
+        
+        # Add cylinder boundaries
+        x_cyl, y_cyl, z_cyl = create_cylinder_surface(detector_bounds['r'], detector_bounds['H'])
+        ax.plot_surface(x_cyl, y_cyl, z_cyl, alpha=0.05, color='gray')
+        
+        # Set labels and title
+        ax.set_xlabel('X (m)', fontsize=12)
+        ax.set_ylabel('Y (m)', fontsize=12)
+        ax.set_zlabel('Z (m)', fontsize=12)
+        ax.set_title(f'Adaptive Search Results\n' +
+                    f'E Err: {energy_error:.1f}MeV ({energy_error_percent:.1f}%), ' +
+                    f'Pos Err: {position_error:.2f}m, Dir Err: {direction_error_deg:.1f}°\n' +
+                    f'Best Loss: {best_match["loss"]:.6f}',
+                    fontsize=14)
+        
+        # Add colorbar and legend
+        plt.colorbar(scatter, ax=ax, label='Hit Time', shrink=0.6)
+        ax.legend(loc='upper right', fontsize=10)
+        
+        # Set axis limits
+        ax.set_xlim([-6, 6])
+        ax.set_ylim([-6, 6])
+        ax.set_zlim([-5, 5])
+        
+        ax.grid(True, alpha=0.3)
+        ax.view_init(elev=20, azim=-60)
+        
+        plt.tight_layout()
+        
+        # Save figure
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_file = f'adaptive_search_result_{timestamp}.png'
+        plt.savefig(output_file, dpi=150, bbox_inches='tight')
+        print(f"Visualization saved to {output_file}")
+        plt.close()
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(description='Adaptive search for LUCiD reconstruction')
+    parser.add_argument('--verbose', '-v', action='store_true', 
+                        help='Show detailed progress during iterations')
+    parser.add_argument('--quiet', '-q', action='store_true',
+                        help='Suppress iteration details (opposite of verbose)')
+    
+    args = parser.parse_args()
+    
+    # Determine verbosity (quiet takes precedence)
+    verbose = True
+    if args.quiet:
+        verbose = False
+    elif args.verbose:
+        verbose = True
+    
+    main(verbose=verbose)
