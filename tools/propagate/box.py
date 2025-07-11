@@ -263,7 +263,7 @@ def box_bounds_check(points, length, width, height):
     inside_y = (y >= -width/2) & (y <= width/2)
     inside_z = (z >= -height/2) & (z <= height/2)
     
-    return True #inside_x & inside_y & inside_z
+    return inside_x & inside_y & inside_z
 
 
 @partial(jax.jit, static_argnums=(2, 3, 4, 5, 6, 7))
@@ -321,63 +321,109 @@ def assign_sensors_to_box_grid(sensors, sensor_radius, length, width, height,
         on_surface = min_distance <= sensor_radius
         
         def assign_surface():
-            # Unified grid assignment for all faces
-            # Face mapping: [+x, -x, +y, -y, +z, -z] -> [3, 2, 0, 1, 4, 5]
-            face_to_standard = jnp.array([3, 2, 0, 1, 4, 5])
-            standard_face = face_to_standard[closest_face]
+            # Use face-specific assignment (more complex but correct)
+            def assign_right_left():  # faces 0,1 in face_distances = [+x, -x, +y, -y, +z, -z]
+                # Right/Left faces use y,z coordinates  
+                y_idx = jnp.floor((y + width/2) / width * n_y).astype(jnp.int32)
+                z_idx = jnp.floor((z + height/2) / height * n_z).astype(jnp.int32)
+                y_idx = jnp.clip(y_idx, 0, n_y - 1)
+                z_idx = jnp.clip(z_idx, 0, n_z - 1)
+                
+                # Calculate overlap with neighboring cells
+                y_frac = ((y + width/2) / width * n_y) % 1
+                z_frac = ((z + height/2) / height * n_z) % 1
+                
+                include_y_right = y_frac >= 1 - sensor_radius / (width / n_y)
+                include_z_up = z_frac >= 1 - sensor_radius / (height / n_z)
+                
+                y_right = jnp.clip(y_idx + 1, 0, n_y - 1)
+                z_up = jnp.clip(z_idx + 1, 0, n_z - 1)
+                
+                # Map to standard face indices: closest_face 0,1 -> standard faces 3,2 
+                standard_face = jnp.where(closest_face == 0, 3, 2)  # +x->right(3), -x->left(2)
+                
+                indices = jnp.array([
+                    [y_idx, z_idx, standard_face],
+                    [y_right, z_idx, standard_face],
+                    [y_idx, z_up, standard_face],
+                    [y_right, z_up, standard_face]
+                ])
+                
+                selection = jnp.array([1.0, include_y_right, include_z_up, include_y_right * include_z_up])
+                sorted_indices = indices[jnp.argsort(-selection)]
+                return jnp.where(jnp.arange(4)[:, None] < jnp.sum(selection), sorted_indices[:4], -1)
             
-            # Determine coordinate system based on face
-            # Front/Back (y faces): use x,z
-            # Left/Right (x faces): use y,z  
-            # Top/Bottom (z faces): use x,y
+            def assign_front_back():  # faces 2,3 in face_distances
+                # Front/Back faces use x,z coordinates
+                x_idx = jnp.floor((x + length/2) / length * n_x).astype(jnp.int32)
+                z_idx = jnp.floor((z + height/2) / height * n_z).astype(jnp.int32)
+                x_idx = jnp.clip(x_idx, 0, n_x - 1)
+                z_idx = jnp.clip(z_idx, 0, n_z - 1)
+                
+                # Calculate overlap with neighboring cells
+                x_frac = ((x + length/2) / length * n_x) % 1
+                z_frac = ((z + height/2) / height * n_z) % 1
+                
+                include_x_right = x_frac >= 1 - sensor_radius / (length / n_x)
+                include_z_up = z_frac >= 1 - sensor_radius / (height / n_z)
+                
+                x_right = jnp.clip(x_idx + 1, 0, n_x - 1)
+                z_up = jnp.clip(z_idx + 1, 0, n_z - 1)
+                
+                # Map to standard face indices: closest_face 2,3 -> standard faces 0,1
+                standard_face = jnp.where(closest_face == 2, 0, 1)  # +y->front(0), -y->back(1)
+                
+                indices = jnp.array([
+                    [x_idx, z_idx, standard_face],
+                    [x_right, z_idx, standard_face],
+                    [x_idx, z_up, standard_face],
+                    [x_right, z_up, standard_face]
+                ])
+                
+                selection = jnp.array([1.0, include_x_right, include_z_up, include_x_right * include_z_up])
+                sorted_indices = indices[jnp.argsort(-selection)]
+                return jnp.where(jnp.arange(4)[:, None] < jnp.sum(selection), sorted_indices[:4], -1)
             
-            # Select coordinates and grid dimensions based on face
-            coords = jnp.where(
-                (standard_face == 0) | (standard_face == 1),  # Front/Back
-                jnp.array([x + length/2, z + height/2]),
+            def assign_top_bottom():  # faces 4,5 in face_distances
+                # Top/Bottom faces use x,y coordinates
+                x_idx = jnp.floor((x + length/2) / length * n_x).astype(jnp.int32)
+                y_idx = jnp.floor((y + width/2) / width * n_y).astype(jnp.int32)
+                x_idx = jnp.clip(x_idx, 0, n_x - 1)
+                y_idx = jnp.clip(y_idx, 0, n_y - 1)
+                
+                # Calculate overlap with neighboring cells
+                x_frac = ((x + length/2) / length * n_x) % 1
+                y_frac = ((y + width/2) / width * n_y) % 1
+                
+                include_x_right = x_frac >= 1 - sensor_radius / (length / n_x)
+                include_y_right = y_frac >= 1 - sensor_radius / (width / n_y)
+                
+                x_right = jnp.clip(x_idx + 1, 0, n_x - 1)
+                y_right = jnp.clip(y_idx + 1, 0, n_y - 1)
+                
+                # Map to standard face indices: closest_face 4,5 -> standard faces 4,5
+                standard_face = jnp.where(closest_face == 4, 4, 5)  # +z->top(4), -z->bottom(5)
+                
+                indices = jnp.array([
+                    [x_idx, y_idx, standard_face],
+                    [x_right, y_idx, standard_face],
+                    [x_idx, y_right, standard_face],
+                    [x_right, y_right, standard_face]
+                ])
+                
+                selection = jnp.array([1.0, include_x_right, include_y_right, include_x_right * include_y_right])
+                sorted_indices = indices[jnp.argsort(-selection)]
+                return jnp.where(jnp.arange(4)[:, None] < jnp.sum(selection), sorted_indices[:4], -1)
+            
+            return jnp.where(
+                (closest_face == 0) | (closest_face == 1),  # Right or Left (+x, -x)
+                assign_right_left(),
                 jnp.where(
-                    (standard_face == 2) | (standard_face == 3),  # Left/Right
-                    jnp.array([y + width/2, z + height/2]),
-                    jnp.array([x + length/2, y + width/2])  # Top/Bottom
+                    (closest_face == 2) | (closest_face == 3),  # Front or Back (+y, -y)
+                    assign_front_back(),
+                    assign_top_bottom()  # Top or Bottom (+z, -z)
                 )
             )
-            
-            dims = jnp.where(
-                (standard_face == 0) | (standard_face == 1),  # Front/Back
-                jnp.array([length, height]),
-                jnp.where(
-                    (standard_face == 2) | (standard_face == 3),  # Left/Right
-                    jnp.array([width, height]),
-                    jnp.array([length, width])  # Top/Bottom
-                )
-            )
-            
-            grid_sizes = jnp.where(
-                (standard_face == 0) | (standard_face == 1),  # Front/Back
-                jnp.array([n_x, n_z]),
-                jnp.where(
-                    (standard_face == 2) | (standard_face == 3),  # Left/Right
-                    jnp.array([n_y, n_z]),
-                    jnp.array([n_x, n_y])  # Top/Bottom
-                )
-            )
-            
-            # Calculate grid indices
-            grid_coords = coords / dims * grid_sizes
-            idx_1 = jnp.floor(grid_coords[0]).astype(jnp.int32)
-            idx_2 = jnp.floor(grid_coords[1]).astype(jnp.int32)
-            
-            # Clamp to valid range
-            idx_1 = jnp.clip(idx_1, 0, grid_sizes[0] - 1)
-            idx_2 = jnp.clip(idx_2, 0, grid_sizes[1] - 1)
-            
-            # For simplicity, just assign to one cell (can be expanded for overlaps)
-            return jnp.array([
-                [idx_1, idx_2, standard_face],
-                [-1, -1, -1],
-                [-1, -1, -1], 
-                [-1, -1, -1]
-            ])
         
         def assign_off_surface():
             return jnp.full((4, 3), -1, dtype=jnp.int32)
