@@ -92,27 +92,25 @@ def intersect_box(ray_origin, ray_direction, length, width, height):
     t = ray_box_intersection_vectorized(ray_origin, ray_direction, box_min, box_max)
     intersects = t > 0
     
-    if intersects:
-        intersection_point = ray_origin + t * ray_direction
-        
-        # Determine which face was hit by checking which coordinate is on the boundary
-        eps = 1e-10
-        
-        # Check each face
-        on_front = jnp.abs(intersection_point[1] - width/2) < eps    # +y face
-        on_back = jnp.abs(intersection_point[1] + width/2) < eps     # -y face  
-        on_left = jnp.abs(intersection_point[0] + length/2) < eps    # -x face
-        on_right = jnp.abs(intersection_point[0] - length/2) < eps   # +x face
-        on_top = jnp.abs(intersection_point[2] - height/2) < eps     # +z face
-        on_bottom = jnp.abs(intersection_point[2] + height/2) < eps  # -z face
-        
-        face_index = jnp.where(on_front, 0,
-                     jnp.where(on_back, 1,
-                     jnp.where(on_left, 2,
-                     jnp.where(on_right, 3,
-                     jnp.where(on_top, 4, 5)))))
-    else:
-        face_index = 0
+    # Calculate intersection point (works even if no intersection)
+    intersection_point = ray_origin + t * ray_direction
+    
+    # Determine which face was hit by checking which coordinate is on the boundary
+    eps = 1e-10
+    
+    # Check each face
+    on_front = jnp.abs(intersection_point[1] - width/2) < eps    # +y face
+    on_back = jnp.abs(intersection_point[1] + width/2) < eps     # -y face  
+    on_left = jnp.abs(intersection_point[0] + length/2) < eps    # -x face
+    on_right = jnp.abs(intersection_point[0] - length/2) < eps   # +x face
+    on_top = jnp.abs(intersection_point[2] - height/2) < eps     # +z face
+    on_bottom = jnp.abs(intersection_point[2] + height/2) < eps  # -z face
+    
+    face_index = jnp.where(on_front, 0,
+                 jnp.where(on_back, 1,
+                 jnp.where(on_left, 2,
+                 jnp.where(on_right, 3,
+                 jnp.where(on_top, 4, 5)))))
     
     return intersects, t, face_index
 
