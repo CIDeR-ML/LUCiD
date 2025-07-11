@@ -1,11 +1,9 @@
 from tools.generate import get_isotropic_rays, photonsim_differentiable_get_rays, predict_t0
 
-from tools.propagate import (
-    create_photon_propagator, 
-    create_sphere_photon_propagator,
-    create_box_photon_propagator,
-    create_propagator_by_geometry
-)
+from tools.propagate.cylinder import create_photon_propagator
+from tools.propagate.sphere import create_sphere_photon_propagator
+from tools.propagate.box import create_box_photon_propagator
+from tools.propagate_box import box_bounds_check  # Direct import for bounds check
 from tools.geometry import generate_detector
 from tools.utils import unpack_t0_params
 import jax
@@ -817,7 +815,6 @@ def create_event_simulator(detector, propagate_photons, Nphot, NUM_SENSORS, sens
             eps = 0 # Dont change without validations
             return distances <= detector.r + eps
     elif detector_type == 'Box':
-        from tools.propagate_box import box_bounds_check
         def get_inside_detector_flag(positions):
             """Box bounds check function."""
             return box_bounds_check(positions, detector.L, detector.W, detector.H)
