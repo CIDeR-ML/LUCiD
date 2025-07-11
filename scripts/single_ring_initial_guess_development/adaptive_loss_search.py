@@ -77,7 +77,7 @@ def sample_around_point(key, center_position, center_direction, center_energy,
 def adaptive_search(true_charges, true_times, simulate_event, sensor_params, sensor_positions,
                    detector_bounds, true_position, true_direction, true_energy,
                    n_iterations=20, population_size=50, elite_fraction=0.2,
-                   random_seed=42, verbose=True):
+                   random_seed=42, verbose=True, track_history=False):
     """
     Adaptive search algorithm that focuses on promising regions.
     
@@ -91,9 +91,22 @@ def adaptive_search(true_charges, true_times, simulate_event, sensor_params, sen
         Fraction of best candidates to keep for next generation
     verbose : bool
         Whether to print detailed progress during iterations
+    track_history : bool
+        Whether to track parameter evolution history
     """
     key = jax.random.PRNGKey(random_seed)
     n_elite = int(population_size * elite_fraction)
+    
+    # Initialize history tracking
+    history = {
+        'best_loss': [],
+        'best_energy': [],
+        'best_position': [],
+        'best_direction': [],
+        'position_error': [],
+        'direction_error': [],
+        'energy_error': []
+    } if track_history else None
     
     # Initialize with random population
     if verbose:
@@ -172,13 +185,23 @@ def adaptive_search(true_charges, true_times, simulate_event, sensor_params, sen
             best_overall = population[0].copy()
             best_overall_loss = population[0]['loss']
         
+        # Calculate errors for best candidate this iteration (for both verbose and history tracking)
+        best_pos_error = float(jnp.linalg.norm(population[0]['position'] - true_position))
+        best_dir_error = float(jnp.arccos(jnp.clip(jnp.abs(jnp.dot(population[0]['direction'], true_direction)), 0, 1)))
+        best_dir_error_deg = np.degrees(best_dir_error)
+        best_energy_error = float(jnp.abs(population[0]['energy'] - true_energy))
+        
+        # Track history if requested
+        if track_history and history is not None:
+            history['best_loss'].append(population[0]['loss'])
+            history['best_energy'].append(population[0]['energy'])
+            history['best_position'].append(np.array(population[0]['position']))
+            history['best_direction'].append(np.array(population[0]['direction']))
+            history['position_error'].append(best_pos_error)
+            history['direction_error'].append(best_dir_error_deg)
+            history['energy_error'].append(best_energy_error)
+        
         if verbose:
-            # Calculate errors for best candidate this iteration
-            best_pos_error = float(jnp.linalg.norm(population[0]['position'] - true_position))
-            best_dir_error = float(jnp.arccos(jnp.clip(jnp.abs(jnp.dot(population[0]['direction'], true_direction)), 0, 1)))
-            best_dir_error_deg = np.degrees(best_dir_error)
-            best_energy_error = float(jnp.abs(population[0]['energy'] - true_energy))
-            
             print(f"  Best loss this iteration: {population[0]['loss']:.6f}")
             print(f"  Best overall loss: {best_overall_loss:.6f}")
             print(f"  Population loss range: [{population[0]['loss']:.6f}, {population[-1]['loss']:.6f}]")
@@ -224,7 +247,10 @@ def adaptive_search(true_charges, true_times, simulate_event, sensor_params, sen
             
             population = new_population
     
-    return best_overall, population
+    if track_history:
+        return best_overall, population, history
+    else:
+        return best_overall, population
 
 
 def create_event_visualization(true_position, true_direction, true_energy, best_match, 
@@ -370,6 +396,183 @@ def print_summary_statistics(results, total_search_time):
     print(f"  Success rate: {n_successful/n_total*100:.1f}%")
 
 
+def create_convergence_plots(event_histories, figures_dir=None, show_individual=True, show_statistics=True):
+    """
+    Create comprehensive visualization of multi-event optimization convergence.
+    Shows parameter errors evolution during iterations.
+    """
+    if not event_histories:
+        print("No convergence histories to plot.")
+        return
+    
+    N_events = len(event_histories)
+    n_iterations = len(event_histories[0]['position_error'])
+    
+    # Create figure with subplots
+    fig, ((ax1, ax2, ax3), (ax4, ax5, ax6)) = plt.subplots(2, 3, figsize=(15, 10))
+    
+    # Plot 1: Energy Error
+    if show_individual:
+        for i in range(N_events):
+            ax1.plot(event_histories[i]['energy_error'], alpha=0.3, color='blue', linewidth=0.5)
+    
+    if show_statistics:
+        all_energy_errors = np.array([h['energy_error'] for h in event_histories])
+        mean_energy_error = np.mean(all_energy_errors, axis=0)
+        std_energy_error = np.std(all_energy_errors, axis=0)
+        median_energy_error = np.median(all_energy_errors, axis=0)
+        
+        iterations = range(n_iterations)
+        ax1.plot(iterations, mean_energy_error, 'r-', linewidth=2, label=f'Mean (N={N_events})')
+        ax1.fill_between(iterations, mean_energy_error - std_energy_error, 
+                        mean_energy_error + std_energy_error, alpha=0.2, color='red', label='±1σ')
+        ax1.plot(iterations, median_energy_error, 'g--', linewidth=2, label='Median')
+    
+    ax1.set_xlabel('Iteration')
+    ax1.set_ylabel('Energy Error (MeV)')
+    ax1.set_title('Energy Error Convergence')
+    ax1.legend()
+    ax1.grid(True, alpha=0.3)
+    
+    # Plot 2: Position Error
+    if show_individual:
+        for i in range(N_events):
+            ax2.plot(event_histories[i]['position_error'], alpha=0.3, color='blue', linewidth=0.5)
+    
+    if show_statistics:
+        all_position_errors = np.array([h['position_error'] for h in event_histories])
+        mean_position_error = np.mean(all_position_errors, axis=0)
+        std_position_error = np.std(all_position_errors, axis=0)
+        median_position_error = np.median(all_position_errors, axis=0)
+        
+        ax2.plot(iterations, mean_position_error, 'r-', linewidth=2, label='Mean')
+        ax2.fill_between(iterations, mean_position_error - std_position_error, 
+                        mean_position_error + std_position_error, alpha=0.2, color='red')
+        ax2.plot(iterations, median_position_error, 'g--', linewidth=2, label='Median')
+    
+    ax2.set_xlabel('Iteration')
+    ax2.set_ylabel('Position Error (m)')
+    ax2.set_title('Position Error Convergence')
+    ax2.legend()
+    ax2.grid(True, alpha=0.3)
+    
+    # Plot 3: Direction Error
+    if show_individual:
+        for i in range(N_events):
+            ax3.plot(event_histories[i]['direction_error'], alpha=0.3, color='blue', linewidth=0.5)
+    
+    if show_statistics:
+        all_direction_errors = np.array([h['direction_error'] for h in event_histories])
+        mean_direction_error = np.mean(all_direction_errors, axis=0)
+        std_direction_error = np.std(all_direction_errors, axis=0)
+        median_direction_error = np.median(all_direction_errors, axis=0)
+        
+        ax3.plot(iterations, mean_direction_error, 'r-', linewidth=2, label='Mean')
+        ax3.fill_between(iterations, mean_direction_error - std_direction_error, 
+                        mean_direction_error + std_direction_error, alpha=0.2, color='red')
+        ax3.plot(iterations, median_direction_error, 'g--', linewidth=2, label='Median')
+    
+    ax3.set_xlabel('Iteration')
+    ax3.set_ylabel('Direction Error (degrees)')
+    ax3.set_title('Direction Error Convergence')
+    ax3.legend()
+    ax3.grid(True, alpha=0.3)
+    
+    # Plot 4: Best Loss Evolution
+    if show_individual:
+        for i in range(N_events):
+            ax4.plot(event_histories[i]['best_loss'], alpha=0.3, color='blue', linewidth=0.5)
+    
+    if show_statistics:
+        all_losses = np.array([h['best_loss'] for h in event_histories])
+        mean_loss = np.mean(all_losses, axis=0)
+        std_loss = np.std(all_losses, axis=0)
+        median_loss = np.median(all_losses, axis=0)
+        
+        ax4.plot(iterations, mean_loss, 'r-', linewidth=2, label='Mean')
+        ax4.fill_between(iterations, mean_loss - std_loss, 
+                        mean_loss + std_loss, alpha=0.2, color='red')
+        ax4.plot(iterations, median_loss, 'g--', linewidth=2, label='Median')
+    
+    ax4.set_xlabel('Iteration')
+    ax4.set_ylabel('Best Loss')
+    ax4.set_title('Loss Function Convergence')
+    ax4.set_yscale('log')
+    ax4.legend()
+    ax4.grid(True, alpha=0.3)
+    
+    # Plot 5: Energy Evolution
+    if show_individual:
+        for i in range(N_events):
+            ax5.plot(event_histories[i]['best_energy'], alpha=0.3, color='blue', linewidth=0.5)
+    
+    if show_statistics:
+        all_energies = np.array([h['best_energy'] for h in event_histories])
+        mean_energy = np.mean(all_energies, axis=0)
+        std_energy = np.std(all_energies, axis=0)
+        median_energy = np.median(all_energies, axis=0)
+        
+        ax5.plot(iterations, mean_energy, 'r-', linewidth=2, label='Mean')
+        ax5.fill_between(iterations, mean_energy - std_energy, 
+                        mean_energy + std_energy, alpha=0.2, color='red')
+        ax5.plot(iterations, median_energy, 'g--', linewidth=2, label='Median')
+    
+    ax5.set_xlabel('Iteration')
+    ax5.set_ylabel('Best Energy (MeV)')
+    ax5.set_title('Energy Parameter Evolution')
+    ax5.legend()
+    ax5.grid(True, alpha=0.3)
+    
+    # Plot 6: Combined Error Metric
+    if show_individual:
+        for i in range(N_events):
+            # Normalized combined error (position/5 + direction/90 + energy/500)
+            combined_error = [
+                p/5.0 + d/90.0 + e/500.0 
+                for p, d, e in zip(event_histories[i]['position_error'], 
+                                 event_histories[i]['direction_error'],
+                                 event_histories[i]['energy_error'])
+            ]
+            ax6.plot(combined_error, alpha=0.3, color='blue', linewidth=0.5)
+    
+    if show_statistics:
+        all_combined_errors = []
+        for i in range(N_events):
+            combined_error = [
+                p/5.0 + d/90.0 + e/500.0 
+                for p, d, e in zip(event_histories[i]['position_error'], 
+                                 event_histories[i]['direction_error'],
+                                 event_histories[i]['energy_error'])
+            ]
+            all_combined_errors.append(combined_error)
+        
+        combined_error_array = np.array(all_combined_errors)
+        mean_combined = np.mean(combined_error_array, axis=0)
+        std_combined = np.std(combined_error_array, axis=0)
+        median_combined = np.median(combined_error_array, axis=0)
+        
+        ax6.plot(iterations, mean_combined, 'r-', linewidth=2, label='Mean')
+        ax6.fill_between(iterations, mean_combined - std_combined, 
+                        mean_combined + std_combined, alpha=0.2, color='red')
+        ax6.plot(iterations, median_combined, 'g--', linewidth=2, label='Median')
+    
+    ax6.set_xlabel('Iteration')
+    ax6.set_ylabel('Normalized Combined Error')
+    ax6.set_title('Combined Error Convergence')
+    ax6.legend()
+    ax6.grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    
+    # Save figure
+    output_file = 'adaptive_search_convergence.png'
+    if figures_dir:
+        output_file = os.path.join(figures_dir, output_file)
+    plt.savefig(output_file, dpi=150, bbox_inches='tight')
+    print(f"Convergence plots saved to {output_file}")
+    plt.close()
+
+
 def create_summary_plots(results, figures_dir=None):
     """Create summary histogram plots for multiple events."""
     successful_results = [r for r in results if r['success']]
@@ -410,7 +613,7 @@ def create_summary_plots(results, figures_dir=None):
     plt.tight_layout()
     
     # Save figure
-    output_file = f'adaptive_search_summary_{len(successful_results)}events.png'
+    output_file = 'adaptive_search_summary.png'
     if figures_dir:
         output_file = os.path.join(figures_dir, output_file)
     plt.savefig(output_file, dpi=150, bbox_inches='tight')
@@ -468,6 +671,7 @@ def main(verbose=True, n_events=1, save_event_plots=False):
     
     # Initialize statistics collection
     results = []
+    event_histories = []
     total_search_time = 0.0
     
     if verbose:
@@ -531,11 +735,23 @@ def main(verbose=True, n_events=1, save_event_plots=False):
         if verbose or n_events == 1:
             print(f"\nStarting adaptive search...")
         search_start_time = datetime.now()
-        best_match, final_population = adaptive_search(
+        
+        # Track history for multi-event runs to enable convergence plots
+        track_history = n_events > 1
+        search_result = adaptive_search(
             true_charges, true_times, simulate_event, sensor_params, sensor_positions,
             detector_bounds, true_position, true_direction, true_energy,
-            n_iterations=40, population_size=20, elite_fraction=0.2, verbose=verbose and n_events == 1
+            n_iterations=40, population_size=20, elite_fraction=0.2, 
+            verbose=verbose and n_events == 1, track_history=track_history
         )
+        
+        # Unpack results based on whether history was tracked
+        if track_history:
+            best_match, final_population, event_history = search_result
+            event_histories.append(event_history)
+        else:
+            best_match, final_population = search_result
+            
         search_duration = (datetime.now() - search_start_time).total_seconds()
         total_search_time += search_duration
         
@@ -602,6 +818,10 @@ def main(verbose=True, n_events=1, save_event_plots=False):
     if n_events > 1:
         print_summary_statistics(results, total_search_time)
         create_summary_plots(results, figures_dir)
+        
+        # Create convergence plots if we have event histories
+        if event_histories:
+            create_convergence_plots(event_histories, figures_dir)
 
 
 if __name__ == "__main__":
