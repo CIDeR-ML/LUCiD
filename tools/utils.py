@@ -352,7 +352,7 @@ def print_particle_params(trk_params):
     print(f"  Direction angles: theta={theta:.2f} rad, phi={phi:.2f} rad")
     print(f"  Direction vector: [{direction[0]:.2f}, {direction[1]:.2f}, {direction[2]:.2f}]")
 
-def print_sensor_params(sensor_params):
+def print_propagation_params(sensor_params):
     """
     Pretty print the detector parameters.
 
@@ -372,10 +372,10 @@ def print_sensor_params(sensor_params):
         jnp.array(10.),         # scatter_length
         jnp.array(0.1),         # reflection_rate
         jnp.array(10.),         # absorption_length
-        jnp.array(0.1)         # sim_temperature
+        jnp.array(0.1)          # sim_temperature
     )
-        print_sensor_params(sensor_params)
-    Detector Parameters:
+        print_propagation_params(sensor_params)
+    Propagation Parameters:
     ───────────────────────
     Scatter Length: 10.00 m
     Reflection Rate: 0.10
@@ -387,7 +387,7 @@ def print_sensor_params(sensor_params):
     scatter_length, reflection_rate, absorption_length, sim_temperature = sensor_params
 
     # Create formatted output with consistent decimal places
-    print("Detector Parameters:")
+    print("Propagation Parameters:")
     print("─" * 20)
     print(f"Scatter Length: {scatter_length:.2f} m")
     print(f"Reflection Rate: {reflection_rate:.2f}")

@@ -472,7 +472,7 @@ def jax_rotate_vector(vector, axis, angle):
     dot_product = jnp.dot(axis, vector) * (1 - cos_angle)
     return cos_angle * vector + sin_angle * cross_product + dot_product * axis
 
-def make_hits_simulation(flat_weights, flat_indices, flat_times, num_detectors, beta=0.01):
+def make_hits_simulation(flat_weights, flat_indices, flat_times, num_detectors, beta=100.1):
     """
     Compute detector charges and aligned times using softmin first-photon timing.
     
@@ -923,8 +923,8 @@ def create_event_simulator(detector, propagate_photons, Nphot, NUM_SENSORS, sens
             # jax.debug.print("AAA - Iteration {}: Found {} problematic new direc NaN", i, jnp.sum(nan_dir_mask))
             # jax.debug.print("AAA - Iteration {}: Found {} problematic new cont fact NaN", i, jnp.sum(nan_factors_mask))
 
-            nan_count = jnp.sum(problematic_rays)
-            jax.debug.print("Iteration {}: Found {} problematic rays with NaN", i, nan_count)
+            # nan_count = jnp.sum(problematic_rays)
+            # jax.debug.print("Iteration {}: Found {} problematic rays with NaN", i, nan_count)
 
             # Replace NaN outputs with safe values
             safe_new_positions = jnp.where(
@@ -962,7 +962,7 @@ def create_event_simulator(detector, propagate_photons, Nphot, NUM_SENSORS, sens
                 continuing_factors  # Use computed factor
             )
 
-            jax.debug.print("Z - Zero Cont Fact: {}", jnp.sum(safe_continuing_factors==0))
+            # jax.debug.print("Z - Zero Cont Fact: {}", jnp.sum(safe_continuing_factors==0))
 
             # Calculate intensities
             detected_intensity_factors = detect_probs * reflection_attenuations
