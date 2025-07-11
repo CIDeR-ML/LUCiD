@@ -886,7 +886,7 @@ def create_event_simulator(detector, propagate_photons, Nphot, NUM_SENSORS, sens
 
             # Propagate photons to find intersections
             prop_results = propagate_fn(current_positions, current_directions)
-            depositions = prop_results['detector_weights']
+            depositions = prop_results['sensor_weights']
             sensor_indices = prop_results['sensor_indices']
             times = prop_results['times']
             hit_positions = prop_results['positions']

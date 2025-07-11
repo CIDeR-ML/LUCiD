@@ -173,8 +173,8 @@ def assign_sensors_to_sphere_grid(sensors, sensor_radius, radius, n_divisions):
 
     Parameters
     ----------
-    detectors : jnp.ndarray
-        Array of sensor positions, shape (n_detectors, 3)
+    sensors : jnp.ndarray
+        Array of sensor positions, shape (n_sensors, 3)
     sensor_radius : float
         Radius of each sensor
     radius : float
@@ -185,17 +185,17 @@ def assign_sensors_to_sphere_grid(sensors, sensor_radius, radius, n_divisions):
     Returns
     -------
     jnp.ndarray
-        Array of shape (n_detectors, 4, 2) containing up to 4 grid cell assignments
-        per detector. -1 indicates no assignment.
+        Array of shape (n_sensors, 4, 2) containing up to 4 grid cell assignments
+        per sensor. -1 indicates no assignment.
     """
     
-    def assign_single_detector(detector):
-        # Convert detector position to spherical coordinates relative to sphere center
+    def assign_single_sensor(sensor):
+        # Convert sensor position to spherical coordinates relative to sphere center
         center = jnp.array([0.0, 0.0, 0.0])
-        relative_pos = detector - center
+        relative_pos = sensor - center
         r = jnp.linalg.norm(relative_pos)
         
-        # Check if detector is approximately on sphere surface
+        # Check if sensor is approximately on sphere surface
         on_surface = jnp.abs(r - radius) <= sensor_radius
         
         def assign_surface():
@@ -286,8 +286,8 @@ def create_sensor_sphere_grid_map(assignments, n_divisions):
             
             return g.at[idx].add(is_valid)
         
-        return jax.lax.fori_loop(0, detector_assignments.shape[0], 
-                                lambda i, g: update_cell(detector_assignments[i], g), grid)
+        return jax.lax.fori_loop(0, sensor_assignments.shape[0], 
+                                lambda i, g: update_cell(sensor_assignments[i], g), grid)
     
     all_updates = jax.vmap(update_grid)(assignments)
     return all_updates.sum(axis=0)
@@ -325,8 +325,8 @@ def calculate_sphere_grid_centers(radius, n_divisions):
 
 @partial(jax.jit, static_argnums=(2, 3, 4), device=jax.devices('cpu')[0])
 def create_inverted_sphere_sensor_map(assignments_geometric, assignments_distance, n_divisions,
-                                       max_sensors_per_cell, num_detectors):
-    """Create inverted detector map for sphere prioritizing geometric intersections then closest detectors"""
+                                       max_sensors_per_cell, num_sensors):
+    """Create inverted sensor map for sphere prioritizing geometric intersections then closest sensors"""
     n_theta = n_divisions
     n_phi = 2 * n_divisions
     total_cells = n_theta * n_phi
@@ -344,10 +344,10 @@ def create_inverted_sphere_sensor_map(assignments_geometric, assignments_distanc
             theta_idx = i // n_phi
             phi_idx = i % n_phi
             
-            # Check if detector j intersects with this cell
-            detector_assignments = assignments_geometric[j]
-            matches = (detector_assignments[:, 0] == theta_idx) & \
-                     (detector_assignments[:, 1] == phi_idx)
+            # Check if sensor j intersects with this cell
+            sensor_assignments = assignments_geometric[j]
+            matches = (sensor_assignments[:, 0] == theta_idx) & \
+                     (sensor_assignments[:, 1] == phi_idx)
             
             cell_matches = jnp.any(matches)
             should_add = cell_matches & (curr_count < max_sensors_per_cell)
@@ -367,17 +367,17 @@ def create_inverted_sphere_sensor_map(assignments_geometric, assignments_distanc
             jnp.arange(len(assignments_geometric))
         )
         
-        # Get closest detectors for this cell
+        # Get closest sensors for this cell
         closest = assignments_distance[i]
         
-        # Add closest detectors if there's room
+        # Add closest sensors if there's room
         def add_closest(carry, j):
             curr_map, curr_count = carry
-            detector_idx = closest[j]
+            sensor_idx = closest[j]
             
             # Check for duplicates
             def check_duplicate(k, is_dup):
-                return is_dup | (curr_map[i, k] == detector_idx)
+                return is_dup | (curr_map[i, k] == sensor_idx)
             
             is_duplicate = jax.lax.fori_loop(
                 0, curr_count,
@@ -390,13 +390,13 @@ def create_inverted_sphere_sensor_map(assignments_geometric, assignments_distanc
             
             new_map = jnp.where(
                 should_add,
-                curr_map.at[i, curr_count].set(detector_idx),
+                curr_map.at[i, curr_count].set(sensor_idx),
                 curr_map
             )
             
             return (new_map, curr_count + should_add), None
         
-        # Fill remaining slots with closest detectors
+        # Fill remaining slots with closest sensors
         (final_map, _), _ = jax.lax.scan(
             add_closest,
             (new_map, geom_count),
@@ -418,7 +418,7 @@ def find_intersected_sphere_sensors_differentiable(ray_origins, ray_directions, 
                                                     radius, n_divisions, inverted_sensor_map,
                                                     temperature, overlap_prob):
     """
-    Finds detectors intersected by rays using a differentiable approximation with overlap-based weights.
+    Finds sensors intersected by rays using a differentiable approximation with overlap-based weights.
     """
     single_ray = ray_origins.ndim == 1
     if single_ray:
@@ -443,7 +443,7 @@ def find_intersected_sphere_sensors_differentiable(ray_origins, ray_directions, 
     # Create bounds check function
     bounds_check = lambda points: sphere_bounds_check(points, radius)
 
-    # Process all potential detectors
+    # Process all potential sensors
     sensor_results = jax.vmap(
         lambda det_idx: compute_sensor_intersections_base(
             det_idx, sensor_positions, sensor_radius,
@@ -454,16 +454,16 @@ def find_intersected_sphere_sensors_differentiable(ray_origins, ray_directions, 
     weights = sensor_results[0]
     sensor_times = sensor_results[1]
     sensor_indices = sensor_results[2]
-    detector_normals = sensor_results[3]
+    sensor_normals = sensor_results[3]
     inside_detector = sensor_results[4]
-    detector_hit_positions = sensor_results[5]
+    sensor_hit_positions = sensor_results[5]
 
     # Calculate sphere surface normals
     sphere_normals = calculate_sphere_normals(intersection_point)
 
     intersection_results = process_intersection_normals(
         ray_origins, ray_directions, intersection_point,
-        t_sphere, detector_normals, detector_hit_positions,
+        t_sphere, sensor_normals, sensor_hit_positions,
         inside_detector, sphere_normals
     )
 
@@ -472,12 +472,12 @@ def find_intersected_sphere_sensors_differentiable(ray_origins, ray_directions, 
 
     result = {
         'times': sensor_times,
-        'detector_weights': weights,
+        'sensor_weights': weights,
         'sensor_indices': sensor_indices,
-        'per_sensor_positions': detector_hit_positions,
+        'per_sensor_positions': sensor_hit_positions,
         'positions': hit_positions,
         'normals': final_normals,
-        'detector_normals': detector_normals,
+        'sensor_normals': sensor_normals,
         'inside_detector': inside_detector
     }
 
@@ -493,7 +493,7 @@ def create_sphere_photon_propagator(sensor_positions, sensor_radius, sphere_radi
     assignments_geometric = assign_sensors_to_sphere_grid(
         sensor_positions, sensor_radius, sphere_radius, n_divisions)
 
-    detector_grid_map = create_sensor_sphere_grid_map(
+    sensor_grid_map = create_sensor_sphere_grid_map(
         assignments_geometric, n_divisions)
 
     assignments_distance = find_closest_sensors(

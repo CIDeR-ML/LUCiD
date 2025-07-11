@@ -277,13 +277,13 @@ def cylinder_bounds_check(points, r, h):
 
 
 @partial(jax.jit, static_argnums=(2, 3, 4, 5, 6))
-def assign_sensors_to_grid(detectors, sensor_radius, r, h, n_cap, n_angular, n_height):
+def assign_sensors_to_grid(sensors, sensor_radius, r, h, n_cap, n_angular, n_height):
     """Assign sensors to grid cells, handling overlap across cell boundaries.
 
     Parameters
     ----------
-    detectors : jnp.ndarray
-        Array of sensor positions, shape (n_detectors, 3)
+    sensors : jnp.ndarray
+        Array of sensor positions, shape (n_sensors, 3)
     sensor_radius : float
         Radius of each sensor
     r : float
@@ -300,18 +300,18 @@ def assign_sensors_to_grid(detectors, sensor_radius, r, h, n_cap, n_angular, n_h
     Returns
     -------
     jnp.ndarray
-        Array of shape (n_detectors, 4, 3) containing up to 4 grid cell assignments
-        per detector. -1 indicates no assignment.
+        Array of shape (n_sensors, 4, 3) containing up to 4 grid cell assignments
+        per sensor. -1 indicates no assignment.
     """
 
-    def assign_single_detector(detector):
-        x, y, z = detector
+    def assign_single_sensor(sensor):
+        x, y, z = sensor
 
         # Convert to cylindrical coordinates
         radius = jnp.sqrt(x ** 2 + y ** 2)
         angle = jnp.arctan2(y, x) % (2 * jnp.pi)
 
-        # Determine detector location (wall or cap)
+        # Determine sensor location (wall or cap)
         on_wall = jnp.abs(radius - r) <= sensor_radius
         on_top = z > h / 2 - sensor_radius
         on_bottom = z < -h / 2 + sensor_radius
@@ -432,19 +432,19 @@ def assign_sensors_to_grid(detectors, sensor_radius, r, h, n_cap, n_angular, n_h
             )
         )
 
-    return jax.vmap(assign_single_detector)(detectors)
+    return jax.vmap(assign_single_sensor)(sensors)
 
 
 @partial(jax.jit, static_argnums=(1, 2, 3))
 def create_sensor_grid_map(assignments, n_cap, n_angular, n_height):
     """
-    Creates a grid map counting the number of detectors in each cell of the detector grid.
+    Creates a grid map counting the number of sensors in each cell of the sensor grid.
     """
     # Calculate grid size: wall cells + cells in both caps
     total_cells = n_angular * n_height + 2 * n_cap * n_cap
     grid = jnp.zeros(total_cells, dtype=jnp.int32)
 
-    def update_grid(detector_assignments):
+    def update_grid(sensor_assignments):
         def update_cell(cell, g):
             i, j, k = cell
             is_valid = (i != -1) & (j != -1) & (k != -1)
@@ -456,7 +456,7 @@ def create_sensor_grid_map(assignments, n_cap, n_angular, n_height):
 
             return g.at[idx].add(is_valid)
 
-        return jax.lax.fori_loop(0, detector_assignments.shape[0], lambda i, g: update_cell(detector_assignments[i], g),
+        return jax.lax.fori_loop(0, sensor_assignments.shape[0], lambda i, g: update_cell(sensor_assignments[i], g),
                                  grid)
 
     all_updates = jax.vmap(update_grid)(assignments)
@@ -510,8 +510,8 @@ def calculate_grid_centers(r, h, n_cap, n_angular, n_height):
 
 @partial(jax.jit, static_argnums=(2, 3, 4, 5, 6), device=jax.devices('cpu')[0])
 def create_inverted_sensor_map(assignments_geometric, assignments_distance, n_cap, n_angular, n_height,
-                                 max_sensors_per_cell, num_detectors):
-    """Create inverted detector map prioritizing geometric intersections then closest detectors"""
+                                 max_sensors_per_cell, num_sensors):
+    """Create inverted sensor map prioritizing geometric intersections then closest sensors"""
     total_cells = n_angular * n_height + 2 * n_cap * n_cap
 
     # Initialize map
@@ -544,11 +544,11 @@ def create_inverted_sensor_map(assignments_geometric, assignments_distance, n_ca
                                0,
                                jnp.where(is_top_cap_cell, 1, 2))
 
-            # Check if detector j intersects with this cell in 3D coordinates
-            detector_assignments = assignments_geometric[j]
-            matches = (detector_assignments[:, 0] == cell_i) & \
-                      (detector_assignments[:, 1] == cell_j) & \
-                      (detector_assignments[:, 2] == cell_k)
+            # Check if sensor j intersects with this cell in 3D coordinates
+            sensor_assignments = assignments_geometric[j]
+            matches = (sensor_assignments[:, 0] == cell_i) & \
+                      (sensor_assignments[:, 1] == cell_j) & \
+                      (sensor_assignments[:, 2] == cell_k)
 
             cell_matches = jnp.any(matches)
             should_add = cell_matches & (curr_count < max_sensors_per_cell)
@@ -568,17 +568,17 @@ def create_inverted_sensor_map(assignments_geometric, assignments_distance, n_ca
             jnp.arange(len(assignments_geometric))
         )
 
-        # Get closest detectors for this cell
+        # Get closest sensors for this cell
         closest = assignments_distance[i]
 
-        # Add closest detectors if there's room
+        # Add closest sensors if there's room
         def add_closest(carry, j):
             curr_map, curr_count = carry
-            detector_idx = closest[j]
+            sensor_idx = closest[j]
 
             # Check for duplicates
             def check_duplicate(k, is_dup):
-                return is_dup | (curr_map[i, k] == detector_idx)
+                return is_dup | (curr_map[i, k] == sensor_idx)
 
             is_duplicate = jax.lax.fori_loop(
                 0, curr_count,
@@ -591,13 +591,13 @@ def create_inverted_sensor_map(assignments_geometric, assignments_distance, n_ca
 
             new_map = jnp.where(
                 should_add,
-                curr_map.at[i, curr_count].set(detector_idx),
+                curr_map.at[i, curr_count].set(sensor_idx),
                 curr_map
             )
 
             return (new_map, curr_count + should_add), None
 
-        # Fill remaining slots with closest detectors
+        # Fill remaining slots with closest sensors
         (final_map, _), _ = jax.lax.scan(
             add_closest,
             (new_map, geom_count),
@@ -619,7 +619,7 @@ def find_intersected_sensors_differentiable(ray_origins, ray_directions, sensor_
                                            n_cap, n_angular, n_height, inverted_sensor_map,
                                            temperature, overlap_prob):
     """
-    Finds detectors intersected by rays using a differentiable approximation with overlap-based weights.
+    Finds sensors intersected by rays using a differentiable approximation with overlap-based weights.
     """
     single_ray = ray_origins.ndim == 1
     if single_ray:
@@ -649,7 +649,7 @@ def find_intersected_sensors_differentiable(ray_origins, ray_directions, sensor_
     # Create bounds check function
     bounds_check = lambda points: cylinder_bounds_check(points, r, h)
 
-    # Process all potential detectors
+    # Process all potential sensors
     sensor_results = jax.vmap(
         lambda det_idx: compute_sensor_intersections_base(
             det_idx, sensor_positions, sensor_radius,
@@ -660,16 +660,16 @@ def find_intersected_sensors_differentiable(ray_origins, ray_directions, sensor_
     weights = sensor_results[0]
     sensor_times = sensor_results[1]
     sensor_indices = sensor_results[2]
-    detector_normals = sensor_results[3]
+    sensor_normals = sensor_results[3]
     inside_detector = sensor_results[4]
-    detector_hit_positions = sensor_results[5]
+    sensor_hit_positions = sensor_results[5]
 
     # Calculate cylinder normals
     cylinder_normals = calculate_cylinder_normals(intersection_point, is_wall, is_top_cap)
 
     intersection_results = process_intersection_normals(
         ray_origins, ray_directions, intersection_point,
-        t_cylinder, detector_normals, detector_hit_positions,
+        t_cylinder, sensor_normals, sensor_hit_positions,
         inside_detector, cylinder_normals
     )
 
@@ -678,12 +678,12 @@ def find_intersected_sensors_differentiable(ray_origins, ray_directions, sensor_
 
     result = {
         'times': sensor_times,
-        'detector_weights': weights,
+        'sensor_weights': weights,
         'sensor_indices': sensor_indices,
-        'per_sensor_positions': detector_hit_positions,
+        'per_sensor_positions': sensor_hit_positions,
         'positions': hit_positions,
         'normals': final_normals,
-        'detector_normals': detector_normals,
+        'sensor_normals': sensor_normals,
         'inside_detector': inside_detector
     }
 
@@ -698,7 +698,7 @@ def create_photon_propagator(sensor_positions, sensor_radius, r=4.0, h=6.0, n_ca
     assignments_geometric = assign_sensors_to_grid(
         sensor_positions, sensor_radius, r, h, n_cap, n_angular, n_height)
 
-    detector_grid_map = create_sensor_grid_map(
+    sensor_grid_map = create_sensor_grid_map(
         assignments_geometric, n_cap, n_angular, n_height)
 
     assignments_distance = find_closest_sensors(
