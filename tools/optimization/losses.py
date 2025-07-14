@@ -328,4 +328,41 @@ def compute_shared_gradients(params, true_charges, true_times, simulate_event, s
     energy_grad = jax.tree.map(lambda x: x[0], jacobian)  # Gradient w.r.t. energy loss
     spatial_grad = jax.tree.map(lambda x: x[1], jacobian)  # Gradient w.r.t. spatial loss
     
+    # Check for NaN values and replace with zeros if needed (to prevent complete optimization failure)
+    def replace_nan_with_zero(x, component_name=""):
+        nan_mask = jnp.isnan(x)
+        nan_count = jnp.sum(nan_mask)
+        total_elements = x.size
+        nan_fraction = nan_count / total_elements
+        
+        # Print warning if NaNs are found
+        if nan_count > 0:
+            print(f"⚠️  NaN replacement in {component_name}: {nan_count}/{total_elements} elements ({nan_fraction:.3f} fraction)")
+        
+        return jnp.where(nan_mask, 0.0, x)
+    
+    # Apply NaN replacement with component identification
+    def replace_nans_in_tree(tree, tree_name):
+        def replace_with_name(x, path=""):
+            component_name = f"{tree_name}"
+            if path:
+                component_name += f".{path}"
+            return replace_nan_with_zero(x, component_name)
+        
+        # For our gradient tree structure: (energy_grad, position_grad, direction_grad)
+        if isinstance(tree, tuple) and len(tree) == 3:
+            energy_grad_clean = replace_nan_with_zero(tree[0], f"{tree_name}.energy")
+            position_grad_clean = jax.tree.map(
+                lambda x: replace_nan_with_zero(x, f"{tree_name}.position"), tree[1]
+            )
+            direction_grad_clean = jax.tree.map(
+                lambda x: replace_nan_with_zero(x, f"{tree_name}.direction"), tree[2]
+            )
+            return (energy_grad_clean, position_grad_clean, direction_grad_clean)
+        else:
+            return jax.tree.map(replace_with_name, tree)
+    
+    energy_grad = replace_nans_in_tree(energy_grad, "energy_grad")
+    spatial_grad = replace_nans_in_tree(spatial_grad, "spatial_grad")
+    
     return energy_grad, spatial_grad, float(energy_loss_val), float(spatial_loss_val)
