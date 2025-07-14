@@ -132,6 +132,11 @@ def run_optimization(
     position_scale=0.1,
     direction_scale=0.1,
     patience=20,
+    # Adaptive scaling parameters
+    auto_scale=True,
+    target_energy_update_mev=10.0,
+    target_position_update_fraction=0.05,
+    target_direction_update_degrees=5.0,
     # Other parameters
     save_event_plots=False,
     verbose=True,
@@ -247,7 +252,11 @@ def run_optimization(
         'patience_factor': 0.5,
         'tau': 0.01,
         'lambda_time': 1.0,
-        'lambda_intensity': 1.0
+        'lambda_intensity': 1.0,
+        'auto_scale': auto_scale,
+        'target_energy_update_mev': target_energy_update_mev,
+        'target_position_update_fraction': target_position_update_fraction,
+        'target_direction_update_degrees': target_direction_update_degrees
     }
     
     if verbose:
@@ -466,6 +475,16 @@ Examples:
     parser.add_argument('--patience', type=int, default=20,
                         help='Patience for learning rate reduction (default: 20)')
     
+    # Adaptive scaling parameters
+    parser.add_argument('--no-auto-scale', action='store_true',
+                        help='Disable automatic gradient scale calculation')
+    parser.add_argument('--target-energy-update', type=float, default=10.0,
+                        help='Target first energy update in MeV (default: 10.0)')
+    parser.add_argument('--target-position-update', type=float, default=0.05,
+                        help='Target first position update as fraction of detector scale (default: 0.05)')
+    parser.add_argument('--target-direction-update', type=float, default=5.0,
+                        help='Target first direction update in degrees (default: 5.0)')
+    
     # Simulation parameters
     parser.add_argument('--photons', type=int, default=1_000_000,
                         help='Number of photons to simulate (default: 1000000)')
@@ -510,6 +529,10 @@ Examples:
         position_scale=args.position_scale,
         direction_scale=args.direction_scale,
         patience=args.patience,
+        auto_scale=not args.no_auto_scale,
+        target_energy_update_mev=args.target_energy_update,
+        target_position_update_fraction=args.target_position_update,
+        target_direction_update_degrees=args.target_direction_update,
         save_event_plots=args.save_event_plots,
         verbose=verbose,
         random_seed=args.seed
