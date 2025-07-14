@@ -236,7 +236,7 @@ def print_summary_statistics(results, total_search_time):
 def create_convergence_plots(event_histories, figures_dir=None, show_individual=True, show_statistics=True, config_file=None):
     """
     Create comprehensive visualization of multi-event optimization convergence.
-    Shows parameter errors evolution during iterations.
+    Shows parameter errors evolution during iterations for both numerical and gradient phases.
     """
     # Extract detector name from config file path
     detector_name = "Unknown"
@@ -252,7 +252,18 @@ def create_convergence_plots(event_histories, figures_dir=None, show_individual=
         return
     
     N_events = len(event_histories)
-    n_iterations = len(event_histories[0]['position_error'])
+    
+    # Check if we have gradient history
+    has_gradient = 'gradient_loss' in event_histories[0]
+    
+    if has_gradient:
+        # For hybrid optimization, we need to combine numerical and gradient phases
+        n_numerical = len(event_histories[0]['position_error'])
+        n_gradient = len(event_histories[0]['gradient_loss']) if has_gradient else 0
+        n_total = n_numerical + n_gradient
+    else:
+        n_iterations = len(event_histories[0]['position_error'])
+        n_total = n_iterations
     
     # Create figure with subplots
     fig, ((ax1, ax2, ax3), (ax4, ax5, ax6)) = plt.subplots(2, 3, figsize=(15, 10))
@@ -416,6 +427,134 @@ def create_convergence_plots(event_histories, figures_dir=None, show_individual=
         output_file = os.path.join(figures_dir, output_file)
     plt.savefig(output_file, dpi=150, bbox_inches='tight')
     print(f"Convergence plots saved to {output_file}")
+    plt.close()
+
+
+def create_hybrid_convergence_plot(event_histories, figures_dir=None, config_file=None):
+    """
+    Create convergence plot showing both numerical and gradient optimization phases.
+    """
+    # Extract detector name
+    detector_name = "Unknown"
+    if config_file:
+        config_basename = os.path.basename(config_file)
+        if '_geom_config.json' in config_basename:
+            detector_name = config_basename.replace('_geom_config.json', '')
+    
+    if not event_histories:
+        print("No convergence histories to plot.")
+        return
+    
+    # Check if we have gradient history
+    has_gradient = 'gradient_loss' in event_histories[0]
+    
+    if not has_gradient:
+        print("No gradient optimization history found. Use regular convergence plot.")
+        return
+    
+    fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(14, 10))
+    
+    # For each event, create combined histories
+    for i, history in enumerate(event_histories):
+        # Get phase lengths
+        n_numerical_iterations = len(history['best_loss'])
+        n_gradient_iterations = len(history['gradient_loss'])
+        
+        # Calculate evaluation counts
+        # For numerical optimization, we need to know population size
+        # We can infer it from the history or pass it as parameter
+        # For now, let's assume it's stored or we use a default
+        population_size = history.get('population_size', 20)  # Default to 20 if not stored
+        
+        # Create x-axis based on evaluations
+        numerical_evals = []
+        eval_count = 0
+        for iter in range(n_numerical_iterations):
+            eval_count += population_size
+            numerical_evals.append(eval_count)
+        
+        # Gradient evaluations (1 per iteration)
+        gradient_evals = []
+        for iter in range(n_gradient_iterations):
+            eval_count += 1
+            gradient_evals.append(eval_count)
+        
+        # Loss plot (ax1)
+        ax1.semilogy(numerical_evals, history['best_loss'], 'b-', alpha=0.3, linewidth=1)
+        ax1.semilogy(gradient_evals, history['gradient_loss'], 'g-', alpha=0.3, linewidth=1)
+        
+        # Position error plot (ax2)
+        numerical_pos = history['position_error']
+        gradient_pos = history.get('gradient_position_error', [numerical_pos[-1]] * n_gradient_iterations)
+        
+        ax2.plot(numerical_evals, numerical_pos, 'b-', alpha=0.3, linewidth=1)
+        ax2.plot(gradient_evals, gradient_pos, 'g-', alpha=0.3, linewidth=1)
+        
+        # Direction error plot (ax3)
+        numerical_dir = history['direction_error']
+        gradient_dir = history.get('gradient_direction_error', [numerical_dir[-1]] * n_gradient_iterations)
+        
+        ax3.plot(numerical_evals, numerical_dir, 'b-', alpha=0.3, linewidth=1)
+        ax3.plot(gradient_evals, gradient_dir, 'g-', alpha=0.3, linewidth=1)
+        
+        # Energy error plot (ax4)
+        numerical_energy = history['energy_error']
+        gradient_energy = history.get('gradient_energy_error', [numerical_energy[-1]] * n_gradient_iterations)
+        
+        ax4.plot(numerical_evals, numerical_energy, 'b-', alpha=0.3, linewidth=1)
+        ax4.plot(gradient_evals, gradient_energy, 'g-', alpha=0.3, linewidth=1)
+    
+    # Add phase separators and labels (after all plots are done)
+    # Calculate separator position
+    total_numerical_evals = n_numerical_iterations * population_size
+    total_evals = total_numerical_evals + n_gradient_iterations
+    
+    for ax in [ax1, ax2, ax3, ax4]:
+        ax.axvline(x=total_numerical_evals, color='red', linestyle='--', alpha=0.7, linewidth=2)
+        
+        # Add phase labels
+        ax.text(total_numerical_evals/2, ax.get_ylim()[1]*0.95, 'Numerical', 
+                ha='center', va='top', fontsize=12, color='darkblue',
+                bbox=dict(boxstyle='round,pad=0.5', facecolor='lightblue', alpha=0.7))
+        ax.text(total_numerical_evals + n_gradient_iterations/2, ax.get_ylim()[1]*0.95, 'Gradient', 
+                ha='center', va='top', fontsize=12, color='darkgreen',
+                bbox=dict(boxstyle='round,pad=0.5', facecolor='lightgreen', alpha=0.7))
+    
+    # Titles and labels
+    ax1.set_title('Loss Function Convergence')
+    ax1.set_xlabel('Function Evaluations')
+    ax1.set_ylabel('Loss')
+    ax1.grid(True, alpha=0.3)
+    
+    ax2.set_title('Position Error Convergence')
+    ax2.set_xlabel('Function Evaluations')
+    ax2.set_ylabel('Position Error (m)')
+    ax2.grid(True, alpha=0.3)
+    
+    ax3.set_title('Direction Error Convergence')
+    ax3.set_xlabel('Function Evaluations')
+    ax3.set_ylabel('Direction Error (degrees)')
+    ax3.grid(True, alpha=0.3)
+    
+    ax4.set_title('Energy Error Convergence')
+    ax4.set_xlabel('Function Evaluations')
+    ax4.set_ylabel('Energy Error (MeV)')
+    ax4.grid(True, alpha=0.3)
+    
+    # Add overall title
+    fig.suptitle(f'{detector_name} Hybrid Optimization Convergence (N={len(event_histories)} events)', 
+                 fontsize=14, fontweight='bold')
+    
+    plt.tight_layout()
+    
+    # Save figure
+    if figures_dir:
+        filename = os.path.join(figures_dir, f'{detector_name}_hybrid_convergence.png')
+        plt.savefig(filename, dpi=300, bbox_inches='tight')
+        print(f"Hybrid convergence plot saved to {filename}")
+    else:
+        plt.show()
+    
     plt.close()
 
 

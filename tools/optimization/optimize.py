@@ -37,7 +37,8 @@ from tools.simulation import setup_event_simulator
 from tools.optimization.algorithms import adaptive_search, hybrid_optimization
 from tools.optimization.utils import (
     create_event_visualization, print_summary_statistics,
-    create_convergence_plots, create_summary_plots
+    create_convergence_plots, create_summary_plots,
+    create_hybrid_convergence_plot
 )
 
 
@@ -140,6 +141,7 @@ def run_optimization(
     # Other parameters
     save_event_plots=False,
     verbose=True,
+    gradient_debug=False,
     random_seed=1234567
 ):
     """
@@ -256,7 +258,9 @@ def run_optimization(
         'auto_scale': auto_scale,
         'target_energy_update_mev': target_energy_update_mev,
         'target_position_update_fraction': target_position_update_fraction,
-        'target_direction_update_degrees': target_direction_update_degrees
+        'target_direction_update_degrees': target_direction_update_degrees,
+        'gradient_debug': gradient_debug,
+        'gradient_verbose': gradient_debug  # Enable gradient verbosity when debug is requested
     }
     
     if verbose:
@@ -415,7 +419,11 @@ def run_optimization(
         
         # Create convergence plots if we have event histories
         if event_histories:
-            create_convergence_plots(event_histories, figures_dir, config_file=config_file)
+            # Check if we have gradient history (hybrid optimization)
+            if event_histories[0] and 'gradient_loss' in event_histories[0]:
+                create_hybrid_convergence_plot(event_histories, figures_dir, config_file=config_file)
+            else:
+                create_convergence_plots(event_histories, figures_dir, config_file=config_file)
     
     return results
 
@@ -494,6 +502,8 @@ Examples:
     # Output and verbosity
     parser.add_argument('--verbose', '-v', action='store_true',
                         help='Show detailed progress during iterations')
+    parser.add_argument('--gradient-debug', action='store_true',
+                        help='Show gradient debugging info every iteration (instead of every 10)')
     parser.add_argument('--quiet', '-q', action='store_true',
                         help='Suppress iteration details (opposite of verbose)')
     parser.add_argument('--save-event-plots', action='store_true',
@@ -535,6 +545,7 @@ Examples:
         target_direction_update_degrees=args.target_direction_update,
         save_event_plots=args.save_event_plots,
         verbose=verbose,
+        gradient_debug=args.gradient_debug,
         random_seed=args.seed
     )
     
