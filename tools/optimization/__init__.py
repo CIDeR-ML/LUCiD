@@ -3,7 +3,7 @@ LUCiD optimization module for parameter reconstruction.
 """
 
 from .algorithms import (
-    adaptive_search, sample_around_point,
+    optimization_engine, sample_around_point,
     create_gradient_optimizer, gradient_step, 
     gradient_optimization_with_patience, hybrid_optimization
 )
@@ -16,7 +16,7 @@ from .utils import (
 )
 
 __all__ = [
-    'adaptive_search',
+    'optimization_engine',
     'sample_around_point',
     'create_gradient_optimizer',
     'gradient_step',

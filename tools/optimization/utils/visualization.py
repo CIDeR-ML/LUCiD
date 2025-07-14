@@ -182,7 +182,7 @@ def create_event_visualization(true_position, true_direction, true_energy, best_
     plt.tight_layout()
     
     # Save figure
-    output_file = f'{detector_name}_adaptive_search_event_{event_idx + 1:03d}.png'
+    output_file = f'{detector_name}_optimization_event_{event_idx + 1:03d}.png'
     if figures_dir:
         output_file = os.path.join(figures_dir, output_file)
     plt.savefig(output_file, dpi=150, bbox_inches='tight')
@@ -422,7 +422,7 @@ def create_convergence_plots(event_histories, figures_dir=None, show_individual=
     plt.tight_layout()
     
     # Save figure
-    output_file = f'{detector_name}_adaptive_search_convergence.png'
+    output_file = f'{detector_name}_optimization_convergence.png'
     if figures_dir:
         output_file = os.path.join(figures_dir, output_file)
     plt.savefig(output_file, dpi=150, bbox_inches='tight')
@@ -607,7 +607,7 @@ def create_summary_plots(results, figures_dir=None, config_file=None):
     plt.tight_layout()
     
     # Save figure
-    output_file = f'{detector_name}_adaptive_search_summary.png'
+    output_file = f'{detector_name}_optimization_summary.png'
     if figures_dir:
         output_file = os.path.join(figures_dir, output_file)
     plt.savefig(output_file, dpi=150, bbox_inches='tight')

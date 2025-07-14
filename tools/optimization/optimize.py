@@ -34,7 +34,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..'))
 from tools.utils import base_dir_path, generate_random_params, spherical_to_cartesian
 from tools.geometry import generate_detector
 from tools.simulation import setup_event_simulator
-from tools.optimization.algorithms import adaptive_search, hybrid_optimization
+from tools.optimization.algorithms import optimization_engine, hybrid_optimization
 from tools.optimization.utils import (
     create_event_visualization, print_summary_statistics,
     create_convergence_plots, create_summary_plots,
@@ -339,7 +339,7 @@ def run_optimization(
             lambda_time=gradient_kwargs.get('lambda_time', 1.0)
         )
         
-        search_result = adaptive_search(
+        search_result = optimization_engine(
             true_charges, true_times, simulate_event, sensor_params, sensor_positions,
             detector_bounds, true_position, true_direction, true_energy,
             n_iterations=n_iterations, 
