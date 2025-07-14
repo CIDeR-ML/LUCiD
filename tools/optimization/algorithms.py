@@ -57,14 +57,14 @@ def sample_around_point(key, center_position, center_direction, center_energy,
     return new_position, new_direction, new_energy
 
 
-def adaptive_search(true_charges, true_times, simulate_event, sensor_params, sensor_positions,
+def optimization_engine(true_charges, true_times, simulate_event, sensor_params, sensor_positions,
                    detector_bounds, true_position, true_direction, true_energy,
                    n_iterations=20, population_size=50, elite_fraction=0.2,
                    random_seed=42, verbose=True, track_history=False,
                    optimization_type='numerical', gradient_iterations=0, gradient_kwargs=None,
                    loss_function=None):
     """
-    Adaptive search algorithm that focuses on promising regions.
+    Unified optimization engine supporting numerical, gradient, and hybrid optimization strategies.
     
     Parameters:
     -----------
@@ -579,17 +579,38 @@ def gradient_step_shared(params, opt_state, true_charges, true_times, key,
     
     new_params = (new_energy, new_position, new_direction_angles)
     
-    # Collect gradient info for debugging
+    # Collect gradient info for debugging with NaN detection
+    energy_grad_energy_mag = float(jnp.linalg.norm(energy_grad_energy))
+    spatial_grad_energy_mag = float(jnp.linalg.norm(spatial_grad_energy))
+    position_grad_mag = float(jnp.linalg.norm(combined_position_grad))
+    direction_grad_mag = float(jnp.linalg.norm(combined_direction_grad))
+    energy_update_mag = float(jnp.abs(energy_update))
+    position_update_mag = float(jnp.linalg.norm(position_update))
+    direction_update_mag = float(jnp.linalg.norm(direction_update))
+    
+    # Check for NaN values in gradients and losses
+    energy_loss_nan = jnp.isnan(energy_loss_val)
+    spatial_loss_nan = jnp.isnan(spatial_loss_val)
+    energy_grad_nan = jnp.any(jnp.isnan(energy_grad_energy)) or jnp.any(jnp.isnan(energy_grad[1])) or jnp.any(jnp.isnan(energy_grad[2]))
+    spatial_grad_nan = jnp.any(jnp.isnan(spatial_grad_energy)) or jnp.any(jnp.isnan(spatial_grad[1])) or jnp.any(jnp.isnan(spatial_grad[2]))
+    any_nan = energy_loss_nan or spatial_loss_nan or energy_grad_nan or spatial_grad_nan
+    
     grad_info = {
         'energy_loss': energy_loss_val,
         'spatial_loss': spatial_loss_val,
-        'energy_grad_mag': float(jnp.linalg.norm(energy_grad_energy)),
-        'spatial_grad_mag': float(jnp.linalg.norm(spatial_grad_energy)),
-        'position_grad_mag': float(jnp.linalg.norm(combined_position_grad)),
-        'direction_grad_mag': float(jnp.linalg.norm(combined_direction_grad)),
-        'energy_update_mag': float(jnp.abs(energy_update)),
-        'position_update_mag': float(jnp.linalg.norm(position_update)),
-        'direction_update_mag': float(jnp.linalg.norm(direction_update))
+        'energy_grad_mag': energy_grad_energy_mag,
+        'spatial_grad_mag': spatial_grad_energy_mag,
+        'position_grad_mag': position_grad_mag,
+        'direction_grad_mag': direction_grad_mag,
+        'energy_update_mag': energy_update_mag,
+        'position_update_mag': position_update_mag,
+        'direction_update_mag': direction_update_mag,
+        # NaN detection info
+        'energy_loss_nan': bool(energy_loss_nan),
+        'spatial_loss_nan': bool(spatial_loss_nan),
+        'energy_grad_nan': bool(energy_grad_nan),
+        'spatial_grad_nan': bool(spatial_grad_nan),
+        'any_nan': bool(any_nan)
     }
     
     return new_params, new_opt_state, float(total_loss), grad_info
@@ -905,6 +926,26 @@ def gradient_optimization_with_patience_shared(
             # print(f"    Grad mags: Energy={grad_info['energy_grad_mag']:.2e}, Spatial={grad_info['spatial_grad_mag']:.2e}")
             # print(f"    Update mags: Energy={grad_info['energy_update_mag']:.2e}, Position={grad_info['position_update_mag']:.2e}, Direction={grad_info['direction_update_mag']:.2e}")
             
+            # Check for NaN issues and provide detailed debugging
+            if grad_info['any_nan']:
+                nan_sources = []
+                if grad_info['energy_loss_nan']:
+                    nan_sources.append("ENERGY LOSS")
+                if grad_info['spatial_loss_nan']:
+                    nan_sources.append("SPATIAL LOSS")
+                if grad_info['energy_grad_nan']:
+                    nan_sources.append("ENERGY GRADIENTS")
+                if grad_info['spatial_grad_nan']:
+                    nan_sources.append("SPATIAL GRADIENTS")
+                
+                print(f"    ⚠️  NaN DETECTED in: {', '.join(nan_sources)}")
+                print(f"    Energy loss: {grad_info['energy_loss']}, Spatial loss: {grad_info['spatial_loss']}")
+                
+                # Print current parameter values for debugging
+                current_energy, current_position, current_direction_angles = params
+                print(f"    Current params: Energy={float(current_energy):.2f}, Position=[{float(current_position[0]):.3f}, {float(current_position[1]):.3f}, {float(current_position[2]):.3f}]")
+                print(f"                   Direction angles=[{float(current_direction_angles[0]):.3f}, {float(current_direction_angles[1]):.3f}]")
+            
             # Show current parameter values and errors if gradient_debug is enabled
             if gradient_debug and true_position is not None and true_direction is not None and true_energy is not None:
                 current_energy, current_position, current_direction_angles = params
@@ -1111,7 +1152,7 @@ def gradient_optimization_with_patience(
     return best_params, history
 
 
-def calculate_adaptive_scales(initial_params, true_charges, true_times,
+def calculate_auto_scales(initial_params, true_charges, true_times,
                             simulate_event, sensor_params, sensor_positions,
                             detector_bounds, energy_lr=1.0, spatial_lr=0.1,
                             target_energy_update_mev=10.0,
@@ -1119,7 +1160,7 @@ def calculate_adaptive_scales(initial_params, true_charges, true_times,
                             target_direction_update_degrees=5.0,
                             key=None, verbose=False):
     """
-    Calculate appropriate gradient scales based on initial gradients and desired update sizes.
+    Automatically calculate appropriate gradient scales based on initial gradients and desired update sizes.
     
     Parameters:
     -----------
@@ -1263,7 +1304,7 @@ def hybrid_optimization(
             print(f"\nPhase 1: Numerical optimization ({n_numerical} iterations)")
         
         key, subkey = jax.random.split(key)
-        best_numerical, _, numerical_history = adaptive_search(
+        best_numerical, _, numerical_history = optimization_engine(
             true_charges, true_times, simulate_event, sensor_params, sensor_positions,
             detector_bounds, true_position, true_direction, true_energy,
             n_iterations=n_numerical,
@@ -1297,7 +1338,7 @@ def hybrid_optimization(
             if verbose:
                 print(f"  Calculating adaptive gradient scales...")
             
-            energy_scale, position_scale, direction_scale = calculate_adaptive_scales(
+            energy_scale, position_scale, direction_scale = calculate_auto_scales(
                 initial_params, true_charges, true_times,
                 simulate_event, sensor_params, sensor_positions, detector_bounds,
                 energy_lr=gradient_kwargs.get('energy_lr', 1.0),
