@@ -315,6 +315,9 @@ def run_optimization(
         # Track history for multi-event runs to enable convergence plots
         track_history = n_events > 1
         
+        # Use a different seed for optimization to avoid correlation with event generation
+        optimization_seed = random_seed + 10000 + event_idx * 1000
+        
         search_result = adaptive_search(
             true_charges, true_times, simulate_event, sensor_params, sensor_positions,
             detector_bounds, true_position, true_direction, true_energy,
@@ -326,7 +329,7 @@ def run_optimization(
             optimization_type=optimization_type,
             gradient_iterations=gradient_iterations,
             gradient_kwargs=gradient_kwargs,
-            random_seed=random_seed + event_idx
+            random_seed=optimization_seed
         )
         
         # Unpack results based on whether history was tracked
