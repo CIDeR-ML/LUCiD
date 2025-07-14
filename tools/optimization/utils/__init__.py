@@ -9,7 +9,8 @@ from .geometry import (
 )
 from .visualization import (
     create_event_visualization, print_summary_statistics,
-    create_convergence_plots, create_summary_plots
+    create_convergence_plots, create_summary_plots,
+    create_hybrid_convergence_plot
 )
 
 __all__ = [
@@ -23,5 +24,6 @@ __all__ = [
     'create_event_visualization',
     'print_summary_statistics',
     'create_convergence_plots',
-    'create_summary_plots'
+    'create_summary_plots',
+    'create_hybrid_convergence_plot'
 ]
