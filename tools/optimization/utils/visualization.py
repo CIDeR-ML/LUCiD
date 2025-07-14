@@ -550,7 +550,7 @@ def create_hybrid_convergence_plot(event_histories, figures_dir=None, config_fil
     # Save figure
     if figures_dir:
         filename = os.path.join(figures_dir, f'{detector_name}_hybrid_convergence.png')
-        plt.savefig(filename, dpi=300, bbox_inches='tight')
+        plt.savefig(filename, dpi=150, bbox_inches='tight')
         print(f"Hybrid convergence plot saved to {filename}")
     else:
         plt.show()
