@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
 import os
 
-from .utils import (
+from .geometry import (
     create_cylinder_surface, create_sphere_surface, create_box_surface,
     compute_cone_cylinder_intersection, compute_cone_sphere_intersection, 
     compute_cone_box_intersection, get_cherenkov_angle

@@ -1,30 +1,21 @@
 """
-LUCiD optimization module for parameter reconstruction.
+Common utilities for LUCiD optimization.
 """
 
-from .algorithms import (
-    adaptive_search, sample_around_point,
-    create_gradient_optimizer, gradient_step, 
-    gradient_optimization_with_patience, hybrid_optimization
-)
-from .utils import (
+from .geometry import (
     get_cherenkov_angle, create_cylinder_surface, create_sphere_surface,
     create_box_surface, compute_cone_cylinder_intersection,
-    compute_cone_sphere_intersection, compute_cone_box_intersection,
+    compute_cone_sphere_intersection, compute_cone_box_intersection
+)
+from .visualization import (
     create_event_visualization, print_summary_statistics,
     create_convergence_plots, create_summary_plots
 )
 
 __all__ = [
-    'adaptive_search',
-    'sample_around_point',
-    'create_gradient_optimizer',
-    'gradient_step',
-    'gradient_optimization_with_patience',
-    'hybrid_optimization',
     'get_cherenkov_angle',
     'create_cylinder_surface',
-    'create_sphere_surface',
+    'create_sphere_surface', 
     'create_box_surface',
     'compute_cone_cylinder_intersection',
     'compute_cone_sphere_intersection',
