@@ -10,7 +10,7 @@ def base_dir_path():
     return os.path.dirname(os.path.abspath(__file__))+'/../'
 
 def unpack_t0_params(particle_type='muon', material='water'):
-    with open(base_dir_path()+'/data/'+particle_type+'_'+material+'_t0.json', 'r') as f:
+    with open(base_dir_path()+f'/data/{material}/{particle_type}/t0.json', 'r') as f:
         t0_params = json.load(f)
 
     """Extract individual parameters from nested dict structure"""
