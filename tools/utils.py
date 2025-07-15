@@ -5,9 +5,68 @@ import jax
 from glob import glob
 import os
 import json
+import sys
 
 def base_dir_path():
     return os.path.dirname(os.path.abspath(__file__))+'/../'
+
+def setup_matplotlib_for_notebook(force_notebook_mode=None):
+    """
+    Configure matplotlib for notebook display when running scripts from Jupyter.
+    
+    This function detects if the script is running in a Jupyter notebook environment
+    and modifies matplotlib's behavior to display plots inline in the notebook
+    instead of trying to show them in separate windows.
+    
+    Args:
+        force_notebook_mode: If True, force notebook mode regardless of detection.
+                            If False, force regular mode. If None, auto-detect.
+    """
+    import matplotlib
+    import matplotlib.pyplot as plt
+    
+    if force_notebook_mode:
+        print("📊 Jupyter notebook environment - configuring matplotlib for inline display")
+        
+        # Use non-interactive backend
+        matplotlib.use('Agg')
+        
+        # Store original show function
+        original_show = plt.show
+        
+        def notebook_show(*args, **kwargs):
+            """Custom show function that displays plots inline in notebooks."""
+            if plt.get_fignums():  # If there are active figures
+                import tempfile
+                from IPython.display import Image, display
+                
+                # Create temporary file for the plot
+                with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp_file:
+                    temp_path = tmp_file.name
+                
+                try:
+                    # Save current figure with high quality
+                    plt.savefig(temp_path, dpi=150, bbox_inches='tight', facecolor='white')
+                    
+                    # Display in notebook
+                    display(Image(temp_path))
+                    
+                finally:
+                    # Close the figure to prevent memory leaks
+                    plt.close()
+                    
+                    # Clean up temporary file
+                    try:
+                        os.remove(temp_path)
+                    except OSError:
+                        pass  # Ignore cleanup errors
+        
+        # Replace plt.show with our custom function
+        plt.show = notebook_show
+        
+    else:
+        # Not in notebook, use default behavior
+        pass
 
 def unpack_t0_params(particle_type='muon', material='water'):
     with open(base_dir_path()+f'/data/{material}/{particle_type}/t0.json', 'r') as f:
