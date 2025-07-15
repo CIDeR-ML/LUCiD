@@ -142,7 +142,8 @@ def run_optimization(
     save_event_plots=False,
     verbose=True,
     gradient_debug=False,
-    random_seed=1234567
+    random_seed=1234567,
+    color_by='time'
 ):
     """
     Main optimization function that supports all modes.
@@ -185,6 +186,8 @@ def run_optimization(
         Whether to show detailed output
     random_seed : int
         Random seed for reproducibility
+    color_by : str
+        Color sensor hits by 'time' or 'charge' in visualizations (default: 'time')
     """
     
     # Configuration
@@ -408,7 +411,7 @@ def run_optimization(
                     best_match, true_charges, true_times, 
                     sensor_positions, detector_bounds,
                     position_error, direction_error_deg, energy_error, energy_error_percent,
-                    event_idx, figures_dir, verbose, config_file
+                    event_idx, figures_dir, verbose, config_file, color_by
                 )
         else:
             result = {
@@ -438,6 +441,7 @@ def run_optimization(
 
 
 def main():
+
     """Main function with command-line interface."""
     parser = argparse.ArgumentParser(
         description='LUCiD parameter optimization with multiple methods',
@@ -453,8 +457,11 @@ Examples:
     # Hybrid optimization
     python -m tools.optimization.optimize --mode hybrid -i 20 --n-gradient 50
     
-    # Save event plots
+    # Save event plots (colored by time - default)
     python -m tools.optimization.optimize --mode hybrid --save-event-plots -n 5
+    
+    # Save event plots colored by charge
+    python -m tools.optimization.optimize --mode hybrid --save-event-plots --color-by charge -n 5
         """
     )
     
@@ -517,6 +524,9 @@ Examples:
                         help='Suppress iteration details (opposite of verbose)')
     parser.add_argument('--save-event-plots', action='store_true',
                         help='Save visualization plots for individual events')
+    parser.add_argument('--color-by', type=str, default='time',
+                        choices=['time', 'charge'],
+                        help='Color sensor hits by time or charge (default: time)')
     
     # Other parameters
     parser.add_argument('--seed', type=int, default=1234567,
@@ -531,6 +541,7 @@ Examples:
     elif args.verbose:
         verbose = True
     
+    print(f"Running optimization")
     # Run optimization
     results = run_optimization(
         config_file=args.config,
@@ -555,7 +566,8 @@ Examples:
         save_event_plots=args.save_event_plots,
         verbose=verbose,
         gradient_debug=args.gradient_debug,
-        random_seed=args.seed
+        random_seed=args.seed,
+        color_by=args.color_by
     )
     
     return results
