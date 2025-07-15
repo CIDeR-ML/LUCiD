@@ -17,6 +17,7 @@ sftp-config.json
 **/test_events/
 **/autodiff_datasets/
 **/output/
+**/trained_model/
 
 
 

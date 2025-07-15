@@ -52,7 +52,7 @@ from siren.training.trainer import SIRENTrainer, TrainingConfig
 from siren.training.dataset import PhotonSimDataset
 from siren.training.monitor import TrainingMonitor, LiveTrainingCallback
 from siren.training.analyzer import TrainingAnalyzer
-from utils import base_dir_path
+from utils import base_dir_path, setup_matplotlib_for_notebook
 
 
 class PhotonSimTrainer:
@@ -67,8 +67,8 @@ class PhotonSimTrainer:
         # Set up paths
         self.base_dir = Path(base_dir_path())
         self.data_dir = self.base_dir / 'data' / material / particle
-        self.output_base = self.base_dir / 'output' / 'photonsim_siren_training'
-        self.output_dir = self.output_base / material / particle
+        # Training output goes to siren_training subdirectory
+        self.output_dir = self.data_dir / 'siren_training'
         
         # Create output directory
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -298,12 +298,17 @@ def main():
                         help='Resume from latest checkpoint')
     parser.add_argument('--no-monitoring', action='store_true',
                         help='Disable live monitoring')
+    parser.add_argument('--notebook-mode', action='store_true',
+                        help='Force notebook mode for plot display')
     parser.add_argument('--seed', type=int, default=42,
                         help='Random seed (default: 42)')
     parser.add_argument('--val-split', type=float, default=0.1,
                         help='Validation split fraction (default: 0.1)')
     
     args = parser.parse_args()
+    
+    # Configure matplotlib for notebook display if needed
+    setup_matplotlib_for_notebook(force_notebook_mode=getattr(args, 'notebook_mode', False))
     
     # Create training configuration
     config = TrainingConfig(

@@ -43,7 +43,7 @@ python train.py --resume
 - `--num-steps` - Total training steps (default: 30000)
 - `--resume` - Resume from latest checkpoint
 
-Models are saved to: `output/photonsim_siren_training/{material}/{particle}/`
+Models are saved to: `data/{material}/{particle}/siren_training/trained_model/`
 
 ## Validation
 
@@ -76,7 +76,7 @@ All validation commands support:
 - `--output` - Custom output directory
 - `--save` - Save results to output directory
 
-Results are saved to: `output/siren/{material}/{particle}/`
+Results are saved to: `data/{material}/{particle}/siren_training/validation/`
 
 ### Commands
 
@@ -129,8 +129,9 @@ Both training and validation require PhotonSim HDF5 lookup tables:
 ## Model Paths
 
 The tools automatically handle model paths:
-- New structure: `output/photonsim_siren_training/{material}/{particle}/trained_model/photonsim_siren_{material}_{particle}`
-- Legacy support: Falls back to old paths for backward compatibility
+- Models: `data/{material}/{particle}/siren_training/trained_model/photonsim_siren`
+- Training output: `data/{material}/{particle}/siren_training/` (checkpoints, history, etc.)
+- Validation output: `data/{material}/{particle}/siren_training/validation/`
 
 ## Examples
 
