@@ -10,17 +10,14 @@ import jax.numpy as jnp
 
 import os
 
-from tools.siren import *
+from tools.siren.core import *
 
 from functools import partial
 
 from tools.utils import spherical_to_cartesian, base_dir_path
 
 # base_dir_path = os.path.dirname(os.path.abspath(__file__))+'/'
-import sys
-sys.path.append(base_dir_path()+'/siren/training')
-
-from inference import SIRENPredictor
+from tools.siren.training.inference import SIRENPredictor
 
 
 def setup_event_simulator(json_filename, n_photons=1_000_000, temperature=0.2, K=2, 
