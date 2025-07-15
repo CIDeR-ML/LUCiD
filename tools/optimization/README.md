@@ -50,8 +50,6 @@ python -m tools.optimization.optimize --mode hybrid -d Box --events 5
 - **`geometry.py`** - Cherenkov cone geometry calculations and surface intersections
 - **`visualization.py`** - Plotting and visualization functions
 
-### Legacy Files (for reference)
-- **`../optimization_deprecated.py`** - Old gradient optimization implementation
 
 ## Optimization Modes
 
