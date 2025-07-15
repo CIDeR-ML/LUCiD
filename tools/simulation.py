@@ -1,8 +1,8 @@
 from tools.generate import get_isotropic_rays, photonsim_differentiable_get_rays, predict_t0
 
-from tools.propagate.cylinder import create_photon_propagator
-from tools.propagate.sphere import create_sphere_photon_propagator
-from tools.propagate.box import create_box_photon_propagator, box_bounds_check
+from tools.propagation.cylinder import create_photon_propagator
+from tools.propagation.sphere import create_sphere_photon_propagator
+from tools.propagation.box import create_box_photon_propagator, box_bounds_check
 from tools.geometry import generate_detector
 from tools.utils import unpack_t0_params
 import jax
