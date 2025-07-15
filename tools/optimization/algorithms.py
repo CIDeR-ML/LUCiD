@@ -946,6 +946,10 @@ def gradient_optimization_with_patience_shared(
                 print(f"    Current params: Energy={float(current_energy):.2f}, Position=[{float(current_position[0]):.3f}, {float(current_position[1]):.3f}, {float(current_position[2]):.3f}]")
                 print(f"                   Direction angles=[{float(current_direction_angles[0]):.3f}, {float(current_direction_angles[1]):.3f}]")
             
+                # NOTE:
+                # Sometimes the spatial part of the loss leads to NaN gradients. However, the system is able to recover via:
+                # Good iteration → NaN gradients → Energy-only update → New stable point → Good iteration
+
             # Show current parameter values and errors if gradient_debug is enabled
             if gradient_debug and true_position is not None and true_direction is not None and true_energy is not None:
                 current_energy, current_position, current_direction_angles = params

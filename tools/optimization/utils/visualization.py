@@ -17,8 +17,15 @@ from .geometry import (
 def create_event_visualization(true_position, true_direction, true_energy, best_match, 
                               true_charges, true_times, sensor_positions, detector_bounds,
                               position_error, direction_error_deg, energy_error, energy_error_percent,
-                              event_idx=0, figures_dir=None, verbose=True, config_file=None):
-    """Create visualization for a single event."""
+                              event_idx=0, figures_dir=None, verbose=True, config_file=None, color_by='time'):
+    """Create visualization for a single event.
+    
+    Parameters:
+    -----------
+    color_by : str, optional
+        What to use for coloring sensor hits. Options are 'time' or 'charge'.
+        Default is 'time'.
+    """
     # Extract detector name from config file path
     detector_name = "Unknown"
     if config_file:
@@ -45,10 +52,24 @@ def create_event_visualization(true_position, true_direction, true_energy, best_
     fig = plt.figure(figsize=(16, 10))
     ax = fig.add_subplot(111, projection='3d')
     
-    # Plot detector hits (color by time, size by charge)
+    # Plot detector hits with equal size, colored by time or charge
+    if color_by == 'time':
+        color_data = hit_times_vis
+        color_label = 'Hit Time'
+        scatter_label = 'Detector Hits (colored by time)'
+        colormap = 'plasma'
+    elif color_by == 'charge':
+        color_data = hit_charges_vis
+        color_label = 'Hit Charge'
+        scatter_label = 'Detector Hits (colored by charge)'
+        colormap = 'viridis'
+    else:
+        raise ValueError(f"color_by must be 'time' or 'charge', got '{color_by}'")
+    
+    # Use fixed size for all sensor hits to avoid visualization issues with large charges
     scatter = ax.scatter(hit_positions[:, 0], hit_positions[:, 1], hit_positions[:, 2], 
-                        c=hit_times_vis, s=hit_charges_vis*2, cmap='plasma', alpha=0.6,
-                        label='Detector Hits (colored by time)')
+                        c=color_data, s=60, cmap=colormap, alpha=0.7,
+                        label=scatter_label)
     
     # Plot true track
     t_vals = np.linspace(0, 8, 100)
@@ -62,7 +83,7 @@ def create_event_visualization(true_position, true_direction, true_energy, best_
     # Plot best fitted track
     fitted_track_points = best_match['position'][:, np.newaxis] + t_vals[np.newaxis, :] * best_match['direction'][:, np.newaxis]
     ax.plot(fitted_track_points[0], fitted_track_points[1], fitted_track_points[2], 
-            'red', linewidth=5, label='Best Fitted Track', zorder=30)
+            'red', linewidth=5, linestyle='--', label='Best Fitted Track', zorder=30)
     ax.scatter(best_match['position'][0], best_match['position'][1], best_match['position'][2], 
                c='red', s=400, marker='*', edgecolors='black', linewidth=3, 
                label='Best Fitted Origin', zorder=35)
@@ -88,7 +109,7 @@ def create_event_visualization(true_position, true_direction, true_energy, best_
         )
         if len(fitted_intersection) > 0:
             ax.plot(fitted_intersection[:, 0], fitted_intersection[:, 1], fitted_intersection[:, 2],
-                   'orange', linewidth=3, alpha=0.8, label='Fitted Cherenkov Ring', zorder=25)
+                   'orange', linewidth=3, linestyle='--', alpha=0.8, label='Fitted Cherenkov Ring', zorder=25)
         
         # Add cylinder boundaries
         x_cyl, y_cyl, z_cyl = create_cylinder_surface(detector_bounds['r'], detector_bounds['H'])
@@ -109,7 +130,7 @@ def create_event_visualization(true_position, true_direction, true_energy, best_
         )
         if len(fitted_intersection) > 0:
             ax.plot(fitted_intersection[:, 0], fitted_intersection[:, 1], fitted_intersection[:, 2],
-                   'orange', linewidth=3, alpha=0.8, label='Fitted Cherenkov Ring', zorder=25)
+                   'orange', linewidth=3, linestyle='--', alpha=0.8, label='Fitted Cherenkov Ring', zorder=25)
         
         # Add sphere boundaries
         x_sph, y_sph, z_sph = create_sphere_surface(detector_bounds['r'])
@@ -135,7 +156,7 @@ def create_event_visualization(true_position, true_direction, true_energy, best_
         if len(fitted_intersection) > 0:
             for segment in fitted_intersection:
                 ax.plot(segment[:, 0], segment[:, 1], segment[:, 2],
-                       'orange', linewidth=3, alpha=0.8, zorder=25)
+                       'orange', linewidth=3, linestyle='--', alpha=0.8, zorder=25)
         
         # Add box boundaries
         vertices, edges = create_box_surface(detector_bounds['x'], detector_bounds['y'], detector_bounds['z'])
@@ -153,7 +174,7 @@ def create_event_visualization(true_position, true_direction, true_energy, best_
                 fontsize=14)
     
     # Add colorbar and legend
-    plt.colorbar(scatter, ax=ax, label='Hit Time', shrink=0.6)
+    plt.colorbar(scatter, ax=ax, label=color_label, shrink=0.6)
     ax.legend(loc='upper right', fontsize=10)
     
     # Set axis limits based on detector type with equal aspect ratio
