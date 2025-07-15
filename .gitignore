@@ -5,25 +5,22 @@
 *.png
 !figures/det_repo_img.png
 *.npy
-
-/test_events
-*/__pycache__
-__pycache__/
-/autodiff_datasets
-.ipynb_checkpoints/
-old_tests/
-
-# Training outputs
-output/
-
-# Generated data from scripts
-**/generated_data/*
-**/figures/*
-**/spatial_overlap_integrals/*
-
-
+*.root
 sftp-config.json
 
+# Generated data from scripts
+**/generated_data/
+**/figures/
+**/spatial_overlap_integrals/
+**/__pycache__/
+**/.ipynb_checkpoints/
+**/test_events/
+**/autodiff_datasets/
+**/output/
 
-*.root
+
+
+
+
+
 
