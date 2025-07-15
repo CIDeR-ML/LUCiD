@@ -6,7 +6,7 @@ import jax
 import jax.numpy as jnp
 from functools import partial
 from jax import lax
-from tools.overlap import create_overlap_prob
+from ..overlap import create_overlap_prob
 
 
 def process_intersection_normals(ray_origins, ray_directions, intersection_point,
@@ -58,7 +58,7 @@ def process_intersection_normals(ray_origins, ray_directions, intersection_point
 
 
 def calculate_weighted_sensor_properties(sensor_normals, sensor_hit_positions,
-                                           inside_sensor):
+                                          inside_sensor):
     """
     Calculate weighted normals and positions for sensor hits.
     

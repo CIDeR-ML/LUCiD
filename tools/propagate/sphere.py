@@ -7,7 +7,7 @@ import jax.numpy as jnp
 from functools import partial
 from jax import lax
 
-from ..propagate_base import (
+from .base import (
     process_intersection_normals, compute_sensor_intersections_base,
     find_closest_sensors
 )
