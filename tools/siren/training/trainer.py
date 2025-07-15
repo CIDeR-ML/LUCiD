@@ -95,8 +95,8 @@ class SIRENTrainer:
         self.output_dir = Path(output_dir) if output_dir else None
         self.resume_from_checkpoint = resume_from_checkpoint
         
-        from tools.siren import SIREN
-        model_class = siren_model
+        from ..core import SIREN
+        model_class = SIREN
             
         # Initialize model
         self.model = model_class(
@@ -223,7 +223,7 @@ class SIRENTrainer:
         # CRITICAL: Force parameters to be concrete (not traced)
         # This prevents the traced array issue that causes checkpoint loading errors
         def make_concrete(tree):
-            return jax.tree_map(lambda x: jax.block_until_ready(x) if hasattr(x, 'shape') else x, tree)
+            return jax.tree.map(lambda x: jax.block_until_ready(x) if hasattr(x, 'shape') else x, tree)
         
         params = make_concrete(params)
         logger.info("✅ Model parameters forced to concrete arrays")
@@ -505,7 +505,7 @@ class SIRENTrainer:
                     return np.asarray(concrete_x)
                 else:
                     return x
-            return jax.tree_map(convert_leaf, tree)
+            return jax.tree.map(convert_leaf, tree)
         
         params_numpy = jax_to_numpy_concrete(params_dict)
         
@@ -515,7 +515,7 @@ class SIRENTrainer:
                 if hasattr(x, '__class__') and 'Traced' in str(type(x)):
                     raise ValueError(f"Still have traced array: {type(x)}")
                 return x
-            return jax.tree_map(check_leaf, tree, is_leaf=lambda x: hasattr(x, '__class__'))
+            return jax.tree.map(check_leaf, tree, is_leaf=lambda x: hasattr(x, '__class__'))
         
         try:
             check_no_traced(params_numpy)
@@ -523,7 +523,7 @@ class SIRENTrainer:
             logger.error(f"ERROR: Traced arrays detected during save: {e}")
             logger.error("Attempting to force concrete evaluation...")
             # Fallback: try to force evaluation again
-            params_numpy = jax.tree_map(
+            params_numpy = jax.tree.map(
                 lambda x: np.array(jax.block_until_ready(x)) if hasattr(x, 'shape') else x, 
                 params_dict
             )
@@ -559,7 +559,7 @@ class SIRENTrainer:
             
             # Convert numpy arrays back to JAX arrays and freeze
             def numpy_to_jax(tree):
-                return jax.tree_map(lambda x: jnp.asarray(x) if hasattr(x, 'shape') else x, tree)
+                return jax.tree.map(lambda x: jnp.asarray(x) if hasattr(x, 'shape') else x, tree)
             
             params_jax = numpy_to_jax(params_dict)
             loaded_params = freeze(params_jax)

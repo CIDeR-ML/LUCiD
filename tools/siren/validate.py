@@ -7,17 +7,26 @@ This module consolidates validation functionality from three notebooks:
 2. photonsim_n_photon_integral.ipynb - N-photon integral analysis  
 3. photonsim_rays_validation.ipynb - Ray generation validation
 
+Supports different particle types and materials with automatic path detection.
+
 Usage:
-    python validation.py cutoff [--energy ENERGY] [--thresholds THRESHOLDS] [--output OUTPUT]
-    python validation.py integral [--energies ENERGIES] [--nphot NPHOT] [--output OUTPUT]
-    python validation.py rays [--energies ENERGIES] [--nphot NPHOT] [--output OUTPUT]
-    python validation.py all [--output OUTPUT]
+    python validate.py cutoff [--material MATERIAL] [--particle PARTICLE] [--energy ENERGY] [--thresholds THRESHOLDS] [--output OUTPUT]
+    python validate.py integral [--material MATERIAL] [--particle PARTICLE] [--energies ENERGIES] [--nphot NPHOT] [--output OUTPUT]
+    python validate.py rays [--material MATERIAL] [--particle PARTICLE] [--energies ENERGIES] [--nphot NPHOT] [--output OUTPUT]
+    python validate.py all [--material MATERIAL] [--particle PARTICLE] [--output OUTPUT]
 
 Examples:
-    python validation.py cutoff --energy 500 --thresholds 1,2,4,8
-    python validation.py integral --energies 200,500,800 --nphot 1000000
-    python validation.py rays --energies 200,400,600,800,1000 --nphot 1000000
-    python validation.py all --output validation_results/
+    # Default water/muon
+    python validate.py cutoff --energy 500 --thresholds 1,2,4,8
+    
+    # Specific material/particle
+    python validate.py integral --material ice --particle electron --energies 200,500,800
+    
+    # All validations for water/muon
+    python validate.py all
+    
+    # All validations for custom material/particle
+    python validate.py all --material water --particle muon --output validation_results/
 """
 
 import sys
@@ -32,22 +41,19 @@ import matplotlib.pyplot as plt
 from matplotlib.colors import LogNorm
 from scipy import stats
 
-# Add parent directory to path
+# Add parent directories to path
 script_dir = Path(__file__).parent
-parent_dir = script_dir.parent
-sys.path.append(str(parent_dir))
-sys.path.append(str(parent_dir / 'tools'))
-
-# Add training modules
-training_path = script_dir / 'training'
-sys.path.append(str(training_path))
+tools_dir = script_dir.parent
+project_root = tools_dir.parent
+sys.path.insert(0, str(project_root))
+sys.path.insert(0, str(tools_dir))
 
 # Import PhotonSim training modules
-from training.inference import SIRENPredictor
-from training.dataset import PhotonSimDataset
+from tools.siren.training.inference import SIRENPredictor
+from tools.siren.training.dataset import PhotonSimDataset
 
 # Import tools
-from tools.siren import SIREN
+from tools.siren.core import SIREN
 from tools.simulation import create_photonsim_siren_grid
 from tools.generate import generate_random_cone_vectors, normalize, photonsim_differentiable_get_rays
 from tools.utils import base_dir_path
@@ -59,24 +65,54 @@ plt.rcParams['font.size'] = 12
 class PhotonSimValidator:
     """Main validation class for PhotonSim SIREN model."""
     
-    def __init__(self, model_path=None, h5_path=None):
-        """Initialize validator with model and dataset paths."""
+    def __init__(self, material='water', particle='muon', model_path=None, h5_path=None):
+        """Initialize validator with material, particle type, and optional paths.
+        
+        Args:
+            material: Material type (e.g., 'water', 'ice')
+            particle: Particle type (e.g., 'muon', 'electron')
+            model_path: Optional explicit model path
+            h5_path: Optional explicit h5 file path
+        """
+        # Store material and particle
+        self.material = material
+        self.particle = particle
+        
         # Get base directory path
         base_dir = base_dir_path()
         
-        # Default model path
+        # Default model path with material/particle structure
         if model_path is None:
-            model_path = Path(base_dir) / 'notebooks/output/photonsim_siren_training/trained_model/photonsim_siren'
+            model_path = Path(base_dir) / 'output' / 'photonsim_siren_training' / material / particle / 'trained_model' / f'photonsim_siren_{material}_{particle}'
+            # Fallback to old path if new doesn't exist
+            if not model_path.exists():
+                old_path = Path(base_dir) / 'output' / 'photonsim_siren_training' / material / particle / 'trained_model' / 'photonsim_siren'
+                if old_path.exists():
+                    model_path = old_path
+                else:
+                    # Try legacy path for backward compatibility
+                    legacy_path = Path(base_dir) / 'notebooks' / 'output' / 'photonsim_siren_training' / 'trained_model' / 'photonsim_siren'
+                    if legacy_path.exists():
+                        model_path = legacy_path
+                        print(f"⚠️  Using legacy model path. Consider retraining with new structure.")
         
-        # Default h5 path
+        # Default h5 path with material/particle structure
         if h5_path is None:
-            h5_path = Path(base_dir) / 'data/water/muon/photon_lookup_table.h5'
+            h5_path = Path(base_dir) / 'data' / material / particle / 'photon_lookup_table.h5'
+            if not h5_path.exists():
+                raise FileNotFoundError(
+                    f"HDF5 lookup table not found at {h5_path}\n"
+                    f"Please ensure the PhotonSim table exists for {material}/{particle}"
+                )
         
-        print(f"Loading PhotonSim SIREN model from: {model_path}")
+        print(f"🎯 PhotonSim SIREN Validation")
+        print(f"  Material: {material}")
+        print(f"  Particle: {particle}")
+        print(f"Loading model from: {model_path}")
         self.photonsim_predictor = SIRENPredictor(model_path)
         self.model_params = self.photonsim_predictor.params
         
-        print(f"Loading PhotonSim dataset from: {h5_path}")
+        print(f"Loading dataset from: {h5_path}")
         self.dataset = PhotonSimDataset(h5_path)
         
         # Get training ranges
@@ -422,9 +458,9 @@ class PhotonSimValidator:
         """Run all validation studies."""
         print("\n🚀 Running all PhotonSim SIREN validations...")
         
-        # Set default output directory if not provided
+        # Set default output directory with material/particle structure if not provided
         if output_dir is None:
-            output_dir = Path(base_dir_path()) / 'output/siren'
+            output_dir = Path(base_dir_path()) / 'output' / 'siren' / self.material / self.particle
         
         os.makedirs(output_dir, exist_ok=True)
         print(f"Saving results to: {output_dir}")
@@ -450,7 +486,17 @@ class PhotonSimValidator:
 
 def main():
     """Main CLI interface."""
-    parser = argparse.ArgumentParser(description='PhotonSim SIREN Validation Suite')
+    parser = argparse.ArgumentParser(
+        description='PhotonSim SIREN Validation Suite',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=__doc__
+    )
+    
+    # Add global material/particle arguments
+    parser.add_argument('--material', type=str, default='water',
+                        help='Material type (default: water)')
+    parser.add_argument('--particle', type=str, default='muon',
+                        help='Particle type (default: muon)')
     
     subparsers = parser.add_subparsers(dest='command', help='Validation command')
     
@@ -458,27 +504,27 @@ def main():
     cutoff_parser = subparsers.add_parser('cutoff', help='Run cut-off threshold analysis')
     cutoff_parser.add_argument('--energy', type=float, default=500, help='Analysis energy (MeV)')
     cutoff_parser.add_argument('--thresholds', type=str, default='1,2,4,8', help='Comma-separated thresholds')
-    cutoff_parser.add_argument('--output', type=str, help='Output directory (default: output/siren)')
-    cutoff_parser.add_argument('--save', action='store_true', help='Save results to output/siren directory')
+    cutoff_parser.add_argument('--output', type=str, help='Output directory')
+    cutoff_parser.add_argument('--save', action='store_true', help='Save results to output directory')
     
     # Integral analysis
     integral_parser = subparsers.add_parser('integral', help='Run n-photon integral analysis')
     integral_parser.add_argument('--energies', type=str, help='Comma-separated energies or range (e.g., 100,1000,100)')
     integral_parser.add_argument('--nphot', type=int, default=1000000, help='Number of photons')
-    integral_parser.add_argument('--output', type=str, help='Output directory (default: output/siren)')
-    integral_parser.add_argument('--save', action='store_true', help='Save results to output/siren directory')
+    integral_parser.add_argument('--output', type=str, help='Output directory')
+    integral_parser.add_argument('--save', action='store_true', help='Save results to output directory')
     
     # Ray validation
     rays_parser = subparsers.add_parser('rays', help='Run ray generation validation')
     rays_parser.add_argument('--energies', type=str, help='Comma-separated energies or range (e.g., 200,1000,20)')
     rays_parser.add_argument('--nphot', type=int, default=1000000, help='Number of photons')
-    rays_parser.add_argument('--output', type=str, help='Output directory (default: output/siren)')
-    rays_parser.add_argument('--save', action='store_true', help='Save results to output/siren directory')
+    rays_parser.add_argument('--output', type=str, help='Output directory')
+    rays_parser.add_argument('--save', action='store_true', help='Save results to output directory')
     
     # All validations
     all_parser = subparsers.add_parser('all', help='Run all validations')
-    all_parser.add_argument('--output', type=str, help='Output directory (default: output/siren)')
-    all_parser.add_argument('--save', action='store_true', help='Save results to output/siren directory')
+    all_parser.add_argument('--output', type=str, help='Output directory')
+    all_parser.add_argument('--save', action='store_true', help='Save results to output directory')
     
     args = parser.parse_args()
     
@@ -486,8 +532,12 @@ def main():
         parser.print_help()
         return
     
-    # Initialize validator
-    validator = PhotonSimValidator()
+    # Initialize validator with material and particle
+    print(f"🎯 Validation Configuration:")
+    print(f"  Material: {args.material}")
+    print(f"  Particle: {args.particle}")
+    
+    validator = PhotonSimValidator(material=args.material, particle=args.particle)
     
     # Parse energy ranges
     def parse_energies(energy_str):
@@ -506,7 +556,8 @@ def main():
         if args.output:
             return args.output
         elif hasattr(args, 'save') and args.save:
-            return Path(base_dir_path()) / 'output/siren'
+            # Use material/particle structure
+            return Path(base_dir_path()) / 'output' / 'siren' / validator.material / validator.particle
         else:
             return None
     

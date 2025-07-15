@@ -7,7 +7,7 @@ import numpy as np
 import jax.numpy as jnp
 import time
 from tqdm import tqdm 
-from tools.siren import *
+from tools.siren.core import *
 from tools.utils import read_photon_data_from_root
 from tools.utils import save_single_event_with_extended_info, get_random_root_entry_index, superimpose_multiple_events
 from jax import jit

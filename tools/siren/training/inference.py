@@ -142,7 +142,7 @@ class SIRENPredictor:
                     params_numpy = params_data
                 
                 # Convert to JAX arrays
-                self.params = freeze(jax.tree_map(jnp.array, params_numpy))
+                self.params = freeze(jax.tree.map(jnp.array, params_numpy))
                 
             except Exception as e:
                 logger.error(f"Failed to load old format: {e}")
@@ -174,12 +174,10 @@ class SIRENPredictor:
         """Initialize the SIREN model architecture."""
         # Import SIREN model
         try:
-            from tools.siren import SIREN
+            from ..core import SIREN
         except ImportError:
-            # Fallback to local definition
-            import sys
-            sys.path.append(str(Path(__file__).parent.parent.parent))
-            from tools.siren import SIREN
+            # Fallback to absolute import
+            from tools.siren.core import SIREN
         
         config = self.metadata['model_config']
         self.model = SIREN(

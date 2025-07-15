@@ -146,7 +146,7 @@ class TrainingMonitor:
         self, 
         save_path: Optional[Path] = None,
         show_recent: int = 1000,
-        figsize: Tuple[int, int] = (15, 10)
+        figsize: Tuple[int, int] = (10, 8)
     ) -> plt.Figure:
         """
         Plot training progress.
