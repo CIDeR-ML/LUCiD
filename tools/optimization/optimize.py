@@ -142,8 +142,10 @@ def run_optimization(
     save_event_plots=False,
     verbose=True,
     gradient_debug=False,
+    numerical_debug=False,
     random_seed=1234567,
-    color_by='time'
+    color_by='time',
+    event_seeds=None
 ):
     """
     Main optimization function that supports all modes.
@@ -188,6 +190,8 @@ def run_optimization(
         Random seed for reproducibility
     color_by : str
         Color sensor hits by 'time' or 'charge' in visualizations (default: 'time')
+    event_seeds : list of int or None
+        List of specific event indices to investigate (e.g., [3, 9, 11])
     """
     
     # Configuration
@@ -266,31 +270,45 @@ def run_optimization(
         'gradient_verbose': gradient_debug  # Enable gradient verbosity when debug is requested
     }
     
-    if verbose:
-        print(f"\nProcessing {n_events} events...")
+    # Determine which events to process
+    if event_seeds is not None:
+        event_iterator = event_seeds
+        actual_n_events = len(event_seeds)
+        if verbose:
+            print(f"\nProcessing {actual_n_events} specific events: {event_seeds}")
+        else:
+            print(f"\nProcessing {actual_n_events} specific events: {event_seeds}")
     else:
-        print(f"\nProcessing {n_events} events...")
+        event_iterator = range(n_events)
+        actual_n_events = n_events
+        if verbose:
+            print(f"\nProcessing {actual_n_events} events...")
+        else:
+            print(f"\nProcessing {actual_n_events} events...")
     
     # Progress bar for multi-event processing
-    event_iterator = range(n_events)
-    if not verbose and n_events > 1:
+    if not verbose and actual_n_events > 1:
         event_iterator = tqdm(event_iterator, desc="Events", unit="event")
     
     for event_idx in event_iterator:
         if verbose:
             print(f"\n{'='*80}")
-            print(f"EVENT {event_idx + 1}/{n_events}")
+            if event_seeds is not None:
+                print(f"EVENT INDEX {event_idx} (#{event_seeds.index(event_idx) + 1}/{actual_n_events})")
+            else:
+                print(f"EVENT {event_idx + 1}/{actual_n_events}")
             print(f"{'='*80}")
         
-        # Generate TRUE event
-        key, subkey = jax.random.split(key)
+        # Generate TRUE event with deterministic seed based on event index
+        # This ensures that event_idx=3 always generates the same event
+        event_key = jax.random.PRNGKey(random_seed + event_idx * 1000)
         
         if detector_type in ['Cylinder', 'Sphere', 'Box']:
             # Use detector-aware random generation
-            true_position, true_direction, true_energy = generate_random_event_params(subkey, detector_bounds)
+            true_position, true_direction, true_energy = generate_random_event_params(event_key, detector_bounds)
         else:
             # Use generic random generation
-            true_energy, true_position, true_direction_angles = generate_random_params(subkey)
+            true_energy, true_position, true_direction_angles = generate_random_params(event_key)
             true_direction = spherical_to_cartesian(true_direction_angles[0], true_direction_angles[1])
         
         # Convert direction to spherical angles
@@ -300,7 +318,7 @@ def run_optimization(
         
         # Simulate true event
         true_particle_params = (true_energy, true_position, true_direction_angles)
-        true_charges, true_times = simulate_event(true_particle_params, sensor_params, subkey)
+        true_charges, true_times = simulate_event(true_particle_params, sensor_params, event_key)
         
         if verbose or n_events == 1:
             print(f"True event parameters:")
@@ -332,6 +350,7 @@ def run_optimization(
         track_history = n_events > 1
         
         # Use a different seed for optimization to avoid correlation with event generation
+        # But keep it deterministic based on event index
         optimization_seed = random_seed + 10000 + event_idx * 1000
         
         # Create the combined loss function for consistent loss definition
@@ -354,7 +373,8 @@ def run_optimization(
             gradient_iterations=gradient_iterations,
             gradient_kwargs=gradient_kwargs,
             random_seed=optimization_seed,
-            loss_function=combined_loss_func
+            loss_function=combined_loss_func,
+            numerical_debug=numerical_debug
         )
         
         # Unpack results based on whether history was tracked
@@ -425,7 +445,7 @@ def run_optimization(
         results.append(result)
     
     # Print summary statistics and create plots
-    if n_events > 1:
+    if actual_n_events > 1:
         print_summary_statistics(results, total_search_time)
         create_summary_plots(results, figures_dir, config_file=config_file)
         
@@ -520,6 +540,8 @@ Examples:
                         help='Show detailed progress during iterations')
     parser.add_argument('--gradient-debug', action='store_true',
                         help='Show gradient debugging info every iteration (instead of every 10)')
+    parser.add_argument('--numerical-debug', action='store_true',
+                        help='Show detailed debugging info for numerical optimization')
     parser.add_argument('--quiet', '-q', action='store_true',
                         help='Suppress iteration details (opposite of verbose)')
     parser.add_argument('--save-event-plots', action='store_true',
@@ -531,6 +553,8 @@ Examples:
     # Other parameters
     parser.add_argument('--seed', type=int, default=1234567,
                         help='Random seed (default: 1234567)')
+    parser.add_argument('--event-seeds', type=str, default=None,
+                        help='Comma-separated list of event indices to investigate (e.g., "3,9,11")')
     
     args = parser.parse_args()
     
@@ -540,6 +564,16 @@ Examples:
         verbose = False
     elif args.verbose:
         verbose = True
+    
+    # Parse event seeds if provided
+    event_seeds = None
+    if args.event_seeds:
+        try:
+            event_seeds = [int(x.strip()) for x in args.event_seeds.split(',')]
+            print(f"Will investigate specific events: {event_seeds}")
+        except ValueError:
+            print("Error: --event-seeds must be comma-separated integers (e.g., '3,9,11')")
+            return None
     
     print(f"Running optimization")
     # Run optimization
@@ -566,8 +600,10 @@ Examples:
         save_event_plots=args.save_event_plots,
         verbose=verbose,
         gradient_debug=args.gradient_debug,
+        numerical_debug=args.numerical_debug,
         random_seed=args.seed,
-        color_by=args.color_by
+        color_by=args.color_by,
+        event_seeds=event_seeds
     )
     
     return results
