@@ -121,10 +121,10 @@ def run_optimization(
     detector_type='Cylinder',
     n_events=1,
     mode='numerical',
-    n_iterations=40,
+    n_iterations=30,
     population_size=20,
-    n_gradient_iterations=50,
-    n_photons=1_000_000,
+    n_gradient_iterations=1000,
+    n_photons=500_000,
     K=2,
     # Gradient optimization parameters
     energy_lr=1.0,
@@ -132,12 +132,12 @@ def run_optimization(
     energy_scale=0.01,
     position_scale=0.1,
     direction_scale=0.1,
-    patience=20,
+    patience=100,
     # Adaptive scaling parameters
     auto_scale=True,
-    target_energy_update_mev=10.0,
-    target_position_update_fraction=0.05,
-    target_direction_update_degrees=5.0,
+    target_energy_update_mev=50.0,
+    target_position_update_fraction=0.01,
+    target_direction_update_degrees=0.1,
     # Other parameters
     save_event_plots=False,
     verbose=True,
@@ -145,7 +145,10 @@ def run_optimization(
     numerical_debug=False,
     random_seed=1234567,
     color_by='time',
-    event_seeds=None
+    event_seeds=None,
+    loss_type='combined',
+    charge_weight=1.0,
+    time_weight=0.1
 ):
     """
     Main optimization function that supports all modes.
@@ -192,6 +195,12 @@ def run_optimization(
         Color sensor hits by 'time' or 'charge' in visualizations (default: 'time')
     event_seeds : list of int or None
         List of specific event indices to investigate (e.g., [3, 9, 11])
+    loss_type : str
+        Type of loss function to use ('combined' or 'poisson')
+    charge_weight : float
+        Weight for charge loss component in Poisson loss
+    time_weight : float
+        Weight for time loss component in Poisson loss
     """
     
     # Configuration
@@ -210,6 +219,9 @@ def run_optimization(
         print(f"Loading detector configuration...")
         print(f"Detector type: {detector_type}")
         print(f"Optimization mode: {mode}")
+        print(f"Loss function type: {loss_type}")
+        if loss_type == 'poisson':
+            print(f"Poisson loss weights: charge={charge_weight}, time={time_weight}")
         if mode in ['gradient', 'hybrid']:
             print(f"Gradient parameters: energy_lr={energy_lr}, spatial_lr={spatial_lr}")
             print(f"Gradient scales: energy={energy_scale}, position={position_scale}, direction={direction_scale}")
@@ -358,7 +370,10 @@ def run_optimization(
         _, _, combined_loss_func = create_optimization_loss_functions(
             simulate_event, sensor_positions, sensor_params, 
             tau=gradient_kwargs.get('tau', 0.01), 
-            lambda_time=gradient_kwargs.get('lambda_time', 1.0)
+            lambda_time=gradient_kwargs.get('lambda_time', 1.0),
+            loss_type=loss_type,
+            charge_weight=charge_weight,
+            time_weight=time_weight
         )
         
         search_result = optimization_engine(
@@ -498,14 +513,14 @@ Examples:
                         help='Optimization mode (default: numerical)')
     
     # Numerical optimization parameters
-    parser.add_argument('--iterations', '-i', type=int, default=40,
-                        help='Number of numerical iterations (default: 40)')
+    parser.add_argument('--iterations', '-i', type=int, default=30,
+                        help='Number of numerical iterations (default: 30)')
     parser.add_argument('--population', '-p', type=int, default=20,
                         help='Population size for numerical optimization (default: 20)')
     
     # Gradient optimization parameters
-    parser.add_argument('--n-gradient', type=int, default=50,
-                        help='Number of gradient iterations (default: 50)')
+    parser.add_argument('--n-gradient', type=int, default=1000,
+                        help='Number of gradient iterations (default: 1000)')
     parser.add_argument('--energy-lr', type=float, default=1.0,
                         help='Learning rate for energy (default: 1.0)')
     parser.add_argument('--spatial-lr', type=float, default=0.1,
@@ -516,22 +531,22 @@ Examples:
                         help='Scale factor for position gradients (default: 0.1)')
     parser.add_argument('--direction-scale', type=float, default=0.1,
                         help='Scale factor for direction gradients (default: 0.1)')
-    parser.add_argument('--patience', type=int, default=20,
-                        help='Patience for learning rate reduction (default: 20)')
+    parser.add_argument('--patience', type=int, default=100,
+                        help='Patience for learning rate reduction (default: 100)')
     
     # Adaptive scaling parameters
     parser.add_argument('--no-auto-scale', action='store_true',
                         help='Disable automatic gradient scale calculation')
-    parser.add_argument('--target-energy-update', type=float, default=10.0,
-                        help='Target first energy update in MeV (default: 10.0)')
-    parser.add_argument('--target-position-update', type=float, default=0.05,
-                        help='Target first position update as fraction of detector scale (default: 0.05)')
-    parser.add_argument('--target-direction-update', type=float, default=5.0,
-                        help='Target first direction update in degrees (default: 5.0)')
+    parser.add_argument('--target-energy-update', type=float, default=50.0,
+                        help='Target first energy update in MeV (default: 50.0)')
+    parser.add_argument('--target-position-update', type=float, default=0.01,
+                        help='Target first position update as fraction of detector scale (default: 0.01)')
+    parser.add_argument('--target-direction-update', type=float, default=0.1,
+                        help='Target first direction update in degrees (default: 0.1)')
     
     # Simulation parameters
-    parser.add_argument('--photons', type=int, default=1_000_000,
-                        help='Number of photons to simulate (default: 1000000)')
+    parser.add_argument('--photons', type=int, default=500_000,
+                        help='Number of photons to simulate (default: 500000)')
     parser.add_argument('--K', type=int, default=2,
                         help='Number of nearest neighbors for sensor mapping (default: 2)')
     
@@ -555,6 +570,15 @@ Examples:
                         help='Random seed (default: 1234567)')
     parser.add_argument('--event-seeds', type=str, default=None,
                         help='Comma-separated list of event indices to investigate (e.g., "3,9,11")')
+    
+    # Loss function parameters
+    parser.add_argument('--loss-type', type=str, default='combined',
+                        choices=['combined', 'poisson'],
+                        help='Type of loss function to use (default: combined)')
+    parser.add_argument('--charge-weight', type=float, default=1.0,
+                        help='Weight for charge loss component in Poisson loss (default: 1.0)')
+    parser.add_argument('--time-weight', type=float, default=0.1,
+                        help='Weight for time loss component in Poisson loss (default: 0.1)')
     
     args = parser.parse_args()
     
@@ -603,7 +627,10 @@ Examples:
         numerical_debug=args.numerical_debug,
         random_seed=args.seed,
         color_by=args.color_by,
-        event_seeds=event_seeds
+        event_seeds=event_seeds,
+        loss_type=args.loss_type,
+        charge_weight=args.charge_weight,
+        time_weight=args.time_weight
     )
     
     return results
