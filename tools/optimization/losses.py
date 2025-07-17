@@ -137,7 +137,7 @@ def _compute_spatial_loss(simulated_charge, simulated_time, true_charge, true_ti
         Spatial loss value
     """
     eps = 1e-8
-    threshold = 1e-2#1e-8
+    threshold = 1e-8
     
     # Compute mean times for active locations
     true_active_mask = true_charge > threshold
