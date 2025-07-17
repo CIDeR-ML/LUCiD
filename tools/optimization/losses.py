@@ -10,6 +10,76 @@ This module contains specialized loss functions for gradient-based optimization:
 import jax
 import jax.numpy as jnp
 from jax import jit
+from jax.scipy import special
+
+
+def _compute_poisson_loss(simulated_charge, simulated_time, true_charge, true_time, 
+                         charge_weight=1.0, time_weight=1.0, eps=1e-8):
+    """
+    Core Poisson likelihood loss computation.
+    
+    Computes the negative log-likelihood assuming Poisson distributions for both
+    charge and time measurements at each sensor.
+    
+    For charge: -log P(observed_charge | expected_charge) where P is Poisson
+    For time: -log P(observed_time | expected_time) where P is Poisson (scaled)
+    
+    Parameters:
+    -----------
+    simulated_charge : jnp.ndarray
+        Simulated/expected charge values
+    simulated_time : jnp.ndarray
+        Simulated/expected time values
+    true_charge : jnp.ndarray
+        Observed charge values
+    true_time : jnp.ndarray
+        Observed time values
+    charge_weight : float
+        Weight for charge loss component
+    time_weight : float
+        Weight for time loss component
+    eps : float
+        Small value to avoid log(0) and ensure numerical stability
+        
+    Returns:
+    --------
+    float
+        Negative Poisson log-likelihood loss
+    """
+    # Clip values to avoid numerical issues
+    simulated_charge = jnp.clip(simulated_charge, eps, None)
+    simulated_time = jnp.clip(simulated_time, eps, None)
+    true_charge = jnp.clip(true_charge, 0, None)
+    true_time = jnp.clip(true_time, 0, None)
+    
+    # Negative log-likelihood for charge (Poisson distribution)
+    # -log P(k | λ) = λ - k*log(λ) + log(k!)
+    # We ignore the log(k!) term as it's constant w.r.t. optimization parameters
+    charge_nll = jnp.sum(simulated_charge - true_charge * jnp.log(simulated_charge))
+    
+    # For time, we need to handle the case where charge = 0 (no signal)
+    # Only consider time loss where there is actual signal (charge > threshold)
+    active_mask = true_charge > eps
+    
+    if time_weight > 0:
+        # Scale time values to make them suitable for Poisson distribution
+        # Times are typically in ns, so we scale to make them order ~1-100
+        time_scale = 10.0  # Scale factor to make times reasonable for Poisson
+        scaled_sim_time = simulated_time * time_scale
+        scaled_true_time = true_time * time_scale
+        
+        # Apply Poisson loss only to active sensors
+        active_sim_time = jnp.where(active_mask, scaled_sim_time, 0.0)
+        active_true_time = jnp.where(active_mask, scaled_true_time, 0.0)
+        
+        # Negative log-likelihood for time (only where there's signal)
+        time_nll = jnp.sum(jnp.where(active_mask, 
+                                   active_sim_time - active_true_time * jnp.log(active_sim_time + eps),
+                                   0.0))
+    else:
+        time_nll = 0.0
+    
+    return charge_weight * charge_nll + time_weight * time_nll
 
 
 def _compute_energy_loss(simulated_charge, true_charge):
@@ -67,7 +137,7 @@ def _compute_spatial_loss(simulated_charge, simulated_time, true_charge, true_ti
         Spatial loss value
     """
     eps = 1e-8
-    threshold = 1e-8
+    threshold = 1e-2#1e-8
     
     # Compute mean times for active locations
     true_active_mask = true_charge > threshold
@@ -194,6 +264,51 @@ def spatial_loss_fn(params, true_event_data, simulate_event, sensor_params, sens
     )
 
 
+def poisson_loss_fn(params, true_event_data, simulate_event, sensor_params, sensor_positions, event_key, 
+                   charge_weight=1.0, time_weight=0.1, eps=1e-8):
+    """
+    Poisson likelihood loss function.
+    
+    Uses negative Poisson log-likelihood for both charge and time measurements
+    at each sensor to optimize all parameters simultaneously.
+    
+    Parameters:
+    -----------
+    params : tuple
+        (energy, position, direction_angles)
+    true_event_data : tuple
+        (true_charge, true_time)
+    simulate_event : function
+        Event simulation function
+    sensor_params : tuple
+        Sensor parameters for simulation
+    sensor_positions : jnp.ndarray
+        Array of sensor positions (not used but kept for consistency)
+    event_key : PRNGKey
+        Random key for simulation
+    charge_weight : float
+        Weight for charge loss component
+    time_weight : float
+        Weight for time loss component
+    eps : float
+        Small value for numerical stability
+        
+    Returns:
+    --------
+    float
+        Negative Poisson log-likelihood loss
+    """
+    true_charge, true_time = true_event_data
+    
+    simulated_data = simulate_event(params, sensor_params, event_key)
+    simulated_charge, simulated_time = simulated_data
+    
+    return _compute_poisson_loss(
+        simulated_charge, simulated_time, true_charge, true_time, 
+        charge_weight=charge_weight, time_weight=time_weight, eps=eps
+    )
+
+
 def combined_loss_fn(params, true_event_data, simulate_event, sensor_params, sensor_positions, event_key, tau=0.01, lambda_time=1.0):
     """
     Combined loss function for numerical optimization.
@@ -240,7 +355,8 @@ def combined_loss_fn(params, true_event_data, simulate_event, sensor_params, sen
     return energy_loss + spatial_loss
 
 
-def create_optimization_loss_functions(simulate_event, sensor_positions, sensor_params, tau=0.01, lambda_time=1.0):
+def create_optimization_loss_functions(simulate_event, sensor_positions, sensor_params, tau=0.01, lambda_time=1.0, 
+                                     loss_type='combined', charge_weight=1.0, time_weight=0.1, eps=1e-8):
     """
     Create loss functions with simulation parameters baked in.
     
@@ -256,6 +372,14 @@ def create_optimization_loss_functions(simulate_event, sensor_positions, sensor_
         Temperature parameter for softmax assignments
     lambda_time : float
         Weight for time loss component
+    loss_type : str
+        Type of loss function to create: 'combined', 'poisson'
+    charge_weight : float
+        Weight for charge loss component (Poisson loss)
+    time_weight : float
+        Weight for time loss component (Poisson loss)
+    eps : float
+        Small value for numerical stability (Poisson loss)
         
     Returns:
     --------
@@ -269,9 +393,15 @@ def create_optimization_loss_functions(simulate_event, sensor_positions, sensor_
     def spatial_loss_func(params, true_event_data, event_key):
         return spatial_loss_fn(params, true_event_data, simulate_event, sensor_params, sensor_positions, event_key, tau, lambda_time)
     
-    def combined_loss_func(params, true_charges, true_times, event_key):
-        true_event_data = (true_charges, true_times)
-        return combined_loss_fn(params, true_event_data, simulate_event, sensor_params, sensor_positions, event_key, tau, lambda_time)
+    if loss_type == 'poisson':
+        def combined_loss_func(params, true_charges, true_times, event_key):
+            true_event_data = (true_charges, true_times)
+            return poisson_loss_fn(params, true_event_data, simulate_event, sensor_params, sensor_positions, event_key, 
+                                 charge_weight, time_weight, eps)
+    else:
+        def combined_loss_func(params, true_charges, true_times, event_key):
+            true_event_data = (true_charges, true_times)
+            return combined_loss_fn(params, true_event_data, simulate_event, sensor_params, sensor_positions, event_key, tau, lambda_time)
     
     return energy_loss_func, spatial_loss_func, combined_loss_func
 
@@ -282,6 +412,10 @@ def compute_shared_gradients(params, true_charges, true_times, simulate_event, s
     
     This approach creates a combined loss function that runs simulate_event once and computes both losses,
     then uses JAX to get gradients with respect to both loss components.
+    
+    Note: The returned gradients are specialized:
+    - energy_grad: Gradients of energy loss w.r.t. all parameters (but only energy component is used)
+    - spatial_grad: Gradients of spatial loss w.r.t. all parameters (but only position/direction components are used)
     
     Parameters:
     -----------

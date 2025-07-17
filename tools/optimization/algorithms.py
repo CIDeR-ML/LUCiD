@@ -193,21 +193,45 @@ def optimization_engine(true_charges, true_times, simulate_event, sensor_params,
             # Debug: For very first iteration, show loss breakdown for a few candidates
             if numerical_debug and iteration == 0 and i < 3:
                 # Calculate individual loss components
-                from ..optimization.losses import energy_loss_fn, spatial_loss_fn
-                energy_loss = energy_loss_fn(particle_params, (true_charges, true_times), 
-                                           simulate_event, sensor_params, sensor_positions, key)
-                spatial_loss = spatial_loss_fn(particle_params, (true_charges, true_times),
-                                             simulate_event, sensor_params, sensor_positions, key, 
-                                             tau=0.01, lambda_time=1.0)
-                print(f"\n  Initial candidate {i} loss breakdown:")
-                print(f"    Energy loss: {float(energy_loss):.6f}")
-                print(f"    Spatial loss: {float(spatial_loss):.6f} (scaled by 1e6)")
-                print(f"    Combined loss: {float(loss):.6f}")
+                from ..optimization.losses import energy_loss_fn, spatial_loss_fn, poisson_loss_fn
+                
+                # IMPORTANT: Use a separate key for debug calls to avoid affecting the main optimization
+                debug_key = jax.random.PRNGKey(42 + i)  # Fixed seed for reproducible debug output
                 
                 # Show the actual charge comparison
-                simulated_charge, _ = simulate_event(particle_params, sensor_params, key)
+                simulated_charge, simulated_time = simulate_event(particle_params, sensor_params, debug_key)
                 total_true = float(jnp.sum(true_charges))
                 total_sim = float(jnp.sum(simulated_charge))
+                
+                print(f"\n  Initial candidate {i} loss breakdown:")
+                if loss_function is not None:
+                    # We're using a specific loss function
+                    print(f"    Total loss: {float(loss):.6f}")
+                    
+                    # Try to identify if it's Poisson loss by checking if it's much larger than typical energy/spatial losses
+                    if float(loss) > 10.0:  # Poisson losses are typically much larger
+                        print(f"    (Likely Poisson loss - larger values are normal)")
+                        
+                        # Calculate Poisson loss components
+                        poisson_charge_loss = poisson_loss_fn(particle_params, (true_charges, true_times),
+                                                            simulate_event, sensor_params, sensor_positions, debug_key, 
+                                                            charge_weight=1.0, time_weight=0.0)
+                        poisson_time_loss = poisson_loss_fn(particle_params, (true_charges, true_times),
+                                                          simulate_event, sensor_params, sensor_positions, debug_key, 
+                                                          charge_weight=0.0, time_weight=1.0)
+                        print(f"    Poisson charge loss: {float(poisson_charge_loss):.6f}")
+                        print(f"    Poisson time loss: {float(poisson_time_loss):.6f}")
+                else:
+                    # Default to energy/spatial breakdown
+                    energy_loss = energy_loss_fn(particle_params, (true_charges, true_times), 
+                                               simulate_event, sensor_params, sensor_positions, debug_key)
+                    spatial_loss = spatial_loss_fn(particle_params, (true_charges, true_times),
+                                                 simulate_event, sensor_params, sensor_positions, debug_key, 
+                                                 tau=0.01, lambda_time=1.0)
+                    print(f"    Energy loss: {float(energy_loss):.6f}")
+                    print(f"    Spatial loss: {float(spatial_loss):.6f} (scaled by 1e6)")
+                    print(f"    Combined loss: {float(loss):.6f}")
+                
                 print(f"    Total charge - True: {total_true:.1f}, Simulated: {total_sim:.1f}")
             
             candidate['loss'] = float(loss)
@@ -271,22 +295,34 @@ def optimization_engine(true_charges, true_times, simulate_event, sensor_params,
                     particle_params = (cand['energy'], cand['position'], direction_angles)
                     
                     # Calculate individual loss components
-                    from ..optimization.losses import energy_loss_fn, spatial_loss_fn
-                    energy_loss = energy_loss_fn(particle_params, (true_charges, true_times), 
-                                               simulate_event, sensor_params, sensor_positions, key)
-                    spatial_loss = spatial_loss_fn(particle_params, (true_charges, true_times),
-                                                 simulate_event, sensor_params, sensor_positions, key, 
-                                                 tau=0.01, lambda_time=1.0)
+                    from ..optimization.losses import energy_loss_fn, spatial_loss_fn, poisson_loss_fn
+                    
+                    # IMPORTANT: Use a separate key for debug calls to avoid affecting the main optimization
+                    debug_key = jax.random.PRNGKey(100 + iteration * 10 + i)  # Fixed seed for reproducible debug output
                     
                     # Show the actual charge comparison
-                    simulated_charge, _ = simulate_event(particle_params, sensor_params, key)
+                    simulated_charge, simulated_time = simulate_event(particle_params, sensor_params, debug_key)
                     total_true = float(jnp.sum(true_charges))
                     total_sim = float(jnp.sum(simulated_charge))
                     charge_ratio = total_sim / total_true if total_true > 0 else 0
                     
-                    print(f"         Loss breakdown: Energy={float(energy_loss):.6f}, Spatial={float(spatial_loss):.6f}")
+                    if loss_function is not None and cand['loss'] > 10.0:  # Likely Poisson loss
+                        poisson_charge_loss = poisson_loss_fn(particle_params, (true_charges, true_times),
+                                                            simulate_event, sensor_params, sensor_positions, debug_key, 
+                                                            charge_weight=1.0, time_weight=0.0)
+                        poisson_time_loss = poisson_loss_fn(particle_params, (true_charges, true_times),
+                                                          simulate_event, sensor_params, sensor_positions, debug_key, 
+                                                          charge_weight=0.0, time_weight=1.0)
+                        print(f"         Loss breakdown: Charge={float(poisson_charge_loss):.6f}, Time={float(poisson_time_loss):.6f}")
+                    else:
+                        energy_loss = energy_loss_fn(particle_params, (true_charges, true_times), 
+                                                   simulate_event, sensor_params, sensor_positions, debug_key)
+                        spatial_loss = spatial_loss_fn(particle_params, (true_charges, true_times),
+                                                     simulate_event, sensor_params, sensor_positions, debug_key, 
+                                                     tau=0.01, lambda_time=1.0)
+                        print(f"         Loss breakdown: Energy={float(energy_loss):.6f}, Spatial={float(spatial_loss):.6f}")
+                    
                     print(f"         Charge ratio: {charge_ratio:.3f} (sim/true: {total_sim:.1f}/{total_true:.1f})")
-                    key, _ = jax.random.split(key)
             
             # Show population diversity
             positions = jnp.array([c['position'] for c in population])
@@ -531,6 +567,12 @@ def gradient_step_shared(params, opt_state, true_charges, true_times, key,
     """
     Perform a single gradient descent step using shared simulation for both energy and spatial losses.
     
+    Uses specialized gradients where:
+    - Energy parameter is updated only based on energy loss gradients
+    - Spatial parameters (position, direction) are updated only based on spatial loss gradients
+    
+    This separation ensures each loss function optimizes its natural parameters without interference.
+    
     Parameters:
     -----------
     params : tuple
@@ -592,17 +634,19 @@ def gradient_step_shared(params, opt_state, true_charges, true_times, key,
         params, true_charges, true_times, simulate_event, sensor_params, sensor_positions, key, tau, lambda_time
     )
     
-    # Combine losses for total loss
+    # Combine losses for total loss (still used for monitoring convergence)
     total_loss = loss_weights[0] * energy_loss_val + loss_weights[1] * spatial_loss_val
     
     # Extract individual gradients
     energy_grad_energy, energy_grad_position, energy_grad_direction = energy_grad
     spatial_grad_energy, spatial_grad_position, spatial_grad_direction = spatial_grad
     
-    # Combine gradients with weights
-    combined_energy_grad = (loss_weights[0] * energy_grad_energy + loss_weights[1] * spatial_grad_energy)
-    combined_position_grad = (loss_weights[0] * energy_grad_position + loss_weights[1] * spatial_grad_position)
-    combined_direction_grad = (loss_weights[0] * energy_grad_direction + loss_weights[1] * spatial_grad_direction)
+    # Use specialized gradients: energy loss for energy parameter, spatial loss for spatial parameters
+    # This decouples the optimization, allowing each loss to focus on its natural parameters
+    # Note: loss_weights are NOT used for gradient combination anymore
+    combined_energy_grad = energy_grad_energy  # Only use energy loss gradient for energy
+    combined_position_grad = spatial_grad_position  # Only use spatial loss gradient for position
+    combined_direction_grad = spatial_grad_direction  # Only use spatial loss gradient for direction
     
     # Apply parameter-specific scaling
     scaled_energy_grad = combined_energy_grad * energy_scale * energy_lr_multiplier
