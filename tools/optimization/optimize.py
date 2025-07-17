@@ -25,6 +25,7 @@ import os
 import sys
 import argparse
 import time
+import pickle
 from datetime import datetime
 from tqdm import tqdm
 
@@ -466,6 +467,9 @@ def run_optimization(
         
         # Create convergence plots if we have event histories
         if event_histories:
+            # Save convergence data for later plotting
+            save_convergence_data(event_histories, results, figures_dir, config_file, mode)
+            
             # Check if we have gradient history (hybrid optimization)
             if event_histories[0] and 'gradient_loss' in event_histories[0]:
                 create_hybrid_convergence_plot(event_histories, figures_dir, config_file=config_file)
@@ -473,6 +477,118 @@ def run_optimization(
                 create_convergence_plots(event_histories, figures_dir, config_file=config_file)
     
     return results
+
+
+def save_convergence_data(event_histories, results, figures_dir, config_file, mode):
+    """
+    Save convergence plot data to pickle file for later plotting.
+    
+    Parameters:
+    -----------
+    event_histories : list
+        List of optimization histories for each event
+    results : list
+        List of optimization results for each event
+    figures_dir : str
+        Directory to save the data file
+    config_file : str
+        Path to detector configuration file
+    mode : str
+        Optimization mode (numerical, gradient, hybrid)
+    """
+    # Extract detector name from config file
+    detector_name = "Unknown"
+    if config_file:
+        config_basename = os.path.basename(config_file)
+        if '_geom_config.json' in config_basename:
+            detector_name = config_basename.replace('_geom_config.json', '')
+        elif '.json' in config_basename:
+            detector_name = config_basename.replace('.json', '')
+    
+    # Create timestamp for unique filename
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    
+    # Prepare data to save
+    convergence_data = {
+        'detector_name': detector_name,
+        'mode': mode,
+        'timestamp': timestamp,
+        'config_file': config_file,
+        'event_histories': event_histories,
+        'results': results,
+        'metadata': {
+            'n_events': len(results),
+            'successful_events': len([r for r in results if r.get('success', False)]),
+            'optimization_mode': mode,
+            'has_gradient_data': event_histories[0] and 'gradient_loss' in event_histories[0] if event_histories else False
+        }
+    }
+    
+    # Convert JAX arrays to numpy for serialization
+    def convert_jax_to_numpy(obj):
+        """Recursively convert JAX arrays to numpy arrays for pickle serialization."""
+        if isinstance(obj, jnp.ndarray):
+            return np.array(obj)
+        elif isinstance(obj, dict):
+            return {key: convert_jax_to_numpy(value) for key, value in obj.items()}
+        elif isinstance(obj, list):
+            return [convert_jax_to_numpy(item) for item in obj]
+        elif isinstance(obj, tuple):
+            return tuple(convert_jax_to_numpy(item) for item in obj)
+        else:
+            return obj
+    
+    convergence_data = convert_jax_to_numpy(convergence_data)
+    
+    # Save to pickle file
+    filename = f'{detector_name}_{mode}_convergence_data_{timestamp}.pkl'
+    filepath = os.path.join(figures_dir, filename)
+    
+    try:
+        with open(filepath, 'wb') as f:
+            pickle.dump(convergence_data, f)
+        print(f"Convergence data saved to {filepath}")
+        
+        # Also save a human-readable summary
+        summary_filename = f'{detector_name}_{mode}_convergence_summary_{timestamp}.txt'
+        summary_filepath = os.path.join(figures_dir, summary_filename)
+        
+        with open(summary_filepath, 'w') as f:
+            f.write(f"LUCiD Optimization Convergence Data Summary\n")
+            f.write(f"==========================================\n\n")
+            f.write(f"Detector: {detector_name}\n")
+            f.write(f"Optimization Mode: {mode}\n")
+            f.write(f"Timestamp: {timestamp}\n")
+            f.write(f"Config File: {config_file}\n")
+            f.write(f"Number of Events: {convergence_data['metadata']['n_events']}\n")
+            f.write(f"Successful Events: {convergence_data['metadata']['successful_events']}\n")
+            f.write(f"Has Gradient Data: {convergence_data['metadata']['has_gradient_data']}\n\n")
+            
+            f.write(f"Data File: {filename}\n\n")
+            
+            f.write(f"To load and plot this data later:\n")
+            f.write(f"```python\n")
+            f.write(f"import pickle\n")
+            f.write(f"import matplotlib.pyplot as plt\n\n")
+            f.write(f"# Load data\n")
+            f.write(f"with open('{filename}', 'rb') as f:\n")
+            f.write(f"    data = pickle.load(f)\n\n")
+            f.write(f"event_histories = data['event_histories']\n")
+            f.write(f"results = data['results']\n\n")
+            f.write(f"# Plot convergence (example for position error)\n")
+            f.write(f"for i, history in enumerate(event_histories):\n")
+            f.write(f"    plt.plot(history['position_error'], alpha=0.7, label=f'Event {{i+1}}')\n")
+            f.write(f"plt.xlabel('Iteration')\n")
+            f.write(f"plt.ylabel('Position Error (m)')\n")
+            f.write(f"plt.title('Position Error Convergence')\n")
+            f.write(f"plt.legend()\n")
+            f.write(f"plt.show()\n")
+            f.write(f"```\n")
+        
+        print(f"Convergence summary saved to {summary_filepath}")
+        
+    except Exception as e:
+        print(f"Warning: Could not save convergence data: {e}")
 
 
 def main():

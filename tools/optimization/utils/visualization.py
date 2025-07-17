@@ -12,6 +12,7 @@ from .geometry import (
     compute_cone_cylinder_intersection, compute_cone_sphere_intersection, 
     compute_cone_box_intersection, get_cherenkov_angle
 )
+from ...visualization import create_detector_display
 
 
 def create_event_visualization(true_position, true_direction, true_energy, best_match, 
@@ -202,14 +203,53 @@ def create_event_visualization(true_position, true_direction, true_energy, best_
     
     plt.tight_layout()
     
-    # Save figure
-    output_file = f'{detector_name}_optimization_event_{event_idx + 1:03d}.png'
+    # Save 3D figure
+    output_file_3d = f'{detector_name}_optimization_event_{event_idx + 1:03d}_3D.png'
     if figures_dir:
-        output_file = os.path.join(figures_dir, output_file)
-    plt.savefig(output_file, dpi=150, bbox_inches='tight')
+        output_file_3d = os.path.join(figures_dir, output_file_3d)
+    plt.savefig(output_file_3d, dpi=150, bbox_inches='tight')
     if verbose:
-        print(f"Visualization saved to {output_file}")
+        print(f"3D visualization saved to {output_file_3d}")
     plt.close()
+    
+    # Create and save 2D detector display if it's a cylinder detector
+    if detector_bounds['type'] == 'cylinder' and config_file:
+        try:
+            # Create detector display function
+            display_func = create_detector_display(config_file, sparse=False)
+            
+            # Create 2D display for charge data
+            output_file_2d_charge = f'{detector_name}_optimization_event_{event_idx + 1:03d}_2D_charge.png'
+            if figures_dir:
+                output_file_2d_charge = os.path.join(figures_dir, output_file_2d_charge)
+            
+            display_func(true_charges, true_times, 
+                        file_name=output_file_2d_charge, 
+                        plot_time=False, 
+                        log_scale=False, 
+                        vmin=0)  # Set minimum to zero for charge plots
+            
+            # Create 2D display for time data
+            output_file_2d_time = f'{detector_name}_optimization_event_{event_idx + 1:03d}_2D_time.png'
+            if figures_dir:
+                output_file_2d_time = os.path.join(figures_dir, output_file_2d_time)
+            
+            display_func(true_charges, true_times, 
+                        file_name=output_file_2d_time, 
+                        plot_time=True, 
+                        log_scale=False)
+            
+            if verbose:
+                print(f"2D detector displays saved to {output_file_2d_charge} and {output_file_2d_time}")
+                
+        except Exception as e:
+            if verbose:
+                print(f"Warning: Could not create 2D detector display: {e}")
+    elif verbose:
+        if detector_bounds['type'] != 'cylinder':
+            print(f"2D detector display only supported for cylinder detectors (current: {detector_bounds['type']})")
+        else:
+            print("Config file not provided, skipping 2D detector display")
 
 
 def print_summary_statistics(results, total_search_time):

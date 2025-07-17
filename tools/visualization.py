@@ -118,7 +118,7 @@ def create_detector_display(json_filename='../config/cyl_geom_config.json', spar
             plot_values[plot_values <= 0] = vmin  # Replace zeros/negatives with minimum
 
             # Use LogNorm for logarithmic color scaling
-            cmap = plt.get_cmap('gnuplot_r') if plot_time else plt.get_cmap('gnuplot')
+            cmap = plt.get_cmap('viridis_r') if plot_time else plt.get_cmap('viridis')
             norm = plt.matplotlib.colors.LogNorm(vmin=vmin, vmax=max_value)
             color_gradient = plt.cm.ScalarMappable(norm=norm, cmap=cmap)
         else:
@@ -128,7 +128,7 @@ def create_detector_display(json_filename='../config/cyl_geom_config.json', spar
             
             below_vmin_mask = (all_values > 0) & (all_values < vmin)
             
-            cmap = plt.get_cmap('gnuplot_r') if plot_time else plt.get_cmap('gnuplot')
+            cmap = plt.get_cmap('viridis_r') if plot_time else plt.get_cmap('viridis')
             norm = plt.Normalize(vmin=vmin, vmax=max_value)
             color_gradient = plt.cm.ScalarMappable(norm=norm, cmap=cmap)
             plot_values = all_values
