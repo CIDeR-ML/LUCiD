@@ -240,16 +240,12 @@ def combined_loss_fn(params, true_charges, true_times, simulate_event, sensor_pa
     return energy_loss, spatial_loss
 
 
-def compute_shared_gradients(params, true_charges, true_times, simulate_event, sensor_params, sensor_positions, event_key, tau=0.01, lambda_time=1.0):
+def compute_shared_gradients(params, true_charges, true_times, energy_grad_fn, spatial_grad_fn, event_key):
     """
-    Compute gradients for both energy and spatial losses with a single simulation.
+    Compute gradients for both energy and spatial losses using pre-compiled gradient functions.
     
-    This approach creates a combined loss function that runs simulate_event once and computes both losses,
-    then uses JAX to get gradients with respect to both loss components.
-    
-    Note: The returned gradients are specialized:
-    - energy_grad: Gradients of energy loss w.r.t. all parameters (but only energy component is used)
-    - spatial_grad: Gradients of spatial loss w.r.t. all parameters (but only position/direction components are used)
+    This approach uses JIT-compiled gradient functions to efficiently compute gradients
+    for both energy and spatial losses without re-jitting.
     
     Parameters:
     -----------
@@ -259,18 +255,12 @@ def compute_shared_gradients(params, true_charges, true_times, simulate_event, s
         True charge measurements
     true_times : jnp.ndarray
         True time measurements
-    simulate_event : function
-        Event simulation function
-    sensor_params : tuple
-        Sensor parameters for simulation
-    sensor_positions : jnp.ndarray
-        Array of sensor positions
+    energy_grad_fn : function
+        Pre-compiled JIT gradient function for energy loss
+    spatial_grad_fn : function
+        Pre-compiled JIT gradient function for spatial loss
     event_key : PRNGKey
         Random key for simulation
-    tau : float
-        Temperature parameter for softmax assignments
-    lambda_time : float
-        Weight for time loss component
         
     Returns:
     --------
@@ -284,69 +274,51 @@ def compute_shared_gradients(params, true_charges, true_times, simulate_event, s
         Spatial loss value
     """
     
-    # Use JAX's jacobian computation for vector-valued function
-    def vector_loss(params):
-        """Return both losses as a vector for jacobian computation."""
-        energy_loss, spatial_loss = combined_loss_fn(
-            params, true_charges, true_times, simulate_event, sensor_params, sensor_positions, event_key, tau, lambda_time
-        )
-        return jnp.array([energy_loss, spatial_loss])
+    # Compute energy loss and gradient
+    energy_loss_val, energy_grad = energy_grad_fn(params, true_charges, true_times, event_key)
     
-    # Compute loss values
-    loss_values = vector_loss(params)
+    # Compute spatial loss and gradient
+    spatial_loss_val, spatial_grad = spatial_grad_fn(params, true_charges, true_times, event_key)
     
-    # Compute jacobian (gradients for each output component)
-    jacobian_fn = jax.jacrev(vector_loss)  # or jax.jacfwd for forward-mode
-    jacobian = jacobian_fn(params)
-    
-    # Extract individual components
-    energy_loss_val = loss_values[0]
-    spatial_loss_val = loss_values[1]
-    
-    # Extract gradients for each loss component
-    # jacobian has shape (2, *param_shape) where first dim corresponds to [energy_loss, spatial_loss]
-    energy_grad = jax.tree.map(lambda x: x[0], jacobian)  # Gradient w.r.t. energy loss
-    spatial_grad = jax.tree.map(lambda x: x[1], jacobian)  # Gradient w.r.t. spatial loss
-    
-    # Check for NaN values and replace with zeros if needed (to prevent complete optimization failure)
-    def replace_nan_with_zero(x, component_name=""):
-        nan_mask = jnp.isnan(x)
-        nan_count = jnp.sum(nan_mask)
-        total_elements = x.size
-        nan_fraction = nan_count / total_elements
+    # # Check for NaN values and replace with zeros if needed (to prevent complete optimization failure)
+    # def replace_nan_with_zero(x, component_name=""):
+    #     nan_mask = jnp.isnan(x)
+    #     nan_count = jnp.sum(nan_mask)
+    #     total_elements = x.size
+    #     nan_fraction = nan_count / total_elements
         
-        # Print warning if NaNs are found (JIT-compatible)
-        jax.lax.cond(
-            nan_count > 0,
-            lambda: jax.debug.print("⚠️  NaN replacement in {component_name}: {nan_count}/{total_elements} elements ({nan_fraction:.3f} fraction)",
-                                   component_name=component_name, nan_count=nan_count, total_elements=total_elements, nan_fraction=nan_fraction),
-            lambda: None
-        )
+    #     # Print warning if NaNs are found (JIT-compatible)
+    #     jax.lax.cond(
+    #         nan_count > 0,
+    #         lambda: jax.debug.print("⚠️  NaN replacement in {component_name}: {nan_count}/{total_elements} elements ({nan_fraction:.3f} fraction)",
+    #                                component_name=component_name, nan_count=nan_count, total_elements=total_elements, nan_fraction=nan_fraction),
+    #         lambda: None
+    #     )
         
-        return jnp.where(nan_mask, 0.0, x)
+    #     return jnp.where(nan_mask, 0.0, x)
     
-    # Apply NaN replacement with component identification
-    def replace_nans_in_tree(tree, tree_name):
-        def replace_with_name(x, path=""):
-            component_name = f"{tree_name}"
-            if path:
-                component_name += f".{path}"
-            return replace_nan_with_zero(x, component_name)
+    # # Apply NaN replacement with component identification
+    # def replace_nans_in_tree(tree, tree_name):
+    #     def replace_with_name(x, path=""):
+    #         component_name = f"{tree_name}"
+    #         if path:
+    #             component_name += f".{path}"
+    #         return replace_nan_with_zero(x, component_name)
         
-        # For our gradient tree structure: (energy_grad, position_grad, direction_grad)
-        if isinstance(tree, tuple) and len(tree) == 3:
-            energy_grad_clean = replace_nan_with_zero(tree[0], f"{tree_name}.energy")
-            position_grad_clean = jax.tree.map(
-                lambda x: replace_nan_with_zero(x, f"{tree_name}.position"), tree[1]
-            )
-            direction_grad_clean = jax.tree.map(
-                lambda x: replace_nan_with_zero(x, f"{tree_name}.direction"), tree[2]
-            )
-            return (energy_grad_clean, position_grad_clean, direction_grad_clean)
-        else:
-            return jax.tree.map(replace_with_name, tree)
+    #     # For our gradient tree structure: (energy_grad, position_grad, direction_grad)
+    #     if isinstance(tree, tuple) and len(tree) == 3:
+    #         energy_grad_clean = replace_nan_with_zero(tree[0], f"{tree_name}.energy")
+    #         position_grad_clean = jax.tree.map(
+    #             lambda x: replace_nan_with_zero(x, f"{tree_name}.position"), tree[1]
+    #         )
+    #         direction_grad_clean = jax.tree.map(
+    #             lambda x: replace_nan_with_zero(x, f"{tree_name}.direction"), tree[2]
+    #         )
+    #         return (energy_grad_clean, position_grad_clean, direction_grad_clean)
+    #     else:
+    #         return jax.tree.map(replace_with_name, tree)
     
-    energy_grad = replace_nans_in_tree(energy_grad, "energy_grad")
-    spatial_grad = replace_nans_in_tree(spatial_grad, "spatial_grad")
+    # energy_grad = replace_nans_in_tree(energy_grad, "energy_grad")
+    # spatial_grad = replace_nans_in_tree(spatial_grad, "spatial_grad")
     
     return energy_grad, spatial_grad, float(energy_loss_val), float(spatial_loss_val)
