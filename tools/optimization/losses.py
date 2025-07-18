@@ -101,8 +101,7 @@ def _compute_energy_loss(simulated_charge, true_charge):
     total_true_charge = jnp.sum(true_charge)
     total_sim_charge = jnp.sum(simulated_charge)
     eps = 1e-8
-    return jnp.abs(jnp.log(total_sim_charge / (total_true_charge + eps)))
-
+    return jnp.abs(jnp.log(total_sim_charge / (total_true_charge + eps)))*2
 
 def _compute_spatial_loss(simulated_charge, simulated_time, true_charge, true_time, 
                          sensor_positions, tau=0.01, lambda_time=1.0, 
