@@ -354,16 +354,8 @@ def run_optimization(
         # But keep it deterministic based on event index
         optimization_seed = random_seed + 10000 + event_idx * 1000
         
-        # Create the combined loss function for consistent loss definition
+        # Use the combined loss function from losses.py
         from tools.optimization.losses import combined_loss_fn
-        def combined_loss_func(params, true_charges, true_times, event_key):
-            energy_loss, spatial_loss = combined_loss_fn(
-                params, true_charges, true_times, 
-                simulate_event, sensor_params, sensor_positions, event_key,
-                tau=gradient_kwargs.get('tau', 0.01), 
-                lambda_time=gradient_kwargs.get('lambda_time', 1.0)
-            )
-            return energy_loss + spatial_loss
         
         search_result = optimization_engine(
             true_charges, true_times, simulate_event, sensor_params, sensor_positions,
@@ -377,7 +369,12 @@ def run_optimization(
             gradient_iterations=gradient_iterations,
             gradient_kwargs=gradient_kwargs,
             random_seed=optimization_seed,
-            loss_function=combined_loss_func,
+            loss_function=lambda params, true_charges, true_times, event_key: sum(combined_loss_fn(
+                params, true_charges, true_times, 
+                simulate_event, sensor_params, sensor_positions, event_key,
+                tau=gradient_kwargs.get('tau', 0.01), 
+                lambda_time=gradient_kwargs.get('lambda_time', 1.0)
+            )),
             numerical_debug=numerical_debug
         )
         
