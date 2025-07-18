@@ -19,8 +19,8 @@ from .cylinder import Cylinder
 from .sphere import Sphere
 from .box import Box
 
-# Import factory functions
-from .factory import (
+# Import detector functions
+from .detector import (
     load_detector_config,
     load_detector_geom,
     generate_detector
@@ -40,7 +40,7 @@ __all__ = [
     'Sphere', 
     'Box',
     
-    # Factory functions
+    # Detector functions
     'load_detector_config',
     'load_detector_geom',
     'generate_detector'
