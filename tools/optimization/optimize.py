@@ -147,9 +147,6 @@ def run_optimization(
     random_seed=1234567,
     color_by='time',
     event_seeds=None,
-    loss_type='combined',
-    charge_weight=1.0,
-    time_weight=0.1
 ):
     """
     Main optimization function that supports all modes.
@@ -196,12 +193,6 @@ def run_optimization(
         Color sensor hits by 'time' or 'charge' in visualizations (default: 'time')
     event_seeds : list of int or None
         List of specific event indices to investigate (e.g., [3, 9, 11])
-    loss_type : str
-        Type of loss function to use ('combined' or 'poisson')
-    charge_weight : float
-        Weight for charge loss component in Poisson loss
-    time_weight : float
-        Weight for time loss component in Poisson loss
     """
     
     # Configuration
@@ -220,9 +211,6 @@ def run_optimization(
         print(f"Loading detector configuration...")
         print(f"Detector type: {detector_type}")
         print(f"Optimization mode: {mode}")
-        print(f"Loss function type: {loss_type}")
-        if loss_type == 'poisson':
-            print(f"Poisson loss weights: charge={charge_weight}, time={time_weight}")
         if mode in ['gradient', 'hybrid']:
             print(f"Gradient parameters: energy_lr={energy_lr}, spatial_lr={spatial_lr}")
             print(f"Gradient scales: energy={energy_scale}, position={position_scale}, direction={direction_scale}")
@@ -367,14 +355,11 @@ def run_optimization(
         optimization_seed = random_seed + 10000 + event_idx * 1000
         
         # Create the combined loss function for consistent loss definition
-        from tools.optimization.losses import create_optimization_loss_functions
-        _, _, combined_loss_func = create_optimization_loss_functions(
+        from tools.optimization.losses import create_combined_loss_function
+        combined_loss_func = create_combined_loss_function(
             simulate_event, sensor_positions, sensor_params, 
             tau=gradient_kwargs.get('tau', 0.01), 
-            lambda_time=gradient_kwargs.get('lambda_time', 1.0),
-            loss_type=loss_type,
-            charge_weight=charge_weight,
-            time_weight=time_weight
+            lambda_time=gradient_kwargs.get('lambda_time', 1.0)
         )
         
         search_result = optimization_engine(
@@ -390,8 +375,7 @@ def run_optimization(
             gradient_kwargs=gradient_kwargs,
             random_seed=optimization_seed,
             loss_function=combined_loss_func,
-            numerical_debug=numerical_debug,
-            loss_type=loss_type
+            numerical_debug=numerical_debug
         )
         
         # Unpack results based on whether history was tracked
@@ -688,15 +672,6 @@ Examples:
     parser.add_argument('--event-seeds', type=str, default=None,
                         help='Comma-separated list of event indices to investigate (e.g., "3,9,11")')
     
-    # Loss function parameters
-    parser.add_argument('--loss-type', type=str, default='combined',
-                        choices=['combined', 'poisson'],
-                        help='Type of loss function to use (default: combined)')
-    parser.add_argument('--charge-weight', type=float, default=1.0,
-                        help='Weight for charge loss component in Poisson loss (default: 1.0)')
-    parser.add_argument('--time-weight', type=float, default=0.1,
-                        help='Weight for time loss component in Poisson loss (default: 0.1)')
-    
     args = parser.parse_args()
     
     # Determine verbosity (quiet takes precedence)
@@ -744,10 +719,7 @@ Examples:
         numerical_debug=args.numerical_debug,
         random_seed=args.seed,
         color_by=args.color_by,
-        event_seeds=event_seeds,
-        loss_type=args.loss_type,
-        charge_weight=args.charge_weight,
-        time_weight=args.time_weight
+        event_seeds=event_seeds
     )
     
     return results

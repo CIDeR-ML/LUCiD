@@ -62,7 +62,7 @@ def optimization_engine(true_charges, true_times, simulate_event, sensor_params,
                    n_iterations=20, population_size=50, elite_fraction=0.2,
                    random_seed=42, verbose=True, track_history=False,
                    optimization_type='numerical', gradient_iterations=0, gradient_kwargs=None,
-                   loss_function=None, numerical_debug=False, loss_type='combined'):
+                   loss_function=None, numerical_debug=False):
     """
     Unified optimization engine supporting numerical, gradient, and hybrid optimization strategies.
     
@@ -180,80 +180,8 @@ def optimization_engine(true_charges, true_times, simulate_event, sensor_params,
             particle_params = (candidate['energy'], candidate['position'], direction_angles)
             loss = loss_function(particle_params, true_charges, true_times, key)
             candidate['loss'] = float(loss)
-
-            
-            # if loss_function is not None:
-            #     loss = loss_function(particle_params, true_charges, true_times, key)
-            # # else:
-            # #     # Create a temporary combined loss function if none provided
-            # #     _, _, temp_combined_loss_func = create_optimization_loss_functions(
-            # #         simulate_event, sensor_positions, sensor_params, tau=0.01, lambda_time=1.0
-            # #     )
-            # #     loss = temp_combined_loss_func(particle_params, true_charges, true_times, key)
-            
-            # candidate['loss'] = float(loss)
-            # # Debug: For very first iteration, show loss breakdown for a few candidates
-            # if numerical_debug and iteration == 0 and i < 3:
-            #     # Calculate individual loss components
-            #     from ..optimization.losses import energy_loss_fn, spatial_loss_fn, poisson_loss_fn
-                
-            #     # IMPORTANT: Use a separate key for debug calls to avoid affecting the main optimization
-            #     debug_key = jax.random.PRNGKey(42 + i)  # Fixed seed for reproducible debug output
-                
-            #     # Show the actual charge comparison
-            #     simulated_charge, simulated_time = simulate_event(particle_params, sensor_params, debug_key)
-            #     total_true = float(jnp.sum(true_charges))
-            #     total_sim = float(jnp.sum(simulated_charge))
-                
-            #     print(f"\n  Initial candidate {i} loss breakdown:")
-            #     if loss_function is not None:
-            #         # We're using a specific loss function
-            #         print(f"    Total loss: {float(loss):.6f}")
-                    
-            #         if loss_type == 'poisson':
-            #             print(f"    (Poisson loss - larger values are normal)")
-                        
-            #             # Calculate Poisson loss components
-            #             poisson_charge_loss = poisson_loss_fn(particle_params, (true_charges, true_times),
-            #                                                 simulate_event, sensor_params, sensor_positions, debug_key, 
-            #                                                 charge_weight=1.0, time_weight=0.0)
-            #             poisson_time_loss = poisson_loss_fn(particle_params, (true_charges, true_times),
-            #                                               simulate_event, sensor_params, sensor_positions, debug_key, 
-            #                                               charge_weight=0.0, time_weight=1.0)
-            #             print(f"    Poisson charge loss: {float(poisson_charge_loss):.6f}")
-            #             print(f"    Poisson time loss: {float(poisson_time_loss):.6f}")
-            #         else:  # combined loss
-            #             # Calculate energy and spatial loss components
-            #             energy_loss = energy_loss_fn(particle_params, (true_charges, true_times), 
-            #                                        simulate_event, sensor_params, sensor_positions, debug_key)
-            #             spatial_loss = spatial_loss_fn(particle_params, (true_charges, true_times),
-            #                                          simulate_event, sensor_params, sensor_positions, debug_key, 
-            #                                          tau=0.01, lambda_time=1.0)
-            #             print(f"    Energy loss: {float(energy_loss):.6f}")
-            #             print(f"    Spatial loss: {float(spatial_loss):.6f}")
-            #     else:
-            #         # Default to energy/spatial breakdown
-            #         energy_loss = energy_loss_fn(particle_params, (true_charges, true_times), 
-            #                                    simulate_event, sensor_params, sensor_positions, debug_key)
-            #         spatial_loss = spatial_loss_fn(particle_params, (true_charges, true_times),
-            #                                      simulate_event, sensor_params, sensor_positions, debug_key, 
-            #                                      tau=0.01, lambda_time=1.0)
-            #         print(f"    Energy loss: {float(energy_loss):.6f}")
-            #         print(f"    Spatial loss: {float(spatial_loss):.6f} (scaled by 1e6)")
-            #         print(f"    Combined loss: {float(loss):.6f}")
-                
-            #     print(f"    Total charge - True: {total_true:.1f}, Simulated: {total_sim:.1f}")
-            
-            
-            
-            # # Calculate ranking score for sorting (energy_loss * 10 + spatial_loss)
-            # # Use the stored components if available
-            # if 'loss_energy' in candidate and 'loss_spatial' in candidate:
-            #     candidate['ranking_score'] = candidate['loss_energy'] * 10 + candidate['loss_spatial']
-            # else:
-            #     candidate['ranking_score'] = candidate['loss']
-            
             candidate['ranking_score'] = candidate['loss']
+
             key, _ = jax.random.split(key)
             
             # Debug: Check for extremely high losses
@@ -272,11 +200,6 @@ def optimization_engine(true_charges, true_times, simulate_event, sensor_params,
         elif population[0]['ranking_score'] < best_overall.get('ranking_score', float('inf')):
             best_overall = population[0].copy()
             best_overall_loss = population[0]['loss']
-
-
-        # if population[0]['ranking_score'] < best_overall.get('ranking_score', float('inf')):
-        #     best_overall = population[0].copy()
-        #     best_overall_loss = population[0]['loss']  # Keep track of actual loss
         
         # Calculate errors for best candidate this iteration (for both verbose and history tracking)
         best_pos_error = float(jnp.linalg.norm(population[0]['position'] - true_position))
@@ -321,7 +244,7 @@ def optimization_engine(true_charges, true_times, simulate_event, sensor_params,
                     particle_params = (cand['energy'], cand['position'], direction_angles)
                     
                     # Calculate individual loss components
-                    from ..optimization.losses import energy_loss_fn, spatial_loss_fn, poisson_loss_fn
+                    from .losses import energy_loss_fn, spatial_loss_fn
                     
                     # IMPORTANT: Use a separate key for debug calls to avoid affecting the main optimization
                     debug_key = jax.random.PRNGKey(100 + iteration * 10 + i)  # Fixed seed for reproducible debug output
@@ -332,47 +255,16 @@ def optimization_engine(true_charges, true_times, simulate_event, sensor_params,
                     total_sim = float(jnp.sum(simulated_charge))
                     charge_ratio = total_sim / total_true if total_true > 0 else 0
                     
-                    if loss_type == 'poisson':
-                        poisson_charge_loss = poisson_loss_fn(particle_params, (true_charges, true_times),
-                                                            simulate_event, sensor_params, sensor_positions, debug_key, 
-                                                            charge_weight=1.0, time_weight=0.0)
-                        poisson_time_loss = poisson_loss_fn(particle_params, (true_charges, true_times),
-                                                          simulate_event, sensor_params, sensor_positions, debug_key, 
-                                                          charge_weight=0.0, time_weight=1.0)
-                        print(f"         Loss breakdown: Charge={float(poisson_charge_loss):.6f}, Time={float(poisson_time_loss):.6f}")
-                    else:  # combined loss
-                        energy_loss = energy_loss_fn(particle_params, (true_charges, true_times), 
-                                                   simulate_event, sensor_params, sensor_positions, debug_key)
-                        spatial_loss = spatial_loss_fn(particle_params, (true_charges, true_times),
-                                                     simulate_event, sensor_params, sensor_positions, debug_key, 
-                                                     tau=0.01, lambda_time=1.0)
-                        print(f"         Loss breakdown: Energy={float(energy_loss):.6f}, Spatial={float(spatial_loss):.6f}")
+                    # Always show energy and spatial loss breakdown
+                    energy_loss = energy_loss_fn(particle_params, (true_charges, true_times), 
+                                               simulate_event, sensor_params, sensor_positions, debug_key)
+                    spatial_loss = spatial_loss_fn(particle_params, (true_charges, true_times),
+                                                 simulate_event, sensor_params, sensor_positions, debug_key, 
+                                                 tau=0.01, lambda_time=1.0)
+                    print(f"         Loss breakdown: Energy={float(energy_loss):.6f}, Spatial={float(spatial_loss):.6f}")
                     
                     print(f"         Charge ratio: {charge_ratio:.3f} (sim/true: {total_sim:.1f}/{total_true:.1f})")
             
-            # # Show population diversity
-            # positions = jnp.array([c['position'] for c in population])
-            # energies = jnp.array([c['energy'] for c in population])
-            # pos_std = jnp.std(positions, axis=0)
-            # energy_std = jnp.std(energies)
-            # print(f"\n  Population diversity:")
-            # print(f"    Position std: [{pos_std[0]:.3f}, {pos_std[1]:.3f}, {pos_std[2]:.3f}] m")
-            # print(f"    Energy std: {energy_std:.1f} MeV")
-            
-            # # Calculate current adaptive parameters (same as used in next generation)
-            # progress = (iteration + 1) / n_iterations
-            # if detector_bounds['type'] == 'cylinder':
-            #     detector_scale = max(detector_bounds['r'], detector_bounds['H']/2)
-            # elif detector_bounds['type'] == 'sphere':
-            #     detector_scale = detector_bounds['r']
-            # elif detector_bounds['type'] == 'box':
-            #     detector_scale = max(detector_bounds['x']/2, detector_bounds['y']/2, detector_bounds['z']/2)
-            
-            # current_position_std = detector_scale * 0.1 * (1 - 0.7 * progress)
-            # current_direction_std = 0.2 * (1 - 0.7 * progress)
-            # current_energy_std = 50.0
-            # print(f"    Adaptive params: position_std={current_position_std:.3f}, direction_std={current_direction_std:.3f}, energy_std={current_energy_std:.1f}")
-        
         # Create next generation
         if iteration < n_iterations - 1:  # Don't create new generation on last iteration
             new_population = []
@@ -399,7 +291,6 @@ def optimization_engine(true_charges, true_times, simulate_event, sensor_params,
                 detector_scale = max(detector_bounds['x']/2, detector_bounds['y']/2, detector_bounds['z']/2)
             
             position_std = detector_scale * 0.1 * (1 - 0.7 * progress)
-            #direction_std = 0.2 * (1 - 0.7 * progress)
             direction_std = 1.0 * (1 - 0.7 * progress)
             energy_std = 50.0
 
@@ -470,7 +361,8 @@ def optimization_engine(true_charges, true_times, simulate_event, sensor_params,
         direction = spherical_to_cartesian(theta, phi)
         
         # Recalculate final loss using combined loss function
-        _, _, combined_loss_func = create_optimization_loss_functions(
+        from .losses import create_combined_loss_function
+        combined_loss_func = create_combined_loss_function(
             simulate_event, sensor_positions, sensor_params, 
             tau=gradient_kwargs.get('tau', 0.01), 
             lambda_time=gradient_kwargs.get('lambda_time', 1.0)
