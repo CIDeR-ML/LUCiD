@@ -10,7 +10,7 @@ import optax
 from datetime import datetime
 from functools import partial
 
-from .losses import create_optimization_loss_functions, compute_shared_gradients
+from .losses import energy_loss_fn, spatial_loss_fn, combined_loss_fn, compute_shared_gradients
 from ..utils import spherical_to_cartesian
 
 
@@ -361,13 +361,13 @@ def optimization_engine(true_charges, true_times, simulate_event, sensor_params,
         direction = spherical_to_cartesian(theta, phi)
         
         # Recalculate final loss using combined loss function
-        from .losses import create_combined_loss_function
-        combined_loss_func = create_combined_loss_function(
-            simulate_event, sensor_positions, sensor_params, 
+        energy_loss, spatial_loss = combined_loss_fn(
+            best_params, true_charges, true_times, 
+            simulate_event, sensor_params, sensor_positions, key,
             tau=gradient_kwargs.get('tau', 0.01), 
             lambda_time=gradient_kwargs.get('lambda_time', 1.0)
         )
-        final_loss = combined_loss_func(best_params, true_charges, true_times, key)
+        final_loss = energy_loss + spatial_loss
         
         # Get the best loss from gradient optimization history
         best_gradient_loss = min(grad_history['gradient']['loss']) if 'gradient' in grad_history else float(final_loss)
@@ -451,24 +451,26 @@ def create_gradient_optimizer(simulate_event, sensor_positions, sensor_params,
         Optimizer for spatial parameters
     """
     
-    # Create specialized loss functions
-    energy_loss_func, spatial_loss_func, combined_loss_func = create_optimization_loss_functions(
-        simulate_event, sensor_positions, sensor_params, tau, lambda_time
-    )
-    
     # Create gradient functions for each loss
+    def energy_loss_func(params, true_charges, true_times, event_key):
+        true_event_data = (true_charges, true_times)
+        return energy_loss_fn(params, true_event_data, simulate_event, sensor_params, sensor_positions, event_key)
+    
+    def spatial_loss_func(params, true_charges, true_times, event_key):
+        true_event_data = (true_charges, true_times)
+        return spatial_loss_fn(params, true_event_data, simulate_event, sensor_params, sensor_positions, event_key, tau, lambda_time)
+    
     energy_grad_fn = jax.grad(energy_loss_func, argnums=0)
     spatial_grad_fn = jax.grad(spatial_loss_func, argnums=0)
     
     # For compatibility, create a combined loss function and single optimizer
-    def combined_loss_fn(params, true_charges, true_times, key):
-        true_event_data = (true_charges, true_times)
-        energy_loss = energy_loss_func(params, true_event_data, key)
-        spatial_loss = spatial_loss_func(params, true_event_data, key)
+    def combined_loss_func(params, true_charges, true_times, key):
+        energy_loss = energy_loss_func(params, true_charges, true_times, key)
+        spatial_loss = spatial_loss_func(params, true_charges, true_times, key)
         return energy_loss + spatial_loss
     
     # Create combined gradient function
-    combined_grad_fn = jax.grad(combined_loss_fn, argnums=0)
+    combined_grad_fn = jax.grad(combined_loss_func, argnums=0)
     
     # Create single optimizer for compatibility
     optimizer = optax.chain(
@@ -476,7 +478,7 @@ def create_gradient_optimizer(simulate_event, sensor_positions, sensor_params,
         optax.adam(learning_rate=1.0)  # Will be scaled by learning rate multipliers
     )
     
-    return combined_loss_fn, combined_grad_fn, optimizer
+    return combined_loss_func, combined_grad_fn, optimizer
 
 
 def gradient_step_shared(params, opt_state, true_charges, true_times, key,

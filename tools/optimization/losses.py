@@ -192,22 +192,28 @@ def spatial_loss_fn(params, true_event_data, simulate_event, sensor_params, sens
     )
 
 
-
-
-
-
-def create_optimization_loss_functions(simulate_event, sensor_positions, sensor_params, tau=0.01, lambda_time=1.0):
+def combined_loss_fn(params, true_charges, true_times, simulate_event, sensor_params, sensor_positions, event_key, tau=0.01, lambda_time=1.0):
     """
-    Create loss functions with simulation parameters baked in.
+    Combined loss function for optimization.
+    
+    Computes both energy and spatial losses with a single simulation call.
     
     Parameters:
     -----------
+    params : tuple
+        (energy, position, direction_angles)
+    true_charges : jnp.ndarray
+        True charge measurements
+    true_times : jnp.ndarray
+        True time measurements
     simulate_event : function
         Event simulation function
-    sensor_positions : jnp.ndarray
-        Array of sensor positions
     sensor_params : tuple
         Sensor parameters for simulation
+    sensor_positions : jnp.ndarray
+        Array of sensor positions
+    event_key : PRNGKey
+        Random key for simulation
     tau : float
         Temperature parameter for softmax assignments
     lambda_time : float
@@ -216,76 +222,22 @@ def create_optimization_loss_functions(simulate_event, sensor_positions, sensor_
     Returns:
     --------
     tuple
-        (energy_loss_func, spatial_loss_func, combined_loss_func) with baked-in parameters
+        (energy_loss, spatial_loss)
     """
+    true_event_data = (true_charges, true_times)
+    true_charge, true_time = true_event_data
     
-    def energy_loss_func(params, true_event_data, event_key):
-        return energy_loss_fn(params, true_event_data, simulate_event, sensor_params, sensor_positions, event_key)
+    simulated_data = simulate_event(params, sensor_params, event_key)
+    simulated_charge, simulated_time = simulated_data
     
-    def spatial_loss_func(params, true_event_data, event_key):
-        return spatial_loss_fn(params, true_event_data, simulate_event, sensor_params, sensor_positions, event_key, tau, lambda_time)
+    energy_loss = _compute_energy_loss(simulated_charge, true_charge)
+    spatial_loss = _compute_spatial_loss(
+        simulated_charge, simulated_time, true_charge, true_time, 
+        sensor_positions, tau=tau, lambda_time=lambda_time, 
+        scale_factor=1e4
+    )
     
-    def combined_loss_func(params, true_charges, true_times, event_key):
-        true_event_data = (true_charges, true_times)
-        true_charge, true_time = true_event_data
-        
-        simulated_data = simulate_event(params, sensor_params, event_key)
-        simulated_charge, simulated_time = simulated_data
-        
-        energy_loss = _compute_energy_loss(simulated_charge, true_charge)
-        spatial_loss = _compute_spatial_loss(
-            simulated_charge, simulated_time, true_charge, true_time, 
-            sensor_positions, tau=tau, lambda_time=lambda_time, 
-            scale_factor=1e4
-        )
-        
-        return energy_loss + spatial_loss
-    
-    return energy_loss_func, spatial_loss_func, combined_loss_func
-
-
-def create_combined_loss_function(simulate_event, sensor_positions, sensor_params, tau=0.01, lambda_time=1.0):
-    """
-    Create a combined loss function with simulation parameters baked in.
-    
-    This is a simplified version that only returns the combined loss function,
-    since that's what's typically used in the optimization pipeline.
-    
-    Parameters:
-    -----------
-    simulate_event : function
-        Event simulation function
-    sensor_positions : jnp.ndarray
-        Array of sensor positions
-    sensor_params : tuple
-        Sensor parameters for simulation
-    tau : float
-        Temperature parameter for softmax assignments
-    lambda_time : float
-        Weight for time loss component
-        
-    Returns:
-    --------
-    function
-        Combined loss function with baked-in parameters
-    """
-    def combined_loss_func(params, true_charges, true_times, event_key):
-        true_event_data = (true_charges, true_times)
-        true_charge, true_time = true_event_data
-        
-        simulated_data = simulate_event(params, sensor_params, event_key)
-        simulated_charge, simulated_time = simulated_data
-        
-        energy_loss = _compute_energy_loss(simulated_charge, true_charge)
-        spatial_loss = _compute_spatial_loss(
-            simulated_charge, simulated_time, true_charge, true_time, 
-            sensor_positions, tau=tau, lambda_time=lambda_time, 
-            scale_factor=1e4
-        )
-        
-        return energy_loss + spatial_loss
-    
-    return combined_loss_func
+    return energy_loss, spatial_loss
 
 
 def compute_shared_gradients(params, true_charges, true_times, simulate_event, sensor_params, sensor_positions, event_key, tau=0.01, lambda_time=1.0):
@@ -332,25 +284,12 @@ def compute_shared_gradients(params, true_charges, true_times, simulate_event, s
         Spatial loss value
     """
     
-    def compute_both_losses(params):
-        """Compute both energy and spatial losses with a single simulation."""
-        # Single simulation call
-        simulated_charges, simulated_times = simulate_event(params, sensor_params, event_key)
-        
-        # Compute both losses using the shared core functions
-        energy_loss = _compute_energy_loss(simulated_charges, true_charges)
-        spatial_loss = _compute_spatial_loss(
-            simulated_charges, simulated_times, true_charges, true_times, 
-            sensor_positions, tau=tau, lambda_time=lambda_time, 
-            scale_factor=1e4
-        )
-        
-        return energy_loss, spatial_loss
-    
     # Use JAX's jacobian computation for vector-valued function
     def vector_loss(params):
         """Return both losses as a vector for jacobian computation."""
-        energy_loss, spatial_loss = compute_both_losses(params)
+        energy_loss, spatial_loss = combined_loss_fn(
+            params, true_charges, true_times, simulate_event, sensor_params, sensor_positions, event_key, tau, lambda_time
+        )
         return jnp.array([energy_loss, spatial_loss])
     
     # Compute loss values

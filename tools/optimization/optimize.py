@@ -355,12 +355,15 @@ def run_optimization(
         optimization_seed = random_seed + 10000 + event_idx * 1000
         
         # Create the combined loss function for consistent loss definition
-        from tools.optimization.losses import create_combined_loss_function
-        combined_loss_func = create_combined_loss_function(
-            simulate_event, sensor_positions, sensor_params, 
-            tau=gradient_kwargs.get('tau', 0.01), 
-            lambda_time=gradient_kwargs.get('lambda_time', 1.0)
-        )
+        from tools.optimization.losses import combined_loss_fn
+        def combined_loss_func(params, true_charges, true_times, event_key):
+            energy_loss, spatial_loss = combined_loss_fn(
+                params, true_charges, true_times, 
+                simulate_event, sensor_params, sensor_positions, event_key,
+                tau=gradient_kwargs.get('tau', 0.01), 
+                lambda_time=gradient_kwargs.get('lambda_time', 1.0)
+            )
+            return energy_loss + spatial_loss
         
         search_result = optimization_engine(
             true_charges, true_times, simulate_event, sensor_params, sensor_positions,
