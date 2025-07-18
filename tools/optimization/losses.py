@@ -14,6 +14,7 @@ from jax.scipy import special
 
 
 
+@jit
 def _compute_energy_loss(simulated_charge, true_charge):
     """
     Core energy loss computation using intensity matching.
@@ -35,9 +36,10 @@ def _compute_energy_loss(simulated_charge, true_charge):
     eps = 1e-8
     return jnp.abs(jnp.log(total_sim_charge / (total_true_charge + eps)))*2
 
+@jit
 def _compute_spatial_loss(simulated_charge, simulated_time, true_charge, true_time, 
                          sensor_positions, tau=0.01, lambda_time=1.0, 
-                         include_time=True, scale_factor=1e4):
+                         scale_factor=1e4):
     """
     Core spatial loss computation using soft assignments.
     
@@ -57,8 +59,6 @@ def _compute_spatial_loss(simulated_charge, simulated_time, true_charge, true_ti
         Temperature parameter for softmax assignments
     lambda_time : float
         Weight for time loss component
-    include_time : bool
-        Whether to include time loss component
     scale_factor : float
         Scale factor for final loss value
         
@@ -111,10 +111,7 @@ def _compute_spatial_loss(simulated_charge, simulated_time, true_charge, true_ti
     L_charge = L_charge_s2t + L_charge_t2s
     L_time = (L_time_s2t + L_time_t2s) * lambda_time
     
-    if include_time:
-        return (L_charge + L_time) / scale_factor
-    else:
-        return L_charge / scale_factor
+    return (L_charge + L_time) / scale_factor
 
 
 def energy_loss_fn(params, true_event_data, simulate_event, sensor_params, sensor_positions, event_key):
@@ -191,7 +188,7 @@ def spatial_loss_fn(params, true_event_data, simulate_event, sensor_params, sens
     return _compute_spatial_loss(
         simulated_charge, simulated_time, true_charge, true_time, 
         sensor_positions, tau=0.001, lambda_time=lambda_time, 
-        include_time=True, scale_factor=1e4
+        scale_factor=1e4
     )
 
 
@@ -239,7 +236,7 @@ def create_optimization_loss_functions(simulate_event, sensor_positions, sensor_
         spatial_loss = _compute_spatial_loss(
             simulated_charge, simulated_time, true_charge, true_time, 
             sensor_positions, tau=tau, lambda_time=lambda_time, 
-            include_time=True, scale_factor=1e4
+            scale_factor=1e4
         )
         
         return energy_loss + spatial_loss
@@ -283,7 +280,7 @@ def create_combined_loss_function(simulate_event, sensor_positions, sensor_param
         spatial_loss = _compute_spatial_loss(
             simulated_charge, simulated_time, true_charge, true_time, 
             sensor_positions, tau=tau, lambda_time=lambda_time, 
-            include_time=True, scale_factor=1e4
+            scale_factor=1e4
         )
         
         return energy_loss + spatial_loss
@@ -345,7 +342,7 @@ def compute_shared_gradients(params, true_charges, true_times, simulate_event, s
         spatial_loss = _compute_spatial_loss(
             simulated_charges, simulated_times, true_charges, true_times, 
             sensor_positions, tau=tau, lambda_time=lambda_time, 
-            include_time=True, scale_factor=1e4
+            scale_factor=1e4
         )
         
         return energy_loss, spatial_loss
@@ -379,9 +376,13 @@ def compute_shared_gradients(params, true_charges, true_times, simulate_event, s
         total_elements = x.size
         nan_fraction = nan_count / total_elements
         
-        # Print warning if NaNs are found
-        if nan_count > 0:
-            print(f"⚠️  NaN replacement in {component_name}: {nan_count}/{total_elements} elements ({nan_fraction:.3f} fraction)")
+        # Print warning if NaNs are found (JIT-compatible)
+        jax.lax.cond(
+            nan_count > 0,
+            lambda: jax.debug.print("⚠️  NaN replacement in {component_name}: {nan_count}/{total_elements} elements ({nan_fraction:.3f} fraction)",
+                                   component_name=component_name, nan_count=nan_count, total_elements=total_elements, nan_fraction=nan_fraction),
+            lambda: None
+        )
         
         return jnp.where(nan_mask, 0.0, x)
     
