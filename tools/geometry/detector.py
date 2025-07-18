@@ -1,5 +1,5 @@
 """
-Detector factory functions for creating detectors from configuration files.
+Functions for creating detectors from configuration files.
 """
 
 import json
