@@ -9,10 +9,11 @@ import numpy as np
 import optax
 from datetime import datetime
 from functools import partial
+from jax import jit, value_and_grad
 
 from .losses import energy_loss_fn, spatial_loss_fn, combined_loss_fn, compute_shared_gradients
 from ..utils import spherical_to_cartesian
-
+import time
 
 def sample_around_point(key, center_position, center_direction, center_energy, 
                        position_std=0.5, direction_std=0.1, energy_std=50.0,
@@ -403,12 +404,28 @@ def optimization_engine(true_charges, true_times, simulate_event, sensor_params,
 # ===================================================================
 
 
+# Create JIT-compiled loss functions that work with pre-simulated data
+@jit
+def _energy_loss_jit(simulated_charges, true_charges):
+    """JIT-compiled energy loss function."""
+    from .losses import _compute_energy_loss
+    return _compute_energy_loss(simulated_charges, true_charges)
+
+@jit  
+def _spatial_loss_jit(simulated_charges, simulated_times, true_charges, true_times, sensor_positions, tau, lambda_time):
+    """JIT-compiled spatial loss function."""
+    from .losses import _compute_spatial_loss
+    return _compute_spatial_loss(simulated_charges, simulated_times, true_charges, true_times, sensor_positions, tau, lambda_time)
+
+# JIT functions will be compiled on first use
+
+
 def create_gradient_optimizer(simulate_event, sensor_positions, sensor_params,
                             energy_lr=1.0, spatial_lr=1.0, 
                             energy_scale=1.0, position_scale=1.0, direction_scale=1.0,
                             tau=0.01, lambda_time=1.0, lambda_intensity=1.0):
     """
-    Create gradient-based optimizer using specialized loss functions.
+    Create JIT-compiled gradient functions and optimizers for gradient-based optimization.
     
     Parameters:
     -----------
@@ -437,59 +454,48 @@ def create_gradient_optimizer(simulate_event, sensor_positions, sensor_params,
     
     Returns:
     -------
-    energy_loss_fn : function
-        Energy-focused loss function
-    spatial_loss_fn : function
-        Spatial-focused loss function
     energy_grad_fn : function
-        Energy gradient function
+        JIT-compiled energy gradient function with value_and_grad
     spatial_grad_fn : function
-        Spatial gradient function
+        JIT-compiled spatial gradient function with value_and_grad
     energy_optimizer : optax optimizer
         Optimizer for energy parameter
     spatial_optimizer : optax optimizer
         Optimizer for spatial parameters
     """
     
-    # Create gradient functions for each loss
-    def energy_loss_func(params, true_charges, true_times, event_key):
-        true_event_data = (true_charges, true_times)
-        return energy_loss_fn(params, true_event_data, simulate_event, sensor_params, sensor_positions, event_key)
+    # Create functions that compute value and gradient w.r.t. parameters
+    def energy_loss_fn(params, true_charges, true_times, event_key):
+        # Simulate once
+        simulated_charges, simulated_times = simulate_event(params, sensor_params, event_key)
+        # Compute loss using JIT-compiled function
+        return _energy_loss_jit(simulated_charges, true_charges)
     
-    def spatial_loss_func(params, true_charges, true_times, event_key):
-        true_event_data = (true_charges, true_times)
-        return spatial_loss_fn(params, true_event_data, simulate_event, sensor_params, sensor_positions, event_key, tau, lambda_time)
+    def spatial_loss_fn(params, true_charges, true_times, event_key):
+        # Simulate once
+        simulated_charges, simulated_times = simulate_event(params, sensor_params, event_key)
+        # Compute loss using JIT-compiled function
+        return _spatial_loss_jit(simulated_charges, simulated_times, true_charges, true_times, sensor_positions, tau, lambda_time)
     
-    energy_grad_fn = jax.grad(energy_loss_func, argnums=0)
-    spatial_grad_fn = jax.grad(spatial_loss_func, argnums=0)
+    # Create value_and_grad functions w.r.t. parameters
+    energy_grad_fn = jax.value_and_grad(energy_loss_fn)
+    spatial_grad_fn = jax.value_and_grad(spatial_loss_fn)
     
-    # For compatibility, create a combined loss function and single optimizer
-    def combined_loss_func(params, true_charges, true_times, key):
-        energy_loss = energy_loss_func(params, true_charges, true_times, key)
-        spatial_loss = spatial_loss_func(params, true_charges, true_times, key)
-        return energy_loss + spatial_loss
+    # Create optimizers
+    energy_optimizer = optax.adam(energy_lr)
+    spatial_optimizer = optax.adam(spatial_lr)
     
-    # Create combined gradient function
-    combined_grad_fn = jax.grad(combined_loss_func, argnums=0)
-    
-    # Create single optimizer for compatibility
-    optimizer = optax.chain(
-        optax.clip_by_global_norm(1.0),
-        optax.adam(learning_rate=1.0)  # Will be scaled by learning rate multipliers
-    )
-    
-    return combined_loss_func, combined_grad_fn, optimizer
+    return energy_grad_fn, spatial_grad_fn, energy_optimizer, spatial_optimizer
 
 
 def gradient_step_shared(params, opt_state, true_charges, true_times, key,
-                        simulate_event, sensor_params, sensor_positions, optimizer,
+                        energy_grad_fn, spatial_grad_fn, optimizer,
                         energy_lr_multiplier=1.0, spatial_lr_multiplier=1.0,
                         energy_scale=1.0, position_scale=1.0, direction_scale=1.0,
                         max_energy_update=15.0, max_position_update=0.15, max_direction_update_deg=5.0,
-                        detector_bounds=None, tau=0.01, lambda_time=1.0, 
-                        loss_weights=(1.0, 1.0)):
+                        detector_bounds=None, loss_weights=(1.0, 1.0)):
     """
-    Perform a single gradient descent step using shared simulation for both energy and spatial losses.
+    Perform a single gradient descent step using pre-compiled gradient functions.
     
     Uses specialized gradients where:
     - Energy parameter is updated only based on energy loss gradients
@@ -509,12 +515,10 @@ def gradient_step_shared(params, opt_state, true_charges, true_times, key,
         True time measurements
     key : PRNGKey
         Random key for simulation
-    simulate_event : function
-        Event simulation function
-    sensor_params : tuple
-        Sensor parameters
-    sensor_positions : jnp.ndarray
-        Array of sensor positions
+    energy_grad_fn : function
+        Pre-compiled JIT gradient function for energy loss
+    spatial_grad_fn : function
+        Pre-compiled JIT gradient function for spatial loss
     optimizer : optax optimizer
         Optimizer
     energy_lr_multiplier : float
@@ -535,10 +539,6 @@ def gradient_step_shared(params, opt_state, true_charges, true_times, key,
         Maximum allowed direction update in degrees
     detector_bounds : dict
         Detector boundary information for position clipping
-    tau : float
-        Temperature parameter for spatial loss
-    lambda_time : float
-        Time loss weight for spatial loss
     loss_weights : tuple
         Weights for (energy_loss, spatial_loss) in combined loss
     
@@ -553,11 +553,13 @@ def gradient_step_shared(params, opt_state, true_charges, true_times, key,
     grad_info : dict
         Gradient information for debugging
     """
-    # Compute gradients using shared simulation
+    # Compute gradients using pre-compiled gradient functions
+    start = time.time() 
     energy_grad, spatial_grad, energy_loss_val, spatial_loss_val = compute_shared_gradients(
-        params, true_charges, true_times, simulate_event, sensor_params, sensor_positions, key, tau, lambda_time
+        params, true_charges, true_times, energy_grad_fn, spatial_grad_fn, key
     )
-    
+    print(f"   compute_shared_gradients time: {time.time() - start:.6f} seconds")
+
     # Combine losses for total loss (still used for monitoring convergence)
     total_loss = loss_weights[0] * energy_loss_val + loss_weights[1] * spatial_loss_val
     
@@ -677,155 +679,20 @@ def gradient_step_shared(params, opt_state, true_charges, true_times, key,
     return new_params, new_opt_state, float(total_loss), grad_info
 
 
-def gradient_step(params, opt_state, true_charges, true_times, key,
-                 loss_fn, grad_fn, optimizer,
-                 energy_lr_multiplier=1.0, spatial_lr_multiplier=1.0,
-                 energy_scale=1.0, position_scale=1.0, direction_scale=1.0,
-                 max_energy_update=15.0, max_position_update=0.15, max_direction_update_deg=5.0,
-                 detector_bounds=None):
-    """
-    Perform a single gradient descent step with parameter-specific scaling.
-    
-    Parameters:
-    -----------
-    params : tuple
-        Current parameters (energy, position, direction_angles)
-    opt_state : optax state
-        Optimizer state
-    true_charges : jnp.ndarray
-        True charge measurements
-    true_times : jnp.ndarray
-        True time measurements
-    key : PRNGKey
-        Random key for simulation
-    loss_fn : function
-        Loss function
-    grad_fn : function
-        Gradient function
-    optimizer : optax optimizer
-        Optimizer
-    energy_lr_multiplier : float
-        Current learning rate multiplier for energy
-    spatial_lr_multiplier : float
-        Current learning rate multiplier for spatial parameters
-    energy_scale : float
-        Scale factor for energy updates
-    position_scale : float
-        Scale factor for position updates
-    direction_scale : float
-        Scale factor for direction updates
-    max_energy_update : float
-        Maximum allowed energy update in MeV
-    max_position_update : float
-        Maximum allowed position update in meters
-    max_direction_update_deg : float
-        Maximum allowed direction update in degrees
-    detector_bounds : dict
-        Detector boundary information for position clipping
-    
-    Returns:
-    -------
-    new_params : tuple
-        Updated parameters
-    new_opt_state : optax state
-        Updated optimizer state
-    loss : float
-        Current loss value
-    grads : tuple
-        Computed gradients
-    """
-    # Compute loss and gradients using the new combined loss function
-    loss = loss_fn(params, true_charges, true_times, key)
-    grads = grad_fn(params, true_charges, true_times, key)
-    
-    # Extract individual gradients
-    energy_grad, position_grad, direction_grad = grads
-    
-    # Apply parameter-specific scaling
-    scaled_energy_grad = energy_grad * energy_scale * energy_lr_multiplier
-    scaled_position_grad = position_grad * position_scale * spatial_lr_multiplier
-    scaled_direction_grad = direction_grad * direction_scale * spatial_lr_multiplier
-    
-    # Combine scaled gradients
-    scaled_grads = (scaled_energy_grad, scaled_position_grad, scaled_direction_grad)
-    
-    # Update parameters
-    updates, new_opt_state = optimizer.update(scaled_grads, opt_state, params)
-    
-    # Extract individual updates
-    energy_update, position_update, direction_update = updates
-    old_energy, old_position, old_direction_angles = params
-    
-    # Clip actual parameter updates to maximum allowed changes
-    # Energy update clipping
-    energy_update_mag = jnp.abs(energy_update)
-    if energy_update_mag > max_energy_update:
-        energy_update = energy_update * (max_energy_update / energy_update_mag)
-    
-    # Position update clipping
-    position_update_mag = jnp.linalg.norm(position_update)
-    if position_update_mag > max_position_update:
-        position_update = position_update * (max_position_update / position_update_mag)
-    
-    # Direction update clipping (convert to radians)
-    max_direction_update_rad = max_direction_update_deg * jnp.pi / 180.0
-    direction_update_mag = jnp.linalg.norm(direction_update)
-    if direction_update_mag > max_direction_update_rad:
-        direction_update = direction_update * (max_direction_update_rad / direction_update_mag)
-    
-    # Apply clipped updates
-    clipped_updates = (energy_update, position_update, direction_update)
-    new_params = optax.apply_updates(params, clipped_updates)
-    
-    # Ensure direction remains normalized
-    new_energy, new_position, new_direction_angles = new_params
-    new_theta, new_phi = new_direction_angles
-    new_direction = spherical_to_cartesian(new_theta, new_phi)
-    new_direction = new_direction / jnp.linalg.norm(new_direction)
-    new_theta = jnp.arccos(jnp.clip(new_direction[2], -1.0, 1.0))
-    new_phi = jnp.arctan2(new_direction[1], new_direction[0])
-    new_direction_angles = jnp.array([new_theta, new_phi])
-    
-    # Clip energy to valid range
-    new_energy = jnp.clip(new_energy, 250.0, 900.0)
-    
-    # Apply detector bounds to position (same as in adaptive search)
-    if detector_bounds:
-        if detector_bounds['type'] == 'cylinder':
-            r = jnp.sqrt(new_position[0]**2 + new_position[1]**2)
-            if r > detector_bounds['r'] * 0.8:
-                new_position = new_position * (detector_bounds['r'] * 0.8 / r)
-            new_position = jnp.clip(new_position, 
-                                   jnp.array([-detector_bounds['r'], -detector_bounds['r'], -detector_bounds['H']/2]) * 0.8,
-                                   jnp.array([detector_bounds['r'], detector_bounds['r'], detector_bounds['H']/2]) * 0.8)
-        elif detector_bounds['type'] == 'sphere':
-            r = jnp.linalg.norm(new_position)
-            if r > detector_bounds['r'] * 0.8:
-                new_position = new_position * (detector_bounds['r'] * 0.8 / r)
-        elif detector_bounds['type'] == 'box':
-            new_position = jnp.clip(new_position,
-                                   jnp.array([-detector_bounds['x']/2, -detector_bounds['y']/2, -detector_bounds['z']/2]) * 0.8,
-                                   jnp.array([detector_bounds['x']/2, detector_bounds['y']/2, detector_bounds['z']/2]) * 0.8)
-    
-    new_params = (new_energy, new_position, new_direction_angles)
-    
-    return new_params, new_opt_state, float(loss), grads
-
-
 def gradient_optimization_with_patience_shared(
     initial_params, true_charges, true_times, 
-    simulate_event, sensor_params, sensor_positions, optimizer,
+    energy_grad_fn, spatial_grad_fn, optimizer,
     n_iterations=100, patience=20, patience_factor=0.5,
     energy_lr=1.0, spatial_lr=1.0,
     energy_scale=1.0, position_scale=1.0, direction_scale=1.0,
     max_energy_update=15.0, max_position_update=0.15, max_direction_update_deg=5.0,
     detector_bounds=None, key=None, verbose=False, gradient_debug=False,
     true_position=None, true_direction=None, true_energy=None,
-    tau=0.01, lambda_time=1.0, loss_weights=(1.0, 1.0)):
+    loss_weights=(1.0, 1.0)):
     """
-    Run gradient-based optimization with patience-based learning rate reduction using shared simulation.
+    Run gradient-based optimization with patience-based learning rate reduction using pre-compiled gradient functions.
     
-    This version computes gradients for both energy and spatial losses with a single simulation call.
+    This version uses JIT-compiled gradient functions for efficient computation.
     
     Parameters:
     -----------
@@ -835,12 +702,10 @@ def gradient_optimization_with_patience_shared(
         True charge measurements
     true_times : jnp.ndarray
         True time measurements
-    simulate_event : function
-        Event simulation function
-    sensor_params : tuple
-        Sensor parameters
-    sensor_positions : jnp.ndarray
-        Array of sensor positions
+    energy_grad_fn : function
+        Pre-compiled JIT gradient function for energy loss
+    spatial_grad_fn : function
+        Pre-compiled JIT gradient function for spatial loss
     optimizer : optax optimizer
         Optimizer
     n_iterations : int
@@ -863,10 +728,6 @@ def gradient_optimization_with_patience_shared(
         Random key for simulation
     verbose : bool
         Whether to print progress
-    tau : float
-        Temperature parameter for spatial loss
-    lambda_time : float
-        Time loss weight for spatial loss
     loss_weights : tuple
         Weights for (energy_loss, spatial_loss) in combined loss
     
@@ -929,15 +790,18 @@ def gradient_optimization_with_patience_shared(
     for i in range(n_iterations):
         key, subkey = jax.random.split(key)
         
-        # Gradient step using shared simulation
+        print('iteration: ', i)
+        start = time.time()
+        # Gradient step using pre-compiled gradient functions
         params, opt_state, loss, grad_info = gradient_step_shared(
             params, opt_state, true_charges, true_times, subkey,
-            simulate_event, sensor_params, sensor_positions, optimizer,
+            energy_grad_fn, spatial_grad_fn, optimizer,
             energy_lr_multiplier, spatial_lr_multiplier,
             energy_scale, position_scale, direction_scale,
             max_energy_update, max_position_update, max_direction_update_deg,
-            detector_bounds, tau, lambda_time, loss_weights
+            detector_bounds, loss_weights
         )
+        print(f"   gradient_step_shared time: {time.time() - start:.6f} seconds")
         
         # Track history
         energy, position, direction_angles = params
@@ -1026,197 +890,6 @@ def gradient_optimization_with_patience_shared(
     return best_params, history
 
 
-def gradient_optimization_with_patience(
-    initial_params, true_charges, true_times, 
-    loss_fn, grad_fn, optimizer,
-    n_iterations=100, patience=20, patience_factor=0.5,
-    energy_lr=1.0, spatial_lr=1.0,
-    energy_scale=1.0, position_scale=1.0, direction_scale=1.0,
-    max_energy_update=15.0, max_position_update=0.15, max_direction_update_deg=5.0,
-    detector_bounds=None, key=None, verbose=False, gradient_debug=False,
-    true_position=None, true_direction=None, true_energy=None):
-    """
-    Run gradient-based optimization with patience-based learning rate reduction.
-    
-    Parameters:
-    -----------
-    initial_params : tuple
-        Initial parameters (energy, position, direction_angles)
-    true_charges : jnp.ndarray
-        True charge measurements
-    true_times : jnp.ndarray
-        True time measurements
-    loss_fn : function
-        Loss function
-    grad_fn : function
-        Gradient function
-    optimizer : optax optimizer
-        Optimizer
-    n_iterations : int
-        Maximum number of iterations
-    patience : int
-        Number of iterations to wait before reducing learning rate
-    patience_factor : float
-        Factor to reduce learning rate by
-    energy_lr : float
-        Initial learning rate for energy
-    spatial_lr : float
-        Initial learning rate for spatial parameters
-    energy_scale : float
-        Scale factor for energy updates
-    position_scale : float
-        Scale factor for position updates
-    direction_scale : float
-        Scale factor for direction updates
-    key : PRNGKey
-        Random key for simulation
-    verbose : bool
-        Whether to print progress
-    
-    Returns:
-    -------
-    best_params : tuple
-        Best parameters found
-    history : dict
-        Optimization history
-    """
-    if key is None:
-        key = jax.random.PRNGKey(0)
-    
-    # Initialize
-    params = initial_params
-    opt_state = optimizer.init(params)
-    
-    # Learning rate multipliers
-    energy_lr_multiplier = energy_lr
-    spatial_lr_multiplier = spatial_lr
-    
-    # Best tracking
-    best_loss = float('inf')
-    best_params = params
-    patience_counter = 0
-    
-    # History tracking
-    history = {
-        'loss': [],
-        'energy': [],
-        'position': [],
-        'direction': [],
-        'energy_lr': [],
-        'spatial_lr': [],
-        'position_error': [],
-        'direction_error': [],
-        'energy_error': []
-    }
-    
-    # Print initial parameters if gradient debug is enabled
-    if gradient_debug:
-        energy, position, direction_angles = initial_params
-        direction = spherical_to_cartesian(direction_angles[0], direction_angles[1])
-        print(f"  Initial gradient parameters:")
-        print(f"    Energy: {float(energy):.1f} MeV")
-        print(f"    Position: [{float(position[0]):.3f}, {float(position[1]):.3f}, {float(position[2]):.3f}] m")
-        print(f"    Direction: [{float(direction[0]):.3f}, {float(direction[1]):.3f}, {float(direction[2]):.3f}]")
-        
-        if true_position is not None and true_direction is not None and true_energy is not None:
-            # Calculate initial errors
-            initial_pos_error = float(jnp.linalg.norm(position - true_position))
-            initial_dir_error = float(jnp.arccos(jnp.clip(jnp.abs(jnp.dot(direction, true_direction)), 0, 1)))
-            initial_dir_error_deg = initial_dir_error * 180.0 / jnp.pi
-            initial_energy_error = float(jnp.abs(energy - true_energy))
-            print(f"    Initial errors: Pos={initial_pos_error:.3f}m, Dir={initial_dir_error_deg:.1f}°, Energy={initial_energy_error:.1f}MeV")
-    
-    for i in range(n_iterations):
-        key, subkey = jax.random.split(key)
-        
-        # Gradient step
-        params, opt_state, loss, grads = gradient_step(
-            params, opt_state, true_charges, true_times, subkey,
-            loss_fn, grad_fn, optimizer,
-            energy_lr_multiplier, spatial_lr_multiplier,
-            energy_scale, position_scale, direction_scale,
-            max_energy_update, max_position_update, max_direction_update_deg,
-            detector_bounds
-        )
-        
-        # Extract gradients for debugging
-        energy_grad, position_grad, direction_grad = grads
-        
-        # Track history
-        energy, position, direction_angles = params
-        history['loss'].append(loss)
-        history['energy'].append(float(energy))
-        history['position'].append(jnp.array(position))
-        history['direction'].append(spherical_to_cartesian(direction_angles[0], direction_angles[1]))
-        history['energy_lr'].append(energy_lr_multiplier)
-        history['spatial_lr'].append(spatial_lr_multiplier)
-        
-        # Track errors if true values are provided
-        if true_position is not None and true_direction is not None and true_energy is not None:
-            direction = spherical_to_cartesian(direction_angles[0], direction_angles[1])
-            pos_error = float(jnp.linalg.norm(position - true_position))
-            dir_error = float(jnp.arccos(jnp.clip(jnp.abs(jnp.dot(direction, true_direction)), 0, 1)))
-            dir_error_deg = dir_error * 180.0 / jnp.pi
-            energy_error = float(jnp.abs(energy - true_energy))
-            
-            history['position_error'].append(pos_error)
-            history['direction_error'].append(dir_error_deg)
-            history['energy_error'].append(energy_error)
-        
-        # Check for improvement
-        if loss < best_loss:
-            best_loss = loss
-            best_params = params
-            patience_counter = 0
-        else:
-            patience_counter += 1
-        
-        # Reduce learning rate if patience exceeded
-        if patience_counter >= patience:
-            energy_lr_multiplier *= patience_factor
-            spatial_lr_multiplier *= patience_factor
-            patience_counter = 0
-            
-            if verbose:
-                print(f"  Iteration {i+1}: Reducing learning rates to {energy_lr_multiplier:.6f}, {spatial_lr_multiplier:.6f}")
-        
-        # Determine when to show debugging info
-        show_debug = (verbose and (gradient_debug or i % 10 == 0 or i == n_iterations - 1)) or gradient_debug
-        
-        if show_debug:
-            # Calculate gradient and update magnitudes for debugging
-            energy_grad_mag = float(jnp.linalg.norm(energy_grad))
-            position_grad_mag = float(jnp.linalg.norm(position_grad))
-            direction_grad_mag = float(jnp.linalg.norm(direction_grad))
-            
-            # Calculate scaled update magnitudes
-            scaled_energy_update_mag = float(jnp.linalg.norm(energy_grad * energy_scale * energy_lr_multiplier))
-            scaled_position_update_mag = float(jnp.linalg.norm(position_grad * position_scale * spatial_lr_multiplier))
-            scaled_direction_update_mag = float(jnp.linalg.norm(direction_grad * direction_scale * spatial_lr_multiplier))
-            
-            # print(f"  Iteration {i+1}/{n_iterations}: Loss = {loss:.6f}, Best = {best_loss:.6f}")
-            # print(f"    Gradients:  Energy={energy_grad_mag:.2e}, Position={position_grad_mag:.2e}, Direction={direction_grad_mag:.2e}")
-            # print(f"    Updates:    Energy={scaled_energy_update_mag:.2e}, Position={scaled_position_update_mag:.2e}, Direction={scaled_direction_update_mag:.2e}")
-            # print(f"    LR Mult:    Energy={energy_lr_multiplier:.4f}, Spatial={spatial_lr_multiplier:.4f}")
-            
-            # Show current parameter values and errors if gradient_debug is enabled
-            if gradient_debug:
-                current_energy, current_position, current_direction_angles = params
-                current_direction = spherical_to_cartesian(current_direction_angles[0], current_direction_angles[1])
-                # print(f"    Current params: Energy={float(current_energy):.1f}MeV, Position=[{float(current_position[0]):.3f}, {float(current_position[1]):.3f}, {float(current_position[2]):.3f}]m")
-                # print(f"                    Direction=[{float(current_direction[0]):.3f}, {float(current_direction[1]):.3f}, {float(current_direction[2]):.3f}]")
-                
-                if true_position is not None and true_direction is not None and true_energy is not None:
-                    # Calculate current errors
-                    current_pos_error = float(jnp.linalg.norm(current_position - true_position))
-                    current_dir_error = float(jnp.arccos(jnp.clip(jnp.abs(jnp.dot(current_direction, true_direction)), 0, 1)))
-                    current_dir_error_deg = current_dir_error * 180.0 / jnp.pi
-                    current_energy_error = float(jnp.abs(current_energy - true_energy))
-                    print(f"    Current errors: Pos={current_pos_error:.3f}m, Dir={current_dir_error_deg:.1f}°, Energy={current_energy_error:.1f}MeV")
-    
-    return best_params, history
-
-
 def calculate_auto_scales(initial_params, true_charges, true_times,
                             simulate_event, sensor_params, sensor_positions,
                             detector_bounds, energy_lr=1.0, spatial_lr=0.1,
@@ -1239,8 +912,8 @@ def calculate_auto_scales(initial_params, true_charges, true_times,
     if key is None:
         key = jax.random.PRNGKey(0)
     
-    # Create a temporary optimizer to compute initial gradients
-    loss_fn, grad_fn, _ = create_gradient_optimizer(
+    # Create temporary gradient functions to compute initial gradients
+    energy_grad_fn, spatial_grad_fn, energy_optimizer, spatial_optimizer = create_gradient_optimizer(
         simulate_event, sensor_positions, sensor_params,
         energy_lr=energy_lr, spatial_lr=spatial_lr,
         energy_scale=1.0, position_scale=1.0, direction_scale=1.0,  # Use 1.0 for initial calculation
@@ -1248,11 +921,15 @@ def calculate_auto_scales(initial_params, true_charges, true_times,
     )
     
     # Compute initial gradients
-    initial_grads = grad_fn(initial_params, true_charges, true_times, key)
-    energy_grad, position_grad, direction_grad = initial_grads
+    energy_loss_val, energy_grad = energy_grad_fn(initial_params, true_charges, true_times, key)
+    spatial_loss_val, spatial_grad = spatial_grad_fn(initial_params, true_charges, true_times, key)
+    
+    # Extract individual gradient components (use spatial gradients for position and direction)
+    energy_grad_energy, _, _ = energy_grad
+    _, position_grad, direction_grad = spatial_grad
     
     # Calculate gradient magnitudes
-    energy_grad_mag = float(jnp.linalg.norm(energy_grad))
+    energy_grad_mag = float(jnp.linalg.norm(energy_grad_energy))
     position_grad_mag = float(jnp.linalg.norm(position_grad))
     direction_grad_mag = float(jnp.linalg.norm(direction_grad))
     
@@ -1426,6 +1103,19 @@ def hybrid_optimization(
             optax.adam(learning_rate=1.0)  # Will be scaled by learning rate multipliers
         )
         
+        # Create pre-compiled gradient functions
+        energy_grad_fn, spatial_grad_fn, energy_optimizer, spatial_optimizer = create_gradient_optimizer(
+            simulate_event, sensor_positions, sensor_params,
+            energy_lr=gradient_kwargs.get('energy_lr', 1.0),
+            spatial_lr=gradient_kwargs.get('spatial_lr', 0.1),
+            energy_scale=gradient_kwargs.get('energy_scale', 0.01),
+            position_scale=gradient_kwargs.get('position_scale', 0.1),
+            direction_scale=gradient_kwargs.get('direction_scale', 0.1),
+            tau=gradient_kwargs.get('tau', 0.01),
+            lambda_time=gradient_kwargs.get('lambda_time', 1.0),
+            lambda_intensity=gradient_kwargs.get('lambda_intensity', 1.0)
+        )
+        
         # Run gradient optimization
         key, subkey = jax.random.split(key)
         
@@ -1481,14 +1171,13 @@ def hybrid_optimization(
             'true_position': true_position,
             'true_direction': true_direction,
             'true_energy': true_energy,
-            'tau': gradient_kwargs.get('tau', 0.01),
-            'lambda_time': gradient_kwargs.get('lambda_time', 1.0),
             'loss_weights': (1.0, 1.0)  # Equal weights for energy and spatial losses
         }
         
+        print('Going to gradient_optimization_with_patience_shared...')
         best_params, gradient_history = gradient_optimization_with_patience_shared(
             initial_params, true_charges, true_times,
-            simulate_event, sensor_params, sensor_positions, optimizer,
+            energy_grad_fn, spatial_grad_fn, optimizer,
             **shared_patience_kwargs
         )
     else:
