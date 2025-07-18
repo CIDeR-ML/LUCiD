@@ -390,7 +390,8 @@ def run_optimization(
             gradient_kwargs=gradient_kwargs,
             random_seed=optimization_seed,
             loss_function=combined_loss_func,
-            numerical_debug=numerical_debug
+            numerical_debug=numerical_debug,
+            loss_type=loss_type
         )
         
         # Unpack results based on whether history was tracked
