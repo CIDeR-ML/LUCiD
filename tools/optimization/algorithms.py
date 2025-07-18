@@ -111,6 +111,7 @@ def optimization_engine(true_charges, true_times, simulate_event, sensor_params,
         print(f"    Energy: {true_energy:.1f} MeV")
     population = []
     
+    start_num_search = time.time() 
     for i in range(population_size):
         key, subkey = jax.random.split(key)
         
@@ -320,7 +321,9 @@ def optimization_engine(true_charges, true_times, simulate_event, sensor_params,
                 key, _ = jax.random.split(key)
             
             population = new_population
-    
+
+    print(f"   Numerical search took: {time.time() - start_num_search:.6f} seconds")
+
     # Apply gradient optimization if requested
     if optimization_type in ['gradient', 'hybrid'] and gradient_iterations > 0:
         
@@ -558,7 +561,7 @@ def gradient_step_shared(params, opt_state, true_charges, true_times, key,
     energy_grad, spatial_grad, energy_loss_val, spatial_loss_val = compute_shared_gradients(
         params, true_charges, true_times, energy_grad_fn, spatial_grad_fn, key
     )
-    print(f"   compute_shared_gradients time: {time.time() - start:.6f} seconds")
+    #print(f"   compute_shared_gradients time: {time.time() - start:.6f} seconds")
 
     # Combine losses for total loss (still used for monitoring convergence)
     total_loss = loss_weights[0] * energy_loss_val + loss_weights[1] * spatial_loss_val
@@ -790,7 +793,7 @@ def gradient_optimization_with_patience_shared(
     for i in range(n_iterations):
         key, subkey = jax.random.split(key)
         
-        print('iteration: ', i)
+        #print('iteration: ', i)
         start = time.time()
         # Gradient step using pre-compiled gradient functions
         params, opt_state, loss, grad_info = gradient_step_shared(
@@ -801,7 +804,7 @@ def gradient_optimization_with_patience_shared(
             max_energy_update, max_position_update, max_direction_update_deg,
             detector_bounds, loss_weights
         )
-        print(f"   gradient_step_shared time: {time.time() - start:.6f} seconds")
+        #print(f"   gradient_step_shared time: {time.time() - start:.6f} seconds")
         
         # Track history
         energy, position, direction_angles = params
