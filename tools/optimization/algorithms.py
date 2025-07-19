@@ -16,10 +16,15 @@ from ..utils import spherical_to_cartesian
 import time
 
 def sample_around_point(key, center_position, center_direction, center_energy, 
-                       position_std=0.5, direction_std=0.1, energy_std=50.0,
+                       position_std=0.5, direction_std=10.0, energy_std=50.0,
                        detector_bounds=None):
     """
     Sample new parameters around a center point with Gaussian noise.
+    
+    Parameters:
+    -----------
+    direction_std : float
+        Standard deviation for angular noise in degrees (not radians)
     """
     # Sample position
     key, subkey = jax.random.split(key)
@@ -44,11 +49,33 @@ def sample_around_point(key, center_position, center_direction, center_energy,
                                    jnp.array([-detector_bounds['x']/2, -detector_bounds['y']/2, -detector_bounds['z']/2]) * 0.8,
                                    jnp.array([detector_bounds['x']/2, detector_bounds['y']/2, detector_bounds['z']/2]) * 0.8)
     
-    # Sample direction (add noise and renormalize)
+    # Sample direction using angle-based approach (like gradient optimization)
     key, subkey = jax.random.split(key)
-    direction_noise = jax.random.normal(subkey, shape=(3,)) * direction_std
-    new_direction = center_direction + direction_noise
-    new_direction = new_direction / jnp.linalg.norm(new_direction)
+    
+    # Convert current direction to spherical angles
+    current_theta = jnp.arccos(jnp.clip(center_direction[2], -1.0, 1.0))
+    current_phi = jnp.arctan2(center_direction[1], center_direction[0])
+    
+    # Add angular noise (in radians) - use direction_std as degrees and convert
+    angular_std_rad = direction_std * jnp.pi / 180.0  # Convert from degrees to radians
+    theta_noise = jax.random.normal(subkey, shape=()) * angular_std_rad #/2 # divide by two because theta range is smaller (0 to pi)
+    key, subkey = jax.random.split(key)
+    phi_noise = jax.random.normal(subkey, shape=()) * angular_std_rad
+    
+    # Apply angular noise
+    new_theta = current_theta + theta_noise
+    new_phi = current_phi + phi_noise
+    
+    # # Ensure theta stays in valid range [0, π]
+    # new_theta = jnp.clip(new_theta, 0.01, jnp.pi - 0.01)  # Small margin to avoid singularities
+    
+    # Convert back to Cartesian direction vector
+    sin_theta = jnp.sin(new_theta)
+    cos_theta = jnp.cos(new_theta)
+    sin_phi = jnp.sin(new_phi)
+    cos_phi = jnp.cos(new_phi)
+    
+    new_direction = jnp.array([sin_theta * cos_phi, sin_theta * sin_phi, cos_theta])
     
     # Sample energy
     key, subkey = jax.random.split(key)
@@ -292,9 +319,9 @@ def optimization_engine(true_charges, true_times, simulate_event, sensor_params,
                 # Use fraction of largest dimension
                 detector_scale = max(detector_bounds['x']/2, detector_bounds['y']/2, detector_bounds['z']/2)
             
-            position_std = detector_scale * 0.1 * (1 - 0.7 * progress)
-            direction_std = 1.0 * (1 - 0.7 * progress)
-            energy_std = 50.0
+            position_std = detector_scale * 0.1 #* (1 - 0.7 * progress)
+            direction_std = 45.0 * (1 - 0.7 * progress)  # Changed to degrees (was 1.0 radian ≈ 57°)
+            energy_std = 50.0 * (1 - 0.7 * progress)
 
             if numerical_debug:
                 print(f"    Adaptive params: position_std={position_std:.3f}, direction_std={direction_std:.3f}, energy_std={energy_std:.1f}")
