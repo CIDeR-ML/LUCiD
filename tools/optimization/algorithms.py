@@ -321,7 +321,7 @@ def optimization_engine(true_charges, true_times, simulate_event, sensor_params,
             
             position_std = detector_scale * 0.1 #* (1 - 0.7 * progress)
             direction_std = 45.0 * (1 - 0.7 * progress)  # Changed to degrees (was 1.0 radian ≈ 57°)
-            energy_std = 50.0 * (1 - 0.7 * progress)
+            energy_std = 50.0# * (1 - 0.7 * progress)
 
             if numerical_debug:
                 print(f"    Adaptive params: position_std={position_std:.3f}, direction_std={direction_std:.3f}, energy_std={energy_std:.1f}")
@@ -407,7 +407,7 @@ def optimization_engine(true_charges, true_times, simulate_event, sensor_params,
             'position': position,
             'direction': direction,
             'energy': energy,
-            'loss': best_gradient_loss  # Use the actual best loss from optimization
+            'loss': best_gradient_loss
         }
         
         # Update history if tracking
@@ -597,48 +597,77 @@ def gradient_step_shared(params, opt_state, true_charges, true_times, key,
     energy_grad_energy, energy_grad_position, energy_grad_direction = energy_grad
     spatial_grad_energy, spatial_grad_position, spatial_grad_direction = spatial_grad
     
-    # Use specialized gradients: energy loss for energy parameter, spatial loss for spatial parameters
-    # This decouples the optimization, allowing each loss to focus on its natural parameters
-    # Note: loss_weights are NOT used for gradient combination anymore
+    # # Use specialized gradients: energy loss for energy parameter, spatial loss for spatial parameters
+    # # This decouples the optimization, allowing each loss to focus on its natural parameters
+    # # Note: loss_weights are NOT used for gradient combination anymore
     combined_energy_grad = energy_grad_energy  # Only use energy loss gradient for energy
     combined_position_grad = spatial_grad_position  # Only use spatial loss gradient for position
     combined_direction_grad = spatial_grad_direction  # Only use spatial loss gradient for direction
     
-    # Apply parameter-specific scaling
-    scaled_energy_grad = combined_energy_grad * energy_scale * energy_lr_multiplier
-    scaled_position_grad = combined_position_grad * position_scale * spatial_lr_multiplier
-    scaled_direction_grad = combined_direction_grad * direction_scale * spatial_lr_multiplier
+    # # Apply parameter-specific scaling
+    # scaled_energy_grad = combined_energy_grad * energy_scale * energy_lr_multiplier
+    # scaled_position_grad = combined_position_grad * position_scale * spatial_lr_multiplier
+    # scaled_direction_grad = combined_direction_grad * direction_scale * spatial_lr_multiplier
     
-    # Combine scaled gradients
-    scaled_grads = (scaled_energy_grad, scaled_position_grad, scaled_direction_grad)
-    
+    # # Combine scaled gradients
+    # scaled_grads = (scaled_energy_grad, scaled_position_grad, scaled_direction_grad)
+
     # Update parameters
-    updates, new_opt_state = optimizer.update(scaled_grads, opt_state, params)
+    #updates, new_opt_state = optimizer.update(scaled_grads, opt_state, params)
+
+
+    # Combine scaled gradients
+    grads = (energy_grad_energy, spatial_grad_position, spatial_grad_direction)
+    updates, new_opt_state = optimizer.update(grads, opt_state, params)
     
     # Extract individual updates
     energy_update, position_update, direction_update = updates
     old_energy, old_position, old_direction_angles = params
     
-    # Clip actual parameter updates to maximum allowed changes
-    # Energy update clipping
-    energy_update_mag = jnp.abs(energy_update)
-    if energy_update_mag > max_energy_update:
-        energy_update = energy_update * (max_energy_update / energy_update_mag)
-    
-    # Position update clipping
+    position_update  = position_update    
+    direction_update = direction_update
     position_update_mag = jnp.linalg.norm(position_update)
-    if position_update_mag > max_position_update:
-        position_update = position_update * (max_position_update / position_update_mag)
-    
-    # Direction update clipping (convert to radians)
     max_direction_update_rad = max_direction_update_deg * jnp.pi / 180.0
     direction_update_mag = jnp.linalg.norm(direction_update)
-    if direction_update_mag > max_direction_update_rad:
-        direction_update = direction_update * (max_direction_update_rad / direction_update_mag)
+
+    if position_update_mag > 1.5:
+        direction_update *= 1e-6
+        position_update *= 1e-6
+
+    energy_update_mag = jnp.abs(energy_update)
+    energy_update = energy_update*energy_scale*energy_lr_multiplier   
+    position_update = position_update*position_scale*spatial_lr_multiplier
+    direction_update = direction_update*direction_scale*spatial_lr_multiplier
+
+    #print(energy_scale, position_scale, direction_scale)
+    #print(energy_update, position_update, direction_update)
+    # print(energy_lr_multiplier, spatial_lr_multiplier)
+    # print('xxx')
+
+
+    #energy_lr_multiplier
+    #energy_update = 10 if energy_update>0 else -10
+
+    # # Clip actual parameter updates to maximum allowed changes
+    # # Energy update clipping
+    # energy_update_mag = jnp.abs(energy_update)
+    # if energy_update_mag > max_energy_update:
+    #     energy_update = energy_update * (max_energy_update / energy_update_mag)
+    
+    # # Position update clipping
+    # position_update_mag = jnp.linalg.norm(position_update)
+    # if position_update_mag > max_position_update:
+    #     position_update = position_update * (max_position_update / position_update_mag)
+    
+    # # Direction update clipping (convert to radians)
+    # max_direction_update_rad = max_direction_update_deg * jnp.pi / 180.0
+    # direction_update_mag = jnp.linalg.norm(direction_update)
+    # if direction_update_mag > max_direction_update_rad:
+    #     direction_update = direction_update * (max_direction_update_rad / direction_update_mag)
     
     # Apply clipped updates
-    clipped_updates = (energy_update, position_update, direction_update)
-    new_params = optax.apply_updates(params, clipped_updates)
+    scaled_updates = (energy_update, position_update, direction_update)
+    new_params = optax.apply_updates(params, scaled_updates)
     
     # Ensure direction remains normalized
     new_energy, new_position, new_direction_angles = new_params
@@ -920,82 +949,82 @@ def gradient_optimization_with_patience_shared(
     return best_params, history
 
 
-def calculate_auto_scales(initial_params, true_charges, true_times,
-                            simulate_event, sensor_params, sensor_positions,
-                            detector_bounds, energy_lr=1.0, spatial_lr=0.1,
-                            target_energy_update_mev=10.0,
-                            target_position_update_fraction=0.05,
-                            target_direction_update_degrees=5.0,
-                            key=None, verbose=False):
-    """
-    Automatically calculate appropriate gradient scales based on initial gradients and desired update sizes.
+# def calculate_auto_scales(initial_params, true_charges, true_times,
+#                             simulate_event, sensor_params, sensor_positions,
+#                             detector_bounds, energy_lr=1.0, spatial_lr=0.1,
+#                             target_energy_update_mev=10.0,
+#                             target_position_update_fraction=0.05,
+#                             target_direction_update_degrees=5.0,
+#                             key=None, verbose=False):
+#     """
+#     Automatically calculate appropriate gradient scales based on initial gradients and desired update sizes.
     
-    Parameters:
-    -----------
-    target_energy_update_mev : float
-        Desired first energy update in MeV when energy_scale=1.0
-    target_position_update_fraction : float
-        Desired first position update as fraction of detector scale when position_scale=1.0
-    target_direction_update_degrees : float
-        Desired first direction update in degrees when direction_scale=1.0
-    """
-    if key is None:
-        key = jax.random.PRNGKey(0)
+#     Parameters:
+#     -----------
+#     target_energy_update_mev : float
+#         Desired first energy update in MeV when energy_scale=1.0
+#     target_position_update_fraction : float
+#         Desired first position update as fraction of detector scale when position_scale=1.0
+#     target_direction_update_degrees : float
+#         Desired first direction update in degrees when direction_scale=1.0
+#     """
+#     if key is None:
+#         key = jax.random.PRNGKey(0)
     
-    # Create temporary gradient functions to compute initial gradients
-    energy_grad_fn, spatial_grad_fn, energy_optimizer, spatial_optimizer = create_gradient_optimizer(
-        simulate_event, sensor_positions, sensor_params,
-        energy_lr=energy_lr, spatial_lr=spatial_lr,
-        energy_scale=1.0, position_scale=1.0, direction_scale=1.0,  # Use 1.0 for initial calculation
-        tau=0.01, lambda_time=1.0, lambda_intensity=1.0
-    )
+#     # Create temporary gradient functions to compute initial gradients
+#     energy_grad_fn, spatial_grad_fn, energy_optimizer, spatial_optimizer = create_gradient_optimizer(
+#         simulate_event, sensor_positions, sensor_params,
+#         energy_lr=energy_lr, spatial_lr=spatial_lr,
+#         energy_scale=1.0, position_scale=1.0, direction_scale=1.0,  # Use 1.0 for initial calculation
+#         tau=0.01, lambda_time=1.0, lambda_intensity=1.0
+#     )
     
-    # Compute initial gradients
-    energy_loss_val, energy_grad = energy_grad_fn(initial_params, true_charges, true_times, key)
-    spatial_loss_val, spatial_grad = spatial_grad_fn(initial_params, true_charges, true_times, key)
+#     # Compute initial gradients
+#     energy_loss_val, energy_grad = energy_grad_fn(initial_params, true_charges, true_times, key)
+#     spatial_loss_val, spatial_grad = spatial_grad_fn(initial_params, true_charges, true_times, key)
     
-    # Extract individual gradient components (use spatial gradients for position and direction)
-    energy_grad_energy, _, _ = energy_grad
-    _, position_grad, direction_grad = spatial_grad
+#     # Extract individual gradient components (use spatial gradients for position and direction)
+#     energy_grad_energy, _, _ = energy_grad
+#     _, position_grad, direction_grad = spatial_grad
     
-    # Calculate gradient magnitudes
-    energy_grad_mag = float(jnp.linalg.norm(energy_grad_energy))
-    position_grad_mag = float(jnp.linalg.norm(position_grad))
-    direction_grad_mag = float(jnp.linalg.norm(direction_grad))
+#     # Calculate gradient magnitudes
+#     energy_grad_mag = float(jnp.linalg.norm(energy_grad_energy))
+#     position_grad_mag = float(jnp.linalg.norm(position_grad))
+#     direction_grad_mag = float(jnp.linalg.norm(direction_grad))
     
-    # Calculate detector scale (same way as in algorithms.py adaptive search)
-    if detector_bounds['type'] == 'cylinder':
-        detector_scale = max(detector_bounds['r'], detector_bounds['H']/2)
-    elif detector_bounds['type'] == 'sphere':
-        detector_scale = detector_bounds['r']
-    elif detector_bounds['type'] == 'box':
-        detector_scale = max(detector_bounds['x']/2, detector_bounds['y']/2, detector_bounds['z']/2)
-    else:
-        detector_scale = 1.0  # fallback
+#     # Calculate detector scale (same way as in algorithms.py adaptive search)
+#     if detector_bounds['type'] == 'cylinder':
+#         detector_scale = max(detector_bounds['r'], detector_bounds['H']/2)
+#     elif detector_bounds['type'] == 'sphere':
+#         detector_scale = detector_bounds['r']
+#     elif detector_bounds['type'] == 'box':
+#         detector_scale = max(detector_bounds['x']/2, detector_bounds['y']/2, detector_bounds['z']/2)
+#     else:
+#         detector_scale = 1.0  # fallback
     
-    # Calculate scales based on desired update sizes
-    # energy_update = energy_grad * energy_scale * energy_lr
-    # We want: target_energy_update_mev = energy_grad_mag * energy_scale * energy_lr
-    energy_scale = target_energy_update_mev / (energy_grad_mag * energy_lr) if energy_grad_mag > 0 else 0.01
+#     # Calculate scales based on desired update sizes
+#     # energy_update = energy_grad * energy_scale * energy_lr
+#     # We want: target_energy_update_mev = energy_grad_mag * energy_scale * energy_lr
+#     energy_scale = target_energy_update_mev #/ (energy_grad_mag * energy_lr) if energy_grad_mag > 0 else 0.01
     
-    # position_update = position_grad * position_scale * spatial_lr  
-    # We want: target_position_update_fraction * detector_scale = position_grad_mag * position_scale * spatial_lr
-    target_position_update = target_position_update_fraction * detector_scale
-    position_scale = target_position_update / (position_grad_mag * spatial_lr) if position_grad_mag > 0 else 0.1
+#     # position_update = position_grad * position_scale * spatial_lr  
+#     # We want: target_position_update_fraction * detector_scale = position_grad_mag * position_scale * spatial_lr
+#     target_position_update = target_position_update_fraction * detector_scale
+#     position_scale = target_position_update / (position_grad_mag * spatial_lr) if position_grad_mag > 0 else 0.1
     
-    # direction_update = direction_grad * direction_scale * spatial_lr
-    # We want: target_direction_update_degrees * π/180 = direction_grad_mag * direction_scale * spatial_lr
-    target_direction_update_rad = target_direction_update_degrees * jnp.pi / 180.0
-    direction_scale = target_direction_update_rad / (direction_grad_mag * spatial_lr) if direction_grad_mag > 0 else 0.1
+#     # direction_update = direction_grad * direction_scale * spatial_lr
+#     # We want: target_direction_update_degrees * π/180 = direction_grad_mag * direction_scale * spatial_lr
+#     target_direction_update_rad = target_direction_update_degrees * jnp.pi / 180.0
+#     direction_scale = target_direction_update_rad / (direction_grad_mag * spatial_lr) if direction_grad_mag > 0 else 0.1
     
-    if verbose:
-        print(f"  Adaptive scale calculation:")
-        print(f"    Initial gradients: Energy={energy_grad_mag:.2e}, Position={position_grad_mag:.2e}, Direction={direction_grad_mag:.2e}")
-        print(f"    Detector scale: {detector_scale:.2f}")
-        print(f"    Target updates: Energy={target_energy_update_mev:.1f}MeV, Position={target_position_update:.3f}m ({target_position_update_fraction*100:.1f}%), Direction={target_direction_update_degrees:.1f}°")
-        print(f"    Calculated scales: Energy={energy_scale:.6f}, Position={position_scale:.6f}, Direction={direction_scale:.6f}")
+#     if verbose:
+#         print(f"  Adaptive scale calculation:")
+#         print(f"    Initial gradients: Energy={energy_grad_mag:.2e}, Position={position_grad_mag:.2e}, Direction={direction_grad_mag:.2e}")
+#         print(f"    Detector scale: {detector_scale:.2f}")
+#         print(f"    Target updates: Energy={target_energy_update_mev:.1f}MeV, Position={target_position_update:.3f}m ({target_position_update_fraction*100:.1f}%), Direction={target_direction_update_degrees:.1f}°")
+#         print(f"    Calculated scales: Energy={energy_scale:.6f}, Position={position_scale:.6f}, Direction={direction_scale:.6f}")
     
-    return energy_scale, position_scale, direction_scale
+#     return energy_scale, position_scale, direction_scale
 
 
 def hybrid_optimization(
@@ -1110,16 +1139,20 @@ def hybrid_optimization(
             if verbose:
                 print(f"  Calculating adaptive gradient scales...")
             
-            energy_scale, position_scale, direction_scale = calculate_auto_scales(
-                initial_params, true_charges, true_times,
-                simulate_event, sensor_params, sensor_positions, detector_bounds,
-                energy_lr=gradient_kwargs.get('energy_lr', 1.0),
-                spatial_lr=gradient_kwargs.get('spatial_lr', 0.1),
-                target_energy_update_mev=gradient_kwargs.get('target_energy_update_mev', 10.0),
-                target_position_update_fraction=gradient_kwargs.get('target_position_update_fraction', 0.05),
-                target_direction_update_degrees=gradient_kwargs.get('target_direction_update_degrees', 5.0),
-                key=key, verbose=verbose
-            )
+            # energy_scale, position_scale, direction_scale = calculate_auto_scales(
+            #     initial_params, true_charges, true_times,
+            #     simulate_event, sensor_params, sensor_positions, detector_bounds,
+            #     energy_lr=gradient_kwargs.get('energy_lr', 1.0),
+            #     spatial_lr=gradient_kwargs.get('spatial_lr', 0.1),
+            #     target_energy_update_mev=gradient_kwargs.get('target_energy_update_mev', 10.0),
+            #     target_position_update_fraction=gradient_kwargs.get('target_position_update_fraction', 0.05),
+            #     target_direction_update_degrees=gradient_kwargs.get('target_direction_update_degrees', 5.0),
+            #     key=key, verbose=verbose
+            # )
+
+            energy_scale = gradient_kwargs.get('target_energy_update_mev', 10.0)
+            position_scale = gradient_kwargs.get('target_position_update_fraction', 0.05)
+            direction_scale = gradient_kwargs.get('target_direction_update_degrees', 0.005)
             
             # Update gradient_kwargs with calculated scales
             gradient_kwargs = gradient_kwargs.copy()  # Don't modify original
@@ -1129,7 +1162,8 @@ def hybrid_optimization(
         
         # Create simple optimizer for shared gradient approach
         optimizer = optax.chain(
-            optax.clip_by_global_norm(1.0),
+            optax.clip(10.0),
+            optax.clip_by_global_norm(10.0),
             optax.adam(learning_rate=1.0)  # Will be scaled by learning rate multipliers
         )
         
@@ -1148,33 +1182,6 @@ def hybrid_optimization(
         
         # Run gradient optimization
         key, subkey = jax.random.split(key)
-        
-        # Extract parameters that are specific to gradient_optimization_with_patience
-        patience_kwargs = {
-            'n_iterations': n_gradient,
-            'patience': gradient_kwargs.get('patience', 20),
-            'patience_factor': gradient_kwargs.get('patience_factor', 0.5),
-            'energy_lr': gradient_kwargs.get('energy_lr', 1.0),
-            'spatial_lr': gradient_kwargs.get('spatial_lr', 0.1),
-            'energy_scale': gradient_kwargs.get('energy_scale', 0.01),
-            'position_scale': gradient_kwargs.get('position_scale', 0.1),
-            'direction_scale': gradient_kwargs.get('direction_scale', 0.1),
-            'max_energy_update': gradient_kwargs.get('target_energy_update_mev', 15.0),
-            'max_position_update': gradient_kwargs.get('target_position_update_fraction', 0.05) * (
-                max(detector_bounds['r'], detector_bounds['H']/2) if detector_bounds and detector_bounds.get('type') == 'cylinder'
-                else detector_bounds['r'] if detector_bounds and detector_bounds.get('type') == 'sphere'
-                else max(detector_bounds['x']/2, detector_bounds['y']/2, detector_bounds['z']/2) if detector_bounds and detector_bounds.get('type') == 'box'
-                else 5.0
-            ),
-            'max_direction_update_deg': gradient_kwargs.get('target_direction_update_degrees', 5.0),
-            'detector_bounds': detector_bounds,
-            'key': subkey,
-            'verbose': gradient_kwargs.get('gradient_verbose', verbose),
-            'gradient_debug': gradient_kwargs.get('gradient_debug', False),
-            'true_position': true_position,
-            'true_direction': true_direction,
-            'true_energy': true_energy
-        }
         
         # Use the new shared gradient optimization for better efficiency
         shared_patience_kwargs = {
