@@ -240,7 +240,7 @@ def combined_loss_fn(params, true_charges, true_times, simulate_event, sensor_pa
     return energy_loss, spatial_loss
 
 
-def compute_shared_gradients(params, true_charges, true_times, energy_grad_fn, spatial_grad_fn, event_key):
+def compute_gradients(params, true_charges, true_times, energy_grad_fn, spatial_grad_fn, event_key):
     """
     Compute gradients for both energy and spatial losses using pre-compiled gradient functions.
     

@@ -118,35 +118,35 @@ def generate_random_event_params(key, detector_bounds):
 
 
 def run_optimization(
-    config_file=None,
-    detector_type='Cylinder',
-    n_events=1,
-    mode='numerical',
-    n_iterations=30,
-    population_size=20,
-    n_gradient_iterations=1000,
-    n_photons=500_000,
-    K=2,
+    config_file,#=None,
+    detector_type,#='Cylinder',
+    n_events,#=1,
+    mode,#='numerical',
+    n_iterations,#=30,
+    population_size,#=20,
+    n_gradient_iterations,#=1000,
+    n_photons,#=500_000,
+    K,#=6,
     # Gradient optimization parameters
-    energy_lr=1.0,
-    spatial_lr=0.1,
-    energy_scale=0.01,
-    position_scale=0.1,
-    direction_scale=0.1,
-    patience=100,
+    energy_lr,#=1.0,
+    spatial_lr,#=0.1,
+    energy_scale,#=0.01,
+    position_scale,#=0.1,
+    direction_scale,#=0.1,
+    patience,#=100,
     # Adaptive scaling parameters
-    auto_scale=True,
-    target_energy_update_mev=50.0,
-    target_position_update_fraction=0.01,
-    target_direction_update_degrees=0.1,
+    # auto_scale,#=True,
+    # target_energy_update_mev,#=50.0,
+    # target_position_update_fraction,#=0.01,
+    # target_direction_update_degrees,#=0.1,
     # Other parameters
-    save_event_plots=False,
-    verbose=True,
-    gradient_debug=False,
-    numerical_debug=False,
-    random_seed=1234567,
-    color_by='time',
-    event_seeds=None,
+    save_event_plots,#=False,
+    verbose,#=True,
+    gradient_debug,#=False,
+    numerical_debug,#=False,
+    random_seed,#=1234567,
+    color_by,#='time',
+    event_seeds,#=None,
 ):
     """
     Main optimization function that supports all modes.
@@ -263,10 +263,10 @@ def run_optimization(
         'tau': 0.01,
         'lambda_time': 1.0,
         'lambda_intensity': 1.0,
-        'auto_scale': auto_scale,
-        'target_energy_update_mev': target_energy_update_mev,
-        'target_position_update_fraction': target_position_update_fraction,
-        'target_direction_update_degrees': target_direction_update_degrees,
+        # 'auto_scale': auto_scale,
+        # 'target_energy_update_mev': target_energy_update_mev,
+        # 'target_position_update_fraction': target_position_update_fraction,
+        # 'target_direction_update_degrees': target_direction_update_degrees,
         'gradient_debug': gradient_debug,
         'gradient_verbose': gradient_debug  # Enable gradient verbosity when debug is requested
     }
@@ -609,9 +609,9 @@ Examples:
                         help='Detector geometry type')
     parser.add_argument('--events', '-n', type=int, default=1,
                         help='Number of events to process (default: 1)')
-    parser.add_argument('--mode', '-m', type=str, default='numerical',
-                        choices=['numerical', 'gradient', 'hybrid'],
-                        help='Optimization mode (default: numerical)')
+    parser.add_argument('--mode', '-m', type=str, default='hybrid',
+                        choices=['numerical', 'hybrid'],
+                        help='Optimization mode (default: hybrid)')
     
     # Numerical optimization parameters
     parser.add_argument('--iterations', '-i', type=int, default=30,
@@ -635,20 +635,20 @@ Examples:
     parser.add_argument('--patience', type=int, default=100,
                         help='Patience for learning rate reduction (default: 100)')
     
-    # Adaptive scaling parameters
-    parser.add_argument('--no-auto-scale', action='store_true',
-                        help='Disable automatic gradient scale calculation')
-    parser.add_argument('--target-energy-update', type=float, default=50.0,
-                        help='Target first energy update in MeV (default: 50.0)')
-    parser.add_argument('--target-position-update', type=float, default=0.01,
-                        help='Target first position update as fraction of detector scale (default: 0.01)')
-    parser.add_argument('--target-direction-update', type=float, default=0.1,
-                        help='Target first direction update in degrees (default: 0.1)')
+    # # Adaptive scaling parameters
+    # parser.add_argument('--no-auto-scale', action='store_true',
+    #                     help='Disable automatic gradient scale calculation')
+    # parser.add_argument('--target-energy-update', type=float, default=50.0,
+    #                     help='Target first energy update in MeV (default: 50.0)')
+    # parser.add_argument('--target-position-update', type=float, default=0.01,
+    #                     help='Target first position update as fraction of detector scale (default: 0.01)')
+    # parser.add_argument('--target-direction-update', type=float, default=0.1,
+    #                     help='Target first direction update in degrees (default: 0.1)')
     
     # Simulation parameters
     parser.add_argument('--photons', type=int, default=500_000,
                         help='Number of photons to simulate (default: 500000)')
-    parser.add_argument('--K', type=int, default=2,
+    parser.add_argument('--K', type=int, default=6,
                         help='Number of nearest neighbors for sensor mapping (default: 2)')
     
     # Output and verbosity
@@ -709,10 +709,10 @@ Examples:
         position_scale=args.position_scale,
         direction_scale=args.direction_scale,
         patience=args.patience,
-        auto_scale=not args.no_auto_scale,
-        target_energy_update_mev=args.target_energy_update,
-        target_position_update_fraction=args.target_position_update,
-        target_direction_update_degrees=args.target_direction_update,
+        # auto_scale=not args.no_auto_scale,
+        # target_energy_update_mev=args.target_energy_update,
+        # target_position_update_fraction=args.target_position_update,
+        # target_direction_update_degrees=args.target_direction_update,
         save_event_plots=args.save_event_plots,
         verbose=verbose,
         gradient_debug=args.gradient_debug,
