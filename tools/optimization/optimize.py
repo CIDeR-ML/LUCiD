@@ -35,7 +35,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..'))
 from tools.utils import base_dir_path, generate_random_params, spherical_to_cartesian
 from tools.geometry import generate_detector
 from tools.simulation import setup_event_simulator
-from tools.optimization.algorithms import optimization_engine, hybrid_optimization
+from tools.optimization.algorithms import optimization_engine
 from tools.optimization.utils import (
     create_event_visualization, print_summary_statistics,
     create_convergence_plots, create_summary_plots,
@@ -118,81 +118,31 @@ def generate_random_event_params(key, detector_bounds):
 
 
 def run_optimization(
-    config_file,#=None,
-    detector_type,#='Cylinder',
-    n_events,#=1,
-    mode,#='numerical',
-    n_iterations,#=30,
-    population_size,#=20,
-    n_gradient_iterations,#=1000,
-    n_photons,#=500_000,
-    K,#=6,
-    # Gradient optimization parameters
-    energy_lr,#=1.0,
-    spatial_lr,#=0.1,
-    energy_scale,#=0.01,
-    position_scale,#=0.1,
-    direction_scale,#=0.1,
-    patience,#=100,
-    # Adaptive scaling parameters
-    # auto_scale,#=True,
-    # target_energy_update_mev,#=50.0,
-    # target_position_update_fraction,#=0.01,
-    # target_direction_update_degrees,#=0.1,
-    # Other parameters
-    save_event_plots,#=False,
-    verbose,#=True,
-    gradient_debug,#=False,
-    numerical_debug,#=False,
-    random_seed,#=1234567,
-    color_by,#='time',
-    event_seeds,#=None,
+    config_file,
+    detector_type,
+    n_events,
+    mode,
+    n_iterations,
+    population_size,
+    n_gradient_iterations,
+    n_photons,
+    K,
+    energy_lr,
+    spatial_lr,
+    energy_scale,
+    position_scale,
+    direction_scale,
+    patience,
+    save_event_plots,
+    verbose,
+    gradient_debug,
+    numerical_debug,
+    random_seed,
+    color_by,
+    event_seeds
 ):
     """
-    Main optimization function that supports all modes.
-    
-    Parameters
-    ----------
-    config_file : str
-        Path to detector configuration file
-    detector_type : str
-        Type of detector: 'Cylinder', 'Sphere', or 'Box'
-    n_events : int
-        Number of events to process
-    mode : str
-        Optimization mode: 'numerical', 'gradient', or 'hybrid'
-    n_iterations : int
-        Number of numerical iterations
-    population_size : int
-        Population size for numerical optimization
-    n_gradient_iterations : int
-        Number of gradient iterations
-    n_photons : int
-        Number of photons to simulate
-    K : int
-        Number of nearest neighbors for sensor mapping
-    energy_lr : float
-        Learning rate for energy parameter
-    spatial_lr : float
-        Learning rate for spatial parameters
-    energy_scale : float
-        Scale factor for energy gradients
-    position_scale : float
-        Scale factor for position gradients
-    direction_scale : float
-        Scale factor for direction gradients
-    patience : int
-        Patience for learning rate reduction
-    save_event_plots : bool
-        Whether to save individual event plots
-    verbose : bool
-        Whether to show detailed output
-    random_seed : int
-        Random seed for reproducibility
-    color_by : str
-        Color sensor hits by 'time' or 'charge' in visualizations (default: 'time')
-    event_seeds : list of int or None
-        List of specific event indices to investigate (e.g., [3, 9, 11])
+    Main optimization function
     """
     
     # Configuration
@@ -263,10 +213,6 @@ def run_optimization(
         'tau': 0.01,
         'lambda_time': 1.0,
         'lambda_intensity': 1.0,
-        # 'auto_scale': auto_scale,
-        # 'target_energy_update_mev': target_energy_update_mev,
-        # 'target_position_update_fraction': target_position_update_fraction,
-        # 'target_direction_update_degrees': target_direction_update_degrees,
         'gradient_debug': gradient_debug,
         'gradient_verbose': gradient_debug  # Enable gradient verbosity when debug is requested
     }
@@ -586,18 +532,6 @@ def main():
 Examples:
     # Numerical optimization (like old adaptive_search.py)
     python -m tools.optimization.optimize --mode numerical -i 40 -p 30 -n 10 -q
-    
-    # Gradient-based optimization 
-    python -m tools.optimization.optimize --mode gradient --n-gradient 100 --energy-lr 0.5
-    
-    # Hybrid optimization
-    python -m tools.optimization.optimize --mode hybrid -i 20 --n-gradient 50
-    
-    # Save event plots (colored by time - default)
-    python -m tools.optimization.optimize --mode hybrid --save-event-plots -n 5
-    
-    # Save event plots colored by charge
-    python -m tools.optimization.optimize --mode hybrid --save-event-plots --color-by charge -n 5
         """
     )
     
@@ -634,17 +568,7 @@ Examples:
                         help='Scale factor for direction gradients (default: 0.1)')
     parser.add_argument('--patience', type=int, default=100,
                         help='Patience for learning rate reduction (default: 100)')
-    
-    # # Adaptive scaling parameters
-    # parser.add_argument('--no-auto-scale', action='store_true',
-    #                     help='Disable automatic gradient scale calculation')
-    # parser.add_argument('--target-energy-update', type=float, default=50.0,
-    #                     help='Target first energy update in MeV (default: 50.0)')
-    # parser.add_argument('--target-position-update', type=float, default=0.01,
-    #                     help='Target first position update as fraction of detector scale (default: 0.01)')
-    # parser.add_argument('--target-direction-update', type=float, default=0.1,
-    #                     help='Target first direction update in degrees (default: 0.1)')
-    
+
     # Simulation parameters
     parser.add_argument('--photons', type=int, default=500_000,
                         help='Number of photons to simulate (default: 500000)')
@@ -667,7 +591,7 @@ Examples:
                         help='Color sensor hits by time or charge (default: time)')
     
     # Other parameters
-    parser.add_argument('--seed', type=int, default=1234567,
+    parser.add_argument('--seed', type=int, default=12345678,
                         help='Random seed (default: 1234567)')
     parser.add_argument('--event-seeds', type=str, default=None,
                         help='Comma-separated list of event indices to investigate (e.g., "3,9,11")')
@@ -709,10 +633,6 @@ Examples:
         position_scale=args.position_scale,
         direction_scale=args.direction_scale,
         patience=args.patience,
-        # auto_scale=not args.no_auto_scale,
-        # target_energy_update_mev=args.target_energy_update,
-        # target_position_update_fraction=args.target_position_update,
-        # target_direction_update_degrees=args.target_direction_update,
         save_event_plots=args.save_event_plots,
         verbose=verbose,
         gradient_debug=args.gradient_debug,

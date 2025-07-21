@@ -3,7 +3,7 @@ LUCiD optimization module for parameter reconstruction.
 """
 
 from .algorithms import (
-    optimization_engine, sample_around_point, hybrid_optimization
+    optimization_engine, sample_around_point, gradient_optimization
 )
 from .utils import (
     get_cherenkov_angle, create_cylinder_surface, create_sphere_surface,
@@ -16,7 +16,7 @@ from .utils import (
 __all__ = [
     'optimization_engine',
     'sample_around_point',
-    'hybrid_optimization',
+    'gradient_optimization',
     'get_cherenkov_angle',
     'create_cylinder_surface',
     'create_sphere_surface',
