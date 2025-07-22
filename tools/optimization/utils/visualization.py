@@ -525,7 +525,7 @@ def create_hybrid_convergence_plot(event_histories, figures_dir=None, config_fil
         # For numerical optimization, we need to know population size
         # We can infer it from the history or pass it as parameter
         # For now, let's assume it's stored or we use a default
-        population_size = history.get('population_size', 20)  # Default to 20 if not stored
+        population_size = history.get('population_size', 1)  # Default to 20 if not stored
         
         # Create x-axis based on evaluations
         numerical_evals = []
