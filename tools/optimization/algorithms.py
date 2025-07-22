@@ -20,11 +20,7 @@ def sample_around_point(key, center_position, center_direction, center_energy,
                        detector_bounds=None):
     """
     Sample new parameters around a center point with Gaussian noise.
-    
-    Parameters:
-    -----------
-    direction_std : float
-        Standard deviation for angular noise in degrees (not radians)
+
     """
     # Sample position
     key, subkey = jax.random.split(key)
@@ -82,61 +78,10 @@ def sample_around_point(key, center_position, center_direction, center_energy,
     return new_position, new_direction, new_energy
 
 
-def optimization_engine(true_charges, true_times, simulate_event, sensor_params, sensor_positions,
-                   detector_bounds, true_position, true_direction, true_energy,
-                   n_iterations, population_size, elite_fraction,
-                   random_seed, verbose, track_history,
-                   optimization_type, gradient_iterations, gradient_kwargs,
-                   loss_function, numerical_debug):
-    """
-    Unified optimization engine supporting numerical, gradient, and hybrid optimization strategies.
+def create_initial_population(key, detector_bounds, population_size):
     
-    Parameters:
-    -----------
-    n_iterations : int
-        Number of iterations
-    population_size : int
-        Number of candidates per iteration
-    elite_fraction : float
-        Fraction of best candidates to keep for next generation
-    verbose : bool
-        Whether to print detailed progress during iterations
-    track_history : bool
-        Whether to track parameter evolution history
-    optimization_type : str
-        Type of optimization: 'numerical', 'gradient', or 'hybrid'
-    gradient_iterations : int
-        Number of gradient iterations (for 'gradient' or 'hybrid' types)
-    gradient_kwargs : dict
-        Keyword arguments for gradient optimization
-    """
-    key = jax.random.PRNGKey(random_seed)
-    n_elite = int(population_size * elite_fraction)
-    
-    # Initialize history tracking
-    history = {
-        'best_loss': [],
-        'best_energy': [],
-        'best_position': [],
-        'best_direction': [],
-        'position_error': [],
-        'direction_error': [],
-        'energy_error': [],
-        'population_size': population_size  # Store for evaluation counting
-    } if track_history else None
-    
-    # Initialize with random population
-    if verbose:
-        print("Initializing random population...")
-    if numerical_debug:
-        print(f"  True parameters for reference:")
-        print(f"    Position: [{true_position[0]:.3f}, {true_position[1]:.3f}, {true_position[2]:.3f}]")
-        print(f"    Direction: [{true_direction[0]:.3f}, {true_direction[1]:.3f}, {true_direction[2]:.3f}]")
-        print(f"    Energy: {true_energy:.1f} MeV")
     population = []
-    
-    start_num_search = time.time() 
-    for i in range(population_size):
+    for i in range(population_size*5):
         key, subkey = jax.random.split(key)
         
         # Generate random parameters based on detector type
@@ -188,14 +133,20 @@ def optimization_engine(true_charges, true_times, simulate_event, sensor_params,
             'energy': energy,
             'loss': float('inf')
         })
-    
-    # Evolution loop
+
+        population.sort(key=lambda x: x['loss'])
+
+    return population[:population_size]
+
+def evolve_population(key, iterations, population, n_elite, loss_function, detector_bounds, true_values, history, verbose, numerical_debug):
+
     best_overall = None
     best_overall_loss = float('inf')
+    (true_charges, true_times, true_energy, true_position, true_direction) = true_values
     
-    for iteration in range(n_iterations):
+    for iteration in range(iterations):
         if verbose:
-            print(f"\nIteration {iteration + 1}/{n_iterations}")
+            print(f"\nIteration {iteration + 1}/{iterations}")
         
         # Evaluate population
         for i, candidate in enumerate(population):
@@ -225,22 +176,20 @@ def optimization_engine(true_charges, true_times, simulate_event, sensor_params,
         elif population[0]['ranking_score'] < best_overall.get('ranking_score', float('inf')):
             best_overall = population[0].copy()
             best_overall_loss = population[0]['loss']
-        
+
         # Calculate errors for best candidate this iteration (for both verbose and history tracking)
         best_pos_error = float(jnp.linalg.norm(population[0]['position'] - true_position))
         best_dir_error = float(jnp.arccos(jnp.clip(jnp.abs(jnp.dot(population[0]['direction'], true_direction)), 0, 1)))
         best_dir_error_deg = np.degrees(best_dir_error)
         best_energy_error = float(jnp.abs(population[0]['energy'] - true_energy))
         
-        # Track history if requested
-        if track_history and history is not None:
-            history['best_loss'].append(population[0]['loss'])
-            history['best_energy'].append(population[0]['energy'])
-            history['best_position'].append(np.array(population[0]['position']))
-            history['best_direction'].append(np.array(population[0]['direction']))
-            history['position_error'].append(best_pos_error)
-            history['direction_error'].append(best_dir_error_deg)
-            history['energy_error'].append(best_energy_error)
+        history['best_loss'].append(population[0]['loss'])
+        history['best_energy'].append(population[0]['energy'])
+        history['best_position'].append(np.array(population[0]['position']))
+        history['best_direction'].append(np.array(population[0]['direction']))
+        history['position_error'].append(best_pos_error)
+        history['direction_error'].append(best_dir_error_deg)
+        history['energy_error'].append(best_energy_error)
         
         if verbose:
             print(f"  Best loss this iteration: {population[0]['loss']:.6f}")
@@ -249,7 +198,7 @@ def optimization_engine(true_charges, true_times, simulate_event, sensor_params,
             print(f"  Best candidate errors: Pos={best_pos_error:.3f}m, Dir={best_dir_error_deg:.1f}°, Energy={best_energy_error:.1f}MeV")
             
         # Create next generation
-        if iteration < n_iterations - 1:  # Don't create new generation on last iteration
+        if iteration < iterations - 1:  # Don't create new generation on last iteration
             new_population = []
             
             # Keep elite
@@ -257,10 +206,11 @@ def optimization_engine(true_charges, true_times, simulate_event, sensor_params,
             new_population.extend([e.copy() for e in elite])
             
             # Generate new candidates around elite
+            population_size = len(population)
             remaining_slots = population_size - n_elite
             
             # Adaptive standard deviations (decrease over iterations)
-            progress = (iteration + 1) / n_iterations
+            progress = (iteration + 1) / iterations
             
             # Scale position std based on detector size
             if detector_bounds['type'] == 'cylinder':
@@ -303,78 +253,7 @@ def optimization_engine(true_charges, true_times, simulate_event, sensor_params,
             
             population = new_population
 
-    if verbose:
-        print(f"   Numerical search took: {time.time() - start_num_search:.6f} seconds")
-
-    # Apply gradient optimization if requested
-    if optimization_type in ['hybrid'] and gradient_iterations > 0:
-        if verbose:
-            print(f"\nApplying gradient-based optimization...")
-            print(f"  Gradient iterations: {gradient_iterations}")
-            print(f"  Gradient kwargs: {gradient_kwargs}")
-        
-        # Convert best result to parameter format
-        theta = jnp.arccos(best_overall['direction'][2])
-        phi = jnp.arctan2(best_overall['direction'][1], best_overall['direction'][0])
-        initial_params = (
-            best_overall['energy'],
-            best_overall['position'],
-            jnp.array([theta, phi])
-        )
-        
-        # Set up gradient kwargs with defaults
-        if gradient_kwargs is None:
-            gradient_kwargs = {}
-        
-        # Run hybrid optimization
-        n_numerical = 0 if optimization_type == 'gradient' else n_iterations
-        best_params, grad_history = gradient_optimization(
-            initial_params, true_charges, true_times,
-            simulate_event, sensor_params, sensor_positions,
-            detector_bounds, true_position, true_direction, true_energy,
-            gradient_iterations, gradient_kwargs, key, verbose)
-
-        # Convert back to result format
-        energy, position, direction_angles = best_params
-        theta, phi = direction_angles
-        direction = spherical_to_cartesian(theta, phi)
-        
-        # Recalculate final loss using combined loss function
-        energy_loss, spatial_loss = combined_loss_fn(
-            best_params, true_charges, true_times, 
-            simulate_event, sensor_params, sensor_positions, key,
-            tau=gradient_kwargs.get('tau', 0.01), 
-            lambda_time=gradient_kwargs.get('lambda_time', 1.0)
-        )
-        final_loss = energy_loss + spatial_loss
-        
-        # Use the loss from the last iteration instead of the minimum
-        last_gradient_loss = grad_history['gradient']['loss'][-1] if 'gradient' in grad_history and grad_history['gradient']['loss'] else float(final_loss)
-        
-        best_overall = {
-            'position': position,
-            'direction': direction,
-            'energy': energy,
-            'loss': last_gradient_loss
-        }
-        
-        # Update history if tracking
-        if track_history and history is not None and 'gradient' in grad_history:
-            history['gradient_loss'] = grad_history['gradient']['loss']
-            history['gradient_energy'] = grad_history['gradient']['energy']
-            history['gradient_position'] = grad_history['gradient']['position']
-            history['gradient_direction'] = grad_history['gradient']['direction']
-            # Store error histories from gradient optimization
-            history['gradient_position_error'] = grad_history['gradient']['position_error']
-            history['gradient_direction_error'] = grad_history['gradient']['direction_error']
-            history['gradient_energy_error'] = grad_history['gradient']['energy_error']
-            # Store the actual best loss from gradient optimization
-            history['gradient_best_loss'] = min(grad_history['gradient']['loss'])
-    
-    if track_history:
-        return best_overall, population, history
-    else:
-        return best_overall, population
+    return population, best_overall, best_overall_loss, history
 
 
 # Create JIT-compiled loss functions that work with pre-simulated data
@@ -397,26 +276,6 @@ def create_gradient_optimizer(simulate_event, sensor_positions, sensor_params,
                             tau, lambda_time):
     """
     Create JIT-compiled gradient functions and optimizers for gradient-based optimization.
-    
-    Parameters:
-    -----------
-    simulate_event : function
-        Event simulation function
-    sensor_positions : jnp.ndarray
-        Array of sensor positions
-    sensor_params : tuple
-        Sensor parameters for simulation
-    tau : float
-        Temperature parameter for softmin loss
-    lambda_time : float
-        Time loss weight
-    
-    Returns:
-    -------
-    energy_grad_fn : function
-        JIT-compiled energy gradient function with value_and_grad
-    spatial_grad_fn : function
-        JIT-compiled spatial gradient function with value_and_grad
     """
     
     # Create functions that compute value and gradient w.r.t. parameters
@@ -448,13 +307,11 @@ def gradient_step(params, opt_state, true_charges, true_times, key,
     Perform a single gradient descent step using pre-compiled gradient functions.
     """
     # Compute gradients using pre-compiled gradient functions
-    # start = time.time() 
     energy_grad, spatial_grad, energy_loss_val, spatial_loss_val = compute_gradients(
         params, true_charges, true_times, energy_grad_fn, spatial_grad_fn, key
     )
-    #print(f"   compute_gradients time: {time.time() - start:.6f} seconds")
 
-    # Combine losses for total loss (still used for monitoring convergence)
+    # Combine losses for total loss
     total_loss = energy_loss_val + spatial_loss_val
     
     # Extract individual gradients
@@ -467,16 +324,16 @@ def gradient_step(params, opt_state, true_charges, true_times, key,
     
     # Extract individual updates
     energy_update, position_update, direction_update = updates
-    #old_energy, old_position, old_direction_angles = params
     
     position_update  = position_update    
     direction_update = direction_update
     position_update_mag = jnp.linalg.norm(position_update)
     direction_update_mag = jnp.linalg.norm(direction_update)
 
-    if position_update_mag > 1.5: #the gradients on the first iteration are huge and get clipped this helps to avoid instabilities but should be fixed better. # do not change without studying it.
-        direction_update *= 1e-6
-        position_update *= 1e-6
+    # If the gradients are too big they are not good as individual components get clipped to 1 (this is a quick fix):
+    if position_update_mag > 1.5: 
+        direction_update *= 1e-2
+        position_update *= 1e-2
 
     energy_update_mag = jnp.abs(energy_update)
     energy_update = energy_update*energy_scale*energy_lr_multiplier   
@@ -531,14 +388,10 @@ def gradient_optimization(
     simulate_event, sensor_params, sensor_positions,
     detector_bounds, true_position, true_direction, true_energy,
     n_gradient, gradient_kwargs, key, verbose):
-    """
-    Some explanation...
-    """
+
     if verbose:
         print(f"\nGradient-based optimization ({n_gradient} iterations)")
-        if n_numerical > 0:
-            print(f"  Starting from numerical result: Loss = {best_numerical['loss']:.6f}")
-   
+
     # Create simple optimizer for gradient approach
     optimizer = optax.chain(
         optax.adam(learning_rate=1.0)  # Will be scaled by learning rate multipliers and scale factors
@@ -631,5 +484,4 @@ def gradient_optimization(
             if verbose:
                 print(f"  Iteration {i+1}: Reducing learning rates to {energy_lr:.6f}, {spatial_lr:.6f}")
 
-    history['gradient'] = history
     return best_params, history
