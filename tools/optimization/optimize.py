@@ -63,12 +63,12 @@ def get_detector_bounds(detector):
 def generate_random_event_params(key, detector_bounds):
     """Generate random event parameters based on detector geometry."""
     if detector_bounds['type'] == 'cylinder':
-        r_vert = jax.random.uniform(key, shape=(), minval=0, maxval=detector_bounds['r'] * 0.8)
+        r_vert = jax.random.uniform(key, shape=(), minval=0, maxval=detector_bounds['r'] * 0.7)
         key, _ = jax.random.split(key)
         theta = jax.random.uniform(key, shape=(), minval=0, maxval=2*jnp.pi)
         key, _ = jax.random.split(key)
-        z_vert = jax.random.uniform(key, shape=(), minval=-detector_bounds['H']/2 * 0.8, 
-                                   maxval=detector_bounds['H']/2 * 0.8)
+        z_vert = jax.random.uniform(key, shape=(), minval=-detector_bounds['H']/2 * 0.7, 
+                                   maxval=detector_bounds['H']/2 * 0.7)
         position = jnp.array([r_vert * jnp.cos(theta), r_vert * jnp.sin(theta), z_vert])
         
     elif detector_bounds['type'] == 'sphere':
@@ -78,7 +78,7 @@ def generate_random_event_params(key, detector_bounds):
         key, _ = jax.random.split(key)
         phi = jax.random.uniform(key, shape=(), minval=0, maxval=2*jnp.pi)
         
-        r = detector_bounds['r'] * 0.8 * jnp.cbrt(u)
+        r = detector_bounds['r'] * 0.7 * jnp.cbrt(u)
         sin_theta = jnp.sqrt(1 - cos_theta**2)
         position = jnp.array([r * sin_theta * jnp.cos(phi), 
                              r * sin_theta * jnp.sin(phi), 
@@ -88,10 +88,10 @@ def generate_random_event_params(key, detector_bounds):
         position = jax.random.uniform(key, shape=(3,), 
                                     minval=jnp.array([-detector_bounds['x']/2, 
                                                      -detector_bounds['y']/2, 
-                                                     -detector_bounds['z']/2]) * 0.8,
+                                                     -detector_bounds['z']/2]) * 0.7,
                                     maxval=jnp.array([detector_bounds['x']/2, 
                                                      detector_bounds['y']/2, 
-                                                     detector_bounds['z']/2]) * 0.8)
+                                                     detector_bounds['z']/2]) * 0.7)
     
     # Random direction
     key, _ = jax.random.split(key)
@@ -103,7 +103,7 @@ def generate_random_event_params(key, detector_bounds):
     
     # Random energy
     key, _ = jax.random.split(key)
-    energy = jax.random.uniform(key, shape=(), minval=250.0, maxval=900.0)
+    energy = jax.random.uniform(key, shape=(), minval=250.0, maxval=850.0)
     
     return position, direction, energy
 
@@ -113,7 +113,7 @@ def optimization_engine(true_charges, true_times, simulate_event, sensor_params,
                    numerical_iterations, population_size, elite_fraction,
                    seed, verbose, use_track_history,
                    gradient_iterations, gradient_kwargs,
-                   loss_function, numerical_debug):
+                   loss_function, numerical_debug, crossover_rate=0.3):
     """
     Some description
 
@@ -142,12 +142,12 @@ def optimization_engine(true_charges, true_times, simulate_event, sensor_params,
         print(f"    Energy: {true_energy:.1f} MeV")
     
     start_num_search = time.time() 
-    population = create_initial_population(key, detector_bounds, population_size)
+    population = create_initial_population(key, detector_bounds, population_size, loss_function, true_charges, true_times)
 
     true_values = true_charges, true_times, true_energy, true_position, true_direction
     n_elite = int(population_size * elite_fraction)
     population, best_overall, best_overall_loss, history = evolve_population(key, numerical_iterations, population, n_elite, loss_function, \
-        detector_bounds, true_values, history, verbose, numerical_debug)
+        detector_bounds, true_values, history, verbose, numerical_debug, crossover_rate)
 
     if verbose:
         print(f"   Numerical search took: {time.time() - start_num_search:.6f} seconds")
@@ -228,7 +228,8 @@ def run_optimization(
     numerical_debug,
     seed,
     color_by,
-    event_seeds
+    event_seeds,
+    crossover_rate=0.3
 ):
     """
     Main optimization function
@@ -386,7 +387,8 @@ def run_optimization(
                 tau=gradient_kwargs['tau'], 
                 lambda_time=gradient_kwargs['lambda_time']
             )),
-            numerical_debug=numerical_debug
+            numerical_debug=numerical_debug,
+            crossover_rate=crossover_rate
         )
         
         # Unpack results based on whether history was tracked
@@ -455,12 +457,11 @@ def run_optimization(
         if event_histories:
             # Save convergence data for later plotting
             save_convergence_data(event_histories, results, figures_dir, config_file)
-            create_hybrid_convergence_plot(event_histories, figures_dir, config_file=config_file)
             # # Check if we have gradient history (hybrid optimization)
-            # if event_histories[0] and 'gradient_loss' in event_histories[0]:
-            #     create_hybrid_convergence_plot(event_histories, figures_dir, config_file=config_file)
-            # else:
-            #     create_convergence_plots(event_histories, figures_dir, config_file=config_file)
+            if event_histories[0] and 'gradient_loss' in event_histories[0]:
+                create_hybrid_convergence_plot(event_histories, figures_dir, config_file=config_file)
+            else:
+                create_convergence_plots(event_histories, figures_dir, config_file=config_file)
     
     return results
 
@@ -599,6 +600,8 @@ Examples:
                         help='Number of numerical iterations (default: 30)')
     parser.add_argument('--population', '-p', type=int, default=20,
                         help='Population size for numerical optimization (default: 20)')
+    parser.add_argument('--crossover-rate', type=float, default=0.3,
+                        help='Crossover rate for genetic algorithm (0.0-1.0, default: 0.3)')
     
     # Gradient optimization parameters
     parser.add_argument('--n-gradient', type=int, default=1000,
@@ -685,7 +688,8 @@ Examples:
         numerical_debug=args.numerical_debug,
         seed=args.seed,
         color_by=args.color_by,
-        event_seeds=event_seeds
+        event_seeds=event_seeds,
+        crossover_rate=args.crossover_rate
     )
     
     return results

@@ -38,8 +38,7 @@ def _compute_energy_loss(simulated_charge, true_charge):
 
 @jit
 def _compute_spatial_loss(simulated_charge, simulated_time, true_charge, true_time, 
-                         sensor_positions, tau=0.01, lambda_time=1.0, 
-                         scale_factor=1e4):
+                         sensor_positions, tau, lambda_time, scale_factor=1e4):
     """
     Core spatial loss computation using soft assignments.
     
@@ -111,7 +110,11 @@ def _compute_spatial_loss(simulated_charge, simulated_time, true_charge, true_ti
     L_charge = L_charge_s2t + L_charge_t2s
     L_time = (L_time_s2t + L_time_t2s) * lambda_time
     
-    return (L_charge + L_time) / scale_factor
+    # Adding new term to avoid degenerate solution in numerical search
+    L_delta_charge = jax.lax.stop_gradient(jnp.sum((jnp.abs(simulated_charge - true_charge))))*10000/scale_factor
+    L_delta_time = jax.lax.stop_gradient(jnp.sum((jnp.abs(sim_time_centered - true_time_centered))))*10000/scale_factor
+    
+    return (L_charge + L_time) / scale_factor + L_delta_charge #+ L_delta_time
 
 
 def energy_loss_fn(params, true_event_data, simulate_event, sensor_params, sensor_positions, event_key):
@@ -187,9 +190,7 @@ def spatial_loss_fn(params, true_event_data, simulate_event, sensor_params, sens
     # Note: Previous version used hardcoded tau=0.001 and included time loss
     return _compute_spatial_loss(
         simulated_charge, simulated_time, true_charge, true_time, 
-        sensor_positions, tau=0.001, lambda_time=lambda_time, 
-        scale_factor=1e4
-    )
+        sensor_positions, tau=0.001, lambda_time=lambda_time)
 
 
 def combined_loss_fn(params, true_charges, true_times, simulate_event, sensor_params, sensor_positions, event_key, tau=0.01, lambda_time=1.0):
