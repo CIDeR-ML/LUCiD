@@ -38,8 +38,8 @@ def create_event_visualization(true_position, true_direction, true_energy, best_
         elif '.json' in config_basename:
             detector_name = config_basename.replace('.json', '')
     
-    # Filter hits with charge > 30
-    min_charge = 30.0
+    # Filter hits with charge > 5
+    min_charge = 0.5
     significant_mask = true_charges > min_charge
     hit_positions = sensor_positions[significant_mask]
     hit_charges_vis = true_charges[significant_mask]

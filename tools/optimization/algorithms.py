@@ -15,6 +15,57 @@ from .losses import energy_loss_fn, spatial_loss_fn, combined_loss_fn, compute_g
 from ..utils import spherical_to_cartesian
 import time
 
+
+def apply_detector_bounds(position, energy, detector_bounds):
+    """
+    Apply detector bounds to position and energy parameters.
+    
+    Args:
+        position: JAX array of shape (3,) representing position
+        energy: Scalar energy value
+        detector_bounds: Dictionary with detector type and dimensions
+        
+    Returns:
+        Tuple of (bounded_position, bounded_energy)
+    """
+    # Apply energy bounds
+    bounded_energy = jnp.clip(energy, 250.0, 950.0)
+    
+    # Apply position bounds based on detector type
+    if detector_bounds is None:
+        return position, bounded_energy
+        
+    if detector_bounds['type'] == 'cylinder':
+        # For cylinder: check radial distance and height
+        r = jnp.sqrt(position[0]**2 + position[1]**2)
+        r_max = detector_bounds['r'] * 0.9
+        
+        # Scale down if outside radial bounds
+        if r > r_max:
+            position = position * (r_max / r)
+        
+        # Clip height
+        position = jnp.clip(position, 
+                           jnp.array([-detector_bounds['r'], -detector_bounds['r'], -detector_bounds['H']/2]) * 0.9,
+                           jnp.array([detector_bounds['r'], detector_bounds['r'], detector_bounds['H']/2]) * 0.9)
+                           
+    elif detector_bounds['type'] == 'sphere':
+        # For sphere: check radial distance
+        r = jnp.linalg.norm(position)
+        r_max = detector_bounds['r'] * 0.9
+        
+        # Scale down if outside bounds
+        if r > r_max:
+            position = position * (r_max / r)
+            
+    elif detector_bounds['type'] == 'box':
+        # For box: clip each dimension
+        position = jnp.clip(position,
+                           jnp.array([-detector_bounds['x']/2, -detector_bounds['y']/2, -detector_bounds['z']/2]) * 0.9,
+                           jnp.array([detector_bounds['x']/2, detector_bounds['y']/2, detector_bounds['z']/2]) * 0.9)
+    
+    return position, bounded_energy
+
 def sample_around_point(key, center_position, center_direction, center_energy, 
                        position_std=0.5, direction_std=10.0, energy_std=50.0,
                        detector_bounds=None):
@@ -26,24 +77,6 @@ def sample_around_point(key, center_position, center_direction, center_energy,
     key, subkey = jax.random.split(key)
     position_noise = jax.random.normal(subkey, shape=(3,)) * position_std
     new_position = center_position + position_noise
-    
-    # Ensure position is within bounds
-    if detector_bounds:
-        if detector_bounds['type'] == 'cylinder':
-            r = jnp.sqrt(new_position[0]**2 + new_position[1]**2)
-            if r > detector_bounds['r'] * 0.8:
-                new_position = new_position * (detector_bounds['r'] * 0.8 / r)
-            new_position = jnp.clip(new_position, 
-                                   jnp.array([-detector_bounds['r'], -detector_bounds['r'], -detector_bounds['H']/2]) * 0.8,
-                                   jnp.array([detector_bounds['r'], detector_bounds['r'], detector_bounds['H']/2]) * 0.8)
-        elif detector_bounds['type'] == 'sphere':
-            r = jnp.linalg.norm(new_position)
-            if r > detector_bounds['r'] * 0.8:
-                new_position = new_position * (detector_bounds['r'] * 0.8 / r)
-        elif detector_bounds['type'] == 'box':
-            new_position = jnp.clip(new_position,
-                                   jnp.array([-detector_bounds['x']/2, -detector_bounds['y']/2, -detector_bounds['z']/2]) * 0.8,
-                                   jnp.array([detector_bounds['x']/2, detector_bounds['y']/2, detector_bounds['z']/2]) * 0.8)
     
     # Sample direction using angle-based approach (like gradient optimization)
     key, subkey = jax.random.split(key)
@@ -73,15 +106,145 @@ def sample_around_point(key, center_position, center_direction, center_energy,
     # Sample energy
     key, subkey = jax.random.split(key)
     energy_noise = jax.random.normal(subkey) * energy_std
-    new_energy = jnp.clip(center_energy + energy_noise, 250.0, 900.0)
+    new_energy = center_energy + energy_noise
+    
+    # Apply bounds to position and energy
+    new_position, new_energy = apply_detector_bounds(new_position, new_energy, detector_bounds)
     
     return new_position, new_direction, new_energy
 
 
-def create_initial_population(key, detector_bounds, population_size):
+def crossover_candidates(parent1, parent2, key, crossover_type='uniform'):
+    """
+    Perform crossover between two parent candidates to create offspring.
+    
+    Args:
+        parent1, parent2: Parent candidates with 'position', 'direction', 'energy'
+        key: JAX random key
+        crossover_type: Type of crossover ('uniform', 'intermediate', 'single_point')
+    
+    Returns:
+        Two offspring candidates
+    """
+    if crossover_type == 'uniform':
+        # Uniform crossover - each parameter has 50% chance from each parent
+        key, subkey = jax.random.split(key)
+        position_mask = jax.random.bernoulli(subkey, p=0.5, shape=(3,))
+        offspring1_position = jnp.where(position_mask, parent1['position'], parent2['position'])
+        offspring2_position = jnp.where(position_mask, parent2['position'], parent1['position'])
+        
+        key, subkey = jax.random.split(key)
+        energy_mask = jax.random.bernoulli(subkey, p=0.5)
+        offspring1_energy = jnp.where(energy_mask, parent1['energy'], parent2['energy'])
+        offspring2_energy = jnp.where(energy_mask, parent2['energy'], parent1['energy'])
+        
+        # For direction, use spherical linear interpolation (slerp) or just pick one
+        key, subkey = jax.random.split(key)
+        direction_mask = jax.random.bernoulli(subkey, p=0.5)
+        offspring1_direction = jnp.where(direction_mask, parent1['direction'], parent2['direction'])
+        offspring2_direction = jnp.where(direction_mask, parent2['direction'], parent1['direction'])
+        
+    elif crossover_type == 'intermediate':
+        # Intermediate crossover - offspring are between parents
+        key, subkey = jax.random.split(key)
+        alpha = jax.random.uniform(subkey, shape=(3,), minval=0.0, maxval=1.0)
+        offspring1_position = alpha * parent1['position'] + (1 - alpha) * parent2['position']
+        offspring2_position = alpha * parent2['position'] + (1 - alpha) * parent1['position']
+        
+        key, subkey = jax.random.split(key)
+        alpha_energy = jax.random.uniform(subkey)
+        offspring1_energy = alpha_energy * parent1['energy'] + (1 - alpha_energy) * parent2['energy']
+        offspring2_energy = alpha_energy * parent2['energy'] + (1 - alpha_energy) * parent1['energy']
+        
+        # For direction, use spherical linear interpolation
+        key, subkey = jax.random.split(key)
+        alpha_dir = jax.random.uniform(subkey)
+        offspring1_direction = spherical_lerp(parent1['direction'], parent2['direction'], alpha_dir)
+        offspring2_direction = spherical_lerp(parent2['direction'], parent1['direction'], alpha_dir)
+        
+    elif crossover_type == 'single_point':
+        # Single point crossover
+        key, subkey = jax.random.split(key)
+        cut_point = jax.random.randint(subkey, shape=(), minval=0, maxval=3)
+        
+        # For simplicity, treat as: [energy, position_x, position_y, position_z, direction]
+        # and do crossover at the cut point
+        if cut_point == 0:
+            # Cut before energy - swap everything
+            offspring1 = parent2.copy()
+            offspring2 = parent1.copy()
+            return offspring1, offspring2
+        elif cut_point == 1:
+            # Cut after energy
+            offspring1_energy = parent1['energy']
+            offspring2_energy = parent2['energy']
+            offspring1_position = parent2['position']
+            offspring2_position = parent1['position']
+            offspring1_direction = parent2['direction']
+            offspring2_direction = parent1['direction']
+        else:
+            # Cut within position
+            offspring1_energy = parent1['energy']
+            offspring2_energy = parent2['energy']
+            offspring1_position = jnp.concatenate([parent1['position'][:cut_point-1], parent2['position'][cut_point-1:]])
+            offspring2_position = jnp.concatenate([parent2['position'][:cut_point-1], parent1['position'][cut_point-1:]])
+            offspring1_direction = parent2['direction']
+            offspring2_direction = parent1['direction']
+    
+    # Normalize directions
+    offspring1_direction = offspring1_direction / jnp.linalg.norm(offspring1_direction)
+    offspring2_direction = offspring2_direction / jnp.linalg.norm(offspring2_direction)
+    
+    offspring1 = {
+        'position': offspring1_position,
+        'direction': offspring1_direction,
+        'energy': offspring1_energy,
+        'loss': float('inf')
+    }
+    
+    offspring2 = {
+        'position': offspring2_position,
+        'direction': offspring2_direction,
+        'energy': offspring2_energy,
+        'loss': float('inf')
+    }
+    
+    return offspring1, offspring2
+
+
+def spherical_lerp(dir1, dir2, alpha):
+    """
+    Spherical linear interpolation between two direction vectors.
+    """
+    # Compute angle between vectors
+    dot = jnp.clip(jnp.dot(dir1, dir2), -1.0, 1.0)
+    theta = jnp.arccos(dot)
+    
+    # If vectors are nearly parallel, just return linear interpolation
+    sin_theta = jnp.sin(theta)
+    
+    # Use conditional to handle near-parallel case
+    def slerp_calculation():
+        a = jnp.sin((1 - alpha) * theta) / sin_theta
+        b = jnp.sin(alpha * theta) / sin_theta
+        return a * dir1 + b * dir2
+    
+    def linear_calculation():
+        return (1 - alpha) * dir1 + alpha * dir2
+    
+    result = jax.lax.cond(
+        sin_theta > 1e-6,
+        slerp_calculation,
+        linear_calculation
+    )
+    
+    return result / jnp.linalg.norm(result)
+
+
+def create_initial_population(key, detector_bounds, population_size, loss_function, true_charges, true_times):
     
     population = []
-    for i in range(population_size*5):
+    for i in range(population_size*10):
         key, subkey = jax.random.split(key)
         
         # Generate random parameters based on detector type
@@ -130,15 +293,22 @@ def create_initial_population(key, detector_bounds, population_size):
         population.append({
             'position': position,
             'direction': direction,
-            'energy': energy,
-            'loss': float('inf')
+            'energy': 800.,
         })
 
-        population.sort(key=lambda x: x['loss'])
+        theta = jnp.arccos(population[-1]['direction'][2])
+        phi = jnp.arctan2(population[-1]['direction'][1], population[-1]['direction'][0])
+        direction_angles = jnp.array([theta, phi])
+        particle_params = (population[-1]['energy'], population[-1]['position'], direction_angles)
+        loss = loss_function(particle_params, true_charges, true_times, key)
+        #print(particle_params, loss)
+        population[-1]['loss'] = float(loss)
+
+    population.sort(key=lambda x: x['loss'])
 
     return population[:population_size]
 
-def evolve_population(key, iterations, population, n_elite, loss_function, detector_bounds, true_values, history, verbose, numerical_debug):
+def evolve_population(key, iterations, population, n_elite, loss_function, detector_bounds, true_values, history, verbose, numerical_debug, crossover_rate, mutation_after_crossover=0.5):
 
     best_overall = None
     best_overall_loss = float('inf')
@@ -161,11 +331,7 @@ def evolve_population(key, iterations, population, n_elite, loss_function, detec
 
             key, _ = jax.random.split(key)
             
-            if numerical_debug:
-                print(f"    Position: [{candidate['position'][0]:.3f}, {candidate['position'][1]:.3f}, {candidate['position'][2]:.3f}]")
-                print(f"    Energy: {candidate['energy']:.1f} MeV")
-                print(f"    Direction: [{candidate['direction'][0]:.3f}, {candidate['direction'][1]:.3f}, {candidate['direction'][2]:.3f}]")
-        
+
         # Sort by ranking score (which uses weighted loss for combined loss type)
         population.sort(key=lambda x: x['ranking_score'])
         
@@ -177,19 +343,27 @@ def evolve_population(key, iterations, population, n_elite, loss_function, detec
             best_overall = population[0].copy()
             best_overall_loss = population[0]['loss']
 
+            if numerical_debug:
+                print(f"    New Best Loss: {best_overall_loss:.3f}")
+                print(f"    New Best Position: [{population[0]['position'][0]:.3f}, {population[0]['position'][1]:.3f}, {population[0]['position'][2]:.3f}]")
+                print(f"    New Best Energy: {population[0]['energy']:.1f} MeV")
+                print(f"    New Best Direction: [{population[0]['direction'][0]:.3f}, {population[0]['direction'][1]:.3f}, {population[0]['direction'][2]:.3f}]")
+                print("\n")
+
         # Calculate errors for best candidate this iteration (for both verbose and history tracking)
         best_pos_error = float(jnp.linalg.norm(population[0]['position'] - true_position))
         best_dir_error = float(jnp.arccos(jnp.clip(jnp.abs(jnp.dot(population[0]['direction'], true_direction)), 0, 1)))
         best_dir_error_deg = np.degrees(best_dir_error)
         best_energy_error = float(jnp.abs(population[0]['energy'] - true_energy))
         
-        history['best_loss'].append(population[0]['loss'])
-        history['best_energy'].append(population[0]['energy'])
-        history['best_position'].append(np.array(population[0]['position']))
-        history['best_direction'].append(np.array(population[0]['direction']))
-        history['position_error'].append(best_pos_error)
-        history['direction_error'].append(best_dir_error_deg)
-        history['energy_error'].append(best_energy_error)
+        if history is not None:
+            history['best_loss'].append(population[0]['loss'])
+            history['best_energy'].append(population[0]['energy'])
+            history['best_position'].append(np.array(population[0]['position']))
+            history['best_direction'].append(np.array(population[0]['direction']))
+            history['position_error'].append(best_pos_error)
+            history['direction_error'].append(best_dir_error_deg)
+            history['energy_error'].append(best_energy_error)
         
         if verbose:
             print(f"  Best loss this iteration: {population[0]['loss']:.6f}")
@@ -223,33 +397,66 @@ def evolve_population(key, iterations, population, n_elite, loss_function, detec
                 # Use fraction of largest dimension
                 detector_scale = max(detector_bounds['x']/2, detector_bounds['y']/2, detector_bounds['z']/2)
             
-            position_std = detector_scale * 0.1
-            direction_std = 45.0 * (1 - 0.7 * progress)
+            position_std = detector_scale * 0.2
+            direction_std = 45.0 #45.0 * (1 - 0.7 * progress)
             energy_std = 50.0
 
-            if numerical_debug:
-                print(f"    Adaptive params: position_std={position_std:.3f}, direction_std={direction_std:.3f}, energy_std={energy_std:.1f}")
-            
-            for i in range(remaining_slots):
-                # Select parent from elite (with bias towards better ones)
-                parent_idx = min(int(abs(jax.random.normal(key)) * n_elite / 3), n_elite - 1)
-                parent = elite[parent_idx]
-                key, _ = jax.random.split(key)
+            i = 0
+            while i < remaining_slots:
+                key, subkey = jax.random.split(key)
+                use_crossover = jax.random.uniform(subkey) < crossover_rate
                 
-                # Generate offspring
-                new_position, new_direction, new_energy = sample_around_point(
-                    key, parent['position'], parent['direction'], parent['energy'],
-                    position_std, direction_std, energy_std, detector_bounds
-                )
-                
-                new_population.append({
-                    'position': new_position,
-                    'direction': new_direction,
-                    'energy': new_energy,
-                    'loss': float('inf')
-                })
-                
-                key, _ = jax.random.split(key)
+                if use_crossover and i + 1 < remaining_slots:
+                    # Crossover: select two parents and create two offspring
+                    key, subkey = jax.random.split(key)
+                    parent1_idx = min(int(abs(jax.random.normal(subkey)) * n_elite / 3), n_elite - 1)
+                    key, subkey = jax.random.split(key)
+                    parent2_idx = min(int(abs(jax.random.normal(subkey)) * n_elite / 3), n_elite - 1)
+                    
+                    parent1 = elite[parent1_idx]
+                    parent2 = elite[parent2_idx]
+                    
+                    # Perform crossover
+                    key, subkey = jax.random.split(key)
+                    offspring1, offspring2 = crossover_candidates(parent1, parent2, subkey, crossover_type='intermediate')
+                    
+                    # Apply mutation to crossover offspring with reduced strength
+                    mutation_strength = mutation_after_crossover  # Use parameter for mutation strength
+                    for offspring in [offspring1, offspring2]:
+                        key, subkey = jax.random.split(key)
+                        # Apply small mutation
+                        mutated_position, mutated_direction, mutated_energy = sample_around_point(
+                            subkey, offspring['position'], offspring['direction'], offspring['energy'],
+                            position_std * mutation_strength, direction_std * mutation_strength, energy_std * mutation_strength, 
+                            detector_bounds
+                        )
+                        offspring['position'] = mutated_position
+                        offspring['direction'] = mutated_direction
+                        offspring['energy'] = 800.#mutated_energy
+                    
+                    new_population.extend([offspring1, offspring2])
+                    i += 2
+                else:
+                    # Mutation: select one parent and create one offspring
+                    key, subkey = jax.random.split(key)
+                    parent_idx = min(int(abs(jax.random.normal(subkey)) * n_elite / 3), n_elite - 1)
+                    parent = elite[parent_idx]
+                    
+                    # Generate offspring through mutation
+                    key, subkey = jax.random.split(key)
+                    new_position, new_direction, new_energy = sample_around_point(
+                        subkey, parent['position'], parent['direction'], parent['energy'],
+                        position_std, direction_std, energy_std, detector_bounds
+                    )
+                    
+                    new_population.append({
+                        'position': new_position,
+                        'direction': new_direction,
+                        'energy': 800.,#new_energy,
+                        'loss': float('inf')
+                    })
+                    
+                    i += 1
             
             population = new_population
 
@@ -353,26 +560,8 @@ def gradient_step(params, opt_state, true_charges, true_times, key,
     new_phi = jnp.arctan2(new_direction[1], new_direction[0])
     new_direction_angles = jnp.array([new_theta, new_phi])
     
-    # Clip energy to valid range
-    new_energy = jnp.clip(new_energy, 250.0, 900.0)
-    
-    # Apply detector bounds to position (same as in adaptive search)
-    if detector_bounds:
-        if detector_bounds['type'] == 'cylinder':
-            r = jnp.sqrt(new_position[0]**2 + new_position[1]**2)
-            if r > detector_bounds['r'] * 0.8:
-                new_position = new_position * (detector_bounds['r'] * 0.8 / r)
-            new_position = jnp.clip(new_position, 
-                                   jnp.array([-detector_bounds['r'], -detector_bounds['r'], -detector_bounds['H']/2]) * 0.8,
-                                   jnp.array([detector_bounds['r'], detector_bounds['r'], detector_bounds['H']/2]) * 0.8)
-        elif detector_bounds['type'] == 'sphere':
-            r = jnp.linalg.norm(new_position)
-            if r > detector_bounds['r'] * 0.8:
-                new_position = new_position * (detector_bounds['r'] * 0.8 / r)
-        elif detector_bounds['type'] == 'box':
-            new_position = jnp.clip(new_position,
-                                   jnp.array([-detector_bounds['x']/2, -detector_bounds['y']/2, -detector_bounds['z']/2]) * 0.8,
-                                   jnp.array([detector_bounds['x']/2, detector_bounds['y']/2, detector_bounds['z']/2]) * 0.8)
+    # Apply detector bounds to position and energy
+    new_position, new_energy = apply_detector_bounds(new_position, new_energy, detector_bounds)
     
     new_params = (new_energy, new_position, new_direction_angles)
     
@@ -467,21 +656,25 @@ def gradient_optimization(
         history['direction_error'].append(dir_error_deg)
         history['energy_error'].append(energy_error)
         
-        # Check for improvement
-        if loss < best_loss:
-            best_loss = loss
-            best_params = params
+        # Look only at the energy loss to decrease LR for spatial part
+        if grad_info['energy_loss'] < best_loss:
+            best_loss = grad_info['energy_loss']
             patience_counter = 0
         else:
             patience_counter += 1
         
         # Reduce learning rate if patience exceeded
         if patience_counter >= patience:
-            energy_lr *= patience_factor
             spatial_lr *= patience_factor
             patience_counter = 0
-            
+
+        # let's reduce the energy lr every 50 iterations.
+        if i>0 and i%50==0:
+            energy_lr *= patience_factor
+
             if verbose:
                 print(f"  Iteration {i+1}: Reducing learning rates to {energy_lr:.6f}, {spatial_lr:.6f}")
+
+        best_params = params # let's take the last iterations as the solution (loss isn't at minimum because of our energy+spatial loss approach)
 
     return best_params, history
