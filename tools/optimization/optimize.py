@@ -26,7 +26,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..'))
 from tools.utils import base_dir_path, generate_random_params, spherical_to_cartesian
 from tools.geometry import generate_detector
 from tools.simulation import setup_event_simulator
-from tools.optimization.algorithms import create_initial_population, evolve_population, gradient_optimization
+from tools.optimization.algorithms import create_initial_population, create_initial_population_database, evolve_population, gradient_optimization
 from tools.optimization.utils import (
     create_event_visualization, print_summary_statistics,
     create_convergence_plots, create_summary_plots,
@@ -113,7 +113,8 @@ def optimization_engine(true_charges, true_times, simulate_event, sensor_params,
                    numerical_iterations, population_size, elite_fraction,
                    seed, verbose, use_track_history,
                    gradient_iterations, gradient_kwargs,
-                   loss_function, numerical_debug, crossover_rate=0.3):
+                   loss_function, numerical_debug, crossover_rate=0.3,
+                   events_cache=None):
     """
     Some description
 
@@ -132,22 +133,51 @@ def optimization_engine(true_charges, true_times, simulate_event, sensor_params,
         'population_size': population_size  # Store for evaluation counting
     } if use_track_history else None
     
-    # Initialize with random population
-    if verbose:
-        print("Initializing random population...")
+    # Choose initialization method based on numerical_iterations
+    start_num_search = time.time()
+    
+    if numerical_iterations == 0:
+        # Use N=3 averaging for direct gradient optimization
+        if verbose:
+            print("Using initial guess from database (N=3 averaging)...")
+        population = create_initial_population_database(
+            None, None, None, 
+            true_charges, true_times, population_size, N=3, verbose=verbose, events_cache=events_cache
+        )
+    else:
+        # Use single best match for hybrid optimization
+        if verbose:
+            print("Using initial guess from database (single best match)...")
+        population = create_initial_population_database(
+            None, None, None,
+            true_charges, true_times, population_size, N=1, verbose=verbose, events_cache=events_cache
+        )
+    
     if numerical_debug:
         print(f"  True parameters for reference:")
         print(f"    Position: [{true_position[0]:.3f}, {true_position[1]:.3f}, {true_position[2]:.3f}]")
         print(f"    Direction: [{true_direction[0]:.3f}, {true_direction[1]:.3f}, {true_direction[2]:.3f}]")
         print(f"    Energy: {true_energy:.1f} MeV")
-    
-    start_num_search = time.time() 
-    population = create_initial_population(key, detector_bounds, population_size, loss_function, true_charges, true_times)
 
     true_values = true_charges, true_times, true_energy, true_position, true_direction
     n_elite = int(population_size * elite_fraction)
-    population, best_overall, best_overall_loss, history = evolve_population(key, numerical_iterations, population, n_elite, loss_function, \
-        detector_bounds, true_values, history, verbose, numerical_debug, crossover_rate)
+    
+    if numerical_iterations == 0:
+        # Skip genetic algorithm - use initial guess directly for gradient optimization
+        best_overall = population[0].copy()  # First element is the best initial guess
+        best_overall_loss = best_overall['loss']
+        
+        if verbose:
+            print(f"Skipping numerical search (iterations=0)")
+            print(f"Using initial guess directly:")
+            print(f"  Position: [{best_overall['position'][0]:.3f}, {best_overall['position'][1]:.3f}, {best_overall['position'][2]:.3f}]")
+            print(f"  Direction: [{best_overall['direction'][0]:.3f}, {best_overall['direction'][1]:.3f}, {best_overall['direction'][2]:.3f}]")
+            print(f"  Energy: {best_overall['energy']:.1f} MeV")
+            print(f"  Initial loss: {best_overall_loss:.6f}")
+    else:
+        # Run genetic algorithm
+        population, best_overall, best_overall_loss, history = evolve_population(key, numerical_iterations, population, n_elite, loss_function, \
+            detector_bounds, true_values, history, verbose, numerical_debug, crossover_rate)
 
     if verbose:
         print(f"   Numerical search took: {time.time() - start_num_search:.6f} seconds")
@@ -262,6 +292,16 @@ def run_optimization(
     
     # Get detector bounds
     detector_bounds = get_detector_bounds(detector)
+    
+    # Load event cache once for all events
+    if verbose or n_events == 1:
+        print("Loading event cache for initial guess system...")
+    
+    from tools.optimization.event_cache import load_event_cache
+    events_cache = load_event_cache(config_file, detector_type, K, verbose=(verbose or n_events == 1))
+    
+    if verbose or n_events == 1:
+        print(f"Loaded cache with {len(events_cache['metadata'])} events")
     
     # Setup simulation parameters
     sensor_params = (
@@ -388,7 +428,8 @@ def run_optimization(
                 lambda_time=gradient_kwargs['lambda_time']
             )),
             numerical_debug=numerical_debug,
-            crossover_rate=crossover_rate
+            crossover_rate=crossover_rate,
+            events_cache=events_cache
         )
         
         # Unpack results based on whether history was tracked
@@ -406,7 +447,7 @@ def run_optimization(
         
         # Calculate errors and store results
         position_error = float(jnp.linalg.norm(best_match['position'] - true_position))
-        direction_error = float(jnp.arccos(jnp.clip(jnp.abs(jnp.dot(best_match['direction'], true_direction)), 0, 1)))
+        direction_error = float(jnp.arccos(jnp.clip(jnp.dot(best_match['direction'], true_direction), -1, 1)))
         direction_error_deg = np.degrees(direction_error)
         energy_error = float(jnp.abs(best_match['energy'] - true_energy))
         energy_error_percent = (energy_error / float(true_energy)) * 100

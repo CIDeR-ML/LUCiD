@@ -26,34 +26,46 @@ sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..'))
 from tools.utils import base_dir_path, spherical_to_cartesian
 from tools.geometry import generate_detector
 from tools.simulation import setup_event_simulator
-from tools.optimization.optimize import get_detector_bounds, generate_random_event_params
+from tools.optimization.event_cache import load_event_cache, generate_and_cache_events, get_detector_bounds, generate_random_event_params
+from tools.optimization.losses import initial_guess_loss
 
 
 def generate_and_store_events(n_events, config_file, detector_type, n_photons, K, seed=42):
     """
-    Generate N events and return their charges and times.
+    Load or generate N events using the shared cache system.
+    
+    This function now uses the shared event cache system. For consistency with
+    the benchmark script, it allows custom parameters but the cache system
+    uses hardcoded values (50k events, 500k photons).
     
     Args:
-        n_events: Number of events to generate
+        n_events: Number of events to use (will be min(n_events, 50000))
         config_file: Path to detector configuration
         detector_type: Type of detector (Cylinder, Sphere, Box)
-        n_photons: Number of photons to simulate
+        n_photons: Number of photons to simulate (cache uses 500k)
         K: Number of nearest neighbors for sensor mapping
-        seed: Random seed
+        seed: Random seed (cache uses 12345)
     
     Returns:
-        events_data: List of dicts containing charges, times, and true parameters
+        events_data: Event database from cache
         detector_bounds: Detector boundary information
         simulate_event: Simulation function
         sensor_params: Sensor parameters
         sensor_positions: Sensor positions
     """
-    print(f"Generating {n_events} events...")
+    print(f"Loading events from cache (using up to {n_events} events)...")
     
-    # Initialize
-    key = jax.random.PRNGKey(seed)
+    # Load events from cache
+    events_data = load_event_cache(config_file, detector_type, K, verbose=True)
     
-    # Setup detector
+    # Limit to requested number of events if smaller than cache
+    if n_events < len(events_data['metadata']):
+        print(f"Using first {n_events} events from cache of {len(events_data['metadata'])}")
+        events_data['all_charges'] = events_data['all_charges'][:n_events]
+        events_data['all_times'] = events_data['all_times'][:n_events]
+        events_data['metadata'] = events_data['metadata'][:n_events]
+    
+    # Setup detector and simulation (needed for new event generation)
     detector = generate_detector(config_file)
     sensor_positions = jnp.array(detector.all_points)
     detector_bounds = get_detector_bounds(detector)
@@ -66,7 +78,7 @@ def generate_and_store_events(n_events, config_file, detector_type, n_photons, K
         jnp.array(0.001)    # gumbel_softmax_temperature
     )
     
-    # Setup event simulator
+    # Setup event simulator (for generating new test events)
     simulate_event = setup_event_simulator(
         json_filename=config_file,
         max_sensors_per_cell=4,
@@ -76,102 +88,10 @@ def generate_and_store_events(n_events, config_file, detector_type, n_photons, K
         detector_type=detector_type
     )
     
-    # Generate events
-    events_data = []
-    generation_start = time.time()
-    
-    # Pre-allocate arrays for charges and times
-    n_sensors_estimate = len(sensor_positions)
-    all_charges = []
-    all_times = []
-    all_metadata = []
-    
-    for i in range(n_events):
-        # Generate random event parameters
-        key, subkey = jax.random.split(key)
-        event_key = jax.random.PRNGKey(seed + i * 1000)
-        
-        position, direction, energy = generate_random_event_params(event_key, detector_bounds, fraction=0.9)
-        
-        # Convert to simulation format
-        theta = jnp.arccos(jnp.clip(direction[2], -1.0, 1.0))
-        phi = jnp.arctan2(direction[1], direction[0])
-        direction_angles = jnp.array([theta, phi])
-        
-        # Simulate event
-        particle_params = (energy, position, direction_angles)
-        charges, times = simulate_event(particle_params, sensor_params, event_key)
-        
-        # Store charges and times separately for efficient stacking
-        all_charges.append(charges)
-        all_times.append(times)
-        
-        # Store metadata
-        all_metadata.append({
-            'true_position': position,
-            'true_direction': direction,
-            'true_energy': energy,
-            'event_index': i
-        })
-        
-        if (i + 1) % 1000 == 0:
-            elapsed = time.time() - generation_start
-            rate = (i + 1) / elapsed
-            print(f"  Generated {i + 1}/{n_events} events ({rate:.1f} events/sec)")
-    
-    # Stack all charges and times once
-    print("  Stacking event data...")
-    stack_start = time.time()
-    all_charges_stacked = jnp.stack(all_charges)
-    all_times_stacked = jnp.stack(all_times)
-    stack_time = time.time() - stack_start
-    
-    # Create events_data with pre-stacked arrays
-    events_data = {
-        'all_charges': all_charges_stacked,
-        'all_times': all_times_stacked,
-        'metadata': all_metadata
-    }
-    
-    total_gen_time = time.time() - generation_start
-    print(f"Generated {n_events} events successfully in {total_gen_time:.1f} seconds ({n_events/total_gen_time:.1f} events/sec)")
-    print(f"  Stacking took {stack_time:.3f} seconds")
-    
     return events_data, detector_bounds, simulate_event, sensor_params, sensor_positions
 
-@jit
-def calculate_loss_to_event(simulated_charges, true_charges, simulated_time, true_time):
-    """
-    Calculate loss between simulated and true charges and times.
-    Loss = sum(|simulated_charge - true_charge|) + sum(|simulated_time - true_time|)
-    
-    Args:
-        simulated_charges: Charges from simulated event
-        true_charges: Charges from true event
-        simulated_time: Times from simulated event
-        true_time: Times from true event
-    
-    Returns:
-        loss: Scalar loss value
-    """
 
-    eps = 1e-8
-    threshold = 1e-8
-    
-    # Compute mean times for active locations
-    true_active_mask = true_charges > threshold
-    sim_active_mask = simulated_charges > threshold
-
-    true_mean_time = jnp.sum(true_time * true_active_mask) / (jnp.sum(true_active_mask) + eps)
-    sim_mean_time = jnp.sum(simulated_time * sim_active_mask) / (jnp.sum(sim_active_mask) + eps)
-
-    true_time_centered = jnp.where(true_active_mask, true_time - true_mean_time, 0.0)
-    sim_time_centered = jnp.where(sim_active_mask, simulated_time - sim_mean_time, 0.0)
-
-    L_delta_charge = jnp.sum((jnp.abs(simulated_charges - true_charges)))
-    L_delta_time = jnp.sum((jnp.abs(sim_time_centered - true_time_centered)))
-
-    return L_delta_charge*L_delta_time
+# The loss calculation function is now imported from losses.py as initial_guess_loss
 
 
 def benchmark_loss_calculation(events_data, detector_bounds, simulate_event, sensor_params, seed=12345, verbose=True):
@@ -249,7 +169,7 @@ def benchmark_loss_calculation(events_data, detector_bounds, simulate_event, sen
     
     # Create a vectorized version of the loss function
     # vmap over the second and fourth arguments (true_charges, true_times), keeping new data fixed
-    calculate_losses_vmap = vmap(lambda true_charges, true_times: calculate_loss_to_event(new_charges, true_charges, new_times, true_times))
+    calculate_losses_vmap = vmap(lambda true_charges, true_times: initial_guess_loss(new_charges, true_charges, new_times, true_times))
     
     # Warm-up JIT compilation
     warmup_start = time.time()
@@ -298,13 +218,19 @@ def benchmark_loss_calculation(events_data, detector_bounds, simulate_event, sen
             loss = losses[idx]
             
             # Calculate errors
-            position_error = float(jnp.linalg.norm(new_position - event['true_position']))
-            direction_error = float(jnp.arccos(jnp.clip(jnp.dot(new_direction, event['true_direction']), -1, 1)))
-            direction_error_deg = np.degrees(direction_error)
-            energy_error = float(jnp.abs(new_energy - event['true_energy']))
-            energy_error_percent = (energy_error / float(event['true_energy'])) * 100
+            # Handle field name differences between old and new formats
+            pos_key = 'position' if 'position' in event else 'true_position'
+            dir_key = 'direction' if 'direction' in event else 'true_direction'
+            energy_key = 'energy' if 'energy' in event else 'true_energy'
+            event_id_key = 'event_id' if 'event_id' in event else 'event_index'
             
-            print(f"\n  Event {event['event_index']} (rank {i+1}):")
+            position_error = float(jnp.linalg.norm(new_position - event[pos_key]))
+            direction_error = float(jnp.arccos(jnp.clip(jnp.dot(new_direction, event[dir_key]), -1, 1)))
+            direction_error_deg = np.degrees(direction_error)
+            energy_error = float(jnp.abs(new_energy - event[energy_key]))
+            energy_error_percent = (energy_error / float(event[energy_key])) * 100
+            
+            print(f"\n  Event {event[event_id_key]} (rank {i+1}):")
             print(f"    Loss: {loss:.3f}")
             print(f"    Position error: {position_error:.3f} m")
             print(f"    Direction error: {direction_error_deg:.1f}°")
@@ -383,12 +309,17 @@ def analyze_best_events_reconstruction(events_data, losses, new_event_params, ma
         else:
             best_events = [events_data[idx] for idx in best_indices]
         
+        # Handle field name differences
+        pos_key = 'position' if 'position' in best_events[0] else 'true_position'
+        dir_key = 'direction' if 'direction' in best_events[0] else 'true_direction'
+        energy_key = 'energy' if 'energy' in best_events[0] else 'true_energy'
+        
         # Average their parameters
-        avg_position = jnp.mean(jnp.array([event['true_position'] for event in best_events]), axis=0)
-        avg_energy = jnp.mean(jnp.array([event['true_energy'] for event in best_events]))
+        avg_position = jnp.mean(jnp.array([event[pos_key] for event in best_events]), axis=0)
+        avg_energy = jnp.mean(jnp.array([event[energy_key] for event in best_events]))
         
         # For direction, we need to be careful about averaging unit vectors
-        directions = jnp.array([event['true_direction'] for event in best_events])
+        directions = jnp.array([event[dir_key] for event in best_events])
         avg_direction = jnp.mean(directions, axis=0)
         avg_direction = avg_direction / jnp.linalg.norm(avg_direction)  # Renormalize
         
@@ -796,9 +727,9 @@ Examples:
             n5_idx = analysis_results['n_values'].index(5)
             aggregated_results['event_data'].append({
                 'test_idx': test_idx,
-                'true_position': np.array(new_event_params['position']),
-                'true_direction': np.array(new_event_params['direction']), 
-                'true_energy': float(new_event_params['energy']),
+                'position': np.array(new_event_params['position']),
+                'direction': np.array(new_event_params['direction']), 
+                'energy': float(new_event_params['energy']),
                 'reco_position': np.array(analysis_results['reconstructed_positions'][n5_idx]),
                 'reco_direction': np.array(analysis_results['reconstructed_directions'][n5_idx]),
                 'reco_energy': float(analysis_results['reconstructed_energies'][n5_idx]),
@@ -878,9 +809,14 @@ Examples:
                 print(f"  Direction Error: {event['direction_error']:.1f}°")
                 print(f"  Energy Error: {event['energy_error']:.1f} MeV")
                 print(f"  True Parameters:")
-                print(f"    Position: [{event['true_position'][0]:.3f}, {event['true_position'][1]:.3f}, {event['true_position'][2]:.3f}] m")
-                print(f"    Direction: [{event['true_direction'][0]:.3f}, {event['true_direction'][1]:.3f}, {event['true_direction'][2]:.3f}]")
-                print(f"    Energy: {event['true_energy']:.1f} MeV")
+                # Handle field name differences
+                pos_key = 'position' if 'position' in event else 'true_position'
+                dir_key = 'direction' if 'direction' in event else 'true_direction'
+                energy_key = 'energy' if 'energy' in event else 'true_energy'
+                
+                print(f"    Position: [{event[pos_key][0]:.3f}, {event[pos_key][1]:.3f}, {event[pos_key][2]:.3f}] m")
+                print(f"    Direction: [{event[dir_key][0]:.3f}, {event[dir_key][1]:.3f}, {event[dir_key][2]:.3f}]")
+                print(f"    Energy: {event[energy_key]:.1f} MeV")
                 print(f"  Reconstructed Parameters (N=5 average):")
                 print(f"    Position: [{event['reco_position'][0]:.3f}, {event['reco_position'][1]:.3f}, {event['reco_position'][2]:.3f}] m")
                 print(f"    Direction: [{event['reco_direction'][0]:.3f}, {event['reco_direction'][1]:.3f}, {event['reco_direction'][2]:.3f}]")
