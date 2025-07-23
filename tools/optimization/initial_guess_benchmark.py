@@ -15,8 +15,9 @@ import os
 import sys
 import time
 import pickle
+import argparse
 from datetime import datetime
-from jax import jit
+from jax import jit, vmap
 import matplotlib.pyplot as plt
 
 # Add parent directory to path for imports
@@ -77,6 +78,14 @@ def generate_and_store_events(n_events, config_file, detector_type, n_photons, K
     
     # Generate events
     events_data = []
+    generation_start = time.time()
+    
+    # Pre-allocate arrays for charges and times
+    n_sensors_estimate = len(sensor_positions)
+    all_charges = []
+    all_times = []
+    all_metadata = []
+    
     for i in range(n_events):
         # Generate random event parameters
         key, subkey = jax.random.split(key)
@@ -93,10 +102,12 @@ def generate_and_store_events(n_events, config_file, detector_type, n_photons, K
         particle_params = (energy, position, direction_angles)
         charges, times = simulate_event(particle_params, sensor_params, event_key)
         
-        # Store event data
-        events_data.append({
-            'charges': charges,
-            'times': times,
+        # Store charges and times separately for efficient stacking
+        all_charges.append(charges)
+        all_times.append(times)
+        
+        # Store metadata
+        all_metadata.append({
             'true_position': position,
             'true_direction': direction,
             'true_energy': energy,
@@ -104,9 +115,27 @@ def generate_and_store_events(n_events, config_file, detector_type, n_photons, K
         })
         
         if (i + 1) % 10 == 0:
-            print(f"  Generated {i + 1}/{n_events} events")
+            elapsed = time.time() - generation_start
+            rate = (i + 1) / elapsed
+            print(f"  Generated {i + 1}/{n_events} events ({rate:.1f} events/sec)")
     
-    print(f"Generated {n_events} events successfully")
+    # Stack all charges and times once
+    print("  Stacking event data...")
+    stack_start = time.time()
+    all_charges_stacked = jnp.stack(all_charges)
+    all_times_stacked = jnp.stack(all_times)
+    stack_time = time.time() - stack_start
+    
+    # Create events_data with pre-stacked arrays
+    events_data = {
+        'all_charges': all_charges_stacked,
+        'all_times': all_times_stacked,
+        'metadata': all_metadata
+    }
+    
+    total_gen_time = time.time() - generation_start
+    print(f"Generated {n_events} events successfully in {total_gen_time:.1f} seconds ({n_events/total_gen_time:.1f} events/sec)")
+    print(f"  Stacking took {stack_time:.3f} seconds")
     
     return events_data, detector_bounds, simulate_event, sensor_params, sensor_positions
 
@@ -144,8 +173,13 @@ def benchmark_loss_calculation(events_data, detector_bounds, simulate_event, sen
         timing_info: Dict with timing information
         new_event_params: Dict with new event parameters
     """
+    timing_breakdown = {}
+    
     if verbose:
         print("\nGenerating new event for loss calculation...")
+    
+    # Time event generation
+    gen_start = time.time()
     
     # Generate new event
     key = jax.random.PRNGKey(seed)
@@ -156,9 +190,15 @@ def benchmark_loss_calculation(events_data, detector_bounds, simulate_event, sen
     phi = jnp.arctan2(new_direction[1], new_direction[0])
     direction_angles = jnp.array([theta, phi])
     
-    # Simulate new event
+    gen_time = time.time() - gen_start
+    timing_breakdown['param_generation'] = gen_time
+    
+    # Time event simulation
+    sim_start = time.time()
     particle_params = (new_energy, new_position, direction_angles)
     new_charges, new_times = simulate_event(particle_params, sensor_params, key)
+    sim_time = time.time() - sim_start
+    timing_breakdown['simulation'] = sim_time
     
     if verbose:
         print(f"New event parameters:")
@@ -167,43 +207,61 @@ def benchmark_loss_calculation(events_data, detector_bounds, simulate_event, sen
         print(f"  Energy: {new_energy:.1f} MeV")
         print(f"  Active sensors: {jnp.sum(new_charges > 0)}")
     
-    # Load all event charges at once
+    # Get pre-stacked charges (no loading needed!)
     if verbose:
-        print(f"\nLoading charges from {len(events_data)} events...")
-    all_true_charges = jnp.stack([event['charges'] for event in events_data])
+        print(f"\nUsing pre-stacked charges from {len(events_data['metadata'])} events...")
+    
+    load_start = time.time()
+    # Check if we have the old format or new format
+    if isinstance(events_data, dict) and 'all_charges' in events_data:
+        # New format - already stacked
+        all_true_charges = events_data['all_charges']
+    else:
+        # Old format - need to stack (for backward compatibility)
+        all_true_charges = jnp.stack([event['charges'] for event in events_data])
+    load_time = time.time() - load_start
+    timing_breakdown['data_loading'] = load_time
     
     # Time loss calculation
     if verbose:
         print("Calculating losses...")
     
+    # Create a vectorized version of the loss function
+    # vmap over the second argument (true_charges), keeping new_charges fixed
+    calculate_losses_vmap = vmap(lambda true_charges: calculate_loss_to_event(new_charges, true_charges))
+    
     # Warm-up JIT compilation
-    _ = calculate_loss_to_event(new_charges, all_true_charges[0])
+    warmup_start = time.time()
+    _ = calculate_losses_vmap(all_true_charges[:1])
+    warmup_time = time.time() - warmup_start
+    timing_breakdown['jit_warmup'] = warmup_time
     
     # Time the actual calculation
     start_time = time.time()
     
-    # Calculate loss to each event
-    losses = []
-    for i in range(len(events_data)):
-        loss = calculate_loss_to_event(new_charges, all_true_charges[i])
-        losses.append(loss)
+    # Calculate all losses at once using vmap
+    losses = calculate_losses_vmap(all_true_charges)
     
     end_time = time.time()
     calculation_time = end_time - start_time
-    
-    losses = jnp.array(losses)
+    timing_breakdown['loss_calculation'] = calculation_time
     
     # Calculate timing statistics
     timing_info = {
         'total_time': calculation_time,
         'time_per_event': calculation_time / len(events_data),
-        'events_per_second': len(events_data) / calculation_time,
-        'n_events': len(events_data)
+        'events_per_second': len(events_data) / calculation_time if calculation_time > 0 else float('inf'),
+        'n_events': len(events_data),
+        'breakdown': timing_breakdown
     }
     
     if verbose:
         print(f"\nTiming Results:")
-        print(f"  Total calculation time: {calculation_time:.6f} seconds")
+        print(f"  Parameter generation: {timing_breakdown['param_generation']*1000:.3f} ms")
+        print(f"  Event simulation: {timing_breakdown['simulation']*1000:.3f} ms")
+        print(f"  Data loading (stacking): {timing_breakdown['data_loading']*1000:.3f} ms")
+        print(f"  JIT warmup: {timing_breakdown['jit_warmup']*1000:.3f} ms")
+        print(f"  Loss calculation: {calculation_time:.6f} seconds")
         print(f"  Time per event: {timing_info['time_per_event']*1000:.3f} ms")
         print(f"  Events per second: {timing_info['events_per_second']:.1f}")
         
@@ -211,7 +269,11 @@ def benchmark_loss_calculation(events_data, detector_bounds, simulate_event, sen
         best_indices = jnp.argsort(losses)[:5]
         print(f"\nBest matching events (by loss):")
         for i, idx in enumerate(best_indices):
-            event = events_data[idx]
+            # Handle both old and new formats
+            if isinstance(events_data, dict) and 'metadata' in events_data:
+                event = events_data['metadata'][idx]
+            else:
+                event = events_data[idx]
             loss = losses[idx]
             
             # Calculate errors
@@ -267,7 +329,12 @@ def analyze_best_events_reconstruction(events_data, losses, new_event_params, ma
     
     # Analyze for different numbers of best events
     n_values = [1, 2, 3, 5, 10, 20, 30, 50, 100]
-    n_values = [n for n in n_values if n <= len(events_data) and n <= max_n]
+    # Get the actual number of events - should be based on losses array length
+    n_events = len(losses)
+    n_values = [n for n in n_values if n <= n_events and n <= max_n]
+    
+    if verbose:
+        print(f"\nAnalyzing with n_values: {n_values} (n_events={n_events}, max_n={max_n})")
     
     analysis_results = {
         'n_values': n_values,
@@ -285,7 +352,12 @@ def analyze_best_events_reconstruction(events_data, losses, new_event_params, ma
     for n in n_values:
         # Get the N best events
         best_indices = sorted_indices[:n]
-        best_events = [events_data[idx] for idx in best_indices]
+        
+        # Handle both old and new formats
+        if isinstance(events_data, dict) and 'metadata' in events_data:
+            best_events = [events_data['metadata'][idx] for idx in best_indices]
+        else:
+            best_events = [events_data[idx] for idx in best_indices]
         
         # Average their parameters
         avg_position = jnp.mean(jnp.array([event['true_position'] for event in best_events]), axis=0)
@@ -495,7 +567,12 @@ def load_or_generate_events(cache_file, n_events, config_file, detector_type, n_
                 cache_data['K'] == K and
                 cache_data['seed'] == seed):
                 
-                print(f"Loaded {len(cache_data['events_data'])} events from cache")
+                # Check if it's the new format
+                if 'events_data' in cache_data and isinstance(cache_data['events_data'], dict) and 'metadata' in cache_data['events_data']:
+                    print(f"Loaded {len(cache_data['events_data']['metadata'])} events from cache (new format)")
+                else:
+                    # Old format
+                    print(f"Loaded {len(cache_data['events_data'])} events from cache")
                 
                 # Recreate non-pickleable objects
                 detector = generate_detector(config_file)
@@ -552,37 +629,100 @@ def load_or_generate_events(cache_file, n_events, config_file, detector_type, n_
 
 def main():
     """Main function to run the benchmark."""
+    parser = argparse.ArgumentParser(
+        description='Initial Guess Benchmark - Analyze event reconstruction using nearest neighbor approach',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+    # Run with default settings (quiet mode)
+    python -m tools.optimization.initial_guess_benchmark
+    
+    # Run with verbose output
+    python -m tools.optimization.initial_guess_benchmark -v
+    
+    # Run with very verbose output (show all timing details)
+    python -m tools.optimization.initial_guess_benchmark -vv
+    
+    # Quick test with fewer events
+    python -m tools.optimization.initial_guess_benchmark -n 1000 -t 10
+    
+    # Skip plotting
+    python -m tools.optimization.initial_guess_benchmark --no-plots
+        """
+    )
+    
+    # Verbosity control
+    parser.add_argument('-v', '--verbose', action='count', default=0,
+                        help='Increase verbosity (use -v for verbose, -vv for very verbose)')
+    parser.add_argument('-q', '--quiet', action='store_true',
+                        help='Quiet mode - minimal output')
+    
+    # Configuration parameters
+    parser.add_argument('-c', '--config', type=str, default=None,
+                        help='Path to detector configuration file')
+    parser.add_argument('-d', '--detector', type=str, default='Cylinder',
+                        choices=['Cylinder', 'Sphere', 'Box'],
+                        help='Detector type (default: Cylinder)')
+    parser.add_argument('-n', '--n-events', type=int, default=10000,
+                        help='Number of events to generate for database (default: 10000)')
+    parser.add_argument('-t', '--n-test-events', type=int, default=100,
+                        help='Number of test events to evaluate (default: 100)')
+    parser.add_argument('--photons', type=int, default=100_000,
+                        help='Number of photons per event (default: 100000)')
+    parser.add_argument('-K', type=int, default=6,
+                        help='Number of nearest neighbors for sensor mapping (default: 6)')
+    parser.add_argument('--seed', type=int, default=42,
+                        help='Random seed (default: 42)')
+    
+    # Output control
+    parser.add_argument('--no-plots', action='store_true',
+                        help='Skip generating histogram plots')
+    parser.add_argument('--output-dir', type=str, default=None,
+                        help='Output directory for results (default: output/benchmarks)')
+    
+    args = parser.parse_args()
+    
+    # Set verbosity level
+    if args.quiet:
+        verbosity = 0
+    else:
+        verbosity = args.verbose
+    
     # Configuration
-    config_file = base_dir_path() + 'config/IWCD_geom_config.json'
-    detector_type = 'Cylinder'
-    n_events = 10000  # Number of events to generate and store
-    n_test_events = 100  # Number of test events to evaluate
-    n_photons = 100_000
-    K = 6
-    seed = 42
+    config_file = args.config or (base_dir_path() + 'config/IWCD_geom_config.json')
+    detector_type = args.detector
+    n_events = args.n_events
+    n_test_events = args.n_test_events
+    n_photons = args.photons
+    K = args.K
+    seed = args.seed
     
     # Create output directory
-    output_dir = os.path.join(base_dir_path(), 'output', 'benchmarks')
+    output_dir = args.output_dir or os.path.join(base_dir_path(), 'output', 'benchmarks')
     os.makedirs(output_dir, exist_ok=True)
     
     # Define cache file path
     cache_file = os.path.join(output_dir, f'events_cache_{detector_type}_{n_events}_{n_photons}_{K}_{seed}.pkl')
     
-    print(f"Event Loss Benchmark")
-    print(f"===================")
-    print(f"Configuration:")
-    print(f"  Detector: {detector_type}")
-    print(f"  Number of events: {n_events}")
-    print(f"  Photons per event: {n_photons}")
-    print(f"  K nearest neighbors: {K}")
-    print()
+    if verbosity >= 1:
+        print(f"Initial Guess Benchmark")
+        print(f"======================")
+        print(f"Configuration:")
+        print(f"  Detector: {detector_type}")
+        print(f"  Number of events: {n_events}")
+        print(f"  Photons per event: {n_photons}")
+        print(f"  K nearest neighbors: {K}")
+        print(f"  Test events: {n_test_events}")
+        print(f"  Verbosity level: {verbosity}")
+        print()
     
     # Load or generate events
     events_data, detector_bounds, simulate_event, sensor_params, sensor_positions = load_or_generate_events(
         cache_file, n_events, config_file, detector_type, n_photons, K, seed
     )
     
-    print(f"\nTesting reconstruction on {n_test_events} events...")
+    if verbosity >= 1:
+        print(f"\nTesting reconstruction on {n_test_events} events...")
     
     # Initialize aggregated results
     n_values = [1, 2, 3, 5, 10, 20, 30, 50, 100]
@@ -596,21 +736,24 @@ def main():
     
     # Test multiple events
     for test_idx in range(n_test_events):
-        print(f"\rProcessing test event {test_idx + 1}/{n_test_events}", end='', flush=True)
+        if verbosity >= 1:
+            print(f"\rProcessing test event {test_idx + 1}/{n_test_events}", end='', flush=True)
         
         # Use different seed for each test event
         test_seed = seed + 100000 + test_idx
         
         # Benchmark loss calculation for this test event
+        # Use verbose=True only if verbosity >= 2
         losses, timing_info, new_event_params = benchmark_loss_calculation(
-            events_data, detector_bounds, simulate_event, sensor_params, seed=test_seed, verbose=False
+            events_data, detector_bounds, simulate_event, sensor_params, 
+            seed=test_seed, verbose=(verbosity >= 2)
         )
         
         aggregated_results['timing_info'].append(timing_info['time_per_event'])
         
         # Analyze reconstruction accuracy for this event
         analysis_results = analyze_best_events_reconstruction(
-            events_data, losses, new_event_params, max_n=100, verbose=False
+            events_data, losses, new_event_params, max_n=100, verbose=(verbosity >= 2)
         )
         
         # Aggregate results
@@ -620,9 +763,10 @@ def main():
                 aggregated_results['direction_errors'][n].append(analysis_results['direction_errors'][i])
                 aggregated_results['energy_errors'][n].append(analysis_results['energy_errors'][i])
     
-    print()  # New line after progress indicator
+    if verbosity >= 1:
+        print()  # New line after progress indicator
     
-    # Calculate and display aggregated statistics
+    # Always show final results
     print(f"\n{'='*80}")
     print(f"AGGREGATED RESULTS OVER {n_test_events} TEST EVENTS")
     print(f"{'='*80}")
@@ -661,8 +805,11 @@ def main():
     
     print(f"\nOptimal N for position reconstruction: {best_n_for_position} (mean error = {best_position_error:.3f} m)")
     
-    # Plot error histograms and identify outliers
-    outlier_info = plot_error_histograms(aggregated_results, output_dir, n_test_events)
+    # Plot error histograms and identify outliers (unless disabled)
+    if not args.no_plots:
+        outlier_info = plot_error_histograms(aggregated_results, output_dir, n_test_events)
+    else:
+        outlier_info = None
     
     # Save aggregated results
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
