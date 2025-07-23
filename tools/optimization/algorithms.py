@@ -241,8 +241,134 @@ def spherical_lerp(dir1, dir2, alpha):
     return result / jnp.linalg.norm(result)
 
 
-def create_initial_population(key, detector_bounds, population_size, loss_function, true_charges, true_times):
+def create_initial_population_database(config_file, detector_type, K, true_charges, true_times, population_size, N=3, verbose=False, events_cache=None):
+    """
+    Create initial population using pre-generated event database.
     
+    When numerical_iterations > 0, use N=3 averaging to find best candidates.
+    Otherwise, use single best match.
+    
+    Args:
+        config_file: Detector configuration file
+        detector_type: Type of detector
+        K: Number of nearest neighbors
+        true_charges: True event charges
+        true_times: True event times
+        population_size: Size of population to return
+        N: Number of best matches to average (use 3 when numerical_iterations=0)
+        verbose: Print debug info
+        
+    Returns:
+        list: Population of best candidates
+    """
+    from .event_cache import load_event_cache
+    from .losses import initial_guess_loss
+    from jax import vmap
+    
+    # Use pre-loaded cache if provided, otherwise load it
+    if events_cache is not None:
+        events_data = events_cache
+        if verbose:
+            print(f"Using pre-loaded cache")
+    else:
+        events_data = load_event_cache(config_file, detector_type, K, verbose=True)
+    
+    # Pre-stacked arrays for efficient computation
+    all_charges_stacked = events_data['all_charges']
+    all_times_stacked = events_data['all_times']
+    metadata = events_data['metadata']
+    
+    if verbose:
+        print(f"Using database with {len(metadata)} events for initial guess")
+    
+    # Vectorized loss calculation
+    # We want to vmap over the cached events (axis 0 of stacked arrays)
+    calculate_losses_vmap = vmap(
+        lambda cached_charges, cached_times: initial_guess_loss(cached_charges, true_charges, cached_times, true_times),
+        in_axes=(0, 0)
+    )
+    
+    # Calculate losses
+    losses = calculate_losses_vmap(all_charges_stacked, all_times_stacked)
+    
+    # Get indices of N best matches
+    best_indices = jnp.argsort(losses)[:N]
+    
+    if N > 1:
+        # Average the N best candidates
+        best_positions = jnp.array([metadata[int(idx)]['position'] for idx in best_indices])
+        best_directions = jnp.array([metadata[int(idx)]['direction'] for idx in best_indices])
+        best_energies = jnp.array([metadata[int(idx)]['energy'] for idx in best_indices])
+        
+        avg_position = jnp.mean(best_positions, axis=0)
+        avg_direction = jnp.mean(best_directions, axis=0)
+        avg_direction = avg_direction / jnp.linalg.norm(avg_direction)  # Normalize
+        avg_energy = jnp.mean(best_energies)
+        
+        if verbose:
+            print(f"Averaged top {N} matches:")
+            print(f"  Position: [{avg_position[0]:.3f}, {avg_position[1]:.3f}, {avg_position[2]:.3f}]")
+            print(f"  Direction: [{avg_direction[0]:.3f}, {avg_direction[1]:.3f}, {avg_direction[2]:.3f}]")
+            print(f"  Energy: {avg_energy:.1f} MeV")
+            print(f"  Average loss: {jnp.mean(losses[best_indices]):.6f}")
+    else:
+        # Use single best match
+        best_idx = int(best_indices[0])
+        avg_position = jnp.array(metadata[best_idx]['position'])
+        avg_direction = jnp.array(metadata[best_idx]['direction'])
+        avg_energy = metadata[best_idx]['energy']
+        
+        if verbose:
+            print(f"Using single best match (index {best_idx}):")
+            print(f"  Position: [{avg_position[0]:.3f}, {avg_position[1]:.3f}, {avg_position[2]:.3f}]")
+            print(f"  Direction: [{avg_direction[0]:.3f}, {avg_direction[1]:.3f}, {avg_direction[2]:.3f}]")
+            print(f"  Energy: {avg_energy:.1f} MeV")
+            print(f"  Loss: {losses[best_idx]:.6f}")
+    
+    # Create population around the best candidate(s)
+    population = []
+    
+    # Add the best candidate itself
+    best_candidate = {
+        'position': avg_position,
+        'direction': avg_direction,
+        'energy': avg_energy,
+        'loss': float(jnp.mean(losses[best_indices]))
+    }
+    population.append(best_candidate)
+    
+    # Fill remaining population slots with variations around the best candidate
+    # Use the existing sample_around_point function for consistency
+    key = jax.random.PRNGKey(12345)
+    
+    for _ in range(population_size - 1):
+        key, subkey = jax.random.split(key)
+        
+        # Sample around the best candidate with small variations
+        new_position, new_direction, new_energy = sample_around_point(
+            subkey, avg_position, avg_direction, avg_energy,
+            position_std=0.1,    # Small variations
+            direction_std=5.0,   # Small angular variations (degrees)
+            energy_std=25.0,     # Small energy variations
+            detector_bounds=events_data['config']['detector_bounds']
+        )
+        
+        candidate = {
+            'position': new_position,
+            'direction': new_direction,
+            'energy': new_energy,
+            'loss': float('inf')  # Will be evaluated in evolve_population
+        }
+        population.append(candidate)
+    
+    return population
+
+
+def create_initial_population(key, detector_bounds, population_size, loss_function, true_charges, true_times):
+    """
+    Legacy function for backwards compatibility.
+    This generates a random population as before.
+    """
     population = []
     for i in range(population_size*10):
         key, subkey = jax.random.split(key)
@@ -353,7 +479,7 @@ def evolve_population(key, iterations, population, n_elite, loss_function, detec
 
         # Calculate errors for best candidate this iteration (for both verbose and history tracking)
         best_pos_error = float(jnp.linalg.norm(population[0]['position'] - true_position))
-        best_dir_error = float(jnp.arccos(jnp.clip(jnp.abs(jnp.dot(population[0]['direction'], true_direction)), 0, 1)))
+        best_dir_error = float(jnp.arccos(jnp.clip(jnp.dot(population[0]['direction'], true_direction), -1, 1)))
         best_dir_error_deg = np.degrees(best_dir_error)
         best_energy_error = float(jnp.abs(population[0]['energy'] - true_energy))
         
@@ -398,8 +524,8 @@ def evolve_population(key, iterations, population, n_elite, loss_function, detec
                 # Use fraction of largest dimension
                 detector_scale = max(detector_bounds['x']/2, detector_bounds['y']/2, detector_bounds['z']/2)
             
-            position_std = detector_scale * 0.5
-            direction_std = 45.0 * (1 - 0.7 * progress)
+            position_std = detector_scale * 0.1
+            direction_std = 10.0 * (1 - 0.7 * progress)
             energy_std = 50.0
 
             i = 0
@@ -649,7 +775,7 @@ def gradient_optimization(
         
         direction = spherical_to_cartesian(direction_angles[0], direction_angles[1])
         pos_error = float(jnp.linalg.norm(position - true_position))
-        dir_error = float(jnp.arccos(jnp.clip(jnp.abs(jnp.dot(direction, true_direction)), 0, 1)))
+        dir_error = float(jnp.arccos(jnp.clip(jnp.dot(direction, true_direction), -1, 1)))
         dir_error_deg = dir_error * 180.0 / jnp.pi
         energy_error = float(jnp.abs(energy - true_energy))
         

@@ -39,7 +39,7 @@ def create_event_visualization(true_position, true_direction, true_energy, best_
             detector_name = config_basename.replace('.json', '')
     
     # Filter hits with charge > 5
-    min_charge = 0.5
+    min_charge = 5.
     significant_mask = true_charges > min_charge
     hit_positions = sensor_positions[significant_mask]
     hit_charges_vis = true_charges[significant_mask]
@@ -546,21 +546,33 @@ def create_hybrid_convergence_plot(event_histories, figures_dir=None, config_fil
         
         # Position error plot (ax2)
         numerical_pos = history['position_error']
-        gradient_pos = history.get('gradient_position_error', [numerical_pos[-1]] * n_gradient_iterations)
+        # Handle case where numerical_pos is empty (when numerical_iterations=0)
+        if len(numerical_pos) > 0:
+            gradient_pos = history.get('gradient_position_error', [numerical_pos[-1]] * n_gradient_iterations)
+        else:
+            gradient_pos = history.get('gradient_position_error', [])
         
         ax2.plot(numerical_evals, numerical_pos, 'b-', alpha=0.3, linewidth=1)
         ax2.plot(gradient_evals, gradient_pos, 'g-', alpha=0.3, linewidth=1)
         
         # Direction error plot (ax3)
         numerical_dir = history['direction_error']
-        gradient_dir = history.get('gradient_direction_error', [numerical_dir[-1]] * n_gradient_iterations)
+        # Handle case where numerical_dir is empty (when numerical_iterations=0)
+        if len(numerical_dir) > 0:
+            gradient_dir = history.get('gradient_direction_error', [numerical_dir[-1]] * n_gradient_iterations)
+        else:
+            gradient_dir = history.get('gradient_direction_error', [])
         
         ax3.plot(numerical_evals, numerical_dir, 'b-', alpha=0.3, linewidth=1)
         ax3.plot(gradient_evals, gradient_dir, 'g-', alpha=0.3, linewidth=1)
         
         # Energy error plot (ax4)
         numerical_energy = history['energy_error']
-        gradient_energy = history.get('gradient_energy_error', [numerical_energy[-1]] * n_gradient_iterations)
+        # Handle case where numerical_energy is empty (when numerical_iterations=0)
+        if len(numerical_energy) > 0:
+            gradient_energy = history.get('gradient_energy_error', [numerical_energy[-1]] * n_gradient_iterations)
+        else:
+            gradient_energy = history.get('gradient_energy_error', [])
         
         ax4.plot(numerical_evals, numerical_energy, 'b-', alpha=0.3, linewidth=1)
         ax4.plot(gradient_evals, gradient_energy, 'g-', alpha=0.3, linewidth=1)

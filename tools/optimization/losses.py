@@ -110,11 +110,7 @@ def _compute_spatial_loss(simulated_charge, simulated_time, true_charge, true_ti
     L_charge = L_charge_s2t + L_charge_t2s
     L_time = (L_time_s2t + L_time_t2s) * lambda_time
     
-    # Adding new term to avoid degenerate solution in numerical search
-    L_delta_charge = jax.lax.stop_gradient(jnp.sum((jnp.abs(simulated_charge - true_charge))))*10000/scale_factor
-    L_delta_time = jax.lax.stop_gradient(jnp.sum((jnp.abs(sim_time_centered - true_time_centered))))*10000/scale_factor
-    
-    return (L_charge + L_time) / scale_factor + L_delta_charge #+ L_delta_time
+    return (L_charge + L_time) / scale_factor
 
 
 def energy_loss_fn(params, true_event_data, simulate_event, sensor_params, sensor_positions, event_key):
@@ -304,3 +300,39 @@ def compute_gradients(params, true_charges, true_times, energy_grad_fn, spatial_
     #                 energy_grad=energy_grad, spatial_grad=spatial_grad)
     
     return energy_grad, spatial_grad, float(energy_loss_val), float(spatial_loss_val)
+
+
+@jit
+def initial_guess_loss(simulated_charges, true_charges, simulated_times, true_times):
+    """
+    Calculate loss between simulated and true charges and times for initial guess selection.
+    This is used to find best matching events in the pre-generated database.
+    
+    Loss = sum(|simulated_charge - true_charge|) + sum(|simulated_time_centered - true_time_centered|)
+    
+    Args:
+        simulated_charges: Charges from simulated event
+        true_charges: Charges from true event
+        simulated_times: Times from simulated event
+        true_times: Times from true event
+    
+    Returns:
+        loss: Scalar loss value combining charge and time differences
+    """
+    eps = 1e-8
+    threshold = 1e-8
+    
+    # Compute mean times for active locations
+    true_active_mask = true_charges > threshold
+    sim_active_mask = simulated_charges > threshold
+
+    true_mean_time = jnp.sum(true_times * true_active_mask) / (jnp.sum(true_active_mask) + eps)
+    sim_mean_time = jnp.sum(simulated_times * sim_active_mask) / (jnp.sum(sim_active_mask) + eps)
+
+    true_time_centered = jnp.where(true_active_mask, true_times - true_mean_time, 0.0)
+    sim_time_centered = jnp.where(sim_active_mask, simulated_times - sim_mean_time, 0.0)
+
+    L_delta_charge = jnp.sum(jnp.abs(simulated_charges - true_charges))
+    L_delta_time = jnp.sum(jnp.abs(sim_time_centered - true_time_centered))
+
+    return L_delta_charge + L_delta_time
