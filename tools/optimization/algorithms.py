@@ -305,6 +305,7 @@ def create_initial_population(key, detector_bounds, population_size, loss_functi
         population[-1]['loss'] = float(loss)
 
     population.sort(key=lambda x: x['loss'])
+    print('BEST LOSS: ', population[0])
 
     return population[:population_size]
 
@@ -397,8 +398,8 @@ def evolve_population(key, iterations, population, n_elite, loss_function, detec
                 # Use fraction of largest dimension
                 detector_scale = max(detector_bounds['x']/2, detector_bounds['y']/2, detector_bounds['z']/2)
             
-            position_std = detector_scale * 0.2
-            direction_std = 45.0 #45.0 * (1 - 0.7 * progress)
+            position_std = detector_scale * 0.5
+            direction_std = 45.0 * (1 - 0.7 * progress)
             energy_std = 50.0
 
             i = 0
