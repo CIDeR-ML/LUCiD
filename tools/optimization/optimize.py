@@ -60,15 +60,15 @@ def get_detector_bounds(detector):
         raise ValueError(f"Unknown detector type: {detector_type}")
 
 
-def generate_random_event_params(key, detector_bounds):
+def generate_random_event_params(key, detector_bounds, fraction=0.7):
     """Generate random event parameters based on detector geometry."""
     if detector_bounds['type'] == 'cylinder':
-        r_vert = jax.random.uniform(key, shape=(), minval=0, maxval=detector_bounds['r'] * 0.7)
+        r_vert = jax.random.uniform(key, shape=(), minval=0, maxval=detector_bounds['r'] * fraction)
         key, _ = jax.random.split(key)
         theta = jax.random.uniform(key, shape=(), minval=0, maxval=2*jnp.pi)
         key, _ = jax.random.split(key)
-        z_vert = jax.random.uniform(key, shape=(), minval=-detector_bounds['H']/2 * 0.7, 
-                                   maxval=detector_bounds['H']/2 * 0.7)
+        z_vert = jax.random.uniform(key, shape=(), minval=-detector_bounds['H']/2 * fraction, 
+                                   maxval=detector_bounds['H']/2 * fraction)
         position = jnp.array([r_vert * jnp.cos(theta), r_vert * jnp.sin(theta), z_vert])
         
     elif detector_bounds['type'] == 'sphere':
@@ -78,7 +78,7 @@ def generate_random_event_params(key, detector_bounds):
         key, _ = jax.random.split(key)
         phi = jax.random.uniform(key, shape=(), minval=0, maxval=2*jnp.pi)
         
-        r = detector_bounds['r'] * 0.7 * jnp.cbrt(u)
+        r = detector_bounds['r'] * fraction * jnp.cbrt(u)
         sin_theta = jnp.sqrt(1 - cos_theta**2)
         position = jnp.array([r * sin_theta * jnp.cos(phi), 
                              r * sin_theta * jnp.sin(phi), 
@@ -88,10 +88,10 @@ def generate_random_event_params(key, detector_bounds):
         position = jax.random.uniform(key, shape=(3,), 
                                     minval=jnp.array([-detector_bounds['x']/2, 
                                                      -detector_bounds['y']/2, 
-                                                     -detector_bounds['z']/2]) * 0.7,
+                                                     -detector_bounds['z']/2]) * fraction,
                                     maxval=jnp.array([detector_bounds['x']/2, 
                                                      detector_bounds['y']/2, 
-                                                     detector_bounds['z']/2]) * 0.7)
+                                                     detector_bounds['z']/2]) * fraction)
     
     # Random direction
     key, _ = jax.random.split(key)
