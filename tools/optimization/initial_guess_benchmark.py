@@ -91,7 +91,7 @@ def generate_and_store_events(n_events, config_file, detector_type, n_photons, K
         key, subkey = jax.random.split(key)
         event_key = jax.random.PRNGKey(seed + i * 1000)
         
-        position, direction, energy = generate_random_event_params(event_key, detector_bounds)
+        position, direction, energy = generate_random_event_params(event_key, detector_bounds, fraction=0.9)
         
         # Convert to simulation format
         theta = jnp.arccos(jnp.clip(direction[2], -1.0, 1.0))
@@ -114,7 +114,7 @@ def generate_and_store_events(n_events, config_file, detector_type, n_photons, K
             'event_index': i
         })
         
-        if (i + 1) % 10 == 0:
+        if (i + 1) % 1000 == 0:
             elapsed = time.time() - generation_start
             rate = (i + 1) / elapsed
             print(f"  Generated {i + 1}/{n_events} events ({rate:.1f} events/sec)")
@@ -140,19 +140,38 @@ def generate_and_store_events(n_events, config_file, detector_type, n_photons, K
     return events_data, detector_bounds, simulate_event, sensor_params, sensor_positions
 
 @jit
-def calculate_loss_to_event(simulated_charges, true_charges):
+def calculate_loss_to_event(simulated_charges, true_charges, simulated_time, true_time):
     """
-    Calculate loss between simulated and true charges.
-    Loss = sum(|simulated_charge - true_charge|)
+    Calculate loss between simulated and true charges and times.
+    Loss = sum(|simulated_charge - true_charge|) + sum(|simulated_time - true_time|)
     
     Args:
         simulated_charges: Charges from simulated event
         true_charges: Charges from true event
+        simulated_time: Times from simulated event
+        true_time: Times from true event
     
     Returns:
         loss: Scalar loss value
     """
-    return jnp.sum(jnp.abs(simulated_charges - true_charges))
+
+    eps = 1e-8
+    threshold = 1e-8
+    
+    # Compute mean times for active locations
+    true_active_mask = true_charges > threshold
+    sim_active_mask = simulated_charges > threshold
+
+    true_mean_time = jnp.sum(true_time * true_active_mask) / (jnp.sum(true_active_mask) + eps)
+    sim_mean_time = jnp.sum(simulated_time * sim_active_mask) / (jnp.sum(sim_active_mask) + eps)
+
+    true_time_centered = jnp.where(true_active_mask, true_time - true_mean_time, 0.0)
+    sim_time_centered = jnp.where(sim_active_mask, simulated_time - sim_mean_time, 0.0)
+
+    L_delta_charge = jnp.sum((jnp.abs(simulated_charges - true_charges)))
+    L_delta_time = jnp.sum((jnp.abs(sim_time_centered - true_time_centered)))
+
+    return L_delta_charge*L_delta_time
 
 
 def benchmark_loss_calculation(events_data, detector_bounds, simulate_event, sensor_params, seed=12345, verbose=True):
@@ -183,7 +202,7 @@ def benchmark_loss_calculation(events_data, detector_bounds, simulate_event, sen
     
     # Generate new event
     key = jax.random.PRNGKey(seed)
-    new_position, new_direction, new_energy = generate_random_event_params(key, detector_bounds)
+    new_position, new_direction, new_energy = generate_random_event_params(key, detector_bounds, fraction=0.7)
     
     # Convert to simulation format
     theta = jnp.arccos(jnp.clip(new_direction[2], -1.0, 1.0))
@@ -207,18 +226,20 @@ def benchmark_loss_calculation(events_data, detector_bounds, simulate_event, sen
         print(f"  Energy: {new_energy:.1f} MeV")
         print(f"  Active sensors: {jnp.sum(new_charges > 0)}")
     
-    # Get pre-stacked charges (no loading needed!)
+    # Get pre-stacked charges and times (no loading needed!)
     if verbose:
-        print(f"\nUsing pre-stacked charges from {len(events_data['metadata'])} events...")
+        print(f"\nUsing pre-stacked charges and times from {len(events_data['metadata'])} events...")
     
     load_start = time.time()
     # Check if we have the old format or new format
     if isinstance(events_data, dict) and 'all_charges' in events_data:
         # New format - already stacked
         all_true_charges = events_data['all_charges']
+        all_true_times = events_data['all_times']
     else:
         # Old format - need to stack (for backward compatibility)
         all_true_charges = jnp.stack([event['charges'] for event in events_data])
+        all_true_times = jnp.stack([event['times'] for event in events_data])
     load_time = time.time() - load_start
     timing_breakdown['data_loading'] = load_time
     
@@ -227,12 +248,12 @@ def benchmark_loss_calculation(events_data, detector_bounds, simulate_event, sen
         print("Calculating losses...")
     
     # Create a vectorized version of the loss function
-    # vmap over the second argument (true_charges), keeping new_charges fixed
-    calculate_losses_vmap = vmap(lambda true_charges: calculate_loss_to_event(new_charges, true_charges))
+    # vmap over the second and fourth arguments (true_charges, true_times), keeping new data fixed
+    calculate_losses_vmap = vmap(lambda true_charges, true_times: calculate_loss_to_event(new_charges, true_charges, new_times, true_times))
     
     # Warm-up JIT compilation
     warmup_start = time.time()
-    _ = calculate_losses_vmap(all_true_charges[:1])
+    _ = calculate_losses_vmap(all_true_charges[:1], all_true_times[:1])
     warmup_time = time.time() - warmup_start
     timing_breakdown['jit_warmup'] = warmup_time
     
@@ -240,7 +261,7 @@ def benchmark_loss_calculation(events_data, detector_bounds, simulate_event, sen
     start_time = time.time()
     
     # Calculate all losses at once using vmap
-    losses = calculate_losses_vmap(all_true_charges)
+    losses = calculate_losses_vmap(all_true_charges, all_true_times)
     
     end_time = time.time()
     calculation_time = end_time - start_time
@@ -278,7 +299,7 @@ def benchmark_loss_calculation(events_data, detector_bounds, simulate_event, sen
             
             # Calculate errors
             position_error = float(jnp.linalg.norm(new_position - event['true_position']))
-            direction_error = float(jnp.arccos(jnp.clip(jnp.abs(jnp.dot(new_direction, event['true_direction'])), 0, 1)))
+            direction_error = float(jnp.arccos(jnp.clip(jnp.dot(new_direction, event['true_direction']), -1, 1)))
             direction_error_deg = np.degrees(direction_error)
             energy_error = float(jnp.abs(new_energy - event['true_energy']))
             energy_error_percent = (energy_error / float(event['true_energy'])) * 100
@@ -341,7 +362,10 @@ def analyze_best_events_reconstruction(events_data, losses, new_event_params, ma
         'position_errors': [],
         'direction_errors': [],
         'energy_errors': [],
-        'mean_losses': []
+        'mean_losses': [],
+        'reconstructed_positions': [],
+        'reconstructed_directions': [],
+        'reconstructed_energies': []
     }
     
     if verbose:
@@ -370,7 +394,7 @@ def analyze_best_events_reconstruction(events_data, losses, new_event_params, ma
         
         # Calculate errors
         position_error = float(jnp.linalg.norm(avg_position - true_position))
-        direction_error = float(jnp.arccos(jnp.clip(jnp.abs(jnp.dot(avg_direction, true_direction)), 0, 1)))
+        direction_error = float(jnp.arccos(jnp.clip(jnp.dot(avg_direction, true_direction), -1, 1)))
         direction_error_deg = np.degrees(direction_error)
         energy_error = float(jnp.abs(avg_energy - true_energy))
         mean_loss = float(jnp.mean(losses[best_indices]))
@@ -380,6 +404,9 @@ def analyze_best_events_reconstruction(events_data, losses, new_event_params, ma
         analysis_results['direction_errors'].append(direction_error_deg)
         analysis_results['energy_errors'].append(energy_error)
         analysis_results['mean_losses'].append(mean_loss)
+        analysis_results['reconstructed_positions'].append(avg_position)
+        analysis_results['reconstructed_directions'].append(avg_direction)
+        analysis_results['reconstructed_energies'].append(avg_energy)
         
         if verbose:
             print(f"{n:>5} | {position_error:>13.3f} | {direction_error_deg:>13.1f} | {energy_error:>18.1f} | {mean_loss:>10.3f}")
@@ -406,7 +433,7 @@ def plot_error_histograms(aggregated_results, output_dir, n_test_events):
         n_test_events: Number of test events
     """
     # Create figure with subplots for different N values
-    selected_n_values = [1, 5, 10, 20, 50]  # Select a subset for visualization
+    selected_n_values = [1, 2, 3, 5, 10]  # Select a subset for visualization
     fig, axes = plt.subplots(3, len(selected_n_values), figsize=(20, 12))
     fig.suptitle(f'Reconstruction Error Distributions for {n_test_events} Test Events', fontsize=16)
     
@@ -461,7 +488,7 @@ def plot_error_histograms(aggregated_results, output_dir, n_test_events):
     
     # Save plot
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    plot_filename = f'error_distributions_{n_test_events}tests_{timestamp}.png'
+    plot_filename = f'error_distributions_{n_test_events}tests.png'
     plot_filepath = os.path.join(output_dir, plot_filename)
     plt.savefig(plot_filepath, dpi=300, bbox_inches='tight')
     plt.close()
@@ -511,7 +538,7 @@ def plot_error_histograms(aggregated_results, output_dir, n_test_events):
     plt.tight_layout()
     
     # Save box plot
-    boxplot_filename = f'error_boxplots_{n_test_events}tests_{timestamp}.png'
+    boxplot_filename = f'error_boxplots_{n_test_events}tests.png'
     boxplot_filepath = os.path.join(output_dir, boxplot_filename)
     plt.savefig(boxplot_filepath, dpi=300, bbox_inches='tight')
     plt.close()
@@ -524,7 +551,7 @@ def plot_error_histograms(aggregated_results, output_dir, n_test_events):
 def save_results(events_data, losses, timing_info, analysis_results, output_dir):
     """Save results to file for later analysis."""
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename = f"event_loss_benchmark_{timestamp}.pkl"
+    filename = f"event_loss_benchmark.pkl"
     filepath = os.path.join(output_dir, filename)
     
     results = {
@@ -663,12 +690,12 @@ Examples:
     parser.add_argument('-d', '--detector', type=str, default='Cylinder',
                         choices=['Cylinder', 'Sphere', 'Box'],
                         help='Detector type (default: Cylinder)')
-    parser.add_argument('-n', '--n-events', type=int, default=10000,
-                        help='Number of events to generate for database (default: 10000)')
+    parser.add_argument('-n', '--n-events', type=int, default=50000,
+                        help='Number of events to generate for database (default: 50000)')
     parser.add_argument('-t', '--n-test-events', type=int, default=100,
                         help='Number of test events to evaluate (default: 100)')
-    parser.add_argument('--photons', type=int, default=100_000,
-                        help='Number of photons per event (default: 100000)')
+    parser.add_argument('--photons', type=int, default=1_000_000,
+                        help='Number of photons per event (default: 1_000_000)')
     parser.add_argument('-K', type=int, default=6,
                         help='Number of nearest neighbors for sensor mapping (default: 6)')
     parser.add_argument('--seed', type=int, default=42,
@@ -689,7 +716,7 @@ Examples:
         verbosity = args.verbose
     
     # Configuration
-    config_file = args.config or (base_dir_path() + 'config/IWCD_geom_config.json')
+    config_file = args.config or (base_dir_path() + 'config/HK_geom_config.json')
     detector_type = args.detector
     n_events = args.n_events
     n_test_events = args.n_test_events
@@ -731,7 +758,8 @@ Examples:
         'position_errors': {n: [] for n in n_values},
         'direction_errors': {n: [] for n in n_values},
         'energy_errors': {n: [] for n in n_values},
-        'timing_info': []
+        'timing_info': [],
+        'event_data': []  # Store event data for outlier analysis with N=5
     }
     
     # Test multiple events
@@ -762,6 +790,22 @@ Examples:
                 aggregated_results['position_errors'][n].append(analysis_results['position_errors'][i])
                 aggregated_results['direction_errors'][n].append(analysis_results['direction_errors'][i])
                 aggregated_results['energy_errors'][n].append(analysis_results['energy_errors'][i])
+        
+        # Store event data for N=5 outlier analysis
+        if 5 in analysis_results['n_values']:
+            n5_idx = analysis_results['n_values'].index(5)
+            aggregated_results['event_data'].append({
+                'test_idx': test_idx,
+                'true_position': np.array(new_event_params['position']),
+                'true_direction': np.array(new_event_params['direction']), 
+                'true_energy': float(new_event_params['energy']),
+                'reco_position': np.array(analysis_results['reconstructed_positions'][n5_idx]),
+                'reco_direction': np.array(analysis_results['reconstructed_directions'][n5_idx]),
+                'reco_energy': float(analysis_results['reconstructed_energies'][n5_idx]),
+                'position_error': analysis_results['position_errors'][n5_idx],
+                'direction_error': analysis_results['direction_errors'][n5_idx],
+                'energy_error': analysis_results['energy_errors'][n5_idx]
+            })
     
     if verbosity >= 1:
         print()  # New line after progress indicator
@@ -805,6 +849,44 @@ Examples:
     
     print(f"\nOptimal N for position reconstruction: {best_n_for_position} (mean error = {best_position_error:.3f} m)")
     
+    # Analyze outliers for N=5
+    if 5 in aggregated_results['direction_errors'] and aggregated_results['event_data']:
+        print(f"\nAnalyzing outliers for N=5 reconstruction...")
+        
+        # Calculate outlier threshold (3 standard deviations) using direction errors
+        dir_errors = np.array(aggregated_results['direction_errors'][5])
+        mean_dir_error = np.mean(dir_errors)
+        std_dir_error = np.std(dir_errors)
+        outlier_threshold = mean_dir_error + 3 * std_dir_error
+        
+        # Find outlier events
+        outlier_events = []
+        for event_data in aggregated_results['event_data']:
+            if event_data['direction_error'] > outlier_threshold:
+                outlier_events.append(event_data)
+        
+        print(f"Found {len(outlier_events)} outlier events (direction error > {outlier_threshold:.1f}°)")
+        print(f"Outlier threshold: mean + 3σ = {mean_dir_error:.1f}° + 3×{std_dir_error:.1f}° = {outlier_threshold:.1f}°")
+        
+        # Print details for each outlier
+        if outlier_events:
+            print(f"\nOutlier Event Details (N=5 reconstruction):")
+            print("=" * 100)
+            for i, event in enumerate(outlier_events):
+                print(f"\nEvent {event['test_idx']} (outlier #{i+1}):")
+                print(f"  Position Error: {event['position_error']:.3f} m")
+                print(f"  Direction Error: {event['direction_error']:.1f}°")
+                print(f"  Energy Error: {event['energy_error']:.1f} MeV")
+                print(f"  True Parameters:")
+                print(f"    Position: [{event['true_position'][0]:.3f}, {event['true_position'][1]:.3f}, {event['true_position'][2]:.3f}] m")
+                print(f"    Direction: [{event['true_direction'][0]:.3f}, {event['true_direction'][1]:.3f}, {event['true_direction'][2]:.3f}]")
+                print(f"    Energy: {event['true_energy']:.1f} MeV")
+                print(f"  Reconstructed Parameters (N=5 average):")
+                print(f"    Position: [{event['reco_position'][0]:.3f}, {event['reco_position'][1]:.3f}, {event['reco_position'][2]:.3f}] m")
+                print(f"    Direction: [{event['reco_direction'][0]:.3f}, {event['reco_direction'][1]:.3f}, {event['reco_direction'][2]:.3f}]")
+                print(f"    Energy: {event['reco_energy']:.1f} MeV")
+    else:
+        print('NO OUTLIER DATA')
     # Plot error histograms and identify outliers (unless disabled)
     if not args.no_plots:
         outlier_info = plot_error_histograms(aggregated_results, output_dir, n_test_events)
@@ -813,7 +895,7 @@ Examples:
     
     # Save aggregated results
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename = f"event_loss_benchmark_aggregated_{n_test_events}tests_{timestamp}.pkl"
+    filename = f"event_loss_benchmark_aggregated_{n_test_events}tests.pkl"
     filepath = os.path.join(output_dir, filename)
     
     with open(filepath, 'wb') as f:
