@@ -26,6 +26,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..'))
 from tools.utils import base_dir_path, generate_random_params, spherical_to_cartesian
 from tools.geometry import generate_detector
 from tools.simulation import setup_event_simulator
+from tools.generate import read_photon_data_from_photonsim
 from tools.optimization.algorithms import create_initial_population, create_initial_population_database, evolve_population, gradient_optimization
 from tools.optimization.utils import (
     create_event_visualization, print_summary_statistics,
@@ -259,7 +260,10 @@ def run_optimization(
     seed,
     color_by,
     event_seeds,
-    crossover_rate=0.3
+    crossover_rate=0.3,
+    data_mode=False,
+    data_file='data/water/muon/50_data_like_events.root',
+    cache_dir=None
 ):
     """
     Main optimization function
@@ -298,7 +302,7 @@ def run_optimization(
         print("Loading event cache for initial guess system...")
     
     from tools.optimization.event_cache import load_event_cache
-    events_cache = load_event_cache(config_file, detector_type, K, verbose=(verbose or n_events == 1))
+    events_cache = load_event_cache(config_file, detector_type, K, verbose=(verbose or n_events == 1), cache_dir=cache_dir)
     
     if verbose or n_events == 1:
         print(f"Loaded cache with {len(events_cache['metadata'])} events")
@@ -374,19 +378,71 @@ def run_optimization(
                 print(f"EVENT {event_idx + 1}/{actual_n_events}")
             print(f"{'='*80}")
         
-        # Generate TRUE event with deterministic seed based on event index
-        # This ensures that event_idx=3 always generates the same event
+            # Generate TRUE event - either prediction-like or data-like
         event_key = jax.random.PRNGKey(seed + event_idx * 1000)        
-        true_position, true_direction, true_energy = generate_random_event_params(event_key, detector_bounds)
-
-        # Convert direction to spherical angles
-        true_theta = jnp.arccos(jnp.clip(true_direction[2], -1.0, 1.0))
-        true_phi = jnp.arctan2(true_direction[1], true_direction[0])
-        true_direction_angles = jnp.array([true_theta, true_phi])
         
-        # Simulate true event
-        true_particle_params = (true_energy, true_position, true_direction_angles)
-        true_charges, true_times = simulate_event(true_particle_params, sensor_params, event_key)
+        if data_mode:
+            # Data-like events from ROOT file
+            if verbose or n_events == 1:
+                print(f"Loading data-like event from ROOT file: {data_file}")
+            
+            # Setup data simulator with is_data=True and temperature=0.0
+            data_simulate_event = setup_event_simulator(
+                json_filename=config_file,
+                max_sensors_per_cell=4,
+                n_photons=n_photons,
+                temperature=0.0,  # Zero temperature for data mode
+                K=K,
+                detector_type=detector_type,
+                is_data=True  # Use data simulator
+            )
+            
+            # Read ROOT file to get number of entries dynamically
+            import uproot
+            with uproot.open(data_file) as file:
+                tree = file['OpticalPhotons']
+                n_entries = tree.num_entries
+            
+            if verbose or n_events == 1:
+                print(f"ROOT file has {n_entries} entries")
+            
+            # Generate random entry index based on event_idx for reproducibility
+            entry_key = jax.random.PRNGKey(seed + event_idx * 1000 + 500)
+            entry_idx = int(jax.random.randint(entry_key, shape=(), minval=0, maxval=n_entries))
+            
+            if verbose or n_events == 1:
+                print(f"Loading entry {entry_idx} from ROOT file")
+            
+            # Load photon data from ROOT file
+            photon_data = read_photon_data_from_photonsim(data_file, entry_idx)
+            
+            # Add the missing 'N' field that the data simulator expects
+            photon_data['N'] = len(photon_data['photon_origins'])
+            
+            # Generate true event using data simulator
+            # For data simulator, we need particle_params, detector_params, key, photon_data
+            # Generate track parameters that we want to simulate
+            true_position, true_direction, _ = generate_random_event_params(event_key, detector_bounds)
+            true_energy = photon_data['energy']  # Energy from ROOT file
+            
+            # Create particle_params tuple for data simulator
+            true_particle_params = (true_energy, true_position, true_direction)
+            
+            # Call data simulator with correct argument order
+            true_charges, true_times = data_simulate_event(true_particle_params, sensor_params, event_key, photon_data)
+            
+        else:
+            # Prediction-like events (original closure test)
+            true_position, true_direction, true_energy = generate_random_event_params(event_key, detector_bounds)
+            
+            # Convert direction to spherical angles
+            true_theta = jnp.arccos(jnp.clip(true_direction[2], -1.0, 1.0))
+            true_phi = jnp.arctan2(true_direction[1], true_direction[0])
+            true_direction_angles = jnp.array([true_theta, true_phi])
+            
+            # Simulate true event using standard simulator
+            true_particle_params = (true_energy, true_position, true_direction_angles)
+            true_charges, true_times = simulate_event(true_particle_params, sensor_params, event_key)
         
         if verbose or n_events == 1:
             print(f"True event parameters:")
@@ -666,6 +722,16 @@ Examples:
     parser.add_argument('--K', type=int, default=6,
                         help='Number of nearest neighbors for sensor mapping (default: 2)')
     
+    # Data mode parameters
+    parser.add_argument('--data-mode', action='store_true',
+                        help='Use data-like events from ROOT file instead of prediction-like events')
+    parser.add_argument('--data-file', type=str, default='data/water/muon/50_data_like_events.root',
+                        help='Path to ROOT file containing data-like events (default: data/water/muon/50_data_like_events.root)')
+    
+    # Cache parameters
+    parser.add_argument('--cache-dir', type=str, default=None,
+                        help='External directory path for event cache storage (default: data/events_cache/)')
+    
     # Output and verbosity
     parser.add_argument('--verbose', '-v', action='store_true',
                         help='Show detailed progress during iterations')
@@ -730,7 +796,10 @@ Examples:
         seed=args.seed,
         color_by=args.color_by,
         event_seeds=event_seeds,
-        crossover_rate=args.crossover_rate
+        crossover_rate=args.crossover_rate,
+        data_mode=args.data_mode,
+        data_file=args.data_file,
+        cache_dir=args.cache_dir
     )
     
     return results

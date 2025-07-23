@@ -30,7 +30,7 @@ from tools.optimization.event_cache import load_event_cache, generate_and_cache_
 from tools.optimization.losses import initial_guess_loss
 
 
-def generate_and_store_events(n_events, config_file, detector_type, n_photons, K, seed=42):
+def generate_and_store_events(n_events, config_file, detector_type, n_photons, K, seed=42, cache_dir=None):
     """
     Load or generate N events using the shared cache system.
     
@@ -56,7 +56,7 @@ def generate_and_store_events(n_events, config_file, detector_type, n_photons, K
     print(f"Loading events from cache (using up to {n_events} events)...")
     
     # Load events from cache
-    events_data = load_event_cache(config_file, detector_type, K, verbose=True)
+    events_data = load_event_cache(config_file, detector_type, K, verbose=True, cache_dir=cache_dir)
     
     # Limit to requested number of events if smaller than cache
     if n_events < len(events_data['metadata']):
@@ -499,7 +499,7 @@ def save_results(events_data, losses, timing_info, analysis_results, output_dir)
     print(f"\nResults saved to: {filepath}")
 
 
-def load_or_generate_events(cache_file, n_events, config_file, detector_type, n_photons, K, seed):
+def load_or_generate_events(cache_file, n_events, config_file, detector_type, n_photons, K, seed, cache_dir=None):
     """
     Load events from cache if available, otherwise generate new ones.
     
@@ -564,7 +564,7 @@ def load_or_generate_events(cache_file, n_events, config_file, detector_type, n_
             print(f"Error loading cache: {e}, regenerating events...")
     
     # Generate new events
-    result = generate_and_store_events(n_events, config_file, detector_type, n_photons, K, seed)
+    result = generate_and_store_events(n_events, config_file, detector_type, n_photons, K, seed, cache_dir)
     events_data, detector_bounds, simulate_event, sensor_params, sensor_positions = result
     
     # Save only the pickleable data to cache
@@ -638,6 +638,10 @@ Examples:
     parser.add_argument('--output-dir', type=str, default=None,
                         help='Output directory for results (default: output/benchmarks)')
     
+    # Cache parameters
+    parser.add_argument('--cache-dir', type=str, default=None,
+                        help='External directory path for event cache storage (default: data/events_cache/)')
+    
     args = parser.parse_args()
     
     # Set verbosity level
@@ -676,7 +680,7 @@ Examples:
     
     # Load or generate events
     events_data, detector_bounds, simulate_event, sensor_params, sensor_positions = load_or_generate_events(
-        cache_file, n_events, config_file, detector_type, n_photons, K, seed
+        cache_file, n_events, config_file, detector_type, n_photons, K, seed, args.cache_dir
     )
     
     if verbosity >= 1:

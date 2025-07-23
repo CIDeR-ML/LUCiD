@@ -18,7 +18,7 @@ from ..geometry import generate_detector
 from ..simulation import setup_event_simulator
 
 
-def get_cache_filepath(config_file, detector_type, K):
+def get_cache_filepath(config_file, detector_type, K, cache_dir=None):
     """
     Get the cache file path based on detector configuration.
     
@@ -26,6 +26,7 @@ def get_cache_filepath(config_file, detector_type, K):
         config_file: Path to detector configuration file
         detector_type: Type of detector (e.g., 'Cylinder')
         K: Number of nearest neighbors used in simulation
+        cache_dir: Custom cache directory path (optional)
         
     Returns:
         tuple: (cache_dir, cache_filepath)
@@ -40,7 +41,8 @@ def get_cache_filepath(config_file, detector_type, K):
             detector_name = config_basename.replace('.json', '')
     
     # Create cache directory
-    cache_dir = os.path.join(base_dir_path(), 'data', 'events_cache')
+    if cache_dir is None:
+        cache_dir = os.path.join(base_dir_path(), 'data', 'events_cache')
     os.makedirs(cache_dir, exist_ok=True)
     
     # Create cache filename with detector name (not type)
@@ -129,7 +131,7 @@ def generate_random_event_params(key, detector_bounds, fraction=0.7):
 
 
 def generate_and_cache_events(config_file, detector_type, n_events=50000, n_photons=500000, 
-                             K=6, seed=12345, verbose=True):
+                             K=6, seed=12345, verbose=True, cache_dir=None):
     """
     Generate or load cached event database.
     
@@ -150,7 +152,7 @@ def generate_and_cache_events(config_file, detector_type, n_events=50000, n_phot
     n_photons = 500000
     
     # Get cache filepath
-    cache_dir, cache_filepath = get_cache_filepath(config_file, detector_type, K)
+    cache_dir, cache_filepath = get_cache_filepath(config_file, detector_type, K, cache_dir)
     
     # Check if cache exists
     if os.path.exists(cache_filepath):
@@ -267,7 +269,7 @@ def generate_and_cache_events(config_file, detector_type, n_events=50000, n_phot
     return events_data
 
 
-def load_event_cache(config_file, detector_type, K, verbose=True):
+def load_event_cache(config_file, detector_type, K, verbose=True, cache_dir=None):
     """
     Load event cache, generating if necessary.
     
@@ -280,5 +282,6 @@ def load_event_cache(config_file, detector_type, K, verbose=True):
         n_photons=500000,    # Hardcoded
         K=K,
         seed=12345,
-        verbose=verbose
+        verbose=verbose,
+        cache_dir=cache_dir
     )
