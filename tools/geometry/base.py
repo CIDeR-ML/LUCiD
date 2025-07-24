@@ -205,16 +205,8 @@ class Detector(ABC):
             
             # Calculate surface normals for sorted sensors
             normals_sorted = calculate_surface_normals(self, sorted_indices)
-            
-            # Normalize color values for colorscale mapping (0 to 1)
-            if len(plot_color_values_sorted) > 1:
-                color_min, color_max = plot_color_values_sorted.min(), plot_color_values_sorted.max()
-                if color_max > color_min:
-                    color_normalized = (plot_color_values_sorted - color_min) / (color_max - color_min)
-                else:
-                    color_normalized = np.ones_like(plot_color_values_sorted) * 0.5
-            else:
-                color_normalized = np.array([0.5])
+            color_min, color_max = plot_color_values_sorted.min(), plot_color_values_sorted.max()
+            color_normalized = plot_color_values_sorted
             
             # Create individual disc meshes for hit sensors
             all_vertices = []
