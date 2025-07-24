@@ -466,7 +466,7 @@ def jax_rotate_vector(vector, axis, angle):
     dot_product = jnp.dot(axis, vector) * (1 - cos_angle)
     return cos_angle * vector + sin_angle * cross_product + dot_product * axis
 
-def make_hits_simulation(flat_weights, flat_indices, flat_times, num_detectors, beta=100.1):
+def make_hits_simulation(flat_weights, flat_indices, flat_times, num_detectors, beta=0.1):
     """
     Compute detector charges and aligned times using softmin first-photon timing.
     
@@ -744,8 +744,7 @@ def create_event_simulator(detector, propagate_photons, Nphot, NUM_SENSORS, sens
     def tot_n_photons_normalization(x):
         """ Translates unphysical SIREN output units into number of physical photons.
             the numbers are calculated using photonsim_n_photon_integral notebook. """
-        return 12.281581*x -781.924247
-
+        return 6.341467*x -608.142421
     # New photonsim forward
     @jax.jit
     def _simulation_without_data(particle_params, detector_params, key, grid_data, model_params):
