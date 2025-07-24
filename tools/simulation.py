@@ -699,7 +699,7 @@ def create_event_simulator(detector, propagate_photons, Nphot, NUM_SENSORS, sens
 
         # Transform photons from ROOT coordinate system
         original_track_dir = jnp.array([0.0, 0.0, 1.0])
-        photon_origins = photon_data['photon_origins'] / 1000.0  # mm to m
+        photon_origins = photon_data['photon_origins'] / 100.0  # mm to m
         photon_directions = photon_data['photon_directions']
 
         # Calculate rotation to align with track direction
