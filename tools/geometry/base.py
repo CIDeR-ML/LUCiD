@@ -268,8 +268,8 @@ class Detector(ABC):
                             ),
                             tickfont=dict(color=colorbar_color),
                             thickness=20,
-                            len=0.7,
-                            x=1.02
+                            len=0.5,
+                            x=1.0
                         )
                     )
                 
@@ -349,10 +349,38 @@ class Detector(ABC):
             showlegend=False,
             paper_bgcolor=paper_color,
             plot_bgcolor=paper_color,   
-            margin=dict(l=0, r=margin_right, t=0, b=0)
+            margin=dict(l=0, r=margin_right+0, t=0, b=0)
         )
         
-        fig.show()
+        # Save figure if filename is provided
+        if figname:
+            fig.write_image(figname, width=2000, height=2000, scale=2)
+            # fig.write_image(figname, width=200, height=200, scale=2)
+            # import tempfile
+            # from PIL import Image
+            
+            # # Save to temporary PNG first for cropping
+            # temp_png = tempfile.NamedTemporaryFile(suffix='.png', delete=False)
+            # fig.write_image(temp_png.name, width=1000, height=800, scale=2)
+            
+            # # Crop the image (remove 20% from each side)
+            # with Image.open(temp_png.name) as img:
+            #     width, height = img.size
+            #     crop_x = int(width * 0.0)
+            #     crop_y = int(height * 0.0)
+            #     cropped = img.crop((crop_x, crop_y, width - crop_x, height - crop_y))
+                
+            #     # Save in the requested format
+            #     if figname.lower().endswith('.pdf'):
+            #         cropped.save(figname, format='PDF', resolution=300)
+            #     else:
+            #         cropped.save(figname)
+            
+            # # Clean up temp file
+            # import os
+            # os.unlink(temp_png.name)
+        else:
+            fig.show()
 
     def _add_detector_surface(self, fig, surface_color='gray'):
         """Add detector surface to the plot"""
