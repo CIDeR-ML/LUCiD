@@ -743,9 +743,9 @@ def create_event_simulator(detector, propagate_photons, Nphot, NUM_SENSORS, sens
     @jax.jit
     def tot_n_photons_normalization(x):
         """ Translates unphysical SIREN output units into number of physical photons.
-            the numbers are calculated using photonsim_n_photon_integral notebook. """
-        return 6.341467*x -608.142421
-    # New photonsim forward
+            the numbers are calculated using validate.py """
+        return 8.909502*x -340.832815
+    
     @jax.jit
     def _simulation_without_data(particle_params, detector_params, key, grid_data, model_params):
         """Simulate events using SIREN model for photon generation."""
