@@ -218,7 +218,7 @@ class PhotonSimTrainer:
         # Save trained model
         print("\n💾 Saving trained model...")
         model_save_dir = self.output_dir / 'trained_model'
-        model_name = f'photonsim_siren_{self.material}_{self.particle}'
+        model_name = f'photonsim_siren'
         weights_path, metadata_path = trainer.save_trained_model(model_save_dir, model_name)
         
         print(f"✅ Model saved successfully!")

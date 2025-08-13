@@ -11,6 +11,7 @@ Supports different particle types and materials with automatic path detection.
 
 Usage:
     python validate.py cutoff [--material MATERIAL] [--particle PARTICLE] [--energy ENERGY] [--thresholds THRESHOLDS] [--output OUTPUT]
+    python validate.py valid-points [--material MATERIAL] [--particle PARTICLE] [--energies ENERGIES] [--thresholds THRESHOLDS] [--output OUTPUT]
     python validate.py integral [--material MATERIAL] [--particle PARTICLE] [--energies ENERGIES] [--nphot NPHOT] [--output OUTPUT]
     python validate.py rays [--material MATERIAL] [--particle PARTICLE] [--energies ENERGIES] [--nphot NPHOT] [--output OUTPUT]
     python validate.py all [--material MATERIAL] [--particle PARTICLE] [--output OUTPUT]
@@ -18,6 +19,9 @@ Usage:
 Examples:
     # Default water/muon
     python validate.py cutoff --energy 500 --thresholds 1,2,4,8
+    
+    # Valid points vs energy analysis
+    python validate.py valid-points --energies 200,2000,20 --thresholds 1,2,4,8
     
     # Specific material/particle
     python validate.py integral --material ice --particle electron --energies 200,500,800
@@ -139,7 +143,7 @@ class PhotonSimValidator:
         photon_weights = self.photonsim_predictor.predict_batch(evaluation_grid)
         return np.array(photon_weights).reshape(len(angle_bins), len(distance_bins))
     
-    def cutoff_study(self, energy=500, thresholds=None, output_dir=None):
+    def cutoff_study(self, energy=1716, thresholds=None, output_dir=None):
         """
         Perform cut-off threshold analysis.
         
@@ -229,7 +233,7 @@ class PhotonSimValidator:
         print(f"\n=== N-Photon Integral Analysis ===")
         
         if energies is None:
-            energies = np.linspace(100, 1000, 20)
+            energies = np.linspace(100, 1900, 20)
         
         print(f"Analyzing {len(energies)} energies from {energies[0]} to {energies[-1]} MeV")
         print(f"N-photons: {nphot:,}")
@@ -353,6 +357,134 @@ class PhotonSimValidator:
         angles = jnp.arccos(jnp.clip(cos_theta, -1.0, 1.0))
         return angles
     
+    def valid_points_vs_energy(self, energies=None, thresholds=None, output_dir=None):
+        """
+        Analyze valid points vs energy for multiple thresholds with linear fits.
+        
+        Args:
+            energies: List of energies to analyze
+            thresholds: List of thresholds to test
+            output_dir: Directory to save results
+        """
+        print(f"\n=== Valid Points vs Energy Analysis ===")
+        
+        if energies is None:
+            energies = np.linspace(200, 2000, 20)
+        
+        if thresholds is None:
+            thresholds = [1, 2, 4, 8]
+        
+        print(f"Analyzing {len(energies)} energies from {energies[0]} to {energies[-1]} MeV")
+        print(f"Thresholds: {thresholds}")
+        
+        # Create analysis grid
+        n_angle_bins = 500
+        n_distance_bins = 500
+        angle_bins = np.linspace(self.angle_min, self.angle_max, n_angle_bins)
+        distance_bins = np.linspace(self.distance_min, self.distance_max, n_distance_bins)
+        
+        # Store results for each threshold
+        threshold_results = {}
+        
+        for threshold in thresholds:
+            valid_counts = []
+            
+            print(f"\nProcessing threshold {threshold}:")
+            for i, energy in enumerate(energies):
+                # Evaluate model at given energy
+                reco_value = self.evaluate_photonsim_grid(energy, angle_bins, distance_bins)
+                
+                # Apply threshold and count valid points
+                masked_values = jnp.where(reco_value > threshold, reco_value, 0)
+                valid_count = np.sum(masked_values > 0)
+                valid_counts.append(valid_count)
+                
+                if (i + 1) % 5 == 0:
+                    print(f"  Processed {i + 1}/{len(energies)} energies")
+            
+            # Perform linear fit
+            slope, intercept, r_value, p_value, std_err = stats.linregress(energies, valid_counts)
+            fit_line = slope * np.array(energies) + intercept
+            
+            threshold_results[threshold] = {
+                'valid_counts': valid_counts,
+                'slope': slope,
+                'intercept': intercept,
+                'r_squared': r_value**2,
+                'std_err': std_err,
+                'fit_line': fit_line
+            }
+            
+            print(f"  Linear Fit Results for threshold {threshold}:")
+            print(f"    Equation: y = {slope:.2f}x + {intercept:.2f}")
+            print(f"    R-squared: {r_value**2:.4f}")
+            print(f"    Slope std error: {std_err:.2f}")
+        
+        # Create visualization
+        fig, axes = plt.subplots(2, 2, figsize=(12, 10))
+        axes = axes.ravel()
+        
+        colors = ['blue', 'green', 'red', 'purple']
+        
+        for idx, threshold in enumerate(thresholds[:4]):  # Plot up to 4 thresholds
+            results = threshold_results[threshold]
+            
+            # Plot data and fit
+            axes[idx].scatter(energies, results['valid_counts'], 
+                            color=colors[idx], alpha=0.6, s=30, label='Data')
+            axes[idx].plot(energies, results['fit_line'], 
+                         color=colors[idx], linestyle='--', linewidth=2,
+                         label=f'Fit: y = {results["slope"]:.2f}x + {results["intercept"]:.2f}')
+            
+            axes[idx].set_xlabel('Energy (MeV)', fontsize=11)
+            axes[idx].set_ylabel('Valid Points', fontsize=11)
+            axes[idx].set_title(f'Threshold = {threshold}\nR² = {results["r_squared"]:.4f}', fontsize=12)
+            axes[idx].legend(loc='upper left')
+            axes[idx].grid(True, alpha=0.3)
+            
+            # Add text with fit parameters
+            text_str = f'Slope: {results["slope"]:.2f} ± {results["std_err"]:.2f}'
+            axes[idx].text(0.95, 0.05, text_str, transform=axes[idx].transAxes,
+                         fontsize=10, ha='right', va='bottom',
+                         bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+        
+        fig.suptitle('Valid Points vs Energy for Different Thresholds', fontsize=14, fontweight='bold')
+        fig.tight_layout()
+        
+        # Print summary of all fits
+        print("\n" + "="*60)
+        print("SUMMARY OF LINEAR FITS")
+        print("="*60)
+        for threshold in thresholds:
+            results = threshold_results[threshold]
+            print(f"\nThreshold {threshold}:")
+            print(f"  Equation: y = {results['slope']:.2f}x + {results['intercept']:.2f}")
+            print(f"  R-squared: {results['r_squared']:.4f}")
+            print(f"  Slope: {results['slope']:.2f} ± {results['std_err']:.2f}")
+            print(f"  Valid points range: {min(results['valid_counts']):,} - {max(results['valid_counts']):,}")
+        
+        if output_dir:
+            os.makedirs(output_dir, exist_ok=True)
+            fig.savefig(f"{output_dir}/valid_points_vs_energy.png", dpi=150, bbox_inches='tight')
+            print(f"\nPlot saved to: {output_dir}/valid_points_vs_energy.png")
+        
+        plt.show()
+        
+        return {
+            'energies': energies.tolist(),
+            'thresholds': thresholds,
+            'results': {
+                threshold: {
+                    'valid_counts': threshold_results[threshold]['valid_counts'],
+                    'slope': threshold_results[threshold]['slope'],
+                    'intercept': threshold_results[threshold]['intercept'],
+                    'r_squared': threshold_results[threshold]['r_squared'],
+                    'std_err': threshold_results[threshold]['std_err']
+                }
+                for threshold in thresholds
+            }
+        }
+    
     def rays_validation(self, energies=None, nphot=1000000, output_dir=None):
         """
         Perform ray generation validation.
@@ -365,7 +497,7 @@ class PhotonSimValidator:
         print(f"\n=== Ray Generation Validation ===")
         
         if energies is None:
-            energies = np.linspace(200, 1000, 20)
+            energies = np.linspace(200, 2000, 20)
         
         print(f"Analyzing {len(energies)} energies from {energies[0]} to {energies[-1]} MeV")
         print(f"N-photons: {nphot:,}")
@@ -375,7 +507,7 @@ class PhotonSimValidator:
         cols = 5
         rows = (n_energies + cols - 1) // cols
         
-        fig, axes = plt.subplots(rows, cols, figsize=(12, 2*rows))
+        fig, axes = plt.subplots(rows, cols, figsize=(12, 4*rows))
         if rows == 1:
             axes = axes.reshape(1, -1)
         
@@ -401,7 +533,7 @@ class PhotonSimValidator:
             angles = self.calculate_opening_angles(ray_vectors, self.direction)
             
             # Calculate statistics
-            num_seeds = jnp.int32(energy * 11.136 - 720.3)
+            num_seeds = jnp.int32(energy * 7.73 -251.65)
             total_weight = float(jnp.sum(photon_weights))
             
             results['statistics'][energy] = {
@@ -415,10 +547,10 @@ class PhotonSimValidator:
             h = axes[row, col].hist2d(
                 ranges, angles,
                 weights=photon_weights.squeeze(),
-                bins=[100, 100],
-                cmap='gnuplot',
-                norm=LogNorm(vmin=1),
-                range=[[0, 6], [0, 3.14]]
+                bins=[500, 500],
+                cmap='viridis',
+                norm=LogNorm(vmin=3.5), # our num_seeds fit should be cutting at ~4
+                range=[[0, 10], [0, 3.14]]
             )
             
             axes[row, col].set_ylabel('Angle (radians)')
@@ -457,6 +589,9 @@ class PhotonSimValidator:
         # Run cut-off study
         cutoff_results = self.cutoff_study(output_dir=output_dir)
         
+        # Run valid points vs energy analysis
+        valid_points_results = self.valid_points_vs_energy(output_dir=output_dir)
+        
         # Run integral analysis
         integral_results = self.integral_analysis(output_dir=output_dir)
         
@@ -468,6 +603,7 @@ class PhotonSimValidator:
         
         return {
             'cutoff_study': cutoff_results,
+            'valid_points_vs_energy': valid_points_results,
             'integral_analysis': integral_results,
             'rays_validation': rays_results
         }
@@ -501,11 +637,21 @@ def main():
     cutoff_parser.add_argument('--save', action='store_true', help='Save results to output directory')
     cutoff_parser.add_argument('--notebook-mode', action='store_true', help='Force notebook mode for plot display')
     
+    # Valid points vs energy analysis
+    valid_points_parser = subparsers.add_parser('valid-points', help='Run valid points vs energy analysis')
+    valid_points_parser.add_argument('--material', type=str, help='Material type (overrides global setting)')
+    valid_points_parser.add_argument('--particle', type=str, help='Particle type (overrides global setting)')
+    valid_points_parser.add_argument('--energies', type=str, help='Comma-separated energies or range (e.g., 200,2000,20)')
+    valid_points_parser.add_argument('--thresholds', type=str, default='1,2,4,8', help='Comma-separated thresholds')
+    valid_points_parser.add_argument('--output', type=str, help='Output directory')
+    valid_points_parser.add_argument('--save', action='store_true', help='Save results to output directory')
+    valid_points_parser.add_argument('--notebook-mode', action='store_true', help='Force notebook mode for plot display')
+    
     # Integral analysis
     integral_parser = subparsers.add_parser('integral', help='Run n-photon integral analysis')
     integral_parser.add_argument('--material', type=str, help='Material type (overrides global setting)')
     integral_parser.add_argument('--particle', type=str, help='Particle type (overrides global setting)')
-    integral_parser.add_argument('--energies', type=str, help='Comma-separated energies or range (e.g., 100,1000,100)')
+    integral_parser.add_argument('--energies', type=str, help='Comma-separated energies or range (e.g., 100,2000,100)')
     integral_parser.add_argument('--nphot', type=int, default=1000000, help='Number of photons')
     integral_parser.add_argument('--output', type=str, help='Output directory')
     integral_parser.add_argument('--save', action='store_true', help='Save results to output directory')
@@ -515,7 +661,7 @@ def main():
     rays_parser = subparsers.add_parser('rays', help='Run ray generation validation')
     rays_parser.add_argument('--material', type=str, help='Material type (overrides global setting)')
     rays_parser.add_argument('--particle', type=str, help='Particle type (overrides global setting)')
-    rays_parser.add_argument('--energies', type=str, help='Comma-separated energies or range (e.g., 200,1000,20)')
+    rays_parser.add_argument('--energies', type=str, help='Comma-separated energies or range (e.g., 200,2000,20)')
     rays_parser.add_argument('--nphot', type=int, default=1000000, help='Number of photons')
     rays_parser.add_argument('--output', type=str, help='Output directory')
     rays_parser.add_argument('--save', action='store_true', help='Save results to output directory')
@@ -576,6 +722,14 @@ def main():
         thresholds = [float(x) for x in args.thresholds.split(',')]
         output_dir = get_output_dir(args)
         validator.cutoff_study(energy=args.energy, thresholds=thresholds, output_dir=output_dir)
+    
+    elif args.command == 'valid-points':
+        energies = None
+        if args.energies:
+            energies = parse_energies(args.energies)
+        thresholds = [float(x) for x in args.thresholds.split(',')]
+        output_dir = get_output_dir(args)
+        validator.valid_points_vs_energy(energies=energies, thresholds=thresholds, output_dir=output_dir)
     
     elif args.command == 'integral':
         energies = None
