@@ -34,7 +34,9 @@ def _compute_energy_loss(simulated_charge, true_charge):
     total_true_charge = jnp.sum(true_charge)
     total_sim_charge = jnp.sum(simulated_charge)
     eps = 1e-8
+
     return jnp.abs(jnp.log(total_sim_charge / (total_true_charge + eps)))*0.1
+
 
 @jit
 def _compute_spatial_loss(simulated_charge, simulated_time, true_charge, true_time, 
@@ -66,18 +68,6 @@ def _compute_spatial_loss(simulated_charge, simulated_time, true_charge, true_ti
     float
         Spatial loss value
     """
-    eps = 1e-8
-    threshold = 1e-8
-    
-    # Compute mean times for active locations
-    true_active_mask = true_charge > threshold
-    sim_active_mask = simulated_charge > threshold
-
-    true_mean_time = jnp.sum(true_time * true_active_mask) / (jnp.sum(true_active_mask) + eps)
-    sim_mean_time = jnp.sum(simulated_time * sim_active_mask) / (jnp.sum(sim_active_mask) + eps)
-
-    true_time_centered = jnp.where(true_active_mask, true_time - true_mean_time, 0.0)
-    sim_time_centered = jnp.where(sim_active_mask, simulated_time - sim_mean_time, 0.0)
 
     # Distance matrix and soft assignments
     N = sensor_positions.shape[0]
@@ -85,32 +75,149 @@ def _compute_spatial_loss(simulated_charge, simulated_time, true_charge, true_ti
         sensor_positions[:, None, :] - sensor_positions[None, :, :], axis=-1
     )
 
+    eps = 1e-8
+    threshold = 40.00001
+
+    sim_active_mask = simulated_charge > threshold
+    true_active_mask = true_charge > threshold
+
     # Soft assignments Sim -> True
     logits_s2t = -dist / tau
     w_s2t = jax.nn.softmax(logits_s2t, axis=1)
-    
     Q_sim_per_true = w_s2t.T @ simulated_charge
-    qt_sim_per_true = w_s2t.T @ (simulated_charge * sim_time_centered)
-    avg_sim_time_per_true = qt_sim_per_true / (Q_sim_per_true + eps)
-    
-    L_charge_s2t = jnp.sum(jnp.abs(Q_sim_per_true - true_charge))
-    L_time_s2t = jnp.sum(jnp.abs(avg_sim_time_per_true - true_time_centered) * Q_sim_per_true)
-    
+
     # Soft assignments True -> Sim
     logits_t2s = -dist.T / tau
     w_t2s = jax.nn.softmax(logits_t2s, axis=1)
-    
     Q_true_per_sim = w_t2s.T @ true_charge
-    qt_true_per_sim = w_t2s.T @ (true_charge * true_time_centered)
-    avg_true_time_per_sim = qt_true_per_sim / (Q_true_per_sim + eps)
+
+    L_charge_s2t = jnp.sum(jnp.abs(Q_sim_per_true - true_charge))#*true_active_mask)
+    L_charge_t2s = jnp.sum(jnp.abs(Q_true_per_sim - simulated_charge))#*sim_active_mask)
+
+    L_charge = (L_charge_s2t + L_charge_t2s)
+
+    true_mean_time = 0.#jnp.sum(true_time * true_active_mask) / (jnp.sum(true_active_mask) + eps)
+    sim_mean_time = 0.#jnp.sum(simulated_time * sim_active_mask) / (jnp.sum(sim_active_mask) + eps)
+
+    true_time_centered = true_time - true_mean_time 
+    sim_time_centered = simulated_time - sim_mean_time
+
+    T_sim_per_true = w_s2t.T @ sim_time_centered
+    T_true_per_sim = w_t2s.T @ true_time_centered
     
-    L_charge_t2s = jnp.sum(jnp.abs(Q_true_per_sim - simulated_charge))
-    L_time_t2s = jnp.sum(jnp.abs(avg_true_time_per_sim - sim_time_centered) * Q_true_per_sim)
-    
-    L_charge = L_charge_s2t + L_charge_t2s
-    L_time = (L_time_s2t + L_time_t2s) * lambda_time
-    
+    L_time_s2t = jnp.sum(jnp.abs(T_sim_per_true - true_time_centered)*true_active_mask)
+    L_time_t2s = jnp.sum(jnp.abs(T_true_per_sim - sim_time_centered)*sim_active_mask)
+
+    L_time = (L_time_s2t+L_time_s2t)*50.
+
+    # jax.debug.print("L_charge: {}", L_charge)
+    # jax.debug.print("L_time: {}", L_time)
+
     return (L_charge + L_time) / scale_factor
+
+
+
+
+
+# @jit
+# def _compute_spatial_loss(simulated_charge, simulated_time, true_charge, true_time, 
+#                          sensor_positions, tau, lambda_time, scale_factor=1e4):
+#     """
+#     Core spatial loss computation using soft assignments.
+    
+#     Parameters:
+#     -----------
+#     simulated_charge : jnp.ndarray
+#         Simulated charge values
+#     simulated_time : jnp.ndarray
+#         Simulated time values
+#     true_charge : jnp.ndarray
+#         True charge values
+#     true_time : jnp.ndarray
+#         True time values
+#     sensor_positions : jnp.ndarray
+#         Array of sensor positions
+#     tau : float
+#         Temperature parameter for softmax assignments
+#     lambda_time : float
+#         Weight for time loss component
+#     scale_factor : float
+#         Scale factor for final loss value
+        
+#     Returns:
+#     --------
+#     float
+#         Spatial loss value
+#     """
+
+#     # Distance matrix and soft assignments
+#     N = sensor_positions.shape[0]
+#     dist = jnp.linalg.norm(
+#         sensor_positions[:, None, :] - sensor_positions[None, :, :], axis=-1
+#     )
+
+#     # Soft assignments Sim -> True
+#     logits_s2t = -dist / tau
+#     w_s2t = jax.nn.softmax(logits_s2t, axis=1)
+#     Q_sim_per_true = w_s2t.T @ simulated_charge
+
+#     # Soft assignments True -> Sim
+#     logits_t2s = -dist.T / tau
+#     w_t2s = jax.nn.softmax(logits_t2s, axis=1)
+#     Q_true_per_sim = w_t2s.T @ true_charge
+
+#     L_charge_s2t = jnp.sum(jnp.abs(Q_sim_per_true - true_charge))
+#     L_charge_t2s = jnp.sum(jnp.abs(Q_true_per_sim - simulated_charge))
+
+#     L_charge = (L_charge_s2t + L_charge_t2s)
+
+#     eps = 1e-8
+#     threshold = 2.00001
+
+#     sim_active_mask = simulated_charge > threshold
+#     true_active_mask = true_charge > threshold
+
+#     true_mean_time = jnp.sum(true_time * true_active_mask) / (jnp.sum(true_active_mask) + eps)
+#     sim_mean_time = jnp.sum(simulated_time * sim_active_mask) / (jnp.sum(sim_active_mask) + eps)
+
+#     L_time = jnp.abs(true_mean_time-sim_mean_time)*1000
+
+#     T_sim_per_true = w_s2t.T @ sim_time_centered
+#     T_true_per_sim = w_t2s.T @ true_time_centered
+    
+#     L_time_s2t = jnp.sum(jnp.abs(T_sim_per_true - true_time_centered)*true_active_mask)
+#     #L_time_t2s = jnp.sum(jnp.abs(T_sim_per_true - true_time_centered)*sim_active_mask)
+
+#     jax.debug.print("Delta_t: {}", true_mean_time-sim_mean_time)
+
+#     L_time = jnp.abs(true_mean_time-sim_mean_time)*L_time_s2t
+
+#     # true_time_centered = true_time - true_mean_time # jnp.where(true_active_mask, true_time - true_mean_time, 0.0)
+#     # sim_time_centered = simulated_time - sim_mean_time #jnp.where(sim_active_mask, simulated_time - sim_mean_time, 0.0)
+
+#     # T_sim_per_true = w_s2t.T @ sim_time_centered
+#     # T_true_per_sim = w_t2s.T @ true_time_centered
+
+#     # #L_time_s2t = jnp.sum(jnp.abs(T_sim_per_true - true_time_centered)*simulated_charge*sim_active_mask)
+#     # L_time_s2t = jnp.sum(jnp.abs(T_sim_per_true - true_time_centered)*true_active_mask)
+#     # L_time_t2s = jnp.sum(jnp.abs(T_sim_per_true - true_time_centered)*sim_active_mask)
+
+#     # #0.#jnp.sum(jnp.abs(T_true_per_sim - sim_time_centered))
+
+#     # L_time = (L_time_s2t + L_time_t2s) * lambda_time
+#     # # A = jnp.sum(w_t2s.T @ (true_time-simulated_time) * true_active_mask) / (jnp.sum(true_active_mask) + eps)
+#     # # #B = jnp.sum(w_s2t.T @ (simulated_time * sim_active_mask) / (jnp.sum(sim_active_mask) + eps)
+
+#     # # L_time = jnp.abs(A)#*100
+
+#     # #jax.debug.print("A: {}", A-B)
+#     jax.debug.print("L_charge: {}", L_charge)
+#     jax.debug.print("L_time: {}", L_time)
+
+#     return (L_charge + L_time) / scale_factor
+
+
+
 
 
 def energy_loss_fn(params, true_event_data, simulate_event, sensor_params, sensor_positions, event_key):
@@ -335,4 +442,4 @@ def initial_guess_loss(simulated_charges, true_charges, simulated_times, true_ti
     L_delta_charge = jnp.sum(jnp.abs(simulated_charges - true_charges))
     L_delta_time = jnp.sum(jnp.abs(sim_time_centered - true_time_centered))
 
-    return L_delta_charge + L_delta_time
+    return L_delta_charge #+ L_delta_time
