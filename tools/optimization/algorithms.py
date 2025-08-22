@@ -29,7 +29,7 @@ def apply_detector_bounds(position, energy, detector_bounds):
         Tuple of (bounded_position, bounded_energy)
     """
     # Apply energy bounds
-    bounded_energy = jnp.clip(energy, 250.0, 950.0)
+    bounded_energy = jnp.clip(energy, 190.0, 1980.0)
     
     # Apply position bounds based on detector type
     if detector_bounds is None:
@@ -414,12 +414,12 @@ def create_initial_population(key, detector_bounds, population_size, loss_functi
         
         # Random energy
         subkey, _ = jax.random.split(subkey)
-        energy = jax.random.uniform(subkey, shape=(), minval=250.0, maxval=900.0)
+        energy = 1000. #jax.random.uniform(subkey, shape=(), minval=250.0, maxval=1950.0)
         
         population.append({
             'position': position,
             'direction': direction,
-            'energy': 800.,
+            'energy': energy,
         })
 
         theta = jnp.arccos(population[-1]['direction'][2])

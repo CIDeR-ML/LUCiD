@@ -125,7 +125,7 @@ def generate_random_event_params(key, detector_bounds, fraction=0.7):
     
     # Random energy
     key, _ = jax.random.split(key)
-    energy = jax.random.uniform(key, shape=(), minval=250.0, maxval=850.0)
+    energy = 1000 #jax.random.uniform(key, shape=(), minval=500.0, maxval=1500.0)
     
     return position, direction, energy
 
@@ -149,7 +149,7 @@ def generate_and_cache_events(config_file, detector_type, n_events=50000, n_phot
     """
     # Hardcode event parameters as specified
     n_events = 50000
-    n_photons = 500000
+    n_photons = 1_000_000
     
     # Get cache filepath
     cache_dir, cache_filepath = get_cache_filepath(config_file, detector_type, K, cache_dir)
@@ -194,10 +194,10 @@ def generate_and_cache_events(config_file, detector_type, n_events=50000, n_phot
     
     # Sensor parameters
     sensor_params = (
-        jnp.array(50.0),    # scatter_length
-        jnp.array(0.1),     # reflection_rate
-        jnp.array(100.0),   # absorption_length
-        jnp.array(0.001)    # gumbel_softmax_temperature
+        jnp.array(100.0),    # scatter_length
+        jnp.array(0.1),      # reflection_rate
+        jnp.array(100.0),    # absorption_length
+        jnp.array(0.001)     # gumbel_softmax_temperature
     )
     
     # Generate events

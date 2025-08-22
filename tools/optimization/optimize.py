@@ -104,7 +104,7 @@ def generate_random_event_params(key, detector_bounds, fraction=0.7):
     
     # Random energy
     key, _ = jax.random.split(key)
-    energy = jax.random.uniform(key, shape=(), minval=250.0, maxval=850.0)
+    energy = 500. #jax.random.uniform(key, shape=(), minval=250.0, maxval=850.0)
     
     return position, direction, energy
 
@@ -309,10 +309,10 @@ def run_optimization(
     
     # Setup simulation parameters
     sensor_params = (
-        jnp.array(50.0),    # scatter_length
-        jnp.array(0.1),     # reflection_rate
-        jnp.array(100.0),   # absorption_length
-        jnp.array(0.001)    # gumbel_softmax_temperature
+        jnp.array(100.0),    # scatter_length
+        jnp.array(0.1),      # reflection_rate
+        jnp.array(100.0),    # absorption_length
+        jnp.array(0.001)     # gumbel_softmax_temperature
     )
     
     # Setup event simulator
@@ -713,7 +713,7 @@ Examples:
                         help='Scale factor for position gradients (default: 0.1)')
     parser.add_argument('--direction-scale', type=float, default=0.1,
                         help='Scale factor for direction gradients (default: 0.1)')
-    parser.add_argument('--patience', type=int, default=100,
+    parser.add_argument('--patience', type=int, default=1250,
                         help='Patience for learning rate reduction (default: 100)')
 
     # Simulation parameters
@@ -743,9 +743,9 @@ Examples:
                         help='Suppress iteration details (opposite of verbose)')
     parser.add_argument('--save-event-plots', action='store_true',
                         help='Save visualization plots for individual events')
-    parser.add_argument('--color-by', type=str, default='time',
+    parser.add_argument('--color-by', type=str, default='charge',
                         choices=['time', 'charge'],
-                        help='Color sensor hits by time or charge (default: time)')
+                        help='Color sensor hits by time or charge (default: charge)')
     
     # Other parameters
     parser.add_argument('--seed', type=int, default=1234567,

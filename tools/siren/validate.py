@@ -533,7 +533,7 @@ class PhotonSimValidator:
             angles = self.calculate_opening_angles(ray_vectors, self.direction)
             
             # Calculate statistics
-            num_seeds = jnp.int32(energy * 7.73 -251.65)
+            num_seeds = jnp.int32(energy * 7.74 +250.72)
             total_weight = float(jnp.sum(photon_weights))
             
             results['statistics'][energy] = {

@@ -164,7 +164,7 @@ def photonsim_differentiable_get_rays(track_origin, track_direction, energy, Nph
     # calculated for 500x500 bins and cut-off of 2 using photonsim_cut_off_study
     # num_seeds = jnp.int32(energy * 11.136 -720.3)
     #num_seeds = jnp.int32(energy * 10.06 -79.32)
-    num_seeds = jnp.int32(energy * 7.73 -251.65)
+    num_seeds = jnp.int32(energy * 7.74 +250.72)
     #num_seeds = jnp.int32(energy * 6.21 +177.57)
 
     seed_indices = random.randint(sampling_key, (Nphot,), 0, num_seeds)
@@ -737,7 +737,7 @@ def read_photon_data_from_photonsim(root_file_path, entry_index):
     
     # Read the data for the specified entry
     tree_data = tree.arrays(['PrimaryEnergy', 'PhotonPosX', 'PhotonPosY', 'PhotonPosZ', 
-                           'PhotonDirX', 'PhotonDirY', 'PhotonDirZ'], 
+                           'PhotonDirX', 'PhotonDirY', 'PhotonDirZ', 'PhotonTime'], 
                           entry_start=entry_index, entry_stop=entry_index+1, library='np')
     
     # Extract primary energy (already in MeV)
@@ -760,9 +760,9 @@ def read_photon_data_from_photonsim(root_file_path, entry_index):
     return {
         'photon_origins': jnp.array(photon_positions),     # Combined position vectors in cm
         'photon_directions': jnp.array(photon_directions), # Combined direction vectors
+        'photon_times': jnp.array(tree_data['PhotonTime'][0]),
         'energy': energy  # Energy in MeV
     }
-
 
 def generate_events_from_photonsim(event_simulator, root_file_path, sensor_params, output_dir=None, 
                                   n_events=None, batch_size=100):

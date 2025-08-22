@@ -356,7 +356,7 @@ def photon_iteration_sample(position, direction, time, surface_distance,
 
     # Time increment based on distance traveled
     time_increment = jnp.where(scatters, scatter_distance, surface_distance)
-    new_time = time + time_increment
+    new_time = time + time_increment/0.299792 # speed of light in m/ns.
 
     # Calculate attenuation based on distance traveled
     distance_traveled = jnp.where(scatters, scatter_distance, surface_distance)
@@ -447,7 +447,7 @@ def photon_iteration_update_factors(position, direction, time, surface_distance,
 
     # Time increment based on distance traveled along the weighted path
     time_increment = reflection_weight * surface_distance + scatter_weight * scatter_distance
-    new_time = time + time_increment
+    new_time = time + time_increment/0.299792 # speed of light in m/ns.
 
     return new_pos, new_dir, new_time, detect_prob, reflection_attenuation, continuing_factor
 
@@ -562,7 +562,7 @@ def make_hits_simulation(flat_weights, flat_indices, flat_times, num_detectors, 
     # Align times to earliest detection
     aligned_times = jnp.where(
         nonzero_mask,
-        softmin_times - min_nonzero_time,
+        softmin_times,# - min_nonzero_time,
         0
     )
     
@@ -631,7 +631,7 @@ def make_hits_data(flat_weights, flat_indices, flat_times, num_detectors):
         # Align times to earliest detection
         aligned_times = jnp.where(
             nonzero_mask,
-            measured_time - min_nonzero_time,
+            measured_time,# - min_nonzero_time,
             1e6
         )
 
@@ -699,8 +699,9 @@ def create_event_simulator(detector, propagate_photons, Nphot, NUM_SENSORS, sens
 
         # Transform photons from ROOT coordinate system
         original_track_dir = jnp.array([0.0, 0.0, 1.0])
-        photon_origins = photon_data['photon_origins'] / 100.0  # mm to m
+        photon_origins = photon_data['photon_origins'] / 100.0  # cm to m (we are transforming mm to cm in the root file reading function)
         photon_directions = photon_data['photon_directions']
+        photon_times = photon_data['photon_times']
 
         # Calculate rotation to align with track direction
         track_direction_norm = jax_normalize(track_direction)
@@ -732,7 +733,6 @@ def create_event_simulator(detector, propagate_photons, Nphot, NUM_SENSORS, sens
         n_rays = photon_origins.shape[0]
         mask = jnp.arange(n_rays) < photon_data['N']
         photon_intensities = 1. * mask.astype(jnp.float32)
-        photon_times = jnp.zeros((n_rays,))
 
         return _common_propagation(
             final_origins, rotated_directions, photon_intensities, photon_times,
@@ -744,7 +744,8 @@ def create_event_simulator(detector, propagate_photons, Nphot, NUM_SENSORS, sens
     def tot_n_photons_normalization(x):
         """ Translates unphysical SIREN output units into number of physical photons.
             the numbers are calculated using validate.py """
-        return 8.909502*x -340.832815
+        #return 8.909502*x -340.832815
+        return (8.858452*x + 110.806667)
     
     @jax.jit
     def _simulation_without_data(particle_params, detector_params, key, grid_data, model_params):
@@ -760,16 +761,17 @@ def create_event_simulator(detector, propagate_photons, Nphot, NUM_SENSORS, sens
             track_origin, track_direction, energy, Nphot, grid_data, model_params, key
         )
 
+        particle_params
         # Scale weights to physical photon count
         total_photons_norm = tot_n_photons_normalization(energy)
         photon_intensities = (total_photons_norm * photon_weights) / Nphot
         photon_times = jnp.zeros((Nphot,))
 
-        distances_to_vertex = jnp.linalg.norm(photon_origins, axis=1) # this is in mm (consistent with predict_t0_vectorized parametrization)
+        distances_to_vertex = jnp.linalg.norm(photon_origins-track_origin, axis=1)*1000 # converting to mm
         predict_t0_vectorized = jax.vmap(predict_t0, in_axes=(0, None, None, None, None, None, None, None, None))
         baseline_slope, baseline_intercept, A_slope, A_intercept, B_slope, B_intercept, offset = t0_params
         t0 = jax.lax.stop_gradient(predict_t0_vectorized(distances_to_vertex, energy, baseline_slope, baseline_intercept, A_slope, A_intercept, B_slope, B_intercept, offset))
-        
+         
         return _common_propagation(
             photon_origins, photon_directions, photon_intensities, photon_times+t0,
             Nphot, detector_params, key, NUM_SENSORS, K, max_sensors_per_cell,
@@ -1019,7 +1021,7 @@ def create_event_simulator(detector, propagate_photons, Nphot, NUM_SENSORS, sens
     elif is_calibration:
         return _simulation_sensor_calibration
     else:
-        model_base_path = base_dir_path()+'/notebooks/output/photonsim_siren_training/trained_model/photonsim_siren'
+        model_base_path = base_dir_path()+'/data/water/muon/siren_training/trained_model/photonsim_siren'
         photonsim_predictor = SIRENPredictor(model_base_path)
         grid_data = create_photonsim_siren_grid(photonsim_predictor, 500)
         model_params = photonsim_predictor.params

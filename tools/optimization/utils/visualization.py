@@ -5,6 +5,7 @@ Visualization functions for LUCiD optimization results.
 import numpy as np
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
+import plotly.graph_objects as go
 import os
 
 from .geometry import (
@@ -13,6 +14,257 @@ from .geometry import (
     compute_cone_box_intersection, get_cherenkov_angle
 )
 from ...visualization import create_detector_display
+
+
+def create_interactive_event_visualization(true_position, true_direction, true_energy, best_match, 
+                                          true_charges, true_times, sensor_positions, detector_bounds,
+                                          position_error, direction_error_deg, energy_error, energy_error_percent,
+                                          event_idx=0, figures_dir=None, detector_name="Unknown", 
+                                          color_by='time', min_charge=10.0):
+    """Create interactive 3D visualization using plotly.
+    
+    Parameters:
+    -----------
+    color_by : str, optional
+        What to use for coloring sensor hits. Options are 'time' or 'charge'.
+        Default is 'time'.
+    min_charge : float, optional
+        Minimum charge threshold for displaying hits. Default is 10.0.
+    """
+    # Filter hits with charge > min_charge
+    significant_mask = true_charges > min_charge
+    hit_positions = sensor_positions[significant_mask]
+    hit_charges_vis = true_charges[significant_mask]
+    hit_times_vis = true_times[significant_mask]
+    
+    # Create plotly figure
+    fig = go.Figure()
+    
+    # Plot detector hits
+    if color_by == 'time':
+        color_data = hit_times_vis
+        color_label = 'Hit Time (ns)'
+        colorscale = 'plasma'
+    elif color_by == 'charge':
+        color_data = hit_charges_vis  
+        color_label = 'Hit Charge'
+        colorscale = 'viridis'
+    else:
+        raise ValueError(f"color_by must be 'time' or 'charge', got '{color_by}'")
+    
+    # Add detector hits as scatter plot
+    fig.add_trace(go.Scatter3d(
+        x=hit_positions[:, 0],
+        y=hit_positions[:, 1], 
+        z=hit_positions[:, 2],
+        mode='markers',
+        marker=dict(
+            size=5,
+            color=color_data,
+            colorscale=colorscale,
+            colorbar=dict(
+                title=color_label,
+                len=0.5,  # Make colorbar shorter (50% of default length)
+                x=1.02,   # Move colorbar further right to avoid legend overlap
+                thickness=15  # Make colorbar thinner
+            ),
+            cmin=0,    # Set minimum to 0 (same as matplotlib)
+            cmax=50,   # Set maximum to 50 (same as matplotlib)
+            opacity=0.8
+        ),
+        name='Detector Hits',
+        hovertemplate='<b>Hit Info</b><br>' +
+                     'Position: (%{x:.2f}, %{y:.2f}, %{z:.2f})<br>' +
+                     f'{color_label}: %{{marker.color:.2f}}<br>' +
+                     '<extra></extra>'
+    ))
+    
+    # Add true track
+    t_vals = np.linspace(0, 8, 100)
+    true_track_points = true_position[:, np.newaxis] + t_vals[np.newaxis, :] * true_direction[:, np.newaxis]
+    
+    fig.add_trace(go.Scatter3d(
+        x=true_track_points[0],
+        y=true_track_points[1],
+        z=true_track_points[2], 
+        mode='lines',
+        line=dict(color='blue', width=8),
+        name='True Track',
+        hovertemplate='<b>True Track</b><br>' +
+                     'Position: (%{x:.2f}, %{y:.2f}, %{z:.2f})<br>' +
+                     '<extra></extra>'
+    ))
+    
+    # Add true origin point
+    fig.add_trace(go.Scatter3d(
+        x=[true_position[0]],
+        y=[true_position[1]],
+        z=[true_position[2]],
+        mode='markers',
+        marker=dict(
+            size=15,
+            color='blue', 
+            symbol='diamond',
+            line=dict(color='black', width=2)
+        ),
+        name='True Origin',
+        hovertemplate='<b>True Origin</b><br>' +
+                     f'Position: ({true_position[0]:.2f}, {true_position[1]:.2f}, {true_position[2]:.2f})<br>' +
+                     f'Energy: {true_energy:.1f} MeV<br>' +
+                     '<extra></extra>'
+    ))
+    
+    # Add fitted track
+    fitted_track_points = best_match['position'][:, np.newaxis] + t_vals[np.newaxis, :] * best_match['direction'][:, np.newaxis]
+    
+    fig.add_trace(go.Scatter3d(
+        x=fitted_track_points[0],
+        y=fitted_track_points[1], 
+        z=fitted_track_points[2],
+        mode='lines',
+        line=dict(color='red', width=8, dash='dash'),
+        name='Fitted Track',
+        hovertemplate='<b>Fitted Track</b><br>' +
+                     'Position: (%{x:.2f}, %{y:.2f}, %{z:.2f})<br>' +
+                     '<extra></extra>'
+    ))
+    
+    # Add fitted origin point
+    fig.add_trace(go.Scatter3d(
+        x=[best_match['position'][0]],
+        y=[best_match['position'][1]],
+        z=[best_match['position'][2]],
+        mode='markers',
+        marker=dict(
+            size=15,
+            color='red',
+            symbol='diamond', 
+            line=dict(color='black', width=2)
+        ),
+        name='Fitted Origin',
+        hovertemplate='<b>Fitted Origin</b><br>' +
+                     f'Position: ({best_match["position"][0]:.2f}, {best_match["position"][1]:.2f}, {best_match["position"][2]:.2f})<br>' +
+                     f'Energy: {best_match["energy"]:.1f} MeV<br>' +
+                     '<extra></extra>'
+    ))
+    
+    # Add Cherenkov cone intersections if geometry allows
+    try:
+        cherenkov_angle = np.radians(41.2)  # Water refractive index ~1.33
+        
+        if detector_bounds['type'] == 'cylinder':
+            from .geometry import compute_cone_cylinder_intersection
+            
+            # True cone intersection  
+            true_intersection = compute_cone_cylinder_intersection(
+                true_position, true_direction, cherenkov_angle,
+                detector_bounds['r'], detector_bounds['H']
+            )
+            if len(true_intersection) > 0:
+                fig.add_trace(go.Scatter3d(
+                    x=true_intersection[:, 0],
+                    y=true_intersection[:, 1],
+                    z=true_intersection[:, 2],
+                    mode='lines',
+                    line=dict(color='blue', width=6),
+                    name='True Cherenkov Ring',
+                    hovertemplate='<b>True Cherenkov Ring</b><br>' +
+                                 'Position: (%{x:.2f}, %{y:.2f}, %{z:.2f})<br>' +
+                                 '<extra></extra>'
+                ))
+            
+            # Fitted cone intersection
+            fitted_intersection = compute_cone_cylinder_intersection(
+                best_match['position'], best_match['direction'], cherenkov_angle,
+                detector_bounds['r'], detector_bounds['H'] 
+            )
+            if len(fitted_intersection) > 0:
+                fig.add_trace(go.Scatter3d(
+                    x=fitted_intersection[:, 0],
+                    y=fitted_intersection[:, 1],
+                    z=fitted_intersection[:, 2],
+                    mode='lines',
+                    line=dict(color='red', width=6, dash='dash'),
+                    name='Fitted Cherenkov Ring',
+                    hovertemplate='<b>Fitted Cherenkov Ring</b><br>' +
+                                 'Position: (%{x:.2f}, %{y:.2f}, %{z:.2f})<br>' +
+                                 '<extra></extra>'
+                ))
+            
+            # Add cylinder boundary wireframe
+            theta = np.linspace(0, 2*np.pi, 50)
+            z_cyl = np.linspace(-detector_bounds['H']/2, detector_bounds['H']/2, 20)
+            
+            # Side of cylinder
+            for z in [-detector_bounds['H']/2, detector_bounds['H']/2]:
+                x_circle = detector_bounds['r'] * np.cos(theta)
+                y_circle = detector_bounds['r'] * np.sin(theta)
+                z_circle = z * np.ones_like(theta)
+                
+                fig.add_trace(go.Scatter3d(
+                    x=x_circle, y=y_circle, z=z_circle,
+                    mode='lines',
+                    line=dict(color='gray', width=2),
+                    showlegend=False,
+                    hoverinfo='skip'
+                ))
+            
+            # Vertical lines of cylinder
+            for i in range(0, len(theta), 10):
+                x_line = [detector_bounds['r'] * np.cos(theta[i])] * 2
+                y_line = [detector_bounds['r'] * np.sin(theta[i])] * 2  
+                z_line = [-detector_bounds['H']/2, detector_bounds['H']/2]
+                
+                fig.add_trace(go.Scatter3d(
+                    x=x_line, y=y_line, z=z_line,
+                    mode='lines',
+                    line=dict(color='gray', width=1),
+                    showlegend=False,
+                    hoverinfo='skip'
+                ))
+                
+    except Exception as e:
+        print(f"Warning: Could not add Cherenkov cone visualization: {e}")
+    
+    # Set layout and styling
+    fig.update_layout(
+        title=dict(
+            text=f'{detector_name} Detector - Event {event_idx + 1} (Interactive)<br>' +
+                 f'<span style="font-size:14px">Energy Error: {energy_error:.1f} MeV, ' +
+                 f'Position Error: {position_error:.2f} m, ' +
+                 f'Direction Error: {direction_error_deg:.1f}°</span>',
+            x=0.5,
+            font=dict(size=16)
+        ),
+        scene=dict(
+            xaxis_title='X (m)',
+            yaxis_title='Y (m)', 
+            zaxis_title='Z (m)',
+            aspectmode='cube',
+            camera=dict(
+                eye=dict(x=1.5, y=1.5, z=1.5)
+            )
+        ),
+        legend=dict(
+            x=0.02,    # Move legend to left side
+            y=0.98,    # Position at top
+            bgcolor='rgba(255,255,255,0.8)',  # Semi-transparent white background
+            bordercolor='rgba(0,0,0,0.2)',
+            borderwidth=1
+        ),
+        width=1000,
+        height=800,
+        showlegend=True
+    )
+    
+    # Save interactive HTML
+    output_file_html = f'{detector_name}_optimization_event_{event_idx + 1:03d}_3D_interactive.html'
+    if figures_dir:
+        output_file_html = os.path.join(figures_dir, output_file_html)
+    
+    fig.write_html(output_file_html)
+    
+    return output_file_html
 
 
 def create_event_visualization(true_position, true_direction, true_energy, best_match, 
@@ -39,7 +291,7 @@ def create_event_visualization(true_position, true_direction, true_energy, best_
             detector_name = config_basename.replace('.json', '')
     
     # Filter hits with charge > 5
-    min_charge = 5.
+    min_charge = 10.
     significant_mask = true_charges > min_charge
     hit_positions = sensor_positions[significant_mask]
     hit_charges_vis = true_charges[significant_mask]
@@ -69,8 +321,8 @@ def create_event_visualization(true_position, true_direction, true_energy, best_
     
     # Use fixed size for all sensor hits to avoid visualization issues with large charges
     scatter = ax.scatter(hit_positions[:, 0], hit_positions[:, 1], hit_positions[:, 2], 
-                        c=color_data, s=60, cmap=colormap, alpha=0.7,
-                        label=scatter_label)
+                        c=color_data, s=30, cmap=colormap, alpha=0.7,
+                        label=scatter_label, vmin=0, vmax=50)
     
     # Plot true track
     t_vals = np.linspace(0, 8, 100)
@@ -101,7 +353,7 @@ def create_event_visualization(true_position, true_direction, true_energy, best_
         )
         if len(true_intersection) > 0:
             ax.plot(true_intersection[:, 0], true_intersection[:, 1], true_intersection[:, 2],
-                   'cyan', linewidth=3, alpha=0.8, label='True Cherenkov Ring', zorder=25)
+                   'blue', linewidth=3, alpha=0.8, label='True Cherenkov Ring', zorder=25)
         
         # Fitted cone intersection
         fitted_intersection = compute_cone_cylinder_intersection(
@@ -110,7 +362,7 @@ def create_event_visualization(true_position, true_direction, true_energy, best_
         )
         if len(fitted_intersection) > 0:
             ax.plot(fitted_intersection[:, 0], fitted_intersection[:, 1], fitted_intersection[:, 2],
-                   'orange', linewidth=3, linestyle='--', alpha=0.8, label='Fitted Cherenkov Ring', zorder=25)
+                   'red', linewidth=3, linestyle='--', alpha=0.8, label='Fitted Cherenkov Ring', zorder=25)
         
         # Add cylinder boundaries
         x_cyl, y_cyl, z_cyl = create_cylinder_surface(detector_bounds['r'], detector_bounds['H'])
@@ -123,7 +375,7 @@ def create_event_visualization(true_position, true_direction, true_energy, best_
         )
         if len(true_intersection) > 0:
             ax.plot(true_intersection[:, 0], true_intersection[:, 1], true_intersection[:, 2],
-                   'cyan', linewidth=3, alpha=0.8, label='True Cherenkov Ring', zorder=25)
+                   'blue', linewidth=3, alpha=0.8, label='True Cherenkov Ring', zorder=25)
         
         # Fitted cone intersection
         fitted_intersection = compute_cone_sphere_intersection(
@@ -131,7 +383,7 @@ def create_event_visualization(true_position, true_direction, true_energy, best_
         )
         if len(fitted_intersection) > 0:
             ax.plot(fitted_intersection[:, 0], fitted_intersection[:, 1], fitted_intersection[:, 2],
-                   'orange', linewidth=3, linestyle='--', alpha=0.8, label='Fitted Cherenkov Ring', zorder=25)
+                   'red', linewidth=3, linestyle='--', alpha=0.8, label='Fitted Cherenkov Ring', zorder=25)
         
         # Add sphere boundaries
         x_sph, y_sph, z_sph = create_sphere_surface(detector_bounds['r'])
@@ -147,7 +399,7 @@ def create_event_visualization(true_position, true_direction, true_energy, best_
             # For box, we might get multiple segments
             for segment in true_intersection:
                 ax.plot(segment[:, 0], segment[:, 1], segment[:, 2],
-                       'cyan', linewidth=3, alpha=0.8, zorder=25)
+                       'blue', linewidth=3, alpha=0.8, zorder=25)
         
         # Fitted cone intersection
         fitted_intersection = compute_cone_box_intersection(
@@ -157,7 +409,7 @@ def create_event_visualization(true_position, true_direction, true_energy, best_
         if len(fitted_intersection) > 0:
             for segment in fitted_intersection:
                 ax.plot(segment[:, 0], segment[:, 1], segment[:, 2],
-                       'orange', linewidth=3, linestyle='--', alpha=0.8, zorder=25)
+                       'red', linewidth=3, linestyle='--', alpha=0.8, zorder=25)
         
         # Add box boundaries
         vertices, edges = create_box_surface(detector_bounds['x'], detector_bounds['y'], detector_bounds['z'])
@@ -212,6 +464,20 @@ def create_event_visualization(true_position, true_direction, true_energy, best_
         print(f"3D visualization saved to {output_file_3d}")
     plt.close()
     
+    # Create interactive HTML visualization
+    try:
+        output_file_html = create_interactive_event_visualization(
+            true_position, true_direction, true_energy, best_match,
+            true_charges, true_times, sensor_positions, detector_bounds,
+            position_error, direction_error_deg, energy_error, energy_error_percent,
+            event_idx, figures_dir, detector_name, color_by
+        )
+        if verbose:
+            print(f"Interactive 3D visualization saved to {output_file_html}")
+    except Exception as e:
+        if verbose:
+            print(f"Warning: Could not create interactive visualization: {e}")
+    
     # Create and save 2D detector display if it's a cylinder detector
     if detector_bounds['type'] == 'cylinder' and config_file:
         try:
@@ -227,7 +493,8 @@ def create_event_visualization(true_position, true_direction, true_energy, best_
                         file_name=output_file_2d_charge, 
                         plot_time=False, 
                         log_scale=False, 
-                        vmin=0)  # Set minimum to zero for charge plots
+                        vmin=0.5,
+                        vmax=30.)
             
             # Create 2D display for time data
             output_file_2d_time = f'{detector_name}_optimization_event_{event_idx + 1:03d}_2D_time.png'
