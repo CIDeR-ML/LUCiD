@@ -158,7 +158,7 @@ def compute_loss_with_time(
     distribution_loss = jnp.sum(normalized_similarity * delta_charge)
 
     return jnp.log(distribution_loss) + intensity_loss # let's do log such that both losses have comparable size
-    
+
 @jit
 def compute_softmin_loss(
         sensor_points: jnp.ndarray,
@@ -168,9 +168,11 @@ def compute_softmin_loss(
         simulated_time: jnp.ndarray,
         tau: float = 0.01,
         eps: float = 1e-8,
-        threshold: float = 1e-8,
-        lambda_time: float = 1.0,
-        lambda_intensity: float = 1.0
+        threshold_mean: float = 1e-8,  # Low threshold for mean computation
+        threshold_loss: float = 40.00001,  # High threshold for loss masking
+        lambda_time: float = 50.0,
+        lambda_intensity: float = 0.1,
+        lambda_charge: float = 1.0,
 ) -> float:
     """
     Compute a differentiable loss using soft assignments between simulated and true sensors.
@@ -193,8 +195,10 @@ def compute_softmin_loss(
         Temperature parameter for the softmin. Smaller tau => sharper assignments.
     eps : float, optional
         Small constant to prevent division by zero, by default 1e-8
-    threshold : float, optional
-        Threshold for considering a sensor active, by default 1e-8
+    threshold_mean : float, optional
+        Threshold for considering a sensor active when computing means for time centering, by default 1e-8.
+    threshold_loss : float, optional
+        Threshold for considering a sensor active when computing what terms contribute to the time loss, by default 40.00001.
     lambda_time : float, optional
         Scaling factor for time loss, by default 1.0.
     lambda_intensity : float, optional
@@ -205,64 +209,69 @@ def compute_softmin_loss(
     float
         Total loss.
     """
-    # Compute mean times for active locations
-    true_active_mask = true_charge > threshold
-    sim_active_mask = simulated_charge > threshold
+    # Mean centering with LOW threshold (include all active sensors)
+    true_active_mean = true_charge > threshold_mean
+    sim_active_mean = simulated_charge > threshold_mean
 
-    # Compute mean times only for active locations
-    true_mean_time = jax.lax.stop_gradient(jnp.sum(true_time * true_active_mask) / (
-                jnp.sum(true_active_mask) + eps))
-    sim_mean_time = jax.lax.stop_gradient(jnp.sum(simulated_time * sim_active_mask) / (
-                jnp.sum(sim_active_mask) + eps))
+    true_mean_time = jax.lax.stop_gradient(jnp.sum(true_time * true_active_mean) / (
+            jnp.sum(true_active_mean) + eps))
+    sim_mean_time = jax.lax.stop_gradient(jnp.sum(simulated_time * sim_active_mean) / (
+            jnp.sum(sim_active_mean) + eps))
 
     # Subtract means from times
-    true_time_centered = jnp.where(true_active_mask, true_time - true_mean_time, 0.0)
-    sim_time_centered = jnp.where(sim_active_mask, simulated_time - sim_mean_time, 0.0)
+    true_time_centered = jnp.where(true_active_mean, true_time - true_mean_time, true_time)
+    sim_time_centered = jnp.where(sim_active_mean, simulated_time - sim_mean_time, simulated_time)
 
+    # Loss masking with HIGH threshold (focus on significant sensors)
+    true_active_loss = true_charge > threshold_loss
+    sim_active_loss = simulated_charge > threshold_loss
+
+    # ============= Energy/Intensity Loss =============
     total_true_charge = jnp.sum(true_charge)
     total_sim_charge = jnp.sum(simulated_charge)
     intensity_loss = jnp.abs(jnp.log(total_sim_charge / (total_true_charge + eps)))
 
-    # Compute distance matrix d[i,j] = ||x_i - x_j||
+    # ============= Spatial Loss Components =============
+    # Compute distance matrix
     N = sensor_points.shape[0]
     dist = jnp.linalg.norm(
         sensor_points[:, None, :] - sensor_points[None, :, :],
         axis=-1
-    )  # Shape (N, N)
+    )
 
-    # Soft assignments Sim -> True
-    logits_s2t = -dist / tau
-    w_s2t = jax.nn.softmax(logits_s2t, axis=1)   # shape (N, N)
+    logits = -dist / tau
+    dist_weights = jax.nn.softmax(logits, axis=1)
 
-    # Aggregated charges (Sim->True)
-    Q_sim_per_true = w_s2t.T @ simulated_charge  # shape (N,)
-    # Charge-weighted centered times:
-    qt_sim_per_true = w_s2t.T @ (simulated_charge * sim_time_centered)  # shape (N,)
-    avg_sim_time_per_true = qt_sim_per_true / (Q_sim_per_true + eps)
+    # ------------- Sim -> True Assignment -------------
+    # Aggregated charges
+    Q_sim_per_true = dist_weights.T @ simulated_charge
+
+    # Charge-weighted time aggregation for better gradient flow
+    T_sim_per_true = dist_weights.T @  sim_time_centered
 
     # Loss terms S->T
     L_charge_s2t = jnp.sum(jnp.abs(Q_sim_per_true - true_charge))
-    L_time_s2t = jnp.sum(jnp.abs(avg_sim_time_per_true - true_time_centered) * Q_sim_per_true)
+    # Use charge-weighted difference
+    L_time_s2t = jnp.sum(jnp.abs(T_sim_per_true - true_time_centered) * true_active_loss)
 
-    # Soft assignments True -> Sim
-    logits_t2s = -dist.T / tau
-    w_t2s = jax.nn.softmax(logits_t2s, axis=1) # shape (N, N)
+    # ------------- True -> Sim Assignment -------------
+    # Aggregated charges
+    Q_true_per_sim = dist_weights.T @ true_charge
 
-    # Aggregated charges (True->Sim)
-    Q_true_per_sim = w_t2s.T @ true_charge  # shape (N,)
-    qt_true_per_sim = w_t2s.T @ (true_charge * true_time_centered)
-    avg_true_time_per_sim = qt_true_per_sim / (Q_true_per_sim + eps)
+    # Charge-weighted time aggregation
+    T_true_per_sim = dist_weights.T @  true_time_centered
 
     # Loss terms T->S
     L_charge_t2s = jnp.sum(jnp.abs(Q_true_per_sim - simulated_charge))
-    L_time_t2s = jnp.sum(jnp.abs(avg_true_time_per_sim - sim_time_centered) * Q_true_per_sim)
+    # Use charge-weighted difference
+    L_time_t2s = jnp.sum(jnp.abs(T_true_per_sim - sim_time_centered) * sim_active_loss)
 
-    # Combine losses
-    L_charge = L_charge_s2t + L_charge_t2s
+    # ============= Combine Losses =============
+    L_charge = (L_charge_s2t + L_charge_t2s) * lambda_charge
     L_time = (L_time_s2t + L_time_t2s) * lambda_time
     L_intensity = intensity_loss * lambda_intensity
 
-    return L_charge + L_time# + L_intensity
+    return L_charge + L_time + L_intensity
 
 
 @jit
