@@ -231,6 +231,20 @@ def compute_softmin_loss(
     total_sim_charge = jnp.sum(simulated_charge)
     intensity_loss = jnp.abs(jnp.log(total_sim_charge / (total_true_charge + eps)))
 
+    # For Scaling the loss terms
+    charge_norm = jax.lax.stop_gradient(
+        (jnp.sum(true_charge) + jnp.sum(simulated_charge)) / 2.0 + eps)
+
+    total_true_time_scale = jax.lax.stop_gradient(
+        jnp.sum(jnp.abs(true_time_centered) * true_active_loss)  + eps
+    )
+
+    total_sim_time_scale = jax.lax.stop_gradient(
+        jnp.sum(jnp.abs(sim_time_centered) * sim_active_loss) + eps
+    )
+
+    time_norm = jax.lax.stop_gradient((total_true_time_scale + total_sim_time_scale) / 2.0 + eps)
+
     # ============= Spatial Loss Components =============
     # Compute distance matrix
     N = sensor_points.shape[0]
@@ -250,9 +264,9 @@ def compute_softmin_loss(
     T_sim_per_true = dist_weights.T @  sim_time_centered
 
     # Loss terms S->T
-    L_charge_s2t = jnp.sum(jnp.abs(Q_sim_per_true - true_charge))
+    L_charge_s2t = jnp.sum(jnp.abs(Q_sim_per_true - true_charge)) / charge_norm
     # Use charge-weighted difference
-    L_time_s2t = jnp.sum(jnp.abs(T_sim_per_true - true_time_centered) * true_active_loss)
+    L_time_s2t = jnp.sum(jnp.abs(T_sim_per_true - true_time_centered) * true_active_loss) / time_norm
 
     # ------------- True -> Sim Assignment -------------
     # Aggregated charges
@@ -262,9 +276,9 @@ def compute_softmin_loss(
     T_true_per_sim = dist_weights.T @  true_time_centered
 
     # Loss terms T->S
-    L_charge_t2s = jnp.sum(jnp.abs(Q_true_per_sim - simulated_charge))
+    L_charge_t2s = jnp.sum(jnp.abs(Q_true_per_sim - simulated_charge)) / charge_norm
     # Use charge-weighted difference
-    L_time_t2s = jnp.sum(jnp.abs(T_true_per_sim - sim_time_centered) * sim_active_loss)
+    L_time_t2s = jnp.sum(jnp.abs(T_true_per_sim - sim_time_centered) * sim_active_loss)/ time_norm
 
     # ============= Combine Losses =============
     L_charge = (L_charge_s2t + L_charge_t2s) * lambda_charge
