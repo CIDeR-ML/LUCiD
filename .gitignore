@@ -4,6 +4,7 @@
 *.h5
 *.png
 !figures/det_repo_img.png
+!figures/combined_3x2_charge_displays.png
 *.npy
 *.root
 sftp-config.json
