@@ -125,7 +125,7 @@ def generate_random_event_params(key, detector_bounds, fraction=0.7):
     
     # Random energy
     key, _ = jax.random.split(key)
-    energy = 1000 #jax.random.uniform(key, shape=(), minval=500.0, maxval=1500.0)
+    energy = jax.random.uniform(key, shape=(), minval=500.0, maxval=1500.0)
     
     return position, direction, energy
 
