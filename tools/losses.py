@@ -1,6 +1,8 @@
 import jax.numpy as jnp
 from jax import jit
 import jax
+from optax.losses import huber_loss
+
 
 @jit
 def compute_simple_loss(
@@ -232,8 +234,7 @@ def compute_softmin_loss(
     intensity_loss = jnp.abs(jnp.log(total_sim_charge / (total_true_charge + eps)))
 
     # For Scaling the loss terms
-    charge_norm = jax.lax.stop_gradient(
-        (jnp.sum(true_charge) + jnp.sum(simulated_charge)) / 2.0 + eps)
+    charge_norm = (jnp.sum(true_charge) + jnp.sum(simulated_charge)) / 2.0 + eps
 
     total_true_time_scale = jax.lax.stop_gradient(
         jnp.sum(jnp.abs(true_time_centered) * true_active_loss)  + eps
@@ -243,7 +244,7 @@ def compute_softmin_loss(
         jnp.sum(jnp.abs(sim_time_centered) * sim_active_loss) + eps
     )
 
-    time_norm = jax.lax.stop_gradient((total_true_time_scale + total_sim_time_scale) / 2.0 + eps)
+    time_norm = (total_true_time_scale + total_sim_time_scale) / 2.0 + eps
 
     # ============= Spatial Loss Components =============
     # Compute distance matrix
@@ -261,7 +262,7 @@ def compute_softmin_loss(
     Q_sim_per_true = dist_weights.T @ simulated_charge
 
     # Charge-weighted time aggregation for better gradient flow
-    T_sim_per_true = dist_weights.T @  sim_time_centered
+    T_sim_per_true = dist_weights.T @ sim_time_centered
 
     # Loss terms S->T
     L_charge_s2t = jnp.sum(jnp.abs(Q_sim_per_true - true_charge)) / charge_norm
@@ -273,7 +274,7 @@ def compute_softmin_loss(
     Q_true_per_sim = dist_weights.T @ true_charge
 
     # Charge-weighted time aggregation
-    T_true_per_sim = dist_weights.T @  true_time_centered
+    T_true_per_sim = dist_weights.T @ true_time_centered
 
     # Loss terms T->S
     L_charge_t2s = jnp.sum(jnp.abs(Q_true_per_sim - simulated_charge)) / charge_norm
@@ -286,6 +287,97 @@ def compute_softmin_loss(
     L_intensity = intensity_loss * lambda_intensity
 
     return L_charge + L_time + L_intensity
+
+
+def poisson_nll(true: jnp.ndarray, pred: jnp.ndarray, eps: float = 1e-8) -> jnp.ndarray:
+    """Compute the Poisson negative log-likelihood loss.
+
+    Parameters
+    ----------
+    true : jnp.ndarray
+        Ground truth values (non-negative).
+    pred : jnp.ndarray
+        Predicted values (non-negative).
+    eps : float, optional
+        Small constant to prevent log(0), by default 1e-8.
+
+    Returns
+    -------
+    jnp.ndarray
+        Poisson negative log-likelihood loss.
+    """
+    nll = pred - true * jnp.log(pred + eps)
+    normalized_nll = jnp.sum(nll) / (jnp.sum(true) + eps)
+    return normalized_nll
+
+def WC_loss(
+        sensor_points: jnp.ndarray,
+        true_charge: jnp.ndarray,
+        true_time: jnp.ndarray,
+        simulated_charge: jnp.ndarray,
+        simulated_time: jnp.ndarray,
+        eps: float = 1e-8,
+        threshold: float = 1e-8,
+        lambda_poisson: float = 1.0,
+        lambda_time: float = 1.0,
+) -> float:
+    """
+    Optimized Loss
+    Compute a loss function with two components:
+    1. Poisson loss: Poisson negative log-likelihood for charge distributions
+    2. Time loss: Huber loss on time differences
+
+    Parameters
+    ----------
+    sensor_points : jnp.ndarray
+        Array of shape (N, 3) with sensor coordinates.
+    true_charge : jnp.ndarray
+        Array of shape (N,) of true charges.
+    true_time : jnp.ndarray
+        Array of shape (N,) of true times.
+    simulated_charge : jnp.ndarray
+        Array of shape (N,) of simulated charges.
+    simulated_time : jnp.ndarray
+        Array of shape (N,) of simulated times.
+    eps : float, optional
+        Small constant to prevent division by zero, by default 1e-8
+    threshold : float, optional
+        Threshold for considering a sensor active, by default 1e-8
+    lambda_poisson : float, optional
+        Scaling factor for Poisson loss, by default 1.0.
+    lambda_time : float, optional
+        Scaling factor for time loss, by default 1.0.
+
+    Returns
+    -------
+    float
+        Total loss.
+    """
+    # ============= Poisson Negative Log Likelihood =============
+    poisson_loss = poisson_nll(true_charge, simulated_charge, eps)
+
+    # ============= Time Loss with Charge Weighted Mean Subtraction =============
+    # Mean centering with LOW threshold (include all active sensors)
+    true_active = true_charge > threshold
+    sim_active = simulated_charge > threshold
+
+    true_weights = jnp.where(true_active, true_charge, 0.0)
+    sim_weights = jnp.where(sim_active, simulated_charge, 0.0)
+
+    true_t0 = jax.lax.stop_gradient(jnp.sum(true_time * true_weights) / (jnp.sum(true_weights) + 1e-8))
+    sim_t0 = jnp.sum(simulated_time * sim_weights) / (jnp.sum(sim_weights) + 1e-8)
+
+    # Compute aligned times and loss
+    both_active = jax.lax.stop_gradient(true_active & sim_active)
+    diff = jnp.where(both_active,
+                     jnp.abs((simulated_time - sim_t0) - (true_time - true_t0)),
+                     0.0)
+    time_loss = jnp.sum(diff) / (jnp.sum(both_active) + 1e-8)
+
+    L_charge = poisson_loss * lambda_poisson
+    L_time = time_loss * lambda_time
+
+    return L_charge + L_time
 
 
 @jit
