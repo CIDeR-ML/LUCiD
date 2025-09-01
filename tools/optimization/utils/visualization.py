@@ -493,8 +493,8 @@ def create_event_visualization(true_position, true_direction, true_energy, best_
                         file_name=output_file_2d_charge, 
                         plot_time=False, 
                         log_scale=False, 
-                        vmin=0.5,
-                        vmax=30.)
+                        vmin=1.1,
+                        vmax=50.)
             
             # Create 2D display for time data
             output_file_2d_time = f'{detector_name}_optimization_event_{event_idx + 1:03d}_2D_time.png'

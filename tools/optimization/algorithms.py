@@ -751,6 +751,8 @@ def gradient_optimization(
     patience = gradient_kwargs['patience']
     patience_factor = gradient_kwargs['patience_factor']
 
+    max_energy_lr_reductions = 5
+    energy_lr_reductions_cnt = 0
     for i in range(n_gradient):    
         start = time.time()
         # Gradient step using pre-compiled gradient functions
@@ -782,10 +784,13 @@ def gradient_optimization(
         history['position_error'].append(pos_error)
         history['direction_error'].append(dir_error_deg)
         history['energy_error'].append(energy_error)
-        
-        # Look only at the energy loss to decrease LR for spatial part
-        if grad_info['energy_loss'] < best_loss:
-            best_loss = grad_info['energy_loss']
+
+        jax.debug.print("P_err, D_err: {:.2f}, {:.2f}", pos_error, dir_error_deg)
+
+        # Look only at the spatial_loss to decrease LR for spatial part
+        if grad_info['spatial_loss'] < best_loss:
+            best_loss = grad_info['spatial_loss']
+            #best_params = params # let's take as parameters those where the spatial_loss is the smallest
             patience_counter = 0
         else:
             patience_counter += 1
@@ -796,8 +801,9 @@ def gradient_optimization(
             patience_counter = 0
 
         # let's reduce the energy lr every 50 iterations.
-        if i>0 and i%50==0:
+        if i>0 and i%50==0 and energy_lr_reductions_cnt < max_energy_lr_reductions:
             energy_lr *= patience_factor
+            energy_lr_reductions_cnt +=1
 
             if verbose:
                 print(f"  Iteration {i+1}: Reducing learning rates to {energy_lr:.6f}, {spatial_lr:.6f}")
