@@ -61,7 +61,7 @@ def get_detector_bounds(detector):
         raise ValueError(f"Unknown detector type: {detector_type}")
 
 
-def generate_random_event_params(key, detector_bounds, fraction=0.7):
+def generate_random_event_params(key, detector_bounds, fraction=0.6):
     """Generate random event parameters based on detector geometry."""
     if detector_bounds['type'] == 'cylinder':
         r_vert = jax.random.uniform(key, shape=(), minval=0, maxval=detector_bounds['r'] * fraction)
