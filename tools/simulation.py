@@ -355,8 +355,8 @@ def photon_iteration_sample(position, direction, time, surface_distance,
     )
 
     # Time increment based on distance traveled
-    time_increment = jnp.where(scatters, scatter_distance, surface_distance)
-    new_time = time + time_increment/0.299792 # speed of light in m/ns.
+    distance_traveled = jnp.where(scatters, scatter_distance, surface_distance)
+    new_time = time + distance_traveled/0.299792 # speed of light in m/ns.
 
     # Calculate attenuation based on distance traveled
     distance_traveled = jnp.where(scatters, scatter_distance, surface_distance)
@@ -446,8 +446,8 @@ def photon_iteration_update_factors(position, direction, time, surface_distance,
     continuing_factor = reflect_prob * reflection_attenuation + scatter_prob * scatter_attenuation
 
     # Time increment based on distance traveled along the weighted path
-    time_increment = reflection_weight * surface_distance + scatter_weight * scatter_distance
-    new_time = time + time_increment/0.299792 # speed of light in m/ns.
+    distance_traveled = reflection_weight * surface_distance + scatter_weight * scatter_distance
+    new_time = time + distance_traveled/0.299792 # speed of light in m/ns.
 
     return new_pos, new_dir, new_time, detect_prob, reflection_attenuation, continuing_factor
 
@@ -466,7 +466,7 @@ def jax_rotate_vector(vector, axis, angle):
     dot_product = jnp.dot(axis, vector) * (1 - cos_angle)
     return cos_angle * vector + sin_angle * cross_product + dot_product * axis
 
-def make_hits_simulation(flat_weights, flat_indices, flat_times, num_detectors, beta=0.1):
+def make_hits_simulation(flat_weights, flat_indices, flat_times, num_detectors, beta=0.1, qe=0.2):
     """
     Compute detector charges and aligned times using softmin first-photon timing.
     
@@ -495,12 +495,12 @@ def make_hits_simulation(flat_weights, flat_indices, flat_times, num_detectors, 
         Softmin-weighted detection times aligned to earliest detection, shape (num_detectors,)
     """
     
-    # Accumulate total charges (same as before)
+    # Accumulate total charges and apply quantum detection efficiency
     total_charge_weighted = jax.ops.segment_sum(
         flat_weights,
         flat_indices,
         num_segments=num_detectors
-    )
+    ) * qe  # Apply quantum detection efficiency
     
     # Filter out zero-weight photons for timing calculation
     timing_mask = (flat_weights>0) & (flat_times>0)
@@ -577,7 +577,8 @@ def make_hits_simulation(flat_weights, flat_indices, flat_times, num_detectors, 
     return corrected_q, aligned_times
 
 
-def time_digitizer(times, time_resolution=0.2):
+# 0.4 ns is Super-Kamiokande's PMT time resolution
+def time_digitizer(times, time_resolution=0.4):
     """
     Digitize input times to bin centers.
     
@@ -600,19 +601,33 @@ def time_digitizer(times, time_resolution=0.2):
     
     return digitized_times
 
-def make_hits_data(flat_weights, flat_indices, flat_times, num_detectors):
+def make_hits_data(flat_weights, flat_indices, flat_times, num_detectors, qe=0.2, rng_key=None):
         
         timing_mask = (flat_weights>0)
         filtered_times = jnp.where(timing_mask, flat_times, jnp.inf)
 
+        # Apply quantum detection efficiency using Bernoulli sampling
+        if rng_key is not None and qe < 1.0:
+            # Generate random numbers for each photon
+            detection_probs = jax.random.uniform(rng_key, shape=flat_weights.shape)
+            # Binary detection decision
+            detected_mask = detection_probs < qe
+            # Apply detection mask to weights
+            qe_weights = flat_weights * detected_mask.astype(jnp.float32)
+            # Also apply detection mask to timing - only detected photons contribute to timing
+            qe_filtered_times = jnp.where(detected_mask & timing_mask, flat_times, jnp.inf)
+        else:
+            qe_weights = flat_weights
+            qe_filtered_times = filtered_times
+
         segment_min_time = jax.ops.segment_min(
-            filtered_times,
+            qe_filtered_times,  # Use QE-filtered times instead of filtered_times
             flat_indices,
             num_segments=num_detectors
         )
 
         total_charge = jax.ops.segment_sum(
-            flat_weights,
+            qe_weights,  # Use QE-modified weights instead of flat_weights
             flat_indices,
             num_segments=num_detectors
         )
@@ -632,7 +647,7 @@ def make_hits_data(flat_weights, flat_indices, flat_times, num_detectors):
         aligned_times = jnp.where(
             nonzero_mask,
             measured_time,# - min_nonzero_time,
-            1e6
+            0
         )
 
         # Zero out charges below threshold
@@ -761,7 +776,6 @@ def create_event_simulator(detector, propagate_photons, Nphot, NUM_SENSORS, sens
             track_origin, track_direction, energy, Nphot, grid_data, model_params, key
         )
 
-        particle_params
         # Scale weights to physical photon count
         total_photons_norm = tot_n_photons_normalization(energy)
         photon_intensities = (total_photons_norm * photon_weights) / Nphot
@@ -1006,14 +1020,24 @@ def create_event_simulator(detector, propagate_photons, Nphot, NUM_SENSORS, sens
         flat_times = all_iter_times.reshape(-1)
 
         # Use make_hits_fn to compute charges and times
-        corrected_q, aligned_times = _make_hits_fn(flat_weights, flat_indices, flat_times, num_sensors)
+        # Generate random key for QE sampling (only used for data mode)
+        key, qe_key = jax.random.split(key)
+        corrected_q, aligned_times = _make_hits_fn(flat_weights, flat_indices, flat_times, num_sensors, qe_key)
 
         return corrected_q, aligned_times
 
+    # Create wrapper functions to handle different signatures and add QE parameter
+    def _make_hits_data_wrapper(flat_weights, flat_indices, flat_times, num_sensors, qe_key, qe=0.2):
+        return make_hits_data(flat_weights, flat_indices, flat_times, num_sensors, qe=qe, rng_key=qe_key)
+    
+    def _make_hits_simulation_wrapper(flat_weights, flat_indices, flat_times, num_sensors, qe_key, qe=0.2):
+        # For simulation mode, qe_key is ignored since we use deterministic scaling
+        return make_hits_simulation(flat_weights, flat_indices, flat_times, num_sensors, qe=qe)
+    
     if is_data:
-        _make_hits_fn = make_hits_data
+        _make_hits_fn = _make_hits_data_wrapper
     else:
-        _make_hits_fn = make_hits_simulation
+        _make_hits_fn = _make_hits_simulation_wrapper
 
     # Return appropriate simulation function
     if is_data:
