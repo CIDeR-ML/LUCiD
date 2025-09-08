@@ -1,6 +1,7 @@
 import jax.numpy as jnp
 from jax import jit
 import jax
+from jax.scipy.special import gammaln
 from optax.losses import huber_loss
 
 
@@ -306,7 +307,7 @@ def poisson_nll(true: jnp.ndarray, pred: jnp.ndarray, eps: float = 1e-8) -> jnp.
     jnp.ndarray
         Poisson negative log-likelihood loss.
     """
-    nll = pred - true * jnp.log(pred + eps)
+    nll = pred - true * jnp.log(pred + eps) + gammaln(true + 1.0)
     normalized_nll = jnp.sum(nll) / (jnp.sum(true) + eps)
     return normalized_nll
 
