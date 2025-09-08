@@ -20,7 +20,7 @@ from tools.utils import spherical_to_cartesian, base_dir_path
 from tools.siren.training.inference import SIRENPredictor
 
 
-def setup_event_simulator(json_filename, n_photons=1_000_000, temperature=0.2, K=2, 
+def setup_event_simulator(json_filename, n_photons=1_000_000, temperature=0.2, K=5,
                          is_data=False, is_calibration=False, max_sensors_per_cell=4,
                          detector_type='Cylinder', use_expected_value=True):
     """
@@ -503,9 +503,10 @@ def make_hits_simulation(flat_weights, flat_indices, flat_times, num_detectors, 
     ) * qe  # Apply quantum detection efficiency
     
     # Filter out zero-weight photons for timing calculation
-    timing_mask = (flat_weights>0) & (flat_times>0)
+    eps = 1e-10
+    timing_mask = (flat_weights>eps) & (flat_times>0)
     filtered_weights = jnp.where(timing_mask, flat_weights, 0.0)
-    filtered_times = jnp.where(timing_mask, flat_times, jnp.inf)
+    filtered_times = jnp.where(timing_mask, flat_times, 1e8)
     filtered_indices = flat_indices
     
     # ===== COMBINED SOFTMIN + INTENSITY WEIGHTING =====
@@ -601,9 +602,9 @@ def time_digitizer(times, time_resolution=0.4):
     
     return digitized_times
 
-def make_hits_data(flat_weights, flat_indices, flat_times, num_detectors, qe=0.2, rng_key=None):
-        
-        timing_mask = (flat_weights>0)
+def make_hits_data(flat_weights, flat_indices, flat_times, num_detectors, qe=0.2, rng_key=None, threshold=1e-10):
+
+        timing_mask = (flat_weights>threshold) & (flat_times>0)
         filtered_times = jnp.where(timing_mask, flat_times, jnp.inf)
 
         # Apply quantum detection efficiency using Bernoulli sampling
@@ -1029,11 +1030,11 @@ def create_event_simulator(detector, propagate_photons, Nphot, NUM_SENSORS, sens
     # Create wrapper functions to handle different signatures and add QE parameter
     def _make_hits_data_wrapper(flat_weights, flat_indices, flat_times, num_sensors, qe_key, qe=0.2):
         return make_hits_data(flat_weights, flat_indices, flat_times, num_sensors, qe=qe, rng_key=qe_key)
-    
+
     def _make_hits_simulation_wrapper(flat_weights, flat_indices, flat_times, num_sensors, qe_key, qe=0.2):
         # For simulation mode, qe_key is ignored since we use deterministic scaling
         return make_hits_simulation(flat_weights, flat_indices, flat_times, num_sensors, qe=qe)
-    
+
     if is_data:
         _make_hits_fn = _make_hits_data_wrapper
     else:
