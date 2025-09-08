@@ -420,16 +420,26 @@ def photon_iteration_update_factors(position, direction, time, surface_distance,
     reflection_attenuation = jnp.exp(-surface_distance / absorption_length)
     scatter_attenuation = jnp.exp(-scatter_distance / absorption_length)
 
-    # Use gumbel-softmax to get soft weights for reflection and scatter.
-    # We only consider continuing paths (not detector absorption)
+    # Use Straight-Through Estimator for action selection
+    # Sample from categorical distribution to decide reflection vs scatter
     probs = jnp.array([reflect_prob, scatter_prob])
-    action_weights = gumbel_softmax(probs, tau_gs, k1)
+    probs_normalized = probs / (jnp.sum(probs) + 1e-10)  # Normalize probabilities
+
+    # Sample discrete action based on probabilities
+    u = jax.random.uniform(k1)
+    hard_choice = (u < probs_normalized[0]).astype(jnp.float32)  # 1.0 for reflection, 0.0 for scatter
+
+    # Create hard one-hot weights
+    hard_weights = jnp.array([hard_choice, 1.0 - hard_choice])
+
+    # Straight-through estimator: hard weights in forward, soft probs in backward
+    action_weights = hard_weights - jax.lax.stop_gradient(probs_normalized) + probs_normalized
     reflection_weight = action_weights[0]
     scatter_weight = action_weights[1]
 
     # Compute the candidate positions and directions.
     epsilon = 1e-4  # Small value to stay inside
-    # the fraction of 'errors' for a given epislon change with the detector size.
+    # the fraction of 'errors' for a given epsilon change with the detector size.
     # this is because the numerical error in direction over a large distance translates into a relatively larger deviation
     # for HK-size epsilon 1e-4 translates into a few tens of rays going out of the detector per each million after several steps.
     # The rule of thumb is that epsilon needs to go down/up proportionally to the detector size.
@@ -443,7 +453,7 @@ def photon_iteration_update_factors(position, direction, time, surface_distance,
     new_dir = normalize(reflection_weight * reflection_dir + scatter_weight * scatter_dir)
 
     # Calculate the continuing factor (reflection + scatter)
-    continuing_factor = reflect_prob * reflection_attenuation + scatter_prob * scatter_attenuation
+    continuing_factor = reflection_weight * reflection_attenuation + scatter_weight * scatter_attenuation
 
     # Time increment based on distance traveled along the weighted path
     distance_traveled = reflection_weight * surface_distance + scatter_weight * scatter_distance
