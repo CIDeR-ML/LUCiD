@@ -22,8 +22,8 @@ from tools.siren.training.inference import SIRENPredictor
 
 
 def setup_event_simulator(json_filename, n_photons=1_000_000, temperature=0.2, K=5,
-                         is_data=False, is_calibration=False, max_sensors_per_cell=4,
-                         detector_type='Cylinder', use_expected_value=True):
+                          is_data=False, is_calibration=False, max_sensors_per_cell=4,
+                          detector_type='Cylinder', use_expected_value=True):
     """
     Sets up and returns an event simulator with the specified configuration.
 
@@ -148,10 +148,6 @@ def normalize(v, epsilon=1e-6):
     norm = jnp.linalg.norm(v, axis=-1, keepdims=True)
     return v / (norm + epsilon)
 
-# def compute_reflection_direction(incident_dir, normal):
-#     """Compute reflection direction given an incident direction and surface normal."""
-#     return normalize(incident_dir - 2 * jnp.dot(incident_dir, normal) * normal)
-
 
 def compute_reflection_direction(incident_dir, normal):
     """Compute reflection direction given an incident direction and surface normal."""
@@ -159,6 +155,7 @@ def compute_reflection_direction(incident_dir, normal):
     normal = normalize(normal)
     dot_product = jnp.sum(incident_dir * normal, axis=-1, keepdims=True)
     return normalize(incident_dir - 2 * dot_product * normal)
+
 
 def create_local_frame(z):
     """Create a local coordinate frame given a z-axis vector."""
@@ -182,7 +179,9 @@ def gumbel_softmax(probs, temperature, rng_key):
 def sample_scatter_distance(D, S, rng_key):
     """Sample a scatter distance from a truncated exponential distribution."""
     u = jax.random.uniform(rng_key)
-    return -S * jnp.log(1 - u * (1 - jnp.exp(-D / S)))
+    ratio = D / S
+    prob_term = -jnp.expm1(-ratio)  # 1 - exp(-D/S)
+    return -S * jnp.log1p(-u * prob_term)
 
 
 def solve_rayleigh_inverse_cdf(u):
@@ -200,7 +199,7 @@ def solve_rayleigh_inverse_cdf(u):
     # Use JAX-compatible conditional
     # Three real roots case (rare in our range)
     sqrt_disc_pos = jnp.sqrt(jnp.abs(discriminant))
-    rho = jnp.sqrt(-p**3 / 27)
+    rho = jnp.sqrt(-p ** 3 / 27)
     theta = jnp.arccos(jnp.clip(-q / (2 * rho), -1, 1))
     mu_three_roots = 2 * jnp.cbrt(rho) * jnp.cos(theta / 3)
     
@@ -215,6 +214,7 @@ def solve_rayleigh_inverse_cdf(u):
     
     # Clamp to valid range due to numerical precision
     return jnp.clip(mu, -1.0, 1.0)
+
 
 def compute_scatter_direction(incident_dir, rng_key):
     """Compute a new scattering direction based on a Rayleigh phase function."""
@@ -234,6 +234,7 @@ def compute_scatter_direction(incident_dir, rng_key):
     frame = create_local_frame(incident_dir)
     return normalize(frame @ local_dir)
 
+
 def create_photonsim_siren_grid(photonsim_predictor, n_bins):
     # Get the actual ranges from PhotonSim training metadata
     dataset_info = photonsim_predictor.dataset_info
@@ -245,8 +246,8 @@ def create_photonsim_siren_grid(photonsim_predictor, n_bins):
     target_norm = photonsim_predictor.metadata['target_normalization']
     if target_norm['scheme'] != 'log_normalized_to_01':
         raise ValueError(f"Expected target normalization scheme 'log_normalized_to_01', "
-                        f"but got '{target_norm['scheme']}'")
-    
+                         f"but got '{target_norm['scheme']}'")
+
     # Create n_bins x n_bins binning using actual PhotonSim training ranges
     angle_bins = jnp.linspace(angle_min, angle_max, n_bins)
     distance_bins = jnp.linspace(distance_min, distance_max, n_bins)
@@ -261,7 +262,8 @@ def create_photonsim_siren_grid(photonsim_predictor, n_bins):
     log_max = target_norm['log_max']
 
     return n_bins, energy_min, energy_max, angle_min, angle_max, distance_min, distance_max, angle_bins, \
-    distance_bins, angle_dist_grid, angle_mesh, distance_mesh, log_min, log_max
+        distance_bins, angle_dist_grid, angle_mesh, distance_mesh, log_min, log_max
+
 
 def photon_iteration_sample(position, direction, time, surface_distance,
                             normal, scatter_length, reflection_rate,
@@ -357,7 +359,7 @@ def photon_iteration_sample(position, direction, time, surface_distance,
 
     # Time increment based on distance traveled
     distance_traveled = jnp.where(scatters, scatter_distance, surface_distance)
-    new_time = time + distance_traveled/0.299792 # speed of light in m/ns.
+    new_time = time + distance_traveled / 0.299792  # speed of light in m/ns.
 
     # Calculate attenuation based on distance traveled
     distance_traveled = jnp.where(scatters, scatter_distance, surface_distance)
@@ -373,6 +375,7 @@ def photon_iteration_sample(position, direction, time, surface_distance,
     continuing_factor = jnp.where(detects, 0.0, attenuation)
 
     return new_pos, new_dir, new_time, detect_prob, reflection_attenuation, continuing_factor
+
 
 def photon_iteration_update_factors(position, direction, time, surface_distance,
                                     normal, scatter_length, reflection_rate,
@@ -406,10 +409,11 @@ def photon_iteration_update_factors(position, direction, time, surface_distance,
     scatter_distance = sample_scatter_distance(surface_distance, scatter_length, k2)
 
     # Core probabilities
+    ratio = surface_distance / scatter_length
     # Probability of reaching the surface without scattering
-    reach_surface_prob = jnp.exp(-surface_distance / scatter_length)
+    reach_surface_prob = jnp.exp(-ratio)
     # Probability of scattering before reaching the surface
-    scatter_prob = 1 - reach_surface_prob
+    scatter_prob = -jnp.expm1(-ratio)  # 1 - reach_surface_prob
 
     # Total probabilities for each possible outcome
     # 1. Reflection: reach surface AND reflect
@@ -453,20 +457,22 @@ def photon_iteration_update_factors(position, direction, time, surface_distance,
     new_pos = reflection_weight * reflection_pos + scatter_weight * scatter_pos
     new_dir = normalize(reflection_weight * reflection_dir + scatter_weight * scatter_dir)
 
-    # Calculate the continuing factor (reflection + scatter)
+    # Calculate the continuing factor based on the probabilities and not the weights
     continuing_factor = reflect_prob * reflection_attenuation + scatter_prob * scatter_attenuation
 
     # Time increment based on distance traveled along the weighted path
     distance_traveled = reflection_weight * surface_distance + scatter_weight * scatter_distance
-    new_time = time + distance_traveled/0.299792 # speed of light in m/ns.
+    new_time = time + distance_traveled / 0.299792  # speed of light in m/ns.
 
     return new_pos, new_dir, new_time, detect_prob, reflection_attenuation, continuing_factor
+
 
 # JAX-compatible versions of the rotation functions
 def jax_normalize(v, epsilon=1e-8):
     """Normalize a vector with numerical stability using JAX."""
     norm = jnp.linalg.norm(v)
     return jnp.where(norm > epsilon, v / norm, v)
+
 
 def jax_rotate_vector(vector, axis, angle):
     """ Rotate a vector around an axis by a given angle in radians using JAX. """
@@ -725,87 +731,87 @@ def make_hits_simulation(flat_weights: jnp.ndarray,
 def time_digitizer(times, time_resolution=0.4):
     """
     Digitize input times to bin centers.
-    
+
     Args:
         times: Input array of times to digitize
         time_resolution: Time resolution for binning (default=1)
-        
+
     Returns:
-        Array with same shape as input where each time is replaced 
+        Array with same shape as input where each time is replaced
         by its corresponding bin center
     """
     time_window = 500  # nanoseconds
-    nbins = int(time_window/time_resolution)
-    bins = jnp.linspace(0, time_window, int(nbins+1))
+    nbins = int(time_window / time_resolution)
+    bins = jnp.linspace(0, time_window, int(nbins + 1))
     bin_centers = bins[:-1] + (bins[1] - bins[0]) / 2
-    
+
     # Find which bin each time falls into
     bin_indices = jnp.digitize(times, bins) - 1
     digitized_times = jnp.where((jnp.isfinite(times)), bin_centers[bin_indices], 1e6)
-    
+
     return digitized_times
 
+
 def make_hits_data(flat_weights, flat_indices, flat_times, num_detectors, qe=0.2, rng_key=None, threshold=1e-10):
+    timing_mask = (flat_weights > threshold) & (flat_times > 0)
+    filtered_times = jnp.where(timing_mask, flat_times, jnp.inf)
 
-        timing_mask = (flat_weights>threshold) & (flat_times>0)
-        filtered_times = jnp.where(timing_mask, flat_times, jnp.inf)
+    # Apply quantum detection efficiency using Bernoulli sampling
+    if rng_key is not None and qe < 1.0:
+        # Generate random numbers for each photon
+        detection_probs = jax.random.uniform(rng_key, shape=flat_weights.shape)
+        # Binary detection decision
+        detected_mask = detection_probs < qe
+        # Apply detection mask to weights
+        qe_weights = flat_weights * detected_mask.astype(jnp.float32)
+        # Also apply detection mask to timing - only detected photons contribute to timing
+        qe_filtered_times = jnp.where(detected_mask & timing_mask, flat_times, jnp.inf)
+    else:
+        qe_weights = flat_weights
+        qe_filtered_times = filtered_times
 
-        # Apply quantum detection efficiency using Bernoulli sampling
-        if rng_key is not None and qe < 1.0:
-            # Generate random numbers for each photon
-            detection_probs = jax.random.uniform(rng_key, shape=flat_weights.shape)
-            # Binary detection decision
-            detected_mask = detection_probs < qe
-            # Apply detection mask to weights
-            qe_weights = flat_weights * detected_mask.astype(jnp.float32)
-            # Also apply detection mask to timing - only detected photons contribute to timing
-            qe_filtered_times = jnp.where(detected_mask & timing_mask, flat_times, jnp.inf)
-        else:
-            qe_weights = flat_weights
-            qe_filtered_times = filtered_times
+    segment_min_time = jax.ops.segment_min(
+        qe_filtered_times,  # Use QE-filtered times instead of filtered_times
+        flat_indices,
+        num_segments=num_detectors
+    )
 
-        segment_min_time = jax.ops.segment_min(
-            qe_filtered_times,  # Use QE-filtered times instead of filtered_times
-            flat_indices,
-            num_segments=num_detectors
-        )
+    total_charge = jax.ops.segment_sum(
+        qe_weights,  # Use QE-modified weights instead of flat_weights
+        flat_indices,
+        num_segments=num_detectors
+    )
 
-        total_charge = jax.ops.segment_sum(
-            qe_weights,  # Use QE-modified weights instead of flat_weights
-            flat_indices,
-            num_segments=num_detectors
-        )
+    measured_time = time_digitizer(segment_min_time)
 
+    # Find minimum non-zero time for alignment
+    nonzero_mask = (total_charge > 1e-10) & (segment_min_time > 0)
+    min_nonzero_time = jnp.where(
+        jnp.any(nonzero_mask),
+        jnp.min(jnp.where(nonzero_mask, measured_time, jnp.inf)),
+        0.0
+    )
 
-        measured_time = time_digitizer(segment_min_time)
+    # Align times to earliest detection
+    aligned_times = jnp.where(
+        nonzero_mask,
+        measured_time,  # - min_nonzero_time,
+        0
+    )
 
-        # Find minimum non-zero time for alignment
-        nonzero_mask = (total_charge > 1e-10) & (segment_min_time > 0)
-        min_nonzero_time = jnp.where(
-            jnp.any(nonzero_mask),
-            jnp.min(jnp.where(nonzero_mask, measured_time, jnp.inf)),
-            0.0
-        )
+    # Zero out charges below threshold
+    measured_charge = jnp.where(
+        nonzero_mask,
+        total_charge,
+        0
+    )
 
-        # Align times to earliest detection
-        aligned_times = jnp.where(
-            nonzero_mask,
-            measured_time,# - min_nonzero_time,
-            0
-        )
-
-        # Zero out charges below threshold
-        measured_charge = jnp.where(
-            nonzero_mask,
-            total_charge,
-            0
-        )
-
-        return measured_charge, aligned_times
+    return measured_charge, aligned_times
 
 
 def create_event_simulator(detector, propagate_photons, Nphot, NUM_SENSORS, sensor_points, K,
-                           is_data, is_calibration, max_sensors_per_cell, use_expected_value=None, detector_type='Cylinder'):
+                           is_data, is_calibration, max_sensors_per_cell, use_expected_value=None,
+                           detector_type='Cylinder'):
     """
     Create an event simulator with the appropriate configuration.
 
@@ -903,14 +909,14 @@ def create_event_simulator(detector, propagate_photons, Nphot, NUM_SENSORS, sens
     def tot_n_photons_normalization(x):
         """ Translates unphysical SIREN output units into number of physical photons.
             the numbers are calculated using validate.py """
-        #return 8.909502*x -340.832815
-        return (8.858452*x + 110.806667)
-    
+        # return 8.909502*x -340.832815
+        return (8.858452 * x + 110.806667)
+
     @jax.jit
     def _simulation_without_data(particle_params, detector_params, key, grid_data, model_params):
         """Simulate events using SIREN model for photon generation."""
         energy, track_origin, direction_angles = particle_params
-        
+
         # Convert theta and phi angles to direction vector
         theta, phi = direction_angles
         track_direction = spherical_to_cartesian(theta, phi)
@@ -925,13 +931,15 @@ def create_event_simulator(detector, propagate_photons, Nphot, NUM_SENSORS, sens
         photon_intensities = (total_photons_norm * photon_weights) / Nphot
         photon_times = jnp.zeros((Nphot,))
 
-        distances_to_vertex = jnp.linalg.norm(photon_origins-track_origin, axis=1)*1000 # converting to mm
+        distances_to_vertex = jnp.linalg.norm(photon_origins - track_origin, axis=1) * 1000  # converting to mm
         predict_t0_vectorized = jax.vmap(predict_t0, in_axes=(0, None, None, None, None, None, None, None, None))
         baseline_slope, baseline_intercept, A_slope, A_intercept, B_slope, B_intercept, offset = t0_params
-        t0 = jax.lax.stop_gradient(predict_t0_vectorized(distances_to_vertex, energy, baseline_slope, baseline_intercept, A_slope, A_intercept, B_slope, B_intercept, offset))
-         
+        t0 = jax.lax.stop_gradient(
+            predict_t0_vectorized(distances_to_vertex, energy, baseline_slope, baseline_intercept, A_slope, A_intercept,
+                                  B_slope, B_intercept, offset))
+
         return _common_propagation(
-            photon_origins, photon_directions, photon_intensities, photon_times+t0,
+            photon_origins, photon_directions, photon_intensities, photon_times + t0,
             Nphot, detector_params, key, NUM_SENSORS, K, max_sensors_per_cell,
             propagate_photons, photon_update_fn
         )
@@ -959,15 +967,15 @@ def create_event_simulator(detector, propagate_photons, Nphot, NUM_SENSORS, sens
         def get_inside_detector_flag(positions):
             """Cylinder bounds check function."""
             x, y, z = positions[:, 0], positions[:, 1], positions[:, 2]
-            eps = 0 # Dont change without validations
-            inside_xy_circle = (x**2 + y**2) <= (detector.r+eps)**2
-            inside_z_bounds = (z >= -detector.H/2-eps) & (z <= detector.H/2+eps)
+            eps = 0  # Dont change without validations
+            inside_xy_circle = (x ** 2 + y ** 2) <= (detector.r + eps) ** 2
+            inside_z_bounds = (z >= -detector.H / 2 - eps) & (z <= detector.H / 2 + eps)
             return inside_xy_circle & inside_z_bounds
     elif detector_type == 'Sphere':
         def get_inside_detector_flag(positions):
             """Sphere bounds check function."""
             distances = jnp.linalg.norm(positions, axis=1)
-            eps = 0 # Dont change without validations
+            eps = 0  # Dont change without validations
             return distances <= detector.r + eps
     elif detector_type == 'Box':
         def get_inside_detector_flag(positions):
@@ -979,7 +987,7 @@ def create_event_simulator(detector, propagate_photons, Nphot, NUM_SENSORS, sens
             return jnp.ones(positions.shape[0], dtype=bool)
 
     @partial(jax.jit, static_argnames=(
-    'n_rays', 'K', 'max_sensors_per_cell', 'num_sensors', 'propagate_fn', 'photon_update_fn'))
+            'n_rays', 'K', 'max_sensors_per_cell', 'num_sensors', 'propagate_fn', 'photon_update_fn'))
     def _common_propagation(positions, directions, intensities, times, n_rays, detector_params, key,
                             num_sensors, K, max_sensors_per_cell, propagate_fn, photon_update_fn):
         """
@@ -1025,9 +1033,12 @@ def create_event_simulator(detector, propagate_photons, Nphot, NUM_SENSORS, sens
         """
         original_scatter_length, original_reflection_rate, original_absorption_length, tau_gs = detector_params
 
+        # Initialize survival attenuation factor tracking (starts at 1.0 for each photon)
+        initial_survival_attenuation_factor = jnp.ones(n_rays)
+
         # Define the step function for lax.scan
         def propagation_step(carry, i):
-            current_positions, current_directions, current_intensities, current_times, key = carry
+            current_positions, current_directions, current_times, survival_attenuation_factor, key = carry
 
             scatter_length = original_scatter_length
             reflection_rate = original_reflection_rate
@@ -1045,7 +1056,7 @@ def create_event_simulator(detector, propagate_photons, Nphot, NUM_SENSORS, sens
             normals = prop_results['normals']
 
             # Compute distances to intersection points
-            surface_distances = jnp.linalg.norm(hit_positions - current_positions, axis=1)-1e-6
+            surface_distances = jnp.linalg.norm(hit_positions - current_positions, axis=1) - 1e-6
 
             # Generate RNG keys for each photon
             key, subkey = jax.random.split(key)
@@ -1058,7 +1069,6 @@ def create_event_simulator(detector, propagate_photons, Nphot, NUM_SENSORS, sens
             )(current_positions, current_directions, current_times,
               surface_distances, normals, scatter_length, reflection_rate,
               absorption_length, tau_gs, rng_keys)
-
 
             nan_pos_mask = jnp.any(jnp.isnan(new_positions), axis=1)
             nan_dir_mask = jnp.any(jnp.isnan(new_directions), axis=1)
@@ -1080,46 +1090,48 @@ def create_event_simulator(detector, propagate_photons, Nphot, NUM_SENSORS, sens
 
             # Replace NaN outputs with safe values
             safe_new_positions = jnp.where(
-                problematic_rays[:, None], 
+                problematic_rays[:, None],
                 current_positions,  # Keep original position
-                new_positions       # Use computed position
+                new_positions  # Use computed position
             )
 
             safe_new_directions = jnp.where(
                 problematic_rays[:, None],
-                current_directions, # Keep original direction  
-                new_directions      # Use computed direction
+                current_directions,  # Keep original direction
+                new_directions  # Use computed direction
             )
 
             safe_new_times = jnp.where(
                 problematic_rays,
-                current_times, # Keep original direction  
-                new_times      # Use computed direction
+                current_times,  # Keep original direction
+                new_times  # Use computed direction
             )
-
 
             # jax.debug.print("A - Zero Cont Fact: {}", jnp.sum(continuing_factors==0))
             # jax.debug.print("A - Problem Rays: {}", jnp.sum(problematic_rays))
 
             inside_detector = get_inside_detector_flag(new_positions)
-            
+
             # jax.debug.print("Rays summary:")
             # jax.debug.print("Current Positions Out of Detector Volume:  {}", jnp.sum(get_inside_detector_flag(current_positions)==False))
             # jax.debug.print("New Positions Out of Detector Volume: {}", jnp.sum(get_inside_detector_flag(new_positions)==False))
-            
 
             safe_continuing_factors = jnp.where(
-                (problematic_rays) | (inside_detector==False),
-                0.0,                # Kill the ray (zero intensity)
+                (problematic_rays) | (inside_detector == False),
+                0.0,  # Kill the ray (zero intensity)
                 continuing_factors  # Use computed factor
             )
 
             # jax.debug.print("Z - Zero Cont Fact: {}", jnp.sum(safe_continuing_factors==0))
 
-            # Calculate intensities
+            # Update survival attenuation factor for each photon
+            new_survival_attenuation_factor = survival_attenuation_factor * safe_continuing_factors
+            physical_intensities = intensities * jax.lax.stop_gradient(survival_attenuation_factor)
+
+            # Calculate intensities with physical decay applied
             detected_intensity_factors = detect_probs * reflection_attenuations
-            updated_weights = depositions * current_intensities[None, :] * detected_intensity_factors[None, :]
-            
+            updated_weights = depositions * physical_intensities[None, :] * detected_intensity_factors[None, :]
+
             total_times = times + current_times[:, None]
             # jax.debug.print("Found {} Neg times", jnp.sum(times<0))
             # jax.debug.print("Found {} Neg current_times", jnp.sum(current_times<0))
@@ -1129,17 +1141,16 @@ def create_event_simulator(detector, propagate_photons, Nphot, NUM_SENSORS, sens
             iteration_indices = sensor_indices
             iteration_times = total_times.squeeze(-1)
 
-            # Update for next iteration using safe values
-            new_intensities = current_intensities * safe_continuing_factors
             # Apply stop_gradient to all state variables
             next_positions = jax.lax.stop_gradient(safe_new_positions)
             next_directions = jax.lax.stop_gradient(safe_new_directions)
-
-            next_intensities = new_intensities
             next_times = safe_new_times
 
+            # Stop gradient on survival attenuation factor to prevent gradient accumulation through decay chain
+            next_survival_attenuation_factor = jax.lax.stop_gradient(new_survival_attenuation_factor)
+
             # Return updated state and outputs
-            new_carry = (next_positions, next_directions, next_intensities, next_times, key)
+            new_carry = (next_positions, next_directions, next_times, next_survival_attenuation_factor, key)
             outputs = (iteration_weights, iteration_indices, iteration_times)
 
             # jax.debug.print("ZZZ - Iteration {}: Found {} problematic next times with NaN", i, jnp.sum(jnp.isnan(next_times)))
@@ -1148,8 +1159,8 @@ def create_event_simulator(detector, propagate_photons, Nphot, NUM_SENSORS, sens
 
             return new_carry, outputs
 
-        # Initial state
-        init_carry = (positions, directions, intensities, times, key)
+        # Initial state with survival attenuation factor
+        init_carry = (positions, directions, times, initial_survival_attenuation_factor, key)
 
         # Run the propagation loop
         _, (all_iter_weights, all_iter_indices, all_iter_times) = jax.lax.scan(
@@ -1189,7 +1200,7 @@ def create_event_simulator(detector, propagate_photons, Nphot, NUM_SENSORS, sens
     elif is_calibration:
         return _simulation_sensor_calibration
     else:
-        model_base_path = base_dir_path()+'/data/water/muon/siren_training/trained_model/photonsim_siren'
+        model_base_path = base_dir_path() + '/data/water/muon/siren_training/trained_model/photonsim_siren'
         photonsim_predictor = SIRENPredictor(model_base_path)
         grid_data = create_photonsim_siren_grid(photonsim_predictor, 500)
         model_params = photonsim_predictor.params
