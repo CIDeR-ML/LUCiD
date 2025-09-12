@@ -342,7 +342,7 @@ def photon_iteration_sample(position, direction, time, surface_distance,
     new_pos = jnp.where(
         scatters,
         position + scatter_distance * normalize(direction),
-        position + (surface_distance - epsilon) * normalize(direction)  # Pull back from boundary
+        position + surface_distance * normalize(direction) + epsilon * normalize(normal)
     )
 
     # Calculate new direction
