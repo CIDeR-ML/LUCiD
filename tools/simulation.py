@@ -444,7 +444,7 @@ def photon_iteration_update_factors(position, direction, time, surface_distance,
     # this is because the numerical error in direction over a large distance translates into a relatively larger deviation
     # for HK-size epsilon 1e-4 translates into a few tens of rays going out of the detector per each million after several steps.
     # The rule of thumb is that epsilon needs to go down/up proportionally to the detector size.
-    reflection_pos = position + (surface_distance - epsilon) * normalize(direction)  # Pull back from boundary
+    reflection_pos = position + surface_distance * normalize(direction) + epsilon * normalize(normal)
     scatter_pos = position + scatter_distance * normalize(direction)
     reflection_dir = compute_reflection_direction(direction, normal)
     scatter_dir = compute_scatter_direction(direction, k3)
