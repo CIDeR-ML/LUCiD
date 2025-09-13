@@ -583,148 +583,38 @@ def make_hits_simulation_min(flat_weights: jnp.ndarray,
     return measured_charge, measured_time
 
 
-def make_hits_simulation(flat_weights: jnp.ndarray,
-                         flat_indices: jnp.ndarray,
-                         flat_times: jnp.ndarray,
-                         num_detectors: int,
-                         qe: float = 0.2,
-                         rng_key: Optional[jax.random.PRNGKey] = None,
-                         threshold: float = 1e-10,
-                         temperature: float = 0.01,
-                         tau_exponent: float = 1.4) -> Tuple[jnp.ndarray, jnp.ndarray]:
-    """
-    Differentiable simulation of photon detection and hit timing using exponentially weighted first arrival.
+def make_hits_simulation(flat_weights, flat_indices, flat_times, num_detectors, qe=0.2, threshold=1e-5):
 
-    This function simulates the detection of photons at multiple detectors, applying quantum
-    efficiency and computing the expected first arrival time using an adaptive exponentially
-    weighted average. Unlike a simple soft minimum that finds the shortest path, this method
-    computes a physically motivated first arrival time that accounts for the statistical
-    nature of photon detection.
+        timing_mask = (flat_weights>threshold) & (flat_times>0)
+        filtered_times = jnp.where(timing_mask, flat_times, jnp.inf)
 
-    The method adapts to the expected photon count per detector:
-    - For N >> 1 photons: Approximates the time when cumulative charge = 1
-    - For N ≈ 1 photon: Computes the expected arrival time given detection
-    - For N < 1 photon: Computes the conditional mean arrival time
+        qe_weights = flat_weights*qe
 
-    Mathematical approach:
-    The effective first arrival time is computed as:
-        t_eff = Σ(Q_i * T_i * exp(-(T_i - T_min)/τ)) / Σ(Q_i * exp(-(T_i - T_min)/τ))
-    where:
-        τ = T_typical / N^tau_exponent
-        T_typical = Σ(Q_i * T_i) / Σ(Q_i)  [charge-weighted mean time]
-        T_min = min(T_i)  [for numerical stability]
-        N = Σ(Q_i)  [total expected photons per detector]
+        total_charge = jax.ops.segment_sum(
+            qe_weights,  # Use QE-modified weights instead of flat_weights
+            flat_indices,
+            num_segments=num_detectors
+        )
 
-    Parameters
-    ----------
-    flat_weights : jnp.ndarray
-        Array of photon weights/energies. Shape: (n_photons,)
-    flat_indices : jnp.ndarray
-        Array of detector indices for each photon. Shape: (n_photons,)
-        Values should be in range [0, num_detectors).
-    flat_times : jnp.ndarray
-        Array of photon arrival times in nanoseconds. Shape: (n_photons,)
-        Must be positive finite values for valid photons.
-    num_detectors : int
-        Total number of detectors in the system
-    qe : float, optional
-        Quantum efficiency (probability of detecting a photon). Default: 0.2
-        Applied as a scaling factor to all weights.
-    rng_key : jax.random.PRNGKey, optional
-        Unused, kept for API compatibility. Default: None
-    threshold : float, optional
-        Minimum weight threshold for valid photons. Default: 1e-10
-        Photons with qe_weight <= threshold are ignored.
-    temperature : float, optional
-        Unused, kept for API compatibility. Default: 0.01
-        The actual temperature τ is computed adaptively per detector.
-    tau_exponent : float, optional
-        Exponent for tau scaling: τ = T_typical / N^tau_exponent. Default: 1.0
-        - 1.0: Linear scaling (good for sparse sensors or unknown distributions)
-        - 1.2-1.5: Better for dense sensors with gradually rising distributions
-        - 0.8: For distributions with sharp early peaks
+        weighted_time_sum = jax.ops.segment_sum(qe_weights * flat_times, flat_indices, num_segments=num_detectors)
+        weighted_mean_time = weighted_time_sum / (total_charge + 1e-20)
 
-    Returns
-    -------
-    measured_charge : jnp.ndarray
-        Total charge (sum of weights) per detector. Shape: (num_detectors,)
-        Zero for detectors with no valid photons above threshold.
-    measured_time : jnp.ndarray
-        Effective first arrival time per detector in nanoseconds. Shape: (num_detectors,)
-        Zero for detectors with no valid photons.
+        # Find minimum non-zero time for alignment
+        nonzero_mask = (total_charge > 1e-5) & (weighted_mean_time > 0)
+        measured_time = jnp.where(
+            jnp.any(nonzero_mask),
+            weighted_mean_time,
+            0.0
+        )
 
-    Notes
-    -----
-    Choosing tau_exponent:
-    The optimal value depends on your photon time distribution shape near T_min:
-    - If λ(t) has sharp peak at T_min: use tau_exponent ≈ 0.8-1.0
-    - If λ(t) rises linearly from T_min: use tau_exponent ≈ 1.5
-    - If λ(t) rises gradually: use tau_exponent ≈ 1.2-1.3
-    - If unknown or mixed: use tau_exponent = 1.0 (default)
+        # Zero out charges below threshold
+        measured_charge = jnp.where(
+            nonzero_mask,
+            total_charge,
+            0
+        )
 
-    For calibration, plot log(t_first - T_min) vs log(N) from your realistic simulation.
-    If the slope is -α, then optimal tau_exponent ≈ 1/α.
-
-    Examples
-    --------
-    >>> # Standard usage with default linear scaling
-    >>> charge, time = make_hits_simulation(weights, indices, times, num_detectors=100)
-    >>>
-    >>> # Optimized for high photon count with gradual rise distribution
-    >>> charge, time = make_hits_simulation(weights, indices, times, num_detectors=100,
-    ...                                     tau_exponent=1.3)
-    """
-    # Apply quantum efficiency
-    qe_weights = flat_weights * qe
-
-    # Filter valid photons
-    valid_mask = (qe_weights > threshold) & (flat_times > 0) & jnp.isfinite(flat_times)
-
-    # For segment_min, we need inf for invalid photons
-    times_for_min = jnp.where(valid_mask, flat_times, jnp.inf)
-    detector_mins = jax.ops.segment_min(times_for_min, flat_indices, num_segments=num_detectors)
-
-    # For all other operations, use 0 for invalid photons
-    masked_weights = jnp.where(valid_mask, qe_weights, 0.0)
-    masked_times = jnp.where(valid_mask, flat_times, 0.0)
-
-    # Compute per-detector total charge
-    total_charge = jax.ops.segment_sum(masked_weights, flat_indices, num_segments=num_detectors)
-
-    # Compute per-detector T_typical (charge-weighted mean time)
-    weighted_times = masked_weights * masked_times
-    sum_weighted_times = jax.ops.segment_sum(weighted_times, flat_indices, num_segments=num_detectors)
-    t_typical_per_detector = sum_weighted_times / (total_charge + 1e-10)
-
-    # Compute tau per detector with configurable exponent
-    tau_per_detector = t_typical_per_detector / jnp.power(total_charge + 1e-10, tau_exponent)
-
-    # Gather the appropriate tau and offset for each photon based on its detector
-    photon_tau = tau_per_detector[flat_indices]
-    photon_offsets = detector_mins[flat_indices]
-
-    # Compute exp terms with per-detector offsets and tau
-    shifted_times = flat_times - photon_offsets
-    exp_terms = jnp.exp(-shifted_times / (photon_tau + 1e-10))
-    masked_exp_terms = jnp.where(valid_mask, exp_terms, 0.0)
-
-    # Compute numerator: sum(Q * T * exp(...)) per detector
-    numerator_terms = masked_weights * masked_times * masked_exp_terms
-    numerator = jax.ops.segment_sum(numerator_terms, flat_indices, num_segments=num_detectors)
-
-    # Compute denominator: sum(Q * exp(...)) per detector
-    denominator_terms = masked_weights * masked_exp_terms
-    denominator = jax.ops.segment_sum(denominator_terms, flat_indices, num_segments=num_detectors)
-
-    # Compute effective first arrival time per detector
-    segment_first_time = numerator / (denominator + 1e-10)
-
-    # Handle detectors with no valid photons
-    has_photons = (total_charge > threshold) & jnp.isfinite(segment_first_time)
-    measured_charge = jnp.where(has_photons, total_charge, 0.0)
-    measured_time = jnp.where(has_photons, segment_first_time, 0.0)
-
-    return measured_charge, measured_time
+        return measured_charge, measured_time
 
 
 # 0.4 ns is Super-Kamiokande's PMT time resolution
@@ -752,61 +642,50 @@ def time_digitizer(times, time_resolution=0.4):
     return digitized_times
 
 
-def make_hits_data(flat_weights, flat_indices, flat_times, num_detectors, qe=0.2, rng_key=None, threshold=1e-10):
-    timing_mask = (flat_weights > threshold) & (flat_times > 0)
-    filtered_times = jnp.where(timing_mask, flat_times, jnp.inf)
+def make_hits_data(flat_weights, flat_indices, flat_times, num_detectors, qe=0.2, rng_key=None, threshold=1e-5):
 
-    # Apply quantum detection efficiency using Bernoulli sampling
-    if rng_key is not None and qe < 1.0:
-        # Generate random numbers for each photon
-        detection_probs = jax.random.uniform(rng_key, shape=flat_weights.shape)
-        # Binary detection decision
-        detected_mask = detection_probs < qe
-        # Apply detection mask to weights
-        qe_weights = flat_weights * detected_mask.astype(jnp.float32)
-        # Also apply detection mask to timing - only detected photons contribute to timing
-        qe_filtered_times = jnp.where(detected_mask & timing_mask, flat_times, jnp.inf)
-    else:
-        qe_weights = flat_weights
-        qe_filtered_times = filtered_times
+        timing_mask = (flat_weights>threshold) & (flat_times>0)
+        filtered_times = jnp.where(timing_mask, flat_times, jnp.inf)
 
-    segment_min_time = jax.ops.segment_min(
-        qe_filtered_times,  # Use QE-filtered times instead of filtered_times
-        flat_indices,
-        num_segments=num_detectors
-    )
+        # Apply quantum detection efficiency using Bernoulli sampling
+        if rng_key is not None and qe < 1.0:
+            # Generate random numbers for each photon
+            detection_probs = jax.random.uniform(rng_key, shape=flat_weights.shape)
+            # Binary detection decision
+            detected_mask = detection_probs < qe
+            # Apply detection mask to weights
+            qe_weights = flat_weights * detected_mask.astype(jnp.float32)
+            # Also apply detection mask to timing - only detected photons contribute to timing
+            qe_filtered_times = jnp.where(detected_mask & timing_mask, flat_times, jnp.inf)
+        else:
+            qe_weights = flat_weights
+            qe_filtered_times = filtered_times
 
-    total_charge = jax.ops.segment_sum(
-        qe_weights,  # Use QE-modified weights instead of flat_weights
-        flat_indices,
-        num_segments=num_detectors
-    )
+        total_charge = jax.ops.segment_sum(
+            qe_weights,  # Use QE-modified weights instead of flat_weights
+            flat_indices,
+            num_segments=num_detectors
+        )
 
-    measured_time = time_digitizer(segment_min_time)
+        weighted_time_sum = jax.ops.segment_sum(qe_weights * flat_times, flat_indices, num_segments=num_detectors)
+        weighted_mean_time = weighted_time_sum / (total_charge + 1e-20)
 
-    # Find minimum non-zero time for alignment
-    nonzero_mask = (total_charge > 1e-10) & (segment_min_time > 0)
-    min_nonzero_time = jnp.where(
-        jnp.any(nonzero_mask),
-        jnp.min(jnp.where(nonzero_mask, measured_time, jnp.inf)),
-        0.0
-    )
+        # Find minimum non-zero time for alignment
+        nonzero_mask = (total_charge > 1e-10) & (weighted_mean_time > 0)
+        measured_time = jnp.where(
+            jnp.any(nonzero_mask),
+            weighted_mean_time,
+            0.0
+        )
 
-    # Align times to earliest detection
-    aligned_times = jnp.where(
-        nonzero_mask,
-        measured_time,  # - min_nonzero_time,
-        0
-    )
+        # Zero out charges below threshold
+        measured_charge = jnp.where(
+            nonzero_mask,
+            total_charge,
+            0
+        )
 
-    # Zero out charges below threshold
-    measured_charge = jnp.where(
-        nonzero_mask,
-        total_charge,
-        0
-    )
-
-    return measured_charge, aligned_times
+        return measured_charge, measured_time
 
 
 def create_event_simulator(detector, propagate_photons, Nphot, NUM_SENSORS, sensor_points, K,
@@ -910,7 +789,7 @@ def create_event_simulator(detector, propagate_photons, Nphot, NUM_SENSORS, sens
         """ Translates unphysical SIREN output units into number of physical photons.
             the numbers are calculated using validate.py """
         # return 8.909502*x -340.832815
-        return (8.858452 * x + 110.806667)
+        return 11.398886*x + -276.226636
 
     @jax.jit
     def _simulation_without_data(particle_params, detector_params, key, grid_data, model_params):
