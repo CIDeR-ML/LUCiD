@@ -136,7 +136,7 @@ def bo_leap_local_search(key, x_n, loss_fn, loss_and_grad_fn, clip_fn, gradient_
     )
 
     params = es.default_params
-    params = params.replace(std_init=0.2)
+    params = params.replace(std_init=1.0)
 
     key, init_key = jax.random.split(key)
     state = es.init(init_key, x_n, params)
