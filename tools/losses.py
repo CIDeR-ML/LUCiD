@@ -373,7 +373,10 @@ def WC_loss(
     diff = jnp.where(both_active,
                      jnp.abs((simulated_time - sim_t0) - (true_time - true_t0)),
                      0.0)
-    time_loss = jnp.sum(diff) / (jnp.sum(both_active) + 1e-8)
+
+    time_norm = jnp.where(both_active, jnp.abs(true_time - true_t0), 0.0)
+
+    time_loss = jnp.sum(diff) / (jnp.sum(time_norm) + eps)
 
     L_charge = poisson_loss * lambda_poisson
     L_time = time_loss * lambda_time
