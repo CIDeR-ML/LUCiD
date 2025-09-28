@@ -600,7 +600,7 @@ def make_hits_simulation(flat_weights, flat_indices, flat_times, num_detectors, 
         weighted_mean_time = weighted_time_sum / (total_charge + 1e-20)
 
         # Find minimum non-zero time for alignment
-        nonzero_mask = (total_charge > 1e-5) & (weighted_mean_time > 0)
+        nonzero_mask = (total_charge > 1e-5) & (weighted_mean_time > 0.)
         measured_time = jnp.where(
             jnp.any(nonzero_mask),
             weighted_mean_time,
@@ -671,12 +671,22 @@ def make_hits_data(flat_weights, flat_indices, flat_times, num_detectors, qe=0.2
         weighted_mean_time = weighted_time_sum / (total_charge + 1e-20)
 
         # Find minimum non-zero time for alignment
-        nonzero_mask = (total_charge > 1e-10) & (weighted_mean_time > 0)
+        detector_mins = jax.ops.segment_min(qe_filtered_times, flat_indices, num_segments=num_detectors)
+
+        nonzero_mask = (total_charge > 1e-10) & (detector_mins > 0)
         measured_time = jnp.where(
             jnp.any(nonzero_mask),
-            weighted_mean_time,
+            time_digitizer(detector_mins),
             0.0
         )
+        
+        # Use this to use mean time instead of min time.
+        # nonzero_mask = (total_charge > 1e-10) & (weighted_mean_time > 0)
+        # measured_time = jnp.where(
+        #     jnp.any(nonzero_mask),
+        #     weighted_mean_time,
+        #     0.0
+        # )
 
         # Zero out charges below threshold
         measured_charge = jnp.where(
