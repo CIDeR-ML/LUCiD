@@ -143,7 +143,7 @@ class PhotonSimValidator:
         photon_weights = self.photonsim_predictor.predict_batch(evaluation_grid)
         return np.array(photon_weights).reshape(len(angle_bins), len(distance_bins))
     
-    def cutoff_study(self, energy=1716, thresholds=None, output_dir=None):
+    def cutoff_study(self, energy=600, thresholds=None, output_dir=None):
         """
         Perform cut-off threshold analysis.
         
@@ -533,11 +533,9 @@ class PhotonSimValidator:
             angles = self.calculate_opening_angles(ray_vectors, self.direction)
             
             # Calculate statistics
-            num_seeds = jnp.int32(energy * 7.74 +250.72)
             total_weight = float(jnp.sum(photon_weights))
             
             results['statistics'][energy] = {
-                'num_seeds': int(num_seeds),
                 'total_weight': total_weight,
                 'mean_range': float(jnp.mean(ranges)),
                 'mean_angle': float(jnp.mean(angles))
@@ -555,7 +553,7 @@ class PhotonSimValidator:
             
             axes[row, col].set_ylabel('Angle (radians)')
             axes[row, col].set_xlabel('Distance to Origin (m)')
-            axes[row, col].set_title(f'Energy: {energy:.0f} MeV\nSeeds: {num_seeds:,}')
+            axes[row, col].set_title(f'Energy: {energy:.0f} MeV')
         
         # Hide unused subplots
         for i in range(n_energies, rows * cols):
