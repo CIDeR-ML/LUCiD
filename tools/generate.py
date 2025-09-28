@@ -162,10 +162,9 @@ def photonsim_differentiable_get_rays(track_origin, track_direction, energy, Nph
     key, noise_key_dist = random.split(key)
 
     # calculated for 500x500 bins and cut-off of 2 using photonsim_cut_off_study
-    # num_seeds = jnp.int32(energy * 11.136 -720.3)
-    #num_seeds = jnp.int32(energy * 10.06 -79.32)
-    num_seeds = jnp.int32(energy * 7.74 +250.72)
-    #num_seeds = jnp.int32(energy * 6.21 +177.57)
+    num_seeds = jnp.int32(10.06*energy -79.32)
+    # # calculated for 500x500 bins and cut-off of 4 using photonsim_cut_off_study
+    # num_seeds = jnp.int32(7.73*energy + 251.65)
 
     seed_indices = random.randint(sampling_key, (Nphot,), 0, num_seeds)
     indices_by_weight = jnp.argsort(-photon_weights.squeeze())[seed_indices]
@@ -177,15 +176,16 @@ def photonsim_differentiable_get_rays(track_origin, track_direction, energy, Nph
     sampled_angle = selected_angle_dist[:, 0]
     sampled_dist  = selected_angle_dist[:, 1]
 
-    # Add Gaussian noise
-    sigma_angle = (angle_max-angle_min)/(2*n_bins)
-    sigma_dist = (distance_max-distance_min)/(2*n_bins)
+    # Add uniform sampling within bin edges instead of Gaussian smearing
+    bin_width_angle = (angle_max-angle_min)/(n_bins)
+    bin_width_dist = (distance_max-distance_min)/(n_bins)
+    
+    # Uniform sampling within [-bin_width/2, +bin_width/2] around bin center
+    uniform_angle = random.uniform(noise_key_angle, (Nphot,), minval=-bin_width_angle/2, maxval=bin_width_angle/2)
+    uniform_dist = random.uniform(noise_key_dist, (Nphot,), minval=-bin_width_dist/2, maxval=bin_width_dist/2)
 
-    noise_angle = random.normal(noise_key_angle, (Nphot,)) * sigma_angle
-    noise_dist = random.normal(noise_key_dist, (Nphot,)) * sigma_dist
-
-    smeared_angle = sampled_angle + noise_angle
-    smeared_dist = sampled_dist + noise_dist
+    smeared_angle = sampled_angle + uniform_angle
+    smeared_dist = sampled_dist + uniform_dist
 
     # Create new evaluation grid with smeared values
     new_evaluation_grid = jnp.stack([
