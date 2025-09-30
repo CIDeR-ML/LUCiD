@@ -112,7 +112,7 @@ def cone_points(axis, max_angle_rad, num_rings):
 
 def hierarchical_direction_search_cone(prediction_simulator, detector_params, position, initial_t0, hit_detector_positions, 
                                      observed_times, observed_charge, true_data, energy_guess,
-                                     levels, initial_div, max_angle_deg, reduction):
+                                     levels, initial_div, max_angle_deg, reduction, verbosity=2):
     """
     Hierarchical cone-based direction search using combined loss evaluation.
     
@@ -129,8 +129,9 @@ def hierarchical_direction_search_cone(prediction_simulator, detector_params, po
         dict with optimal direction and hierarchical search results
     """
     
-    print(f"    Performing {levels}-level hierarchical cone direction search...")
-    print(f"    Parameters: initial_div={initial_div}, max_angle={max_angle_deg}°, reduction={reduction}")
+    if verbosity >= 2:
+        print(f"    Performing {levels}-level hierarchical cone direction search...")
+        print(f"    Parameters: initial_div={initial_div}, max_angle={max_angle_deg}°, reduction={reduction}")
     
     # Initial global grid over sphere
     num_theta, num_phi = initial_div, initial_div*2
@@ -147,7 +148,8 @@ def hierarchical_direction_search_cone(prediction_simulator, detector_params, po
     search_key = jax.random.PRNGKey(789)
     
     for lvl in range(levels):
-        print(f"      Level {lvl}: Evaluating {len(directions)} directions")
+        if verbosity >= 2:
+            print(f"      Level {lvl}: Evaluating {len(directions)} directions")
         
         # Evaluate combined loss for each direction
         level_results = []
@@ -204,7 +206,8 @@ def hierarchical_direction_search_cone(prediction_simulator, detector_params, po
                 continue
         
         if best_level_direction is None:
-            print(f"      ERROR: No valid directions found at level {lvl}")
+            if verbosity >= 1:
+                print(f"      ERROR: No valid directions found at level {lvl}")
             break
             
         # Store level results
@@ -221,8 +224,9 @@ def hierarchical_direction_search_cone(prediction_simulator, detector_params, po
         path.append(level_summary)
         best_direction = best_level_direction
         
-        print(f"      Level {lvl} best loss: {best_loss:.6f}")
-        print(f"      Level {lvl} best direction: {best_level_direction}")
+        if verbosity >= 2:
+            print(f"      Level {lvl} best loss: {best_loss:.6f}")
+            print(f"      Level {lvl} best direction: {best_level_direction}")
         
         # Prepare next level: generate cone around best direction
         if lvl < levels - 1:  # Don't generate cone for last level
@@ -236,9 +240,10 @@ def hierarchical_direction_search_cone(prediction_simulator, detector_params, po
     final_theta = np.arccos(np.clip(best_direction[2], -1.0, 1.0))
     final_phi = np.arctan2(best_direction[1], best_direction[0])
     
-    print(f"    Hierarchical cone search complete. Best loss: {path[-1]['best_loss']:.6f}")
-    print(f"    Best direction: {best_direction}")
-    print(f"    Best angles: θ={final_theta:.3f}, φ={final_phi:.3f}")
+    if verbosity >= 2:
+        print(f"    Hierarchical cone search complete. Best loss: {path[-1]['best_loss']:.6f}")
+        print(f"    Best direction: {best_direction}")
+        print(f"    Best angles: θ={final_theta:.3f}, φ={final_phi:.3f}")
     
     return {
         'best_direction': best_direction,
@@ -273,7 +278,7 @@ def cartesian_to_spherical(direction):
 
 
 def cylinder_position_grid_search(hit_detector_positions, observed_times, observed_charge, 
-                            true_position, true_t0, R, H, L0, levels, reduction):
+                            true_position, true_t0, R, H, L0, levels, reduction, verbosity=2):
     """
     Perform Pos grid grid search for optimal origin position using origin_time_loss
     
@@ -292,9 +297,10 @@ def cylinder_position_grid_search(hit_detector_positions, observed_times, observ
         dict with Pos grid search results and optimal position
     """
     
-    print(f"    Performing Pos grid  position grid search...")
-    print(f"    Parameters: L0={L0}, levels={levels}, reduction={reduction}")
-    print(f"    Detector dimensions: R={R:.1f}m, H={H:.1f}m")
+    if verbosity >= 2:
+        print(f"    Performing Pos grid  position grid search...")
+        print(f"    Parameters: L0={L0}, levels={levels}, reduction={reduction}")
+        print(f"    Detector dimensions: R={R:.1f}m, H={H:.1f}m")
     
     # Generate all Pos grid levels
     all_results = []
@@ -309,16 +315,19 @@ def cylinder_position_grid_search(hit_detector_positions, observed_times, observ
     L = L0
     
     for level in range(levels):
-        print(f"      Pos grid Level {level}: L={L:.3f}, R_local={R_local:.3f}, H_local={H_local:.3f}")
+        if verbosity >= 2:
+            print(f"      Pos grid Level {level}: L={L:.3f}, R_local={R_local:.3f}, H_local={H_local:.3f}")
         
         # Generate Pos grid points for this level
         grid_points = cylinder_grid_points_local(center_xy, z_center, R_local, H_local, L, R, H)
         
         if len(grid_points) == 0:
-            print(f"      No valid Pos grid points at level {level}")
+            if verbosity >= 2:
+                print(f"      No valid Pos grid points at level {level}")
             break
             
-        print(f"      Generated {len(grid_points)} Pos grid points")
+        if verbosity >= 2:
+            print(f"      Generated {len(grid_points)} Pos grid points")
         
         # Evaluate origin_time_loss at each Pos grid point
         level_results = []
@@ -369,8 +378,9 @@ def cylinder_position_grid_search(hit_detector_positions, observed_times, observ
         
         all_results.append(level_summary)
         
-        print(f"      Level {level} best loss: {best_level_loss:.6f}")
-        print(f"      Level {level} best position: {best_level_position}")
+        if verbosity >= 2:
+            print(f"      Level {level} best loss: {best_level_loss:.6f}")
+            print(f"      Level {level} best position: {best_level_position}")
         
         # Prepare for next level refinement
         if best_level_position is not None:
@@ -388,9 +398,10 @@ def cylinder_position_grid_search(hit_detector_positions, observed_times, observ
     # Calculate final statistics
     final_position_error = float(jnp.linalg.norm(best_overall_position - true_position)) if best_overall_position is not None else float('inf')
     
-    print(f"    Pos grid search complete. Best overall loss: {best_overall_loss:.6f}")
-    print(f"    Best position: {best_overall_position}")
-    print(f"    Position error: {final_position_error:.3f}m")
+    if verbosity >= 2:
+        print(f"    Pos grid search complete. Best overall loss: {best_overall_loss:.6f}")
+        print(f"    Best position: {best_overall_position}")
+        print(f"    Position error: {final_position_error:.3f}m")
     
     return {
         'all_levels': all_results,
@@ -403,7 +414,7 @@ def cylinder_position_grid_search(hit_detector_positions, observed_times, observ
 
 def energy_scan_optimization(prediction_simulator, detector_params, position, theta, phi, initial_t0, hit_detector_positions,
                            observed_times, observed_charge, true_data, energy_guess,
-                           energy_delta, n_steps):
+                           energy_delta, n_steps, verbosity=2):
     """
     Perform energy scan around initial energy guess to find optimal energy.
     
@@ -419,8 +430,9 @@ def energy_scan_optimization(prediction_simulator, detector_params, position, th
         dict with energy scan results and optimal energy
     """
     
-    print(f"    Performing energy scan around E_guess={energy_guess:.1f}")
-    print(f"    Scan range: [{energy_guess-energy_delta:.1f}, {energy_guess+energy_delta:.1f}] in {n_steps} steps")
+    if verbosity >= 2:
+        print(f"    Performing energy scan around E_guess={energy_guess:.1f}")
+        print(f"    Scan range: [{energy_guess-energy_delta:.1f}, {energy_guess+energy_delta:.1f}] in {n_steps} steps")
     
     # Generate energy scan points
     energy_min = energy_guess - energy_delta
@@ -472,7 +484,8 @@ def energy_scan_optimization(prediction_simulator, detector_params, position, th
             print(f"        Error evaluating energy {energy:.1f}: {e}")
             continue
     
-    print(f"    Energy scan complete. Best energy: {best_energy:.1f} (loss: {best_loss:.6f})")
+    if verbosity >= 2:
+        print(f"    Energy scan complete. Best energy: {best_energy:.1f} (loss: {best_loss:.6f})")
     
     return {
         'energy_guess': float(energy_guess),
