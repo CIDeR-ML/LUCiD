@@ -40,6 +40,9 @@
   "visualization": {
     "arrow_every_n_points": 100
   },
+  "verbosity": {
+    "level": 1
+  },
   "detector_params": {
     "scatter_length": 50.0,
     "reflection_rate": 0.2,
