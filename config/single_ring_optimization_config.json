@@ -43,6 +43,9 @@
   "verbosity": {
     "level": 1
   },
+  "storage": {
+    "store_true_data": true
+  },
   "detector_params": {
     "scatter_length": 50.0,
     "reflection_rate": 0.2,
