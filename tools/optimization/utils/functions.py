@@ -25,8 +25,8 @@ def estimate_muon_energy_from_photon_count(N):
 
 
 
-# HCP lattice grid generation functions
-def cylinder_hcp_points_local(center_xy, z_center, R_local, H_local, L, R, H):
+# Pos grid generation functions
+def cylinder_grid_points_local(center_xy, z_center, R_local, H_local, L, R, H):
     """
     Generate HCP lattice points inside a local cylinder.
     - center_xy, z_center: center of local cylinder
@@ -272,10 +272,10 @@ def cartesian_to_spherical(direction):
     return theta, phi
 
 
-def hcp_position_grid_search(hit_detector_positions, observed_times, observed_charge, 
+def cylinder_position_grid_search(hit_detector_positions, observed_times, observed_charge, 
                             true_position, true_t0, R, H, L0, levels, reduction):
     """
-    Perform HCP lattice grid search for optimal origin position using origin_time_loss
+    Perform Pos grid grid search for optimal origin position using origin_time_loss
     
     Args:
         hit_detector_positions: positions of detectors with hits
@@ -284,20 +284,20 @@ def hcp_position_grid_search(hit_detector_positions, observed_times, observed_ch
         true_position: true position for comparison
         true_t0: true t0 for loss evaluation
         R, H: detector cylinder dimensions
-        L0: initial HCP lattice spacing
+        L0: initial Pos grid  spacing
         levels: number of refinement levels
         reduction: reduction factor between levels
     
     Returns:
-        dict with HCP search results and optimal position
+        dict with Pos grid search results and optimal position
     """
     
-    print(f"    Performing HCP lattice position grid search...")
+    print(f"    Performing Pos grid  position grid search...")
     print(f"    Parameters: L0={L0}, levels={levels}, reduction={reduction}")
     print(f"    Detector dimensions: R={R:.1f}m, H={H:.1f}m")
     
-    # Generate all HCP levels
-    all_hcp_results = []
+    # Generate all Pos grid levels
+    all_results = []
     best_overall_loss = float('inf')
     best_overall_position = None
     
@@ -309,23 +309,23 @@ def hcp_position_grid_search(hit_detector_positions, observed_times, observed_ch
     L = L0
     
     for level in range(levels):
-        print(f"      HCP Level {level}: L={L:.3f}, R_local={R_local:.3f}, H_local={H_local:.3f}")
+        print(f"      Pos grid Level {level}: L={L:.3f}, R_local={R_local:.3f}, H_local={H_local:.3f}")
         
-        # Generate HCP lattice points for this level
-        hcp_points = cylinder_hcp_points_local(center_xy, z_center, R_local, H_local, L, R, H)
+        # Generate Pos grid points for this level
+        grid_points = cylinder_grid_points_local(center_xy, z_center, R_local, H_local, L, R, H)
         
-        if len(hcp_points) == 0:
-            print(f"      No valid HCP points at level {level}")
+        if len(grid_points) == 0:
+            print(f"      No valid Pos grid points at level {level}")
             break
             
-        print(f"      Generated {len(hcp_points)} HCP points")
+        print(f"      Generated {len(grid_points)} Pos grid points")
         
-        # Evaluate origin_time_loss at each HCP point
+        # Evaluate origin_time_loss at each Pos grid point
         level_results = []
         best_level_loss = float('inf')
         best_level_position = None
         
-        for i, point in enumerate(hcp_points):
+        for i, point in enumerate(grid_points):
             position = jnp.array(point)
             
             try:
@@ -360,14 +360,14 @@ def hcp_position_grid_search(hit_detector_positions, observed_times, observed_ch
             'z_center': z_center,
             'R_local': R_local,
             'H_local': H_local,
-            'num_points': len(hcp_points),
-            'hcp_points': hcp_points,
+            'num_points': len(grid_points),
+            'grid_points': grid_points,
             'point_results': level_results,
             'best_position': np.array(best_level_position) if best_level_position is not None else None,
             'best_loss': best_level_loss
         }
         
-        all_hcp_results.append(level_summary)
+        all_results.append(level_summary)
         
         print(f"      Level {level} best loss: {best_level_loss:.6f}")
         print(f"      Level {level} best position: {best_level_position}")
@@ -388,16 +388,16 @@ def hcp_position_grid_search(hit_detector_positions, observed_times, observed_ch
     # Calculate final statistics
     final_position_error = float(jnp.linalg.norm(best_overall_position - true_position)) if best_overall_position is not None else float('inf')
     
-    print(f"    HCP search complete. Best overall loss: {best_overall_loss:.6f}")
+    print(f"    Pos grid search complete. Best overall loss: {best_overall_loss:.6f}")
     print(f"    Best position: {best_overall_position}")
     print(f"    Position error: {final_position_error:.3f}m")
     
     return {
-        'hcp_levels': all_hcp_results,
+        'all_levels': all_results,
         'best_position': np.array(best_overall_position) if best_overall_position is not None else None,
         'best_loss': best_overall_loss,
         'position_error': final_position_error,
-        'total_levels': len(all_hcp_results)
+        'len_all_levels': len(all_results)
     }
 
 
@@ -484,3 +484,127 @@ def energy_scan_optimization(prediction_simulator, detector_params, position, th
         'best_loss': best_loss,
         'energy_improvement': float(abs(best_energy - energy_guess))
     }
+
+
+
+
+import numpy as np
+
+def performance_summary(
+    energy_guess_errors,
+    grid_position_errors,
+    cone_direction_errors,
+    energy_scan_improvements,
+    final_position_errors,
+    final_direction_errors,
+    final_t0_errors,
+    final_energy_errors,
+    final_combined_losses,
+    final_vertex_losses,
+    final_counts_losses,
+    final_energy_losses,
+    convergence_rates,
+):
+    print("=" * 80)
+    print("RECONSTRUCTION SUMMARY")
+    print("=" * 80)
+
+    # Convert to numpy arrays
+    energy_guess_errors = np.array(energy_guess_errors)
+    grid_position_errors = np.array(grid_position_errors)
+    cone_direction_errors = np.array(cone_direction_errors)
+    energy_scan_improvements = np.array(energy_scan_improvements)
+    final_position_errors = np.array(final_position_errors)
+    final_direction_errors = np.array(final_direction_errors)
+    final_t0_errors = np.array(final_t0_errors)
+    final_energy_errors = np.array(final_energy_errors)
+    final_combined_losses = np.array(final_combined_losses)
+    final_vertex_losses = np.array(final_vertex_losses)
+    final_counts_losses = np.array(final_counts_losses)
+    final_energy_losses = np.array(final_energy_losses)
+    convergence_rates = np.array(convergence_rates)
+
+    # Percentile helper
+    def percentile_68(data):
+        return np.percentile(data, 68)
+
+    # --- STATISTICS ---
+    def stats(data):
+        return np.mean(data), np.std(data), percentile_68(data)
+
+    energy_guess_error_mean, energy_guess_error_std, energy_guess_error_68 = stats(energy_guess_errors)
+    grid_pos_error_mean, grid_pos_error_std, grid_pos_error_68 = stats(grid_position_errors)
+    cone_dir_error_mean, cone_dir_error_std, cone_dir_error_68 = stats(cone_direction_errors)
+    energy_scan_improvement_mean, energy_scan_improvement_std, _ = stats(energy_scan_improvements)
+    pos_error_mean, pos_error_std, pos_error_68 = stats(final_position_errors)
+    dir_error_mean, dir_error_std, dir_error_68 = stats(final_direction_errors)
+    t0_error_mean, t0_error_std, t0_error_68 = stats(final_t0_errors)
+    energy_error_mean, energy_error_std, energy_error_68 = stats(final_energy_errors)
+
+    combined_loss_mean = np.mean(final_combined_losses)
+    vertex_loss_mean = np.mean(final_vertex_losses)
+    counts_loss_mean = np.mean(final_counts_losses)
+    energy_loss_mean = np.mean(final_energy_losses)
+
+    convergence_rate_pct = np.mean(convergence_rates) * 100
+
+    # --- PRINTING ---
+    print(f"\n🔢 ENERGY ESTIMATION:")
+    print(f"  Energy guess error - Mean: {energy_guess_error_mean:.1f} ± {energy_guess_error_std:.1f}")
+    print(f"  Energy guess error - 68%: {energy_guess_error_68:.1f}")
+
+    print(f"\n🔍 HCP POSITION GRID SEARCH:")
+    print(f"  HCP position error - Mean: {grid_pos_error_mean:.3f} ± {grid_pos_error_std:.3f} m")
+    print(f"  HCP position error - 68%: {grid_pos_error_68:.3f} m")
+
+    print(f"\n🎯 HIERARCHICAL CONE DIRECTION SEARCH:")
+    print(f"  Cone direction error - Mean: {cone_dir_error_mean:.1f}° ± {cone_dir_error_std:.1f}°")
+    print(f"  Cone direction error - 68%: {cone_dir_error_68:.1f}°")
+
+    print(f"\n⚡ ENERGY SCAN OPTIMIZATION:")
+    print(f"  Energy scan improvement - Mean: {energy_scan_improvement_mean:.1f} ± {energy_scan_improvement_std:.1f}")
+
+    print(f"\n🎯 FINAL POSITION RECONSTRUCTION:")
+    print(f"  Position error - Mean: {pos_error_mean:.3f} ± {pos_error_std:.3f} m")
+    print(f"  Position error - 68%: {pos_error_68:.3f} m")
+
+    print(f"\n🧭 FINAL DIRECTION RECONSTRUCTION:")
+    print(f"  Direction error - Mean: {dir_error_mean:.1f}° ± {dir_error_std:.1f}°")
+    print(f"  Direction error - 68%: {dir_error_68:.1f}°")
+
+    print(f"\n⏰ TIME RECONSTRUCTION:")
+    print(f"  t0 error - Mean: {t0_error_mean:.3f} ± {t0_error_std:.3f}")
+    print(f"  t0 error - 68%: {t0_error_68:.3f}")
+
+    print(f"\n🔢 ENERGY RECONSTRUCTION:")
+    print(f"  Energy error - Mean: {energy_error_mean:.1f} ± {energy_error_std:.1f}")
+    print(f"  Energy error - 68%: {energy_error_68:.1f}")
+
+    print(f"\n📊 LOSS ANALYSIS:")
+    print(f"  Combined loss - Mean: {combined_loss_mean:.6f}")
+    print(f"  Vertex loss - Mean: {vertex_loss_mean:.6f}")
+    print(f"  Counts loss - Mean: {counts_loss_mean:.6f}")
+    print(f"  Energy loss - Mean: {energy_loss_mean:.6f}")
+
+    print(f"\n⚡ OPTIMIZATION PERFORMANCE:")
+    print(f"  Convergence rate: {convergence_rate_pct:.1f}%")
+
+    print(f"\n✨ KEY PERFORMANCE METRICS:")
+    print(f"  🔢 68% Energy Guess Error: {energy_guess_error_68:.1f}")
+    print(f"  🔍 68% HCP Position Error: {grid_pos_error_68:.3f} m")
+    print(f"  🎯 68% Cone Direction Error: {cone_dir_error_68:.1f}°")
+    print(f"  🎯 68% Final Position Error: {pos_error_68:.3f} m")
+    print(f"  🧭 68% Final Direction Error: {dir_error_68:.1f}°")
+    print(f"  ⏰ 68% t0 Error: {t0_error_68:.3f}")
+    print(f"  🔢 68% Final Energy Error: {energy_error_68:.1f}")
+    print(f"  ⚡ Convergence Rate: {convergence_rate_pct:.1f}%")
+
+    # Improvements
+    position_improvement = grid_pos_error_mean - pos_error_mean
+    direction_improvement = cone_dir_error_mean - dir_error_mean
+    energy_improvement = energy_guess_error_mean - energy_error_mean
+
+    print(f"\n📈 OPTIMIZATION IMPROVEMENTS:")
+    print(f"  Average position improvement: {position_improvement:.3f}m (HCP → final)")
+    print(f"  Average direction improvement: {direction_improvement:.1f}° (cone → final)")
+    print(f"  Average energy improvement: {energy_improvement:.1f} (guess → final)")

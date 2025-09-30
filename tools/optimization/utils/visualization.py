@@ -15,6 +15,603 @@ from .geometry import (
 )
 from ...visualization import create_detector_display
 
+import os
+import numpy as np
+import plotly.graph_objects as go
+
+from tools.optimization.utils.geometry import (
+    create_cylinder_surface, create_sphere_surface, create_box_surface,
+    compute_cone_cylinder_intersection, compute_cone_sphere_intersection, 
+    compute_cone_box_intersection, get_cherenkov_angle
+)
+
+def spherical_to_cartesian(theta, phi):
+    """Convert spherical angles to Cartesian direction vector"""
+    sin_theta = jnp.sin(theta)
+    cos_theta = jnp.cos(theta)
+    sin_phi = jnp.sin(phi)
+    cos_phi = jnp.cos(phi)
+    
+    return jnp.array([sin_theta * cos_phi, sin_theta * sin_phi, cos_theta])
+
+def create_full_event_3D_visualization(
+    event_ID,
+    all_event_results,
+    sensor_positions,
+    true_charges,
+    true_times,
+    detector_bounds,
+    arrow_every_n=10,
+    color_by='time',
+    min_charge=10.0,
+    cherenkov_angle_rad=None,
+    figures_dir=None,
+    detector_name="Unknown",
+    show_legend_limit=8
+):
+    """
+    Combined interactive 3D visualization:
+      - optimization trajectory (markers + lines)
+      - arrows at selected iterations (arrow_every_n)
+      - for each arrow: compute Cherenkov cone intersection with detector geometry and plot ring/segments
+      - detector shading (cylinder/sphere/box)
+      - observed hits (filtered by min_charge) colored by 'time' or 'charge'
+      - true & fitted tracks & origins
+      - saves HTML and returns (fig, output_file_html)
+    
+    Parameters:
+    -----------
+    event_ID : int
+        Index into all_event_results (same structure used by your create_3d_visualization).
+    all_event_results : list/dict
+        Container of event results with same keys/structure as in your posted functions.
+    sensor_positions : np.ndarray (N,3)
+        Positions of the sensors (m).
+    true_charges : np.ndarray (N,)
+    true_times   : np.ndarray (N,)
+    detector_bounds : dict
+        Should include 'type' key: 'cylinder'|'sphere'|'box' and geometry params:
+          - cylinder: {'type':'cylinder', 'r':..., 'H':...}
+          - sphere: {'type':'sphere', 'r':...}
+          - box: {'type':'box', 'x':..., 'y':..., 'z':...}
+    arrow_every_n : int
+        Plot arrows every N trajectory steps (you said you will tune not to be crowded).
+    color_by : 'time'|'charge'
+    min_charge : float
+        threshold to display hits
+    cherenkov_angle_rad : float or None
+        If None, function will compute using get_cherenkov_angle(1.33) if available.
+    figures_dir : str or None
+        directory to save HTML
+    detector_name : str
+        used in file name / title
+    show_legend_limit : int
+        Only show legend entries for the first N arrows (avoid huge legends).
+    """
+    # Basic checks
+    if event_ID >= len(all_event_results):
+        raise IndexError(f"Event {event_ID} not available. Max event index: {len(all_event_results)-1}")
+
+    # Extract event result structure (compatible with your create_3d_visualization)
+    event_result = all_event_results[event_ID]
+    event_data = event_result['event_data']
+    optimization_results = event_result['optimization_results']
+
+    true_position = np.asarray(event_data['true_position'], dtype=float)
+    true_direction = np.asarray(event_data['true_direction'], dtype=float)  # unit vector expected
+    true_energy = event_data.get('true_energy', np.nan)
+
+    # Trajectory / optimization history
+    trajectory_params = np.array(optimization_results['history']['parameters'])
+    trajectory_positions = trajectory_params[:, :3]            # x,y,z
+    trajectory_thetas = trajectory_params[:, 4]               # theta
+    trajectory_phis = trajectory_params[:, 5]                 # phi
+    combined_losses = np.array(optimization_results['history']['combined_losses'])
+    vertex_losses = np.array(optimization_results['history']['vertex_losses'])
+    counts_losses = np.array(optimization_results['history']['counts_losses'])
+
+    # Final / fitted result (use last item in trajectory)
+    final_pos = trajectory_positions[-1]
+    final_theta = trajectory_thetas[-1]
+    final_phi = trajectory_phis[-1]
+
+    # If helper available, compute cherenkov angle (fallback to 41.2 deg in water if not given)
+    if cherenkov_angle_rad is None:
+        try:
+            cherenkov_angle_rad = get_cherenkov_angle(1.33)
+        except Exception:
+            cherenkov_angle_rad = np.radians(41.2)
+
+    # Setup hits (filter by min_charge)
+    significant_mask = np.asarray(true_charges) > min_charge
+    hit_positions = sensor_positions[significant_mask]
+    hit_charges_vis = np.asarray(true_charges)[significant_mask]
+    hit_times_vis = np.asarray(true_times)[significant_mask]
+
+    # Choose coloring for hits
+    if color_by == 'time':
+        color_data = hit_times_vis
+        color_label = 'Hit T'
+        colorscale = 'plasma'
+        cmin, cmax = 0, 50
+    elif color_by == 'charge':
+        color_data = hit_charges_vis
+        color_label = 'Hit Q'
+        colorscale = 'viridis'
+        cmin, cmax = 0, 50
+    else:
+        raise ValueError("color_by must be 'time' or 'charge'")
+
+    # --- Build figure ---
+    fig = go.Figure()
+
+# Detector shaded surfaces / boundaries (fixed homogeneous grey)
+    det_type = detector_bounds.get('type', 'cylinder')
+    try:
+        if det_type == 'cylinder':
+            x_cyl, y_cyl, z_cyl = create_cylinder_surface(detector_bounds['r'], detector_bounds['H'])
+            fig.add_trace(go.Surface(
+                x=x_cyl, y=y_cyl, z=z_cyl,
+                surfacecolor=np.ones_like(x_cyl),  # uniform surface
+                colorscale=[[0, "lightgrey"], [1, "lightgrey"]],
+                opacity=0.15,
+                showscale=False,
+                name='Cylinder Surface',
+                hoverinfo='skip'
+            ))
+            # top/bottom edges ...
+            theta = np.linspace(0, 2*np.pi, 80)
+            for z_val in [-detector_bounds['H']/2, detector_bounds['H']/2]:
+                x_circle = detector_bounds['r'] * np.cos(theta)
+                y_circle = detector_bounds['r'] * np.sin(theta)
+                z_circle = np.full_like(theta, z_val)
+                fig.add_trace(go.Scatter3d(
+                    x=x_circle, y=y_circle, z=z_circle,
+                    mode='lines',
+                    line=dict(color='gray', width=2),
+                    showlegend=False, hoverinfo='skip'
+                ))
+
+        elif det_type == 'sphere':
+            x_sph, y_sph, z_sph = create_sphere_surface(detector_bounds['r'])
+            fig.add_trace(go.Surface(
+                x=x_sph, y=y_sph, z=z_sph,
+                surfacecolor=np.ones_like(x_sph),
+                colorscale=[[0, "lightgrey"], [1, "lightgrey"]],
+                opacity=0.12,
+                showscale=False,
+                name='Sphere Surface',
+                hoverinfo='skip'
+            ))
+
+        elif det_type == 'box':
+            vertices, edges = create_box_surface(detector_bounds['x'], detector_bounds['y'], detector_bounds['z'])
+            vertices = np.asarray(vertices)
+            # wireframe edges
+            for edge in edges:
+                v = vertices[list(edge)]
+                fig.add_trace(go.Scatter3d(
+                    x=v[:,0], y=v[:,1], z=v[:,2],
+                    mode='lines',
+                    line=dict(color='gray', width=2),
+                    showlegend=False, hoverinfo='skip'
+                ))
+            # semi-transparent faces
+            if vertices.shape[0] == 8:
+                faces = [
+                    (0,1,3,2), (4,5,7,6), (0,1,5,4),
+                    (2,3,7,6), (0,2,6,4), (1,3,7,5)
+                ]
+                i_tri, j_tri, k_tri = [], [], []
+                for f in faces:
+                    a,b,c,d = f
+                    i_tri += [a, a]; j_tri += [b, c]; k_tri += [c, d]
+                fig.add_trace(go.Mesh3d(
+                    x=vertices[:,0], y=vertices[:,1], z=vertices[:,2],
+                    i=i_tri, j=j_tri, k=k_tri,
+                    opacity=0.12,
+                    color='lightgrey',
+                    name='Box Surface',
+                    showscale=False
+                ))
+    except Exception as e:
+        print(f"Warning: could not add detector shading: {e}")
+
+    # Observed hits
+    fig.add_trace(go.Scatter3d(
+        x=hit_positions[:, 0],
+        y=hit_positions[:, 1],
+        z=hit_positions[:, 2],
+        mode='markers',
+        marker=dict(
+            size=5,
+            color=color_data,
+            colorscale=colorscale,
+            colorbar=dict(
+                title=color_label,
+                len=0.5,
+                x=1.02,
+                thickness=15,
+            ),
+            cmin=cmin, cmax=cmax,
+            opacity=0.9
+        ),
+        name='Detector Hits',
+        hovertemplate='<b>Hit Info</b><br>'
+                      'Position: (%{x:.2f}, %{y:.2f}, %{z:.2f})<br>'
+                      f'{color_label}: %{{marker.color:.2f}}<extra></extra>'
+    ))
+
+    # Optimization trajectory with different colormap for losses
+    x, y, z = trajectory_positions[:,0], trajectory_positions[:,1], trajectory_positions[:,2]
+    fig.add_trace(go.Scatter3d(
+        x=x, y=y, z=z,
+        mode="markers+lines",
+        marker=dict(
+            size=4,
+            color=combined_losses,
+            colorscale='Cividis',
+            colorbar=dict(
+                title="Loss",
+                len=0.5,
+                x=1.08,
+                thickness=15,
+            ),
+            showscale=True,
+            opacity=0.8
+        ),
+        line=dict(color='gray', width=2),
+        text=[f'Iteration: {i}<br>Loss: {loss:.6f}<br>'
+              f'Vertex Loss: {v_loss:.6f}<br>'
+              f'WC Loss: {w_loss:.6f}<br>'
+              f'θ: {theta:.3f}, φ: {phi:.3f}'
+              for i, (loss, v_loss, w_loss, theta, phi)
+              in enumerate(zip(combined_losses, vertex_losses, counts_losses, trajectory_thetas, trajectory_phis))],
+        hovertemplate='%{text}<extra></extra>',
+        name="Optimization Trajectory"
+    ))
+
+    # Start and final points
+    fig.add_trace(go.Scatter3d(
+        x=[x[0]], y=[y[0]], z=[z[0]],
+        mode="markers", marker=dict(size=12, symbol="circle", color='blue', line=dict(width=3, color='darkblue')), name="Start Point"
+    ))
+    fig.add_trace(go.Scatter3d(
+        x=[x[-1]], y=[y[-1]], z=[z[-1]],
+        mode="markers", marker=dict(size=12, symbol="square", color='green', line=dict(width=3, color='darkgreen')), name="Final Point"
+    ))
+
+    # Add true track & origin
+    t_vals = np.linspace(0, 8, 100)
+    true_track_points = true_position[:, np.newaxis] + t_vals[np.newaxis, :] * true_direction[:, np.newaxis]
+    fig.add_trace(go.Scatter3d(
+        x=true_track_points[0], y=true_track_points[1], z=true_track_points[2],
+        mode='lines', line=dict(color='blue', width=8), name='True Track',
+        hovertemplate='<b>True Track</b><br>Position: (%{x:.2f}, %{y:.2f}, %{z:.2f})<extra></extra>'
+    ))
+    fig.add_trace(go.Scatter3d(
+        x=[true_position[0]], y=[true_position[1]], z=[true_position[2]],
+        mode='markers', marker=dict(size=15, color='blue', symbol='diamond', line=dict(color='black', width=2)), name='True Origin',
+        hovertemplate='<b>True Origin</b><br>' + f'Position: ({true_position[0]:.2f}, {true_position[1]:.2f}, {true_position[2]:.2f})<extra></extra>'
+    ))
+
+    # Add final/fitted track & origin (from final trajectory params)
+    fitted_direction = spherical_to_cartesian(final_theta, final_phi)
+    fitted_track_points = final_pos[:, np.newaxis] + t_vals[np.newaxis, :] * np.asarray(fitted_direction)[:, np.newaxis]
+    fig.add_trace(go.Scatter3d(
+        x=fitted_track_points[0], y=fitted_track_points[1], z=fitted_track_points[2],
+        mode='lines', line=dict(color='red', width=8, dash='dash'), name='Fitted Track',
+        hovertemplate='<b>Fitted Track</b><br>Position: (%{x:.2f}, %{y:.2f}, %{z:.2f})<extra></extra>'
+    ))
+    fig.add_trace(go.Scatter3d(
+        x=[final_pos[0]], y=[final_pos[1]], z=[final_pos[2]],
+        mode='markers', marker=dict(size=15, color='red', symbol='diamond', line=dict(color='black', width=2)), name='Fitted Origin',
+        hovertemplate='<b>Fitted Origin</b><br>' + f'Position: ({final_pos[0]:.2f}, {final_pos[1]:.2f}, {final_pos[2]:.2f})<extra></extra>'
+    ))
+
+    # Add multiple direction arrows along trajectory and compute/plot their cone intersections
+    arrow_len = max(1.0, np.linalg.norm(trajectory_positions.max(axis=0) - trajectory_positions.min(axis=0)) * 0.05)
+    arrow_indices = list(range(0, len(trajectory_positions), arrow_every_n))
+    if (len(trajectory_positions) - 1) not in arrow_indices:
+        arrow_indices.append(len(trajectory_positions) - 1)
+
+    arrow_colors = ['darkblue', 'purple', 'orange', 'darkgreen', 'red', 'brown', 'pink', 'gray', 'olive', 'cyan']
+
+    for i, idx in enumerate(arrow_indices):
+        if idx >= len(trajectory_positions):
+            continue
+        pos = trajectory_positions[idx]
+        theta = trajectory_thetas[idx]
+        phi = trajectory_phis[idx]
+        direction = np.asarray(spherical_to_cartesian(theta, phi))
+        color = arrow_colors[i % len(arrow_colors)]
+        arrow_name = f"Direction at iter {idx}" if idx < len(trajectory_positions) - 1 else "Final Direction"
+        showlegend = (i < show_legend_limit)
+
+        # Arrow line
+        fig.add_trace(go.Scatter3d(
+            x=[pos[0], pos[0] + arrow_len * direction[0]],
+            y=[pos[1], pos[1] + arrow_len * direction[1]],
+            z=[pos[2], pos[2] + arrow_len * direction[2]],
+            mode="lines",
+            line=dict(color=color, width=6),
+            name=arrow_name,
+            showlegend=showlegend,
+            hoverinfo='skip'
+        ))
+
+        # For each arrow, compute and plot intersection ring(s)/segments
+        try:
+            if det_type == 'cylinder':
+                pts = compute_cone_cylinder_intersection(pos, direction, cherenkov_angle_rad, detector_bounds['r'], detector_bounds['H'])
+                if len(pts) > 0:
+                    fig.add_trace(go.Scatter3d(
+                        x=pts[:,0], y=pts[:,1], z=pts[:,2],
+                        mode='lines',
+                        line=dict(color=color, width=4, dash='dash'),
+                        name=f'Ring (iter {idx})',
+                        showlegend=showlegend,
+                        hovertemplate='<b>Cone-Cylinder</b><br>Position: (%{x:.2f}, %{y:.2f}, %{z:.2f})<extra></extra>'
+                    ))
+            elif det_type == 'sphere':
+                pts = compute_cone_sphere_intersection(pos, direction, cherenkov_angle_rad, detector_bounds['r'])
+                if len(pts) > 0:
+                    fig.add_trace(go.Scatter3d(
+                        x=pts[:,0], y=pts[:,1], z=pts[:,2],
+                        mode='lines',
+                        line=dict(color=color, width=4, dash='dash'),
+                        name=f'Ring (iter {idx})',
+                        showlegend=showlegend,
+                        hovertemplate='<b>Cone-Sphere</b><br>Position: (%{x:.2f}, %{y:.2f}, %{z:.2f})<extra></extra>'
+                    ))
+            elif det_type == 'box':
+                # compute_cone_box_intersection might return a list of segments (like in your function)
+                segments = compute_cone_box_intersection(pos, direction, cherenkov_angle_rad,
+                                                        detector_bounds['x'], detector_bounds['y'], detector_bounds['z'])
+                if len(segments) > 0:
+                    # segments might be list of arrays of points
+                    for seg in segments:
+                        seg = np.asarray(seg)
+                        if seg.ndim == 2 and seg.shape[0] > 0:
+                            fig.add_trace(go.Scatter3d(
+                                x=seg[:,0], y=seg[:,1], z=seg[:,2],
+                                mode='lines',
+                                line=dict(color=color, width=4, dash='dash'),
+                                name=f'RingSeg (iter {idx})',
+                                showlegend=showlegend,
+                                hovertemplate='<b>Cone-Box</b><br>Position: (%{x:.2f}, %{y:.2f}, %{z:.2f})<extra></extra>'
+                            ))
+        except Exception as e:
+            # Do not fail the whole plot if a single intersection computation crashes
+            print(f"Warning: could not compute/plot intersection for arrow idx {idx}: {e}")
+
+    # Title with errors & improvements (try to mirror your earlier title fields)
+    pos_err = optimization_results.get('final_position_error', np.nan)
+    dir_err = optimization_results.get('final_direction_error', np.nan)
+    energy_guess_err = event_result.get('energy_guess_error', np.nan)
+    E_err = optimization_results.get('final_energy_error', np.nan)
+    dir_guess_err = event_result.get('cone_direction_error', np.nan)
+    pos_guess_err = event_result.get('hcp_position_error', np.nan)
+    combined_loss = optimization_results.get('final_combined_loss', np.nan)
+
+    # avoid division by zero on true_energy
+    E_percent_guess = (100*energy_guess_err/true_energy) if (true_energy and not np.isnan(true_energy) and true_energy != 0) else np.nan
+    E_percent_final = (100*E_err/true_energy) if (true_energy and not np.isnan(true_energy) and true_energy != 0) else np.nan
+
+    title_text = (f"Event {event_ID}<br>"
+                  f"Pos Guess Error: {pos_guess_err:.3f}m → Final Pos Error: {pos_err:.3f}m<br>"
+                  f"Dir Guess Error: {dir_guess_err:.1f}° → Final Dir Error: {dir_err:.1f}°<br>"
+                  f"E Guess Error: {E_percent_guess:.1f} % → Final E Error: {E_percent_final:.1f} % <br>")
+
+    # Layout
+    center_point = true_position
+    detector_size = 40
+    fig.update_layout(
+        scene=dict(
+            xaxis_title="X (m)", yaxis_title="Y (m)", zaxis_title="Z (m)",
+            xaxis=dict(range=[center_point[0]-detector_size, center_point[0]+detector_size]),
+            yaxis=dict(range=[center_point[1]-detector_size, center_point[1]+detector_size]),
+            zaxis=dict(range=[center_point[2]-detector_size, center_point[2]+detector_size]),
+            aspectmode='cube'
+        ),
+        width=1200,
+        height=900,
+        title=title_text,
+        showlegend=True,
+        legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01, bgcolor="rgba(255,255,255,0.85)")
+    )
+
+    # Save HTML
+    filename = f'{detector_name}_full_event_{event_ID:03d}_3D_interactive.html'
+    if figures_dir:
+        os.makedirs(figures_dir, exist_ok=True)
+        filename = os.path.join(figures_dir, filename)
+    fig.write_html(filename)
+    print(f"Full interactive 3D visualization saved to {filename}")
+
+    return fig, filename
+
+
+
+def create_optimization_path_3d_visualization(event_ID, all_event_results, arrow_every_n):
+    """
+    Create 3D visualization with multiple direction arrows and arrow heads.
+    Title shows both direction and position error improvements.
+    """
+    if event_ID >= len(all_event_results):
+        print(f"Event {event_ID} not available. Max event index: {len(all_event_results)-1}")
+        return
+
+    fig = go.Figure()
+
+    # Extract event data
+    event_result = all_event_results[event_ID]
+    event_data = event_result['event_data']
+    optimization_results = event_result['optimization_results']
+
+    # True parameters
+    true_position = event_data['true_position']
+    true_direction = event_data['true_direction']
+
+    # Extract optimization trajectory
+    trajectory_params = np.array(optimization_results['history']['parameters'])
+    trajectory_positions = trajectory_params[:, :3]  # [x, y, z]
+    trajectory_thetas = trajectory_params[:, 4]
+    trajectory_phis = trajectory_params[:, 5]
+    combined_losses = np.array(optimization_results['history']['combined_losses'])
+    vertex_losses = np.array(optimization_results['history']['vertex_losses'])
+    counts_losses = np.array(optimization_results['history']['counts_losses'])
+
+    x, y, z = trajectory_positions[:, 0], trajectory_positions[:, 1], trajectory_positions[:, 2]
+
+    # Plot optimization trajectory colored by combined loss
+    fig.add_trace(go.Scatter3d(
+        x=x, y=y, z=z,
+        mode="markers+lines",
+        marker=dict(
+            size=4,
+            color=combined_losses,
+            colorscale='Viridis_r',
+            colorbar=dict(title="Loss", x=1.02),
+            showscale=True,
+            opacity=0.8
+        ),
+        line=dict(color='gray', width=2),
+        text=[f'Iteration: {i}<br>Loss: {loss:.6f}<br>Vertex Loss: {v_loss:.6f}<br>WC Loss: {w_loss:.6f}<br>θ: {theta:.3f}, φ: {phi:.3f}'
+              for i, (loss, v_loss, w_loss, theta, phi) in enumerate(zip(combined_losses, vertex_losses, counts_losses, trajectory_thetas, trajectory_phis))],
+        hovertemplate='%{text}<extra></extra>',
+        name="Optimization Trajectory"
+    ))
+
+    # Mark starting point
+    fig.add_trace(go.Scatter3d(
+        x=[x[0]], y=[y[0]], z=[z[0]],
+        mode="markers",
+        marker=dict(size=12, symbol="circle", color='blue', line=dict(width=3, color='darkblue')),
+        name="Start Point"
+    ))
+
+    # Mark final point
+    fig.add_trace(go.Scatter3d(
+        x=[x[-1]], y=[y[-1]], z=[z[-1]],
+        mode="markers",
+        marker=dict(size=12, symbol="square", color='green', line=dict(width=3, color='darkgreen')),
+        name="Final Point"
+    ))
+
+    # Add multiple direction arrows along trajectory
+    arrow_len = 1.5
+    arrow_indices = list(range(0, len(trajectory_positions), arrow_every_n))
+    if len(trajectory_positions) - 1 not in arrow_indices:
+        arrow_indices.append(len(trajectory_positions) - 1)
+
+    arrow_colors = ['darkblue', 'purple', 'orange', 'darkgreen', 'red', 'brown', 'pink', 'gray', 'olive', 'cyan']
+
+    for i, idx in enumerate(arrow_indices):
+        if idx >= len(trajectory_positions):
+            continue
+
+        pos = trajectory_positions[idx]
+        theta = trajectory_thetas[idx]
+        phi = trajectory_phis[idx]
+        direction = spherical_to_cartesian(theta, phi)
+
+        color = arrow_colors[i % len(arrow_colors)]
+        arrow_name = f"Direction at iter {idx}" if idx < len(trajectory_positions) - 1 else "Final Direction"
+
+        fig.add_trace(go.Scatter3d(
+            x=[pos[0], pos[0] + arrow_len * direction[0]],
+            y=[pos[1], pos[1] + arrow_len * direction[1]],
+            z=[pos[2], pos[2] + arrow_len * direction[2]],
+            mode="lines",
+            line=dict(color=color, width=6),
+            name=arrow_name,
+            showlegend=(i < 5)
+        ))
+
+    # True position
+    fig.add_trace(go.Scatter3d(
+        x=[true_position[0]], y=[true_position[1]], z=[true_position[2]],
+        mode="markers",
+        marker=dict(size=18, symbol="diamond", color="red", line=dict(width=3, color='darkred')),
+        name="True Position"
+    ))
+
+    # True direction
+    true_arrow_len = 3.0
+    fig.add_trace(go.Scatter3d(
+        x=[true_position[0], true_position[0] + true_arrow_len * true_direction[0]],
+        y=[true_position[1], true_position[1] + true_arrow_len * true_direction[1]],
+        z=[true_position[2], true_position[2] + true_arrow_len * true_direction[2]],
+        mode="lines",
+        line=dict(color="red", width=10),
+        name="True Direction"
+    ))
+
+    # Errors for title
+    pos_err = optimization_results['final_position_error']
+    dir_err = optimization_results['final_direction_error']
+    t0_err = optimization_results['final_t0_error']
+    dir_guess_err = event_result['cone_direction_error']
+    pos_guess_err = event_result['hcp_position_error']
+    energy_guess_err = event_result['energy_guess_error']
+    E_err = event_result['optimization_results']['final_energy_error']
+    true_energy = event_result['event_data']['true_energy']
+    
+    combined_loss = optimization_results['final_combined_loss']
+
+
+    title_text = (f"Event {event_ID}<br>"
+                  f"Pos Guess Error: {pos_guess_err:.3f}m → Final Pos Error: {pos_err:.3f}m<br>"
+                  f"Dir Guess Error: {dir_guess_err:.1f}° → Final Dir Error: {dir_err:.1f}°<br>"
+                  f"E Guess Error: {100*energy_guess_err/true_energy:.1f} % → Final E Error: {100*E_err/true_energy:.1f} % <br>")
+                  #f"t0 Error: {t0_err:.3f} | Loss: {combined_loss:.6f}")
+
+
+    # Layout
+    center_point = true_position
+    detector_size = 8
+
+    fig.update_layout(
+        scene=dict(
+            xaxis_title="X (m)",
+            yaxis_title="Y (m)",
+            zaxis_title="Z (m)",
+            xaxis=dict(range=[center_point[0] - detector_size, center_point[0] + detector_size]),
+            yaxis=dict(range=[center_point[1] - detector_size, center_point[1] + detector_size]),
+            zaxis=dict(range=[center_point[2] - detector_size, center_point[2] + detector_size]),
+            aspectmode='cube'
+        ),
+        width=1200,
+        height=800,
+        title=title_text,
+        showlegend=True,
+        legend=dict(
+            yanchor="top", y=0.99,
+            xanchor="left", x=0.01,
+            bgcolor="rgba(255, 255, 255, 0.8)"
+        )
+    )
+
+    # Save + show
+    filename = f"grid_search_optimization_3d_event_{event_ID}.html"
+    fig.write_html(filename)
+    print(f"Enhanced 3D visualization saved to {filename}")
+    fig.show()
+
+    return fig
+
+
+
+
+
+
+
+
+
+
+
+
 
 def create_interactive_event_visualization(true_position, true_direction, true_energy, best_match, 
                                           true_charges, true_times, sensor_positions, detector_bounds,
