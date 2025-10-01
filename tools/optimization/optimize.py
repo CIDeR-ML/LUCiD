@@ -1,6 +1,7 @@
 import json
 import math
 import numpy as np
+import jax
 import jax.numpy as jnp
 from pathlib import Path
 from tools.optimization.losses import origin_time_loss
@@ -145,6 +146,32 @@ def is_point_inside_detector(point, detector_bounds, fraction=1.0):
     return False
 
 
+def evaluate_loss_batch(positions, hit_detector_positions, observed_times, observed_charge, t0_fixed):
+    """
+    Vectorized batch evaluation of origin_time_loss for multiple positions.
+
+    Args:
+        positions: Array of positions to evaluate (N, 3)
+        hit_detector_positions: Detector positions with hits
+        observed_times: Timing data
+        observed_charge: Charge data
+        t0_fixed: Fixed t0 value
+
+    Returns:
+        Array of losses (N,)
+    """
+    # Convert to JAX array if needed
+    positions_jax = jnp.asarray(positions)
+
+    # Create vectorized version of origin_time_loss over the first argument (origin)
+    # All other arguments are fixed
+    vectorized_loss = jax.vmap(
+        lambda pos: origin_time_loss(pos, hit_detector_positions, observed_times, observed_charge, t0_fixed)
+    )
+
+    return vectorized_loss(positions_jax)
+
+
 def generate_grid_points_local(center, local_size, L, detector_bounds, fraction=1.0):
     """
     Generate 3D cubic grid points within a local region, filtered by detector bounds.
@@ -173,15 +200,32 @@ def generate_grid_points_local(center, local_size, L, detector_bounds, fraction=
     ys = np.arange(y_min, y_max + dy, dy)
     zs = np.arange(z_min, z_max + dz, dz)
 
-    pts = []
-    for x in xs:
-        for y in ys:
-            for z in zs:
-                if is_point_inside_detector((x, y, z), detector_bounds, fraction):
-                    pts.append((x, y, z))
+    # Vectorized grid generation using meshgrid
+    X, Y, Z = np.meshgrid(xs, ys, zs, indexing='ij')
+    all_points = np.stack([X.ravel(), Y.ravel(), Z.ravel()], axis=1)
 
-    print('len(pts): ', len(pts))
-    return np.array(pts)
+    # Vectorized detector bounds filtering
+    if detector_bounds['type'] == 'cylinder':
+        r = detector_bounds['r'] * fraction
+        H = detector_bounds['H'] * fraction
+        rho_sq = all_points[:, 0]**2 + all_points[:, 1]**2
+        mask = (rho_sq <= r**2) & (np.abs(all_points[:, 2]) <= H / 2)
+    elif detector_bounds['type'] == 'sphere':
+        r = detector_bounds['r'] * fraction
+        dist_sq = np.sum(all_points**2, axis=1)
+        mask = dist_sq <= r**2
+    elif detector_bounds['type'] == 'box':
+        x_lim = detector_bounds['x'] * fraction / 2
+        y_lim = detector_bounds['y'] * fraction / 2
+        z_lim = detector_bounds['z'] * fraction / 2
+        mask = ((np.abs(all_points[:, 0]) <= x_lim) &
+                (np.abs(all_points[:, 1]) <= y_lim) &
+                (np.abs(all_points[:, 2]) <= z_lim))
+    else:
+        mask = np.ones(len(all_points), dtype=bool)
+
+    pts = all_points[mask]
+    return pts
 
 
 def generate_grid_points_4d_local(center_xyz, t0_center, local_size, t0_range, L, dt0,
@@ -444,37 +488,19 @@ def hierarchical_position_grid_search_3d(hit_detector_positions, observed_times,
         if pts.size == 0:
             break
 
-        # Evaluate origin_time_loss at each grid point
-        level_results = []
-        best_level_loss = float('inf')
-        best_level_position = None
+        # Vectorized batch evaluation of all grid points
+        losses = evaluate_loss_batch(pts, hit_detector_positions,
+                                     observed_times, observed_charge, t0_fixed)
 
-        for i, point in enumerate(pts):
-            position = jnp.array(point)
+        # Find best position in this level
+        best_idx = jnp.argmin(losses)
+        best_level_loss = float(losses[best_idx])
+        best_level_position = jnp.array(pts[best_idx])
 
-            try:
-                # Evaluate origin_time_loss with fixed t0
-                loss = origin_time_loss(position, hit_detector_positions,
-                                      observed_times, observed_charge, t0_fixed)
-
-                level_results.append({
-                    'position': np.array(position),
-                    'loss': float(loss),
-                    'distance_to_true': float(jnp.linalg.norm(position - true_position))
-                })
-
-                # Track best for this level
-                if loss < best_level_loss:
-                    best_level_loss = loss
-                    best_level_position = position
-
-                # Track best overall
-                if loss < best_overall_loss:
-                    best_overall_loss = loss
-                    best_overall_position = position
-
-            except Exception as e:
-                continue
+        # Track best overall
+        if best_level_loss < best_overall_loss:
+            best_overall_loss = best_level_loss
+            best_overall_position = best_level_position
 
         level_summary = {
             'level': level,
@@ -482,7 +508,6 @@ def hierarchical_position_grid_search_3d(hit_detector_positions, observed_times,
             'center': center,
             'local_size': local_size,
             'num_points': len(pts),
-            'point_results': level_results,
             'best_position': np.array(best_level_position) if best_level_position is not None else None,
             'best_loss': best_level_loss
         }
@@ -549,7 +574,7 @@ def hierarchical_position_grid_search(hit_detector_positions, observed_times, ob
     # Generate t0 grid
     t0_values = np.linspace(t0_min, t0_max, t0_n_div)
 
-    if verbosity >= 2:
+    if verbosity >= 3:
         print(f"    Testing {len(t0_values)} t0 values: {t0_values}")
 
     all_t0_results = []
@@ -559,7 +584,7 @@ def hierarchical_position_grid_search(hit_detector_positions, observed_times, ob
 
     # Loop over each t0 value
     for i, t0_val in enumerate(t0_values):
-        if verbosity >= 2:
+        if verbosity >= 3:
             print(f"      t0 [{i+1}/{len(t0_values)}] = {t0_val:.4f}")
 
         # Run complete 3D hierarchical search for this fixed t0
@@ -580,7 +605,7 @@ def hierarchical_position_grid_search(hit_detector_positions, observed_times, ob
 
         all_t0_results.append(t0_result)
 
-        if verbosity >= 2:
+        if verbosity >= 3:
             print(f"        → loss: {search_3d_results['best_loss']:.6f}, pos_err: {search_3d_results['position_error']:.3f}m")
 
         # Track best overall
@@ -593,7 +618,7 @@ def hierarchical_position_grid_search(hit_detector_positions, observed_times, ob
     final_position_error = float(jnp.linalg.norm(best_overall_position - true_position)) if best_overall_position is not None else float('inf')
     final_t0_error = float(abs(best_overall_t0 - true_t0)) if best_overall_t0 is not None else float('inf')
 
-    if verbosity >= 2:
+    if verbosity >= 0:
         print(f"    Search complete. Best overall loss: {best_overall_loss:.6f}")
         print(f"    Best position: {best_overall_position}")
         print(f"    Best t0: {best_overall_t0:.4f} (true: {true_t0:.4f})")

@@ -359,7 +359,7 @@ def photon_iteration_sample(position, direction, time, surface_distance,
 
     # Time increment based on distance traveled
     distance_traveled = jnp.where(scatters, scatter_distance, surface_distance)
-    new_time = time + distance_traveled / 0.299792  # speed of light in m/ns.
+    new_time = time + distance_traveled 
 
     # Calculate attenuation based on distance traveled
     distance_traveled = jnp.where(scatters, scatter_distance, surface_distance)
@@ -462,7 +462,7 @@ def photon_iteration_update_factors(position, direction, time, surface_distance,
 
     # Time increment based on distance traveled along the weighted path
     distance_traveled = reflection_weight * surface_distance + scatter_weight * scatter_distance
-    new_time = time + distance_traveled / 0.299792  # speed of light in m/ns.
+    new_time = time + distance_traveled
 
     return new_pos, new_dir, new_time, detect_prob, reflection_attenuation, continuing_factor
 
@@ -992,8 +992,8 @@ def create_event_simulator(detector, propagate_photons, Nphot, NUM_SENSORS, sens
 
             safe_new_times = jnp.where(
                 problematic_rays,
-                current_times,  # Keep original direction
-                new_times  # Use computed direction
+                current_times ,  # Keep original direction but convert to ns
+                new_times  # Use computed direction; for the new_times the conversion to ns happens in the updated photon fucntion.
             )
 
             # jax.debug.print("A - Zero Cont Fact: {}", jnp.sum(continuing_factors==0))
@@ -1021,7 +1021,8 @@ def create_event_simulator(detector, propagate_photons, Nphot, NUM_SENSORS, sens
             detected_intensity_factors = detect_probs * reflection_attenuations
             updated_weights = depositions * physical_intensities[None, :] * detected_intensity_factors[None, :]
 
-            total_times = times + current_times[:, None]
+            total_times = times + current_times[:, None]  # convert to ns
+
             # jax.debug.print("Found {} Neg times", jnp.sum(times<0))
             # jax.debug.print("Found {} Neg current_times", jnp.sum(current_times<0))
 
@@ -1040,7 +1041,7 @@ def create_event_simulator(detector, propagate_photons, Nphot, NUM_SENSORS, sens
 
             # Return updated state and outputs
             new_carry = (next_positions, next_directions, next_times, next_survival_attenuation_factor, key)
-            outputs = (iteration_weights, iteration_indices, iteration_times)
+            outputs = (iteration_weights, iteration_indices, iteration_times / (0.299792/1.33)) # take into account speed of light in the medium
 
             # jax.debug.print("ZZZ - Iteration {}: Found {} problematic next times with NaN", i, jnp.sum(jnp.isnan(next_times)))
             # jax.debug.print("ZZZ - Iteration {}: Found {} problematic next pos NaN", i, jnp.sum(jnp.isnan(next_positions)))
