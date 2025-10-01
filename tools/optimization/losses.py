@@ -56,10 +56,10 @@ def counts_loss(true: jnp.ndarray, pred: jnp.ndarray, eps: float = 1e-8) -> jnp.
 
 
 @jit
-def origin_time_loss(origin, detector_positions, true_times, true_q, t0, photosensor_radius=0.25, c_medium=1., percentile_threshold=85.):
+def origin_time_loss(origin, detector_positions, true_times, true_q, t0, photosensor_radius=0.25, c_medium=(0.299792/1.33), percentile_threshold=85., scale_w=1e8):
     """Vertex time loss component"""
     distances = jnp.linalg.norm(detector_positions - origin[None, :], axis=1)
-    expected_times = (distances - photosensor_radius) / c_medium
+    expected_times = (distances - photosensor_radius)/ c_medium
     time_residuals = true_times - expected_times - t0
     
     threshold = jnp.percentile(true_q, percentile_threshold)
@@ -71,6 +71,9 @@ def origin_time_loss(origin, detector_positions, true_times, true_q, t0, photose
     neg_loss_per_detector = neg_time_res * w 
     pos_loss_per_detector = pos_time_res * w 
     
-    total_loss = jnp.sum(neg_loss_per_detector) / (jnp.sum(w) + 1e-8) + jnp.sum(jnp.abs(pos_loss_per_detector * w)) / (jnp.sum(w) + 1e-8) / 1000.
-    
+    total_loss = jnp.sum(neg_loss_per_detector) / (jnp.sum(w) + 1e-8) + jnp.sum(jnp.abs(pos_loss_per_detector * w)) / (jnp.sum(w) + 1e-8) / scale_w
+
     return total_loss
+
+
+
