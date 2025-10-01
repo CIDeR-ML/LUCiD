@@ -20,9 +20,10 @@
     "energy_learning_rate": 10000.0
   },
   "position_grid_search": {
-    "pos_l0": 12.0,
-    "pos_levels": 1,
-    "pos_reduction": 0.5
+    "pos_n_div": 5,
+    "pos_levels": 6,
+    "pos_fraction": 1.0,
+    "pos_min_L": 0.01
   },
   "cone_direction_search": {
     "cone_levels": 2,
