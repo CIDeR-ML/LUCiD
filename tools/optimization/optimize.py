@@ -618,8 +618,8 @@ def hierarchical_position_grid_search(hit_detector_positions, observed_times, ob
     final_position_error = float(jnp.linalg.norm(best_overall_position - true_position)) if best_overall_position is not None else float('inf')
     final_t0_error = float(abs(best_overall_t0 - true_t0)) if best_overall_t0 is not None else float('inf')
 
-    if verbosity >= 0:
-        print(f"    Search complete. Best overall loss: {best_overall_loss:.6f}")
+    if verbosity >= 1:
+        print(f"    Grid search complete. Best overall loss: {best_overall_loss:.6f}")
         print(f"    Best position: {best_overall_position}")
         print(f"    Best t0: {best_overall_t0:.4f} (true: {true_t0:.4f})")
         print(f"    Position error: {final_position_error:.3f}m, t0 error: {final_t0_error:.4f}")
