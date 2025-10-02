@@ -3,7 +3,7 @@
     "default_json_filename": "../config/SK_geom_config.json",
     "data_file": "../data/water/muon/muon_gun_1050_MeV_100_events_fixed_energy.root",
     "temperature": 0.1,
-    "n_events": 10,
+    "n_events": 30,
     "k": 5,
     "nphot": 200000,
     "c_medium": 1.0
@@ -21,9 +21,9 @@
   },
   "position_grid_search": {
     "pos_n_div": 5,
-    "pos_levels": 5,
+    "pos_levels": 6,
     "pos_fraction": 1.0,
-    "pos_min_L": 0.01,
+    "pos_min_L": 0.001,
     "t0_n_div": 30,
     "t0_min": -15.0,
     "t0_max": 15.0
@@ -39,13 +39,13 @@
     "energy_scan_steps": 25
   },
   "gradient_descent": {
-    "max_iterations": 1000
+    "max_iterations": 500
   },
   "visualization": {
     "arrow_every_n_points": 100
   },
   "verbosity": {
-    "level": 2
+    "level": 0
   },
   "storage": {
     "store_true_data": true
