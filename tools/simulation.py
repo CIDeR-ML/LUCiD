@@ -317,7 +317,7 @@ def photon_iteration_sample(position, direction, time, surface_distance,
     The tau_gs parameter is included to match the signature of photon_iteration_update_factors
     but is not used in the sampling mode.
     """
-    k1, k2, k3 = jax.random.split(rng_key, 3)
+    k1, k2, k3, k4 = jax.random.split(rng_key, 4)
 
     # Sample scatter distance from truncated exponential
     scatter_distance = sample_scatter_distance(surface_distance, scatter_length, k2)
@@ -359,16 +359,21 @@ def photon_iteration_sample(position, direction, time, surface_distance,
 
     # Time increment based on distance traveled
     distance_traveled = jnp.where(scatters, scatter_distance, surface_distance)
-    new_time = time + distance_traveled 
+    new_time = time + distance_traveled
 
-    # Calculate attenuation based on distance traveled
+    # Sample absorption as a binary event (Monte Carlo sampling)
     distance_traveled = jnp.where(scatters, scatter_distance, surface_distance)
-    attenuation = jnp.exp(-distance_traveled / absorption_length)
+    survival_prob = jnp.exp(-distance_traveled / absorption_length)
+    u_absorption = jax.random.uniform(k4)
+    survives_absorption = u_absorption < survival_prob
+
+    # Binary attenuation: 1.0 if survives, 0.0 if absorbed
+    attenuation = survives_absorption.astype(jnp.float32)
 
     # Binary detection probability
     detect_prob = detects.astype(jnp.float32)
 
-    # Attenuation is always applied
+    # Attenuation is always applied (now binary: 0.0 or 1.0)
     reflection_attenuation = attenuation
 
     # Continuing factor: 0 if detected (photon stops), attenuation if continues
