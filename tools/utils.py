@@ -684,7 +684,7 @@ def save_single_event_with_extended_info(charges, times, params, extended_info=N
         filename = f'event_{event_number}.h5'
     
     # Get number of tracks and detectors
-    n_tracks = extended_info['n_rings']
+    n_tracks = extended_info['n_particles']
     n_detectors = charges[0].shape[0]  # Assuming all charge arrays have the same shape
     
     # Create PDG array - use standard PDG codes
