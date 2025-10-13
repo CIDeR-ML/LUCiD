@@ -2,11 +2,12 @@
   "basic_config": {
     "default_json_filename": "../config/SK_geom_config.json",
     "data_file": "../data/water/muon/muon_gun_1050_MeV_100_events_fixed_energy.root",
+    "data_dir": "/sdf/data/neutrino/cjesus/photonsim_output/water/monoenergetic/event_by_event/mu-/1050MeV/",
     "temperature": 0.1,
-    "n_events": 30,
-    "k": 5,
-    "nphot": 200000,
-    "c_medium": 1.0
+    "n_events": 50,
+    "k": 7,
+    "nphot": 250000,
+    "c_medium": 0.22540751879699247
   },
   "optimization_weights": {
     "vertex_weight_scale": 1.0,
@@ -39,13 +40,13 @@
     "energy_scan_steps": 25
   },
   "gradient_descent": {
-    "max_iterations": 500
+    "max_iterations": 400
   },
   "visualization": {
     "arrow_every_n_points": 100
   },
   "verbosity": {
-    "level": 0
+    "level": 1
   },
   "storage": {
     "store_true_data": true
@@ -54,6 +55,13 @@
     "scatter_length": 50.0,
     "reflection_rate": 0.2,
     "absorption_length": 50.0,
-    "gumbel_softmax_temp": 0.001
+    "qe": 0.065
+  },
+  "optimization_params": {
+    "percentile_threshold": 0.1,
+    "angle_scale_deg": 2.0,
+    "inv_scale_w": 0.05,
+    "scale_w": 1000,
+    "damping_factor": 0.998
   }
 }
