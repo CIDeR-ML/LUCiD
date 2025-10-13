@@ -8,8 +8,7 @@ import jax.numpy as jnp
 import time
 from tqdm import tqdm 
 from tools.siren.core import *
-from tools.utils import read_photon_data_from_root
-from tools.utils import save_single_event_with_extended_info, get_random_root_entry_index, superimpose_multiple_events
+from tools.utils import save_single_event_with_extended_info, get_random_root_entry_index, superimpose_multiple_events, merge_event_files
 from jax import jit
 
 def normalize(v, epsilon=1e-8):
@@ -332,297 +331,6 @@ def predict_t0_wrapper(distance, energy, params):
         params['delta_parameterization']['offset']
     )
 
-
-def generate_events_from_root(event_simulator, root_file_path, output_dir='events', n_events=None, 
-                            n_rings=1, pion_root_file_path=None,
-                            max_sensors_per_cell=4, batch_size=100):
-    """
-    Generate and save events from a ROOT file, with support for N rings of particles.
-    Ring 1 (N=1) is always a muon, and additional rings (N>1) are pions.
-    Events are saved with sequential numbering: event_0.h5, event_1.h5, etc.
-    
-    Parameters
-    ----------
-    root_file_path : str
-        Path to the ROOT file for muons
-    output_dir : str, optional
-        Directory to save output files, by default 'events'
-    n_events : int, optional
-        Number of events to process (None for all), by default None
-    n_rings : int, optional
-        Number of rings (particles) to superimpose, by default 1
-        First ring is always a muon, additional rings are pions
-    pion_root_file_path : str, optional
-        Path to ROOT file for pions, required if n_rings > 1, by default None
-    max_sensors_per_cell : int, optional
-        Maximum sensors per cell, by default 4
-    batch_size : int, optional
-        Number of events to accumulate before saving in parallel, by default 100
-        
-    Returns
-    -------
-    list
-        List of saved file paths
-    """
-    import uproot
-    import concurrent.futures
-    
-    # Validate arguments
-    if n_rings < 1:
-        raise ValueError("n_rings must be at least 1")
-    
-    # If n_rings > 1, we need a pion ROOT file
-    if n_rings > 1 and pion_root_file_path is None:
-        raise ValueError("When n_rings > 1, pion_root_file_path must be provided")
-        
-    # Create output directory if it doesn't exist
-    os.makedirs(output_dir, exist_ok=True)
-    
-    # Open ROOT file to get number of entries
-    root_file = uproot.open(root_file_path)
-    tree = root_file['v_photon']
-    total_entries = tree.num_entries
-    
-    if n_events is None:
-        n_events = total_entries
-    else:
-        n_events = min(n_events, total_entries)
-    
-    # Prepare descriptor for printing
-    ring_description = f"{n_rings} ring{'s' if n_rings > 1 else ''}"
-    particle_description = "muon" if n_rings == 1 else f"muon + {n_rings-1} pion{'s' if n_rings > 1 else ''}"
-    
-    print(f"Processing {n_events} events with {ring_description} ({particle_description})...")
-    print(f"Using batch size of {batch_size} events for multithreaded I/O")
-    print(f"Saving events to directory: {output_dir}")
-
-    saved_files = []
-    
-    # Create batches
-    num_batches = (n_events + batch_size - 1) // batch_size
-    
-    # Process each batch
-    for batch_idx in range(num_batches):
-        start_idx = batch_idx * batch_size
-        end_idx = min(start_idx + batch_size, n_events)
-        batch_size_actual = end_idx - start_idx
-        
-        print(f"Processing batch {batch_idx+1}/{num_batches} (events {start_idx} to {end_idx-1})")
-        
-        # Lists to accumulate batch data
-        batch_data = []
-        batch_params = []
-        batch_filenames = []
-        batch_indices = []
-        
-        # Process each entry in the current batch
-        for i in tqdm(range(start_idx, end_idx), desc=f"Generating batch {batch_idx+1}", unit="event"):
-            # Initialize master random key for this event
-            master_key = jax.random.PRNGKey(i * 1000)
-            
-            # Generate a random vertex for all events in this iteration
-            vertex_key, master_key = jax.random.split(master_key)
-            shared_vertex = generate_random_vertex(vertex_key)
-            
-            # Lists to store charges and times for all rings
-            all_charges = []
-            all_times = []
-            all_energies = []
-            all_directions = []
-            all_indices = []  # To store the indices of each particle for filename
-            
-            # Process the first ring - always a muon
-            muon_data = read_photon_data_from_root(root_file_path, i, 'muon')
-            
-            # Set up parameters
-            muon_energy = muon_data['energy']
-            initial_intensity = 1.0
-            scatter_length = 10.0  # default scattering length
-            reflection_rate = 0.1  # default reflection rate
-            absorption_length = 10.0  # default absorption length
-            temperature = 0. 
-            
-            # Generate random direction for muon
-            dir_key, master_key = jax.random.split(master_key)
-            muon_direction = generate_random_direction(dir_key)
-            
-            # Create parameters tuple for muon
-            muon_params = (
-                muon_energy,
-                shared_vertex,   # Use random vertex
-                muon_direction,  # Use random direction
-                initial_intensity,
-                scatter_length,
-                reflection_rate,
-                absorption_length,
-                temperature  
-            )
-            
-            # Get a key for the muon simulation
-            sim_key, master_key = jax.random.split(master_key)
-
-            # Process muon data
-            photon_origins = muon_data['photon_origins']  # Now contains direct origins (cm)
-            photon_directions = muon_data['photon_directions']  # Now contains direct directions
-            N = len(photon_origins)
-
-            # the number 1_000_000 is hard coded also in _simulation_core
-            padding_size = max(0, 1_000_000-N)
-
-            # Pad the origins array (2D array with shape [N,3])
-            muon_data['photon_origins'] = jnp.pad(photon_origins, ((0, padding_size), (0, 0)), 
-                                                mode='constant', constant_values=0)
-
-            # Pad the directions array with a default unit vector [0,0,1]
-            default_direction = jnp.array([0.0, 0.0, 1.0])
-            padding_directions = jnp.tile(default_direction, (padding_size, 1))
-            if padding_size > 0:
-                muon_data['photon_directions'] = jnp.concatenate([photon_directions, padding_directions], axis=0)
-            else:
-                muon_data['photon_directions'] = photon_directions
-                
-            muon_data['N'] = N
-                        
-            # Run simulation for muon
-            muon_charges, muon_times = event_simulator(muon_params, sim_key, muon_data)
-            
-            # Store muon data
-            all_charges.append(muon_charges)
-            all_times.append(muon_times)
-            all_energies.append(muon_energy)
-            all_directions.append(muon_direction)
-            all_indices.append(i)  # Store the original index
-            
-            # Process additional rings (pions) if n_rings > 1
-            for ring_idx in range(1, n_rings):
-                # Get a random entry index from the pion file
-                random_idx = get_random_root_entry_index(pion_root_file_path)
-                
-                # Read photon data for pion
-                pion_data = read_photon_data_from_root(pion_root_file_path, random_idx, 'pion')
-
-                photon_origins = pion_data['photon_origins']
-                photon_directions = pion_data['photon_directions']
-                N = len(photon_origins)
-
-                # the number 1_000_000 is hard coded also in _simulation_core
-                padding_size = max(0, 1_000_000-N)
-
-                # Pad the origins array (2D array with shape [N,3])
-                pion_data['photon_origins'] = jnp.pad(photon_origins, ((0, padding_size), (0, 0)), 
-                                                     mode='constant', constant_values=0)
-
-                # Pad the directions array with a default unit vector [0,0,1]
-                default_direction = jnp.array([0.0, 0.0, 1.0])
-                padding_directions = jnp.tile(default_direction, (padding_size, 1))
-                if padding_size > 0:
-                    pion_data['photon_directions'] = jnp.concatenate([photon_directions, padding_directions], axis=0)
-                else:
-                    pion_data['photon_directions'] = photon_directions
-                    
-                pion_data['N'] = N
-                
-                # Generate a new random direction for the pion
-                pion_dir_key, master_key = jax.random.split(master_key)
-                pion_direction = generate_random_direction(pion_dir_key)
-                
-                # Create parameters tuple for pion - use same vertex but different direction
-                pion_params = (
-                    pion_data['energy'],
-                    shared_vertex,    # Same vertex as muon
-                    pion_direction,   # Different random direction
-                    initial_intensity,
-                    scatter_length,
-                    reflection_rate,
-                    absorption_length,
-                    temperature
-                )
-                
-                # Get a new key for the pion simulation
-                pion_sim_key, master_key = jax.random.split(master_key)
-                
-                # Run simulation for pion
-                pion_charges, pion_times = event_simulator(pion_params, pion_sim_key, pion_data)
-                
-                # Store pion data
-                all_charges.append(pion_charges)
-                all_times.append(pion_times)
-                all_energies.append(pion_data['energy'])
-                all_directions.append(pion_direction)
-                all_indices.append(random_idx)  # Store the random index
-            
-            # Combine all rings using the superimpose_multiple_events function
-            # (We still compute this for possible backward compatibility)
-            if n_rings > 1:
-                combined_charges, combined_times = superimpose_multiple_events(all_charges, all_times)
-            else:
-                # If only one ring, use the muon data directly
-                combined_charges, combined_times = all_charges[0], all_times[0]
-            
-            # Create filename with sequential numbering (event_0.h5, event_1.h5, etc.)
-            event_number = i - start_idx + batch_idx * batch_size
-            filename = os.path.join(output_dir, f'event_{event_number}.h5')
-            
-            # Store original indices in extended_info for reference
-            particle_indices = []
-            particle_indices.append(all_indices[0])  # Store the muon index
-            for ring_idx in range(1, n_rings):
-                particle_indices.append(all_indices[ring_idx])  # Store pion indices
-            
-            # Store the first energy and direction for the save parameters
-            save_params = (all_energies[0], shared_vertex, all_directions[0])
-            
-            # Extended save parameters for multi-ring events
-            extended_info = {
-                'n_rings': n_rings,
-                'particle_types': ['muon'] + ['pion'] * (n_rings - 1),
-                'energies': all_energies,
-                'directions': [dir.tolist() for dir in all_directions],
-                'indices': all_indices,
-                'vertex': shared_vertex.tolist(),  # Add vertex to extended_info
-                'original_indices': particle_indices  # Store original indices for reference
-            }
-                
-            # Store the event data for batch processing
-            batch_data.append((all_charges, all_times, extended_info))
-            batch_params.append(save_params)
-            batch_filenames.append(filename)
-            batch_indices.append(event_number)  # Use sequential event number
-        
-        # Now save all the events in the batch using multithreading
-        with concurrent.futures.ThreadPoolExecutor() as executor:
-            # Create a list of future objects
-            futures = [
-                executor.submit(
-                    save_single_event_with_extended_info, 
-                    data[0], data[1],  # lists of individual charges and times
-                    params, 
-                    extended_info=data[2],  # extended info
-                    event_number=idx, 
-                    filename=filename
-                )
-                for data, params, filename, idx in zip(
-                    batch_data, batch_params, batch_filenames, batch_indices
-                )
-            ]
-            
-            # Collect results as they complete
-            for future in tqdm(
-                concurrent.futures.as_completed(futures), 
-                desc=f"Saving batch {batch_idx+1}", 
-                total=len(futures),
-                unit="file"
-            ):
-                try:
-                    saved_file = future.result()
-                    saved_files.append(saved_file)
-                except Exception as e:
-                    print(f"Error saving file: {e}")
-    
-    print(f"Successfully processed {len(saved_files)} events.")
-    print(f"All events saved to {output_dir} with sequential naming (event_0.h5, event_1.h5, ...)")
-    return saved_files
-
 def generate_multi_folder_events(event_simulator, root_file_path, folder_names, events_per_folder, 
                                n_rings_list=None, pion_root_file_path=None,
                                max_sensors_per_cell=4, batch_size=100):
@@ -764,8 +472,9 @@ def read_photon_data_from_photonsim(root_file_path, entry_index):
         'energy': energy  # Energy in MeV
     }
 
-def generate_events_from_photonsim(event_simulator, root_file_path, sensor_params, output_dir=None, 
-                                  n_events=None, batch_size=100):
+def generate_events_from_photonsim(event_simulator, root_file_path, sensor_params, output_dir=None,
+                                  n_events=None, batch_size=100, particle_type='muon', master_seed=None,
+                                  merge_output=True, merged_filename='merged_events.h5'):
     """
     Generate and save events from a PhotonSim ROOT file.
     Events are saved with sequential numbering: event_0.h5, event_1.h5, etc.
@@ -784,7 +493,15 @@ def generate_events_from_photonsim(event_simulator, root_file_path, sensor_param
         Number of events to process (None for all), by default None
     batch_size : int, optional
         Number of events to accumulate before saving in parallel, by default 100
-        
+    particle_type : str, optional
+        Type of particle (e.g., 'mu-', 'mu+', 'e-', 'e+', 'pi-', 'pi+'), by default 'muon'
+    master_seed : int, optional
+        Random seed for JAX PRNG key generation. If None, generates a random seed based on current time, by default None
+    merge_output : bool, optional
+        Whether to merge individual event files into a single HDF5 file, by default True
+    merged_filename : str, optional
+        Name of the merged output file (only used if merge_output=True), by default 'merged_events.h5'
+
     Returns
     -------
     list
@@ -792,7 +509,15 @@ def generate_events_from_photonsim(event_simulator, root_file_path, sensor_param
     """
     import uproot
     import concurrent.futures
-    
+    import time
+
+    # Generate random seed based on time if not provided
+    if master_seed is None:
+        master_seed = int(time.time() * 1000000) % (2**32)
+        print(f"Generated random master seed from time: {master_seed}")
+    else:
+        print(f"Using provided master seed: {master_seed}")
+
     # Create output directory if it doesn't exist
     os.makedirs(output_dir, exist_ok=True)
     
@@ -829,16 +554,16 @@ def generate_events_from_photonsim(event_simulator, root_file_path, sensor_param
         batch_sensor_params = []
         batch_filenames = []
         batch_indices = []
-        
+
         # Process each entry in the current batch
         for i in tqdm(range(start_idx, end_idx), desc=f"Generating batch {batch_idx+1}", unit="event"):
-            # Initialize master random key for this event
-            master_key = jax.random.PRNGKey(i * 1000)
-            
+            # Initialize master random key for this event using the master seed
+            master_key = jax.random.PRNGKey(master_seed + i)
+
             # Generate a random vertex
             vertex_key, master_key = jax.random.split(master_key)
             vertex = generate_random_vertex(vertex_key)
-            
+
             # Read photon data from PhotonSim
             photon_data = read_photon_data_from_photonsim(root_file_path, i)
             
@@ -862,6 +587,7 @@ def generate_events_from_photonsim(event_simulator, root_file_path, sensor_param
             # Process photon data
             photon_origins = photon_data['photon_origins']
             photon_directions = photon_data['photon_directions']
+            photon_times = photon_data['photon_times']
             N = len(photon_origins)
 
             # the number 1_000_000 is hard coded also in _simulation_core
@@ -878,7 +604,11 @@ def generate_events_from_photonsim(event_simulator, root_file_path, sensor_param
                 photon_data['photon_directions'] = jnp.concatenate([photon_directions, padding_directions], axis=0)
             else:
                 photon_data['photon_directions'] = photon_directions
-                
+
+            # Pad the times array (1D array with shape [N])
+            photon_data['photon_times'] = jnp.pad(photon_times, (0, padding_size),
+                                                  mode='constant', constant_values=0)
+
             photon_data['N'] = N
                         
             # Run simulation
@@ -891,7 +621,7 @@ def generate_events_from_photonsim(event_simulator, root_file_path, sensor_param
             # Extended info for compatibility with save function
             extended_info = {
                 'n_rings': 1,
-                'particle_types': ['muon'],
+                'particle_types': [particle_type],
                 'energies': [muon_energy],
                 'directions': [direction.tolist()],
                 'indices': [i],
@@ -939,4 +669,11 @@ def generate_events_from_photonsim(event_simulator, root_file_path, sensor_param
     
     print(f"Successfully processed {len(saved_files)} events.")
     print(f"All events saved to {output_dir} with sequential naming (event_0.h5, event_1.h5, ...)")
+
+    # Merge files if requested
+    if merge_output:
+        print("\nMerging individual event files...")
+        merged_path = merge_event_files(output_dir, merged_filename=merged_filename, remove_individuals=True)
+        return merged_path
+
     return saved_files
