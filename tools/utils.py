@@ -6,6 +6,7 @@ from glob import glob
 import os
 import json
 import sys
+from tqdm import tqdm 
 
 def base_dir_path():
     return os.path.dirname(os.path.abspath(__file__))+'/../'
@@ -68,11 +69,62 @@ def setup_matplotlib_for_notebook(force_notebook_mode=None):
         # Not in notebook, use default behavior
         pass
 
+def normalize_particle_type_for_path(particle_type):
+    """
+    Normalize particle type string to match data directory structure.
+
+    Parameters
+    ----------
+    particle_type : str
+        Particle type string (e.g., 'mu-', 'mu+', 'e-', 'e+', 'pi-', 'pi+')
+
+    Returns
+    -------
+    str
+        Normalized particle type for directory name (e.g., 'muon', 'pion', 'electron')
+    """
+    path_map = {
+        'mu-': 'muon',
+        'mu+': 'muon',
+        'muon': 'muon',
+        'e-': 'electron',
+        'e+': 'electron',
+        'electron': 'electron',
+        'positron': 'electron',
+        'pi-': 'pion',
+        'pi+': 'pion',
+        'pi0': 'pion',
+        'pion': 'pion'
+    }
+
+    if particle_type in path_map:
+        return path_map[particle_type]
+    else:
+        # Default to the input if not in map (for backward compatibility)
+        return particle_type
+
 def unpack_t0_params(particle_type='muon', material='water'):
-    with open(base_dir_path()+f'/data/{material}/{particle_type}/t0.json', 'r') as f:
+    """
+    Load and unpack t0 timing parameters for a given particle type and material.
+
+    Parameters
+    ----------
+    particle_type : str, optional
+        Particle type (e.g., 'mu-', 'mu+', 'e-', 'e+', 'pi-', 'pi+', 'muon', 'pion', 'electron'), by default 'muon'
+    material : str, optional
+        Material type, by default 'water'
+
+    Returns
+    -------
+    tuple
+        (baseline_slope, baseline_intercept, A_slope, A_intercept, B_slope, B_intercept, offset)
+    """
+    # Normalize particle type for file path
+    normalized_type = normalize_particle_type_for_path(particle_type)
+    with open(base_dir_path()+f'/data/{material}/{normalized_type}/t0.json', 'r') as f:
         t0_params = json.load(f)
 
-    """Extract individual parameters from nested dict structure"""
+    # Extract individual parameters from nested dict structure
     return (
         t0_params['baseline']['slope'],
         t0_params['baseline']['intercept'],
@@ -454,71 +506,6 @@ def print_propagation_params(sensor_params):
     print(f"Simulation Temperature for Gumbel-Softmax: {sim_temperature:.4f}")
     print("─" * 20)
 
-
-def read_photon_data_from_root(root_file_path, entry_index, particle_type='muon'):
-    """
-    Read photon data from a ROOT file for a specific entry, using the component vectors.
-    
-    Parameters
-    ----------
-    root_file_path : str
-        Path to the ROOT file
-    entry_index : int
-        Entry index to read from the file
-    particle_type : str, optional
-        Type of particle ('muon' or 'pion'), by default 'muon'
-        
-    Returns
-    -------
-    dict
-        Dictionary containing photon_origins, photon_directions, and energy
-    """
-    import uproot
-    import numpy as np
-    
-    # Open the ROOT file
-    root_file = uproot.open(root_file_path)
-    
-    # Access the tree
-    tree = root_file['v_photon']
-    
-    # Read position components
-    photon_posx = tree['photon_posx'].array(entry_start=entry_index, entry_stop=entry_index+1)[0]
-    photon_posy = tree['photon_posy'].array(entry_start=entry_index, entry_stop=entry_index+1)[0]
-    photon_posz = tree['photon_posz'].array(entry_start=entry_index, entry_stop=entry_index+1)[0]
-    
-    # Read direction components
-    photon_dirx = tree['photon_dirx'].array(entry_start=entry_index, entry_stop=entry_index+1)[0]
-    photon_diry = tree['photon_diry'].array(entry_start=entry_index, entry_stop=entry_index+1)[0]
-    photon_dirz = tree['photon_dirz'].array(entry_start=entry_index, entry_stop=entry_index+1)[0]
-    
-    # Read momentum
-    initmom = float(tree['initmom'].array(entry_start=entry_index, entry_stop=entry_index+1)[0])
-    
-    # Stack the components to form position and direction arrays
-    photon_positions = np.column_stack((photon_posx, photon_posy, photon_posz))
-    photon_directions = np.column_stack((photon_dirx, photon_diry, photon_dirz))
-    
-    # Convert initmom (momentum) to kinetic energy based on particle type
-    if particle_type.lower() == 'muon':
-        mass = 105.7  # MeV/c^2 (muon rest mass)
-    elif particle_type.lower() == 'pion':
-        mass = 139.6  # MeV/c^2 (charged pion rest mass)
-    else:
-        raise ValueError(f"Unsupported particle type: {particle_type}")
-    
-    # E_kinetic = sqrt(p^2 + m^2) - m
-    energy = np.sqrt(initmom**2 + mass**2) - mass
-    
-    # Convert to JAX arrays
-    import jax.numpy as jnp
-    
-    return {
-        'photon_origins': jnp.array(photon_positions),     # Combined position vectors
-        'photon_directions': jnp.array(photon_directions), # Combined direction vectors
-        'energy': float(energy)
-    }
-
 def superimpose_multiple_events(charges_list, times_list):
     """
     Superimpose multiple events by summing charges and calculating weighted average of times.
@@ -598,6 +585,86 @@ def get_random_root_entry_index(root_file_path):
     
     return np.random.randint(0, total_entries - 1)
 
+def get_pdg_code(particle_type):
+    """
+    Convert particle type string to PDG code.
+
+    Parameters
+    ----------
+    particle_type : str
+        Particle type string (e.g., 'mu-', 'mu+', 'e-', 'e+', 'pi-', 'pi+', 'pi0')
+
+    Returns
+    -------
+    int
+        PDG code for the particle
+    """
+    pdg_map = {
+        'mu-': 13,
+        'mu+': -13,
+        'muon': 13,  # backward compatibility
+        'e-': 11,
+        'e+': -11,
+        'electron': 11,
+        'positron': -11,
+        'pi-': -211,
+        'pi+': 211,
+        'pi0': 111,
+        'pion': 211,  # backward compatibility, assume pi+
+        'gamma': 22,
+        'photon': 22,
+        'proton': 2212,
+        'p': 2212,
+        'neutron': 2112,
+        'n': 2112
+    }
+
+    if particle_type in pdg_map:
+        return pdg_map[particle_type]
+    else:
+        raise ValueError(f"Unknown particle type: {particle_type}")
+
+def get_particle_mass(particle_type):
+    """
+    Get particle rest mass in MeV/c^2.
+
+    Parameters
+    ----------
+    particle_type : str
+        Particle type string (e.g., 'mu-', 'mu+', 'e-', 'e+', 'pi-', 'pi+', 'pi0')
+
+    Returns
+    -------
+    float
+        Rest mass in MeV/c^2
+    """
+    # Normalize particle type by removing charge for mass lookup
+    particle_base = particle_type.replace('-', '').replace('+', '')
+
+    mass_map = {
+        'mu': 105.7,      # muon
+        'muon': 105.7,
+        'e': 0.511,       # electron
+        'electron': 0.511,
+        'positron': 0.511,
+        'pi': 139.6,      # charged pion (pi+ and pi-)
+        'pion': 139.6,
+        'pi0': 135.0,     # neutral pion
+        'gamma': 0.0,
+        'photon': 0.0,
+        'proton': 938.3,
+        'p': 938.3,
+        'neutron': 939.6,
+        'n': 939.6
+    }
+
+    if particle_base in mass_map:
+        return mass_map[particle_base]
+    elif particle_type == 'pi0':  # special case for pi0
+        return mass_map['pi0']
+    else:
+        raise ValueError(f"Unknown particle type: {particle_type}")
+
 def save_single_event_with_extended_info(charges, times, params, extended_info=None, event_number=0, filename=None):
     """
     Save a single event to an HDF5 file with the following structure:
@@ -621,7 +688,7 @@ def save_single_event_with_extended_info(charges, times, params, extended_info=N
     n_detectors = charges[0].shape[0]  # Assuming all charge arrays have the same shape
     
     # Create PDG array - use standard PDG codes
-    pdg_array = jnp.array([13 if pt == 'muon' else 211 for pt in extended_info['particle_types']])
+    pdg_array = jnp.array([get_pdg_code(pt) for pt in extended_info['particle_types']])
     
     # Create Q array (charge for each track in each PMT)
     q_array = jnp.zeros((n_tracks, n_detectors))
@@ -643,10 +710,7 @@ def save_single_event_with_extended_info(charges, times, params, extended_info=N
         direction = jnp.array(extended_info['directions'][i])
         
         # For relativistic particles, we need to convert energy to momentum
-        if extended_info['particle_types'][i] == 'muon':
-            mass = 105.7  # MeV/c^2 (muon rest mass)
-        elif extended_info['particle_types'][i] == 'pion':
-            mass = 139.6  # MeV/c^2 (charged pion rest mass)
+        mass = get_particle_mass(extended_info['particle_types'][i])
         
         # Calculate momentum magnitude: |p| = sqrt(E^2 - m^2)
         # E_kinetic = E_total - m, so E_total = E_kinetic + m
@@ -673,6 +737,72 @@ def save_single_event_with_extended_info(charges, times, params, extended_info=N
         f.create_dataset('event_number', data=event_number)
     
     return filename
+
+def merge_event_files(output_dir, merged_filename='merged_events.h5', remove_individuals=True):
+    """
+    Merge individual event HDF5 files into a single merged file.
+
+    Events are stored in groups: /event_0/, /event_1/, etc.
+    Each group contains: PDG, Q, Q_tot, T, P, V, event_number
+
+    Parameters
+    ----------
+    output_dir : str
+        Directory containing individual event files (event_0.h5, event_1.h5, etc.)
+    merged_filename : str, optional
+        Name of the merged output file, by default 'merged_events.h5'
+    remove_individuals : bool, optional
+        Whether to remove individual event files after merging, by default True
+
+    Returns
+    -------
+    str
+        Path to the merged file
+    """
+    import h5py
+    import glob
+
+    # Find all event files in the directory
+    event_files = sorted(glob.glob(os.path.join(output_dir, 'event_*.h5')))
+
+    if not event_files:
+        print(f"No event files found in {output_dir}")
+        return None
+
+    print(f"Merging {len(event_files)} event files...")
+
+    merged_path = os.path.join(output_dir, merged_filename)
+
+    # Create merged file
+    with h5py.File(merged_path, 'w') as merged_file:
+        # Store number of events as an attribute
+        merged_file.attrs['n_events'] = len(event_files)
+
+        # Process each event file
+        for event_file in tqdm(event_files, desc="Merging events", unit="file"):
+            # Extract event number from filename
+            event_name = os.path.basename(event_file)
+            event_num = int(event_name.replace('event_', '').replace('.h5', ''))
+
+            # Read the individual event file
+            with h5py.File(event_file, 'r') as f:
+                # Create a group for this event
+                event_group = merged_file.create_group(f'event_{event_num}')
+
+                # Copy all datasets from individual file to the group
+                for key in f.keys():
+                    event_group.create_dataset(key, data=f[key][()])
+
+    print(f"Successfully merged events into: {merged_path}")
+
+    # Remove individual files if requested
+    if remove_individuals:
+        print("Removing individual event files...")
+        for event_file in tqdm(event_files, desc="Removing files", unit="file"):
+            os.remove(event_file)
+        print(f"Removed {len(event_files)} individual event files")
+
+    return merged_path
 
 def read_multi_folder_events(folder_names, max_files_per_folder=None, summary_only=True):
     """
