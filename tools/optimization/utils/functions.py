@@ -6,7 +6,7 @@ import numpy as np
 from tools.optimization.losses import *
 
 @jit
-def estimate_muon_energy_from_photon_count(N):
+def estimate_muon_energy_from_photon_count(N, qe=0.065):
     """
     Estimate energy from photon count using empirical fit:
     E_guess = 1.782 * N^0.674 + -97.460
@@ -21,14 +21,13 @@ def estimate_muon_energy_from_photon_count(N):
     float
         Estimated energy
     """
-    return 1.782 * jnp.power(N, 0.674) - 97.460
 
-
+    return 3.320 * jnp.power(N*0.065/(qe+1e-6), 0.658) -131.690
 
 # Pos grid generation functions
 def cylinder_grid_points_local(center_xy, z_center, R_local, H_local, L, R, H):
     """
-    Generate HCP lattice points inside a local cylinder.
+    Generate lattice points inside a local cylinder.
     - center_xy, z_center: center of local cylinder
     - R_local, H_local: half-sizes of local cylinder
     - L: nearest-neighbor spacing
@@ -117,7 +116,7 @@ def hierarchical_direction_search_cone(prediction_simulator, detector_params, po
     Hierarchical cone-based direction search using combined loss evaluation.
     
     Args:
-        position: [x, y, z] position (from HCP search)
+        position: [x, y, z] position (from grid search)
         initial_t0: starting t0 value
         energy_guess: energy estimate from photon count
         levels: number of hierarchical levels
@@ -419,7 +418,7 @@ def energy_scan_optimization(prediction_simulator, detector_params, position, th
     Perform energy scan around initial energy guess to find optimal energy.
     
     Args:
-        position: [x, y, z] position from HCP search
+        position: [x, y, z] position from grid search
         theta, phi: direction angles from cone search
         initial_t0: t0 estimate
         energy_guess: initial energy estimate from photon count
@@ -566,9 +565,9 @@ def performance_summary(
     print(f"  Energy guess error - Mean: {energy_guess_error_mean:.1f} ± {energy_guess_error_std:.1f}")
     print(f"  Energy guess error - 68%: {energy_guess_error_68:.1f}")
 
-    print(f"\n🔍 HCP POSITION GRID SEARCH:")
-    print(f"  HCP position error - Mean: {grid_pos_error_mean:.3f} ± {grid_pos_error_std:.3f} m")
-    print(f"  HCP position error - 68%: {grid_pos_error_68:.3f} m")
+    print(f"\n🔍 POSITION GRID SEARCH:")
+    print(f"  Position error - Mean: {grid_pos_error_mean:.3f} ± {grid_pos_error_std:.3f} m")
+    print(f"  Position error - 68%: {grid_pos_error_68:.3f} m")
 
     print(f"\n🎯 HIERARCHICAL CONE DIRECTION SEARCH:")
     print(f"  Cone direction error - Mean: {cone_dir_error_mean:.1f}° ± {cone_dir_error_std:.1f}°")
@@ -603,13 +602,13 @@ def performance_summary(
     print(f"  Convergence rate: {convergence_rate_pct:.1f}%")
 
     print(f"\n✨ KEY PERFORMANCE METRICS:")
-    print(f"  🔢 68% Energy Guess Error: {energy_guess_error_68:.1f}")
-    print(f"  🔍 68% HCP Position Error: {grid_pos_error_68:.3f} m")
-    print(f"  🎯 68% Cone Direction Error: {cone_dir_error_68:.1f}°")
+    print(f"  🔢 68% Energy Guess Error: {energy_guess_error_68:.2f}")
+    print(f"  🔍 68% Position Error: {grid_pos_error_68:.3f} m")
+    print(f"  🎯 68% Cone Direction Error: {cone_dir_error_68:.2f}°")
     print(f"  🎯 68% Final Position Error: {pos_error_68:.3f} m")
-    print(f"  🧭 68% Final Direction Error: {dir_error_68:.1f}°")
+    print(f"  🧭 68% Final Direction Error: {dir_error_68:.2f}°")
     print(f"  ⏰ 68% t0 Error: {t0_error_68:.3f}")
-    print(f"  🔢 68% Final Energy Error: {energy_error_68:.1f}")
+    print(f"  🔢 68% Final Energy Error: {energy_error_68:.2f}")
     print(f"  ⚡ Convergence Rate: {convergence_rate_pct:.1f}%")
 
     # Improvements
@@ -618,6 +617,6 @@ def performance_summary(
     energy_improvement = energy_guess_error_mean - energy_error_mean
 
     print(f"\n📈 OPTIMIZATION IMPROVEMENTS:")
-    print(f"  Average position improvement: {position_improvement:.3f}m (HCP → final)")
-    print(f"  Average direction improvement: {direction_improvement:.1f}° (cone → final)")
-    print(f"  Average energy improvement: {energy_improvement:.1f} (guess → final)")
+    print(f"  Average position improvement: {position_improvement:.3f}m (Pos Grid → final)")
+    print(f"  Average direction improvement: {direction_improvement:.1f}° (Cone Grid → final)")
+    print(f"  Average energy improvement: {energy_improvement:.1f} (Guess → final)")
