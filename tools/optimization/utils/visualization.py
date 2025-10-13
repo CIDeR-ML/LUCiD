@@ -7,6 +7,7 @@ import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
 import plotly.graph_objects as go
 import os
+import jax.numpy as jnp
 
 from .geometry import (
     create_cylinder_surface, create_sphere_surface, create_box_surface,
@@ -391,7 +392,7 @@ def create_full_event_3D_visualization(
     energy_guess_err = event_result.get('energy_guess_error', np.nan)
     E_err = optimization_results.get('final_energy_error', np.nan)
     dir_guess_err = event_result.get('cone_direction_error', np.nan)
-    pos_guess_err = event_result.get('hcp_position_error', np.nan)
+    pos_guess_err = event_result.get('grid_position_error', np.nan)
     combined_loss = optimization_results.get('final_combined_loss', np.nan)
 
     # avoid division by zero on true_energy
@@ -553,11 +554,11 @@ def create_optimization_path_3d_visualization(event_ID, all_event_results, arrow
     dir_err = optimization_results['final_direction_error']
     t0_err = optimization_results['final_t0_error']
     dir_guess_err = event_result['cone_direction_error']
-    pos_guess_err = event_result['hcp_position_error']
+    pos_guess_err = event_result['grid_position_error']
     energy_guess_err = event_result['energy_guess_error']
     E_err = event_result['optimization_results']['final_energy_error']
     true_energy = event_result['event_data']['true_energy']
-    
+
     combined_loss = optimization_results['final_combined_loss']
 
 
