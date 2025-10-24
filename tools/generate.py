@@ -129,15 +129,16 @@ def normalize_inputs_jit(inputs, energy_min, energy_max, angle_min, angle_max, d
     
     return normalized_inputs
 
-@partial(jax.jit, static_argnums=(3))
+@partial(jax.jit, static_argnums=(3,))
 def photonsim_differentiable_get_rays(track_origin, track_direction, energy, Nphot, 
-                                     table_data, model_params, key):
-
+                                         table_data, model_params, key):
     key, subkey = random.split(key)
     
     n_bins, energy_min, energy_max, angle_min, angle_max, distance_min, distance_max, angle_bins, distance_bins, angle_dist_grid, angle_mesh, distance_mesh, log_min, log_max = table_data
 
-    # Create evaluation grid for PhotonSim model: [energy, angle, distance]
+    # ============================================================================
+    # FIRST EVALUATION: Full grid to get photon weights for sampling
+    # ============================================================================
     evaluation_grid = jnp.stack([
         jnp.full_like(angle_mesh, energy).ravel(),  # Energy (MeV)
         angle_mesh.ravel(),                         # Angle (radians)
@@ -153,17 +154,18 @@ def photonsim_differentiable_get_rays(track_origin, track_direction, energy, Nph
         out_features=1,
     )
     
+    # FIRST MODEL CALL
     photon_weights, _ = model.apply(model_params, normalized_grid)
 
-    # After getting selected_cos and selected_trk:
+    # Sample points based on weights
     key, sampling_key = random.split(key)
     key, noise_key_angle = random.split(key)
     key, noise_key_dist = random.split(key)
 
-    # calculated for 500x500 bins and cut-off of 2 using photonsim_cut_off_study
-    num_seeds = jnp.int32(10.06*energy -79.32)
-    # # calculated for 500x500 bins and cut-off of 4 using photonsim_cut_off_study
-    # num_seeds = jnp.int32(7.73*energy + 251.65)
+    # Calculate number of seeds and sample indices
+    # num_seeds = jnp.int32(10.06*energy - 79.32)
+    # num_seeds = jnp.int32(0.54*energy -68.48)
+    num_seeds = jnp.int32(0.39*energy -2.328)
 
     seed_indices = random.randint(sampling_key, (Nphot,), 0, num_seeds)
     indices_by_weight = jnp.argsort(-photon_weights.squeeze())[seed_indices]
@@ -171,22 +173,44 @@ def photonsim_differentiable_get_rays(track_origin, track_direction, energy, Nph
     angle_dist_mesh = jnp.array(angle_dist_grid)
     selected_angle_dist = angle_dist_mesh[indices_by_weight]
 
-    # Split into separate cos and trk arrays
+    # Split into separate angle and distance arrays
     sampled_angle = selected_angle_dist[:, 0]
     sampled_dist  = selected_angle_dist[:, 1]
 
-    # Add uniform sampling within bin edges instead of Gaussian smearing
-    bin_width_angle = (angle_max-angle_min)/(n_bins)
-    bin_width_dist = (distance_max-distance_min)/(n_bins)
+    # ============================================================================
+    # STRATIFIED SAMPLING: Better coverage than pure MC
+    # ============================================================================
+    bin_width_angle = (angle_max - angle_min) / n_bins
+    bin_width_dist = (distance_max - distance_min) / n_bins
     
-    # Uniform sampling within [-bin_width/2, +bin_width/2] around bin center
-    uniform_angle = random.uniform(noise_key_angle, (Nphot,), minval=-bin_width_angle/2, maxval=bin_width_angle/2)
-    uniform_dist = random.uniform(noise_key_dist, (Nphot,), minval=-bin_width_dist/2, maxval=bin_width_dist/2)
+    # Create stratified samples: divide [0, 1] into Nphot strata
+    # Then shuffle to avoid systematic bias
+    key, subkey_angle = random.split(key)
+    key, subkey_dist = random.split(key)
+    key, subkey_jitter_angle = random.split(key)
+    key, subkey_jitter_dist = random.split(key)
+    
+    # Permute stratum indices for random assignment
+    strata_indices_angle = random.permutation(subkey_angle, Nphot)
+    strata_indices_dist = random.permutation(subkey_dist, Nphot)
+    
+    # Sample within each stratum: (stratum_index + uniform[0,1]) / Nphot
+    jitter_angle = random.uniform(subkey_jitter_angle, (Nphot,))
+    jitter_dist = random.uniform(subkey_jitter_dist, (Nphot,))
+    
+    strata_angle = (strata_indices_angle + jitter_angle) / Nphot
+    strata_dist = (strata_indices_dist + jitter_dist) / Nphot
+    
+    # Map from [0, 1] to [-bin_width/2, bin_width/2]
+    stratified_angle = (strata_angle - 0.5) * bin_width_angle
+    stratified_dist = (strata_dist - 0.5) * bin_width_dist
 
-    smeared_angle = sampled_angle + uniform_angle
-    smeared_dist = sampled_dist + uniform_dist
+    smeared_angle = sampled_angle + stratified_angle
+    smeared_dist = sampled_dist + stratified_dist
 
-    # Create new evaluation grid with smeared values
+    # ============================================================================
+    # SECOND EVALUATION: Smeared points to get final photon weights
+    # ============================================================================
     new_evaluation_grid = jnp.stack([
         jnp.full_like(smeared_angle, energy),
         smeared_angle,
@@ -195,20 +219,20 @@ def photonsim_differentiable_get_rays(track_origin, track_direction, energy, Nph
 
     new_normalized_grid = normalize_inputs_jit(new_evaluation_grid, energy_min, energy_max, angle_min, angle_max, distance_min, distance_max)
     
-    # Run the model with new grid
+    # SECOND MODEL CALL
     new_photon_weights, _ = model.apply(model_params, new_normalized_grid)
 
     photon_thetas = smeared_angle
-    #photon_thetas = jnp.arccos(smeared_cos)
 
     # Generate ray vectors and origins
     subkey, subkey2 = random.split(subkey)
     ray_vectors = generate_random_cone_vectors(track_direction, photon_thetas, Nphot, subkey)
 
     # Convert ranges to meters and compute ray origins
-    ranges = smeared_dist/1000
+    ranges = smeared_dist / 1000
     ray_origins = jnp.ones((Nphot, 3)) * track_origin[None, :] + ranges[:, None] * normalize(track_direction[None, :])
 
+    # Apply boundary conditions
     new_photon_weights = jnp.squeeze(new_photon_weights)
     new_photon_weights = jnp.where(smeared_angle < angle_min, 0, new_photon_weights)
     new_photon_weights = jnp.where(smeared_angle > angle_max, 0, new_photon_weights)
