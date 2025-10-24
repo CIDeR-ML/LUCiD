@@ -130,10 +130,43 @@ def normalize_inputs_jit(inputs, energy_min, energy_max, angle_min, angle_max, d
     return normalized_inputs
 
 @partial(jax.jit, static_argnums=(3,))
-def photonsim_differentiable_get_rays(track_origin, track_direction, energy, Nphot, 
-                                         table_data, model_params, key):
+def photonsim_differentiable_get_rays(track_origin, track_direction, energy, Nphot,
+                                         table_data, model_params, key, num_seeds_slope=0.39, num_seeds_intercept=-2.328):
+    """
+    Generate photon rays using SIREN model for photon generation.
+
+    Parameters
+    ----------
+    track_origin : jnp.ndarray
+        3D position of the track origin
+    track_direction : jnp.ndarray
+        3D direction vector of the track
+    energy : float
+        Energy of the particle in MeV
+    Nphot : int
+        Number of photons to generate
+    table_data : tuple
+        Grid data for SIREN model evaluation
+    model_params : dict
+        SIREN model parameters
+    key : jax.random.PRNGKey
+        Random key for sampling
+    num_seeds_slope : float, optional
+        Slope for num_seeds calculation, default 0.39
+    num_seeds_intercept : float, optional
+        Intercept for num_seeds calculation, default -2.328
+
+    Returns
+    -------
+    ray_vectors : jnp.ndarray
+        Array of photon direction vectors
+    ray_origins : jnp.ndarray
+        Array of photon origin positions
+    photon_weights : jnp.ndarray
+        Array of photon weights
+    """
     key, subkey = random.split(key)
-    
+
     n_bins, energy_min, energy_max, angle_min, angle_max, distance_min, distance_max, angle_bins, distance_bins, angle_dist_grid, angle_mesh, distance_mesh, log_min, log_max = table_data
 
     # ============================================================================
@@ -153,7 +186,7 @@ def photonsim_differentiable_get_rays(track_origin, track_direction, energy, Nph
         hidden_layers=3,
         out_features=1,
     )
-    
+
     # FIRST MODEL CALL
     photon_weights, _ = model.apply(model_params, normalized_grid)
 
@@ -162,10 +195,8 @@ def photonsim_differentiable_get_rays(track_origin, track_direction, energy, Nph
     key, noise_key_angle = random.split(key)
     key, noise_key_dist = random.split(key)
 
-    # Calculate number of seeds and sample indices
-    # num_seeds = jnp.int32(10.06*energy - 79.32)
-    # num_seeds = jnp.int32(0.54*energy -68.48)
-    num_seeds = jnp.int32(0.39*energy -2.328)
+    # Calculate number of seeds and sample indices using provided parameters
+    num_seeds = jnp.int32(num_seeds_slope * energy + num_seeds_intercept)
 
     seed_indices = random.randint(sampling_key, (Nphot,), 0, num_seeds)
     indices_by_weight = jnp.argsort(-photon_weights.squeeze())[seed_indices]

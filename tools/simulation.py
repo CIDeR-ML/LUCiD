@@ -4,7 +4,7 @@ from tools.propagation.cylinder import create_photon_propagator
 from tools.propagation.sphere import create_sphere_photon_propagator
 from tools.propagation.box import create_box_photon_propagator, box_bounds_check
 from tools.geometry import generate_detector
-from tools.utils import unpack_t0_params
+from tools.utils import unpack_t0_params, unpack_photonsim_params
 import jax
 import jax.numpy as jnp
 from typing import Optional, Tuple
@@ -23,7 +23,8 @@ from tools.siren.training.inference import SIRENPredictor
 
 def setup_event_simulator(json_filename, n_photons=1_000_000, temperature=0.2, K=5,
                           is_data=False, is_calibration=False, max_sensors_per_cell=4,
-                          detector_type='Cylinder', use_expected_value=True):
+                          detector_type='Cylinder', use_expected_value=True,
+                          material='water', particle='muon'):
     """
     Sets up and returns an event simulator with the specified configuration.
 
@@ -50,6 +51,10 @@ def setup_event_simulator(json_filename, n_photons=1_000_000, temperature=0.2, K
         - None: Auto-select based on mode
     detector_type : str, optional
         Type of detector geometry: 'Cylinder', 'Sphere', or 'Box'. Default is 'Cylinder' for backward compatibility.
+    material : str, optional
+        Material type (e.g., 'water', 'ice'), default 'water'
+    particle : str, optional
+        Particle type (e.g., 'muon', 'electron'), default 'muon'
 
     Returns
     -------
@@ -137,7 +142,9 @@ def setup_event_simulator(json_filename, n_photons=1_000_000, temperature=0.2, K
         is_calibration,
         max_sensors_per_cell,
         use_expected_value,
-        detector_type
+        detector_type,
+        material,
+        particle
     )
 
     return simulate_event
@@ -805,7 +812,7 @@ def make_hits_data(flat_weights, flat_indices, flat_times, num_detectors, qe=0.2
 
 def create_event_simulator(detector, propagate_photons, Nphot, NUM_SENSORS, sensor_points, K,
                            is_data, is_calibration, max_sensors_per_cell, use_expected_value=None,
-                           detector_type='Cylinder'):
+                           detector_type='Cylinder', material='water', particle='muon'):
     """
     Create an event simulator with the appropriate configuration.
 
@@ -836,6 +843,10 @@ def create_event_simulator(detector, propagate_photons, Nphot, NUM_SENSORS, sens
         - True: Expected value mode (differentiable)
         - False: Monte Carlo sampling mode
         - None: Auto-select (sampling for data, expected value otherwise)
+    material : str, optional
+        Material type (e.g., 'water', 'ice'), default 'water'
+    particle : str, optional
+        Particle type (e.g., 'muon', 'electron'), default 'muon'
 
     Returns
     -------
@@ -899,14 +910,16 @@ def create_event_simulator(detector, propagate_photons, Nphot, NUM_SENSORS, sens
             propagate_photons, photon_update_fn
         )
 
+    # Load photonsim parameters from configuration
+    photonsim_params = unpack_photonsim_params(particle, material)
+    tot_n_photons_slope, tot_n_photons_intercept = photonsim_params['tot_n_photons_normalization']
+    num_seeds_slope, num_seeds_intercept = photonsim_params['num_seeds']
+
     @jax.jit
     def tot_n_photons_normalization(x):
         """ Translates unphysical SIREN output units into number of physical photons.
-            the numbers are calculated using validate.py """
-        # return 8.909502*x -340.832815
-        #return 11.398886*x + -276.226636
-        # moved to 100x100 bins for adaptive binning.
-        return 11.126267*x + -261.606845
+            the numbers are loaded from configuration files. """
+        return tot_n_photons_slope * x + tot_n_photons_intercept
 
     @jax.jit
     def _simulation_without_data(particle_params, detector_params, key, grid_data, model_params):
@@ -917,9 +930,10 @@ def create_event_simulator(detector, propagate_photons, Nphot, NUM_SENSORS, sens
         theta, phi = direction_angles
         track_direction = spherical_to_cartesian(theta, phi)
 
-        # Generate photons using SIREN
+        # Generate photons using SIREN with configured num_seeds parameters
         photon_directions, photon_origins, photon_weights = photonsim_differentiable_get_rays(
-            track_origin, track_direction, energy, Nphot, grid_data, model_params, key
+            track_origin, track_direction, energy, Nphot, grid_data, model_params, key,
+            num_seeds_slope, num_seeds_intercept
         )
 
         # Scale weights to physical photon count
@@ -1197,11 +1211,12 @@ def create_event_simulator(detector, propagate_photons, Nphot, NUM_SENSORS, sens
     elif is_calibration:
         return _simulation_sensor_calibration
     else:
-        model_base_path = base_dir_path() + '/data/water/muon/siren_training/trained_model/photonsim_siren'
+        # Load SIREN model path from configuration
+        model_base_path = photonsim_params['siren_model_path']
         photonsim_predictor = SIRENPredictor(model_base_path)
         grid_data = create_photonsim_siren_grid(photonsim_predictor, 100)
         model_params = photonsim_predictor.params
-        t0_params = unpack_t0_params()
+        t0_params = unpack_t0_params(particle, material)
 
         # Return partially applied function with model data
         return partial(_simulation_without_data,

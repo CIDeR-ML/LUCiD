@@ -135,6 +135,49 @@ def unpack_t0_params(particle_type='muon', material='water'):
         t0_params['delta_parameterization']['offset']
     )
 
+def unpack_photonsim_params(particle_type='muon', material='water'):
+    """
+    Load and unpack photon simulation parameters for a given particle type and material.
+
+    Parameters
+    ----------
+    particle_type : str, optional
+        Particle type (e.g., 'mu-', 'mu+', 'e-', 'e+', 'pi-', 'pi+', 'muon', 'pion', 'electron'), by default 'muon'
+    material : str, optional
+        Material type, by default 'water'
+
+    Returns
+    -------
+    dict
+        Dictionary containing:
+        - 'tot_n_photons_normalization': tuple of (slope, intercept)
+        - 'num_seeds': tuple of (slope, intercept)
+        - 'siren_model_path': str, absolute path to SIREN model
+    """
+    # Normalize particle type for file path
+    normalized_type = normalize_particle_type_for_path(particle_type)
+    config_path = base_dir_path()+f'/data/{material}/{normalized_type}/photonsim_params.json'
+
+    with open(config_path, 'r') as f:
+        photonsim_params = json.load(f)
+
+    # Construct absolute path to SIREN model
+    data_dir = base_dir_path()+f'/data/{material}/{normalized_type}/'
+    siren_model_path = data_dir + photonsim_params['siren_model']['path']
+
+    # Extract individual parameters
+    return {
+        'tot_n_photons_normalization': (
+            photonsim_params['tot_n_photons_normalization']['slope'],
+            photonsim_params['tot_n_photons_normalization']['intercept']
+        ),
+        'num_seeds': (
+            photonsim_params['num_seeds']['slope'],
+            photonsim_params['num_seeds']['intercept']
+        ),
+        'siren_model_path': siren_model_path
+    }
+
 def spherical_to_cartesian(theta, phi):
     """
     Convert spherical coordinates to Cartesian coordinates.
