@@ -1,0 +1,16 @@
+{
+    "tot_n_photons_normalization": {
+        "slope": 11.126267,
+        "intercept": -261.606845,
+        "description": "Linear normalization: tot_n_photons = slope * x + intercept. Calculated using validate.py with 100x100 bins for adaptive binning."
+    },
+    "num_seeds": {
+        "slope": 0.39,
+        "intercept": -2.328,
+        "description": "Number of seeds for photon sampling: num_seeds = int32(slope * energy + intercept)"
+    },
+    "siren_model": {
+        "path": "siren_training/trained_model/photonsim_siren",
+        "description": "Relative path to SIREN model within the particle/material directory"
+    }
+}

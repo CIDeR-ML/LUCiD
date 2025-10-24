@@ -20,6 +20,10 @@ sftp-config.json
 **/output/
 **/trained_model/
 **/data/
+**/siren_training/**
+!data/
+!data/**/
+!data/**/photonsim_params.json
 **/hyper_config/*.json
 
 
