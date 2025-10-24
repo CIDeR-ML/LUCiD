@@ -663,24 +663,61 @@ def make_hits_simulation(flat_weights, flat_indices, flat_times, num_detectors, 
 
         return measured_charge, measured_time
 
-# 0.4 ns is Super-Kamiokande's PMT time resolution
-# https://arxiv.org/pdf/1307.0162
-def smear_times(times, time_resolution=0.4, rng_key=None):
+def smear_times(times, time_resolution=0.4, key=None):
     """
-    Gaussianly smear input times according to detector time resolution.
-    
+    Gaussianly smear input times.
+    The default time resoluition is that of SK.
+    Reference: https://arxiv.org/pdf/1307.0162
+
     Args:
         times: array of input times (e.g., per detector).
         time_resolution: standard deviation (in ns) of Gaussian smearing.
-        rng_key: JAX random key for reproducibility.
+        key: JAX random key for reproducibility.
     Returns:
         smeared_times: Gaussian-smeared times.
     """
-    noise = jax.random.normal(rng_key, shape=times.shape) * time_resolution
+    noise = jax.random.normal(key, shape=times.shape) * time_resolution
     smeared_times = times + noise
     smeared_times = jnp.where((jnp.isfinite(smeared_times)), smeared_times, 1e6)
 
     return smeared_times
+
+
+def smear_charges_SK_like(counts, key=None):
+    """
+    Gaussianly smear input charge counts according to Super-Kamiokande-like resolution.
+
+    Reference: https://arxiv.org/pdf/1307.0162 (Table 2)
+    
+    Args:
+        counts: array of input charge counts (e.g., number of hits per PMT).
+        key: JAX random key for reproducibility.
+    
+    Returns:
+        smeared_counts: Gaussian-smeared charge counts.
+    """
+    if key is None:
+        raise ValueError("key must be provided for reproducibility.")
+
+    # Define sigma according to the count range
+    sigma = jnp.where(
+        counts < 20,
+        counts * 0.04,
+        jnp.where(counts < 130, counts * 0.26, counts * 1.8)
+    )
+
+    # Apply Gaussian smearing
+    noise = jax.random.normal(key, shape=counts.shape) * sigma
+    smeared_counts = counts + noise
+
+    # Handle non-finite results (e.g., NaN or inf)
+    smeared_counts = jnp.where(jnp.isfinite(smeared_counts), smeared_counts, 0.0)
+
+    # Avoid negative or unphysical charge values
+    smeared_counts = jnp.clip(smeared_counts, 0.0, None)
+
+    return smeared_counts
+
 
 # 0.4 ns is Super-Kamiokande's PMT time resolution
 def time_digitizer(times, time_resolution=0.4):
@@ -707,17 +744,18 @@ def time_digitizer(times, time_resolution=0.4):
     return digitized_times
 
 
-def make_hits_data(flat_weights, flat_indices, flat_times, num_detectors, qe=0.2, rng_key=None, threshold=1e-5):
+def make_hits_data(flat_weights, flat_indices, flat_times, num_detectors, qe=0.2, key=None, threshold=1e-5):
 
         timing_mask = (flat_weights>threshold) & (flat_times>0)
         filtered_times = jnp.where(timing_mask, flat_times, jnp.inf)
 
-        rng_key, smear_key = jax.random.split(rng_key)
+        key, smear_time_key = jax.random.split(key)
+        qe_key, smear_counts_key = jax.random.split(key)
 
         # Apply quantum detection efficiency using Bernoulli sampling
-        if rng_key is not None and qe < 1.0:
+        if qe_key is not None and qe < 1.0:
             # Generate random numbers for each photon
-            detection_probs = jax.random.uniform(rng_key, shape=flat_weights.shape)
+            detection_probs = jax.random.uniform(qe_key, shape=flat_weights.shape)
             # Binary detection decision
             detected_mask = detection_probs < qe
             # Apply detection mask to weights
@@ -743,7 +781,7 @@ def make_hits_data(flat_weights, flat_indices, flat_times, num_detectors, qe=0.2
         nonzero_mask = (total_charge > 1e-10) & (detector_mins > 0)
         measured_time = jnp.where(
             jnp.any(nonzero_mask),
-            smear_times(detector_mins, rng_key=smear_key),
+            smear_times(detector_mins, key=smear_time_key),
             0.0
         )
         
@@ -758,7 +796,7 @@ def make_hits_data(flat_weights, flat_indices, flat_times, num_detectors, qe=0.2
         # Zero out charges below threshold
         measured_charge = jnp.where(
             nonzero_mask,
-            total_charge,
+            smear_charges_SK_like(total_charge, key=smear_counts_key),
             0
         )
 
@@ -866,7 +904,9 @@ def create_event_simulator(detector, propagate_photons, Nphot, NUM_SENSORS, sens
         """ Translates unphysical SIREN output units into number of physical photons.
             the numbers are calculated using validate.py """
         # return 8.909502*x -340.832815
-        return 11.398886*x + -276.226636
+        #return 11.398886*x + -276.226636
+        # moved to 100x100 bins for adaptive binning.
+        return 11.126267*x + -261.606845
 
     @jax.jit
     def _simulation_without_data(particle_params, detector_params, key, grid_data, model_params):
@@ -1139,10 +1179,10 @@ def create_event_simulator(detector, propagate_photons, Nphot, NUM_SENSORS, sens
         return corrected_q, aligned_times
 
     # Create wrapper functions to handle different signatures and add QE parameter
-    def _make_hits_data_wrapper(flat_weights, flat_indices, flat_times, num_sensors, qe_key, qe=0.065):
-        return make_hits_data(flat_weights, flat_indices, flat_times, num_sensors, qe=qe, rng_key=qe_key)
+    def _make_hits_data_wrapper(flat_weights, flat_indices, flat_times, num_sensors, key, qe=0.065):
+        return make_hits_data(flat_weights, flat_indices, flat_times, num_sensors, qe=qe, key=key)
 
-    def _make_hits_simulation_wrapper(flat_weights, flat_indices, flat_times, num_sensors, qe_key, qe=0.065):
+    def _make_hits_simulation_wrapper(flat_weights, flat_indices, flat_times, num_sensors, key, qe=0.065):
         # For simulation mode, qe_key is ignored since we use deterministic scaling
         return make_hits_simulation(flat_weights, flat_indices, flat_times, num_sensors, qe=qe)
 
@@ -1159,7 +1199,7 @@ def create_event_simulator(detector, propagate_photons, Nphot, NUM_SENSORS, sens
     else:
         model_base_path = base_dir_path() + '/data/water/muon/siren_training/trained_model/photonsim_siren'
         photonsim_predictor = SIRENPredictor(model_base_path)
-        grid_data = create_photonsim_siren_grid(photonsim_predictor, 500)
+        grid_data = create_photonsim_siren_grid(photonsim_predictor, 100)
         model_params = photonsim_predictor.params
         t0_params = unpack_t0_params()
 
