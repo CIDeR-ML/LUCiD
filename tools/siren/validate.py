@@ -11,6 +11,7 @@ Supports different particle types and materials with automatic path detection.
 
 Usage:
     python validate.py cutoff [--material MATERIAL] [--particle PARTICLE] [--energy ENERGY] [--thresholds THRESHOLDS] [--output OUTPUT]
+    python validate.py energy [--material MATERIAL] [--particle PARTICLE] [--energies ENERGIES] [--threshold THRESHOLD] [--output OUTPUT]
     python validate.py valid-points [--material MATERIAL] [--particle PARTICLE] [--energies ENERGIES] [--thresholds THRESHOLDS] [--output OUTPUT]
     python validate.py integral [--material MATERIAL] [--particle PARTICLE] [--energies ENERGIES] [--nphot NPHOT] [--output OUTPUT]
     python validate.py rays [--material MATERIAL] [--particle PARTICLE] [--energies ENERGIES] [--nphot NPHOT] [--output OUTPUT]
@@ -19,16 +20,19 @@ Usage:
 Examples:
     # Default water/muon
     python validate.py cutoff --energy 500 --thresholds 1,2,4,8
-    
+
+    # Energy comparison at fixed threshold
+    python validate.py energy --energies 500,1000,1500 --threshold 4
+
     # Valid points vs energy analysis
     python validate.py valid-points --energies 200,2000,20 --thresholds 1,2,4,8
-    
+
     # Specific material/particle
     python validate.py integral --material ice --particle electron --energies 200,500,800
-    
+
     # All validations for water/muon
     python validate.py all
-    
+
     # All validations for custom material/particle
     python validate.py all --material water --particle muon --output validation_results/
 """
@@ -143,10 +147,134 @@ class PhotonSimValidator:
         photon_weights = self.photonsim_predictor.predict_batch(evaluation_grid)
         return np.array(photon_weights).reshape(len(angle_bins), len(distance_bins))
     
+    def energy_study(self, energies=None, threshold=4, vmax=None, output_dir=None):
+        """
+        Perform energy comparison analysis at fixed threshold.
+
+        Args:
+            energies: List of energies to analyze (default: [500, 1000, 1500])
+            threshold: Fixed threshold value (used as vmin for colorbar)
+            vmax: Maximum value for colorbar (optional, auto-determined if None)
+            output_dir: Directory to save results
+        """
+        print(f"\n=== Energy Study Analysis ===")
+        print(f"Threshold: {threshold}")
+
+        if energies is None:
+            energies = [500, 1000, 1500]
+
+        # Create analysis grid
+        n_angle_bins = 500
+        n_distance_bins = 500
+        angle_bins = np.linspace(self.angle_min, self.angle_max, n_angle_bins)
+        distance_bins = np.linspace(self.distance_min, self.distance_max, n_distance_bins)
+
+        print(f"Grid: {n_angle_bins}×{n_distance_bins} points")
+        print(f"Energies: {energies} MeV")
+
+        # Analyze different energies
+        results = {
+            'energies': energies,
+            'threshold': threshold,
+            'statistics': {}
+        }
+
+        # First pass: collect all masked values to determine vmax if not provided
+        all_masked_values = []
+        for energy in energies[:4]:  # Only process first 4 energies
+            reco_value = self.evaluate_photonsim_grid(energy, angle_bins, distance_bins)
+            masked_values = jnp.where(reco_value > threshold, reco_value, 0)
+            all_masked_values.append(masked_values)
+
+        # Determine vmax if not provided
+        if vmax is None:
+            vmax = max(np.max(mv) for mv in all_masked_values)
+
+        # Create visualization - determine layout
+        n_energies = len(energies)
+        if n_energies <= 4:
+            fig, axes = plt.subplots(1, n_energies, figsize=(6, 2.5), constrained_layout=True)
+            if n_energies == 1:
+                axes = [axes]
+        else:
+            # Use 2x2 layout for 4 energies
+            fig, axes = plt.subplots(2, 2, figsize=(10, 7), constrained_layout=True)
+            axes = axes.ravel()
+
+        # Convert distance range to meters
+        distance_min_m = 0#self.distance_min / 1000.0
+        distance_max_m = 10#self.distance_max / 1000.0
+
+        # Create plots
+        images = []
+        for i, energy in enumerate(energies):
+            if i >= 4:  # Only plot first 4 energies
+                break
+
+            masked_values = all_masked_values[i]
+
+            # Calculate statistics
+            valid_count = np.sum(masked_values > 0)
+            total_weight = np.sum(masked_values)
+
+            results['statistics'][energy] = {
+                'valid_count': int(valid_count),
+                'total_weight': float(total_weight),
+                'fraction_valid': float(valid_count / masked_values.size)
+            }
+
+            # Plot with common normalization
+            im = axes[i].imshow(masked_values, norm=LogNorm(vmin=threshold, vmax=vmax),
+                               aspect='auto',
+                               extent=[distance_min_m, distance_max_m,
+                                      np.degrees(self.angle_max), np.degrees(self.angle_min)])
+            images.append(im)
+
+            # X-axis label on all plots
+            axes[i].set_xlabel('Distance (m)')
+
+            # Y-axis: only show label and ticks on leftmost plots
+            if n_energies <= 4:
+                # For 1x3 layout, only first plot gets y-axis
+                if i == 0:
+                    axes[i].set_ylabel('Angle (degrees)')
+                else:
+                    axes[i].set_yticklabels([])
+            else:
+                # For 2x2 layout, left column gets y-axis
+                if i % 2 == 0:
+                    axes[i].set_ylabel('Angle (degrees)')
+                else:
+                    axes[i].set_yticklabels([])
+
+            # Add energy label in bottom right corner
+            axes[i].text(0.95, 0.05, f'{int(energy)} MeV', transform=axes[i].transAxes,
+                        fontsize=12, ha='right', va='bottom',
+                        bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+
+            print(f"Energy {energy} MeV: {valid_count:,} valid points ({valid_count/masked_values.size:.3%})")
+
+        # Add common colorbar on rightmost subplot
+        if n_energies <= 4:
+            # For horizontal layout, add colorbar to rightmost plot
+            fig.colorbar(images[-1], ax=axes[-1], label='Intensity (a.u.)')
+        else:
+            # For 2x2 layout, add colorbar to top-right plot
+            fig.colorbar(images[1], ax=axes[1], label='Intensity (a.u.)')
+
+        if output_dir:
+            os.makedirs(output_dir, exist_ok=True)
+            fig.savefig(f"{output_dir}/energy_study_threshold_{threshold}.png", dpi=150, bbox_inches='tight')
+            print(f"Energy study results saved to: {output_dir}/energy_study_threshold_{threshold}.png")
+
+        plt.show()
+
+        return results
+
     def cutoff_study(self, energy=600, thresholds=None, output_dir=None):
         """
         Perform cut-off threshold analysis.
-        
+
         Args:
             energy: Analysis energy in MeV
             thresholds: List of cut-off thresholds to analyze
@@ -154,71 +282,71 @@ class PhotonSimValidator:
         """
         print(f"\n=== Cut-off Study Analysis ===")
         print(f"Energy: {energy} MeV")
-        
+
         if thresholds is None:
             thresholds = [1, 2, 4, 8]
-        
+
         # Create analysis grid
         n_angle_bins = 500
         n_distance_bins = 500
         angle_bins = np.linspace(self.angle_min, self.angle_max, n_angle_bins)
         distance_bins = np.linspace(self.distance_min, self.distance_max, n_distance_bins)
-        
+
         print(f"Grid: {n_angle_bins}×{n_distance_bins} points")
         print(f"Thresholds: {thresholds}")
-        
+
         # Evaluate model at given energy
         reco_value = self.evaluate_photonsim_grid(energy, angle_bins, distance_bins)
-        
+
         # Analyze different thresholds
         results = {
             'energy': energy,
             'thresholds': thresholds,
             'statistics': {}
         }
-        
+
         # Create visualization
         fig, axes = plt.subplots(2, 2, figsize=(8, 6))
         axes = axes.ravel()
-        
+
         for i, threshold in enumerate(thresholds):
             if i >= 4:  # Only plot first 4 thresholds
                 break
-                
+
             # Apply threshold
             masked_values = jnp.where(reco_value > threshold, reco_value, 0)
-            
+
             # Calculate statistics
             valid_count = np.sum(masked_values > 0)
             total_weight = np.sum(masked_values)
-            
+
             results['statistics'][threshold] = {
                 'valid_count': int(valid_count),
                 'total_weight': float(total_weight),
                 'fraction_valid': float(valid_count / masked_values.size)
             }
-            
+
             # Plot
             im = axes[i].imshow(masked_values, norm=LogNorm(vmin=threshold), aspect='auto',
-                               extent=[self.distance_min, self.distance_max, 
+                               extent=[self.distance_min, self.distance_max,
                                       np.degrees(self.angle_max), np.degrees(self.angle_min)])
             axes[i].set_xlabel('Distance (mm)')
             axes[i].set_ylabel('Angle (degrees)')
             axes[i].set_title(f'Threshold: {threshold}\nValid points: {valid_count:,}', fontsize=13)
             fig.colorbar(im, ax=axes[i], label='Photon Density')
-            
+
             print(f"Threshold {threshold}: {valid_count:,} valid points ({valid_count/masked_values.size:.3%})")
-        
+
         fig.suptitle(f'Cut-off Study - Energy: {energy} MeV', fontsize=16)
         fig.tight_layout()
-        
+
         if output_dir:
             os.makedirs(output_dir, exist_ok=True)
             fig.savefig(f"{output_dir}/cutoff_study_energy_{energy}.png", dpi=150, bbox_inches='tight')
             print(f"Cutoff study results saved to: {output_dir}/cutoff_study_energy_{energy}.png")
-        
+
         plt.show()
-        
+
         return results
     
     def integral_analysis(self, energies=None, nphot=1000000, output_dir=None):
@@ -497,7 +625,7 @@ class PhotonSimValidator:
         print(f"\n=== Ray Generation Validation ===")
         
         if energies is None:
-            energies = np.linspace(200, 2000, 20)
+            energies = np.linspace(200, 2000, 19)
         
         print(f"Analyzing {len(energies)} energies from {energies[0]} to {energies[-1]} MeV")
         print(f"N-photons: {nphot:,}")
@@ -634,7 +762,18 @@ def main():
     cutoff_parser.add_argument('--output', type=str, help='Output directory')
     cutoff_parser.add_argument('--save', action='store_true', help='Save results to output directory')
     cutoff_parser.add_argument('--notebook-mode', action='store_true', help='Force notebook mode for plot display')
-    
+
+    # Energy study
+    energy_parser = subparsers.add_parser('energy', help='Run energy comparison analysis at fixed threshold')
+    energy_parser.add_argument('--material', type=str, help='Material type (overrides global setting)')
+    energy_parser.add_argument('--particle', type=str, help='Particle type (overrides global setting)')
+    energy_parser.add_argument('--energies', type=str, default='500,1000,1500', help='Comma-separated energies (MeV)')
+    energy_parser.add_argument('--threshold', type=float, default=4, help='Fixed threshold value')
+    energy_parser.add_argument('--vmax', type=float, help='Maximum value for colorbar (optional)')
+    energy_parser.add_argument('--output', type=str, help='Output directory')
+    energy_parser.add_argument('--save', action='store_true', help='Save results to output directory')
+    energy_parser.add_argument('--notebook-mode', action='store_true', help='Force notebook mode for plot display')
+
     # Valid points vs energy analysis
     valid_points_parser = subparsers.add_parser('valid-points', help='Run valid points vs energy analysis')
     valid_points_parser.add_argument('--material', type=str, help='Material type (overrides global setting)')
@@ -720,7 +859,13 @@ def main():
         thresholds = [float(x) for x in args.thresholds.split(',')]
         output_dir = get_output_dir(args)
         validator.cutoff_study(energy=args.energy, thresholds=thresholds, output_dir=output_dir)
-    
+
+    elif args.command == 'energy':
+        energies = [float(x) for x in args.energies.split(',')]
+        output_dir = get_output_dir(args)
+        vmax = args.vmax if hasattr(args, 'vmax') else None
+        validator.energy_study(energies=energies, threshold=args.threshold, vmax=vmax, output_dir=output_dir)
+
     elif args.command == 'valid-points':
         energies = None
         if args.energies:
