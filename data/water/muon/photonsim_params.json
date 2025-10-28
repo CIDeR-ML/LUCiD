@@ -1,13 +1,15 @@
 {
     "tot_n_photons_normalization": {
-        "slope": 11.126267,
-        "intercept": -261.606845,
-        "description": "Linear normalization: tot_n_photons = slope * x + intercept. Calculated using validate.py with 100x100 bins for adaptive binning."
+        "a": 30.617695,
+        "b": 0.875402,
+        "c": -1596.376086,
+        "description": "Power law normalization: tot_n_photons = a * energy^b + c. Fitted with R² = 0.997176 using validate.py integral analysis with consistent num_seeds parameters."
     },
     "num_seeds": {
-        "slope": 0.39,
-        "intercept": -2.328,
-        "description": "Number of seeds for photon sampling: num_seeds = int32(slope * energy + intercept)"
+        "a": 1.169450,
+        "b": 0.863553,
+        "c": -54.29,
+        "description": "Power law for number of seeds: num_seeds = int32(a * energy^b + c). Fitted with R² = 0.999668 using validate.py valid-points analysis with Intensity threshold = 2."
     },
     "siren_model": {
         "path": "siren_training/trained_model/photonsim_siren",
