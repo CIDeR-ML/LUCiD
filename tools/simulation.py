@@ -912,14 +912,14 @@ def create_event_simulator(detector, propagate_photons, Nphot, NUM_SENSORS, sens
 
     # Load photonsim parameters from configuration
     photonsim_params = unpack_photonsim_params(particle, material)
-    tot_n_photons_slope, tot_n_photons_intercept = photonsim_params['tot_n_photons_normalization']
-    num_seeds_slope, num_seeds_intercept = photonsim_params['num_seeds']
+    tot_n_photons_a, tot_n_photons_b, tot_n_photons_c = photonsim_params['tot_n_photons_normalization']
+    num_seeds_a, num_seeds_b, num_seeds_c = photonsim_params['num_seeds']
 
     @jax.jit
     def tot_n_photons_normalization(x):
         """ Translates unphysical SIREN output units into number of physical photons.
-            the numbers are loaded from configuration files. """
-        return tot_n_photons_slope * x + tot_n_photons_intercept
+            Uses power law: a * energy^b + c. Parameters are loaded from configuration files. """
+        return tot_n_photons_a * jnp.power(x, tot_n_photons_b) + tot_n_photons_c
 
     @jax.jit
     def _simulation_without_data(particle_params, detector_params, key, grid_data, model_params):
@@ -930,15 +930,16 @@ def create_event_simulator(detector, propagate_photons, Nphot, NUM_SENSORS, sens
         theta, phi = direction_angles
         track_direction = spherical_to_cartesian(theta, phi)
 
-        # Generate photons using SIREN with configured num_seeds parameters
+        # Generate photons using SIREN with configured num_seeds parameters (power law)
         photon_directions, photon_origins, photon_weights = photonsim_differentiable_get_rays(
             track_origin, track_direction, energy, Nphot, grid_data, model_params, key,
-            num_seeds_slope, num_seeds_intercept
+            num_seeds_a, num_seeds_b, num_seeds_c
         )
 
         # Scale weights to physical photon count
         total_photons_norm = tot_n_photons_normalization(energy)
         photon_intensities = (total_photons_norm * photon_weights) / Nphot
+        #jax.debug.print("TOT INTENSITIES: {}", jnp.sum(photon_intensities))
         photon_times = jnp.zeros((Nphot,))
 
         distances_to_vertex = jnp.linalg.norm(photon_origins - track_origin, axis=1) * 1000  # converting to mm
