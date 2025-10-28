@@ -70,6 +70,18 @@ Example:
         type=str,
         help='Path to optimization configuration JSON file'
     )
+    parser.add_argument(
+        '--output',
+        type=str,
+        default=None,
+        help='Output directory for results (default: project_root/output)'
+    )
+    parser.add_argument(
+        '--name',
+        type=str,
+        default=None,
+        help='Name for the output file (default: timestamp-based name)'
+    )
     return parser.parse_args()
 
 
@@ -105,6 +117,39 @@ def load_config(config_path):
     return config
 
 
+def tukey_loss(residuals, c=3.0):
+    r = residuals / c
+    return jnp.where(
+        jnp.abs(r) <= 1,
+        (c**2 / 6) * (1 - (1 - r**2)**3),
+        (c**2 / 6)
+    )
+
+
+# @jit
+# def cone_time_loss(true_q, pred_q, true_t, pred_t, t0, eps=1e-8):
+#     time_residuals = true_t - pred_t - jax.lax.stop_gradient(t0)
+#     w1 = jnp.where((true_q > 0.) & (true_t < pred_t), true_q, 0.)
+#     loss = jnp.sum(tukey_loss(time_residuals, c=3.0) * w1) / (jnp.sum(w1) + 1e-3)
+#     return 1.0 + loss
+
+@jit
+def cone_time_loss(true_q, pred_q, pred_t, true_t, t0, eps=1e-8):
+    eps =1e-6
+
+    # q_ref = true_q[-300]
+    # cut = jnp.maximum(jnp.minimum(q_ref, 10.), 1.)
+    
+    mask = (true_q > 1.) & (pred_q > 0.)
+    time_residuals = (true_t - pred_t - jax.lax.stop_gradient(t0)) * mask
+
+    mean = jnp.sum(time_residuals) / (jnp.sum(mask) + eps)
+    std = jnp.sqrt(jnp.sum(((time_residuals - mean * mask) ** 2)) / (jnp.sum(mask) + eps))
+
+    loss = std/10
+
+    return loss
+
 def create_combined_loss_function(vertex_weight_scale, counts_weight_scale, energy_weight_scale,
                                    prediction_simulator, detector_params, c_medium, scale_w,
                                    percentile_threshold, angle_scale_deg, inv_scale_w):
@@ -138,22 +183,31 @@ def create_combined_loss_function(vertex_weight_scale, counts_weight_scale, ener
 
         # Convert spherical to cartesian for direction loss
         direction = spherical_to_cartesian(theta, phi)
-        direction_loss_val = direction_time_loss(position, direction, hit_detector_positions,
-                                                observed_times, observed_counts, t0,
-                                                c_medium=c_medium,
-                                                angle_scale_deg=angle_scale_deg,
-                                                inv_scale_w=inv_scale_w)
+        # direction_loss_val = direction_time_loss(position, direction, hit_detector_positions,
+        #                                         observed_times, observed_counts, t0,
+        #                                         c_medium=c_medium,
+        #                                         angle_scale_deg=angle_scale_deg,
+        #                                         inv_scale_w=inv_scale_w)
 
-        # Weighted product loss with small offset to avoid zero
-        A = jnp.sqrt((vertex_weight_scale * vertex_loss_val + 1e-6) *
-                    (counts_weight_scale * counts_loss_val + 1e-6))
-        B = jnp.sqrt((vertex_weight_scale * vertex_loss_val + 1e-6) *
-                    (counts_weight_scale * counts_loss_val + 1e-6) *
-                    (direction_loss_val + 1e-3))
+        cone_time_loss_val = cone_time_loss(observed_counts, simulated_counts, simulated_time, observed_times, t0)
 
-        combined_loss = jnp.where(jnp.isnan(B), A, B)
+        # # Weighted product loss with small offset to avoid zero
+        # A = jnp.sqrt((vertex_weight_scale * vertex_loss_val + 1e-6) *
+        #             (counts_weight_scale * counts_loss_val + 1e-6))
+        # B = jnp.sqrt((vertex_weight_scale * vertex_loss_val + 1e-6) *
+        #             (counts_weight_scale * counts_loss_val + 1e-6) *
+        #             (direction_loss_val + 1e-3))
 
-        return combined_loss, (vertex_loss_val, counts_loss_val, energy_loss_val, direction_loss_val)
+        # combined_loss = jnp.where(jnp.isnan(B), A, B)
+        #combined_loss = jnp.sqrt((vertex_loss_val/100. + 1e-6) * (counts_loss_val + 1e-6))# * (cone_time_loss_val + 1e-6))
+
+        #combined_loss = jnp.sqrt((vertex_loss_val/100. + 1e-6) * (counts_loss_val + 1e-6) * (cone_time_loss_val + 1e-6))
+
+        #return combined_loss, (vertex_loss_val, counts_loss_val, energy_loss_val, direction_loss_val)
+
+        combined_loss = jnp.sqrt((vertex_loss_val/1e2 + 1e-6) * (counts_loss_val + 1e-6))
+
+        return combined_loss, (vertex_loss_val, counts_loss_val, energy_loss_val, cone_time_loss_val)
 
     combined_grad_fn = jit(value_and_grad(combined_product_loss, has_aux=True))
     return combined_grad_fn
@@ -199,6 +253,14 @@ def run_complete_optimization_adam(initial_t0, hit_detector_positions, observed_
     DETECTOR_R = detector_bounds.get('r', None)
     DETECTOR_H = detector_bounds.get('H', None)
 
+    # Define parameter-specific scaling factors
+    # Parameter structure: [x, y, z, t0, theta, phi, energy]
+
+    POS_LR_SCALE = config['learning_rates']['position_learning_rate']
+    DIR_LR_SCALE = config['learning_rates']['direction_learning_rate']
+    T0_LR_SCALE = config['learning_rates']['t0_learning_rate']
+    ENE_LR_SCALE = config['learning_rates']['energy_learning_rate']
+
     damping_factor = config['optimization_params']['damping_factor']
 
     verbosity = config.get('verbosity', {}).get('level', 2)
@@ -207,11 +269,26 @@ def run_complete_optimization_adam(initial_t0, hit_detector_positions, observed_
     # Stage 0: Energy estimation from photon count
     if verbosity >= 2:
         print("  Stage 0: Energy estimation from photon count")
-    N_photons = jnp.sum(observed_counts)
-    energy_guess = estimate_muon_energy_from_photon_count(N_photons, qe=qe)
+
+
+    # we do the calculation for a track at the origin with theta=jnp.arccos(1/jnp.sqrt(3)). phi=jnp.pi/4.. and t0=0. (t0 has no effect).
+    # the choice of phi and theta correspond to [1/sqrt(3), 1/sqrt(3), 1/sqrt(3)].
+    energy_guess_scan = energy_scan_optimization(
+        prediction_simulator, detector_params, jnp.array([0.,0.,0.]), jnp.arccos(1/jnp.sqrt(3)), jnp.pi/4., 0.,
+        hit_detector_positions, observed_times, observed_counts,
+        true_data, energy_guess=1000+np.random.uniform(-50,50), energy_delta=700,
+        n_steps=10, verbosity=verbosity
+    )
+    energy_guess = energy_guess_scan['best_energy']
+
     if verbosity >= 2:
-        print(f"    Observed photons: {N_photons}")
         print(f"    Energy guess: {energy_guess:.1f} (true: {true_energy:.1f})")
+
+    N_photons = jnp.sum(observed_counts)
+    # energy_guess = estimate_muon_energy_from_photon_count(N_photons, qe=qe)
+    # if verbosity >= 2:
+    #     print(f"    Observed photons: {N_photons}")
+    #     print(f"    Energy guess: {energy_guess:.1f} (true: {true_energy:.1f})")
 
     # Stage 1: Position+t0 grid search
     if verbosity >= 2:
@@ -271,12 +348,17 @@ def run_complete_optimization_adam(initial_t0, hit_detector_positions, observed_
     optimizer = optax.adam(learning_rate=ADAM_LEARNING_RATE, b1=ADAM_B1, b2=ADAM_B2, eps=ADAM_EPS)
     opt_state = optimizer.init(initial_params)
 
-    # Define parameter-specific scaling factors
-    # Parameter structure: [x, y, z, t0, theta, phi, energy]
-    position_scale = 1.0
-    t0_scale = 10.0
-    direction_scale = 0.025
-    energy_scale = 10.0
+    # # Define parameter-specific scaling factors
+    # # Parameter structure: [x, y, z, t0, theta, phi, energy]
+    # position_scale = 1.0
+    # t0_scale = 10.0
+    # direction_scale = 0.025
+    # energy_scale = 10.0
+
+    position_scale = POS_LR_SCALE
+    direction_scale = DIR_LR_SCALE
+    t0_scale = T0_LR_SCALE
+    energy_scale = ENE_LR_SCALE
 
     update_scales = jnp.array([
         position_scale,  # x
@@ -309,7 +391,7 @@ def run_complete_optimization_adam(initial_t0, hit_detector_positions, observed_
     if verbosity >= 2:
         print(f"    Starting Adam optimization...")
 
-    current_damping_w = 1.0
+    current_damping_w = 5.0
     for iteration in range(MAX_ITERATIONS):
         opt_key, _ = jax.random.split(opt_key)
 
@@ -337,6 +419,8 @@ def run_complete_optimization_adam(initial_t0, hit_detector_positions, observed_
 
         # Apply parameter-specific scaling to updates
         scaled_updates = updates * update_scales * current_damping_w
+        if iteration < 50:
+            scaled_updates = scaled_updates.at[-1].set(0.)
 
         # Apply scaled updates to parameters
         current_params = optax.apply_updates(current_params, scaled_updates)
@@ -478,7 +562,6 @@ def generate_event_data(event_idx, random_key, data_dir, data_simulator,
     photon_directions = photon_data['photon_directions']
     photon_times = photon_data['photon_times']
     N = len(photon_origins)
-
     # the number 1_000_000 is hard coded also in _simulation_core
     padding_size = max(0, 1_000_000-N)
 
@@ -522,7 +605,7 @@ def generate_event_data(event_idx, random_key, data_dir, data_simulator,
     true_direction = jnp.array([sin_theta * jnp.cos(phi), sin_theta * jnp.sin(phi), cos_theta])
 
     true_energy = photon_data['energy']
-    TRUE_T0 = jax.random.uniform(key, shape=(), minval=-3.0, maxval=3.0)
+    TRUE_T0 = jax.random.uniform(key, shape=(), minval=-15.0, maxval=15.0)
 
     true_params = (true_energy, true_position, true_direction)
 
@@ -604,7 +687,7 @@ def main():
     # Setup simulators
     print("Setting up simulators...")
     prediction_simulator = setup_event_simulator(
-        default_json_filename, Nphot, TEMPERATURE, max_sensors_per_cell=8, K=K, is_data=False
+        default_json_filename, Nphot, TEMPERATURE, max_sensors_per_cell=4, K=K, is_data=False
     )
 
     data_simulator = setup_event_simulator(
@@ -837,16 +920,16 @@ def main():
 
             # Print results
             if verbosity == 1:
-                print(f"Event {event_idx}: pos_err={results['final_position_error']:.3f}m, "
-                      f"dir_err={results['final_direction_error']:.1f}°, t0_err={results['final_t0_error']:.3f}, "
+                print(f"Event {event_idx}: pos_err={results['final_position_error']*100:.1f}cm, "
+                      f"dir_err={results['final_direction_error']:.2f}°, t0_err={results['final_t0_error']:.3f}, "
                       f"E_err={results['final_energy_error']:.1f}")
             elif verbosity >= 2:
                 print(f"  Energy guess error: {energy_guess_error:.1f}")
-                print(f"  Grid search - Position error: {grid_position_error:.3f}m, t0 error: {grid_t0_error:.3f}")
-                print(f"  Cone direction error: {cone_direction_error:.1f}°")
+                print(f"  Grid search - Position error: {grid_position_error*100:.1f}cm, t0 error: {grid_t0_error:.3f}")
+                print(f"  Cone direction error: {cone_direction_error:.2f}°")
                 print(f"  Energy scan improvement: {energy_scan_improvement:.1f}")
                 print(f"  Final errors - Position: {results['final_position_error']:.3f}m, "
-                      f"Direction: {results['final_direction_error']:.1f}°, t0: {results['final_t0_error']:.3f}, "
+                      f"Direction: {results['final_direction_error']:.2f}°, t0: {results['final_t0_error']:.3f}, "
                       f"Energy: {results['final_energy_error']:.1f}")
                 print(f"  Converged: {results['converged']}, Iterations: {results['total_iterations']}")
 
@@ -894,7 +977,10 @@ def main():
     print(f"Max t0 error:    {np.max(grid_t0_errors_arr):.4f}")
 
     # Save results
-    output_dir = Path(__file__).parent.parent.parent / 'output'
+    if args.output:
+        output_dir = Path(args.output)
+    else:
+        output_dir = Path(__file__).parent.parent.parent / 'output'
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Create timestamp
@@ -923,6 +1009,7 @@ def main():
         'config_file': args.config_file,
         'config': {
             'optimizer': 'Adam',
+            'nphot': Nphot,
             'adam_learning_rate': adam_lr,
             'adam_b1': adam_b1,
             'adam_b2': adam_b2,
@@ -978,7 +1065,10 @@ def main():
     }
 
     # Save results
-    output_file = output_dir / f'single_ring_optimization_adam_{timestamp}_{N_EVENTS}_events.pkl'
+    if args.name:
+        output_file = output_dir / f'{args.name}.pkl'
+    else:
+        output_file = output_dir / f'single_ring_optimization_adam_{timestamp}_{N_EVENTS}_events.pkl'
     with open(output_file, 'wb') as f:
         pickle.dump(results_summary, f)
 
