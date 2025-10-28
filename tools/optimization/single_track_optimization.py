@@ -98,10 +98,6 @@ def load_config(config_path):
         config['optimization_params'] = {}
 
     optimization_params = config['optimization_params']
-    optimization_params.setdefault('percentile_threshold', 0.1)
-    optimization_params.setdefault('angle_scale_deg', 2.0)
-    optimization_params.setdefault('inv_scale_w', 0.05)
-    optimization_params.setdefault('scale_w', 1000)
     optimization_params.setdefault('damping_factor', 0.998)
 
     # Add Adam optimizer parameters if not present
@@ -116,43 +112,8 @@ def load_config(config_path):
 
     return config
 
-
-def tukey_loss(residuals, c=3.0):
-    r = residuals / c
-    return jnp.where(
-        jnp.abs(r) <= 1,
-        (c**2 / 6) * (1 - (1 - r**2)**3),
-        (c**2 / 6)
-    )
-
-
-# @jit
-# def cone_time_loss(true_q, pred_q, true_t, pred_t, t0, eps=1e-8):
-#     time_residuals = true_t - pred_t - jax.lax.stop_gradient(t0)
-#     w1 = jnp.where((true_q > 0.) & (true_t < pred_t), true_q, 0.)
-#     loss = jnp.sum(tukey_loss(time_residuals, c=3.0) * w1) / (jnp.sum(w1) + 1e-3)
-#     return 1.0 + loss
-
-@jit
-def cone_time_loss(true_q, pred_q, pred_t, true_t, t0, eps=1e-8):
-    eps =1e-6
-
-    # q_ref = true_q[-300]
-    # cut = jnp.maximum(jnp.minimum(q_ref, 10.), 1.)
-    
-    mask = (true_q > 1.) & (pred_q > 0.)
-    time_residuals = (true_t - pred_t - jax.lax.stop_gradient(t0)) * mask
-
-    mean = jnp.sum(time_residuals) / (jnp.sum(mask) + eps)
-    std = jnp.sqrt(jnp.sum(((time_residuals - mean * mask) ** 2)) / (jnp.sum(mask) + eps))
-
-    loss = std/10
-
-    return loss
-
-def create_combined_loss_function(vertex_weight_scale, counts_weight_scale, energy_weight_scale,
-                                   prediction_simulator, detector_params, c_medium, scale_w,
-                                   percentile_threshold, angle_scale_deg, inv_scale_w):
+def create_combined_loss_function(vertex_weight_scale, counts_weight_scale,
+                                   prediction_simulator, detector_params, c_medium):
     """Create combined loss function with specified parameters and return its gradient function"""
 
     @jit
@@ -183,27 +144,6 @@ def create_combined_loss_function(vertex_weight_scale, counts_weight_scale, ener
 
         # Convert spherical to cartesian for direction loss
         direction = spherical_to_cartesian(theta, phi)
-        # direction_loss_val = direction_time_loss(position, direction, hit_detector_positions,
-        #                                         observed_times, observed_counts, t0,
-        #                                         c_medium=c_medium,
-        #                                         angle_scale_deg=angle_scale_deg,
-        #                                         inv_scale_w=inv_scale_w)
-
-        cone_time_loss_val = cone_time_loss(observed_counts, simulated_counts, simulated_time, observed_times, t0)
-
-        # # Weighted product loss with small offset to avoid zero
-        # A = jnp.sqrt((vertex_weight_scale * vertex_loss_val + 1e-6) *
-        #             (counts_weight_scale * counts_loss_val + 1e-6))
-        # B = jnp.sqrt((vertex_weight_scale * vertex_loss_val + 1e-6) *
-        #             (counts_weight_scale * counts_loss_val + 1e-6) *
-        #             (direction_loss_val + 1e-3))
-
-        # combined_loss = jnp.where(jnp.isnan(B), A, B)
-        #combined_loss = jnp.sqrt((vertex_loss_val/100. + 1e-6) * (counts_loss_val + 1e-6))# * (cone_time_loss_val + 1e-6))
-
-        #combined_loss = jnp.sqrt((vertex_loss_val/100. + 1e-6) * (counts_loss_val + 1e-6) * (cone_time_loss_val + 1e-6))
-
-        #return combined_loss, (vertex_loss_val, counts_loss_val, energy_loss_val, direction_loss_val)
 
         combined_loss = jnp.sqrt((vertex_loss_val/1e2 + 1e-6) * (counts_loss_val + 1e-6))
 
@@ -224,7 +164,6 @@ def run_complete_optimization_adam(initial_t0, hit_detector_positions, observed_
     # Extract configuration parameters
     VERTEX_WEIGHT_SCALE = config['optimization_weights']['vertex_weight_scale']
     COUNTS_WEIGHT_SCALE = config['optimization_weights']['counts_weight_scale']
-    ENERGY_WEIGHT_SCALE = config['optimization_weights']['energy_weight_scale']
 
     # Adam optimizer parameters
     ADAM_LEARNING_RATE = config['adam_optimizer']['learning_rate']
@@ -651,15 +590,10 @@ def main():
     # Extract optimization parameters
     VERTEX_WEIGHT_SCALE = config['optimization_weights']['vertex_weight_scale']
     COUNTS_WEIGHT_SCALE = config['optimization_weights']['counts_weight_scale']
-    ENERGY_WEIGHT_SCALE = config['optimization_weights']['energy_weight_scale']
 
     qe = config['detector_params']['qe']
 
     # Extract optimization parameters
-    percentile_threshold = config['optimization_params']['percentile_threshold']
-    angle_scale_deg = config['optimization_params']['angle_scale_deg']
-    inv_scale_w = config['optimization_params']['inv_scale_w']
-    scale_w = config['optimization_params']['scale_w']
     damping_factor = config['optimization_params']['damping_factor']
 
     # Extract Adam parameters
@@ -704,10 +638,6 @@ def main():
     print("\n" + "=" * 80)
     print("Additional Optimization Parameters:")
     print("=" * 80)
-    print(f"Percentile threshold:    {percentile_threshold}")
-    print(f"Angle scale (deg):       {angle_scale_deg}")
-    print(f"Inverse scale weight:    {inv_scale_w}")
-    print(f"Scale weight:            {scale_w}")
     print(f"Quantum efficiency:      {qe}")
     print(f"Damping factor:          {damping_factor}")
 
@@ -728,9 +658,8 @@ def main():
 
     # Create combined gradient function
     combined_grad_fn = create_combined_loss_function(
-        VERTEX_WEIGHT_SCALE, COUNTS_WEIGHT_SCALE, ENERGY_WEIGHT_SCALE,
-        prediction_simulator, detector_params, C_MEDIUM, scale_w,
-        percentile_threshold, angle_scale_deg, inv_scale_w
+        VERTEX_WEIGHT_SCALE, COUNTS_WEIGHT_SCALE,
+        prediction_simulator, detector_params, C_MEDIUM
     )
 
     # Warm-up: Pre-compile JIT functions
@@ -1018,7 +947,6 @@ def main():
             'temperature': TEMPERATURE,
             'vertex_weight_scale': VERTEX_WEIGHT_SCALE,
             'counts_weight_scale': COUNTS_WEIGHT_SCALE,
-            'energy_weight_scale': ENERGY_WEIGHT_SCALE,
             'pos_n_div': config['position_grid_search']['pos_n_div'],
             'pos_levels': config['position_grid_search']['pos_levels'],
             'pos_fraction': config['position_grid_search']['pos_fraction'],
@@ -1032,10 +960,6 @@ def main():
             'cone_reduction': config['cone_direction_search']['cone_reduction'],
             'energy_delta': config['energy_optimization']['energy_delta'],
             'energy_scan_steps': config['energy_optimization']['energy_scan_steps'],
-            'percentile_threshold': percentile_threshold,
-            'angle_scale_deg': angle_scale_deg,
-            'inv_scale_w': inv_scale_w,
-            'scale_w': scale_w,
             'qe': qe,
             'damping_factor': damping_factor,
             'detector_r': float(DETECTOR_R) if DETECTOR_R is not None else None,
