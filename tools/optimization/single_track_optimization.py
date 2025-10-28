@@ -10,10 +10,10 @@ Four-stage optimization pipeline:
 5. Adam optimization (position + direction + t0 + energy)
 
 Usage:
-    python single_ring_optimization.py <config_file_path>
+    python single_track_optimization.py <config_file_path>
 
 Example:
-    python single_ring_optimization.py ../../config/single_ring_optimization_config.json
+    python single_track_optimization.py ../../config/single_track_optimization_config.json
 """
 
 import sys
@@ -62,7 +62,7 @@ def parse_arguments():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Example:
-    python single_ring_optimization.py ../../config/single_ring_optimization_config.json
+    python single_track_optimization.py ../../config/single_track_optimization_config.json
         """
     )
     parser.add_argument(
@@ -147,7 +147,7 @@ def create_combined_loss_function(vertex_weight_scale, counts_weight_scale,
 
         combined_loss = jnp.sqrt((vertex_loss_val/1e2 + 1e-6) * (counts_loss_val + 1e-6))
 
-        return combined_loss, (vertex_loss_val, counts_loss_val, energy_loss_val, cone_time_loss_val)
+        return combined_loss, (vertex_loss_val, counts_loss_val, energy_loss_val)
 
     combined_grad_fn = jit(value_and_grad(combined_product_loss, has_aux=True))
     return combined_grad_fn
@@ -334,7 +334,7 @@ def run_complete_optimization_adam(initial_t0, hit_detector_positions, observed_
     for iteration in range(MAX_ITERATIONS):
         opt_key, _ = jax.random.split(opt_key)
 
-        (combined_loss, (vertex_loss, counts_loss_val, energy_loss_val, direction_loss_val)), grad = combined_grad_fn(
+        (combined_loss, (vertex_loss, counts_loss_val, energy_loss_val)), grad = combined_grad_fn(
             current_params, hit_detector_positions, observed_times, observed_counts,
             true_data, opt_key
         )
@@ -343,7 +343,6 @@ def run_complete_optimization_adam(initial_t0, hit_detector_positions, observed_
         if jnp.any(jnp.isnan(grad)):
             if verbosity >= 2:
                 print("      Warning: NaN gradient detected, replacing with zeros")
-                print(direction_loss_val)
                 print("NaN indices:", jnp.where(jnp.isnan(grad)))
             grad = jnp.nan_to_num(grad, nan=0.0)
 
@@ -411,7 +410,6 @@ def run_complete_optimization_adam(initial_t0, hit_detector_positions, observed_
         history['vertex_losses'].append(float(vertex_loss))
         history['counts_losses'].append(float(counts_loss_val))
         history['energy_losses'].append(float(energy_loss_val))
-        history['direction_losses'].append(float(direction_loss_val))
         history['position_errors'].append(float(position_error))
         history['direction_errors'].append(float(direction_error))
         history['t0_errors'].append(float(t0_error))
@@ -992,7 +990,7 @@ def main():
     if args.name:
         output_file = output_dir / f'{args.name}.pkl'
     else:
-        output_file = output_dir / f'single_ring_optimization_adam_{timestamp}_{N_EVENTS}_events.pkl'
+        output_file = output_dir / f'single_track_optimization_adam_{timestamp}_{N_EVENTS}_events.pkl'
     with open(output_file, 'wb') as f:
         pickle.dump(results_summary, f)
 
