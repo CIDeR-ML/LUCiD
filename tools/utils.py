@@ -150,8 +150,8 @@ def unpack_photonsim_params(particle_type='muon', material='water'):
     -------
     dict
         Dictionary containing:
-        - 'tot_n_photons_normalization': tuple of (slope, intercept)
-        - 'num_seeds': tuple of (slope, intercept)
+        - 'tot_n_photons_normalization': tuple of (a, b, c) for power law: a * energy^b + c
+        - 'num_seeds': tuple of (a, b, c) for power law: a * energy^b + c
         - 'siren_model_path': str, absolute path to SIREN model
     """
     # Normalize particle type for file path
@@ -165,15 +165,17 @@ def unpack_photonsim_params(particle_type='muon', material='water'):
     data_dir = base_dir_path()+f'/data/{material}/{normalized_type}/'
     siren_model_path = data_dir + photonsim_params['siren_model']['path']
 
-    # Extract individual parameters
+    # Extract individual parameters (power law: a * x^b + c)
     return {
         'tot_n_photons_normalization': (
-            photonsim_params['tot_n_photons_normalization']['slope'],
-            photonsim_params['tot_n_photons_normalization']['intercept']
+            photonsim_params['tot_n_photons_normalization']['a'],
+            photonsim_params['tot_n_photons_normalization']['b'],
+            photonsim_params['tot_n_photons_normalization']['c']
         ),
         'num_seeds': (
-            photonsim_params['num_seeds']['slope'],
-            photonsim_params['num_seeds']['intercept']
+            photonsim_params['num_seeds']['a'],
+            photonsim_params['num_seeds']['b'],
+            photonsim_params['num_seeds']['c']
         ),
         'siren_model_path': siren_model_path
     }

@@ -131,7 +131,7 @@ def normalize_inputs_jit(inputs, energy_min, energy_max, angle_min, angle_max, d
 
 @partial(jax.jit, static_argnums=(3,))
 def photonsim_differentiable_get_rays(track_origin, track_direction, energy, Nphot,
-                                         table_data, model_params, key, num_seeds_slope=0.39, num_seeds_intercept=-2.328):
+                                         table_data, model_params, key, num_seeds_a=0.035882, num_seeds_b=1.417106, num_seeds_c=2.75):
     """
     Generate photon rays using SIREN model for photon generation.
 
@@ -151,10 +151,12 @@ def photonsim_differentiable_get_rays(track_origin, track_direction, energy, Nph
         SIREN model parameters
     key : jax.random.PRNGKey
         Random key for sampling
-    num_seeds_slope : float, optional
-        Slope for num_seeds calculation, default 0.39
-    num_seeds_intercept : float, optional
-        Intercept for num_seeds calculation, default -2.328
+    num_seeds_a : float, optional
+        Parameter 'a' for power law num_seeds calculation, default 0.035882
+    num_seeds_b : float, optional
+        Parameter 'b' for power law num_seeds calculation, default 1.417106
+    num_seeds_c : float, optional
+        Parameter 'c' for power law num_seeds calculation, default 2.75
 
     Returns
     -------
@@ -195,8 +197,8 @@ def photonsim_differentiable_get_rays(track_origin, track_direction, energy, Nph
     key, noise_key_angle = random.split(key)
     key, noise_key_dist = random.split(key)
 
-    # Calculate number of seeds and sample indices using provided parameters
-    num_seeds = jnp.int32(num_seeds_slope * energy + num_seeds_intercept)
+    # Calculate number of seeds using power law: num_seeds = int32(a * energy^b + c)
+    num_seeds = jnp.int32(num_seeds_a * jnp.power(energy, num_seeds_b) + num_seeds_c)
 
     seed_indices = random.randint(sampling_key, (Nphot,), 0, num_seeds)
     indices_by_weight = jnp.argsort(-photon_weights.squeeze())[seed_indices]

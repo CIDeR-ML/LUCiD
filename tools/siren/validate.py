@@ -48,6 +48,7 @@ from jax import random
 import matplotlib.pyplot as plt
 from matplotlib.colors import LogNorm
 from scipy import stats
+from scipy.optimize import curve_fit
 
 # Add parent directories to path
 script_dir = Path(__file__).parent
@@ -123,13 +124,20 @@ class PhotonSimValidator:
               f"Distance: {self.distance_min}-{self.distance_max} mm")
         
         # Create table data for ray generation
-        self.table_data = create_photonsim_siren_grid(self.photonsim_predictor, 500)
-        
+        self.table_data = create_photonsim_siren_grid(self.photonsim_predictor, 100)
+
+        # Load num_seeds parameters from configuration
+        from tools.utils import unpack_photonsim_params
+        photonsim_params = unpack_photonsim_params(particle, material)
+        self.num_seeds_a, self.num_seeds_b, self.num_seeds_c = photonsim_params['num_seeds']
+
+        print(f"Loaded num_seeds parameters: a={self.num_seeds_a:.6f}, b={self.num_seeds_b:.6f}, c={self.num_seeds_c:.2f}")
+
         # Standard simulation parameters
         self.origin = jnp.array([0.5, 0.0, -0.5])
         self.direction = jnp.array([1.0, -1.0, 0.2])
         self.key = random.PRNGKey(0)
-        
+
         print("✅ PhotonSim validator initialized successfully")
     
     def evaluate_photonsim_grid(self, energy, angle_bins, distance_bins):
@@ -361,7 +369,7 @@ class PhotonSimValidator:
         print(f"\n=== N-Photon Integral Analysis ===")
         
         if energies is None:
-            energies = np.linspace(100, 1900, 20)
+            energies = np.linspace(100, 1900, 50)
         
         print(f"Analyzing {len(energies)} energies from {energies[0]} to {energies[-1]} MeV")
         print(f"N-photons: {nphot:,}")
@@ -374,9 +382,10 @@ class PhotonSimValidator:
             real_count = self.dataset.get_total_counts_for_energy(energy)
             tot_real_photons.append(real_count)
             
-            # Get predicted photon count
+            # Get predicted photon count using configured num_seeds parameters
             _, _, photon_weights = photonsim_differentiable_get_rays(
-                self.origin, self.direction, energy, nphot, self.table_data, self.model_params, self.key
+                self.origin, self.direction, energy, nphot, self.table_data, self.model_params, self.key,
+                self.num_seeds_a, self.num_seeds_b, self.num_seeds_c
             )
             pred_count = np.sum(photon_weights)
             tot_pred_photons.append(pred_count)
@@ -386,60 +395,123 @@ class PhotonSimValidator:
         
         # Calculate ratio and fit
         y_data = np.array(tot_real_photons) / (np.array(tot_pred_photons) / nphot)
-        
-        # Filter data for energies above 200 MeV for linear fit
-        fit_mask = np.array(energies) >= 200
+
+        # Filter data for energies above Cherenkov threshold
+        fit_mask = np.array(energies) >= 250 # assume it is a muon
         energies_fit = np.array(energies)[fit_mask]
         y_data_fit = y_data[fit_mask]
-        
-        print(f"Using {len(energies_fit)}/{len(energies)} data points for linear fit (energies ≥ 200 MeV)")
-        
-        # Linear fit on filtered data
-        slope, intercept, r_value, p_value, std_err = stats.linregress(energies_fit, y_data_fit)
-        line = slope * energies + intercept
-        
-        # Print results
-        print(f"\nLinear Fit Results:")
-        print(f"  Slope: {slope:.6f} ± {std_err:.6f}")
-        print(f"  Intercept: {intercept:.6f}")
-        print(f"  R-squared: {r_value**2:.4f}")
-        print(f"  Equation: y = {slope:.6f}x + {intercept:.6f}")
-        
+
+        print(f"Using {len(energies_fit)}/{len(energies)} data points for power law fit (energies ≥ 250 MeV)")
+
+        # Define power law function: y = a * x^b + c
+        def power_law(x, a, b, c):
+            return a * np.power(x, b) + c
+
+        # Power law fit on filtered data
+        try:
+            popt, pcov = curve_fit(power_law, energies_fit, y_data_fit, p0=[1000.0, 0.3, -2000.])
+            a_fit, b_fit, c_fit = popt
+
+            # Calculate R-squared
+            residuals = y_data_fit - power_law(energies_fit, *popt)
+            ss_res = np.sum(residuals**2)
+            ss_tot = np.sum((y_data_fit - np.mean(y_data_fit))**2)
+            r_squared = 1 - (ss_res / ss_tot)
+
+            # Calculate standard errors
+            perr = np.sqrt(np.diag(pcov))
+            a_err, b_err, c_err = perr
+
+            # Generate fit line
+            line = power_law(np.array(energies), *popt)
+
+            print(f"\nPower Law Fit Results:")
+            print(f"  Equation: y = {a_fit:.6f} * x^{b_fit:.6f} + {c_fit:.6f}")
+            print(f"  Parameters: a = {a_fit:.6f} ± {a_err:.6f}")
+            print(f"              b = {b_fit:.6f} ± {b_err:.6f}")
+            print(f"              c = {c_fit:.6f} ± {c_err:.6f}")
+            print(f"  R-squared: {r_squared:.6f}")
+
+        except Exception as e:
+            print(f"Warning: Power law fit failed: {e}")
+            print(f"Falling back to linear fit...")
+            slope, intercept, r_value, p_value, std_err = stats.linregress(energies_fit, y_data_fit)
+            line = slope * energies + intercept
+            a_fit, b_fit, c_fit = slope, 1.0, intercept
+            a_err, b_err, c_err = std_err, 0.0, 0.0
+            r_squared = r_value**2
+            print(f"  Linear fallback: y = {slope:.6f}x + {intercept:.6f}")
+            print(f"  R-squared: {r_squared:.4f}")
+
         # Apply correction function
         def corr_function(x):
-            return slope * x + intercept
-        
+            return power_law(x, a_fit, b_fit, c_fit)
+
         y_corrected = np.array(tot_real_photons) / (corr_function(energies) * np.array(tot_pred_photons) / nphot)
-        
+
         # Fit corrected data (also filtered for energies >= 200 MeV)
         y_corrected_fit = y_corrected[fit_mask]
-        slope_corr, intercept_corr, r_value_corr, _, _ = stats.linregress(energies_fit, y_corrected_fit)
-        line_corr = slope_corr * energies + intercept_corr
+        try:
+            popt_corr, pcov_corr = curve_fit(power_law, energies_fit, y_corrected_fit, p0=[1.0, 1.0, 0.0])
+            a_corr, b_corr, c_corr = popt_corr
+
+            # Calculate R-squared for corrected fit
+            residuals_corr = y_corrected_fit - power_law(energies_fit, *popt_corr)
+            ss_res_corr = np.sum(residuals_corr**2)
+            ss_tot_corr = np.sum((y_corrected_fit - np.mean(y_corrected_fit))**2)
+            r_squared_corr = 1 - (ss_res_corr / ss_tot_corr)
+
+            # Calculate standard errors for corrected fit
+            perr_corr = np.sqrt(np.diag(pcov_corr))
+            a_err_corr, b_err_corr, c_err_corr = perr_corr
+
+            # Generate fit line
+            line_corr = power_law(np.array(energies), *popt_corr)
+
+        except Exception as e:
+            print(f"Warning: Power law fit for corrected data failed: {e}")
+            slope_corr, intercept_corr, r_value_corr, _, std_err_corr = stats.linregress(energies_fit, y_corrected_fit)
+            line_corr = slope_corr * energies + intercept_corr
+            a_corr, b_corr, c_corr = slope_corr, 1.0, intercept_corr
+            a_err_corr, b_err_corr, c_err_corr = std_err_corr, 0.0, 0.0
+            r_squared_corr = r_value_corr**2
         
         # Create visualization
-        fig, axes = plt.subplots(1, 2, figsize=(8, 4))
-        
+        fig, axes = plt.subplots(1, 2, figsize=(10, 4))
+
         # Original data
         axes[0].plot(energies, y_data, 'bo', label='All Data', markersize=3, alpha=0.6)
         axes[0].plot(energies_fit, y_data_fit, 'ro', label='Fit Data (≥200 MeV)', markersize=3)
-        axes[0].plot(energies, line, 'r-', label=f'Linear fit (R²={r_value**2:.3f})')
+        axes[0].plot(energies, line, 'r-', label=f'Power law fit (R²={r_squared:.4f})', linewidth=2)
         axes[0].set_xlabel('Energy (MeV)')
         axes[0].set_ylabel('Ratio')
-        axes[0].set_title('Original Data vs Linear Fit')
-        axes[0].legend()
+        axes[0].set_title('Original Data vs Power Law Fit')
+        axes[0].legend(fontsize=9)
         axes[0].grid(True, alpha=0.3)
-        
+
+        # Add fit equation to plot
+        fit_text = f'y = {a_fit:.4f}·x$^{{{b_fit:.4f}}}$ + {c_fit:.2f}'
+        axes[0].text(0.05, 0.95, fit_text, transform=axes[0].transAxes,
+                    fontsize=9, va='top',
+                    bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+
         # Corrected data
         axes[1].plot(energies, y_corrected, 'go', label='All Corrected Data', markersize=3, alpha=0.6)
         axes[1].plot(energies_fit, y_corrected_fit, 'mo', label='Fit Data (≥200 MeV)', markersize=3)
-        axes[1].plot(energies, line_corr, 'r-', label=f'Linear fit (R²={r_value_corr**2:.3f})')
+        axes[1].plot(energies, line_corr, 'r-', label=f'Power law fit (R²={r_squared_corr:.4f})', linewidth=2)
         axes[1].set_xlabel('Energy (MeV)')
         axes[1].set_ylabel('Corrected Ratio')
-        axes[1].set_title('Corrected Data vs Linear Fit')
-        axes[1].legend()
+        axes[1].set_title('Corrected Data vs Power Law Fit')
+        axes[1].legend(fontsize=9)
         axes[1].grid(True, alpha=0.3)
-        
-        fig.suptitle('N-Photon Integral Analysis', fontsize=16)
+
+        # Add corrected fit equation to plot
+        fit_text_corr = f'y = {a_corr:.4f}·x$^{{{b_corr:.4f}}}$ + {c_corr:.2f}'
+        axes[1].text(0.05, 0.95, fit_text_corr, transform=axes[1].transAxes,
+                    fontsize=9, va='top',
+                    bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+
+        fig.suptitle('N-Photon Integral Analysis (Power Law Fit)', fontsize=16)
         fig.tight_layout()
         
         # Save results
@@ -448,6 +520,8 @@ class PhotonSimValidator:
             'real_photons': tot_real_photons,
             'pred_photons': tot_pred_photons,
             'nphot': nphot,
+            'fit_type': 'power_law',
+            'fit_equation': 'y = a * x^b + c',
             'fit_filter': {
                 'min_energy': 200,
                 'energies_used': energies_fit.tolist(),
@@ -455,26 +529,55 @@ class PhotonSimValidator:
                 'total_data_points': len(energies)
             },
             'original_fit': {
-                'slope': slope,
-                'intercept': intercept,
-                'r_squared': r_value**2,
-                'equation': f'y = {slope:.6f}x + {intercept:.6f}'
+                'a': a_fit,
+                'b': b_fit,
+                'c': c_fit,
+                'a_err': a_err,
+                'b_err': b_err,
+                'c_err': c_err,
+                'r_squared': r_squared,
+                'equation': f'y = {a_fit:.6f} * x^{b_fit:.6f} + {c_fit:.6f}'
             },
             'corrected_fit': {
-                'slope': slope_corr,
-                'intercept': intercept_corr,
-                'r_squared': r_value_corr**2,
-                'equation': f'y = {slope_corr:.6f}x + {intercept_corr:.6f}'
+                'a': a_corr,
+                'b': b_corr,
+                'c': c_corr,
+                'a_err': a_err_corr,
+                'b_err': b_err_corr,
+                'c_err': c_err_corr,
+                'r_squared': r_squared_corr,
+                'equation': f'y = {a_corr:.6f} * x^{b_corr:.6f} + {c_corr:.6f}'
             }
         }
         
+        # Print summary
+        print("\n" + "="*70)
+        print("SUMMARY OF POWER LAW FITS (y = a * x^b + c)")
+        print("="*70)
+        print("\nOriginal Fit:")
+        print(f"  Equation: y = {a_fit:.6f} * x^{b_fit:.6f} + {c_fit:.6f}")
+        print(f"  R-squared: {r_squared:.6f}")
+        print(f"  Parameters:")
+        print(f"    a = {a_fit:.6f} ± {a_err:.6f}")
+        print(f"    b = {b_fit:.6f} ± {b_err:.6f}")
+        print(f"    c = {c_fit:.6f} ± {c_err:.6f}")
+
+        print("\nCorrected Fit:")
+        print(f"  Equation: y = {a_corr:.6f} * x^{b_corr:.6f} + {c_corr:.6f}")
+        print(f"  R-squared: {r_squared_corr:.6f}")
+        print(f"  Parameters:")
+        print(f"    a = {a_corr:.6f} ± {a_err_corr:.6f}")
+        print(f"    b = {b_corr:.6f} ± {b_err_corr:.6f}")
+        print(f"    c = {c_corr:.6f} ± {c_err_corr:.6f}")
+        print("="*70)
+
         if output_dir:
             os.makedirs(output_dir, exist_ok=True)
             fig.savefig(f"{output_dir}/integral_analysis.png", dpi=150, bbox_inches='tight')
-            print(f"Integral analysis results saved to: {output_dir}/integral_analysis.png")
-        
+            print(f"\nIntegral analysis results saved to: {output_dir}/integral_analysis.png")
+
         plt.show()
-        
+
         return results
     
     def calculate_opening_angles(self, ray_vectors, direction):
@@ -506,89 +609,144 @@ class PhotonSimValidator:
         print(f"Thresholds: {thresholds}")
         
         # Create analysis grid
-        n_angle_bins = 500
-        n_distance_bins = 500
+        n_angle_bins = 100
+        n_distance_bins = 100
         angle_bins = np.linspace(self.angle_min, self.angle_max, n_angle_bins)
         distance_bins = np.linspace(self.distance_min, self.distance_max, n_distance_bins)
         
         # Store results for each threshold
         threshold_results = {}
         
+        # Define power law function: y = a * x^b + c
+        def power_law(x, a, b, c):
+            return a * np.power(x, b) + c
+
         for threshold in thresholds:
             valid_counts = []
-            
+
             print(f"\nProcessing threshold {threshold}:")
             for i, energy in enumerate(energies):
                 # Evaluate model at given energy
                 reco_value = self.evaluate_photonsim_grid(energy, angle_bins, distance_bins)
-                
+
                 # Apply threshold and count valid points
                 masked_values = jnp.where(reco_value > threshold, reco_value, 0)
                 valid_count = np.sum(masked_values > 0)
                 valid_counts.append(valid_count)
-                
+
                 if (i + 1) % 5 == 0:
                     print(f"  Processed {i + 1}/{len(energies)} energies")
-            
-            # Perform linear fit
-            slope, intercept, r_value, p_value, std_err = stats.linregress(energies, valid_counts)
-            fit_line = slope * np.array(energies) + intercept
-            
-            threshold_results[threshold] = {
-                'valid_counts': valid_counts,
-                'slope': slope,
-                'intercept': intercept,
-                'r_squared': r_value**2,
-                'std_err': std_err,
-                'fit_line': fit_line
-            }
-            
-            print(f"  Linear Fit Results for threshold {threshold}:")
-            print(f"    Equation: y = {slope:.2f}x + {intercept:.2f}")
-            print(f"    R-squared: {r_value**2:.4f}")
-            print(f"    Slope std error: {std_err:.2f}")
+
+            # Perform power law fit: y = a * x^b + c
+            # Initial guess: a=1, b=1 (linear), c=0
+            try:
+                popt, pcov = curve_fit(power_law, energies, valid_counts, p0=[1.0, 1.0, 0.0])
+                a_fit, b_fit, c_fit = popt
+
+                # Calculate R-squared
+                residuals = np.array(valid_counts) - power_law(energies, *popt)
+                ss_res = np.sum(residuals**2)
+                ss_tot = np.sum((np.array(valid_counts) - np.mean(valid_counts))**2)
+                r_squared = 1 - (ss_res / ss_tot)
+
+                # Calculate standard errors from covariance matrix
+                perr = np.sqrt(np.diag(pcov))
+                a_err, b_err, c_err = perr
+
+                # Generate fit line
+                fit_line = power_law(np.array(energies), *popt)
+
+                threshold_results[threshold] = {
+                    'valid_counts': valid_counts,
+                    'a': a_fit,
+                    'b': b_fit,
+                    'c': c_fit,
+                    'a_err': a_err,
+                    'b_err': b_err,
+                    'c_err': c_err,
+                    'r_squared': r_squared,
+                    'fit_line': fit_line
+                }
+
+                print(f"  Power Law Fit Results for threshold {threshold}:")
+                print(f"    Equation: y = {a_fit:.4f} * x^{b_fit:.4f} + {c_fit:.2f}")
+                print(f"    Parameters: a = {a_fit:.4f} ± {a_err:.4f}")
+                print(f"                b = {b_fit:.4f} ± {b_err:.4f}")
+                print(f"                c = {c_fit:.2f} ± {c_err:.2f}")
+                print(f"    R-squared: {r_squared:.6f}")
+
+            except Exception as e:
+                print(f"  Warning: Power law fit failed for threshold {threshold}: {e}")
+                print(f"  Falling back to linear fit...")
+                # Fallback to linear fit
+                slope, intercept, r_value, p_value, std_err = stats.linregress(energies, valid_counts)
+                fit_line = slope * np.array(energies) + intercept
+
+                threshold_results[threshold] = {
+                    'valid_counts': valid_counts,
+                    'a': slope,
+                    'b': 1.0,
+                    'c': intercept,
+                    'a_err': std_err,
+                    'b_err': 0.0,
+                    'c_err': 0.0,
+                    'r_squared': r_value**2,
+                    'fit_line': fit_line,
+                    'fallback_linear': True
+                }
+                print(f"    Linear fallback: y = {slope:.2f}x + {intercept:.2f}")
+                print(f"    R-squared: {r_value**2:.4f}")
         
         # Create visualization
         fig, axes = plt.subplots(2, 2, figsize=(12, 10))
         axes = axes.ravel()
-        
+
         colors = ['blue', 'green', 'red', 'purple']
-        
+
         for idx, threshold in enumerate(thresholds[:4]):  # Plot up to 4 thresholds
             results = threshold_results[threshold]
-            
+
             # Plot data and fit
-            axes[idx].scatter(energies, results['valid_counts'], 
+            axes[idx].scatter(energies, results['valid_counts'],
                             color=colors[idx], alpha=0.6, s=30, label='Data')
-            axes[idx].plot(energies, results['fit_line'], 
+            axes[idx].plot(energies, results['fit_line'],
                          color=colors[idx], linestyle='--', linewidth=2,
-                         label=f'Fit: y = {results["slope"]:.2f}x + {results["intercept"]:.2f}')
-            
+                         label=f'Fit: y = {results["a"]:.4f}x^{results["b"]:.4f} + {results["c"]:.2f}')
+
             axes[idx].set_xlabel('Energy (MeV)', fontsize=11)
             axes[idx].set_ylabel('Valid Points', fontsize=11)
-            axes[idx].set_title(f'Threshold = {threshold}\nR² = {results["r_squared"]:.4f}', fontsize=12)
-            axes[idx].legend(loc='upper left')
+            axes[idx].set_title(f'Threshold = {threshold}\nR² = {results["r_squared"]:.6f}', fontsize=12)
+            axes[idx].legend(loc='upper left', fontsize=9)
             axes[idx].grid(True, alpha=0.3)
-            
+
             # Add text with fit parameters
-            text_str = f'Slope: {results["slope"]:.2f} ± {results["std_err"]:.2f}'
+            text_str = (f'a = {results["a"]:.4f} ± {results["a_err"]:.4f}\n'
+                       f'b = {results["b"]:.4f} ± {results["b_err"]:.4f}\n'
+                       f'c = {results["c"]:.2f} ± {results["c_err"]:.2f}')
             axes[idx].text(0.95, 0.05, text_str, transform=axes[idx].transAxes,
-                         fontsize=10, ha='right', va='bottom',
+                         fontsize=9, ha='right', va='bottom',
                          bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
         
         fig.suptitle('Valid Points vs Energy for Different Thresholds', fontsize=14, fontweight='bold')
         fig.tight_layout()
         
         # Print summary of all fits
-        print("\n" + "="*60)
-        print("SUMMARY OF LINEAR FITS")
-        print("="*60)
+        print("\n" + "="*70)
+        print("SUMMARY OF POWER LAW FITS (y = a * x^b + c)")
+        print("="*70)
         for threshold in thresholds:
             results = threshold_results[threshold]
             print(f"\nThreshold {threshold}:")
-            print(f"  Equation: y = {results['slope']:.2f}x + {results['intercept']:.2f}")
-            print(f"  R-squared: {results['r_squared']:.4f}")
-            print(f"  Slope: {results['slope']:.2f} ± {results['std_err']:.2f}")
+            if 'fallback_linear' in results and results['fallback_linear']:
+                print(f"  ⚠️  Linear fallback used (power law fit failed)")
+                print(f"  Equation: y = {results['a']:.2f}x + {results['c']:.2f}")
+            else:
+                print(f"  Equation: y = {results['a']:.6f} * x^{results['b']:.6f} + {results['c']:.2f}")
+            print(f"  R-squared: {results['r_squared']:.6f}")
+            print(f"  Parameters:")
+            print(f"    a = {results['a']:.6f} ± {results['a_err']:.6f}")
+            print(f"    b = {results['b']:.6f} ± {results['b_err']:.6f}")
+            print(f"    c = {results['c']:.2f} ± {results['c_err']:.2f}")
             print(f"  Valid points range: {min(results['valid_counts']):,} - {max(results['valid_counts']):,}")
         
         if output_dir:
@@ -601,13 +759,19 @@ class PhotonSimValidator:
         return {
             'energies': energies.tolist(),
             'thresholds': thresholds,
+            'fit_type': 'power_law',
+            'fit_equation': 'y = a * x^b + c',
             'results': {
                 threshold: {
                     'valid_counts': threshold_results[threshold]['valid_counts'],
-                    'slope': threshold_results[threshold]['slope'],
-                    'intercept': threshold_results[threshold]['intercept'],
+                    'a': threshold_results[threshold]['a'],
+                    'b': threshold_results[threshold]['b'],
+                    'c': threshold_results[threshold]['c'],
+                    'a_err': threshold_results[threshold]['a_err'],
+                    'b_err': threshold_results[threshold]['b_err'],
+                    'c_err': threshold_results[threshold]['c_err'],
                     'r_squared': threshold_results[threshold]['r_squared'],
-                    'std_err': threshold_results[threshold]['std_err']
+                    'fallback_linear': threshold_results[threshold].get('fallback_linear', False)
                 }
                 for threshold in thresholds
             }
@@ -651,9 +815,10 @@ class PhotonSimValidator:
             
             print(f"  Processing energy {energy:.0f} MeV ({i+1}/{n_energies})")
             
-            # Generate rays
+            # Generate rays using configured num_seeds parameters
             ray_vectors, ray_origins, photon_weights = photonsim_differentiable_get_rays(
-                self.origin, self.direction, energy, nphot, self.table_data, self.model_params, self.key
+                self.origin, self.direction, energy, nphot, self.table_data, self.model_params, self.key,
+                self.num_seeds_a, self.num_seeds_b, self.num_seeds_c
             )
             
             # Calculate ranges and angles
