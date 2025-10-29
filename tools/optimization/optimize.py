@@ -4,7 +4,7 @@ import numpy as np
 import jax
 import jax.numpy as jnp
 from pathlib import Path
-from tools.optimization.losses import origin_time_loss
+from tools.optimization.losses import origin_time_loss, grid_origin_time_loss
 
 
 def load_optimization_config(config_path):
@@ -166,7 +166,7 @@ def evaluate_loss_batch(positions, hit_detector_positions, observed_times, obser
     # Create vectorized version of origin_time_loss over the first argument (origin)
     # All other arguments are fixed
     vectorized_loss = jax.vmap(
-        lambda pos: origin_time_loss(pos, hit_detector_positions, observed_times, observed_charge, t0_fixed)
+        lambda pos: grid_origin_time_loss(pos, hit_detector_positions, observed_times, observed_charge, t0_fixed)
     )
 
     return vectorized_loss(positions_jax)

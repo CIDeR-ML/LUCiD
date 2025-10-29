@@ -22,6 +22,7 @@ import argparse
 from pathlib import Path
 from datetime import datetime
 import json
+import time
 
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
@@ -330,6 +331,7 @@ def run_complete_optimization_adam(initial_t0, hit_detector_positions, observed_
     if verbosity >= 2:
         print(f"    Starting Adam optimization...")
 
+    adam_start_time = time.time()
     current_damping_w = 5.0
     for iteration in range(MAX_ITERATIONS):
         opt_key, _ = jax.random.split(opt_key)
@@ -357,8 +359,9 @@ def run_complete_optimization_adam(initial_t0, hit_detector_positions, observed_
 
         # Apply parameter-specific scaling to updates
         scaled_updates = updates * update_scales * current_damping_w
-        if iteration < 50:
-            scaled_updates = scaled_updates.at[-1].set(0.)
+        # if iteration < 25:
+        #     scaled_updates = scaled_updates.at[-1].set(0.)
+            #scaled_updates = scaled_updates.at[3].set(0.)
 
         # Apply scaled updates to parameters
         current_params = optax.apply_updates(current_params, scaled_updates)
@@ -416,6 +419,9 @@ def run_complete_optimization_adam(initial_t0, hit_detector_positions, observed_
         history['energy_errors'].append(float(energy_error))
 
     # Final calculations
+    adam_end_time = time.time()
+    adam_optimization_time = adam_end_time - adam_start_time
+
     final_position = current_params[:3]
     final_t0 = current_params[3]
     final_theta = current_params[4]
@@ -456,6 +462,7 @@ def run_complete_optimization_adam(initial_t0, hit_detector_positions, observed_
         'final_energy_error': float(final_energy_error),
         'total_iterations': len(history['parameters']) - 1,
         'converged': grad_norm < tolerance,
+        'adam_optimization_time': adam_optimization_time,
         'history': history
     }
 
@@ -724,6 +731,7 @@ def main():
     # Process each event
     progress_bar = tqdm(range(N_EVENTS), desc="Processing events") if verbosity == 0 else range(N_EVENTS)
     for event_idx in progress_bar:
+        event_start_time = time.time()
         try:
             if verbosity >= 2:
                 print(f"\n--- Processing Event {event_idx} ---")
@@ -813,6 +821,10 @@ def main():
             if store_true_data:
                 event_data_to_store['true_data'] = event_data['true_data']
 
+            # Calculate event timing
+            event_end_time = time.time()
+            total_event_time = event_end_time - event_start_time
+
             # Store results
             event_result = {
                 'event_data': event_data_to_store,
@@ -824,6 +836,8 @@ def main():
                 'grid_t0_error': grid_t0_error,
                 'cone_direction_error': cone_direction_error,
                 'energy_scan_improvement': energy_scan_improvement,
+                'total_event_time': total_event_time,
+                'adam_optimization_time': results['adam_optimization_time'],
                 'optimization_results': results
             }
             all_event_results.append(event_result)
@@ -902,6 +916,29 @@ def main():
     print(f"Std t0 error:    {np.std(grid_t0_errors_arr):.4f}")
     print(f"Min t0 error:    {np.min(grid_t0_errors_arr):.4f}")
     print(f"Max t0 error:    {np.max(grid_t0_errors_arr):.4f}")
+
+    # Timing summary
+    print("\n" + "=" * 80)
+    print("TIMING SUMMARY")
+    print("=" * 80)
+    total_event_times = [event['total_event_time'] for event in all_event_results]
+    adam_times = [event['adam_optimization_time'] for event in all_event_results]
+
+    print(f"Total Event Processing Time:")
+    print(f"  Mean:   {np.mean(total_event_times):.2f}s")
+    print(f"  Median: {np.median(total_event_times):.2f}s")
+    print(f"  Min:    {np.min(total_event_times):.2f}s")
+    print(f"  Max:    {np.max(total_event_times):.2f}s")
+    print(f"  Total:  {np.sum(total_event_times):.2f}s")
+
+    print(f"\nAdam Optimization Time:")
+    print(f"  Mean:   {np.mean(adam_times):.2f}s")
+    print(f"  Median: {np.median(adam_times):.2f}s")
+    print(f"  Min:    {np.min(adam_times):.2f}s")
+    print(f"  Max:    {np.max(adam_times):.2f}s")
+    print(f"  Total:  {np.sum(adam_times):.2f}s")
+
+    print(f"\nAdam optimization as % of total event time: {100 * np.sum(adam_times) / np.sum(total_event_times):.1f}%")
 
     # Save results
     if args.output:
