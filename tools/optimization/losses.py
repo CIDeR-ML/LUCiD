@@ -55,6 +55,70 @@ def counts_loss(true: jnp.ndarray, pred: jnp.ndarray, eps: float = 1e-8) -> jnp.
     return normalized_nll
 
 @jit
+def grid_origin_time_loss(
+    origin,
+    detector_positions,
+    true_times,
+    true_q,
+    t0,
+    photosensor_radius=0.25,
+    c_medium=(0.299792 / 1.33),
+    w_neg=200.0,
+    w_nll=5.0,
+    w_shape_cv=0.01,
+    w_shape_med=0.01,
+):
+    eps = 1e-9
+
+    # --- Residuals
+    distances = jnp.linalg.norm(detector_positions - origin[None, :], axis=1)
+    expected_times = (distances - photosensor_radius) / c_medium
+    r = true_times - expected_times - t0
+
+    # --- Active sensors
+    mask = (true_q > 0.).astype(jnp.float32)
+    n = jnp.sum(mask) + eps
+
+    # --- Split residuals
+    r_neg = jnp.clip(-r, 0.0, jnp.inf)
+    r_pos = jnp.clip(r, 0.0, jnp.inf)
+
+    # --- 1) Penalty for early photons
+    neg_pen = w_neg * jnp.sum(r_neg * mask) / n
+
+    # --- 2) Positive part analysis
+    pos_mask = mask * (r > 0.0).astype(jnp.float32)
+    n_pos = jnp.sum(pos_mask)
+    has_pos = n_pos > 0
+
+    # Prevent divisions by zero
+    safe_n_pos = jnp.maximum(n_pos, 1.0)
+
+    sum_pos = jnp.sum(r_pos * pos_mask)
+    mean_pos = sum_pos / safe_n_pos
+    mean_pos = jnp.maximum(mean_pos, eps)  # avoid log(0)
+
+    # NLL term (only meaningful if we have positives)
+    nll_pos = w_nll * (n_pos * jnp.log(mean_pos)) / (n + eps)
+
+    # 3) Shape penalties (compute safely)
+    var_pos = jnp.sum(((r_pos - mean_pos) ** 2) * pos_mask) / safe_n_pos
+    std_pos = jnp.sqrt(var_pos + eps)
+    cv = std_pos / (mean_pos + eps)
+    cv_pen = w_shape_cv * (cv - 1.0) ** 2
+
+    med_pen = 0.0  # Skip median for robustness (optional)
+
+    # Mask all positive-related terms if no positives
+    total_loss = neg_pen + has_pos * (nll_pos + cv_pen + med_pen)
+
+    # Replace NaNs by large number to avoid contamination
+    total_loss = jnp.nan_to_num(total_loss, nan=1e6, posinf=1e6, neginf=1e6)
+    return total_loss
+
+
+
+@jit
 def origin_time_loss(origin, detector_positions, true_times, true_q, t0, photosensor_radius=0.25, c_medium=(0.299792/1.33)):
     """Vertex time loss component"""
     distances = jnp.linalg.norm(detector_positions - origin[None, :], axis=1)
