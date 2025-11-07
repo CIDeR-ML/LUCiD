@@ -42,6 +42,7 @@ import optax  # JAX optimization library
 
 from tools.geometry import generate_detector
 from tools.utils import load_single_event, save_single_event, generate_random_params, print_particle_params
+from tools.utils import load_range_params, check_track_endpoint_in_detector
 from tools.simulation import setup_event_simulator
 from tools.generate import read_photon_data_from_photonsim
 
@@ -146,7 +147,7 @@ def create_combined_loss_function(vertex_weight_scale, counts_weight_scale,
         # Convert spherical to cartesian for direction loss
         direction = spherical_to_cartesian(theta, phi)
 
-        combined_loss = jnp.sqrt((vertex_loss_val/1e2 + 1e-6) * (counts_loss_val + 1e-6))
+        combined_loss = jnp.sqrt((vertex_loss_val/1e4 + 1e-6) * (counts_loss_val + 1e-6))
 
         return combined_loss, (vertex_loss_val, counts_loss_val, energy_loss_val)
 
@@ -165,6 +166,9 @@ def run_complete_optimization_adam(initial_t0, hit_detector_positions, observed_
     # Extract configuration parameters
     VERTEX_WEIGHT_SCALE = config['optimization_weights']['vertex_weight_scale']
     COUNTS_WEIGHT_SCALE = config['optimization_weights']['counts_weight_scale']
+
+    # Convert true direction to spherical coordinates for difference calculation
+    true_theta, true_phi = cartesian_to_spherical(true_direction)
 
     # Adam optimizer parameters
     ADAM_LEARNING_RATE = config['adam_optimizer']['learning_rate']
@@ -322,7 +326,11 @@ def run_complete_optimization_adam(initial_t0, hit_detector_positions, observed_
         'position_errors': [],
         'direction_errors': [],
         't0_errors': [],
-        'energy_errors': []
+        'energy_errors': [],
+        'position_differences': [],  # 3D: predicted - true
+        'direction_differences': [],  # 2D: [delta_theta, delta_phi]
+        't0_differences': [],  # 1D: predicted - true
+        'energy_differences': []  # 1D: predicted - true
     }
 
     # Random key for loss evaluations
@@ -359,8 +367,8 @@ def run_complete_optimization_adam(initial_t0, hit_detector_positions, observed_
 
         # Apply parameter-specific scaling to updates
         scaled_updates = updates * update_scales * current_damping_w
-        # if iteration < 25:
-        #     scaled_updates = scaled_updates.at[-1].set(0.)
+        if iteration < 25:
+            scaled_updates = scaled_updates.at[-1].set(0.)
             #scaled_updates = scaled_updates.at[3].set(0.)
 
         # Apply scaled updates to parameters
@@ -369,13 +377,13 @@ def run_complete_optimization_adam(initial_t0, hit_detector_positions, observed_
         # Apply constraints
         if DETECTOR_R is not None and DETECTOR_H is not None:
             current_params = jnp.array([
-                jnp.clip(current_params[0], -DETECTOR_R * 0.9, DETECTOR_R * 0.9),
-                jnp.clip(current_params[1], -DETECTOR_R * 0.9, DETECTOR_R * 0.9),
-                jnp.clip(current_params[2], -DETECTOR_H/2 * 0.9, DETECTOR_H/2 * 0.9),
+                jnp.clip(current_params[0], -DETECTOR_R * 0.95, DETECTOR_R * 0.95),
+                jnp.clip(current_params[1], -DETECTOR_R * 0.95, DETECTOR_R * 0.95),
+                jnp.clip(current_params[2], -DETECTOR_H/2 * 0.95, DETECTOR_H/2 * 0.95),
                 jnp.clip(current_params[3], -20.0, 20.0),
                 current_params[4],
                 current_params[5],
-                jnp.clip(current_params[6], 100.0, 2000.0)
+                jnp.clip(current_params[6], 300.0, 2000.0)
             ])
         else:
             current_params = jnp.array([
@@ -385,10 +393,10 @@ def run_complete_optimization_adam(initial_t0, hit_detector_positions, observed_
                 jnp.clip(current_params[3], -20.0, 20.0),
                 current_params[4],
                 current_params[5],
-                jnp.clip(current_params[6], 100.0, 2000.0)
+                jnp.clip(current_params[6], 300.0, 2000.0)
             ])
 
-        # Calculate current errors
+        # Calculate current parameters
         current_position = current_params[:3]
         current_t0 = current_params[3]
         current_theta = current_params[4]
@@ -396,9 +404,18 @@ def run_complete_optimization_adam(initial_t0, hit_detector_positions, observed_
         current_energy = current_params[6]
         current_direction = spherical_to_cartesian(current_theta, current_phi)
 
-        position_error = jnp.linalg.norm(current_position - true_position)
-        t0_error = abs(current_t0 - TRUE_T0)
-        energy_error = abs(current_energy - true_energy)
+        # Calculate differences (predicted - true)
+        position_difference = current_position - true_position
+        t0_difference = current_t0 - TRUE_T0
+        energy_difference = current_energy - true_energy
+        theta_difference = current_theta - true_theta
+        phi_difference = current_phi - true_phi
+        direction_difference = jnp.array([theta_difference, phi_difference])
+
+        # Calculate error magnitudes for printing
+        position_error = jnp.linalg.norm(position_difference)
+        t0_error = abs(t0_difference)
+        energy_error = abs(energy_difference)
         cos_angle = jnp.clip(jnp.dot(current_direction, true_direction), -1.0, 1.0)
         direction_error = np.degrees(np.arccos(cos_angle))
 
@@ -417,6 +434,10 @@ def run_complete_optimization_adam(initial_t0, hit_detector_positions, observed_
         history['direction_errors'].append(float(direction_error))
         history['t0_errors'].append(float(t0_error))
         history['energy_errors'].append(float(energy_error))
+        history['position_differences'].append(position_difference.tolist())
+        history['direction_differences'].append(direction_difference.tolist())
+        history['t0_differences'].append(float(t0_difference))
+        history['energy_differences'].append(float(energy_difference))
 
     # Final calculations
     adam_end_time = time.time()
@@ -429,9 +450,18 @@ def run_complete_optimization_adam(initial_t0, hit_detector_positions, observed_
     final_energy = current_params[6]
     final_direction = spherical_to_cartesian(final_theta, final_phi)
 
-    final_position_error = jnp.linalg.norm(final_position - true_position)
-    final_t0_error = abs(final_t0 - TRUE_T0)
-    final_energy_error = abs(final_energy - true_energy)
+    # Calculate final differences (predicted - true)
+    final_position_difference = final_position - true_position
+    final_t0_difference = final_t0 - TRUE_T0
+    final_energy_difference = final_energy - true_energy
+    final_theta_difference = final_theta - true_theta
+    final_phi_difference = final_phi - true_phi
+    final_direction_difference = jnp.array([final_theta_difference, final_phi_difference])
+
+    # Calculate final error magnitudes
+    final_position_error = jnp.linalg.norm(final_position_difference)
+    final_t0_error = abs(final_t0_difference)
+    final_energy_error = abs(final_energy_difference)
     final_cos_angle = jnp.clip(jnp.dot(final_direction, true_direction), -1.0, 1.0)
     final_direction_error = np.degrees(np.arccos(final_cos_angle))
 
@@ -460,6 +490,10 @@ def run_complete_optimization_adam(initial_t0, hit_detector_positions, observed_
         'final_direction_error': float(final_direction_error),
         'final_t0_error': float(final_t0_error),
         'final_energy_error': float(final_energy_error),
+        'final_position_difference': final_position_difference.tolist(),  # 3D: [dx, dy, dz]
+        'final_direction_difference': final_direction_difference.tolist(),  # 2D: [dtheta, dphi]
+        'final_t0_difference': float(final_t0_difference),
+        'final_energy_difference': float(final_energy_difference),
         'total_iterations': len(history['parameters']) - 1,
         'converged': grad_norm < tolerance,
         'adam_optimization_time': adam_optimization_time,
@@ -468,7 +502,7 @@ def run_complete_optimization_adam(initial_t0, hit_detector_positions, observed_
 
 
 def generate_event_data(event_idx, random_key, data_dir, data_simulator,
-                       detector_params, detector_bounds):
+                       detector_params, detector_bounds, fraction = 0.6):
     """Generate a single event with random parameters within detector bounds
 
     Args:
@@ -528,7 +562,6 @@ def generate_event_data(event_idx, random_key, data_dir, data_simulator,
     photon_data['N'] = N
 
     key = random_key
-    fraction = 0.6
 
     DETECTOR_R = detector_bounds['r']
     DETECTOR_H = detector_bounds['H']
@@ -618,6 +651,11 @@ def main():
     detector_radius = detector.S_radius
     NUM_DETECTORS = len(detector_points)
 
+    # Load range parametrization for track endpoint validation
+    # TODO: Extract particle and medium from config instead of hardcoding
+    range_params = load_range_params('muon', 'water')
+    print(f"Loaded range parametrization: {range_params['description']}")
+
     # Get detector bounds
     detector_bounds = get_detector_bounds(detector)
     DETECTOR_R = detector_bounds['r'] if detector_bounds['type'] == 'cylinder' else None
@@ -671,9 +709,27 @@ def main():
     print("\nPre-compiling JIT functions...")
     main_key = jax.random.PRNGKey(42)
     warmup_key = jax.random.split(main_key, 1)[0]
-    warmup_event_data = generate_event_data(
-        0, warmup_key, data_dir, data_simulator, detector_params, detector_bounds
-    )
+
+    # Generate warmup event with endpoint validation
+    warmup_attempts = 0
+    warmup_endpoint_valid = False
+    while not warmup_endpoint_valid and warmup_attempts < 10:
+        warmup_attempts += 1
+        warmup_event_data = generate_event_data(
+            0, warmup_key, data_dir, data_simulator, detector_params, detector_bounds, fraction=0.9
+        )
+        warmup_endpoint_valid = check_track_endpoint_in_detector(
+            warmup_event_data['true_position'],
+            warmup_event_data['true_direction'],
+            warmup_event_data['true_energy'],
+            range_params, detector_bounds, fraction=0.9
+        )
+        if not warmup_endpoint_valid:
+            warmup_key, _ = jax.random.split(warmup_key)
+
+    if not warmup_endpoint_valid:
+        print("ERROR: Could not generate valid warmup event. Exiting.")
+        sys.exit(1)
 
     hit_mask = warmup_event_data['hit_counts'] > -999
     hit_detector_positions = detector_points[hit_mask]
@@ -718,6 +774,10 @@ def main():
     final_direction_errors = []
     final_t0_errors = []
     final_energy_errors = []
+    final_position_differences = []  # 3D: [dx, dy, dz]
+    final_direction_differences = []  # 2D: [dtheta, dphi]
+    final_t0_differences = []
+    final_energy_differences = []
     final_combined_losses = []
     final_vertex_losses = []
     final_counts_losses = []
@@ -736,16 +796,51 @@ def main():
             if verbosity >= 2:
                 print(f"\n--- Processing Event {event_idx} ---")
 
-            # Generate event data
-            event_data = generate_event_data(
-                event_idx, event_keys[event_idx], data_dir,
-                data_simulator, detector_params, detector_bounds
-            )
+            # Generate event data with endpoint validation
+            # Try up to 10 times to generate an event with endpoint within detector
+            event_generation_attempts = 0
+            max_attempts = 10
+            event_key = event_keys[event_idx]
+            endpoint_valid = False
 
-            # Extract event parameters
-            true_position = event_data['true_position']
-            true_direction = event_data['true_direction']
-            true_energy = event_data['true_energy']
+            while not endpoint_valid and event_generation_attempts < max_attempts:
+                event_generation_attempts += 1
+
+                # Generate event data
+                event_data = generate_event_data(
+                    event_idx, event_key, data_dir,
+                    data_simulator, detector_params, detector_bounds, fraction=0.9
+                )
+
+                # Extract event parameters
+                true_position = event_data['true_position']
+                true_direction = event_data['true_direction']
+                true_energy = event_data['true_energy']
+
+                # Check if track endpoint is within detector bounds
+                endpoint_valid = check_track_endpoint_in_detector(
+                    true_position, true_direction, true_energy,
+                    range_params, detector_bounds, fraction=0.9
+                )
+
+                if not endpoint_valid:
+                    if event_generation_attempts == 5:
+                        print(f"  WARNING: Event {event_idx} - 5 failed attempts to generate event with endpoint in detector")
+
+                    # Generate new random key for next attempt
+                    event_key, _ = jax.random.split(event_key)
+
+            # Check if we exceeded max attempts
+            if not endpoint_valid:
+                print(f"  ERROR: Event {event_idx} - Failed to generate event with endpoint in detector after {max_attempts} attempts")
+                print(f"  Last attempt: position={true_position}, energy={true_energy:.1f} MeV")
+                print(f"  Exiting program.")
+                sys.exit(1)
+
+            if verbosity >= 2 and event_generation_attempts > 1:
+                print(f"  Generated valid event after {event_generation_attempts} attempts")
+
+            # Continue with already extracted parameters
             TRUE_T0 = event_data['TRUE_T0']
             true_data = event_data['true_data']
 
@@ -852,6 +947,10 @@ def main():
             final_direction_errors.append(results['final_direction_error'])
             final_t0_errors.append(results['final_t0_error'])
             final_energy_errors.append(results['final_energy_error'])
+            final_position_differences.append(results['final_position_difference'])
+            final_direction_differences.append(results['final_direction_difference'])
+            final_t0_differences.append(results['final_t0_difference'])
+            final_energy_differences.append(results['final_energy_difference'])
             final_combined_losses.append(results['final_combined_loss'])
             final_vertex_losses.append(results['final_vertex_loss'])
             final_counts_losses.append(results['final_counts_loss'])
@@ -960,6 +1059,10 @@ def main():
     final_direction_errors = np.array(final_direction_errors)
     final_t0_errors = np.array(final_t0_errors)
     final_energy_errors = np.array(final_energy_errors)
+    final_position_differences = np.array(final_position_differences)  # Shape: (N_events, 3)
+    final_direction_differences = np.array(final_direction_differences)  # Shape: (N_events, 2)
+    final_t0_differences = np.array(final_t0_differences)
+    final_energy_differences = np.array(final_energy_differences)
     final_combined_losses = np.array(final_combined_losses)
     final_vertex_losses = np.array(final_vertex_losses)
     final_counts_losses = np.array(final_counts_losses)
@@ -1013,6 +1116,10 @@ def main():
             'final_direction_errors': final_direction_errors.tolist(),
             'final_t0_errors': final_t0_errors.tolist(),
             'final_energy_errors': final_energy_errors.tolist(),
+            'final_position_differences': final_position_differences.tolist(),  # (N_events, 3)
+            'final_direction_differences': final_direction_differences.tolist(),  # (N_events, 2)
+            'final_t0_differences': final_t0_differences.tolist(),
+            'final_energy_differences': final_energy_differences.tolist(),
             'final_combined_losses': final_combined_losses.tolist(),
             'final_vertex_losses': final_vertex_losses.tolist(),
             'final_counts_losses': final_counts_losses.tolist(),
