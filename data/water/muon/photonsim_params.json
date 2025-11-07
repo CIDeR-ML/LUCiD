@@ -1,14 +1,14 @@
 {
     "tot_n_photons_normalization": {
-        "a": 30.617695,
-        "b": 0.875402,
-        "c": -1596.376086,
+        "a": 24.777408,
+        "b": 0.901248,
+        "c": -1299.415404,
         "description": "Power law normalization: tot_n_photons = a * energy^b + c. Fitted with R² = 0.997176 using validate.py integral analysis with consistent num_seeds parameters."
     },
     "num_seeds": {
-        "a": 1.169450,
-        "b": 0.863553,
-        "c": -54.29,
+        "a": 29.367623,
+        "b": 0.864836,
+        "c": -1386.42,
         "description": "Power law for number of seeds: num_seeds = int32(a * energy^b + c). Fitted with R² = 0.999668 using validate.py valid-points analysis with Intensity threshold = 2."
     },
     "siren_model": {
