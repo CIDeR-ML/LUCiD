@@ -919,7 +919,7 @@ def create_event_simulator(detector, propagate_photons, Nphot, NUM_SENSORS, sens
     def tot_n_photons_normalization(x):
         """ Translates unphysical SIREN output units into number of physical photons.
             Uses power law: a * energy^b + c. Parameters are loaded from configuration files. """
-        return tot_n_photons_a * jnp.power(x, tot_n_photons_b) + tot_n_photons_c
+        return (tot_n_photons_a * jnp.power(x, tot_n_photons_b) + tot_n_photons_c)
 
     @jax.jit
     def _simulation_without_data(particle_params, detector_params, key, grid_data, model_params):
@@ -1215,7 +1215,7 @@ def create_event_simulator(detector, propagate_photons, Nphot, NUM_SENSORS, sens
         # Load SIREN model path from configuration
         model_base_path = photonsim_params['siren_model_path']
         photonsim_predictor = SIRENPredictor(model_base_path)
-        grid_data = create_photonsim_siren_grid(photonsim_predictor, 100)
+        grid_data = create_photonsim_siren_grid(photonsim_predictor, 500)
         model_params = photonsim_predictor.params
         t0_params = unpack_t0_params(particle, material)
 
