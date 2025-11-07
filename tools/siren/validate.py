@@ -124,7 +124,7 @@ class PhotonSimValidator:
               f"Distance: {self.distance_min}-{self.distance_max} mm")
         
         # Create table data for ray generation
-        self.table_data = create_photonsim_siren_grid(self.photonsim_predictor, 100)
+        self.table_data = create_photonsim_siren_grid(self.photonsim_predictor, 500)
 
         # Load num_seeds parameters from configuration
         from tools.utils import unpack_photonsim_params
@@ -504,6 +504,8 @@ class PhotonSimValidator:
         axes[1].set_title('Corrected Data vs Power Law Fit')
         axes[1].legend(fontsize=9)
         axes[1].grid(True, alpha=0.3)
+        axes[1].set_xlim(800,1200)
+        axes[1].set_ylim(0.95,1.05)
 
         # Add corrected fit equation to plot
         fit_text_corr = f'y = {a_corr:.4f}·x$^{{{b_corr:.4f}}}$ + {c_corr:.2f}'
@@ -600,7 +602,7 @@ class PhotonSimValidator:
         print(f"\n=== Valid Points vs Energy Analysis ===")
         
         if energies is None:
-            energies = np.linspace(200, 2000, 20)
+            energies = np.linspace(200, 2000, 200)
         
         if thresholds is None:
             thresholds = [1, 2, 4, 8]
@@ -609,8 +611,8 @@ class PhotonSimValidator:
         print(f"Thresholds: {thresholds}")
         
         # Create analysis grid
-        n_angle_bins = 100
-        n_distance_bins = 100
+        n_angle_bins = 500
+        n_distance_bins = 500
         angle_bins = np.linspace(self.angle_min, self.angle_max, n_angle_bins)
         distance_bins = np.linspace(self.distance_min, self.distance_max, n_distance_bins)
         
