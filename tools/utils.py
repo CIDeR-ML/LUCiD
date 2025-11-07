@@ -1442,5 +1442,94 @@ def print_event_kinematics(event_data, show_details=True):
     print(f"\nParticle Distribution:")
     for particle_type, count in particle_counts.items():
         print(f"  {particle_type}: {count}")
-    
+
     print("="*70)
+
+
+def load_range_params(particle, medium):
+    """
+    Load range parametrization for a given particle and medium.
+
+    Args:
+        particle: Particle type (e.g., 'muon', 'electron')
+        medium: Medium type (e.g., 'water')
+
+    Returns:
+        dict: Range parameters containing 'a', 'b' coefficients and metadata
+
+    The range formula is: Range = a * E + b
+    where E is energy in MeV and Range is in mm.
+    """
+    base_dir = base_dir_path()
+    params_file = os.path.join(base_dir, 'data', medium, particle, 'range_params.json')
+
+    if not os.path.exists(params_file):
+        raise FileNotFoundError(f"Range parameters file not found: {params_file}")
+
+    with open(params_file, 'r') as f:
+        params = json.load(f)
+
+    return params
+
+
+def calculate_particle_range(energy_mev, range_params):
+    """
+    Calculate particle range in the medium given energy.
+
+    Args:
+        energy_mev: Particle energy in MeV
+        range_params: Range parameters dict from load_range_params()
+
+    Returns:
+        float: Range in meters
+
+    The input parametrization is in mm, this function returns range in meters.
+    """
+    a = range_params['parameters']['a']
+    b = range_params['parameters']['b']
+
+    # Calculate range in mm
+    range_mm = a * energy_mev + b
+
+    # Convert to meters
+    range_m = range_mm / 1000.0
+
+    return range_m
+
+
+def check_track_endpoint_in_detector(position, direction, energy_mev, range_params, detector_bounds, fraction=0.9):
+    """
+    Check if the track endpoint (position + range * direction) is within detector bounds.
+
+    Args:
+        position: Track starting position [x, y, z] in meters
+        direction: Track direction (unit vector)
+        energy_mev: Particle energy in MeV
+        range_params: Range parameters from load_range_params()
+        detector_bounds: Dict with 'r' (radius) and 'H' (height) in meters
+        fraction: Fraction of detector bounds to check (default 0.9)
+
+    Returns:
+        bool: True if endpoint is within bounds, False otherwise
+    """
+    # Calculate range in meters
+    track_range = calculate_particle_range(energy_mev, range_params)
+
+    # Calculate endpoint
+    endpoint = position + track_range * direction
+
+    # Extract detector bounds
+    detector_r = detector_bounds['r'] * fraction
+    detector_h = detector_bounds['H'] * fraction
+
+    # Check cylindrical bounds
+    # Radial check (x, y)
+    radial_distance = np.sqrt(endpoint[0]**2 + endpoint[1]**2)
+    if radial_distance > detector_r:
+        return False
+
+    # Height check (z)
+    if abs(endpoint[2]) > detector_h / 2.0:
+        return False
+
+    return True

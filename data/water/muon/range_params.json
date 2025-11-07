@@ -1,0 +1,15 @@
+{
+  "description": "Muon range parametrization in water",
+  "particle": "muon",
+  "medium": "water",
+  "formula": "Range = a * E + b",
+  "units": {
+    "energy": "MeV",
+    "range": "mm"
+  },
+  "parameters": {
+    "a": 4.983,
+    "b": -237.6
+  },
+  "notes": "Linear parametrization for muon range in water as a function of energy. Range in mm, energy in MeV."
+}
