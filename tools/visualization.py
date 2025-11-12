@@ -51,7 +51,7 @@ def create_detector_display(json_filename='../config/cyl_geom_config.json', spar
     n_sensors = len(sensor_positions)
 
     def display_detector_data(*args, file_name=None, plot_time=False, log_scale=False, vmin=None, vmax=None, perc_min=1,
-                              perc_max=99):
+                              perc_max=99, facecolor='white', barcolor='black'):
         """
         Process and display detector data in either sparse or dense format.
 
@@ -119,6 +119,11 @@ def create_detector_display(json_filename='../config/cyl_geom_config.json', spar
                 vmin = 0.1 if log_scale else 0
             if vmax is None:
                 vmax = 1
+
+        if perc_min == 0 and plot_time == False and log_scale == False:
+            vmin = 0.001
+        elif perc_min == 0 and plot_time == False and log_scale == True:
+            vmin = 0.1
 
         # Generate color gradient based on scale type
         max_value = vmax
@@ -191,7 +196,7 @@ def create_detector_display(json_filename='../config/cyl_geom_config.json', spar
         fig_width = 8
         fig_height = fig_width * (y_range / x_range)
 
-        fig, ax = plt.subplots(figsize=(fig_width, fig_height), facecolor='black')
+        fig, ax = plt.subplots(figsize=(fig_width, fig_height), facecolor=facecolor)
 
         # Create color array
         colors = color_gradient.to_rgba(plot_values)
@@ -209,7 +214,7 @@ def create_detector_display(json_filename='../config/cyl_geom_config.json', spar
 
         ax.add_collection(ells)
 
-        ax.set_facecolor("black")
+        ax.set_facecolor(facecolor)
         ax.set_xlim(x_min, x_max)
         ax.set_ylim(y_min, y_max)
         ax.set_aspect('equal', adjustable='box')
@@ -223,9 +228,9 @@ def create_detector_display(json_filename='../config/cyl_geom_config.json', spar
         cbar = plt.colorbar(color_gradient, cax=cax)
         value_label = 'Time (ns)' if plot_time else 'Photoelectron Count (a.u.)'
         scale_label = ' (log scale)' if log_scale else ''
-        cbar.set_label(f'{value_label}{scale_label}', color='white', fontsize=14)
-        cbar.ax.yaxis.set_tick_params(color='white', labelcolor='white')
-        cbar.outline.set_edgecolor('white')
+        cbar.set_label(f'{value_label}{scale_label}', color=barcolor, fontsize=14)
+        cbar.ax.yaxis.set_tick_params(color=barcolor, labelcolor=barcolor)
+        cbar.outline.set_edgecolor(barcolor)
 
         # Explicitly set the tick formatter and locator to ensure ticks appear
         if log_scale:
@@ -238,15 +243,15 @@ def create_detector_display(json_filename='../config/cyl_geom_config.json', spar
             cbar.ax.yaxis.set_major_locator(MaxNLocator(nbins=6))
 
         # Ensure tick labels are white and visible
-        cbar.ax.tick_params(axis='y', which='both', colors='white', labelcolor='white')
+        cbar.ax.tick_params(axis='y', which='both', colors=barcolor, labelcolor=barcolor)
         for label in cbar.ax.get_yticklabels():
-            label.set_color('white')
+            label.set_color(barcolor)
 
         # Adjust layout
         plt.tight_layout()
 
         if file_name:
-            plt.savefig(file_name, bbox_inches='tight', pad_inches=0.1, facecolor='black', edgecolor='none')
+            plt.savefig(file_name, bbox_inches='tight', pad_inches=0.1, facecolor=facecolor, edgecolor='none')
         plt.show()
 
     return display_detector_data
