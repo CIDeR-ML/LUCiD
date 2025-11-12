@@ -124,7 +124,7 @@ class PhotonSimValidator:
               f"Distance: {self.distance_min}-{self.distance_max} mm")
         
         # Create table data for ray generation
-        self.table_data = create_photonsim_siren_grid(self.photonsim_predictor, 500)
+        self.table_data = create_photonsim_siren_grid(self.photonsim_predictor, 250)
 
         # Load num_seeds parameters from configuration
         from tools.utils import unpack_photonsim_params
@@ -172,8 +172,8 @@ class PhotonSimValidator:
             energies = [500, 1000, 1500]
 
         # Create analysis grid
-        n_angle_bins = 500
-        n_distance_bins = 500
+        n_angle_bins = 250
+        n_distance_bins = 250
         angle_bins = np.linspace(self.angle_min, self.angle_max, n_angle_bins)
         distance_bins = np.linspace(self.distance_min, self.distance_max, n_distance_bins)
 
@@ -295,8 +295,8 @@ class PhotonSimValidator:
             thresholds = [1, 2, 4, 8]
 
         # Create analysis grid
-        n_angle_bins = 500
-        n_distance_bins = 500
+        n_angle_bins = 250
+        n_distance_bins = 250
         angle_bins = np.linspace(self.angle_min, self.angle_max, n_angle_bins)
         distance_bins = np.linspace(self.distance_min, self.distance_max, n_distance_bins)
 
@@ -504,7 +504,7 @@ class PhotonSimValidator:
         axes[1].set_title('Corrected Data vs Power Law Fit')
         axes[1].legend(fontsize=9)
         axes[1].grid(True, alpha=0.3)
-        axes[1].set_xlim(800,1200)
+        axes[1].set_xlim(500,1500)
         axes[1].set_ylim(0.95,1.05)
 
         # Add corrected fit equation to plot
@@ -611,8 +611,8 @@ class PhotonSimValidator:
         print(f"Thresholds: {thresholds}")
         
         # Create analysis grid
-        n_angle_bins = 500
-        n_distance_bins = 500
+        n_angle_bins = 250
+        n_distance_bins = 250
         angle_bins = np.linspace(self.angle_min, self.angle_max, n_angle_bins)
         distance_bins = np.linspace(self.distance_min, self.distance_max, n_distance_bins)
         
