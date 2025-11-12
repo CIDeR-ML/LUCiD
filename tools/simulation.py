@@ -1215,7 +1215,7 @@ def create_event_simulator(detector, propagate_photons, Nphot, NUM_SENSORS, sens
         # Load SIREN model path from configuration
         model_base_path = photonsim_params['siren_model_path']
         photonsim_predictor = SIRENPredictor(model_base_path)
-        grid_data = create_photonsim_siren_grid(photonsim_predictor, 500)
+        grid_data = create_photonsim_siren_grid(photonsim_predictor, 250)
         model_params = photonsim_predictor.params
         t0_params = unpack_t0_params(particle, material)
 
