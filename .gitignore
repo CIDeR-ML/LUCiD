@@ -24,7 +24,6 @@ sftp-config.json
 !data/
 !data/**/
 !data/**/photonsim_params.json
-**/hyper_config/*.json
 
 # Ignore s3df_jobs folder except .py files
 s3df_jobs/*
