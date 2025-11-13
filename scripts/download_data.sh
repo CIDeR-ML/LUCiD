@@ -25,8 +25,10 @@ echo "Downloading muon simulation data..."
 echo "This may take several minutes depending on your connection speed."
 echo ""
 
-# Download the data
-gdown --folder "https://drive.google.com/drive/folders/1zdjj48gYxE7TpzwE7QUGAVskuZpjY6BK" -O data/water/muon/
+# Download the data (using -O . to extract contents directly)
+cd data/water/muon
+gdown --folder "https://drive.google.com/drive/folders/1zdjj48gYxE7TpzwE7QUGAVskuZpjY6BK" -O .
+cd ../../..
 
 echo ""
 echo "======================================"
