@@ -187,7 +187,6 @@ class Detector(ABC):
                     color_values_log = np.copy(color_values)
                     color_values_log[~positive_mask] = min_positive * 0.1
                     color_values_log = np.log10(color_values_log)
-                    print(min_positive, np.max(color_values[positive_mask]))
                     colorbar_title = f"{'Time' if plot_time else 'Charge'} (log₁₀ scale)"
                     plot_color_values = color_values_log
             
@@ -355,30 +354,7 @@ class Detector(ABC):
         # Save figure if filename is provided
         if figname:
             fig.write_image(figname, width=2000, height=2000, scale=2)
-            # fig.write_image(figname, width=200, height=200, scale=2)
-            # import tempfile
-            # from PIL import Image
-            
-            # # Save to temporary PNG first for cropping
-            # temp_png = tempfile.NamedTemporaryFile(suffix='.png', delete=False)
-            # fig.write_image(temp_png.name, width=1000, height=800, scale=2)
-            
-            # # Crop the image (remove 20% from each side)
-            # with Image.open(temp_png.name) as img:
-            #     width, height = img.size
-            #     crop_x = int(width * 0.0)
-            #     crop_y = int(height * 0.0)
-            #     cropped = img.crop((crop_x, crop_y, width - crop_x, height - crop_y))
-                
-            #     # Save in the requested format
-            #     if figname.lower().endswith('.pdf'):
-            #         cropped.save(figname, format='PDF', resolution=300)
-            #     else:
-            #         cropped.save(figname)
-            
-            # # Clean up temp file
-            # import os
-            # os.unlink(temp_png.name)
+            fig.show()
         else:
             fig.show()
 
