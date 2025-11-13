@@ -11,7 +11,6 @@ sftp-config.json
 
 # Generated data from scripts
 **/generated_data/
-**/figures/
 **/spatial_overlap_integrals/
 **/__pycache__/
 **/.ipynb_checkpoints/
