@@ -24,7 +24,7 @@ from tools.siren.training.inference import SIRENPredictor
 def setup_event_simulator(json_filename, n_photons=1_000_000, temperature=0.2, K=5,
                           is_data=False, is_calibration=False, max_sensors_per_cell=4,
                           detector_type='Cylinder', use_expected_value=True,
-                          material='water', particle='muon'):
+                          material='water', particle='muon', apply_smearing=True):
     """
     Sets up and returns an event simulator with the specified configuration.
 
@@ -55,6 +55,9 @@ def setup_event_simulator(json_filename, n_photons=1_000_000, temperature=0.2, K
         Material type (e.g., 'water', 'ice'), default 'water'
     particle : str, optional
         Particle type (e.g., 'muon', 'electron'), default 'muon'
+    apply_smearing : bool, optional
+        If True, apply charge and time smearing to simulate detector resolution effects.
+        If False, return true values without smearing (default: False)
 
     Returns
     -------
@@ -144,7 +147,8 @@ def setup_event_simulator(json_filename, n_photons=1_000_000, temperature=0.2, K
         use_expected_value,
         detector_type,
         material,
-        particle
+        particle,
+        apply_smearing
     )
 
     return simulate_event
@@ -751,7 +755,7 @@ def time_digitizer(times, time_resolution=0.4):
     return digitized_times
 
 
-def make_hits_data(flat_weights, flat_indices, flat_times, num_detectors, qe=0.2, key=None, threshold=1e-5):
+def make_hits_data(flat_weights, flat_indices, flat_times, num_detectors, qe=0.2, key=None, threshold=1e-5, apply_smearing=False):
 
         timing_mask = (flat_weights>threshold) & (flat_times>0)
         filtered_times = jnp.where(timing_mask, flat_times, jnp.inf)
@@ -786,12 +790,24 @@ def make_hits_data(flat_weights, flat_indices, flat_times, num_detectors, qe=0.2
         detector_mins = jax.ops.segment_min(qe_filtered_times, flat_indices, num_segments=num_detectors)
 
         nonzero_mask = (total_charge > 1e-10) & (detector_mins > 0)
-        measured_time = jnp.where(
-            jnp.any(nonzero_mask),
-            smear_times(detector_mins, key=smear_time_key),
-            0.0
-        )
-        
+
+        if apply_smearing:
+            # Apply smearing to true values
+            measured_time = jnp.where(
+                jnp.any(nonzero_mask),
+                smear_times(detector_mins, key=smear_time_key),
+                0.0
+            )
+            measured_charge = jnp.where(
+                nonzero_mask,
+                smear_charges_SK_like(total_charge, key=smear_counts_key),
+                0
+            )
+        else:
+            # Return true values without smearing (new default behavior)
+            measured_time = jnp.where(jnp.any(nonzero_mask), detector_mins, 0.0)
+            measured_charge = jnp.where(nonzero_mask, total_charge, 0)
+
         # Use this to use mean time instead of min time.
         # nonzero_mask = (total_charge > 1e-10) & (weighted_mean_time > 0)
         # measured_time = jnp.where(
@@ -800,19 +816,12 @@ def make_hits_data(flat_weights, flat_indices, flat_times, num_detectors, qe=0.2
         #     0.0
         # )
 
-        # Zero out charges below threshold
-        measured_charge = jnp.where(
-            nonzero_mask,
-            smear_charges_SK_like(total_charge, key=smear_counts_key),
-            0
-        )
-
         return measured_charge, measured_time
 
 
 def create_event_simulator(detector, propagate_photons, Nphot, NUM_SENSORS, sensor_points, K,
                            is_data, is_calibration, max_sensors_per_cell, use_expected_value=None,
-                           detector_type='Cylinder', material='water', particle='muon'):
+                           detector_type='Cylinder', material='water', particle='muon', apply_smearing=False):
     """
     Create an event simulator with the appropriate configuration.
 
@@ -1195,7 +1204,7 @@ def create_event_simulator(detector, propagate_photons, Nphot, NUM_SENSORS, sens
 
     # Create wrapper functions to handle different signatures and add QE parameter
     def _make_hits_data_wrapper(flat_weights, flat_indices, flat_times, num_sensors, key, qe=0.065):
-        return make_hits_data(flat_weights, flat_indices, flat_times, num_sensors, qe=qe, key=key)
+        return make_hits_data(flat_weights, flat_indices, flat_times, num_sensors, qe=qe, key=key, apply_smearing=apply_smearing)
 
     def _make_hits_simulation_wrapper(flat_weights, flat_indices, flat_times, num_sensors, key, qe=0.065):
         # For simulation mode, qe_key is ignored since we use deterministic scaling
