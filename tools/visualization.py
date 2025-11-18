@@ -22,16 +22,16 @@ def create_detector_display(json_filename='../config/cyl_geom_config.json', spar
     """
     Create a detector display function that can handle both sparse and dense data formats.
 
-    Parameters:
-    -----------
+    Parameters
+    ----------
     json_filename : str
         Path to the configuration file for detector geometry
     sparse : bool
         If True, function expects sparse data format (indices, charges, times)
         If False, function expects dense data format (full arrays)
 
-    Returns:
-    --------
+    Returns
+    -------
     function
         Display function that can be called with appropriate data format
     """
@@ -39,55 +39,41 @@ def create_detector_display(json_filename='../config/cyl_geom_config.json', spar
     detector = generate_detector(json_filename)
 
     # Load geometry data using new unified function
-    detector_type, radius, height, n_sensors, sensor_radius = load_detector_geom(json_filename)
+    detector_type, radius, height, n_sensors_meta, sensor_radius = load_detector_geom(json_filename)
 
     # Check if it's a cylinder (this visualization is designed for cylinders)
     if detector_type != 'cylinder':
         raise ValueError(f"This visualization is designed for cylinders, got {detector_type}")
 
-    # Set up detector information
+    # Set up detector information from detector object
     sensor_positions = np.array(detector.all_points)
     sensor_cases = np.array([detector.ID_to_case[i] for i in range(len(detector.all_points))])
-    n_sensors = len(sensor_positions)
+    n_sensors = len(sensor_positions)   # IMPORTANT: use actual number of points
 
-    def display_detector_data(*args, file_name=None, plot_time=False, log_scale=False, vmin=None, vmax=None, perc_min=1,
-                              perc_max=99, facecolor='white', barcolor='black'):
+    def display_detector_data(
+        *args,
+        file_name=None,
+        plot_time=False,
+        log_scale=False,
+        vmin=None,
+        vmax=None,
+        perc_min=1,
+        perc_max=99,
+        facecolor='white',
+        barcolor='black',
+        colormap=None,
+        colormap_norm=None,   # currently not used, kept for compatibility
+        zero_color=np.array([0.9, 0.9, 0.9, 1.0]),
+        show_colorbar=True,
+        external_legend=None,
+    ):
         """
         Process and display detector data in either sparse or dense format.
-
-        Parameters (for sparse=True):
-        ---------------------------
-        loaded_indices : array-like
-            Indices of non-zero hits
-        loaded_charges : array-like
-            Charge values at non-zero indices
-        loaded_times : array-like
-            Time values at non-zero indices
-
-        Parameters (for sparse=False):
-        ---------------------------
-        charges : array-like
-            Full array of charge values
-        times : array-like
-            Full array of time values
-
-        Other Parameters:
-        ----------------
-        file_name : str, optional
-            If provided, saves the plot to this file
-        plot_time : bool
-            If True, plot time instead of charge
-        log_scale : bool
-            If True, apply logarithmic scaling to the color gradient
-        vmin : float, optional
-            Minimum value for colormap. Values below this but > 0 will be shown in a distinct color
-        vmax : float, optional
-            Maximum value for colormap
-        perc_min : float
-            Percentile to use for minimum if vmin not provided (default: 1)
-        perc_max : float
-            Percentile to use for maximum if vmax not provided (default: 99)
         """
+
+        # ------------------------
+        # Sparse / dense handling
+        # ------------------------
         if sparse:
             if len(args) != 3:
                 raise ValueError("Sparse format requires three arguments: indices, charges, and times")
@@ -104,10 +90,11 @@ def create_detector_display(json_filename='../config/cyl_geom_config.json', spar
         # Select which values to plot based on plot_time
         all_values = all_times if plot_time else all_charges
 
-        # Get positive values for percentile calculations
+        # ------------------------
+        # vmin / vmax determination
+        # ------------------------
         positive_values = all_values[all_values > 0]
 
-        # Calculate percentiles if vmin or vmax not provided
         if len(positive_values) > 0:
             if vmin is None:
                 vmin = np.percentile(positive_values, perc_min)
@@ -120,70 +107,71 @@ def create_detector_display(json_filename='../config/cyl_geom_config.json', spar
             if vmax is None:
                 vmax = 1
 
-        if perc_min == 0 and plot_time == False and log_scale == False:
+        if perc_min == 0 and (not plot_time) and (not log_scale):
             vmin = 0.001
-        elif perc_min == 0 and plot_time == False and log_scale == True:
+        elif perc_min == 0 and (not plot_time) and log_scale:
             vmin = 0.1
 
-        # Generate color gradient based on scale type
         max_value = vmax
 
+        # ------------------------
+        # Color mapping
+        # ------------------------
         if log_scale:
-            # Create a copy of values for color mapping
             plot_values = np.copy(all_values)
-            # Clip values below vmin to vmin (instead of setting to transparent)
             plot_values[plot_values <= 0] = vmin
             plot_values = np.clip(plot_values, vmin, max_value)
 
-            # Use LogNorm for logarithmic color scaling
             cmap = plt.get_cmap('viridis_r') if plot_time else plt.get_cmap('plasma')
             norm = plt.matplotlib.colors.LogNorm(vmin=vmin, vmax=max_value)
-            color_gradient = plt.cm.ScalarMappable(norm=norm, cmap=cmap)
         else:
-            # Linear scaling
             plot_values = np.copy(all_values)
-            # Clip values to the range [vmin, vmax]
             plot_values = np.clip(plot_values, vmin, max_value)
 
-            cmap = plt.get_cmap('viridis_r') if plot_time else plt.get_cmap('plasma')
+            cmap = plt.get_cmap('viridis_r') if plot_time else plt.get_cmap('viridis')
             norm = plt.Normalize(vmin=vmin, vmax=max_value)
-            color_gradient = plt.cm.ScalarMappable(norm=norm, cmap=cmap)
 
+        # If a custom colormap is provided, override cmap (but keep norm as-is)
+        if colormap is not None:
+            cmap = colormap
+            # If you ever want to use colormap_norm, uncomment:
+            # if colormap_norm is not None:
+            #     norm = colormap_norm
+
+        color_gradient = plt.cm.ScalarMappable(norm=norm, cmap=cmap)
+
+        # ------------------------
+        # Geometry → 2D projection
+        # ------------------------
         caps_offset = 1.05 * height / 2 + radius
 
-        # Calculate positions for all cases
         x = np.zeros(n_sensors)
         y = np.zeros(n_sensors)
 
-        # Barrel case (0)
+        # Barrel (case 0)
         barrel_mask = sensor_cases == 0
         theta = np.arctan2(sensor_positions[barrel_mask, 1], sensor_positions[barrel_mask, 0])
         theta = (theta + np.pi * 3 / 2) % (2 * np.pi) / 2
         x[barrel_mask] = theta * radius * 2
         y[barrel_mask] = sensor_positions[barrel_mask, 2]
 
-        # Top cap case (1)
+        # Top cap (case 1)
         top_mask = sensor_cases == 1
         x[top_mask] = sensor_positions[top_mask, 0] + np.pi * radius
-        y[top_mask] = (caps_offset + sensor_positions[top_mask, 1])
+        y[top_mask] = caps_offset + sensor_positions[top_mask, 1]
 
-        # Bottom cap case (2)
+        # Bottom cap (case 2)
         bottom_mask = sensor_cases == 2
         x[bottom_mask] = sensor_positions[bottom_mask, 0] + np.pi * radius
-        y[bottom_mask] = (-caps_offset - sensor_positions[bottom_mask, 1])
+        y[bottom_mask] = -caps_offset - sensor_positions[bottom_mask, 1]
 
-        # Calculate the minimum distance between points in the transformed space
         transformed_positions = np.column_stack((x, y))
         min_distance = calculate_min_distance(transformed_positions)
-
-        # Set the circle diameter to be equal to the minimum distance
         circle_diameter = min_distance
 
-        # Calculate exact dimensions needed
         x_min, x_max = np.min(x), np.max(x)
         y_min, y_max = np.min(y), np.max(y)
 
-        # Add padding
         padding = circle_diameter
         x_min -= padding
         x_max += padding
@@ -192,66 +180,75 @@ def create_detector_display(json_filename='../config/cyl_geom_config.json', spar
         x_range = x_max - x_min
         y_range = y_max - y_min
 
-        # Set figure size based on data range, accounting for colorbar
         fig_width = 8
         fig_height = fig_width * (y_range / x_range)
 
         fig, ax = plt.subplots(figsize=(fig_width, fig_height), facecolor=facecolor)
 
-        # Create color array
+        # ------------------------
+        # Colors for sensors
+        # ------------------------
         colors = color_gradient.to_rgba(plot_values)
 
-        # Set zero values to be transparent (optional - remove if you want them visible)
+        # Zero / no-hit sensors → zero_color
         zero_mask = all_values <= 0
-        colors[zero_mask, 3] = 0  # Set alpha to 0 for zero values only
+        colors[zero_mask] = zero_color
 
-        # Create EllipseCollection
-        ells = EllipseCollection(widths=circle_diameter, heights=circle_diameter, angles=0, units='x',
-                                 facecolors=colors,
-                                 offsets=transformed_positions,
-                                 transOffset=ax.transData,
-                                 edgecolors='none')
+        ells = EllipseCollection(
+            widths=circle_diameter,
+            heights=circle_diameter,
+            angles=0,
+            units='x',
+            facecolors=colors,
+            offsets=transformed_positions,
+            transOffset=ax.transData,
+            edgecolors='none'
+        )
 
         ax.add_collection(ells)
 
-        ax.set_facecolor(facecolor)
         ax.set_xlim(x_min, x_max)
         ax.set_ylim(y_min, y_max)
         ax.set_aspect('equal', adjustable='box')
-
-        # Remove axes
         ax.axis('off')
 
-        # Add colorbar
-        divider = make_axes_locatable(ax)
-        cax = divider.append_axes("right", size="5%", pad=0.1)
-        cbar = plt.colorbar(color_gradient, cax=cax)
-        value_label = 'Time (ns)' if plot_time else 'Photoelectron Count (a.u.)'
-        scale_label = ' (log scale)' if log_scale else ''
-        cbar.set_label(f'{value_label}{scale_label}', color=barcolor, fontsize=14)
-        cbar.ax.yaxis.set_tick_params(color=barcolor, labelcolor=barcolor)
-        cbar.outline.set_edgecolor(barcolor)
+        # ------------------------
+        # Optional colorbar
+        # ------------------------
+        if show_colorbar:
+            divider = make_axes_locatable(ax)
+            cax = divider.append_axes("right", size="5%", pad=0.1)
+            cbar = plt.colorbar(color_gradient, cax=cax)
+            value_label = 'Time (ns)' if plot_time else 'Photoelectron Count (a.u.)'
+            scale_label = ' (log scale)' if log_scale else ''
+            cbar.set_label(f'{value_label}{scale_label}', color=barcolor, fontsize=14)
+            cbar.ax.yaxis.set_tick_params(color=barcolor, labelcolor=barcolor)
+            cbar.outline.set_edgecolor(barcolor)
 
-        # Explicitly set the tick formatter and locator to ensure ticks appear
-        if log_scale:
-            from matplotlib.ticker import LogLocator, LogFormatter
-            cbar.ax.yaxis.set_major_locator(LogLocator(numticks=10))
-            cbar.ax.yaxis.set_minor_locator(LogLocator(numticks=10, subs='auto'))
-            cbar.ax.yaxis.set_major_formatter(LogFormatter())
-        else:
-            from matplotlib.ticker import MaxNLocator
-            cbar.ax.yaxis.set_major_locator(MaxNLocator(nbins=6))
+            if log_scale:
+                from matplotlib.ticker import LogLocator, LogFormatter
+                cbar.ax.yaxis.set_major_locator(LogLocator(numticks=10))
+                cbar.ax.yaxis.set_minor_locator(LogLocator(numticks=10, subs='auto'))
+                cbar.ax.yaxis.set_major_formatter(LogFormatter())
+            else:
+                from matplotlib.ticker import MaxNLocator
+                cbar.ax.yaxis.set_major_locator(MaxNLocator(nbins=6))
 
-        # Ensure tick labels are white and visible
-        cbar.ax.tick_params(axis='y', which='both', colors=barcolor, labelcolor=barcolor)
-        for label in cbar.ax.get_yticklabels():
-            label.set_color(barcolor)
+            cbar.ax.tick_params(axis='y', which='both', colors=barcolor, labelcolor=barcolor)
+            for label in cbar.ax.get_yticklabels():
+                label.set_color(barcolor)
 
-        # Adjust layout
+        # ------------------------
+        # Optional external legend
+        # ------------------------
+        if external_legend is not None:
+            ax.legend(handles=external_legend, loc='upper right', fontsize=12)
+
         plt.tight_layout()
 
         if file_name:
-            plt.savefig(file_name, bbox_inches='tight', pad_inches=0.1, facecolor=facecolor, edgecolor='none')
+            plt.savefig(file_name, bbox_inches='tight', pad_inches=0.1,
+                        facecolor=facecolor, edgecolor='none')
         plt.show()
 
     return display_detector_data
