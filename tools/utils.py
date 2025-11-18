@@ -1533,3 +1533,55 @@ def check_track_endpoint_in_detector(position, direction, energy_mev, range_para
         return False
 
     return True
+
+
+def generate_random_event_params(key, detector_bounds, fraction=0.7):
+    """
+    Generate random event parameters based on detector geometry.
+    
+    This is the same function from optimize.py, shared for consistency.
+    """
+    if detector_bounds['type'] == 'cylinder':
+        r_vert = jax.random.uniform(key, shape=(), minval=0, maxval=detector_bounds['r'] * fraction)
+        key, _ = jax.random.split(key)
+        theta = jax.random.uniform(key, shape=(), minval=0, maxval=2*jnp.pi)
+        key, _ = jax.random.split(key)
+        z_vert = jax.random.uniform(key, shape=(), minval=-detector_bounds['H']/2 * fraction, 
+                                   maxval=detector_bounds['H']/2 * fraction)
+        position = jnp.array([r_vert * jnp.cos(theta), r_vert * jnp.sin(theta), z_vert])
+        
+    elif detector_bounds['type'] == 'sphere':
+        u = jax.random.uniform(key, shape=())
+        key, _ = jax.random.split(key)
+        cos_theta = jax.random.uniform(key, shape=(), minval=-1, maxval=1)
+        key, _ = jax.random.split(key)
+        phi = jax.random.uniform(key, shape=(), minval=0, maxval=2*jnp.pi)
+        
+        r = detector_bounds['r'] * fraction * jnp.cbrt(u)
+        sin_theta = jnp.sqrt(1 - cos_theta**2)
+        position = jnp.array([r * sin_theta * jnp.cos(phi), 
+                             r * sin_theta * jnp.sin(phi), 
+                             r * cos_theta])
+        
+    elif detector_bounds['type'] == 'box':
+        position = jax.random.uniform(key, shape=(3,), 
+                                    minval=jnp.array([-detector_bounds['x']/2, 
+                                                     -detector_bounds['y']/2, 
+                                                     -detector_bounds['z']/2]) * fraction,
+                                    maxval=jnp.array([detector_bounds['x']/2, 
+                                                     detector_bounds['y']/2, 
+                                                     detector_bounds['z']/2]) * fraction)
+    
+    # Random direction
+    key, _ = jax.random.split(key)
+    phi = jax.random.uniform(key, shape=(), minval=0, maxval=2*jnp.pi)
+    key, _ = jax.random.split(key)
+    cos_theta = jax.random.uniform(key, shape=(), minval=-1, maxval=1)
+    sin_theta = jnp.sqrt(1 - cos_theta**2)
+    direction = jnp.array([sin_theta * jnp.cos(phi), sin_theta * jnp.sin(phi), cos_theta])
+    
+    # Random energy
+    key, _ = jax.random.split(key)
+    energy = jax.random.uniform(key, shape=(), minval=500.0, maxval=1500.0)
+    
+    return position, direction, energy
