@@ -783,6 +783,152 @@ def save_single_event_with_extended_info(charges, times, params, extended_info=N
     
     return filename
 
+def save_single_event_with_label_info(extended_info, event_number=0, filename=None):
+    """
+    Save a single event with label-based structure to an HDF5 file.
+
+    This function saves events generated from PhotonSim's label system where photons
+    are classified by genealogy. The HDF5 structure includes:
+
+    Label-level arrays:
+    - Q_per_label (N_labels, N_sensors): Charge contribution per label
+    - T_per_label (N_labels, N_sensors): Time per label
+    - Label_Genealogy: Variable-length array of genealogies
+    - Label_Category: Category code for each label
+    - Track kinematics per label: Position, Direction, Energy, Time, PDG
+
+    Aggregated values:
+    - Q_true (N_sensors): Sum of charges across all labels
+    - T_true (N_sensors): Min of times across all labels
+    - Q_reco (N_sensors): Optionally smeared Q_true
+    - T_reco (N_sensors): Optionally smeared T_true
+
+    Parameters
+    ----------
+    extended_info : dict
+        Dictionary containing label-based event information
+    event_number : int, optional
+        Event number, by default 0
+    filename : str, optional
+        Output filename, by default None (generates event_{number}.h5)
+
+    Returns
+    -------
+    str
+        Path to saved file
+    """
+    import h5py
+    import numpy as np
+
+    # If no filename provided, generate one
+    if filename is None:
+        filename = f'event_{event_number}.h5'
+
+    n_labels = extended_info['n_labels']
+    labels = extended_info['labels']
+    Q_per_label = extended_info['Q_per_label']
+    T_per_label = extended_info['T_per_label']
+    Q_true = extended_info['Q_true']
+    T_true = extended_info['T_true']
+    Q_reco = extended_info['Q_reco']
+    T_reco = extended_info['T_reco']
+
+    # Extract track info for each label
+    label_categories = []
+    label_pdgs = []
+    label_positions = []
+    label_directions = []
+    label_energies = []
+    label_times = []
+    label_parent_ids = []
+    label_genealogies = []
+
+    for label in labels:
+        track_info = label['track_info']
+        genealogy = label['genealogy']
+
+        if track_info is not None:
+            label_categories.append(track_info['category'])
+            label_pdgs.append(track_info['pdg'])
+            label_positions.append(track_info['position'])
+            label_directions.append(track_info['direction'])
+            label_energies.append(track_info['energy'])
+            label_times.append(track_info['time'])
+            label_parent_ids.append(track_info['parent_id'])
+        else:
+            # Fallback if no track info
+            label_categories.append(-1)
+            label_pdgs.append(0)
+            label_positions.append([0.0, 0.0, 0.0])
+            label_directions.append([0.0, 0.0, 1.0])
+            label_energies.append(0.0)
+            label_times.append(0.0)
+            label_parent_ids.append(-1)
+
+        label_genealogies.append(genealogy)
+
+    # Convert to numpy arrays
+    label_categories = np.array(label_categories, dtype=np.int32)
+    label_pdgs = np.array(label_pdgs, dtype=np.int32)
+    label_positions = np.array(label_positions, dtype=np.float64)
+    label_directions = np.array(label_directions, dtype=np.float64)
+    label_energies = np.array(label_energies, dtype=np.float64)
+    label_times = np.array(label_times, dtype=np.float64)
+    label_parent_ids = np.array(label_parent_ids, dtype=np.int32)
+
+    # Category names mapping
+    category_names = {
+        0: 'Primary',
+        1: 'DecayElectron',
+        2: 'SecondaryPion',
+        3: 'GammaShower',
+        -1: 'Unknown'
+    }
+    label_category_names = [category_names.get(cat, 'Unknown') for cat in label_categories]
+
+    with h5py.File(filename, 'w') as f:
+        # Save Q and T arrays
+        f.create_dataset('Q_per_label', data=np.array(Q_per_label))  # (N_labels, N_sensors)
+        f.create_dataset('T_per_label', data=np.array(T_per_label))  # (N_labels, N_sensors)
+        f.create_dataset('Q_true', data=np.array(Q_true))            # (N_sensors,)
+        f.create_dataset('T_true', data=np.array(T_true))            # (N_sensors,)
+        f.create_dataset('Q_reco', data=np.array(Q_reco))            # (N_sensors,)
+        f.create_dataset('T_reco', data=np.array(T_reco))            # (N_sensors,)
+
+        # Save label information
+        f.create_dataset('n_labels', data=n_labels)
+        f.create_dataset('Label_Category', data=label_categories)
+
+        # Save category names as variable-length strings
+        dt = h5py.string_dtype(encoding='utf-8')
+        f.create_dataset('Label_CategoryName', data=label_category_names, dtype=dt)
+
+        # Save track kinematics
+        f.create_dataset('Track_PDG', data=label_pdgs)
+        f.create_dataset('Track_Position', data=label_positions)    # (N_labels, 3)
+        f.create_dataset('Track_Direction', data=label_directions)  # (N_labels, 3)
+        f.create_dataset('Track_Energy', data=label_energies)
+        f.create_dataset('Track_Time', data=label_times)
+        f.create_dataset('Track_ParentID', data=label_parent_ids)
+
+        # Save genealogies as variable-length array
+        # Create a special dtype for variable-length integer arrays
+        vlen_int_dtype = h5py.vlen_dtype(np.dtype('int32'))
+        genealogy_data = np.array([np.array(g, dtype=np.int32) for g in label_genealogies], dtype=object)
+        f.create_dataset('Label_Genealogy', data=genealogy_data, dtype=vlen_int_dtype)
+
+        # Save metadata (ensure scalars are numpy types)
+        f.create_dataset('event_number', data=np.int32(event_number))
+        f.create_dataset('primary_energy', data=np.float64(extended_info['primary_energy']))
+        f.create_dataset('apply_smearing', data=np.bool_(extended_info['apply_smearing']))
+
+        # Save source information (also ensure proper types for attributes)
+        f.attrs['source'] = extended_info['source']
+        f.attrs['n_labels'] = np.int32(n_labels)
+        f.attrs['n_sensors'] = np.int32(Q_true.shape[0])
+
+    return filename
+
 def merge_event_files(output_dir, merged_filename='merged_events.h5', remove_individuals=True):
     """
     Merge individual event HDF5 files into a single merged file.

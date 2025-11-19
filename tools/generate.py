@@ -6,10 +6,21 @@ import h5py
 import numpy as np
 import jax.numpy as jnp
 import time
-from tqdm import tqdm 
+from tqdm import tqdm
 from tools.siren.core import *
-from tools.utils import save_single_event_with_extended_info, get_random_root_entry_index, superimpose_multiple_events, merge_event_files
+from tools.utils import save_single_event_with_extended_info, save_single_event_with_label_info, get_random_root_entry_index, superimpose_multiple_events, merge_event_files
 from jax import jit
+
+def jax_rotate_vector_local(vector, axis, angle):
+    """
+    Rotate a vector around an axis by an angle using Rodrigues' rotation formula.
+    Local copy to avoid circular import.
+    """
+    cos_angle = jnp.cos(angle)
+    sin_angle = jnp.sin(angle)
+    dot = jnp.dot(axis, vector)
+    cross = jnp.cross(axis, vector)
+    return vector * cos_angle + cross * sin_angle + axis * dot * (1.0 - cos_angle)
 
 def normalize(v, epsilon=1e-8):
     """Normalize a vector with numerical stability.
@@ -529,6 +540,152 @@ def read_photon_data_from_photonsim(root_file_path, entry_index):
         'energy': energy  # Energy in MeV
     }
 
+def read_label_data_from_photonsim(root_file_path, entry_index):
+    """
+    Read label-based photon data from a PhotonSim ROOT file for a specific entry.
+    This function reads the new label system that classifies photons by genealogy.
+
+    Parameters
+    ----------
+    root_file_path : str
+        Path to the PhotonSim ROOT file
+    entry_index : int
+        Entry index to read from the file
+
+    Returns
+    -------
+    dict
+        Dictionary containing:
+        - 'n_labels': int, number of unique labels
+        - 'labels': list of dicts, each containing:
+            - 'genealogy': list of track IDs in the genealogy
+            - 'photon_indices': list of photon indices belonging to this label
+            - 'track_info': dict with track information (position, direction, energy, time, pdg, category, etc.)
+        - 'photon_origins': array (N_photons, 3) in cm
+        - 'photon_directions': array (N_photons, 3)
+        - 'photon_times': array (N_photons,) in ns
+        - 'primary_energy': float, energy in MeV
+    """
+    import uproot
+    import numpy as np
+    import jax.numpy as jnp
+
+    # Open the ROOT file
+    root_file = uproot.open(root_file_path)
+    tree = root_file['OpticalPhotons']
+
+    # Read all necessary data for the specified entry
+    branches_to_read = [
+        'PrimaryEnergy',
+        'PhotonPosX', 'PhotonPosY', 'PhotonPosZ',
+        'PhotonDirX', 'PhotonDirY', 'PhotonDirZ',
+        'PhotonTime',
+        'NLabels',
+        'Label_GenealogySize', 'Label_GenealogyData',
+        'Label_PhotonIDsSize', 'Label_PhotonIDsData',
+        'TrackInfo_TrackID', 'TrackInfo_Category', 'TrackInfo_SubID',
+        'TrackInfo_PosX', 'TrackInfo_PosY', 'TrackInfo_PosZ',
+        'TrackInfo_DirX', 'TrackInfo_DirY', 'TrackInfo_DirZ',
+        'TrackInfo_Energy', 'TrackInfo_Time',
+        'TrackInfo_ParentTrackID', 'TrackInfo_PDG'
+    ]
+
+    tree_data = tree.arrays(branches_to_read, entry_start=entry_index, entry_stop=entry_index+1, library='np')
+
+    # Extract primary energy
+    primary_energy = float(tree_data['PrimaryEnergy'][0])
+
+    # Extract photon data (convert mm to cm)
+    photon_posx = tree_data['PhotonPosX'][0] / 10.0
+    photon_posy = tree_data['PhotonPosY'][0] / 10.0
+    photon_posz = tree_data['PhotonPosZ'][0] / 10.0
+    photon_positions = np.column_stack((photon_posx, photon_posy, photon_posz))
+
+    photon_dirx = tree_data['PhotonDirX'][0]
+    photon_diry = tree_data['PhotonDirY'][0]
+    photon_dirz = tree_data['PhotonDirZ'][0]
+    photon_directions = np.column_stack((photon_dirx, photon_diry, photon_dirz))
+
+    photon_times = tree_data['PhotonTime'][0]
+
+    # Extract label system
+    n_labels = int(tree_data['NLabels'][0])
+
+    # Parse genealogy data
+    genealogy_sizes = tree_data['Label_GenealogySize'][0]
+    genealogy_data = tree_data['Label_GenealogyData'][0]
+
+    # Parse photon IDs data
+    photon_ids_sizes = tree_data['Label_PhotonIDsSize'][0]
+    photon_ids_data = tree_data['Label_PhotonIDsData'][0]
+
+    # Extract track info arrays
+    track_ids = tree_data['TrackInfo_TrackID'][0]
+    track_categories = tree_data['TrackInfo_Category'][0]
+    track_subids = tree_data['TrackInfo_SubID'][0]
+    track_posx = tree_data['TrackInfo_PosX'][0] / 10.0  # mm to cm
+    track_posy = tree_data['TrackInfo_PosY'][0] / 10.0
+    track_posz = tree_data['TrackInfo_PosZ'][0] / 10.0
+    track_dirx = tree_data['TrackInfo_DirX'][0]
+    track_diry = tree_data['TrackInfo_DirY'][0]
+    track_dirz = tree_data['TrackInfo_DirZ'][0]
+    track_energies = tree_data['TrackInfo_Energy'][0]
+    track_times = tree_data['TrackInfo_Time'][0]
+    track_parent_ids = tree_data['TrackInfo_ParentTrackID'][0]
+    track_pdgs = tree_data['TrackInfo_PDG'][0]
+
+    # Build track info dictionary for quick lookup
+    track_info_dict = {}
+    for i in range(len(track_ids)):
+        track_info_dict[int(track_ids[i])] = {
+            'track_id': int(track_ids[i]),
+            'category': int(track_categories[i]),
+            'sub_id': int(track_subids[i]),
+            'position': np.array([track_posx[i], track_posy[i], track_posz[i]]),
+            'direction': np.array([track_dirx[i], track_diry[i], track_dirz[i]]),
+            'energy': float(track_energies[i]),
+            'time': float(track_times[i]),
+            'parent_id': int(track_parent_ids[i]),
+            'pdg': int(track_pdgs[i])
+        }
+
+    # Parse labels
+    labels = []
+    genealogy_offset = 0
+    photon_ids_offset = 0
+
+    for label_idx in range(n_labels):
+        # Extract genealogy for this label
+        gen_size = int(genealogy_sizes[label_idx])
+        genealogy = [int(genealogy_data[genealogy_offset + i]) for i in range(gen_size)]
+        genealogy_offset += gen_size
+
+        # Extract photon indices for this label
+        photon_ids_size = int(photon_ids_sizes[label_idx])
+        photon_indices = [int(photon_ids_data[photon_ids_offset + i]) for i in range(photon_ids_size)]
+        photon_ids_offset += photon_ids_size
+
+        # Get track info for the LAST track in this label's genealogy
+        # Genealogy is ordered parent->child, so last track is the actual particle that produced photons
+        last_track_id = genealogy[-1] if genealogy else None
+        track_info = track_info_dict.get(last_track_id, None) if last_track_id is not None else None
+
+        labels.append({
+            'genealogy': genealogy,
+            'photon_indices': photon_indices,
+            'track_info': track_info
+        })
+
+    return {
+        'n_labels': n_labels,
+        'labels': labels,
+        'photon_origins': jnp.array(photon_positions),
+        'photon_directions': jnp.array(photon_directions),
+        'photon_times': jnp.array(photon_times),
+        'primary_energy': primary_energy,
+        'track_info_dict': track_info_dict  # Include full track info for reference
+    }
+
 def generate_events_from_photonsim(event_simulator, particles_dict, sensor_params, output_dir=None,
                                   n_events=None, batch_size=100, master_seed=None,
                                   merge_output=True, merged_filename='merged_events.h5'):
@@ -761,6 +918,377 @@ def generate_events_from_photonsim(event_simulator, particles_dict, sensor_param
     print(f"\nSuccessfully processed {len(saved_files)} events.")
     print(f"Each event contains {len(particle_types)} particles: {', '.join(particle_types)}")
     print(f"All events saved to {output_dir} with sequential naming (event_0.h5, event_1.h5, ...)")
+
+    # Merge files if requested
+    if merge_output:
+        print("\nMerging individual event files...")
+        merged_path = merge_event_files(output_dir, merged_filename=merged_filename, remove_individuals=True)
+        return merged_path
+
+    return saved_files
+
+def generate_events_from_photonsim_labels(event_simulator, root_file_path, sensor_params, output_dir=None,
+                                         n_events=None, batch_size=100, master_seed=None,
+                                         apply_smearing=False, apply_rotation=False, merge_output=True,
+                                         merged_filename='merged_events.h5'):
+    """
+    Generate and save events from PhotonSim ROOT file using label-based processing.
+    Each label (genealogy) is processed independently through LUCiD simulation.
+
+    This is the NEW workflow where:
+    - PhotonSim runs multiple primaries per job
+    - Photons are classified by labels (genealogies)
+    - Q and T arrays have shape (N_labels, N_sensors) instead of (N_particles, N_sensors)
+    - Q_true and T_true are computed by aggregating across labels
+    - Q_reco and T_reco can optionally be computed by applying smearing
+
+    Parameters
+    ----------
+    event_simulator : function
+        The event simulation function to use (should have apply_smearing parameter)
+    root_file_path : str
+        Path to PhotonSim ROOT file containing multiple primaries and labels
+    sensor_params : tuple
+        scattering length, reflection rate, absorption length and gumbel_softmax
+    output_dir : str, optional
+        Directory to save output files, by default 'events'
+    n_events : int, optional
+        Number of events to generate, by default None (uses all entries)
+    batch_size : int, optional
+        Number of events to accumulate before saving in parallel, by default 100
+    master_seed : int, optional
+        Random seed for JAX PRNG key generation. If None, generates random seed, by default None
+    apply_smearing : bool, optional
+        If True, apply smearing to Q_true and T_true to get Q_reco and T_reco, by default False
+    apply_rotation : bool, optional
+        If True, apply random rotation per primary to all photons and tracks, by default False
+    merge_output : bool, optional
+        Whether to merge individual event files into a single HDF5 file, by default True
+    merged_filename : str, optional
+        Name of the merged output file, by default 'merged_events.h5'
+
+    Returns
+    -------
+    list or str
+        List of saved file paths, or path to merged file if merge_output=True
+    """
+    import uproot
+    import concurrent.futures
+    import time
+    import numpy as np
+    from tools.simulation import smear_charges_SK_like, smear_times
+
+    # Generate random seed if not provided
+    if master_seed is None:
+        master_seed = int(time.time() * 1000000) % (2**32)
+        print(f"Generated random master seed from time: {master_seed}")
+    else:
+        print(f"Using provided master seed: {master_seed}")
+
+    # Create output directory
+    os.makedirs(output_dir, exist_ok=True)
+
+    # Open ROOT file and get number of entries
+    print(f"Loading ROOT file: {root_file_path}")
+    root_file = uproot.open(root_file_path)
+    tree = root_file['OpticalPhotons']
+    num_entries = tree.num_entries
+    print(f"  Found {num_entries} entries")
+    root_file.close()
+
+    # Determine number of events to generate
+    if n_events is None:
+        n_events = num_entries
+        print(f"No n_events specified, using all {n_events} entries")
+
+    print(f"\nGenerating {n_events} events using label-based processing...")
+    print(f"Using batch size of {batch_size} events for multithreaded I/O")
+    print(f"Apply smearing: {apply_smearing}")
+    print(f"Apply rotation: {apply_rotation}")
+    print(f"Saving events to directory: {output_dir}")
+
+    saved_files = []
+
+    # Create batches
+    num_batches = (n_events + batch_size - 1) // batch_size
+
+    # Process each batch
+    for batch_idx in range(num_batches):
+        start_idx = batch_idx * batch_size
+        end_idx = min(start_idx + batch_size, n_events)
+        batch_size_actual = end_idx - start_idx
+
+        print(f"Processing batch {batch_idx+1}/{num_batches} (events {start_idx} to {end_idx-1})")
+
+        # Lists to accumulate batch data
+        batch_data = []
+        batch_filenames = []
+        batch_indices = []
+
+        # Process each entry in the current batch
+        for event_idx in tqdm(range(start_idx, end_idx), desc=f"Generating batch {batch_idx+1}", unit="event"):
+            # Initialize master random key for this event
+            master_key = jax.random.PRNGKey(master_seed + event_idx)
+
+            # Read label data from PhotonSim
+            label_data = read_label_data_from_photonsim(root_file_path, event_idx)
+
+            n_labels = label_data['n_labels']
+            labels = label_data['labels']
+            all_photon_origins = label_data['photon_origins']
+            all_photon_directions = label_data['photon_directions']
+            all_photon_times = label_data['photon_times']
+
+            # Group labels by primary and generate rotations if requested
+            rotation_per_label = {}  # Maps label_idx -> (rotation_axis, rotation_angle)
+
+            if apply_rotation:
+                # Group labels by their root primary (genealogy[0])
+                primary_groups = {}  # Maps primary_track_id -> list of label indices
+                for label_idx, label in enumerate(labels):
+                    genealogy = label['genealogy']
+                    if len(genealogy) > 0:
+                        primary_track_id = genealogy[0]  # Root of the genealogy tree
+                        if primary_track_id not in primary_groups:
+                            primary_groups[primary_track_id] = []
+                        primary_groups[primary_track_id].append(label_idx)
+
+                # Generate one rotation per primary group
+                for primary_track_id, label_indices in primary_groups.items():
+                    # Get the primary's true direction from the first label in the group
+                    first_label_idx = label_indices[0]
+                    first_label = labels[first_label_idx]
+
+                    # Find the primary track info in genealogy
+                    primary_track_info = label_data['track_info_dict'].get(primary_track_id)
+                    if primary_track_info is not None:
+                        source_direction = jnp.array(primary_track_info['direction'])
+                    else:
+                        # Fallback: use [0,0,1] if we can't find primary info
+                        source_direction = jnp.array([0.0, 0.0, 1.0])
+
+                    # Generate random target direction using spherical coordinates
+                    rotation_key, master_key = jax.random.split(master_key)
+                    random_values = jax.random.uniform(rotation_key, shape=(2,))
+                    cos_theta = 2.0 * random_values[0] - 1.0
+                    phi = 2.0 * jnp.pi * random_values[1]
+                    sin_theta = jnp.sqrt(1.0 - cos_theta**2)
+
+                    target_direction = jnp.array([
+                        sin_theta * jnp.cos(phi),
+                        sin_theta * jnp.sin(phi),
+                        cos_theta
+                    ])
+
+                    # Calculate rotation from source to target
+                    source_norm = source_direction / (jnp.linalg.norm(source_direction) + 1e-8)
+                    target_norm = target_direction / (jnp.linalg.norm(target_direction) + 1e-8)
+
+                    rotation_axis = jnp.cross(source_norm, target_norm)
+                    axis_norm = jnp.linalg.norm(rotation_axis)
+
+                    # Handle parallel or anti-parallel cases
+                    rotation_axis = jnp.where(
+                        axis_norm < 1e-6,
+                        jnp.array([1.0, 0.0, 0.0]),  # Arbitrary axis for zero rotation
+                        rotation_axis / (axis_norm + 1e-8)
+                    )
+
+                    rotation_angle = jnp.arccos(jnp.clip(jnp.dot(source_norm, target_norm), -1.0, 1.0))
+
+                    # Store rotation for all labels in this primary group
+                    for label_idx in label_indices:
+                        rotation_per_label[label_idx] = (rotation_axis, rotation_angle)
+
+            # Lists to collect Q and T for each label
+            Q_per_label_list = []
+            T_per_label_list = []
+
+            # Get number of sensors from simulation (will be determined from first run)
+            n_sensors = None
+
+            # Process each label
+            for label_idx, label in enumerate(labels):
+                photon_indices = label['photon_indices']
+
+                if len(photon_indices) == 0:
+                    # No photons for this label - skip or use zeros
+                    if n_sensors is None:
+                        # We don't know sensor count yet, will handle after first label
+                        continue
+                    Q_per_label_list.append(jnp.zeros(n_sensors))
+                    T_per_label_list.append(jnp.zeros(n_sensors))
+                    continue
+
+                # Convert photon indices to numpy array for JAX indexing
+                photon_indices_array = np.array(photon_indices, dtype=np.int32)
+
+                # Extract photons for this label
+                label_photon_origins = all_photon_origins[photon_indices_array]
+                label_photon_directions = all_photon_directions[photon_indices_array]
+                label_photon_times = all_photon_times[photon_indices_array]
+
+                N = len(label_photon_origins)
+
+                # Padding (1_000_000 is hardcoded in _simulation_core)
+                padding_size = max(0, 1_000_000 - N)
+
+                # Pad arrays
+                padded_origins = jnp.pad(label_photon_origins, ((0, padding_size), (0, 0)),
+                                        mode='constant', constant_values=0)
+
+                default_direction = jnp.array([0.0, 0.0, 1.0])
+                padding_directions = jnp.tile(default_direction, (padding_size, 1))
+                if padding_size > 0:
+                    padded_directions = jnp.concatenate([label_photon_directions, padding_directions], axis=0)
+                else:
+                    padded_directions = label_photon_directions
+
+                padded_times = jnp.pad(label_photon_times, (0, padding_size),
+                                       mode='constant', constant_values=0)
+
+                # Track parameters (use track info from label)
+                track_info = label['track_info']
+                if track_info is not None:
+                    track_energy = track_info['energy']
+                    track_position = jnp.array(track_info['position'])
+                    track_direction = jnp.array(track_info['direction'])
+                else:
+                    # Fallback if no track info
+                    track_energy = label_data['primary_energy']
+                    track_position = jnp.array([0.0, 0.0, 0.0])
+                    track_direction = jnp.array([0.0, 0.0, 1.0])
+
+                # Apply rotation to track info if this label has a rotation
+                if label_idx in rotation_per_label:
+                    rotation_axis, rotation_angle = rotation_per_label[label_idx]
+
+                    # Rotate track position and direction
+                    track_position = jax_rotate_vector_local(track_position, rotation_axis, rotation_angle)
+                    track_direction = jax_rotate_vector_local(track_direction, rotation_axis, rotation_angle)
+
+                    # Update the label's track_info with rotated values
+                    if track_info is not None:
+                        track_info['position'] = np.array(track_position)
+                        track_info['direction'] = np.array(track_direction)
+
+                # Prepare photonsim data dict
+                # Always include rotation parameters (with defaults if no rotation)
+                if label_idx in rotation_per_label:
+                    rotation_axis, rotation_angle = rotation_per_label[label_idx]
+                    do_apply_rotation = True
+                else:
+                    rotation_axis = jnp.array([1.0, 0.0, 0.0])  # Dummy axis
+                    rotation_angle = 0.0  # No rotation
+                    do_apply_rotation = False
+
+                photonsim_data = {
+                    'photon_origins': padded_origins,
+                    'photon_directions': padded_directions,
+                    'photon_times': padded_times,
+                    'N': N,
+                    'apply_rotation': do_apply_rotation,
+                    'rotation_axis': rotation_axis,
+                    'rotation_angle': rotation_angle
+                }
+
+                track_params = (track_energy, track_position, track_direction)
+
+                # Get simulation key
+                sim_key, master_key = jax.random.split(master_key)
+
+                # Run simulation for this label (WITHOUT smearing)
+                # The event_simulator should respect apply_smearing=False internally
+                Q_label, T_label = event_simulator(track_params, sensor_params, sim_key, photonsim_data)
+
+                # Store sensor count from first result
+                if n_sensors is None:
+                    n_sensors = len(Q_label)
+
+                Q_per_label_list.append(Q_label)
+                T_per_label_list.append(T_label)
+
+            # Handle case where all labels have no photons
+            if n_sensors is None:
+                print(f"Warning: Event {event_idx} has no photons in any label, skipping...")
+                continue
+
+            # Ensure we have arrays for all labels (fill with zeros if needed)
+            while len(Q_per_label_list) < n_labels:
+                Q_per_label_list.append(jnp.zeros(n_sensors))
+                T_per_label_list.append(jnp.zeros(n_sensors))
+
+            # Stack into arrays (N_labels, N_sensors)
+            Q_per_label = jnp.stack(Q_per_label_list, axis=0)
+            T_per_label = jnp.stack(T_per_label_list, axis=0)
+
+            # Calculate Q_true and T_true by aggregating across labels
+            Q_true = jnp.sum(Q_per_label, axis=0)  # Sum charges
+            T_true = jnp.min(jnp.where(T_per_label > 0, T_per_label, jnp.inf), axis=0)  # Min times
+            T_true = jnp.where(jnp.isfinite(T_true), T_true, 0.0)  # Replace inf with 0
+
+            # Apply smearing if requested
+            if apply_smearing:
+                reco_key, master_key = jax.random.split(master_key)
+                smear_q_key, smear_t_key = jax.random.split(reco_key)
+                Q_reco = smear_charges_SK_like(Q_true, key=smear_q_key)
+                T_reco = smear_times(T_true, key=smear_t_key)
+            else:
+                Q_reco = Q_true
+                T_reco = T_true
+
+            # Create filename
+            event_number = event_idx
+            filename = os.path.join(output_dir, f'event_{event_number}.h5')
+
+            # Extended info with label structure
+            extended_info = {
+                'n_labels': n_labels,
+                'labels': labels,
+                'track_info_dict': label_data['track_info_dict'],
+                'primary_energy': label_data['primary_energy'],
+                'Q_per_label': Q_per_label,
+                'T_per_label': T_per_label,
+                'Q_true': Q_true,
+                'T_true': T_true,
+                'Q_reco': Q_reco,
+                'T_reco': T_reco,
+                'apply_smearing': apply_smearing,
+                'source': 'PhotonSim_Labels'
+            }
+
+            # Store for batch processing
+            batch_data.append(extended_info)
+            batch_filenames.append(filename)
+            batch_indices.append(event_number)
+
+        # Save all events in the batch using multithreading
+        # Note: We'll need to update save function to handle label-based structure
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            futures = [
+                executor.submit(
+                    save_single_event_with_label_info,  # New save function
+                    data,
+                    event_number=idx,
+                    filename=filename
+                )
+                for data, filename, idx in zip(batch_data, batch_filenames, batch_indices)
+            ]
+
+            for future in tqdm(
+                concurrent.futures.as_completed(futures),
+                desc=f"Saving batch {batch_idx+1}",
+                total=len(futures),
+                unit="file"
+            ):
+                try:
+                    saved_file = future.result()
+                    saved_files.append(saved_file)
+                except Exception as e:
+                    print(f"Error saving file: {e}")
+
+    print(f"\nSuccessfully processed {len(saved_files)} events with label-based structure.")
+    print(f"All events saved to {output_dir}")
 
     # Merge files if requested
     if merge_output:

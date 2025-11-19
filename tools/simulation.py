@@ -872,49 +872,49 @@ def create_event_simulator(detector, propagate_photons, Nphot, NUM_SENSORS, sens
 
     # Define simulation function for ROOT data
     @jax.jit
-    def _simulation_with_data(particle_params, detector_params, key, photon_data):
+    def _simulation_with_data(particle_params, detector_params, key, photonsim_data):
         """Simulate events using photon data from ROOT files."""
         energy, track_origin, track_direction = particle_params
 
-        # Transform photons from ROOT coordinate system
-        original_track_dir = jnp.array([0.0, 0.0, 1.0])
-        photon_origins = photon_data['photon_origins'] / 100.0  # cm to m (we are transforming mm to cm in the root file reading function)
-        photon_directions = photon_data['photon_directions']
-        photon_times = photon_data['photon_times']
+        # Extract photon data and convert cm to m
+        photon_origins = photonsim_data['photon_origins'] / 100.0  # cm to m
+        photon_directions = photonsim_data['photon_directions']
+        photon_times = photonsim_data['photon_times']
 
-        # Calculate rotation to align with track direction
-        track_direction_norm = jax_normalize(track_direction)
-        rotation_axis = jnp.cross(original_track_dir, track_direction_norm)
-        axis_norm = jnp.linalg.norm(rotation_axis)
+        # Apply rotation if specified (using jax.lax.cond for JIT compatibility)
+        def apply_rotation_fn(args):
+            origins, directions, rot_axis, rot_angle = args
+            rotated_directions = jax.vmap(
+                lambda v: jax_rotate_vector(v, rot_axis, rot_angle)
+            )(directions)
+            rotated_origins = jax.vmap(
+                lambda v: jax_rotate_vector(v, rot_axis, rot_angle)
+            )(origins)
+            return rotated_origins, rotated_directions
 
-        rotation_axis = jnp.where(
-            axis_norm < 1e-6,
-            jnp.array([1.0, 0.0, 0.0]),
-            rotation_axis / (axis_norm + 1e-8)
+        def no_rotation_fn(args):
+            origins, directions, _, _ = args
+            return origins, directions
+
+        # Get rotation parameters (always present in photonsim_data)
+        rotation_axis = photonsim_data['rotation_axis']
+        rotation_angle = photonsim_data['rotation_angle']
+        apply_rotation = photonsim_data['apply_rotation']
+
+        final_origins, final_directions = jax.lax.cond(
+            apply_rotation,
+            apply_rotation_fn,
+            no_rotation_fn,
+            (photon_origins, photon_directions, rotation_axis, rotation_angle)
         )
-
-        rotation_angle = jnp.arccos(jnp.clip(
-            jnp.dot(original_track_dir, track_direction_norm), -1.0, 1.0
-        ))
-
-        # Apply rotation and translation
-        rotated_directions = jax.vmap(
-            lambda v: jax_rotate_vector(v, rotation_axis, rotation_angle)
-        )(photon_directions)
-
-        rotated_origins = jax.vmap(
-            lambda v: jax_rotate_vector(v, rotation_axis, rotation_angle)
-        )(photon_origins)
-
-        final_origins = rotated_origins + track_origin[None, :]
 
         # Create mask for valid photons
         n_rays = photon_origins.shape[0]
-        mask = jnp.arange(n_rays) < photon_data['N']
+        mask = jnp.arange(n_rays) < photonsim_data['N']
         photon_intensities = 1. * mask.astype(jnp.float32)
 
         return _common_propagation(
-            final_origins, rotated_directions, photon_intensities, photon_times,
+            final_origins, final_directions, photon_intensities, photon_times,
             n_rays, detector_params, key, NUM_SENSORS, K, max_sensors_per_cell,
             propagate_photons, photon_update_fn
         )
