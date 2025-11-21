@@ -2,6 +2,7 @@
 *.pdf
 *.pkl
 *.h5
+*.html
 *.png
 !figures/det_repo_img.png
 !figures/combined_3x2_charge_displays.png
@@ -20,6 +21,7 @@ sftp-config.json
 **/trained_model/
 **/data/
 **/siren_training/**
+**/debug/
 !data/
 !data/**/
 !data/**/photonsim_params.json

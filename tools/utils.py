@@ -103,6 +103,80 @@ def normalize_particle_type_for_path(particle_type):
         # Default to the input if not in map (for backward compatibility)
         return particle_type
 
+def get_refractive_index(material='water'):
+    """
+    Get the refractive index for a given material.
+
+    Parameters
+    ----------
+    material : str
+        Material type (e.g., 'water', 'ice')
+
+    Returns
+    -------
+    float
+        Refractive index of the material
+
+    Raises
+    ------
+    ValueError
+        If material is not supported
+    """
+    # Refractive indices for different materials
+    refractive_indices = {
+        'water': 1.33,
+        # Future materials can be added here:
+        # 'ice': 1.31,
+        # 'liquid_scintillator': 1.50,
+    }
+
+    if material not in refractive_indices:
+        supported_materials = ', '.join(refractive_indices.keys())
+        raise ValueError(
+            f"Material '{material}' is not currently supported.\n"
+            f"Supported materials: {supported_materials}\n"
+            f"Development for additional materials is ongoing."
+        )
+
+    # Print warning that only water is fully supported
+    if material != 'water':
+        print(f"⚠️  WARNING: Material '{material}' is experimental.")
+        print(f"   Only 'water' is fully validated and supported.")
+        print(f"   Development for other materials is ongoing.")
+
+    return refractive_indices[material]
+
+def get_speed_of_light_in_material(material='water'):
+    """
+    Calculate the speed of light in a given material.
+
+    Parameters
+    ----------
+    material : str
+        Material type (e.g., 'water', 'ice')
+
+    Returns
+    -------
+    float
+        Speed of light in the material (m/ns)
+
+    Notes
+    -----
+    The speed of light in a material is calculated as c/n where:
+    - c = 0.299792 m/ns (speed of light in vacuum)
+    - n = refractive index of the material
+
+    For water (n=1.33): c/n ≈ 0.2253 m/ns
+    """
+    # Speed of light in vacuum (m/ns)
+    SPEED_OF_LIGHT_VACUUM = 0.299792  # m/ns
+
+    # Get refractive index for the material
+    n = get_refractive_index(material)
+
+    # Calculate speed of light in material
+    return SPEED_OF_LIGHT_VACUUM / n
+
 def unpack_t0_params(particle_type='muon', material='water'):
     """
     Load and unpack t0 timing parameters for a given particle type and material.

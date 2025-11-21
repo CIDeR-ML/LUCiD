@@ -1,4 +1,5 @@
 {
+  "material": "water",
   "detector_type": "sphere",
   "geometry_definitions": {
     "radius": 17.5,

@@ -9,10 +9,59 @@ from .box import Box
 
 
 def load_detector_config(file_path):
-    """Function to load detector configuration from JSON file"""
+    """
+    Load detector configuration from JSON file.
+
+    Parameters
+    ----------
+    file_path : str
+        Path to the detector configuration JSON file
+
+    Returns
+    -------
+    dict
+        Detector configuration dictionary
+
+    Raises
+    ------
+    ValueError
+        If required fields are missing from the configuration
+    """
     with open(file_path, 'r') as file:
         config = json.load(file)
+
+    # Validate required fields
+    if 'detector_type' not in config:
+        raise ValueError(f"Detector config {file_path} missing required field 'detector_type'")
+
+    if 'material' not in config:
+        raise ValueError(
+            f"Detector config {file_path} missing required field 'material'.\n"
+            f"Please add '\"material\": \"water\"' to the configuration file."
+        )
+
+    if 'geometry_definitions' not in config:
+        raise ValueError(f"Detector config {file_path} missing required field 'geometry_definitions'")
+
     return config
+
+
+def get_material_from_config(file_path):
+    """
+    Get the material property from detector configuration.
+
+    Parameters
+    ----------
+    file_path : str
+        Path to the detector configuration JSON file
+
+    Returns
+    -------
+    str
+        Material type (e.g., 'water', 'ice')
+    """
+    config = load_detector_config(file_path)
+    return config['material']
 
 
 def load_detector_geom(file_path):
