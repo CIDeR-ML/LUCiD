@@ -476,10 +476,8 @@ for event_data in events_data:
         contributing_labels = np.where(label_charges > 0)[0]
         sensor_label_assignments.append((sensor_idx, contributing_labels, label_charges[contributing_labels]))
 
-    # Compute two color schemes: (A) max-charge label, (B) overlap=white
-    overlap_color = 'lightgray'
-    sensor_colors_maxcharge = []  # Mode A: color of label with max charge
-    sensor_colors_overlap = []    # Mode B: white if overlap, else label color
+    # Compute sensor colors based on label with max charge
+    sensor_colors_maxcharge = []
     sensor_charges_list = []
 
     for sensor_idx, contrib_labels, charges in sensor_label_assignments:
@@ -487,18 +485,14 @@ for event_data in events_data:
         sensor_charges_list.append(total_charge)
 
         if len(contrib_labels) == 1:
-            # Single label: use its color in both modes
+            # Single label: use its color
             label_idx = contrib_labels[0]
             color = event_data['label_colors'][label_idx]
             sensor_colors_maxcharge.append(color)
-            sensor_colors_overlap.append(color)
         else:
-            # Multiple labels (overlap)
-            # Mode A: color of label with max charge
+            # Multiple labels: use color of label with max charge
             max_label_idx = contrib_labels[np.argmax(charges)]
             sensor_colors_maxcharge.append(event_data['label_colors'][max_label_idx])
-            # Mode B: fixed overlap color
-            sensor_colors_overlap.append(overlap_color)
 
     # Get hit sensor positions and normals
     if len(hit_indices) > 0:
@@ -510,7 +504,6 @@ for event_data in events_data:
         hit_positions_sorted = hit_positions[depth_order]
         hit_normals_sorted = hit_normals[depth_order]
         sensor_colors_maxcharge_sorted = [sensor_colors_maxcharge[i] for i in depth_order]
-        sensor_colors_overlap_sorted = [sensor_colors_overlap[i] for i in depth_order]
         sensor_charges_sorted = [sensor_charges_list[i] for i in depth_order]
 
         # Create sensor discs for each threshold level
@@ -518,7 +511,6 @@ for event_data in events_data:
         threshold_levels = [1, 5, 10, 20, 50]
         n_sensor_trace_sets = len(threshold_levels)
         sensor_a_trace_indices = []
-        sensor_b_trace_indices = []
 
         for threshold_idx, threshold in enumerate(threshold_levels):
             # Filter sensors by threshold
@@ -530,9 +522,8 @@ for event_data in events_data:
             positions_filtered = hit_positions_sorted[mask]
             normals_filtered = hit_normals_sorted[mask]
             colors_maxcharge_filtered = [c for i, c in enumerate(sensor_colors_maxcharge_sorted) if mask[i]]
-            colors_overlap_filtered = [c for i, c in enumerate(sensor_colors_overlap_sorted) if mask[i]]
 
-            # Create disc meshes - MODE A (max charge)
+            # Create disc meshes colored by label with max charge
             all_vertices_a = []
             all_faces_a = []
             all_colors_a = []
@@ -574,49 +565,17 @@ for event_data in events_data:
                 sensor_a_trace_indices.append(current_trace_index)
                 current_trace_index += 1
 
-            # Create disc meshes - MODE B (overlap=white)
-            all_vertices_b = []
-            all_faces_b = []
-            all_colors_b = []
-            vertex_offset = 0
-
-            for pos, normal, color in zip(positions_filtered, normals_filtered, colors_overlap_filtered):
-                vertices, faces = create_disc_mesh(pos, normal, disc_radius, n_segments=12)
-                faces_adjusted = faces + vertex_offset
-                all_vertices_b.append(vertices)
-                all_faces_b.append(faces_adjusted)
-                all_colors_b.extend([color] * len(vertices))
-                vertex_offset += len(vertices)
-
-            if all_vertices_b:
-                combined_vertices_b = np.vstack(all_vertices_b)
-                combined_faces_b = np.vstack(all_faces_b)
-
-                fig.add_trace(
-                    go.Mesh3d(
-                        x=combined_vertices_b[:, 0],
-                        y=combined_vertices_b[:, 1],
-                        z=combined_vertices_b[:, 2],
-                        i=combined_faces_b[:, 0],
-                        j=combined_faces_b[:, 1],
-                        k=combined_faces_b[:, 2],
-                        vertexcolor=all_colors_b,
-                        opacity=0.9,
-                        name=f'Sensors Overlap (Q≥{threshold} PE)',
-                        showlegend=False,
-                        lighting=dict(ambient=0.8, diffuse=0.8, specular=0.1),
-                        visible=False,  # Hidden by default
-                        hoverinfo='skip'
-                    ),
-                    row=1, col=1
-                )
-                sensor_b_trace_indices.append(current_trace_index)
-                current_trace_index += 1
-
     # Add stacked histograms for Q_true and T_true
     # Sort labels by total charge (most charge at bottom of stack)
     label_total_charges = [event_data['label_q_values'][i] for i in range(event_data['n_labels'])]
     sorted_label_indices = np.argsort(label_total_charges)[::-1]  # Descending order (largest first, will be at bottom)
+
+    # Filter to only include labels that exist in LUCiD data
+    n_lucid_labels = Q_per_label.shape[0]
+    sorted_label_indices = [idx for idx in sorted_label_indices if idx < n_lucid_labels]
+
+    # Track actual number of histogram traces added
+    n_q_histogram_traces = 0
 
     # Q_true histogram (stacked by label) - distribution of charge values
     for idx in sorted_label_indices:
@@ -638,6 +597,10 @@ for event_data in events_data:
                 ),
                 row=2, col=1
             )
+            n_q_histogram_traces += 1
+
+    # Track actual number of T histogram traces added
+    n_t_histogram_traces = 0
 
     # T_true histogram (stacked by label) - distribution of time values
     for idx in sorted_label_indices:
@@ -661,6 +624,7 @@ for event_data in events_data:
                 ),
                 row=2, col=2
             )
+            n_t_histogram_traces += 1
 
     # Update subplot axes (linear scale for counts)
     fig.update_xaxes(title_text="Charge (PE)", row=2, col=1, color='white', gridcolor='gray')
@@ -669,23 +633,21 @@ for event_data in events_data:
     fig.update_yaxes(title_text="Count", row=2, col=2, color='white', gridcolor='gray')
 
     # Calculate trace counts
-    # Structure: photons, arrows, sensors_mode_A (per threshold), sensors_mode_B (per threshold), Q_histograms, T_histograms
-    n_sensor_traces_per_mode = n_sensor_trace_sets if len(hit_indices) > 0 else 0
+    # Structure: photons, arrows, sensors (per threshold), Q_histograms, T_histograms
+    n_sensor_traces = n_sensor_trace_sets if len(hit_indices) > 0 else 0
     n_histogram_traces_per_plot = event_data['n_labels']
     n_total_traces = len(fig.data)
 
     # Create visibility arrays
     # Helper function to build visibility array
-    def make_visibility(show_photons, show_arrows, show_sensors_mode_a, show_sensors_mode_b, show_histograms):
+    def make_visibility(show_photons, show_arrows, show_sensors, show_histograms):
         vis = []
         # Photons
         vis.extend([show_photons] * n_photon_traces)
         # Arrows
         vis.extend([show_arrows] * n_arrow_traces)
-        # Sensors Mode A (per threshold)
-        vis.extend([show_sensors_mode_a] * n_sensor_traces_per_mode)
-        # Sensors Mode B (per threshold)
-        vis.extend([show_sensors_mode_b] * n_sensor_traces_per_mode)
+        # Sensors (per threshold)
+        vis.extend([show_sensors] * n_sensor_traces)
         # Q histograms
         vis.extend([show_histograms] * n_histogram_traces_per_plot)
         # T histograms
@@ -695,35 +657,37 @@ for event_data in events_data:
     # Use the tracked trace indices for button logic
     photon_indices = photon_trace_indices
     arrow_indices = arrow_trace_indices
-    sensor_a_indices = sensor_a_trace_indices
-    sensor_b_indices = sensor_b_trace_indices
-    sensor_all_indices = sensor_a_indices + sensor_b_indices
+    sensor_indices = sensor_a_trace_indices
 
     # Button visibility states
-    show_all = make_visibility(True, True, True, False, True)
+    # Build show_all manually to only show first threshold
+    show_all = []
+    show_all.extend([True] * n_photon_traces)  # All photons visible
+    show_all.extend([True] * n_arrow_traces)   # All arrows visible
+    # Only first threshold visible
+    for i in range(len(sensor_indices)):
+        show_all.append(i == 0)  # Only first threshold visible
+    show_all.extend([True] * n_q_histogram_traces)  # Q histograms visible
+    show_all.extend([True] * n_t_histogram_traces)  # T histograms visible
 
     # Create slider steps for charge threshold
     slider_steps = []
     for threshold_idx, threshold in enumerate(threshold_levels):
-        # Create visibility for this threshold: hide all sensor traces except the one for this threshold
+        # Create visibility for this threshold
         step_vis = []
-        # Photons and arrows: keep current state (will be overridden by buttons)
+        # Photons and arrows: keep current state (use None to not change)
         step_vis.extend([None] * (n_photon_traces + n_arrow_traces))
-        # Sensors Mode A: show only this threshold level
-        for i in range(n_sensor_traces_per_mode):
+        # Sensors: show only this threshold level
+        for i in range(n_sensor_traces):
             step_vis.append(i == threshold_idx)
-        # Sensors Mode B: hide all (unless overlap mode is active)
-        step_vis.extend([False] * n_sensor_traces_per_mode)
         # Histograms: keep visible
-        step_vis.extend([None] * (2 * n_histogram_traces_per_plot))
+        step_vis.extend([None] * (n_q_histogram_traces + n_t_histogram_traces))
 
         slider_steps.append(dict(
             method="update",
             args=[{"visible": step_vis}],
             label=f"{threshold} PE"
         ))
-
-    # No overlap mode visibility arrays needed - will use restyle with specific trace indices
 
     # Update layout
     primary_desc = ', '.join(sorted(primary_particles)) if primary_particles else "Unknown"
@@ -838,12 +802,12 @@ for event_data in events_data:
                 direction="left",
                 buttons=[
                     dict(
-                        args=[{"visible": True}, sensor_a_indices + sensor_b_indices],
+                        args=[{"visible": True}, sensor_indices],
                         label="Sensors ON",
                         method="restyle"
                     ),
                     dict(
-                        args=[{"visible": False}, sensor_a_indices + sensor_b_indices],
+                        args=[{"visible": False}, sensor_indices],
                         label="Sensors OFF",
                         method="restyle"
                     )
@@ -853,34 +817,6 @@ for event_data in events_data:
                 x=0.87,
                 xanchor="left",
                 y=0.10,
-                yanchor="top",
-                bgcolor='rgba(50,50,50,0.8)',
-                bordercolor='white',
-                font=dict(color='white', size=14)
-            ),
-            # Toggle Overlap Mode
-            dict(
-                type="buttons",
-                direction="left",
-                buttons=[
-                    dict(
-                        args=[{"visible": [True]}, sensor_a_indices],
-                        args2=[{"visible": [False]}, sensor_b_indices],
-                        label="Max Charge",
-                        method="restyle"
-                    ),
-                    dict(
-                        args=[{"visible": [False]}, sensor_a_indices],
-                        args2=[{"visible": [True]}, sensor_b_indices],
-                        label="Overlap Gray",
-                        method="restyle"
-                    )
-                ],
-                pad={"r": 5, "t": 5},
-                showactive=False,
-                x=0.87,
-                xanchor="left",
-                y=0.06,
                 yanchor="top",
                 bgcolor='rgba(50,50,50,0.8)',
                 bordercolor='white',
