@@ -75,6 +75,64 @@ colors_palette = ['red', 'blue', 'green', 'orange', 'purple', 'cyan', 'magenta',
                   'brown', 'pink', 'olive', 'navy', 'teal', 'maroon']
 
 
+def create_cylinder(start, end, radius, n_segments=12):
+    """
+    Create a cylinder mesh from start to end point with given radius.
+    Returns vertices (x, y, z) and faces (i, j, k) for Mesh3d.
+    """
+    direction = end - start
+    length = np.linalg.norm(direction)
+
+    if length < 1e-6:
+        return [], [], [], [], [], []
+
+    direction = direction / length
+
+    # Find perpendicular vectors
+    if abs(direction[2]) < 0.9:
+        perp1 = np.cross(direction, np.array([0, 0, 1]))
+    else:
+        perp1 = np.cross(direction, np.array([1, 0, 0]))
+    perp1 = perp1 / np.linalg.norm(perp1)
+    perp2 = np.cross(direction, perp1)
+    perp2 = perp2 / np.linalg.norm(perp2)
+
+    # Generate cylinder vertices
+    angles = np.linspace(0, 2*np.pi, n_segments, endpoint=False)
+    vertices = []
+
+    # Bottom circle
+    for angle in angles:
+        offset = radius * (np.cos(angle) * perp1 + np.sin(angle) * perp2)
+        vertices.append(start + offset)
+
+    # Top circle
+    for angle in angles:
+        offset = radius * (np.cos(angle) * perp1 + np.sin(angle) * perp2)
+        vertices.append(end + offset)
+
+    vertices = np.array(vertices)
+
+    # Generate faces (triangles)
+    faces_i, faces_j, faces_k = [], [], []
+    for i in range(n_segments):
+        next_i = (i + 1) % n_segments
+        # Side faces (2 triangles per segment)
+        # Triangle 1
+        faces_i.append(i)
+        faces_j.append(next_i)
+        faces_k.append(i + n_segments)
+        # Triangle 2
+        faces_i.append(next_i)
+        faces_j.append(next_i + n_segments)
+        faces_k.append(i + n_segments)
+
+    if len(vertices) == 0:
+        return [], [], [], [], [], []
+
+    return vertices[:, 0], vertices[:, 1], vertices[:, 2], faces_i, faces_j, faces_k
+
+
 def print_genealogy_chain(genealogy, track_info_dict, pdg_to_name, category_names):
     """Print the genealogy chain with indentation showing hierarchy"""
     print("Genealogy chain (parent → child):")
@@ -99,6 +157,7 @@ photonsim_data = read_label_data_from_photonsim(root_file, event_idx)
 n_labels = photonsim_data['n_labels']
 labels = photonsim_data['labels']
 track_info_dict = photonsim_data['track_info_dict']
+all_photon_origins = photonsim_data['photon_origins']  # For photon visualization
 print(f"PhotonSim: {n_labels} labels")
 
 # Load LUCiD data
@@ -163,6 +222,36 @@ for label_idx, label in enumerate(labels):
     print(f"  Direction: [{track_info['direction'][0]:.3f}, {track_info['direction'][1]:.3f}, {track_info['direction'][2]:.3f}]")
     print(f"  Total charge deposited: {total_charge:.1f} PE")
     print(f"  Number of photons: {photon_count}")
+
+print()
+
+# Sample photons for visualization
+n_photons_to_sample = 500  # Sample 500 photons per label
+sampled_photons_by_label = []
+master_seed = 42  # For reproducible sampling
+
+print(f"Sampling {n_photons_to_sample} photons per label for visualization...")
+for label_idx, label in enumerate(label_info):
+    photon_indices = labels[label['idx']]['photon_indices']
+
+    if len(photon_indices) == 0:
+        sampled_photons_by_label.append(np.array([]).reshape(0, 3))
+        continue
+
+    # Sample photons
+    photon_indices_array = np.array(photon_indices, dtype=np.int32)
+    n_to_sample = min(n_photons_to_sample, len(photon_indices))
+    np.random.seed(master_seed + label_idx + event_idx * 100)
+    sampled_indices = np.random.choice(len(photon_indices), size=n_to_sample, replace=False)
+    selected_photon_indices = photon_indices_array[sampled_indices]
+
+    # Get photon positions (already in cm from PhotonSim)
+    photon_origins = all_photon_origins[selected_photon_indices]
+    # Convert from cm to m
+    photon_origins_m = photon_origins / 100.0
+
+    sampled_photons_by_label.append(photon_origins_m)
+    print(f"  Label {label_idx}: Sampled {n_to_sample} photons")
 
 print()
 
@@ -280,6 +369,89 @@ fig = go.Figure()
 # Calculate sensor disc radius
 disc_radius = detector.S_radius * 1.0
 
+# Track indices for photon and arrow traces
+photon_trace_indices = []
+arrow_trace_indices = []
+
+# Create photon and arrow traces for each label
+print("Creating photon and arrow traces...")
+for i, label in enumerate(label_info):
+    photons = sampled_photons_by_label[i]
+    color = label['color']
+    label_name = label['name']
+
+    # Get track position and direction (convert from cm to m)
+    track_info = labels[label['idx']]['track_info']
+    track_pos = np.array(track_info['position']) / 100.0  # cm -> m
+    track_dir = np.array(track_info['direction'])
+
+    # Add photon scatter trace
+    if len(photons) > 0:
+        fig.add_trace(
+            go.Scatter3d(
+                x=photons[:, 0], y=photons[:, 1], z=photons[:, 2],
+                mode='markers',
+                marker=dict(size=2, color=color, opacity=0.3),
+                name=label_name,
+                legendgroup=f'label{i}',
+                showlegend=False,
+                visible=True  # Visible by default (photons is default view)
+            )
+        )
+        photon_trace_indices.append(len(fig.data) - 1)
+        print(f"  Added photon trace for {label_name}: {len(photons)} photons")
+
+    # Add arrow (cylinder + cone) to show track direction
+    arrow_scale = 0.20  # Arrow length in meters (20 cm)
+    cylinder_radius = 0.015  # Cylinder radius in meters (1.5 cm)
+
+    # Draw the cylinder shaft
+    cylinder_end = track_pos + track_dir * arrow_scale
+    cyl_x, cyl_y, cyl_z, cyl_i, cyl_j, cyl_k = create_cylinder(
+        track_pos, cylinder_end, cylinder_radius
+    )
+
+    if len(cyl_x) > 0:
+        fig.add_trace(
+            go.Mesh3d(
+                x=cyl_x, y=cyl_y, z=cyl_z,
+                i=cyl_i, j=cyl_j, k=cyl_k,
+                color=color, opacity=1.0,
+                name=f'{label_name} track',
+                legendgroup=f'label{i}',
+                showlegend=False,
+                visible=True,  # Visible by default
+                lighting=dict(ambient=0.8, diffuse=0.8, specular=0.2),
+                flatshading=False
+            )
+        )
+        arrow_trace_indices.append(len(fig.data) - 1)
+
+        # Add cone arrowhead
+        tip_x = track_pos[0] + track_dir[0] * arrow_scale
+        tip_y = track_pos[1] + track_dir[1] * arrow_scale
+        tip_z = track_pos[2] + track_dir[2] * arrow_scale
+
+        fig.add_trace(
+            go.Cone(
+                x=[tip_x], y=[tip_y], z=[tip_z],
+                u=[track_dir[0]], v=[track_dir[1]], w=[track_dir[2]],
+                colorscale=[[0, color], [1, color]],
+                sizemode="absolute",
+                sizeref=0.2,  # Cone size in meters (20 cm)
+                showscale=False,
+                name=f'{label_name} direction',
+                legendgroup=f'label{i}',
+                showlegend=False,
+                visible=True  # Visible by default
+            )
+        )
+        arrow_trace_indices.append(len(fig.data) - 1)
+
+print(f"  Total photon traces: {len(photon_trace_indices)}")
+print(f"  Total arrow traces: {len(arrow_trace_indices)}")
+print()
+
 # Create "All" trace showing total charge across all labels
 all_hit_mask = Q_true >= min_charge
 all_hit_indices = np.where(all_hit_mask)[0]
@@ -329,7 +501,7 @@ if len(all_hit_indices) > 0:
             name='All Labels',
             showlegend=False,
             lighting=dict(ambient=0.8, diffuse=0.8, specular=0.1),
-            visible=False,  # Hidden by default, "By Label" shows first
+            visible=False,  # Hidden by default, "Photons + Arrows" shows first
             colorbar=dict(
                 title="Charge (PE)",
                 x=0.80,  # Much closer to plot
@@ -387,7 +559,7 @@ if len(all_hit_indices) > 0:
             name='By Label',
             showlegend=False,  # No legend
             lighting=dict(ambient=0.8, diffuse=0.8, specular=0.1),
-            visible=True,  # Show by default (first slider item)
+            visible=False,  # Hidden by default, "Photons + Arrows" shows first
             hoverinfo='skip'
         )
     )
@@ -464,7 +636,7 @@ for label_idx, info in enumerate(label_info):
             name=info['name'],
             showlegend=False,
             lighting=dict(ambient=0.8, diffuse=0.8, specular=0.1),
-            visible=False,  # Hidden by default, "By Label" shows first
+            visible=False,  # Hidden by default, "Photons + Arrows" shows first
             colorbar=dict(
                 title="Charge (PE)",
                 x=0.80,  # Much closer to plot
@@ -484,7 +656,19 @@ print()
 # Create slider steps
 slider_steps = []
 
-# Step 0: "By Label" - show discrete color-coded sensors (default view)
+# Step 0: "Photons + Arrows" - show photons and track direction arrows (default view)
+step_vis = [False] * len(fig.data)
+for idx in photon_trace_indices:
+    step_vis[idx] = True
+for idx in arrow_trace_indices:
+    step_vis[idx] = True
+slider_steps.append(dict(
+    method="update",
+    args=[{"visible": step_vis}],
+    label="Photons + Arrows"
+))
+
+# Step 1: "By Label" - show discrete color-coded sensors
 if by_label_trace_idx is not None:
     step_vis = [False] * len(fig.data)
     step_vis[by_label_trace_idx] = True
@@ -494,7 +678,7 @@ if by_label_trace_idx is not None:
         label="By Label"
     ))
 
-# Step 1: "All" - show total charge across all labels
+# Step 2: "All" - show total charge across all labels
 if all_trace_idx is not None:
     step_vis = [False] * len(fig.data)
     step_vis[all_trace_idx] = True
@@ -504,7 +688,7 @@ if all_trace_idx is not None:
         label="All"
     ))
 
-# Steps 2+: Individual labels
+# Steps 3+: Individual labels
 for label_idx, info in enumerate(label_info):
     # Create visibility array: show only this label's sensors
     step_vis = [False] * len(fig.data)
@@ -555,6 +739,60 @@ fig.update_layout(
         "width": 800,  # Wider to accommodate more info
         "height": None  # Auto height
     }],
+    updatemenus=[
+        # Toggle Photons
+        dict(
+            type="buttons",
+            direction="left",
+            buttons=[
+                dict(
+                    args=[{"visible": True}, photon_trace_indices],
+                    label="Photons ON",
+                    method="restyle"
+                ),
+                dict(
+                    args=[{"visible": False}, photon_trace_indices],
+                    label="Photons OFF",
+                    method="restyle"
+                )
+            ],
+            pad={"r": 5, "t": 5},
+            showactive=False,
+            x=0.87,
+            xanchor="left",
+            y=0.18,
+            yanchor="top",
+            bgcolor='rgba(50,50,50,0.8)',
+            bordercolor='white',
+            font=dict(color='white', size=14)
+        ),
+        # Toggle Arrows
+        dict(
+            type="buttons",
+            direction="left",
+            buttons=[
+                dict(
+                    args=[{"visible": True}, arrow_trace_indices],
+                    label="Arrows ON",
+                    method="restyle"
+                ),
+                dict(
+                    args=[{"visible": False}, arrow_trace_indices],
+                    label="Arrows OFF",
+                    method="restyle"
+                )
+            ],
+            pad={"r": 5, "t": 5},
+            showactive=False,
+            x=0.87,
+            xanchor="left",
+            y=0.14,
+            yanchor="top",
+            bgcolor='rgba(50,50,50,0.8)',
+            bordercolor='white',
+            font=dict(color='white', size=14)
+        ),
+    ],
     sliders=[
         dict(
             active=0,
