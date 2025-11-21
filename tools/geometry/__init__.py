@@ -23,7 +23,8 @@ from .box import Box
 from .detector import (
     load_detector_config,
     load_detector_geom,
-    generate_detector
+    generate_detector,
+    get_material_from_config
 )
 
 # Export all public functions and classes for backward compatibility
@@ -43,5 +44,6 @@ __all__ = [
     # Detector functions
     'load_detector_config',
     'load_detector_geom',
-    'generate_detector'
+    'generate_detector',
+    'get_material_from_config'
 ]

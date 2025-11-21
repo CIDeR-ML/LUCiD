@@ -1,4 +1,5 @@
 {
+  "material": "water",
   "detector_type": "box",
   "geometry_definitions": {
     "length": 22.0,

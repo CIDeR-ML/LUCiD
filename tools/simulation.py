@@ -3,8 +3,8 @@ from tools.generate import get_isotropic_rays, photonsim_differentiable_get_rays
 from tools.propagation.cylinder import create_photon_propagator
 from tools.propagation.sphere import create_sphere_photon_propagator
 from tools.propagation.box import create_box_photon_propagator, box_bounds_check
-from tools.geometry import generate_detector
-from tools.utils import unpack_t0_params, unpack_photonsim_params
+from tools.geometry import generate_detector, get_material_from_config
+from tools.utils import unpack_t0_params, unpack_photonsim_params, get_speed_of_light_in_material
 import jax
 import jax.numpy as jnp
 from typing import Optional, Tuple
@@ -24,7 +24,7 @@ from tools.siren.training.inference import SIRENPredictor
 def setup_event_simulator(json_filename, n_photons=1_000_000, temperature=0.2, K=5,
                           is_data=False, is_calibration=False, max_sensors_per_cell=4,
                           detector_type='Cylinder', use_expected_value=True,
-                          material='water', particle='muon', apply_smearing=True):
+                          particle='muon', apply_smearing=True):
     """
     Sets up and returns an event simulator with the specified configuration.
 
@@ -51,13 +51,16 @@ def setup_event_simulator(json_filename, n_photons=1_000_000, temperature=0.2, K
         - None: Auto-select based on mode
     detector_type : str, optional
         Type of detector geometry: 'Cylinder', 'Sphere', or 'Box'. Default is 'Cylinder' for backward compatibility.
-    material : str, optional
-        Material type (e.g., 'water', 'ice'), default 'water'
     particle : str, optional
         Particle type (e.g., 'muon', 'electron'), default 'muon'
     apply_smearing : bool, optional
         If True, apply charge and time smearing to simulate detector resolution effects.
         If False, return true values without smearing (default: False)
+
+    Notes
+    -----
+    Material is now read from the detector configuration JSON file.
+    The config file must include a 'material' field (e.g., "material": "water").
 
     Returns
     -------
@@ -72,7 +75,10 @@ def setup_event_simulator(json_filename, n_photons=1_000_000, temperature=0.2, K
     # Validate detector type
     if detector_type not in ['Cylinder', 'Sphere', 'Box']:
         raise ValueError(f"detector_type must be 'Cylinder', 'Sphere', or 'Box', got {detector_type}")
-    
+
+    # Read material from detector configuration
+    material = get_material_from_config(json_filename)
+
     # Initialize detector configuration based on type
     if detector_type == 'Cylinder':
         # Use cylinder implementation
@@ -278,7 +284,7 @@ def create_photonsim_siren_grid(photonsim_predictor, n_bins):
 
 def photon_iteration_sample(position, direction, time, surface_distance,
                             normal, scatter_length, reflection_rate,
-                            absorption_length, tau_gs, rng_key):
+                            absorption_length, tau_gs, rng_key, speed_of_light):
     """
     Sampling version of photon iteration that makes binary decisions.
 
@@ -307,6 +313,8 @@ def photon_iteration_sample(position, direction, time, surface_distance,
         Temperature parameter for Gumbel-softmax (included for signature compatibility, not used)
     rng_key : jax.random.PRNGKey
         Random key for sampling
+    speed_of_light : float
+        Speed of light in the medium (m/ns), used to convert distance to time
 
     Returns
     -------
@@ -369,8 +377,10 @@ def photon_iteration_sample(position, direction, time, surface_distance,
     )
 
     # Time increment based on distance traveled
+    # Convert distance (meters) to time (nanoseconds)
     distance_traveled = jnp.where(scatters, scatter_distance, surface_distance)
-    new_time = time + distance_traveled
+    time_increment = distance_traveled / speed_of_light  # m / (m/ns) = ns
+    new_time = time + time_increment  # ns + ns
 
     # Sample absorption as a binary event (Monte Carlo sampling)
     distance_traveled = jnp.where(scatters, scatter_distance, surface_distance)
@@ -395,7 +405,7 @@ def photon_iteration_sample(position, direction, time, surface_distance,
 
 def photon_iteration_update_factors(position, direction, time, surface_distance,
                                     normal, scatter_length, reflection_rate,
-                                    absorption_length, tau_gs, rng_key):
+                                    absorption_length, tau_gs, rng_key, speed_of_light):
     """
     An update function for photon propagation that employs a variance reduction technique through computation of expected values.
     It employs Gumbel-softmax sampling to blend reflection and scattering outcomes for full differentiability.
@@ -410,6 +420,7 @@ def photon_iteration_update_factors(position, direction, time, surface_distance,
       - absorption_length: scalar, mean free path for absorption.
       - tau_gs: scalar, temperature for Gumbel-softmax sampling.
       - rng_key: JAX PRNG key.
+      - speed_of_light: float, speed of light in the medium (m/ns), used to convert distance to time.
 
     Returns:
       - new_pos: (3,) array, updated photon position.
@@ -477,8 +488,10 @@ def photon_iteration_update_factors(position, direction, time, surface_distance,
     continuing_factor = reflect_prob * reflection_attenuation + scatter_prob * scatter_attenuation
 
     # Time increment based on distance traveled along the weighted path
+    # Convert distance (meters) to time (nanoseconds)
     distance_traveled = reflection_weight * surface_distance + scatter_weight * scatter_distance
-    new_time = time + distance_traveled
+    time_increment = distance_traveled / speed_of_light  # m / (m/ns) = ns
+    new_time = time + time_increment  # ns + ns
 
     return new_pos, new_dir, new_time, detect_prob, reflection_attenuation, continuing_factor
 
@@ -870,6 +883,9 @@ def create_event_simulator(detector, propagate_photons, Nphot, NUM_SENSORS, sens
     else:
         photon_update_fn = photon_iteration_update_factors
 
+    # Calculate speed of light in the material (m/ns)
+    SPEED_OF_LIGHT_MATERIAL = get_speed_of_light_in_material(material)
+
     # Define simulation function for ROOT data
     @jax.jit
     def _simulation_with_data(particle_params, detector_params, key, photonsim_data):
@@ -1071,9 +1087,12 @@ def create_event_simulator(detector, propagate_photons, Nphot, NUM_SENSORS, sens
             prop_results = propagate_fn(current_positions, current_directions)
             depositions = prop_results['sensor_weights']
             sensor_indices = prop_results['sensor_indices']
-            times = prop_results['times']
+            times_meters = prop_results['times']  # Ray parameter in meters
             hit_positions = prop_results['positions']
             normals = prop_results['normals']
+
+            # Convert ray parameter (meters) to time (nanoseconds)
+            times_ns = times_meters / SPEED_OF_LIGHT_MATERIAL  # m / (m/ns) = ns
 
             # Compute distances to intersection points
             surface_distances = jnp.linalg.norm(hit_positions - current_positions, axis=1) - 1e-6
@@ -1085,10 +1104,10 @@ def create_event_simulator(detector, propagate_photons, Nphot, NUM_SENSORS, sens
             # Apply photon update function (same signature for both modes)
             new_positions, new_directions, new_times, detect_probs, reflection_attenuations, continuing_factors = jax.vmap(
                 photon_update_fn,
-                in_axes=(0, 0, 0, 0, 0, None, None, None, None, 0)
+                in_axes=(0, 0, 0, 0, 0, None, None, None, None, 0, None)
             )(current_positions, current_directions, current_times,
               surface_distances, normals, scatter_length, reflection_rate,
-              absorption_length, tau_gs, rng_keys)
+              absorption_length, tau_gs, rng_keys, SPEED_OF_LIGHT_MATERIAL)
 
             nan_pos_mask = jnp.any(jnp.isnan(new_positions), axis=1)
             nan_dir_mask = jnp.any(jnp.isnan(new_directions), axis=1)
@@ -1152,15 +1171,33 @@ def create_event_simulator(detector, propagate_photons, Nphot, NUM_SENSORS, sens
             detected_intensity_factors = detect_probs * reflection_attenuations
             updated_weights = depositions * physical_intensities[None, :] * detected_intensity_factors[None, :]
 
-            total_times = times + current_times[:, None]  # convert to ns
+            # Calculate total detection times (both in nanoseconds)
+            total_times = times_ns + current_times[:, None]  # ns + ns
 
-            # jax.debug.print("Found {} Neg times", jnp.sum(times<0))
-            # jax.debug.print("Found {} Neg current_times", jnp.sum(current_times<0))
+            # DEBUG: Verify timing units for first iteration
+            def debug_timing():
+                jax.debug.print("=== TIMING DEBUG (Iteration 0) ===")
+                jax.debug.print("  current_times (photon creation): min={min:.2f} ns, max={max:.2f} ns, mean={mean:.2f} ns",
+                               min=jnp.min(current_times),
+                               max=jnp.max(current_times),
+                               mean=jnp.mean(current_times))
+                jax.debug.print("  times_ns (propagation to sensor): min={min:.2f} ns, max={max:.2f} ns, mean={mean:.2f} ns",
+                               min=jnp.min(times_ns),
+                               max=jnp.max(times_ns),
+                               mean=jnp.mean(times_ns))
+                jax.debug.print("  total_times (creation + propagation): min={min:.2f} ns, max={max:.2f} ns, mean={mean:.2f} ns",
+                               min=jnp.min(total_times),
+                               max=jnp.max(total_times),
+                               mean=jnp.mean(total_times))
+                jax.debug.print("  Speed of light in material: {:.4f} m/ns", SPEED_OF_LIGHT_MATERIAL)
+                return None
+
+            jax.lax.cond(i == 0, debug_timing, lambda: None)
 
             # Create outputs for this iteration
             iteration_weights = updated_weights
             iteration_indices = sensor_indices
-            iteration_times = total_times.squeeze(-1)
+            iteration_times = total_times.squeeze(-1)  # Already in nanoseconds
 
             # Apply stop_gradient to all state variables
             next_positions = jax.lax.stop_gradient(safe_new_positions)
@@ -1170,9 +1207,9 @@ def create_event_simulator(detector, propagate_photons, Nphot, NUM_SENSORS, sens
             # Stop gradient on survival attenuation factor to prevent gradient accumulation through decay chain
             next_survival_attenuation_factor = jax.lax.stop_gradient(new_survival_attenuation_factor)
 
-            # Return updated state and outputs
+            # Return updated state and outputs (times already in ns, no conversion needed)
             new_carry = (next_positions, next_directions, next_times, next_survival_attenuation_factor, key)
-            outputs = (iteration_weights, iteration_indices, iteration_times / (0.299792/1.33)) # take into account speed of light in the medium
+            outputs = (iteration_weights, iteration_indices, iteration_times)
 
             # jax.debug.print("ZZZ - Iteration {}: Found {} problematic next times with NaN", i, jnp.sum(jnp.isnan(next_times)))
             # jax.debug.print("ZZZ - Iteration {}: Found {} problematic next pos NaN", i, jnp.sum(jnp.isnan(next_positions)))

@@ -1,4 +1,5 @@
 {
+  "material": "water",
   "detector_type": "cylinder",
   "geometry_definitions": {
     "radius": 35.0,
