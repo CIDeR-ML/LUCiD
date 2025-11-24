@@ -99,7 +99,8 @@ def main():
         0,  # The number of photons is irrelevant in data mode as it is decided based on the input file.
         K=5,
         is_data=True,
-        temperature=0.0
+        temperature=0.0,
+        apply_smearing=False  # Do NOT smear per-label; smearing is applied after summing Q_per_label
     )
 
     # Define sensor parameters (same as generate_events.py)
