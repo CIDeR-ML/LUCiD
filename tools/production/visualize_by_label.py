@@ -169,7 +169,8 @@ for label_idx in range(n_labels):
         print(f"  Genealogy: {genealogy}")
 
     # Print detailed track info
-    pos_m = lucid_data['Track_Position'][label_idx]
+    # Positions are stored in centimeters, convert to meters for display
+    pos_m = lucid_data['Track_Position'][label_idx] / 100.0
     dir_vec = lucid_data['Track_Direction'][label_idx]
     print(f"  PDG: {pdg} ({particle_name})")
     print(f"  Category: {category_name}")
@@ -325,8 +326,9 @@ for i, label in enumerate(label_info):
     color = label['color']
     label_name = label['name']
 
-    # Get track position and direction (from LUCiD HDF5, stored in meters)
-    track_pos = lucid_data['Track_Position'][label['idx']]
+    # Get track position and direction (from LUCiD HDF5)
+    # Positions are stored in centimeters, convert to meters
+    track_pos = lucid_data['Track_Position'][label['idx']] / 100.0
     track_dir = lucid_data['Track_Direction'][label['idx']]
 
     # Add arrow (cylinder + cone) to show track direction
@@ -422,7 +424,7 @@ if len(all_hit_indices) > 0:
             colorbar=dict(title="Charge (PE)", x=1.15),
             name='All',
             showscale=True,
-            visible=True,
+            visible=False,
             lighting=dict(ambient=0.8, diffuse=0.5, specular=0.1),
             flatshading=True
         )
@@ -561,14 +563,15 @@ fig.add_trace(
         marker=dict(size=1, color='lightgray', opacity=0.1),
         name='Detector',
         showlegend=False,
-        visible=True
+        visible=False
     )
 )
+detector_trace_index = len(fig.data) - 1
 
 # Create slider steps
 slider_steps = []
 
-# Step 0: "Arrows" - show arrows only (default view since no photons)
+# Step 0: "Arrows" - show arrows only (no detector sensors)
 step_vis = [False] * len(fig.data)
 for idx in arrow_trace_indices:
     step_vis[idx] = True
@@ -578,7 +581,7 @@ slider_steps.append(dict(
     label="Arrows"
 ))
 
-# Step 1: "By Label" - show discrete color-coded sensors
+# Step 1: "By Label" - show discrete color-coded sensors (no detector dots)
 step_vis = [False] * len(fig.data)
 step_vis[len(arrow_trace_indices) + 1] = True  # By Label trace
 slider_steps.append(dict(
@@ -587,7 +590,7 @@ slider_steps.append(dict(
     label="By Label"
 ))
 
-# Step 2: "All" - show total charge across all labels
+# Step 2: "All" - show total charge across all labels (no detector dots)
 step_vis = [False] * len(fig.data)
 step_vis[len(arrow_trace_indices)] = True  # All trace
 slider_steps.append(dict(
@@ -596,7 +599,7 @@ slider_steps.append(dict(
     label="All"
 ))
 
-# Steps 3+: Individual labels
+# Steps 3+: Individual labels (no detector dots)
 for label_idx, info in enumerate(label_info):
     step_vis = [False] * len(fig.data)
     step_vis[len(arrow_trace_indices) + 2 + label_idx] = True  # Individual label trace
