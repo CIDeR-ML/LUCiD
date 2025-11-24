@@ -77,7 +77,12 @@ def main():
     parser.add_argument(
         '--apply-rotation',
         action='store_true',
-        help='Apply random rotation per primary to all photons and tracks (data augmentation)'
+        help='Apply random rotation per primary to all photons and tracks'
+    )
+    parser.add_argument(
+        '--apply-translation',
+        action='store_true',
+        help='Apply random translation per event to all photons and tracks'
     )
     args = parser.parse_args()
 
@@ -122,6 +127,7 @@ def main():
         print(f"  Master seed: {args.master_seed}")
     print(f"  Apply smearing: {args.apply_smearing}")
     print(f"  Apply rotation: {args.apply_rotation}")
+    print(f"  Apply translation: {args.apply_translation}")
 
     result = generate_events_from_photonsim_labels(
         event_simulator=simulate_event,
@@ -133,6 +139,8 @@ def main():
         master_seed=args.master_seed,
         apply_smearing=args.apply_smearing,
         apply_rotation=args.apply_rotation,
+        apply_translation=args.apply_translation,
+        detector_config_path=args.config,
         merge_output=True,
         merged_filename=args.merged_filename
     )
