@@ -1194,26 +1194,6 @@ def create_event_simulator(detector, propagate_photons, Nphot, NUM_SENSORS, sens
             # Calculate total detection times (both in nanoseconds)
             total_times = times_ns + current_times[:, None]  # ns + ns
 
-            # DEBUG: Verify timing units for first iteration
-            def debug_timing():
-                jax.debug.print("=== TIMING DEBUG (Iteration 0) ===")
-                jax.debug.print("  current_times (photon creation): min={min:.2f} ns, max={max:.2f} ns, mean={mean:.2f} ns",
-                               min=jnp.min(current_times),
-                               max=jnp.max(current_times),
-                               mean=jnp.mean(current_times))
-                jax.debug.print("  times_ns (propagation to sensor): min={min:.2f} ns, max={max:.2f} ns, mean={mean:.2f} ns",
-                               min=jnp.min(times_ns),
-                               max=jnp.max(times_ns),
-                               mean=jnp.mean(times_ns))
-                jax.debug.print("  total_times (creation + propagation): min={min:.2f} ns, max={max:.2f} ns, mean={mean:.2f} ns",
-                               min=jnp.min(total_times),
-                               max=jnp.max(total_times),
-                               mean=jnp.mean(total_times))
-                jax.debug.print("  Speed of light in material: {:.4f} m/ns", SPEED_OF_LIGHT_MATERIAL)
-                return None
-
-            jax.lax.cond(i == 0, debug_timing, lambda: None)
-
             # Create outputs for this iteration
             iteration_weights = updated_weights
             iteration_indices = sensor_indices

@@ -291,6 +291,21 @@ for root_id in sorted(root_tracks):
     genealogy_text_lines.append("<br>")
     genealogy_text_lines.extend(format_track_tree(root_id, track_tree, depth=0))
 
+# Add light containment information
+genealogy_text_lines.append("<br>")
+genealogy_text_lines.append("<br><b>LIGHT CONTAINMENT</b>")
+overall_containment = lucid_data['overall_light_containment']
+genealogy_text_lines.append(f"<br>Overall: {overall_containment*100:.1f}% of photons inside detector")
+
+# Add per-label containment
+light_containment_by_label = lucid_data['light_containment_by_label']
+for label_idx in range(n_labels):
+    color = colors_palette[label_idx % len(colors_palette)]
+    particle_name = pdg_to_name.get(int(lucid_data['Track_PDG'][label_idx]), f"PDG{int(lucid_data['Track_PDG'][label_idx])}")
+    containment = light_containment_by_label[label_idx]
+    particle_colored = f"<span style='color:{color};font-weight:bold'>{particle_name}</span>"
+    genealogy_text_lines.append(f"<br>&nbsp;&nbsp;Label {label_idx} ({particle_colored}): {containment*100:.1f}%")
+
 event_genealogy_text = "<br>".join(genealogy_text_lines) + "<br>&nbsp;<br>&nbsp;"
 
 print("Creating visualization...")
