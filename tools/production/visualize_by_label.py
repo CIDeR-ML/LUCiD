@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
 """
-Simplified sensor visualization by label.
+Simplified sensor visualization by label - HDF5 only version.
 
-This script visualizes sensor hits colored by charge value, with a slider to
-select which label's sensors to display. Provides a focused view for exploring
-how each label (particle type) contributes charge to different sensors.
+Shows sensor hits colored by charge value, with arrows showing track directions.
+No photon visualization - only tracks (arrows) and sensor hits.
 
 Usage:
-    python visualize_by_label.py <root_file> <hdf5_file> <detector_config> --event 0
+    python visualize_by_label.py <hdf5_file> <detector_config> --event 0
 """
 import sys
 sys.path.append('/Users/cjesus/Software/LUCiD')
@@ -15,7 +14,6 @@ sys.path.append('/Users/cjesus/Software/LUCiD')
 import os
 import numpy as np
 import plotly.graph_objects as go
-from tools.generate import read_label_data_from_photonsim
 from tools.production.label_data_utils import read_label_event_file
 from tools.geometry import generate_detector
 from tools.geometry.utils import calculate_surface_normals, create_disc_mesh
@@ -23,14 +21,12 @@ import argparse
 
 # Parse command line arguments
 parser = argparse.ArgumentParser(description='Visualize sensor hits by label')
-parser.add_argument('root_file', type=str, help='Input ROOT file from PhotonSim')
 parser.add_argument('hdf5_file', type=str, help='Input HDF5 file from LUCiD (label-based output)')
 parser.add_argument('detector_config', type=str, help='Detector configuration JSON file')
 parser.add_argument('--event', type=int, default=0, help='Event index to visualize (default: 0)')
 parser.add_argument('--min-charge', type=float, default=1.0, help='Minimum charge threshold in PE (default: 1.0)')
 args = parser.parse_args()
 
-root_file = args.root_file
 hdf5_file = args.hdf5_file
 detector_config = args.detector_config
 event_idx = args.event
@@ -39,7 +35,6 @@ min_charge = args.min_charge
 print("="*70)
 print(f"SENSOR VISUALIZATION BY LABEL")
 print("="*70)
-print(f"PhotonSim ROOT file: {root_file}")
 print(f"LUCiD HDF5 file: {hdf5_file}")
 print(f"Detector config: {detector_config}")
 print(f"Event: {event_idx}")
@@ -56,30 +51,19 @@ print()
 
 # PDG code to particle name mapping
 pdg_to_name = {
-    -211: 'pi-',
-    211: 'pi+',
-    -13: 'mu+',
-    13: 'mu-',
-    -11: 'e+',
-    11: 'e-',
-    22: 'gamma',
-    2212: 'p',
-    2112: 'n',
+    11: 'e-', -11: 'e+', 13: 'mu-', -13: 'mu+', 22: 'gamma',
+    111: 'pi0', 211: 'pi+', -211: 'pi-',
+    321: 'K+', -321: 'K-',
+    2212: 'proton', -2212: 'antiproton',
+    2112: 'neutron', -2112: 'antineutron'
 }
 
-# Category names
-category_names = {0: 'Primary', 1: 'DecayElectron', 2: 'SecondaryPion', 3: 'GammaShower'}
-
-# Define colors for labels
+# Define colors for labels (matching old visualization)
 colors_palette = ['red', 'blue', 'green', 'orange', 'purple', 'cyan', 'magenta', 'yellow',
                   'brown', 'pink', 'olive', 'navy', 'teal', 'maroon']
 
-
 def create_cylinder(start, end, radius, n_segments=12):
-    """
-    Create a cylinder mesh from start to end point with given radius.
-    Returns vertices (x, y, z) and faces (i, j, k) for Mesh3d.
-    """
+    """Create a cylinder mesh from start to end point with given radius."""
     direction = end - start
     length = np.linalg.norm(direction)
 
@@ -118,11 +102,9 @@ def create_cylinder(start, end, radius, n_segments=12):
     for i in range(n_segments):
         next_i = (i + 1) % n_segments
         # Side faces (2 triangles per segment)
-        # Triangle 1
         faces_i.append(i)
         faces_j.append(next_i)
         faces_k.append(i + n_segments)
-        # Triangle 2
         faces_i.append(next_i)
         faces_j.append(next_i + n_segments)
         faces_k.append(i + n_segments)
@@ -133,61 +115,36 @@ def create_cylinder(start, end, radius, n_segments=12):
     return vertices[:, 0], vertices[:, 1], vertices[:, 2], faces_i, faces_j, faces_k
 
 
-def print_genealogy_chain(genealogy, track_info_dict, pdg_to_name, category_names):
-    """Print the genealogy chain with indentation showing hierarchy"""
-    print("Genealogy chain (parent → child):")
-    for depth, track_id in enumerate(genealogy):
-        track = track_info_dict.get(track_id)
-        if track:
-            particle = pdg_to_name.get(track['pdg'], f"PDG{track['pdg']}")
-            category = category_names.get(track['category'], 'Unknown')
-            indent = "   " + " └─" * depth if depth > 0 else "  "
-            print(f"{indent}[{depth+1}] {particle} ({category}) - "
-                  f"TrackID: {track_id}, ParentID: {track['parent_id']}, "
-                  f"Energy: {track['energy']:.2f} MeV")
-        else:
-            print(f"  Warning: Track {track_id} not found in track_info_dict")
-
-
 print(f"Loading event {event_idx}...")
 print()
 
-# Load PhotonSim data
-photonsim_data = read_label_data_from_photonsim(root_file, event_idx)
-n_labels = photonsim_data['n_labels']
-labels = photonsim_data['labels']
-track_info_dict = photonsim_data['track_info_dict']
-all_photon_origins = photonsim_data['photon_origins']  # For photon visualization
-print(f"PhotonSim: {n_labels} labels")
-
-# Load LUCiD data
+# Load LUCiD data (contains all track and sensor information)
 lucid_data = read_label_event_file(hdf5_file, event_index=event_idx, verbose=False)
+n_labels = lucid_data['n_labels']
 Q_per_label = lucid_data['Q_per_label']  # Shape: (N_labels, N_sensors)
 T_per_label = lucid_data['T_per_label']
 Q_true = lucid_data['Q_true']
 
-print(f"LUCiD: Q_per_label shape {Q_per_label.shape}")
+print(f"Event: {n_labels} labels")
+print(f"Q_per_label shape: {Q_per_label.shape}")
 
 # Find global max charge for colorbar normalization
 global_max_charge = np.max(Q_per_label)
 print(f"Global max charge: {global_max_charge:.1f} PE")
 print()
 
-# Prepare label information
+# Prepare label information from HDF5 data
 label_info = []
-for label_idx, label in enumerate(labels):
-    if label_idx >= Q_per_label.shape[0]:
-        # LUCiD has fewer labels than PhotonSim
-        break
+for label_idx in range(n_labels):
+    pdg = lucid_data['Track_PDG'][label_idx]
+    particle_name = pdg_to_name.get(int(pdg), f'PDG{int(pdg)}')
 
-    track_info = label['track_info']
-    if track_info is None:
-        continue
+    # Get category name
+    category_name = lucid_data['Label_CategoryName'][label_idx]
+    if isinstance(category_name, bytes):
+        category_name = category_name.decode('utf-8')
 
-    pdg = track_info['pdg']
-    particle_name = pdg_to_name.get(pdg, f'PDG{pdg}')
-    category = category_names.get(track_info['category'], 'Unknown')
-    kinetic_energy = track_info['energy']  # MeV
+    kinetic_energy = lucid_data['Track_Energy'][label_idx]
     total_charge = np.sum(Q_per_label[label_idx, :])
 
     label_name = f"Label {label_idx}: {particle_name}"
@@ -195,7 +152,7 @@ for label_idx, label in enumerate(labels):
         'idx': label_idx,
         'name': label_name,
         'particle': particle_name,
-        'category': category,
+        'category': category_name,
         'energy': kinetic_energy,
         'total_charge': total_charge,
         'color': colors_palette[label_idx % len(colors_palette)]
@@ -203,119 +160,94 @@ for label_idx, label in enumerate(labels):
 
     # Print detailed label information
     print("=" * 80)
-    print(f"{label_name} ({category})")
+    print(f"{label_name} ({category_name})")
     print("=" * 80)
 
-    # Print genealogy chain
-    if len(label['genealogy']) > 0:
-        print_genealogy_chain(label['genealogy'], track_info_dict, pdg_to_name, category_names)
-        print()
+    # Print genealogy
+    genealogy = lucid_data['Label_Genealogy'][label_idx]
+    if len(genealogy) > 0:
+        print(f"  Genealogy: {genealogy}")
 
-    # Print detailed track info for the photon-producing track
-    photon_count = len(label['photon_indices'])
-    # Convert position from cm (PhotonSim) to m for display
-    pos_m = [track_info['position'][0]/100.0, track_info['position'][1]/100.0, track_info['position'][2]/100.0]
-    print(f"Track producing photons: TrackID {track_info['track_id']} ({particle_name})")
-    print(f"  Category: {category}")
+    # Print detailed track info
+    pos_m = lucid_data['Track_Position'][label_idx]
+    dir_vec = lucid_data['Track_Direction'][label_idx]
+    print(f"  PDG: {pdg} ({particle_name})")
+    print(f"  Category: {category_name}")
     print(f"  Kinetic Energy: {kinetic_energy:.2f} MeV")
     print(f"  Position: [{pos_m[0]:.3f}, {pos_m[1]:.3f}, {pos_m[2]:.3f}] m")
-    print(f"  Direction: [{track_info['direction'][0]:.3f}, {track_info['direction'][1]:.3f}, {track_info['direction'][2]:.3f}]")
+    print(f"  Direction: [{dir_vec[0]:.3f}, {dir_vec[1]:.3f}, {dir_vec[2]:.3f}]")
     print(f"  Total charge deposited: {total_charge:.1f} PE")
-    print(f"  Number of photons: {photon_count}")
 
 print()
 
-# Sample photons for visualization
-n_photons_to_sample = 500  # Sample 500 photons per label
-sampled_photons_by_label = []
-master_seed = 42  # For reproducible sampling
-
-print(f"Sampling {n_photons_to_sample} photons per label for visualization...")
-for label_idx, label in enumerate(label_info):
-    photon_indices = labels[label['idx']]['photon_indices']
-
-    if len(photon_indices) == 0:
-        sampled_photons_by_label.append(np.array([]).reshape(0, 3))
-        continue
-
-    # Sample photons
-    photon_indices_array = np.array(photon_indices, dtype=np.int32)
-    n_to_sample = min(n_photons_to_sample, len(photon_indices))
-    np.random.seed(master_seed + label_idx + event_idx * 100)
-    sampled_indices = np.random.choice(len(photon_indices), size=n_to_sample, replace=False)
-    selected_photon_indices = photon_indices_array[sampled_indices]
-
-    # Get photon positions (already in cm from PhotonSim)
-    photon_origins = all_photon_origins[selected_photon_indices]
-    # Convert from cm to m
-    photon_origins_m = photon_origins / 100.0
-
-    sampled_photons_by_label.append(photon_origins_m)
-    print(f"  Label {label_idx}: Sampled {n_to_sample} photons")
-
-print()
-
-# Calculate charge and average time for each track
-track_charge_time = {}  # {track_id: (charge, avg_time)}
-for label_idx in range(min(Q_per_label.shape[0], len(labels))):
-    label = labels[label_idx]
-    genealogy = label['genealogy']
-    last_track_id = genealogy[-1] if genealogy else None
-
-    charges = Q_per_label[label_idx, :]
-    times = T_per_label[label_idx, :]
-
-    # Weighted average time
-    total_charge = np.sum(charges)
-    if total_charge > 0:
-        # Average time weighted by charge
-        avg_time = np.sum(charges * times) / total_charge
-    else:
-        avg_time = 0
-
-    if last_track_id:
-        track_charge_time[last_track_id] = (total_charge, avg_time)
-
-# Build unified genealogy tree (each track appears only once)
+# Build track tree from HDF5 genealogy data
 track_tree = {}
+category_names_map = {0: "Primary", 1: "DecayElectron", 2: "SecondaryPion", 3: "GammaShower", -1: "Unknown"}
 
-for label_idx in range(min(Q_per_label.shape[0], len(labels))):
-    label = labels[label_idx]
-    genealogy = label['genealogy']
+# Process each label to build the track tree
+for label_idx in range(n_labels):
+    genealogy = lucid_data['Label_Genealogy'][label_idx]
+    if isinstance(genealogy, np.ndarray):
+        genealogy_list = genealogy.tolist()
+    else:
+        genealogy_list = genealogy
 
-    # Get charge and time for the photon-producing track (last in genealogy)
-    last_track_id = genealogy[-1] if genealogy else None
-    charge, avg_time = track_charge_time.get(last_track_id, (0.0, 0.0))
+    pdg = lucid_data['Track_PDG'][label_idx]
+    particle_name = pdg_to_name.get(int(pdg), f'PDG{int(pdg)}')
+    category_code = lucid_data['Label_Category'][label_idx]
+    category_name = category_names_map.get(int(category_code), f'Category_{int(category_code)}')
+    energy = lucid_data['Track_Energy'][label_idx]
+    parent_id = lucid_data['Track_ParentID'][label_idx]
 
-    # Add each track in genealogy to tree
-    for depth, track_id in enumerate(genealogy):
-        track = track_info_dict.get(track_id)
-        if not track:
-            continue
+    # Calculate charge and average time for this label
+    Q_label = Q_per_label[label_idx]
+    T_label = T_per_label[label_idx]
+    total_charge = np.sum(Q_label)
 
+    # Calculate weighted average time (only for sensors with finite times)
+    finite_mask = np.isfinite(T_label) & (Q_label > 0)
+    if np.any(finite_mask):
+        finite_charges = Q_label[finite_mask]
+        finite_times = T_label[finite_mask]
+        avg_time = np.sum(finite_charges * finite_times) / np.sum(finite_charges)
+    else:
+        avg_time = 0.0
+
+    # Add all tracks in the genealogy to the tree
+    for depth, track_id in enumerate(genealogy_list):
         if track_id not in track_tree:
+            # For tracks not at the end of genealogy, we don't have full info yet
+            # We'll update them as we encounter them
             track_tree[track_id] = {
-                'particle': pdg_to_name.get(track['pdg'], f"PDG{track['pdg']}"),
-                'category': category_names.get(track['category'], 'Unknown'),
-                'energy': track['energy'],
-                'parent_id': track['parent_id'],
+                'particle': particle_name if depth == len(genealogy_list) - 1 else f'Track_{track_id}',
+                'category': category_name if depth == len(genealogy_list) - 1 else 'Unknown',
+                'energy': energy if depth == len(genealogy_list) - 1 else 0.0,
+                'parent_id': parent_id if depth == len(genealogy_list) - 1 else (genealogy_list[depth - 1] if depth > 0 else 0),
                 'children': set(),
                 'charge': 0.0,
                 'time': 0.0,
-                'label_id': None
+                'label_id': None,
+                'pdg': pdg if depth == len(genealogy_list) - 1 else 0
             }
 
-        # If this is the photon-producing track, store its charge/time/label
-        if track_id == last_track_id:
-            track_tree[track_id]['charge'] = charge
-            track_tree[track_id]['time'] = avg_time
-            track_tree[track_id]['label_id'] = label_idx
+        # If this is the photon-producing track (last in genealogy), store its data
+        if depth == len(genealogy_list) - 1:
+            track_tree[track_id].update({
+                'particle': particle_name,
+                'category': category_name,
+                'energy': energy,
+                'parent_id': parent_id,
+                'charge': total_charge,
+                'time': avg_time,
+                'label_id': label_idx,
+                'pdg': pdg
+            })
 
         # Link parent-child relationship
         if depth > 0:
-            parent_id = genealogy[depth - 1]
-            if parent_id in track_tree:
-                track_tree[parent_id]['children'].add(track_id)
+            parent_track_id = genealogy_list[depth - 1]
+            if parent_track_id in track_tree:
+                track_tree[parent_track_id]['children'].add(track_id)
 
 
 def format_track_tree(track_id, track_tree, depth=0):
@@ -359,9 +291,9 @@ for root_id in sorted(root_tracks):
     genealogy_text_lines.append("<br>")
     genealogy_text_lines.extend(format_track_tree(root_id, track_tree, depth=0))
 
-event_genealogy_text = "<br>".join(genealogy_text_lines) + "<br>&nbsp;<br>&nbsp;"  # Add spacing with non-breaking spaces
+event_genealogy_text = "<br>".join(genealogy_text_lines) + "<br>&nbsp;<br>&nbsp;"
 
-print(f"Creating visualization...")
+print("Creating visualization...")
 
 # Create figure
 fig = go.Figure()
@@ -369,37 +301,18 @@ fig = go.Figure()
 # Calculate sensor disc radius
 disc_radius = detector.S_radius * 1.0
 
-# Track indices for photon and arrow traces
-photon_trace_indices = []
+# Track indices for arrow traces
 arrow_trace_indices = []
 
-# Create photon and arrow traces for each label
-print("Creating photon and arrow traces...")
+# Create arrow traces for each label
+print("Creating arrow traces...")
 for i, label in enumerate(label_info):
-    photons = sampled_photons_by_label[i]
     color = label['color']
     label_name = label['name']
 
-    # Get track position and direction (convert from cm to m)
-    track_info = labels[label['idx']]['track_info']
-    track_pos = np.array(track_info['position']) / 100.0  # cm -> m
-    track_dir = np.array(track_info['direction'])
-
-    # Add photon scatter trace
-    if len(photons) > 0:
-        fig.add_trace(
-            go.Scatter3d(
-                x=photons[:, 0], y=photons[:, 1], z=photons[:, 2],
-                mode='markers',
-                marker=dict(size=2, color=color, opacity=0.3),
-                name=label_name,
-                legendgroup=f'label{i}',
-                showlegend=False,
-                visible=True  # Visible by default (photons is default view)
-            )
-        )
-        photon_trace_indices.append(len(fig.data) - 1)
-        print(f"  Added photon trace for {label_name}: {len(photons)} photons")
+    # Get track position and direction (from LUCiD HDF5, stored in meters)
+    track_pos = lucid_data['Track_Position'][label['idx']]
+    track_dir = lucid_data['Track_Direction'][label['idx']]
 
     # Add arrow (cylinder + cone) to show track direction
     arrow_scale = 0.20  # Arrow length in meters (20 cm)
@@ -420,7 +333,7 @@ for i, label in enumerate(label_info):
                 name=f'{label_name} track',
                 legendgroup=f'label{i}',
                 showlegend=False,
-                visible=True,  # Visible by default
+                visible=True,
                 lighting=dict(ambient=0.8, diffuse=0.8, specular=0.2),
                 flatshading=False
             )
@@ -443,12 +356,13 @@ for i, label in enumerate(label_info):
                 name=f'{label_name} direction',
                 legendgroup=f'label{i}',
                 showlegend=False,
-                visible=True  # Visible by default
+                visible=True
             )
         )
         arrow_trace_indices.append(len(fig.data) - 1)
 
-print(f"  Total photon traces: {len(photon_trace_indices)}")
+        print(f"  Added arrow for {label_name}")
+
 print(f"  Total arrow traces: {len(arrow_trace_indices)}")
 print()
 
@@ -461,20 +375,13 @@ if len(all_hit_indices) > 0:
     all_positions = detector.all_points[all_hit_indices]
     all_normals = calculate_surface_normals(detector, all_hit_indices)
 
-    # Sort by depth
-    depth_order = np.argsort(all_positions[:, 2])
-    all_positions_sorted = all_positions[depth_order]
-    all_normals_sorted = all_normals[depth_order]
-    all_charges_sorted = all_charges[depth_order]
-    all_hit_indices_sorted = all_hit_indices[depth_order]
-
     # Build combined mesh for "All"
     all_vertices = []
     all_faces = []
     all_intensities = []
     vertex_offset = 0
 
-    for pos, normal, charge in zip(all_positions_sorted, all_normals_sorted, all_charges_sorted):
+    for pos, normal, charge in zip(all_positions, all_normals, all_charges):
         vertices, faces = create_disc_mesh(pos, normal, disc_radius, n_segments=12)
         faces_adjusted = faces + vertex_offset
         all_vertices.append(vertices)
@@ -497,36 +404,31 @@ if len(all_hit_indices) > 0:
             colorscale='Viridis',
             cmin=0,
             cmax=global_max_charge,
-            opacity=0.9,
-            name='All Labels',
-            showlegend=False,
-            lighting=dict(ambient=0.8, diffuse=0.8, specular=0.1),
-            visible=False,  # Hidden by default, "Photons + Arrows" shows first
-            colorbar=dict(
-                title="Charge (PE)",
-                x=0.80,  # Much closer to plot
-                xanchor='left',
-                thickness=20,
-                len=0.7
-            ),
-            hovertemplate='Charge: %{intensity:.1f} PE<extra></extra>'
+            colorbar=dict(title="Charge (PE)", x=1.15),
+            name='All',
+            showscale=True,
+            visible=True,
+            lighting=dict(ambient=0.8, diffuse=0.5, specular=0.1),
+            flatshading=True
         )
     )
-    all_trace_idx = len(fig.data) - 1
     print(f"  All: {len(all_hit_indices)} sensors above {min_charge} PE")
-else:
-    all_trace_idx = None
-    print(f"  Warning: No sensors above {min_charge} PE for 'All'")
 
 # Create "By Label" trace with discrete colors per label
+# Resolve overlaps by assigning each sensor to the label with max charge contribution
 if len(all_hit_indices) > 0:
     by_label_vertices = []
     by_label_faces = []
     by_label_colors = []
     vertex_offset = 0
 
+    # Sort sensors by position for consistent visualization
+    all_positions_sorted = all_positions
+    all_normals_sorted = all_normals
+    all_hit_indices_sorted = all_hit_indices
+
     for idx, sensor_idx in enumerate(all_hit_indices_sorted):
-        # Find which label contributed most charge
+        # Find which label contributed most charge to this sensor
         label_charges = Q_per_label[:, sensor_idx]
         if np.max(label_charges) > 0:
             max_label_idx = np.argmax(label_charges)
@@ -536,13 +438,18 @@ if len(all_hit_indices) > 0:
 
         pos = all_positions_sorted[idx]
         normal = all_normals_sorted[idx]
+
         vertices, faces = create_disc_mesh(pos, normal, disc_radius, n_segments=12)
         faces_adjusted = faces + vertex_offset
         by_label_vertices.append(vertices)
         by_label_faces.append(faces_adjusted)
         by_label_colors.extend([color] * len(vertices))
         vertex_offset += len(vertices)
+else:
+    by_label_vertices = []
 
+# Add "By Label" trace
+if len(by_label_vertices) > 0:
     combined_vertices_by_label = np.vstack(by_label_vertices)
     combined_faces_by_label = np.vstack(by_label_faces)
 
@@ -554,72 +461,55 @@ if len(all_hit_indices) > 0:
             i=combined_faces_by_label[:, 0],
             j=combined_faces_by_label[:, 1],
             k=combined_faces_by_label[:, 2],
-            vertexcolor=by_label_colors,  # Discrete colors, no colorscale
-            opacity=0.9,
+            vertexcolor=by_label_colors,
             name='By Label',
-            showlegend=False,  # No legend
-            lighting=dict(ambient=0.8, diffuse=0.8, specular=0.1),
-            visible=False,  # Hidden by default, "Photons + Arrows" shows first
-            hoverinfo='skip'
+            showscale=False,
+            visible=False,
+            lighting=dict(ambient=0.8, diffuse=0.5, specular=0.1),
+            flatshading=True
         )
     )
-    by_label_trace_idx = len(fig.data) - 1
     print(f"  By Label: {len(all_hit_indices)} sensors (color-coded)")
-else:
-    by_label_trace_idx = None
 
 # Create sensor meshes for each individual label
-sensor_trace_indices = []
+for label_idx in range(n_labels):
+    charges = Q_per_label[label_idx, :]
+    hit_mask = charges >= min_charge
+    hit_indices = np.where(hit_mask)[0]
 
-for label_idx, info in enumerate(label_info):
-    # Get sensors with charge >= min_charge for this label
-    charge_values = Q_per_label[label_idx, :]
-    hit_mask = charge_values >= min_charge
-    hit_sensor_indices = np.where(hit_mask)[0]
-
-    if len(hit_sensor_indices) == 0:
-        print(f"  Warning: Label {label_idx} has no sensors above {min_charge} PE")
+    if len(hit_indices) == 0:
         # Add dummy trace to maintain indexing
-        fig.add_trace(go.Scatter3d(
+        fig.add_trace(go.Mesh3d(
             x=[0], y=[0], z=[0],
-            mode='markers',
-            marker=dict(size=0),
+            i=[0], j=[0], k=[0],
+            opacity=0,
+            showscale=False,
             visible=False,
-            showlegend=False,
-            hoverinfo='skip'
+            name=f'Label {label_idx}'
         ))
-        sensor_trace_indices.append(len(fig.data) - 1)
+        print(f"  Warning: Label {label_idx} has no sensors above {min_charge} PE")
         continue
 
-    hit_charges = charge_values[hit_sensor_indices]
-    hit_positions = detector.all_points[hit_sensor_indices]
-    hit_normals = calculate_surface_normals(detector, hit_sensor_indices)
+    label_charges = charges[hit_indices]
+    positions = detector.all_points[hit_indices]
+    normals = calculate_surface_normals(detector, hit_indices)
 
-    # Sort by depth (z-coordinate) for proper rendering
-    depth_order = np.argsort(hit_positions[:, 2])
-    hit_positions_sorted = hit_positions[depth_order]
-    hit_normals_sorted = hit_normals[depth_order]
-    hit_charges_sorted = hit_charges[depth_order]
-
-    # Create combined mesh for all sensors of this label
-    all_vertices = []
-    all_faces = []
-    all_intensities = []
+    label_vertices = []
+    label_faces = []
+    label_intensities = []
     vertex_offset = 0
 
-    for pos, normal, charge in zip(hit_positions_sorted, hit_normals_sorted, hit_charges_sorted):
+    for pos, normal, charge in zip(positions, normals, label_charges):
         vertices, faces = create_disc_mesh(pos, normal, disc_radius, n_segments=12)
         faces_adjusted = faces + vertex_offset
-        all_vertices.append(vertices)
-        all_faces.append(faces_adjusted)
-        # Assign charge value to all vertices of this disc
-        all_intensities.extend([charge] * len(vertices))
+        label_vertices.append(vertices)
+        label_faces.append(faces_adjusted)
+        label_intensities.extend([charge] * len(vertices))
         vertex_offset += len(vertices)
 
-    combined_vertices = np.vstack(all_vertices)
-    combined_faces = np.vstack(all_faces)
+    combined_vertices = np.vstack(label_vertices)
+    combined_faces = np.vstack(label_faces)
 
-    # Add mesh trace
     fig.add_trace(
         go.Mesh3d(
             x=combined_vertices[:, 0],
@@ -628,79 +518,80 @@ for label_idx, info in enumerate(label_info):
             i=combined_faces[:, 0],
             j=combined_faces[:, 1],
             k=combined_faces[:, 2],
-            intensity=all_intensities,
+            intensity=label_intensities,
             colorscale='Viridis',
             cmin=0,
             cmax=global_max_charge,
-            opacity=0.9,
-            name=info['name'],
-            showlegend=False,
-            lighting=dict(ambient=0.8, diffuse=0.8, specular=0.1),
-            visible=False,  # Hidden by default, "Photons + Arrows" shows first
-            colorbar=dict(
-                title="Charge (PE)",
-                x=0.80,  # Much closer to plot
-                xanchor='left',
-                thickness=20,
-                len=0.7
-            ),
-            hovertemplate='Charge: %{intensity:.1f} PE<extra></extra>'
+            colorbar=dict(title="Charge (PE)", x=1.15),
+            name=f'Label {label_idx}',
+            showscale=True,
+            visible=False,
+            lighting=dict(ambient=0.8, diffuse=0.5, specular=0.1),
+            flatshading=True
         )
     )
-    sensor_trace_indices.append(len(fig.data) - 1)
-
-    print(f"  Label {label_idx}: {len(hit_sensor_indices)} sensors above {min_charge} PE")
+    print(f"  Label {label_idx}: {len(hit_indices)} sensors above {min_charge} PE")
 
 print()
+
+# Add detector geometry
+print("Adding detector geometry...")
+sensor_positions = detector.all_points
+fig.add_trace(
+    go.Scatter3d(
+        x=sensor_positions[:, 0],
+        y=sensor_positions[:, 1],
+        z=sensor_positions[:, 2],
+        mode='markers',
+        marker=dict(size=1, color='lightgray', opacity=0.1),
+        name='Detector',
+        showlegend=False,
+        visible=True
+    )
+)
 
 # Create slider steps
 slider_steps = []
 
-# Step 0: "Photons + Arrows" - show photons and track direction arrows (default view)
+# Step 0: "Arrows" - show arrows only (default view since no photons)
 step_vis = [False] * len(fig.data)
-for idx in photon_trace_indices:
-    step_vis[idx] = True
 for idx in arrow_trace_indices:
     step_vis[idx] = True
 slider_steps.append(dict(
     method="update",
     args=[{"visible": step_vis}],
-    label="Photons + Arrows"
+    label="Arrows"
 ))
 
 # Step 1: "By Label" - show discrete color-coded sensors
-if by_label_trace_idx is not None:
-    step_vis = [False] * len(fig.data)
-    step_vis[by_label_trace_idx] = True
-    slider_steps.append(dict(
-        method="update",
-        args=[{"visible": step_vis}],
-        label="By Label"
-    ))
+step_vis = [False] * len(fig.data)
+step_vis[len(arrow_trace_indices) + 1] = True  # By Label trace
+slider_steps.append(dict(
+    method="update",
+    args=[{"visible": step_vis}],
+    label="By Label"
+))
 
 # Step 2: "All" - show total charge across all labels
-if all_trace_idx is not None:
-    step_vis = [False] * len(fig.data)
-    step_vis[all_trace_idx] = True
-    slider_steps.append(dict(
-        method="update",
-        args=[{"visible": step_vis}],
-        label="All"
-    ))
+step_vis = [False] * len(fig.data)
+step_vis[len(arrow_trace_indices)] = True  # All trace
+slider_steps.append(dict(
+    method="update",
+    args=[{"visible": step_vis}],
+    label="All"
+))
 
 # Steps 3+: Individual labels
 for label_idx, info in enumerate(label_info):
-    # Create visibility array: show only this label's sensors
     step_vis = [False] * len(fig.data)
-    step_vis[sensor_trace_indices[label_idx]] = True
-
+    step_vis[len(arrow_trace_indices) + 2 + label_idx] = True  # Individual label trace
     slider_steps.append(dict(
         method="update",
-        args=[{"visible": step_vis}],  # Only update trace visibility
+        args=[{"visible": step_vis}],
         label=f"{label_idx}: {info['particle']}"
     ))
 
-# Update layout
+# Update layout with black theme matching old style
 fig.update_layout(
     title=dict(
         text=f'Event {event_idx}: Sensor Hits by Label',
@@ -740,32 +631,6 @@ fig.update_layout(
         "height": None  # Auto height
     }],
     updatemenus=[
-        # Toggle Photons
-        dict(
-            type="buttons",
-            direction="left",
-            buttons=[
-                dict(
-                    args=[{"visible": True}, photon_trace_indices],
-                    label="Photons ON",
-                    method="restyle"
-                ),
-                dict(
-                    args=[{"visible": False}, photon_trace_indices],
-                    label="Photons OFF",
-                    method="restyle"
-                )
-            ],
-            pad={"r": 5, "t": 5},
-            showactive=False,
-            x=0.87,
-            xanchor="left",
-            y=0.18,
-            yanchor="top",
-            bgcolor='rgba(50,50,50,0.8)',
-            bordercolor='white',
-            font=dict(color='white', size=14)
-        ),
         # Toggle Arrows
         dict(
             type="buttons",
@@ -801,7 +666,7 @@ fig.update_layout(
             xanchor="left",
             x=0.0,
             currentvalue=dict(
-                prefix="Label: ",
+                prefix="View: ",
                 visible=True,
                 xanchor="left",
                 font=dict(color='white', size=14)
@@ -812,16 +677,17 @@ fig.update_layout(
         )
     ],
     height=1600,  # Generous height with larger 3D plot
-    width=1600
+    width=1600,
+    showlegend=False
 )
 
-# Save as HTML
-root_basename = os.path.splitext(os.path.basename(root_file))[0]
-hdf5_basename = os.path.splitext(os.path.basename(hdf5_file))[0]
-filename = f'label_sensors_{root_basename}_{hdf5_basename}_event{event_idx}.html'
+# Save to HTML
+root_basename = os.path.splitext(os.path.basename(hdf5_file))[0]
+filename = f'label_sensors_{root_basename}_event{event_idx}.html'
 fig.write_html(filename)
 
 print(f"Saved to: {filename}")
+
 print()
 print("="*70)
 print("DONE")
