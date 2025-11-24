@@ -929,8 +929,8 @@ def generate_events_from_photonsim(event_simulator, particles_dict, sensor_param
 
 def generate_events_from_photonsim_labels(event_simulator, root_file_path, sensor_params, output_dir=None,
                                          n_events=None, batch_size=100, master_seed=None,
-                                         apply_smearing=False, apply_rotation=False, merge_output=True,
-                                         merged_filename='merged_events.h5'):
+                                         apply_smearing=False, apply_rotation=False, apply_translation=False,
+                                         detector_config_path=None, merge_output=True, merged_filename='merged_events.h5'):
     """
     Generate and save events from PhotonSim ROOT file using label-based processing.
     Each label (genealogy) is processed independently through LUCiD simulation.
@@ -962,6 +962,10 @@ def generate_events_from_photonsim_labels(event_simulator, root_file_path, senso
         If True, apply smearing to Q_true and T_true to get Q_reco and T_reco, by default False
     apply_rotation : bool, optional
         If True, apply random rotation per primary to all photons and tracks, by default False
+    apply_translation : bool, optional
+        If True, apply random translation per event to all photons and tracks (after rotation), by default False
+    detector_config_path : str, optional
+        Path to detector configuration JSON file (required if apply_translation=True), by default None
     merge_output : bool, optional
         Whether to merge individual event files into a single HDF5 file, by default True
     merged_filename : str, optional
@@ -976,6 +980,7 @@ def generate_events_from_photonsim_labels(event_simulator, root_file_path, senso
     import concurrent.futures
     import time
     import numpy as np
+    import json
     from tools.simulation import smear_charges_SK_like, smear_times
 
     # Generate random seed if not provided
@@ -1005,7 +1010,41 @@ def generate_events_from_photonsim_labels(event_simulator, root_file_path, senso
     print(f"Using batch size of {batch_size} events for multithreaded I/O")
     print(f"Apply smearing: {apply_smearing}")
     print(f"Apply rotation: {apply_rotation}")
+    print(f"Apply translation: {apply_translation}")
     print(f"Saving events to directory: {output_dir}")
+
+    # Load detector bounds if translation is requested
+    detector_bounds = None
+    if apply_translation:
+        if detector_config_path is None:
+            raise ValueError("detector_config_path must be provided when apply_translation=True")
+
+        with open(detector_config_path, 'r') as f:
+            config = json.load(f)
+
+        detector_type = config.get('detector_type', 'cylinder')
+        geom_def = config['geometry_definitions']
+
+        if detector_type == 'cylinder':
+            detector_bounds = {
+                'type': 'cylinder',
+                'radius': geom_def['radius'],  # meters
+                'height': geom_def['height']   # meters
+            }
+        elif detector_type == 'sphere':
+            detector_bounds = {
+                'type': 'sphere',
+                'radius': geom_def['radius']
+            }
+        elif detector_type == 'box':
+            detector_bounds = {
+                'type': 'box',
+                'length': geom_def['length'],
+                'width': geom_def['width'],
+                'height': geom_def['height']
+            }
+
+        print(f"Detector bounds loaded: {detector_bounds}")
 
     saved_files = []
 
@@ -1100,6 +1139,61 @@ def generate_events_from_photonsim_labels(event_simulator, root_file_path, senso
                     for label_idx in label_indices:
                         rotation_per_label[label_idx] = (rotation_axis, rotation_angle)
 
+            # Generate random translation vector for this event (applied AFTER rotation)
+            translation_vector = jnp.array([0.0, 0.0, 0.0])  # Default: no translation
+            if apply_translation:
+                translation_key, master_key = jax.random.split(master_key)
+
+                if detector_bounds['type'] == 'cylinder':
+                    # Sample within a fiducial fraction (e.g., 90%) of detector bounds
+                    frac = 0.9
+                    r_max = detector_bounds['radius'] * frac
+                    h_max = detector_bounds['height'] * frac / 2.0  # Half-height
+
+                    # Sample random radius and angle for cylindrical coordinates
+                    random_vals = jax.random.uniform(translation_key, shape=(3,))
+                    r_sample = r_max * jnp.sqrt(random_vals[0])  # sqrt for uniform in circle
+                    theta_sample = 2.0 * jnp.pi * random_vals[1]
+                    z_sample = (2.0 * random_vals[2] - 1.0) * h_max  # Uniform in [-h_max, h_max]
+
+                    translation_vector = jnp.array([
+                        r_sample * jnp.cos(theta_sample),
+                        r_sample * jnp.sin(theta_sample),
+                        z_sample
+                    ])
+
+                elif detector_bounds['type'] == 'sphere':
+                    # Sample uniformly within sphere (fiducial fraction)
+                    frac = 0.9
+                    r_max = detector_bounds['radius'] * frac
+
+                    random_vals = jax.random.uniform(translation_key, shape=(3,))
+                    # Sample uniformly in ball using rejection sampling
+                    r_sample = r_max * (random_vals[0] ** (1.0/3.0))  # Cube root for uniform in ball
+                    cos_theta = 2.0 * random_vals[1] - 1.0
+                    phi = 2.0 * jnp.pi * random_vals[2]
+                    sin_theta = jnp.sqrt(1.0 - cos_theta**2)
+
+                    translation_vector = r_sample * jnp.array([
+                        sin_theta * jnp.cos(phi),
+                        sin_theta * jnp.sin(phi),
+                        cos_theta
+                    ])
+
+                elif detector_bounds['type'] == 'box':
+                    # Sample uniformly within box (fiducial fraction)
+                    frac = 0.9
+                    l_max = detector_bounds['length'] * frac / 2.0
+                    w_max = detector_bounds['width'] * frac / 2.0
+                    h_max = detector_bounds['height'] * frac / 2.0
+
+                    random_vals = jax.random.uniform(translation_key, shape=(3,))
+                    translation_vector = jnp.array([
+                        (2.0 * random_vals[0] - 1.0) * l_max,
+                        (2.0 * random_vals[1] - 1.0) * w_max,
+                        (2.0 * random_vals[2] - 1.0) * h_max
+                    ])
+
             # Lists to collect Q and T for each label
             Q_per_label_list = []
             T_per_label_list = []
@@ -1151,7 +1245,8 @@ def generate_events_from_photonsim_labels(event_simulator, root_file_path, senso
                 track_info = label['track_info']
                 if track_info is not None:
                     track_energy = track_info['energy']
-                    track_position = jnp.array(track_info['position'])
+                    # Convert position from cm (PhotonSim) to meters (LUCiD)
+                    track_position = jnp.array(track_info['position']) / 100.0
                     track_direction = jnp.array(track_info['direction'])
                 else:
                     # Fallback if no track info
@@ -1163,14 +1258,18 @@ def generate_events_from_photonsim_labels(event_simulator, root_file_path, senso
                 if label_idx in rotation_per_label:
                     rotation_axis, rotation_angle = rotation_per_label[label_idx]
 
-                    # Rotate track position and direction
+                    # Rotate track position (in meters) and direction
                     track_position = jax_rotate_vector_local(track_position, rotation_axis, rotation_angle)
                     track_direction = jax_rotate_vector_local(track_direction, rotation_axis, rotation_angle)
 
-                    # Update the label's track_info with rotated values
-                    if track_info is not None:
-                        track_info['position'] = np.array(track_position)
-                        track_info['direction'] = np.array(track_direction)
+                # Apply translation to track position (applied AFTER rotation, in meters)
+                if apply_translation:
+                    track_position = track_position + translation_vector
+
+                # Update the label's track_info with final values (STORE IN METERS)
+                if track_info is not None:
+                    track_info['position'] = np.array(track_position)  # Store in meters
+                    track_info['direction'] = np.array(track_direction)
 
                 # Prepare photonsim data dict
                 # Always include rotation parameters (with defaults if no rotation)
@@ -1189,7 +1288,9 @@ def generate_events_from_photonsim_labels(event_simulator, root_file_path, senso
                     'N': N,
                     'apply_rotation': do_apply_rotation,
                     'rotation_axis': rotation_axis,
-                    'rotation_angle': rotation_angle
+                    'rotation_angle': rotation_angle,
+                    'apply_translation': apply_translation,
+                    'translation_vector': translation_vector
                 }
 
                 track_params = (track_energy, track_position, track_direction)

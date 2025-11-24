@@ -924,6 +924,26 @@ def create_event_simulator(detector, propagate_photons, Nphot, NUM_SENSORS, sens
             (photon_origins, photon_directions, rotation_axis, rotation_angle)
         )
 
+        # Apply translation if specified (AFTER rotation)
+        def apply_translation_fn(args):
+            origins, translation_vec = args
+            return origins + translation_vec[None, :]  # Broadcast translation to all photons
+
+        def no_translation_fn(args):
+            origins, _ = args
+            return origins
+
+        # Get translation parameters (may not be present in older code)
+        apply_translation = photonsim_data.get('apply_translation', False)
+        translation_vector = photonsim_data.get('translation_vector', jnp.array([0.0, 0.0, 0.0]))
+
+        final_origins = jax.lax.cond(
+            apply_translation,
+            apply_translation_fn,
+            no_translation_fn,
+            (final_origins, translation_vector)
+        )
+
         # Create mask for valid photons
         n_rays = photon_origins.shape[0]
         mask = jnp.arange(n_rays) < photonsim_data['N']
