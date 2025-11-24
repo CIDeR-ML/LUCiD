@@ -1232,9 +1232,41 @@ def generate_events_from_photonsim_labels(event_simulator, root_file_path, senso
                 Q_reco = Q_true
                 T_reco = T_true
 
-            # Calculate containment (simplified for now)
+            # Calculate light containment
             light_containment_by_label = np.zeros(n_labels, dtype=np.float64)
             overall_light_containment = 0.0
+
+            if apply_translation and detector_bounds is not None:
+                # Calculate which photons are inside detector bounds (after translation)
+                if detector_bounds['type'] == 'cylinder':
+                    r = np.sqrt(all_photon_origins_np[:, 0]**2 + all_photon_origins_np[:, 1]**2)
+                    z = all_photon_origins_np[:, 2]
+                    all_photons_inside_mask = (r <= detector_bounds['radius']) & (np.abs(z) <= detector_bounds['height'] / 2.0)
+                elif detector_bounds['type'] == 'sphere':
+                    r = np.sqrt(np.sum(all_photon_origins_np**2, axis=1))
+                    all_photons_inside_mask = r <= detector_bounds['radius']
+                elif detector_bounds['type'] == 'box':
+                    all_photons_inside_mask = ((np.abs(all_photon_origins_np[:, 0]) <= detector_bounds['length'] / 2.0) &
+                                               (np.abs(all_photon_origins_np[:, 1]) <= detector_bounds['width'] / 2.0) &
+                                               (np.abs(all_photon_origins_np[:, 2]) <= detector_bounds['height'] / 2.0))
+
+                # Calculate per-label containment
+                total_photons_all_labels = 0
+                total_photons_inside_all_labels = 0
+
+                for label_idx, label in enumerate(labels):
+                    photon_indices = label['photon_indices']
+                    N = len(photon_indices)
+                    if N > 0:
+                        mask_for_label = all_photons_inside_mask[photon_indices]
+                        n_inside = int(np.sum(mask_for_label))
+                        light_containment_by_label[label_idx] = float(n_inside) / N
+                        total_photons_all_labels += N
+                        total_photons_inside_all_labels += n_inside
+
+                # Calculate overall containment
+                if total_photons_all_labels > 0:
+                    overall_light_containment = float(total_photons_inside_all_labels) / total_photons_all_labels
 
             # Create filename
             event_number = event_idx
