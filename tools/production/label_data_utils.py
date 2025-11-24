@@ -150,7 +150,11 @@ def _read_single_label_event(group, event_index, filename):
         'event_number': int(group['event_number'][()]) if 'event_number' in group else event_index,
         'primary_energy': float(group['primary_energy'][()]) if 'primary_energy' in group else 0.0,
         'apply_smearing': bool(group['apply_smearing'][()]) if 'apply_smearing' in group else False,
-        'filename': filename
+        'filename': filename,
+
+        # Light containment metrics (with defaults for backward compatibility)
+        'overall_light_containment': float(group['overall_light_containment'][()]) if 'overall_light_containment' in group else 1.0,
+        'light_containment_by_label': np.array(group['light_containment_by_label']) if 'light_containment_by_label' in group else np.ones(int(group['n_labels'][()])),
     }
 
     # Add attributes if present
@@ -322,6 +326,155 @@ def print_label_event_info(data, title="Event", show_matrices=False,
         for j in range(min(n_pmts_to_show, n_sensors)):
             print(f"{data['Q_reco'][j]:<10.2f}", end="")
         print()
+
+
+def print_genealogy_tree(data, title="Event"):
+    """
+    Print track genealogy tree with light containment information.
+
+    Parameters
+    ----------
+    data : dict
+        Event data dictionary
+    title : str
+        Title for the printout
+    """
+    n_labels = data['n_labels']
+
+    # Define colors (for terminal, we'll just use labels)
+    colors_palette = ['red', 'blue', 'green', 'orange', 'purple', 'cyan', 'magenta', 'yellow',
+                      'brown', 'pink', 'olive', 'navy', 'teal', 'maroon']
+
+    category_names_map = {0: "Primary", 1: "DecayElectron", 2: "SecondaryPion", 3: "GammaShower", -1: "Unknown"}
+
+    # Build track tree from HDF5 genealogy data
+    track_tree = {}
+    Q_per_label = data['Q_per_label']
+    T_per_label = data['T_per_label']
+
+    # Process each label to build the track tree
+    for label_idx in range(n_labels):
+        genealogy = data['Label_Genealogy'][label_idx]
+        if isinstance(genealogy, np.ndarray):
+            genealogy_list = genealogy.tolist()
+        else:
+            genealogy_list = genealogy
+
+        pdg = data['Track_PDG'][label_idx]
+        particle_name = get_particle_name(int(pdg))
+        category_code = data['Label_Category'][label_idx]
+        category_name = category_names_map.get(int(category_code), f'Category_{int(category_code)}')
+        energy = data['Track_Energy'][label_idx]
+        parent_id = data['Track_ParentID'][label_idx]
+
+        # Calculate charge and average time for this label
+        Q_label = Q_per_label[label_idx]
+        T_label = T_per_label[label_idx]
+        total_charge = np.sum(Q_label)
+
+        # Calculate weighted average time (only for sensors with finite times)
+        finite_mask = np.isfinite(T_label) & (Q_label > 0)
+        if np.any(finite_mask):
+            finite_charges = Q_label[finite_mask]
+            finite_times = T_label[finite_mask]
+            avg_time = np.sum(finite_charges * finite_times) / np.sum(finite_charges)
+        else:
+            avg_time = 0.0
+
+        # Add all tracks in the genealogy to the tree
+        for depth, track_id in enumerate(genealogy_list):
+            if track_id not in track_tree:
+                track_tree[track_id] = {
+                    'particle': particle_name if depth == len(genealogy_list) - 1 else f'Track_{track_id}',
+                    'category': category_name if depth == len(genealogy_list) - 1 else 'Unknown',
+                    'energy': energy if depth == len(genealogy_list) - 1 else 0.0,
+                    'parent_id': parent_id if depth == len(genealogy_list) - 1 else (genealogy_list[depth - 1] if depth > 0 else 0),
+                    'children': set(),
+                    'charge': 0.0,
+                    'time': 0.0,
+                    'label_id': None,
+                    'pdg': pdg if depth == len(genealogy_list) - 1 else 0,
+                    'containment': 0.0
+                }
+
+            # If this is the photon-producing track (last in genealogy), store its data
+            if depth == len(genealogy_list) - 1:
+                containment = data['light_containment_by_label'][label_idx]
+                track_tree[track_id].update({
+                    'particle': particle_name,
+                    'category': category_name,
+                    'energy': energy,
+                    'parent_id': parent_id,
+                    'charge': total_charge,
+                    'time': avg_time,
+                    'label_id': label_idx,
+                    'pdg': pdg,
+                    'containment': containment
+                })
+
+            # Link parent-child relationship
+            if depth > 0:
+                parent_track_id = genealogy_list[depth - 1]
+                if parent_track_id in track_tree:
+                    track_tree[parent_track_id]['children'].add(track_id)
+
+    def format_track_tree_terminal(track_id, track_tree, depth=0):
+        """Recursively format track tree as text"""
+        if track_id not in track_tree:
+            return []
+
+        track = track_tree[track_id]
+        indent = "  " + "  " * depth
+        arrow = "└─ " if depth > 0 else ""
+
+        # Format label ID with containment info
+        if track['label_id'] is not None:
+            label_str = f" [Label {track['label_id']}]"
+            containment_str = f" - Containment: {track['containment']*100:.1f}%"
+        else:
+            label_str = ""
+            containment_str = ""
+
+        lines = [
+            f"{indent}{arrow}{track['particle']} ({track['category']}) - TrackID: {track_id}{label_str}",
+            f"{indent}    Energy: {track['energy']:.1f} MeV, Charge: {track['charge']:.1f} PE, Avg Time: {track['time']:.1f} ns{containment_str}"
+        ]
+
+        # Add children recursively
+        for child_id in sorted(track['children']):
+            lines.extend(format_track_tree_terminal(child_id, track_tree, depth + 1))
+
+        return lines
+
+    # Find root tracks (parent_id == 0 or not in tree)
+    root_tracks = [tid for tid, data_item in track_tree.items() if data_item['parent_id'] == 0]
+
+    # Print header
+    print(f"\n{'='*80}")
+    print(f"{title} - TRACK GENEALOGY")
+    print(f"{'='*80}")
+
+    # Print tree
+    for root_id in sorted(root_tracks):
+        print()
+        for line in format_track_tree_terminal(root_id, track_tree, depth=0):
+            print(line)
+
+    # Print overall light containment
+    overall_containment = data['overall_light_containment']
+    print(f"\n{'='*80}")
+    print("LIGHT CONTAINMENT")
+    print(f"{'='*80}")
+    print(f"Overall: {overall_containment*100:.1f}% of photons inside detector")
+
+    # Print per-label containment
+    light_containment_by_label = data['light_containment_by_label']
+    print("\nPer-label:")
+    for label_idx in range(n_labels):
+        particle_name = get_particle_name(int(data['Track_PDG'][label_idx]))
+        containment = light_containment_by_label[label_idx]
+        print(f"  Label {label_idx} ({particle_name}): {containment*100:.1f}%")
+    print()
 
 
 def print_file_summary(filename, max_events_to_show=None):

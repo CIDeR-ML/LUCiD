@@ -996,6 +996,10 @@ def save_single_event_with_label_info(extended_info, event_number=0, filename=No
         f.create_dataset('primary_energy', data=np.float64(extended_info['primary_energy']))
         f.create_dataset('apply_smearing', data=np.bool_(extended_info['apply_smearing']))
 
+        # Save light containment metrics
+        f.create_dataset('overall_light_containment', data=np.float64(extended_info['overall_light_containment']))
+        f.create_dataset('light_containment_by_label', data=np.array(extended_info['light_containment_by_label'], dtype=np.float64))
+
         # Save source information (also ensure proper types for attributes)
         f.attrs['source'] = extended_info['source']
         f.attrs['n_labels'] = np.int32(n_labels)
