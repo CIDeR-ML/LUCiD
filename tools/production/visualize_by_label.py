@@ -25,12 +25,14 @@ parser.add_argument('hdf5_file', type=str, help='Input HDF5 file from LUCiD (lab
 parser.add_argument('detector_config', type=str, help='Detector configuration JSON file')
 parser.add_argument('--event', type=int, default=0, help='Event index to visualize (default: 0)')
 parser.add_argument('--min-charge', type=float, default=1.0, help='Minimum charge threshold in PE (default: 1.0)')
+parser.add_argument('--output-dir', type=str, default=None, help='Output directory for HTML file (default: current directory)')
 args = parser.parse_args()
 
 hdf5_file = args.hdf5_file
 detector_config = args.detector_config
 event_idx = args.event
 min_charge = args.min_charge
+output_dir = args.output_dir
 
 print("="*70)
 print(f"SENSOR VISUALIZATION BY LABEL")
@@ -731,6 +733,12 @@ fig.update_layout(
 # Save to HTML
 root_basename = os.path.splitext(os.path.basename(hdf5_file))[0]
 filename = f'label_sensors_{root_basename}_event{event_idx}.html'
+
+# Use output directory if specified
+if output_dir is not None:
+    os.makedirs(output_dir, exist_ok=True)
+    filename = os.path.join(output_dir, filename)
+
 fig.write_html(filename)
 
 print(f"Saved to: {filename}")

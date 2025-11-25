@@ -960,17 +960,25 @@ def save_single_event_with_label_info(extended_info, event_number=0, filename=No
     }
     label_category_names = [category_names.get(cat, 'Unknown') for cat in label_categories]
 
+    # Ensure all arrays are numpy arrays (converts JAX arrays if needed)
+    Q_per_label = np.asarray(Q_per_label, dtype=np.float32)
+    T_per_label = np.asarray(T_per_label, dtype=np.float32)
+    Q_true = np.asarray(Q_true, dtype=np.float32)
+    T_true = np.asarray(T_true, dtype=np.float32)
+    Q_reco = np.asarray(Q_reco, dtype=np.float32)
+    T_reco = np.asarray(T_reco, dtype=np.float32)
+
     with h5py.File(filename, 'w') as f:
         # Save Q and T arrays
-        f.create_dataset('Q_per_label', data=np.array(Q_per_label))  # (N_labels, N_sensors)
-        f.create_dataset('T_per_label', data=np.array(T_per_label))  # (N_labels, N_sensors)
-        f.create_dataset('Q_true', data=np.array(Q_true))            # (N_sensors,)
-        f.create_dataset('T_true', data=np.array(T_true))            # (N_sensors,)
-        f.create_dataset('Q_reco', data=np.array(Q_reco))            # (N_sensors,)
-        f.create_dataset('T_reco', data=np.array(T_reco))            # (N_sensors,)
+        f.create_dataset('Q_per_label', data=Q_per_label)  # (N_labels, N_sensors)
+        f.create_dataset('T_per_label', data=T_per_label)  # (N_labels, N_sensors)
+        f.create_dataset('Q_true', data=Q_true)            # (N_sensors,)
+        f.create_dataset('T_true', data=T_true)            # (N_sensors,)
+        f.create_dataset('Q_reco', data=Q_reco)            # (N_sensors,)
+        f.create_dataset('T_reco', data=T_reco)            # (N_sensors,)
 
         # Save label information
-        f.create_dataset('n_labels', data=n_labels)
+        f.create_dataset('n_labels', data=np.int32(n_labels))
         f.create_dataset('Label_Category', data=label_categories)
 
         # Save category names as variable-length strings
@@ -988,7 +996,21 @@ def save_single_event_with_label_info(extended_info, event_number=0, filename=No
         # Save genealogies as variable-length array
         # Create a special dtype for variable-length integer arrays
         vlen_int_dtype = h5py.vlen_dtype(np.dtype('int32'))
-        genealogy_data = np.array([np.array(g, dtype=np.int32) for g in label_genealogies], dtype=object)
+
+        # Pre-convert all genealogies to int32 arrays
+        # Important: Create the list first, then wrap in object array
+        genealogy_arrays = []
+        for g in label_genealogies:
+            arr = np.asarray(g, dtype=np.int32)
+            if arr.ndim == 0:
+                arr = arr.reshape(1)
+            genealogy_arrays.append(arr.flatten())
+
+        # Create object array by assignment to preserve int32 dtype of inner arrays
+        genealogy_data = np.empty(len(genealogy_arrays), dtype=object)
+        for i, arr in enumerate(genealogy_arrays):
+            genealogy_data[i] = arr
+
         f.create_dataset('Label_Genealogy', data=genealogy_data, dtype=vlen_int_dtype)
 
         # Save metadata (ensure scalars are numpy types)

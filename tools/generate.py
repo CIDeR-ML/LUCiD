@@ -1061,13 +1061,15 @@ def generate_events_from_photonsim_labels(event_simulator, root_file_path, senso
         batch_indices = []
 
         # Process each entry in the current batch
-        for event_idx in tqdm(range(start_idx, end_idx), desc=f"Generating batch {batch_idx+1}", unit="event"):
+        for event_idx in range(start_idx, end_idx):
             event_start_time = time.time()
+            print(f"\n  Event {event_idx+1}/{n_events} (index {event_idx}):", flush=True)
 
             # Initialize master random key for this event
             master_key = jax.random.PRNGKey(master_seed + event_idx)
 
             # Read label data from PhotonSim
+            print(f"    Reading label data from ROOT file...", flush=True)
             label_data = read_label_data_from_photonsim(root_file_path, event_idx)
 
             n_labels = label_data['n_labels']
@@ -1075,13 +1077,16 @@ def generate_events_from_photonsim_labels(event_simulator, root_file_path, senso
             all_photon_origins = label_data['photon_origins']
             all_photon_directions = label_data['photon_directions']
             all_photon_times = label_data['photon_times']
+            total_photons = len(all_photon_origins)
+            print(f"    Found {n_labels} labels, {total_photons:,} total photons", flush=True)
 
             # ========================================================================
             # VECTORIZED NUMPY PREPROCESSING + EFFICIENT JAX TRANSFER
             # All preprocessing in NumPy, single efficient transfer using device_put
             # ========================================================================
+            print(f"    Preprocessing photon data...", flush=True)
 
-            PAD_SIZE = 1_000_000
+            PAD_SIZE = 2_000_000
             default_direction = np.array([0.0, 0.0, 1.0], dtype=np.float32)
 
             # Data already NumPy - ensure float32 and convert to meters (avoid unnecessary copies)
@@ -1177,6 +1182,8 @@ def generate_events_from_photonsim_labels(event_simulator, root_file_path, senso
             # ========================================================================
             # VMAP OPTIMIZATION: Process all labels in parallel using vmap
             # ========================================================================
+            print(f"    Running VMAP simulation for {n_labels} labels...", flush=True)
+            sim_start_time = time.time()
 
             # Create a wrapper function that processes a single label
             def simulate_single_label(track_energy, track_pos, track_dir, photon_origins,
@@ -1219,6 +1226,8 @@ def generate_events_from_photonsim_labels(event_simulator, root_file_path, senso
                 N_per_label_array,
                 label_keys
             )
+            sim_elapsed = time.time() - sim_start_time
+            print(f"    Simulation completed in {sim_elapsed:.2f}s", flush=True)
 
             # Calculate Q_true and T_true by aggregating across labels
             Q_true = jnp.sum(Q_per_label, axis=0)
@@ -1234,6 +1243,15 @@ def generate_events_from_photonsim_labels(event_simulator, root_file_path, senso
             else:
                 Q_reco = Q_true
                 T_reco = T_true
+
+            # Convert JAX arrays to numpy BEFORE storing in extended_info
+            # This is critical for thread-safe saving with ThreadPoolExecutor
+            Q_per_label = np.asarray(Q_per_label, dtype=np.float32)
+            T_per_label = np.asarray(T_per_label, dtype=np.float32)
+            Q_true = np.asarray(Q_true, dtype=np.float32)
+            T_true = np.asarray(T_true, dtype=np.float32)
+            Q_reco = np.asarray(Q_reco, dtype=np.float32)
+            T_reco = np.asarray(T_reco, dtype=np.float32)
 
             # Calculate light containment
             light_containment_by_label = np.zeros(n_labels, dtype=np.float64)
@@ -1300,6 +1318,7 @@ def generate_events_from_photonsim_labels(event_simulator, root_file_path, senso
 
             event_total_time = time.time() - event_start_time
             event_times.append(event_total_time)
+            print(f"    Event total time: {event_total_time:.2f}s", flush=True)
 
         # Save all events in the batch using multithreading
         print(f"Saving batch {batch_idx+1}...")
@@ -1325,7 +1344,9 @@ def generate_events_from_photonsim_labels(event_simulator, root_file_path, senso
                     saved_file = future.result()
                     saved_files.append(saved_file)
                 except Exception as e:
+                    import traceback
                     print(f"Error saving file: {e}")
+                    traceback.print_exc()
 
         t_save = time.time() - t_save_start
         print(f"Batch {batch_idx+1} save time: {t_save:.3f}s\n")
