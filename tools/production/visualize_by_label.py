@@ -332,8 +332,8 @@ for i, label in enumerate(label_info):
     track_dir = lucid_data['Track_Direction'][label['idx']]
 
     # Add arrow (cylinder + cone) to show track direction
-    arrow_scale = 0.20  # Arrow length in meters (20 cm)
-    cylinder_radius = 0.015  # Cylinder radius in meters (1.5 cm)
+    arrow_scale = 3.0  # Arrow length in meters (3 m)
+    cylinder_radius = 0.075  # Cylinder radius in meters (7.5 cm)
 
     # Draw the cylinder shaft
     cylinder_end = track_pos + track_dir * arrow_scale
@@ -368,7 +368,7 @@ for i, label in enumerate(label_info):
                 u=[track_dir[0]], v=[track_dir[1]], w=[track_dir[2]],
                 colorscale=[[0, color], [1, color]],
                 sizemode="absolute",
-                sizeref=0.2,  # Cone size in meters (20 cm)
+                sizeref=1.5,  # Cone size in meters (1.5 m)
                 showscale=False,
                 name=f'{label_name} direction',
                 legendgroup=f'label{i}',
@@ -553,6 +553,31 @@ print()
 
 # Add detector geometry
 print("Adding detector geometry...")
+
+# Add detector cylinder surface (barely visible)
+theta = np.linspace(0, 2*np.pi, 40)
+z = np.linspace(-detector.H/2, detector.H/2, 40)
+theta_grid, z_grid = np.meshgrid(theta, z)
+x_cyl = detector.r * np.cos(theta_grid)
+y_cyl = detector.r * np.sin(theta_grid)
+
+fig.add_trace(
+    go.Surface(
+        x=x_cyl,
+        y=y_cyl,
+        z=z_grid,
+        colorscale=[[0, 'gray'], [1, 'gray']],
+        opacity=0.1,
+        showscale=False,
+        name='Detector Volume',
+        hoverinfo='skip',
+        showlegend=False,
+        visible=True
+    )
+)
+detector_surface_index = len(fig.data) - 1
+
+# Add sensor positions as small dots
 sensor_positions = detector.all_points
 fig.add_trace(
     go.Scatter3d(
@@ -571,38 +596,42 @@ detector_trace_index = len(fig.data) - 1
 # Create slider steps
 slider_steps = []
 
-# Step 0: "Arrows" - show arrows only (no detector sensors)
+# Step 0: "Arrows" - show arrows and detector surface
 step_vis = [False] * len(fig.data)
 for idx in arrow_trace_indices:
     step_vis[idx] = True
+step_vis[detector_surface_index] = True  # Show detector surface
 slider_steps.append(dict(
     method="update",
     args=[{"visible": step_vis}],
     label="Arrows"
 ))
 
-# Step 1: "By Label" - show discrete color-coded sensors (no detector dots)
+# Step 1: "By Label" - show discrete color-coded sensors and detector surface
 step_vis = [False] * len(fig.data)
 step_vis[len(arrow_trace_indices) + 1] = True  # By Label trace
+step_vis[detector_surface_index] = True  # Show detector surface
 slider_steps.append(dict(
     method="update",
     args=[{"visible": step_vis}],
     label="By Label"
 ))
 
-# Step 2: "All" - show total charge across all labels (no detector dots)
+# Step 2: "All" - show total charge across all labels and detector surface
 step_vis = [False] * len(fig.data)
 step_vis[len(arrow_trace_indices)] = True  # All trace
+step_vis[detector_surface_index] = True  # Show detector surface
 slider_steps.append(dict(
     method="update",
     args=[{"visible": step_vis}],
     label="All"
 ))
 
-# Steps 3+: Individual labels (no detector dots)
+# Steps 3+: Individual labels and detector surface
 for label_idx, info in enumerate(label_info):
     step_vis = [False] * len(fig.data)
     step_vis[len(arrow_trace_indices) + 2 + label_idx] = True  # Individual label trace
+    step_vis[detector_surface_index] = True  # Show detector surface
     slider_steps.append(dict(
         method="update",
         args=[{"visible": step_vis}],

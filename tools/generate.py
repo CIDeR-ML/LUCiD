@@ -1155,6 +1155,9 @@ def generate_events_from_photonsim_labels(event_simulator, root_file_path, senso
 
                 if apply_translation:
                     track_positions_np[label_idx] += translation_vector
+                    # Update labels data structure with transformed position (convert back to cm)
+                    if track_info is not None:
+                        track_info['position'] = track_positions_np[label_idx] * 100.0
 
                 # Scatter photons
                 if N > 0:
