@@ -11,6 +11,52 @@ from tools.siren.core import *
 from tools.utils import save_single_event_with_extended_info, save_single_event_with_label_info, get_random_root_entry_index, superimpose_multiple_events, merge_event_files
 from jax import jit
 
+
+def get_max_photons_per_label(root_file_path, n_events=None):
+    """
+    Efficiently scan a ROOT file to find the maximum number of photons in any single label.
+
+    This function reads only the Label_PhotonIDsSize branch for all events at once,
+    which is much faster than iterating through events one by one.
+
+    Parameters
+    ----------
+    root_file_path : str
+        Path to the PhotonSim ROOT file
+    n_events : int, optional
+        Number of events to scan. If None, scans all events.
+
+    Returns
+    -------
+    int
+        Maximum number of photons found in any single label across all scanned events
+    """
+    import uproot
+
+    root_file = uproot.open(root_file_path)
+    tree = root_file['OpticalPhotons']
+    num_entries = tree.num_entries
+
+    # Limit to n_events if specified
+    entry_stop = min(n_events, num_entries) if n_events is not None else num_entries
+
+    # Read Label_PhotonIDsSize for all events at once (jagged array)
+    photon_ids_sizes = tree['Label_PhotonIDsSize'].array(
+        entry_start=0, entry_stop=entry_stop, library='np'
+    )
+
+    # Find global maximum across all events and all labels
+    max_photons = 0
+    for event_sizes in photon_ids_sizes:
+        if len(event_sizes) > 0:
+            event_max = int(max(event_sizes))
+            if event_max > max_photons:
+                max_photons = event_max
+
+    root_file.close()
+    return max_photons
+
+
 def jax_rotate_vector_local(vector, axis, angle):
     """
     Rotate a vector around an axis by an angle using Rodrigues' rotation formula.
@@ -934,8 +980,9 @@ def generate_events_from_photonsim_labels(event_simulator, root_file_path, senso
     """
     VMAP-OPTIMIZED VERSION: Generate and save events using batched label processing.
 
-    This version pads all labels to 1M photons and uses jax.vmap to process them in parallel,
-    eliminating the Python loop and achieving 5-10x speedup.
+    This version dynamically determines the optimal PAD_SIZE based on the maximum photons
+    per label in the ROOT file, then uses jax.vmap to process all labels in parallel,
+    eliminating the Python loop and achieving significant speedup.
 
     Parameters
     ----------
@@ -1000,6 +1047,13 @@ def generate_events_from_photonsim_labels(event_simulator, root_file_path, senso
     if n_events is None:
         n_events = num_entries
         print(f"No n_events specified, using all {n_events} entries")
+
+    # Dynamically determine PAD_SIZE based on actual data in the ROOT file
+    print(f"Scanning ROOT file to determine optimal PAD_SIZE...")
+    max_photons_in_file = get_max_photons_per_label(root_file_path, n_events)
+    PAD_SIZE = max_photons_in_file + 1  # +1 for safety margin
+    print(f"  Max photons per label in file: {max_photons_in_file:,}")
+    print(f"  Using PAD_SIZE: {PAD_SIZE:,}")
 
     print(f"\nGenerating {n_events} events using VMAP-OPTIMIZED label-based processing...")
     print(f"Using batch size of {batch_size} events for multithreaded I/O")
@@ -1086,7 +1140,7 @@ def generate_events_from_photonsim_labels(event_simulator, root_file_path, senso
             # ========================================================================
             print(f"    Preprocessing photon data...", flush=True)
 
-            PAD_SIZE = 2_000_000
+            # PAD_SIZE is now computed dynamically at the function level
             default_direction = np.array([0.0, 0.0, 1.0], dtype=np.float32)
 
             # Data already NumPy - ensure float32 and convert to meters (avoid unnecessary copies)
