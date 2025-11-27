@@ -295,6 +295,20 @@ def format_track_tree(track_id, track_tree, depth=0):
     return lines
 
 
+# Post-process track tree to infer pi0 from children
+# If a track has category='Unknown' and all its children are gammas with category='GammaShower',
+# it's a pi0 (PDG 111) that decayed to two gammas (GammaShower is by definition from pi0 decay)
+for track_id, track_data in track_tree.items():
+    if track_data['category'] == 'Unknown' and track_data['children']:
+        children_are_gamma_showers = all(
+            track_tree.get(child_id, {}).get('category') == 'GammaShower'
+            for child_id in track_data['children']
+        )
+        if children_are_gamma_showers:
+            track_data['particle'] = 'pi0'
+            track_data['category'] = 'Primary'
+            track_data['pdg'] = 111
+
 # Find root tracks (parent_id == 0 or not in tree)
 root_tracks = [tid for tid, data in track_tree.items() if data['parent_id'] == 0]
 
