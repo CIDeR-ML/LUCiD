@@ -54,7 +54,7 @@ from tools.optimization.utils.functions import performance_summary
 from tools.optimization.optimize import load_optimization_config, print_optimization_parameters, get_detector_params_from_config
 from tools.optimization.optimize import get_detector_bounds, hierarchical_position_grid_search
 
-from tools.optimization.losses import energy_loss, counts_loss, origin_time_loss, direction_time_loss
+from tools.optimization.losses import energy_loss, counts_loss, origin_time_loss
 
 
 def parse_arguments():
