@@ -105,27 +105,156 @@ def grid_origin_time_loss(
     total_loss = jnp.nan_to_num(total_loss, nan=1e6, posinf=1e6, neginf=1e6)
     return total_loss
 
-@jit
-def origin_time_loss(origin, detector_positions, true_times, true_q, t0, photosensor_radius=0.25, c_medium=(0.299792/1.33)):
-    """Vertex time loss component"""
-    distances = jnp.linalg.norm(detector_positions - origin[None, :], axis=1)
-    expected_times = (distances - photosensor_radius)/ c_medium
-    time_residuals = true_times - expected_times - (t0 + 0.15)
+# @jit
+# def origin_time_loss(origin, detector_positions, true_times, true_q, t0, photosensor_radius=0.25, c_medium=(0.299792/1.33)):
+#     """Vertex time loss component"""
+#     distances = jnp.linalg.norm(detector_positions - origin[None, :], axis=1)
+#     expected_times = (distances - photosensor_radius)/ c_medium
+#     time_residuals = true_times - expected_times - (t0 + 0.15)
     
-    shift = 0.075
+#     shift = 0.075
 
-    w1 = jnp.where(true_q>0., true_q, 0.)
+#     w1 = jnp.where(true_q>0., true_q, 0.)
 
-    neg_time_res = jnp.where(time_residuals < 0, jnp.abs(time_residuals), 0.0)
+#     neg_time_res = jnp.where(time_residuals < 0, jnp.abs(time_residuals), 0.0)
 
-    ultra_rel_term = jnp.sum(jnp.abs(neg_time_res*w1)) / (jnp.sum(w1) + 1e-8)+shift
+#     ultra_rel_term = jnp.sum(jnp.abs(neg_time_res*w1)) / (jnp.sum(w1) + 1e-8)+shift
 
-    pos_time_res = jnp.where(time_residuals > 0, jnp.abs(time_residuals), 0.0)
+#     pos_time_res = jnp.where(time_residuals > 0, jnp.abs(time_residuals), 0.0)
 
-    w2 = jnp.where(true_q>0., true_q, 0.)
+#     w2 = jnp.where(true_q>0., true_q, 0.)
     
-    proximity_term =  jnp.sum(jnp.abs(time_residuals*w2**2)) / (jnp.sum(w2) + 1e-8)+shift
+#     proximity_term =  jnp.sum(jnp.abs(time_residuals*w2**2)) / (jnp.sum(w2) + 1e-8)+shift
 
-    total_loss = jnp.sqrt((ultra_rel_term*proximity_term))
+#     total_loss = jnp.sqrt((ultra_rel_term*proximity_term))
  
-    return total_loss
+#     return total_loss
+
+# def softplus(x):
+#     return jnp.log1p(jnp.exp(-jnp.abs(x))) + jnp.maximum(x, 0.)
+
+# def smooth_pinball(r, tau=0.1, sigma=0.5):
+#     """
+#     Smooth version of pinball/quantile loss.
+#     Minimizer sets approx quantile_tau(r) ~= 0.
+#     """
+#     # Approx max(r,0) and max(-r,0)
+#     pos = softplus(r / sigma) * sigma
+#     neg = softplus(-r / sigma) * sigma
+#     return tau * pos + (1.0 - tau) * neg
+
+# @jit
+# def origin_time_loss(origin, detector_positions, true_times, true_q, t0,
+#                               photosensor_radius=0.25, c_medium=(0.299792/1.33)):
+    
+#     d = jnp.linalg.norm(detector_positions - origin[None, :], axis=1)
+#     expected = (d - photosensor_radius) / c_medium
+
+#     b = true_times - expected          # "implied t0" per sensor
+#     r = b - t0
+
+#     w = jnp.where(true_q > 0., true_q, 0.)
+#     wsum = jnp.sum(w) + 1e-8
+
+#     # Main term: quantile alignment => correct t0 minimum (not gradient peak)
+#     main = jnp.sum(w * smooth_pinball(r, tau=0.70, sigma=0.05)) / wsum
+
+#     return main
+
+# @jit
+# def cone_time_loss(observed_counts, simulated_time, observed_times, t0):
+#     b = observed_times - simulated_time
+#     r = b - t0
+#     w = jnp.where(observed_counts > 0., observed_counts, 0.)
+#     wsum = jnp.sum(w) + 1e-8
+#     main = jnp.sum(w * smooth_pinball(r, tau=0.12, sigma=0.05)) / wsum
+#     return main
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+def softplus(x):
+    return jnp.log1p(jnp.exp(-jnp.abs(x))) + jnp.maximum(x, 0.)
+
+def smooth_pinball(r, tau=0.1, sigma=0.5):
+    """
+    Smooth version of pinball/quantile loss.
+    Minimizer sets approx quantile_tau(r) ~= 0.
+    """
+    # Approx max(r,0) and max(-r,0)
+    pos = softplus(r / sigma) * sigma
+    neg = softplus(-r / sigma) * sigma
+    return tau * pos + (1.0 - tau) * neg
+    
+@jit
+def origin_time_loss(origin, detector_positions, true_times, true_q, t0,
+                     photosensor_radius=0.25, c_medium=(0.299792/1.33), tau=0.23):
+    d = jnp.linalg.norm(detector_positions - origin[None, :], axis=1)
+    expected = (d - photosensor_radius) / c_medium
+
+    r = true_times - expected - t0
+
+    w = jnp.where(true_q > 0., 1., 0.)
+    wsum = jnp.sum(w) + 1e-8
+
+    main = jnp.sum(w * smooth_pinball(r, tau=tau, sigma=0.25)) / wsum
+
+    return main
+
+@jit
+def cone_time_loss(observed_counts, simulated_time, observed_times, t0, tau=0.12):
+    r = observed_times - simulated_time - t0
+    w = jnp.where(observed_counts > 0., observed_counts, 0.)
+    wsum = jnp.sum(w) + 1e-8
+    main = jnp.sum(w * smooth_pinball(r, tau=tau, sigma=0.25)) / wsum
+    return main
+
+def create_combined_loss_function(prediction_simulator, detector_params):
+    """Create combined loss function with specified parameters and return its gradient function"""
+
+    @jit
+    def combined_product_loss(params, hit_detector_positions, observed_times, observed_counts, 
+                                        true_data, key):
+        """
+        Combined loss function: product of vertex loss, counts loss, and energy loss
+        
+        Args:
+            params: [x, y, z, t0, theta, phi, energy] where theta and phi are spherical direction angles
+            vertex_weight: scaling factor for vertex loss contribution
+            counts_weight: scaling factor for counts loss contribution  
+            energy_weight: scaling factor for energy loss contribution
+        """
+        position = params[:3]
+        t0 = params[3]
+        theta = params[4]
+        phi = params[5]
+        energy = params[6]
+    
+        track_params = (energy, position, jnp.array([theta, phi]))
+        simulated_data = prediction_simulator(track_params, detector_params, key)
+        simulated_counts = simulated_data[0]
+        simulated_time = simulated_data[1]
+    
+        # Calculate individual loss components
+        vertex_loss_val = origin_time_loss(jax.lax.stop_gradient(position), hit_detector_positions, observed_times,
+                                          observed_counts, t0)
+        
+        counts_loss_val = counts_loss(observed_counts, simulated_counts)
+        time_loss_val = cone_time_loss(observed_counts, simulated_time, observed_times, t0)
+    
+        combined = jnp.sqrt(
+            (vertex_loss_val + 1e-6) * (counts_loss_val + 1e-6) * (time_loss_val + 1e-6)
+        )
+        return combined, (vertex_loss_val, counts_loss_val, vertex_loss_val)
