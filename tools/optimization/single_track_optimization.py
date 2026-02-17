@@ -54,7 +54,7 @@ from tools.optimization.utils.functions import performance_summary
 from tools.optimization.optimize import load_optimization_config, print_optimization_parameters, get_detector_params_from_config
 from tools.optimization.optimize import get_detector_bounds, hierarchical_position_grid_search
 
-from tools.optimization.losses import energy_loss, counts_loss, origin_time_loss
+from tools.optimization.losses import energy_loss, counts_loss, origin_time_loss, cone_time_loss, smooth_pinball
 
 
 def parse_arguments():
@@ -112,44 +112,76 @@ def load_config(config_path):
     adam_params.setdefault('b2', 0.999)
     adam_params.setdefault('eps', 1e-8)
 
+    # Add fixed_vertex config if not present (default: disabled)
+    if 'fixed_vertex' not in config:
+        config['fixed_vertex'] = {'enabled': False, 'position': [0.0, 0.0, 0.0]}
+
     return config
 
 def create_combined_loss_function(vertex_weight_scale, counts_weight_scale,
-                                   prediction_simulator, detector_params, c_medium):
-    """Create combined loss function with specified parameters and return its gradient function"""
+                                   prediction_simulator, detector_params, c_medium,
+                                   nrays=10_000):
+    """Create combined loss function with specified parameters and return its gradient function.
+
+    The cone_time_loss tau parameter is computed automatically from the energy
+    (params[6]) and nrays using the fitted parametrisation stored in
+    data/water/muon/tau_parametrization.pkl.
+    """
+
+    # Load tau parametrization coefficients (captured as constants by JIT)
+    param_path = os.path.join(
+        Path(__file__).parent.parent.parent, 'data', 'water', 'muon',
+        'tau_parametrization.pkl')
+    with open(param_path, 'rb') as f:
+        gf = pickle.load(f)['global_fit']
+    a_energy = jnp.array(gf['a_energy'])
+    b_log10nrays = jnp.array(gf['b_log10nrays'])
+    c_intercept = jnp.array(gf['c_intercept'])
+    log10_nrays = jnp.array(np.log10(nrays))
+
+    def cone_time_loss_parametric(observed_counts, simulated_time,
+                                  observed_times, t0, tau):
+        b = observed_times - simulated_time
+        r = b - t0
+        w = jnp.where(observed_counts > 0., observed_counts, 0.)
+        wsum = jnp.sum(w) + 1e-8
+        return jnp.sum(w * smooth_pinball(r, tau=tau, sigma=0.05)) / wsum
 
     @jit
     def combined_product_loss(params, hit_detector_positions, observed_times, observed_counts,
-                             true_data, key):
+                            true_data, key):
         """
-        Combined loss function: product of vertex loss, counts loss, energy loss, and direction loss
+        Combined loss function: product of vertex loss, counts loss, and time loss.
+        tau for cone_time_loss is computed from params[6] (energy) and nrays.
 
         Args:
             params: [x, y, z, t0, theta, phi, energy]
+
+        Returns:
+            combined_loss, (vertex_loss_val, counts_loss_val, time_loss_val)
         """
         position = params[:3]
         t0 = params[3]
         theta = params[4]
         phi = params[5]
         energy = params[6]
-
         track_params = (energy, position, jnp.array([theta, phi]))
         simulated_data = prediction_simulator(track_params, detector_params, key)
         simulated_counts = simulated_data[0]
         simulated_time = simulated_data[1]
 
-        # Calculate individual loss components
         vertex_loss_val = origin_time_loss(position, hit_detector_positions, observed_times,
-                                          observed_counts, t0, c_medium=c_medium)
+                                        observed_counts, t0)
         counts_loss_val = counts_loss(observed_counts, simulated_counts)
-        energy_loss_val = energy_loss(simulated_counts, observed_counts)
 
-        # Convert spherical to cartesian for direction loss
-        direction = spherical_to_cartesian(theta, phi)
+        # # Energy-dependent cone tau (from tau optimization study v8)
+        # # tau = A * E + B, fitted to: E=400->0.06, E=1000->0.08, E=1600->0.10
+        # tau = 0.12 # 3.333e-5 * jax.lax.stop_gradient(energy) + 0.0467
+        time_loss_val = cone_time_loss(
+            observed_counts, simulated_time, observed_times, t0, tau=0.12)
 
-        combined_loss = jnp.sqrt((vertex_loss_val/1e4 + 1e-6) * (counts_loss_val + 1e-6))
-
-        return combined_loss, (vertex_loss_val, counts_loss_val, energy_loss_val)
+        combined_loss = jnp.sqrt((vertex_loss_val + 1e-6) * (counts_loss_val + 1e-6) * (time_loss_val + 1e-6))
+        return combined_loss, (vertex_loss_val, counts_loss_val, time_loss_val)
 
     combined_grad_fn = jit(value_and_grad(combined_product_loss, has_aux=True))
     return combined_grad_fn
@@ -502,7 +534,7 @@ def run_complete_optimization_adam(initial_t0, hit_detector_positions, observed_
 
 
 def generate_event_data(event_idx, random_key, data_dir, data_simulator,
-                       detector_params, detector_bounds, fraction = 0.6):
+                       detector_params, detector_bounds, fraction = 0.6, fixed_vertex_config=None):
     """Generate a single event with random parameters within detector bounds
 
     Args:
@@ -512,6 +544,7 @@ def generate_event_data(event_idx, random_key, data_dir, data_simulator,
         data_simulator: Data simulator function
         detector_params: Detector parameters
         detector_bounds: Detector bounds dictionary
+        fixed_vertex_config: Dict with 'enabled' and 'position' keys to fix vertex at specific location
     """
     import glob
 
@@ -566,13 +599,18 @@ def generate_event_data(event_idx, random_key, data_dir, data_simulator,
     DETECTOR_R = detector_bounds['r']
     DETECTOR_H = detector_bounds['H']
 
-    r_vert = jax.random.uniform(key, shape=(), minval=0, maxval=DETECTOR_R * fraction)
-    key, _ = jax.random.split(key)
-    theta = jax.random.uniform(key, shape=(), minval=0, maxval=2*jnp.pi)
-    key, _ = jax.random.split(key)
-    z_vert = jax.random.uniform(key, shape=(), minval=-DETECTOR_H/2 * fraction,
-                               maxval=DETECTOR_H/2 * fraction)
-    true_position = jnp.array([r_vert * jnp.cos(theta), r_vert * jnp.sin(theta), z_vert])
+    # Check if vertex should be fixed at a specific position
+    if fixed_vertex_config and fixed_vertex_config.get('enabled', False):
+        true_position = jnp.array(fixed_vertex_config['position'])
+    else:
+        # Random vertex generation within detector bounds
+        r_vert = jax.random.uniform(key, shape=(), minval=0, maxval=DETECTOR_R * fraction)
+        key, _ = jax.random.split(key)
+        theta = jax.random.uniform(key, shape=(), minval=0, maxval=2*jnp.pi)
+        key, _ = jax.random.split(key)
+        z_vert = jax.random.uniform(key, shape=(), minval=-DETECTOR_H/2 * fraction,
+                                   maxval=DETECTOR_H/2 * fraction)
+        true_position = jnp.array([r_vert * jnp.cos(theta), r_vert * jnp.sin(theta), z_vert])
 
     key, _ = jax.random.split(key)
     phi = jax.random.uniform(key, shape=(), minval=0, maxval=2*jnp.pi)
@@ -585,6 +623,36 @@ def generate_event_data(event_idx, random_key, data_dir, data_simulator,
     TRUE_T0 = jax.random.uniform(key, shape=(), minval=-15.0, maxval=15.0)
 
     true_params = (true_energy, true_position, true_direction)
+
+    # Compute rotation to transform from original direction (0,0,1) to true_direction
+    original_direction = jnp.array([0.0, 0.0, 1.0])
+    true_direction_norm = true_direction / (jnp.linalg.norm(true_direction) + 1e-8)
+
+    # Rotation axis = cross product of original and target directions
+    rotation_axis = jnp.cross(original_direction, true_direction_norm)
+    axis_norm = jnp.linalg.norm(rotation_axis)
+
+    # Handle case where directions are parallel (axis_norm ~ 0)
+    rotation_axis = jnp.where(
+        axis_norm < 1e-6,
+        jnp.array([1.0, 0.0, 0.0]),  # Arbitrary axis when parallel
+        rotation_axis / (axis_norm + 1e-8)
+    )
+
+    # Rotation angle = arccos of dot product
+    rotation_angle = jnp.arccos(jnp.clip(
+        jnp.dot(original_direction, true_direction_norm), -1.0, 1.0
+    ))
+
+    # Set rotation parameters in photon_data
+    photon_data['rotation_axis'] = rotation_axis
+    photon_data['rotation_angle'] = rotation_angle
+    photon_data['apply_rotation'] = jnp.array(True)
+
+    # Set translation parameters to move from origin to true_position
+    photon_data['apply_translation'] = jnp.array(True)
+    photon_data['translation_vector'] = true_position
+
 
     key, _ = jax.random.split(key)
     true_data = jax.lax.stop_gradient(data_simulator(true_params, detector_params, key, photon_data))
@@ -702,7 +770,7 @@ def main():
     # Create combined gradient function
     combined_grad_fn = create_combined_loss_function(
         VERTEX_WEIGHT_SCALE, COUNTS_WEIGHT_SCALE,
-        prediction_simulator, detector_params, C_MEDIUM
+        prediction_simulator, detector_params, C_MEDIUM, nrays=Nphot
     )
 
     # Warm-up: Pre-compile JIT functions
@@ -716,7 +784,8 @@ def main():
     while not warmup_endpoint_valid and warmup_attempts < 10:
         warmup_attempts += 1
         warmup_event_data = generate_event_data(
-            0, warmup_key, data_dir, data_simulator, detector_params, detector_bounds, fraction=0.9
+            0, warmup_key, data_dir, data_simulator, detector_params, detector_bounds, fraction=0.9,
+            fixed_vertex_config=config.get('fixed_vertex')
         )
         warmup_endpoint_valid = check_track_endpoint_in_detector(
             warmup_event_data['true_position'],
@@ -809,7 +878,8 @@ def main():
                 # Generate event data
                 event_data = generate_event_data(
                     event_idx, event_key, data_dir,
-                    data_simulator, detector_params, detector_bounds, fraction=0.9
+                    data_simulator, detector_params, detector_bounds, fraction=0.9,
+                    fixed_vertex_config=config.get('fixed_vertex')
                 )
 
                 # Extract event parameters
