@@ -9,6 +9,7 @@ import time
 from tqdm import tqdm
 from tools.siren.core import *
 from tools.utils import save_single_event_with_extended_info, save_single_event_with_label_info, get_random_root_entry_index, superimpose_multiple_events, merge_event_files
+from tools.production.voxelize import VoxelGridConfig, voxelize_from_photon_indices, pack_voxel_data_for_hdf5
 from jax import jit
 
 
@@ -586,7 +587,7 @@ def read_photon_data_from_photonsim(root_file_path, entry_index):
         'energy': energy  # Energy in MeV
     }
 
-def read_label_data_from_photonsim(root_file_path, entry_index):
+def read_label_data_from_photonsim(root_file_path, entry_index, include_track_segments=False):
     """
     Read label-based photon data from a PhotonSim ROOT file for a specific entry.
     This function reads the new label system that classifies photons by genealogy.
@@ -597,6 +598,8 @@ def read_label_data_from_photonsim(root_file_path, entry_index):
         Path to the PhotonSim ROOT file
     entry_index : int
         Entry index to read from the file
+    include_track_segments : bool, optional
+        If True, also read meaningful tracks and segment data, by default False
 
     Returns
     -------
@@ -607,10 +610,13 @@ def read_label_data_from_photonsim(root_file_path, entry_index):
             - 'genealogy': list of track IDs in the genealogy
             - 'photon_indices': list of photon indices belonging to this label
             - 'track_info': dict with track information (position, direction, energy, time, pdg, category, etc.)
+            - 'extended_genealogy': list of meaningful track IDs (if include_track_segments=True)
         - 'photon_origins': array (N_photons, 3) in cm
         - 'photon_directions': array (N_photons, 3)
         - 'photon_times': array (N_photons,) in ns
         - 'primary_energy': float, energy in MeV
+        - 'meaningful_tracks': dict (if include_track_segments=True)
+        - 'segments': dict (if include_track_segments=True)
     """
     import uproot
     import numpy as np
@@ -635,6 +641,21 @@ def read_label_data_from_photonsim(root_file_path, entry_index):
         'TrackInfo_Energy', 'TrackInfo_Time',
         'TrackInfo_ParentTrackID', 'TrackInfo_PDG'
     ]
+
+    # Add branches for track segments if requested
+    if include_track_segments:
+        branches_to_read.extend([
+            'Label_ExtGenealogySize', 'Label_ExtGenealogyData',
+            'NMeaningfulTracks',
+            'MTrack_TrackID', 'MTrack_ParentID', 'MTrack_PDG',
+            'MTrack_InitialEnergy', 'MTrack_ParticleName', 'MTrack_NCherenkov',
+            'MTrack_SegmentOffset', 'MTrack_NSegments',
+            'NSegments',
+            'Segment_StartX', 'Segment_StartY', 'Segment_StartZ',
+            'Segment_EndX', 'Segment_EndY', 'Segment_EndZ',
+            'Segment_DirX', 'Segment_DirY', 'Segment_DirZ',
+            'Segment_Edep', 'Segment_Time'
+        ])
 
     tree_data = tree.arrays(branches_to_read, entry_start=entry_index, entry_stop=entry_index+1, library='np')
 
@@ -695,10 +716,18 @@ def read_label_data_from_photonsim(root_file_path, entry_index):
             'pdg': int(track_pdgs[i])
         }
 
+    # Parse extended genealogy data if requested
+    ext_genealogy_sizes = None
+    ext_genealogy_data = None
+    if include_track_segments:
+        ext_genealogy_sizes = tree_data['Label_ExtGenealogySize'][0]
+        ext_genealogy_data = tree_data['Label_ExtGenealogyData'][0]
+
     # Parse labels
     labels = []
     genealogy_offset = 0
     photon_ids_offset = 0
+    ext_genealogy_offset = 0
 
     for label_idx in range(n_labels):
         # Extract genealogy for this label
@@ -711,18 +740,30 @@ def read_label_data_from_photonsim(root_file_path, entry_index):
         photon_indices = [int(photon_ids_data[photon_ids_offset + i]) for i in range(photon_ids_size)]
         photon_ids_offset += photon_ids_size
 
+        # Extract extended genealogy if available
+        extended_genealogy = None
+        if include_track_segments and ext_genealogy_sizes is not None:
+            ext_gen_size = int(ext_genealogy_sizes[label_idx])
+            extended_genealogy = [int(ext_genealogy_data[ext_genealogy_offset + i]) for i in range(ext_gen_size)]
+            ext_genealogy_offset += ext_gen_size
+
         # Get track info for the LAST track in this label's genealogy
         # Genealogy is ordered parent->child, so last track is the actual particle that produced photons
         last_track_id = genealogy[-1] if genealogy else None
         track_info = track_info_dict.get(last_track_id, None) if last_track_id is not None else None
 
-        labels.append({
+        label_dict = {
             'genealogy': genealogy,
             'photon_indices': photon_indices,
             'track_info': track_info
-        })
+        }
+        if extended_genealogy is not None:
+            label_dict['extended_genealogy'] = extended_genealogy
 
-    return {
+        labels.append(label_dict)
+
+    # Build result dictionary
+    result = {
         'n_labels': n_labels,
         'labels': labels,
         'photon_origins': photon_positions,  # Keep as NumPy (avoid JAX conversion overhead)
@@ -731,6 +772,56 @@ def read_label_data_from_photonsim(root_file_path, entry_index):
         'primary_energy': primary_energy,
         'track_info_dict': track_info_dict  # Include full track info for reference
     }
+
+    # Parse meaningful tracks and segments if requested
+    if include_track_segments:
+        n_meaningful_tracks = int(tree_data['NMeaningfulTracks'][0])
+        n_segments = int(tree_data['NSegments'][0])
+
+        # Build meaningful tracks dictionary (keyed by track ID for easy lookup)
+        meaningful_tracks = {}
+        mtrack_ids = tree_data['MTrack_TrackID'][0]
+        mtrack_parent_ids = tree_data['MTrack_ParentID'][0]
+        mtrack_pdgs = tree_data['MTrack_PDG'][0]
+        mtrack_energies = tree_data['MTrack_InitialEnergy'][0]
+        mtrack_names = tree_data['MTrack_ParticleName'][0]
+        mtrack_ncherenkov = tree_data['MTrack_NCherenkov'][0]
+        mtrack_seg_offsets = tree_data['MTrack_SegmentOffset'][0]
+        mtrack_nsegs = tree_data['MTrack_NSegments'][0]
+
+        for i in range(n_meaningful_tracks):
+            track_id = int(mtrack_ids[i])
+            meaningful_tracks[track_id] = {
+                'track_id': track_id,
+                'parent_id': int(mtrack_parent_ids[i]),
+                'pdg': int(mtrack_pdgs[i]),
+                'initial_energy': float(mtrack_energies[i]),
+                'particle_name': str(mtrack_names[i]),
+                'n_cherenkov': int(mtrack_ncherenkov[i]),
+                'segment_offset': int(mtrack_seg_offsets[i]),
+                'n_segments': int(mtrack_nsegs[i])
+            }
+
+        # Extract segment arrays (positions in mm, convert to cm)
+        segments = {
+            'start_x': tree_data['Segment_StartX'][0] / 10.0,  # mm to cm
+            'start_y': tree_data['Segment_StartY'][0] / 10.0,
+            'start_z': tree_data['Segment_StartZ'][0] / 10.0,
+            'end_x': tree_data['Segment_EndX'][0] / 10.0,
+            'end_y': tree_data['Segment_EndY'][0] / 10.0,
+            'end_z': tree_data['Segment_EndZ'][0] / 10.0,
+            'dir_x': tree_data['Segment_DirX'][0],
+            'dir_y': tree_data['Segment_DirY'][0],
+            'dir_z': tree_data['Segment_DirZ'][0],
+            'edep': tree_data['Segment_Edep'][0],
+            'time': tree_data['Segment_Time'][0],
+            'n_segments': n_segments
+        }
+
+        result['meaningful_tracks'] = meaningful_tracks
+        result['segments'] = segments
+
+    return result
 
 def generate_events_from_photonsim(event_simulator, particles_dict, sensor_params, output_dir=None,
                                   n_events=None, batch_size=100, master_seed=None,
@@ -976,7 +1067,8 @@ def generate_events_from_photonsim(event_simulator, particles_dict, sensor_param
 def generate_events_from_photonsim_labels(event_simulator, root_file_path, sensor_params, output_dir=None,
                                          n_events=None, batch_size=100, master_seed=None,
                                          apply_smearing=False, apply_rotation=False, apply_translation=False,
-                                         detector_config_path=None, merge_output=True, merged_filename='merged_events.h5'):
+                                         detector_config_path=None, merge_output=True, merged_filename='merged_events.h5',
+                                         include_track_segments=False):
     """
     VMAP-OPTIMIZED VERSION: Generate and save events using batched label processing.
 
@@ -1058,8 +1150,14 @@ def generate_events_from_photonsim_labels(event_simulator, root_file_path, senso
     print(f"\nGenerating {n_events} events using VMAP-OPTIMIZED label-based processing...")
     print(f"Using batch size of {batch_size} events for multithreaded I/O")
     print(f"Apply smearing: {apply_smearing}")
-    print(f"Apply rotation: {apply_rotation}")
     print(f"Apply translation: {apply_translation}")
+    # Note: Rotation is not applied in this workflow because PhotonSim already generates
+    # primaries with random isotropic directions (/gun/randomDirection true). The photon
+    # and track data are already in randomized coordinate frames, so rotation in LUCiD
+    # would be redundant. Only translation is needed to place the vertex in the detector.
+    if apply_rotation:
+        print(f"WARNING: apply_rotation=True was passed but rotation is disabled in this workflow.")
+        print(f"         PhotonSim already generates tracks with random directions, so rotation is unnecessary.")
     print(f"Saving events to directory: {output_dir}")
 
     # Load detector bounds if translation is requested
@@ -1124,7 +1222,7 @@ def generate_events_from_photonsim_labels(event_simulator, root_file_path, senso
 
             # Read label data from PhotonSim
             print(f"    Reading label data from ROOT file...", flush=True)
-            label_data = read_label_data_from_photonsim(root_file_path, event_idx)
+            label_data = read_label_data_from_photonsim(root_file_path, event_idx, include_track_segments=include_track_segments)
 
             n_labels = label_data['n_labels']
             labels = label_data['labels']
@@ -1184,6 +1282,18 @@ def generate_events_from_photonsim_labels(event_simulator, root_file_path, senso
                     ], dtype=np.float32)
 
                 all_photon_origins_np += translation_vector[None, :]
+
+                # Apply translation to segment positions if track segments are included
+                if include_track_segments and 'segments' in label_data:
+                    segments = label_data['segments']
+                    # Convert translation from meters to cm (segments are in cm)
+                    translation_cm = translation_vector * 100.0
+                    segments['start_x'] = segments['start_x'] + translation_cm[0]
+                    segments['start_y'] = segments['start_y'] + translation_cm[1]
+                    segments['start_z'] = segments['start_z'] + translation_cm[2]
+                    segments['end_x'] = segments['end_x'] + translation_cm[0]
+                    segments['end_y'] = segments['end_y'] + translation_cm[1]
+                    segments['end_z'] = segments['end_z'] + translation_cm[2]
 
             # Pre-allocate batched arrays
             batched_origins_np = np.zeros((n_labels, PAD_SIZE, 3), dtype=np.float32)
@@ -1343,6 +1453,31 @@ def generate_events_from_photonsim_labels(event_simulator, root_file_path, senso
                 if total_photons_all_labels > 0:
                     overall_light_containment = float(total_photons_inside_all_labels) / total_photons_all_labels
 
+            # ========================================================================
+            # VOXELIZATION
+            # Convert photon positions to sparse voxel representation
+            # ========================================================================
+            print(f"    Voxelizing photon positions...", flush=True)
+            voxel_start_time = time.time()
+
+            # Get photon indices for each label
+            label_photon_indices_list = [label['photon_indices'] for label in labels]
+
+            # Voxelize using positions in meters
+            voxel_config = VoxelGridConfig()
+            voxel_data = voxelize_from_photon_indices(
+                all_photon_origins_np,  # Already in meters
+                label_photon_indices_list,
+                voxel_config
+            )
+
+            # Pack for HDF5 storage
+            packed_voxel_data = pack_voxel_data_for_hdf5(voxel_data)
+
+            voxel_elapsed = time.time() - voxel_start_time
+            total_voxels = np.sum(voxel_data['n_nonzero_voxels'])
+            print(f"    Voxelization: {total_voxels:,} voxels in {voxel_elapsed:.3f}s", flush=True)
+
             # Create filename
             event_number = event_idx
             filename = os.path.join(output_dir, f'event_{event_number}.h5')
@@ -1362,8 +1497,20 @@ def generate_events_from_photonsim_labels(event_simulator, root_file_path, senso
                 'apply_smearing': apply_smearing,
                 'source': 'PhotonSim_Labels_VMAP',
                 'overall_light_containment': overall_light_containment,
-                'light_containment_by_label': light_containment_by_label
+                'light_containment_by_label': light_containment_by_label,
+                # Voxel data (sparse representation)
+                'voxel_n_nonzero': packed_voxel_data['voxel_n_nonzero'],
+                'voxel_offsets': packed_voxel_data['voxel_offsets'],
+                'voxel_flat_indices': packed_voxel_data['voxel_flat_indices'],
+                'voxel_counts': packed_voxel_data['voxel_counts'],
+                # Track segment data (if included)
+                'include_track_segments': include_track_segments
             }
+
+            # Add meaningful tracks and segments if requested
+            if include_track_segments and 'meaningful_tracks' in label_data:
+                extended_info['meaningful_tracks'] = label_data['meaningful_tracks']
+                extended_info['segments'] = label_data['segments']
 
             # Store for batch processing
             batch_data.append(extended_info)

@@ -877,6 +877,12 @@ def save_single_event_with_label_info(extended_info, event_number=0, filename=No
     - Q_reco (N_sensors): Optionally smeared Q_true
     - T_reco (N_sensors): Optionally smeared T_true
 
+    Voxel data (sparse representation):
+    - voxel_n_nonzero (N_labels,): Number of non-zero voxels per label
+    - voxel_offsets (N_labels,): Starting offset in flattened arrays per label
+    - voxel_flat_indices (N_v,): Flat voxel indices (use flat_index_to_position to decode)
+    - voxel_counts (N_v,): Photon count per voxel
+
     Parameters
     ----------
     extended_info : dict
@@ -1022,10 +1028,85 @@ def save_single_event_with_label_info(extended_info, event_number=0, filename=No
         f.create_dataset('overall_light_containment', data=np.float64(extended_info['overall_light_containment']))
         f.create_dataset('light_containment_by_label', data=np.array(extended_info['light_containment_by_label'], dtype=np.float64))
 
+        # Save voxel data (sparse representation)
+        if 'voxel_n_nonzero' in extended_info:
+            f.create_dataset('voxel_n_nonzero', data=np.asarray(extended_info['voxel_n_nonzero'], dtype=np.int32))
+            f.create_dataset('voxel_offsets', data=np.asarray(extended_info['voxel_offsets'], dtype=np.int32))
+            f.create_dataset('voxel_flat_indices', data=np.asarray(extended_info['voxel_flat_indices'], dtype=np.int64))
+            f.create_dataset('voxel_counts', data=np.asarray(extended_info['voxel_counts'], dtype=np.int32))
+
         # Save source information (also ensure proper types for attributes)
         f.attrs['source'] = extended_info['source']
         f.attrs['n_labels'] = np.int32(n_labels)
         f.attrs['n_sensors'] = np.int32(Q_true.shape[0])
+
+        # Save meaningful tracks and segments if included
+        if extended_info.get('include_track_segments', False) and 'meaningful_tracks' in extended_info:
+            meaningful_tracks = extended_info['meaningful_tracks']
+            segments = extended_info['segments']
+
+            # Create a group for meaningful tracks
+            tracks_group = f.create_group('MeaningfulTracks')
+
+            # Save track-level arrays
+            n_tracks = len(meaningful_tracks)
+            tracks_group.attrs['n_tracks'] = np.int32(n_tracks)
+
+            if n_tracks > 0:
+                # Build arrays from meaningful_tracks dict
+                track_ids = np.array([t['track_id'] for t in meaningful_tracks.values()], dtype=np.int32)
+                parent_ids = np.array([t['parent_id'] for t in meaningful_tracks.values()], dtype=np.int32)
+                pdgs = np.array([t['pdg'] for t in meaningful_tracks.values()], dtype=np.int32)
+                energies = np.array([t['initial_energy'] for t in meaningful_tracks.values()], dtype=np.float32)
+                n_cherenkov = np.array([t['n_cherenkov'] for t in meaningful_tracks.values()], dtype=np.int32)
+                seg_offsets = np.array([t['segment_offset'] for t in meaningful_tracks.values()], dtype=np.int32)
+                n_segs = np.array([t['n_segments'] for t in meaningful_tracks.values()], dtype=np.int32)
+                particle_names = [t['particle_name'] for t in meaningful_tracks.values()]
+
+                tracks_group.create_dataset('TrackID', data=track_ids)
+                tracks_group.create_dataset('ParentID', data=parent_ids)
+                tracks_group.create_dataset('PDG', data=pdgs)
+                tracks_group.create_dataset('InitialEnergy', data=energies)
+                tracks_group.create_dataset('NCherenkov', data=n_cherenkov)
+                tracks_group.create_dataset('SegmentOffset', data=seg_offsets)
+                tracks_group.create_dataset('NSegments', data=n_segs)
+
+                # Save particle names as variable-length strings
+                dt = h5py.string_dtype(encoding='utf-8')
+                tracks_group.create_dataset('ParticleName', data=particle_names, dtype=dt)
+
+            # Create a group for segments
+            segments_group = f.create_group('Segments')
+            n_segments = segments['n_segments']
+            segments_group.attrs['n_segments'] = np.int32(n_segments)
+
+            if n_segments > 0:
+                # Save segment arrays (positions in cm)
+                segments_group.create_dataset('StartX', data=np.asarray(segments['start_x'], dtype=np.float32))
+                segments_group.create_dataset('StartY', data=np.asarray(segments['start_y'], dtype=np.float32))
+                segments_group.create_dataset('StartZ', data=np.asarray(segments['start_z'], dtype=np.float32))
+                segments_group.create_dataset('EndX', data=np.asarray(segments['end_x'], dtype=np.float32))
+                segments_group.create_dataset('EndY', data=np.asarray(segments['end_y'], dtype=np.float32))
+                segments_group.create_dataset('EndZ', data=np.asarray(segments['end_z'], dtype=np.float32))
+                segments_group.create_dataset('DirX', data=np.asarray(segments['dir_x'], dtype=np.float32))
+                segments_group.create_dataset('DirY', data=np.asarray(segments['dir_y'], dtype=np.float32))
+                segments_group.create_dataset('DirZ', data=np.asarray(segments['dir_z'], dtype=np.float32))
+                segments_group.create_dataset('Edep', data=np.asarray(segments['edep'], dtype=np.float32))
+                segments_group.create_dataset('Time', data=np.asarray(segments['time'], dtype=np.float32))
+
+            # Save extended genealogy for each label if available
+            ext_genealogies = []
+            for label in labels:
+                if 'extended_genealogy' in label and label['extended_genealogy'] is not None:
+                    ext_genealogies.append(np.asarray(label['extended_genealogy'], dtype=np.int32))
+                else:
+                    ext_genealogies.append(np.array([], dtype=np.int32))
+
+            if ext_genealogies:
+                ext_gen_data = np.empty(len(ext_genealogies), dtype=object)
+                for i, arr in enumerate(ext_genealogies):
+                    ext_gen_data[i] = arr
+                f.create_dataset('Label_ExtendedGenealogy', data=ext_gen_data, dtype=vlen_int_dtype)
 
     return filename
 
@@ -1080,9 +1161,19 @@ def merge_event_files(output_dir, merged_filename='merged_events.h5', remove_ind
                 # Create a group for this event
                 event_group = merged_file.create_group(f'event_{event_num}')
 
-                # Copy all datasets from individual file to the group
+                # Recursively copy all datasets and groups from individual file
+                def copy_item(src, dst, name):
+                    """Recursively copy HDF5 items (datasets and groups)."""
+                    item = src[name]
+                    if isinstance(item, h5py.Dataset):
+                        dst.create_dataset(name, data=item[()])
+                    elif isinstance(item, h5py.Group):
+                        grp = dst.create_group(name)
+                        for subkey in item.keys():
+                            copy_item(item, grp, subkey)
+
                 for key in f.keys():
-                    event_group.create_dataset(key, data=f[key][()])
+                    copy_item(f, event_group, key)
 
     print(f"Successfully merged events into: {merged_path}")
 
