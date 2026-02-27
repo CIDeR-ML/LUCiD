@@ -134,6 +134,53 @@ PE_per_particle = lucid_data['PE_per_particle']  # Shape: (n_particles, N_sensor
 T_per_particle = lucid_data['T_per_particle']
 PE = lucid_data['PE']
 
+# Load track info for PDG lookup and arrow visualization
+import h5py
+track_id_to_info = {}  # Map track ID to (pdg, position, direction, energy)
+with h5py.File(hdf5_file, 'r') as f:
+    if f'event_{event_idx}' in f:
+        event_group = f[f'event_{event_idx}']
+    else:
+        event_group = f
+
+    if 'TrackInformation' in event_group and 'Segments' in event_group:
+        tracks_grp = event_group['TrackInformation']
+        segs_grp = event_group['Segments']
+
+        track_ids = np.array(tracks_grp['TrackID'])
+        track_pdgs = np.array(tracks_grp['PDG'])
+        track_energies = np.array(tracks_grp['InitialEnergy'])
+        track_seg_offsets = np.array(tracks_grp['SegmentOffset'])
+        track_n_segs = np.array(tracks_grp['NSegments'])
+
+        # Get segment data (in cm, convert to m)
+        seg_start_x = np.array(segs_grp['StartX']) / 100.0
+        seg_start_y = np.array(segs_grp['StartY']) / 100.0
+        seg_start_z = np.array(segs_grp['StartZ']) / 100.0
+        seg_dir_x = np.array(segs_grp['DirX'])
+        seg_dir_y = np.array(segs_grp['DirY'])
+        seg_dir_z = np.array(segs_grp['DirZ'])
+
+        for i, tid in enumerate(track_ids):
+            offset = track_seg_offsets[i]
+            if track_n_segs[i] > 0:
+                pos = np.array([seg_start_x[offset], seg_start_y[offset], seg_start_z[offset]])
+                dir_vec = np.array([seg_dir_x[offset], seg_dir_y[offset], seg_dir_z[offset]])
+                # Normalize direction
+                dir_norm = np.linalg.norm(dir_vec)
+                if dir_norm > 0:
+                    dir_vec = dir_vec / dir_norm
+            else:
+                pos = np.array([0, 0, 0])
+                dir_vec = np.array([0, 0, 1])
+
+            track_id_to_info[int(tid)] = {
+                'pdg': int(track_pdgs[i]),
+                'position': pos,
+                'direction': dir_vec,
+                'energy': float(track_energies[i])
+            }
+
 print(f"Event: {n_particles} categorized particles")
 print(f"t0: {lucid_data.get('t0', 0.0):.2f} ns")
 print(f"PE_per_particle shape: {PE_per_particle.shape}")
@@ -151,11 +198,32 @@ for particle_idx in range(n_particles):
     total_charge = np.sum(PE_per_particle[particle_idx, :])
     containment = lucid_data['light_containment_by_particle'][particle_idx]
 
+    # Get particle type from PDG using extended genealogy (last track ID)
+    ext_genealogy = lucid_data.get('Particle_TrackGenealogy', [None] * n_particles)[particle_idx]
+    particle_type = "unknown"
+    particle_energy = 0.0
+    particle_position = None
+    particle_direction = None
+
+    if ext_genealogy is not None and len(ext_genealogy) > 0:
+        # Get the last track ID in the genealogy (the track that produced photons)
+        last_track_id = int(ext_genealogy[-1])
+        if last_track_id in track_id_to_info:
+            pdg = track_id_to_info[last_track_id]['pdg']
+            particle_type = pdg_to_name.get(pdg, f'PDG{pdg}')
+            particle_energy = track_id_to_info[last_track_id]['energy']
+            particle_position = track_id_to_info[last_track_id]['position']
+            particle_direction = track_id_to_info[last_track_id]['direction']
+
     particle_name = f"Particle {particle_idx}"
     particle_info.append({
         'idx': particle_idx,
         'name': particle_name,
         'category': category_name,
+        'particle_type': particle_type,
+        'energy': particle_energy,
+        'position': particle_position,
+        'direction': particle_direction,
         'total_charge': total_charge,
         'containment': containment,
         'color': colors_palette[particle_idx % len(colors_palette)]
@@ -163,7 +231,7 @@ for particle_idx in range(n_particles):
 
     # Print detailed particle information
     print("=" * 80)
-    print(f"{particle_name} ({category_name})")
+    print(f"{particle_name} ({category_name}) - {particle_type}")
     print("=" * 80)
 
     # Print genealogy
@@ -172,6 +240,7 @@ for particle_idx in range(n_particles):
         print(f"  Genealogy: {genealogy}")
 
     print(f"  Category: {category_name}")
+    print(f"  Particle type: {particle_type} ({particle_energy:.1f} MeV)")
     print(f"  Total charge deposited: {total_charge:.1f} PE")
     print(f"  Light containment: {containment*100:.1f}%")
 
@@ -180,7 +249,7 @@ print()
 # Keep label_info for compatibility with rest of code
 label_info = particle_info
 
-# Build particle tree from HDF5 genealogy data (simplified - no per-particle track info)
+# Build particle tree from HDF5 genealogy data
 particle_tree = {}
 
 # Process each categorized particle
@@ -210,9 +279,16 @@ for particle_idx in range(n_particles):
 
     containment = lucid_data['light_containment_by_particle'][particle_idx]
 
+    # Get particle type and position/direction from particle_info
+    pinfo = particle_info[particle_idx]
+
     # Store particle info
     particle_tree[particle_idx] = {
         'category': category_name,
+        'particle_type': pinfo['particle_type'],
+        'energy': pinfo['energy'],
+        'position': pinfo['position'],
+        'direction': pinfo['direction'],
         'genealogy': genealogy_list,
         'charge': total_charge,
         'time': avg_time,
@@ -277,7 +353,13 @@ def format_particle_tree(particle_idx, particle_tree, children, depth=0):
 
     particle = particle_tree[particle_idx]
     color = colors_palette[particle_idx % len(colors_palette)]
-    category_colored = f"<span style='color:{color};font-weight:bold'>{particle['category']}</span>"
+
+    # Format particle type with energy
+    particle_type = particle.get('particle_type', 'unknown')
+    energy = particle.get('energy', 0.0)
+    type_str = f"{particle_type} ({energy:.1f} MeV)" if energy > 0 else particle_type
+
+    category_colored = f"<span style='color:{color};font-weight:bold'>{particle['category']}: {type_str}</span>"
 
     indent = "&nbsp;&nbsp;" * (depth + 1)
     arrow = "└─ " if depth > 0 else ""
@@ -320,10 +402,72 @@ fig = go.Figure()
 # Calculate sensor disc radius
 disc_radius = detector.S_radius * 1.0
 
-# Note: Arrow traces removed - per-particle track position/direction no longer stored
-# Track segment visualization is now used instead (see below)
+# Create arrow traces for each categorized particle
+print("Creating arrow traces...")
 arrow_trace_indices = []
-print("Note: Per-particle track arrows not available (track info stored in TrackInformation group)")
+for i, pinfo in enumerate(particle_info):
+    color = pinfo['color']
+    particle_type = pinfo['particle_type']
+    category = pinfo['category']
+
+    # Get track position and direction
+    track_pos = pinfo['position']
+    track_dir = pinfo['direction']
+
+    if track_pos is None or track_dir is None:
+        print(f"  Skipping arrow for Particle {i} (no track info)")
+        continue
+
+    # Add arrow (cylinder + cone) to show track direction
+    arrow_scale = 3.0  # Arrow length in meters (3 m)
+    cylinder_radius = 0.075  # Cylinder radius in meters (7.5 cm)
+
+    # Draw the cylinder shaft
+    cylinder_end = track_pos + track_dir * arrow_scale
+    cyl_x, cyl_y, cyl_z, cyl_i, cyl_j, cyl_k = create_cylinder(
+        track_pos, cylinder_end, cylinder_radius
+    )
+
+    if len(cyl_x) > 0:
+        fig.add_trace(
+            go.Mesh3d(
+                x=cyl_x, y=cyl_y, z=cyl_z,
+                i=cyl_i, j=cyl_j, k=cyl_k,
+                color=color, opacity=1.0,
+                name=f'{particle_type} ({category})',
+                legendgroup=f'particle{i}',
+                showlegend=False,
+                visible=True,
+                lighting=dict(ambient=0.8, diffuse=0.8, specular=0.2),
+                flatshading=False
+            )
+        )
+        arrow_trace_indices.append(len(fig.data) - 1)
+
+        # Add cone arrowhead
+        tip_x = track_pos[0] + track_dir[0] * arrow_scale
+        tip_y = track_pos[1] + track_dir[1] * arrow_scale
+        tip_z = track_pos[2] + track_dir[2] * arrow_scale
+
+        fig.add_trace(
+            go.Cone(
+                x=[tip_x], y=[tip_y], z=[tip_z],
+                u=[track_dir[0]], v=[track_dir[1]], w=[track_dir[2]],
+                colorscale=[[0, color], [1, color]],
+                sizemode="absolute",
+                sizeref=1.5,  # Cone size in meters (1.5 m)
+                showscale=False,
+                name=f'{particle_type} direction',
+                legendgroup=f'particle{i}',
+                showlegend=False,
+                visible=True
+            )
+        )
+        arrow_trace_indices.append(len(fig.data) - 1)
+
+        print(f"  Added arrow for Particle {i}: {particle_type} ({category})")
+
+print(f"  Total arrow traces: {len(arrow_trace_indices)}")
 print()
 
 # Create "All" trace showing total charge across all labels
@@ -728,11 +872,24 @@ detector_trace_index = len(fig.data) - 1
 # Create slider steps
 slider_steps = []
 
-# Track indices for main visualization traces (after arrow traces, which are now empty)
-# Trace order: "All", "By Particle", Individual particles..., voxel (if present), segments..., detector surface, detector points
-all_trace_index = 0  # First trace is "All"
-by_particle_trace_index = 1  # Second trace is "By Particle"
-individual_particle_start = 2  # Individual particle traces start here
+# Track indices for main visualization traces
+# Trace order: Arrows..., "All", "By Particle", Individual particles..., voxel (if present), segments..., detector surface, detector points
+n_arrow_traces = len(arrow_trace_indices)
+all_trace_index = n_arrow_traces  # After arrow traces
+by_particle_trace_index = n_arrow_traces + 1  # After "All"
+individual_particle_start = n_arrow_traces + 2  # After "By Particle"
+
+# Step: "Arrows" - show direction arrows for each categorized particle
+if len(arrow_trace_indices) > 0:
+    step_vis = [False] * len(fig.data)
+    for idx in arrow_trace_indices:
+        step_vis[idx] = True
+    step_vis[detector_surface_index] = True  # Show detector surface
+    slider_steps.append(dict(
+        method="update",
+        args=[{"visible": step_vis}],
+        label="Arrows"
+    ))
 
 # Step: "Track Segments" - show track segment trajectories and detector surface
 if len(segment_trace_indices) > 0:
