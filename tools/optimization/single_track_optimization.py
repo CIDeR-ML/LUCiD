@@ -180,7 +180,7 @@ def create_combined_loss_function(vertex_weight_scale, counts_weight_scale,
         time_loss_val = cone_time_loss(
             observed_counts, simulated_time, observed_times, t0, tau=0.12)
 
-        combined_loss = jnp.sqrt((vertex_loss_val + 1e-6) * (counts_loss_val + 1e-6) * (time_loss_val + 1e-6))
+        combined_loss = jnp.sqrt((vertex_loss_val + 1e-6) * (counts_loss_val + 1e-6) * (time_loss_val + 1e-6)) + counts_loss_val
         return combined_loss, (vertex_loss_val, counts_loss_val, time_loss_val)
 
     combined_grad_fn = jit(value_and_grad(combined_product_loss, has_aux=True))

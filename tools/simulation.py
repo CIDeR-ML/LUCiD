@@ -723,11 +723,11 @@ def smear_charges_SK_like(counts, key=None):
     if key is None:
         raise ValueError("key must be provided for reproducibility.")
 
-    # Define sigma according to the count range
+    #Define sigma according to the count range
     sigma = jnp.where(
         counts < 20,
-        counts * 0.04,
-        jnp.where(counts < 130, counts * 0.26, counts * 1.8)
+        counts * 0.012,
+        jnp.where(counts < 130, counts * 0.0075, counts * 0.005)
     )
 
     # Apply Gaussian smearing
