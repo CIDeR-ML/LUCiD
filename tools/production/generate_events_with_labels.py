@@ -86,6 +86,11 @@ def main():
         action='store_true',
         help='Apply random translation per event to all photons and tracks'
     )
+    parser.add_argument(
+        '--include-track-segments',
+        action='store_true',
+        help='Include meaningful track and segment data in output (track-level G4 information)'
+    )
     args = parser.parse_args()
 
     # Verify ROOT file exists
@@ -130,6 +135,7 @@ def main():
     print(f"  Apply smearing: {args.apply_smearing}")
     print(f"  Apply rotation: {args.apply_rotation}")
     print(f"  Apply translation: {args.apply_translation}")
+    print(f"  Include track segments: {args.include_track_segments}")
 
     result = generate_events_from_photonsim_labels(
         event_simulator=simulate_event,
@@ -144,7 +150,8 @@ def main():
         apply_translation=args.apply_translation,
         detector_config_path=args.config,
         merge_output=True,
-        merged_filename=args.merged_filename
+        merged_filename=args.merged_filename,
+        include_track_segments=args.include_track_segments
     )
 
     print(f"\nOutput file: {result}")
