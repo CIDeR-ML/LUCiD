@@ -15,6 +15,7 @@ import os
 import numpy as np
 import plotly.graph_objects as go
 from tools.production.label_data_utils import read_label_event_file
+from tools.production.voxelize import flat_index_to_position, VoxelGridConfig
 from tools.geometry import generate_detector
 from tools.geometry.utils import calculate_surface_normals, create_disc_mesh
 import argparse
@@ -567,6 +568,100 @@ for label_idx in range(n_labels):
 
 print()
 
+# ============================================================================
+# VOXEL VISUALIZATION
+# ============================================================================
+print("Creating voxel visualization...")
+
+# Check if voxel data exists in the HDF5 file
+has_voxel_data = False
+voxel_trace_index = None
+
+# Try to load voxel data directly from HDF5
+import h5py
+with h5py.File(hdf5_file, 'r') as f:
+    # Navigate to the correct event group
+    if f'event_{event_idx}' in f:
+        event_group = f[f'event_{event_idx}']
+    else:
+        event_group = f  # Single event file
+
+    if 'voxel_flat_indices' in event_group:
+        has_voxel_data = True
+        voxel_n_nonzero = np.array(event_group['voxel_n_nonzero'])
+        voxel_offsets = np.array(event_group['voxel_offsets'])
+        voxel_flat_indices = np.array(event_group['voxel_flat_indices'])
+        voxel_counts = np.array(event_group['voxel_counts'])
+
+if has_voxel_data and len(voxel_flat_indices) > 0:
+    print(f"  Found voxel data: {len(voxel_flat_indices)} total voxels")
+
+    # Convert flat indices to positions
+    voxel_config = VoxelGridConfig()
+    voxel_positions = flat_index_to_position(voxel_flat_indices, voxel_config)
+
+    # Build arrays for scatter plot with colors per label
+    all_voxel_x = []
+    all_voxel_y = []
+    all_voxel_z = []
+    all_voxel_colors = []
+    all_voxel_sizes = []
+    all_voxel_text = []
+
+    for label_idx in range(n_labels):
+        start = voxel_offsets[label_idx]
+        end = start + voxel_n_nonzero[label_idx]
+
+        label_positions = voxel_positions[start:end]
+        label_counts = voxel_counts[start:end]
+        label_color = colors_palette[label_idx % len(colors_palette)]
+
+        # Get label info for hover text
+        particle_name = label_info[label_idx]['particle']
+
+        for i, (pos, count) in enumerate(zip(label_positions, label_counts)):
+            all_voxel_x.append(pos[0])
+            all_voxel_y.append(pos[1])
+            all_voxel_z.append(pos[2])
+            all_voxel_colors.append(label_color)
+            # Scale marker size by log of photon count
+            size = np.log10(count + 1) * 3 + 2
+            all_voxel_sizes.append(size)
+            all_voxel_text.append(
+                f"Label {label_idx}: {particle_name}<br>"
+                f"Position: ({pos[0]:.3f}, {pos[1]:.3f}, {pos[2]:.3f}) m<br>"
+                f"Photons: {count}"
+            )
+
+        print(f"    Label {label_idx} ({particle_name}): {voxel_n_nonzero[label_idx]} voxels, {np.sum(label_counts)} photons")
+
+    # Add voxel trace
+    fig.add_trace(
+        go.Scatter3d(
+            x=all_voxel_x,
+            y=all_voxel_y,
+            z=all_voxel_z,
+            mode='markers',
+            marker=dict(
+                size=all_voxel_sizes,
+                color=all_voxel_colors,
+                opacity=0.8,
+                line=dict(width=0)
+            ),
+            text=all_voxel_text,
+            hoverinfo='text',
+            name='Voxels',
+            showlegend=False,
+            visible=False
+        )
+    )
+    voxel_trace_index = len(fig.data) - 1
+    print(f"  Total: {len(all_voxel_x)} voxels visualized")
+else:
+    print("  No voxel data found in HDF5 file")
+
+print()
+
 # Add detector geometry
 print("Adding detector geometry...")
 
@@ -623,7 +718,18 @@ slider_steps.append(dict(
     label="Arrows"
 ))
 
-# Step 1: "By Label" - show discrete color-coded sensors and detector surface
+# Step 1: "Voxels" (if available) - show voxels and detector surface (no arrows)
+if voxel_trace_index is not None:
+    step_vis = [False] * len(fig.data)
+    step_vis[voxel_trace_index] = True  # Voxel trace
+    step_vis[detector_surface_index] = True  # Show detector surface
+    slider_steps.append(dict(
+        method="update",
+        args=[{"visible": step_vis}],
+        label="Voxels"
+    ))
+
+# Step 2: "By Label" - show discrete color-coded sensors and detector surface
 step_vis = [False] * len(fig.data)
 step_vis[len(arrow_trace_indices) + 1] = True  # By Label trace
 step_vis[detector_surface_index] = True  # Show detector surface
