@@ -99,7 +99,7 @@ for (( p=0; p<$N_PARTICLES; p++ )); do
     ENERGY_MIN=$(jq -r ".particles[$p].energy_min_MeV" "$CONFIG_FILE")
     ENERGY_MAX=$(jq -r ".particles[$p].energy_max_MeV" "$CONFIG_FILE")
     echo "  - $PARTICLE_TYPE: ${ENERGY_MIN}-${ENERGY_MAX} MeV"
-    PARTICLE_COMMANDS="${PARTICLE_COMMANDS}/gun/addPrimary ${PARTICLE_TYPE} ${ENERGY_MIN} ${ENERGY_MAX} MeV
+    PARTICLE_COMMANDS="${PARTICLE_COMMANDS}/gun/addPrimaryWithEnergyRange ${PARTICLE_TYPE} ${ENERGY_MIN} ${ENERGY_MAX} MeV
 "
 done
 echo ""

@@ -41,8 +41,8 @@ def get_max_photons_per_label(root_file_path, n_events=None):
     # Limit to n_events if specified
     entry_stop = min(n_events, num_entries) if n_events is not None else num_entries
 
-    # Read Label_PhotonIDsSize for all events at once (jagged array)
-    photon_ids_sizes = tree['Label_PhotonIDsSize'].array(
+    # Read Particle_PhotonIDsSize for all events at once (jagged array)
+    photon_ids_sizes = tree['Particle_PhotonIDsSize'].array(
         entry_start=0, entry_stop=entry_stop, library='np'
     )
 
@@ -632,9 +632,9 @@ def read_label_data_from_photonsim(root_file_path, entry_index, include_track_se
         'PhotonPosX', 'PhotonPosY', 'PhotonPosZ',
         'PhotonDirX', 'PhotonDirY', 'PhotonDirZ',
         'PhotonTime',
-        'NLabels',
-        'Label_GenealogySize', 'Label_GenealogyData',
-        'Label_PhotonIDsSize', 'Label_PhotonIDsData',
+        'NParticles',
+        'Particle_GenealogySize', 'Particle_GenealogyData',
+        'Particle_PhotonIDsSize', 'Particle_PhotonIDsData',
         'TrackInfo_TrackID', 'TrackInfo_Category', 'TrackInfo_SubID',
         'TrackInfo_PosX', 'TrackInfo_PosY', 'TrackInfo_PosZ',
         'TrackInfo_DirX', 'TrackInfo_DirY', 'TrackInfo_DirZ',
@@ -645,7 +645,7 @@ def read_label_data_from_photonsim(root_file_path, entry_index, include_track_se
     # Add branches for track segments if requested
     if include_track_segments:
         branches_to_read.extend([
-            'Label_ExtGenealogySize', 'Label_ExtGenealogyData',
+            'Particle_ExtGenealogySize', 'Particle_ExtGenealogyData',
             'NMeaningfulTracks',
             'MTrack_TrackID', 'MTrack_ParentID', 'MTrack_PDG',
             'MTrack_InitialEnergy', 'MTrack_ParticleName', 'MTrack_NCherenkov',
@@ -675,16 +675,16 @@ def read_label_data_from_photonsim(root_file_path, entry_index, include_track_se
 
     photon_times = tree_data['PhotonTime'][0]
 
-    # Extract label system
-    n_labels = int(tree_data['NLabels'][0])
+    # Extract particle system (n_labels kept as internal variable name for compatibility)
+    n_labels = int(tree_data['NParticles'][0])
 
     # Parse genealogy data
-    genealogy_sizes = tree_data['Label_GenealogySize'][0]
-    genealogy_data = tree_data['Label_GenealogyData'][0]
+    genealogy_sizes = tree_data['Particle_GenealogySize'][0]
+    genealogy_data = tree_data['Particle_GenealogyData'][0]
 
     # Parse photon IDs data
-    photon_ids_sizes = tree_data['Label_PhotonIDsSize'][0]
-    photon_ids_data = tree_data['Label_PhotonIDsData'][0]
+    photon_ids_sizes = tree_data['Particle_PhotonIDsSize'][0]
+    photon_ids_data = tree_data['Particle_PhotonIDsData'][0]
 
     # Extract track info arrays
     track_ids = tree_data['TrackInfo_TrackID'][0]
@@ -720,8 +720,8 @@ def read_label_data_from_photonsim(root_file_path, entry_index, include_track_se
     ext_genealogy_sizes = None
     ext_genealogy_data = None
     if include_track_segments:
-        ext_genealogy_sizes = tree_data['Label_ExtGenealogySize'][0]
-        ext_genealogy_data = tree_data['Label_ExtGenealogyData'][0]
+        ext_genealogy_sizes = tree_data['Particle_ExtGenealogySize'][0]
+        ext_genealogy_data = tree_data['Particle_ExtGenealogyData'][0]
 
     # Parse labels
     labels = []
