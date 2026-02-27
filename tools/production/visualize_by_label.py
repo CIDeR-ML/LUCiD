@@ -593,6 +593,101 @@ with h5py.File(hdf5_file, 'r') as f:
         voxel_flat_indices = np.array(event_group['voxel_flat_indices'])
         voxel_counts = np.array(event_group['voxel_counts'])
 
+# ============================================================================
+# TRACK SEGMENT VISUALIZATION
+# ============================================================================
+print("Loading track segment data...")
+
+# Check if track segment data exists
+has_segment_data = False
+segment_trace_indices = []
+
+with h5py.File(hdf5_file, 'r') as f:
+    if f'event_{event_idx}' in f:
+        event_group = f[f'event_{event_idx}']
+    else:
+        event_group = f
+
+    if 'MeaningfulTracks' in event_group and 'Segments' in event_group:
+        has_segment_data = True
+        tracks_group = event_group['MeaningfulTracks']
+        segs_group = event_group['Segments']
+
+        # Load track data
+        track_ids = np.array(tracks_group['TrackID'])
+        track_parent_ids = np.array(tracks_group['ParentID'])
+        track_pdgs = np.array(tracks_group['PDG'])
+        track_seg_offsets = np.array(tracks_group['SegmentOffset'])
+        track_n_segs = np.array(tracks_group['NSegments'])
+        track_n_cherenkov = np.array(tracks_group['NCherenkov'])
+        track_names = [s.decode() if isinstance(s, bytes) else s
+                       for s in tracks_group['ParticleName'][:]]
+
+        # Load segment data (positions in cm, convert to meters for display)
+        seg_start_x = np.array(segs_group['StartX']) / 100.0
+        seg_start_y = np.array(segs_group['StartY']) / 100.0
+        seg_start_z = np.array(segs_group['StartZ']) / 100.0
+        seg_end_x = np.array(segs_group['EndX']) / 100.0
+        seg_end_y = np.array(segs_group['EndY']) / 100.0
+        seg_end_z = np.array(segs_group['EndZ']) / 100.0
+
+        print(f"  Found {len(track_ids)} meaningful tracks with {len(seg_start_x)} segments")
+
+if has_segment_data and len(track_ids) > 0:
+    MIN_SEGMENTS_TO_DISPLAY = 5  # Only show tracks with significant trajectory
+
+    # Filter tracks with enough segments
+    tracks_to_display = [i for i in range(len(track_ids))
+                         if track_n_segs[i] > MIN_SEGMENTS_TO_DISPLAY]
+    print(f"  Displaying {len(tracks_to_display)} tracks with >{MIN_SEGMENTS_TO_DISPLAY} segments")
+
+    # Color mapping for particles
+    particle_colors = {
+        'mu-': 'red', 'mu+': 'magenta',
+        'e-': 'blue', 'e+': 'cyan',
+        'pi+': 'green', 'pi-': 'lime',
+        'pi0': 'yellow',
+        'gamma': 'orange',
+        'proton': 'white', 'neutron': 'gray'
+    }
+
+    for track_idx in tracks_to_display:
+        offset = track_seg_offsets[track_idx]
+        n_segs = track_n_segs[track_idx]
+
+        particle_name = track_names[track_idx]
+        color = particle_colors.get(particle_name, 'white')
+
+        # Create lines for each segment (with None separators for disconnected lines)
+        x_coords = []
+        y_coords = []
+        z_coords = []
+
+        for seg_idx in range(n_segs):
+            i = offset + seg_idx
+            x_coords.extend([seg_start_x[i], seg_end_x[i], None])
+            y_coords.extend([seg_start_y[i], seg_end_y[i], None])
+            z_coords.extend([seg_start_z[i], seg_end_z[i], None])
+
+        fig.add_trace(go.Scatter3d(
+            x=x_coords, y=y_coords, z=z_coords,
+            mode='lines',
+            line=dict(color=color, width=3),
+            name=f'{particle_name} (Track {track_ids[track_idx]})',
+            legendgroup=f'track_{track_idx}',
+            showlegend=False,
+            visible=False,
+            hoverinfo='text',
+            hovertext=f'{particle_name}<br>TrackID: {track_ids[track_idx]}<br>Cherenkov: {track_n_cherenkov[track_idx]}'
+        ))
+        segment_trace_indices.append(len(fig.data) - 1)
+
+    print(f"  Created {len(segment_trace_indices)} track segment traces")
+else:
+    print("  No track segment data found in HDF5 file")
+
+print()
+
 if has_voxel_data and len(voxel_flat_indices) > 0:
     print(f"  Found voxel data: {len(voxel_flat_indices)} total voxels")
 
@@ -717,6 +812,18 @@ slider_steps.append(dict(
     args=[{"visible": step_vis}],
     label="Arrows"
 ))
+
+# Step: "Track Segments" - show track segment trajectories and detector surface
+if len(segment_trace_indices) > 0:
+    step_vis = [False] * len(fig.data)
+    for idx in segment_trace_indices:
+        step_vis[idx] = True
+    step_vis[detector_surface_index] = True  # Show detector surface
+    slider_steps.append(dict(
+        method="update",
+        args=[{"visible": step_vis}],
+        label="Track Segments"
+    ))
 
 # Step 1: "Voxels" (if available) - show voxels and detector surface (no arrows)
 if voxel_trace_index is not None:
