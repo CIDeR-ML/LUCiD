@@ -1482,19 +1482,19 @@ def generate_events_from_photonsim_labels(event_simulator, root_file_path, senso
             event_number = event_idx
             filename = os.path.join(output_dir, f'event_{event_number}.h5')
 
+            # Generate event time offset t0 (simulates unknown event start time)
+            t0 = np.random.uniform(-15.0, 15.0)
+
             # Extended info with label structure
             extended_info = {
                 'n_labels': n_labels,
                 'labels': labels,
                 'track_info_dict': label_data['track_info_dict'],
-                'primary_energy': label_data['primary_energy'],
+                't0': t0,
                 'Q_per_label': Q_per_label,
                 'T_per_label': T_per_label,
-                'Q_true': Q_true,
-                'T_true': T_true,
                 'Q_reco': Q_reco,
                 'T_reco': T_reco,
-                'apply_smearing': apply_smearing,
                 'source': 'PhotonSim_Labels_VMAP',
                 'overall_light_containment': overall_light_containment,
                 'light_containment_by_label': light_containment_by_label,

@@ -171,7 +171,7 @@ cd "$LUCID_DIR"
 for (( event=0; event<$N_EVENTS; event++ )); do
     echo "Generating visualization for event $event..."
     singularity exec -B /sdf,/fs,/sdf/scratch,/lscratch ${SINGULARITY_IMAGE} python \
-        tools/production/visualize_by_label.py \
+        tools/production/visualize_labeled_events.py \
         "$HDF5_FILE" \
         config/SK_geom_config.json \
         --event "$event" \

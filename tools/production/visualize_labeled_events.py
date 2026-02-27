@@ -6,7 +6,7 @@ Shows sensor hits colored by charge value, with arrows showing track directions.
 No photon visualization - only tracks (arrows) and sensor hits.
 
 Usage:
-    python visualize_by_label.py <hdf5_file> <detector_config> --event 0
+    python visualize_labeled_events.py <hdf5_file> <detector_config> --event 0
 """
 import sys
 sys.path.append('/Users/cjesus/Software/LUCiD')
@@ -121,203 +121,189 @@ def create_cylinder(start, end, radius, n_segments=12):
 print(f"Loading event {event_idx}...")
 print()
 
-# Load LUCiD data (contains all track and sensor information)
-lucid_data = read_label_event_file(hdf5_file, event_index=event_idx, verbose=False)
-n_labels = lucid_data['n_labels']
-Q_per_label = lucid_data['Q_per_label']  # Shape: (N_labels, N_sensors)
-T_per_label = lucid_data['T_per_label']
-Q_true = lucid_data['Q_true']
+# Category names mapping
+category_names_map = {0: "Primary", 1: "DecayElectron", 2: "SecondaryPion", 3: "GammaShower", -1: "Unknown"}
 
-print(f"Event: {n_labels} labels")
-print(f"Q_per_label shape: {Q_per_label.shape}")
+def get_category_name(code):
+    return category_names_map.get(int(code), f'Category_{int(code)}')
+
+# Load LUCiD data (contains sensor and particle information)
+lucid_data = read_label_event_file(hdf5_file, event_index=event_idx, verbose=False)
+n_particles = lucid_data['n_particles']
+PE_per_particle = lucid_data['PE_per_particle']  # Shape: (n_particles, N_sensors)
+T_per_particle = lucid_data['T_per_particle']
+PE = lucid_data['PE']
+
+print(f"Event: {n_particles} categorized particles")
+print(f"t0: {lucid_data.get('t0', 0.0):.2f} ns")
+print(f"PE_per_particle shape: {PE_per_particle.shape}")
 
 # Find global max charge for colorbar normalization
-global_max_charge = np.max(Q_per_label)
+global_max_charge = np.max(PE_per_particle)
 print(f"Global max charge: {global_max_charge:.1f} PE")
 print()
 
-# Prepare label information from HDF5 data
-label_info = []
-for label_idx in range(n_labels):
-    pdg = lucid_data['Track_PDG'][label_idx]
-    particle_name = pdg_to_name.get(int(pdg), f'PDG{int(pdg)}')
+# Prepare particle information from HDF5 data
+particle_info = []
+for particle_idx in range(n_particles):
+    category_code = lucid_data['Particle_Category'][particle_idx]
+    category_name = get_category_name(category_code)
+    total_charge = np.sum(PE_per_particle[particle_idx, :])
+    containment = lucid_data['light_containment_by_particle'][particle_idx]
 
-    # Get category name
-    category_name = lucid_data['Label_CategoryName'][label_idx]
-    if isinstance(category_name, bytes):
-        category_name = category_name.decode('utf-8')
-
-    kinetic_energy = lucid_data['Track_Energy'][label_idx]
-    total_charge = np.sum(Q_per_label[label_idx, :])
-
-    label_name = f"Label {label_idx}: {particle_name}"
-    label_info.append({
-        'idx': label_idx,
-        'name': label_name,
-        'particle': particle_name,
+    particle_name = f"Particle {particle_idx}"
+    particle_info.append({
+        'idx': particle_idx,
+        'name': particle_name,
         'category': category_name,
-        'energy': kinetic_energy,
         'total_charge': total_charge,
-        'color': colors_palette[label_idx % len(colors_palette)]
+        'containment': containment,
+        'color': colors_palette[particle_idx % len(colors_palette)]
     })
 
-    # Print detailed label information
+    # Print detailed particle information
     print("=" * 80)
-    print(f"{label_name} ({category_name})")
+    print(f"{particle_name} ({category_name})")
     print("=" * 80)
 
     # Print genealogy
-    genealogy = lucid_data['Label_Genealogy'][label_idx]
+    genealogy = lucid_data['Particle_CategorizedGenealogy'][particle_idx]
     if len(genealogy) > 0:
         print(f"  Genealogy: {genealogy}")
 
-    # Print detailed track info
-    # Positions are stored in centimeters, convert to meters for display
-    pos_m = lucid_data['Track_Position'][label_idx] / 100.0
-    dir_vec = lucid_data['Track_Direction'][label_idx]
-    print(f"  PDG: {pdg} ({particle_name})")
     print(f"  Category: {category_name}")
-    print(f"  Kinetic Energy: {kinetic_energy:.2f} MeV")
-    print(f"  Position: [{pos_m[0]:.3f}, {pos_m[1]:.3f}, {pos_m[2]:.3f}] m")
-    print(f"  Direction: [{dir_vec[0]:.3f}, {dir_vec[1]:.3f}, {dir_vec[2]:.3f}]")
     print(f"  Total charge deposited: {total_charge:.1f} PE")
-
-    # Print light containment
-    containment = lucid_data['light_containment_by_label'][label_idx]
     print(f"  Light containment: {containment*100:.1f}%")
 
 print()
 
-# Build track tree from HDF5 genealogy data
-track_tree = {}
-category_names_map = {0: "Primary", 1: "DecayElectron", 2: "SecondaryPion", 3: "GammaShower", -1: "Unknown"}
+# Keep label_info for compatibility with rest of code
+label_info = particle_info
 
-# Process each label to build the track tree
-for label_idx in range(n_labels):
-    genealogy = lucid_data['Label_Genealogy'][label_idx]
+# Build particle tree from HDF5 genealogy data (simplified - no per-particle track info)
+particle_tree = {}
+
+# Process each categorized particle
+for particle_idx in range(n_particles):
+    genealogy = lucid_data['Particle_CategorizedGenealogy'][particle_idx]
     if isinstance(genealogy, np.ndarray):
         genealogy_list = genealogy.tolist()
     else:
         genealogy_list = genealogy
 
-    pdg = lucid_data['Track_PDG'][label_idx]
-    particle_name = pdg_to_name.get(int(pdg), f'PDG{int(pdg)}')
-    category_code = lucid_data['Label_Category'][label_idx]
-    category_name = category_names_map.get(int(category_code), f'Category_{int(category_code)}')
-    energy = lucid_data['Track_Energy'][label_idx]
-    parent_id = lucid_data['Track_ParentID'][label_idx]
+    category_code = lucid_data['Particle_Category'][particle_idx]
+    category_name = get_category_name(category_code)
 
-    # Calculate charge and average time for this label
-    Q_label = Q_per_label[label_idx]
-    T_label = T_per_label[label_idx]
-    total_charge = np.sum(Q_label)
+    # Calculate charge and average time for this particle
+    PE_particle = PE_per_particle[particle_idx]
+    T_particle = T_per_particle[particle_idx]
+    total_charge = np.sum(PE_particle)
 
     # Calculate weighted average time (only for sensors with finite times)
-    finite_mask = np.isfinite(T_label) & (Q_label > 0)
+    finite_mask = np.isfinite(T_particle) & (PE_particle > 0)
     if np.any(finite_mask):
-        finite_charges = Q_label[finite_mask]
-        finite_times = T_label[finite_mask]
+        finite_charges = PE_particle[finite_mask]
+        finite_times = T_particle[finite_mask]
         avg_time = np.sum(finite_charges * finite_times) / np.sum(finite_charges)
     else:
         avg_time = 0.0
 
-    # Add all tracks in the genealogy to the tree
-    for depth, track_id in enumerate(genealogy_list):
-        if track_id not in track_tree:
-            # For tracks not at the end of genealogy, we don't have full info yet
-            # We'll update them as we encounter them
-            track_tree[track_id] = {
-                'particle': particle_name if depth == len(genealogy_list) - 1 else f'Track_{track_id}',
-                'category': category_name if depth == len(genealogy_list) - 1 else 'Unknown',
-                'energy': energy if depth == len(genealogy_list) - 1 else 0.0,
-                'parent_id': parent_id if depth == len(genealogy_list) - 1 else (genealogy_list[depth - 1] if depth > 0 else 0),
-                'children': set(),
-                'charge': 0.0,
-                'time': 0.0,
-                'label_id': None,
-                'pdg': pdg if depth == len(genealogy_list) - 1 else 0
-            }
+    containment = lucid_data['light_containment_by_particle'][particle_idx]
 
-        # If this is the photon-producing track (last in genealogy), store its data
-        if depth == len(genealogy_list) - 1:
-            track_tree[track_id].update({
-                'particle': particle_name,
-                'category': category_name,
-                'energy': energy,
-                'parent_id': parent_id,
-                'charge': total_charge,
-                'time': avg_time,
-                'label_id': label_idx,
-                'pdg': pdg
-            })
+    # Store particle info
+    particle_tree[particle_idx] = {
+        'category': category_name,
+        'genealogy': genealogy_list,
+        'charge': total_charge,
+        'time': avg_time,
+        'containment': containment
+    }
 
-        # Link parent-child relationship
-        if depth > 0:
-            parent_track_id = genealogy_list[depth - 1]
-            if parent_track_id in track_tree:
-                track_tree[parent_track_id]['children'].add(track_id)
+# Alias for compatibility with rest of code
+track_tree = particle_tree
+n_labels = n_particles
+Q_per_label = PE_per_particle
+T_per_label = T_per_particle
+Q_true = PE
 
 
-def format_track_tree(track_id, track_tree, depth=0):
-    """Recursively format track tree as text with color coding"""
-    if track_id not in track_tree:
+def build_particle_hierarchy(particle_tree, n_particles):
+    """Build parent-child relationships between particles based on genealogy."""
+    # Find which particles are "children" of others based on genealogy overlap
+    # A particle B is a child of particle A if B's genealogy starts with A's genealogy
+    children = {i: [] for i in range(n_particles)}
+    roots = []
+
+    for i in range(n_particles):
+        gen_i = particle_tree[i]['genealogy']
+        is_root = True
+
+        for j in range(n_particles):
+            if i == j:
+                continue
+            gen_j = particle_tree[j]['genealogy']
+
+            # Check if particle i's genealogy starts with particle j's genealogy
+            # (meaning i is a descendant of j)
+            if len(gen_j) < len(gen_i) and gen_i[:len(gen_j)] == gen_j:
+                # j is an ancestor of i - but we want the closest ancestor
+                # Check if there's a closer ancestor
+                is_closest = True
+                for k in range(n_particles):
+                    if k == i or k == j:
+                        continue
+                    gen_k = particle_tree[k]['genealogy']
+                    # k is between j and i if j's gen is prefix of k's gen and k's gen is prefix of i's gen
+                    if (len(gen_j) < len(gen_k) < len(gen_i) and
+                        gen_i[:len(gen_k)] == gen_k and gen_k[:len(gen_j)] == gen_j):
+                        is_closest = False
+                        break
+
+                if is_closest:
+                    children[j].append(i)
+                    is_root = False
+                    break
+
+        if is_root:
+            roots.append(i)
+
+    return roots, children
+
+
+def format_particle_tree(particle_idx, particle_tree, children, depth=0):
+    """Recursively format particle tree as HTML text with arrows and indentation."""
+    if particle_idx not in particle_tree:
         return []
 
-    track = track_tree[track_id]
-    indent = "&nbsp;&nbsp;" + "&nbsp;&nbsp;" * depth
+    particle = particle_tree[particle_idx]
+    color = colors_palette[particle_idx % len(colors_palette)]
+    category_colored = f"<span style='color:{color};font-weight:bold'>{particle['category']}</span>"
+
+    indent = "&nbsp;&nbsp;" * (depth + 1)
     arrow = "└─ " if depth > 0 else ""
 
-    # Format label ID with color if present
-    if track['label_id'] is not None:
-        color = colors_palette[track['label_id'] % len(colors_palette)]
-        particle_colored = f"<span style='color:{color};font-weight:bold'>{track['particle']}</span>"
-        label_str = f" [Label {track['label_id']}]"
-    else:
-        particle_colored = track['particle']
-        label_str = ""
-
-    # Add containment if this track has a label
-    containment_str = ""
-    if track['label_id'] is not None:
-        containment = lucid_data['light_containment_by_label'][track['label_id']]
-        containment_str = f", Containment: {containment*100:.1f}%"
+    containment_str = f", Containment: {particle['containment']*100:.1f}%"
 
     lines = [
-        f"{indent}{arrow}{particle_colored} ({track['category']}) - "
-        f"TrackID: {track_id}{label_str}",
-        f"{indent}&nbsp;&nbsp;&nbsp;&nbsp;Energy: {track['energy']:.1f} MeV, "
-        f"Charge: {track['charge']:.1f} PE, Avg Time: {track['time']:.1f} ns{containment_str}"
+        f"{indent}{arrow}{category_colored} [Particle {particle_idx}]",
+        f"{indent}&nbsp;&nbsp;&nbsp;&nbsp;Charge: {particle['charge']:.1f} PE, Avg Time: {particle['time']:.1f} ns{containment_str}"
     ]
 
     # Add children recursively
-    for child_id in sorted(track['children']):
-        lines.extend(format_track_tree(child_id, track_tree, depth + 1))
+    for child_idx in sorted(children.get(particle_idx, [])):
+        lines.extend(format_particle_tree(child_idx, particle_tree, children, depth + 1))
 
     return lines
 
 
-# Post-process track tree to infer pi0 from children
-# If a track has category='Unknown' and all its children are gammas with category='GammaShower',
-# it's a pi0 (PDG 111) that decayed to two gammas (GammaShower is by definition from pi0 decay)
-for track_id, track_data in track_tree.items():
-    if track_data['category'] == 'Unknown' and track_data['children']:
-        children_are_gamma_showers = all(
-            track_tree.get(child_id, {}).get('category') == 'GammaShower'
-            for child_id in track_data['children']
-        )
-        if children_are_gamma_showers:
-            track_data['particle'] = 'pi0'
-            track_data['category'] = 'Primary'
-            track_data['pdg'] = 111
+# Build particle hierarchy from genealogy
+roots, children = build_particle_hierarchy(particle_tree, n_particles)
 
-# Find root tracks (parent_id == 0 or not in tree)
-root_tracks = [tid for tid, data in track_tree.items() if data['parent_id'] == 0]
-
-# Build formatted text
-genealogy_text_lines = [f"<b>EVENT {event_idx} - TRACK GENEALOGY</b>"]
-for root_id in sorted(root_tracks):
+# Build formatted text for particle genealogy display
+genealogy_text_lines = [f"<b>EVENT {event_idx} - CATEGORIZED PARTICLES</b>"]
+for root_idx in sorted(roots):
     genealogy_text_lines.append("<br>")
-    genealogy_text_lines.extend(format_track_tree(root_id, track_tree, depth=0))
+    genealogy_text_lines.extend(format_particle_tree(root_idx, particle_tree, children, depth=0))
 
 # Add overall light containment at the end
 genealogy_text_lines.append("<br>")
@@ -334,70 +320,10 @@ fig = go.Figure()
 # Calculate sensor disc radius
 disc_radius = detector.S_radius * 1.0
 
-# Track indices for arrow traces
+# Note: Arrow traces removed - per-particle track position/direction no longer stored
+# Track segment visualization is now used instead (see below)
 arrow_trace_indices = []
-
-# Create arrow traces for each label
-print("Creating arrow traces...")
-for i, label in enumerate(label_info):
-    color = label['color']
-    label_name = label['name']
-
-    # Get track position and direction (from LUCiD HDF5)
-    # Positions are stored in centimeters, convert to meters
-    track_pos = lucid_data['Track_Position'][label['idx']] / 100.0
-    track_dir = lucid_data['Track_Direction'][label['idx']]
-
-    # Add arrow (cylinder + cone) to show track direction
-    arrow_scale = 3.0  # Arrow length in meters (3 m)
-    cylinder_radius = 0.075  # Cylinder radius in meters (7.5 cm)
-
-    # Draw the cylinder shaft
-    cylinder_end = track_pos + track_dir * arrow_scale
-    cyl_x, cyl_y, cyl_z, cyl_i, cyl_j, cyl_k = create_cylinder(
-        track_pos, cylinder_end, cylinder_radius
-    )
-
-    if len(cyl_x) > 0:
-        fig.add_trace(
-            go.Mesh3d(
-                x=cyl_x, y=cyl_y, z=cyl_z,
-                i=cyl_i, j=cyl_j, k=cyl_k,
-                color=color, opacity=1.0,
-                name=f'{label_name} track',
-                legendgroup=f'label{i}',
-                showlegend=False,
-                visible=True,
-                lighting=dict(ambient=0.8, diffuse=0.8, specular=0.2),
-                flatshading=False
-            )
-        )
-        arrow_trace_indices.append(len(fig.data) - 1)
-
-        # Add cone arrowhead
-        tip_x = track_pos[0] + track_dir[0] * arrow_scale
-        tip_y = track_pos[1] + track_dir[1] * arrow_scale
-        tip_z = track_pos[2] + track_dir[2] * arrow_scale
-
-        fig.add_trace(
-            go.Cone(
-                x=[tip_x], y=[tip_y], z=[tip_z],
-                u=[track_dir[0]], v=[track_dir[1]], w=[track_dir[2]],
-                colorscale=[[0, color], [1, color]],
-                sizemode="absolute",
-                sizeref=1.5,  # Cone size in meters (1.5 m)
-                showscale=False,
-                name=f'{label_name} direction',
-                legendgroup=f'label{i}',
-                showlegend=False,
-                visible=True
-            )
-        )
-        arrow_trace_indices.append(len(fig.data) - 1)
-
-        print(f"  Added arrow for {label_name}")
-
-print(f"  Total arrow traces: {len(arrow_trace_indices)}")
+print("Note: Per-particle track arrows not available (track info stored in TrackInformation group)")
 print()
 
 # Create "All" trace showing total charge across all labels
@@ -608,9 +534,9 @@ with h5py.File(hdf5_file, 'r') as f:
     else:
         event_group = f
 
-    if 'MeaningfulTracks' in event_group and 'Segments' in event_group:
+    if 'TrackInformation' in event_group and 'Segments' in event_group:
         has_segment_data = True
-        tracks_group = event_group['MeaningfulTracks']
+        tracks_group = event_group['TrackInformation']
         segs_group = event_group['Segments']
 
         # Load track data
@@ -620,8 +546,8 @@ with h5py.File(hdf5_file, 'r') as f:
         track_seg_offsets = np.array(tracks_group['SegmentOffset'])
         track_n_segs = np.array(tracks_group['NSegments'])
         track_n_cherenkov = np.array(tracks_group['NCherenkov'])
-        track_names = [s.decode() if isinstance(s, bytes) else s
-                       for s in tracks_group['ParticleName'][:]]
+        # Get particle names from PDG codes
+        track_names = [pdg_to_name.get(int(pdg), f'PDG{int(pdg)}') for pdg in track_pdgs]
 
         # Load segment data (positions in cm, convert to meters for display)
         seg_start_x = np.array(segs_group['StartX']) / 100.0
@@ -703,32 +629,32 @@ if has_voxel_data and len(voxel_flat_indices) > 0:
     all_voxel_sizes = []
     all_voxel_text = []
 
-    for label_idx in range(n_labels):
-        start = voxel_offsets[label_idx]
-        end = start + voxel_n_nonzero[label_idx]
+    for particle_idx in range(n_particles):
+        start = voxel_offsets[particle_idx]
+        end = start + voxel_n_nonzero[particle_idx]
 
-        label_positions = voxel_positions[start:end]
-        label_counts = voxel_counts[start:end]
-        label_color = colors_palette[label_idx % len(colors_palette)]
+        particle_positions = voxel_positions[start:end]
+        particle_counts = voxel_counts[start:end]
+        particle_color = colors_palette[particle_idx % len(colors_palette)]
 
-        # Get label info for hover text
-        particle_name = label_info[label_idx]['particle']
+        # Get particle info for hover text
+        category_name = particle_info[particle_idx]['category']
 
-        for i, (pos, count) in enumerate(zip(label_positions, label_counts)):
+        for i, (pos, count) in enumerate(zip(particle_positions, particle_counts)):
             all_voxel_x.append(pos[0])
             all_voxel_y.append(pos[1])
             all_voxel_z.append(pos[2])
-            all_voxel_colors.append(label_color)
+            all_voxel_colors.append(particle_color)
             # Scale marker size by log of photon count
             size = np.log10(count + 1) * 3 + 2
             all_voxel_sizes.append(size)
             all_voxel_text.append(
-                f"Label {label_idx}: {particle_name}<br>"
+                f"Particle {particle_idx}: {category_name}<br>"
                 f"Position: ({pos[0]:.3f}, {pos[1]:.3f}, {pos[2]:.3f}) m<br>"
                 f"Photons: {count}"
             )
 
-        print(f"    Label {label_idx} ({particle_name}): {voxel_n_nonzero[label_idx]} voxels, {np.sum(label_counts)} photons")
+        print(f"    Particle {particle_idx} ({category_name}): {voxel_n_nonzero[particle_idx]} voxels, {np.sum(particle_counts)} photons")
 
     # Add voxel trace
     fig.add_trace(
@@ -802,16 +728,11 @@ detector_trace_index = len(fig.data) - 1
 # Create slider steps
 slider_steps = []
 
-# Step 0: "Arrows" - show arrows and detector surface
-step_vis = [False] * len(fig.data)
-for idx in arrow_trace_indices:
-    step_vis[idx] = True
-step_vis[detector_surface_index] = True  # Show detector surface
-slider_steps.append(dict(
-    method="update",
-    args=[{"visible": step_vis}],
-    label="Arrows"
-))
+# Track indices for main visualization traces (after arrow traces, which are now empty)
+# Trace order: "All", "By Particle", Individual particles..., voxel (if present), segments..., detector surface, detector points
+all_trace_index = 0  # First trace is "All"
+by_particle_trace_index = 1  # Second trace is "By Particle"
+individual_particle_start = 2  # Individual particle traces start here
 
 # Step: "Track Segments" - show track segment trajectories and detector surface
 if len(segment_trace_indices) > 0:
@@ -825,7 +746,7 @@ if len(segment_trace_indices) > 0:
         label="Track Segments"
     ))
 
-# Step 1: "Voxels" (if available) - show voxels and detector surface (no arrows)
+# Step: "Voxels" (if available) - show voxels and detector surface
 if voxel_trace_index is not None:
     step_vis = [False] * len(fig.data)
     step_vis[voxel_trace_index] = True  # Voxel trace
@@ -836,19 +757,19 @@ if voxel_trace_index is not None:
         label="Voxels"
     ))
 
-# Step 2: "By Label" - show discrete color-coded sensors and detector surface
+# Step: "By Particle" - show discrete color-coded sensors and detector surface
 step_vis = [False] * len(fig.data)
-step_vis[len(arrow_trace_indices) + 1] = True  # By Label trace
+step_vis[by_particle_trace_index] = True  # By Particle trace
 step_vis[detector_surface_index] = True  # Show detector surface
 slider_steps.append(dict(
     method="update",
     args=[{"visible": step_vis}],
-    label="By Label"
+    label="By Particle"
 ))
 
-# Step 2: "All" - show total charge across all labels and detector surface
+# Step: "All" - show total charge across all particles and detector surface
 step_vis = [False] * len(fig.data)
-step_vis[len(arrow_trace_indices)] = True  # All trace
+step_vis[all_trace_index] = True  # All trace
 step_vis[detector_surface_index] = True  # Show detector surface
 slider_steps.append(dict(
     method="update",
@@ -856,21 +777,21 @@ slider_steps.append(dict(
     label="All"
 ))
 
-# Steps 3+: Individual labels and detector surface
-for label_idx, info in enumerate(label_info):
+# Steps: Individual particles and detector surface
+for particle_idx, info in enumerate(particle_info):
     step_vis = [False] * len(fig.data)
-    step_vis[len(arrow_trace_indices) + 2 + label_idx] = True  # Individual label trace
+    step_vis[individual_particle_start + particle_idx] = True  # Individual particle trace
     step_vis[detector_surface_index] = True  # Show detector surface
     slider_steps.append(dict(
         method="update",
         args=[{"visible": step_vis}],
-        label=f"{label_idx}: {info['particle']}"
+        label=f"{particle_idx}: {info['category']}"
     ))
 
 # Update layout with black theme matching old style
 fig.update_layout(
     title=dict(
-        text=f'Event {event_idx}: Sensor Hits by Label',
+        text=f'Event {event_idx}: Sensor Hits by Particle',
         font=dict(color='white', size=16)
     ),
     scene=dict(
@@ -906,34 +827,6 @@ fig.update_layout(
         "width": 800,  # Wider to accommodate more info
         "height": None  # Auto height
     }],
-    updatemenus=[
-        # Toggle Arrows
-        dict(
-            type="buttons",
-            direction="left",
-            buttons=[
-                dict(
-                    args=[{"visible": True}, arrow_trace_indices],
-                    label="Arrows ON",
-                    method="restyle"
-                ),
-                dict(
-                    args=[{"visible": False}, arrow_trace_indices],
-                    label="Arrows OFF",
-                    method="restyle"
-                )
-            ],
-            pad={"r": 5, "t": 5},
-            showactive=False,
-            x=0.87,
-            xanchor="left",
-            y=0.14,
-            yanchor="top",
-            bgcolor='rgba(50,50,50,0.8)',
-            bordercolor='white',
-            font=dict(color='white', size=14)
-        ),
-    ],
     sliders=[
         dict(
             active=0,
