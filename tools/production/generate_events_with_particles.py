@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-Production script to generate events from PhotonSim ROOT files using label-based workflow.
-This script uses the NEW label-based processing where photons are classified by genealogy.
+Production script to generate events from PhotonSim ROOT files using particle-based workflow.
+This script uses particle-based processing where photons are classified by genealogy.
 
-Uses VMAP-optimized processing with jax.vmap for 5-10x speedup through vectorized label processing.
+Uses VMAP-optimized processing with jax.vmap for 5-10x speedup through vectorized particle processing.
 
 Usage:
-    python generate_events_with_labels.py --root-file path/to/file.root --config config.json --output output_dir/
+    python generate_events_with_particles.py --root-file path/to/file.root --config config.json --output output_dir/
 """
 
 import argparse
@@ -20,20 +20,20 @@ sys.path.append(main_path+'/../')
 
 import jax.numpy as jnp
 
-from generate import generate_events_from_photonsim_labels
+from generate import generate_events_from_photonsim_particles
 from simulation import setup_event_simulator
 from utils import base_dir_path
 
 def main():
     parser = argparse.ArgumentParser(
-        description='Generate events from PhotonSim ROOT files using label-based workflow',
-        epilog='Example: python generate_events_with_labels.py --root-file test.root --config SK_geom_config.json --output events/'
+        description='Generate events from PhotonSim ROOT files using particle-based workflow',
+        epilog='Example: python generate_events_with_particles.py --root-file test.root --config SK_geom_config.json --output events/'
     )
     parser.add_argument(
         '--root-file',
         type=str,
         required=True,
-        help='Path to PhotonSim ROOT file with label-based data'
+        help='Path to PhotonSim ROOT file with particle-based data'
     )
     parser.add_argument(
         '--output',
@@ -112,7 +112,7 @@ def main():
         K=5,
         is_data=True,
         temperature=0.0,
-        apply_smearing=False  # Do NOT smear per-label; smearing is applied after summing Q_per_label
+        apply_smearing=False  # Do NOT smear per-particle; smearing is applied after summing PE_per_particle
     )
 
     # Define sensor parameters (same as generate_events.py)
@@ -124,7 +124,7 @@ def main():
     )
 
     # Generate events
-    print(f"\nGenerating events using label-based workflow:")
+    print(f"\nGenerating events using particle-based workflow:")
     print(f"  ROOT file: {args.root_file}")
     print(f"  Output directory: {args.output}")
     print(f"  Detector config: {args.config}")
@@ -137,7 +137,7 @@ def main():
     print(f"  Apply translation: {args.apply_translation}")
     print(f"  Include track segments: {args.include_track_segments}")
 
-    result = generate_events_from_photonsim_labels(
+    result = generate_events_from_photonsim_particles(
         event_simulator=simulate_event,
         root_file_path=args.root_file,
         sensor_params=sensor_params,

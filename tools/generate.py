@@ -8,16 +8,16 @@ import jax.numpy as jnp
 import time
 from tqdm import tqdm
 from tools.siren.core import *
-from tools.utils import save_single_event_with_extended_info, save_single_event_with_label_info, get_random_root_entry_index, superimpose_multiple_events, merge_event_files
+from tools.utils import save_single_event_with_extended_info, save_single_event_with_particle_info, get_random_root_entry_index, superimpose_multiple_events, merge_event_files
 from tools.production.voxelize import VoxelGridConfig, voxelize_from_photon_indices, pack_voxel_data_for_hdf5
 from jax import jit
 
 
-def get_max_photons_per_label(root_file_path, n_events=None):
+def get_max_photons_per_particle(root_file_path, n_events=None):
     """
-    Efficiently scan a ROOT file to find the maximum number of photons in any single label.
+    Efficiently scan a ROOT file to find the maximum number of photons in any single particle.
 
-    This function reads only the Label_PhotonIDsSize branch for all events at once,
+    This function reads only the Particle_PhotonIDsSize branch for all events at once,
     which is much faster than iterating through events one by one.
 
     Parameters
@@ -30,7 +30,7 @@ def get_max_photons_per_label(root_file_path, n_events=None):
     Returns
     -------
     int
-        Maximum number of photons found in any single label across all scanned events
+        Maximum number of photons found in any single particle across all scanned events
     """
     import uproot
 
@@ -46,7 +46,7 @@ def get_max_photons_per_label(root_file_path, n_events=None):
         entry_start=0, entry_stop=entry_stop, library='np'
     )
 
-    # Find global maximum across all events and all labels
+    # Find global maximum across all events and all particles
     max_photons = 0
     for event_sizes in photon_ids_sizes:
         if len(event_sizes) > 0:
@@ -587,10 +587,10 @@ def read_photon_data_from_photonsim(root_file_path, entry_index):
         'energy': energy  # Energy in MeV
     }
 
-def read_label_data_from_photonsim(root_file_path, entry_index, include_track_segments=False):
+def read_particle_data_from_photonsim(root_file_path, entry_index, include_track_segments=False):
     """
-    Read label-based photon data from a PhotonSim ROOT file for a specific entry.
-    This function reads the new label system that classifies photons by genealogy.
+    Read particle-based photon data from a PhotonSim ROOT file for a specific entry.
+    This function reads the particle system that classifies photons by genealogy.
 
     Parameters
     ----------
@@ -605,10 +605,10 @@ def read_label_data_from_photonsim(root_file_path, entry_index, include_track_se
     -------
     dict
         Dictionary containing:
-        - 'n_labels': int, number of unique labels
-        - 'labels': list of dicts, each containing:
+        - 'n_particles': int, number of unique particles
+        - 'particles': list of dicts, each containing:
             - 'genealogy': list of track IDs in the genealogy
-            - 'photon_indices': list of photon indices belonging to this label
+            - 'photon_indices': list of photon indices belonging to this particle
             - 'track_info': dict with track information (position, direction, energy, time, pdg, category, etc.)
             - 'extended_genealogy': list of meaningful track IDs (if include_track_segments=True)
         - 'photon_origins': array (N_photons, 3) in cm
@@ -675,8 +675,8 @@ def read_label_data_from_photonsim(root_file_path, entry_index, include_track_se
 
     photon_times = tree_data['PhotonTime'][0]
 
-    # Extract particle system (n_labels kept as internal variable name for compatibility)
-    n_labels = int(tree_data['NParticles'][0])
+    # Extract particle system
+    n_particles = int(tree_data['NParticles'][0])
 
     # Parse genealogy data
     genealogy_sizes = tree_data['Particle_GenealogySize'][0]
@@ -723,49 +723,49 @@ def read_label_data_from_photonsim(root_file_path, entry_index, include_track_se
         ext_genealogy_sizes = tree_data['Particle_ExtGenealogySize'][0]
         ext_genealogy_data = tree_data['Particle_ExtGenealogyData'][0]
 
-    # Parse labels
-    labels = []
+    # Parse particles
+    particles = []
     genealogy_offset = 0
     photon_ids_offset = 0
     ext_genealogy_offset = 0
 
-    for label_idx in range(n_labels):
-        # Extract genealogy for this label
-        gen_size = int(genealogy_sizes[label_idx])
+    for particle_idx in range(n_particles):
+        # Extract genealogy for this particle
+        gen_size = int(genealogy_sizes[particle_idx])
         genealogy = [int(genealogy_data[genealogy_offset + i]) for i in range(gen_size)]
         genealogy_offset += gen_size
 
-        # Extract photon indices for this label
-        photon_ids_size = int(photon_ids_sizes[label_idx])
+        # Extract photon indices for this particle
+        photon_ids_size = int(photon_ids_sizes[particle_idx])
         photon_indices = [int(photon_ids_data[photon_ids_offset + i]) for i in range(photon_ids_size)]
         photon_ids_offset += photon_ids_size
 
         # Extract extended genealogy if available
         extended_genealogy = None
         if include_track_segments and ext_genealogy_sizes is not None:
-            ext_gen_size = int(ext_genealogy_sizes[label_idx])
+            ext_gen_size = int(ext_genealogy_sizes[particle_idx])
             extended_genealogy = [int(ext_genealogy_data[ext_genealogy_offset + i]) for i in range(ext_gen_size)]
             ext_genealogy_offset += ext_gen_size
 
-        # Get track info for the LAST track in this label's genealogy
+        # Get track info for the LAST track in this particle's genealogy
         # Genealogy is ordered parent->child, so last track is the actual particle that produced photons
         last_track_id = genealogy[-1] if genealogy else None
         track_info = track_info_dict.get(last_track_id, None) if last_track_id is not None else None
 
-        label_dict = {
+        particle_dict = {
             'genealogy': genealogy,
             'photon_indices': photon_indices,
             'track_info': track_info
         }
         if extended_genealogy is not None:
-            label_dict['extended_genealogy'] = extended_genealogy
+            particle_dict['extended_genealogy'] = extended_genealogy
 
-        labels.append(label_dict)
+        particles.append(particle_dict)
 
     # Build result dictionary
     result = {
-        'n_labels': n_labels,
-        'labels': labels,
+        'n_particles': n_particles,
+        'particles': particles,
         'photon_origins': photon_positions,  # Keep as NumPy (avoid JAX conversion overhead)
         'photon_directions': photon_directions,  # Keep as NumPy
         'photon_times': photon_times,  # Keep as NumPy
@@ -1064,16 +1064,16 @@ def generate_events_from_photonsim(event_simulator, particles_dict, sensor_param
 
     return saved_files
 
-def generate_events_from_photonsim_labels(event_simulator, root_file_path, sensor_params, output_dir=None,
-                                         n_events=None, batch_size=100, master_seed=None,
-                                         apply_smearing=False, apply_rotation=False, apply_translation=False,
-                                         detector_config_path=None, merge_output=True, merged_filename='merged_events.h5',
-                                         include_track_segments=False):
+def generate_events_from_photonsim_particles(event_simulator, root_file_path, sensor_params, output_dir=None,
+                                             n_events=None, batch_size=100, master_seed=None,
+                                             apply_smearing=False, apply_rotation=False, apply_translation=False,
+                                             detector_config_path=None, merge_output=True, merged_filename='merged_events.h5',
+                                             include_track_segments=False):
     """
-    VMAP-OPTIMIZED VERSION: Generate and save events using batched label processing.
+    VMAP-OPTIMIZED VERSION: Generate and save events using batched particle processing.
 
     This version dynamically determines the optimal PAD_SIZE based on the maximum photons
-    per label in the ROOT file, then uses jax.vmap to process all labels in parallel,
+    per particle in the ROOT file, then uses jax.vmap to process all particles in parallel,
     eliminating the Python loop and achieving significant speedup.
 
     Parameters
@@ -1093,7 +1093,7 @@ def generate_events_from_photonsim_labels(event_simulator, root_file_path, senso
     master_seed : int, optional
         Random seed for JAX PRNG key generation. If None, generates random seed, by default None
     apply_smearing : bool, optional
-        If True, apply smearing to Q_true and T_true to get Q_reco and T_reco, by default False
+        If True, apply smearing to PE_true and T_true to get PE_reco and T_reco, by default False
     apply_rotation : bool, optional
         If True, apply random rotation per primary to all photons and tracks, by default False
     apply_translation : bool, optional
@@ -1142,12 +1142,12 @@ def generate_events_from_photonsim_labels(event_simulator, root_file_path, senso
 
     # Dynamically determine PAD_SIZE based on actual data in the ROOT file
     print(f"Scanning ROOT file to determine optimal PAD_SIZE...")
-    max_photons_in_file = get_max_photons_per_label(root_file_path, n_events)
+    max_photons_in_file = get_max_photons_per_particle(root_file_path, n_events)
     PAD_SIZE = max_photons_in_file + 1  # +1 for safety margin
-    print(f"  Max photons per label in file: {max_photons_in_file:,}")
+    print(f"  Max photons per particle in file: {max_photons_in_file:,}")
     print(f"  Using PAD_SIZE: {PAD_SIZE:,}")
 
-    print(f"\nGenerating {n_events} events using VMAP-OPTIMIZED label-based processing...")
+    print(f"\nGenerating {n_events} events using VMAP-OPTIMIZED particle-based processing...")
     print(f"Using batch size of {batch_size} events for multithreaded I/O")
     print(f"Apply smearing: {apply_smearing}")
     print(f"Apply translation: {apply_translation}")
@@ -1220,17 +1220,17 @@ def generate_events_from_photonsim_labels(event_simulator, root_file_path, senso
             # Initialize master random key for this event
             master_key = jax.random.PRNGKey(master_seed + event_idx)
 
-            # Read label data from PhotonSim
-            print(f"    Reading label data from ROOT file...", flush=True)
-            label_data = read_label_data_from_photonsim(root_file_path, event_idx, include_track_segments=include_track_segments)
+            # Read particle data from PhotonSim
+            print(f"    Reading particle data from ROOT file...", flush=True)
+            particle_data = read_particle_data_from_photonsim(root_file_path, event_idx, include_track_segments=include_track_segments)
 
-            n_labels = label_data['n_labels']
-            labels = label_data['labels']
-            all_photon_origins = label_data['photon_origins']
-            all_photon_directions = label_data['photon_directions']
-            all_photon_times = label_data['photon_times']
+            n_particles = particle_data['n_particles']
+            particles = particle_data['particles']
+            all_photon_origins = particle_data['photon_origins']
+            all_photon_directions = particle_data['photon_directions']
+            all_photon_times = particle_data['photon_times']
             total_photons = len(all_photon_origins)
-            print(f"    Found {n_labels} labels, {total_photons:,} total photons", flush=True)
+            print(f"    Found {n_particles} particles, {total_photons:,} total photons", flush=True)
 
             # ========================================================================
             # VECTORIZED NUMPY PREPROCESSING + EFFICIENT JAX TRANSFER
@@ -1284,8 +1284,8 @@ def generate_events_from_photonsim_labels(event_simulator, root_file_path, senso
                 all_photon_origins_np += translation_vector[None, :]
 
                 # Apply translation to segment positions if track segments are included
-                if include_track_segments and 'segments' in label_data:
-                    segments = label_data['segments']
+                if include_track_segments and 'segments' in particle_data:
+                    segments = particle_data['segments']
                     # Convert translation from meters to cm (segments are in cm)
                     translation_cm = translation_vector * 100.0
                     segments['start_x'] = segments['start_x'] + translation_cm[0]
@@ -1296,63 +1296,63 @@ def generate_events_from_photonsim_labels(event_simulator, root_file_path, senso
                     segments['end_z'] = segments['end_z'] + translation_cm[2]
 
             # Pre-allocate batched arrays
-            batched_origins_np = np.zeros((n_labels, PAD_SIZE, 3), dtype=np.float32)
-            batched_directions_np = np.tile(default_direction, (n_labels, PAD_SIZE, 1))
-            batched_times_np = np.zeros((n_labels, PAD_SIZE), dtype=np.float32)
+            batched_origins_np = np.zeros((n_particles, PAD_SIZE, 3), dtype=np.float32)
+            batched_directions_np = np.tile(default_direction, (n_particles, PAD_SIZE, 1))
+            batched_times_np = np.zeros((n_particles, PAD_SIZE), dtype=np.float32)
 
             # Build track parameters as NumPy arrays (more efficient than lists)
-            N_per_label_np = np.zeros(n_labels, dtype=np.int32)
-            track_energies_np = np.zeros(n_labels, dtype=np.float32)
-            track_positions_np = np.zeros((n_labels, 3), dtype=np.float32)
-            track_directions_np = np.zeros((n_labels, 3), dtype=np.float32)
+            N_per_particle_np = np.zeros(n_particles, dtype=np.int32)
+            track_energies_np = np.zeros(n_particles, dtype=np.float32)
+            track_positions_np = np.zeros((n_particles, 3), dtype=np.float32)
+            track_directions_np = np.zeros((n_particles, 3), dtype=np.float32)
 
-            # Process each label
-            for label_idx, label in enumerate(labels):
-                photon_indices = label['photon_indices']
+            # Process each particle
+            for particle_idx, particle in enumerate(particles):
+                photon_indices = particle['photon_indices']
                 N = len(photon_indices)
-                N_per_label_np[label_idx] = N
+                N_per_particle_np[particle_idx] = N
 
                 # Extract track parameters
-                track_info = label['track_info']
+                track_info = particle['track_info']
                 if track_info is not None:
-                    track_energies_np[label_idx] = track_info['energy']
-                    track_positions_np[label_idx] = track_info['position'] / 100.0  # cm to m
-                    track_directions_np[label_idx] = track_info['direction']
+                    track_energies_np[particle_idx] = track_info['energy']
+                    track_positions_np[particle_idx] = track_info['position'] / 100.0  # cm to m
+                    track_directions_np[particle_idx] = track_info['direction']
                 else:
-                    track_energies_np[label_idx] = label_data['primary_energy']
-                    track_directions_np[label_idx] = [0.0, 0.0, 1.0]
+                    track_energies_np[particle_idx] = particle_data['primary_energy']
+                    track_directions_np[particle_idx] = [0.0, 0.0, 1.0]
 
                 if apply_translation:
-                    track_positions_np[label_idx] += translation_vector
-                    # Update labels data structure with transformed position (convert back to cm)
+                    track_positions_np[particle_idx] += translation_vector
+                    # Update particles data structure with transformed position (convert back to cm)
                     if track_info is not None:
-                        track_info['position'] = track_positions_np[label_idx] * 100.0
+                        track_info['position'] = track_positions_np[particle_idx] * 100.0
 
                 # Scatter photons
                 if N > 0:
-                    batched_origins_np[label_idx, :N] = all_photon_origins_np[photon_indices]
-                    batched_directions_np[label_idx, :N] = all_photon_directions_np[photon_indices]
-                    batched_times_np[label_idx, :N] = all_photon_times_np[photon_indices]
+                    batched_origins_np[particle_idx, :N] = all_photon_origins_np[photon_indices]
+                    batched_directions_np[particle_idx, :N] = all_photon_directions_np[photon_indices]
+                    batched_times_np[particle_idx, :N] = all_photon_times_np[photon_indices]
 
             # Efficient transfer to JAX device (avoids unnecessary copies)
             batched_origins = jax.device_put(batched_origins_np)
             batched_directions = jax.device_put(batched_directions_np)
             batched_times = jax.device_put(batched_times_np)
-            N_per_label_array = jax.device_put(N_per_label_np)
+            N_per_particle_array = jax.device_put(N_per_particle_np)
             track_energies_array = jax.device_put(track_energies_np)
             track_positions_array = jax.device_put(track_positions_np)
             track_directions_array = jax.device_put(track_directions_np)
 
             # ========================================================================
-            # VMAP OPTIMIZATION: Process all labels in parallel using vmap
+            # VMAP OPTIMIZATION: Process all particles in parallel using vmap
             # ========================================================================
-            print(f"    Running VMAP simulation for {n_labels} labels...", flush=True)
+            print(f"    Running VMAP simulation for {n_particles} particles...", flush=True)
             sim_start_time = time.time()
 
-            # Create a wrapper function that processes a single label
-            def simulate_single_label(track_energy, track_pos, track_dir, photon_origins,
-                                     photon_dirs, photon_times, N, sim_key):
-                """Process a single label - will be vmapped over all labels."""
+            # Create a wrapper function that processes a single particle
+            def simulate_single_particle(track_energy, track_pos, track_dir, photon_origins,
+                                         photon_dirs, photon_times, N, sim_key):
+                """Process a single particle - will be vmapped over all particles."""
                 track_params = (track_energy, track_pos, track_dir)
 
                 photonsim_data = {
@@ -1371,54 +1371,54 @@ def generate_events_from_photonsim_labels(event_simulator, root_file_path, senso
 
             # Create vectorized version using vmap
             # in_axes: (0, 0, 0, 0, 0, 0, 0, 0) means vectorize over first axis of all arguments
-            simulate_all_labels = jax.vmap(
-                simulate_single_label,
+            simulate_all_particles = jax.vmap(
+                simulate_single_particle,
                 in_axes=(0, 0, 0, 0, 0, 0, 0, 0)
             )
 
-            # Generate random keys for all labels
-            label_keys = jax.random.split(master_key, n_labels)
+            # Generate random keys for all particles
+            particle_keys = jax.random.split(master_key, n_particles)
 
-            # Process all labels in one vectorized call!
-            Q_per_label, T_per_label = simulate_all_labels(
+            # Process all particles in one vectorized call!
+            PE_per_particle, T_per_particle = simulate_all_particles(
                 track_energies_array,
                 track_positions_array,
                 track_directions_array,
                 batched_origins,
                 batched_directions,
                 batched_times,
-                N_per_label_array,
-                label_keys
+                N_per_particle_array,
+                particle_keys
             )
             sim_elapsed = time.time() - sim_start_time
             print(f"    Simulation completed in {sim_elapsed:.2f}s", flush=True)
 
-            # Calculate Q_true and T_true by aggregating across labels
-            Q_true = jnp.sum(Q_per_label, axis=0)
-            T_true = jnp.min(jnp.where(T_per_label > 0, T_per_label, jnp.inf), axis=0)
+            # Calculate PE_true and T_true by aggregating across particles
+            PE_true = jnp.sum(PE_per_particle, axis=0)
+            T_true = jnp.min(jnp.where(T_per_particle > 0, T_per_particle, jnp.inf), axis=0)
             T_true = jnp.where(jnp.isfinite(T_true), T_true, 0.0)
 
             # Apply smearing if requested
             if apply_smearing:
                 reco_key, master_key = jax.random.split(master_key)
-                smear_q_key, smear_t_key = jax.random.split(reco_key)
-                Q_reco = smear_charges_SK_like(Q_true, key=smear_q_key)
+                smear_pe_key, smear_t_key = jax.random.split(reco_key)
+                PE_reco = smear_charges_SK_like(PE_true, key=smear_pe_key)
                 T_reco = smear_times(T_true, key=smear_t_key)
             else:
-                Q_reco = Q_true
+                PE_reco = PE_true
                 T_reco = T_true
 
             # Convert JAX arrays to numpy BEFORE storing in extended_info
             # This is critical for thread-safe saving with ThreadPoolExecutor
-            Q_per_label = np.asarray(Q_per_label, dtype=np.float32)
-            T_per_label = np.asarray(T_per_label, dtype=np.float32)
-            Q_true = np.asarray(Q_true, dtype=np.float32)
+            PE_per_particle = np.asarray(PE_per_particle, dtype=np.float32)
+            T_per_particle = np.asarray(T_per_particle, dtype=np.float32)
+            PE_true = np.asarray(PE_true, dtype=np.float32)
             T_true = np.asarray(T_true, dtype=np.float32)
-            Q_reco = np.asarray(Q_reco, dtype=np.float32)
+            PE_reco = np.asarray(PE_reco, dtype=np.float32)
             T_reco = np.asarray(T_reco, dtype=np.float32)
 
             # Calculate light containment
-            light_containment_by_label = np.zeros(n_labels, dtype=np.float64)
+            light_containment_by_particle = np.zeros(n_particles, dtype=np.float64)
             overall_light_containment = 0.0
 
             if apply_translation and detector_bounds is not None:
@@ -1435,23 +1435,23 @@ def generate_events_from_photonsim_labels(event_simulator, root_file_path, senso
                                                (np.abs(all_photon_origins_np[:, 1]) <= detector_bounds['width'] / 2.0) &
                                                (np.abs(all_photon_origins_np[:, 2]) <= detector_bounds['height'] / 2.0))
 
-                # Calculate per-label containment
-                total_photons_all_labels = 0
-                total_photons_inside_all_labels = 0
+                # Calculate per-particle containment
+                total_photons_all_particles = 0
+                total_photons_inside_all_particles = 0
 
-                for label_idx, label in enumerate(labels):
-                    photon_indices = label['photon_indices']
+                for particle_idx, particle in enumerate(particles):
+                    photon_indices = particle['photon_indices']
                     N = len(photon_indices)
                     if N > 0:
-                        mask_for_label = all_photons_inside_mask[photon_indices]
-                        n_inside = int(np.sum(mask_for_label))
-                        light_containment_by_label[label_idx] = float(n_inside) / N
-                        total_photons_all_labels += N
-                        total_photons_inside_all_labels += n_inside
+                        mask_for_particle = all_photons_inside_mask[photon_indices]
+                        n_inside = int(np.sum(mask_for_particle))
+                        light_containment_by_particle[particle_idx] = float(n_inside) / N
+                        total_photons_all_particles += N
+                        total_photons_inside_all_particles += n_inside
 
                 # Calculate overall containment
-                if total_photons_all_labels > 0:
-                    overall_light_containment = float(total_photons_inside_all_labels) / total_photons_all_labels
+                if total_photons_all_particles > 0:
+                    overall_light_containment = float(total_photons_inside_all_particles) / total_photons_all_particles
 
             # ========================================================================
             # VOXELIZATION
@@ -1460,14 +1460,14 @@ def generate_events_from_photonsim_labels(event_simulator, root_file_path, senso
             print(f"    Voxelizing photon positions...", flush=True)
             voxel_start_time = time.time()
 
-            # Get photon indices for each label
-            label_photon_indices_list = [label['photon_indices'] for label in labels]
+            # Get photon indices for each particle
+            particle_photon_indices_list = [particle['photon_indices'] for particle in particles]
 
             # Voxelize using positions in meters
             voxel_config = VoxelGridConfig()
             voxel_data = voxelize_from_photon_indices(
                 all_photon_origins_np,  # Already in meters
-                label_photon_indices_list,
+                particle_photon_indices_list,
                 voxel_config
             )
 
@@ -1485,19 +1485,19 @@ def generate_events_from_photonsim_labels(event_simulator, root_file_path, senso
             # Generate event time offset t0 (simulates unknown event start time)
             t0 = np.random.uniform(-15.0, 15.0)
 
-            # Extended info with label structure
+            # Extended info with particle structure
             extended_info = {
-                'n_labels': n_labels,
-                'labels': labels,
-                'track_info_dict': label_data['track_info_dict'],
+                'n_particles': n_particles,
+                'particles': particles,
+                'track_info_dict': particle_data['track_info_dict'],
                 't0': t0,
-                'Q_per_label': Q_per_label,
-                'T_per_label': T_per_label,
-                'Q_reco': Q_reco,
+                'PE_per_particle': PE_per_particle,
+                'T_per_particle': T_per_particle,
+                'PE_reco': PE_reco,
                 'T_reco': T_reco,
-                'source': 'PhotonSim_Labels_VMAP',
+                'source': 'PhotonSim_Particles_VMAP',
                 'overall_light_containment': overall_light_containment,
-                'light_containment_by_label': light_containment_by_label,
+                'light_containment_by_particle': light_containment_by_particle,
                 # Voxel data (sparse representation)
                 'voxel_n_nonzero': packed_voxel_data['voxel_n_nonzero'],
                 'voxel_offsets': packed_voxel_data['voxel_offsets'],
@@ -1508,9 +1508,9 @@ def generate_events_from_photonsim_labels(event_simulator, root_file_path, senso
             }
 
             # Add meaningful tracks and segments if requested
-            if include_track_segments and 'meaningful_tracks' in label_data:
-                extended_info['meaningful_tracks'] = label_data['meaningful_tracks']
-                extended_info['segments'] = label_data['segments']
+            if include_track_segments and 'meaningful_tracks' in particle_data:
+                extended_info['meaningful_tracks'] = particle_data['meaningful_tracks']
+                extended_info['segments'] = particle_data['segments']
 
             # Store for batch processing
             batch_data.append(extended_info)
@@ -1527,7 +1527,7 @@ def generate_events_from_photonsim_labels(event_simulator, root_file_path, senso
         with concurrent.futures.ThreadPoolExecutor() as executor:
             futures = [
                 executor.submit(
-                    save_single_event_with_label_info,
+                    save_single_event_with_particle_info,
                     data,
                     event_number=idx,
                     filename=filename
@@ -1552,7 +1552,7 @@ def generate_events_from_photonsim_labels(event_simulator, root_file_path, senso
         t_save = time.time() - t_save_start
         print(f"Batch {batch_idx+1} save time: {t_save:.3f}s\n")
 
-    print(f"\nSuccessfully processed {len(saved_files)} events with VMAP-OPTIMIZED label-based structure.")
+    print(f"\nSuccessfully processed {len(saved_files)} events with VMAP-OPTIMIZED particle-based structure.")
     print(f"All events saved to {output_dir}")
 
     # Print average event time

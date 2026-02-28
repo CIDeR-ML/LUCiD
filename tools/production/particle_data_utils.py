@@ -1,8 +1,8 @@
 """
-Utilities for reading and analyzing label-based LUCiD output files.
+Utilities for reading and analyzing particle-based LUCiD output files.
 
-This module provides tools for comprehensive analysis of the new label-based
-workflow where photons are classified by genealogy rather than by primary particle.
+This module provides tools for comprehensive analysis of the particle-based
+workflow where photons are classified by genealogy.
 """
 
 import h5py
@@ -37,19 +37,19 @@ def get_category_name(category_code):
         0: "Primary",
         1: "DecayElectron",
         2: "SecondaryPion",
-        3: "GammaShower",
+        3: "Gamma",
         -1: "Unknown"
     }
     return category_names.get(int(category_code), f"Category_{int(category_code)}")
 
 
-def read_label_event_file(filename, event_index=None, verbose=True, show_matrices=False,
-                          show_genealogies=True, n_pmts_to_show=10):
+def read_particle_event_file(filename, event_index=None, verbose=True, show_matrices=False,
+                             show_genealogies=True, n_pmts_to_show=10):
     """
-    Read label-based event(s) from an HDF5 file.
+    Read particle-based event(s) from an HDF5 file.
 
-    This function reads the new label-based format where Q and T have shape
-    (N_labels, N_sensors) instead of (N_particles, N_sensors).
+    This function reads the particle-based format where PE and T have shape
+    (n_particles, N_sensors).
 
     Parameters
     ----------
@@ -91,27 +91,27 @@ def read_label_event_file(filename, event_index=None, verbose=True, show_matrice
                 raise IndexError(f"Event index {event_index} out of range [0, {n_events})")
 
             group_name = f'event_{event_index}'
-            event_data = _read_single_label_event(f[group_name], event_index, filename)
+            event_data = _read_single_particle_event(f[group_name], event_index, filename)
 
             if verbose:
-                print_label_event_info(event_data, f"Event {event_index}",
-                                      show_matrices=show_matrices,
-                                      show_genealogies=show_genealogies,
-                                      n_pmts_to_show=n_pmts_to_show)
+                print_particle_event_info(event_data, f"Event {event_index}",
+                                          show_matrices=show_matrices,
+                                          show_genealogies=show_genealogies,
+                                          n_pmts_to_show=n_pmts_to_show)
 
             return event_data
         else:
             # Read all events
             events = []
             for i, group_name in enumerate(event_groups):
-                event_data = _read_single_label_event(f[group_name], i, filename)
+                event_data = _read_single_particle_event(f[group_name], i, filename)
                 events.append(event_data)
 
                 if verbose:
-                    print_label_event_info(event_data, f"Event {i}/{n_events-1}",
-                                          show_matrices=show_matrices,
-                                          show_genealogies=show_genealogies,
-                                          n_pmts_to_show=n_pmts_to_show)
+                    print_particle_event_info(event_data, f"Event {i}/{n_events-1}",
+                                              show_matrices=show_matrices,
+                                              show_genealogies=show_genealogies,
+                                              n_pmts_to_show=n_pmts_to_show)
 
             if verbose:
                 print(f"\n{'='*70}")
@@ -121,8 +121,8 @@ def read_label_event_file(filename, event_index=None, verbose=True, show_matrice
             return events
 
 
-def _read_single_label_event(group, event_index, filename):
-    """Read a single event from an HDF5 group (new field naming convention)"""
+def _read_single_particle_event(group, event_index, filename):
+    """Read a single event from an HDF5 group"""
     n_particles = int(group['n_particles'][()])
 
     data = {
@@ -162,8 +162,8 @@ def _read_single_label_event(group, event_index, filename):
     return data
 
 
-def print_label_event_info(data, title="Event", show_matrices=False,
-                           show_genealogies=True, n_pmts_to_show=10):
+def print_particle_event_info(data, title="Event", show_matrices=False,
+                              show_genealogies=True, n_pmts_to_show=10):
     """
     Print comprehensive information about a categorized particle event.
 
@@ -318,7 +318,7 @@ def print_genealogy_tree(data, title="Event"):
     colors_palette = ['red', 'blue', 'green', 'orange', 'purple', 'cyan', 'magenta', 'yellow',
                       'brown', 'pink', 'olive', 'navy', 'teal', 'maroon']
 
-    category_names_map = {0: "Primary", 1: "DecayElectron", 2: "SecondaryPion", 3: "GammaShower", -1: "Unknown"}
+    category_names_map = {0: "Primary", 1: "DecayElectron", 2: "SecondaryPion", 3: "Gamma", -1: "Unknown"}
 
     # Build tree from genealogy data
     particle_tree = {}
@@ -403,7 +403,7 @@ def print_file_summary(filename, max_events_to_show=None):
         Maximum number of events to show in detail.
         If None, shows all events.
     """
-    events = read_label_event_file(filename, event_index=None, verbose=False)
+    events = read_particle_event_file(filename, event_index=None, verbose=False)
 
     print(f"\n{'='*70}")
     print(f"FILE SUMMARY: {filename}")
@@ -439,8 +439,8 @@ def print_file_summary(filename, max_events_to_show=None):
     print(f"{'='*70}")
 
     for i in range(n_to_show):
-        print_label_event_info(events[i], f"Event {i}", show_matrices=False,
-                              show_genealogies=True, n_pmts_to_show=5)
+        print_particle_event_info(events[i], f"Event {i}", show_matrices=False,
+                                  show_genealogies=True, n_pmts_to_show=5)
 
 
 if __name__ == "__main__":
@@ -453,15 +453,15 @@ if __name__ == "__main__":
 
         if event_idx is not None:
             # Show single event
-            read_label_event_file(filename, event_index=event_idx,
-                                 verbose=True, show_matrices=True,
-                                 show_genealogies=True, n_pmts_to_show=10)
+            read_particle_event_file(filename, event_index=event_idx,
+                                     verbose=True, show_matrices=True,
+                                     show_genealogies=True, n_pmts_to_show=10)
         else:
             # Show all events
             print_file_summary(filename, max_events_to_show=3)
     else:
         print("Usage:")
-        print("  python label_data_utils.py <filename> [event_index]")
+        print("  python particle_data_utils.py <filename> [event_index]")
         print("\nExamples:")
-        print("  python label_data_utils.py events.h5           # Show all events")
-        print("  python label_data_utils.py events.h5 0         # Show event 0 in detail")
+        print("  python particle_data_utils.py events.h5           # Show all events")
+        print("  python particle_data_utils.py events.h5 0         # Show event 0 in detail")

@@ -219,21 +219,21 @@ def voxelize_photons(positions: np.ndarray,
     return unique_flat_indices, counts
 
 
-def voxelize_photons_by_label(positions: np.ndarray,
-                               labels: np.ndarray,
-                               config: Optional[VoxelGridConfig] = None) -> Dict:
+def voxelize_photons_by_particle(positions: np.ndarray,
+                                  particles: np.ndarray,
+                                  config: Optional[VoxelGridConfig] = None) -> Dict:
     """
-    Voxelize photon positions grouped by label.
+    Voxelize photon positions grouped by particle.
 
     This is the main function for production use. It counts photons in each
-    voxel for each label separately, storing only non-zero voxels.
+    voxel for each particle separately, storing only non-zero voxels.
 
     Parameters
     ----------
     positions : np.ndarray
         Array of shape (N, 3) containing photon positions in meters
-    labels : np.ndarray
-        Array of shape (N,) containing label indices for each photon
+    particles : np.ndarray
+        Array of shape (N,) containing particle indices for each photon
     config : VoxelGridConfig, optional
         Grid configuration. Uses default if not provided.
 
@@ -241,42 +241,42 @@ def voxelize_photons_by_label(positions: np.ndarray,
     -------
     dict
         Dictionary containing:
-        - 'n_labels': int, number of unique labels
-        - 'n_nonzero_voxels': np.ndarray of shape (n_labels,),
-            number of non-zero voxels per label
-        - 'voxel_indices': list of np.ndarray, flat voxel indices per label
-        - 'voxel_counts': list of np.ndarray, photon counts per voxel per label
+        - 'n_particles': int, number of unique particles
+        - 'n_nonzero_voxels': np.ndarray of shape (n_particles,),
+            number of non-zero voxels per particle
+        - 'voxel_indices': list of np.ndarray, flat voxel indices per particle
+        - 'voxel_counts': list of np.ndarray, photon counts per voxel per particle
         - 'config': VoxelGridConfig used
     """
     if config is None:
         config = VoxelGridConfig()
 
-    unique_labels = np.unique(labels)
-    n_labels = len(unique_labels)
+    unique_particles = np.unique(particles)
+    n_particles = len(unique_particles)
 
     # Convert all positions to voxel indices at once
     voxel_indices = position_to_voxel_indices(positions, config)
     flat_indices = voxel_indices_to_flat_index(voxel_indices, config)
 
-    # Process each label
-    n_nonzero_voxels = np.zeros(n_labels, dtype=np.int64)
+    # Process each particle
+    n_nonzero_voxels = np.zeros(n_particles, dtype=np.int64)
     voxel_indices_list = []
     voxel_counts_list = []
 
-    for i, label in enumerate(unique_labels):
-        mask = labels == label
-        label_flat_indices = flat_indices[mask]
+    for i, particle in enumerate(unique_particles):
+        mask = particles == particle
+        particle_flat_indices = flat_indices[mask]
 
-        # Get unique voxels and counts for this label
-        unique_indices, counts = np.unique(label_flat_indices, return_counts=True)
+        # Get unique voxels and counts for this particle
+        unique_indices, counts = np.unique(particle_flat_indices, return_counts=True)
 
         n_nonzero_voxels[i] = len(unique_indices)
         voxel_indices_list.append(unique_indices)
         voxel_counts_list.append(counts)
 
     return {
-        'n_labels': n_labels,
-        'label_ids': unique_labels,
+        'n_particles': n_particles,
+        'particle_ids': unique_particles,
         'n_nonzero_voxels': n_nonzero_voxels,
         'voxel_indices': voxel_indices_list,
         'voxel_counts': voxel_counts_list,
@@ -285,61 +285,61 @@ def voxelize_photons_by_label(positions: np.ndarray,
 
 
 def voxelize_from_photon_indices(all_positions: np.ndarray,
-                                  label_photon_indices: List[np.ndarray],
+                                  particle_photon_indices: List[np.ndarray],
                                   config: Optional[VoxelGridConfig] = None) -> Dict:
     """
-    Voxelize photons where labels are defined by lists of photon indices.
+    Voxelize photons where particles are defined by lists of photon indices.
 
-    This matches the PhotonSim data format where each label has a list of
+    This matches the PhotonSim data format where each particle has a list of
     photon IDs that belong to it.
 
     Parameters
     ----------
     all_positions : np.ndarray
         Array of shape (N_total, 3) containing all photon positions in meters
-    label_photon_indices : list of np.ndarray
-        List of arrays, each containing photon indices for that label
+    particle_photon_indices : list of np.ndarray
+        List of arrays, each containing photon indices for that particle
     config : VoxelGridConfig, optional
         Grid configuration. Uses default if not provided.
 
     Returns
     -------
     dict
-        Same format as voxelize_photons_by_label
+        Same format as voxelize_photons_by_particle
     """
     if config is None:
         config = VoxelGridConfig()
 
-    n_labels = len(label_photon_indices)
+    n_particles = len(particle_photon_indices)
 
     # Convert all positions to flat indices at once (for efficiency)
     voxel_indices = position_to_voxel_indices(all_positions, config)
     all_flat_indices = voxel_indices_to_flat_index(voxel_indices, config)
 
-    # Process each label
-    n_nonzero_voxels = np.zeros(n_labels, dtype=np.int64)
+    # Process each particle
+    n_nonzero_voxels = np.zeros(n_particles, dtype=np.int64)
     voxel_indices_list = []
     voxel_counts_list = []
 
-    for i, photon_idx in enumerate(label_photon_indices):
+    for i, photon_idx in enumerate(particle_photon_indices):
         if len(photon_idx) == 0:
             n_nonzero_voxels[i] = 0
             voxel_indices_list.append(np.array([], dtype=np.int64))
             voxel_counts_list.append(np.array([], dtype=np.int64))
             continue
 
-        # Get flat indices for photons in this label
-        label_flat_indices = all_flat_indices[photon_idx]
+        # Get flat indices for photons in this particle
+        particle_flat_indices = all_flat_indices[photon_idx]
 
         # Get unique voxels and counts
-        unique_indices, counts = np.unique(label_flat_indices, return_counts=True)
+        unique_indices, counts = np.unique(particle_flat_indices, return_counts=True)
 
         n_nonzero_voxels[i] = len(unique_indices)
         voxel_indices_list.append(unique_indices)
         voxel_counts_list.append(counts)
 
     return {
-        'n_labels': n_labels,
+        'n_particles': n_particles,
         'n_nonzero_voxels': n_nonzero_voxels,
         'voxel_indices': voxel_indices_list,
         'voxel_counts': voxel_counts_list,
@@ -352,30 +352,30 @@ def pack_voxel_data_for_hdf5(voxel_data: Dict) -> Dict:
     Pack voxel data into a format suitable for HDF5 storage.
 
     Since HDF5 doesn't natively support ragged arrays, we flatten the
-    per-label arrays and store offset information.
+    per-particle arrays and store offset information.
 
     Parameters
     ----------
     voxel_data : dict
-        Output from voxelize_photons_by_label or voxelize_from_photon_indices
+        Output from voxelize_photons_by_particle or voxelize_from_photon_indices
 
     Returns
     -------
     dict
         Dictionary with HDF5-compatible arrays:
-        - 'voxel_n_nonzero': shape (n_labels,), count of non-zero voxels per label
-        - 'voxel_offsets': shape (n_labels,), starting offset for each label
+        - 'voxel_n_nonzero': shape (n_particles,), count of non-zero voxels per particle
+        - 'voxel_offsets': shape (n_particles,), starting offset for each particle
         - 'voxel_flat_indices': shape (total_nonzero,), concatenated flat indices
         - 'voxel_counts': shape (total_nonzero,), concatenated photon counts
         - 'voxel_grid_size_m': grid size in meters
         - 'voxel_size_m': voxel size in meters
         - 'voxel_n_per_dim': number of voxels per dimension
     """
-    n_labels = voxel_data['n_labels']
+    n_particles = voxel_data['n_particles']
     n_nonzero_voxels = voxel_data['n_nonzero_voxels']
 
     # Compute offsets
-    offsets = np.zeros(n_labels, dtype=np.int64)
+    offsets = np.zeros(n_particles, dtype=np.int64)
     offsets[1:] = np.cumsum(n_nonzero_voxels[:-1])
 
     # Concatenate indices and counts
@@ -407,20 +407,20 @@ def unpack_voxel_data_from_hdf5(hdf5_data: Dict) -> Dict:
     Returns
     -------
     dict
-        Dictionary matching the output format of voxelize_photons_by_label
+        Dictionary matching the output format of voxelize_photons_by_particle
     """
     n_nonzero = hdf5_data['voxel_n_nonzero']
     offsets = hdf5_data['voxel_offsets']
     all_indices = hdf5_data['voxel_flat_indices']
     all_counts = hdf5_data['voxel_counts']
 
-    n_labels = len(n_nonzero)
+    n_particles = len(n_nonzero)
 
-    # Reconstruct per-label arrays
+    # Reconstruct per-particle arrays
     voxel_indices_list = []
     voxel_counts_list = []
 
-    for i in range(n_labels):
+    for i in range(n_particles):
         start = offsets[i]
         end = start + n_nonzero[i]
         voxel_indices_list.append(all_indices[start:end])
@@ -432,7 +432,7 @@ def unpack_voxel_data_from_hdf5(hdf5_data: Dict) -> Dict:
     )
 
     return {
-        'n_labels': n_labels,
+        'n_particles': n_particles,
         'n_nonzero_voxels': n_nonzero,
         'voxel_indices': voxel_indices_list,
         'voxel_counts': voxel_counts_list,
@@ -447,24 +447,24 @@ def get_voxel_statistics(voxel_data: Dict) -> Dict:
     Parameters
     ----------
     voxel_data : dict
-        Output from voxelize_photons_by_label or voxelize_from_photon_indices
+        Output from voxelize_photons_by_particle or voxelize_from_photon_indices
 
     Returns
     -------
     dict
         Dictionary with statistics:
         - 'total_photons': total photon count
-        - 'total_nonzero_voxels': total non-zero voxels across all labels
-        - 'photons_per_label': array of photon counts per label
+        - 'total_nonzero_voxels': total non-zero voxels across all particles
+        - 'photons_per_particle': array of photon counts per particle
         - 'max_photons_per_voxel': maximum photons in any single voxel
         - 'mean_photons_per_voxel': mean photons per non-zero voxel
     """
-    n_labels = voxel_data['n_labels']
+    n_particles = voxel_data['n_particles']
     n_nonzero = voxel_data['n_nonzero_voxels']
     counts_list = voxel_data['voxel_counts']
 
-    photons_per_label = np.array([np.sum(c) for c in counts_list])
-    total_photons = np.sum(photons_per_label)
+    photons_per_particle = np.array([np.sum(c) for c in counts_list])
+    total_photons = np.sum(photons_per_particle)
     total_nonzero = np.sum(n_nonzero)
 
     all_counts = np.concatenate(counts_list) if total_nonzero > 0 else np.array([0])
@@ -472,7 +472,7 @@ def get_voxel_statistics(voxel_data: Dict) -> Dict:
     return {
         'total_photons': int(total_photons),
         'total_nonzero_voxels': int(total_nonzero),
-        'photons_per_label': photons_per_label,
+        'photons_per_particle': photons_per_particle,
         'max_photons_per_voxel': int(np.max(all_counts)) if total_nonzero > 0 else 0,
         'mean_photons_per_voxel': float(np.mean(all_counts)) if total_nonzero > 0 else 0.0
     }

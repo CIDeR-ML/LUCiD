@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-Simplified sensor visualization by label - HDF5 only version.
+Simplified sensor visualization by particle - HDF5 only version.
 
 Shows sensor hits colored by charge value, with arrows showing track directions.
 No photon visualization - only tracks (arrows) and sensor hits.
 
 Usage:
-    python visualize_labeled_events.py <hdf5_file> <detector_config> --event 0
+    python visualize_particle_events.py <hdf5_file> <detector_config> --event 0
 """
 import sys
 sys.path.append('/Users/cjesus/Software/LUCiD')
@@ -14,15 +14,15 @@ sys.path.append('/Users/cjesus/Software/LUCiD')
 import os
 import numpy as np
 import plotly.graph_objects as go
-from tools.production.label_data_utils import read_label_event_file
+from tools.production.particle_data_utils import read_particle_event_file
 from tools.production.voxelize import flat_index_to_position, VoxelGridConfig
 from tools.geometry import generate_detector
 from tools.geometry.utils import calculate_surface_normals, create_disc_mesh
 import argparse
 
 # Parse command line arguments
-parser = argparse.ArgumentParser(description='Visualize sensor hits by label')
-parser.add_argument('hdf5_file', type=str, help='Input HDF5 file from LUCiD (label-based output)')
+parser = argparse.ArgumentParser(description='Visualize sensor hits by particle')
+parser.add_argument('hdf5_file', type=str, help='Input HDF5 file from LUCiD (particle-based output)')
 parser.add_argument('detector_config', type=str, help='Detector configuration JSON file')
 parser.add_argument('--event', type=int, default=0, help='Event index to visualize (default: 0)')
 parser.add_argument('--min-charge', type=float, default=1.0, help='Minimum charge threshold in PE (default: 1.0)')
@@ -36,7 +36,7 @@ min_charge = args.min_charge
 output_dir = args.output_dir
 
 print("="*70)
-print(f"SENSOR VISUALIZATION BY LABEL")
+print(f"SENSOR VISUALIZATION BY PARTICLE")
 print("="*70)
 print(f"LUCiD HDF5 file: {hdf5_file}")
 print(f"Detector config: {detector_config}")
@@ -122,13 +122,13 @@ print(f"Loading event {event_idx}...")
 print()
 
 # Category names mapping
-category_names_map = {0: "Primary", 1: "DecayElectron", 2: "SecondaryPion", 3: "GammaShower", -1: "Unknown"}
+category_names_map = {0: "Primary", 1: "DecayElectron", 2: "SecondaryPion", 3: "Gamma", -1: "Unknown"}
 
 def get_category_name(code):
     return category_names_map.get(int(code), f'Category_{int(code)}')
 
 # Load LUCiD data (contains sensor and particle information)
-lucid_data = read_label_event_file(hdf5_file, event_index=event_idx, verbose=False)
+lucid_data = read_particle_event_file(hdf5_file, event_index=event_idx, verbose=False)
 n_particles = lucid_data['n_particles']
 PE_per_particle = lucid_data['PE_per_particle']  # Shape: (n_particles, N_sensors)
 T_per_particle = lucid_data['T_per_particle']
@@ -246,8 +246,6 @@ for particle_idx in range(n_particles):
 
 print()
 
-# Keep label_info for compatibility with rest of code
-label_info = particle_info
 
 # Build particle tree from HDF5 genealogy data
 particle_tree = {}
@@ -295,12 +293,11 @@ for particle_idx in range(n_particles):
         'containment': containment
     }
 
-# Alias for compatibility with rest of code
+# Alias for rest of visualization code
 track_tree = particle_tree
-n_labels = n_particles
-Q_per_label = PE_per_particle
-T_per_label = T_per_particle
-Q_true = PE
+PE_per_part = PE_per_particle
+T_per_part = T_per_particle
+PE_total = PE
 
 
 def build_particle_hierarchy(particle_tree, n_particles):
@@ -470,12 +467,12 @@ for i, pinfo in enumerate(particle_info):
 print(f"  Total arrow traces: {len(arrow_trace_indices)}")
 print()
 
-# Create "All" trace showing total charge across all labels
-all_hit_mask = Q_true >= min_charge
+# Create "All" trace showing total charge across all particles
+all_hit_mask = PE_total >= min_charge
 all_hit_indices = np.where(all_hit_mask)[0]
 
 if len(all_hit_indices) > 0:
-    all_charges = Q_true[all_hit_indices]
+    all_charges = PE_total[all_hit_indices]
     all_positions = detector.all_points[all_hit_indices]
     all_normals = calculate_surface_normals(detector, all_hit_indices)
 
@@ -518,12 +515,12 @@ if len(all_hit_indices) > 0:
     )
     print(f"  All: {len(all_hit_indices)} sensors above {min_charge} PE")
 
-# Create "By Label" trace with discrete colors per label
-# Resolve overlaps by assigning each sensor to the label with max charge contribution
+# Create "By Particle" trace with discrete colors per particle
+# Resolve overlaps by assigning each sensor to the particle with max charge contribution
 if len(all_hit_indices) > 0:
-    by_label_vertices = []
-    by_label_faces = []
-    by_label_colors = []
+    by_particle_vertices = []
+    by_particle_faces = []
+    by_particle_colors = []
     vertex_offset = 0
 
     # Sort sensors by position for consistent visualization
@@ -532,11 +529,11 @@ if len(all_hit_indices) > 0:
     all_hit_indices_sorted = all_hit_indices
 
     for idx, sensor_idx in enumerate(all_hit_indices_sorted):
-        # Find which label contributed most charge to this sensor
-        label_charges = Q_per_label[:, sensor_idx]
-        if np.max(label_charges) > 0:
-            max_label_idx = np.argmax(label_charges)
-            color = colors_palette[max_label_idx % len(colors_palette)]
+        # Find which particle contributed most charge to this sensor
+        particle_charges = PE_per_part[:, sensor_idx]
+        if np.max(particle_charges) > 0:
+            max_particle_idx = np.argmax(particle_charges)
+            color = colors_palette[max_particle_idx % len(colors_palette)]
         else:
             color = 'gray'
 
@@ -545,39 +542,39 @@ if len(all_hit_indices) > 0:
 
         vertices, faces = create_disc_mesh(pos, normal, disc_radius, n_segments=12)
         faces_adjusted = faces + vertex_offset
-        by_label_vertices.append(vertices)
-        by_label_faces.append(faces_adjusted)
-        by_label_colors.extend([color] * len(vertices))
+        by_particle_vertices.append(vertices)
+        by_particle_faces.append(faces_adjusted)
+        by_particle_colors.extend([color] * len(vertices))
         vertex_offset += len(vertices)
 else:
-    by_label_vertices = []
+    by_particle_vertices = []
 
-# Add "By Label" trace
-if len(by_label_vertices) > 0:
-    combined_vertices_by_label = np.vstack(by_label_vertices)
-    combined_faces_by_label = np.vstack(by_label_faces)
+# Add "By Particle" trace
+if len(by_particle_vertices) > 0:
+    combined_vertices_by_particle = np.vstack(by_particle_vertices)
+    combined_faces_by_particle = np.vstack(by_particle_faces)
 
     fig.add_trace(
         go.Mesh3d(
-            x=combined_vertices_by_label[:, 0],
-            y=combined_vertices_by_label[:, 1],
-            z=combined_vertices_by_label[:, 2],
-            i=combined_faces_by_label[:, 0],
-            j=combined_faces_by_label[:, 1],
-            k=combined_faces_by_label[:, 2],
-            vertexcolor=by_label_colors,
-            name='By Label',
+            x=combined_vertices_by_particle[:, 0],
+            y=combined_vertices_by_particle[:, 1],
+            z=combined_vertices_by_particle[:, 2],
+            i=combined_faces_by_particle[:, 0],
+            j=combined_faces_by_particle[:, 1],
+            k=combined_faces_by_particle[:, 2],
+            vertexcolor=by_particle_colors,
+            name='By Particle',
             showscale=False,
             visible=False,
             lighting=dict(ambient=0.8, diffuse=0.5, specular=0.1),
             flatshading=True
         )
     )
-    print(f"  By Label: {len(all_hit_indices)} sensors (color-coded)")
+    print(f"  By Particle: {len(all_hit_indices)} sensors (color-coded)")
 
-# Create sensor meshes for each individual label
-for label_idx in range(n_labels):
-    charges = Q_per_label[label_idx, :]
+# Create sensor meshes for each individual particle
+for particle_idx in range(n_particles):
+    charges = PE_per_part[particle_idx, :]
     hit_mask = charges >= min_charge
     hit_indices = np.where(hit_mask)[0]
 
@@ -589,30 +586,30 @@ for label_idx in range(n_labels):
             opacity=0,
             showscale=False,
             visible=False,
-            name=f'Label {label_idx}'
+            name=f'Particle {particle_idx}'
         ))
-        print(f"  Warning: Label {label_idx} has no sensors above {min_charge} PE")
+        print(f"  Warning: Particle {particle_idx} has no sensors above {min_charge} PE")
         continue
 
-    label_charges = charges[hit_indices]
+    particle_charges = charges[hit_indices]
     positions = detector.all_points[hit_indices]
     normals = calculate_surface_normals(detector, hit_indices)
 
-    label_vertices = []
-    label_faces = []
-    label_intensities = []
+    particle_vertices = []
+    particle_faces = []
+    particle_intensities = []
     vertex_offset = 0
 
-    for pos, normal, charge in zip(positions, normals, label_charges):
+    for pos, normal, charge in zip(positions, normals, particle_charges):
         vertices, faces = create_disc_mesh(pos, normal, disc_radius, n_segments=12)
         faces_adjusted = faces + vertex_offset
-        label_vertices.append(vertices)
-        label_faces.append(faces_adjusted)
-        label_intensities.extend([charge] * len(vertices))
+        particle_vertices.append(vertices)
+        particle_faces.append(faces_adjusted)
+        particle_intensities.extend([charge] * len(vertices))
         vertex_offset += len(vertices)
 
-    combined_vertices = np.vstack(label_vertices)
-    combined_faces = np.vstack(label_faces)
+    combined_vertices = np.vstack(particle_vertices)
+    combined_faces = np.vstack(particle_faces)
 
     fig.add_trace(
         go.Mesh3d(
@@ -622,19 +619,19 @@ for label_idx in range(n_labels):
             i=combined_faces[:, 0],
             j=combined_faces[:, 1],
             k=combined_faces[:, 2],
-            intensity=label_intensities,
+            intensity=particle_intensities,
             colorscale='Viridis',
             cmin=0,
             cmax=global_max_charge,
             colorbar=dict(title="Charge (PE)", x=0.92, len=0.8),
-            name=f'Label {label_idx}',
+            name=f'Particle {particle_idx}',
             showscale=True,
             visible=False,
             lighting=dict(ambient=0.8, diffuse=0.5, specular=0.1),
             flatshading=True
         )
     )
-    print(f"  Label {label_idx}: {len(hit_indices)} sensors above {min_charge} PE")
+    print(f"  Particle {particle_idx}: {len(hit_indices)} sensors above {min_charge} PE")
 
 print()
 
@@ -1011,7 +1008,7 @@ fig.update_layout(
 
 # Save to HTML
 root_basename = os.path.splitext(os.path.basename(hdf5_file))[0]
-filename = f'label_sensors_{root_basename}_event{event_idx}.html'
+filename = f'particle_sensors_{root_basename}_event{event_idx}.html'
 
 # Use output directory if specified
 if output_dir is not None:
