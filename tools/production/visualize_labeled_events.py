@@ -508,7 +508,7 @@ if len(all_hit_indices) > 0:
             colorscale='Viridis',
             cmin=0,
             cmax=global_max_charge,
-            colorbar=dict(title="Charge (PE)", x=1.15),
+            colorbar=dict(title="Charge (PE)", x=0.92, len=0.8),
             name='All',
             showscale=True,
             visible=False,
@@ -626,7 +626,7 @@ for label_idx in range(n_labels):
             colorscale='Viridis',
             cmin=0,
             cmax=global_max_charge,
-            colorbar=dict(title="Charge (PE)", x=1.15),
+            colorbar=dict(title="Charge (PE)", x=0.92, len=0.8),
             name=f'Label {label_idx}',
             showscale=True,
             visible=False,
@@ -960,12 +960,12 @@ fig.update_layout(
         xaxis=dict(gridcolor='gray', color='white'),
         yaxis=dict(gridcolor='gray', color='white'),
         zaxis=dict(gridcolor='gray', color='white'),
-        domain=dict(x=[0.0, 1.0], y=[0.10, 0.95])  # Larger 3D plot, more vertical space
+        domain=dict(x=[0.0, 0.85], y=[0.10, 0.95])  # Fixed domain leaving room for colorbar
     ),
     paper_bgcolor='black',
     plot_bgcolor='black',
     font=dict(color='white'),
-    margin=dict(b=700, t=120, l=50, r=50),  # Generous bottom margin for text box
+    margin=dict(b=700, t=120, l=50, r=50),  # Bottom margin for text box
     annotations=[{
         "text": event_genealogy_text,  # Static text showing entire event
         "showarrow": False,
@@ -998,7 +998,9 @@ fig.update_layout(
                 font=dict(color='white', size=14)
             ),
             pad={"b": 10, "t": 50},
-            len=0.8,
+            len=0.95,
+            ticklen=10,
+            minorticklen=0,
             steps=slider_steps
         )
     ],
