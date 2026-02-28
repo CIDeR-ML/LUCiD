@@ -146,7 +146,7 @@ echo "========================================================================"
 HDF5_FILE="${TMP_DIR}/${CONFIG_NAME}_validation.h5"
 
 singularity exec -B /sdf,/fs,/sdf/scratch,/lscratch ${SINGULARITY_IMAGE} python \
-    ${LUCID_DIR}/tools/production/generate_events_with_labels.py \
+    ${LUCID_DIR}/tools/production/generate_events_with_particles.py \
     --root-file "$ROOT_FILE" \
     --output "$TMP_DIR" \
     --apply-smearing \
@@ -171,7 +171,7 @@ cd "$LUCID_DIR"
 for (( event=0; event<$N_EVENTS; event++ )); do
     echo "Generating visualization for event $event..."
     singularity exec -B /sdf,/fs,/sdf/scratch,/lscratch ${SINGULARITY_IMAGE} python \
-        tools/production/visualize_labeled_events.py \
+        tools/production/visualize_particle_events.py \
         "$HDF5_FILE" \
         config/SK_geom_config.json \
         --event "$event" \

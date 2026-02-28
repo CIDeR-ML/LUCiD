@@ -857,12 +857,12 @@ def save_single_event_with_extended_info(charges, times, params, extended_info=N
     
     return filename
 
-def save_single_event_with_label_info(extended_info, event_number=0, filename=None):
+def save_single_event_with_particle_info(extended_info, event_number=0, filename=None):
     """
     Save a single event with categorized particle structure to an HDF5 file.
 
     This function saves events generated from PhotonSim where photons are classified
-    by particle genealogy into categories (Primary, DecayElectron, GammaShower, SecondaryPion).
+    by particle genealogy into categories (Primary, DecayElectron, Gamma, SecondaryPion).
 
     The HDF5 structure includes:
 
@@ -914,11 +914,11 @@ def save_single_event_with_label_info(extended_info, event_number=0, filename=No
     if filename is None:
         filename = f'event_{event_number}.h5'
 
-    n_particles = extended_info['n_labels']
-    labels = extended_info['labels']
-    PE_per_particle = extended_info['Q_per_label']
-    T_per_particle = extended_info['T_per_label']
-    PE = extended_info['Q_reco']  # Observed (smeared) values
+    n_particles = extended_info['n_particles']
+    particles = extended_info['particles']
+    PE_per_particle = extended_info['PE_per_particle']
+    T_per_particle = extended_info['T_per_particle']
+    PE = extended_info['PE_reco']  # Observed (smeared) values
     T = extended_info['T_reco']
     t0 = extended_info.get('t0', 0.0)  # Event time offset
 
@@ -926,9 +926,9 @@ def save_single_event_with_label_info(extended_info, event_number=0, filename=No
     particle_categories = []
     particle_genealogies = []
 
-    for label in labels:
-        track_info = label['track_info']
-        genealogy = label['genealogy']
+    for particle in particles:
+        track_info = particle['track_info']
+        genealogy = particle['genealogy']
 
         if track_info is not None:
             particle_categories.append(track_info['category'])
@@ -983,7 +983,7 @@ def save_single_event_with_label_info(extended_info, event_number=0, filename=No
 
         # Containment metrics
         f.create_dataset('overall_light_containment', data=np.float64(extended_info['overall_light_containment']))
-        f.create_dataset('light_containment_by_particle', data=np.array(extended_info['light_containment_by_label'], dtype=np.float64))
+        f.create_dataset('light_containment_by_particle', data=np.array(extended_info['light_containment_by_particle'], dtype=np.float64))
 
         # Voxel data (sparse representation)
         if 'voxel_n_nonzero' in extended_info:
@@ -1048,9 +1048,9 @@ def save_single_event_with_label_info(extended_info, event_number=0, filename=No
 
             # Save track genealogy for each particle if available
             ext_genealogies = []
-            for label in labels:
-                if 'extended_genealogy' in label and label['extended_genealogy'] is not None:
-                    ext_genealogies.append(np.asarray(label['extended_genealogy'], dtype=np.int32))
+            for particle in particles:
+                if 'extended_genealogy' in particle and particle['extended_genealogy'] is not None:
+                    ext_genealogies.append(np.asarray(particle['extended_genealogy'], dtype=np.int32))
                 else:
                     ext_genealogies.append(np.array([], dtype=np.int32))
 
