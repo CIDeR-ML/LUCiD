@@ -91,6 +91,11 @@ def main():
         action='store_true',
         help='Include meaningful track and segment data in output (track-level G4 information)'
     )
+    parser.add_argument(
+        '--include-voxels',
+        action='store_true',
+        help='Include voxelized photon position data in output'
+    )
     args = parser.parse_args()
 
     # Verify ROOT file exists
@@ -136,6 +141,7 @@ def main():
     print(f"  Apply rotation: {args.apply_rotation}")
     print(f"  Apply translation: {args.apply_translation}")
     print(f"  Include track segments: {args.include_track_segments}")
+    print(f"  Include voxels: {args.include_voxels}")
 
     result = generate_events_from_photonsim_particles(
         event_simulator=simulate_event,
@@ -151,7 +157,8 @@ def main():
         detector_config_path=args.config,
         merge_output=True,
         merged_filename=args.merged_filename,
-        include_track_segments=args.include_track_segments
+        include_track_segments=args.include_track_segments,
+        include_voxels=args.include_voxels
     )
 
     print(f"\nOutput file: {result}")
