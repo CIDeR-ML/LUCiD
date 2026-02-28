@@ -1068,7 +1068,7 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path, se
                                              n_events=None, batch_size=100, master_seed=None,
                                              apply_smearing=False, apply_rotation=False, apply_translation=False,
                                              detector_config_path=None, merge_output=True, merged_filename='merged_events.h5',
-                                             include_track_segments=False):
+                                             include_track_segments=False, include_voxels=False):
     """
     VMAP-OPTIMIZED VERSION: Generate and save events using batched particle processing.
 
@@ -1454,29 +1454,31 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path, se
                     overall_light_containment = float(total_photons_inside_all_particles) / total_photons_all_particles
 
             # ========================================================================
-            # VOXELIZATION
+            # VOXELIZATION (optional)
             # Convert photon positions to sparse voxel representation
             # ========================================================================
-            print(f"    Voxelizing photon positions...", flush=True)
-            voxel_start_time = time.time()
+            packed_voxel_data = None
+            if include_voxels:
+                print(f"    Voxelizing photon positions...", flush=True)
+                voxel_start_time = time.time()
 
-            # Get photon indices for each particle
-            particle_photon_indices_list = [particle['photon_indices'] for particle in particles]
+                # Get photon indices for each particle
+                particle_photon_indices_list = [particle['photon_indices'] for particle in particles]
 
-            # Voxelize using positions in meters
-            voxel_config = VoxelGridConfig()
-            voxel_data = voxelize_from_photon_indices(
-                all_photon_origins_np,  # Already in meters
-                particle_photon_indices_list,
-                voxel_config
-            )
+                # Voxelize using positions in meters
+                voxel_config = VoxelGridConfig()
+                voxel_data = voxelize_from_photon_indices(
+                    all_photon_origins_np,  # Already in meters
+                    particle_photon_indices_list,
+                    voxel_config
+                )
 
-            # Pack for HDF5 storage
-            packed_voxel_data = pack_voxel_data_for_hdf5(voxel_data)
+                # Pack for HDF5 storage
+                packed_voxel_data = pack_voxel_data_for_hdf5(voxel_data)
 
-            voxel_elapsed = time.time() - voxel_start_time
-            total_voxels = np.sum(voxel_data['n_nonzero_voxels'])
-            print(f"    Voxelization: {total_voxels:,} voxels in {voxel_elapsed:.3f}s", flush=True)
+                voxel_elapsed = time.time() - voxel_start_time
+                total_voxels = np.sum(voxel_data['n_nonzero_voxels'])
+                print(f"    Voxelization: {total_voxels:,} voxels in {voxel_elapsed:.3f}s", flush=True)
 
             # Create filename
             event_number = event_idx
@@ -1498,14 +1500,16 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path, se
                 'source': 'PhotonSim_Particles_VMAP',
                 'overall_light_containment': overall_light_containment,
                 'light_containment_by_particle': light_containment_by_particle,
-                # Voxel data (sparse representation)
-                'voxel_n_nonzero': packed_voxel_data['voxel_n_nonzero'],
-                'voxel_offsets': packed_voxel_data['voxel_offsets'],
-                'voxel_flat_indices': packed_voxel_data['voxel_flat_indices'],
-                'voxel_counts': packed_voxel_data['voxel_counts'],
                 # Track segment data (if included)
                 'include_track_segments': include_track_segments
             }
+
+            # Add voxel data if included
+            if packed_voxel_data is not None:
+                extended_info['voxel_n_nonzero'] = packed_voxel_data['voxel_n_nonzero']
+                extended_info['voxel_offsets'] = packed_voxel_data['voxel_offsets']
+                extended_info['voxel_flat_indices'] = packed_voxel_data['voxel_flat_indices']
+                extended_info['voxel_counts'] = packed_voxel_data['voxel_counts']
 
             # Add meaningful tracks and segments if requested
             if include_track_segments and 'meaningful_tracks' in particle_data:
