@@ -704,6 +704,67 @@ def get_random_root_entry_index(root_file_path):
     
     return np.random.randint(0, total_entries - 1)
 
+def read_photon_data_from_root(root_file_path, entry_index, particle_type='muon'):
+    """
+    Read photon data from a ROOT file for a specific entry, using the component vectors.
+
+    Parameters
+    ----------
+    root_file_path : str
+        Path to the ROOT file
+    entry_index : int
+        Entry index to read from the file
+    particle_type : str, optional
+        Type of particle ('muon' or 'pion'), by default 'muon'
+
+    Returns
+    -------
+    dict
+        Dictionary containing photon_origins, photon_directions, and energy
+    """
+    import uproot
+    import jax.numpy as jnp
+
+    # Open the ROOT file
+    root_file = uproot.open(root_file_path)
+
+    # Access the tree
+    tree = root_file['v_photon']
+
+    # Read position components
+    photon_posx = tree['photon_posx'].array(entry_start=entry_index, entry_stop=entry_index+1)[0]
+    photon_posy = tree['photon_posy'].array(entry_start=entry_index, entry_stop=entry_index+1)[0]
+    photon_posz = tree['photon_posz'].array(entry_start=entry_index, entry_stop=entry_index+1)[0]
+
+    # Read direction components
+    photon_dirx = tree['photon_dirx'].array(entry_start=entry_index, entry_stop=entry_index+1)[0]
+    photon_diry = tree['photon_diry'].array(entry_start=entry_index, entry_stop=entry_index+1)[0]
+    photon_dirz = tree['photon_dirz'].array(entry_start=entry_index, entry_stop=entry_index+1)[0]
+
+    # Read momentum
+    initmom = float(tree['initmom'].array(entry_start=entry_index, entry_stop=entry_index+1)[0])
+
+    # Stack the components to form position and direction arrays
+    photon_positions = np.column_stack((photon_posx, photon_posy, photon_posz))
+    photon_directions = np.column_stack((photon_dirx, photon_diry, photon_dirz))
+
+    # Convert initmom (momentum) to kinetic energy based on particle type
+    if particle_type.lower() == 'muon':
+        mass = 105.7  # MeV/c^2 (muon rest mass)
+    elif particle_type.lower() == 'pion':
+        mass = 139.6  # MeV/c^2 (charged pion rest mass)
+    else:
+        raise ValueError(f"Unsupported particle type: {particle_type}")
+
+    # E_kinetic = sqrt(p^2 + m^2) - m
+    energy = np.sqrt(initmom**2 + mass**2) - mass
+
+    return {
+        'photon_origins': jnp.array(photon_positions),     # Combined position vectors
+        'photon_directions': jnp.array(photon_directions), # Combined direction vectors
+        'energy': float(energy)
+    }
+
 def get_pdg_code(particle_type):
     """
     Convert particle type string to PDG code.
