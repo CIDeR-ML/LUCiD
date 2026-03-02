@@ -63,7 +63,7 @@ from tools.siren.training.dataset import PhotonSimDataset
 
 # Import tools
 from tools.siren.core import SIREN
-from tools.simulation import create_photonsim_siren_grid
+from tools.siren.core import create_photonsim_siren_grid
 from tools.generate import generate_random_cone_vectors, normalize, photonsim_differentiable_get_rays
 from tools.utils import base_dir_path, setup_matplotlib_for_notebook
 
