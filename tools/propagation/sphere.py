@@ -455,7 +455,7 @@ def find_intersected_sphere_sensors_differentiable(ray_origins, ray_directions, 
     sensor_times = sensor_results[1]
     sensor_indices = sensor_results[2]
     sensor_normals = sensor_results[3]
-    inside_detector = sensor_results[4]
+    inside_sensor = sensor_results[4]
     sensor_hit_positions = sensor_results[5]
 
     # Calculate sphere surface normals
@@ -464,7 +464,7 @@ def find_intersected_sphere_sensors_differentiable(ray_origins, ray_directions, 
     intersection_results = process_intersection_normals(
         ray_origins, ray_directions, intersection_point,
         t_sphere, sensor_normals, sensor_hit_positions,
-        inside_detector, sphere_normals
+        inside_sensor, sphere_normals
     )
 
     hit_positions = intersection_results['positions']
@@ -478,7 +478,7 @@ def find_intersected_sphere_sensors_differentiable(ray_origins, ray_directions, 
         'positions': hit_positions,
         'normals': final_normals,
         'sensor_normals': sensor_normals,
-        'inside_detector': inside_detector
+        'inside_sensor': inside_sensor
     }
 
     return result if not single_ray else jax.tree_map(lambda x: x[0], result)
