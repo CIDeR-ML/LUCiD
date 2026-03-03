@@ -661,7 +661,7 @@ def find_intersected_sensors_differentiable(ray_origins, ray_directions, sensor_
     sensor_times = sensor_results[1]
     sensor_indices = sensor_results[2]
     sensor_normals = sensor_results[3]
-    inside_detector = sensor_results[4]
+    inside_sensor = sensor_results[4]
     sensor_hit_positions = sensor_results[5]
 
     # Calculate cylinder normals
@@ -670,7 +670,7 @@ def find_intersected_sensors_differentiable(ray_origins, ray_directions, sensor_
     intersection_results = process_intersection_normals(
         ray_origins, ray_directions, intersection_point,
         t_cylinder, sensor_normals, sensor_hit_positions,
-        inside_detector, cylinder_normals
+        inside_sensor, cylinder_normals
     )
 
     hit_positions = intersection_results['positions']
@@ -684,7 +684,7 @@ def find_intersected_sensors_differentiable(ray_origins, ray_directions, sensor_
         'positions': hit_positions,
         'normals': final_normals,
         'sensor_normals': sensor_normals,
-        'inside_detector': inside_detector
+        'inside_sensor': inside_sensor
     }
 
     return result if not single_ray else jax.tree_map(lambda x: x[0], result)
