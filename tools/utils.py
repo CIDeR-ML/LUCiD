@@ -1948,3 +1948,27 @@ def smear_charges_SK_like(counts, key=None):
     smeared_counts = jnp.clip(smeared_counts, 0.0, None)
 
     return smeared_counts
+
+
+def time_digitizer(times, time_resolution=0.4):
+    """
+    Digitize input times to bin centers.
+
+    Args:
+        times: Input array of times to digitize
+        time_resolution: Time resolution for binning (default=0.4 ns, Super-Kamiokande PMT resolution)
+
+    Returns:
+        Array with same shape as input where each time is replaced
+        by its corresponding bin center
+    """
+    time_window = 500  # nanoseconds
+    nbins = int(time_window / time_resolution)
+    bins = jnp.linspace(0, time_window, int(nbins + 1))
+    bin_centers = bins[:-1] + (bins[1] - bins[0]) / 2
+
+    # Find which bin each time falls into
+    bin_indices = jnp.digitize(times, bins) - 1
+    digitized_times = jnp.where((jnp.isfinite(times)), bin_centers[bin_indices], 1e6)
+
+    return digitized_times
