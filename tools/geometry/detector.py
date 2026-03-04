@@ -6,6 +6,7 @@ import json
 from .cylinder import Cylinder
 from .sphere import Sphere
 from .box import Box
+from .superk import SuperK
 
 
 def load_detector_config(file_path):
@@ -80,6 +81,10 @@ def load_detector_geom(file_path):
     elif detector_type == 'box':
         return (detector_type, geom_def['length'], geom_def['width'], 
                 geom_def['height'], geom_def['n_sensors'], geom_def['sensor_radius'])
+    elif detector_type == 'superk':
+        return (detector_type, geom_def['radius'], geom_def['height'],
+                geom_def['n_sensors'], geom_def['sensor_radius'],
+                geom_def['connection_table_path'])
     else:
         raise ValueError(f"Unknown detector type: {detector_type}")
 
@@ -98,3 +103,7 @@ def generate_detector(file_path):
     elif detector_type == 'box':
         _, length, width, height, n_sensors, sensor_radius = geom_data
         return Box(length, width, height, n_sensors, sensor_radius)
+    elif detector_type == 'superk':
+        _, radius, height, n_sensors, sensor_radius, connection_table_path = geom_data
+        return SuperK(connection_table_path, radius=radius, height=height,
+                      n_sensors=n_sensors, sensor_radius=sensor_radius)
