@@ -39,11 +39,11 @@ def create_detector_display(json_filename='../config/cyl_geom_config.json', spar
     detector = generate_detector(json_filename)
 
     # Load geometry data using new unified function
-    detector_type, radius, height, n_sensors_meta, sensor_radius = load_detector_geom(json_filename)
+    detector_type, radius, height, n_sensors_meta, sensor_radius, _ = load_detector_geom(json_filename)
 
     # Check if it's a cylinder (this visualization is designed for cylinders)
-    if detector_type != 'cylinder':
-        raise ValueError(f"This visualization is designed for cylinders, got {detector_type}")
+    #if detector_type != 'cylinder':
+    #    raise ValueError(f"This visualization is designed for cylinders, got {detector_type}")
 
     # Set up detector information from detector object
     sensor_positions = np.array(detector.all_points)
