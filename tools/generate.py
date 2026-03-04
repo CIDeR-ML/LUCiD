@@ -853,12 +853,14 @@ def generate_events_from_root(event_simulator, root_file_path, output_dir='event
 
 def generate_multi_folder_events(event_simulator, root_file_path, folder_names, events_per_folder,
                                n_rings_list=None, pion_root_file_path=None,
-                               max_sensors_per_cell=4, batch_size=100):
+                               sensor_params=None, max_sensors_per_cell=4, batch_size=100):
     """
     Generate events across multiple folders, each with sequentially numbered events.
-    
+
     Parameters
     ----------
+    event_simulator : function
+        The event simulation function to use
     root_file_path : str
         Path to the ROOT file for muons
     folder_names : list of str
@@ -870,11 +872,13 @@ def generate_multi_folder_events(event_simulator, root_file_path, folder_names, 
         Number of rings for each folder, by default None (1 ring for all folders)
     pion_root_file_path : str, optional
         Path to ROOT file for pions, required if n_rings > 1 in any folder, by default None
+    sensor_params : tuple, optional
+        Sensor parameters tuple passed to event_simulator, by default None
     max_sensors_per_cell : int, optional
         Maximum sensors per cell, by default 4
     batch_size : int, optional
         Number of events to accumulate before saving in parallel, by default 100
-        
+
     Returns
     -------
     dict
@@ -920,6 +924,7 @@ def generate_multi_folder_events(event_simulator, root_file_path, folder_names, 
             n_events=n_events,
             n_rings=n_rings,
             pion_root_file_path=pion_root_file_path,
+            sensor_params=sensor_params,
             max_sensors_per_cell=max_sensors_per_cell,
             batch_size=batch_size
         )
@@ -1429,7 +1434,7 @@ def generate_events_from_photonsim_labels(event_simulator, root_file_path, senso
     import time
     import numpy as np
     import json
-    from tools.simulation import smear_charges_SK_like, smear_times
+    from tools.utils import smear_charges_SK_like, smear_times
 
     # Generate random seed if not provided
     if master_seed is None:
