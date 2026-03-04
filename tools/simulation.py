@@ -251,6 +251,74 @@ def compute_scatter_direction(incident_dir, rng_key):
     frame = create_local_frame(incident_dir)
     return normalize(frame @ local_dir)
 
+def compute_asym_scatter_direction(incident_dir, rng_key):
+    """
+    Compute a new scattering direction for asymmetric (forward Mie) scattering.
+
+    From the SK calibration paper (arXiv:1307.0162), Section 3.2.1:
+    The asymmetric scattering probability increases linearly from cos θ = 0
+    to cos θ = 1, with no scattering for cos θ < 0 (backward hemisphere).
+    That is, P(cos θ) ∝ cos θ for cos θ ∈ [0, 1], and P = 0 for cos θ < 0.
+
+    The CDF is: F(μ) = μ² for μ ∈ [0, 1], so the inverse CDF is μ = √u.
+    """
+    k1, k2 = jax.random.split(rng_key)
+    u1 = jax.random.uniform(k1)
+    u2 = jax.random.uniform(k2)
+
+    cos_theta = jnp.sqrt(u1)
+    sin_theta = jnp.sqrt(1 - cos_theta ** 2)
+    phi = 2 * jnp.pi * u2
+    local_dir = normalize(jnp.array([sin_theta * jnp.cos(phi),
+                                     sin_theta * jnp.sin(phi),
+                                     cos_theta]))
+    frame = create_local_frame(incident_dir)
+    return normalize(frame @ local_dir)
+
+def compute_mixed_scatter_direction(incident_dir, asym_fraction, rng_key):
+    """
+    Compute a scattering direction from a mixture of symmetric (Rayleigh)
+    and asymmetric (forward Mie) distributions.
+
+    Instead of computing both directions and selecting, this computes a single
+    direction by choosing the cos_theta sampling method based on asym_fraction.
+    This avoids duplicate create_local_frame / matrix multiply overhead.
+
+    Parameters
+    ----------
+    incident_dir : jnp.ndarray
+        Current photon direction (3,)
+    asym_fraction : float
+        Probability that this scatter is asymmetric: α_asym / (α_sym + α_asym).
+    rng_key : jax.random.PRNGKey
+
+    Returns
+    -------
+    new_dir : jnp.ndarray
+        Scattered direction (3,)
+    """
+    k1, k2, k3 = jax.random.split(rng_key, 3)
+
+    # Decide which angular distribution to use
+    u_choice = jax.random.uniform(k1)
+    is_asym = u_choice < asym_fraction
+
+    # Sample cos_theta from either distribution
+    u1 = jax.random.uniform(k2)
+    cos_theta_sym = solve_rayleigh_inverse_cdf(u1)   # Rayleigh: P(μ) ∝ 1 + μ²
+    cos_theta_asym = jnp.sqrt(u1)                     # Forward Mie: P(μ) ∝ μ on [0,1]
+    cos_theta = jnp.where(is_asym, cos_theta_asym, cos_theta_sym)
+
+    # Single direction computation (shared frame, one matrix multiply)
+    u2 = jax.random.uniform(k3)
+    sin_theta = jnp.sqrt(1 - cos_theta ** 2)
+    phi = 2 * jnp.pi * u2
+    local_dir = normalize(jnp.array([sin_theta * jnp.cos(phi),
+                                     sin_theta * jnp.sin(phi),
+                                     cos_theta]))
+    frame = create_local_frame(incident_dir)
+    return normalize(frame @ local_dir)
+
 
 def create_photonsim_siren_grid(photonsim_predictor, n_bins):
     # Get the actual ranges from PhotonSim training metadata
@@ -284,7 +352,7 @@ def create_photonsim_siren_grid(photonsim_predictor, n_bins):
 
 def photon_iteration_sample(position, direction, time, surface_distance,
                             normal, scatter_length, reflection_rate,
-                            absorption_length, tau_gs, rng_key, speed_of_light):
+                            absorption_length, asym_fraction, tau_gs, rng_key, speed_of_light):
     """
     Sampling version of photon iteration that makes binary decisions.
 
@@ -309,6 +377,8 @@ def photon_iteration_sample(position, direction, time, surface_distance,
         Probability of reflection when reaching a surface
     absorption_length : float
         Mean free path for absorption in the medium
+    asym_fraction : float
+        Fraction of scatters that are asymmetric: α_asym / (α_sym + α_asym).
     tau_gs : float
         Temperature parameter for Gumbel-softmax (included for signature compatibility, not used)
     rng_key : jax.random.PRNGKey
@@ -368,7 +438,7 @@ def photon_iteration_sample(position, direction, time, surface_distance,
 
     # Calculate new direction
     reflection_dir = compute_reflection_direction(direction, normal)
-    scatter_dir = compute_scatter_direction(direction, k3)
+    scatter_dir = compute_mixed_scatter_direction(direction, asym_fraction, k3)
 
     new_dir = jnp.where(
         reflects,
@@ -405,7 +475,7 @@ def photon_iteration_sample(position, direction, time, surface_distance,
 
 def photon_iteration_update_factors(position, direction, time, surface_distance,
                                     normal, scatter_length, reflection_rate,
-                                    absorption_length, tau_gs, rng_key, speed_of_light):
+                                    absorption_length, asym_fraction, tau_gs, rng_key, speed_of_light):
     """
     An update function for photon propagation that employs a variance reduction technique through computation of expected values.
     It employs Gumbel-softmax sampling to blend reflection and scattering outcomes for full differentiability.
@@ -418,6 +488,7 @@ def photon_iteration_update_factors(position, direction, time, surface_distance,
       - scatter_length: scalar, mean free path for scattering.
       - reflection_rate: scalar, probability of reflection at the surface.
       - absorption_length: scalar, mean free path for absorption.
+      - asym_fraction: scalar, fraction of scatters that are asymmetric (forward Mie).
       - tau_gs: scalar, temperature for Gumbel-softmax sampling.
       - rng_key: JAX PRNG key.
       - speed_of_light: float, speed of light in the medium (m/ns), used to convert distance to time.
@@ -434,24 +505,20 @@ def photon_iteration_update_factors(position, direction, time, surface_distance,
 
     # Sample the distance along the ray where scattering might occur.
     scatter_distance = sample_scatter_distance(surface_distance, scatter_length, k2)
-
+    
     # Core probabilities
-    ratio = surface_distance / scatter_length
-    # Probability of reaching the surface without scattering
+    ratio = surface_distance / scatter_length    
     reach_surface_prob = jnp.exp(-ratio)
-    # Probability of scattering before reaching the surface
     scatter_prob = -jnp.expm1(-ratio)  # 1 - reach_surface_prob
 
     # Total probabilities for each possible outcome
-    # 1. Reflection: reach surface AND reflect
     reflect_prob = reach_surface_prob * reflection_rate
-    # 2. Detection: reach surface AND NOT reflect
     detect_prob = reach_surface_prob * (1 - reflection_rate)
 
     # Attenuation factors (only affect intensity, not probabilities)
     reflection_attenuation = jnp.exp(-surface_distance / absorption_length)
     scatter_attenuation = jnp.exp(-scatter_distance / absorption_length)
-
+    
     # Use Straight-Through Estimator for action selection
     # Sample from categorical distribution to decide reflection vs scatter
     probs = jnp.array([reflect_prob, scatter_prob])
@@ -478,22 +545,22 @@ def photon_iteration_update_factors(position, direction, time, surface_distance,
     reflection_pos = position + surface_distance * normalize(direction) + epsilon * normalize(normal)
     scatter_pos = position + scatter_distance * normalize(direction)
     reflection_dir = compute_reflection_direction(direction, normal)
-    scatter_dir = compute_scatter_direction(direction, k3)
+    scatter_dir = compute_mixed_scatter_direction(direction, asym_fraction, k3)
 
     # Blend the two possibilities for continuing paths.
     new_pos = reflection_weight * reflection_pos + scatter_weight * scatter_pos
     new_dir = normalize(reflection_weight * reflection_dir + scatter_weight * scatter_dir)
 
     # Calculate the continuing factor based on the probabilities and not the weights
-    continuing_factor = reflect_prob * reflection_attenuation + scatter_prob * scatter_attenuation
+    continuing_factor = reflect_prob * reflection_attenuation + reflect_prob * reflection_attenuation + scatter_prob * scatter_attenuation
 
     # Time increment based on distance traveled along the weighted path
     # Convert distance (meters) to time (nanoseconds)
-    distance_traveled = reflection_weight * surface_distance + scatter_weight * scatter_distance
+    distance_traveled = reflection_weight * surface_distance + scatter_weight * scatter_distance 
     time_increment = distance_traveled / speed_of_light  # m / (m/ns) = ns
     new_time = time + time_increment  # ns + ns
 
-    return new_pos, new_dir, new_time, detect_prob, reflection_attenuation, continuing_factor
+    return new_pos,new_dir, new_time, detect_prob, reflection_attenuation, continuing_factor
 
 
 # JAX-compatible versions of the rotation functions
@@ -831,6 +898,73 @@ def make_hits_data(flat_weights, flat_indices, flat_times, num_detectors, qe=0.2
 
         return measured_charge, measured_time
 
+def get_wavelength_dependent_properties(wavelengths):
+    """
+    Compute wavelength-dependent optical properties using the SK empirical water model.
+    From SK calibration paper (arXiv:1307.0162), Eqs. 14-17, Table 3.
+
+    Parameters
+    ----------
+    wavelengths : jnp.ndarray
+        Photon wavelengths in nm, shape (n_photons,)
+
+    Returns
+    -------
+    scatter_length : jnp.ndarray
+        Combined scattering mean free path: 1/(α_sym + α_asym), in meters
+    asym_fraction : jnp.ndarray
+        Fraction of scatters that are asymmetric: α_asym/(α_sym + α_asym)
+    absorption_length : jnp.ndarray
+        Absorption mean free path: 1/α_abs, in meters
+    """
+    # --- Scattering ---
+    # Symmetric scattering (Rayleigh + symmetric Mie), Eq. 16:
+    #   α_sym(λ) = P4/λ⁴ × (1 + P5/λ²)
+    P4 = 8.51e7
+    P5 = 1.14e5
+    alpha_sym = P4 / (wavelengths ** 4) * (1.0 + P5 / (wavelengths ** 2))
+
+    # Asymmetric scattering (forward Mie), Eq. 17:
+    #   α_asym(λ) = P6 × (1 + P7/λ⁴ × (λ - P8)²)
+    P6 = 1.00e-4
+    P7 = 4.62e6
+    P8 = 392.0
+    alpha_asym = P6 * (1.0 + P7 / (wavelengths ** 4) * (wavelengths - P8) ** 2)
+
+    # Combined scattering: competing exponentials
+    alpha_total_scatter = alpha_sym + alpha_asym
+    scatter_length = 1.0 / alpha_total_scatter
+    asym_fraction = alpha_asym / alpha_total_scatter
+
+    # --- Absorption ---
+    # Eq. 14: α_abs(λ) = P0 * P1 / λ⁴ + C(λ)
+    # Eq. 15: C = P0 * P2 * (λ/500)^P3  for λ ≤ 464 nm
+    #         C = Pope & Fry (1997) data   for λ ≥ 464 nm
+    P0 = 0.624
+    P1 = 2.96e7
+    P2 = 3.24e-2
+    P3 = 10.9
+
+    # Pope & Fry (1997) pure water absorption coefficients (m⁻¹)
+    pf_wavelengths = jnp.array([
+        464.0, 470.0, 480.0, 490.0, 500.0, 510.0, 520.0, 530.0,
+        540.0, 550.0, 560.0, 570.0, 580.0, 590.0, 600.0, 610.0,
+        620.0, 630.0, 640.0, 650.0, 660.0, 670.0, 680.0, 690.0, 700.0
+    ])
+    pf_absorption = jnp.array([
+        0.0054, 0.0058, 0.0064, 0.0082, 0.0257, 0.0357, 0.0477, 0.0507,
+        0.0558, 0.0638, 0.0708, 0.0799, 0.1080, 0.1570, 0.2440, 0.2890,
+        0.3090, 0.3190, 0.3290, 0.3490, 0.4000, 0.4300, 0.4500, 0.5000, 0.6500
+    ])
+
+    C_powerlaw = P0 * P2 * (wavelengths / 500.0) ** P3
+    C_popefry = jnp.interp(wavelengths, pf_wavelengths, pf_absorption)
+    C = jnp.where(wavelengths <= 464.0, C_powerlaw, C_popefry)
+
+    alpha_abs = P0 * P1 / (wavelengths ** 4) + C
+    absorption_length = 1.0 / alpha_abs
+
+    return scatter_length, asym_fraction, absorption_length
 
 def create_event_simulator(detector, propagate_photons, Nphot, NUM_SENSORS, sensor_points, K,
                            is_data, is_calibration, max_sensors_per_cell, use_expected_value=None,
@@ -952,7 +1086,7 @@ def create_event_simulator(detector, propagate_photons, Nphot, NUM_SENSORS, sens
         return _common_propagation(
             final_origins, final_directions, photon_intensities, photon_times,
             n_rays, detector_params, key, NUM_SENSORS, K, max_sensors_per_cell,
-            propagate_photons, photon_update_fn
+            propagate_photons, photon_update_fn, None
         )
 
     # Load photonsim parameters from configuration
@@ -997,18 +1131,33 @@ def create_event_simulator(detector, propagate_photons, Nphot, NUM_SENSORS, sens
         return _common_propagation(
             photon_origins, photon_directions, photon_intensities, photon_times + t0,
             Nphot, detector_params, key, NUM_SENSORS, K, max_sensors_per_cell,
-            propagate_photons, photon_update_fn
+            propagate_photons, photon_update_fn, None
         )
 
     # Define calibration simulation function
     @jax.jit
     def _simulation_sensor_calibration(source_params, detector_params, key):
-        """Simulate isotropic point source for detector calibration."""
-        source_origin, source_intensity = source_params
+        """Simulate isotropic point source for detector calibration.
 
-        # Generate isotropic photons
-        photon_directions, photon_origins, photon_intensities = get_isotropic_rays(
-            source_origin, source_intensity, Nphot, key
+        Parameters
+        ----------
+        source_params : tuple
+            (source_origin, source_intensity, wavelength) where:
+            - source_origin: jnp.ndarray, 3D position in meters
+            - source_intensity: float, total source intensity
+            - wavelength: float, wavelength in nm.
+              If > 0, monochromatic at that wavelength (e.g. 405.0 for laser).
+              If <= 0, sample from Cherenkov 1/lambda^2 spectrum.
+        detector_params : tuple
+            (scatter_length, reflection_rate, absorption_length, tau_gs)
+        key : jax.random.PRNGKey
+            Random key
+        """
+        source_origin, source_intensity, wavelength = source_params
+
+        # Generate isotropic photons with wavelengths
+        photon_directions, photon_origins, photon_intensities, wavelengths = get_isotropic_rays(
+            source_origin, source_intensity, Nphot, key, wavelength=wavelength
         )
         photon_times = jnp.zeros((Nphot,))
 
@@ -1017,6 +1166,7 @@ def create_event_simulator(detector, propagate_photons, Nphot, NUM_SENSORS, sens
             Nphot, detector_params, key, NUM_SENSORS, K, max_sensors_per_cell,
             propagate_photons, photon_update_fn
         )
+
 
     # Create geometry-specific bounds check function
     if detector_type == 'Cylinder':
@@ -1041,7 +1191,7 @@ def create_event_simulator(detector, propagate_photons, Nphot, NUM_SENSORS, sens
         def get_inside_detector_flag(positions):
             """Fallback bounds check function."""
             return jnp.ones(positions.shape[0], dtype=bool)
-
+    
     @partial(jax.jit, static_argnames=(
             'n_rays', 'K', 'max_sensors_per_cell', 'num_sensors', 'propagate_fn', 'photon_update_fn'))
     def _common_propagation(positions, directions, intensities, times, n_rays, detector_params, key,
@@ -1079,6 +1229,10 @@ def create_event_simulator(detector, propagate_photons, Nphot, NUM_SENSORS, sens
             Function to propagate photons and find sensor intersections
         photon_update_fn : callable
             Either photon_iteration_update_factors or photon_iteration_sample
+        wavelengths : jnp.ndarray or None, optional
+            Wavelength of each photon in nm, shape (n_rays,).
+            If None, wavelength-dependent effects are disabled and all
+            parameters remain scalar. Default: None.
 
         Returns
         -------
@@ -1087,8 +1241,8 @@ def create_event_simulator(detector, propagate_photons, Nphot, NUM_SENSORS, sens
         aligned_times : jnp.ndarray
             Average detection times aligned to earliest detection, shape (num_sensors,)
         """
-        original_scatter_length, original_reflection_rate, original_absorption_length, tau_gs = detector_params
-
+        original_scatter_length, asym_fraction, original_reflection_rate, original_absorption_length, tau_gs = detector_params
+        
         # Initialize survival attenuation factor tracking (starts at 1.0 for each photon)
         initial_survival_attenuation_factor = jnp.ones(n_rays)
 
@@ -1121,13 +1275,14 @@ def create_event_simulator(detector, propagate_photons, Nphot, NUM_SENSORS, sens
             key, subkey = jax.random.split(key)
             rng_keys = jax.random.split(subkey, n_rays)
 
-            # Apply photon update function (same signature for both modes)
+            # Apply photon update function
+            # scatter_length, absorption_length, asym_fraction are always per-photon (axis 0)
             new_positions, new_directions, new_times, detect_probs, reflection_attenuations, continuing_factors = jax.vmap(
                 photon_update_fn,
-                in_axes=(0, 0, 0, 0, 0, None, None, None, None, 0, None)
+                in_axes=(0, 0, 0, 0, 0, None, None, None, None, None, 0, None)
             )(current_positions, current_directions, current_times,
               surface_distances, normals, scatter_length, reflection_rate,
-              absorption_length, tau_gs, rng_keys, SPEED_OF_LIGHT_MATERIAL)
+              absorption_length, asym_fraction, tau_gs, rng_keys, SPEED_OF_LIGHT_MATERIAL)
 
             nan_pos_mask = jnp.any(jnp.isnan(new_positions), axis=1)
             nan_dir_mask = jnp.any(jnp.isnan(new_directions), axis=1)

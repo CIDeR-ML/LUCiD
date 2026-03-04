@@ -614,14 +614,16 @@ def print_propagation_params(sensor_params):
     ───────────────────────
     """
     # Unpack the parameter tuple
-    scatter_length, reflection_rate, absorption_length, sim_temperature = sensor_params
+    scatter_length, asym_fraction, reflection_rate, absorption_length, sim_temperature = sensor_params
 
     # Create formatted output with consistent decimal places
     print("Propagation Parameters:")
     print("─" * 20)
     print(f"Scatter Length: {scatter_length:.2f} m")
+    print(f"Scat. Inverse Water Transparency: {1/scatter_length:.4f} 1/m")
     print(f"Reflection Rate: {reflection_rate:.2f}")
     print(f"Absorption Length: {absorption_length:.2f} m")
+    print(f"Abs. Inverse Water Transparency: {1/absorption_length:.4f} 1/m")
     print(f"Simulation Temperature for Gumbel-Softmax: {sim_temperature:.4f}")
     print("─" * 20)
 

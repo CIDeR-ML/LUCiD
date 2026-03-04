@@ -332,38 +332,114 @@ def photonsim_differentiable_get_rays(track_origin, track_direction, energy, Nph
 
     return ray_vectors, ray_origins, denormalize_log_predictions(new_photon_weights, log_max, log_min)
 
+@partial(jax.jit, static_argnums=(1,))
+def sample_wavelengths_cherenkov(key, n, lambda_min=300.0, lambda_max=700.0):
+    """
+    Sample wavelengths from the Cherenkov spectrum dN/dlambda ~ 1/lambda^2.
+
+    Uses exact inverse CDF sampling (no rejection needed).
+
+    The Cherenkov radiation spectrum in terms of wavelength is:
+        dN/dlambda ∝ 1/lambda^2
+
+    The CDF is:
+        F(lambda) = (1/lambda_min - 1/lambda) / (1/lambda_min - 1/lambda_max)
+
+    Inverting:
+        lambda = 1 / (1/lambda_min - u * (1/lambda_min - 1/lambda_max))
+
+    Parameters
+    ----------
+    key : jax.random.PRNGKey
+        Random key for sampling
+    n : int
+        Number of wavelengths to sample
+    lambda_min : float
+        Minimum wavelength in nm (default: 300 nm, near-UV)
+    lambda_max : float
+        Maximum wavelength in nm (default: 700 nm, red edge of visible)
+
+    Returns
+    -------
+    jnp.ndarray
+        Array of shape (n,) with wavelengths in nm
+    """
+    u = jax.random.uniform(key, shape=(n,))
+    inv_lambda_min = 1.0 / lambda_min
+    inv_lambda_max = 1.0 / lambda_max
+    wavelengths = 1.0 / (inv_lambda_min - u * (inv_lambda_min - inv_lambda_max))
+    return wavelengths
 
 @partial(jax.jit, static_argnums=(2,))
-def get_isotropic_rays(source_position, source_intensity, Nphot, key):
+def get_isotropic_rays(source_position, source_intensity, Nphot, key,
+                       wavelength=0.0, lambda_min=300.0, lambda_max=700.0):
     """
     Generate photons isotropically from a point source using spherical coordinates.
+
+    Parameters
+    ----------
+    source_position : jnp.ndarray
+        3D position of the source in meters.
+    source_intensity : float
+        Total source intensity (scales photon weights).
+    Nphot : int
+        Number of photon rays to generate (static).
+    key : jax.random.PRNGKey
+        Random key for all stochastic sampling.
+    wavelength : float, optional
+        Wavelength control parameter in nm:
+        - If > 0: monochromatic source at this wavelength (e.g. 405.0 for a laser).
+        - If <= 0: sample from Cherenkov spectrum 1/lambda^2 between
+          lambda_min and lambda_max (default behavior).
+        Default: 0.0 (sample from spectrum).
+    lambda_min : float, optional
+        Minimum wavelength in nm for spectral sampling. Default: 300.0.
+    lambda_max : float, optional
+        Maximum wavelength in nm for spectral sampling. Default: 700.0.
+
+    Returns
+    -------
+    ray_vectors : jnp.ndarray, shape (Nphot, 3)
+        Unit direction vectors for each photon.
+    ray_origins : jnp.ndarray, shape (Nphot, 3)
+        Origin positions for each photon (all equal to source_position).
+    photon_weights : jnp.ndarray, shape (Nphot,)
+        Intensity weight for each photon.
+    wavelengths : jnp.ndarray, shape (Nphot,)
+        Wavelength of each photon in nm.
     """
     # Split the random key
-    key, key_phi, key_theta = random.split(key, 3)
-    
+    key, key_phi, key_theta, key_wl = random.split(key, 4)
+
     # Generate spherically isotropic directions
     phi = random.uniform(key_phi, (Nphot,)) * 2 * jnp.pi
     cos_theta = random.uniform(key_theta, (Nphot,)) * 2 - 1
     sin_theta = jnp.sqrt(1 - cos_theta**2)
-    
+
     # Convert to Cartesian coordinates
     x = sin_theta * jnp.cos(phi)
     y = sin_theta * jnp.sin(phi)
     z = cos_theta
-    
+
     # Stack into direction vectors
     ray_vectors_unnormalized = jnp.stack([x, y, z], axis=1)
-    
+
     # Normalize using vmap (even though they should already be unit vectors)
     ray_vectors = jax.vmap(normalize)(ray_vectors_unnormalized)
-    
+
     # All ray origins are at the source position
     ray_origins = jnp.tile(source_position, (Nphot, 1))
-    
+
     # Uniform weights
     photon_weights = jnp.ones(Nphot) * (source_intensity / Nphot)
-    
-    return ray_vectors, ray_origins, photon_weights
+
+    # Generate wavelengths:
+    # If wavelength > 0, monochromatic; otherwise sample from Cherenkov 1/lambda^2
+    sampled = sample_wavelengths_cherenkov(key_wl, Nphot, lambda_min, lambda_max)
+    mono = jnp.full((Nphot,), wavelength)
+    wavelengths = jnp.where(wavelength > 0.0, mono, sampled)
+
+    return ray_vectors, ray_origins, photon_weights, wavelengths
 
 
 def generate_random_direction(key):
