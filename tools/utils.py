@@ -1892,3 +1892,59 @@ def generate_random_event_params(key, detector_bounds, fraction=0.7):
     energy = jax.random.uniform(key, shape=(), minval=500.0, maxval=1500.0)
     
     return position, direction, energy
+
+
+def smear_times(times, time_resolution=0.4, key=None):
+    """
+    Gaussianly smear input times.
+    The default time resoluition is that of SK.
+    Reference: https://arxiv.org/pdf/1307.0162
+
+    Args:
+        times: array of input times (e.g., per detector).
+        time_resolution: standard deviation (in ns) of Gaussian smearing.
+        key: JAX random key for reproducibility.
+    Returns:
+        smeared_times: Gaussian-smeared times.
+    """
+    noise = jax.random.normal(key, shape=times.shape) * time_resolution
+    smeared_times = times + noise
+    smeared_times = jnp.where((jnp.isfinite(smeared_times)), smeared_times, 1e6)
+
+    return smeared_times
+
+
+def smear_charges_SK_like(counts, key=None):
+    """
+    Gaussianly smear input charge counts according to Super-Kamiokande-like resolution.
+
+    Reference: https://arxiv.org/pdf/1307.0162 (Table 2)
+
+    Args:
+        counts: array of input charge counts (e.g., number of hits per PMT).
+        key: JAX random key for reproducibility.
+
+    Returns:
+        smeared_counts: Gaussian-smeared charge counts.
+    """
+    if key is None:
+        raise ValueError("key must be provided for reproducibility.")
+
+    # Define sigma according to the count range
+    sigma = jnp.where(
+        counts < 20,
+        counts * 0.04,
+        jnp.where(counts < 130, counts * 0.26, counts * 1.8)
+    )
+
+    # Apply Gaussian smearing
+    noise = jax.random.normal(key, shape=counts.shape) * sigma
+    smeared_counts = counts + noise
+
+    # Handle non-finite results (e.g., NaN or inf)
+    smeared_counts = jnp.where(jnp.isfinite(smeared_counts), smeared_counts, 0.0)
+
+    # Avoid negative or unphysical charge values
+    smeared_counts = jnp.clip(smeared_counts, 0.0, None)
+
+    return smeared_counts
