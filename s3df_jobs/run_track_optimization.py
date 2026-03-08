@@ -43,22 +43,35 @@ def parse_args():
 
 
 def load_config_list(config_file):
-    """Load the list of configuration files to process."""
+    """Load the list of configuration files to process.
+
+    Accepts either:
+    - A config_list JSON (list of {config_path, name} entries)
+    - A single opt_config JSON (has basic_config key) - will be wrapped automatically
+    """
     config_path = Path(config_file)
     if not config_path.exists():
         raise FileNotFoundError(f"Config file not found: {config_file}")
 
     with open(config_path, 'r') as f:
-        config_list = json.load(f)
+        config_data = json.load(f)
 
-    # Validate that all config files exist
-    for config_info in config_list:
-        if 'config_path' not in config_info:
-            raise ValueError(f"Config entry missing 'config_path' field: {config_info}")
-
-        config_file_path = Path(config_info['config_path'])
-        if not config_file_path.exists():
-            raise FileNotFoundError(f"Config file not found: {config_info['config_path']}")
+    # Check if this is a single opt_config (has basic_config) or a config_list (is a list)
+    if isinstance(config_data, dict) and 'basic_config' in config_data:
+        # Single opt_config file - wrap it
+        name = config_path.stem.replace('opt_', '')  # e.g., "opt_config_0" -> "config_0"
+        config_list = [{'config_path': str(config_path.resolve()), 'name': name}]
+    elif isinstance(config_data, list):
+        # Config list format
+        config_list = config_data
+        for config_info in config_list:
+            if 'config_path' not in config_info:
+                raise ValueError(f"Config entry missing 'config_path' field: {config_info}")
+            config_file_path = Path(config_info['config_path'])
+            if not config_file_path.exists():
+                raise FileNotFoundError(f"Config file not found: {config_info['config_path']}")
+    else:
+        raise ValueError(f"Unrecognized config format in {config_file}")
 
     return config_list
 

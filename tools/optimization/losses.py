@@ -54,6 +54,14 @@ def counts_loss(true: jnp.ndarray, pred: jnp.ndarray, eps: float = 1e-8) -> jnp.
     normalized_nll = jnp.sum(nll) / (jnp.sum(true) + eps)
     return normalized_nll
 
+    # cap=1000.0
+    # nll = pred - true * jnp.log(pred + eps) + gammaln(true + 1.0)
+    
+    # # Smooth saturating cap
+    # nll_capped = cap * (1.0 - jnp.exp(-nll / cap))
+    
+    # return jnp.sum(nll_capped) / (jnp.sum(true) + eps)
+
 @jit
 def grid_origin_time_loss(
     origin,
@@ -256,5 +264,5 @@ def create_combined_loss_function(prediction_simulator, detector_params):
     
         combined = jnp.sqrt(
             (vertex_loss_val + 1e-6) * (counts_loss_val + 1e-6) * (time_loss_val + 1e-6)
-        )
+        ) + counts_loss_val
         return combined, (vertex_loss_val, counts_loss_val, vertex_loss_val)
