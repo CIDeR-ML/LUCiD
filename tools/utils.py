@@ -918,30 +918,46 @@ def save_single_event_with_extended_info(charges, times, params, extended_info=N
     
     return filename
 
-def save_single_event_with_label_info(extended_info, event_number=0, filename=None):
+def save_single_event_with_particle_info(extended_info, event_number=0, filename=None):
     """
-    Save a single event with label-based structure to an HDF5 file.
+    Save a single event with categorized particle structure to an HDF5 file.
 
-    This function saves events generated from PhotonSim's label system where photons
-    are classified by genealogy. The HDF5 structure includes:
+    This function saves events generated from PhotonSim where photons are classified
+    by particle genealogy into categories (Primary, DecayElectron, Gamma, SecondaryPion).
 
-    Label-level arrays:
-    - Q_per_label (N_labels, N_sensors): Charge contribution per label
-    - T_per_label (N_labels, N_sensors): Time per label
-    - Label_Genealogy: Variable-length array of genealogies
-    - Label_Category: Category code for each label
-    - Track kinematics per label: Position, Direction, Energy, Time, PDG
+    The HDF5 structure includes:
 
-    Aggregated values:
-    - Q_true (N_sensors): Sum of charges across all labels
-    - T_true (N_sensors): Min of times across all labels
-    - Q_reco (N_sensors): Optionally smeared Q_true
-    - T_reco (N_sensors): Optionally smeared T_true
+    Event Metadata:
+    - event_number: Event index
+    - n_particles: Number of categorized particles
+    - t0: Event time offset (ns), sampled U(-15, 15)
+
+    Reconstructed Sensor Data:
+    - PE (N_sensors,): Observed photoelectrons
+    - T (N_sensors,): Observed first-hit time (ns)
+
+    Sensor Data by Categorized Particle:
+    - PE_per_particle (n_particles, N_sensors): True PE per particle per sensor
+    - T_per_particle (n_particles, N_sensors): True first-hit time per particle
+
+    Categorized Particles Metadata:
+    - Particle_Category (n_particles,): Category ID (0-3)
+    - Particle_CategorizedGenealogy: Ancestry chain of categorized particles
+    - Particle_TrackGenealogy: Full G4 track ID ancestry (optional)
+
+    Track Information (optional):
+    - TrackID, ParentID, PDG, InitialEnergy, NCherenkov, SegmentOffset, NSegments
+
+    Segments (optional):
+    - Start/End positions, Direction, Edep, Time
+
+    Voxel data (sparse representation):
+    - voxel_n_nonzero, voxel_offsets, voxel_flat_indices, voxel_counts
 
     Parameters
     ----------
     extended_info : dict
-        Dictionary containing label-based event information
+        Dictionary containing event information
     event_number : int, optional
         Event number, by default 0
     filename : str, optional
@@ -959,109 +975,61 @@ def save_single_event_with_label_info(extended_info, event_number=0, filename=No
     if filename is None:
         filename = f'event_{event_number}.h5'
 
-    n_labels = extended_info['n_labels']
-    labels = extended_info['labels']
-    Q_per_label = extended_info['Q_per_label']
-    T_per_label = extended_info['T_per_label']
-    Q_true = extended_info['Q_true']
-    T_true = extended_info['T_true']
-    Q_reco = extended_info['Q_reco']
-    T_reco = extended_info['T_reco']
+    n_particles = extended_info['n_particles']
+    particles = extended_info['particles']
+    PE_per_particle = extended_info['PE_per_particle']
+    T_per_particle = extended_info['T_per_particle']
+    PE = extended_info['PE_reco']  # Observed (smeared) values
+    T = extended_info['T_reco']
+    t0 = extended_info.get('t0', 0.0)  # Event time offset
 
-    # Extract track info for each label
-    label_categories = []
-    label_pdgs = []
-    label_positions = []
-    label_directions = []
-    label_energies = []
-    label_times = []
-    label_parent_ids = []
-    label_genealogies = []
+    # Extract category and genealogy for each particle
+    particle_categories = []
+    particle_genealogies = []
 
-    for label in labels:
-        track_info = label['track_info']
-        genealogy = label['genealogy']
+    for particle in particles:
+        track_info = particle['track_info']
+        genealogy = particle['genealogy']
 
         if track_info is not None:
-            label_categories.append(track_info['category'])
-            label_pdgs.append(track_info['pdg'])
-            label_positions.append(track_info['position'])
-            label_directions.append(track_info['direction'])
-            label_energies.append(track_info['energy'])
-            label_times.append(track_info['time'])
-            label_parent_ids.append(track_info['parent_id'])
+            particle_categories.append(track_info['category'])
         else:
-            # Fallback if no track info
-            label_categories.append(-1)
-            label_pdgs.append(0)
-            label_positions.append([0.0, 0.0, 0.0])
-            label_directions.append([0.0, 0.0, 1.0])
-            label_energies.append(0.0)
-            label_times.append(0.0)
-            label_parent_ids.append(-1)
+            particle_categories.append(-1)
 
-        label_genealogies.append(genealogy)
+        particle_genealogies.append(genealogy)
 
     # Convert to numpy arrays
-    label_categories = np.array(label_categories, dtype=np.int32)
-    label_pdgs = np.array(label_pdgs, dtype=np.int32)
-    label_positions = np.array(label_positions, dtype=np.float64)
-    label_directions = np.array(label_directions, dtype=np.float64)
-    label_energies = np.array(label_energies, dtype=np.float64)
-    label_times = np.array(label_times, dtype=np.float64)
-    label_parent_ids = np.array(label_parent_ids, dtype=np.int32)
-
-    # Category names mapping
-    category_names = {
-        0: 'Primary',
-        1: 'DecayElectron',
-        2: 'SecondaryPion',
-        3: 'GammaShower',
-        -1: 'Unknown'
-    }
-    label_category_names = [category_names.get(cat, 'Unknown') for cat in label_categories]
+    particle_categories = np.array(particle_categories, dtype=np.int32)
 
     # Ensure all arrays are numpy arrays (converts JAX arrays if needed)
-    Q_per_label = np.asarray(Q_per_label, dtype=np.float32)
-    T_per_label = np.asarray(T_per_label, dtype=np.float32)
-    Q_true = np.asarray(Q_true, dtype=np.float32)
-    T_true = np.asarray(T_true, dtype=np.float32)
-    Q_reco = np.asarray(Q_reco, dtype=np.float32)
-    T_reco = np.asarray(T_reco, dtype=np.float32)
+    PE_per_particle = np.asarray(PE_per_particle, dtype=np.float32)
+    T_per_particle = np.asarray(T_per_particle, dtype=np.float32)
+    PE = np.asarray(PE, dtype=np.float32)
+    T = np.asarray(T, dtype=np.float32)
 
     with h5py.File(filename, 'w') as f:
-        # Save Q and T arrays
-        f.create_dataset('Q_per_label', data=Q_per_label)  # (N_labels, N_sensors)
-        f.create_dataset('T_per_label', data=T_per_label)  # (N_labels, N_sensors)
-        f.create_dataset('Q_true', data=Q_true)            # (N_sensors,)
-        f.create_dataset('T_true', data=T_true)            # (N_sensors,)
-        f.create_dataset('Q_reco', data=Q_reco)            # (N_sensors,)
-        f.create_dataset('T_reco', data=T_reco)            # (N_sensors,)
+        # Event metadata
+        f.create_dataset('event_number', data=np.int32(event_number))
+        f.create_dataset('n_particles', data=np.int32(n_particles))
+        f.create_dataset('t0', data=np.float32(t0))
 
-        # Save label information
-        f.create_dataset('n_labels', data=np.int32(n_labels))
-        f.create_dataset('Label_Category', data=label_categories)
+        # Reconstructed sensor data
+        f.create_dataset('PE', data=PE)  # (N_sensors,) - observed photoelectrons
+        f.create_dataset('T', data=T)    # (N_sensors,) - observed first-hit time
 
-        # Save category names as variable-length strings
-        dt = h5py.string_dtype(encoding='utf-8')
-        f.create_dataset('Label_CategoryName', data=label_category_names, dtype=dt)
+        # Sensor data by categorized particle
+        f.create_dataset('PE_per_particle', data=PE_per_particle)  # (n_particles, N_sensors)
+        f.create_dataset('T_per_particle', data=T_per_particle)    # (n_particles, N_sensors)
 
-        # Save track kinematics
-        f.create_dataset('Track_PDG', data=label_pdgs)
-        f.create_dataset('Track_Position', data=label_positions)    # (N_labels, 3)
-        f.create_dataset('Track_Direction', data=label_directions)  # (N_labels, 3)
-        f.create_dataset('Track_Energy', data=label_energies)
-        f.create_dataset('Track_Time', data=label_times)
-        f.create_dataset('Track_ParentID', data=label_parent_ids)
+        # Categorized particles metadata
+        f.create_dataset('Particle_Category', data=particle_categories)
 
         # Save genealogies as variable-length array
-        # Create a special dtype for variable-length integer arrays
         vlen_int_dtype = h5py.vlen_dtype(np.dtype('int32'))
 
         # Pre-convert all genealogies to int32 arrays
-        # Important: Create the list first, then wrap in object array
         genealogy_arrays = []
-        for g in label_genealogies:
+        for g in particle_genealogies:
             arr = np.asarray(g, dtype=np.int32)
             if arr.ndim == 0:
                 arr = arr.reshape(1)
@@ -1072,21 +1040,86 @@ def save_single_event_with_label_info(extended_info, event_number=0, filename=No
         for i, arr in enumerate(genealogy_arrays):
             genealogy_data[i] = arr
 
-        f.create_dataset('Label_Genealogy', data=genealogy_data, dtype=vlen_int_dtype)
+        f.create_dataset('Particle_CategorizedGenealogy', data=genealogy_data, dtype=vlen_int_dtype)
 
-        # Save metadata (ensure scalars are numpy types)
-        f.create_dataset('event_number', data=np.int32(event_number))
-        f.create_dataset('primary_energy', data=np.float64(extended_info['primary_energy']))
-        f.create_dataset('apply_smearing', data=np.bool_(extended_info['apply_smearing']))
-
-        # Save light containment metrics
+        # Containment metrics
         f.create_dataset('overall_light_containment', data=np.float64(extended_info['overall_light_containment']))
-        f.create_dataset('light_containment_by_label', data=np.array(extended_info['light_containment_by_label'], dtype=np.float64))
+        f.create_dataset('light_containment_by_particle', data=np.array(extended_info['light_containment_by_particle'], dtype=np.float64))
 
-        # Save source information (also ensure proper types for attributes)
+        # Voxel data (sparse representation)
+        if 'voxel_n_nonzero' in extended_info:
+            f.create_dataset('voxel_n_nonzero', data=np.asarray(extended_info['voxel_n_nonzero'], dtype=np.int32))
+            f.create_dataset('voxel_offsets', data=np.asarray(extended_info['voxel_offsets'], dtype=np.int32))
+            f.create_dataset('voxel_flat_indices', data=np.asarray(extended_info['voxel_flat_indices'], dtype=np.int64))
+            f.create_dataset('voxel_counts', data=np.asarray(extended_info['voxel_counts'], dtype=np.int32))
+
+        # File attributes
         f.attrs['source'] = extended_info['source']
-        f.attrs['n_labels'] = np.int32(n_labels)
-        f.attrs['n_sensors'] = np.int32(Q_true.shape[0])
+        f.attrs['n_particles'] = np.int32(n_particles)
+        f.attrs['n_sensors'] = np.int32(PE.shape[0])
+
+        # Save track information and segments if included
+        if extended_info.get('include_track_segments', False) and 'meaningful_tracks' in extended_info:
+            meaningful_tracks = extended_info['meaningful_tracks']
+            segments = extended_info['segments']
+
+            # Create TrackInformation group
+            tracks_group = f.create_group('TrackInformation')
+
+            # Save track-level arrays
+            n_tracks = len(meaningful_tracks)
+            tracks_group.attrs['n_tracks'] = np.int32(n_tracks)
+
+            if n_tracks > 0:
+                # Build arrays from meaningful_tracks dict
+                track_ids = np.array([t['track_id'] for t in meaningful_tracks.values()], dtype=np.int32)
+                parent_ids = np.array([t['parent_id'] for t in meaningful_tracks.values()], dtype=np.int32)
+                pdgs = np.array([t['pdg'] for t in meaningful_tracks.values()], dtype=np.int32)
+                energies = np.array([t['initial_energy'] for t in meaningful_tracks.values()], dtype=np.float32)
+                n_cherenkov = np.array([t['n_cherenkov'] for t in meaningful_tracks.values()], dtype=np.int32)
+                seg_offsets = np.array([t['segment_offset'] for t in meaningful_tracks.values()], dtype=np.int32)
+                n_segs = np.array([t['n_segments'] for t in meaningful_tracks.values()], dtype=np.int32)
+
+                tracks_group.create_dataset('TrackID', data=track_ids)
+                tracks_group.create_dataset('ParentID', data=parent_ids)
+                tracks_group.create_dataset('PDG', data=pdgs)
+                tracks_group.create_dataset('InitialEnergy', data=energies)
+                tracks_group.create_dataset('NCherenkov', data=n_cherenkov)
+                tracks_group.create_dataset('SegmentOffset', data=seg_offsets)
+                tracks_group.create_dataset('NSegments', data=n_segs)
+
+            # Create Segments group
+            segments_group = f.create_group('Segments')
+            n_segments = segments['n_segments']
+            segments_group.attrs['n_segments'] = np.int32(n_segments)
+
+            if n_segments > 0:
+                # Save segment arrays (positions in cm)
+                segments_group.create_dataset('StartX', data=np.asarray(segments['start_x'], dtype=np.float32))
+                segments_group.create_dataset('StartY', data=np.asarray(segments['start_y'], dtype=np.float32))
+                segments_group.create_dataset('StartZ', data=np.asarray(segments['start_z'], dtype=np.float32))
+                segments_group.create_dataset('EndX', data=np.asarray(segments['end_x'], dtype=np.float32))
+                segments_group.create_dataset('EndY', data=np.asarray(segments['end_y'], dtype=np.float32))
+                segments_group.create_dataset('EndZ', data=np.asarray(segments['end_z'], dtype=np.float32))
+                segments_group.create_dataset('DirX', data=np.asarray(segments['dir_x'], dtype=np.float32))
+                segments_group.create_dataset('DirY', data=np.asarray(segments['dir_y'], dtype=np.float32))
+                segments_group.create_dataset('DirZ', data=np.asarray(segments['dir_z'], dtype=np.float32))
+                segments_group.create_dataset('Edep', data=np.asarray(segments['edep'], dtype=np.float32))
+                segments_group.create_dataset('Time', data=np.asarray(segments['time'], dtype=np.float32))
+
+            # Save track genealogy for each particle if available
+            ext_genealogies = []
+            for particle in particles:
+                if 'extended_genealogy' in particle and particle['extended_genealogy'] is not None:
+                    ext_genealogies.append(np.asarray(particle['extended_genealogy'], dtype=np.int32))
+                else:
+                    ext_genealogies.append(np.array([], dtype=np.int32))
+
+            if ext_genealogies:
+                ext_gen_data = np.empty(len(ext_genealogies), dtype=object)
+                for i, arr in enumerate(ext_genealogies):
+                    ext_gen_data[i] = arr
+                f.create_dataset('Particle_TrackGenealogy', data=ext_gen_data, dtype=vlen_int_dtype)
 
     return filename
 
@@ -1141,9 +1174,19 @@ def merge_event_files(output_dir, merged_filename='merged_events.h5', remove_ind
                 # Create a group for this event
                 event_group = merged_file.create_group(f'event_{event_num}')
 
-                # Copy all datasets from individual file to the group
+                # Recursively copy all datasets and groups from individual file
+                def copy_item(src, dst, name):
+                    """Recursively copy HDF5 items (datasets and groups)."""
+                    item = src[name]
+                    if isinstance(item, h5py.Dataset):
+                        dst.create_dataset(name, data=item[()])
+                    elif isinstance(item, h5py.Group):
+                        grp = dst.create_group(name)
+                        for subkey in item.keys():
+                            copy_item(item, grp, subkey)
+
                 for key in f.keys():
-                    event_group.create_dataset(key, data=f[key][()])
+                    copy_item(f, event_group, key)
 
     print(f"Successfully merged events into: {merged_path}")
 
@@ -1930,11 +1973,11 @@ def smear_charges_SK_like(counts, key=None):
     if key is None:
         raise ValueError("key must be provided for reproducibility.")
 
-    # Define sigma according to the count range
+    #Define sigma according to the count range
     sigma = jnp.where(
         counts < 20,
-        counts * 0.04,
-        jnp.where(counts < 130, counts * 0.26, counts * 1.8)
+        counts * 0.012,
+        jnp.where(counts < 130, counts * 0.0075, counts * 0.005)
     )
 
     # Apply Gaussian smearing

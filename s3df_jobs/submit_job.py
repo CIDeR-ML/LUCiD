@@ -49,10 +49,22 @@ def parse_args():
         action='store_true',
         help='Actually submit the job (default: just generate script)'
     )
+    parser.add_argument(
+        '--partition',
+        type=str,
+        default='ampere',
+        help='SLURM partition (default: ampere)'
+    )
+    parser.add_argument(
+        '--account',
+        type=str,
+        default='mli:cider-ml',
+        help='SLURM account (default: mli:cider-ml)'
+    )
     return parser.parse_args()
 
 
-def generate_slurm_script(config_file, output_dir, job_name, project_root):
+def generate_slurm_script(config_file, output_dir, job_name, project_root, partition='ampere', account='mli:cider-ml'):
     """Generate SLURM batch script content."""
 
     # Convert paths to absolute
@@ -71,8 +83,8 @@ def generate_slurm_script(config_file, output_dir, job_name, project_root):
 #SBATCH --job-name={job_name}
 #SBATCH --output={log_file}
 #SBATCH --error={log_file}
-#SBATCH --partition=ampere
-#SBATCH --account=neutrino:default
+#SBATCH --partition={partition}
+#SBATCH --account={account}
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=1
@@ -152,7 +164,9 @@ def main():
         args.config,
         args.output,
         args.job_name,
-        project_root
+        project_root,
+        args.partition,
+        args.account
     )
 
     # Save SLURM script
