@@ -627,6 +627,7 @@ def generate_events_from_root(event_simulator, root_file_path, output_dir='event
     if n_rings < 1:
         raise ValueError("n_rings must be at least 1")
 
+    from tools.detector_params import ParticleParams
     # If n_rings > 1, we need a pion ROOT file
     if n_rings > 1 and pion_root_file_path is None:
         raise ValueError("When n_rings > 1, pion_root_file_path must be provided")
@@ -697,11 +698,12 @@ def generate_events_from_root(event_simulator, root_file_path, output_dir='event
             dir_key, master_key = jax.random.split(master_key)
             muon_direction = generate_random_direction(dir_key)
 
-            # Create parameters tuple for muon
-            track_params = (
-                muon_energy,
-                shared_vertex,
-                muon_direction,
+            # Create parameters for muon
+            track_params = ParticleParams.from_cartesian(
+                energy=muon_energy,
+                position=shared_vertex,
+                direction=muon_direction,
+                t0=0.0,
             )
 
             # Get a key for the muon simulation
@@ -769,11 +771,12 @@ def generate_events_from_root(event_simulator, root_file_path, output_dir='event
                 pion_dir_key, master_key = jax.random.split(master_key)
                 pion_direction = generate_random_direction(pion_dir_key)
 
-                # Create parameters tuple for pion
-                pion_track_params = (
-                    pion_data['energy'],
-                    shared_vertex,
-                    pion_direction,
+                # Create parameters for pion
+                pion_track_params = ParticleParams.from_cartesian(
+                    energy=pion_data['energy'],
+                    position=shared_vertex,
+                    direction=pion_direction,
+                    t0=0.0,
                 )
 
                 # Get a new key for the pion simulation
@@ -1267,6 +1270,7 @@ def generate_events_from_photonsim(event_simulator, particles_dict, sensor_param
     list or str
         List of saved file paths, or path to merged file if merge_output=True
     """
+    from tools.detector_params import ParticleParams
     import uproot
     import concurrent.futures
     import time
@@ -1359,11 +1363,12 @@ def generate_events_from_photonsim(event_simulator, particles_dict, sensor_param
                 dir_key, master_key = jax.random.split(master_key)
                 direction = generate_random_direction(dir_key)
 
-                # Create parameters tuple
-                track_params = (
-                    particle_energy,
-                    vertex,
-                    direction
+                # Create parameters
+                track_params = ParticleParams.from_cartesian(
+                    energy=particle_energy,
+                    position=vertex,
+                    direction=direction,
+                    t0=0.0,
                 )
 
                 # Get a key for the simulation
@@ -1522,6 +1527,7 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path, se
     import uproot
     import concurrent.futures
     import time
+    from tools.detector_params import ParticleParams
     import numpy as np
     import json
     from tools.simulation import smear_charges_SK_like, smear_times
@@ -1762,7 +1768,12 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path, se
             def simulate_single_particle(track_energy, track_pos, track_dir, photon_origins,
                                          photon_dirs, photon_times, N, sim_key):
                 """Process a single particle - will be vmapped over all particles."""
-                track_params = (track_energy, track_pos, track_dir)
+                track_params = ParticleParams.from_cartesian(
+                    energy=track_energy,
+                    position=track_pos,
+                    direction=track_dir,
+                    t0=0.0,
+                )
 
                 photonsim_data = {
                     'photon_origins': photon_origins,

@@ -67,10 +67,9 @@ def get_param_value(params, sp):
 
 def set_param_value(params, sp, value):
     """Return params with one field replaced according to SweepParam."""
-    if sp.index is not None:
-        arr = getattr(params, sp.field)
-        return params._replace(**{sp.field: arr.at[sp.index].set(value)})
-    return params._replace(**{sp.field: jnp.array(value)})
+    arr = getattr(params, sp.field)
+    idx = sp.index if sp.index is not None else ()
+    return params._replace(**{sp.field: arr.at[idx].set(value)})
 
 
 def get_grad_component(grads, sp):
