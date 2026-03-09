@@ -4,6 +4,7 @@ import jax.numpy as jnp
 import math
 import numpy as np
 from tools.optimization.losses import *
+from tools.detector_params import ParticleParams
 
 @jit
 def estimate_muon_energy_from_photon_count(N, qe=0.065):
@@ -109,7 +110,7 @@ def cone_points(axis, max_angle_rad, num_rings):
     return np.array(points)
 
 
-def hierarchical_direction_search_cone(prediction_simulator, detector_params, position, initial_t0, hit_detector_positions, 
+def hierarchical_direction_search_cone(prediction_simulator, position, initial_t0, hit_detector_positions,
                                      observed_times, observed_charge, true_data, energy_guess,
                                      levels, initial_div, max_angle_deg, reduction, verbosity=2):
     """
@@ -175,8 +176,9 @@ def hierarchical_direction_search_cone(prediction_simulator, detector_params, po
                 #     true_data, detector_params, search_key
                 # )
 
-                track_params = (energy_guess, position, jnp.array([theta, phi]))
-                simulated_data = prediction_simulator(track_params, detector_params, search_key)
+                track = ParticleParams(energy=jnp.asarray(energy_guess), position=jnp.asarray(position),
+                                      theta=jnp.asarray(theta), phi=jnp.asarray(phi), t0=jnp.asarray(initial_t0))
+                simulated_data = prediction_simulator(track, search_key)
                 loss = counts_loss(observed_charge, simulated_data[0])
 
                 # loss, _ = spatial_loss_component(
@@ -411,7 +413,7 @@ def cylinder_position_grid_search(hit_detector_positions, observed_times, observ
     }
 
 
-def energy_scan_optimization(prediction_simulator, detector_params, position, theta, phi, initial_t0, hit_detector_positions,
+def energy_scan_optimization(prediction_simulator, position, theta, phi, initial_t0, hit_detector_positions,
                            observed_times, observed_charge, true_data, energy_guess,
                            energy_delta, n_steps, verbosity=2):
     """
@@ -456,8 +458,9 @@ def energy_scan_optimization(prediction_simulator, detector_params, position, th
         
         try:
 
-            current_track_params = (energy, position, jnp.array([theta, phi]))
-            simulated_data = prediction_simulator(current_track_params, detector_params, scan_key)
+            track = ParticleParams(energy=jnp.asarray(energy), position=jnp.asarray(position),
+                                  theta=jnp.asarray(theta), phi=jnp.asarray(phi), t0=jnp.asarray(initial_t0))
+            simulated_data = prediction_simulator(track, scan_key)
             loss = energy_loss(simulated_data[0], observed_charge)
             # combined_loss, vertex_loss, wc_loss, energy_loss_val = energy_loss(
             #     test_params, hit_detector_positions, observed_times, observed_charge,

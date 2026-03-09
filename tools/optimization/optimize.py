@@ -59,24 +59,6 @@ def print_optimization_parameters(config, detector_r, detector_h, num_detectors,
         print(f"  Energy scan steps: {config['energy_optimization']['energy_scan_steps']}")
 
 
-def get_detector_params_from_config(config):
-    """
-    Convert detector parameters from config to JAX array format.
-
-    Args:
-        config: Configuration dictionary
-
-    Returns:
-        tuple: JAX arrays for detector parameters
-    """
-    detector_config = config['detector_params']
-    return (
-        jnp.array(detector_config['scatter_length']),
-        jnp.array(detector_config['reflection_rate']),
-        jnp.array(detector_config['absorption_length']),
-        jnp.array(detector_config['qe'])
-    )
-
 
 def get_detector_bounds(detector):
     """
