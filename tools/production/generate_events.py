@@ -27,6 +27,7 @@ import jax.numpy as jnp
 
 from generate import generate_events_from_photonsim
 from simulation import setup_event_simulator
+from detector_params import DetectorParams
 
 from utils import base_dir_path
 
@@ -112,11 +113,13 @@ def main():
     )
 
     # Define sensor parameters
-    sensor_params = (
-        jnp.array(50.0),      # scatter_length
-        jnp.array(0.2),       # reflection_rate
-        jnp.array(50.0),      # absorption_length
-        jnp.array(0.001)      # this parameter is deprecated
+    sensor_params = DetectorParams(
+        scatter_length=jnp.array(50.0),
+        wall_reflection_rate=jnp.array(0.2),
+        sensor_reflection_rate=jnp.array(0.0),
+        absorption_length=jnp.array(50.0),
+        qe=jnp.array(1.0),
+        qe_corrections=jnp.array(1.0),
     )
 
     # Generate events
