@@ -48,43 +48,68 @@ class PhotonSimDataset:
         """Load data from HDF5 lookup table and prepare for training."""
         logger.info(f"Loading HDF5 lookup table from {self.data_path}")
         self.data_type = 'h5_lookup'
-        
+
         with h5py.File(self.data_path, 'r') as f:
-            # Load average table (photons per event)
-            average_table = f['data/photon_table_average'][:]
-            
-            # Load coordinates
-            energy_centers = f['coordinates/energy_centers'][:]
-            angle_centers = f['coordinates/angle_centers'][:]
-            distance_centers = f['coordinates/distance_centers'][:]
-            
+            # Auto-detect data type based on available datasets
+            if 'data/dedx_table_average' in f:
+                # This is a dEdx lookup table
+                self.table_type = 'dedx'
+                average_table = f['data/dedx_table_average'][:]
+                energy_centers = f['coordinates/energy_centers'][:]
+                dedx_centers = f['coordinates/dedx_centers'][:]
+                distance_centers = f['coordinates/distance_centers'][:]
+                second_dim_centers = dedx_centers
+                second_dim_name = 'dedx'
+            elif 'data/photon_table_average' in f:
+                # This is a photon lookup table
+                self.table_type = 'photon'
+                average_table = f['data/photon_table_average'][:]
+                energy_centers = f['coordinates/energy_centers'][:]
+                angle_centers = f['coordinates/angle_centers'][:]
+                distance_centers = f['coordinates/distance_centers'][:]
+                second_dim_centers = angle_centers
+                second_dim_name = 'angle'
+            else:
+                raise ValueError(f"Unknown lookup table format in {self.data_path}")
+
             # Get metadata
             metadata = dict(f['metadata'].attrs)
-            
+
         # Create coordinate grids
-        E, A, D = np.meshgrid(energy_centers, angle_centers, distance_centers, indexing='ij')
-        
+        E, X, D = np.meshgrid(energy_centers, second_dim_centers, distance_centers, indexing='ij')
+
         # Flatten for training
         self.data['inputs'] = np.stack([
             E.flatten(),
-            A.flatten(), 
+            X.flatten(),
             D.flatten()
         ], axis=-1).astype(np.float32)
-        
+
         self.data['targets'] = average_table.flatten()[:, np.newaxis].astype(np.float32)
-        
+
         # Store metadata
         self.metadata = metadata
         self.energy_range = (energy_centers.min(), energy_centers.max())
-        self.angle_range = (angle_centers.min(), angle_centers.max())
         self.distance_range = (distance_centers.min(), distance_centers.max())
-        
-        logger.info(f"Loaded {len(self.data['inputs']):,} data points from lookup table")
-        logger.info(f"Energy range: {self.energy_range[0]:.0f}-{self.energy_range[1]:.0f} MeV")
-        logger.info(f"Angle range: {np.degrees(self.angle_range[0]):.1f}-{np.degrees(self.angle_range[1]):.1f} degrees")
-        logger.info(f"Distance range: {self.distance_range[0]:.0f}-{self.distance_range[1]:.0f} mm")
-        logger.info(f"Table type: {metadata.get('normalization', 'unknown')} ({metadata.get('average_units', 'unknown units')})") 
-        
+
+        # Store second dimension range with appropriate name
+        if self.table_type == 'dedx':
+            self.dedx_range = (second_dim_centers.min(), second_dim_centers.max())
+            self.angle_range = None  # Not applicable
+            logger.info(f"Loaded {len(self.data['inputs']):,} data points from dE/dx lookup table")
+            logger.info(f"Energy range: {self.energy_range[0]:.0f}-{self.energy_range[1]:.0f} MeV")
+            logger.info(f"dE/dx range: {self.dedx_range[0]:.1f}-{self.dedx_range[1]:.1f} keV/mm")
+            logger.info(f"Distance range: {self.distance_range[0]:.0f}-{self.distance_range[1]:.0f} mm")
+        else:
+            self.angle_range = (second_dim_centers.min(), second_dim_centers.max())
+            self.dedx_range = None  # Not applicable
+            logger.info(f"Loaded {len(self.data['inputs']):,} data points from photon lookup table")
+            logger.info(f"Energy range: {self.energy_range[0]:.0f}-{self.energy_range[1]:.0f} MeV")
+            logger.info(f"Angle range: {np.degrees(self.angle_range[0]):.1f}-{np.degrees(self.angle_range[1]):.1f} degrees")
+            logger.info(f"Distance range: {self.distance_range[0]:.0f}-{self.distance_range[1]:.0f} mm")
+
+        logger.info(f"Table type: {self.table_type} - {metadata.get('normalization', 'unknown')} ({metadata.get('average_units', 'unknown units')})")
+
         # Normalize inputs and prepare bounds
         self._normalize_data()
         
