@@ -21,6 +21,7 @@ sftp-config.json
 **/trained_model/
 **/data/
 **/siren_training/**
+**/dedx_siren_training/**
 **/debug/
 !data/
 !data/**/
