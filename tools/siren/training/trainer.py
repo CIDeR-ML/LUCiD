@@ -713,7 +713,53 @@ class SIRENTrainer:
             plt.show()
             
         return fig
-    
+
+    def _build_dataset_info(self) -> dict:
+        """Build dataset info dict, handling both photon and dEdx table types."""
+        # Detect table type - check both attribute and actual data availability
+        table_type = getattr(self.dataset, 'table_type', None)
+
+        # If table_type not set, infer from available ranges
+        if table_type is None:
+            if getattr(self.dataset, 'dedx_range', None) is not None:
+                table_type = 'dedx'
+            else:
+                table_type = 'photon'
+
+        info = {
+            'data_type': getattr(self.dataset, 'data_type', 'unknown'),
+            'table_type': table_type,
+            'energy_range': [float(self.dataset.energy_range[0]), float(self.dataset.energy_range[1])],
+            'distance_range': [float(self.dataset.distance_range[0]), float(self.dataset.distance_range[1])],
+        }
+
+        # Get dedx_range if available
+        dedx_range = getattr(self.dataset, 'dedx_range', None)
+        angle_range = getattr(self.dataset, 'angle_range', None)
+
+        if table_type == 'dedx' or (dedx_range is not None and angle_range is None):
+            # dEdx table: second dimension is dE/dx
+            info['dedx_range'] = [float(dedx_range[0]), float(dedx_range[1])] if dedx_range else None
+            info['angle_range'] = None
+            info['units'] = {
+                'energy': 'MeV',
+                'dedx': 'keV/mm',
+                'distance': 'mm',
+                'density': 'entries/event'
+            }
+        else:
+            # Photon table: second dimension is angle
+            info['angle_range'] = [float(angle_range[0]), float(angle_range[1])] if angle_range else None
+            info['dedx_range'] = None
+            info['units'] = {
+                'energy': 'MeV',
+                'angle': 'radians',
+                'distance': 'mm',
+                'photon_density': 'photons/mm^2'
+            }
+
+        return info
+
     def save_trained_model(self, output_dir: Path, model_name: str = "siren_model"):
         """
         Save the trained SIREN model with all necessary metadata for inference.
@@ -757,18 +803,7 @@ class SIRENTrainer:
                 'input_min': make_json_serializable(self.dataset.normalized_bounds['input_min']),
                 'input_max': make_json_serializable(self.dataset.normalized_bounds['input_max'])
             },
-            'dataset_info': {
-                'data_type': getattr(self.dataset, 'data_type', 'unknown'),
-                'energy_range': [float(self.dataset.energy_range[0]), float(self.dataset.energy_range[1])],
-                'angle_range': [float(self.dataset.angle_range[0]), float(self.dataset.angle_range[1])],
-                'distance_range': [float(self.dataset.distance_range[0]), float(self.dataset.distance_range[1])],
-                'units': {
-                    'energy': 'MeV',
-                    'angle': 'radians',
-                    'distance': 'mm',
-                    'photon_density': 'photons/mm^2'
-                }
-            },
+            'dataset_info': self._build_dataset_info(),
             'training_info': {
                 'final_step': int(self.state.step) if self.state else 0,
                 'final_train_loss': float(self.history['train_loss'][-1]) if self.history['train_loss'] else None,

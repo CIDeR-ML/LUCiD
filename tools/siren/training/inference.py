@@ -167,7 +167,14 @@ class SIRENPredictor:
         logger.info(f"Loaded SIREN model from {self.model_path}")
         logger.info(f"Model config: {self.metadata['model_config']}")
         logger.info(f"Energy range: {self.dataset_info['energy_range']} MeV")
-        logger.info(f"Angle range: {np.degrees(self.dataset_info['angle_range'])} degrees")
+
+        # Handle both photon (angle) and dEdx table types
+        table_type = self.dataset_info.get('table_type', 'photon')
+        if table_type == 'dedx' and self.dataset_info.get('dedx_range'):
+            logger.info(f"dE/dx range: {self.dataset_info['dedx_range']} keV/mm")
+        elif self.dataset_info.get('angle_range'):
+            logger.info(f"Angle range: {np.degrees(self.dataset_info['angle_range'])} degrees")
+
         logger.info(f"Distance range: {self.dataset_info['distance_range']} mm")
         
     def _init_model(self):
