@@ -55,7 +55,19 @@ from tools.optimization.optimize import load_optimization_config, print_optimiza
 from tools.optimization.optimize import get_detector_bounds, hierarchical_position_grid_search
 from tools.detector_params import ParticleParams
 
-from tools.optimization.losses import energy_loss, counts_loss, origin_time_loss, cone_time_loss, smooth_pinball
+from tools.optimization.losses import (
+    energy_loss,
+    counts_loss,
+    origin_time_loss,
+    cone_time_loss,
+    smooth_pinball,
+    first_arrival_nll,
+    poisson_nll,
+    get_optimal_tau_vtx,
+    TAU_VTX_PARAM_A,
+    TAU_VTX_PARAM_B,
+    TAU_VTX_PARAM_C,
+)
 
 
 def parse_arguments():
@@ -121,68 +133,84 @@ def load_config(config_path):
 
 def create_combined_loss_function(vertex_weight_scale, counts_weight_scale,
                                    prediction_simulator, c_medium,
-                                   nrays=10_000):
-    """Create combined loss function with specified parameters and return its gradient function.
+                                   nrays=10_000, num_detectors=10764,
+                                   detector_positions=None):
+    """Create combined loss function with likelihood-based losses and dynamic tau_vtx.
 
-    The cone_time_loss tau parameter is computed automatically from the energy
-    (params[6]) and nrays using the fitted parametrisation stored in
-    data/water/muon/tau_parametrization.pkl.
+    Uses:
+    - poisson_nll for charge loss
+    - first_arrival_nll for time loss
+    - origin_time_loss with dynamic tau_vtx for vertex loss
+    - 3-term combined loss formula matching tau scan scripts
+
+    tau_vtx is computed from nrays and current energy using the learned parametrization.
     """
-
-    # Load tau parametrization coefficients (captured as constants by JIT)
-    param_path = os.path.join(
-        Path(__file__).parent.parent.parent, 'data', 'water', 'muon',
-        'tau_parametrization.pkl')
-    with open(param_path, 'rb') as f:
-        gf = pickle.load(f)['global_fit']
-    a_energy = jnp.array(gf['a_energy'])
-    b_log10nrays = jnp.array(gf['b_log10nrays'])
-    c_intercept = jnp.array(gf['c_intercept'])
-    log10_nrays = jnp.array(np.log10(nrays))
-
-    def cone_time_loss_parametric(observed_counts, simulated_time,
-                                  observed_times, t0, tau):
-        b = observed_times - simulated_time
-        r = b - t0
-        w = jnp.where(observed_counts > 0., observed_counts, 0.)
-        wsum = jnp.sum(w) + 1e-8
-        return jnp.sum(w * smooth_pinball(r, tau=tau, sigma=0.05)) / wsum
+    nrays_float = float(nrays)
+    TAU_TIME = 0.15  # Fixed tau for first_arrival_nll (time likelihood)
 
     @jit
     def combined_product_loss(track, hit_detector_positions, observed_times, observed_counts,
                             true_data, key):
         """
-        Combined loss function: product of vertex loss, counts loss, and time loss.
-        tau for cone_time_loss is computed from track.energy and nrays.
+        Combined loss function with likelihood-based losses.
 
         Args:
             track: ParticleParams with energy, position, theta, phi, t0
 
         Returns:
-            combined_loss, (vertex_loss_val, counts_loss_val, time_loss_val)
+            combined_loss, (vertex_loss_val, charge_loss_val, time_loss_val)
         """
         position = track.position
         t0 = track.t0
-        theta = track.theta
-        phi = track.phi
         energy = track.energy
 
-        simulated_data = prediction_simulator(track, key)
-        simulated_counts = simulated_data[0]
-        simulated_time = simulated_data[1]
+        # Create track with t0=0 for simulation (time shift applied to observations)
+        track_sim = ParticleParams(
+            energy=energy, position=position,
+            theta=track.theta, phi=track.phi, t0=jnp.array(0.0)
+        )
 
-        vertex_loss_val = origin_time_loss(position, hit_detector_positions, observed_times,
-                                        observed_counts, t0)
-        counts_loss_val = counts_loss(observed_counts, simulated_counts)
+        # Simulator returns (log_w, flat_times, flat_indices, total_charge)
+        log_w, flat_times, flat_indices, total_charge = prediction_simulator(track_sim, key)
 
-        # # Energy-dependent cone tau (from tau optimization study v8)
-        # # tau = A * E + B, fitted to: E=400->0.06, E=1000->0.08, E=1600->0.10
-        # tau = 0.12 # 3.333e-5 * jax.lax.stop_gradient(energy) + 0.0467
-        time_loss_val = cone_time_loss(
-            observed_counts, simulated_time, observed_times, t0, tau=0.12)
+        # Charge loss: Poisson NLL
+        charge_loss_val = poisson_nll(observed_counts, total_charge)
 
-        combined_loss = jnp.sqrt((vertex_loss_val + 1e-6) * (counts_loss_val + 1e-6) * (time_loss_val + 1e-6)) + counts_loss_val
-        return combined_loss, (vertex_loss_val, counts_loss_val, time_loss_val)
+        # Time loss: First-arrival NLL
+        # Shift observed times by t0 (time treatment matching tau scans)
+        t_obs_shifted = observed_times - t0
+        time_nll = first_arrival_nll(
+            log_w, flat_times, flat_indices,
+            t_obs_shifted, TAU_TIME, num_detectors
+        )
+        # Mask for hit sensors and average
+        hit_mask = observed_counts > 0
+        n_hit = jnp.sum(hit_mask) + 1e-8
+        time_loss_val = jnp.sum(jnp.where(hit_mask, time_nll, 0.0)) / n_hit
+
+        # Vertex loss: origin_time_loss with DYNAMIC tau_vtx
+        # tau_vtx computed from current energy with stop_gradient
+        tau_vtx = jax.lax.stop_gradient(
+            TAU_VTX_PARAM_A * nrays_float + TAU_VTX_PARAM_B * energy + TAU_VTX_PARAM_C
+        )
+        tau_vtx = jnp.clip(tau_vtx, 0.05, 0.95)
+
+        vertex_loss_val = origin_time_loss(
+            jax.lax.stop_gradient(position), hit_detector_positions, observed_times,
+            observed_counts, t0, tau=tau_vtx
+        )
+
+        # 3-term combined loss (matching tau scan scripts and notebook)
+        c = charge_loss_val
+        t = time_loss_val
+        v = vertex_loss_val
+        s = 0.
+
+        combined_loss = jnp.sqrt((c + s) * (t + s) * (v + s)) \
+            + jnp.sqrt((c + s) * jax.lax.stop_gradient((t + s) * (v + s))) \
+            + jnp.sqrt((v + s) * jax.lax.stop_gradient((t + s) * (c + s)))
+
+        return combined_loss, (vertex_loss_val, charge_loss_val, time_loss_val)
 
     combined_grad_fn = jit(value_and_grad(combined_product_loss, has_aux=True))
     return combined_grad_fn
@@ -755,7 +783,7 @@ def main():
     # Create combined gradient function
     combined_grad_fn = create_combined_loss_function(
         VERTEX_WEIGHT_SCALE, COUNTS_WEIGHT_SCALE,
-        prediction_simulator, C_MEDIUM, nrays=Nphot
+        prediction_simulator, C_MEDIUM, nrays=Nphot, num_detectors=NUM_DETECTORS
     )
 
     # Warm-up: Pre-compile JIT functions
