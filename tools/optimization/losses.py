@@ -373,3 +373,49 @@ def first_arrival_nll(log_w, flat_times, flat_indices,
     loss = -log_w_total - log_f - (N_s - 1) * log_one_minus_F
 
     return loss
+
+
+# =============================================================================
+# TAU_VTX PARAMETRIZATION
+# =============================================================================
+# Coefficients from weighted least-squares fit on tau hyperparameter scan.
+# To recalculate these parameters:
+#   1. Run: python s3df_jobs/submit_tau_hyperparameter_tuning_job.py --output output/tau_scan --submit
+#   2. Wait for job completion, results in output/tau_scan/result.csv
+#   3. Run analysis notebook: good_notebooks/analyze_tau_scan.ipynb
+#   4. Update coefficients below with new fit results
+
+TAU_VTX_PARAM_A = 1.092557e-06  # coefficient for Nrays
+TAU_VTX_PARAM_B = 2.578522e-04  # coefficient for Energy (MeV)
+TAU_VTX_PARAM_C = -0.0442       # intercept
+
+
+def get_optimal_tau_vtx(nrays, energy_mev):
+    """
+    Get optimal tau_vtx based on learned parametrization.
+
+    tau_vtx = a * Nrays + b * Energy + c
+
+    This parametrization was derived from scanning tau_vtx across
+    different (Nrays, Energy) combinations and fitting to minimize
+    position reconstruction error.
+
+    Args:
+        nrays: Number of photon rays (can be JAX array or scalar)
+        energy_mev: Energy in MeV (can be JAX array or scalar)
+
+    Returns:
+        Optimal tau_vtx value (typically in range 0.1-0.8)
+    """
+    return TAU_VTX_PARAM_A * nrays + TAU_VTX_PARAM_B * energy_mev + TAU_VTX_PARAM_C
+
+
+# =============================================================================
+# ALIASES FOR CONSISTENCY ACROSS CODEBASE
+# =============================================================================
+# poisson_nll is an alias for counts_loss (same formula)
+poisson_nll = counts_loss
+
+# origin_time_loss already accepts tau parameter, so it can be used as configurable
+# This alias makes the API clearer when using dynamic tau_vtx
+origin_time_loss_configurable = origin_time_loss
