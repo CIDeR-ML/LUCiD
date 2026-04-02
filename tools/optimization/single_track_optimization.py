@@ -401,8 +401,7 @@ def run_complete_optimization_adam(initial_t0, hit_detector_positions, observed_
             grads = jax.tree.map(lambda g: jnp.nan_to_num(g, nan=0.0), grads)
 
         grad_norm = jnp.sqrt(sum(jnp.sum(g**2) for g in jax.tree.leaves(grads)))
-        if grad_norm < tolerance:
-            break
+        # Note: Convergence check removed to ensure consistent history length across all events
 
         # Adam update with parameter-specific scaling
         updates, opt_state = optimizer.update(grads, opt_state, track)
@@ -743,7 +742,7 @@ def main():
     DETECTOR_H = detector_bounds['H'] if detector_bounds['type'] == 'cylinder' else None
 
     # Setup simulators
-    PHYSICS_CONFIG = config.get('physics_config', None)
+    PHYSICS_CONFIG = config['basic_config'].get('physics_config', None)
     print("Setting up simulators...")
     prediction_simulator = setup_event_simulator(
         default_json_filename, Nphot, TEMPERATURE, max_sensors_per_cell=4, K=K, is_data=False,
