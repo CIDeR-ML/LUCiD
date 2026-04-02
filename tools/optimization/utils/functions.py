@@ -178,8 +178,9 @@ def hierarchical_direction_search_cone(prediction_simulator, position, initial_t
 
                 track = ParticleParams(energy=jnp.asarray(energy_guess), position=jnp.asarray(position),
                                       theta=jnp.asarray(theta), phi=jnp.asarray(phi), t0=jnp.asarray(initial_t0))
-                simulated_data = prediction_simulator(track, search_key)
-                loss = counts_loss(observed_charge, simulated_data[0])
+                # Simulator returns (log_w, flat_times, flat_indices, total_charge)
+                log_w, flat_times, flat_indices, total_charge = prediction_simulator(track, search_key)
+                loss = counts_loss(observed_charge, total_charge)
 
                 # loss, _ = spatial_loss_component(
                 #     position, theta, phi, energy_guess, true_data, detector_params, search_key
@@ -460,8 +461,10 @@ def energy_scan_optimization(prediction_simulator, position, theta, phi, initial
 
             track = ParticleParams(energy=jnp.asarray(energy), position=jnp.asarray(position),
                                   theta=jnp.asarray(theta), phi=jnp.asarray(phi), t0=jnp.asarray(initial_t0))
-            simulated_data = prediction_simulator(track, scan_key)
-            loss = energy_loss(simulated_data[0], observed_charge)
+            # Simulator returns (log_w, flat_times, flat_indices, total_charge)
+            log_w, flat_times, flat_indices, total_charge = prediction_simulator(track, scan_key)
+            # Use energy_loss (log ratio of total counts) for initial energy guess
+            loss = energy_loss(total_charge, observed_charge)
             # combined_loss, vertex_loss, wc_loss, energy_loss_val = energy_loss(
             #     test_params, hit_detector_positions, observed_times, observed_charge,
             #     true_data, detector_params, scan_key
