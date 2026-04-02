@@ -2,6 +2,50 @@
 
 Scripts for running optimization jobs on S3DF SLURM cluster.
 
+## Container
+
+All jobs use the Singularity container:
+```
+/sdf/group/neutrino/images/develop.sif
+```
+
+To run commands manually with the container:
+```bash
+singularity exec -B /sdf,/fs,/sdf/scratch,/lscratch /sdf/group/neutrino/images/develop.sif python3 your_script.py
+```
+
+---
+
+## Track Optimization Jobs
+
+### 1. Create config files
+
+Edit and run the config creation script (e.g., `nrays_config/create_configs.py`):
+
+```bash
+cd s3df_jobs/nrays_config
+python3 create_configs.py
+```
+
+### 2. Submit jobs
+
+Submit each config as a separate job:
+
+```bash
+cd s3df_jobs
+for i in 0 1 2 3 4 5; do
+  python3 submit_job.py \
+    --config nrays_config/opt_config_${i}.json \
+    --output /path/to/output/dir \
+    --job-name myjob_${i} \
+    --submit
+done
+```
+
+Output pkl files will be saved directly to the output directory as `config_X.pkl`.
+
+---
+
 ## Tau Hyperparameter Tuning
 
 The `tau_vtx` parameter in the vertex loss function depends on Nrays and Energy.
