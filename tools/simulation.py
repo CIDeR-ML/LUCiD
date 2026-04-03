@@ -4,7 +4,20 @@ from tools.propagation.cylinder import create_photon_propagator
 from tools.propagation.sphere import create_sphere_photon_propagator
 from tools.propagation.box import create_box_photon_propagator, box_bounds_check
 from tools.geometry import generate_detector, get_material_from_config
+<<<<<<< Updated upstream
 from tools.utils import unpack_t0_params, unpack_photonsim_params, get_speed_of_light_in_material
+=======
+from tools.utils import (
+    unpack_t0_params, unpack_photonsim_params,
+    get_speed_of_light_in_material,
+    spherical_to_cartesian, base_dir_path,
+    smear_times, smear_charges_SK_like,
+    normalize, create_local_frame, solve_rayleigh_inverse_cdf,
+)
+from tools.detector_params import DetectorParams, ParticleParams, load_detector_params
+from tools.wavelength import compute_scatter_direction, compute_asym_scatter_direction
+
+>>>>>>> Stashed changes
 import jax
 import jax.numpy as jnp
 from typing import Optional, Tuple
@@ -160,10 +173,15 @@ def setup_event_simulator(json_filename, n_photons=1_000_000, temperature=0.2, K
     return simulate_event
 
 
+<<<<<<< Updated upstream
 def normalize(v, epsilon=1e-6):
     """Normalize a vector (or batch of vectors)."""
     norm = jnp.linalg.norm(v, axis=-1, keepdims=True)
     return v / (norm + epsilon)
+=======
+# normalize, create_local_frame, solve_rayleigh_inverse_cdf imported from tools.utils
+# compute_scatter_direction, compute_asym_scatter_direction imported from tools.wavelength
+>>>>>>> Stashed changes
 
 
 def compute_reflection_direction(incident_dir, normal):
@@ -174,6 +192,7 @@ def compute_reflection_direction(incident_dir, normal):
     return normalize(incident_dir - 2 * dot_product * normal)
 
 
+<<<<<<< Updated upstream
 def create_local_frame(z):
     """Create a local coordinate frame given a z-axis vector."""
     z = normalize(z)
@@ -191,6 +210,26 @@ def gumbel_softmax(probs, temperature, rng_key):
     gumbel = -jnp.log(-jnp.log(uniform))
     logits = jnp.log(probs) + gumbel
     return jax.nn.softmax(logits / temperature)
+=======
+def sample_cosine_hemisphere(normal, rng_key):
+    """Cosine-weighted hemisphere sampling (reparameterisation trick)."""
+    k1, k2 = jax.random.split(rng_key)
+    u1 = jax.random.uniform(k1)
+    u2 = jax.random.uniform(k2)
+
+    cos_theta = jnp.sqrt(1 - u1)
+    sin_theta = jnp.sqrt(u1)
+    phi = 2 * jnp.pi * u2
+
+    local_dir = jnp.array([
+        sin_theta * jnp.cos(phi),
+        sin_theta * jnp.sin(phi),
+        cos_theta,
+    ])
+
+    frame = create_local_frame(normal)
+    return normalize(frame.T @ local_dir)
+>>>>>>> Stashed changes
 
 
 def sample_scatter_distance(D, S, rng_key):
@@ -201,6 +240,7 @@ def sample_scatter_distance(D, S, rng_key):
     return -S * jnp.log1p(-u * prob_term)
 
 
+<<<<<<< Updated upstream
 def solve_rayleigh_inverse_cdf(u):
     """
     Solve the inverse CDF for Rayleigh scattering: P(μ) ∝ (1 + μ²)
@@ -353,11 +393,47 @@ def create_photonsim_siren_grid(photonsim_predictor, n_bins):
 def photon_iteration_sample(position, direction, time, surface_distance,
                             normal, scatter_length, reflection_rate,
                             absorption_length, asym_fraction, tau_gs, rng_key, speed_of_light):
-    """
-    Sampling version of photon iteration that makes binary decisions.
+=======
+# JAX-compatible rotation helpers (for data mode)
+def jax_normalize(v, epsilon=1e-8):
+    """Normalize a vector with numerical stability using JAX."""
+    norm = jnp.linalg.norm(v)
+    return jnp.where(norm > epsilon, v / norm, v)
 
+
+def jax_rotate_vector(vector, axis, angle):
+    """Rotate a vector around an axis by a given angle in radians using JAX."""
+    axis = jax_normalize(axis)
+    cos_angle = jnp.cos(angle)
+    sin_angle = jnp.sin(angle)
+    cross_product = jnp.cross(axis, vector)
+    dot_product = jnp.dot(axis, vector) * (1 - cos_angle)
+    return cos_angle * vector + sin_angle * cross_product + dot_product * axis
+
+
+# ===================================================================
+# Photon iteration functions (13-arg signatures: dual scatter, dual reflection)
+# ===================================================================
+
+def photon_iteration_sample(
+        position, direction, time, surface_distance,
+        normal, scatter_length, asym_scatter_length, mie_g,
+        wall_reflection_rate, sensor_reflection_rate,
+        absorption_length,
+        hit_sensor, rng_key, speed_of_light):
+>>>>>>> Stashed changes
+    """
+    Sampling version of photon iteration with competing Rayleigh + Mie scatter.
+
+<<<<<<< Updated upstream
     This function performs Monte Carlo sampling where photons make discrete
     choices (detect/reflect/scatter) rather than computing expected values.
+=======
+    Implements Geant4-style competing processes: Rayleigh scatter, Mie scatter,
+    and reaching the surface are independent exponential processes. The shortest
+    sampled distance wins. Mie scattering uses the Henyey-Greenstein phase
+    function with asymmetry parameter g.
+>>>>>>> Stashed changes
 
     Parameters
     ----------
@@ -372,9 +448,21 @@ def photon_iteration_sample(position, direction, time, surface_distance,
     normal : jnp.ndarray
         Surface normal at the intersection point
     scatter_length : float
+<<<<<<< Updated upstream
         Mean free path for scattering in the medium
     reflection_rate : float
         Probability of reflection when reaching a surface
+=======
+        Mean free path for symmetric (Rayleigh) scattering
+    asym_scatter_length : float
+        Mean free path for asymmetric (Mie) scattering
+    mie_g : float
+        Henyey-Greenstein asymmetry parameter for Mie scattering (-1, 1)
+    wall_reflection_rate : float
+        Probability of reflection when hitting a wall
+    sensor_reflection_rate : float
+        Probability of reflection when hitting a sensor
+>>>>>>> Stashed changes
     absorption_length : float
         Mean free path for absorption in the medium
     asym_fraction : float
@@ -401,6 +489,7 @@ def photon_iteration_sample(position, direction, time, surface_distance,
     continuing_factor : float
         Factor for continuing photons (0.0 if detected, attenuation if continues)
 
+<<<<<<< Updated upstream
     Notes
     -----
     The tau_gs parameter is included to match the signature of photon_iteration_update_factors
@@ -413,32 +502,69 @@ def photon_iteration_sample(position, direction, time, surface_distance,
 
     # Probability of reaching surface without scattering
     reach_surface_prob = jnp.exp(-surface_distance / scatter_length)
+=======
+    k1, k2, k3, k4, k5 = jax.random.split(rng_key, 5)
+
+    reflection_rate = jnp.where(hit_sensor, sensor_reflection_rate, wall_reflection_rate)
+
+    # Competing exponential processes: sample distances for both scatter types
+    rayleigh_distance = sample_scatter_distance(surface_distance, scatter_length, k2)
+    mie_distance = sample_scatter_distance(surface_distance, asym_scatter_length, k5)
+
+    # Combined scatter probability: P(any scatter before surface)
+    # For competing exponentials: α_total = α_ray + α_mie
+    # P(reach surface) = exp(-D * (1/L_ray + 1/L_mie))
+    inv_total = 1.0 / scatter_length + 1.0 / asym_scatter_length
+    reach_surface_prob = jnp.exp(-surface_distance * inv_total)
+>>>>>>> Stashed changes
 
     # Sample whether photon reaches surface
     u1 = jax.random.uniform(k1)
     reaches_surface = u1 < reach_surface_prob
 
+<<<<<<< Updated upstream
     # If reaches surface, sample whether it reflects or is detected
+=======
+    # If scatter occurs, which type? The shorter sampled distance wins.
+    is_rayleigh = rayleigh_distance <= mie_distance
+    scatter_distance = jnp.where(is_rayleigh, rayleigh_distance, mie_distance)
+
+>>>>>>> Stashed changes
     u2 = jax.random.uniform(k2)
     reflects = reaches_surface & (u2 < reflection_rate)
     detects = reaches_surface & (u2 >= reflection_rate)
     scatters = ~reaches_surface
 
+<<<<<<< Updated upstream
     # Calculate new position based on outcome
     epsilon = 1e-4  # Small value to stay inside
     # the fraction of 'errors' for a given epislon change with the detector size.
     # this is because the numerical error in direction over a large distance translates into a relatively larger deviation
     # for HK-size epsilon 1e-4 translates into a few tens of rays going out of the detector per each million after several steps.
     # The rule of thumb is that epsilon needs to go down/up proportionally to the detector size.
+=======
+    epsilon = 1e-4
+>>>>>>> Stashed changes
     new_pos = jnp.where(
         scatters,
         position + scatter_distance * normalize(direction),
         position + surface_distance * normalize(direction) + epsilon * normalize(normal)
     )
 
+<<<<<<< Updated upstream
     # Calculate new direction
     reflection_dir = compute_reflection_direction(direction, normal)
     scatter_dir = compute_mixed_scatter_direction(direction, asym_fraction, k3)
+=======
+    specular_dir = compute_reflection_direction(direction, normal)
+    diffuse_dir = sample_cosine_hemisphere(normal, k4)
+    reflection_dir = jnp.where(hit_sensor, specular_dir, diffuse_dir)
+
+    # Select scatter direction based on which process won
+    rayleigh_dir = compute_scatter_direction(direction, k3)
+    mie_dir = compute_asym_scatter_direction(direction, k3, g=mie_g)
+    scatter_dir = jnp.where(is_rayleigh, rayleigh_dir, mie_dir)
+>>>>>>> Stashed changes
 
     new_dir = jnp.where(
         reflects,
@@ -473,13 +599,23 @@ def photon_iteration_sample(position, direction, time, surface_distance,
     return new_pos, new_dir, new_time, detect_prob, reflection_attenuation, continuing_factor
 
 
+<<<<<<< Updated upstream
 def photon_iteration_update_factors(position, direction, time, surface_distance,
                                     normal, scatter_length, reflection_rate,
                                     absorption_length, asym_fraction, tau_gs, rng_key, speed_of_light):
+=======
+def photon_iteration_update_factors(
+        position, direction, time, surface_distance,
+        normal, scatter_length, asym_scatter_length, mie_g,
+        wall_reflection_rate, sensor_reflection_rate,
+        absorption_length,
+        hit_sensor, rng_key, speed_of_light):
+>>>>>>> Stashed changes
     """
     An update function for photon propagation that employs a variance reduction technique through computation of expected values.
     It employs Gumbel-softmax sampling to blend reflection and scattering outcomes for full differentiability.
 
+<<<<<<< Updated upstream
     Parameters:
       - position, direction: (3,) arrays for the photon's current state.
       - time: scalar, current photon time.
@@ -510,12 +646,86 @@ def photon_iteration_update_factors(position, direction, time, surface_distance,
     ratio = surface_distance / scatter_length    
     reach_surface_prob = jnp.exp(-ratio)
     scatter_prob = -jnp.expm1(-ratio)  # 1 - reach_surface_prob
+=======
+    Implements competing Rayleigh + Mie scatter processes with full
+    differentiability. Mie scattering uses the Henyey-Greenstein phase
+    function with differentiable asymmetry parameter g.
+    Walls use diffuse reflection, sensors use specular.
+
+    Parameters
+    ----------
+    position, direction : jnp.ndarray
+        (3,) arrays for the photon's current state.
+    time : float
+        Current photon time.
+    surface_distance : float
+        Distance to nearest surface (norm of hit_position - position).
+    normal : jnp.ndarray
+        (3,) surface normal at the hit position.
+    scatter_length : float
+        Mean free path for symmetric (Rayleigh) scattering.
+    asym_scatter_length : float
+        Mean free path for asymmetric (Mie) scattering.
+    mie_g : float
+        Henyey-Greenstein asymmetry parameter for Mie scattering (-1, 1).
+    wall_reflection_rate : float
+        Probability of reflection at walls.
+    sensor_reflection_rate : float
+        Probability of reflection at sensors.
+    absorption_length : float
+        Mean free path for absorption.
+    hit_sensor : bool
+        Whether the photon hit a sensor (True) or wall (False).
+    rng_key : jax.random.PRNGKey
+        JAX PRNG key.
+    speed_of_light : float
+        Speed of light in the medium (m/ns).
+
+    Returns
+    -------
+    new_pos : jnp.ndarray
+        (3,) updated photon position.
+    new_dir : jnp.ndarray
+        (3,) updated photon direction.
+    new_time : float
+        Updated photon time.
+    detect_prob : float
+        Probability of detection.
+    reflection_attenuation : float
+        Attenuation factor from absorption over surface distance.
+    continuing_factor : float
+        Factor for continuation (reflection or scatter).
+    """
+
+    k1, k2, k3, k5 = jax.random.split(rng_key, 4)
+
+    reflection_rate = jnp.where(hit_sensor, sensor_reflection_rate, wall_reflection_rate)
+
+    # Sample scatter distances for both processes
+    rayleigh_distance = sample_scatter_distance(surface_distance, scatter_length, k2)
+    mie_distance = sample_scatter_distance(surface_distance, asym_scatter_length, k5)
+
+    # Competing exponentials: combined rate determines reach-surface probability
+    inv_total = 1.0 / scatter_length + 1.0 / asym_scatter_length
+    reach_surface_prob = jnp.exp(-surface_distance * inv_total)
+    total_scatter_prob = -jnp.expm1(-surface_distance * inv_total)
+
+    # Fraction of scatters that are Rayleigh vs Mie (rate-weighted)
+    rayleigh_frac = (1.0 / scatter_length) / inv_total
+    mie_frac = 1.0 - rayleigh_frac
+>>>>>>> Stashed changes
 
     # Total probabilities for each possible outcome
     reflect_prob = reach_surface_prob * reflection_rate
     detect_prob = reach_surface_prob * (1 - reflection_rate)
 
+<<<<<<< Updated upstream
     # Attenuation factors (only affect intensity, not probabilities)
+=======
+    # Scatter distance: rate-weighted blend for position computation
+    scatter_distance = rayleigh_frac * rayleigh_distance + mie_frac * mie_distance
+
+>>>>>>> Stashed changes
     reflection_attenuation = jnp.exp(-surface_distance / absorption_length)
     scatter_attenuation = jnp.exp(-scatter_distance / absorption_length)
     
@@ -524,7 +734,15 @@ def photon_iteration_update_factors(position, direction, time, surface_distance,
     probs = jnp.array([reflect_prob, scatter_prob])
     probs_normalized = probs / (jnp.sum(probs) + 1e-10)  # Normalize probabilities
 
+<<<<<<< Updated upstream
     # Sample discrete action based on probabilities
+=======
+    # Straight-Through Estimator for action selection:
+    # Sample discrete action, but let soft probabilities flow in backward pass
+    probs = jnp.array([reach_surface_prob, total_scatter_prob])
+    probs_normalized = probs / (jnp.sum(probs) + 1e-10)
+
+>>>>>>> Stashed changes
     u = jax.random.uniform(k1)
     hard_choice = (u < probs_normalized[0]).astype(jnp.float32)  # 1.0 for reflection, 0.0 for scatter
 
@@ -536,6 +754,7 @@ def photon_iteration_update_factors(position, direction, time, surface_distance,
     reflection_weight = action_weights[0]
     scatter_weight = action_weights[1]
 
+<<<<<<< Updated upstream
     # Compute the candidate positions and directions.
     epsilon = 1e-4  # Small value to stay inside
     # the fraction of 'errors' for a given epsilon change with the detector size.
@@ -543,26 +762,49 @@ def photon_iteration_update_factors(position, direction, time, surface_distance,
     # for HK-size epsilon 1e-4 translates into a few tens of rays going out of the detector per each million after several steps.
     # The rule of thumb is that epsilon needs to go down/up proportionally to the detector size.
     reflection_pos = position + surface_distance * normalize(direction) + epsilon * normalize(normal)
+=======
+    epsilon = 1e-4
+    surface_pos = position + surface_distance * normalize(direction) + epsilon * normalize(normal)
+>>>>>>> Stashed changes
     scatter_pos = position + scatter_distance * normalize(direction)
     reflection_dir = compute_reflection_direction(direction, normal)
     scatter_dir = compute_mixed_scatter_direction(direction, asym_fraction, k3)
 
+<<<<<<< Updated upstream
     # Blend the two possibilities for continuing paths.
     new_pos = reflection_weight * reflection_pos + scatter_weight * scatter_pos
     new_dir = normalize(reflection_weight * reflection_dir + scatter_weight * scatter_dir)
+=======
+    specular_dir = compute_reflection_direction(direction, normal)
+    diffuse_dir = sample_cosine_hemisphere(normal, k3)
+    reflection_dir = jnp.where(hit_sensor, specular_dir, diffuse_dir)
+
+    # Mixed scatter direction: rate-weighted blend of Rayleigh and Mie
+    rayleigh_dir = compute_scatter_direction(direction, k3)
+    mie_dir = compute_asym_scatter_direction(direction, k3, g=mie_g)
+    # Sanitize directions before blending to prevent NaN propagation
+    rayleigh_dir = jnp.nan_to_num(rayleigh_dir, nan=0.0)
+    mie_dir = jnp.nan_to_num(mie_dir, nan=0.0)
+    scatter_dir = normalize(rayleigh_frac * rayleigh_dir + mie_frac * mie_dir)
+>>>>>>> Stashed changes
 
     # Calculate the continuing factor based on the probabilities and not the weights
     continuing_factor = reflect_prob * reflection_attenuation + reflect_prob * reflection_attenuation + scatter_prob * scatter_attenuation
 
+<<<<<<< Updated upstream
     # Time increment based on distance traveled along the weighted path
     # Convert distance (meters) to time (nanoseconds)
     distance_traveled = reflection_weight * surface_distance + scatter_weight * scatter_distance 
     time_increment = distance_traveled / speed_of_light  # m / (m/ns) = ns
     new_time = time + time_increment  # ns + ns
+=======
+    continuing_factor = reflect_prob * reflection_attenuation + total_scatter_prob * scatter_attenuation
+>>>>>>> Stashed changes
 
     return new_pos,new_dir, new_time, detect_prob, reflection_attenuation, continuing_factor
 
 
+<<<<<<< Updated upstream
 # JAX-compatible versions of the rotation functions
 def jax_normalize(v, epsilon=1e-8):
     """Normalize a vector with numerical stability using JAX."""
@@ -578,6 +820,44 @@ def jax_rotate_vector(vector, axis, angle):
     cross_product = jnp.cross(axis, vector)
     dot_product = jnp.dot(axis, vector) * (1 - cos_angle)
     return cos_angle * vector + sin_angle * cross_product + dot_product * axis
+=======
+# ===================================================================
+# Custom VJP wrapper — NaN gradient sanitisation
+# ===================================================================
+
+@jax.custom_vjp
+def photon_iteration_update_factors_safe(
+        position, direction, time, surface_distance,
+        normal, scatter_length, asym_scatter_length, mie_g,
+        wall_reflection_rate, sensor_reflection_rate,
+        absorption_length,
+        hit_sensor, rng_key, speed_of_light):
+    return photon_iteration_update_factors(
+        position, direction, time, surface_distance,
+        normal, scatter_length, asym_scatter_length, mie_g,
+        wall_reflection_rate, sensor_reflection_rate,
+        absorption_length,
+        hit_sensor, rng_key, speed_of_light)
+
+
+def _fwd(position, direction, time, surface_distance,
+         normal, scatter_length, asym_scatter_length, mie_g,
+         wall_reflection_rate, sensor_reflection_rate,
+         absorption_length,
+         hit_sensor, rng_key, speed_of_light):
+    outputs = photon_iteration_update_factors(
+        position, direction, time, surface_distance,
+        normal, scatter_length, asym_scatter_length, mie_g,
+        wall_reflection_rate, sensor_reflection_rate,
+        absorption_length,
+        hit_sensor, rng_key, speed_of_light)
+    residuals = (position, direction, time, surface_distance,
+                 normal, scatter_length, asym_scatter_length, mie_g,
+                 wall_reflection_rate, sensor_reflection_rate,
+                 absorption_length,
+                 hit_sensor, rng_key, speed_of_light)
+    return outputs, residuals
+>>>>>>> Stashed changes
 
 
 def make_hits_simulation_min(flat_weights: jnp.ndarray,
@@ -1017,8 +1297,140 @@ def create_event_simulator(detector, propagate_photons, Nphot, NUM_SENSORS, sens
     else:
         photon_update_fn = photon_iteration_update_factors
 
+<<<<<<< Updated upstream
     # Calculate speed of light in the material (m/ns)
     SPEED_OF_LIGHT_MATERIAL = get_speed_of_light_in_material(material)
+=======
+    # ---- Geometry bounds check ----------------------------------------------
+    if detector_type == 'Cylinder':
+        def get_inside_detector_flag(positions):
+            x, y, z = positions[:, 0], positions[:, 1], positions[:, 2]
+            inside_xy = (x ** 2 + y ** 2) <= detector.r ** 2
+            inside_z = (z >= -detector.H / 2) & (z <= detector.H / 2)
+            return inside_xy & inside_z
+    elif detector_type == 'Sphere':
+        def get_inside_detector_flag(positions):
+            return jnp.linalg.norm(positions, axis=1) <= detector.r
+    elif detector_type == 'Box':
+        def get_inside_detector_flag(positions):
+            return box_bounds_check(positions, detector.L, detector.W, detector.H)
+
+    # ---- make_hits wrapper selection ----------------------------------------
+    if is_data:
+        def _make_hits_fn(flat_weights, flat_indices, flat_times, num_sensors, qe_key, qe, qe_corrections):
+            return make_hits_data(flat_weights, flat_indices, flat_times, num_sensors,
+                                  qe=qe, rng_key=qe_key, apply_smearing=apply_smearing)
+    else:
+        def _make_hits_fn(flat_weights, flat_indices, flat_times, num_sensors, qe_key, qe, qe_corrections):
+            return make_hits_simulation(flat_weights, flat_indices, flat_times, num_sensors,
+                                        qe=qe, qe_corrections=qe_corrections)
+
+    # ================================================================
+    # Core propagation (shared by all modes)
+    # ================================================================
+
+    @partial(jax.jit, static_argnames=(
+        'n_rays', 'K', 'n_grad_iters', 'max_sensors_per_cell', 'num_sensors',
+        'propagate_fn', 'photon_update_fn'))
+    def _common_propagation(
+            positions, directions, intensities, times,
+            n_rays, detector_params, key,
+            num_sensors, K, n_grad_iters, max_sensors_per_cell,
+            propagate_fn, photon_update_fn):
+        """Core photon propagation loop using DetectorParams."""
+
+        # Named field access (no tuple unpacking)
+        scatter_length = detector_params.scatter_length
+        asym_scatter_length = detector_params.asym_scatter_length
+        mie_g = detector_params.mie_g
+        wall_reflection_rate = detector_params.wall_reflection_rate
+        sensor_reflection_rate = detector_params.sensor_reflection_rate
+        absorption_length = detector_params.absorption_length
+        qe = detector_params.qe
+        qe_corrections = detector_params.qe_corrections
+
+        initial_survival = jnp.ones(n_rays)
+
+        def propagation_step(carry, i):
+            current_pos, current_dir, current_times, survival, key = carry
+            key, prop_key = jax.random.split(key)
+
+            prop_results = propagate_fn(current_pos, current_dir)
+            depositions = prop_results['sensor_weights']
+            sensor_indices = prop_results['sensor_indices']
+            hit_times_meters = prop_results['times']  # ray parameter in meters
+            hit_positions = prop_results['positions']
+            normals = prop_results['normals']
+            inside_sensor = prop_results['inside_sensor']
+
+            hit_sensor = jnp.max(inside_sensor, axis=0)
+            surface_distances = jnp.linalg.norm(hit_positions - current_pos, axis=1) - 1e-6
+
+            key, subkey = jax.random.split(key)
+            rng_keys = jax.random.split(subkey, n_rays)
+
+            # vmap: 14 args — dual scatter with HG, dual reflection
+            (new_positions, new_directions, new_times,
+             detect_probs, reflection_attenuations,
+             continuing_factors) = jax.vmap(
+                photon_update_fn,
+                in_axes=(0, 0, 0, 0, 0,
+                         None, None, None, None, None, None,
+                         0, 0, None)
+            )(current_pos, current_dir, current_times,
+              surface_distances, normals,
+              scatter_length, asym_scatter_length, mie_g,
+              wall_reflection_rate, sensor_reflection_rate,
+              absorption_length,
+              hit_sensor, rng_keys, SPEED_OF_LIGHT_MATERIAL)
+
+            inside_detector = get_inside_detector_flag(new_positions)
+            safe_continuing = jnp.where(inside_detector, continuing_factors, 0.0)
+
+            new_survival = survival * safe_continuing
+
+            physical_intensities = intensities * survival
+            detected_factors = detect_probs * reflection_attenuations
+            updated_weights = depositions * physical_intensities[None, :] * detected_factors[None, :]
+            times_ns = hit_times_meters / SPEED_OF_LIGHT_MATERIAL  # m / (m/ns) = ns
+            total_times = times_ns + current_times[:, None]
+
+            iter_weights = updated_weights
+            iter_indices = sensor_indices
+            iter_times = total_times.squeeze(-1)
+
+            # Stop gradient on position/direction after n_grad_iters iterations
+            # n_grad_iters=0 (reconstruction): always stop_gradient
+            # n_grad_iters=2 (calibration): gradient flows for first 2 iterations
+            next_pos = jnp.where(i < K, new_positions, jax.lax.stop_gradient(new_positions))
+            next_dir = jnp.where(i < 2, new_directions, jax.lax.stop_gradient(new_directions))
+            next_times = new_times
+            next_survival = new_survival
+
+            new_carry = (next_pos, next_dir, next_times, next_survival, key)
+            outputs = (iter_weights, iter_indices, iter_times)
+            return new_carry, outputs
+
+        init_carry = (positions, directions, times, initial_survival, key)
+        propagation_step_remat = jax.remat(propagation_step)
+
+        _, (all_weights, all_indices, all_times) = jax.lax.scan(
+            propagation_step_remat, init_carry, jnp.arange(K))
+
+        flat_weights = all_weights.reshape(-1)
+        flat_indices = all_indices.reshape(-1)
+        flat_times = all_times.reshape(-1)
+
+        key, qe_key = jax.random.split(key)
+        corrected_q, aligned_times = _make_hits_fn(
+            flat_weights, flat_indices, flat_times, num_sensors, qe_key, qe, qe_corrections)
+
+        return corrected_q, aligned_times
+
+    # ================================================================
+    # Mode-specific simulation functions
+    # ================================================================
+>>>>>>> Stashed changes
 
     # Define simulation function for ROOT data
     @jax.jit
@@ -1419,8 +1831,22 @@ def create_event_simulator(detector, propagate_photons, Nphot, NUM_SENSORS, sens
         grid_data = create_photonsim_siren_grid(photonsim_predictor, 250)
         model_params = photonsim_predictor.params
         t0_params = unpack_t0_params(particle, material)
+<<<<<<< Updated upstream
 
         # Return partially applied function with model data
         return partial(_simulation_without_data,
                        grid_data=grid_data,
                        model_params=model_params)
+=======
+        if _default_dp is not None:
+            @jax.jit
+            def _sim_track_default(particle_params, key):
+                return _simulation_without_data_impl(particle_params, _default_dp, key,
+                                                     grid_data=grid_data, model_params=model_params)
+            _sim_track_default.default_detector_params = _default_dp
+            return _sim_track_default
+        else:
+            return partial(_simulation_without_data_impl,
+                           grid_data=grid_data,
+                           model_params=model_params)
+>>>>>>> Stashed changes

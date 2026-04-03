@@ -276,6 +276,63 @@ def spherical_to_cartesian(theta, phi):
     
     return jnp.array([x, y, z])
 
+
+# ---------------------------------------------------------------------------
+# Shared geometric / scattering primitives
+# Used by both simulation.py and wavelength.py
+# ---------------------------------------------------------------------------
+
+def normalize(v, epsilon=1e-6):
+    """Normalize a vector (or batch of vectors)."""
+    norm = jnp.linalg.norm(v, axis=-1, keepdims=True)
+    return v / jnp.maximum(norm, epsilon)
+
+
+def create_local_frame(z):
+    """Create an orthonormal frame with *z* as the z-axis."""
+    z = normalize(z)
+    t = jnp.where(
+        jnp.abs(z[0]) < 0.9,
+        jnp.array([1.0, 0.0, 0.0]),
+        jnp.array([0.0, 1.0, 0.0]),
+    )
+    x = normalize(jnp.cross(t, z))
+    y = jnp.cross(z, x)
+    return jnp.stack([x, y, z])
+
+
+def solve_rayleigh_inverse_cdf(u):
+    """
+    Solve the inverse CDF for Rayleigh scattering: P(μ) ∝ (1 + μ²)
+    Uses Cardano's formula to solve: μ³ + 3μ - (8u - 4) = 0
+
+    This is evaluated in the forward pass only (to generate a random cosθ).
+    No gradient flows through it — the analytical solution is faster than
+    iterative methods and vectorizes perfectly under vmap.
+    """
+    # Transform to standard form: t³ + pt + q = 0 where μ = t
+    p = 3.0
+    q = -(8.0 * u - 4.0)
+
+    # Cardano's formula
+    discriminant = -(4 * p ** 3 + 27 * q ** 2)
+
+    # Three real roots case
+    sqrt_disc_pos = jnp.sqrt(jnp.abs(discriminant))
+    rho = jnp.sqrt(-p ** 3 / 27)
+    theta = jnp.arccos(jnp.clip(-q / (2 * rho), -1, 1))
+    mu_three_roots = 2 * jnp.cbrt(rho) * jnp.cos(theta / 3)
+
+    # One real root case
+    sqrt_disc_neg = jnp.sqrt(-discriminant)
+    A = jnp.cbrt((-q + sqrt_disc_neg / (3 * jnp.sqrt(3))) / 2)
+    B = jnp.cbrt((-q - sqrt_disc_neg / (3 * jnp.sqrt(3))) / 2)
+    mu_one_root = A + B
+
+    # Select based on discriminant sign
+    mu = jnp.where(discriminant >= 0, mu_three_roots, mu_one_root)
+    return jnp.clip(mu, -1.0, 1.0)
+
 def full_to_sparse(charges, times):
     """Convert full arrays to sparse representation by removing zero elements.
 
@@ -461,12 +518,25 @@ def load_single_event(filename, num_sensors, sparse=True, calibration_mode=False
 
         # Load detector parameters
         detector_group = f['sensor_params']
+<<<<<<< Updated upstream
         scatter_length = jnp.array(detector_group['scatter_length'][()])
         reflection_rate = jnp.array(detector_group['reflection_rate'][()])
         absorption_length = jnp.array(detector_group['absorption_length'][()])
         sim_temperature = jnp.array(detector_group['sim_temperature'][()])
 
         sensor_params = (scatter_length, reflection_rate, absorption_length, sim_temperature)
+=======
+        sensor_params = DetectorParams(
+            scatter_length=jnp.array(detector_group['scatter_length'][()]),
+            wall_reflection_rate=jnp.array(detector_group['wall_reflection_rate'][()]),
+            sensor_reflection_rate=jnp.array(detector_group['sensor_reflection_rate'][()]),
+            absorption_length=jnp.array(detector_group['absorption_length'][()]),
+            qe=jnp.array(detector_group['qe'][()]),
+            qe_corrections=jnp.array(detector_group['qe_corrections'][()]),
+            asym_scatter_length=jnp.array(detector_group['asym_scatter_length'][()]),
+            mie_g=jnp.array(detector_group['mie_g'][()])
+        )
+>>>>>>> Stashed changes
 
         # Load event data
         event_group = f['event']
