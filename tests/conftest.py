@@ -23,7 +23,7 @@ def small_cylinder_config():
 @pytest.fixture(scope="session")
 def cylinder_detector(small_cylinder_config):
     """Build WCTE cylinder detector once per session."""
-    from tools.geometry import generate_detector
+    from lucid.geometry import generate_detector
     return generate_detector(small_cylinder_config)
 
 

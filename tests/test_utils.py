@@ -3,7 +3,7 @@ import jax
 import jax.numpy as jnp
 import numpy.testing as npt
 
-from tools.utils import spherical_to_cartesian, smear_times, smear_charges_SK_like
+from lucid.utils import spherical_to_cartesian, smear_times, smear_charges_SK_like
 
 
 class TestSphericalToCartesian:

@@ -16,12 +16,9 @@ Usage:
     python run_eval_with_parametrization.py --output OUTPUT_DIR [--n-events N]
 """
 
-import sys
 from pathlib import Path
 
-# Add project root to path
 project_root = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(project_root))
 
 import argparse
 import csv
@@ -40,21 +37,21 @@ from jax import jit, value_and_grad
 from jax.scipy.special import gammaln
 
 # LUCiD imports
-from tools.geometry import generate_detector
-from tools.generate import read_photon_data_from_photonsim
-from tools.simulation import setup_event_simulator
-from tools.utils import load_range_params, check_track_endpoint_in_detector
-from tools.detector_params import ParticleParams, load_detector_params
-from tools.optimization.optimize import (
+from lucid.geometry import generate_detector
+from lucid.generate import read_photon_data_from_photonsim
+from lucid.simulation import setup_event_simulator
+from lucid.utils import load_range_params, check_track_endpoint_in_detector
+from lucid.detector_params import ParticleParams, load_detector_params
+from lucid.optimization.optimize import (
     load_optimization_config,
     get_detector_bounds,
     hierarchical_position_grid_search
 )
-from tools.optimization.utils.functions import (
+from lucid.optimization.utils.functions import (
     cartesian_to_spherical,
     spherical_to_cartesian,
 )
-from tools.optimization.losses import (
+from lucid.optimization.losses import (
     first_arrival_nll,
     get_optimal_tau_vtx,
     TAU_VTX_PARAM_A,
