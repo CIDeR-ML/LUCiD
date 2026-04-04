@@ -1,5 +1,5 @@
 """Event simulator factory (setup_event_simulator)."""
-from lucid.generate import (
+from lucid.sources.siren_rays import (
     photonsim_differentiable_get_rays,
     predict_t0,
 )

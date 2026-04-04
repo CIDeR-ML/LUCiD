@@ -41,7 +41,7 @@ from lucid.geometry import generate_detector
 from lucid.utils import load_single_event, save_single_event, generate_random_params, print_particle_params
 from lucid.utils import load_range_params, check_track_endpoint_in_detector
 from lucid.simulation import setup_event_simulator
-from lucid.generate import read_photon_data_from_photonsim
+from lucid.sources.event_io import read_photon_data_from_photonsim
 
 from lucid.optimization.utils.functions import estimate_muon_energy_from_photon_count, cone_points
 from lucid.optimization.utils.functions import hierarchical_direction_search_cone, energy_scan_optimization
