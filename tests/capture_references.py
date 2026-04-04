@@ -69,10 +69,9 @@ nrm = jnp.array([0.0, 0.0, 1.0])
 refs["cosine_hemi"] = sample_cosine_hemisphere(nrm, key3).tolist()
 
 # ── Losses ───────────────────────────────────────────────────────────
-from lucid.losses import poisson_nll
-from lucid.optimization.losses import (
-    energy_loss, counts_loss, origin_time_loss, first_arrival_nll,
-    segment_logsumexp,
+from lucid.losses import (
+    poisson_nll, energy_loss, counts_loss, origin_time_loss,
+    first_arrival_nll, segment_logsumexp,
 )
 
 true_q = jnp.array([10.0, 5.0, 0.0, 3.0, 8.0])

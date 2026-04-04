@@ -51,7 +51,7 @@ from lucid.optimization.utils.functions import (
     cartesian_to_spherical,
     spherical_to_cartesian,
 )
-from lucid.optimization.losses import (
+from lucid.losses import (
     first_arrival_nll,
     get_optimal_tau_vtx,
     TAU_VTX_PARAM_A,

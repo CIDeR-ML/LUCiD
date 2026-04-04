@@ -2,9 +2,8 @@
 import jax.numpy as jnp
 import numpy.testing as npt
 
-from lucid.losses import poisson_nll
-from lucid.optimization.losses import (
-    energy_loss, counts_loss, segment_logsumexp,
+from lucid.losses import (
+    poisson_nll, energy_loss, counts_loss, segment_logsumexp,
 )
 
 
