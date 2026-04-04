@@ -42,7 +42,7 @@ from lucid.sources.event_io import read_photon_data_from_photonsim
 from lucid.simulation import setup_event_simulator
 from lucid.utils import load_range_params, check_track_endpoint_in_detector
 from lucid.detector_params import ParticleParams, load_detector_params
-from lucid.optimization.optimize import (
+from lucid.optimization.grid_search import (
     load_optimization_config,
     get_detector_bounds,
     hierarchical_position_grid_search
