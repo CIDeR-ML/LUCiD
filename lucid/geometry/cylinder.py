@@ -232,3 +232,22 @@ class Cylinder(Detector):
         )
 
         fig.show()
+
+    def bounds_check(self, positions):
+        """Test whether positions are inside the cylinder.
+
+        Parameters
+        ----------
+        positions : jnp.ndarray
+            Shape ``(N, 3)`` array of [x, y, z] coordinates.
+
+        Returns
+        -------
+        jnp.ndarray
+            Boolean array of shape ``(N,)``; True where inside.
+        """
+        import jax.numpy as jnp
+        x, y, z = positions[:, 0], positions[:, 1], positions[:, 2]
+        inside_xy = (x ** 2 + y ** 2) <= self.r ** 2
+        inside_z = (z >= -self.H / 2) & (z <= self.H / 2)
+        return inside_xy & inside_z

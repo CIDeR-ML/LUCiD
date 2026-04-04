@@ -175,19 +175,9 @@ def setup_event_simulator(
     else:
         photon_update_fn = jax.remat(photon_iteration_update_factors_safe)
 
-    # ---- Geometry bounds check ----------------------------------------------
-    if detector_type == 'Cylinder':
-        def get_inside_detector_flag(positions):
-            x, y, z = positions[:, 0], positions[:, 1], positions[:, 2]
-            inside_xy = (x ** 2 + y ** 2) <= detector.r ** 2
-            inside_z = (z >= -detector.H / 2) & (z <= detector.H / 2)
-            return inside_xy & inside_z
-    elif detector_type == 'Sphere':
-        def get_inside_detector_flag(positions):
-            return jnp.linalg.norm(positions, axis=1) <= detector.r
-    elif detector_type == 'Box':
-        def get_inside_detector_flag(positions):
-            return box_bounds_check(positions, detector.L, detector.W, detector.H)
+    # ---- Geometry bounds check (delegates to detector method) ----------------
+    def get_inside_detector_flag(positions):
+        return detector.bounds_check(positions)
 
     # ---- make_hits wrapper selection ----------------------------------------
     if is_data:

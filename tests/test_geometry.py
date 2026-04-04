@@ -98,3 +98,29 @@ class TestBoundsCheck:
         assert result[0] == True
         assert result[1] == False
         assert result[2] == True
+
+    def test_cylinder_bounds_method(self, cylinder_detector):
+        """detector.bounds_check() matches standalone cylinder_bounds_check()."""
+        from lucid.propagation.cylinder import cylinder_bounds_check
+        det = cylinder_detector
+        pts = jnp.array([
+            [0.0, 0.0, 0.0], [10.0, 10.0, 10.0], [1.9, 0.0, 0.0],
+            [0.0, 0.0, 1.99], [0.0, 0.0, 2.01],
+        ])
+        expected = cylinder_bounds_check(pts, det.r, det.H)
+        result = det.bounds_check(pts)
+        npt.assert_array_equal(result, expected)
+
+    def test_sphere_bounds_method(self):
+        det = generate_detector("config/JUNO_geom_config.json")
+        pts = jnp.array([[0.0, 0.0, 0.0], [100.0, 100.0, 100.0]])
+        result = det.bounds_check(pts)
+        assert result[0] == True
+        assert result[1] == False
+
+    def test_box_bounds_method(self):
+        det = generate_detector("config/nuSCOPE_geom_config.json")
+        pts = jnp.array([[0.0, 0.0, 0.0], [100.0, 100.0, 100.0]])
+        result = det.bounds_check(pts)
+        assert result[0] == True
+        assert result[1] == False
