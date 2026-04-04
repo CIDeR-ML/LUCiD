@@ -27,10 +27,9 @@ dependencies = [
 training = ["torch>=2.0"]
 dev = ["pytest>=7.0", "nbmake"]
 
-# Entry points added in Phase 2.3 after run.py is created.
-# [project.scripts]
-# lucid-optimize = "lucid.optimization.run:main"
-# lucid-train-siren = "lucid.siren.train:main"
+[project.scripts]
+lucid-optimize = "lucid.optimization.run:main"
+lucid-train-siren = "lucid.siren.train:main"
 
 [tool.setuptools.packages.find]
 include = ["lucid*"]
