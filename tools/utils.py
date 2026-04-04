@@ -329,19 +329,16 @@ def save_single_event(event_data, particle_params, sensor_params, event_number=0
     ----------
     event_data : tuple
         (charges, average_times) arrays for the event
-    particle_params : tuple
-        if calibration_mode is True:
-            (source_position, source_intensity)
-        if calibration_mode is False:
-            (track_energy, track_origin, track_direction)
-    sensor_params : tuple
-        (scatter_length, reflection_rate, absorption_length, sim_temperature)
+    particle_params : ParticleParams or IsotropicSource
+        if calibration_mode is True: IsotropicSource with position, intensity
+        if calibration_mode is False: ParticleParams with energy, position, theta, phi, t0
+    sensor_params : DetectorParams
+        DetectorParams NamedTuple with all detector calibration fields
     event_number : int, optional
         Event identifier number, defaults to 0
     filename : str, optional
         Custom path to output HDF5 file. If None, auto-generates name
         in 'events' folder as 'event_X.h5' or 'event_X_TIMESTAMP.h5'
-
 
     Returns
     -------
@@ -378,22 +375,24 @@ def save_single_event(event_data, particle_params, sensor_params, event_number=0
         # Save simulation parameters
         if calibration_mode:
             params_group = f.create_group('calibration_params')
-            params_group.create_dataset('source_position', data=np.array(particle_params[0]))
-            params_group.create_dataset('source_intensity', data=np.array(particle_params[1]))
+            params_group.create_dataset('source_position', data=np.array(particle_params.position))
+            params_group.create_dataset('source_intensity', data=np.array(particle_params.intensity))
 
         else:
             params_group = f.create_group('particle_params')
-            params_group.create_dataset('track_energy', data=np.array(particle_params[0]))
-            params_group.create_dataset('track_origin', data=np.array(particle_params[1]))
-            params_group.create_dataset('track_direction', data=np.array(particle_params[2]))
+            params_group.create_dataset('track_energy', data=np.array(particle_params.energy))
+            params_group.create_dataset('track_origin', data=np.array(particle_params.position))
+            params_group.create_dataset('track_direction', data=np.array(particle_params.direction))
 
-        params_group = f.create_group('sensor_params')
-        params_group.create_dataset('scatter_length', data=np.array(sensor_params[0]))
-        params_group.create_dataset('reflection_rate', data=np.array(sensor_params[1]))
-        params_group.create_dataset('absorption_length', data=np.array(sensor_params[2]))
-        params_group.create_dataset('sim_temperature', data=np.array(sensor_params[3]))
+        detector_group = f.create_group('sensor_params')
+        detector_group.create_dataset('scatter_length', data=np.array(sensor_params.scatter_length))
+        detector_group.create_dataset('wall_reflection_rate', data=np.array(sensor_params.wall_reflection_rate))
+        detector_group.create_dataset('sensor_reflection_rate', data=np.array(sensor_params.sensor_reflection_rate))
+        detector_group.create_dataset('absorption_length', data=np.array(sensor_params.absorption_length))
+        detector_group.create_dataset('qe', data=np.array(sensor_params.qe))
+        detector_group.create_dataset('qe_corrections', data=np.array(sensor_params.qe_corrections))
 
-        # # Save event data and number
+        # Save event data and number
         event_group = f.create_group('event')
         event_group.create_dataset('event_number', data=np.array(event_number))
         event_group.create_dataset('indices', data=np.array(indices))
@@ -420,53 +419,43 @@ def load_single_event(filename, num_sensors, sparse=True, calibration_mode=False
 
     Returns
     -------
-    particle_params : tuple
-        if calibration_mode is True:
-            (source_position, source_intensity)
-        if calibration_mode is False:
-            (track_energy, track_origin, track_direction)
-    sensor_params : tuple
-        (scatter_length, reflection_rate, absorption_length, sim_temperature)
-    event_number : int
-        Event identifier number
+    particle_params : ParticleParams or IsotropicSource
+        if calibration_mode is True: IsotropicSource
+        if calibration_mode is False: ParticleParams
+    sensor_params : DetectorParams
+        DetectorParams NamedTuple
     If sparse=True:
-        indices : jnp.ndarray
-            Detector indices with non-zero values
-        charges : jnp.ndarray
-            Charge values at these indices
-        times : jnp.ndarray
-            Time values at these indices
+        indices, charges, times
     If sparse=False:
-        charges : jnp.ndarray
-            Full array of charges for all sensors
-        times : jnp.ndarray
-            Full array of times for all sensors
+        charges, times (dense)
     """
+    from tools.detector_params import ParticleParams, DetectorParams, isotropic_source
+
     with h5py.File(filename, 'r') as f:
         if calibration_mode:
-            # Load calibration parameters
             params_group = f['calibration_params']
             source_position = jnp.array(params_group['source_position'][()])
             source_intensity = jnp.array(params_group['source_intensity'][()])
-
-            particle_params = (source_position, source_intensity)
+            particle_params = isotropic_source(position=source_position, intensity=source_intensity)
         else:
-            # Load particle parameters
             params_group = f['particle_params']
             track_energy = jnp.array(params_group['track_energy'][()])
             track_origin = jnp.array(params_group['track_origin'][()])
             track_direction = jnp.array(params_group['track_direction'][()])
-
-            particle_params = (track_energy, track_origin, track_direction)
+            particle_params = ParticleParams.from_cartesian(
+                energy=track_energy, position=track_origin,
+                direction=track_direction, t0=jnp.array(0.0))
 
         # Load detector parameters
         detector_group = f['sensor_params']
-        scatter_length = jnp.array(detector_group['scatter_length'][()])
-        reflection_rate = jnp.array(detector_group['reflection_rate'][()])
-        absorption_length = jnp.array(detector_group['absorption_length'][()])
-        sim_temperature = jnp.array(detector_group['sim_temperature'][()])
-
-        sensor_params = (scatter_length, reflection_rate, absorption_length, sim_temperature)
+        sensor_params = DetectorParams(
+            scatter_length=jnp.array(detector_group['scatter_length'][()]),
+            wall_reflection_rate=jnp.array(detector_group['wall_reflection_rate'][()]),
+            sensor_reflection_rate=jnp.array(detector_group['sensor_reflection_rate'][()]),
+            absorption_length=jnp.array(detector_group['absorption_length'][()]),
+            qe=jnp.array(detector_group['qe'][()]),
+            qe_corrections=jnp.array(detector_group['qe_corrections'][()]),
+        )
 
         # Load event data
         event_group = f['event']
@@ -491,32 +480,31 @@ import jax.numpy as jnp
 def generate_random_params(key, h=2, r=1):
     """
     Generate random parameters for particle simulation using angles for direction.
-    
+
     Parameters:
     key: JAX PRNG key
-    
+
     Returns:
-    tuple: (energy, position, direction_angles, intensity)
-        - energy: scalar energy value in MeV
-        - position: 3D position vector [x, y, z]
-        - direction_angles: tuple of (theta, phi) in radians
+    ParticleParams: with energy, position, theta, phi, t0
     """
+    from tools.detector_params import ParticleParams
+
     k1, k2, k3, k4 = jax.random.split(key, 4)
-    
+
     # Generate energy between 100 and 1000 MeV
     energy = 300. + 600. * jax.random.uniform(k1)
-    
+
     # Generate random position inside detector volume (approximated as cylinder)
     position = generate_random_point_inside_cylinder(k2, h, r)
-    
+
     # Generate random direction angles
     # theta: inclination angle (0 to pi)
     # phi: azimuthal angle (0 to 2*pi)
     theta = jnp.pi * jax.random.uniform(k3)
     phi = 2.0 * jnp.pi * jax.random.uniform(k4)
-    direction_angles = jnp.array([theta, phi])
-    
-    return energy, position, direction_angles
+
+    return ParticleParams(energy=energy, position=position,
+                          theta=theta, phi=phi, t0=jnp.array(0.0))
 
 @jax.jit
 def generate_random_point_inside_cylinder(key, h=2, r=1, offset = 0.1):
@@ -566,21 +554,19 @@ def generate_random_point_inside_cylinder(key, h=2, r=1, offset = 0.1):
 def print_particle_params(trk_params):
     """
     Print particle parameters in a readable format.
-    
+
     Parameters:
-    trk_params: tuple of (energy, position, direction_angles)
+    trk_params: ParticleParams with energy, position, theta, phi, t0
     """
-    energy, position, direction_angles = trk_params
-    theta, phi = direction_angles
-    
     # Convert angles to Cartesian for display
-    direction = spherical_to_cartesian(theta, phi)
-    
+    direction = spherical_to_cartesian(trk_params.theta, trk_params.phi)
+
     print("Particle Parameters:")
-    print(f"  Energy: {energy:.2f} MeV")
-    print(f"  Position: [{position[0]:.2f}, {position[1]:.2f}, {position[2]:.2f}] m")
-    print(f"  Direction angles: theta={theta:.2f} rad, phi={phi:.2f} rad")
+    print(f"  Energy: {trk_params.energy:.2f} MeV")
+    print(f"  Position: [{trk_params.position[0]:.2f}, {trk_params.position[1]:.2f}, {trk_params.position[2]:.2f}] m")
+    print(f"  Direction angles: theta={trk_params.theta:.2f} rad, phi={trk_params.phi:.2f} rad")
     print(f"  Direction vector: [{direction[0]:.2f}, {direction[1]:.2f}, {direction[2]:.2f}]")
+    print(f"  t0: {trk_params.t0:.4f}")
 
 def print_propagation_params(sensor_params):
     """
@@ -588,41 +574,21 @@ def print_propagation_params(sensor_params):
 
     Parameters
     ----------
-    sensor_params : dict
-        Dictionary containing detector parameters
+    sensor_params : DetectorParams
+        DetectorParams NamedTuple with named fields
 
     Returns
     -------
     None
         Prints formatted parameter information to stdout
-
-    Example
-    -------
-     sensor_params = (
-        jnp.array(10.),         # scatter_length
-        jnp.array(0.1),         # reflection_rate
-        jnp.array(10.),         # absorption_length
-        jnp.array(0.1)          # sim_temperature
-    )
-        print_propagation_params(sensor_params)
-    Propagation Parameters:
-    ───────────────────────
-    Scatter Length: 10.00 m
-    Reflection Rate: 0.10
-    Absorption Length: 10.00 m
-    Simulation Temperature for Gumbel-Softmax: 0.10
-    ───────────────────────
     """
-    # Unpack the parameter tuple
-    scatter_length, reflection_rate, absorption_length, sim_temperature = sensor_params
-
-    # Create formatted output with consistent decimal places
     print("Propagation Parameters:")
     print("─" * 20)
-    print(f"Scatter Length: {scatter_length:.2f} m")
-    print(f"Reflection Rate: {reflection_rate:.2f}")
-    print(f"Absorption Length: {absorption_length:.2f} m")
-    print(f"Simulation Temperature for Gumbel-Softmax: {sim_temperature:.4f}")
+    print(f"Scatter Length: {sensor_params.scatter_length:.2f} m")
+    print(f"Wall Reflection Rate: {sensor_params.wall_reflection_rate:.2f}")
+    print(f"Sensor Reflection Rate: {sensor_params.sensor_reflection_rate:.2f}")
+    print(f"Absorption Length: {sensor_params.absorption_length:.2f} m")
+    print(f"QE: {sensor_params.qe:.4f}")
     print("─" * 20)
 
 def superimpose_multiple_events(charges_list, times_list):
@@ -703,6 +669,67 @@ def get_random_root_entry_index(root_file_path):
     total_entries = tree.num_entries
     
     return np.random.randint(0, total_entries - 1)
+
+def read_photon_data_from_root(root_file_path, entry_index, particle_type='muon'):
+    """
+    Read photon data from a ROOT file for a specific entry, using the component vectors.
+
+    Parameters
+    ----------
+    root_file_path : str
+        Path to the ROOT file
+    entry_index : int
+        Entry index to read from the file
+    particle_type : str, optional
+        Type of particle ('muon' or 'pion'), by default 'muon'
+
+    Returns
+    -------
+    dict
+        Dictionary containing photon_origins, photon_directions, and energy
+    """
+    import uproot
+    import jax.numpy as jnp
+
+    # Open the ROOT file
+    root_file = uproot.open(root_file_path)
+
+    # Access the tree
+    tree = root_file['v_photon']
+
+    # Read position components
+    photon_posx = tree['photon_posx'].array(entry_start=entry_index, entry_stop=entry_index+1)[0]
+    photon_posy = tree['photon_posy'].array(entry_start=entry_index, entry_stop=entry_index+1)[0]
+    photon_posz = tree['photon_posz'].array(entry_start=entry_index, entry_stop=entry_index+1)[0]
+
+    # Read direction components
+    photon_dirx = tree['photon_dirx'].array(entry_start=entry_index, entry_stop=entry_index+1)[0]
+    photon_diry = tree['photon_diry'].array(entry_start=entry_index, entry_stop=entry_index+1)[0]
+    photon_dirz = tree['photon_dirz'].array(entry_start=entry_index, entry_stop=entry_index+1)[0]
+
+    # Read momentum
+    initmom = float(tree['initmom'].array(entry_start=entry_index, entry_stop=entry_index+1)[0])
+
+    # Stack the components to form position and direction arrays
+    photon_positions = np.column_stack((photon_posx, photon_posy, photon_posz))
+    photon_directions = np.column_stack((photon_dirx, photon_diry, photon_dirz))
+
+    # Convert initmom (momentum) to kinetic energy based on particle type
+    if particle_type.lower() == 'muon':
+        mass = 105.7  # MeV/c^2 (muon rest mass)
+    elif particle_type.lower() == 'pion':
+        mass = 139.6  # MeV/c^2 (charged pion rest mass)
+    else:
+        raise ValueError(f"Unsupported particle type: {particle_type}")
+
+    # E_kinetic = sqrt(p^2 + m^2) - m
+    energy = np.sqrt(initmom**2 + mass**2) - mass
+
+    return {
+        'photon_origins': jnp.array(photon_positions),     # Combined position vectors
+        'photon_directions': jnp.array(photon_directions), # Combined direction vectors
+        'energy': float(energy)
+    }
 
 def get_pdg_code(particle_type):
     """
@@ -1862,15 +1889,97 @@ def generate_random_event_params(key, detector_bounds, fraction=0.7):
                                                      detector_bounds['z']/2]) * fraction)
     
     # Random direction
+    from tools.detector_params import ParticleParams
     key, _ = jax.random.split(key)
     phi = jax.random.uniform(key, shape=(), minval=0, maxval=2*jnp.pi)
     key, _ = jax.random.split(key)
     cos_theta = jax.random.uniform(key, shape=(), minval=-1, maxval=1)
     sin_theta = jnp.sqrt(1 - cos_theta**2)
     direction = jnp.array([sin_theta * jnp.cos(phi), sin_theta * jnp.sin(phi), cos_theta])
-    
+
     # Random energy
     key, _ = jax.random.split(key)
     energy = jax.random.uniform(key, shape=(), minval=500.0, maxval=1500.0)
-    
-    return position, direction, energy
+
+    return ParticleParams.from_cartesian(energy=energy, position=position,
+                                         direction=direction, t0=jnp.array(0.0))
+
+
+def smear_times(times, time_resolution=0.4, key=None):
+    """
+    Gaussianly smear input times.
+    The default time resoluition is that of SK.
+    Reference: https://arxiv.org/pdf/1307.0162
+
+    Args:
+        times: array of input times (e.g., per detector).
+        time_resolution: standard deviation (in ns) of Gaussian smearing.
+        key: JAX random key for reproducibility.
+    Returns:
+        smeared_times: Gaussian-smeared times.
+    """
+    noise = jax.random.normal(key, shape=times.shape) * time_resolution
+    smeared_times = times + noise
+    smeared_times = jnp.where((jnp.isfinite(smeared_times)), smeared_times, 1e6)
+
+    return smeared_times
+
+
+def smear_charges_SK_like(counts, key=None):
+    """
+    Gaussianly smear input charge counts according to Super-Kamiokande-like resolution.
+
+    Reference: https://arxiv.org/pdf/1307.0162 (Table 2)
+
+    Args:
+        counts: array of input charge counts (e.g., number of hits per PMT).
+        key: JAX random key for reproducibility.
+
+    Returns:
+        smeared_counts: Gaussian-smeared charge counts.
+    """
+    if key is None:
+        raise ValueError("key must be provided for reproducibility.")
+
+    #Define sigma according to the count range
+    sigma = jnp.where(
+        counts < 20,
+        counts * 0.012,
+        jnp.where(counts < 130, counts * 0.0075, counts * 0.005)
+    )
+
+    # Apply Gaussian smearing
+    noise = jax.random.normal(key, shape=counts.shape) * sigma
+    smeared_counts = counts + noise
+
+    # Handle non-finite results (e.g., NaN or inf)
+    smeared_counts = jnp.where(jnp.isfinite(smeared_counts), smeared_counts, 0.0)
+
+    # Avoid negative or unphysical charge values
+    smeared_counts = jnp.clip(smeared_counts, 0.0, None)
+
+    return smeared_counts
+
+
+def time_digitizer(times, time_resolution=0.4):
+    """
+    Digitize input times to bin centers.
+
+    Args:
+        times: Input array of times to digitize
+        time_resolution: Time resolution for binning (default=0.4 ns, Super-Kamiokande PMT resolution)
+
+    Returns:
+        Array with same shape as input where each time is replaced
+        by its corresponding bin center
+    """
+    time_window = 500  # nanoseconds
+    nbins = int(time_window / time_resolution)
+    bins = jnp.linspace(0, time_window, int(nbins + 1))
+    bin_centers = bins[:-1] + (bins[1] - bins[0]) / 2
+
+    # Find which bin each time falls into
+    bin_indices = jnp.digitize(times, bins) - 1
+    digitized_times = jnp.where((jnp.isfinite(times)), bin_centers[bin_indices], 1e6)
+
+    return digitized_times

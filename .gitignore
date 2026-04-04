@@ -27,9 +27,10 @@ sftp-config.json
 !data/**/
 !data/**/photonsim_params.json
 
-# Ignore s3df_jobs folder except .py files
+# Ignore s3df_jobs folder except .py and .md files
 s3df_jobs/*
 !s3df_jobs/*.py
+!s3df_jobs/*.md
 !s3df_jobs/*/
 s3df_jobs/*/*
 !s3df_jobs/*/*.py

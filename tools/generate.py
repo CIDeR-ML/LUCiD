@@ -8,7 +8,7 @@ import jax.numpy as jnp
 import time
 from tqdm import tqdm
 from tools.siren.core import *
-from tools.utils import save_single_event_with_extended_info, save_single_event_with_particle_info, get_random_root_entry_index, superimpose_multiple_events, merge_event_files
+from tools.utils import save_single_event_with_extended_info, save_single_event_with_particle_info, get_random_root_entry_index, superimpose_multiple_events, merge_event_files, read_photon_data_from_root
 from tools.production.voxelize import VoxelGridConfig, voxelize_from_photon_indices, pack_voxel_data_for_hdf5
 from jax import jit
 
@@ -336,34 +336,173 @@ def photonsim_differentiable_get_rays(track_origin, track_direction, energy, Nph
 @partial(jax.jit, static_argnums=(2,))
 def get_isotropic_rays(source_position, source_intensity, Nphot, key):
     """
-    Generate photons isotropically from a point source using spherical coordinates.
+    Fibonacci spiral using scan-based recurrence to avoid float32 precision issues.
     """
-    # Split the random key
-    key, key_phi, key_theta = random.split(key, 3)
-    
-    # Generate spherically isotropic directions
-    phi = random.uniform(key_phi, (Nphot,)) * 2 * jnp.pi
-    cos_theta = random.uniform(key_theta, (Nphot,)) * 2 - 1
-    sin_theta = jnp.sqrt(1 - cos_theta**2)
-    
-    # Convert to Cartesian coordinates
-    x = sin_theta * jnp.cos(phi)
-    y = sin_theta * jnp.sin(phi)
-    z = cos_theta
-    
-    # Stack into direction vectors
-    ray_vectors_unnormalized = jnp.stack([x, y, z], axis=1)
-    
-    # Normalize using vmap (even though they should already be unit vectors)
-    ray_vectors = jax.vmap(normalize)(ray_vectors_unnormalized)
-    
-    # All ray origins are at the source position
+    # Block configuration
+    block_size = 1000
+    n_full_blocks = Nphot // block_size
+    remainder = Nphot % block_size
+
+    golden_ratio_inverse = jnp.float32(0.6180339887498949)
+    block_increment = (block_size * golden_ratio_inverse) % 1.0
+
+    # Compute block offsets using scan
+    def scan_fn(carry, x):
+        next_offset = (carry + block_increment) % 1.0
+        return next_offset, carry
+
+    _, block_offsets = jax.lax.scan(scan_fn, 0.0, None, length=n_full_blocks + (1 if remainder else 0))
+
+    # Generate all points
+    all_indices = jnp.arange(Nphot, dtype=jnp.float32)
+    block_idx = all_indices // block_size
+    local_idx = all_indices % block_size
+
+    # Compute theta using block offsets
+    local_t = (local_idx * golden_ratio_inverse) % 1.0
+    block_offset = block_offsets[block_idx.astype(jnp.int32)]
+    t = (local_t + block_offset) % 1.0
+    theta = 2.0 * jnp.pi * t
+
+    # Compute z and r
+    z = 1.0 - 2.0 * (all_indices + 0.5) / Nphot
+    r = jnp.sqrt(jnp.maximum(0.0, 1.0 - z * z))
+
+    # Convert to Cartesian
+    x = jnp.cos(theta) * r
+    y = jnp.sin(theta) * r
+
+    ray_vectors = jnp.stack([x, y, z], axis=1)
     ray_origins = jnp.tile(source_position, (Nphot, 1))
-    
-    # Uniform weights
     photon_weights = jnp.ones(Nphot) * (source_intensity / Nphot)
-    
+
     return ray_vectors, ray_origins, photon_weights
+
+@partial(jax.jit, static_argnums=(2,))
+def get_isotropic_rays_random(source_position, source_intensity, Nphot, key):
+    """
+    Generate photons isotropically from a point source using random sampling.
+    Uses 3 normal samples + normalization for uniform sphere distribution.
+    """
+    v = random.normal(key, (Nphot, 3))
+    ray_vectors = v / jnp.linalg.norm(v, axis=1, keepdims=True)
+    ray_origins = jnp.tile(source_position, (Nphot, 1))
+    photon_weights = jnp.ones(Nphot) * (source_intensity / Nphot)
+
+    return ray_vectors, ray_origins, photon_weights
+
+
+@partial(jax.jit, static_argnums=(3,))
+def generate_laser_photons(fiber_position, fiber_direction, source_intensity, n_photons, key, n_water=1.33, fiber_NA=0.22):
+    """
+    Generate laser photons from a fiber tip with realistic angular distribution.
+    Photons are distributed WITHIN the cone, not just on its surface.
+
+    Parameters
+    ----------
+    fiber_position : jnp.ndarray
+        3D position of fiber tip (where photons originate)
+    fiber_direction : jnp.ndarray
+        3D unit vector of fiber pointing direction
+    source_intensity : float
+        Total intensity of the laser source
+    n_photons : int
+        Number of photons to generate
+    key : jax.random.PRNGKey
+        Random key for JAX
+    n_water : float, optional
+        Refractive index of water, default 1.33
+    fiber_NA : float
+        Numerical aperture of the fiber, default 0.22
+
+    Returns
+    -------
+    ray_vectors : jnp.ndarray
+        Array of shape (n_photons, 3) containing photon direction vectors
+    ray_origins : jnp.ndarray
+        Array of shape (n_photons, 3) containing photon origins (all at fiber tip)
+    photon_weights : jnp.ndarray
+        Array of shape (n_photons,) containing photon weights (uniform)
+    """
+    # Normalize fiber direction
+    fiber_direction = normalize(fiber_direction)
+
+    # Calculate maximum emission angle in water from numerical aperture
+    theta_max = jnp.arcsin(fiber_NA / n_water)
+
+    # Split keys for different random samples
+    key1, key2 = jax.random.split(key)
+
+    # Sample angles uniformly in solid angle (not uniform in theta!)
+    # This gives the correct sin(theta) weighting for angles WITHIN the cone
+    u = jax.random.uniform(key1, (n_photons,))
+    theta = jnp.arcsin(jnp.sqrt(u) * jnp.sin(theta_max))
+
+    # Sample azimuthal angles uniformly around fiber axis
+    phi = jax.random.uniform(key2, (n_photons,)) * 2 * jnp.pi
+
+    # Generate directions in local fiber coordinate system
+    sin_theta = jnp.sin(theta)
+    cos_theta = jnp.cos(theta)
+
+    local_x = sin_theta * jnp.cos(phi)
+    local_y = sin_theta * jnp.sin(phi)
+    local_z = cos_theta  # Along fiber axis
+
+    # Build orthonormal basis with fiber_direction as the z-axis
+    basis = generate_orthonormal_basis(fiber_direction)
+
+    # Stack local directions
+    local_directions = jnp.stack([local_x, local_y, local_z], axis=1)
+
+    # Transform to global coordinates
+    ray_vectors = jnp.einsum('ij,kj->ki', basis, local_directions)
+
+    # All photons originate from the fiber tip position
+    ray_origins = jnp.tile(fiber_position[None, :], (n_photons, 1))
+
+    # Uniform weights
+    photon_weights = source_intensity * jnp.ones(n_photons) / n_photons
+
+    return ray_vectors, ray_origins, photon_weights
+
+
+def setup_calibration_generator(source_type='isotropic'):
+    """
+    Factory function that returns a configured calibration photon generator.
+
+    Parameters
+    ----------
+    source_type : str
+        Type of calibration source: 'isotropic', 'isotropic_random', or 'laser'
+
+    Returns
+    -------
+    callable
+        Generator function with signature:
+        (source_origin, source_intensity, Nphot, key) -> (directions, origins, weights)
+    """
+
+    if source_type == 'isotropic':
+        def generator(source_origin, source_intensity, Nphot, key):
+            return get_isotropic_rays(source_origin, source_intensity, Nphot, key)
+        return generator
+
+    elif source_type == 'isotropic_random':
+        def generator(source_origin, source_intensity, Nphot, key):
+            return get_isotropic_rays_random(source_origin, source_intensity, Nphot, key)
+        return generator
+
+    elif source_type == 'laser':
+        def generator(source_origin, source_intensity, Nphot, key):
+            direction = jnp.array([0., 0., -1.])
+            return generate_laser_photons(
+                source_origin, direction, source_intensity, Nphot, key, fiber_NA=0.22
+            )
+        return generator
+
+    else:
+        raise ValueError(f"Unknown source_type: {source_type}. Available: 'isotropic', 'isotropic_random', 'laser'")
 
 
 def generate_random_direction(key):
@@ -446,9 +585,279 @@ def predict_t0_wrapper(distance, energy, params):
         params['delta_parameterization']['offset']
     )
 
-def generate_multi_folder_events(event_simulator, root_file_path, folder_names, events_per_folder, 
+def generate_events_from_root(event_simulator, root_file_path, output_dir='events', n_events=None,
+                            n_rings=1, pion_root_file_path=None,
+                            sensor_params=None, max_sensors_per_cell=4, batch_size=100):
+    """
+    Generate and save events from a ROOT file, with support for N rings of particles.
+    Ring 1 (N=1) is always a muon, and additional rings (N>1) are pions.
+    Events are saved with sequential numbering: event_0.h5, event_1.h5, etc.
+
+    Parameters
+    ----------
+    event_simulator : function
+        The event simulation function to use
+    root_file_path : str
+        Path to the ROOT file for muons
+    output_dir : str, optional
+        Directory to save output files, by default 'events'
+    n_events : int, optional
+        Number of events to process (None for all), by default None
+    n_rings : int, optional
+        Number of rings (particles) to superimpose, by default 1
+        First ring is always a muon, additional rings are pions
+    pion_root_file_path : str, optional
+        Path to ROOT file for pions, required if n_rings > 1, by default None
+    sensor_params : tuple, optional
+        Sensor parameters tuple passed to event_simulator, by default None
+    max_sensors_per_cell : int, optional
+        Maximum sensors per cell, by default 4
+    batch_size : int, optional
+        Number of events to accumulate before saving in parallel, by default 100
+
+    Returns
+    -------
+    list
+        List of saved file paths
+    """
+    import uproot
+    import concurrent.futures
+
+    # Validate arguments
+    if n_rings < 1:
+        raise ValueError("n_rings must be at least 1")
+
+    from tools.detector_params import ParticleParams
+    # If n_rings > 1, we need a pion ROOT file
+    if n_rings > 1 and pion_root_file_path is None:
+        raise ValueError("When n_rings > 1, pion_root_file_path must be provided")
+
+    # Create output directory if it doesn't exist
+    os.makedirs(output_dir, exist_ok=True)
+
+    # Open ROOT file to get number of entries
+    root_file = uproot.open(root_file_path)
+    tree = root_file['v_photon']
+    total_entries = tree.num_entries
+
+    if n_events is None:
+        n_events = total_entries
+    else:
+        n_events = min(n_events, total_entries)
+
+    # Prepare descriptor for printing
+    ring_description = f"{n_rings} ring{'s' if n_rings > 1 else ''}"
+    particle_description = "muon" if n_rings == 1 else f"muon + {n_rings-1} pion{'s' if n_rings > 1 else ''}"
+
+    print(f"Processing {n_events} events with {ring_description} ({particle_description})...")
+    print(f"Using batch size of {batch_size} events for multithreaded I/O")
+    print(f"Saving events to directory: {output_dir}")
+
+    saved_files = []
+
+    # Create batches
+    num_batches = (n_events + batch_size - 1) // batch_size
+
+    # Process each batch
+    for batch_idx in range(num_batches):
+        start_idx = batch_idx * batch_size
+        end_idx = min(start_idx + batch_size, n_events)
+        batch_size_actual = end_idx - start_idx
+
+        print(f"Processing batch {batch_idx+1}/{num_batches} (events {start_idx} to {end_idx-1})")
+
+        # Lists to accumulate batch data
+        batch_data = []
+        batch_params = []
+        batch_filenames = []
+        batch_indices = []
+
+        # Process each entry in the current batch
+        for i in tqdm(range(start_idx, end_idx), desc=f"Generating batch {batch_idx+1}", unit="event"):
+            # Initialize master random key for this event
+            master_key = jax.random.PRNGKey(i * 1000)
+
+            # Generate a random vertex for all events in this iteration
+            vertex_key, master_key = jax.random.split(master_key)
+            shared_vertex = generate_random_vertex(vertex_key)
+
+            # Lists to store charges and times for all rings
+            all_charges = []
+            all_times = []
+            all_energies = []
+            all_directions = []
+            all_indices = []
+
+            # Process the first ring - always a muon
+            muon_data = read_photon_data_from_root(root_file_path, i, 'muon')
+
+            # Set up parameters
+            muon_energy = muon_data['energy']
+
+            # Generate random direction for muon
+            dir_key, master_key = jax.random.split(master_key)
+            muon_direction = generate_random_direction(dir_key)
+
+            # Create parameters for muon
+            track_params = ParticleParams.from_cartesian(
+                energy=muon_energy,
+                position=shared_vertex,
+                direction=muon_direction,
+                t0=0.0,
+            )
+
+            # Get a key for the muon simulation
+            sim_key, master_key = jax.random.split(master_key)
+
+            # Process muon data
+            photon_origins = muon_data['photon_origins']
+            photon_directions = muon_data['photon_directions']
+            N = len(photon_origins)
+
+            # the number 1_000_000 is hard coded also in _simulation_core
+            padding_size = max(0, 1_000_000-N)
+
+            # Pad the origins array (2D array with shape [N,3])
+            muon_data['photon_origins'] = jnp.pad(photon_origins, ((0, padding_size), (0, 0)),
+                                                mode='constant', constant_values=0)
+
+            # Pad the directions array with a default unit vector [0,0,1]
+            default_direction = jnp.array([0.0, 0.0, 1.0])
+            padding_directions = jnp.tile(default_direction, (padding_size, 1))
+            if padding_size > 0:
+                muon_data['photon_directions'] = jnp.concatenate([photon_directions, padding_directions], axis=0)
+            else:
+                muon_data['photon_directions'] = photon_directions
+
+            muon_data['N'] = N
+
+            # Run simulation for muon
+            muon_charges, muon_times = event_simulator(track_params, sensor_params, sim_key, muon_data)
+
+            # Store muon data
+            all_charges.append(muon_charges)
+            all_times.append(muon_times)
+            all_energies.append(muon_energy)
+            all_directions.append(muon_direction)
+            all_indices.append(i)
+
+            # Process additional rings (pions) if n_rings > 1
+            for ring_idx in range(1, n_rings):
+                # Get a random entry index from the pion file
+                random_idx = get_random_root_entry_index(pion_root_file_path)
+
+                # Read photon data for pion
+                pion_data = read_photon_data_from_root(pion_root_file_path, random_idx, 'pion')
+
+                photon_origins = pion_data['photon_origins']
+                photon_directions = pion_data['photon_directions']
+                N = len(photon_origins)
+
+                padding_size = max(0, 1_000_000-N)
+
+                pion_data['photon_origins'] = jnp.pad(photon_origins, ((0, padding_size), (0, 0)),
+                                                     mode='constant', constant_values=0)
+
+                default_direction = jnp.array([0.0, 0.0, 1.0])
+                padding_directions = jnp.tile(default_direction, (padding_size, 1))
+                if padding_size > 0:
+                    pion_data['photon_directions'] = jnp.concatenate([photon_directions, padding_directions], axis=0)
+                else:
+                    pion_data['photon_directions'] = photon_directions
+
+                pion_data['N'] = N
+
+                # Generate a new random direction for the pion
+                pion_dir_key, master_key = jax.random.split(master_key)
+                pion_direction = generate_random_direction(pion_dir_key)
+
+                # Create parameters for pion
+                pion_track_params = ParticleParams.from_cartesian(
+                    energy=pion_data['energy'],
+                    position=shared_vertex,
+                    direction=pion_direction,
+                    t0=0.0,
+                )
+
+                # Get a new key for the pion simulation
+                pion_sim_key, master_key = jax.random.split(master_key)
+
+                # Run simulation for pion
+                pion_charges, pion_times = event_simulator(pion_track_params, sensor_params, pion_sim_key, pion_data)
+
+                # Store pion data
+                all_charges.append(pion_charges)
+                all_times.append(pion_times)
+                all_energies.append(pion_data['energy'])
+                all_directions.append(pion_direction)
+                all_indices.append(random_idx)
+
+            # Combine all rings
+            if n_rings > 1:
+                combined_charges, combined_times = superimpose_multiple_events(all_charges, all_times)
+            else:
+                combined_charges, combined_times = all_charges[0], all_times[0]
+
+            # Create filename with sequential numbering
+            event_number = i - start_idx + batch_idx * batch_size
+            filename = os.path.join(output_dir, f'event_{event_number}.h5')
+
+            # Store original indices in extended_info
+            particle_indices = [all_indices[ring_idx] for ring_idx in range(n_rings)]
+
+            save_params = (all_energies[0], shared_vertex, all_directions[0])
+
+            extended_info = {
+                'n_rings': n_rings,
+                'particle_types': ['muon'] + ['pion'] * (n_rings - 1),
+                'energies': all_energies,
+                'directions': [dir.tolist() for dir in all_directions],
+                'indices': all_indices,
+                'vertex': shared_vertex.tolist(),
+                'original_indices': particle_indices
+            }
+
+            batch_data.append((all_charges, all_times, extended_info))
+            batch_params.append(save_params)
+            batch_filenames.append(filename)
+            batch_indices.append(event_number)
+
+        # Save all events in the batch using multithreading
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            futures = [
+                executor.submit(
+                    save_single_event_with_extended_info,
+                    data[0], data[1],
+                    params,
+                    extended_info=data[2],
+                    event_number=idx,
+                    filename=filename
+                )
+                for data, params, filename, idx in zip(
+                    batch_data, batch_params, batch_filenames, batch_indices
+                )
+            ]
+
+            for future in tqdm(
+                concurrent.futures.as_completed(futures),
+                desc=f"Saving batch {batch_idx+1}",
+                total=len(futures),
+                unit="file"
+            ):
+                try:
+                    saved_file = future.result()
+                    saved_files.append(saved_file)
+                except Exception as e:
+                    print(f"Error saving file: {e}")
+
+    print(f"Successfully processed {len(saved_files)} events.")
+    print(f"All events saved to {output_dir} with sequential naming (event_0.h5, event_1.h5, ...)")
+    return saved_files
+
+
+def generate_multi_folder_events(event_simulator, root_file_path, folder_names, events_per_folder,
                                n_rings_list=None, pion_root_file_path=None,
-                               max_sensors_per_cell=4, batch_size=100):
+                               sensor_params=None, max_sensors_per_cell=4, batch_size=100):
     """
     Generate events across multiple folders, each with sequentially numbered events.
     
@@ -465,49 +874,51 @@ def generate_multi_folder_events(event_simulator, root_file_path, folder_names, 
         Number of rings for each folder, by default None (1 ring for all folders)
     pion_root_file_path : str, optional
         Path to ROOT file for pions, required if n_rings > 1 in any folder, by default None
+    sensor_params : tuple, optional
+        Sensor parameters tuple passed to event_simulator, by default None
     max_sensors_per_cell : int, optional
         Maximum sensors per cell, by default 4
     batch_size : int, optional
         Number of events to accumulate before saving in parallel, by default 100
-        
+
     Returns
     -------
     dict
         Dictionary mapping folder names to lists of saved file paths
     """
     import os
-    
+
     # Validate and normalize inputs
     if isinstance(events_per_folder, int):
         events_per_folder = [events_per_folder] * len(folder_names)
     elif len(events_per_folder) != len(folder_names):
         raise ValueError("If events_per_folder is a list, it must match the length of folder_names")
-    
+
     if n_rings_list is None:
         n_rings_list = [1] * len(folder_names)
     elif len(n_rings_list) != len(folder_names):
         raise ValueError("If n_rings_list is provided, it must match the length of folder_names")
-    
+
     # Check if pion file is needed but not provided
     if any(n_rings > 1 for n_rings in n_rings_list) and pion_root_file_path is None:
         raise ValueError("pion_root_file_path is required when n_rings > 1 in any folder")
-        
+
     # Create base directory if it doesn't exist
     base_dir = os.path.dirname(folder_names[0])
     if base_dir and not os.path.exists(base_dir):
         os.makedirs(base_dir, exist_ok=True)
-    
+
     # Generate events for each folder
     results = {}
     for folder_idx, folder_name in enumerate(folder_names):
         n_events = events_per_folder[folder_idx]
         n_rings = n_rings_list[folder_idx]
-        
+
         print(f"\n{'-'*80}")
         print(f"Processing folder {folder_idx+1}/{len(folder_names)}: {folder_name}")
         print(f"Generating {n_events} events with {n_rings} ring(s)")
         print(f"{'-'*80}\n")
-        
+
         saved_files = generate_events_from_root(
             event_simulator=event_simulator,
             root_file_path=root_file_path,
@@ -515,6 +926,7 @@ def generate_multi_folder_events(event_simulator, root_file_path, folder_names, 
             n_events=n_events,
             n_rings=n_rings,
             pion_root_file_path=pion_root_file_path,
+            sensor_params=sensor_params,
             max_sensors_per_cell=max_sensors_per_cell,
             batch_size=batch_size
         )
@@ -858,6 +1270,7 @@ def generate_events_from_photonsim(event_simulator, particles_dict, sensor_param
     list or str
         List of saved file paths, or path to merged file if merge_output=True
     """
+    from tools.detector_params import ParticleParams
     import uproot
     import concurrent.futures
     import time
@@ -950,11 +1363,12 @@ def generate_events_from_photonsim(event_simulator, particles_dict, sensor_param
                 dir_key, master_key = jax.random.split(master_key)
                 direction = generate_random_direction(dir_key)
 
-                # Create parameters tuple
-                track_params = (
-                    particle_energy,
-                    vertex,
-                    direction
+                # Create parameters
+                track_params = ParticleParams.from_cartesian(
+                    energy=particle_energy,
+                    position=vertex,
+                    direction=direction,
+                    t0=0.0,
                 )
 
                 # Get a key for the simulation
@@ -1113,6 +1527,7 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path, se
     import uproot
     import concurrent.futures
     import time
+    from tools.detector_params import ParticleParams
     import numpy as np
     import json
     from tools.simulation import smear_charges_SK_like, smear_times
@@ -1353,7 +1768,12 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path, se
             def simulate_single_particle(track_energy, track_pos, track_dir, photon_origins,
                                          photon_dirs, photon_times, N, sim_key):
                 """Process a single particle - will be vmapped over all particles."""
-                track_params = (track_energy, track_pos, track_dir)
+                track_params = ParticleParams.from_cartesian(
+                    energy=track_energy,
+                    position=track_pos,
+                    direction=track_dir,
+                    t0=0.0,
+                )
 
                 photonsim_data = {
                     'photon_origins': photon_origins,

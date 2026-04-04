@@ -51,10 +51,23 @@ from tools.optimization.utils.functions import hierarchical_direction_search_con
 from tools.optimization.utils.functions import cartesian_to_spherical, spherical_to_cartesian
 from tools.optimization.utils.functions import performance_summary
 
-from tools.optimization.optimize import load_optimization_config, print_optimization_parameters, get_detector_params_from_config
+from tools.optimization.optimize import load_optimization_config, print_optimization_parameters
 from tools.optimization.optimize import get_detector_bounds, hierarchical_position_grid_search
+from tools.detector_params import ParticleParams
 
-from tools.optimization.losses import energy_loss, counts_loss, origin_time_loss, cone_time_loss, smooth_pinball
+from tools.optimization.losses import (
+    energy_loss,
+    counts_loss,
+    origin_time_loss,
+    cone_time_loss,
+    smooth_pinball,
+    first_arrival_nll,
+    poisson_nll,
+    get_optimal_tau_vtx,
+    TAU_VTX_PARAM_A,
+    TAU_VTX_PARAM_B,
+    TAU_VTX_PARAM_C,
+)
 
 
 def parse_arguments():
@@ -119,69 +132,85 @@ def load_config(config_path):
     return config
 
 def create_combined_loss_function(vertex_weight_scale, counts_weight_scale,
-                                   prediction_simulator, detector_params, c_medium,
-                                   nrays=10_000):
-    """Create combined loss function with specified parameters and return its gradient function.
+                                   prediction_simulator, c_medium,
+                                   nrays=10_000, num_detectors=10764,
+                                   detector_positions=None):
+    """Create combined loss function with likelihood-based losses and dynamic tau_vtx.
 
-    The cone_time_loss tau parameter is computed automatically from the energy
-    (params[6]) and nrays using the fitted parametrisation stored in
-    data/water/muon/tau_parametrization.pkl.
+    Uses:
+    - poisson_nll for charge loss
+    - first_arrival_nll for time loss
+    - origin_time_loss with dynamic tau_vtx for vertex loss
+    - 3-term combined loss formula matching tau scan scripts
+
+    tau_vtx is computed from nrays and current energy using the learned parametrization.
     """
-
-    # Load tau parametrization coefficients (captured as constants by JIT)
-    param_path = os.path.join(
-        Path(__file__).parent.parent.parent, 'data', 'water', 'muon',
-        'tau_parametrization.pkl')
-    with open(param_path, 'rb') as f:
-        gf = pickle.load(f)['global_fit']
-    a_energy = jnp.array(gf['a_energy'])
-    b_log10nrays = jnp.array(gf['b_log10nrays'])
-    c_intercept = jnp.array(gf['c_intercept'])
-    log10_nrays = jnp.array(np.log10(nrays))
-
-    def cone_time_loss_parametric(observed_counts, simulated_time,
-                                  observed_times, t0, tau):
-        b = observed_times - simulated_time
-        r = b - t0
-        w = jnp.where(observed_counts > 0., observed_counts, 0.)
-        wsum = jnp.sum(w) + 1e-8
-        return jnp.sum(w * smooth_pinball(r, tau=tau, sigma=0.05)) / wsum
+    nrays_float = float(nrays)
+    TAU_TIME = 0.15  # Fixed tau for first_arrival_nll (time likelihood)
 
     @jit
-    def combined_product_loss(params, hit_detector_positions, observed_times, observed_counts,
+    def combined_product_loss(track, hit_detector_positions, observed_times, observed_counts,
                             true_data, key):
         """
-        Combined loss function: product of vertex loss, counts loss, and time loss.
-        tau for cone_time_loss is computed from params[6] (energy) and nrays.
+        Combined loss function with likelihood-based losses.
 
         Args:
-            params: [x, y, z, t0, theta, phi, energy]
+            track: ParticleParams with energy, position, theta, phi, t0
 
         Returns:
-            combined_loss, (vertex_loss_val, counts_loss_val, time_loss_val)
+            combined_loss, (vertex_loss_val, charge_loss_val, time_loss_val)
         """
-        position = params[:3]
-        t0 = params[3]
-        theta = params[4]
-        phi = params[5]
-        energy = params[6]
-        track_params = (energy, position, jnp.array([theta, phi]))
-        simulated_data = prediction_simulator(track_params, detector_params, key)
-        simulated_counts = simulated_data[0]
-        simulated_time = simulated_data[1]
+        position = track.position
+        t0 = track.t0
+        energy = track.energy
 
-        vertex_loss_val = origin_time_loss(position, hit_detector_positions, observed_times,
-                                        observed_counts, t0)
-        counts_loss_val = counts_loss(observed_counts, simulated_counts)
+        # Create track with t0=0 for simulation (time shift applied to observations)
+        track_sim = ParticleParams(
+            energy=energy, position=position,
+            theta=track.theta, phi=track.phi, t0=jnp.array(0.0)
+        )
 
-        # # Energy-dependent cone tau (from tau optimization study v8)
-        # # tau = A * E + B, fitted to: E=400->0.06, E=1000->0.08, E=1600->0.10
-        # tau = 0.12 # 3.333e-5 * jax.lax.stop_gradient(energy) + 0.0467
-        time_loss_val = cone_time_loss(
-            observed_counts, simulated_time, observed_times, t0, tau=0.12)
+        # Simulator returns (log_w, flat_times, flat_indices, total_charge)
+        log_w, flat_times, flat_indices, total_charge = prediction_simulator(track_sim, key)
 
-        combined_loss = jnp.sqrt((vertex_loss_val + 1e-6) * (counts_loss_val + 1e-6) * (time_loss_val + 1e-6)) + counts_loss_val
-        return combined_loss, (vertex_loss_val, counts_loss_val, time_loss_val)
+        # Charge loss: Poisson NLL
+        charge_loss_val = poisson_nll(observed_counts, total_charge)
+
+        # Time loss: First-arrival NLL
+        # Shift observed times by t0 (time treatment matching tau scans)
+        t_obs_shifted = observed_times - t0
+        time_nll = first_arrival_nll(
+            log_w, flat_times, flat_indices,
+            t_obs_shifted, TAU_TIME, num_detectors
+        )
+        # Mask for hit sensors and average
+        hit_mask = observed_counts > 0
+        n_hit = jnp.sum(hit_mask) + 1e-8
+        time_loss_val = jnp.sum(jnp.where(hit_mask, time_nll, 0.0)) / n_hit
+
+        # Vertex loss: origin_time_loss with DYNAMIC tau_vtx
+        # tau_vtx computed from current energy with stop_gradient
+        tau_vtx = jax.lax.stop_gradient(
+            TAU_VTX_PARAM_A * nrays_float + TAU_VTX_PARAM_B * energy + TAU_VTX_PARAM_C
+        )
+        tau_vtx = jnp.clip(tau_vtx, 0.05, 0.95)
+
+        vertex_loss_val = origin_time_loss(
+            jax.lax.stop_gradient(position), hit_detector_positions, observed_times,
+            observed_counts, t0, tau=tau_vtx
+        )
+
+        # 3-term combined loss (matching tau scan scripts and notebook)
+        c = charge_loss_val
+        t = time_loss_val
+        v = vertex_loss_val
+        s = 0.
+
+        combined_loss = jnp.sqrt((c + s) * (t + s) * (v + s)) \
+            + jnp.sqrt((c + s) * jax.lax.stop_gradient((t + s) * (v + s))) \
+            + jnp.sqrt((v + s) * jax.lax.stop_gradient((t + s) * (c + s)))
+
+        return combined_loss, (vertex_loss_val, charge_loss_val, time_loss_val)
 
     combined_grad_fn = jit(value_and_grad(combined_product_loss, has_aux=True))
     return combined_grad_fn
@@ -189,7 +218,7 @@ def create_combined_loss_function(vertex_weight_scale, counts_weight_scale,
 
 def run_complete_optimization_adam(initial_t0, hit_detector_positions, observed_times, observed_counts,
                                    true_data, true_energy, true_position, true_direction, TRUE_T0,
-                                   config, detector_bounds, prediction_simulator, detector_params,
+                                   config, detector_bounds, prediction_simulator,
                                    combined_grad_fn, qe):
     """
     Run complete optimization pipeline with Adam optimizer
@@ -250,7 +279,7 @@ def run_complete_optimization_adam(initial_t0, hit_detector_positions, observed_
     # we do the calculation for a track at the origin with theta=jnp.arccos(1/jnp.sqrt(3)). phi=jnp.pi/4.. and t0=0. (t0 has no effect).
     # the choice of phi and theta correspond to [1/sqrt(3), 1/sqrt(3), 1/sqrt(3)].
     energy_guess_scan = energy_scan_optimization(
-        prediction_simulator, detector_params, jnp.array([0.,0.,0.]), jnp.arccos(1/jnp.sqrt(3)), jnp.pi/4., 0.,
+        prediction_simulator, jnp.array([0.,0.,0.]), jnp.arccos(1/jnp.sqrt(3)), jnp.pi/4., 0.,
         hit_detector_positions, observed_times, observed_counts,
         true_data, energy_guess=1000+np.random.uniform(-50,50), energy_delta=700,
         n_steps=10, verbosity=verbosity
@@ -288,7 +317,7 @@ def run_complete_optimization_adam(initial_t0, hit_detector_positions, observed_
     if verbosity >= 2:
         print("  Stage 2: Hierarchical cone direction search at optimal position")
     cone_results = hierarchical_direction_search_cone(
-        prediction_simulator, detector_params, optimal_position, optimal_t0,
+        prediction_simulator, optimal_position, optimal_t0,
         hit_detector_positions, observed_times, observed_counts,
         true_data, energy_guess, levels=CONE_LEVELS, initial_div=CONE_INITIAL_DIV,
         max_angle_deg=CONE_MAX_ANGLE_DEG, reduction=CONE_REDUCTION, verbosity=verbosity
@@ -298,7 +327,7 @@ def run_complete_optimization_adam(initial_t0, hit_detector_positions, observed_
     if verbosity >= 2:
         print("  Stage 3: Energy scan optimization")
     energy_scan_results = energy_scan_optimization(
-        prediction_simulator, detector_params, optimal_position,
+        prediction_simulator, optimal_position,
         cone_results['best_theta'], cone_results['best_phi'],
         optimal_t0, hit_detector_positions, observed_times, observed_counts,
         true_data, energy_guess, energy_delta=ENERGY_DELTA,
@@ -312,44 +341,27 @@ def run_complete_optimization_adam(initial_t0, hit_detector_positions, observed_
         print("  Stage 4: Adam optimization (position + direction + t0 + energy)")
         print("    Update scaling: position=1.0, direction=0.025, t0=10.0, energy=10.0")
 
-    # Create initial parameter vector
-    initial_params = jnp.array([
-        optimal_position[0], optimal_position[1], optimal_position[2],
-        optimal_t0,
-        cone_results['best_theta'], cone_results['best_phi'],
-        optimal_energy
-    ])
+    # Create initial ParticleParams
+    track = ParticleParams(
+        energy=jnp.asarray(optimal_energy),
+        position=jnp.array([optimal_position[0], optimal_position[1], optimal_position[2]]),
+        theta=jnp.asarray(cone_results['best_theta']),
+        phi=jnp.asarray(cone_results['best_phi']),
+        t0=jnp.asarray(optimal_t0),
+    )
+    initial_track = track
 
     # Initialize Adam optimizer
     optimizer = optax.adam(learning_rate=ADAM_LEARNING_RATE, b1=ADAM_B1, b2=ADAM_B2, eps=ADAM_EPS)
-    opt_state = optimizer.init(initial_params)
-
-    # # Define parameter-specific scaling factors
-    # # Parameter structure: [x, y, z, t0, theta, phi, energy]
-    # position_scale = 1.0
-    # t0_scale = 10.0
-    # direction_scale = 0.025
-    # energy_scale = 10.0
+    opt_state = optimizer.init(track)
 
     position_scale = POS_LR_SCALE
     direction_scale = DIR_LR_SCALE
     t0_scale = T0_LR_SCALE
     energy_scale = ENE_LR_SCALE
 
-    update_scales = jnp.array([
-        position_scale,  # x
-        position_scale,  # y
-        position_scale,  # z
-        t0_scale,        # t0
-        direction_scale, # theta
-        direction_scale, # phi
-        energy_scale     # energy
-    ])
-
-    current_params = initial_params.copy()
-
     history = {
-        'parameters': [current_params.copy()],
+        'parameters': [track],
         'combined_losses': [],
         'vertex_losses': [],
         'counts_losses': [],
@@ -376,64 +388,64 @@ def run_complete_optimization_adam(initial_t0, hit_detector_positions, observed_
     for iteration in range(MAX_ITERATIONS):
         opt_key, _ = jax.random.split(opt_key)
 
-        (combined_loss, (vertex_loss, counts_loss_val, energy_loss_val)), grad = combined_grad_fn(
-            current_params, hit_detector_positions, observed_times, observed_counts,
+        (combined_loss, (vertex_loss, counts_loss_val, energy_loss_val)), grads = combined_grad_fn(
+            track, hit_detector_positions, observed_times, observed_counts,
             true_data, opt_key
         )
 
         # Handle NaN gradients
-        if jnp.any(jnp.isnan(grad)):
+        has_nan = any(jnp.any(jnp.isnan(g)) for g in jax.tree.leaves(grads))
+        if has_nan:
             if verbosity >= 2:
                 print("      Warning: NaN gradient detected, replacing with zeros")
-                print("NaN indices:", jnp.where(jnp.isnan(grad)))
-            grad = jnp.nan_to_num(grad, nan=0.0)
+            grads = jax.tree.map(lambda g: jnp.nan_to_num(g, nan=0.0), grads)
 
-        grad_norm = jnp.linalg.norm(grad)
-        if grad_norm < tolerance:
-            break
+        grad_norm = jnp.sqrt(sum(jnp.sum(g**2) for g in jax.tree.leaves(grads)))
+        # Note: Convergence check removed to ensure consistent history length across all events
 
         # Adam update with parameter-specific scaling
-        updates, opt_state = optimizer.update(grad, opt_state, current_params)
+        updates, opt_state = optimizer.update(grads, opt_state, track)
 
         current_damping_w *= damping_factor
 
         # Apply parameter-specific scaling to updates
-        scaled_updates = updates * update_scales * current_damping_w
+        scaled_updates = ParticleParams(
+            energy=updates.energy * energy_scale * current_damping_w,
+            position=updates.position * position_scale * current_damping_w,
+            theta=updates.theta * direction_scale * current_damping_w,
+            phi=updates.phi * direction_scale * current_damping_w,
+            t0=updates.t0 * t0_scale * current_damping_w,
+        )
         if iteration < 25:
-            scaled_updates = scaled_updates.at[-1].set(0.)
-            #scaled_updates = scaled_updates.at[3].set(0.)
+            scaled_updates = scaled_updates._replace(energy=jnp.zeros_like(scaled_updates.energy))
+            #scaled_updates = scaled_updates._replace(t0=jnp.zeros_like(scaled_updates.t0))
 
         # Apply scaled updates to parameters
-        current_params = optax.apply_updates(current_params, scaled_updates)
+        track = optax.apply_updates(track, scaled_updates)
 
         # Apply constraints
         if DETECTOR_R is not None and DETECTOR_H is not None:
-            current_params = jnp.array([
-                jnp.clip(current_params[0], -DETECTOR_R * 0.95, DETECTOR_R * 0.95),
-                jnp.clip(current_params[1], -DETECTOR_R * 0.95, DETECTOR_R * 0.95),
-                jnp.clip(current_params[2], -DETECTOR_H/2 * 0.95, DETECTOR_H/2 * 0.95),
-                jnp.clip(current_params[3], -20.0, 20.0),
-                current_params[4],
-                current_params[5],
-                jnp.clip(current_params[6], 300.0, 2000.0)
-            ])
+            track = track._replace(
+                position=jnp.array([
+                    jnp.clip(track.position[0], -DETECTOR_R * 0.95, DETECTOR_R * 0.95),
+                    jnp.clip(track.position[1], -DETECTOR_R * 0.95, DETECTOR_R * 0.95),
+                    jnp.clip(track.position[2], -DETECTOR_H/2 * 0.95, DETECTOR_H/2 * 0.95),
+                ]),
+                t0=jnp.clip(track.t0, -20.0, 20.0),
+                energy=jnp.clip(track.energy, 300.0, 2000.0),
+            )
         else:
-            current_params = jnp.array([
-                current_params[0],
-                current_params[1],
-                current_params[2],
-                jnp.clip(current_params[3], -20.0, 20.0),
-                current_params[4],
-                current_params[5],
-                jnp.clip(current_params[6], 300.0, 2000.0)
-            ])
+            track = track._replace(
+                t0=jnp.clip(track.t0, -20.0, 20.0),
+                energy=jnp.clip(track.energy, 300.0, 2000.0),
+            )
 
         # Calculate current parameters
-        current_position = current_params[:3]
-        current_t0 = current_params[3]
-        current_theta = current_params[4]
-        current_phi = current_params[5]
-        current_energy = current_params[6]
+        current_position = track.position
+        current_t0 = track.t0
+        current_theta = track.theta
+        current_phi = track.phi
+        current_energy = track.energy
         current_direction = spherical_to_cartesian(current_theta, current_phi)
 
         # Calculate differences (predicted - true)
@@ -457,7 +469,7 @@ def run_complete_optimization_adam(initial_t0, hit_detector_positions, observed_
             print(f"      Loss: {combined_loss:.6f}, grad_norm: {grad_norm:.6f}")
 
         # Store history
-        history['parameters'].append(current_params.copy())
+        history['parameters'].append(track)
         history['combined_losses'].append(float(combined_loss))
         history['vertex_losses'].append(float(vertex_loss))
         history['counts_losses'].append(float(counts_loss_val))
@@ -475,11 +487,11 @@ def run_complete_optimization_adam(initial_t0, hit_detector_positions, observed_
     adam_end_time = time.time()
     adam_optimization_time = adam_end_time - adam_start_time
 
-    final_position = current_params[:3]
-    final_t0 = current_params[3]
-    final_theta = current_params[4]
-    final_phi = current_params[5]
-    final_energy = current_params[6]
+    final_position = track.position
+    final_t0 = track.t0
+    final_theta = track.theta
+    final_phi = track.phi
+    final_energy = track.energy
     final_direction = spherical_to_cartesian(final_theta, final_phi)
 
     # Calculate final differences (predicted - true)
@@ -506,7 +518,7 @@ def run_complete_optimization_adam(initial_t0, hit_detector_positions, observed_
         'grid_position_search': pos_results,
         'cone_direction_search': cone_results,
         'energy_scan_search': energy_scan_results,
-        'initial_params': initial_params,
+        'initial_track': initial_track,
         'final_position': final_position,
         'final_direction': final_direction,
         'final_theta': final_theta,
@@ -534,7 +546,7 @@ def run_complete_optimization_adam(initial_t0, hit_detector_positions, observed_
 
 
 def generate_event_data(event_idx, random_key, data_dir, data_simulator,
-                       detector_params, detector_bounds, fraction = 0.6, fixed_vertex_config=None):
+                       detector_bounds, fraction = 0.6, fixed_vertex_config=None):
     """Generate a single event with random parameters within detector bounds
 
     Args:
@@ -542,7 +554,6 @@ def generate_event_data(event_idx, random_key, data_dir, data_simulator,
         random_key: JAX random key
         data_dir: Directory containing .root files (will randomly select one each call)
         data_simulator: Data simulator function
-        detector_params: Detector parameters
         detector_bounds: Detector bounds dictionary
         fixed_vertex_config: Dict with 'enabled' and 'position' keys to fix vertex at specific location
     """
@@ -622,7 +633,8 @@ def generate_event_data(event_idx, random_key, data_dir, data_simulator,
     true_energy = photon_data['energy']
     TRUE_T0 = jax.random.uniform(key, shape=(), minval=-15.0, maxval=15.0)
 
-    true_params = (true_energy, true_position, true_direction)
+    true_track = ParticleParams.from_cartesian(energy=true_energy, position=true_position,
+                                               direction=true_direction, t0=TRUE_T0)
 
     # Compute rotation to transform from original direction (0,0,1) to true_direction
     original_direction = jnp.array([0.0, 0.0, 1.0])
@@ -655,7 +667,7 @@ def generate_event_data(event_idx, random_key, data_dir, data_simulator,
 
 
     key, _ = jax.random.split(key)
-    true_data = jax.lax.stop_gradient(data_simulator(true_params, detector_params, key, photon_data))
+    true_data = jax.lax.stop_gradient(data_simulator(true_track, key, photon_data))
 
     hit_counts, hit_times_raw = true_data
     hit_times = hit_times_raw + TRUE_T0
@@ -730,17 +742,17 @@ def main():
     DETECTOR_H = detector_bounds['H'] if detector_bounds['type'] == 'cylinder' else None
 
     # Setup simulators
+    PHYSICS_CONFIG = config['basic_config'].get('physics_config', None)
     print("Setting up simulators...")
     prediction_simulator = setup_event_simulator(
-        default_json_filename, Nphot, TEMPERATURE, max_sensors_per_cell=4, K=K, is_data=False
+        default_json_filename, Nphot, TEMPERATURE, max_sensors_per_cell=4, K=K, is_data=False,
+        physics_config=PHYSICS_CONFIG, default_detector_params=True
     )
 
     data_simulator = setup_event_simulator(
-        default_json_filename, Nphot, temperature=0.0, K=20, is_data=True, is_calibration=False
+        default_json_filename, Nphot, temperature=0.0, K=20, is_data=True, is_calibration=False,
+        physics_config=PHYSICS_CONFIG, default_detector_params=True
     )
-
-    # Get detector parameters
-    detector_params = get_detector_params_from_config(config)
 
     # Print parameters
     print_optimization_parameters(config, detector_bounds['r'], detector_bounds.get('H', 0), NUM_DETECTORS)
@@ -770,7 +782,7 @@ def main():
     # Create combined gradient function
     combined_grad_fn = create_combined_loss_function(
         VERTEX_WEIGHT_SCALE, COUNTS_WEIGHT_SCALE,
-        prediction_simulator, detector_params, C_MEDIUM, nrays=Nphot
+        prediction_simulator, C_MEDIUM, nrays=Nphot, num_detectors=NUM_DETECTORS
     )
 
     # Warm-up: Pre-compile JIT functions
@@ -784,7 +796,7 @@ def main():
     while not warmup_endpoint_valid and warmup_attempts < 10:
         warmup_attempts += 1
         warmup_event_data = generate_event_data(
-            0, warmup_key, data_dir, data_simulator, detector_params, detector_bounds, fraction=0.9,
+            0, warmup_key, data_dir, data_simulator, detector_bounds, fraction=0.9,
             fixed_vertex_config=config.get('fixed_vertex')
         )
         warmup_endpoint_valid = check_track_endpoint_in_detector(
@@ -818,7 +830,6 @@ def main():
         config=config,
         detector_bounds=detector_bounds,
         prediction_simulator=prediction_simulator,
-        detector_params=detector_params,
         combined_grad_fn=combined_grad_fn,
         qe=qe
     )
@@ -878,7 +889,7 @@ def main():
                 # Generate event data
                 event_data = generate_event_data(
                     event_idx, event_key, data_dir,
-                    data_simulator, detector_params, detector_bounds, fraction=0.9,
+                    data_simulator, detector_bounds, fraction=0.9,
                     fixed_vertex_config=config.get('fixed_vertex')
                 )
 
@@ -948,7 +959,6 @@ def main():
                 config=config,
                 detector_bounds=detector_bounds,
                 prediction_simulator=prediction_simulator,
-                detector_params=detector_params,
                 combined_grad_fn=combined_grad_fn,
                 qe=qe
             )

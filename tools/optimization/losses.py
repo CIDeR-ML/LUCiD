@@ -8,6 +8,7 @@ from jax import jit
 from jax.scipy import special
 from jax.scipy.special import gammaln
 from functools import partial
+from tools.detector_params import ParticleParams
 
 @jit
 def energy_loss(simulated_counts, true_counts):
@@ -178,21 +179,6 @@ def grid_origin_time_loss(
 #     main = jnp.sum(w * smooth_pinball(r, tau=0.12, sigma=0.05)) / wsum
 #     return main
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 def softplus(x):
     return jnp.log1p(jnp.exp(-jnp.abs(x))) + jnp.maximum(x, 0.)
 
@@ -229,40 +215,207 @@ def cone_time_loss(observed_counts, simulated_time, observed_times, t0, tau=0.12
     main = jnp.sum(w * smooth_pinball(r, tau=tau, sigma=0.25)) / wsum
     return main
 
-def create_combined_loss_function(prediction_simulator, detector_params):
+def create_combined_loss_function(prediction_simulator):
     """Create combined loss function with specified parameters and return its gradient function"""
 
     @jit
-    def combined_product_loss(params, hit_detector_positions, observed_times, observed_counts, 
+    def combined_product_loss(track, hit_detector_positions, observed_times, observed_counts,
                                         true_data, key):
         """
         Combined loss function: product of vertex loss, counts loss, and energy loss
-        
+
         Args:
-            params: [x, y, z, t0, theta, phi, energy] where theta and phi are spherical direction angles
+            track: ParticleParams with energy, position, theta, phi, t0
             vertex_weight: scaling factor for vertex loss contribution
-            counts_weight: scaling factor for counts loss contribution  
+            counts_weight: scaling factor for counts loss contribution
             energy_weight: scaling factor for energy loss contribution
         """
-        position = params[:3]
-        t0 = params[3]
-        theta = params[4]
-        phi = params[5]
-        energy = params[6]
-    
-        track_params = (energy, position, jnp.array([theta, phi]))
-        simulated_data = prediction_simulator(track_params, detector_params, key)
+        position = track.position
+        t0 = track.t0
+        theta = track.theta
+        phi = track.phi
+        energy = track.energy
+
+        simulated_data = prediction_simulator(track, key)
         simulated_counts = simulated_data[0]
         simulated_time = simulated_data[1]
-    
+
         # Calculate individual loss components
         vertex_loss_val = origin_time_loss(jax.lax.stop_gradient(position), hit_detector_positions, observed_times,
                                           observed_counts, t0)
-        
+
         counts_loss_val = counts_loss(observed_counts, simulated_counts)
         time_loss_val = cone_time_loss(observed_counts, simulated_time, observed_times, t0)
-    
+
         combined = jnp.sqrt(
             (vertex_loss_val + 1e-6) * (counts_loss_val + 1e-6) * (time_loss_val + 1e-6)
         ) + counts_loss_val
         return combined, (vertex_loss_val, counts_loss_val, vertex_loss_val)
+
+
+# ===================================================================
+# Likelihood-based loss functions
+# ===================================================================
+
+def segment_logsumexp(data, indices, num_segments):
+    """Numerically stable log-sum-exp aggregated per segment."""
+    max_vals = jax.ops.segment_max(
+        data, indices, num_segments=num_segments,
+        indices_are_sorted=False
+    )
+    shifted = data - max_vals[indices]
+    exp_summed = jax.ops.segment_sum(
+        jnp.exp(shifted), indices, num_segments=num_segments
+    )
+    return max_vals + jnp.log(exp_summed)
+
+
+# def first_arrival_nll(log_w, flat_times, flat_indices,
+#                       t_obs_per_sensor, tau, num_detectors):
+#     """First-arrival negative log-likelihood using a logistic kernel.
+#
+#     Parameters
+#     ----------
+#     log_w : jnp.ndarray
+#         Log of per-photon QE-corrected weights.
+#     flat_times : jnp.ndarray
+#         Per-photon simulated arrival times.
+#     flat_indices : jnp.ndarray
+#         Per-photon sensor indices.
+#     t_obs_per_sensor : jnp.ndarray
+#         Observed first-arrival time per sensor (num_detectors,).
+#     tau : float
+#         Kernel width parameter.
+#     num_detectors : int
+#         Number of sensors.
+#
+#     Returns
+#     -------
+#     loss : jnp.ndarray
+#         Per-sensor NLL (num_detectors,).
+#     """
+#     t_obs_per_photon = t_obs_per_sensor[flat_indices]
+#     x = (t_obs_per_photon - flat_times) / tau
+#
+#     # log lambda: log(w_i * K(x_i)) where K is logistic density
+#     log_kernel = (jax.nn.log_sigmoid(x)
+#                   + jax.nn.log_sigmoid(-x)
+#                   - jnp.log(tau))
+#     log_lambda = segment_logsumexp(
+#         log_w + log_kernel, flat_indices, num_detectors
+#     )
+#
+#     # Lambda: cumulative intensity up to t_obs
+#     log_Lambda = segment_logsumexp(
+#         log_w + jax.nn.log_sigmoid(x), flat_indices, num_detectors
+#     )
+#
+#     Lambda = jnp.exp(log_Lambda)
+#
+#     # softplus(log_Lambda) = log(1 + Lambda): recovers standard NLL
+#     # near the optimum but grows logarithmically for large Lambda,
+#     # preventing the t0 plateau from survival-term saturation
+#     loss = -log_lambda + Lambda
+#
+#     return loss
+
+# def first_arrival_nll(log_w, flat_times, flat_indices,
+#                       t_obs_per_sensor, tau, num_detectors):
+#     t_obs_per_photon = t_obs_per_sensor[flat_indices]
+#     x = (t_obs_per_photon - flat_times) / tau
+#
+#     # log rate: log λ(t_obs)
+#     log_kernel = (jax.nn.log_sigmoid(x)
+#                   + jax.nn.log_sigmoid(-x)
+#                   - jnp.log(tau))
+#     log_lambda = segment_logsumexp(
+#         log_w + log_kernel, flat_indices, num_detectors
+#     )
+#
+#     # Cumulative intensity: Λ(t_obs) — must be exp, NOT softplus
+#     log_Lambda = segment_logsumexp(
+#         log_w + jax.nn.log_sigmoid(x), flat_indices, num_detectors
+#     )
+#     Lambda = jnp.exp(jnp.clip(log_Lambda, -20.0, 10.0))  # stability clamp
+#
+#     return -log_lambda + Lambda
+
+def first_arrival_nll(log_w, flat_times, flat_indices,
+                      t_obs_per_sensor, tau, num_detectors):
+    t_obs_per_photon = t_obs_per_sensor[flat_indices]
+    x = (t_obs_per_photon - flat_times) / tau
+
+    # Filter invalid photons
+    valid = log_w > -20.0
+    safe_log_w = jnp.where(valid, log_w, -1e6)
+
+    # Normalize weights per sensor in log-space
+    log_w_total = segment_logsumexp(safe_log_w, flat_indices, num_detectors)
+    log_w_norm = safe_log_w - log_w_total[flat_indices]
+
+    # N_s = expected photon count per sensor
+    N_s = jnp.exp(log_w_total)
+
+    # log f(t_obs) — mixture density
+    log_kernel = (jax.nn.log_sigmoid(x)
+                  + jax.nn.log_sigmoid(-x)
+                  - jnp.log(tau))
+    log_f = segment_logsumexp(
+        log_w_norm + log_kernel, flat_indices, num_detectors
+    )
+
+    # log(1 - F) via the identity: 1-F = Σ p_i σ(-x_i)
+    log_one_minus_F = segment_logsumexp(
+        log_w_norm + jax.nn.log_sigmoid(-x), flat_indices, num_detectors
+    )
+
+    # Order statistic NLL: -log[N_s · f · (1-F)^{N_s-1}]
+    loss = -log_w_total - log_f - (N_s - 1) * log_one_minus_F
+
+    return loss
+
+
+# =============================================================================
+# TAU_VTX PARAMETRIZATION
+# =============================================================================
+# Coefficients from weighted least-squares fit on tau hyperparameter scan.
+# To recalculate these parameters:
+#   1. Run: python s3df_jobs/submit_tau_hyperparameter_tuning_job.py --output output/tau_scan --submit
+#   2. Wait for job completion, results in output/tau_scan/result.csv
+#   3. Run analysis notebook: good_notebooks/analyze_tau_scan.ipynb
+#   4. Update coefficients below with new fit results
+
+TAU_VTX_PARAM_A = 1.092557e-06  # coefficient for Nrays
+TAU_VTX_PARAM_B = 2.578522e-04  # coefficient for Energy (MeV)
+TAU_VTX_PARAM_C = -0.0442       # intercept
+
+
+def get_optimal_tau_vtx(nrays, energy_mev):
+    """
+    Get optimal tau_vtx based on learned parametrization.
+
+    tau_vtx = a * Nrays + b * Energy + c
+
+    This parametrization was derived from scanning tau_vtx across
+    different (Nrays, Energy) combinations and fitting to minimize
+    position reconstruction error.
+
+    Args:
+        nrays: Number of photon rays (can be JAX array or scalar)
+        energy_mev: Energy in MeV (can be JAX array or scalar)
+
+    Returns:
+        Optimal tau_vtx value (typically in range 0.1-0.8)
+    """
+    return TAU_VTX_PARAM_A * nrays + TAU_VTX_PARAM_B * energy_mev + TAU_VTX_PARAM_C
+
+
+# =============================================================================
+# ALIASES FOR CONSISTENCY ACROSS CODEBASE
+# =============================================================================
+# poisson_nll is an alias for counts_loss (same formula)
+poisson_nll = counts_loss
+
+# origin_time_loss already accepts tau parameter, so it can be used as configurable
+# This alias makes the API clearer when using dynamic tau_vtx
+origin_time_loss_configurable = origin_time_loss

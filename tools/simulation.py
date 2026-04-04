@@ -1,203 +1,85 @@
-from tools.generate import get_isotropic_rays, photonsim_differentiable_get_rays, predict_t0
-
+from tools.generate import (
+    get_isotropic_rays,
+    photonsim_differentiable_get_rays,
+    predict_t0,
+    generate_laser_photons,
+    setup_calibration_generator,
+)
 from tools.propagation.cylinder import create_photon_propagator
 from tools.propagation.sphere import create_sphere_photon_propagator
 from tools.propagation.box import create_box_photon_propagator, box_bounds_check
 from tools.geometry import generate_detector, get_material_from_config
-from tools.utils import unpack_t0_params, unpack_photonsim_params, get_speed_of_light_in_material
+from tools.utils import (
+    unpack_t0_params, unpack_photonsim_params,
+    get_speed_of_light_in_material,
+    spherical_to_cartesian, base_dir_path,
+    smear_times, smear_charges_SK_like,
+)
+from tools.detector_params import DetectorParams, ParticleParams, load_detector_params
+
 import jax
 import jax.numpy as jnp
 from typing import Optional, Tuple
-
 import os
-
 from tools.siren.core import *
-
 from functools import partial
-
-from tools.utils import spherical_to_cartesian, base_dir_path
-
-# base_dir_path = os.path.dirname(os.path.abspath(__file__))+'/'
 from tools.siren.training.inference import SIRENPredictor
 
 
-def setup_event_simulator(json_filename, n_photons=1_000_000, temperature=0.2, K=5,
-                          is_data=False, is_calibration=False, max_sensors_per_cell=4,
-                          detector_type='Cylinder', use_expected_value=True,
-                          particle='muon', apply_smearing=True):
-    """
-    Sets up and returns an event simulator with the specified configuration.
-
-    Parameters
-    ----------
-    json_filename : str
-        Path to the JSON file containing detector configuration.
-    n_photons : int, optional
-        Number of photons to simulate per event, default 1,000,000.
-    temperature : float, optional
-        Temperature parameter for photon propagation, default 0.2.
-    K : int, optional
-        Maximum scattering iterations before forced detection (default: 2)
-    is_data : bool, optional
-        True for ROOT file data mode (default: False)
-    is_calibration : bool, optional
-        True for isotropic calibration mode (default: False)
-    max_sensors_per_cell : int, optional
-        Grid cell sensor limit (default: 4)
-    use_expected_value : bool, optional
-        Propagation mode selection:
-        - True: Expected value (differentiable)
-        - False: Monte Carlo sampling
-        - None: Auto-select based on mode
-    detector_type : str, optional
-        Type of detector geometry: 'Cylinder', 'Sphere', or 'Box'. Default is 'Cylinder' for backward compatibility.
-    particle : str, optional
-        Particle type (e.g., 'muon', 'electron'), default 'muon'
-    apply_smearing : bool, optional
-        If True, apply charge and time smearing to simulate detector resolution effects.
-        If False, return true values without smearing (default: False)
-
-    Notes
-    -----
-    Material is now read from the detector configuration JSON file.
-    The config file must include a 'material' field (e.g., "material": "water").
-
-    Returns
-    -------
-    callable
-        simulate_event: a JIT-compiled function that takes (params, key) and returns event data.
-        The parameter tuple for the simulation function is expected to be:
-           (cone_opening, track_origin, track_direction, initial_intensity,
-            scatter_length, reflection_rate, absorption_length, tau_gs)
-        and K is precompiled as part of the simulator.
-    """
-    
-    # Validate detector type
-    if detector_type not in ['Cylinder', 'Sphere', 'Box']:
-        raise ValueError(f"detector_type must be 'Cylinder', 'Sphere', or 'Box', got {detector_type}")
-
-    # Read material from detector configuration
-    material = get_material_from_config(json_filename)
-
-    # Initialize detector configuration based on type
-    if detector_type == 'Cylinder':
-        # Use cylinder implementation
-        detector = generate_detector(json_filename)
-        sensor_points = jnp.array(detector.all_points)
-        photosensor_radius = detector.S_radius
-        cylinder_height = detector.H
-        cylinder_radius = detector.r
-
-        # Setup cylinder photon propagator
-        propagate_photons = create_photon_propagator(
-            sensor_points,
-            photosensor_radius,
-            r=cylinder_radius, 
-            h=cylinder_height,
-            temperature=temperature,
-            max_sensors_per_cell=max_sensors_per_cell
-        )
-        
-    elif detector_type == 'Sphere':
-        # Use sphere implementation
-        detector = generate_detector(json_filename)
-        sensor_points = jnp.array(detector.all_points)
-        photosensor_radius = detector.S_radius
-        sphere_radius = detector.r
-        
-        # Setup sphere photon propagator
-        propagate_photons = create_sphere_photon_propagator(
-            sensor_points,
-            photosensor_radius,
-            sphere_radius=sphere_radius,
-            temperature=temperature,
-            n_divisions=100,
-            max_sensors_per_cell=max_sensors_per_cell
-        )
-        
-    elif detector_type == 'Box':
-        # Use box implementation
-        detector = generate_detector(json_filename)
-        sensor_points = jnp.array(detector.all_points)
-        photosensor_radius = detector.S_radius
-        box_length = detector.L
-        box_width = detector.W
-        box_height = detector.H
-        
-        # Setup box photon propagator
-        propagate_photons = create_box_photon_propagator(
-            sensor_points,
-            photosensor_radius,
-            length=box_length,
-            width=box_width,
-            height=box_height,
-            temperature=temperature,
-            max_sensors_per_cell=max_sensors_per_cell
-        )
-
-    # Get number of sensors from the points array (common for all types)
-    NUM_SENSORS = len(sensor_points)
-
-    # Create the event simulator with a fixed number of scattering iterations K
-    # (This part remains the same for all detector types)
-    simulate_event = create_event_simulator(
-        detector,
-        propagate_photons,
-        n_photons,
-        NUM_SENSORS,
-        sensor_points,
-        K,
-        is_data,
-        is_calibration,
-        max_sensors_per_cell,
-        use_expected_value,
-        detector_type,
-        material,
-        particle,
-        apply_smearing
-    )
-
-    return simulate_event
-
+# ===================================================================
+# Helper functions
+# ===================================================================
 
 def normalize(v, epsilon=1e-6):
     """Normalize a vector (or batch of vectors)."""
     norm = jnp.linalg.norm(v, axis=-1, keepdims=True)
-    return v / (norm + epsilon)
+    return v / jnp.maximum(norm, epsilon)
 
 
 def compute_reflection_direction(incident_dir, normal):
-    """Compute reflection direction given an incident direction and surface normal."""
-    # Compute dot product along the last axis for batched vectors
+    """Compute specular reflection direction."""
     normal = normalize(normal)
     dot_product = jnp.sum(incident_dir * normal, axis=-1, keepdims=True)
     return normalize(incident_dir - 2 * dot_product * normal)
 
 
+def sample_cosine_hemisphere(normal, rng_key):
+    """Cosine-weighted hemisphere sampling (reparameterisation trick)."""
+    k1, k2 = jax.random.split(rng_key)
+    u1 = jax.random.uniform(k1)
+    u2 = jax.random.uniform(k2)
+
+    cos_theta = jnp.sqrt(1 - u1)
+    sin_theta = jnp.sqrt(u1)
+    phi = 2 * jnp.pi * u2
+
+    local_dir = jnp.array([
+        sin_theta * jnp.cos(phi),
+        sin_theta * jnp.sin(phi),
+        cos_theta,
+    ])
+
+    frame = create_local_frame(normal)
+    return normalize(frame.T @ local_dir)
+
+
 def create_local_frame(z):
-    """Create a local coordinate frame given a z-axis vector."""
+    """Create an orthonormal frame with *z* as the z-axis."""
     z = normalize(z)
-    t = jnp.where(jnp.abs(z[0]) < 0.9,
-                  jnp.array([1.0, 0.0, 0.0]),
-                  jnp.array([0.0, 1.0, 0.0]))
+    t = jnp.where(
+        jnp.abs(z[0]) < 0.9,
+        jnp.array([1.0, 0.0, 0.0]),
+        jnp.array([0.0, 1.0, 0.0]),
+    )
     x = normalize(jnp.cross(t, z))
     y = jnp.cross(z, x)
     return jnp.stack([x, y, z])
 
 
-def gumbel_softmax(probs, temperature, rng_key):
-    """Differentiable sampling from a discrete distribution using Gumbel-softmax."""
-    uniform = jax.random.uniform(rng_key, shape=probs.shape)
-    gumbel = -jnp.log(-jnp.log(uniform))
-    logits = jnp.log(probs) + gumbel
-    return jax.nn.softmax(logits / temperature)
-
-
 def sample_scatter_distance(D, S, rng_key):
-    """Sample a scatter distance from a truncated exponential distribution."""
+    """Sample from a truncated exponential (scatter before surface)."""
     u = jax.random.uniform(rng_key)
-    ratio = D / S
-    prob_term = -jnp.expm1(-ratio)  # 1 - exp(-D/S)
+    prob_term = -jnp.expm1(-D / S)
     return -S * jnp.log1p(-u * prob_term)
 
 
@@ -209,87 +91,77 @@ def solve_rayleigh_inverse_cdf(u):
     # Transform to standard form: t³ + pt + q = 0 where μ = t
     p = 3.0
     q = -(8.0 * u - 4.0)
-    
+
     # Cardano's formula
-    discriminant = -(4 * p**3 + 27 * q**2)
-    
-    # Use JAX-compatible conditional
-    # Three real roots case (rare in our range)
+    discriminant = -(4 * p ** 3 + 27 * q ** 2)
+
+    # Three real roots case
     sqrt_disc_pos = jnp.sqrt(jnp.abs(discriminant))
     rho = jnp.sqrt(-p ** 3 / 27)
     theta = jnp.arccos(jnp.clip(-q / (2 * rho), -1, 1))
     mu_three_roots = 2 * jnp.cbrt(rho) * jnp.cos(theta / 3)
-    
-    # One real root case (typical)
+
+    # One real root case
     sqrt_disc_neg = jnp.sqrt(-discriminant)
     A = jnp.cbrt((-q + sqrt_disc_neg / (3 * jnp.sqrt(3))) / 2)
     B = jnp.cbrt((-q - sqrt_disc_neg / (3 * jnp.sqrt(3))) / 2)
     mu_one_root = A + B
-    
+
     # Select based on discriminant sign
     mu = jnp.where(discriminant >= 0, mu_three_roots, mu_one_root)
-    
-    # Clamp to valid range due to numerical precision
     return jnp.clip(mu, -1.0, 1.0)
 
 
 def compute_scatter_direction(incident_dir, rng_key):
-    """Compute a new scattering direction based on a Rayleigh phase function."""
+    """Rayleigh-phase-function scattering direction."""
     k1, k2 = jax.random.split(rng_key)
     u1 = jax.random.uniform(k1)
     u2 = jax.random.uniform(k2)
-    
-    # FIXED: Use correct Rayleigh inverse CDF instead of cbrt
+
     cos_theta = solve_rayleigh_inverse_cdf(u1)
-    
-    # Everything else stays the same
     sin_theta = jnp.sqrt(1 - cos_theta ** 2)
     phi = 2 * jnp.pi * u2
-    local_dir = normalize(jnp.array([sin_theta * jnp.cos(phi),
-                                     sin_theta * jnp.sin(phi),
-                                     cos_theta]))
+    local_dir = normalize(jnp.array([
+        sin_theta * jnp.cos(phi),
+        sin_theta * jnp.sin(phi),
+        cos_theta,
+    ]))
     frame = create_local_frame(incident_dir)
     return normalize(frame @ local_dir)
 
 
-def create_photonsim_siren_grid(photonsim_predictor, n_bins):
-    # Get the actual ranges from PhotonSim training metadata
-    dataset_info = photonsim_predictor.dataset_info
-    energy_min, energy_max = dataset_info['energy_range']
-    angle_min, angle_max = dataset_info['angle_range']  # In radians
-    distance_min, distance_max = dataset_info['distance_range']  # In mm
-    
-    # Validate target normalization scheme
-    target_norm = photonsim_predictor.metadata['target_normalization']
-    if target_norm['scheme'] != 'log_normalized_to_01':
-        raise ValueError(f"Expected target normalization scheme 'log_normalized_to_01', "
-                         f"but got '{target_norm['scheme']}'")
-
-    # Create n_bins x n_bins binning using actual PhotonSim training ranges
-    angle_bins = jnp.linspace(angle_min, angle_max, n_bins)
-    distance_bins = jnp.linspace(distance_min, distance_max, n_bins)
-    angle_dist_grid = jnp.column_stack([
-        jnp.repeat(angle_bins, n_bins),
-        jnp.tile(distance_bins, n_bins)
-    ])
-        
-    # Create meshgrid using actual PhotonSim ranges
-    angle_mesh, distance_mesh = jnp.meshgrid(angle_bins, distance_bins, indexing='ij')
-    log_min = target_norm['log_min']
-    log_max = target_norm['log_max']
-
-    return n_bins, energy_min, energy_max, angle_min, angle_max, distance_min, distance_max, angle_bins, \
-        distance_bins, angle_dist_grid, angle_mesh, distance_mesh, log_min, log_max
+# JAX-compatible rotation helpers (for data mode)
+def jax_normalize(v, epsilon=1e-8):
+    """Normalize a vector with numerical stability using JAX."""
+    norm = jnp.linalg.norm(v)
+    return jnp.where(norm > epsilon, v / norm, v)
 
 
-def photon_iteration_sample(position, direction, time, surface_distance,
-                            normal, scatter_length, reflection_rate,
-                            absorption_length, tau_gs, rng_key, speed_of_light):
+def jax_rotate_vector(vector, axis, angle):
+    """Rotate a vector around an axis by a given angle in radians using JAX."""
+    axis = jax_normalize(axis)
+    cos_angle = jnp.cos(angle)
+    sin_angle = jnp.sin(angle)
+    cross_product = jnp.cross(axis, vector)
+    dot_product = jnp.dot(axis, vector) * (1 - cos_angle)
+    return cos_angle * vector + sin_angle * cross_product + dot_product * axis
+
+
+# ===================================================================
+# Photon iteration functions (12-arg signatures: dual reflection, no tau_gs)
+# ===================================================================
+
+def photon_iteration_sample(
+        position, direction, time, surface_distance,
+        normal, scatter_length, wall_reflection_rate, sensor_reflection_rate,
+        absorption_length,
+        hit_sensor, rng_key, speed_of_light):
     """
     Sampling version of photon iteration that makes binary decisions.
 
-    This function performs Monte Carlo sampling where photons make discrete
-    choices (detect/reflect/scatter) rather than computing expected values.
+    Performs Monte Carlo sampling where photons make discrete choices
+    (detect/reflect/scatter) rather than computing expected values.
+    Walls use diffuse reflection, sensors use specular reflection.
 
     Parameters
     ----------
@@ -305,16 +177,18 @@ def photon_iteration_sample(position, direction, time, surface_distance,
         Surface normal at the intersection point
     scatter_length : float
         Mean free path for scattering in the medium
-    reflection_rate : float
-        Probability of reflection when reaching a surface
+    wall_reflection_rate : float
+        Probability of reflection when hitting a wall
+    sensor_reflection_rate : float
+        Probability of reflection when hitting a sensor
     absorption_length : float
         Mean free path for absorption in the medium
-    tau_gs : float
-        Temperature parameter for Gumbel-softmax (included for signature compatibility, not used)
+    hit_sensor : bool
+        Whether the photon hit a sensor (True) or wall (False)
     rng_key : jax.random.PRNGKey
         Random key for sampling
     speed_of_light : float
-        Speed of light in the medium (m/ns), used to convert distance to time
+        Speed of light in the medium (m/ns)
 
     Returns
     -------
@@ -330,281 +204,244 @@ def photon_iteration_sample(position, direction, time, surface_distance,
         Attenuation factor due to absorption
     continuing_factor : float
         Factor for continuing photons (0.0 if detected, attenuation if continues)
-
-    Notes
-    -----
-    The tau_gs parameter is included to match the signature of photon_iteration_update_factors
-    but is not used in the sampling mode.
     """
+
     k1, k2, k3, k4 = jax.random.split(rng_key, 4)
 
-    # Sample scatter distance from truncated exponential
+    reflection_rate = jnp.where(hit_sensor, sensor_reflection_rate, wall_reflection_rate)
     scatter_distance = sample_scatter_distance(surface_distance, scatter_length, k2)
 
-    # Probability of reaching surface without scattering
     reach_surface_prob = jnp.exp(-surface_distance / scatter_length)
 
-    # Sample whether photon reaches surface
     u1 = jax.random.uniform(k1)
     reaches_surface = u1 < reach_surface_prob
 
-    # If reaches surface, sample whether it reflects or is detected
     u2 = jax.random.uniform(k2)
     reflects = reaches_surface & (u2 < reflection_rate)
     detects = reaches_surface & (u2 >= reflection_rate)
     scatters = ~reaches_surface
 
-    # Calculate new position based on outcome
-    epsilon = 1e-4  # Small value to stay inside
-    # the fraction of 'errors' for a given epislon change with the detector size.
-    # this is because the numerical error in direction over a large distance translates into a relatively larger deviation
-    # for HK-size epsilon 1e-4 translates into a few tens of rays going out of the detector per each million after several steps.
+    # The fraction of 'errors' for a given epsilon change with the detector size.
+    # This is because the numerical error in direction over a large distance translates
+    # into a relatively larger deviation. For HK-size epsilon 1e-4 translates into a few
+    # tens of rays going out of the detector per each million after several steps.
     # The rule of thumb is that epsilon needs to go down/up proportionally to the detector size.
+    epsilon = 1e-4
     new_pos = jnp.where(
         scatters,
         position + scatter_distance * normalize(direction),
-        position + surface_distance * normalize(direction) + epsilon * normalize(normal)
+        position + surface_distance * normalize(direction) + epsilon * normalize(normal),
     )
 
-    # Calculate new direction
-    reflection_dir = compute_reflection_direction(direction, normal)
+    specular_dir = compute_reflection_direction(direction, normal)
+    diffuse_dir = sample_cosine_hemisphere(normal, k4)
+    reflection_dir = jnp.where(hit_sensor, specular_dir, diffuse_dir)
     scatter_dir = compute_scatter_direction(direction, k3)
 
     new_dir = jnp.where(
         reflects,
         reflection_dir,
-        jnp.where(scatters, scatter_dir, direction)
+        jnp.where(scatters, scatter_dir, direction),
     )
 
-    # Time increment based on distance traveled
-    # Convert distance (meters) to time (nanoseconds)
     distance_traveled = jnp.where(scatters, scatter_distance, surface_distance)
-    time_increment = distance_traveled / speed_of_light  # m / (m/ns) = ns
-    new_time = time + time_increment  # ns + ns
+    new_time = time + distance_traveled / speed_of_light
 
-    # Sample absorption as a binary event (Monte Carlo sampling)
-    distance_traveled = jnp.where(scatters, scatter_distance, surface_distance)
+    # Binary absorption sampling (Bernoulli)
     survival_prob = jnp.exp(-distance_traveled / absorption_length)
-    u_absorption = jax.random.uniform(k4)
+    u_absorption = jax.random.uniform(k3)
     survives_absorption = u_absorption < survival_prob
-
-    # Binary attenuation: 1.0 if survives, 0.0 if absorbed
     attenuation = survives_absorption.astype(jnp.float32)
 
-    # Binary detection probability
     detect_prob = detects.astype(jnp.float32)
-
-    # Attenuation is always applied (now binary: 0.0 or 1.0)
     reflection_attenuation = attenuation
-
-    # Continuing factor: 0 if detected (photon stops), attenuation if continues
     continuing_factor = jnp.where(detects, 0.0, attenuation)
 
     return new_pos, new_dir, new_time, detect_prob, reflection_attenuation, continuing_factor
 
 
-def photon_iteration_update_factors(position, direction, time, surface_distance,
-                                    normal, scatter_length, reflection_rate,
-                                    absorption_length, tau_gs, rng_key, speed_of_light):
+def photon_iteration_update_factors(
+        position, direction, time, surface_distance,
+        normal, scatter_length, wall_reflection_rate, sensor_reflection_rate,
+        absorption_length,
+        hit_sensor, rng_key, speed_of_light):
     """
-    An update function for photon propagation that employs a variance reduction technique through computation of expected values.
-    It employs Gumbel-softmax sampling to blend reflection and scattering outcomes for full differentiability.
+    Expected-value photon update with Straight-Through Estimator (STE).
 
-    Parameters:
-      - position, direction: (3,) arrays for the photon's current state.
-      - time: scalar, current photon time.
-      - surface_distance: scalar, computed from norm(hit_position - position).
-      - normal: (3,) array, the surface normal at the hit position.
-      - scatter_length: scalar, mean free path for scattering.
-      - reflection_rate: scalar, probability of reflection at the surface.
-      - absorption_length: scalar, mean free path for absorption.
-      - tau_gs: scalar, temperature for Gumbel-softmax sampling.
-      - rng_key: JAX PRNG key.
-      - speed_of_light: float, speed of light in the medium (m/ns), used to convert distance to time.
+    Computes expected values for detect/reflect/scatter outcomes for full
+    differentiability. Walls use diffuse reflection, sensors use specular.
 
-    Returns:
-      - new_pos: (3,) array, updated photon position.
-      - new_dir: (3,) array, updated photon direction.
-      - new_time: scalar, updated photon time.
-      - detect_prob: scalar, probability of detection.
-      - reflection_attenuation: scalar, attenuation factor.
-      - continuing_factor: scalar, factor for continuation (reflection or scatter).
+    Parameters
+    ----------
+    position, direction : jnp.ndarray
+        (3,) arrays for the photon's current state.
+    time : float
+        Current photon time.
+    surface_distance : float
+        Distance to nearest surface (norm of hit_position - position).
+    normal : jnp.ndarray
+        (3,) surface normal at the hit position.
+    scatter_length : float
+        Mean free path for scattering.
+    wall_reflection_rate : float
+        Probability of reflection at walls.
+    sensor_reflection_rate : float
+        Probability of reflection at sensors.
+    absorption_length : float
+        Mean free path for absorption.
+    hit_sensor : bool
+        Whether the photon hit a sensor (True) or wall (False).
+    rng_key : jax.random.PRNGKey
+        JAX PRNG key.
+    speed_of_light : float
+        Speed of light in the medium (m/ns).
+
+    Returns
+    -------
+    new_pos : jnp.ndarray
+        (3,) updated photon position.
+    new_dir : jnp.ndarray
+        (3,) updated photon direction.
+    new_time : float
+        Updated photon time.
+    detect_prob : float
+        Probability of detection.
+    reflection_attenuation : float
+        Attenuation factor from absorption over surface distance.
+    continuing_factor : float
+        Factor for continuation (reflection or scatter).
     """
+
     k1, k2, k3 = jax.random.split(rng_key, 3)
 
-    # Sample the distance along the ray where scattering might occur.
+    reflection_rate = jnp.where(hit_sensor, sensor_reflection_rate, wall_reflection_rate)
     scatter_distance = sample_scatter_distance(surface_distance, scatter_length, k2)
 
-    # Core probabilities
     ratio = surface_distance / scatter_length
-    # Probability of reaching the surface without scattering
     reach_surface_prob = jnp.exp(-ratio)
-    # Probability of scattering before reaching the surface
-    scatter_prob = -jnp.expm1(-ratio)  # 1 - reach_surface_prob
+    scatter_prob = -jnp.expm1(-ratio)
 
-    # Total probabilities for each possible outcome
-    # 1. Reflection: reach surface AND reflect
     reflect_prob = reach_surface_prob * reflection_rate
-    # 2. Detection: reach surface AND NOT reflect
     detect_prob = reach_surface_prob * (1 - reflection_rate)
 
-    # Attenuation factors (only affect intensity, not probabilities)
     reflection_attenuation = jnp.exp(-surface_distance / absorption_length)
     scatter_attenuation = jnp.exp(-scatter_distance / absorption_length)
 
-    # Use Straight-Through Estimator for action selection
-    # Sample from categorical distribution to decide reflection vs scatter
-    probs = jnp.array([reflect_prob, scatter_prob])
-    probs_normalized = probs / (jnp.sum(probs) + 1e-10)  # Normalize probabilities
+    # Straight-Through Estimator for action selection:
+    # Sample discrete action, but let soft probabilities flow in backward pass
+    probs = jnp.array([reach_surface_prob, scatter_prob])
+    probs_normalized = probs / (jnp.sum(probs) + 1e-10)
 
-    # Sample discrete action based on probabilities
     u = jax.random.uniform(k1)
-    hard_choice = (u < probs_normalized[0]).astype(jnp.float32)  # 1.0 for reflection, 0.0 for scatter
-
-    # Create hard one-hot weights
+    hard_choice = (u < probs_normalized[0]).astype(jnp.float32)
     hard_weights = jnp.array([hard_choice, 1.0 - hard_choice])
-
-    # Straight-through estimator: hard weights in forward, soft probs in backward
     action_weights = hard_weights - jax.lax.stop_gradient(probs_normalized) + probs_normalized
-    reflection_weight = action_weights[0]
+
+    surface_weight = action_weights[0]
     scatter_weight = action_weights[1]
 
-    # Compute the candidate positions and directions.
-    epsilon = 1e-4  # Small value to stay inside
-    # the fraction of 'errors' for a given epsilon change with the detector size.
-    # this is because the numerical error in direction over a large distance translates into a relatively larger deviation
-    # for HK-size epsilon 1e-4 translates into a few tens of rays going out of the detector per each million after several steps.
+    # The fraction of 'errors' for a given epsilon change with the detector size.
+    # This is because the numerical error in direction over a large distance translates
+    # into a relatively larger deviation. For HK-size epsilon 1e-4 translates into a few
+    # tens of rays going out of the detector per each million after several steps.
     # The rule of thumb is that epsilon needs to go down/up proportionally to the detector size.
-    reflection_pos = position + surface_distance * normalize(direction) + epsilon * normalize(normal)
+    epsilon = 1e-4
+    surface_pos = position + surface_distance * normalize(direction) + epsilon * normalize(normal)
     scatter_pos = position + scatter_distance * normalize(direction)
-    reflection_dir = compute_reflection_direction(direction, normal)
+
+    specular_dir = compute_reflection_direction(direction, normal)
+    diffuse_dir = sample_cosine_hemisphere(normal, k3)
+    reflection_dir = jnp.where(hit_sensor, specular_dir, diffuse_dir)
     scatter_dir = compute_scatter_direction(direction, k3)
 
-    # Blend the two possibilities for continuing paths.
-    new_pos = reflection_weight * reflection_pos + scatter_weight * scatter_pos
-    new_dir = normalize(reflection_weight * reflection_dir + scatter_weight * scatter_dir)
+    new_pos = surface_weight * surface_pos + scatter_weight * scatter_pos
+    new_dir = normalize(surface_weight * reflection_dir + scatter_weight * scatter_dir)
 
-    # Calculate the continuing factor based on the probabilities and not the weights
     continuing_factor = reflect_prob * reflection_attenuation + scatter_prob * scatter_attenuation
 
-    # Time increment based on distance traveled along the weighted path
-    # Convert distance (meters) to time (nanoseconds)
-    distance_traveled = reflection_weight * surface_distance + scatter_weight * scatter_distance
-    time_increment = distance_traveled / speed_of_light  # m / (m/ns) = ns
-    new_time = time + time_increment  # ns + ns
+    distance_traveled = surface_weight * surface_distance + scatter_weight * scatter_distance
+    new_time = time + distance_traveled / speed_of_light
 
     return new_pos, new_dir, new_time, detect_prob, reflection_attenuation, continuing_factor
 
 
-# JAX-compatible versions of the rotation functions
-def jax_normalize(v, epsilon=1e-8):
-    """Normalize a vector with numerical stability using JAX."""
-    norm = jnp.linalg.norm(v)
-    return jnp.where(norm > epsilon, v / norm, v)
+# ===================================================================
+# Custom VJP wrapper — NaN gradient sanitisation
+# ===================================================================
+
+@jax.custom_vjp
+def photon_iteration_update_factors_safe(
+        position, direction, time, surface_distance,
+        normal, scatter_length, wall_reflection_rate, sensor_reflection_rate,
+        absorption_length,
+        hit_sensor, rng_key, speed_of_light):
+    return photon_iteration_update_factors(
+        position, direction, time, surface_distance,
+        normal, scatter_length, wall_reflection_rate, sensor_reflection_rate,
+        absorption_length,
+        hit_sensor, rng_key, speed_of_light)
 
 
-def jax_rotate_vector(vector, axis, angle):
-    """ Rotate a vector around an axis by a given angle in radians using JAX. """
-    axis = jax_normalize(axis)
-    cos_angle = jnp.cos(angle)
-    sin_angle = jnp.sin(angle)
-    cross_product = jnp.cross(axis, vector)
-    dot_product = jnp.dot(axis, vector) * (1 - cos_angle)
-    return cos_angle * vector + sin_angle * cross_product + dot_product * axis
+def _fwd(position, direction, time, surface_distance,
+         normal, scatter_length, wall_reflection_rate, sensor_reflection_rate,
+         absorption_length,
+         hit_sensor, rng_key, speed_of_light):
+    outputs = photon_iteration_update_factors(
+        position, direction, time, surface_distance,
+        normal, scatter_length, wall_reflection_rate, sensor_reflection_rate,
+        absorption_length,
+        hit_sensor, rng_key, speed_of_light)
+    residuals = (position, direction, time, surface_distance,
+                 normal, scatter_length, wall_reflection_rate, sensor_reflection_rate,
+                 absorption_length,
+                 hit_sensor, rng_key, speed_of_light)
+    return outputs, residuals
 
 
-def make_hits_simulation_min(flat_weights: jnp.ndarray,
-                             flat_indices: jnp.ndarray,
-                             flat_times: jnp.ndarray,
-                             num_detectors: int,
-                             qe: float = 0.2,
-                             rng_key: Optional[jax.random.PRNGKey] = None,
-                             threshold: float = 1e-10,
-                             temperature: float = 0.01) -> Tuple[jnp.ndarray, jnp.ndarray]:
-    """
-    Differentiable simulation of photon detection and hit timing.
+def _bwd(residuals, g):
+    g_pos, g_dir, g_time, g_detect, g_refl, g_cont = g
 
-    This function simulates the detection of photons at multiple detectors,
-    applying quantum efficiency and computing the first arrival time using
-    a differentiable soft minimum approximation. This allows the function
-    to be used in gradient-based optimization and neural network training.
+    g_pos = jnp.nan_to_num(g_pos, nan=0.0, posinf=0.0, neginf=0.0)
+    g_dir = jnp.nan_to_num(g_dir, nan=0.0, posinf=0.0, neginf=0.0)
+    g_time = jnp.nan_to_num(g_time, nan=0.0, posinf=0.0, neginf=0.0)
+    g_detect = jnp.nan_to_num(g_detect, nan=0.0, posinf=0.0, neginf=0.0)
+    g_refl = jnp.nan_to_num(g_refl, nan=0.0, posinf=0.0, neginf=0.0)
+    g_cont = jnp.nan_to_num(g_cont, nan=0.0, posinf=0.0, neginf=0.0)
 
-    The soft minimum uses the LogSumExp trick with numerical stability to
-    approximate the hard minimum operation in a differentiable manner.
+    _, vjp_fn = jax.vjp(photon_iteration_update_factors, *residuals)
+    return vjp_fn((g_pos, g_dir, g_time, g_detect, g_refl, g_cont))
 
-    Parameters
-    ----------
-    flat_weights : jnp.ndarray
-        Array of photon weights/energies. Shape: (n_photons,)
-    flat_indices : jnp.ndarray
-        Array of detector indices for each photon. Shape: (n_photons,)
-    flat_times : jnp.ndarray
-        Array of photon arrival times in nanoseconds. Shape: (n_photons,)
-    num_detectors : int
-        Total number of detectors
-    qe : float, optional
-        Quantum efficiency (probability of detecting a photon). Default: 0.2
-        Applied as a scaling factor to all weights.
-    rng_key : jax.random.PRNGKey, optional
-        Unused, kept for API compatibility. Default: None
-    threshold : float, optional
-        Minimum weight threshold for valid photons. Default: 1e-10
-    temperature : float, optional
-        Soft minimum temperature parameter. Default: 0.1
-        - Use 0.01 for maximum accuracy (inference)
-        - Use 0.1-0.2 for training (better gradients)
-        - Lower values give harder minimum approximation
 
-    Returns
-    -------
-    measured_charge : jnp.ndarray
-        Total charge per detector. Shape: (num_detectors,)
-    measured_time : jnp.ndarray
-        First arrival time per detector (continuous). Shape: (num_detectors,)
-        Returns 0 for detectors with no valid hits.
+photon_iteration_update_factors_safe.defvjp(_fwd, _bwd)
 
-    Notes
-    -----
-    Temperature Selection Guide:
-    - T=0.01: Error ~0.113 ns (15% non-zero gradients)
-    - T=0.1:  Error ~0.128 ns (22% non-zero gradients)
-    - T=0.2:  Error ~0.143 ns (32% non-zero gradients)
-    - T=1.0:  Error ~0.390 ns (86% non-zero gradients)
 
-    The soft minimum approximation at T=0.01 achieves accuracy within
-    the fundamental limit imposed by hardware digitization.
-    """
-    # Apply quantum efficiency
-    qe_weights = flat_weights * qe
+# ===================================================================
+# make_hits functions
+# ===================================================================
 
-    # Filter valid photons
+def make_hits_simulation(
+        flat_weights, flat_indices, flat_times, num_detectors,
+        qe=0.2, qe_corrections=None, threshold=1e-10, temperature=0.01):
+    """Differentiable soft-min first-arrival timing with per-sensor QE corrections."""
+    per_photon_qe = qe * qe_corrections[flat_indices]
+    qe_weights = flat_weights * per_photon_qe
+
     valid_mask = (qe_weights > threshold) & (flat_times > 0) & jnp.isfinite(flat_times)
     filtered_times = jnp.where(valid_mask, flat_times, jnp.inf)
 
-    # Get per-detector minimum times for offset
     detector_mins = jax.ops.segment_min(filtered_times, flat_indices, num_segments=num_detectors)
-
-    # Gather the appropriate offset for each photon based on its detector
     photon_offsets = detector_mins[flat_indices]
 
-    # Compute exp terms with per-detector offsets
     shifted_times = jnp.where(valid_mask, flat_times - photon_offsets, jnp.inf)
     exp_terms = jnp.where(valid_mask, jnp.exp(-shifted_times / temperature), 0.0)
-
-    # Sum exp terms per detector
     exp_sums = jax.ops.segment_sum(exp_terms, flat_indices, num_segments=num_detectors)
 
-    # Compute soft minimum per detector
     segment_min_time = detector_mins - temperature * jnp.log(exp_sums + 1e-20)
-
-    # Handle detectors with no valid photons
     has_photons = jnp.isfinite(detector_mins)
     segment_min_time = jnp.where(has_photons, segment_min_time, jnp.inf)
 
-    # Sum charges per detector
     total_charge = jax.ops.segment_sum(qe_weights, flat_indices, num_segments=num_detectors)
 
-    # Final masking
     nonzero_mask = (total_charge > threshold) & jnp.isfinite(segment_min_time)
     measured_charge = jnp.where(nonzero_mask, total_charge, 0.0)
     measured_time = jnp.where(nonzero_mask, segment_min_time, 0.0)
@@ -612,290 +449,467 @@ def make_hits_simulation_min(flat_weights: jnp.ndarray,
     return measured_charge, measured_time
 
 
-def make_hits_simulation(flat_weights, flat_indices, flat_times, num_detectors, qe=0.2, threshold=1e-5, temperature=0.01):
-        """
-        Differentiable simulation of photon detection with soft minimum timing.
+def make_hits_data(
+        flat_weights, flat_indices, flat_times, num_detectors,
+        qe=0.2, rng_key=None, threshold=1e-5, apply_smearing=False):
+    """Data-mode hits with Bernoulli QE, segment_min timing, and optional SK-like smearing."""
+    timing_mask = (flat_weights > threshold) & (flat_times > 0)
+    filtered_times = jnp.where(timing_mask, flat_times, jnp.inf)
 
-        Uses the same charge prediction as before but employs soft minimum
-        logic from make_hits_simulation_min for time prediction.
+    rng_key, smear_time_key = jax.random.split(rng_key)
+    qe_key, smear_counts_key = jax.random.split(rng_key)
 
-        Parameters
-        ----------
-        flat_weights : jnp.ndarray
-            Array of photon weights/energies
-        flat_indices : jnp.ndarray
-            Array of detector indices for each photon
-        flat_times : jnp.ndarray
-            Array of photon arrival times
-        num_detectors : int
-            Total number of detectors
-        qe : float, optional
-            Quantum efficiency. Default: 0.2
-        threshold : float, optional
-            Minimum weight threshold. Default: 1e-5
-        temperature : float, optional
-            Soft minimum temperature parameter. Default: 0.01
-            - Lower values (0.01) give harder minimum approximation
-            - Higher values (0.1-0.2) give better gradients
+    # Always apply Bernoulli QE sampling — when qe >= 1.0, uniform(0,1) < qe
+    # is always true so all photons pass.  Avoids Python `if` on traced values.
+    detection_probs = jax.random.uniform(qe_key, shape=flat_weights.shape)
+    detected_mask = detection_probs < qe
+    qe_weights = flat_weights * detected_mask.astype(jnp.float32)
+    qe_filtered_times = jnp.where(detected_mask & timing_mask, flat_times, jnp.inf)
 
-        Returns
-        -------
-        measured_charge : jnp.ndarray
-            Total charge per detector
-        measured_time : jnp.ndarray
-            First arrival time per detector (soft minimum)
-        """
-        # Apply quantum efficiency
-        qe_weights = flat_weights * qe
+    total_charge = jax.ops.segment_sum(qe_weights, flat_indices, num_segments=num_detectors)
+    detector_mins = jax.ops.segment_min(qe_filtered_times, flat_indices, num_segments=num_detectors)
 
-        # Charge calculation (unchanged)
-        total_charge = jax.ops.segment_sum(
-            qe_weights,
-            flat_indices,
-            num_segments=num_detectors
+    nonzero_mask = (total_charge > 1e-10) & (detector_mins > 0)
+
+    if apply_smearing:
+        measured_time = jnp.where(
+            jnp.any(nonzero_mask),
+            smear_times(detector_mins, key=smear_time_key),
+            0.0
         )
-
-        # Time calculation using soft minimum (from make_hits_simulation_min)
-        # Filter valid photons
-        valid_mask = (qe_weights > threshold) & (flat_times > 0) & jnp.isfinite(flat_times)
-        filtered_times = jnp.where(valid_mask, flat_times, jnp.inf)
-
-        # Get per-detector minimum times for offset
-        detector_mins = jax.ops.segment_min(filtered_times, flat_indices, num_segments=num_detectors)
-
-        # Gather the appropriate offset for each photon based on its detector
-        photon_offsets = detector_mins[flat_indices]
-
-        # Compute exp terms with per-detector offsets
-        shifted_times = jnp.where(valid_mask, flat_times - photon_offsets, jnp.inf)
-        exp_terms = jnp.where(valid_mask, jnp.exp(-shifted_times / temperature), 0.0)
-
-        # Sum exp terms per detector
-        exp_sums = jax.ops.segment_sum(exp_terms, flat_indices, num_segments=num_detectors)
-
-        # Compute soft minimum per detector
-        segment_min_time = detector_mins - temperature * jnp.log(exp_sums + 1e-20)
-
-        # Handle detectors with no valid photons
-        has_photons = jnp.isfinite(detector_mins)
-        segment_min_time = jnp.where(has_photons, segment_min_time, jnp.inf)
-
-        # Final masking
-        nonzero_mask = (total_charge > threshold) & jnp.isfinite(segment_min_time)
-        measured_charge = jnp.where(nonzero_mask, total_charge, 0.0)
-        measured_time = jnp.where(nonzero_mask, segment_min_time, 0.0)
-
-        return measured_charge, measured_time
-
-def smear_times(times, time_resolution=0.4, key=None):
-    """
-    Gaussianly smear input times.
-    The default time resoluition is that of SK.
-    Reference: https://arxiv.org/pdf/1307.0162
-
-    Args:
-        times: array of input times (e.g., per detector).
-        time_resolution: standard deviation (in ns) of Gaussian smearing.
-        key: JAX random key for reproducibility.
-    Returns:
-        smeared_times: Gaussian-smeared times.
-    """
-    noise = jax.random.normal(key, shape=times.shape) * time_resolution
-    smeared_times = times + noise
-    smeared_times = jnp.where((jnp.isfinite(smeared_times)), smeared_times, 1e6)
-
-    return smeared_times
-
-
-def smear_charges_SK_like(counts, key=None):
-    """
-    Gaussianly smear input charge counts according to Super-Kamiokande-like resolution.
-
-    Reference: https://arxiv.org/pdf/1307.0162 (Table 2)
-    
-    Args:
-        counts: array of input charge counts (e.g., number of hits per PMT).
-        key: JAX random key for reproducibility.
-    
-    Returns:
-        smeared_counts: Gaussian-smeared charge counts.
-    """
-    if key is None:
-        raise ValueError("key must be provided for reproducibility.")
-
-    #Define sigma according to the count range
-    sigma = jnp.where(
-        counts < 20,
-        counts * 0.012,
-        jnp.where(counts < 130, counts * 0.0075, counts * 0.005)
-    )
-
-    # Apply Gaussian smearing
-    noise = jax.random.normal(key, shape=counts.shape) * sigma
-    smeared_counts = counts + noise
-
-    # Handle non-finite results (e.g., NaN or inf)
-    smeared_counts = jnp.where(jnp.isfinite(smeared_counts), smeared_counts, 0.0)
-
-    # Avoid negative or unphysical charge values
-    smeared_counts = jnp.clip(smeared_counts, 0.0, None)
-
-    return smeared_counts
-
-
-# 0.4 ns is Super-Kamiokande's PMT time resolution
-def time_digitizer(times, time_resolution=0.4):
-    """
-    Digitize input times to bin centers.
-
-    Args:
-        times: Input array of times to digitize
-        time_resolution: Time resolution for binning (default=1)
-
-    Returns:
-        Array with same shape as input where each time is replaced
-        by its corresponding bin center
-    """
-    time_window = 500  # nanoseconds
-    nbins = int(time_window / time_resolution)
-    bins = jnp.linspace(0, time_window, int(nbins + 1))
-    bin_centers = bins[:-1] + (bins[1] - bins[0]) / 2
-
-    # Find which bin each time falls into
-    bin_indices = jnp.digitize(times, bins) - 1
-    digitized_times = jnp.where((jnp.isfinite(times)), bin_centers[bin_indices], 1e6)
-
-    return digitized_times
-
-
-def make_hits_data(flat_weights, flat_indices, flat_times, num_detectors, qe=0.2, key=None, threshold=1e-5, apply_smearing=False):
-
-        timing_mask = (flat_weights>threshold) & (flat_times>0)
-        filtered_times = jnp.where(timing_mask, flat_times, jnp.inf)
-
-        key, smear_time_key = jax.random.split(key)
-        qe_key, smear_counts_key = jax.random.split(key)
-
-        # Apply quantum detection efficiency using Bernoulli sampling
-        if qe_key is not None and qe < 1.0:
-            # Generate random numbers for each photon
-            detection_probs = jax.random.uniform(qe_key, shape=flat_weights.shape)
-            # Binary detection decision
-            detected_mask = detection_probs < qe
-            # Apply detection mask to weights
-            qe_weights = flat_weights * detected_mask.astype(jnp.float32)
-            # Also apply detection mask to timing - only detected photons contribute to timing
-            qe_filtered_times = jnp.where(detected_mask & timing_mask, flat_times, jnp.inf)
-        else:
-            qe_weights = flat_weights
-            qe_filtered_times = filtered_times
-
-        total_charge = jax.ops.segment_sum(
-            qe_weights,  # Use QE-modified weights instead of flat_weights
-            flat_indices,
-            num_segments=num_detectors
+        measured_charge = jnp.where(
+            nonzero_mask,
+            smear_charges_SK_like(total_charge, key=smear_counts_key),
+            0
         )
+    else:
+        measured_time = jnp.where(jnp.any(nonzero_mask), detector_mins, 0.0)
+        measured_charge = jnp.where(nonzero_mask, total_charge, 0)
 
-        weighted_time_sum = jax.ops.segment_sum(qe_weights * flat_times, flat_indices, num_segments=num_detectors)
-        weighted_mean_time = weighted_time_sum / (total_charge + 1e-20)
-
-        # Find minimum non-zero time for alignment
-        detector_mins = jax.ops.segment_min(qe_filtered_times, flat_indices, num_segments=num_detectors)
-
-        nonzero_mask = (total_charge > 1e-10) & (detector_mins > 0)
-
-        if apply_smearing:
-            # Apply smearing to true values
-            measured_time = jnp.where(
-                jnp.any(nonzero_mask),
-                smear_times(detector_mins, key=smear_time_key),
-                0.0
-            )
-            measured_charge = jnp.where(
-                nonzero_mask,
-                smear_charges_SK_like(total_charge, key=smear_counts_key),
-                0
-            )
-        else:
-            # Return true values without smearing (new default behavior)
-            measured_time = jnp.where(jnp.any(nonzero_mask), detector_mins, 0.0)
-            measured_charge = jnp.where(nonzero_mask, total_charge, 0)
-
-        # Use this to use mean time instead of min time.
-        # nonzero_mask = (total_charge > 1e-10) & (weighted_mean_time > 0)
-        # measured_time = jnp.where(
-        #     jnp.any(nonzero_mask),
-        #     weighted_mean_time,
-        #     0.0
-        # )
-
-        return measured_charge, measured_time
+    return measured_charge, measured_time
 
 
-def create_event_simulator(detector, propagate_photons, Nphot, NUM_SENSORS, sensor_points, K,
-                           is_data, is_calibration, max_sensors_per_cell, use_expected_value=None,
-                           detector_type='Cylinder', material='water', particle='muon', apply_smearing=False):
-    """
-    Create an event simulator with the appropriate configuration.
+def make_hits_likelihood(
+        flat_weights, flat_indices, flat_times, num_detectors,
+        qe=0.2, qe_corrections=None, threshold=1e-10):
+    """Likelihood mode: return per-photon log-weights and per-sensor total charge.
 
-    This function sets up the simulator by choosing the correct photon update
-    function and simulation mode based on the provided parameters. All simulation
-    functions are defined within this scope to avoid redundant parameter passing.
+    Instead of aggregating times to per-sensor first-arrival values, this
+    returns the raw per-photon arrays so that ``first_arrival_nll`` (or
+    similar likelihood-based losses) can operate on them directly.
 
     Parameters
     ----------
-    propagate_photons : callable
-        Function to propagate photons through the detector geometry
-    Nphot : int
-        Number of photons to simulate per event
-    NUM_SENSORS : int
-        Total number of sensors in the system
-    sensor_points : jnp.ndarray
-        Array of sensor positions, shape (NUM_SENSORS, 3)
+    flat_weights : jnp.ndarray
+        Per-photon detection weights (K * max_sensors * n_rays,).
+    flat_indices : jnp.ndarray
+        Per-photon sensor indices (same shape).
+    flat_times : jnp.ndarray
+        Per-photon arrival times in ns (same shape).
+    num_detectors : int
+        Total number of sensors.
+    qe : float
+        Quantum efficiency.
+    qe_corrections : jnp.ndarray
+        Per-sensor QE correction factors (num_detectors,).
+    threshold : float
+        Minimum weight to consider a photon valid.
+
+    Returns
+    -------
+    log_w : jnp.ndarray
+        Log of QE-corrected weights (per photon). Invalid photons get -1e10.
+    safe_times : jnp.ndarray
+        Arrival times with invalid entries zeroed out (per photon).
+    flat_indices : jnp.ndarray
+        Sensor indices (per photon, unchanged).
+    total_charge : jnp.ndarray
+        Predicted total charge per sensor (num_detectors,).
+    """
+    per_photon_qe = qe * qe_corrections[flat_indices]
+    qe_weights = flat_weights * per_photon_qe
+
+    valid_mask = (qe_weights > threshold) & (flat_times > 0) & jnp.isfinite(flat_times)
+    safe_weights = jnp.where(valid_mask, qe_weights, 0.0)
+    safe_times = jnp.where(valid_mask, flat_times, 0.0)
+    log_w = jnp.where(valid_mask, jnp.log(safe_weights + 1e-30), -1e10)
+
+    total_charge = jax.ops.segment_sum(safe_weights, flat_indices, num_segments=num_detectors)
+
+    return log_w, safe_times, flat_indices, total_charge
+
+
+# ===================================================================
+# Event simulator factory
+# ===================================================================
+
+def setup_event_simulator(
+        json_filename,
+        n_photons=1_000_000,
+        temperature=0.2,
+        K=7,
+        is_data=False,
+        is_calibration=False,
+        max_sensors_per_cell=4,
+        detector_type='Cylinder',
+        use_expected_value=True,
+        particle='muon',
+        apply_smearing=True,
+        physics_config=None,
+        default_detector_params=False):
+    """
+    Set up and return an event simulator using DetectorParams / ParticleParams.
+
+    Parameters
+    ----------
+    json_filename : str
+        Path to detector geometry JSON.
+    n_photons : int
+        Number of photons per event.
+    temperature : float
+        Soft-assignment temperature for propagation.
     K : int
-        Number of scattering iterations before forcing detection
+        Maximum scattering iterations.
     is_data : bool
-        If True, simulator reads photon data from ROOT files
+        ROOT-file data mode.
     is_calibration : bool
-        If True, simulator uses isotropic point source
+        Calibration mode (source passed at call time).
     max_sensors_per_cell : int
-        Maximum number of sensors per grid cell
-    use_expected_value : bool, optional
-        Propagation mode selection:
-        - True: Expected value mode (differentiable)
-        - False: Monte Carlo sampling mode
-        - None: Auto-select (sampling for data, expected value otherwise)
-    material : str, optional
-        Material type (e.g., 'water', 'ice'), default 'water'
-    particle : str, optional
-        Particle type (e.g., 'muon', 'electron'), default 'muon'
+        Grid cell sensor limit.
+    detector_type : str
+        'Cylinder', 'Sphere', or 'Box'.
+    use_expected_value : bool
+        True -> STE (differentiable), False -> MC sampling.
+    particle : str
+        Particle type (e.g., 'muon', 'electron'). Used to load SIREN model,
+        t0 parameters, and photon normalization from config.
+    apply_smearing : bool
+        If True, apply SK-like charge and time smearing in data mode.
+    physics_config : str or None
+        Path to physics config JSON (e.g. ``SK_physics_config.json``).
+        Required when ``default_detector_params=True``.
+    default_detector_params : bool or DetectorParams
+        Controls whether ``detector_params`` is baked into the returned function:
+
+        - ``False`` (default) -- returned function **requires** ``detector_params``
+          as an explicit argument.
+        - ``True`` -- loads ``DetectorParams`` from *physics_config* at setup time
+          and bakes it into the closure.
+        - ``DetectorParams`` instance -- bakes that instance directly (no file load).
 
     Returns
     -------
     callable
-        JIT-compiled simulation function
+        When ``default_detector_params`` is ``False``:
+
+        - **Calibration** ``(source, detector_params, key) -> (charges, times)``
+        - **Track**       ``(particle_params, detector_params, key) -> (charges, times)``
+        - **Data**        ``(particle_params, detector_params, key, photon_data) -> (charges, times)``
+
+        When ``default_detector_params`` is truthy (``True`` or a ``DetectorParams``):
+
+        - **Calibration** ``(source, key) -> (charges, times)``
+        - **Track**       ``(particle_params, key) -> (charges, times)``
+        - **Data**        ``(particle_params, key, photon_data) -> (charges, times)``
+
+        When detector params are baked in, the returned function also exposes
+        a ``.default_detector_params`` attribute for inspection.
     """
-    # Select photon update function based on mode
+    # ---- Resolve default_detector_params ------------------------------------
+    if default_detector_params is False:
+        _default_dp = None
+    elif default_detector_params is True:
+        if physics_config is None:
+            raise ValueError("physics_config is required when default_detector_params=True")
+        _default_dp = load_detector_params(physics_config)
+    elif isinstance(default_detector_params, DetectorParams):
+        _default_dp = default_detector_params
+    else:
+        raise TypeError(
+            f"default_detector_params must be bool or DetectorParams, got {type(default_detector_params)}")
+
+    if detector_type not in ('Cylinder', 'Sphere', 'Box'):
+        raise ValueError(f"detector_type must be 'Cylinder', 'Sphere', or 'Box', got {detector_type}")
+
+    # ---- Read material and compute speed of light ---------------------------
+    material = get_material_from_config(json_filename)
+    SPEED_OF_LIGHT_MATERIAL = get_speed_of_light_in_material(material)
+
+    # ---- Detector geometry --------------------------------------------------
+    detector = generate_detector(json_filename)
+    sensor_points = jnp.array(detector.all_points)
+    photosensor_radius = detector.S_radius
+    NUM_SENSORS = len(sensor_points)
+    Nphot = n_photons
+
+    if detector_type == 'Cylinder':
+        propagate_photons = create_photon_propagator(
+            sensor_points, photosensor_radius,
+            r=detector.r, h=detector.H,
+            temperature=temperature,
+            max_sensors_per_cell=max_sensors_per_cell)
+    elif detector_type == 'Sphere':
+        propagate_photons = create_sphere_photon_propagator(
+            sensor_points, photosensor_radius,
+            sphere_radius=detector.r,
+            temperature=temperature,
+            n_divisions=100,
+            max_sensors_per_cell=max_sensors_per_cell)
+    elif detector_type == 'Box':
+        propagate_photons = create_box_photon_propagator(
+            sensor_points, photosensor_radius,
+            length=detector.L, width=detector.W, height=detector.H,
+            temperature=temperature,
+            max_sensors_per_cell=max_sensors_per_cell)
+
+    # ---- Handle qe_corrections for baked-in detector params -----------------
+    if _default_dp is not None:
+        qe_corr = _default_dp.qe_corrections
+        # If scalar placeholder (from null in JSON), broadcast to NUM_SENSORS
+        if qe_corr.ndim == 0:
+            _default_dp = _default_dp._replace(qe_corrections=jnp.ones(NUM_SENSORS) * qe_corr)
+        elif len(qe_corr) != NUM_SENSORS:
+            raise ValueError(
+                f"qe_corrections has {len(qe_corr)} elements "
+                f"but detector has {NUM_SENSORS} sensors")
+
+    # ---- Select photon update function --------------------------------------
     if is_data:
-        photon_update_fn = photon_iteration_sample  # Data always uses sampling
+        photon_update_fn = photon_iteration_sample
     elif use_expected_value is False:
         photon_update_fn = photon_iteration_sample
     else:
-        photon_update_fn = photon_iteration_update_factors
+        photon_update_fn = jax.remat(photon_iteration_update_factors_safe)
 
-    # Calculate speed of light in the material (m/ns)
-    SPEED_OF_LIGHT_MATERIAL = get_speed_of_light_in_material(material)
+    # ---- Geometry bounds check ----------------------------------------------
+    if detector_type == 'Cylinder':
+        def get_inside_detector_flag(positions):
+            x, y, z = positions[:, 0], positions[:, 1], positions[:, 2]
+            inside_xy = (x ** 2 + y ** 2) <= detector.r ** 2
+            inside_z = (z >= -detector.H / 2) & (z <= detector.H / 2)
+            return inside_xy & inside_z
+    elif detector_type == 'Sphere':
+        def get_inside_detector_flag(positions):
+            return jnp.linalg.norm(positions, axis=1) <= detector.r
+    elif detector_type == 'Box':
+        def get_inside_detector_flag(positions):
+            return box_bounds_check(positions, detector.L, detector.W, detector.H)
 
-    # Define simulation function for ROOT data
+    # ---- make_hits wrapper selection ----------------------------------------
+    if is_data:
+        def _make_hits_fn(flat_weights, flat_indices, flat_times, num_sensors, qe_key, qe, qe_corrections):
+            return make_hits_data(flat_weights, flat_indices, flat_times, num_sensors,
+                                  qe=qe, rng_key=qe_key, apply_smearing=apply_smearing)
+    else:
+        def _make_hits_fn(flat_weights, flat_indices, flat_times, num_sensors, qe_key, qe, qe_corrections):
+            return make_hits_simulation(flat_weights, flat_indices, flat_times, num_sensors,
+                                        qe=qe, qe_corrections=qe_corrections)
+
+        def _make_hits_likelihood_fn(flat_weights, flat_indices, flat_times, num_sensors, qe_key, qe, qe_corrections):
+            return make_hits_likelihood(flat_weights, flat_indices, flat_times, num_sensors,
+                                        qe=qe, qe_corrections=qe_corrections)
+
+    # ================================================================
+    # Core propagation (shared by all modes)
+    # ================================================================
+
+    @partial(jax.jit, static_argnames=(
+        'n_rays', 'K', 'n_grad_iters', 'max_sensors_per_cell', 'num_sensors',
+        'propagate_fn', 'photon_update_fn'))
+    def _common_propagation(
+            positions, directions, intensities, times,
+            n_rays, detector_params, key,
+            num_sensors, K, n_grad_iters, max_sensors_per_cell,
+            propagate_fn, photon_update_fn):
+        """Core photon propagation loop using DetectorParams."""
+
+        # Named field access (no tuple unpacking)
+        scatter_length = detector_params.scatter_length
+        wall_reflection_rate = detector_params.wall_reflection_rate
+        sensor_reflection_rate = detector_params.sensor_reflection_rate
+        absorption_length = detector_params.absorption_length
+        qe = detector_params.qe
+        qe_corrections = detector_params.qe_corrections
+
+        initial_survival = jnp.ones(n_rays)
+
+        def propagation_step(carry, i):
+            current_pos, current_dir, current_times, survival, key = carry
+            key, prop_key = jax.random.split(key)
+
+            prop_results = propagate_fn(current_pos, current_dir)
+            depositions = prop_results['sensor_weights']
+            sensor_indices = prop_results['sensor_indices']
+            hit_times_meters = prop_results['times']  # ray parameter in meters
+            hit_positions = prop_results['positions']
+            normals = prop_results['normals']
+            inside_sensor = prop_results['inside_sensor']
+
+            hit_sensor = jnp.max(inside_sensor, axis=0)
+            surface_distances = jnp.linalg.norm(hit_positions - current_pos, axis=1) - 1e-6
+
+            key, subkey = jax.random.split(key)
+            rng_keys = jax.random.split(subkey, n_rays)
+
+            # vmap: 12 args — dual reflection, no tau_gs
+            (new_positions, new_directions, new_times,
+             detect_probs, reflection_attenuations,
+             continuing_factors) = jax.vmap(
+                photon_update_fn,
+                in_axes=(0, 0, 0, 0, 0,
+                         None, None, None, None,
+                         0, 0, None)
+            )(current_pos, current_dir, current_times,
+              surface_distances, normals,
+              scatter_length, wall_reflection_rate, sensor_reflection_rate,
+              absorption_length,
+              hit_sensor, rng_keys, SPEED_OF_LIGHT_MATERIAL)
+
+            inside_detector = get_inside_detector_flag(new_positions)
+            safe_continuing = jnp.where(inside_detector, continuing_factors, 0.0)
+
+            new_survival = survival * safe_continuing
+
+            physical_intensities = intensities * survival
+            detected_factors = detect_probs * reflection_attenuations
+            updated_weights = depositions * physical_intensities[None, :] * detected_factors[None, :]
+            times_ns = hit_times_meters / SPEED_OF_LIGHT_MATERIAL  # m / (m/ns) = ns
+            total_times = times_ns + current_times[:, None]
+
+            iter_weights = updated_weights
+            iter_indices = sensor_indices
+            iter_times = total_times.squeeze(-1)
+
+            # Stop gradient on position/direction after n_grad_iters iterations
+            # n_grad_iters=0 (reconstruction): always stop_gradient
+            # n_grad_iters=2 (calibration): gradient flows for first 2 iterations
+            next_pos = jnp.where(i < K, new_positions, jax.lax.stop_gradient(new_positions))
+            next_dir = jnp.where(i < n_grad_iters, new_directions, jax.lax.stop_gradient(new_directions))
+            next_times = new_times
+            next_survival = new_survival
+
+            new_carry = (next_pos, next_dir, next_times, next_survival, key)
+            outputs = (iter_weights, iter_indices, iter_times)
+            return new_carry, outputs
+
+        init_carry = (positions, directions, times, initial_survival, key)
+        propagation_step_remat = jax.remat(propagation_step)
+
+        _, (all_weights, all_indices, all_times) = jax.lax.scan(
+            propagation_step_remat, init_carry, jnp.arange(K))
+
+        flat_weights = all_weights.reshape(-1)
+        flat_indices = all_indices.reshape(-1)
+        flat_times = all_times.reshape(-1)
+
+        key, qe_key = jax.random.split(key)
+        corrected_q, aligned_times = _make_hits_fn(
+            flat_weights, flat_indices, flat_times, num_sensors, qe_key, qe, qe_corrections)
+
+        return corrected_q, aligned_times
+
+    @partial(jax.jit, static_argnames=(
+        'n_rays', 'K', 'n_grad_iters', 'max_sensors_per_cell', 'num_sensors',
+        'propagate_fn', 'photon_update_fn'))
+    def _common_propagation_likelihood(
+            positions, directions, intensities, times,
+            n_rays, detector_params, key,
+            num_sensors, K, n_grad_iters, max_sensors_per_cell,
+            propagate_fn, photon_update_fn):
+        """Core photon propagation returning per-photon data for likelihood losses."""
+
+        scatter_length = detector_params.scatter_length
+        wall_reflection_rate = detector_params.wall_reflection_rate
+        sensor_reflection_rate = detector_params.sensor_reflection_rate
+        absorption_length = detector_params.absorption_length
+        qe = detector_params.qe
+        qe_corrections = detector_params.qe_corrections
+
+        initial_survival = jnp.ones(n_rays)
+
+        def propagation_step(carry, i):
+            current_pos, current_dir, current_times, survival, key = carry
+            key, prop_key = jax.random.split(key)
+
+            prop_results = propagate_fn(current_pos, current_dir)
+            depositions = prop_results['sensor_weights']
+            sensor_indices = prop_results['sensor_indices']
+            hit_times_meters = prop_results['times']
+            hit_positions = prop_results['positions']
+            normals = prop_results['normals']
+            inside_sensor = prop_results['inside_sensor']
+
+            hit_sensor = jnp.max(inside_sensor, axis=0)
+            surface_distances = jnp.linalg.norm(hit_positions - current_pos, axis=1) - 1e-6
+
+            key, subkey = jax.random.split(key)
+            rng_keys = jax.random.split(subkey, n_rays)
+
+            (new_positions, new_directions, new_times,
+             detect_probs, reflection_attenuations,
+             continuing_factors) = jax.vmap(
+                photon_update_fn,
+                in_axes=(0, 0, 0, 0, 0,
+                         None, None, None, None,
+                         0, 0, None)
+            )(current_pos, current_dir, current_times,
+              surface_distances, normals,
+              scatter_length, wall_reflection_rate, sensor_reflection_rate,
+              absorption_length,
+              hit_sensor, rng_keys, SPEED_OF_LIGHT_MATERIAL)
+
+            inside_detector = get_inside_detector_flag(new_positions)
+            safe_continuing = jnp.where(inside_detector, continuing_factors, 0.0)
+
+            new_survival = survival * safe_continuing
+
+            physical_intensities = intensities * survival
+            detected_factors = detect_probs * reflection_attenuations
+            updated_weights = depositions * physical_intensities[None, :] * detected_factors[None, :]
+            times_ns = hit_times_meters / SPEED_OF_LIGHT_MATERIAL
+            total_times = times_ns + current_times[:, None]
+
+            iter_weights = updated_weights
+            iter_indices = sensor_indices
+            iter_times = total_times.squeeze(-1)
+
+            next_pos = jnp.where(i < 0, new_positions, jax.lax.stop_gradient(new_positions))
+            next_dir = jnp.where(i < n_grad_iters, new_directions, jax.lax.stop_gradient(new_directions))
+            next_times = new_times
+            next_survival = new_survival
+
+            new_carry = (next_pos, next_dir, next_times, next_survival, key)
+            outputs = (iter_weights, iter_indices, iter_times)
+            return new_carry, outputs
+
+        init_carry = (positions, directions, times, initial_survival, key)
+        propagation_step_remat = jax.remat(propagation_step)
+
+        _, (all_weights, all_indices, all_times) = jax.lax.scan(
+            propagation_step_remat, init_carry, jnp.arange(K))
+
+        flat_weights = all_weights.reshape(-1)
+        flat_indices = all_indices.reshape(-1)
+        flat_times = all_times.reshape(-1)
+
+        key, qe_key = jax.random.split(key)
+        return _make_hits_likelihood_fn(
+            flat_weights, flat_indices, flat_times, num_sensors, qe_key, qe, qe_corrections)
+
+    # ================================================================
+    # Mode-specific simulation functions
+    # ================================================================
+
     @jax.jit
-    def _simulation_with_data(particle_params, detector_params, key, photonsim_data):
-        """Simulate events using photon data from ROOT files."""
-        energy, track_origin, track_direction = particle_params
+    def _simulation_with_data_impl(particle_params, detector_params, key, photon_data):
+        """Data mode: photons from ROOT/PhotonSim files, particle_params is ParticleParams."""
+        energy = particle_params.energy
+        track_origin = particle_params.position
+        track_direction = particle_params.direction  # property
 
-        # Extract photon data and convert cm to m
-        photon_origins = photonsim_data['photon_origins'] / 100.0  # cm to m
-        photon_directions = photonsim_data['photon_directions']
-        photon_times = photonsim_data['photon_times']
+        photon_origins = photon_data['photon_origins'] / 100.0  # cm to m
+        photon_directions = photon_data['photon_directions']
+        photon_times = photon_data['photon_times']
 
         # Apply rotation if specified (using jax.lax.cond for JIT compatibility)
         def apply_rotation_fn(args):
@@ -912,10 +926,9 @@ def create_event_simulator(detector, propagate_photons, Nphot, NUM_SENSORS, sens
             origins, directions, _, _ = args
             return origins, directions
 
-        # Get rotation parameters (always present in photonsim_data)
-        rotation_axis = photonsim_data['rotation_axis']
-        rotation_angle = photonsim_data['rotation_angle']
-        apply_rotation = photonsim_data['apply_rotation']
+        rotation_axis = photon_data['rotation_axis']
+        rotation_angle = photon_data['rotation_angle']
+        apply_rotation = photon_data['apply_rotation']
 
         final_origins, final_directions = jax.lax.cond(
             apply_rotation,
@@ -927,15 +940,14 @@ def create_event_simulator(detector, propagate_photons, Nphot, NUM_SENSORS, sens
         # Apply translation if specified (AFTER rotation)
         def apply_translation_fn(args):
             origins, translation_vec = args
-            return origins + translation_vec[None, :]  # Broadcast translation to all photons
+            return origins + translation_vec[None, :]
 
         def no_translation_fn(args):
             origins, _ = args
             return origins
 
-        # Get translation parameters (may not be present in older code)
-        apply_translation = photonsim_data.get('apply_translation', False)
-        translation_vector = photonsim_data.get('translation_vector', jnp.array([0.0, 0.0, 0.0]))
+        apply_translation = photon_data.get('apply_translation', False)
+        translation_vector = photon_data.get('translation_vector', jnp.array([0.0, 0.0, 0.0]))
 
         final_origins = jax.lax.cond(
             apply_translation,
@@ -944,328 +956,99 @@ def create_event_simulator(detector, propagate_photons, Nphot, NUM_SENSORS, sens
             (final_origins, translation_vector)
         )
 
-        # Create mask for valid photons
         n_rays = photon_origins.shape[0]
-        mask = jnp.arange(n_rays) < photonsim_data['N']
-        photon_intensities = 1. * mask.astype(jnp.float32)
+        mask = jnp.arange(n_rays) < photon_data['N']
+        photon_intensities = 1.0 * mask.astype(jnp.float32)
 
         return _common_propagation(
             final_origins, final_directions, photon_intensities, photon_times,
-            n_rays, detector_params, key, NUM_SENSORS, K, max_sensors_per_cell,
-            propagate_photons, photon_update_fn
-        )
+            n_rays, detector_params, key, NUM_SENSORS, K, 0, max_sensors_per_cell,
+            propagate_photons, photon_update_fn)
 
-    # Load photonsim parameters from configuration
+    # Load photonsim parameters from configuration (power-law normalization, SIREN path)
     photonsim_params = unpack_photonsim_params(particle, material)
     tot_n_photons_a, tot_n_photons_b, tot_n_photons_c = photonsim_params['tot_n_photons_normalization']
     num_seeds_a, num_seeds_b, num_seeds_c = photonsim_params['num_seeds']
 
     @jax.jit
     def tot_n_photons_normalization(x):
-        """ Translates unphysical SIREN output units into number of physical photons.
-            Uses power law: a * energy^b + c. Parameters are loaded from configuration files. """
-        return (tot_n_photons_a * jnp.power(x, tot_n_photons_b) + tot_n_photons_c)
+        """Power law: a * energy^b + c. Parameters loaded from config."""
+        return tot_n_photons_a * jnp.power(x, tot_n_photons_b) + tot_n_photons_c
 
     @jax.jit
-    def _simulation_without_data(particle_params, detector_params, key, grid_data, model_params):
-        """Simulate events using SIREN model for photon generation."""
-        energy, track_origin, direction_angles = particle_params
+    def _simulation_without_data_impl(particle_params, detector_params, key, grid_data, model_params):
+        """SIREN mode: particle_params is ParticleParams."""
+        energy = particle_params.energy
+        track_origin = particle_params.position
+        track_direction = particle_params.direction  # property
 
-        # Convert theta and phi angles to direction vector
-        theta, phi = direction_angles
-        track_direction = spherical_to_cartesian(theta, phi)
-
-        # Generate photons using SIREN with configured num_seeds parameters (power law)
         photon_directions, photon_origins, photon_weights = photonsim_differentiable_get_rays(
             track_origin, track_direction, energy, Nphot, grid_data, model_params, key,
             num_seeds_a, num_seeds_b, num_seeds_c
         )
 
-        # Scale weights to physical photon count
         total_photons_norm = tot_n_photons_normalization(energy)
         photon_intensities = (total_photons_norm * photon_weights) / Nphot
-        #jax.debug.print("TOT INTENSITIES: {}", jnp.sum(photon_intensities))
         photon_times = jnp.zeros((Nphot,))
 
-        distances_to_vertex = jnp.linalg.norm(photon_origins - track_origin, axis=1) * 1000  # converting to mm
-        predict_t0_vectorized = jax.vmap(predict_t0, in_axes=(0, None, None, None, None, None, None, None, None))
+        distances_to_vertex = jnp.linalg.norm(photon_origins - track_origin, axis=1) * 1000
+        predict_t0_vec = jax.vmap(predict_t0, in_axes=(0, None, None, None, None, None, None, None, None))
         baseline_slope, baseline_intercept, A_slope, A_intercept, B_slope, B_intercept, offset = t0_params
         t0 = jax.lax.stop_gradient(
-            predict_t0_vectorized(distances_to_vertex, energy, baseline_slope, baseline_intercept, A_slope, A_intercept,
-                                  B_slope, B_intercept, offset))
+            predict_t0_vec(distances_to_vertex, energy,
+                           baseline_slope, baseline_intercept,
+                           A_slope, A_intercept,
+                           B_slope, B_intercept, offset))
 
-        return _common_propagation(
+        return _common_propagation_likelihood(
             photon_origins, photon_directions, photon_intensities, photon_times + t0,
-            Nphot, detector_params, key, NUM_SENSORS, K, max_sensors_per_cell,
-            propagate_photons, photon_update_fn
-        )
+            Nphot, detector_params, key, NUM_SENSORS, K, 0, max_sensors_per_cell,
+            propagate_photons, photon_update_fn)
 
-    # Define calibration simulation function
     @jax.jit
-    def _simulation_sensor_calibration(source_params, detector_params, key):
-        """Simulate isotropic point source for detector calibration."""
-        source_origin, source_intensity = source_params
-
-        # Generate isotropic photons
-        photon_directions, photon_origins, photon_intensities = get_isotropic_rays(
-            source_origin, source_intensity, Nphot, key
-        )
+    def _simulation_sensor_calibration_impl(source, detector_params, key):
+        """Calibration mode: source is a callable (IsotropicSource or LaserSource)."""
+        photon_directions, photon_origins, photon_intensities = source(Nphot, key)
         photon_times = jnp.zeros((Nphot,))
 
         return _common_propagation(
             photon_origins, photon_directions, photon_intensities, photon_times,
-            Nphot, detector_params, key, NUM_SENSORS, K, max_sensors_per_cell,
-            propagate_photons, photon_update_fn
-        )
+            Nphot, detector_params, key, NUM_SENSORS, K, 2, max_sensors_per_cell,
+            propagate_photons, photon_update_fn)
 
-    # Create geometry-specific bounds check function
-    if detector_type == 'Cylinder':
-        def get_inside_detector_flag(positions):
-            """Cylinder bounds check function."""
-            x, y, z = positions[:, 0], positions[:, 1], positions[:, 2]
-            eps = 0  # Dont change without validations
-            inside_xy_circle = (x ** 2 + y ** 2) <= (detector.r + eps) ** 2
-            inside_z_bounds = (z >= -detector.H / 2 - eps) & (z <= detector.H / 2 + eps)
-            return inside_xy_circle & inside_z_bounds
-    elif detector_type == 'Sphere':
-        def get_inside_detector_flag(positions):
-            """Sphere bounds check function."""
-            distances = jnp.linalg.norm(positions, axis=1)
-            eps = 0  # Dont change without validations
-            return distances <= detector.r + eps
-    elif detector_type == 'Box':
-        def get_inside_detector_flag(positions):
-            """Box bounds check function."""
-            return box_bounds_check(positions, detector.L, detector.W, detector.H)
-    else:
-        def get_inside_detector_flag(positions):
-            """Fallback bounds check function."""
-            return jnp.ones(positions.shape[0], dtype=bool)
-
-    @partial(jax.jit, static_argnames=(
-            'n_rays', 'K', 'max_sensors_per_cell', 'num_sensors', 'propagate_fn', 'photon_update_fn'))
-    def _common_propagation(positions, directions, intensities, times, n_rays, detector_params, key,
-                            num_sensors, K, max_sensors_per_cell, propagate_fn, photon_update_fn):
-        """
-        Common photon propagation logic for all simulation modes.
-
-        This function handles the core propagation loop, tracking photons through
-        K iterations of scattering/reflection/detection. It can work with different
-        photon update functions (expected value or sampling).
-
-        Parameters
-        ----------
-        positions : jnp.ndarray
-            Initial positions of photons, shape (n_rays, 3)
-        directions : jnp.ndarray
-            Initial normalized direction vectors, shape (n_rays, 3)
-        intensities : jnp.ndarray
-            Initial intensities of photons, shape (n_rays,)
-        times : jnp.ndarray
-            Initial times of photons, shape (n_rays,)
-        n_rays : int
-            Number of photons to propagate
-        detector_params : tuple
-            (scatter_length, reflection_rate, absorption_length, tau_gs)
-        key : jax.random.PRNGKey
-            Random key for stochastic operations
-        num_sensors : int
-            Total number of sensors in the system
-        K : int
-            Number of scattering iterations
-        max_sensors_per_cell : int
-            Maximum sensors per grid cell
-        propagate_fn : callable
-            Function to propagate photons and find sensor intersections
-        photon_update_fn : callable
-            Either photon_iteration_update_factors or photon_iteration_sample
-
-        Returns
-        -------
-        corrected_q : jnp.ndarray
-            Total charge deposited at each sensor, shape (num_sensors,)
-        aligned_times : jnp.ndarray
-            Average detection times aligned to earliest detection, shape (num_sensors,)
-        """
-        original_scatter_length, original_reflection_rate, original_absorption_length, tau_gs = detector_params
-
-        # Initialize survival attenuation factor tracking (starts at 1.0 for each photon)
-        initial_survival_attenuation_factor = jnp.ones(n_rays)
-
-        # Define the step function for lax.scan
-        def propagation_step(carry, i):
-            current_positions, current_directions, current_times, survival_attenuation_factor, key = carry
-
-            scatter_length = original_scatter_length
-            reflection_rate = original_reflection_rate
-            absorption_length = original_absorption_length
-
-            # Split keys
-            key, prop_key = jax.random.split(key)
-
-            # Propagate photons to find intersections
-            prop_results = propagate_fn(current_positions, current_directions)
-            depositions = prop_results['sensor_weights']
-            sensor_indices = prop_results['sensor_indices']
-            times_meters = prop_results['times']  # Ray parameter in meters
-            hit_positions = prop_results['positions']
-            normals = prop_results['normals']
-
-            # Convert ray parameter (meters) to time (nanoseconds)
-            times_ns = times_meters / SPEED_OF_LIGHT_MATERIAL  # m / (m/ns) = ns
-
-            # Compute distances to intersection points
-            surface_distances = jnp.linalg.norm(hit_positions - current_positions, axis=1) - 1e-6
-
-            # Generate RNG keys for each photon
-            key, subkey = jax.random.split(key)
-            rng_keys = jax.random.split(subkey, n_rays)
-
-            # Apply photon update function (same signature for both modes)
-            new_positions, new_directions, new_times, detect_probs, reflection_attenuations, continuing_factors = jax.vmap(
-                photon_update_fn,
-                in_axes=(0, 0, 0, 0, 0, None, None, None, None, 0, None)
-            )(current_positions, current_directions, current_times,
-              surface_distances, normals, scatter_length, reflection_rate,
-              absorption_length, tau_gs, rng_keys, SPEED_OF_LIGHT_MATERIAL)
-
-            nan_pos_mask = jnp.any(jnp.isnan(new_positions), axis=1)
-            nan_dir_mask = jnp.any(jnp.isnan(new_directions), axis=1)
-
-            # Fix: Ensure nan_time_mask is per-ray, not scalar
-            nan_time_scalar = jnp.isnan(new_times)
-            nan_time_mask = jnp.broadcast_to(nan_time_scalar, nan_pos_mask.shape)
-
-            nan_factors_mask = jnp.isnan(continuing_factors)
-            problematic_rays = nan_pos_mask | nan_dir_mask | nan_time_mask | nan_factors_mask
-
-            # jax.debug.print("AAA - Iteration {}: Found {} problematic new times with NaN", i, jnp.sum(nan_time_mask))
-            # jax.debug.print("AAA - Iteration {}: Found {} problematic new pos NaN", i, jnp.sum(nan_pos_mask))
-            # jax.debug.print("AAA - Iteration {}: Found {} problematic new direc NaN", i, jnp.sum(nan_dir_mask))
-            # jax.debug.print("AAA - Iteration {}: Found {} problematic new cont fact NaN", i, jnp.sum(nan_factors_mask))
-
-            # nan_count = jnp.sum(problematic_rays)
-            # jax.debug.print("Iteration {}: Found {} problematic rays with NaN", i, nan_count)
-
-            # Replace NaN outputs with safe values
-            safe_new_positions = jnp.where(
-                problematic_rays[:, None],
-                current_positions,  # Keep original position
-                new_positions  # Use computed position
-            )
-
-            safe_new_directions = jnp.where(
-                problematic_rays[:, None],
-                current_directions,  # Keep original direction
-                new_directions  # Use computed direction
-            )
-
-            safe_new_times = jnp.where(
-                problematic_rays,
-                current_times ,  # Keep original direction but convert to ns
-                new_times  # Use computed direction; for the new_times the conversion to ns happens in the updated photon fucntion.
-            )
-
-            # jax.debug.print("A - Zero Cont Fact: {}", jnp.sum(continuing_factors==0))
-            # jax.debug.print("A - Problem Rays: {}", jnp.sum(problematic_rays))
-
-            inside_detector = get_inside_detector_flag(new_positions)
-
-            # jax.debug.print("Rays summary:")
-            # jax.debug.print("Current Positions Out of Detector Volume:  {}", jnp.sum(get_inside_detector_flag(current_positions)==False))
-            # jax.debug.print("New Positions Out of Detector Volume: {}", jnp.sum(get_inside_detector_flag(new_positions)==False))
-
-            safe_continuing_factors = jnp.where(
-                (problematic_rays) | (inside_detector == False),
-                0.0,  # Kill the ray (zero intensity)
-                continuing_factors  # Use computed factor
-            )
-
-            # jax.debug.print("Z - Zero Cont Fact: {}", jnp.sum(safe_continuing_factors==0))
-
-            # Update survival attenuation factor for each photon
-            new_survival_attenuation_factor = survival_attenuation_factor * safe_continuing_factors
-            physical_intensities = intensities * jax.lax.stop_gradient(survival_attenuation_factor)
-
-            # Calculate intensities with physical decay applied
-            detected_intensity_factors = detect_probs * reflection_attenuations
-            updated_weights = depositions * physical_intensities[None, :] * detected_intensity_factors[None, :]
-
-            # Calculate total detection times (both in nanoseconds)
-            total_times = times_ns + current_times[:, None]  # ns + ns
-
-            # Create outputs for this iteration
-            iteration_weights = updated_weights
-            iteration_indices = sensor_indices
-            iteration_times = total_times.squeeze(-1)  # Already in nanoseconds
-
-            # Apply stop_gradient to all state variables
-            next_positions = jax.lax.stop_gradient(safe_new_positions)
-            next_directions = jax.lax.stop_gradient(safe_new_directions)
-            next_times = safe_new_times
-
-            # Stop gradient on survival attenuation factor to prevent gradient accumulation through decay chain
-            next_survival_attenuation_factor = jax.lax.stop_gradient(new_survival_attenuation_factor)
-
-            # Return updated state and outputs (times already in ns, no conversion needed)
-            new_carry = (next_positions, next_directions, next_times, next_survival_attenuation_factor, key)
-            outputs = (iteration_weights, iteration_indices, iteration_times)
-
-            # jax.debug.print("ZZZ - Iteration {}: Found {} problematic next times with NaN", i, jnp.sum(jnp.isnan(next_times)))
-            # jax.debug.print("ZZZ - Iteration {}: Found {} problematic next pos NaN", i, jnp.sum(jnp.isnan(next_positions)))
-            # jax.debug.print("ZZZ - Iteration {}: Found {} problematic next direc NaN", i, jnp.sum(jnp.isnan(next_directions)))
-
-            return new_carry, outputs
-
-        # Initial state with survival attenuation factor
-        init_carry = (positions, directions, times, initial_survival_attenuation_factor, key)
-
-        # Run the propagation loop
-        _, (all_iter_weights, all_iter_indices, all_iter_times) = jax.lax.scan(
-            propagation_step,
-            init_carry,
-            jnp.arange(K)
-        )
-
-        # Flatten arrays across iterations and photons
-        flat_weights = all_iter_weights.reshape(-1)
-        flat_indices = all_iter_indices.reshape(-1)
-        flat_times = all_iter_times.reshape(-1)
-
-        # Use make_hits_fn to compute charges and times
-        # Generate random key for QE sampling (only used for data mode)
-        key, qe_key = jax.random.split(key)
-        corrected_q, aligned_times = _make_hits_fn(flat_weights, flat_indices, flat_times, num_sensors, qe_key)
-
-        return corrected_q, aligned_times
-
-    # Create wrapper functions to handle different signatures and add QE parameter
-    def _make_hits_data_wrapper(flat_weights, flat_indices, flat_times, num_sensors, key, qe=0.065):
-        return make_hits_data(flat_weights, flat_indices, flat_times, num_sensors, qe=qe, key=key, apply_smearing=apply_smearing)
-
-    def _make_hits_simulation_wrapper(flat_weights, flat_indices, flat_times, num_sensors, key, qe=0.065):
-        # For simulation mode, qe_key is ignored since we use deterministic scaling
-        return make_hits_simulation(flat_weights, flat_indices, flat_times, num_sensors, qe=qe)
-
+    # ---- Return the right function ------------------------------------------
     if is_data:
-        _make_hits_fn = _make_hits_data_wrapper
-    else:
-        _make_hits_fn = _make_hits_simulation_wrapper
-
-    # Return appropriate simulation function
-    if is_data:
-        return _simulation_with_data
+        if _default_dp is not None:
+            @jax.jit
+            def _sim_data_default(particle_params, key, photon_data):
+                return _simulation_with_data_impl(particle_params, _default_dp, key, photon_data)
+            _sim_data_default.default_detector_params = _default_dp
+            return _sim_data_default
+        else:
+            return _simulation_with_data_impl
     elif is_calibration:
-        return _simulation_sensor_calibration
+        if _default_dp is not None:
+            @jax.jit
+            def _sim_calibration_default(source, key):
+                return _simulation_sensor_calibration_impl(source, _default_dp, key)
+            _sim_calibration_default.default_detector_params = _default_dp
+            return _sim_calibration_default
+        else:
+            return _simulation_sensor_calibration_impl
     else:
-        # Load SIREN model path from configuration
         model_base_path = photonsim_params['siren_model_path']
         photonsim_predictor = SIRENPredictor(model_base_path)
         grid_data = create_photonsim_siren_grid(photonsim_predictor, 250)
         model_params = photonsim_predictor.params
         t0_params = unpack_t0_params(particle, material)
-
-        # Return partially applied function with model data
-        return partial(_simulation_without_data,
-                       grid_data=grid_data,
-                       model_params=model_params)
+        if _default_dp is not None:
+            @jax.jit
+            def _sim_track_default(particle_params, key):
+                return _simulation_without_data_impl(particle_params, _default_dp, key,
+                                                     grid_data=grid_data, model_params=model_params)
+            _sim_track_default.default_detector_params = _default_dp
+            return _sim_track_default
+        else:
+            return partial(_simulation_without_data_impl,
+                           grid_data=grid_data,
+                           model_params=model_params)

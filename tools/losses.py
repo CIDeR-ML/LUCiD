@@ -476,3 +476,305 @@ def compute_simplified_loss(
 
     # Total loss
     return L_centroid + L_intensity + L_time
+
+
+def hellinger_loss(true_charge_smooth, simulated_charge_smooth, eps=1e-8):
+    sqrt_true = jnp.sqrt(true_charge_smooth + eps)
+    sqrt_sim = jnp.sqrt(simulated_charge_smooth + eps)
+    return jnp.sum((sqrt_true - sqrt_sim) ** 2)
+
+
+@jit
+def WC_smooth_loss(
+        sensor_points: jnp.ndarray,
+        true_charge: jnp.ndarray,
+        true_time: jnp.ndarray,
+        simulated_charge: jnp.ndarray,
+        simulated_time: jnp.ndarray,
+        tau: float = 0.05,
+        eps: float = 1e-8,
+        threshold: float = 1e-8,
+        lambda_poisson: float = 1.0,
+        lambda_time: float = 1.0,
+) -> float:
+    """
+    Smoothed version of WC_loss using Gaussian distance weights.
+
+    Applies spatial Gaussian smoothing to both true and simulated charges
+    before computing Poisson loss, which helps with gradient flow.
+
+    Parameters
+    ----------
+    sensor_points : jnp.ndarray
+        Array of shape (N, 3) with sensor coordinates.
+    true_charge : jnp.ndarray
+        Array of shape (N,) of true charges.
+    true_time : jnp.ndarray
+        Array of shape (N,) of true times.
+    simulated_charge : jnp.ndarray
+        Array of shape (N,) of simulated charges.
+    simulated_time : jnp.ndarray
+        Array of shape (N,) of simulated times.
+    tau : float, optional
+        Gaussian width parameter for spatial smoothing, by default 0.05
+    eps : float, optional
+        Small constant to prevent division by zero, by default 1e-8
+    threshold : float, optional
+        Threshold for considering a sensor active, by default 1e-8
+    lambda_poisson : float, optional
+        Scaling factor for Poisson loss, by default 1.0.
+    lambda_time : float, optional
+        Scaling factor for time loss, by default 1.0.
+
+    Returns
+    -------
+    float
+        Total loss.
+    """
+    # ============= Compute Distance-based Gaussian Weights =============
+    dist = jnp.linalg.norm(
+        sensor_points[:, None, :] - sensor_points[None, :, :],
+        axis=-1
+    )
+    dist_weights = jnp.exp(-dist**2 / (2 * tau**2))
+    col_sums = jnp.sum(dist_weights, axis=0, keepdims=True)
+    dist_weights = dist_weights / (col_sums + eps)
+
+    # ============= Apply Smoothing to Charges =============
+    true_charge_smooth = dist_weights @ true_charge
+    simulated_charge_smooth = dist_weights @ simulated_charge
+
+    # ============= Poisson Loss on Smoothed Charges =============
+    # poisson_loss = hellinger_loss(true_charge_smooth, simulated_charge_smooth, eps)
+    poisson_loss = poisson_nll(true_charge_smooth, simulated_charge_smooth, eps)
+
+    # ============= Time Loss (same as original WC_loss) =============
+    true_active = true_charge > threshold
+    sim_active = simulated_charge > threshold
+
+    true_weights = jnp.where(true_active, true_charge, 0.0)
+    sim_weights = jnp.where(sim_active, simulated_charge, 0.0)
+
+    true_t0 = jax.lax.stop_gradient(jnp.sum(true_time * true_weights) / (jnp.sum(true_weights) + eps))
+    sim_t0 = jnp.sum(simulated_time * sim_weights) / (jnp.sum(sim_weights) + eps)
+
+    both_active = jax.lax.stop_gradient(true_active & sim_active)
+    diff = jnp.where(both_active,
+                     jnp.abs((simulated_time - sim_t0) - (true_time - true_t0)),
+                     0.0)
+
+    time_norm = jnp.where(both_active, jnp.abs(true_time - true_t0), 0.0)
+
+    time_loss = jnp.sum(diff) / (jnp.sum(time_norm) + eps)
+
+    # ============= Combine Losses =============
+    L_charge = poisson_loss * lambda_poisson
+    L_time = time_loss * lambda_time
+
+    return L_charge + L_time
+
+
+@jit
+def WC_smooth_loss_qe_decoupled(
+        sensor_points: jnp.ndarray,
+        true_charge: jnp.ndarray,
+        true_time: jnp.ndarray,
+        simulated_charge: jnp.ndarray,
+        simulated_time: jnp.ndarray,
+        qe_corrections: jnp.ndarray,
+        tau: float = 0.05,
+        eps: float = 1e-8,
+        threshold: float = 1e-8,
+        lambda_poisson: float = 1.0,
+        lambda_time: float = 1.0,
+) -> float:
+    """
+    Smoothed loss with QE-decoupled gradients.
+
+    Divides out per-sensor QE corrections before smoothing,
+    then multiplies back after. This prevents QE corrections
+    from mixing across sensors during the spatial convolution,
+    resulting in approximately decoupled gradients for each
+    sensor's QE correction.
+
+    Parameters
+    ----------
+    sensor_points : jnp.ndarray
+        Array of shape (N, 3) with sensor coordinates.
+    true_charge : jnp.ndarray
+        Array of shape (N,) of true charges.
+    true_time : jnp.ndarray
+        Array of shape (N,) of true times.
+    simulated_charge : jnp.ndarray
+        Array of shape (N,) of simulated charges.
+    simulated_time : jnp.ndarray
+        Array of shape (N,) of simulated times.
+    qe_corrections : jnp.ndarray
+        Array of shape (N,) of per-sensor QE correction factors.
+    tau : float, optional
+        Gaussian width parameter for spatial smoothing, by default 0.05
+    eps : float, optional
+        Small constant to prevent division by zero, by default 1e-8
+    threshold : float, optional
+        Threshold for considering a sensor active, by default 1e-8
+    lambda_poisson : float, optional
+        Scaling factor for Poisson loss, by default 1.0.
+    lambda_time : float, optional
+        Scaling factor for time loss, by default 1.0.
+
+    Returns
+    -------
+    float
+        Total loss.
+    """
+    # ============= Compute Distance-based Gaussian Weights =============
+    dist = jnp.linalg.norm(
+        sensor_points[:, None, :] - sensor_points[None, :, :],
+        axis=-1
+    )
+    dist_weights = jnp.exp(-dist**2 / (2 * tau**2))
+    col_sums = jnp.sum(dist_weights, axis=0, keepdims=True)
+    dist_weights = dist_weights / (col_sums + eps)
+
+    # ============= Divide both by QE corrections =============
+    raw_sim = simulated_charge / (qe_corrections + eps)
+    raw_true = true_charge / (qe_corrections + eps)
+
+    # ============= Smooth both =============
+    raw_sim_smooth = dist_weights @ raw_sim
+    raw_true_smooth = dist_weights @ raw_true
+
+    # ============= Poisson Loss =============
+    poisson_loss = poisson_nll(raw_true_smooth, raw_sim_smooth, eps)
+
+    # ============= Time Loss (same as WC_smooth_loss) =============
+    true_active = true_charge > threshold
+    sim_active = simulated_charge > threshold
+
+    true_weights = jnp.where(true_active, true_charge, 0.0)
+    sim_weights = jnp.where(sim_active, simulated_charge, 0.0)
+
+    true_t0 = jax.lax.stop_gradient(jnp.sum(true_time * true_weights) / (jnp.sum(true_weights) + eps))
+    sim_t0 = jnp.sum(simulated_time * sim_weights) / (jnp.sum(sim_weights) + eps)
+
+    both_active = jax.lax.stop_gradient(true_active & sim_active)
+    diff = jnp.where(both_active,
+                     jnp.abs((simulated_time - sim_t0) - (true_time - true_t0)),
+                     0.0)
+    time_norm = jnp.where(both_active, jnp.abs(true_time - true_t0), 0.0)
+    time_loss = jnp.sum(diff) / (jnp.sum(time_norm) + eps)
+
+    # ============= Combine Losses =============
+    L_charge = poisson_loss * lambda_poisson
+    L_time = time_loss * lambda_time
+
+    return L_charge + L_time
+
+
+@jit
+def WC_smooth_loss_hybrid(
+        sensor_points: jnp.ndarray,
+        true_charge: jnp.ndarray,
+        true_time: jnp.ndarray,
+        simulated_charge: jnp.ndarray,
+        simulated_time: jnp.ndarray,
+        qe_corrections: jnp.ndarray,
+        tau: float = 0.05,
+        eps: float = 1e-8,
+        threshold: float = 1e-8,
+        lambda_poisson: float = 1.0,
+        lambda_time: float = 1.0,
+        lambda_mse: float = 1.0,
+) -> float:
+    """
+    Hybrid loss with cleanly separated gradients:
+    - Poisson loss: gradients flow ONLY to physics parameters
+    - MSE loss: gradients flow ONLY to QE corrections
+
+    The separation is achieved using stop_gradient:
+    1. For Poisson: sim_for_poisson = sim_charge / c * stop_gradient(c)
+       - This blocks gradient path to qe_corrections
+    2. For MSE: raw_sim_sg = stop_gradient(sim_charge / c)
+       - This blocks gradient path to physics params
+       - Gradients only flow through raw_true = true_charge / c
+
+    Parameters
+    ----------
+    sensor_points : jnp.ndarray
+        Array of shape (N, 3) with sensor coordinates.
+    true_charge : jnp.ndarray
+        Array of shape (N,) of true charges.
+    true_time : jnp.ndarray
+        Array of shape (N,) of true times.
+    simulated_charge : jnp.ndarray
+        Array of shape (N,) of simulated charges.
+    simulated_time : jnp.ndarray
+        Array of shape (N,) of simulated times.
+    qe_corrections : jnp.ndarray
+        Array of shape (N,) of per-sensor QE correction factors.
+    tau : float, optional
+        Gaussian width parameter for spatial smoothing, by default 0.05
+    eps : float, optional
+        Small constant to prevent division by zero, by default 1e-8
+    threshold : float, optional
+        Threshold for considering a sensor active, by default 1e-8
+    lambda_poisson : float, optional
+        Scaling factor for Poisson loss (physics params), by default 1.0.
+    lambda_time : float, optional
+        Scaling factor for time loss, by default 1.0.
+    lambda_mse : float, optional
+        Scaling factor for MSE loss (QE corrections), by default 1.0.
+
+    Returns
+    -------
+    float
+        Total loss.
+    """
+    # ============= Compute Distance-based Gaussian Weights =============
+    dist = jnp.linalg.norm(
+        sensor_points[:, None, :] - sensor_points[None, :, :],
+        axis=-1
+    )
+    dist_weights = jnp.exp(-dist**2 / (2 * tau**2))
+    col_sums = jnp.sum(dist_weights, axis=0, keepdims=True)
+    dist_weights = dist_weights / (col_sums + eps)
+
+    # ============= Poisson Loss (physics params ONLY) =============
+    qe_corrections_sg = jax.lax.stop_gradient(qe_corrections)
+    sim_for_poisson = simulated_charge / (qe_corrections + eps) * qe_corrections_sg
+
+    true_charge_smooth = dist_weights @ true_charge
+    sim_charge_smooth = dist_weights @ sim_for_poisson
+    poisson_loss = poisson_nll(true_charge_smooth, sim_charge_smooth, eps)
+
+    # ============= MSE Loss (QE corrections ONLY) =============
+    raw_sim = simulated_charge / (qe_corrections + eps)
+    raw_sim_sg = jax.lax.stop_gradient(raw_sim)
+
+    raw_true = true_charge / (qe_corrections + eps)
+
+    mse_loss = jnp.mean((raw_true - raw_sim_sg) ** 2) / jnp.sum(raw_true**2)
+
+    # ============= Time Loss =============
+    true_active = true_charge > threshold
+    sim_active = simulated_charge > threshold
+
+    true_weights = jnp.where(true_active, true_charge, 0.0)
+    sim_weights = jnp.where(sim_active, simulated_charge, 0.0)
+
+    true_t0 = jax.lax.stop_gradient(jnp.sum(true_time * true_weights) / (jnp.sum(true_weights) + eps))
+    sim_t0 = jnp.sum(simulated_time * sim_weights) / (jnp.sum(sim_weights) + eps)
+
+    both_active = jax.lax.stop_gradient(true_active & sim_active)
+    diff = jnp.where(both_active,
+                     jnp.abs((simulated_time - sim_t0) - (true_time - true_t0)),
+                     0.0)
+    time_norm = jnp.where(both_active, jnp.abs(true_time - true_t0), 0.0)
+    time_loss = jnp.sum(diff) / (jnp.sum(time_norm) + eps)
+
+    # ============= Combine Losses =============
+    L_poisson = poisson_loss * lambda_poisson
+    L_time = time_loss * lambda_time
+    L_mse = mse_loss * lambda_mse
+
+    return L_poisson + L_time + L_mse
