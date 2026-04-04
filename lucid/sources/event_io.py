@@ -1009,7 +1009,7 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path, se
     from lucid.detector_params import ParticleParams
     import numpy as np
     import json
-    from lucid.simulation import smear_charges_SK_like, smear_times
+    from lucid.utils import smear_charges_SK_like, smear_times
     pass  # save_single_event_with_particle_info and merge_event_files are now local
     from lucid.production.voxelize import VoxelGridConfig, voxelize_from_photon_indices, pack_voxel_data_for_hdf5
 
