@@ -5,8 +5,10 @@ Box (rectangular prism) detector geometry implementation.
 import numpy as np
 import plotly.graph_objects as go
 from .base import Detector
+from .registry import register_detector
 
 
+@register_detector('box')
 class Box(Detector):
     """Box (rectangular prism) detector geometry"""
     
