@@ -8,6 +8,7 @@ import json
 import os
 from typing import NamedTuple, Optional
 
+import jax
 import jax.numpy as jnp
 import numpy as np
 
@@ -37,6 +38,43 @@ class MediumProperties(NamedTuple):
 # ---------------------------------------------------------------------------
 
 _DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
+
+
+def load_qe_curve(csv_path=None):
+    """Load PMT QE curve and return a JAX-compatible interpolation function.
+
+    Parameters
+    ----------
+    csv_path : str, optional
+        Path to a CSV file with columns (wavelength_nm, qe_percent).
+        Defaults to ``data/sk_qe.csv`` (SK R3600 PMT).
+
+    Returns
+    -------
+    callable
+        ``qe_fn(wavelength_nm) -> qe_fraction`` (0 to 1).
+        Returns 0 outside the tabulated range.
+    """
+    if csv_path is None:
+        csv_path = os.path.join(_DATA_DIR, "sk_qe.csv")
+
+    data = np.loadtxt(csv_path, delimiter=",", comments="#")
+    wavelengths = data[:, 0]
+    qe_pct = data[:, 1]
+
+    sort_idx = np.argsort(wavelengths)
+    wl_knots = jnp.array(wavelengths[sort_idx])
+    qe_knots = jnp.array(qe_pct[sort_idx] / 100.0)  # percent -> fraction
+    wl_min = float(wl_knots[0])
+    wl_max = float(wl_knots[-1])
+
+    @jax.jit
+    def get_qe(wavelength):
+        qe = jnp.interp(wavelength, wl_knots, qe_knots)
+        in_range = (wavelength >= wl_min) & (wavelength <= wl_max)
+        return jnp.where(in_range, qe, 0.0)
+
+    return get_qe
 
 
 def _load_water_json():
