@@ -217,13 +217,15 @@ def setup_event_simulator(
         qe = detector_params.qe
         qe_corrections = detector_params.qe_corrections
 
+        from lucid.simulation.types import PhotonState
+
         initial_survival = jnp.ones(n_rays)
 
         def propagation_step(carry, i):
-            current_pos, current_dir, current_times, survival, key = carry
-            key, prop_key = jax.random.split(key)
+            state = carry
+            key, prop_key = jax.random.split(state.key)
 
-            prop_results = propagate_fn(current_pos, current_dir)
+            prop_results = propagate_fn(state.positions, state.directions)
             depositions = prop_results['sensor_weights']
             sensor_indices = prop_results['sensor_indices']
             hit_times_meters = prop_results['times']
@@ -232,7 +234,7 @@ def setup_event_simulator(
             inside_sensor = prop_results['inside_sensor']
 
             hit_sensor = jnp.max(inside_sensor, axis=0)
-            surface_distances = jnp.linalg.norm(hit_positions - current_pos, axis=1) - 1e-6
+            surface_distances = jnp.linalg.norm(hit_positions - state.positions, axis=1) - 1e-6
 
             key, subkey = jax.random.split(key)
             rng_keys = jax.random.split(subkey, n_rays)
@@ -245,7 +247,7 @@ def setup_event_simulator(
                 in_axes=(0, 0, 0, 0, 0,
                          None, None, None, None,
                          0, 0, None)
-            )(current_pos, current_dir, current_times,
+            )(state.positions, state.directions, state.times,
               surface_distances, normals,
               scatter_length, wall_reflection_rate, sensor_reflection_rate,
               absorption_length,
@@ -254,13 +256,13 @@ def setup_event_simulator(
             inside_detector = get_inside_detector_flag(new_positions)
             safe_continuing = jnp.where(inside_detector, continuing_factors, 0.0)
 
-            new_survival = survival * safe_continuing
+            new_survival = state.survival * safe_continuing
 
-            physical_intensities = intensities * survival
+            physical_intensities = intensities * state.survival
             detected_factors = detect_probs * reflection_attenuations
             updated_weights = depositions * physical_intensities[None, :] * detected_factors[None, :]
             times_ns = hit_times_meters / SPEED_OF_LIGHT_MATERIAL
-            total_times = times_ns + current_times[:, None]
+            total_times = times_ns + state.times[:, None]
 
             iter_weights = updated_weights
             iter_indices = sensor_indices
@@ -273,18 +275,28 @@ def setup_event_simulator(
             #              n_grad_iters=2 (calibration) → gradient flows for first 2
             next_pos = jnp.where(i < pos_grad_threshold, new_positions, jax.lax.stop_gradient(new_positions))
             next_dir = jnp.where(i < n_grad_iters, new_directions, jax.lax.stop_gradient(new_directions))
-            next_times = new_times
-            next_survival = new_survival
 
-            new_carry = (next_pos, next_dir, next_times, next_survival, key)
+            new_state = PhotonState(
+                positions=next_pos,
+                directions=next_dir,
+                times=new_times,
+                survival=new_survival,
+                key=key,
+            )
             outputs = (iter_weights, iter_indices, iter_times)
-            return new_carry, outputs
+            return new_state, outputs
 
-        init_carry = (positions, directions, times, initial_survival, key)
+        init_state = PhotonState(
+            positions=positions,
+            directions=directions,
+            times=times,
+            survival=initial_survival,
+            key=key,
+        )
         propagation_step_remat = jax.remat(propagation_step)
 
         _, (all_weights, all_indices, all_times) = jax.lax.scan(
-            propagation_step_remat, init_carry, jnp.arange(K))
+            propagation_step_remat, init_state, jnp.arange(K))
 
         flat_weights = all_weights.reshape(-1)
         flat_indices = all_indices.reshape(-1)
