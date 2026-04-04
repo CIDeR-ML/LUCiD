@@ -209,13 +209,25 @@ def setup_event_simulator(
 
     @partial(jax.jit, static_argnames=(
         'n_rays', 'K', 'n_grad_iters', 'max_sensors_per_cell', 'num_sensors',
-        'propagate_fn', 'photon_update_fn'))
+        'propagate_fn', 'photon_update_fn', 'pos_grad_threshold', 'make_hits_fn'))
     def _common_propagation(
             positions, directions, intensities, times,
             n_rays, detector_params, key,
             num_sensors, K, n_grad_iters, max_sensors_per_cell,
-            propagate_fn, photon_update_fn):
-        """Core photon propagation loop using DetectorParams."""
+            propagate_fn, photon_update_fn,
+            pos_grad_threshold, make_hits_fn):
+        """Core photon propagation loop using DetectorParams.
+
+        Parameters
+        ----------
+        pos_grad_threshold : int
+            Iteration threshold for position stop_gradient.
+            Standard modes use K (gradient flows for all iterations).
+            Likelihood mode uses 0 (always stop — positions are not optimized).
+        make_hits_fn : callable
+            Sensor response aggregation function. One of:
+            _make_hits_fn (simulation/data) or _make_hits_likelihood_fn (likelihood).
+        """
 
         # Named field access (no tuple unpacking)
         scatter_length = detector_params.scatter_length
@@ -234,7 +246,7 @@ def setup_event_simulator(
             prop_results = propagate_fn(current_pos, current_dir)
             depositions = prop_results['sensor_weights']
             sensor_indices = prop_results['sensor_indices']
-            hit_times_meters = prop_results['times']  # ray parameter in meters
+            hit_times_meters = prop_results['times']
             hit_positions = prop_results['positions']
             normals = prop_results['normals']
             inside_sensor = prop_results['inside_sensor']
@@ -267,99 +279,6 @@ def setup_event_simulator(
             physical_intensities = intensities * survival
             detected_factors = detect_probs * reflection_attenuations
             updated_weights = depositions * physical_intensities[None, :] * detected_factors[None, :]
-            times_ns = hit_times_meters / SPEED_OF_LIGHT_MATERIAL  # m / (m/ns) = ns
-            total_times = times_ns + current_times[:, None]
-
-            iter_weights = updated_weights
-            iter_indices = sensor_indices
-            iter_times = total_times.squeeze(-1)
-
-            # Stop gradient on position/direction after n_grad_iters iterations
-            # n_grad_iters=0 (reconstruction): always stop_gradient
-            # n_grad_iters=2 (calibration): gradient flows for first 2 iterations
-            next_pos = jnp.where(i < K, new_positions, jax.lax.stop_gradient(new_positions))
-            next_dir = jnp.where(i < n_grad_iters, new_directions, jax.lax.stop_gradient(new_directions))
-            next_times = new_times
-            next_survival = new_survival
-
-            new_carry = (next_pos, next_dir, next_times, next_survival, key)
-            outputs = (iter_weights, iter_indices, iter_times)
-            return new_carry, outputs
-
-        init_carry = (positions, directions, times, initial_survival, key)
-        propagation_step_remat = jax.remat(propagation_step)
-
-        _, (all_weights, all_indices, all_times) = jax.lax.scan(
-            propagation_step_remat, init_carry, jnp.arange(K))
-
-        flat_weights = all_weights.reshape(-1)
-        flat_indices = all_indices.reshape(-1)
-        flat_times = all_times.reshape(-1)
-
-        key, qe_key = jax.random.split(key)
-        corrected_q, aligned_times = _make_hits_fn(
-            flat_weights, flat_indices, flat_times, num_sensors, qe_key, qe, qe_corrections)
-
-        return corrected_q, aligned_times
-
-    @partial(jax.jit, static_argnames=(
-        'n_rays', 'K', 'n_grad_iters', 'max_sensors_per_cell', 'num_sensors',
-        'propagate_fn', 'photon_update_fn'))
-    def _common_propagation_likelihood(
-            positions, directions, intensities, times,
-            n_rays, detector_params, key,
-            num_sensors, K, n_grad_iters, max_sensors_per_cell,
-            propagate_fn, photon_update_fn):
-        """Core photon propagation returning per-photon data for likelihood losses."""
-
-        scatter_length = detector_params.scatter_length
-        wall_reflection_rate = detector_params.wall_reflection_rate
-        sensor_reflection_rate = detector_params.sensor_reflection_rate
-        absorption_length = detector_params.absorption_length
-        qe = detector_params.qe
-        qe_corrections = detector_params.qe_corrections
-
-        initial_survival = jnp.ones(n_rays)
-
-        def propagation_step(carry, i):
-            current_pos, current_dir, current_times, survival, key = carry
-            key, prop_key = jax.random.split(key)
-
-            prop_results = propagate_fn(current_pos, current_dir)
-            depositions = prop_results['sensor_weights']
-            sensor_indices = prop_results['sensor_indices']
-            hit_times_meters = prop_results['times']
-            hit_positions = prop_results['positions']
-            normals = prop_results['normals']
-            inside_sensor = prop_results['inside_sensor']
-
-            hit_sensor = jnp.max(inside_sensor, axis=0)
-            surface_distances = jnp.linalg.norm(hit_positions - current_pos, axis=1) - 1e-6
-
-            key, subkey = jax.random.split(key)
-            rng_keys = jax.random.split(subkey, n_rays)
-
-            (new_positions, new_directions, new_times,
-             detect_probs, reflection_attenuations,
-             continuing_factors) = jax.vmap(
-                photon_update_fn,
-                in_axes=(0, 0, 0, 0, 0,
-                         None, None, None, None,
-                         0, 0, None)
-            )(current_pos, current_dir, current_times,
-              surface_distances, normals,
-              scatter_length, wall_reflection_rate, sensor_reflection_rate,
-              absorption_length,
-              hit_sensor, rng_keys, SPEED_OF_LIGHT_MATERIAL)
-
-            inside_detector = get_inside_detector_flag(new_positions)
-            safe_continuing = jnp.where(inside_detector, continuing_factors, 0.0)
-
-            new_survival = survival * safe_continuing
-
-            physical_intensities = intensities * survival
-            detected_factors = detect_probs * reflection_attenuations
-            updated_weights = depositions * physical_intensities[None, :] * detected_factors[None, :]
             times_ns = hit_times_meters / SPEED_OF_LIGHT_MATERIAL
             total_times = times_ns + current_times[:, None]
 
@@ -367,7 +286,12 @@ def setup_event_simulator(
             iter_indices = sensor_indices
             iter_times = total_times.squeeze(-1)
 
-            next_pos = jnp.where(i < 0, new_positions, jax.lax.stop_gradient(new_positions))
+            # Stop gradient on positions and directions independently:
+            # - Position: threshold=K → gradient flows all iterations (standard)
+            #             threshold=0 → always stop (likelihood)
+            # - Direction: n_grad_iters=0 (reconstruction) → always stop
+            #              n_grad_iters=2 (calibration) → gradient flows for first 2
+            next_pos = jnp.where(i < pos_grad_threshold, new_positions, jax.lax.stop_gradient(new_positions))
             next_dir = jnp.where(i < n_grad_iters, new_directions, jax.lax.stop_gradient(new_directions))
             next_times = new_times
             next_survival = new_survival
@@ -387,7 +311,7 @@ def setup_event_simulator(
         flat_times = all_times.reshape(-1)
 
         key, qe_key = jax.random.split(key)
-        return _make_hits_likelihood_fn(
+        return make_hits_fn(
             flat_weights, flat_indices, flat_times, num_sensors, qe_key, qe, qe_corrections)
 
     # ================================================================
@@ -457,7 +381,8 @@ def setup_event_simulator(
         return _common_propagation(
             final_origins, final_directions, photon_intensities, photon_times,
             n_rays, detector_params, key, NUM_SENSORS, K, 0, max_sensors_per_cell,
-            propagate_photons, photon_update_fn)
+            propagate_photons, photon_update_fn,
+            pos_grad_threshold=K, make_hits_fn=_make_hits_fn)
 
     # Load photonsim parameters from configuration (power-law normalization, SIREN path)
     photonsim_params = unpack_photonsim_params(particle, material)
@@ -494,10 +419,11 @@ def setup_event_simulator(
                            A_slope, A_intercept,
                            B_slope, B_intercept, offset))
 
-        return _common_propagation_likelihood(
+        return _common_propagation(
             photon_origins, photon_directions, photon_intensities, photon_times + t0,
             Nphot, detector_params, key, NUM_SENSORS, K, 0, max_sensors_per_cell,
-            propagate_photons, photon_update_fn)
+            propagate_photons, photon_update_fn,
+            pos_grad_threshold=0, make_hits_fn=_make_hits_likelihood_fn)
 
     @jax.jit
     def _simulation_sensor_calibration_impl(source, detector_params, key):
@@ -508,7 +434,8 @@ def setup_event_simulator(
         return _common_propagation(
             photon_origins, photon_directions, photon_intensities, photon_times,
             Nphot, detector_params, key, NUM_SENSORS, K, 2, max_sensors_per_cell,
-            propagate_photons, photon_update_fn)
+            propagate_photons, photon_update_fn,
+            pos_grad_threshold=K, make_hits_fn=_make_hits_fn)
 
     # ---- Return the right function ------------------------------------------
     if is_data:
