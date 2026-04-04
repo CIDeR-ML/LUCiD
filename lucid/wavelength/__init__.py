@@ -1,0 +1,9 @@
+"""Wavelength-dependent physics for LUCiD.
+
+Submodules:
+    medium     — MediumProperties, make_medium, compute_effective_properties
+    spectrum   — Cherenkov wavelength sampling
+    scattering — Rayleigh and Mie/HG phase function samplers
+"""
+from lucid.wavelength.medium import MediumProperties, make_medium, compute_effective_properties
+from lucid.wavelength.spectrum import sample_cherenkov_wavelengths
