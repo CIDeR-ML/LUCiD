@@ -34,7 +34,6 @@ MODULES = [
     "lucid.siren",
     "lucid.siren.core",
     "lucid.optimization",
-    "lucid.optimization.losses",
     "lucid.optimization.grid_search",
     "lucid.optimization.pipeline",
     "lucid.optimization.run",

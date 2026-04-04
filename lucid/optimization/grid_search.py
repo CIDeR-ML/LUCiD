@@ -4,7 +4,7 @@ import numpy as np
 import jax
 import jax.numpy as jnp
 from pathlib import Path
-from lucid.optimization.losses import origin_time_loss, grid_origin_time_loss
+from lucid.losses import origin_time_loss, grid_origin_time_loss
 
 
 def load_optimization_config(config_path):

@@ -3,7 +3,7 @@ from jax import jit
 import jax.numpy as jnp
 import math
 import numpy as np
-from lucid.optimization.losses import *
+from lucid.losses import counts_loss, energy_loss, origin_time_loss
 from lucid.detector_params import ParticleParams
 
 @jit
