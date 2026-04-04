@@ -2,7 +2,7 @@
 import jax.numpy as jnp
 import numpy.testing as npt
 
-from tools.detector_params import (
+from lucid.detector_params import (
     DetectorParams, ParticleParams,
     normalize_params, denormalize_params, default_bounds,
 )

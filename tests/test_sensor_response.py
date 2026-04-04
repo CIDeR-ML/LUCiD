@@ -3,7 +3,7 @@ import jax
 import jax.numpy as jnp
 import numpy.testing as npt
 
-from tools.simulation import (
+from lucid.simulation import (
     make_hits_simulation, make_hits_data, make_hits_likelihood,
 )
 
