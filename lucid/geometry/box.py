@@ -229,3 +229,22 @@ class Box(Detector):
         )
 
         fig.show()
+
+    def bounds_check(self, positions):
+        """Test whether positions are inside the box.
+
+        Parameters
+        ----------
+        positions : jnp.ndarray
+            Shape ``(N, 3)``.
+
+        Returns
+        -------
+        jnp.ndarray
+            Boolean array of shape ``(N,)``.
+        """
+        import jax.numpy as jnp
+        x, y, z = positions[:, 0], positions[:, 1], positions[:, 2]
+        return ((x >= -self.L / 2) & (x <= self.L / 2) &
+                (y >= -self.W / 2) & (y <= self.W / 2) &
+                (z >= -self.H / 2) & (z <= self.H / 2))
