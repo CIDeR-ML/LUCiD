@@ -753,16 +753,22 @@ def time_digitizer(times, time_resolution=0.4):
 # Shared math helpers (moved from generate.py during Phase 2.2 refactor)
 # ---------------------------------------------------------------------------
 
-def jax_rotate_vector_local(vector, axis, angle):
+def jax_rotate_vector(vector, axis, angle):
+    """Rotate a vector around an axis by a given angle using Rodrigues' formula.
+
+    The axis is normalized internally for safety.
     """
-    Rotate a vector around an axis by an angle using Rodrigues' rotation formula.
-    Local copy to avoid circular import.
-    """
+    norm = jnp.linalg.norm(axis)
+    axis = jnp.where(norm > 1e-8, axis / norm, axis)
     cos_angle = jnp.cos(angle)
     sin_angle = jnp.sin(angle)
-    dot = jnp.dot(axis, vector)
-    cross = jnp.cross(axis, vector)
-    return vector * cos_angle + cross * sin_angle + axis * dot * (1.0 - cos_angle)
+    cross_product = jnp.cross(axis, vector)
+    dot_product = jnp.dot(axis, vector) * (1 - cos_angle)
+    return cos_angle * vector + sin_angle * cross_product + dot_product * axis
+
+
+# Backward-compat alias
+jax_rotate_vector_local = jax_rotate_vector
 
 def normalize(v, epsilon=1e-8):
     """Normalize a vector (or batch of vectors) with numerical stability.

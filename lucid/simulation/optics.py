@@ -105,12 +105,5 @@ def jax_normalize(v, epsilon=1e-8):
     return jnp.where(norm > epsilon, v / norm, v)
 
 
-def jax_rotate_vector(vector, axis, angle):
-    """Rotate a vector around an axis by a given angle in radians using JAX."""
-    axis = jax_normalize(axis)
-    cos_angle = jnp.cos(angle)
-    sin_angle = jnp.sin(angle)
-    cross_product = jnp.cross(axis, vector)
-    dot_product = jnp.dot(axis, vector) * (1 - cos_angle)
-    return cos_angle * vector + sin_angle * cross_product + dot_product * axis
+from lucid.utils import jax_rotate_vector  # noqa: F811 — canonical location
 
