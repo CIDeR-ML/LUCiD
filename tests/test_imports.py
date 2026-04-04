@@ -13,6 +13,7 @@ MODULES = [
     "lucid.simulation.config",
     "lucid.simulation.types",
     "lucid.geometry.detector_geometry",
+    "lucid.geometry.registry",
     "lucid.sources.particle_model",
     "lucid.generate",
     "lucid.sources",

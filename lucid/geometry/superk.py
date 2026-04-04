@@ -9,8 +9,10 @@ positions (in cm) to meters to match the standard config format.
 import numpy as np
 import plotly.graph_objects as go
 from .base import Detector
+from .registry import register_detector
 
 
+@register_detector('superk')
 class SuperK(Detector):
     """
     Super-Kamiokande detector geometry.

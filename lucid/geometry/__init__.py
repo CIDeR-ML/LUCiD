@@ -27,6 +27,9 @@ from .detector import (
     get_material_from_config
 )
 
+# Registry
+from .registry import get_detector_class, register_detector, list_detector_types
+
 # Export all public functions and classes for backward compatibility
 __all__ = [
     # Utility functions

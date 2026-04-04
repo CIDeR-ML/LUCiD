@@ -48,8 +48,10 @@ class DetectorGeometry(NamedTuple):
         detector_type : str
             'Cylinder', 'Sphere', or 'Box'.
         """
-        if detector_type not in ('Cylinder', 'Sphere', 'Box'):
-            raise ValueError(f"detector_type must be 'Cylinder', 'Sphere', or 'Box', got {detector_type}")
+        # Normalize casing
+        dt_key = detector_type.lower()
+        if dt_key not in ('cylinder', 'sphere', 'box'):
+            raise ValueError(f"detector_type must be 'cylinder', 'sphere', or 'box', got {detector_type}")
 
         # Material
         material = get_material_from_config(json_filename)
@@ -62,20 +64,20 @@ class DetectorGeometry(NamedTuple):
         num_sensors = len(sensor_points)
 
         # Propagator
-        if detector_type == 'Cylinder':
+        if dt_key == 'cylinder':
             propagator = create_photon_propagator(
                 sensor_points, sensor_radius,
                 r=detector.r, h=detector.H,
                 temperature=temperature,
                 max_sensors_per_cell=max_sensors_per_cell)
-        elif detector_type == 'Sphere':
+        elif dt_key == 'sphere':
             propagator = create_sphere_photon_propagator(
                 sensor_points, sensor_radius,
                 sphere_radius=detector.r,
                 temperature=temperature,
                 n_divisions=100,
                 max_sensors_per_cell=max_sensors_per_cell)
-        elif detector_type == 'Box':
+        elif dt_key == 'box':
             propagator = create_box_photon_propagator(
                 sensor_points, sensor_radius,
                 length=detector.L, width=detector.W, height=detector.H,

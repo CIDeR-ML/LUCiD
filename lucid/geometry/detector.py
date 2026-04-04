@@ -3,10 +3,12 @@ Functions for creating detectors from configuration files.
 """
 
 import json
-from .cylinder import Cylinder
-from .sphere import Sphere
-from .box import Box
-from .superk import SuperK
+from .registry import get_detector_class
+# Import subclasses so their @register_detector decorators run
+from .cylinder import Cylinder  # noqa: F401
+from .sphere import Sphere      # noqa: F401
+from .box import Box            # noqa: F401
+from .superk import SuperK      # noqa: F401
 
 
 def load_detector_config(file_path):
@@ -90,20 +92,33 @@ def load_detector_geom(file_path):
 
 
 def generate_detector(file_path):
-    """Function to generate detector from json config"""
-    geom_data = load_detector_geom(file_path)
-    detector_type = geom_data[0]
-    
-    if detector_type == 'cylinder':
-        _, radius, height, n_sensors, sensor_radius = geom_data
-        return Cylinder(radius, height, n_sensors, sensor_radius)
-    elif detector_type == 'sphere':
-        _, radius, _, n_sensors, sensor_radius = geom_data
-        return Sphere(radius, n_sensors, sensor_radius)
-    elif detector_type == 'box':
-        _, length, width, height, n_sensors, sensor_radius = geom_data
-        return Box(length, width, height, n_sensors, sensor_radius)
-    elif detector_type == 'superk':
-        _, radius, height, n_sensors, sensor_radius, connection_table_path = geom_data
-        return SuperK(connection_table_path, radius=radius, height=height,
-                      n_sensors=n_sensors, sensor_radius=sensor_radius)
+    """Generate a detector from a JSON config file using the geometry registry.
+
+    The detector type in the config (e.g. 'cylinder', 'sphere', 'box', 'superk')
+    is looked up in the registry to find the appropriate class. Each class
+    knows how to construct itself from the geometry_definitions dict.
+    """
+    config = load_detector_config(file_path)
+    detector_type = config['detector_type']
+    geom_def = config['geometry_definitions']
+
+    cls = get_detector_class(detector_type)
+
+    # Dispatch construction based on class — each geometry has different __init__ args
+    if cls is Cylinder:
+        return cls(geom_def['radius'], geom_def['height'],
+                   geom_def['n_sensors'], geom_def['sensor_radius'])
+    elif cls is Sphere:
+        return cls(geom_def['radius'], geom_def['n_sensors'], geom_def['sensor_radius'])
+    elif cls is Box:
+        return cls(geom_def['length'], geom_def['width'], geom_def['height'],
+                   geom_def['n_sensors'], geom_def['sensor_radius'])
+    elif cls is SuperK:
+        return cls(geom_def['connection_table_path'], radius=geom_def['radius'],
+                   height=geom_def['height'], n_sensors=geom_def['n_sensors'],
+                   sensor_radius=geom_def['sensor_radius'])
+    else:
+        # Future-proof: class was registered but we don't know its constructor.
+        # This shouldn't happen with the current set of geometries.
+        raise NotImplementedError(
+            f"No construction logic for registered detector class {cls.__name__}")

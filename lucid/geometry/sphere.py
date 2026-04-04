@@ -6,8 +6,10 @@ import numpy as np
 import plotly.graph_objects as go
 from .base import Detector
 from .utils import fibonacci_sphere_points_numpy
+from .registry import register_detector
 
 
+@register_detector('sphere')
 class Sphere(Detector):
     """Spherical detector geometry"""
     
