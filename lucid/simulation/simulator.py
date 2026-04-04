@@ -122,39 +122,29 @@ def setup_event_simulator(
         raise TypeError(
             f"default_detector_params must be bool or DetectorParams, got {type(default_detector_params)}")
 
-    if detector_type not in ('Cylinder', 'Sphere', 'Box'):
-        raise ValueError(f"detector_type must be 'Cylinder', 'Sphere', or 'Box', got {detector_type}")
+    # ---- Build containers from flat args -----------------------------------
+    from lucid.geometry.detector_geometry import DetectorGeometry
+    from lucid.simulation.config import SimConfig
 
-    # ---- Read material and compute speed of light ---------------------------
-    material = get_material_from_config(json_filename)
-    SPEED_OF_LIGHT_MATERIAL = get_speed_of_light_in_material(material)
+    det_geom = DetectorGeometry.from_config(
+        json_filename, temperature=temperature,
+        max_sensors_per_cell=max_sensors_per_cell,
+        detector_type=detector_type)
 
-    # ---- Detector geometry --------------------------------------------------
-    detector = generate_detector(json_filename)
-    sensor_points = jnp.array(detector.all_points)
-    photosensor_radius = detector.S_radius
-    NUM_SENSORS = len(sensor_points)
-    Nphot = n_photons
+    mode = 'data' if is_data else ('calibration' if is_calibration else 'track')
+    sim_config = SimConfig(
+        n_photons=n_photons, K=K, mode=mode,
+        use_expected_value=use_expected_value,
+        apply_smearing=apply_smearing)
 
-    if detector_type == 'Cylinder':
-        propagate_photons = create_photon_propagator(
-            sensor_points, photosensor_radius,
-            r=detector.r, h=detector.H,
-            temperature=temperature,
-            max_sensors_per_cell=max_sensors_per_cell)
-    elif detector_type == 'Sphere':
-        propagate_photons = create_sphere_photon_propagator(
-            sensor_points, photosensor_radius,
-            sphere_radius=detector.r,
-            temperature=temperature,
-            n_divisions=100,
-            max_sensors_per_cell=max_sensors_per_cell)
-    elif detector_type == 'Box':
-        propagate_photons = create_box_photon_propagator(
-            sensor_points, photosensor_radius,
-            length=detector.L, width=detector.W, height=detector.H,
-            temperature=temperature,
-            max_sensors_per_cell=max_sensors_per_cell)
+    # ---- Extract fields from containers ------------------------------------
+    material = det_geom.medium.material
+    SPEED_OF_LIGHT_MATERIAL = det_geom.speed_of_light
+    detector = det_geom.detector
+    sensor_points = det_geom.sensor_points
+    NUM_SENSORS = det_geom.num_sensors
+    Nphot = sim_config.n_photons
+    propagate_photons = det_geom.propagator
 
     # ---- Handle qe_corrections for baked-in detector params -----------------
     if _default_dp is not None:
@@ -168,9 +158,9 @@ def setup_event_simulator(
                 f"but detector has {NUM_SENSORS} sensors")
 
     # ---- Select photon update function --------------------------------------
-    if is_data:
+    if sim_config.is_data:
         photon_update_fn = photon_iteration_sample
-    elif use_expected_value is False:
+    elif sim_config.use_expected_value is False:
         photon_update_fn = photon_iteration_sample
     else:
         photon_update_fn = jax.remat(photon_iteration_update_factors_safe)
@@ -180,10 +170,10 @@ def setup_event_simulator(
         return detector.bounds_check(positions)
 
     # ---- make_hits wrapper selection ----------------------------------------
-    if is_data:
+    if sim_config.is_data:
         def _make_hits_fn(flat_weights, flat_indices, flat_times, num_sensors, qe_key, qe, qe_corrections):
             return make_hits_data(flat_weights, flat_indices, flat_times, num_sensors,
-                                  qe=qe, rng_key=qe_key, apply_smearing=apply_smearing)
+                                  qe=qe, rng_key=qe_key, apply_smearing=sim_config.apply_smearing)
     else:
         def _make_hits_fn(flat_weights, flat_indices, flat_times, num_sensors, qe_key, qe, qe_corrections):
             return make_hits_simulation(flat_weights, flat_indices, flat_times, num_sensors,
@@ -370,9 +360,9 @@ def setup_event_simulator(
 
         return _common_propagation(
             final_origins, final_directions, photon_intensities, photon_times,
-            n_rays, detector_params, key, NUM_SENSORS, K, 0, max_sensors_per_cell,
+            n_rays, detector_params, key, NUM_SENSORS, sim_config.K, sim_config.effective_n_grad_iters, max_sensors_per_cell,
             propagate_photons, photon_update_fn,
-            pos_grad_threshold=K, make_hits_fn=_make_hits_fn)
+            pos_grad_threshold=sim_config.K, make_hits_fn=_make_hits_fn)
 
     # Load photonsim parameters from configuration (power-law normalization, SIREN path)
     photonsim_params = unpack_photonsim_params(particle, material)
@@ -411,9 +401,9 @@ def setup_event_simulator(
 
         return _common_propagation(
             photon_origins, photon_directions, photon_intensities, photon_times + t0,
-            Nphot, detector_params, key, NUM_SENSORS, K, 0, max_sensors_per_cell,
+            Nphot, detector_params, key, NUM_SENSORS, sim_config.K, sim_config.effective_n_grad_iters, max_sensors_per_cell,
             propagate_photons, photon_update_fn,
-            pos_grad_threshold=0, make_hits_fn=_make_hits_likelihood_fn)
+            pos_grad_threshold=0, make_hits_fn=_make_hits_likelihood_fn)  # pos=0: likelihood always stops position gradient
 
     @jax.jit
     def _simulation_sensor_calibration_impl(source, detector_params, key):
@@ -423,12 +413,12 @@ def setup_event_simulator(
 
         return _common_propagation(
             photon_origins, photon_directions, photon_intensities, photon_times,
-            Nphot, detector_params, key, NUM_SENSORS, K, 2, max_sensors_per_cell,
+            Nphot, detector_params, key, NUM_SENSORS, sim_config.K, sim_config.effective_n_grad_iters, max_sensors_per_cell,
             propagate_photons, photon_update_fn,
-            pos_grad_threshold=K, make_hits_fn=_make_hits_fn)
+            pos_grad_threshold=sim_config.K, make_hits_fn=_make_hits_fn)
 
     # ---- Return the right function ------------------------------------------
-    if is_data:
+    if sim_config.is_data:
         if _default_dp is not None:
             @jax.jit
             def _sim_data_default(particle_params, key, photon_data):
@@ -437,7 +427,7 @@ def setup_event_simulator(
             return _sim_data_default
         else:
             return _simulation_with_data_impl
-    elif is_calibration:
+    elif sim_config.is_calibration:
         if _default_dp is not None:
             @jax.jit
             def _sim_calibration_default(source, key):
