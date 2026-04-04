@@ -141,3 +141,87 @@ class TestPropagationResult:
             inside_sensor=jnp.zeros((max_sensors, n_rays), dtype=jnp.bool_),
         )
         assert result.sensor_weights.shape == (4, 10)
+
+
+class TestJITCompatibility:
+    """Verify all NamedTuples work correctly inside jax.jit — no retracing
+    issues, no static field problems."""
+
+    def test_photon_state_jit_scan(self):
+        """Full jax.lax.scan with PhotonState carry inside jit."""
+        @jax.jit
+        def run_scan(init_state):
+            def step(state, i):
+                new_state = PhotonState(
+                    positions=state.positions + state.directions * 0.1,
+                    directions=state.directions,
+                    times=state.times + 0.1 / 0.3,
+                    survival=state.survival * 0.95,
+                    key=state.key,
+                )
+                return new_state, state.survival
+            return jax.lax.scan(step, init_state, jnp.arange(5))
+
+        init = PhotonState(
+            positions=jnp.zeros((3, 3)),
+            directions=jnp.ones((3, 3)) / jnp.sqrt(3.0),
+            times=jnp.zeros(3),
+            survival=jnp.ones(3),
+            key=jax.random.PRNGKey(0),
+        )
+        final, all_survival = run_scan(init)
+        assert final.positions.shape == (3, 3)
+        assert all_survival.shape == (5, 3)
+        # After 5 steps: survival = 0.95^5
+        npt.assert_allclose(final.survival[0], 0.95**5, atol=1e-5)
+
+    def test_photon_step_result_jit_vmap(self):
+        """PhotonStepResult as return from vmap inside jit."""
+        @jax.jit
+        def make_results(positions):
+            def single(pos):
+                return PhotonStepResult(
+                    position=pos,
+                    direction=jnp.array([0., 0., 1.]),
+                    time=jnp.linalg.norm(pos),
+                    detect_prob=0.5,
+                    reflection_attenuation=0.99,
+                    continuing_factor=0.49,
+                )
+            return jax.vmap(single)(positions)
+
+        positions = jnp.array([[1., 0., 0.], [0., 2., 0.], [0., 0., 3.]])
+        result = make_results(positions)
+        assert result.position.shape == (3, 3)
+        npt.assert_allclose(result.time, [1.0, 2.0, 3.0], atol=1e-5)
+
+    def test_photon_rays_optional_wavelengths_jit(self):
+        """PhotonRays with wavelengths=None must work in jit."""
+        @jax.jit
+        def process(rays):
+            return jnp.sum(rays.weights)
+
+        rays = PhotonRays(
+            directions=jnp.ones((5, 3)),
+            origins=jnp.zeros((5, 3)),
+            weights=jnp.ones(5) * 0.5,
+        )
+        result = process(rays)
+        npt.assert_allclose(result, 2.5)
+
+    def test_grad_through_photon_state(self):
+        """Gradients should flow through PhotonState fields."""
+        @jax.jit
+        def loss_fn(positions):
+            state = PhotonState(
+                positions=positions,
+                directions=jnp.ones_like(positions),
+                times=jnp.zeros(positions.shape[0]),
+                survival=jnp.ones(positions.shape[0]),
+                key=jax.random.PRNGKey(0),
+            )
+            return jnp.sum(state.positions ** 2)
+
+        pos = jnp.array([[1.0, 2.0, 3.0]])
+        grad = jax.grad(loss_fn)(pos)
+        npt.assert_allclose(grad, [[2.0, 4.0, 6.0]])
