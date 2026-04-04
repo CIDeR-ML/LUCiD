@@ -3,7 +3,7 @@ import jax.numpy as jnp
 import numpy as np
 import numpy.testing as npt
 
-from tools.geometry import generate_detector
+from lucid.geometry import generate_detector
 
 
 class TestCylinderDetector:
@@ -87,7 +87,7 @@ class TestBoxDetector:
 
 class TestBoundsCheck:
     def test_cylinder_bounds(self, cylinder_detector):
-        from tools.propagation.cylinder import cylinder_bounds_check
+        from lucid.propagation.cylinder import cylinder_bounds_check
         det = cylinder_detector
         pts = jnp.array([
             [0.0, 0.0, 0.0],       # center → inside

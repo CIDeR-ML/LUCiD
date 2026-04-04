@@ -11,7 +11,7 @@ import jax.numpy as jnp
 import numpy as np
 
 # ── Optics (simulation.py) ──────────────────────────────────────────
-from tools.simulation import (
+from lucid.simulation import (
     normalize, jax_normalize, compute_reflection_direction,
     create_local_frame, sample_scatter_distance, solve_rayleigh_inverse_cdf,
     compute_scatter_direction, sample_cosine_hemisphere, jax_rotate_vector,
@@ -69,8 +69,8 @@ nrm = jnp.array([0.0, 0.0, 1.0])
 refs["cosine_hemi"] = sample_cosine_hemisphere(nrm, key3).tolist()
 
 # ── Losses ───────────────────────────────────────────────────────────
-from tools.losses import poisson_nll
-from tools.optimization.losses import (
+from lucid.losses import poisson_nll
+from lucid.optimization.losses import (
     energy_loss, counts_loss, origin_time_loss, first_arrival_nll,
     segment_logsumexp,
 )
@@ -88,7 +88,7 @@ indices = jnp.array([0, 0, 1, 1, 2])
 refs["segment_logsumexp"] = segment_logsumexp(data, indices, 3).tolist()
 
 # ── DetectorParams / ParticleParams ──────────────────────────────────
-from tools.detector_params import (
+from lucid.detector_params import (
     DetectorParams, ParticleParams,
     normalize_params, denormalize_params, default_bounds,
 )
@@ -121,7 +121,7 @@ refs["default_bounds_scatter_min"] = float(bounds_min.scatter_length)
 refs["default_bounds_scatter_max"] = float(bounds_max.scatter_length)
 
 # ── Utils ────────────────────────────────────────────────────────────
-from tools.utils import spherical_to_cartesian, smear_times, smear_charges_SK_like
+from lucid.utils import spherical_to_cartesian, smear_times, smear_charges_SK_like
 
 refs["sph_to_cart_0_0"] = spherical_to_cartesian(0.0, 0.0).tolist()
 refs["sph_to_cart_pi2_0"] = spherical_to_cartesian(jnp.pi/2, 0.0).tolist()
@@ -137,7 +137,7 @@ counts = jnp.array([5.0, 15.0, 50.0, 200.0])
 refs["smear_charges"] = smear_charges_SK_like(counts, key_c).tolist()
 
 # ── Geometry ─────────────────────────────────────────────────────────
-from tools.geometry import generate_detector
+from lucid.geometry import generate_detector
 
 det_cyl = generate_detector("config/WCTE_geom_config.json")
 refs["cyl_num_sensors"] = det_cyl.n_sensors
@@ -146,7 +146,7 @@ refs["cyl_first5"] = det_cyl.all_points[:5].tolist()
 refs["cyl_last5"] = det_cyl.all_points[-5:].tolist()
 
 # bounds check: inside, outside, boundary
-from tools.propagation.cylinder import cylinder_bounds_check
+from lucid.propagation.cylinder import cylinder_bounds_check
 test_pts = jnp.array([[0.0, 0.0, 0.0], [10.0, 10.0, 10.0], [1.9, 0.0, 0.0]])
 bounds_result = cylinder_bounds_check(test_pts, det_cyl.r, det_cyl.H)
 refs["cyl_bounds"] = bounds_result.tolist()

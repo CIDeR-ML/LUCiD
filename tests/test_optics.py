@@ -3,7 +3,7 @@ import jax
 import jax.numpy as jnp
 import numpy.testing as npt
 
-from tools.simulation import (
+from lucid.simulation import (
     normalize, jax_normalize, compute_reflection_direction,
     create_local_frame, sample_scatter_distance, solve_rayleigh_inverse_cdf,
     compute_scatter_direction, sample_cosine_hemisphere, jax_rotate_vector,
