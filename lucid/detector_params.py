@@ -30,7 +30,6 @@ import jax.numpy as jnp
 import numpy as np
 
 from lucid.utils import spherical_to_cartesian
-from lucid.generate import get_isotropic_rays, generate_laser_photons
 
 
 # ---------------------------------------------------------------------------
@@ -100,58 +99,13 @@ class ParticleParams(NamedTuple):
 
 
 # ---------------------------------------------------------------------------
-# Calibration source types (callable NamedTuples)
+# Calibration source types — canonical home is lucid.sources.calibration_sources
+# Re-exported here for backwards compatibility.
 # ---------------------------------------------------------------------------
-
-class IsotropicSource(NamedTuple):
-    """Isotropic point source — callable JAX pytree.
-
-    Usage: ``source(n_photons, key)`` or ``source(n_photons, key, n_water)``.
-    """
-    position: jnp.ndarray     # (3,)
-    intensity: jnp.ndarray    # scalar
-
-    def __call__(self, n_photons, key, n_water=1.33):
-        return get_isotropic_rays(self.position, self.intensity, n_photons, key)
-
-
-class LaserSource(NamedTuple):
-    """Laser fibre source — callable JAX pytree.
-
-    Usage: ``source(n_photons, key)`` or ``source(n_photons, key, n_water)``.
-    """
-    position: jnp.ndarray     # (3,)
-    intensity: jnp.ndarray    # scalar
-    direction: jnp.ndarray    # (3,), default [0, 0, -1]
-    fiber_NA: jnp.ndarray     # scalar, default 0.22
-
-    def __call__(self, n_photons, key, n_water=1.33):
-        return generate_laser_photons(
-            self.position, self.direction, self.intensity,
-            n_photons, key, n_water, self.fiber_NA,
-        )
-
-
-# --- Factory helpers with sensible defaults ---
-
-def isotropic_source(position, intensity=1_000_000):
-    """Create an IsotropicSource with default intensity."""
-    return IsotropicSource(
-        position=jnp.asarray(position, dtype=jnp.float32),
-        intensity=jnp.asarray(float(intensity), dtype=jnp.float32),
-    )
-
-
-def laser_source(position, intensity=1_000_000, direction=None, fiber_NA=0.22):
-    """Create a LaserSource with default direction (downward) and NA."""
-    if direction is None:
-        direction = [0.0, 0.0, -1.0]
-    return LaserSource(
-        position=jnp.asarray(position, dtype=jnp.float32),
-        intensity=jnp.asarray(float(intensity), dtype=jnp.float32),
-        direction=jnp.asarray(direction, dtype=jnp.float32),
-        fiber_NA=jnp.asarray(float(fiber_NA), dtype=jnp.float32),
-    )
+from lucid.sources.calibration_sources import (  # noqa: F401, E402
+    IsotropicSource, LaserSource,
+    isotropic_source, laser_source,
+)
 
 
 # ---------------------------------------------------------------------------

@@ -1983,3 +1983,63 @@ def time_digitizer(times, time_resolution=0.4):
     digitized_times = jnp.where((jnp.isfinite(times)), bin_centers[bin_indices], 1e6)
 
     return digitized_times
+
+
+# ---------------------------------------------------------------------------
+# Shared math helpers (moved from generate.py during Phase 2.2 refactor)
+# ---------------------------------------------------------------------------
+
+def jax_rotate_vector_local(vector, axis, angle):
+    """
+    Rotate a vector around an axis by an angle using Rodrigues' rotation formula.
+    Local copy to avoid circular import.
+    """
+    cos_angle = jnp.cos(angle)
+    sin_angle = jnp.sin(angle)
+    dot = jnp.dot(axis, vector)
+    cross = jnp.cross(axis, vector)
+    return vector * cos_angle + cross * sin_angle + axis * dot * (1.0 - cos_angle)
+
+def normalize(v, epsilon=1e-8):
+    """Normalize a vector with numerical stability.
+
+    Parameters
+    ----------
+    v : jnp.ndarray
+        Input vector to normalize
+    epsilon : float, optional
+        Small constant for numerical stability, by default 1e-8
+
+    Returns
+    -------
+    jnp.ndarray
+        Normalized vector
+    """
+    return v / (jnp.linalg.norm(v) + epsilon)
+
+
+def generate_orthonormal_basis(v):
+    """Generate an orthonormal basis with v as one of the vectors.
+
+    Parameters
+    ----------
+    v : jnp.ndarray
+        Input vector that will be the third basis vector
+
+    Returns
+    -------
+    jnp.ndarray
+        3x3 matrix where columns are orthonormal basis vectors
+    """
+    v = normalize(v)
+
+    # Find a vector not parallel to v by trying [1,0,0] or [0,1,0]
+    not_v = jnp.array([1.0, 0.0, 0.0])
+    cond = jnp.abs(jnp.dot(v, not_v)) > 0.9
+    not_v = jnp.where(cond, jnp.array([0.0, 1.0, 0.0]), not_v)
+
+    # Use cross product to find two vectors orthogonal to v
+    u = normalize(jnp.cross(v, not_v))
+    w = jnp.cross(v, u)
+
+    return jnp.stack([u, w, v], axis=-1)
