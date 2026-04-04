@@ -12,3 +12,7 @@ from lucid.simulation.photon_step import (
 from lucid.simulation.sensor_response import (
     make_hits_simulation, make_hits_data, make_hits_likelihood,
 )
+from lucid.simulation.types import (
+    PhotonRays, PropagationResult, PhotonStepResult, PhotonState,
+)
+from lucid.simulation.config import SimConfig
