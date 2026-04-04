@@ -1,0 +1,32 @@
+{
+  "material": "water",
+  "refractive_index": 1.33,
+  "speed_of_light_vacuum_m_per_ns": 0.299792,
+
+  "scattering": {
+    "source": "SK calibration paper (arXiv:1307.0162), Eqs. 16-17, Table 3",
+    "symmetric": {
+      "description": "Rayleigh + symmetric Mie: alpha_sym = P4/lambda^4 * (1 + P5/lambda^2)",
+      "P4": 8.51e7,
+      "P5": 1.14e5
+    },
+    "asymmetric": {
+      "description": "Forward Mie: alpha_asym = P6 * (1 + P7/lambda^4 * (lambda - P8)^2)",
+      "P6": 1.00e-4,
+      "P7": 4.62e6,
+      "P8": 392.0,
+      "default_asymmetry_g": 0.95
+    }
+  },
+
+  "absorption": {
+    "source": "SK calibration paper (arXiv:1307.0162), Eqs. 14-15, Table 3 + Pope & Fry (1997)",
+    "description": "alpha_abs = P0*P1/lambda^4 + C(lambda); C = power law (<464nm) or Pope&Fry (>=464nm)",
+    "P0": 0.624,
+    "P1": 2.96e7,
+    "P2": 3.24e-2,
+    "P3": 10.9,
+    "pope_fry_wavelengths_nm": [464, 470, 480, 490, 500, 510, 520, 530, 540, 550, 560, 570, 580, 590, 600, 610, 620, 630, 640, 650, 660, 670, 680, 690, 700],
+    "pope_fry_absorption_m_inv": [0.0054, 0.0058, 0.0064, 0.0082, 0.0257, 0.0357, 0.0477, 0.0507, 0.0558, 0.0638, 0.0708, 0.0799, 0.108, 0.157, 0.244, 0.289, 0.309, 0.319, 0.329, 0.349, 0.4, 0.43, 0.45, 0.5, 0.65]
+  }
+}
