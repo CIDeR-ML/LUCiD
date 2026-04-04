@@ -1,12 +1,7 @@
-"""Pure optics functions: normalize, reflection, scattering, local frame."""
+"""Pure optics functions: reflection, scattering, local frame."""
 import jax
 import jax.numpy as jnp
-
-
-def normalize(v, epsilon=1e-6):
-    """Normalize a vector (or batch of vectors)."""
-    norm = jnp.linalg.norm(v, axis=-1, keepdims=True)
-    return v / jnp.maximum(norm, epsilon)
+from lucid.utils import normalize
 
 
 def compute_reflection_direction(incident_dir, normal):
