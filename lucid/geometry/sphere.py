@@ -80,3 +80,19 @@ class Sphere(Detector):
         )
 
         fig.show()
+
+    def bounds_check(self, positions):
+        """Test whether positions are inside the sphere.
+
+        Parameters
+        ----------
+        positions : jnp.ndarray
+            Shape ``(N, 3)``.
+
+        Returns
+        -------
+        jnp.ndarray
+            Boolean array of shape ``(N,)``.
+        """
+        import jax.numpy as jnp
+        return jnp.linalg.norm(positions, axis=1) <= self.r
