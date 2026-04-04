@@ -57,7 +57,8 @@ from lucid.siren.training.dataset import PhotonSimDataset
 # Import tools
 from lucid.siren.core import SIREN
 from lucid.siren.core import create_photonsim_siren_grid
-from lucid.generate import generate_random_cone_vectors, normalize, photonsim_differentiable_get_rays
+from lucid.sources.siren_rays import generate_random_cone_vectors, photonsim_differentiable_get_rays
+from lucid.utils import normalize
 from lucid.utils import base_dir_path, setup_matplotlib_for_notebook
 
 plt.rcParams['text.usetex'] = False

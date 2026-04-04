@@ -20,7 +20,7 @@ import random
 import jax
 import jax.numpy as jnp
 
-from lucid.generate import generate_events_from_photonsim
+from lucid.sources.event_io import generate_events_from_photonsim
 from lucid.simulation import setup_event_simulator
 from lucid.detector_params import DetectorParams
 

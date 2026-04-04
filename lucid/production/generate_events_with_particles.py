@@ -15,7 +15,7 @@ import os
 
 import jax.numpy as jnp
 
-from lucid.generate import generate_events_from_photonsim_particles
+from lucid.sources.event_io import generate_events_from_photonsim_particles
 from lucid.simulation import setup_event_simulator
 from lucid.detector_params import DetectorParams
 from lucid.utils import base_dir_path

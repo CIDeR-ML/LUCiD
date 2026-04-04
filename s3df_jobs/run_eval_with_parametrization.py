@@ -38,7 +38,7 @@ from jax.scipy.special import gammaln
 
 # LUCiD imports
 from lucid.geometry import generate_detector
-from lucid.generate import read_photon_data_from_photonsim
+from lucid.sources.event_io import read_photon_data_from_photonsim
 from lucid.simulation import setup_event_simulator
 from lucid.utils import load_range_params, check_track_endpoint_in_detector
 from lucid.detector_params import ParticleParams, load_detector_params
