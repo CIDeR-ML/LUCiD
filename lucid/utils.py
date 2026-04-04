@@ -765,21 +765,22 @@ def jax_rotate_vector_local(vector, axis, angle):
     return vector * cos_angle + cross * sin_angle + axis * dot * (1.0 - cos_angle)
 
 def normalize(v, epsilon=1e-8):
-    """Normalize a vector with numerical stability.
+    """Normalize a vector (or batch of vectors) with numerical stability.
 
     Parameters
     ----------
     v : jnp.ndarray
-        Input vector to normalize
+        Input vector or batch of vectors to normalize.
     epsilon : float, optional
-        Small constant for numerical stability, by default 1e-8
+        Small constant for numerical stability, by default 1e-8.
 
     Returns
     -------
     jnp.ndarray
-        Normalized vector
+        Normalized vector(s), same shape as input.
     """
-    return v / (jnp.linalg.norm(v) + epsilon)
+    norm = jnp.linalg.norm(v, axis=-1, keepdims=True)
+    return v / (norm + epsilon)
 
 
 def generate_orthonormal_basis(v):
