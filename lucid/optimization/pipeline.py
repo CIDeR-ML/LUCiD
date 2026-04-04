@@ -35,7 +35,7 @@ from lucid.optimization.grid_search import load_optimization_config, print_optim
 from lucid.optimization.grid_search import get_detector_bounds, hierarchical_position_grid_search
 from lucid.detector_params import ParticleParams
 
-from lucid.optimization.losses import (
+from lucid.losses import (
     energy_loss,
     counts_loss,
     origin_time_loss,

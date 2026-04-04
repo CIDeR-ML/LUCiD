@@ -57,7 +57,7 @@ from lucid.optimization.pipeline import (
     generate_event_data,
 )
 
-from lucid.optimization.losses import (
+from lucid.losses import (
     energy_loss,
     counts_loss,
     origin_time_loss,

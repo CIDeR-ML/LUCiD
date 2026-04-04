@@ -2,6 +2,8 @@ import jax.numpy as jnp
 from jax import jit
 import jax
 from jax.scipy.special import gammaln
+from jax.scipy import special
+from functools import partial
 from optax.losses import huber_loss
 
 
@@ -52,9 +54,6 @@ def compute_simple_loss(
     intensity_loss = jnp.abs(jnp.log(jnp.sum(simulated_charge) / (jnp.sum(true_charge) + eps)))
 
     return charge_loss + time_loss + intensity_loss
-
-
-import jax.numpy as jnp
 
 
 def compute_loss_with_time(
@@ -289,27 +288,6 @@ def compute_softmin_loss(
 
     return L_charge + L_time + L_intensity
 
-
-def poisson_nll(true: jnp.ndarray, pred: jnp.ndarray, eps: float = 1e-8) -> jnp.ndarray:
-    """Compute the Poisson negative log-likelihood loss.
-
-    Parameters
-    ----------
-    true : jnp.ndarray
-        Ground truth values (non-negative).
-    pred : jnp.ndarray
-        Predicted values (non-negative).
-    eps : float, optional
-        Small constant to prevent log(0), by default 1e-8.
-
-    Returns
-    -------
-    jnp.ndarray
-        Poisson negative log-likelihood loss.
-    """
-    nll = pred - true * jnp.log(pred + eps) + gammaln(true + 1.0)
-    normalized_nll = jnp.sum(nll) / (jnp.sum(true) + eps)
-    return normalized_nll
 
 def WC_loss(
         sensor_points: jnp.ndarray,
@@ -778,3 +756,246 @@ def WC_smooth_loss_hybrid(
     L_mse = mse_loss * lambda_mse
 
     return L_poisson + L_time + L_mse
+
+
+# ===================================================================
+# Optimization loss functions (formerly in lucid/optimization/losses.py)
+# ===================================================================
+
+@jit
+def energy_loss(simulated_counts, true_counts):
+    """
+    Core energy loss computation using intensity matching.
+
+    Parameters:
+    -----------
+    simulated_counts : jnp.ndarray
+        Simulated counts values
+    true_counts : jnp.ndarray
+        True counts values
+
+    Returns:
+    --------
+    float
+        Energy loss value
+    """
+    total_true_counts = jnp.sum(true_counts)
+    total_sim_counts = jnp.sum(simulated_counts)
+    eps = 1e-8
+
+    return jnp.abs(jnp.log(total_sim_counts / (total_true_counts + eps)))
+
+@jit
+def counts_loss(true: jnp.ndarray, pred: jnp.ndarray, eps: float = 1e-8) -> jnp.ndarray:
+    """Compute the Poisson negative log-likelihood loss.
+
+    Parameters
+    ----------
+    true : jnp.ndarray
+        Ground truth values (non-negative).
+    pred : jnp.ndarray
+        Predicted values (non-negative).
+    eps : float, optional
+        Small constant to prevent log(0), by default 1e-8.
+
+    Returns
+    -------
+    jnp.ndarray
+        Poisson negative log-likelihood loss.
+    """
+    nll = pred - true * jnp.log(pred + eps) + gammaln(true + 1.0)
+    normalized_nll = jnp.sum(nll) / (jnp.sum(true) + eps)
+    return normalized_nll
+
+    # cap=1000.0
+    # nll = pred - true * jnp.log(pred + eps) + gammaln(true + 1.0)
+
+    # # Smooth saturating cap
+    # nll_capped = cap * (1.0 - jnp.exp(-nll / cap))
+
+    # return jnp.sum(nll_capped) / (jnp.sum(true) + eps)
+
+@jit
+def grid_origin_time_loss(
+    origin,
+    detector_positions,
+    true_times,
+    true_q,
+    t0,
+    photosensor_radius=0.25,
+    c_medium=(0.299792 / 1.33),
+    w_neg=100.0,
+):
+    eps = 1e-9
+
+    # --- Residuals
+    distances = jnp.linalg.norm(detector_positions - origin[None, :], axis=1)
+    expected_times = (distances - photosensor_radius) / c_medium
+    r = true_times - expected_times - t0
+
+    # --- Active sensors
+    mask = (true_q > 0.).astype(jnp.float32)
+    n = jnp.sum(mask) + eps
+
+    # --- Split residuals
+    r_neg = jnp.clip(-r, 0.0, jnp.inf)
+    r_pos = jnp.clip(r, 0.0, jnp.inf)
+
+    # --- 1) Penalty for early photons
+    neg_pen = jnp.sum(r_neg * mask) / n
+
+    # --- 2) Positive part analysis
+    pos_mask = mask * (r > 0.0).astype(jnp.float32)
+    n_pos = jnp.sum(pos_mask)
+    has_pos = n_pos > 0
+
+    # Prevent divisions by zero
+    safe_n_pos = jnp.maximum(n_pos, 1.0)
+
+    sum_pos = jnp.sum(r_pos * pos_mask)
+    mean_pos = sum_pos / safe_n_pos
+    mean_pos = jnp.maximum(mean_pos, eps)  # avoid log(0)
+
+    # NLL term (only meaningful if we have positives)
+    nll_pos = (n_pos * jnp.log(mean_pos)) / (n + eps)
+
+    # Mask all positive-related terms if no positives
+    total_loss = w_neg * neg_pen + has_pos * (nll_pos)
+
+    # Replace NaNs by large number to avoid contamination
+    total_loss = jnp.nan_to_num(total_loss, nan=1e6, posinf=1e6, neginf=1e6)
+    return total_loss
+
+def softplus(x):
+    return jnp.log1p(jnp.exp(-jnp.abs(x))) + jnp.maximum(x, 0.)
+
+def smooth_pinball(r, tau=0.1, sigma=0.5):
+    """
+    Smooth version of pinball/quantile loss.
+    Minimizer sets approx quantile_tau(r) ~= 0.
+    """
+    # Approx max(r,0) and max(-r,0)
+    pos = softplus(r / sigma) * sigma
+    neg = softplus(-r / sigma) * sigma
+    return tau * pos + (1.0 - tau) * neg
+
+@jit
+def origin_time_loss(origin, detector_positions, true_times, true_q, t0,
+                     photosensor_radius=0.25, c_medium=(0.299792/1.33), tau=0.23):
+    d = jnp.linalg.norm(detector_positions - origin[None, :], axis=1)
+    expected = (d - photosensor_radius) / c_medium
+
+    r = true_times - expected - t0
+
+    w = jnp.where(true_q > 0., 1., 0.)
+    wsum = jnp.sum(w) + 1e-8
+
+    main = jnp.sum(w * smooth_pinball(r, tau=tau, sigma=0.25)) / wsum
+
+    return main
+
+@jit
+def cone_time_loss(observed_counts, simulated_time, observed_times, t0, tau=0.12):
+    r = observed_times - simulated_time - t0
+    w = jnp.where(observed_counts > 0., observed_counts, 0.)
+    wsum = jnp.sum(w) + 1e-8
+    main = jnp.sum(w * smooth_pinball(r, tau=tau, sigma=0.25)) / wsum
+    return main
+
+
+# ===================================================================
+# Likelihood-based loss functions
+# ===================================================================
+
+def segment_logsumexp(data, indices, num_segments):
+    """Numerically stable log-sum-exp aggregated per segment."""
+    max_vals = jax.ops.segment_max(
+        data, indices, num_segments=num_segments,
+        indices_are_sorted=False
+    )
+    shifted = data - max_vals[indices]
+    exp_summed = jax.ops.segment_sum(
+        jnp.exp(shifted), indices, num_segments=num_segments
+    )
+    return max_vals + jnp.log(exp_summed)
+
+
+def first_arrival_nll(log_w, flat_times, flat_indices,
+                      t_obs_per_sensor, tau, num_detectors):
+    t_obs_per_photon = t_obs_per_sensor[flat_indices]
+    x = (t_obs_per_photon - flat_times) / tau
+
+    # Filter invalid photons
+    valid = log_w > -20.0
+    safe_log_w = jnp.where(valid, log_w, -1e6)
+
+    # Normalize weights per sensor in log-space
+    log_w_total = segment_logsumexp(safe_log_w, flat_indices, num_detectors)
+    log_w_norm = safe_log_w - log_w_total[flat_indices]
+
+    # N_s = expected photon count per sensor
+    N_s = jnp.exp(log_w_total)
+
+    # log f(t_obs) — mixture density
+    log_kernel = (jax.nn.log_sigmoid(x)
+                  + jax.nn.log_sigmoid(-x)
+                  - jnp.log(tau))
+    log_f = segment_logsumexp(
+        log_w_norm + log_kernel, flat_indices, num_detectors
+    )
+
+    # log(1 - F) via the identity: 1-F = Σ p_i σ(-x_i)
+    log_one_minus_F = segment_logsumexp(
+        log_w_norm + jax.nn.log_sigmoid(-x), flat_indices, num_detectors
+    )
+
+    # Order statistic NLL: -log[N_s · f · (1-F)^{N_s-1}]
+    loss = -log_w_total - log_f - (N_s - 1) * log_one_minus_F
+
+    return loss
+
+
+# =============================================================================
+# TAU_VTX PARAMETRIZATION
+# =============================================================================
+# Coefficients from weighted least-squares fit on tau hyperparameter scan.
+# To recalculate these parameters:
+#   1. Run: python s3df_jobs/submit_tau_hyperparameter_tuning_job.py --output output/tau_scan --submit
+#   2. Wait for job completion, results in output/tau_scan/result.csv
+#   3. Run analysis notebook: good_notebooks/analyze_tau_scan.ipynb
+#   4. Update coefficients below with new fit results
+
+TAU_VTX_PARAM_A = 1.092557e-06  # coefficient for Nrays
+TAU_VTX_PARAM_B = 2.578522e-04  # coefficient for Energy (MeV)
+TAU_VTX_PARAM_C = -0.0442       # intercept
+
+
+def get_optimal_tau_vtx(nrays, energy_mev):
+    """
+    Get optimal tau_vtx based on learned parametrization.
+
+    tau_vtx = a * Nrays + b * Energy + c
+
+    This parametrization was derived from scanning tau_vtx across
+    different (Nrays, Energy) combinations and fitting to minimize
+    position reconstruction error.
+
+    Args:
+        nrays: Number of photon rays (can be JAX array or scalar)
+        energy_mev: Energy in MeV (can be JAX array or scalar)
+
+    Returns:
+        Optimal tau_vtx value (typically in range 0.1-0.8)
+    """
+    return TAU_VTX_PARAM_A * nrays + TAU_VTX_PARAM_B * energy_mev + TAU_VTX_PARAM_C
+
+
+# =============================================================================
+# ALIASES FOR CONSISTENCY ACROSS CODEBASE
+# =============================================================================
+# poisson_nll is an alias for counts_loss (same formula)
+poisson_nll = counts_loss
+
+# origin_time_loss already accepts tau parameter, so it can be used as configurable
+# This alias makes the API clearer when using dynamic tau_vtx
+origin_time_loss_configurable = origin_time_loss

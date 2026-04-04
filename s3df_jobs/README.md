@@ -88,7 +88,7 @@ TAU_VTX_PARAM_C = ...  # intercept
 #### 4. Use Parametrization
 
 ```python
-from lucid.optimization.losses import get_optimal_tau_vtx
+from lucid.losses import get_optimal_tau_vtx
 
 tau = get_optimal_tau_vtx(nrays=150000, energy_mev=1000)
 ```

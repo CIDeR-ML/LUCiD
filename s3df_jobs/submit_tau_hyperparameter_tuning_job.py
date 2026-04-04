@@ -145,7 +145,7 @@ from lucid.optimization.utils.functions import (
     cartesian_to_spherical,
     spherical_to_cartesian,
 )
-from lucid.optimization.losses import first_arrival_nll
+from lucid.losses import first_arrival_nll
 
 
 SCAN_GRID = {scan_grid_str}
