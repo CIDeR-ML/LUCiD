@@ -11,6 +11,7 @@ MODULES = [
     "lucid.simulation.sensor_response",
     "lucid.simulation.simulator",
     "lucid.simulation.config",
+    "lucid.simulation.types",
     "lucid.geometry.detector_geometry",
     "lucid.sources.particle_model",
     "lucid.generate",
