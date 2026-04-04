@@ -26,14 +26,7 @@ from lucid.optimization.utils.geometry import (
     compute_cone_box_intersection, get_cherenkov_angle
 )
 
-def spherical_to_cartesian(theta, phi):
-    """Convert spherical angles to Cartesian direction vector"""
-    sin_theta = jnp.sin(theta)
-    cos_theta = jnp.cos(theta)
-    sin_phi = jnp.sin(phi)
-    cos_phi = jnp.cos(phi)
-    
-    return jnp.array([sin_theta * cos_phi, sin_theta * sin_phi, cos_theta])
+from lucid.utils import spherical_to_cartesian  # noqa: F401 — canonical location
 
 
 def create_event_3D_visualization(
