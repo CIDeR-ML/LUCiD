@@ -78,11 +78,11 @@ def validate_sensor_map(assignments_geometric, inverted_sensor_map, num_sensors,
     overcrowded = int(np.sum(cell_geo_count > max_sensors_per_cell))
     max_geo = int(cell_geo_count.max()) if total_cells > 0 else 0
     if overcrowded > 0:
-        warnings.warn(
+        raise ValueError(
             f"Sensor map: {overcrowded} cells have more geometric sensor "
             f"assignments ({max_geo} max) than max_sensors_per_cell="
             f"{max_sensors_per_cell}. Increase max_sensors_per_cell or "
-            f"refine the grid to avoid dropping sensors.")
+            f"refine the grid.")
 
     # --- 5. Forward-inverse consistency ---
     n_missing = 0
@@ -134,7 +134,10 @@ def create_propagator(detector, sensor_positions, sensor_radius,
     sensor_positions = jnp.array(sensor_positions)
     num_sensors = len(sensor_positions)
 
-    # Configure grid on detector — caller passes geometry-specific params
+    # Configure grid on detector — caller passes geometry-specific params.
+    # max_sensors_per_cell is always forwarded so auto-derivation can
+    # ensure no cell exceeds this limit.
+    grid_params.setdefault('max_sensors_per_cell', max_sensors_per_cell)
     detector.configure_grid(**grid_params)
 
     # 1. Geometric sensor-to-cell assignments

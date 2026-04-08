@@ -38,16 +38,20 @@ class Box(Detector):
         self._n_z = None
         self.place_photosensors()
 
-    def configure_grid(self, n_x=None, n_y=None, n_z=None):
+    def configure_grid(self, n_x=None, n_y=None, n_z=None,
+                        max_sensors_per_cell=4):
         """Set grid parameters for propagation methods.
 
-        If not provided, defaults are derived from detector dimensions and
-        sensor count to give roughly uniform cell density across all 6 faces.
+        If not provided, defaults are derived from detector dimensions to
+        ensure no cell exceeds ``max_sensors_per_cell`` sensors.
         """
         import math
         n_placed = len(self.all_points) if self.all_points is not None else self.n_sensors
         total_area = 2 * (self.L * self.W + self.L * self.H + self.W * self.H)
-        cell_size = math.sqrt(total_area / max(1, n_placed))
+        # Target cell size from: n_placed / max_sensors_per_cell × safety
+        safety = 2.0
+        target_cells = n_placed / max_sensors_per_cell * safety
+        cell_size = math.sqrt(total_area / max(1, target_cells))
 
         self._n_x = n_x if n_x is not None else max(10, int(self.L / cell_size))
         self._n_y = n_y if n_y is not None else max(10, int(self.W / cell_size))
