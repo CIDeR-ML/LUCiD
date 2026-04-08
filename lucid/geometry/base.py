@@ -41,6 +41,102 @@ class Detector(ABC):
         """Visualize the detector geometry as wireframe. Must be implemented by subclasses."""
         pass
 
+    # ── Propagation abstract methods (Phase 9) ─────────────────────────
+    # Subclasses implement these to enable the shared create_propagator().
+    # bounds_check() was added in Phase 6.
+
+    def intersect_ray(self, origins, directions):
+        """Batch ray-geometry intersection.
+
+        Parameters
+        ----------
+        origins : jnp.ndarray, shape (n_rays, 3)
+        directions : jnp.ndarray, shape (n_rays, 3)
+
+        Returns
+        -------
+        intersection_point : jnp.ndarray, shape (n_rays, 3)
+        t_value : jnp.ndarray, shape (n_rays,)
+        grid_info : geometry-specific opaque data passed to point_to_grid_cell
+        surface_info : geometry-specific data passed to compute_normal
+        """
+        raise NotImplementedError
+
+    def compute_normal(self, intersection_point, surface_info):
+        """Compute outward surface normals at intersection points.
+
+        Parameters
+        ----------
+        intersection_point : jnp.ndarray, shape (n_rays, 3)
+        surface_info : from intersect_ray
+
+        Returns
+        -------
+        normals : jnp.ndarray, shape (n_rays, 3), outward convention
+        """
+        raise NotImplementedError
+
+    def point_to_grid_cell(self, grid_info):
+        """Map intersection data to linear grid cell indices.
+
+        Parameters
+        ----------
+        grid_info : from intersect_ray
+
+        Returns
+        -------
+        linear_idx : jnp.ndarray, shape (n_rays,), int
+        """
+        raise NotImplementedError
+
+    def assign_sensor_to_cells(self, sensors, sensor_radius):
+        """Map each sensor to the grid cells it overlaps.
+
+        Parameters
+        ----------
+        sensors : jnp.ndarray, shape (n_sensors, 3)
+        sensor_radius : float
+
+        Returns
+        -------
+        assignments : jnp.ndarray, geometry-specific shape
+        """
+        raise NotImplementedError
+
+    def grid_cell_centers(self):
+        """Compute (n_cells, 3) array of grid cell center positions.
+
+        Returns
+        -------
+        centers : jnp.ndarray, shape (n_total_cells, 3)
+        """
+        raise NotImplementedError
+
+    def total_grid_cells(self):
+        """Return total number of grid cells.
+
+        Returns
+        -------
+        int
+        """
+        raise NotImplementedError
+
+    def cell_index_to_coords(self, linear_idx):
+        """Decode linear cell index back to grid coordinates.
+
+        Used by the inverted sensor map builder to match geometric
+        assignments (which store grid coordinates) against cell indices.
+
+        Parameters
+        ----------
+        linear_idx : int or jnp.ndarray
+
+        Returns
+        -------
+        coords : geometry-specific (cell_i, cell_j, cell_k) or similar
+        """
+        raise NotImplementedError
+
     def visualize_event_data_plotly_discs(self, loaded_indices, loaded_charges, loaded_times, 
                                      plot_time=False, log_scale=False, title=None, 
                                      show_all_sensors=True, marker_size=6, show_colorbar=True,

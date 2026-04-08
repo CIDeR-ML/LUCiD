@@ -236,20 +236,97 @@ class Cylinder(Detector):
         fig.show()
 
     def bounds_check(self, positions):
-        """Test whether positions are inside the cylinder.
-
-        Parameters
-        ----------
-        positions : jnp.ndarray
-            Shape ``(N, 3)`` array of [x, y, z] coordinates.
-
-        Returns
-        -------
-        jnp.ndarray
-            Boolean array of shape ``(N,)``; True where inside.
-        """
+        """Test whether positions are inside the cylinder."""
         import jax.numpy as jnp
         x, y, z = positions[:, 0], positions[:, 1], positions[:, 2]
         inside_xy = (x ** 2 + y ** 2) <= self.r ** 2
         inside_z = (z >= -self.H / 2) & (z <= self.H / 2)
         return inside_xy & inside_z
+
+    # ── Propagation methods (Phase 9) ──────────────────────────────────
+
+    def intersect_ray(self, origins, directions):
+        """Batch ray-cylinder intersection with grid indexing."""
+        from lucid.propagation.cylinder import batch_intersect_cylinder_with_grid
+        # Default grid params matching create_photon_propagator defaults
+        n_cap = getattr(self, '_n_cap', 150)
+        n_angular = getattr(self, '_n_angular', 250)
+        n_height = getattr(self, '_n_height', 150)
+        results = batch_intersect_cylinder_with_grid(
+            origins, directions, self.r, self.H, n_cap, n_angular, n_height)
+        # Returns: (intersects, t, is_wall, is_top_cap, wall_indices, cap_indices, intersection_point)
+        intersects, t, is_wall, is_top_cap, wall_indices, cap_indices, intersection_point = results
+        grid_info = (is_wall, is_top_cap, wall_indices, cap_indices)
+        surface_info = (is_wall, is_top_cap)
+        return intersection_point, t, grid_info, surface_info
+
+    def compute_normal(self, intersection_point, surface_info):
+        """Compute outward cylinder surface normals."""
+        from lucid.propagation.cylinder import calculate_cylinder_normals
+        is_wall, is_top_cap = surface_info
+        return calculate_cylinder_normals(intersection_point, is_wall, is_top_cap)
+
+    def point_to_grid_cell(self, grid_info):
+        """Map cylinder intersection to linear grid cell index."""
+        import jax.numpy as jnp
+        is_wall, is_top_cap, wall_indices, cap_indices = grid_info
+        n_cap = getattr(self, '_n_cap', 150)
+        n_angular = getattr(self, '_n_angular', 250)
+        n_height = getattr(self, '_n_height', 150)
+
+        wall_linear = wall_indices[:, 0] * n_height + wall_indices[:, 1]
+        cap_linear = cap_indices[:, 0] * n_cap + cap_indices[:, 1]
+        n_wall_cells = n_angular * n_height
+
+        idx = jnp.where(is_wall, wall_linear,
+                        jnp.where(is_top_cap,
+                                  n_wall_cells + cap_linear,
+                                  n_wall_cells + n_cap * n_cap + cap_linear))
+        total_cells = n_wall_cells + 2 * n_cap * n_cap
+        return jnp.clip(idx, 0, total_cells - 1)
+
+    def assign_sensor_to_cells(self, sensors, sensor_radius):
+        """Map sensors to overlapping cylinder grid cells."""
+        from lucid.propagation.cylinder import assign_sensors_to_grid
+        n_cap = getattr(self, '_n_cap', 150)
+        n_angular = getattr(self, '_n_angular', 250)
+        n_height = getattr(self, '_n_height', 150)
+        return assign_sensors_to_grid(
+            sensors, sensor_radius, self.r, self.H, n_cap, n_angular, n_height)
+
+    def grid_cell_centers(self):
+        """Compute centers of all cylinder grid cells."""
+        from lucid.propagation.cylinder import calculate_grid_centers
+        n_cap = getattr(self, '_n_cap', 150)
+        n_angular = getattr(self, '_n_angular', 250)
+        n_height = getattr(self, '_n_height', 150)
+        return calculate_grid_centers(self.r, self.H, n_cap, n_angular, n_height)
+
+    def total_grid_cells(self):
+        n_cap = getattr(self, '_n_cap', 150)
+        n_angular = getattr(self, '_n_angular', 250)
+        n_height = getattr(self, '_n_height', 150)
+        return n_angular * n_height + 2 * n_cap * n_cap
+
+    def cell_index_to_coords(self, linear_idx):
+        """Decode linear index to (cell_i, cell_j, cell_k) for cylinder."""
+        import jax.numpy as jnp
+        n_cap = getattr(self, '_n_cap', 150)
+        n_angular = getattr(self, '_n_angular', 250)
+        n_height = getattr(self, '_n_height', 150)
+        n_wall = n_angular * n_height
+
+        is_wall = linear_idx < n_wall
+        is_top = (linear_idx >= n_wall) & (linear_idx < n_wall + n_cap * n_cap)
+
+        wall_i = linear_idx // n_height
+        wall_j = linear_idx % n_height
+        cap_offset = linear_idx - n_wall
+        cap_idx = cap_offset % (n_cap * n_cap)
+        cap_i = cap_idx // n_cap
+        cap_j = cap_idx % n_cap
+
+        cell_i = jnp.where(is_wall, wall_i, cap_i)
+        cell_j = jnp.where(is_wall, wall_j, cap_j)
+        cell_k = jnp.where(is_wall, 0, jnp.where(is_top, 1, 2))
+        return cell_i, cell_j, cell_k
