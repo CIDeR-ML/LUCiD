@@ -817,16 +817,19 @@ Two separate repos are involved:
   branch here is at an early state (merge only, no refactoring applied yet).
 
 - **diffCherenkov** (`CIDeR-ML/diffCherenkov.git`) at `/home/oalterka/desktop_linux/diffWC/diffCherenkov/`:
-  The original repo where refactoring work was initially performed. The `refactor-v2`
-  branch was transferred to the LUCiD repo. The `origin/likelihood` branch here has the
-  same commit (`2786118`) as LUCiD's `likelihood` branch — they share history.
+  Shares commit history with LUCiD. The `refactor-v2` branch here was the initial working
+  copy and has been transferred to the LUCiD repo.
 
-- **Fixed baseline** at `/tmp/lucid-baseline/`: Git worktree from `origin/likelihood`
-  (commit `2786118`, same in both repos) with the normal convention fix applied
-  (7-line change). Used for comparison.
+- **Fixed baseline** at `/tmp/lucid-baseline/`: Worktree from `origin/likelihood`
+  (commit `2786118`) with the normal convention fix applied (7-line change:
+  outward geometry normals + `inward_normal = -normal` in photon_step + negated
+  sensor normals in base.py).
 
 **Working directory**: `/home/oalterka/desktop_linux/diffWC/LUCiD/` on branch `refactor-v2`.
-All future work should be done here.
+
+**Note on tests/**: The LUCiD repo `tests/` directory contains both our refactor tests
+AND some pre-existing test files (`test_tangent_gradients.py`, `test_all_fixes.py`, etc.).
+Run refactor tests by listing them explicitly or by excluding the old ones.
 
 ### Phases Completed
 
