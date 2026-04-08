@@ -85,14 +85,15 @@ def photon_iteration_sample(
     # tens of rays going out of the detector per each million after several steps.
     # The rule of thumb is that epsilon needs to go down/up proportionally to the detector size.
     epsilon = 1e-4
+    inward_normal = -normal  # Geometry normals point outward; negate to push into medium
     new_pos = jnp.where(
         scatters,
         position + scatter_distance * normalize(direction),
-        position + surface_distance * normalize(direction) + epsilon * normalize(normal),
+        position + surface_distance * normalize(direction) + epsilon * normalize(inward_normal),
     )
 
     specular_dir = compute_reflection_direction(direction, normal)
-    diffuse_dir = sample_cosine_hemisphere(normal, k4)
+    diffuse_dir = sample_cosine_hemisphere(inward_normal, k4)
     reflection_dir = jnp.where(hit_sensor, specular_dir, diffuse_dir)
     scatter_dir = compute_scatter_direction(direction, k3)
 
@@ -204,11 +205,12 @@ def photon_iteration_update_factors(
     # tens of rays going out of the detector per each million after several steps.
     # The rule of thumb is that epsilon needs to go down/up proportionally to the detector size.
     epsilon = 1e-4
-    surface_pos = position + surface_distance * normalize(direction) + epsilon * normalize(normal)
+    inward_normal = -normal  # Geometry normals point outward; negate to push into medium
+    surface_pos = position + surface_distance * normalize(direction) + epsilon * normalize(inward_normal)
     scatter_pos = position + scatter_distance * normalize(direction)
 
     specular_dir = compute_reflection_direction(direction, normal)
-    diffuse_dir = sample_cosine_hemisphere(normal, k3)
+    diffuse_dir = sample_cosine_hemisphere(inward_normal, k3)
     reflection_dir = jnp.where(hit_sensor, specular_dir, diffuse_dir)
     scatter_dir = compute_scatter_direction(direction, k3)
 
