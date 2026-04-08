@@ -33,7 +33,17 @@ class Box(Detector):
         self.L = length
         self.W = width
         self.H = height
+        self._n_x = None
+        self._n_y = None
+        self._n_z = None
         self.place_photosensors()
+
+    def configure_grid(self, n_x=125, n_y=125, n_z=125):
+        """Set grid parameters for propagation methods."""
+        self._n_x = n_x
+        self._n_y = n_y
+        self._n_z = n_z
+
 
     def place_photosensors(self):
         """Position the photo sensor centers proportionally by surface area."""
@@ -245,9 +255,9 @@ class Box(Detector):
     def intersect_ray(self, origins, directions):
         """Batch ray-box intersection with grid indexing."""
         from lucid.propagation.box import batch_intersect_box_with_grid
-        n_x = getattr(self, '_n_x', 125)
-        n_y = getattr(self, '_n_y', 125)
-        n_z = getattr(self, '_n_z', 125)
+        n_x = self._n_x
+        n_y = self._n_y
+        n_z = self._n_z
         results = batch_intersect_box_with_grid(
             origins, directions, self.L, self.W, self.H, n_x, n_y, n_z)
         intersects, t, face_indices, grid_indices, intersection_point = results
@@ -264,9 +274,9 @@ class Box(Detector):
         """Map box intersection to linear grid cell index."""
         import jax.numpy as jnp
         face_indices, grid_indices = grid_info
-        n_x = getattr(self, '_n_x', 125)
-        n_y = getattr(self, '_n_y', 125)
-        n_z = getattr(self, '_n_z', 125)
+        n_x = self._n_x
+        n_y = self._n_y
+        n_z = self._n_z
 
         fb_cells = n_x * n_z           # front/back face cells
         lr_cells = n_y * n_z           # left/right face cells
@@ -294,32 +304,32 @@ class Box(Detector):
     def assign_sensor_to_cells(self, sensors, sensor_radius):
         """Map sensors to overlapping box grid cells."""
         from lucid.propagation.box import assign_sensors_to_box_grid
-        n_x = getattr(self, '_n_x', 125)
-        n_y = getattr(self, '_n_y', 125)
-        n_z = getattr(self, '_n_z', 125)
+        n_x = self._n_x
+        n_y = self._n_y
+        n_z = self._n_z
         return assign_sensors_to_box_grid(
             sensors, sensor_radius, self.L, self.W, self.H, n_x, n_y, n_z)
 
     def grid_cell_centers(self):
         """Compute centers of all box grid cells."""
         from lucid.propagation.box import calculate_box_grid_centers
-        n_x = getattr(self, '_n_x', 125)
-        n_y = getattr(self, '_n_y', 125)
-        n_z = getattr(self, '_n_z', 125)
+        n_x = self._n_x
+        n_y = self._n_y
+        n_z = self._n_z
         return calculate_box_grid_centers(self.L, self.W, self.H, n_x, n_y, n_z)
 
     def total_grid_cells(self):
-        n_x = getattr(self, '_n_x', 125)
-        n_y = getattr(self, '_n_y', 125)
-        n_z = getattr(self, '_n_z', 125)
+        n_x = self._n_x
+        n_y = self._n_y
+        n_z = self._n_z
         return 2 * (n_x * n_z + n_y * n_z + n_x * n_y)
 
     def cell_index_to_coords(self, linear_idx):
         """Decode linear index to (cell_i, cell_j, face_idx) for box."""
         import jax.numpy as jnp
-        n_x = getattr(self, '_n_x', 125)
-        n_y = getattr(self, '_n_y', 125)
-        n_z = getattr(self, '_n_z', 125)
+        n_x = self._n_x
+        n_y = self._n_y
+        n_z = self._n_z
         fb = n_x * n_z
         lr = n_y * n_z
         tb = n_x * n_y
@@ -356,9 +366,9 @@ class Box(Detector):
                                    max_sensors_per_cell, num_sensors):
         """Build cell→sensor lookup table for box."""
         from lucid.propagation.box import create_inverted_box_sensor_map
-        n_x = getattr(self, '_n_x', 125)
-        n_y = getattr(self, '_n_y', 125)
-        n_z = getattr(self, '_n_z', 125)
+        n_x = self._n_x
+        n_y = self._n_y
+        n_z = self._n_z
         return create_inverted_box_sensor_map(
             assignments_geometric, assignments_distance,
             n_x, n_y, n_z, max_sensors_per_cell)

@@ -17,7 +17,8 @@ from lucid.overlap import create_overlap_prob
 
 
 def create_propagator(detector, sensor_positions, sensor_radius,
-                      temperature=0.2, max_sensors_per_cell=4):
+                      temperature=0.2, max_sensors_per_cell=4,
+                      **grid_params):
     """Build a JIT-compiled photon propagator using detector methods.
 
     Parameters
@@ -29,6 +30,11 @@ def create_propagator(detector, sensor_positions, sensor_radius,
     temperature : float
         Soft-assignment temperature for overlap probability.
     max_sensors_per_cell : int
+    **grid_params
+        Geometry-specific grid parameters passed to ``detector.configure_grid()``.
+        Cylinder: n_cap, n_angular, n_height.
+        Sphere: n_divisions.
+        Box: n_x, n_y, n_z.
 
     Returns
     -------
@@ -37,6 +43,9 @@ def create_propagator(detector, sensor_positions, sensor_radius,
     """
     sensor_positions = jnp.array(sensor_positions)
     num_sensors = len(sensor_positions)
+
+    # Configure grid on detector — caller passes geometry-specific params
+    detector.configure_grid(**grid_params)
 
     # 1. Geometric sensor-to-cell assignments
     assignments_geometric = detector.assign_sensor_to_cells(sensor_positions, sensor_radius)

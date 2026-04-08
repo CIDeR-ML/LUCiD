@@ -85,10 +85,10 @@ class TestSphereSharedPropagator:
             sphere_radius=det.r, n_divisions=50,
             temperature=0.2, max_sensors_per_cell=4)
 
-        det._n_divisions = 50
         new = create_propagator(
             det, sensor_points, sensor_radius,
-            temperature=0.2, max_sensors_per_cell=4)
+            temperature=0.2, max_sensors_per_cell=4,
+            n_divisions=50)
 
         _compare_propagators(old, new, "Sphere")
 
