@@ -28,7 +28,8 @@ class DetectorGeometry(NamedTuple):
     def from_config(json_filename: str,
                     temperature: float = 0.2,
                     max_sensors_per_cell: int = 4,
-                    detector_type: str = 'Cylinder') -> 'DetectorGeometry':
+                    detector_type: str = 'Cylinder',
+                    **grid_params) -> 'DetectorGeometry':
         """Build a DetectorGeometry from a config JSON file.
 
         This does everything the old inline code in ``setup_event_simulator``
@@ -39,12 +40,18 @@ class DetectorGeometry(NamedTuple):
         ----------
         json_filename : str
             Path to detector geometry JSON.
-        temperature : float
-            Soft-assignment temperature for propagation.
+        temperature : float or None
+            Soft-assignment temperature for propagation. None uses step function.
         max_sensors_per_cell : int
             Grid cell sensor limit.
         detector_type : str
             'Cylinder', 'Sphere', or 'Box'.
+        **grid_params
+            Geometry-specific grid parameters forwarded to ``create_propagator()``.
+            Cylinder: n_cap, n_angular, n_height.
+            Sphere: n_divisions.
+            Box: n_x, n_y, n_z.
+            If not provided, auto-derived from detector geometry.
         """
         # Normalize casing
         dt_key = detector_type.lower()
@@ -65,7 +72,8 @@ class DetectorGeometry(NamedTuple):
         propagator = create_shared_propagator(
             detector, sensor_points, sensor_radius,
             temperature=temperature,
-            max_sensors_per_cell=max_sensors_per_cell)
+            max_sensors_per_cell=max_sensors_per_cell,
+            **grid_params)
 
         # QE curve (try to load, None if not available)
         try:

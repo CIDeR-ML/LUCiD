@@ -160,8 +160,12 @@ def create_propagator(detector, sensor_positions, sensor_radius,
                         num_sensors, detector, max_sensors_per_cell)
 
     # 5. Overlap probability (shared)
-    sigma = temperature * sensor_radius
-    overlap_prob = create_overlap_prob(sigma, sensor_radius)
+    # temperature=None → step function (hard assignment, non-differentiable)
+    # temperature=float → Gaussian kernel with sigma = temperature * sensor_radius
+    if temperature is None:
+        overlap_prob = create_overlap_prob(None, sensor_radius)
+    else:
+        overlap_prob = create_overlap_prob(temperature * sensor_radius, sensor_radius)
 
     # 6. Bounds check closure
     def bounds_check(positions):

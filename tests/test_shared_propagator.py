@@ -83,15 +83,17 @@ class TestSphereSharedPropagator:
         sensor_points = jnp.array(det.all_points)
         sensor_radius = det.S_radius
 
+        # n_divisions=100 matches what old setup_event_simulator used for sphere
+        # (n_divisions=50 was factory default but overcrowds JUNO's 10k sensors)
         old = create_sphere_photon_propagator(
             sensor_points, sensor_radius,
-            sphere_radius=det.r, n_divisions=50,
+            sphere_radius=det.r, n_divisions=100,
             temperature=0.2, max_sensors_per_cell=4)
 
         new = create_propagator(
             det, sensor_points, sensor_radius,
             temperature=0.2, max_sensors_per_cell=4,
-            n_divisions=50)
+            n_divisions=100)
 
         _compare_propagators(old, new, "Sphere")
 
