@@ -5,9 +5,7 @@ import jax.numpy as jnp
 
 from lucid.geometry import generate_detector, get_material_from_config
 from lucid.wavelength.medium import MediumProperties, make_medium, load_qe_curve
-from lucid.propagation.cylinder import create_photon_propagator
-from lucid.propagation.sphere import create_sphere_photon_propagator
-from lucid.propagation.box import create_box_photon_propagator
+from lucid.propagation.shared import create_propagator as create_shared_propagator
 
 
 class DetectorGeometry(NamedTuple):
@@ -63,26 +61,11 @@ class DetectorGeometry(NamedTuple):
         sensor_radius = detector.S_radius
         num_sensors = len(sensor_points)
 
-        # Propagator
-        if dt_key == 'cylinder':
-            propagator = create_photon_propagator(
-                sensor_points, sensor_radius,
-                r=detector.r, h=detector.H,
-                temperature=temperature,
-                max_sensors_per_cell=max_sensors_per_cell)
-        elif dt_key == 'sphere':
-            propagator = create_sphere_photon_propagator(
-                sensor_points, sensor_radius,
-                sphere_radius=detector.r,
-                temperature=temperature,
-                n_divisions=100,
-                max_sensors_per_cell=max_sensors_per_cell)
-        elif dt_key == 'box':
-            propagator = create_box_photon_propagator(
-                sensor_points, sensor_radius,
-                length=detector.L, width=detector.W, height=detector.H,
-                temperature=temperature,
-                max_sensors_per_cell=max_sensors_per_cell)
+        # Propagator (shared — uses detector abstract methods)
+        propagator = create_shared_propagator(
+            detector, sensor_points, sensor_radius,
+            temperature=temperature,
+            max_sensors_per_cell=max_sensors_per_cell)
 
         # QE curve (try to load, None if not available)
         try:
