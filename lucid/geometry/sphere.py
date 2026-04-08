@@ -31,21 +31,23 @@ class Sphere(Detector):
         self._n_divisions = None
         self.place_photosensors()
 
-    def configure_grid(self, n_divisions=None):
+    def configure_grid(self, n_divisions=None, max_sensors_per_cell=4):
         """Set grid parameters for propagation methods.
 
-        If not provided, defaults are derived from sensor count to give
-        roughly one grid cell per sensor.
+        If not provided, defaults are derived from sensor count to
+        ensure no cell exceeds ``max_sensors_per_cell`` sensors.
         """
         import math
         if n_divisions is not None:
             self._n_divisions = n_divisions
         else:
             n_placed = len(self.all_points) if self.all_points is not None else self.n_sensors
-            # n_divisions × 2*n_divisions = 2*n_divisions² total cells.
-            # Polar grid concentrates cells near poles, so overshoot slightly
-            # (factor 1.5) to avoid overcrowding at the equator.
-            self._n_divisions = max(10, int(math.sqrt(n_placed * 1.5 / 2)))
+            # total cells = 2 × n_div². Target: n_placed / max_sensors_per_cell × safety.
+            # Polar grid has non-uniform cell sizes — equatorial cells are much
+            # larger than polar cells, causing sensor crowding at the equator.
+            # Safety factor 6.0 ensures no cell exceeds max_sensors_per_cell.
+            target_cells = n_placed / max_sensors_per_cell * 8.0
+            self._n_divisions = max(10, int(math.sqrt(target_cells / 2)))
 
 
     def place_photosensors(self):

@@ -15,30 +15,39 @@ from lucid.propagation.shared import create_propagator, validate_sensor_map
 class TestAutoGridDerivation:
     """Verify configure_grid() produces sensible defaults per geometry."""
 
+    def _check_no_overcrowding(self, det, max_sensors_per_cell=4):
+        """Verify no cell exceeds max_sensors_per_cell."""
+        import numpy as np
+        sp = jnp.array(det.all_points)
+        ag = np.asarray(det.assign_sensor_to_cells(sp, det.S_radius))
+        tc = det.total_grid_cells()
+        cell_count = np.zeros(tc, dtype=int)
+        for sid in range(ag.shape[0]):
+            for slot in range(ag.shape[1]):
+                c = ag[sid, slot]
+                if np.all(c == -1):
+                    continue
+                li = int(det.point_to_grid_cell_from_coords(c))
+                if 0 <= li < tc:
+                    cell_count[li] += 1
+        max_in_cell = int(cell_count.max()) if tc > 0 else 0
+        assert max_in_cell <= max_sensors_per_cell, \
+            f"Cell has {max_in_cell} sensors, exceeds max_sensors_per_cell={max_sensors_per_cell}"
+
     def test_cylinder_auto_grid(self):
         det = generate_detector("config/WCTE_geom_config.json")
-        det.configure_grid()
-        n_sensors = len(det.all_points)
-        total_cells = det._n_angular * det._n_height + 2 * det._n_cap**2
-        # Should be roughly 1:1 cells to sensors
-        ratio = total_cells / n_sensors
-        assert 0.5 < ratio < 3.0, f"Cell/sensor ratio {ratio:.1f} outside [0.5, 3.0]"
+        det.configure_grid(max_sensors_per_cell=4)
+        self._check_no_overcrowding(det)
 
     def test_sphere_auto_grid(self):
         det = generate_detector("config/JUNO_geom_config.json")
-        det.configure_grid()
-        n_sensors = len(det.all_points)
-        total_cells = det._n_divisions * 2 * det._n_divisions
-        ratio = total_cells / n_sensors
-        assert 0.5 < ratio < 3.0, f"Cell/sensor ratio {ratio:.1f} outside [0.5, 3.0]"
+        det.configure_grid(max_sensors_per_cell=4)
+        self._check_no_overcrowding(det)
 
     def test_box_auto_grid(self):
         det = generate_detector("config/nuSCOPE_geom_config.json")
-        det.configure_grid()
-        n_sensors = len(det.all_points)
-        total_cells = det.total_grid_cells()
-        ratio = total_cells / n_sensors
-        assert 0.5 < ratio < 3.0, f"Cell/sensor ratio {ratio:.1f} outside [0.5, 3.0]"
+        det.configure_grid(max_sensors_per_cell=4)
+        self._check_no_overcrowding(det)
 
     def test_explicit_overrides_auto(self):
         """Explicit grid params should override auto-derivation."""
@@ -72,32 +81,36 @@ class TestValidationCatchesProblems:
             assert len(sensor_warnings) == 0, \
                 f"Unexpected warnings: {[str(x.message) for x in sensor_warnings]}"
 
-    def test_warns_on_overcrowding(self):
-        """Very coarse grid should warn about overcrowding."""
+    def test_raises_on_overcrowding(self):
+        """Very coarse grid should raise ValueError for overcrowding."""
         det = generate_detector("config/WCTE_geom_config.json")
-        with warnings.catch_warnings(record=True) as w:
-            warnings.simplefilter("always")
-            # Very coarse grid → many sensors per cell
-            prop = create_propagator(
+        with pytest.raises(ValueError, match="max_sensors_per_cell"):
+            create_propagator(
                 det, jnp.array(det.all_points), det.S_radius,
                 n_cap=5, n_angular=5, n_height=5,
                 max_sensors_per_cell=2)
-            sensor_warnings = [x for x in w if 'Sensor map' in str(x.message)]
-            assert len(sensor_warnings) > 0, "Should warn about overcrowding"
 
-    def test_warns_on_missing_sensors(self):
-        """Coarse grid with low max_sensors_per_cell should lose sensors."""
+    def test_auto_grid_no_overcrowding_cylinder(self):
+        """Auto-derived cylinder grid must not exceed max_sensors_per_cell."""
         det = generate_detector("config/WCTE_geom_config.json")
-        with warnings.catch_warnings(record=True) as w:
-            warnings.simplefilter("always")
-            prop = create_propagator(
-                det, jnp.array(det.all_points), det.S_radius,
-                n_cap=5, n_angular=5, n_height=5,
-                max_sensors_per_cell=1)
-            msgs = [str(x.message) for x in w if 'Sensor map' in str(x.message)]
-            has_visibility_warning = any('do not appear' in m for m in msgs)
-            has_overflow_warning = any('overflow' in m or 'Increase' in m for m in msgs)
-            assert has_visibility_warning or has_overflow_warning
+        # Should not raise — auto grid handles max_sensors_per_cell
+        prop = create_propagator(det, jnp.array(det.all_points), det.S_radius)
+        result = prop(jnp.zeros((1, 3)), jnp.array([[1., 0., 0.]]))
+        assert 'sensor_weights' in result
+
+    def test_auto_grid_no_overcrowding_sphere(self):
+        """Auto-derived sphere grid must not exceed max_sensors_per_cell."""
+        det = generate_detector("config/JUNO_geom_config.json")
+        prop = create_propagator(det, jnp.array(det.all_points), det.S_radius)
+        result = prop(jnp.zeros((1, 3)), jnp.array([[1., 0., 0.]]))
+        assert 'sensor_weights' in result
+
+    def test_auto_grid_no_overcrowding_box(self):
+        """Auto-derived box grid must not exceed max_sensors_per_cell."""
+        det = generate_detector("config/nuSCOPE_geom_config.json")
+        prop = create_propagator(det, jnp.array(det.all_points), det.S_radius)
+        result = prop(jnp.zeros((1, 3)), jnp.array([[1., 0., 0.]]))
+        assert 'sensor_weights' in result
 
 
 class TestAutoGridWithPropagator:
