@@ -85,7 +85,7 @@ def photon_iteration_sample(
     # tens of rays going out of the detector per each million after several steps.
     # The rule of thumb is that epsilon needs to go down/up proportionally to the detector size.
     epsilon = 1e-4
-    inward_normal = -normal  # Geometry normals point outward; negate to push into medium
+    inward_normal = -normal  # geometry normals point outward; negate to get into-medium direction
     new_pos = jnp.where(
         scatters,
         position + scatter_distance * normalize(direction),
@@ -205,7 +205,7 @@ def photon_iteration_update_factors(
     # tens of rays going out of the detector per each million after several steps.
     # The rule of thumb is that epsilon needs to go down/up proportionally to the detector size.
     epsilon = 1e-4
-    inward_normal = -normal  # Geometry normals point outward; negate to push into medium
+    inward_normal = -normal  # geometry normals point outward; negate to get into-medium direction
     surface_pos = position + surface_distance * normalize(direction) + epsilon * normalize(inward_normal)
     scatter_pos = position + scatter_distance * normalize(direction)
 
