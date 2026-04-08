@@ -43,12 +43,15 @@ class TestCylinderSharedPropagator:
         sensor_points = jnp.array(det.all_points)
         sensor_radius = det.S_radius
 
+        # Use explicit grid params matching the old factory defaults
         old = create_photon_propagator(
             sensor_points, sensor_radius,
-            r=det.r, h=det.H, temperature=0.2, max_sensors_per_cell=4)
+            r=det.r, h=det.H, n_cap=150, n_angular=250, n_height=150,
+            temperature=0.2, max_sensors_per_cell=4)
         new = create_propagator(
             det, sensor_points, sensor_radius,
-            temperature=0.2, max_sensors_per_cell=4)
+            temperature=0.2, max_sensors_per_cell=4,
+            n_cap=150, n_angular=250, n_height=150)
 
         _compare_propagators(old, new, "Cylinder")
 
@@ -105,10 +108,12 @@ class TestBoxSharedPropagator:
         old = create_box_photon_propagator(
             sensor_points, sensor_radius,
             length=det.L, width=det.W, height=det.H,
+            n_x=125, n_y=125, n_z=125,
             temperature=0.2, max_sensors_per_cell=4)
 
         new = create_propagator(
             det, sensor_points, sensor_radius,
-            temperature=0.2, max_sensors_per_cell=4)
+            temperature=0.2, max_sensors_per_cell=4,
+            n_x=125, n_y=125, n_z=125)
 
         _compare_propagators(old, new, "Box")

@@ -37,11 +37,27 @@ class Cylinder(Detector):
         self._n_height = None
         self.place_photosensors()
 
-    def configure_grid(self, n_cap=150, n_angular=250, n_height=150):
-        """Set grid parameters for propagation methods."""
-        self._n_cap = n_cap
-        self._n_angular = n_angular
-        self._n_height = n_height
+    def configure_grid(self, n_cap=None, n_angular=None, n_height=None):
+        """Set grid parameters for propagation methods.
+
+        If not provided, defaults are derived from detector geometry to give
+        roughly one grid cell per sensor on average. These can be overridden
+        for finer or coarser grids.
+        """
+        import math
+        n_placed = len(self.all_points) if self.all_points is not None else self.n_sensors
+        # Barrel area fraction determines how many cells go to barrel vs caps
+        barrel_area = 2 * math.pi * self.r * self.H
+        cap_area = math.pi * self.r ** 2
+        total_area = barrel_area + 2 * cap_area
+        barrel_frac = barrel_area / total_area
+
+        n_barrel_sensors = max(1, int(n_placed * barrel_frac))
+        n_cap_sensors = max(1, int(n_placed * (1 - barrel_frac) / 2))
+
+        self._n_angular = n_angular if n_angular is not None else max(10, int(math.sqrt(n_barrel_sensors * self.H / self.r)))
+        self._n_height = n_height if n_height is not None else max(10, int(math.sqrt(n_barrel_sensors * self.r / self.H)))
+        self._n_cap = n_cap if n_cap is not None else max(10, int(math.sqrt(n_cap_sensors)))
 
 
     def place_photosensors(self):
@@ -341,6 +357,21 @@ class Cylinder(Detector):
         cell_j = jnp.where(is_wall, wall_j, cap_j)
         cell_k = jnp.where(is_wall, 0, jnp.where(is_top, 1, 2))
         return cell_i, cell_j, cell_k
+
+    def point_to_grid_cell_from_coords(self, coords):
+        """Convert grid coordinates (from assignment array) to linear index.
+
+        For cylinder: coords = [angular_idx, height_idx, part_type]
+        where part_type: 0=wall, 1=top_cap, 2=bottom_cap.
+        """
+        cell_i, cell_j, cell_k = int(coords[0]), int(coords[1]), int(coords[2])
+        n_wall = self._n_angular * self._n_height
+        if cell_k == 0:  # wall
+            return cell_i * self._n_height + cell_j
+        elif cell_k == 1:  # top cap
+            return n_wall + cell_i * self._n_cap + cell_j
+        else:  # bottom cap
+            return n_wall + self._n_cap * self._n_cap + cell_i * self._n_cap + cell_j
 
     def build_inverted_sensor_map(self, assignments_geometric, assignments_distance,
                                    max_sensors_per_cell, num_sensors):

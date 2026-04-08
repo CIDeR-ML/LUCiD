@@ -38,11 +38,20 @@ class Box(Detector):
         self._n_z = None
         self.place_photosensors()
 
-    def configure_grid(self, n_x=125, n_y=125, n_z=125):
-        """Set grid parameters for propagation methods."""
-        self._n_x = n_x
-        self._n_y = n_y
-        self._n_z = n_z
+    def configure_grid(self, n_x=None, n_y=None, n_z=None):
+        """Set grid parameters for propagation methods.
+
+        If not provided, defaults are derived from detector dimensions and
+        sensor count to give roughly uniform cell density across all 6 faces.
+        """
+        import math
+        n_placed = len(self.all_points) if self.all_points is not None else self.n_sensors
+        total_area = 2 * (self.L * self.W + self.L * self.H + self.W * self.H)
+        cell_size = math.sqrt(total_area / max(1, n_placed))
+
+        self._n_x = n_x if n_x is not None else max(10, int(self.L / cell_size))
+        self._n_y = n_y if n_y is not None else max(10, int(self.W / cell_size))
+        self._n_z = n_z if n_z is not None else max(10, int(self.H / cell_size))
 
 
     def place_photosensors(self):
@@ -361,6 +370,19 @@ class Box(Detector):
         cell_j = jnp.where(is_fb, fb_j, jnp.where(is_lr, lr_j, tb_j))
         face_idx = jnp.where(is_fb, fb_face, jnp.where(is_lr, lr_face, tb_face))
         return cell_i, cell_j, face_idx
+
+    def point_to_grid_cell_from_coords(self, coords):
+        """Convert grid coordinates to linear index.
+
+        For box: coords = [cell_i, cell_j, face_idx].
+        """
+        cell_i, cell_j, face_idx = int(coords[0]), int(coords[1]), int(coords[2])
+        fb = self._n_x * self._n_z
+        lr = self._n_y * self._n_z
+        tb = self._n_x * self._n_y
+        offsets = [0, fb, 2*fb, 2*fb+lr, 2*(fb+lr), 2*(fb+lr)+tb]
+        second_dim = self._n_z if face_idx <= 3 else self._n_y
+        return offsets[face_idx] + cell_i * second_dim + cell_j
 
     def build_inverted_sensor_map(self, assignments_geometric, assignments_distance,
                                    max_sensors_per_cell, num_sensors):

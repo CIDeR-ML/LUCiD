@@ -31,9 +31,20 @@ class Sphere(Detector):
         self._n_divisions = None
         self.place_photosensors()
 
-    def configure_grid(self, n_divisions=50):
-        """Set grid parameters for propagation methods."""
-        self._n_divisions = n_divisions
+    def configure_grid(self, n_divisions=None):
+        """Set grid parameters for propagation methods.
+
+        If not provided, defaults are derived from sensor count to give
+        roughly one grid cell per sensor.
+        """
+        import math
+        if n_divisions is not None:
+            self._n_divisions = n_divisions
+        else:
+            n_placed = len(self.all_points) if self.all_points is not None else self.n_sensors
+            # n_divisions × 2*n_divisions = 2*n_divisions² total cells
+            # Want ~n_placed cells → n_divisions ≈ sqrt(n_placed / 2)
+            self._n_divisions = max(10, int(math.sqrt(n_placed / 2)))
 
 
     def place_photosensors(self):
@@ -145,6 +156,15 @@ class Sphere(Detector):
         theta_idx = linear_idx // n_phi
         phi_idx = linear_idx % n_phi
         return theta_idx, phi_idx
+
+    def point_to_grid_cell_from_coords(self, coords):
+        """Convert grid coordinates to linear index.
+
+        For sphere: coords = [theta_idx, phi_idx].
+        """
+        theta_idx, phi_idx = int(coords[0]), int(coords[1])
+        n_phi = 2 * self._n_divisions
+        return theta_idx * n_phi + phi_idx
 
     def build_inverted_sensor_map(self, assignments_geometric, assignments_distance,
                                    max_sensors_per_cell, num_sensors):
