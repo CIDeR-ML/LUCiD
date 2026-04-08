@@ -5,6 +5,6 @@
     "radius": 16.9,
     "height": 36.2,
     "n_sensors": 11000,
-    "sensor_radius": 0.25,
+    "sensor_radius": 0.25
   }
 }
