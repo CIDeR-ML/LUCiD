@@ -31,7 +31,18 @@ class Cylinder(Detector):
         super().__init__(n_sensors, sensor_radius)
         self.r = radius
         self.H = height
+        # Grid params — set via configure_grid() before using propagation methods
+        self._n_cap = None
+        self._n_angular = None
+        self._n_height = None
         self.place_photosensors()
+
+    def configure_grid(self, n_cap=150, n_angular=250, n_height=150):
+        """Set grid parameters for propagation methods."""
+        self._n_cap = n_cap
+        self._n_angular = n_angular
+        self._n_height = n_height
+
 
     def place_photosensors(self):
         """Position the photo sensor centers proportionally by surface area."""
@@ -249,9 +260,9 @@ class Cylinder(Detector):
         """Batch ray-cylinder intersection with grid indexing."""
         from lucid.propagation.cylinder import batch_intersect_cylinder_with_grid
         # Default grid params matching create_photon_propagator defaults
-        n_cap = getattr(self, '_n_cap', 150)
-        n_angular = getattr(self, '_n_angular', 250)
-        n_height = getattr(self, '_n_height', 150)
+        n_cap = self._n_cap
+        n_angular = self._n_angular
+        n_height = self._n_height
         results = batch_intersect_cylinder_with_grid(
             origins, directions, self.r, self.H, n_cap, n_angular, n_height)
         # Returns: (intersects, t, is_wall, is_top_cap, wall_indices, cap_indices, intersection_point)
@@ -270,9 +281,9 @@ class Cylinder(Detector):
         """Map cylinder intersection to linear grid cell index."""
         import jax.numpy as jnp
         is_wall, is_top_cap, wall_indices, cap_indices = grid_info
-        n_cap = getattr(self, '_n_cap', 150)
-        n_angular = getattr(self, '_n_angular', 250)
-        n_height = getattr(self, '_n_height', 150)
+        n_cap = self._n_cap
+        n_angular = self._n_angular
+        n_height = self._n_height
 
         wall_linear = wall_indices[:, 0] * n_height + wall_indices[:, 1]
         cap_linear = cap_indices[:, 0] * n_cap + cap_indices[:, 1]
@@ -288,32 +299,32 @@ class Cylinder(Detector):
     def assign_sensor_to_cells(self, sensors, sensor_radius):
         """Map sensors to overlapping cylinder grid cells."""
         from lucid.propagation.cylinder import assign_sensors_to_grid
-        n_cap = getattr(self, '_n_cap', 150)
-        n_angular = getattr(self, '_n_angular', 250)
-        n_height = getattr(self, '_n_height', 150)
+        n_cap = self._n_cap
+        n_angular = self._n_angular
+        n_height = self._n_height
         return assign_sensors_to_grid(
             sensors, sensor_radius, self.r, self.H, n_cap, n_angular, n_height)
 
     def grid_cell_centers(self):
         """Compute centers of all cylinder grid cells."""
         from lucid.propagation.cylinder import calculate_grid_centers
-        n_cap = getattr(self, '_n_cap', 150)
-        n_angular = getattr(self, '_n_angular', 250)
-        n_height = getattr(self, '_n_height', 150)
+        n_cap = self._n_cap
+        n_angular = self._n_angular
+        n_height = self._n_height
         return calculate_grid_centers(self.r, self.H, n_cap, n_angular, n_height)
 
     def total_grid_cells(self):
-        n_cap = getattr(self, '_n_cap', 150)
-        n_angular = getattr(self, '_n_angular', 250)
-        n_height = getattr(self, '_n_height', 150)
+        n_cap = self._n_cap
+        n_angular = self._n_angular
+        n_height = self._n_height
         return n_angular * n_height + 2 * n_cap * n_cap
 
     def cell_index_to_coords(self, linear_idx):
         """Decode linear index to (cell_i, cell_j, cell_k) for cylinder."""
         import jax.numpy as jnp
-        n_cap = getattr(self, '_n_cap', 150)
-        n_angular = getattr(self, '_n_angular', 250)
-        n_height = getattr(self, '_n_height', 150)
+        n_cap = self._n_cap
+        n_angular = self._n_angular
+        n_height = self._n_height
         n_wall = n_angular * n_height
 
         is_wall = linear_idx < n_wall
@@ -335,9 +346,9 @@ class Cylinder(Detector):
                                    max_sensors_per_cell, num_sensors):
         """Build cell→sensor lookup table for cylinder."""
         from lucid.propagation.cylinder import create_inverted_sensor_map
-        n_cap = getattr(self, '_n_cap', 150)
-        n_angular = getattr(self, '_n_angular', 250)
-        n_height = getattr(self, '_n_height', 150)
+        n_cap = self._n_cap
+        n_angular = self._n_angular
+        n_height = self._n_height
         return create_inverted_sensor_map(
             assignments_geometric, assignments_distance,
             n_cap, n_angular, n_height, max_sensors_per_cell, num_sensors)
