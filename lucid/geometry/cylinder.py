@@ -37,27 +37,32 @@ class Cylinder(Detector):
         self._n_height = None
         self.place_photosensors()
 
-    def configure_grid(self, n_cap=None, n_angular=None, n_height=None):
+    def configure_grid(self, n_cap=None, n_angular=None, n_height=None,
+                        max_sensors_per_cell=4):
         """Set grid parameters for propagation methods.
 
-        If not provided, defaults are derived from detector geometry to give
-        roughly one grid cell per sensor on average. These can be overridden
-        for finer or coarser grids.
+        If not provided, defaults are derived from detector geometry to
+        ensure no cell exceeds ``max_sensors_per_cell`` sensors.
         """
         import math
         n_placed = len(self.all_points) if self.all_points is not None else self.n_sensors
-        # Barrel area fraction determines how many cells go to barrel vs caps
+        # Target: enough cells so each has ≤ max_sensors_per_cell sensors.
+        # Safety factor accounts for non-uniform sensor distribution
+        # (barrel vs caps, hexagonal packing overlap at cell boundaries).
+        safety = 4.0
+        target_cells = n_placed / max_sensors_per_cell * safety
+
         barrel_area = 2 * math.pi * self.r * self.H
         cap_area = math.pi * self.r ** 2
         total_area = barrel_area + 2 * cap_area
         barrel_frac = barrel_area / total_area
 
-        n_barrel_sensors = max(1, int(n_placed * barrel_frac))
-        n_cap_sensors = max(1, int(n_placed * (1 - barrel_frac) / 2))
+        target_barrel = target_cells * barrel_frac
+        target_cap = target_cells * (1 - barrel_frac) / 2
 
-        self._n_angular = n_angular if n_angular is not None else max(10, int(math.sqrt(n_barrel_sensors * self.H / self.r)))
-        self._n_height = n_height if n_height is not None else max(10, int(math.sqrt(n_barrel_sensors * self.r / self.H)))
-        self._n_cap = n_cap if n_cap is not None else max(10, int(math.sqrt(n_cap_sensors)))
+        self._n_angular = n_angular if n_angular is not None else max(10, int(math.sqrt(target_barrel * self.H / self.r)))
+        self._n_height = n_height if n_height is not None else max(10, int(math.sqrt(target_barrel * self.r / self.H)))
+        self._n_cap = n_cap if n_cap is not None else max(10, int(math.sqrt(target_cap)))
 
 
     def place_photosensors(self):
