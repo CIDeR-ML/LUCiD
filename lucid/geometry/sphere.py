@@ -42,9 +42,10 @@ class Sphere(Detector):
             self._n_divisions = n_divisions
         else:
             n_placed = len(self.all_points) if self.all_points is not None else self.n_sensors
-            # n_divisions × 2*n_divisions = 2*n_divisions² total cells
-            # Want ~n_placed cells → n_divisions ≈ sqrt(n_placed / 2)
-            self._n_divisions = max(10, int(math.sqrt(n_placed / 2)))
+            # n_divisions × 2*n_divisions = 2*n_divisions² total cells.
+            # Polar grid concentrates cells near poles, so overshoot slightly
+            # (factor 1.5) to avoid overcrowding at the equator.
+            self._n_divisions = max(10, int(math.sqrt(n_placed * 1.5 / 2)))
 
 
     def place_photosensors(self):
