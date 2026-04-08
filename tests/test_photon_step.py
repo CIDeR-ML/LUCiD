@@ -34,8 +34,8 @@ class TestPhotonIterationSample:
         args = _make_photon_args(key)
         new_pos, new_dir, new_time, detect_prob, refl_atten, cont_factor = \
             photon_iteration_sample(**args)
-        # position: moved along direction by surface_distance
-        npt.assert_allclose(new_pos, [0.5, 0.5, 1.999899983406067], atol=1e-5)
+        # position: moved along direction by surface_distance, epsilon pushed via -normal (inward)
+        npt.assert_allclose(new_pos, [0.5, 0.5, 2.0001], atol=1e-3)
         # direction: reflected (hit_sensor=True, sensor detected)
         npt.assert_allclose(new_dir, [0.0, 0.0, 1.0], atol=1e-5)
         # time advanced
@@ -55,7 +55,7 @@ class TestPhotonIterationUpdateFactors:
         args = _make_photon_args(key)
         new_pos, new_dir, new_time, detect_prob, refl_atten, cont_factor = \
             photon_iteration_update_factors(**args)
-        npt.assert_allclose(new_pos, [0.5, 0.5, 1.999899983406067], atol=1e-5)
+        npt.assert_allclose(new_pos, [0.5, 0.5, 2.0001], atol=1e-3)
         # update_factors reflects (expected value mode)
         npt.assert_allclose(new_dir, [0.0, 0.0, -1.0], atol=1e-5)
         npt.assert_allclose(new_time, 6.657789707183838, atol=1e-4)

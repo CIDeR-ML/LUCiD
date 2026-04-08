@@ -105,16 +105,14 @@ class TestCylinderCombined:
 
 
 class TestCylinderNormals:
-    def test_wall_normal_is_radial_inward(self):
-        """Wall normals point radially inward (toward center).
-        Note: wall normals are inward, cap normals are outward — this is
-        the existing convention used by the propagation pipeline."""
+    def test_wall_normal_is_radial_outward(self):
+        """Wall normals point radially outward (standard convention)."""
         point = jnp.array([[2.0, 0.0, 0.0]])
         is_wall = jnp.array([True])
         is_top = jnp.array([False])
         normals = calculate_cylinder_normals(point, is_wall, is_top)
-        # Wall normal at (2,0,0) points inward: (-1, 0, 0)
-        npt.assert_allclose(normals[0], [-1., 0., 0.], atol=1e-3)
+        # Wall normal at (2,0,0) points outward: (+1, 0, 0)
+        npt.assert_allclose(normals[0], [1., 0., 0.], atol=1e-3)
 
     def test_top_cap_normal_points_up(self):
         """Top cap normal should point upward (outward from detector volume)."""
@@ -247,27 +245,25 @@ class TestBatchIntersection:
         npt.assert_allclose(batch[1][0], single[1], atol=1e-6)
 
 
-# ── Normal convention documentation tests ────────────────────────────
-# Pre-existing convention: cylinder walls INWARD, everything else OUTWARD.
-# Specular reflection is sign-agnostic. Diffuse wall reflection and epsilon
-# offset are affected but compensated by bounds checking. See analysis in
-# Phase 9 planning. These tests DOCUMENT the existing behavior, not assert
-# a particular convention is "correct".
+# ── Normal convention tests ───────────────────────────────────────────
+# ALL geometry normals point OUTWARD (standard convention).
+# The simulation code negates normals at the two consumption points
+# (epsilon offset and diffuse reflection) to get the inward direction.
 
 class TestNormalConvention:
-    """Document the actual normal conventions per geometry surface type."""
+    """Verify all normals follow the outward convention."""
 
-    def test_cylinder_wall_inward(self):
-        """Cylinder wall normals point INWARD (toward axis)."""
+    def test_cylinder_wall_outward(self):
+        """Cylinder wall normals point OUTWARD (radially away from axis)."""
         point = jnp.array([[2.0, 0.0, 0.5], [0.0, 2.0, -0.3]])
         is_wall = jnp.array([True, True])
         is_top = jnp.array([False, False])
         normals = calculate_cylinder_normals(point, is_wall, is_top)
-        # Dot with radial direction should be negative (inward)
+        # Dot with radial direction should be positive (outward)
         for i in range(2):
             radial = point[i, :2] / jnp.linalg.norm(point[i, :2])
             dot = normals[i, 0] * radial[0] + normals[i, 1] * radial[1]
-            assert float(dot) < 0, f"Cylinder wall normal should point inward, got dot={dot}"
+            assert float(dot) > 0, f"Cylinder wall normal should point outward, got dot={dot}"
 
     def test_cylinder_cap_outward(self):
         """Cylinder cap normals point OUTWARD (+z top, -z bottom)."""

@@ -231,8 +231,8 @@ def calculate_cylinder_normals(intersection_point, is_wall, is_top_cap):
     ndarray
         Normal vectors for cylinder intersections
     """
-    # Wall normals
-    wall_normals = -intersection_point[:, :2] / (
+    # Wall normals (outward — radially away from cylinder axis)
+    wall_normals = intersection_point[:, :2] / (
             jnp.linalg.norm(intersection_point[:, :2], axis=1, keepdims=True) + 1e-10)
     wall_normals = jnp.concatenate([wall_normals, jnp.zeros_like(intersection_point[:, :1])], axis=1)
     
