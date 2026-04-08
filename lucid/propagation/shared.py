@@ -5,8 +5,11 @@ create_sphere_photon_propagator, create_box_photon_propagator) with a
 single function that works for any Detector subclass implementing the
 Phase 9 abstract methods.
 """
+import warnings
+
 import jax
 import jax.numpy as jnp
+import numpy as np
 
 from lucid.propagation.base import (
     compute_sensor_intersections_base,
@@ -14,6 +17,93 @@ from lucid.propagation.base import (
     find_closest_sensors,
 )
 from lucid.overlap import create_overlap_prob
+
+
+def validate_sensor_map(assignments_geometric, inverted_sensor_map, num_sensors,
+                        detector, max_sensors_per_cell):
+    """Check consistency between forward (sensor→cells) and inverse (cell→sensors) maps.
+
+    Runs at propagator build time (numpy, not JIT). Raises warnings for
+    any issues that could silently degrade simulation quality.
+
+    Checks:
+    1. Index bounds — no out-of-range sensor IDs
+    2. Cell coverage — fraction of cells with at least one sensor
+    3. Sensor visibility — are all sensors reachable through the map?
+    4. Overcrowding — cells where geometric assignments exceed max_sensors_per_cell
+    5. Forward-inverse consistency — geometric assignments present in inverse map
+    """
+    inv = np.asarray(inverted_sensor_map)
+    fwd = np.asarray(assignments_geometric)
+    total_cells, slots = inv.shape
+    valid_mask = inv != -1
+
+    # --- 1. Index bounds ---
+    if valid_mask.any():
+        min_idx, max_idx = int(inv[valid_mask].min()), int(inv[valid_mask].max())
+        if min_idx < 0 or max_idx >= num_sensors:
+            warnings.warn(
+                f"Sensor map: out-of-range indices [{min_idx}, {max_idx}] "
+                f"for {num_sensors} sensors")
+
+    # --- 2. Cell coverage ---
+    cells_with_sensors = int(np.any(valid_mask, axis=1).sum())
+    coverage_pct = 100.0 * cells_with_sensors / total_cells if total_cells > 0 else 0
+    if coverage_pct < 90.0:
+        warnings.warn(
+            f"Sensor map: low cell coverage — {cells_with_sensors}/{total_cells} "
+            f"({coverage_pct:.1f}%) cells have sensors. Photons hitting empty "
+            f"cells will produce zero weights.")
+
+    # --- 3. Sensor visibility ---
+    sensors_in_map = set(int(x) for x in inv[valid_mask])
+    missing_sensors = set(range(num_sensors)) - sensors_in_map
+    if missing_sensors:
+        warnings.warn(
+            f"Sensor map: {len(missing_sensors)}/{num_sensors} sensors do not "
+            f"appear in any cell's inverse map. These sensors can never be hit.")
+
+    # --- 4. Overcrowding (geometric assignments exceed max_sensors_per_cell) ---
+    # Count how many geometric assignments each cell receives
+    cell_geo_count = np.zeros(total_cells, dtype=int)
+    for sensor_id in range(fwd.shape[0]):
+        for slot in range(fwd.shape[1]):
+            coords = fwd[sensor_id, slot]
+            if np.all(coords == -1):
+                continue
+            linear_idx = int(detector.point_to_grid_cell_from_coords(coords))
+            if 0 <= linear_idx < total_cells:
+                cell_geo_count[linear_idx] += 1
+
+    overcrowded = int(np.sum(cell_geo_count > max_sensors_per_cell))
+    max_geo = int(cell_geo_count.max()) if total_cells > 0 else 0
+    if overcrowded > 0:
+        warnings.warn(
+            f"Sensor map: {overcrowded} cells have more geometric sensor "
+            f"assignments ({max_geo} max) than max_sensors_per_cell="
+            f"{max_sensors_per_cell}. Increase max_sensors_per_cell or "
+            f"refine the grid to avoid dropping sensors.")
+
+    # --- 5. Forward-inverse consistency ---
+    n_missing = 0
+    n_checked = 0
+    for sensor_id in range(fwd.shape[0]):
+        for slot in range(fwd.shape[1]):
+            coords = fwd[sensor_id, slot]
+            if np.all(coords == -1):
+                continue
+            linear_idx = int(detector.point_to_grid_cell_from_coords(coords))
+            if linear_idx < 0 or linear_idx >= total_cells:
+                continue
+            n_checked += 1
+            if sensor_id not in inv[linear_idx]:
+                n_missing += 1
+
+    if n_missing > 0:
+        warnings.warn(
+            f"Sensor map: {n_missing}/{n_checked} geometric assignments are "
+            f"missing from the inverse map — likely dropped due to "
+            f"max_sensors_per_cell={max_sensors_per_cell} overflow.")
 
 
 def create_propagator(detector, sensor_positions, sensor_radius,
@@ -61,6 +151,10 @@ def create_propagator(detector, sensor_positions, sensor_radius,
     inverted_sensor_map = detector.build_inverted_sensor_map(
         assignments_geometric, assignments_distance,
         max_sensors_per_cell, num_sensors)
+
+    # 4b. Validate the sensor map
+    validate_sensor_map(assignments_geometric, inverted_sensor_map,
+                        num_sensors, detector, max_sensors_per_cell)
 
     # 5. Overlap probability (shared)
     sigma = temperature * sensor_radius
