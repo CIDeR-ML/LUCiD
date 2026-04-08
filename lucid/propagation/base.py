@@ -179,7 +179,9 @@ def compute_sensor_intersections_base(sensor_idx, sensor_positions, sensor_radiu
     distance = jnp.linalg.norm(to_sensor, axis=1)
     
     # Calculate normal vectors for closest approach
-    normals_closest = to_sensor / (jnp.linalg.norm(to_sensor, axis=1, keepdims=True) + 1e-10)
+    # Negate so normals point outward from detector wall (matching geometry normal convention).
+    # Raw to_sensor points from sensor center toward interior (inward); negating gives outward.
+    normals_closest = -to_sensor / (jnp.linalg.norm(to_sensor, axis=1, keepdims=True) + 1e-10)
     
     # Ray-sphere intersection coefficients
     a = jnp.sum(ray_d * ray_d, axis=1)  # Should be 1 for normalized directions
@@ -210,8 +212,9 @@ def compute_sensor_intersections_base(sensor_idx, sensor_positions, sensor_radiu
     intersection_points = ray_origins + t_intersect[:, None] * ray_d
     
     # Calculate normals at intersection points
+    # Negate so normals point outward from detector wall (matching geometry normal convention).
     to_intersection = intersection_points - sphere_centers
-    normals_intersect = to_intersection / (jnp.linalg.norm(to_intersection, axis=1, keepdims=True) + 1e-10)
+    normals_intersect = -to_intersection / (jnp.linalg.norm(to_intersection, axis=1, keepdims=True) + 1e-10)
     
     # Determine if ray intersects with sensor (add small epsilon for stability)
     intersects = (discriminant > 1e-6) & (t_intersect > 0)
