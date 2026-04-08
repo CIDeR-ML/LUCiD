@@ -330,3 +330,14 @@ class Cylinder(Detector):
         cell_j = jnp.where(is_wall, wall_j, cap_j)
         cell_k = jnp.where(is_wall, 0, jnp.where(is_top, 1, 2))
         return cell_i, cell_j, cell_k
+
+    def build_inverted_sensor_map(self, assignments_geometric, assignments_distance,
+                                   max_sensors_per_cell, num_sensors):
+        """Build cell→sensor lookup table for cylinder."""
+        from lucid.propagation.cylinder import create_inverted_sensor_map
+        n_cap = getattr(self, '_n_cap', 150)
+        n_angular = getattr(self, '_n_angular', 250)
+        n_height = getattr(self, '_n_height', 150)
+        return create_inverted_sensor_map(
+            assignments_geometric, assignments_distance,
+            n_cap, n_angular, n_height, max_sensors_per_cell, num_sensors)

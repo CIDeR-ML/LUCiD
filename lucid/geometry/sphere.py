@@ -139,3 +139,12 @@ class Sphere(Detector):
         theta_idx = linear_idx // n_phi
         phi_idx = linear_idx % n_phi
         return theta_idx, phi_idx
+
+    def build_inverted_sensor_map(self, assignments_geometric, assignments_distance,
+                                   max_sensors_per_cell, num_sensors):
+        """Build cell→sensor lookup table for sphere."""
+        from lucid.propagation.sphere import create_inverted_sphere_sensor_map
+        n_div = getattr(self, '_n_divisions', 50)
+        return create_inverted_sphere_sensor_map(
+            assignments_geometric, assignments_distance,
+            n_div, max_sensors_per_cell, num_sensors)

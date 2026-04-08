@@ -351,3 +351,14 @@ class Box(Detector):
         cell_j = jnp.where(is_fb, fb_j, jnp.where(is_lr, lr_j, tb_j))
         face_idx = jnp.where(is_fb, fb_face, jnp.where(is_lr, lr_face, tb_face))
         return cell_i, cell_j, face_idx
+
+    def build_inverted_sensor_map(self, assignments_geometric, assignments_distance,
+                                   max_sensors_per_cell, num_sensors):
+        """Build cell→sensor lookup table for box."""
+        from lucid.propagation.box import create_inverted_box_sensor_map
+        n_x = getattr(self, '_n_x', 125)
+        n_y = getattr(self, '_n_y', 125)
+        n_z = getattr(self, '_n_z', 125)
+        return create_inverted_box_sensor_map(
+            assignments_geometric, assignments_distance,
+            n_x, n_y, n_z, max_sensors_per_cell)
