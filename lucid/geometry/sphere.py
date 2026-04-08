@@ -84,17 +84,58 @@ class Sphere(Detector):
         fig.show()
 
     def bounds_check(self, positions):
-        """Test whether positions are inside the sphere.
-
-        Parameters
-        ----------
-        positions : jnp.ndarray
-            Shape ``(N, 3)``.
-
-        Returns
-        -------
-        jnp.ndarray
-            Boolean array of shape ``(N,)``.
-        """
+        """Test whether positions are inside the sphere."""
         import jax.numpy as jnp
         return jnp.linalg.norm(positions, axis=1) <= self.r
+
+    # ── Propagation methods (Phase 9) ──────────────────────────────────
+
+    def intersect_ray(self, origins, directions):
+        """Batch ray-sphere intersection with grid indexing."""
+        from lucid.propagation.sphere import batch_intersect_sphere_with_grid
+        n_div = getattr(self, '_n_divisions', 50)
+        results = batch_intersect_sphere_with_grid(origins, directions, self.r, n_div)
+        intersects, t, theta_idx, phi_idx, intersection_point = results
+        grid_info = (theta_idx, phi_idx)
+        surface_info = None  # sphere has uniform surface
+        return intersection_point, t, grid_info, surface_info
+
+    def compute_normal(self, intersection_point, surface_info):
+        """Compute outward sphere surface normals."""
+        from lucid.propagation.sphere import calculate_sphere_normals
+        return calculate_sphere_normals(intersection_point)
+
+    def point_to_grid_cell(self, grid_info):
+        """Map sphere intersection to linear grid cell index."""
+        import jax.numpy as jnp
+        theta_idx, phi_idx = grid_info
+        n_div = getattr(self, '_n_divisions', 50)
+        n_theta = n_div
+        n_phi = 2 * n_div
+        idx = theta_idx * n_phi + phi_idx
+        total = n_theta * n_phi
+        return jnp.clip(idx, 0, total - 1)
+
+    def assign_sensor_to_cells(self, sensors, sensor_radius):
+        """Map sensors to overlapping sphere grid cells."""
+        from lucid.propagation.sphere import assign_sensors_to_sphere_grid
+        n_div = getattr(self, '_n_divisions', 50)
+        return assign_sensors_to_sphere_grid(sensors, sensor_radius, self.r, n_div)
+
+    def grid_cell_centers(self):
+        """Compute centers of all sphere grid cells."""
+        from lucid.propagation.sphere import calculate_sphere_grid_centers
+        n_div = getattr(self, '_n_divisions', 50)
+        return calculate_sphere_grid_centers(self.r, n_div)
+
+    def total_grid_cells(self):
+        n_div = getattr(self, '_n_divisions', 50)
+        return n_div * (2 * n_div)
+
+    def cell_index_to_coords(self, linear_idx):
+        """Decode linear index to (theta_idx, phi_idx) for sphere."""
+        n_div = getattr(self, '_n_divisions', 50)
+        n_phi = 2 * n_div
+        theta_idx = linear_idx // n_phi
+        phi_idx = linear_idx % n_phi
+        return theta_idx, phi_idx

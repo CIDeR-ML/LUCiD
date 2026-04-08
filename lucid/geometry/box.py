@@ -233,20 +233,121 @@ class Box(Detector):
         fig.show()
 
     def bounds_check(self, positions):
-        """Test whether positions are inside the box.
-
-        Parameters
-        ----------
-        positions : jnp.ndarray
-            Shape ``(N, 3)``.
-
-        Returns
-        -------
-        jnp.ndarray
-            Boolean array of shape ``(N,)``.
-        """
+        """Test whether positions are inside the box."""
         import jax.numpy as jnp
         x, y, z = positions[:, 0], positions[:, 1], positions[:, 2]
         return ((x >= -self.L / 2) & (x <= self.L / 2) &
                 (y >= -self.W / 2) & (y <= self.W / 2) &
                 (z >= -self.H / 2) & (z <= self.H / 2))
+
+    # ── Propagation methods (Phase 9) ──────────────────────────────────
+
+    def intersect_ray(self, origins, directions):
+        """Batch ray-box intersection with grid indexing."""
+        from lucid.propagation.box import batch_intersect_box_with_grid
+        n_x = getattr(self, '_n_x', 125)
+        n_y = getattr(self, '_n_y', 125)
+        n_z = getattr(self, '_n_z', 125)
+        results = batch_intersect_box_with_grid(
+            origins, directions, self.L, self.W, self.H, n_x, n_y, n_z)
+        intersects, t, face_indices, grid_indices, intersection_point = results
+        grid_info = (face_indices, grid_indices)
+        surface_info = face_indices
+        return intersection_point, t, grid_info, surface_info
+
+    def compute_normal(self, intersection_point, surface_info):
+        """Compute outward box face normals."""
+        from lucid.propagation.box import calculate_box_normals
+        return calculate_box_normals(surface_info)  # surface_info = face_indices
+
+    def point_to_grid_cell(self, grid_info):
+        """Map box intersection to linear grid cell index."""
+        import jax.numpy as jnp
+        face_indices, grid_indices = grid_info
+        n_x = getattr(self, '_n_x', 125)
+        n_y = getattr(self, '_n_y', 125)
+        n_z = getattr(self, '_n_z', 125)
+
+        fb_cells = n_x * n_z           # front/back face cells
+        lr_cells = n_y * n_z           # left/right face cells
+        tb_cells = n_x * n_y           # top/bottom face cells
+
+        offsets = jnp.array([
+            0,                           # face 0: front
+            fb_cells,                    # face 1: back
+            2 * fb_cells,                # face 2: left
+            2 * fb_cells + lr_cells,     # face 3: right
+            2 * (fb_cells + lr_cells),   # face 4: top
+            2 * (fb_cells + lr_cells) + tb_cells,  # face 5: bottom
+        ])
+
+        # grid_indices[:, 0] and [:, 1] are the 2D cell coords on the face
+        # For front/back/left/right: second_dim is n_z
+        # For top/bottom: second_dim is n_y
+        second_dim = jnp.where(face_indices <= 3, n_z, n_y)
+        local_idx = grid_indices[:, 0] * second_dim + grid_indices[:, 1]
+
+        total_cells = 2 * (fb_cells + lr_cells + tb_cells)
+        idx = offsets[face_indices] + local_idx
+        return jnp.clip(idx, 0, total_cells - 1)
+
+    def assign_sensor_to_cells(self, sensors, sensor_radius):
+        """Map sensors to overlapping box grid cells."""
+        from lucid.propagation.box import assign_sensors_to_box_grid
+        n_x = getattr(self, '_n_x', 125)
+        n_y = getattr(self, '_n_y', 125)
+        n_z = getattr(self, '_n_z', 125)
+        return assign_sensors_to_box_grid(
+            sensors, sensor_radius, self.L, self.W, self.H, n_x, n_y, n_z)
+
+    def grid_cell_centers(self):
+        """Compute centers of all box grid cells."""
+        from lucid.propagation.box import calculate_box_grid_centers
+        n_x = getattr(self, '_n_x', 125)
+        n_y = getattr(self, '_n_y', 125)
+        n_z = getattr(self, '_n_z', 125)
+        return calculate_box_grid_centers(self.L, self.W, self.H, n_x, n_y, n_z)
+
+    def total_grid_cells(self):
+        n_x = getattr(self, '_n_x', 125)
+        n_y = getattr(self, '_n_y', 125)
+        n_z = getattr(self, '_n_z', 125)
+        return 2 * (n_x * n_z + n_y * n_z + n_x * n_y)
+
+    def cell_index_to_coords(self, linear_idx):
+        """Decode linear index to (cell_i, cell_j, face_idx) for box."""
+        import jax.numpy as jnp
+        n_x = getattr(self, '_n_x', 125)
+        n_y = getattr(self, '_n_y', 125)
+        n_z = getattr(self, '_n_z', 125)
+        fb = n_x * n_z
+        lr = n_y * n_z
+        tb = n_x * n_y
+
+        is_fb = linear_idx < 2 * fb
+        is_lr = (linear_idx >= 2 * fb) & (linear_idx < 2 * fb + 2 * lr)
+
+        # Front/Back
+        fb_face = jnp.where(linear_idx < fb, 0, 1)
+        fb_local = linear_idx % fb
+        fb_i = fb_local // n_z
+        fb_j = fb_local % n_z
+
+        # Left/Right
+        lr_offset = linear_idx - 2 * fb
+        lr_face = jnp.where(lr_offset < lr, 2, 3)
+        lr_local = lr_offset % lr
+        lr_i = lr_local // n_z
+        lr_j = lr_local % n_z
+
+        # Top/Bottom
+        tb_offset = linear_idx - 2 * fb - 2 * lr
+        tb_face = jnp.where(tb_offset < tb, 4, 5)
+        tb_local = tb_offset % tb
+        tb_i = tb_local // n_y
+        tb_j = tb_local % n_y
+
+        cell_i = jnp.where(is_fb, fb_i, jnp.where(is_lr, lr_i, tb_i))
+        cell_j = jnp.where(is_fb, fb_j, jnp.where(is_lr, lr_j, tb_j))
+        face_idx = jnp.where(is_fb, fb_face, jnp.where(is_lr, lr_face, tb_face))
+        return cell_i, cell_j, face_idx
