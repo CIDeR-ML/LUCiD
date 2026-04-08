@@ -144,7 +144,7 @@ class TestSphereBoxPropagatorGradients:
     def test_sphere_grad(self):
         det = generate_detector("config/JUNO_geom_config.json")
         prop = create_propagator(det, jnp.array(det.all_points), det.S_radius,
-                                  n_divisions=50)
+                                  n_divisions=100)
 
         def loss(origin):
             return jnp.sum(prop(origin[None, :], jnp.array([[1., 0., 0.]]))['sensor_weights'])
