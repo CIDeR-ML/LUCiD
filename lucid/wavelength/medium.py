@@ -34,20 +34,16 @@ class MediumProperties(NamedTuple):
 
 
 # ---------------------------------------------------------------------------
-# Factory
+# QE curve loading
 # ---------------------------------------------------------------------------
 
-_DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
-
-
-def load_qe_curve(csv_path=None):
+def load_qe_curve(json_path):
     """Load PMT QE curve and return a JAX-compatible interpolation function.
 
     Parameters
     ----------
-    csv_path : str, optional
-        Path to a CSV file with columns (wavelength_nm, qe_percent).
-        Defaults to ``data/sk_qe.csv`` (SK R3600 PMT).
+    json_path : str
+        Path to a JSON file with keys ``wavelengths_nm`` and ``qe_percent``.
 
     Returns
     -------
@@ -55,12 +51,11 @@ def load_qe_curve(csv_path=None):
         ``qe_fn(wavelength_nm) -> qe_fraction`` (0 to 1).
         Returns 0 outside the tabulated range.
     """
-    if csv_path is None:
-        csv_path = os.path.join(_DATA_DIR, "sk_qe.csv")
+    with open(json_path) as f:
+        data = json.load(f)
 
-    data = np.loadtxt(csv_path, delimiter=",", comments="#")
-    wavelengths = data[:, 0]
-    qe_pct = data[:, 1]
+    wavelengths = np.array(data["wavelengths_nm"])
+    qe_pct = np.array(data["qe_percent"])
 
     sort_idx = np.argsort(wavelengths)
     wl_knots = jnp.array(wavelengths[sort_idx])
@@ -77,15 +72,23 @@ def load_qe_curve(csv_path=None):
     return get_qe
 
 
-def _load_water_json():
-    path = os.path.join(_DATA_DIR, "water.json")
-    with open(path, "r") as f:
+# ---------------------------------------------------------------------------
+# Factory
+# ---------------------------------------------------------------------------
+
+def _load_medium_json(json_path):
+    with open(json_path, "r") as f:
         return json.load(f)
 
 
+# Legacy default path (used when no explicit path is given)
+_LEGACY_WATER_PATH = os.path.join(os.path.dirname(__file__), "..", "..", "config", "materials", "water.json")
+
+
 def make_medium(material: str = "water",
-                wavelength_grid: Optional[jnp.ndarray] = None) -> MediumProperties:
-    """Build a MediumProperties from a material name.
+                wavelength_grid: Optional[jnp.ndarray] = None,
+                medium_model_path: str = None) -> MediumProperties:
+    """Build a MediumProperties from a material name or model file.
 
     Parameters
     ----------
@@ -94,6 +97,9 @@ def make_medium(material: str = "water",
     wavelength_grid : jnp.ndarray, optional
         If provided, wavelength-dependent arrays are computed on this grid.
         If ``None``, only scalar properties are populated (monochromatic mode).
+    medium_model_path : str, optional
+        Explicit path to the medium model JSON file. If ``None``, falls back
+        to the legacy bundled ``water.json``.
 
     Returns
     -------
@@ -102,7 +108,11 @@ def make_medium(material: str = "water",
     if material != "water":
         raise ValueError(f"Unknown material '{material}'. Supported: 'water'.")
 
-    data = _load_water_json()
+    if medium_model_path is not None:
+        data = _load_medium_json(medium_model_path)
+    else:
+        data = _load_medium_json(_LEGACY_WATER_PATH)
+
     n = data["refractive_index"]
     c_vac = data["speed_of_light_vacuum_m_per_ns"]
     c_medium = c_vac / n

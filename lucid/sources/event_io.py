@@ -447,9 +447,17 @@ def read_photon_data_from_photonsim(root_file_path, entry_index):
     # Access the tree
     tree = root_file['OpticalPhotons']
 
-    # Read the data for the specified entry
-    tree_data = tree.arrays(['PrimaryEnergy', 'PhotonPosX', 'PhotonPosY', 'PhotonPosZ',
-                           'PhotonDirX', 'PhotonDirY', 'PhotonDirZ', 'PhotonTime'],
+    # Determine which branches to read
+    branches = ['PrimaryEnergy', 'PhotonPosX', 'PhotonPosY', 'PhotonPosZ',
+                'PhotonDirX', 'PhotonDirY', 'PhotonDirZ', 'PhotonTime']
+
+    # Read wavelength if available in the ROOT file
+    available_branches = tree.keys()
+    has_wavelength = 'PhotonWavelength' in available_branches
+    if has_wavelength:
+        branches.append('PhotonWavelength')
+
+    tree_data = tree.arrays(branches,
                           entry_start=entry_index, entry_stop=entry_index+1, library='np')
 
     # Extract primary energy (already in MeV)
@@ -469,12 +477,18 @@ def read_photon_data_from_photonsim(root_file_path, entry_index):
     photon_positions = np.column_stack((photon_posx, photon_posy, photon_posz))
     photon_directions = np.column_stack((photon_dirx, photon_diry, photon_dirz))
 
-    return {
+    result = {
         'photon_origins': jnp.array(photon_positions),     # Combined position vectors in cm
         'photon_directions': jnp.array(photon_directions), # Combined direction vectors
         'photon_times': jnp.array(tree_data['PhotonTime'][0]),
         'energy': energy  # Energy in MeV
     }
+
+    # Include per-photon wavelengths (nm) if available from PhotonSim
+    if has_wavelength:
+        result['wavelengths'] = jnp.array(tree_data['PhotonWavelength'][0])
+
+    return result
 
 def read_particle_data_from_photonsim(root_file_path, entry_index, include_track_segments=False):
     """
@@ -877,6 +891,12 @@ def generate_events_from_photonsim(event_simulator, particles_dict, sensor_param
                 # Pad the times array (1D array with shape [N])
                 photon_data['photon_times'] = jnp.pad(photon_times, (0, padding_size),
                                                       mode='constant', constant_values=0)
+
+                # Pad wavelengths if present (1D array with shape [N])
+                if 'wavelengths' in photon_data:
+                    photon_data['wavelengths'] = jnp.pad(
+                        photon_data['wavelengths'], (0, padding_size),
+                        mode='constant', constant_values=0)
 
                 photon_data['N'] = N
 
