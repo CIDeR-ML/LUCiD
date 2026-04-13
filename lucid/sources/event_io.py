@@ -2801,3 +2801,431 @@ def print_event_kinematics(event_data, show_details=True):
         print(f"  {particle_type}: {count}")
 
     print("="*70)
+
+
+# ---------------------------------------------------------------------------
+# V2 format: flat sparse HDF5 (sensor file + segment file)
+# ---------------------------------------------------------------------------
+
+_GZIP_OPTS = dict(compression='gzip', compression_opts=4)
+
+
+def save_sensor_batch_v2(batch_events, filename, n_sensors,
+                         source='PhotonSim_Particles_VMAP',
+                         sensor_positions=None,
+                         production_meta=None):
+    """Save a batch of events to a V2 sensor file (flat sparse CSR).
+
+    Parameters
+    ----------
+    batch_events : list of dict
+        Each dict must contain:
+        - 'event_number': int
+        - 'n_particles': int
+        - 't0': float
+        - 'overall_light_containment': float
+        - 'light_containment_by_particle': array (n_particles,)
+        - 'PE_reco': array (n_sensors,) — smeared event-level PE
+        - 'T_reco': array (n_sensors,) — smeared event-level T
+        - 'PE_per_particle': array (n_particles, n_sensors)
+        - 'T_per_particle': array (n_particles, n_sensors)
+        - 'particles': list of dicts with 'track_info' and 'genealogy'
+    filename : str
+    n_sensors : int
+    sensor_positions : np.ndarray, optional
+        Shape (n_sensors, 3) PMT coordinates in meters. Stored once per file.
+    production_meta : dict, optional
+        Keys: 'detector_config', 'material', 'detector_type',
+        'smearing_applied', 'master_seed', 'root_file'.
+    source : str
+    """
+    n_events = len(batch_events)
+
+    # --- Event header arrays ---
+    ev_numbers = np.array([e['event_number'] for e in batch_events], dtype=np.uint32)
+    ev_npart = np.array([e['n_particles'] for e in batch_events], dtype=np.uint16)
+    ev_t0 = np.array([e['t0'] for e in batch_events], dtype=np.float32)
+    ev_cont = np.array([e['overall_light_containment'] for e in batch_events], dtype=np.float32)
+
+    # --- Particle metadata (flat across events) ---
+    part_event_off = [0]
+    part_cats = []
+    part_cont = []
+    gen_offsets = [0]
+    gen_data_list = []
+
+    for ev in batch_events:
+        particles = ev['particles']
+        n_p = ev['n_particles']
+        part_event_off.append(part_event_off[-1] + n_p)
+
+        for particle in particles:
+            ti = particle['track_info']
+            cat = ti['category'] if ti is not None else -1
+            part_cats.append(cat if cat >= 0 else 255)
+
+            genealogy = particle['genealogy']
+            gen_arr = np.asarray(genealogy, dtype=np.int32).flatten()
+            gen_data_list.append(gen_arr)
+            gen_offsets.append(gen_offsets[-1] + len(gen_arr))
+
+        cont_arr = np.asarray(ev['light_containment_by_particle'], dtype=np.float32)
+        part_cont.extend(cont_arr.tolist())
+
+    part_event_off = np.array(part_event_off, dtype=np.uint32)
+    part_cats = np.array(part_cats, dtype=np.uint8)
+    part_cont = np.array(part_cont, dtype=np.float32)
+    gen_offsets = np.array(gen_offsets, dtype=np.uint32)
+    gen_data = np.concatenate(gen_data_list) if gen_data_list else np.array([], dtype=np.int32)
+
+    # --- Event-level sensor hits (sparse) ---
+    ev_hit_offsets = [0]
+    ev_hit_idx_list = []
+    ev_hit_pe_list = []
+    ev_hit_t_list = []
+
+    for ev in batch_events:
+        pe = np.asarray(ev['PE_reco'], dtype=np.float32)
+        t = np.asarray(ev['T_reco'], dtype=np.float32)
+        mask = (pe > 0) | (np.isfinite(t) & (t > 0) & (t < 1e5))
+        indices = np.where(mask)[0].astype(np.uint16)
+        ev_hit_idx_list.append(indices)
+        ev_hit_pe_list.append(pe[mask])
+        ev_hit_t_list.append(np.where(np.isfinite(t[mask]), t[mask], np.float32(0.0)))
+        ev_hit_offsets.append(ev_hit_offsets[-1] + len(indices))
+
+    ev_hit_offsets = np.array(ev_hit_offsets, dtype=np.uint32)
+    ev_hit_idx = np.concatenate(ev_hit_idx_list) if ev_hit_idx_list else np.array([], dtype=np.uint16)
+    ev_hit_pe = np.concatenate(ev_hit_pe_list) if ev_hit_pe_list else np.array([], dtype=np.float32)
+    ev_hit_t = np.concatenate(ev_hit_t_list) if ev_hit_t_list else np.array([], dtype=np.float32)
+
+    # --- Per-particle sensor hits (sparse CSR) ---
+    pp_hit_offsets = [0]
+    pp_hit_idx_list = []
+    pp_hit_pe_list = []
+    pp_hit_t_list = []
+
+    for ev in batch_events:
+        pe_pp = np.asarray(ev['PE_per_particle'], dtype=np.float32)
+        t_pp = np.asarray(ev['T_per_particle'], dtype=np.float32)
+        n_p = pe_pp.shape[0]
+        for i in range(n_p):
+            mask = pe_pp[i] > 0
+            indices = np.where(mask)[0].astype(np.uint16)
+            pp_hit_idx_list.append(indices)
+            pp_hit_pe_list.append(pe_pp[i, mask])
+            # For T, use the matching mask (same sparsity pattern)
+            t_vals = t_pp[i, mask]
+            # Replace inf/nan with 0 for clean storage
+            t_vals = np.where(np.isfinite(t_vals), t_vals, np.float32(0.0))
+            pp_hit_t_list.append(t_vals)
+            pp_hit_offsets.append(pp_hit_offsets[-1] + len(indices))
+
+    pp_hit_offsets = np.array(pp_hit_offsets, dtype=np.uint32)
+    pp_hit_idx = np.concatenate(pp_hit_idx_list) if pp_hit_idx_list else np.array([], dtype=np.uint16)
+    pp_hit_pe = np.concatenate(pp_hit_pe_list) if pp_hit_pe_list else np.array([], dtype=np.float32)
+    pp_hit_t = np.concatenate(pp_hit_t_list) if pp_hit_t_list else np.array([], dtype=np.float32)
+
+    # --- Write ---
+    with h5py.File(filename, 'w') as f:
+        f.attrs['format_version'] = 2
+        f.attrs['n_events'] = n_events
+        f.attrs['n_sensors'] = n_sensors
+        f.attrs['source'] = source
+
+        # Production metadata
+        if production_meta is not None:
+            for key in ('detector_config', 'material', 'detector_type',
+                        'root_file'):
+                if key in production_meta:
+                    f.attrs[key] = str(production_meta[key])
+            if 'smearing_applied' in production_meta:
+                f.attrs['smearing_applied'] = bool(production_meta['smearing_applied'])
+            if 'master_seed' in production_meta:
+                f.attrs['master_seed'] = int(production_meta['master_seed'])
+
+        # Sensor positions (stored once per file)
+        if sensor_positions is not None:
+            f.create_dataset('sensor_positions',
+                             data=np.asarray(sensor_positions, dtype=np.float32),
+                             **_GZIP_OPTS)
+
+        # Event header
+        f.create_dataset('event_number', data=ev_numbers, **_GZIP_OPTS)
+        f.create_dataset('n_particles', data=ev_npart, **_GZIP_OPTS)
+        f.create_dataset('t0', data=ev_t0, **_GZIP_OPTS)
+        f.create_dataset('overall_containment', data=ev_cont, **_GZIP_OPTS)
+
+        # Particle metadata
+        f.create_dataset('particle_event_offset', data=part_event_off, **_GZIP_OPTS)
+        f.create_dataset('particle_category', data=part_cats, **_GZIP_OPTS)
+        f.create_dataset('particle_containment', data=part_cont, **_GZIP_OPTS)
+        f.create_dataset('genealogy_offsets', data=gen_offsets, **_GZIP_OPTS)
+        f.create_dataset('genealogy_data', data=gen_data, **_GZIP_OPTS)
+
+        # Event-level hits
+        f.create_dataset('event_hit_offsets', data=ev_hit_offsets, **_GZIP_OPTS)
+        f.create_dataset('event_hit_sensor_idx', data=ev_hit_idx, **_GZIP_OPTS)
+        f.create_dataset('event_hit_PE', data=ev_hit_pe, **_GZIP_OPTS)
+        f.create_dataset('event_hit_T', data=ev_hit_t, **_GZIP_OPTS)
+
+        # Per-particle hits
+        f.create_dataset('particle_hit_offsets', data=pp_hit_offsets, **_GZIP_OPTS)
+        f.create_dataset('particle_hit_sensor_idx', data=pp_hit_idx, **_GZIP_OPTS)
+        f.create_dataset('particle_hit_PE', data=pp_hit_pe, **_GZIP_OPTS)
+        f.create_dataset('particle_hit_T', data=pp_hit_t, **_GZIP_OPTS)
+
+        # Voxel data (optional)
+        voxel_events = [e for e in batch_events if 'voxel_n_nonzero' in e]
+        if voxel_events:
+            vox_off = [0]
+            vox_idx_list = []
+            vox_cnt_list = []
+            for ev in batch_events:
+                if 'voxel_n_nonzero' in ev:
+                    nnz = np.asarray(ev['voxel_n_nonzero'], dtype=np.int32)
+                    offsets_ev = np.asarray(ev['voxel_offsets'], dtype=np.int32)
+                    flat_idx = np.asarray(ev['voxel_flat_indices'], dtype=np.int64)
+                    counts = np.asarray(ev['voxel_counts'], dtype=np.int32)
+                    # Per-particle voxels for this event
+                    n_p = ev['n_particles']
+                    for p in range(n_p):
+                        start = int(offsets_ev[p])
+                        end = start + int(nnz[p])
+                        vox_idx_list.append(flat_idx[start:end])
+                        vox_cnt_list.append(counts[start:end])
+                        vox_off.append(vox_off[-1] + int(nnz[p]))
+                else:
+                    # No voxels for this event — add empty entries per particle
+                    for _ in range(ev['n_particles']):
+                        vox_off.append(vox_off[-1])
+
+            f.create_dataset('voxel_particle_offsets',
+                             data=np.array(vox_off, dtype=np.uint32), **_GZIP_OPTS)
+            f.create_dataset('voxel_flat_indices',
+                             data=np.concatenate(vox_idx_list) if vox_idx_list else np.array([], dtype=np.int64),
+                             **_GZIP_OPTS)
+            f.create_dataset('voxel_counts',
+                             data=np.concatenate(vox_cnt_list) if vox_cnt_list else np.array([], dtype=np.int32),
+                             **_GZIP_OPTS)
+
+    return filename
+
+
+def save_segment_batch_v2(batch_events, filename):
+    """Save a batch of events to a V2 segment file (flat arrays).
+
+    Parameters
+    ----------
+    batch_events : list of dict
+        Each dict must contain:
+        - 'event_number': int
+        - 'n_particles': int
+        - 'particles': list with 'extended_genealogy'
+        - 'meaningful_tracks': dict  (track_id -> track info)
+        - 'segments': dict with start_x, ..., time, n_segments
+    filename : str
+    """
+    n_events = len(batch_events)
+
+    ev_numbers = np.array([e['event_number'] for e in batch_events], dtype=np.uint32)
+
+    # --- Collect tracks and segments ---
+    track_event_off = [0]
+    all_track_id = []
+    all_parent_id = []
+    all_pdg = []
+    all_energy = []
+    all_ncher = []
+    seg_track_off = [0]
+
+    all_sx, all_sy, all_sz = [], [], []
+    all_ex, all_ey, all_ez = [], [], []
+    all_dx, all_dy, all_dz = [], [], []
+    all_edep, all_time = [], []
+
+    # Extended genealogy
+    total_particles = sum(e['n_particles'] for e in batch_events)
+    ext_gen_offsets = [0]
+    ext_gen_data_list = []
+
+    for ev in batch_events:
+        mt = ev.get('meaningful_tracks', {})
+        seg = ev.get('segments', {'n_segments': 0})
+
+        n_tracks = len(mt)
+        track_event_off.append(track_event_off[-1] + n_tracks)
+
+        if n_tracks > 0:
+            # Iterate in order of the dict (insertion-ordered in Python 3.7+)
+            seg_offset_base = len(all_sx)  # current segment count before this event
+            for t_info in mt.values():
+                all_track_id.append(t_info['track_id'])
+                all_parent_id.append(t_info['parent_id'])
+                all_pdg.append(t_info['pdg'])
+                all_energy.append(t_info['initial_energy'])
+                all_ncher.append(t_info['n_cherenkov'])
+
+                n_segs_this = t_info['n_segments']
+                seg_track_off.append(seg_track_off[-1] + n_segs_this)
+
+        n_segs = seg['n_segments']
+        if n_segs > 0:
+            all_sx.append(np.asarray(seg['start_x'], dtype=np.float32))
+            all_sy.append(np.asarray(seg['start_y'], dtype=np.float32))
+            all_sz.append(np.asarray(seg['start_z'], dtype=np.float32))
+            all_ex.append(np.asarray(seg['end_x'], dtype=np.float32))
+            all_ey.append(np.asarray(seg['end_y'], dtype=np.float32))
+            all_ez.append(np.asarray(seg['end_z'], dtype=np.float32))
+            all_dx.append(np.asarray(seg['dir_x'], dtype=np.float16))
+            all_dy.append(np.asarray(seg['dir_y'], dtype=np.float16))
+            all_dz.append(np.asarray(seg['dir_z'], dtype=np.float16))
+            all_edep.append(np.asarray(seg['edep'], dtype=np.float32))
+            all_time.append(np.asarray(seg['time'], dtype=np.float32))
+
+        # Extended genealogy for particles in this event
+        for particle in ev['particles']:
+            ext_gen = particle.get('extended_genealogy')
+            if ext_gen is not None:
+                arr = np.asarray(ext_gen, dtype=np.int32).flatten()
+            else:
+                arr = np.array([], dtype=np.int32)
+            ext_gen_data_list.append(arr)
+            ext_gen_offsets.append(ext_gen_offsets[-1] + len(arr))
+
+    def _concat_or_empty(arrays, dtype):
+        return np.concatenate(arrays).astype(dtype) if arrays else np.array([], dtype=dtype)
+
+    track_event_off = np.array(track_event_off, dtype=np.uint32)
+    seg_track_off = np.array(seg_track_off, dtype=np.uint32)
+    ext_gen_offsets = np.array(ext_gen_offsets, dtype=np.uint32)
+    ext_gen_data = np.concatenate(ext_gen_data_list) if ext_gen_data_list else np.array([], dtype=np.int32)
+
+    with h5py.File(filename, 'w') as f:
+        f.attrs['format_version'] = 2
+        f.attrs['n_events'] = n_events
+
+        f.create_dataset('event_number', data=ev_numbers, **_GZIP_OPTS)
+        f.create_dataset('track_event_offset', data=track_event_off, **_GZIP_OPTS)
+
+        # Track table
+        f.create_dataset('track_id', data=np.array(all_track_id, dtype=np.int32) if all_track_id else np.array([], dtype=np.int32), **_GZIP_OPTS)
+        f.create_dataset('parent_id', data=np.array(all_parent_id, dtype=np.int32) if all_parent_id else np.array([], dtype=np.int32), **_GZIP_OPTS)
+        f.create_dataset('pdg', data=np.array(all_pdg, dtype=np.int16) if all_pdg else np.array([], dtype=np.int16), **_GZIP_OPTS)
+        f.create_dataset('initial_energy', data=np.array(all_energy, dtype=np.float32) if all_energy else np.array([], dtype=np.float32), **_GZIP_OPTS)
+        f.create_dataset('n_cherenkov', data=np.array(all_ncher, dtype=np.int32) if all_ncher else np.array([], dtype=np.int32), **_GZIP_OPTS)
+        f.create_dataset('segment_offset', data=seg_track_off, **_GZIP_OPTS)
+
+        # Segment table
+        f.create_dataset('start_x', data=_concat_or_empty(all_sx, np.float32), **_GZIP_OPTS)
+        f.create_dataset('start_y', data=_concat_or_empty(all_sy, np.float32), **_GZIP_OPTS)
+        f.create_dataset('start_z', data=_concat_or_empty(all_sz, np.float32), **_GZIP_OPTS)
+        f.create_dataset('end_x', data=_concat_or_empty(all_ex, np.float32), **_GZIP_OPTS)
+        f.create_dataset('end_y', data=_concat_or_empty(all_ey, np.float32), **_GZIP_OPTS)
+        f.create_dataset('end_z', data=_concat_or_empty(all_ez, np.float32), **_GZIP_OPTS)
+        f.create_dataset('dir_x', data=_concat_or_empty(all_dx, np.float16), **_GZIP_OPTS)
+        f.create_dataset('dir_y', data=_concat_or_empty(all_dy, np.float16), **_GZIP_OPTS)
+        f.create_dataset('dir_z', data=_concat_or_empty(all_dz, np.float16), **_GZIP_OPTS)
+        f.create_dataset('edep', data=_concat_or_empty(all_edep, np.float32), **_GZIP_OPTS)
+        f.create_dataset('time', data=_concat_or_empty(all_time, np.float32), **_GZIP_OPTS)
+
+        # Extended genealogy
+        f.create_dataset('ext_genealogy_offsets', data=ext_gen_offsets, **_GZIP_OPTS)
+        f.create_dataset('ext_genealogy_data', data=ext_gen_data, **_GZIP_OPTS)
+
+    return filename
+
+
+def read_sensor_event_v2(filename, event_index, n_sensors=None):
+    """Read a single event from a V2 sensor file, returning a V1-compatible dict.
+
+    Parameters
+    ----------
+    filename : str
+    event_index : int
+        Index within this file (0-based), NOT the global event_number.
+    n_sensors : int, optional
+        If None, read from file attribute.
+
+    Returns
+    -------
+    dict
+        Same keys as V1 format for compatibility:
+        PE, T, PE_per_particle, T_per_particle, n_particles,
+        Particle_Category, t0, overall_light_containment, etc.
+    """
+    with h5py.File(filename, 'r') as f:
+        if n_sensors is None:
+            n_sensors = int(f.attrs['n_sensors'])
+
+        i = event_index
+
+        # Event header
+        event_number = int(f['event_number'][i])
+        n_part = int(f['n_particles'][i])
+        t0 = float(f['t0'][i])
+        overall_cont = float(f['overall_containment'][i])
+
+        # Particle metadata
+        p_start = int(f['particle_event_offset'][i])
+        p_end = int(f['particle_event_offset'][i + 1])
+        categories = np.array(f['particle_category'][p_start:p_end])
+        # Map 255 back to -1 for V1 compat
+        categories = np.where(categories == 255, -1, categories).astype(np.int32)
+        particle_cont = np.array(f['particle_containment'][p_start:p_end])
+
+        # Genealogy
+        gen_off = np.array(f['genealogy_offsets'][p_start:p_end + 1])
+        gen_data = np.array(f['genealogy_data'][int(gen_off[0]):int(gen_off[-1])])
+        gen_off_local = gen_off - gen_off[0]
+
+        genealogies = []
+        for j in range(n_part):
+            g_start = int(gen_off_local[j])
+            g_end = int(gen_off_local[j + 1])
+            genealogies.append(gen_data[g_start:g_end])
+
+        # Event-level hits -> dense
+        h_start = int(f['event_hit_offsets'][i])
+        h_end = int(f['event_hit_offsets'][i + 1])
+        hit_idx = np.array(f['event_hit_sensor_idx'][h_start:h_end])
+        hit_pe = np.array(f['event_hit_PE'][h_start:h_end])
+        hit_t = np.array(f['event_hit_T'][h_start:h_end])
+
+        PE = np.zeros(n_sensors, dtype=np.float32)
+        T = np.zeros(n_sensors, dtype=np.float32)
+        if len(hit_idx) > 0:
+            PE[hit_idx] = hit_pe
+            T[hit_idx] = hit_t
+
+        # Per-particle hits -> dense
+        PE_pp = np.zeros((n_part, n_sensors), dtype=np.float32)
+        T_pp = np.full((n_part, n_sensors), np.inf, dtype=np.float32)
+
+        pp_off = np.array(f['particle_hit_offsets'][p_start:p_end + 1])
+        pp_idx_all = np.array(f['particle_hit_sensor_idx'][int(pp_off[0]):int(pp_off[-1])])
+        pp_pe_all = np.array(f['particle_hit_PE'][int(pp_off[0]):int(pp_off[-1])])
+        pp_t_all = np.array(f['particle_hit_T'][int(pp_off[0]):int(pp_off[-1])])
+        pp_off_local = pp_off - pp_off[0]
+
+        for j in range(n_part):
+            s = int(pp_off_local[j])
+            e = int(pp_off_local[j + 1])
+            if e > s:
+                idx = pp_idx_all[s:e]
+                PE_pp[j, idx] = pp_pe_all[s:e]
+                T_pp[j, idx] = pp_t_all[s:e]
+
+    return {
+        'event_number': event_number,
+        'n_particles': n_part,
+        't0': t0,
+        'PE': PE,
+        'T': T,
+        'PE_per_particle': PE_pp,
+        'T_per_particle': T_pp,
+        'Particle_Category': categories,
+        'overall_light_containment': overall_cont,
+        'light_containment_by_particle': particle_cont,
+        'Particle_CategorizedGenealogy': np.array(genealogies, dtype=object),
+    }
