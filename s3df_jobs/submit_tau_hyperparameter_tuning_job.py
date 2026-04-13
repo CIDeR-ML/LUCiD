@@ -287,6 +287,12 @@ def generate_event_data(event_idx, random_key, data_dir, data_simulator,
 
     photon_data['photon_times'] = jnp.pad(photon_times, (0, padding_size),
                                           mode='constant', constant_values=0)
+
+    if 'wavelengths' in photon_data:
+        photon_data['wavelengths'] = jnp.pad(
+            photon_data['wavelengths'], (0, padding_size),
+            mode='constant', constant_values=0)
+
     photon_data['N'] = N
 
     key = random_key
