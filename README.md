@@ -12,24 +12,46 @@ LUCiD provides a JAX-based differentiable simulation of light propagation in opt
 
 - **Differentiable ray-tracing** with automatic differentiation for gradient-based optimization
 - **Physics-informed neural network (SIREN)** as surrogate model for Cherenkov emission
-- **Multi-geometry support**: cylindrical, spherical, and box detectors
+- **Multi-geometry support**: cylindrical, spherical, box detectors, and SuperK (real PMT positions from ConnectionTable)
 - **Particle track reconstruction** via gradient descent with position, direction, initial time, and energy inference
-- **Detector calibration** for optical parameters (scattering, absorption, reflection)
+- **Detector calibration** for optical parameters (scattering, absorption, reflection, quantum efficiency)
+- **Wavelength-dependent physics**: per-photon scattering, absorption, and QE driven by medium models and PMT curves
+- **Composable physics configs**: each detector property independently chooses scalar or wavelength-dependent representation
+- **Gradient analysis tools**: 1D/2D parameter sweeps with loss landscapes and gradient fields
 
 ## Core Components
 
-### Simulation (`tools/`)
-- **`simulation.py`** - Main event simulator with photon propagation and sensor response
-- **`geometry/`** - Detector geometries (cylinder, sphere, box) with sensor positions and spatial indexing
-- **`propagation/`** - Photon ray-tracing with scattering, reflection, and absorption
-- **`siren/`** - Physics SIREN neural network for Cherenkov emission modeling
+### Simulation (`lucid/simulation/`)
+- **`simulator.py`** - Main event simulator with photon propagation and sensor response
+- **`photon_step.py`** - Per-photon propagation step (scattering, reflection, absorption)
+- **`sensor_response.py`** - Sensor hit aggregation for simulation, data, and likelihood modes
 
-### Optimization (`tools/optimization/`)
-- **`single_track_optimization.py`** - Adam-based gradient descent for track parameters
+### Geometry (`lucid/geometry/`)
+- **`cylinder.py`**, **`sphere.py`**, **`box.py`** - Detector geometries with sensor placement and ray intersection
+- **`superk.py`** - SuperK detector using real PMT positions from ROOT ConnectionTable
+- **`registry.py`** - Detector type registration and dispatch
 
-### Data Generation (`tools/`)
-- **`generate.py`** - Interface to PhotonSim ROOT files for data-like events
-- **`utils.py`** - Random event generation, coordinate conversions, I/O utilities
+### Wavelength (`lucid/wavelength/`)
+- **`medium.py`** - Wavelength-dependent optical properties (Rayleigh scattering, absorption, QE curves)
+- **`spectrum.py`** - Cherenkov wavelength sampling via inverse CDF
+
+### Propagation (`lucid/propagation/`)
+- Photon ray-tracing with scattering, reflection, and absorption
+
+### SIREN (`lucid/siren/`)
+- Physics-informed neural network for Cherenkov emission modeling
+
+### Optimization (`lucid/optimization/`)
+- **`pipeline.py`** - Adam-based gradient descent for track reconstruction
+- **`algorithms.py`** - Numerical, gradient, and hybrid optimization algorithms
+
+### Sources (`lucid/sources/`)
+- **`calibration_sources.py`** - Laser and isotropic calibration sources with optional wavelength
+- **`event_io.py`** - Interface to PhotonSim ROOT files for data-like events
+
+### Gradient Analysis (`lucid/gradient_analysis/`)
+- **`sweep.py`** - 1D and 2D parameter sweeps over loss landscapes
+- **`plotting.py`** - Visualization of sweep results and gradient fields
 
 ## Input Files and PhotonSim Integration
 
@@ -45,13 +67,34 @@ To avoid requiring users to install and run PhotonSim, we provide example input 
 
 Tutorial notebooks in `good_notebooks/` demonstrate key workflows:
 
-1. **`train_siren.ipynb`** - Train Physics SIREN on PhotonSim lookup tables
-2. **`geometry_and_events_3D_visualization.ipynb`** - Visualize detector geometries and simulated events
-3. **`data_vs_pred_hit_predictions.ipynb`** - Compare data-like vs. prediction-like events
-4. **`cylinder_2D_displays.ipynb`** - Create 2D unwrapped detector displays
-5. **`parameter_scans_1D.ipynb`** - 1D parameter scans showing loss landscapes
-6. **`grad_loss_and_opt_in_2D.ipynb`** - 2D gradient fields with optimization trajectories
-7. **`track_optimization_visualization.ipynb`** - Track reconstruction convergence with bootstrap CIs
-8. **`visualize_3D_track_optimization.ipynb`** - 3D visualization of optimization paths
-9. **`computational_performance_evaluation.ipynb`** - Benchmark simulation and gradient computation
-10. **`optimization_vs_variables.ipynb`** - Performance vs. photon count, sensor count, and energy
+**Training & Visualization**
+- **`train_siren.ipynb`** - Train Physics SIREN on PhotonSim lookup tables
+- **`geometry_and_events_3D_visualization.ipynb`** - Visualize detector geometries and simulated events
+- **`cylinder_2D_displays.ipynb`** - Create 2D unwrapped detector displays
+- **`event_hit_animation.ipynb`** - Animated hit displays
+
+**Track Reconstruction**
+- **`tracking_opt_development.ipynb`** - Track reconstruction with Poisson loss
+- **`tracking_opt_development_likelihood.ipynb`** - Track reconstruction with likelihood loss
+- **`tracking_opt_with_gif.ipynb`** - Track optimization with GIF recording
+- **`visualize_3D_track_optimization.ipynb`** - 3D visualization of optimization paths
+- **`track_optimization_visualization.ipynb`** - Convergence analysis with bootstrap CIs
+- **`data_vs_pred_hit_predictions.ipynb`** - Compare data-like vs. prediction-like events
+
+**Calibration**
+- **`grad_param_calibration_multi_init_no_qe.ipynb`** - Multi-initialization calibration parameter fitting
+- **`detector_grad_qe_convergence_multi_source.ipynb`** - QE convergence with multiple sources
+- **`laser_source_grad_analysis.ipynb`** - Laser source gradient sweeps
+- **`wavelength_calibration.ipynb`** - Wavelength-dependent calibration analysis
+
+**Loss Landscapes & Gradients**
+- **`parameter_scans_1D.ipynb`** - 1D parameter scans with Poisson loss
+- **`parameter_scans_1D_likelihood.ipynb`** - 1D parameter scans with likelihood loss
+- **`parameter_scans_1D_v2.ipynb`** - Updated parameter scans with gradient analysis library
+- **`grad_loss_and_opt_in_2D.ipynb`** - 2D gradient fields with optimization trajectories
+- **`grad_loss_and_opt_in_2D_likelihood.ipynb`** - 2D gradient fields with likelihood loss
+- **`per_sensor_tau_analysis.ipynb`** - Per-sensor tau parameter analysis
+
+**Performance**
+- **`computational_performance_evaluation.ipynb`** - Benchmark simulation and gradient computation
+- **`optimization_vs_variables.ipynb`** - Performance vs. photon count, sensor count, and energy
