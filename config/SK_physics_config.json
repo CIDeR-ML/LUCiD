@@ -3,5 +3,5 @@
   "qe_curve": "pmt/SK_QE.json",
   "wall_reflection_rate": 0.2,
   "sensor_reflection_rate": 0.2,
-  "qe_corrections": "pmt_qe_corrections/SK_qe_corrections.json"
+  "qe_corrections": 1.0
 }

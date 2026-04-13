@@ -9,11 +9,12 @@ positions (in cm) to meters to match the standard config format.
 import numpy as np
 import plotly.graph_objects as go
 from .base import Detector
+from .cylinder import Cylinder
 from .registry import register_detector
 
 
 @register_detector('superk')
-class SuperK(Detector):
+class SuperK(Cylinder):
     """
     Super-Kamiokande detector geometry.
 
@@ -63,12 +64,16 @@ class SuperK(Detector):
             print(f"SuperK: config says {n_sensors} sensors but ROOT file "
                   f"has {actual_n}. Using actual count from file.")
 
-        # Initialize base class with actual sensor count
-        super().__init__(actual_n, sensor_radius)
+        # Initialize Detector base (skip Cylinder.__init__ which would place
+        # sensors algorithmically — we place them from the ROOT file instead)
+        Detector.__init__(self, actual_n, sensor_radius)
         self.r = radius
         self.H = height
+        self._n_cap = None
+        self._n_angular = None
+        self._n_height = None
 
-        # Place sensors using real positions
+        # Place sensors using real positions from ConnectionTable
         self.place_photosensors()
 
     def _load_connection_table(self):
