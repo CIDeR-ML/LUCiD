@@ -48,5 +48,10 @@ __all__ = [
     'load_detector_config',
     'load_detector_geom',
     'generate_detector',
-    'get_material_from_config'
+    'get_material_from_config',
+
+    # Registry
+    'get_detector_class',
+    'register_detector',
+    'list_detector_types',
 ]

@@ -19,7 +19,7 @@ def WC_loss(
     Optimized Loss
     Compute a loss function with two components:
     1. Poisson loss: Poisson negative log-likelihood for charge distributions
-    2. Time loss: Huber loss on time differences
+    2. Time loss: L1 (mean absolute error) on time differences
 
     Parameters
     ----------
@@ -310,14 +310,6 @@ def counts_loss(true: jnp.ndarray, pred: jnp.ndarray, eps: float = 1e-8) -> jnp.
     nll = pred - true * jnp.log(pred + eps) + gammaln(true + 1.0)
     normalized_nll = jnp.sum(nll) / (jnp.sum(true) + eps)
     return normalized_nll
-
-    # cap=1000.0
-    # nll = pred - true * jnp.log(pred + eps) + gammaln(true + 1.0)
-
-    # # Smooth saturating cap
-    # nll_capped = cap * (1.0 - jnp.exp(-nll / cap))
-
-    # return jnp.sum(nll_capped) / (jnp.sum(true) + eps)
 
 @jit
 def grid_origin_time_loss(

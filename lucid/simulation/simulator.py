@@ -216,7 +216,11 @@ def setup_event_simulator(
         Returns (scatter_lengths, absorption_lengths, qe_weights, key).
         qe_weights is (n,) or None.
         """
-        if not wavelength_mode or _medium_wl is None:
+        if wavelength_mode and _medium_wl is None:
+            raise RuntimeError(
+                "wavelength_mode=True but no medium model was loaded. "
+                "Provide a physics_config with 'medium_model' or set wavelength_mode=False.")
+        if not wavelength_mode:
             return (jnp.full(n, detector_params.scatter_length),
                     jnp.full(n, detector_params.absorption_length),
                     None, key)
@@ -226,6 +230,9 @@ def setup_event_simulator(
             key, wl_key = jax.random.split(key)
             wavelengths = sample_cherenkov_wavelengths(wl_key, n)
 
+        wavelengths = jnp.clip(wavelengths,
+                               _medium_wl.wavelength_grid[0],
+                               _medium_wl.wavelength_grid[-1])
         sc = jnp.interp(wavelengths, _medium_wl.wavelength_grid, _medium_wl.scatter_coeff)
         ac = jnp.interp(wavelengths, _medium_wl.wavelength_grid, _medium_wl.absorption_coeff)
         scatter_lengths = 1.0 / (sc + 1e-30)

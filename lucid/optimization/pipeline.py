@@ -34,6 +34,7 @@ from lucid.optimization.utils.functions import performance_summary
 from lucid.optimization.grid_search import load_optimization_config, print_optimization_parameters
 from lucid.optimization.grid_search import get_detector_bounds, hierarchical_position_grid_search
 from lucid.detector_params import ParticleParams
+from lucid.wavelength import DEFAULT_WAVELENGTH_NM
 
 from lucid.losses import (
     energy_loss,
@@ -526,7 +527,7 @@ def generate_event_data(event_idx, random_key, data_dir, data_simulator,
     if 'wavelengths' in photon_data:
         photon_data['wavelengths'] = jnp.pad(
             photon_data['wavelengths'], (0, padding_size),
-            mode='constant', constant_values=0)
+            mode='constant', constant_values=DEFAULT_WAVELENGTH_NM)
 
     photon_data['N'] = N
 
