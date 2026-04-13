@@ -460,8 +460,9 @@ def setup_event_simulator(
         track_origin = particle_params.position
         track_direction = particle_params.direction  # property
 
+        key, ray_key, opt_key = jax.random.split(key, 3)
         photon_directions, photon_origins, photon_weights = photonsim_differentiable_get_rays(
-            track_origin, track_direction, energy, Nphot, grid_data, model_params, key,
+            track_origin, track_direction, energy, Nphot, grid_data, model_params, ray_key,
             num_seeds_a, num_seeds_b, num_seeds_c
         )
 
@@ -480,7 +481,7 @@ def setup_event_simulator(
 
         # Per-photon optical properties (Cherenkov spectrum when wavelength_mode)
         scatter_lengths, absorption_lengths, qe_weights, key = _get_optical_arrays(
-            Nphot, detector_params, key)
+            Nphot, detector_params, opt_key)
 
         if qe_weights is not None:
             photon_intensities = photon_intensities * qe_weights
@@ -496,7 +497,8 @@ def setup_event_simulator(
     @jax.jit
     def _simulation_sensor_calibration_impl(source, detector_params, key):
         """Calibration mode: source is a callable (IsotropicSource or LaserSource)."""
-        photon_directions, photon_origins, photon_intensities = source(Nphot, key)
+        key, source_key, opt_key = jax.random.split(key, 3)
+        photon_directions, photon_origins, photon_intensities = source(Nphot, source_key)
         photon_times = jnp.zeros((Nphot,))
 
         # Per-photon optical properties
@@ -506,7 +508,7 @@ def setup_event_simulator(
         else:
             wavelengths = None
         scatter_lengths, absorption_lengths, qe_weights, key = _get_optical_arrays(
-            Nphot, detector_params, key, wavelengths=wavelengths)
+            Nphot, detector_params, opt_key, wavelengths=wavelengths)
 
         if qe_weights is not None:
             photon_intensities = photon_intensities * qe_weights
