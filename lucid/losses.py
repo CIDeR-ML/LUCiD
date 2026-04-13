@@ -4,6 +4,7 @@ import jax
 from jax.scipy.special import gammaln
 
 
+@jit
 def WC_loss(
         sensor_points: jnp.ndarray,
         true_charge: jnp.ndarray,
@@ -117,7 +118,7 @@ def compute_simplified_loss(
     lambda_time : float, optional
         Scaling factor for time loss, by default 1.0.
     lambda_intensity : float, optional
-        Scaling factor for intensity loss, by default 1.0.
+        Scaling factor for intensity loss, by default 0.5.
 
     Returns
     -------
@@ -232,7 +233,6 @@ def WC_smooth_loss(
     simulated_charge_smooth = dist_weights @ simulated_charge
 
     # ============= Poisson Loss on Smoothed Charges =============
-    # poisson_loss = hellinger_loss(true_charge_smooth, simulated_charge_smooth, eps)
     poisson_loss = poisson_nll(true_charge_smooth, simulated_charge_smooth, eps)
 
     # ============= Time Loss (same as original WC_loss) =============

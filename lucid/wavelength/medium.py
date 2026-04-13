@@ -200,8 +200,8 @@ def compute_effective_properties(detector_params, medium, wavelengths=None,
                 detector_params.qe)
 
     # Wavelength-active: per-photon corrections
-    # Reference wavelength index (use medium's grid midpoint)
-    ref_wl = 400.0  # nm — typical Cherenkov peak
+    # Reference wavelength (fixed at Cherenkov peak, not grid midpoint)
+    ref_wl = 400.0  # nm
 
     wl_grid = medium.wavelength_grid
     scatter_at_wl = jnp.interp(wavelengths, wl_grid, medium.scatter_coeff)
