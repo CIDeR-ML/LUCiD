@@ -13,6 +13,7 @@ import os
 import time
 from glob import glob as _glob
 from tqdm import tqdm
+from lucid.wavelength import DEFAULT_WAVELENGTH_NM
 
 
 def get_max_photons_per_particle(root_file_path, n_events=None):
@@ -896,7 +897,7 @@ def generate_events_from_photonsim(event_simulator, particles_dict, sensor_param
                 if 'wavelengths' in photon_data:
                     photon_data['wavelengths'] = jnp.pad(
                         photon_data['wavelengths'], (0, padding_size),
-                        mode='constant', constant_values=0)
+                        mode='constant', constant_values=DEFAULT_WAVELENGTH_NM)
 
                 photon_data['N'] = N
 
