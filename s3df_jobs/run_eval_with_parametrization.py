@@ -42,6 +42,7 @@ from lucid.sources.event_io import read_photon_data_from_photonsim
 from lucid.simulation import setup_event_simulator
 from lucid.utils import load_range_params, check_track_endpoint_in_detector
 from lucid.detector_params import ParticleParams, load_detector_params
+from lucid.wavelength import DEFAULT_WAVELENGTH_NM
 from lucid.optimization.grid_search import (
     load_optimization_config,
     get_detector_bounds,
@@ -264,7 +265,7 @@ def generate_event_data(event_idx, random_key, data_dir, data_simulator,
     if 'wavelengths' in photon_data:
         photon_data['wavelengths'] = jnp.pad(
             photon_data['wavelengths'], (0, padding_size),
-            mode='constant', constant_values=0)
+            mode='constant', constant_values=DEFAULT_WAVELENGTH_NM)
 
     photon_data['N'] = N
 
