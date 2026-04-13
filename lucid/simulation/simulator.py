@@ -13,7 +13,9 @@ from lucid.utils import (
     spherical_to_cartesian, base_dir_path,
     smear_times, smear_charges_SK_like,
 )
-from lucid.detector_params import DetectorParams, ParticleParams, load_detector_params
+from lucid.detector_params import DetectorParams, ParticleParams, load_detector_params, load_physics_config
+from lucid.wavelength.medium import make_medium, load_qe_curve
+from lucid.wavelength.spectrum import sample_cherenkov_wavelengths
 
 import jax
 import jax.numpy as jnp
@@ -50,7 +52,9 @@ def setup_event_simulator(
         particle='muon',
         apply_smearing=True,
         physics_config=None,
-        default_detector_params=False):
+        default_detector_params=False,
+        wavelength_mode=True,
+        **grid_params):
     """
     Set up and return an event simulator using DetectorParams / ParticleParams.
 
@@ -110,14 +114,23 @@ def setup_event_simulator(
         a ``.default_detector_params`` attribute for inspection.
     """
     # ---- Resolve default_detector_params ------------------------------------
+    _medium_model_path = None
+    _qe_curve_path = None
+
     if default_detector_params is False:
         _default_dp = None
+        # Still extract medium/QE paths from physics config if provided
+        if physics_config is not None:
+            _, _medium_model_path, _qe_curve_path = load_physics_config(physics_config)
     elif default_detector_params is True:
         if physics_config is None:
             raise ValueError("physics_config is required when default_detector_params=True")
-        _default_dp = load_detector_params(physics_config)
+        _default_dp, _medium_model_path, _qe_curve_path = load_physics_config(physics_config)
     elif isinstance(default_detector_params, DetectorParams):
         _default_dp = default_detector_params
+        # Extract medium/QE paths from physics config if provided alongside
+        if physics_config is not None:
+            _, _medium_model_path, _qe_curve_path = load_physics_config(physics_config)
     else:
         raise TypeError(
             f"default_detector_params must be bool or DetectorParams, got {type(default_detector_params)}")
@@ -129,7 +142,8 @@ def setup_event_simulator(
     det_geom = DetectorGeometry.from_config(
         json_filename, temperature=temperature,
         max_sensors_per_cell=max_sensors_per_cell,
-        detector_type=detector_type)
+        detector_type=detector_type,
+        **grid_params)
 
     mode = 'data' if is_data else ('calibration' if is_calibration else 'track')
     sim_config = SimConfig(
@@ -183,6 +197,43 @@ def setup_event_simulator(
             return make_hits_likelihood(flat_weights, flat_indices, flat_times, num_sensors,
                                         qe=qe, qe_corrections=qe_corrections)
 
+    # ---- Wavelength-dependent medium (when wavelength_mode=True) -----
+    if wavelength_mode:
+        _wl_grid = jnp.linspace(300.0, 700.0, 200)
+        _medium_wl = make_medium(material, wavelength_grid=_wl_grid,
+                                 medium_model_path=_medium_model_path)
+        _qe_fn = load_qe_curve(_qe_curve_path) if _qe_curve_path else None
+    else:
+        _medium_wl = None
+        _qe_fn = None
+
+    def _get_optical_arrays(n, detector_params, key, wavelengths=None):
+        """Compute per-photon (n,) scatter/absorption arrays and QE weights.
+
+        When wavelength_mode=True: uses medium coefficients at given wavelengths.
+        When wavelength_mode=False: broadcasts DetectorParams scalars.
+
+        Returns (scatter_lengths, absorption_lengths, qe_weights, key).
+        qe_weights is (n,) or None.
+        """
+        if not wavelength_mode or _medium_wl is None:
+            return (jnp.full(n, detector_params.scatter_length),
+                    jnp.full(n, detector_params.absorption_length),
+                    None, key)
+
+        # Sample or use provided wavelengths
+        if wavelengths is None:
+            key, wl_key = jax.random.split(key)
+            wavelengths = sample_cherenkov_wavelengths(wl_key, n)
+
+        sc = jnp.interp(wavelengths, _medium_wl.wavelength_grid, _medium_wl.scatter_coeff)
+        ac = jnp.interp(wavelengths, _medium_wl.wavelength_grid, _medium_wl.absorption_coeff)
+        scatter_lengths = 1.0 / (sc + 1e-30)
+        absorption_lengths = 1.0 / (ac + 1e-30)
+
+        qe_weights = _qe_fn(wavelengths) if _qe_fn is not None else None
+        return scatter_lengths, absorption_lengths, qe_weights, key
+
     # ================================================================
     # Core propagation (shared by all modes)
     # ================================================================
@@ -192,28 +243,27 @@ def setup_event_simulator(
         'propagate_fn', 'photon_update_fn', 'pos_grad_threshold', 'make_hits_fn'))
     def _common_propagation(
             positions, directions, intensities, times,
+            scatter_lengths, absorption_lengths,
             n_rays, detector_params, key,
             num_sensors, K, n_grad_iters, max_sensors_per_cell,
             propagate_fn, photon_update_fn,
             pos_grad_threshold, make_hits_fn):
-        """Core photon propagation loop using DetectorParams.
+        """Core photon propagation loop.
 
         Parameters
         ----------
+        scatter_lengths : jnp.ndarray
+            Per-photon scattering lengths, shape (n_rays,).
+        absorption_lengths : jnp.ndarray
+            Per-photon absorption lengths, shape (n_rays,).
         pos_grad_threshold : int
             Iteration threshold for position stop_gradient.
-            Standard modes use K (gradient flows for all iterations).
-            Likelihood mode uses 0 (always stop — positions are not optimized).
         make_hits_fn : callable
-            Sensor response aggregation function. One of:
-            _make_hits_fn (simulation/data) or _make_hits_likelihood_fn (likelihood).
+            Sensor response aggregation function.
         """
 
-        # Named field access (no tuple unpacking)
-        scatter_length = detector_params.scatter_length
         wall_reflection_rate = detector_params.wall_reflection_rate
         sensor_reflection_rate = detector_params.sensor_reflection_rate
-        absorption_length = detector_params.absorption_length
         qe = detector_params.qe
         qe_corrections = detector_params.qe_corrections
 
@@ -239,18 +289,18 @@ def setup_event_simulator(
             key, subkey = jax.random.split(key)
             rng_keys = jax.random.split(subkey, n_rays)
 
-            # vmap: 12 args — dual reflection, no tau_gs
+            # vmap: 12 args — per-photon scatter/absorption, scalar reflections
             (new_positions, new_directions, new_times,
              detect_probs, reflection_attenuations,
              continuing_factors) = jax.vmap(
                 photon_update_fn,
                 in_axes=(0, 0, 0, 0, 0,
-                         None, None, None, None,
+                         0, None, None, 0,
                          0, 0, None)
             )(state.positions, state.directions, state.times,
               surface_distances, normals,
-              scatter_length, wall_reflection_rate, sensor_reflection_rate,
-              absorption_length,
+              scatter_lengths, wall_reflection_rate, sensor_reflection_rate,
+              absorption_lengths,
               hit_sensor, rng_keys, SPEED_OF_LIGHT_MATERIAL)
 
             inside_detector = get_inside_detector_flag(new_positions)
@@ -370,8 +420,18 @@ def setup_event_simulator(
         mask = jnp.arange(n_rays) < photon_data['N']
         photon_intensities = 1.0 * mask.astype(jnp.float32)
 
+        # Per-photon optical properties — use PhotonSim wavelengths if available
+        data_wavelengths = photon_data.get('wavelengths', None)
+        scatter_lengths, absorption_lengths, qe_weights, key = _get_optical_arrays(
+            n_rays, detector_params, key, wavelengths=data_wavelengths)
+
+        if qe_weights is not None:
+            photon_intensities = photon_intensities * qe_weights
+            detector_params = detector_params._replace(qe=jnp.array(1.0))
+
         return _common_propagation(
             final_origins, final_directions, photon_intensities, photon_times,
+            scatter_lengths, absorption_lengths,
             n_rays, detector_params, key, NUM_SENSORS, sim_config.K, sim_config.effective_n_grad_iters, max_sensors_per_cell,
             propagate_photons, photon_update_fn,
             pos_grad_threshold=sim_config.K, make_hits_fn=_make_hits_fn)
@@ -411,8 +471,17 @@ def setup_event_simulator(
                            A_slope, A_intercept,
                            B_slope, B_intercept, offset))
 
+        # Per-photon optical properties (Cherenkov spectrum when wavelength_mode)
+        scatter_lengths, absorption_lengths, qe_weights, key = _get_optical_arrays(
+            Nphot, detector_params, key)
+
+        if qe_weights is not None:
+            photon_intensities = photon_intensities * qe_weights
+            detector_params = detector_params._replace(qe=jnp.array(1.0))
+
         return _common_propagation(
             photon_origins, photon_directions, photon_intensities, photon_times + t0,
+            scatter_lengths, absorption_lengths,
             Nphot, detector_params, key, NUM_SENSORS, sim_config.K, sim_config.effective_n_grad_iters, max_sensors_per_cell,
             propagate_photons, photon_update_fn,
             pos_grad_threshold=0, make_hits_fn=_make_hits_likelihood_fn)  # pos=0: likelihood always stops position gradient
@@ -423,8 +492,22 @@ def setup_event_simulator(
         photon_directions, photon_origins, photon_intensities = source(Nphot, key)
         photon_times = jnp.zeros((Nphot,))
 
+        # Per-photon optical properties
+        source_wl = getattr(source, 'wavelength', None)
+        if source_wl is not None:
+            wavelengths = jnp.full(Nphot, source_wl)
+        else:
+            wavelengths = None
+        scatter_lengths, absorption_lengths, qe_weights, key = _get_optical_arrays(
+            Nphot, detector_params, key, wavelengths=wavelengths)
+
+        if qe_weights is not None:
+            photon_intensities = photon_intensities * qe_weights
+            detector_params = detector_params._replace(qe=jnp.array(1.0))
+
         return _common_propagation(
             photon_origins, photon_directions, photon_intensities, photon_times,
+            scatter_lengths, absorption_lengths,
             Nphot, detector_params, key, NUM_SENSORS, sim_config.K, sim_config.effective_n_grad_iters, max_sensors_per_cell,
             propagate_photons, photon_update_fn,
             pos_grad_threshold=sim_config.K, make_hits_fn=_make_hits_fn)

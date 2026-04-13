@@ -242,9 +242,13 @@ class IsotropicSource(NamedTuple):
     """Isotropic point source -- callable JAX pytree.
 
     Usage: ``source(n_photons, key)`` or ``source(n_photons, key, n_water)``.
+
+    The optional ``wavelength`` field (nm) is used by the simulator in
+    wavelength mode to look up per-photon scatter/absorption from the medium.
     """
     position: jnp.ndarray     # (3,)
     intensity: jnp.ndarray    # scalar
+    wavelength: object = None # scalar nm, or None for broadband
 
     def __call__(self, n_photons, key, n_water=1.33):
         return get_isotropic_rays(self.position, self.intensity, n_photons, key)
@@ -254,11 +258,15 @@ class LaserSource(NamedTuple):
     """Laser fibre source -- callable JAX pytree.
 
     Usage: ``source(n_photons, key)`` or ``source(n_photons, key, n_water)``.
+
+    The optional ``wavelength`` field (nm) is used by the simulator in
+    wavelength mode to look up per-photon scatter/absorption from the medium.
     """
     position: jnp.ndarray     # (3,)
     intensity: jnp.ndarray    # scalar
     direction: jnp.ndarray    # (3,), default [0, 0, -1]
     fiber_NA: jnp.ndarray     # scalar, default 0.22
+    wavelength: object = None # scalar nm, or None for broadband
 
     def __call__(self, n_photons, key, n_water=1.33):
         return generate_laser_photons(
@@ -269,21 +277,42 @@ class LaserSource(NamedTuple):
 
 # --- Factory helpers with sensible defaults ---
 
-def isotropic_source(position, intensity=1_000_000):
-    """Create an IsotropicSource with default intensity."""
+def isotropic_source(position, intensity=1_000_000, wavelength=None):
+    """Create an IsotropicSource with default intensity.
+
+    Parameters
+    ----------
+    wavelength : float or None
+        Source wavelength in nm. When set and wavelength_mode=True in the
+        simulator, per-photon scatter/absorption are looked up from the
+        medium at this wavelength.
+    """
+    wl = jnp.asarray(float(wavelength), dtype=jnp.float32) if wavelength is not None else None
     return IsotropicSource(
         position=jnp.asarray(position, dtype=jnp.float32),
         intensity=jnp.asarray(float(intensity), dtype=jnp.float32),
+        wavelength=wl,
     )
 
 
-def laser_source(position, intensity=1_000_000, direction=None, fiber_NA=0.22):
-    """Create a LaserSource with default direction (downward) and NA."""
+def laser_source(position, intensity=1_000_000, direction=None, fiber_NA=0.22,
+                 wavelength=None):
+    """Create a LaserSource with default direction (downward) and NA.
+
+    Parameters
+    ----------
+    wavelength : float or None
+        Laser wavelength in nm (e.g. 405.0). When set and wavelength_mode=True
+        in the simulator, per-photon scatter/absorption are looked up from the
+        medium at this wavelength.
+    """
     if direction is None:
         direction = [0.0, 0.0, -1.0]
+    wl = jnp.asarray(float(wavelength), dtype=jnp.float32) if wavelength is not None else None
     return LaserSource(
         position=jnp.asarray(position, dtype=jnp.float32),
         intensity=jnp.asarray(float(intensity), dtype=jnp.float32),
         direction=jnp.asarray(direction, dtype=jnp.float32),
         fiber_NA=jnp.asarray(float(fiber_NA), dtype=jnp.float32),
+        wavelength=wl,
     )

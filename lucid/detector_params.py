@@ -138,34 +138,60 @@ def save_detector_params(params: DetectorParams, filepath: str):
         json.dump(data, f, indent=2)
 
 
-def load_detector_params(filepath: str, num_sensors: int = None) -> DetectorParams:
-    """Load DetectorParams from JSON.
+def _resolve_field(val, config_dir):
+    """Resolve a single physics config field value.
 
-    Supports four value formats per field:
-      - ``null``   → ``jnp.asarray(1.0)`` (scalar placeholder)
-      - scalar (number)  → ``jnp.asarray(float)``
-      - list             → ``jnp.asarray(list)``  (inline array)
-      - ``"__array__:filename.npy"`` sentinel → loaded from companion ``.npy``
+    - ``null``   → ``jnp.asarray(1.0)`` (placeholder)
+    - number     → ``jnp.asarray(float)``
+    - list       → ``jnp.asarray(list)``
+    - string ending in ``.json`` → loaded from file (relative to *config_dir*)
+    - ``"__array__:filename.npy"`` → loaded from companion ``.npy``
+    """
+    if val is None:
+        return jnp.asarray(1.0)
+    if isinstance(val, str):
+        if val.endswith(".json"):
+            with open(os.path.join(config_dir, val)) as f:
+                arr = json.load(f)
+            return jnp.asarray(arr, dtype=jnp.float32)
+        if val.startswith(_ARRAY_SENTINEL):
+            npy_name = val[len(_ARRAY_SENTINEL):]
+            return jnp.asarray(np.load(os.path.join(config_dir, npy_name)))
+        raise ValueError(f"Unrecognised string value: {val!r}")
+    if isinstance(val, list):
+        return jnp.asarray(val, dtype=jnp.float32)
+    return jnp.asarray(float(val))
+
+
+def load_detector_params(filepath: str, num_sensors: int = None) -> DetectorParams:
+    """Load DetectorParams from a composable physics config JSON.
+
+    The physics config may contain only the fields relevant to the detector.
+    Fields not present in the JSON are filled with ``jnp.asarray(1.0)``
+    (scalar placeholder).
+
+    Field values can be:
+      - ``null``   → placeholder 1.0
+      - number     → scalar
+      - list       → inline array
+      - ``"path/to/file.json"`` → loaded from JSON file (relative to config dir)
+      - ``"__array__:file.npy"`` → loaded from companion ``.npy`` (legacy)
+
+    The following extra keys are recognised but not stored in DetectorParams:
+      - ``medium_model`` — path to medium model JSON
+      - ``qe_curve`` — path to PMT QE curve JSON
 
     If *num_sensors* is given, scalar ``qe_corrections`` are automatically
     expanded to ``jnp.ones(num_sensors) * value``.
     """
-    dirpath = os.path.dirname(filepath) or "."
+    config_dir = os.path.dirname(filepath) or "."
     with open(filepath) as f:
         data = json.load(f)
+
     kwargs = {}
     for field in DetectorParams._fields:
-        val = data[field]
-        if val is None:
-            kwargs[field] = jnp.asarray(1.0)
-        elif isinstance(val, str) and val.startswith(_ARRAY_SENTINEL):
-            npy_name = val[len(_ARRAY_SENTINEL):]
-            arr = np.load(os.path.join(dirpath, npy_name))
-            kwargs[field] = jnp.asarray(arr)
-        elif isinstance(val, list):
-            kwargs[field] = jnp.asarray(val, dtype=jnp.float32)
-        else:
-            kwargs[field] = jnp.asarray(float(val))
+        val = data.get(field, None)
+        kwargs[field] = _resolve_field(val, config_dir)
 
     # Auto-expand scalar qe_corrections when num_sensors is known
     if num_sensors is not None:
@@ -174,6 +200,40 @@ def load_detector_params(filepath: str, num_sensors: int = None) -> DetectorPara
             kwargs['qe_corrections'] = jnp.ones(num_sensors) * qe_corr
 
     return DetectorParams(**kwargs)
+
+
+def load_physics_config(filepath: str, num_sensors: int = None):
+    """Load a composable physics config — returns DetectorParams plus extras.
+
+    Returns
+    -------
+    detector_params : DetectorParams
+    medium_model_path : str or None
+        Resolved path to the medium model JSON, if present.
+    qe_curve_path : str or None
+        Resolved path to the PMT QE curve JSON, if present.
+    """
+    config_dir = os.path.dirname(filepath) or "."
+    with open(filepath) as f:
+        data = json.load(f)
+
+    medium_model = data.get("medium_model")
+    qe_curve = data.get("qe_curve")
+
+    medium_model_path = os.path.join(config_dir, medium_model) if medium_model else None
+    qe_curve_path = os.path.join(config_dir, qe_curve) if qe_curve else None
+
+    kwargs = {}
+    for field in DetectorParams._fields:
+        val = data.get(field, None)
+        kwargs[field] = _resolve_field(val, config_dir)
+
+    if num_sensors is not None:
+        qe_corr = kwargs['qe_corrections']
+        if qe_corr.ndim == 0:
+            kwargs['qe_corrections'] = jnp.ones(num_sensors) * qe_corr
+
+    return DetectorParams(**kwargs), medium_model_path, qe_curve_path
 
 
 def save_particle_params(params: ParticleParams, filepath: str):

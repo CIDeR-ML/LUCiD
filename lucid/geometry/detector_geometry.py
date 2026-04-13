@@ -4,7 +4,7 @@ from typing import NamedTuple, Optional, Callable
 import jax.numpy as jnp
 
 from lucid.geometry import generate_detector, get_material_from_config
-from lucid.wavelength.medium import MediumProperties, make_medium, load_qe_curve
+from lucid.wavelength.medium import MediumProperties, make_medium
 from lucid.propagation.shared import create_propagator as create_shared_propagator
 
 
@@ -20,7 +20,6 @@ class DetectorGeometry(NamedTuple):
     num_sensors: int
     speed_of_light: float                       # m/ns in this medium
     medium: MediumProperties                    # material physics
-    qe_curve: Optional[Callable] = None         # PMT spectral response fn
     detector: object = None                     # the Detector instance
     propagator: Optional[Callable] = None       # JIT-compiled propagate_photons
 
@@ -75,12 +74,6 @@ class DetectorGeometry(NamedTuple):
             max_sensors_per_cell=max_sensors_per_cell,
             **grid_params)
 
-        # QE curve (try to load, None if not available)
-        try:
-            qe_fn = load_qe_curve()
-        except FileNotFoundError:
-            qe_fn = None
-
         return DetectorGeometry(
             detector_type=detector_type,
             sensor_points=sensor_points,
@@ -88,7 +81,6 @@ class DetectorGeometry(NamedTuple):
             num_sensors=num_sensors,
             speed_of_light=medium.speed_of_light,
             medium=medium,
-            qe_curve=qe_fn,
             detector=detector,
             propagator=propagator,
         )
