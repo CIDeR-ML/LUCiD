@@ -48,8 +48,11 @@ class Cylinder(Detector):
         n_placed = len(self.all_points) if self.all_points is not None else self.n_sensors
         # Target: enough cells so each has ≤ max_sensors_per_cell sensors.
         # Safety factor accounts for non-uniform sensor distribution
-        # (barrel vs caps, hexagonal packing overlap at cell boundaries).
-        safety = 4.0
+        # (barrel vs caps, hexagonal packing overlap at cell boundaries)
+        # and multi-cell overlap from assign_sensor_to_cells (each sensor
+        # is assigned to all cells its physical radius overlaps, not just
+        # its center cell).
+        safety = 8.0
         target_cells = n_placed / max_sensors_per_cell * safety
 
         barrel_area = 2 * math.pi * self.r * self.H

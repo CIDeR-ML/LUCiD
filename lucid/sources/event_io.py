@@ -1076,12 +1076,12 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path, se
         print(f"         PhotonSim already generates tracks with random directions, so rotation is unnecessary.")
     print(f"Saving events to directory: {output_dir}")
 
-    # Load detector bounds if translation is requested
+    # Load detector bounds for containment calculation and (optionally) translation
     detector_bounds = None
-    if apply_translation:
-        if detector_config_path is None:
-            raise ValueError("detector_config_path must be provided when apply_translation=True")
+    if apply_translation and detector_config_path is None:
+        raise ValueError("detector_config_path must be provided when apply_translation=True")
 
+    if detector_config_path is not None:
         with open(detector_config_path, 'r') as f:
             config = json.load(f)
 
@@ -1342,8 +1342,8 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path, se
             light_containment_by_particle = np.zeros(n_particles, dtype=np.float64)
             overall_light_containment = 0.0
 
-            if apply_translation and detector_bounds is not None:
-                # Calculate which photons are inside detector bounds (after translation)
+            if detector_bounds is not None:
+                # Calculate which photons are inside detector bounds
                 if detector_bounds['type'] == 'cylinder':
                     r = np.sqrt(all_photon_origins_np[:, 0]**2 + all_photon_origins_np[:, 1]**2)
                     z = all_photon_origins_np[:, 2]
