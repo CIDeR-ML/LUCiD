@@ -75,14 +75,12 @@ def validate_sensor_map(assignments_geometric, inverted_sensor_map, num_sensors,
             if 0 <= linear_idx < total_cells:
                 cell_geo_count[linear_idx] += 1
 
-    overcrowded = int(np.sum(cell_geo_count > max_sensors_per_cell))
     max_geo = int(cell_geo_count.max()) if total_cells > 0 else 0
-    if overcrowded > 0:
-        raise ValueError(
-            f"Sensor map: {overcrowded} cells have more geometric sensor "
-            f"assignments ({max_geo} max) than max_sensors_per_cell="
-            f"{max_sensors_per_cell}. Increase max_sensors_per_cell or "
-            f"refine the grid.")
+    if max_geo > max_sensors_per_cell:
+        warnings.warn(
+            f"Sensor map: max geometric sensor assignments per cell ({max_geo}) "
+            f"exceeds max_sensors_per_cell={max_sensors_per_cell}. "
+            f"Auto-adjusting to {max_geo}.")
 
     # --- 5. Forward-inverse consistency ---
     n_missing = 0

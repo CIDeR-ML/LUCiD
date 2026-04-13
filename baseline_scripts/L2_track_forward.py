@@ -37,10 +37,32 @@ NPHOT = 1000
 K = 2
 TEMPERATURE = 0.1
 
+# Need detector geometry to build default DetectorParams
+if BACKEND == "tools":
+    from tools.geometry import generate_detector
+    from tools.detector_params import DetectorParams
+else:
+    from lucid.geometry import generate_detector
+    from lucid.detector_params import DetectorParams
+
+det = generate_detector(GEOM)
+NUM_SENSORS = len(det.all_points)
+
+default_dp = DetectorParams(
+    scatter_length=50.0,
+    wall_reflection_rate=0.2,
+    sensor_reflection_rate=0.2,
+    absorption_length=50.0,
+    qe=0.2,
+    qe_corrections=jnp.ones(NUM_SENSORS),
+)
+
 # Use explicit grid params matching old defaults for cylinder
 sim = setup_event_simulator(
     GEOM, NPHOT, TEMPERATURE, K=K,
-    is_data=False, max_sensors_per_cell=4)
+    is_data=False, max_sensors_per_cell=4,
+    default_detector_params=default_dp,
+    n_cap=150, n_angular=250, n_height=150)
 
 print(f"  Simulator created (Nphot={NPHOT}, K={K})")
 
