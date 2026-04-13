@@ -74,11 +74,11 @@ Open and run `good_notebooks/analyze_tau_scan.ipynb` to:
 - Visualize position error vs tau_vtx for each (Nrays, Energy)
 - Find optimal tau_vtx per combination
 - Fit weighted linear parametrization: `tau_vtx = a*Nrays + b*E + c`
-- Get updated coefficients to paste into `tools/optimization/losses.py`
+- Get updated coefficients to paste into `lucid/losses.py`
 
 #### 3. Update Centralized Parameters
 
-After fitting, update the coefficients in `tools/optimization/losses.py`:
+After fitting, update the coefficients in `lucid/losses.py`:
 ```python
 TAU_VTX_PARAM_A = ...  # coefficient for Nrays
 TAU_VTX_PARAM_B = ...  # coefficient for Energy (MeV)
