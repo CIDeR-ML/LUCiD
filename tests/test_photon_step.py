@@ -1,6 +1,9 @@
 """Tests for photon iteration functions (photon_iteration_sample/update_factors)."""
+import pytest
 import jax
 import jax.numpy as jnp
+
+pytestmark = pytest.mark.slow
 import numpy.testing as npt
 
 from lucid.simulation import (

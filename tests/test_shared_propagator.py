@@ -11,6 +11,8 @@ import pytest
 from lucid.propagation.shared import create_propagator
 from lucid.geometry import generate_detector
 
+pytestmark = pytest.mark.slow
+
 
 def _compare_propagators(old_propagator, new_propagator, label):
     """Compare two propagators on multiple ray configurations."""

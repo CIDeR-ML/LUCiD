@@ -23,6 +23,8 @@ from lucid.propagation.box import (
     batch_intersect_box_with_grid, calculate_box_normals,
 )
 
+pytestmark = pytest.mark.slow
+
 
 # ── Cylinder intersection ────────────────────────────────────────────
 

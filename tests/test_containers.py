@@ -1,9 +1,12 @@
 """Tests for Phase 6 container types."""
+import pytest
 import jax.numpy as jnp
 import numpy.testing as npt
 
 from lucid.simulation.config import SimConfig
 from lucid.geometry.detector_geometry import DetectorGeometry
+
+pytestmark = pytest.mark.slow
 
 
 class TestSimConfig:
@@ -59,13 +62,10 @@ class TestDetectorGeometry:
         assert result[0] == True
         assert result[1] == False
 
-    def test_qe_curve_loaded(self, small_cylinder_config):
+    def test_no_qe_curve_in_geometry(self, small_cylinder_config):
         dg = DetectorGeometry.from_config(small_cylinder_config, detector_type='Cylinder')
-        # Should have loaded the default sk_qe.csv
-        assert dg.qe_curve is not None
-        # Peak QE around 370nm
-        peak = dg.qe_curve(375.0)
-        assert 0.1 < float(peak) < 0.3
+        # QE curve is no longer part of DetectorGeometry — it lives in physics config
+        assert not hasattr(dg, 'qe_curve')
 
     def test_invalid_detector_type(self, small_cylinder_config):
         import pytest
