@@ -3,6 +3,7 @@ Functions for creating detectors from configuration files.
 """
 
 import json
+import os
 from .registry import get_detector_class
 # Import subclasses so their @register_detector decorators run
 from .cylinder import Cylinder  # noqa: F401
@@ -114,7 +115,10 @@ def generate_detector(file_path):
         return cls(geom_def['length'], geom_def['width'], geom_def['height'],
                    geom_def['n_sensors'], geom_def['sensor_radius'])
     elif cls is SuperK:
-        return cls(geom_def['connection_table_path'], radius=geom_def['radius'],
+        # Resolve connection_table_path relative to the config file directory
+        config_dir = os.path.dirname(os.path.abspath(file_path))
+        ct_path = os.path.join(config_dir, geom_def['connection_table_path'])
+        return cls(ct_path, radius=geom_def['radius'],
                    height=geom_def['height'], n_sensors=geom_def['n_sensors'],
                    sensor_radius=geom_def['sensor_radius'])
     else:
