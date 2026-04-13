@@ -8,7 +8,10 @@ import jax
 import jax.numpy as jnp
 import numpy.testing as npt
 
+import pytest
 from lucid.geometry.detector_geometry import DetectorGeometry
+
+pytestmark = pytest.mark.slow
 
 
 class TestCylinderPropagator:

@@ -3,9 +3,12 @@
 Tests the chain: optics → photon_step → sensor_response with realistic inputs,
 and gradient flow through the differentiable simulation path.
 """
+import pytest
 import jax
 import jax.numpy as jnp
 import numpy.testing as npt
+
+pytestmark = pytest.mark.slow
 
 from lucid.simulation.optics import (
     normalize, compute_reflection_direction, create_local_frame,

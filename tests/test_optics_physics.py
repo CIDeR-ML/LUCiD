@@ -3,10 +3,13 @@
 These tests verify the physical correctness of the optics implementations,
 not just that they run or match reference values.
 """
+import pytest
 import jax
 import jax.numpy as jnp
 import numpy as np
 import numpy.testing as npt
+
+pytestmark = pytest.mark.slow
 
 from lucid.simulation.optics import (
     normalize, compute_reflection_direction, create_local_frame,

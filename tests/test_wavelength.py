@@ -3,8 +3,12 @@ import jax
 import jax.numpy as jnp
 import numpy.testing as npt
 
+import os
+
 from lucid.wavelength.medium import MediumProperties, make_medium, compute_effective_properties, load_qe_curve
 from lucid.wavelength.spectrum import sample_cherenkov_wavelengths
+
+_SK_QE_PATH = os.path.join(os.path.dirname(__file__), '..', 'config', 'pmt', 'SK_QE.json')
 from lucid.wavelength.scattering import (
     compute_rayleigh_scatter_direction,
     hg_sample_cos_theta,
@@ -134,18 +138,18 @@ class TestScattering:
 
 class TestQECurve:
     def test_load_default(self):
-        qe_fn = load_qe_curve()
+        qe_fn = load_qe_curve(_SK_QE_PATH)
         # Peak QE around 370-380nm should be ~21%
         peak_qe = qe_fn(375.0)
         assert 0.15 < float(peak_qe) < 0.25
 
     def test_zero_outside_range(self):
-        qe_fn = load_qe_curve()
+        qe_fn = load_qe_curve(_SK_QE_PATH)
         assert float(qe_fn(200.0)) == 0.0
         assert float(qe_fn(800.0)) == 0.0
 
     def test_vectorized(self):
-        qe_fn = load_qe_curve()
+        qe_fn = load_qe_curve(_SK_QE_PATH)
         wls = jnp.array([300.0, 400.0, 500.0, 600.0])
         result = qe_fn(wls)
         assert result.shape == (4,)
@@ -153,7 +157,7 @@ class TestQECurve:
         assert float(result[1]) > float(result[3])
 
     def test_returns_fraction_not_percent(self):
-        qe_fn = load_qe_curve()
+        qe_fn = load_qe_curve(_SK_QE_PATH)
         # All values should be < 1.0 (fractions, not percent)
         wls = jnp.linspace(300.0, 650.0, 50)
         result = qe_fn(wls)

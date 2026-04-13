@@ -34,4 +34,9 @@ lucid-train-siren = "lucid.siren.train:main"
 [tool.setuptools.packages.find]
 include = ["lucid*"]
 
+[tool.pytest.ini_options]
+markers = [
+    "slow: full simulation with JIT compilation (30s+)",
+]
+
 [tool.setuptools_scm]

@@ -11,6 +11,8 @@ import pytest
 from lucid.geometry import generate_detector
 from lucid.propagation.shared import create_propagator, validate_sensor_map
 
+pytestmark = pytest.mark.slow
+
 
 class TestAutoGridDerivation:
     """Verify configure_grid() produces sensible defaults per geometry."""
