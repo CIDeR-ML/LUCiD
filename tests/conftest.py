@@ -6,6 +6,34 @@ import pytest
 import jax
 import jax.numpy as jnp
 
+# Files marked @pytest.mark.slow — skip importing them unless --slow is passed.
+_SLOW_FILES = [
+    "test_containers.py",
+    "test_integration.py",
+    "test_optics_physics.py",
+    "test_photon_step.py",
+    "test_photon_step_physics.py",
+    "test_propagation_differentiability.py",
+    "test_propagator_output.py",
+    "test_ray_intersection.py",
+    "test_sensor_map_validation.py",
+    "test_shared_propagator.py",
+    "test_shared_propagator_differentiability.py",
+    "test_sk_like_integration.py",
+    "test_wavelength_integration.py",
+]
+
+
+def pytest_addoption(parser):
+    parser.addoption("--slow", action="store_true", default=False,
+                     help="Include slow tests (detector/propagator/simulation)")
+
+
+def pytest_ignore_collect(collection_path, config):
+    if config.getoption("--slow", default=False):
+        return False
+    return collection_path.name in _SLOW_FILES
+
 
 @pytest.fixture(scope="session")
 def key():

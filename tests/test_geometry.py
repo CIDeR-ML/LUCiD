@@ -3,6 +3,7 @@ import jax.numpy as jnp
 import numpy as np
 import numpy.testing as npt
 
+import pytest
 from lucid.geometry import generate_detector
 
 

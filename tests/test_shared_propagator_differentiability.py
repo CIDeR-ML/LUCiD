@@ -15,6 +15,8 @@ from lucid.geometry import generate_detector
 from lucid.simulation.photon_step import photon_iteration_update_factors_safe
 from lucid.simulation.sensor_response import make_hits_simulation
 
+pytestmark = pytest.mark.slow
+
 
 class TestSharedPropagatorGradients:
     """Verify gradients flow through the shared propagator."""

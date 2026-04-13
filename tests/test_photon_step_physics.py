@@ -7,8 +7,11 @@ Tests verify that the photon propagation step correctly implements:
 - Position advancement along ray direction
 - STE (Straight-Through Estimator) expected value semantics
 """
+import pytest
 import jax
 import jax.numpy as jnp
+
+pytestmark = pytest.mark.slow
 import numpy.testing as npt
 
 from lucid.simulation.photon_step import (

@@ -19,6 +19,8 @@ from lucid.simulation.sensor_response import (
 )
 from lucid.overlap import create_overlap_prob
 
+pytestmark = pytest.mark.slow
+
 
 class TestOverlapProbDifferentiability:
     """The overlap probability is the soft-assignment kernel that makes
