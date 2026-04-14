@@ -170,7 +170,10 @@ def print_report(result, params_info=""):
 
 def main():
     parser = argparse.ArgumentParser(description="Find optimal K for a detector configuration")
-    parser.add_argument("--config", required=True, help="Detector geometry JSON config")
+    parser.add_argument("--detector", required=True,
+                        help="Detector name (e.g. SK_like, HK, WCTE, JUNO). "
+                             "Resolves to config/<name>_geom_config.json and "
+                             "config/<name>_physics_config.json.")
     parser.add_argument("--source", default="track", choices=["laser", "isotropic", "track", "data"],
                         help="Source type (default: track)")
     parser.add_argument("--nphot", type=int, default=50_000, help="Number of photons (default: 50000)")
@@ -181,20 +184,13 @@ def main():
                         help="Entry index in ROOT file (default: 0)")
     parser.add_argument("--temperature", type=float, default=None,
                         help="Propagation temperature (default: None = step function)")
-    parser.add_argument("--scatter-length", type=float, default=50.0, help="Scatter length in m")
-    parser.add_argument("--absorption-length", type=float, default=50.0, help="Absorption length in m")
-    parser.add_argument("--wall-reflection", type=float, default=0.2, help="Wall reflection rate")
-    parser.add_argument("--sensor-reflection", type=float, default=0.2, help="Sensor reflection rate")
-    parser.add_argument("--qe", type=float, default=0.065, help="Quantum efficiency")
     parser.add_argument("--target", type=float, default=0.999,
                         help="Target cumulative charge fraction (default: 0.999)")
     parser.add_argument("--percentile", type=float, default=95,
                         help="Percentile of rays to check (default: 95)")
-    parser.add_argument("--wavelength", action="store_true",
-                        help="Enable wavelength-dependent mode (full Cherenkov spectrum)")
     parser.add_argument("--sweep-wavelengths", action="store_true",
                         help="Run a K analysis at each wavelength in --wavelength-list. "
-                             "Each run uses monochromatic scalars from the medium curve.")
+                             "Each run uses monochromatic values from the physics config.")
     parser.add_argument("--wavelength-list",
                         default="300,325,350,375,400,425,450,475,500,550,600",
                         help="Comma-separated wavelengths (nm) for sweep "
@@ -203,6 +199,14 @@ def main():
                         help="Particle energy in MeV (for track mode, default: 500)")
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
     args = parser.parse_args()
+
+    # Resolve detector name to paired geom + physics config paths
+    cfg_dir = os.path.join(os.path.dirname(__file__), '..', 'config')
+    args.config = os.path.abspath(os.path.join(cfg_dir, f"{args.detector}_geom_config.json"))
+    args.physics_config = os.path.abspath(os.path.join(cfg_dir, f"{args.detector}_physics_config.json"))
+    for p in (args.config, args.physics_config):
+        if not os.path.exists(p):
+            parser.error(f"Config not found: {p}")
 
     import jax
     import jax.numpy as jnp
@@ -213,38 +217,20 @@ def main():
     det = generate_detector(args.config)
     NUM_SENSORS = len(det.all_points)
 
-    dp = DetectorParams(
-        scatter_length=args.scatter_length,
-        wall_reflection_rate=args.wall_reflection,
-        sensor_reflection_rate=args.sensor_reflection,
-        absorption_length=args.absorption_length,
-        qe=args.qe,
-        qe_corrections=jnp.ones(NUM_SENSORS),
-    )
+    # Load detector params and curves from the physics config
+    from lucid.detector_params import load_physics_config
+    from lucid.wavelength.medium import load_qe_curve as _load_qe_curve
+    dp, medium_path, qe_curve_path = load_physics_config(args.physics_config, NUM_SENSORS)
+    qe_curve_fn = _load_qe_curve(qe_curve_path) if qe_curve_path else None
 
     grid_kw = dict(n_cap=150, n_angular=250, n_height=150)
     key = jax.random.PRNGKey(args.seed)
 
-    params_info = (f"scatter={args.scatter_length}m, absorption={args.absorption_length}m, "
-                   f"wall_refl={args.wall_reflection}, sensor_refl={args.sensor_reflection}")
+    params_info = f"detector={args.detector}"
 
-    if args.wavelength:
-        from lucid.wavelength import make_medium, compute_effective_properties
-        medium = make_medium("water", wavelength_grid=jnp.linspace(300, 600, 301))
-
-        # Show effective properties at key wavelengths
-        print("\nWavelength-dependent effective properties:")
-        print(f"  {'wl (nm)':>8s}  {'eff_scatter':>12s}  {'eff_absorption':>14s}  {'ratio L_s/L_a':>14s}")
-        for wl in [300, 350, 400, 450, 500, 550, 600]:
-            eff_s, eff_a, eff_q = compute_effective_properties(
-                dp, medium, wavelengths=jnp.array([float(wl)]))
-            s_val = float(eff_s[0]) if hasattr(eff_s, '__len__') else float(eff_s)
-            a_val = float(eff_a[0]) if hasattr(eff_a, '__len__') else float(eff_a)
-            print(f"  {wl:8d}  {s_val:12.1f}m  {a_val:14.1f}m  {s_val/a_val:14.2f}")
-        params_info += ", wavelength=ON"
-
-    # Sweep mode forces scalar (monochromatic per step); otherwise honor --wavelength
-    wl_mode = args.wavelength and not args.sweep_wavelengths
+    # Sweep mode forces scalar (monochromatic per step); non-sweep uses simulator's
+    # wavelength_mode=True so it honors medium + QE curve from the physics config
+    wl_mode = not args.sweep_wavelengths
 
     # Preload the ROOT photon data once if we need it, so sweep mode reuses it
     photon_data_base = None
@@ -268,6 +254,7 @@ def main():
             sim = setup_event_simulator(
                 args.config, args.nphot, temperature=args.temperature, K=args.k_max,
                 is_data=False, is_calibration=False,
+                physics_config=args.physics_config,
                 default_detector_params=dp_run, hit_mode='per_photon',
                 wavelength_mode=wl_mode, **grid_kw)
             track = ParticleParams(
@@ -287,6 +274,7 @@ def main():
             sim = setup_event_simulator(
                 args.config, args.nphot, temperature=args.temperature, K=args.k_max,
                 is_data=False, is_calibration=True,
+                physics_config=args.physics_config,
                 default_detector_params=dp_run, hit_mode='per_photon',
                 wavelength_mode=wl_mode, **grid_kw)
             out = sim(src, key)
@@ -299,6 +287,7 @@ def main():
             sim = setup_event_simulator(
                 args.config, pd['N'], temperature=args.temperature, K=args.k_max,
                 is_data=True, apply_smearing=False,
+                physics_config=args.physics_config,
                 default_detector_params=dp_run, hit_mode='per_photon',
                 wavelength_mode=wl_mode, **grid_kw)
             part = ParticleParams(
@@ -325,22 +314,27 @@ def main():
 
     # Sweep mode: loop over wavelengths, monochromatic scatter/absorption from medium
     from lucid.wavelength import make_medium
-    medium = make_medium("water", wavelength_grid=jnp.linspace(280, 700, 421))
+    medium = make_medium("water", wavelength_grid=jnp.linspace(280, 700, 421),
+                        medium_model_path=medium_path)
     wavelengths = [float(w.strip()) for w in args.wavelength_list.split(",")]
 
-    print(f"\nSweeping {len(wavelengths)} wavelengths for source={args.source}, K_max={args.k_max}")
-    print(f"{'wl(nm)':>6s}  {'L_scat':>8s}  {'L_abs':>8s}  {'total':>10s}  "
-          f"{'K@charge':>9s}  {'K@photons':>10s}  {'t(s)':>6s}")
-    print("-" * 70)
+    qe_info = "QE from curve" if qe_curve_fn is not None else f"QE={float(dp.qe):.4f} scalar"
+    print(f"\nSweeping {len(wavelengths)} wavelengths for source={args.source}, "
+          f"K_max={args.k_max}  ({qe_info})")
+    print(f"{'wl(nm)':>6s}  {'L_scat':>8s}  {'L_abs':>8s}  {'QE':>8s}  "
+          f"{'total':>10s}  {'K@charge':>9s}  {'K@photons':>10s}  {'t(s)':>6s}")
+    print("-" * 82)
 
     sweep_results = []
     for wl in wavelengths:
         sc = float(jnp.interp(wl, medium.wavelength_grid, medium.scatter_coeff))
         ac = float(jnp.interp(wl, medium.wavelength_grid, medium.absorption_coeff))
         L_s, L_a = 1.0 / sc, 1.0 / ac
+        qe_wl = float(qe_curve_fn(jnp.array(wl))) if qe_curve_fn is not None else float(dp.qe)
         dp_wl = dp._replace(
             scatter_length=jnp.array(L_s),
-            absorption_length=jnp.array(L_a))
+            absorption_length=jnp.array(L_a),
+            qe=jnp.array(qe_wl))
 
         result, n, total, elapsed = run_one(dp_wl, wl_override=wl)
 
@@ -361,15 +355,15 @@ def main():
                 k_photons = k + 1
                 break
 
-        print(f"{wl:6.0f}  {L_s:8.1f}  {L_a:8.1f}  {total:10.1f}  "
+        print(f"{wl:6.0f}  {L_s:8.1f}  {L_a:8.1f}  {qe_wl:8.4f}  {total:10.1f}  "
               f"{k_charge:9d}  {k_photons:10d}  {elapsed:6.1f}")
-        sweep_results.append((wl, L_s, L_a, k_charge, k_photons, result, total))
+        sweep_results.append((wl, L_s, L_a, qe_wl, k_charge, k_photons, result, total))
 
-    # Summarize worst case
-    worst = max(sweep_results, key=lambda r: max(r[3], r[4]))
-    wl_w, L_s_w, L_a_w, kc_w, kp_w, result_w, total_w = worst
-    print(f"\n{'='*70}")
-    print(f"  Worst case: {wl_w:.0f} nm  (L_scat={L_s_w:.1f}m, L_abs={L_a_w:.1f}m)")
+    # Summarize worst case (by largest K needed)
+    worst = max(sweep_results, key=lambda r: max(r[4], r[5]))
+    wl_w, L_s_w, L_a_w, qe_w, kc_w, kp_w, result_w, total_w = worst
+    print(f"\n{'='*82}")
+    print(f"  Worst case: {wl_w:.0f} nm  (L_scat={L_s_w:.1f}m, L_abs={L_a_w:.1f}m, QE={qe_w:.4f})")
     print(f"  K for {args.target:.1%} charge: {kc_w}   K for 100% photons: {kp_w}")
     print_report(result_w, params_info + f", wl={wl_w:.0f}nm")
 
