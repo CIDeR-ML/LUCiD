@@ -54,6 +54,7 @@ def setup_event_simulator(
         physics_config=None,
         default_detector_params=False,
         wavelength_mode=True,
+        hit_mode=None,
         **grid_params):
     """
     Set up and return an event simulator using DetectorParams / ParticleParams.
@@ -94,6 +95,13 @@ def setup_event_simulator(
         - ``True`` -- loads ``DetectorParams`` from *physics_config* at setup time
           and bakes it into the closure.
         - ``DetectorParams`` instance -- bakes that instance directly (no file load).
+    hit_mode : str or None
+        How sensor hits are aggregated. ``None`` (default) uses the source-appropriate
+        choice; pass a value to override (useful for analysis):
+
+        - ``'aggregated'`` -- differentiable per-sensor (charges, times). Default for calibration.
+        - ``'per_photon'`` -- per-photon arrays (log_w, times, indices, charges). Default for track.
+        - ``'realistic'`` -- Bernoulli QE sampling, hard-min timing, optional smearing. Default for data.
 
     Returns
     -------
@@ -183,19 +191,37 @@ def setup_event_simulator(
     def get_inside_detector_flag(positions):
         return detector.bounds_check(positions)
 
-    # ---- make_hits wrapper selection ----------------------------------------
-    if sim_config.is_data:
-        def _make_hits_fn(flat_weights, flat_indices, flat_times, num_sensors, qe_key, qe, qe_corrections):
-            return make_hits_data(flat_weights, flat_indices, flat_times, num_sensors,
-                                  qe=qe, rng_key=qe_key, apply_smearing=sim_config.apply_smearing)
-    else:
-        def _make_hits_fn(flat_weights, flat_indices, flat_times, num_sensors, qe_key, qe, qe_corrections):
-            return make_hits_simulation(flat_weights, flat_indices, flat_times, num_sensors,
-                                        qe=qe, qe_corrections=qe_corrections)
+    # ---- Resolve hit_mode ---------------------------------------------------
+    _VALID_HIT_MODES = ('aggregated', 'per_photon', 'realistic')
+    if hit_mode is None:
+        if sim_config.is_data:
+            hit_mode = 'realistic'
+        elif sim_config.is_calibration:
+            hit_mode = 'aggregated'
+        else:
+            hit_mode = 'per_photon'
+    elif hit_mode not in _VALID_HIT_MODES:
+        raise ValueError(
+            f"hit_mode must be one of {_VALID_HIT_MODES} or None, got {hit_mode!r}")
 
-        def _make_hits_likelihood_fn(flat_weights, flat_indices, flat_times, num_sensors, qe_key, qe, qe_corrections):
-            return make_hits_likelihood(flat_weights, flat_indices, flat_times, num_sensors,
-                                        qe=qe, qe_corrections=qe_corrections)
+    # ---- make_hits wrapper selection ----------------------------------------
+    def _make_hits_aggregated(flat_weights, flat_indices, flat_times, num_sensors, qe_key, qe, qe_corrections):
+        return make_hits_simulation(flat_weights, flat_indices, flat_times, num_sensors,
+                                    qe=qe, qe_corrections=qe_corrections)
+
+    def _make_hits_per_photon(flat_weights, flat_indices, flat_times, num_sensors, qe_key, qe, qe_corrections):
+        return make_hits_likelihood(flat_weights, flat_indices, flat_times, num_sensors,
+                                    qe=qe, qe_corrections=qe_corrections)
+
+    def _make_hits_realistic(flat_weights, flat_indices, flat_times, num_sensors, qe_key, qe, qe_corrections):
+        return make_hits_data(flat_weights, flat_indices, flat_times, num_sensors,
+                              qe=qe, rng_key=qe_key, apply_smearing=sim_config.apply_smearing)
+
+    _make_hits_fn = {
+        'aggregated': _make_hits_aggregated,
+        'per_photon': _make_hits_per_photon,
+        'realistic': _make_hits_realistic,
+    }[hit_mode]
 
     # ---- Wavelength-dependent medium (when wavelength_mode=True) -----
     if wavelength_mode:
@@ -506,7 +532,7 @@ def setup_event_simulator(
             qe_per_photon,
             Nphot, detector_params, key, NUM_SENSORS, sim_config.K, sim_config.effective_n_grad_iters, max_sensors_per_cell,
             propagate_photons, photon_update_fn,
-            pos_grad_threshold=0, make_hits_fn=_make_hits_likelihood_fn)  # pos=0: likelihood always stops position gradient
+            pos_grad_threshold=0, make_hits_fn=_make_hits_fn)  # pos=0: likelihood always stops position gradient
 
     @jax.jit
     def _simulation_sensor_calibration_impl(source, detector_params, key):
