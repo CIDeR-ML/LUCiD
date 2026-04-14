@@ -191,7 +191,14 @@ def main():
     parser.add_argument("--percentile", type=float, default=95,
                         help="Percentile of rays to check (default: 95)")
     parser.add_argument("--wavelength", action="store_true",
-                        help="Enable wavelength-dependent mode")
+                        help="Enable wavelength-dependent mode (full Cherenkov spectrum)")
+    parser.add_argument("--sweep-wavelengths", action="store_true",
+                        help="Run a K analysis at each wavelength in --wavelength-list. "
+                             "Each run uses monochromatic scalars from the medium curve.")
+    parser.add_argument("--wavelength-list",
+                        default="300,325,350,375,400,425,450,475,500,550,600",
+                        help="Comma-separated wavelengths (nm) for sweep "
+                             "(default: 300,325,...,600)")
     parser.add_argument("--energy", type=float, default=500.0,
                         help="Particle energy in MeV (for track mode, default: 500)")
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
@@ -236,77 +243,135 @@ def main():
             print(f"  {wl:8d}  {s_val:12.1f}m  {a_val:14.1f}m  {s_val/a_val:14.2f}")
         params_info += ", wavelength=ON"
 
-    t_start = time.perf_counter()
+    # Sweep mode forces scalar (monochromatic per step); otherwise honor --wavelength
+    wl_mode = args.wavelength and not args.sweep_wavelengths
 
-    # All sources use hit_mode='per_photon' to expose per-iteration log_w for analysis.
-    if args.source == "track":
-        sim = setup_event_simulator(
-            args.config, args.nphot, temperature=args.temperature, K=args.k_max,
-            is_data=False, is_calibration=False,
-            default_detector_params=dp, hit_mode='per_photon', **grid_kw)
-
-        track = ParticleParams(
-            energy=jnp.array(args.energy),
-            position=jnp.array([0.0, 0.0, 0.0]),
-            theta=jnp.array(0.5),
-            phi=jnp.array(1.0),
-            t0=jnp.array(0.0),
-        )
-        output = sim(track, key)
-        nphot_actual = args.nphot
-
-    elif args.source in ("laser", "isotropic"):
-        from lucid.sources import laser_source, isotropic_source
-        if args.source == "laser":
-            source = laser_source(position=[0.0, 0.0, det.H / 2 - 0.1], intensity=100_000_000)
-        else:
-            source = isotropic_source(position=[0.0, 0.0, 0.0], intensity=100_000_000)
-
-        sim = setup_event_simulator(
-            args.config, args.nphot, temperature=args.temperature, K=args.k_max,
-            is_data=False, is_calibration=True,
-            default_detector_params=dp, hit_mode='per_photon', **grid_kw)
-        output = sim(source, key)
-        nphot_actual = args.nphot
-
-    elif args.source == "data":
+    # Preload the ROOT photon data once if we need it, so sweep mode reuses it
+    photon_data_base = None
+    if args.source == "data":
         if args.root_file is None:
             raise ValueError("--root-file is required for --source data")
         from lucid.sources.event_io import read_photon_data_from_photonsim
+        photon_data_base = read_photon_data_from_photonsim(args.root_file, args.entry)
+        photon_data_base['N'] = int(photon_data_base['photon_origins'].shape[0])
+        photon_data_base['rotation_axis'] = jnp.array([0.0, 0.0, 1.0])
+        photon_data_base['rotation_angle'] = jnp.array(0.0)
+        photon_data_base['apply_rotation'] = False
+        photon_data_base['apply_translation'] = False
+        photon_data_base['translation_vector'] = jnp.array([0.0, 0.0, 0.0])
 
-        photon_data = read_photon_data_from_photonsim(args.root_file, args.entry)
-        nphot_actual = int(photon_data['photon_origins'].shape[0])
-        photon_data['N'] = nphot_actual
-        photon_data['rotation_axis'] = jnp.array([0.0, 0.0, 1.0])
-        photon_data['rotation_angle'] = jnp.array(0.0)
-        photon_data['apply_rotation'] = False
-        photon_data['apply_translation'] = False
-        photon_data['translation_vector'] = jnp.array([0.0, 0.0, 0.0])
+    def run_one(dp_run, wl_override=None):
+        """Run a single sim and return (result, nphot_actual, total_charge, elapsed)."""
+        t0 = time.perf_counter()
 
-        sim = setup_event_simulator(
-            args.config, nphot_actual, temperature=args.temperature, K=args.k_max,
-            is_data=True, apply_smearing=False,
-            default_detector_params=dp, hit_mode='per_photon', **grid_kw)
+        if args.source == "track":
+            sim = setup_event_simulator(
+                args.config, args.nphot, temperature=args.temperature, K=args.k_max,
+                is_data=False, is_calibration=False,
+                default_detector_params=dp_run, hit_mode='per_photon',
+                wavelength_mode=wl_mode, **grid_kw)
+            track = ParticleParams(
+                energy=jnp.array(args.energy),
+                position=jnp.array([0.0, 0.0, 0.0]),
+                theta=jnp.array(0.5), phi=jnp.array(1.0), t0=jnp.array(0.0))
+            out = sim(track, key)
+            n = args.nphot
 
-        part = ParticleParams(
-            energy=jnp.array(photon_data.get('energy', 1000.0)),
-            position=jnp.zeros(3),
-            theta=jnp.array(0.0), phi=jnp.array(0.0), t0=jnp.array(0.0),
-        )
-        output = sim(part, key, photon_data)
-        params_info += f", ROOT={os.path.basename(args.root_file)} entry={args.entry}"
+        elif args.source in ("laser", "isotropic"):
+            from lucid.sources import laser_source, isotropic_source
+            if args.source == "laser":
+                src = laser_source(position=[0.0, 0.0, det.H / 2 - 0.1],
+                                   intensity=100_000_000, wavelength=wl_override)
+            else:
+                src = isotropic_source(position=[0.0, 0.0, 0.0], intensity=100_000_000)
+            sim = setup_event_simulator(
+                args.config, args.nphot, temperature=args.temperature, K=args.k_max,
+                is_data=False, is_calibration=True,
+                default_detector_params=dp_run, hit_mode='per_photon',
+                wavelength_mode=wl_mode, **grid_kw)
+            out = sim(src, key)
+            n = args.nphot
 
-    log_w = output[0]
-    elapsed = time.perf_counter() - t_start
+        else:  # data
+            pd = dict(photon_data_base)
+            if wl_override is not None:
+                pd['wavelengths'] = jnp.full(pd['N'], float(wl_override))
+            sim = setup_event_simulator(
+                args.config, pd['N'], temperature=args.temperature, K=args.k_max,
+                is_data=True, apply_smearing=False,
+                default_detector_params=dp_run, hit_mode='per_photon',
+                wavelength_mode=wl_mode, **grid_kw)
+            part = ParticleParams(
+                energy=jnp.array(pd.get('energy', 1000.0)),
+                position=jnp.zeros(3),
+                theta=jnp.array(0.0), phi=jnp.array(0.0), t0=jnp.array(0.0))
+            out = sim(part, key, pd)
+            n = pd['N']
 
-    result = analyze_k_convergence(
-        log_w, args.k_max, nphot_actual,
-        target_frac=args.target,
-        target_percentile=args.percentile,
-    )
-    print(f"\n  Source: {args.source}  |  Nphot: {nphot_actual:,}  |  "
-          f"K_max: {args.k_max}  |  Time: {elapsed:.1f}s")
-    print_report(result, params_info)
+        res = analyze_k_convergence(out[0], args.k_max, n,
+                                    target_frac=args.target,
+                                    target_percentile=args.percentile)
+        return res, n, float(sum(res['charge_per_iter'])), time.perf_counter() - t0
+
+    # --------- Single run or wavelength sweep --------------------------------
+    if not args.sweep_wavelengths:
+        result, nphot_actual, _, elapsed = run_one(dp)
+        if args.source == "data":
+            params_info += f", ROOT={os.path.basename(args.root_file)} entry={args.entry}"
+        print(f"\n  Source: {args.source}  |  Nphot: {nphot_actual:,}  |  "
+              f"K_max: {args.k_max}  |  Time: {elapsed:.1f}s")
+        print_report(result, params_info)
+        return
+
+    # Sweep mode: loop over wavelengths, monochromatic scatter/absorption from medium
+    from lucid.wavelength import make_medium
+    medium = make_medium("water", wavelength_grid=jnp.linspace(280, 700, 421))
+    wavelengths = [float(w.strip()) for w in args.wavelength_list.split(",")]
+
+    print(f"\nSweeping {len(wavelengths)} wavelengths for source={args.source}, K_max={args.k_max}")
+    print(f"{'wl(nm)':>6s}  {'L_scat':>8s}  {'L_abs':>8s}  {'total':>10s}  "
+          f"{'K@charge':>9s}  {'K@photons':>10s}  {'t(s)':>6s}")
+    print("-" * 70)
+
+    sweep_results = []
+    for wl in wavelengths:
+        sc = float(jnp.interp(wl, medium.wavelength_grid, medium.scatter_coeff))
+        ac = float(jnp.interp(wl, medium.wavelength_grid, medium.absorption_coeff))
+        L_s, L_a = 1.0 / sc, 1.0 / ac
+        dp_wl = dp._replace(
+            scatter_length=jnp.array(L_s),
+            absorption_length=jnp.array(L_a))
+
+        result, n, total, elapsed = run_one(dp_wl, wl_override=wl)
+
+        # Find K for target charge fraction from per-iter cumulative
+        charge_cum = np.cumsum(result['charge_per_iter'])
+        k_charge = args.k_max
+        for k in range(args.k_max):
+            if total > 0 and charge_cum[k] / total >= args.target:
+                k_charge = k + 1
+                break
+
+        # Find K where all active photons have contributed
+        n_active = result['n_active']
+        cum_ph = result['cumulative_photons']
+        k_photons = args.k_max
+        for k in range(args.k_max):
+            if n_active > 0 and cum_ph[k] >= n_active:
+                k_photons = k + 1
+                break
+
+        print(f"{wl:6.0f}  {L_s:8.1f}  {L_a:8.1f}  {total:10.1f}  "
+              f"{k_charge:9d}  {k_photons:10d}  {elapsed:6.1f}")
+        sweep_results.append((wl, L_s, L_a, k_charge, k_photons, result, total))
+
+    # Summarize worst case
+    worst = max(sweep_results, key=lambda r: max(r[3], r[4]))
+    wl_w, L_s_w, L_a_w, kc_w, kp_w, result_w, total_w = worst
+    print(f"\n{'='*70}")
+    print(f"  Worst case: {wl_w:.0f} nm  (L_scat={L_s_w:.1f}m, L_abs={L_a_w:.1f}m)")
+    print(f"  K for {args.target:.1%} charge: {kc_w}   K for 100% photons: {kp_w}")
+    print_report(result_w, params_info + f", wl={wl_w:.0f}nm")
 
 
 if __name__ == "__main__":
