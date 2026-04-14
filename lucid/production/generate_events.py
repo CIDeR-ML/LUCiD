@@ -22,7 +22,7 @@ import jax.numpy as jnp
 
 from lucid.sources.event_io import generate_events_from_photonsim
 from lucid.simulation import setup_event_simulator
-from lucid.detector_params import DetectorParams
+from lucid.detector_params import DetectorParams, load_physics_config
 
 from lucid.utils import base_dir_path
 
@@ -48,8 +48,8 @@ def main():
     parser.add_argument(
         '--config',
         type=str,
-        default=base_dir_path()+'config/SK_geom_config.json',
-        help='Path to detector geometry configuration (default: '+base_dir_path()+'config/SK_geom_config.json'
+        default=base_dir_path()+'config/SK_like_geom_config.json',
+        help='Path to detector geometry configuration (default: '+base_dir_path()+'config/SK_like_geom_config.json'
     )
     parser.add_argument(
         '--n-events',
@@ -75,6 +75,13 @@ def main():
         default=None,
         help='Random seed for reproducibility (default: random based on time)'
     )
+    parser.add_argument(
+        '--physics-config',
+        type=str,
+        default=base_dir_path()+'config/SK_like_physics_config.json',
+        help='Path to physics configuration (medium model, QE curve, detector params). '
+             'Default: '+base_dir_path()+'config/SK_like_physics_config.json'
+    )
     args = parser.parse_args()
 
     # Parse particle specifications into dictionary
@@ -96,25 +103,23 @@ def main():
         print("Error: No valid particle specifications provided")
         sys.exit(1)
 
-    # Setup event simulator
+    # Load detector parameters from physics config
+    print(f"\nLoading physics configuration: {args.physics_config}")
+    sensor_params, _, _ = load_physics_config(args.physics_config)
+    print(f"  Wall reflection rate: {float(sensor_params.wall_reflection_rate):.3f}")
+    print(f"  Sensor reflection rate: {float(sensor_params.sensor_reflection_rate):.3f}")
+    print(f"  QE (scalar): {float(sensor_params.qe):.3f}")
+
+    # Setup event simulator with physics config for wavelength-dependent QE and medium model
     print(f"\nSetting up event simulator")
-    print(f"Using configuration file: {args.config}")
+    print(f"Using geometry configuration: {args.config}")
     simulate_event = setup_event_simulator(
         args.config,
         0, # The number of photons is irrelevant in data mode as it is decided based on the input file.
         K=5,
         is_data=True,
-        temperature=0.0
-    )
-
-    # Define sensor parameters
-    sensor_params = DetectorParams(
-        scatter_length=jnp.array(50.0),
-        wall_reflection_rate=jnp.array(0.2),
-        sensor_reflection_rate=jnp.array(0.0),
-        absorption_length=jnp.array(50.0),
-        qe=jnp.array(1.0),
-        qe_corrections=jnp.array(1.0),
+        temperature=0.0,
+        physics_config=args.physics_config,
     )
 
     # Generate events
