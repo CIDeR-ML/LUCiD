@@ -173,7 +173,7 @@ for (( event=0; event<$N_EVENTS; event++ )); do
     singularity exec -B /sdf,/fs,/sdf/scratch,/lscratch ${SINGULARITY_IMAGE} python \
         lucid/production/visualize_particle_events.py \
         "$HDF5_FILE" \
-        config/SK_geom_config.json \
+        config/SK_like_geom_config.json \
         --event "$event" \
         --output-dir "$OUTPUT_DIR"
 done

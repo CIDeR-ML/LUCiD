@@ -535,7 +535,7 @@ def read_particle_data_from_photonsim(root_file_path, entry_index, include_track
         'PrimaryEnergy',
         'PhotonPosX', 'PhotonPosY', 'PhotonPosZ',
         'PhotonDirX', 'PhotonDirY', 'PhotonDirZ',
-        'PhotonTime',
+        'PhotonTime', 'PhotonWavelength',
         'NParticles',
         'Particle_GenealogySize', 'Particle_GenealogyData',
         'Particle_PhotonIDsSize', 'Particle_PhotonIDsData',
@@ -578,6 +578,7 @@ def read_particle_data_from_photonsim(root_file_path, entry_index, include_track
     photon_directions = np.column_stack((photon_dirx, photon_diry, photon_dirz))
 
     photon_times = tree_data['PhotonTime'][0]
+    photon_wavelengths = tree_data['PhotonWavelength'][0]
 
     # Extract particle system
     n_particles = int(tree_data['NParticles'][0])
@@ -673,6 +674,7 @@ def read_particle_data_from_photonsim(root_file_path, entry_index, include_track
         'photon_origins': photon_positions,  # Keep as NumPy (avoid JAX conversion overhead)
         'photon_directions': photon_directions,  # Keep as NumPy
         'photon_times': photon_times,  # Keep as NumPy
+        'photon_wavelengths': photon_wavelengths,  # Keep as NumPy (nm)
         'primary_energy': primary_energy,
         'track_info_dict': track_info_dict  # Include full track info for reference
     }
@@ -1146,6 +1148,7 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path, se
             all_photon_origins = particle_data['photon_origins']
             all_photon_directions = particle_data['photon_directions']
             all_photon_times = particle_data['photon_times']
+            all_photon_wavelengths = particle_data['photon_wavelengths']
             total_photons = len(all_photon_origins)
             print(f"    Found {n_particles} particles, {total_photons:,} total photons", flush=True)
 
@@ -1162,6 +1165,7 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path, se
             all_photon_origins_np = all_photon_origins.astype(np.float32, copy=False) / 100.0
             all_photon_directions_np = all_photon_directions.astype(np.float32, copy=False)
             all_photon_times_np = all_photon_times.astype(np.float32, copy=False)
+            all_photon_wavelengths_np = all_photon_wavelengths.astype(np.float32, copy=False)
 
             # Generate random translation vector
             translation_vector = np.array([0.0, 0.0, 0.0], dtype=np.float32)
@@ -1216,6 +1220,7 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path, se
             batched_origins_np = np.zeros((n_particles, PAD_SIZE, 3), dtype=np.float32)
             batched_directions_np = np.tile(default_direction, (n_particles, PAD_SIZE, 1))
             batched_times_np = np.zeros((n_particles, PAD_SIZE), dtype=np.float32)
+            batched_wavelengths_np = np.zeros((n_particles, PAD_SIZE), dtype=np.float32)
 
             # Build track parameters as NumPy arrays (more efficient than lists)
             N_per_particle_np = np.zeros(n_particles, dtype=np.int32)
@@ -1250,11 +1255,13 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path, se
                     batched_origins_np[particle_idx, :N] = all_photon_origins_np[photon_indices]
                     batched_directions_np[particle_idx, :N] = all_photon_directions_np[photon_indices]
                     batched_times_np[particle_idx, :N] = all_photon_times_np[photon_indices]
+                    batched_wavelengths_np[particle_idx, :N] = all_photon_wavelengths_np[photon_indices]
 
             # Efficient transfer to JAX device (avoids unnecessary copies)
             batched_origins = jax.device_put(batched_origins_np)
             batched_directions = jax.device_put(batched_directions_np)
             batched_times = jax.device_put(batched_times_np)
+            batched_wavelengths = jax.device_put(batched_wavelengths_np)
             N_per_particle_array = jax.device_put(N_per_particle_np)
             track_energies_array = jax.device_put(track_energies_np)
             track_positions_array = jax.device_put(track_positions_np)
@@ -1268,7 +1275,7 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path, se
 
             # Create a wrapper function that processes a single particle
             def simulate_single_particle(track_energy, track_pos, track_dir, photon_origins,
-                                         photon_dirs, photon_times, N, sim_key):
+                                         photon_dirs, photon_times, photon_wavelengths, N, sim_key):
                 """Process a single particle - will be vmapped over all particles."""
                 track_params = ParticleParams.from_cartesian(
                     energy=track_energy,
@@ -1281,6 +1288,7 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path, se
                     'photon_origins': photon_origins,
                     'photon_directions': photon_dirs,
                     'photon_times': photon_times,
+                    'wavelengths': photon_wavelengths,
                     'N': N,
                     'apply_rotation': False,
                     'rotation_axis': jnp.array([1.0, 0.0, 0.0]),
@@ -1292,10 +1300,9 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path, se
                 return event_simulator(track_params, sensor_params, sim_key, photonsim_data)
 
             # Create vectorized version using vmap
-            # in_axes: (0, 0, 0, 0, 0, 0, 0, 0) means vectorize over first axis of all arguments
             simulate_all_particles = jax.vmap(
                 simulate_single_particle,
-                in_axes=(0, 0, 0, 0, 0, 0, 0, 0)
+                in_axes=(0, 0, 0, 0, 0, 0, 0, 0, 0)
             )
 
             # Generate random keys for all particles
@@ -1309,6 +1316,7 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path, se
                 batched_origins,
                 batched_directions,
                 batched_times,
+                batched_wavelengths,
                 N_per_particle_array,
                 particle_keys
             )

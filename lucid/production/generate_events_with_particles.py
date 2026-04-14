@@ -17,7 +17,7 @@ import jax.numpy as jnp
 
 from lucid.sources.event_io import generate_events_from_photonsim_particles
 from lucid.simulation import setup_event_simulator
-from lucid.detector_params import DetectorParams
+from lucid.detector_params import DetectorParams, load_physics_config
 from lucid.utils import base_dir_path
 
 def main():
@@ -40,8 +40,8 @@ def main():
     parser.add_argument(
         '--config',
         type=str,
-        default=base_dir_path()+'config/SK_geom_config.json',
-        help='Path to detector geometry configuration (default: '+base_dir_path()+'config/SK_geom_config.json)'
+        default=base_dir_path()+'config/SK_like_geom_config.json',
+        help='Path to detector geometry configuration (default: '+base_dir_path()+'config/SK_like_geom_config.json)'
     )
     parser.add_argument(
         '--n-events',
@@ -92,6 +92,13 @@ def main():
         action='store_true',
         help='Include voxelized photon position data in output'
     )
+    parser.add_argument(
+        '--physics-config',
+        type=str,
+        default=base_dir_path()+'config/SK_like_physics_config.json',
+        help='Path to physics configuration (medium model, QE curve, detector params). '
+             'Default: '+base_dir_path()+'config/SK_like_physics_config.json'
+    )
     args = parser.parse_args()
 
     # Verify ROOT file exists
@@ -104,33 +111,43 @@ def main():
         print(f"Error: Config file not found: {args.config}")
         sys.exit(1)
 
-    # Setup event simulator
+    # Verify ROOT file contains PhotonWavelength branch (required for QE)
+    import uproot
+    _root = uproot.open(args.root_file)
+    _tree = _root['OpticalPhotons']
+    if 'PhotonWavelength' not in _tree.keys():
+        print(f"Error: ROOT file does not contain 'PhotonWavelength' branch.")
+        print(f"Wavelength data is required for correct QE application.")
+        print(f"Please regenerate the ROOT file with PhotonSim wavelength storage enabled.")
+        sys.exit(1)
+    _root.close()
+
+    # Load detector parameters from physics config
+    print(f"\nLoading physics configuration: {args.physics_config}")
+    sensor_params, _, _ = load_physics_config(args.physics_config)
+    print(f"  Wall reflection rate: {float(sensor_params.wall_reflection_rate):.3f}")
+    print(f"  Sensor reflection rate: {float(sensor_params.sensor_reflection_rate):.3f}")
+    print(f"  QE (scalar): {float(sensor_params.qe):.3f}")
+
+    # Setup event simulator with physics config for wavelength-dependent QE and medium model
     print(f"\nSetting up event simulator")
-    print(f"Using configuration file: {args.config}")
+    print(f"Using geometry configuration: {args.config}")
     simulate_event = setup_event_simulator(
         args.config,
         0,  # The number of photons is irrelevant in data mode as it is decided based on the input file.
         K=5,
         is_data=True,
         temperature=0.0,
-        apply_smearing=False  # Do NOT smear per-particle; smearing is applied after summing PE_per_particle
-    )
-
-    # Define sensor parameters (same as generate_events.py)
-    sensor_params = DetectorParams(
-        scatter_length=jnp.array(50.0),
-        wall_reflection_rate=jnp.array(0.2),
-        sensor_reflection_rate=jnp.array(0.0),
-        absorption_length=jnp.array(50.0),
-        qe=jnp.array(1.0),
-        qe_corrections=jnp.array(1.0),
+        apply_smearing=False,  # Do NOT smear per-particle; smearing is applied after summing PE_per_particle
+        physics_config=args.physics_config,
     )
 
     # Generate events
     print(f"\nGenerating events using particle-based workflow:")
     print(f"  ROOT file: {args.root_file}")
     print(f"  Output directory: {args.output}")
-    print(f"  Detector config: {args.config}")
+    print(f"  Geometry config: {args.config}")
+    print(f"  Physics config: {args.physics_config}")
     if args.n_events:
         print(f"  Number of events: {args.n_events}")
     if args.master_seed:
