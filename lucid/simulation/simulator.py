@@ -251,6 +251,7 @@ def setup_event_simulator(
     def _common_propagation(
             positions, directions, intensities, times,
             scatter_lengths, absorption_lengths,
+            qe_per_photon,
             n_rays, detector_params, key,
             num_sensors, K, n_grad_iters, max_sensors_per_cell,
             propagate_fn, photon_update_fn,
@@ -263,6 +264,8 @@ def setup_event_simulator(
             Per-photon scattering lengths, shape (n_rays,).
         absorption_lengths : jnp.ndarray
             Per-photon absorption lengths, shape (n_rays,).
+        qe_per_photon : jnp.ndarray
+            Per-photon quantum efficiency, shape (n_rays,).
         pos_grad_threshold : int
             Iteration threshold for position stop_gradient.
         make_hits_fn : callable
@@ -271,7 +274,6 @@ def setup_event_simulator(
 
         wall_reflection_rate = detector_params.wall_reflection_rate
         sensor_reflection_rate = detector_params.sensor_reflection_rate
-        qe = detector_params.qe
         qe_corrections = detector_params.qe_corrections
 
         from lucid.simulation.types import PhotonState
@@ -359,9 +361,15 @@ def setup_event_simulator(
         flat_indices = all_indices.reshape(-1)
         flat_times = all_times.reshape(-1)
 
+        # Tile per-photon QE to match flat shape.
+        # all_weights shape: (K, max_sensors_per_cell, n_rays), C-order reshape
+        # → photon index is i % n_rays
+        photon_idx = jnp.arange(flat_weights.shape[0]) % n_rays
+        flat_qe = qe_per_photon[photon_idx]
+
         key, qe_key = jax.random.split(key)
         return make_hits_fn(
-            flat_weights, flat_indices, flat_times, num_sensors, qe_key, qe, qe_corrections)
+            flat_weights, flat_indices, flat_times, num_sensors, qe_key, flat_qe, qe_corrections)
 
     # ================================================================
     # Mode-specific simulation functions
@@ -432,13 +440,16 @@ def setup_event_simulator(
         scatter_lengths, absorption_lengths, qe_weights, key = _get_optical_arrays(
             n_rays, detector_params, key, wavelengths=data_wavelengths)
 
+        # Per-photon QE: wavelength curve * scalar qe (passed to make_hits, not baked into weights)
         if qe_weights is not None:
-            photon_intensities = photon_intensities * qe_weights
-            detector_params = detector_params._replace(qe=jnp.array(1.0))
+            qe_per_photon = qe_weights * detector_params.qe
+        else:
+            qe_per_photon = jnp.full(n_rays, detector_params.qe)
 
         return _common_propagation(
             final_origins, final_directions, photon_intensities, photon_times,
             scatter_lengths, absorption_lengths,
+            qe_per_photon,
             n_rays, detector_params, key, NUM_SENSORS, sim_config.K, sim_config.effective_n_grad_iters, max_sensors_per_cell,
             propagate_photons, photon_update_fn,
             pos_grad_threshold=sim_config.K, make_hits_fn=_make_hits_fn)
@@ -483,13 +494,16 @@ def setup_event_simulator(
         scatter_lengths, absorption_lengths, qe_weights, key = _get_optical_arrays(
             Nphot, detector_params, opt_key)
 
+        # Per-photon QE: wavelength curve * scalar qe (passed to make_hits, not baked into weights)
         if qe_weights is not None:
-            photon_intensities = photon_intensities * qe_weights
-            detector_params = detector_params._replace(qe=jnp.array(1.0))
+            qe_per_photon = qe_weights * detector_params.qe
+        else:
+            qe_per_photon = jnp.full(Nphot, detector_params.qe)
 
         return _common_propagation(
             photon_origins, photon_directions, photon_intensities, photon_times + t0,
             scatter_lengths, absorption_lengths,
+            qe_per_photon,
             Nphot, detector_params, key, NUM_SENSORS, sim_config.K, sim_config.effective_n_grad_iters, max_sensors_per_cell,
             propagate_photons, photon_update_fn,
             pos_grad_threshold=0, make_hits_fn=_make_hits_likelihood_fn)  # pos=0: likelihood always stops position gradient
@@ -510,13 +524,16 @@ def setup_event_simulator(
         scatter_lengths, absorption_lengths, qe_weights, key = _get_optical_arrays(
             Nphot, detector_params, opt_key, wavelengths=wavelengths)
 
+        # Per-photon QE: wavelength curve * scalar qe (passed to make_hits, not baked into weights)
         if qe_weights is not None:
-            photon_intensities = photon_intensities * qe_weights
-            detector_params = detector_params._replace(qe=jnp.array(1.0))
+            qe_per_photon = qe_weights * detector_params.qe
+        else:
+            qe_per_photon = jnp.full(Nphot, detector_params.qe)
 
         return _common_propagation(
             photon_origins, photon_directions, photon_intensities, photon_times,
             scatter_lengths, absorption_lengths,
+            qe_per_photon,
             Nphot, detector_params, key, NUM_SENSORS, sim_config.K, sim_config.effective_n_grad_iters, max_sensors_per_cell,
             propagate_photons, photon_update_fn,
             pos_grad_threshold=sim_config.K, make_hits_fn=_make_hits_fn)
