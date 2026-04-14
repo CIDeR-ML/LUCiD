@@ -216,12 +216,12 @@ def main():
 
     t_start = time.perf_counter()
 
+    # All sources use hit_mode='per_photon' to expose per-iteration log_w for analysis.
     if args.source == "track":
-        # Track mode → likelihood output (4-tuple)
         sim = setup_event_simulator(
             args.config, args.nphot, temperature=args.temperature, K=args.k_max,
             is_data=False, is_calibration=False,
-            default_detector_params=dp, **grid_kw)
+            default_detector_params=dp, hit_mode='per_photon', **grid_kw)
 
         track = ParticleParams(
             energy=jnp.array(args.energy),
@@ -231,78 +231,23 @@ def main():
             t0=jnp.array(0.0),
         )
         output = sim(track, key)
-        log_w = output[0]
 
     elif args.source in ("laser", "isotropic"):
-        # Calibration mode returns (charges, times) — no per-K data.
-        # To get per-K analysis, we run at each K value and difference.
-        print(f"\nRunning calibration source ({args.source}) at K=1..{args.k_max}...")
         from lucid.sources import laser_source, isotropic_source
-
         if args.source == "laser":
             source = laser_source(position=[0.0, 0.0, det.H / 2 - 0.1], intensity=100_000_000)
         else:
             source = isotropic_source(position=[0.0, 0.0, 0.0], intensity=100_000_000)
 
-        charge_by_k = []
-        for k_val in range(1, args.k_max + 1):
-            sim_k = setup_event_simulator(
-                args.config, args.nphot, temperature=args.temperature, K=k_val,
-                is_data=False, is_calibration=True,
-                default_detector_params=dp, **grid_kw)
-            charges, _ = sim_k(source, key)
-            charge_by_k.append(float(jnp.sum(charges)))
+        sim = setup_event_simulator(
+            args.config, args.nphot, temperature=args.temperature, K=args.k_max,
+            is_data=False, is_calibration=True,
+            default_detector_params=dp, hit_mode='per_photon', **grid_kw)
+        output = sim(source, key)
 
-        # Compute marginal charge per iteration
-        marginal = [charge_by_k[0]]
-        for i in range(1, len(charge_by_k)):
-            marginal.append(charge_by_k[i] - charge_by_k[i - 1])
-
-        total = charge_by_k[-1]
-        ratios = []
-        for k in range(2, len(marginal)):
-            if marginal[k - 1] > 0:
-                ratios.append(marginal[k] / marginal[k - 1])
-        mean_survival = np.mean(ratios) if ratios else 0.0
-
-        # Find optimal K
-        optimal_k = args.k_max
-        for k in range(len(charge_by_k)):
-            if total > 0 and charge_by_k[k] / total >= args.target:
-                optimal_k = k + 1
-                break
-
-        missed = 0.0
-        if optimal_k < args.k_max and total > 0:
-            last_frac = marginal[optimal_k - 1] / total
-            r = mean_survival
-            missed = last_frac * r / (1 - r) if r < 1 else float('inf')
-
-        elapsed = time.perf_counter() - t_start
-
-        print(f"\n{'='*70}")
-        print(f"  K Convergence Analysis  ({params_info})")
-        print(f"  Source: {args.source}  |  Nphot: {args.nphot:,}  |  Time: {elapsed:.1f}s")
-        print(f"{'='*70}")
-        print(f"  Total charge at K={args.k_max}: {total:.1f}")
-        print(f"  Mean per-bounce survival: {mean_survival:.3f}")
-        print(f"\n  Per-iteration charge (marginal):")
-        for k, (m, cum) in enumerate(zip(marginal, charge_by_k)):
-            frac = m / total if total > 0 else 0
-            cum_frac = cum / total if total > 0 else 0
-            bar = '█' * int(frac * 50)
-            print(f"    K={k+1:2d}: {m:12.1f}  ({frac:6.2%})  cumul={cum_frac:6.2%}  {bar}")
-
-        print(f"\n  Target: {args.target:.1%} of total charge")
-        print(f"  >>> Optimal K = {optimal_k} <<<")
-        if missed > 0:
-            print(f"  Estimated missed charge beyond K={optimal_k}: {missed:.4%}")
-        print()
-        return
-
+    log_w = output[0]
     elapsed = time.perf_counter() - t_start
 
-    # Analyze likelihood output
     result = analyze_k_convergence(
         log_w, args.k_max, args.nphot,
         target_frac=args.target,

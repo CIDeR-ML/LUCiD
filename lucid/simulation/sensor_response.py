@@ -57,7 +57,7 @@ def make_hits_data(
     total_charge = jax.ops.segment_sum(qe_weights, flat_indices, num_segments=num_detectors)
     detector_mins = jax.ops.segment_min(qe_filtered_times, flat_indices, num_segments=num_detectors)
 
-    nonzero_mask = (total_charge > 1e-10) & (detector_mins > 0)
+    nonzero_mask = (total_charge > 1e-10) & (detector_mins > 0) & jnp.isfinite(detector_mins)
 
     if apply_smearing:
         measured_time = jnp.where(
