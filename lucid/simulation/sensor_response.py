@@ -39,7 +39,7 @@ def make_hits_simulation(
 
 def make_hits_data(
         flat_weights, flat_indices, flat_times, num_detectors,
-        qe=0.2, rng_key=None, threshold=1e-5, apply_smearing=False):
+        qe=0.2, qe_corrections=None, rng_key=None, threshold=1e-5, apply_smearing=False):
     """Data-mode hits with Bernoulli QE, segment_min timing, and optional SK-like smearing."""
     timing_mask = (flat_weights > threshold) & (flat_times > 0)
     filtered_times = jnp.where(timing_mask, flat_times, jnp.inf)
@@ -47,10 +47,13 @@ def make_hits_data(
     rng_key, smear_time_key = jax.random.split(rng_key)
     qe_key, smear_counts_key = jax.random.split(rng_key)
 
-    # Always apply Bernoulli QE sampling — when qe >= 1.0, uniform(0,1) < qe
+    # Per-photon QE including per-sensor corrections (consistent with simulation/likelihood)
+    per_photon_qe = qe * qe_corrections[flat_indices] if qe_corrections is not None else qe
+
+    # Bernoulli QE sampling — when qe >= 1.0, uniform(0,1) < qe
     # is always true so all photons pass.  Avoids Python `if` on traced values.
     detection_probs = jax.random.uniform(qe_key, shape=flat_weights.shape)
-    detected_mask = detection_probs < qe
+    detected_mask = detection_probs < per_photon_qe
     qe_weights = flat_weights * detected_mask.astype(jnp.float32)
     qe_filtered_times = jnp.where(detected_mask & timing_mask, flat_times, jnp.inf)
 
