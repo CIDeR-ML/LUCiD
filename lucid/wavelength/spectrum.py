@@ -20,7 +20,7 @@ def sample_cherenkov_wavelengths(key, n_photons,
     n_photons : int
         Number of wavelengths to sample.
     lambda_min : float
-        Minimum wavelength in nm (default: 300, near-UV).
+        Minimum wavelength in nm (default: 200, deep UV to match PhotonSim).
     lambda_max : float
         Maximum wavelength in nm (default: 700, red edge of visible).
 

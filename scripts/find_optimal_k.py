@@ -314,7 +314,7 @@ def main():
 
     # Sweep mode: loop over wavelengths, monochromatic scatter/absorption from medium
     from lucid.wavelength import make_medium
-    medium = make_medium("water", wavelength_grid=jnp.linspace(280, 700, 421),
+    medium = make_medium("water", wavelength_grid=jnp.linspace(300, 700, 401),
                         medium_model_path=medium_path)
     wavelengths = [float(w.strip()) for w in args.wavelength_list.split(",")]
 

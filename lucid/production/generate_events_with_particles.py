@@ -135,7 +135,7 @@ def main():
     simulate_event = setup_event_simulator(
         args.config,
         0,  # The number of photons is irrelevant in data mode as it is decided based on the input file.
-        K=5,
+        K=12,
         is_data=True,
         temperature=0.0,
         apply_smearing=False,  # Do NOT smear per-particle; smearing is applied after summing PE_per_particle
