@@ -215,7 +215,8 @@ def setup_event_simulator(
 
     def _make_hits_realistic(flat_weights, flat_indices, flat_times, num_sensors, qe_key, qe, qe_corrections):
         return make_hits_data(flat_weights, flat_indices, flat_times, num_sensors,
-                              qe=qe, rng_key=qe_key, apply_smearing=sim_config.apply_smearing)
+                              qe=qe, qe_corrections=qe_corrections,
+                              rng_key=qe_key, apply_smearing=sim_config.apply_smearing)
 
     _make_hits_fn = {
         'aggregated': _make_hits_aggregated,
