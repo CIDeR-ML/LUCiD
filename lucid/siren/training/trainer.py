@@ -59,7 +59,7 @@ class SIRENTrainer:
     
     Example usage in notebook:
     ```python
-    from diffCherenkov.siren.training import SIRENTrainer, TrainingConfig
+    from lucid.siren.training import SIRENTrainer, TrainingConfig
     
     config = TrainingConfig(
         hidden_features=256,

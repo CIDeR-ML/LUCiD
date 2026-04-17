@@ -118,7 +118,7 @@ class PhotonSimValidator:
               f"Distance: {self.distance_min}-{self.distance_max} mm")
         
         # Create table data for ray generation
-        self.table_data = create_photonsim_siren_grid(self.photonsim_predictor, 250)
+        self.table_data = create_photonsim_siren_grid(self.photonsim_predictor)
 
         # Load num_seeds parameters from configuration
         from lucid.utils import unpack_photonsim_params

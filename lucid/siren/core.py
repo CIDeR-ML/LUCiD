@@ -364,7 +364,7 @@ def load_siren_model(model_path: str, model_type: str = "auto"):
         return load_siren_jax(model_path)
 
 
-def create_photonsim_siren_grid(photonsim_predictor, n_bins):
+def create_photonsim_siren_grid(photonsim_predictor, n_bins=250):
     """Create a precomputed grid for SIREN model evaluation.
 
     Parameters

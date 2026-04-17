@@ -3,7 +3,7 @@ import matplotlib.pyplot as plt
 from matplotlib.collections import EllipseCollection
 from scipy.spatial.distance import pdist
 from mpl_toolkits.axes_grid1 import make_axes_locatable
-from lucid.geometry import load_detector_geom, generate_detector
+from lucid.geometry import generate_detector
 from lucid.utils import sparse_to_full
 from matplotlib.colors import LinearSegmentedColormap
 
@@ -38,12 +38,10 @@ def create_detector_display(json_filename='../config/cyl_geom_config.json', spar
     # Generate detector
     detector = generate_detector(json_filename)
 
-    # Load geometry data using new unified function
-    detector_type, radius, height, n_sensors_meta, sensor_radius, _ = load_detector_geom(json_filename)
-
-    # Check if it's a cylinder (this visualization is designed for cylinders)
-    #if detector_type != 'cylinder':
-    #    raise ValueError(f"This visualization is designed for cylinders, got {detector_type}")
+    # Get geometry data from detector object
+    radius = detector.r
+    height = detector.H
+    sensor_radius = detector.S_radius
 
     # Set up detector information from detector object
     sensor_positions = np.array(detector.all_points)
@@ -274,12 +272,10 @@ def create_detector_comparison_display(json_filename='config/cyl_geom_config.jso
     # Generate detector
     detector = generate_detector(json_filename)
 
-    # Load geometry data using new unified function
-    detector_type, radius, height, n_sensors, sensor_radius = load_detector_geom(json_filename)
-    
-    # Check if it's a cylinder (this visualization is designed for cylinders)
-    if detector_type != 'cylinder':
-        raise ValueError(f"This visualization is designed for cylinders, got {detector_type}")
+    # Get geometry data from detector object
+    radius = detector.r
+    height = detector.H
+    sensor_radius = detector.S_radius
 
     # Set up detector information
     sensor_positions = np.array(detector.all_points)
@@ -325,23 +321,23 @@ def create_detector_comparison_display(json_filename='config/cyl_geom_config.jso
         # Calculate charge differences
         charge_diff = sim_charges_full - true_charges_full
 
-        # # Handle time differences with alignment if requested
-        # if align_time:
-        #     # Find active time points
-        #     active_times_true = true_times_full > 0
-        #     active_times_sim = sim_times_full > 0
+        # Handle time differences with alignment if requested
+        if align_time:
+            # Find active time points
+            active_times_true = true_times_full > 0
+            active_times_sim = sim_times_full > 0
 
-        #     # Calculate means for active times
-        #     true_time_mean = np.mean(true_times_full[active_times_true]) if np.any(active_times_true) else 0
-        #     sim_time_mean = np.mean(sim_times_full[active_times_sim]) if np.any(active_times_sim) else 0
+            # Calculate means for active times
+            true_time_mean = np.mean(true_times_full[active_times_true]) if np.any(active_times_true) else 0
+            sim_time_mean = np.mean(sim_times_full[active_times_sim]) if np.any(active_times_sim) else 0
 
-        #     # Subtract means from active times
-        #     true_times_aligned = np.where(active_times_true, true_times_full - true_time_mean, 0)
-        #     sim_times_aligned = np.where(active_times_sim, sim_times_full - sim_time_mean, 0)
+            # Subtract means from active times
+            true_times_aligned = np.where(active_times_true, true_times_full - true_time_mean, 0)
+            sim_times_aligned = np.where(active_times_sim, sim_times_full - sim_time_mean, 0)
 
-        #     time_diff = sim_times_aligned - true_times_aligned
-        # else:
-        time_diff = sim_times_full - true_times_full
+            time_diff = sim_times_aligned - true_times_aligned
+        else:
+            time_diff = sim_times_full - true_times_full
 
         # Select which values to plot
         all_values = time_diff if plot_time else charge_diff
@@ -352,9 +348,6 @@ def create_detector_comparison_display(json_filename='config/cyl_geom_config.jso
         else:
             # Find maximum absolute value for symmetric color scale (original behavior)
             max_abs_value = np.max(np.abs(all_values[all_values<1e5]))
-            print('MAX ABS VALUE: ', np.max(true_times_full))
-            print('MAX ABS VALUE: ', np.max(sim_times_full))
-            print('MAX ABS VALUE: ', max_abs_value)
 
         # Create colors array: gnuplot(0) for non-active, diverging colormap for active
         gnuplot = plt.cm.gnuplot
