@@ -94,7 +94,7 @@ def main():
 
     # Setup paths
     project_root = Path(__file__).parent.parent
-    optimization_script = project_root / 'tools' / 'optimization' / 'single_track_optimization.py'
+    optimization_script = project_root / 'lucid' / 'optimization' / 'run.py'
     output_dir = Path(args.output)
 
     # Create output directory

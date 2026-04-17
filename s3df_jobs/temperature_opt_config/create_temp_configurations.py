@@ -10,7 +10,8 @@ data = {
     "n_events": 100,
     "k": 7,
     "nphot": 300000,
-    "c_medium": 0.22540751879699247
+    "c_medium": 0.22540751879699247,
+    "physics_config": "config/SK_physics_config.json"
   },
   "optimization_weights": {
     "vertex_weight_scale": 1.0,
