@@ -24,7 +24,7 @@ class TrainingAnalyzer:
     
     Example usage in notebook:
     ```python
-    from diffCherenkov.siren.training import TrainingAnalyzer
+    from lucid.siren.training import TrainingAnalyzer
     
     analyzer = TrainingAnalyzer(trainer, dataset)
     results = analyzer.evaluate_model()

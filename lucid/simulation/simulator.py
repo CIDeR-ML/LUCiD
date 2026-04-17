@@ -55,6 +55,8 @@ def setup_event_simulator(
         default_detector_params=False,
         wavelength_mode=True,
         hit_mode=None,
+        n_grad_iters=None,
+        pos_grad_threshold=None,  # None → use mode default (calib:K, track:0)
         **grid_params):
     """
     Set up and return an event simulator using DetectorParams / ParticleParams.
@@ -157,7 +159,8 @@ def setup_event_simulator(
     sim_config = SimConfig(
         n_photons=n_photons, K=K, mode=mode,
         use_expected_value=use_expected_value,
-        apply_smearing=apply_smearing)
+        apply_smearing=apply_smearing,
+        n_grad_iters=n_grad_iters)
 
     # ---- Extract fields from containers ------------------------------------
     material = det_geom.medium.material
@@ -473,13 +476,14 @@ def setup_event_simulator(
         else:
             qe_per_photon = jnp.full(n_rays, detector_params.qe)
 
+        _pgt = sim_config.K if pos_grad_threshold is None else pos_grad_threshold
         return _common_propagation(
             final_origins, final_directions, photon_intensities, photon_times,
             scatter_lengths, absorption_lengths,
             qe_per_photon,
             n_rays, detector_params, key, NUM_SENSORS, sim_config.K, sim_config.effective_n_grad_iters, max_sensors_per_cell,
             propagate_photons, photon_update_fn,
-            pos_grad_threshold=sim_config.K, make_hits_fn=_make_hits_fn)
+            pos_grad_threshold=_pgt, make_hits_fn=_make_hits_fn)
 
     # Load photonsim parameters from configuration (power-law normalization, SIREN path)
     photonsim_params = unpack_photonsim_params(particle, material)
@@ -527,13 +531,14 @@ def setup_event_simulator(
         else:
             qe_per_photon = jnp.full(Nphot, detector_params.qe)
 
+        _pgt = 0 if pos_grad_threshold is None else pos_grad_threshold
         return _common_propagation(
             photon_origins, photon_directions, photon_intensities, photon_times + t0,
             scatter_lengths, absorption_lengths,
             qe_per_photon,
             Nphot, detector_params, key, NUM_SENSORS, sim_config.K, sim_config.effective_n_grad_iters, max_sensors_per_cell,
             propagate_photons, photon_update_fn,
-            pos_grad_threshold=0, make_hits_fn=_make_hits_fn)  # pos=0: likelihood always stops position gradient
+            pos_grad_threshold=_pgt, make_hits_fn=_make_hits_fn)
 
     @jax.jit
     def _simulation_sensor_calibration_impl(source, detector_params, key):
@@ -557,13 +562,14 @@ def setup_event_simulator(
         else:
             qe_per_photon = jnp.full(Nphot, detector_params.qe)
 
+        _pgt = sim_config.K if pos_grad_threshold is None else pos_grad_threshold
         return _common_propagation(
             photon_origins, photon_directions, photon_intensities, photon_times,
             scatter_lengths, absorption_lengths,
             qe_per_photon,
             Nphot, detector_params, key, NUM_SENSORS, sim_config.K, sim_config.effective_n_grad_iters, max_sensors_per_cell,
             propagate_photons, photon_update_fn,
-            pos_grad_threshold=sim_config.K, make_hits_fn=_make_hits_fn)
+            pos_grad_threshold=_pgt, make_hits_fn=_make_hits_fn)
 
     # ---- Return the right function ------------------------------------------
     if sim_config.is_data:
@@ -587,7 +593,7 @@ def setup_event_simulator(
     else:
         model_base_path = photonsim_params['siren_model_path']
         photonsim_predictor = SIRENPredictor(model_base_path)
-        grid_data = create_photonsim_siren_grid(photonsim_predictor, 250)
+        grid_data = create_photonsim_siren_grid(photonsim_predictor)
         model_params = photonsim_predictor.params
         t0_params = unpack_t0_params(particle, material)
         if _default_dp is not None:
