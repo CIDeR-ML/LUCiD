@@ -8,7 +8,8 @@ data = {
     "n_events": 150,
     "k": 7,
     "nphot": 75000,
-    "c_medium": 0.22540751879699247
+    "c_medium": 0.22540751879699247,
+    "physics_config": "config/SK_physics_config.json"
   },
   "optimization_weights": {"vertex_weight_scale": 1.0, "counts_weight_scale": 1.0},
   "learning_rates": {"position_learning_rate": 0.05, "direction_learning_rate": 0.005, "t0_learning_rate": 0.1, "energy_learning_rate": 10.0},

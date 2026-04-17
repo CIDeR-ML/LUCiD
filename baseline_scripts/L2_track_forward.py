@@ -62,7 +62,8 @@ sim = setup_event_simulator(
     GEOM, NPHOT, TEMPERATURE, K=K,
     is_data=False, max_sensors_per_cell=4,
     default_detector_params=default_dp,
-    n_cap=150, n_angular=250, n_height=150)
+    n_cap=150, n_angular=250, n_height=150,
+    wavelength_mode=False)
 
 print(f"  Simulator created (Nphot={NPHOT}, K={K})")
 
