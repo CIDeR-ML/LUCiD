@@ -198,7 +198,7 @@ def main():
     )
 
     data_simulator = setup_event_simulator(
-        default_json_filename, Nphot, temperature=0.0, K=20, is_data=True, is_calibration=False,
+        default_json_filename, Nphot, temperature=0.0, K=12, is_data=True, is_calibration=False,
         physics_config=PHYSICS_CONFIG, default_detector_params=True
     )
 

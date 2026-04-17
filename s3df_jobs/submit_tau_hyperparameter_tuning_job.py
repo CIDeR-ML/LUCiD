@@ -664,7 +664,7 @@ def main():
             )
             data_simulator = setup_event_simulator(
                 GEOM_CONFIG, nrays, temperature=0.0,
-                K=K, is_data=True, is_calibration=False,
+                K=12, is_data=True, is_calibration=False,
                 physics_config=PHYSICS_CONFIG, default_detector_params=True
             )
             current_nrays = nrays
