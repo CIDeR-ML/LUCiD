@@ -29,6 +29,21 @@ from lucid.optimization.utils.geometry import (
 from lucid.utils import spherical_to_cartesian  # noqa: F401 — canonical location
 
 
+def _params_to_array(params_list):
+    """Convert a list of parameters to a 2D numpy array.
+
+    Handles both ParticleParams namedtuples and flat arrays.
+    ParticleParams layout: [pos_x, pos_y, pos_z, t0, theta, phi, energy]
+    """
+    if hasattr(params_list[0], 'position'):
+        # ParticleParams namedtuple
+        return np.array([
+            [*np.asarray(p.position), float(p.t0), float(p.theta), float(p.phi), float(p.energy)]
+            for p in params_list
+        ])
+    return np.array(params_list)
+
+
 def create_event_3D_visualization(
     event_ID,
     all_event_results,
@@ -89,7 +104,7 @@ def create_event_3D_visualization(
     true_energy = event_data.get('true_energy', np.nan)
 
     # Get final fitted parameters (last item in trajectory)
-    trajectory_params = np.array(optimization_results['history']['parameters'])
+    trajectory_params = _params_to_array(optimization_results['history']['parameters'])
     final_pos = trajectory_params[-1, :3]  # x,y,z
     final_theta = trajectory_params[-1, 4]  # theta
     final_phi = trajectory_params[-1, 5]    # phi
@@ -423,7 +438,7 @@ def create_optimization_path_3d_visualization(event_ID, all_event_results, arrow
     true_direction = event_data['true_direction']
 
     # Extract optimization trajectory
-    trajectory_params = np.array(optimization_results['history']['parameters'])
+    trajectory_params = _params_to_array(optimization_results['history']['parameters'])
     trajectory_positions = trajectory_params[:, :3]  # [x, y, z]
     trajectory_thetas = trajectory_params[:, 4]
     trajectory_phis = trajectory_params[:, 5]

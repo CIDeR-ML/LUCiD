@@ -24,7 +24,7 @@ class TrainingMonitor:
     
     Example usage in notebook:
     ```python
-    from diffCherenkov.siren.training import TrainingMonitor
+    from lucid.siren.training import TrainingMonitor
     
     monitor = TrainingMonitor('output/training_run')
     monitor.start_monitoring(update_interval=10)  # Update every 10 seconds

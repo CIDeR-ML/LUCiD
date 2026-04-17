@@ -41,11 +41,11 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Import training modules
-from siren.training.trainer import SIRENTrainer, TrainingConfig
-from siren.training.dataset import PhotonSimDataset
-from siren.training.monitor import TrainingMonitor, LiveTrainingCallback
-from siren.training.analyzer import TrainingAnalyzer
-from utils import base_dir_path, setup_matplotlib_for_notebook
+from lucid.siren.training.trainer import SIRENTrainer, TrainingConfig
+from lucid.siren.training.dataset import PhotonSimDataset
+from lucid.siren.training.monitor import TrainingMonitor, LiveTrainingCallback
+from lucid.siren.training.analyzer import TrainingAnalyzer
+from lucid.utils import base_dir_path, setup_matplotlib_for_notebook
 
 
 class PhotonSimTrainer:

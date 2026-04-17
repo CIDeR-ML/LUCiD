@@ -252,8 +252,8 @@ def predict_t0_wrapper(distance, energy, params):
     """Wrapper to use your existing params dict structure"""
     return predict_t0(
         distance, energy,
-        params['baseline_1000MeV']['slope'],
-        params['baseline_1000MeV']['intercept'],
+        params['baseline']['slope'],
+        params['baseline']['intercept'],
         params['delta_parameterization']['A_slope'],
         params['delta_parameterization']['A_intercept'],
         params['delta_parameterization']['B_slope'],

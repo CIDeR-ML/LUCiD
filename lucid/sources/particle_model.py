@@ -52,7 +52,7 @@ class ParticleModel(NamedTuple):
         # Load SIREN model
         siren_model_path = photonsim_params['siren_model_path']
         predictor = SIRENPredictor(siren_model_path)
-        grid_data = create_photonsim_siren_grid(siren_model_path)
+        grid_data = create_photonsim_siren_grid(predictor)
 
         # t0 timing parameters
         t0_params = unpack_t0_params(particle, material)
