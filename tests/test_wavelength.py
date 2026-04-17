@@ -90,7 +90,7 @@ class TestCherenkovSpectrum:
         key = jax.random.PRNGKey(42)
         wl = sample_cherenkov_wavelengths(key, 10000)
         assert wl.shape == (10000,)
-        assert jnp.all(wl >= 300.0)
+        assert jnp.all(wl >= 200.0)
         assert jnp.all(wl <= 700.0)
 
     def test_distribution_skews_blue(self):
@@ -98,7 +98,7 @@ class TestCherenkovSpectrum:
         key = jax.random.PRNGKey(42)
         wl = sample_cherenkov_wavelengths(key, 100000)
         median = jnp.median(wl)
-        midpoint = (300.0 + 700.0) / 2.0
+        midpoint = (200.0 + 700.0) / 2.0
         assert float(median) < midpoint, "Cherenkov spectrum should skew toward shorter wavelengths"
 
     def test_custom_range(self):
