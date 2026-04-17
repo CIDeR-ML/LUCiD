@@ -1,4 +1,4 @@
-"""Tests for loss functions (tools/losses.py and tools/optimization/losses.py)."""
+"""Tests for loss functions (lucid/losses.py and lucid/optimization/losses.py)."""
 import jax.numpy as jnp
 import numpy.testing as npt
 

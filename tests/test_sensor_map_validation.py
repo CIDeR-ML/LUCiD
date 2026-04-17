@@ -83,10 +83,11 @@ class TestValidationCatchesProblems:
             assert len(sensor_warnings) == 0, \
                 f"Unexpected warnings: {[str(x.message) for x in sensor_warnings]}"
 
-    def test_raises_on_overcrowding(self):
-        """Very coarse grid should raise ValueError for overcrowding."""
+    def test_warns_on_overcrowding(self):
+        """Very coarse grid should warn about exceeding max_sensors_per_cell
+        (and auto-adjust the limit rather than crashing)."""
         det = generate_detector("config/WCTE_geom_config.json")
-        with pytest.raises(ValueError, match="max_sensors_per_cell"):
+        with pytest.warns(UserWarning, match="max_sensors_per_cell"):
             create_propagator(
                 det, jnp.array(det.all_points), det.S_radius,
                 n_cap=5, n_angular=5, n_height=5,

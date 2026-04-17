@@ -129,11 +129,16 @@ class TestTrackModeKConvergence:
 
     @pytest.fixture(scope="class")
     def track_output(self, detector_params):
-        """Run track simulation at K=8 and return likelihood 4-tuple."""
+        """Run track simulation at K=12 and return likelihood 4-tuple.
+
+        K=12 matches the production data-mode default (see
+        lucid/production/generate_events*.py) which the K-convergence analysis
+        showed covers >99.9% of charge for SK_like geometry.
+        """
         from lucid.simulation import setup_event_simulator
         from lucid.detector_params import ParticleParams
 
-        K = 8
+        K = 12
         NPHOT = 10_000
 
         sim = setup_event_simulator(

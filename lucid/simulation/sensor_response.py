@@ -9,7 +9,7 @@ from lucid.utils import smear_times, smear_charges_SK_like
 
 def make_hits_simulation(
         flat_weights, flat_indices, flat_times, num_detectors,
-        qe=0.2, qe_corrections=None, threshold=1e-10, temperature=0.01):
+        qe=0.2, qe_corrections=None, threshold=1e-10, temperature=0.1):
     """Differentiable soft-min first-arrival timing with per-sensor QE corrections."""
     per_photon_qe = qe * qe_corrections[flat_indices]
     qe_weights = flat_weights * per_photon_qe
