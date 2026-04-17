@@ -29,7 +29,7 @@ from functools import partial
 import numpy as np
 
 # ── Use the real overlap function from the codebase ──────────────────────────
-from tools.overlap import create_overlap_prob
+from lucid.overlap import create_overlap_prob
 
 
 # =============================================================================
