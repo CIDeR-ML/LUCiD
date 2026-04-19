@@ -205,11 +205,16 @@ def photon_iteration_update_factors(
     # tens of rays going out of the detector per each million after several steps.
     # The rule of thumb is that epsilon needs to go down/up proportionally to the detector size.
     epsilon = 1e-4
-    inward_normal = -normal  # geometry normals point outward; negate to get into-medium direction
+    # Detach the normal on the reflection path (Igehy 1999 Eq. 22 curvature term).
+    # Letting the gradient flow through the normal compounds a factor of ~1/r_sensor
+    # across K bounces, producing ~10^5-10^6 STE blowups for angular parameters.
+    # Stop-gradient here removes that compounding while keeping the forward value unchanged.
+    normal_refl = jax.lax.stop_gradient(normal)
+    inward_normal = -normal_refl  # into-medium direction, gradient-detached for reflection path
     surface_pos = position + surface_distance * normalize(direction) + epsilon * normalize(inward_normal)
     scatter_pos = position + scatter_distance * normalize(direction)
 
-    specular_dir = compute_reflection_direction(direction, normal)
+    specular_dir = compute_reflection_direction(direction, normal_refl)
     diffuse_dir = sample_cosine_hemisphere(inward_normal, k3)
     reflection_dir = jnp.where(hit_sensor, specular_dir, diffuse_dir)
     scatter_dir = compute_scatter_direction(direction, k3)
