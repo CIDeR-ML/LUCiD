@@ -60,7 +60,15 @@ let simTime = 0;
 let simTMin = 0, simTMax = 0;              // currently-active-view range
 let pmtTRange = [0, 1], segTRange = [0, 1];
 let sweepSpeed = 1.0;
-let quantileT = true;   // default on — time viz is much more informative this way
+// Quantile-T scope: 'off' | 'pmts' | 'seg' | 'both'. Default = PMTs only
+// (the event display — where it's most visually useful); segments stay in
+// raw ns so the user can see the physical time arithmetic.
+let quantileScope = 'pmts';
+const quantilePMT = () => quantileScope === 'pmts' || quantileScope === 'both';
+const quantileSeg = () => quantileScope === 'seg'  || quantileScope === 'both';
+// In 'both' mode, PMT and segment times share one quantile map so the same
+// physical time maps to the same rank on both meshes. null otherwise.
+let unionQMap = null;
 
 // Three.js.
 let renderer, scene, camera, controls;
@@ -295,8 +303,8 @@ function pmtContValArray() {
   // Quantile transform in time mode: replace each signal PMT's T with its
   // rank fraction in [0, 1]. This gives a uniform visual spread across the
   // viridis_r colormap even when arrival times cluster heavily.
-  if (isTime && quantileT) {
-    const q = buildQuantileMapMasked(pmtT, pmtHasSignal);
+  if (isTime && quantilePMT()) {
+    const q = unionQMap || buildQuantileMapMasked(pmtT, pmtHasSignal);
     const norm = new Float32Array(nSensors);
     for (let i = 0; i < nSensors; i++) {
       if (!pmtHasSignal[i]) { norm[i] = 0; continue; }
@@ -327,6 +335,33 @@ function buildQuantileMapMasked(values, mask) {
   const denom = Math.max(1, pts.length - 1);
   for (let i = 0; i < pts.length; i++) m.set(pts[i], i / denom);
   return m;
+}
+
+// Union quantile map for 'both' scope: pool signal-PMT T + all seg times
+// into one distribution so identical physical times map to identical ranks.
+function refreshUnionQMap() {
+  if (quantileScope !== 'both' || !evtBundle || !pmtT || !pmtHasSignal) {
+    unionQMap = null;
+    return;
+  }
+  const seg = evtBundle.seg;
+  const pool = [];
+  for (let i = 0; i < pmtT.length; i++) {
+    if (pmtHasSignal[i] && Number.isFinite(pmtT[i])) pool.push(pmtT[i]);
+  }
+  if (seg && seg.time) {
+    for (let i = 0; i < seg.time.length; i++) {
+      if (Number.isFinite(seg.time[i])) pool.push(seg.time[i]);
+    }
+  }
+  pool.sort((a, b) => a - b);
+  const m = new Map();
+  const denom = Math.max(1, pool.length - 1);
+  for (let i = 0; i < pool.length; i++) {
+    // First occurrence wins — ties across meshes resolve to the same rank.
+    if (!m.has(pool[i])) m.set(pool[i], i / denom);
+  }
+  unionQMap = m;
 }
 
 // Shared hue for a category id. Used in 3D (shader HSL), 2D (render2D),
@@ -378,9 +413,9 @@ function segContValArrays() {
   if (!field) return { contPerSeg: new Float32Array(seg.n), vmin: 0, vmax: 1 };
   const f32 = field instanceof Float32Array ? field : Float32Array.from(field);
 
-  // Quantile for time: same treatment as PMTs.
-  if (isTimeField && quantileT) {
-    const q = buildQuantileMapMasked(f32, null);
+  // Quantile for time: same treatment as PMTs; union map when scope=both.
+  if (isTimeField && quantileSeg()) {
+    const q = unionQMap || buildQuantileMapMasked(f32, null);
     const norm = new Float32Array(seg.n);
     for (let i = 0; i < seg.n; i++) {
       const v = f32[i];
@@ -449,7 +484,7 @@ function buildPMTs() {
   // reveals them). Quantile transform replaces T with its rank fraction in
   // [0, 1], which gives the sweep uniform density even when event has a
   // long decay tail. Sweep range tracks whichever space we're in.
-  const qMap = quantileT ? buildQuantileMap(pmtT) : null;
+  const qMap = quantilePMT() ? (unionQMap || buildQuantileMap(pmtT)) : null;
   for (let i = 0; i < nSensors; i++) {
     const t = pmtT[i];
     if (!Number.isFinite(t)) { arrivalT[i] = 1e30; continue; }
@@ -537,7 +572,7 @@ function buildSegments() {
   const hasSig = new Float32Array(N);
 
   // Segment time range for quantile transform.
-  const segQMap = quantileT ? buildQuantileMap(seg.time) : null;
+  const segQMap = quantileSeg() ? (unionQMap || buildQuantileMap(seg.time)) : null;
   if (segQMap) {
     segTRange = [0, 1];
   } else {
@@ -1335,8 +1370,18 @@ function applyViewSweepRange() {
   if (simTime < simTMin || simTime > simTMax) simTime = simTMin;
   scrub.value = simTime;
   const eps = Math.max(1e-4, (simTMax - simTMin) / 200);
-  if (pmtMat) { pmtMat.uniforms.sweepEps.value = eps; pmtMat.uniforms.simTime.value = simTime; }
-  if (segMat) { segMat.uniforms.sweepEps.value = eps; segMat.uniforms.simTime.value = simTime; }
+  // Re-sync every sweep-related uniform — mesh rebuilds (quantile scope,
+  // event load, etc.) create fresh materials with default-0 uniforms.
+  if (pmtMat) {
+    pmtMat.uniforms.sweepEps.value = eps;
+    pmtMat.uniforms.simTime.value = simTime;
+    pmtMat.uniforms.sweepOn.value = sweepOn ? 1.0 : 0.0;
+  }
+  if (segMat) {
+    segMat.uniforms.sweepEps.value = eps;
+    segMat.uniforms.simTime.value = simTime;
+    segMat.uniforms.sweepOn.value = sweepOn ? 1.0 : 0.0;
+  }
 }
 
 function updateSweepUI() {
@@ -1364,6 +1409,7 @@ async function loadEvent(idx) {
     simTime = 0;
     deriveSensorArrays();
     buildInstLookups();
+    refreshUnionQMap();   // needs pmtT + seg times; before buildPMTs/buildSegments
     buildPMTs();
     buildSegments();
     buildOutline();
@@ -1476,7 +1522,7 @@ function setupUI() {
     // Toolbar state.
     curView = 'pmts'; curField = 'charge'; curLabel = 'none';
     selectedParticle = null; selectedGroup = null;
-    sweepOn = false; sweepPlaying = false; quantileT = true;
+    sweepOn = false; sweepPlaying = false; quantileScope = 'pmts';
     simTime = 0;
     // Settings-drawer state.
     logScale = true; percMin = 1; percMax = 99;
@@ -1493,7 +1539,7 @@ function setupUI() {
     $('percVal').textContent = '1 – 99';
     $('vminInput').value = ''; $('vmaxInput').value = '';
     $('cmapSelect').value = 'auto';
-    $('quantileChk').checked = true;   // matches the new default
+    $('quantileScope').value = quantileScope;
     $('pmtSizeSlider').value = pmtSize; $('pmtSizeVal').textContent = pmtSize.toFixed(1);
     $('showEmptyChk').checked = showEmpty;
     $('showMeshChk').checked = showMesh;
@@ -1504,7 +1550,7 @@ function setupUI() {
     if (controls) controls.autoRotate = autoRotate;
     syncSweepBtn();
     // Rebuild meshes (quantile may have been on, arrivalT baked into geometry).
-    if (evtBundle) { buildPMTs(); buildSegments(); buildOutline(); }
+    if (evtBundle) { refreshUnionQMap(); buildPMTs(); buildSegments(); buildOutline(); }
     if (pmtMesh) pmtMesh.visible = true;
     if (segMesh) segMesh.visible = false;
     if (pmtMat) pmtMat.uniforms.sweepOn.value = 0.0;
@@ -1561,11 +1607,12 @@ function setupUI() {
     sweepSpeed = parseFloat(e.target.value);
     $('sweepSpeedVal').textContent = sweepSpeed.toFixed(1);
   });
-  $('quantileChk').addEventListener('change', (e) => {
-    quantileT = e.target.checked;
+  $('quantileScope').addEventListener('change', (e) => {
+    quantileScope = e.target.value;
     if (evtBundle) {
-      // Rebuild the meshes (arrivalT is baked in), then refresh colors
-      // and correspondence so the effect is visible even with Sweep off.
+      // Rebuild meshes (arrivalT is baked in), then refresh colors and
+      // correspondence so the effect is visible even with Sweep off.
+      refreshUnionQMap();
       buildPMTs();
       buildSegments();
       updatePMTColors();
@@ -1575,7 +1622,8 @@ function setupUI() {
       updateSweepUI();
       render2D();
     }
-    showToast(`quantile transform ${quantileT ? 'on' : 'off'} — affects FIELD = TIME coloring & sweep`);
+    const label = {off: 'off', pmts: 'PMTs only', seg: 'segments only', both: 'PMTs + segments'}[quantileScope];
+    showToast(`quantile T → ${label}`);
   });
 
   // Save PNG.
