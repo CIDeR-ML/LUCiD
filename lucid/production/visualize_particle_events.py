@@ -1,43 +1,69 @@
 #!/usr/bin/env python3
 """
-Simplified sensor visualization by particle - HDF5 only version.
+Visualize sensor hits for a single event from a v3 four-file dataset.
 
-Shows sensor hits colored by charge value, with arrows showing track directions.
-No photon visualization - only tracks (arrows) and sensor hits.
+Shows sensor hits colored by charge value, with arrows showing track
+directions and optional track segment polylines. Reads the four v3 files
+(sensor/inst/seg/labl) for one batch and renders one event as HTML.
 
 Usage:
-    python visualize_particle_events.py <hdf5_file> <detector_config> --event 0
+    python visualize_particle_events.py <dataset_root> <detector_config> \\
+        --event 0 [--file-index 0]
+
+``<dataset_root>`` must contain ``sensor/``, ``inst/``, ``seg/``, ``labl/``
+subdirectories with ``wc_*_{file_index:04d}.h5`` files.
 """
 import os
 import numpy as np
 import plotly.graph_objects as go
-from lucid.production.particle_data_utils import read_particle_event_file
-from lucid.production.voxelize import flat_index_to_position, VoxelGridConfig
+from pathlib import Path
+from lucid.sources.event_io import (
+    read_sensor_event_v3,
+    read_inst_event_v3,
+    read_seg_event_v3,
+    read_labl_event_v3,
+)
 from lucid.geometry import generate_detector
 from lucid.geometry.utils import calculate_surface_normals, create_disc_mesh
 import argparse
 
 # Parse command line arguments
-parser = argparse.ArgumentParser(description='Visualize sensor hits by particle')
-parser.add_argument('hdf5_file', type=str, help='Input HDF5 file from LUCiD (particle-based output)')
+parser = argparse.ArgumentParser(description='Visualize sensor hits from a v3 four-file dataset')
+parser.add_argument('dataset_root', type=str,
+                    help='Dataset root directory containing sensor/, inst/, seg/, labl/ subdirs.')
 parser.add_argument('detector_config', type=str, help='Detector configuration JSON file')
-parser.add_argument('--event', type=int, default=0, help='Event index to visualize (default: 0)')
-parser.add_argument('--min-charge', type=float, default=1.0, help='Minimum charge threshold in PE (default: 1.0)')
-parser.add_argument('--output-dir', type=str, default=None, help='Output directory for HTML file (default: current directory)')
+parser.add_argument('--event', type=int, default=0,
+                    help='Event sequence index within the batch file (default: 0).')
+parser.add_argument('--file-index', type=int, default=0,
+                    help='Batch file index NNNN in wc_*_NNNN.h5 (default: 0).')
+parser.add_argument('--min-charge', type=float, default=1.0,
+                    help='Minimum charge threshold in PE (default: 1.0)')
+parser.add_argument('--output-dir', type=str, default=None,
+                    help='Output directory for HTML file (default: current directory)')
 args = parser.parse_args()
 
-hdf5_file = args.hdf5_file
+dataset_root = Path(args.dataset_root)
 detector_config = args.detector_config
 event_idx = args.event
+file_index = args.file_index
 min_charge = args.min_charge
 output_dir = args.output_dir
+
+sensor_file = dataset_root / 'sensor' / f'wc_sensor_{file_index:04d}.h5'
+inst_file = dataset_root / 'inst' / f'wc_inst_{file_index:04d}.h5'
+seg_file = dataset_root / 'seg' / f'wc_seg_{file_index:04d}.h5'
+labl_file = dataset_root / 'labl' / f'wc_labl_{file_index:04d}.h5'
+
+for p in (sensor_file, inst_file, seg_file, labl_file):
+    if not p.exists():
+        raise FileNotFoundError(f"v3 batch file missing: {p}")
 
 print("="*70)
 print(f"SENSOR VISUALIZATION BY PARTICLE")
 print("="*70)
-print(f"LUCiD HDF5 file: {hdf5_file}")
+print(f"Dataset root: {dataset_root}")
 print(f"Detector config: {detector_config}")
-print(f"Event: {event_idx}")
+print(f"Event: {event_idx} (file index {file_index})")
 print(f"Min charge threshold: {min_charge} PE")
 print()
 
@@ -115,71 +141,116 @@ def create_cylinder(start, end, radius, n_segments=12):
     return vertices[:, 0], vertices[:, 1], vertices[:, 2], faces_i, faces_j, faces_k
 
 
-print(f"Loading event {event_idx}...")
+print(f"Loading event {event_idx} from v3 batch file_index={file_index}...")
 print()
 
-# Category names mapping
-category_names_map = {0: "Primary", 1: "DecayElectron", 2: "SecondaryPion", 3: "Gamma", -1: "Unknown"}
+# Category names mapping (255 = Unknown, sentinel for uncategorized)
+category_names_map = {0: "Primary", 1: "DecayElectron", 2: "SecondaryPion",
+                      3: "Gamma", 255: "Unknown", -1: "Unknown"}
 
 def get_category_name(code):
     return category_names_map.get(int(code), f'Category_{int(code)}')
 
-# Load LUCiD data (contains sensor and particle information)
-lucid_data = read_particle_event_file(hdf5_file, event_index=event_idx, verbose=False)
-n_particles = lucid_data['n_particles']
-PE_per_particle = lucid_data['PE_per_particle']  # Shape: (n_particles, N_sensors)
-T_per_particle = lucid_data['T_per_particle']
-PE = lucid_data['PE']
+# Read the four v3 files
+sensor_data = read_sensor_event_v3(str(sensor_file), event_idx)
+inst_data = read_inst_event_v3(str(inst_file), event_idx)
+seg_data = read_seg_event_v3(str(seg_file), event_idx)
+labl_data = read_labl_event_v3(str(labl_file), event_idx)
 
-# Load track info for PDG lookup and arrow visualization
-import h5py
-track_id_to_info = {}  # Map track ID to (pdg, position, direction, energy)
-with h5py.File(hdf5_file, 'r') as f:
-    if f'event_{event_idx}' in f:
-        event_group = f[f'event_{event_idx}']
-    else:
-        event_group = f
+n_sensors = detector.n_sensors
+n_particles = int(labl_data['n_particles'])
+n_tracks = int(labl_data['n_tracks'])
+t0 = float(labl_data['per_event']['t0'])
+overall_light_containment = float(labl_data['per_event']['overall_containment'])
 
-    if 'TrackInformation' in event_group and 'Segments' in event_group:
-        tracks_grp = event_group['TrackInformation']
-        segs_grp = event_group['Segments']
+# Reconstruct dense PE_per_particle / T_per_particle from inst sparse rows
+PE_per_particle = np.zeros((n_particles, n_sensors), dtype=np.float32)
+T_per_particle = np.full((n_particles, n_sensors), np.inf, dtype=np.float32)
+if int(inst_data.get('n_particle_hits', 0)) > 0:
+    pi_arr = np.asarray(inst_data['particle_idx'], dtype=np.int32)
+    si_arr = np.asarray(inst_data['sensor_idx'], dtype=np.int32)
+    pe_arr = np.asarray(inst_data['PE'], dtype=np.float32)
+    t_arr = np.asarray(inst_data['T'], dtype=np.float32)
+    PE_per_particle[pi_arr, si_arr] = pe_arr
+    T_per_particle[pi_arr, si_arr] = np.where(t_arr > 0, t_arr, np.inf)
 
-        track_ids = np.array(tracks_grp['TrackID'])
-        track_pdgs = np.array(tracks_grp['PDG'])
-        track_energies = np.array(tracks_grp['InitialEnergy'])
-        track_seg_offsets = np.array(tracks_grp['SegmentOffset'])
-        track_n_segs = np.array(tracks_grp['NSegments'])
+# Reconstruct dense per-sensor PE from sensor sparse
+PE = np.zeros(n_sensors, dtype=np.float32)
+if int(sensor_data.get('n_hits', 0)) > 0:
+    PE[np.asarray(sensor_data['sensor_idx'], dtype=np.int32)] = np.asarray(
+        sensor_data['PE'], dtype=np.float32)
 
-        # Get segment data (in cm, convert to m)
-        seg_start_x = np.array(segs_grp['StartX']) / 100.0
-        seg_start_y = np.array(segs_grp['StartY']) / 100.0
-        seg_start_z = np.array(segs_grp['StartZ']) / 100.0
-        seg_dir_x = np.array(segs_grp['DirX'])
-        seg_dir_y = np.array(segs_grp['DirY'])
-        seg_dir_z = np.array(segs_grp['DirZ'])
+# Decompose labl/per_particle CSR genealogy arrays
+pp = labl_data['per_particle']
 
-        for i, tid in enumerate(track_ids):
-            offset = track_seg_offsets[i]
-            if track_n_segs[i] > 0:
-                pos = np.array([seg_start_x[offset], seg_start_y[offset], seg_start_z[offset]])
-                dir_vec = np.array([seg_dir_x[offset], seg_dir_y[offset], seg_dir_z[offset]])
-                # Normalize direction
-                dir_norm = np.linalg.norm(dir_vec)
-                if dir_norm > 0:
-                    dir_vec = dir_vec / dir_norm
-            else:
-                pos = np.array([0, 0, 0])
-                dir_vec = np.array([0, 0, 1])
+def _decompose_csr(data, offsets, count):
+    data = np.asarray(data)
+    offsets = np.asarray(offsets)
+    return [np.asarray(data[offsets[i]:offsets[i + 1]]) for i in range(count)]
 
-            track_id_to_info[int(tid)] = {
-                'pdg': int(track_pdgs[i]),
-                'position': pos,
-                'direction': dir_vec,
-                'energy': float(track_energies[i])
-            }
+particle_categorized_genealogy = _decompose_csr(
+    pp['genealogy_data'], pp['genealogy_offsets'], n_particles)
+particle_track_genealogy = _decompose_csr(
+    pp['ext_genealogy_data'], pp['ext_genealogy_offsets'], n_particles)
+particle_category = np.asarray(pp['category'], dtype=np.int32)
+light_containment_by_particle = np.asarray(pp['containment'], dtype=np.float32)
 
-print(f"Event: {n_particles} categorized particles")
-print(f"t0: {lucid_data.get('t0', 0.0):.2f} ns")
+# Build the dict that the rendering code below indexes into
+lucid_data = {
+    'n_particles': n_particles,
+    'PE_per_particle': PE_per_particle,
+    'T_per_particle': T_per_particle,
+    'PE': PE,
+    't0': t0,
+    'Particle_Category': particle_category,
+    'light_containment_by_particle': light_containment_by_particle,
+    'Particle_TrackGenealogy': particle_track_genealogy,
+    'Particle_CategorizedGenealogy': particle_categorized_genealogy,
+    'overall_light_containment': overall_light_containment,
+}
+
+# Build track_id_to_info using labl/per_track + seg first-segment per track
+track_id_to_info = {}
+pt = labl_data['per_track']
+if n_tracks > 0:
+    track_ids_labl = np.asarray(pt['track_id'], dtype=np.int64)
+    track_pdgs_labl = np.asarray(pt['pdg'], dtype=np.int32)
+    track_energies_labl = np.asarray(pt['initial_energy'], dtype=np.float32)
+
+    seg_track_idx = np.asarray(seg_data['track_idx'], dtype=np.int32)
+    first_seg_for_track = np.full(n_tracks, -1, dtype=np.int32)
+    for seg_row in range(seg_track_idx.size):
+        ti = int(seg_track_idx[seg_row])
+        if 0 <= ti < n_tracks and first_seg_for_track[ti] == -1:
+            first_seg_for_track[ti] = seg_row
+
+    seg_start_x_m = np.asarray(seg_data['start_x'], dtype=np.float32) / 100.0
+    seg_start_y_m = np.asarray(seg_data['start_y'], dtype=np.float32) / 100.0
+    seg_start_z_m = np.asarray(seg_data['start_z'], dtype=np.float32) / 100.0
+    seg_dx = np.asarray(seg_data['dir_x'], dtype=np.float32)
+    seg_dy = np.asarray(seg_data['dir_y'], dtype=np.float32)
+    seg_dz = np.asarray(seg_data['dir_z'], dtype=np.float32)
+
+    for k in range(n_tracks):
+        fs = int(first_seg_for_track[k])
+        if fs >= 0:
+            pos = np.array([seg_start_x_m[fs], seg_start_y_m[fs], seg_start_z_m[fs]])
+            dir_vec = np.array([seg_dx[fs], seg_dy[fs], seg_dz[fs]], dtype=np.float32)
+            n = float(np.linalg.norm(dir_vec))
+            if n > 0:
+                dir_vec = dir_vec / n
+        else:
+            pos = np.array([0.0, 0.0, 0.0])
+            dir_vec = np.array([0.0, 0.0, 1.0])
+        track_id_to_info[int(track_ids_labl[k])] = {
+            'pdg': int(track_pdgs_labl[k]),
+            'position': pos,
+            'direction': dir_vec,
+            'energy': float(track_energies_labl[k]),
+        }
+
+print(f"Event: {n_particles} categorized particles, {n_tracks} meaningful tracks")
+print(f"t0: {t0:.2f} ns")
 print(f"PE_per_particle shape: {PE_per_particle.shape}")
 
 # Find global max charge for colorbar normalization
@@ -633,69 +704,37 @@ for particle_idx in range(n_particles):
 print()
 
 # ============================================================================
-# VOXEL VISUALIZATION
+# TRACK SEGMENT VISUALIZATION (from v3 seg + labl/per_track)
 # ============================================================================
-print("Creating voxel visualization...")
+print("Loading track segment data from v3 seg file...")
 
-# Check if voxel data exists in the HDF5 file
-has_voxel_data = False
-voxel_trace_index = None
-
-# Try to load voxel data directly from HDF5
-import h5py
-with h5py.File(hdf5_file, 'r') as f:
-    # Navigate to the correct event group
-    if f'event_{event_idx}' in f:
-        event_group = f[f'event_{event_idx}']
-    else:
-        event_group = f  # Single event file
-
-    if 'voxel_flat_indices' in event_group:
-        has_voxel_data = True
-        voxel_n_nonzero = np.array(event_group['voxel_n_nonzero'])
-        voxel_offsets = np.array(event_group['voxel_offsets'])
-        voxel_flat_indices = np.array(event_group['voxel_flat_indices'])
-        voxel_counts = np.array(event_group['voxel_counts'])
-
-# ============================================================================
-# TRACK SEGMENT VISUALIZATION
-# ============================================================================
-print("Loading track segment data...")
-
-# Check if track segment data exists
-has_segment_data = False
+has_segment_data = n_tracks > 0
 segment_trace_indices = []
 
-with h5py.File(hdf5_file, 'r') as f:
-    if f'event_{event_idx}' in f:
-        event_group = f[f'event_{event_idx}']
-    else:
-        event_group = f
+if has_segment_data:
+    track_ids = track_ids_labl
+    track_parent_ids = np.asarray(pt['parent_id'], dtype=np.int32)
+    track_pdgs = track_pdgs_labl
+    track_n_cherenkov = np.asarray(pt['n_cherenkov'], dtype=np.int32)
+    track_names = [pdg_to_name.get(int(pdg), f'PDG{int(pdg)}') for pdg in track_pdgs]
 
-    if 'TrackInformation' in event_group and 'Segments' in event_group:
-        has_segment_data = True
-        tracks_group = event_group['TrackInformation']
-        segs_group = event_group['Segments']
+    # Derive per-track segment offsets + counts from the track_idx FK column.
+    # Segments are written ordered by track (writer guarantee), so offsets are
+    # the first occurrence of each track_idx; counts are bincount.
+    track_n_segs = np.bincount(seg_track_idx, minlength=n_tracks).astype(np.int32)
+    track_seg_offsets = np.zeros(n_tracks, dtype=np.int32)
+    if n_tracks > 1:
+        track_seg_offsets[1:] = np.cumsum(track_n_segs[:-1])
 
-        # Load track data
-        track_ids = np.array(tracks_group['TrackID'])
-        track_parent_ids = np.array(tracks_group['ParentID'])
-        track_pdgs = np.array(tracks_group['PDG'])
-        track_seg_offsets = np.array(tracks_group['SegmentOffset'])
-        track_n_segs = np.array(tracks_group['NSegments'])
-        track_n_cherenkov = np.array(tracks_group['NCherenkov'])
-        # Get particle names from PDG codes
-        track_names = [pdg_to_name.get(int(pdg), f'PDG{int(pdg)}') for pdg in track_pdgs]
+    # Segment geometry in meters (seg file stores cm)
+    seg_start_x = np.asarray(seg_data['start_x'], dtype=np.float32) / 100.0
+    seg_start_y = np.asarray(seg_data['start_y'], dtype=np.float32) / 100.0
+    seg_start_z = np.asarray(seg_data['start_z'], dtype=np.float32) / 100.0
+    seg_end_x = np.asarray(seg_data['end_x'], dtype=np.float32) / 100.0
+    seg_end_y = np.asarray(seg_data['end_y'], dtype=np.float32) / 100.0
+    seg_end_z = np.asarray(seg_data['end_z'], dtype=np.float32) / 100.0
 
-        # Load segment data (positions in cm, convert to meters for display)
-        seg_start_x = np.array(segs_group['StartX']) / 100.0
-        seg_start_y = np.array(segs_group['StartY']) / 100.0
-        seg_start_z = np.array(segs_group['StartZ']) / 100.0
-        seg_end_x = np.array(segs_group['EndX']) / 100.0
-        seg_end_y = np.array(segs_group['EndY']) / 100.0
-        seg_end_z = np.array(segs_group['EndZ']) / 100.0
-
-        print(f"  Found {len(track_ids)} meaningful tracks with {len(seg_start_x)} segments")
+    print(f"  Found {n_tracks} meaningful tracks with {seg_start_x.size} segments")
 
 if has_segment_data and len(track_ids) > 0:
     MIN_SEGMENTS_TO_DISPLAY = 5  # Only show tracks with significant trajectory
@@ -748,76 +787,7 @@ if has_segment_data and len(track_ids) > 0:
 
     print(f"  Created {len(segment_trace_indices)} track segment traces")
 else:
-    print("  No track segment data found in HDF5 file")
-
-print()
-
-if has_voxel_data and len(voxel_flat_indices) > 0:
-    print(f"  Found voxel data: {len(voxel_flat_indices)} total voxels")
-
-    # Convert flat indices to positions
-    voxel_config = VoxelGridConfig()
-    voxel_positions = flat_index_to_position(voxel_flat_indices, voxel_config)
-
-    # Build arrays for scatter plot with colors per label
-    all_voxel_x = []
-    all_voxel_y = []
-    all_voxel_z = []
-    all_voxel_colors = []
-    all_voxel_sizes = []
-    all_voxel_text = []
-
-    for particle_idx in range(n_particles):
-        start = voxel_offsets[particle_idx]
-        end = start + voxel_n_nonzero[particle_idx]
-
-        particle_positions = voxel_positions[start:end]
-        particle_counts = voxel_counts[start:end]
-        particle_color = colors_palette[particle_idx % len(colors_palette)]
-
-        # Get particle info for hover text
-        category_name = particle_info[particle_idx]['category']
-
-        for i, (pos, count) in enumerate(zip(particle_positions, particle_counts)):
-            all_voxel_x.append(pos[0])
-            all_voxel_y.append(pos[1])
-            all_voxel_z.append(pos[2])
-            all_voxel_colors.append(particle_color)
-            # Scale marker size by log of photon count
-            size = np.log10(count + 1) * 3 + 2
-            all_voxel_sizes.append(size)
-            all_voxel_text.append(
-                f"Particle {particle_idx}: {category_name}<br>"
-                f"Position: ({pos[0]:.3f}, {pos[1]:.3f}, {pos[2]:.3f}) m<br>"
-                f"Photons: {count}"
-            )
-
-        print(f"    Particle {particle_idx} ({category_name}): {voxel_n_nonzero[particle_idx]} voxels, {np.sum(particle_counts)} photons")
-
-    # Add voxel trace
-    fig.add_trace(
-        go.Scatter3d(
-            x=all_voxel_x,
-            y=all_voxel_y,
-            z=all_voxel_z,
-            mode='markers',
-            marker=dict(
-                size=all_voxel_sizes,
-                color=all_voxel_colors,
-                opacity=0.8,
-                line=dict(width=0)
-            ),
-            text=all_voxel_text,
-            hoverinfo='text',
-            name='Voxels',
-            showlegend=False,
-            visible=False
-        )
-    )
-    voxel_trace_index = len(fig.data) - 1
-    print(f"  Total: {len(all_voxel_x)} voxels visualized")
-else:
-    print("  No voxel data found in HDF5 file")
+    print("  No track segment data available")
 
 print()
 
@@ -867,7 +837,7 @@ detector_trace_index = len(fig.data) - 1
 slider_steps = []
 
 # Track indices for main visualization traces
-# Trace order: Arrows..., "All", "By Particle", Individual particles..., voxel (if present), segments..., detector surface, detector points
+# Trace order: Arrows..., "All", "By Particle", Individual particles..., segments..., detector surface, detector points
 n_arrow_traces = len(arrow_trace_indices)
 all_trace_index = n_arrow_traces  # After arrow traces
 by_particle_trace_index = n_arrow_traces + 1  # After "All"
@@ -895,17 +865,6 @@ if len(segment_trace_indices) > 0:
         method="update",
         args=[{"visible": step_vis}],
         label="Track Segments"
-    ))
-
-# Step: "Voxels" (if available) - show voxels and detector surface
-if voxel_trace_index is not None:
-    step_vis = [False] * len(fig.data)
-    step_vis[voxel_trace_index] = True  # Voxel trace
-    step_vis[detector_surface_index] = True  # Show detector surface
-    slider_steps.append(dict(
-        method="update",
-        args=[{"visible": step_vis}],
-        label="Voxels"
     ))
 
 # Step: "By Particle" - show discrete color-coded sensors and detector surface
@@ -1004,8 +963,8 @@ fig.update_layout(
 )
 
 # Save to HTML
-root_basename = os.path.splitext(os.path.basename(hdf5_file))[0]
-filename = f'particle_sensors_{root_basename}_event{event_idx}.html'
+root_basename = dataset_root.name if dataset_root.name else 'dataset'
+filename = f'particle_sensors_{root_basename}_file{file_index:04d}_event{event_idx:03d}.html'
 
 # Use output directory if specified
 if output_dir is not None:

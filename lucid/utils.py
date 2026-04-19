@@ -494,11 +494,9 @@ def superimpose_multiple_events(charges_list, times_list):
     return combined_charges, combined_times
 
 # ---------------------------------------------------------------------------
-# The following I/O functions were moved to lucid.sources.event_io in Phase 2.5:
+# The following I/O functions live in lucid.sources.event_io (Phase 2.5+):
 #   save_single_event, load_single_event, get_random_root_entry_index,
 #   read_photon_data_from_root, get_pdg_code, get_particle_mass,
-#   save_single_event_with_extended_info, save_single_event_with_particle_info,
-#   merge_event_files, read_multi_folder_events, read_event_file,
 #   extract_particle_properties, analyze_loaded_particle, analyze_event_directory,
 #   PARTICLE_MASSES, momentum_to_angles_and_energy, analyze_event_kinematics,
 #   print_event_kinematics, full_to_sparse (copy), sparse_to_full (copy)
@@ -512,11 +510,6 @@ from lucid.sources.event_io import (               # noqa: F401
     read_photon_data_from_root,
     get_pdg_code,
     get_particle_mass,
-    save_single_event_with_extended_info,
-    save_single_event_with_particle_info,
-    merge_event_files,
-    read_multi_folder_events,
-    read_event_file,
     extract_particle_properties,
     analyze_loaded_particle,
     analyze_event_directory,

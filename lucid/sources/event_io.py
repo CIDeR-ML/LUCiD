@@ -333,95 +333,6 @@ def generate_events_from_root(event_simulator, root_file_path, output_dir='event
     return saved_files
 
 
-def generate_multi_folder_events(event_simulator, root_file_path, folder_names, events_per_folder,
-                               n_rings_list=None, pion_root_file_path=None,
-                               sensor_params=None, max_sensors_per_cell=4, batch_size=100):
-    """
-    Generate events across multiple folders, each with sequentially numbered events.
-
-    Parameters
-    ----------
-    root_file_path : str
-        Path to the ROOT file for muons
-    folder_names : list of str
-        List of folder names to create and populate with events
-    events_per_folder : int or list of int
-        Number of events to generate per folder. Can be a single int for all folders
-        or a list of ints matching the length of folder_names
-    n_rings_list : list of int, optional
-        Number of rings for each folder, by default None (1 ring for all folders)
-    pion_root_file_path : str, optional
-        Path to ROOT file for pions, required if n_rings > 1 in any folder, by default None
-    sensor_params : tuple, optional
-        Sensor parameters tuple passed to event_simulator, by default None
-    max_sensors_per_cell : int, optional
-        Maximum sensors per cell, by default 4
-    batch_size : int, optional
-        Number of events to accumulate before saving in parallel, by default 100
-
-    Returns
-    -------
-    dict
-        Dictionary mapping folder names to lists of saved file paths
-    """
-    import os
-
-    # Validate and normalize inputs
-    if isinstance(events_per_folder, int):
-        events_per_folder = [events_per_folder] * len(folder_names)
-    elif len(events_per_folder) != len(folder_names):
-        raise ValueError("If events_per_folder is a list, it must match the length of folder_names")
-
-    if n_rings_list is None:
-        n_rings_list = [1] * len(folder_names)
-    elif len(n_rings_list) != len(folder_names):
-        raise ValueError("If n_rings_list is provided, it must match the length of folder_names")
-
-    # Check if pion file is needed but not provided
-    if any(n_rings > 1 for n_rings in n_rings_list) and pion_root_file_path is None:
-        raise ValueError("pion_root_file_path is required when n_rings > 1 in any folder")
-
-    # Create base directory if it doesn't exist
-    base_dir = os.path.dirname(folder_names[0])
-    if base_dir and not os.path.exists(base_dir):
-        os.makedirs(base_dir, exist_ok=True)
-
-    # Generate events for each folder
-    results = {}
-    for folder_idx, folder_name in enumerate(folder_names):
-        n_events = events_per_folder[folder_idx]
-        n_rings = n_rings_list[folder_idx]
-
-        print(f"\n{'-'*80}")
-        print(f"Processing folder {folder_idx+1}/{len(folder_names)}: {folder_name}")
-        print(f"Generating {n_events} events with {n_rings} ring(s)")
-        print(f"{'-'*80}\n")
-
-        saved_files = generate_events_from_root(
-            event_simulator=event_simulator,
-            root_file_path=root_file_path,
-            output_dir=folder_name,
-            n_events=n_events,
-            n_rings=n_rings,
-            pion_root_file_path=pion_root_file_path,
-            sensor_params=sensor_params,
-            max_sensors_per_cell=max_sensors_per_cell,
-            batch_size=batch_size
-        )
-
-        results[folder_name] = saved_files
-
-    # Print summary
-    print("\nGeneration Summary:")
-    print("=" * 50)
-    total_events = sum(len(files) for files in results.values())
-    print(f"Total events generated: {total_events}")
-    for folder_name, files in results.items():
-        print(f"  - {folder_name}: {len(files)} events")
-
-    return results
-
-
 def read_photon_data_from_photonsim(root_file_path, entry_index):
     """
     Read photon data from a PhotonSim ROOT file for a specific entry.
@@ -558,8 +469,19 @@ def read_particle_data_from_photonsim(root_file_path, entry_index, include_track
             'Segment_StartX', 'Segment_StartY', 'Segment_StartZ',
             'Segment_EndX', 'Segment_EndY', 'Segment_EndZ',
             'Segment_DirX', 'Segment_DirY', 'Segment_DirZ',
-            'Segment_Edep', 'Segment_Time'
+            'Segment_Edep', 'Segment_Time',
+            'Segment_BetaStart', 'Segment_NCherenkov',
         ])
+
+        available = set(tree.keys())
+        required_new = {'Segment_BetaStart', 'Segment_NCherenkov'}
+        missing = required_new - available
+        if missing:
+            raise ValueError(
+                f"PhotonSim ROOT file is missing branches {sorted(missing)}. "
+                f"Upgrade to PhotonSim branch 'add-per-segment-beta-ncherenkov' "
+                f"(commit 1ef5ace or later)."
+            )
 
     tree_data = tree.arrays(branches_to_read, entry_start=entry_index, entry_stop=entry_index+1, library='np')
 
@@ -721,320 +643,84 @@ def read_particle_data_from_photonsim(root_file_path, entry_index, include_track
             'dir_z': tree_data['Segment_DirZ'][0],
             'edep': tree_data['Segment_Edep'][0],
             'time': tree_data['Segment_Time'][0],
+            'beta_start': tree_data['Segment_BetaStart'][0],
+            'n_cherenkov': tree_data['Segment_NCherenkov'][0],
             'n_segments': n_segments
         }
+
+        edep_len = len(segments['edep'])
+        assert len(segments['beta_start']) == edep_len, (
+            f"Segment_BetaStart length {len(segments['beta_start'])} != Segment_Edep {edep_len}")
+        assert len(segments['n_cherenkov']) == edep_len, (
+            f"Segment_NCherenkov length {len(segments['n_cherenkov'])} != Segment_Edep {edep_len}")
 
         result['meaningful_tracks'] = meaningful_tracks
         result['segments'] = segments
 
     return result
 
-def generate_events_from_photonsim(event_simulator, particles_dict, sensor_params, output_dir=None,
-                                  n_events=None, batch_size=100, master_seed=None,
-                                  merge_output=True, merged_filename='merged_events.h5'):
-    """
-    Generate and save events from PhotonSim ROOT files for multiple particle types.
-    Events are saved with sequential numbering: event_0.h5, event_1.h5, etc.
-    Each event contains multiple particles sharing the same vertex but with independent track parameters.
-
-    Parameters
-    ----------
-    event_simulator : function
-        The event simulation function to use
-    particles_dict : dict
-        Dictionary mapping particle types to ROOT file paths
-        Example: {'mu-': 'path/to/muon.root', 'pi-': 'path/to/pion.root'}
-    sensor_params: tuple
-        scattering length, reflection rate, absorption length and gumbel_softmax
-    output_dir : str, optional
-        Directory to save output files, by default 'events'
-    n_events : int, optional
-        Number of events to generate, by default None
-    batch_size : int, optional
-        Number of events to accumulate before saving in parallel, by default 100
-    master_seed : int, optional
-        Random seed for JAX PRNG key generation. If None, generates a random seed based on current time, by default None
-    merge_output : bool, optional
-        Whether to merge individual event files into a single HDF5 file, by default True
-    merged_filename : str, optional
-        Name of the merged output file (only used if merge_output=True), by default 'merged_events.h5'
-
-    Returns
-    -------
-    list or str
-        List of saved file paths, or path to merged file if merge_output=True
-    """
-    from lucid.detector_params import ParticleParams
-    from lucid.sources.calibration_sources import generate_random_direction, generate_random_vertex
-    pass  # save_single_event_with_extended_info and merge_event_files are now local
-    import uproot
-    import concurrent.futures
-    import time
-    import numpy as np
-
-    # Generate random seed based on time if not provided
-    if master_seed is None:
-        master_seed = int(time.time() * 1000000) % (2**32)
-        print(f"Generated random master seed from time: {master_seed}")
-    else:
-        print(f"Using provided master seed: {master_seed}")
-
-    # Create output directory if it doesn't exist
-    os.makedirs(output_dir, exist_ok=True)
-
-    # Open each ROOT file and get number of entries
-    num_entries = {}
-    particle_types = list(particles_dict.keys())
-
-    print(f"Loading ROOT files for {len(particle_types)} particle types:")
-    for particle_type, root_file_path in particles_dict.items():
-        root_file = uproot.open(root_file_path)
-        tree = root_file['OpticalPhotons']
-        num_entries[particle_type] = tree.num_entries
-        print(f"  - {particle_type}: {num_entries[particle_type]} entries in {root_file_path}")
-        root_file.close()
-
-    # Determine number of events to generate
-    if n_events is None:
-        # Use the minimum number of entries across all particle types
-        n_events = min(num_entries.values())
-        print(f"No n_events specified, using minimum entries: {n_events}")
-
-    print(f"\nGenerating {n_events} events with {len(particle_types)} particles each...")
-    print(f"Using batch size of {batch_size} events for multithreaded I/O")
-    print(f"Saving events to directory: {output_dir}")
-
-    saved_files = []
-
-    # Create batches
-    num_batches = (n_events + batch_size - 1) // batch_size
-
-    # Process each batch
-    for batch_idx in range(num_batches):
-        start_idx = batch_idx * batch_size
-        end_idx = min(start_idx + batch_size, n_events)
-        batch_size_actual = end_idx - start_idx
-
-        print(f"Processing batch {batch_idx+1}/{num_batches} (events {start_idx} to {end_idx-1})")
-
-        # Lists to accumulate batch data
-        batch_data = []
-        batch_track_params = []
-        batch_sensor_params = []
-        batch_filenames = []
-        batch_indices = []
-
-        # Process each entry in the current batch
-        for event_idx in tqdm(range(start_idx, end_idx), desc=f"Generating batch {batch_idx+1}", unit="event"):
-            # Initialize master random key for this event using the master seed
-            master_key = jax.random.PRNGKey(master_seed + event_idx)
-
-            # Generate a random vertex (shared by all particles in this event)
-            vertex_key, master_key = jax.random.split(master_key)
-            vertex = generate_random_vertex(vertex_key)
-
-            # Lists to collect data for all particles in this event
-            event_charges_list = []
-            event_times_list = []
-            event_particle_types = []
-            event_energies = []
-            event_directions = []
-            event_original_indices = []
-
-            # Process each particle type
-            for particle_type in particle_types:
-                root_file_path = particles_dict[particle_type]
-
-                # Sample a random entry index for this particle
-                sample_key, master_key = jax.random.split(master_key)
-                entry_index = int(jax.random.randint(sample_key, (), 0, num_entries[particle_type]))
-
-                # Read photon data from PhotonSim at the random index
-                photon_data = read_photon_data_from_photonsim(root_file_path, entry_index)
-
-                # Set up parameters
-                particle_energy = photon_data['energy']
-
-                # Generate random direction for this particle
-                dir_key, master_key = jax.random.split(master_key)
-                direction = generate_random_direction(dir_key)
-
-                # Create parameters
-                track_params = ParticleParams.from_cartesian(
-                    energy=particle_energy,
-                    position=vertex,
-                    direction=direction,
-                    t0=0.0,
-                )
-
-                # Get a key for the simulation
-                sim_key, master_key = jax.random.split(master_key)
-
-                # Process photon data
-                photon_origins = photon_data['photon_origins']
-                photon_directions = photon_data['photon_directions']
-                photon_times = photon_data['photon_times']
-                N = len(photon_origins)
-
-                # the number 1_000_000 is hard coded also in _simulation_core
-                padding_size = max(0, 1_000_000-N)
-
-                # Pad the origins array (2D array with shape [N,3])
-                photon_data['photon_origins'] = jnp.pad(photon_origins, ((0, padding_size), (0, 0)),
-                                                    mode='constant', constant_values=0)
-
-                # Pad the directions array with a default unit vector [0,0,1]
-                default_direction = jnp.array([0.0, 0.0, 1.0])
-                padding_directions = jnp.tile(default_direction, (padding_size, 1))
-                if padding_size > 0:
-                    photon_data['photon_directions'] = jnp.concatenate([photon_directions, padding_directions], axis=0)
-                else:
-                    photon_data['photon_directions'] = photon_directions
-
-                # Pad the times array (1D array with shape [N])
-                photon_data['photon_times'] = jnp.pad(photon_times, (0, padding_size),
-                                                      mode='constant', constant_values=0)
-
-                # Pad wavelengths if present (1D array with shape [N])
-                if 'wavelengths' in photon_data:
-                    photon_data['wavelengths'] = jnp.pad(
-                        photon_data['wavelengths'], (0, padding_size),
-                        mode='constant', constant_values=DEFAULT_WAVELENGTH_NM)
-
-                photon_data['N'] = N
-
-                # Run simulation for this particle
-                charges, times = event_simulator(track_params, sensor_params, sim_key, photon_data)
-
-                # Collect data for this particle
-                event_charges_list.append(charges)
-                event_times_list.append(times)
-                event_particle_types.append(particle_type)
-                event_energies.append(particle_energy)
-                event_directions.append(direction.tolist())
-                event_original_indices.append(entry_index)
-
-            # Create filename with sequential numbering (event_0.h5, event_1.h5, etc.)
-            event_number = event_idx
-            filename = os.path.join(output_dir, f'event_{event_number}.h5')
-
-            # Extended info with updated field names
-            extended_info = {
-                'n_particles': len(particle_types),
-                'particle_types': event_particle_types,
-                'energies': event_energies,
-                'directions': event_directions,
-                'vertex': vertex.tolist(),
-                'original_indices': event_original_indices,
-                'source': 'PhotonSim'
-            }
-
-            # Store the event data for batch processing
-            # Note: track_params is just a placeholder since we have multiple particles
-            dummy_track_params = (event_energies[0], vertex, jnp.array(event_directions[0]))
-            batch_data.append((event_charges_list, event_times_list, extended_info))
-            batch_track_params.append(dummy_track_params)
-            batch_sensor_params.append(sensor_params)
-            batch_filenames.append(filename)
-            batch_indices.append(event_number)
-
-        # Now save all the events in the batch using multithreading
-        with concurrent.futures.ThreadPoolExecutor() as executor:
-            # Create a list of future objects
-            futures = [
-                executor.submit(
-                    save_single_event_with_extended_info,
-                    data[0], data[1],  # lists of charges and times (one per particle)
-                    t_params,  # dummy track params (not used in extended save function)
-                    extended_info=data[2],  # extended info
-                    event_number=idx,
-                    filename=filename
-                )
-                for data, t_params, filename, idx in zip(
-                    batch_data, batch_track_params, batch_filenames, batch_indices
-                )
-            ]
-
-            # Collect results as they complete
-            for future in tqdm(
-                concurrent.futures.as_completed(futures),
-                desc=f"Saving batch {batch_idx+1}",
-                total=len(futures),
-                unit="file"
-            ):
-                try:
-                    saved_file = future.result()
-                    saved_files.append(saved_file)
-                except Exception as e:
-                    print(f"Error saving file: {e}")
-
-    print(f"\nSuccessfully processed {len(saved_files)} events.")
-    print(f"Each event contains {len(particle_types)} particles: {', '.join(particle_types)}")
-    print(f"All events saved to {output_dir} with sequential naming (event_0.h5, event_1.h5, ...)")
-
-    # Merge files if requested
-    if merge_output:
-        print("\nMerging individual event files...")
-        merged_path = merge_event_files(output_dir, merged_filename=merged_filename, remove_individuals=True)
-        return merged_path
-
-    return saved_files
-
-def generate_events_from_photonsim_particles(event_simulator, root_file_path, sensor_params, output_dir=None,
+def generate_events_from_photonsim_particles(event_simulator, root_file_path, sensor_params,
+                                             sensor_positions, output_dir=None,
                                              n_events=None, batch_size=100, master_seed=None,
                                              apply_smearing=False, apply_rotation=False, apply_translation=False,
-                                             detector_config_path=None, merge_output=True, merged_filename='merged_events.h5',
-                                             include_track_segments=False, include_voxels=False):
-    """
-    VMAP-OPTIMIZED VERSION: Generate and save events using batched particle processing.
+                                             detector_config_path=None,
+                                             dataset_name='unnamed_dataset', run_id=None,
+                                             file_index_start=0, detector_type='cylinder',
+                                             material='water', include_track_segments=True):
+    """Generate events from a PhotonSim ROOT file, writing v3 four-file batches.
 
-    This version dynamically determines the optimal PAD_SIZE based on the maximum photons
-    per particle in the ROOT file, then uses jax.vmap to process all particles in parallel,
-    eliminating the Python loop and achieving significant speedup.
+    For each batch of events, writes four HDF5 files under ``output_dir``:
+    ``sensor/wc_sensor_NNNN.h5``, ``inst/wc_inst_NNNN.h5``,
+    ``seg/wc_seg_NNNN.h5``, ``labl/wc_labl_NNNN.h5``. See
+    ``docs/LUCID_DATASET.md`` for the full schema.
 
     Parameters
     ----------
-    event_simulator : function
-        The event simulation function to use (should have apply_smearing parameter)
+    event_simulator : Callable
+        Per-particle simulator function.
     root_file_path : str
-        Path to PhotonSim ROOT file containing multiple primaries and labels
+        PhotonSim ROOT file path.
     sensor_params : tuple
-        scattering length, reflection rate, absorption length and gumbel_softmax
-    output_dir : str, optional
-        Directory to save output files, by default 'events'
+        Propagation parameters (scatter length, absorption length, ...).
+    sensor_positions : array-like (n_sensors, 3)
+        PMT coordinates in meters.
+    output_dir : str
+        Dataset root directory; four subdirs are created under it.
     n_events : int, optional
-        Number of events to generate, by default None (uses all entries)
-    batch_size : int, optional
-        Number of events to accumulate before saving in parallel, by default 100
+        Number of events to generate (default: all entries in the ROOT file).
+    batch_size : int
+        Number of events per v3 batch file.
     master_seed : int, optional
-        Random seed for JAX PRNG key generation. If None, generates random seed, by default None
-    apply_smearing : bool, optional
-        If True, apply smearing to PE_true and T_true to get PE_reco and T_reco, by default False
-    apply_rotation : bool, optional
-        If True, apply random rotation per primary to all photons and tracks, by default False
-    apply_translation : bool, optional
-        If True, apply random translation per event to all photons and tracks (after rotation), by default False
+        JAX PRNG seed; random if None.
+    apply_smearing, apply_rotation, apply_translation : bool
+        Transform toggles; rotation is ignored (PhotonSim handles it).
     detector_config_path : str, optional
-        Path to detector configuration JSON file (required if apply_translation=True), by default None
-    merge_output : bool, optional
-        Whether to merge individual event files into a single HDF5 file, by default True
-    merged_filename : str, optional
-        Name of the merged output file, by default 'merged_events.h5'
-
-    Returns
-    -------
-    list or str
-        List of saved file paths, or path to merged file if merge_output=True
+        Required when ``apply_translation=True``; also used for seg config
+        geometry attrs.
+    dataset_name : str
+        Provenance: dataset identifier written to every ``config/`` group.
+    run_id : str, optional
+        Provenance: unique batch identifier; auto-UUID4 if None.
+    file_index_start : int
+        Index of the first batch file in this invocation (default 0).
+    detector_type, material : str
+        Provenance: detector geometry type and medium.
+    include_track_segments : bool
+        Must be True for v3 output (seg file requires segment data). Default True.
     """
     import uproot
-    import concurrent.futures
     import time
+    import uuid
+    import subprocess
+    from pathlib import Path
     from lucid.detector_params import ParticleParams
     import numpy as np
     import json
     from lucid.utils import smear_charges_SK_like, smear_times
-    pass  # save_single_event_with_particle_info and merge_event_files are now local
-    from lucid.production.voxelize import VoxelGridConfig, voxelize_from_photon_indices, pack_voxel_data_for_hdf5
+
+    if not include_track_segments:
+        raise ValueError(
+            "v3 output requires include_track_segments=True (seg file needs segment data).")
 
     # Generate random seed if not provided
     if master_seed is None:
@@ -1043,8 +729,35 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path, se
     else:
         print(f"Using provided master seed: {master_seed}")
 
-    # Create output directory
-    os.makedirs(output_dir, exist_ok=True)
+    # Resolve run_id
+    if run_id is None:
+        run_id = str(uuid.uuid4())
+    print(f"Run id: {run_id}")
+
+    # Resolve sensor positions / n_sensors
+    sensor_positions_np = np.asarray(sensor_positions, dtype=np.float32)
+    if sensor_positions_np.ndim != 2 or sensor_positions_np.shape[1] != 3:
+        raise ValueError(
+            f"sensor_positions must have shape (n_sensors, 3); got {sensor_positions_np.shape}")
+    n_sensors = int(sensor_positions_np.shape[0])
+
+    # Resolve git commit for provenance (fallback to env or 'unknown')
+    try:
+        lucid_repo_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        git_commit = subprocess.check_output(
+            ['git', 'rev-parse', 'HEAD'],
+            cwd=lucid_repo_root,
+            stderr=subprocess.DEVNULL,
+        ).decode().strip()
+    except Exception:
+        git_commit = os.environ.get('GIT_COMMIT', 'unknown')
+
+    # Create output directory tree
+    out_root = Path(output_dir)
+    for subdir in ('sensor', 'inst', 'seg', 'labl'):
+        (out_root / subdir).mkdir(parents=True, exist_ok=True)
+
+    source_file_abs = os.path.abspath(root_file_path)
 
     # Open ROOT file and get number of entries
     print(f"Loading ROOT file: {root_file_path}")
@@ -1383,33 +1096,6 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path, se
                 if total_photons_all_particles > 0:
                     overall_light_containment = float(total_photons_inside_all_particles) / total_photons_all_particles
 
-            # ========================================================================
-            # VOXELIZATION (optional)
-            # Convert photon positions to sparse voxel representation
-            # ========================================================================
-            packed_voxel_data = None
-            if include_voxels:
-                print(f"    Voxelizing photon positions...", flush=True)
-                voxel_start_time = time.time()
-
-                # Get photon indices for each particle
-                particle_photon_indices_list = [particle['photon_indices'] for particle in particles]
-
-                # Voxelize using positions in meters
-                voxel_config = VoxelGridConfig()
-                voxel_data = voxelize_from_photon_indices(
-                    all_photon_origins_np,  # Already in meters
-                    particle_photon_indices_list,
-                    voxel_config
-                )
-
-                # Pack for HDF5 storage
-                packed_voxel_data = pack_voxel_data_for_hdf5(voxel_data)
-
-                voxel_elapsed = time.time() - voxel_start_time
-                total_voxels = np.sum(voxel_data['n_nonzero_voxels'])
-                print(f"    Voxelization: {total_voxels:,} voxels in {voxel_elapsed:.3f}s", flush=True)
-
             # Create filename
             event_number = event_idx
             filename = os.path.join(output_dir, f'event_{event_number}.h5')
@@ -1434,71 +1120,90 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path, se
                 'include_track_segments': include_track_segments
             }
 
-            # Add voxel data if included
-            if packed_voxel_data is not None:
-                extended_info['voxel_n_nonzero'] = packed_voxel_data['voxel_n_nonzero']
-                extended_info['voxel_offsets'] = packed_voxel_data['voxel_offsets']
-                extended_info['voxel_flat_indices'] = packed_voxel_data['voxel_flat_indices']
-                extended_info['voxel_counts'] = packed_voxel_data['voxel_counts']
-
             # Add meaningful tracks and segments if requested
             if include_track_segments and 'meaningful_tracks' in particle_data:
                 extended_info['meaningful_tracks'] = particle_data['meaningful_tracks']
                 extended_info['segments'] = particle_data['segments']
 
             # Store for batch processing
+            extended_info['source_event_idx'] = int(event_number)
             batch_data.append(extended_info)
-            batch_filenames.append(filename)
             batch_indices.append(event_number)
 
             event_total_time = time.time() - event_start_time
             event_times.append(event_total_time)
             print(f"    Event total time: {event_total_time:.2f}s", flush=True)
 
-        # Save all events in the batch using multithreading
-        print(f"Saving batch {batch_idx+1}...")
+        # Write this batch as four v3 files (sensor/inst/seg/labl)
+        print(f"Saving batch {batch_idx+1} as v3 four-file group...")
         t_save_start = time.time()
-        with concurrent.futures.ThreadPoolExecutor() as executor:
-            futures = [
-                executor.submit(
-                    save_single_event_with_particle_info,
-                    data,
-                    event_number=idx,
-                    filename=filename
-                )
-                for data, filename, idx in zip(batch_data, batch_filenames, batch_indices)
-            ]
 
-            for future in tqdm(
-                concurrent.futures.as_completed(futures),
-                desc=f"Saving batch {batch_idx+1}",
-                total=len(futures),
-                unit="file"
-            ):
-                try:
-                    saved_file = future.result()
-                    saved_files.append(saved_file)
-                except Exception as e:
-                    import traceback
-                    print(f"Error saving file: {e}")
-                    traceback.print_exc()
+        file_idx = int(file_index_start + batch_idx)
+        sensor_path = out_root / 'sensor' / f'wc_sensor_{file_idx:04d}.h5'
+        inst_path = out_root / 'inst' / f'wc_inst_{file_idx:04d}.h5'
+        seg_path = out_root / 'seg' / f'wc_seg_{file_idx:04d}.h5'
+        labl_path = out_root / 'labl' / f'wc_labl_{file_idx:04d}.h5'
+
+        batch_src_idx = np.asarray(batch_indices, dtype=np.uint32)
+
+        config_meta = {
+            'n_events': len(batch_data),
+            'git_commit': git_commit,
+            'run_id': run_id,
+            'dataset_name': dataset_name,
+            'file_index': file_idx,
+            'source_file': source_file_abs,
+            'lucid_master_seed': int(master_seed),
+            'photonsim_seed': -1,
+            'n_sensors': n_sensors,
+            'detector_type': detector_type,
+            'material': material,
+            'smearing_applied': bool(apply_smearing),
+            'smearing_charge_function': 'SK_like' if apply_smearing else 'none',
+            'smearing_time_function': 'SK_like' if apply_smearing else 'none',
+            'label_names': ['category'],
+        }
+
+        # Optional geometry hints for seg config
+        if detector_bounds is not None:
+            config_meta['detector_shape'] = detector_bounds['type']
+            if detector_bounds['type'] == 'cylinder':
+                config_meta['detector_radius'] = float(detector_bounds['radius'])
+                config_meta['detector_half_height'] = float(detector_bounds['height']) / 2.0
+                config_meta['detector_axis'] = np.array([0.0, 0.0, 1.0], dtype=np.float32)
+            elif detector_bounds['type'] == 'sphere':
+                config_meta['detector_radius'] = float(detector_bounds['radius'])
+            elif detector_bounds['type'] == 'box':
+                l, w, h = detector_bounds['length'], detector_bounds['width'], detector_bounds['height']
+                config_meta['detector_bbox'] = np.array(
+                    [-l/2, l/2, -w/2, w/2, -h/2, h/2], dtype=np.float32)
+
+        with h5py.File(sensor_path, 'w') as fs, h5py.File(inst_path, 'w') as fi, \
+                h5py.File(seg_path, 'w') as fg, h5py.File(labl_path, 'w') as fl:
+            write_sensor_config_v3(fs, config_meta, batch_src_idx, sensor_positions_np)
+            write_inst_config_v3(fi, config_meta, batch_src_idx, sensor_positions_np)
+            write_seg_config_v3(fg, config_meta, batch_src_idx)
+            write_labl_config_v3(fl, config_meta, batch_src_idx)
+
+            for seq_idx, evdict in enumerate(batch_data):
+                save_sensor_event_v3(fs, evdict, seq_idx)
+                save_inst_event_v3(fi, evdict, seq_idx)
+                save_seg_event_v3(fg, evdict, seq_idx)
+                save_labl_event_v3(fl, evdict, seq_idx)
+
+        saved_files.extend([str(sensor_path), str(inst_path), str(seg_path), str(labl_path)])
 
         t_save = time.time() - t_save_start
         print(f"Batch {batch_idx+1} save time: {t_save:.3f}s\n")
 
-    print(f"\nSuccessfully processed {len(saved_files)} events with VMAP-OPTIMIZED particle-based structure.")
-    print(f"All events saved to {output_dir}")
+    print(f"\nSuccessfully wrote {num_batches} batches "
+          f"({len(saved_files)} files total) to {output_dir}/"
+          f"{{sensor,inst,seg,labl}}/")
 
     # Print average event time
     if event_times:
         avg_time = sum(event_times) / len(event_times)
         print(f"Average event processing time: {avg_time:.3f}s")
-
-    # Merge files if requested
-    if merge_output:
-        print("\nMerging individual event files...")
-        merged_path = merge_event_files(output_dir, merged_filename=merged_filename, remove_individuals=True)
-        return merged_path
 
     return saved_files
 
@@ -1865,552 +1570,6 @@ def get_particle_mass(particle_type):
         return mass_map['pi0']
     else:
         raise ValueError(f"Unknown particle type: {particle_type}")
-
-def save_single_event_with_extended_info(charges, times, params, extended_info=None, event_number=0, filename=None):
-    """
-    Save a single event to an HDF5 file with the following structure:
-    - PDG (shape N, ): The PDG code of each track (particle)
-    - Q (shape N, L): The observed charge for each track in each PMT
-    - Q_tot (shape N, ): The total observed charge for each track
-    - T (shape N, L): The observed time for each track in each PMT
-    - P (shape N, 3): The 3D particle momentum
-    - V (shape N, 3): The 3D origin of each particle
-
-    Where N is the number of tracks and L is the number of sensors.
-    """
-    # If no filename is provided, generate one
-    if filename is None:
-        filename = f'event_{event_number}.h5'
-
-    # Get number of tracks and detectors
-    n_tracks = extended_info['n_particles']
-    n_detectors = charges[0].shape[0]  # Assuming all charge arrays have the same shape
-
-    # Create PDG array - use standard PDG codes
-    pdg_array = jnp.array([get_pdg_code(pt) for pt in extended_info['particle_types']])
-
-    # Create Q array (charge for each track in each PMT)
-    q_array = jnp.zeros((n_tracks, n_detectors))
-    for i in range(n_tracks):
-        q_array = q_array.at[i].set(charges[i])
-
-    # Calculate Q_tot (total observed charge for each track)
-    q_tot = jnp.sum(q_array, axis=1)
-
-    # Create T array (time for each track in each PMT) - same shape as Q
-    t_array = jnp.zeros((n_tracks, n_detectors))
-    for i in range(n_tracks):
-        t_array = t_array.at[i].set(times[i])
-
-    # Create momentum array
-    p_array = jnp.zeros((n_tracks, 3))
-    for i in range(n_tracks):
-        energy = extended_info['energies'][i]
-        direction = jnp.array(extended_info['directions'][i])
-
-        # For relativistic particles, we need to convert energy to momentum
-        mass = get_particle_mass(extended_info['particle_types'][i])
-
-        # Calculate momentum magnitude: |p| = sqrt(E^2 - m^2)
-        # E_kinetic = E_total - m, so E_total = E_kinetic + m
-        total_energy = energy + mass
-        momentum_mag = jnp.sqrt(total_energy**2 - mass**2)
-
-        # Calculate momentum vector
-        p_array = p_array.at[i].set(momentum_mag * direction)
-
-    # Create vertex array (same vertex for all tracks)
-    vertex = jnp.array(extended_info['vertex'])
-    v_array = jnp.tile(vertex, (n_tracks, 1))
-
-    with h5py.File(filename, 'w') as f:
-        # Save data in the requested format
-        f.create_dataset('PDG', data=pdg_array)  # shape (N,)
-        f.create_dataset('Q', data=q_array)      # shape (N, L)
-        f.create_dataset('Q_tot', data=q_tot)    # shape (N,)
-        f.create_dataset('T', data=t_array)      # shape (N, L)
-        f.create_dataset('P', data=p_array)      # shape (N, 3)
-        f.create_dataset('V', data=v_array)      # shape (N, 3)
-
-        # Also save event number for reference
-        f.create_dataset('event_number', data=event_number)
-
-    return filename
-
-def save_single_event_with_particle_info(extended_info, event_number=0, filename=None):
-    """
-    Save a single event with categorized particle structure to an HDF5 file.
-
-    This function saves events generated from PhotonSim where photons are classified
-    by particle genealogy into categories (Primary, DecayElectron, Gamma, SecondaryPion).
-
-    The HDF5 structure includes:
-
-    Event Metadata:
-    - event_number: Event index
-    - n_particles: Number of categorized particles
-    - t0: Event time offset (ns), sampled U(-15, 15)
-
-    Reconstructed Sensor Data:
-    - PE (N_sensors,): Observed photoelectrons
-    - T (N_sensors,): Observed first-hit time (ns)
-
-    Sensor Data by Categorized Particle:
-    - PE_per_particle (n_particles, N_sensors): True PE per particle per sensor
-    - T_per_particle (n_particles, N_sensors): True first-hit time per particle
-
-    Categorized Particles Metadata:
-    - Particle_Category (n_particles,): Category ID (0-3)
-    - Particle_CategorizedGenealogy: Ancestry chain of categorized particles
-    - Particle_TrackGenealogy: Full G4 track ID ancestry (optional)
-
-    Track Information (optional):
-    - TrackID, ParentID, PDG, InitialEnergy, NCherenkov, SegmentOffset, NSegments
-
-    Segments (optional):
-    - Start/End positions, Direction, Edep, Time
-
-    Voxel data (sparse representation):
-    - voxel_n_nonzero, voxel_offsets, voxel_flat_indices, voxel_counts
-
-    Parameters
-    ----------
-    extended_info : dict
-        Dictionary containing event information
-    event_number : int, optional
-        Event number, by default 0
-    filename : str, optional
-        Output filename, by default None (generates event_{number}.h5)
-
-    Returns
-    -------
-    str
-        Path to saved file
-    """
-
-    # If no filename provided, generate one
-    if filename is None:
-        filename = f'event_{event_number}.h5'
-
-    n_particles = extended_info['n_particles']
-    particles = extended_info['particles']
-    PE_per_particle = extended_info['PE_per_particle']
-    T_per_particle = extended_info['T_per_particle']
-    PE = extended_info['PE_reco']  # Observed (smeared) values
-    T = extended_info['T_reco']
-    t0 = extended_info.get('t0', 0.0)  # Event time offset
-
-    # Extract category and genealogy for each particle
-    particle_categories = []
-    particle_genealogies = []
-
-    for particle in particles:
-        track_info = particle['track_info']
-        genealogy = particle['genealogy']
-
-        if track_info is not None:
-            particle_categories.append(track_info['category'])
-        else:
-            particle_categories.append(-1)
-
-        particle_genealogies.append(genealogy)
-
-    # Convert to numpy arrays
-    particle_categories = np.array(particle_categories, dtype=np.int32)
-
-    # Ensure all arrays are numpy arrays (converts JAX arrays if needed)
-    PE_per_particle = np.asarray(PE_per_particle, dtype=np.float32)
-    T_per_particle = np.asarray(T_per_particle, dtype=np.float32)
-    PE = np.asarray(PE, dtype=np.float32)
-    T = np.asarray(T, dtype=np.float32)
-
-    with h5py.File(filename, 'w') as f:
-        # Event metadata
-        f.create_dataset('event_number', data=np.int32(event_number))
-        f.create_dataset('n_particles', data=np.int32(n_particles))
-        f.create_dataset('t0', data=np.float32(t0))
-
-        # Reconstructed sensor data
-        f.create_dataset('PE', data=PE)  # (N_sensors,) - observed photoelectrons
-        f.create_dataset('T', data=T)    # (N_sensors,) - observed first-hit time
-
-        # Sensor data by categorized particle
-        f.create_dataset('PE_per_particle', data=PE_per_particle)  # (n_particles, N_sensors)
-        f.create_dataset('T_per_particle', data=T_per_particle)    # (n_particles, N_sensors)
-
-        # Categorized particles metadata
-        f.create_dataset('Particle_Category', data=particle_categories)
-
-        # Save genealogies as variable-length array
-        vlen_int_dtype = h5py.vlen_dtype(np.dtype('int32'))
-
-        # Pre-convert all genealogies to int32 arrays
-        genealogy_arrays = []
-        for g in particle_genealogies:
-            arr = np.asarray(g, dtype=np.int32)
-            if arr.ndim == 0:
-                arr = arr.reshape(1)
-            genealogy_arrays.append(arr.flatten())
-
-        # Create object array by assignment to preserve int32 dtype of inner arrays
-        genealogy_data = np.empty(len(genealogy_arrays), dtype=object)
-        for i, arr in enumerate(genealogy_arrays):
-            genealogy_data[i] = arr
-
-        f.create_dataset('Particle_CategorizedGenealogy', data=genealogy_data, dtype=vlen_int_dtype)
-
-        # Containment metrics
-        f.create_dataset('overall_light_containment', data=np.float64(extended_info['overall_light_containment']))
-        f.create_dataset('light_containment_by_particle', data=np.array(extended_info['light_containment_by_particle'], dtype=np.float64))
-
-        # Voxel data (sparse representation)
-        if 'voxel_n_nonzero' in extended_info:
-            f.create_dataset('voxel_n_nonzero', data=np.asarray(extended_info['voxel_n_nonzero'], dtype=np.int32))
-            f.create_dataset('voxel_offsets', data=np.asarray(extended_info['voxel_offsets'], dtype=np.int32))
-            f.create_dataset('voxel_flat_indices', data=np.asarray(extended_info['voxel_flat_indices'], dtype=np.int64))
-            f.create_dataset('voxel_counts', data=np.asarray(extended_info['voxel_counts'], dtype=np.int32))
-
-        # File attributes
-        f.attrs['source'] = extended_info['source']
-        f.attrs['n_particles'] = np.int32(n_particles)
-        f.attrs['n_sensors'] = np.int32(PE.shape[0])
-
-        # Save track information and segments if included
-        if extended_info.get('include_track_segments', False) and 'meaningful_tracks' in extended_info:
-            meaningful_tracks = extended_info['meaningful_tracks']
-            segments = extended_info['segments']
-
-            # Create TrackInformation group
-            tracks_group = f.create_group('TrackInformation')
-
-            # Save track-level arrays
-            n_tracks = len(meaningful_tracks)
-            tracks_group.attrs['n_tracks'] = np.int32(n_tracks)
-
-            if n_tracks > 0:
-                # Build arrays from meaningful_tracks dict
-                track_ids = np.array([t['track_id'] for t in meaningful_tracks.values()], dtype=np.int32)
-                parent_ids = np.array([t['parent_id'] for t in meaningful_tracks.values()], dtype=np.int32)
-                pdgs = np.array([t['pdg'] for t in meaningful_tracks.values()], dtype=np.int32)
-                energies = np.array([t['initial_energy'] for t in meaningful_tracks.values()], dtype=np.float32)
-                n_cherenkov = np.array([t['n_cherenkov'] for t in meaningful_tracks.values()], dtype=np.int32)
-                seg_offsets = np.array([t['segment_offset'] for t in meaningful_tracks.values()], dtype=np.int32)
-                n_segs = np.array([t['n_segments'] for t in meaningful_tracks.values()], dtype=np.int32)
-
-                tracks_group.create_dataset('TrackID', data=track_ids)
-                tracks_group.create_dataset('ParentID', data=parent_ids)
-                tracks_group.create_dataset('PDG', data=pdgs)
-                tracks_group.create_dataset('InitialEnergy', data=energies)
-                tracks_group.create_dataset('NCherenkov', data=n_cherenkov)
-                tracks_group.create_dataset('SegmentOffset', data=seg_offsets)
-                tracks_group.create_dataset('NSegments', data=n_segs)
-
-            # Create Segments group
-            segments_group = f.create_group('Segments')
-            n_segments = segments['n_segments']
-            segments_group.attrs['n_segments'] = np.int32(n_segments)
-
-            if n_segments > 0:
-                # Save segment arrays (positions in cm)
-                segments_group.create_dataset('StartX', data=np.asarray(segments['start_x'], dtype=np.float32))
-                segments_group.create_dataset('StartY', data=np.asarray(segments['start_y'], dtype=np.float32))
-                segments_group.create_dataset('StartZ', data=np.asarray(segments['start_z'], dtype=np.float32))
-                segments_group.create_dataset('EndX', data=np.asarray(segments['end_x'], dtype=np.float32))
-                segments_group.create_dataset('EndY', data=np.asarray(segments['end_y'], dtype=np.float32))
-                segments_group.create_dataset('EndZ', data=np.asarray(segments['end_z'], dtype=np.float32))
-                segments_group.create_dataset('DirX', data=np.asarray(segments['dir_x'], dtype=np.float32))
-                segments_group.create_dataset('DirY', data=np.asarray(segments['dir_y'], dtype=np.float32))
-                segments_group.create_dataset('DirZ', data=np.asarray(segments['dir_z'], dtype=np.float32))
-                segments_group.create_dataset('Edep', data=np.asarray(segments['edep'], dtype=np.float32))
-                segments_group.create_dataset('Time', data=np.asarray(segments['time'], dtype=np.float32))
-
-            # Save track genealogy for each particle if available
-            ext_genealogies = []
-            for particle in particles:
-                if 'extended_genealogy' in particle and particle['extended_genealogy'] is not None:
-                    ext_genealogies.append(np.asarray(particle['extended_genealogy'], dtype=np.int32))
-                else:
-                    ext_genealogies.append(np.array([], dtype=np.int32))
-
-            if ext_genealogies:
-                ext_gen_data = np.empty(len(ext_genealogies), dtype=object)
-                for i, arr in enumerate(ext_genealogies):
-                    ext_gen_data[i] = arr
-                f.create_dataset('Particle_TrackGenealogy', data=ext_gen_data, dtype=vlen_int_dtype)
-
-    return filename
-
-def merge_event_files(output_dir, merged_filename='merged_events.h5', remove_individuals=True):
-    """
-    Merge individual event HDF5 files into a single merged file.
-
-    Events are stored in groups: /event_0/, /event_1/, etc.
-    Each group contains: PDG, Q, Q_tot, T, P, V, event_number
-
-    Parameters
-    ----------
-    output_dir : str
-        Directory containing individual event files (event_0.h5, event_1.h5, etc.)
-    merged_filename : str, optional
-        Name of the merged output file, by default 'merged_events.h5'
-    remove_individuals : bool, optional
-        Whether to remove individual event files after merging, by default True
-
-    Returns
-    -------
-    str
-        Path to the merged file
-    """
-    import glob
-
-    # Find all event files in the directory
-    event_files = sorted(glob.glob(os.path.join(output_dir, 'event_*.h5')))
-
-    if not event_files:
-        print(f"No event files found in {output_dir}")
-        return None
-
-    print(f"Merging {len(event_files)} event files...")
-
-    merged_path = os.path.join(output_dir, merged_filename)
-
-    # Create merged file
-    with h5py.File(merged_path, 'w') as merged_file:
-        # Store number of events as an attribute
-        merged_file.attrs['n_events'] = len(event_files)
-
-        # Process each event file
-        for event_file in tqdm(event_files, desc="Merging events", unit="file"):
-            # Extract event number from filename
-            event_name = os.path.basename(event_file)
-            event_num = int(event_name.replace('event_', '').replace('.h5', ''))
-
-            # Read the individual event file
-            with h5py.File(event_file, 'r') as f:
-                # Create a group for this event
-                event_group = merged_file.create_group(f'event_{event_num}')
-
-                # Recursively copy all datasets and groups from individual file
-                def copy_item(src, dst, name):
-                    """Recursively copy HDF5 items (datasets and groups)."""
-                    item = src[name]
-                    if isinstance(item, h5py.Dataset):
-                        dst.create_dataset(name, data=item[()])
-                    elif isinstance(item, h5py.Group):
-                        grp = dst.create_group(name)
-                        for subkey in item.keys():
-                            copy_item(item, grp, subkey)
-
-                for key in f.keys():
-                    copy_item(f, event_group, key)
-
-    print(f"Successfully merged events into: {merged_path}")
-
-    # Remove individual files if requested
-    if remove_individuals:
-        print("Removing individual event files...")
-        for event_file in tqdm(event_files, desc="Removing files", unit="file"):
-            os.remove(event_file)
-        print(f"Removed {len(event_files)} individual event files")
-
-    return merged_path
-
-def read_multi_folder_events(folder_names, max_files_per_folder=None, summary_only=True):
-    """
-    Read events from multiple folders.
-
-    Parameters
-    ----------
-    folder_names : list of str
-        List of folder names containing event files
-    max_files_per_folder : int, optional
-        Maximum number of files to read per folder, by default None (all files)
-    summary_only : bool, optional
-        Whether to print only summary statistics and not individual files, by default True
-
-    Returns
-    -------
-    dict
-        Dictionary mapping folder names to lists of data dictionaries
-    """
-    results = {}
-
-    total_events = 0
-    total_tracks = 0
-    total_muons = 0
-    total_pions = 0
-
-    print(f"\nReading events from {len(folder_names)} folders:")
-    for folder_idx, folder_name in enumerate(folder_names):
-        print(f"\n{'-'*50}")
-        print(f"Folder {folder_idx+1}/{len(folder_names)}: {folder_name}")
-        print(f"{'-'*50}")
-
-        data_list = analyze_event_directory(
-            directory=folder_name,
-            pattern="event_*.h5",
-            max_files=max_files_per_folder,
-            summary_only=summary_only
-        )
-
-        results[folder_name] = data_list
-
-        # Accumulate statistics
-        folder_tracks = sum(data['PDG'].shape[0] for data in data_list)
-        folder_muons = sum(np.sum(data['PDG'] == 13) for data in data_list)
-        folder_pions = sum(np.sum(data['PDG'] == 211) for data in data_list)
-
-        total_events += len(data_list)
-        total_tracks += folder_tracks
-        total_muons += folder_muons
-        total_pions += folder_pions
-
-    # Print overall summary
-    print("\n" + "="*60)
-    print(f"Overall Summary for {len(folder_names)} Folders")
-    print("="*60)
-    print(f"Total events: {total_events}")
-    print(f"Total tracks: {total_tracks}")
-    print(f"Total muons: {total_muons} ({total_muons/total_tracks*100:.1f}%)")
-    print(f"Total pions: {total_pions} ({total_pions/total_tracks*100:.1f}%)")
-
-    # Print folder comparison
-    print("\nFolder Comparison:")
-    print("-" * 80)
-    print(f"{'Folder':<20}{'Events':<10}{'Tracks':<10}{'Muons':<10}{'Pions':<10}")
-    print("-" * 80)
-
-    for folder_name, data_list in results.items():
-        folder_tracks = sum(data['PDG'].shape[0] for data in data_list)
-        folder_muons = sum(np.sum(data['PDG'] == 13) for data in data_list)
-        folder_pions = sum(np.sum(data['PDG'] == 211) for data in data_list)
-
-        print(f"{folder_name:<20}{len(data_list):<10}{folder_tracks:<10}{folder_muons:<10}{folder_pions:<10}")
-
-    return results
-
-def read_event_file(filename, verbose=True):
-    """
-    Read an event file in the new format and print its contents.
-
-    Parameters
-    ----------
-    filename : str
-        Path to the HDF5 file
-    verbose : bool, optional
-        Whether to print detailed information, by default True
-
-    Returns
-    -------
-    dict
-        Dictionary containing the event data
-    """
-    with h5py.File(filename, 'r') as f:
-        # Read all datasets
-        pdg = np.array(f['PDG'])
-        q = np.array(f['Q'])
-        q_tot = np.array(f['Q_tot'])
-        t = np.array(f['T'])
-        p = np.array(f['P'])
-        v = np.array(f['V'])
-
-        # Check if event_number is present
-        event_number = np.array(f['event_number']) if 'event_number' in f else None
-
-        data = {
-            'PDG': pdg,
-            'Q': q,
-            'Q_tot': q_tot,
-            'T': t,
-            'P': p,
-            'V': v,
-            'event_number': event_number,
-            'filename': filename
-        }
-
-    # Print information if verbose
-    if verbose:
-        print(f"\n{'='*50}")
-        print(f"File: {os.path.basename(filename)}")
-        if event_number is not None:
-            print(f"Event Number: {event_number}")
-        print(f"{'='*50}")
-
-        n_tracks = pdg.shape[0]
-        n_detectors = q.shape[1]
-
-        print(f"Number of tracks: {n_tracks}")
-        print(f"Number of detectors: {n_detectors}")
-        print(f"\nParticle Information:")
-        print("-" * 80)
-        print(f"{'Track #':<8}{'PDG':<8}{'Q_tot':<12}{'P_mag (MeV/c)':<16}{'Direction':<25}{'Vertex':<25}")
-        print("-" * 80)
-
-        for i in range(n_tracks):
-            # Convert PDG code to particle name
-            particle = "Muon" if pdg[i] == 13 else "Pion" if pdg[i] == 211 else f"Unknown ({pdg[i]})"
-
-            # Calculate momentum magnitude
-            p_mag = np.sqrt(np.sum(p[i]**2))
-
-            # Normalize direction
-            direction = p[i] / (p_mag if p_mag > 0 else 1)
-
-            print(f"{i:<8}{particle:<8}{q_tot[i]:<12.2f}{p_mag:<16.2f}{str(direction):<25}{str(v[i]):<25}")
-
-        print("\nDetector Statistics:")
-        print(f"Total charge detected: {np.sum(q_tot):.2f}")
-        print(f"Mean charge per track: {np.mean(q_tot):.2f}")
-        print(f"Mean charge per PMT: {np.mean(np.sum(q, axis=0)):.2f}")
-        print(f"Number of PMTs with signal: {np.sum(np.sum(q, axis=0) > 0)}")
-
-        # Print Q values for each track
-        print("\nCharge Matrix (Q) - First 10 PMTs:")
-        print("-" * 80)
-        header = "Track #  "
-        for j in range(min(10, n_detectors)):
-            header += f"PMT-{j:<5} "
-        print(header)
-        print("-" * 80)
-
-        for i in range(n_tracks):
-            row = f"{i:<8}  "
-            for j in range(min(10, n_detectors)):
-                row += f"{q[i,j]:<7.2f} "
-            row += f"... (showing 10/{n_detectors} PMTs)"
-            print(row)
-
-        # Print timing information
-        print("\nTiming Information:")
-        # T is now shape (N, L) like Q
-        valid_times = t[t > 0]
-        if valid_times.size > 0:
-            print(f"Mean detection time: {np.mean(valid_times):.2f} ns")
-            print(f"Min detection time: {np.min(valid_times):.2f} ns")
-            print(f"Max detection time: {np.max(valid_times):.2f} ns")
-        else:
-            print("No valid timing data available")
-
-        # Print T values for each track (similar to Q matrix)
-        print("\nTime Matrix (T) - First 10 PMTs:")
-        print("-" * 80)
-        header = "Track #  "
-        for j in range(min(10, n_detectors)):
-            header += f"PMT-{j:<5} "
-        print(header)
-        print("-" * 80)
-
-        for i in range(n_tracks):
-            row = f"{i:<8}  "
-            for j in range(min(10, n_detectors)):
-                if t[i,j] > 0:
-                    row += f"{t[i,j]:<7.2f} "
-                else:
-                    row += f"{'--':<7} "
-            row += f"... (showing 10/{n_detectors} PMTs)"
-            print(row)
-
-    return data
 
 def extract_particle_properties(momentum, pdg_code):
     """
@@ -2813,428 +1972,405 @@ def print_event_kinematics(event_data, show_details=True):
 
 
 # ---------------------------------------------------------------------------
-# V2 format: flat sparse HDF5 (sensor file + segment file)
+# V3 format: four-file per-event-group HDF5 (sensor / inst / seg / labl).
+# See docs/LUCID_DATASET.md for the full schema.
 # ---------------------------------------------------------------------------
 
 _GZIP_OPTS = dict(compression='gzip', compression_opts=4)
+_V3_FORMAT_VERSION = 3
 
 
-def save_sensor_batch_v2(batch_events, filename, n_sensors,
-                         source='PhotonSim_Particles_VMAP',
-                         sensor_positions=None,
-                         production_meta=None):
-    """Save a batch of events to a V2 sensor file (flat sparse CSR).
+def derive_particle_idx_per_track(event_dict):
+    """Map each meaningful track to the local index of its owning particle.
 
-    Parameters
-    ----------
-    batch_events : list of dict
-        Each dict must contain:
-        - 'event_number': int
-        - 'n_particles': int
-        - 't0': float
-        - 'overall_light_containment': float
-        - 'light_containment_by_particle': array (n_particles,)
-        - 'PE_reco': array (n_sensors,) — smeared event-level PE
-        - 'T_reco': array (n_sensors,) — smeared event-level T
-        - 'PE_per_particle': array (n_particles, n_sensors)
-        - 'T_per_particle': array (n_particles, n_sensors)
-        - 'particles': list of dicts with 'track_info' and 'genealogy'
-    filename : str
-    n_sensors : int
-    sensor_positions : np.ndarray, optional
-        Shape (n_sensors, 3) PMT coordinates in meters. Stored once per file.
-    production_meta : dict, optional
-        Keys: 'detector_config', 'material', 'detector_type',
-        'smearing_applied', 'master_seed', 'root_file'.
-    source : str
-    """
-    n_events = len(batch_events)
-
-    # --- Event header arrays ---
-    ev_numbers = np.array([e['event_number'] for e in batch_events], dtype=np.uint32)
-    ev_npart = np.array([e['n_particles'] for e in batch_events], dtype=np.uint16)
-    ev_t0 = np.array([e['t0'] for e in batch_events], dtype=np.float32)
-    ev_cont = np.array([e['overall_light_containment'] for e in batch_events], dtype=np.float32)
-
-    # --- Particle metadata (flat across events) ---
-    part_event_off = [0]
-    part_cats = []
-    part_cont = []
-    gen_offsets = [0]
-    gen_data_list = []
-
-    for ev in batch_events:
-        particles = ev['particles']
-        n_p = ev['n_particles']
-        part_event_off.append(part_event_off[-1] + n_p)
-
-        for particle in particles:
-            ti = particle['track_info']
-            cat = ti['category'] if ti is not None else -1
-            part_cats.append(cat if cat >= 0 else 255)
-
-            genealogy = particle['genealogy']
-            gen_arr = np.asarray(genealogy, dtype=np.int32).flatten()
-            gen_data_list.append(gen_arr)
-            gen_offsets.append(gen_offsets[-1] + len(gen_arr))
-
-        cont_arr = np.asarray(ev['light_containment_by_particle'], dtype=np.float32)
-        part_cont.extend(cont_arr.tolist())
-
-    part_event_off = np.array(part_event_off, dtype=np.uint32)
-    part_cats = np.array(part_cats, dtype=np.uint8)
-    part_cont = np.array(part_cont, dtype=np.float32)
-    gen_offsets = np.array(gen_offsets, dtype=np.uint32)
-    gen_data = np.concatenate(gen_data_list) if gen_data_list else np.array([], dtype=np.int32)
-
-    # --- Event-level sensor hits (sparse) ---
-    ev_hit_offsets = [0]
-    ev_hit_idx_list = []
-    ev_hit_pe_list = []
-    ev_hit_t_list = []
-
-    for ev in batch_events:
-        pe = np.asarray(ev['PE_reco'], dtype=np.float32)
-        t = np.asarray(ev['T_reco'], dtype=np.float32)
-        mask = (pe > 0) | (np.isfinite(t) & (t > 0) & (t < 1e5))
-        indices = np.where(mask)[0].astype(np.uint16)
-        ev_hit_idx_list.append(indices)
-        ev_hit_pe_list.append(pe[mask])
-        ev_hit_t_list.append(np.where(np.isfinite(t[mask]), t[mask], np.float32(0.0)))
-        ev_hit_offsets.append(ev_hit_offsets[-1] + len(indices))
-
-    ev_hit_offsets = np.array(ev_hit_offsets, dtype=np.uint32)
-    ev_hit_idx = np.concatenate(ev_hit_idx_list) if ev_hit_idx_list else np.array([], dtype=np.uint16)
-    ev_hit_pe = np.concatenate(ev_hit_pe_list) if ev_hit_pe_list else np.array([], dtype=np.float32)
-    ev_hit_t = np.concatenate(ev_hit_t_list) if ev_hit_t_list else np.array([], dtype=np.float32)
-
-    # --- Per-particle sensor hits (sparse CSR) ---
-    pp_hit_offsets = [0]
-    pp_hit_idx_list = []
-    pp_hit_pe_list = []
-    pp_hit_t_list = []
-
-    for ev in batch_events:
-        pe_pp = np.asarray(ev['PE_per_particle'], dtype=np.float32)
-        t_pp = np.asarray(ev['T_per_particle'], dtype=np.float32)
-        n_p = pe_pp.shape[0]
-        for i in range(n_p):
-            mask = pe_pp[i] > 0
-            indices = np.where(mask)[0].astype(np.uint16)
-            pp_hit_idx_list.append(indices)
-            pp_hit_pe_list.append(pe_pp[i, mask])
-            # For T, use the matching mask (same sparsity pattern)
-            t_vals = t_pp[i, mask]
-            # Replace inf/nan with 0 for clean storage
-            t_vals = np.where(np.isfinite(t_vals), t_vals, np.float32(0.0))
-            pp_hit_t_list.append(t_vals)
-            pp_hit_offsets.append(pp_hit_offsets[-1] + len(indices))
-
-    pp_hit_offsets = np.array(pp_hit_offsets, dtype=np.uint32)
-    pp_hit_idx = np.concatenate(pp_hit_idx_list) if pp_hit_idx_list else np.array([], dtype=np.uint16)
-    pp_hit_pe = np.concatenate(pp_hit_pe_list) if pp_hit_pe_list else np.array([], dtype=np.float32)
-    pp_hit_t = np.concatenate(pp_hit_t_list) if pp_hit_t_list else np.array([], dtype=np.float32)
-
-    # --- Write ---
-    with h5py.File(filename, 'w') as f:
-        f.attrs['format_version'] = 2
-        f.attrs['n_events'] = n_events
-        f.attrs['n_sensors'] = n_sensors
-        f.attrs['source'] = source
-
-        # Production metadata
-        if production_meta is not None:
-            for key in ('detector_config', 'material', 'detector_type',
-                        'root_file'):
-                if key in production_meta:
-                    f.attrs[key] = str(production_meta[key])
-            if 'smearing_applied' in production_meta:
-                f.attrs['smearing_applied'] = bool(production_meta['smearing_applied'])
-            if 'master_seed' in production_meta:
-                f.attrs['master_seed'] = int(production_meta['master_seed'])
-
-        # Sensor positions (stored once per file)
-        if sensor_positions is not None:
-            f.create_dataset('sensor_positions',
-                             data=np.asarray(sensor_positions, dtype=np.float32),
-                             **_GZIP_OPTS)
-
-        # Event header
-        f.create_dataset('event_number', data=ev_numbers, **_GZIP_OPTS)
-        f.create_dataset('n_particles', data=ev_npart, **_GZIP_OPTS)
-        f.create_dataset('t0', data=ev_t0, **_GZIP_OPTS)
-        f.create_dataset('overall_containment', data=ev_cont, **_GZIP_OPTS)
-
-        # Particle metadata
-        f.create_dataset('particle_event_offset', data=part_event_off, **_GZIP_OPTS)
-        f.create_dataset('particle_category', data=part_cats, **_GZIP_OPTS)
-        f.create_dataset('particle_containment', data=part_cont, **_GZIP_OPTS)
-        f.create_dataset('genealogy_offsets', data=gen_offsets, **_GZIP_OPTS)
-        f.create_dataset('genealogy_data', data=gen_data, **_GZIP_OPTS)
-
-        # Event-level hits
-        f.create_dataset('event_hit_offsets', data=ev_hit_offsets, **_GZIP_OPTS)
-        f.create_dataset('event_hit_sensor_idx', data=ev_hit_idx, **_GZIP_OPTS)
-        f.create_dataset('event_hit_PE', data=ev_hit_pe, **_GZIP_OPTS)
-        f.create_dataset('event_hit_T', data=ev_hit_t, **_GZIP_OPTS)
-
-        # Per-particle hits
-        f.create_dataset('particle_hit_offsets', data=pp_hit_offsets, **_GZIP_OPTS)
-        f.create_dataset('particle_hit_sensor_idx', data=pp_hit_idx, **_GZIP_OPTS)
-        f.create_dataset('particle_hit_PE', data=pp_hit_pe, **_GZIP_OPTS)
-        f.create_dataset('particle_hit_T', data=pp_hit_t, **_GZIP_OPTS)
-
-        # Voxel data (optional)
-        voxel_events = [e for e in batch_events if 'voxel_n_nonzero' in e]
-        if voxel_events:
-            vox_off = [0]
-            vox_idx_list = []
-            vox_cnt_list = []
-            for ev in batch_events:
-                if 'voxel_n_nonzero' in ev:
-                    nnz = np.asarray(ev['voxel_n_nonzero'], dtype=np.int32)
-                    offsets_ev = np.asarray(ev['voxel_offsets'], dtype=np.int32)
-                    flat_idx = np.asarray(ev['voxel_flat_indices'], dtype=np.int64)
-                    counts = np.asarray(ev['voxel_counts'], dtype=np.int32)
-                    # Per-particle voxels for this event
-                    n_p = ev['n_particles']
-                    for p in range(n_p):
-                        start = int(offsets_ev[p])
-                        end = start + int(nnz[p])
-                        vox_idx_list.append(flat_idx[start:end])
-                        vox_cnt_list.append(counts[start:end])
-                        vox_off.append(vox_off[-1] + int(nnz[p]))
-                else:
-                    # No voxels for this event — add empty entries per particle
-                    for _ in range(ev['n_particles']):
-                        vox_off.append(vox_off[-1])
-
-            f.create_dataset('voxel_particle_offsets',
-                             data=np.array(vox_off, dtype=np.uint32), **_GZIP_OPTS)
-            f.create_dataset('voxel_flat_indices',
-                             data=np.concatenate(vox_idx_list) if vox_idx_list else np.array([], dtype=np.int64),
-                             **_GZIP_OPTS)
-            f.create_dataset('voxel_counts',
-                             data=np.concatenate(vox_cnt_list) if vox_cnt_list else np.array([], dtype=np.int32),
-                             **_GZIP_OPTS)
-
-    return filename
-
-
-def save_segment_batch_v2(batch_events, filename):
-    """Save a batch of events to a V2 segment file (flat arrays).
-
-    Parameters
-    ----------
-    batch_events : list of dict
-        Each dict must contain:
-        - 'event_number': int
-        - 'n_particles': int
-        - 'particles': list with 'extended_genealogy'
-        - 'meaningful_tracks': dict  (track_id -> track info)
-        - 'segments': dict with start_x, ..., time, n_segments
-    filename : str
-    """
-    n_events = len(batch_events)
-
-    ev_numbers = np.array([e['event_number'] for e in batch_events], dtype=np.uint32)
-
-    # --- Collect tracks and segments ---
-    track_event_off = [0]
-    all_track_id = []
-    all_parent_id = []
-    all_pdg = []
-    all_energy = []
-    all_ncher = []
-    seg_track_off = [0]
-
-    all_sx, all_sy, all_sz = [], [], []
-    all_ex, all_ey, all_ez = [], [], []
-    all_dx, all_dy, all_dz = [], [], []
-    all_edep, all_time = [], []
-
-    # Extended genealogy
-    total_particles = sum(e['n_particles'] for e in batch_events)
-    ext_gen_offsets = [0]
-    ext_gen_data_list = []
-
-    for ev in batch_events:
-        mt = ev.get('meaningful_tracks', {})
-        seg = ev.get('segments', {'n_segments': 0})
-
-        n_tracks = len(mt)
-        track_event_off.append(track_event_off[-1] + n_tracks)
-
-        if n_tracks > 0:
-            # Iterate in order of the dict (insertion-ordered in Python 3.7+)
-            seg_offset_base = len(all_sx)  # current segment count before this event
-            for t_info in mt.values():
-                all_track_id.append(t_info['track_id'])
-                all_parent_id.append(t_info['parent_id'])
-                all_pdg.append(t_info['pdg'])
-                all_energy.append(t_info['initial_energy'])
-                all_ncher.append(t_info['n_cherenkov'])
-
-                n_segs_this = t_info['n_segments']
-                seg_track_off.append(seg_track_off[-1] + n_segs_this)
-
-        n_segs = seg['n_segments']
-        if n_segs > 0:
-            all_sx.append(np.asarray(seg['start_x'], dtype=np.float32))
-            all_sy.append(np.asarray(seg['start_y'], dtype=np.float32))
-            all_sz.append(np.asarray(seg['start_z'], dtype=np.float32))
-            all_ex.append(np.asarray(seg['end_x'], dtype=np.float32))
-            all_ey.append(np.asarray(seg['end_y'], dtype=np.float32))
-            all_ez.append(np.asarray(seg['end_z'], dtype=np.float32))
-            all_dx.append(np.asarray(seg['dir_x'], dtype=np.float16))
-            all_dy.append(np.asarray(seg['dir_y'], dtype=np.float16))
-            all_dz.append(np.asarray(seg['dir_z'], dtype=np.float16))
-            all_edep.append(np.asarray(seg['edep'], dtype=np.float32))
-            all_time.append(np.asarray(seg['time'], dtype=np.float32))
-
-        # Extended genealogy for particles in this event
-        for particle in ev['particles']:
-            ext_gen = particle.get('extended_genealogy')
-            if ext_gen is not None:
-                arr = np.asarray(ext_gen, dtype=np.int32).flatten()
-            else:
-                arr = np.array([], dtype=np.int32)
-            ext_gen_data_list.append(arr)
-            ext_gen_offsets.append(ext_gen_offsets[-1] + len(arr))
-
-    def _concat_or_empty(arrays, dtype):
-        return np.concatenate(arrays).astype(dtype) if arrays else np.array([], dtype=dtype)
-
-    track_event_off = np.array(track_event_off, dtype=np.uint32)
-    seg_track_off = np.array(seg_track_off, dtype=np.uint32)
-    ext_gen_offsets = np.array(ext_gen_offsets, dtype=np.uint32)
-    ext_gen_data = np.concatenate(ext_gen_data_list) if ext_gen_data_list else np.array([], dtype=np.int32)
-
-    with h5py.File(filename, 'w') as f:
-        f.attrs['format_version'] = 2
-        f.attrs['n_events'] = n_events
-
-        f.create_dataset('event_number', data=ev_numbers, **_GZIP_OPTS)
-        f.create_dataset('track_event_offset', data=track_event_off, **_GZIP_OPTS)
-
-        # Track table
-        f.create_dataset('track_id', data=np.array(all_track_id, dtype=np.int32) if all_track_id else np.array([], dtype=np.int32), **_GZIP_OPTS)
-        f.create_dataset('parent_id', data=np.array(all_parent_id, dtype=np.int32) if all_parent_id else np.array([], dtype=np.int32), **_GZIP_OPTS)
-        f.create_dataset('pdg', data=np.array(all_pdg, dtype=np.int16) if all_pdg else np.array([], dtype=np.int16), **_GZIP_OPTS)
-        f.create_dataset('initial_energy', data=np.array(all_energy, dtype=np.float32) if all_energy else np.array([], dtype=np.float32), **_GZIP_OPTS)
-        f.create_dataset('n_cherenkov', data=np.array(all_ncher, dtype=np.int32) if all_ncher else np.array([], dtype=np.int32), **_GZIP_OPTS)
-        f.create_dataset('segment_offset', data=seg_track_off, **_GZIP_OPTS)
-
-        # Segment table
-        f.create_dataset('start_x', data=_concat_or_empty(all_sx, np.float32), **_GZIP_OPTS)
-        f.create_dataset('start_y', data=_concat_or_empty(all_sy, np.float32), **_GZIP_OPTS)
-        f.create_dataset('start_z', data=_concat_or_empty(all_sz, np.float32), **_GZIP_OPTS)
-        f.create_dataset('end_x', data=_concat_or_empty(all_ex, np.float32), **_GZIP_OPTS)
-        f.create_dataset('end_y', data=_concat_or_empty(all_ey, np.float32), **_GZIP_OPTS)
-        f.create_dataset('end_z', data=_concat_or_empty(all_ez, np.float32), **_GZIP_OPTS)
-        f.create_dataset('dir_x', data=_concat_or_empty(all_dx, np.float16), **_GZIP_OPTS)
-        f.create_dataset('dir_y', data=_concat_or_empty(all_dy, np.float16), **_GZIP_OPTS)
-        f.create_dataset('dir_z', data=_concat_or_empty(all_dz, np.float16), **_GZIP_OPTS)
-        f.create_dataset('edep', data=_concat_or_empty(all_edep, np.float32), **_GZIP_OPTS)
-        f.create_dataset('time', data=_concat_or_empty(all_time, np.float32), **_GZIP_OPTS)
-
-        # Extended genealogy
-        f.create_dataset('ext_genealogy_offsets', data=ext_gen_offsets, **_GZIP_OPTS)
-        f.create_dataset('ext_genealogy_data', data=ext_gen_data, **_GZIP_OPTS)
-
-    return filename
-
-
-def read_sensor_event_v2(filename, event_index, n_sensors=None):
-    """Read a single event from a V2 sensor file, returning a V1-compatible dict.
-
-    Parameters
-    ----------
-    filename : str
-    event_index : int
-        Index within this file (0-based), NOT the global event_number.
-    n_sensors : int, optional
-        If None, read from file attribute.
+    Walks the track's ``parent_id`` chain until reaching the ``track_id`` of
+    a categorized particle (the last entry of that particle's
+    ``genealogy``). Orphaned tracks (no categorized ancestor found) get -1.
 
     Returns
     -------
-    dict
-        Same keys as V1 format for compatibility:
-        PE, T, PE_per_particle, T_per_particle, n_particles,
-        Particle_Category, t0, overall_light_containment, etc.
+    np.ndarray (int32) shape (n_tracks,)
     """
+    tracks = event_dict.get('meaningful_tracks', {})
+    particles = event_dict.get('particles', [])
+
+    id_to_idx = {}
+    for i, particle in enumerate(particles):
+        gen = particle.get('genealogy') or []
+        if gen:
+            id_to_idx[int(gen[-1])] = i
+
+    out = np.full(len(tracks), -1, dtype=np.int32)
+    for row, tinfo in enumerate(tracks.values()):
+        cur = int(tinfo['track_id'])
+        visited = set()
+        while cur > 0 and cur not in visited:
+            visited.add(cur)
+            if cur in id_to_idx:
+                out[row] = id_to_idx[cur]
+                break
+            parent = tracks.get(cur)
+            if parent is None:
+                break
+            cur = int(parent['parent_id'])
+    return out
+
+
+def _write_common_config_attrs(f, config_meta):
+    """Create ``config/`` group with provenance attrs common to all v3 files."""
+    cfg = f.require_group('config')
+    cfg.attrs['format_version'] = _V3_FORMAT_VERSION
+    cfg.attrs['n_events'] = int(config_meta['n_events'])
+    cfg.attrs['git_commit'] = str(config_meta.get('git_commit', 'unknown'))
+    cfg.attrs['run_id'] = str(config_meta['run_id'])
+    cfg.attrs['dataset_name'] = str(config_meta['dataset_name'])
+    cfg.attrs['file_index'] = int(config_meta.get('file_index', 0))
+    cfg.attrs['source_file'] = str(config_meta['source_file'])
+    cfg.attrs['lucid_master_seed'] = int(config_meta['lucid_master_seed'])
+    cfg.attrs['photonsim_seed'] = int(config_meta.get('photonsim_seed', -1))
+    return cfg
+
+
+def write_sensor_config_v3(f, config_meta, source_event_idx, sensor_positions):
+    """Write the config/ group of a sensor v3 file."""
+    cfg = _write_common_config_attrs(f, config_meta)
+    cfg.attrs['n_sensors'] = int(config_meta['n_sensors'])
+    cfg.attrs['detector_type'] = str(config_meta['detector_type'])
+    cfg.attrs['material'] = str(config_meta['material'])
+    cfg.attrs['smearing_applied'] = bool(config_meta['smearing_applied'])
+    cfg.attrs['smearing_charge_function'] = str(
+        config_meta.get('smearing_charge_function', 'default'))
+    cfg.attrs['smearing_time_function'] = str(
+        config_meta.get('smearing_time_function', 'default'))
+    cfg.create_dataset('source_event_idx',
+                       data=np.asarray(source_event_idx, dtype=np.uint32),
+                       **_GZIP_OPTS)
+    cfg.create_dataset('sensor_positions',
+                       data=np.asarray(sensor_positions, dtype=np.float32),
+                       **_GZIP_OPTS)
+
+
+def write_inst_config_v3(f, config_meta, source_event_idx, sensor_positions):
+    """Write the config/ group of an inst v3 file."""
+    cfg = _write_common_config_attrs(f, config_meta)
+    cfg.attrs['n_sensors'] = int(config_meta['n_sensors'])
+    cfg.attrs['detector_type'] = str(config_meta['detector_type'])
+    cfg.attrs['material'] = str(config_meta['material'])
+    cfg.create_dataset('source_event_idx',
+                       data=np.asarray(source_event_idx, dtype=np.uint32),
+                       **_GZIP_OPTS)
+    cfg.create_dataset('sensor_positions',
+                       data=np.asarray(sensor_positions, dtype=np.float32),
+                       **_GZIP_OPTS)
+
+
+def write_seg_config_v3(f, config_meta, source_event_idx):
+    """Write the config/ group of a seg v3 file."""
+    cfg = _write_common_config_attrs(f, config_meta)
+    cfg.attrs['detector_type'] = str(config_meta['detector_type'])
+    cfg.attrs['material'] = str(config_meta['material'])
+    if 'detector_shape' in config_meta:
+        cfg.attrs['detector_shape'] = str(config_meta['detector_shape'])
+    for key in ('detector_bbox', 'detector_axis'):
+        if key in config_meta:
+            cfg.create_dataset(key,
+                               data=np.asarray(config_meta[key], dtype=np.float32))
+    for key in ('detector_radius', 'detector_half_height'):
+        if key in config_meta:
+            cfg.attrs[key] = float(config_meta[key])
+    cfg.create_dataset('source_event_idx',
+                       data=np.asarray(source_event_idx, dtype=np.uint32),
+                       **_GZIP_OPTS)
+
+
+def write_labl_config_v3(f, config_meta, source_event_idx):
+    """Write the config/ group of a labl v3 file."""
+    cfg = _write_common_config_attrs(f, config_meta)
+    label_names = list(config_meta.get('label_names', ['category']))
+    cfg.attrs['label_names'] = np.array(label_names, dtype=h5py.string_dtype())
+    cfg.create_dataset('source_event_idx',
+                       data=np.asarray(source_event_idx, dtype=np.uint32),
+                       **_GZIP_OPTS)
+
+
+def _event_group_name(seq_idx):
+    return f'event_{int(seq_idx):03d}'
+
+
+def save_sensor_event_v3(f, event_dict, seq_idx):
+    """Write a single event_NNN/ group to an already-open sensor v3 file.
+
+    ``event_dict`` must contain: ``source_event_idx``, ``t0``, ``PE_reco``,
+    ``T_reco``. Times are stored t0-shifted into the detector frame.
+    """
+    grp = f.create_group(_event_group_name(seq_idx))
+    grp.attrs['source_event_idx'] = int(event_dict['source_event_idx'])
+
+    pe = np.asarray(event_dict['PE_reco'], dtype=np.float32)
+    t = np.asarray(event_dict['T_reco'], dtype=np.float32)
+    t0 = np.float32(event_dict['t0'])
+
+    mask = (pe > 0) | (np.isfinite(t) & (t > 0) & (t < 1e5))
+    indices = np.where(mask)[0].astype(np.uint16)
+    pe_sparse = pe[mask].astype(np.float32)
+    t_sparse = np.where(np.isfinite(t[mask]), t[mask], np.float32(0.0))
+    t_sparse = np.where(t_sparse > 0, t_sparse - t0, np.float32(0.0)).astype(np.float32)
+
+    grp.attrs['n_hits'] = int(indices.size)
+    grp.create_dataset('sensor_idx', data=indices, **_GZIP_OPTS)
+    grp.create_dataset('PE', data=pe_sparse, **_GZIP_OPTS)
+    grp.create_dataset('T', data=t_sparse, **_GZIP_OPTS)
+
+
+def save_inst_event_v3(f, event_dict, seq_idx):
+    """Write a single event_NNN/ group to an already-open inst v3 file.
+
+    Stores the per-particle PE/T decomposition as FK rows keyed by
+    ``particle_idx`` (local to the event). Times are t0-shifted.
+    """
+    grp = f.create_group(_event_group_name(seq_idx))
+    grp.attrs['source_event_idx'] = int(event_dict['source_event_idx'])
+    grp.attrs['n_particles'] = int(event_dict['n_particles'])
+
+    pe_pp = np.asarray(event_dict['PE_per_particle'], dtype=np.float32)
+    t_pp = np.asarray(event_dict['T_per_particle'], dtype=np.float32)
+    t0 = np.float32(event_dict['t0'])
+    n_p = pe_pp.shape[0]
+
+    particle_idx_parts, sensor_idx_parts, pe_parts, t_parts = [], [], [], []
+    for i in range(n_p):
+        mask = pe_pp[i] > 0
+        idx = np.where(mask)[0]
+        if idx.size == 0:
+            continue
+        particle_idx_parts.append(np.full(idx.shape[0], i, dtype=np.int32))
+        sensor_idx_parts.append(idx.astype(np.uint16))
+        pe_parts.append(pe_pp[i, mask].astype(np.float32))
+        t_vals = t_pp[i, mask]
+        t_vals = np.where(np.isfinite(t_vals), t_vals, np.float32(0.0))
+        t_vals = np.where(t_vals > 0, t_vals - t0, np.float32(0.0))
+        t_parts.append(t_vals.astype(np.float32))
+
+    def _cat(xs, dtype):
+        return np.concatenate(xs).astype(dtype) if xs else np.array([], dtype=dtype)
+
+    particle_idx_arr = _cat(particle_idx_parts, np.int32)
+    sensor_idx_arr = _cat(sensor_idx_parts, np.uint16)
+    pe_arr = _cat(pe_parts, np.float32)
+    t_arr = _cat(t_parts, np.float32)
+
+    grp.attrs['n_particle_hits'] = int(particle_idx_arr.size)
+    grp.create_dataset('particle_idx', data=particle_idx_arr, **_GZIP_OPTS)
+    grp.create_dataset('sensor_idx', data=sensor_idx_arr, **_GZIP_OPTS)
+    grp.create_dataset('PE', data=pe_arr, **_GZIP_OPTS)
+    grp.create_dataset('T', data=t_arr, **_GZIP_OPTS)
+
+
+def save_seg_event_v3(f, event_dict, seq_idx):
+    """Write a single event_NNN/ group to an already-open seg v3 file.
+
+    Each segment row gets a local ``track_idx`` FK (0..n_tracks-1). Times are
+    shifted by ``t0`` so they live in the detector frame. ``beta_start`` and
+    ``n_cherenkov`` are pass-through from PhotonSim.
+    """
+    grp = f.create_group(_event_group_name(seq_idx))
+    grp.attrs['source_event_idx'] = int(event_dict['source_event_idx'])
+
+    mt = event_dict.get('meaningful_tracks', {})
+    seg = event_dict.get('segments', {'n_segments': 0})
+    t0 = np.float32(event_dict['t0'])
+
+    n_tracks = int(len(mt))
+    n_segments = int(seg.get('n_segments', 0))
+    grp.attrs['n_tracks'] = n_tracks
+    grp.attrs['n_segments'] = n_segments
+
+    track_idx_per_segment = []
+    for track_local_idx, t_info in enumerate(mt.values()):
+        track_idx_per_segment.extend(
+            [track_local_idx] * int(t_info['n_segments']))
+    track_idx_arr = np.asarray(track_idx_per_segment, dtype=np.int32)
+    assert track_idx_arr.size == n_segments, (
+        f"track_idx length {track_idx_arr.size} != n_segments {n_segments}")
+
+    grp.create_dataset('track_idx', data=track_idx_arr, **_GZIP_OPTS)
+
+    def _empty(dtype): return np.array([], dtype=dtype)
+    if n_segments > 0:
+        fields = {
+            'start_x': (seg['start_x'], np.float32),
+            'start_y': (seg['start_y'], np.float32),
+            'start_z': (seg['start_z'], np.float32),
+            'end_x': (seg['end_x'], np.float32),
+            'end_y': (seg['end_y'], np.float32),
+            'end_z': (seg['end_z'], np.float32),
+            'dir_x': (seg['dir_x'], np.float16),
+            'dir_y': (seg['dir_y'], np.float16),
+            'dir_z': (seg['dir_z'], np.float16),
+            'edep': (seg['edep'], np.float32),
+            'time': (np.asarray(seg['time'], dtype=np.float32) - t0, np.float32),
+            'beta_start': (seg['beta_start'], np.float32),
+            'n_cherenkov': (seg['n_cherenkov'], np.int32),
+        }
+        for name, (arr, dtype) in fields.items():
+            grp.create_dataset(name,
+                               data=np.asarray(arr, dtype=dtype),
+                               **_GZIP_OPTS)
+    else:
+        for name, dtype in (('start_x', np.float32), ('start_y', np.float32),
+                            ('start_z', np.float32), ('end_x', np.float32),
+                            ('end_y', np.float32), ('end_z', np.float32),
+                            ('dir_x', np.float16), ('dir_y', np.float16),
+                            ('dir_z', np.float16), ('edep', np.float32),
+                            ('time', np.float32), ('beta_start', np.float32),
+                            ('n_cherenkov', np.int32)):
+            grp.create_dataset(name, data=_empty(dtype), **_GZIP_OPTS)
+
+
+def save_labl_event_v3(f, event_dict, seq_idx):
+    """Write a single event_NNN/ group to an already-open labl v3 file.
+
+    Contains three subgroups: ``per_event/`` (t0 and overall_containment),
+    ``per_particle/`` (category, containment, genealogy CSR), and
+    ``per_track/`` (track metadata + ``particle_idx`` FK).
+    """
+    grp = f.create_group(_event_group_name(seq_idx))
+    grp.attrs['source_event_idx'] = int(event_dict['source_event_idx'])
+    grp.attrs['n_particles'] = int(event_dict['n_particles'])
+    mt = event_dict.get('meaningful_tracks', {})
+    grp.attrs['n_tracks'] = int(len(mt))
+
+    # --- per_event ---
+    pe_grp = grp.create_group('per_event')
+    pe_grp.create_dataset('t0', data=np.float32(event_dict['t0']))
+    pe_grp.create_dataset('overall_containment',
+                          data=np.float32(event_dict['overall_light_containment']))
+
+    # --- per_particle ---
+    pp_grp = grp.create_group('per_particle')
+    particles = event_dict['particles']
+
+    cats = []
+    for particle in particles:
+        ti = particle.get('track_info')
+        cat = ti['category'] if ti is not None else -1
+        cats.append(cat if cat >= 0 else 255)
+    pp_grp.create_dataset('category',
+                          data=np.array(cats, dtype=np.uint8),
+                          **_GZIP_OPTS)
+
+    cont = np.asarray(event_dict['light_containment_by_particle'],
+                      dtype=np.float32)
+    pp_grp.create_dataset('containment', data=cont, **_GZIP_OPTS)
+
+    gen_offsets = [0]
+    gen_data_list = []
+    for particle in particles:
+        gen = np.asarray(particle['genealogy'], dtype=np.int32).flatten()
+        gen_data_list.append(gen)
+        gen_offsets.append(gen_offsets[-1] + len(gen))
+    pp_grp.create_dataset('genealogy_offsets',
+                          data=np.array(gen_offsets, dtype=np.uint32),
+                          **_GZIP_OPTS)
+    pp_grp.create_dataset('genealogy_data',
+                          data=(np.concatenate(gen_data_list)
+                                if gen_data_list else np.array([], dtype=np.int32)),
+                          **_GZIP_OPTS)
+
+    ext_offsets = [0]
+    ext_data_list = []
+    for particle in particles:
+        ext = particle.get('extended_genealogy')
+        arr = (np.asarray(ext, dtype=np.int32).flatten()
+               if ext is not None else np.array([], dtype=np.int32))
+        ext_data_list.append(arr)
+        ext_offsets.append(ext_offsets[-1] + len(arr))
+    pp_grp.create_dataset('ext_genealogy_offsets',
+                          data=np.array(ext_offsets, dtype=np.uint32),
+                          **_GZIP_OPTS)
+    pp_grp.create_dataset('ext_genealogy_data',
+                          data=(np.concatenate(ext_data_list)
+                                if ext_data_list else np.array([], dtype=np.int32)),
+                          **_GZIP_OPTS)
+
+    # --- per_track ---
+    pt_grp = grp.create_group('per_track')
+    if mt:
+        track_id = np.array([t['track_id'] for t in mt.values()], dtype=np.int32)
+        parent_id = np.array([t['parent_id'] for t in mt.values()], dtype=np.int32)
+        pdg = np.array([t['pdg'] for t in mt.values()], dtype=np.int16)
+        initial_energy = np.array([t['initial_energy'] for t in mt.values()],
+                                   dtype=np.float32)
+        n_ch = np.array([t['n_cherenkov'] for t in mt.values()], dtype=np.int32)
+        particle_idx = derive_particle_idx_per_track(event_dict)
+    else:
+        track_id = np.array([], dtype=np.int32)
+        parent_id = np.array([], dtype=np.int32)
+        pdg = np.array([], dtype=np.int16)
+        initial_energy = np.array([], dtype=np.float32)
+        n_ch = np.array([], dtype=np.int32)
+        particle_idx = np.array([], dtype=np.int32)
+
+    pt_grp.create_dataset('track_id', data=track_id, **_GZIP_OPTS)
+    pt_grp.create_dataset('parent_id', data=parent_id, **_GZIP_OPTS)
+    pt_grp.create_dataset('pdg', data=pdg, **_GZIP_OPTS)
+    pt_grp.create_dataset('initial_energy', data=initial_energy, **_GZIP_OPTS)
+    pt_grp.create_dataset('n_cherenkov', data=n_ch, **_GZIP_OPTS)
+    pt_grp.create_dataset('particle_idx', data=particle_idx, **_GZIP_OPTS)
+
+
+def list_events_v3(filename):
+    """Return the ``config/source_event_idx`` array from a v3 file."""
     with h5py.File(filename, 'r') as f:
-        if n_sensors is None:
-            n_sensors = int(f.attrs['n_sensors'])
+        return np.asarray(f['config/source_event_idx'][:])
 
-        i = event_index
 
-        # Event header
-        event_number = int(f['event_number'][i])
-        n_part = int(f['n_particles'][i])
-        t0 = float(f['t0'][i])
-        overall_cont = float(f['overall_containment'][i])
+def _v3_group_to_dict(grp):
+    """Recursively copy attrs + datasets + subgroups into a plain dict."""
+    out = {}
+    for key, value in grp.attrs.items():
+        out[key] = value
+    for key in grp.keys():
+        item = grp[key]
+        if isinstance(item, h5py.Dataset):
+            out[key] = item[()]
+        else:  # subgroup
+            out[key] = _v3_group_to_dict(item)
+    return out
 
-        # Particle metadata
-        p_start = int(f['particle_event_offset'][i])
-        p_end = int(f['particle_event_offset'][i + 1])
-        categories = np.array(f['particle_category'][p_start:p_end])
-        # Map 255 back to -1 for V1 compat
-        categories = np.where(categories == 255, -1, categories).astype(np.int32)
-        particle_cont = np.array(f['particle_containment'][p_start:p_end])
 
-        # Genealogy
-        gen_off = np.array(f['genealogy_offsets'][p_start:p_end + 1])
-        gen_data = np.array(f['genealogy_data'][int(gen_off[0]):int(gen_off[-1])])
-        gen_off_local = gen_off - gen_off[0]
+def _read_v3_event(filename, event_idx):
+    """Return the event_NNN/ group contents as a dict keyed by dataset/attr name."""
+    with h5py.File(filename, 'r') as f:
+        name = f'event_{int(event_idx):03d}'
+        if name not in f:
+            raise KeyError(
+                f"Event group {name!r} not found in {filename}. "
+                f"Available: {sorted(k for k in f.keys() if k.startswith('event_'))[:5]} ...")
+        return _v3_group_to_dict(f[name])
 
-        genealogies = []
-        for j in range(n_part):
-            g_start = int(gen_off_local[j])
-            g_end = int(gen_off_local[j + 1])
-            genealogies.append(gen_data[g_start:g_end])
 
-        # Event-level hits -> dense
-        h_start = int(f['event_hit_offsets'][i])
-        h_end = int(f['event_hit_offsets'][i + 1])
-        hit_idx = np.array(f['event_hit_sensor_idx'][h_start:h_end])
-        hit_pe = np.array(f['event_hit_PE'][h_start:h_end])
-        hit_t = np.array(f['event_hit_T'][h_start:h_end])
+def read_sensor_event_v3(filename, event_idx):
+    """Read event ``event_idx`` from a sensor v3 file."""
+    return _read_v3_event(filename, event_idx)
 
-        PE = np.zeros(n_sensors, dtype=np.float32)
-        T = np.zeros(n_sensors, dtype=np.float32)
-        if len(hit_idx) > 0:
-            PE[hit_idx] = hit_pe
-            T[hit_idx] = hit_t
 
-        # Per-particle hits -> dense
-        PE_pp = np.zeros((n_part, n_sensors), dtype=np.float32)
-        T_pp = np.full((n_part, n_sensors), np.inf, dtype=np.float32)
+def read_inst_event_v3(filename, event_idx):
+    """Read event ``event_idx`` from an inst v3 file."""
+    return _read_v3_event(filename, event_idx)
 
-        pp_off = np.array(f['particle_hit_offsets'][p_start:p_end + 1])
-        pp_idx_all = np.array(f['particle_hit_sensor_idx'][int(pp_off[0]):int(pp_off[-1])])
-        pp_pe_all = np.array(f['particle_hit_PE'][int(pp_off[0]):int(pp_off[-1])])
-        pp_t_all = np.array(f['particle_hit_T'][int(pp_off[0]):int(pp_off[-1])])
-        pp_off_local = pp_off - pp_off[0]
 
-        for j in range(n_part):
-            s = int(pp_off_local[j])
-            e = int(pp_off_local[j + 1])
-            if e > s:
-                idx = pp_idx_all[s:e]
-                PE_pp[j, idx] = pp_pe_all[s:e]
-                T_pp[j, idx] = pp_t_all[s:e]
+def read_seg_event_v3(filename, event_idx):
+    """Read event ``event_idx`` from a seg v3 file."""
+    return _read_v3_event(filename, event_idx)
 
-    return {
-        'event_number': event_number,
-        'n_particles': n_part,
-        't0': t0,
-        'PE': PE,
-        'T': T,
-        'PE_per_particle': PE_pp,
-        'T_per_particle': T_pp,
-        'Particle_Category': categories,
-        'overall_light_containment': overall_cont,
-        'light_containment_by_particle': particle_cont,
-        'Particle_CategorizedGenealogy': np.array(genealogies, dtype=object),
-    }
+
+def read_labl_event_v3(filename, event_idx):
+    """Read event ``event_idx`` from a labl v3 file.
+
+    The returned dict contains top-level attrs plus three subdicts:
+    ``per_event``, ``per_particle``, ``per_track``.
+    """
+    return _read_v3_event(filename, event_idx)
+
+
