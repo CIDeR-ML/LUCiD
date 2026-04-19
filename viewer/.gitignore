@@ -1,0 +1,5 @@
+# Test/sample datasets — large HDF5 files produced by make_test_data.py or
+# copied from production runs. Regenerate locally rather than committing.
+sample_v3/
+test_data/
+__pycache__/
