@@ -224,9 +224,9 @@ if n_tracks > 0:
         if 0 <= ti < n_tracks and first_seg_for_track[ti] == -1:
             first_seg_for_track[ti] = seg_row
 
-    seg_start_x_m = np.asarray(seg_data['start_x'], dtype=np.float32) / 100.0
-    seg_start_y_m = np.asarray(seg_data['start_y'], dtype=np.float32) / 100.0
-    seg_start_z_m = np.asarray(seg_data['start_z'], dtype=np.float32) / 100.0
+    seg_start_x_m = np.asarray(seg_data['start_x'], dtype=np.float32)
+    seg_start_y_m = np.asarray(seg_data['start_y'], dtype=np.float32)
+    seg_start_z_m = np.asarray(seg_data['start_z'], dtype=np.float32)
     seg_dx = np.asarray(seg_data['dir_x'], dtype=np.float32)
     seg_dy = np.asarray(seg_data['dir_y'], dtype=np.float32)
     seg_dz = np.asarray(seg_data['dir_z'], dtype=np.float32)
@@ -726,13 +726,13 @@ if has_segment_data:
     if n_tracks > 1:
         track_seg_offsets[1:] = np.cumsum(track_n_segs[:-1])
 
-    # Segment geometry in meters (seg file stores cm)
-    seg_start_x = np.asarray(seg_data['start_x'], dtype=np.float32) / 100.0
-    seg_start_y = np.asarray(seg_data['start_y'], dtype=np.float32) / 100.0
-    seg_start_z = np.asarray(seg_data['start_z'], dtype=np.float32) / 100.0
-    seg_end_x = np.asarray(seg_data['end_x'], dtype=np.float32) / 100.0
-    seg_end_y = np.asarray(seg_data['end_y'], dtype=np.float32) / 100.0
-    seg_end_z = np.asarray(seg_data['end_z'], dtype=np.float32) / 100.0
+    # Segment geometry in meters (seg file stores meters)
+    seg_start_x = np.asarray(seg_data['start_x'], dtype=np.float32)
+    seg_start_y = np.asarray(seg_data['start_y'], dtype=np.float32)
+    seg_start_z = np.asarray(seg_data['start_z'], dtype=np.float32)
+    seg_end_x = np.asarray(seg_data['end_x'], dtype=np.float32)
+    seg_end_y = np.asarray(seg_data['end_y'], dtype=np.float32)
+    seg_end_z = np.asarray(seg_data['end_z'], dtype=np.float32)
 
     print(f"  Found {n_tracks} meaningful tracks with {seg_start_x.size} segments")
 

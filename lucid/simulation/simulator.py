@@ -305,6 +305,11 @@ def setup_event_simulator(
         wall_reflection_rate = detector_params.wall_reflection_rate
         sensor_reflection_rate = detector_params.sensor_reflection_rate
         qe_corrections = detector_params.qe_corrections
+        # Scalar placeholder (e.g. from JSON `qe_corrections: 1.0`) — broadcast
+        # to per-sensor so indexing in make_hits_* works when detector_params
+        # comes in directly (not baked-in via setup-time guard).
+        if qe_corrections.ndim == 0:
+            qe_corrections = jnp.ones(num_sensors) * qe_corrections
 
         from lucid.simulation.types import PhotonState
 
@@ -412,7 +417,7 @@ def setup_event_simulator(
         track_origin = particle_params.position
         track_direction = particle_params.direction  # property
 
-        photon_origins = photon_data['photon_origins'] / 100.0  # cm to m
+        photon_origins = photon_data['photon_origins']  # already m
         photon_directions = photon_data['photon_directions']
         photon_times = photon_data['photon_times']
 

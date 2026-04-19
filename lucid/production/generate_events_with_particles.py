@@ -31,7 +31,6 @@ import numpy as np
 
 from lucid.sources.event_io import generate_events_from_photonsim_particles
 from lucid.simulation import setup_event_simulator
-from lucid.detector_params import load_physics_config
 from lucid.geometry.detector_geometry import DetectorGeometry
 from lucid.utils import base_dir_path
 
@@ -98,15 +97,11 @@ def main():
     print(f"\nDetector geometry: {detector_type} / {material}, "
           f"{sensor_positions.shape[0]} sensors")
 
-    # Load physics config
-    print(f"\nLoading physics configuration: {args.physics_config}")
-    sensor_params, _, _ = load_physics_config(args.physics_config)
-    print(f"  Wall reflection rate: {float(sensor_params.wall_reflection_rate):.3f}")
-    print(f"  Sensor reflection rate: {float(sensor_params.sensor_reflection_rate):.3f}")
-    print(f"  QE (scalar): {float(sensor_params.qe):.3f}")
-
-    # Setup the simulator
-    print(f"\nSetting up event simulator")
+    # Setup the simulator with baked-in detector params (loaded from physics config).
+    # This also normalizes scalar qe_corrections via the guard at
+    # simulator.py:174-183 before the closure is built.
+    print(f"\nSetting up event simulator with baked-in detector params")
+    print(f"  Physics config: {args.physics_config}")
     simulate_event = setup_event_simulator(
         args.config,
         0,  # n_photons irrelevant in data mode — driven by ROOT
@@ -115,7 +110,12 @@ def main():
         temperature=0.0,
         apply_smearing=False,  # per-particle smearing off; PE-sum smearing applied later
         physics_config=args.physics_config,
+        default_detector_params=True,
     )
+    dp = simulate_event.default_detector_params
+    print(f"  Wall reflection rate: {float(dp.wall_reflection_rate):.3f}")
+    print(f"  Sensor reflection rate: {float(dp.sensor_reflection_rate):.3f}")
+    print(f"  QE (scalar): {float(dp.qe):.3f}")
 
     print(f"\nGenerating v3 dataset:")
     print(f"  Source ROOT: {args.root_file}")
@@ -133,7 +133,6 @@ def main():
     saved_files = generate_events_from_photonsim_particles(
         event_simulator=simulate_event,
         root_file_path=args.root_file,
-        sensor_params=sensor_params,
         sensor_positions=sensor_positions,
         output_dir=args.output,
         n_events=args.n_events,

@@ -375,10 +375,10 @@ def read_photon_data_from_photonsim(root_file_path, entry_index):
     # Extract primary energy (already in MeV)
     energy = float(tree_data['PrimaryEnergy'][0])
 
-    # Extract photon positions (convert mm to cm)
-    photon_posx = tree_data['PhotonPosX'][0] / 10.0  # mm to cm
-    photon_posy = tree_data['PhotonPosY'][0] / 10.0
-    photon_posz = tree_data['PhotonPosZ'][0] / 10.0
+    # Extract photon positions (PhotonSim mm → LUCiD m)
+    photon_posx = tree_data['PhotonPosX'][0] / 1000.0  # mm to m
+    photon_posy = tree_data['PhotonPosY'][0] / 1000.0
+    photon_posz = tree_data['PhotonPosZ'][0] / 1000.0
 
     # Extract photon directions
     photon_dirx = tree_data['PhotonDirX'][0]
@@ -390,7 +390,7 @@ def read_photon_data_from_photonsim(root_file_path, entry_index):
     photon_directions = np.column_stack((photon_dirx, photon_diry, photon_dirz))
 
     result = {
-        'photon_origins': jnp.array(photon_positions),     # Combined position vectors in cm
+        'photon_origins': jnp.array(photon_positions),     # Combined position vectors in m
         'photon_directions': jnp.array(photon_directions), # Combined direction vectors
         'photon_times': jnp.array(tree_data['PhotonTime'][0]),
         'energy': energy  # Energy in MeV
@@ -426,7 +426,7 @@ def read_particle_data_from_photonsim(root_file_path, entry_index, include_track
             - 'photon_indices': list of photon indices belonging to this particle
             - 'track_info': dict with track information (position, direction, energy, time, pdg, category, etc.)
             - 'extended_genealogy': list of meaningful track IDs (if include_track_segments=True)
-        - 'photon_origins': array (N_photons, 3) in cm
+        - 'photon_origins': array (N_photons, 3) in m
         - 'photon_directions': array (N_photons, 3)
         - 'photon_times': array (N_photons,) in ns
         - 'primary_energy': float, energy in MeV
@@ -488,10 +488,10 @@ def read_particle_data_from_photonsim(root_file_path, entry_index, include_track
     # Extract primary energy
     primary_energy = float(tree_data['PrimaryEnergy'][0])
 
-    # Extract photon data (convert mm to cm)
-    photon_posx = tree_data['PhotonPosX'][0] / 10.0
-    photon_posy = tree_data['PhotonPosY'][0] / 10.0
-    photon_posz = tree_data['PhotonPosZ'][0] / 10.0
+    # Extract photon data (PhotonSim mm → LUCiD m)
+    photon_posx = tree_data['PhotonPosX'][0] / 1000.0
+    photon_posy = tree_data['PhotonPosY'][0] / 1000.0
+    photon_posz = tree_data['PhotonPosZ'][0] / 1000.0
     photon_positions = np.column_stack((photon_posx, photon_posy, photon_posz))
 
     photon_dirx = tree_data['PhotonDirX'][0]
@@ -517,9 +517,9 @@ def read_particle_data_from_photonsim(root_file_path, entry_index, include_track
     track_ids = tree_data['TrackInfo_TrackID'][0]
     track_categories = tree_data['TrackInfo_Category'][0]
     track_subids = tree_data['TrackInfo_SubID'][0]
-    track_posx = tree_data['TrackInfo_PosX'][0] / 10.0  # mm to cm
-    track_posy = tree_data['TrackInfo_PosY'][0] / 10.0
-    track_posz = tree_data['TrackInfo_PosZ'][0] / 10.0
+    track_posx = tree_data['TrackInfo_PosX'][0] / 1000.0  # mm to m
+    track_posy = tree_data['TrackInfo_PosY'][0] / 1000.0
+    track_posz = tree_data['TrackInfo_PosZ'][0] / 1000.0
     track_dirx = tree_data['TrackInfo_DirX'][0]
     track_diry = tree_data['TrackInfo_DirY'][0]
     track_dirz = tree_data['TrackInfo_DirZ'][0]
@@ -630,14 +630,14 @@ def read_particle_data_from_photonsim(root_file_path, entry_index, include_track
                 'n_segments': int(mtrack_nsegs[i])
             }
 
-        # Extract segment arrays (positions in mm, convert to cm)
+        # Extract segment arrays (PhotonSim mm → LUCiD m)
         segments = {
-            'start_x': tree_data['Segment_StartX'][0] / 10.0,  # mm to cm
-            'start_y': tree_data['Segment_StartY'][0] / 10.0,
-            'start_z': tree_data['Segment_StartZ'][0] / 10.0,
-            'end_x': tree_data['Segment_EndX'][0] / 10.0,
-            'end_y': tree_data['Segment_EndY'][0] / 10.0,
-            'end_z': tree_data['Segment_EndZ'][0] / 10.0,
+            'start_x': tree_data['Segment_StartX'][0] / 1000.0,  # mm to m
+            'start_y': tree_data['Segment_StartY'][0] / 1000.0,
+            'start_z': tree_data['Segment_StartZ'][0] / 1000.0,
+            'end_x': tree_data['Segment_EndX'][0] / 1000.0,
+            'end_y': tree_data['Segment_EndY'][0] / 1000.0,
+            'end_z': tree_data['Segment_EndZ'][0] / 1000.0,
             'dir_x': tree_data['Segment_DirX'][0],
             'dir_y': tree_data['Segment_DirY'][0],
             'dir_z': tree_data['Segment_DirZ'][0],
@@ -659,7 +659,7 @@ def read_particle_data_from_photonsim(root_file_path, entry_index, include_track
 
     return result
 
-def generate_events_from_photonsim_particles(event_simulator, root_file_path, sensor_params,
+def generate_events_from_photonsim_particles(event_simulator, root_file_path,
                                              sensor_positions, output_dir=None,
                                              n_events=None, batch_size=100, master_seed=None,
                                              apply_smearing=False, apply_rotation=False, apply_translation=False,
@@ -677,11 +677,11 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path, se
     Parameters
     ----------
     event_simulator : Callable
-        Per-particle simulator function.
+        Per-particle simulator with baked-in detector_params. Built via
+        ``setup_event_simulator(..., default_detector_params=True)``; the
+        call signature is ``(track_params, key, photonsim_data)``.
     root_file_path : str
         PhotonSim ROOT file path.
-    sensor_params : tuple
-        Propagation parameters (scatter length, absorption length, ...).
     sensor_positions : array-like (n_sensors, 3)
         PMT coordinates in meters.
     output_dir : str
@@ -874,8 +874,8 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path, se
             # PAD_SIZE is now computed dynamically at the function level
             default_direction = np.array([0.0, 0.0, 1.0], dtype=np.float32)
 
-            # Data already NumPy - ensure float32 and convert to meters (avoid unnecessary copies)
-            all_photon_origins_np = all_photon_origins.astype(np.float32, copy=False) / 100.0
+            # Data already NumPy in meters; just ensure float32
+            all_photon_origins_np = all_photon_origins.astype(np.float32, copy=False)
             all_photon_directions_np = all_photon_directions.astype(np.float32, copy=False)
             all_photon_times_np = all_photon_times.astype(np.float32, copy=False)
             all_photon_wavelengths_np = all_photon_wavelengths.astype(np.float32, copy=False)
@@ -920,14 +920,13 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path, se
                 # Apply translation to segment positions if track segments are included
                 if include_track_segments and 'segments' in particle_data:
                     segments = particle_data['segments']
-                    # Convert translation from meters to cm (segments are in cm)
-                    translation_cm = translation_vector * 100.0
-                    segments['start_x'] = segments['start_x'] + translation_cm[0]
-                    segments['start_y'] = segments['start_y'] + translation_cm[1]
-                    segments['start_z'] = segments['start_z'] + translation_cm[2]
-                    segments['end_x'] = segments['end_x'] + translation_cm[0]
-                    segments['end_y'] = segments['end_y'] + translation_cm[1]
-                    segments['end_z'] = segments['end_z'] + translation_cm[2]
+                    # Segments are in meters; translation_vector is in meters
+                    segments['start_x'] = segments['start_x'] + translation_vector[0]
+                    segments['start_y'] = segments['start_y'] + translation_vector[1]
+                    segments['start_z'] = segments['start_z'] + translation_vector[2]
+                    segments['end_x'] = segments['end_x'] + translation_vector[0]
+                    segments['end_y'] = segments['end_y'] + translation_vector[1]
+                    segments['end_z'] = segments['end_z'] + translation_vector[2]
 
             # Pre-allocate batched arrays
             batched_origins_np = np.zeros((n_particles, PAD_SIZE, 3), dtype=np.float32)
@@ -951,7 +950,7 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path, se
                 track_info = particle['track_info']
                 if track_info is not None:
                     track_energies_np[particle_idx] = track_info['energy']
-                    track_positions_np[particle_idx] = track_info['position'] / 100.0  # cm to m
+                    track_positions_np[particle_idx] = track_info['position']  # already m
                     track_directions_np[particle_idx] = track_info['direction']
                 else:
                     track_energies_np[particle_idx] = particle_data['primary_energy']
@@ -959,9 +958,8 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path, se
 
                 if apply_translation:
                     track_positions_np[particle_idx] += translation_vector
-                    # Update particles data structure with transformed position (convert back to cm)
                     if track_info is not None:
-                        track_info['position'] = track_positions_np[particle_idx] * 100.0
+                        track_info['position'] = track_positions_np[particle_idx].copy()
 
                 # Scatter photons
                 if N > 0:
@@ -1010,7 +1008,8 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path, se
                     'translation_vector': translation_vector
                 }
 
-                return event_simulator(track_params, sensor_params, sim_key, photonsim_data)
+                # detector_params are baked into event_simulator via default_detector_params=True
+                return event_simulator(track_params, sim_key, photonsim_data)
 
             # Create vectorized version using vmap
             simulate_all_particles = jax.vmap(
@@ -2016,6 +2015,49 @@ def derive_particle_idx_per_track(event_dict):
     return out
 
 
+def derive_track_ancestor_and_interaction(event_dict):
+    """For each meaningful track, derive (ancestor_track_id, interaction_id).
+
+    * ``ancestor_track_id`` is the root of the parent chain — the primary
+      this track descends from. A track that is itself a primary
+      (``parent_id == 0``) is its own ancestor.
+    * ``interaction_id`` is the 0-based rank of that ancestor among the
+      event's primaries (sorted by track_id), grouping all tracks of the
+      same neutrino/interaction vertex.
+
+    Returns
+    -------
+    (ancestor, interaction) : tuple of np.ndarray (int32, int32)
+        Both shape ``(n_tracks,)``.
+    """
+    tracks = event_dict.get('meaningful_tracks', {})
+    if not tracks:
+        empty = np.array([], dtype=np.int32)
+        return empty, empty.copy()
+
+    parent_of = {int(tid): int(t['parent_id']) for tid, t in tracks.items()}
+
+    def walk_to_root(tid):
+        cur = tid
+        visited = set()
+        while cur > 0 and cur not in visited:
+            visited.add(cur)
+            parent = parent_of.get(cur, 0)
+            if parent == 0 or parent not in parent_of:
+                return cur
+            cur = parent
+        return cur
+
+    ancestors = np.array(
+        [walk_to_root(int(t['track_id'])) for t in tracks.values()],
+        dtype=np.int32)
+
+    unique_primaries = sorted(set(int(a) for a in ancestors))
+    rank_of = {a: i for i, a in enumerate(unique_primaries)}
+    interaction = np.array([rank_of[int(a)] for a in ancestors], dtype=np.int32)
+    return ancestors, interaction
+
+
 def _write_common_config_attrs(f, config_meta):
     """Create ``config/`` group with provenance attrs common to all v3 files."""
     cfg = f.require_group('config')
@@ -2303,6 +2345,7 @@ def save_labl_event_v3(f, event_dict, seq_idx):
                                    dtype=np.float32)
         n_ch = np.array([t['n_cherenkov'] for t in mt.values()], dtype=np.int32)
         particle_idx = derive_particle_idx_per_track(event_dict)
+        ancestor, interaction = derive_track_ancestor_and_interaction(event_dict)
     else:
         track_id = np.array([], dtype=np.int32)
         parent_id = np.array([], dtype=np.int32)
@@ -2310,6 +2353,8 @@ def save_labl_event_v3(f, event_dict, seq_idx):
         initial_energy = np.array([], dtype=np.float32)
         n_ch = np.array([], dtype=np.int32)
         particle_idx = np.array([], dtype=np.int32)
+        ancestor = np.array([], dtype=np.int32)
+        interaction = np.array([], dtype=np.int32)
 
     pt_grp.create_dataset('track_id', data=track_id, **_GZIP_OPTS)
     pt_grp.create_dataset('parent_id', data=parent_id, **_GZIP_OPTS)
@@ -2317,6 +2362,8 @@ def save_labl_event_v3(f, event_dict, seq_idx):
     pt_grp.create_dataset('initial_energy', data=initial_energy, **_GZIP_OPTS)
     pt_grp.create_dataset('n_cherenkov', data=n_ch, **_GZIP_OPTS)
     pt_grp.create_dataset('particle_idx', data=particle_idx, **_GZIP_OPTS)
+    pt_grp.create_dataset('ancestor', data=ancestor, **_GZIP_OPTS)
+    pt_grp.create_dataset('interaction', data=interaction, **_GZIP_OPTS)
 
 
 def list_events_v3(filename):

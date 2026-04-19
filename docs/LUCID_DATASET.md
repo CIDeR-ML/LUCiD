@@ -130,11 +130,11 @@ seg.h5
 └── event_NNN/
     │ attrs: source_event_idx, n_tracks, n_segments
     ├── track_idx             (n_segments,) int32   — local FK to labl/per_track row
-    ├── start_x, start_y, start_z   (n_segments,) float32
-    ├── end_x, end_y, end_z         (n_segments,) float32
+    ├── start_x, start_y, start_z   (n_segments,) float32  — meters
+    ├── end_x, end_y, end_z         (n_segments,) float32  — meters
     ├── dir_x, dir_y, dir_z         (n_segments,) float16
-    ├── time                       (n_segments,) float32   — segment start time, detector frame
-    ├── edep                       (n_segments,) float32   — energy deposited in segment
+    ├── time                       (n_segments,) float32   — ns, detector frame (t0-shifted)
+    ├── edep                       (n_segments,) float32   — MeV
     ├── beta_start                 (n_segments,) float32   — particle β at segment start
     └── n_cherenkov                (n_segments,) int32     — Cherenkov photons emitted in segment
 ```
@@ -175,10 +175,12 @@ labl.h5
     └── per_track/                               (~600 rows for typical LUCiD events)
         ├── track_id            (n_tracks,) int32   — Geant4 track ID (truth metadata)
         ├── parent_id           (n_tracks,) int32
-        ├── pdg                 (n_tracks,) int16
-        ├── initial_energy      (n_tracks,) float32
+        ├── pdg                 (n_tracks,) int16   — raw PDG code
+        ├── initial_energy      (n_tracks,) float32 — MeV
         ├── n_cherenkov         (n_tracks,) int32   — total Cherenkov for this track
-        └── particle_idx        (n_tracks,) int32   — FK to per_particle row
+        ├── particle_idx        (n_tracks,) int32   — FK to per_particle row
+        ├── ancestor            (n_tracks,) int32   — primary track_id at root of parent chain
+        └── interaction         (n_tracks,) int32   — 0-based rank of ancestor among event primaries
 ```
 
 Notes:

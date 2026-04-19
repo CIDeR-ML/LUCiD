@@ -121,6 +121,11 @@ def test_labl_event_roundtrip(v3_batch):
     np.testing.assert_array_equal(pt['track_id'], np.array([100, 150, 200], dtype=np.int32))
     np.testing.assert_array_equal(pt['parent_id'], np.array([0, 100, 100], dtype=np.int32))
     np.testing.assert_array_equal(pt['pdg'], np.array([13, 22, 11], dtype=np.int16))
+    # ancestor/interaction derived from parent chain:
+    # track 100 (parent 0) is a primary — its own ancestor; 150/200 descend from it.
+    # With a single primary in the event, interaction_id == 0 for all rows.
+    np.testing.assert_array_equal(pt['ancestor'], np.array([100, 100, 100], dtype=np.int32))
+    np.testing.assert_array_equal(pt['interaction'], np.array([0, 0, 0], dtype=np.int32))
 
 
 def test_list_events_v3(v3_batch):
