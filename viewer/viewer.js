@@ -1220,11 +1220,14 @@ function render2D() {
   let corrMax = 1;
   if (corrMap) for (const v of corrMap.values()) if (v > corrMax) corrMax = v;
 
-  // 2D fade only when PMT-time space matches the active sweep range. In
-  // SEG view simTime lives in seg-time space, which doesn't line up with
-  // pmtArrivalT in general — skip the 2D fade rather than render garbage.
-  const sweepActive = sweepOn && pmtArrivalT && curView === 'pmts';
-  const sweepEps = Math.max(1e-4, (simTMax - simTMin) / 200);
+  // 2D PMT fade: pmtArrivalT lives in PMT-time space (rank or raw), but
+  // the active simTime might be in seg-time space (SEG view). Map sweep
+  // progress (0..1 through the active range) onto PMT range so the 2D
+  // panel sweeps in lockstep with the 3D animation, regardless of view.
+  const sweepActive = sweepOn && pmtArrivalT;
+  const progress = (simTime - simTMin) / Math.max(1e-9, simTMax - simTMin);
+  const pmtSimTime = pmtTRange[0] + progress * (pmtTRange[1] - pmtTRange[0]);
+  const sweepEps = Math.max(1e-4, (pmtTRange[1] - pmtTRange[0]) / 200);
 
   // Draw each PMT in layout space. v is already canvas-y-down.
   for (let i = 0; i < nSensors; i++) {
@@ -1261,11 +1264,11 @@ function render2D() {
       }
     }
     // Sweep fade — match the 3D shader's smoothstep (cubic Hermite),
-    // not a linear ramp, so 2D and 3D fade look identical.
+    // using PMT-time-space pmtSimTime so it works in any 3D view.
     if (sweepActive && hasSig) {
       const aT = pmtArrivalT[i];
       if (Number.isFinite(aT) && aT < 1e29) {
-        const u = Math.max(0, Math.min(1, (simTime - (aT - sweepEps)) / (2 * sweepEps)));
+        const u = Math.max(0, Math.min(1, (pmtSimTime - (aT - sweepEps)) / (2 * sweepEps)));
         const fade = u * u * (3 - 2 * u);
         alpha *= fade;
       } else {
@@ -1520,7 +1523,7 @@ function setupUI() {
     if (segMat) segMat.uniforms.sweepOn.value = sweepOn ? 1.0 : 0.0;
     if (sweepOn) sweepPlaying = true;
     updateSweepUI();
-    render2D();   // 2D fade applies from this frame on
+    render2D();
   });
   $('sweepPlayPause').addEventListener('click', () => {
     if (!sweepOn) return;   // no-op when sweep UI is hidden
