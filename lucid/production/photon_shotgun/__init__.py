@@ -13,6 +13,7 @@ from lucid.production.photon_shotgun.io import (
     save_shotgun_waveform, load_shotgun_waveform,
     save_shotgun_per_photon, load_shotgun_per_photon,
     StreamingWaveformWriter, StreamingPerPhotonWriter,
+    merge_waveform_shards, merge_per_photon_shards,
 )
 from lucid.production.photon_shotgun.utils import (
     read_detector_bounds,
