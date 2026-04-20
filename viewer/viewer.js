@@ -1214,8 +1214,10 @@ function render2D() {
   let corrMax = 1;
   if (corrMap) for (const v of corrMap.values()) if (v > corrMax) corrMax = v;
 
-  // Time-sweep gating: same arrivalT values as the 3D shader uses.
-  const sweepActive = sweepOn && pmtArrivalT;
+  // 2D sweep fade only meaningful in PMTs view: simTime is in PMT-time
+  // space then. In SEG view simTime is in seg-time space, which doesn't
+  // line up with pmtArrivalT — so skip the fade rather than render garbage.
+  const sweepActive = sweepOn && pmtArrivalT && curView === 'pmts';
   const sweepEps = Math.max(1e-4, (simTMax - simTMin) / 200);
 
   // Draw each PMT in layout space. v is already canvas-y-down.
@@ -1252,14 +1254,16 @@ function render2D() {
         alpha = hasSig ? 0.15 : 0.08;   // non-contributors dim, but not gone
       }
     }
-    // Sweep fade — mirror the 3D shader's smoothstep around arrivalT.
+    // Sweep fade — match the 3D shader's smoothstep (cubic Hermite),
+    // not a linear ramp, so 2D and 3D fade look identical.
     if (sweepActive && hasSig) {
       const aT = pmtArrivalT[i];
       if (Number.isFinite(aT) && aT < 1e29) {
-        const fade = Math.max(0, Math.min(1, (simTime - (aT - sweepEps)) / (2 * sweepEps)));
+        const u = Math.max(0, Math.min(1, (simTime - (aT - sweepEps)) / (2 * sweepEps)));
+        const fade = u * u * (3 - 2 * u);
         alpha *= fade;
       } else {
-        alpha = 0;   // sentinel/unreachable
+        alpha = 0;   // sentinel / unreachable
       }
     }
     ctx2d.globalAlpha = alpha;
@@ -1352,6 +1356,13 @@ function animate() {
     if (pmtMat) pmtMat.uniforms.simTime.value = simTime;
     if (segMat) segMat.uniforms.simTime.value = simTime;
     render2D();
+    // Throttled diagnostic (one log every ~120 frames ≈ 2 s).
+    if ((window.__sweepDbgN = (window.__sweepDbgN || 0) + 1) % 120 === 0) {
+      const n = pmtArrivalT ? pmtArrivalT.length : 0;
+      let nVisible = 0;
+      if (pmtArrivalT) for (let i = 0; i < n; i++) if (pmtArrivalT[i] < simTime) nVisible++;
+      console.log(`[sweep] simTime=${simTime.toFixed(4)} range=[${simTMin.toFixed(3)}, ${simTMax.toFixed(3)}] view=${curView} scope=${quantileScope} visible=${nVisible}/${n}`);
+    }
   }
 
   controls.update();
@@ -1367,7 +1378,11 @@ function applyViewSweepRange() {
   const scrub = $('sweepScrubber');
   scrub.min = simTMin; scrub.max = simTMax;
   scrub.step = (simTMax - simTMin) / 1000 || 0.01;
-  if (simTime < simTMin || simTime > simTMax) simTime = simTMin;
+  // Always reset simTime when the range changes — applyViewSweepRange is
+  // only called when the time *space* changed (event load, view toggle,
+  // scope change, reset), so an in-range carry-over (e.g. simTime=0.5 was
+  // a quantile rank, now it's 0.5 ns in a different mesh) is meaningless.
+  simTime = simTMin;
   scrub.value = simTime;
   const eps = Math.max(1e-4, (simTMax - simTMin) / 200);
   // Re-sync every sweep-related uniform — mesh rebuilds (quantile scope,
