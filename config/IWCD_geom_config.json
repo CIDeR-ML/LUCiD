@@ -2,9 +2,9 @@
   "material": "water",
   "detector_type": "cylinder",
   "geometry_definitions": {
-    "radius": 5.0,
+    "radius": 3.5,
     "height": 8.0,
-    "n_sensors": 10000,
-    "sensor_radius": 0.1
+    "n_sensors": 6992,
+    "sensor_radius": 0.075
   }
 }
