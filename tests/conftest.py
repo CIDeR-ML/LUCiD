@@ -20,6 +20,7 @@ _SLOW_FILES = [
     "test_sensor_map_validation.py",
     "test_shared_propagator.py",
     "test_shared_propagator_differentiability.py",
+    "test_shotgun_waveform.py",
     "test_sk_like_integration.py",
     "test_wavelength_integration.py",
 ]

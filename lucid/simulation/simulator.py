@@ -33,6 +33,7 @@ from lucid.simulation.photon_step import (
 )
 from lucid.simulation.sensor_response import (
     make_hits_simulation, make_hits_data, make_hits_likelihood,
+    build_make_hits_waveform, build_make_hits_per_photon_shotgun,
 )
 
 # ===================================================================
@@ -57,6 +58,7 @@ def setup_event_simulator(
         hit_mode=None,
         n_grad_iters=None,
         pos_grad_threshold=None,  # None → use mode default (calib:K, track:0)
+        waveform_config=None,
         **grid_params):
     """
     Set up and return an event simulator using DetectorParams / ParticleParams.
@@ -195,7 +197,8 @@ def setup_event_simulator(
         return detector.bounds_check(positions)
 
     # ---- Resolve hit_mode ---------------------------------------------------
-    _VALID_HIT_MODES = ('aggregated', 'per_photon', 'realistic')
+    _VALID_HIT_MODES = ('aggregated', 'per_photon', 'realistic',
+                        'waveform', 'shotgun_per_photon')
     if hit_mode is None:
         if sim_config.is_data:
             hit_mode = 'realistic'
@@ -221,10 +224,35 @@ def setup_event_simulator(
                               qe=qe, qe_corrections=qe_corrections,
                               rng_key=qe_key, apply_smearing=sim_config.apply_smearing)
 
+    # Shotgun hit modes (waveform + per-photon). Defaults match SK-realistic
+    # PMT behaviour; override via ``waveform_config``.
+    _wf_cfg = dict(window_ns=500.0, bin_width_ns=1.0, tts_sigma_ns=1.0,
+                   t_min_ns=0.0, smear_time=True, smear_charge=True)
+    if waveform_config:
+        _wf_cfg.update(waveform_config)
+
+    if hit_mode == 'waveform':
+        _wf_fn = build_make_hits_waveform(n_photons=n_photons, **_wf_cfg)
+        def _make_hits_waveform(flat_weights, flat_indices, flat_times, num_sensors,
+                                qe_key, qe, qe_corrections):
+            return _wf_fn(flat_weights, flat_indices, flat_times, num_sensors,
+                          qe_key, qe, qe_corrections)
+    elif hit_mode == 'shotgun_per_photon':
+        _pp_fn = build_make_hits_per_photon_shotgun(
+            n_photons=n_photons,
+            tts_sigma_ns=_wf_cfg['tts_sigma_ns'],
+            smear_time=_wf_cfg['smear_time'])
+        def _make_hits_shotgun_pp(flat_weights, flat_indices, flat_times, num_sensors,
+                                  qe_key, qe, qe_corrections):
+            return _pp_fn(flat_weights, flat_indices, flat_times, num_sensors,
+                          qe_key, qe, qe_corrections)
+
     _make_hits_fn = {
         'aggregated': _make_hits_aggregated,
         'per_photon': _make_hits_per_photon,
         'realistic': _make_hits_realistic,
+        'waveform': _make_hits_waveform if hit_mode == 'waveform' else None,
+        'shotgun_per_photon': _make_hits_shotgun_pp if hit_mode == 'shotgun_per_photon' else None,
     }[hit_mode]
 
     # ---- Wavelength-dependent medium (when wavelength_mode=True) -----
@@ -255,10 +283,17 @@ def setup_event_simulator(
                     jnp.full(n, detector_params.absorption_length),
                     None, key)
 
-        # Sample or use provided wavelengths
+        # Normalize wavelength input to per-photon array:
+        #   None   → sample Cherenkov spectrum
+        #   scalar → broadcast to (n,)
+        #   (n,)   → use as-is
         if wavelengths is None:
             key, wl_key = jax.random.split(key)
             wavelengths = sample_cherenkov_wavelengths(wl_key, n)
+        else:
+            wavelengths = jnp.asarray(wavelengths)
+            if wavelengths.ndim == 0:
+                wavelengths = jnp.full(n, wavelengths)
 
         wavelengths = jnp.clip(wavelengths,
                                _medium_wl.wavelength_grid[0],
@@ -531,7 +566,11 @@ def setup_event_simulator(
         else:
             qe_per_photon = jnp.full(Nphot, detector_params.qe)
 
-        _pgt = 0 if pos_grad_threshold is None else pos_grad_threshold
+        # Track-mode position-gradient default: was 0 (always stop) as a workaround
+        # for the reflection-normal curvature explosion. The normal-fix now lives
+        # inside photon_iteration_update_factors, so position gradient can flow
+        # all K bounces.
+        _pgt = sim_config.K if pos_grad_threshold is None else pos_grad_threshold
         return _common_propagation(
             photon_origins, photon_directions, photon_intensities, photon_times + t0,
             scatter_lengths, absorption_lengths,
@@ -548,11 +587,9 @@ def setup_event_simulator(
         photon_times = jnp.zeros((Nphot,))
 
         # Per-photon optical properties
-        source_wl = getattr(source, 'wavelength', None)
-        if source_wl is not None:
-            wavelengths = jnp.full(Nphot, source_wl)
-        else:
-            wavelengths = None
+        # Source wavelength can be None (→ Cherenkov), scalar, or (Nphot,) array;
+        # _get_optical_arrays normalizes the shape.
+        wavelengths = getattr(source, 'wavelength', None)
         scatter_lengths, absorption_lengths, qe_weights, key = _get_optical_arrays(
             Nphot, detector_params, opt_key, wavelengths=wavelengths)
 
