@@ -270,8 +270,9 @@ class TestSimConfigIntegration:
 
     def test_effective_n_grad_iters_values(self):
         from lucid.simulation.config import SimConfig
-        # Track mode: n_grad_iters=0 (always stop gradient on directions)
-        assert SimConfig(mode='track').effective_n_grad_iters == 0
+        # Track mode: gradient flows all K bounces (normal-fix inside photon step
+        # eliminates the curvature-compounding explosion that used to require 0)
+        assert SimConfig(mode='track', K=7).effective_n_grad_iters == 7
         # Calibration: n_grad_iters=2 (gradient flows for first 2 iterations)
         assert SimConfig(mode='calibration').effective_n_grad_iters == 2
         # Data: n_grad_iters=0
