@@ -497,3 +497,90 @@ class StreamingPerPhotonWriter:
 
     def __exit__(self, exc_type, exc, tb):
         self.close()
+
+
+# ---------------------------------------------------------------------------
+# Shard merging — glue multiple parallel shards into a single HDF5
+# ---------------------------------------------------------------------------
+
+def _merged_meta(shards: list, *, mode: str, extra_consistent: tuple):
+    """Collect shard metas, check consistency, return (merged_meta, metas)."""
+    metas = [dict(h5py.File(p, 'r')['meta'].attrs) for p in shards]
+    for key in ('mode',) + extra_consistent:
+        # Skip keys absent from any shard (one-shot save omits e.g. n_photons)
+        if any(key not in m for m in metas):
+            continue
+        vals = {tuple(np.atleast_1d(m[key]).tolist()) if hasattr(m[key], 'shape')
+                else m[key] for m in metas}
+        if len(vals) > 1:
+            raise ValueError(f"shards disagree on '{key}': {vals}")
+    merged = dict(metas[0])
+    merged['n_cases'] = int(sum(int(m['n_cases']) for m in metas))
+    merged['mode'] = mode
+    return merged, metas
+
+
+def merge_waveform_shards(shard_paths: list, output_path: str):
+    """Concatenate N waveform-mode HDF5 shards into one file.
+
+    Shards must agree on ``num_sensors``, ``n_time_bins``, ``n_photons``,
+    ``window_ns``, ``bin_width_ns``. Cases are renumbered globally.
+    """
+    if not shard_paths:
+        raise ValueError("shard_paths is empty")
+    merged, _ = _merged_meta(
+        shard_paths, mode='waveform',
+        extra_consistent=('num_sensors', 'n_time_bins', 'n_photons',
+                          'window_ns', 'bin_width_ns'))
+    n_time_bins = int(merged['n_time_bins'])
+
+    has_source = any('source' in h5py.File(p, 'r') for p in shard_paths)
+
+    with StreamingWaveformWriter(
+            output_path,
+            num_sensors=int(merged['num_sensors']),
+            n_time_bins=n_time_bins,
+            waveform_config={
+                'window_ns': float(merged['window_ns']),
+                'bin_width_ns': float(merged['bin_width_ns']),
+                'tts_sigma_ns': float(merged.get('tts_sigma_ns', 1.0)),
+                'smear_time': bool(merged.get('smear_time', 1)),
+                'smear_charge': bool(merged.get('smear_charge', 1)),
+            },
+            n_photons=int(merged.get('n_photons', 0)),
+            K=int(merged.get('K', 0)),
+            save_source=has_source,
+    ) as w:
+        for p in shard_paths:
+            shard = load_shotgun_waveform(p, dense=False)
+            n_cases = int(dict(shard['meta'])['n_cases'])
+            num_sensors = int(dict(shard['meta'])['num_sensors'])
+            wf = densify_waveform(
+                shard['case_idx'], shard['sensor_id'], shard['time_bin'],
+                shard['charge'], n_cases=n_cases,
+                num_sensors=num_sensors, n_time_bins=n_time_bins)
+            w.append(wf, shard['n_dropped'], shard['n_detected'],
+                     source_chunk=shard['source'] if w.save_source else None)
+
+
+def merge_per_photon_shards(shard_paths: list, output_path: str):
+    """Concatenate N per-photon shards into one HDF5."""
+    if not shard_paths:
+        raise ValueError("shard_paths is empty")
+    merged, _ = _merged_meta(
+        shard_paths, mode='per_photon',
+        extra_consistent=('n_photons',))
+
+    has_source = any('source' in h5py.File(p, 'r') for p in shard_paths)
+
+    with StreamingPerPhotonWriter(
+            output_path,
+            n_photons=int(merged['n_photons']),
+            tts_sigma_ns=float(merged.get('tts_sigma_ns', 1.0)),
+            K=int(merged.get('K', 0)),
+            save_source=has_source,
+    ) as w:
+        for p in shard_paths:
+            shard = load_shotgun_per_photon(p)
+            w.append(shard['detected'], shard['sensor_id'], shard['hit_time'],
+                     source_chunk=shard['source'] if w.save_source else None)
