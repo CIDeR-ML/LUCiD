@@ -22,7 +22,8 @@ class SimConfig(NamedTuple):
         Apply SK-like charge/time smearing in data mode.
     n_grad_iters : int
         Iteration threshold for direction stop_gradient.
-        Default derived from mode: track=0, calibration=2.
+        Default derived from mode: track=K (gradient flows all bounces),
+        calibration=2, data=0.
     """
     n_photons: int = 1_000_000
     K: int = 7
@@ -36,7 +37,11 @@ class SimConfig(NamedTuple):
         """Resolve n_grad_iters: explicit value or mode default."""
         if self.n_grad_iters is not None:
             return self.n_grad_iters
-        return {'track': 0, 'calibration': 2, 'data': 0}.get(self.mode, 0)
+        # Track default used to be 0 (fully detach direction gradient) as a
+        # workaround for the reflection-normal curvature explosion. That is now
+        # fixed at the normal level inside photon_iteration_update_factors, so
+        # direction gradient can flow all K bounces.
+        return {'track': self.K, 'calibration': 2, 'data': 0}.get(self.mode, 0)
 
     @property
     def is_data(self) -> bool:
