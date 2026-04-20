@@ -3,3 +3,6 @@
 sample_v3/
 test_data/
 __pycache__/
+
+# Override parent's *.html exclusion — viewer's index.html is source.
+!*.html

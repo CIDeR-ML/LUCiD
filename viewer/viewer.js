@@ -484,13 +484,17 @@ function buildPMTs() {
   // reveals them). Quantile transform replaces T with its rank fraction in
   // [0, 1], which gives the sweep uniform density even when event has a
   // long decay tail. Sweep range tracks whichever space we're in.
-  const qMap = quantilePMT() ? (unionQMap || buildQuantileMap(pmtT)) : null;
+  // arrivalT (drives the sweep) is *always* rank-based — that way the sweep
+  // is uniformly paced regardless of how clustered raw arrival times are.
+  // The Quantile-T scope setting controls coloring only.
+  const qMap = unionQMap || buildQuantileMap(pmtT);
   for (let i = 0; i < nSensors; i++) {
     const t = pmtT[i];
     if (!Number.isFinite(t)) { arrivalT[i] = 1e30; continue; }
-    arrivalT[i] = qMap ? qMap.get(t) : t;
+    const r = qMap.get(t);
+    arrivalT[i] = (r === undefined) ? 1e30 : r;
   }
-  pmtTRange = qMap ? [0, 1] : [minFinite(pmtT), maxFinite(pmtT)];
+  pmtTRange = [0, 1];
   pmtArrivalT = arrivalT;   // shared with 2D sweep rendering
 
   pmtGeo = new THREE.BufferGeometry();
@@ -571,24 +575,18 @@ function buildSegments() {
   const arrivalT = new Float32Array(N);
   const hasSig = new Float32Array(N);
 
-  // Segment time range for quantile transform.
-  const segQMap = quantileSeg() ? (unionQMap || buildQuantileMap(seg.time)) : null;
-  if (segQMap) {
-    segTRange = [0, 1];
-  } else {
-    let mn = Infinity, mx = -Infinity;
-    for (let i = 0; i < n; i++) {
-      const v = seg.time[i];
-      if (Number.isFinite(v)) { if (v < mn) mn = v; if (v > mx) mx = v; }
-    }
-    segTRange = [mn === Infinity ? 0 : mn, mx === -Infinity ? 1 : mx];
-  }
+  // Segment arrivalT (drives the sweep) is always rank-based for uniform
+  // sweep pacing — most events have segments clumped at low t, which would
+  // otherwise zip past in the first few frames. Coloring respects scope.
+  const segQMap = unionQMap || buildQuantileMap(seg.time);
+  segTRange = [0, 1];
 
   for (let i = 0; i < n; i++) {
     const sx = seg.start_x[i], sy = seg.start_y[i], sz = seg.start_z[i];
     const ex = seg.end_x[i],   ey = seg.end_y[i],   ez = seg.end_z[i];
     const t = seg.time[i];
-    const tMapped = segQMap ? segQMap.get(t) : t;
+    const r = segQMap.get(t);
+    const tMapped = (r === undefined) ? 1e30 : r;
     for (let k = 0; k < K; k++) {
       const f = (k + 0.5) / K;
       const p = i * K + k;
@@ -1214,10 +1212,9 @@ function render2D() {
   let corrMax = 1;
   if (corrMap) for (const v of corrMap.values()) if (v > corrMax) corrMax = v;
 
-  // 2D sweep fade only meaningful in PMTs view: simTime is in PMT-time
-  // space then. In SEG view simTime is in seg-time space, which doesn't
-  // line up with pmtArrivalT — so skip the fade rather than render garbage.
-  const sweepActive = sweepOn && pmtArrivalT && curView === 'pmts';
+  // arrivalT is always in [0,1] (rank space) for both meshes, so 2D PMT
+  // fade is meaningful in either view.
+  const sweepActive = sweepOn && pmtArrivalT;
   const sweepEps = Math.max(1e-4, (simTMax - simTMin) / 200);
 
   // Draw each PMT in layout space. v is already canvas-y-down.
@@ -1356,13 +1353,6 @@ function animate() {
     if (pmtMat) pmtMat.uniforms.simTime.value = simTime;
     if (segMat) segMat.uniforms.simTime.value = simTime;
     render2D();
-    // Throttled diagnostic (one log every ~120 frames ≈ 2 s).
-    if ((window.__sweepDbgN = (window.__sweepDbgN || 0) + 1) % 120 === 0) {
-      const n = pmtArrivalT ? pmtArrivalT.length : 0;
-      let nVisible = 0;
-      if (pmtArrivalT) for (let i = 0; i < n; i++) if (pmtArrivalT[i] < simTime) nVisible++;
-      console.log(`[sweep] simTime=${simTime.toFixed(4)} range=[${simTMin.toFixed(3)}, ${simTMax.toFixed(3)}] view=${curView} scope=${quantileScope} visible=${nVisible}/${n}`);
-    }
   }
 
   controls.update();
@@ -1401,7 +1391,8 @@ function applyViewSweepRange() {
 
 function updateSweepUI() {
   $('sweepScrubber').value = simTime;
-  $('sweepTimeLabel').textContent = simTime.toFixed(2) + ' ns';
+  // simTime is now a rank fraction in [0, 1].
+  $('sweepTimeLabel').textContent = (simTime * 100).toFixed(1) + ' %';
   const btn = $('sweepPlayPause');
   btn.innerHTML = sweepPlaying ? '&#x23F8;' : '&#x25B6;';
   btn.classList.toggle('active', sweepPlaying);
