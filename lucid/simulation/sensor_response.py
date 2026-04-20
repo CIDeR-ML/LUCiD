@@ -1,6 +1,7 @@
 """Sensor response: make_hits_* functions."""
 import jax
 import jax.numpy as jnp
+from functools import partial
 from lucid.utils import smear_times, smear_charges_SK_like
 
 # ===================================================================
@@ -129,3 +130,172 @@ def make_hits_likelihood(
 
     return log_w, safe_times, flat_indices, total_charge
 
+
+# ===================================================================
+# Shotgun mode: dense waveform & per-photon hit list
+# ===================================================================
+
+def _resolve_first_detection(
+        flat_weights, flat_indices, flat_times, n_photons,
+        per_photon_qe, qe_key, threshold):
+    """Compact flat propagation arrays to per-photon first-detection records.
+
+    Returns arrays of length ``n_photons``:
+    - detected : bool    — did this photon pass QE Bernoulli at any iteration?
+    - sensor_id : int32  — sensor hit (first-detection), or -1 if not detected
+    - hit_time : float32 — propagation time at first detection (0 if not detected)
+    """
+    base_valid = (flat_weights > threshold) & (flat_times > 0) & jnp.isfinite(flat_times)
+    detection_probs = jax.random.uniform(qe_key, shape=flat_weights.shape)
+    detected_flat = base_valid & (detection_probs < per_photon_qe)
+
+    photon_idx = jnp.arange(flat_weights.shape[0]) % n_photons
+
+    safe_time = jnp.where(detected_flat, flat_times, jnp.inf)
+    first_time = jax.ops.segment_min(safe_time, photon_idx, num_segments=n_photons)
+
+    matches_first = detected_flat & (flat_times == first_time[photon_idx])
+    safe_flat_idx = jnp.where(matches_first, jnp.arange(flat_weights.shape[0]),
+                              jnp.iinfo(jnp.int32).max)
+    first_flat_idx = jax.ops.segment_min(safe_flat_idx, photon_idx, num_segments=n_photons)
+
+    detected = jnp.isfinite(first_time)
+    sensor_id = jnp.where(detected, flat_indices[first_flat_idx], -1)
+    hit_time = jnp.where(detected, first_time, 0.0)
+    return detected, sensor_id, hit_time
+
+
+def build_make_hits_waveform(
+    n_photons,
+    window_ns=500.0,
+    bin_width_ns=1.0,
+    tts_sigma_ns=1.0,
+    t_min_ns=0.0,
+    smear_time=True,
+    smear_charge=True,
+    threshold=1e-10,
+):
+    """Factory: returns a ``make_hits_waveform`` closure with baked-in bin grid.
+
+    Pipeline: propagation flat arrays → per-photon first-detection (n_photons) →
+    TTS + gain smearing on n_photons entries → bin to (num_detectors, n_time_bins).
+    This keeps the segment_sum input small even when K×max_sensors×n_photons is large.
+
+    Parameters
+    ----------
+    n_photons : int
+        Number of photons per case (must match n_rays).
+    window_ns : float
+        Readout window in ns; default 500.
+    bin_width_ns : float
+        Waveform bin width in ns; default 1 ns (1 GHz FADC convention).
+    tts_sigma_ns : float
+        Gaussian σ of per-photon TTS; default 1.0 ns.
+    t_min_ns : float
+        Start of the window; default 0.
+    smear_time, smear_charge : bool
+        Toggle Gaussian TTS and SK-like gain smearing.
+    threshold : float
+        Minimum per-slot weight to treat as a physical candidate.
+
+    Returns
+    -------
+    callable
+        ``make_hits_waveform(flat_weights, flat_indices, flat_times,
+        num_detectors, rng_key, qe, qe_corrections)`` returning
+        ``(waveform, n_dropped, n_detected)``.
+    """
+    n_time_bins = int(round(window_ns / bin_width_ns))
+
+    @partial(jax.jit, static_argnames=('num_detectors',))
+    def make_hits_waveform(
+            flat_weights, flat_indices, flat_times, num_detectors,
+            rng_key, qe, qe_corrections):
+        per_photon_qe = qe * qe_corrections[flat_indices]
+        qe_key, tts_key, gain_key = jax.random.split(rng_key, 3)
+
+        detected, sensor_id, hit_time = _resolve_first_detection(
+            flat_weights, flat_indices, flat_times, n_photons,
+            per_photon_qe, qe_key, threshold)
+
+        if smear_time:
+            noise = jax.random.normal(tts_key, shape=hit_time.shape) * tts_sigma_ns
+            hit_time_smeared = hit_time + noise
+        else:
+            hit_time_smeared = hit_time
+
+        bin_idx = jnp.floor((hit_time_smeared - t_min_ns) / bin_width_ns).astype(jnp.int32)
+        in_window = (bin_idx >= 0) & (bin_idx < n_time_bins)
+
+        charges = jnp.ones((n_photons,), dtype=jnp.float32)
+        if smear_charge:
+            charges = smear_charges_SK_like(charges, key=gain_key)
+
+        keep = detected & in_window
+        dropped = detected & ~in_window
+
+        safe_sensor = jnp.where(keep, sensor_id, 0)
+        safe_bin = jnp.where(keep, bin_idx, 0)
+        flat_bin_idx = safe_sensor * n_time_bins + safe_bin
+        safe_charge = jnp.where(keep, charges, 0.0)
+
+        waveform_flat = jax.ops.segment_sum(
+            safe_charge, flat_bin_idx, num_segments=num_detectors * n_time_bins)
+        waveform = waveform_flat.reshape(num_detectors, n_time_bins)
+
+        n_dropped = jnp.sum(dropped.astype(jnp.int32))
+        n_detected = jnp.sum(detected.astype(jnp.int32))
+
+        return waveform, n_dropped, n_detected
+
+    make_hits_waveform.n_time_bins = n_time_bins
+    make_hits_waveform.window_ns = float(window_ns)
+    make_hits_waveform.bin_width_ns = float(bin_width_ns)
+    make_hits_waveform.tts_sigma_ns = float(tts_sigma_ns)
+    make_hits_waveform.t_min_ns = float(t_min_ns)
+    return make_hits_waveform
+
+
+def build_make_hits_per_photon_shotgun(
+    n_photons,
+    tts_sigma_ns=1.0,
+    smear_time=True,
+    threshold=1e-10,
+):
+    """Factory: returns a ``make_hits_per_photon`` closure for shotgun mode.
+
+    For each input photon, resolves the first-iteration detected slot (if any)
+    and returns (detected_flag, sensor_id, hit_time) arrays of length ``n_photons``.
+
+    Must be used with the MC-sampling propagator so weights are binary.
+
+    Parameters
+    ----------
+    n_photons : int
+        Number of photons per case (must match n_rays).
+    tts_sigma_ns : float
+        Gaussian σ of per-photon TTS; default 1.0 ns.
+    smear_time : bool
+        If True, apply Gaussian TTS smearing to hit times.
+    threshold : float
+        Minimum per-slot weight to consider a candidate.
+    """
+
+    @partial(jax.jit, static_argnames=('num_detectors',))
+    def make_hits_per_photon(
+            flat_weights, flat_indices, flat_times, num_detectors,
+            rng_key, qe, qe_corrections):
+        per_photon_qe = qe * qe_corrections[flat_indices]
+        qe_key, tts_key = jax.random.split(rng_key)
+
+        detected, sensor_id, hit_time = _resolve_first_detection(
+            flat_weights, flat_indices, flat_times, n_photons,
+            per_photon_qe, qe_key, threshold)
+
+        if smear_time:
+            noise = jax.random.normal(tts_key, shape=hit_time.shape) * tts_sigma_ns
+            hit_time = jnp.where(detected, hit_time + noise, hit_time)
+
+        return detected, sensor_id, hit_time
+
+    return make_hits_per_photon

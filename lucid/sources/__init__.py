@@ -10,3 +10,8 @@ from lucid.sources.calibration_sources import (
     generate_laser_photons,
     setup_calibration_generator,
 )
+from lucid.sources.shotgun_source import (
+    ShotgunSource,
+    shotgun_source,
+    stack_shotgun_sources,
+)
