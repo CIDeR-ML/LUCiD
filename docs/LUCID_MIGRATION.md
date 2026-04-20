@@ -41,9 +41,10 @@ debugging is **not affected** and stays as-is.
 `Segment_NCherenkov` per Geant4 step. Built and verified.
 
 **Still to do (LUCiD side)**: implement v3 writers and readers, refactor
-the two production-entry generators to call them, drop voxelization and
-the obsolete v1/v2 helpers, fix the pre-existing `qe_corrections` bug
-that blocks end-to-end runs.
+the two production-entry generators to call them, drop the obsolete
+v1/v2 helpers, fix the pre-existing `qe_corrections` bug that blocks
+end-to-end runs. (Voxelization has already been dropped — `voxelize.py`
+and its notebook are deleted.)
 
 ---
 

@@ -188,7 +188,7 @@ Across the four files, for each `event_NNN/`:
 | `particle_data_utils.py` | Modify | Update dataset paths and names to v3 schema (`read_particle_event_file` remains, reads `inst/event_NNN/` and `labl/event_NNN/`). ~100 LoC. |
 | `data_prod_utils.py` | **Delete** | Only consumers were `notebooks/` (disposable) and two production notebooks being migrated below. ~180 LoC gone. |
 | `generate_validation_htmls.sh` | Modify | Line 156: swap `--merged-filename` for `--dataset-name`/`--run-id`. Adjust downstream paths. ~5 LoC. |
-| `voxelize.py` | **Keep** | Module stays usable for on-the-fly voxelization in `voxel_visualization.ipynb`. No save path touches it after §3.4. |
+| `voxelize.py` | **Deleted** | Voxelization dropped entirely — superseded by per-segment `seg/` data. No remaining callers. |
 
 No `lucid/production/__init__.py` exists — no package-level re-exports
 to prune.
@@ -200,7 +200,7 @@ to prune.
 | `2D_event_visualization.ipynb` | Modify | Update reader call to v3. ~20 LoC. |
 | `3D_event_visualization.ipynb` | Modify | Update reader call to v3. ~20 LoC. |
 | `read_production_output.ipynb` | **Delete** | Demo of the old schema; replaced by v3 readers. |
-| `voxel_visualization.ipynb` | Keep untouched | Reads PhotonSim ROOT and voxelizes in-memory. No LUCiD HDF5 schema dependency. |
+| `voxel_visualization.ipynb` | **Deleted** | Removed alongside `voxelize.py` (its only dependency). |
 
 ---
 
