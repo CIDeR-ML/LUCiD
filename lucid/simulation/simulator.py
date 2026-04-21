@@ -15,7 +15,9 @@ from lucid.utils import (
 )
 from lucid.detector_params import DetectorParams, ParticleParams, load_detector_params, load_physics_config
 from lucid.wavelength.medium import make_medium, load_qe_curve, qe_curve_bounds
-from lucid.wavelength.spectrum import sample_cherenkov_wavelengths
+from lucid.wavelength.spectrum import (
+    sample_cherenkov_wavelengths, build_qe_weighted_cherenkov_sampler,
+)
 
 import jax
 import jax.numpy as jnp
@@ -59,6 +61,7 @@ def setup_event_simulator(
         n_grad_iters=None,
         pos_grad_threshold=None,  # None → use mode default (calib:K, track:0)
         waveform_config=None,
+        wavelength_sampling='cherenkov',
         **grid_params):
     """
     Set up and return an event simulator using DetectorParams / ParticleParams.
@@ -106,6 +109,19 @@ def setup_event_simulator(
         - ``'aggregated'`` -- differentiable per-sensor (charges, times). Default for calibration.
         - ``'per_photon'`` -- per-photon arrays (log_w, times, indices, charges). Default for track.
         - ``'realistic'`` -- Bernoulli QE sampling, hard-min timing, optional smearing. Default for data.
+    wavelength_sampling : str
+        How LUCiD samples λ when it samples (track mode, calibration with
+        ``source.wavelength=None``). Ignored silently when the caller supplies
+        wavelengths explicitly (scalar/array source, ROOT-file data-mode photons).
+
+        - ``'cherenkov'`` (default) — λ ~ 1/λ², per-photon weight = ``qe_fn(λ)``.
+        - ``'cherenkov_qe'`` — λ ~ QE(λ)/λ² via inverse CDF, per-photon weight
+          collapses to the scalar ``<QE>_C``. Variance-optimal in expected-value
+          mode. In Bernoulli / MC mode the expected waveform matches
+          ``'cherenkov'`` but per-shot Binomial fluctuations are suppressed, so
+          use only when the output is interpreted as a density estimate.
+          Rejected at setup when ``wavelength_mode=False``, no QE curve is
+          loaded, or ``is_data=True``.
 
     Returns
     -------
@@ -280,6 +296,33 @@ def setup_event_simulator(
         _medium_wl = None
         _qe_fn = None
 
+    # ---- Wavelength sampling mode ----------------------------------------
+    # 'cherenkov'   : Method A — λ ~ 1/λ², per-photon QE weight = qe_fn(λ).
+    # 'cherenkov_qe': Method B — λ ~ QE(λ)/λ² (importance sampling),
+    #                 per-photon QE weight collapses to the scalar <QE>_C.
+    if wavelength_sampling not in ('cherenkov', 'cherenkov_qe'):
+        raise ValueError(
+            f"wavelength_sampling must be 'cherenkov' or 'cherenkov_qe'; "
+            f"got {wavelength_sampling!r}")
+    if wavelength_sampling == 'cherenkov_qe':
+        if not wavelength_mode:
+            raise ValueError(
+                "wavelength_sampling='cherenkov_qe' requires wavelength_mode=True.")
+        if _qe_fn is None:
+            raise ValueError(
+                "wavelength_sampling='cherenkov_qe' requires a QE curve — set "
+                "qe_curve in the physics_config.")
+        if is_data:
+            raise ValueError(
+                "wavelength_sampling='cherenkov_qe' is incompatible with "
+                "is_data=True: PhotonSim ROOT photons carry their own "
+                "wavelengths; LUCiD does not sample in data mode.")
+        _qe_sampler, _mean_qe_c = build_qe_weighted_cherenkov_sampler(
+            _qe_fn, _wl_lo, _wl_hi)
+    else:
+        _qe_sampler = None
+        _mean_qe_c = None
+
     def _get_optical_arrays(n, detector_params, key, wavelengths=None):
         """Compute per-photon (n,) scatter/absorption arrays and QE weights.
 
@@ -299,13 +342,19 @@ def setup_event_simulator(
                     None, key)
 
         # Normalize wavelength input to per-photon array:
-        #   None   → sample Cherenkov spectrum
+        #   None   → sample Cherenkov spectrum (Method A or B depending on
+        #            wavelength_sampling)
         #   scalar → broadcast to (n,)
         #   (n,)   → use as-is
+        sampled_via_qe_importance = False
         if wavelengths is None:
             key, wl_key = jax.random.split(key)
-            wavelengths = sample_cherenkov_wavelengths(
-                wl_key, n, lambda_min=_wl_lo, lambda_max=_wl_hi)
+            if wavelength_sampling == 'cherenkov_qe':
+                wavelengths = _qe_sampler(wl_key, n)
+                sampled_via_qe_importance = True
+            else:
+                wavelengths = sample_cherenkov_wavelengths(
+                    wl_key, n, lambda_min=_wl_lo, lambda_max=_wl_hi)
         else:
             wavelengths = jnp.asarray(wavelengths)
             if wavelengths.ndim == 0:
@@ -319,7 +368,18 @@ def setup_event_simulator(
         scatter_lengths = 1.0 / (sc + 1e-30)
         absorption_lengths = 1.0 / (ac + 1e-30)
 
-        qe_weights = _qe_fn(wavelengths) if _qe_fn is not None else None
+        # QE-weight convention:
+        #   • Method B sampled here  → the λ-dependence of QE is already in
+        #     the sampling distribution, so the per-photon weight collapses
+        #     to the scalar <QE>_C.
+        #   • Otherwise (explicit wavelengths, PhotonSim data, or Method A):
+        #     the per-photon weight must include qe_fn(λ).
+        if sampled_via_qe_importance:
+            qe_weights = jnp.full(n, _mean_qe_c)
+        elif _qe_fn is not None:
+            qe_weights = _qe_fn(wavelengths)
+        else:
+            qe_weights = None
         return scatter_lengths, absorption_lengths, qe_weights, key
 
     # ================================================================
