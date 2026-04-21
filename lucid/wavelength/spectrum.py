@@ -8,7 +8,7 @@ import jax.numpy as jnp
 
 
 def sample_cherenkov_wavelengths(key, n_photons,
-                                 lambda_min=200.0, lambda_max=700.0):
+                                 lambda_min=300.0, lambda_max=700.0):
     """Sample wavelengths from the Cherenkov spectrum dN/dlambda ~ 1/lambda^2.
 
     Uses exact inverse-CDF sampling (no rejection step needed).
@@ -20,7 +20,9 @@ def sample_cherenkov_wavelengths(key, n_photons,
     n_photons : int
         Number of wavelengths to sample.
     lambda_min : float
-        Minimum wavelength in nm (default: 200, deep UV to match PhotonSim).
+        Minimum wavelength in nm (default: 300, lower edge of LUCiD's water
+        medium grid). Callers in ``setup_event_simulator`` pass tighter
+        bounds derived from the loaded QE curve.
     lambda_max : float
         Maximum wavelength in nm (default: 700, red edge of visible).
 

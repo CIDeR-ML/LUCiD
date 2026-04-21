@@ -72,6 +72,14 @@ def load_qe_curve(json_path):
     return get_qe
 
 
+def qe_curve_bounds(json_path):
+    """Return the (min, max) wavelength knots from a QE-curve JSON file."""
+    with open(json_path) as f:
+        data = json.load(f)
+    wavelengths = np.array(data["wavelengths_nm"])
+    return float(wavelengths.min()), float(wavelengths.max())
+
+
 # ---------------------------------------------------------------------------
 # Factory
 # ---------------------------------------------------------------------------
