@@ -70,20 +70,22 @@ def get_detector_bounds(detector):
     Returns:
         dict: Dictionary with detector type and bounds
     """
-    detector_type = detector.__class__.__name__
+    from lucid.geometry.cylinder import Cylinder
+    from lucid.geometry.sphere import Sphere
+    from lucid.geometry.box import Box
 
-    if 'Cylinder' in detector_type:
+    if isinstance(detector, Cylinder):
         return {
             'type': 'cylinder',
             'r': detector.r,
             'H': detector.H
         }
-    elif 'Sphere' in detector_type:
+    elif isinstance(detector, Sphere):
         return {
             'type': 'sphere',
             'r': detector.r
         }
-    elif 'Box' in detector_type:
+    elif isinstance(detector, Box):
         return {
             'type': 'box',
             'x': detector.L,
@@ -91,7 +93,7 @@ def get_detector_bounds(detector):
             'z': detector.H
         }
     else:
-        raise ValueError(f"Unknown detector type: {detector_type}")
+        raise ValueError(f"Unknown detector type: {detector.__class__.__name__}")
 
 
 def is_point_inside_detector(point, detector_bounds, fraction=1.0):
