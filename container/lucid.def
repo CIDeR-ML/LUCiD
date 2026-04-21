@@ -1,0 +1,50 @@
+Bootstrap: localimage
+From: /sdf/data/neutrino/cjesus/software/images/lucid-base.sif
+
+# Top layer of the LUCiD unified container. Bootstraps from
+# lucid-base.sif (apt + conda + Pythia6 + ROOT 6.28 already installed).
+# Adds:
+#   * GENIE v3.06.02 from source (against ROOT's libEGPythia6)
+#   * PhotonSim from source (conda GEANT4 + source ROOT)
+#   * LUCiD editable pip install
+#
+# Build: `apptainer build --fakeroot lucid.sif lucid.def`
+#
+# Fast iteration workflow:
+#   apptainer build --sandbox lucid-sandbox/ lucid-base.sif
+#   apptainer exec --writable --fakeroot --no-mount tmp \
+#       -B /sdf/data/neutrino/cjesus/tmp/build-cache:/build-cache \
+#       -B $PWD/../../PhotonSim:/opt/PhotonSim \
+#       -B $PWD/..:/opt/LUCiD \
+#       lucid-sandbox/ bash /opt/container-scripts/build-genie.sh
+#   ... iterate individual scripts until all pass ...
+#   apptainer build --fakeroot lucid.sif lucid-sandbox/
+
+%files
+    ../../PhotonSim   /opt/PhotonSim
+    ../                /opt/LUCiD
+
+%post
+    set -eux
+
+    # Scripts are already at /opt/container-scripts from the base image.
+    /opt/container-scripts/build-genie.sh
+    /opt/container-scripts/build-photonsim.sh
+    /opt/container-scripts/build-lucid.sh
+
+    mkdir -p /opt/genie_xsec
+
+%environment
+    export PATH=/opt/root/bin:/opt/genie/bin:/opt/conda/bin:$PATH
+    export LD_LIBRARY_PATH=/opt/root/lib:/opt/conda/lib:/opt/genie/lib:${LD_LIBRARY_PATH:-}
+    export ROOTSYS=/opt/root
+    export GENIE=/opt/genie
+    export GENIE_PREFIX=/opt/genie
+    export GXMLPATH=/opt/genie/config
+    export PHOTONSIM_BIN=/opt/PhotonSim/build/PhotonSim
+    export GENIE_XSEC_FILE=${GENIE_XSEC_FILE:-/opt/genie_xsec/gxspl-FNALsmall.xml}
+
+%labels
+    Project LUCiD
+    Layer full
+    Contents "Base + GENIE 3.06.02 + PhotonSim + LUCiD"
