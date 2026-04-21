@@ -141,14 +141,16 @@ def save_detector_params(params: DetectorParams, filepath: str):
 def _resolve_field(val, config_dir):
     """Resolve a single physics config field value.
 
-    - ``null``   → ``jnp.asarray(1.0)`` (placeholder)
+    - ``null`` / missing → ``jnp.asarray(jnp.nan)`` (unresolved placeholder;
+      wavelength-projectable scalars are filled in later from curves if
+      ``medium_model`` / ``qe_curve`` is referenced)
     - number     → ``jnp.asarray(float)``
     - list       → ``jnp.asarray(list)``
     - string ending in ``.json`` → loaded from file (relative to *config_dir*)
     - ``"__array__:filename.npy"`` → loaded from companion ``.npy``
     """
     if val is None:
-        return jnp.asarray(1.0)
+        return jnp.asarray(jnp.nan)
     if isinstance(val, str):
         if val.endswith(".json"):
             with open(os.path.join(config_dir, val)) as f:
@@ -163,15 +165,57 @@ def _resolve_field(val, config_dir):
     return jnp.asarray(float(val))
 
 
-def load_detector_params(filepath: str, num_sensors: int = None) -> DetectorParams:
+_PROJECTABLE_FIELDS = ("scatter_length", "absorption_length", "qe")
+
+
+def _project_missing_scalars(kwargs, medium_path, qe_path, ref_wavelength_nm,
+                             source_filepath):
+    """Fill NaN scalar fields by evaluating wavelength curves at ``ref_wavelength_nm``.
+
+    Modifies *kwargs* in place. Raises if a scalar is missing and no curve is
+    available to project from.
+    """
+    for field in _PROJECTABLE_FIELDS:
+        v = kwargs[field]
+        if v.ndim != 0 or not bool(jnp.isnan(v)):
+            continue
+
+        if field == "qe":
+            if qe_path is None:
+                raise ValueError(
+                    f"Physics config {source_filepath!r} has no scalar 'qe' "
+                    f"and no 'qe_curve' to project from at "
+                    f"λ={ref_wavelength_nm}nm.")
+            from lucid.wavelength.medium import load_qe_curve
+            scalar = float(load_qe_curve(qe_path)(ref_wavelength_nm))
+        else:
+            if medium_path is None:
+                raise ValueError(
+                    f"Physics config {source_filepath!r} has no scalar "
+                    f"{field!r} and no 'medium_model' to project from at "
+                    f"λ={ref_wavelength_nm}nm.")
+            from lucid.wavelength.medium import make_medium
+            wl_grid = jnp.array([ref_wavelength_nm], dtype=jnp.float32)
+            m = make_medium("water", wavelength_grid=wl_grid,
+                            medium_model_path=medium_path)
+            coeff = m.scatter_coeff if field == "scatter_length" else m.absorption_coeff
+            scalar = float(1.0 / (coeff[0] + 1e-30))
+
+        kwargs[field] = jnp.asarray(scalar, dtype=jnp.float32)
+
+
+def load_detector_params(filepath: str, num_sensors: int = None,
+                         scalar_ref_wavelength: float = None) -> DetectorParams:
     """Load DetectorParams from a composable physics config JSON.
 
     The physics config may contain only the fields relevant to the detector.
-    Fields not present in the JSON are filled with ``jnp.asarray(1.0)``
-    (scalar placeholder).
+    Missing scalar fields for ``scatter_length``, ``absorption_length`` or
+    ``qe`` are projected from the referenced wavelength curves at
+    ``scalar_ref_wavelength`` (default 400 nm). If neither a scalar value nor
+    a curve reference is available, loading fails.
 
     Field values can be:
-      - ``null``   → placeholder 1.0
+      - ``null`` / missing → projected from curves (see above), else error
       - number     → scalar
       - list       → inline array
       - ``"path/to/file.json"`` → loaded from JSON file (relative to config dir)
@@ -184,26 +228,19 @@ def load_detector_params(filepath: str, num_sensors: int = None) -> DetectorPara
     If *num_sensors* is given, scalar ``qe_corrections`` are automatically
     expanded to ``jnp.ones(num_sensors) * value``.
     """
-    config_dir = os.path.dirname(filepath) or "."
-    with open(filepath) as f:
-        data = json.load(f)
-
-    kwargs = {}
-    for field in DetectorParams._fields:
-        val = data.get(field, None)
-        kwargs[field] = _resolve_field(val, config_dir)
-
-    # Auto-expand scalar qe_corrections when num_sensors is known
-    if num_sensors is not None:
-        qe_corr = kwargs['qe_corrections']
-        if qe_corr.ndim == 0:
-            kwargs['qe_corrections'] = jnp.ones(num_sensors) * qe_corr
-
-    return DetectorParams(**kwargs)
+    dp, _, _ = load_physics_config(filepath, num_sensors=num_sensors,
+                                   scalar_ref_wavelength=scalar_ref_wavelength)
+    return dp
 
 
-def load_physics_config(filepath: str, num_sensors: int = None):
+def load_physics_config(filepath: str, num_sensors: int = None,
+                        scalar_ref_wavelength: float = None):
     """Load a composable physics config — returns DetectorParams plus extras.
+
+    Missing scalar fields (``scatter_length``, ``absorption_length``, ``qe``)
+    are projected from the referenced wavelength curves at
+    ``scalar_ref_wavelength`` (default 400 nm). If neither a scalar value nor
+    a curve reference is available, loading fails with a clear error.
 
     Returns
     -------
@@ -213,6 +250,10 @@ def load_physics_config(filepath: str, num_sensors: int = None):
     qe_curve_path : str or None
         Resolved path to the PMT QE curve JSON, if present.
     """
+    from lucid.wavelength import DEFAULT_WAVELENGTH_NM
+    ref_wl = (scalar_ref_wavelength if scalar_ref_wavelength is not None
+              else DEFAULT_WAVELENGTH_NM)
+
     config_dir = os.path.dirname(filepath) or "."
     with open(filepath) as f:
         data = json.load(f)
@@ -228,10 +269,16 @@ def load_physics_config(filepath: str, num_sensors: int = None):
         val = data.get(field, None)
         kwargs[field] = _resolve_field(val, config_dir)
 
+    _project_missing_scalars(kwargs, medium_model_path, qe_curve_path,
+                             ref_wl, filepath)
+
     if num_sensors is not None:
         qe_corr = kwargs['qe_corrections']
         if qe_corr.ndim == 0:
-            kwargs['qe_corrections'] = jnp.ones(num_sensors) * qe_corr
+            # NaN qe_corrections means the config omitted it entirely — default
+            # to neutral (1.0) rather than poisoning the array.
+            fill = jnp.where(jnp.isnan(qe_corr), jnp.float32(1.0), qe_corr)
+            kwargs['qe_corrections'] = jnp.ones(num_sensors) * fill
 
     return DetectorParams(**kwargs), medium_model_path, qe_curve_path
 
