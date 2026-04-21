@@ -25,9 +25,24 @@ export HOST_PYTHON="python3.8"
 export LUCID_PATH="/path/to/your/LUCiD"
 
 # =============================================================================
-# Singularity image (hosts the LUCiD Python env with jax / numpy / h5py)
+# Singularity images
 # =============================================================================
+# Legacy image (LUCiD Python env only: jax/numpy/h5py). Used by the classic
+# two-step sbatch body for non-GENIE configs (PhotonSim on bare host, LUCiD
+# in this image).
 export SINGULARITY_IMAGE_PATH="/sdf/group/neutrino/images/develop.sif"
+
+# Unified image (GEANT4 + ROOT + GENIE + PhotonSim + LUCiD) — used for
+# GENIE-based configs (primary_source="genie"), where the whole chain runs
+# in one `singularity exec`. Build with `apptainer build --fakeroot
+# lucid.sif LUCiD/container/lucid.def`.
+export LUCID_IMAGE_PATH="/path/to/your/lucid.sif"
+
+# GENIE cross-section spline XML (gntpc input). The default below is the
+# S3DF cvmfs-staged `G18_02a_00_000` tune covering neutrino energies up to
+# ~1000 GeV, which is plenty for our 0.1–10 GeV flux. Non-S3DF users should
+# stage a local copy and point this at it.
+export GENIE_XSEC_FILE="/cvmfs/larsoft.opensciencegrid.org/products/genie_xsec/v3_06_00/NULL/G1802a00000-k250-e1000/data/gxspl-FNALsmall.xml"
 
 # =============================================================================
 # Output paths

@@ -26,9 +26,18 @@ export HOST_PYTHON="python3.8"
 export LUCID_PATH="/sdf/home/c/cjesus/REFACTORED/LUCiD"
 
 # =============================================================================
-# Singularity image (hosts the LUCiD Python env with jax / numpy / h5py)
+# Singularity images
 # =============================================================================
+# Legacy image (LUCiD Python env only). Two-step sbatch body: PhotonSim on
+# bare host + LUCiD in this image.
 export SINGULARITY_IMAGE_PATH="/sdf/group/neutrino/images/develop.sif"
+
+# Unified image (GEANT4 + ROOT + GENIE + PhotonSim + LUCiD). Used for
+# GENIE-based configs; one `singularity exec` runs the whole chain.
+export LUCID_IMAGE_PATH="/sdf/data/neutrino/cjesus/software/images/lucid.sif"
+
+# GENIE cross-section spline XML for the G18_02a_00_000 tune (0.1-1000 GeV).
+export GENIE_XSEC_FILE="/cvmfs/larsoft.opensciencegrid.org/products/genie_xsec/v3_06_00/NULL/G1802a00000-k250-e1000/data/gxspl-FNALsmall.xml"
 
 # =============================================================================
 # Output paths

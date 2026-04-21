@@ -35,6 +35,7 @@ def generate_macro(
     output_root_file: str,
     n_events: int,
     override_energy_MeV: Optional[float] = None,
+    genie_rootracker: Optional[str] = None,
 ) -> str:
     """Return the Geant4 macro text for one PhotonSim job.
 
@@ -50,7 +51,19 @@ def generate_macro(
         If set, force monoenergetic primaries at this energy regardless of
         config's `energy_distribution`. Used by the S3DF wrapper's energy-scan
         fan-out. If unset, behavior follows `config['energy_distribution']`.
+    genie_rootracker : str, optional
+        Path to a GENIE rooTracker ROOT file (from `gntpc -f rootracker`).
+        When set, emit `/gun/genieInput` / `/gun/genieIsotropic` instead of
+        `/gun/addPrimary*` — PhotonSim injects final-state particles from the
+        rootracker entries. Requires config['primary_source'] == 'genie'.
     """
+    if genie_rootracker is not None:
+        return _generate_genie_macro(
+            config=config,
+            output_root_file=output_root_file,
+            n_events=n_events,
+            rootracker_path=genie_rootracker,
+        )
     config_name = config.get("name", "")
     config_number = config.get("config_number", -1)
     material = config.get("material", "")
@@ -144,4 +157,72 @@ def generate_macro(
     lines.append(f"/run/beamOn {n_events}")
 
     # Trailing newline matches `cat >> HEREDOC` output: one `\n` after the last line.
+    return "\n".join(lines) + "\n"
+
+
+def _generate_genie_macro(
+    *,
+    config: dict,
+    output_root_file: str,
+    n_events: int,
+    rootracker_path: str,
+) -> str:
+    """Emit a Geant4 macro that reads primaries from a GENIE rootracker file."""
+    config_name = config.get("name", "")
+    config_number = config.get("config_number", -1)
+    material = config.get("material", "")
+    g = config.get("genie", {})
+    probe = g.get("probe_pdg", "?")
+    emin = g.get("energy_min_GeV", "?")
+    emax = g.get("energy_max_GeV", "?")
+    isotropic = str(g.get("direction", "isotropic")).lower() == "isotropic"
+    store_individual = bool(config.get("store_individual_photons", False))
+    disable_decays = bool(config.get("disable_decays", False))
+
+    lines: list[str] = []
+    lines.append("# PhotonSim macro (GENIE primary source)")
+    lines.append(f"# Configuration: {config_name}")
+    lines.append(f"# Config Number: {config_number:06d}")
+    lines.append(f"# Material: {material}")
+    lines.append(f"# Probe PDG: {probe}, E range [{emin}, {emax}] GeV, "
+                 f"direction: {'isotropic' if isotropic else 'GENIE beam axis'}")
+    lines.append("")
+    lines.append("# Set output filename before initialization")
+    lines.append(f"/output/filename {output_root_file}")
+    lines.append("")
+    lines.append("/run/initialize")
+    lines.append("")
+
+    if store_individual:
+        lines.append("/photon/storeIndividual true")
+        lines.append("/edep/storeIndividual false")
+    else:
+        lines.append("/photon/storeIndividual false")
+        lines.append("/edep/storeIndividual false")
+
+    if disable_decays:
+        lines.append("")
+        lines.append("# Decays disabled (unusual for GENIE events; included for parity)")
+        lines.append("/particle/select mu-")
+        lines.append("/particle/process/inactivate 1")
+        lines.append("/particle/process/inactivate 7")
+        lines.append("/particle/select mu+")
+        lines.append("/particle/process/inactivate 1")
+        lines.append("/particle/select pi+")
+        lines.append("/particle/process/inactivate 1")
+        lines.append("/particle/select pi-")
+        lines.append("/particle/process/inactivate 1")
+    else:
+        lines.append("")
+        lines.append("# Decays ENABLED (standard for GENIE final-state propagation)")
+
+    lines.append("")
+    lines.append("# Load final-state particles from GENIE rootracker file.")
+    lines.append("/gun/clearPrimaries")
+    lines.append(f"/gun/genieInput {rootracker_path}")
+    lines.append(f"/gun/genieIsotropic {'true' if isotropic else 'false'}")
+    lines.append("")
+    lines.append(f"# Run {n_events} events")
+    lines.append(f"/run/beamOn {n_events}")
+
     return "\n".join(lines) + "\n"

@@ -7,8 +7,11 @@ singularity.
 
 - **GEANT4 11.3+** and **ROOT 6.0+** installed on your system. On
   Linux, `conda install -c conda-forge geant4 root` is the fastest
-  path (Dockerfile coming in a future phase).
+  path.
 - **Python 3.9+**.
+- **GENIE v3** (only if you want neutrino-flux configs like
+  `dataprod_13_numu.json` / `dataprod_14_nue.json`). Easiest: use the
+  unified container — see the bottom of this doc.
 
 ## 1. Build PhotonSim (once)
 
@@ -85,6 +88,33 @@ done
 
 For SLURM or HPC submission on S3DF, see
 [QUICKSTART_S3DF.md](QUICKSTART_S3DF.md).
+
+## Neutrino-flux configs (GENIE chain)
+
+Configs with `"primary_source": "genie"` (e.g. `dataprod_13_numu.json`,
+`dataprod_14_nue.json`) chain **gevgen → gntpc → PhotonSim → LUCiD**
+per job. Dependencies are GEANT4 + ROOT + GENIE v3 + the LUCiD Python
+env. The simplest way to cover all of those is the unified container:
+
+```bash
+# One-time build (needs Apptainer 1.2+ with fakeroot support; ~45 min).
+cd LUCiD/container
+apptainer build --fakeroot lucid.sif lucid.def
+
+# Run any GENIE config in one invocation:
+singularity exec \
+    -B /path/to/xsec:/opt/genie_xsec \
+    lucid.sif \
+    lucid-run-job \
+        --config /opt/LUCiD/lucid/production/configs/dataprod_13_numu.json \
+        --output-dir /tmp/genie_test --job-id 1 --test
+```
+
+The container ships PhotonSim pre-built and LUCiD pip-installed, so
+`PHOTONSIM_BIN` is already set. GENIE cross-section splines are large
+(~500 MB) and are not baked in; point `GENIE_XSEC_FILE` at a local copy
+(e.g. from
+`cvmfs/larsoft.opensciencegrid.org/products/genie_xsec/v3_06_00/NULL/G1802a00000-k250-e1000/data/`).
 
 ## Troubleshooting
 

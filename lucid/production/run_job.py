@@ -78,6 +78,11 @@ def _parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
         help="Keep the intermediate PhotonSim ROOT file even if config sets cleanup_root_files=true.",
     )
     parser.add_argument(
+        "--skip-genie", action="store_true",
+        help="Skip the GENIE step (gevgen+gntpc). Has no effect when "
+             "primary_source != 'genie'.",
+    )
+    parser.add_argument(
         "--skip-photonsim", action="store_true",
         help="Skip macro generation + PhotonSim. Assumes the ROOT file is already present. "
              "Use in multi-process workflows where PhotonSim runs in a different environment "
@@ -95,9 +100,14 @@ def _parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
 def _load_config(path: str) -> dict:
     with open(path) as f:
         cfg = json.load(f)
-    for required in ("name", "particles", "material", "energy_distribution"):
-        if required not in cfg:
-            raise ValueError(f"Config {path!r} missing required field: {required!r}")
+    required = ["name", "material"]
+    if cfg.get("primary_source") == "genie":
+        required.append("genie")
+    else:
+        required += ["particles", "energy_distribution"]
+    for key in required:
+        if key not in cfg:
+            raise ValueError(f"Config {path!r} missing required field: {key!r}")
     return cfg
 
 
@@ -205,8 +215,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     if n_events is None:
         n_events = int(config.get("n_events_per_job", 100))
 
-    if args.skip_photonsim and args.skip_lucid:
-        print("Error: --skip-photonsim and --skip-lucid together are a no-op.", file=sys.stderr)
+    if args.skip_genie and args.skip_photonsim and args.skip_lucid:
+        print("Error: all steps skipped; nothing to do.", file=sys.stderr)
         return EXIT_CONFIG
 
     photonsim_bin = os.environ.get("PHOTONSIM_BIN")
@@ -238,6 +248,40 @@ def main(argv: Optional[list[str]] = None) -> int:
     print(f"    n_events:     {n_events}")
     print(f"    output_dir:   {output_dir}")
 
+    # Deterministic path for the GENIE rootracker file, regardless of
+    # whether we produce it this invocation or a prior one did. Used by both
+    # the GENIE step and the macro-generation step so the two can run in
+    # separate processes and still agree on the path.
+    gtrac_path = output_dir / f"gntp_job_{job_id_padded}.gtrac.root"
+    uses_genie = config.get("primary_source") == "genie"
+
+    # Step 0: GENIE event generation (only when the config requests it)
+    if uses_genie and not args.skip_genie:
+        try:
+            from lucid.production.run_genie import run_genie
+            print("\n=== Step 0: GENIE event generation ===", flush=True)
+            produced = run_genie(
+                config=config,
+                output_dir=output_dir,
+                job_id=args.job_id,
+                n_events=n_events,
+                seed=args.master_seed,
+            )
+            print(f"GENIE rootracker: {produced}")
+            # run_genie uses the same convention; sanity-check.
+            if produced != gtrac_path:
+                print(f"Warning: GENIE output {produced} != expected {gtrac_path}")
+        except Exception as e:
+            print(f"GENIE step failed: {e}", file=sys.stderr)
+            return EXIT_PHOTONSIM
+    elif uses_genie and args.skip_genie and not args.skip_photonsim:
+        # PhotonSim will consume the rootracker; it must already exist.
+        if not gtrac_path.is_file():
+            print(f"Error: --skip-genie set but {gtrac_path} does not exist "
+                  f"(required for PhotonSim step with primary_source=genie).",
+                  file=sys.stderr)
+            return EXIT_PHOTONSIM
+
     # Step 1+2: Generate macro and run PhotonSim
     if not args.skip_photonsim:
         from lucid.production.generate_macro import generate_macro
@@ -247,6 +291,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             output_root_file=root_filename,
             n_events=n_events,
             override_energy_MeV=args.override_energy_MeV,
+            genie_rootracker=str(gtrac_path) if uses_genie else None,
         )
         macro_path.write_text(macro_text)
         print(f"Wrote {macro_path}")

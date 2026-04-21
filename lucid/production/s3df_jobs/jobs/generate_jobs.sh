@@ -68,11 +68,12 @@ CONFIG_NAME_SLUG=$(echo "$CONFIG_NAME" | sed 's/+/plus/g; s/-/minus/g; s/ /_/g; 
 CONFIG_DESC=$(jq -r '.description // ""' "$CONFIG_FILE")
 MATERIAL=$(jq -r '.material' "$CONFIG_FILE")
 OUTPUT_PATH=$(jq -r '.output_path' "$CONFIG_FILE")
-ENERGY_DIST=$(jq -r '.energy_distribution' "$CONFIG_FILE")
+PRIMARY_SOURCE=$(jq -r '.primary_source // "particle_gun"' "$CONFIG_FILE")
+ENERGY_DIST=$(jq -r '.energy_distribution // "uniform"' "$CONFIG_FILE")
 RUN_LUCID=$(jq -r '.run_lucid // true' "$CONFIG_FILE")
 N_JOBS=$(jq -r '.n_jobs' "$CONFIG_FILE")
 N_EVENTS=$(jq -r '.n_events_per_job' "$CONFIG_FILE")
-N_PARTICLES=$(jq '.particles | length' "$CONFIG_FILE")
+N_PARTICLES=$(jq '.particles // [] | length' "$CONFIG_FILE")
 USE_CONFIG_NUMBER=$(jq -r 'if has("use_config_number") then .use_config_number else true end' "$CONFIG_FILE")
 
 if [ "$TEST_MODE" = true ]; then
@@ -84,7 +85,7 @@ fi
 [ "$MATERIAL"      != "null" ] || { echo "Error: config missing required field 'material'"    >&2; exit 1; }
 [ "$OUTPUT_PATH"   != "null" ] || { echo "Error: config missing required field 'output_path'" >&2; exit 1; }
 
-if [ "$ENERGY_DIST" != "monoenergetic" ] && [ "$ENERGY_DIST" != "uniform" ]; then
+if [ "$PRIMARY_SOURCE" != "genie" ] && [ "$ENERGY_DIST" != "monoenergetic" ] && [ "$ENERGY_DIST" != "uniform" ]; then
     echo "Error: energy_distribution must be 'monoenergetic' or 'uniform' (got: $ENERGY_DIST)" >&2
     exit 1
 fi
@@ -95,7 +96,19 @@ if [ "$USE_CONFIG_NUMBER" == "true" ] && { [ "$CONFIG_NUMBER" == "null" ] || [ "
 fi
 
 [ -n "${LUCID_PATH:-}" ] || { echo "Error: LUCID_PATH not set in user_paths.sh" >&2; exit 1; }
-[ -n "${PHOTONSIM_BIN:-}" ] || { echo "Error: PHOTONSIM_BIN not set in user_paths.sh" >&2; exit 1; }
+
+if [ "$PRIMARY_SOURCE" = "genie" ]; then
+    [ -n "${LUCID_IMAGE_PATH:-}" ] || {
+        echo "Error: LUCID_IMAGE_PATH not set (required for primary_source=genie)." >&2
+        echo "Build the unified container with LUCiD/container/lucid.def and point" >&2
+        echo "LUCID_IMAGE_PATH at the resulting .sif." >&2
+        exit 1; }
+    [ -f "${LUCID_IMAGE_PATH}" ] || {
+        echo "Error: LUCID_IMAGE_PATH=${LUCID_IMAGE_PATH} does not exist." >&2
+        exit 1; }
+else
+    [ -n "${PHOTONSIM_BIN:-}" ] || { echo "Error: PHOTONSIM_BIN not set in user_paths.sh" >&2; exit 1; }
+fi
 
 # --- Effective resources ------------------------------------------------------
 EFFECTIVE_OUTPUT_BASE="${OUTPUT_OVERRIDE:-$OUTPUT_BASE_PATH}"
@@ -146,6 +159,8 @@ emit_sbatch() {
     [ "$EFFECTIVE_GPUS" != "0" ] && gpu_line="#SBATCH --gpus=${EFFECTIVE_GPUS}"
 
     local sbatch_path="${out_dir}/submit_job_${job_id}.sbatch"
+
+    # Common SBATCH header.
     cat > "$sbatch_path" <<EOFSBATCH
 #!/bin/bash
 #SBATCH --partition=${EFFECTIVE_PARTITION}
@@ -165,13 +180,37 @@ echo "SLURM Job ID: \${SLURM_JOB_ID}"
 echo "Job started:  \$(date)"
 echo "Node:         \$(hostname)"
 
+EOFSBATCH
+
+    if [ "$PRIMARY_SOURCE" = "genie" ]; then
+        # Single-step body: everything runs inside the unified LUCiD image
+        # (GEANT4 + ROOT + GENIE + PhotonSim + LUCiD). No bare-host state.
+        local skip_lucid_flag=""
+        [ "$RUN_LUCID" != "true" ] && skip_lucid_flag="--skip-lucid"
+
+        cat >> "$sbatch_path" <<EOFSBATCH
+# Unified container: GEANT4 + ROOT + GENIE + PhotonSim + LUCiD.
+# Cross-section splines live on /cvmfs (526 MB), so we bind it into the
+# container rather than bake into the image.
+export APPTAINERENV_GENIE_XSEC_FILE=${GENIE_XSEC_FILE}
+singularity exec --nv -B /sdf,/fs,/sdf/scratch,/lscratch,/cvmfs \\
+    ${LUCID_IMAGE_PATH} \\
+    lucid-run-job \\
+        --config "${CONFIG_FILE}" \\
+        --output-dir "${out_dir}" \\
+        --job-id ${job_id} ${test_flag} ${override_flag} ${skip_lucid_flag}
+
+EOFSBATCH
+    else
+        # Classic two-step body: PhotonSim on bare host, LUCiD in legacy image.
+        cat >> "$sbatch_path" <<EOFSBATCH
 # Host-side env: GEANT4 + ROOT shared libs for the PhotonSim binary.
 source ${UTILS_DIR}/setup_environment.sh
 export PHOTONSIM_BIN=${PHOTONSIM_BIN}
 export PYTHONPATH=${LUCID_PATH}:\${PYTHONPATH:-}
 export APPTAINERENV_PYTHONPATH=\${PYTHONPATH}
 
-# Step A: run macro generation + PhotonSim on the bare node (no jax needed).
+# Step A: macro generation + PhotonSim on the bare node (no jax needed).
 ${HOST_PYTHON:-python3} -m lucid.production.run_job \\
     --config "${CONFIG_FILE}" \\
     --output-dir "${out_dir}" \\
@@ -180,9 +219,9 @@ ${HOST_PYTHON:-python3} -m lucid.production.run_job \\
 
 EOFSBATCH
 
-    if [ "$RUN_LUCID" == "true" ]; then
-        cat >> "$sbatch_path" <<EOFSBATCH
-# Step B: run LUCiD v3 writer inside the singularity image (has jax/numpy/h5py).
+        if [ "$RUN_LUCID" == "true" ]; then
+            cat >> "$sbatch_path" <<EOFSBATCH
+# Step B: LUCiD v3 writer inside the legacy singularity image.
 singularity exec --nv -B /sdf,/fs,/sdf/scratch,/lscratch \\
     ${SINGULARITY_IMAGE_PATH} \\
     python3 -m lucid.production.run_job \\
@@ -192,6 +231,7 @@ singularity exec --nv -B /sdf,/fs,/sdf/scratch,/lscratch \\
         --skip-photonsim ${test_flag}
 
 EOFSBATCH
+        fi
     fi
 
     cat >> "$sbatch_path" <<EOFSBATCH

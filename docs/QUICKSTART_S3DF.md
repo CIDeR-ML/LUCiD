@@ -64,18 +64,31 @@ python3 /path/to/LUCiD/viewer/serve_viewer.py <OUT>/water/uniform_energy/config_
 
 ## What each sbatch does
 
-The `submit_job_NNN.sbatch` that `generate_jobs.sh` writes has two
-steps:
+`generate_jobs.sh` emits one of two sbatch shapes based on the config's
+`primary_source`:
 
-1. **Bare-host step**: `source utils/setup_environment.sh`, then run
-   `$HOST_PYTHON -m lucid.production.run_job --skip-lucid ...`. This
-   handles macro generation + the PhotonSim binary (needs GEANT4/ROOT
-   shared libs from the host, not the container).
+**Particle-gun configs** (default — `dataprod_01_mu.json`, etc.): two-step body
+1. **Bare-host step** — `source utils/setup_environment.sh`, then
+   `$HOST_PYTHON -m lucid.production.run_job --skip-lucid ...` (macro gen +
+   PhotonSim; needs GEANT4/ROOT shared libs from the host).
+2. **Singularity step** — `singularity exec $SINGULARITY_IMAGE_PATH python3
+   -m lucid.production.run_job --skip-photonsim ...` (LUCiD v3 writer;
+   needs jax/numpy/h5py from the container).
 
-2. **Singularity step**: `singularity exec $SINGULARITY_IMAGE_PATH
-   python3 -m lucid.production.run_job --skip-photonsim ...`. This
-   runs the LUCiD v3 writer (needs jax / numpy / h5py from the
-   container).
+**GENIE configs** (`primary_source: genie`, e.g. `dataprod_13_numu.json`):
+single-step body — the whole chain (gevgen → gntpc → PhotonSim → LUCiD)
+runs inside one `singularity exec $LUCID_IMAGE_PATH lucid-run-job ...`.
+The unified image at `LUCID_IMAGE_PATH` contains GEANT4 11.3, ROOT,
+GENIE v3.06.02, PhotonSim, and the LUCiD Python stack. Build with:
+
+```bash
+cd LUCiD/container
+apptainer build --fakeroot lucid.sif lucid.def
+# point user_paths.sh:LUCID_IMAGE_PATH at the resulting .sif
+```
+
+The build also needs `GENIE_XSEC_FILE` set in `user_paths.sh` — by
+default this points at the cvmfs-staged `G18_02a_00_000` splines.
 
 ## Paths / conventions
 
