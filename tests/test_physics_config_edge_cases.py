@@ -63,8 +63,13 @@ def test_config_loads(det_name, cfg_file, n_sensors):
 
 
 # ---------------------------------------------------------------------------
-# 2. Field presence: populated fields have correct values; missing default to 1.0
+# 2. Field presence: populated fields carry their JSON values; missing
+#    projectable fields are filled from wavelength curves at the reference λ;
+#    missing non-projectable fields are left as NaN (loud failure if used).
 # ---------------------------------------------------------------------------
+_PROJECTABLE = ("scatter_length", "absorption_length", "qe")
+
+
 @pytest.mark.parametrize("det_name", list(DETECTOR_INFO.keys()))
 def test_field_presence(det_name, loaded_configs):
     params, _, _, cfg_path, n_sensors = loaded_configs[det_name]
@@ -88,15 +93,27 @@ def test_field_presence(det_name, loaded_configs):
                 assert val.ndim >= 1, (
                     f"{det_name}.{field} loaded from file '{raw_val}' "
                     f"should be array, got shape {val.shape}")
+        elif field in _PROJECTABLE:
+            # Missing scatter/absorption/qe should be projected from curves —
+            # finite, positive, not the placeholder NaN.
+            assert val.ndim == 0 and bool(jnp.isfinite(val)) and float(val) > 0, (
+                f"{det_name}.{field} should be projected from curves at λ_ref, "
+                f"got {float(val)}")
+        elif field == "qe_corrections":
+            # qe_corrections defaults to neutral 1.0 (optionally expanded).
+            assert bool(jnp.all(jnp.isclose(val, 1.0))), (
+                f"{det_name}.qe_corrections missing → should be neutral 1.0, "
+                f"got {val}")
         else:
-            assert val.ndim == 0 and jnp.allclose(val, 1.0), (
-                f"{det_name}.{field} should default to 1.0, "
-                f"got {val if val.ndim > 0 else float(val)}")
+            # Non-projectable scalars (reflections): NaN placeholder if absent.
+            assert val.ndim == 0 and bool(jnp.isnan(val)), (
+                f"{det_name}.{field} should be NaN when missing, got {float(val)}")
 
 
-def test_sk_missing_fields_default_to_one(loaded_configs):
-    """SK_physics_config should NOT have scatter_length/absorption_length/qe
-    in the JSON; those fields should default to 1.0."""
+def test_sk_missing_fields_project_from_curves(loaded_configs):
+    """SK_physics_config has no scalar scatter/absorption/qe — they must be
+    projected from the referenced curves (medium_model, qe_curve), not NaN,
+    not 1.0."""
     sk_params, _, _, cfg_path, _ = loaded_configs["SK"]
     with open(cfg_path) as f:
         sk_raw = json.load(f)
@@ -104,8 +121,11 @@ def test_sk_missing_fields_default_to_one(loaded_configs):
     for field in ["scatter_length", "absorption_length", "qe"]:
         assert field not in sk_raw, f"SK config unexpectedly has '{field}'"
         val = getattr(sk_params, field)
-        assert val.ndim == 0 and jnp.allclose(val, 1.0), (
-            f"SK.{field} should default to 1.0, got {float(val):.4f}")
+        assert val.ndim == 0, f"SK.{field} should be scalar, got shape {val.shape}"
+        assert bool(jnp.isfinite(val)) and float(val) > 0, (
+            f"SK.{field} should be projected (finite, positive), got {float(val)}")
+        assert not jnp.allclose(val, 1.0), (
+            f"SK.{field} = {float(val):.4f} suspiciously equal to 1.0 placeholder")
 
 
 # ---------------------------------------------------------------------------
@@ -225,19 +245,33 @@ def test_load_detector_params_returns_container(det_name):
 
 
 @pytest.mark.parametrize("det_name", ["SK", "SK_like", "HK", "BigHK"])
-def test_missing_fields_default_to_one(det_name):
+def test_missing_projectable_fields_are_projected(det_name):
+    """load_detector_params should project missing scatter/absorption/qe from
+    the referenced wavelength curves. The result must be finite and positive."""
     cfg_file, n_sensors = DETECTOR_INFO[det_name]
     cfg_path = os.path.join(CONFIG_DIR, cfg_file)
     with open(cfg_path) as f:
         raw = json.load(f)
 
     params = load_detector_params(cfg_path, num_sensors=n_sensors)
-    for field in DETECTOR_PARAMS_FIELDS:
+    for field in _PROJECTABLE:
         if field in raw:
             continue
-        if field == "qe_corrections":
-            continue  # qe_corrections might be expanded, handled elsewhere
         val = getattr(params, field)
-        assert val.ndim == 0 and jnp.allclose(val, 1.0), (
-            f"load_detector_params({det_name}).{field} should default to 1.0, "
-            f"got {float(val):.4f}")
+        assert val.ndim == 0 and bool(jnp.isfinite(val)) and float(val) > 0, (
+            f"load_detector_params({det_name}).{field} should be projected "
+            f"from curves (finite, positive), got {float(val)}")
+
+
+def test_missing_required_scalar_without_curve_raises(tmp_path):
+    """If a scalar is missing and no curve is available to project from,
+    loading must fail loudly rather than silently substitute a placeholder."""
+    bad_cfg = tmp_path / "bad_physics.json"
+    bad_cfg.write_text(json.dumps({
+        "wall_reflection_rate": 0.2,
+        "sensor_reflection_rate": 0.2,
+        "qe_corrections": 1.0,
+        # no scatter_length / absorption_length / qe / medium_model / qe_curve
+    }))
+    with pytest.raises(ValueError, match="no scalar"):
+        load_detector_params(str(bad_cfg))
