@@ -1,0 +1,49 @@
+#!/bin/bash
+# User-specific paths configuration for S3DF — TEMPLATE
+# Copy to user_paths.sh and edit. Do NOT commit user_paths.sh.
+
+# =============================================================================
+# Software installations (host-side)
+# =============================================================================
+# GEANT4 and ROOT installs — sourced by utils/setup_environment.sh so the
+# PhotonSim binary finds its shared libs when run on bare compute nodes.
+export GEANT4_INSTALL_DIR="/path/to/your/geant4/install"
+export ROOT_INSTALL_DIR="/path/to/your/root/install"
+
+# Path to the built PhotonSim binary.
+export PHOTONSIM_BIN="/path/to/your/PhotonSim/build/PhotonSim"
+
+# Python interpreter for the bare-host step (macro gen + PhotonSim subprocess).
+# Must be >= 3.8. On some clusters `python3` is older, so pin an explicit version.
+export HOST_PYTHON="python3.8"
+
+# =============================================================================
+# LUCiD
+# =============================================================================
+# LUCiD repo root. Used to set PYTHONPATH so jobs can import
+# `lucid.production.run_job`.
+export LUCID_PATH="/path/to/your/LUCiD"
+
+# =============================================================================
+# Singularity image (hosts the LUCiD Python env with jax / numpy / h5py)
+# =============================================================================
+export SINGULARITY_IMAGE_PATH="/sdf/group/neutrino/images/develop.sif"
+
+# =============================================================================
+# Output paths
+# =============================================================================
+export OUTPUT_BASE_PATH="/path/to/your/production/output"
+
+# =============================================================================
+# SLURM configuration
+# =============================================================================
+export SLURM_PARTITION="ampere"
+export SLURM_ACCOUNT="your-account:your-group"
+
+# =============================================================================
+# Resource defaults
+# =============================================================================
+export DEFAULT_CPUS="1"
+export DEFAULT_MEMORY="39936"   # MB
+export DEFAULT_GPUS="1"
+export DEFAULT_TIME="23:00:00"

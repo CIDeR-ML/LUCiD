@@ -30,9 +30,13 @@ dev = ["pytest>=7.0", "nbmake"]
 [project.scripts]
 lucid-optimize = "lucid.optimization.run:main"
 lucid-train-siren = "lucid.siren.train:main"
+lucid-run-job = "lucid.production.run_job:main"
 
 [tool.setuptools.packages.find]
 include = ["lucid*"]
+
+[tool.setuptools.package-data]
+"lucid.production.configs" = ["*.json"]
 
 [tool.pytest.ini_options]
 markers = [

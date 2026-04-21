@@ -6,6 +6,15 @@ A high-performance, differentiable simulation framework for optical particle det
 
 ![Repository Overview](figures/combined_3x2_charge_displays.png)
 
+## Quick start
+
+Produce v3 events end-to-end on your own machine:
+
+- [Local quickstart](docs/QUICKSTART_LOCAL.md) — clone, build PhotonSim, `pip install -e .`, run `lucid-run-job`.
+- [S3DF quickstart](docs/QUICKSTART_S3DF.md) — SLURM + singularity deployment for SLAC users.
+
+The single-job entry point is `lucid-run-job` (`lucid/production/run_job.py`); 12 bundled configs live at `lucid/production/configs/`. See [LUCID_DATASET.md](docs/LUCID_DATASET.md) for the v3 schema.
+
 ## Overview
 
 LUCiD provides a JAX-based differentiable simulation of light propagation in optical detectors. Key features include:
