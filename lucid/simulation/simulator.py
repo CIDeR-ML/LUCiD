@@ -14,7 +14,7 @@ from lucid.utils import (
     smear_times, smear_charges_SK_like,
 )
 from lucid.detector_params import DetectorParams, ParticleParams, load_detector_params, load_physics_config
-from lucid.wavelength.medium import make_medium, load_qe_curve
+from lucid.wavelength.medium import make_medium, load_qe_curve, qe_curve_bounds
 from lucid.wavelength.spectrum import sample_cherenkov_wavelengths
 
 import jax
@@ -256,12 +256,27 @@ def setup_event_simulator(
     }[hit_mode]
 
     # ---- Wavelength-dependent medium (when wavelength_mode=True) -----
+    # Sampling/grid bounds: clamp the QE curve's knot range into the
+    # [300, 700] nm floor/ceiling that LUCiD's water medium covers.
+    # Without a QE curve, default to the full [300, 700] nm range.
     if wavelength_mode:
-        _wl_grid = jnp.linspace(300.0, 700.0, 200)
+        if _qe_curve_path is not None:
+            _qe_lo, _qe_hi = qe_curve_bounds(_qe_curve_path)
+            _wl_lo = max(300.0, _qe_lo)
+            _wl_hi = min(700.0, _qe_hi)
+            if _wl_hi <= _wl_lo:
+                raise ValueError(
+                    f"QE curve range [{_qe_lo:.1f}, {_qe_hi:.1f}] nm does not "
+                    f"overlap the water medium range [300, 700] nm. Check "
+                    f"the qe_curve path in physics_config: {_qe_curve_path}")
+        else:
+            _wl_lo, _wl_hi = 300.0, 700.0
+        _wl_grid = jnp.linspace(_wl_lo, _wl_hi, 200)
         _medium_wl = make_medium(material, wavelength_grid=_wl_grid,
                                  medium_model_path=_medium_model_path)
         _qe_fn = load_qe_curve(_qe_curve_path) if _qe_curve_path else None
     else:
+        _wl_lo, _wl_hi = 300.0, 700.0
         _medium_wl = None
         _qe_fn = None
 
@@ -289,7 +304,8 @@ def setup_event_simulator(
         #   (n,)   → use as-is
         if wavelengths is None:
             key, wl_key = jax.random.split(key)
-            wavelengths = sample_cherenkov_wavelengths(wl_key, n)
+            wavelengths = sample_cherenkov_wavelengths(
+                wl_key, n, lambda_min=_wl_lo, lambda_max=_wl_hi)
         else:
             wavelengths = jnp.asarray(wavelengths)
             if wavelengths.ndim == 0:

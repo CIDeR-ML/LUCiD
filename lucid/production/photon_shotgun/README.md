@@ -25,7 +25,10 @@ temperature   = None   # hard sensor edges (required for binary detection)
 window_ns     = 500
 bin_width_ns  = 1.0    # 1 GHz FADC sampling
 tts_sigma_ns  = 1.0    # roughly SK R3600 single-PE time resolution
-wavelength    = "cherenkov"   # per-photon sampled from 1/λ² over [200, 700] nm
+wavelength    = "cherenkov"   # per-photon sampled from 1/λ² over the QE-curve
+                              # range intersected with [300, 700] nm
+                              # (e.g. SK → [300, 648], HK → [300, 651]; default
+                              # [300, 700] when no QE curve is loaded)
 direction     = isotropic     # one random direction per case, shared by all photons
 position      = uniform       # random inside detector volume, shrunk by 0.9
 ```

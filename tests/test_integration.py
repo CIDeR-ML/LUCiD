@@ -248,7 +248,7 @@ class TestWavelengthModuleJIT:
 
         wl = sample(jax.random.PRNGKey(42))
         assert wl.shape == (100,)
-        assert jnp.all(wl >= 200.)
+        assert jnp.all(wl >= 300.)
         assert jnp.all(wl <= 700.)
 
     def test_cherenkov_sampling_grad(self):
