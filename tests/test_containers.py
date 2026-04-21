@@ -18,8 +18,11 @@ class TestSimConfig:
         assert cfg.use_expected_value is True
 
     def test_track_mode_grad_iters(self):
+        # Track mode lets direction gradient flow all K bounces; the
+        # reflection-normal curvature issue that used to require n_grad_iters=0
+        # is now fixed at the normal level.
         cfg = SimConfig(mode='track')
-        assert cfg.effective_n_grad_iters == 0
+        assert cfg.effective_n_grad_iters == cfg.K
 
     def test_calibration_mode_grad_iters(self):
         cfg = SimConfig(mode='calibration')
