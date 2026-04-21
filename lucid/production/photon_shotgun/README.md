@@ -88,6 +88,13 @@ Source
   --origin                X Y Z     For --position-mode center
   --direction             DX DY DZ  For --direction-mode fixed
   --wavelength            FLOAT | "cherenkov"
+  --wavelength-sampling   {cherenkov, cherenkov_qe}
+                                    'cherenkov' (default) = λ~1/λ², per-photon
+                                    QE weight. 'cherenkov_qe' = λ~QE(λ)/λ²,
+                                    scalar <QE>_C weight — lower variance at
+                                    fixed photon count but the output becomes
+                                    a density estimate rather than a literal
+                                    per-shot realization.
   --intensity             FLOAT
 
 Simulator

@@ -29,6 +29,7 @@ def setup_shotgun_simulator(
     smear_time: bool = True,
     smear_charge: bool = True,
     default_detector_params: bool = True,
+    wavelength_sampling: str = 'cherenkov',
     **grid_params,
 ):
     """Build a photon-shotgun simulator.
@@ -50,6 +51,13 @@ def setup_shotgun_simulator(
         Waveform binning + TTS smearing. Also applies to per-photon (tts only).
     smear_time, smear_charge : bool
         Toggle per-photon Gaussian TTS and SK-like gain smearing.
+    wavelength_sampling : {'cherenkov', 'cherenkov_qe'}
+        ``'cherenkov'`` (default) samples λ from 1/λ² and applies QE(λ)
+        per-photon. ``'cherenkov_qe'`` importance-samples λ ∝ QE(λ)/λ²
+        so the per-photon QE weight collapses to the scalar <QE>_C —
+        strictly lower variance at fixed photon count, but the output
+        becomes a density estimate rather than a literal per-shot
+        realization (Binomial fluctuations get suppressed).
     default_detector_params : bool
         If True, bake DetectorParams from physics_config into the closure —
         returned callable is ``sim(source, key)``. Otherwise ``sim(source, dp, key)``.
@@ -86,6 +94,7 @@ def setup_shotgun_simulator(
         wavelength_mode=True,
         hit_mode=hit_mode,
         waveform_config=waveform_config,
+        wavelength_sampling=wavelength_sampling,
         **grid_params,
     )
 

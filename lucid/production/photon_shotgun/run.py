@@ -73,6 +73,13 @@ def build_parser():
                    help='Fixed origin (required when --position-mode center)')
     p.add_argument('--wavelength', type=_parse_wavelength, default='cherenkov')
     p.add_argument('--intensity', type=float, default=1.0)
+    p.add_argument('--wavelength-sampling',
+                   choices=['cherenkov', 'cherenkov_qe'],
+                   default='cherenkov',
+                   help="How LUCiD samples λ when source.wavelength is None. "
+                        "'cherenkov' (default): λ~1/λ², per-photon QE weight. "
+                        "'cherenkov_qe': λ~QE(λ)/λ², scalar <QE>_C weight — "
+                        "lower variance, but density-estimate semantics.")
     p.add_argument('--output-mode', choices=['waveform', 'per_photon'],
                    default='waveform')
     p.add_argument('--K', type=int, default=12)
@@ -134,6 +141,7 @@ def main(argv=None):
         tts_sigma_ns=args.tts_sigma_ns,
         smear_time=not args.no_smear_time,
         smear_charge=not args.no_smear_charge,
+        wavelength_sampling=args.wavelength_sampling,
     )
     print(f"[shotgun] setup: {time.time()-t0:.1f}s  num_sensors={sim.num_sensors}")
 
