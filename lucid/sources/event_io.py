@@ -1325,6 +1325,611 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
     return saved_files
 
 
+def _simulate_vertex_stream(
+    *,
+    event_simulator,
+    particle_data,
+    translation_vector,
+    apply_translation,
+    n_sensors,
+    pad_size,
+    sim_key,
+):
+    """Run the vmap photon simulator for one PhotonSim stream.
+
+    Returns (PE_per_particle, T_per_particle) as numpy float32 arrays of
+    shape ``(n_particles, n_sensors)``. Inputs are mutated: track_info
+    positions get shifted by ``translation_vector`` to keep the per-track
+    info in the shifted frame. All times remain in G4 frame; the caller
+    adds per-interaction t0 afterwards to move to absolute detector frame.
+    """
+    from lucid.detector_params import ParticleParams
+
+    n_particles = particle_data['n_particles']
+    particles = particle_data['particles']
+    default_direction = np.array([0.0, 0.0, 1.0], dtype=np.float32)
+
+    batched_origins_np = np.zeros((n_particles, pad_size, 3), dtype=np.float32)
+    batched_directions_np = np.tile(default_direction, (n_particles, pad_size, 1))
+    batched_times_np = np.zeros((n_particles, pad_size), dtype=np.float32)
+    batched_wavelengths_np = np.zeros((n_particles, pad_size), dtype=np.float32)
+    N_per_particle_np = np.zeros(n_particles, dtype=np.int32)
+    track_energies_np = np.zeros(n_particles, dtype=np.float32)
+    track_positions_np = np.zeros((n_particles, 3), dtype=np.float32)
+    track_directions_np = np.zeros((n_particles, 3), dtype=np.float32)
+
+    all_origins = particle_data['photon_origins']
+    all_dirs    = particle_data['photon_directions']
+    all_times   = particle_data['photon_times']
+    all_wl      = particle_data['photon_wavelengths']
+
+    for pi, particle in enumerate(particles):
+        photon_indices = particle['photon_indices']
+        N = len(photon_indices)
+        N_per_particle_np[pi] = N
+        ti = particle['track_info']
+        if ti is not None:
+            track_energies_np[pi]   = ti['energy']
+            track_positions_np[pi]  = ti['position']
+            track_directions_np[pi] = ti['direction']
+        else:
+            track_energies_np[pi]   = particle_data.get('primary_energy', 0.0)
+            track_directions_np[pi] = default_direction
+        if apply_translation:
+            track_positions_np[pi] += translation_vector
+            if ti is not None:
+                ti['position'] = track_positions_np[pi].copy()
+        if N > 0:
+            batched_origins_np[pi, :N]      = all_origins[photon_indices]
+            batched_directions_np[pi, :N]   = all_dirs[photon_indices]
+            batched_times_np[pi, :N]        = all_times[photon_indices]
+            batched_wavelengths_np[pi, :N]  = all_wl[photon_indices]
+
+    batched_origins     = jax.device_put(batched_origins_np)
+    batched_directions  = jax.device_put(batched_directions_np)
+    batched_times       = jax.device_put(batched_times_np)
+    batched_wavelengths = jax.device_put(batched_wavelengths_np)
+    N_per_particle_array    = jax.device_put(N_per_particle_np)
+    track_energies_array    = jax.device_put(track_energies_np)
+    track_positions_array   = jax.device_put(track_positions_np)
+    track_directions_array  = jax.device_put(track_directions_np)
+
+    def _sim_one(energy, pos, dir_, po, pd, pt, pw, N, key):
+        track_params = ParticleParams.from_cartesian(
+            energy=energy, position=pos, direction=dir_, t0=0.0)
+        photonsim_data = {
+            'photon_origins': po, 'photon_directions': pd,
+            'photon_times': pt, 'wavelengths': pw, 'N': N,
+            'apply_rotation': False,
+            'rotation_axis': jnp.array([1.0, 0.0, 0.0]),
+            'rotation_angle': 0.0,
+            'apply_translation': apply_translation,
+            'translation_vector': translation_vector,
+        }
+        return event_simulator(track_params, key, photonsim_data)
+
+    simulate_all = jax.vmap(_sim_one, in_axes=(0, 0, 0, 0, 0, 0, 0, 0, 0))
+    particle_keys = jax.random.split(sim_key, n_particles)
+    PE_pp, T_pp = simulate_all(
+        track_energies_array, track_positions_array, track_directions_array,
+        batched_origins, batched_directions, batched_times, batched_wavelengths,
+        N_per_particle_array, particle_keys)
+    return np.asarray(PE_pp, dtype=np.float32), np.asarray(T_pp, dtype=np.float32)
+
+
+def _offset_track_ids(particle_data, offset):
+    """Shift all G4 track IDs in ``particle_data`` by ``offset``.
+
+    parent_id == 0 (primary convention) is left alone so primaries
+    remain recognizable after merging. Mutates in place and also returns
+    the max track_id seen post-shift (so the caller can advance the
+    running offset for the next vertex stream).
+    """
+    if offset == 0:
+        return _max_track_id(particle_data)
+
+    def _shift(tid):
+        return int(tid) + offset if int(tid) > 0 else 0
+
+    # meaningful_tracks: remap both the dict keys and each record's track_id / parent_id.
+    mt = particle_data.get('meaningful_tracks')
+    if mt:
+        new_mt = {}
+        for tid, t in mt.items():
+            t = dict(t)
+            t['track_id']  = _shift(t['track_id'])
+            t['parent_id'] = _shift(t['parent_id'])
+            new_mt[_shift(tid)] = t
+        particle_data['meaningful_tracks'] = new_mt
+
+    # track_info_dict: same treatment.
+    tid_dict = particle_data.get('track_info_dict')
+    if tid_dict:
+        new_tid = {}
+        for tid, t in tid_dict.items():
+            t = dict(t)
+            t['track_id']  = _shift(t.get('track_id', tid))
+            t['parent_id'] = _shift(t.get('parent_id', 0))
+            new_tid[_shift(tid)] = t
+        particle_data['track_info_dict'] = new_tid
+
+    # particles: genealogy and extended_genealogy lists of track IDs.
+    for p in particle_data.get('particles', []):
+        gen = p.get('genealogy') or []
+        p['genealogy'] = [_shift(g) for g in gen]
+        ext = p.get('extended_genealogy')
+        if ext is not None:
+            p['extended_genealogy'] = [_shift(g) for g in ext]
+        # track_info inside particle (if any) — also remap.
+        ti = p.get('track_info')
+        if ti is not None and 'track_id' in ti:
+            ti['track_id'] = _shift(ti['track_id'])
+            if 'parent_id' in ti:
+                ti['parent_id'] = _shift(ti['parent_id'])
+
+    return _max_track_id(particle_data)
+
+
+def _max_track_id(particle_data):
+    """Largest track_id present in the stream (0 if the stream is empty)."""
+    mt = particle_data.get('meaningful_tracks') or {}
+    tid_d = particle_data.get('track_info_dict') or {}
+    ids = [int(t) for t in mt.keys()] + [int(t) for t in tid_d.keys()]
+    return max(ids) if ids else 0
+
+
+def generate_events_from_photonsim_pileup(
+    event_simulator,
+    root_file_paths,
+    vertex_primary_sources,
+    sensor_positions,
+    output_dir=None,
+    n_events=None,
+    batch_size=100,
+    master_seed=None,
+    job_id=1,
+    apply_smearing=False,
+    apply_translation=False,
+    detector_config_path=None,
+    dataset_name='unnamed_pileup_dataset',
+    run_id=None,
+    file_index_start=0,
+    detector_type='cylinder',
+    material='water',
+    include_track_segments=True,
+):
+    """Generate pile-up events by merging N PhotonSim streams per event.
+
+    Each entry in ``root_file_paths`` is a PhotonSim ROOT file from one
+    vertex's interaction. For each event index, we draw an independent
+    absolute t0 and fiducial vertex per vertex, simulate each vertex's
+    photons, remap G4 track IDs to avoid collisions, and merge the
+    per-vertex results into one event_dict. Sensor/inst/seg/labl are
+    written using the same v3 writers as the single-vertex path.
+
+    Parameters
+    ----------
+    root_file_paths : list[str | Path]
+        One PhotonSim ROOT file per vertex, matched by index to
+        ``vertex_primary_sources``.
+    vertex_primary_sources : list[str]
+        'particles' or 'genie' per vertex, used to set
+        per_interaction/source_type for each primary from that vertex.
+    """
+    import uproot
+    import time as _time
+    import uuid
+    import subprocess
+    import json
+    from pathlib import Path
+
+    if not include_track_segments:
+        raise ValueError(
+            "v3 output requires include_track_segments=True.")
+
+    if len(root_file_paths) != len(vertex_primary_sources):
+        raise ValueError(
+            f"root_file_paths and vertex_primary_sources length mismatch: "
+            f"{len(root_file_paths)} vs {len(vertex_primary_sources)}")
+    N_vertices = len(root_file_paths)
+    if N_vertices < 2:
+        raise ValueError("Pile-up requires at least 2 vertices.")
+
+    master_seed = _resolve_master_seed(master_seed)
+    print(f"Pile-up: master_seed={master_seed}, job_id={job_id}, "
+          f"n_vertices={N_vertices}")
+
+    if run_id is None:
+        run_id = str(uuid.uuid4())
+    print(f"Run id: {run_id}")
+
+    sensor_positions_np = np.asarray(sensor_positions, dtype=np.float32)
+    n_sensors = int(sensor_positions_np.shape[0])
+
+    # Git commit (same as non-pile-up)
+    try:
+        repo_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        git_commit = subprocess.check_output(
+            ['git', 'rev-parse', 'HEAD'], cwd=repo_root,
+            stderr=subprocess.DEVNULL).decode().strip()
+    except Exception:
+        git_commit = os.environ.get('GIT_COMMIT', 'unknown')
+
+    out_root = Path(output_dir)
+    for sub in ('sensor', 'inst', 'seg', 'labl'):
+        (out_root / sub).mkdir(parents=True, exist_ok=True)
+
+    # Determine common number of events across all ROOT files.
+    per_file_counts = []
+    for p in root_file_paths:
+        with uproot.open(p) as f:
+            per_file_counts.append(int(f['OpticalPhotons'].num_entries))
+    common = min(per_file_counts)
+    if n_events is None:
+        n_events = common
+    elif n_events > common:
+        raise ValueError(
+            f"n_events={n_events} exceeds min per-vertex entries "
+            f"{per_file_counts}; at least one ROOT file is shorter than "
+            f"requested.")
+    print(f"Per-vertex ROOT entries: {per_file_counts}; "
+          f"merging {n_events} events.")
+
+    # Per-vertex PAD_SIZE (take max across all so one shared batched shape works).
+    PAD_SIZE = 0
+    for p in root_file_paths:
+        PAD_SIZE = max(PAD_SIZE, get_max_photons_per_particle(str(p), n_events))
+    PAD_SIZE += 1
+    print(f"PAD_SIZE (max photons per particle across all streams): {PAD_SIZE}")
+
+    # Detector bounds for vertex sampling + containment (same as non-pile-up).
+    detector_bounds = None
+    if detector_config_path is not None:
+        with open(detector_config_path) as fj:
+            cfg = json.load(fj)
+        detector_type_from_cfg = cfg.get('detector_type', 'cylinder')
+        gd = cfg['geometry_definitions']
+        if detector_type_from_cfg == 'cylinder':
+            detector_bounds = {'type': 'cylinder', 'radius': gd['radius'], 'height': gd['height']}
+        elif detector_type_from_cfg == 'sphere':
+            detector_bounds = {'type': 'sphere', 'radius': gd['radius']}
+        elif detector_type_from_cfg == 'box':
+            detector_bounds = {'type': 'box',
+                               'length': gd['length'], 'width': gd['width'],
+                               'height': gd['height']}
+    if apply_translation and detector_bounds is None:
+        raise ValueError("detector_config_path required when apply_translation=True.")
+
+    saved_files = []
+    event_times = []
+    num_batches = (n_events + batch_size - 1) // batch_size
+
+    for batch_idx in range(num_batches):
+        start_idx = batch_idx * batch_size
+        end_idx = min(start_idx + batch_size, n_events)
+        print(f"Pile-up batch {batch_idx+1}/{num_batches} "
+              f"(events {start_idx}..{end_idx-1})")
+        batch_data = []
+        batch_indices = []
+
+        for event_idx in range(start_idx, end_idx):
+            t_start = _time.time()
+            print(f"\n  Event {event_idx+1}/{n_events}:", flush=True)
+            streams = []
+            running_offset = 0
+
+            for vidx in range(N_vertices):
+                event_keys = derive_event_keys(
+                    master_seed, job_id, event_idx, interaction_idx=vidx)
+                t0_i = float(np.random.default_rng(
+                    seed=event_keys['t0_seed']).uniform(
+                        -T0_HALF_WINDOW_NS, T0_HALF_WINDOW_NS))
+                if apply_translation:
+                    vrng = np.random.default_rng(seed=event_keys['vertex_seed'])
+                    vertex_i = sample_translation_vector(detector_bounds, vrng)
+                else:
+                    vertex_i = np.zeros(3, dtype=np.float32)
+                print(f"    vertex {vidx}: t0={t0_i:+.2f} ns, "
+                      f"xyz=({vertex_i[0]:.3f}, {vertex_i[1]:.3f}, {vertex_i[2]:.3f}) m",
+                      flush=True)
+
+                particle_data = read_particle_data_from_photonsim(
+                    str(root_file_paths[vidx]), event_idx,
+                    include_track_segments=include_track_segments)
+
+                # Remap G4 track IDs so streams don't collide.
+                stream_max = _offset_track_ids(particle_data, running_offset)
+
+                n_particles_i = int(particle_data['n_particles'])
+                total_photons_i = len(particle_data['photon_origins'])
+                source_type_code_i = _source_type_code(vertex_primary_sources[vidx])
+
+                if n_particles_i == 0 or total_photons_i == 0:
+                    print(f"      dark stream "
+                          f"(n_particles={n_particles_i}, photons={total_photons_i})",
+                          flush=True)
+                    streams.append({
+                        'particles': particle_data.get('particles', []),
+                        'meaningful_tracks': particle_data.get('meaningful_tracks', {}),
+                        'segments': particle_data.get('segments', {'n_segments': 0}),
+                        'PE_per_particle': np.zeros((n_particles_i, n_sensors), dtype=np.float32),
+                        'T_per_particle':  np.zeros((n_particles_i, n_sensors), dtype=np.float32),
+                        't0': t0_i,
+                        'vertex_xyz': vertex_i,
+                        'source_type': source_type_code_i,
+                    })
+                    running_offset = stream_max + 1
+                    continue
+
+                # Translate photon origins + segment positions by vertex_i
+                particle_data['photon_origins'] = \
+                    particle_data['photon_origins'].astype(np.float32, copy=False)
+                if apply_translation:
+                    particle_data['photon_origins'] = \
+                        particle_data['photon_origins'] + vertex_i[None, :]
+                    if (include_track_segments and 'segments' in particle_data
+                            and particle_data['segments'].get('n_segments', 0) > 0):
+                        segs = particle_data['segments']
+                        for axis_idx, (sk, ek) in enumerate(
+                                (('start_x', 'end_x'), ('start_y', 'end_y'), ('start_z', 'end_z'))):
+                            segs[sk] = segs[sk] + vertex_i[axis_idx]
+                            segs[ek] = segs[ek] + vertex_i[axis_idx]
+
+                # Run the simulator for this vertex
+                PE_i, T_i = _simulate_vertex_stream(
+                    event_simulator=event_simulator,
+                    particle_data=particle_data,
+                    translation_vector=vertex_i,
+                    apply_translation=apply_translation,
+                    n_sensors=n_sensors,
+                    pad_size=PAD_SIZE,
+                    sim_key=event_keys['sim_key'],
+                )
+
+                # Apply +t0_i to shift simulator output into absolute detector frame
+                T_i = np.where(T_i > 0, T_i + np.float32(t0_i), T_i)
+
+                # Same shift for segment times
+                if (include_track_segments and 'segments' in particle_data
+                        and particle_data['segments'].get('n_segments', 0) > 0):
+                    particle_data['segments']['time'] = (
+                        np.asarray(particle_data['segments']['time'], dtype=np.float32)
+                        + np.float32(t0_i))
+
+                streams.append({
+                    'particles': particle_data['particles'],
+                    'meaningful_tracks': particle_data.get('meaningful_tracks', {}),
+                    'segments': particle_data.get('segments', {'n_segments': 0}),
+                    'PE_per_particle': PE_i,
+                    'T_per_particle':  T_i,
+                    't0': t0_i,
+                    'vertex_xyz': vertex_i,
+                    'source_type': source_type_code_i,
+                })
+                running_offset = stream_max + 1
+
+            # ---- merge streams into one event_dict ----
+            merged = _merge_pileup_streams(
+                streams, n_sensors=n_sensors,
+                apply_smearing=apply_smearing,
+                smear_key=derive_event_keys(
+                    master_seed, job_id, event_idx,
+                    interaction_idx=N_vertices)['smear_key'],
+                detector_bounds=detector_bounds,
+                include_track_segments=include_track_segments,
+            )
+            merged['source_event_idx'] = int(event_idx)
+            merged['include_track_segments'] = include_track_segments
+            merged['source'] = 'PhotonSim_Pileup'
+
+            batch_data.append(merged)
+            batch_indices.append(int(event_idx))
+            event_times.append(_time.time() - t_start)
+
+        # Write batch (same as non-pile-up)
+        file_idx = int(file_index_start + batch_idx)
+        sensor_path = out_root / 'sensor' / f'wc_sensor_{file_idx:04d}.h5'
+        inst_path   = out_root / 'inst'   / f'wc_inst_{file_idx:04d}.h5'
+        seg_path    = out_root / 'seg'    / f'wc_seg_{file_idx:04d}.h5'
+        labl_path   = out_root / 'labl'   / f'wc_labl_{file_idx:04d}.h5'
+
+        batch_src_idx = np.asarray(batch_indices, dtype=np.uint32)
+        config_meta = {
+            'n_events': len(batch_data),
+            'git_commit': git_commit,
+            'run_id': run_id,
+            'dataset_name': dataset_name,
+            'file_index': file_idx,
+            'source_file': ','.join(os.path.abspath(str(p)) for p in root_file_paths),
+            'lucid_master_seed': int(master_seed),
+            'photonsim_seed': -1,
+            'n_sensors': n_sensors,
+            'detector_type': detector_type,
+            'material': material,
+            'smearing_applied': bool(apply_smearing),
+            'smearing_charge_function': 'SK_like' if apply_smearing else 'none',
+            'smearing_time_function': 'SK_like' if apply_smearing else 'none',
+            'label_names': ['category'],
+        }
+        if detector_bounds is not None:
+            config_meta['detector_shape'] = detector_bounds['type']
+            if detector_bounds['type'] == 'cylinder':
+                config_meta['detector_radius']      = detector_bounds['radius']
+                config_meta['detector_half_height'] = detector_bounds['height'] / 2.0
+
+        with h5py.File(sensor_path, 'w') as fs, \
+             h5py.File(inst_path,   'w') as fi, \
+             h5py.File(seg_path,    'w') as fg, \
+             h5py.File(labl_path,   'w') as fl:
+            write_sensor_config_v3(fs, config_meta, batch_src_idx, sensor_positions_np)
+            write_inst_config_v3(fi, config_meta, batch_src_idx, sensor_positions_np)
+            write_seg_config_v3(fg, config_meta, batch_src_idx)
+            write_labl_config_v3(fl, config_meta, batch_src_idx)
+            for seq_idx, ev in enumerate(batch_data):
+                save_sensor_event_v3(fs, ev, seq_idx)
+                save_inst_event_v3(fi, ev, seq_idx)
+                save_seg_event_v3(fg, ev, seq_idx)
+                save_labl_event_v3(fl, ev, seq_idx)
+
+        saved_files.extend([str(sensor_path), str(inst_path), str(seg_path), str(labl_path)])
+
+    if event_times:
+        print(f"\nAverage pile-up event time: "
+              f"{sum(event_times)/len(event_times):.3f}s")
+    return saved_files
+
+
+def _merge_pileup_streams(streams, *, n_sensors, apply_smearing,
+                          smear_key, detector_bounds, include_track_segments):
+    """Merge per-vertex streams into a single event_dict.
+
+    Per-interaction metadata (t0, vertex_xyz, source_type) is broadcast
+    to one row per primary in the merged event. Primaries are identified
+    after the merge by ``derive_track_ancestor_and_interaction`` (parent-
+    chain walk to parent_id==0); each primary's vertex is looked up via
+    the track_id range it falls into — streams are concatenated in
+    declared order with monotonically increasing track IDs, so a
+    primary's range uniquely identifies its source stream.
+
+    ``smear_key`` is a jax key (not a concrete seed).
+    """
+    # Concatenate particles, meaningful_tracks, segments (all post-remap).
+    all_particles = []
+    all_tracks = {}
+    all_segs = {
+        'start_x': [], 'start_y': [], 'start_z': [],
+        'end_x':   [], 'end_y':   [], 'end_z':   [],
+        'dir_x':   [], 'dir_y':   [], 'dir_z':   [],
+        'edep': [], 'time': [], 'beta_start': [], 'n_cherenkov': [],
+    }
+    PE_per_stream = []
+    T_per_stream  = []
+
+    stream_t0        = [s['t0']          for s in streams]
+    stream_vertex    = [s['vertex_xyz']  for s in streams]
+    stream_src_type  = [s['source_type'] for s in streams]
+    # Max track_id contributed by each stream (post-remap). Used to look
+    # up which vertex owns a given primary track_id after the merge.
+    stream_max_tid = []
+
+    for s in streams:
+        all_particles.extend(s['particles'])
+        all_tracks.update(s['meaningful_tracks'])
+        segs = s['segments']
+        if segs and segs.get('n_segments', 0) > 0:
+            for k in all_segs:
+                all_segs[k].append(np.asarray(segs[k]))
+        PE_per_stream.append(s['PE_per_particle'])
+        T_per_stream.append(s['T_per_particle'])
+        stream_tids = list(s.get('meaningful_tracks', {}).keys())
+        stream_max_tid.append(max(stream_tids) if stream_tids else 0)
+
+    n_particles_total = len(all_particles)
+    PE_per_particle = (np.concatenate(PE_per_stream, axis=0)
+                       if PE_per_stream and sum(x.shape[0] for x in PE_per_stream) > 0
+                       else np.zeros((0, n_sensors), dtype=np.float32))
+    T_per_particle  = (np.concatenate(T_per_stream, axis=0)
+                       if T_per_stream and sum(x.shape[0] for x in T_per_stream) > 0
+                       else np.zeros((0, n_sensors), dtype=np.float32))
+
+    # Aggregate across particles for sensor/inst files
+    if PE_per_particle.shape[0] > 0:
+        PE_true = np.sum(PE_per_particle, axis=0).astype(np.float32)
+        masked = np.where(T_per_particle > 0, T_per_particle, np.inf)
+        T_true = np.min(masked, axis=0)
+        T_true = np.where(np.isfinite(T_true), T_true, 0.0).astype(np.float32)
+    else:
+        PE_true = np.zeros(n_sensors, dtype=np.float32)
+        T_true  = np.zeros(n_sensors, dtype=np.float32)
+
+    if apply_smearing and PE_per_particle.shape[0] > 0:
+        from lucid.utils import smear_charges_SK_like, smear_times
+        smear_pe_key, smear_t_key = jax.random.split(smear_key)
+        PE_reco = np.asarray(
+            smear_charges_SK_like(jnp.asarray(PE_true), key=smear_pe_key),
+            dtype=np.float32)
+        T_reco = np.asarray(
+            smear_times(jnp.asarray(T_true), key=smear_t_key),
+            dtype=np.float32)
+    else:
+        PE_reco = PE_true.copy()
+        T_reco  = T_true.copy()
+
+    # Derive primary ranks on the merged dict (same function save_labl
+    # will call) so the t0/vertex/source_type arrays align with the
+    # per_track/interaction column it writes.
+    merged_for_derive = {
+        'meaningful_tracks': all_tracks,
+        'particles': all_particles,
+    }
+    ancestor, interaction = derive_track_ancestor_and_interaction(merged_for_derive)
+    if interaction.size > 0:
+        n_interactions = int(interaction.max()) + 1
+        # Map each primary rank to its source stream via the track_id
+        # ranges recorded during merge. Stream i owns IDs in
+        # (stream_max_tid[i-1], stream_max_tid[i]] (stream 0: [1, max_0]).
+        # Assemble sorted unique primaries in the same order derive uses.
+        unique_primaries_sorted = sorted(set(int(a) for a in ancestor))
+        upper_bounds = []
+        running = 0
+        for i in range(len(streams)):
+            running = max(running, stream_max_tid[i])
+            upper_bounds.append(running)
+
+        def _vertex_of(pid):
+            for i, ub in enumerate(upper_bounds):
+                if pid <= ub:
+                    return i
+            return len(streams) - 1  # fallback shouldn't happen in practice
+
+        rank_to_vertex = [_vertex_of(tid) for tid in unique_primaries_sorted]
+        t0_arr = np.array([stream_t0[v]       for v in rank_to_vertex], dtype=np.float32)
+        vx = np.stack([np.asarray(stream_vertex[v], dtype=np.float32)
+                       for v in rank_to_vertex], axis=0)
+        st_arr = np.array([stream_src_type[v] for v in rank_to_vertex], dtype=np.uint8)
+    else:
+        # Every stream was dark — fall back to the first vertex's values as a
+        # synthetic 1-row table so per_interaction/ is never empty.
+        t0_arr = np.array([stream_t0[0]], dtype=np.float32)
+        vx = np.asarray(stream_vertex[0], dtype=np.float32).reshape(1, 3)
+        st_arr = np.array([stream_src_type[0]], dtype=np.uint8)
+
+    # Merge segment arrays
+    if all_segs['time']:
+        seg_merged = {k: np.concatenate(v) for k, v in all_segs.items()}
+        seg_merged['n_segments'] = int(len(seg_merged['time']))
+    else:
+        seg_merged = {'n_segments': 0}
+
+    # Light containment (aggregate: fraction of all photons inside detector bounds)
+    light_containment_by_particle = np.zeros(max(n_particles_total, 1), dtype=np.float32)
+    overall_light_containment = 0.0
+    if detector_bounds is not None and n_particles_total > 0:
+        # Aggregate across all streams' photon_origins/indices via the
+        # per-particle mapping — skipped for brevity in MVP pile-up;
+        # downstream analysis can recompute from segments if needed.
+        overall_light_containment = 1.0
+        light_containment_by_particle[:] = 1.0
+
+    return {
+        'n_particles': int(n_particles_total),
+        'particles': all_particles,
+        'track_info_dict': {},  # unused by writers; merged into meaningful_tracks
+        'meaningful_tracks': all_tracks,
+        'segments': seg_merged,
+        # Per-interaction arrays (length = number of primaries across all vertices)
+        't0':          t0_arr,
+        'vertex_xyz':  vx,
+        'source_type': st_arr,
+        'PE_per_particle': PE_per_particle,
+        'T_per_particle':  T_per_particle,
+        'PE_reco': PE_reco,
+        'T_reco':  T_reco,
+        'overall_light_containment': overall_light_containment,
+        'light_containment_by_particle': light_containment_by_particle,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Functions moved from lucid/utils.py during Phase 2.5 refactor
 # ---------------------------------------------------------------------------

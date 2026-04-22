@@ -1,0 +1,40 @@
+{
+  "config_number": 15,
+  "name": "pile-up: (mu- + pi+) + GENIE numu",
+  "description": "Two overlapping interactions per event: vertex 0 is a particle-gun (mu- + pi+) shot, vertex 1 is a GENIE numu interaction on water. Each vertex draws an independent absolute interaction time t0 ~ Uniform(-250, 250) ns and its own fiducial vertex position.",
+  "material": "water",
+  "output_path": "pile_up",
+  "pile_up": true,
+  "vertices": [
+    {
+      "primary_source": "particles",
+      "energy_distribution": "uniform",
+      "particles": [
+        {"type": "mu-", "energy_min_MeV": 105, "energy_max_MeV": 1500},
+        {"type": "pi+", "energy_min_MeV": 105, "energy_max_MeV": 1500}
+      ]
+    },
+    {
+      "primary_source": "genie",
+      "genie": {
+        "probe_pdg": 14,
+        "target": "water",
+        "energy_min_GeV": 0.1,
+        "energy_max_GeV": 2.0,
+        "tune": "G18_02a_00_000",
+        "event_generator_list": "CC+NC",
+        "direction": "isotropic"
+      }
+    }
+  ],
+  "store_individual_photons": true,
+  "run_lucid": true,
+  "disable_decays": false,
+  "lucid_options": {
+    "apply_smearing": true,
+    "apply_translation": true
+  },
+  "n_jobs": 2,
+  "n_events_per_job": 100,
+  "cleanup_root_files": true
+}
