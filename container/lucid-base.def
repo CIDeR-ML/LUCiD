@@ -55,9 +55,21 @@ From: condaforge/miniforge3:latest
     /opt/container-scripts/build-pythia6.sh
 
 %environment
-    export PATH=/opt/root/bin:/opt/conda/bin:$PATH
-    export LD_LIBRARY_PATH=/opt/root/lib:/opt/conda/lib:${LD_LIBRARY_PATH:-}
+    # Paths for every stage of the chain: base ROOT + conda, plus the
+    # top-layer's GENIE and PhotonSim. Those dirs are empty until
+    # lucid.def's %post populates them; harmless no-ops until then.
+    # This ensures the final sif has all required env vars regardless of
+    # whether it was built via `apptainer build lucid.sif lucid.def` or
+    # via the sandbox-first path (`apptainer build lucid.sif <sandbox>`),
+    # which otherwise only carries the base image's %environment forward.
+    export PATH=/opt/root/bin:/opt/genie/bin:/opt/conda/bin:$PATH
+    export LD_LIBRARY_PATH=/opt/root/lib:/opt/conda/lib:/opt/genie/lib:${LD_LIBRARY_PATH:-}
     export ROOTSYS=/opt/root
+    export GENIE=/opt/genie
+    export GENIE_PREFIX=/opt/genie
+    export GXMLPATH=/opt/genie/config
+    export PHOTONSIM_BIN=/opt/PhotonSim/build/PhotonSim
+    export GENIE_XSEC_FILE=${GENIE_XSEC_FILE:-/opt/genie_xsec/gxspl-FNALsmall.xml}
     export CC=/opt/conda/bin/gcc
     export CXX=/opt/conda/bin/g++
 
