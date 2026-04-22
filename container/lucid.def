@@ -32,7 +32,10 @@ From: /sdf/data/neutrino/cjesus/software/images/lucid-base.sif
     /opt/container-scripts/build-photonsim.sh
     /opt/container-scripts/build-lucid.sh
 
-    mkdir -p /opt/genie_xsec
+    # Bake the GENIE xsec splines into the image so the container is
+    # self-contained — no cvmfs bind-mount or first-run network needed.
+    # Default tune G18_02a_00_000 matches dataprod_13/14 configs.
+    /opt/container-scripts/fetch-xsec-splines.sh --dest /opt/genie_xsec
 
 %environment
     export PATH=/opt/root/bin:/opt/genie/bin:/opt/conda/bin:$PATH

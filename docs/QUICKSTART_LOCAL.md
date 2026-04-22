@@ -1,5 +1,9 @@
 # Local Quickstart — Produce v3 events on any machine
 
+> **On macOS, or prefer a container?** See
+> [QUICKSTART_DOCKER.md](QUICKSTART_DOCKER.md) — one `docker build`,
+> then one `docker run`, with GEANT4 + ROOT + GENIE already set up.
+
 Three steps to a working v3 dataset with no S3DF, no SLURM, no
 singularity.
 
@@ -97,24 +101,28 @@ per job. Dependencies are GEANT4 + ROOT + GENIE v3 + the LUCiD Python
 env. The simplest way to cover all of those is the unified container:
 
 ```bash
-# One-time build (needs Apptainer 1.2+ with fakeroot support; ~45 min).
+# One-time build (needs Apptainer 1.2+ with fakeroot support; ~75 min
+# including the ~60 min base layer).
 cd LUCiD/container
-apptainer build --fakeroot lucid.sif lucid.def
+apptainer build --fakeroot lucid-base.sif lucid-base.def
+apptainer build --fakeroot lucid.sif       lucid.def
 
 # Run any GENIE config in one invocation:
-singularity exec \
-    -B /path/to/xsec:/opt/genie_xsec \
-    lucid.sif \
+apptainer exec lucid.sif \
     lucid-run-job \
         --config /opt/LUCiD/lucid/production/configs/dataprod_13_numu.json \
         --output-dir /tmp/genie_test --job-id 1 --test
 ```
 
-The container ships PhotonSim pre-built and LUCiD pip-installed, so
-`PHOTONSIM_BIN` is already set. GENIE cross-section splines are large
-(~500 MB) and are not baked in; point `GENIE_XSEC_FILE` at a local copy
-(e.g. from
-`cvmfs/larsoft.opensciencegrid.org/products/genie_xsec/v3_06_00/NULL/G1802a00000-k250-e1000/data/`).
+The container ships PhotonSim pre-built, LUCiD pip-installed, and the
+GENIE cross-section splines for tune `G18_02a_00_000` baked in at
+`/opt/genie_xsec/gxspl-FNALsmall.xml` — no cvmfs, no runtime
+bind-mount, no first-run network. To use a different tune, override
+`GENIE_XSEC_FILE` at runtime (e.g.
+`apptainer exec -B /my/xsec:/opt/genie_xsec --env GENIE_XSEC_FILE=... lucid.sif ...`).
+
+Docker users see [QUICKSTART_DOCKER.md](QUICKSTART_DOCKER.md) for the
+equivalent Docker invocation.
 
 ## Troubleshooting
 
