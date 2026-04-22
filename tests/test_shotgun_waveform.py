@@ -115,3 +115,84 @@ def test_waveform_charge_approximates_detected_count(sim_waveform):
     """With unit per-hit charge and gain smearing σ≈1%, summed charge ≈ n_detected."""
     wf, _, ndet = sim_waveform(_source(), jax.random.PRNGKey(0))
     assert abs(float(np.asarray(wf).sum()) - int(ndet)) / max(int(ndet), 1) < 0.05
+
+
+# ── Expected-value waveform mode ───────────────────────────────────────────
+
+@pytest.fixture(scope='module')
+def sim_waveform_expected(wcte_paths):
+    geom, phys = wcte_paths
+    return setup_shotgun_simulator(
+        geom, physics_config=phys, n_photons=64,
+        output_mode='waveform', K=3, detector_type='Cylinder',
+        use_expected_value=True,
+    )
+
+
+def test_expected_waveform_shapes(sim_waveform_expected):
+    wf, nd, ndet = sim_waveform_expected(_source(), jax.random.PRNGKey(0))
+    assert wf.ndim == 2
+    assert wf.shape[1] == 500
+    assert wf.shape[0] == sim_waveform_expected.num_sensors
+    assert nd.ndim == 0 and ndet.ndim == 0
+
+
+def test_expected_waveform_continuous_and_finite(sim_waveform_expected):
+    wf, _, ndet = sim_waveform_expected(_source(), jax.random.PRNGKey(0))
+    wf_np = np.asarray(wf)
+    assert np.isfinite(wf_np).all()
+    # Continuous weights → expect non-integer charge somewhere.
+    has_fractional = np.any((wf_np > 0) & (wf_np != np.floor(wf_np)))
+    assert has_fractional, "expected_value mode should produce fractional charges"
+    assert float(wf_np.sum()) > 0
+    # ndet in expected mode is total continuous charge, so should equal sum.
+    assert abs(float(ndet) - float(wf_np.sum())) < 1e-4
+
+
+def test_expected_waveform_matches_bernoulli_mean(sim_waveform, sim_waveform_expected):
+    """Large-N: expected-value waveform should agree with the mean of many
+    Bernoulli runs within a few percent."""
+    src = _source(64)
+    wf_expected, _, _ = sim_waveform_expected(src, jax.random.PRNGKey(0))
+    bernoulli_runs = []
+    for k in range(64):
+        wf_b, _, _ = sim_waveform(src, jax.random.PRNGKey(k))
+        bernoulli_runs.append(np.asarray(wf_b))
+    mean_bernoulli = np.mean(bernoulli_runs, axis=0)
+    # Compare totals (robust summary).
+    tot_exp = float(np.asarray(wf_expected).sum())
+    tot_bern = float(mean_bernoulli.sum())
+    rel = abs(tot_exp - tot_bern) / max(tot_bern, 1e-6)
+    assert rel < 0.10, f"expected total {tot_exp:.3f} vs Bernoulli mean {tot_bern:.3f}"
+
+
+def test_expected_waveform_plus_cherenkov_qe(wcte_paths):
+    """Expected-value + Method B: still finite and positive, shape unchanged.
+    Needs a physics config that provides a QE curve (SK's does; WCTE's doesn't)."""
+    geom, _ = wcte_paths
+    base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    sk_phys = os.path.join(base, 'config', 'SK_physics_config.json')
+    sim = setup_shotgun_simulator(
+        geom, physics_config=sk_phys, n_photons=64,
+        output_mode='waveform', K=3, detector_type='Cylinder',
+        use_expected_value=True,
+        wavelength_sampling='cherenkov_qe',
+    )
+    # Force Cherenkov sampling by leaving source.wavelength=None.
+    src = shotgun_source([0.0, 0.0, 0.0], [0.0, 0.0, 1.0],
+                         n_photons=64, wavelength=None, intensity=1.0)
+    wf, _, _ = sim(src, jax.random.PRNGKey(0))
+    wf_np = np.asarray(wf)
+    assert np.isfinite(wf_np).all()
+    assert float(wf_np.sum()) > 0
+
+
+def test_expected_value_rejects_per_photon(wcte_paths):
+    """Expected-value + per-photon output is unsupported and should error."""
+    geom, phys = wcte_paths
+    with pytest.raises(ValueError, match="output_mode='waveform'"):
+        setup_shotgun_simulator(
+            geom, physics_config=phys, n_photons=64,
+            output_mode='per_photon', K=3, detector_type='Cylinder',
+            use_expected_value=True,
+        )

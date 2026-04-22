@@ -35,7 +35,8 @@ from lucid.simulation.photon_step import (
 )
 from lucid.simulation.sensor_response import (
     make_hits_simulation, make_hits_data, make_hits_likelihood,
-    build_make_hits_waveform, build_make_hits_per_photon_shotgun,
+    build_make_hits_waveform, build_make_hits_waveform_expected,
+    build_make_hits_per_photon_shotgun,
 )
 
 # ===================================================================
@@ -214,7 +215,7 @@ def setup_event_simulator(
 
     # ---- Resolve hit_mode ---------------------------------------------------
     _VALID_HIT_MODES = ('aggregated', 'per_photon', 'realistic',
-                        'waveform', 'shotgun_per_photon')
+                        'waveform', 'waveform_expected', 'shotgun_per_photon')
     if hit_mode is None:
         if sim_config.is_data:
             hit_mode = 'realistic'
@@ -253,6 +254,16 @@ def setup_event_simulator(
                                 qe_key, qe, qe_corrections):
             return _wf_fn(flat_weights, flat_indices, flat_times, num_sensors,
                           qe_key, qe, qe_corrections)
+    elif hit_mode == 'waveform_expected':
+        # Expected-value waveform: no Bernoulli, no gain smear — those do not
+        # exist when every slot deposits a continuous weight.
+        _wf_exp_cfg = {k: v for k, v in _wf_cfg.items() if k != 'smear_charge'}
+        _wf_exp_fn = build_make_hits_waveform_expected(
+            n_photons=n_photons, **_wf_exp_cfg)
+        def _make_hits_waveform_expected(flat_weights, flat_indices, flat_times, num_sensors,
+                                         qe_key, qe, qe_corrections):
+            return _wf_exp_fn(flat_weights, flat_indices, flat_times, num_sensors,
+                              qe_key, qe, qe_corrections)
     elif hit_mode == 'shotgun_per_photon':
         _pp_fn = build_make_hits_per_photon_shotgun(
             n_photons=n_photons,
@@ -268,6 +279,7 @@ def setup_event_simulator(
         'per_photon': _make_hits_per_photon,
         'realistic': _make_hits_realistic,
         'waveform': _make_hits_waveform if hit_mode == 'waveform' else None,
+        'waveform_expected': _make_hits_waveform_expected if hit_mode == 'waveform_expected' else None,
         'shotgun_per_photon': _make_hits_shotgun_pp if hit_mode == 'shotgun_per_photon' else None,
     }[hit_mode]
 
