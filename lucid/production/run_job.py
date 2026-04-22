@@ -255,12 +255,17 @@ def main(argv: Optional[list[str]] = None) -> int:
     gtrac_path = output_dir / f"gntp_job_{job_id_padded}.gtrac.root"
     uses_genie = config.get("primary_source") == "genie"
 
-    # Step 0: GENIE event generation (only when the config requests it)
+    # Step 0: GENIE event generation (only when the config requests it).
+    # GENIE configs use primary-by-primary injection in PhotonSim: gevgen
+    # produces N interactions, run_genie counts the total status==1 primaries
+    # across those, and we set /run/beamOn (and LUCiD's n_events) to that
+    # primary count so the downstream v3 dataset has one entry per primary.
+    photonsim_events = n_events
     if uses_genie and not args.skip_genie:
         try:
             from lucid.production.run_genie import run_genie
             print("\n=== Step 0: GENIE event generation ===", flush=True)
-            produced = run_genie(
+            produced, total_primaries = run_genie(
                 config=config,
                 output_dir=output_dir,
                 job_id=args.job_id,
@@ -268,9 +273,13 @@ def main(argv: Optional[list[str]] = None) -> int:
                 seed=args.master_seed,
             )
             print(f"GENIE rootracker: {produced}")
-            # run_genie uses the same convention; sanity-check.
+            print(f"GENIE total primaries (one G4 event each): {total_primaries}")
             if produced != gtrac_path:
                 print(f"Warning: GENIE output {produced} != expected {gtrac_path}")
+            photonsim_events = total_primaries
+            # Persist primary count so --skip-genie reruns know the right beamOn.
+            (output_dir / f"gntp_job_{job_id_padded}.primaries.txt"
+             ).write_text(str(total_primaries) + "\n")
         except Exception as e:
             print(f"GENIE step failed: {e}", file=sys.stderr)
             return EXIT_PHOTONSIM
@@ -281,6 +290,10 @@ def main(argv: Optional[list[str]] = None) -> int:
                   f"(required for PhotonSim step with primary_source=genie).",
                   file=sys.stderr)
             return EXIT_PHOTONSIM
+        marker = output_dir / f"gntp_job_{job_id_padded}.primaries.txt"
+        if marker.is_file():
+            photonsim_events = int(marker.read_text().strip())
+            print(f"GENIE primary count from cache: {photonsim_events}")
 
     # Step 1+2: Generate macro and run PhotonSim
     if not args.skip_photonsim:
@@ -289,7 +302,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         macro_text = generate_macro(
             config,
             output_root_file=root_filename,
-            n_events=n_events,
+            n_events=photonsim_events,
             override_energy_MeV=args.override_energy_MeV,
             genie_rootracker=str(gtrac_path) if uses_genie else None,
         )
@@ -315,13 +328,20 @@ def main(argv: Optional[list[str]] = None) -> int:
               file=sys.stderr)
         return EXIT_PHOTONSIM
 
+    # For GENIE configs the LUCiD step should see one entry per injected
+    # primary, matching the PhotonSim output. For particle-gun configs
+    # photonsim_events == n_events, so this is a no-op.
+    if uses_genie and photonsim_events == n_events:
+        # Happens when --skip-genie was set and the marker was missing;
+        # fall back to reading from PhotonSim's ROOT header.
+        pass
     try:
         _run_lucid(
             root_file=root_path,
             output_dir=output_dir,
             config=config,
             file_index=file_index,
-            n_events=n_events,
+            n_events=photonsim_events,
             master_seed=args.master_seed,
         )
     except Exception as e:

@@ -1,7 +1,7 @@
 {
   "config_number": 14,
   "name": "GENIE nue water",
-  "description": "GENIE nue CC+NC interactions on a water target, isotropic direction, uniform 0.1-10 GeV neutrino energy.",
+  "description": "GENIE nue CC+NC interactions on a water target, isotropic direction, uniform 0.1-2 GeV neutrino energy.",
   "material": "water",
   "output_path": "genie",
   "primary_source": "genie",
@@ -9,7 +9,7 @@
     "probe_pdg": 12,
     "target": "water",
     "energy_min_GeV": 0.1,
-    "energy_max_GeV": 10.0,
+    "energy_max_GeV": 2.0,
     "tune": "G18_02a_00_000",
     "event_generator_list": "CC+NC",
     "direction": "isotropic"

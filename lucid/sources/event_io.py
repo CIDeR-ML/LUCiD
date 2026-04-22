@@ -865,6 +865,47 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
             total_photons = len(all_photon_origins)
             print(f"    Found {n_particles} particles, {total_photons:,} total photons", flush=True)
 
+            # Short-circuit: dark events (no tracked particles or no photons)
+            # are valid physics — a neutron primary or a sub-Cherenkov-threshold
+            # proton contributes no detectable signal. Skip the JAX simulation
+            # (whose axis-0 min reduction would fail on empty arrays) and
+            # write a zero-filled v3 entry. Downstream save_*_event_v3 writers
+            # are already sparse-safe (n_hits=0 groups are valid).
+            if n_particles == 0 or total_photons == 0:
+                print(f"    Event {event_idx}: dark "
+                      f"(n_particles={n_particles}, total_photons={total_photons}); "
+                      f"writing zero-filled v3 entry.", flush=True)
+                event_number = event_idx
+                t0 = np.random.uniform(-15.0, 15.0)
+                PE_per_particle = np.zeros((max(n_particles, 0), n_sensors), dtype=np.float32)
+                T_per_particle  = np.zeros((max(n_particles, 0), n_sensors), dtype=np.float32)
+                PE_true = np.zeros(n_sensors, dtype=np.float32)
+                T_true  = np.zeros(n_sensors, dtype=np.float32)
+                PE_reco = PE_true
+                T_reco  = T_true
+                extended_info = {
+                    'n_particles': int(n_particles),
+                    'particles': particles,
+                    'track_info_dict': particle_data.get('track_info_dict', {}),
+                    't0': t0,
+                    'PE_per_particle': PE_per_particle,
+                    'T_per_particle': T_per_particle,
+                    'PE_reco': PE_reco,
+                    'T_reco': T_reco,
+                    'source': 'PhotonSim_Particles_VMAP',
+                    'overall_light_containment': 0.0,
+                    'light_containment_by_particle': np.zeros(max(n_particles, 1), dtype=np.float32),
+                    'include_track_segments': include_track_segments,
+                    'source_event_idx': int(event_number),
+                }
+                if include_track_segments and 'meaningful_tracks' in particle_data:
+                    extended_info['meaningful_tracks'] = particle_data['meaningful_tracks']
+                    extended_info['segments']        = particle_data['segments']
+                batch_data.append(extended_info)
+                batch_indices.append(event_number)
+                event_times.append(time.time() - event_start_time)
+                continue
+
             # ========================================================================
             # VECTORIZED NUMPY PREPROCESSING + EFFICIENT JAX TRANSFER
             # All preprocessing in NumPy, single efficient transfer using device_put

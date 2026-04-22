@@ -63,6 +63,23 @@ def _target_spec(config_genie: dict) -> str:
     raise GenieError(f"Unrecognized GENIE target spec: {tgt!r}")
 
 
+def _count_final_state_primaries(gtrac_file: Path) -> int:
+    """Scan a rootracker file and count all status==1 particles. PhotonSim
+    under primary-by-primary injection emits one G4 event per such
+    particle (except the rare PDG code G4 doesn't know, which is quietly
+    skipped — resulting in an empty v3 entry downstream)."""
+    import uproot  # deferred: only needed for GENIE configs
+    import numpy as np
+
+    total = 0
+    with uproot.open(gtrac_file) as f:
+        t = f["gRooTracker"]
+        for block in t.iterate(["StdHepN", "StdHepStatus"], library="np"):
+            for n, st in zip(block["StdHepN"], block["StdHepStatus"]):
+                total += int(np.sum(st[: int(n)] == 1))
+    return total
+
+
 def run_genie(
     *,
     config: dict,
@@ -70,8 +87,16 @@ def run_genie(
     job_id: int,
     n_events: int,
     seed: Optional[int] = None,
-) -> Path:
-    """Run gevgen + gntpc to produce a rootracker file. Returns the path.
+) -> tuple[Path, int]:
+    """Run gevgen + gntpc to produce a rootracker file.
+
+    Returns
+    -------
+    (gtrac_path, total_primaries)
+        `total_primaries` is the number of status==1 particles across all
+        generated events — i.e. the number of G4 events PhotonSim will
+        emit (one per primary). Caller passes this to generate_macro.py so
+        `/run/beamOn` matches.
 
     Seeding: if `seed` is None, derive a per-job seed from job_id so reruns
     are reproducible; otherwise use the caller-provided value directly.
@@ -155,4 +180,7 @@ def run_genie(
         except OSError:
             pass
 
-    return gtrac_file
+    total_primaries = _count_final_state_primaries(gtrac_file)
+    print(f"    counted {total_primaries} final-state primaries across "
+          f"{n_events} GENIE interactions")
+    return gtrac_file, total_primaries
