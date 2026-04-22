@@ -1162,6 +1162,20 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
             PE_reco = np.asarray(PE_reco, dtype=np.float32)
             T_reco = np.asarray(T_reco, dtype=np.float32)
 
+            # Shift simulator outputs from G4-frame (origin at vertex) into
+            # absolute detector frame by adding the per-interaction t0.
+            # Only the single-vertex path is in this function today; the
+            # pile-up path applies per-vertex t0 in its merger. The
+            # positivity mask preserves "no-hit" sentinels (0/inf).
+            t0_f32 = np.float32(t0)
+            T_per_particle = np.where(T_per_particle > 0, T_per_particle + t0_f32, T_per_particle)
+            T_true = np.where(T_true > 0, T_true + t0_f32, T_true)
+            T_reco = np.where(T_reco > 0, T_reco + t0_f32, T_reco)
+            # Segments always carry meaningful times — shift all of them.
+            if include_track_segments and 'segments' in particle_data and particle_data['segments'].get('n_segments', 0) > 0:
+                particle_data['segments']['time'] = \
+                    np.asarray(particle_data['segments']['time'], dtype=np.float32) + t0_f32
+
             # Calculate light containment
             light_containment_by_particle = np.zeros(n_particles, dtype=np.float64)
             overall_light_containment = 0.0
@@ -2302,21 +2316,21 @@ def _event_group_name(seq_idx):
 def save_sensor_event_v3(f, event_dict, seq_idx):
     """Write a single event_NNN/ group to an already-open sensor v3 file.
 
-    ``event_dict`` must contain: ``source_event_idx``, ``t0``, ``PE_reco``,
-    ``T_reco``. Times are stored t0-shifted into the detector frame.
+    ``event_dict`` must contain: ``source_event_idx``, ``PE_reco``,
+    ``T_reco``. Times in ``T_reco`` are expected in absolute detector
+    frame — the caller applies per-interaction t0 shifts before calling
+    this writer; the writer does not shift times further.
     """
     grp = f.create_group(_event_group_name(seq_idx))
     grp.attrs['source_event_idx'] = int(event_dict['source_event_idx'])
 
     pe = np.asarray(event_dict['PE_reco'], dtype=np.float32)
     t = np.asarray(event_dict['T_reco'], dtype=np.float32)
-    t0 = np.float32(event_dict['t0'])
 
     mask = (pe > 0) | (np.isfinite(t) & (t > 0) & (t < 1e5))
     indices = np.where(mask)[0].astype(np.uint16)
     pe_sparse = pe[mask].astype(np.float32)
-    t_sparse = np.where(np.isfinite(t[mask]), t[mask], np.float32(0.0))
-    t_sparse = np.where(t_sparse > 0, t_sparse - t0, np.float32(0.0)).astype(np.float32)
+    t_sparse = np.where(np.isfinite(t[mask]), t[mask], np.float32(0.0)).astype(np.float32)
 
     grp.attrs['n_hits'] = int(indices.size)
     grp.create_dataset('sensor_idx', data=indices, **_GZIP_OPTS)
@@ -2328,7 +2342,8 @@ def save_inst_event_v3(f, event_dict, seq_idx):
     """Write a single event_NNN/ group to an already-open inst v3 file.
 
     Stores the per-particle PE/T decomposition as FK rows keyed by
-    ``particle_idx`` (local to the event). Times are t0-shifted.
+    ``particle_idx`` (local to the event). Times in ``T_per_particle``
+    are expected in absolute detector frame — no shift is applied here.
     """
     grp = f.create_group(_event_group_name(seq_idx))
     grp.attrs['source_event_idx'] = int(event_dict['source_event_idx'])
@@ -2336,7 +2351,6 @@ def save_inst_event_v3(f, event_dict, seq_idx):
 
     pe_pp = np.asarray(event_dict['PE_per_particle'], dtype=np.float32)
     t_pp = np.asarray(event_dict['T_per_particle'], dtype=np.float32)
-    t0 = np.float32(event_dict['t0'])
     n_p = pe_pp.shape[0]
 
     particle_idx_parts, sensor_idx_parts, pe_parts, t_parts = [], [], [], []
@@ -2350,7 +2364,6 @@ def save_inst_event_v3(f, event_dict, seq_idx):
         pe_parts.append(pe_pp[i, mask].astype(np.float32))
         t_vals = t_pp[i, mask]
         t_vals = np.where(np.isfinite(t_vals), t_vals, np.float32(0.0))
-        t_vals = np.where(t_vals > 0, t_vals - t0, np.float32(0.0))
         t_parts.append(t_vals.astype(np.float32))
 
     def _cat(xs, dtype):
@@ -2380,7 +2393,6 @@ def save_seg_event_v3(f, event_dict, seq_idx):
 
     mt = event_dict.get('meaningful_tracks', {})
     seg = event_dict.get('segments', {'n_segments': 0})
-    t0 = np.float32(event_dict['t0'])
 
     n_tracks = int(len(mt))
     n_segments = int(seg.get('n_segments', 0))
@@ -2410,7 +2422,7 @@ def save_seg_event_v3(f, event_dict, seq_idx):
             'dir_y': (seg['dir_y'], np.float16),
             'dir_z': (seg['dir_z'], np.float16),
             'edep': (seg['edep'], np.float32),
-            'time': (np.asarray(seg['time'], dtype=np.float32) - t0, np.float32),
+            'time': (np.asarray(seg['time'], dtype=np.float32), np.float32),
             'beta_start': (seg['beta_start'], np.float32),
             'n_cherenkov': (seg['n_cherenkov'], np.int32),
         }

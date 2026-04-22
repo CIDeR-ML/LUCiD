@@ -68,9 +68,10 @@ def test_sensor_event_roundtrip(v3_batch):
     sensor = read_sensor_event_v3(str(paths['sensor']), 0)
     # Sensors 0..4 have PE; others don't
     assert sensor['n_hits'] == 5
-    # Detector-frame: times written as (T_reco - t0)
+    # Stored T equals input T: save_* no longer shifts — the caller is
+    # expected to apply t0 in absolute detector frame before saving.
     expected_pe = np.array([3.0, 2.0, 1.0, 5.0, 2.5], dtype=np.float32)
-    expected_t = np.array([50.0, 52.0, 55.0, 60.0, 61.0], dtype=np.float32) - np.float32(ev['t0'])
+    expected_t = np.array([50.0, 52.0, 55.0, 60.0, 61.0], dtype=np.float32)
     assert np.allclose(sensor['PE'], expected_pe)
     assert np.allclose(sensor['T'], expected_t)
     with h5py.File(paths['sensor'], 'r') as f:
@@ -86,7 +87,8 @@ def test_inst_event_roundtrip(v3_batch):
     # FK column ordering matches the build
     np.testing.assert_array_equal(inst['particle_idx'], np.array([0, 0, 0, 1, 1], dtype=np.int32))
     np.testing.assert_array_equal(inst['sensor_idx'], np.array([0, 1, 2, 3, 4], dtype=np.uint16))
-    expected_t = np.array([50.0, 52.0, 55.0, 60.0, 61.0], dtype=np.float32) - np.float32(ev['t0'])
+    # No save-time shift — stored T matches input T.
+    expected_t = np.array([50.0, 52.0, 55.0, 60.0, 61.0], dtype=np.float32)
     assert np.allclose(inst['T'], expected_t)
 
 
@@ -100,8 +102,8 @@ def test_seg_event_roundtrip(v3_batch):
     # beta_start and n_cherenkov pass through untouched (aside from dtype)
     np.testing.assert_allclose(seg['beta_start'], ev['segments']['beta_start'])
     np.testing.assert_array_equal(seg['n_cherenkov'], ev['segments']['n_cherenkov'])
-    # time is t0-shifted
-    np.testing.assert_allclose(seg['time'], ev['segments']['time'] - ev['t0'])
+    # No save-time shift — stored time matches input time.
+    np.testing.assert_allclose(seg['time'], ev['segments']['time'])
 
 
 def test_labl_event_roundtrip(v3_batch):

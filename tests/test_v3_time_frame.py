@@ -1,8 +1,9 @@
-"""Verify v3 writers apply the t0 shift consistently.
+"""Verify v3 writer time-frame semantics.
 
-seg.time, inst.T, and sensor.T must all be stored in detector-frame
-(G4-absolute minus t0). labl/per_interaction/t0 is the truth emission
-time (per interaction — one row for single-interaction events).
+From v4 on, save_* no longer applies any t0 shift: input times are
+expected already in absolute detector frame (generate_events_from_photonsim_*
+adds per-interaction t0 before saving). labl/per_interaction/t0 carries
+the per-interaction metadata for downstream reconstruction.
 """
 import h5py
 import numpy as np
@@ -45,21 +46,21 @@ def _write_batch(tmp_path, t0):
 
 
 @pytest.mark.parametrize("t0", [0.0, 7.5, -3.2, 15.0])
-def test_seg_time_is_t0_shifted(tmp_path, t0):
+def test_seg_time_passthrough(tmp_path, t0):
+    """Stored seg.time equals the input — save_* applies no shift."""
     paths, ev = _write_batch(tmp_path, t0)
     seg = read_seg_event_v3(str(paths['seg']), 0)
-    expected = ev['segments']['time'] - np.float32(t0)
-    np.testing.assert_allclose(seg['time'], expected, atol=1e-5)
+    np.testing.assert_allclose(seg['time'], ev['segments']['time'], atol=1e-5)
 
 
 @pytest.mark.parametrize("t0", [0.0, 7.5, -3.2])
-def test_inst_and_sensor_T_are_t0_shifted(tmp_path, t0):
+def test_inst_and_sensor_T_passthrough(tmp_path, t0):
+    """Stored inst.T and sensor.T equal the input — save_* applies no shift."""
     paths, ev = _write_batch(tmp_path, t0)
     inst = read_inst_event_v3(str(paths['inst']), 0)
     sensor = read_sensor_event_v3(str(paths['sensor']), 0)
 
-    # Expected detector-frame times (non-zero only for hit sensors)
-    expected_t = np.array([50.0, 52.0, 55.0, 60.0, 61.0]) - np.float32(t0)
+    expected_t = np.array([50.0, 52.0, 55.0, 60.0, 61.0])
     np.testing.assert_allclose(inst['T'], expected_t, atol=1e-5)
     np.testing.assert_allclose(sensor['T'], expected_t, atol=1e-5)
 
