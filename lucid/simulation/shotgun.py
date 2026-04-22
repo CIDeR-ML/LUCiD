@@ -30,6 +30,7 @@ def setup_shotgun_simulator(
     smear_charge: bool = True,
     default_detector_params: bool = True,
     wavelength_sampling: str = 'cherenkov',
+    use_expected_value: bool = False,
     **grid_params,
 ):
     """Build a photon-shotgun simulator.
@@ -58,6 +59,13 @@ def setup_shotgun_simulator(
         strictly lower variance at fixed photon count, but the output
         becomes a density estimate rather than a literal per-shot
         realization (Binomial fluctuations get suppressed).
+    use_expected_value : bool
+        ``False`` (default) uses the Bernoulli MC propagator + Bernoulli
+        QE, producing literal per-shot realizations. ``True`` uses the
+        expected-value propagator + continuous QE weight — output is the
+        expected waveform (same shape) with substantially lower MC noise
+        at fixed photon count. Requires ``output_mode='waveform'``; does
+        not combine with ``'per_photon'``.
     default_detector_params : bool
         If True, bake DetectorParams from physics_config into the closure —
         returned callable is ``sim(source, key)``. Otherwise ``sim(source, dp, key)``.
@@ -68,10 +76,18 @@ def setup_shotgun_simulator(
         Jitted simulator. In addition to being callable per-case, it exposes
         a ``.batch`` attribute that vmaps over a leading case axis.
     """
-    _HIT_MODES = {'waveform': 'waveform', 'per_photon': 'shotgun_per_photon'}
+    if use_expected_value:
+        _HIT_MODES = {'waveform': 'waveform_expected'}
+        if output_mode != 'waveform':
+            raise ValueError(
+                f"use_expected_value=True requires output_mode='waveform'; "
+                f"got {output_mode!r} (per-photon semantics don't apply in "
+                "expected mode — each photon has multiple continuous slots).")
+    else:
+        _HIT_MODES = {'waveform': 'waveform', 'per_photon': 'shotgun_per_photon'}
     if output_mode not in _HIT_MODES:
         raise ValueError(
-            f"output_mode must be 'waveform' or 'per_photon', got {output_mode!r}")
+            f"output_mode must be one of {tuple(_HIT_MODES)}, got {output_mode!r}")
     hit_mode = _HIT_MODES[output_mode]
 
     waveform_config = dict(
@@ -88,7 +104,7 @@ def setup_shotgun_simulator(
         is_calibration=True,
         max_sensors_per_cell=max_sensors_per_cell,
         detector_type=detector_type,
-        use_expected_value=False,   # MC sampling (binary detection)
+        use_expected_value=use_expected_value,
         physics_config=physics_config,
         default_detector_params=default_detector_params,
         wavelength_mode=True,

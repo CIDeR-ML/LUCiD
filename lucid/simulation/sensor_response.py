@@ -256,6 +256,91 @@ def build_make_hits_waveform(
     return make_hits_waveform
 
 
+def build_make_hits_waveform_expected(
+    n_photons,
+    window_ns=500.0,
+    bin_width_ns=1.0,
+    tts_sigma_ns=1.0,
+    t_min_ns=0.0,
+    smear_time=True,
+    threshold=1e-10,
+):
+    """Factory: continuous QE-weighted waveform (no Bernoulli, no gain smearing).
+
+    Companion to ``build_make_hits_waveform`` but for expected-value mode.
+    Every propagation slot contributes its continuous ``flat_weight · QE``
+    deposit to the ``(sensor, time_bin)`` cell it lands in. No Bernoulli coin
+    is flipped; the output is the expected waveform given the sampled photon
+    trajectories.
+
+    Same ``(num_detectors, n_time_bins)`` output shape as
+    ``build_make_hits_waveform`` — IO, merge, and analysis code are unchanged.
+    ``n_dropped`` counts valid slots that landed outside the readout window;
+    ``n_detected`` is the total (continuous) integrated charge across all
+    sensors, which replaces the integer photon count from Bernoulli mode.
+
+    Parameters
+    ----------
+    n_photons : int
+        Photons per case. Kept for API symmetry with the Bernoulli factory —
+        expected mode doesn't need it for first-detection compaction.
+    window_ns, bin_width_ns, t_min_ns : float
+        Readout window / bin grid (matches Bernoulli factory).
+    tts_sigma_ns : float
+        Per-slot Gaussian TTS σ. Each slot (photon × scattering iteration ×
+        cell-sensor) gets its own draw — slightly over-smooths relative to a
+        per-detection draw but the effect is tiny at σ ≲ bin_width.
+    smear_time : bool
+        Toggle TTS smearing.
+    threshold : float
+        Minimum per-slot weight to be counted as physical.
+    """
+    n_time_bins = int(round(window_ns / bin_width_ns))
+    del n_photons  # unused; present for API symmetry
+
+    @partial(jax.jit, static_argnames=('num_detectors',))
+    def make_hits_waveform_expected(
+            flat_weights, flat_indices, flat_times, num_detectors,
+            rng_key, qe, qe_corrections):
+        per_slot_qe = qe * qe_corrections[flat_indices]
+        slot_charge = flat_weights * per_slot_qe
+
+        if smear_time:
+            noise = jax.random.normal(rng_key, shape=flat_times.shape) * tts_sigma_ns
+            smeared_times = flat_times + noise
+        else:
+            smeared_times = flat_times
+
+        bin_idx = jnp.floor((smeared_times - t_min_ns) / bin_width_ns).astype(jnp.int32)
+        in_window = (bin_idx >= 0) & (bin_idx < n_time_bins)
+        base_valid = (flat_weights > threshold) & (flat_times > 0) & jnp.isfinite(flat_times)
+        keep = base_valid & in_window
+        dropped = base_valid & ~in_window
+
+        safe_sensor = jnp.where(keep, flat_indices, 0)
+        safe_bin = jnp.where(keep, bin_idx, 0)
+        flat_bin_idx = safe_sensor * n_time_bins + safe_bin
+        safe_charge = jnp.where(keep, slot_charge, 0.0)
+
+        waveform_flat = jax.ops.segment_sum(
+            safe_charge, flat_bin_idx, num_segments=num_detectors * n_time_bins)
+        waveform = waveform_flat.reshape(num_detectors, n_time_bins)
+
+        n_dropped = jnp.sum(dropped.astype(jnp.int32))
+        # In expected mode, "detected" is a continuous charge total, not a
+        # photon count. Exposed via n_detected for reporting symmetry.
+        n_detected = jnp.sum(waveform)
+
+        return waveform, n_dropped, n_detected
+
+    make_hits_waveform_expected.n_time_bins = n_time_bins
+    make_hits_waveform_expected.window_ns = float(window_ns)
+    make_hits_waveform_expected.bin_width_ns = float(bin_width_ns)
+    make_hits_waveform_expected.tts_sigma_ns = float(tts_sigma_ns)
+    make_hits_waveform_expected.t_min_ns = float(t_min_ns)
+    return make_hits_waveform_expected
+
+
 def build_make_hits_per_photon_shotgun(
     n_photons,
     tts_sigma_ns=1.0,

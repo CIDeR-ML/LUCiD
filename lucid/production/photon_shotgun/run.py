@@ -72,7 +72,11 @@ def build_parser():
                    type=float, default=None,
                    help='Fixed origin (required when --position-mode center)')
     p.add_argument('--wavelength', type=_parse_wavelength, default='cherenkov')
-    p.add_argument('--intensity', type=float, default=1.0)
+    p.add_argument('--intensity', type=float, default=None,
+                   help="Per-photon weight. Default: 1.0 in Bernoulli mode; "
+                        "1/n_photons in --expected-value mode so the output "
+                        "is an expected-detection-rate density (per emitted "
+                        "photon). Pass explicitly to override.")
     p.add_argument('--wavelength-sampling',
                    choices=['cherenkov', 'cherenkov_qe'],
                    default='cherenkov',
@@ -80,6 +84,12 @@ def build_parser():
                         "'cherenkov' (default): λ~1/λ², per-photon QE weight. "
                         "'cherenkov_qe': λ~QE(λ)/λ², scalar <QE>_C weight — "
                         "lower variance, but density-estimate semantics.")
+    p.add_argument('--expected-value', action='store_true',
+                   help="Use expected-value propagator + continuous QE weight "
+                        "(hit_mode='waveform_expected'). Same output shape as "
+                        "Bernoulli waveform but with substantially lower MC "
+                        "noise — the output is the expected waveform, not a "
+                        "per-shot realization. Requires --output-mode waveform.")
     p.add_argument('--output-mode', choices=['waveform', 'per_photon'],
                    default='waveform')
     p.add_argument('--K', type=int, default=12)
@@ -94,6 +104,12 @@ def build_parser():
     p.add_argument('-o', '--output', required=True)
     p.add_argument('--save-source', action='store_true',
                    help='Persist per-case photon origin/direction arrays (large!)')
+    p.add_argument('--charge-threshold', type=float, default=0.0,
+                   help="Sparsification threshold on per-bin charge. Default 0 "
+                        "(keep everything) works for Bernoulli. For expected-"
+                        "value mode the waveform is non-sparse — set e.g. "
+                        "0.01 to drop sub-percent-photon bins and keep storage "
+                        "tractable.")
     return p
 
 
@@ -126,6 +142,13 @@ def _build_positions_directions(args, n_cases: int):
 def main(argv=None):
     args = build_parser().parse_args(argv)
 
+    # Per-photon intensity. Default: 1.0 in Bernoulli (integer counts); 1/n in
+    # expected mode so the saved waveform is a density (expected detection
+    # rate per emitted photon). Explicit --intensity always wins.
+    if args.intensity is None:
+        args.intensity = (1.0 / args.n_photons) if args.expected_value else 1.0
+    print(f"[shotgun] per-photon intensity = {args.intensity:.3e}")
+
     print(f"[shotgun] building simulator — detector={args.detector_type}, "
           f"n_photons={args.n_photons}, mode={args.output_mode}, K={args.K}")
     t0 = time.time()
@@ -142,6 +165,7 @@ def main(argv=None):
         smear_time=not args.no_smear_time,
         smear_charge=not args.no_smear_charge,
         wavelength_sampling=args.wavelength_sampling,
+        use_expected_value=args.expected_value,
     )
     print(f"[shotgun] setup: {time.time()-t0:.1f}s  num_sensors={sim.num_sensors}")
 
@@ -184,7 +208,8 @@ def main(argv=None):
             num_sensors=sim.num_sensors, n_time_bins=n_time_bins,
             waveform_config=sim.waveform_config,
             detector_config=args.detector, physics_config=args.physics_config,
-            n_photons=args.n_photons, K=args.K, save_source=args.save_source)
+            n_photons=args.n_photons, K=args.K, save_source=args.save_source,
+            threshold=args.charge_threshold)
         total_det = total_drop = 0
     else:
         writer = StreamingPerPhotonWriter(

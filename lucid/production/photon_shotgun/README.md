@@ -100,6 +100,9 @@ Source
 Simulator
   --K                     INT       Max scattering iterations (default 12)
   --output-mode           {waveform, per_photon}
+  --expected-value                  Use expected-value propagator + continuous
+                                    QE weight (same waveform shape, lower MC
+                                    noise, density-estimate semantics)
 
 Waveform / smearing
   --window-ns             FLOAT
@@ -112,6 +115,63 @@ IO
   --seed                  INT       Drives positions, directions, Cherenkov sampling, and QE Bernoulli
   -o, --output            PATH
   --save-source                     Persist per-case origin / direction arrays
+  --charge-threshold      FLOAT     Sparsification threshold on per-bin charge
+                                    (default 0). See below for expected-mode guidance.
+```
+
+---
+
+## Expected-value mode (`--expected-value`)
+
+Every slot deposits a continuous QE-weighted charge into its `(sensor, bin)`
+cell — no Bernoulli coin, no gain smearing. The output is the **expected
+waveform** (same shape as Bernoulli mode) with substantially lower MC noise
+at fixed photon count. Trade-off: the per-shot Binomial fluctuation is
+removed — treat each case as a density estimate, not a physical realization.
+
+### Normalization
+
+Expected mode automatically sets the per-photon `intensity` to `1/n_photons`
+so the saved waveform is a **density**: charge `c` in a bin means "if you
+release `N` photons into this configuration, expected detections in this
+bin = `c · N`". The scale is independent of `n_photons`, so two shots with
+different photon budgets are directly comparable after summing/normalizing.
+Pass `--intensity` explicitly to override.
+
+### Sparsification threshold
+
+Because expected-value waveforms have a continuous low-charge tail in every
+bin that could ever see a photon, they do *not* sparsify naturally like
+Bernoulli outputs. Use `--charge-threshold` to drop sub-noise-floor bins.
+
+For normalized output (the default in `--expected-value`), a threshold of
+`t_abs` means "keep bins whose expected detections ≥ `t_abs · N`". For the
+recommended production `N = 500 000`:
+
+| `--charge-threshold` | physical meaning (at N = 500k) | smoke file size (100 × 100k) | est. 10k × 500k |
+|---|---|---|---|
+| `0`      | keep everything (noise floor included) | 156 MB | 40–60 GB |
+| `1e-9`   | ≥ 0.0005 photon per 500k shot          | 76 MB  | ~12 GB |
+| **`1e-8`** | **≥ 0.005 photon per 500k shot**       | **31 MB** | **~3–5 GB ← recommended default** |
+| `1e-7`   | ≥ 0.05 photon per 500k shot            | 2.8 MB | ~300–500 MB |
+| `1e-6`   | ≥ 0.5 photon per 500k shot             | 64 KB  | ~10–30 MB |
+
+`1e-8` keeps every bin that would see ≥ 0.5% of one photon in a 500k shot
+— fine enough to reconstruct smooth per-sensor waveforms, coarse enough
+that the file stays a few GB. Drop to `1e-9` if you're integrating over
+large ensembles and care about the ≲ 0.1%-photon tail; step up to `1e-7`
+if you only need peak pulse shapes.
+
+### Example — recommended 10k × 500k expected-density production
+
+```bash
+python -m lucid.production.photon_shotgun.run \
+    --detector config/SK_geom_config.json --physics-config config/SK_physics_config.json \
+    --n-cases 10000 --n-photons 500000 \
+    --expected-value --wavelength-sampling cherenkov_qe \
+    --charge-threshold 1e-8 \
+    --output-mode waveform --chunk 10 \
+    -o runs/shotgun_SK_10k_500k_expected_qe.h5
 ```
 
 ---
