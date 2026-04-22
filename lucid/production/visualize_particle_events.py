@@ -160,7 +160,7 @@ labl_data = read_labl_event_v3(str(labl_file), event_idx)
 n_sensors = detector.n_sensors
 n_particles = int(labl_data['n_particles'])
 n_tracks = int(labl_data['n_tracks'])
-t0 = float(labl_data['per_event']['t0'])
+t0 = float(labl_data['per_interaction']['t0'][0])
 overall_light_containment = float(labl_data['per_event']['overall_containment'])
 
 # Reconstruct dense PE_per_particle / T_per_particle from inst sparse rows

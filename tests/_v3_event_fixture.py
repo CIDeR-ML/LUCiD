@@ -80,6 +80,9 @@ def build_synthetic_event(source_event_idx=0, t0=7.5, n_sensors=20):
         'meaningful_tracks': meaningful_tracks,
         'segments': segments,
         't0': t0,
+        # Single-interaction fixture: one vertex, particle-gun source.
+        'vertex_xyz': np.array([0.1, -0.2, 0.3], dtype=np.float32),
+        'source_type': 0,  # SOURCE_TYPE_PARTICLES
         'PE_per_particle': PE_per_particle,
         'T_per_particle': T_per_particle,
         'PE_reco': PE_reco,

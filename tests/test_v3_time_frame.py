@@ -1,7 +1,8 @@
 """Verify v3 writers apply the t0 shift consistently.
 
 seg.time, inst.T, and sensor.T must all be stored in detector-frame
-(G4-absolute minus t0). labl/per_event/t0 is the truth emission time.
+(G4-absolute minus t0). labl/per_interaction/t0 is the truth emission
+time (per interaction — one row for single-interaction events).
 """
 import h5py
 import numpy as np
@@ -66,4 +67,6 @@ def test_inst_and_sensor_T_are_t0_shifted(tmp_path, t0):
 def test_labl_t0_matches_input(tmp_path):
     paths, ev = _write_batch(tmp_path, 9.125)
     labl = read_labl_event_v3(str(paths['labl']), 0)
-    assert float(labl['per_event']['t0']) == pytest.approx(ev['t0'])
+    # Single-interaction fixture → 1 row in per_interaction/
+    assert len(labl['per_interaction']['t0']) == 1
+    assert float(labl['per_interaction']['t0'][0]) == pytest.approx(ev['t0'])

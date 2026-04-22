@@ -54,7 +54,7 @@ def test_config_present_in_all_files(v3_batch):
     for name, path in paths.items():
         with h5py.File(path, 'r') as f:
             assert 'config' in f, f"{name} missing config group"
-            assert f['config'].attrs['format_version'] == 3
+            assert f['config'].attrs['format_version'] == 4
             assert f['config'].attrs['run_id'].decode() == cfg['run_id'] \
                 if isinstance(f['config'].attrs['run_id'], bytes) \
                 else f['config'].attrs['run_id'] == cfg['run_id']
@@ -109,13 +109,25 @@ def test_labl_event_roundtrip(v3_batch):
     labl = read_labl_event_v3(str(paths['labl']), 0)
     assert labl['n_particles'] == 2
     assert labl['n_tracks'] == 3
-    # per_event
-    assert float(labl['per_event']['t0']) == pytest.approx(ev['t0'])
+    # per_event (t0 has moved to per_interaction/)
+    assert 't0' not in labl['per_event']
     assert float(labl['per_event']['overall_containment']) == pytest.approx(0.92)
+    # per_interaction — 1 row for this single-interaction fixture
+    pi = labl['per_interaction']
+    assert len(pi['t0']) == 1
+    assert float(pi['t0'][0]) == pytest.approx(ev['t0'])
+    assert int(pi['source_type'][0]) == ev['source_type']
+    np.testing.assert_allclose(
+        [pi['vertex_x'][0], pi['vertex_y'][0], pi['vertex_z'][0]],
+        ev['vertex_xyz'], atol=1e-6)
+    # Only one primary in this fixture (track 100), so the ancestor is 100.
+    assert int(pi['ancestor_track_id'][0]) == 100
     # per_particle
     pp = labl['per_particle']
     np.testing.assert_array_equal(pp['category'], np.array([0, 1], dtype=np.uint8))
     np.testing.assert_allclose(pp['containment'], [0.95, 0.85], atol=1e-6)
+    # interaction_idx: both particles trace back to primary 100 → rank 0.
+    np.testing.assert_array_equal(pp['interaction_idx'], np.array([0, 0], dtype=np.int32))
     # per_track
     pt = labl['per_track']
     np.testing.assert_array_equal(pt['track_id'], np.array([100, 150, 200], dtype=np.int32))

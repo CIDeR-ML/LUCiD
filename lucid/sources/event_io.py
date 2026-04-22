@@ -733,7 +733,8 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
                                              detector_config_path=None,
                                              dataset_name='unnamed_dataset', run_id=None,
                                              file_index_start=0, detector_type='cylinder',
-                                             material='water', include_track_segments=True):
+                                             material='water', include_track_segments=True,
+                                             primary_source='particles'):
     """Generate events from a PhotonSim ROOT file, writing v3 four-file batches.
 
     For each batch of events, writes four HDF5 files under ``output_dir``:
@@ -777,7 +778,11 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
         Provenance: detector geometry type and medium.
     include_track_segments : bool
         Must be True for v3 output (seg file requires segment data). Default True.
+    primary_source : str
+        'particles' or 'genie'. Written into ``per_interaction/source_type``
+        for every event of this batch.
     """
+    source_type_code = _source_type_code(primary_source)
     import uproot
     import time
     import uuid
@@ -927,7 +932,19 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
                                            interaction_idx=0)
             master_key = event_keys['sim_key']
             t0 = float(np.random.default_rng(
-                seed=event_keys['t0_seed']).uniform(-15.0, 15.0))
+                seed=event_keys['t0_seed']).uniform(
+                    -T0_HALF_WINDOW_NS, T0_HALF_WINDOW_NS))
+
+            # Draw the vertex once, up front — both dark-event and normal
+            # branches write it into per_interaction/. When apply_translation
+            # is False the vertex is the origin (nothing to apply).
+            if apply_translation and detector_bounds is not None:
+                vertex_rng = np.random.default_rng(
+                    seed=event_keys['vertex_seed'])
+                translation_vector = sample_translation_vector(
+                    detector_bounds, vertex_rng)
+            else:
+                translation_vector = np.zeros(3, dtype=np.float32)
 
             # Read particle data from PhotonSim
             print(f"    Reading particle data from ROOT file...", flush=True)
@@ -965,6 +982,8 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
                     'particles': particles,
                     'track_info_dict': particle_data.get('track_info_dict', {}),
                     't0': t0,
+                    'vertex_xyz': translation_vector.copy(),
+                    'source_type': source_type_code,
                     'PE_per_particle': PE_per_particle,
                     'T_per_particle': T_per_particle,
                     'PE_reco': PE_reco,
@@ -998,40 +1017,8 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
             all_photon_times_np = all_photon_times.astype(np.float32, copy=False)
             all_photon_wavelengths_np = all_photon_wavelengths.astype(np.float32, copy=False)
 
-            # Generate random translation vector
-            translation_vector = np.array([0.0, 0.0, 0.0], dtype=np.float32)
+            # Vertex already drawn at top of loop (same value both branches).
             if apply_translation:
-                rng = np.random.default_rng(seed=event_keys['vertex_seed'])
-
-                if detector_bounds['type'] == 'cylinder':
-                    frac, r_max = 0.9, detector_bounds['radius'] * 0.9
-                    h_max = detector_bounds['height'] * 0.9 / 2.0
-                    random_vals = rng.uniform(0, 1, size=3).astype(np.float32)
-                    r_sample = r_max * np.sqrt(random_vals[0])
-                    theta_sample = 2.0 * np.pi * random_vals[1]
-                    z_sample = (2.0 * random_vals[2] - 1.0) * h_max
-                    translation_vector = np.array([
-                        r_sample * np.cos(theta_sample),
-                        r_sample * np.sin(theta_sample),
-                        z_sample
-                    ], dtype=np.float32)
-                elif detector_bounds['type'] == 'sphere':
-                    r_max = detector_bounds['radius'] * 0.9
-                    random_vals = rng.uniform(0, 1, size=3).astype(np.float32)
-                    r_sample = r_max * (random_vals[0] ** (1.0/3.0))
-                    cos_theta, phi = 2.0 * random_vals[1] - 1.0, 2.0 * np.pi * random_vals[2]
-                    sin_theta = np.sqrt(1.0 - cos_theta**2)
-                    translation_vector = r_sample * np.array([
-                        sin_theta * np.cos(phi), sin_theta * np.sin(phi), cos_theta
-                    ], dtype=np.float32)
-                elif detector_bounds['type'] == 'box':
-                    random_vals = rng.uniform(0, 1, size=3).astype(np.float32)
-                    translation_vector = np.array([
-                        (2.0 * random_vals[0] - 1.0) * detector_bounds['length'] * 0.45,
-                        (2.0 * random_vals[1] - 1.0) * detector_bounds['width'] * 0.45,
-                        (2.0 * random_vals[2] - 1.0) * detector_bounds['height'] * 0.45
-                    ], dtype=np.float32)
-
                 all_photon_origins_np += translation_vector[None, :]
 
                 # Apply translation to segment positions if track segments are included
@@ -1223,6 +1210,8 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
                 'particles': particles,
                 'track_info_dict': particle_data['track_info_dict'],
                 't0': t0,
+                'vertex_xyz': translation_vector.copy(),
+                'source_type': source_type_code,
                 'PE_per_particle': PE_per_particle,
                 'T_per_particle': T_per_particle,
                 'PE_reco': PE_reco,
@@ -2091,7 +2080,63 @@ def print_event_kinematics(event_data, show_details=True):
 # ---------------------------------------------------------------------------
 
 _GZIP_OPTS = dict(compression='gzip', compression_opts=4)
-_V3_FORMAT_VERSION = 3
+_V3_FORMAT_VERSION = 4
+
+# per_interaction/source_type encoding
+SOURCE_TYPE_PARTICLES = 0
+SOURCE_TYPE_GENIE     = 1
+
+# t0 draw half-window (ns). Applied symmetrically per interaction:
+# t0 ~ Uniform(-T0_HALF_WINDOW_NS, +T0_HALF_WINDOW_NS). Wide enough to
+# (a) randomize absolute event time so downstream models can't assume
+# t=0 is the true start, and (b) cover a ±250 ns pile-up window.
+T0_HALF_WINDOW_NS = 250.0
+
+
+def _source_type_code(primary_source):
+    """Map config's ``primary_source`` string to the per_interaction/source_type int."""
+    if primary_source == 'genie':
+        return SOURCE_TYPE_GENIE
+    return SOURCE_TYPE_PARTICLES
+
+
+def sample_translation_vector(detector_bounds, rng):
+    """Draw a random vertex inside the fiducial volume of the detector.
+
+    Cylinder: uniform in (r, theta, z) with r <= 0.9*R, |z| <= 0.45*H.
+    Sphere:   uniform in the 0.9*R ball.
+    Box:      uniform in the 0.9-fraction-scaled box.
+
+    Returns a length-3 float32 array in meters.
+    """
+    if detector_bounds is None:
+        return np.zeros(3, dtype=np.float32)
+    kind = detector_bounds['type']
+    if kind == 'cylinder':
+        r_max = detector_bounds['radius'] * 0.9
+        h_max = detector_bounds['height'] * 0.9 / 2.0
+        u = rng.uniform(0, 1, size=3).astype(np.float32)
+        r = r_max * np.sqrt(u[0])
+        theta = 2.0 * np.pi * u[1]
+        z = (2.0 * u[2] - 1.0) * h_max
+        return np.array([r * np.cos(theta), r * np.sin(theta), z], dtype=np.float32)
+    if kind == 'sphere':
+        r_max = detector_bounds['radius'] * 0.9
+        u = rng.uniform(0, 1, size=3).astype(np.float32)
+        r = r_max * (u[0] ** (1.0 / 3.0))
+        cos_t = 2.0 * u[1] - 1.0
+        phi = 2.0 * np.pi * u[2]
+        sin_t = np.sqrt(1.0 - cos_t * cos_t)
+        return r * np.array([sin_t * np.cos(phi), sin_t * np.sin(phi), cos_t],
+                            dtype=np.float32)
+    if kind == 'box':
+        u = rng.uniform(0, 1, size=3).astype(np.float32)
+        return np.array([
+            (2.0 * u[0] - 1.0) * detector_bounds['length'] * 0.45,
+            (2.0 * u[1] - 1.0) * detector_bounds['width']  * 0.45,
+            (2.0 * u[2] - 1.0) * detector_bounds['height'] * 0.45,
+        ], dtype=np.float32)
+    raise ValueError(f"Unknown detector_bounds type: {kind!r}")
 
 
 def derive_particle_idx_per_track(event_dict):
@@ -2387,9 +2432,15 @@ def save_seg_event_v3(f, event_dict, seq_idx):
 def save_labl_event_v3(f, event_dict, seq_idx):
     """Write a single event_NNN/ group to an already-open labl v3 file.
 
-    Contains three subgroups: ``per_event/`` (t0 and overall_containment),
-    ``per_particle/`` (category, containment, genealogy CSR), and
-    ``per_track/`` (track metadata + ``particle_idx`` FK).
+    Subgroups:
+    * ``per_event/`` — overall_containment (scalar).
+    * ``per_interaction/`` — one row per primary/interaction rank:
+      ``source_type``, ``t0``, ``vertex_{x,y,z}``, ``ancestor_track_id``,
+      ``n_particles``. Dark events (no tracks) get a 1-row synthetic entry.
+    * ``per_particle/`` — category, containment, genealogy CSR, and
+      ``interaction_idx`` FK into ``per_interaction/``.
+    * ``per_track/`` — track metadata + ``particle_idx`` and
+      ``interaction`` FK columns.
     """
     grp = f.create_group(_event_group_name(seq_idx))
     grp.attrs['source_event_idx'] = int(event_dict['source_event_idx'])
@@ -2397,11 +2448,27 @@ def save_labl_event_v3(f, event_dict, seq_idx):
     mt = event_dict.get('meaningful_tracks', {})
     grp.attrs['n_tracks'] = int(len(mt))
 
-    # --- per_event ---
+    # Track-level derivations (also used to size per_interaction/)
+    if mt:
+        particle_idx = derive_particle_idx_per_track(event_dict)
+        ancestor, interaction = derive_track_ancestor_and_interaction(event_dict)
+    else:
+        particle_idx = np.array([], dtype=np.int32)
+        ancestor = np.array([], dtype=np.int32)
+        interaction = np.array([], dtype=np.int32)
+
+    # --- per_event (just the overall containment scalar now) ---
     pe_grp = grp.create_group('per_event')
-    pe_grp.create_dataset('t0', data=np.float32(event_dict['t0']))
     pe_grp.create_dataset('overall_containment',
                           data=np.float32(event_dict['overall_light_containment']))
+
+    # --- per_interaction ---
+    # Row `i` corresponds to tracks whose `interaction == i`. For
+    # single-interaction events every row shares t0/vertex/source_type
+    # (they come from the same PhotonSim stream); pile-up supplies
+    # per-vertex arrays that get indexed here instead.
+    pi_grp = grp.create_group('per_interaction')
+    _write_per_interaction(pi_grp, event_dict, ancestor, interaction)
 
     # --- per_particle ---
     pp_grp = grp.create_group('per_particle')
@@ -2450,6 +2517,13 @@ def save_labl_event_v3(f, event_dict, seq_idx):
                                 if ext_data_list else np.array([], dtype=np.int32)),
                           **_GZIP_OPTS)
 
+    # interaction_idx per particle: derived by mapping each particle's
+    # last-in-genealogy (primary) track_id to its interaction rank.
+    pp_grp.create_dataset(
+        'interaction_idx',
+        data=derive_particle_interaction_idx(event_dict, interaction),
+        **_GZIP_OPTS)
+
     # --- per_track ---
     pt_grp = grp.create_group('per_track')
     if mt:
@@ -2459,17 +2533,12 @@ def save_labl_event_v3(f, event_dict, seq_idx):
         initial_energy = np.array([t['initial_energy'] for t in mt.values()],
                                    dtype=np.float32)
         n_ch = np.array([t['n_cherenkov'] for t in mt.values()], dtype=np.int32)
-        particle_idx = derive_particle_idx_per_track(event_dict)
-        ancestor, interaction = derive_track_ancestor_and_interaction(event_dict)
     else:
         track_id = np.array([], dtype=np.int32)
         parent_id = np.array([], dtype=np.int32)
         pdg = np.array([], dtype=np.int16)
         initial_energy = np.array([], dtype=np.float32)
         n_ch = np.array([], dtype=np.int32)
-        particle_idx = np.array([], dtype=np.int32)
-        ancestor = np.array([], dtype=np.int32)
-        interaction = np.array([], dtype=np.int32)
 
     pt_grp.create_dataset('track_id', data=track_id, **_GZIP_OPTS)
     pt_grp.create_dataset('parent_id', data=parent_id, **_GZIP_OPTS)
@@ -2479,6 +2548,98 @@ def save_labl_event_v3(f, event_dict, seq_idx):
     pt_grp.create_dataset('particle_idx', data=particle_idx, **_GZIP_OPTS)
     pt_grp.create_dataset('ancestor', data=ancestor, **_GZIP_OPTS)
     pt_grp.create_dataset('interaction', data=interaction, **_GZIP_OPTS)
+
+
+def _write_per_interaction(pi_grp, event_dict, ancestor, interaction):
+    """Populate the per_interaction/ subgroup.
+
+    ``event_dict`` may carry ``t0`` / ``vertex_xyz`` / ``source_type``
+    as scalars (single-interaction) or as per-interaction arrays
+    (pile-up). In the scalar case the values are broadcast to every row.
+    """
+    # Distinct primary-ranks, in order
+    if interaction.size > 0:
+        n_interactions = int(interaction.max()) + 1
+        ancestor_per_rank = np.zeros(n_interactions, dtype=np.int32)
+        n_particles_per_rank = np.zeros(n_interactions, dtype=np.int32)
+        for anc, rank in zip(ancestor, interaction):
+            ancestor_per_rank[int(rank)] = int(anc)
+        # Count particles per interaction
+        part_inter = derive_particle_interaction_idx(event_dict, interaction)
+        for pi in part_inter:
+            if 0 <= int(pi) < n_interactions:
+                n_particles_per_rank[int(pi)] += 1
+    else:
+        # Dark event — synthesize 1 row so per_interaction/ always exists.
+        n_interactions = 1
+        ancestor_per_rank = np.array([-1], dtype=np.int32)
+        n_particles_per_rank = np.array([0], dtype=np.int32)
+
+    # Broadcast event_dict['t0'|'vertex_xyz'|'source_type'] to rows.
+    t0_raw = event_dict.get('t0', 0.0)
+    vx_raw = event_dict.get('vertex_xyz', np.zeros(3, dtype=np.float32))
+    st_raw = event_dict.get('source_type', SOURCE_TYPE_PARTICLES)
+
+    t0_arr = np.asarray(t0_raw, dtype=np.float32).reshape(-1)
+    if t0_arr.size == 1:
+        t0_arr = np.full(n_interactions, float(t0_arr[0]), dtype=np.float32)
+    assert t0_arr.size == n_interactions, \
+        f"t0 length {t0_arr.size} != n_interactions {n_interactions}"
+
+    vx_arr = np.asarray(vx_raw, dtype=np.float32)
+    if vx_arr.ndim == 1:
+        vx_arr = np.broadcast_to(vx_arr, (n_interactions, 3)).copy()
+    assert vx_arr.shape == (n_interactions, 3), \
+        f"vertex_xyz shape {vx_arr.shape} != ({n_interactions}, 3)"
+
+    st_arr = np.asarray(st_raw, dtype=np.uint8).reshape(-1)
+    if st_arr.size == 1:
+        st_arr = np.full(n_interactions, int(st_arr[0]), dtype=np.uint8)
+    assert st_arr.size == n_interactions
+
+    pi_grp.create_dataset('source_type',       data=st_arr, **_GZIP_OPTS)
+    pi_grp.create_dataset('t0',                data=t0_arr, **_GZIP_OPTS)
+    pi_grp.create_dataset('vertex_x',          data=vx_arr[:, 0].copy(), **_GZIP_OPTS)
+    pi_grp.create_dataset('vertex_y',          data=vx_arr[:, 1].copy(), **_GZIP_OPTS)
+    pi_grp.create_dataset('vertex_z',          data=vx_arr[:, 2].copy(), **_GZIP_OPTS)
+    pi_grp.create_dataset('ancestor_track_id', data=ancestor_per_rank, **_GZIP_OPTS)
+    pi_grp.create_dataset('n_particles',       data=n_particles_per_rank, **_GZIP_OPTS)
+
+
+def derive_particle_interaction_idx(event_dict, track_interaction=None):
+    """For each particle, return the interaction index of its primary ancestor.
+
+    Uses each particle's last-in-genealogy track_id (== its primary
+    track) and looks up that track's ``interaction`` rank. Particles
+    with no genealogy or whose primary isn't in the tracks table get -1.
+
+    Parameters
+    ----------
+    event_dict : dict
+        Must carry ``meaningful_tracks`` (dict of track_id → info) and
+        ``particles`` (list with a ``genealogy`` key).
+    track_interaction : np.ndarray, optional
+        Cached output of ``derive_track_ancestor_and_interaction``; if
+        None, recomputed.
+    """
+    tracks = event_dict.get('meaningful_tracks', {})
+    particles = event_dict.get('particles', [])
+    if not particles:
+        return np.array([], dtype=np.int32)
+    if not tracks:
+        return np.full(len(particles), -1, dtype=np.int32)
+    if track_interaction is None:
+        _, track_interaction = derive_track_ancestor_and_interaction(event_dict)
+    tid_to_interaction = {
+        int(tid): int(track_interaction[i])
+        for i, tid in enumerate(tracks.keys())
+    }
+    out = np.full(len(particles), -1, dtype=np.int32)
+    for i, particle in enumerate(particles):
+        gen = particle.get('genealogy') or []
+        if gen:
+            out[i] = tid_to_interaction.get(int(gen[-1]), -1)
+    return out
 
 
 def list_events_v3(filename):
@@ -2530,8 +2691,12 @@ def read_seg_event_v3(filename, event_idx):
 def read_labl_event_v3(filename, event_idx):
     """Read event ``event_idx`` from a labl v3 file.
 
-    The returned dict contains top-level attrs plus three subdicts:
-    ``per_event``, ``per_particle``, ``per_track``.
+    The returned dict contains top-level attrs plus four subdicts:
+    ``per_event`` (overall_containment), ``per_interaction``
+    (source_type, t0, vertex_{x,y,z}, ancestor_track_id, n_particles),
+    ``per_particle`` (category, containment, genealogy CSR,
+    interaction_idx), and ``per_track`` (track_id, parent_id, pdg,
+    initial_energy, n_cherenkov, particle_idx, ancestor, interaction).
     """
     return _read_v3_event(filename, event_idx)
 

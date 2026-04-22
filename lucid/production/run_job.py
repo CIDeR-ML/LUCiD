@@ -197,6 +197,7 @@ def _run_lucid(
         detector_type=detector_type,
         material=material,
         include_track_segments=True,
+        primary_source=config.get("primary_source", "particles"),
     )
     print(f"LUCiD wrote {len(saved_files)} files under {output_dir}/{{sensor,inst,seg,labl}}/")
 
