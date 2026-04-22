@@ -132,6 +132,7 @@ def _run_lucid(
     file_index: int,
     n_events: int,
     master_seed: Optional[int],
+    job_id: int,
 ) -> None:
     """Import LUCiD and write the v3 four-file batch for this job.
 
@@ -185,6 +186,7 @@ def _run_lucid(
         n_events=n_events,
         batch_size=n_events,   # one batch per job
         master_seed=master_seed,
+        job_id=job_id,
         apply_smearing=apply_smearing,
         apply_rotation=False,  # PhotonSim already randomizes directions
         apply_translation=apply_translation,
@@ -261,6 +263,15 @@ def main(argv: Optional[list[str]] = None) -> int:
     # across those, and we set /run/beamOn (and LUCiD's n_events) to that
     # primary count so the downstream v3 dataset has one entry per primary.
     photonsim_events = n_events
+
+    # Derive per-subprocess seeds from the (master_seed, job_id, vertex_idx=0)
+    # hierarchy. vertex_idx=0 is the only stream today; pile-up configs
+    # (commit 3) will iterate this per vertex.
+    from lucid.sources.event_io import derive_subprocess_seeds
+    subproc_seeds = derive_subprocess_seeds(
+        args.master_seed, args.job_id, vertex_idx=0
+    )
+
     if uses_genie and not args.skip_genie:
         try:
             from lucid.production.run_genie import run_genie
@@ -270,7 +281,7 @@ def main(argv: Optional[list[str]] = None) -> int:
                 output_dir=output_dir,
                 job_id=args.job_id,
                 n_events=n_events,
-                seed=args.master_seed,
+                seed=subproc_seeds['genie_seed'],
             )
             print(f"GENIE rootracker: {produced}")
             print(f"GENIE total primaries (one G4 event each): {total_primaries}")
@@ -305,6 +316,8 @@ def main(argv: Optional[list[str]] = None) -> int:
             n_events=photonsim_events,
             override_energy_MeV=args.override_energy_MeV,
             genie_rootracker=str(gtrac_path) if uses_genie else None,
+            photonsim_seeds=(subproc_seeds['photonsim_seed1'],
+                             subproc_seeds['photonsim_seed2']),
         )
         macro_path.write_text(macro_text)
         print(f"Wrote {macro_path}")
@@ -343,6 +356,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             file_index=file_index,
             n_events=photonsim_events,
             master_seed=args.master_seed,
+            job_id=args.job_id,
         )
     except Exception as e:
         import traceback

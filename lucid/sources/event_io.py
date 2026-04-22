@@ -16,6 +16,72 @@ from tqdm import tqdm
 from lucid.wavelength import DEFAULT_WAVELENGTH_NM
 
 
+# Tag constants used with jax.random.fold_in so each subprocess stream in
+# the seed hierarchy gets a distinct derivation. Value is arbitrary — it
+# just has to be stable and distinct across tags.
+_SUBPROC_PHOTONSIM_TAG = 0xB107
+_SUBPROC_GENIE_TAG     = 0x6E1E
+
+
+def _resolve_master_seed(master_seed):
+    """Return a deterministic int seed, drawing from time if master_seed is None."""
+    if master_seed is None:
+        return int(time.time() * 1_000_000) % (2 ** 31 - 1)
+    return int(master_seed) % (2 ** 31 - 1)
+
+
+def derive_event_keys(master_seed, job_id, event_idx, interaction_idx=0):
+    """Derive independent RNG keys for one (job, event, interaction) step.
+
+    Combines ``master_seed``, ``job_id``, ``event_idx`` and
+    ``interaction_idx`` via ``jax.random.fold_in`` so every dimension is
+    independent — reusing a CLI seed across jobs no longer collides, and
+    pile-up interactions within one event get distinct draws.
+
+    Returns a dict with ``vertex_seed`` / ``t0_seed`` (concrete ints for
+    ``np.random.default_rng``) and ``sim_key`` / ``smear_key`` (JAX keys
+    to be consumed directly by ``jax.random.*``).
+    """
+    master_seed = _resolve_master_seed(master_seed)
+    base = jax.random.PRNGKey(master_seed)
+    job_key = jax.random.fold_in(base, int(job_id))
+    event_key = jax.random.fold_in(job_key, int(event_idx))
+    interaction_key = jax.random.fold_in(event_key, int(interaction_idx))
+    vertex_key, t0_key, sim_key, smear_key = jax.random.split(interaction_key, 4)
+    return {
+        'vertex_seed': int(jax.random.randint(vertex_key, (), 1, 2**31 - 1)),
+        't0_seed':     int(jax.random.randint(t0_key,     (), 1, 2**31 - 1)),
+        'sim_key':     sim_key,
+        'smear_key':   smear_key,
+    }
+
+
+def derive_subprocess_seeds(master_seed, job_id, vertex_idx=0):
+    """Derive deterministic seeds for the per-job subprocesses (GENIE, PhotonSim).
+
+    Subprocess seeds are folded at the (master_seed, job_id, vertex_idx)
+    level — not per-event — because each subprocess produces all
+    ``n_events`` internally and drives its own per-event RNG. The
+    ``vertex_idx`` axis exists so pile-up configurations with N
+    PhotonSim/GENIE streams per event get independent seeds per stream.
+
+    PhotonSim's Geant4/CLHEP engine needs two seeds (`/random/setSeeds
+    s1 s2`); GENIE's gevgen takes one.
+    """
+    master_seed = _resolve_master_seed(master_seed)
+    base = jax.random.PRNGKey(master_seed)
+    job_key = jax.random.fold_in(base, int(job_id))
+    vertex_key = jax.random.fold_in(job_key, int(vertex_idx))
+    genie_key = jax.random.fold_in(vertex_key, _SUBPROC_GENIE_TAG)
+    ps_root = jax.random.fold_in(vertex_key, _SUBPROC_PHOTONSIM_TAG)
+    ps_key1, ps_key2 = jax.random.split(ps_root, 2)
+    return {
+        'genie_seed':      int(jax.random.randint(genie_key, (), 1, 2**31 - 1)),
+        'photonsim_seed1': int(jax.random.randint(ps_key1,   (), 1, 2**31 - 1)),
+        'photonsim_seed2': int(jax.random.randint(ps_key2,   (), 1, 2**31 - 1)),
+    }
+
+
 def get_max_photons_per_particle(root_file_path, n_events=None):
     """
     Efficiently scan a ROOT file to find the maximum number of photons in any single particle.
@@ -662,6 +728,7 @@ def read_particle_data_from_photonsim(root_file_path, entry_index, include_track
 def generate_events_from_photonsim_particles(event_simulator, root_file_path,
                                              sensor_positions, output_dir=None,
                                              n_events=None, batch_size=100, master_seed=None,
+                                             job_id=1,
                                              apply_smearing=False, apply_rotation=False, apply_translation=False,
                                              detector_config_path=None,
                                              dataset_name='unnamed_dataset', run_id=None,
@@ -692,6 +759,9 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
         Number of events per v3 batch file.
     master_seed : int, optional
         JAX PRNG seed; random if None.
+    job_id : int
+        1-based job id. Folded into the seed hierarchy so reusing
+        ``master_seed`` across jobs yields independent RNG streams.
     apply_smearing, apply_rotation, apply_translation : bool
         Transform toggles; rotation is ignored (PhotonSim handles it).
     detector_config_path : str, optional
@@ -849,8 +919,15 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
             event_start_time = time.time()
             print(f"\n  Event {event_idx+1}/{n_events} (index {event_idx}):", flush=True)
 
-            # Initialize master random key for this event
-            master_key = jax.random.PRNGKey(master_seed + event_idx)
+            # Deterministic RNG keys for this (job, event). All per-event
+            # draws — vertex translation, t0, simulator, smearing — flow
+            # from this hierarchy so reusing --master-seed across jobs
+            # yields independent streams.
+            event_keys = derive_event_keys(master_seed, job_id, event_idx,
+                                           interaction_idx=0)
+            master_key = event_keys['sim_key']
+            t0 = float(np.random.default_rng(
+                seed=event_keys['t0_seed']).uniform(-15.0, 15.0))
 
             # Read particle data from PhotonSim
             print(f"    Reading particle data from ROOT file...", flush=True)
@@ -876,7 +953,7 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
                       f"(n_particles={n_particles}, total_photons={total_photons}); "
                       f"writing zero-filled v3 entry.", flush=True)
                 event_number = event_idx
-                t0 = np.random.uniform(-15.0, 15.0)
+                # t0 already drawn at top of loop from the seed hierarchy.
                 PE_per_particle = np.zeros((max(n_particles, 0), n_sensors), dtype=np.float32)
                 T_per_particle  = np.zeros((max(n_particles, 0), n_sensors), dtype=np.float32)
                 PE_true = np.zeros(n_sensors, dtype=np.float32)
@@ -924,8 +1001,7 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
             # Generate random translation vector
             translation_vector = np.array([0.0, 0.0, 0.0], dtype=np.float32)
             if apply_translation:
-                translation_seed = (master_seed + event_idx * 1000) % (2**32)
-                rng = np.random.default_rng(seed=translation_seed)
+                rng = np.random.default_rng(seed=event_keys['vertex_seed'])
 
                 if detector_bounds['type'] == 'cylinder':
                     frac, r_max = 0.9, detector_bounds['radius'] * 0.9
@@ -1083,8 +1159,7 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
 
             # Apply smearing if requested
             if apply_smearing:
-                reco_key, master_key = jax.random.split(master_key)
-                smear_pe_key, smear_t_key = jax.random.split(reco_key)
+                smear_pe_key, smear_t_key = jax.random.split(event_keys['smear_key'])
                 PE_reco = smear_charges_SK_like(PE_true, key=smear_pe_key)
                 T_reco = smear_times(T_true, key=smear_t_key)
             else:
@@ -1140,8 +1215,7 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
             event_number = event_idx
             filename = os.path.join(output_dir, f'event_{event_number}.h5')
 
-            # Generate event time offset t0 (simulates unknown event start time)
-            t0 = np.random.uniform(-15.0, 15.0)
+            # t0 already drawn at top of loop from the seed hierarchy.
 
             # Extended info with particle structure
             extended_info = {
