@@ -16,7 +16,7 @@ from jax import value_and_grad, jit
 
 pytestmark = pytest.mark.slow
 
-GEOM = os.path.join(os.path.dirname(__file__), '..', 'config', 'WCTE_geom_config.json')
+GEOM = os.path.join(os.path.dirname(__file__), '..', 'config', 'WCTE_like_geom_config.json')
 PHYSICS = os.path.join(os.path.dirname(__file__), '..', 'config', 'SK_physics_config.json')
 
 

@@ -2,6 +2,9 @@
   "material": "water",
   "detector_type": "cylinder",
   "geometry_definitions": {
-    "npz_file_path": "hk_geometry.npz"
+    "radius": 2,
+    "height": 4,
+    "n_sensors": 2500,
+    "sensor_radius": 0.040
   }
 }

@@ -21,8 +21,8 @@ import numpy as np
 # ---- Paths ---------------------------------------------------------------
 CONFIG = os.path.join(BASE, "config")
 
-WCTE_GEOM = os.path.join(CONFIG, "WCTE_geom_config.json")
-WCTE_PHYS = os.path.join(CONFIG, "WCTE_physics_config.json")
+WCTE_GEOM = os.path.join(CONFIG, "WCTE_like_geom_config.json")
+WCTE_PHYS = os.path.join(CONFIG, "WCTE_like_physics_config.json")
 SK_LIKE_GEOM = os.path.join(CONFIG, "SK_like_geom_config.json")
 SK_LIKE_PHYS = os.path.join(CONFIG, "SK_like_physics_config.json")
 SK_GEOM = os.path.join(CONFIG, "SK_geom_config.json")
@@ -410,7 +410,7 @@ def test_8_superk():
         sim = setup_event_simulator(
             SK_GEOM, n_photons=NPHOT, temperature=None, K=K_VAL,
             is_calibration=True,
-            detector_type='superk',
+            detector_type='Cylinder',
             physics_config=SK_PHYS,
             default_detector_params=True,
             wavelength_mode=True,
@@ -419,12 +419,12 @@ def test_8_superk():
         src = laser_source(position=[0., 0., 10.0], intensity=1e8, wavelength=405.0)
         charges, _ = sim(src, KEY)
 
-        ok_sensors = (n_sensors == 11146)
+        ok_sensors = (n_sensors == 11096)
         ok_charges = bool(jnp.all(jnp.isfinite(charges)) and jnp.sum(charges) > 0)
 
         report("8_superk_mode",
                ok_sensors and ok_charges,
-               f"n_sensors={n_sensors} (expect 11146), "
+               f"n_sensors={n_sensors} (expect 11096), "
                f"total_charge={float(jnp.sum(charges)):.2f}, "
                f"charges_shape={charges.shape}")
     except Exception as e:

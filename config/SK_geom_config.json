@@ -1,11 +1,7 @@
 {
   "material": "water",
-  "detector_type": "superk",
+  "detector_type": "cylinder",
   "geometry_definitions": {
-    "radius": 16.9,
-    "height": 36.2,
-    "n_sensors": 11146,
-    "sensor_radius": 0.254,
-    "connection_table_path": "ConnectionTable_SK5.root"
+    "npz_file_path": "sk_geometry.npz"
   }
 }

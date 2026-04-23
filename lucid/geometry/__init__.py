@@ -41,9 +41,9 @@ __all__ = [
     # Detector classes
     'Detector',
     'Cylinder',
-    'Sphere', 
+    'Sphere',
     'Box',
-    
+
     # Detector functions
     'load_detector_config',
     'load_detector_geom',

@@ -22,15 +22,29 @@ from lucid.sources.shotgun_source import shotgun_source, stack_shotgun_sources
 def read_detector_bounds(json_path: str) -> dict:
     """Extract axis-aligned detector dimensions from a geometry config JSON.
 
-    Reads LUCiD's standard schema: top-level ``detector_type`` plus a
-    ``geometry_definitions`` block. Cylinder / superk → ``(r, H)``; sphere → ``r``;
-    box → ``(x, y, z)``. Units: meters.
+    For algorithmic configs the dimensions live directly in
+    ``geometry_definitions`` (``radius``/``height``/``length``/``width``).
+    For file-loaded cylinders the JSON only carries ``npz_file_path`` —
+    we fall back to building the detector to read the dimensions off
+    its scalars.
+
+    Returns:
+        cylinder → ``{type: 'cylinder', r, H}``
+        sphere   → ``{type: 'sphere', r}``
+        box      → ``{type: 'box', x, y, z}``
+        (units: meters)
     """
     with open(json_path) as f:
         cfg = json.load(f)
     t = cfg.get('detector_type', 'cylinder').lower()
     geom = cfg.get('geometry_definitions', cfg)
-    if t in ('cylinder', 'superk'):
+
+    if t == 'cylinder':
+        if 'npz_file_path' in geom:
+            # File-loaded geometry — bounds live in the .npz, not the JSON.
+            from lucid.geometry import generate_detector
+            det = generate_detector(json_path)
+            return dict(type='cylinder', r=float(det.r), H=float(det.H))
         return dict(type='cylinder',
                     r=float(geom['radius']), H=float(geom['height']))
     if t == 'sphere':
