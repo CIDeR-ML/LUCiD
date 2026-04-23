@@ -1,0 +1,27 @@
+{
+  "config_number": 13,
+  "name": "GENIE numu water (devtest)",
+  "description": "Container smoke-test variant of dataprod_13_numu.json using tune G18_10a_02_11b, whose xsec splines ship in the NUISANCE tutorial base image. Not for production.",
+  "material": "water",
+  "output_path": "genie",
+  "primary_source": "genie",
+  "genie": {
+    "probe_pdg": 14,
+    "target": "water",
+    "energy_min_GeV": 0.1,
+    "energy_max_GeV": 2.0,
+    "tune": "G18_10a_02_11b",
+    "event_generator_list": "CC+NC",
+    "direction": "isotropic"
+  },
+  "store_individual_photons": true,
+  "run_lucid": true,
+  "disable_decays": false,
+  "lucid_options": {
+    "apply_smearing": true,
+    "apply_translation": true
+  },
+  "n_jobs": 2,
+  "n_events_per_job": 100,
+  "cleanup_root_files": true
+}
