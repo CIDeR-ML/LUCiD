@@ -12,7 +12,7 @@ LUCiD provides a JAX-based differentiable simulation of light propagation in opt
 
 - **Differentiable ray-tracing** with automatic differentiation for gradient-based optimization
 - **Physics-informed neural network (SIREN)** as surrogate model for Cherenkov emission
-- **Multi-geometry support**: cylindrical, spherical, box detectors, and SuperK (real PMT positions from ConnectionTable)
+- **Multi-geometry support**: cylindrical, spherical, and box detectors. Cylinders can be either algorithmically tiled (e.g. `SK_like`, `WCTE_like`) or built from measured PMT positions in a `.npz` file (`SK`, `HK`, `WCTE` from public WCSim geofiles)
 - **Particle track reconstruction** via gradient descent with position, direction, initial time, and energy inference
 - **Detector calibration** for optical parameters (scattering, absorption, reflection, quantum efficiency)
 - **Wavelength-dependent physics**: per-photon scattering, absorption, and QE driven by medium models and PMT curves
@@ -27,8 +27,8 @@ LUCiD provides a JAX-based differentiable simulation of light propagation in opt
 - **`sensor_response.py`** - Sensor hit aggregation for simulation, data, and likelihood modes
 
 ### Geometry (`lucid/geometry/`)
-- **`cylinder.py`**, **`sphere.py`**, **`box.py`** - Detector geometries with sensor placement and ray intersection
-- **`superk.py`** - SuperK detector using real PMT positions from ROOT ConnectionTable
+- **`cylinder.py`**, **`sphere.py`**, **`box.py`** - Detector geometries with sensor placement and ray intersection. `Cylinder` can be built either algorithmically or via `Cylinder.from_pmt_file(npz_path)` from a unified PMT-array `.npz` (used by SK, HK, WCTE).
+- **`PMT_NPZ_SCHEMA.md`** - Authoritative schema for the PMT-array `.npz` files; converters in `config/scripts/` produce these from public WCSim geofiles.
 - **`registry.py`** - Detector type registration and dispatch
 
 ### Wavelength (`lucid/wavelength/`)
