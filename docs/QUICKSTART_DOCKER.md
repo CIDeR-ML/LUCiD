@@ -132,12 +132,14 @@ LUCiD and PhotonSim as siblings and build from the parent:
 mkdir lucid-work && cd lucid-work
 git clone https://github.com/CIDeR-ML/LUCiD.git
 git clone https://github.com/cesarjesusvalls/PhotonSim.git
-docker build --platform linux/amd64 \
+docker build --platform linux/amd64 --provenance=false --sbom=false \
     -f LUCiD/container/Dockerfile -t lucid:latest .
 ```
 
-Expect ~10 min cold on Apple Silicon. Subsequent rebuilds reuse
-layers — editing LUCiD source retriggers just the last layer (~30 s).
+`--provenance=false --sbom=false` suppresses BuildKit attestation
+manifests; ghcr.io stalls on them for this package. Expect ~10 min cold
+on Apple Silicon. Subsequent rebuilds reuse layers — editing LUCiD
+source retriggers just the last layer (~30 s).
 
 ## Troubleshooting
 

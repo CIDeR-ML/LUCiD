@@ -22,10 +22,12 @@ Dockerfile adds conda GEANT4 11.3 + PhotonSim + LUCiD.
 From the parent directory containing both `LUCiD/` and `PhotonSim/`:
 
 ```bash
-docker build --platform linux/amd64 \
+docker build --platform linux/amd64 --provenance=false --sbom=false \
     -f LUCiD/container/Dockerfile -t lucid:latest .
 ```
 
-Cold build is ~10 min on Apple Silicon. Editing LUCiD source retriggers
-only the last layer (~30 s). For a quicker dev loop without rebuilding,
-bind-mount the checkout — see QUICKSTART_DOCKER §3.
+`--provenance=false --sbom=false` suppresses BuildKit attestation manifests
+(ghcr.io has trouble with them for this package). Cold build is ~10 min
+on Apple Silicon. Editing LUCiD source retriggers only the last layer
+(~30 s). For a quicker dev loop without rebuilding, bind-mount the
+checkout — see QUICKSTART_DOCKER §3.
