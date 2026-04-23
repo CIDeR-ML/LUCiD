@@ -54,7 +54,7 @@ def test_config_present_in_all_files(v3_batch):
     for name, path in paths.items():
         with h5py.File(path, 'r') as f:
             assert 'config' in f, f"{name} missing config group"
-            assert f['config'].attrs['format_version'] == 3
+            assert f['config'].attrs['format_version'] == 4
             assert f['config'].attrs['run_id'].decode() == cfg['run_id'] \
                 if isinstance(f['config'].attrs['run_id'], bytes) \
                 else f['config'].attrs['run_id'] == cfg['run_id']
@@ -68,9 +68,10 @@ def test_sensor_event_roundtrip(v3_batch):
     sensor = read_sensor_event_v3(str(paths['sensor']), 0)
     # Sensors 0..4 have PE; others don't
     assert sensor['n_hits'] == 5
-    # Detector-frame: times written as (T_reco - t0)
+    # Stored T equals input T: save_* no longer shifts — the caller is
+    # expected to apply t0 in absolute detector frame before saving.
     expected_pe = np.array([3.0, 2.0, 1.0, 5.0, 2.5], dtype=np.float32)
-    expected_t = np.array([50.0, 52.0, 55.0, 60.0, 61.0], dtype=np.float32) - np.float32(ev['t0'])
+    expected_t = np.array([50.0, 52.0, 55.0, 60.0, 61.0], dtype=np.float32)
     assert np.allclose(sensor['PE'], expected_pe)
     assert np.allclose(sensor['T'], expected_t)
     with h5py.File(paths['sensor'], 'r') as f:
@@ -86,7 +87,8 @@ def test_inst_event_roundtrip(v3_batch):
     # FK column ordering matches the build
     np.testing.assert_array_equal(inst['particle_idx'], np.array([0, 0, 0, 1, 1], dtype=np.int32))
     np.testing.assert_array_equal(inst['sensor_idx'], np.array([0, 1, 2, 3, 4], dtype=np.uint16))
-    expected_t = np.array([50.0, 52.0, 55.0, 60.0, 61.0], dtype=np.float32) - np.float32(ev['t0'])
+    # No save-time shift — stored T matches input T.
+    expected_t = np.array([50.0, 52.0, 55.0, 60.0, 61.0], dtype=np.float32)
     assert np.allclose(inst['T'], expected_t)
 
 
@@ -100,8 +102,8 @@ def test_seg_event_roundtrip(v3_batch):
     # beta_start and n_cherenkov pass through untouched (aside from dtype)
     np.testing.assert_allclose(seg['beta_start'], ev['segments']['beta_start'])
     np.testing.assert_array_equal(seg['n_cherenkov'], ev['segments']['n_cherenkov'])
-    # time is t0-shifted
-    np.testing.assert_allclose(seg['time'], ev['segments']['time'] - ev['t0'])
+    # No save-time shift — stored time matches input time.
+    np.testing.assert_allclose(seg['time'], ev['segments']['time'])
 
 
 def test_labl_event_roundtrip(v3_batch):
@@ -109,13 +111,25 @@ def test_labl_event_roundtrip(v3_batch):
     labl = read_labl_event_v3(str(paths['labl']), 0)
     assert labl['n_particles'] == 2
     assert labl['n_tracks'] == 3
-    # per_event
-    assert float(labl['per_event']['t0']) == pytest.approx(ev['t0'])
+    # per_event (t0 has moved to per_interaction/)
+    assert 't0' not in labl['per_event']
     assert float(labl['per_event']['overall_containment']) == pytest.approx(0.92)
+    # per_interaction — 1 row for this single-interaction fixture
+    pi = labl['per_interaction']
+    assert len(pi['t0']) == 1
+    assert float(pi['t0'][0]) == pytest.approx(ev['t0'])
+    assert int(pi['source_type'][0]) == ev['source_type']
+    np.testing.assert_allclose(
+        [pi['vertex_x'][0], pi['vertex_y'][0], pi['vertex_z'][0]],
+        ev['vertex_xyz'], atol=1e-6)
+    # Only one primary in this fixture (track 100), so the ancestor is 100.
+    assert int(pi['ancestor_track_id'][0]) == 100
     # per_particle
     pp = labl['per_particle']
     np.testing.assert_array_equal(pp['category'], np.array([0, 1], dtype=np.uint8))
     np.testing.assert_allclose(pp['containment'], [0.95, 0.85], atol=1e-6)
+    # interaction_idx: both particles trace back to primary 100 → rank 0.
+    np.testing.assert_array_equal(pp['interaction_idx'], np.array([0, 0], dtype=np.int32))
     # per_track
     pt = labl['per_track']
     np.testing.assert_array_equal(pt['track_id'], np.array([100, 150, 200], dtype=np.int32))

@@ -127,7 +127,9 @@ def load_event_v3(dataset_root, event_idx, file_index=0, n_sensors=None):
         'T': T_per_particle,
         'Q_tot': PE,
         'T_tot': T,
-        't0': float(labl['per_event']['t0']),
+        # t0 is now per-interaction. For single-interaction events every
+        # row carries the same value; this tool picks the first.
+        't0': float(labl['per_interaction']['t0'][0]),
         'overall_containment': float(labl['per_event']['overall_containment']),
         'PDG': _per_particle_pdg(labl),
         'Particle_Category': np.asarray(labl['per_particle']['category']),

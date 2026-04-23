@@ -101,7 +101,22 @@ def _load_config(path: str) -> dict:
     with open(path) as f:
         cfg = json.load(f)
     required = ["name", "material"]
-    if cfg.get("primary_source") == "genie":
+    if cfg.get("pile_up"):
+        required += ["vertices"]
+        vertices = cfg.get("vertices")
+        if not isinstance(vertices, list) or len(vertices) < 2:
+            raise ValueError(
+                f"Pile-up config {path!r} must declare at least 2 vertices; got {vertices!r}")
+        for i, v in enumerate(vertices):
+            if v.get("primary_source") == "genie":
+                if "genie" not in v:
+                    raise ValueError(
+                        f"Pile-up vertex {i} primary_source='genie' but missing 'genie' block")
+            else:
+                if "particles" not in v or "energy_distribution" not in v:
+                    raise ValueError(
+                        f"Pile-up vertex {i} missing 'particles'/'energy_distribution'")
+    elif cfg.get("primary_source") == "genie":
         required.append("genie")
     else:
         required += ["particles", "energy_distribution"]
@@ -109,6 +124,31 @@ def _load_config(path: str) -> dict:
         if key not in cfg:
             raise ValueError(f"Config {path!r} missing required field: {key!r}")
     return cfg
+
+
+def _build_vertex_subconfig(top_config: dict, vertex: dict) -> dict:
+    """Merge top-level shared fields with a per-vertex block.
+
+    The per-vertex sub-config is what generate_macro/run_genie see as
+    "the config" — so it must carry the usual top-level keys
+    (``name``, ``material``, photon/decay switches, ...) plus the
+    vertex-specific primary source.
+    """
+    sub = {
+        "name": top_config["name"],
+        "material": top_config["material"],
+        "store_individual_photons": top_config.get("store_individual_photons", False),
+        "disable_decays": top_config.get("disable_decays", False),
+        "config_number": top_config.get("config_number", -1),
+    }
+    sub["primary_source"] = vertex.get("primary_source", "particles")
+    if sub["primary_source"] == "genie":
+        sub["genie"] = vertex["genie"]
+    else:
+        sub["energy_distribution"] = vertex.get(
+            "energy_distribution", top_config.get("energy_distribution", "uniform"))
+        sub["particles"] = vertex["particles"]
+    return sub
 
 
 def _run_photonsim(photonsim_bin: str, macro_path: Path, cwd: Path) -> None:
@@ -132,6 +172,7 @@ def _run_lucid(
     file_index: int,
     n_events: int,
     master_seed: Optional[int],
+    job_id: int,
 ) -> None:
     """Import LUCiD and write the v3 four-file batch for this job.
 
@@ -185,6 +226,7 @@ def _run_lucid(
         n_events=n_events,
         batch_size=n_events,   # one batch per job
         master_seed=master_seed,
+        job_id=job_id,
         apply_smearing=apply_smearing,
         apply_rotation=False,  # PhotonSim already randomizes directions
         apply_translation=apply_translation,
@@ -195,6 +237,7 @@ def _run_lucid(
         detector_type=detector_type,
         material=material,
         include_track_segments=True,
+        primary_source=config.get("primary_source", "particles"),
     )
     print(f"LUCiD wrote {len(saved_files)} files under {output_dir}/{{sensor,inst,seg,labl}}/")
 
@@ -208,6 +251,9 @@ def main(argv: Optional[list[str]] = None) -> int:
     except Exception as e:
         print(f"Error loading config {args.config!r}: {e}", file=sys.stderr)
         return EXIT_CONFIG
+
+    if config.get("pile_up"):
+        return _main_pileup(args, config)
 
     n_events = args.n_events
     if args.test:
@@ -261,6 +307,15 @@ def main(argv: Optional[list[str]] = None) -> int:
     # across those, and we set /run/beamOn (and LUCiD's n_events) to that
     # primary count so the downstream v3 dataset has one entry per primary.
     photonsim_events = n_events
+
+    # Derive per-subprocess seeds from the (master_seed, job_id, vertex_idx=0)
+    # hierarchy. vertex_idx=0 is the only stream today; pile-up configs
+    # (commit 3) will iterate this per vertex.
+    from lucid.sources.event_io import derive_subprocess_seeds
+    subproc_seeds = derive_subprocess_seeds(
+        args.master_seed, args.job_id, vertex_idx=0
+    )
+
     if uses_genie and not args.skip_genie:
         try:
             from lucid.production.run_genie import run_genie
@@ -270,7 +325,7 @@ def main(argv: Optional[list[str]] = None) -> int:
                 output_dir=output_dir,
                 job_id=args.job_id,
                 n_events=n_events,
-                seed=args.master_seed,
+                seed=subproc_seeds['genie_seed'],
             )
             print(f"GENIE rootracker: {produced}")
             print(f"GENIE total primaries (one G4 event each): {total_primaries}")
@@ -305,6 +360,8 @@ def main(argv: Optional[list[str]] = None) -> int:
             n_events=photonsim_events,
             override_energy_MeV=args.override_energy_MeV,
             genie_rootracker=str(gtrac_path) if uses_genie else None,
+            photonsim_seeds=(subproc_seeds['photonsim_seed1'],
+                             subproc_seeds['photonsim_seed2']),
         )
         macro_path.write_text(macro_text)
         print(f"Wrote {macro_path}")
@@ -343,6 +400,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             file_index=file_index,
             n_events=photonsim_events,
             master_seed=args.master_seed,
+            job_id=args.job_id,
         )
     except Exception as e:
         import traceback
@@ -374,6 +432,197 @@ def main(argv: Optional[list[str]] = None) -> int:
         f"job_id={args.job_id} file_index={file_index} "
         f"dataset_name={config['name']!r}"
     )
+    return EXIT_OK
+
+
+def _main_pileup(args: argparse.Namespace, config: dict) -> int:
+    """Run a pile-up job: N PhotonSim streams -> merged v3 event."""
+    n_events = args.n_events
+    if args.test:
+        n_events = 2
+    if n_events is None:
+        n_events = int(config.get("n_events_per_job", 100))
+
+    if args.skip_genie and args.skip_photonsim and args.skip_lucid:
+        print("Error: all steps skipped; nothing to do.", file=sys.stderr)
+        return EXIT_CONFIG
+
+    photonsim_bin = os.environ.get("PHOTONSIM_BIN")
+    if not args.skip_photonsim:
+        if not photonsim_bin:
+            print("Error: PHOTONSIM_BIN env var must point to the built PhotonSim binary.",
+                  file=sys.stderr)
+            return EXIT_CONFIG
+        if not Path(photonsim_bin).is_file():
+            print(f"Error: PHOTONSIM_BIN={photonsim_bin!r} does not exist.", file=sys.stderr)
+            return EXIT_CONFIG
+
+    output_dir = Path(args.output_dir).resolve()
+    output_dir.mkdir(parents=True, exist_ok=True)
+    for sub in ("sensor", "inst", "seg", "labl"):
+        (output_dir / sub).mkdir(exist_ok=True)
+
+    vertices = config["vertices"]
+    n_vertices = len(vertices)
+    job_id_padded = f"{args.job_id:06d}"
+    file_index = args.job_id - 1
+
+    print(f"=== lucid-run-job (pile-up) ===", flush=True)
+    print(f"    config:        {args.config}")
+    print(f"    dataset_name:  {config['name']}")
+    print(f"    config_number: {config.get('config_number', '?')}")
+    print(f"    job_id:        {args.job_id} (file_index={file_index})")
+    print(f"    n_events:      {n_events}")
+    print(f"    n_vertices:    {n_vertices}")
+    print(f"    output_dir:    {output_dir}")
+
+    from lucid.sources.event_io import derive_subprocess_seeds
+    from lucid.production.generate_macro import generate_macro
+
+    root_paths: list[Path] = []
+    vertex_sources: list[str] = []
+
+    for vidx, vertex in enumerate(vertices):
+        sub_cfg = _build_vertex_subconfig(config, vertex)
+        vertex_sources.append(sub_cfg["primary_source"])
+        uses_genie_v = sub_cfg["primary_source"] == "genie"
+        subproc_seeds = derive_subprocess_seeds(
+            args.master_seed, args.job_id, vertex_idx=vidx
+        )
+        gtrac_path = output_dir / f"gntp_job_{job_id_padded}_v{vidx}.gtrac.root"
+        root_filename = f"output_job_{job_id_padded}_v{vidx}.root"
+        root_path = output_dir / root_filename
+        macro_path = output_dir / f"job_{job_id_padded}_v{vidx}.mac"
+
+        print(f"\n--- vertex {vidx}: {sub_cfg['primary_source']} ---", flush=True)
+
+        # Step 0 (per-vertex): GENIE if requested
+        ps_events = n_events
+        if uses_genie_v and not args.skip_genie:
+            try:
+                from lucid.production.run_genie import run_genie
+                produced, total_primaries = run_genie(
+                    config=sub_cfg,
+                    output_dir=output_dir,
+                    job_id=args.job_id * 100 + vidx,  # make rootracker filenames distinct
+                    n_events=n_events,
+                    seed=subproc_seeds["genie_seed"],
+                )
+                # run_genie writes gntp_job_{job_id_padded_inner}.gtrac.root —
+                # move/rename to our per-vertex path.
+                if produced != gtrac_path:
+                    try:
+                        produced.rename(gtrac_path)
+                    except OSError:
+                        import shutil
+                        shutil.copy2(str(produced), str(gtrac_path))
+                ps_events = total_primaries
+            except Exception as e:
+                print(f"GENIE step for vertex {vidx} failed: {e}", file=sys.stderr)
+                return EXIT_PHOTONSIM
+
+        # Step 1+2: Generate macro, run PhotonSim
+        if not args.skip_photonsim:
+            macro_text = generate_macro(
+                sub_cfg,
+                output_root_file=root_filename,
+                n_events=ps_events,
+                override_energy_MeV=args.override_energy_MeV,
+                genie_rootracker=str(gtrac_path) if uses_genie_v else None,
+                photonsim_seeds=(subproc_seeds["photonsim_seed1"],
+                                 subproc_seeds["photonsim_seed2"]),
+            )
+            macro_path.write_text(macro_text)
+            print(f"    macro: {macro_path}")
+            try:
+                _run_photonsim(photonsim_bin, macro_path, cwd=output_dir)
+            except Exception as e:
+                print(f"PhotonSim vertex {vidx} failed: {e}", file=sys.stderr)
+                return EXIT_PHOTONSIM
+            if not root_path.is_file():
+                print(f"Error: PhotonSim vertex {vidx} did not produce {root_path}",
+                      file=sys.stderr)
+                return EXIT_PHOTONSIM
+        else:
+            if not root_path.is_file():
+                print(f"Error: --skip-photonsim but {root_path} missing", file=sys.stderr)
+                return EXIT_PHOTONSIM
+
+        root_paths.append(root_path)
+
+    if args.skip_lucid:
+        print(f"\n--skip-lucid: stopping after per-vertex PhotonSim. "
+              f"ROOT files: {root_paths}")
+        return EXIT_OK
+
+    # Step 3: Run LUCiD pile-up merger
+    import numpy as np
+    from lucid.sources.event_io import generate_events_from_photonsim_pileup
+    from lucid.simulation import setup_event_simulator
+    from lucid.geometry.detector_geometry import DetectorGeometry
+    from lucid.utils import base_dir_path
+
+    detector_config_path = base_dir_path() + "config/SK_like_geom_config.json"
+    physics_config_path  = base_dir_path() + "config/SK_like_physics_config.json"
+
+    det_geom = DetectorGeometry.from_config(detector_config_path)
+    sensor_positions = np.asarray(det_geom.sensor_points, dtype=np.float32)
+    detector_type = str(det_geom.detector_type)
+    material = str(det_geom.medium.material)
+
+    simulate_event = setup_event_simulator(
+        detector_config_path, 0, K=12, is_data=True, temperature=0.0,
+        apply_smearing=False, physics_config=physics_config_path,
+        default_detector_params=True,
+    )
+
+    lucid_opts = config.get("lucid_options", {})
+    apply_smearing = bool(lucid_opts.get("apply_smearing", True))
+    apply_translation = bool(lucid_opts.get("apply_translation", True))
+
+    print(f"\n=== Step 3: LUCiD pile-up merger ({n_vertices} streams) ===", flush=True)
+    saved_files = generate_events_from_photonsim_pileup(
+        event_simulator=simulate_event,
+        root_file_paths=[str(p) for p in root_paths],
+        vertex_primary_sources=vertex_sources,
+        sensor_positions=sensor_positions,
+        output_dir=str(output_dir),
+        n_events=None,   # auto from min per-vertex entries
+        batch_size=n_events,
+        master_seed=args.master_seed,
+        job_id=args.job_id,
+        apply_smearing=apply_smearing,
+        apply_translation=apply_translation,
+        detector_config_path=detector_config_path,
+        dataset_name=config["name"],
+        run_id=None,
+        file_index_start=file_index,
+        detector_type=detector_type,
+        material=material,
+        include_track_segments=True,
+    )
+    print(f"LUCiD wrote {len(saved_files)} files.")
+
+    # Step 4: Verify
+    print("\n=== Step 4: Verifying v3 output ===", flush=True)
+    from lucid.production.verify_output import verify_batch
+    ok, messages = verify_batch(output_dir, file_index, expected_dataset_name=config["name"])
+    for m in messages:
+        print(f"    {m}")
+    if not ok:
+        return EXIT_VERIFY
+
+    # Step 5: Cleanup
+    if bool(config.get("cleanup_root_files", False)) and not args.keep_root:
+        for rp in root_paths:
+            try:
+                rp.unlink()
+            except OSError as e:
+                print(f"    warning: could not remove {rp}: {e}")
+
+    print(f"\nOK pile-up config_number={config.get('config_number','?')} "
+          f"job_id={args.job_id} file_index={file_index} "
+          f"dataset_name={config['name']!r} n_vertices={n_vertices}")
     return EXIT_OK
 
 

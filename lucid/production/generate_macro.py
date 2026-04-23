@@ -27,7 +27,7 @@ For monoenergetic with an energy scan, the caller passes
 """
 from __future__ import annotations
 
-from typing import Optional
+from typing import Optional, Tuple
 
 
 def generate_macro(
@@ -36,6 +36,7 @@ def generate_macro(
     n_events: int,
     override_energy_MeV: Optional[float] = None,
     genie_rootracker: Optional[str] = None,
+    photonsim_seeds: Optional[Tuple[int, int]] = None,
 ) -> str:
     """Return the Geant4 macro text for one PhotonSim job.
 
@@ -56,6 +57,12 @@ def generate_macro(
         When set, emit `/gun/genieInput` / `/gun/genieIsotropic` instead of
         `/gun/addPrimary*` — PhotonSim injects final-state particles from the
         rootracker entries. Requires config['primary_source'] == 'genie'.
+    photonsim_seeds : (int, int), optional
+        Two positive integers for `/random/setSeeds`. When set, emit the
+        command immediately after `/run/initialize` so Geant4's CLHEP
+        engine is explicitly seeded. Without this, two identically-invoked
+        PhotonSim jobs can produce identical output because CLHEP falls
+        back to a fixed internal default.
     """
     if genie_rootracker is not None:
         return _generate_genie_macro(
@@ -63,6 +70,7 @@ def generate_macro(
             output_root_file=output_root_file,
             n_events=n_events,
             rootracker_path=genie_rootracker,
+            photonsim_seeds=photonsim_seeds,
         )
     config_name = config.get("name", "")
     config_number = config.get("config_number", -1)
@@ -93,6 +101,11 @@ def generate_macro(
     lines.append("")
     lines.append("/run/initialize")
     lines.append("")
+
+    if photonsim_seeds is not None:
+        s1, s2 = photonsim_seeds
+        lines.append(f"/random/setSeeds {int(s1)} {int(s2)}")
+        lines.append("")
 
     # Photon / edep storage
     if store_individual:
@@ -166,6 +179,7 @@ def _generate_genie_macro(
     output_root_file: str,
     n_events: int,
     rootracker_path: str,
+    photonsim_seeds: Optional[Tuple[int, int]] = None,
 ) -> str:
     """Emit a Geant4 macro that reads primaries from a GENIE rootracker file."""
     config_name = config.get("name", "")
@@ -192,6 +206,11 @@ def _generate_genie_macro(
     lines.append("")
     lines.append("/run/initialize")
     lines.append("")
+
+    if photonsim_seeds is not None:
+        s1, s2 = photonsim_seeds
+        lines.append(f"/random/setSeeds {int(s1)} {int(s2)}")
+        lines.append("")
 
     if store_individual:
         lines.append("/photon/storeIndividual true")
