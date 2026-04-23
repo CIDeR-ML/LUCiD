@@ -1,7 +1,8 @@
 # S3DF Quickstart — Production on SLURM
 
 Concise runbook for the S3DF (SLAC) deployment. For a local-machine
-workflow with no cluster, see [QUICKSTART_LOCAL.md](QUICKSTART_LOCAL.md).
+workflow with no cluster, see [QUICKSTART_LOCAL.md](QUICKSTART_LOCAL.md);
+for Docker on macOS/Linux, see [QUICKSTART_DOCKER.md](QUICKSTART_DOCKER.md).
 
 ## One-time setup
 
@@ -11,14 +12,19 @@ git clone git@github.com:cesarjesusvalls/PhotonSim.git
 git clone git@github.com:CIDeR-ML/LUCiD.git
 cd LUCiD
 
-# Configure paths (copies of S3DF-specific install locations)
+# Pull the container image. Apptainer converts the Docker image to .sif.
+apptainer pull \
+    /sdf/data/neutrino/<user>/software/images/lucid.sif \
+    docker://ghcr.io/cider-ml/lucid:latest
+
+# Configure paths
 cd lucid/production/s3df_jobs
 cp user_paths.sh.template user_paths.sh
-${EDITOR:-vim} user_paths.sh          # set PHOTONSIM_BIN, LUCID_PATH, OUTPUT_BASE_PATH, ...
-
-# Build PhotonSim (once)
-./utils/build_photonsim.sh
+${EDITOR:-vim} user_paths.sh          # set LUCID_IMAGE_PATH, OUTPUT_BASE_PATH, ...
 ```
+
+Point `LUCID_IMAGE_PATH` in `user_paths.sh` at the `.sif` produced
+above.
 
 ## Submit one test run (one job per config, 2 events each)
 
@@ -49,6 +55,19 @@ Each job of a config writes its own batch (`file_index = job_id - 1`)
 into shared `{sensor,inst,seg,labl}/` subdirs — the whole config dir
 is one LUCiD dataset.
 
+## Dev loop — bind-mount your checkouts
+
+Same pattern as Docker, via `apptainer exec -B`:
+
+```bash
+apptainer exec \
+    -B "$PWD/LUCiD:/opt/LUCiD" \
+    -B "$PWD/PhotonSim:/opt/PhotonSim" \
+    "$LUCID_IMAGE_PATH" \
+    lucid-run-job --config /opt/LUCiD/lucid/production/configs/dataprod_01_mu.json \
+                  --output-dir /tmp/out --job-id 1 --test
+```
+
 ## Useful commands
 
 ```bash
@@ -64,31 +83,15 @@ python3 /path/to/LUCiD/viewer/serve_viewer.py <OUT>/water/uniform_energy/config_
 
 ## What each sbatch does
 
-`generate_jobs.sh` emits one of two sbatch shapes based on the config's
-`primary_source`:
+`generate_jobs.sh` emits a single-step sbatch body: the whole chain
+(gevgen → gntpc → PhotonSim → LUCiD, or macro gen → PhotonSim → LUCiD
+for particle-gun configs) runs inside one `apptainer exec
+$LUCID_IMAGE_PATH lucid-run-job ...`. The image contains GEANT4 11.3,
+ROOT 6.30, GENIE 3.04, PhotonSim, and the LUCiD Python stack.
 
-**Particle-gun configs** (default — `dataprod_01_mu.json`, etc.): two-step body
-1. **Bare-host step** — `source utils/setup_environment.sh`, then
-   `$HOST_PYTHON -m lucid.production.run_job --skip-lucid ...` (macro gen +
-   PhotonSim; needs GEANT4/ROOT shared libs from the host).
-2. **Singularity step** — `singularity exec $SINGULARITY_IMAGE_PATH python3
-   -m lucid.production.run_job --skip-photonsim ...` (LUCiD v3 writer;
-   needs jax/numpy/h5py from the container).
-
-**GENIE configs** (`primary_source: genie`, e.g. `dataprod_13_numu.json`):
-single-step body — the whole chain (gevgen → gntpc → PhotonSim → LUCiD)
-runs inside one `singularity exec $LUCID_IMAGE_PATH lucid-run-job ...`.
-The unified image at `LUCID_IMAGE_PATH` contains GEANT4 11.3, ROOT,
-GENIE v3.06.02, PhotonSim, and the LUCiD Python stack. Build with:
-
-```bash
-cd LUCiD/container
-apptainer build --fakeroot lucid.sif lucid.def
-# point user_paths.sh:LUCID_IMAGE_PATH at the resulting .sif
-```
-
-The build also needs `GENIE_XSEC_FILE` set in `user_paths.sh` — by
-default this points at the cvmfs-staged `G18_02a_00_000` splines.
+Production configs like `dataprod_13_numu.json` pin tune
+`G18_02a_00_000`; set `GENIE_XSEC_FILE` in `user_paths.sh` to the
+matching cvmfs-staged spline file.
 
 ## Paths / conventions
 
