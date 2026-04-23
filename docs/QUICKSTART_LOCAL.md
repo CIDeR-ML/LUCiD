@@ -98,31 +98,36 @@ For SLURM or HPC submission on S3DF, see
 Configs with `"primary_source": "genie"` (e.g. `dataprod_13_numu.json`,
 `dataprod_14_nue.json`) chain **gevgen → gntpc → PhotonSim → LUCiD**
 per job. Dependencies are GEANT4 + ROOT + GENIE v3 + the LUCiD Python
-env. The simplest way to cover all of those is the unified container:
+env. The simplest way to cover all of those is the published container:
 
 ```bash
-# One-time build (needs Apptainer 1.2+ with fakeroot support; ~75 min
-# including the ~60 min base layer).
-cd LUCiD/container
-apptainer build --fakeroot lucid-base.sif lucid-base.def
-apptainer build --fakeroot lucid.sif       lucid.def
-
-# Run any GENIE config in one invocation:
-apptainer exec lucid.sif \
+# Docker
+docker pull ghcr.io/cider-ml/lucid:latest
+docker run --rm --platform linux/amd64 \
+    -v /tmp/genie_test:/out \
+    -e GENIE_XSEC_FILE=/opt/genie_xsec/3_04_00/G18_10a_02_11b/gxspl-min.xml.gz \
+    ghcr.io/cider-ml/lucid:latest \
     lucid-run-job \
-        --config /opt/LUCiD/lucid/production/configs/dataprod_13_numu.json \
-        --output-dir /tmp/genie_test --job-id 1 --test
+        --config /opt/LUCiD/lucid/production/configs/dataprod_13_numu_devtest.json \
+        --output-dir /out --job-id 1 --test
+
+# Apptainer
+apptainer pull lucid.sif docker://ghcr.io/cider-ml/lucid:latest
+apptainer exec lucid.sif lucid-run-job \
+    --config /opt/LUCiD/lucid/production/configs/dataprod_13_numu_devtest.json \
+    --output-dir /tmp/genie_test --job-id 1 --test
 ```
 
-The container ships PhotonSim pre-built, LUCiD pip-installed, and the
-GENIE cross-section splines for tune `G18_02a_00_000` baked in at
-`/opt/genie_xsec/gxspl-FNALsmall.xml` — no cvmfs, no runtime
-bind-mount, no first-run network. To use a different tune, override
-`GENIE_XSEC_FILE` at runtime (e.g.
-`apptainer exec -B /my/xsec:/opt/genie_xsec --env GENIE_XSEC_FILE=... lucid.sif ...`).
+The image ships PhotonSim pre-built, LUCiD pip-installed, and GENIE
+3.04 with xsec splines for the `AR23_20i_00_000`, `G18_10a_02_11b`,
+and `G21_11a_00_000` tunes pre-baked. The `dataprod_13_numu_devtest.json`
+config uses `G18_10a_02_11b` for container smoke tests; production
+runs with `dataprod_13_numu.json` (tune `G18_02a_00_000`) require
+S3DF's cvmfs-staged splines — see
+[QUICKSTART_S3DF.md](QUICKSTART_S3DF.md).
 
-Docker users see [QUICKSTART_DOCKER.md](QUICKSTART_DOCKER.md) for the
-equivalent Docker invocation.
+See [QUICKSTART_DOCKER.md](QUICKSTART_DOCKER.md) for more Docker
+details (bind-mount dev loop, Rosetta setup, etc.).
 
 ## Troubleshooting
 

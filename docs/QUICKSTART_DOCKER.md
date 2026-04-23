@@ -1,91 +1,53 @@
 # Docker Quickstart — Produce v3 events on macOS or generic Linux
 
 This runbook targets **macOS (Apple Silicon or Intel)** and any Linux
-machine without Apptainer/Singularity — e.g. a laptop or a VM with only
-Docker installed. The image bundles GEANT4 11.3, ROOT 6.28, Pythia6,
-GENIE 3.06, PhotonSim, and LUCiD; **GENIE cross-section splines are
-baked in** at build time, so runs work offline.
+machine without Apptainer/Singularity. The published image bundles
+GEANT4 11.3, ROOT 6.30 with Pythia6, GENIE 3.04, PhotonSim, and LUCiD;
+cross-section splines for the `AR23_20i_00_000`, `G18_10a_02_11b`, and
+`G21_11a_00_000` tunes ship with the underlying NUISANCE base, so runs
+work offline.
 
 For S3DF/SLURM see [QUICKSTART_S3DF.md](QUICKSTART_S3DF.md); for a
-host-native conda build (no container) see
+host-native install (no container) see
 [QUICKSTART_LOCAL.md](QUICKSTART_LOCAL.md).
 
 ## Prerequisites
 
 - **Docker Desktop** (macOS/Windows) or `docker` engine (Linux).
-- **~20 GB free disk** (image is ~6 GB; build cache adds a few more).
-- **~90 min** for the first build on Apple Silicon (Rosetta overhead) or
-  ~60 min on native x86_64.
+- **~10 GB free disk** (image is ~4 GB).
 
 ### Apple Silicon (M1/M2/M3/M4): enable Rosetta 2
 
 The image is `linux/amd64` — conda-forge does not ship `geant4` for
-`linux-aarch64`, so native `arm64` is not an option today. Rosetta 2
-runs amd64 images at roughly 70–80% of native speed, which is fine for
-test runs and development.
+`linux-aarch64`. Rosetta 2 runs amd64 images at roughly 70–80% of
+native speed, which is fine for test runs and development.
 
 1. Install Rosetta 2: `softwareupdate --install-rosetta --agree-to-license`.
 2. In Docker Desktop → Settings → General, enable
    **"Use Rosetta for x86/amd64 emulation on Apple Silicon"**.
 
-## 1. Clone LUCiD and PhotonSim as siblings
+## 1. Pull the image
 
 ```bash
-mkdir lucid-work && cd lucid-work
-git clone https://github.com/CIDeR-ML/LUCiD.git
-git clone https://github.com/cesarjesusvalls/PhotonSim.git
+docker pull --platform linux/amd64 ghcr.io/cider-ml/lucid:latest
+docker tag ghcr.io/cider-ml/lucid:latest lucid:latest
 ```
 
-Layout must be:
+No build required. First pull is ~4 GB.
 
-```
-lucid-work/
-├── LUCiD/
-└── PhotonSim/
-```
-
-## 2. Build the image (one time, ~60–90 min)
-
-From the `lucid-work` directory (the parent of both repos):
-
-```bash
-docker build \
-    --platform linux/amd64 \
-    -f LUCiD/container/Dockerfile \
-    -t lucid:latest \
-    .
-```
-
-Breakdown of the build:
-
-| Layer            | Wall time (Rosetta) | What it does                                                   |
-|------------------|---------------------|----------------------------------------------------------------|
-| apt + conda      | ~10 min             | Ubuntu base, GEANT4 11.3, Python stack, compiler toolchain.    |
-| Pythia6          | ~1 min              | `libPythia6.so` from ROOT's prebuilt tarball.                  |
-| ROOT 6.28.12     | ~45 min             | Source build with `-Dpythia6=ON` (the slow part).              |
-| GENIE 3.06.02    | ~5 min              | Links against `libEGPythia6.so`.                               |
-| Xsec splines     | ~2 min              | 455 MB download from FNAL scisoft (public mirror).             |
-| PhotonSim, LUCiD | ~3 min              | Geant4 app + editable pip install.                             |
-
-Subsequent builds re-use Docker's layer cache — editing only LUCiD
-source code retriggers just the last layer (~30 s).
-
-## 3. Run a test job
+## 2. Run a test job
 
 ```bash
 mkdir -p /tmp/lucid-out
 docker run --rm --platform linux/amd64 \
-    -v "$PWD:/work" \
     -v /tmp/lucid-out:/out \
     lucid:latest \
     lucid-run-job \
-        --config /opt/LUCiD/lucid/production/configs/dataprod_13_numu.json \
-        --output-dir /out \
-        --job-id 1 \
-        --test
+        --config /opt/LUCiD/lucid/production/configs/dataprod_01_mu.json \
+        --output-dir /out --job-id 1 --test
 ```
 
-Expect ~2 minutes. Output under `/tmp/lucid-out/`:
+Expect ~30 s. Output under `/tmp/lucid-out/`:
 
 ```
 sensor/wc_sensor_0000.h5
@@ -94,9 +56,53 @@ seg/wc_seg_0000.h5
 labl/wc_labl_0000.h5
 ```
 
-The `dataprod_13_numu.json` config runs **νμ + H₂O** at 0.1–2 GeV via
-the baked-in `G18_02a_00_000` tune. Use `dataprod_14_nue.json` for the
-νₑ chain.
+For the GENIE chain, the container smoke-test config points at a tune
+that ships in the base image:
+
+```bash
+docker run --rm --platform linux/amd64 \
+    -v /tmp/lucid-out:/out \
+    -e GENIE_XSEC_FILE=/opt/genie_xsec/3_04_00/G18_10a_02_11b/gxspl-min.xml.gz \
+    lucid:latest \
+    lucid-run-job \
+        --config /opt/LUCiD/lucid/production/configs/dataprod_13_numu_devtest.json \
+        --output-dir /out --job-id 1 --test
+```
+
+The in-repo `dataprod_13_numu.json` pins tune `G18_02a_00_000`, whose
+splines are not in the NUISANCE base image. Use `dataprod_13_numu_devtest.json`
+(tune `G18_10a_02_11b`) for container smoke tests; the production
+config runs on S3DF where the full spline set is available.
+
+## 3. Dev loop — bind-mount your checkout
+
+To iterate on LUCiD Python code without rebuilding the image, bind the
+local clone over `/opt/LUCiD`:
+
+```bash
+docker run --rm --platform linux/amd64 \
+    -v "$PWD/LUCiD:/opt/LUCiD" \
+    -v /tmp/lucid-out:/out \
+    lucid:latest \
+    lucid-run-job --config /opt/LUCiD/lucid/production/configs/dataprod_01_mu.json \
+                  --output-dir /out --job-id 1 --test
+```
+
+For a PhotonSim source edit, bind-mount and rebuild in place:
+
+```bash
+docker run --rm --platform linux/amd64 \
+    -v "$PWD/PhotonSim:/opt/PhotonSim" \
+    -v "$PWD/LUCiD:/opt/LUCiD" \
+    -v /tmp/lucid-out:/out \
+    lucid:latest \
+    bash -c "cmake --build /opt/PhotonSim/build -j && \
+             lucid-run-job --config /opt/LUCiD/lucid/production/configs/dataprod_01_mu.json \
+                           --output-dir /out --job-id 1 --test"
+```
+
+The baked `/opt/PhotonSim/build` stays intact, so incremental compiles
+land in <1 min.
 
 ## 4. Inspect the output
 
@@ -109,50 +115,40 @@ python3 -c "import h5py; f=h5py.File('/tmp/lucid-out/labl/wc_labl_0000.h5'); \
     print('dataset_name:', f.attrs.get('dataset_name', b'').decode())"
 ```
 
-Or run the LUCiD viewer from a clone (no container needed for this
-step):
+Or run the LUCiD viewer from the clone (no container needed):
 
 ```bash
 cd LUCiD
-pip install -e .          # or `uv pip install -e .`
+pip install -e .
 python3 viewer/serve_viewer.py /tmp/lucid-out --open
 ```
 
-## Using a different xsec spline
+## Opt-in: build the image from source
 
-The image bakes `G18_02a_00_000` at `/opt/genie_xsec/gxspl-FNALsmall.xml`.
-To override at runtime:
+You only need this if you're modifying the Dockerfile itself. Clone
+LUCiD and PhotonSim as siblings and build from the parent:
 
 ```bash
-# Put your own gxspl XML on the host, bind-mount over /opt/genie_xsec:
-docker run --rm --platform linux/amd64 \
-    -v /path/to/my/xsec:/opt/genie_xsec \
-    -e GENIE_XSEC_FILE=/opt/genie_xsec/your-file.xml \
-    ...
+mkdir lucid-work && cd lucid-work
+git clone https://github.com/CIDeR-ML/LUCiD.git
+git clone https://github.com/cesarjesusvalls/PhotonSim.git
+docker build --platform linux/amd64 \
+    -f LUCiD/container/Dockerfile -t lucid:latest .
 ```
 
-Or fetch a different tune into the image before building: edit the
-`fetch-xsec-splines.sh` call in `Dockerfile` and pass `--tune
-G18_10a_02_11a` (etc.).
+Expect ~10 min cold on Apple Silicon. Subsequent rebuilds reuse
+layers — editing LUCiD source retriggers just the last layer (~30 s).
 
 ## Troubleshooting
 
-- **`exec /bin/bash: exec format error`** — you're on Apple Silicon
-  without Rosetta enabled. See step 0 above.
-- **Build hangs during ROOT step** — not hung; just slow under Rosetta.
-  Expect 40–60 min for that one layer. `docker stats` should show a
-  busy container.
-- **`GENIE_XSEC_FILE unset or missing`** — the xsec fetch failed at
-  build time (network blip?). Rebuild just the affected layer:
-  `docker build --target … --no-cache …` or delete the image and
-  rebuild.
-- **Apple Silicon very slow (<50% native)** — make sure Rosetta is
-  enabled in Docker Desktop settings, not just installed on the Mac.
+- **`exec /bin/bash: exec format error`** — Apple Silicon without
+  Rosetta enabled in Docker Desktop. See step 0.
+- **BuildKit silence during source builds** — long solve/compile steps
+  buffer output. Use `docker stats` to see CPU use, or
+  `--progress=plain`.
+- **GENIE complains about missing splines** — the config's `tune` does
+  not match a tune in the image. Swap to `G18_10a_02_11b` (or
+  `AR23_20i_00_000`, `G21_11a_00_000`) and set `GENIE_XSEC_FILE`
+  to the matching `/opt/genie_xsec/3_04_00/<tune>/gxspl-min.xml.gz`.
 - **"No space left on device"** — `docker system prune -af` reclaims
-  old layers and dangling images.
-
-## Publishing the image (follow-up, not included here)
-
-Current setup is **local build only**. If you want to skip the 60 min
-build, the image can be pushed to a registry (ghcr.io, Docker Hub) and
-pulled instead — but that is a separate decision not covered here.
+  old layers.
