@@ -54,8 +54,8 @@ class DetectorGeometry(NamedTuple):
         """
         # Normalize casing
         dt_key = detector_type.lower()
-        if dt_key not in ('cylinder', 'sphere', 'box', 'superk'):
-            raise ValueError(f"detector_type must be 'cylinder', 'sphere', 'box', or 'superk', got {detector_type}")
+        if dt_key not in ('cylinder', 'sphere', 'box'):
+            raise ValueError(f"detector_type must be 'cylinder', 'sphere', or 'box', got {detector_type}")
 
         # Material
         material = get_material_from_config(json_filename)

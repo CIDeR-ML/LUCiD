@@ -63,7 +63,7 @@ class TestPropagatorGradients:
     @pytest.fixture(scope="class")
     def cylinder_geom(self):
         return DetectorGeometry.from_config(
-            "config/WCTE_geom_config.json", detector_type='Cylinder')
+            "config/WCTE_like_geom_config.json", detector_type='Cylinder')
 
     def test_grad_weights_wrt_origin(self, cylinder_geom):
         """Sensor weights should be differentiable w.r.t. ray origin."""

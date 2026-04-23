@@ -9,7 +9,6 @@ from .registry import get_detector_class
 from .cylinder import Cylinder  # noqa: F401
 from .sphere import Sphere      # noqa: F401
 from .box import Box            # noqa: F401
-from .superk import SuperK      # noqa: F401
 
 
 def load_detector_config(file_path):
@@ -69,25 +68,31 @@ def get_material_from_config(file_path):
 
 
 def load_detector_geom(file_path):
-    """Load detector geometry from JSON config"""
+    """Load detector geometry from JSON config.
+
+    Returns a tuple identifying the detector type and its geometry
+    parameters. For cylinders the second element distinguishes the
+    two construction paths:
+        ('cylinder', 'algorithmic', radius, height, n_sensors, sensor_radius)
+        ('cylinder', 'pmt_file',    npz_file_path)
+    """
     config = load_detector_config(file_path)
-    
+
     detector_type = config['detector_type']
     geom_def = config['geometry_definitions']
-    
+
     if detector_type == 'cylinder':
-        return (detector_type, geom_def['radius'], geom_def['height'], 
+        if 'npz_file_path' in geom_def:
+            return (detector_type, 'pmt_file', geom_def['npz_file_path'])
+        return (detector_type, 'algorithmic',
+                geom_def['radius'], geom_def['height'],
                 geom_def['n_sensors'], geom_def['sensor_radius'])
     elif detector_type == 'sphere':
-        return (detector_type, geom_def['radius'], None, 
+        return (detector_type, geom_def['radius'], None,
                 geom_def['n_sensors'], geom_def['sensor_radius'])
     elif detector_type == 'box':
-        return (detector_type, geom_def['length'], geom_def['width'], 
+        return (detector_type, geom_def['length'], geom_def['width'],
                 geom_def['height'], geom_def['n_sensors'], geom_def['sensor_radius'])
-    elif detector_type == 'superk':
-        return (detector_type, geom_def['radius'], geom_def['height'],
-                geom_def['n_sensors'], geom_def['sensor_radius'],
-                geom_def['connection_table_path'])
     else:
         raise ValueError(f"Unknown detector type: {detector_type}")
 
@@ -95,9 +100,18 @@ def load_detector_geom(file_path):
 def generate_detector(file_path):
     """Generate a detector from a JSON config file using the geometry registry.
 
-    The detector type in the config (e.g. 'cylinder', 'sphere', 'box', 'superk')
-    is looked up in the registry to find the appropriate class. Each class
-    knows how to construct itself from the geometry_definitions dict.
+    The detector type in the config (e.g. 'cylinder', 'sphere', 'box') is
+    looked up in the registry to find the appropriate class.
+
+    For ``detector_type: cylinder``, two construction paths are supported:
+
+      * ``geometry_definitions`` carries ``npz_file_path`` →
+        :meth:`Cylinder.from_pmt_file` loads measured PMT positions
+        from that file (used for SK, HK, WCTE, SK_official, etc.).
+      * Otherwise → algorithmic placement using
+        ``radius / height / n_sensors / sensor_radius``.
+
+    The npz path is resolved relative to the config-file directory.
     """
     config = load_detector_config(file_path)
     detector_type = config['detector_type']
@@ -105,8 +119,11 @@ def generate_detector(file_path):
 
     cls = get_detector_class(detector_type)
 
-    # Dispatch construction based on class — each geometry has different __init__ args
     if cls is Cylinder:
+        if 'npz_file_path' in geom_def:
+            config_dir = os.path.dirname(os.path.abspath(file_path))
+            npz_path = os.path.join(config_dir, geom_def['npz_file_path'])
+            return cls.from_pmt_file(npz_path)
         return cls(geom_def['radius'], geom_def['height'],
                    geom_def['n_sensors'], geom_def['sensor_radius'])
     elif cls is Sphere:
@@ -114,15 +131,7 @@ def generate_detector(file_path):
     elif cls is Box:
         return cls(geom_def['length'], geom_def['width'], geom_def['height'],
                    geom_def['n_sensors'], geom_def['sensor_radius'])
-    elif cls is SuperK:
-        # Resolve connection_table_path relative to the config file directory
-        config_dir = os.path.dirname(os.path.abspath(file_path))
-        ct_path = os.path.join(config_dir, geom_def['connection_table_path'])
-        return cls(ct_path, radius=geom_def['radius'],
-                   height=geom_def['height'], n_sensors=geom_def['n_sensors'],
-                   sensor_radius=geom_def['sensor_radius'])
     else:
         # Future-proof: class was registered but we don't know its constructor.
-        # This shouldn't happen with the current set of geometries.
         raise NotImplementedError(
             f"No construction logic for registered detector class {cls.__name__}")

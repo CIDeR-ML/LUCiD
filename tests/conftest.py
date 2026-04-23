@@ -46,14 +46,17 @@ def key():
 
 @pytest.fixture(scope="session")
 def small_cylinder_config():
-    """Path to a small cylinder detector config."""
+    """Path to a small generic cylinder detector config (WCTE-shaped,
+    algorithmic placement). The real-WCTE config (``WCTE_geom_config``)
+    loads measured PMT positions from a separate npz file and is not
+    suitable as a generic cylinder fixture."""
     return os.path.join(os.path.dirname(os.path.dirname(__file__)),
-                        "config", "WCTE_geom_config.json")
+                        "config", "WCTE_like_geom_config.json")
 
 
 @pytest.fixture(scope="session")
 def cylinder_detector(small_cylinder_config):
-    """Build WCTE cylinder detector once per session."""
+    """Build the small generic cylinder detector once per session."""
     from lucid.geometry import generate_detector
     return generate_detector(small_cylinder_config)
 

@@ -313,7 +313,7 @@ class TestCrossGeometry:
         from lucid.geometry.detector_geometry import DetectorGeometry
 
         dg_cyl = DetectorGeometry.from_config(
-            "config/WCTE_geom_config.json", detector_type='Cylinder')
+            "config/WCTE_like_geom_config.json", detector_type='Cylinder')
         dg_sph = DetectorGeometry.from_config(
             "config/JUNO_geom_config.json", detector_type='Sphere')
         dg_box = DetectorGeometry.from_config(

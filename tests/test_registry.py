@@ -22,10 +22,7 @@ from lucid.geometry.registry import _REGISTRY
 class TestRegistryLookup:
     def test_all_types_registered(self):
         types = list_detector_types()
-        assert 'cylinder' in types
-        assert 'sphere' in types
-        assert 'box' in types
-        assert 'superk' in types
+        assert sorted(types) == ['box', 'cylinder', 'sphere']
 
     def test_case_insensitive(self):
         assert get_detector_class('cylinder') is Cylinder
@@ -47,7 +44,7 @@ class TestGenerateDetectorViaRegistry:
 
     def test_cylinder_identical(self):
         """WCTE cylinder must have same sensors as baseline."""
-        det = generate_detector("config/WCTE_geom_config.json")
+        det = generate_detector("config/WCTE_like_geom_config.json")
         assert isinstance(det, Cylinder)
         assert det.all_points.shape == (2444, 3)
         npt.assert_allclose(det.all_points[0], [2.0, 0.0, -1.94], atol=1e-5)
@@ -70,7 +67,7 @@ class TestBoundsCheckJIT:
     in the photon propagation loop which is JIT-compiled."""
 
     def test_cylinder_bounds_check_jit(self):
-        det = generate_detector("config/WCTE_geom_config.json")
+        det = generate_detector("config/WCTE_like_geom_config.json")
         pts = jnp.array([[0.0, 0.0, 0.0], [100.0, 100.0, 100.0]])
 
         @jax.jit
@@ -107,7 +104,7 @@ class TestBoundsCheckJIT:
 
     def test_bounds_check_jit_with_grad(self):
         """bounds_check output feeds into jnp.where which is differentiable."""
-        det = generate_detector("config/WCTE_geom_config.json")
+        det = generate_detector("config/WCTE_like_geom_config.json")
 
         @jax.jit
         def loss_fn(positions):
@@ -123,7 +120,7 @@ class TestBoundsCheckJIT:
 
     def test_bounds_check_vmap(self):
         """bounds_check should work with vmap over batch dimension."""
-        det = generate_detector("config/WCTE_geom_config.json")
+        det = generate_detector("config/WCTE_like_geom_config.json")
 
         # Single-point bounds check via vmap
         single_check = jax.vmap(lambda p: det.bounds_check(p[None])[0])
@@ -138,7 +135,7 @@ class TestDetectorGeometryJIT:
     def test_from_config_cylinder_jit_propagator(self):
         """The propagator from DetectorGeometry should be JIT-callable."""
         from lucid.geometry.detector_geometry import DetectorGeometry
-        dg = DetectorGeometry.from_config("config/WCTE_geom_config.json",
+        dg = DetectorGeometry.from_config("config/WCTE_like_geom_config.json",
                                            detector_type='Cylinder')
         # Propagator should already be JIT-compiled
         assert dg.propagator is not None
