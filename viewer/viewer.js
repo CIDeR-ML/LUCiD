@@ -172,8 +172,10 @@ function workerCall(action, data, timeoutMs = 60000) {
 //     to signal-bearing entries. Masked-out entries still get a normalized
 //     value (for continuity), but don't influence vmin/vmax.
 //   - Time fields (`isTime=true`): linear scale, percentile over ALL finite
-//     values in mask (negatives allowed — the writer emits a sentinel T = -t0
-//     for no-signal rows, which the mask excludes).
+//     values in mask (negatives allowed — v4 stores sensor.T in absolute
+//     detector frame = G4 + t0_interaction, so hit times can be large
+//     positive or large negative depending on the randomly drawn t0).
+//     No-signal rows are excluded upstream via the PE > 0 mask.
 //   - Non-time fields: the LUCiD notebook's rule applies — percentile over
 //     positive values only, optional log scale.
 function normalizeValues(values, opts) {
@@ -230,9 +232,10 @@ function normalizeValues(values, opts) {
 }
 
 // ── PMT derivation from sensor / inst ──────────────────────────────────
-// A sensor row exists per sensor-of-interest; the writer emits a placeholder
-// with PE=0 and T = -t0 for no-signal rows. We treat "has signal" as PE > 0
-// so those sentinels render as the empty-gray silhouette.
+// v4 writes only signal-bearing sensors into the sparse sensor file (the
+// save_sensor_event_v3 mask keeps rows where PE > 0 OR T is a finite
+// positive time within a reasonable window). Whatever makes it through,
+// we still filter here with PE > 0 to guard against edge cases.
 function deriveSensorArrays() {
   pmtPE = new Float32Array(nSensors);
   pmtT = new Float32Array(nSensors);

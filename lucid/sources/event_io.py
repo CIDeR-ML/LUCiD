@@ -3074,11 +3074,6 @@ def save_labl_event_v3(f, event_dict, seq_idx):
         ancestor = np.array([], dtype=np.int32)
         interaction = np.array([], dtype=np.int32)
 
-    # --- per_event (just the overall containment scalar now) ---
-    pe_grp = grp.create_group('per_event')
-    pe_grp.create_dataset('overall_containment',
-                          data=np.float32(event_dict['overall_light_containment']))
-
     # --- per_interaction ---
     # Row `i` corresponds to tracks whose `interaction == i`. For
     # single-interaction events every row shares t0/vertex/source_type
@@ -3086,6 +3081,19 @@ def save_labl_event_v3(f, event_dict, seq_idx):
     # per-vertex arrays that get indexed here instead.
     pi_grp = grp.create_group('per_interaction')
     _write_per_interaction(pi_grp, event_dict, ancestor, interaction)
+
+    # --- per_event (scalar summaries: overall_containment + t0) ---
+    # t0 is derived from per_interaction/t0 as the earliest interaction
+    # time in the event — a single-scalar convenience for downstream
+    # tools (e.g. the viewer) that want one reference time per event
+    # without walking the per_interaction table. For single-interaction
+    # events this equals the sole t0.
+    pe_grp = grp.create_group('per_event')
+    pe_grp.create_dataset('overall_containment',
+                          data=np.float32(event_dict['overall_light_containment']))
+    pi_t0 = pi_grp['t0'][()]
+    pe_grp.create_dataset('t0',
+                          data=np.float32(float(np.min(pi_t0))))
 
     # --- per_particle ---
     pp_grp = grp.create_group('per_particle')

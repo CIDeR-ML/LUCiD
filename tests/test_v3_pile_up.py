@@ -80,6 +80,17 @@ def test_per_particle_interaction_idx(pileup_batch):
     np.testing.assert_array_equal(pp['interaction_idx'], [0, 0, 1])
 
 
+def test_per_event_t0_is_min_of_per_interaction(pileup_batch):
+    """per_event/t0 is the earliest interaction time in the event — a
+    single-scalar convenience for downstream tools. For this fixture,
+    t0_a = -17.0 and t0_b = 123.4, so per_event/t0 = -17.0."""
+    paths, cfg, ev = pileup_batch
+    labl = read_labl_event_v3(str(paths['labl']), 0)
+    t0_min = float(min(labl['per_interaction']['t0']))
+    assert float(labl['per_event']['t0']) == pytest.approx(t0_min)
+    assert float(labl['per_event']['t0']) == pytest.approx(-17.0)
+
+
 def test_per_track_interaction_ranks_by_track_id(pileup_batch):
     paths, cfg, ev = pileup_batch
     labl = read_labl_event_v3(str(paths['labl']), 0)

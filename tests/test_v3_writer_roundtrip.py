@@ -111,9 +111,9 @@ def test_labl_event_roundtrip(v3_batch):
     labl = read_labl_event_v3(str(paths['labl']), 0)
     assert labl['n_particles'] == 2
     assert labl['n_tracks'] == 3
-    # per_event (t0 has moved to per_interaction/)
-    assert 't0' not in labl['per_event']
+    # per_event: overall_containment scalar + t0 = min(per_interaction/t0)
     assert float(labl['per_event']['overall_containment']) == pytest.approx(0.92)
+    assert float(labl['per_event']['t0']) == pytest.approx(ev['t0'])
     # per_interaction — 1 row for this single-interaction fixture
     pi = labl['per_interaction']
     assert len(pi['t0']) == 1
