@@ -1,0 +1,6 @@
+# Conversion scripts that produce the .npz files in ../ are kept
+# locally for reproducibility but are not committed. The .npz files
+# they emit (and the source .txt / .root files they read) live in
+# ../ and ARE committed where appropriate.
+*
+!.gitignore
