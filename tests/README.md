@@ -74,14 +74,14 @@ test_s3_combined.py, test_tangent_gradients.py
 | Fixture | Scope | What it provides |
 |---------|-------|-----------------|
 | `key` | session | `jax.random.PRNGKey(42)` |
-| `small_cylinder_config` | session | Path to WCTE_geom_config.json |
-| `cylinder_detector` | session | Pre-built WCTE detector (cached) |
+| `small_cylinder_config` | session | Path to WCTE_like_geom_config.json |
+| `cylinder_detector` | session | Pre-built small generic cylinder (cached) |
 | `fixed_flat_hits` | session | Synthetic sensor hit data for unit tests |
 
 ## Config dependencies
 
 Tests reference configs in `config/`:
-- Geometry: `WCTE_geom_config.json` (small, fast), `SK_like_geom_config.json` (large, slow)
+- Geometry: `WCTE_like_geom_config.json` (small, fast, algorithmic), `SK_like_geom_config.json` (large, slow). The real `WCTE_geom_config.json` loads measured PMT positions from a separate `.npz` file and is exercised on its own (it is not the generic small-cylinder fixture).
 - Physics: `SK_physics_config.json` (composable format with medium_model + qe_curve references)
 - Materials: `materials/water.json`
 - PMT curves: `pmt/SK_QE.json`, `pmt/HK_QE.json`
