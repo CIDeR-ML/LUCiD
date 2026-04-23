@@ -1092,11 +1092,22 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path, se
         geom_def = config['geometry_definitions']
 
         if detector_type == 'cylinder':
-            detector_bounds = {
-                'type': 'cylinder',
-                'radius': geom_def['radius'],
-                'height': geom_def['height']
-            }
+            if 'npz_file_path' in geom_def:
+                # File-loaded geometry — bounds live in the .npz, not
+                # the JSON. Build the detector to read them off.
+                from lucid.geometry import generate_detector
+                det = generate_detector(detector_config_path)
+                detector_bounds = {
+                    'type': 'cylinder',
+                    'radius': float(det.r),
+                    'height': float(det.H),
+                }
+            else:
+                detector_bounds = {
+                    'type': 'cylinder',
+                    'radius': geom_def['radius'],
+                    'height': geom_def['height'],
+                }
         elif detector_type == 'sphere':
             detector_bounds = {
                 'type': 'sphere',

@@ -19,7 +19,7 @@ class TestCylinderPropagator:
 
     def setup_method(self):
         self.dg = DetectorGeometry.from_config(
-            "config/WCTE_geom_config.json", detector_type='Cylinder',
+            "config/WCTE_like_geom_config.json", detector_type='Cylinder',
             temperature=0.2)
 
     def test_output_has_all_keys(self):

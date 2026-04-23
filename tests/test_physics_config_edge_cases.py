@@ -25,14 +25,15 @@ CONFIG_DIR = os.path.join(
 DETECTOR_INFO = {
     "BigHK":   ("BigHK_physics_config.json",   20000),
     "EOS":     ("EOS_physics_config.json",       200),
-    "HK":      ("HK_physics_config.json",      20000),
+    "HK":      ("HK_physics_config.json",      19746),
     "IWCD":    ("IWCD_physics_config.json",     10000),
     "JUNO":    ("JUNO_physics_config.json",     10000),
     "MidBox":  ("MidBox_physics_config.json",    9000),
-    "SK":      ("SK_physics_config.json",       11146),
+    "SK":      ("SK_physics_config.json",       11096),
     "SK_like": ("SK_like_physics_config.json",  11000),
     "TAO":     ("TAO_physics_config.json",       4000),
-    "WCTE":    ("WCTE_physics_config.json",      2500),
+    "WCTE":    ("WCTE_physics_config.json",      1995),
+    "WCTE_like": ("WCTE_like_physics_config.json", 2500),
     "nuSCOPE": ("nuSCOPE_physics_config.json",   5000),
 }
 

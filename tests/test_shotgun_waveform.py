@@ -21,8 +21,8 @@ pytestmark = pytest.mark.slow
 @pytest.fixture(scope='module')
 def wcte_paths():
     base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    return (os.path.join(base, 'config', 'WCTE_geom_config.json'),
-            os.path.join(base, 'config', 'WCTE_physics_config.json'))
+    return (os.path.join(base, 'config', 'WCTE_like_geom_config.json'),
+            os.path.join(base, 'config', 'WCTE_like_physics_config.json'))
 
 
 @pytest.fixture(scope='module')

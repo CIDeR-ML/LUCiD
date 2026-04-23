@@ -9,10 +9,31 @@ from .utils import generate_concentric_hexagons
 from .registry import register_detector
 
 
+_FROM_FILE_REQUIRED_ARRAYS = (
+    'positions_mm', 'directions', 'surfaces', 'pmt_id',
+)
+_FROM_FILE_REQUIRED_SCALARS = (
+    'radius', 'height', 'sensor_radius',
+)
+_FROM_FILE_RESERVED = set(_FROM_FILE_REQUIRED_ARRAYS) | set(_FROM_FILE_REQUIRED_SCALARS)
+_FROM_FILE_MM_TO_M = 0.001
+_INACTIVE_PREFIX = 'inactive_'
+
+
 @register_detector('cylinder')
 class Cylinder(Detector):
-    """Cylindrical detector geometry"""
-    
+    """Cylindrical detector geometry.
+
+    Two construction paths share this class:
+
+    * The default :meth:`__init__` algorithmically tiles the barrel
+      and end caps with ``n_sensors`` photosensors.
+    * :meth:`from_pmt_file` instead loads measured PMT positions from
+      a `.npz` file (see ``PMT_NPZ_SCHEMA.md``) — used for SK, HK,
+      WCTE, SK_official and any other geometry whose layout is given
+      rather than computed.
+    """
+
     def __init__(self, radius, height, n_sensors, sensor_radius):
         """
         Initialize cylindrical detector.
@@ -106,6 +127,157 @@ class Cylinder(Detector):
                 self.ID_to_case[i] = 1
             else:
                 self.ID_to_case[i] = 2
+
+    # ── Construction from a PMT-positions npz file ────────────────────
+
+    @classmethod
+    def from_pmt_file(cls, npz_file_path, snap_to_wall=True):
+        """Build a :class:`Cylinder` whose PMT positions are read from
+        a unified-schema ``.npz`` file (see ``PMT_NPZ_SCHEMA.md``).
+
+        Parameters
+        ----------
+        npz_file_path : str
+            Path to the ``.npz`` file.
+        snap_to_wall : bool, optional
+            Project barrel PMTs to ``r_xy = radius`` and cap PMTs to
+            ``z = ±height/2``. Default True. Geofiles can leave PMTs
+            up to a few centimetres off the nominal surface (mPMT
+            domes, alternating barrel rings); snapping puts them on
+            the geometric boundary so the cylinder ray-tracer treats
+            them correctly. The pre-snap positions are kept on
+            ``self.raw_positions``.
+
+        Returns
+        -------
+        Cylinder
+            A cylinder whose ``all_points`` array holds the active
+            sensors from the file (barrel first, then top cap, then
+            bottom cap). Per-PMT metadata arrays found in the file
+            are reordered to match ``all_points`` and attached as
+            attributes named after their npz key. Inactive PMTs (any
+            ``inactive_*`` arrays) are attached as-is.
+        """
+        data = np.load(npz_file_path, allow_pickle=True)
+
+        # ── Validate schema ──
+        for key in _FROM_FILE_REQUIRED_ARRAYS + _FROM_FILE_REQUIRED_SCALARS:
+            if key not in data.files:
+                raise KeyError(
+                    f"PMT npz '{npz_file_path}' is missing required "
+                    f"key '{key}'. See lucid/geometry/PMT_NPZ_SCHEMA.md."
+                )
+
+        positions_m = data['positions_mm'].astype(float) * _FROM_FILE_MM_TO_M
+        directions = data['directions'].astype(float)
+        surfaces = np.asarray(data['surfaces'])
+        n = positions_m.shape[0]
+        if directions.shape != (n, 3):
+            raise ValueError(
+                f"PMT npz '{npz_file_path}': directions shape "
+                f"{directions.shape} does not match positions ({n}, 3)."
+            )
+        if surfaces.shape != (n,):
+            raise ValueError(
+                f"PMT npz '{npz_file_path}': surfaces shape "
+                f"{surfaces.shape} does not match positions count {n}."
+            )
+
+        sensor_radius = float(data['sensor_radius'])
+        radius = float(data['radius'])
+        height = float(data['height'])
+
+        # ── Build the instance, bypassing __init__ (which would do
+        # the algorithmic placement) ──
+        instance = cls.__new__(cls)
+        Detector.__init__(instance, n, sensor_radius)
+        instance.r = radius
+        instance.H = height
+        instance._n_cap = None
+        instance._n_angular = None
+        instance._n_height = None
+        instance.npz_file_path = npz_file_path
+        instance.snap_to_wall = bool(snap_to_wall)
+
+        # ── Reorder to (barrel, top, bottom) and place ──
+        order = np.concatenate([
+            np.where(surfaces == 'barrel')[0],
+            np.where(surfaces == 'top')[0],
+            np.where(surfaces == 'bottom')[0],
+        ])
+        if order.size != n:
+            unknown = np.setdiff1d(surfaces, ['barrel', 'top', 'bottom'])
+            raise ValueError(
+                f"PMT npz '{npz_file_path}': unknown surface labels "
+                f"in active block: {unknown.tolist()}"
+            )
+        instance._reorder_indices = order
+
+        positions_ord = positions_m[order]
+        instance.raw_positions = positions_ord.copy()
+        if instance.snap_to_wall:
+            positions_ord = instance._snap_to_wall(positions_ord, surfaces[order])
+
+        n_barrel = int(np.sum(surfaces == 'barrel'))
+        n_top    = int(np.sum(surfaces == 'top'))
+        instance.all_points = positions_ord
+        instance.barr_points = positions_ord[:n_barrel]
+        instance.tcap_points = positions_ord[n_barrel:n_barrel + n_top]
+        instance.bcap_points = positions_ord[n_barrel + n_top:]
+
+        # PMT viewing directions, reordered. Not used by the propagator
+        # today (which uses the cylinder normal), but kept for any
+        # future angular-response physics.
+        instance.pmt_directions = directions[order]
+
+        # Standard mappings
+        instance.ID_to_position = {
+            i: instance.all_points[i] for i in range(n)
+        }
+        case = np.empty(n, dtype=int)
+        case[:n_barrel] = 0
+        case[n_barrel:n_barrel + n_top] = 1
+        case[n_barrel + n_top:] = 2
+        instance.ID_to_case = {i: int(case[i]) for i in range(n)}
+
+        # PMT-id → sequential index lookup (always built; convenient
+        # for indexing real-data hits back into all_points order).
+        pmt_id = np.asarray(data['pmt_id'])[order]
+        instance.pmt_id = pmt_id
+        instance.pmt_id_to_idx = {int(pid): i for i, pid in enumerate(pmt_id)}
+
+        # ── Attach all other arrays from the npz as attributes ──
+        # Per-active-PMT arrays (first dim == N) get reordered;
+        # inactive_* arrays and scalars are stored as-is.
+        for key in data.files:
+            if key in _FROM_FILE_RESERVED or key == 'pmt_id':
+                continue
+            arr = data[key]
+            if key.startswith(_INACTIVE_PREFIX):
+                setattr(instance, key, arr)
+                continue
+            if arr.ndim >= 1 and arr.shape[0] == n:
+                setattr(instance, key, arr[order])
+            else:
+                setattr(instance, key, arr)
+
+        return instance
+
+    def _snap_to_wall(self, positions, surfaces):
+        """Project barrel PMTs radially onto ``r=self.r`` and cap PMTs
+        axially onto ``z=±self.H/2``. ``positions`` and ``surfaces``
+        must already share the same row order."""
+        out = positions.copy()
+        barrel = surfaces == 'barrel'
+        xy = out[barrel, :2]
+        r_xy = np.linalg.norm(xy, axis=1, keepdims=True)
+        r_xy = np.where(r_xy > 0, r_xy, 1.0)  # guard against r=0
+        out[barrel, :2] = xy * (self.r / r_xy)
+        out[surfaces == 'top', 2] = self.H / 2
+        out[surfaces == 'bottom', 2] = -self.H / 2
+        return out
+
+    # ── Algorithmic placement helpers ──────────────────────────────────
 
     def _place_barrel_sensors(self, n_sensors):
         """Place sensors on barrel surface with rectangular grid."""

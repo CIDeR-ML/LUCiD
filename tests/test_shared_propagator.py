@@ -41,7 +41,7 @@ class TestCylinderSharedPropagator:
         """Shared propagator must match existing cylinder propagator."""
         from lucid.propagation.cylinder import create_photon_propagator
 
-        det = generate_detector("config/WCTE_geom_config.json")
+        det = generate_detector("config/WCTE_like_geom_config.json")
         sensor_points = jnp.array(det.all_points)
         sensor_radius = det.S_radius
 
@@ -58,7 +58,7 @@ class TestCylinderSharedPropagator:
         _compare_propagators(old, new, "Cylinder")
 
     def test_output_keys(self):
-        det = generate_detector("config/WCTE_geom_config.json")
+        det = generate_detector("config/WCTE_like_geom_config.json")
         prop = create_propagator(det, jnp.array(det.all_points), det.S_radius)
         result = prop(jnp.zeros((1, 3)), jnp.array([[1., 0., 0.]]))
         expected = {'sensor_weights', 'sensor_indices', 'times', 'positions',
@@ -66,7 +66,7 @@ class TestCylinderSharedPropagator:
         assert set(result.keys()) == expected
 
     def test_deterministic(self):
-        det = generate_detector("config/WCTE_geom_config.json")
+        det = generate_detector("config/WCTE_like_geom_config.json")
         prop = create_propagator(det, jnp.array(det.all_points), det.S_radius)
         origins = jnp.zeros((2, 3))
         dirs = jnp.array([[1., 0., 0.], [0., 1., 0.]])

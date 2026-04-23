@@ -23,7 +23,7 @@ class TestSharedPropagatorGradients:
 
     @pytest.fixture(scope="class")
     def cylinder_prop(self):
-        det = generate_detector("config/WCTE_geom_config.json")
+        det = generate_detector("config/WCTE_like_geom_config.json")
         prop = create_propagator(
             det, jnp.array(det.all_points), det.S_radius,
             n_cap=150, n_angular=250, n_height=150)
@@ -70,7 +70,7 @@ class TestFullPipelineGradients:
 
     @pytest.fixture(scope="class")
     def pipeline_setup(self):
-        det = generate_detector("config/WCTE_geom_config.json")
+        det = generate_detector("config/WCTE_like_geom_config.json")
         prop = create_propagator(
             det, jnp.array(det.all_points), det.S_radius,
             n_cap=150, n_angular=250, n_height=150)
