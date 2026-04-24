@@ -14,12 +14,12 @@ def build_synthetic_event(source_event_idx=0, t0=7.5, n_sensors=20):
         {
             'genealogy': [100],
             'extended_genealogy': [100],
-            'track_info': {'category': 0},  # Primary
+            'track_info': {'category': 0, 'energy': 1000.0},  # Primary mu- @ 1 GeV KE
         },
         {
             'genealogy': [100, 200],
             'extended_genealogy': [100, 150, 200],
-            'track_info': {'category': 1},  # DecayElectron
+            'track_info': {'category': 1, 'energy': 100.0},  # DecayElectron @ 100 MeV KE
         },
     ]
 
@@ -28,9 +28,9 @@ def build_synthetic_event(source_event_idx=0, t0=7.5, n_sensors=20):
     # - track 150 -> no direct match, but its parent chain 150 -> 100 reaches particle 0
     # - track 200 -> particle 1 (matches genealogy[-1] = 200)
     meaningful_tracks = {
-        100: {'track_id': 100, 'parent_id': 0,   'pdg': 13,  'initial_energy': 1000.0, 'n_cherenkov': 3, 'n_segments': 2},
-        150: {'track_id': 150, 'parent_id': 100, 'pdg': 22,  'initial_energy':   5.0, 'n_cherenkov': 0, 'n_segments': 0},
-        200: {'track_id': 200, 'parent_id': 100, 'pdg': 11,  'initial_energy': 100.0, 'n_cherenkov': 2, 'n_segments': 2},
+        100: {'track_id': 100, 'parent_id': 0,   'pdg': 13,  'initial_energy': 1000.0, 'n_cherenkov': 3, 'n_segments': 2, 'segment_offset': 0},
+        150: {'track_id': 150, 'parent_id': 100, 'pdg': 22,  'initial_energy':   5.0, 'n_cherenkov': 0, 'n_segments': 0, 'segment_offset': 2},
+        200: {'track_id': 200, 'parent_id': 100, 'pdg': 11,  'initial_energy': 100.0, 'n_cherenkov': 2, 'n_segments': 2, 'segment_offset': 2},
     }
 
     # Four segments total: 2 for track 100, 0 for 150, 2 for 200
@@ -99,8 +99,10 @@ def build_synthetic_event(source_event_idx=0, t0=7.5, n_sensors=20):
         'T_per_particle': T_per_particle,
         'PE_reco': PE_reco,
         'T_reco': T_reco,
-        'overall_light_containment': 0.92,
-        'light_containment_by_particle': np.array([0.95, 0.85], dtype=np.float32),
+        # Synthetic containment numbers: writer round-trips verbatim.
+        'edep_containment': np.float32(0.92),
+        'edep_containment_per_interaction': np.array([0.92], dtype=np.float32),
+        'edep_containment_per_particle': np.array([0.95, 0.85], dtype=np.float32),
     }
 
     sensor_positions = np.random.default_rng(0).normal(size=(n_sensors, 3)).astype(np.float32)
@@ -146,18 +148,18 @@ def build_synthetic_pileup_event(source_event_idx=0, n_sensors=20,
     # Vertex A primaries
     particles = [
         {'genealogy': [100],      'extended_genealogy': [100],
-         'track_info': {'category': 0}},          # mu- primary
+         'track_info': {'category': 0, 'energy': 1000.0}},   # mu- primary
         {'genealogy': [100, 150], 'extended_genealogy': [100, 150],
-         'track_info': {'category': 1}},          # decay e-
+         'track_info': {'category': 1, 'energy': 100.0}},    # decay e-
         {'genealogy': [300],      'extended_genealogy': [300],
-         'track_info': {'category': 0}},          # pi+ primary (vertex B)
+         'track_info': {'category': 0, 'energy': 500.0}},    # pi+ primary (vertex B)
     ]
 
     # Tracks — spanning both vertices
     meaningful_tracks = {
-        100: {'track_id': 100, 'parent_id': 0,   'pdg': 13,  'initial_energy': 1000.0, 'n_cherenkov': 3, 'n_segments': 2},
-        150: {'track_id': 150, 'parent_id': 100, 'pdg': 11,  'initial_energy':  100.0, 'n_cherenkov': 1, 'n_segments': 1},
-        300: {'track_id': 300, 'parent_id': 0,   'pdg': 211, 'initial_energy':  500.0, 'n_cherenkov': 2, 'n_segments': 1},
+        100: {'track_id': 100, 'parent_id': 0,   'pdg': 13,  'initial_energy': 1000.0, 'n_cherenkov': 3, 'n_segments': 2, 'segment_offset': 0},
+        150: {'track_id': 150, 'parent_id': 100, 'pdg': 11,  'initial_energy':  100.0, 'n_cherenkov': 1, 'n_segments': 1, 'segment_offset': 2},
+        300: {'track_id': 300, 'parent_id': 0,   'pdg': 211, 'initial_energy':  500.0, 'n_cherenkov': 2, 'n_segments': 1, 'segment_offset': 3},
     }
 
     # Segments, already in absolute detector frame (+t0 applied per stream).
@@ -240,8 +242,9 @@ def build_synthetic_pileup_event(source_event_idx=0, n_sensors=20,
         'T_per_particle':  T_per_particle,
         'PE_reco': PE_reco,
         'T_reco':  T_reco,
-        'overall_light_containment': 0.9,
-        'light_containment_by_particle': np.array([0.9, 0.8, 0.95], dtype=np.float32),
+        'edep_containment': np.float32(0.9),
+        'edep_containment_per_interaction': np.array([0.88, 0.93], dtype=np.float32),
+        'edep_containment_per_particle': np.array([0.9, 0.8, 0.95], dtype=np.float32),
     }
 
     sensor_positions = np.random.default_rng(0).normal(size=(n_sensors, 3)).astype(np.float32)

@@ -1003,14 +1003,16 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
                     'PE_reco': PE_reco,
                     'T_reco': T_reco,
                     'source': 'PhotonSim_Particles_VMAP',
-                    'overall_light_containment': 0.0,
-                    'light_containment_by_particle': np.zeros(max(n_particles, 1), dtype=np.float32),
                     'include_track_segments': include_track_segments,
                     'source_event_idx': int(event_number),
                 }
                 if include_track_segments and 'meaningful_tracks' in particle_data:
                     extended_info['meaningful_tracks'] = particle_data['meaningful_tracks']
                     extended_info['segments']        = particle_data['segments']
+                cont = _compute_edep_containment(extended_info, detector_bounds)
+                extended_info['edep_containment_per_particle']    = cont['per_particle']
+                extended_info['edep_containment_per_interaction'] = cont['per_interaction']
+                extended_info['edep_containment']                 = cont['overall']
                 batch_data.append(extended_info)
                 batch_indices.append(event_number)
                 event_times.append(time.time() - event_start_time)
@@ -1193,42 +1195,6 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
                 particle_data['segments']['time'] = \
                     np.asarray(particle_data['segments']['time'], dtype=np.float32) + t0_f32
 
-            # Calculate light containment
-            light_containment_by_particle = np.zeros(n_particles, dtype=np.float64)
-            overall_light_containment = 0.0
-
-            if detector_bounds is not None:
-                # Calculate which photons are inside detector bounds
-                if detector_bounds['type'] == 'cylinder':
-                    r = np.sqrt(all_photon_origins_np[:, 0]**2 + all_photon_origins_np[:, 1]**2)
-                    z = all_photon_origins_np[:, 2]
-                    all_photons_inside_mask = (r <= detector_bounds['radius']) & (np.abs(z) <= detector_bounds['height'] / 2.0)
-                elif detector_bounds['type'] == 'sphere':
-                    r = np.sqrt(np.sum(all_photon_origins_np**2, axis=1))
-                    all_photons_inside_mask = r <= detector_bounds['radius']
-                elif detector_bounds['type'] == 'box':
-                    all_photons_inside_mask = ((np.abs(all_photon_origins_np[:, 0]) <= detector_bounds['length'] / 2.0) &
-                                               (np.abs(all_photon_origins_np[:, 1]) <= detector_bounds['width'] / 2.0) &
-                                               (np.abs(all_photon_origins_np[:, 2]) <= detector_bounds['height'] / 2.0))
-
-                # Calculate per-particle containment
-                total_photons_all_particles = 0
-                total_photons_inside_all_particles = 0
-
-                for particle_idx, particle in enumerate(particles):
-                    photon_indices = particle['photon_indices']
-                    N = len(photon_indices)
-                    if N > 0:
-                        mask_for_particle = all_photons_inside_mask[photon_indices]
-                        n_inside = int(np.sum(mask_for_particle))
-                        light_containment_by_particle[particle_idx] = float(n_inside) / N
-                        total_photons_all_particles += N
-                        total_photons_inside_all_particles += n_inside
-
-                # Calculate overall containment
-                if total_photons_all_particles > 0:
-                    overall_light_containment = float(total_photons_inside_all_particles) / total_photons_all_particles
-
             # Create filename
             event_number = event_idx
             filename = os.path.join(output_dir, f'event_{event_number}.h5')
@@ -1251,8 +1217,6 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
                 'PE_reco': PE_reco,
                 'T_reco': T_reco,
                 'source': 'PhotonSim_Particles_VMAP',
-                'overall_light_containment': overall_light_containment,
-                'light_containment_by_particle': light_containment_by_particle,
                 # Track segment data (if included)
                 'include_track_segments': include_track_segments
             }
@@ -1261,6 +1225,15 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
             if include_track_segments and 'meaningful_tracks' in particle_data:
                 extended_info['meaningful_tracks'] = particle_data['meaningful_tracks']
                 extended_info['segments'] = particle_data['segments']
+
+            # Edep containment (per-particle / per-interaction / overall).
+            # Requires meaningful_tracks + segments for the ownership walk;
+            # returns NaN arrays when either is missing (e.g. disabled via
+            # include_track_segments=False).
+            cont = _compute_edep_containment(extended_info, detector_bounds)
+            extended_info['edep_containment_per_particle']    = cont['per_particle']
+            extended_info['edep_containment_per_interaction'] = cont['per_interaction']
+            extended_info['edep_containment']                 = cont['overall']
 
             # Store for batch processing
             extended_info['source_event_idx'] = int(event_number)
@@ -1886,17 +1859,7 @@ def _merge_pileup_streams(streams, *, n_sensors, apply_smearing,
     else:
         seg_merged = {'n_segments': 0}
 
-    # Light containment (aggregate: fraction of all photons inside detector bounds)
-    light_containment_by_particle = np.zeros(max(n_particles_total, 1), dtype=np.float32)
-    overall_light_containment = 0.0
-    if detector_bounds is not None and n_particles_total > 0:
-        # Aggregate across all streams' photon_origins/indices via the
-        # per-particle mapping — skipped for brevity in MVP pile-up;
-        # downstream analysis can recompute from segments if needed.
-        overall_light_containment = 1.0
-        light_containment_by_particle[:] = 1.0
-
-    return {
+    merged = {
         'n_particles': int(n_particles_total),
         'particles': all_particles,
         'track_info_dict': {},  # unused by writers; merged into meaningful_tracks
@@ -1910,9 +1873,16 @@ def _merge_pileup_streams(streams, *, n_sensors, apply_smearing,
         'T_per_particle':  T_per_particle,
         'PE_reco': PE_reco,
         'T_reco':  T_reco,
-        'overall_light_containment': overall_light_containment,
-        'light_containment_by_particle': light_containment_by_particle,
     }
+
+    # Edep containment (same derivation as the single-vertex path; works
+    # across merged streams because the helper uses cumulative n_segments
+    # in track-insertion order rather than per-stream segment_offset).
+    cont = _compute_edep_containment(merged, detector_bounds)
+    merged['edep_containment_per_particle']    = cont['per_particle']
+    merged['edep_containment_per_interaction'] = cont['per_interaction']
+    merged['edep_containment']                 = cont['overall']
+    return merged
 
 
 # ---------------------------------------------------------------------------
@@ -2704,6 +2674,157 @@ def _source_type_code(primary_source):
     return SOURCE_TYPE_PARTICLES
 
 
+def _compute_edep_containment(event_dict, detector_bounds):
+    """Energy-deposit containment at per-particle / per-interaction / event level.
+
+    For each Geant4 segment, test whether its midpoint lies inside
+    ``detector_bounds`` and accumulate ``edep`` when it does. Per-particle
+    denominator is that particle's initial kinetic energy (MeV, from
+    PhotonSim's ``TrackInfo_Energy`` branch). Per-interaction and
+    event-level denominators sum the primary initial KEs recorded in
+    ``interaction_metadata``. Entities with zero denominator produce NaN
+    rather than 0 to distinguish "no reference energy" from "0% contained".
+
+    Segment ownership follows the same parent-chain rule used by
+    ``derive_particle_idx_per_track``: a meaningful track's edep is
+    credited to the nearest categorized ancestor particle. Segment
+    positions are assumed to be in the detector frame (already shifted
+    by the per-interaction translation_vector when applicable).
+
+    Segment-to-track mapping uses cumulative ``n_segments`` over tracks
+    in dict-insertion order — the same invariant ``save_seg_event_v3``
+    relies on — so the helper works for both single-stream events and
+    merged pile-up streams where per-track ``segment_offset`` fields are
+    stream-local and no longer valid in the merged flat array.
+
+    Returns
+    -------
+    dict:
+        'per_particle'    : float32 (n_particles,)    — NaN where denom == 0
+        'per_interaction' : float32 (n_interactions,) — NaN where denom == 0
+        'overall'         : float32 scalar            — NaN where denom == 0
+    """
+    particles = event_dict.get('particles') or []
+    meaningful_tracks = event_dict.get('meaningful_tracks') or {}
+    segments = event_dict.get('segments') or {}
+    interactions = event_dict.get('interaction_metadata') or []
+    n_particles = len(particles)
+    n_interactions = len(interactions)
+    n_segments = int(segments.get('n_segments', 0))
+
+    per_particle_arr = np.full(n_particles, np.nan, dtype=np.float32)
+    per_interaction_arr = np.full(n_interactions, np.nan, dtype=np.float32)
+    overall = np.float32(np.nan)
+
+    if detector_bounds is None:
+        return {'per_particle': per_particle_arr,
+                'per_interaction': per_interaction_arr,
+                'overall': overall}
+
+    # Inside-mask over segment midpoints → per-segment edep contribution.
+    if n_segments > 0:
+        mx = 0.5 * (np.asarray(segments['start_x'], dtype=np.float64)
+                    + np.asarray(segments['end_x'], dtype=np.float64))
+        my = 0.5 * (np.asarray(segments['start_y'], dtype=np.float64)
+                    + np.asarray(segments['end_y'], dtype=np.float64))
+        mz = 0.5 * (np.asarray(segments['start_z'], dtype=np.float64)
+                    + np.asarray(segments['end_z'], dtype=np.float64))
+        edep = np.asarray(segments['edep'], dtype=np.float64)
+        kind = detector_bounds['type']
+        if kind == 'cylinder':
+            r = np.sqrt(mx * mx + my * my)
+            inside = (r <= detector_bounds['radius']) & (np.abs(mz) <= detector_bounds['height'] / 2.0)
+        elif kind == 'sphere':
+            r = np.sqrt(mx * mx + my * my + mz * mz)
+            inside = r <= detector_bounds['radius']
+        elif kind == 'box':
+            inside = ((np.abs(mx) <= detector_bounds['length'] / 2.0) &
+                      (np.abs(my) <= detector_bounds['width']  / 2.0) &
+                      (np.abs(mz) <= detector_bounds['height'] / 2.0))
+        else:
+            raise ValueError(f"Unknown detector_bounds type: {kind!r}")
+        edep_inside_segment = np.where(inside, edep, 0.0)
+    else:
+        edep_inside_segment = np.array([], dtype=np.float64)
+
+    # Track segment slices from cumulative n_segments in dict order (same
+    # invariant as save_seg_event_v3).
+    edep_inside_per_track = {}
+    cursor = 0
+    for tid, t in meaningful_tracks.items():
+        ns = int(t.get('n_segments', 0))
+        if ns > 0 and cursor + ns <= n_segments:
+            edep_inside_per_track[int(tid)] = float(edep_inside_segment[cursor:cursor + ns].sum())
+        else:
+            edep_inside_per_track[int(tid)] = 0.0
+        cursor += ns
+
+    # Attribute each meaningful track to the nearest categorized ancestor
+    # particle by walking parent_id (same rule as derive_particle_idx_per_track).
+    id_to_particle_idx = {}
+    for i, particle in enumerate(particles):
+        gen = particle.get('genealogy') or []
+        if gen:
+            id_to_particle_idx[int(gen[-1])] = i
+
+    edep_inside_per_particle = np.zeros(n_particles, dtype=np.float64)
+    for tid in meaningful_tracks.keys():
+        cur = int(tid)
+        visited = set()
+        owner = -1
+        while cur > 0 and cur not in visited:
+            visited.add(cur)
+            if cur in id_to_particle_idx:
+                owner = id_to_particle_idx[cur]
+                break
+            parent = meaningful_tracks.get(cur)
+            if parent is None:
+                break
+            cur = int(parent['parent_id'])
+        if owner >= 0:
+            edep_inside_per_particle[owner] += edep_inside_per_track.get(int(tid), 0.0)
+
+    # Per-particle denominator: initial KE from track_info.energy (MeV).
+    denom_particle = np.zeros(n_particles, dtype=np.float64)
+    for i, particle in enumerate(particles):
+        ti = particle.get('track_info')
+        if ti is not None and 'energy' in ti:
+            denom_particle[i] = float(ti['energy'])
+
+    with np.errstate(invalid='ignore', divide='ignore'):
+        per_particle_arr = np.where(denom_particle > 0,
+                                    edep_inside_per_particle / denom_particle,
+                                    np.nan).astype(np.float32)
+
+    # Per-interaction: aggregate per-particle edep_inside by interaction
+    # (same FK derivation used by the writer); denominator = sum of
+    # primary KE recorded in interaction_metadata.
+    inter_idx = derive_particle_interaction_idx(event_dict)
+    numer_interaction = np.zeros(n_interactions, dtype=np.float64)
+    for i in range(n_particles):
+        pi_i = int(inter_idx[i]) if i < len(inter_idx) else -1
+        if 0 <= pi_i < n_interactions:
+            numer_interaction[pi_i] += edep_inside_per_particle[i]
+
+    denom_interaction = np.array(
+        [float(np.sum(np.asarray(s.get('primary_energies', []), dtype=np.float64)))
+         for s in interactions],
+        dtype=np.float64)
+
+    with np.errstate(invalid='ignore', divide='ignore'):
+        per_interaction_arr = np.where(denom_interaction > 0,
+                                       numer_interaction / denom_interaction,
+                                       np.nan).astype(np.float32)
+
+    total_num = float(np.sum(numer_interaction))
+    total_den = float(np.sum(denom_interaction))
+    overall = np.float32(total_num / total_den) if total_den > 0 else np.float32(np.nan)
+
+    return {'per_particle':    per_particle_arr,
+            'per_interaction': per_interaction_arr,
+            'overall':         overall}
+
+
 def build_interaction_metadata(particle_data, *, t0, vertex_xyz, source_type_code):
     """Assemble the per-interaction metadata dict consumed by ``_write_per_interaction``.
 
@@ -3081,17 +3202,23 @@ def save_labl_event_v3(f, event_dict, seq_idx):
     """Write a single event_NNN/ group to an already-open labl v5 file.
 
     Subgroups:
-    * ``per_event/`` — overall_containment + t0 (= min per_interaction/t0).
+    * ``per_event/`` — edep_containment + t0 (= min per_interaction/t0).
     * ``per_interaction/`` — one row per source interaction (one per
       G4 event for non-pile-up; one per vertex for pile-up). Fields:
       source_type, t0, vertex_{x,y,z}, n_primaries, n_particles,
-      neutrino_pdg, neutrino_energy_MeV, and CSR-encoded
-      primary_{track_ids,pdgs,energies}_{offsets,data}.
+      neutrino_pdg, neutrino_energy_MeV, edep_containment, and
+      CSR-encoded primary_{track_ids,pdgs,energies}_{offsets,data}.
       Dark events (no tracks) still get a 1-row table with empty CSR lists.
-    * ``per_particle/`` — category, containment, genealogy CSR, and
+    * ``per_particle/`` — category, edep_containment, genealogy CSR, and
       ``interaction_idx`` FK into ``per_interaction/`` rows.
     * ``per_track/`` — track metadata + ``particle_idx`` and
       ``interaction`` FK (indexes per_interaction/ rows) columns.
+
+    edep_containment is ``sum(edep of segments inside detector bounds)``
+    divided by a reference energy (per-particle: the particle's initial
+    KE from ``TrackInfo_Energy``; per-interaction/event: sum of primary
+    initial KEs in that interaction). Entities with zero reference
+    energy (neutrinos, dark events) are written as NaN.
     """
     grp = f.create_group(_event_group_name(seq_idx))
     grp.attrs['source_event_idx'] = int(event_dict['source_event_idx'])
@@ -3116,15 +3243,15 @@ def save_labl_event_v3(f, event_dict, seq_idx):
     pi_grp = grp.create_group('per_interaction')
     _write_per_interaction(pi_grp, event_dict, ancestor, interaction)
 
-    # --- per_event (scalar summaries: overall_containment + t0) ---
+    # --- per_event (scalar summaries: edep_containment + t0) ---
     # t0 is derived from per_interaction/t0 as the earliest interaction
     # time in the event — a single-scalar convenience for downstream
     # tools (e.g. the viewer) that want one reference time per event
     # without walking the per_interaction table. For single-interaction
     # events this equals the sole t0.
     pe_grp = grp.create_group('per_event')
-    pe_grp.create_dataset('overall_containment',
-                          data=np.float32(event_dict['overall_light_containment']))
+    pe_grp.create_dataset('edep_containment',
+                          data=np.float32(event_dict['edep_containment']))
     pi_t0 = pi_grp['t0'][()]
     pe_grp.create_dataset('t0',
                           data=np.float32(float(np.min(pi_t0))))
@@ -3142,9 +3269,9 @@ def save_labl_event_v3(f, event_dict, seq_idx):
                           data=np.array(cats, dtype=np.uint8),
                           **_GZIP_OPTS)
 
-    cont = np.asarray(event_dict['light_containment_by_particle'],
+    cont = np.asarray(event_dict['edep_containment_per_particle'],
                       dtype=np.float32)
-    pp_grp.create_dataset('containment', data=cont, **_GZIP_OPTS)
+    pp_grp.create_dataset('edep_containment', data=cont, **_GZIP_OPTS)
 
     gen_offsets = [0]
     gen_data_list = []
@@ -3228,6 +3355,10 @@ def _write_per_interaction(pi_grp, event_dict, ancestor, interaction):
                                               (primaries + descendants).
       * ``neutrino_pdg``          (int16)   — probe PDG (0 for particle-gun).
       * ``neutrino_energy_MeV``   (float32) — probe KE (0.0 for particle-gun).
+      * ``edep_containment``      (float32) — sum(edep inside detector) /
+                                              sum(primary KE) for this
+                                              interaction; NaN if the
+                                              denominator is 0.
       * CSR variable-length per interaction (offsets(n_interactions+1,) + data):
           - ``primary_track_ids_*``  (int32)
           - ``primary_pdgs_*``       (int16)
@@ -3284,6 +3415,12 @@ def _write_per_interaction(pi_grp, event_dict, ancestor, interaction):
     e_data = (np.concatenate(e_chunks) if e_chunks
               else np.array([], dtype=np.float32))
 
+    edep_containment_arr = np.asarray(
+        event_dict['edep_containment_per_interaction'], dtype=np.float32)
+    assert edep_containment_arr.shape == (n_interactions,), (
+        f"edep_containment_per_interaction shape {edep_containment_arr.shape} "
+        f"!= (n_interactions={n_interactions},)")
+
     pi_grp.create_dataset('source_type',         data=source_type_arr,    **_GZIP_OPTS)
     pi_grp.create_dataset('t0',                  data=t0_arr,             **_GZIP_OPTS)
     pi_grp.create_dataset('vertex_x',            data=vx_arr[:, 0].copy(),**_GZIP_OPTS)
@@ -3293,6 +3430,7 @@ def _write_per_interaction(pi_grp, event_dict, ancestor, interaction):
     pi_grp.create_dataset('n_particles',         data=n_particles_per_interaction,**_GZIP_OPTS)
     pi_grp.create_dataset('neutrino_pdg',        data=neutrino_pdg_arr,   **_GZIP_OPTS)
     pi_grp.create_dataset('neutrino_energy_MeV', data=neutrino_ke_arr,    **_GZIP_OPTS)
+    pi_grp.create_dataset('edep_containment',    data=edep_containment_arr, **_GZIP_OPTS)
     pi_grp.create_dataset('primary_track_ids_offsets', data=tid_offsets,  **_GZIP_OPTS)
     pi_grp.create_dataset('primary_track_ids_data',    data=tid_data,     **_GZIP_OPTS)
     pi_grp.create_dataset('primary_pdgs_offsets',      data=pdg_offsets,  **_GZIP_OPTS)
@@ -3387,11 +3525,11 @@ def read_labl_event_v3(filename, event_idx):
     """Read event ``event_idx`` from a labl v5 file.
 
     The returned dict contains top-level attrs plus four subdicts:
-    ``per_event`` (overall_containment, t0 = min per_interaction/t0),
+    ``per_event`` (edep_containment, t0 = min per_interaction/t0),
     ``per_interaction`` (source_type, t0, vertex_{x,y,z}, n_primaries,
-    n_particles, neutrino_pdg, neutrino_energy_MeV, and CSR-encoded
-    primary_{track_ids,pdgs,energies}_{offsets,data}),
-    ``per_particle`` (category, containment, genealogy CSR,
+    n_particles, neutrino_pdg, neutrino_energy_MeV, edep_containment,
+    and CSR-encoded primary_{track_ids,pdgs,energies}_{offsets,data}),
+    ``per_particle`` (category, edep_containment, genealogy CSR,
     interaction_idx), and ``per_track`` (track_id, parent_id, pdg,
     initial_energy, n_cherenkov, particle_idx, ancestor, interaction).
     """

@@ -161,7 +161,7 @@ n_sensors = detector.n_sensors
 n_particles = int(labl_data['n_particles'])
 n_tracks = int(labl_data['n_tracks'])
 t0 = float(labl_data['per_interaction']['t0'][0])
-overall_light_containment = float(labl_data['per_event']['overall_containment'])
+overall_edep_containment = float(labl_data['per_event']['edep_containment'])
 
 # Reconstruct dense PE_per_particle / T_per_particle from inst sparse rows
 PE_per_particle = np.zeros((n_particles, n_sensors), dtype=np.float32)
@@ -193,7 +193,7 @@ particle_categorized_genealogy = _decompose_csr(
 particle_track_genealogy = _decompose_csr(
     pp['ext_genealogy_data'], pp['ext_genealogy_offsets'], n_particles)
 particle_category = np.asarray(pp['category'], dtype=np.int32)
-light_containment_by_particle = np.asarray(pp['containment'], dtype=np.float32)
+edep_containment_per_particle = np.asarray(pp['edep_containment'], dtype=np.float32)
 
 # Build the dict that the rendering code below indexes into
 lucid_data = {
@@ -203,10 +203,10 @@ lucid_data = {
     'PE': PE,
     't0': t0,
     'Particle_Category': particle_category,
-    'light_containment_by_particle': light_containment_by_particle,
+    'edep_containment_per_particle': edep_containment_per_particle,
     'Particle_TrackGenealogy': particle_track_genealogy,
     'Particle_CategorizedGenealogy': particle_categorized_genealogy,
-    'overall_light_containment': overall_light_containment,
+    'overall_edep_containment': overall_edep_containment,
 }
 
 # Build track_id_to_info using labl/per_track + seg first-segment per track
@@ -264,7 +264,7 @@ for particle_idx in range(n_particles):
     category_code = lucid_data['Particle_Category'][particle_idx]
     category_name = get_category_name(category_code)
     total_charge = np.sum(PE_per_particle[particle_idx, :])
-    containment = lucid_data['light_containment_by_particle'][particle_idx]
+    containment = lucid_data['edep_containment_per_particle'][particle_idx]
 
     # Get particle type from PDG using extended genealogy (last track ID)
     ext_genealogy = lucid_data.get('Particle_TrackGenealogy', [None] * n_particles)[particle_idx]
@@ -310,7 +310,10 @@ for particle_idx in range(n_particles):
     print(f"  Category: {category_name}")
     print(f"  Particle type: {particle_type} ({particle_energy:.1f} MeV)")
     print(f"  Total charge deposited: {total_charge:.1f} PE")
-    print(f"  Light containment: {containment*100:.1f}%")
+    if np.isfinite(containment):
+        print(f"  Edep containment: {containment*100:.1f}%")
+    else:
+        print(f"  Edep containment: n/a (no reference energy)")
 
 print()
 
@@ -343,7 +346,7 @@ for particle_idx in range(n_particles):
     else:
         avg_time = 0.0
 
-    containment = lucid_data['light_containment_by_particle'][particle_idx]
+    containment = lucid_data['edep_containment_per_particle'][particle_idx]
 
     # Get particle type and position/direction from particle_info
     pinfo = particle_info[particle_idx]
@@ -429,7 +432,9 @@ def format_particle_tree(particle_idx, particle_tree, children, depth=0):
     indent = "&nbsp;&nbsp;" * (depth + 1)
     arrow = "└─ " if depth > 0 else ""
 
-    containment_str = f", Containment: {particle['containment']*100:.1f}%"
+    c = particle['containment']
+    containment_str = (f", Edep containment: {c*100:.1f}%"
+                       if np.isfinite(c) else ", Edep containment: n/a")
 
     lines = [
         f"{indent}{arrow}{category_colored} [Particle {particle_idx}]",
@@ -452,10 +457,15 @@ for root_idx in sorted(roots):
     genealogy_text_lines.append("<br>")
     genealogy_text_lines.extend(format_particle_tree(root_idx, particle_tree, children, depth=0))
 
-# Add overall light containment at the end
+# Add overall edep containment at the end
 genealogy_text_lines.append("<br>")
-overall_containment = lucid_data['overall_light_containment']
-genealogy_text_lines.append(f"<br><b>Overall Light Containment:</b> {overall_containment*100:.1f}% of photons inside detector")
+overall_containment = lucid_data['overall_edep_containment']
+if np.isfinite(overall_containment):
+    genealogy_text_lines.append(
+        f"<br><b>Overall Edep Containment:</b> {overall_containment*100:.1f}% of primary KE deposited inside detector")
+else:
+    genealogy_text_lines.append(
+        "<br><b>Overall Edep Containment:</b> n/a (no reference energy)")
 
 event_genealogy_text = "<br>".join(genealogy_text_lines) + "<br>&nbsp;<br>&nbsp;"
 

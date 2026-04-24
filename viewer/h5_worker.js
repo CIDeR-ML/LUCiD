@@ -148,7 +148,7 @@ function decodeEvent(idx) {
   const perTrkGrp = lEvt.get('per_track');
 
   const t0 = perEvtGrp ? readAttrOrScalar(perEvtGrp, 't0') : 0;
-  const overallContainment = perEvtGrp ? readAttrOrScalar(perEvtGrp, 'overall_containment') : NaN;
+  const edepContainment = perEvtGrp ? readAttrOrScalar(perEvtGrp, 'edep_containment') : NaN;
 
   // v5 per_interaction: one row per source interaction (one G4 event
   // worth of primaries + their descendants). CSR primary_{track_ids,
@@ -165,6 +165,7 @@ function decodeEvent(idx) {
       n_particles:             readDsInt32(perIntGrp,   'n_particles'),
       neutrino_pdg:            readDsInt16(perIntGrp,   'neutrino_pdg'),
       neutrino_energy_MeV:     readDsFloat32(perIntGrp, 'neutrino_energy_MeV'),
+      edep_containment:        readDsFloat32(perIntGrp, 'edep_containment'),
       primary_track_ids_offsets: readDsUint32(perIntGrp, 'primary_track_ids_offsets'),
       primary_track_ids_data:    readDsInt32(perIntGrp,  'primary_track_ids_data'),
       primary_pdgs_offsets:      readDsUint32(perIntGrp, 'primary_pdgs_offsets'),
@@ -174,10 +175,10 @@ function decodeEvent(idx) {
     };
   }
 
-  let category = null, containment = null, genealogy = null, genealogyOffsets = null;
+  let category = null, edepContainmentPerParticle = null, genealogy = null, genealogyOffsets = null;
   if (perPartGrp) {
     category = readDsUint8(perPartGrp, 'category');
-    containment = readDsFloat32(perPartGrp, 'containment');
+    edepContainmentPerParticle = readDsFloat32(perPartGrp, 'edep_containment');
     genealogy = readDsInt32(perPartGrp, 'genealogy_data');
     genealogyOffsets = readDsUint32(perPartGrp, 'genealogy_offsets');
   }
@@ -200,7 +201,7 @@ function decodeEvent(idx) {
     warning,
     srcIdx: srcIdxS,
     t0,
-    overallContainment,
+    edepContainment,
     sensor: { sensor_idx: sensorSIdx, PE: sensorPE, T: sensorT,
               nHits: sensorSIdx ? sensorSIdx.length : 0 },
     inst: { particle_idx: instParticle, sensor_idx: instSIdx, PE: instPE, T: instT,
@@ -212,7 +213,7 @@ function decodeEvent(idx) {
            n: nSegments },
     labl: { n_particles, n_tracks,
             per_interaction: perInteraction,
-            per_particle: { category, containment, genealogy, genealogy_offsets: genealogyOffsets },
+            per_particle: { category, edep_containment: edepContainmentPerParticle, genealogy, genealogy_offsets: genealogyOffsets },
             per_track: { pdg: trackPdg, particle_idx: trackParticleIdx,
                          initial_energy: trackInitE, n_cherenkov: trackNCh,
                          ancestor: trackAncestor, interaction: trackInteraction } },
@@ -220,7 +221,7 @@ function decodeEvent(idx) {
 }
 
 function readAttrOrScalar(grp, name) {
-  // t0 / overall_containment are scalar datasets per schema, not attrs.
+  // t0 / edep_containment are scalar datasets per schema, not attrs.
   const ds = grp.get(name);
   if (ds) {
     const v = ds.value;

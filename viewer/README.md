@@ -67,7 +67,7 @@ The sidebar contents depend on the current Label:
 Click a row to isolate that particle (or union of particles in the group): its PMT contributions pop at near-full brightness, non-contributors fade to ~8% alpha, and segments belonging to the selection stay bright. Click the same row again to deselect. Changing Label clears the selection.
 
 Below the event-meta block, the sidebar shows a **SELECTION** info card:
-- For a particle: category name, containment, Σ PE from inst, sensors hit, n tracks, n Cherenkov, max initial energy, PDG set, genealogy chain.
+- For a particle: category name, edep containment, Σ PE from inst, sensors hit, n tracks, n Cherenkov, max initial energy, PDG set, genealogy chain.
 - For a group: kind, id, particle IDs in the group, Σ PE, sensors hit, n tracks.
 
 ### Settings drawer
@@ -99,8 +99,9 @@ Per [`docs/LUCID_DATASET.md`](../docs/LUCID_DATASET.md). The viewer reads:
 **labl.h5**
 - `config/attrs/label_names` e.g. `['category']`.
 - `event_NNN/attrs`: `source_event_idx`, `n_particles`, `n_tracks`.
-- `event_NNN/per_event/{t0 (f32 scalar), overall_containment (f32 scalar)}`.
-- `event_NNN/per_particle/{category (u8), containment (f32), genealogy_data (i32), genealogy_offsets (u32), ext_genealogy_data, ext_genealogy_offsets}`.
+- `event_NNN/per_event/{t0 (f32 scalar), edep_containment (f32 scalar)}`.
+- `event_NNN/per_interaction/{..., edep_containment (f32)}` — NaN where the interaction's summed primary KE is zero.
+- `event_NNN/per_particle/{category (u8), edep_containment (f32), genealogy_data (i32), genealogy_offsets (u32), ext_genealogy_data, ext_genealogy_offsets}`.
 - `event_NNN/per_track/{track_id (i32), parent_id (i32), pdg (i16), initial_energy (f32), n_cherenkov (i32), particle_idx (i32), ancestor (i32), interaction (i32)}`.
 
 Cross-file integrity: `source_event_idx` is compared across all four files on each event load; a mismatch is logged to the browser console (non-fatal).

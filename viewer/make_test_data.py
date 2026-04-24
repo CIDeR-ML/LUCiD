@@ -213,6 +213,8 @@ def gen_event(rng, n_sensors, sensor_positions, n_particles=6):
         rng.uniform(200.0, 2000.0, size=n_interactions).astype(np.float32),
         np.float32(0.0),
     ).astype(np.float32)
+    per_interaction_edep_containment = rng.uniform(
+        0.7, 1.0, size=n_interactions).astype(np.float32)
 
     # Per-interaction primary lists — pick the first track of each particle
     # in that interaction. In this stub each particle has one track cluster,
@@ -275,7 +277,7 @@ def gen_event(rng, n_sensors, sensor_positions, n_particles=6):
             # (viewer) as a single-scalar reference without walking
             # per_interaction.
             'per_event':    {'t0': np.float32(float(per_interaction_t0.min())),
-                             'overall_containment': np.float32(rng.uniform(0.8, 1.0))},
+                             'edep_containment': np.float32(rng.uniform(0.8, 1.0))},
             'per_interaction': {
                 'source_type':                 source_type_arr,
                 't0':                          per_interaction_t0,
@@ -286,6 +288,7 @@ def gen_event(rng, n_sensors, sensor_positions, n_particles=6):
                 'n_particles':                 n_particles_per_interaction,
                 'neutrino_pdg':                neutrino_pdg,
                 'neutrino_energy_MeV':         neutrino_energy_MeV,
+                'edep_containment':            per_interaction_edep_containment,
                 'primary_track_ids_offsets':   ptid_off,
                 'primary_track_ids_data':      ptid_data,
                 'primary_pdgs_offsets':        ppdg_off,
@@ -293,7 +296,7 @@ def gen_event(rng, n_sensors, sensor_positions, n_particles=6):
                 'primary_energies_offsets':    pen_off,
                 'primary_energies_data':       pen_data,
             },
-            'per_particle': {'category': categories, 'containment': containment,
+            'per_particle': {'category': categories, 'edep_containment': containment,
                              'genealogy_data': gen_data, 'genealogy_offsets': gen_off,
                              'ext_genealogy_data': gen_data.copy(),
                              'ext_genealogy_offsets': gen_off.copy(),
@@ -431,8 +434,8 @@ def write_dataset(out_dir, geom, n_events, n_sensors, seed):
         g.attrs['n_tracks'] = ev['labl']['n_tracks']
         pe_g = g.create_group('per_event')
         pe_g.create_dataset('t0', data=ev['labl']['per_event']['t0'])
-        pe_g.create_dataset('overall_containment',
-                            data=ev['labl']['per_event']['overall_containment'])
+        pe_g.create_dataset('edep_containment',
+                            data=ev['labl']['per_event']['edep_containment'])
         pi_g = g.create_group('per_interaction')
         for name, arr in ev['labl']['per_interaction'].items():
             pi_g.create_dataset(name, data=arr)
