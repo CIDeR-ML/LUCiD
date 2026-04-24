@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
-"""Synthesize a minimal v4 LUCiD dataset for viewer smoke tests.
+"""Synthesize a minimal v5 LUCiD dataset for viewer smoke tests.
 
 Produces four HDF5 files matching `docs/LUCID_DATASET.md` — sensor, inst,
 seg, labl — with a small number of events and synthetic but reasonable
 content. Intended to exercise the browser viewer without running the
-full production pipeline. Emits the v4 schema: per_interaction/ with
-one row per primary, per_particle/interaction_idx FK, and per_event/t0
-derived as min(per_interaction/t0).
+full production pipeline. Emits the v5 schema: per_interaction/ with
+one row per source interaction (not per primary), per_interaction fields
+include CSR primary_{track_ids,pdgs,energies} lists plus neutrino probe
+metadata, and per_event/t0 derived as min(per_interaction/t0).
 
 Usage:
     python3 make_test_data.py --out ./test_data
@@ -92,7 +93,7 @@ def place_box(n_sensors, L, W, H):
 
 
 def write_common_config(cfg_grp, n_events, provenance_extras=None):
-    cfg_grp.attrs['format_version'] = 4
+    cfg_grp.attrs['format_version'] = 5
     cfg_grp.attrs['n_events'] = n_events
     cfg_grp.attrs['git_commit'] = 'test-stub'
     cfg_grp.attrs['run_id'] = 'test-stub-000'
@@ -188,24 +189,79 @@ def gen_event(rng, n_sensors, sensor_positions, n_particles=6):
     gen_data = np.array([], dtype=np.int32)
     gen_off = np.zeros(n_particles + 1, dtype=np.uint32)
 
-    # v4 per_interaction: one row per primary (= one per particle in this
-    # stub since we give each a unique primary track_id). source_type=0
-    # (particles) for all rows; each gets its own random t0 drawn from the
-    # same ±250 ns window the production writer uses.
-    per_interaction_t0 = rng.uniform(-250.0, 250.0, size=n_particles).astype(np.float32)
-    # Ancestor track_id per interaction: pick the first track for each particle.
-    ancestor_per_interaction = np.zeros(n_particles, dtype=np.int32)
+    # v5 per_interaction: one row per source interaction. This stub models
+    # a 2-interaction event (akin to pile-up) — half the particles belong
+    # to interaction 0 and the other half to interaction 1 — so the viewer
+    # exercises the multi-interaction code path. Each interaction row
+    # records its full primary list via CSR offsets+data, plus synthetic
+    # source/neutrino metadata.
+    n_interactions = 2 if n_particles >= 2 else 1
+    # Split particles across interactions: first half → interaction 0, rest → 1.
+    particle_to_interaction = np.concatenate([
+        np.zeros(n_particles // n_interactions, dtype=np.int32),
+        np.ones(n_particles - n_particles // n_interactions, dtype=np.int32),
+    ])[:n_particles]
+    if n_interactions == 1:
+        particle_to_interaction = np.zeros(n_particles, dtype=np.int32)
+
+    per_interaction_t0 = rng.uniform(-250.0, 250.0, size=n_interactions).astype(np.float32)
+    source_type_arr = np.array(
+        [0] + [1] * (n_interactions - 1), dtype=np.uint8)   # first gun, rest "genie"
+    neutrino_pdg = np.where(source_type_arr == 1, np.int16(14), np.int16(0))
+    neutrino_energy_MeV = np.where(
+        source_type_arr == 1,
+        rng.uniform(200.0, 2000.0, size=n_interactions).astype(np.float32),
+        np.float32(0.0),
+    ).astype(np.float32)
+
+    # Per-interaction primary lists — pick the first track of each particle
+    # in that interaction. In this stub each particle has one track cluster,
+    # so n_primaries per interaction equals n_particles in that interaction.
+    primary_tid_chunks = [[] for _ in range(n_interactions)]
+    primary_pdg_chunks = [[] for _ in range(n_interactions)]
+    primary_e_chunks   = [[] for _ in range(n_interactions)]
+    seen_particle = set()
     for t_row in track_rows:
         p = int(t_row['particle_idx'])
-        if ancestor_per_interaction[p] == 0:
-            ancestor_per_interaction[p] = int(t_row['track_id'])
-    # per_particle/interaction_idx FK: identity in this stub (1 primary per particle).
-    interaction_idx = np.arange(n_particles, dtype=np.int32)
-    # per_track derived fields: ancestor = its particle's primary; interaction = its particle_idx.
+        if p in seen_particle:
+            continue
+        seen_particle.add(p)
+        i = int(particle_to_interaction[p])
+        primary_tid_chunks[i].append(int(t_row['track_id']))
+        primary_pdg_chunks[i].append(int(t_row['pdg']))
+        primary_e_chunks[i].append(float(t_row['init_e']))
+
+    def _csr(chunks, dtype):
+        offsets = np.zeros(len(chunks) + 1, dtype=np.uint32)
+        for i, c in enumerate(chunks):
+            offsets[i + 1] = offsets[i] + len(c)
+        data = np.array([x for c in chunks for x in c], dtype=dtype)
+        return offsets, data
+
+    ptid_off, ptid_data = _csr(primary_tid_chunks, np.int32)
+    ppdg_off, ppdg_data = _csr(primary_pdg_chunks, np.int16)
+    pen_off,  pen_data  = _csr(primary_e_chunks,   np.float32)
+
+    # per_particle/interaction_idx FK.
+    interaction_idx = particle_to_interaction.copy()
+
+    # per_track derived: ancestor = its particle's first primary; interaction = its particle's interaction.
+    ancestor_per_particle = np.zeros(n_particles, dtype=np.int32)
+    for t_row in track_rows:
+        p = int(t_row['particle_idx'])
+        if ancestor_per_particle[p] == 0:
+            ancestor_per_particle[p] = int(t_row['track_id'])
     track_ancestor = np.array(
-        [ancestor_per_interaction[int(r['particle_idx'])] for r in track_rows],
+        [ancestor_per_particle[int(r['particle_idx'])] for r in track_rows],
         dtype=np.int32)
-    track_interaction = track_rows['particle_idx'].astype(np.int32)
+    track_interaction = np.array(
+        [particle_to_interaction[int(r['particle_idx'])] for r in track_rows],
+        dtype=np.int32)
+
+    n_particles_per_interaction = np.bincount(
+        particle_to_interaction, minlength=n_interactions).astype(np.int32)
+    n_primaries_per_interaction = np.array(
+        [len(c) for c in primary_tid_chunks], dtype=np.int32)
 
     return {
         'sensor': {'sensor_idx': sensor_idx, 'PE': sensor_PE, 'T': sensor_T},
@@ -214,19 +270,28 @@ def gen_event(rng, n_sensors, sensor_positions, n_particles=6):
                    'PE': inst_arr['pe'], 'T': inst_arr['t']},
         'seg':    {k: seg_rows[k] for k in seg_rows.dtype.names},
         'labl':   {
-            # per_event/t0 = min(per_interaction/t0) — the earliest interaction
-            # time in the event, used by downstream tools (viewer) as a single-
-            # scalar reference without walking per_interaction.
+            # per_event/t0 = min(per_interaction/t0) — the earliest
+            # interaction time in the event, used by downstream tools
+            # (viewer) as a single-scalar reference without walking
+            # per_interaction.
             'per_event':    {'t0': np.float32(float(per_interaction_t0.min())),
                              'overall_containment': np.float32(rng.uniform(0.8, 1.0))},
             'per_interaction': {
-                'source_type':       np.zeros(n_particles, dtype=np.uint8),
-                't0':                per_interaction_t0,
-                'vertex_x':          rng.uniform(-1, 1, size=n_particles).astype(np.float32),
-                'vertex_y':          rng.uniform(-1, 1, size=n_particles).astype(np.float32),
-                'vertex_z':          rng.uniform(-1, 1, size=n_particles).astype(np.float32),
-                'ancestor_track_id': ancestor_per_interaction,
-                'n_particles':       np.ones(n_particles, dtype=np.int32),
+                'source_type':                 source_type_arr,
+                't0':                          per_interaction_t0,
+                'vertex_x':                    rng.uniform(-1, 1, size=n_interactions).astype(np.float32),
+                'vertex_y':                    rng.uniform(-1, 1, size=n_interactions).astype(np.float32),
+                'vertex_z':                    rng.uniform(-1, 1, size=n_interactions).astype(np.float32),
+                'n_primaries':                 n_primaries_per_interaction,
+                'n_particles':                 n_particles_per_interaction,
+                'neutrino_pdg':                neutrino_pdg,
+                'neutrino_energy_MeV':         neutrino_energy_MeV,
+                'primary_track_ids_offsets':   ptid_off,
+                'primary_track_ids_data':      ptid_data,
+                'primary_pdgs_offsets':        ppdg_off,
+                'primary_pdgs_data':           ppdg_data,
+                'primary_energies_offsets':    pen_off,
+                'primary_energies_data':       pen_data,
             },
             'per_particle': {'category': categories, 'containment': containment,
                              'genealogy_data': gen_data, 'genealogy_offsets': gen_off,

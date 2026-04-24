@@ -143,11 +143,36 @@ function decodeEvent(idx) {
 
   // Labl file.
   const perEvtGrp = lEvt.get('per_event');
+  const perIntGrp = lEvt.get('per_interaction');
   const perPartGrp = lEvt.get('per_particle');
   const perTrkGrp = lEvt.get('per_track');
 
   const t0 = perEvtGrp ? readAttrOrScalar(perEvtGrp, 't0') : 0;
   const overallContainment = perEvtGrp ? readAttrOrScalar(perEvtGrp, 'overall_containment') : NaN;
+
+  // v5 per_interaction: one row per source interaction (one G4 event
+  // worth of primaries + their descendants). CSR primary_{track_ids,
+  // pdgs, energies} lists carry each interaction's primary particles.
+  let perInteraction = null;
+  if (perIntGrp) {
+    perInteraction = {
+      source_type:             readDsUint8(perIntGrp,   'source_type'),
+      t0:                      readDsFloat32(perIntGrp, 't0'),
+      vertex_x:                readDsFloat32(perIntGrp, 'vertex_x'),
+      vertex_y:                readDsFloat32(perIntGrp, 'vertex_y'),
+      vertex_z:                readDsFloat32(perIntGrp, 'vertex_z'),
+      n_primaries:             readDsInt32(perIntGrp,   'n_primaries'),
+      n_particles:             readDsInt32(perIntGrp,   'n_particles'),
+      neutrino_pdg:            readDsInt16(perIntGrp,   'neutrino_pdg'),
+      neutrino_energy_MeV:     readDsFloat32(perIntGrp, 'neutrino_energy_MeV'),
+      primary_track_ids_offsets: readDsUint32(perIntGrp, 'primary_track_ids_offsets'),
+      primary_track_ids_data:    readDsInt32(perIntGrp,  'primary_track_ids_data'),
+      primary_pdgs_offsets:      readDsUint32(perIntGrp, 'primary_pdgs_offsets'),
+      primary_pdgs_data:         readDsInt16(perIntGrp,  'primary_pdgs_data'),
+      primary_energies_offsets:  readDsUint32(perIntGrp, 'primary_energies_offsets'),
+      primary_energies_data:     readDsFloat32(perIntGrp, 'primary_energies_data'),
+    };
+  }
 
   let category = null, containment = null, genealogy = null, genealogyOffsets = null;
   if (perPartGrp) {
@@ -186,6 +211,7 @@ function decodeEvent(idx) {
            time: segTime, edep: segEdep, beta_start: segBeta, n_cherenkov: segNCh,
            n: nSegments },
     labl: { n_particles, n_tracks,
+            per_interaction: perInteraction,
             per_particle: { category, containment, genealogy, genealogy_offsets: genealogyOffsets },
             per_track: { pdg: trackPdg, particle_idx: trackParticleIdx,
                          initial_energy: trackInitE, n_cherenkov: trackNCh,

@@ -915,6 +915,25 @@ function buildSidebar() {
   addRow('n tracks',    String(evtBundle.labl.n_tracks));
   addRow('n segments',  String(evtBundle.seg.n));
 
+  // v5 per_interaction summary: one row per source interaction (one G4
+  // event's primaries bundled). Shows interaction count + per-row source
+  // type, primary PDG list, and neutrino probe info for GENIE rows.
+  const pi = evtBundle.labl.per_interaction;
+  if (pi && pi.t0 && pi.t0.length) {
+    addRow('n interactions', String(pi.t0.length));
+    for (let i = 0; i < pi.t0.length; i++) {
+      const src = pi.source_type[i] === 1 ? 'genie' : 'gun';
+      const s0 = pi.primary_pdgs_offsets[i];
+      const s1 = pi.primary_pdgs_offsets[i + 1];
+      const pdgs = Array.from(pi.primary_pdgs_data.slice(s0, s1)).join(',');
+      let line = `[${src}] t0=${pi.t0[i].toFixed(1)} ns  pdgs=[${pdgs}]`;
+      if (pi.source_type[i] === 1) {
+        line += ` nu=${pi.neutrino_pdg[i]}@${pi.neutrino_energy_MeV[i].toFixed(0)} MeV`;
+      }
+      addRow(`int ${i}`, line);
+    }
+  }
+
   renderSelectionInfo();
 }
 
