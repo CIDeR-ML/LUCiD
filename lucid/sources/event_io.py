@@ -2957,7 +2957,13 @@ def save_sensor_event_v3(f, event_dict, seq_idx):
     pe = np.asarray(event_dict['PE_reco'], dtype=np.float32)
     t = np.asarray(event_dict['T_reco'], dtype=np.float32)
 
-    mask = (pe > 0) | (np.isfinite(t) & (t > 0) & (t < 1e5))
+    # A "hit" is a sensor with real charge: pe > 0. SK-like charge smearing
+    # preserves zero (sigma=0 when counts=0), so pe == 0 ⇒ no photon ever
+    # reached this sensor. Drop such sensors even if smear_times fabricated
+    # a noisy time for them. The isfinite & <1e5 checks catch smear_times'
+    # 1e6 non-finite sentinel. Absolute time can legitimately be negative
+    # (t0 ∈ [-250, +250] ns), so no lower bound.
+    mask = (pe > 0) & np.isfinite(t) & (t < 1e5)
     indices = np.where(mask)[0].astype(np.uint16)
     pe_sparse = pe[mask].astype(np.float32)
     t_sparse = np.where(np.isfinite(t[mask]), t[mask], np.float32(0.0)).astype(np.float32)
