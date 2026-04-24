@@ -203,3 +203,82 @@ def test_snap_off_drops_off_wall_sensors_for_sk(repo_root):
         "Without snap, WCTE's mPMT-dome PMTs that sit > 40 mm in "
         "from the wall should be invisible to the grid; got 0 missing."
     )
+
+
+# ── Propagator sensor-map regression ──────────────────────────────────
+
+
+def _forward_assignment_stats(det):
+    """Count how many forward-assigned sensors each grid cell has,
+    and how many sensors end up fully orphaned."""
+    import numpy as np
+    fwd = np.asarray(det.assign_sensor_to_cells(
+        jnp.asarray(det.all_points), float(det.S_radius)))
+    total_cells = det.total_grid_cells()
+    cell_counts = np.zeros(total_cells, dtype=int)
+    for s in range(fwd.shape[0]):
+        for slot in range(fwd.shape[1]):
+            c = fwd[s, slot]
+            if (c == -1).all():
+                continue
+            idx = int(det.point_to_grid_cell_from_coords(c))
+            if 0 <= idx < total_cells:
+                cell_counts[idx] += 1
+    row_has_any = np.any(fwd.reshape(len(fwd), -1, 3).max(axis=2) != -1, axis=1)
+    orphans = int((~row_has_any).sum())
+    return cell_counts, orphans
+
+
+@pytest.mark.parametrize("npz,label", [
+    ('sk_geometry.npz',    'SK'),
+    ('hk_geometry.npz',    'HK'),
+    ('wcte_geometry.npz',  'WCTE'),
+])
+def test_default_grid_respects_max_sensors_per_cell(repo_root, npz, label):
+    """With the default configure_grid (nearest-neighbour sizing) plus
+    the default max_sensors_per_cell=4, no grid cell must receive more
+    than 4 geometric forward assignments and no sensor may be orphaned.
+
+    Previously the grid was sized from cylinder surface area with a
+    safety factor, which silently undercounted for mPMT-clustered
+    layouts (WCTE: ~500 cells with >4 sensors, ~100 sensors dropped
+    from the inverse map). The nearest-neighbour rule adapts to the
+    actual sensor layout."""
+    det = Cylinder.from_pmt_file(
+        os.path.join(repo_root, 'config', npz), snap_to_wall=True)
+    det.configure_grid()            # default: max_sensors_per_cell=4
+    cell_counts, orphans = _forward_assignment_stats(det)
+    assert orphans == 0, f"{label}: {orphans} sensors orphaned from the grid"
+    assert int(cell_counts.max()) <= 4, (
+        f"{label}: max forward assignments per cell is "
+        f"{cell_counts.max()} (> default max_sensors_per_cell=4); "
+        f"configure_grid should be producing a finer grid. "
+        f"{(cell_counts > 4).sum()} cells overflow."
+    )
+
+
+@pytest.mark.parametrize("npz,label", [
+    ('sk_geometry.npz',    'SK'),
+    ('hk_geometry.npz',    'HK'),
+    ('wcte_geometry.npz',  'WCTE'),
+])
+def test_create_propagator_emits_no_sensor_map_warnings(repo_root, npz, label):
+    """End-to-end: running create_propagator on each real detector
+    must not trigger ANY of the ``Sensor map:`` validator warnings
+    (missing sensors, overcrowding, or forward/inverse inconsistency).
+    """
+    import warnings as pywarnings
+    from lucid.propagation.shared import create_propagator
+
+    det = Cylinder.from_pmt_file(
+        os.path.join(repo_root, 'config', npz), snap_to_wall=True)
+    with pywarnings.catch_warnings(record=True) as w_list:
+        pywarnings.simplefilter("always")
+        create_propagator(det, jnp.asarray(det.all_points),
+                          float(det.S_radius), temperature=0.2)
+    sensor_map_warnings = [w for w in w_list
+                           if "Sensor map" in str(w.message)]
+    assert not sensor_map_warnings, (
+        f"{label}: create_propagator emitted Sensor-map warnings: "
+        + "; ".join(str(w.message) for w in sensor_map_warnings)
+    )
