@@ -59,7 +59,7 @@ jobs:
                 --job-id 1 \
                 --master-seed 42 \
                 --output-dir /out &&
-              python3 /opt/LUCiD/scratch/render_ci_displays.py \
+              python3 /opt/LUCiD/ci_tests/render_ci_displays.py \
                 --output-dir /out \
                 --geom-config /opt/LUCiD/config/SK_like_geom_config.json \
                 --out-png /out/dataprod_01_visual_smoke.png \
