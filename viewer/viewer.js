@@ -1245,6 +1245,21 @@ function render2D() {
   let corrMax = 1;
   if (corrMap) for (const v of corrMap.values()) if (v > corrMax) corrMax = v;
 
+  // Selection hue (categorical mode only): in pile-up / overlap, a sensor can
+  // receive PE from the selection AND from another group whose particle
+  // dominates the sensor. Painting such a contributor in the dominant
+  // particle's hue makes it look like another group's hit is being
+  // highlighted. When a selection is active, recolor contributors with the
+  // selection's own hue.
+  let selectionHue = 0;
+  if (corrActive && isCat) {
+    if (selectedGroup) {
+      selectionHue = groupHue(selectedGroup.kind, selectedGroup.id);
+    } else if (selectedParticle != null) {
+      selectionHue = hashHue(selectedParticle);
+    }
+  }
+
   // 2D PMT fade: pmtArrivalT lives in PMT-time space (rank or raw), but
   // the active simTime might be in seg-time space (SEG view). Map sweep
   // progress (0..1 through the active range) onto PMT range so the 2D
@@ -1269,8 +1284,12 @@ function render2D() {
       fill = '#333';
     } else if (isCat) {
       // catArr[i] is a hue in [0,1] (categoryHue or hashHue). Render via HSL
-      // so 2D agrees with the 3D shader.
-      const [cr,cg,cb] = hsl2rgb(catArr[i], 0.78, 0.55);
+      // so 2D agrees with the 3D shader. When a selection is active, paint
+      // contributors with the selection's hue instead of the dominant
+      // particle's hue — otherwise overlap PMTs read as "wrong group".
+      const isSelContrib = corrActive && (corrMap.get(i) || 0) > 0;
+      const hue = isSelContrib ? selectionHue : catArr[i];
+      const [cr,cg,cb] = hsl2rgb(hue, 0.78, 0.55);
       fill = `rgb(${cr},${cg},${cb})`;
     } else {
       const [cr,cg,cb] = currentCmapRGB(contArr[i]);
