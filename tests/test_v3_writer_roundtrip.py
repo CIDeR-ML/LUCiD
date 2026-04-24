@@ -54,7 +54,7 @@ def test_config_present_in_all_files(v3_batch):
     for name, path in paths.items():
         with h5py.File(path, 'r') as f:
             assert 'config' in f, f"{name} missing config group"
-            assert f['config'].attrs['format_version'] == 4
+            assert f['config'].attrs['format_version'] == 5
             assert f['config'].attrs['run_id'].decode() == cfg['run_id'] \
                 if isinstance(f['config'].attrs['run_id'], bytes) \
                 else f['config'].attrs['run_id'] == cfg['run_id']
@@ -117,27 +117,38 @@ def test_labl_event_roundtrip(v3_batch):
     # per_interaction — 1 row for this single-interaction fixture
     pi = labl['per_interaction']
     assert len(pi['t0']) == 1
-    assert float(pi['t0'][0]) == pytest.approx(ev['t0'])
-    assert int(pi['source_type'][0]) == ev['source_type']
+    meta = ev['interaction_metadata'][0]
+    assert float(pi['t0'][0]) == pytest.approx(meta['t0'])
+    assert int(pi['source_type'][0]) == meta['source_type']
     np.testing.assert_allclose(
         [pi['vertex_x'][0], pi['vertex_y'][0], pi['vertex_z'][0]],
-        ev['vertex_xyz'], atol=1e-6)
-    # Only one primary in this fixture (track 100), so the ancestor is 100.
-    assert int(pi['ancestor_track_id'][0]) == 100
+        meta['vertex_xyz'], atol=1e-6)
+    # v5 per_interaction scalars
+    assert int(pi['n_primaries'][0]) == 1            # only mu- is a primary
+    assert int(pi['n_particles'][0]) == 2            # mu- + decay-e
+    assert int(pi['neutrino_pdg'][0]) == 0           # particle-gun
+    assert float(pi['neutrino_energy_MeV'][0]) == 0.0
+    # v5 CSR: primary list for interaction 0 = [13 @ 1000 MeV, track_id 100]
+    np.testing.assert_array_equal(pi['primary_track_ids_offsets'], [0, 1])
+    np.testing.assert_array_equal(pi['primary_track_ids_data'], [100])
+    np.testing.assert_array_equal(pi['primary_pdgs_offsets'], [0, 1])
+    np.testing.assert_array_equal(pi['primary_pdgs_data'], [13])
+    np.testing.assert_array_equal(pi['primary_energies_offsets'], [0, 1])
+    np.testing.assert_allclose(pi['primary_energies_data'], [1000.0])
     # per_particle
     pp = labl['per_particle']
     np.testing.assert_array_equal(pp['category'], np.array([0, 1], dtype=np.uint8))
     np.testing.assert_allclose(pp['containment'], [0.95, 0.85], atol=1e-6)
-    # interaction_idx: both particles trace back to primary 100 → rank 0.
+    # interaction_idx: both particles belong to the single interaction 0.
     np.testing.assert_array_equal(pp['interaction_idx'], np.array([0, 0], dtype=np.int32))
     # per_track
     pt = labl['per_track']
     np.testing.assert_array_equal(pt['track_id'], np.array([100, 150, 200], dtype=np.int32))
     np.testing.assert_array_equal(pt['parent_id'], np.array([0, 100, 100], dtype=np.int32))
     np.testing.assert_array_equal(pt['pdg'], np.array([13, 22, 11], dtype=np.int16))
-    # ancestor/interaction derived from parent chain:
-    # track 100 (parent 0) is a primary — its own ancestor; 150/200 descend from it.
-    # With a single primary in the event, interaction_id == 0 for all rows.
+    # ancestor (parent-chain walk) unchanged across schema versions.
+    # interaction column now indexes per_interaction rows (all → 0 since
+    # there's only one interaction in this fixture).
     np.testing.assert_array_equal(pt['ancestor'], np.array([100, 100, 100], dtype=np.int32))
     np.testing.assert_array_equal(pt['interaction'], np.array([0, 0, 0], dtype=np.int32))
 

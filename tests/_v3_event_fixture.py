@@ -73,6 +73,10 @@ def build_synthetic_event(source_event_idx=0, t0=7.5, n_sensors=20):
     T_reco = np.zeros(n_sensors, dtype=np.float32)
     T_reco[:5] = [50.0, 52.0, 55.0, 60.0, 61.0]
 
+    # v5: exactly one interaction (one G4 event fired the gun with a single
+    # primary — track 100 is the only parent_id==0 track). The decay-e
+    # (track 200, parent_id=100) descends from it and shares the same
+    # interaction.
     event_dict = {
         'source_event_idx': source_event_idx,
         'n_particles': 2,
@@ -80,9 +84,17 @@ def build_synthetic_event(source_event_idx=0, t0=7.5, n_sensors=20):
         'meaningful_tracks': meaningful_tracks,
         'segments': segments,
         't0': t0,
-        # Single-interaction fixture: one vertex, particle-gun source.
-        'vertex_xyz': np.array([0.1, -0.2, 0.3], dtype=np.float32),
-        'source_type': 0,  # SOURCE_TYPE_PARTICLES
+        'primary_to_interaction': {100: 0},
+        'interaction_metadata': [{
+            't0': float(t0),
+            'vertex_xyz': np.array([0.1, -0.2, 0.3], dtype=np.float32),
+            'source_type': 0,  # SOURCE_TYPE_PARTICLES
+            'neutrino_pdg': 0,
+            'neutrino_energy_MeV': 0.0,
+            'primary_track_ids': [100],
+            'primary_pdgs':      [13],       # mu-
+            'primary_energies':  [1000.0],   # MeV
+        }],
         'PE_per_particle': PE_per_particle,
         'T_per_particle': T_per_particle,
         'PE_reco': PE_reco,
@@ -190,17 +202,31 @@ def build_synthetic_pileup_event(source_event_idx=0, n_sensors=20,
     T_reco[3] = 60.0 + t0_b
     T_reco[4] = 61.0 + t0_b
 
-    # per_interaction arrays (one entry per primary):
-    # derive_track_ancestor_and_interaction ranks primaries sorted by
-    # track_id → [100, 300] → [rank 0, rank 1]. Track 150 descends from
-    # 100 → also rank 0. So particles 0 and 1 are rank 0; particle 2 is
-    # rank 1. The t0/vertex/source_type arrays below are indexed by rank.
-    t0_arr = np.array([t0_a, t0_b], dtype=np.float32)
-    vertex_xyz_arr = np.array([
-        [0.1, -0.2, 0.3],
-        [-1.0, 2.0, -3.0],
-    ], dtype=np.float32)
-    source_type_arr = np.array([0, 1], dtype=np.uint8)  # particles, genie
+    # v5 per_interaction: one row per source vertex (= per G4 event).
+    # Vertex A fired one primary (mu-, track 100); its decay-e (track 150)
+    # descends from it and shares interaction 0. Vertex B fired one
+    # primary (pi+, track 300) alone in interaction 1. Vertex B is a
+    # synthetic "GENIE" vertex for the fixture — neutrino metadata is
+    # populated only for that row.
+    interaction_metadata = [
+        {'t0': float(t0_a),
+         'vertex_xyz': np.array([0.1, -0.2, 0.3], dtype=np.float32),
+         'source_type': 0,
+         'neutrino_pdg': 0,
+         'neutrino_energy_MeV': 0.0,
+         'primary_track_ids': [100],
+         'primary_pdgs':      [13],
+         'primary_energies':  [1000.0]},
+        {'t0': float(t0_b),
+         'vertex_xyz': np.array([-1.0, 2.0, -3.0], dtype=np.float32),
+         'source_type': 1,
+         'neutrino_pdg': 14,
+         'neutrino_energy_MeV': 1234.5,
+         'primary_track_ids': [300],
+         'primary_pdgs':      [211],     # pi+
+         'primary_energies':  [500.0]},
+    ]
+    primary_to_interaction = {100: 0, 300: 1}
 
     event_dict = {
         'source_event_idx': source_event_idx,
@@ -208,9 +234,8 @@ def build_synthetic_pileup_event(source_event_idx=0, n_sensors=20,
         'particles': particles,
         'meaningful_tracks': meaningful_tracks,
         'segments': segments,
-        't0': t0_arr,
-        'vertex_xyz': vertex_xyz_arr,
-        'source_type': source_type_arr,
+        'interaction_metadata': interaction_metadata,
+        'primary_to_interaction': primary_to_interaction,
         'PE_per_particle': PE_per_particle,
         'T_per_particle':  T_per_particle,
         'PE_reco': PE_reco,

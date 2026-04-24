@@ -507,7 +507,10 @@ def read_particle_data_from_photonsim(root_file_path, entry_index, include_track
     root_file = uproot.open(root_file_path)
     tree = root_file['OpticalPhotons']
 
-    # Read all necessary data for the specified entry
+    # Read all necessary data for the specified entry. The GENIE provenance
+    # branches (RooTrackerEntryID / IncomingNuPdg / IncomingNuKE) are
+    # required in v5; older PhotonSim ROOT files without them are not
+    # supported.
     branches_to_read = [
         'PrimaryEnergy',
         'PhotonPosX', 'PhotonPosY', 'PhotonPosZ',
@@ -520,7 +523,8 @@ def read_particle_data_from_photonsim(root_file_path, entry_index, include_track
         'TrackInfo_PosX', 'TrackInfo_PosY', 'TrackInfo_PosZ',
         'TrackInfo_DirX', 'TrackInfo_DirY', 'TrackInfo_DirZ',
         'TrackInfo_Energy', 'TrackInfo_Time',
-        'TrackInfo_ParentTrackID', 'TrackInfo_PDG'
+        'TrackInfo_ParentTrackID', 'TrackInfo_PDG',
+        'RooTrackerEntryID', 'IncomingNuPdg', 'IncomingNuKE',
     ]
 
     # Add branches for track segments if requested
@@ -664,7 +668,13 @@ def read_particle_data_from_photonsim(root_file_path, entry_index, include_track
         'photon_times': photon_times,  # Keep as NumPy
         'photon_wavelengths': photon_wavelengths,  # Keep as NumPy (nm)
         'primary_energy': primary_energy,
-        'track_info_dict': track_info_dict  # Include full track info for reference
+        'track_info_dict': track_info_dict,  # Include full track info for reference
+        # GENIE provenance (from PhotonSim's v5 branches). -1 / 0 / 0.0 for
+        # particle-gun events; non-sentinels for GENIE events pulled from
+        # the rootracker's status==0 probe.
+        'rootracker_entry_id':  int(tree_data['RooTrackerEntryID'][0]),
+        'neutrino_pdg':         int(tree_data['IncomingNuPdg'][0]),
+        'neutrino_energy_MeV':  float(tree_data['IncomingNuKE'][0]),
     }
 
     # Parse meaningful tracks and segments if requested
@@ -977,13 +987,17 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
                 T_true  = np.zeros(n_sensors, dtype=np.float32)
                 PE_reco = PE_true
                 T_reco  = T_true
+                interaction_meta = build_interaction_metadata(
+                    particle_data, t0=t0, vertex_xyz=translation_vector,
+                    source_type_code=source_type_code)
+                primary_to_interaction = {tid: 0
+                                   for tid in interaction_meta['primary_track_ids']}
                 extended_info = {
                     'n_particles': int(n_particles),
                     'particles': particles,
                     'track_info_dict': particle_data.get('track_info_dict', {}),
-                    't0': t0,
-                    'vertex_xyz': translation_vector.copy(),
-                    'source_type': source_type_code,
+                    'primary_to_interaction': primary_to_interaction,
+                    'interaction_metadata': [interaction_meta],
                     'PE_per_particle': PE_per_particle,
                     'T_per_particle': T_per_particle,
                     'PE_reco': PE_reco,
@@ -1219,13 +1233,16 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
             # t0 already drawn at top of loop from the seed hierarchy.
 
             # Extended info with particle structure
+            interaction_meta = build_interaction_metadata(
+                particle_data, t0=t0, vertex_xyz=translation_vector,
+                source_type_code=source_type_code)
+            primary_to_interaction = {tid: 0 for tid in interaction_meta['primary_track_ids']}
             extended_info = {
                 'n_particles': n_particles,
                 'particles': particles,
                 'track_info_dict': particle_data['track_info_dict'],
-                't0': t0,
-                'vertex_xyz': translation_vector.copy(),
-                'source_type': source_type_code,
+                'primary_to_interaction': primary_to_interaction,
+                'interaction_metadata': [interaction_meta],
                 'PE_per_particle': PE_per_particle,
                 'T_per_particle': T_per_particle,
                 'PE_reco': PE_reco,
@@ -1568,10 +1585,9 @@ def generate_events_from_photonsim_pileup(
     if n_events is None:
         n_events = common
     elif n_events > common:
-        raise ValueError(
-            f"n_events={n_events} exceeds min per-vertex entries "
-            f"{per_file_counts}; at least one ROOT file is shorter than "
-            f"requested.")
+        print(f"WARNING: requested n_events={n_events} exceeds min per-vertex "
+              f"entries {per_file_counts}; capping to {common}.")
+        n_events = common
     print(f"Per-vertex ROOT entries: {per_file_counts}; "
           f"merging {n_events} events.")
 
@@ -1654,9 +1670,9 @@ def generate_events_from_photonsim_pileup(
                         'segments': particle_data.get('segments', {'n_segments': 0}),
                         'PE_per_particle': np.zeros((n_particles_i, n_sensors), dtype=np.float32),
                         'T_per_particle':  np.zeros((n_particles_i, n_sensors), dtype=np.float32),
-                        't0': t0_i,
-                        'vertex_xyz': vertex_i,
-                        'source_type': source_type_code_i,
+                        'interaction_meta': build_interaction_metadata(
+                            particle_data, t0=t0_i, vertex_xyz=vertex_i,
+                            source_type_code=source_type_code_i),
                     })
                     running_offset = stream_max + 1
                     continue
@@ -1702,9 +1718,9 @@ def generate_events_from_photonsim_pileup(
                     'segments': particle_data.get('segments', {'n_segments': 0}),
                     'PE_per_particle': PE_i,
                     'T_per_particle':  T_i,
-                    't0': t0_i,
-                    'vertex_xyz': vertex_i,
-                    'source_type': source_type_code_i,
+                    'interaction_meta': build_interaction_metadata(
+                        particle_data, t0=t0_i, vertex_xyz=vertex_i,
+                        source_type_code=source_type_code_i),
                 })
                 running_offset = stream_max + 1
 
@@ -1805,12 +1821,17 @@ def _merge_pileup_streams(streams, *, n_sensors, apply_smearing,
     PE_per_stream = []
     T_per_stream  = []
 
-    stream_t0        = [s['t0']          for s in streams]
-    stream_vertex    = [s['vertex_xyz']  for s in streams]
-    stream_src_type  = [s['source_type'] for s in streams]
-    # Max track_id contributed by each stream (post-remap). Used to look
-    # up which vertex owns a given primary track_id after the merge.
-    stream_max_tid = []
+    # One interaction per stream. `interaction_metadata[i]` comes straight
+    # from `build_interaction_metadata(...)` at stream-processing time —
+    # including the primary_track_ids / pdgs / energies lists — so no
+    # derivation is needed here. `primary_to_interaction[tid] = i` maps
+    # each primary track_id (already remapped across streams so they're
+    # globally unique) to the interaction row it belongs to.
+    interaction_metadata = [s['interaction_meta'] for s in streams]
+    primary_to_interaction = {}
+    for i, meta in enumerate(interaction_metadata):
+        for tid in meta['primary_track_ids']:
+            primary_to_interaction[int(tid)] = i
 
     for s in streams:
         all_particles.extend(s['particles'])
@@ -1821,8 +1842,6 @@ def _merge_pileup_streams(streams, *, n_sensors, apply_smearing,
                 all_segs[k].append(np.asarray(segs[k]))
         PE_per_stream.append(s['PE_per_particle'])
         T_per_stream.append(s['T_per_particle'])
-        stream_tids = list(s.get('meaningful_tracks', {}).keys())
-        stream_max_tid.append(max(stream_tids) if stream_tids else 0)
 
     n_particles_total = len(all_particles)
     PE_per_particle = (np.concatenate(PE_per_stream, axis=0)
@@ -1855,45 +1874,6 @@ def _merge_pileup_streams(streams, *, n_sensors, apply_smearing,
         PE_reco = PE_true.copy()
         T_reco  = T_true.copy()
 
-    # Derive primary ranks on the merged dict (same function save_labl
-    # will call) so the t0/vertex/source_type arrays align with the
-    # per_track/interaction column it writes.
-    merged_for_derive = {
-        'meaningful_tracks': all_tracks,
-        'particles': all_particles,
-    }
-    ancestor, interaction = derive_track_ancestor_and_interaction(merged_for_derive)
-    if interaction.size > 0:
-        n_interactions = int(interaction.max()) + 1
-        # Map each primary rank to its source stream via the track_id
-        # ranges recorded during merge. Stream i owns IDs in
-        # (stream_max_tid[i-1], stream_max_tid[i]] (stream 0: [1, max_0]).
-        # Assemble sorted unique primaries in the same order derive uses.
-        unique_primaries_sorted = sorted(set(int(a) for a in ancestor))
-        upper_bounds = []
-        running = 0
-        for i in range(len(streams)):
-            running = max(running, stream_max_tid[i])
-            upper_bounds.append(running)
-
-        def _vertex_of(pid):
-            for i, ub in enumerate(upper_bounds):
-                if pid <= ub:
-                    return i
-            return len(streams) - 1  # fallback shouldn't happen in practice
-
-        rank_to_vertex = [_vertex_of(tid) for tid in unique_primaries_sorted]
-        t0_arr = np.array([stream_t0[v]       for v in rank_to_vertex], dtype=np.float32)
-        vx = np.stack([np.asarray(stream_vertex[v], dtype=np.float32)
-                       for v in rank_to_vertex], axis=0)
-        st_arr = np.array([stream_src_type[v] for v in rank_to_vertex], dtype=np.uint8)
-    else:
-        # Every stream was dark — fall back to the first vertex's values as a
-        # synthetic 1-row table so per_interaction/ is never empty.
-        t0_arr = np.array([stream_t0[0]], dtype=np.float32)
-        vx = np.asarray(stream_vertex[0], dtype=np.float32).reshape(1, 3)
-        st_arr = np.array([stream_src_type[0]], dtype=np.uint8)
-
     # Merge segment arrays
     if all_segs['time']:
         seg_merged = {k: np.concatenate(v) for k, v in all_segs.items()}
@@ -1917,10 +1897,10 @@ def _merge_pileup_streams(streams, *, n_sensors, apply_smearing,
         'track_info_dict': {},  # unused by writers; merged into meaningful_tracks
         'meaningful_tracks': all_tracks,
         'segments': seg_merged,
-        # Per-interaction arrays (length = number of primaries across all vertices)
-        't0':          t0_arr,
-        'vertex_xyz':  vx,
-        'source_type': st_arr,
+        # v5 per-interaction routing (one entry per vertex stream; the
+        # writer consumes these to populate the per_interaction/ subgroup).
+        'interaction_metadata':   interaction_metadata,
+        'primary_to_interaction': primary_to_interaction,
         'PE_per_particle': PE_per_particle,
         'T_per_particle':  T_per_particle,
         'PE_reco': PE_reco,
@@ -2699,7 +2679,7 @@ def print_event_kinematics(event_data, show_details=True):
 # ---------------------------------------------------------------------------
 
 _GZIP_OPTS = dict(compression='gzip', compression_opts=4)
-_V3_FORMAT_VERSION = 4
+_V3_FORMAT_VERSION = 5
 
 # per_interaction/source_type encoding
 SOURCE_TYPE_PARTICLES = 0
@@ -2717,6 +2697,39 @@ def _source_type_code(primary_source):
     if primary_source == 'genie':
         return SOURCE_TYPE_GENIE
     return SOURCE_TYPE_PARTICLES
+
+
+def build_interaction_metadata(particle_data, *, t0, vertex_xyz, source_type_code):
+    """Assemble the per-interaction metadata dict consumed by ``_write_per_interaction``.
+
+    One interaction corresponds to one G4 event in the non-pile-up path
+    and to one vertex stream in the pile-up path. The dict records the
+    physics vertex (t0 + vertex_xyz), the source flag, the incoming-
+    neutrino probe info from PhotonSim (GENIE-only — zero sentinels for
+    particle-gun), and the full list of status==1 primaries fired in
+    this interaction with their PDGs and initial kinetic energies.
+
+    Primaries are identified as ``parent_id == 0`` entries in
+    ``meaningful_tracks`` and are emitted sorted by track_id for a
+    deterministic layout.
+    """
+    mt = particle_data.get('meaningful_tracks') or {}
+    rows = [(int(tid), int(t['pdg']), float(t['initial_energy']))
+            for tid, t in mt.items() if int(t['parent_id']) == 0]
+    rows.sort(key=lambda r: r[0])
+    primary_tids = [r[0] for r in rows]
+    primary_pdgs = [r[1] for r in rows]
+    primary_energies = [r[2] for r in rows]
+    return {
+        't0': float(t0),
+        'vertex_xyz': np.asarray(vertex_xyz, dtype=np.float32).copy(),
+        'source_type': int(source_type_code),
+        'neutrino_pdg': int(particle_data.get('neutrino_pdg', 0)),
+        'neutrino_energy_MeV': float(particle_data.get('neutrino_energy_MeV', 0.0)),
+        'primary_track_ids': primary_tids,
+        'primary_pdgs': primary_pdgs,
+        'primary_energies': primary_energies,
+    }
 
 
 def sample_translation_vector(detector_bounds, rng):
@@ -2799,10 +2812,17 @@ def derive_track_ancestor_and_interaction(event_dict):
 
     * ``ancestor_track_id`` is the root of the parent chain — the primary
       this track descends from. A track that is itself a primary
-      (``parent_id == 0``) is its own ancestor.
-    * ``interaction_id`` is the 0-based rank of that ancestor among the
-      event's primaries (sorted by track_id), grouping all tracks of the
-      same neutrino/interaction vertex.
+      (``parent_id == 0``) is its own ancestor. This column is the
+      authoritative ancestry lookup and is **unchanged** across schema
+      versions.
+    * ``interaction_id`` is the **interaction index** the track's primary
+      belongs to, read from ``event_dict['primary_to_interaction']``:
+      always 0 for non-pile-up events (one interaction), 0..N-1 for
+      N-way pile-up events (one interaction per vertex stream). All
+      primaries that came from the same G4 event / vertex share the
+      same interaction_id, so a multi-primary GENIE interaction or a
+      multi-primary particle-gun shot collapses to a single
+      ``per_interaction`` row.
 
     Returns
     -------
@@ -2831,9 +2851,9 @@ def derive_track_ancestor_and_interaction(event_dict):
         [walk_to_root(int(t['track_id'])) for t in tracks.values()],
         dtype=np.int32)
 
-    unique_primaries = sorted(set(int(a) for a in ancestors))
-    rank_of = {a: i for i, a in enumerate(unique_primaries)}
-    interaction = np.array([rank_of[int(a)] for a in ancestors], dtype=np.int32)
+    primary_to_interaction = event_dict['primary_to_interaction']
+    interaction = np.array([int(primary_to_interaction[int(a)]) for a in ancestors],
+                           dtype=np.int32)
     return ancestors, interaction
 
 
@@ -3047,17 +3067,20 @@ def save_seg_event_v3(f, event_dict, seq_idx):
 
 
 def save_labl_event_v3(f, event_dict, seq_idx):
-    """Write a single event_NNN/ group to an already-open labl v3 file.
+    """Write a single event_NNN/ group to an already-open labl v5 file.
 
     Subgroups:
-    * ``per_event/`` — overall_containment (scalar).
-    * ``per_interaction/`` — one row per primary/interaction rank:
-      ``source_type``, ``t0``, ``vertex_{x,y,z}``, ``ancestor_track_id``,
-      ``n_particles``. Dark events (no tracks) get a 1-row synthetic entry.
+    * ``per_event/`` — overall_containment + t0 (= min per_interaction/t0).
+    * ``per_interaction/`` — one row per source interaction (one per
+      G4 event for non-pile-up; one per vertex for pile-up). Fields:
+      source_type, t0, vertex_{x,y,z}, n_primaries, n_particles,
+      neutrino_pdg, neutrino_energy_MeV, and CSR-encoded
+      primary_{track_ids,pdgs,energies}_{offsets,data}.
+      Dark events (no tracks) still get a 1-row table with empty CSR lists.
     * ``per_particle/`` — category, containment, genealogy CSR, and
-      ``interaction_idx`` FK into ``per_interaction/``.
+      ``interaction_idx`` FK into ``per_interaction/`` rows.
     * ``per_track/`` — track metadata + ``particle_idx`` and
-      ``interaction`` FK columns.
+      ``interaction`` FK (indexes per_interaction/ rows) columns.
     """
     grp = f.create_group(_event_group_name(seq_idx))
     grp.attrs['source_event_idx'] = int(event_dict['source_event_idx'])
@@ -3176,59 +3199,95 @@ def save_labl_event_v3(f, event_dict, seq_idx):
 
 
 def _write_per_interaction(pi_grp, event_dict, ancestor, interaction):
-    """Populate the per_interaction/ subgroup.
+    """Populate the per_interaction/ subgroup for v5.
 
-    ``event_dict`` may carry ``t0`` / ``vertex_xyz`` / ``source_type``
-    as scalars (single-interaction) or as per-interaction arrays
-    (pile-up). In the scalar case the values are broadcast to every row.
+    One row per interaction — a single G4 event in non-pile-up events
+    (so always one row) and one vertex stream in pile-up events (N rows
+    for N-way pile-up). Each interaction bundles every primary fired in
+    that G4 event plus the full ancestry cascade of each, collapsing a
+    multi-primary GENIE interaction or a multi-primary particle-gun
+    shot into a single row.
+
+    Fields:
+      * ``source_type``           (uint8)   — 0=particles, 1=genie.
+      * ``t0`` / ``vertex_x/y/z`` (float32) — interaction time + vertex.
+      * ``n_primaries``           (int32)   — count of ``parent_id==0``
+                                              tracks in this interaction.
+      * ``n_particles``           (int32)   — count of categorized particles
+                                              (primaries + descendants).
+      * ``neutrino_pdg``          (int16)   — probe PDG (0 for particle-gun).
+      * ``neutrino_energy_MeV``   (float32) — probe KE (0.0 for particle-gun).
+      * CSR variable-length per interaction (offsets(n_interactions+1,) + data):
+          - ``primary_track_ids_*``  (int32)
+          - ``primary_pdgs_*``       (int16)
+          - ``primary_energies_*``   (float32)
+
+    Input contract: ``event_dict['interaction_metadata']`` is a list of
+    per-interaction dicts produced by :func:`build_interaction_metadata`.
+    Per-interaction ``n_particles`` is derived by counting categorized
+    particles whose ``interaction_idx`` matches the row, via the
+    already-computed ``interaction`` column.
     """
-    # Distinct primary-ranks, in order
-    if interaction.size > 0:
-        n_interactions = int(interaction.max()) + 1
-        ancestor_per_rank = np.zeros(n_interactions, dtype=np.int32)
-        n_particles_per_rank = np.zeros(n_interactions, dtype=np.int32)
-        for anc, rank in zip(ancestor, interaction):
-            ancestor_per_rank[int(rank)] = int(anc)
-        # Count particles per interaction
-        part_inter = derive_particle_interaction_idx(event_dict, interaction)
-        for pi in part_inter:
-            if 0 <= int(pi) < n_interactions:
-                n_particles_per_rank[int(pi)] += 1
-    else:
-        # Dark event — synthesize 1 row so per_interaction/ always exists.
-        n_interactions = 1
-        ancestor_per_rank = np.array([-1], dtype=np.int32)
-        n_particles_per_rank = np.array([0], dtype=np.int32)
+    interactions = event_dict['interaction_metadata']
+    n_interactions = len(interactions)
+    assert n_interactions > 0, "interaction_metadata must contain at least one entry"
 
-    # Broadcast event_dict['t0'|'vertex_xyz'|'source_type'] to rows.
-    t0_raw = event_dict.get('t0', 0.0)
-    vx_raw = event_dict.get('vertex_xyz', np.zeros(3, dtype=np.float32))
-    st_raw = event_dict.get('source_type', SOURCE_TYPE_PARTICLES)
+    # Per-interaction n_particles: count categorized particles assigned to each row.
+    n_particles_per_interaction = np.zeros(n_interactions, dtype=np.int32)
+    part_inter = derive_particle_interaction_idx(event_dict, interaction)
+    for pi in part_inter:
+        pi = int(pi)
+        if 0 <= pi < n_interactions:
+            n_particles_per_interaction[pi] += 1
 
-    t0_arr = np.asarray(t0_raw, dtype=np.float32).reshape(-1)
-    if t0_arr.size == 1:
-        t0_arr = np.full(n_interactions, float(t0_arr[0]), dtype=np.float32)
-    assert t0_arr.size == n_interactions, \
-        f"t0 length {t0_arr.size} != n_interactions {n_interactions}"
+    # Scalars per interaction
+    source_type_arr = np.array(
+        [int(s['source_type']) for s in interactions], dtype=np.uint8)
+    t0_arr = np.array([float(s['t0']) for s in interactions], dtype=np.float32)
+    vx_arr = np.stack(
+        [np.asarray(s['vertex_xyz'], dtype=np.float32) for s in interactions], axis=0)
+    assert vx_arr.shape == (n_interactions, 3)
+    neutrino_pdg_arr = np.array(
+        [int(s['neutrino_pdg']) for s in interactions], dtype=np.int16)
+    neutrino_ke_arr = np.array(
+        [float(s['neutrino_energy_MeV']) for s in interactions], dtype=np.float32)
+    n_primaries_per_interaction = np.array(
+        [len(s['primary_track_ids']) for s in interactions], dtype=np.int32)
 
-    vx_arr = np.asarray(vx_raw, dtype=np.float32)
-    if vx_arr.ndim == 1:
-        vx_arr = np.broadcast_to(vx_arr, (n_interactions, 3)).copy()
-    assert vx_arr.shape == (n_interactions, 3), \
-        f"vertex_xyz shape {vx_arr.shape} != ({n_interactions}, 3)"
+    # CSR: per-interaction primary lists.
+    tid_offsets = np.zeros(n_interactions + 1, dtype=np.uint32)
+    pdg_offsets = np.zeros(n_interactions + 1, dtype=np.uint32)
+    e_offsets   = np.zeros(n_interactions + 1, dtype=np.uint32)
+    tid_chunks, pdg_chunks, e_chunks = [], [], []
+    for i, s in enumerate(interactions):
+        tid_chunks.append(np.asarray(s['primary_track_ids'], dtype=np.int32))
+        pdg_chunks.append(np.asarray(s['primary_pdgs'],      dtype=np.int16))
+        e_chunks.append(  np.asarray(s['primary_energies'],  dtype=np.float32))
+        tid_offsets[i + 1] = tid_offsets[i] + len(tid_chunks[-1])
+        pdg_offsets[i + 1] = pdg_offsets[i] + len(pdg_chunks[-1])
+        e_offsets[i + 1]   = e_offsets[i]   + len(e_chunks[-1])
+    tid_data = (np.concatenate(tid_chunks) if tid_chunks
+                else np.array([], dtype=np.int32))
+    pdg_data = (np.concatenate(pdg_chunks) if pdg_chunks
+                else np.array([], dtype=np.int16))
+    e_data = (np.concatenate(e_chunks) if e_chunks
+              else np.array([], dtype=np.float32))
 
-    st_arr = np.asarray(st_raw, dtype=np.uint8).reshape(-1)
-    if st_arr.size == 1:
-        st_arr = np.full(n_interactions, int(st_arr[0]), dtype=np.uint8)
-    assert st_arr.size == n_interactions
-
-    pi_grp.create_dataset('source_type',       data=st_arr, **_GZIP_OPTS)
-    pi_grp.create_dataset('t0',                data=t0_arr, **_GZIP_OPTS)
-    pi_grp.create_dataset('vertex_x',          data=vx_arr[:, 0].copy(), **_GZIP_OPTS)
-    pi_grp.create_dataset('vertex_y',          data=vx_arr[:, 1].copy(), **_GZIP_OPTS)
-    pi_grp.create_dataset('vertex_z',          data=vx_arr[:, 2].copy(), **_GZIP_OPTS)
-    pi_grp.create_dataset('ancestor_track_id', data=ancestor_per_rank, **_GZIP_OPTS)
-    pi_grp.create_dataset('n_particles',       data=n_particles_per_rank, **_GZIP_OPTS)
+    pi_grp.create_dataset('source_type',         data=source_type_arr,    **_GZIP_OPTS)
+    pi_grp.create_dataset('t0',                  data=t0_arr,             **_GZIP_OPTS)
+    pi_grp.create_dataset('vertex_x',            data=vx_arr[:, 0].copy(),**_GZIP_OPTS)
+    pi_grp.create_dataset('vertex_y',            data=vx_arr[:, 1].copy(),**_GZIP_OPTS)
+    pi_grp.create_dataset('vertex_z',            data=vx_arr[:, 2].copy(),**_GZIP_OPTS)
+    pi_grp.create_dataset('n_primaries',         data=n_primaries_per_interaction,**_GZIP_OPTS)
+    pi_grp.create_dataset('n_particles',         data=n_particles_per_interaction,**_GZIP_OPTS)
+    pi_grp.create_dataset('neutrino_pdg',        data=neutrino_pdg_arr,   **_GZIP_OPTS)
+    pi_grp.create_dataset('neutrino_energy_MeV', data=neutrino_ke_arr,    **_GZIP_OPTS)
+    pi_grp.create_dataset('primary_track_ids_offsets', data=tid_offsets,  **_GZIP_OPTS)
+    pi_grp.create_dataset('primary_track_ids_data',    data=tid_data,     **_GZIP_OPTS)
+    pi_grp.create_dataset('primary_pdgs_offsets',      data=pdg_offsets,  **_GZIP_OPTS)
+    pi_grp.create_dataset('primary_pdgs_data',         data=pdg_data,     **_GZIP_OPTS)
+    pi_grp.create_dataset('primary_energies_offsets',  data=e_offsets,    **_GZIP_OPTS)
+    pi_grp.create_dataset('primary_energies_data',     data=e_data,       **_GZIP_OPTS)
 
 
 def derive_particle_interaction_idx(event_dict, track_interaction=None):
@@ -3314,11 +3373,13 @@ def read_seg_event_v3(filename, event_idx):
 
 
 def read_labl_event_v3(filename, event_idx):
-    """Read event ``event_idx`` from a labl v3 file.
+    """Read event ``event_idx`` from a labl v5 file.
 
     The returned dict contains top-level attrs plus four subdicts:
-    ``per_event`` (overall_containment), ``per_interaction``
-    (source_type, t0, vertex_{x,y,z}, ancestor_track_id, n_particles),
+    ``per_event`` (overall_containment, t0 = min per_interaction/t0),
+    ``per_interaction`` (source_type, t0, vertex_{x,y,z}, n_primaries,
+    n_particles, neutrino_pdg, neutrino_energy_MeV, and CSR-encoded
+    primary_{track_ids,pdgs,energies}_{offsets,data}),
     ``per_particle`` (category, containment, genealogy CSR,
     interaction_idx), and ``per_track`` (track_id, parent_id, pdg,
     initial_energy, n_cherenkov, particle_idx, ancestor, interaction).

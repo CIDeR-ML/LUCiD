@@ -587,7 +587,12 @@ def _main_pileup(args: argparse.Namespace, config: dict) -> int:
         vertex_primary_sources=vertex_sources,
         sensor_positions=sensor_positions,
         output_dir=str(output_dir),
-        n_events=None,   # auto from min per-vertex entries
+        # Cap at the user-requested n_events. GENIE emits variable
+        # primaries per interaction, so each vertex's PhotonSim ROOT
+        # typically contains more events than requested; without this
+        # cap the merger would use min(per_file_counts) and the job
+        # would produce far more events than --n-events / --test asked for.
+        n_events=n_events,
         batch_size=n_events,
         master_seed=args.master_seed,
         job_id=args.job_id,
