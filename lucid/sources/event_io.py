@@ -1122,8 +1122,11 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
                     'apply_rotation': False,
                     'rotation_axis': jnp.array([1.0, 0.0, 0.0]),
                     'rotation_angle': 0.0,
-                    'apply_translation': apply_translation,
-                    'translation_vector': translation_vector
+                    # Photons were already translated in NumPy above; do NOT
+                    # ask the JIT simulator to translate again or vertices
+                    # near the detector wall get pushed outside it.
+                    'apply_translation': False,
+                    'translation_vector': jnp.zeros(3),
                 }
 
                 # detector_params are baked into event_simulator via default_detector_params=True
@@ -1420,8 +1423,10 @@ def _simulate_vertex_stream(
             'apply_rotation': False,
             'rotation_axis': jnp.array([1.0, 0.0, 0.0]),
             'rotation_angle': 0.0,
-            'apply_translation': apply_translation,
-            'translation_vector': translation_vector,
+            # Photons were already translated in NumPy by the caller; do NOT
+            # translate a second time inside the JIT simulator.
+            'apply_translation': False,
+            'translation_vector': jnp.zeros(3),
         }
         return event_simulator(track_params, key, photonsim_data)
 
