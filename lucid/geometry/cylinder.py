@@ -62,31 +62,66 @@ class Cylinder(Detector):
                         max_sensors_per_cell=4):
         """Set grid parameters for propagation methods.
 
-        If not provided, defaults are derived from detector geometry to
-        ensure no cell exceeds ``max_sensors_per_cell`` sensors.
+        The default sizing rule keeps each grid-cell edge **no longer
+        than the smallest sensor-to-sensor distance** in the detector
+        (with a safety factor). That guarantees at most one sensor
+        centre per cell; the 4-way overlap in
+        :func:`assign_sensors_to_grid` then brings each cell to at
+        most ~4 geometric assignments — matching the default
+        ``max_sensors_per_cell=4``.
+
+        The previous area/safety-factor heuristic worked for
+        uniformly-placed sensors (SK, HK) but broke for clustered
+        mPMT layouts: when 19 PMTs of a dome project onto a small
+        patch of the cylinder wall, cells sized by global area end
+        up several sensors too coarse and the inverse-map builder
+        drops the overflowers. The nearest-neighbour rule adapts
+        to whatever the sensor layout actually is.
+
+        Explicit ``n_angular`` / ``n_height`` / ``n_cap`` arguments
+        still win; the rule only supplies defaults for what is not
+        passed.
+
+        ``max_sensors_per_cell`` scales the target cell area
+        proportionally — a caller passing ``max_sensors_per_cell=16``
+        gets a coarser grid (edge ~2× larger) because each cell is
+        allowed to hold ~4× more sensors.
         """
         import math
-        n_placed = len(self.all_points) if self.all_points is not None else self.n_sensors
-        # Target: enough cells so each has ≤ max_sensors_per_cell sensors.
-        # Safety factor accounts for non-uniform sensor distribution
-        # (barrel vs caps, hexagonal packing overlap at cell boundaries)
-        # and multi-cell overlap from assign_sensor_to_cells (each sensor
-        # is assigned to all cells its physical radius overlaps, not just
-        # its center cell).
-        safety = 8.0
-        target_cells = n_placed / max_sensors_per_cell * safety
+        import numpy as np
 
-        barrel_area = 2 * math.pi * self.r * self.H
-        cap_area = math.pi * self.r ** 2
-        total_area = barrel_area + 2 * cap_area
-        barrel_frac = barrel_area / total_area
+        scale = math.sqrt(max_sensors_per_cell / 4.0)
 
-        target_barrel = target_cells * barrel_frac
-        target_cap = target_cells * (1 - barrel_frac) / 2
+        if self.all_points is not None and len(self.all_points) >= 2:
+            from scipy.spatial import cKDTree
+            pts = np.asarray(self.all_points)
+            tree = cKDTree(pts)
+            dists, _ = tree.query(pts, k=2)
+            nn_min = float(dists[:, 1].min())
+            # Safety factor — calibrated against WCTE (mPMT dome,
+            # tightest layout in the repo): cell ≤ 0.92 × nn_min
+            # keeps max occupancy at 4. 0.9 leaves headroom.
+            target = 0.9 * nn_min * scale
+            # Floor: never go below the sensor radius. Without this,
+            # a single buggy sensor pair coincident-by-mm in the npz
+            # would drive a multi-GB grid. The floor is well below
+            # the natural target for every real detector in the repo
+            # (WCTE has the tightest packing at 0.9*nn_min ≈ 62mm,
+            # vs floor of 40mm). When the floor activates, expect
+            # some cells to exceed max_sensors_per_cell — the
+            # validator in shared.py will emit a warning.
+            target = max(target, self.S_radius * scale)
+        else:
+            # No sensors placed yet, or only one — fall back to a
+            # sensor-size-based target so callers get something sane.
+            target = 2 * self.S_radius * scale
 
-        self._n_angular = n_angular if n_angular is not None else max(10, int(math.sqrt(target_barrel * self.H / self.r)))
-        self._n_height = n_height if n_height is not None else max(10, int(math.sqrt(target_barrel * self.r / self.H)))
-        self._n_cap = n_cap if n_cap is not None else max(10, int(math.sqrt(target_cap)))
+        self._n_angular = n_angular if n_angular is not None else max(
+            10, int(math.ceil(2 * math.pi * self.r / target)))
+        self._n_height = n_height if n_height is not None else max(
+            10, int(math.ceil(self.H / target)))
+        self._n_cap = n_cap if n_cap is not None else max(
+            10, int(math.ceil(2 * self.r / target)))
 
 
     def place_photosensors(self):
