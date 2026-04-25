@@ -907,9 +907,7 @@ function buildSidebar() {
   };
   addRow('src idx', String(evtBundle.srcIdx ?? curEvent));
   addRow('t0 (ns)', (evtBundle.t0 || 0).toFixed(2));
-  if (Number.isFinite(evtBundle.edepContainment)) {
-    addRow('edep containment', evtBundle.edepContainment.toFixed(3));
-  }
+  addRow('contained', evtBundle.contained ? 'true' : 'false');
   addRow('n hits',      String(evtBundle.sensor.nHits));
   addRow('n particles', String(evtBundle.labl.n_particles));
   addRow('n tracks',    String(evtBundle.labl.n_tracks));
@@ -930,8 +928,8 @@ function buildSidebar() {
       if (pi.source_type[i] === 1) {
         line += ` nu=${pi.neutrino_pdg[i]}@${pi.neutrino_energy_MeV[i].toFixed(0)} MeV`;
       }
-      if (pi.edep_containment && Number.isFinite(pi.edep_containment[i])) {
-        line += ` edep_cont=${pi.edep_containment[i].toFixed(3)}`;
+      if (pi.contained) {
+        line += ` contained=${pi.contained[i] ? 'true' : 'false'}`;
       }
       addRow(`int ${i}`, line);
     }
@@ -1040,7 +1038,7 @@ function renderSelectionInfo() {
 function renderParticleInfo(info, p) {
   const labl = evtBundle.labl;
   const cat = labl.per_particle.category;
-  const cont = labl.per_particle.edep_containment;
+  const cont = labl.per_particle.contained;
   const per_track = labl.per_track;
   const add = (k, v) => {
     const r = document.createElement('div');
@@ -1054,7 +1052,7 @@ function renderParticleInfo(info, p) {
                     <span>${particleLabel(p)}</span>`;
   info.appendChild(head);
   if (cat) add('category', CAT_NAMES[cat[p]] || String(cat[p]));
-  if (cont) add('edep containment', Number.isFinite(cont[p]) ? cont[p].toFixed(3) : '—');
+  if (cont) add('contained', cont[p] ? 'true' : 'false');
   // Tracks belonging to this particle.
   let nTracks = 0, nCher = 0, initE = 0;
   const pdgSet = new Set();

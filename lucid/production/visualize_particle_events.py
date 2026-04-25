@@ -161,7 +161,7 @@ n_sensors = detector.n_sensors
 n_particles = int(labl_data['n_particles'])
 n_tracks = int(labl_data['n_tracks'])
 t0 = float(labl_data['per_interaction']['t0'][0])
-overall_edep_containment = float(labl_data['per_event']['edep_containment'])
+overall_contained = bool(labl_data['per_event']['contained'])
 
 # Reconstruct dense PE_per_particle / T_per_particle from inst sparse rows
 PE_per_particle = np.zeros((n_particles, n_sensors), dtype=np.float32)
@@ -193,7 +193,7 @@ particle_categorized_genealogy = _decompose_csr(
 particle_track_genealogy = _decompose_csr(
     pp['ext_genealogy_data'], pp['ext_genealogy_offsets'], n_particles)
 particle_category = np.asarray(pp['category'], dtype=np.int32)
-edep_containment_per_particle = np.asarray(pp['edep_containment'], dtype=np.float32)
+contained_per_particle = np.asarray(pp['contained'], dtype=bool)
 
 # Build the dict that the rendering code below indexes into
 lucid_data = {
@@ -203,10 +203,10 @@ lucid_data = {
     'PE': PE,
     't0': t0,
     'Particle_Category': particle_category,
-    'edep_containment_per_particle': edep_containment_per_particle,
+    'contained_per_particle': contained_per_particle,
     'Particle_TrackGenealogy': particle_track_genealogy,
     'Particle_CategorizedGenealogy': particle_categorized_genealogy,
-    'overall_edep_containment': overall_edep_containment,
+    'overall_contained': overall_contained,
 }
 
 # Build track_id_to_info using labl/per_track + seg first-segment per track
@@ -264,7 +264,7 @@ for particle_idx in range(n_particles):
     category_code = lucid_data['Particle_Category'][particle_idx]
     category_name = get_category_name(category_code)
     total_charge = np.sum(PE_per_particle[particle_idx, :])
-    containment = lucid_data['edep_containment_per_particle'][particle_idx]
+    contained = bool(lucid_data['contained_per_particle'][particle_idx])
 
     # Get particle type from PDG using extended genealogy (last track ID)
     ext_genealogy = lucid_data.get('Particle_TrackGenealogy', [None] * n_particles)[particle_idx]
@@ -293,7 +293,7 @@ for particle_idx in range(n_particles):
         'position': particle_position,
         'direction': particle_direction,
         'total_charge': total_charge,
-        'containment': containment,
+        'contained': contained,
         'color': colors_palette[particle_idx % len(colors_palette)]
     })
 
@@ -310,10 +310,7 @@ for particle_idx in range(n_particles):
     print(f"  Category: {category_name}")
     print(f"  Particle type: {particle_type} ({particle_energy:.1f} MeV)")
     print(f"  Total charge deposited: {total_charge:.1f} PE")
-    if np.isfinite(containment):
-        print(f"  Edep containment: {containment*100:.1f}%")
-    else:
-        print(f"  Edep containment: n/a (no reference energy)")
+    print(f"  Contained: {contained}")
 
 print()
 
@@ -346,7 +343,7 @@ for particle_idx in range(n_particles):
     else:
         avg_time = 0.0
 
-    containment = lucid_data['edep_containment_per_particle'][particle_idx]
+    contained = bool(lucid_data['contained_per_particle'][particle_idx])
 
     # Get particle type and position/direction from particle_info
     pinfo = particle_info[particle_idx]
@@ -361,7 +358,7 @@ for particle_idx in range(n_particles):
         'genealogy': genealogy_list,
         'charge': total_charge,
         'time': avg_time,
-        'containment': containment
+        'contained': contained,
     }
 
 # Alias for rest of visualization code
@@ -432,13 +429,11 @@ def format_particle_tree(particle_idx, particle_tree, children, depth=0):
     indent = "&nbsp;&nbsp;" * (depth + 1)
     arrow = "└─ " if depth > 0 else ""
 
-    c = particle['containment']
-    containment_str = (f", Edep containment: {c*100:.1f}%"
-                       if np.isfinite(c) else ", Edep containment: n/a")
+    contained_str = f", Contained: {bool(particle['contained'])}"
 
     lines = [
         f"{indent}{arrow}{category_colored} [Particle {particle_idx}]",
-        f"{indent}&nbsp;&nbsp;&nbsp;&nbsp;Charge: {particle['charge']:.1f} PE, Avg Time: {particle['time']:.1f} ns{containment_str}"
+        f"{indent}&nbsp;&nbsp;&nbsp;&nbsp;Charge: {particle['charge']:.1f} PE, Avg Time: {particle['time']:.1f} ns{contained_str}"
     ]
 
     # Add children recursively
@@ -457,15 +452,10 @@ for root_idx in sorted(roots):
     genealogy_text_lines.append("<br>")
     genealogy_text_lines.extend(format_particle_tree(root_idx, particle_tree, children, depth=0))
 
-# Add overall edep containment at the end
+# Add overall containment flag at the end
 genealogy_text_lines.append("<br>")
-overall_containment = lucid_data['overall_edep_containment']
-if np.isfinite(overall_containment):
-    genealogy_text_lines.append(
-        f"<br><b>Overall Edep Containment:</b> {overall_containment*100:.1f}% of primary KE deposited inside detector")
-else:
-    genealogy_text_lines.append(
-        "<br><b>Overall Edep Containment:</b> n/a (no reference energy)")
+genealogy_text_lines.append(
+    f"<br><b>Event Contained:</b> {bool(lucid_data['overall_contained'])}")
 
 event_genealogy_text = "<br>".join(genealogy_text_lines) + "<br>&nbsp;<br>&nbsp;"
 

@@ -130,10 +130,10 @@ def load_event_v3(dataset_root, event_idx, file_index=0, n_sensors=None):
         # t0 is now per-interaction. For single-interaction events every
         # row carries the same value; this tool picks the first.
         't0': float(labl['per_interaction']['t0'][0]),
-        'edep_containment': float(labl['per_event']['edep_containment']),
+        'contained': bool(labl['per_event']['contained']),
         'PDG': _per_particle_pdg(labl),
         'Particle_Category': np.asarray(labl['per_particle']['category']),
-        'edep_containment_per_particle': np.asarray(labl['per_particle']['edep_containment']),
+        'contained_per_particle': np.asarray(labl['per_particle']['contained'], dtype=bool),
         'labl': labl,
         'seg': seg,
     }
@@ -162,10 +162,9 @@ def print_event_info(event):
           f"n_particles={event['n_particles']}, t0={event['t0']:.2f} ns, "
           f"total PE={event['Q_tot'].sum():.1f}")
     for i in range(event['n_particles']):
-        cont = event['edep_containment_per_particle'][i]
-        cont_str = f"{cont*100:.1f}%" if np.isfinite(cont) else "n/a"
+        contained = bool(event['contained_per_particle'][i])
         print(f"  particle {i}: category={cat_names[i]}, pdg={pdg_names[i]}, "
-              f"edep_containment={cont_str}")
+              f"contained={contained}")
 
 
 def read_multi_event_file(dataset_root, file_index=0, verbose=False, n_sensors=None):

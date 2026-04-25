@@ -62,6 +62,25 @@ function readDsInt16(grp, name) {
   const d = grp.get(name); if (!d) return null;
   return new Int16Array(d.value);
 }
+// HDF5 bool → Uint8Array (0/1). Callers use !!arr[i] to consume as JS bool.
+function readDsBool(grp, name) {
+  const d = grp.get(name); if (!d) return null;
+  const v = d.value;
+  if (v instanceof Uint8Array) return v;
+  // h5wasm may surface bool as a normal Array of booleans / numbers.
+  const out = new Uint8Array(v.length);
+  for (let i = 0; i < v.length; i++) out[i] = v[i] ? 1 : 0;
+  return out;
+}
+function readScalarBool(grp, name) {
+  const ds = grp.get(name);
+  if (!ds) return false;
+  const v = ds.value;
+  if (typeof v === 'boolean') return v;
+  if (typeof v === 'number') return !!v;
+  if (v && v.length !== undefined) return !!v[0];
+  return !!v;
+}
 
 // ── Mount HDF5 files in memory ─────────────────────────────────────────
 // Production files are small (≤ few MB each). Fetching them whole into a
@@ -148,7 +167,7 @@ function decodeEvent(idx) {
   const perTrkGrp = lEvt.get('per_track');
 
   const t0 = perEvtGrp ? readAttrOrScalar(perEvtGrp, 't0') : 0;
-  const edepContainment = perEvtGrp ? readAttrOrScalar(perEvtGrp, 'edep_containment') : NaN;
+  const contained = perEvtGrp ? readScalarBool(perEvtGrp, 'contained') : false;
 
   // v5 per_interaction: one row per source interaction (one G4 event
   // worth of primaries + their descendants). CSR primary_{track_ids,
@@ -165,7 +184,7 @@ function decodeEvent(idx) {
       n_particles:             readDsInt32(perIntGrp,   'n_particles'),
       neutrino_pdg:            readDsInt16(perIntGrp,   'neutrino_pdg'),
       neutrino_energy_MeV:     readDsFloat32(perIntGrp, 'neutrino_energy_MeV'),
-      edep_containment:        readDsFloat32(perIntGrp, 'edep_containment'),
+      contained:               readDsBool(perIntGrp,    'contained'),
       primary_track_ids_offsets: readDsUint32(perIntGrp, 'primary_track_ids_offsets'),
       primary_track_ids_data:    readDsInt32(perIntGrp,  'primary_track_ids_data'),
       primary_pdgs_offsets:      readDsUint32(perIntGrp, 'primary_pdgs_offsets'),
@@ -175,10 +194,10 @@ function decodeEvent(idx) {
     };
   }
 
-  let category = null, edepContainmentPerParticle = null, genealogy = null, genealogyOffsets = null;
+  let category = null, containedPerParticle = null, genealogy = null, genealogyOffsets = null;
   if (perPartGrp) {
     category = readDsUint8(perPartGrp, 'category');
-    edepContainmentPerParticle = readDsFloat32(perPartGrp, 'edep_containment');
+    containedPerParticle = readDsBool(perPartGrp, 'contained');
     genealogy = readDsInt32(perPartGrp, 'genealogy_data');
     genealogyOffsets = readDsUint32(perPartGrp, 'genealogy_offsets');
   }
@@ -197,11 +216,12 @@ function decodeEvent(idx) {
   const n_particles = nParticles || (category ? category.length : 0);
   const n_tracks = (trackPdg ? trackPdg.length : 0) || nTracksSeg;
 
+  const segContained = readDsBool(gEvt, 'contained');
   return {
     warning,
     srcIdx: srcIdxS,
     t0,
-    edepContainment,
+    contained,
     sensor: { sensor_idx: sensorSIdx, PE: sensorPE, T: sensorT,
               nHits: sensorSIdx ? sensorSIdx.length : 0 },
     inst: { particle_idx: instParticle, sensor_idx: instSIdx, PE: instPE, T: instT,
@@ -210,10 +230,11 @@ function decodeEvent(idx) {
            start_x: segStartX, start_y: segStartY, start_z: segStartZ,
            end_x: segEndX, end_y: segEndY, end_z: segEndZ,
            time: segTime, edep: segEdep, beta_start: segBeta, n_cherenkov: segNCh,
+           contained: segContained,
            n: nSegments },
     labl: { n_particles, n_tracks,
             per_interaction: perInteraction,
-            per_particle: { category, edep_containment: edepContainmentPerParticle, genealogy, genealogy_offsets: genealogyOffsets },
+            per_particle: { category, contained: containedPerParticle, genealogy, genealogy_offsets: genealogyOffsets },
             per_track: { pdg: trackPdg, particle_idx: trackParticleIdx,
                          initial_energy: trackInitE, n_cherenkov: trackNCh,
                          ancestor: trackAncestor, interaction: trackInteraction } },
@@ -221,7 +242,7 @@ function decodeEvent(idx) {
 }
 
 function readAttrOrScalar(grp, name) {
-  // t0 / edep_containment are scalar datasets per schema, not attrs.
+  // t0 / contained are scalar datasets per schema, not attrs.
   const ds = grp.get(name);
   if (ds) {
     const v = ds.value;

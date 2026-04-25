@@ -177,13 +177,17 @@ def gen_event(rng, n_sensors, sensor_positions, n_particles=6):
         ('end_x', 'f4'), ('end_y', 'f4'), ('end_z', 'f4'),
         ('dir_x', 'f4'), ('dir_y', 'f4'), ('dir_z', 'f4'),
         ('time', 'f4'), ('edep', 'f4'), ('beta', 'f4'), ('ncher', 'i4')])
+    # Synthetic per-segment contained flag (random; this stub doesn't
+    # know the detector geometry). Real datasets compute it against
+    # detector_bounds in `_compute_contained`.
+    seg_contained = rng.integers(0, 2, size=len(seg_rows)).astype(bool)
     track_rows = np.array(track_rows, dtype=[
         ('track_id', 'i4'), ('parent_id', 'i4'), ('pdg', 'i2'),
         ('init_e', 'f4'), ('n_cher', 'i4'), ('particle_idx', 'i4')])
 
     # labl: categories and genealogy stubs.
     categories = rng.integers(0, 4, size=n_particles, endpoint=False).astype(np.uint8)
-    containment = rng.uniform(0.7, 1.0, size=n_particles).astype(np.float32)
+    contained_per_particle = rng.integers(0, 2, size=n_particles).astype(bool)
 
     # Genealogy stub: empty chains (vlen not critical for viewer MVP).
     gen_data = np.array([], dtype=np.int32)
@@ -213,8 +217,8 @@ def gen_event(rng, n_sensors, sensor_positions, n_particles=6):
         rng.uniform(200.0, 2000.0, size=n_interactions).astype(np.float32),
         np.float32(0.0),
     ).astype(np.float32)
-    per_interaction_edep_containment = rng.uniform(
-        0.7, 1.0, size=n_interactions).astype(np.float32)
+    per_interaction_contained = rng.integers(
+        0, 2, size=n_interactions).astype(bool)
 
     # Per-interaction primary lists — pick the first track of each particle
     # in that interaction. In this stub each particle has one track cluster,
@@ -270,14 +274,15 @@ def gen_event(rng, n_sensors, sensor_positions, n_particles=6):
         'inst':   {'particle_idx': inst_arr['p'].astype(np.int32),
                    'sensor_idx': inst_arr['s'],
                    'PE': inst_arr['pe'], 'T': inst_arr['t']},
-        'seg':    {k: seg_rows[k] for k in seg_rows.dtype.names},
+        'seg':    {**{k: seg_rows[k] for k in seg_rows.dtype.names},
+                   'contained': seg_contained},
         'labl':   {
             # per_event/t0 = min(per_interaction/t0) — the earliest
             # interaction time in the event, used by downstream tools
             # (viewer) as a single-scalar reference without walking
             # per_interaction.
             'per_event':    {'t0': np.float32(float(per_interaction_t0.min())),
-                             'edep_containment': np.float32(rng.uniform(0.8, 1.0))},
+                             'contained': bool(per_interaction_contained.all() and n_interactions > 0)},
             'per_interaction': {
                 'source_type':                 source_type_arr,
                 't0':                          per_interaction_t0,
@@ -288,7 +293,7 @@ def gen_event(rng, n_sensors, sensor_positions, n_particles=6):
                 'n_particles':                 n_particles_per_interaction,
                 'neutrino_pdg':                neutrino_pdg,
                 'neutrino_energy_MeV':         neutrino_energy_MeV,
-                'edep_containment':            per_interaction_edep_containment,
+                'contained':                   per_interaction_contained,
                 'primary_track_ids_offsets':   ptid_off,
                 'primary_track_ids_data':      ptid_data,
                 'primary_pdgs_offsets':        ppdg_off,
@@ -296,7 +301,7 @@ def gen_event(rng, n_sensors, sensor_positions, n_particles=6):
                 'primary_energies_offsets':    pen_off,
                 'primary_energies_data':       pen_data,
             },
-            'per_particle': {'category': categories, 'edep_containment': containment,
+            'per_particle': {'category': categories, 'contained': contained_per_particle,
                              'genealogy_data': gen_data, 'genealogy_offsets': gen_off,
                              'ext_genealogy_data': gen_data.copy(),
                              'ext_genealogy_offsets': gen_off.copy(),
@@ -434,8 +439,8 @@ def write_dataset(out_dir, geom, n_events, n_sensors, seed):
         g.attrs['n_tracks'] = ev['labl']['n_tracks']
         pe_g = g.create_group('per_event')
         pe_g.create_dataset('t0', data=ev['labl']['per_event']['t0'])
-        pe_g.create_dataset('edep_containment',
-                            data=ev['labl']['per_event']['edep_containment'])
+        pe_g.create_dataset('contained',
+                            data=np.bool_(ev['labl']['per_event']['contained']))
         pi_g = g.create_group('per_interaction')
         for name, arr in ev['labl']['per_interaction'].items():
             pi_g.create_dataset(name, data=arr)

@@ -94,14 +94,14 @@ Per [`docs/LUCID_DATASET.md`](../docs/LUCID_DATASET.md). The viewer reads:
 **seg.h5**
 - `config/attrs`: `detector_shape`, `detector_radius`, `detector_half_height`, plus provenance.
 - `event_NNN/attrs`: `source_event_idx`, `n_tracks`, `n_segments`.
-- `event_NNN/{track_idx, start_{x,y,z}, end_{x,y,z}, dir_{x,y,z} (f16), time, edep, beta_start, n_cherenkov}`.
+- `event_NNN/{track_idx, start_{x,y,z}, end_{x,y,z}, dir_{x,y,z} (f16), time, edep, beta_start, n_cherenkov, contained (bool)}`.
 
 **labl.h5**
 - `config/attrs/label_names` e.g. `['category']`.
 - `event_NNN/attrs`: `source_event_idx`, `n_particles`, `n_tracks`.
-- `event_NNN/per_event/{t0 (f32 scalar), edep_containment (f32 scalar)}`.
-- `event_NNN/per_interaction/{..., edep_containment (f32)}` — NaN where the interaction's summed primary KE is zero.
-- `event_NNN/per_particle/{category (u8), edep_containment (f32), genealogy_data (i32), genealogy_offsets (u32), ext_genealogy_data, ext_genealogy_offsets}`.
+- `event_NNN/per_event/{t0 (f32 scalar), contained (bool scalar)}`.
+- `event_NNN/per_interaction/{..., contained (bool)}` — True iff every meaningful segment of every particle in this interaction is contained; False for empty interactions.
+- `event_NNN/per_particle/{category (u8), contained (bool), genealogy_data (i32), genealogy_offsets (u32), ext_genealogy_data, ext_genealogy_offsets}`.
 - `event_NNN/per_track/{track_id (i32), parent_id (i32), pdg (i16), initial_energy (f32), n_cherenkov (i32), particle_idx (i32), ancestor (i32), interaction (i32)}`.
 
 Cross-file integrity: `source_event_idx` is compared across all four files on each event load; a mismatch is logged to the browser console (non-fatal).

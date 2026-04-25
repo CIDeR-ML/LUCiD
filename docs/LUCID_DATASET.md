@@ -136,7 +136,8 @@ seg.h5
     ├── time                       (n_segments,) float32   — ns, detector frame (t0-shifted)
     ├── edep                       (n_segments,) float32   — MeV
     ├── beta_start                 (n_segments,) float32   — particle β at segment start
-    └── n_cherenkov                (n_segments,) int32     — Cherenkov photons emitted in segment
+    ├── n_cherenkov                (n_segments,) int32     — Cherenkov photons emitted in segment
+    └── contained                  (n_segments,) bool      — both endpoints inside detector_bounds
 ```
 
 Notes:
@@ -164,16 +165,16 @@ labl.h5
     │ attrs: source_event_idx, n_particles, n_tracks
     ├── per_event/
     │   ├── t0                                   ()   float32 — true emission time
-    │   └── edep_containment                     ()   float32 — Σ(edep inside)/Σ(primary KE); NaN if denom=0
+    │   └── contained                            ()   bool    — True iff every meaningful segment is fully inside detector; False for empty events
     ├── per_interaction/                         (1 row for non-pile-up; N rows for N-way pile-up)
     │   ├── source_type, t0, vertex_{x,y,z}       — see save_labl_event_v3 docstring
     │   ├── n_primaries, n_particles              — ints per interaction
     │   ├── neutrino_pdg, neutrino_energy_MeV     — GENIE-only, zeroed for particle-gun
-    │   ├── edep_containment                     (n_interactions,) float32 — NaN if primary-KE sum=0
+    │   ├── contained                            (n_interactions,) bool — AND over particles attributed to this interaction; False if interaction has no particles
     │   └── CSR primary_{track_ids,pdgs,energies}_{offsets,data}
     ├── per_particle/                            (~8 rows for typical LUCiD events)
     │   ├── category                             (n_particles,) uint8
-    │   ├── edep_containment                     (n_particles,) float32 — edep_inside/particle_KE; NaN if denom=0
+    │   ├── contained                            (n_particles,) bool — AND over meaningful segments attributed to this particle; False if particle has no segments
     │   ├── genealogy_data                       (vlen int32) — categorized chain
     │   ├── genealogy_offsets                    (n_particles+1,) uint32
     │   ├── ext_genealogy_data                   (vlen int32) — full Geant4 chain
@@ -286,8 +287,8 @@ home in this layout. Mapping table:
 | `n_particles` | attr on `event_NNN/` in inst, labl |
 | `event_number` | renamed to `source_event_idx` — attr on every `event_NNN/`, plus `config/source_event_idx` array in every file |
 | `particle_category` | `labl/event_NNN/per_particle/category` |
-| `particle_containment` | `labl/event_NNN/per_particle/edep_containment` |
-| `overall_containment` | `labl/event_NNN/per_event/edep_containment` |
+| `particle_containment` | `labl/event_NNN/per_particle/contained` (bool) |
+| `overall_containment` | `labl/event_NNN/per_event/contained` (bool) |
 | `genealogy_data`, `genealogy_offsets` | `labl/event_NNN/per_particle/genealogy_data`, `genealogy_offsets` |
 | `ext_genealogy_data`, `ext_genealogy_offsets` | `labl/event_NNN/per_particle/ext_genealogy_data`, `ext_genealogy_offsets` |
 | `start_x/y/z`, `end_x/y/z`, `dir_x/y/z` | `seg/event_NNN/start_*`, `end_*`, `dir_*` |

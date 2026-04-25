@@ -1009,10 +1009,11 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
                 if include_track_segments and 'meaningful_tracks' in particle_data:
                     extended_info['meaningful_tracks'] = particle_data['meaningful_tracks']
                     extended_info['segments']        = particle_data['segments']
-                cont = _compute_edep_containment(extended_info, detector_bounds)
-                extended_info['edep_containment_per_particle']    = cont['per_particle']
-                extended_info['edep_containment_per_interaction'] = cont['per_interaction']
-                extended_info['edep_containment']                 = cont['overall']
+                cont = _compute_contained(extended_info, detector_bounds)
+                extended_info['contained_per_segment']     = cont['per_segment']
+                extended_info['contained_per_particle']    = cont['per_particle']
+                extended_info['contained_per_interaction'] = cont['per_interaction']
+                extended_info['contained']                 = cont['overall']
                 batch_data.append(extended_info)
                 batch_indices.append(event_number)
                 event_times.append(time.time() - event_start_time)
@@ -1226,14 +1227,15 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
                 extended_info['meaningful_tracks'] = particle_data['meaningful_tracks']
                 extended_info['segments'] = particle_data['segments']
 
-            # Edep containment (per-particle / per-interaction / overall).
+            # Geometric containment (per-segment / particle / interaction / event).
             # Requires meaningful_tracks + segments for the ownership walk;
-            # returns NaN arrays when either is missing (e.g. disabled via
-            # include_track_segments=False).
-            cont = _compute_edep_containment(extended_info, detector_bounds)
-            extended_info['edep_containment_per_particle']    = cont['per_particle']
-            extended_info['edep_containment_per_interaction'] = cont['per_interaction']
-            extended_info['edep_containment']                 = cont['overall']
+            # returns all-False arrays when either is missing (e.g. disabled
+            # via include_track_segments=False).
+            cont = _compute_contained(extended_info, detector_bounds)
+            extended_info['contained_per_segment']     = cont['per_segment']
+            extended_info['contained_per_particle']    = cont['per_particle']
+            extended_info['contained_per_interaction'] = cont['per_interaction']
+            extended_info['contained']                 = cont['overall']
 
             # Store for batch processing
             extended_info['source_event_idx'] = int(event_number)
@@ -1875,13 +1877,15 @@ def _merge_pileup_streams(streams, *, n_sensors, apply_smearing,
         'T_reco':  T_reco,
     }
 
-    # Edep containment (same derivation as the single-vertex path; works
-    # across merged streams because the helper uses cumulative n_segments
-    # in track-insertion order rather than per-stream segment_offset).
-    cont = _compute_edep_containment(merged, detector_bounds)
-    merged['edep_containment_per_particle']    = cont['per_particle']
-    merged['edep_containment_per_interaction'] = cont['per_interaction']
-    merged['edep_containment']                 = cont['overall']
+    # Geometric containment (same derivation as the single-vertex path;
+    # works across merged streams because the helper uses cumulative
+    # n_segments in track-insertion order rather than per-stream
+    # segment_offset).
+    cont = _compute_contained(merged, detector_bounds)
+    merged['contained_per_segment']     = cont['per_segment']
+    merged['contained_per_particle']    = cont['per_particle']
+    merged['contained_per_interaction'] = cont['per_interaction']
+    merged['contained']                 = cont['overall']
     return merged
 
 
@@ -2674,22 +2678,29 @@ def _source_type_code(primary_source):
     return SOURCE_TYPE_PARTICLES
 
 
-def _compute_edep_containment(event_dict, detector_bounds):
-    """Energy-deposit containment at per-particle / per-interaction / event level.
+def _compute_contained(event_dict, detector_bounds):
+    """Geometric containment flags at per-segment / particle / interaction / event level.
 
-    For each Geant4 segment, test whether its midpoint lies inside
-    ``detector_bounds`` and accumulate ``edep`` when it does. Per-particle
-    denominator is that particle's initial kinetic energy (MeV, from
-    PhotonSim's ``TrackInfo_Energy`` branch). Per-interaction and
-    event-level denominators sum the primary initial KEs recorded in
-    ``interaction_metadata``. Entities with zero denominator produce NaN
-    rather than 0 to distinguish "no reference energy" from "0% contained".
+    A meaningful segment is *contained* iff both its start point and its
+    end point lie inside ``detector_bounds``. A superset is contained iff
+    every member is contained:
 
-    Segment ownership follows the same parent-chain rule used by
-    ``derive_particle_idx_per_track``: a meaningful track's edep is
-    credited to the nearest categorized ancestor particle. Segment
-    positions are assumed to be in the detector frame (already shifted
-    by the per-interaction translation_vector when applicable).
+        * particle  — AND over all meaningful segments attributed to it
+                       via the same parent-chain walk used by
+                       ``derive_particle_idx_per_track``.
+        * interaction — AND over its particles.
+        * event       — AND over its interactions.
+
+    Empty subsets evaluate to **False** (an interaction with zero
+    categorized particles, a particle with no attributed segments, an
+    event with no interactions, or any case with ``detector_bounds=None``).
+    Identity-True would silently mark neutrinos / dark events as
+    "contained," which downstream filters would misread.
+
+    Segment positions are assumed to be in the detector frame (already
+    shifted by the per-interaction translation_vector when applicable);
+    the inside test uses the post-translation coordinates so the answer
+    matches what ``seg.h5`` actually stores.
 
     Segment-to-track mapping uses cumulative ``n_segments`` over tracks
     in dict-insertion order — the same invariant ``save_seg_event_v3``
@@ -2700,9 +2711,10 @@ def _compute_edep_containment(event_dict, detector_bounds):
     Returns
     -------
     dict:
-        'per_particle'    : float32 (n_particles,)    — NaN where denom == 0
-        'per_interaction' : float32 (n_interactions,) — NaN where denom == 0
-        'overall'         : float32 scalar            — NaN where denom == 0
+        'per_segment'     : bool (n_segments,)
+        'per_particle'    : bool (n_particles,)
+        'per_interaction' : bool (n_interactions,)
+        'overall'         : bool scalar
     """
     particles = event_dict.get('particles') or []
     meaningful_tracks = event_dict.get('meaningful_tracks') or {}
@@ -2712,62 +2724,73 @@ def _compute_edep_containment(event_dict, detector_bounds):
     n_interactions = len(interactions)
     n_segments = int(segments.get('n_segments', 0))
 
-    per_particle_arr = np.full(n_particles, np.nan, dtype=np.float32)
-    per_interaction_arr = np.full(n_interactions, np.nan, dtype=np.float32)
-    overall = np.float32(np.nan)
+    per_segment_arr = np.zeros(n_segments, dtype=bool)
+    per_particle_arr = np.zeros(n_particles, dtype=bool)
+    per_interaction_arr = np.zeros(n_interactions, dtype=bool)
+    overall = np.bool_(False)
 
     if detector_bounds is None:
-        return {'per_particle': per_particle_arr,
+        return {'per_segment':     per_segment_arr,
+                'per_particle':    per_particle_arr,
                 'per_interaction': per_interaction_arr,
-                'overall': overall}
+                'overall':         overall}
 
-    # Inside-mask over segment midpoints → per-segment edep contribution.
+    # Inside test on both endpoints. AND over (start_inside, end_inside).
     if n_segments > 0:
-        mx = 0.5 * (np.asarray(segments['start_x'], dtype=np.float64)
-                    + np.asarray(segments['end_x'], dtype=np.float64))
-        my = 0.5 * (np.asarray(segments['start_y'], dtype=np.float64)
-                    + np.asarray(segments['end_y'], dtype=np.float64))
-        mz = 0.5 * (np.asarray(segments['start_z'], dtype=np.float64)
-                    + np.asarray(segments['end_z'], dtype=np.float64))
-        edep = np.asarray(segments['edep'], dtype=np.float64)
+        sx = np.asarray(segments['start_x'], dtype=np.float64)
+        sy = np.asarray(segments['start_y'], dtype=np.float64)
+        sz = np.asarray(segments['start_z'], dtype=np.float64)
+        ex = np.asarray(segments['end_x'], dtype=np.float64)
+        ey = np.asarray(segments['end_y'], dtype=np.float64)
+        ez = np.asarray(segments['end_z'], dtype=np.float64)
         kind = detector_bounds['type']
         if kind == 'cylinder':
-            r = np.sqrt(mx * mx + my * my)
-            inside = (r <= detector_bounds['radius']) & (np.abs(mz) <= detector_bounds['height'] / 2.0)
+            R = float(detector_bounds['radius'])
+            HZ = float(detector_bounds['height']) / 2.0
+            start_in = (np.sqrt(sx * sx + sy * sy) <= R) & (np.abs(sz) <= HZ)
+            end_in   = (np.sqrt(ex * ex + ey * ey) <= R) & (np.abs(ez) <= HZ)
         elif kind == 'sphere':
-            r = np.sqrt(mx * mx + my * my + mz * mz)
-            inside = r <= detector_bounds['radius']
+            R = float(detector_bounds['radius'])
+            start_in = np.sqrt(sx * sx + sy * sy + sz * sz) <= R
+            end_in   = np.sqrt(ex * ex + ey * ey + ez * ez) <= R
         elif kind == 'box':
-            inside = ((np.abs(mx) <= detector_bounds['length'] / 2.0) &
-                      (np.abs(my) <= detector_bounds['width']  / 2.0) &
-                      (np.abs(mz) <= detector_bounds['height'] / 2.0))
+            HL = float(detector_bounds['length']) / 2.0
+            HW = float(detector_bounds['width'])  / 2.0
+            HH = float(detector_bounds['height']) / 2.0
+            start_in = (np.abs(sx) <= HL) & (np.abs(sy) <= HW) & (np.abs(sz) <= HH)
+            end_in   = (np.abs(ex) <= HL) & (np.abs(ey) <= HW) & (np.abs(ez) <= HH)
         else:
             raise ValueError(f"Unknown detector_bounds type: {kind!r}")
-        edep_inside_segment = np.where(inside, edep, 0.0)
-    else:
-        edep_inside_segment = np.array([], dtype=np.float64)
+        per_segment_arr = (start_in & end_in).astype(bool)
 
-    # Track segment slices from cumulative n_segments in dict order (same
-    # invariant as save_seg_event_v3).
-    edep_inside_per_track = {}
+    # Group segments per meaningful track via cumulative n_segments
+    # (same invariant as save_seg_event_v3). Per-track contained = AND
+    # over its segments; a track with zero segments contributes "True"
+    # to its owning particle (it has nothing to violate containment with),
+    # so the empty-set rule is enforced one level up at the particle.
+    seg_contained_per_track = {}
     cursor = 0
     for tid, t in meaningful_tracks.items():
         ns = int(t.get('n_segments', 0))
         if ns > 0 and cursor + ns <= n_segments:
-            edep_inside_per_track[int(tid)] = float(edep_inside_segment[cursor:cursor + ns].sum())
+            seg_contained_per_track[int(tid)] = bool(per_segment_arr[cursor:cursor + ns].all())
         else:
-            edep_inside_per_track[int(tid)] = 0.0
+            # Track with no segments: treat as no-evidence (True), so the
+            # particle-level AND only fires "False" on an actual leak.
+            seg_contained_per_track[int(tid)] = True
         cursor += ns
 
     # Attribute each meaningful track to the nearest categorized ancestor
-    # particle by walking parent_id (same rule as derive_particle_idx_per_track).
+    # particle (same rule as derive_particle_idx_per_track). Track each
+    # particle's accumulated AND and whether it received any track at all.
     id_to_particle_idx = {}
     for i, particle in enumerate(particles):
         gen = particle.get('genealogy') or []
         if gen:
             id_to_particle_idx[int(gen[-1])] = i
 
-    edep_inside_per_particle = np.zeros(n_particles, dtype=np.float64)
+    particle_has_track = np.zeros(n_particles, dtype=bool)
+    particle_and = np.ones(n_particles, dtype=bool)
     for tid in meaningful_tracks.keys():
         cur = int(tid)
         visited = set()
@@ -2782,45 +2805,28 @@ def _compute_edep_containment(event_dict, detector_bounds):
                 break
             cur = int(parent['parent_id'])
         if owner >= 0:
-            edep_inside_per_particle[owner] += edep_inside_per_track.get(int(tid), 0.0)
+            particle_has_track[owner] = True
+            particle_and[owner] &= seg_contained_per_track[int(tid)]
 
-    # Per-particle denominator: initial KE from track_info.energy (MeV).
-    denom_particle = np.zeros(n_particles, dtype=np.float64)
-    for i, particle in enumerate(particles):
-        ti = particle.get('track_info')
-        if ti is not None and 'energy' in ti:
-            denom_particle[i] = float(ti['energy'])
+    # Particle: True iff it owns ≥1 track AND every owned segment is contained.
+    per_particle_arr = (particle_has_track & particle_and).astype(bool)
 
-    with np.errstate(invalid='ignore', divide='ignore'):
-        per_particle_arr = np.where(denom_particle > 0,
-                                    edep_inside_per_particle / denom_particle,
-                                    np.nan).astype(np.float32)
-
-    # Per-interaction: aggregate per-particle edep_inside by interaction
-    # (same FK derivation used by the writer); denominator = sum of
-    # primary KE recorded in interaction_metadata.
+    # Interaction: AND over its particles. Empty interaction → False.
     inter_idx = derive_particle_interaction_idx(event_dict)
-    numer_interaction = np.zeros(n_interactions, dtype=np.float64)
+    interaction_has_particle = np.zeros(n_interactions, dtype=bool)
+    interaction_and = np.ones(n_interactions, dtype=bool)
     for i in range(n_particles):
         pi_i = int(inter_idx[i]) if i < len(inter_idx) else -1
         if 0 <= pi_i < n_interactions:
-            numer_interaction[pi_i] += edep_inside_per_particle[i]
+            interaction_has_particle[pi_i] = True
+            interaction_and[pi_i] &= bool(per_particle_arr[i])
+    per_interaction_arr = (interaction_has_particle & interaction_and).astype(bool)
 
-    denom_interaction = np.array(
-        [float(np.sum(np.asarray(s.get('primary_energies', []), dtype=np.float64)))
-         for s in interactions],
-        dtype=np.float64)
+    # Event: AND over interactions. Empty event → False.
+    overall = np.bool_(n_interactions > 0 and bool(per_interaction_arr.all()))
 
-    with np.errstate(invalid='ignore', divide='ignore'):
-        per_interaction_arr = np.where(denom_interaction > 0,
-                                       numer_interaction / denom_interaction,
-                                       np.nan).astype(np.float32)
-
-    total_num = float(np.sum(numer_interaction))
-    total_den = float(np.sum(denom_interaction))
-    overall = np.float32(total_num / total_den) if total_den > 0 else np.float32(np.nan)
-
-    return {'per_particle':    per_particle_arr,
+    return {'per_segment':     per_segment_arr,
+            'per_particle':    per_particle_arr,
             'per_interaction': per_interaction_arr,
             'overall':         overall}
 
@@ -3166,6 +3172,15 @@ def save_seg_event_v3(f, event_dict, seq_idx):
 
     grp.create_dataset('track_idx', data=track_idx_arr, **_GZIP_OPTS)
 
+    # per-segment contained flag computed alongside the higher-level
+    # AND-rollups by `_compute_contained`. Saves any reader from having
+    # to know detector geometry just to ask "did this step stay inside?".
+    contained_per_segment = np.asarray(
+        event_dict.get('contained_per_segment', np.zeros(n_segments, dtype=bool)),
+        dtype=bool)
+    if contained_per_segment.shape != (n_segments,):
+        contained_per_segment = np.zeros(n_segments, dtype=bool)
+
     def _empty(dtype): return np.array([], dtype=dtype)
     if n_segments > 0:
         fields = {
@@ -3182,6 +3197,7 @@ def save_seg_event_v3(f, event_dict, seq_idx):
             'time': (np.asarray(seg['time'], dtype=np.float32), np.float32),
             'beta_start': (seg['beta_start'], np.float32),
             'n_cherenkov': (seg['n_cherenkov'], np.int32),
+            'contained': (contained_per_segment, bool),
         }
         for name, (arr, dtype) in fields.items():
             grp.create_dataset(name,
@@ -3194,7 +3210,7 @@ def save_seg_event_v3(f, event_dict, seq_idx):
                             ('dir_x', np.float16), ('dir_y', np.float16),
                             ('dir_z', np.float16), ('edep', np.float32),
                             ('time', np.float32), ('beta_start', np.float32),
-                            ('n_cherenkov', np.int32)):
+                            ('n_cherenkov', np.int32), ('contained', bool)):
             grp.create_dataset(name, data=_empty(dtype), **_GZIP_OPTS)
 
 
@@ -3202,23 +3218,24 @@ def save_labl_event_v3(f, event_dict, seq_idx):
     """Write a single event_NNN/ group to an already-open labl v5 file.
 
     Subgroups:
-    * ``per_event/`` — edep_containment + t0 (= min per_interaction/t0).
+    * ``per_event/`` — contained (bool) + t0 (= min per_interaction/t0).
     * ``per_interaction/`` — one row per source interaction (one per
       G4 event for non-pile-up; one per vertex for pile-up). Fields:
       source_type, t0, vertex_{x,y,z}, n_primaries, n_particles,
-      neutrino_pdg, neutrino_energy_MeV, edep_containment, and
-      CSR-encoded primary_{track_ids,pdgs,energies}_{offsets,data}.
-      Dark events (no tracks) still get a 1-row table with empty CSR lists.
-    * ``per_particle/`` — category, edep_containment, genealogy CSR, and
+      neutrino_pdg, neutrino_energy_MeV, contained, and CSR-encoded
+      primary_{track_ids,pdgs,energies}_{offsets,data}. Dark events
+      (no tracks) still get a 1-row table with empty CSR lists.
+    * ``per_particle/`` — category, contained, genealogy CSR, and
       ``interaction_idx`` FK into ``per_interaction/`` rows.
     * ``per_track/`` — track metadata + ``particle_idx`` and
       ``interaction`` FK (indexes per_interaction/ rows) columns.
 
-    edep_containment is ``sum(edep of segments inside detector bounds)``
-    divided by a reference energy (per-particle: the particle's initial
-    KE from ``TrackInfo_Energy``; per-interaction/event: sum of primary
-    initial KEs in that interaction). Entities with zero reference
-    energy (neutrinos, dark events) are written as NaN.
+    ``contained`` is a binary geometric-containment flag: True iff every
+    meaningful segment in the entity has both endpoints inside
+    ``detector_bounds``. AND-composes from segment → particle →
+    interaction → event. Empty subsets (interaction with zero
+    particles, particle with no segments, event with no interactions)
+    are False — see ``_compute_contained`` for the full spec.
     """
     grp = f.create_group(_event_group_name(seq_idx))
     grp.attrs['source_event_idx'] = int(event_dict['source_event_idx'])
@@ -3243,15 +3260,15 @@ def save_labl_event_v3(f, event_dict, seq_idx):
     pi_grp = grp.create_group('per_interaction')
     _write_per_interaction(pi_grp, event_dict, ancestor, interaction)
 
-    # --- per_event (scalar summaries: edep_containment + t0) ---
+    # --- per_event (scalar summaries: contained + t0) ---
     # t0 is derived from per_interaction/t0 as the earliest interaction
     # time in the event — a single-scalar convenience for downstream
     # tools (e.g. the viewer) that want one reference time per event
     # without walking the per_interaction table. For single-interaction
     # events this equals the sole t0.
     pe_grp = grp.create_group('per_event')
-    pe_grp.create_dataset('edep_containment',
-                          data=np.float32(event_dict['edep_containment']))
+    pe_grp.create_dataset('contained',
+                          data=np.bool_(event_dict['contained']))
     pi_t0 = pi_grp['t0'][()]
     pe_grp.create_dataset('t0',
                           data=np.float32(float(np.min(pi_t0))))
@@ -3269,9 +3286,8 @@ def save_labl_event_v3(f, event_dict, seq_idx):
                           data=np.array(cats, dtype=np.uint8),
                           **_GZIP_OPTS)
 
-    cont = np.asarray(event_dict['edep_containment_per_particle'],
-                      dtype=np.float32)
-    pp_grp.create_dataset('edep_containment', data=cont, **_GZIP_OPTS)
+    cont = np.asarray(event_dict['contained_per_particle'], dtype=bool)
+    pp_grp.create_dataset('contained', data=cont, **_GZIP_OPTS)
 
     gen_offsets = [0]
     gen_data_list = []
@@ -3355,10 +3371,12 @@ def _write_per_interaction(pi_grp, event_dict, ancestor, interaction):
                                               (primaries + descendants).
       * ``neutrino_pdg``          (int16)   — probe PDG (0 for particle-gun).
       * ``neutrino_energy_MeV``   (float32) — probe KE (0.0 for particle-gun).
-      * ``edep_containment``      (float32) — sum(edep inside detector) /
-                                              sum(primary KE) for this
-                                              interaction; NaN if the
-                                              denominator is 0.
+      * ``contained``             (bool)    — True iff every meaningful
+                                              segment of every particle
+                                              attributed to this
+                                              interaction is contained;
+                                              False for empty
+                                              interactions.
       * CSR variable-length per interaction (offsets(n_interactions+1,) + data):
           - ``primary_track_ids_*``  (int32)
           - ``primary_pdgs_*``       (int16)
@@ -3415,10 +3433,10 @@ def _write_per_interaction(pi_grp, event_dict, ancestor, interaction):
     e_data = (np.concatenate(e_chunks) if e_chunks
               else np.array([], dtype=np.float32))
 
-    edep_containment_arr = np.asarray(
-        event_dict['edep_containment_per_interaction'], dtype=np.float32)
-    assert edep_containment_arr.shape == (n_interactions,), (
-        f"edep_containment_per_interaction shape {edep_containment_arr.shape} "
+    contained_arr = np.asarray(
+        event_dict['contained_per_interaction'], dtype=bool)
+    assert contained_arr.shape == (n_interactions,), (
+        f"contained_per_interaction shape {contained_arr.shape} "
         f"!= (n_interactions={n_interactions},)")
 
     pi_grp.create_dataset('source_type',         data=source_type_arr,    **_GZIP_OPTS)
@@ -3430,7 +3448,7 @@ def _write_per_interaction(pi_grp, event_dict, ancestor, interaction):
     pi_grp.create_dataset('n_particles',         data=n_particles_per_interaction,**_GZIP_OPTS)
     pi_grp.create_dataset('neutrino_pdg',        data=neutrino_pdg_arr,   **_GZIP_OPTS)
     pi_grp.create_dataset('neutrino_energy_MeV', data=neutrino_ke_arr,    **_GZIP_OPTS)
-    pi_grp.create_dataset('edep_containment',    data=edep_containment_arr, **_GZIP_OPTS)
+    pi_grp.create_dataset('contained',           data=contained_arr,      **_GZIP_OPTS)
     pi_grp.create_dataset('primary_track_ids_offsets', data=tid_offsets,  **_GZIP_OPTS)
     pi_grp.create_dataset('primary_track_ids_data',    data=tid_data,     **_GZIP_OPTS)
     pi_grp.create_dataset('primary_pdgs_offsets',      data=pdg_offsets,  **_GZIP_OPTS)
@@ -3525,11 +3543,11 @@ def read_labl_event_v3(filename, event_idx):
     """Read event ``event_idx`` from a labl v5 file.
 
     The returned dict contains top-level attrs plus four subdicts:
-    ``per_event`` (edep_containment, t0 = min per_interaction/t0),
+    ``per_event`` (contained, t0 = min per_interaction/t0),
     ``per_interaction`` (source_type, t0, vertex_{x,y,z}, n_primaries,
-    n_particles, neutrino_pdg, neutrino_energy_MeV, edep_containment,
-    and CSR-encoded primary_{track_ids,pdgs,energies}_{offsets,data}),
-    ``per_particle`` (category, edep_containment, genealogy CSR,
+    n_particles, neutrino_pdg, neutrino_energy_MeV, contained, and
+    CSR-encoded primary_{track_ids,pdgs,energies}_{offsets,data}),
+    ``per_particle`` (category, contained, genealogy CSR,
     interaction_idx), and ``per_track`` (track_id, parent_id, pdg,
     initial_energy, n_cherenkov, particle_idx, ancestor, interaction).
     """

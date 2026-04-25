@@ -99,10 +99,13 @@ def build_synthetic_event(source_event_idx=0, t0=7.5, n_sensors=20):
         'T_per_particle': T_per_particle,
         'PE_reco': PE_reco,
         'T_reco': T_reco,
-        # Synthetic containment numbers: writer round-trips verbatim.
-        'edep_containment': np.float32(0.92),
-        'edep_containment_per_interaction': np.array([0.92], dtype=np.float32),
-        'edep_containment_per_particle': np.array([0.95, 0.85], dtype=np.float32),
+        # Synthetic containment flags: writer round-trips verbatim. Picked
+        # to exercise both True and False at every level so the column
+        # types and shapes are checked end-to-end.
+        'contained': np.bool_(True),
+        'contained_per_interaction': np.array([True], dtype=bool),
+        'contained_per_particle': np.array([True, False], dtype=bool),
+        'contained_per_segment': np.array([True, True, False, False], dtype=bool),
     }
 
     sensor_positions = np.random.default_rng(0).normal(size=(n_sensors, 3)).astype(np.float32)
@@ -242,9 +245,10 @@ def build_synthetic_pileup_event(source_event_idx=0, n_sensors=20,
         'T_per_particle':  T_per_particle,
         'PE_reco': PE_reco,
         'T_reco':  T_reco,
-        'edep_containment': np.float32(0.9),
-        'edep_containment_per_interaction': np.array([0.88, 0.93], dtype=np.float32),
-        'edep_containment_per_particle': np.array([0.9, 0.8, 0.95], dtype=np.float32),
+        'contained': np.bool_(False),
+        'contained_per_interaction': np.array([True, False], dtype=bool),
+        'contained_per_particle': np.array([True, True, False], dtype=bool),
+        'contained_per_segment': np.array([True, True, True, False], dtype=bool),
     }
 
     sensor_positions = np.random.default_rng(0).normal(size=(n_sensors, 3)).astype(np.float32)

@@ -111,8 +111,8 @@ def test_labl_event_roundtrip(v3_batch):
     labl = read_labl_event_v3(str(paths['labl']), 0)
     assert labl['n_particles'] == 2
     assert labl['n_tracks'] == 3
-    # per_event: edep_containment scalar + t0 = min(per_interaction/t0)
-    assert float(labl['per_event']['edep_containment']) == pytest.approx(0.92)
+    # per_event: contained scalar + t0 = min(per_interaction/t0)
+    assert bool(labl['per_event']['contained']) is True
     assert float(labl['per_event']['t0']) == pytest.approx(ev['t0'])
     # per_interaction — 1 row for this single-interaction fixture
     pi = labl['per_interaction']
@@ -135,12 +135,14 @@ def test_labl_event_roundtrip(v3_batch):
     np.testing.assert_array_equal(pi['primary_pdgs_data'], [13])
     np.testing.assert_array_equal(pi['primary_energies_offsets'], [0, 1])
     np.testing.assert_allclose(pi['primary_energies_data'], [1000.0])
-    # per_interaction: edep_containment column round-trips (one row here)
-    np.testing.assert_allclose(pi['edep_containment'], [0.92], atol=1e-6)
+    # per_interaction: contained column round-trips (one row here)
+    np.testing.assert_array_equal(np.asarray(pi['contained'], dtype=bool),
+                                  np.array([True], dtype=bool))
     # per_particle
     pp = labl['per_particle']
     np.testing.assert_array_equal(pp['category'], np.array([0, 1], dtype=np.uint8))
-    np.testing.assert_allclose(pp['edep_containment'], [0.95, 0.85], atol=1e-6)
+    np.testing.assert_array_equal(np.asarray(pp['contained'], dtype=bool),
+                                  np.array([True, False], dtype=bool))
     # interaction_idx: both particles belong to the single interaction 0.
     np.testing.assert_array_equal(pp['interaction_idx'], np.array([0, 0], dtype=np.int32))
     # per_track
