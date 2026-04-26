@@ -51,6 +51,7 @@ let selectedGroup = null;
 let showEmpty = true;
 let showMesh = true;
 let pmtSize = 10;
+let outlineWidth = 1.0;
 let autoRotate = true;
 
 // Time sweep.
@@ -75,6 +76,7 @@ let renderer, scene, camera, controls;
 let pmtGeo, pmtMat, pmtMesh;
 let segGeo, segMat, segMesh;
 let outlineMesh = null;
+let outlineMat = null;
 let lastFrameTime = 0;
 
 // Colormap textures.
@@ -647,72 +649,82 @@ function buildSegments() {
 }
 
 // ── Detector outline (cylinder/box/sphere wireframe) ───────────────────
+// Uses three.js fat lines (LineSegments2 + LineMaterial) so thickness
+// works across browsers. WebGL/ANGLE silently caps the regular
+// LineBasicMaterial.linewidth at 1px on Chrome/Safari.
 function buildOutline() {
   if (outlineMesh) { scene.remove(outlineMesh); outlineMesh = null; }
+  outlineMat = null;
   if (!showMesh) return;
+
+  const segs = []; // flat [x0,y0,z0, x1,y1,z1, ...] — pairs of endpoints.
+  const push = (x0,y0,z0, x1,y1,z1) => segs.push(x0,y0,z0, x1,y1,z1);
+
   const t = (detectorType || '').toLowerCase();
-  const grp = new THREE.Group();
-  const mat = new THREE.LineBasicMaterial({ color: 0x28394a, transparent: true, opacity: 0.5 });
   if (t === 'cylinder') {
-    const r = shape.r, hh = shape.halfH;
-    const seg = 64;
-    const top = new Float32Array(seg * 2 * 3), bot = new Float32Array(seg * 2 * 3);
+    const r = shape.r, hh = shape.halfH, seg = 64;
     for (let i = 0; i < seg; i++) {
-      const a0 = 2 * Math.PI * i / seg, a1 = 2 * Math.PI * (i + 1) / seg;
-      top[i*6] = r*Math.cos(a0); top[i*6+1] = r*Math.sin(a0); top[i*6+2] = hh;
-      top[i*6+3] = r*Math.cos(a1); top[i*6+4] = r*Math.sin(a1); top[i*6+5] = hh;
-      bot[i*6] = r*Math.cos(a0); bot[i*6+1] = r*Math.sin(a0); bot[i*6+2] = -hh;
-      bot[i*6+3] = r*Math.cos(a1); bot[i*6+4] = r*Math.sin(a1); bot[i*6+5] = -hh;
+      const a0 = 2*Math.PI*i/seg, a1 = 2*Math.PI*(i+1)/seg;
+      push(r*Math.cos(a0), r*Math.sin(a0),  hh, r*Math.cos(a1), r*Math.sin(a1),  hh);
+      push(r*Math.cos(a0), r*Math.sin(a0), -hh, r*Math.cos(a1), r*Math.sin(a1), -hh);
     }
-    const gTop = new THREE.BufferGeometry(); gTop.setAttribute('position', new THREE.BufferAttribute(top, 3));
-    const gBot = new THREE.BufferGeometry(); gBot.setAttribute('position', new THREE.BufferAttribute(bot, 3));
-    grp.add(new THREE.LineSegments(gTop, mat));
-    grp.add(new THREE.LineSegments(gBot, mat));
-    // Verticals
-    const verts = new Float32Array(8 * 2 * 3);
     for (let i = 0; i < 8; i++) {
-      const a = 2 * Math.PI * i / 8;
-      verts[i*6] = r*Math.cos(a); verts[i*6+1] = r*Math.sin(a); verts[i*6+2] = -hh;
-      verts[i*6+3] = r*Math.cos(a); verts[i*6+4] = r*Math.sin(a); verts[i*6+5] = hh;
+      const a = 2*Math.PI*i/8;
+      push(r*Math.cos(a), r*Math.sin(a), -hh, r*Math.cos(a), r*Math.sin(a),  hh);
     }
-    const gV = new THREE.BufferGeometry(); gV.setAttribute('position', new THREE.BufferAttribute(verts, 3));
-    grp.add(new THREE.LineSegments(gV, mat));
   } else if (t === 'box') {
     const hL = shape.L/2, hW = shape.W/2, hH = shape.H/2;
     const c = [
       [-hL,-hW,-hH],[hL,-hW,-hH],[hL,hW,-hH],[-hL,hW,-hH],
       [-hL,-hW, hH],[hL,-hW, hH],[hL,hW, hH],[-hL,hW, hH],
     ];
-    const e = [[0,1],[1,2],[2,3],[3,0],[4,5],[5,6],[6,7],[7,4],[0,4],[1,5],[2,6],[3,7]];
-    const v = new Float32Array(e.length * 2 * 3);
-    for (let i = 0; i < e.length; i++) {
-      const [a,b] = e[i];
-      v[i*6]=c[a][0]; v[i*6+1]=c[a][1]; v[i*6+2]=c[a][2];
-      v[i*6+3]=c[b][0]; v[i*6+4]=c[b][1]; v[i*6+5]=c[b][2];
+    for (const [a,b] of [[0,1],[1,2],[2,3],[3,0],[4,5],[5,6],[6,7],[7,4],[0,4],[1,5],[2,6],[3,7]]) {
+      push(c[a][0],c[a][1],c[a][2], c[b][0],c[b][1],c[b][2]);
     }
-    const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.BufferAttribute(v, 3));
-    grp.add(new THREE.LineSegments(g, mat));
   } else if (t === 'sphere') {
-    const r = shape.r;
-    // Three great circles (xy, yz, xz planes)
-    const seg = 96;
-    const make = (axis) => {
-      const v = new Float32Array(seg * 2 * 3);
+    const r = shape.r, seg = 96;
+    for (let axis = 0; axis < 3; axis++) {
       for (let i = 0; i < seg; i++) {
-        const a0 = 2 * Math.PI * i / seg, a1 = 2 * Math.PI * (i + 1) / seg;
+        const a0 = 2*Math.PI*i/seg, a1 = 2*Math.PI*(i+1)/seg;
         let p0, p1;
-        if (axis === 0) { p0 = [r*Math.cos(a0), r*Math.sin(a0), 0]; p1 = [r*Math.cos(a1), r*Math.sin(a1), 0]; }
+        if (axis === 0)      { p0 = [r*Math.cos(a0), r*Math.sin(a0), 0]; p1 = [r*Math.cos(a1), r*Math.sin(a1), 0]; }
         else if (axis === 1) { p0 = [0, r*Math.cos(a0), r*Math.sin(a0)]; p1 = [0, r*Math.cos(a1), r*Math.sin(a1)]; }
-        else { p0 = [r*Math.cos(a0), 0, r*Math.sin(a0)]; p1 = [r*Math.cos(a1), 0, r*Math.sin(a1)]; }
-        v[i*6]=p0[0]; v[i*6+1]=p0[1]; v[i*6+2]=p0[2];
-        v[i*6+3]=p1[0]; v[i*6+4]=p1[1]; v[i*6+5]=p1[2];
+        else                 { p0 = [r*Math.cos(a0), 0, r*Math.sin(a0)]; p1 = [r*Math.cos(a1), 0, r*Math.sin(a1)]; }
+        push(p0[0],p0[1],p0[2], p1[0],p1[1],p1[2]);
       }
-      const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.BufferAttribute(v, 3));
-      return new THREE.LineSegments(g, mat);
-    };
-    grp.add(make(0)); grp.add(make(1)); grp.add(make(2));
+    }
+  } else {
+    return;
   }
-  outlineMesh = grp;
+
+  const fat = (typeof THREE.LineSegments2 !== 'undefined') &&
+              (typeof THREE.LineMaterial !== 'undefined') &&
+              (typeof THREE.LineSegmentsGeometry !== 'undefined');
+
+  if (fat) {
+    const g = new THREE.LineSegmentsGeometry();
+    g.setPositions(segs);
+    const mat = new THREE.LineMaterial({
+      color: 0x28394a, transparent: true, opacity: 0.5, linewidth: outlineWidth,
+    });
+    // LineMaterial linewidth is in screen pixels by default and needs the
+    // renderer resolution to compute the thickness in clip space.
+    const sz = renderer.getSize(new THREE.Vector2());
+    mat.resolution.set(sz.x, sz.y);
+    outlineMat = mat;
+    const ls = new THREE.LineSegments2(g, mat);
+    ls.computeLineDistances();
+    outlineMesh = ls;
+  } else {
+    // Fallback: plain LineSegments. Thickness slider will visibly affect
+    // Firefox only.
+    const arr = new Float32Array(segs);
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(arr, 3));
+    const mat = new THREE.LineBasicMaterial({ color: 0x28394a, transparent: true, opacity: 0.5, linewidth: outlineWidth });
+    outlineMat = mat;
+    outlineMesh = new THREE.LineSegments(g, mat);
+  }
   scene.add(outlineMesh);
 }
 
@@ -1517,6 +1529,9 @@ function onResize() {
     renderer.setSize(el3.clientWidth, el3.clientHeight);
     camera.aspect = el3.clientWidth / el3.clientHeight;
     camera.updateProjectionMatrix();
+    if (outlineMat && outlineMat.resolution) {
+      outlineMat.resolution.set(el3.clientWidth, el3.clientHeight);
+    }
   }
   resize2D();
   render2D();
@@ -1606,6 +1621,7 @@ function setupUI() {
     manualVmin = null; manualVmax = null;
     cmapName = 'auto';
     pmtSize = 10;
+    outlineWidth = 1.0;
     showEmpty = true; showMesh = true;
     sweepSpeed = 1.0;
     autoRotate = true;
@@ -1618,6 +1634,7 @@ function setupUI() {
     $('cmapSelect').value = 'auto';
     $('quantileScope').value = quantileScope;
     $('pmtSizeSlider').value = pmtSize; $('pmtSizeVal').textContent = pmtSize.toFixed(1);
+    $('outlineWidthSlider').value = outlineWidth; $('outlineWidthVal').textContent = outlineWidth.toFixed(1);
     $('showEmptyChk').checked = showEmpty;
     $('showMeshChk').checked = showMesh;
     $('sweepSpeed').value = sweepSpeed; $('sweepSpeedVal').textContent = sweepSpeed.toFixed(1);
@@ -1679,6 +1696,11 @@ function setupUI() {
   $('showMeshChk').addEventListener('change', (e) => {
     showMesh = e.target.checked;
     buildOutline();
+  });
+  $('outlineWidthSlider').addEventListener('input', (e) => {
+    outlineWidth = parseFloat(e.target.value);
+    $('outlineWidthVal').textContent = outlineWidth.toFixed(1);
+    if (outlineMat) { outlineMat.linewidth = outlineWidth; outlineMat.needsUpdate = true; }
   });
   $('sweepSpeed').addEventListener('input', (e) => {
     sweepSpeed = parseFloat(e.target.value);
