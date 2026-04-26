@@ -31,18 +31,26 @@ export function layoutCylinder(positions, nSensors, r, halfH) {
   const layoutH = botY + capH;
   const capX    = Math.PI * r - r;     // cap centered on the barrel's midpoint
 
-  const zTol = 0.1 * halfH;
-
   for (let i = 0; i < nSensors; i++) {
     const x = positions[i * 3];
     const y = positions[i * 3 + 1];
     const z = positions[i * 3 + 2];
-    if (z > halfH - zTol) {
+    // Classify by nearest surface so a barrel ring near the top doesn't
+    // get misread as a cap ring. Cap sensors sit on the disc with rho < r;
+    // barrel sensors sit on the wall with rho ≈ r — using only |z| pulls
+    // the topmost barrel rows onto the cap and renders them on top of the
+    // real outer cap ring.
+    const rho = Math.sqrt(x * x + y * y);
+    const dBarrel = Math.abs(rho - r);
+    const dTopCap = Math.abs(z - halfH);
+    const dBotCap = Math.abs(z + halfH);
+    const dMin = Math.min(dBarrel, dTopCap, dBotCap);
+    if (dMin === dTopCap) {
       // Top cap: physical +y = up on screen, so v = (r - y), offset by topY.
       case_[i] = 1; panel[i] = 1;
       u[i] = (x + r) + capX;      // x_world + r so it sits in rect.x = capX..capX+capW
       v[i] = (r - y) + topY;
-    } else if (z < -halfH + zTol) {
+    } else if (dMin === dBotCap) {
       // Bottom cap: mirrored. Physical -y_world = up on screen.
       case_[i] = 2; panel[i] = 2;
       u[i] = (x + r) + capX;
@@ -59,11 +67,11 @@ export function layoutCylinder(positions, nSensors, r, halfH) {
   }
 
   const panels = [
-    { id: 0, label: 'Barrel',     width: 2 * Math.PI * r, height: stripH,
+    { id: 0, label: 'Barrel',     labelAnchor: 'top',  width: 2 * Math.PI * r, height: stripH,
       rect: { x: 0,    y: barrelY, w: 2 * Math.PI * r, h: stripH } },
-    { id: 1, label: 'Top Cap',    width: capW, height: capH,
+    { id: 1, label: 'Top Cap',    labelAnchor: 'left', width: capW, height: capH,
       rect: { x: capX, y: topY,    w: capW, h: capH } },
-    { id: 2, label: 'Bottom Cap', width: capW, height: capH,
+    { id: 2, label: 'Bottom Cap', labelAnchor: 'left', width: capW, height: capH,
       rect: { x: capX, y: botY,    w: capW, h: capH } },
   ];
 
@@ -125,11 +133,11 @@ export function layoutBox(positions, nSensors, L, W, H) {
   }
 
   const panels = [
-    { id: 0, label: 'Sides',       width: perim, height: stripH,
+    { id: 0, label: 'Sides',       labelAnchor: 'top',  width: perim, height: stripH,
       rect: { x: 0,    y: stripY, w: perim, h: stripH } },
-    { id: 1, label: 'Top Cap',     width: capW,  height: capH,
+    { id: 1, label: 'Top Cap',     labelAnchor: 'left', width: capW,  height: capH,
       rect: { x: capX, y: topY,   w: capW,  h: capH } },
-    { id: 2, label: 'Bottom Cap',  width: capW,  height: capH,
+    { id: 2, label: 'Bottom Cap',  labelAnchor: 'left', width: capW,  height: capH,
       rect: { x: capX, y: botY,   w: capW,  h: capH } },
   ];
 
@@ -167,7 +175,7 @@ export function layoutSphere(positions, nSensors, r) {
   }
 
   const panels = [
-    { id: 0, label: 'Equirectangular', width: 2 * Math.PI * r, height: Math.PI * r,
+    { id: 0, label: 'Equirectangular', labelAnchor: 'top', width: 2 * Math.PI * r, height: Math.PI * r,
       rect: { x: 0, y: 0, w: 2 * Math.PI * r, h: Math.PI * r } },
   ];
 

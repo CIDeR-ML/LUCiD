@@ -1200,18 +1200,31 @@ function render2D() {
   const offX = margin + (avW - layout.layoutW * scale) / 2;
   const offY = margin + (avH - layout.layoutH * scale) / 2;
 
-  // Panel backgrounds (very faint) and labels.
+  // Panel backgrounds (very faint) and labels. Labels render OUTSIDE the
+  // rect so they never overlap sensors: 'top' anchor sits above the rect
+  // (used for wide strips); 'left' anchor reads bottom→top along the
+  // rect's left margin (used for cap squares, where there isn't enough
+  // empty corner space inside the disc-of-sensors).
   ctx2d.strokeStyle = 'rgba(255,255,255,0.04)';
   ctx2d.lineWidth = 1;
   ctx2d.font = '10px monospace';
   ctx2d.fillStyle = '#444';
   ctx2d.textAlign = 'left';
+  ctx2d.textBaseline = 'alphabetic';
   for (const p of layout.panels) {
     const rx = offX + p.rect.x * scale;
     const ry = offY + p.rect.y * scale;
     const rw = p.rect.w * scale, rh = p.rect.h * scale;
     ctx2d.strokeRect(rx, ry, rw, rh);
-    ctx2d.fillText(p.label, rx + 4, ry + 11);
+    if (p.labelAnchor === 'left') {
+      ctx2d.save();
+      ctx2d.translate(rx - 4, ry + rh);
+      ctx2d.rotate(-Math.PI / 2);
+      ctx2d.fillText(p.label, 0, 0);
+      ctx2d.restore();
+    } else {
+      ctx2d.fillText(p.label, rx + 4, ry - 4);
+    }
   }
 
   // Seams (box face boundaries).
