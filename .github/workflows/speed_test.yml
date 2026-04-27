@@ -1,0 +1,67 @@
+name: Pipeline speed test (diagnostic)
+
+# Runs after `Build and push lucid container` on main / production-interm,
+# the same trigger pattern as visual_smoke.yml. Pulls the freshly-built
+# image, runs ci_tests/speed_test.py for one mu, one low-E electron, and
+# one GENIE numu config at N=20, and uploads the JSON + MD report as a
+# workflow artifact.
+#
+# This is a *diagnostic* — it always succeeds (unless the harness itself
+# blows up). Compare artifacts across commits to spot regressions in
+# pipeline wall time. There is no built-in budget threshold.
+
+on:
+  workflow_run:
+    workflows: ["Build and push lucid container"]
+    types: [completed]
+
+jobs:
+  speed:
+    if: >
+      github.event.workflow_run.conclusion == 'success' &&
+      (github.event.workflow_run.head_branch == 'main' ||
+       github.event.workflow_run.head_branch == 'production-interm')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - name: Log in to ghcr.io
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Resolve image tag from the build that triggered this run
+        id: img
+        run: |
+          SHA="${{ github.event.workflow_run.head_sha }}"
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          echo "short=${SHA:0:7}" >> "$GITHUB_OUTPUT"
+          echo "image=ghcr.io/cider-ml/lucid:$SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Pull LUCiD container
+        run: docker pull ${{ steps.img.outputs.image }}
+
+      - name: Run pipeline speed test
+        run: |
+          mkdir -p out
+          docker run --rm \
+            -v "$PWD/out:/out" \
+            -e GENIE_XSEC_FILE=/opt/genie_xsec/3_04_00/G18_10a_02_11b/gxspl-min.xml.gz \
+            ${{ steps.img.outputs.image }} \
+            python3 /opt/LUCiD/ci_tests/speed_test.py \
+              --n-events 20 \
+              --out-json /out/speed.json \
+              --out-md   /out/speed.md
+
+      - name: Upload speed-test artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: speed_test-${{ steps.img.outputs.short }}
+          path: |
+            out/speed.json
+            out/speed.md
+          retention-days: 90
+          if-no-files-found: error
