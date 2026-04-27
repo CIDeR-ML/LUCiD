@@ -117,6 +117,13 @@ def generate_macro(
         lines.append("/photon/storeIndividual false")
         lines.append("/edep/storeIndividual false")
 
+    # Per-photon segment index — opt-in, gated on the same key LUCiD reads.
+    # Required upstream for the seg/event_NNN/sensor_hits/ subgroup.
+    store_seg_idx = bool(
+        config.get("lucid_options", {}).get("store_segment_sensor_map", False))
+    if store_seg_idx:
+        lines.append("/photon/storeSegmentIndex true")
+
     # Decays
     if disable_decays:
         lines.append("")
@@ -218,6 +225,11 @@ def _generate_genie_macro(
     else:
         lines.append("/photon/storeIndividual false")
         lines.append("/edep/storeIndividual false")
+
+    store_seg_idx = bool(
+        config.get("lucid_options", {}).get("store_segment_sensor_map", False))
+    if store_seg_idx:
+        lines.append("/photon/storeSegmentIndex true")
 
     if disable_decays:
         lines.append("")

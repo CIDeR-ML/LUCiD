@@ -468,7 +468,8 @@ def read_photon_data_from_photonsim(root_file_path, entry_index):
 
     return result
 
-def read_particle_data_from_photonsim(root_file_path, entry_index, include_track_segments=False):
+def read_particle_data_from_photonsim(root_file_path, entry_index, include_track_segments=False,
+                                      include_segment_index=False):
     """
     Read particle-based photon data from a PhotonSim ROOT file for a specific entry.
     This function reads the particle system that classifies photons by genealogy.
@@ -553,6 +554,14 @@ def read_particle_data_from_photonsim(root_file_path, entry_index, include_track
                 f"(commit 1ef5ace or later)."
             )
 
+    # Per-photon segment index is opt-in: only present in PhotonSim runs that
+    # set /photon/storeSegmentIndex true. Caller asks for it explicitly when
+    # the segment <-> sensor map is being built.
+    have_segment_index = False
+    if include_segment_index and 'Photon_SegmentIndex' in tree.keys():
+        branches_to_read.append('Photon_SegmentIndex')
+        have_segment_index = True
+
     tree_data = tree.arrays(branches_to_read, entry_start=entry_index, entry_stop=entry_index+1, library='np')
 
     # Extract primary energy
@@ -571,6 +580,13 @@ def read_particle_data_from_photonsim(root_file_path, entry_index, include_track
 
     photon_times = tree_data['PhotonTime'][0]
     photon_wavelengths = tree_data['PhotonWavelength'][0]
+
+    # Per-photon merged-segment index (-1 sentinel for non-meaningful parents).
+    # Only populated when the writer was opt-in; otherwise None and downstream
+    # segment-sensor aggregation is skipped.
+    photon_segment_index = None
+    if have_segment_index:
+        photon_segment_index = np.asarray(tree_data['Photon_SegmentIndex'][0], dtype=np.int32)
 
     # Extract particle system
     n_particles = int(tree_data['NParticles'][0])
@@ -676,6 +692,8 @@ def read_particle_data_from_photonsim(root_file_path, entry_index, include_track
         'neutrino_pdg':         int(tree_data['IncomingNuPdg'][0]),
         'neutrino_energy_MeV':  float(tree_data['IncomingNuKE'][0]),
     }
+    if photon_segment_index is not None:
+        result['photon_segment_index'] = photon_segment_index
 
     # Parse meaningful tracks and segments if requested
     if include_track_segments:
@@ -744,7 +762,8 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
                                              dataset_name='unnamed_dataset', run_id=None,
                                              file_index_start=0, detector_type='cylinder',
                                              material='water', include_track_segments=True,
-                                             primary_source='particles'):
+                                             primary_source='particles',
+                                             store_segment_sensor_map=False):
     """Generate events from a PhotonSim ROOT file, writing v3 four-file batches.
 
     For each batch of events, writes four HDF5 files under ``output_dir``:
@@ -958,7 +977,10 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
 
             # Read particle data from PhotonSim
             print(f"    Reading particle data from ROOT file...", flush=True)
-            particle_data = read_particle_data_from_photonsim(root_file_path, event_idx, include_track_segments=include_track_segments)
+            particle_data = read_particle_data_from_photonsim(
+                root_file_path, event_idx,
+                include_track_segments=include_track_segments,
+                include_segment_index=store_segment_sensor_map)
 
             n_particles = particle_data['n_particles']
             particles = particle_data['particles']
@@ -1182,6 +1204,76 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
             PE_reco = np.asarray(PE_reco, dtype=np.float32)
             T_reco = np.asarray(T_reco, dtype=np.float32)
 
+            # Optional second pass: per-segment vmap to derive (segment, sensor)
+            # PE+T cells. Reuses simulate_all_particles unchanged — in data mode
+            # the simulator ignores particle_params and depends only on per-photon
+            # data, so we re-batch photons by segment_idx (instead of by particle)
+            # and pass dummy track params per segment.
+            segment_sensor_hits = None
+            if (store_segment_sensor_map
+                    and 'photon_segment_index' in particle_data
+                    and include_track_segments
+                    and 'segments' in particle_data
+                    and int(particle_data['segments'].get('n_segments', 0)) > 0):
+                seg_idx_per_photon = particle_data['photon_segment_index']
+                n_seg = int(particle_data['segments']['n_segments'])
+                # Group photons by segment. -1 sentinel (non-meaningful parent
+                # tracks) drops out — those photons still appear in sensor.h5
+                # totals via the per-particle pass.
+                seg_photon_lists = [[] for _ in range(n_seg)]
+                for ph_idx, sg in enumerate(seg_idx_per_photon):
+                    s = int(sg)
+                    if 0 <= s < n_seg:
+                        seg_photon_lists[s].append(ph_idx)
+                n_per_seg_np = np.array([len(s) for s in seg_photon_lists], dtype=np.int32)
+                max_seg_photons = int(n_per_seg_np.max(initial=0))
+                if max_seg_photons > 0:
+                    pad_seg = max_seg_photons + 1  # +1 safety margin (mirrors PAD_SIZE)
+                    seg_origins_np = np.zeros((n_seg, pad_seg, 3), dtype=np.float32)
+                    seg_dirs_np = np.tile(default_direction, (n_seg, pad_seg, 1))
+                    seg_times_np = np.zeros((n_seg, pad_seg), dtype=np.float32)
+                    seg_wls_np = np.zeros((n_seg, pad_seg), dtype=np.float32)
+                    for sg, ph_list in enumerate(seg_photon_lists):
+                        k = len(ph_list)
+                        if k == 0:
+                            continue
+                        seg_origins_np[sg, :k] = all_photon_origins_np[ph_list]
+                        seg_dirs_np[sg, :k] = all_photon_directions_np[ph_list]
+                        seg_times_np[sg, :k] = all_photon_times_np[ph_list]
+                        seg_wls_np[sg, :k] = all_photon_wavelengths_np[ph_list]
+
+                    # Dummy ParticleParams per segment — data-mode simulator
+                    # only reads photons, not these. Use primary energy / origin
+                    # / +z as placeholders.
+                    dummy_E_np = np.full(n_seg, particle_data['primary_energy'], dtype=np.float32)
+                    dummy_pos_np = np.zeros((n_seg, 3), dtype=np.float32)
+                    dummy_dir_np = np.tile(default_direction, (n_seg, 1))
+
+                    seg_origins = jax.device_put(seg_origins_np)
+                    seg_dirs = jax.device_put(seg_dirs_np)
+                    seg_times_j = jax.device_put(seg_times_np)
+                    seg_wls = jax.device_put(seg_wls_np)
+                    seg_N = jax.device_put(n_per_seg_np)
+                    dummy_E = jax.device_put(dummy_E_np)
+                    dummy_pos = jax.device_put(dummy_pos_np)
+                    dummy_dir = jax.device_put(dummy_dir_np)
+
+                    # Independent RNG stream from the per-particle pass.
+                    seg_master_key = jax.random.fold_in(master_key, 1)
+                    seg_keys = jax.random.split(seg_master_key, n_seg)
+
+                    PE_per_seg, T_per_seg = simulate_all_particles(
+                        dummy_E, dummy_pos, dummy_dir,
+                        seg_origins, seg_dirs, seg_times_j, seg_wls,
+                        seg_N, seg_keys
+                    )
+                    PE_per_seg = np.asarray(PE_per_seg, dtype=np.float32)
+                    T_per_seg = np.asarray(T_per_seg, dtype=np.float32)
+                    segment_sensor_hits = {
+                        'PE_per_segment': PE_per_seg,
+                        'T_per_segment': T_per_seg,
+                    }
+
             # Shift simulator outputs from G4-frame (origin at vertex) into
             # absolute detector frame by adding the per-interaction t0.
             # Only the single-vertex path is in this function today; the
@@ -1191,6 +1283,9 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
             T_per_particle = np.where(T_per_particle > 0, T_per_particle + t0_f32, T_per_particle)
             T_true = np.where(T_true > 0, T_true + t0_f32, T_true)
             T_reco = np.where(T_reco > 0, T_reco + t0_f32, T_reco)
+            if segment_sensor_hits is not None:
+                T_seg = segment_sensor_hits['T_per_segment']
+                segment_sensor_hits['T_per_segment'] = np.where(T_seg > 0, T_seg + t0_f32, T_seg)
             # Segments always carry meaningful times — shift all of them.
             if include_track_segments and 'segments' in particle_data and particle_data['segments'].get('n_segments', 0) > 0:
                 particle_data['segments']['time'] = \
@@ -1226,6 +1321,21 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
             if include_track_segments and 'meaningful_tracks' in particle_data:
                 extended_info['meaningful_tracks'] = particle_data['meaningful_tracks']
                 extended_info['segments'] = particle_data['segments']
+
+            # Sparsify the per-segment / per-sensor decomposition into the
+            # flat-parallel layout used by save_seg_event_v3 → sensor_hits/.
+            # Mirrors inst.h5's (particle_idx, sensor_idx, PE, T) shape.
+            if segment_sensor_hits is not None:
+                PE_seg = segment_sensor_hits['PE_per_segment']  # (n_seg, n_sensors)
+                T_seg  = segment_sensor_hits['T_per_segment']
+                valid = PE_seg > 0
+                seg_flat, sen_flat = np.where(valid)
+                extended_info['segment_sensor_hits'] = {
+                    'segment_idx': seg_flat.astype(np.int32),
+                    'sensor_idx':  sen_flat.astype(np.uint16),
+                    'PE':          PE_seg[valid].astype(np.float32),
+                    'T':           T_seg[valid].astype(np.float32),
+                }
 
             # Geometric containment (per-segment / particle / interaction / event).
             # Requires meaningful_tracks + segments for the ownership walk;
@@ -3212,6 +3322,30 @@ def save_seg_event_v3(f, event_dict, seq_idx):
                             ('time', np.float32), ('beta_start', np.float32),
                             ('n_cherenkov', np.int32), ('contained', bool)):
             grp.create_dataset(name, data=_empty(dtype), **_GZIP_OPTS)
+
+    # Optional segment <-> sensor correspondence map. Mirrors inst.h5's flat
+    # parallel-array shape: each row is one (segment, sensor) pair with PE+T.
+    # Forward map (segment -> sensors): groupby segment_idx. Reverse map
+    # (sensor -> segments): groupby sensor_idx. Both reconstructable in O(N).
+    # Subgroup absence is the explicit "old run / flag off" signal — no format
+    # version bump needed.
+    seg_sen = event_dict.get('segment_sensor_hits')
+    if seg_sen is not None:
+        sh = grp.create_group('sensor_hits')
+        sh.create_dataset('segment_idx',
+                          data=np.asarray(seg_sen['segment_idx'], dtype=np.int32),
+                          **_GZIP_OPTS)
+        sh.create_dataset('sensor_idx',
+                          data=np.asarray(seg_sen['sensor_idx'], dtype=np.uint16),
+                          **_GZIP_OPTS)
+        sh.create_dataset('PE',
+                          data=np.asarray(seg_sen['PE'], dtype=np.float32),
+                          **_GZIP_OPTS)
+        sh.create_dataset('T',
+                          data=np.asarray(seg_sen['T'], dtype=np.float32),
+                          **_GZIP_OPTS)
+        sh.attrs['n_segment_hits'] = int(len(seg_sen['PE']))
+        grp.attrs['has_segment_sensor_map'] = True
 
 
 def save_labl_event_v3(f, event_dict, seq_idx):

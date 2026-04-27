@@ -19,7 +19,8 @@
   "disable_decays": false,
   "lucid_options": {
     "apply_smearing": true,
-    "apply_translation": true
+    "apply_translation": true,
+    "store_segment_sensor_map": true
   },
   "n_jobs": 2,
   "n_events_per_job": 100,

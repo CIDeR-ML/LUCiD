@@ -217,6 +217,11 @@ def _run_lucid(
     lucid_opts = config.get("lucid_options", {})
     apply_smearing = bool(lucid_opts.get("apply_smearing", True))
     apply_translation = bool(lucid_opts.get("apply_translation", True))
+    # Opt-in segment <-> sensor map. Default off so existing dataprod runs are
+    # byte-identical. The matching PhotonSim macro flag
+    # (/photon/storeSegmentIndex true) must also be set; generate_macro reads
+    # the same key.
+    store_segment_sensor_map = bool(lucid_opts.get("store_segment_sensor_map", False))
 
     saved_files = generate_events_from_photonsim_particles(
         event_simulator=simulate_event,
@@ -238,6 +243,7 @@ def _run_lucid(
         material=material,
         include_track_segments=True,
         primary_source=config.get("primary_source", "particles"),
+        store_segment_sensor_map=store_segment_sensor_map,
     )
     print(f"LUCiD wrote {len(saved_files)} files under {output_dir}/{{sensor,inst,seg,labl}}/")
 
