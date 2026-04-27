@@ -305,6 +305,62 @@ def _simulate_particles_bucketed(
             track_energies, track_positions, track_directions)
 
 
+def _read_photons_for_event(raw_tree, event_idx):
+    """Stitch OpticalPhotonsRaw chunks for one event into flat numpy arrays.
+
+    OpticalPhotonsRaw stores per-photon scalars as fixed-K chunks (one
+    TTree entry = one chunk of up to 100 k photons). Each entry has
+    EventID + ChunkStartID stamped on it. This helper returns the
+    per-event flat (NPhotons, 3)/(NPhotons,) arrays the rest of LUCiD
+    consumes — units converted (PhotonSim mm → LUCiD m); chunk concat
+    is in ascending ChunkStartID order so global photon IDs line up
+    with Particle_PhotonIDsData.
+
+    Memory: at 30 M photons / event this materializes ~1 GB of
+    photon arrays in numpy. PhotonSim's streaming bound only applies
+    to the simulator side; LUCiD still processes one event at a time.
+    """
+    import numpy as np
+
+    eids = raw_tree['EventID'].array(library='np')
+    chunk_start_ids = raw_tree['ChunkStartID'].array(library='np')
+    mask = (eids == event_idx)
+    matching = np.flatnonzero(mask)
+    if matching.size == 0:
+        # Empty event (no photons emitted). Return zero-length arrays.
+        empty3 = np.zeros((0, 3), dtype=np.float32)
+        empty1 = np.zeros((0,), dtype=np.float32)
+        return empty3, empty3, empty1, empty1
+
+    # Sort by ChunkStartID so chunks concatenate in global-id order.
+    matching = matching[np.argsort(chunk_start_ids[matching])]
+    entry_lo, entry_hi = int(matching.min()), int(matching.max())
+    # Bulk-read the contiguous entry range (matching is contiguous in
+    # practice — chunks for one event are written together — but the
+    # sort+range approach is robust to ordering).
+    chunk_data = raw_tree.arrays(
+        ['PhotonPosX', 'PhotonPosY', 'PhotonPosZ',
+         'PhotonDirX', 'PhotonDirY', 'PhotonDirZ',
+         'PhotonTime', 'PhotonWavelength'],
+        entry_start=entry_lo, entry_stop=entry_hi + 1, library='np',
+    )
+    # Re-index by `matching - entry_lo` to honor the sorted order.
+    rel = matching - entry_lo
+
+    posx = np.concatenate([chunk_data['PhotonPosX'][i] for i in rel]).astype(np.float32, copy=False) / 1000.0
+    posy = np.concatenate([chunk_data['PhotonPosY'][i] for i in rel]).astype(np.float32, copy=False) / 1000.0
+    posz = np.concatenate([chunk_data['PhotonPosZ'][i] for i in rel]).astype(np.float32, copy=False) / 1000.0
+    dirx = np.concatenate([chunk_data['PhotonDirX'][i] for i in rel]).astype(np.float32, copy=False)
+    diry = np.concatenate([chunk_data['PhotonDirY'][i] for i in rel]).astype(np.float32, copy=False)
+    dirz = np.concatenate([chunk_data['PhotonDirZ'][i] for i in rel]).astype(np.float32, copy=False)
+    times = np.concatenate([chunk_data['PhotonTime'][i] for i in rel]).astype(np.float32, copy=False)
+    wls = np.concatenate([chunk_data['PhotonWavelength'][i] for i in rel]).astype(np.float32, copy=False)
+
+    photon_positions = np.column_stack((posx, posy, posz))
+    photon_directions = np.column_stack((dirx, diry, dirz))
+    return photon_positions, photon_directions, times, wls
+
+
 def get_max_photons_per_particle(root_file_path, n_events=None):
     """
     Efficiently scan a ROOT file to find the maximum number of photons in any single particle.
@@ -645,49 +701,35 @@ def read_photon_data_from_photonsim(root_file_path, entry_index):
     # Open the ROOT file
     root_file = uproot.open(root_file_path)
 
-    # Access the tree
+    # Per-photon scalars are in OpticalPhotonsRaw (chunked); only
+    # event-level metadata stays on OpticalPhotons.
+    if 'OpticalPhotonsRaw' not in root_file:
+        raise ValueError(
+            f"PhotonSim ROOT file {root_file_path} is missing OpticalPhotonsRaw. "
+            f"Re-simulate with the current PhotonSim build."
+        )
     tree = root_file['OpticalPhotons']
+    raw_tree = root_file['OpticalPhotonsRaw']
 
-    # Determine which branches to read
-    branches = ['PrimaryEnergy', 'PhotonPosX', 'PhotonPosY', 'PhotonPosZ',
-                'PhotonDirX', 'PhotonDirY', 'PhotonDirZ', 'PhotonTime']
-
-    # Read wavelength if available in the ROOT file
-    available_branches = tree.keys()
-    has_wavelength = 'PhotonWavelength' in available_branches
-    if has_wavelength:
-        branches.append('PhotonWavelength')
-
-    tree_data = tree.arrays(branches,
-                          entry_start=entry_index, entry_stop=entry_index+1, library='np')
+    tree_data = tree.arrays(['PrimaryEnergy'],
+                            entry_start=entry_index, entry_stop=entry_index+1, library='np')
 
     # Extract primary energy (already in MeV)
     energy = float(tree_data['PrimaryEnergy'][0])
 
-    # Extract photon positions (PhotonSim mm → LUCiD m)
-    photon_posx = tree_data['PhotonPosX'][0] / 1000.0  # mm to m
-    photon_posy = tree_data['PhotonPosY'][0] / 1000.0
-    photon_posz = tree_data['PhotonPosZ'][0] / 1000.0
-
-    # Extract photon directions
-    photon_dirx = tree_data['PhotonDirX'][0]
-    photon_diry = tree_data['PhotonDirY'][0]
-    photon_dirz = tree_data['PhotonDirZ'][0]
-
-    # Stack the components to form position and direction arrays
-    photon_positions = np.column_stack((photon_posx, photon_posy, photon_posz))
-    photon_directions = np.column_stack((photon_dirx, photon_diry, photon_dirz))
+    # Stitch chunks for this event into flat per-photon arrays
+    photon_positions, photon_directions, photon_times, photon_wavelengths = \
+        _read_photons_for_event(raw_tree, entry_index)
 
     result = {
         'photon_origins': jnp.array(photon_positions),     # Combined position vectors in m
         'photon_directions': jnp.array(photon_directions), # Combined direction vectors
-        'photon_times': jnp.array(tree_data['PhotonTime'][0]),
+        'photon_times': jnp.array(photon_times),
         'energy': energy  # Energy in MeV
     }
 
-    # Include per-photon wavelengths (nm) if available from PhotonSim
-    if has_wavelength:
-        result['wavelengths'] = jnp.array(tree_data['PhotonWavelength'][0])
+    # Per-photon wavelengths (nm) — always present in OpticalPhotonsRaw.
+    result['wavelengths'] = jnp.array(photon_wavelengths)
 
     return result
 
@@ -731,15 +773,25 @@ def read_particle_data_from_photonsim(root_file_path, entry_index, include_track
     root_file = uproot.open(root_file_path)
     tree = root_file['OpticalPhotons']
 
+    # Per-photon scalar measurements live on a sister tree
+    # (OpticalPhotonsRaw) as fixed-K chunks so PhotonSim's peak RAM is
+    # bounded at any energy. We assemble per-event flat arrays here from
+    # the chunks belonging to entry_index. Old ROOT files without
+    # OpticalPhotonsRaw are not supported (re-simulate to migrate).
+    if 'OpticalPhotonsRaw' not in root_file:
+        raise ValueError(
+            f"PhotonSim ROOT file {root_file_path} is missing OpticalPhotonsRaw. "
+            f"This LUCiD release expects the chunked photon layout. "
+            f"Re-simulate with the current PhotonSim build."
+        )
+    raw_tree = root_file['OpticalPhotonsRaw']
+
     # Read all necessary data for the specified entry. The GENIE provenance
     # branches (RooTrackerEntryID / IncomingNuPdg / IncomingNuKE) are
     # required in v5; older PhotonSim ROOT files without them are not
     # supported.
     branches_to_read = [
         'PrimaryEnergy',
-        'PhotonPosX', 'PhotonPosY', 'PhotonPosZ',
-        'PhotonDirX', 'PhotonDirY', 'PhotonDirZ',
-        'PhotonTime', 'PhotonWavelength',
         'NParticles',
         'Particle_GenealogySize', 'Particle_GenealogyData',
         'Particle_PhotonIDsSize', 'Particle_PhotonIDsData',
@@ -790,19 +842,12 @@ def read_particle_data_from_photonsim(root_file_path, entry_index, include_track
     # Extract primary energy
     primary_energy = float(tree_data['PrimaryEnergy'][0])
 
-    # Extract photon data (PhotonSim mm → LUCiD m)
-    photon_posx = tree_data['PhotonPosX'][0] / 1000.0
-    photon_posy = tree_data['PhotonPosY'][0] / 1000.0
-    photon_posz = tree_data['PhotonPosZ'][0] / 1000.0
-    photon_positions = np.column_stack((photon_posx, photon_posy, photon_posz))
-
-    photon_dirx = tree_data['PhotonDirX'][0]
-    photon_diry = tree_data['PhotonDirY'][0]
-    photon_dirz = tree_data['PhotonDirZ'][0]
-    photon_directions = np.column_stack((photon_dirx, photon_diry, photon_dirz))
-
-    photon_times = tree_data['PhotonTime'][0]
-    photon_wavelengths = tree_data['PhotonWavelength'][0]
+    # Pull this event's photon chunks from OpticalPhotonsRaw. Concatenate
+    # in ascending ChunkStartID order so the resulting flat arrays line up
+    # with global photon IDs in Particle_PhotonIDsData (which weren't
+    # affected by the chunking on the writer side).
+    photon_positions, photon_directions, photon_times, photon_wavelengths = \
+        _read_photons_for_event(raw_tree, entry_index)
 
     # Per-photon merged-segment index (-1 sentinel for non-meaningful parents).
     # Only populated when the writer was opt-in; otherwise None and downstream

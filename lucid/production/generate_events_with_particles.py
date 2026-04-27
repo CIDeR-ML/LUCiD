@@ -79,13 +79,14 @@ def main():
         print(f"Error: Geometry config not found: {args.config}")
         sys.exit(1)
 
-    # Verify ROOT file contains PhotonWavelength (required for QE)
+    # Verify ROOT file uses the chunked OpticalPhotonsRaw layout
+    # (per-photon scalars including PhotonWavelength live there).
     import uproot
     _root = uproot.open(args.root_file)
-    _tree = _root['OpticalPhotons']
-    if 'PhotonWavelength' not in _tree.keys():
-        print("Error: ROOT file does not contain 'PhotonWavelength' branch.")
-        print("Regenerate the ROOT file with PhotonSim wavelength storage enabled.")
+    if 'OpticalPhotonsRaw' not in _root:
+        print("Error: ROOT file does not contain 'OpticalPhotonsRaw' tree.")
+        print("Regenerate with the current PhotonSim build (per-photon scalars "
+              "moved off OpticalPhotons into a chunked sister tree).")
         sys.exit(1)
     _root.close()
 
