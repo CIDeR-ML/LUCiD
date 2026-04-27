@@ -69,10 +69,10 @@ docker run --rm --platform linux/amd64 \
         --output-dir /out --job-id 1 --test
 ```
 
-The in-repo `dataprod_13_numu.json` pins tune `G18_02a_00_000`, whose
-splines are not in the NUISANCE base image. Use `dataprod_13_numu_devtest.json`
-(tune `G18_10a_02_11b`) for container smoke tests; the production
-config runs on S3DF where the full spline set is available.
+All in-repo GENIE configs pin tune `G18_10a_02_11b`, whose splines
+ship in the NUISANCE base image, so they run inside the container
+without extra setup. For other tunes, set `GENIE_XSEC_FILE` to your
+own spline path.
 
 ## 3. Dev loop — bind-mount your checkout
 

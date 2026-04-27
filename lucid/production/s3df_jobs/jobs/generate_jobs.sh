@@ -1,7 +1,8 @@
 #!/bin/bash
 # generate_jobs.sh — fan out a dataprod JSON config into SLURM sbatch scripts
-# that invoke `lucid-run-job` (macro + PhotonSim on the bare compute node, then
-# LUCiD v3 writer inside the singularity image with jax/numpy/h5py).
+# that invoke `lucid-run-job` inside the unified LUCiD container
+# (GEANT4 + ROOT + GENIE + PhotonSim + LUCiD). One `apptainer exec` per job;
+# no bare-host state.
 #
 # Usage: ./generate_jobs.sh -c <config_json> [-s] [-t] [-g] [-P partition] [-o output_base]
 
@@ -9,7 +10,6 @@ set -eu -o pipefail
 
 # --- Locate ourselves --------------------------------------------------------
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
-UTILS_DIR="${SCRIPT_DIR}/../utils"
 USER_PATHS="${SCRIPT_DIR}/../user_paths.sh"
 
 if [ -f "${USER_PATHS}" ]; then
@@ -95,20 +95,14 @@ if [ "$USE_CONFIG_NUMBER" == "true" ] && { [ "$CONFIG_NUMBER" == "null" ] || [ "
     exit 1
 fi
 
-[ -n "${LUCID_PATH:-}" ] || { echo "Error: LUCID_PATH not set in user_paths.sh" >&2; exit 1; }
-
-if [ "$PRIMARY_SOURCE" = "genie" ]; then
-    [ -n "${LUCID_IMAGE_PATH:-}" ] || {
-        echo "Error: LUCID_IMAGE_PATH not set (required for primary_source=genie)." >&2
-        echo "Build the unified container with LUCiD/container/lucid.def and point" >&2
-        echo "LUCID_IMAGE_PATH at the resulting .sif." >&2
-        exit 1; }
-    [ -f "${LUCID_IMAGE_PATH}" ] || {
-        echo "Error: LUCID_IMAGE_PATH=${LUCID_IMAGE_PATH} does not exist." >&2
-        exit 1; }
-else
-    [ -n "${PHOTONSIM_BIN:-}" ] || { echo "Error: PHOTONSIM_BIN not set in user_paths.sh" >&2; exit 1; }
-fi
+[ -n "${LUCID_IMAGE_PATH:-}" ] || {
+    echo "Error: LUCID_IMAGE_PATH not set in user_paths.sh." >&2
+    echo "Pull the unified container with:" >&2
+    echo "  apptainer pull lucid.sif docker://ghcr.io/cider-ml/lucid:latest" >&2
+    exit 1; }
+[ -f "${LUCID_IMAGE_PATH}" ] || {
+    echo "Error: LUCID_IMAGE_PATH=${LUCID_IMAGE_PATH} does not exist." >&2
+    exit 1; }
 
 # --- Effective resources ------------------------------------------------------
 EFFECTIVE_OUTPUT_BASE="${OUTPUT_OVERRIDE:-$OUTPUT_BASE_PATH}"
@@ -154,13 +148,14 @@ emit_sbatch() {
     [ -n "$override_energy" ] && override_flag="--override-energy-MeV ${override_energy}"
     local test_flag=""
     [ "$TEST_MODE" = true ] && test_flag="--test"
+    local skip_lucid_flag=""
+    [ "$RUN_LUCID" != "true" ] && skip_lucid_flag="--skip-lucid"
 
     local gpu_line=""
     [ "$EFFECTIVE_GPUS" != "0" ] && gpu_line="#SBATCH --gpus=${EFFECTIVE_GPUS}"
 
     local sbatch_path="${out_dir}/submit_job_${job_id}.sbatch"
 
-    # Common SBATCH header.
     cat > "$sbatch_path" <<EOFSBATCH
 #!/bin/bash
 #SBATCH --partition=${EFFECTIVE_PARTITION}
@@ -180,61 +175,17 @@ echo "SLURM Job ID: \${SLURM_JOB_ID}"
 echo "Job started:  \$(date)"
 echo "Node:         \$(hostname)"
 
-EOFSBATCH
-
-    if [ "$PRIMARY_SOURCE" = "genie" ]; then
-        # Single-step body: everything runs inside the unified LUCiD image
-        # (GEANT4 + ROOT + GENIE + PhotonSim + LUCiD). No bare-host state.
-        local skip_lucid_flag=""
-        [ "$RUN_LUCID" != "true" ] && skip_lucid_flag="--skip-lucid"
-
-        cat >> "$sbatch_path" <<EOFSBATCH
 # Unified container: GEANT4 + ROOT + GENIE + PhotonSim + LUCiD.
-# Cross-section splines live on /cvmfs (526 MB), so we bind it into the
-# container rather than bake into the image.
+# GENIE_XSEC_FILE points inside the container by default; bind /cvmfs only
+# so that an override pointing at a cvmfs spline still works.
 export APPTAINERENV_GENIE_XSEC_FILE=${GENIE_XSEC_FILE}
-singularity exec --nv -B /sdf,/fs,/sdf/scratch,/lscratch,/cvmfs \\
+apptainer exec --nv -B /sdf,/fs,/sdf/scratch,/lscratch,/cvmfs \\
     ${LUCID_IMAGE_PATH} \\
     lucid-run-job \\
         --config "${CONFIG_FILE}" \\
         --output-dir "${out_dir}" \\
         --job-id ${job_id} ${test_flag} ${override_flag} ${skip_lucid_flag}
 
-EOFSBATCH
-    else
-        # Classic two-step body: PhotonSim on bare host, LUCiD in legacy image.
-        cat >> "$sbatch_path" <<EOFSBATCH
-# Host-side env: GEANT4 + ROOT shared libs for the PhotonSim binary.
-source ${UTILS_DIR}/setup_environment.sh
-export PHOTONSIM_BIN=${PHOTONSIM_BIN}
-export PYTHONPATH=${LUCID_PATH}:\${PYTHONPATH:-}
-export APPTAINERENV_PYTHONPATH=\${PYTHONPATH}
-
-# Step A: macro generation + PhotonSim on the bare node (no jax needed).
-${HOST_PYTHON:-python3} -m lucid.production.run_job \\
-    --config "${CONFIG_FILE}" \\
-    --output-dir "${out_dir}" \\
-    --job-id ${job_id} \\
-    --skip-lucid ${test_flag} ${override_flag}
-
-EOFSBATCH
-
-        if [ "$RUN_LUCID" == "true" ]; then
-            cat >> "$sbatch_path" <<EOFSBATCH
-# Step B: LUCiD v3 writer inside the legacy singularity image.
-singularity exec --nv -B /sdf,/fs,/sdf/scratch,/lscratch \\
-    ${SINGULARITY_IMAGE_PATH} \\
-    python3 -m lucid.production.run_job \\
-        --config "${CONFIG_FILE}" \\
-        --output-dir "${out_dir}" \\
-        --job-id ${job_id} \\
-        --skip-photonsim ${test_flag}
-
-EOFSBATCH
-        fi
-    fi
-
-    cat >> "$sbatch_path" <<EOFSBATCH
 echo "Job ended: \$(date)"
 EOFSBATCH
 

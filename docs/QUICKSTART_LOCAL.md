@@ -120,11 +120,10 @@ apptainer exec lucid.sif lucid-run-job \
 
 The image ships PhotonSim pre-built, LUCiD pip-installed, and GENIE
 3.04 with xsec splines for the `AR23_20i_00_000`, `G18_10a_02_11b`,
-and `G21_11a_00_000` tunes pre-baked. The `dataprod_13_numu_devtest.json`
-config uses `G18_10a_02_11b` for container smoke tests; production
-runs with `dataprod_13_numu.json` (tune `G18_02a_00_000`) require
-S3DF's cvmfs-staged splines — see
-[QUICKSTART_S3DF.md](QUICKSTART_S3DF.md).
+and `G21_11a_00_000` tunes pre-baked. All in-repo GENIE configs
+(`dataprod_13_numu.json`, `dataprod_14_nue.json`, etc.) use
+`G18_10a_02_11b` so they work in-container out of the box. For other
+tunes, point `GENIE_XSEC_FILE` at your own spline.
 
 See [QUICKSTART_DOCKER.md](QUICKSTART_DOCKER.md) for more Docker
 details (bind-mount dev loop, Rosetta setup, etc.).

@@ -89,9 +89,10 @@ for particle-gun configs) runs inside one `apptainer exec
 $LUCID_IMAGE_PATH lucid-run-job ...`. The image contains GEANT4 11.3,
 ROOT 6.30, GENIE 3.04, PhotonSim, and the LUCiD Python stack.
 
-Production configs like `dataprod_13_numu.json` pin tune
-`G18_02a_00_000`; set `GENIE_XSEC_FILE` in `user_paths.sh` to the
-matching cvmfs-staged spline file.
+In-repo GENIE configs pin tune `G18_10a_02_11b`, whose splines ship
+in the container. To run with a different tune, point
+`GENIE_XSEC_FILE` in `user_paths.sh` at the matching cvmfs-staged
+spline file.
 
 ## Paths / conventions
 

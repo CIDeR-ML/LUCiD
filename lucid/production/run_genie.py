@@ -107,7 +107,7 @@ def run_genie(
     probe = int(g["probe_pdg"])
     emin = float(g["energy_min_GeV"])
     emax = float(g["energy_max_GeV"])
-    tune = str(g.get("tune", "G18_02a_00_000"))
+    tune = str(g.get("tune", "G18_10a_02_11b"))
     evg_list = str(g.get("event_generator_list", "CC+NC"))
     target = _target_spec(g)
 

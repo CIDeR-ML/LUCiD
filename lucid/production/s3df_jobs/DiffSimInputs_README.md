@@ -5,12 +5,18 @@ Configurations for generating PhotonSim data used as input for LUCiD. These conf
 ## Quick Start
 
 ```bash
-# 1. Configure your paths
-cp user_paths.sh.template user_paths.sh
-vim user_paths.sh  # Edit with your paths
+# 1. Pull the unified container (one-time)
+apptainer pull /sdf/data/neutrino/<user>/software/images/lucid.sif \
+    docker://ghcr.io/cider-ml/lucid:latest
 
-# 2. Build PhotonSim
-./utils/build_photonsim.sh
+# 2. Configure your paths
+cp user_paths.sh.template user_paths.sh
+vim user_paths.sh   # set LUCID_IMAGE_PATH, OUTPUT_BASE_PATH, SLURM_*
+```
+
+PhotonSim ships pre-built inside the container — no host-side build
+needed. See `DataProduction_README.md` for the full configuration
+schema.
 
 ## Usage
 

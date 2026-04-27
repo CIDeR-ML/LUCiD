@@ -1,48 +1,28 @@
 #!/bin/bash
 # User-specific paths configuration for S3DF — TEMPLATE
 # Copy to user_paths.sh and edit. Do NOT commit user_paths.sh.
+#
+# All production runs go through one `apptainer exec lucid.sif lucid-run-job
+# ...` per SLURM job. The unified container ships GEANT4 + ROOT + GENIE +
+# PhotonSim + LUCiD, so the only host-side state is the .sif file and the
+# output directory.
 
 # =============================================================================
-# Software installations (host-side)
+# Container image
 # =============================================================================
-# GEANT4 and ROOT installs — sourced by utils/setup_environment.sh so the
-# PhotonSim binary finds its shared libs when run on bare compute nodes.
-export GEANT4_INSTALL_DIR="/path/to/your/geant4/install"
-export ROOT_INSTALL_DIR="/path/to/your/root/install"
-
-# Path to the built PhotonSim binary.
-export PHOTONSIM_BIN="/path/to/your/PhotonSim/build/PhotonSim"
-
-# Python interpreter for the bare-host step (macro gen + PhotonSim subprocess).
-# Must be >= 3.8. On some clusters `python3` is older, so pin an explicit version.
-export HOST_PYTHON="python3.8"
-
-# =============================================================================
-# LUCiD
-# =============================================================================
-# LUCiD repo root. Used to set PYTHONPATH so jobs can import
-# `lucid.production.run_job`.
-export LUCID_PATH="/path/to/your/LUCiD"
-
-# =============================================================================
-# Singularity images
-# =============================================================================
-# Legacy image (LUCiD Python env only: jax/numpy/h5py). Used by the classic
-# two-step sbatch body for non-GENIE configs (PhotonSim on bare host, LUCiD
-# in this image).
-export SINGULARITY_IMAGE_PATH="/sdf/group/neutrino/images/develop.sif"
-
-# Unified image (GEANT4 + ROOT + GENIE + PhotonSim + LUCiD) — used for
-# GENIE-based configs (primary_source="genie"), where the whole chain runs
-# in one `singularity exec`. Build with `apptainer build --fakeroot
-# lucid.sif LUCiD/container/lucid.def`.
+# Unified LUCiD container. Pull and convert from ghcr.io with:
+#   apptainer pull lucid.sif docker://ghcr.io/cider-ml/lucid:latest
 export LUCID_IMAGE_PATH="/path/to/your/lucid.sif"
 
-# GENIE cross-section spline XML (gntpc input). The default below is the
-# S3DF cvmfs-staged `G18_02a_00_000` tune covering neutrino energies up to
-# ~1000 GeV, which is plenty for our 0.1–10 GeV flux. Non-S3DF users should
-# stage a local copy and point this at it.
-export GENIE_XSEC_FILE="/cvmfs/larsoft.opensciencegrid.org/products/genie_xsec/v3_06_00/NULL/G1802a00000-k250-e1000/data/gxspl-FNALsmall.xml"
+# =============================================================================
+# GENIE cross-section splines
+# =============================================================================
+# Path *inside* the container. The default points at the `G18_10a_02_11b`
+# spline bundled in the LUCiD image — matches the in-repo dataprod_*.json
+# configs and needs no cvmfs at runtime. To use a different tune, point at
+# the matching spline file (mount /cvmfs into the container if it lives
+# there).
+export GENIE_XSEC_FILE="/opt/genie_xsec/3_04_00/G18_10a_02_11b/gxspl-min.xml.gz"
 
 # =============================================================================
 # Output paths

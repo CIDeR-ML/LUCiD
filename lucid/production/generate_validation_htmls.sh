@@ -26,7 +26,7 @@ LUCID_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 PHOTONSIM_DIR="$(cd "${LUCID_DIR}/../PhotonSim" && pwd)"
 DATAPROD_CONFIG_DIR="${PHOTONSIM_DIR}/macros/data_production_config"
 TMP_DIR="/sdf/data/neutrino/cjesus/tmp/validation_generation"
-SINGULARITY_IMAGE="/sdf/group/neutrino/images/develop.sif"
+SINGULARITY_IMAGE="/sdf/data/neutrino/cjesus/software/images/lucid.sif"
 
 # Parse command line arguments
 while [[ $# -gt 0 ]]; do

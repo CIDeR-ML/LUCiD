@@ -847,7 +847,7 @@ echo ""
 cd {project_root}
 echo "Working directory: $(pwd)"
 
-export SINGULARITY_IMAGE_PATH=/sdf/group/neutrino/images/develop.sif
+export SINGULARITY_IMAGE_PATH=/sdf/data/neutrino/cjesus/software/images/lucid.sif
 function spython() {{
     singularity exec --nv -B /sdf,/fs,/sdf/scratch,/lscratch ${{SINGULARITY_IMAGE_PATH}} python "$@"
 }}
