@@ -31,6 +31,8 @@ dev = ["pytest>=7.0", "nbmake"]
 lucid-optimize = "lucid.optimization.run:main"
 lucid-train-siren = "lucid.siren.train:main"
 lucid-run-job = "lucid.production.run_job:main"
+lucid-build-photon-table = "lucid.siren.training.photonsim_data.build_photon_table:main"
+lucid-build-dedx-table = "lucid.siren.training.photonsim_data.build_dedx_table:main"
 
 [tool.setuptools.packages.find]
 include = ["lucid*"]

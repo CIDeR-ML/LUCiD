@@ -364,8 +364,8 @@ def main():
     parser = argparse.ArgumentParser(
         description='Create training dataset for JAXSiren from 3D density table')
     parser.add_argument('--table-path', '-t',
-                       default='../PhotonSim/output/3d_lookup_table_density/photon_lookup_table.h5',
-                       help='Path to HDF5 photon lookup table file')
+                       default='data/water/mu-/photon_lookup_table.h5',
+                       help='Path to HDF5 photon lookup table file (built by lucid-build-photon-table)')
     parser.add_argument('--output', '-o',
                        default='output/siren_dataset',
                        help='Output directory for dataset')

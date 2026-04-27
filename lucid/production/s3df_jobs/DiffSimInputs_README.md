@@ -65,3 +65,9 @@ $OUTPUT_BASE_PATH/water/monoenergetic/averaged/mu-/2000MeV/
 ```
 
 See `DataProduction_README.md` for additional documentation of the job system in s3df.
+
+## Next step
+
+For the "lookup" configurations, the per-energy ROOTs produced here feed
+into [`docs/SIREN_TRAINING_INPUTS.md`](../../../docs/SIREN_TRAINING_INPUTS.md),
+which covers the ROOT → `photon_lookup_table.h5` build and SIREN training.
