@@ -51,6 +51,7 @@ let selectedGroup = null;
 let showEmpty = true;
 let showMesh = true;
 let pmtSize = 10;
+let outlineWidth = 1.0;
 let autoRotate = true;
 
 // Time sweep.
@@ -75,6 +76,7 @@ let renderer, scene, camera, controls;
 let pmtGeo, pmtMat, pmtMesh;
 let segGeo, segMat, segMesh;
 let outlineMesh = null;
+let outlineMat = null;
 let lastFrameTime = 0;
 
 // Colormap textures.
@@ -647,72 +649,82 @@ function buildSegments() {
 }
 
 // ── Detector outline (cylinder/box/sphere wireframe) ───────────────────
+// Uses three.js fat lines (LineSegments2 + LineMaterial) so thickness
+// works across browsers. WebGL/ANGLE silently caps the regular
+// LineBasicMaterial.linewidth at 1px on Chrome/Safari.
 function buildOutline() {
   if (outlineMesh) { scene.remove(outlineMesh); outlineMesh = null; }
+  outlineMat = null;
   if (!showMesh) return;
+
+  const segs = []; // flat [x0,y0,z0, x1,y1,z1, ...] — pairs of endpoints.
+  const push = (x0,y0,z0, x1,y1,z1) => segs.push(x0,y0,z0, x1,y1,z1);
+
   const t = (detectorType || '').toLowerCase();
-  const grp = new THREE.Group();
-  const mat = new THREE.LineBasicMaterial({ color: 0x28394a, transparent: true, opacity: 0.5 });
   if (t === 'cylinder') {
-    const r = shape.r, hh = shape.halfH;
-    const seg = 64;
-    const top = new Float32Array(seg * 2 * 3), bot = new Float32Array(seg * 2 * 3);
+    const r = shape.r, hh = shape.halfH, seg = 64;
     for (let i = 0; i < seg; i++) {
-      const a0 = 2 * Math.PI * i / seg, a1 = 2 * Math.PI * (i + 1) / seg;
-      top[i*6] = r*Math.cos(a0); top[i*6+1] = r*Math.sin(a0); top[i*6+2] = hh;
-      top[i*6+3] = r*Math.cos(a1); top[i*6+4] = r*Math.sin(a1); top[i*6+5] = hh;
-      bot[i*6] = r*Math.cos(a0); bot[i*6+1] = r*Math.sin(a0); bot[i*6+2] = -hh;
-      bot[i*6+3] = r*Math.cos(a1); bot[i*6+4] = r*Math.sin(a1); bot[i*6+5] = -hh;
+      const a0 = 2*Math.PI*i/seg, a1 = 2*Math.PI*(i+1)/seg;
+      push(r*Math.cos(a0), r*Math.sin(a0),  hh, r*Math.cos(a1), r*Math.sin(a1),  hh);
+      push(r*Math.cos(a0), r*Math.sin(a0), -hh, r*Math.cos(a1), r*Math.sin(a1), -hh);
     }
-    const gTop = new THREE.BufferGeometry(); gTop.setAttribute('position', new THREE.BufferAttribute(top, 3));
-    const gBot = new THREE.BufferGeometry(); gBot.setAttribute('position', new THREE.BufferAttribute(bot, 3));
-    grp.add(new THREE.LineSegments(gTop, mat));
-    grp.add(new THREE.LineSegments(gBot, mat));
-    // Verticals
-    const verts = new Float32Array(8 * 2 * 3);
     for (let i = 0; i < 8; i++) {
-      const a = 2 * Math.PI * i / 8;
-      verts[i*6] = r*Math.cos(a); verts[i*6+1] = r*Math.sin(a); verts[i*6+2] = -hh;
-      verts[i*6+3] = r*Math.cos(a); verts[i*6+4] = r*Math.sin(a); verts[i*6+5] = hh;
+      const a = 2*Math.PI*i/8;
+      push(r*Math.cos(a), r*Math.sin(a), -hh, r*Math.cos(a), r*Math.sin(a),  hh);
     }
-    const gV = new THREE.BufferGeometry(); gV.setAttribute('position', new THREE.BufferAttribute(verts, 3));
-    grp.add(new THREE.LineSegments(gV, mat));
   } else if (t === 'box') {
     const hL = shape.L/2, hW = shape.W/2, hH = shape.H/2;
     const c = [
       [-hL,-hW,-hH],[hL,-hW,-hH],[hL,hW,-hH],[-hL,hW,-hH],
       [-hL,-hW, hH],[hL,-hW, hH],[hL,hW, hH],[-hL,hW, hH],
     ];
-    const e = [[0,1],[1,2],[2,3],[3,0],[4,5],[5,6],[6,7],[7,4],[0,4],[1,5],[2,6],[3,7]];
-    const v = new Float32Array(e.length * 2 * 3);
-    for (let i = 0; i < e.length; i++) {
-      const [a,b] = e[i];
-      v[i*6]=c[a][0]; v[i*6+1]=c[a][1]; v[i*6+2]=c[a][2];
-      v[i*6+3]=c[b][0]; v[i*6+4]=c[b][1]; v[i*6+5]=c[b][2];
+    for (const [a,b] of [[0,1],[1,2],[2,3],[3,0],[4,5],[5,6],[6,7],[7,4],[0,4],[1,5],[2,6],[3,7]]) {
+      push(c[a][0],c[a][1],c[a][2], c[b][0],c[b][1],c[b][2]);
     }
-    const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.BufferAttribute(v, 3));
-    grp.add(new THREE.LineSegments(g, mat));
   } else if (t === 'sphere') {
-    const r = shape.r;
-    // Three great circles (xy, yz, xz planes)
-    const seg = 96;
-    const make = (axis) => {
-      const v = new Float32Array(seg * 2 * 3);
+    const r = shape.r, seg = 96;
+    for (let axis = 0; axis < 3; axis++) {
       for (let i = 0; i < seg; i++) {
-        const a0 = 2 * Math.PI * i / seg, a1 = 2 * Math.PI * (i + 1) / seg;
+        const a0 = 2*Math.PI*i/seg, a1 = 2*Math.PI*(i+1)/seg;
         let p0, p1;
-        if (axis === 0) { p0 = [r*Math.cos(a0), r*Math.sin(a0), 0]; p1 = [r*Math.cos(a1), r*Math.sin(a1), 0]; }
+        if (axis === 0)      { p0 = [r*Math.cos(a0), r*Math.sin(a0), 0]; p1 = [r*Math.cos(a1), r*Math.sin(a1), 0]; }
         else if (axis === 1) { p0 = [0, r*Math.cos(a0), r*Math.sin(a0)]; p1 = [0, r*Math.cos(a1), r*Math.sin(a1)]; }
-        else { p0 = [r*Math.cos(a0), 0, r*Math.sin(a0)]; p1 = [r*Math.cos(a1), 0, r*Math.sin(a1)]; }
-        v[i*6]=p0[0]; v[i*6+1]=p0[1]; v[i*6+2]=p0[2];
-        v[i*6+3]=p1[0]; v[i*6+4]=p1[1]; v[i*6+5]=p1[2];
+        else                 { p0 = [r*Math.cos(a0), 0, r*Math.sin(a0)]; p1 = [r*Math.cos(a1), 0, r*Math.sin(a1)]; }
+        push(p0[0],p0[1],p0[2], p1[0],p1[1],p1[2]);
       }
-      const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.BufferAttribute(v, 3));
-      return new THREE.LineSegments(g, mat);
-    };
-    grp.add(make(0)); grp.add(make(1)); grp.add(make(2));
+    }
+  } else {
+    return;
   }
-  outlineMesh = grp;
+
+  const fat = (typeof THREE.LineSegments2 !== 'undefined') &&
+              (typeof THREE.LineMaterial !== 'undefined') &&
+              (typeof THREE.LineSegmentsGeometry !== 'undefined');
+
+  if (fat) {
+    const g = new THREE.LineSegmentsGeometry();
+    g.setPositions(segs);
+    const mat = new THREE.LineMaterial({
+      color: 0x28394a, transparent: true, opacity: 0.5, linewidth: outlineWidth,
+    });
+    // LineMaterial linewidth is in screen pixels by default and needs the
+    // renderer resolution to compute the thickness in clip space.
+    const sz = renderer.getSize(new THREE.Vector2());
+    mat.resolution.set(sz.x, sz.y);
+    outlineMat = mat;
+    const ls = new THREE.LineSegments2(g, mat);
+    ls.computeLineDistances();
+    outlineMesh = ls;
+  } else {
+    // Fallback: plain LineSegments. Thickness slider will visibly affect
+    // Firefox only.
+    const arr = new Float32Array(segs);
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(arr, 3));
+    const mat = new THREE.LineBasicMaterial({ color: 0x28394a, transparent: true, opacity: 0.5, linewidth: outlineWidth });
+    outlineMat = mat;
+    outlineMesh = new THREE.LineSegments(g, mat);
+  }
   scene.add(outlineMesh);
 }
 
@@ -765,6 +777,9 @@ function updatePMTColors() {
     pmtGeo.attributes.contVal.needsUpdate = true;
   }
   drawLegend();
+  // Re-apply any active selection so the catVal override survives — this
+  // canonical write would otherwise wipe the selection-hue paint.
+  applyCorrespondence();
 }
 
 function pmtContValArrayForField() {
@@ -799,6 +814,9 @@ function updateSegmentColors() {
     }
     segGeo.attributes.contVal.needsUpdate = true;
   }
+  // Re-apply the selection override (it lives in the same buffer we
+  // just rewrote canonically).
+  applyCorrespondence();
 }
 
 // ── Correspondence: isolate the selected item ─────────────────────────
@@ -848,7 +866,62 @@ function applyCorrespondence() {
   pmtMat.uniforms.corrOn.value = corrActive ? 1.0 : 0.0;
   if (segMat) segMat.uniforms.corrOn.value = corrActive ? 1.0 : 0.0;
 
+  // Reset PMT catVal to the canonical (dominant-particle) hue. We do
+  // this unconditionally so a prior selection-hue override is wiped
+  // before we (maybe) write a new one — keeps applyCorrespondence
+  // idempotent across selection toggles.
+  const isCat = (curLabel !== 'none');
+  const pmtCV = pmtGeo.attributes.catVal.array;
+  if (isCat) {
+    pmtCV.set(pmtCatValArray());
+    pmtGeo.attributes.catVal.needsUpdate = true;
+  }
+  // Same for seg catVal: a per-track binary highlight + a hue override
+  // for tracks belonging to the selection so the 3D seg points read as
+  // the selection's color, mirroring the PMT path. updatePMTColors can
+  // chain in here before buildSegments has rebuilt segGeo for the new
+  // event, so guard against a buffer-size mismatch — buildSegments will
+  // eventually call updateSegmentColors → applyCorrespondence with the
+  // correct geometry.
+  let segCV = null;
+  let segOK = false;
+  const K = SEG_POINTS_PER;
+  if (segGeo && isCat && evtBundle && evtBundle.seg) {
+    const seg = evtBundle.seg;
+    const buf = segGeo.attributes.catVal.array;
+    if (seg && seg.n && buf.length === seg.n * K) {
+      segCV = buf;
+      segOK = true;
+      const segCat = segCatValArrays();
+      if (segCat) {
+        for (let i = 0; i < seg.n; i++) {
+          const v = segCat[i];
+          for (let k = 0; k < K; k++) segCV[i * K + k] = v;
+        }
+        segGeo.attributes.catVal.needsUpdate = true;
+      }
+    }
+  }
+
   if (corrActive) {
+    // Selection hue override: in pile-up overlap, a sensor can receive PE
+    // from the selection AND from another group whose particle dominates.
+    // Painting such a contributor in the dominant particle's hue makes it
+    // look like another group's hit is being highlighted. Recolor
+    // contributors with the selection's own hue instead. (The 2D panel
+    // does the same trick at render time; here we bake it into catVal.)
+    let selectionHue = 0;
+    let useSelHue = false;
+    if (isCat) {
+      if (selectedGroup) {
+        selectionHue = groupHue(selectedGroup.kind, selectedGroup.id);
+        useSelHue = true;
+      } else if (selectedParticle != null) {
+        selectionHue = hashHue(selectedParticle);
+        useSelHue = true;
+      }
+    }
+
     // PMT contributions summed across all particles in the current set.
     const map = unionContributions(particleSet);
     if (map) {
@@ -859,22 +932,30 @@ function applyCorrespondence() {
           if (!(pe > 0)) continue;
           const frac = Math.min(1, pe / maxPE);
           pmtHL[s] = 0.35 + 0.65 * Math.sqrt(frac);
+          if (useSelHue) pmtCV[s] = selectionHue;
         }
+        if (useSelHue) pmtGeo.attributes.catVal.needsUpdate = true;
       }
     }
     // Segments: binary highlight if the track belongs to any particle in
-    // the selected set.
+    // the selected set, and (in categorical mode) override the hue to
+    // the selection's color so the bright seg points read consistently.
     const seg = evtBundle.seg;
     const per_track = evtBundle.labl.per_track;
-    if (seg && seg.n && segHL && per_track && per_track.particle_idx) {
-      const K = SEG_POINTS_PER;
+    const segHLOK = segHL && seg && seg.n && segHL.length === seg.n * K;
+    if (segHLOK && per_track && per_track.particle_idx) {
       const setLookup = new Set(particleSet);
       for (let i = 0; i < seg.n; i++) {
         const t = seg.track_idx[i];
         const p = per_track.particle_idx[t];
-        const v = setLookup.has(p) ? 1.0 : 0.0;
+        const inSel = setLookup.has(p);
+        const v = inSel ? 1.0 : 0.0;
         for (let k = 0; k < K; k++) segHL[i * K + k] = v;
+        if (inSel && useSelHue && segOK) {
+          for (let k = 0; k < K; k++) segCV[i * K + k] = selectionHue;
+        }
       }
+      if (useSelHue && segOK) segGeo.attributes.catVal.needsUpdate = true;
     }
   } // end corrActive
   pmtGeo.attributes.hl.needsUpdate = true;
@@ -1200,18 +1281,31 @@ function render2D() {
   const offX = margin + (avW - layout.layoutW * scale) / 2;
   const offY = margin + (avH - layout.layoutH * scale) / 2;
 
-  // Panel backgrounds (very faint) and labels.
+  // Panel backgrounds (very faint) and labels. Labels render OUTSIDE the
+  // rect so they never overlap sensors: 'top' anchor sits above the rect
+  // (used for wide strips); 'left' anchor reads bottom→top along the
+  // rect's left margin (used for cap squares, where there isn't enough
+  // empty corner space inside the disc-of-sensors).
   ctx2d.strokeStyle = 'rgba(255,255,255,0.04)';
   ctx2d.lineWidth = 1;
   ctx2d.font = '10px monospace';
   ctx2d.fillStyle = '#444';
   ctx2d.textAlign = 'left';
+  ctx2d.textBaseline = 'alphabetic';
   for (const p of layout.panels) {
     const rx = offX + p.rect.x * scale;
     const ry = offY + p.rect.y * scale;
     const rw = p.rect.w * scale, rh = p.rect.h * scale;
     ctx2d.strokeRect(rx, ry, rw, rh);
-    ctx2d.fillText(p.label, rx + 4, ry + 11);
+    if (p.labelAnchor === 'left') {
+      ctx2d.save();
+      ctx2d.translate(rx - 4, ry + rh);
+      ctx2d.rotate(-Math.PI / 2);
+      ctx2d.fillText(p.label, 0, 0);
+      ctx2d.restore();
+    } else {
+      ctx2d.fillText(p.label, rx + 4, ry - 4);
+    }
   }
 
   // Seams (box face boundaries).
@@ -1504,6 +1598,9 @@ function onResize() {
     renderer.setSize(el3.clientWidth, el3.clientHeight);
     camera.aspect = el3.clientWidth / el3.clientHeight;
     camera.updateProjectionMatrix();
+    if (outlineMat && outlineMat.resolution) {
+      outlineMat.resolution.set(el3.clientWidth, el3.clientHeight);
+    }
   }
   resize2D();
   render2D();
@@ -1593,6 +1690,7 @@ function setupUI() {
     manualVmin = null; manualVmax = null;
     cmapName = 'auto';
     pmtSize = 10;
+    outlineWidth = 1.0;
     showEmpty = true; showMesh = true;
     sweepSpeed = 1.0;
     autoRotate = true;
@@ -1605,6 +1703,7 @@ function setupUI() {
     $('cmapSelect').value = 'auto';
     $('quantileScope').value = quantileScope;
     $('pmtSizeSlider').value = pmtSize; $('pmtSizeVal').textContent = pmtSize.toFixed(1);
+    $('outlineWidthSlider').value = outlineWidth; $('outlineWidthVal').textContent = outlineWidth.toFixed(1);
     $('showEmptyChk').checked = showEmpty;
     $('showMeshChk').checked = showMesh;
     $('sweepSpeed').value = sweepSpeed; $('sweepSpeedVal').textContent = sweepSpeed.toFixed(1);
@@ -1666,6 +1765,11 @@ function setupUI() {
   $('showMeshChk').addEventListener('change', (e) => {
     showMesh = e.target.checked;
     buildOutline();
+  });
+  $('outlineWidthSlider').addEventListener('input', (e) => {
+    outlineWidth = parseFloat(e.target.value);
+    $('outlineWidthVal').textContent = outlineWidth.toFixed(1);
+    if (outlineMat) { outlineMat.linewidth = outlineWidth; outlineMat.needsUpdate = true; }
   });
   $('sweepSpeed').addEventListener('input', (e) => {
     sweepSpeed = parseFloat(e.target.value);
