@@ -777,6 +777,9 @@ function updatePMTColors() {
     pmtGeo.attributes.contVal.needsUpdate = true;
   }
   drawLegend();
+  // Re-apply any active selection so the catVal override survives — this
+  // canonical write would otherwise wipe the selection-hue paint.
+  applyCorrespondence();
 }
 
 function pmtContValArrayForField() {
@@ -811,6 +814,9 @@ function updateSegmentColors() {
     }
     segGeo.attributes.contVal.needsUpdate = true;
   }
+  // Re-apply the selection override (it lives in the same buffer we
+  // just rewrote canonically).
+  applyCorrespondence();
 }
 
 // ── Correspondence: isolate the selected item ─────────────────────────
@@ -860,7 +866,62 @@ function applyCorrespondence() {
   pmtMat.uniforms.corrOn.value = corrActive ? 1.0 : 0.0;
   if (segMat) segMat.uniforms.corrOn.value = corrActive ? 1.0 : 0.0;
 
+  // Reset PMT catVal to the canonical (dominant-particle) hue. We do
+  // this unconditionally so a prior selection-hue override is wiped
+  // before we (maybe) write a new one — keeps applyCorrespondence
+  // idempotent across selection toggles.
+  const isCat = (curLabel !== 'none');
+  const pmtCV = pmtGeo.attributes.catVal.array;
+  if (isCat) {
+    pmtCV.set(pmtCatValArray());
+    pmtGeo.attributes.catVal.needsUpdate = true;
+  }
+  // Same for seg catVal: a per-track binary highlight + a hue override
+  // for tracks belonging to the selection so the 3D seg points read as
+  // the selection's color, mirroring the PMT path. updatePMTColors can
+  // chain in here before buildSegments has rebuilt segGeo for the new
+  // event, so guard against a buffer-size mismatch — buildSegments will
+  // eventually call updateSegmentColors → applyCorrespondence with the
+  // correct geometry.
+  let segCV = null;
+  let segOK = false;
+  const K = SEG_POINTS_PER;
+  if (segGeo && isCat && evtBundle && evtBundle.seg) {
+    const seg = evtBundle.seg;
+    const buf = segGeo.attributes.catVal.array;
+    if (seg && seg.n && buf.length === seg.n * K) {
+      segCV = buf;
+      segOK = true;
+      const segCat = segCatValArrays();
+      if (segCat) {
+        for (let i = 0; i < seg.n; i++) {
+          const v = segCat[i];
+          for (let k = 0; k < K; k++) segCV[i * K + k] = v;
+        }
+        segGeo.attributes.catVal.needsUpdate = true;
+      }
+    }
+  }
+
   if (corrActive) {
+    // Selection hue override: in pile-up overlap, a sensor can receive PE
+    // from the selection AND from another group whose particle dominates.
+    // Painting such a contributor in the dominant particle's hue makes it
+    // look like another group's hit is being highlighted. Recolor
+    // contributors with the selection's own hue instead. (The 2D panel
+    // does the same trick at render time; here we bake it into catVal.)
+    let selectionHue = 0;
+    let useSelHue = false;
+    if (isCat) {
+      if (selectedGroup) {
+        selectionHue = groupHue(selectedGroup.kind, selectedGroup.id);
+        useSelHue = true;
+      } else if (selectedParticle != null) {
+        selectionHue = hashHue(selectedParticle);
+        useSelHue = true;
+      }
+    }
+
     // PMT contributions summed across all particles in the current set.
     const map = unionContributions(particleSet);
     if (map) {
@@ -871,22 +932,30 @@ function applyCorrespondence() {
           if (!(pe > 0)) continue;
           const frac = Math.min(1, pe / maxPE);
           pmtHL[s] = 0.35 + 0.65 * Math.sqrt(frac);
+          if (useSelHue) pmtCV[s] = selectionHue;
         }
+        if (useSelHue) pmtGeo.attributes.catVal.needsUpdate = true;
       }
     }
     // Segments: binary highlight if the track belongs to any particle in
-    // the selected set.
+    // the selected set, and (in categorical mode) override the hue to
+    // the selection's color so the bright seg points read consistently.
     const seg = evtBundle.seg;
     const per_track = evtBundle.labl.per_track;
-    if (seg && seg.n && segHL && per_track && per_track.particle_idx) {
-      const K = SEG_POINTS_PER;
+    const segHLOK = segHL && seg && seg.n && segHL.length === seg.n * K;
+    if (segHLOK && per_track && per_track.particle_idx) {
       const setLookup = new Set(particleSet);
       for (let i = 0; i < seg.n; i++) {
         const t = seg.track_idx[i];
         const p = per_track.particle_idx[t];
-        const v = setLookup.has(p) ? 1.0 : 0.0;
+        const inSel = setLookup.has(p);
+        const v = inSel ? 1.0 : 0.0;
         for (let k = 0; k < K; k++) segHL[i * K + k] = v;
+        if (inSel && useSelHue && segOK) {
+          for (let k = 0; k < K; k++) segCV[i * K + k] = selectionHue;
+        }
       }
+      if (useSelHue && segOK) segGeo.attributes.catVal.needsUpdate = true;
     }
   } // end corrActive
   pmtGeo.attributes.hl.needsUpdate = true;
