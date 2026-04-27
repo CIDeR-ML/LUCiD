@@ -154,6 +154,14 @@ emit_sbatch() {
     local gpu_line=""
     [ "$EFFECTIVE_GPUS" != "0" ] && gpu_line="#SBATCH --gpus=${EFFECTIVE_GPUS}"
 
+    # Optional dev-loop bind mounts. If LUCID_DEV_PATH / PHOTONSIM_DEV_PATH are
+    # exported (e.g. in user_paths.sh), the corresponding host checkout shadows
+    # the baked container copy. Lets you test source-level changes on SLURM
+    # without rebuilding the container.
+    local dev_binds=""
+    [ -n "${LUCID_DEV_PATH:-}" ]     && dev_binds="${dev_binds} -B ${LUCID_DEV_PATH}:/opt/LUCiD"
+    [ -n "${PHOTONSIM_DEV_PATH:-}" ] && dev_binds="${dev_binds} -B ${PHOTONSIM_DEV_PATH}:/opt/PhotonSim"
+
     local sbatch_path="${out_dir}/submit_job_${job_id}.sbatch"
 
     cat > "$sbatch_path" <<EOFSBATCH
@@ -179,7 +187,7 @@ echo "Node:         \$(hostname)"
 # GENIE_XSEC_FILE points inside the container by default; bind /cvmfs only
 # so that an override pointing at a cvmfs spline still works.
 export APPTAINERENV_GENIE_XSEC_FILE=${GENIE_XSEC_FILE}
-apptainer exec --nv -B /sdf,/fs,/sdf/scratch,/lscratch,/cvmfs \\
+apptainer exec --nv -B /sdf,/fs,/sdf/scratch,/lscratch,/cvmfs ${dev_binds} \\
     ${LUCID_IMAGE_PATH} \\
     lucid-run-job \\
         --config "${CONFIG_FILE}" \\

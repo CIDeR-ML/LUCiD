@@ -75,6 +75,21 @@ def get_cache_filename(r: float, sigma: float) -> str:
     return f"gaussian_overlap_r{r:.6f}_sigma{sigma:.6f}.json"
 
 
+def overlap_cache_dir() -> str:
+    # Resolve a writable directory for spatial_overlap_integrals/.
+    # Order: $LUCID_OVERLAP_CACHE_DIR, package-relative (writable editable
+    # checkout), then $XDG_CACHE_HOME/lucid (fallback for read-only installs
+    # like the lucid.sif container).
+    env = os.environ.get('LUCID_OVERLAP_CACHE_DIR')
+    if env:
+        return env
+    pkg_dir = os.path.join(base_dir_path(), 'spatial_overlap_integrals')
+    if os.access(base_dir_path(), os.W_OK):
+        return pkg_dir
+    xdg = os.environ.get('XDG_CACHE_HOME') or os.path.join(os.path.expanduser('~'), '.cache')
+    return os.path.join(xdg, 'lucid', 'spatial_overlap_integrals')
+
+
 def save_overlap_values(r: float, sigma: float, d_values: jnp.ndarray, f_values: jnp.ndarray) -> None:
     """Save overlap values to a cache file.
 
@@ -90,7 +105,8 @@ def save_overlap_values(r: float, sigma: float, d_values: jnp.ndarray, f_values:
         Array of overlap probabilities
     """
     # Create cache directory if it doesn't exist
-    os.makedirs(base_dir_path()+'/spatial_overlap_integrals/', exist_ok=True)
+    cache_dir = overlap_cache_dir()
+    os.makedirs(cache_dir, exist_ok=True)
 
     # Convert to Python lists for JSON serialization
     cache_data = {
@@ -100,7 +116,7 @@ def save_overlap_values(r: float, sigma: float, d_values: jnp.ndarray, f_values:
         'f_values': f_values.tolist()
     }
 
-    filename = os.path.join(base_dir_path()+'/spatial_overlap_integrals/', get_cache_filename(r, sigma))
+    filename = os.path.join(cache_dir, get_cache_filename(r, sigma))
     with open(filename, 'w') as f:
         json.dump(cache_data, f)
 
@@ -120,7 +136,7 @@ def load_overlap_values(r: float, sigma: float) -> Optional[Tuple[jnp.ndarray, j
     Optional[Tuple[jnp.ndarray, jnp.ndarray]]
         Cached values if they exist, None otherwise
     """
-    filename = os.path.join(base_dir_path()+'/spatial_overlap_integrals/', get_cache_filename(r, sigma))
+    filename = os.path.join(overlap_cache_dir(), get_cache_filename(r, sigma))
 
     if os.path.exists(filename):
         with open(filename, 'r') as f:
