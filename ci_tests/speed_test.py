@@ -76,6 +76,7 @@ RE_PHOTONSIM_EXIT = re.compile(
 )
 RE_LUCID_EVENT_TOTAL = re.compile(r"^\s+Event total time:\s*([\d.]+)s")
 RE_LUCID_EVENT_SIM = re.compile(r"^\s+Simulation completed in\s+([\d.]+)s")
+RE_LUCID_STAGE = re.compile(r"^\s+\[timing\]\s+(\w+)\s+([\d.]+)s\s*$")
 RE_LUCID_BATCH_SAVE = re.compile(r"^Batch\s+\d+\s+save time:\s*([\d.]+)s")
 RE_LUCID_DONE = re.compile(r"^Successfully wrote\s+\d+\s+batches?")
 
@@ -120,6 +121,7 @@ def parse_timeline(timeline, n_events: int, has_genie: bool) -> dict:
     event_total: list[float] = []
     event_sim: list[float] = []
     batch_save: list[float] = []
+    stage_times: dict[str, list[float]] = {}
     t_lucid_done = None
 
     for ts, line in timeline:
@@ -133,6 +135,8 @@ def parse_timeline(timeline, n_events: int, has_genie: bool) -> dict:
             t_step4 = ts
         elif (m := RE_PHOTONSIM_EXIT.search(line)):
             photonsim_internal_elapsed = float(m.group(1))
+        elif (m := RE_LUCID_STAGE.match(line)):
+            stage_times.setdefault(m.group(1), []).append(float(m.group(2)))
         elif (m := RE_LUCID_EVENT_TOTAL.match(line)):
             event_total.append(float(m.group(1)))
         elif (m := RE_LUCID_EVENT_SIM.match(line)):
@@ -175,6 +179,7 @@ def parse_timeline(timeline, n_events: int, has_genie: bool) -> dict:
             "per_event_total_s": event_total,
             "per_event_sim_s": event_sim,
             "batch_save_s": batch_save,
+            "per_stage_s": stage_times,
             # init = wall - per-event work - save = preamble (imports,
             # ROOT scan, geometry, lookup tables).
             "init_s": lc_wall - per_event_sum - save_sum,
@@ -196,8 +201,14 @@ def measure_config(
     n_events: int,
     work_root: Path,
     photonsim_bin: str | None,
+    log_path: Path | None = None,
 ) -> dict:
-    """Run the pipeline once at N events and harvest per-event timings."""
+    """Run the pipeline once at N events and harvest per-event timings.
+
+    If ``log_path`` is given, write the raw timestamped stdout there for
+    later inspection (PAD_SIZE, photon counts, geometry banner, anything
+    the parser doesn't capture).
+    """
     is_genie = uses_genie(config_path)
     if is_genie and not os.environ.get("GENIE_XSEC_FILE"):
         return {"skipped": "GENIE_XSEC_FILE not set"}
@@ -219,11 +230,19 @@ def measure_config(
 
     rc, timeline, total_wall = run_with_line_timing(cmd, env)
 
+    if log_path is not None:
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        with log_path.open("w") as f:
+            for ts, line in timeline:
+                f.write(f"{ts:8.3f}  {line}\n")
+
     parsed = parse_timeline(timeline, n_events, has_genie=is_genie)
     parsed["is_genie"] = is_genie
     parsed["wall_total_s"] = total_wall
     parsed["returncode"] = rc
     parsed["ok"] = rc == 0
+    if log_path is not None:
+        parsed["raw_log"] = str(log_path)
     if rc != 0:
         # Tail of the stream so the report is self-diagnosing.
         parsed["stderr_tail"] = [ln for _, ln in timeline[-12:]]
@@ -287,6 +306,49 @@ def write_markdown(report: dict, out_md: Path) -> None:
                 )
     lines.append("")
 
+    # Per-stage LUCiD breakdown (event 0 vs the rest, per stage, per config).
+    # Surfaces JIT compile cost on event 0 and ranks stages by mean cost.
+    any_stages = any(
+        (data.get("stages", {}).get("lucid", {}) or {}).get("per_stage_s")
+        for data in report["configs"].values()
+        if not (data.get("skipped") or data.get("error") or not data.get("ok"))
+    )
+    if any_stages:
+        lines.append("## Per-stage LUCiD breakdown\n")
+        lines.append("Event 0 vs events 1+ for each in-process LUCiD sub-stage. "
+                     "Stages should sum to roughly the per-event total; a large "
+                     "event-0 vs events-1+ gap on `simulate` indicates JIT "
+                     "compile cost on the first event.\n")
+        lines.append("| config | stage | event 0 (s) | mean 1+ (s) | min 1+ (s) | max 1+ (s) | n |")
+        lines.append("|---|---|---:|---:|---:|---:|---:|")
+        for cfg, data in report["configs"].items():
+            if data.get("skipped") or data.get("error") or not data.get("ok"):
+                continue
+            lc = data.get("stages", {}).get("lucid") or {}
+            stage_map = lc.get("per_stage_s") or {}
+            if not stage_map:
+                continue
+            # Stable order: emit in the source-code order if present, then any extras alphabetically.
+            canonical = ["root_read", "preprocess", "simulate", "post_jax", "meta_contain"]
+            ordered = [s for s in canonical if s in stage_map]
+            ordered += sorted(s for s in stage_map if s not in canonical)
+            for stage in ordered:
+                ts = stage_map[stage]
+                if not ts:
+                    continue
+                ev0 = ts[0]
+                rest = ts[1:]
+                if rest:
+                    mean = sum(rest) / len(rest)
+                    lo, hi = min(rest), max(rest)
+                else:
+                    mean = lo = hi = None
+                lines.append(
+                    f"| `{cfg}` | {stage} | {_fmt(ev0)} | {_fmt(mean)} | "
+                    f"{_fmt(lo)} | {_fmt(hi)} | {len(ts)} |"
+                )
+        lines.append("")
+
     # Per-event LUCiD detail (where we have it).
     lines.append("## Per-event LUCiD timing\n")
     lines.append("Event total time (s, includes ROOT read + sim + bookkeeping per event):\n")
@@ -333,6 +395,13 @@ def main(argv=None) -> int:
                    help="Path for the JSON report.")
     p.add_argument("--out-md", type=Path, default=None,
                    help="Optional Markdown summary path.")
+    p.add_argument("--logs-dir", type=Path, default=None,
+                   help="Directory for per-config raw stdout logs (one "
+                        "<config_stem>.log per config, with leading "
+                        "wall-time-relative-to-launch column). Defaults to "
+                        "the parent of --out-json. Pass --no-logs to skip.")
+    p.add_argument("--no-logs", action="store_true",
+                   help="Don't save raw stdout logs (default is to save them).")
     args = p.parse_args(argv)
 
     configs = list(args.configs) if args.configs else list(DEFAULT_CONFIGS)
@@ -352,8 +421,17 @@ def main(argv=None) -> int:
         "configs": {},
     }
 
+    if args.no_logs:
+        logs_dir = None
+    else:
+        logs_dir = args.logs_dir or args.out_json.parent
+    if logs_dir is not None:
+        logs_dir.mkdir(parents=True, exist_ok=True)
+
     print(f"=== speed_test: {len(configs)} configs × N={args.n_events} ===")
     print(f"work dir: {work_root}")
+    if logs_dir is not None:
+        print(f"logs dir: {logs_dir}")
 
     for name in configs:
         cfg_path = CONFIGS_DIR / name
@@ -363,11 +441,13 @@ def main(argv=None) -> int:
             continue
         print(f"  measuring {name} ...", flush=True)
         try:
+            log_path = (logs_dir / f"{cfg_path.stem}.log") if logs_dir else None
             report["configs"][name] = measure_config(
                 cfg_path,
                 n_events=args.n_events,
                 work_root=work_root,
                 photonsim_bin=args.photonsim_bin,
+                log_path=log_path,
             )
         except Exception as e:
             report["configs"][name] = {"error": f"{type(e).__name__}: {e}"}

@@ -222,6 +222,10 @@ def _run_lucid(
     # (/photon/storeSegmentIndex true) must also be set; generate_macro reads
     # the same key.
     store_segment_sensor_map = bool(lucid_opts.get("store_segment_sensor_map", False))
+    # PAD_SIZE bucketing (see lucid/sources/event_io.py for the full rationale).
+    # `None` -> module default; an explicit empty list opts back into the
+    # legacy single-PAD_SIZE-from-file-max path (one JIT compile, no chunking).
+    pad_size_buckets = lucid_opts.get("pad_size_buckets", None)
 
     saved_files = generate_events_from_photonsim_particles(
         event_simulator=simulate_event,
@@ -244,6 +248,7 @@ def _run_lucid(
         include_track_segments=True,
         primary_source=config.get("primary_source", "particles"),
         store_segment_sensor_map=store_segment_sensor_map,
+        pad_size_buckets=pad_size_buckets,
     )
     print(f"LUCiD wrote {len(saved_files)} files under {output_dir}/{{sensor,inst,seg,labl}}/")
 

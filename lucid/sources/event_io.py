@@ -82,6 +82,229 @@ def derive_subprocess_seeds(master_seed, job_id, vertex_idx=0):
     }
 
 
+# =============================================================================
+# PAD_SIZE bucketing
+# =============================================================================
+#
+# The data-mode kernel (`_common_propagation` in lucid/simulation/simulator.py)
+# JIT-caches on the input photon-axis size (`n_rays`, a static argname). Today's
+# pre-bucketing path scans the ROOT file once and pads every event to the
+# file-wide max — so a 49k-photon event still pays for a 530k-photon kernel
+# call. Bucketing cuts that waste by quantizing the kernel input shape into a
+# small set of bucket sizes; one JIT compile per bucket. Particles with more
+# photons than the largest bucket are split into chunks (each <= max bucket)
+# and recombined on host (PE-sum, T-min).
+#
+# Defaults chosen to balance worst-case padding waste (≤2.5×) against up-front
+# compile cost (~1 min per bucket). Set lucid_options.pad_size_buckets in the
+# config to override; an empty list reverts to the file-max single-PAD_SIZE
+# path (one compile, no chunking).
+_DEFAULT_PAD_SIZE_BUCKETS = (10_000, 100_000, 250_000, 500_000, 1_000_000)
+
+
+def _normalize_buckets(buckets):
+    """Coerce a user-provided bucket spec into a sorted tuple of unique ints.
+
+    An empty / None / falsy input is the opt-out sentinel returned as ()."""
+    if not buckets:
+        return ()
+    return tuple(sorted({int(b) for b in buckets if int(b) > 0}))
+
+
+def _pick_bucket(n, buckets):
+    """Smallest bucket >= n. Falls back to the largest bucket if n exceeds it."""
+    for b in buckets:
+        if b >= n:
+            return b
+    return buckets[-1]
+
+
+def _split_into_chunks(n, buckets):
+    """Split ``n`` photons into a list of bucket sizes covering all of them.
+
+    For n <= max(buckets): a single chunk in the smallest fitting bucket.
+    For n  > max(buckets): floor(n/max) chunks of `max(buckets)` plus one
+    remainder chunk in the smallest fitting bucket. The kernel only consumes
+    `Np` photons per call (mask in simulator.py:470), so unused slots are
+    masked out — bucket sizes only affect the JIT cache key, never physics.
+    """
+    max_bucket = buckets[-1]
+    chunks = []
+    remaining = n
+    while remaining > max_bucket:
+        chunks.append(max_bucket)
+        remaining -= max_bucket
+    if remaining > 0:
+        chunks.append(_pick_bucket(remaining, buckets))
+    return chunks
+
+
+def _warmup_buckets(event_simulator, buckets):
+    """Trigger one JIT compile per unique bucket size, up-front.
+
+    Runs the simulator once per bucket with throwaway zero-filled photons
+    (Np=0, so no real propagation work) and blocks on the result. After
+    this returns, every later call at any of these bucket sizes hits the
+    JIT cache and runs at native kernel cost. ~1 min per bucket on CPU.
+    """
+    if not buckets:
+        return
+    from lucid.detector_params import ParticleParams
+    print(f"Warming up JIT cache for {len(buckets)} bucket size(s)...")
+    track_params = ParticleParams.from_cartesian(
+        energy=jnp.float32(800.0),
+        position=jnp.zeros(3, dtype=jnp.float32),
+        direction=jnp.array([0.0, 0.0, 1.0], dtype=jnp.float32),
+        t0=jnp.float32(0.0),
+    )
+    rotation_axis = jnp.array([1.0, 0.0, 0.0], dtype=jnp.float32)
+    translation_vector = jnp.zeros(3, dtype=jnp.float32)
+    default_dir = jnp.array([0.0, 0.0, 1.0], dtype=jnp.float32)
+    for bucket in buckets:
+        t0_warm = time.time()
+        photonsim_data = {
+            'photon_origins':    jnp.zeros((bucket, 3), dtype=jnp.float32),
+            'photon_directions': jnp.tile(default_dir, (bucket, 1)),
+            'photon_times':      jnp.zeros(bucket, dtype=jnp.float32),
+            'wavelengths':       jnp.zeros(bucket, dtype=jnp.float32),
+            'N': jnp.int32(0),
+            'apply_rotation': False,
+            'rotation_axis': rotation_axis,
+            'rotation_angle': 0.0,
+            'apply_translation': False,
+            'translation_vector': translation_vector,
+        }
+        key = jax.random.PRNGKey(0)
+        PE, T = event_simulator(track_params, key, photonsim_data)
+        PE.block_until_ready(); T.block_until_ready()
+        print(f"  bucket {bucket:>10,}: {time.time() - t0_warm:.2f}s", flush=True)
+
+
+def _simulate_particles_bucketed(
+        event_simulator, particles, particle_data,
+        all_photon_origins_np, all_photon_directions_np,
+        all_photon_times_np, all_photon_wavelengths_np,
+        translation_vector, apply_translation,
+        master_key, n_sensors, buckets):
+    """Run the per-particle propagation kernel, splitting big particles into chunks.
+
+    For each particle, group its photons into chunks of size <= max_bucket,
+    each padded to the smallest fitting bucket from ``buckets``. Each chunk
+    is one ``event_simulator(...)`` call; results are combined on host
+    (PE-sum, T-min over chunks). The downstream loop expects the same
+    ``(n_particles, n_sensors)`` numpy arrays the legacy vmap path produced.
+
+    Returns
+    -------
+    PE_per_particle : np.ndarray, shape (n_particles, n_sensors), float32
+    T_per_particle  : np.ndarray, shape (n_particles, n_sensors), float32
+    track_energies   : np.ndarray, shape (n_particles,), float32
+    track_positions  : np.ndarray, shape (n_particles, 3), float32
+    track_directions : np.ndarray, shape (n_particles, 3), float32
+    """
+    from lucid.detector_params import ParticleParams
+
+    n_particles = len(particles)
+    PE_per_particle = np.zeros((n_particles, n_sensors), dtype=np.float32)
+    T_per_particle  = np.zeros((n_particles, n_sensors), dtype=np.float32)
+    track_energies   = np.zeros(n_particles, dtype=np.float32)
+    track_positions  = np.zeros((n_particles, 3), dtype=np.float32)
+    track_directions = np.zeros((n_particles, 3), dtype=np.float32)
+
+    rotation_axis = jnp.array([1.0, 0.0, 0.0], dtype=jnp.float32)
+    zero_translation = jnp.zeros(3, dtype=jnp.float32)
+    default_dir = jnp.array([0.0, 0.0, 1.0], dtype=jnp.float32)
+
+    particle_keys = jax.random.split(master_key, max(n_particles, 1))
+
+    for p_idx, particle in enumerate(particles):
+        # Resolve track params (mirrors the legacy preprocess path so the
+        # downstream metadata builder sees the same per-particle attrs).
+        track_info = particle['track_info']
+        if track_info is not None:
+            track_energies[p_idx]   = track_info['energy']
+            track_positions[p_idx]  = track_info['position']
+            track_directions[p_idx] = track_info['direction']
+        else:
+            track_energies[p_idx]   = particle_data['primary_energy']
+            track_directions[p_idx] = (0.0, 0.0, 1.0)
+        if apply_translation:
+            track_positions[p_idx] += translation_vector
+            if track_info is not None:
+                track_info['position'] = track_positions[p_idx].copy()
+
+        photon_indices = np.asarray(particle['photon_indices'], dtype=np.int64)
+        N = int(len(photon_indices))
+        if N == 0:
+            continue  # leaves PE/T zero for this particle
+
+        track_params = ParticleParams.from_cartesian(
+            energy=jnp.float32(track_energies[p_idx]),
+            position=jnp.asarray(track_positions[p_idx]),
+            direction=jnp.asarray(track_directions[p_idx]),
+            t0=jnp.float32(0.0),
+        )
+
+        chunks = _split_into_chunks(N, buckets)
+
+        # Accumulators (host side).
+        pe_acc = np.zeros(n_sensors, dtype=np.float32)
+        t_min_acc = np.full(n_sensors, np.inf, dtype=np.float32)
+
+        offset = 0
+        for chunk_idx, bucket_size in enumerate(chunks):
+            n_in_chunk = min(bucket_size, N - offset)
+
+            # Build padded arrays (host-side numpy, then push to device).
+            bo = np.zeros((bucket_size, 3), dtype=np.float32)
+            bd = np.zeros((bucket_size, 3), dtype=np.float32)
+            bd[:] = (0.0, 0.0, 1.0)
+            bt = np.zeros(bucket_size, dtype=np.float32)
+            bw = np.zeros(bucket_size, dtype=np.float32)
+            sl = slice(offset, offset + n_in_chunk)
+            idx_slice = photon_indices[sl]
+            bo[:n_in_chunk] = all_photon_origins_np[idx_slice]
+            bd[:n_in_chunk] = all_photon_directions_np[idx_slice]
+            bt[:n_in_chunk] = all_photon_times_np[idx_slice]
+            bw[:n_in_chunk] = all_photon_wavelengths_np[idx_slice]
+
+            photonsim_data = {
+                'photon_origins':    jax.device_put(bo),
+                'photon_directions': jax.device_put(bd),
+                'photon_times':      jax.device_put(bt),
+                'wavelengths':       jax.device_put(bw),
+                'N': jnp.int32(n_in_chunk),
+                'apply_rotation': False,
+                'rotation_axis': rotation_axis,
+                'rotation_angle': 0.0,
+                'apply_translation': False,
+                'translation_vector': zero_translation,
+            }
+
+            chunk_key = jax.random.fold_in(particle_keys[p_idx], chunk_idx)
+            PE_chunk, T_chunk = event_simulator(track_params, chunk_key, photonsim_data)
+            # Block + transfer to host so we can aggregate across chunks
+            # without keeping device buffers alive.
+            PE_chunk_np = np.asarray(PE_chunk, dtype=np.float32)
+            T_chunk_np  = np.asarray(T_chunk,  dtype=np.float32)
+
+            pe_acc += PE_chunk_np
+            # Earliest non-zero time per sensor across chunks.
+            t_min_acc = np.minimum(
+                t_min_acc,
+                np.where(T_chunk_np > 0, T_chunk_np, np.inf),
+            )
+
+            offset += n_in_chunk
+
+        PE_per_particle[p_idx] = pe_acc
+        # Restore "no hit = 0" sentinel for sensors that never fired.
+        T_per_particle[p_idx] = np.where(np.isfinite(t_min_acc), t_min_acc, 0.0)
+
+    return (PE_per_particle, T_per_particle,
+            track_energies, track_positions, track_directions)
+
+
 def get_max_photons_per_particle(root_file_path, n_events=None):
     """
     Efficiently scan a ROOT file to find the maximum number of photons in any single particle.
@@ -763,7 +986,8 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
                                              file_index_start=0, detector_type='cylinder',
                                              material='water', include_track_segments=True,
                                              primary_source='particles',
-                                             store_segment_sensor_map=False):
+                                             store_segment_sensor_map=False,
+                                             pad_size_buckets=None):
     """Generate events from a PhotonSim ROOT file, writing v3 four-file batches.
 
     For each batch of events, writes four HDF5 files under ``output_dir``:
@@ -876,12 +1100,36 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
         n_events = num_entries
         print(f"No n_events specified, using all {n_events} entries")
 
-    # Dynamically determine PAD_SIZE based on actual data in the ROOT file
+    # Resolve PAD_SIZE strategy. Two paths:
+    #   * pad_size_buckets non-empty -> bucketed kernel calls. JIT-compile each
+    #     bucket size up-front; per-particle photons split into chunks. This
+    #     avoids the file-max-padding waste on small events and caps per-call
+    #     memory at the largest bucket.
+    #   * pad_size_buckets == ()    -> legacy single-PAD_SIZE-from-file-max
+    #     behavior preserved verbatim (one JIT compile, vmap over particles).
+    if pad_size_buckets is None:
+        pad_size_buckets = _DEFAULT_PAD_SIZE_BUCKETS
+    pad_size_buckets = _normalize_buckets(pad_size_buckets)
+    use_bucketing = bool(pad_size_buckets)
+
+    # Always scan the file — useful diagnostic even when bucketing.
     print(f"Scanning ROOT file to determine optimal PAD_SIZE...")
     max_photons_in_file = get_max_photons_per_particle(root_file_path, n_events)
-    PAD_SIZE = max_photons_in_file + 1  # +1 for safety margin
-    print(f"  Max photons per particle in file: {max_photons_in_file:,}")
-    print(f"  Using PAD_SIZE: {PAD_SIZE:,}")
+    if use_bucketing:
+        print(f"  Max photons per particle in file: {max_photons_in_file:,}")
+        print(f"  Using PAD_SIZE buckets: {list(pad_size_buckets)}")
+        if max_photons_in_file > pad_size_buckets[-1]:
+            n_chunks_max = -(-max_photons_in_file // pad_size_buckets[-1])  # ceil
+            print(f"  Largest particle ({max_photons_in_file:,}) exceeds max bucket "
+                  f"({pad_size_buckets[-1]:,}); will split into up to {n_chunks_max} "
+                  f"chunks per particle.")
+        # Sentinel kept so legacy code paths that read PAD_SIZE still
+        # compile; the bucketed path doesn't actually use it.
+        PAD_SIZE = pad_size_buckets[-1]
+    else:
+        PAD_SIZE = max_photons_in_file + 1  # +1 for safety margin
+        print(f"  Max photons per particle in file: {max_photons_in_file:,}")
+        print(f"  Using PAD_SIZE: {PAD_SIZE:,}  (legacy mode, pad_size_buckets=[])")
 
     print(f"\nGenerating {n_events} events using VMAP-OPTIMIZED particle-based processing...")
     print(f"Using batch size of {batch_size} events for multithreaded I/O")
@@ -932,6 +1180,44 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
     saved_files = []
     event_times = []  # Track event processing times
 
+    # Warm up the JIT cache once for every bucket size we expect to hit. After
+    # this returns, every per-event kernel call lands on a cached compile and
+    # runs at native cost. ~1 min per bucket on CPU (one-time cost, amortized
+    # over thousands of events). Skipped in legacy mode — there's only one
+    # shape there, so the first event's compile is fine.
+    if use_bucketing:
+        _warmup_buckets(event_simulator, pad_size_buckets)
+
+    # Vmap over a particle/segment axis — defined once and reused for both
+    # the legacy per-event-vmap path and the optional segment-sensor-map
+    # second pass below. The bucketed per-event path doesn't use this; it
+    # calls ``event_simulator`` directly per (particle, chunk).
+    def _simulate_single_particle(track_energy, track_pos, track_dir, photon_origins,
+                                  photon_dirs, photon_times, photon_wavelengths, N, sim_key):
+        track_params = ParticleParams.from_cartesian(
+            energy=track_energy, position=track_pos, direction=track_dir, t0=0.0,
+        )
+        photonsim_data = {
+            'photon_origins': photon_origins,
+            'photon_directions': photon_dirs,
+            'photon_times': photon_times,
+            'wavelengths': photon_wavelengths,
+            'N': N,
+            'apply_rotation': False,
+            'rotation_axis': jnp.array([1.0, 0.0, 0.0]),
+            'rotation_angle': 0.0,
+            # Photons were already translated in NumPy upstream; do NOT ask
+            # the JIT simulator to translate again.
+            'apply_translation': False,
+            'translation_vector': jnp.zeros(3),
+        }
+        return event_simulator(track_params, sim_key, photonsim_data)
+
+    simulate_all_particles = jax.vmap(
+        _simulate_single_particle,
+        in_axes=(0, 0, 0, 0, 0, 0, 0, 0, 0),
+    )
+
     # Create batches
     num_batches = (n_events + batch_size - 1) // batch_size
 
@@ -977,10 +1263,12 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
 
             # Read particle data from PhotonSim
             print(f"    Reading particle data from ROOT file...", flush=True)
+            _t_root = time.perf_counter()
             particle_data = read_particle_data_from_photonsim(
                 root_file_path, event_idx,
                 include_track_segments=include_track_segments,
                 include_segment_index=store_segment_sensor_map)
+            print(f"    [timing] root_read {time.perf_counter() - _t_root:.3f}s", flush=True)
 
             n_particles = particle_data['n_particles']
             particles = particle_data['particles']
@@ -1042,12 +1330,11 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
                 continue
 
             # ========================================================================
-            # VECTORIZED NUMPY PREPROCESSING + EFFICIENT JAX TRANSFER
-            # All preprocessing in NumPy, single efficient transfer using device_put
+            # SHARED UPSTREAM PREPROCESSING (both bucketed and legacy paths)
             # ========================================================================
             print(f"    Preprocessing photon data...", flush=True)
+            _t_pre = time.perf_counter()
 
-            # PAD_SIZE is now computed dynamically at the function level
             default_direction = np.array([0.0, 0.0, 1.0], dtype=np.float32)
 
             # Data already NumPy in meters; just ensure float32
@@ -1071,115 +1358,107 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
                     segments['end_y'] = segments['end_y'] + translation_vector[1]
                     segments['end_z'] = segments['end_z'] + translation_vector[2]
 
-            # Pre-allocate batched arrays
-            batched_origins_np = np.zeros((n_particles, PAD_SIZE, 3), dtype=np.float32)
-            batched_directions_np = np.tile(default_direction, (n_particles, PAD_SIZE, 1))
-            batched_times_np = np.zeros((n_particles, PAD_SIZE), dtype=np.float32)
-            batched_wavelengths_np = np.zeros((n_particles, PAD_SIZE), dtype=np.float32)
-
-            # Build track parameters as NumPy arrays (more efficient than lists)
-            N_per_particle_np = np.zeros(n_particles, dtype=np.int32)
-            track_energies_np = np.zeros(n_particles, dtype=np.float32)
-            track_positions_np = np.zeros((n_particles, 3), dtype=np.float32)
-            track_directions_np = np.zeros((n_particles, 3), dtype=np.float32)
-
-            # Process each particle
-            for particle_idx, particle in enumerate(particles):
-                photon_indices = particle['photon_indices']
-                N = len(photon_indices)
-                N_per_particle_np[particle_idx] = N
-
-                # Extract track parameters
-                track_info = particle['track_info']
-                if track_info is not None:
-                    track_energies_np[particle_idx] = track_info['energy']
-                    track_positions_np[particle_idx] = track_info['position']  # already m
-                    track_directions_np[particle_idx] = track_info['direction']
-                else:
-                    track_energies_np[particle_idx] = particle_data['primary_energy']
-                    track_directions_np[particle_idx] = [0.0, 0.0, 1.0]
-
-                if apply_translation:
-                    track_positions_np[particle_idx] += translation_vector
-                    if track_info is not None:
-                        track_info['position'] = track_positions_np[particle_idx].copy()
-
-                # Scatter photons
-                if N > 0:
-                    batched_origins_np[particle_idx, :N] = all_photon_origins_np[photon_indices]
-                    batched_directions_np[particle_idx, :N] = all_photon_directions_np[photon_indices]
-                    batched_times_np[particle_idx, :N] = all_photon_times_np[photon_indices]
-                    batched_wavelengths_np[particle_idx, :N] = all_photon_wavelengths_np[photon_indices]
-
-            # Efficient transfer to JAX device (avoids unnecessary copies)
-            batched_origins = jax.device_put(batched_origins_np)
-            batched_directions = jax.device_put(batched_directions_np)
-            batched_times = jax.device_put(batched_times_np)
-            batched_wavelengths = jax.device_put(batched_wavelengths_np)
-            N_per_particle_array = jax.device_put(N_per_particle_np)
-            track_energies_array = jax.device_put(track_energies_np)
-            track_positions_array = jax.device_put(track_positions_np)
-            track_directions_array = jax.device_put(track_directions_np)
-
-            # ========================================================================
-            # VMAP OPTIMIZATION: Process all particles in parallel using vmap
-            # ========================================================================
-            print(f"    Running VMAP simulation for {n_particles} particles...", flush=True)
-            sim_start_time = time.time()
-
-            # Create a wrapper function that processes a single particle
-            def simulate_single_particle(track_energy, track_pos, track_dir, photon_origins,
-                                         photon_dirs, photon_times, photon_wavelengths, N, sim_key):
-                """Process a single particle - will be vmapped over all particles."""
-                track_params = ParticleParams.from_cartesian(
-                    energy=track_energy,
-                    position=track_pos,
-                    direction=track_dir,
-                    t0=0.0,
+            if use_bucketing:
+                # ====================================================================
+                # BUCKETED PATH: per-particle / per-chunk kernel calls.
+                # ====================================================================
+                print(f"    [timing] preprocess {time.perf_counter() - _t_pre:.3f}s", flush=True)
+                print(f"    Running bucketed simulation for {n_particles} particles "
+                      f"(buckets={list(pad_size_buckets)})...", flush=True)
+                sim_start_time = time.time()
+                _t_sim = time.perf_counter()
+                (PE_per_particle, T_per_particle,
+                 _track_E_np, _track_pos_np, _track_dir_np) = _simulate_particles_bucketed(
+                    event_simulator, particles, particle_data,
+                    all_photon_origins_np, all_photon_directions_np,
+                    all_photon_times_np, all_photon_wavelengths_np,
+                    translation_vector, apply_translation,
+                    master_key, n_sensors, pad_size_buckets,
                 )
+                sim_elapsed = time.time() - sim_start_time
+                print(f"    Simulation completed in {sim_elapsed:.2f}s", flush=True)
+                print(f"    [timing] simulate {time.perf_counter() - _t_sim:.3f}s", flush=True)
+                _t_post = time.perf_counter()
+            else:
+                # ====================================================================
+                # LEGACY PATH: file-max PAD_SIZE, vmap over particles.
+                # ====================================================================
+                # Pre-allocate batched arrays
+                batched_origins_np = np.zeros((n_particles, PAD_SIZE, 3), dtype=np.float32)
+                batched_directions_np = np.tile(default_direction, (n_particles, PAD_SIZE, 1))
+                batched_times_np = np.zeros((n_particles, PAD_SIZE), dtype=np.float32)
+                batched_wavelengths_np = np.zeros((n_particles, PAD_SIZE), dtype=np.float32)
 
-                photonsim_data = {
-                    'photon_origins': photon_origins,
-                    'photon_directions': photon_dirs,
-                    'photon_times': photon_times,
-                    'wavelengths': photon_wavelengths,
-                    'N': N,
-                    'apply_rotation': False,
-                    'rotation_axis': jnp.array([1.0, 0.0, 0.0]),
-                    'rotation_angle': 0.0,
-                    # Photons were already translated in NumPy above; do NOT
-                    # ask the JIT simulator to translate again or vertices
-                    # near the detector wall get pushed outside it.
-                    'apply_translation': False,
-                    'translation_vector': jnp.zeros(3),
-                }
+                # Build track parameters as NumPy arrays (more efficient than lists)
+                N_per_particle_np = np.zeros(n_particles, dtype=np.int32)
+                track_energies_np = np.zeros(n_particles, dtype=np.float32)
+                track_positions_np = np.zeros((n_particles, 3), dtype=np.float32)
+                track_directions_np = np.zeros((n_particles, 3), dtype=np.float32)
 
-                # detector_params are baked into event_simulator via default_detector_params=True
-                return event_simulator(track_params, sim_key, photonsim_data)
+                # Process each particle
+                for particle_idx, particle in enumerate(particles):
+                    photon_indices = particle['photon_indices']
+                    N = len(photon_indices)
+                    N_per_particle_np[particle_idx] = N
 
-            # Create vectorized version using vmap
-            simulate_all_particles = jax.vmap(
-                simulate_single_particle,
-                in_axes=(0, 0, 0, 0, 0, 0, 0, 0, 0)
-            )
+                    # Extract track parameters
+                    track_info = particle['track_info']
+                    if track_info is not None:
+                        track_energies_np[particle_idx] = track_info['energy']
+                        track_positions_np[particle_idx] = track_info['position']  # already m
+                        track_directions_np[particle_idx] = track_info['direction']
+                    else:
+                        track_energies_np[particle_idx] = particle_data['primary_energy']
+                        track_directions_np[particle_idx] = [0.0, 0.0, 1.0]
 
-            # Generate random keys for all particles
-            particle_keys = jax.random.split(master_key, n_particles)
+                    if apply_translation:
+                        track_positions_np[particle_idx] += translation_vector
+                        if track_info is not None:
+                            track_info['position'] = track_positions_np[particle_idx].copy()
 
-            # Process all particles in one vectorized call!
-            PE_per_particle, T_per_particle = simulate_all_particles(
-                track_energies_array,
-                track_positions_array,
-                track_directions_array,
-                batched_origins,
-                batched_directions,
-                batched_times,
-                batched_wavelengths,
-                N_per_particle_array,
-                particle_keys
-            )
-            sim_elapsed = time.time() - sim_start_time
-            print(f"    Simulation completed in {sim_elapsed:.2f}s", flush=True)
+                    # Scatter photons
+                    if N > 0:
+                        batched_origins_np[particle_idx, :N] = all_photon_origins_np[photon_indices]
+                        batched_directions_np[particle_idx, :N] = all_photon_directions_np[photon_indices]
+                        batched_times_np[particle_idx, :N] = all_photon_times_np[photon_indices]
+                        batched_wavelengths_np[particle_idx, :N] = all_photon_wavelengths_np[photon_indices]
+
+                # Efficient transfer to JAX device (avoids unnecessary copies)
+                batched_origins = jax.device_put(batched_origins_np)
+                batched_directions = jax.device_put(batched_directions_np)
+                batched_times = jax.device_put(batched_times_np)
+                batched_wavelengths = jax.device_put(batched_wavelengths_np)
+                N_per_particle_array = jax.device_put(N_per_particle_np)
+                track_energies_array = jax.device_put(track_energies_np)
+                track_positions_array = jax.device_put(track_positions_np)
+                track_directions_array = jax.device_put(track_directions_np)
+
+                print(f"    [timing] preprocess {time.perf_counter() - _t_pre:.3f}s", flush=True)
+
+                # vmap simulation
+                print(f"    Running VMAP simulation for {n_particles} particles...", flush=True)
+                sim_start_time = time.time()
+                _t_sim = time.perf_counter()
+
+                # Generate random keys for all particles
+                particle_keys = jax.random.split(master_key, n_particles)
+
+                # Process all particles in one vectorized call!
+                PE_per_particle, T_per_particle = simulate_all_particles(
+                    track_energies_array,
+                    track_positions_array,
+                    track_directions_array,
+                    batched_origins,
+                    batched_directions,
+                    batched_times,
+                    batched_wavelengths,
+                    N_per_particle_array,
+                    particle_keys
+                )
+                sim_elapsed = time.time() - sim_start_time
+                print(f"    Simulation completed in {sim_elapsed:.2f}s", flush=True)
+                print(f"    [timing] simulate {time.perf_counter() - _t_sim:.3f}s", flush=True)
+                _t_post = time.perf_counter()
 
             # Calculate PE_true and T_true by aggregating across particles
             PE_true = jnp.sum(PE_per_particle, axis=0)
@@ -1296,6 +1575,8 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
             filename = os.path.join(output_dir, f'event_{event_number}.h5')
 
             # t0 already drawn at top of loop from the seed hierarchy.
+            print(f"    [timing] post_jax {time.perf_counter() - _t_post:.3f}s", flush=True)
+            _t_meta = time.perf_counter()
 
             # Extended info with particle structure
             interaction_meta = build_interaction_metadata(
@@ -1346,6 +1627,7 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
             extended_info['contained_per_particle']    = cont['per_particle']
             extended_info['contained_per_interaction'] = cont['per_interaction']
             extended_info['contained']                 = cont['overall']
+            print(f"    [timing] meta_contain {time.perf_counter() - _t_meta:.3f}s", flush=True)
 
             # Store for batch processing
             extended_info['source_event_idx'] = int(event_number)
