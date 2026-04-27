@@ -63,7 +63,7 @@ CONFIGS_DIR = REPO / "lucid" / "production" / "configs"
 DEFAULT_CONFIGS = [
     "dataprod_01_mu.json",            # single mu — baseline
     "dataprod_06_e_low_energy.json",  # low-E electron — fast, EM-dominated
-    "dataprod_13_numu_devtest.json",  # GENIE numu, devtest tune (G18_10a_02_11b)
+    "dataprod_13_numu.json",          # GENIE numu CC+NC on water (G18_10a_02_11b)
 ]
 
 # ── Stdout patterns from run_job.py + PhotonSim + LUCiD writer ────────

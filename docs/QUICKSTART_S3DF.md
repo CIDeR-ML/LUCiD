@@ -68,6 +68,19 @@ apptainer exec \
                   --output-dir /tmp/out --job-id 1 --test
 ```
 
+To exercise the same bind under the SLURM fan-out (e.g. validate a
+LUCiD/PhotonSim source change before a container rebuild), export
+either or both of `LUCID_DEV_PATH` / `PHOTONSIM_DEV_PATH` before
+running `submit_all_configs.sh` or `generate_jobs.sh`. Each emitted
+sbatch then adds `-B <path>:/opt/{LUCiD,PhotonSim}` to its
+`apptainer exec`. Unset the vars to go back to the frozen container.
+
+```bash
+export LUCID_DEV_PATH="$PWD/LUCiD"
+export PHOTONSIM_DEV_PATH="$PWD/PhotonSim"
+echo "y" | ./submit_all_configs.sh -t -s -o /sdf/data/<user>/dev_test
+```
+
 ## Useful commands
 
 ```bash

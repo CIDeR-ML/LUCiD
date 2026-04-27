@@ -56,8 +56,10 @@ seg/wc_seg_0000.h5
 labl/wc_labl_0000.h5
 ```
 
-For the GENIE chain, the container smoke-test config points at a tune
-that ships in the base image:
+For the GENIE chain (gevgen → gntpc → PhotonSim → LUCiD), the
+in-repo configs pin tune `G18_10a_02_11b`, whose splines ship in
+the NUISANCE base image — so they run inside the container without
+extra setup:
 
 ```bash
 docker run --rm --platform linux/amd64 \
@@ -65,14 +67,11 @@ docker run --rm --platform linux/amd64 \
     -e GENIE_XSEC_FILE=/opt/genie_xsec/3_04_00/G18_10a_02_11b/gxspl-min.xml.gz \
     lucid:latest \
     lucid-run-job \
-        --config /opt/LUCiD/lucid/production/configs/dataprod_13_numu_devtest.json \
+        --config /opt/LUCiD/lucid/production/configs/dataprod_13_numu.json \
         --output-dir /out --job-id 1 --test
 ```
 
-All in-repo GENIE configs pin tune `G18_10a_02_11b`, whose splines
-ship in the NUISANCE base image, so they run inside the container
-without extra setup. For other tunes, set `GENIE_XSEC_FILE` to your
-own spline path.
+For other tunes, set `GENIE_XSEC_FILE` to your own spline path.
 
 ## 3. Dev loop — bind-mount your checkout
 

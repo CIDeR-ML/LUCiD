@@ -108,13 +108,13 @@ docker run --rm --platform linux/amd64 \
     -e GENIE_XSEC_FILE=/opt/genie_xsec/3_04_00/G18_10a_02_11b/gxspl-min.xml.gz \
     ghcr.io/cider-ml/lucid:latest \
     lucid-run-job \
-        --config /opt/LUCiD/lucid/production/configs/dataprod_13_numu_devtest.json \
+        --config /opt/LUCiD/lucid/production/configs/dataprod_13_numu.json \
         --output-dir /out --job-id 1 --test
 
 # Apptainer
 apptainer pull lucid.sif docker://ghcr.io/cider-ml/lucid:latest
 apptainer exec lucid.sif lucid-run-job \
-    --config /opt/LUCiD/lucid/production/configs/dataprod_13_numu_devtest.json \
+    --config /opt/LUCiD/lucid/production/configs/dataprod_13_numu.json \
     --output-dir /tmp/genie_test --job-id 1 --test
 ```
 

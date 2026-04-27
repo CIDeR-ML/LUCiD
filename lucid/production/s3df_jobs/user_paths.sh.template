@@ -42,3 +42,13 @@ export DEFAULT_CPUS="1"
 export DEFAULT_MEMORY="39936"   # MB
 export DEFAULT_GPUS="1"
 export DEFAULT_TIME="23:00:00"
+
+# =============================================================================
+# Optional: dev-loop bind mounts
+# =============================================================================
+# If set, generate_jobs.sh adds `-B <path>:/opt/{LUCiD,PhotonSim}` to each
+# sbatch's `apptainer exec`, shadowing the baked container copy with your
+# host checkout. Useful for validating source-level changes under SLURM
+# without rebuilding the container. Leave unset for frozen-container runs.
+# export LUCID_DEV_PATH="/path/to/your/LUCiD"
+# export PHOTONSIM_DEV_PATH="/path/to/your/PhotonSim"
