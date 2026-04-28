@@ -32,7 +32,6 @@ let pmtArrivalT = null;            // Float32Array — same value used for the 3
 // inst lookups.
 let particleToSensor = null;       // Array(nParticles) of Map<sensor, PE>
 let particleTotals = null;         // Float32Array(nParticles)  total PE per particle
-let particleAncestor = null;       // Int32Array(nParticles)  derived from per_track
 let particleInteraction = null;    // Int32Array(nParticles)
 let particlePdgBucket = null;      // Int8Array(nParticles)   own-PDG bucket, with π⁰ ancestor override
 // PDG-mode sidebar rows. One row per particle (mirroring Particle mode),
@@ -53,14 +52,14 @@ let segmentTotals = null;          // Float32Array(seg.n)  total PE per segment
 // UI state.
 let curView = 'pmts';              // 'pmts' | 'seg'   (exclusive 3D view)
 let curField = 'charge';           // 'charge' | 'time'  (continuous field)
-let curLabel = 'none';             // 'none' | 'particle' | 'pdg' | 'ancestor' | 'interaction' | 'segment'
+let curLabel = 'none';             // 'none' | 'particle' | 'pdg' | 'interaction' | 'segment'
 let logScale = true;
 let percMin = 1, percMax = 99;
 let manualVmin = null, manualVmax = null;
 let cmapName = 'auto';
 // Selection state. Only one is ever set at a time.
 //   selectedParticle : specific particle index (used when Label = None/Particle)
-//   selectedGroup    : { kind: 'pdg'|'ancestor'|'interaction', id: int }
+//   selectedGroup    : { kind: 'pdg'|'interaction', id: int }
 let selectedParticle = null;
 let selectedGroup = null;
 let showEmpty = true;
@@ -279,19 +278,17 @@ function buildInstLookups() {
   particleToSensor = [];
   for (let p = 0; p < n_particles; p++) particleToSensor.push(new Map());
   particleTotals = new Float32Array(n_particles);
-  particleAncestor = new Int32Array(n_particles);    for (let p = 0; p < n_particles; p++) particleAncestor[p] = -1;
   particleInteraction = new Int32Array(n_particles); for (let p = 0; p < n_particles; p++) particleInteraction[p] = -1;
   pmtDomParticle = new Int32Array(nSensors);
   for (let i = 0; i < nSensors; i++) pmtDomParticle[i] = -1;
 
-  // Derive per-particle ancestor/interaction from per_track (any track of
-  // that particle gives the same value; take the first we see).
+  // Derive per-particle interaction from per_track (any track of that
+  // particle gives the same value; take the first we see).
   const pt = evtBundle.labl.per_track;
   if (pt && pt.particle_idx) {
     for (let t = 0; t < pt.particle_idx.length; t++) {
       const p = pt.particle_idx[t];
       if (p < 0 || p >= n_particles) continue;
-      if (particleAncestor[p] < 0 && pt.ancestor) particleAncestor[p] = pt.ancestor[t];
       if (particleInteraction[p] < 0 && pt.interaction) particleInteraction[p] = pt.interaction[t];
     }
   }
@@ -539,9 +536,9 @@ function computePdgBuckets(labl) {
   return buckets;
 }
 
-// Hue for the "group" label modes (pdg, ancestor, interaction).
-// PDG uses the fixed palette keyed on bucket index; ancestor/interaction
-// hash by golden ratio.
+// Hue for the "group" label modes (pdg, interaction).
+// PDG uses the fixed palette keyed on bucket index; interaction hashes
+// by golden ratio.
 function groupHue(kind, id) {
   if (kind === 'pdg') return pdgBucketHue(id);
   return hashHue(id);
@@ -565,7 +562,6 @@ function particleGroupId(p) {
   if (curLabel === 'pdg') {
     return particlePdgBucket ? particlePdgBucket[p] : -1;
   }
-  if (curLabel === 'ancestor')    return particleAncestor ? particleAncestor[p] : -1;
   if (curLabel === 'interaction') return particleInteraction ? particleInteraction[p] : -1;
   return p;
 }
@@ -638,9 +634,6 @@ function segCatValArrays() {
     } else if (curLabel === 'pdg') {
       const pidx = per_track.particle_idx ? per_track.particle_idx[t] : -1;
       out[i] = (pidx >= 0 && particlePdgBucket) ? pdgBucketHue(particlePdgBucket[pidx]) : 0;
-    } else if (curLabel === 'ancestor') {
-      const a = per_track.ancestor ? per_track.ancestor[t] : -1;
-      out[i] = a >= 0 ? hashHue(a) : 0;
     } else if (curLabel === 'interaction') {
       const k = per_track.interaction ? per_track.interaction[t] : -1;
       out[i] = k >= 0 ? hashHue(k) : 0;
@@ -1022,9 +1015,7 @@ function currentParticleSet() {
       return pdgRows[selectedGroup.id].particleIds.slice();
     }
     const out = [];
-    if (selectedGroup.kind === 'ancestor') {
-      for (let p = 0; p < n_particles; p++) if (particleAncestor[p] === selectedGroup.id) out.push(p);
-    } else if (selectedGroup.kind === 'interaction') {
+    if (selectedGroup.kind === 'interaction') {
       for (let p = 0; p < n_particles; p++) if (particleInteraction[p] === selectedGroup.id) out.push(p);
     }
     return out;
@@ -1202,7 +1193,7 @@ function buildSidebar() {
     list.innerHTML = '<div class="event-meta-row" style="padding:8px"><span class="k">(none)</span></div>';
   } else if (curLabel === 'pdg') {
     buildSidebarPdgRows(list);
-  } else if (curLabel === 'ancestor' || curLabel === 'interaction') {
+  } else if (curLabel === 'interaction') {
     buildSidebarGroups(list, curLabel);
   } else {
     buildSidebarParticles(list, n);
@@ -1341,15 +1332,14 @@ function pdgRowLabel(row) {
   return `${name} · P${row.particleIds[0]}`;
 }
 
-// List ancestors / interactions. One row per distinct group id, with the
-// total PE and particle count for that group.
+// List interactions. One row per distinct group id, with the total PE
+// and particle count for that group.
 function buildSidebarGroups(list, kind) {
   const n_particles = evtBundle.labl.n_particles || 0;
   const groups = new Map();   // id → { n, pe, parts: [] }
   for (let p = 0; p < n_particles; p++) {
     let id;
-    if (kind === 'ancestor')      id = particleAncestor ? particleAncestor[p] : -1;
-    else if (kind === 'interaction') id = particleInteraction ? particleInteraction[p] : -1;
+    if (kind === 'interaction') id = particleInteraction ? particleInteraction[p] : -1;
     if (id == null || id < 0) continue;
     if (!groups.has(id)) groups.set(id, { n: 0, pe: 0, parts: [] });
     const g = groups.get(id);
@@ -1392,7 +1382,6 @@ function groupLabelText(kind, id, n) {
     if (!pdgRows || id < 0 || id >= pdgRows.length) return 'pdg row ' + id;
     return pdgRowLabel(pdgRows[id]);
   }
-  if (kind === 'ancestor')    return `ancestor ${id} · n=${n}`;
   if (kind === 'interaction') return `interaction ${id} · n=${n}`;
   if (kind === 'segment')     return `segment ${id}`;
   return String(id);
@@ -1526,8 +1515,7 @@ function renderGroupInfo(info, group) {
   } else {
     for (let p = 0; p < n_particles; p++) {
       let gid;
-      if (kind === 'ancestor')         gid = particleAncestor[p];
-      else if (kind === 'interaction') gid = particleInteraction[p];
+      if (kind === 'interaction') gid = particleInteraction[p];
       if (gid === id) { parts.push(p); pe += particleTotals[p] || 0; }
     }
   }
@@ -1804,7 +1792,6 @@ function drawLegend() {
 function labelText() {
   if (curLabel === 'particle') return 'Particle';
   if (curLabel === 'pdg') return 'PDG';
-  if (curLabel === 'ancestor') return 'Ancestor';
   if (curLabel === 'interaction') return 'Interaction';
   if (curLabel === 'segment') return 'Segment';
   return curField === 'charge' ? 'PE' : 'T (ns)';

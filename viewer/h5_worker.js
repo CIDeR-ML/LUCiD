@@ -217,14 +217,13 @@ function decodeEvent(idx) {
   }
 
   let trackId = null, trackPdg = null, trackParticleIdx = null, trackInitE = null, trackNCh = null;
-  let trackAncestor = null, trackInteraction = null;
+  let trackInteraction = null;
   if (perTrkGrp) {
     trackId = readDsInt32(perTrkGrp, 'track_id');
     trackPdg = readDsInt16(perTrkGrp, 'pdg');
     trackParticleIdx = readDsInt32(perTrkGrp, 'particle_idx');
     trackInitE = readDsFloat32(perTrkGrp, 'initial_energy');
     trackNCh = readDsInt32(perTrkGrp, 'n_cherenkov');
-    trackAncestor = readDsInt32(perTrkGrp, 'ancestor');
     trackInteraction = readDsInt32(perTrkGrp, 'interaction');
   }
 
@@ -253,7 +252,7 @@ function decodeEvent(idx) {
             per_particle: { contained: containedPerParticle, genealogy, genealogy_offsets: genealogyOffsets },
             per_track: { track_id: trackId, pdg: trackPdg, particle_idx: trackParticleIdx,
                          initial_energy: trackInitE, n_cherenkov: trackNCh,
-                         ancestor: trackAncestor, interaction: trackInteraction } },
+                         interaction: trackInteraction } },
   };
 }
 
