@@ -16,6 +16,19 @@ import { computeLayout } from './geometry_layout.js';
 let worker = null;
 let nEvents = 0, nSensors = 0;
 let detectorType = '', shape = {};
+let detectorMaterial = 'water';    // string from seg/config.material — drives β_thresh
+
+// Cherenkov β threshold = 1/n. Materials table mirrors lucid/utils.py.
+// Used by the BETA field to remap β ∈ [β_thresh, 1] → [0, 1] so the
+// colormap covers the physically-meaningful Cherenkov-emitting range.
+const REFRACTIVE_INDEX_BY_MATERIAL = {
+  water: 1.33,
+  ice:   1.31,
+};
+function cherenkovBetaThreshold(material) {
+  const n = REFRACTIVE_INDEX_BY_MATERIAL[(material || '').toLowerCase()] || 1.33;
+  return 1.0 / n;
+}
 let sensorPositions = null;        // Float32Array(nSensors * 3)
 let layout = null;                 // from computeLayout()
 
@@ -25,6 +38,7 @@ let evtBundle = null;              // decoded {sensor, inst, seg, labl, t0, srcI
 // Per-PMT derived arrays (length nSensors).
 let pmtPE = null;                  // summed PE per sensor
 let pmtT = null;                   // earliest T per sensor (NaN if no hit)
+let pmtBeta = null;                // PE-weighted mean β over contributing segments per sensor (NaN if no contribution)
 let pmtDomParticle = null;         // Int32Array  (argmax-over-inst per sensor; -1 if none)
 let pmtHasSignal = null;           // Uint8Array
 let pmtArrivalT = null;            // Float32Array — same value used for the 3D sweep shader
@@ -51,7 +65,7 @@ let segmentTotals = null;          // Float32Array(seg.n)  total PE per segment
 
 // UI state.
 let curView = 'pmts';              // 'pmts' | 'seg'   (exclusive 3D view)
-let curField = 'charge';           // 'charge' | 'time'  (continuous field)
+let curField = 'charge';           // 'charge' | 'time' | 'beta'  (continuous field)
 let curLabel = 'none';             // 'none' | 'particle' | 'pdg' | 'interaction' | 'segment'
 let logScale = true;
 let percMin = 1, percMax = 99;
@@ -119,7 +133,7 @@ function showToast(msg) {
 
 function currentCmapName() {
   if (cmapName !== 'auto') return cmapName;
-  if (curLabel === 'beta' || curLabel === 'ncher') return 'viridis';
+  if (curField === 'beta') return 'viridis';
   return curField === 'charge' ? 'plasma' : 'viridis_r';
 }
 
@@ -273,6 +287,39 @@ function deriveSensorArrays() {
   }
 }
 
+// Project per-segment β_start onto sensors via the seg/sensor_hits map.
+// For each sensor s:
+//   pmtBeta[s] = Σ_rows[sensor==s] (β_start[seg_idx] · PE) / Σ_rows[sensor==s] PE
+// PE-weighting is the natural choice — a row's PE is the number of detected
+// photons from that segment at that sensor, so a segment with stronger
+// photon yield carries proportionally more weight in the average.
+// pmtBeta[s] = NaN when no row references s (rendered as 0 / dark via the
+// pmtHasSignal mask).
+function deriveBetaProjection() {
+  pmtBeta = new Float32Array(nSensors);
+  for (let i = 0; i < nSensors; i++) pmtBeta[i] = NaN;
+  const seg = evtBundle && evtBundle.seg;
+  if (!seg || !seg.sensor_hits || !seg.beta_start || !seg.n) return;
+  const sh = seg.sensor_hits;
+  const segIdx = sh.segment_idx, sensorIdx = sh.sensor_idx, peArr = sh.PE;
+  const beta = seg.beta_start;
+  if (!segIdx || !sensorIdx || !peArr) return;
+  const wsum = new Float64Array(nSensors);
+  const bsum = new Float64Array(nSensors);
+  for (let r = 0; r < segIdx.length; r++) {
+    const sg = segIdx[r], sn = sensorIdx[r], w = peArr[r];
+    if (sg < 0 || sn < 0 || sg >= seg.n || sn >= nSensors) continue;
+    if (!(w > 0)) continue;
+    const b = beta[sg];
+    if (!Number.isFinite(b)) continue;
+    bsum[sn] += b * w;
+    wsum[sn] += w;
+  }
+  for (let i = 0; i < nSensors; i++) {
+    if (wsum[i] > 0) pmtBeta[i] = bsum[i] / wsum[i];
+  }
+}
+
 function buildInstLookups() {
   const n_particles = evtBundle.labl.n_particles || 0;
   particleToSensor = [];
@@ -384,6 +431,38 @@ function buildSegmentLookups() {
 
 function pmtContValArray() {
   const isTime = curField === 'time';
+  const isBeta = curField === 'beta';
+  // β is intrinsically bounded in [0, 1] but only β > 1/n produces
+  // Cherenkov in the active medium. Remap β ∈ [β_thresh, 1] → [0, 1]
+  // so the viridis ramp covers the physically meaningful range; sub-
+  // threshold β clamps to 0. Sensors without a β projection (no
+  // seg/sensor_hits row, or segmap not stored) get NaN and are
+  // excluded from the percentile pool by normalizeValues' finite check.
+  if (isBeta) {
+    const remapped = new Float32Array(nSensors);
+    const bt = cherenkovBetaThreshold(detectorMaterial);
+    const denom = Math.max(1e-6, 1.0 - bt);
+    if (pmtBeta) {
+      for (let i = 0; i < nSensors; i++) {
+        const b = pmtBeta[i];
+        remapped[i] = (pmtHasSignal[i] && Number.isFinite(b))
+          ? Math.max(0, Math.min(1, (b - bt) / denom))
+          : NaN;
+      }
+    } else {
+      for (let i = 0; i < nSensors; i++) remapped[i] = NaN;
+    }
+    // Route through normalizeValues so the panel's vmin/vmax + percentile
+    // sliders work in remapped-β space. log is forced off — log on a
+    // bounded ratio doesn't carry useful structure.
+    return normalizeValues(remapped, {
+      isTime: false,
+      isLog: false,
+      pMin: percMin, pMax: percMax,
+      mVmin: manualVmin, mVmax: manualVmax,
+      mask: pmtHasSignal,
+    });
+  }
   // Quantile transform in time mode: replace each signal PMT's T with its
   // rank fraction in [0, 1]. This gives a uniform visual spread across the
   // viridis_r colormap even when arrival times cluster heavily.
@@ -591,10 +670,38 @@ function pmtCatValArray() {
 
 function segContValArrays() {
   // Seg continuous source follows Field (since seg-only labels are gone):
-  //   charge → edep,  time → time.
+  //   charge → edep,  time → time,  beta → beta_start.
   const seg = evtBundle.seg;
   if (!seg || !seg.n) return { contPerSeg: null, vmin: 0, vmax: 1 };
   const isTimeField = curField === 'time';
+  const isBetaField = curField === 'beta';
+  // β remap to [β_thresh, 1] → [0, 1]; matches the PMT β projection
+  // so a sensor and the segments contributing to it read with the same
+  // hue when both are above threshold. Routed through normalizeValues
+  // (with log forced off) so panel vmin/vmax/percentile sliders work.
+  if (isBetaField) {
+    const remapped = new Float32Array(seg.n);
+    const b = seg.beta_start;
+    if (b) {
+      const bt = cherenkovBetaThreshold(detectorMaterial);
+      const denom = Math.max(1e-6, 1.0 - bt);
+      for (let i = 0; i < seg.n; i++) {
+        remapped[i] = Number.isFinite(b[i])
+          ? Math.max(0, Math.min(1, (b[i] - bt) / denom))
+          : NaN;
+      }
+    } else {
+      for (let i = 0; i < seg.n; i++) remapped[i] = NaN;
+    }
+    const { norm, vmin, vmax } = normalizeValues(remapped, {
+      isTime: false,
+      isLog: false,
+      pMin: percMin, pMax: percMax,
+      mVmin: manualVmin, mVmax: manualVmax,
+      mask: null,
+    });
+    return { contPerSeg: norm, vmin, vmax };
+  }
   const field = isTimeField ? seg.time : seg.edep;
   if (!field) return { contPerSeg: new Float32Array(seg.n), vmin: 0, vmax: 1 };
   const f32 = field instanceof Float32Array ? field : Float32Array.from(field);
@@ -1785,7 +1892,11 @@ function drawLegend() {
   ctx2d.fillStyle = '#888';
   ctx2d.font = '10px monospace';
   ctx2d.textAlign = 'left';
-  ctx2d.fillText(labelText() + (logScale ? ' (log)' : ''), bx, by - 3);
+  // Log applies only to the charge field — time normalises linear, β
+  // is bounded and routed with isLog=false. Suppress the "(log)" tag
+  // unless it's actually in effect.
+  const logActive = logScale && curField === 'charge';
+  ctx2d.fillText(labelText() + (logActive ? ' (log)' : ''), bx, by - 3);
   $('label2dText').textContent = `UNWRAPPED · ${labelText()}`;
 }
 
@@ -1794,6 +1905,7 @@ function labelText() {
   if (curLabel === 'pdg') return 'PDG';
   if (curLabel === 'interaction') return 'Interaction';
   if (curLabel === 'segment') return 'Segment';
+  if (curField === 'beta') return 'β (Č-remapped)';
   return curField === 'charge' ? 'PE' : 'T (ns)';
 }
 
@@ -1876,6 +1988,22 @@ function applyViewSweepRange() {
   }
 }
 
+// Reflect field-dependent control eligibility. Currently used to disable
+// the log-scale toggle in BETA mode (β is bounded; log doesn't apply).
+function syncFieldDependentControls() {
+  const chk = $('logChk');
+  if (!chk) return;
+  if (curField === 'beta') {
+    chk.disabled = true;
+    chk.parentElement.style.opacity = '0.4';
+    chk.parentElement.title = 'Log scale not applicable to β';
+  } else {
+    chk.disabled = false;
+    chk.parentElement.style.opacity = '';
+    chk.parentElement.title = '';
+  }
+}
+
 function updateSweepUI() {
   $('sweepScrubber').value = simTime;
   // Label units depend on whether the active mesh's range is rank ([0,1])
@@ -1907,6 +2035,7 @@ async function loadEvent(idx) {
     deriveSensorArrays();
     buildInstLookups();
     buildSegmentLookups();
+    deriveBetaProjection();
     refreshUnionQMap();   // needs pmtT + seg times; before buildPMTs/buildSegments
     buildPMTs();
     buildSegments();
@@ -1969,11 +2098,12 @@ function setupUI() {
     updateSweepUI();
   });
 
-  // Field toggle (Charge/Time).
+  // Field toggle (Charge / Time / Beta).
   $('fieldGrp').addEventListener('click', (e) => {
     const b = e.target.closest('button'); if (!b) return;
     curField = b.dataset.v;
     for (const c of $('fieldGrp').children) c.classList.toggle('active', c === b);
+    syncFieldDependentControls();
     updatePMTColors();
     updateSegmentColors();
     render2D();
@@ -2049,6 +2179,7 @@ function setupUI() {
     $('sweepSpeed').value = sweepSpeed; $('sweepSpeedVal').textContent = sweepSpeed.toFixed(1);
     for (const c of $('viewGrp').children) c.classList.toggle('active', c.dataset.v === 'pmts');
     for (const c of $('fieldGrp').children) c.classList.toggle('active', c.dataset.v === 'charge');
+    syncFieldDependentControls();
     $('rotBtn').classList.toggle('active', autoRotate);
     if (controls) controls.autoRotate = autoRotate;
     syncSweepBtn();
@@ -2203,6 +2334,7 @@ if (typeof THREE === 'undefined') {
     nSensors = cfg.nSensors;
     detectorType = cfg.detectorType;
     shape = cfg.shape;
+    detectorMaterial = cfg.material || 'water';
     sensorPositions = cfg.sensorPositions;
 
     ls.textContent = 'Computing layout...';
@@ -2216,6 +2348,7 @@ if (typeof THREE === 'undefined') {
     initThree();
     init2D();
     setupUI();
+    syncFieldDependentControls();
 
     await loadEvent(0);
     animate();

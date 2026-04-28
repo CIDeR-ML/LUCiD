@@ -376,6 +376,12 @@ self.onmessage = async function (e) {
         source_file: readString(sCfg, 'source_file'),
         format_version: readAttr(sCfg, 'format_version'),
       };
+      // Material name (used by the viewer to derive the Cherenkov β
+      // threshold for the BETA field). Stored on seg/config in v5; fall
+      // back to sensor/config; default 'water' if absent.
+      const material = readString(gCfg, 'material')
+                    || readString(sCfg, 'material')
+                    || 'water';
 
       // Send a copy of sensor positions so we retain the local reference.
       const posCopy = sensorPositions ? new Float32Array(sensorPositions) : null;
@@ -384,6 +390,7 @@ self.onmessage = async function (e) {
         nEvents, nSensors,
         detectorType,
         shape,
+        material,
         sensorPositions: posCopy,
         provenance,
       }, posCopy ? [posCopy.buffer] : []);
