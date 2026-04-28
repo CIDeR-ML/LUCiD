@@ -1230,10 +1230,6 @@ function buildSidebar() {
           : `${eMeV.toFixed(0)} MeV`;
         addRow(prefix + 'probe', `${nuName} @ ${eStr}`);
       }
-      if (pi.vertex_x && pi.vertex_y && pi.vertex_z) {
-        addRow(prefix + 'vertex',
-          `(${pi.vertex_x[i].toFixed(1)}, ${pi.vertex_y[i].toFixed(1)}, ${pi.vertex_z[i].toFixed(1)}) m`);
-      }
       // Per-primary rows: PDG name + energy, one per primary, so each
       // line stays short. Energy comes from primary_energies_data when
       // present (v5+); falls back to "—" if missing.
@@ -1574,6 +1570,8 @@ function particleSwatch(p) {
 const PDG_NAMES = new Map([
   [11,'e⁻'],[-11,'e⁺'],[13,'μ⁻'],[-13,'μ⁺'],[22,'γ'],
   [211,'π⁺'],[-211,'π⁻'],[111,'π⁰'],[2212,'p'],[2112,'n'],
+  [12,'νe'],[-12,'ν̄e'],[14,'νμ'],[-14,'ν̄μ'],[16,'ντ'],[-16,'ν̄τ'],
+  [321,'K⁺'],[-321,'K⁻'],[130,'K⁰_L'],[310,'K⁰_S'],
 ]);
 
 function particleLabel(p) {
