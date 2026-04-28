@@ -35,11 +35,12 @@ let particleTotals = null;         // Float32Array(nParticles)  total PE per par
 let particleAncestor = null;       // Int32Array(nParticles)  derived from per_track
 let particleInteraction = null;    // Int32Array(nParticles)
 let particlePdgBucket = null;      // Int8Array(nParticles)   own-PDG bucket, with π⁰ ancestor override
-// PDG-mode sidebar rows. One row per particle, except particles in the
-// e⁻, e⁺, or π⁰ buckets are bundled by chain[0] (root meaningful ancestor
-// track) so a primary e± shower or a π⁰ → γγ family folds into one row.
+// PDG-mode sidebar rows. One row per particle (mirroring Particle mode),
+// just sorted by PDG bucket and colored by the fixed bucket palette.
 // Particles with zero PE contribution are excluded entirely.
-//   pdgRows[i] = { id, bucket, particleIds: [...], totalPE, isShower }
+//   pdgRows[i] = { id, bucket, particleIds: [pid], totalPE }
+// (particleIds is always a singleton, kept as a list for code-path
+// uniformity with the older shower-grouping shape.)
 let pdgRows = null;
 
 // seg/sensor_hits lookups (only populated when LUCiD ran with
@@ -319,41 +320,25 @@ function buildInstLookups() {
 }
 
 // Build the PDG-mode sidebar rows. Called after particleTotals is
-// populated. One row per particle, except particles in the e⁻, e⁺, or π⁰
-// buckets are bundled by chain[0] (root meaningful ancestor track) so a
-// primary e± shower or a π⁰ → γγ family folds into one row. Particles
-// with zero PE contribution are excluded.
-//   pdgRows[i] = { id, bucket, particleIds: [...], totalPE, isShower }
+// populated. One row per particle (matches Particle-mode rows 1:1, just
+// re-coloured by PDG bucket). Particles with zero PE contribution are
+// excluded so the sidebar only lists rows that actually correspond to a
+// detector signature.
+//   pdgRows[i] = { id, bucket, particleIds: [pid], totalPE }
 function rebuildPdgRows() {
   pdgRows = [];
   if (!evtBundle || !particlePdgBucket || !particleTotals) return;
-  const labl = evtBundle.labl;
-  const pp = labl.per_particle || {};
-  const n_p = labl.n_particles || 0;
-  if (n_p === 0) return;
-  const gen = pp.genealogy, off = pp.genealogy_offsets;
-  const rootByP = new Int32Array(n_p);
-  for (let p = 0; p < n_p; p++) {
-    rootByP[p] = (gen && off && off.length > p + 1 && off[p + 1] > off[p])
-      ? gen[off[p]] : -1;
-  }
-  const isShowerBucket = (b) => (b === 4 || b === 5 || b === 6); // π⁰ / e⁻ / e⁺
-  const groupMap = new Map();
+  const n_p = (evtBundle.labl.n_particles || 0);
   for (let p = 0; p < n_p; p++) {
     if ((particleTotals[p] || 0) <= 0) continue;     // hide zero-PE particles
-    const b = particlePdgBucket[p];
-    const key = (isShowerBucket(b) && rootByP[p] >= 0)
-      ? `${b}|${rootByP[p]}`
-      : `${b}|p${p}`;
-    let row = groupMap.get(key);
-    if (!row) {
-      row = { bucket: b, particleIds: [], totalPE: 0, isShower: isShowerBucket(b) };
-      groupMap.set(key, row);
-    }
-    row.particleIds.push(p);
-    row.totalPE += particleTotals[p];
+    pdgRows.push({
+      bucket: particlePdgBucket[p],
+      particleIds: [p],
+      totalPE: particleTotals[p],
+    });
   }
-  pdgRows = [...groupMap.values()];
+  // Order: by bucket asc (μ⁻ first … "other" last), then by PE desc within
+  // each bucket so the most luminous of, say, three π⁺ shows first.
   pdgRows.sort((a, b) =>
     a.bucket - b.bucket || b.totalPE - a.totalPE);
   for (let i = 0; i < pdgRows.length; i++) pdgRows[i].id = i;
@@ -1317,11 +1302,7 @@ function buildSidebarPdgRows(list) {
 
 function pdgRowLabel(row) {
   const name = PDG_BUCKET_NAMES[row.bucket] || ('pdg' + row.bucket);
-  if (row.particleIds.length === 1) {
-    return `${name} · P${row.particleIds[0]}`;
-  }
-  // Shower row: show particle count instead of enumerating IDs.
-  return `${name} shower · n=${row.particleIds.length}`;
+  return `${name} · P${row.particleIds[0]}`;
 }
 
 // List ancestors / interactions. One row per distinct group id, with the
