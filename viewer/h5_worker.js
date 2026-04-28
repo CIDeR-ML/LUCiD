@@ -209,17 +209,17 @@ function decodeEvent(idx) {
     };
   }
 
-  let category = null, containedPerParticle = null, genealogy = null, genealogyOffsets = null;
+  let containedPerParticle = null, genealogy = null, genealogyOffsets = null;
   if (perPartGrp) {
-    category = readDsUint8(perPartGrp, 'category');
     containedPerParticle = readDsBool(perPartGrp, 'contained');
     genealogy = readDsInt32(perPartGrp, 'genealogy_data');
     genealogyOffsets = readDsUint32(perPartGrp, 'genealogy_offsets');
   }
 
-  let trackPdg = null, trackParticleIdx = null, trackInitE = null, trackNCh = null;
+  let trackId = null, trackPdg = null, trackParticleIdx = null, trackInitE = null, trackNCh = null;
   let trackAncestor = null, trackInteraction = null;
   if (perTrkGrp) {
+    trackId = readDsInt32(perTrkGrp, 'track_id');
     trackPdg = readDsInt16(perTrkGrp, 'pdg');
     trackParticleIdx = readDsInt32(perTrkGrp, 'particle_idx');
     trackInitE = readDsFloat32(perTrkGrp, 'initial_energy');
@@ -228,7 +228,7 @@ function decodeEvent(idx) {
     trackInteraction = readDsInt32(perTrkGrp, 'interaction');
   }
 
-  const n_particles = nParticles || (category ? category.length : 0);
+  const n_particles = nParticles || (genealogyOffsets ? Math.max(0, genealogyOffsets.length - 1) : 0);
   const n_tracks = (trackPdg ? trackPdg.length : 0) || nTracksSeg;
 
   const segContained = readDsBool(gEvt, 'contained');
@@ -250,8 +250,8 @@ function decodeEvent(idx) {
            n: nSegments },
     labl: { n_particles, n_tracks,
             per_interaction: perInteraction,
-            per_particle: { category, contained: containedPerParticle, genealogy, genealogy_offsets: genealogyOffsets },
-            per_track: { pdg: trackPdg, particle_idx: trackParticleIdx,
+            per_particle: { contained: containedPerParticle, genealogy, genealogy_offsets: genealogyOffsets },
+            per_track: { track_id: trackId, pdg: trackPdg, particle_idx: trackParticleIdx,
                          initial_energy: trackInitE, n_cherenkov: trackNCh,
                          ancestor: trackAncestor, interaction: trackInteraction } },
   };

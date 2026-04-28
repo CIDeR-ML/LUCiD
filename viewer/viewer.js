@@ -34,6 +34,7 @@ let particleToSensor = null;       // Array(nParticles) of Map<sensor, PE>
 let particleTotals = null;         // Float32Array(nParticles)  total PE per particle
 let particleAncestor = null;       // Int32Array(nParticles)  derived from per_track
 let particleInteraction = null;    // Int32Array(nParticles)
+let particlePdgBucket = null;      // Int8Array(nParticles)   own-PDG bucket, with π⁰ ancestor override
 
 // seg/sensor_hits lookups (only populated when LUCiD ran with
 // store_segment_sensor_map=true; otherwise all stay null and Label=Segment
@@ -45,14 +46,14 @@ let segmentTotals = null;          // Float32Array(seg.n)  total PE per segment
 // UI state.
 let curView = 'pmts';              // 'pmts' | 'seg'   (exclusive 3D view)
 let curField = 'charge';           // 'charge' | 'time'  (continuous field)
-let curLabel = 'none';             // 'none' | 'particle' | 'category' | 'ancestor' | 'interaction' | 'segment'
+let curLabel = 'none';             // 'none' | 'particle' | 'pdg' | 'ancestor' | 'interaction' | 'segment'
 let logScale = true;
 let percMin = 1, percMax = 99;
 let manualVmin = null, manualVmax = null;
 let cmapName = 'auto';
 // Selection state. Only one is ever set at a time.
 //   selectedParticle : specific particle index (used when Label = None/Particle)
-//   selectedGroup    : { kind: 'category'|'ancestor'|'interaction', id: int }
+//   selectedGroup    : { kind: 'pdg'|'ancestor'|'interaction', id: int }
 let selectedParticle = null;
 let selectedGroup = null;
 let showEmpty = true;
@@ -288,6 +289,8 @@ function buildInstLookups() {
     }
   }
 
+  particlePdgBucket = computePdgBuckets(evtBundle.labl);
+
   const i_ = evtBundle.inst;
   if (!i_ || !i_.nHits) return;
 
@@ -415,24 +418,91 @@ function refreshUnionQMap() {
   unionQMap = m;
 }
 
-// Shared hue for a category id. Used in 3D (shader HSL), 2D (render2D),
-// and the sidebar swatch — so colors agree everywhere.
-function categoryHue(c) { return ((c | 0) * 0.13 + 0.07) % 1.0; }
+// PDG-bucket coloring. Fixed palette so a given bucket reads with the
+// same hue across every event and label-mode toggle.
+//   0=μ⁻ 1=μ⁺ 2=π⁺ 3=π⁻ 4=π⁰ 5=e⁻ 6=e⁺ 7=p 8=other meson 9=other
+const PDG_BUCKET_NAMES = ['μ⁻','μ⁺','π⁺','π⁻','π⁰','e⁻','e⁺','p','other meson','other'];
+const PDG_BUCKET_HUE = [
+  0.61,  // μ⁻ — blue
+  0.78,  // μ⁺ — purple
+  0.00,  // π⁺ — red
+  0.08,  // π⁻ — orange
+  0.16,  // π⁰ — yellow
+  0.34,  // e⁻ — green
+  0.50,  // e⁺ — cyan
+  0.10,  // p  — brown-ish (low S/L applied where used)
+  0.90,  // other meson — magenta
+  0.00,  // other — gray (S=0 below)
+];
+const PDG_BUCKET_SAT = [0.78,0.78,0.78,0.78,0.85,0.78,0.78,0.45,0.78,0.00];
+const PDG_BUCKET_LIT = [0.55,0.55,0.55,0.55,0.55,0.50,0.55,0.40,0.55,0.55];
+// Other-meson PDG codes (|pdg|).
+const OTHER_MESON_ABS_PDG = new Set([
+  130, 310, 311, 321,            // K⁰_L, K⁰_S, K⁰, K±
+  411, 421, 431,                 // D±, D⁰, D_s±
+  511, 521, 531,                 // B⁰, B±, B_s
+  221, 331, 333,                 // η, η′, φ
+  443, 553,                      // J/ψ, Υ
+]);
+function pdgBucket(pdg) {
+  switch (pdg) {
+    case 13:   return 0;   // μ⁻
+    case -13:  return 1;   // μ⁺
+    case 211:  return 2;   // π⁺
+    case -211: return 3;   // π⁻
+    case 111:  return 4;   // π⁰
+    case 11:   return 5;   // e⁻
+    case -11:  return 6;   // e⁺
+    case 2212: return 7;   // p
+  }
+  return OTHER_MESON_ABS_PDG.has(Math.abs(pdg)) ? 8 : 9;
+}
+function pdgBucketHue(b) { return PDG_BUCKET_HUE[(b|0) % PDG_BUCKET_HUE.length]; }
+function pdgBucketRGB(b) {
+  const i = (b|0) % PDG_BUCKET_HUE.length;
+  return hsl2rgb(PDG_BUCKET_HUE[i], PDG_BUCKET_SAT[i], PDG_BUCKET_LIT[i]);
+}
 
-// Hue for the "group" label modes (category, ancestor, interaction).
-// Category stays on the fixed-palette hue; ancestor/interaction hash by
-// golden ratio so distinct values read as distinct colors.
+// Compute per-particle bucket from genealogy + per_track:
+//   own PDG = pdg of last (leaf) track in genealogy chain
+//   override to π⁰ bucket if any track in the chain has pdg==111
+function computePdgBuckets(labl) {
+  const n_p = labl ? (labl.n_particles || 0) : 0;
+  const buckets = new Int8Array(n_p);
+  buckets.fill(9);   // 'other' default
+  if (n_p === 0) return buckets;
+  const pp = labl.per_particle || {};
+  const pt = labl.per_track || {};
+  if (!pt.track_id || !pt.pdg || !pp.genealogy || !pp.genealogy_offsets) return buckets;
+  const pdgByTrackId = new Map();
+  for (let i = 0; i < pt.track_id.length; i++) pdgByTrackId.set(pt.track_id[i], pt.pdg[i]);
+  const gen = pp.genealogy, off = pp.genealogy_offsets;
+  for (let p = 0; p < n_p; p++) {
+    const s = off[p], e = off[p + 1];
+    if (e <= s) continue;
+    let hasPi0 = false;
+    for (let k = s; k < e; k++) {
+      if (pdgByTrackId.get(gen[k]) === 111) { hasPi0 = true; break; }
+    }
+    if (hasPi0) { buckets[p] = 4; continue; }
+    const leafPdg = pdgByTrackId.get(gen[e - 1]);
+    if (leafPdg !== undefined) buckets[p] = pdgBucket(leafPdg);
+  }
+  return buckets;
+}
+
+// Hue for the "group" label modes (pdg, ancestor, interaction).
+// PDG uses the fixed palette; ancestor/interaction hash by golden ratio.
 function groupHue(kind, id) {
-  if (kind === 'category') return categoryHue(id);
+  if (kind === 'pdg') return pdgBucketHue(id);
   return hashHue(id);
 }
 
 // For a given particle index, return the "group id" for the active label.
 function particleGroupId(p) {
   if (p < 0) return -1;
-  if (curLabel === 'category') {
-    const c = evtBundle.labl.per_particle.category;
-    return c ? c[p] : -1;
+  if (curLabel === 'pdg') {
+    return particlePdgBucket ? particlePdgBucket[p] : -1;
   }
   if (curLabel === 'ancestor')    return particleAncestor ? particleAncestor[p] : -1;
   if (curLabel === 'interaction') return particleInteraction ? particleInteraction[p] : -1;
@@ -504,10 +574,9 @@ function segCatValArrays() {
     if (curLabel === 'particle') {
       const pidx = per_track.particle_idx ? per_track.particle_idx[t] : -1;
       out[i] = pidx >= 0 ? hashHue(pidx) : 0;
-    } else if (curLabel === 'category') {
+    } else if (curLabel === 'pdg') {
       const pidx = per_track.particle_idx ? per_track.particle_idx[t] : -1;
-      const cat = per_particle.category;
-      out[i] = (pidx >= 0 && cat) ? categoryHue(cat[pidx]) : 0;
+      out[i] = (pidx >= 0 && particlePdgBucket) ? pdgBucketHue(particlePdgBucket[pidx]) : 0;
     } else if (curLabel === 'ancestor') {
       const a = per_track.ancestor ? per_track.ancestor[t] : -1;
       out[i] = a >= 0 ? hashHue(a) : 0;
@@ -876,8 +945,8 @@ function updateSegmentColors() {
 }
 
 // ── Correspondence: isolate the selected item ─────────────────────────
-// A selection is either a specific particle (when label ≠ category) or
-// a category (when label = category). Both resolve to a set of particles
+// A selection is either a specific particle (when label ≠ pdg) or
+// a PDG bucket (when label = pdg). Both resolve to a set of particles
 // whose inst contributions we union per sensor.
 function currentParticleSet() {
   if (!evtBundle) return null;
@@ -885,10 +954,9 @@ function currentParticleSet() {
     if (selectedGroup.kind === 'segment') return [];   // not particle-decomposed
     const n_particles = evtBundle.labl.n_particles || 0;
     const out = [];
-    if (selectedGroup.kind === 'category') {
-      const cat = evtBundle.labl.per_particle.category;
-      if (!cat) return null;
-      for (let p = 0; p < cat.length; p++) if (cat[p] === selectedGroup.id) out.push(p);
+    if (selectedGroup.kind === 'pdg') {
+      if (!particlePdgBucket) return null;
+      for (let p = 0; p < n_particles; p++) if (particlePdgBucket[p] === selectedGroup.id) out.push(p);
     } else if (selectedGroup.kind === 'ancestor') {
       for (let p = 0; p < n_particles; p++) if (particleAncestor[p] === selectedGroup.id) out.push(p);
     } else if (selectedGroup.kind === 'interaction') {
@@ -1058,8 +1126,8 @@ function buildSidebar() {
   const title = $('sidebarTitle');
   if (title) {
     title.textContent =
-      curLabel === 'category' ? 'CATEGORIES' :
-      curLabel === 'segment'  ? 'SEGMENTS'   :
+      curLabel === 'pdg'     ? 'PDG'      :
+      curLabel === 'segment' ? 'SEGMENTS' :
       'PARTICLES';
   }
   const n = evtBundle.labl.n_particles || 0;
@@ -1067,7 +1135,7 @@ function buildSidebar() {
     buildSidebarSegments(list);
   } else if (n === 0) {
     list.innerHTML = '<div class="event-meta-row" style="padding:8px"><span class="k">(none)</span></div>';
-  } else if (curLabel === 'category' || curLabel === 'ancestor' || curLabel === 'interaction') {
+  } else if (curLabel === 'pdg' || curLabel === 'ancestor' || curLabel === 'interaction') {
     buildSidebarGroups(list, curLabel);
   } else {
     buildSidebarParticles(list, n);
@@ -1150,9 +1218,8 @@ function buildSidebarGroups(list, kind) {
   const groups = new Map();   // id → { n, pe, parts: [] }
   for (let p = 0; p < n_particles; p++) {
     let id;
-    if (kind === 'category') {
-      const c = evtBundle.labl.per_particle.category;
-      id = c ? c[p] : -1;
+    if (kind === 'pdg') {
+      id = particlePdgBucket ? particlePdgBucket[p] : -1;
     } else if (kind === 'ancestor')    id = particleAncestor ? particleAncestor[p] : -1;
     else if (kind === 'interaction')   id = particleInteraction ? particleInteraction[p] : -1;
     if (id == null || id < 0) continue;
@@ -1193,7 +1260,7 @@ function buildSidebarGroups(list, kind) {
 }
 
 function groupLabelText(kind, id, n) {
-  if (kind === 'category')    return `${CAT_NAMES[id] || 'cat'+id} · n=${n}`;
+  if (kind === 'pdg')         return `${PDG_BUCKET_NAMES[id] || 'pdg'+id} · n=${n}`;
   if (kind === 'ancestor')    return `ancestor ${id} · n=${n}`;
   if (kind === 'interaction') return `interaction ${id} · n=${n}`;
   if (kind === 'segment')     return `segment ${id}`;
@@ -1267,7 +1334,6 @@ function renderSelectionInfo() {
 
 function renderParticleInfo(info, p) {
   const labl = evtBundle.labl;
-  const cat = labl.per_particle.category;
   const cont = labl.per_particle.contained;
   const per_track = labl.per_track;
   const add = (k, v) => {
@@ -1281,7 +1347,7 @@ function renderParticleInfo(info, p) {
   head.innerHTML = `<span class="selection-swatch" style="background:${particleSwatch(p)}"></span>
                     <span>${particleLabel(p)}</span>`;
   info.appendChild(head);
-  if (cat) add('category', CAT_NAMES[cat[p]] || String(cat[p]));
+  if (particlePdgBucket) add('pdg bucket', PDG_BUCKET_NAMES[particlePdgBucket[p]] || String(particlePdgBucket[p]));
   if (cont) add('contained', cont[p] ? 'true' : 'false');
   // Tracks belonging to this particle.
   let nTracks = 0, nCher = 0, initE = 0;
@@ -1321,7 +1387,7 @@ function renderGroupInfo(info, group) {
   let pe = 0;
   for (let p = 0; p < n_particles; p++) {
     let gid;
-    if (kind === 'category')         { const c = evtBundle.labl.per_particle.category; gid = c ? c[p] : -1; }
+    if (kind === 'pdg')              { gid = particlePdgBucket ? particlePdgBucket[p] : -1; }
     else if (kind === 'ancestor')    { gid = particleAncestor[p]; }
     else if (kind === 'interaction') { gid = particleInteraction[p]; }
     if (gid === id) { parts.push(p); pe += particleTotals[p] || 0; }
@@ -1366,16 +1432,14 @@ function pdgName(code) {
 }
 
 function particleSwatch(p) {
-  // Swatch color matches the 3D shader. Category mode uses categoryHue;
-  // otherwise each particle gets a hashed-golden hue.
-  let h;
-  if (curLabel === 'category') {
-    const cat = evtBundle.labl.per_particle.category;
-    h = categoryHue(cat ? cat[p] : p);
-  } else {
-    h = hashHue(p);
+  // Swatch color matches the 3D shader. PDG mode uses the fixed bucket
+  // palette (so e.g. μ⁻ is always blue); otherwise each particle gets a
+  // hashed-golden hue.
+  if (curLabel === 'pdg' && particlePdgBucket) {
+    const [r,g,b] = pdgBucketRGB(particlePdgBucket[p]);
+    return `rgb(${r},${g},${b})`;
   }
-  const [r,g,b] = hsl2rgb(h, 0.78, 0.55);
+  const [r,g,b] = hsl2rgb(hashHue(p), 0.78, 0.55);
   return `rgb(${r},${g},${b})`;
 }
 
@@ -1383,11 +1447,11 @@ const PDG_NAMES = new Map([
   [11,'e⁻'],[-11,'e⁺'],[13,'μ⁻'],[-13,'μ⁺'],[22,'γ'],
   [211,'π⁺'],[-211,'π⁻'],[111,'π⁰'],[2212,'p'],[2112,'n'],
 ]);
-const CAT_NAMES = ['Primary','DecayElec','SecPion','Gamma','—','—','—','—'];
 
 function particleLabel(p) {
-  const cat = evtBundle.labl.per_particle.category;
-  if (cat) return `${CAT_NAMES[cat[p]] || 'cat'+cat[p]} · P${p}`;
+  if (particlePdgBucket) {
+    return `${PDG_BUCKET_NAMES[particlePdgBucket[p]] || 'pdg'+particlePdgBucket[p]} · P${p}`;
+  }
   return `P${p}`;
 }
 
@@ -1523,7 +1587,7 @@ function render2D() {
       if (!showEmpty) continue;
       fill = '#333';
     } else if (isCat) {
-      // catArr[i] is a hue in [0,1] (categoryHue or hashHue). Render via HSL
+      // catArr[i] is a hue in [0,1] (pdgBucketHue or hashHue). Render via HSL
       // so 2D agrees with the 3D shader. When a selection is active, paint
       // contributors with the selection's hue instead of the dominant
       // particle's hue — otherwise overlap PMTs read as "wrong group".
@@ -1598,11 +1662,10 @@ function drawLegend() {
 
 function labelText() {
   if (curLabel === 'particle') return 'Particle';
-  if (curLabel === 'category') return 'Category';
-  if (curLabel === 'track') return 'Track';
   if (curLabel === 'pdg') return 'PDG';
-  if (curLabel === 'beta') return 'β';
-  if (curLabel === 'ncher') return 'n_Cherenkov';
+  if (curLabel === 'ancestor') return 'Ancestor';
+  if (curLabel === 'interaction') return 'Interaction';
+  if (curLabel === 'segment') return 'Segment';
   return curField === 'charge' ? 'PE' : 'T (ns)';
 }
 
