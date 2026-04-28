@@ -209,12 +209,12 @@ def _run_lucid(
     # Opt-in segment <-> sensor map. Default off so existing dataprod runs are
     # byte-identical. The matching PhotonSim macro flag
     # (/photon/storeSegmentIndex true) must also be set; generate_macro reads
-    # the same key. When on, the simulator runs in 'release' mode, which
-    # adds an exact per-(segment, sensor) decomposition next to the per-
-    # sensor totals — replacing the old two-pass approach (which used
-    # independent RNG and therefore disagreed with sensor.h5).
+    # the same key. When on, the simulator runs in 'per_segment' mode,
+    # which adds an exact per-(segment, sensor) decomposition next to
+    # the per-sensor totals — replacing the old two-pass approach
+    # (which used independent RNG and therefore disagreed with sensor.h5).
     store_segment_sensor_map = bool(lucid_opts.get("store_segment_sensor_map", False))
-    hit_mode = 'release' if store_segment_sensor_map else 'realistic'
+    hit_mode = 'per_segment' if store_segment_sensor_map else 'realistic'
 
     simulate_event = setup_event_simulator(
         detector_config_path,

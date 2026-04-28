@@ -32,7 +32,7 @@ from lucid.simulation.photon_step import (
     photon_iteration_sample, photon_iteration_update_factors_safe,
 )
 from lucid.simulation.sensor_response import (
-    make_hits_simulation, make_hits_data, make_hits_likelihood, make_hits_release,
+    make_hits_simulation, make_hits_data, make_hits_likelihood, make_hits_per_segment,
 )
 
 # ===================================================================
@@ -195,7 +195,7 @@ def setup_event_simulator(
         return detector.bounds_check(positions)
 
     # ---- Resolve hit_mode ---------------------------------------------------
-    _VALID_HIT_MODES = ('aggregated', 'per_photon', 'realistic', 'release')
+    _VALID_HIT_MODES = ('aggregated', 'per_photon', 'realistic', 'per_segment')
     if hit_mode is None:
         if sim_config.is_data:
             hit_mode = 'realistic'
@@ -209,8 +209,8 @@ def setup_event_simulator(
 
     # ---- make_hits wrapper selection ----------------------------------------
     # All wrappers accept the optional `flat_segment_idx` / `n_segments`
-    # kwargs for signature uniformity; only `_make_hits_release` consumes
-    # them. The other modes ignore them silently.
+    # kwargs for signature uniformity; only `_make_hits_per_segment`
+    # consumes them. The other modes ignore them silently.
     def _make_hits_aggregated(flat_weights, flat_indices, flat_times, num_sensors, qe_key, qe, qe_corrections,
                               flat_segment_idx=None, n_segments=0):
         return make_hits_simulation(flat_weights, flat_indices, flat_times, num_sensors,
@@ -227,9 +227,9 @@ def setup_event_simulator(
                               qe=qe, qe_corrections=qe_corrections,
                               rng_key=qe_key, apply_smearing=sim_config.apply_smearing)
 
-    def _make_hits_release(flat_weights, flat_indices, flat_times, num_sensors, qe_key, qe, qe_corrections,
+    def _make_hits_per_segment(flat_weights, flat_indices, flat_times, num_sensors, qe_key, qe, qe_corrections,
                            flat_segment_idx=None, n_segments=0):
-        return make_hits_release(flat_weights, flat_indices, flat_times, num_sensors,
+        return make_hits_per_segment(flat_weights, flat_indices, flat_times, num_sensors,
                                  qe=qe, qe_corrections=qe_corrections,
                                  rng_key=qe_key, apply_smearing=sim_config.apply_smearing,
                                  flat_segment_idx=flat_segment_idx, n_segments=n_segments)
@@ -238,7 +238,7 @@ def setup_event_simulator(
         'aggregated': _make_hits_aggregated,
         'per_photon': _make_hits_per_photon,
         'realistic': _make_hits_realistic,
-        'release':   _make_hits_release,
+        'per_segment': _make_hits_per_segment,
     }[hit_mode]
 
     # ---- Wavelength-dependent medium (when wavelength_mode=True) -----
@@ -420,7 +420,7 @@ def setup_event_simulator(
 
         # Per-photon segment id, broadcast to flat shape via the same trick.
         # None when no segment decomposition is requested (every mode except
-        # 'release'); make_hits_fn dispatches accordingly.
+        # 'per_segment'); make_hits_fn dispatches accordingly.
         flat_segment_idx = (segment_idx[photon_idx]
                              if segment_idx is not None else None)
 
@@ -442,7 +442,7 @@ def setup_event_simulator(
         When ``photon_data`` carries ``'photon_segment_index'`` (per-photon
         int32 array, padded with -1 sentinels) and ``n_segments > 0`` is
         passed, the underlying ``make_hits_fn`` may emit per-(segment,
-        sensor) decomposition outputs (used by ``hit_mode='release'``).
+        sensor) decomposition outputs (used by ``hit_mode='per_segment'``).
         Existing data-mode callers do not pass either and see no change.
         """
         energy = particle_params.energy
@@ -513,9 +513,9 @@ def setup_event_simulator(
         else:
             qe_per_photon = jnp.full(n_rays, detector_params.qe)
 
-        # Optional per-photon segment id (release mode). Realistic / track /
+        # Optional per-photon segment id (per_segment mode). Realistic / track /
         # calibration paths don't pass this — segment_idx stays None and the
-        # decomposition branch in make_hits_release is never taken.
+        # decomposition branch in make_hits_per_segment is never taken.
         segment_idx = photon_data.get('photon_segment_index', None)
 
         _pgt = sim_config.K if pos_grad_threshold is None else pos_grad_threshold

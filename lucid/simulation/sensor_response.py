@@ -41,7 +41,7 @@ def _qe_roll(flat_weights, flat_indices, flat_times,
              qe, qe_corrections, qe_key, threshold):
     """Per-photon Bernoulli QE survival.
 
-    Shared between make_hits_data and make_hits_release so both modes
+    Shared between make_hits_data and make_hits_per_segment so both modes
     use identical RNG and threshold semantics.
     """
     timing_mask = (flat_weights > threshold) & (flat_times > 0)
@@ -89,11 +89,11 @@ def make_hits_data(
     return measured_charge, measured_time
 
 
-def make_hits_release(
+def make_hits_per_segment(
         flat_weights, flat_indices, flat_times, num_detectors,
         qe=0.2, qe_corrections=None, rng_key=None, threshold=1e-5, apply_smearing=False,
         flat_segment_idx=None, n_segments=0):
-    """Release-mode hits: realistic per-sensor PLUS exact per-(segment, sensor) decomposition.
+    """Per-segment-mode hits: realistic per-sensor PLUS exact per-(segment, sensor) decomposition.
 
     Per-sensor outputs (measured_charge, measured_time) are produced by the
     same logic as make_hits_data — same RNG, same smearing — so callers

@@ -139,7 +139,7 @@ def _split_into_chunks(n, buckets):
     return chunks
 
 
-def _warmup_buckets(event_simulator, buckets, release_mode=False):
+def _warmup_buckets(event_simulator, buckets, per_segment_mode=False):
     """Trigger one JIT compile per unique bucket size, up-front.
 
     Runs the simulator once per bucket with throwaway zero-filled photons
@@ -147,10 +147,10 @@ def _warmup_buckets(event_simulator, buckets, release_mode=False):
     this returns, every later call at any of these bucket sizes hits the
     JIT cache and runs at native kernel cost. ~1 min per bucket on CPU.
 
-    In ``release_mode``, the simulator expects ``photon_segment_index``
+    In ``per_segment_mode``, the simulator expects ``photon_segment_index``
     in ``photonsim_data`` and an ``n_segments`` static kwarg. Each real
     event will trigger a fresh compile (n_segments differs per event),
-    so the warmup here only validates the release path with the
+    so the warmup here only validates the per_segment path with the
     smallest valid ``n_segments=1``.
     """
     if not buckets:
@@ -181,7 +181,7 @@ def _warmup_buckets(event_simulator, buckets, release_mode=False):
             'translation_vector': translation_vector,
         }
         key = jax.random.PRNGKey(0)
-        if release_mode:
+        if per_segment_mode:
             photonsim_data['photon_segment_index'] = jnp.full(
                 bucket, -1, dtype=jnp.int32)
             result = event_simulator(
@@ -212,13 +212,13 @@ def _simulate_particles_bucketed(
     ``(n_particles, n_sensors)`` numpy arrays the legacy vmap path produced.
 
     When ``n_segments > 0`` and ``all_photon_segment_index_np`` is supplied,
-    the simulator must be in ``hit_mode='release'`` and returns a 4-tuple
+    the simulator must be in ``hit_mode='per_segment'`` and returns a 4-tuple
     (per-sensor PE/T plus per-(segment, sensor) PE/T). The 2D arrays are
     accumulated across particles AND chunks and returned as the last two
     elements of the result. Photons whose segment id is ``-1`` (sentinel
     for non-meaningful parent track) contribute to the per-sensor total
     but produce no row in the segment decomposition (handled inside
-    ``make_hits_release``).
+    ``make_hits_per_segment``).
 
     Returns
     -------
@@ -240,8 +240,8 @@ def _simulate_particles_bucketed(
     track_positions  = np.zeros((n_particles, 3), dtype=np.float32)
     track_directions = np.zeros((n_particles, 3), dtype=np.float32)
 
-    release_mode = n_segments > 0 and all_photon_segment_index_np is not None
-    if release_mode:
+    per_segment_mode = n_segments > 0 and all_photon_segment_index_np is not None
+    if per_segment_mode:
         pe_per_seg_total = np.zeros((n_segments, n_sensors), dtype=np.float32)
         t_per_seg_total = np.full((n_segments, n_sensors), np.inf, dtype=np.float32)
     else:
@@ -317,7 +317,7 @@ def _simulate_particles_bucketed(
                 'apply_translation': False,
                 'translation_vector': zero_translation,
             }
-            if release_mode:
+            if per_segment_mode:
                 # Padding photons get sentinel -1 so they contribute to
                 # the per-sensor total but produce no segment row.
                 bs = np.full(bucket_size, -1, dtype=np.int32)
@@ -325,7 +325,7 @@ def _simulate_particles_bucketed(
                 photonsim_data['photon_segment_index'] = jax.device_put(bs)
 
             chunk_key = jax.random.fold_in(particle_keys[p_idx], chunk_idx)
-            if release_mode:
+            if per_segment_mode:
                 PE_chunk, T_chunk, pe_seg_chunk, t_seg_chunk = event_simulator(
                     track_params, chunk_key, photonsim_data, n_segments=n_segments)
                 pe_per_seg_total += np.asarray(pe_seg_chunk, dtype=np.float32)
@@ -354,7 +354,7 @@ def _simulate_particles_bucketed(
         # Restore "no hit = 0" sentinel for sensors that never fired.
         T_per_particle[p_idx] = np.where(np.isfinite(t_min_acc), t_min_acc, 0.0)
 
-    if release_mode:
+    if per_segment_mode:
         # "no hit = 0" sentinel on the seg-level T array too, mirroring
         # the per-sensor convention.
         t_per_seg_total = np.where(
@@ -1293,7 +1293,7 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
     if use_bucketing:
         _warmup_buckets(
             event_simulator, pad_size_buckets,
-            release_mode=store_segment_sensor_map)
+            per_segment_mode=store_segment_sensor_map)
 
     # Vmap over a particle/segment axis — defined once and reused for both
     # the legacy per-event-vmap path and the optional segment-sensor-map
@@ -1450,7 +1450,7 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
             all_photon_times_np = all_photon_times.astype(np.float32, copy=False)
             all_photon_wavelengths_np = all_photon_wavelengths.astype(np.float32, copy=False)
 
-            # Optional per-photon segment id (release mode). When the flag is
+            # Optional per-photon segment id (per_segment mode). When the flag is
             # off or the upstream PhotonSim build didn't emit
             # Photon_SegmentIndex, this stays None and the simulator runs
             # in plain 'realistic' mode.
@@ -1620,8 +1620,9 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
             T_reco = np.asarray(T_reco, dtype=np.float32)
 
             # Per-(segment, sensor) decomposition was computed inline by the
-            # release-mode simulator (hit_mode='release'); pe_per_seg_total /
-            # t_per_seg_total were filled in by _simulate_particles_bucketed
+            # per_segment-mode simulator (hit_mode='per_segment');
+            # pe_per_seg_total / t_per_seg_total were filled in by
+            # _simulate_particles_bucketed
             # above (or are None when the flag is off / legacy path).
             segment_sensor_hits = None
             if pe_per_seg_total is not None:
