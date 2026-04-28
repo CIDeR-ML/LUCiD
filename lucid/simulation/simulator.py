@@ -32,7 +32,7 @@ from lucid.simulation.photon_step import (
     photon_iteration_sample, photon_iteration_update_factors_safe,
 )
 from lucid.simulation.sensor_response import (
-    make_hits_simulation, make_hits_data, make_hits_likelihood,
+    make_hits_simulation, make_hits_data, make_hits_likelihood, make_hits_release,
 )
 
 # ===================================================================
@@ -195,7 +195,7 @@ def setup_event_simulator(
         return detector.bounds_check(positions)
 
     # ---- Resolve hit_mode ---------------------------------------------------
-    _VALID_HIT_MODES = ('aggregated', 'per_photon', 'realistic')
+    _VALID_HIT_MODES = ('aggregated', 'per_photon', 'realistic', 'release')
     if hit_mode is None:
         if sim_config.is_data:
             hit_mode = 'realistic'
@@ -208,23 +208,37 @@ def setup_event_simulator(
             f"hit_mode must be one of {_VALID_HIT_MODES} or None, got {hit_mode!r}")
 
     # ---- make_hits wrapper selection ----------------------------------------
-    def _make_hits_aggregated(flat_weights, flat_indices, flat_times, num_sensors, qe_key, qe, qe_corrections):
+    # All wrappers accept the optional `flat_segment_idx` / `n_segments`
+    # kwargs for signature uniformity; only `_make_hits_release` consumes
+    # them. The other modes ignore them silently.
+    def _make_hits_aggregated(flat_weights, flat_indices, flat_times, num_sensors, qe_key, qe, qe_corrections,
+                              flat_segment_idx=None, n_segments=0):
         return make_hits_simulation(flat_weights, flat_indices, flat_times, num_sensors,
                                     qe=qe, qe_corrections=qe_corrections)
 
-    def _make_hits_per_photon(flat_weights, flat_indices, flat_times, num_sensors, qe_key, qe, qe_corrections):
+    def _make_hits_per_photon(flat_weights, flat_indices, flat_times, num_sensors, qe_key, qe, qe_corrections,
+                              flat_segment_idx=None, n_segments=0):
         return make_hits_likelihood(flat_weights, flat_indices, flat_times, num_sensors,
                                     qe=qe, qe_corrections=qe_corrections)
 
-    def _make_hits_realistic(flat_weights, flat_indices, flat_times, num_sensors, qe_key, qe, qe_corrections):
+    def _make_hits_realistic(flat_weights, flat_indices, flat_times, num_sensors, qe_key, qe, qe_corrections,
+                             flat_segment_idx=None, n_segments=0):
         return make_hits_data(flat_weights, flat_indices, flat_times, num_sensors,
                               qe=qe, qe_corrections=qe_corrections,
                               rng_key=qe_key, apply_smearing=sim_config.apply_smearing)
+
+    def _make_hits_release(flat_weights, flat_indices, flat_times, num_sensors, qe_key, qe, qe_corrections,
+                           flat_segment_idx=None, n_segments=0):
+        return make_hits_release(flat_weights, flat_indices, flat_times, num_sensors,
+                                 qe=qe, qe_corrections=qe_corrections,
+                                 rng_key=qe_key, apply_smearing=sim_config.apply_smearing,
+                                 flat_segment_idx=flat_segment_idx, n_segments=n_segments)
 
     _make_hits_fn = {
         'aggregated': _make_hits_aggregated,
         'per_photon': _make_hits_per_photon,
         'realistic': _make_hits_realistic,
+        'release':   _make_hits_release,
     }[hit_mode]
 
     # ---- Wavelength-dependent medium (when wavelength_mode=True) -----
@@ -277,7 +291,8 @@ def setup_event_simulator(
 
     @partial(jax.jit, static_argnames=(
         'n_rays', 'K', 'n_grad_iters', 'max_sensors_per_cell', 'num_sensors',
-        'propagate_fn', 'photon_update_fn', 'pos_grad_threshold', 'make_hits_fn'))
+        'propagate_fn', 'photon_update_fn', 'pos_grad_threshold', 'make_hits_fn',
+        'n_segments'))
     def _common_propagation(
             positions, directions, intensities, times,
             scatter_lengths, absorption_lengths,
@@ -285,7 +300,8 @@ def setup_event_simulator(
             n_rays, detector_params, key,
             num_sensors, K, n_grad_iters, max_sensors_per_cell,
             propagate_fn, photon_update_fn,
-            pos_grad_threshold, make_hits_fn):
+            pos_grad_threshold, make_hits_fn,
+            segment_idx=None, n_segments=0):
         """Core photon propagation loop.
 
         Parameters
@@ -402,17 +418,33 @@ def setup_event_simulator(
         photon_idx = jnp.arange(flat_weights.shape[0]) % n_rays
         flat_qe = qe_per_photon[photon_idx]
 
+        # Per-photon segment id, broadcast to flat shape via the same trick.
+        # None when no segment decomposition is requested (every mode except
+        # 'release'); make_hits_fn dispatches accordingly.
+        flat_segment_idx = (segment_idx[photon_idx]
+                             if segment_idx is not None else None)
+
         key, qe_key = jax.random.split(key)
         return make_hits_fn(
-            flat_weights, flat_indices, flat_times, num_sensors, qe_key, flat_qe, qe_corrections)
+            flat_weights, flat_indices, flat_times, num_sensors,
+            qe_key, flat_qe, qe_corrections,
+            flat_segment_idx=flat_segment_idx, n_segments=n_segments)
 
     # ================================================================
     # Mode-specific simulation functions
     # ================================================================
 
-    @jax.jit
-    def _simulation_with_data_impl(particle_params, detector_params, key, photon_data):
-        """Data mode: photons from ROOT/PhotonSim files, particle_params is ParticleParams."""
+    @partial(jax.jit, static_argnames=('n_segments',))
+    def _simulation_with_data_impl(particle_params, detector_params, key, photon_data,
+                                   n_segments=0):
+        """Data mode: photons from ROOT/PhotonSim files, particle_params is ParticleParams.
+
+        When ``photon_data`` carries ``'photon_segment_index'`` (per-photon
+        int32 array, padded with -1 sentinels) and ``n_segments > 0`` is
+        passed, the underlying ``make_hits_fn`` may emit per-(segment,
+        sensor) decomposition outputs (used by ``hit_mode='release'``).
+        Existing data-mode callers do not pass either and see no change.
+        """
         energy = particle_params.energy
         track_origin = particle_params.position
         track_direction = particle_params.direction  # property
@@ -481,6 +513,11 @@ def setup_event_simulator(
         else:
             qe_per_photon = jnp.full(n_rays, detector_params.qe)
 
+        # Optional per-photon segment id (release mode). Realistic / track /
+        # calibration paths don't pass this — segment_idx stays None and the
+        # decomposition branch in make_hits_release is never taken.
+        segment_idx = photon_data.get('photon_segment_index', None)
+
         _pgt = sim_config.K if pos_grad_threshold is None else pos_grad_threshold
         return _common_propagation(
             final_origins, final_directions, photon_intensities, photon_times,
@@ -488,7 +525,8 @@ def setup_event_simulator(
             qe_per_photon,
             n_rays, detector_params, key, NUM_SENSORS, sim_config.K, sim_config.effective_n_grad_iters, max_sensors_per_cell,
             propagate_photons, photon_update_fn,
-            pos_grad_threshold=_pgt, make_hits_fn=_make_hits_fn)
+            pos_grad_threshold=_pgt, make_hits_fn=_make_hits_fn,
+            segment_idx=segment_idx, n_segments=n_segments)
 
     # Load photonsim parameters from configuration (power-law normalization, SIREN path)
     photonsim_params = unpack_photonsim_params(particle, material)
@@ -579,9 +617,11 @@ def setup_event_simulator(
     # ---- Return the right function ------------------------------------------
     if sim_config.is_data:
         if _default_dp is not None:
-            @jax.jit
-            def _sim_data_default(particle_params, key, photon_data):
-                return _simulation_with_data_impl(particle_params, _default_dp, key, photon_data)
+            @partial(jax.jit, static_argnames=('n_segments',))
+            def _sim_data_default(particle_params, key, photon_data, n_segments=0):
+                return _simulation_with_data_impl(
+                    particle_params, _default_dp, key, photon_data,
+                    n_segments=n_segments)
             _sim_data_default.default_detector_params = _default_dp
             return _sim_data_default
         else:

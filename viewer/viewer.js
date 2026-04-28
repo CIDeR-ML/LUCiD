@@ -35,10 +35,17 @@ let particleTotals = null;         // Float32Array(nParticles)  total PE per par
 let particleAncestor = null;       // Int32Array(nParticles)  derived from per_track
 let particleInteraction = null;    // Int32Array(nParticles)
 
+// seg/sensor_hits lookups (only populated when LUCiD ran with
+// store_segment_sensor_map=true; otherwise all stay null and Label=Segment
+// shows nothing).
+let pmtDomSegment = null;          // Int32Array(nSensors)  argmax-PE segment per sensor (-1 if none)
+let segmentToSensor = null;        // Array(seg.n) of Map<sensor, PE>
+let segmentTotals = null;          // Float32Array(seg.n)  total PE per segment
+
 // UI state.
 let curView = 'pmts';              // 'pmts' | 'seg'   (exclusive 3D view)
 let curField = 'charge';           // 'charge' | 'time'  (continuous field)
-let curLabel = 'none';             // 'none' | 'particle' | 'category' | 'track' | 'pdg' | 'beta' | 'ncher'
+let curLabel = 'none';             // 'none' | 'particle' | 'category' | 'ancestor' | 'interaction' | 'segment'
 let logScale = true;
 let percMin = 1, percMax = 99;
 let manualVmin = null, manualVmax = null;
@@ -301,6 +308,45 @@ function buildInstLookups() {
   }
 }
 
+// Mirror of buildInstLookups for the seg/sensor_hits subgroup. Populates
+// pmtDomSegment / segmentToSensor / segmentTotals from the flat
+// (segment, sensor) PE rows. All three stay null when sensor_hits is
+// absent — Label=Segment renders a blank in that case.
+function buildSegmentLookups() {
+  pmtDomSegment = null;
+  segmentToSensor = null;
+  segmentTotals = null;
+
+  const seg = evtBundle && evtBundle.seg;
+  const hits = seg && seg.sensor_hits;
+  const nSeg = seg ? seg.n : 0;
+  if (!hits || !nSeg) return;
+
+  pmtDomSegment = new Int32Array(nSensors);
+  for (let i = 0; i < nSensors; i++) pmtDomSegment[i] = -1;
+  const perSensorBest = new Float32Array(nSensors);
+  for (let i = 0; i < nSensors; i++) perSensorBest[i] = -Infinity;
+
+  segmentToSensor = new Array(nSeg);
+  for (let i = 0; i < nSeg; i++) segmentToSensor[i] = new Map();
+  segmentTotals = new Float32Array(nSeg);
+
+  const segIdx = hits.segment_idx, senIdx = hits.sensor_idx, pe = hits.PE;
+  const n = pe ? pe.length : 0;
+  for (let i = 0; i < n; i++) {
+    const sg = segIdx[i];
+    const s = senIdx[i];
+    const v = pe[i];
+    if (sg < 0 || sg >= nSeg) continue;
+    segmentToSensor[sg].set(s, (segmentToSensor[sg].get(s) || 0) + v);
+    segmentTotals[sg] += v;
+    if (v > perSensorBest[s]) {
+      perSensorBest[s] = v;
+      pmtDomSegment[s] = sg;
+    }
+  }
+}
+
 // ── contVal / catVal field builders ─────────────────────────────────────
 
 function pmtContValArray() {
@@ -395,6 +441,14 @@ function particleGroupId(p) {
 
 function pmtCatValArray() {
   const out = new Float32Array(nSensors);
+  if (curLabel === 'segment') {
+    if (!pmtDomSegment) return out;   // sensor_hits absent — blank panel
+    for (let i = 0; i < nSensors; i++) {
+      const sg = pmtDomSegment[i];
+      out[i] = sg < 0 ? 0 : hashHue(sg);
+    }
+    return out;
+  }
   for (let i = 0; i < nSensors; i++) {
     const p = pmtDomParticle[i];
     if (p < 0) { out[i] = 0; continue; }
@@ -460,6 +514,8 @@ function segCatValArrays() {
     } else if (curLabel === 'interaction') {
       const k = per_track.interaction ? per_track.interaction[t] : -1;
       out[i] = k >= 0 ? hashHue(k) : 0;
+    } else if (curLabel === 'segment') {
+      out[i] = hashHue(i);
     } else {
       out[i] = 0;
     }
@@ -826,6 +882,7 @@ function updateSegmentColors() {
 function currentParticleSet() {
   if (!evtBundle) return null;
   if (selectedGroup) {
+    if (selectedGroup.kind === 'segment') return [];   // not particle-decomposed
     const n_particles = evtBundle.labl.n_particles || 0;
     const out = [];
     if (selectedGroup.kind === 'category') {
@@ -841,6 +898,24 @@ function currentParticleSet() {
   }
   if (selectedParticle != null) return [selectedParticle];
   return null;
+}
+
+// Sensor-PE Map for the active selection. Returns null when nothing is
+// selected OR the selection has zero contributions (so callers can use
+// "is this null?" as the single corrActive predicate). Segment selection
+// routes through segmentToSensor; everything else is the union of
+// per-particle inst contributions.
+function selectionContributions() {
+  if (!evtBundle) return null;
+  if (selectedGroup && selectedGroup.kind === 'segment') {
+    if (!segmentToSensor) return null;
+    const m = segmentToSensor[selectedGroup.id];
+    return (m && m.size > 0) ? m : null;
+  }
+  const ps = currentParticleSet();
+  if (ps == null || ps.length === 0) return null;
+  const m = unionContributions(ps);
+  return (m && m.size > 0) ? m : null;
 }
 
 function unionContributions(particleIds) {
@@ -862,7 +937,9 @@ function applyCorrespondence() {
   if (segHL) segHL.fill(0);
 
   const particleSet = currentParticleSet();
-  const corrActive = particleSet != null && particleSet.length > 0;
+  const segSelected = selectedGroup && selectedGroup.kind === 'segment';
+  const map = selectionContributions();
+  const corrActive = map != null;
   pmtMat.uniforms.corrOn.value = corrActive ? 1.0 : 0.0;
   if (segMat) segMat.uniforms.corrOn.value = corrActive ? 1.0 : 0.0;
 
@@ -922,8 +999,9 @@ function applyCorrespondence() {
       }
     }
 
-    // PMT contributions summed across all particles in the current set.
-    const map = unionContributions(particleSet);
+    // PMT contributions: per-segment when a segment row is selected;
+    // otherwise the per-particle union. Already computed at the top of
+    // applyCorrespondence — reuse.
     if (map) {
       let maxPE = 0;
       for (const v of map.values()) if (v > maxPE) maxPE = v;
@@ -938,12 +1016,23 @@ function applyCorrespondence() {
       }
     }
     // Segments: binary highlight if the track belongs to any particle in
-    // the selected set, and (in categorical mode) override the hue to
+    // the selected set (or, when a segment row is selected, just that
+    // single segment), and — in categorical mode — override the hue to
     // the selection's color so the bright seg points read consistently.
     const seg = evtBundle.seg;
     const per_track = evtBundle.labl.per_track;
     const segHLOK = segHL && seg && seg.n && segHL.length === seg.n * K;
-    if (segHLOK && per_track && per_track.particle_idx) {
+    if (segHLOK && segSelected) {
+      const sid = selectedGroup.id;
+      for (let i = 0; i < seg.n; i++) {
+        const v = (i === sid) ? 1.0 : 0.0;
+        for (let k = 0; k < K; k++) segHL[i * K + k] = v;
+        if (i === sid && useSelHue && segOK) {
+          for (let k = 0; k < K; k++) segCV[i * K + k] = selectionHue;
+        }
+      }
+      if (useSelHue && segOK) segGeo.attributes.catVal.needsUpdate = true;
+    } else if (segHLOK && per_track && per_track.particle_idx) {
       const setLookup = new Set(particleSet);
       for (let i = 0; i < seg.n; i++) {
         const t = seg.track_idx[i];
@@ -967,9 +1056,16 @@ function buildSidebar() {
   const list = $('particleList');
   list.innerHTML = '';
   const title = $('sidebarTitle');
-  if (title) title.textContent = curLabel === 'category' ? 'CATEGORIES' : 'PARTICLES';
+  if (title) {
+    title.textContent =
+      curLabel === 'category' ? 'CATEGORIES' :
+      curLabel === 'segment'  ? 'SEGMENTS'   :
+      'PARTICLES';
+  }
   const n = evtBundle.labl.n_particles || 0;
-  if (n === 0) {
+  if (curLabel === 'segment') {
+    buildSidebarSegments(list);
+  } else if (n === 0) {
     list.innerHTML = '<div class="event-meta-row" style="padding:8px"><span class="k">(none)</span></div>';
   } else if (curLabel === 'category' || curLabel === 'ancestor' || curLabel === 'interaction') {
     buildSidebarGroups(list, curLabel);
@@ -1100,7 +1196,60 @@ function groupLabelText(kind, id, n) {
   if (kind === 'category')    return `${CAT_NAMES[id] || 'cat'+id} · n=${n}`;
   if (kind === 'ancestor')    return `ancestor ${id} · n=${n}`;
   if (kind === 'interaction') return `interaction ${id} · n=${n}`;
+  if (kind === 'segment')     return `segment ${id}`;
   return String(id);
+}
+
+// One row per segment that hit at least one PMT, sorted by descending
+// total PE. Shows track id and n_sensors hit. Click toggles isolation.
+function buildSidebarSegments(list) {
+  if (!segmentToSensor) {
+    list.innerHTML = '<div class="event-meta-row" style="padding:8px"><span class="k">(seg/sensor_hits absent — re-run with store_segment_sensor_map=true)</span></div>';
+    return;
+  }
+  const seg = evtBundle.seg;
+  const per_track = evtBundle.labl.per_track;
+  const trackPdg = per_track ? per_track.pdg : null;
+  const ordered = [];
+  for (let i = 0; i < seg.n; i++) {
+    if (segmentTotals[i] > 0) ordered.push(i);
+  }
+  ordered.sort((a, b) => segmentTotals[b] - segmentTotals[a]);
+  if (ordered.length === 0) {
+    list.innerHTML = '<div class="event-meta-row" style="padding:8px"><span class="k">(no segments hit any sensor)</span></div>';
+    return;
+  }
+  for (const id of ordered) {
+    const row = document.createElement('div');
+    row.className = 'particle-row';
+    if (selectedGroup && selectedGroup.kind === 'segment' && selectedGroup.id === id) row.classList.add('selected');
+    const swatch = document.createElement('span');
+    swatch.className = 'particle-swatch';
+    const [r,g,b] = hsl2rgb(hashHue(id), 0.78, 0.55);
+    swatch.style.background = `rgb(${r},${g},${b})`;
+    const label = document.createElement('span');
+    label.className = 'particle-label';
+    const t = seg.track_idx ? seg.track_idx[id] : -1;
+    const pdg = (t >= 0 && trackPdg) ? trackPdg[t] : null;
+    const pdgStr = pdg != null ? (PDG_NAMES.get(pdg) || `pdg${pdg}`) : '';
+    label.textContent = `S${id} · T${t}${pdgStr ? ' · ' + pdgStr : ''}`;
+    const meta = document.createElement('span');
+    meta.className = 'particle-meta';
+    const nSen = segmentToSensor[id] ? segmentToSensor[id].size : 0;
+    meta.textContent = `${formatPE(segmentTotals[id])} · ${nSen} pmt`;
+    row.appendChild(swatch);
+    row.appendChild(label);
+    row.appendChild(meta);
+    row.addEventListener('click', () => {
+      selectedParticle = null;
+      const already = selectedGroup && selectedGroup.kind === 'segment' && selectedGroup.id === id;
+      selectedGroup = already ? null : { kind: 'segment', id };
+      buildSidebar();
+      applyCorrespondence();
+      render2D();
+    });
+    list.appendChild(row);
+  }
 }
 
 function renderSelectionInfo() {
@@ -1330,10 +1479,9 @@ function render2D() {
   const contArr = isCat ? null : pmtContValArrayForField().norm;
   const catArr = isCat ? pmtCatValArray() : null;
 
-  // Selected item (particle or category) influences CPU-side alpha for 2D.
-  const particleSet2d = currentParticleSet();
-  const corrActive = particleSet2d != null && particleSet2d.length > 0;
-  const corrMap = corrActive ? unionContributions(particleSet2d) : null;
+  // Selected item (particle, group or segment) influences CPU-side alpha for 2D.
+  const corrMap = selectionContributions();
+  const corrActive = corrMap != null;
   let corrMax = 1;
   if (corrMap) for (const v of corrMap.values()) if (v > corrMax) corrMax = v;
 
@@ -1567,6 +1715,7 @@ async function loadEvent(idx) {
     simTime = 0;
     deriveSensorArrays();
     buildInstLookups();
+    buildSegmentLookups();
     refreshUnionQMap();   // needs pmtT + seg times; before buildPMTs/buildSegments
     buildPMTs();
     buildSegments();

@@ -203,6 +203,19 @@ def _run_lucid(
     print(f"    geometry:   {detector_type} / {material}, "
           f"{sensor_positions.shape[0]} sensors")
 
+    lucid_opts = config.get("lucid_options", {})
+    apply_smearing = bool(lucid_opts.get("apply_smearing", True))
+    apply_translation = bool(lucid_opts.get("apply_translation", True))
+    # Opt-in segment <-> sensor map. Default off so existing dataprod runs are
+    # byte-identical. The matching PhotonSim macro flag
+    # (/photon/storeSegmentIndex true) must also be set; generate_macro reads
+    # the same key. When on, the simulator runs in 'release' mode, which
+    # adds an exact per-(segment, sensor) decomposition next to the per-
+    # sensor totals — replacing the old two-pass approach (which used
+    # independent RNG and therefore disagreed with sensor.h5).
+    store_segment_sensor_map = bool(lucid_opts.get("store_segment_sensor_map", False))
+    hit_mode = 'release' if store_segment_sensor_map else 'realistic'
+
     simulate_event = setup_event_simulator(
         detector_config_path,
         0,
@@ -212,16 +225,8 @@ def _run_lucid(
         apply_smearing=False,  # per-particle smearing off; PE-sum smearing applied below
         physics_config=physics_config_path,
         default_detector_params=True,
+        hit_mode=hit_mode,
     )
-
-    lucid_opts = config.get("lucid_options", {})
-    apply_smearing = bool(lucid_opts.get("apply_smearing", True))
-    apply_translation = bool(lucid_opts.get("apply_translation", True))
-    # Opt-in segment <-> sensor map. Default off so existing dataprod runs are
-    # byte-identical. The matching PhotonSim macro flag
-    # (/photon/storeSegmentIndex true) must also be set; generate_macro reads
-    # the same key.
-    store_segment_sensor_map = bool(lucid_opts.get("store_segment_sensor_map", False))
     # PAD_SIZE bucketing (see lucid/sources/event_io.py for the full rationale).
     # `None` -> module default; an explicit empty list opts back into the
     # legacy single-PAD_SIZE-from-file-max path (one JIT compile, no chunking).

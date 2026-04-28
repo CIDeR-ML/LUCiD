@@ -160,6 +160,21 @@ function decodeEvent(idx) {
   const nTracksSeg = readAttr(gEvt, 'n_tracks') || 0;
   const nSegments = readAttr(gEvt, 'n_segments') || (segEdep ? segEdep.length : 0);
 
+  // Optional sensor_hits subgroup (present when LUCiD ran with
+  // store_segment_sensor_map=true). Flat parallel arrays — one row per
+  // (segment, sensor) pair — used to colour PMTs by the dominant segment
+  // and to drive segment-row selection in the sidebar.
+  let segSensorHits = null;
+  const shGrp = gEvt.get('sensor_hits');
+  if (shGrp) {
+    segSensorHits = {
+      segment_idx: readDsInt32(shGrp,   'segment_idx'),
+      sensor_idx:  readDsUint16(shGrp,  'sensor_idx'),
+      PE:          readDsFloat32(shGrp, 'PE'),
+      T:           readDsFloat32(shGrp, 'T'),
+    };
+  }
+
   // Labl file.
   const perEvtGrp = lEvt.get('per_event');
   const perIntGrp = lEvt.get('per_interaction');
@@ -231,6 +246,7 @@ function decodeEvent(idx) {
            end_x: segEndX, end_y: segEndY, end_z: segEndZ,
            time: segTime, edep: segEdep, beta_start: segBeta, n_cherenkov: segNCh,
            contained: segContained,
+           sensor_hits: segSensorHits,
            n: nSegments },
     labl: { n_particles, n_tracks,
             per_interaction: perInteraction,
