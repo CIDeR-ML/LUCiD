@@ -25,7 +25,9 @@ dependencies = [
 
 [project.optional-dependencies]
 training = ["torch>=2.0"]
-dev = ["pytest>=7.0", "nbmake"]
+notebooks = ["jupyterlab>=4.0", "ipykernel>=6.0", "nbmake"]
+dev = ["pytest>=7.0", "lucid-sim[notebooks]"]
+all = ["lucid-sim[training,notebooks,dev]"]
 
 [project.scripts]
 lucid-optimize = "lucid.optimization.run:main"
