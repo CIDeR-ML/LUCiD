@@ -1210,25 +1210,50 @@ function buildSidebar() {
   addRow('n tracks',    String(evtBundle.labl.n_tracks));
   addRow('n segments',  String(evtBundle.seg.n));
 
-  // v5 per_interaction summary: one row per source interaction (one G4
-  // event's primaries bundled). Shows interaction count + per-row source
-  // type, primary PDG list, and neutrino probe info for GENIE rows.
+  // v5 per_interaction summary. Split into labeled rows so the source,
+  // probe, vertex, and per-primary energies are individually readable
+  // (the .v cell ellipsis-clips at ~140 px wide so a single dense line
+  // gets cut off).
   const pi = evtBundle.labl.per_interaction;
   if (pi && pi.t0 && pi.t0.length) {
-    addRow('n interactions', String(pi.t0.length));
-    for (let i = 0; i < pi.t0.length; i++) {
-      const src = pi.source_type[i] === 1 ? 'genie' : 'gun';
+    const nInt = pi.t0.length;
+    if (nInt > 1) addRow('n interactions', String(nInt));
+    for (let i = 0; i < nInt; i++) {
+      const prefix = (nInt > 1) ? `[int ${i}] ` : '';
+      const isGenie = pi.source_type[i] === 1;
+      addRow(prefix + 'source', isGenie ? 'GENIE' : 'particle gun');
+      if (isGenie) {
+        const nuName = pdgName(pi.neutrino_pdg[i]);
+        const eMeV = pi.neutrino_energy_MeV[i];
+        const eStr = eMeV >= 1000
+          ? `${(eMeV / 1000).toFixed(2)} GeV`
+          : `${eMeV.toFixed(0)} MeV`;
+        addRow(prefix + 'probe', `${nuName} @ ${eStr}`);
+      }
+      if (pi.vertex_x && pi.vertex_y && pi.vertex_z) {
+        addRow(prefix + 'vertex',
+          `(${pi.vertex_x[i].toFixed(1)}, ${pi.vertex_y[i].toFixed(1)}, ${pi.vertex_z[i].toFixed(1)}) m`);
+      }
+      // Per-primary rows: PDG name + energy, one per primary, so each
+      // line stays short. Energy comes from primary_energies_data when
+      // present (v5+); falls back to "—" if missing.
       const s0 = pi.primary_pdgs_offsets[i];
       const s1 = pi.primary_pdgs_offsets[i + 1];
-      const pdgs = Array.from(pi.primary_pdgs_data.slice(s0, s1)).join(',');
-      let line = `[${src}] t0=${pi.t0[i].toFixed(1)} ns  pdgs=[${pdgs}]`;
-      if (pi.source_type[i] === 1) {
-        line += ` nu=${pi.neutrino_pdg[i]}@${pi.neutrino_energy_MeV[i].toFixed(0)} MeV`;
+      const hasE = !!(pi.primary_energies_data && pi.primary_energies_offsets);
+      const e0 = hasE ? pi.primary_energies_offsets[i] : 0;
+      for (let k = s0; k < s1; k++) {
+        const pdg = pi.primary_pdgs_data[k];
+        const eMeV = hasE ? pi.primary_energies_data[e0 + (k - s0)] : null;
+        const eStr = eMeV == null ? '—' :
+          (eMeV >= 1000
+            ? `${(eMeV / 1000).toFixed(2)} GeV`
+            : `${eMeV.toFixed(0)} MeV`);
+        addRow(prefix + `prim ${k - s0}`, `${pdgName(pdg)} · ${eStr}`);
       }
       if (pi.contained) {
-        line += ` contained=${pi.contained[i] ? 'true' : 'false'}`;
+        addRow(prefix + 'contained', pi.contained[i] ? 'true' : 'false');
       }
-      addRow(`int ${i}`, line);
+      if (nInt > 1) addRow(prefix + 't0', `${pi.t0[i].toFixed(1)} ns`);
     }
   }
 
