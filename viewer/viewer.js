@@ -35,6 +35,12 @@ let particleTotals = null;         // Float32Array(nParticles)  total PE per par
 let particleAncestor = null;       // Int32Array(nParticles)  derived from per_track
 let particleInteraction = null;    // Int32Array(nParticles)
 let particlePdgBucket = null;      // Int8Array(nParticles)   own-PDG bucket, with π⁰ ancestor override
+// PDG-mode sidebar rows. One row per particle, except particles in the
+// e⁻, e⁺, or π⁰ buckets are bundled by chain[0] (root meaningful ancestor
+// track) so a primary e± shower or a π⁰ → γγ family folds into one row.
+// Particles with zero PE contribution are excluded entirely.
+//   pdgRows[i] = { id, bucket, particleIds: [...], totalPE, isShower }
+let pdgRows = null;
 
 // seg/sensor_hits lookups (only populated when LUCiD ran with
 // store_segment_sensor_map=true; otherwise all stay null and Label=Segment
@@ -309,6 +315,48 @@ function buildInstLookups() {
       pmtDomParticle[s] = p;
     }
   }
+  rebuildPdgRows();
+}
+
+// Build the PDG-mode sidebar rows. Called after particleTotals is
+// populated. One row per particle, except particles in the e⁻, e⁺, or π⁰
+// buckets are bundled by chain[0] (root meaningful ancestor track) so a
+// primary e± shower or a π⁰ → γγ family folds into one row. Particles
+// with zero PE contribution are excluded.
+//   pdgRows[i] = { id, bucket, particleIds: [...], totalPE, isShower }
+function rebuildPdgRows() {
+  pdgRows = [];
+  if (!evtBundle || !particlePdgBucket || !particleTotals) return;
+  const labl = evtBundle.labl;
+  const pp = labl.per_particle || {};
+  const n_p = labl.n_particles || 0;
+  if (n_p === 0) return;
+  const gen = pp.genealogy, off = pp.genealogy_offsets;
+  const rootByP = new Int32Array(n_p);
+  for (let p = 0; p < n_p; p++) {
+    rootByP[p] = (gen && off && off.length > p + 1 && off[p + 1] > off[p])
+      ? gen[off[p]] : -1;
+  }
+  const isShowerBucket = (b) => (b === 4 || b === 5 || b === 6); // π⁰ / e⁻ / e⁺
+  const groupMap = new Map();
+  for (let p = 0; p < n_p; p++) {
+    if ((particleTotals[p] || 0) <= 0) continue;     // hide zero-PE particles
+    const b = particlePdgBucket[p];
+    const key = (isShowerBucket(b) && rootByP[p] >= 0)
+      ? `${b}|${rootByP[p]}`
+      : `${b}|p${p}`;
+    let row = groupMap.get(key);
+    if (!row) {
+      row = { bucket: b, particleIds: [], totalPE: 0, isShower: isShowerBucket(b) };
+      groupMap.set(key, row);
+    }
+    row.particleIds.push(p);
+    row.totalPE += particleTotals[p];
+  }
+  pdgRows = [...groupMap.values()];
+  pdgRows.sort((a, b) =>
+    a.bucket - b.bucket || b.totalPE - a.totalPE);
+  for (let i = 0; i < pdgRows.length; i++) pdgRows[i].id = i;
 }
 
 // Mirror of buildInstLookups for the seg/sensor_hits subgroup. Populates
@@ -492,10 +540,23 @@ function computePdgBuckets(labl) {
 }
 
 // Hue for the "group" label modes (pdg, ancestor, interaction).
-// PDG uses the fixed palette; ancestor/interaction hash by golden ratio.
+// PDG uses the fixed palette keyed on bucket index; ancestor/interaction
+// hash by golden ratio.
 function groupHue(kind, id) {
   if (kind === 'pdg') return pdgBucketHue(id);
   return hashHue(id);
+}
+
+// Hue for the currently-selected group. PDG selection IDs are row indices
+// into pdgRows (not buckets), so we dereference here. Other kinds use the
+// id directly.
+function selectedGroupHue() {
+  if (!selectedGroup) return 0;
+  if (selectedGroup.kind === 'pdg') {
+    if (!pdgRows || selectedGroup.id < 0 || selectedGroup.id >= pdgRows.length) return 0;
+    return pdgBucketHue(pdgRows[selectedGroup.id].bucket);
+  }
+  return groupHue(selectedGroup.kind, selectedGroup.id);
 }
 
 // For a given particle index, return the "group id" for the active label.
@@ -946,18 +1007,22 @@ function updateSegmentColors() {
 
 // ── Correspondence: isolate the selected item ─────────────────────────
 // A selection is either a specific particle (when label ≠ pdg) or
-// a PDG bucket (when label = pdg). Both resolve to a set of particles
+// a PDG-mode row (when label = pdg). Both resolve to a set of particles
 // whose inst contributions we union per sensor.
 function currentParticleSet() {
   if (!evtBundle) return null;
   if (selectedGroup) {
     if (selectedGroup.kind === 'segment') return [];   // not particle-decomposed
     const n_particles = evtBundle.labl.n_particles || 0;
-    const out = [];
     if (selectedGroup.kind === 'pdg') {
-      if (!particlePdgBucket) return null;
-      for (let p = 0; p < n_particles; p++) if (particlePdgBucket[p] === selectedGroup.id) out.push(p);
-    } else if (selectedGroup.kind === 'ancestor') {
+      // PDG selection id is a row index into pdgRows. Each row carries an
+      // explicit particleIds list (singleton for non-shower buckets, the
+      // full shower for e±/π⁰ groupings).
+      if (!pdgRows || selectedGroup.id < 0 || selectedGroup.id >= pdgRows.length) return null;
+      return pdgRows[selectedGroup.id].particleIds.slice();
+    }
+    const out = [];
+    if (selectedGroup.kind === 'ancestor') {
       for (let p = 0; p < n_particles; p++) if (particleAncestor[p] === selectedGroup.id) out.push(p);
     } else if (selectedGroup.kind === 'interaction') {
       for (let p = 0; p < n_particles; p++) if (particleInteraction[p] === selectedGroup.id) out.push(p);
@@ -1059,7 +1124,7 @@ function applyCorrespondence() {
     let useSelHue = false;
     if (isCat) {
       if (selectedGroup) {
-        selectionHue = groupHue(selectedGroup.kind, selectedGroup.id);
+        selectionHue = selectedGroupHue();
         useSelHue = true;
       } else if (selectedParticle != null) {
         selectionHue = hashHue(selectedParticle);
@@ -1135,7 +1200,9 @@ function buildSidebar() {
     buildSidebarSegments(list);
   } else if (n === 0) {
     list.innerHTML = '<div class="event-meta-row" style="padding:8px"><span class="k">(none)</span></div>';
-  } else if (curLabel === 'pdg' || curLabel === 'ancestor' || curLabel === 'interaction') {
+  } else if (curLabel === 'pdg') {
+    buildSidebarPdgRows(list);
+  } else if (curLabel === 'ancestor' || curLabel === 'interaction') {
     buildSidebarGroups(list, curLabel);
   } else {
     buildSidebarParticles(list, n);
@@ -1211,17 +1278,61 @@ function buildSidebarParticles(list, n) {
   }
 }
 
-// List categories / ancestors / interactions. One row per distinct group id,
-// with the total PE and particle count for that group.
+// PDG rows: one entry per particle (or per shower for e±/π⁰). Driven
+// from precomputed `pdgRows` so zero-PE particles are absent and shower
+// grouping is consistent with the selection / hue lookups.
+function buildSidebarPdgRows(list) {
+  if (!pdgRows || pdgRows.length === 0) {
+    list.innerHTML = '<div class="event-meta-row" style="padding:8px"><span class="k">(no particles with hits)</span></div>';
+    return;
+  }
+  for (const row of pdgRows) {
+    const r = document.createElement('div');
+    r.className = 'particle-row';
+    if (selectedGroup && selectedGroup.kind === 'pdg' && selectedGroup.id === row.id) r.classList.add('selected');
+    const swatch = document.createElement('span');
+    swatch.className = 'particle-swatch';
+    const [rr,gg,bb] = pdgBucketRGB(row.bucket);
+    swatch.style.background = `rgb(${rr},${gg},${bb})`;
+    const label = document.createElement('span');
+    label.className = 'particle-label';
+    label.textContent = pdgRowLabel(row);
+    const meta = document.createElement('span');
+    meta.className = 'particle-meta';
+    meta.textContent = formatPE(row.totalPE);
+    r.appendChild(swatch);
+    r.appendChild(label);
+    r.appendChild(meta);
+    r.addEventListener('click', () => {
+      selectedParticle = null;
+      const already = selectedGroup && selectedGroup.kind === 'pdg' && selectedGroup.id === row.id;
+      selectedGroup = already ? null : { kind: 'pdg', id: row.id };
+      buildSidebar();
+      applyCorrespondence();
+      render2D();
+    });
+    list.appendChild(r);
+  }
+}
+
+function pdgRowLabel(row) {
+  const name = PDG_BUCKET_NAMES[row.bucket] || ('pdg' + row.bucket);
+  if (row.particleIds.length === 1) {
+    return `${name} · P${row.particleIds[0]}`;
+  }
+  // Shower row: show particle count instead of enumerating IDs.
+  return `${name} shower · n=${row.particleIds.length}`;
+}
+
+// List ancestors / interactions. One row per distinct group id, with the
+// total PE and particle count for that group.
 function buildSidebarGroups(list, kind) {
   const n_particles = evtBundle.labl.n_particles || 0;
   const groups = new Map();   // id → { n, pe, parts: [] }
   for (let p = 0; p < n_particles; p++) {
     let id;
-    if (kind === 'pdg') {
-      id = particlePdgBucket ? particlePdgBucket[p] : -1;
-    } else if (kind === 'ancestor')    id = particleAncestor ? particleAncestor[p] : -1;
-    else if (kind === 'interaction')   id = particleInteraction ? particleInteraction[p] : -1;
+    if (kind === 'ancestor')      id = particleAncestor ? particleAncestor[p] : -1;
+    else if (kind === 'interaction') id = particleInteraction ? particleInteraction[p] : -1;
     if (id == null || id < 0) continue;
     if (!groups.has(id)) groups.set(id, { n: 0, pe: 0, parts: [] });
     const g = groups.get(id);
@@ -1260,7 +1371,10 @@ function buildSidebarGroups(list, kind) {
 }
 
 function groupLabelText(kind, id, n) {
-  if (kind === 'pdg')         return `${PDG_BUCKET_NAMES[id] || 'pdg'+id} · n=${n}`;
+  if (kind === 'pdg') {
+    if (!pdgRows || id < 0 || id >= pdgRows.length) return 'pdg row ' + id;
+    return pdgRowLabel(pdgRows[id]);
+  }
   if (kind === 'ancestor')    return `ancestor ${id} · n=${n}`;
   if (kind === 'interaction') return `interaction ${id} · n=${n}`;
   if (kind === 'segment')     return `segment ${id}`;
@@ -1383,18 +1497,26 @@ function renderParticleInfo(info, p) {
 function renderGroupInfo(info, group) {
   const { kind, id } = group;
   const n_particles = evtBundle.labl.n_particles || 0;
-  const parts = [];
+  let parts = [];
   let pe = 0;
-  for (let p = 0; p < n_particles; p++) {
-    let gid;
-    if (kind === 'pdg')              { gid = particlePdgBucket ? particlePdgBucket[p] : -1; }
-    else if (kind === 'ancestor')    { gid = particleAncestor[p]; }
-    else if (kind === 'interaction') { gid = particleInteraction[p]; }
-    if (gid === id) { parts.push(p); pe += particleTotals[p] || 0; }
+  let bucketForHue = id;
+  if (kind === 'pdg') {
+    if (pdgRows && id >= 0 && id < pdgRows.length) {
+      parts = pdgRows[id].particleIds.slice();
+      pe = pdgRows[id].totalPE;
+      bucketForHue = pdgRows[id].bucket;
+    }
+  } else {
+    for (let p = 0; p < n_particles; p++) {
+      let gid;
+      if (kind === 'ancestor')         gid = particleAncestor[p];
+      else if (kind === 'interaction') gid = particleInteraction[p];
+      if (gid === id) { parts.push(p); pe += particleTotals[p] || 0; }
+    }
   }
   const head = document.createElement('div');
   head.className = 'selection-head';
-  const [r,g,b] = hsl2rgb(groupHue(kind, id), 0.78, 0.55);
+  const [r,g,b] = hsl2rgb(groupHue(kind, bucketForHue), 0.78, 0.55);
   const title = groupLabelText(kind, id, parts.length);
   head.innerHTML = `<span class="selection-swatch" style="background:rgb(${r},${g},${b})"></span>
                     <span>${title}</span>`;
@@ -1558,7 +1680,7 @@ function render2D() {
   let selectionHue = 0;
   if (corrActive && isCat) {
     if (selectedGroup) {
-      selectionHue = groupHue(selectedGroup.kind, selectedGroup.id);
+      selectionHue = selectedGroupHue();
     } else if (selectedParticle != null) {
       selectionHue = hashHue(selectedParticle);
     }
