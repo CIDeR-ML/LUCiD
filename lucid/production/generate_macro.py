@@ -124,6 +124,14 @@ def generate_macro(
     if store_seg_idx:
         lines.append("/photon/storeSegmentIndex true")
 
+    # Raw-vs-merged segment emission. PhotonSim defaults to raw on this
+    # branch; LUCiD's segment_grouping.py reapplies the merger and writes
+    # group_id alongside. Override only when running A/B byte-identity
+    # comparisons against the legacy merged output.
+    emit_raw = config.get("lucid_options", {}).get("emit_raw_segments", True)
+    if not emit_raw:
+        lines.append("/photon/emitRawSegments false")
+
     # Decays
     if disable_decays:
         lines.append("")
@@ -230,6 +238,14 @@ def _generate_genie_macro(
         config.get("lucid_options", {}).get("store_segment_sensor_map", False))
     if store_seg_idx:
         lines.append("/photon/storeSegmentIndex true")
+
+    # Raw-vs-merged segment emission. PhotonSim defaults to raw on this
+    # branch; LUCiD's segment_grouping.py reapplies the merger and writes
+    # group_id alongside. Override only when running A/B byte-identity
+    # comparisons against the legacy merged output.
+    emit_raw = config.get("lucid_options", {}).get("emit_raw_segments", True)
+    if not emit_raw:
+        lines.append("/photon/emitRawSegments false")
 
     if disable_decays:
         lines.append("")

@@ -137,6 +137,7 @@ seg.h5
     ├── edep                       (n_segments,) float32   — MeV
     ├── beta_start                 (n_segments,) float32   — particle β at segment start
     ├── n_cherenkov                (n_segments,) int32     — Cherenkov photons emitted in segment
+    ├── group_id                   (n_segments,) int32     — coarser segment grouping (see notes)
     └── contained                  (n_segments,) bool      — both endpoints inside detector_bounds
 ```
 
@@ -147,6 +148,15 @@ Notes:
   Geant4. See [DATASET_DESIGN.md](DATASET_DESIGN.md) for rationale.
 - `n_cherenkov` is Geant4's exact count for this segment — direct truth label
   for forward-simulation ML.
+- Each segment row is one raw G4 sub-step (PhotonSim ships unmerged
+  segments; the prior in-PhotonSim merger now runs in Python at
+  ingestion time — see `lucid/sources/segment_grouping.py`).
+  `group_id` holds the merger's output: aggregating segments by
+  `group_id` (start = first row's start, end = last row's end, edep
+  and n_cherenkov summed, dir / beta_start / time = first row's value)
+  reproduces the coarser pre-merge schema. Group ids are contiguous
+  within an event (`0..n_groups-1`) and never re-used across tracks.
+  Consumers should pick whichever granularity their task needs.
 - Segments are physically ordered by track (so segments belonging to track k
   appear contiguously), but the ordering is **not** required for correctness
   — `track_idx` is the canonical link. Loaders may shuffle segments freely.

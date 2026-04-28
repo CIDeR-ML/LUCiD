@@ -14,6 +14,7 @@ import time
 from glob import glob as _glob
 from tqdm import tqdm
 from lucid.wavelength import DEFAULT_WAVELENGTH_NM
+from lucid.sources.segment_grouping import assign_group_ids
 
 
 # Tag constants used with jax.random.fold_in so each subprocess stream in
@@ -1052,21 +1053,53 @@ def read_particle_data_from_photonsim(root_file_path, entry_index, include_track
                 'n_segments': int(mtrack_nsegs[i])
             }
 
+        # Pull raw mm values once. Grouping runs on these (mm-units, float64)
+        # so the geometric-length comparison in segment_grouping.py is
+        # bit-identical to the C++ merger; the mm→m conversion happens after.
+        seg_start_x_mm = tree_data['Segment_StartX'][0]
+        seg_start_y_mm = tree_data['Segment_StartY'][0]
+        seg_start_z_mm = tree_data['Segment_StartZ'][0]
+        seg_end_x_mm = tree_data['Segment_EndX'][0]
+        seg_end_y_mm = tree_data['Segment_EndY'][0]
+        seg_end_z_mm = tree_data['Segment_EndZ'][0]
+        seg_dir_x = tree_data['Segment_DirX'][0]
+        seg_dir_y = tree_data['Segment_DirY'][0]
+        seg_dir_z = tree_data['Segment_DirZ'][0]
+        seg_edep = tree_data['Segment_Edep'][0]
+
+        # PhotonSim 'raw-segments-no-merge' branch ships every G4 sub-step
+        # as its own Segment_* row; the merger lives here in Python instead.
+        # Aggregating raw rows by group_id reproduces the old merged output.
+        group_id = assign_group_ids(
+            start_x_mm=seg_start_x_mm,
+            start_y_mm=seg_start_y_mm,
+            start_z_mm=seg_start_z_mm,
+            end_x_mm=seg_end_x_mm,
+            end_y_mm=seg_end_y_mm,
+            end_z_mm=seg_end_z_mm,
+            dir_x=seg_dir_x,
+            dir_y=seg_dir_y,
+            dir_z=seg_dir_z,
+            edep_mev=seg_edep,
+            meaningful_tracks=meaningful_tracks,
+        )
+
         # Extract segment arrays (PhotonSim mm → LUCiD m)
         segments = {
-            'start_x': tree_data['Segment_StartX'][0] / 1000.0,  # mm to m
-            'start_y': tree_data['Segment_StartY'][0] / 1000.0,
-            'start_z': tree_data['Segment_StartZ'][0] / 1000.0,
-            'end_x': tree_data['Segment_EndX'][0] / 1000.0,
-            'end_y': tree_data['Segment_EndY'][0] / 1000.0,
-            'end_z': tree_data['Segment_EndZ'][0] / 1000.0,
-            'dir_x': tree_data['Segment_DirX'][0],
-            'dir_y': tree_data['Segment_DirY'][0],
-            'dir_z': tree_data['Segment_DirZ'][0],
-            'edep': tree_data['Segment_Edep'][0],
+            'start_x': seg_start_x_mm / 1000.0,
+            'start_y': seg_start_y_mm / 1000.0,
+            'start_z': seg_start_z_mm / 1000.0,
+            'end_x': seg_end_x_mm / 1000.0,
+            'end_y': seg_end_y_mm / 1000.0,
+            'end_z': seg_end_z_mm / 1000.0,
+            'dir_x': seg_dir_x,
+            'dir_y': seg_dir_y,
+            'dir_z': seg_dir_z,
+            'edep': seg_edep,
             'time': tree_data['Segment_Time'][0],
             'beta_start': tree_data['Segment_BetaStart'][0],
             'n_cherenkov': tree_data['Segment_NCherenkov'][0],
+            'group_id': group_id,
             'n_segments': n_segments
         }
 
@@ -1075,6 +1108,8 @@ def read_particle_data_from_photonsim(root_file_path, entry_index, include_track
             f"Segment_BetaStart length {len(segments['beta_start'])} != Segment_Edep {edep_len}")
         assert len(segments['n_cherenkov']) == edep_len, (
             f"Segment_NCherenkov length {len(segments['n_cherenkov'])} != Segment_Edep {edep_len}")
+        assert len(segments['group_id']) == edep_len, (
+            f"group_id length {len(segments['group_id'])} != Segment_Edep {edep_len}")
 
         result['meaningful_tracks'] = meaningful_tracks
         result['segments'] = segments
@@ -3653,6 +3688,13 @@ def save_seg_event_v3(f, event_dict, seq_idx):
 
     def _empty(dtype): return np.array([], dtype=dtype)
     if n_segments > 0:
+        # group_id is supplied by read_particle_data_from_photonsim. Old
+        # writes (no Python-side grouping) fall back to a contiguous range
+        # so each raw step is its own group — keeps the column non-null.
+        group_id_arr = np.asarray(
+            seg.get('group_id', np.arange(n_segments, dtype=np.int32)),
+            dtype=np.int32,
+        )
         fields = {
             'start_x': (seg['start_x'], np.float32),
             'start_y': (seg['start_y'], np.float32),
@@ -3667,6 +3709,7 @@ def save_seg_event_v3(f, event_dict, seq_idx):
             'time': (np.asarray(seg['time'], dtype=np.float32), np.float32),
             'beta_start': (seg['beta_start'], np.float32),
             'n_cherenkov': (seg['n_cherenkov'], np.int32),
+            'group_id': (group_id_arr, np.int32),
             'contained': (contained_per_segment, bool),
         }
         for name, (arr, dtype) in fields.items():
@@ -3680,7 +3723,8 @@ def save_seg_event_v3(f, event_dict, seq_idx):
                             ('dir_x', np.float16), ('dir_y', np.float16),
                             ('dir_z', np.float16), ('edep', np.float32),
                             ('time', np.float32), ('beta_start', np.float32),
-                            ('n_cherenkov', np.int32), ('contained', bool)):
+                            ('n_cherenkov', np.int32), ('group_id', np.int32),
+                            ('contained', bool)):
             grp.create_dataset(name, data=_empty(dtype), **_GZIP_OPTS)
 
     # Optional segment <-> sensor correspondence map. Mirrors inst.h5's flat
