@@ -329,7 +329,13 @@ def setup_event_simulator(
 
         from lucid.simulation.types import PhotonState
 
-        initial_survival = jnp.ones(n_rays)
+        # Photons whose origin lies outside the detector volume must not
+        # contribute weight at step 0. The propagation_step body already
+        # zeroes safe_continuing for any photon stepping outside, but only
+        # *after* the first iteration's weights have been emitted — so an
+        # outside-origin photon would otherwise leak hits on step 0.
+        # Mirror the same inside-detector mask onto initial_survival.
+        initial_survival = get_inside_detector_flag(positions).astype(jnp.float32)
 
         def propagation_step(carry, i):
             state = carry
