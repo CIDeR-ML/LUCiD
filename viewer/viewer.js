@@ -453,8 +453,10 @@ function refreshUnionQMap() {
 
 // PDG-bucket coloring. Fixed palette so a given bucket reads with the
 // same hue across every event and label-mode toggle.
-//   0=μ⁻ 1=μ⁺ 2=π⁺ 3=π⁻ 4=π⁰ 5=e⁻ 6=e⁺ 7=p 8=other meson 9=other
-const PDG_BUCKET_NAMES = ['μ⁻','μ⁺','π⁺','π⁻','π⁰','e⁻','e⁺','p','other meson','other'];
+//   0=μ⁻ 1=μ⁺ 2=π⁺ 3=π⁻ 4=π⁰ 5=e⁻ 6=e⁺ 7=p 8=n 9=γ 10=ν 11=other meson 12=other
+const PDG_BUCKET_NAMES = [
+  'μ⁻','μ⁺','π⁺','π⁻','π⁰','e⁻','e⁺','p','n','γ','ν','other meson','other'
+];
 const PDG_BUCKET_HUE = [
   0.61,  // μ⁻ — blue
   0.78,  // μ⁺ — purple
@@ -464,11 +466,18 @@ const PDG_BUCKET_HUE = [
   0.34,  // e⁻ — green
   0.50,  // e⁺ — cyan
   0.10,  // p  — brown-ish (low S/L applied where used)
+  0.55,  // n  — steel teal (neutral hadron)
+  0.18,  // γ  — pale gold (visually close-but-distinct from π⁰)
+  0.95,  // ν  — faded violet (S/L low → "almost invisible")
   0.90,  // other meson — magenta
   0.00,  // other — gray (S=0 below)
 ];
-const PDG_BUCKET_SAT = [0.78,0.78,0.78,0.78,0.85,0.78,0.78,0.45,0.78,0.00];
-const PDG_BUCKET_LIT = [0.55,0.55,0.55,0.55,0.55,0.50,0.55,0.40,0.55,0.55];
+const PDG_BUCKET_SAT = [
+  0.78, 0.78, 0.78, 0.78, 0.85, 0.78, 0.78, 0.45, 0.45, 0.55, 0.20, 0.78, 0.00,
+];
+const PDG_BUCKET_LIT = [
+  0.55, 0.55, 0.55, 0.55, 0.55, 0.50, 0.55, 0.40, 0.50, 0.65, 0.45, 0.55, 0.55,
+];
 // Other-meson PDG codes (|pdg|).
 const OTHER_MESON_ABS_PDG = new Set([
   130, 310, 311, 321,            // K⁰_L, K⁰_S, K⁰, K±
@@ -477,6 +486,8 @@ const OTHER_MESON_ABS_PDG = new Set([
   221, 331, 333,                 // η, η′, φ
   443, 553,                      // J/ψ, Υ
 ]);
+// Neutrinos (|pdg|).
+const NEUTRINO_ABS_PDG = new Set([12, 14, 16]);
 function pdgBucket(pdg) {
   switch (pdg) {
     case 13:   return 0;   // μ⁻
@@ -487,8 +498,12 @@ function pdgBucket(pdg) {
     case 11:   return 5;   // e⁻
     case -11:  return 6;   // e⁺
     case 2212: return 7;   // p
+    case 2112: return 8;   // n
+    case 22:   return 9;   // γ
   }
-  return OTHER_MESON_ABS_PDG.has(Math.abs(pdg)) ? 8 : 9;
+  if (NEUTRINO_ABS_PDG.has(Math.abs(pdg))) return 10;
+  if (OTHER_MESON_ABS_PDG.has(Math.abs(pdg))) return 11;
+  return 12;
 }
 function pdgBucketHue(b) { return PDG_BUCKET_HUE[(b|0) % PDG_BUCKET_HUE.length]; }
 function pdgBucketRGB(b) {
