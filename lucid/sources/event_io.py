@@ -208,38 +208,41 @@ def _simulate_particles_bucketed(
 
     For each particle, group its photons into chunks of size <= max_bucket,
     each padded to the smallest fitting bucket from ``buckets``. Each chunk
-    is one ``event_simulator(...)`` call; results are combined on host
-    (PE-sum, T-min over chunks). The downstream loop expects the same
-    ``(n_particles, n_sensors)`` numpy arrays the legacy vmap path produced.
+    is one ``event_simulator(...)`` call; per-sensor PE-sum and T-min are
+    aggregated across all (particle, chunk) pairs.
 
     When ``n_segments > 0`` and ``all_photon_segment_index_np`` is supplied,
-    the simulator must be in ``hit_mode='per_segment'`` and returns a 4-tuple
-    (per-sensor PE/T plus per-(segment, sensor) PE/T). The 2D arrays are
-    accumulated across particles AND chunks and returned as the last two
-    elements of the result. Photons whose segment id is ``-1`` (sentinel
-    for non-meaningful parent track) contribute to the per-sensor total
-    but produce no row in the segment decomposition (handled inside
-    ``make_hits_per_segment``).
+    the simulator runs in ``hit_mode='per_segment'`` and additionally
+    returns a per-(segment, sensor) decomposition; the 2D arrays are
+    accumulated across particles AND chunks. Photons whose segment id is
+    ``-1`` (sentinel for non-meaningful parent track) contribute to the
+    per-sensor total but produce no row in the segment decomposition
+    (handled inside ``make_hits_per_segment``).
+
+    Per-particle PE/T (inst.h5) is no longer accumulated here — it is
+    derived downstream by ``aggregate_inst_from_segments`` over the
+    per-(segment, sensor) tensor plus the segment→track→particle map.
 
     Returns
     -------
-    PE_per_particle : np.ndarray, shape (n_particles, n_sensors), float32
-    T_per_particle  : np.ndarray, shape (n_particles, n_sensors), float32
-    track_energies   : np.ndarray, shape (n_particles,), float32
-    track_positions  : np.ndarray, shape (n_particles, 3), float32
-    track_directions : np.ndarray, shape (n_particles, 3), float32
-    pe_per_seg : np.ndarray, shape (n_segments, n_sensors), float32 — or
-        None when ``n_segments == 0``.
-    t_per_seg  : same as pe_per_seg.
+    pe_per_sensor    : (n_sensors,) float32 — PE_true (pre-smearing).
+    t_per_sensor     : (n_sensors,) float32 — first-arrival per sensor; 0 = no hit.
+    track_energies   : (n_particles,) float32
+    track_positions  : (n_particles, 3) float32
+    track_directions : (n_particles, 3) float32
+    pe_per_seg       : (n_segments, n_sensors) float32 — None when
+        ``n_segments == 0``.
+    t_per_seg        : same as pe_per_seg; 0 = no hit.
     """
     from lucid.detector_params import ParticleParams
 
     n_particles = len(particles)
-    PE_per_particle = np.zeros((n_particles, n_sensors), dtype=np.float32)
-    T_per_particle  = np.zeros((n_particles, n_sensors), dtype=np.float32)
     track_energies   = np.zeros(n_particles, dtype=np.float32)
     track_positions  = np.zeros((n_particles, 3), dtype=np.float32)
     track_directions = np.zeros((n_particles, 3), dtype=np.float32)
+
+    pe_per_sensor    = np.zeros(n_sensors, dtype=np.float32)
+    t_per_sensor_inf = np.full(n_sensors, np.inf, dtype=np.float32)
 
     per_segment_mode = n_segments > 0 and all_photon_segment_index_np is not None
     if per_segment_mode:
@@ -274,7 +277,7 @@ def _simulate_particles_bucketed(
         photon_indices = np.asarray(particle['photon_indices'], dtype=np.int64)
         N = int(len(photon_indices))
         if N == 0:
-            continue  # leaves PE/T zero for this particle
+            continue
 
         track_params = ParticleParams.from_cartesian(
             energy=jnp.float32(track_energies[p_idx]),
@@ -284,10 +287,6 @@ def _simulate_particles_bucketed(
         )
 
         chunks = _split_into_chunks(N, buckets)
-
-        # Accumulators (host side).
-        pe_acc = np.zeros(n_sensors, dtype=np.float32)
-        t_min_acc = np.full(n_sensors, np.inf, dtype=np.float32)
 
         offset = 0
         for chunk_idx, bucket_size in enumerate(chunks):
@@ -342,26 +341,23 @@ def _simulate_particles_bucketed(
             PE_chunk_np = np.asarray(PE_chunk, dtype=np.float32)
             T_chunk_np  = np.asarray(T_chunk,  dtype=np.float32)
 
-            pe_acc += PE_chunk_np
-            # Earliest non-zero time per sensor across chunks.
-            t_min_acc = np.minimum(
-                t_min_acc,
+            pe_per_sensor += PE_chunk_np
+            t_per_sensor_inf = np.minimum(
+                t_per_sensor_inf,
                 np.where(T_chunk_np > 0, T_chunk_np, np.inf),
             )
 
             offset += n_in_chunk
 
-        PE_per_particle[p_idx] = pe_acc
-        # Restore "no hit = 0" sentinel for sensors that never fired.
-        T_per_particle[p_idx] = np.where(np.isfinite(t_min_acc), t_min_acc, 0.0)
+    # Restore "no hit = 0" sentinel for sensors that never fired.
+    t_per_sensor = np.where(np.isfinite(t_per_sensor_inf), t_per_sensor_inf, 0.0)
 
     if per_segment_mode:
-        # "no hit = 0" sentinel on the seg-level T array too, mirroring
-        # the per-sensor convention.
+        # Same convention on the seg-level T array.
         t_per_seg_total = np.where(
             np.isfinite(t_per_seg_total), t_per_seg_total, 0.0)
 
-    return (PE_per_particle, T_per_particle,
+    return (pe_per_sensor, t_per_sensor,
             track_energies, track_positions, track_directions,
             pe_per_seg_total, t_per_seg_total)
 
@@ -1524,7 +1520,7 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
                       f"(buckets={list(pad_size_buckets)})...", flush=True)
                 sim_start_time = time.time()
                 _t_sim = time.perf_counter()
-                (PE_per_particle, T_per_particle,
+                (pe_per_sensor_np, t_per_sensor_np,
                  _track_E_np, _track_pos_np, _track_dir_np,
                  pe_per_seg_total, t_per_seg_total) = _simulate_particles_bucketed(
                     event_simulator, particles, particle_data,
@@ -1539,6 +1535,36 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
                 print(f"    Simulation completed in {sim_elapsed:.2f}s", flush=True)
                 print(f"    [timing] simulate {time.perf_counter() - _t_sim:.3f}s", flush=True)
                 _t_post = time.perf_counter()
+
+                # inst.h5 (per-particle PE/T) is now a downstream view of
+                # seg/sensor_hits/ via the segment→track→particle map.
+                # Build track_idx_per_segment from meaningful_tracks (the
+                # same way save_seg_event_v3 does), call
+                # derive_particle_idx_per_track, then aggregate.
+                _mt = particle_data.get('meaningful_tracks', {})
+                _track_idx_per_segment = np.empty(n_segments, dtype=np.int32)
+                _off = 0
+                for _local_idx, _tinfo in enumerate(_mt.values()):
+                    _ns = int(_tinfo['n_segments'])
+                    _track_idx_per_segment[_off:_off + _ns] = _local_idx
+                    _off += _ns
+                if _off != n_segments:
+                    raise ValueError(
+                        f"meaningful_tracks segment counts sum to {_off} "
+                        f"!= n_segments {n_segments}")
+                _particle_idx_per_track = derive_particle_idx_per_track({
+                    'meaningful_tracks': _mt, 'particles': particles})
+                PE_per_particle, T_per_particle = aggregate_inst_from_segments(
+                    pe_per_seg_total, t_per_seg_total,
+                    _track_idx_per_segment, _particle_idx_per_track,
+                    n_particles, n_sensors)
+
+                # PE_true / T_true (per-sensor pre-smearing) come from the
+                # kernel's per-sensor accumulator: includes every photon's
+                # contribution, even orphan-track photons that the
+                # aggregator drops from inst.h5.
+                PE_true = jnp.asarray(pe_per_sensor_np)
+                T_true = jnp.asarray(t_per_sensor_np)
             else:
                 # ====================================================================
                 # LEGACY PATH: file-max PAD_SIZE, vmap over particles.
@@ -1631,10 +1657,10 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
                 print(f"    [timing] simulate {time.perf_counter() - _t_sim:.3f}s", flush=True)
                 _t_post = time.perf_counter()
 
-            # Calculate PE_true and T_true by aggregating across particles
-            PE_true = jnp.sum(PE_per_particle, axis=0)
-            T_true = jnp.min(jnp.where(T_per_particle > 0, T_per_particle, jnp.inf), axis=0)
-            T_true = jnp.where(jnp.isfinite(T_true), T_true, 0.0)
+                # Legacy path: PE_true/T_true derived from per-particle.
+                PE_true = jnp.sum(PE_per_particle, axis=0)
+                T_true = jnp.min(jnp.where(T_per_particle > 0, T_per_particle, jnp.inf), axis=0)
+                T_true = jnp.where(jnp.isfinite(T_true), T_true, 0.0)
 
             # Apply smearing if requested
             if apply_smearing:
@@ -3442,6 +3468,77 @@ def derive_particle_idx_per_track(event_dict):
                 break
             cur = int(parent['parent_id'])
     return out
+
+
+def aggregate_inst_from_segments(pe_per_seg, t_per_seg,
+                                  track_idx_per_segment,
+                                  particle_idx_per_track,
+                                  n_particles, n_sensors):
+    """Aggregate per-(segment, sensor) PE/T into per-particle PE/T.
+
+    inst.h5's per-particle decomposition is a downstream view of
+    ``seg/event_NNN/sensor_hits/`` plus the segment→track→particle map.
+    PE per particle is the sum over the particle's segments; T per
+    particle is the min over the particle's segments' first-arrival
+    times.
+
+    Bit-identical to today's per-particle kernel call when every photon
+    of a categorized particle has a valid segment id (always true on
+    the raw-segments-no-merge PhotonSim branch). Composition argument:
+    PE comes from the same ``qe_weights`` tensor in
+    ``make_hits_per_segment`` whether read per-sensor or per-(seg,
+    sensor); T composes via ``min(min(A), min(B)) == min(A ∪ B)``.
+
+    The "no hit = 0" sentinel pattern is preserved exactly: 0 in the
+    input means "no photons hit this (seg, sensor)"; we route
+    0 → +inf → segment_min → back to 0.
+
+    Parameters
+    ----------
+    pe_per_seg : (n_segments, n_sensors) float32
+        PE_total per (segment, sensor). 0 = no hit.
+    t_per_seg : (n_segments, n_sensors) float32
+        First-arrival time per (segment, sensor). 0 = no hit.
+    track_idx_per_segment : (n_segments,) int32
+        Local track index per segment (0..n_tracks-1).
+    particle_idx_per_track : (n_tracks,) int32
+        Particle index per track; -1 for tracks without a categorized
+        ancestor (their segments are dropped from inst.h5).
+    n_particles, n_sensors : int
+
+    Returns
+    -------
+    PE_per_particle : (n_particles, n_sensors) float32
+    T_per_particle  : (n_particles, n_sensors) float32 — 0 = no hit.
+    """
+    PE_pp = np.zeros((n_particles, n_sensors), dtype=np.float32)
+    T_pp = np.zeros((n_particles, n_sensors), dtype=np.float32)
+    if n_particles == 0:
+        return PE_pp, T_pp
+
+    n_segments = int(pe_per_seg.shape[0])
+    if n_segments == 0:
+        return PE_pp, T_pp
+
+    if track_idx_per_segment.size != n_segments:
+        raise ValueError(
+            f"track_idx_per_segment length {track_idx_per_segment.size} "
+            f"!= n_segments {n_segments}")
+
+    particle_idx_per_seg = particle_idx_per_track[track_idx_per_segment]
+    valid = particle_idx_per_seg >= 0
+    if not valid.any():
+        return PE_pp, T_pp
+
+    valid_pidx = particle_idx_per_seg[valid].astype(np.int64)
+
+    np.add.at(PE_pp, valid_pidx, pe_per_seg[valid])
+
+    T_pp_inf = np.full((n_particles, n_sensors), np.inf, dtype=np.float32)
+    t_inf = np.where(t_per_seg > 0, t_per_seg, np.inf).astype(np.float32)
+    np.minimum.at(T_pp_inf, valid_pidx, t_inf[valid])
+    T_pp = np.where(np.isfinite(T_pp_inf), T_pp_inf, np.float32(0.0))
+    return PE_pp.astype(np.float32, copy=False), T_pp.astype(np.float32, copy=False)
 
 
 def derive_track_ancestor_and_interaction(event_dict):
