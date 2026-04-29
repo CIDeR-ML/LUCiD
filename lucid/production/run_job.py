@@ -206,15 +206,14 @@ def _run_lucid(
     lucid_opts = config.get("lucid_options", {})
     apply_smearing = bool(lucid_opts.get("apply_smearing", True))
     apply_translation = bool(lucid_opts.get("apply_translation", True))
-    # Opt-in segment <-> sensor map. Default off so existing dataprod runs are
-    # byte-identical. The matching PhotonSim macro flag
-    # (/photon/storeSegmentIndex true) must also be set; generate_macro reads
-    # the same key. When on, the simulator runs in 'per_segment' mode,
-    # which adds an exact per-(segment, sensor) decomposition next to
-    # the per-sensor totals — replacing the old two-pass approach
-    # (which used independent RNG and therefore disagreed with sensor.h5).
-    store_segment_sensor_map = bool(lucid_opts.get("store_segment_sensor_map", False))
-    hit_mode = 'per_segment' if store_segment_sensor_map else 'realistic'
+    # seg/event_NNN/sensor_hits/ is mandatory for data-mode datasets:
+    # it's the per-(segment, sensor) ground truth that inst.h5 is now
+    # aggregated from. The matching PhotonSim macro flag
+    # (/photon/storeSegmentIndex true) is emitted unconditionally by
+    # generate_macro.py for data mode. The simulator runs in
+    # 'per_segment' mode, which produces an exact per-(segment, sensor)
+    # decomposition with column-sums equal to the per-sensor totals
+    # by construction (shared qe_weights — sensor_response.py:100-104).
 
     simulate_event = setup_event_simulator(
         detector_config_path,
@@ -225,7 +224,7 @@ def _run_lucid(
         apply_smearing=False,  # per-particle smearing off; PE-sum smearing applied below
         physics_config=physics_config_path,
         default_detector_params=True,
-        hit_mode=hit_mode,
+        hit_mode='per_segment',
     )
     # PAD_SIZE bucketing (see lucid/sources/event_io.py for the full rationale).
     # `None` -> module default; an explicit empty list opts back into the
@@ -252,7 +251,7 @@ def _run_lucid(
         material=material,
         include_track_segments=True,
         primary_source=config.get("primary_source", "particles"),
-        store_segment_sensor_map=store_segment_sensor_map,
+        store_segment_sensor_map=True,
         pad_size_buckets=pad_size_buckets,
     )
     print(f"LUCiD wrote {len(saved_files)} files under {output_dir}/{{sensor,inst,seg,labl}}/")

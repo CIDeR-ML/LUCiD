@@ -128,7 +128,7 @@ seg.h5
 │   │           detector_bbox (6,), detector_radius, detector_half_height, detector_axis (3,)
 │   └── source_event_idx      (n_events,) uint32
 └── event_NNN/
-    │ attrs: source_event_idx, n_tracks, n_segments
+    │ attrs: source_event_idx, n_tracks, n_segments, has_segment_sensor_map (always true for data-mode datasets)
     ├── track_idx             (n_segments,) int32   — local FK to labl/per_track row
     ├── start_x, start_y, start_z   (n_segments,) float32  — meters
     ├── end_x, end_y, end_z         (n_segments,) float32  — meters
@@ -138,7 +138,13 @@ seg.h5
     ├── beta_start                 (n_segments,) float32   — particle β at segment start
     ├── n_cherenkov                (n_segments,) int32     — Cherenkov photons emitted in segment
     ├── group_id                   (n_segments,) int32     — coarser segment grouping (see notes)
-    └── contained                  (n_segments,) bool      — both endpoints inside detector_bounds
+    ├── contained                  (n_segments,) bool      — both endpoints inside detector_bounds
+    └── sensor_hits/                — flat per-(segment, sensor) PE/T (n_segment_hits rows)
+        │ attrs: n_segment_hits
+        ├── segment_idx           (n_segment_hits,) int32  — FK to this event's segments (0..n_segments-1)
+        ├── sensor_idx            (n_segment_hits,) uint16 — FK to sensor_positions
+        ├── PE                    (n_segment_hits,) float32 — segment's contribution to that sensor's PE
+        └── T                     (n_segment_hits,) float32 — segment's first-arrival time on that sensor (ns, detector frame)
 ```
 
 Notes:
@@ -160,6 +166,13 @@ Notes:
 - Segments are physically ordered by track (so segments belonging to track k
   appear contiguously), but the ordering is **not** required for correctness
   — `track_idx` is the canonical link. Loaders may shuffle segments freely.
+- `sensor_hits/` is the per-(segment, sensor) ground truth that `inst.h5`
+  is aggregated from: aggregating `sensor_hits.PE` over `segment_idx →
+  track_idx → particle_idx` reproduces `inst.h5/event_NNN/PE` exactly
+  (column-sums match `sensor.h5/event_NNN/PE` by construction — shared
+  `qe_weights` in `sensor_response.make_hits_per_segment`). Mandatory in
+  data-mode datasets — re-bucketing into a different particle definition
+  is a Python re-aggregation over the same on-disk file.
 
 ### `labl.h5` — labels and truth dimension tables
 

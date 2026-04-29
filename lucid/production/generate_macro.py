@@ -117,12 +117,10 @@ def generate_macro(
         lines.append("/photon/storeIndividual false")
         lines.append("/edep/storeIndividual false")
 
-    # Per-photon segment index — opt-in, gated on the same key LUCiD reads.
-    # Required upstream for the seg/event_NNN/sensor_hits/ subgroup.
-    store_seg_idx = bool(
-        config.get("lucid_options", {}).get("store_segment_sensor_map", False))
-    if store_seg_idx:
-        lines.append("/photon/storeSegmentIndex true")
+    # Per-photon segment index — mandatory for data mode. Required for the
+    # seg/event_NNN/sensor_hits/ subgroup, which is now the ground truth
+    # that inst.h5 is aggregated from.
+    lines.append("/photon/storeSegmentIndex true")
 
     # Raw-vs-merged segment emission. PhotonSim defaults to raw on this
     # branch; LUCiD's segment_grouping.py reapplies the merger and writes
@@ -234,10 +232,8 @@ def _generate_genie_macro(
         lines.append("/photon/storeIndividual false")
         lines.append("/edep/storeIndividual false")
 
-    store_seg_idx = bool(
-        config.get("lucid_options", {}).get("store_segment_sensor_map", False))
-    if store_seg_idx:
-        lines.append("/photon/storeSegmentIndex true")
+    # Per-photon segment index — mandatory for data mode (GENIE primaries).
+    lines.append("/photon/storeSegmentIndex true")
 
     # Raw-vs-merged segment emission. PhotonSim defaults to raw on this
     # branch; LUCiD's segment_grouping.py reapplies the merger and writes
