@@ -149,7 +149,6 @@ def main():
         file_index_start=args.file_index_start,
         detector_type=detector_type,
         material=material,
-        include_track_segments=True,
         store_segment_sensor_map=True,  # mandatory for data mode
     )
 

@@ -1,26 +1,29 @@
 """Pure-Python port of PhotonSim's per-track categorization, genealogy
-construction, and photon→particle bucketing.
+construction, photon→particle bucketing, and meaningful-track
+derivation.
 
-Today, PhotonSim categorizes Geant4 tracks at creation time
-(``SteppingAction.cc:109-265``) into four buckets — Primary,
-DecayElectron, SecondaryPion, Gamma — and emits ``Particle_*`` /
-``TrackInfo_Category`` ROOT branches with the categorized particles
-and their photon assignments. This module reproduces that logic in
-Python, consuming raw ``TrackInfo_*`` arrays (incl.
-``TrackInfo_CreatorProcess`` from Stage 1) plus the
-``MTrack_*`` / ``Segment_*`` / ``Photon_SegmentIndex`` arrays.
+Until Stage 5a, PhotonSim categorized Geant4 tracks at creation time
+and emitted ``Particle_*`` / ``MTrack_*`` / ``TrackInfo_Category``
+ROOT branches. After Stage 5a, PhotonSim emits only the raw inputs
+(``TrackInfo_*`` incl. ``TrackInfo_CreatorProcess``, every G4 track's
+segments via ``Segment_*`` + ``Segment_TrackID``,
+``Photon_SegmentIndex``, ``OpticalPhotonsRaw``); this module
+reconstructs the categorization, the meaningful-track set, the
+genealogies, and the photon→particle binding in Python.
 
-Output is bit-identical to the legacy C++ branches on
-``TrackInfo_Category`` and ``Particle_*`` except for ``TrackInfo_SubID``
-within a single (parent, decay-process, time) tie — Geant4 processes
-multi-secondary decays in stack (LIFO) order; this implementation
-processes tracks in track-id order. The sub-id is metadata only, never
-read downstream of ``read_particle_data_from_photonsim``, so this
-divergence is invisible to inst.h5 / labl.h5 consumers.
+The categorization output is bit-identical to the legacy C++ branches
+on ``TrackInfo_Category`` and ``Particle_*`` except for
+``TrackInfo_SubID`` within a single (parent, decay-process, time) tie
+— Geant4 processes multi-secondary decays in stack (LIFO) order; this
+implementation processes tracks in track-id order. The sub-id is
+metadata only, never read downstream of
+``read_particle_data_from_photonsim``, so this divergence is invisible
+to inst.h5 / labl.h5 consumers.
 
-``RelabelPhotonsForDeflection`` is already disabled in PhotonSim
-(SteppingAction.cc:246-259 commented out), so photon→particle
-bucketing matches by segment ownership without any extra divergence.
+The meaningful-track set ("Cherenkov producers + their ancestors")
+mirrors the legacy C++ filter in ``DataManager::EndEvent`` — same
+definition, same downstream HDF5 contents, just derived in Python
+from groupby on ``Segment_TrackID`` + ``Segment_NCherenkov``.
 """
 from __future__ import annotations
 
@@ -328,6 +331,171 @@ def categorize_event(
         ext_genealogies=[r[1] for r in rows],
         particle_idx_by_meaningful_track=particle_idx_by_mtrack,
     )
+
+
+def derive_meaningful_tracks(
+    segment_track_id: np.ndarray,
+    segment_n_cherenkov: np.ndarray,
+    track_info: Dict[int, Dict[str, object]],
+) -> Dict[int, Dict[str, object]]:
+    """Reconstruct the legacy ``MTrack_*`` table from the all-tracks
+    ``Segment_*`` table emitted by Stage 5a PhotonSim.
+
+    "Meaningful" tracks are those that produced ≥1 Cherenkov photon
+    plus their ancestors — same definition as the legacy C++ filter at
+    ``DataManager::EndEvent``. Output dict shape matches the legacy
+    ``meaningful_tracks`` consumed by
+    :func:`lucid.sources.segment_grouping.assign_group_ids`:
+    ``track_id → {parent_id, pdg, initial_energy, particle_name,
+    n_cherenkov, segment_offset, n_segments}``.
+
+    The ``segment_offset`` returned here indexes into the **filtered**
+    segment array produced by :func:`filter_segments_to_meaningful` —
+    ``assign_group_ids`` must be called against the same filtered array.
+
+    Parameters
+    ----------
+    segment_track_id
+        ``Segment_TrackID`` from the PhotonSim ROOT — one entry per
+        raw segment, naming the G4 track that emitted it.
+    segment_n_cherenkov
+        ``Segment_NCherenkov`` — number of Cherenkov photons emitted
+        in each raw segment.
+    track_info
+        Per-track lookup keyed by track id, with at minimum
+        ``parent_id``, ``pdg``, ``energy`` (KE in MeV) entries — same
+        shape produced by the existing
+        ``read_particle_data_from_photonsim`` reader.
+
+    Returns
+    -------
+    dict
+        ``{track_id: {parent_id, pdg, initial_energy, particle_name,
+        n_cherenkov, segment_offset, n_segments}}``. Iteration order
+        is track-id ascending (matches the order tracks appear in the
+        filtered segment array).
+    """
+    seg_tid = np.asarray(segment_track_id, dtype=np.int64)
+    seg_nch = np.asarray(segment_n_cherenkov, dtype=np.int64)
+
+    if seg_tid.size == 0:
+        return {}
+
+    # Per-track segment counts and Cherenkov totals via stable groupby.
+    # Tracks appear in seg_tid in track-id-ascending order (PhotonSim's
+    # std::map iteration), so a single pass collects offsets/counts.
+    unique_tids, first_idx, counts = np.unique(
+        seg_tid, return_index=True, return_counts=True)
+    # Per-track sum of Segment_NCherenkov.
+    cher_sum_per_track: Dict[int, int] = {}
+    for tid in unique_tids:
+        mask = seg_tid == tid
+        cher_sum_per_track[int(tid)] = int(seg_nch[mask].sum())
+
+    # Cherenkov producers — tracks with ≥1 Cherenkov segment.
+    producers = {tid for tid, c in cher_sum_per_track.items() if c > 0}
+
+    # Walk ancestors via track_info[parent_id] (mirrors the legacy
+    # second pass in DataManager::EndEvent). Stop at parent_id <= 0
+    # or when the parent is missing from the track_info / segment set.
+    meaningful_ids = set(producers)
+    track_set = set(int(tid) for tid in unique_tids)
+    for leaf in producers:
+        cur = leaf
+        while cur > 0:
+            ti = track_info.get(cur)
+            if ti is None:
+                break
+            par = int(ti.get('parent_id', 0))
+            if par <= 0:
+                break
+            if par in meaningful_ids:
+                # Already covered upstream.
+                break
+            if par not in track_set:
+                # Parent has no segment row (untracked) — stop.
+                break
+            meaningful_ids.add(par)
+            cur = par
+
+    # Build the output dict in track-id-ascending order so it matches
+    # the order tracks appear in the filtered segment array.
+    result: Dict[int, Dict[str, object]] = {}
+    cumulative_offset = 0
+    for tid_arr_idx, tid in enumerate(unique_tids):
+        tid_int = int(tid)
+        n_seg = int(counts[tid_arr_idx])
+        if tid_int not in meaningful_ids:
+            continue
+        ti = track_info.get(tid_int, {})
+        result[tid_int] = {
+            'track_id': tid_int,
+            'parent_id': int(ti.get('parent_id', 0)),
+            'pdg': int(ti.get('pdg', 0)),
+            'initial_energy': float(ti.get('energy', 0.0)),
+            'particle_name': pdg_to_g4name(int(ti.get('pdg', 0))),
+            'n_cherenkov': cher_sum_per_track[tid_int],
+            'segment_offset': cumulative_offset,
+            'n_segments': n_seg,
+        }
+        cumulative_offset += n_seg
+    return result
+
+
+def filter_segments_to_meaningful(
+    segment_track_id: np.ndarray,
+    meaningful_tracks: Dict[int, Dict[str, object]],
+    photon_segment_index: Optional[np.ndarray] = None,
+) -> Tuple[np.ndarray, Optional[np.ndarray]]:
+    """Filter the all-tracks segment array to the meaningful subset.
+
+    Returns ``(keep_mask, photon_segment_index_remapped)`` so the
+    caller can reindex parallel ``Segment_*`` arrays in one shot.
+
+    Parameters
+    ----------
+    segment_track_id
+        ``Segment_TrackID`` from the PhotonSim ROOT.
+    meaningful_tracks
+        Output of :func:`derive_meaningful_tracks` — keys define the
+        meaningful subset.
+    photon_segment_index
+        Optional ``Photon_SegmentIndex`` from the ROOT (positions in
+        the all-tracks segment array). If provided, returned remapped
+        to filtered-array positions; non-meaningful-segment photons
+        get ``-1`` (which never happens for Cherenkov photons since
+        every Cherenkov-producing track is meaningful, but defended).
+
+    Returns
+    -------
+    keep_mask : np.ndarray (bool)
+        Per-segment boolean mask; ``segment_array[keep_mask]`` is the
+        filtered array.
+    photon_segment_index_remapped : np.ndarray or None
+        ``photon_segment_index`` remapped from all-tracks positions to
+        filtered-array positions, or ``None`` if input was ``None``.
+    """
+    seg_tid = np.asarray(segment_track_id, dtype=np.int64)
+    if seg_tid.size == 0:
+        return (np.array([], dtype=bool),
+                None if photon_segment_index is None else np.array([], dtype=np.int32))
+
+    keep_mask = np.zeros(seg_tid.size, dtype=bool)
+    if meaningful_tracks:
+        meaningful_ids = np.fromiter(meaningful_tracks.keys(), dtype=np.int64)
+        keep_mask = np.isin(seg_tid, meaningful_ids)
+
+    if photon_segment_index is None:
+        return keep_mask, None
+
+    # cumsum-based remap: filtered_pos = cumsum(keep_mask) - 1 at each
+    # all-tracks index. Non-meaningful segments get -1.
+    full_to_filtered = np.cumsum(keep_mask, dtype=np.int64) - 1
+    full_to_filtered = np.where(keep_mask, full_to_filtered, -1).astype(np.int64)
+
+    psi = np.asarray(photon_segment_index, dtype=np.int64)
+    out = np.where(psi >= 0, full_to_filtered[psi], -1).astype(np.int32)
+    return keep_mask, out
 
 
 def bucket_photons_by_segment(

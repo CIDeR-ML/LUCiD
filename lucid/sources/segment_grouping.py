@@ -43,9 +43,10 @@ def assign_group_ids(
 ) -> np.ndarray:
     """Assign a contiguous group id (0..G-1 within the event) to each raw segment.
 
-    Walks ``meaningful_tracks`` in iteration order — the dict is built
-    from the parallel ``MTrack_*`` arrays in PhotonSim ROOT, so iteration
-    order matches the per-track block layout in ``Segment_*``.
+    Walks ``meaningful_tracks`` in iteration order — the dict is
+    derived from ``Segment_TrackID`` + ``Segment_NCherenkov`` (post
+    Stage 5a), so iteration order matches the per-track block layout
+    in the filtered ``Segment_*`` arrays.
 
     Parameters
     ----------

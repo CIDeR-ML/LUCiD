@@ -15,6 +15,14 @@ from glob import glob as _glob
 from tqdm import tqdm
 from lucid.wavelength import DEFAULT_WAVELENGTH_NM
 from lucid.sources.segment_grouping import assign_group_ids
+from lucid.sources.particle_categorization import (
+    TrackEntry,
+    bucket_photons_by_segment,
+    categorize_event,
+    derive_meaningful_tracks,
+    filter_segments_to_meaningful,
+    pdg_to_g4name,
+)
 
 
 # Tag constants used with jax.random.fold_in so each subprocess stream in
@@ -420,10 +428,13 @@ def _read_photons_for_event(raw_tree, event_idx):
 
 def get_max_photons_per_particle(root_file_path, n_events=None):
     """
-    Efficiently scan a ROOT file to find the maximum number of photons in any single particle.
+    Return an upper bound on the number of photons in any single particle.
 
-    This function reads only the Particle_PhotonIDsSize branch for all events at once,
-    which is much faster than iterating through events one by one.
+    Post-Stage-5a, PhotonSim no longer emits a per-particle photon-count
+    branch (``Particle_PhotonIDsSize`` is gone). The per-event total
+    ``NOpticalPhotons`` is a safe upper bound (one particle can't carry
+    more photons than the entire event), and that's all PAD_SIZE needs
+    — oversizing the JAX kernel padding is harmless, undersizing isn't.
 
     Parameters
     ----------
@@ -435,29 +446,19 @@ def get_max_photons_per_particle(root_file_path, n_events=None):
     Returns
     -------
     int
-        Maximum number of photons found in any single particle across all scanned events
+        Upper bound on photons per particle (= max NOpticalPhotons over
+        the scanned events).
     """
     import uproot
 
     root_file = uproot.open(root_file_path)
     tree = root_file['OpticalPhotons']
     num_entries = tree.num_entries
-
-    # Limit to n_events if specified
     entry_stop = min(n_events, num_entries) if n_events is not None else num_entries
 
-    # Read Particle_PhotonIDsSize for all events at once (jagged array)
-    photon_ids_sizes = tree['Particle_PhotonIDsSize'].array(
-        entry_start=0, entry_stop=entry_stop, library='np'
-    )
-
-    # Find global maximum across all events and all particles
-    max_photons = 0
-    for event_sizes in photon_ids_sizes:
-        if len(event_sizes) > 0:
-            event_max = int(max(event_sizes))
-            if event_max > max_photons:
-                max_photons = event_max
+    n_photons_per_event = tree['NOpticalPhotons'].array(
+        entry_start=0, entry_stop=entry_stop, library='np')
+    max_photons = int(n_photons_per_event.max()) if n_photons_per_event.size > 0 else 0
 
     root_file.close()
     return max_photons
@@ -790,11 +791,17 @@ def read_photon_data_from_photonsim(root_file_path, entry_index):
 
     return result
 
-def read_particle_data_from_photonsim(root_file_path, entry_index, include_track_segments=False,
-                                      include_segment_index=False):
+def read_particle_data_from_photonsim(root_file_path, entry_index):
     """
     Read particle-based photon data from a PhotonSim ROOT file for a specific entry.
-    This function reads the particle system that classifies photons by genealogy.
+
+    Post-Stage-5a, PhotonSim emits only raw G4 outputs — every track in
+    ``TrackInfo_*``, every G4 sub-step in ``Segment_*`` (with inline
+    ``Segment_TrackID``), and unconditional ``Photon_SegmentIndex``.
+    The categorization that used to happen in C++ (``Particle_*`` /
+    ``MTrack_*`` / ``TrackInfo_Category`` branches) now happens here in
+    Python via :func:`categorize_event` and
+    :func:`derive_meaningful_tracks`.
 
     Parameters
     ----------
@@ -802,8 +809,6 @@ def read_particle_data_from_photonsim(root_file_path, entry_index, include_track
         Path to the PhotonSim ROOT file
     entry_index : int
         Entry index to read from the file
-    include_track_segments : bool, optional
-        If True, also read meaningful tracks and segment data, by default False
 
     Returns
     -------
@@ -811,22 +816,26 @@ def read_particle_data_from_photonsim(root_file_path, entry_index, include_track
         Dictionary containing:
         - 'n_particles': int, number of unique particles
         - 'particles': list of dicts, each containing:
-            - 'genealogy': list of track IDs in the genealogy
+            - 'genealogy': list of categorized track IDs (root→leaf)
+            - 'extended_genealogy': list of meaningful track IDs on this particle's chain
             - 'photon_indices': list of photon indices belonging to this particle
-            - 'track_info': dict with track information (position, direction, energy, time, pdg, category, etc.)
-            - 'extended_genealogy': list of meaningful track IDs (if include_track_segments=True)
+            - 'track_info': dict for the leaf track (position, direction,
+              energy, time, pdg, category, etc.)
         - 'photon_origins': array (N_photons, 3) in m
         - 'photon_directions': array (N_photons, 3)
         - 'photon_times': array (N_photons,) in ns
+        - 'photon_wavelengths': array (N_photons,) in nm
+        - 'photon_segment_index': array (N_photons,) — int32 index into
+          the (filtered, meaningful-tracks-only) ``segments`` arrays
         - 'primary_energy': float, energy in MeV
-        - 'meaningful_tracks': dict (if include_track_segments=True)
-        - 'segments': dict (if include_track_segments=True)
+        - 'track_info_dict': dict keyed by track_id with full per-track kinematics
+        - 'meaningful_tracks': dict keyed by meaningful track_id (Cherenkov producers + ancestors)
+        - 'segments': dict of meaningful-tracks-only segment arrays + 'group_id'
+        - 'rootracker_entry_id', 'neutrino_pdg', 'neutrino_energy_MeV': GENIE provenance
     """
     import uproot
     import numpy as np
-    import jax.numpy as jnp
 
-    # Open the ROOT file
     root_file = uproot.open(root_file_path)
     tree = root_file['OpticalPhotons']
 
@@ -843,173 +852,251 @@ def read_particle_data_from_photonsim(root_file_path, entry_index, include_track
         )
     raw_tree = root_file['OpticalPhotonsRaw']
 
-    # Read all necessary data for the specified entry. The GENIE provenance
-    # branches (RooTrackerEntryID / IncomingNuPdg / IncomingNuKE) are
-    # required in v5; older PhotonSim ROOT files without them are not
-    # supported.
+    # Verify the post-Stage-5a schema. ``Segment_TrackID`` is the inline
+    # track-ownership branch added when the meaningful-tracks filter
+    # was dropped in PhotonSim; ``Photon_SegmentIndex`` became
+    # unconditional at the same time; ``TrackInfo_CreatorProcess`` is
+    # the input the Python categorizer needs (Stage 1).
+    available = set(tree.keys())
+    required = {
+        'Segment_TrackID', 'Photon_SegmentIndex',
+        'TrackInfo_CreatorProcess',
+    }
+    missing = required - available
+    if missing:
+        raise ValueError(
+            f"PhotonSim ROOT file is missing branches {sorted(missing)}. "
+            f"Re-simulate with PhotonSim branch 'raw-segments-no-merge' "
+            f"(commit 672066b or later)."
+        )
+
     branches_to_read = [
         'PrimaryEnergy',
-        'NParticles',
-        'Particle_GenealogySize', 'Particle_GenealogyData',
-        'Particle_PhotonIDsSize', 'Particle_PhotonIDsData',
-        'TrackInfo_TrackID', 'TrackInfo_Category', 'TrackInfo_SubID',
+        'TrackInfo_TrackID',
         'TrackInfo_PosX', 'TrackInfo_PosY', 'TrackInfo_PosZ',
         'TrackInfo_DirX', 'TrackInfo_DirY', 'TrackInfo_DirZ',
         'TrackInfo_Energy', 'TrackInfo_Time',
         'TrackInfo_ParentTrackID', 'TrackInfo_PDG',
+        'TrackInfo_CreatorProcess',
+        'NSegments',
+        'Segment_StartX', 'Segment_StartY', 'Segment_StartZ',
+        'Segment_EndX', 'Segment_EndY', 'Segment_EndZ',
+        'Segment_DirX', 'Segment_DirY', 'Segment_DirZ',
+        'Segment_Edep', 'Segment_Time',
+        'Segment_BetaStart', 'Segment_NCherenkov',
+        'Segment_TrackID',
+        'Photon_SegmentIndex',
         'RooTrackerEntryID', 'IncomingNuPdg', 'IncomingNuKE',
     ]
+    tree_data = tree.arrays(
+        branches_to_read,
+        entry_start=entry_index, entry_stop=entry_index + 1,
+        library='np',
+    )
 
-    # Add branches for track segments if requested
-    if include_track_segments:
-        branches_to_read.extend([
-            'Particle_ExtGenealogySize', 'Particle_ExtGenealogyData',
-            'NMeaningfulTracks',
-            'MTrack_TrackID', 'MTrack_ParentID', 'MTrack_PDG',
-            'MTrack_InitialEnergy', 'MTrack_ParticleName', 'MTrack_NCherenkov',
-            'MTrack_SegmentOffset', 'MTrack_NSegments',
-            'NSegments',
-            'Segment_StartX', 'Segment_StartY', 'Segment_StartZ',
-            'Segment_EndX', 'Segment_EndY', 'Segment_EndZ',
-            'Segment_DirX', 'Segment_DirY', 'Segment_DirZ',
-            'Segment_Edep', 'Segment_Time',
-            'Segment_BetaStart', 'Segment_NCherenkov',
-        ])
-
-        available = set(tree.keys())
-        required_new = {'Segment_BetaStart', 'Segment_NCherenkov'}
-        missing = required_new - available
-        if missing:
-            raise ValueError(
-                f"PhotonSim ROOT file is missing branches {sorted(missing)}. "
-                f"Upgrade to PhotonSim branch 'add-per-segment-beta-ncherenkov' "
-                f"(commit 1ef5ace or later)."
-            )
-
-    # Per-photon segment index is opt-in: only present in PhotonSim runs that
-    # set /photon/storeSegmentIndex true. Caller asks for it explicitly when
-    # the segment <-> sensor map is being built.
-    have_segment_index = False
-    if include_segment_index and 'Photon_SegmentIndex' in tree.keys():
-        branches_to_read.append('Photon_SegmentIndex')
-        have_segment_index = True
-
-    tree_data = tree.arrays(branches_to_read, entry_start=entry_index, entry_stop=entry_index+1, library='np')
-
-    # Extract primary energy
     primary_energy = float(tree_data['PrimaryEnergy'][0])
 
     # Pull this event's photon chunks from OpticalPhotonsRaw. Concatenate
     # in ascending ChunkStartID order so the resulting flat arrays line up
-    # with global photon IDs in Particle_PhotonIDsData (which weren't
-    # affected by the chunking on the writer side).
+    # with global photon IDs.
     photon_positions, photon_directions, photon_times, photon_wavelengths = \
         _read_photons_for_event(raw_tree, entry_index)
 
-    # Per-photon merged-segment index (-1 sentinel for non-meaningful parents).
-    # Only populated when the writer was opt-in; otherwise None and downstream
-    # segment-sensor aggregation is skipped.
-    photon_segment_index = None
-    if have_segment_index:
-        photon_segment_index = np.asarray(tree_data['Photon_SegmentIndex'][0], dtype=np.int32)
+    # ---- TrackInfo_* → track_info_dict (raw, pre-categorization) ----
+    track_ids = np.asarray(tree_data['TrackInfo_TrackID'][0], dtype=np.int64)
+    track_posx = np.asarray(tree_data['TrackInfo_PosX'][0], dtype=np.float64) / 1000.0  # mm → m
+    track_posy = np.asarray(tree_data['TrackInfo_PosY'][0], dtype=np.float64) / 1000.0
+    track_posz = np.asarray(tree_data['TrackInfo_PosZ'][0], dtype=np.float64) / 1000.0
+    track_dirx = np.asarray(tree_data['TrackInfo_DirX'][0], dtype=np.float64)
+    track_diry = np.asarray(tree_data['TrackInfo_DirY'][0], dtype=np.float64)
+    track_dirz = np.asarray(tree_data['TrackInfo_DirZ'][0], dtype=np.float64)
+    track_energies = np.asarray(tree_data['TrackInfo_Energy'][0], dtype=np.float64)
+    track_times = np.asarray(tree_data['TrackInfo_Time'][0], dtype=np.float64)
+    track_parent_ids = np.asarray(tree_data['TrackInfo_ParentTrackID'][0], dtype=np.int64)
+    track_pdgs = np.asarray(tree_data['TrackInfo_PDG'][0], dtype=np.int64)
+    track_processes = tree_data['TrackInfo_CreatorProcess'][0]  # vector<string>
 
-    # Extract particle system
-    n_particles = int(tree_data['NParticles'][0])
-
-    # Parse genealogy data
-    genealogy_sizes = tree_data['Particle_GenealogySize'][0]
-    genealogy_data = tree_data['Particle_GenealogyData'][0]
-
-    # Parse photon IDs data
-    photon_ids_sizes = tree_data['Particle_PhotonIDsSize'][0]
-    photon_ids_data = tree_data['Particle_PhotonIDsData'][0]
-
-    # Extract track info arrays
-    track_ids = tree_data['TrackInfo_TrackID'][0]
-    track_categories = tree_data['TrackInfo_Category'][0]
-    track_subids = tree_data['TrackInfo_SubID'][0]
-    track_posx = tree_data['TrackInfo_PosX'][0] / 1000.0  # mm to m
-    track_posy = tree_data['TrackInfo_PosY'][0] / 1000.0
-    track_posz = tree_data['TrackInfo_PosZ'][0] / 1000.0
-    track_dirx = tree_data['TrackInfo_DirX'][0]
-    track_diry = tree_data['TrackInfo_DirY'][0]
-    track_dirz = tree_data['TrackInfo_DirZ'][0]
-    track_energies = tree_data['TrackInfo_Energy'][0]
-    track_times = tree_data['TrackInfo_Time'][0]
-    track_parent_ids = tree_data['TrackInfo_ParentTrackID'][0]
-    track_pdgs = tree_data['TrackInfo_PDG'][0]
-
-    # Build track info dictionary for quick lookup
     track_info_dict = {}
     for i in range(len(track_ids)):
-        track_info_dict[int(track_ids[i])] = {
-            'track_id': int(track_ids[i]),
-            'category': int(track_categories[i]),
-            'sub_id': int(track_subids[i]),
+        tid = int(track_ids[i])
+        track_info_dict[tid] = {
+            'track_id': tid,
+            # category / sub_id filled in below from the categorizer.
+            'category': -1,
+            'sub_id': -1,
             'position': np.array([track_posx[i], track_posy[i], track_posz[i]]),
             'direction': np.array([track_dirx[i], track_diry[i], track_dirz[i]]),
             'energy': float(track_energies[i]),
             'time': float(track_times[i]),
             'parent_id': int(track_parent_ids[i]),
-            'pdg': int(track_pdgs[i])
+            'pdg': int(track_pdgs[i]),
+            'creator_process': str(track_processes[i]),
         }
 
-    # Parse extended genealogy data if requested
-    ext_genealogy_sizes = None
-    ext_genealogy_data = None
-    if include_track_segments:
-        ext_genealogy_sizes = tree_data['Particle_ExtGenealogySize'][0]
-        ext_genealogy_data = tree_data['Particle_ExtGenealogyData'][0]
+    # ---- Segment_* → meaningful_tracks (groupby on Segment_TrackID) ----
+    seg_track_id_full = np.asarray(tree_data['Segment_TrackID'][0], dtype=np.int64)
+    seg_n_cherenkov_full = np.asarray(tree_data['Segment_NCherenkov'][0], dtype=np.int64)
+    n_segments_full = int(tree_data['NSegments'][0])
 
-    # Parse particles
+    meaningful_tracks = derive_meaningful_tracks(
+        segment_track_id=seg_track_id_full,
+        segment_n_cherenkov=seg_n_cherenkov_full,
+        track_info=track_info_dict,
+    )
+
+    # Filter Segment_* arrays to meaningful only. Keeps seg.h5 size
+    # the same as legacy and lines up with meaningful_tracks' segment
+    # offsets (which index into the filtered array).
+    photon_segment_index_full = np.asarray(
+        tree_data['Photon_SegmentIndex'][0], dtype=np.int64)
+    keep_mask, photon_segment_index = filter_segments_to_meaningful(
+        segment_track_id=seg_track_id_full,
+        meaningful_tracks=meaningful_tracks,
+        photon_segment_index=photon_segment_index_full,
+    )
+
+    # ---- Run the Python categorizer ----
+    # Build per-track entries; the decision tree only reads pdg, parent,
+    # KE and creator_process.
+    track_rows = [
+        TrackEntry(
+            track_id=tid,
+            parent_id=ti['parent_id'],
+            pdg=ti['pdg'],
+            ke_mev=ti['energy'],
+            creator_process=ti['creator_process'],
+        )
+        for tid, ti in track_info_dict.items()
+    ]
+
+    # The categorizer's secondary-pion category-parent walk needs the
+    # meaningful track parent/pdg map. Build it from meaningful_tracks.
+    meaningful_track_parent_pdg = {
+        tid: (int(t['parent_id']), int(t['pdg']))
+        for tid, t in meaningful_tracks.items()
+    }
+    cherenkov_count_by_mt_track = {
+        tid: int(t['n_cherenkov']) for tid, t in meaningful_tracks.items()
+    }
+    cat_result = categorize_event(
+        track_info_rows=track_rows,
+        meaningful_track_parent_pdg=meaningful_track_parent_pdg,
+        cherenkov_count_by_mt_track=cherenkov_count_by_mt_track,
+    )
+
+    # Plumb category / sub_id back into track_info_dict so save_labl_event_v3
+    # (and any other consumer) can read it.
+    for tid, cat in cat_result.category_by_track_id.items():
+        if tid in track_info_dict:
+            track_info_dict[tid]['category'] = int(cat)
+    for tid, sub in cat_result.sub_id_by_track_id.items():
+        if tid in track_info_dict:
+            track_info_dict[tid]['sub_id'] = int(sub)
+
+    # ---- Bucket photons → particle ----
+    # photon_segment_index is now in *filtered* segment positions; pass
+    # the matching filtered Segment_TrackID so seg→track lookup lines up.
+    seg_track_id_filtered = seg_track_id_full[keep_mask]
+    photon_to_particle = bucket_photons_by_segment(
+        photon_segment_index=photon_segment_index,
+        segment_track_id=seg_track_id_filtered,
+        particle_idx_by_meaningful_track=cat_result.particle_idx_by_meaningful_track,
+    )
+
+    # ---- Build particles list ----
+    n_particles = len(cat_result.genealogies)
+    photons_per_particle = [[] for _ in range(n_particles)]
+    if photon_to_particle.size > 0:
+        for ph_idx, p_idx in enumerate(photon_to_particle):
+            if p_idx >= 0:
+                photons_per_particle[int(p_idx)].append(int(ph_idx))
+
     particles = []
-    genealogy_offset = 0
-    photon_ids_offset = 0
-    ext_genealogy_offset = 0
-
-    for particle_idx in range(n_particles):
-        # Extract genealogy for this particle
-        gen_size = int(genealogy_sizes[particle_idx])
-        genealogy = [int(genealogy_data[genealogy_offset + i]) for i in range(gen_size)]
-        genealogy_offset += gen_size
-
-        # Extract photon indices for this particle
-        photon_ids_size = int(photon_ids_sizes[particle_idx])
-        photon_indices = [int(photon_ids_data[photon_ids_offset + i]) for i in range(photon_ids_size)]
-        photon_ids_offset += photon_ids_size
-
-        # Extract extended genealogy if available
-        extended_genealogy = None
-        if include_track_segments and ext_genealogy_sizes is not None:
-            ext_gen_size = int(ext_genealogy_sizes[particle_idx])
-            extended_genealogy = [int(ext_genealogy_data[ext_genealogy_offset + i]) for i in range(ext_gen_size)]
-            ext_genealogy_offset += ext_gen_size
-
-        # Get track info for the LAST track in this particle's genealogy
-        # Genealogy is ordered parent->child, so last track is the actual particle that produced photons
+    for p_idx in range(n_particles):
+        genealogy = list(cat_result.genealogies[p_idx])
+        ext_genealogy = list(cat_result.ext_genealogies[p_idx])
         last_track_id = genealogy[-1] if genealogy else None
-        track_info = track_info_dict.get(last_track_id, None) if last_track_id is not None else None
-
-        particle_dict = {
+        track_info = track_info_dict.get(last_track_id) if last_track_id is not None else None
+        particles.append({
             'genealogy': genealogy,
-            'photon_indices': photon_indices,
-            'track_info': track_info
-        }
-        if extended_genealogy is not None:
-            particle_dict['extended_genealogy'] = extended_genealogy
+            'extended_genealogy': ext_genealogy,
+            'photon_indices': photons_per_particle[p_idx],
+            'track_info': track_info,
+        })
 
-        particles.append(particle_dict)
+    # ---- Build the filtered segments dict ----
+    # mm → m for endpoint coords. Filter every parallel array via keep_mask.
+    seg_start_x_mm = np.asarray(tree_data['Segment_StartX'][0], dtype=np.float64)[keep_mask]
+    seg_start_y_mm = np.asarray(tree_data['Segment_StartY'][0], dtype=np.float64)[keep_mask]
+    seg_start_z_mm = np.asarray(tree_data['Segment_StartZ'][0], dtype=np.float64)[keep_mask]
+    seg_end_x_mm = np.asarray(tree_data['Segment_EndX'][0], dtype=np.float64)[keep_mask]
+    seg_end_y_mm = np.asarray(tree_data['Segment_EndY'][0], dtype=np.float64)[keep_mask]
+    seg_end_z_mm = np.asarray(tree_data['Segment_EndZ'][0], dtype=np.float64)[keep_mask]
+    seg_dir_x = np.asarray(tree_data['Segment_DirX'][0], dtype=np.float64)[keep_mask]
+    seg_dir_y = np.asarray(tree_data['Segment_DirY'][0], dtype=np.float64)[keep_mask]
+    seg_dir_z = np.asarray(tree_data['Segment_DirZ'][0], dtype=np.float64)[keep_mask]
+    seg_edep = np.asarray(tree_data['Segment_Edep'][0], dtype=np.float64)[keep_mask]
+    seg_time = np.asarray(tree_data['Segment_Time'][0], dtype=np.float64)[keep_mask]
+    seg_beta_start = np.asarray(tree_data['Segment_BetaStart'][0], dtype=np.float64)[keep_mask]
+    seg_n_cherenkov = seg_n_cherenkov_full[keep_mask]
 
-    # Build result dictionary
+    n_segments = int(seg_edep.shape[0])
+
+    # Group raw G4 sub-steps into the (legacy) merged segments via
+    # segment_grouping.assign_group_ids — the offsets in
+    # meaningful_tracks index into this filtered array.
+    group_id = assign_group_ids(
+        start_x_mm=seg_start_x_mm,
+        start_y_mm=seg_start_y_mm,
+        start_z_mm=seg_start_z_mm,
+        end_x_mm=seg_end_x_mm,
+        end_y_mm=seg_end_y_mm,
+        end_z_mm=seg_end_z_mm,
+        dir_x=seg_dir_x,
+        dir_y=seg_dir_y,
+        dir_z=seg_dir_z,
+        edep_mev=seg_edep,
+        meaningful_tracks=meaningful_tracks,
+    )
+
+    segments = {
+        'start_x': seg_start_x_mm / 1000.0,
+        'start_y': seg_start_y_mm / 1000.0,
+        'start_z': seg_start_z_mm / 1000.0,
+        'end_x': seg_end_x_mm / 1000.0,
+        'end_y': seg_end_y_mm / 1000.0,
+        'end_z': seg_end_z_mm / 1000.0,
+        'dir_x': seg_dir_x,
+        'dir_y': seg_dir_y,
+        'dir_z': seg_dir_z,
+        'edep': seg_edep,
+        'time': seg_time,
+        'beta_start': seg_beta_start,
+        'n_cherenkov': seg_n_cherenkov,
+        'group_id': group_id,
+        'n_segments': n_segments,
+    }
+
+    edep_len = len(segments['edep'])
+    assert len(segments['beta_start']) == edep_len, (
+        f"Segment_BetaStart length {len(segments['beta_start'])} != Segment_Edep {edep_len}")
+    assert len(segments['n_cherenkov']) == edep_len, (
+        f"Segment_NCherenkov length {len(segments['n_cherenkov'])} != Segment_Edep {edep_len}")
+    assert len(segments['group_id']) == edep_len, (
+        f"group_id length {len(segments['group_id'])} != Segment_Edep {edep_len}")
+
     result = {
         'n_particles': n_particles,
         'particles': particles,
-        'photon_origins': photon_positions,  # Keep as NumPy (avoid JAX conversion overhead)
-        'photon_directions': photon_directions,  # Keep as NumPy
-        'photon_times': photon_times,  # Keep as NumPy
-        'photon_wavelengths': photon_wavelengths,  # Keep as NumPy (nm)
+        'photon_origins': photon_positions,
+        'photon_directions': photon_directions,
+        'photon_times': photon_times,
+        'photon_wavelengths': photon_wavelengths,
+        'photon_segment_index': photon_segment_index,
         'primary_energy': primary_energy,
-        'track_info_dict': track_info_dict,  # Include full track info for reference
+        'track_info_dict': track_info_dict,
+        'meaningful_tracks': meaningful_tracks,
+        'segments': segments,
         # GENIE provenance (from PhotonSim's v5 branches). -1 / 0 / 0.0 for
         # particle-gun events; non-sentinels for GENIE events pulled from
         # the rootracker's status==0 probe.
@@ -1017,99 +1104,6 @@ def read_particle_data_from_photonsim(root_file_path, entry_index, include_track
         'neutrino_pdg':         int(tree_data['IncomingNuPdg'][0]),
         'neutrino_energy_MeV':  float(tree_data['IncomingNuKE'][0]),
     }
-    if photon_segment_index is not None:
-        result['photon_segment_index'] = photon_segment_index
-
-    # Parse meaningful tracks and segments if requested
-    if include_track_segments:
-        n_meaningful_tracks = int(tree_data['NMeaningfulTracks'][0])
-        n_segments = int(tree_data['NSegments'][0])
-
-        # Build meaningful tracks dictionary (keyed by track ID for easy lookup)
-        meaningful_tracks = {}
-        mtrack_ids = tree_data['MTrack_TrackID'][0]
-        mtrack_parent_ids = tree_data['MTrack_ParentID'][0]
-        mtrack_pdgs = tree_data['MTrack_PDG'][0]
-        mtrack_energies = tree_data['MTrack_InitialEnergy'][0]
-        mtrack_names = tree_data['MTrack_ParticleName'][0]
-        mtrack_ncherenkov = tree_data['MTrack_NCherenkov'][0]
-        mtrack_seg_offsets = tree_data['MTrack_SegmentOffset'][0]
-        mtrack_nsegs = tree_data['MTrack_NSegments'][0]
-
-        for i in range(n_meaningful_tracks):
-            track_id = int(mtrack_ids[i])
-            meaningful_tracks[track_id] = {
-                'track_id': track_id,
-                'parent_id': int(mtrack_parent_ids[i]),
-                'pdg': int(mtrack_pdgs[i]),
-                'initial_energy': float(mtrack_energies[i]),
-                'particle_name': str(mtrack_names[i]),
-                'n_cherenkov': int(mtrack_ncherenkov[i]),
-                'segment_offset': int(mtrack_seg_offsets[i]),
-                'n_segments': int(mtrack_nsegs[i])
-            }
-
-        # Pull raw mm values once. Grouping runs on these (mm-units, float64)
-        # so the geometric-length comparison in segment_grouping.py is
-        # bit-identical to the C++ merger; the mm→m conversion happens after.
-        seg_start_x_mm = tree_data['Segment_StartX'][0]
-        seg_start_y_mm = tree_data['Segment_StartY'][0]
-        seg_start_z_mm = tree_data['Segment_StartZ'][0]
-        seg_end_x_mm = tree_data['Segment_EndX'][0]
-        seg_end_y_mm = tree_data['Segment_EndY'][0]
-        seg_end_z_mm = tree_data['Segment_EndZ'][0]
-        seg_dir_x = tree_data['Segment_DirX'][0]
-        seg_dir_y = tree_data['Segment_DirY'][0]
-        seg_dir_z = tree_data['Segment_DirZ'][0]
-        seg_edep = tree_data['Segment_Edep'][0]
-
-        # PhotonSim 'raw-segments-no-merge' branch ships every G4 sub-step
-        # as its own Segment_* row; the merger lives here in Python instead.
-        # Aggregating raw rows by group_id reproduces the old merged output.
-        group_id = assign_group_ids(
-            start_x_mm=seg_start_x_mm,
-            start_y_mm=seg_start_y_mm,
-            start_z_mm=seg_start_z_mm,
-            end_x_mm=seg_end_x_mm,
-            end_y_mm=seg_end_y_mm,
-            end_z_mm=seg_end_z_mm,
-            dir_x=seg_dir_x,
-            dir_y=seg_dir_y,
-            dir_z=seg_dir_z,
-            edep_mev=seg_edep,
-            meaningful_tracks=meaningful_tracks,
-        )
-
-        # Extract segment arrays (PhotonSim mm → LUCiD m)
-        segments = {
-            'start_x': seg_start_x_mm / 1000.0,
-            'start_y': seg_start_y_mm / 1000.0,
-            'start_z': seg_start_z_mm / 1000.0,
-            'end_x': seg_end_x_mm / 1000.0,
-            'end_y': seg_end_y_mm / 1000.0,
-            'end_z': seg_end_z_mm / 1000.0,
-            'dir_x': seg_dir_x,
-            'dir_y': seg_dir_y,
-            'dir_z': seg_dir_z,
-            'edep': seg_edep,
-            'time': tree_data['Segment_Time'][0],
-            'beta_start': tree_data['Segment_BetaStart'][0],
-            'n_cherenkov': tree_data['Segment_NCherenkov'][0],
-            'group_id': group_id,
-            'n_segments': n_segments
-        }
-
-        edep_len = len(segments['edep'])
-        assert len(segments['beta_start']) == edep_len, (
-            f"Segment_BetaStart length {len(segments['beta_start'])} != Segment_Edep {edep_len}")
-        assert len(segments['n_cherenkov']) == edep_len, (
-            f"Segment_NCherenkov length {len(segments['n_cherenkov'])} != Segment_Edep {edep_len}")
-        assert len(segments['group_id']) == edep_len, (
-            f"group_id length {len(segments['group_id'])} != Segment_Edep {edep_len}")
-
-        result['meaningful_tracks'] = meaningful_tracks
-        result['segments'] = segments
-
     return result
 
 def generate_events_from_photonsim_particles(event_simulator, root_file_path,
@@ -1120,7 +1114,7 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
                                              detector_config_path=None,
                                              dataset_name='unnamed_dataset', run_id=None,
                                              file_index_start=0, detector_type='cylinder',
-                                             material='water', include_track_segments=True,
+                                             material='water',
                                              primary_source='particles',
                                              store_segment_sensor_map=False,
                                              pad_size_buckets=None):
@@ -1165,8 +1159,6 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
         Index of the first batch file in this invocation (default 0).
     detector_type, material : str
         Provenance: detector geometry type and medium.
-    include_track_segments : bool
-        Must be True for v3 output (seg file requires segment data). Default True.
     primary_source : str
         'particles' or 'genie'. Written into ``per_interaction/source_type``
         for every event of this batch.
@@ -1181,10 +1173,6 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
     import numpy as np
     import json
     from lucid.utils import smear_charges_SK_like, smear_times
-
-    if not include_track_segments:
-        raise ValueError(
-            "v3 output requires include_track_segments=True (seg file needs segment data).")
 
     # Generate random seed if not provided
     if master_seed is None:
@@ -1403,9 +1391,7 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
             print(f"    Reading particle data from ROOT file...", flush=True)
             _t_root = time.perf_counter()
             particle_data = read_particle_data_from_photonsim(
-                root_file_path, event_idx,
-                include_track_segments=include_track_segments,
-                include_segment_index=store_segment_sensor_map)
+                root_file_path, event_idx)
             print(f"    [timing] root_read {time.perf_counter() - _t_root:.3f}s", flush=True)
 
             n_particles = particle_data['n_particles']
@@ -1451,10 +1437,9 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
                     'PE_reco': PE_reco,
                     'T_reco': T_reco,
                     'source': 'PhotonSim_Particles_VMAP',
-                    'include_track_segments': include_track_segments,
                     'source_event_idx': int(event_number),
                 }
-                if include_track_segments and 'meaningful_tracks' in particle_data:
+                if 'meaningful_tracks' in particle_data:
                     extended_info['meaningful_tracks'] = particle_data['meaningful_tracks']
                     extended_info['segments']        = particle_data['segments']
                 cont = _compute_contained(extended_info, detector_bounds)
@@ -1489,7 +1474,6 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
             n_segments = 0
             if (store_segment_sensor_map
                     and 'photon_segment_index' in particle_data
-                    and include_track_segments
                     and 'segments' in particle_data):
                 n_segments = int(particle_data['segments'].get('n_segments', 0))
                 if n_segments > 0:
@@ -1500,8 +1484,8 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
             if apply_translation:
                 all_photon_origins_np += translation_vector[None, :]
 
-                # Apply translation to segment positions if track segments are included
-                if include_track_segments and 'segments' in particle_data:
+                # Apply translation to segment positions
+                if 'segments' in particle_data:
                     segments = particle_data['segments']
                     # Segments are in meters; translation_vector is in meters
                     segments['start_x'] = segments['start_x'] + translation_vector[0]
@@ -1705,7 +1689,7 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
                 T_seg = segment_sensor_hits['T_per_segment']
                 segment_sensor_hits['T_per_segment'] = np.where(T_seg > 0, T_seg + t0_f32, T_seg)
             # Segments always carry meaningful times — shift all of them.
-            if include_track_segments and 'segments' in particle_data and particle_data['segments'].get('n_segments', 0) > 0:
+            if 'segments' in particle_data and particle_data['segments'].get('n_segments', 0) > 0:
                 particle_data['segments']['time'] = \
                     np.asarray(particle_data['segments']['time'], dtype=np.float32) + t0_f32
 
@@ -1733,12 +1717,9 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
                 'PE_reco': PE_reco,
                 'T_reco': T_reco,
                 'source': 'PhotonSim_Particles_VMAP',
-                # Track segment data (if included)
-                'include_track_segments': include_track_segments
             }
 
-            # Add meaningful tracks and segments if requested
-            if include_track_segments and 'meaningful_tracks' in particle_data:
+            if 'meaningful_tracks' in particle_data:
                 extended_info['meaningful_tracks'] = particle_data['meaningful_tracks']
                 extended_info['segments'] = particle_data['segments']
 
@@ -1758,9 +1739,7 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
                 }
 
             # Geometric containment (per-segment / particle / interaction / event).
-            # Requires meaningful_tracks + segments for the ownership walk;
-            # returns all-False arrays when either is missing (e.g. disabled
-            # via include_track_segments=False).
+            # Requires meaningful_tracks + segments for the ownership walk.
             cont = _compute_contained(extended_info, detector_bounds)
             extended_info['contained_per_segment']     = cont['per_segment']
             extended_info['contained_per_particle']    = cont['per_particle']
@@ -2024,7 +2003,6 @@ def generate_events_from_photonsim_pileup(
     file_index_start=0,
     detector_type='cylinder',
     material='water',
-    include_track_segments=True,
 ):
     """Generate pile-up events by merging N PhotonSim streams per event.
 
@@ -2050,10 +2028,6 @@ def generate_events_from_photonsim_pileup(
     import subprocess
     import json
     from pathlib import Path
-
-    if not include_track_segments:
-        raise ValueError(
-            "v3 output requires include_track_segments=True.")
 
     if len(root_file_paths) != len(vertex_primary_sources):
         raise ValueError(
@@ -2161,8 +2135,7 @@ def generate_events_from_photonsim_pileup(
                       flush=True)
 
                 particle_data = read_particle_data_from_photonsim(
-                    str(root_file_paths[vidx]), event_idx,
-                    include_track_segments=include_track_segments)
+                    str(root_file_paths[vidx]), event_idx)
 
                 # Remap G4 track IDs so streams don't collide.
                 stream_max = _offset_track_ids(particle_data, running_offset)
@@ -2194,7 +2167,7 @@ def generate_events_from_photonsim_pileup(
                 if apply_translation:
                     particle_data['photon_origins'] = \
                         particle_data['photon_origins'] + vertex_i[None, :]
-                    if (include_track_segments and 'segments' in particle_data
+                    if ('segments' in particle_data
                             and particle_data['segments'].get('n_segments', 0) > 0):
                         segs = particle_data['segments']
                         for axis_idx, (sk, ek) in enumerate(
@@ -2217,7 +2190,7 @@ def generate_events_from_photonsim_pileup(
                 T_i = np.where(T_i > 0, T_i + np.float32(t0_i), T_i)
 
                 # Same shift for segment times
-                if (include_track_segments and 'segments' in particle_data
+                if ('segments' in particle_data
                         and particle_data['segments'].get('n_segments', 0) > 0):
                     particle_data['segments']['time'] = (
                         np.asarray(particle_data['segments']['time'], dtype=np.float32)
@@ -2243,10 +2216,8 @@ def generate_events_from_photonsim_pileup(
                     master_seed, job_id, event_idx,
                     interaction_idx=N_vertices)['smear_key'],
                 detector_bounds=detector_bounds,
-                include_track_segments=include_track_segments,
             )
             merged['source_event_idx'] = int(event_idx)
-            merged['include_track_segments'] = include_track_segments
             merged['source'] = 'PhotonSim_Pileup'
 
             batch_data.append(merged)
@@ -2307,7 +2278,7 @@ def generate_events_from_photonsim_pileup(
 
 
 def _merge_pileup_streams(streams, *, n_sensors, apply_smearing,
-                          smear_key, detector_bounds, include_track_segments):
+                          smear_key, detector_bounds):
     """Merge per-vertex streams into a single event_dict.
 
     Per-interaction metadata (t0, vertex_xyz, source_type) is broadcast

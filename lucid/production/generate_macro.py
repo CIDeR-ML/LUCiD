@@ -107,20 +107,14 @@ def generate_macro(
         lines.append(f"/random/setSeeds {int(s1)} {int(s2)}")
         lines.append("")
 
-    # Photon / edep storage
+    # Photon storage. Photon_SegmentIndex is unconditional in PhotonSim
+    # post-Stage-5a, so no /photon/storeSegmentIndex toggle is needed.
     if store_individual:
-        lines.append("# ENABLE individual photon/edep storage for event-by-event analysis")
+        lines.append("# ENABLE individual photon storage for event-by-event analysis")
         lines.append("/photon/storeIndividual true")
-        lines.append("/edep/storeIndividual false")
     else:
-        lines.append("# DISABLE individual photon/edep storage to save space")
+        lines.append("# DISABLE individual photon storage to save space")
         lines.append("/photon/storeIndividual false")
-        lines.append("/edep/storeIndividual false")
-
-    # Per-photon segment index — mandatory for data mode. Required for the
-    # seg/event_NNN/sensor_hits/ subgroup, which is now the ground truth
-    # that inst.h5 is aggregated from.
-    lines.append("/photon/storeSegmentIndex true")
 
     # Raw-vs-merged segment emission. PhotonSim defaults to raw on this
     # branch; LUCiD's segment_grouping.py reapplies the merger and writes
@@ -225,15 +219,12 @@ def _generate_genie_macro(
         lines.append(f"/random/setSeeds {int(s1)} {int(s2)}")
         lines.append("")
 
+    # Photon storage. Photon_SegmentIndex is unconditional in PhotonSim
+    # post-Stage-5a, so no /photon/storeSegmentIndex toggle is needed.
     if store_individual:
         lines.append("/photon/storeIndividual true")
-        lines.append("/edep/storeIndividual false")
     else:
         lines.append("/photon/storeIndividual false")
-        lines.append("/edep/storeIndividual false")
-
-    # Per-photon segment index — mandatory for data mode (GENIE primaries).
-    lines.append("/photon/storeSegmentIndex true")
 
     # Raw-vs-merged segment emission. PhotonSim defaults to raw on this
     # branch; LUCiD's segment_grouping.py reapplies the merger and writes

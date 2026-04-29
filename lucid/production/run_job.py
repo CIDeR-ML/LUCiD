@@ -249,7 +249,6 @@ def _run_lucid(
         file_index_start=file_index,
         detector_type=detector_type,
         material=material,
-        include_track_segments=True,
         primary_source=config.get("primary_source", "particles"),
         store_segment_sensor_map=True,
         pad_size_buckets=pad_size_buckets,
@@ -619,7 +618,6 @@ def _main_pileup(args: argparse.Namespace, config: dict) -> int:
         file_index_start=file_index,
         detector_type=detector_type,
         material=material,
-        include_track_segments=True,
     )
     print(f"LUCiD wrote {len(saved_files)} files.")
 
