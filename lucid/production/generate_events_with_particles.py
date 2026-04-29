@@ -149,7 +149,6 @@ def main():
         file_index_start=args.file_index_start,
         detector_type=detector_type,
         material=material,
-        store_segment_sensor_map=True,  # mandatory for data mode
     )
 
     print(f"\nWrote {len(saved_files)} files under {args.output}/"

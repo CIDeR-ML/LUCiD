@@ -208,9 +208,8 @@ def _run_lucid(
     apply_translation = bool(lucid_opts.get("apply_translation", True))
     # seg/event_NNN/sensor_hits/ is mandatory for data-mode datasets:
     # it's the per-(segment, sensor) ground truth that inst.h5 is now
-    # aggregated from. The matching PhotonSim macro flag
-    # (/photon/storeSegmentIndex true) is emitted unconditionally by
-    # generate_macro.py for data mode. The simulator runs in
+    # aggregated from. Photon_SegmentIndex is unconditional in PhotonSim
+    # post-Stage-5a, so no macro flag is needed. The simulator runs in
     # 'per_segment' mode, which produces an exact per-(segment, sensor)
     # decomposition with column-sums equal to the per-sensor totals
     # by construction (shared qe_weights — sensor_response.py:100-104).
@@ -250,7 +249,6 @@ def _run_lucid(
         detector_type=detector_type,
         material=material,
         primary_source=config.get("primary_source", "particles"),
-        store_segment_sensor_map=True,
         pad_size_buckets=pad_size_buckets,
     )
     print(f"LUCiD wrote {len(saved_files)} files under {output_dir}/{{sensor,inst,seg,labl}}/")

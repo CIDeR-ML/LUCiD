@@ -1116,7 +1116,6 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
                                              file_index_start=0, detector_type='cylinder',
                                              material='water',
                                              primary_source='particles',
-                                             store_segment_sensor_map=False,
                                              pad_size_buckets=None):
     """Generate events from a PhotonSim ROOT file, writing v3 four-file batches.
 
@@ -1310,9 +1309,11 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
     # over thousands of events). Skipped in legacy mode — there's only one
     # shape there, so the first event's compile is fine.
     if use_bucketing:
+        # Production wires hit_mode='per_segment' (run_job.py); per-segment
+        # data is unconditional in the post-Stage-5a v3 reader.
         _warmup_buckets(
             event_simulator, pad_size_buckets,
-            per_segment_mode=store_segment_sensor_map)
+            per_segment_mode=True)
 
     # Vmap over a particle/segment axis — defined once and reused for both
     # the legacy per-event-vmap path and the optional segment-sensor-map
@@ -1466,15 +1467,13 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
             all_photon_times_np = all_photon_times.astype(np.float32, copy=False)
             all_photon_wavelengths_np = all_photon_wavelengths.astype(np.float32, copy=False)
 
-            # Optional per-photon segment id (per_segment mode). When the flag is
-            # off or the upstream PhotonSim build didn't emit
-            # Photon_SegmentIndex, this stays None and the simulator runs
-            # in plain 'realistic' mode.
+            # Per-photon segment id. Post-Stage-5a, the v3 reader always
+            # emits ``photon_segment_index`` and ``segments``; the legacy
+            # ``realistic`` mode (no segments) is no longer supported by
+            # this writer.
             all_photon_segment_index_np = None
             n_segments = 0
-            if (store_segment_sensor_map
-                    and 'photon_segment_index' in particle_data
-                    and 'segments' in particle_data):
+            if 'photon_segment_index' in particle_data and 'segments' in particle_data:
                 n_segments = int(particle_data['segments'].get('n_segments', 0))
                 if n_segments > 0:
                     all_photon_segment_index_np = np.asarray(
@@ -1555,12 +1554,12 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
                 # ====================================================================
                 if all_photon_segment_index_np is not None:
                     raise NotImplementedError(
-                        "store_segment_sensor_map=True requires the bucketed "
-                        "kernel path (pad_size_buckets != []). The legacy "
-                        "single-PAD_SIZE vmap path does not plumb the per-photon "
-                        "segment id into the simulator. Either drop "
-                        "pad_size_buckets=[] from the config, or unset "
-                        "store_segment_sensor_map.")
+                        "Per-segment data was extracted from the v3 reader "
+                        "but pad_size_buckets=[] selected the legacy "
+                        "single-PAD_SIZE vmap kernel, which does not plumb "
+                        "the per-photon segment id into the simulator. Drop "
+                        "pad_size_buckets=[] from the config to use the "
+                        "bucketed per-segment path.")
                 # Set the segment outputs that the downstream code reads.
                 pe_per_seg_total = None
                 t_per_seg_total = None
