@@ -160,7 +160,7 @@ def test_categorizer_matches_legacy_roots():
     arr = t.arrays([
         'TrackInfo_TrackID', 'TrackInfo_PDG', 'TrackInfo_ParentTrackID',
         'TrackInfo_Energy', 'TrackInfo_CreatorProcess', 'TrackInfo_Category',
-        'MTrack_TrackID', 'MTrack_ParentID', 'MTrack_PDG',
+        'MTrack_TrackID', 'MTrack_ParentID', 'MTrack_PDG', 'MTrack_NCherenkov',
         'Particle_GenealogySize', 'Particle_GenealogyData',
         'Particle_ExtGenealogySize', 'Particle_ExtGenealogyData',
     ], library='np')
@@ -185,10 +185,13 @@ def test_categorizer_matches_legacy_roots():
         mt_id = np.asarray(arr['MTrack_TrackID'][ev], dtype=np.int64)
         mt_pa = np.asarray(arr['MTrack_ParentID'][ev], dtype=np.int64)
         mt_pdg = np.asarray(arr['MTrack_PDG'][ev], dtype=np.int64)
+        mt_nch = np.asarray(arr['MTrack_NCherenkov'][ev], dtype=np.int64)
         mt_parent = {int(mt_id[i]): (int(mt_pa[i]), int(mt_pdg[i]))
                      for i in range(len(mt_id))}
+        mt_cher = {int(mt_id[i]): int(mt_nch[i]) for i in range(len(mt_id))}
 
-        res = categorize_event(rows, meaningful_track_parent_pdg=mt_parent)
+        res = categorize_event(rows, meaningful_track_parent_pdg=mt_parent,
+                               cherenkov_count_by_mt_track=mt_cher)
 
         cat_py = np.asarray(
             [res.category_by_track_id[int(tid[i])] for i in range(len(tid))],

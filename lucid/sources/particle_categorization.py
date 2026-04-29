@@ -115,6 +115,7 @@ class CategorizationResult:
 def categorize_event(
     track_info_rows: List[TrackEntry],
     meaningful_track_parent_pdg: Optional[Dict[int, Tuple[int, int]]] = None,
+    cherenkov_count_by_mt_track: Optional[Dict[int, int]] = None,
 ) -> CategorizationResult:
     """Mirror ``SteppingAction.cc:167-265`` for one event's worth of tracks.
 
@@ -140,6 +141,16 @@ def categorize_event(
         wasn't itself categorized). Built from ``MTrack_*``. ``None``
         means "no extra tracks", which is fine when the legacy ROOT
         output already covered the chain.
+    cherenkov_count_by_mt_track
+        Optional map ``track_id → n_cherenkov_photons``, built from
+        ``MTrack_NCherenkov``. When provided, only meaningful tracks
+        with ``n_cherenkov > 0`` contribute particles — matching the
+        C++ ``fGenealogyToPhotonIDs`` semantics where a genealogy
+        bucket only exists if at least one photon was emitted with
+        that bucketed-genealogy. When omitted, every meaningful
+        track produces a particle (legacy behaviour, may emit
+        spurious zero-photon particles on GENIE-style events with
+        primary tracks that have segments but below-threshold β).
 
     Returns
     -------
@@ -279,7 +290,16 @@ def categorize_event(
     # Walk meaningful tracks (parents may not be categorized — that's
     # why we walk the compressed chain on the leaf and attribute the
     # whole meaningful track to whatever categorized chain it inherits).
+    # Tracks with zero Cherenkov photons are skipped to mirror the C++
+    # fGenealogyToPhotonIDs semantics — a genealogy bucket only exists
+    # if some photon emitted bucketed there. A track with segments but
+    # n_cherenkov==0 (e.g. a primary slow proton with sub-threshold β)
+    # would otherwise create a spurious zero-photon particle.
+    cher = cherenkov_count_by_mt_track or {}
     for mt_id in sorted(mt_parent.keys()):
+        if cher and cher.get(mt_id, 0) <= 0:
+            particle_idx_by_mtrack[mt_id] = -1
+            continue
         gen = _walk_compressed(mt_id)
         if not gen:
             # No categorized ancestor — track contributes no particle.
