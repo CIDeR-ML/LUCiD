@@ -437,7 +437,27 @@ def setup_event_simulator(
             state = carry
             key, prop_key = jax.random.split(state.key)
 
-            prop_results = propagate_fn(state.positions, state.directions)
+            # Block per-photon gradient through propagate_fn for photons whose
+            # origin is OUTSIDE the cylinder. The cylinder ray-trace's auto-
+            # derived backward has undefined Jacobian for "outside" rays
+            # (sqrt+where pattern in the barrel intersection produces inf
+            # intermediates that combine with zero downstream cotangents to
+            # give 0×inf=NaN at the track parameters).
+            #
+            # jnp.where backward *selects* between cotangents (no multiplication),
+            # so an outside photon's NaN cotangent from propagate_fn is replaced
+            # with 0 rather than multiplied with it — avoiding 0×NaN=NaN. The
+            # forward value is unchanged: both branches numerically equal
+            # state.positions/state.directions.
+            inside_flag = jax.lax.stop_gradient(get_inside_detector_flag(state.positions))
+            safe_positions  = jnp.where(inside_flag[:, None],
+                                        state.positions,
+                                        jax.lax.stop_gradient(state.positions))
+            safe_directions = jnp.where(inside_flag[:, None],
+                                        state.directions,
+                                        jax.lax.stop_gradient(state.directions))
+
+            prop_results = propagate_fn(safe_positions, safe_directions)
             depositions = prop_results['sensor_weights']
             sensor_indices = prop_results['sensor_indices']
             hit_times_meters = prop_results['times']
