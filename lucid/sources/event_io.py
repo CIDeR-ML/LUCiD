@@ -1721,20 +1721,20 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
             print(f"    [timing] preprocess {time.perf_counter() - _t_pre:.3f}s", flush=True)
 
             # ----------------------------------------------------------------
-            # Phase 2 — bucketed trace (one pass per photon, two-axis bucketing).
+            # Phase 2 — bucketed trace (per-photon flat lists out).
             # ----------------------------------------------------------------
             print(f"    Running bucketed trace "
-                  f"(rays_buckets={list(pad_size_buckets)}, "
-                  f"seg_buckets={list(_DEFAULT_SEG_BUCKETS)})...", flush=True)
+                  f"(rays_buckets={list(pad_size_buckets)})...", flush=True)
             sim_start_time = time.time()
             _t_sim = time.perf_counter()
-            pe_per_sensor_np, t_per_sensor_np, pe_per_seg_raw, t_per_seg_raw = \
+            pe_per_sensor_np, t_per_sensor_np, \
+                photon_qe_w, photon_qe_t, photon_sen_i, photon_seg_i_raw = \
                 _trace_event_bucketed(
                     event_simulator,
                     photon_origins_np, photon_directions_np,
                     photon_times_np, photon_wavelengths_np,
-                    photon_segment_index_raw, n_segments_raw,
-                    n_sensors, pad_size_buckets, _DEFAULT_SEG_BUCKETS,
+                    photon_segment_index_raw,
+                    n_sensors, pad_size_buckets,
                     master_key,
                 )
             sim_elapsed = time.time() - sim_start_time
@@ -1742,50 +1742,30 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
             print(f"    [timing] simulate {time.perf_counter() - _t_sim:.3f}s", flush=True)
 
             # ----------------------------------------------------------------
-            # Phase 3 — derive views (categorize, filter, slice tensor).
+            # Phase 3 — derive views (categorize, filter, build photon records).
             # ----------------------------------------------------------------
             _t_post = time.perf_counter()
-            particle_data = _derive_views_from_segments(
-                raw, pe_per_seg_raw=pe_per_seg_raw, t_per_seg_raw=t_per_seg_raw)
+            particle_data = _derive_views_from_segments(raw, photon_records={
+                'qe_weight':   photon_qe_w,
+                'qe_time':     photon_qe_t,
+                'sensor_idx':  photon_sen_i,
+                'seg_idx_raw': photon_seg_i_raw,
+            })
             n_particles = particle_data['n_particles']
             particles = particle_data['particles']
             n_segments = int(particle_data['segments']['n_segments'])
-            pe_per_seg_total = particle_data['pe_per_seg_filtered']
-            t_per_seg_total  = particle_data['t_per_seg_filtered']
 
-            # inst.h5 (per-particle PE/T) is a downstream view of seg/sensor_hits
-            # via the segment→track→particle map. Build track_idx_per_segment
-            # from meaningful_tracks (same invariant save_seg_event_v3 uses),
-            # call derive_particle_idx_per_track, then aggregate.
-            _mt = particle_data['meaningful_tracks']
-            _track_idx_per_segment = np.empty(n_segments, dtype=np.int32)
-            _off = 0
-            for _local_idx, _tinfo in enumerate(_mt.values()):
-                _ns = int(_tinfo['n_segments'])
-                _track_idx_per_segment[_off:_off + _ns] = _local_idx
-                _off += _ns
-            if _off != n_segments:
-                raise ValueError(
-                    f"meaningful_tracks segment counts sum to {_off} "
-                    f"!= n_segments {n_segments}")
-            _particle_idx_per_track = derive_particle_idx_per_track({
-                'meaningful_tracks': _mt, 'particles': particles})
-            if pe_per_seg_total is not None and t_per_seg_total is not None:
-                # Hot path: JIT-fused PE-sum + T-min-ignoring-zeros.
-                # The bucketed numpy fallback inside the wrapper kicks in
-                # only when shapes overflow the JIT cache's max bounds.
-                PE_per_particle, T_per_particle = _aggregate_inst_from_segments_jit(
-                    pe_per_seg_total, t_per_seg_total,
-                    _track_idx_per_segment, _particle_idx_per_track,
-                    n_particles, n_sensors,
-                    _DEFAULT_SEG_BUCKETS)
-            else:
-                # Dark event short-circuit (n_segments_raw==0 path): no kernel
-                # output to aggregate. aggregate_inst_from_segments handles
-                # this internally too, but skipping the call avoids needing
-                # well-shaped zero tensors.
-                PE_per_particle = np.zeros((n_particles, n_sensors), dtype=np.float32)
-                T_per_particle  = np.zeros((n_particles, n_sensors), dtype=np.float32)
+            # ----------------------------------------------------------------
+            # Phase 4 — host aggregation: inst.h5 PE/T + seg.h5 sparse triplets.
+            # ----------------------------------------------------------------
+            pr = particle_data['photon_records_filtered']
+            agg = _aggregate_from_photon_records(
+                pr['qe_weight'], pr['qe_time'], pr['sensor_idx'],
+                pr['seg_idx_filtered'], pr['particle_idx'],
+                n_particles=n_particles, n_sensors=n_sensors)
+            PE_per_particle = agg['PE_per_particle']
+            T_per_particle  = agg['T_per_particle']
+            seg_hits        = agg['segment_sensor_hits']
 
             # PE_true / T_true (per-sensor pre-smearing) come from the
             # kernel's per-sensor accumulator: includes every photon's
@@ -1815,30 +1795,19 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
             PE_reco = np.array(PE_reco, dtype=np.float32, copy=True)
             T_reco  = np.array(T_reco,  dtype=np.float32, copy=True)
 
-            # Per-(segment, sensor) decomposition was computed inline by the
-            # per_segment-mode simulator (hit_mode='per_segment');
-            # pe_per_seg_total / t_per_seg_total were filled in by
-            # _simulate_particles_bucketed
-            # above (or are None when the flag is off / legacy path).
-            segment_sensor_hits = None
-            if pe_per_seg_total is not None:
-                segment_sensor_hits = {
-                    'PE_per_segment': pe_per_seg_total,
-                    'T_per_segment':  t_per_seg_total,
-                }
-
             # Shift simulator outputs from G4-frame (origin at vertex) into
             # absolute detector frame by adding the per-interaction t0.
             # Only the single-vertex path is in this function today; the
             # pile-up path applies per-vertex t0 in its merger. The
-            # positivity mask preserves "no-hit" sentinels (0/inf).
+            # positivity mask preserves "no-hit" sentinels (0/inf) on the
+            # dense per-sensor / per-particle tensors. seg_hits['T'] is
+            # sparse — every entry is a real hit, so a flat += suffices.
             t0_f32 = np.float32(t0)
             np.add(T_per_particle, t0_f32, out=T_per_particle, where=T_per_particle > 0)
             np.add(T_true,         t0_f32, out=T_true,         where=T_true > 0)
             np.add(T_reco,         t0_f32, out=T_reco,         where=T_reco > 0)
-            if segment_sensor_hits is not None:
-                T_seg = segment_sensor_hits['T_per_segment']
-                np.add(T_seg, t0_f32, out=T_seg, where=T_seg > 0)
+            if seg_hits is not None and seg_hits['T'].size > 0:
+                seg_hits['T'] = seg_hits['T'] + t0_f32
             # Segments always carry meaningful times — shift all of them.
             if 'segments' in particle_data and particle_data['segments'].get('n_segments', 0) > 0:
                 particle_data['segments']['time'] = \
@@ -1874,21 +1843,12 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
                 extended_info['meaningful_tracks'] = particle_data['meaningful_tracks']
                 extended_info['segments'] = particle_data['segments']
 
-            # Sparsify the per-segment / per-sensor decomposition into the
-            # flat-parallel layout used by save_seg_event_v3 → sensor_hits/.
-            # Mirrors inst.h5's (particle_idx, sensor_idx, PE, T) shape.
-            # Uses np.nonzero + paired gather to skip the full bool-mask
-            # intermediate (~330 MB on muon-class events).
-            if segment_sensor_hits is not None:
-                PE_seg = segment_sensor_hits['PE_per_segment']  # (n_seg, n_sensors)
-                T_seg  = segment_sensor_hits['T_per_segment']
-                seg_flat, sen_flat = np.nonzero(PE_seg)
-                extended_info['segment_sensor_hits'] = {
-                    'segment_idx': seg_flat.astype(np.int32),
-                    'sensor_idx':  sen_flat.astype(np.uint16),
-                    'PE':          PE_seg[seg_flat, sen_flat],
-                    'T':           T_seg[seg_flat, sen_flat],
-                }
+            # seg.h5 sparse triplets came directly from the host aggregator
+            # (seg_hits dict already in writer-ready shape). Skip the
+            # writer wiring when there are no hits at all (dark event /
+            # all photons orphan-segmented).
+            if seg_hits is not None and seg_hits['PE'].size > 0:
+                extended_info['segment_sensor_hits'] = seg_hits
 
             # Geometric containment (per-segment / particle / interaction / event).
             # Requires meaningful_tracks + segments for the ownership walk.
