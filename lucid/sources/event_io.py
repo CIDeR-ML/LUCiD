@@ -3767,20 +3767,38 @@ def aggregate_inst_from_segments(pe_per_seg, t_per_seg,
             f"track_idx_per_segment length {track_idx_per_segment.size} "
             f"!= n_segments {n_segments}")
 
-    particle_idx_per_seg = particle_idx_per_track[track_idx_per_segment]
-    valid = particle_idx_per_seg >= 0
-    if not valid.any():
+    # Fast path. Two stages:
+    #   1. Per-track aggregation via reduceat over contiguous track slices
+    #      (segments are filled in track-insertion order, so
+    #      track_idx_per_segment is monotonic non-decreasing — see the
+    #      caller in generate_events_from_photonsim_particles).
+    #   2. Per-particle routing on the much smaller per-track tensor via
+    #      np.add.at / np.minimum.at. n_tracks ≪ n_segments so the
+    #      unbuffered scatter is now cheap.
+    # ``np.unique`` on a sorted input returns the unique values and their
+    # first-occurrence indices in one pass — exactly the boundaries
+    # reduceat consumes.
+    unique_tracks, track_starts = np.unique(track_idx_per_segment, return_index=True)
+
+    PE_pt = np.add.reduceat(pe_per_seg, track_starts, axis=0)
+    # Min ignoring zeros (the "no hit" sentinel): substitute +inf for
+    # zeros, reduceat min, then any output cell still at +inf gets sent
+    # back to 0 in the per-particle stage below.
+    t_inf = np.where(t_per_seg > 0, t_per_seg, np.float32(np.inf))
+    T_pt_inf = np.minimum.reduceat(t_inf, track_starts, axis=0)
+
+    # Route per-track → per-particle, dropping orphaned tracks (-1).
+    particle_idx_per_unique_track = particle_idx_per_track[unique_tracks]
+    valid_t = particle_idx_per_unique_track >= 0
+    if not valid_t.any():
         return PE_pp, T_pp
+    valid_pidx_t = particle_idx_per_unique_track[valid_t].astype(np.int64)
 
-    valid_pidx = particle_idx_per_seg[valid].astype(np.int64)
-
-    np.add.at(PE_pp, valid_pidx, pe_per_seg[valid])
-
+    np.add.at(PE_pp, valid_pidx_t, PE_pt[valid_t])
     T_pp_inf = np.full((n_particles, n_sensors), np.inf, dtype=np.float32)
-    t_inf = np.where(t_per_seg > 0, t_per_seg, np.inf).astype(np.float32)
-    np.minimum.at(T_pp_inf, valid_pidx, t_inf[valid])
+    np.minimum.at(T_pp_inf, valid_pidx_t, T_pt_inf[valid_t])
     T_pp = np.where(np.isfinite(T_pp_inf), T_pp_inf, np.float32(0.0))
-    return PE_pp.astype(np.float32, copy=False), T_pp.astype(np.float32, copy=False)
+    return PE_pp, T_pp
 
 
 def derive_track_ancestor_and_interaction(event_dict):
