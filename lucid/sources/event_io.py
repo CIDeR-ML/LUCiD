@@ -1810,14 +1810,17 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
                 PE_reco = PE_true
                 T_reco = T_true
 
-            # Convert JAX arrays to numpy BEFORE storing in extended_info
-            # This is critical for thread-safe saving with ThreadPoolExecutor
+            # Convert JAX arrays to numpy BEFORE storing in extended_info.
+            # Critical for thread-safe saving with ThreadPoolExecutor, and
+            # ``np.array`` (not ``asarray``) on the JAX-backed values
+            # ensures we own a writable host buffer for the in-place
+            # t0 shift below — JAX buffers come back read-only.
             PE_per_particle = np.asarray(PE_per_particle, dtype=np.float32)
-            T_per_particle = np.asarray(T_per_particle, dtype=np.float32)
-            PE_true = np.asarray(PE_true, dtype=np.float32)
-            T_true = np.asarray(T_true, dtype=np.float32)
-            PE_reco = np.asarray(PE_reco, dtype=np.float32)
-            T_reco = np.asarray(T_reco, dtype=np.float32)
+            T_per_particle  = np.asarray(T_per_particle,  dtype=np.float32)
+            PE_true = np.array(PE_true, dtype=np.float32, copy=True)
+            T_true  = np.array(T_true,  dtype=np.float32, copy=True)
+            PE_reco = np.array(PE_reco, dtype=np.float32, copy=True)
+            T_reco  = np.array(T_reco,  dtype=np.float32, copy=True)
 
             # Per-(segment, sensor) decomposition was computed inline by the
             # per_segment-mode simulator (hit_mode='per_segment');
