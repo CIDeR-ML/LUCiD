@@ -1876,16 +1876,17 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
             # Sparsify the per-segment / per-sensor decomposition into the
             # flat-parallel layout used by save_seg_event_v3 → sensor_hits/.
             # Mirrors inst.h5's (particle_idx, sensor_idx, PE, T) shape.
+            # Uses np.nonzero + paired gather to skip the full bool-mask
+            # intermediate (~330 MB on muon-class events).
             if segment_sensor_hits is not None:
                 PE_seg = segment_sensor_hits['PE_per_segment']  # (n_seg, n_sensors)
                 T_seg  = segment_sensor_hits['T_per_segment']
-                valid = PE_seg > 0
-                seg_flat, sen_flat = np.where(valid)
+                seg_flat, sen_flat = np.nonzero(PE_seg)
                 extended_info['segment_sensor_hits'] = {
                     'segment_idx': seg_flat.astype(np.int32),
                     'sensor_idx':  sen_flat.astype(np.uint16),
-                    'PE':          PE_seg[valid].astype(np.float32),
-                    'T':           T_seg[valid].astype(np.float32),
+                    'PE':          PE_seg[seg_flat, sen_flat],
+                    'T':           T_seg[seg_flat, sen_flat],
                 }
 
             # Geometric containment (per-segment / particle / interaction / event).
@@ -2641,13 +2642,12 @@ def _merge_pileup_streams(streams, *, n_sensors, apply_smearing,
     if seg_tensor_stream:
         pe_per_seg_merged = np.concatenate(seg_tensor_stream, axis=0)
         t_per_seg_merged  = np.concatenate(t_seg_tensor_stream, axis=0)
-        valid = pe_per_seg_merged > 0
-        seg_flat, sen_flat = np.where(valid)
+        seg_flat, sen_flat = np.nonzero(pe_per_seg_merged)
         merged['segment_sensor_hits'] = {
             'segment_idx': seg_flat.astype(np.int32),
             'sensor_idx':  sen_flat.astype(np.uint16),
-            'PE':          pe_per_seg_merged[valid].astype(np.float32),
-            'T':           t_per_seg_merged[valid].astype(np.float32),
+            'PE':          pe_per_seg_merged[seg_flat, sen_flat],
+            'T':           t_per_seg_merged[seg_flat, sen_flat],
         }
 
     # Geometric containment (same derivation as the single-vertex path;
