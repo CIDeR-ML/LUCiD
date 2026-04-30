@@ -93,35 +93,18 @@ def derive_subprocess_seeds(master_seed, job_id, vertex_idx=0):
 
 
 # =============================================================================
-# Two-axis bucketing (n_rays × n_segments)
+# Single-axis bucketing (n_rays)
 # =============================================================================
 #
 # The data-mode kernel (`_common_propagation` in lucid/simulation/simulator.py)
-# JIT-caches on two static argnames: ``n_rays`` (size of the per-chunk photon
-# array) and ``n_segments`` (size of the per-(segment, sensor) decomposition
-# output). Both are output-shape-defining inside ``make_hits_per_segment``
-# (segment_sum bucket count + reshape). Each unique ``(n_rays, n_segments)``
-# pair triggers a fresh JIT compile.
-#
-# Strategy: quantize both axes into a small finite set of bucket sizes. A
-# warmup pass compiles every (rays_b × seg_b) pair once at startup; from then
-# on every event hits the JIT cache. Per chunk, photons are padded to the
-# smallest fitting rays bucket (existing behaviour); the chunk's locally-
-# referenced segment ids are remapped to a dense ``[0, k)`` range and ``k``
-# is rounded up to the smallest fitting seg bucket (new behaviour). The kernel
-# treats segment ids as opaque ``[0, n_segments)`` keys, so per-chunk local
-# remapping is sound; the host scatters each chunk's ``(n_seg_local, n_sensors)``
-# tile back into the global ``(n_segments_event, n_sensors)`` PE/T buffer at
-# the chunk's unique-segment row indices (PE-sum, T-min — same merge rule
-# already used across rays-bucket chunks for per-sensor totals).
-#
-# Spec chosen so the worst-case kernel output ``(n_seg_b × n_sensors × 4 × 2)``
-# fits ~3 GB on CI's 8 GB ubuntu-latest runner. Per-chunk local n_seg is
-# bounded by ``min(rays_b, n_segments_event)``, so aligning the rays and seg
-# top buckets at the same value avoids a configuration where the seg axis
-# can't accommodate a worst-case "1 photon per segment" chunk.
+# JIT-caches on ``n_rays`` (size of the per-chunk photon array). Quantizing
+# this axis into a small finite set of bucket sizes is enough to keep the
+# JIT cache bounded: a warmup pass compiles each entry once at startup; every
+# subsequent event hits the cache. Per chunk, photons are padded to the
+# smallest fitting bucket; the kernel returns per-photon flat lists that the
+# host aggregates downstream — no segment-axis bucketing is needed because
+# the kernel no longer emits a ``(n_segments, n_sensors)`` decomposition.
 _DEFAULT_PAD_SIZE_BUCKETS = (256, 2_048, 8_192, 32_768)
-_DEFAULT_SEG_BUCKETS      = (256, 2_048, 8_192, 32_768)
 
 
 def _normalize_buckets(buckets):
@@ -209,171 +192,6 @@ def _warmup_buckets(event_simulator, rays_buckets):
         for arr in result:
             arr.block_until_ready()
         print(f"  rays={rays_b:>6,}: {time.time() - t0_warm:.2f}s", flush=True)
-
-
-def _simulate_particles_bucketed(
-        event_simulator, particles, particle_data,
-        all_photon_origins_np, all_photon_directions_np,
-        all_photon_times_np, all_photon_wavelengths_np,
-        translation_vector, apply_translation,
-        master_key, n_sensors, buckets,
-        all_photon_segment_index_np=None, n_segments=0):
-    """Run the per-particle propagation kernel, splitting big particles into chunks.
-
-    For each particle, group its photons into chunks of size <= max_bucket,
-    each padded to the smallest fitting bucket from ``buckets``. Each chunk
-    is one ``event_simulator(...)`` call; per-sensor PE-sum and T-min are
-    aggregated across all (particle, chunk) pairs.
-
-    When ``n_segments > 0`` and ``all_photon_segment_index_np`` is supplied,
-    the simulator runs in ``hit_mode='per_segment'`` and additionally
-    returns a per-(segment, sensor) decomposition; the 2D arrays are
-    accumulated across particles AND chunks. Photons whose segment id is
-    ``-1`` (sentinel for non-meaningful parent track) contribute to the
-    per-sensor total but produce no row in the segment decomposition
-    (handled inside ``make_hits_per_segment``).
-
-    Per-particle PE/T (inst.h5) is no longer accumulated here — it is
-    derived downstream by ``aggregate_inst_from_segments`` over the
-    per-(segment, sensor) tensor plus the segment→track→particle map.
-
-    Returns
-    -------
-    pe_per_sensor    : (n_sensors,) float32 — PE_true (pre-smearing).
-    t_per_sensor     : (n_sensors,) float32 — first-arrival per sensor; 0 = no hit.
-    track_energies   : (n_particles,) float32
-    track_positions  : (n_particles, 3) float32
-    track_directions : (n_particles, 3) float32
-    pe_per_seg       : (n_segments, n_sensors) float32 — None when
-        ``n_segments == 0``.
-    t_per_seg        : same as pe_per_seg; 0 = no hit.
-    """
-    from lucid.detector_params import ParticleParams
-
-    n_particles = len(particles)
-    track_energies   = np.zeros(n_particles, dtype=np.float32)
-    track_positions  = np.zeros((n_particles, 3), dtype=np.float32)
-    track_directions = np.zeros((n_particles, 3), dtype=np.float32)
-
-    pe_per_sensor    = np.zeros(n_sensors, dtype=np.float32)
-    t_per_sensor_inf = np.full(n_sensors, np.inf, dtype=np.float32)
-
-    per_segment_mode = n_segments > 0 and all_photon_segment_index_np is not None
-    if per_segment_mode:
-        pe_per_seg_total = np.zeros((n_segments, n_sensors), dtype=np.float32)
-        t_per_seg_total = np.full((n_segments, n_sensors), np.inf, dtype=np.float32)
-    else:
-        pe_per_seg_total = None
-        t_per_seg_total = None
-
-    rotation_axis = jnp.array([1.0, 0.0, 0.0], dtype=jnp.float32)
-    zero_translation = jnp.zeros(3, dtype=jnp.float32)
-    default_dir = jnp.array([0.0, 0.0, 1.0], dtype=jnp.float32)
-
-    particle_keys = jax.random.split(master_key, max(n_particles, 1))
-
-    for p_idx, particle in enumerate(particles):
-        # Resolve track params (mirrors the legacy preprocess path so the
-        # downstream metadata builder sees the same per-particle attrs).
-        track_info = particle['track_info']
-        if track_info is not None:
-            track_energies[p_idx]   = track_info['energy']
-            track_positions[p_idx]  = track_info['position']
-            track_directions[p_idx] = track_info['direction']
-        else:
-            track_energies[p_idx]   = particle_data['primary_energy']
-            track_directions[p_idx] = (0.0, 0.0, 1.0)
-        if apply_translation:
-            track_positions[p_idx] += translation_vector
-            if track_info is not None:
-                track_info['position'] = track_positions[p_idx].copy()
-
-        photon_indices = np.asarray(particle['photon_indices'], dtype=np.int64)
-        N = int(len(photon_indices))
-        if N == 0:
-            continue
-
-        track_params = ParticleParams.from_cartesian(
-            energy=jnp.float32(track_energies[p_idx]),
-            position=jnp.asarray(track_positions[p_idx]),
-            direction=jnp.asarray(track_directions[p_idx]),
-            t0=jnp.float32(0.0),
-        )
-
-        chunks = _split_into_chunks(N, buckets)
-
-        offset = 0
-        for chunk_idx, bucket_size in enumerate(chunks):
-            n_in_chunk = min(bucket_size, N - offset)
-
-            # Build padded arrays (host-side numpy, then push to device).
-            bo = np.zeros((bucket_size, 3), dtype=np.float32)
-            bd = np.zeros((bucket_size, 3), dtype=np.float32)
-            bd[:] = (0.0, 0.0, 1.0)
-            bt = np.zeros(bucket_size, dtype=np.float32)
-            bw = np.zeros(bucket_size, dtype=np.float32)
-            sl = slice(offset, offset + n_in_chunk)
-            idx_slice = photon_indices[sl]
-            bo[:n_in_chunk] = all_photon_origins_np[idx_slice]
-            bd[:n_in_chunk] = all_photon_directions_np[idx_slice]
-            bt[:n_in_chunk] = all_photon_times_np[idx_slice]
-            bw[:n_in_chunk] = all_photon_wavelengths_np[idx_slice]
-
-            photonsim_data = {
-                'photon_origins':    jax.device_put(bo),
-                'photon_directions': jax.device_put(bd),
-                'photon_times':      jax.device_put(bt),
-                'wavelengths':       jax.device_put(bw),
-                'N': jnp.int32(n_in_chunk),
-                'apply_rotation': False,
-                'rotation_axis': rotation_axis,
-                'rotation_angle': 0.0,
-                'apply_translation': False,
-                'translation_vector': zero_translation,
-            }
-            if per_segment_mode:
-                # Padding photons get sentinel -1 so they contribute to
-                # the per-sensor total but produce no segment row.
-                bs = np.full(bucket_size, -1, dtype=np.int32)
-                bs[:n_in_chunk] = all_photon_segment_index_np[idx_slice]
-                photonsim_data['photon_segment_index'] = jax.device_put(bs)
-
-            chunk_key = jax.random.fold_in(particle_keys[p_idx], chunk_idx)
-            if per_segment_mode:
-                PE_chunk, T_chunk, pe_seg_chunk, t_seg_chunk = event_simulator(
-                    track_params, chunk_key, photonsim_data, n_segments=n_segments)
-                pe_per_seg_total += np.asarray(pe_seg_chunk, dtype=np.float32)
-                t_seg_chunk_np = np.asarray(t_seg_chunk, dtype=np.float32)
-                t_per_seg_total = np.minimum(
-                    t_per_seg_total,
-                    np.where(t_seg_chunk_np > 0, t_seg_chunk_np, np.inf),
-                )
-            else:
-                PE_chunk, T_chunk = event_simulator(track_params, chunk_key, photonsim_data)
-            # Block + transfer to host so we can aggregate across chunks
-            # without keeping device buffers alive.
-            PE_chunk_np = np.asarray(PE_chunk, dtype=np.float32)
-            T_chunk_np  = np.asarray(T_chunk,  dtype=np.float32)
-
-            pe_per_sensor += PE_chunk_np
-            t_per_sensor_inf = np.minimum(
-                t_per_sensor_inf,
-                np.where(T_chunk_np > 0, T_chunk_np, np.inf),
-            )
-
-            offset += n_in_chunk
-
-    # Restore "no hit = 0" sentinel for sensors that never fired.
-    t_per_sensor = np.where(np.isfinite(t_per_sensor_inf), t_per_sensor_inf, 0.0)
-
-    if per_segment_mode:
-        # Same convention on the seg-level T array.
-        t_per_seg_total = np.where(
-            np.isfinite(t_per_seg_total), t_per_seg_total, 0.0)
-
-    return (pe_per_sensor, t_per_sensor,
-            track_energies, track_positions, track_directions,
-            pe_per_seg_total, t_per_seg_total)
 
 
 # Vestigial track params: the kernel reads these out of ParticleParams but
@@ -1515,9 +1333,8 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
     if pad_size_buckets is None or not pad_size_buckets:
         pad_size_buckets = _DEFAULT_PAD_SIZE_BUCKETS
     pad_size_buckets = _normalize_buckets(pad_size_buckets)
-    use_bucketing = True   # invariant — kept as a named constant for step-8 cleanup
+    use_bucketing = True
     print(f"  Using rays buckets: {list(pad_size_buckets)}")
-    print(f"  Using seg  buckets: {list(_DEFAULT_SEG_BUCKETS)}")
 
     print(f"\nGenerating {n_events} events using VMAP-OPTIMIZED particle-based processing...")
     print(f"Using batch size of {batch_size} events for multithreaded I/O")
@@ -3677,145 +3494,6 @@ def derive_particle_idx_per_track(event_dict):
     return out
 
 
-# ---------------------------------------------------------------------------
-# JIT-fused aggregator (single-vertex hot path).
-#
-# Profiling showed ``aggregate_inst_from_segments`` was ~95% of post_jax for
-# muon-class events: three full passes over (n_seg, n_sensors) ≈ 1.3 GB and a
-# 1.3 GB ``np.where(t > 0, t, inf)`` allocation. The numpy path is
-# memory-bandwidth-bound at ~5 GB/s on the CI runner, hence the ~1 s/event
-# ceiling.
-#
-# The JIT'd version below fuses the where-substitute + segment_sum +
-# segment_min into one pass through XLA: pe_per_seg + t_per_seg are read once
-# each, and intermediate tensors stay in registers. Cache key is the input
-# shapes — we pad to ``_DEFAULT_SEG_BUCKETS`` (same buckets the kernel uses)
-# so we get at most 4 JIT entries.
-# ---------------------------------------------------------------------------
-
-# Pad to fixed maxima so the JIT cache only depends on n_seg_bucket. These
-# are generous over what production events emit (muon ~tens of meaningful
-# tracks, GENIE numu ~hundreds; never near 4096). Adjust if a config emits
-# more.
-_AGG_N_TRACKS_MAX    = 4096
-_AGG_N_PARTICLES_MAX = 256
-
-
-@partial(jax.jit, static_argnums=(4,))
-def _jit_aggregate_inst_kernel(pe_per_seg, t_per_seg,
-                                track_idx_per_segment,
-                                particle_idx_per_track,
-                                n_particles_max):
-    """JIT-fused PE-sum + T-min-ignoring-zeros segment aggregator.
-
-    Padding contract:
-      * pe_per_seg, t_per_seg : (n_seg_bucket, n_sensors) float32; padded
-        rows beyond ``n_seg_actual`` must be zeros.
-      * track_idx_per_segment : (n_seg_bucket,) int32; padded rows must
-        point to a sentinel index whose ``particle_idx_per_track`` entry
-        is ``-1``.
-      * particle_idx_per_track : (n_tracks_max,) int32; ``-1`` for orphan
-        or padding tracks.
-      * n_particles_max : static output bucket size; the call site slices
-        ``PE_pp[:n_particles_actual]``.
-
-    Returns ``(PE_pp_padded, T_pp_padded)`` of shape
-    ``(n_particles_max, n_sensors)``. T uses ``0`` as "no hit".
-    """
-    pidx_per_seg = particle_idx_per_track[track_idx_per_segment]   # (n_seg,)
-    valid = pidx_per_seg >= 0
-    safe_pidx = jnp.where(valid, pidx_per_seg, n_particles_max).astype(jnp.int32)
-
-    # PE: zero-out invalid rows (they go to the sentinel particle bucket
-    # which we discard) then segment_sum.
-    pe_masked = jnp.where(valid[:, None], pe_per_seg, jnp.float32(0.0))
-    PE_pp_pad = jax.ops.segment_sum(
-        pe_masked, safe_pidx, num_segments=n_particles_max + 1)
-
-    # T: substitute +inf for zeros AND invalid rows in one fused pass,
-    # segment_min, then sentinel ``+inf`` (no-hit) → 0.
-    t_inf = jnp.where(valid[:, None] & (t_per_seg > 0),
-                      t_per_seg, jnp.float32(jnp.inf))
-    T_pp_inf_pad = jax.ops.segment_min(
-        t_inf, safe_pidx, num_segments=n_particles_max + 1)
-    T_pp_pad = jnp.where(jnp.isfinite(T_pp_inf_pad),
-                         T_pp_inf_pad, jnp.float32(0.0))
-
-    return PE_pp_pad[:n_particles_max], T_pp_pad[:n_particles_max]
-
-
-def _aggregate_inst_from_segments_jit(pe_per_seg, t_per_seg,
-                                       track_idx_per_segment,
-                                       particle_idx_per_track,
-                                       n_particles, n_sensors,
-                                       seg_buckets):
-    """Numpy-facing wrapper around :func:`_jit_aggregate_inst_kernel`.
-
-    Pads inputs to the smallest seg bucket that fits, calls the JIT
-    kernel, and slices the result back to ``n_particles``.
-
-    Falls back to ``aggregate_inst_from_segments`` (numpy) when the
-    inputs exceed the largest seg bucket — never expected on production
-    configs but kept as a safety net.
-    """
-    n_seg = int(pe_per_seg.shape[0])
-    if n_seg == 0 or n_particles == 0:
-        return (np.zeros((n_particles, n_sensors), dtype=np.float32),
-                np.zeros((n_particles, n_sensors), dtype=np.float32))
-
-    n_seg_bucket = _pick_bucket(n_seg, seg_buckets)
-    if n_seg_bucket < n_seg:
-        # Bigger than any bucket — fall back to numpy aggregator.
-        return aggregate_inst_from_segments(
-            pe_per_seg, t_per_seg, track_idx_per_segment,
-            particle_idx_per_track, n_particles, n_sensors)
-
-    n_tracks_actual = int(particle_idx_per_track.size)
-    if n_tracks_actual >= _AGG_N_TRACKS_MAX:
-        return aggregate_inst_from_segments(
-            pe_per_seg, t_per_seg, track_idx_per_segment,
-            particle_idx_per_track, n_particles, n_sensors)
-    if n_particles >= _AGG_N_PARTICLES_MAX:
-        return aggregate_inst_from_segments(
-            pe_per_seg, t_per_seg, track_idx_per_segment,
-            particle_idx_per_track, n_particles, n_sensors)
-
-    # Pad pe_per_seg / t_per_seg to (n_seg_bucket, n_sensors) with zeros.
-    if n_seg < n_seg_bucket:
-        pe_padded = np.zeros((n_seg_bucket, n_sensors), dtype=np.float32)
-        pe_padded[:n_seg] = pe_per_seg
-        t_padded = np.zeros((n_seg_bucket, n_sensors), dtype=np.float32)
-        t_padded[:n_seg] = t_per_seg
-    else:
-        pe_padded = np.ascontiguousarray(pe_per_seg, dtype=np.float32)
-        t_padded  = np.ascontiguousarray(t_per_seg,  dtype=np.float32)
-
-    # Pad track_idx with sentinel = _AGG_N_TRACKS_MAX - 1 (which has
-    # particle_idx == -1 because we pad pidx_per_track with -1s below).
-    sentinel_track_idx = _AGG_N_TRACKS_MAX - 1
-    if n_seg < n_seg_bucket:
-        track_idx_padded = np.full(n_seg_bucket, sentinel_track_idx, dtype=np.int32)
-        track_idx_padded[:n_seg] = track_idx_per_segment
-    else:
-        track_idx_padded = np.ascontiguousarray(track_idx_per_segment, dtype=np.int32)
-
-    # Pad particle_idx_per_track to (_AGG_N_TRACKS_MAX,) with -1.
-    pidx_padded = np.full(_AGG_N_TRACKS_MAX, -1, dtype=np.int32)
-    pidx_padded[:n_tracks_actual] = particle_idx_per_track
-
-    PE_pp_jax, T_pp_jax = _jit_aggregate_inst_kernel(
-        jnp.asarray(pe_padded),
-        jnp.asarray(t_padded),
-        jnp.asarray(track_idx_padded),
-        jnp.asarray(pidx_padded),
-        _AGG_N_PARTICLES_MAX,
-    )
-
-    # ``np.array(..., copy=True)`` (not ``asarray``) so the caller owns a
-    # writable host buffer for the in-place t0 shift downstream.
-    PE_pp = np.array(PE_pp_jax[:n_particles], dtype=np.float32, copy=True)
-    T_pp  = np.array(T_pp_jax[:n_particles],  dtype=np.float32, copy=True)
-    return PE_pp, T_pp
 
 
 def _aggregate_from_photon_records(
@@ -3930,12 +3608,10 @@ def aggregate_inst_from_segments(pe_per_seg, t_per_seg,
     particle is the min over the particle's segments' first-arrival
     times.
 
-    Bit-identical to today's per-particle kernel call when every photon
-    of a categorized particle has a valid segment id (always true on
-    the raw-segments-no-merge PhotonSim branch). Composition argument:
-    PE comes from the same ``qe_weights`` tensor in
-    ``make_hits_per_segment`` whether read per-sensor or per-(seg,
-    sensor); T composes via ``min(min(A), min(B)) == min(A ∪ B)``.
+    Kept as the byte-identity oracle for ``test_aggregator_matches_oracle``
+    — the production single-vertex / pile-up paths use
+    ``_aggregate_from_photon_records`` instead, which works directly from
+    the per-photon flat lists.
 
     The "no hit = 0" sentinel pattern is preserved exactly: 0 in the
     input means "no photons hit this (seg, sensor)"; we route

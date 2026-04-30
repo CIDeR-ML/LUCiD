@@ -41,7 +41,7 @@ def _qe_roll(flat_weights, flat_indices, flat_times,
              qe, qe_corrections, qe_key, threshold):
     """Per-photon Bernoulli QE survival.
 
-    Shared between make_hits_data and make_hits_per_segment so both modes
+    Shared between make_hits_data and make_hits_per_photon so both modes
     use identical RNG and threshold semantics.
     """
     timing_mask = (flat_weights > threshold) & (flat_times > 0)
@@ -89,89 +89,17 @@ def make_hits_data(
     return measured_charge, measured_time
 
 
-def make_hits_per_segment(
-        flat_weights, flat_indices, flat_times, num_detectors,
-        qe=0.2, qe_corrections=None, rng_key=None, threshold=1e-5, apply_smearing=False,
-        flat_segment_idx=None, n_segments=0):
-    """Per-segment-mode hits: realistic per-sensor PLUS exact per-(segment, sensor) decomposition.
-
-    Per-sensor outputs (measured_charge, measured_time) are produced by the
-    same logic as make_hits_data — same RNG, same smearing — so callers
-    that drop the segment outputs see identical behaviour.
-
-    The decomposition reuses the same qe_weights tensor as the per-sensor
-    sum, so column sums equal measured_charge by construction (no RNG
-    mismatch like the previous two-pass implementation).
-
-    Photons with flat_segment_idx == -1 (sentinel for non-meaningful
-    parent track) are routed to the n_segments-th dummy bucket and
-    sliced off before return — they still contribute to the per-sensor
-    total but produce no segment row.
-
-    Returns
-    -------
-    measured_charge : (num_detectors,)
-    measured_time   : (num_detectors,)
-    pe_per_seg      : (n_segments, num_detectors)
-    t_per_seg       : (n_segments, num_detectors)
-    """
-    rng_key, smear_time_key = jax.random.split(rng_key)
-    qe_key, smear_counts_key = jax.random.split(rng_key)
-
-    qe_weights, qe_filtered_times = _qe_roll(
-        flat_weights, flat_indices, flat_times,
-        qe, qe_corrections, qe_key, threshold)
-
-    # ---- Per-sensor (mirrors make_hits_data) ----
-    total_charge = jax.ops.segment_sum(qe_weights, flat_indices, num_segments=num_detectors)
-    detector_mins = jax.ops.segment_min(qe_filtered_times, flat_indices, num_segments=num_detectors)
-
-    nonzero_mask = (total_charge > 1e-10) & (detector_mins > 0) & jnp.isfinite(detector_mins)
-
-    if apply_smearing:
-        measured_time = jnp.where(
-            jnp.any(nonzero_mask),
-            smear_times(detector_mins, key=smear_time_key),
-            0.0,
-        )
-        measured_charge = jnp.where(
-            nonzero_mask,
-            smear_charges_SK_like(total_charge, key=smear_counts_key),
-            0,
-        )
-    else:
-        measured_time = jnp.where(jnp.any(nonzero_mask), detector_mins, 0.0)
-        measured_charge = jnp.where(nonzero_mask, total_charge, 0)
-
-    # ---- Per-(segment, sensor) decomposition ----
-    safe_seg = jnp.where(flat_segment_idx >= 0, flat_segment_idx, n_segments)
-    combined_idx = safe_seg * num_detectors + flat_indices
-    n_buckets = (n_segments + 1) * num_detectors
-
-    pe_per_seg = jax.ops.segment_sum(
-        qe_weights, combined_idx, num_segments=n_buckets,
-    ).reshape(n_segments + 1, num_detectors)[:n_segments]
-
-    t_per_seg = jax.ops.segment_min(
-        qe_filtered_times, combined_idx, num_segments=n_buckets,
-    ).reshape(n_segments + 1, num_detectors)[:n_segments]
-    t_per_seg = jnp.where(jnp.isfinite(t_per_seg), t_per_seg, 0.0)
-
-    return measured_charge, measured_time, pe_per_seg, t_per_seg
-
-
 def make_hits_per_photon(
         flat_weights, flat_indices, flat_times, num_detectors,
         qe=0.2, qe_corrections=None, rng_key=None, threshold=1e-5, apply_smearing=False,
         flat_segment_idx=None):
     """Per-sensor totals PLUS pass-through per-photon arrays for host aggregation.
 
-    Per-sensor outputs (measured_charge, measured_time) are byte-equivalent
-    to make_hits_per_segment — same RNG split, same smearing behaviour. The
-    n_segments-keyed dense scatter is dropped: instead, the per-photon
-    qe_weights / qe_filtered_times / flat_indices / flat_segment_idx arrays
-    are returned to the host, which does the per-(segment, sensor) and
-    per-(particle, sensor) groupbys in numpy.
+    Per-sensor outputs (measured_charge, measured_time) follow the same
+    QE roll + segment_sum/segment_min pattern as make_hits_data; the
+    per-photon qe_weights / qe_filtered_times / flat_indices /
+    flat_segment_idx arrays are returned to the host so it can do the
+    per-(segment, sensor) and per-(particle, sensor) groupbys in numpy.
 
     Returns
     -------
