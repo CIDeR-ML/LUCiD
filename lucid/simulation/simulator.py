@@ -32,7 +32,8 @@ from lucid.simulation.photon_step import (
     photon_iteration_sample, photon_iteration_update_factors_safe,
 )
 from lucid.simulation.sensor_response import (
-    make_hits_simulation, make_hits_data, make_hits_likelihood, make_hits_per_segment,
+    make_hits_simulation, make_hits_data, make_hits_likelihood,
+    make_hits_per_segment, make_hits_per_photon,
 )
 
 # ===================================================================
@@ -229,10 +230,12 @@ def setup_event_simulator(
 
     def _make_hits_per_segment(flat_weights, flat_indices, flat_times, num_sensors, qe_key, qe, qe_corrections,
                            flat_segment_idx=None, n_segments=0):
-        return make_hits_per_segment(flat_weights, flat_indices, flat_times, num_sensors,
-                                 qe=qe, qe_corrections=qe_corrections,
-                                 rng_key=qe_key, apply_smearing=sim_config.apply_smearing,
-                                 flat_segment_idx=flat_segment_idx, n_segments=n_segments)
+        # ``n_segments`` is unused — the new kernel emits per-photon flat
+        # arrays and the host does the per-(segment, sensor) groupby.
+        return make_hits_per_photon(flat_weights, flat_indices, flat_times, num_sensors,
+                                qe=qe, qe_corrections=qe_corrections,
+                                rng_key=qe_key, apply_smearing=sim_config.apply_smearing,
+                                flat_segment_idx=flat_segment_idx)
 
     _make_hits_fn = {
         'aggregated': _make_hits_aggregated,
@@ -291,8 +294,7 @@ def setup_event_simulator(
 
     @partial(jax.jit, static_argnames=(
         'n_rays', 'K', 'n_grad_iters', 'max_sensors_per_cell', 'num_sensors',
-        'propagate_fn', 'photon_update_fn', 'pos_grad_threshold', 'make_hits_fn',
-        'n_segments'))
+        'propagate_fn', 'photon_update_fn', 'pos_grad_threshold', 'make_hits_fn'))
     def _common_propagation(
             positions, directions, intensities, times,
             scatter_lengths, absorption_lengths,
@@ -440,7 +442,7 @@ def setup_event_simulator(
     # Mode-specific simulation functions
     # ================================================================
 
-    @partial(jax.jit, static_argnames=('n_segments',))
+    @jax.jit
     def _simulation_with_data_impl(particle_params, detector_params, key, photon_data,
                                    n_segments=0):
         """Data mode: photons from ROOT/PhotonSim files, particle_params is ParticleParams.
@@ -623,7 +625,7 @@ def setup_event_simulator(
     # ---- Return the right function ------------------------------------------
     if sim_config.is_data:
         if _default_dp is not None:
-            @partial(jax.jit, static_argnames=('n_segments',))
+            @jax.jit
             def _sim_data_default(particle_params, key, photon_data, n_segments=0):
                 return _simulation_with_data_impl(
                     particle_params, _default_dp, key, photon_data,
