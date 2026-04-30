@@ -1287,11 +1287,23 @@ def _derive_views_from_segments(raw, pe_per_seg_raw=None, t_per_seg_raw=None):
 
     # ---- Build particles list ----
     n_particles = len(cat_result.genealogies)
-    photons_per_particle = [[] for _ in range(n_particles)]
-    if photon_to_particle.size > 0:
-        for ph_idx, p_idx in enumerate(photon_to_particle):
-            if p_idx >= 0:
-                photons_per_particle[int(p_idx)].append(int(ph_idx))
+    if n_particles > 0 and photon_to_particle.size > 0:
+        # Vectorized partition: photons whose particle_idx >= 0 are sorted
+        # by particle_idx; np.searchsorted on the sorted column gives the
+        # inclusive boundaries for each particle's photon-id slice.
+        valid = photon_to_particle >= 0
+        valid_ph_idx = np.flatnonzero(valid)
+        valid_p_idx  = photon_to_particle[valid].astype(np.int64, copy=False)
+        order = np.argsort(valid_p_idx, kind='stable')
+        sorted_p  = valid_p_idx[order]
+        sorted_ph = valid_ph_idx[order]
+        boundaries = np.searchsorted(sorted_p, np.arange(n_particles + 1))
+        photons_per_particle = [
+            sorted_ph[boundaries[i]:boundaries[i + 1]].tolist()
+            for i in range(n_particles)
+        ]
+    else:
+        photons_per_particle = [[] for _ in range(n_particles)]
 
     particles = []
     for p_idx in range(n_particles):
