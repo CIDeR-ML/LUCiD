@@ -3536,64 +3536,125 @@ def _compute_contained(event_dict, detector_bounds):
             raise ValueError(f"Unknown detector_bounds type: {kind!r}")
         per_segment_arr = (start_in & end_in).astype(bool)
 
-    # Group segments per meaningful track via cumulative n_segments
-    # (same invariant as save_seg_event_v3). Per-track contained = AND
-    # over its segments; a track with zero segments contributes "True"
-    # to its owning particle (it has nothing to violate containment with),
-    # so the empty-set rule is enforced one level up at the particle.
-    seg_contained_per_track = {}
-    cursor = 0
-    for tid, t in meaningful_tracks.items():
-        ns = int(t.get('n_segments', 0))
-        if ns > 0 and cursor + ns <= n_segments:
-            seg_contained_per_track[int(tid)] = bool(per_segment_arr[cursor:cursor + ns].all())
-        else:
-            # Track with no segments: treat as no-evidence (True), so the
-            # particle-level AND only fires "False" on an actual leak.
-            seg_contained_per_track[int(tid)] = True
-        cursor += ns
+    # ------------------------------------------------------------------
+    # Per-track contained, vectorized.
+    # Group segments per meaningful track via cumulative n_segments (the
+    # save_seg_event_v3 invariant). A track is contained iff every owned
+    # segment is contained. Zero-segment tracks → True (no-evidence).
+    # ------------------------------------------------------------------
+    n_tracks = len(meaningful_tracks)
+    if n_tracks == 0:
+        per_particle_arr = np.zeros(n_particles, dtype=bool)
+    else:
+        track_ids_np   = np.fromiter(
+            (int(tid) for tid in meaningful_tracks.keys()),
+            dtype=np.int64, count=n_tracks)
+        n_seg_per_track = np.fromiter(
+            (int(t.get('n_segments', 0)) for t in meaningful_tracks.values()),
+            dtype=np.int64, count=n_tracks)
+        parent_per_track = np.fromiter(
+            (int(t['parent_id']) for t in meaningful_tracks.values()),
+            dtype=np.int64, count=n_tracks)
 
-    # Attribute each meaningful track to the nearest categorized ancestor
-    # particle (same rule as derive_particle_idx_per_track). Track each
-    # particle's accumulated AND and whether it received any track at all.
-    id_to_particle_idx = {}
-    for i, particle in enumerate(particles):
-        gen = particle.get('genealogy') or []
-        if gen:
-            id_to_particle_idx[int(gen[-1])] = i
+        # Reverse map track_id -> local idx in O(n).
+        tid_to_local = {int(tid): i for i, tid in enumerate(track_ids_np.tolist())}
 
-    particle_has_track = np.zeros(n_particles, dtype=bool)
-    particle_and = np.ones(n_particles, dtype=bool)
-    for tid in meaningful_tracks.keys():
-        cur = int(tid)
-        visited = set()
-        owner = -1
-        while cur > 0 and cur not in visited:
-            visited.add(cur)
-            if cur in id_to_particle_idx:
-                owner = id_to_particle_idx[cur]
+        # seg → local track idx for in-range segments.
+        # Out-of-range counts (cursor + ns > n_segments) get clamped so
+        # we don't index past per_segment_arr; their entries fall into
+        # the "empty" branch below and stay True.
+        seg_idx_per_seg = np.repeat(np.arange(n_tracks, dtype=np.int64), n_seg_per_track)
+        if seg_idx_per_seg.size > n_segments:
+            # Defensive truncation matching the legacy "cursor+ns <= n_segments" guard.
+            seg_idx_per_seg = seg_idx_per_seg[:n_segments]
+        # Per-track AND of per_segment_arr: a track is False iff any of
+        # its segments is False. Indexed assignment of False at False-
+        # segment positions is order-independent (idempotent).
+        seg_contained_per_track_np = np.ones(n_tracks, dtype=bool)
+        if seg_idx_per_seg.size > 0:
+            false_segs = ~per_segment_arr[:seg_idx_per_seg.size]
+            seg_contained_per_track_np[seg_idx_per_seg[false_segs]] = False
+        # Tracks with zero segments stay True (already initialized).
+
+        # ------------------------------------------------------------------
+        # Owner walk, vectorized. Each meaningful track climbs its
+        # parent chain (within meaningful_tracks) until it hits either
+        # a categorized root or falls off the chain. Iteration count is
+        # bounded by max chain depth; for SK-class events this is shallow.
+        # ------------------------------------------------------------------
+        # Build per-track "categorized root" tag (-1 if track is not the
+        # last entry of any particle's genealogy).
+        owner_of_local = np.full(n_tracks, -1, dtype=np.int64)
+        for i, particle in enumerate(particles):
+            gen = particle.get('genealogy') or []
+            if not gen:
+                continue
+            last_tid = int(gen[-1])
+            li = tid_to_local.get(last_tid)
+            if li is not None:
+                owner_of_local[li] = i
+
+        # Per-track parent local idx (-1 if parent not in meaningful_tracks).
+        parent_local = np.full(n_tracks, -1, dtype=np.int64)
+        for i, pid in enumerate(parent_per_track.tolist()):
+            li = tid_to_local.get(pid)
+            if li is not None:
+                parent_local[i] = li
+
+        cur = np.arange(n_tracks, dtype=np.int64)
+        final_owner = np.full(n_tracks, -1, dtype=np.int64)
+        alive = np.ones(n_tracks, dtype=bool)
+        for _ in range(n_tracks):  # bounded by deepest chain
+            new_owner = owner_of_local[cur]
+            found = alive & (new_owner >= 0)
+            if found.any():
+                final_owner = np.where(found, new_owner, final_owner)
+                alive &= ~found
+            if not alive.any():
                 break
-            parent = meaningful_tracks.get(cur)
-            if parent is None:
+            p = parent_local[cur]
+            fell_off = alive & (p < 0)
+            alive &= ~fell_off
+            if not alive.any():
                 break
-            cur = int(parent['parent_id'])
-        if owner >= 0:
-            particle_has_track[owner] = True
-            particle_and[owner] &= seg_contained_per_track[int(tid)]
+            cur = np.where(alive, p, cur)
 
-    # Particle: True iff it owns ≥1 track AND every owned segment is contained.
-    per_particle_arr = (particle_has_track & particle_and).astype(bool)
+        valid_owners = final_owner >= 0
+        particle_has_track = np.zeros(n_particles, dtype=bool)
+        particle_and = np.ones(n_particles, dtype=bool)
+        if valid_owners.any():
+            owners = final_owner[valid_owners]
+            contained = seg_contained_per_track_np[valid_owners]
+            # Indexed assignment of True is order-independent.
+            particle_has_track[owners] = True
+            # AND aggregation: a particle becomes False if ANY owned
+            # track is False. Idempotent assignment of False at the
+            # False-track owners.
+            not_contained = ~contained
+            if not_contained.any():
+                particle_and[owners[not_contained]] = False
 
+        # Particle: True iff it owns ≥1 track AND every owned segment is contained.
+        per_particle_arr = particle_has_track & particle_and
+
+    # ------------------------------------------------------------------
     # Interaction: AND over its particles. Empty interaction → False.
+    # ------------------------------------------------------------------
     inter_idx = derive_particle_interaction_idx(event_dict)
     interaction_has_particle = np.zeros(n_interactions, dtype=bool)
     interaction_and = np.ones(n_interactions, dtype=bool)
-    for i in range(n_particles):
-        pi_i = int(inter_idx[i]) if i < len(inter_idx) else -1
-        if 0 <= pi_i < n_interactions:
-            interaction_has_particle[pi_i] = True
-            interaction_and[pi_i] &= bool(per_particle_arr[i])
-    per_interaction_arr = (interaction_has_particle & interaction_and).astype(bool)
+    if n_particles > 0 and inter_idx.size > 0:
+        m = min(n_particles, inter_idx.size)
+        ii = inter_idx[:m].astype(np.int64, copy=False)
+        valid = (ii >= 0) & (ii < n_interactions)
+        if valid.any():
+            valid_inter = ii[valid]
+            valid_part  = per_particle_arr[:m][valid]
+            interaction_has_particle[valid_inter] = True
+            not_contained = ~valid_part
+            if not_contained.any():
+                interaction_and[valid_inter[not_contained]] = False
+    per_interaction_arr = interaction_has_particle & interaction_and
 
     # Event: AND over interactions. Empty event → False.
     overall = np.bool_(n_interactions > 0 and bool(per_interaction_arr.all()))
