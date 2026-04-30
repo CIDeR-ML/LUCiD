@@ -1832,12 +1832,12 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
             # pile-up path applies per-vertex t0 in its merger. The
             # positivity mask preserves "no-hit" sentinels (0/inf).
             t0_f32 = np.float32(t0)
-            T_per_particle = np.where(T_per_particle > 0, T_per_particle + t0_f32, T_per_particle)
-            T_true = np.where(T_true > 0, T_true + t0_f32, T_true)
-            T_reco = np.where(T_reco > 0, T_reco + t0_f32, T_reco)
+            np.add(T_per_particle, t0_f32, out=T_per_particle, where=T_per_particle > 0)
+            np.add(T_true,         t0_f32, out=T_true,         where=T_true > 0)
+            np.add(T_reco,         t0_f32, out=T_reco,         where=T_reco > 0)
             if segment_sensor_hits is not None:
                 T_seg = segment_sensor_hits['T_per_segment']
-                segment_sensor_hits['T_per_segment'] = np.where(T_seg > 0, T_seg + t0_f32, T_seg)
+                np.add(T_seg, t0_f32, out=T_seg, where=T_seg > 0)
             # Segments always carry meaningful times — shift all of them.
             if 'segments' in particle_data and particle_data['segments'].get('n_segments', 0) > 0:
                 particle_data['segments']['time'] = \
@@ -2419,12 +2419,11 @@ def generate_events_from_photonsim_pileup(
 
                 # Apply +t0_i to shift simulator output into absolute detector frame.
                 t0_f32 = np.float32(t0_i)
-                T_i = np.where(T_i > 0, T_i + t0_f32, T_i)
+                np.add(T_i, t0_f32, out=T_i, where=T_i > 0)
                 # Per-segment T (for the merged segment_sensor_hits).
                 if t_per_seg_filt_i is not None:
-                    t_per_seg_filt_i = np.where(t_per_seg_filt_i > 0,
-                                                 t_per_seg_filt_i + t0_f32,
-                                                 t_per_seg_filt_i)
+                    np.add(t_per_seg_filt_i, t0_f32, out=t_per_seg_filt_i,
+                           where=t_per_seg_filt_i > 0)
                 # Same shift for segment times.
                 if particle_data_i['segments'].get('n_segments', 0) > 0:
                     particle_data_i['segments']['time'] = (
