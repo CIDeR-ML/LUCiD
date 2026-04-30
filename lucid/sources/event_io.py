@@ -160,24 +160,26 @@ def _split_into_chunks(n, buckets):
     return chunks
 
 
-def _warmup_buckets(event_simulator, buckets, per_segment_mode=False):
-    """Trigger one JIT compile per unique bucket size, up-front.
+def _warmup_buckets(event_simulator, rays_buckets, seg_buckets):
+    """Trigger one JIT compile per (n_rays_bucket, n_seg_bucket) pair.
 
-    Runs the simulator once per bucket with throwaway zero-filled photons
-    (Np=0, so no real propagation work) and blocks on the result. After
-    this returns, every later call at any of these bucket sizes hits the
-    JIT cache and runs at native kernel cost. ~1 min per bucket on CPU.
+    Runs the simulator once per (rays_b, seg_b) combination with throwaway
+    zero-filled photons (N=0, so no real propagation work) and blocks on
+    the result. After this returns, every real-event kernel call whose
+    static args land on one of the warmed pairs hits the JIT cache and
+    runs at native kernel cost. The Cartesian product has
+    ``len(rays_buckets) × len(seg_buckets)`` entries (default 4×4 = 16);
+    each compile is ~10–30 s on CPU.
 
-    In ``per_segment_mode``, the simulator expects ``photon_segment_index``
-    in ``photonsim_data`` and an ``n_segments`` static kwarg. Each real
-    event will trigger a fresh compile (n_segments differs per event),
-    so the warmup here only validates the per_segment path with the
-    smallest valid ``n_segments=1``.
+    Both ``rays_buckets`` and ``seg_buckets`` are sorted tuples produced by
+    ``_normalize_buckets``. An empty/falsy spec on either axis disables
+    warmup (kernel still works, just pays compile cost on first hit).
     """
-    if not buckets:
+    if not rays_buckets or not seg_buckets:
         return
     from lucid.detector_params import ParticleParams
-    print(f"Warming up JIT cache for {len(buckets)} bucket size(s)...")
+    n_pairs = len(rays_buckets) * len(seg_buckets)
+    print(f"Warming up JIT cache for {n_pairs} (rays × seg) bucket pair(s)...")
     track_params = ParticleParams.from_cartesian(
         energy=jnp.float32(800.0),
         position=jnp.zeros(3, dtype=jnp.float32),
@@ -187,34 +189,31 @@ def _warmup_buckets(event_simulator, buckets, per_segment_mode=False):
     rotation_axis = jnp.array([1.0, 0.0, 0.0], dtype=jnp.float32)
     translation_vector = jnp.zeros(3, dtype=jnp.float32)
     default_dir = jnp.array([0.0, 0.0, 1.0], dtype=jnp.float32)
-    for bucket in buckets:
-        t0_warm = time.time()
-        photonsim_data = {
-            'photon_origins':    jnp.zeros((bucket, 3), dtype=jnp.float32),
-            'photon_directions': jnp.tile(default_dir, (bucket, 1)),
-            'photon_times':      jnp.zeros(bucket, dtype=jnp.float32),
-            'wavelengths':       jnp.zeros(bucket, dtype=jnp.float32),
-            'N': jnp.int32(0),
-            'apply_rotation': False,
-            'rotation_axis': rotation_axis,
-            'rotation_angle': 0.0,
-            'apply_translation': False,
-            'translation_vector': translation_vector,
-        }
-        key = jax.random.PRNGKey(0)
-        if per_segment_mode:
-            photonsim_data['photon_segment_index'] = jnp.full(
-                bucket, -1, dtype=jnp.int32)
+    for rays_b in rays_buckets:
+        for seg_b in seg_buckets:
+            t0_warm = time.time()
+            photonsim_data = {
+                'photon_origins':    jnp.zeros((rays_b, 3), dtype=jnp.float32),
+                'photon_directions': jnp.tile(default_dir, (rays_b, 1)),
+                'photon_times':      jnp.zeros(rays_b, dtype=jnp.float32),
+                'wavelengths':       jnp.zeros(rays_b, dtype=jnp.float32),
+                'N': jnp.int32(0),
+                'apply_rotation': False,
+                'rotation_axis': rotation_axis,
+                'rotation_angle': 0.0,
+                'apply_translation': False,
+                'translation_vector': translation_vector,
+                'photon_segment_index': jnp.full(rays_b, -1, dtype=jnp.int32),
+            }
+            key = jax.random.PRNGKey(0)
             result = event_simulator(
-                track_params, key, photonsim_data, n_segments=1)
-        else:
-            result = event_simulator(track_params, key, photonsim_data)
-        # Release-mode simulators return a 4-tuple (charges, times,
-        # pe_per_seg, t_per_seg); realistic returns 2. Block on every
-        # leaf so the JIT trace finishes for both.
-        for arr in result:
-            arr.block_until_ready()
-        print(f"  bucket {bucket:>10,}: {time.time() - t0_warm:.2f}s", flush=True)
+                track_params, key, photonsim_data, n_segments=seg_b)
+            # per_segment mode returns a 4-tuple; block on every leaf so the
+            # JIT trace finishes.
+            for arr in result:
+                arr.block_until_ready()
+            print(f"  rays={rays_b:>6,}  seg={seg_b:>6,}: "
+                  f"{time.time() - t0_warm:.2f}s", flush=True)
 
 
 def _simulate_particles_bucketed(
@@ -1315,17 +1314,16 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
     saved_files = []
     event_times = []  # Track event processing times
 
-    # Warm up the JIT cache once for every bucket size we expect to hit. After
-    # this returns, every per-event kernel call lands on a cached compile and
-    # runs at native cost. ~1 min per bucket on CPU (one-time cost, amortized
-    # over thousands of events). Skipped in legacy mode — there's only one
-    # shape there, so the first event's compile is fine.
+    # Warm up the JIT cache once for every (rays_b, seg_b) bucket pair we
+    # expect to hit. After this returns, every per-event kernel call lands
+    # on a cached compile and runs at native cost. ~10–30s per pair on CPU,
+    # one-time, amortized over thousands of events. Skipped in legacy mode
+    # — only one (n_rays, n_segments) shape there, so first-event compile
+    # suffices.
     if use_bucketing:
         # Production wires hit_mode='per_segment' (run_job.py); per-segment
         # data is unconditional in the post-Stage-5a v3 reader.
-        _warmup_buckets(
-            event_simulator, pad_size_buckets,
-            per_segment_mode=True)
+        _warmup_buckets(event_simulator, pad_size_buckets, _DEFAULT_SEG_BUCKETS)
 
     # Vmap over a particle/segment axis — defined once and reused for both
     # the legacy per-event-vmap path and the optional segment-sensor-map
