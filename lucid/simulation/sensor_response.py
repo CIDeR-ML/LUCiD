@@ -160,6 +160,58 @@ def make_hits_per_segment(
     return measured_charge, measured_time, pe_per_seg, t_per_seg
 
 
+def make_hits_per_photon(
+        flat_weights, flat_indices, flat_times, num_detectors,
+        qe=0.2, qe_corrections=None, rng_key=None, threshold=1e-5, apply_smearing=False,
+        flat_segment_idx=None):
+    """Per-sensor totals PLUS pass-through per-photon arrays for host aggregation.
+
+    Per-sensor outputs (measured_charge, measured_time) are byte-equivalent
+    to make_hits_per_segment — same RNG split, same smearing behaviour. The
+    n_segments-keyed dense scatter is dropped: instead, the per-photon
+    qe_weights / qe_filtered_times / flat_indices / flat_segment_idx arrays
+    are returned to the host, which does the per-(segment, sensor) and
+    per-(particle, sensor) groupbys in numpy.
+
+    Returns
+    -------
+    measured_charge   : (num_detectors,) float32
+    measured_time     : (num_detectors,) float32
+    qe_weights        : (n_rays_bucket,) float32 — 0 for QE-failed photons
+    qe_filtered_times : (n_rays_bucket,) float32 — +inf for QE-failed / non-positive arrivals
+    flat_indices      : (n_rays_bucket,) int32   — per-photon sensor index (pass-through)
+    flat_segment_idx  : (n_rays_bucket,) int32   — per-photon segment index (pass-through)
+    """
+    rng_key, smear_time_key = jax.random.split(rng_key)
+    qe_key, smear_counts_key = jax.random.split(rng_key)
+
+    qe_weights, qe_filtered_times = _qe_roll(
+        flat_weights, flat_indices, flat_times,
+        qe, qe_corrections, qe_key, threshold)
+
+    total_charge = jax.ops.segment_sum(qe_weights, flat_indices, num_segments=num_detectors)
+    detector_mins = jax.ops.segment_min(qe_filtered_times, flat_indices, num_segments=num_detectors)
+
+    nonzero_mask = (total_charge > 1e-10) & (detector_mins > 0) & jnp.isfinite(detector_mins)
+
+    if apply_smearing:
+        measured_time = jnp.where(
+            jnp.any(nonzero_mask),
+            smear_times(detector_mins, key=smear_time_key),
+            0.0,
+        )
+        measured_charge = jnp.where(
+            nonzero_mask,
+            smear_charges_SK_like(total_charge, key=smear_counts_key),
+            0,
+        )
+    else:
+        measured_time = jnp.where(jnp.any(nonzero_mask), detector_mins, 0.0)
+        measured_charge = jnp.where(nonzero_mask, total_charge, 0)
+
+    return measured_charge, measured_time, qe_weights, qe_filtered_times, flat_indices, flat_segment_idx
+
+
 def make_hits_likelihood(
         flat_weights, flat_indices, flat_times, num_detectors,
         qe=0.2, qe_corrections=None, threshold=1e-10):
