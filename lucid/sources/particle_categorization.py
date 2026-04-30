@@ -383,14 +383,16 @@ def derive_meaningful_tracks(
 
     # Per-track segment counts and Cherenkov totals via stable groupby.
     # Tracks appear in seg_tid in track-id-ascending order (PhotonSim's
-    # std::map iteration), so a single pass collects offsets/counts.
+    # std::map iteration), so ``np.unique`` returns sorted ``unique_tids``
+    # with ``first_idx`` already in monotonic order — exactly the group
+    # boundaries ``np.add.reduceat`` consumes. One vectorized pass over
+    # ``seg_nch`` instead of one (n_seg,) bool-mask + sum per unique id.
     unique_tids, first_idx, counts = np.unique(
         seg_tid, return_index=True, return_counts=True)
-    # Per-track sum of Segment_NCherenkov.
-    cher_sum_per_track: Dict[int, int] = {}
-    for tid in unique_tids:
-        mask = seg_tid == tid
-        cher_sum_per_track[int(tid)] = int(seg_nch[mask].sum())
+    cher_sums = np.add.reduceat(seg_nch, first_idx)
+    cher_sum_per_track: Dict[int, int] = {
+        int(tid): int(s) for tid, s in zip(unique_tids.tolist(), cher_sums.tolist())
+    }
 
     # Cherenkov producers — tracks with ≥1 Cherenkov segment.
     producers = {tid for tid, c in cher_sum_per_track.items() if c > 0}

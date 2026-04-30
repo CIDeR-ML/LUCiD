@@ -1267,13 +1267,18 @@ def _derive_views_from_segments(raw, pe_per_seg_raw=None, t_per_seg_raw=None):
     )
 
     # Plumb category / sub_id back into track_info_dict so save_labl_event_v3
-    # (and any other consumer) can read it.
-    for tid, cat in cat_result.category_by_track_id.items():
-        if tid in track_info_dict:
-            track_info_dict[tid]['category'] = int(cat)
-    for tid, sub in cat_result.sub_id_by_track_id.items():
-        if tid in track_info_dict:
-            track_info_dict[tid]['sub_id'] = int(sub)
+    # (and any other consumer) can read it. Iterate once over the category
+    # dict (sub_id is a strict subset) and look up each track once.
+    cat_dict = cat_result.category_by_track_id
+    sub_dict = cat_result.sub_id_by_track_id
+    for tid, cat in cat_dict.items():
+        ti = track_info_dict.get(tid)
+        if ti is None:
+            continue
+        ti['category'] = int(cat)
+        sub = sub_dict.get(tid)
+        if sub is not None:
+            ti['sub_id'] = int(sub)
 
     # ---- Bucket photons → particle ----
     # photon_segment_index is now in *filtered* segment positions; pass
