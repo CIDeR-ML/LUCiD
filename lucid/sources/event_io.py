@@ -1532,36 +1532,17 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
         n_events = num_entries
         print(f"No n_events specified, using all {n_events} entries")
 
-    # Resolve PAD_SIZE strategy. Two paths:
-    #   * pad_size_buckets non-empty -> bucketed kernel calls. JIT-compile each
-    #     bucket size up-front; per-particle photons split into chunks. This
-    #     avoids the file-max-padding waste on small events and caps per-call
-    #     memory at the largest bucket.
-    #   * pad_size_buckets == ()    -> legacy single-PAD_SIZE-from-file-max
-    #     behavior preserved verbatim (one JIT compile, vmap over particles).
-    if pad_size_buckets is None:
+    # Resolve bucket spec. Bucketing is mandatory now — the legacy
+    # file-max single-PAD_SIZE path was removed when categorization
+    # moved downstream of the kernel call (the per-particle vmap that
+    # path relied on no longer exists). An empty/None ``pad_size_buckets``
+    # falls back to ``_DEFAULT_PAD_SIZE_BUCKETS``.
+    if pad_size_buckets is None or not pad_size_buckets:
         pad_size_buckets = _DEFAULT_PAD_SIZE_BUCKETS
     pad_size_buckets = _normalize_buckets(pad_size_buckets)
-    use_bucketing = bool(pad_size_buckets)
-
-    # Always scan the file — useful diagnostic even when bucketing.
-    print(f"Scanning ROOT file to determine optimal PAD_SIZE...")
-    max_photons_in_file = get_max_photons_per_particle(root_file_path, n_events)
-    if use_bucketing:
-        print(f"  Max photons per particle in file: {max_photons_in_file:,}")
-        print(f"  Using PAD_SIZE buckets: {list(pad_size_buckets)}")
-        if max_photons_in_file > pad_size_buckets[-1]:
-            n_chunks_max = -(-max_photons_in_file // pad_size_buckets[-1])  # ceil
-            print(f"  Largest particle ({max_photons_in_file:,}) exceeds max bucket "
-                  f"({pad_size_buckets[-1]:,}); will split into up to {n_chunks_max} "
-                  f"chunks per particle.")
-        # Sentinel kept so legacy code paths that read PAD_SIZE still
-        # compile; the bucketed path doesn't actually use it.
-        PAD_SIZE = pad_size_buckets[-1]
-    else:
-        PAD_SIZE = max_photons_in_file + 1  # +1 for safety margin
-        print(f"  Max photons per particle in file: {max_photons_in_file:,}")
-        print(f"  Using PAD_SIZE: {PAD_SIZE:,}  (legacy mode, pad_size_buckets=[])")
+    use_bucketing = True   # invariant — kept as a named constant for step-8 cleanup
+    print(f"  Using rays buckets: {list(pad_size_buckets)}")
+    print(f"  Using seg  buckets: {list(_DEFAULT_SEG_BUCKETS)}")
 
     print(f"\nGenerating {n_events} events using VMAP-OPTIMIZED particle-based processing...")
     print(f"Using batch size of {batch_size} events for multithreaded I/O")
@@ -1696,262 +1677,112 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
             else:
                 translation_vector = np.zeros(3, dtype=np.float32)
 
-            # Read particle data from PhotonSim
-            print(f"    Reading particle data from ROOT file...", flush=True)
+            # ----------------------------------------------------------------
+            # Phase 1 — read raw event from ROOT (no categorization).
+            # ----------------------------------------------------------------
+            print(f"    Reading raw event from ROOT file...", flush=True)
             _t_root = time.perf_counter()
-            particle_data = read_particle_data_from_photonsim(
-                root_file_path, event_idx)
+            raw = _read_event_raw(root_file_path, event_idx)
             print(f"    [timing] root_read {time.perf_counter() - _t_root:.3f}s", flush=True)
 
+            n_segments_raw = raw['segments_raw']['n_segments']
+            total_photons = int(raw['photon_origins'].shape[0])
+            print(f"    Raw: photons={total_photons:,}  "
+                  f"segments={n_segments_raw:,}", flush=True)
+
+            # Apply vertex translation to the raw photon origins and the raw
+            # segment positions BEFORE tracing, so the kernel sees vertex-
+            # translated photons and the downstream segments dict carries the
+            # translated positions too. The raw segment table stays in mm
+            # (``_derive_views_from_segments`` converts to m), so the
+            # translation_vector (m) is scaled by 1000 here.
+            _t_pre = time.perf_counter()
+            photon_origins_np      = raw['photon_origins'].astype(np.float32, copy=False)
+            photon_directions_np   = raw['photon_directions'].astype(np.float32, copy=False)
+            photon_times_np        = raw['photon_times'].astype(np.float32, copy=False)
+            photon_wavelengths_np  = raw['photon_wavelengths'].astype(np.float32, copy=False)
+            photon_segment_index_raw = np.asarray(raw['photon_segment_index_raw'], dtype=np.int64)
+
+            if apply_translation:
+                photon_origins_np = photon_origins_np + translation_vector[None, :]
+                seg = raw['segments_raw']
+                seg['start_x_mm'] = seg['start_x_mm'] + float(translation_vector[0]) * 1000.0
+                seg['start_y_mm'] = seg['start_y_mm'] + float(translation_vector[1]) * 1000.0
+                seg['start_z_mm'] = seg['start_z_mm'] + float(translation_vector[2]) * 1000.0
+                seg['end_x_mm']   = seg['end_x_mm']   + float(translation_vector[0]) * 1000.0
+                seg['end_y_mm']   = seg['end_y_mm']   + float(translation_vector[1]) * 1000.0
+                seg['end_z_mm']   = seg['end_z_mm']   + float(translation_vector[2]) * 1000.0
+            print(f"    [timing] preprocess {time.perf_counter() - _t_pre:.3f}s", flush=True)
+
+            # ----------------------------------------------------------------
+            # Phase 2 — bucketed trace (one pass per photon, two-axis bucketing).
+            # ----------------------------------------------------------------
+            print(f"    Running bucketed trace "
+                  f"(rays_buckets={list(pad_size_buckets)}, "
+                  f"seg_buckets={list(_DEFAULT_SEG_BUCKETS)})...", flush=True)
+            sim_start_time = time.time()
+            _t_sim = time.perf_counter()
+            pe_per_sensor_np, t_per_sensor_np, pe_per_seg_raw, t_per_seg_raw = \
+                _trace_event_bucketed(
+                    event_simulator,
+                    photon_origins_np, photon_directions_np,
+                    photon_times_np, photon_wavelengths_np,
+                    photon_segment_index_raw, n_segments_raw,
+                    n_sensors, pad_size_buckets, _DEFAULT_SEG_BUCKETS,
+                    master_key,
+                )
+            sim_elapsed = time.time() - sim_start_time
+            print(f"    Simulation completed in {sim_elapsed:.2f}s", flush=True)
+            print(f"    [timing] simulate {time.perf_counter() - _t_sim:.3f}s", flush=True)
+
+            # ----------------------------------------------------------------
+            # Phase 3 — derive views (categorize, filter, slice tensor).
+            # ----------------------------------------------------------------
+            _t_post = time.perf_counter()
+            particle_data = _derive_views_from_segments(
+                raw, pe_per_seg_raw=pe_per_seg_raw, t_per_seg_raw=t_per_seg_raw)
             n_particles = particle_data['n_particles']
             particles = particle_data['particles']
-            all_photon_origins = particle_data['photon_origins']
-            all_photon_directions = particle_data['photon_directions']
-            all_photon_times = particle_data['photon_times']
-            all_photon_wavelengths = particle_data['photon_wavelengths']
-            total_photons = len(all_photon_origins)
-            print(f"    Found {n_particles} particles, {total_photons:,} total photons", flush=True)
+            n_segments = int(particle_data['segments']['n_segments'])
+            pe_per_seg_total = particle_data['pe_per_seg_filtered']
+            t_per_seg_total  = particle_data['t_per_seg_filtered']
 
-            # Short-circuit: dark events (no tracked particles or no photons)
-            # are valid physics — a neutron primary or a sub-Cherenkov-threshold
-            # proton contributes no detectable signal. Skip the JAX simulation
-            # (whose axis-0 min reduction would fail on empty arrays) and
-            # write a zero-filled v3 entry. Downstream save_*_event_v3 writers
-            # are already sparse-safe (n_hits=0 groups are valid).
-            if n_particles == 0 or total_photons == 0:
-                print(f"    Event {event_idx}: dark "
-                      f"(n_particles={n_particles}, total_photons={total_photons}); "
-                      f"writing zero-filled v3 entry.", flush=True)
-                event_number = event_idx
-                # t0 already drawn at top of loop from the seed hierarchy.
-                PE_per_particle = np.zeros((max(n_particles, 0), n_sensors), dtype=np.float32)
-                T_per_particle  = np.zeros((max(n_particles, 0), n_sensors), dtype=np.float32)
-                PE_true = np.zeros(n_sensors, dtype=np.float32)
-                T_true  = np.zeros(n_sensors, dtype=np.float32)
-                PE_reco = PE_true
-                T_reco  = T_true
-                interaction_meta = build_interaction_metadata(
-                    particle_data, t0=t0, vertex_xyz=translation_vector,
-                    source_type_code=source_type_code)
-                primary_to_interaction = {tid: 0
-                                   for tid in interaction_meta['primary_track_ids']}
-                extended_info = {
-                    'n_particles': int(n_particles),
-                    'particles': particles,
-                    'track_info_dict': particle_data.get('track_info_dict', {}),
-                    'primary_to_interaction': primary_to_interaction,
-                    'interaction_metadata': [interaction_meta],
-                    'PE_per_particle': PE_per_particle,
-                    'T_per_particle': T_per_particle,
-                    'PE_reco': PE_reco,
-                    'T_reco': T_reco,
-                    'source': 'PhotonSim_Particles_VMAP',
-                    'source_event_idx': int(event_number),
-                }
-                if 'meaningful_tracks' in particle_data:
-                    extended_info['meaningful_tracks'] = particle_data['meaningful_tracks']
-                    extended_info['segments']        = particle_data['segments']
-                cont = _compute_contained(extended_info, detector_bounds)
-                extended_info['contained_per_segment']     = cont['per_segment']
-                extended_info['contained_per_particle']    = cont['per_particle']
-                extended_info['contained_per_interaction'] = cont['per_interaction']
-                extended_info['contained']                 = cont['overall']
-                batch_data.append(extended_info)
-                batch_indices.append(event_number)
-                event_times.append(time.time() - event_start_time)
-                continue
-
-            # ========================================================================
-            # SHARED UPSTREAM PREPROCESSING (both bucketed and legacy paths)
-            # ========================================================================
-            print(f"    Preprocessing photon data...", flush=True)
-            _t_pre = time.perf_counter()
-
-            default_direction = np.array([0.0, 0.0, 1.0], dtype=np.float32)
-
-            # Data already NumPy in meters; just ensure float32
-            all_photon_origins_np = all_photon_origins.astype(np.float32, copy=False)
-            all_photon_directions_np = all_photon_directions.astype(np.float32, copy=False)
-            all_photon_times_np = all_photon_times.astype(np.float32, copy=False)
-            all_photon_wavelengths_np = all_photon_wavelengths.astype(np.float32, copy=False)
-
-            # Per-photon segment id. Post-Stage-5a, the v3 reader always
-            # emits ``photon_segment_index`` and ``segments``; the legacy
-            # ``realistic`` mode (no segments) is no longer supported by
-            # this writer.
-            all_photon_segment_index_np = None
-            n_segments = 0
-            if 'photon_segment_index' in particle_data and 'segments' in particle_data:
-                n_segments = int(particle_data['segments'].get('n_segments', 0))
-                if n_segments > 0:
-                    all_photon_segment_index_np = np.asarray(
-                        particle_data['photon_segment_index'], dtype=np.int32)
-
-            # Vertex already drawn at top of loop (same value both branches).
-            if apply_translation:
-                all_photon_origins_np += translation_vector[None, :]
-
-                # Apply translation to segment positions
-                if 'segments' in particle_data:
-                    segments = particle_data['segments']
-                    # Segments are in meters; translation_vector is in meters
-                    segments['start_x'] = segments['start_x'] + translation_vector[0]
-                    segments['start_y'] = segments['start_y'] + translation_vector[1]
-                    segments['start_z'] = segments['start_z'] + translation_vector[2]
-                    segments['end_x'] = segments['end_x'] + translation_vector[0]
-                    segments['end_y'] = segments['end_y'] + translation_vector[1]
-                    segments['end_z'] = segments['end_z'] + translation_vector[2]
-
-            if use_bucketing:
-                # ====================================================================
-                # BUCKETED PATH: per-particle / per-chunk kernel calls.
-                # ====================================================================
-                print(f"    [timing] preprocess {time.perf_counter() - _t_pre:.3f}s", flush=True)
-                print(f"    Running bucketed simulation for {n_particles} particles "
-                      f"(buckets={list(pad_size_buckets)})...", flush=True)
-                sim_start_time = time.time()
-                _t_sim = time.perf_counter()
-                (pe_per_sensor_np, t_per_sensor_np,
-                 _track_E_np, _track_pos_np, _track_dir_np,
-                 pe_per_seg_total, t_per_seg_total) = _simulate_particles_bucketed(
-                    event_simulator, particles, particle_data,
-                    all_photon_origins_np, all_photon_directions_np,
-                    all_photon_times_np, all_photon_wavelengths_np,
-                    translation_vector, apply_translation,
-                    master_key, n_sensors, pad_size_buckets,
-                    all_photon_segment_index_np=all_photon_segment_index_np,
-                    n_segments=n_segments,
-                )
-                sim_elapsed = time.time() - sim_start_time
-                print(f"    Simulation completed in {sim_elapsed:.2f}s", flush=True)
-                print(f"    [timing] simulate {time.perf_counter() - _t_sim:.3f}s", flush=True)
-                _t_post = time.perf_counter()
-
-                # inst.h5 (per-particle PE/T) is now a downstream view of
-                # seg/sensor_hits/ via the segment→track→particle map.
-                # Build track_idx_per_segment from meaningful_tracks (the
-                # same way save_seg_event_v3 does), call
-                # derive_particle_idx_per_track, then aggregate.
-                _mt = particle_data.get('meaningful_tracks', {})
-                _track_idx_per_segment = np.empty(n_segments, dtype=np.int32)
-                _off = 0
-                for _local_idx, _tinfo in enumerate(_mt.values()):
-                    _ns = int(_tinfo['n_segments'])
-                    _track_idx_per_segment[_off:_off + _ns] = _local_idx
-                    _off += _ns
-                if _off != n_segments:
-                    raise ValueError(
-                        f"meaningful_tracks segment counts sum to {_off} "
-                        f"!= n_segments {n_segments}")
-                _particle_idx_per_track = derive_particle_idx_per_track({
-                    'meaningful_tracks': _mt, 'particles': particles})
+            # inst.h5 (per-particle PE/T) is a downstream view of seg/sensor_hits
+            # via the segment→track→particle map. Build track_idx_per_segment
+            # from meaningful_tracks (same invariant save_seg_event_v3 uses),
+            # call derive_particle_idx_per_track, then aggregate.
+            _mt = particle_data['meaningful_tracks']
+            _track_idx_per_segment = np.empty(n_segments, dtype=np.int32)
+            _off = 0
+            for _local_idx, _tinfo in enumerate(_mt.values()):
+                _ns = int(_tinfo['n_segments'])
+                _track_idx_per_segment[_off:_off + _ns] = _local_idx
+                _off += _ns
+            if _off != n_segments:
+                raise ValueError(
+                    f"meaningful_tracks segment counts sum to {_off} "
+                    f"!= n_segments {n_segments}")
+            _particle_idx_per_track = derive_particle_idx_per_track({
+                'meaningful_tracks': _mt, 'particles': particles})
+            if pe_per_seg_total is not None and t_per_seg_total is not None:
                 PE_per_particle, T_per_particle = aggregate_inst_from_segments(
                     pe_per_seg_total, t_per_seg_total,
                     _track_idx_per_segment, _particle_idx_per_track,
                     n_particles, n_sensors)
-
-                # PE_true / T_true (per-sensor pre-smearing) come from the
-                # kernel's per-sensor accumulator: includes every photon's
-                # contribution, even orphan-track photons that the
-                # aggregator drops from inst.h5.
-                PE_true = jnp.asarray(pe_per_sensor_np)
-                T_true = jnp.asarray(t_per_sensor_np)
             else:
-                # ====================================================================
-                # LEGACY PATH: file-max PAD_SIZE, vmap over particles.
-                # ====================================================================
-                if all_photon_segment_index_np is not None:
-                    raise NotImplementedError(
-                        "Per-segment data was extracted from the v3 reader "
-                        "but pad_size_buckets=[] selected the legacy "
-                        "single-PAD_SIZE vmap kernel, which does not plumb "
-                        "the per-photon segment id into the simulator. Drop "
-                        "pad_size_buckets=[] from the config to use the "
-                        "bucketed per-segment path.")
-                # Set the segment outputs that the downstream code reads.
-                pe_per_seg_total = None
-                t_per_seg_total = None
-                # Pre-allocate batched arrays
-                batched_origins_np = np.zeros((n_particles, PAD_SIZE, 3), dtype=np.float32)
-                batched_directions_np = np.tile(default_direction, (n_particles, PAD_SIZE, 1))
-                batched_times_np = np.zeros((n_particles, PAD_SIZE), dtype=np.float32)
-                batched_wavelengths_np = np.zeros((n_particles, PAD_SIZE), dtype=np.float32)
+                # Dark event short-circuit (n_segments_raw==0 path): no kernel
+                # output to aggregate. aggregate_inst_from_segments handles
+                # this internally too, but skipping the call avoids needing
+                # well-shaped zero tensors.
+                PE_per_particle = np.zeros((n_particles, n_sensors), dtype=np.float32)
+                T_per_particle  = np.zeros((n_particles, n_sensors), dtype=np.float32)
 
-                # Build track parameters as NumPy arrays (more efficient than lists)
-                N_per_particle_np = np.zeros(n_particles, dtype=np.int32)
-                track_energies_np = np.zeros(n_particles, dtype=np.float32)
-                track_positions_np = np.zeros((n_particles, 3), dtype=np.float32)
-                track_directions_np = np.zeros((n_particles, 3), dtype=np.float32)
-
-                # Process each particle
-                for particle_idx, particle in enumerate(particles):
-                    photon_indices = particle['photon_indices']
-                    N = len(photon_indices)
-                    N_per_particle_np[particle_idx] = N
-
-                    # Extract track parameters
-                    track_info = particle['track_info']
-                    if track_info is not None:
-                        track_energies_np[particle_idx] = track_info['energy']
-                        track_positions_np[particle_idx] = track_info['position']  # already m
-                        track_directions_np[particle_idx] = track_info['direction']
-                    else:
-                        track_energies_np[particle_idx] = particle_data['primary_energy']
-                        track_directions_np[particle_idx] = [0.0, 0.0, 1.0]
-
-                    if apply_translation:
-                        track_positions_np[particle_idx] += translation_vector
-                        if track_info is not None:
-                            track_info['position'] = track_positions_np[particle_idx].copy()
-
-                    # Scatter photons
-                    if N > 0:
-                        batched_origins_np[particle_idx, :N] = all_photon_origins_np[photon_indices]
-                        batched_directions_np[particle_idx, :N] = all_photon_directions_np[photon_indices]
-                        batched_times_np[particle_idx, :N] = all_photon_times_np[photon_indices]
-                        batched_wavelengths_np[particle_idx, :N] = all_photon_wavelengths_np[photon_indices]
-
-                # Efficient transfer to JAX device (avoids unnecessary copies)
-                batched_origins = jax.device_put(batched_origins_np)
-                batched_directions = jax.device_put(batched_directions_np)
-                batched_times = jax.device_put(batched_times_np)
-                batched_wavelengths = jax.device_put(batched_wavelengths_np)
-                N_per_particle_array = jax.device_put(N_per_particle_np)
-                track_energies_array = jax.device_put(track_energies_np)
-                track_positions_array = jax.device_put(track_positions_np)
-                track_directions_array = jax.device_put(track_directions_np)
-
-                print(f"    [timing] preprocess {time.perf_counter() - _t_pre:.3f}s", flush=True)
-
-                # vmap simulation
-                print(f"    Running VMAP simulation for {n_particles} particles...", flush=True)
-                sim_start_time = time.time()
-                _t_sim = time.perf_counter()
-
-                # Generate random keys for all particles
-                particle_keys = jax.random.split(master_key, n_particles)
-
-                # Process all particles in one vectorized call!
-                PE_per_particle, T_per_particle = simulate_all_particles(
-                    track_energies_array,
-                    track_positions_array,
-                    track_directions_array,
-                    batched_origins,
-                    batched_directions,
-                    batched_times,
-                    batched_wavelengths,
-                    N_per_particle_array,
-                    particle_keys
-                )
-                sim_elapsed = time.time() - sim_start_time
-                print(f"    Simulation completed in {sim_elapsed:.2f}s", flush=True)
-                print(f"    [timing] simulate {time.perf_counter() - _t_sim:.3f}s", flush=True)
-                _t_post = time.perf_counter()
-
-                # Legacy path: PE_true/T_true derived from per-particle.
-                PE_true = jnp.sum(PE_per_particle, axis=0)
-                T_true = jnp.min(jnp.where(T_per_particle > 0, T_per_particle, jnp.inf), axis=0)
-                T_true = jnp.where(jnp.isfinite(T_true), T_true, 0.0)
+            # PE_true / T_true (per-sensor pre-smearing) come from the
+            # kernel's per-sensor accumulator: includes every photon's
+            # contribution, even orphan-track photons that the
+            # aggregator drops from inst.h5.
+            PE_true = jnp.asarray(pe_per_sensor_np)
+            T_true  = jnp.asarray(t_per_sensor_np)
 
             # Apply smearing if requested
             if apply_smearing:
