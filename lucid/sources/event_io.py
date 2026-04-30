@@ -2324,7 +2324,7 @@ def generate_events_from_photonsim_pileup(
                 photon_directions_i   = raw['photon_directions'].astype(np.float32, copy=False)
                 photon_times_i        = raw['photon_times'].astype(np.float32, copy=False)
                 photon_wavelengths_i  = raw['photon_wavelengths'].astype(np.float32, copy=False)
-                photon_segment_index_i = np.asarray(raw['photon_segment_index_raw'], dtype=np.int64)
+                photon_segment_index_i = np.asarray(raw['photon_segment_index_raw'], dtype=np.int32)
                 if apply_translation:
                     photon_origins_i = photon_origins_i + vertex_i[None, :]
                     seg_raw_i = raw['segments_raw']
@@ -2336,58 +2336,42 @@ def generate_events_from_photonsim_pileup(
                         seg_raw_i['end_y_mm']   = seg_raw_i['end_y_mm']   + float(vertex_i[1]) * 1000.0
                         seg_raw_i['end_z_mm']   = seg_raw_i['end_z_mm']   + float(vertex_i[2]) * 1000.0
 
-                # Phase 2 — bucketed trace for this vertex.
-                pe_sensor_i, t_sensor_i, pe_per_seg_raw_i, t_per_seg_raw_i = \
+                # Phase 2 — bucketed trace for this vertex (per-photon out).
+                pe_sensor_i, t_sensor_i, qe_w_i, qe_t_i, sen_i_i, seg_i_raw_i = \
                     _trace_event_bucketed(
                         event_simulator,
                         photon_origins_i, photon_directions_i,
                         photon_times_i, photon_wavelengths_i,
-                        photon_segment_index_i, n_segments_raw_i,
-                        n_sensors, rays_buckets, seg_buckets,
+                        photon_segment_index_i,
+                        n_sensors, rays_buckets,
                         event_keys['sim_key'],
                     )
 
-                # Phase 3 — derive views (categorize, filter, slice tensor).
-                particle_data_i = _derive_views_from_segments(
-                    raw, pe_per_seg_raw=pe_per_seg_raw_i,
-                    t_per_seg_raw=t_per_seg_raw_i)
+                # Phase 3 — derive views (categorize, filter, build photon records).
+                particle_data_i = _derive_views_from_segments(raw, photon_records={
+                    'qe_weight':   qe_w_i,
+                    'qe_time':     qe_t_i,
+                    'sensor_idx':  sen_i_i,
+                    'seg_idx_raw': seg_i_raw_i,
+                })
                 n_particles_i = particle_data_i['n_particles']
-                pe_per_seg_filt_i = particle_data_i['pe_per_seg_filtered']
-                t_per_seg_filt_i  = particle_data_i['t_per_seg_filtered']
 
-                # Aggregate per-vertex inst.h5 contributions.
-                _mt_i = particle_data_i['meaningful_tracks']
-                _n_seg_i = int(particle_data_i['segments']['n_segments'])
-                _track_idx_per_segment_i = np.empty(_n_seg_i, dtype=np.int32)
-                _off_i = 0
-                for _local_idx, _tinfo in enumerate(_mt_i.values()):
-                    _ns = int(_tinfo['n_segments'])
-                    _track_idx_per_segment_i[_off_i:_off_i + _ns] = _local_idx
-                    _off_i += _ns
-                if _off_i != _n_seg_i:
-                    raise ValueError(
-                        f"vertex {vidx}: meaningful_tracks segment counts "
-                        f"sum to {_off_i} != n_segments {_n_seg_i}")
-                _particle_idx_per_track_i = derive_particle_idx_per_track({
-                    'meaningful_tracks': _mt_i,
-                    'particles': particle_data_i['particles']})
-                if pe_per_seg_filt_i is not None and t_per_seg_filt_i is not None:
-                    PE_i, T_i = _aggregate_inst_from_segments_jit(
-                        pe_per_seg_filt_i, t_per_seg_filt_i,
-                        _track_idx_per_segment_i, _particle_idx_per_track_i,
-                        n_particles_i, n_sensors,
-                        _DEFAULT_SEG_BUCKETS)
-                else:
-                    PE_i = np.zeros((n_particles_i, n_sensors), dtype=np.float32)
-                    T_i  = np.zeros((n_particles_i, n_sensors), dtype=np.float32)
+                # Phase 4 — host aggregation: per-vertex inst.h5 PE/T + sparse seg.h5 hits.
+                pr_i = particle_data_i['photon_records_filtered']
+                agg_i = _aggregate_from_photon_records(
+                    pr_i['qe_weight'], pr_i['qe_time'], pr_i['sensor_idx'],
+                    pr_i['seg_idx_filtered'], pr_i['particle_idx'],
+                    n_particles=n_particles_i, n_sensors=n_sensors)
+                PE_i      = agg_i['PE_per_particle']
+                T_i       = agg_i['T_per_particle']
+                seg_hits_i = agg_i['segment_sensor_hits']
 
                 # Apply +t0_i to shift simulator output into absolute detector frame.
                 t0_f32 = np.float32(t0_i)
                 np.add(T_i, t0_f32, out=T_i, where=T_i > 0)
-                # Per-segment T (for the merged segment_sensor_hits).
-                if t_per_seg_filt_i is not None:
-                    np.add(t_per_seg_filt_i, t0_f32, out=t_per_seg_filt_i,
-                           where=t_per_seg_filt_i > 0)
+                # seg_hits['T'] is sparse — every entry is a real hit, flat += suffices.
+                if seg_hits_i['T'].size > 0:
+                    seg_hits_i['T'] = seg_hits_i['T'] + t0_f32
                 # Same shift for segment times.
                 if particle_data_i['segments'].get('n_segments', 0) > 0:
                     particle_data_i['segments']['time'] = (
@@ -2400,8 +2384,7 @@ def generate_events_from_photonsim_pileup(
                     'segments':          particle_data_i['segments'],
                     'PE_per_particle':   PE_i,
                     'T_per_particle':    T_i,
-                    'pe_per_seg_filtered': pe_per_seg_filt_i,
-                    't_per_seg_filtered':  t_per_seg_filt_i,
+                    'seg_hits':          seg_hits_i,
                     'interaction_meta':  build_interaction_metadata(
                         particle_data_i, t0=t0_i, vertex_xyz=vertex_i,
                         source_type_code=source_type_code_i),
@@ -2515,33 +2498,35 @@ def _merge_pileup_streams(streams, *, n_sensors, apply_smearing,
         for tid in meta['primary_track_ids']:
             primary_to_interaction[int(tid)] = i
 
-    # Per-vertex segment-decomposition tensors (post-Stage-6 pile-up). Each
-    # stream contributes a (n_seg_v, n_sensors) tile in track-id-ascending
-    # ``meaningful_tracks`` block layout — the same ordering ``segments``
-    # already uses, which is also the order ``save_seg_event_v3`` walks.
+    # Per-vertex sparse seg.h5 hits. Each stream's ``seg_hits`` carries
+    # segment indices that are local to that vertex's filtered segment
+    # table (0..n_seg_v-1); the merged seg.h5 wants global indices into
+    # the concatenated segment table, so each stream's segment_idx is
+    # shifted by the cumulative segment count of preceding streams.
     # Streams' segments are disjoint by construction (track ids were
-    # offset upstream so meaningful_tracks across streams don't overlap),
-    # so concatenation along axis 0 yields the merged
-    # (Σ n_seg_v, n_sensors) tensor without needing a row-wise min.
-    seg_tensor_stream = []
-    t_seg_tensor_stream = []
+    # offset upstream so meaningful_tracks don't overlap across streams),
+    # which mirrors today's `np.concatenate(axis=0)` row-offset semantics.
+    seg_hits_shifted = []
+    seg_offset = 0
     for s in streams:
         all_particles.extend(s['particles'])
         all_tracks.update(s['meaningful_tracks'])
         segs = s['segments']
-        if segs and segs.get('n_segments', 0) > 0:
+        n_seg_v = int(segs.get('n_segments', 0)) if segs else 0
+        if n_seg_v > 0:
             for k in all_segs:
                 all_segs[k].append(np.asarray(segs[k]))
         PE_per_stream.append(s['PE_per_particle'])
         T_per_stream.append(s['T_per_particle'])
-        # Accept either the new (filtered tensor) shape or the legacy shape
-        # that lacks them — fallback emits an empty tile so the merge still
-        # works for callers that haven't migrated.
-        ps = s.get('pe_per_seg_filtered')
-        ts = s.get('t_per_seg_filtered')
-        if ps is not None and ts is not None and ps.shape[0] > 0:
-            seg_tensor_stream.append(ps)
-            t_seg_tensor_stream.append(ts)
+        sh = s.get('seg_hits')
+        if sh is not None and sh['PE'].size > 0:
+            seg_hits_shifted.append({
+                'segment_idx': sh['segment_idx'] + np.int32(seg_offset),
+                'sensor_idx':  sh['sensor_idx'],
+                'PE':          sh['PE'],
+                'T':           sh['T'],
+            })
+        seg_offset += n_seg_v
 
     n_particles_total = len(all_particles)
     PE_per_particle = (np.concatenate(PE_per_stream, axis=0)
@@ -2597,20 +2582,14 @@ def _merge_pileup_streams(streams, *, n_sensors, apply_smearing,
         'T_reco':  T_reco,
     }
 
-    # Merge per-(segment, sensor) tensors across streams and sparsify into
-    # the (segment_idx, sensor_idx, PE, T) layout save_seg_event_v3 writes
-    # to seg/event_NNN/sensor_hits/. Pre-Stage-6 pile-up didn't emit this
-    # at all (the legacy _simulate_vertex_stream skipped per_segment mode),
-    # so this is a behavior fix as well as a refactor.
-    if seg_tensor_stream:
-        pe_per_seg_merged = np.concatenate(seg_tensor_stream, axis=0)
-        t_per_seg_merged  = np.concatenate(t_seg_tensor_stream, axis=0)
-        seg_flat, sen_flat = np.nonzero(pe_per_seg_merged)
+    # Concat the per-vertex sparse seg.h5 triplets (already segment_idx-
+    # shifted into the merged segment table's row space).
+    if seg_hits_shifted:
         merged['segment_sensor_hits'] = {
-            'segment_idx': seg_flat.astype(np.int32),
-            'sensor_idx':  sen_flat.astype(np.uint16),
-            'PE':          pe_per_seg_merged[seg_flat, sen_flat],
-            'T':           t_per_seg_merged[seg_flat, sen_flat],
+            'segment_idx': np.concatenate([d['segment_idx'] for d in seg_hits_shifted]).astype(np.int32),
+            'sensor_idx':  np.concatenate([d['sensor_idx']  for d in seg_hits_shifted]).astype(np.uint16),
+            'PE':          np.concatenate([d['PE']          for d in seg_hits_shifted]).astype(np.float32),
+            'T':           np.concatenate([d['T']           for d in seg_hits_shifted]).astype(np.float32),
         }
 
     # Geometric containment (same derivation as the single-vertex path;
