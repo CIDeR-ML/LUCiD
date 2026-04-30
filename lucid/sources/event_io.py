@@ -430,39 +430,32 @@ def _trace_event_bucketed(
         event_simulator,
         photon_origins_np, photon_directions_np,
         photon_times_np, photon_wavelengths_np,
-        photon_segment_index_raw, n_segments_raw,
-        n_sensors, rays_buckets, seg_buckets,
+        photon_segment_index_raw,
+        n_sensors, rays_buckets,
         master_key):
     """Bucketed propagation for one event — single trace per photon.
 
-    Replaces ``_simulate_particles_bucketed``: drops the per-particle loop
-    (the kernel doesn't use ``ParticleParams`` for propagation; the
-    partition was scaffolding for a per-particle output that's now derived
-    downstream from the per-(segment, sensor) tensor) and quantizes the
-    per-chunk kernel call along **two** axes:
+    Drops the per-particle loop and the per-(segment, sensor) dense
+    output. Per chunk, photons are padded to the smallest fitting
+    ``rays_buckets`` entry and propagated in one kernel call. The kernel
+    returns:
 
-      * ``n_rays_bucket`` — smallest ``rays_buckets`` entry that fits the
-        chunk's photon count. Same chunking logic as before
-        (``_split_into_chunks``).
-      * ``n_seg_bucket`` — smallest ``seg_buckets`` entry that fits the
-        chunk's **local** unique segment count. The chunk's segment ids
-        are remapped to a dense ``[0, k)`` range; the kernel emits a
-        ``(n_seg_bucket, n_sensors)`` tile padded with zero rows; the
-        host scatters the meaningful prefix back into the global
-        ``(n_segments_raw, n_sensors)`` PE/T buffer at the chunk's
-        unique-segment row indices (PE-sum, T-min — same composition rule
-        already used across rays-bucket chunks for per-sensor totals).
+      * per-sensor totals (PE, T) — accumulated across chunks via PE-sum
+        and T-min as today;
+      * per-photon flat arrays (qe_weight, qe_time, sensor_idx,
+        seg_idx_raw) — sliced to the active photon count and concatenated
+        across chunks. The host runs the per-(segment, sensor) and
+        per-(particle, sensor) groupbys downstream
+        (``_aggregate_from_photon_records``).
 
-    The JIT cache key becomes ``(n_rays_bucket, n_seg_bucket)`` — a small
-    finite product covered by ``_warmup_buckets``. Memory per kernel call
-    is bounded by ``n_seg_bucket × n_sensors × 4 × 2`` (PE + T tile),
-    independent of the event's segment total.
+    The JIT cache key is ``n_rays_bucket`` only — 4 entries instead of 16.
+    Memory per kernel call is bounded by
+    ``n_rays_bucket × (4 + 4 + 4 + 4) bytes ≈ 0.5 MB``, independent of the
+    event's segment total.
 
-    RNG: ``chunk_key = jax.random.fold_in(master_key, chunk_idx)`` — keyed
-    by global chunk index across all photons. This differs from the legacy
-    ``fold_in(split(master_key, n_particles)[p_idx], chunk_idx)`` keying,
-    so per-seed bytewise outputs differ from the pre-refactor code (the
-    physics distribution is unchanged — see plan §4).
+    RNG: ``chunk_key = jax.random.fold_in(master_key, chunk_idx)`` — same
+    keying as today, so byte-equivalent (up to float reduction order)
+    given the same master_seed.
 
     Parameters
     ----------
@@ -470,65 +463,57 @@ def _trace_event_bucketed(
         Built by ``setup_event_simulator(..., hit_mode='per_segment')``.
     photon_*_np : np.ndarray
         All-event flat photon arrays (already vertex-translated by caller).
-    photon_segment_index_raw : np.ndarray (int64)
-        ``(N_photons,)`` indices into the **raw** segment table; -1 sentinels
-        for photons whose segment was dropped (shouldn't happen in practice
-        — every Cherenkov-producing track is in the meaningful set, but the
-        kernel handles -1 robustly anyway).
-    n_segments_raw : int
-        Number of rows in the raw segment table for this event.
+    photon_segment_index_raw : np.ndarray (int32 or int64)
+        ``(N_photons,)`` indices into the **raw** segment table; -1
+        sentinels for photons whose segment was dropped.
     n_sensors : int
         Detector sensor count.
-    rays_buckets, seg_buckets : tuple[int, ...]
-        Sorted bucket specs (output of ``_normalize_buckets``).
+    rays_buckets : tuple[int, ...]
+        Sorted bucket spec (output of ``_normalize_buckets``).
     master_key : jax.Array
-        Per-event master RNG key (folded down from the seed hierarchy).
+        Per-event master RNG key.
 
     Returns
     -------
-    pe_per_sensor    : (n_sensors,) float32
-    t_per_sensor     : (n_sensors,) float32  — 0 = no hit
-    pe_per_seg_raw   : (n_segments_raw, n_sensors) float32  — zero rows for
-                       segments no photon referenced (incl. non-Cherenkov)
-    t_per_seg_raw    : (n_segments_raw, n_sensors) float32  — 0 = no hit
+    pe_per_sensor       : (n_sensors,) float32
+    t_per_sensor        : (n_sensors,) float32  — 0 = no hit
+    photon_qe_weight    : (N_photons,) float32  — 0 for QE-failed photons
+    photon_qe_time      : (N_photons,) float32  — +inf for QE-failed / no hit
+    photon_sensor_idx   : (N_photons,) int32
+    photon_seg_idx_raw  : (N_photons,) int32    — -1 for orphan photons
     """
     if not rays_buckets:
         raise ValueError("_trace_event_bucketed requires non-empty rays_buckets")
-    if not seg_buckets:
-        raise ValueError("_trace_event_bucketed requires non-empty seg_buckets")
     rays_buckets = tuple(rays_buckets)
-    seg_buckets = tuple(seg_buckets)
 
     N = int(photon_origins_np.shape[0])
     pe_per_sensor    = np.zeros(n_sensors, dtype=np.float32)
     t_per_sensor_inf = np.full(n_sensors, np.inf, dtype=np.float32)
 
-    # Allocate global per-(segment, sensor) accumulators for this event.
-    # The kernel emits decomposition only for segments referenced by each
-    # chunk's photons; rows that no photon ever touched stay at zero PE
-    # and inf T (later restored to 0 = no hit). For non-Cherenkov-emitting
-    # segments this is exactly the right answer — they contribute geometry
-    # metadata to seg.h5 but no sensor hits.
-    pe_per_seg_raw    = np.zeros((max(n_segments_raw, 0), n_sensors), dtype=np.float32)
-    t_per_seg_raw_inf = np.full((max(n_segments_raw, 0), n_sensors), np.inf, dtype=np.float32)
-
     if N == 0:
-        # Empty event — return zero per-sensor / per-segment results.
-        t_per_sensor = np.zeros(n_sensors, dtype=np.float32)
-        t_per_seg_raw = np.zeros_like(pe_per_seg_raw)
-        return pe_per_sensor, t_per_sensor, pe_per_seg_raw, t_per_seg_raw
+        return (
+            pe_per_sensor,
+            np.zeros(n_sensors, dtype=np.float32),
+            np.empty(0, dtype=np.float32),
+            np.empty(0, dtype=np.float32),
+            np.empty(0, dtype=np.int32),
+            np.empty(0, dtype=np.int32),
+        )
 
     rotation_axis    = jnp.array([1.0, 0.0, 0.0], dtype=jnp.float32)
     zero_translation = jnp.zeros(3, dtype=jnp.float32)
     track_params = _get_zero_track_params()
 
-    # Make sure inputs are float32 / int64 once — the kernel will device_put
-    # the per-chunk slices below.
     po = np.ascontiguousarray(photon_origins_np,    dtype=np.float32)
     pd = np.ascontiguousarray(photon_directions_np, dtype=np.float32)
     pt = np.ascontiguousarray(photon_times_np,      dtype=np.float32)
     pw = np.ascontiguousarray(photon_wavelengths_np, dtype=np.float32)
-    psi = np.ascontiguousarray(photon_segment_index_raw, dtype=np.int64)
+    psi = np.ascontiguousarray(photon_segment_index_raw, dtype=np.int32)
+
+    qe_w_chunks  = []
+    qe_t_chunks  = []
+    sen_i_chunks = []
+    seg_i_chunks = []
 
     chunks = _split_into_chunks(N, rays_buckets)
     offset = 0
@@ -536,10 +521,9 @@ def _trace_event_bucketed(
         n_in_chunk = min(bucket_size, N - offset)
         sl = slice(offset, offset + n_in_chunk)
 
-        # --- Build the rays-bucket-padded per-chunk arrays ---
         bo = np.zeros((bucket_size, 3), dtype=np.float32)
         bd = np.zeros((bucket_size, 3), dtype=np.float32)
-        bd[:] = (0.0, 0.0, 1.0)  # default direction for padding slots
+        bd[:] = (0.0, 0.0, 1.0)
         bt = np.zeros(bucket_size, dtype=np.float32)
         bw = np.zeros(bucket_size, dtype=np.float32)
         bo[:n_in_chunk] = po[sl]
@@ -547,33 +531,8 @@ def _trace_event_bucketed(
         bt[:n_in_chunk] = pt[sl]
         bw[:n_in_chunk] = pw[sl]
 
-        # --- Local segment remap for this chunk ---
-        # Photons in this chunk reference some subset of the event's raw
-        # segment ids; remap to a dense [0, n_local) range so the kernel's
-        # n_segments static arg can be quantized to a small bucket spec.
-        seg_chunk = psi[sl]                         # (n_in_chunk,) int64
-        valid_mask = seg_chunk >= 0
-        if valid_mask.any():
-            unique_segs = np.unique(seg_chunk[valid_mask])
-            # searchsorted gives the local id (0..n_local-1) for each global
-            # id; -1 photons fall through to the sentinel below.
-            local_ids = np.searchsorted(unique_segs, seg_chunk).astype(np.int32)
-            local_ids = np.where(valid_mask, local_ids, np.int32(-1))
-            n_local = int(unique_segs.shape[0])
-        else:
-            unique_segs = np.empty(0, dtype=np.int64)
-            local_ids = np.full(n_in_chunk, -1, dtype=np.int32)
-            n_local = 0
-
-        # Pad the segment-id array with sentinels for the unused rays slots.
         bs = np.full(bucket_size, -1, dtype=np.int32)
-        bs[:n_in_chunk] = local_ids
-
-        # Pick the smallest seg-bucket that holds the local n_segments. When
-        # n_local==0 we still need a positive bucket size so the kernel can
-        # build the (n_seg_bucket+1, n_sensors) decomposition tile (it'll
-        # be all zeros — no real photon contributes a segment row).
-        n_seg_bucket = _pick_bucket(max(n_local, 1), seg_buckets)
+        bs[:n_in_chunk] = psi[sl]
 
         photonsim_data = {
             'photon_origins':    jax.device_put(bo),
@@ -590,11 +549,9 @@ def _trace_event_bucketed(
         }
 
         chunk_key = jax.random.fold_in(master_key, chunk_idx)
-        PE_chunk, T_chunk, pe_seg_chunk, t_seg_chunk = event_simulator(
-            track_params, chunk_key, photonsim_data, n_segments=n_seg_bucket)
+        PE_chunk, T_chunk, qe_w_chunk, qe_t_chunk, sen_i_chunk, seg_i_chunk = (
+            event_simulator(track_params, chunk_key, photonsim_data))
 
-        # Block + transfer to host so we can aggregate across chunks
-        # without keeping device buffers alive.
         PE_chunk_np = np.asarray(PE_chunk, dtype=np.float32)
         T_chunk_np  = np.asarray(T_chunk,  dtype=np.float32)
         pe_per_sensor += PE_chunk_np
@@ -603,27 +560,26 @@ def _trace_event_bucketed(
             np.where(T_chunk_np > 0, T_chunk_np, np.inf),
         )
 
-        # Scatter the meaningful prefix of the segment tile back into the
-        # global per-event buffer at the chunk's unique-segment indices.
-        if n_local > 0:
-            pe_seg_chunk_np = np.asarray(pe_seg_chunk, dtype=np.float32)
-            t_seg_chunk_np  = np.asarray(t_seg_chunk,  dtype=np.float32)
-            # Only the first n_local rows carry real data; the kernel pads
-            # the remaining rows of the n_seg_bucket-sized tile with zeros
-            # (no photon was ever routed to a local id >= n_local).
-            pe_per_seg_raw[unique_segs] += pe_seg_chunk_np[:n_local]
-            t_per_seg_raw_inf[unique_segs] = np.minimum(
-                t_per_seg_raw_inf[unique_segs],
-                np.where(t_seg_chunk_np[:n_local] > 0,
-                         t_seg_chunk_np[:n_local], np.inf),
-            )
+        # Slice per-photon arrays to the chunk's active photon count
+        # (drop bucket padding — those slots have qe_weight=0 from the
+        # kernel's mask-driven QE roll, but truncating keeps the host's
+        # photon-id alignment to the input.).
+        qe_w_chunks.append(np.asarray(qe_w_chunk, dtype=np.float32)[:n_in_chunk])
+        qe_t_chunks.append(np.asarray(qe_t_chunk, dtype=np.float32)[:n_in_chunk])
+        sen_i_chunks.append(np.asarray(sen_i_chunk, dtype=np.int32)[:n_in_chunk])
+        seg_i_chunks.append(np.asarray(seg_i_chunk, dtype=np.int32)[:n_in_chunk])
 
         offset += n_in_chunk
 
-    # Restore "no hit = 0" sentinel.
-    t_per_sensor  = np.where(np.isfinite(t_per_sensor_inf), t_per_sensor_inf, 0.0)
-    t_per_seg_raw = np.where(np.isfinite(t_per_seg_raw_inf), t_per_seg_raw_inf, 0.0)
-    return pe_per_sensor, t_per_sensor, pe_per_seg_raw, t_per_seg_raw
+    t_per_sensor = np.where(np.isfinite(t_per_sensor_inf), t_per_sensor_inf, 0.0)
+    photon_qe_weight   = np.concatenate(qe_w_chunks)
+    photon_qe_time     = np.concatenate(qe_t_chunks)
+    photon_sensor_idx  = np.concatenate(sen_i_chunks)
+    photon_seg_idx_raw = np.concatenate(seg_i_chunks)
+
+    return (pe_per_sensor, t_per_sensor,
+            photon_qe_weight, photon_qe_time,
+            photon_sensor_idx, photon_seg_idx_raw)
 
 
 def _read_photons_for_event(raw_tree, event_idx):
