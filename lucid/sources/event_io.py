@@ -1171,32 +1171,35 @@ def _read_event_raw(root_file_path, entry_index):
     }
 
 
-def _derive_views_from_segments(raw, pe_per_seg_raw=None, t_per_seg_raw=None):
+def _derive_views_from_segments(raw, photon_records=None):
     """Categorize, filter, and assemble the downstream-view dict.
 
     This is the post-kernel half of the legacy ``read_particle_data_from_photonsim``.
     Runs the four pure helpers from ``particle_categorization.py`` plus
     ``segment_grouping.assign_group_ids`` on the raw read output, and (if
-    the kernel's per-segment output was supplied) slices the raw per-
-    ``(segment, sensor)`` PE/T tensors to the meaningful-segment subset
-    that matches today's ``seg.h5`` layout.
+    the kernel's per-photon flat lists were supplied) builds the
+    ``photon_records_filtered`` dict that the downstream host aggregator
+    consumes.
 
     Parameters
     ----------
     raw : dict
         Output of :func:`_read_event_raw`.
-    pe_per_seg_raw, t_per_seg_raw : np.ndarray or None
-        Optional ``(n_segments_raw, n_sensors)`` float32 tensors emitted
-        by the bucketed kernel. When provided, the same ``keep_mask`` that
-        filters the segment table is applied to their first axis to yield
-        ``pe_per_seg_filtered`` / ``t_per_seg_filtered``. Pass ``None`` for
-        dark events (no kernel call).
+    photon_records : dict or None
+        Optional dict with keys ``qe_weight`` (N_photons,) float32,
+        ``qe_time`` (N_photons,) float32, ``sensor_idx`` (N_photons,)
+        int32, ``seg_idx_raw`` (N_photons,) int32 — the per-photon flat
+        lists emitted by :func:`_trace_event_bucketed`. When provided,
+        the function attaches a ``photon_records_filtered`` entry with
+        the same fields plus ``seg_idx_filtered`` (raw→filtered remap)
+        and ``particle_idx`` (filtered-track → categorized particle).
+        Pass ``None`` for dark events (no kernel call).
 
     Returns
     -------
     dict — same shape as the legacy ``read_particle_data_from_photonsim``
-    output, plus ``pe_per_seg_filtered`` / ``t_per_seg_filtered`` (each
-    ``None`` when their input was ``None``).
+    output, plus ``photon_records_filtered`` (``None`` when no records
+    were supplied).
     """
     track_info_dict = raw['track_info_dict']
     seg_track_id_full   = raw['segments_raw']['track_id']
@@ -1366,18 +1369,22 @@ def _derive_views_from_segments(raw, pe_per_seg_raw=None, t_per_seg_raw=None):
     assert len(segments['group_id']) == edep_len, (
         f"group_id length {len(segments['group_id'])} != Segment_Edep {edep_len}")
 
-    # ---- Slice per-(segment, sensor) PE/T tensors to filtered positions ----
-    # The kernel emitted the decomposition over the **raw** segment table; the
-    # writers consume only the meaningful-segment subset, so the same
-    # ``keep_mask`` that built ``segments`` selects the rows we keep here.
-    if pe_per_seg_raw is not None:
-        pe_per_seg_filtered = pe_per_seg_raw[keep_mask]
+    # ---- Build photon_records_filtered for the host aggregator ----
+    # ``filter_segments_to_meaningful`` already produced ``photon_segment_index``
+    # in the **filtered** segment space; ``bucket_photons_by_segment`` already
+    # gave us the per-photon particle index. Both arrays carry the -1
+    # sentinel for orphans, which is what the host aggregator's QE-pass
+    # mask needs.
+    if photon_records is not None:
+        photon_records_filtered = {
+            'qe_weight':        photon_records['qe_weight'],
+            'qe_time':          photon_records['qe_time'],
+            'sensor_idx':       photon_records['sensor_idx'],
+            'seg_idx_filtered': photon_segment_index.astype(np.int32, copy=False),
+            'particle_idx':     photon_to_particle.astype(np.int32, copy=False),
+        }
     else:
-        pe_per_seg_filtered = None
-    if t_per_seg_raw is not None:
-        t_per_seg_filtered = t_per_seg_raw[keep_mask]
-    else:
-        t_per_seg_filtered = None
+        photon_records_filtered = None
 
     return {
         'n_particles':         n_particles,
@@ -1391,8 +1398,7 @@ def _derive_views_from_segments(raw, pe_per_seg_raw=None, t_per_seg_raw=None):
         'track_info_dict':     track_info_dict,
         'meaningful_tracks':   meaningful_tracks,
         'segments':            segments,
-        'pe_per_seg_filtered': pe_per_seg_filtered,
-        't_per_seg_filtered':  t_per_seg_filtered,
+        'photon_records_filtered': photon_records_filtered,
         # GENIE provenance — pass through.
         'rootracker_entry_id':  raw['rootracker_entry_id'],
         'neutrino_pdg':         raw['neutrino_pdg'],
@@ -1411,7 +1417,8 @@ def read_particle_data_from_photonsim(root_file_path, entry_index):
     flow downstream.
     """
     raw = _read_event_raw(root_file_path, entry_index)
-    return _derive_views_from_segments(raw, pe_per_seg_raw=None, t_per_seg_raw=None)
+    return _derive_views_from_segments(raw, photon_records=None)
+
 
 def generate_events_from_photonsim_particles(event_simulator, root_file_path,
                                              sensor_positions, output_dir=None,
