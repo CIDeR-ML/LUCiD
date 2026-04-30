@@ -3910,6 +3910,106 @@ def _aggregate_inst_from_segments_jit(pe_per_seg, t_per_seg,
     return PE_pp, T_pp
 
 
+def _aggregate_from_photon_records(
+        photon_qe_weight,
+        photon_qe_time,
+        photon_sensor_idx,
+        photon_seg_idx_filtered,
+        photon_particle_idx,
+        n_particles, n_sensors):
+    """One-pass host aggregation from per-photon flat lists.
+
+    Replaces the dense ``(n_segments, n_sensors)`` PE/T tensors plus the
+    JIT inst aggregator plus the ``np.nonzero(PE_seg)`` sparsifier with a
+    single numpy lexsort+reduceat pass. Two groupbys, both keyed by
+    ``(group, sensor_idx)``:
+
+      * ``(particle_idx, sensor_idx)`` → dense ``(n_particles, n_sensors)``
+        ``PE_per_particle`` and ``T_per_particle`` for inst.h5;
+      * ``(seg_idx_filtered, sensor_idx)`` → sparse triplets
+        ``{segment_idx, sensor_idx, PE, T}`` for seg.h5
+        (``segment_sensor_hits``).
+
+    PE per group is the sum of QE-passing photon weights; T per group is
+    the min of unsmeared QE-filtered arrival times. ``qe_weight > 0`` is
+    the QE-pass mask (failed photons have weight 0 and time +inf from
+    ``_qe_roll``). Orphans (``-1``) drop out.
+
+    Returns
+    -------
+    dict with keys 'PE_per_particle', 'T_per_particle',
+    'segment_sensor_hits' (the latter is ``{'segment_idx', 'sensor_idx',
+    'PE', 'T'}`` arrays). When no QE-passing photon points at a given
+    group axis, returns zero-filled / empty outputs respectively.
+    """
+    PE_pp = np.zeros((n_particles, n_sensors), dtype=np.float32)
+    T_pp  = np.zeros((n_particles, n_sensors), dtype=np.float32)
+    seg_hits = {
+        'segment_idx': np.empty(0, dtype=np.int32),
+        'sensor_idx':  np.empty(0, dtype=np.uint16),
+        'PE':          np.empty(0, dtype=np.float32),
+        'T':           np.empty(0, dtype=np.float32),
+    }
+
+    if photon_qe_weight.size == 0:
+        return {'PE_per_particle': PE_pp, 'T_per_particle': T_pp,
+                'segment_sensor_hits': seg_hits}
+
+    qe_pass = photon_qe_weight > 0
+
+    # ---- inst.h5: groupby (particle_idx, sensor_idx) ----
+    p_mask = qe_pass & (photon_particle_idx >= 0)
+    if n_particles > 0 and p_mask.any():
+        pi = photon_particle_idx[p_mask].astype(np.int64)
+        si = photon_sensor_idx[p_mask].astype(np.int64)
+        w  = photon_qe_weight[p_mask]
+        t  = photon_qe_time[p_mask]
+        # Lexsort by (pi, si) — primary pi, secondary si.
+        order = np.lexsort((si, pi))
+        pi_s = pi[order]; si_s = si[order]
+        w_s  = w[order];  t_s  = t[order]
+        composite = pi_s * np.int64(n_sensors) + si_s
+        change = np.empty(composite.size, dtype=bool)
+        change[0] = True
+        change[1:] = composite[1:] != composite[:-1]
+        starts = np.flatnonzero(change)
+        PE_groups = np.add.reduceat(w_s, starts)
+        T_groups  = np.minimum.reduceat(t_s, starts)
+        gp = pi_s[starts]; gs = si_s[starts]
+        PE_pp[gp, gs] = PE_groups
+        # Drop +inf cells back to 0 (no QE-passing photon).
+        finite = np.isfinite(T_groups)
+        if finite.any():
+            T_pp[gp[finite], gs[finite]] = T_groups[finite]
+
+    # ---- seg.h5 sparse triplets: groupby (seg_idx_filtered, sensor_idx) ----
+    s_mask = qe_pass & (photon_seg_idx_filtered >= 0)
+    if s_mask.any():
+        seg = photon_seg_idx_filtered[s_mask].astype(np.int64)
+        si  = photon_sensor_idx[s_mask].astype(np.int64)
+        w   = photon_qe_weight[s_mask]
+        t   = photon_qe_time[s_mask]
+        order = np.lexsort((si, seg))
+        seg_s = seg[order]; si_s = si[order]
+        w_s   = w[order];   t_s  = t[order]
+        composite = seg_s * np.int64(n_sensors) + si_s
+        change = np.empty(composite.size, dtype=bool)
+        change[0] = True
+        change[1:] = composite[1:] != composite[:-1]
+        starts = np.flatnonzero(change)
+        PE_g = np.add.reduceat(w_s, starts).astype(np.float32)
+        T_g  = np.minimum.reduceat(t_s, starts).astype(np.float32)
+        seg_hits = {
+            'segment_idx': seg_s[starts].astype(np.int32),
+            'sensor_idx':  si_s[starts].astype(np.uint16),
+            'PE':          PE_g,
+            'T':           T_g,
+        }
+
+    return {'PE_per_particle': PE_pp, 'T_per_particle': T_pp,
+            'segment_sensor_hits': seg_hits}
+
+
 def aggregate_inst_from_segments(pe_per_seg, t_per_seg,
                                   track_idx_per_segment,
                                   particle_idx_per_track,

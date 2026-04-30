@@ -40,7 +40,10 @@ import h5py
 import numpy as np
 import pytest
 
-from lucid.sources.event_io import aggregate_inst_from_segments
+from lucid.sources.event_io import (
+    aggregate_inst_from_segments,
+    _aggregate_from_photon_records,
+)
 
 
 def test_aggregator_matches_oracle():
@@ -123,6 +126,81 @@ def test_aggregator_handles_empty_inputs():
         np.array([0], dtype=np.int32),
         n_particles=0, n_sensors=n_sensors)
     assert PE_pp.shape == (0, n_sensors)
+
+
+def test_aggregator_from_photon_records_matches_oracle():
+    """Synthetic per-photon aggregation: 5 photons → 2 segments → 2 particles.
+
+    Verifies that ``_aggregate_from_photon_records`` produces the same
+    inst.h5 PE/T tensors as the dense oracle and emits the expected
+    seg.h5 sparse triplets.
+    """
+    n_sensors = 2
+    n_particles = 2
+    # 5 photons.
+    # P0: seg 0, sensor 0, weight 1.0, time 10  (QE-pass) → particle 0
+    # P1: seg 0, sensor 1, weight 2.0, time  5  (QE-pass) → particle 0
+    # P2: seg 1, sensor 0, weight 3.0, time 20  (QE-pass) → particle 1
+    # P3: seg 1, sensor 1, weight 0.0, time inf (QE-fail) → particle 1 (drops)
+    # P4: orphan (seg=-1, particle=-1), weight 0.5 (QE-pass) → drops from both
+    photon_qe_weight        = np.array([1.0, 2.0, 3.0, 0.0, 0.5], dtype=np.float32)
+    photon_qe_time          = np.array([10.0, 5.0, 20.0, np.inf, 15.0], dtype=np.float32)
+    photon_sensor_idx       = np.array([0, 1, 0, 1, 0], dtype=np.int32)
+    photon_seg_idx_filtered = np.array([0, 0, 1, 1, -1], dtype=np.int32)
+    photon_particle_idx     = np.array([0, 0, 1, 1, -1], dtype=np.int32)
+
+    out = _aggregate_from_photon_records(
+        photon_qe_weight, photon_qe_time, photon_sensor_idx,
+        photon_seg_idx_filtered, photon_particle_idx,
+        n_particles=n_particles, n_sensors=n_sensors)
+
+    expected_PE = np.array([
+        [1.0, 2.0],   # particle 0: P0 + P1
+        [3.0, 0.0],   # particle 1: P2; P3 failed QE
+    ], dtype=np.float32)
+    expected_T = np.array([
+        [10.0, 5.0],
+        [20.0, 0.0],   # 0 = no hit
+    ], dtype=np.float32)
+    np.testing.assert_array_equal(out['PE_per_particle'], expected_PE)
+    np.testing.assert_array_equal(out['T_per_particle'], expected_T)
+
+    sh = out['segment_sensor_hits']
+    # Expected triplet rows in (seg, sensor) lex order.
+    np.testing.assert_array_equal(sh['segment_idx'], np.array([0, 0, 1], dtype=np.int32))
+    np.testing.assert_array_equal(sh['sensor_idx'],  np.array([0, 1, 0], dtype=np.uint16))
+    np.testing.assert_array_equal(sh['PE'],          np.array([1.0, 2.0, 3.0], dtype=np.float32))
+    np.testing.assert_array_equal(sh['T'],           np.array([10.0, 5.0, 20.0], dtype=np.float32))
+
+
+def test_aggregator_from_photon_records_handles_empty():
+    out = _aggregate_from_photon_records(
+        np.empty(0, dtype=np.float32),
+        np.empty(0, dtype=np.float32),
+        np.empty(0, dtype=np.int32),
+        np.empty(0, dtype=np.int32),
+        np.empty(0, dtype=np.int32),
+        n_particles=3, n_sensors=4)
+    assert out['PE_per_particle'].shape == (3, 4)
+    np.testing.assert_array_equal(out['PE_per_particle'], 0.0)
+    np.testing.assert_array_equal(out['T_per_particle'],  0.0)
+    assert out['segment_sensor_hits']['segment_idx'].size == 0
+
+
+def test_aggregator_from_photon_records_sums_within_group():
+    """Two photons hitting the same (segment, sensor) sum their PE; T = min."""
+    out = _aggregate_from_photon_records(
+        np.array([1.5, 2.5], dtype=np.float32),         # weights
+        np.array([20.0, 8.0], dtype=np.float32),        # times — second photon arrives earlier
+        np.array([0, 0], dtype=np.int32),               # both sensor 0
+        np.array([0, 0], dtype=np.int32),               # both segment 0
+        np.array([0, 0], dtype=np.int32),               # both particle 0
+        n_particles=1, n_sensors=1)
+    np.testing.assert_array_equal(out['PE_per_particle'], np.array([[4.0]], dtype=np.float32))
+    np.testing.assert_array_equal(out['T_per_particle'],  np.array([[8.0]], dtype=np.float32))
+    sh = out['segment_sensor_hits']
+    np.testing.assert_array_equal(sh['PE'], np.array([4.0], dtype=np.float32))
+    np.testing.assert_array_equal(sh['T'],  np.array([8.0], dtype=np.float32))
 
 
 _DATASET_ENV = 'LUCID_INST_FROM_SEG_DATASET'
