@@ -161,31 +161,24 @@ def _split_into_chunks(n, buckets):
     return chunks
 
 
-def _warmup_buckets(event_simulator, rays_buckets, seg_buckets, n_sensors=None):
-    """Trigger one JIT compile per (n_rays_bucket, n_seg_bucket) pair.
+def _warmup_buckets(event_simulator, rays_buckets):
+    """Trigger one JIT compile per ``n_rays_bucket`` (4 entries on default spec).
 
-    Runs the simulator once per (rays_b, seg_b) combination with throwaway
-    zero-filled photons (N=0, so no real propagation work) and blocks on
-    the result. After this returns, every real-event kernel call whose
-    static args land on one of the warmed pairs hits the JIT cache and
-    runs at native kernel cost. The Cartesian product has
-    ``len(rays_buckets) × len(seg_buckets)`` entries (default 4×4 = 16);
-    each compile is ~10–30 s on CPU.
+    Runs the simulator once per bucket with throwaway zero-filled photons
+    (``N=0``, so no real propagation work) and blocks on the result. After
+    this returns, every real-event kernel call whose ``n_rays`` matches
+    one of the warmed buckets hits the JIT cache and runs at native
+    kernel cost. Each compile is ~10–30 s on CPU; total warmup ~80–120 s
+    on the default 4-bucket spec.
 
-    When ``n_sensors`` is provided, additionally pre-compiles
-    :func:`_jit_aggregate_inst_kernel` once per seg bucket — same cache
-    semantics, ~5 s per bucket on CPU. Without this, the first event of a
-    run pays the aggregator compile cost in its post_jax timing.
-
-    Both ``rays_buckets`` and ``seg_buckets`` are sorted tuples produced by
-    ``_normalize_buckets``. An empty/falsy spec on either axis disables
-    warmup (kernel still works, just pays compile cost on first hit).
+    The host-side aggregator (``_aggregate_from_photon_records``) is
+    pure numpy and has no JIT step, so no separate aggregator warmup is
+    needed.
     """
-    if not rays_buckets or not seg_buckets:
+    if not rays_buckets:
         return
     from lucid.detector_params import ParticleParams
-    n_pairs = len(rays_buckets) * len(seg_buckets)
-    print(f"Warming up JIT cache for {n_pairs} (rays × seg) bucket pair(s)...")
+    print(f"Warming up JIT cache for {len(rays_buckets)} rays bucket(s)...")
     track_params = ParticleParams.from_cartesian(
         energy=jnp.float32(800.0),
         position=jnp.zeros(3, dtype=jnp.float32),
@@ -196,49 +189,26 @@ def _warmup_buckets(event_simulator, rays_buckets, seg_buckets, n_sensors=None):
     translation_vector = jnp.zeros(3, dtype=jnp.float32)
     default_dir = jnp.array([0.0, 0.0, 1.0], dtype=jnp.float32)
     for rays_b in rays_buckets:
-        for seg_b in seg_buckets:
-            t0_warm = time.time()
-            photonsim_data = {
-                'photon_origins':    jnp.zeros((rays_b, 3), dtype=jnp.float32),
-                'photon_directions': jnp.tile(default_dir, (rays_b, 1)),
-                'photon_times':      jnp.zeros(rays_b, dtype=jnp.float32),
-                'wavelengths':       jnp.zeros(rays_b, dtype=jnp.float32),
-                'N': jnp.int32(0),
-                'apply_rotation': False,
-                'rotation_axis': rotation_axis,
-                'rotation_angle': 0.0,
-                'apply_translation': False,
-                'translation_vector': translation_vector,
-                'photon_segment_index': jnp.full(rays_b, -1, dtype=jnp.int32),
-            }
-            key = jax.random.PRNGKey(0)
-            result = event_simulator(
-                track_params, key, photonsim_data, n_segments=seg_b)
-            # per_segment mode returns a 4-tuple; block on every leaf so the
-            # JIT trace finishes.
-            for arr in result:
-                arr.block_until_ready()
-            print(f"  rays={rays_b:>6,}  seg={seg_b:>6,}: "
-                  f"{time.time() - t0_warm:.2f}s", flush=True)
-
-    # Aggregator JIT warmup — one compile per seg bucket. Independent of
-    # rays_b. Skipped if n_sensors isn't known yet (e.g., legacy paths).
-    if n_sensors is not None:
-        print(f"Warming up aggregator JIT cache for {len(seg_buckets)} "
-              f"seg bucket(s)...")
-        # Sentinel-padded tracks: every track is "padding" (orphan), which
-        # makes the kernel zero-output but exercises the full compile path.
-        agg_pidx = jnp.full(_AGG_N_TRACKS_MAX, -1, dtype=jnp.int32)
-        for seg_b in seg_buckets:
-            t0_warm = time.time()
-            agg_pe   = jnp.zeros((seg_b, n_sensors), dtype=jnp.float32)
-            agg_t    = jnp.zeros((seg_b, n_sensors), dtype=jnp.float32)
-            agg_tidx = jnp.full(seg_b, _AGG_N_TRACKS_MAX - 1, dtype=jnp.int32)
-            PE_pp_jax, T_pp_jax = _jit_aggregate_inst_kernel(
-                agg_pe, agg_t, agg_tidx, agg_pidx, _AGG_N_PARTICLES_MAX)
-            PE_pp_jax.block_until_ready()
-            T_pp_jax.block_until_ready()
-            print(f"  agg seg={seg_b:>6,}: {time.time() - t0_warm:.2f}s", flush=True)
+        t0_warm = time.time()
+        photonsim_data = {
+            'photon_origins':    jnp.zeros((rays_b, 3), dtype=jnp.float32),
+            'photon_directions': jnp.tile(default_dir, (rays_b, 1)),
+            'photon_times':      jnp.zeros(rays_b, dtype=jnp.float32),
+            'wavelengths':       jnp.zeros(rays_b, dtype=jnp.float32),
+            'N': jnp.int32(0),
+            'apply_rotation': False,
+            'rotation_axis': rotation_axis,
+            'rotation_angle': 0.0,
+            'apply_translation': False,
+            'translation_vector': translation_vector,
+            'photon_segment_index': jnp.full(rays_b, -1, dtype=jnp.int32),
+        }
+        key = jax.random.PRNGKey(0)
+        result = event_simulator(track_params, key, photonsim_data)
+        # Block on every leaf so the JIT trace finishes.
+        for arr in result:
+            arr.block_until_ready()
+        print(f"  rays={rays_b:>6,}: {time.time() - t0_warm:.2f}s", flush=True)
 
 
 def _simulate_particles_bucketed(
@@ -1605,10 +1575,7 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
     # — only one (n_rays, n_segments) shape there, so first-event compile
     # suffices.
     if use_bucketing:
-        # Production wires hit_mode='per_segment' (run_job.py); per-segment
-        # data is unconditional in the post-Stage-5a v3 reader.
-        _warmup_buckets(event_simulator, pad_size_buckets, _DEFAULT_SEG_BUCKETS,
-                        n_sensors=n_sensors)
+        _warmup_buckets(event_simulator, pad_size_buckets)
 
     # Vmap over a particle/segment axis — defined once and reused for both
     # the legacy per-event-vmap path and the optional segment-sensor-map
@@ -2236,19 +2203,14 @@ def generate_events_from_photonsim_pileup(
     print(f"Per-vertex ROOT entries: {per_file_counts}; "
           f"merging {n_events} events.")
 
-    # Bucket spec — same as the single-vertex driver. Bucketing is mandatory
-    # (the legacy file-max vmap path was removed when categorization moved
-    # downstream of the kernel call).
+    # Bucket spec — same as the single-vertex driver. Single axis (rays)
+    # since the host aggregator runs on per-photon flat lists in numpy.
     rays_buckets = _normalize_buckets(_DEFAULT_PAD_SIZE_BUCKETS)
-    seg_buckets  = _normalize_buckets(_DEFAULT_SEG_BUCKETS)
     print(f"Pile-up rays buckets: {list(rays_buckets)}")
-    print(f"Pile-up seg  buckets: {list(seg_buckets)}")
 
-    # Warm up the JIT cache once for every (rays_b × seg_b) pair before the
-    # per-event / per-vertex loop. Same warmup the single-vertex path does
-    # — pile-up shares the same compiled kernel and the same aggregator.
-    _warmup_buckets(event_simulator, rays_buckets, seg_buckets,
-                    n_sensors=n_sensors)
+    # Warm up the JIT cache once per rays bucket before the per-event /
+    # per-vertex loop. Pile-up shares the same compiled kernel.
+    _warmup_buckets(event_simulator, rays_buckets)
 
     # Detector bounds for vertex sampling + containment (same as non-pile-up).
     detector_bounds = None
