@@ -802,47 +802,34 @@ def read_photon_data_from_photonsim(root_file_path, entry_index):
 
     return result
 
-def read_particle_data_from_photonsim(root_file_path, entry_index):
-    """
-    Read particle-based photon data from a PhotonSim ROOT file for a specific entry.
+def _read_event_raw(root_file_path, entry_index):
+    """Read one PhotonSim event from ROOT into a raw dict — no categorization.
 
-    Post-Stage-5a, PhotonSim emits only raw G4 outputs — every track in
-    ``TrackInfo_*``, every G4 sub-step in ``Segment_*`` (with inline
-    ``Segment_TrackID``), and unconditional ``Photon_SegmentIndex``.
-    The categorization that used to happen in C++ (``Particle_*`` /
-    ``MTrack_*`` / ``TrackInfo_Category`` branches) now happens here in
-    Python via :func:`categorize_event` and
-    :func:`derive_meaningful_tracks`.
+    This is the I/O-only half of the legacy ``read_particle_data_from_photonsim``.
+    The ray-tracing path consumes the raw output directly; ``meaningful_tracks``,
+    ``segments`` (filtered), ``particles`` and any view of ``track_info_dict``
+    enriched with category/sub_id are derived downstream by
+    :func:`_derive_views_from_segments` after the kernel call.
 
     Parameters
     ----------
     root_file_path : str
-        Path to the PhotonSim ROOT file
     entry_index : int
-        Entry index to read from the file
 
     Returns
     -------
-    dict
-        Dictionary containing:
-        - 'n_particles': int, number of unique particles
-        - 'particles': list of dicts, each containing:
-            - 'genealogy': list of categorized track IDs (root→leaf)
-            - 'extended_genealogy': list of meaningful track IDs on this particle's chain
-            - 'photon_indices': list of photon indices belonging to this particle
-            - 'track_info': dict for the leaf track (position, direction,
-              energy, time, pdg, category, etc.)
-        - 'photon_origins': array (N_photons, 3) in m
-        - 'photon_directions': array (N_photons, 3)
-        - 'photon_times': array (N_photons,) in ns
-        - 'photon_wavelengths': array (N_photons,) in nm
-        - 'photon_segment_index': array (N_photons,) — int32 index into
-          the (filtered, meaningful-tracks-only) ``segments`` arrays
-        - 'primary_energy': float, energy in MeV
-        - 'track_info_dict': dict keyed by track_id with full per-track kinematics
-        - 'meaningful_tracks': dict keyed by meaningful track_id (Cherenkov producers + ancestors)
-        - 'segments': dict of meaningful-tracks-only segment arrays + 'group_id'
-        - 'rootracker_entry_id', 'neutrino_pdg', 'neutrino_energy_MeV': GENIE provenance
+    dict with keys:
+        - 'photon_origins', 'photon_directions', 'photon_times',
+          'photon_wavelengths' — flat per-photon arrays for this event
+        - 'photon_segment_index_raw' — (N_photons,) int64 indices into
+          the **raw** segment table (no remap)
+        - 'segments_raw' — dict of all-tracks segment arrays in **mm** plus
+          ``track_id`` (int64) and ``n_segments`` (int). Endpoint
+          conversion to metres is deferred to ``_derive_views_from_segments``.
+        - 'track_info_dict' — raw per-track dict; ``category`` and
+          ``sub_id`` are sentinel ``-1`` (filled downstream).
+        - 'primary_energy', 'rootracker_entry_id', 'neutrino_pdg',
+          'neutrino_energy_MeV'
     """
     import uproot
     import numpy as np
@@ -932,7 +919,7 @@ def read_particle_data_from_photonsim(root_file_path, entry_index):
         tid = int(track_ids[i])
         track_info_dict[tid] = {
             'track_id': tid,
-            # category / sub_id filled in below from the categorizer.
+            # category / sub_id filled in by _derive_views_from_segments.
             'category': -1,
             'sub_id': -1,
             'position': np.array([track_posx[i], track_posy[i], track_posz[i]]),
@@ -944,11 +931,77 @@ def read_particle_data_from_photonsim(root_file_path, entry_index):
             'creator_process': str(track_processes[i]),
         }
 
-    # ---- Segment_* → meaningful_tracks (groupby on Segment_TrackID) ----
-    seg_track_id_full = np.asarray(tree_data['Segment_TrackID'][0], dtype=np.int64)
-    seg_n_cherenkov_full = np.asarray(tree_data['Segment_NCherenkov'][0], dtype=np.int64)
-    n_segments_full = int(tree_data['NSegments'][0])
+    # ---- Raw segment table (no filtering) ----
+    # Endpoints stay in mm here so ``_derive_views_from_segments`` can hand
+    # the same arrays into ``assign_group_ids`` without round-trip-converting.
+    n_segments_raw = int(tree_data['NSegments'][0])
+    segments_raw = {
+        'start_x_mm': np.asarray(tree_data['Segment_StartX'][0], dtype=np.float64),
+        'start_y_mm': np.asarray(tree_data['Segment_StartY'][0], dtype=np.float64),
+        'start_z_mm': np.asarray(tree_data['Segment_StartZ'][0], dtype=np.float64),
+        'end_x_mm':   np.asarray(tree_data['Segment_EndX'][0], dtype=np.float64),
+        'end_y_mm':   np.asarray(tree_data['Segment_EndY'][0], dtype=np.float64),
+        'end_z_mm':   np.asarray(tree_data['Segment_EndZ'][0], dtype=np.float64),
+        'dir_x':      np.asarray(tree_data['Segment_DirX'][0], dtype=np.float64),
+        'dir_y':      np.asarray(tree_data['Segment_DirY'][0], dtype=np.float64),
+        'dir_z':      np.asarray(tree_data['Segment_DirZ'][0], dtype=np.float64),
+        'edep':       np.asarray(tree_data['Segment_Edep'][0], dtype=np.float64),
+        'time':       np.asarray(tree_data['Segment_Time'][0], dtype=np.float64),
+        'beta_start': np.asarray(tree_data['Segment_BetaStart'][0], dtype=np.float64),
+        'n_cherenkov':np.asarray(tree_data['Segment_NCherenkov'][0], dtype=np.int64),
+        'track_id':   np.asarray(tree_data['Segment_TrackID'][0], dtype=np.int64),
+        'n_segments': n_segments_raw,
+    }
+    photon_segment_index_raw = np.asarray(
+        tree_data['Photon_SegmentIndex'][0], dtype=np.int64)
 
+    return {
+        'photon_origins':           photon_positions,
+        'photon_directions':        photon_directions,
+        'photon_times':              photon_times,
+        'photon_wavelengths':        photon_wavelengths,
+        'photon_segment_index_raw': photon_segment_index_raw,
+        'segments_raw':              segments_raw,
+        'track_info_dict':           track_info_dict,
+        'primary_energy':            primary_energy,
+        'rootracker_entry_id':       int(tree_data['RooTrackerEntryID'][0]),
+        'neutrino_pdg':              int(tree_data['IncomingNuPdg'][0]),
+        'neutrino_energy_MeV':       float(tree_data['IncomingNuKE'][0]),
+    }
+
+
+def _derive_views_from_segments(raw, pe_per_seg_raw=None, t_per_seg_raw=None):
+    """Categorize, filter, and assemble the downstream-view dict.
+
+    This is the post-kernel half of the legacy ``read_particle_data_from_photonsim``.
+    Runs the four pure helpers from ``particle_categorization.py`` plus
+    ``segment_grouping.assign_group_ids`` on the raw read output, and (if
+    the kernel's per-segment output was supplied) slices the raw per-
+    ``(segment, sensor)`` PE/T tensors to the meaningful-segment subset
+    that matches today's ``seg.h5`` layout.
+
+    Parameters
+    ----------
+    raw : dict
+        Output of :func:`_read_event_raw`.
+    pe_per_seg_raw, t_per_seg_raw : np.ndarray or None
+        Optional ``(n_segments_raw, n_sensors)`` float32 tensors emitted
+        by the bucketed kernel. When provided, the same ``keep_mask`` that
+        filters the segment table is applied to their first axis to yield
+        ``pe_per_seg_filtered`` / ``t_per_seg_filtered``. Pass ``None`` for
+        dark events (no kernel call).
+
+    Returns
+    -------
+    dict — same shape as the legacy ``read_particle_data_from_photonsim``
+    output, plus ``pe_per_seg_filtered`` / ``t_per_seg_filtered`` (each
+    ``None`` when their input was ``None``).
+    """
+    track_info_dict = raw['track_info_dict']
+    seg_track_id_full   = raw['segments_raw']['track_id']
+    seg_n_cherenkov_full = raw['segments_raw']['n_cherenkov']
+
+    # ---- Segment_* → meaningful_tracks (groupby on Segment_TrackID) ----
     meaningful_tracks = derive_meaningful_tracks(
         segment_track_id=seg_track_id_full,
         segment_n_cherenkov=seg_n_cherenkov_full,
@@ -958,12 +1011,10 @@ def read_particle_data_from_photonsim(root_file_path, entry_index):
     # Filter Segment_* arrays to meaningful only. Keeps seg.h5 size
     # the same as legacy and lines up with meaningful_tracks' segment
     # offsets (which index into the filtered array).
-    photon_segment_index_full = np.asarray(
-        tree_data['Photon_SegmentIndex'][0], dtype=np.int64)
     keep_mask, photon_segment_index = filter_segments_to_meaningful(
         segment_track_id=seg_track_id_full,
         meaningful_tracks=meaningful_tracks,
-        photon_segment_index=photon_segment_index_full,
+        photon_segment_index=raw['photon_segment_index_raw'],
     )
 
     # ---- Run the Python categorizer ----
@@ -1037,19 +1088,20 @@ def read_particle_data_from_photonsim(root_file_path, entry_index):
 
     # ---- Build the filtered segments dict ----
     # mm → m for endpoint coords. Filter every parallel array via keep_mask.
-    seg_start_x_mm = np.asarray(tree_data['Segment_StartX'][0], dtype=np.float64)[keep_mask]
-    seg_start_y_mm = np.asarray(tree_data['Segment_StartY'][0], dtype=np.float64)[keep_mask]
-    seg_start_z_mm = np.asarray(tree_data['Segment_StartZ'][0], dtype=np.float64)[keep_mask]
-    seg_end_x_mm = np.asarray(tree_data['Segment_EndX'][0], dtype=np.float64)[keep_mask]
-    seg_end_y_mm = np.asarray(tree_data['Segment_EndY'][0], dtype=np.float64)[keep_mask]
-    seg_end_z_mm = np.asarray(tree_data['Segment_EndZ'][0], dtype=np.float64)[keep_mask]
-    seg_dir_x = np.asarray(tree_data['Segment_DirX'][0], dtype=np.float64)[keep_mask]
-    seg_dir_y = np.asarray(tree_data['Segment_DirY'][0], dtype=np.float64)[keep_mask]
-    seg_dir_z = np.asarray(tree_data['Segment_DirZ'][0], dtype=np.float64)[keep_mask]
-    seg_edep = np.asarray(tree_data['Segment_Edep'][0], dtype=np.float64)[keep_mask]
-    seg_time = np.asarray(tree_data['Segment_Time'][0], dtype=np.float64)[keep_mask]
-    seg_beta_start = np.asarray(tree_data['Segment_BetaStart'][0], dtype=np.float64)[keep_mask]
-    seg_n_cherenkov = seg_n_cherenkov_full[keep_mask]
+    seg_raw = raw['segments_raw']
+    seg_start_x_mm = seg_raw['start_x_mm'][keep_mask]
+    seg_start_y_mm = seg_raw['start_y_mm'][keep_mask]
+    seg_start_z_mm = seg_raw['start_z_mm'][keep_mask]
+    seg_end_x_mm   = seg_raw['end_x_mm'][keep_mask]
+    seg_end_y_mm   = seg_raw['end_y_mm'][keep_mask]
+    seg_end_z_mm   = seg_raw['end_z_mm'][keep_mask]
+    seg_dir_x      = seg_raw['dir_x'][keep_mask]
+    seg_dir_y      = seg_raw['dir_y'][keep_mask]
+    seg_dir_z      = seg_raw['dir_z'][keep_mask]
+    seg_edep       = seg_raw['edep'][keep_mask]
+    seg_time       = seg_raw['time'][keep_mask]
+    seg_beta_start = seg_raw['beta_start'][keep_mask]
+    seg_n_cherenkov = seg_raw['n_cherenkov'][keep_mask]
 
     n_segments = int(seg_edep.shape[0])
 
@@ -1074,9 +1126,9 @@ def read_particle_data_from_photonsim(root_file_path, entry_index):
         'start_x': seg_start_x_mm / 1000.0,
         'start_y': seg_start_y_mm / 1000.0,
         'start_z': seg_start_z_mm / 1000.0,
-        'end_x': seg_end_x_mm / 1000.0,
-        'end_y': seg_end_y_mm / 1000.0,
-        'end_z': seg_end_z_mm / 1000.0,
+        'end_x':   seg_end_x_mm / 1000.0,
+        'end_y':   seg_end_y_mm / 1000.0,
+        'end_z':   seg_end_z_mm / 1000.0,
         'dir_x': seg_dir_x,
         'dir_y': seg_dir_y,
         'dir_z': seg_dir_z,
@@ -1096,26 +1148,52 @@ def read_particle_data_from_photonsim(root_file_path, entry_index):
     assert len(segments['group_id']) == edep_len, (
         f"group_id length {len(segments['group_id'])} != Segment_Edep {edep_len}")
 
-    result = {
-        'n_particles': n_particles,
-        'particles': particles,
-        'photon_origins': photon_positions,
-        'photon_directions': photon_directions,
-        'photon_times': photon_times,
-        'photon_wavelengths': photon_wavelengths,
+    # ---- Slice per-(segment, sensor) PE/T tensors to filtered positions ----
+    # The kernel emitted the decomposition over the **raw** segment table; the
+    # writers consume only the meaningful-segment subset, so the same
+    # ``keep_mask`` that built ``segments`` selects the rows we keep here.
+    if pe_per_seg_raw is not None:
+        pe_per_seg_filtered = pe_per_seg_raw[keep_mask]
+    else:
+        pe_per_seg_filtered = None
+    if t_per_seg_raw is not None:
+        t_per_seg_filtered = t_per_seg_raw[keep_mask]
+    else:
+        t_per_seg_filtered = None
+
+    return {
+        'n_particles':         n_particles,
+        'particles':           particles,
+        'photon_origins':      raw['photon_origins'],
+        'photon_directions':   raw['photon_directions'],
+        'photon_times':        raw['photon_times'],
+        'photon_wavelengths':  raw['photon_wavelengths'],
         'photon_segment_index': photon_segment_index,
-        'primary_energy': primary_energy,
-        'track_info_dict': track_info_dict,
-        'meaningful_tracks': meaningful_tracks,
-        'segments': segments,
-        # GENIE provenance (from PhotonSim's v5 branches). -1 / 0 / 0.0 for
-        # particle-gun events; non-sentinels for GENIE events pulled from
-        # the rootracker's status==0 probe.
-        'rootracker_entry_id':  int(tree_data['RooTrackerEntryID'][0]),
-        'neutrino_pdg':         int(tree_data['IncomingNuPdg'][0]),
-        'neutrino_energy_MeV':  float(tree_data['IncomingNuKE'][0]),
+        'primary_energy':      raw['primary_energy'],
+        'track_info_dict':     track_info_dict,
+        'meaningful_tracks':   meaningful_tracks,
+        'segments':            segments,
+        'pe_per_seg_filtered': pe_per_seg_filtered,
+        't_per_seg_filtered':  t_per_seg_filtered,
+        # GENIE provenance — pass through.
+        'rootracker_entry_id':  raw['rootracker_entry_id'],
+        'neutrino_pdg':         raw['neutrino_pdg'],
+        'neutrino_energy_MeV':  raw['neutrino_energy_MeV'],
     }
-    return result
+
+
+def read_particle_data_from_photonsim(root_file_path, entry_index):
+    """Backward-compatible wrapper: read raw + derive views without per-segment data.
+
+    Equivalent to the legacy implementation; preserves the exact return-dict
+    shape for any external caller. The data-mode driver no longer routes
+    through this wrapper — it calls :func:`_read_event_raw`,
+    :func:`_trace_event_bucketed`, and :func:`_derive_views_from_segments`
+    directly so the per-(segment, sensor) tensor that the kernel emits can
+    flow downstream.
+    """
+    raw = _read_event_raw(root_file_path, entry_index)
+    return _derive_views_from_segments(raw, pe_per_seg_raw=None, t_per_seg_raw=None)
 
 def generate_events_from_photonsim_particles(event_simulator, root_file_path,
                                              sensor_positions, output_dir=None,
