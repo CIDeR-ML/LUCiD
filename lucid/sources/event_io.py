@@ -92,23 +92,35 @@ def derive_subprocess_seeds(master_seed, job_id, vertex_idx=0):
 
 
 # =============================================================================
-# PAD_SIZE bucketing
+# Two-axis bucketing (n_rays × n_segments)
 # =============================================================================
 #
 # The data-mode kernel (`_common_propagation` in lucid/simulation/simulator.py)
-# JIT-caches on the input photon-axis size (`n_rays`, a static argname). Today's
-# pre-bucketing path scans the ROOT file once and pads every event to the
-# file-wide max — so a 49k-photon event still pays for a 530k-photon kernel
-# call. Bucketing cuts that waste by quantizing the kernel input shape into a
-# small set of bucket sizes; one JIT compile per bucket. Particles with more
-# photons than the largest bucket are split into chunks (each <= max bucket)
-# and recombined on host (PE-sum, T-min).
+# JIT-caches on two static argnames: ``n_rays`` (size of the per-chunk photon
+# array) and ``n_segments`` (size of the per-(segment, sensor) decomposition
+# output). Both are output-shape-defining inside ``make_hits_per_segment``
+# (segment_sum bucket count + reshape). Each unique ``(n_rays, n_segments)``
+# pair triggers a fresh JIT compile.
 #
-# Defaults chosen to balance worst-case padding waste (≤2.5×) against up-front
-# compile cost (~1 min per bucket). Set lucid_options.pad_size_buckets in the
-# config to override; an empty list reverts to the file-max single-PAD_SIZE
-# path (one compile, no chunking).
-_DEFAULT_PAD_SIZE_BUCKETS = (10_000, 100_000, 250_000, 500_000, 1_000_000)
+# Strategy: quantize both axes into a small finite set of bucket sizes. A
+# warmup pass compiles every (rays_b × seg_b) pair once at startup; from then
+# on every event hits the JIT cache. Per chunk, photons are padded to the
+# smallest fitting rays bucket (existing behaviour); the chunk's locally-
+# referenced segment ids are remapped to a dense ``[0, k)`` range and ``k``
+# is rounded up to the smallest fitting seg bucket (new behaviour). The kernel
+# treats segment ids as opaque ``[0, n_segments)`` keys, so per-chunk local
+# remapping is sound; the host scatters each chunk's ``(n_seg_local, n_sensors)``
+# tile back into the global ``(n_segments_event, n_sensors)`` PE/T buffer at
+# the chunk's unique-segment row indices (PE-sum, T-min — same merge rule
+# already used across rays-bucket chunks for per-sensor totals).
+#
+# Spec chosen so the worst-case kernel output ``(n_seg_b × n_sensors × 4 × 2)``
+# fits ~3 GB on CI's 8 GB ubuntu-latest runner. Per-chunk local n_seg is
+# bounded by ``min(rays_b, n_segments_event)``, so aligning the rays and seg
+# top buckets at the same value avoids a configuration where the seg axis
+# can't accommodate a worst-case "1 photon per segment" chunk.
+_DEFAULT_PAD_SIZE_BUCKETS = (256, 2_048, 8_192, 32_768)
+_DEFAULT_SEG_BUCKETS      = (256, 2_048, 8_192, 32_768)
 
 
 def _normalize_buckets(buckets):
