@@ -332,6 +332,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         try:
             from lucid.production.run_genie import run_genie
             print("\n=== Step 0: GENIE event generation ===", flush=True)
+            t_genie = time.time()
             produced, total_primaries = run_genie(
                 config=config,
                 output_dir=output_dir,
@@ -339,6 +340,7 @@ def main(argv: Optional[list[str]] = None) -> int:
                 n_events=n_events,
                 seed=subproc_seeds['genie_seed'],
             )
+            print(f"GENIE elapsed: {time.time() - t_genie:.1f}s")
             print(f"GENIE rootracker: {produced}")
             print(f"GENIE total primaries (one G4 event each): {total_primaries}")
             if produced != gtrac_path:
@@ -513,6 +515,7 @@ def _main_pileup(args: argparse.Namespace, config: dict) -> int:
         if uses_genie_v and not args.skip_genie:
             try:
                 from lucid.production.run_genie import run_genie
+                t_genie = time.time()
                 produced, total_primaries = run_genie(
                     config=sub_cfg,
                     output_dir=output_dir,
@@ -520,6 +523,7 @@ def _main_pileup(args: argparse.Namespace, config: dict) -> int:
                     n_events=n_events,
                     seed=subproc_seeds["genie_seed"],
                 )
+                print(f"GENIE vertex {vidx} elapsed: {time.time() - t_genie:.1f}s")
                 # run_genie writes gntp_job_{job_id_padded_inner}.gtrac.root —
                 # move/rename to our per-vertex path.
                 if produced != gtrac_path:

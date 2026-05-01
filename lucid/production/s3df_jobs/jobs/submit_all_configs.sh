@@ -132,12 +132,14 @@ if [ -n "$OUTPUT_OVERRIDE" ]; then
 fi
 echo ""
 
-# Create temporary directory for modified configs if needed
+# Override configs go on shared FS and persist past sbatch return; see QUICKSTART_S3DF.md.
 TEMP_DIR=""
 if [ -n "$N_JOBS_OVERRIDE" ] || [ -n "$N_EVENTS_OVERRIDE" ]; then
-    TEMP_DIR=$(mktemp -d)
-    trap "rm -rf $TEMP_DIR" EXIT
-    echo "Creating temporary configs with overridden values..."
+    BASE_FOR_TEMP="${OUTPUT_OVERRIDE:-$OUTPUT_BASE_PATH}"
+    mkdir -p "$BASE_FOR_TEMP" 2>/dev/null || true
+    TEMP_DIR=$(mktemp -d -p "$BASE_FOR_TEMP" overridden_configs.XXXXXX 2>/dev/null \
+                  || mktemp -d "$HOME/.lucid_overridden_configs.XXXXXX")
+    echo "Override configs: $TEMP_DIR (persistent — remove after jobs finish)"
 fi
 
 if [ "$DRY_RUN" = true ]; then

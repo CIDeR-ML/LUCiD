@@ -107,6 +107,46 @@ in the container. To run with a different tune, point
 `GENIE_XSEC_FILE` in `user_paths.sh` at the matching cvmfs-staged
 spline file.
 
+## Refreshing the container image
+
+```bash
+apptainer pull --force "$LUCID_IMAGE_PATH" docker://ghcr.io/cider-ml/lucid:latest
+```
+
+If you have `LUCID_DEV_PATH` / `PHOTONSIM_DEV_PATH` set (dev-loop binds),
+also rebuild the host PhotonSim against the new image:
+
+```bash
+apptainer exec -B /sdf,/fs,/sdf/scratch,/lscratch,/cvmfs \
+    -B "$PHOTONSIM_DEV_PATH:/opt/PhotonSim" \
+    "$LUCID_IMAGE_PATH" \
+    bash -lc 'cmake --build /opt/PhotonSim/build -j 4'
+```
+
+Otherwise the host binary is shadowed in but stale relative to the new
+image, and LUCiD will fail with "PhotonSim ROOT file is missing
+branches …".
+
+## Override configs (`-n` / `-e`)
+
+`submit_all_configs.sh -n N -e M` materializes a temporary JSON per
+config so it can edit `n_jobs` / `n_events_per_job`. That temp file is
+read by SLURM at dispatch time, *after* the wrapper has exited, so it
+must (a) live on shared FS visible to compute nodes (no node-local
+`/lscratch`) and (b) not be auto-deleted by the wrapper. The script
+writes them to `${OUTPUT}/overridden_configs.XXXXXX/` and leaves them
+there — remove the dir manually after the run if you want.
+
+## Spatial overlap cache
+
+LUCiD writes a small JSON cache (`spatial_overlap_integrals/*.json`).
+Resolution order is `$LUCID_OVERLAP_CACHE_DIR` → package dir if
+writable → `$XDG_CACHE_HOME/lucid/spatial_overlap_integrals` (default
+`~/.cache/lucid/...`). With dev-loop binds the host package dir is
+writable, so the cache lives next to the source. On a baked-only
+container without binds it falls back to `~/.cache/lucid/`. No setup
+needed.
+
 ## Paths / conventions
 
 - Configs: `LUCiD/lucid/production/configs/dataprod_*.json`
