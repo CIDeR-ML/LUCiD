@@ -1,0 +1,53 @@
+{
+  "config_number": 18,
+  "name": "pile-up: 2 x particle-bomb",
+  "description": "Two overlapping 'particle bomb' interactions per event. Each vertex draws a per-event multiplicity N=Uniform(1,5), then samples N particles (with replacement) from the candidate pool {e-, e+, mu-, mu+, gamma, pi+, pi-, pi0}, each with kinetic energy uniform in [0, 3000] MeV and an isotropic direction. Pile-up is at the LUCiD level: each vertex draws an independent absolute t0 ~ Uniform(-250, 250) ns and its own fiducial vertex position.",
+  "material": "water",
+  "pile_up": true,
+  "vertices": [
+    {
+      "primary_source": "bomb",
+      "bomb": {
+        "min_particles": 1,
+        "max_particles": 5,
+        "candidates": [
+          {"type": "e-",    "energy_min_MeV": 0, "energy_max_MeV": 3000},
+          {"type": "e+",    "energy_min_MeV": 0, "energy_max_MeV": 3000},
+          {"type": "mu-",   "energy_min_MeV": 0, "energy_max_MeV": 3000},
+          {"type": "mu+",   "energy_min_MeV": 0, "energy_max_MeV": 3000},
+          {"type": "gamma", "energy_min_MeV": 0, "energy_max_MeV": 3000},
+          {"type": "pi+",   "energy_min_MeV": 0, "energy_max_MeV": 3000},
+          {"type": "pi-",   "energy_min_MeV": 0, "energy_max_MeV": 3000},
+          {"type": "pi0",   "energy_min_MeV": 0, "energy_max_MeV": 3000}
+        ]
+      }
+    },
+    {
+      "primary_source": "bomb",
+      "bomb": {
+        "min_particles": 1,
+        "max_particles": 5,
+        "candidates": [
+          {"type": "e-",    "energy_min_MeV": 0, "energy_max_MeV": 3000},
+          {"type": "e+",    "energy_min_MeV": 0, "energy_max_MeV": 3000},
+          {"type": "mu-",   "energy_min_MeV": 0, "energy_max_MeV": 3000},
+          {"type": "mu+",   "energy_min_MeV": 0, "energy_max_MeV": 3000},
+          {"type": "gamma", "energy_min_MeV": 0, "energy_max_MeV": 3000},
+          {"type": "pi+",   "energy_min_MeV": 0, "energy_max_MeV": 3000},
+          {"type": "pi-",   "energy_min_MeV": 0, "energy_max_MeV": 3000},
+          {"type": "pi0",   "energy_min_MeV": 0, "energy_max_MeV": 3000}
+        ]
+      }
+    }
+  ],
+  "store_individual_photons": true,
+  "run_lucid": true,
+  "disable_decays": false,
+  "lucid_options": {
+    "apply_smearing": true,
+    "apply_translation": true
+  },
+  "n_jobs": 2,
+  "n_events_per_job": 100,
+  "cleanup_root_files": true
+}

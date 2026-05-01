@@ -113,16 +113,24 @@ def _load_config(path: str) -> dict:
             raise ValueError(
                 f"Pile-up config {path!r} must declare at least 2 vertices; got {vertices!r}")
         for i, v in enumerate(vertices):
-            if v.get("primary_source") == "genie":
+            src = v.get("primary_source")
+            if src == "genie":
                 if "genie" not in v:
                     raise ValueError(
                         f"Pile-up vertex {i} primary_source='genie' but missing 'genie' block")
+            elif src == "bomb":
+                if "bomb" not in v or not isinstance(v["bomb"].get("candidates"), list):
+                    raise ValueError(
+                        f"Pile-up vertex {i} primary_source='bomb' but missing "
+                        f"'bomb.candidates' list")
             else:
                 if "particles" not in v or "energy_distribution" not in v:
                     raise ValueError(
                         f"Pile-up vertex {i} missing 'particles'/'energy_distribution'")
     elif cfg.get("primary_source") == "genie":
         required.append("genie")
+    elif cfg.get("primary_source") == "bomb":
+        required.append("bomb")
     else:
         required += ["particles", "energy_distribution"]
     for key in required:
@@ -149,6 +157,8 @@ def _build_vertex_subconfig(top_config: dict, vertex: dict) -> dict:
     sub["primary_source"] = vertex.get("primary_source", "particles")
     if sub["primary_source"] == "genie":
         sub["genie"] = vertex["genie"]
+    elif sub["primary_source"] == "bomb":
+        sub["bomb"] = vertex["bomb"]
     else:
         sub["energy_distribution"] = vertex.get(
             "energy_distribution", top_config.get("energy_distribution", "uniform"))

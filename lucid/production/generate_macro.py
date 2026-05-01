@@ -72,6 +72,13 @@ def generate_macro(
             rootracker_path=genie_rootracker,
             photonsim_seeds=photonsim_seeds,
         )
+    if config.get("primary_source") == "bomb":
+        return _generate_bomb_macro(
+            config=config,
+            output_root_file=output_root_file,
+            n_events=n_events,
+            photonsim_seeds=photonsim_seeds,
+        )
     config_name = config.get("name", "")
     config_number = config.get("config_number", -1)
     material = config.get("material", "")
@@ -169,6 +176,106 @@ def generate_macro(
     lines.append(f"/run/beamOn {n_events}")
 
     # Trailing newline matches `cat >> HEREDOC` output: one `\n` after the last line.
+    return "\n".join(lines) + "\n"
+
+
+def _generate_bomb_macro(
+    *,
+    config: dict,
+    output_root_file: str,
+    n_events: int,
+    photonsim_seeds: Optional[Tuple[int, int]] = None,
+) -> str:
+    """Emit a Geant4 macro that drives PhotonSim's particle-bomb mode.
+
+    The config's ``bomb`` block carries the candidate pool and the
+    multiplicity range:
+
+        "bomb": {
+            "min_particles": 1,
+            "max_particles": 5,
+            "candidates": [
+                {"type": "mu-",   "energy_min_MeV": 0, "energy_max_MeV": 3000},
+                ...
+            ]
+        }
+
+    Each event independently draws N=Uniform(min,max) particles from the
+    pool, samples a per-particle uniform-in-range kinetic energy, and
+    fires each in an isotropic direction.
+    """
+    config_name = config.get("name", "")
+    config_number = config.get("config_number", -1)
+    material = config.get("material", "")
+    bomb = config.get("bomb", {})
+    candidates = bomb.get("candidates", [])
+    if not candidates:
+        raise ValueError("primary_source='bomb' requires bomb.candidates to be non-empty")
+    n_min = int(bomb.get("min_particles", 1))
+    n_max = int(bomb.get("max_particles", 5))
+    if n_max < n_min:
+        raise ValueError(f"bomb.max_particles ({n_max}) < min_particles ({n_min})")
+    store_individual = bool(config.get("store_individual_photons", False))
+    disable_decays = bool(config.get("disable_decays", False))
+
+    lines: list[str] = []
+    lines.append("# PhotonSim macro (particle bomb)")
+    lines.append(f"# Configuration: {config_name}")
+    lines.append(f"# Config Number: {config_number:06d}")
+    lines.append(f"# Material: {material}")
+    lines.append(f"# Multiplicity per event: Uniform[{n_min}, {n_max}]")
+    lines.append(f"# Candidate pool ({len(candidates)} entries):")
+    for c in candidates:
+        lines.append(f"#   {c['type']}: [{c['energy_min_MeV']:g}, {c['energy_max_MeV']:g}] MeV")
+    lines.append("")
+    lines.append("# Set output filename before initialization")
+    lines.append(f"/output/filename {output_root_file}")
+    lines.append("")
+    lines.append("/run/initialize")
+    lines.append("")
+
+    if photonsim_seeds is not None:
+        s1, s2 = photonsim_seeds
+        lines.append(f"/random/setSeeds {int(s1)} {int(s2)}")
+        lines.append("")
+
+    if store_individual:
+        lines.append("/photon/storeIndividual true")
+    else:
+        lines.append("/photon/storeIndividual false")
+
+    if disable_decays:
+        lines.append("")
+        lines.append("# Decays disabled")
+        lines.append("/particle/select mu-")
+        lines.append("/particle/process/inactivate 1")
+        lines.append("/particle/process/inactivate 7")
+        lines.append("/particle/select mu+")
+        lines.append("/particle/process/inactivate 1")
+        lines.append("/particle/select pi+")
+        lines.append("/particle/process/inactivate 1")
+        lines.append("/particle/select pi-")
+        lines.append("/particle/process/inactivate 1")
+    else:
+        lines.append("")
+        lines.append("# Decays ENABLED")
+
+    lines.append("")
+    lines.append("# Bomb candidate pool")
+    lines.append("/gun/clearPrimaries")
+    lines.append("/gun/bombClearCandidates")
+    lines.append(f"/gun/bombMinParticles {n_min}")
+    lines.append(f"/gun/bombMaxParticles {n_max}")
+    for c in candidates:
+        ptype = c["type"]
+        emin = c["energy_min_MeV"]
+        emax = c["energy_max_MeV"]
+        lines.append(f"/gun/bombAddCandidate {ptype} {emin:g} {emax:g} MeV")
+    lines.append("/gun/bombMode true")
+    lines.append("")
+    lines.append(f"# Run {n_events} events")
+    lines.append(f"/run/beamOn {n_events}")
+
     return "\n".join(lines) + "\n"
 
 
