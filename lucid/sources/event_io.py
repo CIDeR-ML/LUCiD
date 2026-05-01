@@ -2116,6 +2116,7 @@ def generate_events_from_photonsim_pileup(
                         seg_raw_i['end_z_mm']   = seg_raw_i['end_z_mm']   + float(vertex_i[2]) * 1000.0
 
                 # Phase 2 — bucketed trace for this vertex (per-photon out).
+                _t_sim = _time.time()
                 pe_sensor_i, t_sensor_i, qe_w_i, qe_t_i, sen_i_i, seg_i_raw_i = \
                     _trace_event_bucketed(
                         event_simulator,
@@ -2125,6 +2126,7 @@ def generate_events_from_photonsim_pileup(
                         n_sensors, rays_buckets,
                         event_keys['sim_key'],
                     )
+                print(f"      [timing] simulate {_time.time() - _t_sim:.3f}s", flush=True)
 
                 # Phase 3 — derive views (categorize, filter, build photon records).
                 particle_data_i = _derive_views_from_segments(raw, photon_records={
@@ -2171,6 +2173,7 @@ def generate_events_from_photonsim_pileup(
                 running_offset = stream_max + 1
 
             # ---- merge streams into one event_dict ----
+            _t_merge = _time.time()
             merged = _merge_pileup_streams(
                 streams, n_sensors=n_sensors,
                 apply_smearing=apply_smearing,
@@ -2179,12 +2182,15 @@ def generate_events_from_photonsim_pileup(
                     interaction_idx=N_vertices)['smear_key'],
                 detector_bounds=detector_bounds,
             )
+            print(f"    [timing] merge {_time.time() - _t_merge:.3f}s", flush=True)
             merged['source_event_idx'] = int(event_idx)
             merged['source'] = 'PhotonSim_Pileup'
 
             batch_data.append(merged)
             batch_indices.append(int(event_idx))
-            event_times.append(_time.time() - t_start)
+            event_total_time = _time.time() - t_start
+            event_times.append(event_total_time)
+            print(f"    Event total time: {event_total_time:.2f}s", flush=True)
 
         # Write batch (same as non-pile-up)
         file_idx = int(file_index_start + batch_idx)
@@ -2217,6 +2223,7 @@ def generate_events_from_photonsim_pileup(
                 config_meta['detector_radius']      = detector_bounds['radius']
                 config_meta['detector_half_height'] = detector_bounds['height'] / 2.0
 
+        _t_save = _time.time()
         with h5py.File(sensor_path, 'w') as fs, \
              h5py.File(inst_path,   'w') as fi, \
              h5py.File(seg_path,    'w') as fg, \
@@ -2232,6 +2239,11 @@ def generate_events_from_photonsim_pileup(
                 save_labl_event_v3(fl, ev, seq_idx)
 
         saved_files.extend([str(sensor_path), str(inst_path), str(seg_path), str(labl_path)])
+        print(f"Batch {batch_idx+1} save time: {_time.time() - _t_save:.3f}s\n")
+
+    print(f"\nSuccessfully wrote {num_batches} batches "
+          f"({len(saved_files)} files total) to {output_dir}/"
+          f"{{sensor,inst,seg,labl}}/")
 
     if event_times:
         print(f"\nAverage pile-up event time: "
