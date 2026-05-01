@@ -36,7 +36,7 @@ echo "y" | ./submit_all_configs.sh -t -s -o /sdf/data/<user>/WAND/<date>_test
 Each config produces:
 
 ```
-<OUT>/water/uniform_energy/config_NNNNNN/
+<OUT>/water/config_NNNNNN/
 ├── sensor/wc_sensor_0000.h5
 ├── inst/wc_inst_0000.h5
 ├── seg/wc_seg_0000.h5
@@ -91,7 +91,7 @@ echo "y" | ./submit_all_configs.sh -t -s -o /sdf/data/<user>/dev_test
 scancel -u $USER -n photonsi
 
 # Inspect one output with the viewer (see viewer/README.md for SSH tunneling)
-python3 /path/to/LUCiD/viewer/serve_viewer.py <OUT>/water/uniform_energy/config_000001
+python3 /path/to/LUCiD/viewer/serve_viewer.py <OUT>/water/config_000001
 ```
 
 ## What each sbatch does

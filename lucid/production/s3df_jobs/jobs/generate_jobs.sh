@@ -67,7 +67,6 @@ CONFIG_NAME=$(jq -r '.name' "$CONFIG_FILE")
 CONFIG_NAME_SLUG=$(echo "$CONFIG_NAME" | sed 's/+/plus/g; s/-/minus/g; s/ /_/g; s/__*/_/g')
 CONFIG_DESC=$(jq -r '.description // ""' "$CONFIG_FILE")
 MATERIAL=$(jq -r '.material' "$CONFIG_FILE")
-OUTPUT_PATH=$(jq -r '.output_path' "$CONFIG_FILE")
 PRIMARY_SOURCE=$(jq -r '.primary_source // "particle_gun"' "$CONFIG_FILE")
 ENERGY_DIST=$(jq -r '.energy_distribution // "uniform"' "$CONFIG_FILE")
 RUN_LUCID=$(jq -r '.run_lucid // true' "$CONFIG_FILE")
@@ -83,7 +82,6 @@ fi
 # --- Validate -----------------------------------------------------------------
 [ "$CONFIG_NAME"   != "null" ] || { echo "Error: config missing required field 'name'"   >&2; exit 1; }
 [ "$MATERIAL"      != "null" ] || { echo "Error: config missing required field 'material'"    >&2; exit 1; }
-[ "$OUTPUT_PATH"   != "null" ] || { echo "Error: config missing required field 'output_path'" >&2; exit 1; }
 
 if [ "$PRIMARY_SOURCE" != "genie" ] && [ "$ENERGY_DIST" != "monoenergetic" ] && [ "$ENERGY_DIST" != "uniform" ]; then
     echo "Error: energy_distribution must be 'monoenergetic' or 'uniform' (got: $ENERGY_DIST)" >&2
@@ -109,7 +107,7 @@ EFFECTIVE_OUTPUT_BASE="${OUTPUT_OVERRIDE:-$OUTPUT_BASE_PATH}"
 EFFECTIVE_PARTITION="${PARTITION_OVERRIDE:-$SLURM_PARTITION}"
 if [ "$USE_GPU" = true ]; then EFFECTIVE_GPUS="1"; else EFFECTIVE_GPUS="$DEFAULT_GPUS"; fi
 
-OUTPUT_BASE_DIR="${EFFECTIVE_OUTPUT_BASE}/${MATERIAL}/${OUTPUT_PATH}"
+OUTPUT_BASE_DIR="${EFFECTIVE_OUTPUT_BASE}/${MATERIAL}"
 if [ "$USE_CONFIG_NUMBER" == "true" ]; then
     CONFIG_DIR="${OUTPUT_BASE_DIR}/config_$(printf "%06d" "$CONFIG_NUMBER")"
 else

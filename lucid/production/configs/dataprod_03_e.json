@@ -3,7 +3,6 @@
   "name": "single e-",
   "description": "Single electron with LUCiD processing",
   "material": "water",
-  "output_path": "uniform_energy",
   "energy_distribution": "uniform",
   "store_individual_photons": true,
   "run_lucid": true,

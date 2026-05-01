@@ -10,7 +10,7 @@ Usage:
     python timing_report.py --config-dir /path/to/config_000001
 
     # Analyze all configs in base directory
-    python timing_report.py --all --base-dir /path/to/water/uniform_energy
+    python timing_report.py --all --base-dir /path/to/water
 
     # Save histogram to file
     python timing_report.py --all --base-dir /path/to/output --output timing_report.png
