@@ -28,8 +28,9 @@ TEST_MODE=false
 USE_GPU=false
 PARTITION_OVERRIDE=""
 OUTPUT_OVERRIDE=""
+DETECTOR="SK_like"
 
-while getopts "c:stgP:o:h" opt; do
+while getopts "c:stgP:o:D:h" opt; do
     case $opt in
         c) CONFIG_FILE="$OPTARG";;
         s) SUBMIT_JOBS=true;;
@@ -37,14 +38,16 @@ while getopts "c:stgP:o:h" opt; do
         g) USE_GPU=true;;
         P) PARTITION_OVERRIDE="$OPTARG";;
         o) OUTPUT_OVERRIDE="$OPTARG";;
+        D) DETECTOR="$OPTARG";;
         h) cat <<EOF
-Usage: $0 -c <config_json> [-s] [-t] [-g] [-P partition] [-o output_base]
+Usage: $0 -c <config_json> [-s] [-t] [-g] [-P partition] [-o output_base] [-D detector]
   -c  Path to dataprod JSON config (required)
   -s  Submit jobs to SLURM (default: prepare only)
   -t  Test mode — create only one job (and pass --test to lucid-run-job)
   -g  Enable GPU mode (request 1 GPU per job)
   -P  SLURM partition override
   -o  OUTPUT_BASE_PATH override
+  -D  Detector geometry (default: SK_like). Picks LUCiD/config/<detector>_{geom,physics}_config.json.
 
 See lucid/production/configs/ for example JSON configs.
 EOF
@@ -107,7 +110,7 @@ EFFECTIVE_OUTPUT_BASE="${OUTPUT_OVERRIDE:-$OUTPUT_BASE_PATH}"
 EFFECTIVE_PARTITION="${PARTITION_OVERRIDE:-$SLURM_PARTITION}"
 if [ "$USE_GPU" = true ]; then EFFECTIVE_GPUS="1"; else EFFECTIVE_GPUS="$DEFAULT_GPUS"; fi
 
-OUTPUT_BASE_DIR="${EFFECTIVE_OUTPUT_BASE}/${MATERIAL}"
+OUTPUT_BASE_DIR="${EFFECTIVE_OUTPUT_BASE}/${DETECTOR}"
 if [ "$USE_CONFIG_NUMBER" == "true" ]; then
     CONFIG_DIR="${OUTPUT_BASE_DIR}/config_$(printf "%06d" "$CONFIG_NUMBER")"
 else
@@ -131,6 +134,7 @@ echo "Energy dist:   $ENERGY_DIST"
 echo "Particles:     $N_PARTICLES"
 echo "Jobs:          $N_JOBS (events/job=$N_EVENTS)"
 echo "Partition:     $EFFECTIVE_PARTITION  GPUs=$EFFECTIVE_GPUS"
+echo "Detector:      $DETECTOR"
 echo "Output dir:    $CONFIG_DIR"
 echo ""
 
@@ -190,6 +194,7 @@ apptainer exec --nv -B /sdf,/fs,/sdf/scratch,/lscratch,/cvmfs ${dev_binds} \\
     lucid-run-job \\
         --config "${CONFIG_FILE}" \\
         --output-dir "${out_dir}" \\
+        --detector ${DETECTOR} \\
         --job-id ${job_id} ${test_flag} ${override_flag} ${skip_lucid_flag}
 
 echo "Job ended: \$(date)"

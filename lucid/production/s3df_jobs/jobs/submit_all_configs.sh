@@ -16,9 +16,10 @@ N_EVENTS_OVERRIDE=""
 USE_GPU=false
 PARTITION_OVERRIDE=""
 OUTPUT_OVERRIDE=""
+DETECTOR_OVERRIDE=""
 
 # Parse command line arguments
-while getopts "p:stdn:e:gP:o:h" opt; do
+while getopts "p:stdn:e:gP:o:D:h" opt; do
     case $opt in
         p) PATTERN="$OPTARG";;
         s) SUBMIT_JOBS=true;;
@@ -29,7 +30,8 @@ while getopts "p:stdn:e:gP:o:h" opt; do
         g) USE_GPU=true;;
         P) PARTITION_OVERRIDE="$OPTARG";;
         o) OUTPUT_OVERRIDE="$OPTARG";;
-        h) echo "Usage: $0 [-p pattern] [-s] [-t] [-d] [-n n_jobs] [-e events] [-g] [-P partition] [-o output_base]"
+        D) DETECTOR_OVERRIDE="$OPTARG";;
+        h) echo "Usage: $0 [-p pattern] [-s] [-t] [-d] [-n n_jobs] [-e events] [-g] [-P partition] [-o output_base] [-D detector]"
            echo "  -p: Pattern to match config files (default: dataprod*.json)"
            echo "  -s: Submit jobs to SLURM (default: prepare only)"
            echo "  -t: Test mode - create only one job per config"
@@ -39,6 +41,7 @@ while getopts "p:stdn:e:gP:o:h" opt; do
            echo "  -g: Enable GPU mode (request 1 GPU per job)"
            echo "  -P: SLURM partition override"
            echo "  -o: Output base path override"
+           echo "  -D: Detector geometry (default: SK_like)"
            echo ""
            echo "Examples:"
            echo "  # Dry run to see all configs"
@@ -129,6 +132,10 @@ fi
 
 if [ -n "$OUTPUT_OVERRIDE" ]; then
     CMD_ARGS="$CMD_ARGS -o $OUTPUT_OVERRIDE"
+fi
+
+if [ -n "$DETECTOR_OVERRIDE" ]; then
+    CMD_ARGS="$CMD_ARGS -D $DETECTOR_OVERRIDE"
 fi
 echo ""
 

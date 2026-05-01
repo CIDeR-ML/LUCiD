@@ -49,6 +49,11 @@ def _parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
         help="Path to dataprod JSON config (e.g. from lucid/production/configs/).",
     )
     parser.add_argument(
+        "--detector", type=str, default="SK_like",
+        help="Detector geometry to simulate against. Selects "
+             "config/<detector>_{geom,physics}_config.json.",
+    )
+    parser.add_argument(
         "--output-dir", type=str, required=True,
         help="Absolute path to the dataset directory for this config. "
              "PhotonSim ROOT and the v3 {sensor,inst,seg,labl}/ subdirs are written here.",
@@ -173,6 +178,7 @@ def _run_lucid(
     n_events: int,
     master_seed: Optional[int],
     job_id: int,
+    detector: str,
 ) -> None:
     """Import LUCiD and write the v3 four-file batch for this job.
 
@@ -186,8 +192,8 @@ def _run_lucid(
     from lucid.geometry.detector_geometry import DetectorGeometry
     from lucid.utils import base_dir_path
 
-    detector_config_path = base_dir_path() + "config/SK_like_geom_config.json"
-    physics_config_path = base_dir_path() + "config/SK_like_physics_config.json"
+    detector_config_path = base_dir_path() + f"config/{detector}_geom_config.json"
+    physics_config_path = base_dir_path() + f"config/{detector}_physics_config.json"
 
     print(f"=== Step 3: Running LUCiD v3 writer ===", flush=True)
     print(f"    ROOT file:  {root_file}")
@@ -415,6 +421,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             n_events=photonsim_events,
             master_seed=args.master_seed,
             job_id=args.job_id,
+            detector=args.detector,
         )
     except Exception as e:
         import traceback
@@ -578,8 +585,8 @@ def _main_pileup(args: argparse.Namespace, config: dict) -> int:
     from lucid.geometry.detector_geometry import DetectorGeometry
     from lucid.utils import base_dir_path
 
-    detector_config_path = base_dir_path() + "config/SK_like_geom_config.json"
-    physics_config_path  = base_dir_path() + "config/SK_like_physics_config.json"
+    detector_config_path = base_dir_path() + f"config/{args.detector}_geom_config.json"
+    physics_config_path  = base_dir_path() + f"config/{args.detector}_physics_config.json"
 
     det_geom = DetectorGeometry.from_config(detector_config_path)
     sensor_positions = np.asarray(det_geom.sensor_points, dtype=np.float32)
