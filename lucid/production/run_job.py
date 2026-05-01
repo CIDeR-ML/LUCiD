@@ -597,6 +597,7 @@ def _main_pileup(args: argparse.Namespace, config: dict) -> int:
         detector_config_path, 0, K=12, is_data=True, temperature=0.0,
         apply_smearing=False, physics_config=physics_config_path,
         default_detector_params=True,
+        hit_mode='per_segment',
     )
 
     lucid_opts = config.get("lucid_options", {})
