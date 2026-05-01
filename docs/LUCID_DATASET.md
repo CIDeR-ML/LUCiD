@@ -205,7 +205,7 @@ labl.h5
     └── per_track/                               (~600 rows for typical LUCiD events)
         ├── track_id            (n_tracks,) int32   — Geant4 track ID (truth metadata)
         ├── parent_id           (n_tracks,) int32
-        ├── pdg                 (n_tracks,) int16   — raw PDG code
+        ├── pdg                 (n_tracks,) int32   — raw PDG code (nuclear PDGs ~1e9 do not fit in int16)
         ├── initial_energy      (n_tracks,) float32 — MeV
         ├── n_cherenkov         (n_tracks,) int32   — total Cherenkov for this track
         ├── particle_idx        (n_tracks,) int32   — FK to per_particle row

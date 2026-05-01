@@ -4108,14 +4108,14 @@ def save_labl_event_v3(f, event_dict, seq_idx):
     if mt:
         track_id = np.array([t['track_id'] for t in mt.values()], dtype=np.int32)
         parent_id = np.array([t['parent_id'] for t in mt.values()], dtype=np.int32)
-        pdg = np.array([t['pdg'] for t in mt.values()], dtype=np.int16)
+        pdg = np.array([t['pdg'] for t in mt.values()], dtype=np.int32)
         initial_energy = np.array([t['initial_energy'] for t in mt.values()],
                                    dtype=np.float32)
         n_ch = np.array([t['n_cherenkov'] for t in mt.values()], dtype=np.int32)
     else:
         track_id = np.array([], dtype=np.int32)
         parent_id = np.array([], dtype=np.int32)
-        pdg = np.array([], dtype=np.int16)
+        pdg = np.array([], dtype=np.int32)
         initial_energy = np.array([], dtype=np.float32)
         n_ch = np.array([], dtype=np.int32)
 
