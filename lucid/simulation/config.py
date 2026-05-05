@@ -20,6 +20,9 @@ class SimConfig(NamedTuple):
         True → STE (differentiable), False → MC sampling.
     apply_smearing : bool
         Apply SK-like charge/time smearing in data mode.
+    tts_sigma_ns : float
+        Single-PE PMT transit-time spread (ns). 2.5 ns matches SK 20-inch
+        R3600. Applied per-photon before segment_min in make_hits_data.
     n_grad_iters : int
         Iteration threshold for direction stop_gradient.
         Default derived from mode: track=K (gradient flows all bounces),
@@ -30,6 +33,7 @@ class SimConfig(NamedTuple):
     mode: str = 'track'
     use_expected_value: bool = True
     apply_smearing: bool = True
+    tts_sigma_ns: float = 2.5
     n_grad_iters: Optional[int] = None
 
     @property

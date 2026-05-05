@@ -669,11 +669,22 @@ def generate_random_event_params(key, detector_bounds, fraction=0.7):
                                          direction=direction, t0=jnp.array(0.0))
 
 
-def smear_times(times, time_resolution=0.4, key=None):
+def smear_times(times, time_resolution=2.5, key=None):
     """
     Gaussianly smear input times.
-    The default time resoluition is that of SK.
-    Reference: https://arxiv.org/pdf/1307.0162
+
+    Default σ = 2.5 ns matches the single-PE TTS of the SK 20-inch R3600
+    PMT (Fukuda et al. 2003, NIM A 501, 418). Use 1.15 ns for HK 20-inch
+    HQE R12860 (Nishimura et al. 2022, NIM A 1027, 166248).
+
+    Note: when applied at the *per-photon* level (e.g. inside
+    ``make_hits_data`` before segment_min), this represents the physical
+    transit-time jitter and the per-channel first-arrival narrowing emerges
+    automatically from the order statistic. When applied to already-aggregated
+    per-channel times (legacy paths, e.g. event_io.py), σ should instead be the
+    effective high-PE channel resolution (~0.4 ns for SK), since the
+    order-statistic narrowing has already happened — pass ``time_resolution``
+    explicitly in those callers.
 
     Args:
         times: array of input times (e.g., per detector).

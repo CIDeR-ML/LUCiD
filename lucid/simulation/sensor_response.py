@@ -40,10 +40,23 @@ def make_hits_simulation(
 
 def make_hits_data(
         flat_weights, flat_indices, flat_times, num_detectors,
-        qe=0.2, qe_corrections=None, rng_key=None, threshold=1e-5, apply_smearing=False):
-    """Data-mode hits with Bernoulli QE, segment_min timing, and optional SK-like smearing."""
+        qe=0.2, qe_corrections=None, rng_key=None, threshold=1e-5,
+        apply_smearing=False, tts_sigma_ns=2.5):
+    """Data-mode hits with Bernoulli QE, per-photon TTS, then segment_min timing.
+
+    When ``apply_smearing`` is true, each detected photon receives its own
+    Gaussian TTS draw *before* the per-sensor segment_min is taken — the
+    physical PMT picture (each PE has independent transit-time jitter and the
+    discriminator fires on the earliest detected pulse). This produces the
+    correct N-dependent narrowing of the per-sensor first-arrival time as an
+    order statistic of the per-photon Gaussians, rather than a flat σ added
+    after the min.
+
+    ``tts_sigma_ns`` is the single-PE transit-time spread of the PMT (Gaussian
+    σ in ns). Default 2.5 ns matches SK 20-inch R3600 (Fukuda et al. 2003,
+    NIM A 501, 418). For HK 20-inch HQE R12860 use ~1.15 ns.
+    """
     timing_mask = (flat_weights > threshold) & (flat_times > 0)
-    filtered_times = jnp.where(timing_mask, flat_times, jnp.inf)
 
     rng_key, smear_time_key = jax.random.split(rng_key)
     qe_key, smear_counts_key = jax.random.split(rng_key)
@@ -56,7 +69,16 @@ def make_hits_data(
     detection_probs = jax.random.uniform(qe_key, shape=flat_weights.shape)
     detected_mask = detection_probs < per_photon_qe
     qe_weights = flat_weights * detected_mask.astype(jnp.float32)
-    qe_filtered_times = jnp.where(detected_mask & timing_mask, flat_times, jnp.inf)
+
+    # Per-photon TTS smearing applied before segment_min so the per-sensor
+    # time is min_i(t_i + ε_i) — independent draw per detected photon.
+    if apply_smearing:
+        smeared_flat_times = smear_times(
+            flat_times, time_resolution=tts_sigma_ns, key=smear_time_key)
+    else:
+        smeared_flat_times = flat_times
+
+    qe_filtered_times = jnp.where(detected_mask & timing_mask, smeared_flat_times, jnp.inf)
 
     total_charge = jax.ops.segment_sum(qe_weights, flat_indices, num_segments=num_detectors)
     detector_mins = jax.ops.segment_min(qe_filtered_times, flat_indices, num_segments=num_detectors)
@@ -64,19 +86,20 @@ def make_hits_data(
     nonzero_mask = (total_charge > 1e-10) & (detector_mins > 0) & jnp.isfinite(detector_mins)
 
     if apply_smearing:
-        measured_time = jnp.where(
-            jnp.any(nonzero_mask),
-            smear_times(detector_mins, key=smear_time_key),
-            0.0
-        )
         measured_charge = jnp.where(
             nonzero_mask,
             smear_charges_SK_like(total_charge, key=smear_counts_key),
             0
         )
     else:
-        measured_time = jnp.where(jnp.any(nonzero_mask), detector_mins, 0.0)
         measured_charge = jnp.where(nonzero_mask, total_charge, 0)
+
+    # Per-sensor mask (not jnp.any!): unhit sensors get 0, not inf. Under
+    # the old post-min smear_times path, inf was clipped to 1e6 inside
+    # smear_times. Now that TTS smearing is per-photon (pre-min), the
+    # post-min detector_mins is inf for unhit sensors and would propagate
+    # as inf into any downstream loss using t_obs.
+    measured_time = jnp.where(nonzero_mask, detector_mins, 0.0)
 
     return measured_charge, measured_time
 

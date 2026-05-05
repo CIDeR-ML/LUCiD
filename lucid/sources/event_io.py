@@ -1032,7 +1032,7 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path, se
     from lucid.detector_params import ParticleParams
     import numpy as np
     import json
-    from lucid.utils import smear_charges_SK_like, smear_times
+    from lucid.utils import smear_charges_SK_like
     pass  # save_single_event_with_particle_info and merge_event_files are now local
     from lucid.production.voxelize import VoxelGridConfig, voxelize_from_photon_indices, pack_voxel_data_for_hdf5
 
@@ -1339,15 +1339,17 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path, se
             T_true = jnp.min(jnp.where(T_per_particle > 0, T_per_particle, jnp.inf), axis=0)
             T_true = jnp.where(jnp.isfinite(T_true), T_true, 0.0)
 
-            # Apply smearing if requested
+            # Apply charge smearing if requested. Per-photon TTS is already
+            # applied inside make_hits_data (pre-segment_min), so T_true
+            # already carries the correct first-arrival smearing — no
+            # additional time smearing is needed here.
             if apply_smearing:
                 reco_key, master_key = jax.random.split(master_key)
-                smear_pe_key, smear_t_key = jax.random.split(reco_key)
+                smear_pe_key, _ = jax.random.split(reco_key)
                 PE_reco = smear_charges_SK_like(PE_true, key=smear_pe_key)
-                T_reco = smear_times(T_true, key=smear_t_key)
             else:
                 PE_reco = PE_true
-                T_reco = T_true
+            T_reco = T_true
 
             # Convert JAX arrays to numpy BEFORE storing in extended_info
             # This is critical for thread-safe saving with ThreadPoolExecutor
