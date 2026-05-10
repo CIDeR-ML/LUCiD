@@ -265,10 +265,20 @@ def _trace_event_bucketed(
     -------
     pe_per_sensor       : (n_sensors,) float32
     t_per_sensor        : (n_sensors,) float32  — 0 = no hit
-    photon_qe_weight    : (N_photons,) float32  — 0 for QE-failed photons
-    photon_qe_time      : (N_photons,) float32  — +inf for QE-failed / no hit
-    photon_sensor_idx   : (N_photons,) int32
-    photon_seg_idx_raw  : (N_photons,) int32    — -1 for orphan photons
+    photon_qe_weight    : (factor·N_photons,) float32 — 0 for QE-failed entries
+    photon_qe_time      : (factor·N_photons,) float32 — +inf for QE-failed / no hit
+    photon_sensor_idx   : (factor·N_photons,) int32
+    photon_seg_idx_raw  : (factor·N_photons,) int32   — -1 for orphan photons
+    photon_global_idx   : (factor·N_photons,) int32   — global photon id (0..N-1)
+                          per kernel-flat row, for downstream gather of per-photon
+                          arrays (seg_idx_filtered, particle_idx) into kernel-flat
+                          alignment
+
+    ``factor = K · max_sensors_per_cell`` is the number of (propagation
+    iteration, sensor cell) pairs each photon contributes to in the soft-hit
+    kernel. Per-sensor PE/T (``pe_per_sensor``, ``t_per_sensor``) already
+    aggregate over all factor entries via segment_sum/segment_min inside
+    the kernel, so they remain ``(n_sensors,)``-shaped.
     """
     if not rays_buckets:
         raise ValueError("_trace_event_bucketed requires non-empty rays_buckets")
@@ -284,6 +294,7 @@ def _trace_event_bucketed(
             np.zeros(n_sensors, dtype=np.float32),
             np.empty(0, dtype=np.float32),
             np.empty(0, dtype=np.float32),
+            np.empty(0, dtype=np.int32),
             np.empty(0, dtype=np.int32),
             np.empty(0, dtype=np.int32),
         )
@@ -302,6 +313,7 @@ def _trace_event_bucketed(
     qe_t_chunks  = []
     sen_i_chunks = []
     seg_i_chunks = []
+    gid_chunks   = []
 
     chunks = _split_into_chunks(N, rays_buckets)
     offset = 0
@@ -348,14 +360,30 @@ def _trace_event_bucketed(
             np.where(T_chunk_np > 0, T_chunk_np, np.inf),
         )
 
-        # Slice per-photon arrays to the chunk's active photon count
-        # (drop bucket padding — those slots have qe_weight=0 from the
-        # kernel's mask-driven QE roll, but truncating keeps the host's
-        # photon-id alignment to the input.).
-        qe_w_chunks.append(np.asarray(qe_w_chunk, dtype=np.float32)[:n_in_chunk])
-        qe_t_chunks.append(np.asarray(qe_t_chunk, dtype=np.float32)[:n_in_chunk])
-        sen_i_chunks.append(np.asarray(sen_i_chunk, dtype=np.int32)[:n_in_chunk])
-        seg_i_chunks.append(np.asarray(seg_i_chunk, dtype=np.int32)[:n_in_chunk])
+        # The kernel returns flat arrays of length (K · max_sensors_per_cell · bucket_size)
+        # — one entry per (propagation iteration, sensor cell, photon) tuple — because
+        # each photon's contribution is distributed across multiple (k, sensor_cell)
+        # pairs in the soft-hit model. Per-sensor PE_chunk already sums these
+        # contributions internally (segment_sum on flat_indices). To produce per-
+        # (particle, sensor) and per-(segment, sensor) totals that match PE_chunk,
+        # the host aggregator needs the FULL flat arrays paired with broadcast
+        # particle_idx / seg_idx — NOT a [:n_in_chunk] slice (which would only
+        # keep the (k=0, sensor_cell=0) slab, ~1/(K·max_sensors_per_cell) of data).
+        # Drop only the bucket padding (photon ids >= n_in_chunk), and emit a
+        # global photon id per kept row so the host can gather per-photon arrays
+        # (seg_idx_filtered, particle_idx) up to kernel-flat alignment.
+        qe_w_arr  = np.asarray(qe_w_chunk,  dtype=np.float32)
+        qe_t_arr  = np.asarray(qe_t_chunk,  dtype=np.float32)
+        sen_i_arr = np.asarray(sen_i_chunk, dtype=np.int32)
+        seg_i_arr = np.asarray(seg_i_chunk, dtype=np.int32)
+        flat_len = qe_w_arr.shape[0]
+        photon_axis = np.arange(flat_len, dtype=np.int64) % bucket_size
+        keep = photon_axis < n_in_chunk
+        qe_w_chunks .append(qe_w_arr [keep])
+        qe_t_chunks .append(qe_t_arr [keep])
+        sen_i_chunks.append(sen_i_arr[keep])
+        seg_i_chunks.append(seg_i_arr[keep])
+        gid_chunks  .append((photon_axis[keep] + offset).astype(np.int32))
 
         offset += n_in_chunk
 
@@ -364,10 +392,12 @@ def _trace_event_bucketed(
     photon_qe_time     = np.concatenate(qe_t_chunks)
     photon_sensor_idx  = np.concatenate(sen_i_chunks)
     photon_seg_idx_raw = np.concatenate(seg_i_chunks)
+    photon_global_idx  = np.concatenate(gid_chunks)
 
     return (pe_per_sensor, t_per_sensor,
             photon_qe_weight, photon_qe_time,
-            photon_sensor_idx, photon_seg_idx_raw)
+            photon_sensor_idx, photon_seg_idx_raw,
+            photon_global_idx)
 
 
 def _read_photons_for_event(raw_tree, event_idx):
@@ -974,13 +1004,15 @@ def _derive_views_from_segments(raw, photon_records=None):
     raw : dict
         Output of :func:`_read_event_raw`.
     photon_records : dict or None
-        Optional dict with keys ``qe_weight`` (N_photons,) float32,
-        ``qe_time`` (N_photons,) float32, ``sensor_idx`` (N_photons,)
-        int32, ``seg_idx_raw`` (N_photons,) int32 — the per-photon flat
-        lists emitted by :func:`_trace_event_bucketed`. When provided,
-        the function attaches a ``photon_records_filtered`` entry with
-        the same fields plus ``seg_idx_filtered`` (raw→filtered remap)
-        and ``particle_idx`` (filtered-track → categorized particle).
+        Optional dict with keys ``qe_weight``, ``qe_time``, ``sensor_idx``,
+        ``seg_idx_raw`` — kernel-flat arrays of shape ``(factor·N_photons,)``
+        emitted by :func:`_trace_event_bucketed` — and ``photon_global_idx``
+        of the same shape, mapping each kernel-flat row to the source
+        photon id (0..N-1). When provided, the function attaches a
+        ``photon_records_filtered`` entry whose ``qe_weight``, ``qe_time``,
+        ``sensor_idx`` are the kernel-flat arrays unchanged, plus
+        ``seg_idx_filtered`` and ``particle_idx`` gathered via
+        ``photon_global_idx`` so all five arrays are kernel-flat-aligned.
         Pass ``None`` for dark events (no kernel call).
 
     Returns
@@ -1158,18 +1190,26 @@ def _derive_views_from_segments(raw, photon_records=None):
         f"group_id length {len(segments['group_id'])} != Segment_Edep {edep_len}")
 
     # ---- Build photon_records_filtered for the host aggregator ----
-    # ``filter_segments_to_meaningful`` already produced ``photon_segment_index``
-    # in the **filtered** segment space; ``bucket_photons_by_segment`` already
-    # gave us the per-photon particle index. Both arrays carry the -1
-    # sentinel for orphans, which is what the host aggregator's QE-pass
-    # mask needs.
+    # ``filter_segments_to_meaningful`` produced ``photon_segment_index`` in
+    # the **filtered** segment space (length N); ``bucket_photons_by_segment``
+    # gave us the per-photon particle index (length N). Both carry the -1
+    # sentinel for orphans, which is what the host aggregator's QE-pass mask
+    # needs. The kernel-flat arrays in ``photon_records`` have one row per
+    # (propagation iteration, sensor cell, photon) tuple — length factor·N
+    # — so we gather the per-photon arrays via ``photon_global_idx`` to bring
+    # all five arrays to a common kernel-flat alignment for the groupbys.
     if photon_records is not None:
+        gid = np.asarray(photon_records['photon_global_idx'], dtype=np.int64)
         photon_records_filtered = {
             'qe_weight':        photon_records['qe_weight'],
             'qe_time':          photon_records['qe_time'],
             'sensor_idx':       photon_records['sensor_idx'],
-            'seg_idx_filtered': photon_segment_index.astype(np.int32, copy=False),
-            'particle_idx':     photon_to_particle.astype(np.int32, copy=False),
+            'seg_idx_filtered': (photon_segment_index[gid]
+                                 if photon_segment_index.size
+                                 else photon_segment_index).astype(np.int32, copy=False),
+            'particle_idx':     (photon_to_particle[gid]
+                                 if photon_to_particle.size
+                                 else photon_to_particle).astype(np.int32, copy=False),
         }
     else:
         photon_records_filtered = None
@@ -1512,7 +1552,8 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
             sim_start_time = time.time()
             _t_sim = time.perf_counter()
             pe_per_sensor_np, t_per_sensor_np, \
-                photon_qe_w, photon_qe_t, photon_sen_i, photon_seg_i_raw = \
+                photon_qe_w, photon_qe_t, photon_sen_i, photon_seg_i_raw, \
+                photon_gid = \
                 _trace_event_bucketed(
                     event_simulator,
                     photon_origins_np, photon_directions_np,
@@ -1530,10 +1571,11 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
             # ----------------------------------------------------------------
             _t_post = time.perf_counter()
             particle_data = _derive_views_from_segments(raw, photon_records={
-                'qe_weight':   photon_qe_w,
-                'qe_time':     photon_qe_t,
-                'sensor_idx':  photon_sen_i,
-                'seg_idx_raw': photon_seg_i_raw,
+                'qe_weight':         photon_qe_w,
+                'qe_time':           photon_qe_t,
+                'sensor_idx':        photon_sen_i,
+                'seg_idx_raw':       photon_seg_i_raw,
+                'photon_global_idx': photon_gid,
             })
             n_particles = particle_data['n_particles']
             particles = particle_data['particles']
@@ -2117,7 +2159,7 @@ def generate_events_from_photonsim_pileup(
 
                 # Phase 2 — bucketed trace for this vertex (per-photon out).
                 _t_sim = _time.time()
-                pe_sensor_i, t_sensor_i, qe_w_i, qe_t_i, sen_i_i, seg_i_raw_i = \
+                pe_sensor_i, t_sensor_i, qe_w_i, qe_t_i, sen_i_i, seg_i_raw_i, gid_i = \
                     _trace_event_bucketed(
                         event_simulator,
                         photon_origins_i, photon_directions_i,
@@ -2130,10 +2172,11 @@ def generate_events_from_photonsim_pileup(
 
                 # Phase 3 — derive views (categorize, filter, build photon records).
                 particle_data_i = _derive_views_from_segments(raw, photon_records={
-                    'qe_weight':   qe_w_i,
-                    'qe_time':     qe_t_i,
-                    'sensor_idx':  sen_i_i,
-                    'seg_idx_raw': seg_i_raw_i,
+                    'qe_weight':         qe_w_i,
+                    'qe_time':           qe_t_i,
+                    'sensor_idx':        sen_i_i,
+                    'seg_idx_raw':       seg_i_raw_i,
+                    'photon_global_idx': gid_i,
                 })
                 n_particles_i = particle_data_i['n_particles']
 
