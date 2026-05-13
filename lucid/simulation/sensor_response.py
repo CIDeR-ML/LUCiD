@@ -38,70 +38,168 @@ def make_hits_simulation(
     return measured_charge, measured_time
 
 
+def _qe_roll(flat_weights, flat_indices, flat_times,
+             qe, qe_corrections, qe_key, threshold):
+    """Per-photon Bernoulli QE survival.
+
+    Shared between make_hits_data and make_hits_per_segment so both modes
+    use identical RNG and threshold semantics.
+    """
+    timing_mask = (flat_weights > threshold) & (flat_times > 0)
+    per_photon_qe = qe * qe_corrections[flat_indices] if qe_corrections is not None else qe
+    detection_probs = jax.random.uniform(qe_key, shape=flat_weights.shape)
+    detected_mask = detection_probs < per_photon_qe
+    qe_weights = flat_weights * detected_mask.astype(jnp.float32)
+    qe_filtered_times = jnp.where(detected_mask & timing_mask, flat_times, jnp.inf)
+    return qe_weights, qe_filtered_times, detected_mask, timing_mask
+
+
 def make_hits_data(
         flat_weights, flat_indices, flat_times, num_detectors,
         qe=0.2, qe_corrections=None, rng_key=None, threshold=1e-5,
         apply_smearing=False, tts_sigma_ns=2.5):
     """Data-mode hits with Bernoulli QE, per-photon TTS, then segment_min timing.
 
+    Returns ``(measured_charge, measured_time_true, measured_time_reco)``.
+
     When ``apply_smearing`` is true, each detected photon receives its own
     Gaussian TTS draw *before* the per-sensor segment_min is taken — the
     physical PMT picture (each PE has independent transit-time jitter and the
-    discriminator fires on the earliest detected pulse). This produces the
-    correct N-dependent narrowing of the per-sensor first-arrival time as an
-    order statistic of the per-photon Gaussians, rather than a flat σ added
-    after the min.
+    discriminator fires on the earliest detected pulse). Two segment_mins
+    are computed: one on true (unsmeared) times and one on TTS-smeared times,
+    so callers get both T_true and T_reco from a single kernel pass.
 
     ``tts_sigma_ns`` is the single-PE transit-time spread of the PMT (Gaussian
     σ in ns). Default 2.5 ns matches SK 20-inch R3600 (Fukuda et al. 2003,
     NIM A 501, 418). For HK 20-inch HQE R12860 use ~1.15 ns.
     """
-    timing_mask = (flat_weights > threshold) & (flat_times > 0)
-
     rng_key, smear_time_key = jax.random.split(rng_key)
     qe_key, smear_counts_key = jax.random.split(rng_key)
 
-    # Per-photon QE including per-sensor corrections (consistent with simulation/likelihood)
-    per_photon_qe = qe * qe_corrections[flat_indices] if qe_corrections is not None else qe
+    qe_weights, qe_filtered_times, detected_mask, timing_mask = _qe_roll(
+        flat_weights, flat_indices, flat_times,
+        qe, qe_corrections, qe_key, threshold)
 
-    # Bernoulli QE sampling — when qe >= 1.0, uniform(0,1) < qe
-    # is always true so all photons pass.  Avoids Python `if` on traced values.
-    detection_probs = jax.random.uniform(qe_key, shape=flat_weights.shape)
-    detected_mask = detection_probs < per_photon_qe
-    qe_weights = flat_weights * detected_mask.astype(jnp.float32)
+    total_charge = jax.ops.segment_sum(qe_weights, flat_indices, num_segments=num_detectors)
 
-    # Per-photon TTS smearing applied before segment_min so the per-sensor
-    # time is min_i(t_i + ε_i) — independent draw per detected photon.
+    # True (unsmeared) first-arrival per sensor.
+    detector_mins_true = jax.ops.segment_min(
+        qe_filtered_times, flat_indices, num_segments=num_detectors)
+
+    # TTS-smeared first-arrival: per-photon Gaussian jitter before segment_min
+    # so per-sensor time is min_i(t_i + ε_i) with correct N-dependent narrowing.
     if apply_smearing:
         smeared_flat_times = smear_times(
             flat_times, time_resolution=tts_sigma_ns, key=smear_time_key)
+        qe_filtered_smeared = jnp.where(
+            detected_mask & timing_mask, smeared_flat_times, jnp.inf)
+        detector_mins_reco = jax.ops.segment_min(
+            qe_filtered_smeared, flat_indices, num_segments=num_detectors)
     else:
-        smeared_flat_times = flat_times
+        detector_mins_reco = detector_mins_true
 
-    qe_filtered_times = jnp.where(detected_mask & timing_mask, smeared_flat_times, jnp.inf)
-
-    total_charge = jax.ops.segment_sum(qe_weights, flat_indices, num_segments=num_detectors)
-    detector_mins = jax.ops.segment_min(qe_filtered_times, flat_indices, num_segments=num_detectors)
-
-    nonzero_mask = (total_charge > 1e-10) & (detector_mins > 0) & jnp.isfinite(detector_mins)
+    nonzero_mask = (
+        (total_charge > 1e-10)
+        & (detector_mins_true > 0)
+        & jnp.isfinite(detector_mins_true))
 
     if apply_smearing:
         measured_charge = jnp.where(
             nonzero_mask,
             smear_charges_SK_like(total_charge, key=smear_counts_key),
-            0
-        )
+            0)
     else:
         measured_charge = jnp.where(nonzero_mask, total_charge, 0)
 
-    # Per-sensor mask (not jnp.any!): unhit sensors get 0, not inf. Under
-    # the old post-min smear_times path, inf was clipped to 1e6 inside
-    # smear_times. Now that TTS smearing is per-photon (pre-min), the
-    # post-min detector_mins is inf for unhit sensors and would propagate
-    # as inf into any downstream loss using t_obs.
-    measured_time = jnp.where(nonzero_mask, detector_mins, 0.0)
+    measured_time_true = jnp.where(nonzero_mask, detector_mins_true, 0.0)
+    measured_time_reco = jnp.where(nonzero_mask, detector_mins_reco, 0.0)
 
-    return measured_charge, measured_time
+    return measured_charge, measured_time_true, measured_time_reco
+
+
+def make_hits_per_segment(
+        flat_weights, flat_indices, flat_times, num_detectors,
+        qe=0.2, qe_corrections=None, rng_key=None, threshold=1e-5,
+        apply_smearing=False, tts_sigma_ns=2.5,
+        flat_segment_idx=None, n_segments=0):
+    """Per-segment-mode hits: realistic per-sensor PLUS exact per-(segment, sensor) decomposition.
+
+    Returns ``(measured_charge, measured_time_true, measured_time_reco,
+    pe_per_seg, t_per_seg_true, t_per_seg_reco)``.
+
+    Per-sensor outputs use the same QE draws and TTS draws as make_hits_data.
+    The per-(segment, sensor) decomposition reuses the same qe_weights tensor,
+    so column sums of pe_per_seg equal measured_charge by construction.
+
+    When ``apply_smearing`` is true, per-photon TTS is applied before both the
+    per-sensor and per-segment segment_mins. Both true (unsmeared) and reco
+    (TTS-smeared) times are computed and returned for each granularity.
+
+    Photons with ``flat_segment_idx == -1`` (sentinel for non-meaningful
+    parent track) are routed to the ``n_segments``-th dummy bucket and
+    sliced off before return — they still contribute to the per-sensor
+    total but produce no segment row.
+    """
+    rng_key, smear_time_key = jax.random.split(rng_key)
+    qe_key, smear_counts_key = jax.random.split(rng_key)
+
+    qe_weights, qe_filtered_times, detected_mask, timing_mask = _qe_roll(
+        flat_weights, flat_indices, flat_times,
+        qe, qe_corrections, qe_key, threshold)
+
+    # ---- Per-sensor (mirrors make_hits_data) ----
+    total_charge = jax.ops.segment_sum(qe_weights, flat_indices, num_segments=num_detectors)
+    detector_mins_true = jax.ops.segment_min(
+        qe_filtered_times, flat_indices, num_segments=num_detectors)
+
+    if apply_smearing:
+        smeared_flat_times = smear_times(
+            flat_times, time_resolution=tts_sigma_ns, key=smear_time_key)
+        qe_filtered_smeared = jnp.where(
+            detected_mask & timing_mask, smeared_flat_times, jnp.inf)
+        detector_mins_reco = jax.ops.segment_min(
+            qe_filtered_smeared, flat_indices, num_segments=num_detectors)
+    else:
+        qe_filtered_smeared = qe_filtered_times
+        detector_mins_reco = detector_mins_true
+
+    nonzero_mask = (
+        (total_charge > 1e-10)
+        & (detector_mins_true > 0)
+        & jnp.isfinite(detector_mins_true))
+
+    if apply_smearing:
+        measured_charge = jnp.where(
+            nonzero_mask,
+            smear_charges_SK_like(total_charge, key=smear_counts_key),
+            0)
+    else:
+        measured_charge = jnp.where(nonzero_mask, total_charge, 0)
+
+    measured_time_true = jnp.where(nonzero_mask, detector_mins_true, 0.0)
+    measured_time_reco = jnp.where(nonzero_mask, detector_mins_reco, 0.0)
+
+    # ---- Per-(segment, sensor) decomposition ----
+    safe_seg = jnp.where(flat_segment_idx >= 0, flat_segment_idx, n_segments)
+    combined_idx = safe_seg * num_detectors + flat_indices
+    n_buckets = (n_segments + 1) * num_detectors
+
+    pe_per_seg = jax.ops.segment_sum(
+        qe_weights, combined_idx, num_segments=n_buckets,
+    ).reshape(n_segments + 1, num_detectors)[:n_segments]
+
+    t_per_seg_true = jax.ops.segment_min(
+        qe_filtered_times, combined_idx, num_segments=n_buckets,
+    ).reshape(n_segments + 1, num_detectors)[:n_segments]
+    t_per_seg_true = jnp.where(jnp.isfinite(t_per_seg_true), t_per_seg_true, 0.0)
+
+    t_per_seg_reco = jax.ops.segment_min(
+        qe_filtered_smeared, combined_idx, num_segments=n_buckets,
+    ).reshape(n_segments + 1, num_detectors)[:n_segments]
+    t_per_seg_reco = jnp.where(jnp.isfinite(t_per_seg_reco), t_per_seg_reco, 0.0)
+
+    return (measured_charge, measured_time_true, measured_time_reco,
+            pe_per_seg, t_per_seg_true, t_per_seg_reco)
 
 
 def make_hits_likelihood(

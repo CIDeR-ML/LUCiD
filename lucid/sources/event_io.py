@@ -209,8 +209,9 @@ def generate_events_from_root(event_simulator, root_file_path, output_dir='event
 
             muon_data['N'] = N
 
-            # Run simulation for muon
-            muon_charges, muon_times = event_simulator(track_params, sensor_params, sim_key, muon_data)
+            # Run simulation for muon (realistic mode returns 3-tuple)
+            muon_result = event_simulator(track_params, sensor_params, sim_key, muon_data)
+            muon_charges, muon_times = muon_result[0], muon_result[-1]
 
             # Store muon data
             all_charges.append(muon_charges)
@@ -261,7 +262,8 @@ def generate_events_from_root(event_simulator, root_file_path, output_dir='event
                 pion_sim_key, master_key = jax.random.split(master_key)
 
                 # Run simulation for pion
-                pion_charges, pion_times = event_simulator(pion_track_params, sensor_params, pion_sim_key, pion_data)
+                pion_result = event_simulator(pion_track_params, sensor_params, pion_sim_key, pion_data)
+                pion_charges, pion_times = pion_result[0], pion_result[-1]
 
                 # Store pion data
                 all_charges.append(pion_charges)
@@ -464,10 +466,10 @@ def read_photon_data_from_photonsim(root_file_path, entry_index):
     # Extract primary energy (already in MeV)
     energy = float(tree_data['PrimaryEnergy'][0])
 
-    # Extract photon positions (convert mm to cm)
-    photon_posx = tree_data['PhotonPosX'][0] / 10.0  # mm to cm
-    photon_posy = tree_data['PhotonPosY'][0] / 10.0
-    photon_posz = tree_data['PhotonPosZ'][0] / 10.0
+    # Extract photon positions (convert mm to m)
+    photon_posx = tree_data['PhotonPosX'][0] / 1000.0  # mm to m
+    photon_posy = tree_data['PhotonPosY'][0] / 1000.0
+    photon_posz = tree_data['PhotonPosZ'][0] / 1000.0
 
     # Extract photon directions
     photon_dirx = tree_data['PhotonDirX'][0]
@@ -479,7 +481,7 @@ def read_photon_data_from_photonsim(root_file_path, entry_index):
     photon_directions = np.column_stack((photon_dirx, photon_diry, photon_dirz))
 
     result = {
-        'photon_origins': jnp.array(photon_positions),     # Combined position vectors in cm
+        'photon_origins': jnp.array(photon_positions),     # Combined position vectors in m
         'photon_directions': jnp.array(photon_directions), # Combined direction vectors
         'photon_times': jnp.array(tree_data['PhotonTime'][0]),
         'energy': energy  # Energy in MeV
@@ -515,7 +517,7 @@ def read_particle_data_from_photonsim(root_file_path, entry_index, include_track
             - 'photon_indices': list of photon indices belonging to this particle
             - 'track_info': dict with track information (position, direction, energy, time, pdg, category, etc.)
             - 'extended_genealogy': list of meaningful track IDs (if include_track_segments=True)
-        - 'photon_origins': array (N_photons, 3) in cm
+        - 'photon_origins': array (N_photons, 3) in m
         - 'photon_directions': array (N_photons, 3)
         - 'photon_times': array (N_photons,) in ns
         - 'primary_energy': float, energy in MeV
@@ -566,10 +568,10 @@ def read_particle_data_from_photonsim(root_file_path, entry_index, include_track
     # Extract primary energy
     primary_energy = float(tree_data['PrimaryEnergy'][0])
 
-    # Extract photon data (convert mm to cm)
-    photon_posx = tree_data['PhotonPosX'][0] / 10.0
-    photon_posy = tree_data['PhotonPosY'][0] / 10.0
-    photon_posz = tree_data['PhotonPosZ'][0] / 10.0
+    # Extract photon data (convert mm to m)
+    photon_posx = tree_data['PhotonPosX'][0] / 1000.0
+    photon_posy = tree_data['PhotonPosY'][0] / 1000.0
+    photon_posz = tree_data['PhotonPosZ'][0] / 1000.0
     photon_positions = np.column_stack((photon_posx, photon_posy, photon_posz))
 
     photon_dirx = tree_data['PhotonDirX'][0]
@@ -595,9 +597,9 @@ def read_particle_data_from_photonsim(root_file_path, entry_index, include_track
     track_ids = tree_data['TrackInfo_TrackID'][0]
     track_categories = tree_data['TrackInfo_Category'][0]
     track_subids = tree_data['TrackInfo_SubID'][0]
-    track_posx = tree_data['TrackInfo_PosX'][0] / 10.0  # mm to cm
-    track_posy = tree_data['TrackInfo_PosY'][0] / 10.0
-    track_posz = tree_data['TrackInfo_PosZ'][0] / 10.0
+    track_posx = tree_data['TrackInfo_PosX'][0] / 1000.0  # mm to m
+    track_posy = tree_data['TrackInfo_PosY'][0] / 1000.0
+    track_posz = tree_data['TrackInfo_PosZ'][0] / 1000.0
     track_dirx = tree_data['TrackInfo_DirX'][0]
     track_diry = tree_data['TrackInfo_DirY'][0]
     track_dirz = tree_data['TrackInfo_DirZ'][0]
@@ -708,14 +710,14 @@ def read_particle_data_from_photonsim(root_file_path, entry_index, include_track
                 'n_segments': int(mtrack_nsegs[i])
             }
 
-        # Extract segment arrays (positions in mm, convert to cm)
+        # Extract segment arrays (positions in mm, convert to m)
         segments = {
-            'start_x': tree_data['Segment_StartX'][0] / 10.0,  # mm to cm
-            'start_y': tree_data['Segment_StartY'][0] / 10.0,
-            'start_z': tree_data['Segment_StartZ'][0] / 10.0,
-            'end_x': tree_data['Segment_EndX'][0] / 10.0,
-            'end_y': tree_data['Segment_EndY'][0] / 10.0,
-            'end_z': tree_data['Segment_EndZ'][0] / 10.0,
+            'start_x': tree_data['Segment_StartX'][0] / 1000.0,  # mm to m
+            'start_y': tree_data['Segment_StartY'][0] / 1000.0,
+            'start_z': tree_data['Segment_StartZ'][0] / 1000.0,
+            'end_x': tree_data['Segment_EndX'][0] / 1000.0,
+            'end_y': tree_data['Segment_EndY'][0] / 1000.0,
+            'end_z': tree_data['Segment_EndZ'][0] / 1000.0,
             'dir_x': tree_data['Segment_DirX'][0],
             'dir_y': tree_data['Segment_DirY'][0],
             'dir_z': tree_data['Segment_DirZ'][0],
@@ -903,8 +905,11 @@ def generate_events_from_photonsim(event_simulator, particles_dict, sensor_param
 
                 photon_data['N'] = N
 
-                # Run simulation for this particle
-                charges, times = event_simulator(track_params, sensor_params, sim_key, photon_data)
+                # Run simulation for this particle.
+                # Realistic mode returns (charge, time_true, time_reco).
+                result = event_simulator(track_params, sensor_params, sim_key, photon_data)
+                charges = result[0]
+                times = result[-1]  # use reco time (last element)
 
                 # Collect data for this particle
                 event_charges_list.append(charges)
@@ -1172,8 +1177,8 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path, se
             # PAD_SIZE is now computed dynamically at the function level
             default_direction = np.array([0.0, 0.0, 1.0], dtype=np.float32)
 
-            # Data already NumPy - ensure float32 and convert to meters (avoid unnecessary copies)
-            all_photon_origins_np = all_photon_origins.astype(np.float32, copy=False) / 100.0
+            # Data already NumPy in meters - ensure float32
+            all_photon_origins_np = all_photon_origins.astype(np.float32, copy=False)
             all_photon_directions_np = all_photon_directions.astype(np.float32, copy=False)
             all_photon_times_np = all_photon_times.astype(np.float32, copy=False)
             all_photon_wavelengths_np = all_photon_wavelengths.astype(np.float32, copy=False)
@@ -1218,14 +1223,12 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path, se
                 # Apply translation to segment positions if track segments are included
                 if include_track_segments and 'segments' in particle_data:
                     segments = particle_data['segments']
-                    # Convert translation from meters to cm (segments are in cm)
-                    translation_cm = translation_vector * 100.0
-                    segments['start_x'] = segments['start_x'] + translation_cm[0]
-                    segments['start_y'] = segments['start_y'] + translation_cm[1]
-                    segments['start_z'] = segments['start_z'] + translation_cm[2]
-                    segments['end_x'] = segments['end_x'] + translation_cm[0]
-                    segments['end_y'] = segments['end_y'] + translation_cm[1]
-                    segments['end_z'] = segments['end_z'] + translation_cm[2]
+                    segments['start_x'] = segments['start_x'] + translation_vector[0]
+                    segments['start_y'] = segments['start_y'] + translation_vector[1]
+                    segments['start_z'] = segments['start_z'] + translation_vector[2]
+                    segments['end_x'] = segments['end_x'] + translation_vector[0]
+                    segments['end_y'] = segments['end_y'] + translation_vector[1]
+                    segments['end_z'] = segments['end_z'] + translation_vector[2]
 
             # Pre-allocate batched arrays
             batched_origins_np = np.zeros((n_particles, PAD_SIZE, 3), dtype=np.float32)
@@ -1249,7 +1252,7 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path, se
                 track_info = particle['track_info']
                 if track_info is not None:
                     track_energies_np[particle_idx] = track_info['energy']
-                    track_positions_np[particle_idx] = track_info['position'] / 100.0  # cm to m
+                    track_positions_np[particle_idx] = track_info['position']  # already m
                     track_directions_np[particle_idx] = track_info['direction']
                 else:
                     track_energies_np[particle_idx] = particle_data['primary_energy']
@@ -1257,9 +1260,8 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path, se
 
                 if apply_translation:
                     track_positions_np[particle_idx] += translation_vector
-                    # Update particles data structure with transformed position (convert back to cm)
                     if track_info is not None:
-                        track_info['position'] = track_positions_np[particle_idx] * 100.0
+                        track_info['position'] = track_positions_np[particle_idx].copy()
 
                 # Scatter photons
                 if N > 0:
@@ -1320,7 +1322,8 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path, se
             particle_keys = jax.random.split(master_key, n_particles)
 
             # Process all particles in one vectorized call!
-            PE_per_particle, T_per_particle = simulate_all_particles(
+            # Realistic mode returns (charge, time_true, time_reco).
+            PE_per_particle, T_per_particle_true, T_per_particle_reco = simulate_all_particles(
                 track_energies_array,
                 track_positions_array,
                 track_directions_array,
@@ -1334,27 +1337,26 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path, se
             sim_elapsed = time.time() - sim_start_time
             print(f"    Simulation completed in {sim_elapsed:.2f}s", flush=True)
 
-            # Calculate PE_true and T_true by aggregating across particles
+            # Aggregate across particles: PE sums, T takes earliest non-zero.
             PE_true = jnp.sum(PE_per_particle, axis=0)
-            T_true = jnp.min(jnp.where(T_per_particle > 0, T_per_particle, jnp.inf), axis=0)
+            T_true = jnp.min(jnp.where(T_per_particle_true > 0, T_per_particle_true, jnp.inf), axis=0)
             T_true = jnp.where(jnp.isfinite(T_true), T_true, 0.0)
+            T_reco = jnp.min(jnp.where(T_per_particle_reco > 0, T_per_particle_reco, jnp.inf), axis=0)
+            T_reco = jnp.where(jnp.isfinite(T_reco), T_reco, 0.0)
 
-            # Apply charge smearing if requested. Per-photon TTS is already
-            # applied inside make_hits_data (pre-segment_min), so T_true
-            # already carries the correct first-arrival smearing — no
-            # additional time smearing is needed here.
             if apply_smearing:
                 reco_key, master_key = jax.random.split(master_key)
                 smear_pe_key, _ = jax.random.split(reco_key)
                 PE_reco = smear_charges_SK_like(PE_true, key=smear_pe_key)
             else:
                 PE_reco = PE_true
-            T_reco = T_true
 
             # Convert JAX arrays to numpy BEFORE storing in extended_info
             # This is critical for thread-safe saving with ThreadPoolExecutor
             PE_per_particle = np.asarray(PE_per_particle, dtype=np.float32)
-            T_per_particle = np.asarray(T_per_particle, dtype=np.float32)
+            # inst/T stores true (unsmeared) per-particle times for truth analysis.
+            T_per_particle = np.asarray(T_per_particle_true, dtype=np.float32)
+            T_per_particle_reco = np.asarray(T_per_particle_reco, dtype=np.float32)
             PE_true = np.asarray(PE_true, dtype=np.float32)
             T_true = np.asarray(T_true, dtype=np.float32)
             PE_reco = np.asarray(PE_reco, dtype=np.float32)
@@ -1437,7 +1439,8 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path, se
                 'track_info_dict': particle_data['track_info_dict'],
                 't0': t0,
                 'PE_per_particle': PE_per_particle,
-                'T_per_particle': T_per_particle,
+                'T_per_particle': T_per_particle,          # true (unsmeared)
+                'T_per_particle_reco': T_per_particle_reco,  # TTS-smeared
                 'PE_reco': PE_reco,
                 'T_reco': T_reco,
                 'source': 'PhotonSim_Particles_VMAP',
@@ -1778,8 +1781,9 @@ def read_photon_data_from_root(root_file_path, entry_index, particle_type='muon'
     # Read momentum
     initmom = float(tree['initmom'].array(entry_start=entry_index, entry_stop=entry_index+1)[0])
 
-    # Stack the components to form position and direction arrays
-    photon_positions = np.column_stack((photon_posx, photon_posy, photon_posz))
+    # Stack the components to form position and direction arrays.
+    # Old ROOT format stores positions in cm; convert to m.
+    photon_positions = np.column_stack((photon_posx, photon_posy, photon_posz)) / 100.0
     photon_directions = np.column_stack((photon_dirx, photon_diry, photon_dirz))
 
     # Convert initmom (momentum) to kinetic energy based on particle type
@@ -2008,7 +2012,8 @@ def save_single_event_with_particle_info(extended_info, event_number=0, filename
     n_particles = extended_info['n_particles']
     particles = extended_info['particles']
     PE_per_particle = extended_info['PE_per_particle']
-    T_per_particle = extended_info['T_per_particle']
+    T_per_particle = extended_info['T_per_particle']  # true (unsmeared)
+    T_per_particle_reco = extended_info.get('T_per_particle_reco', None)
     PE = extended_info['PE_reco']  # Observed (smeared) values
     T = extended_info['T_reco']
     t0 = extended_info.get('t0', 0.0)  # Event time offset
@@ -2047,9 +2052,12 @@ def save_single_event_with_particle_info(extended_info, event_number=0, filename
         f.create_dataset('PE', data=PE)  # (N_sensors,) - observed photoelectrons
         f.create_dataset('T', data=T)    # (N_sensors,) - observed first-hit time
 
-        # Sensor data by categorized particle
+        # Sensor data by categorized particle (T_per_particle = true/unsmeared)
         f.create_dataset('PE_per_particle', data=PE_per_particle)  # (n_particles, N_sensors)
         f.create_dataset('T_per_particle', data=T_per_particle)    # (n_particles, N_sensors)
+        if T_per_particle_reco is not None:
+            f.create_dataset('T_per_particle_reco',
+                             data=np.asarray(T_per_particle_reco, dtype=np.float32))
 
         # Categorized particles metadata
         f.create_dataset('Particle_Category', data=particle_categories)
@@ -2124,7 +2132,7 @@ def save_single_event_with_particle_info(extended_info, event_number=0, filename
             segments_group.attrs['n_segments'] = np.int32(n_segments)
 
             if n_segments > 0:
-                # Save segment arrays (positions in cm)
+                # Save segment arrays (positions in m)
                 segments_group.create_dataset('StartX', data=np.asarray(segments['start_x'], dtype=np.float32))
                 segments_group.create_dataset('StartY', data=np.asarray(segments['start_y'], dtype=np.float32))
                 segments_group.create_dataset('StartZ', data=np.asarray(segments['start_z'], dtype=np.float32))
@@ -2926,21 +2934,26 @@ def save_sensor_batch_v2(batch_events, filename, n_sensors,
     pp_hit_idx_list = []
     pp_hit_pe_list = []
     pp_hit_t_list = []
+    pp_hit_t_reco_list = []
+    has_t_reco = any('T_per_particle_reco' in ev for ev in batch_events)
 
     for ev in batch_events:
         pe_pp = np.asarray(ev['PE_per_particle'], dtype=np.float32)
         t_pp = np.asarray(ev['T_per_particle'], dtype=np.float32)
+        t_pp_reco = np.asarray(ev['T_per_particle_reco'], dtype=np.float32) if has_t_reco else None
         n_p = pe_pp.shape[0]
         for i in range(n_p):
             mask = pe_pp[i] > 0
             indices = np.where(mask)[0].astype(np.uint16)
             pp_hit_idx_list.append(indices)
             pp_hit_pe_list.append(pe_pp[i, mask])
-            # For T, use the matching mask (same sparsity pattern)
             t_vals = t_pp[i, mask]
-            # Replace inf/nan with 0 for clean storage
             t_vals = np.where(np.isfinite(t_vals), t_vals, np.float32(0.0))
             pp_hit_t_list.append(t_vals)
+            if t_pp_reco is not None:
+                t_reco_vals = t_pp_reco[i, mask]
+                t_reco_vals = np.where(np.isfinite(t_reco_vals), t_reco_vals, np.float32(0.0))
+                pp_hit_t_reco_list.append(t_reco_vals)
             pp_hit_offsets.append(pp_hit_offsets[-1] + len(indices))
 
     pp_hit_offsets = np.array(pp_hit_offsets, dtype=np.uint32)
@@ -2991,11 +3004,14 @@ def save_sensor_batch_v2(batch_events, filename, n_sensors,
         f.create_dataset('event_hit_PE', data=ev_hit_pe, **_GZIP_OPTS)
         f.create_dataset('event_hit_T', data=ev_hit_t, **_GZIP_OPTS)
 
-        # Per-particle hits
+        # Per-particle hits (T = true/unsmeared, T_reco = TTS-smeared)
         f.create_dataset('particle_hit_offsets', data=pp_hit_offsets, **_GZIP_OPTS)
         f.create_dataset('particle_hit_sensor_idx', data=pp_hit_idx, **_GZIP_OPTS)
         f.create_dataset('particle_hit_PE', data=pp_hit_pe, **_GZIP_OPTS)
         f.create_dataset('particle_hit_T', data=pp_hit_t, **_GZIP_OPTS)
+        if has_t_reco and pp_hit_t_reco_list:
+            pp_hit_t_reco = np.concatenate(pp_hit_t_reco_list) if pp_hit_t_reco_list else np.array([], dtype=np.float32)
+            f.create_dataset('particle_hit_T_reco', data=pp_hit_t_reco, **_GZIP_OPTS)
 
         # Voxel data (optional)
         voxel_events = [e for e in batch_events if 'voxel_n_nonzero' in e]

@@ -114,7 +114,7 @@ class TestDataMode:
         """With qe=1.0, all photons should pass QE sampling."""
         w, idx, t, n, _ = _make_test_hits()
         key = jax.random.PRNGKey(42)
-        q, _ = make_hits_data(w, idx, t, n, qe=1.0, rng_key=key)
+        q, _, _ = make_hits_data(w, idx, t, n, qe=1.0, rng_key=key)
         # Total charge should equal sum of weights at each sensor
         expected_sensor0 = 0.8 + 0.6 + 0.4
         npt.assert_allclose(q[0], expected_sensor0, atol=1e-5)
@@ -123,7 +123,7 @@ class TestDataMode:
         """With qe≈0, no photons should pass."""
         w, idx, t, n, _ = _make_test_hits()
         key = jax.random.PRNGKey(42)
-        q, _ = make_hits_data(w, idx, t, n, qe=1e-10, rng_key=key)
+        q, _, _ = make_hits_data(w, idx, t, n, qe=1e-10, rng_key=key)
         npt.assert_allclose(q, jnp.zeros(n), atol=1e-6)
 
 

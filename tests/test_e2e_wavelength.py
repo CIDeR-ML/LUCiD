@@ -313,7 +313,7 @@ def test_6_data_old_root():
             'rotation_angle': 0.0,
         }
 
-        charges, times = sim(pp, KEY, sim_data)
+        charges, times_true, times_reco = sim(pp, KEY, sim_data)
         ok = bool(jnp.all(jnp.isfinite(charges)) and jnp.sum(charges) > 0)
         report("6b_old_root_simulation",
                ok,
@@ -386,7 +386,7 @@ def test_7_data_new_root():
         if has_wl:
             sim_data['wavelengths'] = photon_data['wavelengths']
 
-        charges, times = sim(pp, KEY, sim_data)
+        charges, times_true, times_reco = sim(pp, KEY, sim_data)
         ok = bool(jnp.all(jnp.isfinite(charges)) and jnp.sum(charges) > 0)
         report("7b_new_root_simulation",
                ok,

@@ -171,7 +171,7 @@ log_w, safe_t, fi, total_q = make_hits_likelihood(flat_w, flat_i, flat_t, n_det,
 results["hits_like_log_w"] = to_list(log_w)
 results["hits_like_total_q"] = to_list(total_q)
 
-q_data, t_data = make_hits_data(flat_w, flat_i, flat_t, n_det,
+q_data, t_data_true, t_data = make_hits_data(flat_w, flat_i, flat_t, n_det,
                                  qe=0.2, rng_key=key)
 results["hits_data_charge"] = to_list(q_data)
 results["hits_data_time"] = to_list(t_data)

@@ -66,17 +66,27 @@ class TestMakeHitsData:
     def test_output_shape(self, fixed_flat_hits):
         h = fixed_flat_hits
         key = jax.random.PRNGKey(42)
-        q, t = make_hits_data(
+        q, t_true, t_reco = make_hits_data(
             h["flat_weights"], h["flat_indices"], h["flat_times"],
             h["num_detectors"], qe=0.2, rng_key=key,
         )
         assert q.shape == (20,)
-        assert t.shape == (20,)
+        assert t_true.shape == (20,)
+        assert t_reco.shape == (20,)
+
+    def test_no_smearing_true_equals_reco(self, fixed_flat_hits):
+        h = fixed_flat_hits
+        key = jax.random.PRNGKey(42)
+        q, t_true, t_reco = make_hits_data(
+            h["flat_weights"], h["flat_indices"], h["flat_times"],
+            h["num_detectors"], qe=0.2, rng_key=key, apply_smearing=False,
+        )
+        npt.assert_array_equal(t_true, t_reco)
 
     def test_no_negative_charge(self, fixed_flat_hits):
         h = fixed_flat_hits
         key = jax.random.PRNGKey(42)
-        q, _ = make_hits_data(
+        q, _, _ = make_hits_data(
             h["flat_weights"], h["flat_indices"], h["flat_times"],
             h["num_detectors"], qe=0.2, rng_key=key,
         )
