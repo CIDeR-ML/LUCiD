@@ -283,7 +283,7 @@ function exportGif(){
   const gr=new THREE.WebGLRenderer({antialias:true,preserveDrawingBuffer:true});gr.setSize(w,h);
   const gc=cam.clone();gc.aspect=w/h;gc.updateProjectionMatrix();
   const gif=new GIF({workers:2,quality:8,width:w,height:h,
-    workerScript:'https://cdn.jsdelivr.net/npm/gif.js@0.2.0/dist/gif.worker.js'});
+    workerScript:'gif.worker.js'});
   const nF=100;
   if(hitMesh)hitMesh.material.uniforms.anOn.value=1;
   const bA=Math.atan2(cam.position.y-ctrl.target.y,cam.position.x-ctrl.target.x);
