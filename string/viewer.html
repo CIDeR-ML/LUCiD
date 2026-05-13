@@ -7,45 +7,45 @@
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body { background: #060610; color: #bbb; font-family: 'Segoe UI', sans-serif; overflow: hidden; }
 #container { width: 100vw; height: 100vh; }
-#controls {
+#ui {
   position: absolute; top: 10px; left: 10px; z-index: 10;
-  background: rgba(6,6,18,0.9); padding: 12px 16px; border-radius: 8px;
-  min-width: 260px; font-size: 12px; backdrop-filter: blur(6px);
+  background: rgba(6,6,18,0.92); padding: 10px 14px; border-radius: 8px;
+  min-width: 250px; font-size: 11px; backdrop-filter: blur(6px);
 }
-#controls h3 { color: #6af; margin-bottom: 6px; font-size: 14px; }
-label { display: block; margin: 4px 0 1px; color: #667; font-size: 10px;
+#ui h3 { color: #6af; margin-bottom: 5px; font-size: 13px; }
+label { display: block; margin: 3px 0 0; color: #556; font-size: 9px;
   text-transform: uppercase; letter-spacing: 0.6px; }
-select { width: 100%; background: #12122a; color: #aaa; border: 1px solid #223;
-  padding: 3px; border-radius: 3px; font-size: 11px; }
-input[type=range] { width: 100%; accent-color: #4488cc; }
-.info { margin-top: 6px; line-height: 1.5; font-size: 10px; color: #556; }
-.info span { color: #99a; }
-.row { margin-top: 5px; display: flex; flex-wrap: wrap; gap: 3px; }
+select { width: 100%; background: #10102a; color: #999; border: 1px solid #1a1a33;
+  padding: 2px; border-radius: 3px; font-size: 10px; }
+input[type=range] { width: 100%; accent-color: #4488cc; height: 14px; }
+.info { margin-top: 5px; line-height: 1.4; font-size: 9px; color: #445; }
+.info span { color: #88a; }
+.row { margin-top: 4px; display: flex; flex-wrap: wrap; gap: 2px; }
 .row button {
-  padding: 3px 7px; background: #12122a; color: #789;
-  border: 1px solid #223; border-radius: 3px; cursor: pointer; font-size: 10px;
+  padding: 2px 6px; background: #10102a; color: #678;
+  border: 1px solid #1a1a33; border-radius: 2px; cursor: pointer; font-size: 9px;
 }
-.row button:hover { background: #1e1e3a; color: #acd; }
+.row button:hover { background: #1a1a3e; color: #9bd; }
 .row button.on { border-color: #4488cc; color: #8bf; }
-#timeBar { margin-top: 5px; padding: 3px 6px; background: rgba(0,0,0,0.5); border-radius: 3px;
-  font-family: monospace; font-size: 12px; color: #aa8; }
-.sep { border: 0; border-top: 1px solid #181828; margin: 7px 0; }
-#gifProg { display: none; margin-top: 3px; color: #aa8; font-size: 10px; }
-#cbarBox {
-  position: absolute; bottom: 14px; right: 14px; z-index: 10;
-  background: rgba(6,6,18,0.9); padding: 6px; border-radius: 5px;
-  font-size: 10px; text-align: center; color: #556;
+#tBar { margin-top: 4px; padding: 2px 5px; background: rgba(0,0,0,0.5); border-radius: 2px;
+  font-family: monospace; font-size: 11px; color: #997; }
+.sep { border: 0; border-top: 1px solid #151525; margin: 5px 0; }
+#gProg { display: none; margin-top: 2px; color: #997; font-size: 9px; }
+#cb {
+  position: absolute; bottom: 12px; right: 12px; z-index: 10;
+  background: rgba(6,6,18,0.92); padding: 5px; border-radius: 5px;
+  font-size: 9px; text-align: center; color: #445;
 }
-#cbarBox canvas { display: block; margin: 2px 0; }
+#cb canvas { display: block; margin: 2px 0; }
 </style>
 </head>
 <body>
 <div id="container"></div>
-<div id="controls">
+<div id="ui">
   <h3>IceCube-86</h3>
   <label>Event</label><select id="evSel"></select>
-  <label>Point size</label><input type="range" id="ptSz" min="0.3" max="5" step="0.1" value="1.2">
-  <label>Emphasis</label><input type="range" id="emph" min="0.1" max="2" step="0.05" value="0.5">
+  <label>Point size</label><input type="range" id="ptSz" min="0.3" max="5" step="0.1" value="1.8">
+  <label>Emphasis</label><input type="range" id="emph" min="0.5" max="4" step="0.1" value="2.0">
   <div class="row">
     <button id="bStr" class="on">Strings</button>
     <button id="bUnh" class="on">Unhit</button>
@@ -56,19 +56,20 @@ input[type=range] { width: 100%; accent-color: #4488cc; }
     <button id="bPlay">&#9654;</button>
     <button id="bPause">&#10074;&#10074;</button>
     <button id="bReset">Reset</button>
-    <button id="bHardReset">&#8634; Full Reset</button>
+    <button id="bHard">&#8634;</button>
     <button id="bGif">GIF</button>
   </div>
-  <label>Speed</label><input type="range" id="spd" min="0.1" max="5" step="0.1" value="1">
-  <span id="spdV" style="color:#556">1.0x</span>
-  <div id="timeBar">t = 0 ns</div>
-  <div id="gifProg"></div>
+  <label>Speed</label><input type="range" id="spd" min="0.05" max="3" step="0.05" value="0.5">
+  <span id="spdV" style="color:#445">0.5x</span>
+  <label>Rotation</label><input type="range" id="rot" min="0" max="1" step="0.05" value="0.15">
+  <div id="tBar">t = 0 ns</div>
+  <div id="gProg"></div>
   <div class="info" id="info">Loading...</div>
 </div>
-<div id="cbarBox">
+<div id="cb">
   <div>log₁₀(Q)</div>
-  <canvas id="cbar" width="14" height="100"></canvas>
-  <div id="cbMin">0</div><div id="cbMax">1</div>
+  <canvas id="cbar" width="12" height="90"></canvas>
+  <div id="cbMn">0</div><div id="cbMx">1</div>
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/gif.js@0.2.0/dist/gif.js"></script>
@@ -78,298 +79,264 @@ input[type=range] { width: 100%; accent-color: #4488cc; }
 <script type="module">
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { Line2 } from 'three/addons/lines/Line2.js';
+import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
+import { LineGeometry } from 'three/addons/lines/LineGeometry.js';
 
-let scene, camera, renderer, ctrl;
-let det = null, evs = null;
-let strGrp, unhitPts = null, hitMesh = null;
-let trackGeo = null, trackMat = null, trackLine = null, trackDot = null;
-let showStr = true, showUnh = true, showTrk = true;
-let anim = false, animT = 0, tMin = 0, tMax = 1000, lastT = 0;
-let initCamPos = null, initCamTarget = null;
+let scene, cam, ren, ctrl;
+let det=null, evs=null;
+let strGrp, unhitPts=null, hitMesh=null;
+let trkLine=null, trkDot=null, trkMat=null;
+let showStr=true, showUnh=true, showTrk=true;
+let an=false, anQ=0, tMin=0, tMax=1000, lastT=0;
+let initCP=null, initCT=null;
+let curQuantiles=null; // per-DOM quantile (0-1) of hit time
 
-const C_MUON = 0.2998;  // m/ns (speed of light)
-const DIR = '../output/siren_tracks/';
+const C=0.2998, TLEN=300, DIR='../output/siren_tracks/';
 
-// ── Inferno-like colormap ──
-function infernoRGB(t) {
-  t = Math.max(0, Math.min(1, t));
-  const s = [[0,[3,3,10]],[.13,[40,10,60]],[.27,[100,15,100]],[.4,[155,30,80]],
-    [.55,[200,60,40]],[.7,[230,120,15]],[.82,[245,180,10]],[.92,[250,225,60]],[1,[252,252,165]]];
-  for (let i = 0; i < s.length-1; i++) {
-    const [t0,c0]=s[i],[t1,c1]=s[i+1];
-    if (t<=t1) { const f=(t-t0)/(t1-t0);
-      return [c0[0]+f*(c1[0]-c0[0]),c0[1]+f*(c1[1]-c0[1]),c0[2]+f*(c1[2]-c0[2])]; }
-  }
+// ── Inferno ──
+function inferno(t){
+  t=Math.max(0,Math.min(1,t));
+  const s=[[0,[2,1,10]],[.1,[30,5,55]],[.22,[75,10,95]],[.33,[120,20,95]],
+    [.44,[165,40,70]],[.55,[200,65,40]],[.66,[225,105,15]],[.77,[240,155,10]],
+    [.88,[248,200,45]],[1,[250,248,160]]];
+  for(let i=0;i<s.length-1;i++){const[t0,c0]=s[i],[t1,c1]=s[i+1];
+    if(t<=t1){const f=(t-t0)/(t1-t0);return[c0[0]+f*(c1[0]-c0[0]),c0[1]+f*(c1[1]-c0[1]),c0[2]+f*(c1[2]-c0[2])];}}
   return s[s.length-1][1];
 }
-
-function mkCmap() {
-  const w=256, d=new Uint8Array(w*4);
-  for(let i=0;i<w;i++){const c=infernoRGB(i/(w-1));d[i*4]=c[0];d[i*4+1]=c[1];d[i*4+2]=c[2];d[i*4+3]=255;}
-  const t=new THREE.DataTexture(d,w,1,THREE.RGBAFormat); t.needsUpdate=true; return t;
-}
+function mkCmap(){const w=256,d=new Uint8Array(w*4);for(let i=0;i<w;i++){const c=inferno(i/(w-1));
+  d[i*4]=c[0];d[i*4+1]=c[1];d[i*4+2]=c[2];d[i*4+3]=255;}
+  const t=new THREE.DataTexture(d,w,1,THREE.RGBAFormat);t.needsUpdate=true;return t;}
 
 // ── Shaders ──
-const VS = `
+const VS=`
 attribute float qN;
-attribute float hT;
-uniform float ptSz, empP, aT, aOn, tRng;
+attribute float hQ; // quantile of hit time (0-1)
+uniform float ptSz, empP, anQ, anOn;
 varying float vN, vA, vFl;
 void main(){
-  vN = qN;
-  float em = pow(max(qN,0.001), empP);
-  vA = 0.03 + 0.7 * em;
-  float sz = (0.8 + qN * 3.5) * ptSz;
-  vFl = 0.0;
-  if(aOn > 0.5){
-    float dt = aT - hT;
-    float fw = tRng * 0.08;
-    float arrive = smoothstep(-fw*0.2, fw*0.1, dt);
-    float flash = (1.0 - smoothstep(0.0, fw*1.5, dt)) * 0.3;
-    vA *= arrive;
-    sz *= mix(1.0, 1.15, flash * arrive);
-    vFl = flash * arrive;
-    if(dt < -fw*0.4){ vA=0.0; sz=0.0; }
+  vN=qN;
+  float em=pow(max(qN,0.001),empP);
+  vA=0.02+0.65*em;
+  float sz=(0.5+qN*qN*5.5)*ptSz;
+  vFl=0.0;
+  if(anOn>0.5){
+    float dt=anQ-hQ;
+    float arrive=smoothstep(-0.03,0.01,dt);
+    float flash=(1.0-smoothstep(0.0,0.08,dt))*0.2;
+    vA*=arrive;
+    sz*=mix(1.0,1.1,flash*arrive);
+    vFl=flash*arrive;
+    if(dt<-0.04){vA=0.0;sz=0.0;}
   }
-  gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0);
-  gl_PointSize = sz;
+  gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0);
+  gl_PointSize=sz;
 }`;
-
-const FS = `
+const FS=`
 uniform sampler2D cm;
-varying float vN, vA, vFl;
+varying float vN,vA,vFl;
 void main(){
-  vec2 d = gl_PointCoord - vec2(0.5);
-  float r = length(d);
-  if(r>0.5) discard;
-  float edge = 1.0 - smoothstep(0.32, 0.5, r);
-  vec3 c = texture2D(cm, vec2(clamp(vN,0.01,0.99), 0.5)).rgb;
-  c += vec3(vFl * 0.4, vFl * 0.3, vFl * 0.15);
-  gl_FragColor = vec4(c, vA * edge);
+  vec2 d=gl_PointCoord-vec2(0.5);float r=length(d);
+  if(r>0.5)discard;
+  float edge=1.0-smoothstep(0.3,0.5,r);
+  vec3 c=texture2D(cm,vec2(clamp(vN,0.01,0.99),0.5)).rgb;
+  c+=vec3(vFl*0.3,vFl*0.2,vFl*0.08);
+  gl_FragColor=vec4(c,vA*edge);
 }`;
 
-async function loadData() {
-  const [dr,er] = await Promise.all([fetch(DIR+'detector.json'),fetch(DIR+'events.json')]);
-  det = await dr.json(); evs = await er.json();
-  const sel = document.getElementById('evSel');
+async function loadData(){
+  const[dr,er]=await Promise.all([fetch(DIR+'detector.json'),fetch(DIR+'events.json')]);
+  det=await dr.json();evs=await er.json();
+  const sel=$('evSel');
   evs.forEach((e,i)=>{const o=document.createElement('option');o.value=i;
     o.text=`${i}: ${e.n_doms_hit} DOMs`;sel.appendChild(o);});
 }
 
-function init() {
-  scene = new THREE.Scene(); scene.background = new THREE.Color(0x060610);
-  camera = new THREE.PerspectiveCamera(42,innerWidth/innerHeight,1,6000);
-  camera.position.set(1000,500,600); camera.up.set(0,0,1);
-  renderer = new THREE.WebGLRenderer({antialias:true,preserveDrawingBuffer:true});
-  renderer.setSize(innerWidth,innerHeight); renderer.setPixelRatio(devicePixelRatio);
-  document.getElementById('container').appendChild(renderer.domElement);
-  ctrl = new OrbitControls(camera,renderer.domElement);
-  ctrl.enableDamping=true; ctrl.target.set(0,0,-1950);
-  scene.add(new THREE.AmbientLight(0x202040,0.8));
-  initCamPos = camera.position.clone(); initCamTarget = ctrl.target.clone();
-  addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;
-    camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight);});
+function init(){
+  scene=new THREE.Scene();scene.background=new THREE.Color(0x060610);
+  cam=new THREE.PerspectiveCamera(38,innerWidth/innerHeight,1,8000);
+  // Camera: 30° above horizontal, diagonal view, looking at array center
+  const zMid=-1952, dist=1800;
+  cam.position.set(dist*0.7, dist*0.5, zMid+dist*0.45);
+  cam.up.set(0,0,1);
+  ren=new THREE.WebGLRenderer({antialias:true,preserveDrawingBuffer:true});
+  ren.setSize(innerWidth,innerHeight);ren.setPixelRatio(devicePixelRatio);
+  document.getElementById('container').appendChild(ren.domElement);
+  ctrl=new OrbitControls(cam,ren.domElement);
+  ctrl.enableDamping=true;ctrl.target.set(0,0,zMid);
+  scene.add(new THREE.AmbientLight(0x1a1a30,0.6));
+  initCP=cam.position.clone();initCT=ctrl.target.clone();
+  addEventListener('resize',()=>{cam.aspect=innerWidth/innerHeight;
+    cam.updateProjectionMatrix();ren.setSize(innerWidth,innerHeight);
+    if(trkMat)trkMat.resolution.set(innerWidth,innerHeight);});
 }
 
-function buildDet() {
-  strGrp = new THREE.Group();
-  const sm = new THREE.LineBasicMaterial({color:0x101828,transparent:true,opacity:0.18});
-  for(let i=0;i<det.n_str;i++){
-    const a=det.string_anchors[i],t=det.string_tops[i];
+function buildDet(){
+  strGrp=new THREE.Group();
+  const sm=new THREE.LineBasicMaterial({color:0x0e1525,transparent:true,opacity:0.15});
+  for(let i=0;i<det.n_str;i++){const a=det.string_anchors[i],t=det.string_tops[i];
     strGrp.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints([
-      new THREE.Vector3(a[0],a[1],a[2]),new THREE.Vector3(t[0],t[1],t[2])]),sm));
-  }
+      new THREE.Vector3(a[0],a[1],a[2]),new THREE.Vector3(t[0],t[1],t[2])]),sm));}
   scene.add(strGrp);
-
   const p=new Float32Array(det.n_sensors*3);
   for(let i=0;i<det.n_sensors;i++){p[i*3]=det.dom_positions[i][0];p[i*3+1]=det.dom_positions[i][1];p[i*3+2]=det.dom_positions[i][2];}
   const g=new THREE.BufferGeometry();g.setAttribute('position',new THREE.BufferAttribute(p,3));
-  unhitPts=new THREE.Points(g,new THREE.PointsMaterial({color:0x0e1420,size:1,sizeAttenuation:false,transparent:true,opacity:0.1}));
+  unhitPts=new THREE.Points(g,new THREE.PointsMaterial({color:0x0a1018,size:0.8,sizeAttenuation:false,transparent:true,opacity:0.08}));
   scene.add(unhitPts);
-}
-
-function clearHits(){
-  if(hitMesh){scene.remove(hitMesh);hitMesh.geometry.dispose();hitMesh.material.dispose();hitMesh=null;}
-  if(trackLine){scene.remove(trackLine);trackLine=null;}
-  if(trackDot){scene.remove(trackDot);trackDot=null;}
-  trackGeo=null; trackMat=null;
-}
-
-function showEvent(idx){
-  clearHits(); anim=false; animT=0;
-  const ev=evs[idx]; if(!ev||!ev.hit_dom_ids.length) return;
-  const hasT = ev.hit_times_ns && ev.hit_times_ns.length>0;
-  const hits = ev.hit_dom_ids.map((id,i)=>({id,q:ev.hit_charges[i],
-    t:hasT?Math.max(ev.hit_times_ns[i],0):0})).filter(h=>h.q>1e-8);
-  if(!hits.length) return;
-
-  const lqs=hits.map(h=>Math.log10(Math.max(h.q,1e-10)));
-  const lMin=Math.min(...lqs),lMax=Math.max(...lqs);
-  const vt=hits.map(h=>h.t).filter(t=>isFinite(t)&&t>=0);
-  tMin=vt.length?Math.min(...vt):0; tMax=vt.length?Math.max(...vt):1000;
-
-  const n=hits.length, pos=new Float32Array(n*3), qN=new Float32Array(n), hT=new Float32Array(n);
-  hits.forEach((h,i)=>{const p=det.dom_positions[h.id];
-    pos[i*3]=p[0];pos[i*3+1]=p[1];pos[i*3+2]=p[2];
-    qN[i]=(Math.log10(Math.max(h.q,1e-10))-lMin)/(lMax-lMin+1e-10);
-    hT[i]=h.t;});
-
-  const geo=new THREE.BufferGeometry();
-  geo.setAttribute('position',new THREE.BufferAttribute(pos,3));
-  geo.setAttribute('qN',new THREE.BufferAttribute(qN,1));
-  geo.setAttribute('hT',new THREE.BufferAttribute(hT,1));
-  hitMesh=new THREE.Points(geo,new THREE.ShaderMaterial({
-    vertexShader:VS,fragmentShader:FS,transparent:true,depthWrite:false,
-    blending:THREE.AdditiveBlending,
-    uniforms:{cm:{value:mkCmap()},ptSz:{value:+$('ptSz').value},
-      empP:{value:+$('emph').value},aT:{value:tMin},aOn:{value:0},tRng:{value:tMax-tMin}}}));
-  scene.add(hitMesh);
-
-  // Track (will be updated dynamically)
-  const o=ev.track_origin, d=ev.track_direction;
-  // Full track line (always visible when not animating)
-  const tStart = -20, tEnd = TRACK_LEN;
-  trackMat = new THREE.LineBasicMaterial({color:0xcc4433,transparent:true,opacity:0.3});
-  trackGeo = new THREE.BufferGeometry();
-  const tp = new Float32Array(6);
-  tp[0]=o[0]+d[0]*tStart; tp[1]=o[1]+d[1]*tStart; tp[2]=o[2]+d[2]*tStart;
-  tp[3]=o[0]+d[0]*tEnd;   tp[4]=o[1]+d[1]*tEnd;   tp[5]=o[2]+d[2]*tEnd;
-  trackGeo.setAttribute('position',new THREE.BufferAttribute(tp,3));
-  trackLine = new THREE.Line(trackGeo,trackMat);
-  trackLine.visible = showTrk;
-  scene.add(trackLine);
-
-  const dg=new THREE.SphereGeometry(2.5,8,6);
-  trackDot=new THREE.Mesh(dg,new THREE.MeshBasicMaterial({color:0xff5544,transparent:true,opacity:0.6}));
-  trackDot.visible=false; scene.add(trackDot);
-
-  drawCbar(lMin,lMax);
-  $('info').innerHTML=`Ev <span>${idx}</span> | <span>${hits.length}</span> DOMs | Q <span>${ev.total_charge.toFixed(0)}</span> | ${((tMax-tMin)).toFixed(0)} ns`;
-  updTime();
 }
 
 function $(id){return document.getElementById(id);}
 
-function drawCbar(mn,mx){
-  const c=$('cbar'),x=c.getContext('2d');
-  for(let y=0;y<c.height;y++){const t=1-y/c.height,rgb=infernoRGB(t);
-    x.fillStyle=`rgb(${rgb[0]|0},${rgb[1]|0},${rgb[2]|0})`;x.fillRect(0,y,c.width,1);}
-  $('cbMin').textContent=mn.toFixed(1); $('cbMax').textContent=mx.toFixed(1);
+function clearHits(){
+  if(hitMesh){scene.remove(hitMesh);hitMesh.geometry.dispose();hitMesh.material.dispose();hitMesh=null;}
+  if(trkLine){scene.remove(trkLine);trkLine.geometry.dispose();trkLine=null;}
+  if(trkDot){scene.remove(trkDot);trkDot=null;}
+  trkMat=null; curQuantiles=null;
 }
 
-function updTime(){$('timeBar').textContent=`t = ${animT.toFixed(0)} ns`;}
+function showEvent(idx){
+  clearHits();an=false;anQ=0;
+  const ev=evs[idx];if(!ev||!ev.hit_dom_ids.length)return;
+  const hasT=ev.hit_times_ns&&ev.hit_times_ns.length>0;
+  const hits=ev.hit_dom_ids.map((id,i)=>({id,q:ev.hit_charges[i],
+    t:hasT?Math.max(ev.hit_times_ns[i],0):0})).filter(h=>h.q>1e-8);
+  if(!hits.length)return;
 
-const TRACK_LEN = 300; // meters — physical emission length (F=30 × ~10m SIREN range)
+  // Charge normalization
+  const lqs=hits.map(h=>Math.log10(Math.max(h.q,1e-10)));
+  const lMin=Math.min(...lqs),lMax=Math.max(...lqs);
 
-function updTrack(t, isAnimating){
-  if(!trackLine||!trackGeo) return;
-  const ev=evs[+$('evSel').value]; if(!ev) return;
-  const o=ev.track_origin, d=ev.track_direction;
-  const pa = trackGeo.attributes.position.array;
-  const startS = -20;
+  // Quantile transform of times
+  const times=hits.map(h=>h.t);
+  const sorted=[...times].sort((a,b)=>a-b);
+  const tToQ=t=>{let lo=0,hi=sorted.length-1;
+    while(lo<hi){const m=(lo+hi)>>1;if(sorted[m]<t)lo=m+1;else hi=m;}
+    return lo/(sorted.length-1);};
+  curQuantiles=times.map(tToQ);
+  tMin=Math.min(...times);tMax=Math.max(...times);
 
-  if(!isAnimating){
-    // Static: show full track
-    pa[0]=o[0]+d[0]*startS; pa[1]=o[1]+d[1]*startS; pa[2]=o[2]+d[2]*startS;
-    pa[3]=o[0]+d[0]*TRACK_LEN; pa[4]=o[1]+d[1]*TRACK_LEN; pa[5]=o[2]+d[2]*TRACK_LEN;
-    trackGeo.attributes.position.needsUpdate=true;
-    if(trackDot) trackDot.visible=false;
-    return;
-  }
+  const n=hits.length,pos=new Float32Array(n*3),qN=new Float32Array(n),hQ=new Float32Array(n);
+  hits.forEach((h,i)=>{const p=det.dom_positions[h.id];
+    pos[i*3]=p[0];pos[i*3+1]=p[1];pos[i*3+2]=p[2];
+    qN[i]=(Math.log10(Math.max(h.q,1e-10))-lMin)/(lMax-lMin+1e-10);
+    hQ[i]=curQuantiles[i];});
 
-  // Animating: line grows from start to muon front
-  const tTravel = TRACK_LEN / C_MUON;
-  const frac = Math.max(0, Math.min(1, (t - tMin) / tTravel));
-  const frontS = startS + frac * (TRACK_LEN - startS);
+  const geo=new THREE.BufferGeometry();
+  geo.setAttribute('position',new THREE.BufferAttribute(pos,3));
+  geo.setAttribute('qN',new THREE.BufferAttribute(qN,1));
+  geo.setAttribute('hQ',new THREE.BufferAttribute(hQ,1));
+  hitMesh=new THREE.Points(geo,new THREE.ShaderMaterial({
+    vertexShader:VS,fragmentShader:FS,transparent:true,depthWrite:false,
+    blending:THREE.AdditiveBlending,
+    uniforms:{cm:{value:mkCmap()},ptSz:{value:+$('ptSz').value},
+      empP:{value:+$('emph').value},anQ:{value:0},anOn:{value:0}}}));
+  scene.add(hitMesh);
 
-  pa[0]=o[0]+d[0]*startS;  pa[1]=o[1]+d[1]*startS;  pa[2]=o[2]+d[2]*startS;
-  pa[3]=o[0]+d[0]*frontS; pa[4]=o[1]+d[1]*frontS; pa[5]=o[2]+d[2]*frontS;
-  trackGeo.attributes.position.needsUpdate=true;
+  // Track line (thick, using Line2)
+  const o=ev.track_origin,d=ev.track_direction;
+  trkMat=new LineMaterial({color:0xff3322,linewidth:4,transparent:true,opacity:0.6,
+    worldUnits:false,resolution:new THREE.Vector2(innerWidth,innerHeight)});
+  buildTrackLine(o,d,-20,TLEN);
 
-  if(trackDot){
-    trackDot.position.set(o[0]+d[0]*frontS, o[1]+d[1]*frontS, o[2]+d[2]*frontS);
-    trackDot.visible = showTrk && frac < 1.0;
-  }
+  // Track dot
+  const dg=new THREE.SphereGeometry(3,10,8);
+  trkDot=new THREE.Mesh(dg,new THREE.MeshBasicMaterial({color:0xff4433,transparent:true,opacity:0.8}));
+  trkDot.visible=false;scene.add(trkDot);
+
+  drawCbar(lMin,lMax);
+  $('info').innerHTML=`Ev <span>${idx}</span> | <span>${hits.length}</span> DOMs | Q <span>${ev.total_charge.toFixed(0)}</span> | ${(tMax-tMin).toFixed(0)} ns`;
+  updTBar();
+}
+
+function buildTrackLine(o,d,s0,s1){
+  if(trkLine){scene.remove(trkLine);trkLine.geometry.dispose();}
+  const lg=new LineGeometry();
+  lg.setPositions([o[0]+d[0]*s0,o[1]+d[1]*s0,o[2]+d[2]*s0,
+                   o[0]+d[0]*s1,o[1]+d[1]*s1,o[2]+d[2]*s1]);
+  trkLine=new Line2(lg,trkMat);trkLine.visible=showTrk;
+  trkLine.computeLineDistances();scene.add(trkLine);
+}
+
+function drawCbar(mn,mx){const c=$('cbar'),x=c.getContext('2d');
+  for(let y=0;y<c.height;y++){const t=1-y/c.height,rgb=inferno(t);
+    x.fillStyle=`rgb(${rgb[0]|0},${rgb[1]|0},${rgb[2]|0})`;x.fillRect(0,y,c.width,1);}
+  $('cbMn').textContent=mn.toFixed(1);$('cbMx').textContent=mx.toFixed(1);}
+
+function updTBar(){
+  const tNs=tMin+(tMax-tMin)*anQ;
+  $('tBar').textContent=`t = ${tNs.toFixed(0)} ns  (q=${anQ.toFixed(2)})`;}
+
+function updTrack(q,isAnim){
+  const ev=evs[+$('evSel').value];if(!ev)return;
+  const o=ev.track_origin,d=ev.track_direction;
+  if(!isAnim){buildTrackLine(o,d,-20,TLEN);if(trkDot)trkDot.visible=false;return;}
+  const frac=Math.max(0,Math.min(1,q*1.5)); // muon traverses track in first ~67% of quantile time
+  const front=-20+frac*(TLEN+20);
+  buildTrackLine(o,d,-20,front);
+  if(trkDot){trkDot.position.set(o[0]+d[0]*front,o[1]+d[1]*front,o[2]+d[2]*front);
+    trkDot.visible=showTrk&&frac<1;}
 }
 
 function tick(ts){
   requestAnimationFrame(tick);
-  const dt=lastT?(ts-lastT)/1000:0; lastT=ts;
-  if(hitMesh){
-    const u=hitMesh.material.uniforms;
-    u.ptSz.value=+$('ptSz').value; u.empP.value=+$('emph').value;
-    if(anim){
-      u.aOn.value=1;
-      const spd=+$('spd').value, nsps=(tMax-tMin)*0.22*spd;
-      animT+=dt*nsps;
-      if(animT>tMax+(tMax-tMin)*0.12) animT=tMin-(tMax-tMin)*0.06;
-      u.aT.value=animT;
-      updTrack(animT, true);
-      ctrl.autoRotate=true; ctrl.autoRotateSpeed=0.3;
-    } else {
-      u.aOn.value=0;
-      updTrack(0, false);
-      ctrl.autoRotate=false;
-    }
-  }
-  ctrl.update(); updTime();
-  renderer.render(scene,camera);
+  const dt=lastT?(ts-lastT)/1000:0;lastT=ts;
+  if(hitMesh){const u=hitMesh.material.uniforms;
+    u.ptSz.value=+$('ptSz').value;u.empP.value=+$('emph').value;
+    if(an){u.anOn.value=1;
+      const spd=+$('spd').value;anQ+=dt*spd*0.2;
+      if(anQ>1.12)anQ=-0.06;
+      u.anQ.value=anQ;updTrack(anQ,true);
+      const rotSpd=+$('rot').value;
+      ctrl.autoRotate=rotSpd>0.01;ctrl.autoRotateSpeed=rotSpd*2;
+    }else{u.anOn.value=0;updTrack(0,false);ctrl.autoRotate=false;}}
+  ctrl.update();updTBar();ren.render(scene,cam);
 }
 
 // ── GIF ──
 function exportGif(){
-  const pr=$('gifProg'); pr.style.display='block'; pr.textContent='Capturing...';
+  const pr=$('gProg');pr.style.display='block';pr.textContent='Capturing...';
   const w=640,h=480;
   const gr=new THREE.WebGLRenderer({antialias:true,preserveDrawingBuffer:true});gr.setSize(w,h);
-  const gc=camera.clone();gc.aspect=w/h;gc.updateProjectionMatrix();
+  const gc=cam.clone();gc.aspect=w/h;gc.updateProjectionMatrix();
   const gif=new GIF({workers:2,quality:8,width:w,height:h,
     workerScript:'https://cdn.jsdelivr.net/npm/gif.js@0.2.0/dist/gif.worker.js'});
-  const nF=90, totT=(tMax-tMin)*1.25, dt=totT/nF;
-  let t=tMin-(tMax-tMin)*0.06;
-  if(hitMesh) hitMesh.material.uniforms.aOn.value=1;
-  const baseAngle=Math.atan2(camera.position.y-ctrl.target.y,camera.position.x-ctrl.target.x);
-  const camR=Math.sqrt((camera.position.x-ctrl.target.x)**2+(camera.position.y-ctrl.target.y)**2);
-  const camZ=camera.position.z;
+  const nF=100;
+  if(hitMesh)hitMesh.material.uniforms.anOn.value=1;
+  const bA=Math.atan2(cam.position.y-ctrl.target.y,cam.position.x-ctrl.target.x);
+  const cR=Math.sqrt((cam.position.x-ctrl.target.x)**2+(cam.position.y-ctrl.target.y)**2);
+  const cZ=cam.position.z;
   for(let f=0;f<nF;f++){
-    if(hitMesh) hitMesh.material.uniforms.aT.value=t;
-    updTrack(t, true);
-    const ang=baseAngle+(f/nF)*Math.PI*0.4;
-    gc.position.set(ctrl.target.x+camR*Math.cos(ang),ctrl.target.y+camR*Math.sin(ang),camZ);
+    const q=-0.04+(f/nF)*1.16;
+    if(hitMesh)hitMesh.material.uniforms.anQ.value=q;
+    updTrack(q,true);
+    const ang=bA+(f/nF)*Math.PI*0.35;
+    gc.position.set(ctrl.target.x+cR*Math.cos(ang),ctrl.target.y+cR*Math.sin(ang),cZ);
     gc.lookAt(ctrl.target);
+    if(trkMat)trkMat.resolution.set(w,h);
     gr.render(scene,gc);
     const cv=document.createElement('canvas');cv.width=w;cv.height=h;
     cv.getContext('2d').drawImage(gr.domElement,0,0);
-    gif.addFrame(cv,{delay:70}); t+=dt;
-    pr.textContent=`${f+1}/${nF}`;
+    gif.addFrame(cv,{delay:60});pr.textContent=`${f+1}/${nF}`;
   }
-  gif.on('finished',blob=>{
-    const a=document.createElement('a');a.href=URL.createObjectURL(blob);
+  gif.on('finished',blob=>{const a=document.createElement('a');a.href=URL.createObjectURL(blob);
     a.download=`icecube_ev${$('evSel').value}.gif`;a.click();
-    pr.textContent='Saved!'; setTimeout(()=>pr.style.display='none',2000);gr.dispose();
-  });
-  pr.textContent='Encoding...'; gif.render();
+    pr.textContent='Saved!';setTimeout(()=>pr.style.display='none',2000);gr.dispose();});
+  pr.textContent='Encoding...';gif.render();
 }
 
 // ── Controls ──
 $('evSel').onchange=e=>showEvent(+e.target.value);
 $('bStr').onclick=e=>{showStr=!showStr;strGrp.visible=showStr;e.target.classList.toggle('on');};
 $('bUnh').onclick=e=>{showUnh=!showUnh;if(unhitPts)unhitPts.visible=showUnh;e.target.classList.toggle('on');};
-$('bTrk').onclick=e=>{showTrk=!showTrk;if(trackLine)trackLine.visible=showTrk;
-  if(trackDot)trackDot.visible=showTrk&&anim;e.target.classList.toggle('on');};
-$('bPlay').onclick=()=>{anim=true;if(animT>=tMax)animT=tMin;};
-$('bPause').onclick=()=>{anim=false;};
-$('bReset').onclick=()=>{anim=false;animT=tMin-(tMax-tMin)*0.06;
-  if(hitMesh)hitMesh.material.uniforms.aOn.value=0;if(trackDot)trackDot.visible=false;updTime();};
-$('bHardReset').onclick=()=>{
-  anim=false; animT=0;
-  if(hitMesh)hitMesh.material.uniforms.aOn.value=0;
-  if(trackDot)trackDot.visible=false;
-  camera.position.copy(initCamPos); ctrl.target.copy(initCamTarget);
-  ctrl.autoRotate=false; ctrl.update();
-  $('ptSz').value=1.2; $('emph').value=0.5; $('spd').value=1;
-  $('spdV').textContent='1.0x';
-  showEvent(+$('evSel').value);
-};
+$('bTrk').onclick=e=>{showTrk=!showTrk;if(trkLine)trkLine.visible=showTrk;
+  if(trkDot)trkDot.visible=showTrk&&an;e.target.classList.toggle('on');};
+$('bPlay').onclick=()=>{an=true;if(anQ>=1.1)anQ=-0.04;};
+$('bPause').onclick=()=>{an=false;};
+$('bReset').onclick=()=>{an=false;anQ=0;
+  if(hitMesh)hitMesh.material.uniforms.anOn.value=0;if(trkDot)trkDot.visible=false;updTBar();};
+$('bHard').onclick=()=>{an=false;anQ=0;cam.position.copy(initCP);ctrl.target.copy(initCT);
+  ctrl.autoRotate=false;ctrl.update();$('ptSz').value=1.8;$('emph').value=2;$('spd').value=0.5;
+  $('spdV').textContent='0.5x';$('rot').value=0.15;showEvent(+$('evSel').value);};
 $('bGif').onclick=exportGif;
 $('spd').oninput=e=>{$('spdV').textContent=(+e.target.value).toFixed(1)+'x';};
 
