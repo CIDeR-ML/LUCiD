@@ -1,6 +1,6 @@
 {
   "name": "smax_water_el",
-  "description": "s_max parametrisation scan for e- in water. 29-energy dense grid, 10x stats of the schedule that produced the original smax_data.csv.",
+  "description": "s_max parametrisation scan for e- in water. 34-energy grid up to 100 GeV; 10k events at low E, floor 1k at high E. Cells above 10 GeV split into ~100-event jobs.",
   "material": "water",
   "particles": [{"type": "e-"}],
   "energy_list_MeV": [
@@ -10,11 +10,14 @@
     1250, 1500, 1750, 2000,
     2750, 3500, 4250, 5000,
     6250, 7500, 8750, 10000,
-    20000, 30000, 40000, 50000
+    20000, 30000, 40000, 50000,
+    60000, 70000, 80000, 90000, 100000
   ],
   "events_schedule": {
-    "base": 5000,
+    "base": 10000,
     "anchor_MeV": 1000,
-    "floor": 100
+    "floor": 1000,
+    "split_above_MeV": 10000,
+    "target_events_per_job": 100
   }
 }

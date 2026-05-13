@@ -26,7 +26,10 @@ python3 generate_jobs.py -c configs/water_el.json -s
 # 4. Smoke test (4 energies, 50 events each)
 python3 generate_jobs.py -c configs/water_mu_test.json -s
 
-# 5. Once all jobs finish, fit s_max(E) and write the CSVs
+# 5. Once all jobs finish, merge per-cell output_job_*.root → photonsim.root
+./merge.sh $OUTPUT_BASE_PATH
+
+# 6. Fit s_max(E) and write the CSVs
 ./analyze.sh $OUTPUT_BASE_PATH
 ```
 
@@ -53,16 +56,24 @@ generating Stage-1 SIREN inputs.
   "events_schedule": {
     "base":       5000,
     "anchor_MeV": 1000,
-    "floor":      100
+    "floor":      100,
+    "split_above_MeV":        10000,
+    "target_events_per_job":  100
   }
 }
 ```
 
 The schedule is the schedule from `scan_smax.py`: `base` events at and
 below `anchor_MeV`, halved per doubling above (rounded to int), never
-below `floor`. The default `configs/water_{mu,el}.json` use 10× the
-multipliers that produced the existing `smax_data.csv` (29-energy dense
-grid, base=5000, floor=100), for ~81 k events per particle.
+below `floor`. The default `configs/water_mu.json` uses 10× the
+multipliers that produced the existing `smax_data.csv` (34-energy grid
+up to 100 GeV, base=5000, floor=100). `configs/water_el.json` uses a
+heavier schedule (base=10000, floor=1000) plus job splitting because
+high-energy electron showers are expensive — `split_above_MeV` +
+`target_events_per_job` fan a cell out into `ceil(n_events/target)`
+SLURM jobs that all write into the same cell directory as
+`output_job_NNNNNN.root`, ready for `merge.sh` to `hadd` into
+`photonsim.root`.
 
 Alternative — provide a flat per-cell count instead of a schedule:
 
@@ -74,13 +85,27 @@ The smoke-test config `water_mu_test.json` uses this flat form.
 
 ## Output layout
 
+For cells with one job (default):
+
 ```
 <OUTPUT_BASE>/<material>/<particle>/<E>MeV/
   ├── photonsim.root         # contains PhotonHist_Distance (1D, mm)
   ├── photonsim_config.json
   ├── submit.sbatch
-  ├── job-<slurmid>.out / .err
+  ├── job-001-<slurmid>.out / .err
   └── job_000001.mac
+```
+
+For cells split into N jobs (E > `split_above_MeV` in the e- config):
+
+```
+<OUTPUT_BASE>/<material>/<particle>/<E>MeV/
+  ├── photonsim.root          # created by merge.sh (hadd of all N)
+  ├── photonsim_config.json
+  ├── submit_job_001.sbatch ... submit_job_NNN.sbatch
+  ├── job-001-*.out/.err ... job-NNN-*.out/.err
+  ├── output_job_000001.root ... output_job_NNNNNN.root   (deleted after merge)
+  └── job_000001.mac ... job_NNNNNN.mac
 ```
 
 ## Notes on stats budget
