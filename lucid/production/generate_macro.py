@@ -169,8 +169,23 @@ def generate_macro(
             lines.append(f"/gun/addPrimary {ptype} {energy:g} MeV")
 
     lines.append("")
-    lines.append("# Use random directions for all primaries")
-    lines.append("/gun/randomDirection true")
+    # Direction handling. SIREN-input lookup-table configs need a fixed +Z
+    # direction because PhotonSim's PhotonHist_AngleDistance fills the opening
+    # angle against a hardcoded +Z axis (DataManager.cc:540-548); random
+    # directions smear the Cherenkov ring across the angle axis and the hist
+    # becomes unusable as a training input.
+    if bool(config.get("fixed_direction_z", False)):
+        lines.append("# Fixed +Z direction (SIREN-input lookup-table mode)")
+        lines.append("/gun/position 0 0 0 m")
+        lines.append("/gun/direction 0 0 1")
+    else:
+        lines.append("# Use random directions for all primaries")
+        lines.append("/gun/randomDirection true")
+    # Optional s_max for /output/smax (enables PhotonHist_AngleDistanceNorm).
+    smax_mm = config.get("smax_mm")
+    if smax_mm is not None:
+        lines.append("")
+        lines.append(f"/output/smax {float(smax_mm):.6f} mm")
     lines.append("")
     lines.append(f"# Run {n_events} events")
     lines.append(f"/run/beamOn {n_events}")
