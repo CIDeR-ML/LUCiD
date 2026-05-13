@@ -69,16 +69,11 @@ class DetectorGeometry(NamedTuple):
         sensor_radius = detector.S_radius
         num_sensors = len(sensor_points)
 
-        # Propagator — string uses its own factory, others use the shared one
+        # Propagator — string uses its own, others use the shared one
         if isinstance(detector, StringTelescope):
-            from lucid.propagation.string.propagator import create_string_propagator
+            from lucid.propagation.string.string_propagator import create_string_propagator
             propagator = create_string_propagator(
-                detector, sensor_points, sensor_radius,
-                temperature=temperature,
-                lambda_abs=grid_params.pop('lambda_abs', 100.0),
-                lambda_scat=grid_params.pop('lambda_scat', 30.0),
-                max_str_per_cell=grid_params.pop('max_str_per_cell', 6),
-            )
+                detector, sensor_radius, temperature=temperature)
         else:
             propagator = create_shared_propagator(
                 detector, sensor_points, sensor_radius,
