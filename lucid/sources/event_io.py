@@ -778,35 +778,55 @@ def read_photon_data_from_photonsim(root_file_path, entry_index):
     # Open the ROOT file
     root_file = uproot.open(root_file_path)
 
-    # Per-photon scalars are in OpticalPhotonsRaw (chunked); only
-    # event-level metadata stays on OpticalPhotons.
-    if 'OpticalPhotonsRaw' not in root_file:
-        raise ValueError(
-            f"PhotonSim ROOT file {root_file_path} is missing OpticalPhotonsRaw. "
-            f"Re-simulate with the current PhotonSim build."
-        )
-    tree = root_file['OpticalPhotons']
-    raw_tree = root_file['OpticalPhotonsRaw']
+    # Modern format: per-photon scalars in OpticalPhotonsRaw (chunked).
+    # Legacy format: everything on the OpticalPhotons tree (pre-chunk era).
+    if 'OpticalPhotonsRaw' in root_file:
+        tree = root_file['OpticalPhotons']
+        raw_tree = root_file['OpticalPhotonsRaw']
 
-    tree_data = tree.arrays(['PrimaryEnergy'],
-                            entry_start=entry_index, entry_stop=entry_index+1, library='np')
+        tree_data = tree.arrays(['PrimaryEnergy'],
+                                entry_start=entry_index, entry_stop=entry_index+1, library='np')
+        energy = float(tree_data['PrimaryEnergy'][0])
 
-    # Extract primary energy (already in MeV)
-    energy = float(tree_data['PrimaryEnergy'][0])
+        photon_positions, photon_directions, photon_times, photon_wavelengths = \
+            _read_photons_for_event(raw_tree, entry_index)
 
-    # Stitch chunks for this event into flat per-photon arrays
-    photon_positions, photon_directions, photon_times, photon_wavelengths = \
-        _read_photons_for_event(raw_tree, entry_index)
-
-    result = {
-        'photon_origins': jnp.array(photon_positions),     # Combined position vectors in m
-        'photon_directions': jnp.array(photon_directions), # Combined direction vectors
-        'photon_times': jnp.array(photon_times),
-        'energy': energy  # Energy in MeV
-    }
-
-    # Per-photon wavelengths (nm) — always present in OpticalPhotonsRaw.
-    result['wavelengths'] = jnp.array(photon_wavelengths)
+        result = {
+            'photon_origins': jnp.array(photon_positions),
+            'photon_directions': jnp.array(photon_directions),
+            'photon_times': jnp.array(photon_times),
+            'energy': energy,
+            'wavelengths': jnp.array(photon_wavelengths),
+        }
+    else:
+        # Legacy single-tree format (no OpticalPhotonsRaw).
+        tree = root_file['OpticalPhotons']
+        branches = ['PrimaryEnergy', 'PhotonPosX', 'PhotonPosY', 'PhotonPosZ',
+                     'PhotonDirX', 'PhotonDirY', 'PhotonDirZ', 'PhotonTime']
+        tree_data = tree.arrays(branches,
+                                entry_start=entry_index, entry_stop=entry_index+1, library='np')
+        energy = float(tree_data['PrimaryEnergy'][0])
+        photon_positions = np.column_stack((
+            tree_data['PhotonPosX'][0] / 1000.0,
+            tree_data['PhotonPosY'][0] / 1000.0,
+            tree_data['PhotonPosZ'][0] / 1000.0,
+        ))
+        photon_directions = np.column_stack((
+            tree_data['PhotonDirX'][0],
+            tree_data['PhotonDirY'][0],
+            tree_data['PhotonDirZ'][0],
+        ))
+        photon_times = np.asarray(tree_data['PhotonTime'][0], dtype=np.float32)
+        result = {
+            'photon_origins': jnp.array(photon_positions),
+            'photon_directions': jnp.array(photon_directions),
+            'photon_times': jnp.array(photon_times),
+            'energy': energy,
+        }
+        if 'PhotonWavelength' in tree.keys():
+            wl_data = tree.arrays(['PhotonWavelength'],
+                                   entry_start=entry_index, entry_stop=entry_index+1, library='np')
+            result['wavelengths'] = jnp.array(wl_data['PhotonWavelength'][0])
 
     return result
 

@@ -502,22 +502,23 @@ def superimpose_multiple_events(charges_list, times_list):
 #   print_event_kinematics, full_to_sparse (copy), sparse_to_full (copy)
 # ---------------------------------------------------------------------------
 
-# Backward-compat re-exports so existing imports keep working
-from lucid.sources.event_io import (               # noqa: F401
-    save_single_event,
-    load_single_event,
-    get_random_root_entry_index,
-    read_photon_data_from_root,
-    get_pdg_code,
-    get_particle_mass,
-    extract_particle_properties,
-    analyze_loaded_particle,
-    analyze_event_directory,
-    PARTICLE_MASSES,
-    momentum_to_angles_and_energy,
-    analyze_event_kinematics,
-    print_event_kinematics,
-)
+# Backward-compat re-exports so existing ``from lucid.utils import X``
+# keeps working.  Deferred via __getattr__ to break the circular import
+# chain (utils → event_io → sources/__init__ → siren_rays → utils).
+_EVENT_IO_REEXPORTS = {
+    'save_single_event', 'load_single_event', 'get_random_root_entry_index',
+    'read_photon_data_from_root', 'get_pdg_code', 'get_particle_mass',
+    'extract_particle_properties', 'analyze_loaded_particle',
+    'analyze_event_directory', 'PARTICLE_MASSES',
+    'momentum_to_angles_and_energy', 'analyze_event_kinematics',
+    'print_event_kinematics',
+}
+
+def __getattr__(name):
+    if name in _EVENT_IO_REEXPORTS:
+        from lucid.sources import event_io
+        return getattr(event_io, name)
+    raise AttributeError(f"module 'lucid.utils' has no attribute {name!r}")
 
 def load_range_params(particle, medium):
     """

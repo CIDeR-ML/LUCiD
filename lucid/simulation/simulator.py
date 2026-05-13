@@ -108,9 +108,22 @@ def setup_event_simulator(
         How sensor hits are aggregated. ``None`` (default) uses the source-appropriate
         choice; pass a value to override (useful for analysis):
 
-        - ``'aggregated'`` -- differentiable per-sensor (charges, times). Default for calibration.
-        - ``'per_photon'`` -- per-photon arrays (log_w, times, indices, charges). Default for track.
-        - ``'realistic'`` -- Bernoulli QE sampling, hard-min timing, optional smearing. Default for data.
+        - ``'aggregated'`` -- differentiable soft-min per-sensor. Returns 2:
+          ``(charges, times)``. Default for calibration.
+        - ``'per_photon'`` -- per-photon arrays for likelihood losses. Returns 4:
+          ``(log_w, times, indices, charges)``. Default for track.
+        - ``'realistic'`` -- Bernoulli QE + per-photon TTS. Returns 3:
+          ``(charges, times_true, times_reco)``. Default for data.
+        - ``'per_segment'`` -- realistic + per-(segment, sensor) decomposition.
+          Returns 6: ``(charges, times_true, times_reco, pe_per_seg,
+          t_per_seg_true, t_per_seg_reco)``. Requires ``photon_segment_index``
+          in photon_data and ``n_segments`` argument.
+        - ``'waveform'`` -- dense waveform histogram with Bernoulli QE + TTS +
+          gain smearing. Returns 3: ``(waveform, n_dropped, n_detected)``.
+        - ``'waveform_expected'`` -- continuous expected-value waveform. Returns 3:
+          ``(waveform, n_dropped, n_detected)``.
+        - ``'shotgun_per_photon'`` -- per-photon first-detection records. Returns 3:
+          ``(detected, sensor_id, hit_time)``.
     wavelength_sampling : str
         How LUCiD samples λ when it samples (track mode, calibration with
         ``source.wavelength=None``). Ignored silently when the caller supplies
@@ -128,17 +141,20 @@ def setup_event_simulator(
     Returns
     -------
     callable
+        The return arity depends on ``hit_mode`` (see above). The calling
+        convention depends on ``default_detector_params``:
+
         When ``default_detector_params`` is ``False``:
 
-        - **Calibration** ``(source, detector_params, key) -> (charges, times)``
-        - **Track**       ``(particle_params, detector_params, key) -> (charges, times)``
-        - **Data**        ``(particle_params, detector_params, key, photon_data) -> (charges, times)``
+        - **Calibration** ``(source, detector_params, key) -> result``
+        - **Track**       ``(particle_params, detector_params, key) -> result``
+        - **Data**        ``(particle_params, detector_params, key, photon_data) -> result``
 
         When ``default_detector_params`` is truthy (``True`` or a ``DetectorParams``):
 
-        - **Calibration** ``(source, key) -> (charges, times)``
-        - **Track**       ``(particle_params, key) -> (charges, times)``
-        - **Data**        ``(particle_params, key, photon_data) -> (charges, times)``
+        - **Calibration** ``(source, key) -> result``
+        - **Track**       ``(particle_params, key) -> result``
+        - **Data**        ``(particle_params, key, photon_data[, n_segments]) -> result``
 
         When detector params are baked in, the returned function also exposes
         a ``.default_detector_params`` attribute for inspection.
