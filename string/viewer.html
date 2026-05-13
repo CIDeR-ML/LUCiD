@@ -202,17 +202,12 @@ function showEvent(idx){
   const vt=hits.map(h=>h.t).filter(t=>isFinite(t));
   tMin=vt.length?Math.min(...vt):0;tMax=vt.length?Math.max(...vt):1000;
 
-  // Charge-weighted quantile of time
-  const sortedIdx=[...Array(hits.length)].map((_,i)=>i).sort((a,b)=>hits[a].t-hits[b].t);
-  const totalQ=hits.reduce((s,h)=>s+h.q,0);
-  const quantiles=new Array(hits.length);
-  let cumQ=0;
-  sortedIdx.forEach(i=>{cumQ+=hits[i].q;quantiles[i]=cumQ/totalQ;});
-
   const n=hits.length,pos=new Float32Array(n*3),qN=new Float32Array(n),hQ=new Float32Array(n);
   hits.forEach((h,i)=>{const p=det.dom_positions[h.id];
     pos[i*3]=p[0];pos[i*3+1]=p[1];pos[i*3+2]=p[2];
-    qN[i]=norms[i]; hQ[i]=quantiles[i];});
+    qN[i]=norms[i];
+    // Normalized time: linear in real time
+    hQ[i]=(h.t-tMin)/(tMax-tMin+1e-10);});
 
   const geo=new THREE.BufferGeometry();
   geo.setAttribute('position',new THREE.BufferAttribute(pos,3));
@@ -258,17 +253,18 @@ function drawCbar(){
 
 function updTBar(){
   const tNs=tMin+(tMax-tMin)*Math.max(0,Math.min(1,anQ));
-  $('tBar').textContent=`t=${tNs.toFixed(0)}ns  q=${anQ.toFixed(2)}`;}
+  $('tBar').textContent=`t = ${tNs.toFixed(0)} ns`;}
 
-function updTrk(q,isAn){
+function updTrk(tFrac,isAn){
   const ev=evs[+$('evSel').value];if(!ev)return;
   const o=ev.track_origin,d=ev.track_direction;
   if(!isAn){buildTrk(o,d,-20,TLEN);if(trkDot)trkDot.visible=false;return;}
-  const frac=Math.max(0,Math.min(1,q*1.5));
-  const front=-20+frac*(TLEN+20);
+  // Muon at c: crosses TLEN in TLEN/C ns. tFrac is [0,1] over the full event time span.
+  const muonFrac=Math.max(0,Math.min(1, tFrac*(tMax-tMin)/(TLEN/C)));
+  const front=-20+muonFrac*(TLEN+20);
   buildTrk(o,d,-20,front);
   if(trkDot){trkDot.position.set(o[0]+d[0]*front,o[1]+d[1]*front,o[2]+d[2]*front);
-    trkDot.visible=showTrk&&frac<1;}}
+    trkDot.visible=showTrk&&muonFrac<1;}}
 
 function tick(ts){
   requestAnimationFrame(tick);
