@@ -35,10 +35,8 @@ from lucid.sources.calibration_sources import (  # noqa: F401
 from lucid.sources.event_io import (             # noqa: F401
     get_max_photons_per_particle,
     generate_events_from_root,
-    generate_multi_folder_events,
     read_photon_data_from_photonsim,
     read_particle_data_from_photonsim,
-    generate_events_from_photonsim,
     generate_events_from_photonsim_particles,
     # Moved from utils in Phase 2.5
     save_single_event,
@@ -47,11 +45,6 @@ from lucid.sources.event_io import (             # noqa: F401
     read_photon_data_from_root,
     get_pdg_code,
     get_particle_mass,
-    save_single_event_with_extended_info,
-    save_single_event_with_particle_info,
-    merge_event_files,
-    read_multi_folder_events,
-    read_event_file,
     extract_particle_properties,
     analyze_loaded_particle,
     analyze_event_directory,

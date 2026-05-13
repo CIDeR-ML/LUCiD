@@ -122,9 +122,10 @@ python validate.py rays [OPTIONS]
 
 ## Data Requirements
 
-Both training and validation require PhotonSim HDF5 lookup tables:
-- Location: `data/{material}/{particle}/photon_lookup_table.h5`
-- Generate using PhotonSim table generation tools
+Both training and validation require an HDF5 lookup table at
+`data/{material}/{particle}/photon_lookup_table.h5`. To build it from
+PhotonSim ROOT output, see
+[`docs/SIREN_TRAINING_INPUTS.md`](../../docs/SIREN_TRAINING_INPUTS.md).
 
 ## Model Paths
 

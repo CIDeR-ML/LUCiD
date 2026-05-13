@@ -4,14 +4,23 @@ Scripts for running optimization jobs on S3DF SLURM cluster.
 
 ## Container
 
-All jobs use the Singularity container:
+All jobs use the unified LUCiD apptainer image (same one production data
+generation uses, baked from `ghcr.io/cider-ml/lucid:latest`):
 ```
-/sdf/group/neutrino/images/develop.sif
+/sdf/data/neutrino/cjesus/software/images/lucid.sif
+```
+
+Pull/refresh with:
+```bash
+apptainer pull /sdf/data/neutrino/cjesus/software/images/lucid.sif \
+    docker://ghcr.io/cider-ml/lucid:latest
 ```
 
 To run commands manually with the container:
 ```bash
-singularity exec -B /sdf,/fs,/sdf/scratch,/lscratch /sdf/group/neutrino/images/develop.sif python3 your_script.py
+apptainer exec -B /sdf,/fs,/sdf/scratch,/lscratch \
+    /sdf/data/neutrino/cjesus/software/images/lucid.sif \
+    python3 your_script.py
 ```
 
 ---

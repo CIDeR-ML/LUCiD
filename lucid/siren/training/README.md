@@ -174,6 +174,9 @@ The module expects PhotonSim data in either:
    - Directory containing `inputs.npy`, `targets.npy`
    - Optional `metadata.json` and `normalization_bounds.npz`
 
+For how to build the HDF5 lookup table from PhotonSim ROOT output, see
+[`docs/SIREN_TRAINING_INPUTS.md`](../../../docs/SIREN_TRAINING_INPUTS.md).
+
 ## Configuration Options
 
 ### Model Architecture

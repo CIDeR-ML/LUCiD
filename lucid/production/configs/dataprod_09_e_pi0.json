@@ -1,0 +1,30 @@
+{
+  "config_number": 9,
+  "name": "e- + pi0",
+  "description": "Multi-particle events with electron and neutral pion with LUCiD processing",
+  "material": "water",
+  "output_path": "uniform_energy",
+  "energy_distribution": "uniform",
+  "store_individual_photons": true,
+  "run_lucid": true,
+  "disable_decays": false,
+  "particles": [
+    {
+      "type": "e-",
+      "energy_min_MeV": 100,
+      "energy_max_MeV": 1500
+    },
+    {
+      "type": "pi0",
+      "energy_min_MeV": 100,
+      "energy_max_MeV": 1500
+    }
+  ],
+  "lucid_options": {
+    "apply_smearing": true,
+    "apply_translation": true
+  },
+  "n_jobs": 2,
+  "n_events_per_job": 100,
+  "cleanup_root_files": true
+}

@@ -26,7 +26,7 @@ LUCID_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 PHOTONSIM_DIR="$(cd "${LUCID_DIR}/../PhotonSim" && pwd)"
 DATAPROD_CONFIG_DIR="${PHOTONSIM_DIR}/macros/data_production_config"
 TMP_DIR="/sdf/data/neutrino/cjesus/tmp/validation_generation"
-SINGULARITY_IMAGE="/sdf/group/neutrino/images/develop.sif"
+SINGULARITY_IMAGE="/sdf/data/neutrino/cjesus/software/images/lucid.sif"
 
 # Parse command line arguments
 while [[ $# -gt 0 ]]; do
@@ -141,26 +141,28 @@ ls -lh "$ROOT_FILE"
 
 echo ""
 echo "========================================================================"
-echo "STEP 2: Running LUCiD processing"
+echo "STEP 2: Running LUCiD processing (v3 four-file output)"
 echo "========================================================================"
-HDF5_FILE="${TMP_DIR}/${CONFIG_NAME}_validation.h5"
+DATASET_ROOT="${TMP_DIR}/${CONFIG_NAME}_validation"
+mkdir -p "$DATASET_ROOT"
 
 singularity exec -B /sdf,/fs,/sdf/scratch,/lscratch ${SINGULARITY_IMAGE} python \
     ${LUCID_DIR}/lucid/production/generate_events_with_particles.py \
     --root-file "$ROOT_FILE" \
-    --output "$TMP_DIR" \
+    --output "$DATASET_ROOT" \
+    --dataset-name "${CONFIG_NAME}_validation" \
     --apply-smearing \
     --apply-translation \
-    --include-track-segments \
     --n-events "$N_EVENTS" \
-    --merged-filename "$(basename $HDF5_FILE)"
+    --batch-size "$N_EVENTS"
 
-if [ ! -f "$HDF5_FILE" ]; then
-    echo "Error: LUCiD failed to create HDF5 file"
+SENSOR_FILE="${DATASET_ROOT}/sensor/wc_sensor_0000.h5"
+if [ ! -f "$SENSOR_FILE" ]; then
+    echo "Error: LUCiD failed to create v3 batch file (expected $SENSOR_FILE)"
     exit 1
 fi
-echo "HDF5 file created: $HDF5_FILE"
-ls -lh "$HDF5_FILE"
+echo "v3 dataset created under: $DATASET_ROOT"
+ls -lh "${DATASET_ROOT}/"*/*.h5
 
 echo ""
 echo "========================================================================"
@@ -172,9 +174,10 @@ for (( event=0; event<$N_EVENTS; event++ )); do
     echo "Generating visualization for event $event..."
     singularity exec -B /sdf,/fs,/sdf/scratch,/lscratch ${SINGULARITY_IMAGE} python \
         lucid/production/visualize_particle_events.py \
-        "$HDF5_FILE" \
+        "$DATASET_ROOT" \
         config/SK_like_geom_config.json \
         --event "$event" \
+        --file-index 0 \
         --output-dir "$OUTPUT_DIR"
 done
 

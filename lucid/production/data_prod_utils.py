@@ -1,348 +1,188 @@
-import h5py
+"""Notebook/scripting helpers for loading v3 LUCiD dataset batches.
+
+The notebooks under ``lucid/production/notebooks/`` import from this module.
+Functions mirror the old API names (``read_multi_event_file``,
+``get_track_hits``, ``get_particle_name``, ``print_event_info``) but read
+the four-file v3 layout documented in ``docs/LUCID_DATASET.md``.
+"""
+
+from pathlib import Path
 import numpy as np
-import jax.numpy as jnp
+
+from lucid.sources.event_io import (
+    read_sensor_event_v3,
+    read_inst_event_v3,
+    read_seg_event_v3,
+    read_labl_event_v3,
+    list_events_v3,
+)
 
 
-def read_multi_event_file(filename, event_index=None, verbose=True, show_matrices=False):
-    """
-    Read event(s) from an HDF5 file that may contain multiple events.
-    
-    This function handles the new file format where multiple events are stacked
-    with an index. It can read a specific event by index or all events.
-    
-    Parameters
-    ----------
-    filename : str
-        Path to the HDF5 file
-    event_index : int or None, optional
-        If specified, read only the event at this index.
-        If None, read all events in the file.
-        Index can be used in two ways:
-        - If data has an 'event_index' dimension, use it to slice
-        - If data is organized in groups, use it to select a group
-    verbose : bool, optional
-        Whether to print detailed information, by default True
-    show_matrices : bool, optional
-        Whether to show charge and time matrices in verbose output, by default False
-        
-    Returns
-    -------
-    dict or list of dict
-        If event_index is specified, returns a single event dictionary.
-        If event_index is None, returns a list of event dictionaries.
-        Each dictionary contains:
-        - 'PDG': particle PDG codes
-        - 'Q': charge matrix
-        - 'Q_tot': total charge per track
-        - 'T': time matrix
-        - 'P': momentum vectors
-        - 'V': vertex positions
-        - 'event_number': event identifier
-        - 'filename': source filename
-        
-    Examples
-    --------
-    # Read all events
-    >>> events = read_multi_event_file('events.h5')
-    >>> print(f"Read {len(events)} events")
-    
-    # Read specific event with detailed matrix display
-    >>> event_0 = read_multi_event_file('events.h5', event_index=0, show_matrices=True)
-    >>> print(f"Event 0 has {len(event_0['PDG'])} tracks")
-    """
-    with h5py.File(filename, 'r') as f:
-        # Determine file structure
-        keys = list(f.keys())
-        
-        # Check if file has top-level datasets (new format with event dimension)
-        if 'PDG' in keys:
-            # New format: datasets have an event dimension
-            pdg_full = np.array(f['PDG'])
-            
-            # Check if there's an event dimension (3D for Q and T, 2D for PDG)
-            if len(pdg_full.shape) == 2:
-                # Format: datasets have shape (num_events, ...) 
-                n_events = pdg_full.shape[0]
-                
-                if event_index is not None:
-                    # Read single event
-                    if event_index >= n_events:
-                        raise IndexError(f"Event index {event_index} out of range [0, {n_events})")
-                    
-                    data = {
-                        'PDG': np.array(f['PDG'][event_index]),
-                        'Q': np.array(f['Q'][event_index]),
-                        'Q_tot': np.array(f['Q_tot'][event_index]) if 'Q_tot' in f else np.sum(f['Q'][event_index], axis=1),
-                        'T': np.array(f['T'][event_index]),
-                        'P': np.array(f['P'][event_index]),
-                        'V': np.array(f['V'][event_index]),
-                        'event_number': event_index,
-                        'filename': filename
-                    }
-                    
-                    if verbose:
-                        print_event_info(data, f"Event {event_index}", show_matrices=show_matrices)
-                    
-                    return data
-                else:
-                    # Read all events
-                    events = []
-                    for i in range(n_events):
-                        data = {
-                            'PDG': np.array(f['PDG'][i]),
-                            'Q': np.array(f['Q'][i]),
-                            'Q_tot': np.array(f['Q_tot'][i]) if 'Q_tot' in f else np.sum(f['Q'][i], axis=1),
-                            'T': np.array(f['T'][i]),
-                            'P': np.array(f['P'][i]),
-                            'V': np.array(f['V'][i]),
-                            'event_number': i,
-                            'filename': filename
-                        }
-                        events.append(data)
-                        
-                        if verbose:
-                            print_event_info(data, f"Event {i}/{n_events-1}", show_matrices=show_matrices)
-                    
-                    if verbose:
-                        print(f"\nTotal: Read {len(events)} events from {filename}")
-                    
-                    return events
-            else:
-                # Format: single event file (backward compatibility)
-                data = {
-                    'PDG': pdg_full,
-                    'Q': np.array(f['Q']),
-                    'Q_tot': np.array(f['Q_tot']) if 'Q_tot' in f else np.sum(f['Q'], axis=1),
-                    'T': np.array(f['T']),
-                    'P': np.array(f['P']),
-                    'V': np.array(f['V']),
-                    'event_number': np.array(f['event_number']) if 'event_number' in f else 0,
-                    'filename': filename
-                }
-                
-                if verbose:
-                    print_event_info(data, "Single Event", show_matrices=show_matrices)
-                
-                return data
-        
-        # Check if file has event groups (alternative multi-event format)
-        elif 'event_0' in keys or any(k.startswith('event_') for k in keys):
-            # Group-based format: each event is in a separate group
-            event_groups = sorted([k for k in keys if k.startswith('event_')])
-            n_events = len(event_groups)
-            
-            if event_index is not None:
-                # Read single event
-                if event_index >= n_events:
-                    raise IndexError(f"Event index {event_index} out of range [0, {n_events})")
-                
-                group_name = f'event_{event_index}'
-                if group_name not in f:
-                    raise KeyError(f"Event group {group_name} not found in file")
-                
-                g = f[group_name]
-                data = {
-                    'PDG': np.array(g['PDG']),
-                    'Q': np.array(g['Q']),
-                    'Q_tot': np.array(g['Q_tot']) if 'Q_tot' in g else np.sum(g['Q'], axis=1),
-                    'T': np.array(g['T']),
-                    'P': np.array(g['P']),
-                    'V': np.array(g['V']),
-                    'event_number': np.array(g['event_number']) if 'event_number' in g else event_index,
-                    'filename': filename
-                }
-                
-                if verbose:
-                    print_event_info(data, f"Event {event_index}", show_matrices=show_matrices)
-                
-                return data
-            else:
-                # Read all events
-                events = []
-                for i, group_name in enumerate(event_groups):
-                    g = f[group_name]
-                    data = {
-                        'PDG': np.array(g['PDG']),
-                        'Q': np.array(g['Q']),
-                        'Q_tot': np.array(g['Q_tot']) if 'Q_tot' in g else np.sum(g['Q'], axis=1),
-                        'T': np.array(g['T']),
-                        'P': np.array(g['P']),
-                        'V': np.array(g['V']),
-                        'event_number': np.array(g['event_number']) if 'event_number' in g else i,
-                        'filename': filename
-                    }
-                    events.append(data)
-                    
-                    if verbose:
-                        print_event_info(data, f"Event {i}/{n_events-1}", show_matrices=show_matrices)
-                
-                if verbose:
-                    print(f"\nTotal: Read {len(events)} events from {filename}")
-                
-                return events
-        else:
-            raise ValueError(f"Unrecognized file format. Top-level keys: {keys}")
+PDG_NAMES = {
+    11: 'e-', -11: 'e+',
+    13: 'mu-', -13: 'mu+',
+    22: 'gamma',
+    111: 'pi0', 211: 'pi+', -211: 'pi-',
+    321: 'K+', -321: 'K-',
+    2212: 'proton', -2212: 'antiproton',
+    2112: 'neutron', -2112: 'antineutron',
+}
 
 
-def print_event_info(data, title="Event", show_matrices=False, n_pmts_to_show=10):
-    """
-    Print summary information about an event.
-    
-    Parameters
-    ----------
-    data : dict
-        Event data dictionary
-    title : str
-        Title for the printout
-    show_matrices : bool, optional
-        Whether to show charge and time matrices, by default False
-    n_pmts_to_show : int, optional
-        Number of PMTs to show in matrix display, by default 10
-    """
-    pdg = data['PDG']
-    q = data['Q']
-    q_tot = data['Q_tot']
-    t = data['T']
-    p = data['P']
-    v = data['V']
-    
-    n_tracks = pdg.shape[0]
-    n_detectors = q.shape[1]
-    
-    print(f"\n{'='*50}")
-    print(f"{title}")
-    print(f"{'='*50}")
-    print(f"Event Number: {data['event_number']}")
-    print(f"Number of tracks: {n_tracks}")
-    print(f"Number of sensors: {n_detectors}")
-    
-    # Detector statistics
-    print(f"\nDetector Statistics:")
-    print(f"Total charge detected: {np.sum(q_tot):.2f}")
-    print(f"Mean charge per track: {np.mean(q_tot):.2f}")
-    print(f"Mean charge per PMT: {np.mean(np.sum(q, axis=0)):.2f}")
-    print(f"Number of PMTs with signal: {np.sum(np.sum(q, axis=0) > 0)}")
-    
-    # Particle information
-    print(f"\nParticle Information:")
-    print("-" * 80)
-    print(f"{'Track #':<8}{'PDG':<8}{'Q_tot':<12}{'P_mag (MeV/c)':<16}{'Direction':<25}{'Vertex':<25}")
-    print("-" * 80)
-    
-    for i in range(n_tracks):
-        # Convert PDG code to particle name
-        particle = get_particle_name(pdg[i])
-        
-        # Calculate momentum magnitude
-        p_mag = np.sqrt(np.sum(p[i]**2))
-        
-        # Normalize direction
-        direction = p[i] / (p_mag if p_mag > 0 else 1)
-        
-        print(f"{i:<8}{particle:<8}{q_tot[i]:<12.2f}{p_mag:<16.2f}{str(direction):<25}{str(v[i]):<25}")
-    
-    if show_matrices:
-        # Print Q values for each track
-        print("\nCharge Matrix (Q) - First {} PMTs:".format(min(n_pmts_to_show, n_detectors)))
-        print("-" * 80)
-        header = "Track #  "
-        for j in range(min(n_pmts_to_show, n_detectors)):
-            header += f"PMT-{j:<5} "
-        print(header)
-        print("-" * 80)
-        
-        for i in range(n_tracks):
-            row = f"{i:<8}  "
-            for j in range(min(n_pmts_to_show, n_detectors)):
-                row += f"{q[i,j]:<7.2f} "
-            row += f"... (showing {min(n_pmts_to_show, n_detectors)}/{n_detectors} PMTs)"
-            print(row)
-        
-        # Print timing information
-        print("\nTiming Information:")
-        # T is now shape (N, L) like Q
-        valid_times = t[t > 0]
-        if valid_times.size > 0:
-            print(f"Mean detection time: {np.mean(valid_times):.2f} ns")
-            print(f"Min detection time: {np.min(valid_times):.2f} ns")
-            print(f"Max detection time: {np.max(valid_times):.2f} ns")
-        else:
-            print("No valid timing data available")
-        
-        # Print T values for each track (similar to Q matrix)
-        print("\nTime Matrix (T) - First {} PMTs:".format(min(n_pmts_to_show, n_detectors)))
-        print("-" * 80)
-        header = "Track #  "
-        for j in range(min(n_pmts_to_show, n_detectors)):
-            header += f"PMT-{j:<5} "
-        print(header)
-        print("-" * 80)
-        
-        for i in range(n_tracks):
-            row = f"{i:<8}  "
-            for j in range(min(n_pmts_to_show, n_detectors)):
-                if t[i,j] > 0:
-                    row += f"{t[i,j]:<7.2f} "
-                else:
-                    row += f"{'--':<7} "
-            row += f"... (showing {min(n_pmts_to_show, n_detectors)}/{n_detectors} PMTs)"
-            print(row)
+CATEGORY_NAMES = {
+    0: 'Primary', 1: 'DecayElectron', 2: 'SecondaryPion', 3: 'Gamma',
+    255: 'Unknown', -1: 'Unknown',
+}
 
 
-def get_particle_name(pdg_code):
+def get_particle_name(pdg):
+    return PDG_NAMES.get(int(pdg), f'PDG{int(pdg)}')
+
+
+def _per_particle_pdg(labl):
+    """Best-effort PDG per particle, from the last track_id in its genealogy."""
+    pp = labl['per_particle']
+    pt = labl['per_track']
+    genealogy = np.asarray(pp['genealogy_data'])
+    offsets = np.asarray(pp['genealogy_offsets'])
+    n_p = int(labl['n_particles'])
+    n_t = int(labl['n_tracks'])
+    track_ids = np.asarray(pt['track_id']) if n_t > 0 else np.array([], dtype=np.int64)
+    track_pdgs = np.asarray(pt['pdg']) if n_t > 0 else np.array([], dtype=np.int32)
+    id_to_pdg = {int(tid): int(pdg) for tid, pdg in zip(track_ids, track_pdgs)}
+    out = np.full(n_p, -1, dtype=np.int32)
+    for i in range(n_p):
+        s, e = int(offsets[i]), int(offsets[i + 1])
+        if e > s:
+            out[i] = id_to_pdg.get(int(genealogy[e - 1]), -1)
+    return out
+
+
+def _infer_n_sensors(sensor_file):
+    import h5py
+    with h5py.File(sensor_file, 'r') as f:
+        return int(f['config'].attrs['n_sensors'])
+
+
+def _resolve_dataset_paths(dataset_root_or_sensor_file, file_index):
+    """Accept either a dataset root directory or a direct sensor file path."""
+    p = Path(dataset_root_or_sensor_file)
+    if p.is_file() and p.suffix == '.h5':
+        stem = p.stem
+        try:
+            file_index = int(stem.split('_')[-1])
+        except ValueError:
+            pass
+        root = p.parent.parent
+    else:
+        root = p
+    sensor = root / 'sensor' / f'wc_sensor_{file_index:04d}.h5'
+    inst = root / 'inst' / f'wc_inst_{file_index:04d}.h5'
+    seg = root / 'seg' / f'wc_seg_{file_index:04d}.h5'
+    labl = root / 'labl' / f'wc_labl_{file_index:04d}.h5'
+    return sensor, inst, seg, labl, file_index
+
+
+def load_event_v3(dataset_root, event_idx, file_index=0, n_sensors=None):
+    """Load a single event from a v3 dataset batch and return a dict.
+
+    The returned dict exposes dense ``(n_particles, n_sensors)`` PE/T
+    matrices under keys ``Q`` and ``T`` for notebook compatibility. Raw v3
+    reader outputs are also included under ``labl`` and ``seg`` for anyone
+    who needs them.
     """
-    Convert PDG code to particle name.
-    
-    Parameters
-    ----------
-    pdg_code : int
-        PDG particle code
-        
-    Returns
-    -------
-    str
-        Particle name
-    """
-    particle_map = {
-        13: 'mu-',
-        -13: 'mu+',
-        211: 'pi+',
-        -211: 'pi-',
-        111: 'pi0',
-        11: 'e-',
-        -11: 'e+',
-        22: 'gamma',
-        2212: 'p',
-        2112: 'n'
+    sensor_p, inst_p, seg_p, labl_p, file_index = _resolve_dataset_paths(
+        dataset_root, file_index)
+
+    if n_sensors is None:
+        n_sensors = _infer_n_sensors(sensor_p)
+
+    sensor = read_sensor_event_v3(str(sensor_p), event_idx)
+    inst = read_inst_event_v3(str(inst_p), event_idx)
+    seg = read_seg_event_v3(str(seg_p), event_idx)
+    labl = read_labl_event_v3(str(labl_p), event_idx)
+
+    n_particles = int(labl['n_particles'])
+
+    PE_per_particle = np.zeros((n_particles, n_sensors), dtype=np.float32)
+    T_per_particle = np.full((n_particles, n_sensors), np.inf, dtype=np.float32)
+    if int(inst.get('n_particle_hits', 0)) > 0:
+        pi = np.asarray(inst['particle_idx'], dtype=np.int32)
+        si = np.asarray(inst['sensor_idx'], dtype=np.int32)
+        PE_per_particle[pi, si] = np.asarray(inst['PE'], dtype=np.float32)
+        t_arr = np.asarray(inst['T'], dtype=np.float32)
+        T_per_particle[pi, si] = np.where(t_arr > 0, t_arr, np.inf)
+
+    PE = np.zeros(n_sensors, dtype=np.float32)
+    T = np.zeros(n_sensors, dtype=np.float32)
+    if int(sensor.get('n_hits', 0)) > 0:
+        si_s = np.asarray(sensor['sensor_idx'], dtype=np.int32)
+        PE[si_s] = np.asarray(sensor['PE'], dtype=np.float32)
+        T[si_s] = np.asarray(sensor['T'], dtype=np.float32)
+
+    return {
+        'source_event_idx': int(sensor['source_event_idx']),
+        'n_particles': n_particles,
+        'Q': PE_per_particle,
+        'T': T_per_particle,
+        'Q_tot': PE,
+        'T_tot': T,
+        # t0 is now per-interaction. For single-interaction events every
+        # row carries the same value; this tool picks the first.
+        't0': float(labl['per_interaction']['t0'][0]),
+        'contained': bool(labl['per_event']['contained']),
+        'PDG': _per_particle_pdg(labl),
+        'Particle_Category': np.asarray(labl['per_particle']['category']),
+        'contained_per_particle': np.asarray(labl['per_particle']['contained'], dtype=bool),
+        'labl': labl,
+        'seg': seg,
     }
 
-    return particle_map.get(pdg_code, f'unknown')
 
+def get_track_hits(event, track_idx):
+    """Return (indices, Q, T) for one particle row of an event dict.
 
-def get_track_hits(event, track_index):
+    ``track_idx`` is the local particle index (0..n_particles-1). The name
+    is kept for backwards compatibility with older notebooks; in v3 these
+    rows correspond to Geant4-categorized particles, not individual tracks.
     """
-    Extract nonzero PMT indices, Q, and T for a specific track,
-    keeping only the PMTs with Q > 0.
+    Q_row = event['Q'][track_idx]
+    T_row = event['T'][track_idx]
+    mask = Q_row > 0
+    indices = np.where(mask)[0]
+    return indices, Q_row[mask], T_row[mask]
 
-    Returns filtered arrays so that:
-        len(nonzero_indices) == len(Q_filtered) == len(T_filtered)
+
+def print_event_info(event):
+    cat = event['Particle_Category']
+    cat_names = [CATEGORY_NAMES.get(int(c), f'C{int(c)}') for c in cat]
+    pdg = event['PDG']
+    pdg_names = [get_particle_name(p) if int(p) != -1 else '?' for p in pdg]
+    print(f"Event source_event_idx={event['source_event_idx']}, "
+          f"n_particles={event['n_particles']}, t0={event['t0']:.2f} ns, "
+          f"total PE={event['Q_tot'].sum():.1f}")
+    for i in range(event['n_particles']):
+        contained = bool(event['contained_per_particle'][i])
+        print(f"  particle {i}: category={cat_names[i]}, pdg={pdg_names[i]}, "
+              f"contained={contained}")
+
+
+def read_multi_event_file(dataset_root, file_index=0, verbose=False, n_sensors=None):
+    """Return a list of event dicts for an entire v3 batch file.
+
+    ``dataset_root`` is the directory containing ``sensor/``, ``inst/``,
+    ``seg/``, ``labl/`` subdirectories. A direct sensor file path is also
+    accepted; in that case ``file_index`` is parsed from the filename.
     """
-    Q = event['Q']
-    T = event['T']
-
-    if track_index < 0 or track_index >= Q.shape[0]:
-        raise IndexError(
-            f"Track index {track_index} out of range [0, {Q.shape[0]})"
-        )
-
-    Q_row = Q[track_index]
-    T_row = T[track_index]
-
-    # PMTs where charge is detected
-    nonzero_indices = np.where(Q_row > 0)[0]
-
-    # Filter Q and T to only these PMTs
-    Q_filtered = Q_row[nonzero_indices]
-    T_filtered = T_row[nonzero_indices]
-
-    return nonzero_indices, Q_filtered, T_filtered
+    sensor_file, _, _, _, file_index = _resolve_dataset_paths(dataset_root, file_index)
+    source_event_idx = list_events_v3(str(sensor_file))
+    n_events = len(source_event_idx)
+    if n_sensors is None:
+        n_sensors = _infer_n_sensors(sensor_file)
+    events = []
+    for i in range(n_events):
+        ev = load_event_v3(dataset_root, i, file_index=file_index, n_sensors=n_sensors)
+        events.append(ev)
+        if verbose:
+            print_event_info(ev)
+    return events
