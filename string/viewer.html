@@ -1,0 +1,289 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>IceCube-86 Event Viewer</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #0a0a1a; color: #ccc; font-family: 'Segoe UI', sans-serif; overflow: hidden; }
+#container { width: 100vw; height: 100vh; }
+#controls {
+  position: absolute; top: 10px; left: 10px; z-index: 10;
+  background: rgba(10,10,30,0.85); padding: 12px 16px; border-radius: 8px;
+  min-width: 260px; font-size: 13px;
+}
+#controls h3 { color: #6af; margin-bottom: 8px; font-size: 15px; }
+#controls label { display: block; margin: 6px 0 2px; color: #aaa; }
+#controls select, #controls input[type=range] { width: 100%; }
+#controls .info { margin-top: 10px; line-height: 1.6; }
+#controls .info span { color: #fff; }
+#controls button {
+  margin-top: 8px; padding: 5px 12px; background: #335; color: #adf;
+  border: 1px solid #558; border-radius: 4px; cursor: pointer; margin-right: 4px;
+}
+#controls button:hover { background: #447; }
+#colorbar {
+  position: absolute; bottom: 20px; right: 20px; z-index: 10;
+  background: rgba(10,10,30,0.85); padding: 10px; border-radius: 6px;
+  font-size: 12px; text-align: center;
+}
+#colorbar canvas { display: block; margin: 4px 0; }
+</style>
+</head>
+<body>
+<div id="container"></div>
+<div id="controls">
+  <h3>IceCube-86 Event Viewer</h3>
+  <label>Event:</label>
+  <select id="eventSelect"></select>
+  <label>DOM size scale:</label>
+  <input type="range" id="domScale" min="0.5" max="10" step="0.5" value="3">
+  <label>Charge threshold:</label>
+  <input type="range" id="chargeThresh" min="0" max="100" step="1" value="0">
+  <span id="threshVal">0%</span>
+  <div>
+    <button id="toggleStrings">Strings</button>
+    <button id="toggleUnhit">Unhit DOMs</button>
+    <button id="toggleTrack">Track</button>
+  </div>
+  <div class="info" id="info">Loading...</div>
+</div>
+<div id="colorbar">
+  <div>log₁₀(charge)</div>
+  <canvas id="cbar" width="20" height="150"></canvas>
+  <div id="cbarMin">0</div>
+  <div id="cbarMax">1</div>
+</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+  }
+}
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+let scene, camera, renderer, controls;
+let detectorData = null, eventsData = null;
+let stringLines = [], unhitDots = null, hitDots = null, trackLine = null;
+let showStrings = true, showUnhit = true, showTrack = true;
+
+const DATA_DIR = '../output/siren_tracks/';
+
+async function loadData() {
+  const [detRes, evRes] = await Promise.all([
+    fetch(DATA_DIR + 'detector.json'),
+    fetch(DATA_DIR + 'events.json'),
+  ]);
+  detectorData = await detRes.json();
+  eventsData = await evRes.json();
+
+  const sel = document.getElementById('eventSelect');
+  eventsData.forEach((ev, i) => {
+    const opt = document.createElement('option');
+    opt.value = i;
+    opt.text = `Event ${i} — ${ev.n_doms_hit} DOMs, Q=${ev.total_charge.toFixed(0)}`;
+    sel.appendChild(opt);
+  });
+}
+
+function init() {
+  const container = document.getElementById('container');
+  scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x0a0a1a);
+
+  camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 1, 5000);
+  camera.position.set(800, 400, 800);
+  camera.up.set(0, 0, 1);
+
+  renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.setPixelRatio(window.devicePixelRatio);
+  container.appendChild(renderer.domElement);
+
+  controls = new OrbitControls(camera, renderer.domElement);
+  controls.enableDamping = true;
+  controls.target.set(0, 0, -1950);
+
+  // Lighting
+  scene.add(new THREE.AmbientLight(0x404060, 1.0));
+  const dirLight = new THREE.DirectionalLight(0xffffff, 0.5);
+  dirLight.position.set(500, 500, 500);
+  scene.add(dirLight);
+
+  window.addEventListener('resize', () => {
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+  });
+}
+
+function buildDetector() {
+  const d = detectorData;
+
+  // Strings as thin lines
+  const stringMat = new THREE.LineBasicMaterial({ color: 0x224466, opacity: 0.3, transparent: true });
+  for (let i = 0; i < d.n_str; i++) {
+    const a = d.string_anchors[i], t = d.string_tops[i];
+    const geom = new THREE.BufferGeometry().setFromPoints([
+      new THREE.Vector3(a[0], a[1], a[2]),
+      new THREE.Vector3(t[0], t[1], t[2]),
+    ]);
+    const line = new THREE.Line(geom, stringMat);
+    scene.add(line);
+    stringLines.push(line);
+  }
+
+  // Unhit DOMs as small points
+  const positions = new Float32Array(d.n_sensors * 3);
+  for (let i = 0; i < d.n_sensors; i++) {
+    positions[i*3]   = d.dom_positions[i][0];
+    positions[i*3+1] = d.dom_positions[i][1];
+    positions[i*3+2] = d.dom_positions[i][2];
+  }
+  const unhitGeom = new THREE.BufferGeometry();
+  unhitGeom.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  const unhitMat = new THREE.PointsMaterial({ color: 0x334455, size: 1.5, sizeAttenuation: false });
+  unhitDots = new THREE.Points(unhitGeom, unhitMat);
+  scene.add(unhitDots);
+}
+
+function chargeToColor(logQ, logMin, logMax) {
+  const t = Math.max(0, Math.min(1, (logQ - logMin) / (logMax - logMin + 1e-10)));
+  // Blue -> Cyan -> Green -> Yellow -> Red
+  const r = t < 0.5 ? 0 : Math.min(1, (t - 0.5) * 4);
+  const g = t < 0.25 ? t * 4 : (t < 0.75 ? 1 : (1 - t) * 4);
+  const b = t < 0.5 ? 1 - t * 2 : 0;
+  return new THREE.Color(r, g, b);
+}
+
+function drawColorbar(logMin, logMax) {
+  const canvas = document.getElementById('cbar');
+  const ctx = canvas.getContext('2d');
+  for (let y = 0; y < canvas.height; y++) {
+    const t = 1 - y / canvas.height;
+    const logQ = logMin + t * (logMax - logMin);
+    const c = chargeToColor(logQ, logMin, logMax);
+    ctx.fillStyle = `rgb(${c.r*255|0},${c.g*255|0},${c.b*255|0})`;
+    ctx.fillRect(0, y, canvas.width, 1);
+  }
+  document.getElementById('cbarMin').textContent = logMin.toFixed(1);
+  document.getElementById('cbarMax').textContent = logMax.toFixed(1);
+}
+
+function showEvent(idx) {
+  const ev = eventsData[idx];
+  const domScale = parseFloat(document.getElementById('domScale').value);
+  const threshPct = parseFloat(document.getElementById('chargeThresh').value) / 100;
+
+  // Remove old hit dots and track
+  if (hitDots) { scene.remove(hitDots); hitDots.geometry.dispose(); hitDots = null; }
+  if (trackLine) { scene.remove(trackLine); trackLine.geometry.dispose(); trackLine = null; }
+
+  // Hit DOMs
+  const hitIds = ev.hit_dom_ids;
+  const hitCharges = ev.hit_charges;
+  if (hitIds.length === 0) return;
+
+  const maxQ = Math.max(...hitCharges);
+  const thresh = maxQ * threshPct;
+  const filtered = hitIds.map((id, i) => ({ id, q: hitCharges[i] }))
+                         .filter(h => h.q > thresh);
+
+  const logCharges = filtered.map(h => Math.log10(Math.max(h.q, 1e-10)));
+  const logMin = Math.min(...logCharges);
+  const logMax = Math.max(...logCharges);
+
+  const hitPositions = new Float32Array(filtered.length * 3);
+  const hitColors = new Float32Array(filtered.length * 3);
+  const hitSizes = new Float32Array(filtered.length);
+
+  filtered.forEach((h, i) => {
+    const pos = detectorData.dom_positions[h.id];
+    hitPositions[i*3]   = pos[0];
+    hitPositions[i*3+1] = pos[1];
+    hitPositions[i*3+2] = pos[2];
+
+    const logQ = Math.log10(Math.max(h.q, 1e-10));
+    const c = chargeToColor(logQ, logMin, logMax);
+    hitColors[i*3]   = c.r;
+    hitColors[i*3+1] = c.g;
+    hitColors[i*3+2] = c.b;
+
+    const normQ = (logQ - logMin) / (logMax - logMin + 1e-10);
+    hitSizes[i] = (2 + normQ * 8) * domScale;
+  });
+
+  const hitGeom = new THREE.BufferGeometry();
+  hitGeom.setAttribute('position', new THREE.BufferAttribute(hitPositions, 3));
+  hitGeom.setAttribute('color', new THREE.BufferAttribute(hitColors, 3));
+  const hitMat = new THREE.PointsMaterial({
+    size: 5 * domScale, vertexColors: true, sizeAttenuation: false,
+    transparent: true, opacity: 0.9,
+  });
+  hitDots = new THREE.Points(hitGeom, hitMat);
+  scene.add(hitDots);
+
+  // Track line
+  const o = ev.track_origin, d = ev.track_direction;
+  const trackLen = 400;
+  const p1 = new THREE.Vector3(o[0] - d[0]*trackLen/2, o[1] - d[1]*trackLen/2, o[2] - d[2]*trackLen/2);
+  const p2 = new THREE.Vector3(o[0] + d[0]*trackLen/2, o[1] + d[1]*trackLen/2, o[2] + d[2]*trackLen/2);
+  const trackGeom = new THREE.BufferGeometry().setFromPoints([p1, p2]);
+  const trackMat = new THREE.LineBasicMaterial({ color: 0xff4444, linewidth: 2 });
+  trackLine = new THREE.Line(trackGeom, trackMat);
+  trackLine.visible = showTrack;
+  scene.add(trackLine);
+
+  drawColorbar(logMin, logMax);
+
+  document.getElementById('info').innerHTML =
+    `Event <span>${idx}</span><br>` +
+    `DOMs hit: <span>${filtered.length}</span> / ${detectorData.n_sensors}<br>` +
+    `Total charge: <span>${ev.total_charge.toFixed(0)}</span><br>` +
+    `Track: [${o.map(v=>v.toFixed(0)).join(', ')}]<br>` +
+    `Dir: [${d.map(v=>v.toFixed(2)).join(', ')}]`;
+}
+
+function animate() {
+  requestAnimationFrame(animate);
+  controls.update();
+  renderer.render(scene, camera);
+}
+
+// Controls
+document.getElementById('eventSelect').addEventListener('change', e => showEvent(+e.target.value));
+document.getElementById('domScale').addEventListener('input', () => showEvent(+document.getElementById('eventSelect').value));
+document.getElementById('chargeThresh').addEventListener('input', e => {
+  document.getElementById('threshVal').textContent = e.target.value + '%';
+  showEvent(+document.getElementById('eventSelect').value);
+});
+document.getElementById('toggleStrings').addEventListener('click', () => {
+  showStrings = !showStrings;
+  stringLines.forEach(l => l.visible = showStrings);
+});
+document.getElementById('toggleUnhit').addEventListener('click', () => {
+  showUnhit = !showUnhit;
+  if (unhitDots) unhitDots.visible = showUnhit;
+});
+document.getElementById('toggleTrack').addEventListener('click', () => {
+  showTrack = !showTrack;
+  if (trackLine) trackLine.visible = showTrack;
+});
+
+// Init
+async function start() {
+  init();
+  await loadData();
+  buildDetector();
+  showEvent(0);
+  animate();
+}
+start();
+</script>
+</body>
+</html>
