@@ -461,7 +461,7 @@ def setup_event_simulator(
             prop_results = propagate_fn(safe_positions, safe_directions)
             depositions = prop_results['sensor_weights']
             sensor_indices = prop_results['sensor_indices']
-            hit_times_meters = prop_results['times']
+            sensor_distances = prop_results['sensor_distances']
             hit_positions = prop_results['positions']
             normals = prop_results['normals']
             inside_sensor = prop_results['inside_sensor']
@@ -494,8 +494,8 @@ def setup_event_simulator(
             physical_intensities = intensities * state.survival
             detected_factors = detect_probs * reflection_attenuations
             updated_weights = depositions * physical_intensities[None, :] * detected_factors[None, :]
-            times_ns = hit_times_meters / SPEED_OF_LIGHT_MATERIAL
-            total_times = times_ns + state.times[:, None]
+            sensor_times_ns = sensor_distances / SPEED_OF_LIGHT_MATERIAL
+            total_times = sensor_times_ns + state.times[:, None]
 
             iter_weights = updated_weights
             iter_indices = sensor_indices

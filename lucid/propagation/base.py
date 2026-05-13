@@ -237,14 +237,11 @@ def compute_sensor_intersections_base(sensor_idx, sensor_positions, sensor_radiu
     intersects_and_inside = (intersects & inside_sensor)
     
     # Now use this combined condition
-    times   = jnp.where(intersects_and_inside[:, None], t_intersect[:, None], t_closest)
-    points  = jnp.where(intersects_and_inside[:, None], intersection_points, closest)
-    normals = jnp.where(intersects_and_inside[:, None], normals_intersect, normals_closest)
+    distances = jnp.where(intersects_and_inside[:, None], t_intersect[:, None], t_closest)
+    points    = jnp.where(intersects_and_inside[:, None], intersection_points, closest)
+    normals   = jnp.where(intersects_and_inside[:, None], normals_intersect, normals_closest)
 
-    #return weights, times, sensor_idx, normals, inside_sensor, points
-
-    # In principle we should not be using anything if intersects_and_inside is false, reflecting instead out of the detector surface.
-    return weights, times, sensor_idx, normals, intersects_and_inside, points
+    return weights, distances, sensor_idx, normals, intersects_and_inside, points
 
 
 @partial(jax.jit, static_argnums=(1,))

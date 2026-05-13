@@ -6,6 +6,7 @@ import jax.numpy as jnp
 from lucid.geometry import generate_detector, get_material_from_config
 from lucid.wavelength.medium import MediumProperties, make_medium
 from lucid.propagation.shared import create_propagator as create_shared_propagator
+from lucid.geometry.string import StringTelescope
 
 
 class DetectorGeometry(NamedTuple):
@@ -54,8 +55,9 @@ class DetectorGeometry(NamedTuple):
         """
         # Normalize casing
         dt_key = detector_type.lower()
-        if dt_key not in ('cylinder', 'sphere', 'box'):
-            raise ValueError(f"detector_type must be 'cylinder', 'sphere', or 'box', got {detector_type}")
+        valid_types = ('cylinder', 'sphere', 'box', 'string')
+        if dt_key not in valid_types:
+            raise ValueError(f"detector_type must be one of {valid_types}, got {detector_type}")
 
         # Material
         material = get_material_from_config(json_filename)
@@ -67,12 +69,22 @@ class DetectorGeometry(NamedTuple):
         sensor_radius = detector.S_radius
         num_sensors = len(sensor_points)
 
-        # Propagator (shared — uses detector abstract methods)
-        propagator = create_shared_propagator(
-            detector, sensor_points, sensor_radius,
-            temperature=temperature,
-            max_sensors_per_cell=max_sensors_per_cell,
-            **grid_params)
+        # Propagator — string uses its own factory, others use the shared one
+        if isinstance(detector, StringTelescope):
+            from lucid.propagation.string.propagator import create_string_propagator
+            propagator = create_string_propagator(
+                detector, sensor_points, sensor_radius,
+                temperature=temperature,
+                lambda_abs=grid_params.pop('lambda_abs', 100.0),
+                lambda_scat=grid_params.pop('lambda_scat', 30.0),
+                max_str_per_cell=grid_params.pop('max_str_per_cell', 6),
+            )
+        else:
+            propagator = create_shared_propagator(
+                detector, sensor_points, sensor_radius,
+                temperature=temperature,
+                max_sensors_per_cell=max_sensors_per_cell,
+                **grid_params)
 
         return DetectorGeometry(
             detector_type=detector_type,

@@ -668,7 +668,7 @@ def find_intersected_box_sensors_differentiable(ray_origins, ray_directions, sen
     )(potential_sensors.T)
     
     weights = sensor_results[0]
-    sensor_times = sensor_results[1]
+    sensor_distances = sensor_results[1]
     sensor_indices = sensor_results[2]
     sensor_normals = sensor_results[3]
     inside_sensor = sensor_results[4]
@@ -687,7 +687,7 @@ def find_intersected_box_sensors_differentiable(ray_origins, ray_directions, sen
     final_normals = intersection_results['normals']
 
     result = {
-        'times': sensor_times,
+        'sensor_distances': sensor_distances,
         'sensor_weights': weights,
         'sensor_indices': sensor_indices,
         'per_sensor_positions': sensor_hit_positions,

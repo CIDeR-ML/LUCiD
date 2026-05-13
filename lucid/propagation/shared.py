@@ -206,7 +206,7 @@ def create_propagator(detector, sensor_positions, sensor_radius,
                 photon_origins, photon_directions,
                 bounds_check, overlap_prob)
 
-        (weights, sensor_times, sensor_indices,
+        (weights, sensor_distances, sensor_indices,
          sensor_normals_all, inside_sensor,
          sensor_hit_positions) = jax.vmap(
             compute_for_slot, in_axes=1, out_axes=0)(potential_sensors)
@@ -225,7 +225,7 @@ def create_propagator(detector, sensor_positions, sensor_radius,
 
         # g. Assemble result dict
         result = {
-            'times': sensor_times,
+            'sensor_distances': sensor_distances,
             'sensor_weights': weights,
             'sensor_indices': sensor_indices,
             'per_sensor_positions': sensor_hit_positions,
