@@ -256,20 +256,28 @@ function drawCbar(mn,mx){
 
 function updTime(){$('timeBar').textContent=`t = ${animT.toFixed(0)} ns`;}
 
+const TRACK_LEN = 300; // meters — physical emission length (F=30 × ~10m SIREN range)
+
 function updTrack(t){
   if(!trackLine||!trackGeo) return;
   const ev=evs[+$('evSel').value]; if(!ev) return;
   const o=ev.track_origin, d=ev.track_direction;
-  // Muon start: well before tMin. Muon front at current time.
-  const startS = (tMin - (tMax-tMin)*0.1 - 0) * C_MUON;  // behind origin
-  const frontS = Math.max(startS, (t - 0) * C_MUON);       // current front
+  // Muon traverses TRACK_LEN meters in TRACK_LEN/C_MUON ns (~1000 ns)
+  const tTravel = TRACK_LEN / C_MUON;
+  // Muon starts slightly before origin, ends at origin + TRACK_LEN
+  const startS = -20; // small lead-in before vertex
+  const frac = Math.max(0, Math.min(1, (t - tMin) / tTravel));
+  const frontS = startS + frac * (TRACK_LEN - startS);
+  // Track line: from start to current muon front (capped at TRACK_LEN)
+  const tailS = startS;
   const pa = trackGeo.attributes.position.array;
-  pa[0]=o[0]+d[0]*startS; pa[1]=o[1]+d[1]*startS; pa[2]=o[2]+d[2]*startS;
+  pa[0]=o[0]+d[0]*tailS;  pa[1]=o[1]+d[1]*tailS;  pa[2]=o[2]+d[2]*tailS;
   pa[3]=o[0]+d[0]*frontS; pa[4]=o[1]+d[1]*frontS; pa[5]=o[2]+d[2]*frontS;
   trackGeo.attributes.position.needsUpdate=true;
   if(trackDot){
     trackDot.position.set(o[0]+d[0]*frontS, o[1]+d[1]*frontS, o[2]+d[2]*frontS);
-    trackDot.visible = showTrk && anim;
+    // Dot visible only while muon is still traveling (first ~1000 ns)
+    trackDot.visible = showTrk && anim && frac < 1.0;
   }
 }
 
