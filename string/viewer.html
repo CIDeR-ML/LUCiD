@@ -4,39 +4,28 @@
 <meta charset="UTF-8">
 <title>IceCube-86 Event Viewer</title>
 <style>
-* { margin: 0; padding: 0; box-sizing: border-box; }
-body { background: #060610; color: #bbb; font-family: 'Segoe UI', sans-serif; overflow: hidden; }
-#container { width: 100vw; height: 100vh; }
-#ui {
-  position: absolute; top: 10px; left: 10px; z-index: 10;
-  background: rgba(6,6,18,0.92); padding: 10px 14px; border-radius: 8px;
-  min-width: 250px; font-size: 11px; backdrop-filter: blur(6px);
-}
-#ui h3 { color: #6af; margin-bottom: 5px; font-size: 13px; }
-label { display: block; margin: 3px 0 0; color: #556; font-size: 9px;
-  text-transform: uppercase; letter-spacing: 0.6px; }
-select { width: 100%; background: #10102a; color: #999; border: 1px solid #1a1a33;
-  padding: 2px; border-radius: 3px; font-size: 10px; }
-input[type=range] { width: 100%; accent-color: #4488cc; height: 14px; }
-.info { margin-top: 5px; line-height: 1.4; font-size: 9px; color: #445; }
-.info span { color: #88a; }
-.row { margin-top: 4px; display: flex; flex-wrap: wrap; gap: 2px; }
-.row button {
-  padding: 2px 6px; background: #10102a; color: #678;
-  border: 1px solid #1a1a33; border-radius: 2px; cursor: pointer; font-size: 9px;
-}
-.row button:hover { background: #1a1a3e; color: #9bd; }
-.row button.on { border-color: #4488cc; color: #8bf; }
-#tBar { margin-top: 4px; padding: 2px 5px; background: rgba(0,0,0,0.5); border-radius: 2px;
-  font-family: monospace; font-size: 11px; color: #997; }
-.sep { border: 0; border-top: 1px solid #151525; margin: 5px 0; }
-#gProg { display: none; margin-top: 2px; color: #997; font-size: 9px; }
-#cb {
-  position: absolute; bottom: 12px; right: 12px; z-index: 10;
-  background: rgba(6,6,18,0.92); padding: 5px; border-radius: 5px;
-  font-size: 9px; text-align: center; color: #445;
-}
-#cb canvas { display: block; margin: 2px 0; }
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#060610;color:#bbb;font-family:'Segoe UI',sans-serif;overflow:hidden}
+#container{width:100vw;height:100vh}
+#ui{position:absolute;top:10px;left:10px;z-index:10;background:rgba(6,6,18,0.92);
+  padding:10px 14px;border-radius:8px;min-width:250px;font-size:11px;backdrop-filter:blur(6px)}
+#ui h3{color:#6af;margin-bottom:5px;font-size:13px}
+label{display:block;margin:3px 0 0;color:#556;font-size:9px;text-transform:uppercase;letter-spacing:.6px}
+select{width:100%;background:#10102a;color:#999;border:1px solid #1a1a33;padding:2px;border-radius:3px;font-size:10px}
+input[type=range]{width:100%;accent-color:#4488cc;height:14px}
+.info{margin-top:5px;line-height:1.4;font-size:9px;color:#445}.info span{color:#88a}
+.row{margin-top:4px;display:flex;flex-wrap:wrap;gap:2px}
+.row button{padding:2px 6px;background:#10102a;color:#678;border:1px solid #1a1a33;
+  border-radius:2px;cursor:pointer;font-size:9px}
+.row button:hover{background:#1a1a3e;color:#9bd}
+.row button.on{border-color:#4488cc;color:#8bf}
+#tBar{margin-top:4px;padding:2px 5px;background:rgba(0,0,0,.5);border-radius:2px;
+  font-family:monospace;font-size:11px;color:#997}
+.sep{border:0;border-top:1px solid #151525;margin:5px 0}
+#gProg{display:none;margin-top:2px;color:#997;font-size:9px}
+#cb{position:absolute;bottom:12px;right:12px;z-index:10;background:rgba(6,6,18,.92);
+  padding:5px;border-radius:5px;font-size:9px;text-align:center;color:#445}
+#cb canvas{display:block;margin:2px 0}
 </style>
 </head>
 <body>
@@ -44,12 +33,13 @@ input[type=range] { width: 100%; accent-color: #4488cc; height: 14px; }
 <div id="ui">
   <h3>IceCube-86</h3>
   <label>Event</label><select id="evSel"></select>
-  <label>Point size</label><input type="range" id="ptSz" min="0.3" max="5" step="0.1" value="1.8">
+  <label>Point size</label><input type="range" id="ptSz" min="0.5" max="5" step="0.1" value="2.0">
   <label>Emphasis</label><input type="range" id="emph" min="0.5" max="4" step="0.1" value="2.0">
   <div class="row">
     <button id="bStr" class="on">Strings</button>
     <button id="bUnh" class="on">Unhit</button>
     <button id="bTrk" class="on">Track</button>
+    <button id="bLog" class="on">Log</button>
   </div>
   <hr class="sep">
   <div class="row">
@@ -61,13 +51,13 @@ input[type=range] { width: 100%; accent-color: #4488cc; height: 14px; }
   </div>
   <label>Speed</label><input type="range" id="spd" min="0.05" max="3" step="0.05" value="0.5">
   <span id="spdV" style="color:#445">0.5x</span>
-  <label>Rotation</label><input type="range" id="rot" min="0" max="1" step="0.05" value="0.15">
+  <label>Rotation</label><input type="range" id="rot" min="0" max="1" step="0.05" value="0.1">
   <div id="tBar">t = 0 ns</div>
   <div id="gProg"></div>
   <div class="info" id="info">Loading...</div>
 </div>
 <div id="cb">
-  <div>log₁₀(Q)</div>
+  <div id="cbLabel">log₁₀(Q)</div>
   <canvas id="cbar" width="12" height="90"></canvas>
   <div id="cbMn">0</div><div id="cbMx">1</div>
 </div>
@@ -83,51 +73,47 @@ import { Line2 } from 'three/addons/lines/Line2.js';
 import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
 import { LineGeometry } from 'three/addons/lines/LineGeometry.js';
 
-let scene, cam, ren, ctrl;
-let det=null, evs=null;
-let strGrp, unhitPts=null, hitMesh=null;
-let trkLine=null, trkDot=null, trkMat=null;
-let showStr=true, showUnh=true, showTrk=true;
-let an=false, anQ=0, tMin=0, tMax=1000, lastT=0;
-let initCP=null, initCT=null;
-let curQuantiles=null; // per-DOM quantile (0-1) of hit time
+let scene,cam,ren,ctrl;
+let det=null,evs=null;
+let strGrp,unhitPts=null,hitMesh=null;
+let trkLine=null,trkDot=null,trkMat=null;
+let showStr=true,showUnh=true,showTrk=true,useLog=true;
+let an=false,anQ=0,tMin=0,tMax=1000,lastT=0;
+let initCP=null,initCT=null;
+let curHits=null;
 
-const C=0.2998, TLEN=300, DIR='../output/siren_tracks/';
+const C=0.2998,TLEN=300,DIR='../output/siren_tracks/';
 
-// ── Inferno ──
-function inferno(t){
-  t=Math.max(0,Math.min(1,t));
+function inferno(t){t=Math.max(0,Math.min(1,t));
   const s=[[0,[2,1,10]],[.1,[30,5,55]],[.22,[75,10,95]],[.33,[120,20,95]],
     [.44,[165,40,70]],[.55,[200,65,40]],[.66,[225,105,15]],[.77,[240,155,10]],
     [.88,[248,200,45]],[1,[250,248,160]]];
   for(let i=0;i<s.length-1;i++){const[t0,c0]=s[i],[t1,c1]=s[i+1];
     if(t<=t1){const f=(t-t0)/(t1-t0);return[c0[0]+f*(c1[0]-c0[0]),c0[1]+f*(c1[1]-c0[1]),c0[2]+f*(c1[2]-c0[2])];}}
-  return s[s.length-1][1];
-}
+  return s[s.length-1][1];}
 function mkCmap(){const w=256,d=new Uint8Array(w*4);for(let i=0;i<w;i++){const c=inferno(i/(w-1));
   d[i*4]=c[0];d[i*4+1]=c[1];d[i*4+2]=c[2];d[i*4+3]=255;}
   const t=new THREE.DataTexture(d,w,1,THREE.RGBAFormat);t.needsUpdate=true;return t;}
 
-// ── Shaders ──
 const VS=`
 attribute float qN;
-attribute float hQ; // quantile of hit time (0-1)
-uniform float ptSz, empP, anQ, anOn;
-varying float vN, vA, vFl;
+attribute float hQ;
+uniform float ptSz,empP,anQ,anOn;
+varying float vN,vA,vFl;
 void main(){
   vN=qN;
   float em=pow(max(qN,0.001),empP);
-  vA=0.02+0.65*em;
-  float sz=(0.5+qN*qN*5.5)*ptSz;
+  vA=0.015+0.75*em;
+  float sz=(1.0+qN*3.5)*ptSz;
   vFl=0.0;
   if(anOn>0.5){
     float dt=anQ-hQ;
-    float arrive=smoothstep(-0.03,0.01,dt);
-    float flash=(1.0-smoothstep(0.0,0.08,dt))*0.2;
+    float arrive=smoothstep(-0.025,0.008,dt);
+    float flash=(1.0-smoothstep(0.0,0.06,dt))*0.15;
     vA*=arrive;
-    sz*=mix(1.0,1.1,flash*arrive);
+    sz*=mix(1.0,1.08,flash*arrive);
     vFl=flash*arrive;
-    if(dt<-0.04){vA=0.0;sz=0.0;}
+    if(dt<-0.035){vA=0.0;sz=0.0;}
   }
   gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0);
   gl_PointSize=sz;
@@ -140,7 +126,7 @@ void main(){
   if(r>0.5)discard;
   float edge=1.0-smoothstep(0.3,0.5,r);
   vec3 c=texture2D(cm,vec2(clamp(vN,0.01,0.99),0.5)).rgb;
-  c+=vec3(vFl*0.3,vFl*0.2,vFl*0.08);
+  c+=vec3(vFl*0.25,vFl*0.18,vFl*0.06);
   gl_FragColor=vec4(c,vA*edge);
 }`;
 
@@ -149,31 +135,26 @@ async function loadData(){
   det=await dr.json();evs=await er.json();
   const sel=$('evSel');
   evs.forEach((e,i)=>{const o=document.createElement('option');o.value=i;
-    o.text=`${i}: ${e.n_doms_hit} DOMs`;sel.appendChild(o);});
-}
+    o.text=`${i}: ${e.n_doms_hit} DOMs`;sel.appendChild(o);});}
 
 function init(){
   scene=new THREE.Scene();scene.background=new THREE.Color(0x060610);
   cam=new THREE.PerspectiveCamera(38,innerWidth/innerHeight,1,8000);
-  // Camera: 30° above horizontal, diagonal view, looking at array center
-  const zMid=-1952, dist=1800;
-  cam.position.set(dist*0.7, dist*0.5, zMid+dist*0.45);
-  cam.up.set(0,0,1);
+  const zM=-1952,d=1800;
+  cam.position.set(d*0.7,d*0.5,zM+d*0.45);cam.up.set(0,0,1);
   ren=new THREE.WebGLRenderer({antialias:true,preserveDrawingBuffer:true});
   ren.setSize(innerWidth,innerHeight);ren.setPixelRatio(devicePixelRatio);
   document.getElementById('container').appendChild(ren.domElement);
-  ctrl=new OrbitControls(cam,ren.domElement);
-  ctrl.enableDamping=true;ctrl.target.set(0,0,zMid);
+  ctrl=new OrbitControls(cam,ren.domElement);ctrl.enableDamping=true;ctrl.target.set(0,0,zM);
   scene.add(new THREE.AmbientLight(0x1a1a30,0.6));
   initCP=cam.position.clone();initCT=ctrl.target.clone();
   addEventListener('resize',()=>{cam.aspect=innerWidth/innerHeight;
     cam.updateProjectionMatrix();ren.setSize(innerWidth,innerHeight);
-    if(trkMat)trkMat.resolution.set(innerWidth,innerHeight);});
-}
+    if(trkMat)trkMat.resolution.set(innerWidth,innerHeight);});}
 
 function buildDet(){
   strGrp=new THREE.Group();
-  const sm=new THREE.LineBasicMaterial({color:0x0e1525,transparent:true,opacity:0.15});
+  const sm=new THREE.LineBasicMaterial({color:0x1a2840,transparent:true,opacity:0.28});
   for(let i=0;i<det.n_str;i++){const a=det.string_anchors[i],t=det.string_tops[i];
     strGrp.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints([
       new THREE.Vector3(a[0],a[1],a[2]),new THREE.Vector3(t[0],t[1],t[2])]),sm));}
@@ -181,17 +162,32 @@ function buildDet(){
   const p=new Float32Array(det.n_sensors*3);
   for(let i=0;i<det.n_sensors;i++){p[i*3]=det.dom_positions[i][0];p[i*3+1]=det.dom_positions[i][1];p[i*3+2]=det.dom_positions[i][2];}
   const g=new THREE.BufferGeometry();g.setAttribute('position',new THREE.BufferAttribute(p,3));
-  unhitPts=new THREE.Points(g,new THREE.PointsMaterial({color:0x0a1018,size:0.8,sizeAttenuation:false,transparent:true,opacity:0.08}));
-  scene.add(unhitPts);
-}
+  unhitPts=new THREE.Points(g,new THREE.PointsMaterial({color:0x0e1620,size:0.8,sizeAttenuation:false,transparent:true,opacity:0.1}));
+  scene.add(unhitPts);}
 
 function $(id){return document.getElementById(id);}
-
 function clearHits(){
   if(hitMesh){scene.remove(hitMesh);hitMesh.geometry.dispose();hitMesh.material.dispose();hitMesh=null;}
   if(trkLine){scene.remove(trkLine);trkLine.geometry.dispose();trkLine=null;}
   if(trkDot){scene.remove(trkDot);trkDot=null;}
-  trkMat=null; curQuantiles=null;
+  trkMat=null;curHits=null;}
+
+function computeNorm(hits){
+  // Normalize charges: p1/p99 of log10 or linear
+  const qs=hits.map(h=>h.q);
+  if(useLog){
+    const lqs=qs.map(q=>Math.log10(Math.max(q,1e-10)));
+    lqs.sort((a,b)=>a-b);
+    const p1=lqs[Math.floor(lqs.length*0.01)];
+    const p99=lqs[Math.floor(lqs.length*0.99)];
+    return hits.map(h=>{const lq=Math.log10(Math.max(h.q,1e-10));
+      return Math.max(0,Math.min(1,(lq-p1)/(p99-p1+1e-10)));});
+  } else {
+    const sq=[...qs].sort((a,b)=>a-b);
+    const p1=sq[Math.floor(sq.length*0.01)];
+    const p99=sq[Math.floor(sq.length*0.99)];
+    return hits.map(h=>Math.max(0,Math.min(1,(h.q-p1)/(p99-p1+1e-10))));
+  }
 }
 
 function showEvent(idx){
@@ -200,26 +196,23 @@ function showEvent(idx){
   const hasT=ev.hit_times_ns&&ev.hit_times_ns.length>0;
   const hits=ev.hit_dom_ids.map((id,i)=>({id,q:ev.hit_charges[i],
     t:hasT?Math.max(ev.hit_times_ns[i],0):0})).filter(h=>h.q>1e-8);
-  if(!hits.length)return;
+  curHits=hits;if(!hits.length)return;
 
-  // Charge normalization
-  const lqs=hits.map(h=>Math.log10(Math.max(h.q,1e-10)));
-  const lMin=Math.min(...lqs),lMax=Math.max(...lqs);
+  const norms=computeNorm(hits);
+  const vt=hits.map(h=>h.t).filter(t=>isFinite(t));
+  tMin=vt.length?Math.min(...vt):0;tMax=vt.length?Math.max(...vt):1000;
 
-  // Quantile transform of times
-  const times=hits.map(h=>h.t);
-  const sorted=[...times].sort((a,b)=>a-b);
-  const tToQ=t=>{let lo=0,hi=sorted.length-1;
-    while(lo<hi){const m=(lo+hi)>>1;if(sorted[m]<t)lo=m+1;else hi=m;}
-    return lo/(sorted.length-1);};
-  curQuantiles=times.map(tToQ);
-  tMin=Math.min(...times);tMax=Math.max(...times);
+  // Charge-weighted quantile of time
+  const sortedIdx=[...Array(hits.length)].map((_,i)=>i).sort((a,b)=>hits[a].t-hits[b].t);
+  const totalQ=hits.reduce((s,h)=>s+h.q,0);
+  const quantiles=new Array(hits.length);
+  let cumQ=0;
+  sortedIdx.forEach(i=>{cumQ+=hits[i].q;quantiles[i]=cumQ/totalQ;});
 
   const n=hits.length,pos=new Float32Array(n*3),qN=new Float32Array(n),hQ=new Float32Array(n);
   hits.forEach((h,i)=>{const p=det.dom_positions[h.id];
     pos[i*3]=p[0];pos[i*3+1]=p[1];pos[i*3+2]=p[2];
-    qN[i]=(Math.log10(Math.max(h.q,1e-10))-lMin)/(lMax-lMin+1e-10);
-    hQ[i]=curQuantiles[i];});
+    qN[i]=norms[i]; hQ[i]=quantiles[i];});
 
   const geo=new THREE.BufferGeometry();
   geo.setAttribute('position',new THREE.BufferAttribute(pos,3));
@@ -232,67 +225,62 @@ function showEvent(idx){
       empP:{value:+$('emph').value},anQ:{value:0},anOn:{value:0}}}));
   scene.add(hitMesh);
 
-  // Track line (thick, using Line2)
+  // Track (cyan/white)
   const o=ev.track_origin,d=ev.track_direction;
-  trkMat=new LineMaterial({color:0xff3322,linewidth:4,transparent:true,opacity:0.6,
+  trkMat=new LineMaterial({color:0x44ddff,linewidth:5,transparent:true,opacity:0.7,
     worldUnits:false,resolution:new THREE.Vector2(innerWidth,innerHeight)});
-  buildTrackLine(o,d,-20,TLEN);
-
-  // Track dot
-  const dg=new THREE.SphereGeometry(3,10,8);
-  trkDot=new THREE.Mesh(dg,new THREE.MeshBasicMaterial({color:0xff4433,transparent:true,opacity:0.8}));
+  buildTrk(o,d,-20,TLEN);
+  const dg=new THREE.SphereGeometry(3.5,10,8);
+  trkDot=new THREE.Mesh(dg,new THREE.MeshBasicMaterial({color:0x88eeff,transparent:true,opacity:0.85}));
   trkDot.visible=false;scene.add(trkDot);
 
-  drawCbar(lMin,lMax);
-  $('info').innerHTML=`Ev <span>${idx}</span> | <span>${hits.length}</span> DOMs | Q <span>${ev.total_charge.toFixed(0)}</span> | ${(tMax-tMin).toFixed(0)} ns`;
-  updTBar();
-}
+  drawCbar();
+  const tRng=hasT?` | ${(tMax-tMin).toFixed(0)}ns`:'';
+  $('info').innerHTML=`Ev <span>${idx}</span> | <span>${hits.length}</span> DOMs | Q <span>${ev.total_charge.toFixed(0)}</span>${tRng}`;
+  updTBar();}
 
-function buildTrackLine(o,d,s0,s1){
+function buildTrk(o,d,s0,s1){
   if(trkLine){scene.remove(trkLine);trkLine.geometry.dispose();}
   const lg=new LineGeometry();
-  lg.setPositions([o[0]+d[0]*s0,o[1]+d[1]*s0,o[2]+d[2]*s0,
-                   o[0]+d[0]*s1,o[1]+d[1]*s1,o[2]+d[2]*s1]);
-  trkLine=new Line2(lg,trkMat);trkLine.visible=showTrk;
-  trkLine.computeLineDistances();scene.add(trkLine);
-}
+  lg.setPositions([o[0]+d[0]*s0,o[1]+d[1]*s0,o[2]+d[2]*s0,o[0]+d[0]*s1,o[1]+d[1]*s1,o[2]+d[2]*s1]);
+  trkLine=new Line2(lg,trkMat);trkLine.visible=showTrk;trkLine.computeLineDistances();scene.add(trkLine);}
 
-function drawCbar(mn,mx){const c=$('cbar'),x=c.getContext('2d');
+function drawCbar(){
+  const c=$('cbar'),x=c.getContext('2d');
   for(let y=0;y<c.height;y++){const t=1-y/c.height,rgb=inferno(t);
     x.fillStyle=`rgb(${rgb[0]|0},${rgb[1]|0},${rgb[2]|0})`;x.fillRect(0,y,c.width,1);}
-  $('cbMn').textContent=mn.toFixed(1);$('cbMx').textContent=mx.toFixed(1);}
+  if(!curHits||!curHits.length)return;
+  const qs=curHits.map(h=>useLog?Math.log10(Math.max(h.q,1e-10)):h.q);
+  qs.sort((a,b)=>a-b);
+  $('cbMn').textContent=(qs[Math.floor(qs.length*0.01)]).toFixed(1);
+  $('cbMx').textContent=(qs[Math.floor(qs.length*0.99)]).toFixed(1);
+  $('cbLabel').textContent=useLog?'log₁₀(Q)':'Q';}
 
 function updTBar(){
-  const tNs=tMin+(tMax-tMin)*anQ;
-  $('tBar').textContent=`t = ${tNs.toFixed(0)} ns  (q=${anQ.toFixed(2)})`;}
+  const tNs=tMin+(tMax-tMin)*Math.max(0,Math.min(1,anQ));
+  $('tBar').textContent=`t=${tNs.toFixed(0)}ns  q=${anQ.toFixed(2)}`;}
 
-function updTrack(q,isAnim){
+function updTrk(q,isAn){
   const ev=evs[+$('evSel').value];if(!ev)return;
   const o=ev.track_origin,d=ev.track_direction;
-  if(!isAnim){buildTrackLine(o,d,-20,TLEN);if(trkDot)trkDot.visible=false;return;}
-  const frac=Math.max(0,Math.min(1,q*1.5)); // muon traverses track in first ~67% of quantile time
+  if(!isAn){buildTrk(o,d,-20,TLEN);if(trkDot)trkDot.visible=false;return;}
+  const frac=Math.max(0,Math.min(1,q*1.5));
   const front=-20+frac*(TLEN+20);
-  buildTrackLine(o,d,-20,front);
+  buildTrk(o,d,-20,front);
   if(trkDot){trkDot.position.set(o[0]+d[0]*front,o[1]+d[1]*front,o[2]+d[2]*front);
-    trkDot.visible=showTrk&&frac<1;}
-}
+    trkDot.visible=showTrk&&frac<1;}}
 
 function tick(ts){
   requestAnimationFrame(tick);
   const dt=lastT?(ts-lastT)/1000:0;lastT=ts;
   if(hitMesh){const u=hitMesh.material.uniforms;
     u.ptSz.value=+$('ptSz').value;u.empP.value=+$('emph').value;
-    if(an){u.anOn.value=1;
-      const spd=+$('spd').value;anQ+=dt*spd*0.2;
-      if(anQ>1.12)anQ=-0.06;
-      u.anQ.value=anQ;updTrack(anQ,true);
-      const rotSpd=+$('rot').value;
-      ctrl.autoRotate=rotSpd>0.01;ctrl.autoRotateSpeed=rotSpd*2;
-    }else{u.anOn.value=0;updTrack(0,false);ctrl.autoRotate=false;}}
-  ctrl.update();updTBar();ren.render(scene,cam);
-}
+    if(an){u.anOn.value=1;const spd=+$('spd').value;anQ+=dt*spd*0.18;
+      if(anQ>1.1)anQ=-0.04;u.anQ.value=anQ;updTrk(anQ,true);
+      const r=+$('rot').value;ctrl.autoRotate=r>0.01;ctrl.autoRotateSpeed=r*1.5;
+    }else{u.anOn.value=0;updTrk(0,false);ctrl.autoRotate=false;}}
+  ctrl.update();updTBar();ren.render(scene,cam);}
 
-// ── GIF ──
 function exportGif(){
   const pr=$('gProg');pr.style.display='block';pr.textContent='Capturing...';
   const w=640,h=480;
@@ -305,38 +293,34 @@ function exportGif(){
   const bA=Math.atan2(cam.position.y-ctrl.target.y,cam.position.x-ctrl.target.x);
   const cR=Math.sqrt((cam.position.x-ctrl.target.x)**2+(cam.position.y-ctrl.target.y)**2);
   const cZ=cam.position.z;
-  for(let f=0;f<nF;f++){
-    const q=-0.04+(f/nF)*1.16;
-    if(hitMesh)hitMesh.material.uniforms.anQ.value=q;
-    updTrack(q,true);
-    const ang=bA+(f/nF)*Math.PI*0.35;
+  for(let f=0;f<nF;f++){const q=-0.03+(f/nF)*1.13;
+    if(hitMesh)hitMesh.material.uniforms.anQ.value=q;updTrk(q,true);
+    const ang=bA+(f/nF)*Math.PI*0.3;
     gc.position.set(ctrl.target.x+cR*Math.cos(ang),ctrl.target.y+cR*Math.sin(ang),cZ);
-    gc.lookAt(ctrl.target);
-    if(trkMat)trkMat.resolution.set(w,h);
+    gc.lookAt(ctrl.target);if(trkMat)trkMat.resolution.set(w,h);
     gr.render(scene,gc);
     const cv=document.createElement('canvas');cv.width=w;cv.height=h;
     cv.getContext('2d').drawImage(gr.domElement,0,0);
-    gif.addFrame(cv,{delay:60});pr.textContent=`${f+1}/${nF}`;
-  }
+    gif.addFrame(cv,{delay:60});pr.textContent=`${f+1}/${nF}`;}
   gif.on('finished',blob=>{const a=document.createElement('a');a.href=URL.createObjectURL(blob);
     a.download=`icecube_ev${$('evSel').value}.gif`;a.click();
     pr.textContent='Saved!';setTimeout(()=>pr.style.display='none',2000);gr.dispose();});
-  pr.textContent='Encoding...';gif.render();
-}
+  pr.textContent='Encoding...';gif.render();}
 
-// ── Controls ──
 $('evSel').onchange=e=>showEvent(+e.target.value);
 $('bStr').onclick=e=>{showStr=!showStr;strGrp.visible=showStr;e.target.classList.toggle('on');};
 $('bUnh').onclick=e=>{showUnh=!showUnh;if(unhitPts)unhitPts.visible=showUnh;e.target.classList.toggle('on');};
 $('bTrk').onclick=e=>{showTrk=!showTrk;if(trkLine)trkLine.visible=showTrk;
   if(trkDot)trkDot.visible=showTrk&&an;e.target.classList.toggle('on');};
+$('bLog').onclick=e=>{useLog=!useLog;e.target.classList.toggle('on');showEvent(+$('evSel').value);};
 $('bPlay').onclick=()=>{an=true;if(anQ>=1.1)anQ=-0.04;};
 $('bPause').onclick=()=>{an=false;};
 $('bReset').onclick=()=>{an=false;anQ=0;
   if(hitMesh)hitMesh.material.uniforms.anOn.value=0;if(trkDot)trkDot.visible=false;updTBar();};
 $('bHard').onclick=()=>{an=false;anQ=0;cam.position.copy(initCP);ctrl.target.copy(initCT);
-  ctrl.autoRotate=false;ctrl.update();$('ptSz').value=1.8;$('emph').value=2;$('spd').value=0.5;
-  $('spdV').textContent='0.5x';$('rot').value=0.15;showEvent(+$('evSel').value);};
+  ctrl.autoRotate=false;ctrl.update();$('ptSz').value=2;$('emph').value=2;$('spd').value=0.5;
+  $('spdV').textContent='0.5x';$('rot').value=0.1;useLog=true;$('bLog').classList.add('on');
+  showEvent(+$('evSel').value);};
 $('bGif').onclick=exportGif;
 $('spd').oninput=e=>{$('spdV').textContent=(+e.target.value).toFixed(1)+'x';};
 
