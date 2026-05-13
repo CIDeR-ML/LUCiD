@@ -5,437 +5,356 @@
 <title>IceCube-86 Event Viewer</title>
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
-body { background: #080810; color: #bbb; font-family: 'Segoe UI', sans-serif; overflow: hidden; }
+body { background: #060610; color: #bbb; font-family: 'Segoe UI', sans-serif; overflow: hidden; }
 #container { width: 100vw; height: 100vh; }
 #controls {
   position: absolute; top: 10px; left: 10px; z-index: 10;
-  background: rgba(8,8,20,0.88); padding: 12px 16px; border-radius: 8px;
-  min-width: 270px; font-size: 12px; backdrop-filter: blur(6px);
+  background: rgba(6,6,18,0.9); padding: 12px 16px; border-radius: 8px;
+  min-width: 260px; font-size: 12px; backdrop-filter: blur(6px);
 }
-#controls h3 { color: #6af; margin-bottom: 6px; font-size: 14px; letter-spacing: 0.5px; }
-#controls label { display: block; margin: 5px 0 1px; color: #888; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; }
-#controls select, #controls input[type=range] { width: 100%; }
-#controls select { background: #1a1a2e; color: #ccc; border: 1px solid #334; padding: 3px; border-radius: 3px; }
-input[type=range] { accent-color: #4488cc; }
-.info { margin-top: 8px; line-height: 1.5; font-size: 11px; }
-.info span { color: #ddd; }
-.btn-row { margin-top: 6px; display: flex; flex-wrap: wrap; gap: 3px; }
-.btn-row button {
-  padding: 4px 8px; background: #1a1a2e; color: #8ac;
-  border: 1px solid #334; border-radius: 3px; cursor: pointer; font-size: 11px;
+#controls h3 { color: #6af; margin-bottom: 6px; font-size: 14px; }
+label { display: block; margin: 4px 0 1px; color: #667; font-size: 10px;
+  text-transform: uppercase; letter-spacing: 0.6px; }
+select { width: 100%; background: #12122a; color: #aaa; border: 1px solid #223;
+  padding: 3px; border-radius: 3px; font-size: 11px; }
+input[type=range] { width: 100%; accent-color: #4488cc; }
+.info { margin-top: 6px; line-height: 1.5; font-size: 10px; color: #556; }
+.info span { color: #99a; }
+.row { margin-top: 5px; display: flex; flex-wrap: wrap; gap: 3px; }
+.row button {
+  padding: 3px 7px; background: #12122a; color: #789;
+  border: 1px solid #223; border-radius: 3px; cursor: pointer; font-size: 10px;
 }
-.btn-row button:hover { background: #2a2a4e; }
-.btn-row button.active { background: #334466; border-color: #6af; }
-#timeBar { margin-top: 6px; padding: 4px 6px; background: rgba(0,0,0,0.4); border-radius: 3px;
-  font-family: 'JetBrains Mono', monospace; font-size: 13px; color: #ee8; }
-#colorbar {
-  position: absolute; bottom: 16px; right: 16px; z-index: 10;
-  background: rgba(8,8,20,0.88); padding: 8px; border-radius: 6px;
-  font-size: 11px; text-align: center; backdrop-filter: blur(6px);
+.row button:hover { background: #1e1e3a; color: #acd; }
+.row button.on { border-color: #4488cc; color: #8bf; }
+#timeBar { margin-top: 5px; padding: 3px 6px; background: rgba(0,0,0,0.5); border-radius: 3px;
+  font-family: monospace; font-size: 12px; color: #aa8; }
+.sep { border: 0; border-top: 1px solid #181828; margin: 7px 0; }
+#gifProg { display: none; margin-top: 3px; color: #aa8; font-size: 10px; }
+#cbarBox {
+  position: absolute; bottom: 14px; right: 14px; z-index: 10;
+  background: rgba(6,6,18,0.9); padding: 6px; border-radius: 5px;
+  font-size: 10px; text-align: center; color: #556;
 }
-#colorbar canvas { display: block; margin: 3px 0; }
-.sep { border: 0; border-top: 1px solid #222; margin: 8px 0; }
-#gifProgress { display: none; margin-top: 4px; color: #ee8; font-size: 11px; }
+#cbarBox canvas { display: block; margin: 2px 0; }
 </style>
 </head>
 <body>
 <div id="container"></div>
 <div id="controls">
   <h3>IceCube-86</h3>
-  <label>Event</label>
-  <select id="eventSelect"></select>
-  <label>Point size</label>
-  <input type="range" id="domScale" min="0.3" max="6" step="0.1" value="1.5">
-  <label>Emphasis (low-charge fade)</label>
-  <input type="range" id="emphPow" min="0.1" max="3" step="0.1" value="0.6">
-  <div class="btn-row">
-    <button id="toggleStrings" class="active">Strings</button>
-    <button id="toggleUnhit" class="active">Unhit</button>
-    <button id="toggleTrack" class="active">Track</button>
+  <label>Event</label><select id="evSel"></select>
+  <label>Point size</label><input type="range" id="ptSz" min="0.3" max="5" step="0.1" value="1.2">
+  <label>Emphasis</label><input type="range" id="emph" min="0.1" max="2" step="0.05" value="0.5">
+  <div class="row">
+    <button id="bStr" class="on">Strings</button>
+    <button id="bUnh" class="on">Unhit</button>
+    <button id="bTrk" class="on">Track</button>
   </div>
   <hr class="sep">
-  <label>Animation</label>
-  <div class="btn-row">
-    <button id="btnPlay">&#9654; Play</button>
-    <button id="btnPause">&#10074;&#10074;</button>
-    <button id="btnReset">&#8634; Reset</button>
-    <button id="btnGif">Save GIF</button>
+  <div class="row">
+    <button id="bPlay">&#9654;</button>
+    <button id="bPause">&#10074;&#10074;</button>
+    <button id="bReset">Reset</button>
+    <button id="bHardReset">&#8634; Full Reset</button>
+    <button id="bGif">GIF</button>
   </div>
-  <label>Speed</label>
-  <input type="range" id="animSpeed" min="0.1" max="5" step="0.1" value="1">
-  <span id="speedVal" style="color:#888">1.0x</span>
+  <label>Speed</label><input type="range" id="spd" min="0.1" max="5" step="0.1" value="1">
+  <span id="spdV" style="color:#556">1.0x</span>
   <div id="timeBar">t = 0 ns</div>
-  <div id="gifProgress"></div>
+  <div id="gifProg"></div>
   <div class="info" id="info">Loading...</div>
 </div>
-<div id="colorbar">
-  <div style="color:#888">log₁₀(Q)</div>
-  <canvas id="cbar" width="16" height="120"></canvas>
-  <div id="cbarMin">0</div>
-  <div id="cbarMax">1</div>
+<div id="cbarBox">
+  <div>log₁₀(Q)</div>
+  <canvas id="cbar" width="14" height="100"></canvas>
+  <div id="cbMin">0</div><div id="cbMax">1</div>
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/gif.js@0.2.0/dist/gif.js"></script>
 <script type="importmap">
-{ "imports": {
-    "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
-    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
-} }
+{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"}}
 </script>
 <script type="module">
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
-let scene, camera, renderer, controls;
-let detData = null, evData = null;
-let stringGroup, unhitPts = null, trackLine = null, trackDot = null;
-let hitMesh = null;
-let showStrings = true, showUnhit = true, showTrack = true;
+let scene, camera, renderer, ctrl;
+let det = null, evs = null;
+let strGrp, unhitPts = null, hitMesh = null;
+let trackGeo = null, trackMat = null, trackLine = null, trackDot = null;
+let showStr = true, showUnh = true, showTrk = true;
+let anim = false, animT = 0, tMin = 0, tMax = 1000, lastT = 0;
+let initCamPos = null, initCamTarget = null;
 
-// Animation
-let currentHits = [];
-let animating = false, animTime = 0, tMin = 0, tMax = 1000;
-let lastFrame = 0;
+const C_MUON = 0.2998;  // m/ns (speed of light)
+const DIR = '../output/siren_tracks/';
 
-const DATA_DIR = '../output/siren_tracks/';
-
-// ── Colormap: warm dark (from JAXTPC) ──
-function warmColor(t) {
+// ── Inferno-like colormap ──
+function infernoRGB(t) {
   t = Math.max(0, Math.min(1, t));
-  const stops = [[0,[8,8,12]],[.15,[60,15,5]],[.35,[140,45,0]],[.55,[200,100,0]],[.75,[240,160,30]],[.9,[255,210,90]],[1,[255,250,220]]];
-  for (let i = 0; i < stops.length - 1; i++) {
-    const [t0,c0] = stops[i], [t1,c1] = stops[i+1];
-    if (t <= t1) {
-      const f = (t - t0) / (t1 - t0);
-      return [c0[0]+f*(c1[0]-c0[0]), c0[1]+f*(c1[1]-c0[1]), c0[2]+f*(c1[2]-c0[2])];
-    }
+  const s = [[0,[3,3,10]],[.13,[40,10,60]],[.27,[100,15,100]],[.4,[155,30,80]],
+    [.55,[200,60,40]],[.7,[230,120,15]],[.82,[245,180,10]],[.92,[250,225,60]],[1,[252,252,165]]];
+  for (let i = 0; i < s.length-1; i++) {
+    const [t0,c0]=s[i],[t1,c1]=s[i+1];
+    if (t<=t1) { const f=(t-t0)/(t1-t0);
+      return [c0[0]+f*(c1[0]-c0[0]),c0[1]+f*(c1[1]-c0[1]),c0[2]+f*(c1[2]-c0[2])]; }
   }
-  return stops[stops.length-1][1];
+  return s[s.length-1][1];
 }
 
-// ── Custom shader for hit DOMs ──
-const hitVS = `
-attribute float logQ;
-attribute float hitT;
-attribute float logQNorm;
-uniform float ptScale;
-uniform float emphPow;
-uniform float animT;
-uniform float animOn;
-uniform float tRange;
-varying float vNorm;
-varying float vAlpha;
-varying float vFlash;
-void main() {
-  vNorm = logQNorm;
-  float emph = pow(max(logQNorm, 0.001), emphPow);
-  vAlpha = 0.05 + 0.85 * emph;
-  float sz = (1.0 + logQNorm * 4.0) * ptScale;
-  vFlash = 0.0;
-  if (animOn > 0.5) {
-    float dt = animT - hitT;
-    float fadeW = tRange * 0.12;
-    float arriveAlpha = smoothstep(-fadeW * 0.3, 0.0, dt);
-    float flashAmt = 1.0 - smoothstep(0.0, fadeW, dt);
-    vAlpha *= arriveAlpha;
-    sz *= mix(1.0, 1.6, flashAmt * arriveAlpha);
-    vFlash = flashAmt * arriveAlpha;
-    if (dt < -fadeW * 0.5) { vAlpha = 0.0; sz = 0.0; }
+function mkCmap() {
+  const w=256, d=new Uint8Array(w*4);
+  for(let i=0;i<w;i++){const c=infernoRGB(i/(w-1));d[i*4]=c[0];d[i*4+1]=c[1];d[i*4+2]=c[2];d[i*4+3]=255;}
+  const t=new THREE.DataTexture(d,w,1,THREE.RGBAFormat); t.needsUpdate=true; return t;
+}
+
+// ── Shaders ──
+const VS = `
+attribute float qN;
+attribute float hT;
+uniform float ptSz, empP, aT, aOn, tRng;
+varying float vN, vA, vFl;
+void main(){
+  vN = qN;
+  float em = pow(max(qN,0.001), empP);
+  vA = 0.03 + 0.7 * em;
+  float sz = (0.8 + qN * 3.5) * ptSz;
+  vFl = 0.0;
+  if(aOn > 0.5){
+    float dt = aT - hT;
+    float fw = tRng * 0.08;
+    float arrive = smoothstep(-fw*0.2, fw*0.1, dt);
+    float flash = (1.0 - smoothstep(0.0, fw*1.5, dt)) * 0.3;
+    vA *= arrive;
+    sz *= mix(1.0, 1.15, flash * arrive);
+    vFl = flash * arrive;
+    if(dt < -fw*0.4){ vA=0.0; sz=0.0; }
   }
-  vec4 mv = modelViewMatrix * vec4(position, 1.0);
-  gl_Position = projectionMatrix * mv;
+  gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0);
   gl_PointSize = sz;
 }`;
 
-const hitFS = `
-varying float vNorm;
-varying float vAlpha;
-varying float vFlash;
-uniform sampler2D cmap;
-void main() {
+const FS = `
+uniform sampler2D cm;
+varying float vN, vA, vFl;
+void main(){
   vec2 d = gl_PointCoord - vec2(0.5);
   float r = length(d);
-  if (r > 0.5) discard;
-  float edge = 1.0 - smoothstep(0.35, 0.5, r);
-  vec3 c = texture2D(cmap, vec2(clamp(vNorm, 0.01, 0.99), 0.5)).rgb;
-  c = mix(c, vec3(1.0, 0.95, 0.8), vFlash * 0.6);
-  gl_FragColor = vec4(c, vAlpha * edge);
+  if(r>0.5) discard;
+  float edge = 1.0 - smoothstep(0.32, 0.5, r);
+  vec3 c = texture2D(cm, vec2(clamp(vN,0.01,0.99), 0.5)).rgb;
+  c += vec3(vFl * 0.4, vFl * 0.3, vFl * 0.15);
+  gl_FragColor = vec4(c, vA * edge);
 }`;
 
-function buildColormap() {
-  const w = 256, data = new Uint8Array(w * 4);
-  for (let i = 0; i < w; i++) {
-    const c = warmColor(i / (w - 1));
-    data[i*4] = c[0]; data[i*4+1] = c[1]; data[i*4+2] = c[2]; data[i*4+3] = 255;
-  }
-  const tex = new THREE.DataTexture(data, w, 1, THREE.RGBAFormat);
-  tex.needsUpdate = true;
-  return tex;
-}
-
 async function loadData() {
-  const [dr, er] = await Promise.all([fetch(DATA_DIR+'detector.json'), fetch(DATA_DIR+'events.json')]);
-  detData = await dr.json(); evData = await er.json();
-  const sel = document.getElementById('eventSelect');
-  evData.forEach((ev, i) => {
-    const o = document.createElement('option'); o.value = i;
-    o.text = `${i}: ${ev.n_doms_hit} DOMs  Q=${ev.total_charge.toFixed(0)}`; sel.appendChild(o);
-  });
+  const [dr,er] = await Promise.all([fetch(DIR+'detector.json'),fetch(DIR+'events.json')]);
+  det = await dr.json(); evs = await er.json();
+  const sel = document.getElementById('evSel');
+  evs.forEach((e,i)=>{const o=document.createElement('option');o.value=i;
+    o.text=`${i}: ${e.n_doms_hit} DOMs`;sel.appendChild(o);});
 }
 
 function init() {
-  scene = new THREE.Scene(); scene.background = new THREE.Color(0x080810);
-  camera = new THREE.PerspectiveCamera(45, innerWidth/innerHeight, 1, 6000);
-  camera.position.set(900, 500, 700); camera.up.set(0,0,1);
-  renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
-  renderer.setSize(innerWidth, innerHeight); renderer.setPixelRatio(devicePixelRatio);
+  scene = new THREE.Scene(); scene.background = new THREE.Color(0x060610);
+  camera = new THREE.PerspectiveCamera(42,innerWidth/innerHeight,1,6000);
+  camera.position.set(1000,500,600); camera.up.set(0,0,1);
+  renderer = new THREE.WebGLRenderer({antialias:true,preserveDrawingBuffer:true});
+  renderer.setSize(innerWidth,innerHeight); renderer.setPixelRatio(devicePixelRatio);
   document.getElementById('container').appendChild(renderer.domElement);
-  controls = new OrbitControls(camera, renderer.domElement);
-  controls.enableDamping = true; controls.target.set(0, 0, -1950);
-  scene.add(new THREE.AmbientLight(0x303050, 1));
-  addEventListener('resize', () => {
-    camera.aspect = innerWidth/innerHeight; camera.updateProjectionMatrix();
-    renderer.setSize(innerWidth, innerHeight);
-  });
+  ctrl = new OrbitControls(camera,renderer.domElement);
+  ctrl.enableDamping=true; ctrl.target.set(0,0,-1950);
+  scene.add(new THREE.AmbientLight(0x202040,0.8));
+  initCamPos = camera.position.clone(); initCamTarget = ctrl.target.clone();
+  addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;
+    camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight);});
 }
 
-function buildDetector() {
-  const d = detData;
-  stringGroup = new THREE.Group();
-  const sMat = new THREE.LineBasicMaterial({ color: 0x182838, transparent: true, opacity: 0.25 });
-  for (let i = 0; i < d.n_str; i++) {
-    const a = d.string_anchors[i], t = d.string_tops[i];
-    const g = new THREE.BufferGeometry().setFromPoints([
-      new THREE.Vector3(a[0],a[1],a[2]), new THREE.Vector3(t[0],t[1],t[2])]);
-    stringGroup.add(new THREE.Line(g, sMat));
+function buildDet() {
+  strGrp = new THREE.Group();
+  const sm = new THREE.LineBasicMaterial({color:0x101828,transparent:true,opacity:0.18});
+  for(let i=0;i<det.n_str;i++){
+    const a=det.string_anchors[i],t=det.string_tops[i];
+    strGrp.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints([
+      new THREE.Vector3(a[0],a[1],a[2]),new THREE.Vector3(t[0],t[1],t[2])]),sm));
   }
-  scene.add(stringGroup);
+  scene.add(strGrp);
 
-  const pos = new Float32Array(d.n_sensors * 3);
-  for (let i = 0; i < d.n_sensors; i++) {
-    pos[i*3]=d.dom_positions[i][0]; pos[i*3+1]=d.dom_positions[i][1]; pos[i*3+2]=d.dom_positions[i][2];
-  }
-  const ug = new THREE.BufferGeometry(); ug.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-  unhitPts = new THREE.Points(ug, new THREE.PointsMaterial({
-    color: 0x1a2030, size: 1, sizeAttenuation: false, transparent: true, opacity: 0.15 }));
+  const p=new Float32Array(det.n_sensors*3);
+  for(let i=0;i<det.n_sensors;i++){p[i*3]=det.dom_positions[i][0];p[i*3+1]=det.dom_positions[i][1];p[i*3+2]=det.dom_positions[i][2];}
+  const g=new THREE.BufferGeometry();g.setAttribute('position',new THREE.BufferAttribute(p,3));
+  unhitPts=new THREE.Points(g,new THREE.PointsMaterial({color:0x0e1420,size:1,sizeAttenuation:false,transparent:true,opacity:0.1}));
   scene.add(unhitPts);
 }
 
-function clearHits() {
-  if (hitMesh) { scene.remove(hitMesh); hitMesh.geometry.dispose(); hitMesh.material.dispose(); hitMesh = null; }
-  if (trackLine) { scene.remove(trackLine); trackLine.geometry.dispose(); trackLine = null; }
-  if (trackDot) { scene.remove(trackDot); trackDot = null; }
+function clearHits(){
+  if(hitMesh){scene.remove(hitMesh);hitMesh.geometry.dispose();hitMesh.material.dispose();hitMesh=null;}
+  if(trackLine){scene.remove(trackLine);trackLine=null;}
+  if(trackDot){scene.remove(trackDot);trackDot=null;}
+  trackGeo=null; trackMat=null;
 }
 
-function showEvent(idx) {
-  clearHits(); animating = false; animTime = 0;
-  const ev = evData[idx]; currentHits = [];
-  if (!ev || !ev.hit_dom_ids.length) return;
+function showEvent(idx){
+  clearHits(); anim=false; animT=0;
+  const ev=evs[idx]; if(!ev||!ev.hit_dom_ids.length) return;
+  const hasT = ev.hit_times_ns && ev.hit_times_ns.length>0;
+  const hits = ev.hit_dom_ids.map((id,i)=>({id,q:ev.hit_charges[i],
+    t:hasT?Math.max(ev.hit_times_ns[i],0):0})).filter(h=>h.q>1e-8);
+  if(!hits.length) return;
 
-  const hasTimes = ev.hit_times_ns && ev.hit_times_ns.length > 0;
-  const hits = ev.hit_dom_ids.map((id, i) => ({
-    id, q: ev.hit_charges[i], t: hasTimes ? ev.hit_times_ns[i] : 0
-  })).filter(h => h.q > 1e-8);
-  currentHits = hits;
-  if (!hits.length) return;
+  const lqs=hits.map(h=>Math.log10(Math.max(h.q,1e-10)));
+  const lMin=Math.min(...lqs),lMax=Math.max(...lqs);
+  const vt=hits.map(h=>h.t).filter(t=>isFinite(t)&&t>=0);
+  tMin=vt.length?Math.min(...vt):0; tMax=vt.length?Math.max(...vt):1000;
 
-  const logQs = hits.map(h => Math.log10(Math.max(h.q, 1e-10)));
-  const logMin = Math.min(...logQs), logMax = Math.max(...logQs);
-  const validT = hits.map(h=>h.t).filter(t=>isFinite(t));
-  tMin = validT.length ? Math.min(...validT) : 0;
-  tMax = validT.length ? Math.max(...validT) : 1000;
+  const n=hits.length, pos=new Float32Array(n*3), qN=new Float32Array(n), hT=new Float32Array(n);
+  hits.forEach((h,i)=>{const p=det.dom_positions[h.id];
+    pos[i*3]=p[0];pos[i*3+1]=p[1];pos[i*3+2]=p[2];
+    qN[i]=(Math.log10(Math.max(h.q,1e-10))-lMin)/(lMax-lMin+1e-10);
+    hT[i]=h.t;});
 
-  const n = hits.length;
-  const pos = new Float32Array(n*3), logQAttr = new Float32Array(n);
-  const hitTAttr = new Float32Array(n), normAttr = new Float32Array(n);
-
-  hits.forEach((h, i) => {
-    const p = detData.dom_positions[h.id];
-    pos[i*3]=p[0]; pos[i*3+1]=p[1]; pos[i*3+2]=p[2];
-    const lq = Math.log10(Math.max(h.q, 1e-10));
-    logQAttr[i] = lq;
-    normAttr[i] = (lq - logMin) / (logMax - logMin + 1e-10);
-    hitTAttr[i] = h.t;
-  });
-
-  const geo = new THREE.BufferGeometry();
-  geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-  geo.setAttribute('logQ', new THREE.BufferAttribute(logQAttr, 1));
-  geo.setAttribute('logQNorm', new THREE.BufferAttribute(normAttr, 1));
-  geo.setAttribute('hitT', new THREE.BufferAttribute(hitTAttr, 1));
-
-  const mat = new THREE.ShaderMaterial({
-    vertexShader: hitVS, fragmentShader: hitFS, transparent: true, depthWrite: false,
-    blending: THREE.AdditiveBlending,
-    uniforms: {
-      cmap: { value: buildColormap() },
-      ptScale: { value: parseFloat(document.getElementById('domScale').value) },
-      emphPow: { value: parseFloat(document.getElementById('emphPow').value) },
-      animT: { value: tMin },
-      animOn: { value: 0.0 },
-      tRange: { value: tMax - tMin },
-    }
-  });
-  hitMesh = new THREE.Points(geo, mat);
+  const geo=new THREE.BufferGeometry();
+  geo.setAttribute('position',new THREE.BufferAttribute(pos,3));
+  geo.setAttribute('qN',new THREE.BufferAttribute(qN,1));
+  geo.setAttribute('hT',new THREE.BufferAttribute(hT,1));
+  hitMesh=new THREE.Points(geo,new THREE.ShaderMaterial({
+    vertexShader:VS,fragmentShader:FS,transparent:true,depthWrite:false,
+    blending:THREE.AdditiveBlending,
+    uniforms:{cm:{value:mkCmap()},ptSz:{value:+$('ptSz').value},
+      empP:{value:+$('emph').value},aT:{value:tMin},aOn:{value:0},tRng:{value:tMax-tMin}}}));
   scene.add(hitMesh);
 
-  // Track
-  const o = ev.track_origin, d = ev.track_direction, len = 500;
-  const p1 = new THREE.Vector3(o[0]-d[0]*len/2, o[1]-d[1]*len/2, o[2]-d[2]*len/2);
-  const p2 = new THREE.Vector3(o[0]+d[0]*len/2, o[1]+d[1]*len/2, o[2]+d[2]*len/2);
-  const tg = new THREE.BufferGeometry().setFromPoints([p1, p2]);
-  trackLine = new THREE.Line(tg, new THREE.LineBasicMaterial({ color: 0xcc3333, transparent: true, opacity: 0.5 }));
-  trackLine.visible = showTrack;
+  // Track (will be updated dynamically)
+  const o=ev.track_origin, d=ev.track_direction;
+  trackMat = new THREE.LineBasicMaterial({color:0xdd4433,transparent:true,opacity:0.35});
+  trackGeo = new THREE.BufferGeometry();
+  const tp = new Float32Array(6);
+  tp[0]=o[0];tp[1]=o[1];tp[2]=o[2];tp[3]=o[0];tp[4]=o[1];tp[5]=o[2];
+  trackGeo.setAttribute('position',new THREE.BufferAttribute(tp,3));
+  trackLine = new THREE.Line(trackGeo,trackMat);
+  trackLine.visible = showTrk;
   scene.add(trackLine);
 
-  // Track dot (animated position along track)
-  const dotGeo = new THREE.SphereGeometry(3, 8, 6);
-  trackDot = new THREE.Mesh(dotGeo, new THREE.MeshBasicMaterial({ color: 0xff4444, transparent: true, opacity: 0.8 }));
-  trackDot.visible = false;
-  scene.add(trackDot);
+  const dg=new THREE.SphereGeometry(2.5,8,6);
+  trackDot=new THREE.Mesh(dg,new THREE.MeshBasicMaterial({color:0xff5544,transparent:true,opacity:0.7}));
+  trackDot.visible=false; scene.add(trackDot);
 
-  drawColorbar(logMin, logMax);
-  const tRng = hasTimes ? ` | ${(tMax-tMin).toFixed(0)} ns` : '';
-  document.getElementById('info').innerHTML =
-    `Event <span>${idx}</span> | <span>${hits.length}</span> DOMs | Q=<span>${ev.total_charge.toFixed(0)}</span>${tRng}<br>` +
-    `Track [${o.map(v=>v.toFixed(0)).join(',')}] → [${d.map(v=>v.toFixed(2)).join(',')}]`;
-  updateTimeBar();
+  drawCbar(lMin,lMax);
+  $('info').innerHTML=`Ev <span>${idx}</span> | <span>${hits.length}</span> DOMs | Q <span>${ev.total_charge.toFixed(0)}</span> | ${((tMax-tMin)).toFixed(0)} ns`;
+  updTime();
 }
 
-function drawColorbar(logMin, logMax) {
-  const c = document.getElementById('cbar'), ctx = c.getContext('2d');
-  for (let y = 0; y < c.height; y++) {
-    const t = 1 - y / c.height, rgb = warmColor(t);
-    ctx.fillStyle = `rgb(${rgb[0]|0},${rgb[1]|0},${rgb[2]|0})`; ctx.fillRect(0, y, c.width, 1);
+function $(id){return document.getElementById(id);}
+
+function drawCbar(mn,mx){
+  const c=$('cbar'),x=c.getContext('2d');
+  for(let y=0;y<c.height;y++){const t=1-y/c.height,rgb=infernoRGB(t);
+    x.fillStyle=`rgb(${rgb[0]|0},${rgb[1]|0},${rgb[2]|0})`;x.fillRect(0,y,c.width,1);}
+  $('cbMin').textContent=mn.toFixed(1); $('cbMax').textContent=mx.toFixed(1);
+}
+
+function updTime(){$('timeBar').textContent=`t = ${animT.toFixed(0)} ns`;}
+
+function updTrack(t){
+  if(!trackLine||!trackGeo) return;
+  const ev=evs[+$('evSel').value]; if(!ev) return;
+  const o=ev.track_origin, d=ev.track_direction;
+  // Muon start: well before tMin. Muon front at current time.
+  const startS = (tMin - (tMax-tMin)*0.1 - 0) * C_MUON;  // behind origin
+  const frontS = Math.max(startS, (t - 0) * C_MUON);       // current front
+  const pa = trackGeo.attributes.position.array;
+  pa[0]=o[0]+d[0]*startS; pa[1]=o[1]+d[1]*startS; pa[2]=o[2]+d[2]*startS;
+  pa[3]=o[0]+d[0]*frontS; pa[4]=o[1]+d[1]*frontS; pa[5]=o[2]+d[2]*frontS;
+  trackGeo.attributes.position.needsUpdate=true;
+  if(trackDot){
+    trackDot.position.set(o[0]+d[0]*frontS, o[1]+d[1]*frontS, o[2]+d[2]*frontS);
+    trackDot.visible = showTrk && anim;
   }
-  document.getElementById('cbarMin').textContent = logMin.toFixed(1);
-  document.getElementById('cbarMax').textContent = logMax.toFixed(1);
 }
 
-function updateTimeBar() {
-  document.getElementById('timeBar').textContent = `t = ${animTime.toFixed(0)} ns`;
-}
-
-function updateAnim(dt) {
-  if (!hitMesh) return;
-  const u = hitMesh.material.uniforms;
-  u.ptScale.value = parseFloat(document.getElementById('domScale').value);
-  u.emphPow.value = parseFloat(document.getElementById('emphPow').value);
-
-  if (!animating) { u.animOn.value = 0; return; }
-  u.animOn.value = 1;
-
-  const speed = parseFloat(document.getElementById('animSpeed').value);
-  const nsPerSec = (tMax - tMin) * 0.25 * speed;
-  animTime += dt * nsPerSec;
-  if (animTime > tMax + (tMax-tMin)*0.15) animTime = tMin - (tMax-tMin)*0.08;
-  u.animT.value = animTime;
-
-  // Animate track dot
-  if (trackDot && showTrack) {
-    const ev = evData[+document.getElementById('eventSelect').value];
-    const o = ev.track_origin, d = ev.track_direction;
-    const frac = Math.max(0, Math.min(1, (animTime - tMin) / (tMax - tMin)));
-    const trackLen = 400, s = -trackLen/2 + frac * trackLen;
-    trackDot.position.set(o[0]+d[0]*s, o[1]+d[1]*s, o[2]+d[2]*s);
-    trackDot.visible = animating;
+function tick(ts){
+  requestAnimationFrame(tick);
+  const dt=lastT?(ts-lastT)/1000:0; lastT=ts;
+  if(hitMesh){
+    const u=hitMesh.material.uniforms;
+    u.ptSz.value=+$('ptSz').value; u.empP.value=+$('emph').value;
+    if(anim){
+      u.aOn.value=1;
+      const spd=+$('spd').value, nsps=(tMax-tMin)*0.22*spd;
+      animT+=dt*nsps;
+      if(animT>tMax+(tMax-tMin)*0.12) animT=tMin-(tMax-tMin)*0.06;
+      u.aT.value=animT;
+      updTrack(animT);
+      // Gentle auto-rotate
+      ctrl.autoRotate=true; ctrl.autoRotateSpeed=0.3;
+    } else {
+      u.aOn.value=0;
+      ctrl.autoRotate=false;
+    }
   }
-
-  updateTimeBar();
+  ctrl.update(); updTime();
+  renderer.render(scene,camera);
 }
 
-function animate(ts) {
-  requestAnimationFrame(animate);
-  const dt = lastFrame ? (ts - lastFrame) / 1000 : 0;
-  lastFrame = ts;
-  updateAnim(dt);
-  controls.update();
-  renderer.render(scene, camera);
-}
-
-// ── GIF Export ──
-function exportGif() {
-  const prog = document.getElementById('gifProgress');
-  prog.style.display = 'block'; prog.textContent = 'Capturing frames...';
-
-  const w = 640, h = 480;
-  const gifRenderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
-  gifRenderer.setSize(w, h);
-
-  const gifCam = camera.clone();
-  gifCam.aspect = w / h; gifCam.updateProjectionMatrix();
-
-  const gif = new GIF({ workers: 2, quality: 10, width: w, height: h,
-    workerScript: 'https://cdn.jsdelivr.net/npm/gif.js@0.2.0/dist/gif.worker.js' });
-
-  const nFrames = 80, dt = (tMax - tMin + (tMax-tMin)*0.2) / nFrames;
-  let t = tMin - (tMax-tMin)*0.08;
-
-  if (hitMesh) hitMesh.material.uniforms.animOn.value = 1;
-
-  for (let f = 0; f < nFrames; f++) {
-    if (hitMesh) hitMesh.material.uniforms.animT.value = t;
-    // Slow orbit
-    const angle = (f / nFrames) * Math.PI * 0.3;
-    const r = camera.position.length();
-    gifCam.position.copy(camera.position);
-    gifCam.position.applyAxisAngle(new THREE.Vector3(0,0,1), angle);
-    gifCam.lookAt(controls.target);
-
-    gifRenderer.render(scene, gifCam);
-    const canvas = document.createElement('canvas'); canvas.width = w; canvas.height = h;
-    canvas.getContext('2d').drawImage(gifRenderer.domElement, 0, 0);
-    gif.addFrame(canvas, { delay: 80 });
-    t += dt;
-    prog.textContent = `Frame ${f+1}/${nFrames}`;
+// ── GIF ──
+function exportGif(){
+  const pr=$('gifProg'); pr.style.display='block'; pr.textContent='Capturing...';
+  const w=640,h=480;
+  const gr=new THREE.WebGLRenderer({antialias:true,preserveDrawingBuffer:true});gr.setSize(w,h);
+  const gc=camera.clone();gc.aspect=w/h;gc.updateProjectionMatrix();
+  const gif=new GIF({workers:2,quality:8,width:w,height:h,
+    workerScript:'https://cdn.jsdelivr.net/npm/gif.js@0.2.0/dist/gif.worker.js'});
+  const nF=90, totT=(tMax-tMin)*1.25, dt=totT/nF;
+  let t=tMin-(tMax-tMin)*0.06;
+  if(hitMesh) hitMesh.material.uniforms.aOn.value=1;
+  const baseAngle=Math.atan2(camera.position.y-ctrl.target.y,camera.position.x-ctrl.target.x);
+  const camR=Math.sqrt((camera.position.x-ctrl.target.x)**2+(camera.position.y-ctrl.target.y)**2);
+  const camZ=camera.position.z;
+  for(let f=0;f<nF;f++){
+    if(hitMesh) hitMesh.material.uniforms.aT.value=t;
+    updTrack(t);
+    const ang=baseAngle+(f/nF)*Math.PI*0.4;
+    gc.position.set(ctrl.target.x+camR*Math.cos(ang),ctrl.target.y+camR*Math.sin(ang),camZ);
+    gc.lookAt(ctrl.target);
+    gr.render(scene,gc);
+    const cv=document.createElement('canvas');cv.width=w;cv.height=h;
+    cv.getContext('2d').drawImage(gr.domElement,0,0);
+    gif.addFrame(cv,{delay:70}); t+=dt;
+    pr.textContent=`${f+1}/${nF}`;
   }
-
-  gif.on('finished', blob => {
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a'); a.href = url;
-    a.download = `icecube_event_${document.getElementById('eventSelect').value}.gif`;
-    a.click(); URL.revokeObjectURL(url);
-    prog.textContent = 'GIF saved!';
-    setTimeout(() => { prog.style.display = 'none'; }, 2000);
-    gifRenderer.dispose();
+  gif.on('finished',blob=>{
+    const a=document.createElement('a');a.href=URL.createObjectURL(blob);
+    a.download=`icecube_ev${$('evSel').value}.gif`;a.click();
+    pr.textContent='Saved!'; setTimeout(()=>pr.style.display='none',2000);gr.dispose();
   });
-
-  prog.textContent = 'Encoding GIF...';
-  gif.render();
+  pr.textContent='Encoding...'; gif.render();
 }
 
 // ── Controls ──
-document.getElementById('eventSelect').addEventListener('change', e => showEvent(+e.target.value));
-document.getElementById('domScale').addEventListener('input', () => {});
-document.getElementById('emphPow').addEventListener('input', () => {});
-document.getElementById('toggleStrings').addEventListener('click', e => {
-  showStrings = !showStrings; stringGroup.visible = showStrings; e.target.classList.toggle('active');
-});
-document.getElementById('toggleUnhit').addEventListener('click', e => {
-  showUnhit = !showUnhit; if(unhitPts) unhitPts.visible = showUnhit; e.target.classList.toggle('active');
-});
-document.getElementById('toggleTrack').addEventListener('click', e => {
-  showTrack = !showTrack;
-  if(trackLine) trackLine.visible = showTrack;
-  if(trackDot) trackDot.visible = showTrack && animating;
-  e.target.classList.toggle('active');
-});
-document.getElementById('btnPlay').addEventListener('click', () => {
-  animating = true; if (animTime >= tMax) animTime = tMin;
-});
-document.getElementById('btnPause').addEventListener('click', () => { animating = false; });
-document.getElementById('btnReset').addEventListener('click', () => {
-  animating = false; animTime = tMin - (tMax-tMin)*0.08;
-  if(hitMesh) hitMesh.material.uniforms.animOn.value = 0;
-  if(trackDot) trackDot.visible = false;
-  updateTimeBar();
-});
-document.getElementById('btnGif').addEventListener('click', exportGif);
-document.getElementById('animSpeed').addEventListener('input', e => {
-  document.getElementById('speedVal').textContent = (+e.target.value).toFixed(1)+'x';
-});
+$('evSel').onchange=e=>showEvent(+e.target.value);
+$('bStr').onclick=e=>{showStr=!showStr;strGrp.visible=showStr;e.target.classList.toggle('on');};
+$('bUnh').onclick=e=>{showUnh=!showUnh;if(unhitPts)unhitPts.visible=showUnh;e.target.classList.toggle('on');};
+$('bTrk').onclick=e=>{showTrk=!showTrk;if(trackLine)trackLine.visible=showTrk;
+  if(trackDot)trackDot.visible=showTrk&&anim;e.target.classList.toggle('on');};
+$('bPlay').onclick=()=>{anim=true;if(animT>=tMax)animT=tMin;};
+$('bPause').onclick=()=>{anim=false;};
+$('bReset').onclick=()=>{anim=false;animT=tMin-(tMax-tMin)*0.06;
+  if(hitMesh)hitMesh.material.uniforms.aOn.value=0;if(trackDot)trackDot.visible=false;updTime();};
+$('bHardReset').onclick=()=>{
+  anim=false; animT=0;
+  if(hitMesh)hitMesh.material.uniforms.aOn.value=0;
+  if(trackDot)trackDot.visible=false;
+  camera.position.copy(initCamPos); ctrl.target.copy(initCamTarget);
+  ctrl.autoRotate=false; ctrl.update();
+  $('ptSz').value=1.2; $('emph').value=0.5; $('spd').value=1;
+  $('spdV').textContent='1.0x';
+  showEvent(+$('evSel').value);
+};
+$('bGif').onclick=exportGif;
+$('spd').oninput=e=>{$('spdV').textContent=(+e.target.value).toFixed(1)+'x';};
 
-async function start() { init(); await loadData(); buildDetector(); showEvent(0); animate(0); }
+async function start(){init();await loadData();buildDet();showEvent(0);tick(0);}
 start();
 </script>
 </body>
