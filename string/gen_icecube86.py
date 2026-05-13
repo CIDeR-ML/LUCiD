@@ -22,16 +22,20 @@ SENSOR_RADIUS = 0.165  # 13" DOM outer radius (m)
 # ──────────────────────────────────────────────────────────────────────
 
 def hex_ring_positions(spacing, n_rings):
-    """Generate positions for concentric hex rings."""
+    """Generate positions for concentric hex rings.
+
+    Ring k has 6k positions. Total through ring n: 1 + 3n(n+1).
+    """
     positions = [(0.0, 0.0)]
     for ring in range(1, n_rings + 1):
         for side in range(6):
-            corner_angle = np.pi / 3 * side
+            cx = ring * spacing * np.cos(np.pi / 3 * side)
+            cy = ring * spacing * np.sin(np.pi / 3 * side)
+            nx = ring * spacing * np.cos(np.pi / 3 * (side + 1))
+            ny = ring * spacing * np.sin(np.pi / 3 * (side + 1))
             for step in range(ring):
-                angle = corner_angle + np.pi / 3 * (side + 2)
-                x = ring * spacing * np.cos(corner_angle) + step * spacing * np.cos(angle)
-                y = ring * spacing * np.sin(corner_angle) + step * spacing * np.sin(angle)
-                positions.append((x, y))
+                t = step / ring
+                positions.append((cx + t * (nx - cx), cy + t * (ny - cy)))
     return np.array(positions)
 
 

@@ -80,7 +80,7 @@ def simulate_one_event(det, prop, grid_data, model_params, event_idx, master_key
     scatter_lengths = jnp.full(N_PHOTONS, 30.0)
     absorption_lengths = jnp.full(N_PHOTONS, 100.0)
     dom_charges = jnp.zeros(NUM_SENSORS)
-    dom_times = jnp.zeros(NUM_SENSORS)
+    dom_time_weighted = jnp.zeros(NUM_SENSORS)
 
     for k in range(K):
         key, subkey = jax.random.split(key)
@@ -118,10 +118,18 @@ def simulate_one_event(det, prop, grid_data, model_params, event_idx, master_key
         weighted_times = sensor_times_ns.T * jnp.where(
             per_dom_charges > 1e-10, 1.0, 0.0)  # only count actual hits
 
+        # Per-DOM hit times: photon current time + distance to DOM / speed
+        dom_hit_times = times_state[:, None] + sensor_dists.T / SPEED  # (n_photons, max_dom) in ns
+
         idx_T = sensor_indices.T
         valid = (idx_T >= 0) & (idx_T < NUM_SENSORS)
         dom_charges = dom_charges.at[jnp.where(valid, idx_T, 0).ravel()].add(
             jnp.where(valid, weighted_charges, 0.0).ravel())
+
+        # Charge-weighted time accumulation
+        weighted_times = dom_hit_times * weighted_charges
+        dom_time_weighted = dom_time_weighted.at[jnp.where(valid, idx_T, 0).ravel()].add(
+            jnp.where(valid, weighted_times, 0.0).ravel())
 
         survival = survival * safe_cont
         positions = new_pos
@@ -129,13 +137,18 @@ def simulate_one_event(det, prop, grid_data, model_params, event_idx, master_key
         times_state = new_times
 
     charges_np = np.array(dom_charges)
+    time_weighted_np = np.array(dom_time_weighted)
     hit_mask = charges_np > 1e-6
+
+    # Mean hit time per DOM = charge-weighted time / charge
+    dom_times_np = np.where(hit_mask, time_weighted_np / (charges_np + 1e-30), 0.0)
 
     return {
         'event_idx': event_idx,
         'track_origin': np.array(track_origin),
         'track_direction': np.array(track_direction),
         'dom_charges': charges_np,
+        'dom_times': dom_times_np,
         'hit_mask': hit_mask,
         'n_doms_hit': int(hit_mask.sum()),
         'total_charge': float(charges_np.sum()),
@@ -191,11 +204,13 @@ def main():
                  track_origin=result['track_origin'],
                  track_direction=result['track_direction'],
                  dom_charges=result['dom_charges'],
+                 dom_times=result['dom_times'],
                  hit_mask=result['hit_mask'])
 
         # Summary for viewer JSON
         hit_ids = np.where(result['hit_mask'])[0].tolist()
         hit_charges = result['dom_charges'][result['hit_mask']].tolist()
+        hit_times = result['dom_times'][result['hit_mask']].tolist()
         all_events.append({
             'event_idx': ev,
             'track_origin': result['track_origin'].tolist(),
@@ -204,6 +219,7 @@ def main():
             'total_charge': result['total_charge'],
             'hit_dom_ids': hit_ids,
             'hit_charges': hit_charges,
+            'hit_times_ns': hit_times,
         })
 
         tag = " (JIT)" if ev == 0 else ""
