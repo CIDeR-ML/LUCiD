@@ -1,0 +1,9 @@
+{
+  "name": "siren_water_el_test",
+  "description": "SIREN-input smoke test for e- at the same 4 energies as the mu- test.",
+  "material": "water",
+  "particles": [{"type": "e-"}],
+  "energy_list_MeV": [500, 1000, 2000, 5000],
+  "n_events_per_job": 10,
+  "include_extrapolated": false
+}

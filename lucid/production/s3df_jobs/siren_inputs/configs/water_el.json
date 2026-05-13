@@ -1,0 +1,9 @@
+{
+  "name": "siren_water_el",
+  "description": "Full SIREN-input scan for e- in water. s/s_max axis.",
+  "material": "water",
+  "particles": [{"type": "e-"}],
+  "energy_list_MeV": [100, 200, 500, 750, 1000, 1500, 2000, 3000, 5000, 7500, 10000],
+  "n_events_per_job": 1000,
+  "include_extrapolated": false
+}

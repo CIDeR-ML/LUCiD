@@ -1,0 +1,9 @@
+{
+  "name": "siren_water_mu_test",
+  "description": "SIREN-input smoke test: 4 energies, 10 events each. s/s_max axis.",
+  "material": "water",
+  "particles": [{"type": "mu-"}],
+  "energy_list_MeV": [500, 1000, 2000, 5000],
+  "n_events_per_job": 10,
+  "include_extrapolated": false
+}
