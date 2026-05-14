@@ -23,23 +23,54 @@ vim ../user_paths.sh
 # 2. Prepare sbatch scripts only (no submission)
 python3 generate_jobs.py -c configs/water_mu_test.json
 
-# 3. Submit
+# 3. Submit smoke test (small grid, flat 100 events/cell, 1 job per cell)
 python3 generate_jobs.py -c configs/water_mu_test.json -s
 
-# 4. (Test mode — only the first cell)
-python3 generate_jobs.py -c configs/water_mu_test.json -s -t
+# 4. Submit the full scan (322-cell grid, 10k events/cell, ~1h/sub-job)
+python3 generate_jobs.py -c configs/water_mu.json -s
+python3 generate_jobs.py -c configs/water_el.json -s
+
+# 5. After all jobs finish, hadd per-cell sub-job ROOTs
+./merge.sh $OUTPUT_BASE_PATH
 ```
 
 ## Config schema
 
+Two forms are supported. Smoke-test configs use a flat
+`n_events_per_job` at top level — one SLURM job per (particle, energy)
+cell:
+
 ```json
 {
   "name": "siren_water_mu_test",
-  "description": "...",
   "material": "water",
   "particles": [{"type": "mu-"}],
-  "energy_list_MeV": [500, 1000, 2000, 5000],
-  "n_events_per_job": 10,
+  "energy_list_MeV": [500, 1000, 2000, 5000, 10000, 50000, 100000],
+  "n_events_per_job": 100,
+  "include_extrapolated": false
+}
+```
+
+Full-scan configs use an `events_schedule` block. The generator splits
+each cell's `events_per_cell` total into multiple SLURM sub-jobs whose
+wall time is ≈ `target_seconds_per_job`, using a linear time model
+fitted from real v6 runs (`t/event = a + b · E_MeV`, defaults in
+`generate_jobs.py`'s `DEFAULT_TIME_MODEL`):
+
+```json
+{
+  "name": "siren_water_mu",
+  "material": "water",
+  "particles": [{"type": "mu-"}],
+  "energy_list_MeV": [...322 entries up to 100 GeV...],
+  "events_schedule": {
+    "events_per_cell": 10000,
+    "target_seconds_per_job": 3600,
+    "time_model": {
+      "a_seconds_per_event":         0.06,
+      "b_seconds_per_event_per_mev": 4.22e-4
+    }
+  },
   "include_extrapolated": false
 }
 ```
@@ -48,19 +79,35 @@ python3 generate_jobs.py -c configs/water_mu_test.json -s -t
 - `include_extrapolated: true` lets you process energies below the
   parametrisation's `fit_min_mev`; otherwise those cells are skipped with
   a warning. Override at the CLI with `--include-extrapolated`.
-- One job per (particle, energy) cell — `n_events_per_job` is the total
-  per-cell statistics.
+- Splits are balanced (`events_per_job = ceil(events_per_cell / n_jobs)`)
+  so the last sub-job may run slightly short of the target — the total
+  event count can slightly overshoot `events_per_cell` because of the
+  ceiling.
 
 ## Output
+
+Single-job cells (every cell in a smoke test, low-E cells in the full scan):
 
 ```
 <OUTPUT_BASE>/<material>/<particle>/<E>MeV/
   ├── photonsim.root        # PhotonHist_AngleDistance(Norm), dEdxHist_Distance, ...
-  ├── photonsim_config.json # per-cell dataprod config consumed by lucid-run-job
+  ├── photonsim_config.json
   ├── submit.sbatch
-  ├── job-<slurmid>.out
-  ├── job-<slurmid>.err
-  └── job_000001.mac        # G4 macro that ran inside the container
+  ├── job-001-<slurmid>.out / .err
+  └── job_000001.mac
+```
+
+Multi-job cells (typically high-E cells when an `events_schedule` with
+splitting is active):
+
+```
+<OUTPUT_BASE>/<material>/<particle>/<E>MeV/
+  ├── photonsim.root          # created by merge.sh (hadd of all N sub-jobs)
+  ├── photonsim_config.json
+  ├── submit_job_001.sbatch ... submit_job_NNN.sbatch
+  ├── job-001-*.out / .err ... job-NNN-*.out / .err
+  ├── output_job_000001.root ... output_job_NNNNNN.root  (deleted after merge)
+  └── job_000001.mac ... job_NNNNNN.mac
 ```
 
 ## Plotting

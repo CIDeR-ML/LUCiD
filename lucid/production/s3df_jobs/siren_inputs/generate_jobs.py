@@ -2,7 +2,9 @@
 """SLURM fan-out for SIREN-input PhotonSim jobs (s/s_max histogram axis).
 
 Reads a SIREN-input JSON config (material + particles + non-uniform energy
-list) and submits one SLURM job per (particle, energy) cell. For each cell:
+list) and submits one or more SLURM jobs per (particle, energy) cell.
+
+For each cell:
 
   1. Reads the s_max power-law fit from
      PhotonSim/data/<material>/<particle>/smax_fit.csv (s_max = A * E^B),
@@ -10,18 +12,38 @@ list) and submits one SLURM job per (particle, energy) cell. For each cell:
   2. Writes a per-cell dataprod-style JSON config that lucid-run-job
      consumes, with `smax_mm` set so the macro emits `/output/smax <val> mm`
      and PhotonSim writes the `PhotonHist_AngleDistanceNorm` histogram.
-  3. Emits an sbatch that runs lucid-run-job inside the unified container
-     and renames `output_job_000001.root` -> `photonsim.root` so the
-     output matches the PhotonSim plotter layout expected by
-     `PhotonSim/tools/siren_inputs/plot_norm_hists.py` and
-     `PhotonSim/tools/plot_2d_hists.py`.
+  3. Splits the total `events_per_cell` across N sub-jobs so each job
+     targets ~`target_seconds_per_job` of wall time (linear time model
+     fit empirically from v6: t/event ≈ 0.06 + 4.22e-4 * E_MeV).
+     Each sub-job gets a unique --job-id and writes
+     `output_job_NNNNNN.root` into the cell dir.
+  4. Emits one sbatch per sub-job. After all jobs finish, run merge.sh to
+     hadd them into a single `photonsim.root` per cell — what
+     `plot_norm_hists.py` and the training-table builder consume.
 
-Output layout (PhotonSim-compatible):
+Output layout (PhotonSim-compatible, after merge.sh):
 
     <OUTPUT_BASE>/<material>/<particle>/<E>MeV/photonsim.root
 
-Drop-in for `plot_norm_hists.py --input-dir <OUTPUT_BASE>` to produce
-`angle_distance_norm_<material>_<particle>.png` grid figures.
+Config schema (events_schedule is optional; if absent the script falls back
+to a flat `n_events_per_job` at top level for backward-compat with smoke
+tests):
+
+    {
+      "name": "siren_water_mu",
+      "material": "water",
+      "particles": [{"type": "mu-"}],
+      "energy_list_MeV": [...],
+      "events_schedule": {
+        "events_per_cell": 10000,
+        "target_seconds_per_job": 3600,
+        "time_model": {
+          "a_seconds_per_event": 0.06,
+          "b_seconds_per_event_per_mev": 4.22e-4
+        }
+      },
+      "include_extrapolated": false
+    }
 """
 
 from __future__ import annotations
@@ -29,6 +51,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import math
 import os
 import shlex
 import shutil
@@ -36,6 +59,16 @@ import subprocess
 import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
+
+
+# Empirical time model fit from the v6 SIREN-input test (100 events/cell,
+# 1 km world box, 500 MeV..100 GeV on roma partition):
+#   t_per_event(E_MeV) ≈ 0.06 + 4.22e-4 * E_MeV   [seconds]
+# Override per-config via events_schedule.time_model if needed.
+DEFAULT_TIME_MODEL = {
+    "a_seconds_per_event":         0.06,
+    "b_seconds_per_event_per_mev": 4.22e-4,
+}
 
 
 # --- Paths --------------------------------------------------------------------
@@ -108,12 +141,47 @@ def smax_at(A: float, B: float, energy_mev: float) -> float:
     return A * (energy_mev ** B)
 
 
+# --- Time-based split planning -----------------------------------------------
+
+def t_per_event(energy_mev: float, a_s: float, b_s_per_mev: float) -> float:
+    return a_s + b_s_per_mev * energy_mev
+
+
+def split_plan_by_time(*, events_per_cell: int, energy_mev: int,
+                        target_seconds_per_job: Optional[float],
+                        a_s: float, b_s_per_mev: float) -> Tuple[int, int]:
+    """Return (n_jobs, events_per_job) for one cell.
+
+    If `target_seconds_per_job` is None or the cell would fit in one job
+    already, return (1, events_per_cell). Otherwise pick `n_jobs` so each
+    job runs for ≈ target wall-time, then balance events evenly across
+    them (`ceil` per-job count — the last sub-job may run slightly short).
+    """
+    if target_seconds_per_job is None or events_per_cell <= 0:
+        return 1, events_per_cell
+    t_per = t_per_event(energy_mev, a_s, b_s_per_mev)
+    if t_per <= 0:
+        return 1, events_per_cell
+    cell_wall_s = events_per_cell * t_per
+    if cell_wall_s <= target_seconds_per_job:
+        return 1, events_per_cell
+    n_jobs = max(1, math.ceil(cell_wall_s / target_seconds_per_job))
+    events_per_job = math.ceil(events_per_cell / n_jobs)
+    return n_jobs, events_per_job
+
+
 # --- Per-cell artifacts ------------------------------------------------------
 
 def write_per_cell_config(*, cell_dir: Path, material: str, particle: str,
-                          energy_mev: int, smax_mm: float, n_events: int,
+                          energy_mev: int, smax_mm: float,
+                          events_per_job: int, n_jobs: int,
                           name: str) -> Path:
-    """Write the dataprod-style JSON config that lucid-run-job will read."""
+    """Write the dataprod-style JSON config that lucid-run-job will read.
+
+    The same config is reused by every sub-job in the cell — only the
+    sbatch's `--job-id` differs, which makes each sub-job's output ROOT
+    a unique `output_job_NNNNNN.root` ready for merge.sh to hadd.
+    """
     cfg = {
         "config_number": -1,
         "use_config_number": False,
@@ -134,8 +202,8 @@ def write_per_cell_config(*, cell_dir: Path, material: str, particle: str,
 
         "particles": [{"type": particle}],
 
-        "n_jobs": 1,
-        "n_events_per_job": int(n_events),
+        "n_jobs": int(n_jobs),
+        "n_events_per_job": int(events_per_job),
     }
     out = cell_dir / "photonsim_config.json"
     out.write_text(json.dumps(cfg, indent=2) + "\n")
@@ -146,8 +214,8 @@ SBATCH_TEMPLATE = """#!/bin/bash
 #SBATCH --partition={partition}
 #SBATCH --account={account}
 #SBATCH --job-name={job_name}
-#SBATCH --output={cell_dir}/job-%j.out
-#SBATCH --error={cell_dir}/job-%j.err
+#SBATCH --output={cell_dir}/job-{job_id:03d}-%j.out
+#SBATCH --error={cell_dir}/job-{job_id:03d}-%j.err
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task={cpus}
@@ -165,22 +233,23 @@ apptainer exec --nv -B /sdf,/fs,/sdf/scratch,/lscratch,/cvmfs {dev_binds} \\
     lucid-run-job \\
         --config "{cell_cfg}" \\
         --output-dir "{cell_dir}" \\
-        --job-id 1 \\
+        --job-id {job_id} \\
         --skip-lucid \\
         --override-energy-MeV {energy_mev}
 
-# Rename for PhotonSim-layout consumers (plot_norm_hists.py, plot_2d_hists.py,
-# build_photon_table). One job per cell -> single ROOT.
-mv "{cell_dir}/output_job_000001.root" "{cell_dir}/photonsim.root"
+# Each sub-job writes output_job_<job_id:06>.root; merge.sh hadd's them all
+# into photonsim.root per cell after the queue drains.
 
 echo "Job ended: $(date)"
 """
 
 
 def write_sbatch(*, cell_dir: Path, cell_cfg: Path, energy_mev: int,
-                 job_name: str, env: Dict[str, str], partition: str,
+                 job_name: str, job_id: int, sbatch_name: str,
+                 env: Dict[str, str], partition: str,
                  use_gpu: bool) -> Path:
-    """Emit submit.sbatch in the cell dir."""
+    """Emit submit_job_<id>.sbatch (or submit.sbatch when n_jobs=1) in the
+    cell dir."""
     image = env["LUCID_IMAGE_PATH"]
     gpus = "1" if use_gpu else env.get("DEFAULT_GPUS", "0")
     gpu_line = f"#SBATCH --gpus={gpus}\n" if gpus != "0" else ""
@@ -205,8 +274,9 @@ def write_sbatch(*, cell_dir: Path, cell_cfg: Path, energy_mev: int,
         image=image,
         cell_cfg=str(cell_cfg),
         energy_mev=energy_mev,
+        job_id=job_id,
     )
-    out = cell_dir / "submit.sbatch"
+    out = cell_dir / sbatch_name
     out.write_text(body)
     out.chmod(0o755)
     return out
@@ -262,10 +332,25 @@ def main(argv: Optional[List[str]] = None) -> int:
     material = cfg["material"]
     particles = [p["type"] for p in cfg["particles"]]
     energies: List[int] = list(cfg["energy_list_MeV"])
-    n_events = int(cfg["n_events_per_job"])
     include_extrapolated = bool(
         args.include_extrapolated or cfg.get("include_extrapolated", False)
     )
+
+    # Events budget. Either an `events_schedule` block (with optional
+    # time_model + target_seconds_per_job for splitting), or fall back to a
+    # flat `n_events_per_job` at top level for smoke-test configs.
+    sched = cfg.get("events_schedule")
+    if sched:
+        events_per_cell = int(sched["events_per_cell"])
+        target_s = sched.get("target_seconds_per_job")
+        target_s = float(target_s) if target_s is not None else None
+        tm = {**DEFAULT_TIME_MODEL, **(sched.get("time_model") or {})}
+    else:
+        events_per_cell = int(cfg["n_events_per_job"])
+        target_s = None
+        tm = DEFAULT_TIME_MODEL
+    a_s = float(tm["a_seconds_per_event"])
+    b_s_per_mev = float(tm["b_seconds_per_event_per_mev"])
 
     # user_paths
     env = load_user_paths(args.user_paths)
@@ -282,15 +367,19 @@ def main(argv: Optional[List[str]] = None) -> int:
     print(f"=== SIREN-input fan-out: {name} ===")
     print(f"material:     {material}")
     print(f"particles:    {particles}")
-    print(f"energies:     {energies} MeV")
-    print(f"events/cell:  {n_events}")
+    print(f"energies:     {len(energies)} cells, "
+          f"{energies[0]}..{energies[-1]} MeV")
+    print(f"events/cell:  {events_per_cell:,}")
+    if target_s is not None:
+        print(f"target/job:   {target_s:.0f} s "
+              f"(time model: t/event = {a_s:g} + {b_s_per_mev:g} * E_MeV)")
     print(f"output base:  {output_base}")
     print(f"PhotonSim:    {photonsim_dir}")
     print(f"partition:    {partition}")
     print("")
 
-    # Build cell list. Filter test mode + below-fit.
-    cells: List[Tuple[str, int, float]] = []  # (particle, energy, smax_mm)
+    # Build cell list. Each cell: (particle, energy, smax_mm, n_jobs, evt_per_job).
+    cells: List[Tuple[str, int, float, int, int]] = []
     skipped: List[str] = []
     for particle in particles:
         A, B, fit_min = load_smax_fit(photonsim_dir, material, particle)
@@ -299,7 +388,13 @@ def main(argv: Optional[List[str]] = None) -> int:
                 skipped.append(f"{particle} @ {energy} MeV "
                                f"(< fit_min={fit_min}; pass --include-extrapolated to force)")
                 continue
-            cells.append((particle, energy, smax_at(A, B, energy)))
+            n_jobs, evt_per_job = split_plan_by_time(
+                events_per_cell=events_per_cell, energy_mev=energy,
+                target_seconds_per_job=target_s,
+                a_s=a_s, b_s_per_mev=b_s_per_mev,
+            )
+            cells.append((particle, energy, smax_at(A, B, energy),
+                          n_jobs, evt_per_job))
 
     if args.test and cells:
         cells = cells[:1]
@@ -312,40 +407,64 @@ def main(argv: Optional[List[str]] = None) -> int:
             print(f"  SKIP {s}", file=sys.stderr)
         return 1
 
-    prepared = submitted = skipped_existing = 0
-    for particle, energy, smax_mm in cells:
+    total_jobs = sum(c[3] for c in cells)
+    total_events = sum(c[3] * c[4] for c in cells)
+    print(f"total cells:   {len(cells)}")
+    print(f"total jobs:    {total_jobs}")
+    print(f"total events:  {total_events:,}")
+    print("")
+
+    prepared = submitted = skipped_existing = skipped_jobs = 0
+    for particle, energy, smax_mm, n_jobs, evt_per_job in cells:
         cell_dir = output_base / material / particle / f"{energy}MeV"
         cell_dir.mkdir(parents=True, exist_ok=True)
 
-        existing_root = cell_dir / "photonsim.root"
-        if existing_root.is_file() and not args.no_skip_existing:
-            print(f"  skip (exists): {existing_root}")
+        merged = cell_dir / "photonsim.root"
+        if merged.is_file() and not args.no_skip_existing:
+            print(f"  skip (merged exists): {merged}")
             skipped_existing += 1
             continue
 
         cell_name = f"siren_{material}_{particle}_{energy}MeV"
         cell_cfg = write_per_cell_config(
             cell_dir=cell_dir, material=material, particle=particle,
-            energy_mev=energy, smax_mm=smax_mm, n_events=n_events,
-            name=cell_name,
+            energy_mev=energy, smax_mm=smax_mm,
+            events_per_job=evt_per_job, n_jobs=n_jobs, name=cell_name,
         )
-        sb = write_sbatch(
-            cell_dir=cell_dir, cell_cfg=cell_cfg, energy_mev=energy,
-            job_name=cell_name, env=env, partition=partition, use_gpu=args.gpu,
-        )
-        prepared += 1
 
-        if args.submit:
-            r = subprocess.run(["sbatch", str(sb)], capture_output=True, text=True)
-            if r.returncode != 0:
-                print(f"  FAILED sbatch for {cell_name}: {r.stderr.strip()}",
-                      file=sys.stderr)
+        for job_id in range(1, n_jobs + 1):
+            if n_jobs == 1:
+                sb_name = "submit.sbatch"
+                job_label = cell_name
+            else:
+                sb_name = f"submit_job_{job_id:03d}.sbatch"
+                job_label = f"{cell_name}_j{job_id:03d}"
+
+            out_root = cell_dir / f"output_job_{job_id:06d}.root"
+            if out_root.is_file() and not args.no_skip_existing:
+                print(f"  skip (job exists): {out_root.name}")
+                skipped_jobs += 1
                 continue
-            submitted += 1
-            print(f"  submitted {cell_name}  (s_max={smax_mm:.1f} mm)  -> "
-                  f"{r.stdout.strip()}")
-        else:
-            print(f"  prepared  {cell_name}  (s_max={smax_mm:.1f} mm)  -> {sb}")
+
+            sb = write_sbatch(
+                cell_dir=cell_dir, cell_cfg=cell_cfg, energy_mev=energy,
+                job_name=job_label, job_id=job_id, sbatch_name=sb_name,
+                env=env, partition=partition, use_gpu=args.gpu,
+            )
+            prepared += 1
+
+            if args.submit:
+                r = subprocess.run(["sbatch", str(sb)], capture_output=True, text=True)
+                if r.returncode != 0:
+                    print(f"  FAILED sbatch for {job_label}: {r.stderr.strip()}",
+                          file=sys.stderr)
+                    continue
+                submitted += 1
+                print(f"  submitted {job_label}  (s_max={smax_mm:.1f} mm, "
+                      f"{evt_per_job} evts)  -> {r.stdout.strip()}")
+            else:
+                print(f"  prepared  {job_label}  (s_max={smax_mm:.1f} mm, "
+                      f"{evt_per_job} evts)  -> {sb}")
 
     for s in skipped:
         print(f"  SKIP {s}")
@@ -354,9 +473,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     print("=== Fan-out complete ===")
     print(f"Prepared:        {prepared}")
     print(f"Submitted:       {submitted}")
-    print(f"Skipped (exist): {skipped_existing}")
+    print(f"Skipped cells:   {skipped_existing}")
+    print(f"Skipped jobs:    {skipped_jobs}")
     print(f"Skipped (fit):   {len(skipped)}")
     print(f"Output root:     {output_base / material}")
+    print("")
+    print("Next: once all jobs finish, run merge.sh to hadd per-cell")
+    print("      output_job_*.root into photonsim.root for each cell.")
     return 0
 
 
