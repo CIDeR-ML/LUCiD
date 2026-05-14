@@ -19,15 +19,13 @@ import jax.numpy as jnp
 import numpy as np
 
 from lucid.overlap import create_overlap_prob
-from lucid.geometry.string_sizing import auto_n_dom_snap
 
 
 def create_string_propagator(
     detector,
     sensor_radius,
     temperature=0.2,
-    n_closest=None,
-    n_dom_snap=None,
+    n_closest=2,
 ):
     """Build a JIT-compiled string propagator (standard interface).
 
@@ -36,10 +34,8 @@ def create_string_propagator(
     detector : StringTelescope
     sensor_radius : float
     temperature : float
-    n_closest : int or None
-        Strings to check per ray. None → auto.
-    n_dom_snap : int or None
-        DOMs per selected string. None → auto from curvature.
+    n_closest : int
+        Strings to check per ray (default 2). Total candidates = n_closest * 2.
 
     Returns
     -------
@@ -47,6 +43,7 @@ def create_string_propagator(
         propagate_fn(origins, directions) → dict
         Same output contract as shared.create_propagator.
     """
+    n_dom_snap = 2  # bracket pair — always sufficient for straight strings
     tables = detector.get_jax_tables()
     string_anchors = tables['string_anchors']
     string_axes = tables['string_axes']
@@ -60,15 +57,6 @@ def create_string_propagator(
     env_r_sq = detector.envelope_radius ** 2
     env_z_min = detector.envelope_z_min
     env_z_max = detector.envelope_z_max
-
-    curv_max = float(detector.string_curv.max())
-    mean_dz = float(np.median(np.diff(
-        np.sort(detector.dom_s_offsets[0, :detector.n_dom_per_str_np[0]]))))
-
-    if n_dom_snap is None:
-        n_dom_snap = auto_n_dom_snap(curv_max, mean_dz)
-    if n_closest is None:
-        n_closest = 2 if curv_max < mean_dz * 0.5 else 3
 
     n_cand = n_closest * n_dom_snap
 

@@ -27,14 +27,10 @@ class DetectorGeometry(NamedTuple):
     @staticmethod
     def from_config(json_filename: str,
                     temperature: float = 0.2,
-                    max_sensors_per_cell: int = 4,
+                    max_candidates_per_ray: int = 4,
                     detector_type: str = 'Cylinder',
                     **grid_params) -> 'DetectorGeometry':
         """Build a DetectorGeometry from a config JSON file.
-
-        This does everything the old inline code in ``setup_event_simulator``
-        did: load config, create detector, build propagator, derive speed of
-        light from the medium.
 
         Parameters
         ----------
@@ -42,16 +38,13 @@ class DetectorGeometry(NamedTuple):
             Path to detector geometry JSON.
         temperature : float or None
             Soft-assignment temperature for propagation. None uses step function.
-        max_sensors_per_cell : int
-            Grid cell sensor limit.
+        max_candidates_per_ray : int
+            Sensor candidates checked per ray per K step. Interpreted as
+            max_sensors_per_cell for tanks, n_closest*2 for strings.
         detector_type : str
-            'Cylinder', 'Sphere', or 'Box'.
+            'Cylinder', 'Sphere', 'Box', or 'String'.
         **grid_params
             Geometry-specific grid parameters forwarded to ``create_propagator()``.
-            Cylinder: n_cap, n_angular, n_height.
-            Sphere: n_divisions.
-            Box: n_x, n_y, n_z.
-            If not provided, auto-derived from detector geometry.
         """
         # Normalize casing
         dt_key = detector_type.lower()
@@ -73,12 +66,13 @@ class DetectorGeometry(NamedTuple):
         if isinstance(detector, StringTelescope):
             from lucid.propagation.string.string_propagator import create_string_propagator
             propagator = create_string_propagator(
-                detector, sensor_radius, temperature=temperature)
+                detector, sensor_radius, temperature=temperature,
+                n_closest=max_candidates_per_ray // 2)
         else:
             propagator = create_shared_propagator(
                 detector, sensor_points, sensor_radius,
                 temperature=temperature,
-                max_sensors_per_cell=max_sensors_per_cell,
+                max_sensors_per_cell=max_candidates_per_ray,
                 **grid_params)
 
         return DetectorGeometry(
