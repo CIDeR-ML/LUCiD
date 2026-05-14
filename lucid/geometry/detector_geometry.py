@@ -56,8 +56,12 @@ class DetectorGeometry(NamedTuple):
         material = get_material_from_config(json_filename)
         medium = make_medium(material)
 
-        # Geometry
+        # Geometry — detector_type comes from the JSON, not the parameter
         detector = generate_detector(json_filename)
+        import json as _json
+        with open(json_filename) as _f:
+            _cfg = _json.load(_f)
+        actual_type = _cfg.get('detector_type', detector_type)
         sensor_points = jnp.array(detector.all_points)
         sensor_radius = detector.S_radius
         num_sensors = len(sensor_points)
@@ -76,7 +80,7 @@ class DetectorGeometry(NamedTuple):
                 **grid_params)
 
         return DetectorGeometry(
-            detector_type=detector_type,
+            detector_type=actual_type,
             sensor_points=sensor_points,
             sensor_radius=sensor_radius,
             num_sensors=num_sensors,

@@ -478,7 +478,9 @@ def setup_event_simulator(
             if is_volume:
                 # ── Volume model: per-DOM survival, no reflection ──
                 from lucid.simulation.photon_step_volume import photon_step_volume
-                seg_lengths = jnp.linalg.norm(hit_positions - state.positions, axis=1)
+                seg_lengths = prop_results.get(
+                    'envelope_exit_t',
+                    jnp.linalg.norm(hit_positions - state.positions, axis=1))
                 seg_lengths = jnp.maximum(seg_lengths, 1.0)
 
                 (new_positions, new_directions, new_times,

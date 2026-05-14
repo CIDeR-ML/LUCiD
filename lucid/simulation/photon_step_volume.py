@@ -65,17 +65,16 @@ def photon_step_volume(
     """
     k1, k2 = jax.random.split(rng_key)
 
-    # Per-DOM reach probability: exp(-dist_j / λ_scat)
-    # Clamp negative distances to 0 (DOM behind the photon)
+    # Per-DOM reach: probability of traveling distance d without scattering
+    # OR being absorbed. Both kill the straight-line path to the DOM.
     safe_distances = jnp.maximum(per_dom_distances, 0.0)
-    per_dom_reach = jnp.exp(-safe_distances / scatter_length)
+    lambda_total = 1.0 / (1.0 / scatter_length + 1.0 / absorption_length)
+    per_dom_reach = jnp.exp(-safe_distances / lambda_total)
 
     # Per-DOM detection weight: overlap × reach
     per_dom_charges = per_dom_overlaps * per_dom_reach
 
-    # Total detection probability (summed over all DOMs this step)
     total_detected = jnp.sum(per_dom_charges)
-    total_detected = jnp.minimum(total_detected, 1.0)
 
     # Scatter: sample how far the photon goes before scattering
     scatter_distance = sample_scatter_distance(segment_length, scatter_length, k1)

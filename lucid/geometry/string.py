@@ -94,9 +94,12 @@ class StringTelescope(Detector):
                 all_positions.append(pos.copy())
                 global_id += 1
             if n > 0:
-                valid_s = self.dom_s_offsets[i, :n]
-                self.string_s_min[i] = valid_s.min()
-                self.string_s_max[i] = valid_s.max()
+                # Sort DOMs by arc-length so bracket-finding snap works
+                sort_idx = np.argsort(self.dom_s_offsets[i, :n])
+                self.dom_s_offsets[i, :n] = self.dom_s_offsets[i, :n][sort_idx]
+                self.dom_global_ids[i, :n] = self.dom_global_ids[i, :n][sort_idx]
+                self.string_s_min[i] = self.dom_s_offsets[i, 0]
+                self.string_s_max[i] = self.dom_s_offsets[i, n - 1]
 
         self._all_positions = np.array(all_positions)
 

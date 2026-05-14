@@ -44,6 +44,7 @@ def create_string_propagator(
         Same output contract as shared.create_propagator.
     """
     n_dom_snap = 2  # bracket pair — always sufficient for straight strings
+    n_closest = min(n_closest, detector.n_str)  # guard for small test geometries
     tables = detector.get_jax_tables()
     string_anchors = tables['string_anchors']
     string_axes = tables['string_axes']
@@ -207,6 +208,11 @@ def create_string_propagator(
         t_barrel = jnp.where(disc_env > 0, (-b_env + sqrt_disc) / (2 * a_env), 1e10)
         t_top = jnp.where(jnp.abs(dz) > 1e-20, (env_z_max - oz) / dz, 1e10)
         t_bot = jnp.where(jnp.abs(dz) > 1e-20, (env_z_min - oz) / dz, 1e10)
+        # Cap hits must be within the barrel radius
+        cap_top_pt = photon_origins + t_top[:, None] * photon_directions
+        cap_bot_pt = photon_origins + t_bot[:, None] * photon_directions
+        t_top = jnp.where(cap_top_pt[:, 0]**2 + cap_top_pt[:, 1]**2 <= env_r_sq, t_top, 1e10)
+        t_bot = jnp.where(cap_bot_pt[:, 0]**2 + cap_bot_pt[:, 1]**2 <= env_r_sq, t_bot, 1e10)
         t_env = jnp.minimum(jnp.minimum(
             jnp.where(t_barrel > 0, t_barrel, 1e10),
             jnp.where(t_top > 0, t_top, 1e10)),
@@ -229,6 +235,7 @@ def create_string_propagator(
             'inside_sensor': has_weight.T,                         # (n_cand, n_rays)
             'per_sensor_positions': closest_pts.transpose(1, 0, 2),  # (n_cand, n_rays, 3)
             'sensor_normals': sensor_normals.transpose(1, 0, 2),     # (n_cand, n_rays, 3)
+            'envelope_exit_t': t_env,                              # (n_rays,)
         }
 
         if single:
