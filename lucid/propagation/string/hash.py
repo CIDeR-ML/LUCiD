@@ -1,5 +1,5 @@
 """
-2D spatial hash for string positions.
+2D spatial hash for string positions (REFERENCE IMPLEMENTATION — superseded by fast.py).
 
 Bins string-telescope strings into a regular xy grid so that the DDA
 traversal kernel can efficiently retrieve candidate strings per cell.

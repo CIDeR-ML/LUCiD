@@ -267,10 +267,10 @@ def calculate_linear_index_base(indices, grid_dims, index_map):
 
 
 @partial(jax.jit, static_argnums=(2,))
-def find_closest_sensors(grid_centers, sensor_positions, max_sensors_per_cell):
+def find_closest_sensors(grid_centers, sensor_positions, max_candidates_per_ray):
     """Find closest sensors to each grid cell center"""
     squared_distances = jnp.sum(
         (grid_centers[:, None, :] - sensor_positions[None, :, :]) ** 2,
         axis=2
     )
-    return jax.lax.top_k(-squared_distances, max_sensors_per_cell)[1]
+    return jax.lax.top_k(-squared_distances, max_candidates_per_ray)[1]

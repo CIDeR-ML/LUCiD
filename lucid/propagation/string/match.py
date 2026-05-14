@@ -1,5 +1,5 @@
 """
-Per-segment string matcher.
+Per-segment string matcher (REFERENCE IMPLEMENTATION — superseded by fast.py).
 
 Chains the DDA traversal, spatial-hash gather, distance filter, and DOM
 snap into a single JIT'd function that produces candidate DOM IDs for

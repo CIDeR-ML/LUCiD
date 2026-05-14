@@ -1,5 +1,5 @@
 """
-Core math kernels for string-telescope photon propagation.
+Core math kernels for string-telescope photon propagation (REFERENCE — superseded by fast.py).
 
 Provides JIT-compatible functions for:
   1. Skew-line distance from a photon ray to a string axis

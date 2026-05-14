@@ -1,5 +1,5 @@
 """
-2D Amanatides-Woo DDA (Digital Differential Analyzer) traversal kernel.
+2D Amanatides-Woo DDA traversal kernel (REFERENCE IMPLEMENTATION — superseded by fast.py).
 
 Given a 2D ray (origin_xy, direction_xy) and a regular grid, produces
 a fixed-length list of cell indices traversed by the ray, up to a

@@ -1,10 +1,10 @@
 """
-Batch SIREN track simulation: 20 events, 1M photons each, GPU.
+Batch cascade simulation: 20 events at various energies in IceCube-86.
 
-Uses the fast string simulator (brute-force + lax.scan) for ~18× speedup
-over the old DDA/hash pipeline.
+Generates EM and hadronic cascades at random positions/directions,
+simulates with the fast string simulator, saves output for the viewer.
 
-Run: python string/batch_siren_tracks.py
+Run: python string/batch_cascades.py
 """
 
 import sys
@@ -19,54 +19,30 @@ import numpy as np
 
 from lucid.geometry.string import StringTelescope
 from lucid.propagation.string.fast import create_fast_string_simulator
-from lucid.siren.core import create_photonsim_siren_grid
-from lucid.siren.training.inference import SIRENPredictor
-from lucid.sources.siren_rays import photonsim_differentiable_get_rays
-from lucid.utils import base_dir_path
+from lucid.sources.cascade import generate_cascade_photons
 
 CONFIG_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "config")
 SIMPLE_NPZ = os.path.join(CONFIG_DIR, "icecube86_simple.npz")
-OUTPUT_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "output", "siren_tracks")
+OUTPUT_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "output", "cascades")
 
-F = 30
 N_PHOTONS = 1_000_000
-K = 15
+K = 20
 TEMPERATURE = 0.2
 N_EVENTS = 20
-SIREN_ENERGY = 2000.0  # MeV
 SPEED = 0.2254
+N_MEDIUM = 1.33
 
-
-def generate_siren_track_photons(track_origin, track_direction, n_photons, key,
-                                  grid_data, model_params):
-    ray_vectors, ray_origins, photon_weights = photonsim_differentiable_get_rays(
-        track_origin, track_direction, SIREN_ENERGY, n_photons,
-        grid_data, model_params, key,
-    )
-    offsets = ray_origins - track_origin[None, :]
-    ray_origins_scaled = track_origin[None, :] + F * offsets
-    photon_weights_scaled = photon_weights * F
-    return ray_vectors, ray_origins_scaled, photon_weights_scaled
+ENERGIES_GEV = [10, 30, 100, 300, 1000, 3000, 10000, 30000, 100000]
 
 
 def main():
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-    print(f"Loading detector and SIREN...")
     det = StringTelescope.from_npz(SIMPLE_NPZ)
-
     sim = create_fast_string_simulator(
         det, det.S_radius, temperature=TEMPERATURE,
-        lambda_abs=100.0, lambda_scat=30.0,
-        speed_of_light=SPEED)
+        lambda_abs=100.0, lambda_scat=30.0, speed_of_light=SPEED)
 
-    data_dir = os.path.join(base_dir_path(), 'data', 'water', 'muon')
-    model_path = os.path.join(data_dir, 'siren_training', 'trained_model', 'photonsim_siren')
-    predictor = SIRENPredictor(model_path)
-    grid_data = create_photonsim_siren_grid(predictor)
-    model_params = predictor.params
-
-    # Save detector geometry for the viewer
     det_info = {
         'string_anchors': det.string_anchors.tolist(),
         'string_tops': det.string_tops.tolist(),
@@ -82,32 +58,38 @@ def main():
     with open(os.path.join(OUTPUT_DIR, 'detector.json'), 'w') as f:
         json.dump(det_info, f)
 
-    print(f"\nSimulating {N_EVENTS} events: {N_PHOTONS:,} photons, K={K}, F={F}")
+    z_mid = (det.envelope_z_min + det.envelope_z_max) / 2
+
+    print(f"Simulating {N_EVENTS} cascade events: {N_PHOTONS:,} photons, K={K}")
     print(f"Backend: {jax.default_backend()}")
     print(f"{'='*70}")
 
     all_events = []
     event_times = []
-    z_mid = (det.envelope_z_min + det.envelope_z_max) / 2
 
     for ev in range(N_EVENTS):
         t0 = time.perf_counter()
 
-        key = jax.random.PRNGKey(ev * 1000 + 42)
-        key, k1, k2, gen_key, sim_key = jax.random.split(key, 5)
+        key = jax.random.PRNGKey(ev * 1000 + 7)
+        key, k1, k2, k3, gen_key, sim_key = jax.random.split(key, 6)
 
-        origin_offset = jax.random.uniform(k1, (3,), minval=-50.0, maxval=50.0)
-        origin_offset = origin_offset.at[2].set(origin_offset[2] * 5)
-        track_origin = jnp.array([0.0, 0.0, z_mid]) + origin_offset
+        energy_gev = ENERGIES_GEV[ev % len(ENERGIES_GEV)]
+        energy_mev = energy_gev * 1000.0
+        is_hadronic = (ev % 3 == 2)
+
+        offset = jax.random.uniform(k1, (3,), minval=-80.0, maxval=80.0)
+        offset = offset.at[2].set(offset[2] * 4)
+        vertex = jnp.array([0.0, 0.0, z_mid]) + offset
 
         dir_raw = jax.random.normal(k2, (3,))
-        track_direction = dir_raw / (jnp.linalg.norm(dir_raw) + 1e-10)
+        direction = dir_raw / (jnp.linalg.norm(dir_raw) + 1e-10)
 
-        ray_vectors, ray_origins, photon_weights = generate_siren_track_photons(
-            track_origin, track_direction, N_PHOTONS, gen_key, grid_data, model_params)
+        origins, dirs, weights = generate_cascade_photons(
+            vertex, direction, energy_mev, N_PHOTONS, gen_key,
+            n_medium=N_MEDIUM, is_hadronic=is_hadronic)
 
         dom_charges, dom_time_weighted = sim(
-            ray_origins, ray_vectors, photon_weights, K, sim_key)
+            origins, dirs, weights, K, sim_key)
         jax.block_until_ready(dom_charges)
 
         elapsed = time.perf_counter() - t0
@@ -119,8 +101,8 @@ def main():
         dom_times_np = np.where(hit_mask, time_weighted_np / (charges_np + 1e-30), 0.0)
 
         np.savez(os.path.join(OUTPUT_DIR, f'event_{ev:03d}.npz'),
-                 track_origin=np.array(track_origin),
-                 track_direction=np.array(track_direction),
+                 vertex=np.array(vertex),
+                 direction=np.array(direction),
                  dom_charges=charges_np,
                  dom_times=dom_times_np,
                  hit_mask=hit_mask)
@@ -130,8 +112,10 @@ def main():
         hit_times = dom_times_np[hit_mask].tolist()
         all_events.append({
             'event_idx': ev,
-            'track_origin': np.array(track_origin).tolist(),
-            'track_direction': np.array(track_direction).tolist(),
+            'vertex': np.array(vertex).tolist(),
+            'direction': np.array(direction).tolist(),
+            'energy_gev': energy_gev,
+            'is_hadronic': bool(is_hadronic),
             'n_doms_hit': int(hit_mask.sum()),
             'total_charge': float(charges_np.sum()),
             'hit_dom_ids': hit_ids,
@@ -140,7 +124,8 @@ def main():
         })
 
         tag = " (JIT)" if ev == 0 else ""
-        print(f"  Event {ev:2d}: {int(hit_mask.sum()):4d} DOMs, "
+        kind = "had" if is_hadronic else " em"
+        print(f"  Event {ev:2d} [{kind} {energy_gev:6d} GeV]: {int(hit_mask.sum()):4d} DOMs, "
               f"Q={charges_np.sum():10.0f}, {elapsed:.1f}s{tag}")
 
     with open(os.path.join(OUTPUT_DIR, 'events.json'), 'w') as f:

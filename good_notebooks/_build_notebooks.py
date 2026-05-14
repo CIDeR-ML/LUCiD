@@ -122,7 +122,7 @@ data_sim = setup_event_simulator(
 
 pred_sim = setup_event_simulator(
     DEFAULT_JSON_FILENAME, NPHOT_PRED, 0.10,
-    max_sensors_per_cell=4, K=K_PRED,
+    max_candidates_per_ray=4, K=K_PRED,
     is_data=False, hit_mode='per_photon',
     wavelength_mode=WAVELENGTH_MODE,
     physics_config=PHYSICS_CONFIG, default_detector_params=True)
@@ -478,7 +478,7 @@ data_sim = setup_event_simulator(
     physics_config=PHYSICS_CONFIG, default_detector_params=True)
 pred_sim = setup_event_simulator(
     DEFAULT_JSON_FILENAME, NPHOT_PRED, 0.10,
-    max_sensors_per_cell=4, K=K_PRED,
+    max_candidates_per_ray=4, K=K_PRED,
     is_data=False, hit_mode='per_photon',
     wavelength_mode=WAVELENGTH_MODE,
     physics_config=PHYSICS_CONFIG, default_detector_params=True)

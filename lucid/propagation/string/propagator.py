@@ -1,13 +1,10 @@
 """
-String-telescope photon propagator factory.
+String-telescope photon propagator factory (REFERENCE IMPLEMENTATION).
 
-Parallel to ``lucid.propagation.shared.create_propagator`` but replaces
-the surface-grid → inverted-sensor-map path with the DDA → string-match
-volumetric path.
+Superseded by ``fast.py`` which is ~20x faster. This module is kept for
+validation and as a reference for the DDA + hash + match pipeline.
 
-Produces a JIT-compiled ``propagate_photons(origins, directions)`` that
-returns the same output dict shape as the shared propagator, so the
-existing photon_step / simulator code works unchanged.
+Use ``create_fast_string_simulator`` from ``fast.py`` for production.
 """
 
 import jax

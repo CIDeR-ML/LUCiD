@@ -40,7 +40,7 @@ class DetectorGeometry(NamedTuple):
             Soft-assignment temperature for propagation. None uses step function.
         max_candidates_per_ray : int
             Sensor candidates checked per ray per K step. Interpreted as
-            max_sensors_per_cell for tanks, n_closest*2 for strings.
+            max_candidates_per_ray for tanks, n_closest*2 for strings.
         detector_type : str
             'Cylinder', 'Sphere', 'Box', or 'String'.
         **grid_params
@@ -72,7 +72,7 @@ class DetectorGeometry(NamedTuple):
             propagator = create_shared_propagator(
                 detector, sensor_points, sensor_radius,
                 temperature=temperature,
-                max_sensors_per_cell=max_candidates_per_ray,
+                max_candidates_per_ray=max_candidates_per_ray,
                 **grid_params)
 
         return DetectorGeometry(

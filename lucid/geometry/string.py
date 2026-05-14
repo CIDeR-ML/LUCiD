@@ -177,22 +177,22 @@ class StringTelescope(Detector):
     # ── Phase 9 abstract methods (not used — string propagator bypasses) ──
 
     def intersect_ray(self, origins, directions):
-        raise NotImplementedError("StringTelescope uses create_string_propagator, not create_propagator")
+        raise NotImplementedError("StringTelescope uses create_fast_string_simulator, not create_propagator")
 
     def compute_normal(self, point, surface_info):
-        raise NotImplementedError("StringTelescope uses create_string_propagator, not create_propagator")
+        raise NotImplementedError("StringTelescope uses create_fast_string_simulator, not create_propagator")
 
     def point_to_grid_cell(self, grid_info):
-        raise NotImplementedError("StringTelescope uses create_string_propagator, not create_propagator")
+        raise NotImplementedError("StringTelescope uses create_fast_string_simulator, not create_propagator")
 
     def assign_sensor_to_cells(self, sensors, sensor_radius):
-        raise NotImplementedError("StringTelescope uses create_string_propagator, not create_propagator")
+        raise NotImplementedError("StringTelescope uses create_fast_string_simulator, not create_propagator")
 
     def grid_cell_centers(self):
-        raise NotImplementedError("StringTelescope uses create_string_propagator, not create_propagator")
+        raise NotImplementedError("StringTelescope uses create_fast_string_simulator, not create_propagator")
 
     def total_grid_cells(self):
-        raise NotImplementedError("StringTelescope uses create_string_propagator, not create_propagator")
+        raise NotImplementedError("StringTelescope uses create_fast_string_simulator, not create_propagator")
 
     def visualize_geometry_wireframe(self, show_sensors=True, show_strings=True,
                                      show_envelope=True, dom_size=2,

@@ -141,7 +141,7 @@ if os.path.exists(GEOM_CONFIG):
     # Time propagator CREATION (includes grid building)
     start = time.perf_counter()
     prop = create_photon_propagator(sp, det.S_radius, r=det.r, h=det.H,
-                                    temperature=0.2, max_sensors_per_cell=4)
+                                    temperature=0.2, max_candidates_per_ray=4)
     create_time = time.perf_counter() - start
     timings["propagator_creation"] = {"mean_ms": round(create_time * 1000, 1), "std_ms": 0}
     print(f"  propagator_creation: {create_time*1000:.1f} ms (single run)")

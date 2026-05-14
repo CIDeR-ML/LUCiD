@@ -50,7 +50,7 @@ def setup_event_simulator(
         K=7,
         is_data=False,
         is_calibration=False,
-        max_sensors_per_cell=None,
+        max_candidates_per_ray=4,
         detector_type='Cylinder',
         use_expected_value=True,
         particle='muon',
@@ -81,8 +81,8 @@ def setup_event_simulator(
         ROOT-file data mode.
     is_calibration : bool
         Calibration mode (source passed at call time).
-    max_sensors_per_cell : int
-        Grid cell sensor limit.
+    max_candidates_per_ray : int
+        Maximum sensor candidates checked per ray per K step.
     detector_type : str
         'Cylinder', 'Sphere', or 'Box'.
     use_expected_value : bool
@@ -168,12 +168,9 @@ def setup_event_simulator(
     from lucid.geometry.detector_geometry import DetectorGeometry
     from lucid.simulation.config import SimConfig
 
-    # Resolve max_candidates_per_ray: explicit kwarg overrides SimConfig default
-    _mcpr = max_sensors_per_cell if max_sensors_per_cell is not None else 4
-
     det_geom = DetectorGeometry.from_config(
         json_filename, temperature=temperature,
-        max_candidates_per_ray=_mcpr,
+        max_candidates_per_ray=max_candidates_per_ray,
         detector_type=detector_type,
         **grid_params)
 
@@ -183,7 +180,7 @@ def setup_event_simulator(
         use_expected_value=use_expected_value,
         apply_smearing=apply_smearing,
         n_grad_iters=n_grad_iters,
-        max_candidates_per_ray=_mcpr)
+        max_candidates_per_ray=max_candidates_per_ray)
 
     # ---- Extract fields from containers ------------------------------------
     material = det_geom.medium.material
@@ -567,7 +564,7 @@ def setup_event_simulator(
         flat_times = all_times.reshape(-1)
 
         # Tile per-photon QE to match flat shape.
-        # all_weights shape: (K, max_sensors_per_cell, n_rays), C-order reshape
+        # all_weights shape: (K, max_candidates_per_ray, n_rays), C-order reshape
         # → photon index is i % n_rays
         photon_idx = jnp.arange(flat_weights.shape[0]) % n_rays
         flat_qe = qe_per_photon[photon_idx]

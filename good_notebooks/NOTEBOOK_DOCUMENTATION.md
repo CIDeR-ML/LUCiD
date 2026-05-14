@@ -45,7 +45,7 @@ from lucid.optimization.run import load_config
 ```python
 prediction_simulator = setup_event_simulator(
     default_json_filename, Nphot=50_000, TEMPERATURE=0.10,
-    max_sensors_per_cell=4, K=config['basic_config']['k'], is_data=False,
+    max_candidates_per_ray=4, K=config['basic_config']['k'], is_data=False,
     physics_config=PHYSICS_CONFIG, default_detector_params=True
 )
 data_simulator = setup_event_simulator(
