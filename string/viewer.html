@@ -210,13 +210,18 @@ function showEvent(idx){
 
   const norms=computeNorm(hits);
   const vt=hits.map(h=>h.t).filter(t=>isFinite(t));
-  // Use p1/p99 to avoid long tails stretching the animation
-  if(vt.length>10){
-    const st=[...vt].sort((a,b)=>a-b);
-    tMin=st[Math.floor(st.length*0.01)];
-    tMax=st[Math.floor(st.length*0.99)];
+  // Charge-weighted p1/p99: animation range tracks where the SIGNAL is,
+  // not where dim ghost DOMs trickle in
+  if(hits.length>10){
+    const paired=hits.map(h=>({t:h.t,q:h.q})).sort((a,b)=>a.t-b.t);
+    const totalQ=paired.reduce((s,h)=>s+h.q,0);
+    let cumQ=0;
+    let t01=paired[0].t, t99=paired[paired.length-1].t;
+    for(const h of paired){cumQ+=h.q;if(cumQ>=totalQ*0.01&&t01===paired[0].t)t01=h.t;if(cumQ>=totalQ*0.99){t99=h.t;break;}}
+    tMin=t01; tMax=t99;
   } else {
-    tMin=vt.length?Math.min(...vt):0;tMax=vt.length?Math.max(...vt):1000;
+    tMin=hits.length?Math.min(...hits.map(h=>h.t)):0;
+    tMax=hits.length?Math.max(...hits.map(h=>h.t)):1000;
   }
 
   const n=hits.length,pos=new Float32Array(n*3),qN=new Float32Array(n),hQ=new Float32Array(n);
