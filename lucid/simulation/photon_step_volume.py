@@ -7,14 +7,18 @@ gets its own reach probability based on its distance from the photon origin.
 No reflection — photons either scatter in the medium, are absorbed, or
 are detected by a DOM. The detection weight per DOM is:
 
-    charge_j = overlap(d_j) × exp(-dist_j / λ_scat) × intensity × survival
+    charge_j = overlap(d_perp_j) × exp(-d_j / λ_scat) × exp(-d_j / λ_abs)
+
+where exp(-d/λ_scat) is the probability of remaining on the ray (STE soft
+weight, not a hard gate on scatter_dist), and exp(-d/λ_abs) is the weight
+attenuation from absorption. These are kept separate for clarity and to
+support independent wavelength dependence.
 
 The continuing factor is:
 
-    continuing = (1 - Σ_j overlap_j × reach_j) × exp(-scatter_dist / λ_abs)
+    continuing = (1 - Σ_j charge_j) × exp(-scatter_dist / λ_abs)
 
-This is fully differentiable — no STE branching needed since there is no
-wall/surface to "reach or scatter before."
+Weight budget: deposited + continuing ≤ 1 (difference is absorbed).
 """
 
 import jax
