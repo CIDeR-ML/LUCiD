@@ -51,7 +51,7 @@ def setup_event_simulator(
         K=7,
         is_data=False,
         is_calibration=False,
-        max_sensors_per_cell=4,
+        max_candidates_per_ray=4,
         detector_type='Cylinder',
         use_expected_value=True,
         particle='muon',
@@ -82,7 +82,7 @@ def setup_event_simulator(
         ROOT-file data mode.
     is_calibration : bool
         Calibration mode (source passed at call time).
-    max_sensors_per_cell : int
+    max_candidates_per_ray : int
         Grid cell sensor limit.
     detector_type : str
         'Cylinder', 'Sphere', or 'Box'.
@@ -187,7 +187,7 @@ def setup_event_simulator(
 
     det_geom = DetectorGeometry.from_config(
         json_filename, temperature=temperature,
-        max_sensors_per_cell=max_sensors_per_cell,
+        max_candidates_per_ray=max_candidates_per_ray,
         detector_type=detector_type,
         **grid_params)
 
@@ -436,7 +436,7 @@ def setup_event_simulator(
     # ================================================================
 
     @partial(jax.jit, static_argnames=(
-        'n_rays', 'K', 'n_grad_iters', 'max_sensors_per_cell', 'num_sensors',
+        'n_rays', 'K', 'n_grad_iters', 'max_candidates_per_ray', 'num_sensors',
         'propagate_fn', 'photon_update_fn', 'pos_grad_threshold', 'make_hits_fn',
         'n_segments'))
     def _common_propagation(
@@ -444,7 +444,7 @@ def setup_event_simulator(
             scatter_lengths, absorption_lengths,
             qe_per_photon,
             n_rays, detector_params, key,
-            num_sensors, K, n_grad_iters, max_sensors_per_cell,
+            num_sensors, K, n_grad_iters, max_candidates_per_ray,
             propagate_fn, photon_update_fn,
             pos_grad_threshold, make_hits_fn,
             segment_idx=None, n_segments=0):
@@ -509,7 +509,7 @@ def setup_event_simulator(
             prop_results = propagate_fn(safe_positions, safe_directions)
             depositions = prop_results['sensor_weights']
             sensor_indices = prop_results['sensor_indices']
-            hit_times_meters = prop_results['times']
+            sensor_distances = prop_results['sensor_distances']
             hit_positions = prop_results['positions']
             normals = prop_results['normals']
             inside_sensor = prop_results['inside_sensor']
@@ -542,8 +542,8 @@ def setup_event_simulator(
             physical_intensities = intensities * state.survival
             detected_factors = detect_probs * reflection_attenuations
             updated_weights = depositions * physical_intensities[None, :] * detected_factors[None, :]
-            times_ns = hit_times_meters / SPEED_OF_LIGHT_MATERIAL
-            total_times = times_ns + state.times[:, None]
+            sensor_times_ns = sensor_distances / SPEED_OF_LIGHT_MATERIAL
+            total_times = sensor_times_ns + state.times[:, None]
 
             iter_weights = updated_weights
             iter_indices = sensor_indices
@@ -584,7 +584,7 @@ def setup_event_simulator(
         flat_times = all_times.reshape(-1)
 
         # Tile per-photon QE to match flat shape.
-        # all_weights shape: (K, max_sensors_per_cell, n_rays), C-order reshape
+        # all_weights shape: (K, max_candidates_per_ray, n_rays), C-order reshape
         # → photon index is i % n_rays
         photon_idx = jnp.arange(flat_weights.shape[0]) % n_rays
         flat_qe = qe_per_photon[photon_idx]
@@ -684,7 +684,7 @@ def setup_event_simulator(
             final_origins, final_directions, photon_intensities, photon_times,
             scatter_lengths, absorption_lengths,
             qe_per_photon,
-            n_rays, detector_params, key, NUM_SENSORS, sim_config.K, sim_config.effective_n_grad_iters, max_sensors_per_cell,
+            n_rays, detector_params, key, NUM_SENSORS, sim_config.K, sim_config.effective_n_grad_iters, max_candidates_per_ray,
             propagate_photons, photon_update_fn,
             pos_grad_threshold=_pgt, make_hits_fn=_make_hits_fn,
             segment_idx=segment_idx, n_segments=n_segments)
@@ -744,7 +744,7 @@ def setup_event_simulator(
             photon_origins, photon_directions, photon_intensities, photon_times + t0,
             scatter_lengths, absorption_lengths,
             qe_per_photon,
-            Nphot, detector_params, key, NUM_SENSORS, sim_config.K, sim_config.effective_n_grad_iters, max_sensors_per_cell,
+            Nphot, detector_params, key, NUM_SENSORS, sim_config.K, sim_config.effective_n_grad_iters, max_candidates_per_ray,
             propagate_photons, photon_update_fn,
             pos_grad_threshold=_pgt, make_hits_fn=_make_hits_fn)
 
@@ -773,7 +773,7 @@ def setup_event_simulator(
             photon_origins, photon_directions, photon_intensities, photon_times,
             scatter_lengths, absorption_lengths,
             qe_per_photon,
-            Nphot, detector_params, key, NUM_SENSORS, sim_config.K, sim_config.effective_n_grad_iters, max_sensors_per_cell,
+            Nphot, detector_params, key, NUM_SENSORS, sim_config.K, sim_config.effective_n_grad_iters, max_candidates_per_ray,
             propagate_photons, photon_update_fn,
             pos_grad_threshold=_pgt, make_hits_fn=_make_hits_fn)
 

@@ -26,7 +26,7 @@ class DetectorGeometry(NamedTuple):
     @staticmethod
     def from_config(json_filename: str,
                     temperature: float = 0.2,
-                    max_sensors_per_cell: int = 4,
+                    max_candidates_per_ray: int = 4,
                     detector_type: str = 'Cylinder',
                     **grid_params) -> 'DetectorGeometry':
         """Build a DetectorGeometry from a config JSON file.
@@ -41,7 +41,7 @@ class DetectorGeometry(NamedTuple):
             Path to detector geometry JSON.
         temperature : float or None
             Soft-assignment temperature for propagation. None uses step function.
-        max_sensors_per_cell : int
+        max_candidates_per_ray : int
             Grid cell sensor limit.
         detector_type : str
             'Cylinder', 'Sphere', or 'Box'.
@@ -71,7 +71,7 @@ class DetectorGeometry(NamedTuple):
         propagator = create_shared_propagator(
             detector, sensor_points, sensor_radius,
             temperature=temperature,
-            max_sensors_per_cell=max_sensors_per_cell,
+            max_candidates_per_ray=max_candidates_per_ray,
             **grid_params)
 
         return DetectorGeometry(

@@ -107,7 +107,7 @@ class TestFullPipelineGradients:
             weights = depositions * detect_probs[None, :] * refl_attens[None, :]
             flat_w = weights.reshape(-1)
             flat_i = result['sensor_indices'].reshape(-1)
-            flat_t = (result['times'] / 0.2253).reshape(-1)
+            flat_t = (result['sensor_distances'] / 0.2253).reshape(-1)
             qe_corr = jnp.ones(len(det.all_points))
             q, _ = make_hits_simulation(flat_w, flat_i, flat_t,
                                          len(det.all_points), qe=0.2,
@@ -129,7 +129,7 @@ class TestFullPipelineGradients:
             result = prop(origins, dirs)
             w = result['sensor_weights'].reshape(-1)
             i = result['sensor_indices'].reshape(-1)
-            t = (result['times'] / 0.2253).reshape(-1)
+            t = (result['sensor_distances'] / 0.2253).reshape(-1)
             qe_corr = jnp.ones(len(det.all_points))
             q, _ = make_hits_simulation(w, i, t, len(det.all_points),
                                          qe=qe, qe_corrections=qe_corr)

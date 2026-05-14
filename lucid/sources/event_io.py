@@ -485,7 +485,7 @@ def get_max_photons_per_particle(root_file_path, n_events=None):
 
 def generate_events_from_root(event_simulator, root_file_path, output_dir='events', n_events=None,
                             n_rings=1, pion_root_file_path=None,
-                            sensor_params=None, max_sensors_per_cell=4, batch_size=100):
+                            sensor_params=None, max_candidates_per_ray=4, batch_size=100):
     """
     Generate and save events from a ROOT file, with support for N rings of particles.
     Ring 1 (N=1) is always a muon, and additional rings (N>1) are pions.
@@ -508,7 +508,7 @@ def generate_events_from_root(event_simulator, root_file_path, output_dir='event
         Path to ROOT file for pions, required if n_rings > 1, by default None
     sensor_params : tuple, optional
         Sensor parameters tuple passed to event_simulator, by default None
-    max_sensors_per_cell : int, optional
+    max_candidates_per_ray : int, optional
         Maximum sensors per cell, by default 4
     batch_size : int, optional
         Number of events to accumulate before saving in parallel, by default 100
