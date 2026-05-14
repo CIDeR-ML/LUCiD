@@ -281,9 +281,10 @@ def create_fast_string_simulator(
             valid = cand_ids >= 0
             ov_weights = jnp.where(valid, ov_weights, 0.0)
 
-            reach = jnp.exp(-t_clamped / lambda_scat)
-            per_dom_charges = ov_weights * reach
-            total_detected = jnp.minimum(jnp.sum(per_dom_charges, axis=1), 1.0)
+            scatter_reach = jnp.exp(-t_clamped / lambda_scat)
+            absorb_weight = jnp.exp(-t_clamped / lambda_abs)
+            per_dom_charges = ov_weights * scatter_reach * absorb_weight
+            total_detected = jnp.sum(per_dom_charges, axis=1)
 
             seg_len = envelope_exit(safe_pos, safe_dir)
             u = jax.random.uniform(k_scatter, (n,))
