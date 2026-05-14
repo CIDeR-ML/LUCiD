@@ -210,14 +210,21 @@ function showEvent(idx){
 
   const norms=computeNorm(hits);
   const vt=hits.map(h=>h.t).filter(t=>isFinite(t));
-  tMin=vt.length?Math.min(...vt):0;tMax=vt.length?Math.max(...vt):1000;
+  // Use p1/p99 to avoid long tails stretching the animation
+  if(vt.length>10){
+    const st=[...vt].sort((a,b)=>a-b);
+    tMin=st[Math.floor(st.length*0.01)];
+    tMax=st[Math.floor(st.length*0.99)];
+  } else {
+    tMin=vt.length?Math.min(...vt):0;tMax=vt.length?Math.max(...vt):1000;
+  }
 
   const n=hits.length,pos=new Float32Array(n*3),qN=new Float32Array(n),hQ=new Float32Array(n);
   hits.forEach((h,i)=>{const p=det.dom_positions[h.id];
     pos[i*3]=p[0];pos[i*3+1]=p[1];pos[i*3+2]=p[2];
     qN[i]=norms[i];
-    // Normalized time: linear in real time
-    hQ[i]=(h.t-tMin)/(tMax-tMin+1e-10);});
+    // Normalized time: linear, clamped to [0,1] within p1-p99 range
+    hQ[i]=Math.max(0,Math.min(1,(h.t-tMin)/(tMax-tMin+1e-10)));});
 
   const geo=new THREE.BufferGeometry();
   geo.setAttribute('position',new THREE.BufferAttribute(pos,3));
