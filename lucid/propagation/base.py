@@ -238,12 +238,9 @@ def compute_sensor_intersections_base(sensor_idx, sensor_positions, sensor_radiu
     
     # Now use this combined condition
     distances = jnp.where(intersects_and_inside[:, None], t_intersect[:, None], t_closest)
-    points  = jnp.where(intersects_and_inside[:, None], intersection_points, closest)
-    normals = jnp.where(intersects_and_inside[:, None], normals_intersect, normals_closest)
+    points    = jnp.where(intersects_and_inside[:, None], intersection_points, closest)
+    normals   = jnp.where(intersects_and_inside[:, None], normals_intersect, normals_closest)
 
-    #return weights, distances, sensor_idx, normals, inside_sensor, points
-
-    # In principle we should not be using anything if intersects_and_inside is false, reflecting instead out of the detector surface.
     return weights, distances, sensor_idx, normals, intersects_and_inside, points
 
 

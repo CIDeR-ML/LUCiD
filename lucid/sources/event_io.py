@@ -755,6 +755,95 @@ def generate_events_from_root(event_simulator, root_file_path, output_dir='event
     return saved_files
 
 
+def generate_multi_folder_events(event_simulator, root_file_path, folder_names, events_per_folder,
+                               n_rings_list=None, pion_root_file_path=None,
+                               sensor_params=None, max_candidates_per_ray=4, batch_size=100):
+    """
+    Generate events across multiple folders, each with sequentially numbered events.
+
+    Parameters
+    ----------
+    root_file_path : str
+        Path to the ROOT file for muons
+    folder_names : list of str
+        List of folder names to create and populate with events
+    events_per_folder : int or list of int
+        Number of events to generate per folder. Can be a single int for all folders
+        or a list of ints matching the length of folder_names
+    n_rings_list : list of int, optional
+        Number of rings for each folder, by default None (1 ring for all folders)
+    pion_root_file_path : str, optional
+        Path to ROOT file for pions, required if n_rings > 1 in any folder, by default None
+    sensor_params : tuple, optional
+        Sensor parameters tuple passed to event_simulator, by default None
+    max_candidates_per_ray : int, optional
+        Maximum sensors per cell, by default 4
+    batch_size : int, optional
+        Number of events to accumulate before saving in parallel, by default 100
+
+    Returns
+    -------
+    dict
+        Dictionary mapping folder names to lists of saved file paths
+    """
+    import os
+
+    # Validate and normalize inputs
+    if isinstance(events_per_folder, int):
+        events_per_folder = [events_per_folder] * len(folder_names)
+    elif len(events_per_folder) != len(folder_names):
+        raise ValueError("If events_per_folder is a list, it must match the length of folder_names")
+
+    if n_rings_list is None:
+        n_rings_list = [1] * len(folder_names)
+    elif len(n_rings_list) != len(folder_names):
+        raise ValueError("If n_rings_list is provided, it must match the length of folder_names")
+
+    # Check if pion file is needed but not provided
+    if any(n_rings > 1 for n_rings in n_rings_list) and pion_root_file_path is None:
+        raise ValueError("pion_root_file_path is required when n_rings > 1 in any folder")
+
+    # Create base directory if it doesn't exist
+    base_dir = os.path.dirname(folder_names[0])
+    if base_dir and not os.path.exists(base_dir):
+        os.makedirs(base_dir, exist_ok=True)
+
+    # Generate events for each folder
+    results = {}
+    for folder_idx, folder_name in enumerate(folder_names):
+        n_events = events_per_folder[folder_idx]
+        n_rings = n_rings_list[folder_idx]
+
+        print(f"\n{'-'*80}")
+        print(f"Processing folder {folder_idx+1}/{len(folder_names)}: {folder_name}")
+        print(f"Generating {n_events} events with {n_rings} ring(s)")
+        print(f"{'-'*80}\n")
+
+        saved_files = generate_events_from_root(
+            event_simulator=event_simulator,
+            root_file_path=root_file_path,
+            output_dir=folder_name,
+            n_events=n_events,
+            n_rings=n_rings,
+            pion_root_file_path=pion_root_file_path,
+            sensor_params=sensor_params,
+            max_candidates_per_ray=max_candidates_per_ray,
+            batch_size=batch_size
+        )
+
+        results[folder_name] = saved_files
+
+    # Print summary
+    print("\nGeneration Summary:")
+    print("=" * 50)
+    total_events = sum(len(files) for files in results.values())
+    print(f"Total events generated: {total_events}")
+    for folder_name, files in results.items():
+        print(f"  - {folder_name}: {len(files)} events")
+
+    return results
+
+
 def read_photon_data_from_photonsim(root_file_path, entry_index):
     """
     Read photon data from a PhotonSim ROOT file for a specific entry.

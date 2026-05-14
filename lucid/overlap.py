@@ -233,7 +233,8 @@ def precompute_lookup(r: float,
     else:
         d_sparse_before = jnp.array([])
 
-    d_sparse_after = jnp.linspace(transition_end, d_max_factor * r, num_sparse // 2)[1:]
+    d_max = max(d_max_factor * r, r + 5 * sigma)
+    d_sparse_after = jnp.linspace(transition_end, d_max, num_sparse // 2)[1:]
 
     # Combine all regions
     d_values = jnp.concatenate((d_sparse_before, d_dense, d_sparse_after))
@@ -291,6 +292,17 @@ def create_overlap_prob(sigma: Optional[float],
     if sigma is None or sigma < 0.02 * r:
         def overlap_prob(d: float) -> float:
             return jnp.where(d < r, 1.0, 0.0)
+
+        return overlap_prob
+
+    # Point-source analytical limit for large sigma (disk << Gaussian width).
+    # Per-photon error < 3% for sigma >= 3r; mean (cross-section πr²) is exact.
+    if sigma >= 3.0 * r:
+        _coeff = r ** 2 / (2.0 * sigma ** 2)
+        _inv_2s2 = 1.0 / (2.0 * sigma ** 2)
+
+        def overlap_prob(d: float) -> float:
+            return _coeff * jnp.exp(-d ** 2 * _inv_2s2)
 
         return overlap_prob
 

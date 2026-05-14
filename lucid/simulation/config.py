@@ -35,6 +35,7 @@ class SimConfig(NamedTuple):
     apply_smearing: bool = True
     tts_sigma_ns: float = 2.5
     n_grad_iters: Optional[int] = None
+    max_candidates_per_ray: int = 4
 
     @property
     def effective_n_grad_iters(self) -> int:

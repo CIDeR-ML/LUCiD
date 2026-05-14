@@ -295,6 +295,58 @@ def isotropic_source(position, intensity=1_000_000, wavelength=None):
     )
 
 
+class CascadeSource(NamedTuple):
+    """Parametric Cherenkov cascade source -- callable JAX pytree.
+
+    Emits photons in a narrow Cherenkov cone from a point-like shower vertex.
+    Suitable for neutrino-telescope-scale events (1 GeV – 10 PeV).
+    """
+    position: jnp.ndarray       # (3,) vertex
+    direction: jnp.ndarray      # (3,) shower axis
+    energy_mev: jnp.ndarray     # scalar, cascade energy in MeV
+    intensity: jnp.ndarray      # scalar (= total Cherenkov photon yield)
+    n_medium: jnp.ndarray       # scalar, refractive index
+    is_hadronic: bool = False
+    wavelength: object = None
+
+    def __call__(self, n_photons, key, n_water=1.33):
+        from lucid.sources.cascade import generate_cascade_photons
+        origins, directions, weights = generate_cascade_photons(
+            self.position, self.direction, self.energy_mev,
+            n_photons, key, n_medium=self.n_medium,
+            is_hadronic=self.is_hadronic,
+        )
+        return directions, origins, weights
+
+
+def cascade_source(position, direction, energy_mev, n_medium=1.33,
+                   is_hadronic=False, wavelength=None):
+    """Create a CascadeSource for neutrino telescope simulations.
+
+    Parameters
+    ----------
+    position : (3,)     cascade vertex (meters)
+    direction : (3,)    shower axis (unit vector)
+    energy_mev : float  cascade energy in MeV (e.g., 1e8 for 100 TeV)
+    n_medium : float    refractive index (1.33 water, 1.32 ice)
+    is_hadronic : bool  True for hadronic cascade (broader angular spread)
+    wavelength : float or None
+        Source wavelength in nm for wavelength-dependent mode.
+    """
+    from lucid.sources.cascade import PHOTONS_PER_MEV
+    total_yield = PHOTONS_PER_MEV * energy_mev
+    wl = jnp.asarray(float(wavelength), dtype=jnp.float32) if wavelength is not None else None
+    return CascadeSource(
+        position=jnp.asarray(position, dtype=jnp.float32),
+        direction=jnp.asarray(direction, dtype=jnp.float32),
+        energy_mev=jnp.asarray(float(energy_mev), dtype=jnp.float32),
+        intensity=jnp.asarray(float(total_yield), dtype=jnp.float32),
+        n_medium=jnp.asarray(float(n_medium), dtype=jnp.float32),
+        is_hadronic=is_hadronic,
+        wavelength=wl,
+    )
+
+
 def laser_source(position, intensity=1_000_000, direction=None, fiber_NA=0.22,
                  wavelength=None):
     """Create a LaserSource with default direction (downward) and NA.
