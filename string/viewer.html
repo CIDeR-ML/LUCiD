@@ -34,7 +34,8 @@ input[type=range]{width:100%;accent-color:#4488cc;height:14px}
   <h3>IceCube-86</h3>
   <label>Dataset</label>
   <select id="dsSel">
-    <option value="../output/cascades/">Cascades</option>
+    <option value="../output/cascades_sim/">Cascades (simulator)</option>
+    <option value="../output/cascades/">Cascades (fast)</option>
     <option value="../output/siren_tracks/">Tracks (SIREN)</option>
   </select>
   <label>Event</label><select id="evSel"></select>
@@ -88,7 +89,7 @@ let initCP=null,initCT=null;
 let curHits=null;
 
 const C=0.2998,TLEN=300;
-let DIR='../output/cascades/';
+let DIR='../output/cascades_sim/';
 
 function inferno(t){t=Math.max(0,Math.min(1,t));
   const s=[[0,[2,1,10]],[.1,[30,5,55]],[.22,[75,10,95]],[.33,[120,20,95]],
