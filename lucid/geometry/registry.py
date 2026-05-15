@@ -11,11 +11,14 @@ Usage::
     cls = get_detector_class('cylinder')   # returns Cylinder
     cls = get_detector_class('Cylinder')   # also returns Cylinder (case-insensitive)
 """
+from __future__ import annotations
 
-_REGISTRY = {}
+from typing import Callable, List
+
+_REGISTRY: dict[str, type] = {}
 
 
-def register_detector(name):
+def register_detector(name: str) -> Callable[[type], type]:
     """Class decorator that registers a Detector subclass under ``name``.
 
     The name is stored in lowercase. Lookup via ``get_detector_class``
@@ -34,7 +37,7 @@ def register_detector(name):
     return decorator
 
 
-def get_detector_class(name):
+def get_detector_class(name: str) -> type:
     """Look up a registered detector class by name (case-insensitive).
 
     Parameters
@@ -60,6 +63,6 @@ def get_detector_class(name):
     return _REGISTRY[key]
 
 
-def list_detector_types():
+def list_detector_types() -> List[str]:
     """Return sorted list of registered detector type names."""
     return sorted(_REGISTRY.keys())

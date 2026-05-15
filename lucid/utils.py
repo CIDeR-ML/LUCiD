@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import h5py
 import numpy as np
 import jax.numpy as jnp
@@ -6,12 +8,17 @@ from glob import glob
 import os
 import json
 import sys
-from tqdm import tqdm 
+from typing import Any, Optional, TYPE_CHECKING
+from tqdm import tqdm
 
-def base_dir_path():
+if TYPE_CHECKING:
+    from lucid.detector_params import DetectorParams, ParticleParams
+
+def base_dir_path() -> str:
+    """Return the absolute path to the LUCiD project root directory."""
     return os.path.dirname(os.path.abspath(__file__))+'/../'
 
-def setup_matplotlib_for_notebook(force_notebook_mode=None):
+def setup_matplotlib_for_notebook(force_notebook_mode: bool | None = None) -> None:
     """
     Configure matplotlib for notebook display when running scripts from Jupyter.
     
@@ -69,7 +76,7 @@ def setup_matplotlib_for_notebook(force_notebook_mode=None):
         # Not in notebook, use default behavior
         pass
 
-def normalize_particle_type_for_path(particle_type):
+def normalize_particle_type_for_path(particle_type: str) -> str:
     """
     Normalize particle type string to match data directory structure.
 
@@ -103,7 +110,7 @@ def normalize_particle_type_for_path(particle_type):
         # Default to the input if not in map (for backward compatibility)
         return particle_type
 
-def get_refractive_index(material='water'):
+def get_refractive_index(material: str = 'water') -> float:
     """
     Get the refractive index for a given material.
 
@@ -144,7 +151,7 @@ def get_refractive_index(material='water'):
 
     return refractive_indices[material]
 
-def get_speed_of_light_in_material(material='water'):
+def get_speed_of_light_in_material(material: str = 'water') -> float:
     """
     Calculate the speed of light in a given material.
 
@@ -172,7 +179,7 @@ def get_speed_of_light_in_material(material='water'):
 
     return SPEED_OF_LIGHT_VACUUM / n
 
-def unpack_t0_params(particle_type='muon', material='water'):
+def unpack_t0_params(particle_type: str = 'muon', material: str = 'water') -> tuple[float, ...]:
     """
     Load and unpack t0 timing parameters for a given particle type and material.
 
@@ -203,7 +210,7 @@ def unpack_t0_params(particle_type='muon', material='water'):
         t0_params['delta_parameterization']['offset']
     )
 
-def unpack_photonsim_params(particle_type='muon', material='water'):
+def unpack_photonsim_params(particle_type: str = 'muon', material: str = 'water') -> dict:
     """
     Load and unpack photon simulation parameters for a given particle type and material.
 
@@ -246,7 +253,7 @@ def unpack_photonsim_params(particle_type='muon', material='water'):
         'siren_model_path': siren_model_path
     }
 
-def spherical_to_cartesian(theta, phi):
+def spherical_to_cartesian(theta: jax.Array, phi: jax.Array) -> jax.Array:
     """
     Convert spherical coordinates to Cartesian coordinates.
     
@@ -268,7 +275,7 @@ def spherical_to_cartesian(theta, phi):
     
     return jnp.array([x, y, z])
 
-def full_to_sparse(charges, times):
+def full_to_sparse(charges: jax.Array, times: jax.Array) -> tuple[jax.Array, jax.Array, jax.Array]:
     """Convert full arrays to sparse representation by removing zero elements.
 
     Parameters
@@ -293,7 +300,7 @@ def full_to_sparse(charges, times):
     return non_zero_indices, non_zero_charges, non_zero_times
 
 
-def sparse_to_full(sparse_indices, sparse_values, full_size):
+def sparse_to_full(sparse_indices: jax.Array, sparse_values: jax.Array, full_size: int) -> jax.Array:
     """Convert sparse representation back to full array with zeros.
 
     Parameters
@@ -314,7 +321,7 @@ def sparse_to_full(sparse_indices, sparse_values, full_size):
     return full_data.at[sparse_indices].set(sparse_values)
 
 
-def generate_random_params(key, h=2, r=1):
+def generate_random_params(key: jax.Array, h: float = 2, r: float = 1) -> ParticleParams:
     """
     Generate random parameters for particle simulation using angles for direction.
 
@@ -340,7 +347,7 @@ def generate_random_params(key, h=2, r=1):
                           theta=theta, phi=phi, t0=jnp.array(0.0))
 
 @jax.jit
-def generate_random_point_inside_cylinder(key, h=2, r=1, offset = 0.1):
+def generate_random_point_inside_cylinder(key: jax.Array, h: float = 2, r: float = 1, offset: float = 0.1) -> jax.Array:
     """
     Generate random point inside a cylinder with specified height and radius.
 
@@ -379,7 +386,7 @@ def generate_random_point_inside_cylinder(key, h=2, r=1, offset = 0.1):
     ])
 
 
-def print_particle_params(trk_params):
+def print_particle_params(trk_params: ParticleParams) -> None:
     """
     Print particle parameters in a readable format.
 
@@ -396,7 +403,7 @@ def print_particle_params(trk_params):
     print(f"  Direction vector: [{direction[0]:.2f}, {direction[1]:.2f}, {direction[2]:.2f}]")
     print(f"  t0: {trk_params.t0:.4f}")
 
-def print_propagation_params(sensor_params):
+def print_propagation_params(sensor_params: DetectorParams) -> None:
     """
     Pretty print the detector parameters.
 
@@ -419,7 +426,7 @@ def print_propagation_params(sensor_params):
     print(f"QE: {sensor_params.qe:.4f}")
     print("─" * 20)
 
-def superimpose_multiple_events(charges_list, times_list):
+def superimpose_multiple_events(charges_list: list[jax.Array], times_list: list[jax.Array]) -> tuple[jax.Array, jax.Array]:
     """
     Superimpose multiple events by summing charges and calculating weighted average of times.
     
@@ -486,13 +493,13 @@ _EVENT_IO_REEXPORTS = {
     'print_event_kinematics',
 }
 
-def __getattr__(name):
+def __getattr__(name: str) -> Any:
     if name in _EVENT_IO_REEXPORTS:
         from lucid.sources import event_io
         return getattr(event_io, name)
     raise AttributeError(f"module 'lucid.utils' has no attribute {name!r}")
 
-def load_range_params(particle, medium):
+def load_range_params(particle: str, medium: str) -> dict:
     """
     Load range parametrization for a given particle and medium.
 
@@ -518,7 +525,7 @@ def load_range_params(particle, medium):
     return params
 
 
-def calculate_particle_range(energy_mev, range_params):
+def calculate_particle_range(energy_mev: float, range_params: dict) -> float:
     """
     Calculate particle range in the medium given energy.
 
@@ -540,7 +547,10 @@ def calculate_particle_range(energy_mev, range_params):
     return range_m
 
 
-def check_track_endpoint_in_detector(position, direction, energy_mev, range_params, detector_bounds, fraction=0.9):
+def check_track_endpoint_in_detector(
+    position: np.ndarray, direction: np.ndarray, energy_mev: float,
+    range_params: dict, detector_bounds: dict, fraction: float = 0.9,
+) -> bool:
     """
     Check if the track endpoint (position + range * direction) is within detector bounds.
 
@@ -571,7 +581,7 @@ def check_track_endpoint_in_detector(position, direction, energy_mev, range_para
     return True
 
 
-def generate_random_event_params(key, detector_bounds, fraction=0.7):
+def generate_random_event_params(key: jax.Array, detector_bounds: dict, fraction: float = 0.7) -> ParticleParams:
     """
     Generate random event parameters based on detector geometry.
     """
@@ -621,7 +631,7 @@ def generate_random_event_params(key, detector_bounds, fraction=0.7):
                                          direction=direction, t0=jnp.array(0.0))
 
 
-def smear_times(times, time_resolution=2.5, key=None):
+def smear_times(times: jax.Array, time_resolution: float = 2.5, key: jax.Array | None = None) -> jax.Array:
     """
     Gaussianly smear input times.
 
@@ -652,7 +662,7 @@ def smear_times(times, time_resolution=2.5, key=None):
     return smeared_times
 
 
-def smear_charges_SK_like(counts, key=None):
+def smear_charges_SK_like(counts: jax.Array, key: jax.Array | None = None) -> jax.Array:
     """
     Gaussianly smear input charge counts according to Super-Kamiokande-like resolution.
 
@@ -686,7 +696,7 @@ def smear_charges_SK_like(counts, key=None):
     return smeared_counts
 
 
-def time_digitizer(times, time_resolution=0.4):
+def time_digitizer(times: jax.Array, time_resolution: float = 0.4) -> jax.Array:
     """
     Digitize input times to bin centers.
 
@@ -710,7 +720,7 @@ def time_digitizer(times, time_resolution=0.4):
     return digitized_times
 
 
-def jax_rotate_vector(vector, axis, angle):
+def jax_rotate_vector(vector: jax.Array, axis: jax.Array, angle: float) -> jax.Array:
     """Rotate a vector around an axis by a given angle using Rodrigues' formula.
 
     The axis is normalized internally for safety.
@@ -727,7 +737,7 @@ def jax_rotate_vector(vector, axis, angle):
 # Backward-compat alias
 jax_rotate_vector_local = jax_rotate_vector
 
-def normalize(v, epsilon=1e-8):
+def normalize(v: jax.Array, epsilon: float = 1e-8) -> jax.Array:
     """Normalize a vector (or batch of vectors) with numerical stability.
 
     Parameters
@@ -746,7 +756,7 @@ def normalize(v, epsilon=1e-8):
     return v / (norm + epsilon)
 
 
-def generate_orthonormal_basis(v):
+def generate_orthonormal_basis(v: jax.Array) -> jax.Array:
     """Generate an orthonormal basis with v as one of the vectors.
 
     Parameters

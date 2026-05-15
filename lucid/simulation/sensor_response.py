@@ -1,12 +1,23 @@
 """Sensor response: make_hits_* functions."""
+from __future__ import annotations
+
+from typing import Optional, Callable
+
 import jax
 import jax.numpy as jnp
 from functools import partial
 from lucid.utils import smear_times, smear_charges_SK_like
 
 def make_hits_simulation(
-        flat_weights, flat_indices, flat_times, num_detectors,
-        qe=0.2, qe_corrections=None, threshold=1e-10, temperature=0.1):
+        flat_weights: jax.Array,                        # (M,)
+        flat_indices: jax.Array,                        # (M,) int
+        flat_times: jax.Array,                          # (M,)
+        num_detectors: int,
+        qe: float = 0.2,
+        qe_corrections: Optional[jax.Array] = None,    # (num_detectors,)
+        threshold: float = 1e-10,
+        temperature: float = 0.1,
+) -> tuple[jax.Array, jax.Array]:                       # (measured_charge, measured_time)
     """Differentiable soft-min first-arrival timing with per-sensor QE corrections."""
     per_photon_qe = qe * qe_corrections[flat_indices]
     qe_weights = flat_weights * per_photon_qe
@@ -34,8 +45,15 @@ def make_hits_simulation(
     return measured_charge, measured_time
 
 
-def _qe_roll(flat_weights, flat_indices, flat_times,
-             qe, qe_corrections, qe_key, threshold):
+def _qe_roll(
+    flat_weights: jax.Array,                    # (M,)
+    flat_indices: jax.Array,                    # (M,) int
+    flat_times: jax.Array,                      # (M,)
+    qe: float,
+    qe_corrections: Optional[jax.Array],        # (num_detectors,) or None
+    qe_key: jax.Array,                          # PRNGKeyArray
+    threshold: float,
+) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array]:
     """Per-photon Bernoulli QE survival.
 
     Shared between make_hits_data and make_hits_per_photon so both modes
@@ -51,9 +69,17 @@ def _qe_roll(flat_weights, flat_indices, flat_times,
 
 
 def make_hits_data(
-        flat_weights, flat_indices, flat_times, num_detectors,
-        qe=0.2, qe_corrections=None, rng_key=None, threshold=1e-5,
-        apply_smearing=False, tts_sigma_ns=2.5):
+        flat_weights: jax.Array,                        # (M,)
+        flat_indices: jax.Array,                        # (M,) int
+        flat_times: jax.Array,                          # (M,)
+        num_detectors: int,
+        qe: float = 0.2,
+        qe_corrections: Optional[jax.Array] = None,
+        rng_key: Optional[jax.Array] = None,            # PRNGKeyArray
+        threshold: float = 1e-5,
+        apply_smearing: bool = False,
+        tts_sigma_ns: float = 2.5,
+) -> tuple[jax.Array, jax.Array, jax.Array]:
     """Data-mode hits with Bernoulli QE, per-photon TTS, then segment_min timing.
 
     Returns ``(measured_charge, measured_time_true, measured_time_reco)``.
@@ -114,10 +140,20 @@ def make_hits_data(
 
 
 def make_hits_per_photon(
-        flat_weights, flat_indices, flat_times, num_detectors,
-        qe=0.2, qe_corrections=None, rng_key=None, threshold=1e-5,
-        apply_smearing=False, tts_sigma_ns=2.5,
-        flat_segment_idx=None):
+        flat_weights: jax.Array,
+        flat_indices: jax.Array,
+        flat_times: jax.Array,
+        num_detectors: int,
+        qe: float = 0.2,
+        qe_corrections: Optional[jax.Array] = None,
+        rng_key: Optional[jax.Array] = None,
+        threshold: float = 1e-5,
+        apply_smearing: bool = False,
+        tts_sigma_ns: float = 2.5,
+        flat_segment_idx: Optional[jax.Array] = None,
+) -> tuple[jax.Array, jax.Array, jax.Array,
+           jax.Array, jax.Array, jax.Array,
+           jax.Array, Optional[jax.Array]]:
     """Per-sensor totals PLUS pass-through per-photon arrays for host aggregation.
 
     Per-sensor outputs (measured_charge, measured_time_true, measured_time_reco)
@@ -180,8 +216,14 @@ def make_hits_per_photon(
 
 
 def make_hits_likelihood(
-        flat_weights, flat_indices, flat_times, num_detectors,
-        qe=0.2, qe_corrections=None, threshold=1e-10):
+        flat_weights: jax.Array,
+        flat_indices: jax.Array,
+        flat_times: jax.Array,
+        num_detectors: int,
+        qe: float = 0.2,
+        qe_corrections: Optional[jax.Array] = None,
+        threshold: float = 1e-10,
+) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array]:
     """Likelihood mode: return per-photon log-weights and per-sensor total charge.
 
     Instead of aggregating times to per-sensor first-arrival values, this
@@ -234,8 +276,14 @@ def make_hits_likelihood(
 # ===================================================================
 
 def _resolve_first_detection(
-        flat_weights, flat_indices, flat_times, n_photons,
-        per_photon_qe, qe_key, threshold):
+        flat_weights: jax.Array,      # (M,)
+        flat_indices: jax.Array,      # (M,) int
+        flat_times: jax.Array,        # (M,)
+        n_photons: int,
+        per_photon_qe: jax.Array,     # (M,)
+        qe_key: jax.Array,           # PRNGKeyArray
+        threshold: float,
+) -> tuple[jax.Array, jax.Array, jax.Array]:
     """Compact flat propagation arrays to per-photon first-detection records.
 
     Returns arrays of length ``n_photons``:
@@ -264,15 +312,15 @@ def _resolve_first_detection(
 
 
 def build_make_hits_waveform(
-    n_photons,
-    window_ns=500.0,
-    bin_width_ns=1.0,
-    tts_sigma_ns=1.0,
-    t_min_ns=0.0,
-    smear_time=True,
-    smear_charge=True,
-    threshold=1e-10,
-):
+    n_photons: int,
+    window_ns: float = 500.0,
+    bin_width_ns: float = 1.0,
+    tts_sigma_ns: float = 1.0,
+    t_min_ns: float = 0.0,
+    smear_time: bool = True,
+    smear_charge: bool = True,
+    threshold: float = 1e-10,
+) -> Callable:
     """Factory: returns a ``make_hits_waveform`` closure with baked-in bin grid.
 
     Pipeline: propagation flat arrays → per-photon first-detection (n_photons) →
@@ -307,8 +355,14 @@ def build_make_hits_waveform(
 
     @partial(jax.jit, static_argnames=('num_detectors',))
     def make_hits_waveform(
-            flat_weights, flat_indices, flat_times, num_detectors,
-            rng_key, qe, qe_corrections):
+            flat_weights: jax.Array,
+            flat_indices: jax.Array,
+            flat_times: jax.Array,
+            num_detectors: int,
+            rng_key: jax.Array,
+            qe: float,
+            qe_corrections: jax.Array,
+    ) -> tuple[jax.Array, jax.Array, jax.Array]:
         per_photon_qe = qe * qe_corrections[flat_indices]
         qe_key, tts_key, gain_key = jax.random.split(rng_key, 3)
 
@@ -355,14 +409,14 @@ def build_make_hits_waveform(
 
 
 def build_make_hits_waveform_expected(
-    n_photons,
-    window_ns=500.0,
-    bin_width_ns=1.0,
-    tts_sigma_ns=1.0,
-    t_min_ns=0.0,
-    smear_time=True,
-    threshold=1e-10,
-):
+    n_photons: int,
+    window_ns: float = 500.0,
+    bin_width_ns: float = 1.0,
+    tts_sigma_ns: float = 1.0,
+    t_min_ns: float = 0.0,
+    smear_time: bool = True,
+    threshold: float = 1e-10,
+) -> Callable:
     """Factory: continuous QE-weighted waveform (no Bernoulli, no gain smearing).
 
     Companion to ``build_make_hits_waveform`` but for expected-value mode.
@@ -398,8 +452,14 @@ def build_make_hits_waveform_expected(
 
     @partial(jax.jit, static_argnames=('num_detectors',))
     def make_hits_waveform_expected(
-            flat_weights, flat_indices, flat_times, num_detectors,
-            rng_key, qe, qe_corrections):
+            flat_weights: jax.Array,
+            flat_indices: jax.Array,
+            flat_times: jax.Array,
+            num_detectors: int,
+            rng_key: jax.Array,
+            qe: float,
+            qe_corrections: jax.Array,
+    ) -> tuple[jax.Array, jax.Array, jax.Array]:
         per_slot_qe = qe * qe_corrections[flat_indices]
         slot_charge = flat_weights * per_slot_qe
 
@@ -440,11 +500,11 @@ def build_make_hits_waveform_expected(
 
 
 def build_make_hits_per_photon_shotgun(
-    n_photons,
-    tts_sigma_ns=1.0,
-    smear_time=True,
-    threshold=1e-10,
-):
+    n_photons: int,
+    tts_sigma_ns: float = 1.0,
+    smear_time: bool = True,
+    threshold: float = 1e-10,
+) -> Callable:
     """Factory: returns a ``make_hits_per_photon`` closure for shotgun mode.
 
     For each input photon, resolves the first-iteration detected slot (if any)
@@ -466,8 +526,14 @@ def build_make_hits_per_photon_shotgun(
 
     @partial(jax.jit, static_argnames=('num_detectors',))
     def make_hits_per_photon(
-            flat_weights, flat_indices, flat_times, num_detectors,
-            rng_key, qe, qe_corrections):
+            flat_weights: jax.Array,
+            flat_indices: jax.Array,
+            flat_times: jax.Array,
+            num_detectors: int,
+            rng_key: jax.Array,
+            qe: float,
+            qe_corrections: jax.Array,
+    ) -> tuple[jax.Array, jax.Array, jax.Array]:
         per_photon_qe = qe * qe_corrections[flat_indices]
         qe_key, tts_key = jax.random.split(rng_key)
 

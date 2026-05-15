@@ -1,4 +1,6 @@
 """Photon iteration functions (sample, update_factors, custom VJP)."""
+from __future__ import annotations
+
 import jax
 import jax.numpy as jnp
 from lucid.simulation.optics import (
@@ -10,10 +12,19 @@ from lucid.simulation.optics import (
 # ===================================================================
 
 def photon_iteration_sample(
-        position, direction, time, surface_distance,
-        normal, scatter_length, wall_reflection_rate, sensor_reflection_rate,
-        absorption_length,
-        hit_sensor, rng_key, speed_of_light):
+        position: jax.Array,                # (3,)
+        direction: jax.Array,               # (3,)
+        time: jax.Array,                    # scalar
+        surface_distance: jax.Array,        # scalar
+        normal: jax.Array,                  # (3,)
+        scatter_length: jax.Array,          # scalar
+        wall_reflection_rate: jax.Array,    # scalar
+        sensor_reflection_rate: jax.Array,  # scalar
+        absorption_length: jax.Array,       # scalar
+        hit_sensor: jax.Array,              # scalar bool
+        rng_key: jax.Array,                 # PRNGKeyArray
+        speed_of_light: float,
+) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array]:
     """
     Sampling version of photon iteration that makes binary decisions.
 
@@ -120,10 +131,19 @@ def photon_iteration_sample(
 
 
 def photon_iteration_update_factors(
-        position, direction, time, surface_distance,
-        normal, scatter_length, wall_reflection_rate, sensor_reflection_rate,
-        absorption_length,
-        hit_sensor, rng_key, speed_of_light):
+        position: jax.Array,                # (3,)
+        direction: jax.Array,               # (3,)
+        time: jax.Array,                    # scalar
+        surface_distance: jax.Array,        # scalar
+        normal: jax.Array,                  # (3,)
+        scatter_length: jax.Array,          # scalar
+        wall_reflection_rate: jax.Array,    # scalar
+        sensor_reflection_rate: jax.Array,  # scalar
+        absorption_length: jax.Array,       # scalar
+        hit_sensor: jax.Array,              # scalar bool
+        rng_key: jax.Array,                 # PRNGKeyArray
+        speed_of_light: float,
+) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array]:
     """
     Expected-value photon update with Straight-Through Estimator (STE).
 
@@ -236,10 +256,19 @@ def photon_iteration_update_factors(
 
 @jax.custom_vjp
 def photon_iteration_update_factors_safe(
-        position, direction, time, surface_distance,
-        normal, scatter_length, wall_reflection_rate, sensor_reflection_rate,
-        absorption_length,
-        hit_sensor, rng_key, speed_of_light):
+        position: jax.Array,                # (3,)
+        direction: jax.Array,               # (3,)
+        time: jax.Array,                    # scalar
+        surface_distance: jax.Array,        # scalar
+        normal: jax.Array,                  # (3,)
+        scatter_length: jax.Array,          # scalar
+        wall_reflection_rate: jax.Array,    # scalar
+        sensor_reflection_rate: jax.Array,  # scalar
+        absorption_length: jax.Array,       # scalar
+        hit_sensor: jax.Array,              # scalar bool
+        rng_key: jax.Array,                 # PRNGKeyArray
+        speed_of_light: float,
+) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array]:
     return photon_iteration_update_factors(
         position, direction, time, surface_distance,
         normal, scatter_length, wall_reflection_rate, sensor_reflection_rate,
@@ -247,10 +276,24 @@ def photon_iteration_update_factors_safe(
         hit_sensor, rng_key, speed_of_light)
 
 
-def _fwd(position, direction, time, surface_distance,
-         normal, scatter_length, wall_reflection_rate, sensor_reflection_rate,
-         absorption_length,
-         hit_sensor, rng_key, speed_of_light):
+def _fwd(
+    position: jax.Array,                # (3,)
+    direction: jax.Array,               # (3,)
+    time: jax.Array,                    # scalar
+    surface_distance: jax.Array,        # scalar
+    normal: jax.Array,                  # (3,)
+    scatter_length: jax.Array,          # scalar
+    wall_reflection_rate: jax.Array,    # scalar
+    sensor_reflection_rate: jax.Array,  # scalar
+    absorption_length: jax.Array,       # scalar
+    hit_sensor: jax.Array,              # scalar bool
+    rng_key: jax.Array,                 # PRNGKeyArray
+    speed_of_light: float,
+) -> tuple[
+    tuple[jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array],
+    tuple[jax.Array, ...],
+]:
+    """Forward pass for NaN-safe photon iteration."""
     outputs = photon_iteration_update_factors(
         position, direction, time, surface_distance,
         normal, scatter_length, wall_reflection_rate, sensor_reflection_rate,
@@ -263,7 +306,11 @@ def _fwd(position, direction, time, surface_distance,
     return outputs, residuals
 
 
-def _bwd(residuals, g):
+def _bwd(
+    residuals: tuple[jax.Array, ...],
+    g: tuple[jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array],
+) -> tuple[jax.Array, ...]:
+    """Backward pass with NaN-sanitized gradients."""
     g_pos, g_dir, g_time, g_detect, g_refl, g_cont = g
 
     g_pos = jnp.nan_to_num(g_pos, nan=0.0, posinf=0.0, neginf=0.0)

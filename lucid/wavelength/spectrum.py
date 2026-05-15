@@ -3,12 +3,16 @@
 Provides wavelength sampling from the Cherenkov radiation spectrum
 ``dN/dlambda ~ 1/lambda^2`` via exact inverse-CDF sampling.
 """
+from __future__ import annotations
+
+from typing import Callable
+
 import jax
 import jax.numpy as jnp
 
 
-def sample_cherenkov_wavelengths(key, n_photons,
-                                 lambda_min=300.0, lambda_max=700.0):
+def sample_cherenkov_wavelengths(key: jax.Array, n_photons: int,
+                                 lambda_min: float = 300.0, lambda_max: float = 700.0) -> jax.Array:
     """Sample wavelengths from the Cherenkov spectrum dN/dlambda ~ 1/lambda^2.
 
     Uses exact inverse-CDF sampling (no rejection step needed).
@@ -37,8 +41,10 @@ def sample_cherenkov_wavelengths(key, n_photons,
     return 1.0 / (inv_min - u * (inv_min - inv_max))
 
 
-def build_qe_weighted_cherenkov_sampler(qe_fn, lambda_min, lambda_max,
-                                        n_grid=500):
+def build_qe_weighted_cherenkov_sampler(
+    qe_fn: Callable[[jax.Array], jax.Array], lambda_min: float,
+    lambda_max: float, n_grid: int = 500,
+) -> tuple[Callable[[jax.Array, int], jax.Array], float]:
     """Build an inverse-CDF sampler for QE(λ) · 1/λ² and the scalar
     ``<QE>_C = ∫QE(λ)/λ² dλ / ∫1/λ² dλ`` over ``[lambda_min, lambda_max]``.
 

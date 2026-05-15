@@ -21,7 +21,9 @@ Helpers:
     save_particle_params / load_particle_params
 """
 
-from typing import NamedTuple
+from __future__ import annotations
+
+from typing import Any, NamedTuple
 import json
 import os
 
@@ -126,7 +128,7 @@ def save_detector_params(params: DetectorParams, filepath: str):
         json.dump(data, f, indent=2)
 
 
-def _resolve_field(val, config_dir):
+def _resolve_field(val: Any, config_dir: str) -> jax.Array:
     """Resolve a single physics config field value.
 
     - ``null`` / missing → ``jnp.asarray(jnp.nan)`` (unresolved placeholder;
@@ -192,8 +194,8 @@ def _project_missing_scalars(kwargs, medium_path, qe_path, ref_wavelength_nm,
         kwargs[field] = jnp.asarray(scalar, dtype=jnp.float32)
 
 
-def load_detector_params(filepath: str, num_sensors: int = None,
-                         scalar_ref_wavelength: float = None) -> DetectorParams:
+def load_detector_params(filepath: str, num_sensors: int | None = None,
+                         scalar_ref_wavelength: float | None = None) -> DetectorParams:
     """Load DetectorParams from a composable physics config JSON.
 
     The physics config may contain only the fields relevant to the detector.
@@ -221,8 +223,8 @@ def load_detector_params(filepath: str, num_sensors: int = None,
     return dp
 
 
-def load_physics_config(filepath: str, num_sensors: int = None,
-                        scalar_ref_wavelength: float = None):
+def load_physics_config(filepath: str, num_sensors: int | None = None,
+                        scalar_ref_wavelength: float | None = None) -> tuple[DetectorParams, str | None, str | None]:
     """Load a composable physics config — returns DetectorParams plus extras.
 
     Missing scalar fields (``scatter_length``, ``absorption_length``, ``qe``)

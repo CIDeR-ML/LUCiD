@@ -4,9 +4,11 @@ MediumProperties holds the physical properties of the detection medium
 (water, ice): refractive index, wavelength-dependent scattering and
 absorption coefficients. QE is a detector property and lives elsewhere.
 """
+from __future__ import annotations
+
 import json
 import os
-from typing import NamedTuple, Optional
+from typing import Any, Callable, NamedTuple, Optional
 
 import jax
 import jax.numpy as jnp
@@ -37,7 +39,7 @@ class MediumProperties(NamedTuple):
 # QE curve loading
 # ---------------------------------------------------------------------------
 
-def load_qe_curve(json_path):
+def load_qe_curve(json_path: str) -> Callable[[jax.Array], jax.Array]:
     """Load PMT QE curve and return a JAX-compatible interpolation function.
 
     Parameters
@@ -72,7 +74,7 @@ def load_qe_curve(json_path):
     return get_qe
 
 
-def qe_curve_bounds(json_path):
+def qe_curve_bounds(json_path: str) -> tuple[float, float]:
     """Return the (min, max) wavelength knots from a QE-curve JSON file."""
     with open(json_path) as f:
         data = json.load(f)
@@ -84,7 +86,7 @@ def qe_curve_bounds(json_path):
 # Factory
 # ---------------------------------------------------------------------------
 
-def _load_medium_json(json_path):
+def _load_medium_json(json_path: str) -> dict:
     with open(json_path, "r") as f:
         return json.load(f)
 
@@ -94,8 +96,8 @@ _LEGACY_WATER_PATH = os.path.join(os.path.dirname(__file__), "..", "..", "config
 
 
 def make_medium(material: str = "water",
-                wavelength_grid: Optional[jnp.ndarray] = None,
-                medium_model_path: str = None) -> MediumProperties:
+                wavelength_grid: jax.Array | None = None,
+                medium_model_path: str | None = None) -> MediumProperties:
     """Build a MediumProperties from a material name or model file.
 
     Parameters
@@ -173,8 +175,11 @@ def make_medium(material: str = "water",
 # Effective property derivation
 # ---------------------------------------------------------------------------
 
-def compute_effective_properties(detector_params, medium, wavelengths=None,
-                                 qe_curve=None):
+def compute_effective_properties(
+    detector_params: Any, medium: MediumProperties,
+    wavelengths: jax.Array | None = None,
+    qe_curve: Callable[[jax.Array], jax.Array] | None = None,
+) -> tuple[float | jax.Array, float | jax.Array, float | jax.Array]:
     """Derive per-photon effective scatter/absorption/QE from calibration
     scalars, medium corrections, and optional wavelength arrays.
 

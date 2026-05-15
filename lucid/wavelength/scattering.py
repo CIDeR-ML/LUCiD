@@ -6,13 +6,15 @@ branch and available for external use. They are NOT currently called in the
 main simulation propagation loop (which uses the Rayleigh sampler from
 ``lucid.simulation.optics``).
 """
+from __future__ import annotations
+
 import jax
 import jax.numpy as jnp
 from lucid.utils import normalize
 from lucid.simulation.optics import create_local_frame, solve_rayleigh_inverse_cdf
 
 
-def compute_rayleigh_scatter_direction(incident_dir, rng_key):
+def compute_rayleigh_scatter_direction(incident_dir: jax.Array, rng_key: jax.Array) -> jax.Array:
     """Rayleigh phase function scattering: P(cos_theta) ~ (1 + cos^2 theta).
 
     This is functionally identical to ``lucid.simulation.optics.compute_scatter_direction``
@@ -45,7 +47,7 @@ def compute_rayleigh_scatter_direction(incident_dir, rng_key):
     return normalize(frame @ local_dir)
 
 
-def hg_sample_cos_theta(u, g):
+def hg_sample_cos_theta(u: float, g: float) -> jax.Array:
     """Sample cos(theta) from the Henyey-Greenstein phase function.
 
     P(cos_theta) = (1 - g^2) / (2 * (1 + g^2 - 2*g*cos_theta)^(3/2))
@@ -71,7 +73,7 @@ def hg_sample_cos_theta(u, g):
     return jnp.clip(cos_theta, -1.0, 1.0)
 
 
-def compute_mie_scatter_direction(incident_dir, rng_key, g=0.95):
+def compute_mie_scatter_direction(incident_dir: jax.Array, rng_key: jax.Array, g: float = 0.95) -> jax.Array:
     """Mie (Henyey-Greenstein) scattering direction.
 
     Parameters

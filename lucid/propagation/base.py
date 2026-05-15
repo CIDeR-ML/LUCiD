@@ -1,6 +1,9 @@
 """
 Base functionality shared across all detector geometries for photon propagation.
 """
+from __future__ import annotations
+
+from typing import Callable
 
 import jax
 import jax.numpy as jnp
@@ -9,9 +12,16 @@ from jax import lax
 from ..overlap import create_overlap_prob
 
 
-def process_intersection_normals(ray_origins, ray_directions, intersection_point,
-                                 t_geometry, sensor_normals, sensor_hit_positions,
-                                 inside_sensor, geometry_normals):
+def process_intersection_normals(
+    ray_origins: jax.Array,           # (N, 3)
+    ray_directions: jax.Array,        # (N, 3)
+    intersection_point: jax.Array,    # (N, 3)
+    t_geometry: jax.Array,            # (N,)
+    sensor_normals: jax.Array,        # (M, N, 3)
+    sensor_hit_positions: jax.Array,  # (M, N, 3)
+    inside_sensor: jax.Array,         # (M, N) bool
+    geometry_normals: jax.Array,      # (N, 3)
+) -> dict[str, jax.Array]:
     """
     Main function to process all normal and position calculations for intersections.
     
@@ -57,8 +67,11 @@ def process_intersection_normals(ray_origins, ray_directions, intersection_point
     }
 
 
-def calculate_weighted_sensor_properties(sensor_normals, sensor_hit_positions,
-                                          inside_sensor):
+def calculate_weighted_sensor_properties(
+    sensor_normals: jax.Array,        # (M, N, 3)
+    sensor_hit_positions: jax.Array,  # (M, N, 3)
+    inside_sensor: jax.Array,         # (M, N) bool
+) -> tuple[jax.Array, jax.Array]:    # (weighted_normals, weighted_positions)
     """
     Calculate weighted normals and positions for sensor hits.
     
@@ -90,9 +103,15 @@ def calculate_weighted_sensor_properties(sensor_normals, sensor_hit_positions,
     return weighted_normals, weighted_positions
 
 
-def calculate_hit_properties(ray_origins, ray_directions, t_geometry, inside_sensor,
-                             weighted_sensor_normals, weighted_sensor_positions,
-                             geometry_normals):
+def calculate_hit_properties(
+    ray_origins: jax.Array,                  # (N, 3)
+    ray_directions: jax.Array,               # (N, 3)
+    t_geometry: jax.Array,                   # (N,)
+    inside_sensor: jax.Array,                # (M, N) bool
+    weighted_sensor_normals: jax.Array,      # (N, 3)
+    weighted_sensor_positions: jax.Array,    # (N, 3)
+    geometry_normals: jax.Array,             # (N, 3)
+) -> tuple[jax.Array, jax.Array]:           # (hit_positions, final_normals)
     """
     Calculate final hit positions and normals based on intersection type.
     
@@ -137,9 +156,16 @@ def calculate_hit_properties(ray_origins, ray_directions, t_geometry, inside_sen
     return hit_positions, final_normals
 
 
-def compute_sensor_intersections_base(sensor_idx, sensor_positions, sensor_radius,
-                                        ray_origins, ray_directions, geometry_bounds_check,
-                                        overlap_prob):
+def compute_sensor_intersections_base(
+    sensor_idx: jax.Array,                       # (N,) int
+    sensor_positions: jax.Array,                 # (n_sensors, 3)
+    sensor_radius: float,
+    ray_origins: jax.Array,                      # (N, 3)
+    ray_directions: jax.Array,                   # (N, 3)
+    geometry_bounds_check: Callable[[jax.Array], jax.Array],
+    overlap_prob: Callable[[jax.Array], jax.Array],
+) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array]:
+    # (weights, distances, sensor_idx, normals, inside_sensor, points)
     """
     Base function to compute sensor intersections for any geometry.
     
@@ -232,7 +258,11 @@ def compute_sensor_intersections_base(sensor_idx, sensor_positions, sensor_radiu
 
 
 @partial(jax.jit, static_argnums=(1,))
-def calculate_linear_index_base(indices, grid_dims, index_map):
+def calculate_linear_index_base(
+    indices: tuple[jax.Array, ...],
+    grid_dims: tuple[int, ...],
+    index_map: Callable,
+) -> jax.Array:
     """
     Calculate linear index for grid cells.
     
@@ -254,7 +284,11 @@ def calculate_linear_index_base(indices, grid_dims, index_map):
 
 
 @partial(jax.jit, static_argnums=(2,))
-def find_closest_sensors(grid_centers, sensor_positions, max_candidates_per_ray):
+def find_closest_sensors(
+    grid_centers: jax.Array,          # (n_cells, 3)
+    sensor_positions: jax.Array,      # (n_sensors, 3)
+    max_candidates_per_ray: int,
+) -> jax.Array:                       # (n_cells, max_candidates_per_ray) int
     """Find closest sensors to each grid cell center"""
     squared_distances = jnp.sum(
         (grid_centers[:, None, :] - sensor_positions[None, :, :]) ** 2,

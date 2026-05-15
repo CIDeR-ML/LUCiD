@@ -1,6 +1,11 @@
 """
 LUCiD propagation module with unified geometry interface.
 """
+from __future__ import annotations
+
+from typing import Any, Callable
+
+import jax
 
 from .geometry import (
     ray_sphere_intersection, ray_cylinder_intersection, ray_box_intersection_vectorized,
@@ -14,7 +19,12 @@ from .cylinder import create_photon_propagator as create_cylinder_propagator, cy
 from .sphere import create_sphere_photon_propagator, sphere_bounds_check
 from .box import create_box_photon_propagator, box_bounds_check
 
-def create_photon_propagator(detector_type, sensor_positions, sensor_radius, **detector_params):
+def create_photon_propagator(
+    detector_type: str,
+    sensor_positions: jax.Array,      # (n_sensors, 3)
+    sensor_radius: float,
+    **detector_params: Any,
+) -> Callable[[jax.Array, jax.Array], dict[str, jax.Array]]:
     """
     Unified interface for creating photon propagators for different detector geometries.
 

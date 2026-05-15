@@ -1,12 +1,21 @@
 """
 Utility functions for detector geometries including sensor patterns and visualization.
 """
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Tuple, Union
 
 import numpy as np
 from scipy.spatial.transform import Rotation
 
+if TYPE_CHECKING:
+    from .base import Detector
 
-def generate_concentric_hexagons(n_sensors, radius_eff):
+# Type alias for inputs that accept numpy, JAX, list, or tuple arrays
+ArrayLike = Union[np.ndarray, list, tuple]
+
+
+def generate_concentric_hexagons(n_sensors: int, radius_eff: float) -> np.ndarray:
     """Generate hexagonal pattern using concentric rings.
     
     Returns exact number of sensors in a regular hexagonal pattern.
@@ -62,7 +71,7 @@ def generate_concentric_hexagons(n_sensors, radius_eff):
     return np.array(points[:n_sensors])  # Ensure exact count
 
 
-def fibonacci_sphere_points_numpy(n_points, radius=1.0):
+def fibonacci_sphere_points_numpy(n_points: int, radius: float = 1.0) -> np.ndarray:
     """Generate approximately equidistant points on sphere surface using Fibonacci spiral.
     
     Parameters
@@ -95,7 +104,7 @@ def fibonacci_sphere_points_numpy(n_points, radius=1.0):
     return points
 
 
-def create_disc_mesh(center, normal, radius, n_segments=20):
+def create_disc_mesh(center: ArrayLike, normal: ArrayLike, radius: float, n_segments: int = 20) -> Tuple[np.ndarray, np.ndarray]:
     """
     Create a circular disc mesh with specified center, normal, and radius.
     
@@ -154,7 +163,7 @@ def create_disc_mesh(center, normal, radius, n_segments=20):
     return vertices, np.array(faces)
 
 
-def calculate_surface_normals(detector, sensor_indices):
+def calculate_surface_normals(detector: Detector, sensor_indices: ArrayLike) -> np.ndarray:
     """
     Calculate surface normal vectors for detector positions.
     

@@ -1,17 +1,31 @@
 """
 Base detector class with complex visualization methods.
 """
+from __future__ import annotations
 
+from typing import Any, Dict, Optional, Tuple, Union
+
+import jax
 import numpy as np
 from abc import ABC, abstractmethod
 import plotly.graph_objects as go
 from .utils import calculate_surface_normals, create_disc_mesh
 
+# Type alias for inputs that accept numpy, JAX, list, or tuple arrays
+ArrayLike = Union[np.ndarray, jax.Array, list, tuple]
+
 
 class Detector(ABC):
     """Base class for detector geometries"""
-    
-    def __init__(self, n_sensors, sensor_radius):
+
+    C: np.ndarray
+    n_sensors: int
+    S_radius: float
+    all_points: Optional[np.ndarray]
+    ID_to_position: Optional[Dict[int, np.ndarray]]
+    ID_to_case: Optional[Dict[int, int]]
+
+    def __init__(self, n_sensors: int, sensor_radius: float) -> None:
         """
         Initialize common detector attributes.
         
@@ -32,19 +46,19 @@ class Detector(ABC):
         self.ID_to_case = None
 
     @abstractmethod
-    def place_photosensors(self):
+    def place_photosensors(self) -> None:
         """Position the photo sensor centers. Must be implemented by subclasses."""
         pass
 
     @abstractmethod
-    def visualize_geometry_wireframe(self, show_sensors=True):
+    def visualize_geometry_wireframe(self, show_sensors: bool = True) -> None:
         """Visualize the detector geometry as wireframe. Must be implemented by subclasses."""
         pass
 
     # ── Propagation abstract methods (Phase 9) ─────────────────────────
     # Subclasses implement these to enable the shared create_propagator().
 
-    def intersect_ray(self, origins, directions):
+    def intersect_ray(self, origins: jax.Array, directions: jax.Array) -> Tuple[jax.Array, jax.Array, Any, Any]:
         """Batch ray-geometry intersection.
 
         Parameters
@@ -61,7 +75,7 @@ class Detector(ABC):
         """
         raise NotImplementedError
 
-    def compute_normal(self, intersection_point, surface_info):
+    def compute_normal(self, intersection_point: jax.Array, surface_info: Any) -> jax.Array:
         """Compute outward surface normals at intersection points.
 
         Parameters
@@ -75,7 +89,7 @@ class Detector(ABC):
         """
         raise NotImplementedError
 
-    def point_to_grid_cell(self, grid_info):
+    def point_to_grid_cell(self, grid_info: Any) -> jax.Array:
         """Map intersection data to linear grid cell indices.
 
         Parameters
@@ -88,7 +102,7 @@ class Detector(ABC):
         """
         raise NotImplementedError
 
-    def assign_sensor_to_cells(self, sensors, sensor_radius):
+    def assign_sensor_to_cells(self, sensors: jax.Array, sensor_radius: float) -> jax.Array:
         """Map each sensor to the grid cells it overlaps.
 
         Parameters
@@ -102,7 +116,7 @@ class Detector(ABC):
         """
         raise NotImplementedError
 
-    def grid_cell_centers(self):
+    def grid_cell_centers(self) -> jax.Array:
         """Compute (n_cells, 3) array of grid cell center positions.
 
         Returns
@@ -111,7 +125,7 @@ class Detector(ABC):
         """
         raise NotImplementedError
 
-    def total_grid_cells(self):
+    def total_grid_cells(self) -> int:
         """Return total number of grid cells.
 
         Returns
@@ -120,7 +134,7 @@ class Detector(ABC):
         """
         raise NotImplementedError
 
-    def cell_index_to_coords(self, linear_idx):
+    def cell_index_to_coords(self, linear_idx: Union[int, jax.Array]) -> Any:
         """Decode linear cell index back to grid coordinates.
 
         Used by the inverted sensor map builder to match geometric
@@ -136,12 +150,26 @@ class Detector(ABC):
         """
         raise NotImplementedError
 
-    def visualize_event_data_plotly_discs(self, loaded_indices, loaded_charges, loaded_times, 
-                                     plot_time=False, log_scale=False, title=None, 
-                                     show_all_sensors=True, marker_size=6, show_colorbar=True,
-                                     opacity=1.0, dark_theme=True, n_disc_segments=12, 
-                                     colorscale='viridis', surface_color='gray', 
-                                     inactive_color='red', inactive_opacity=0.3, figname=None):
+    def visualize_event_data_plotly_discs(
+        self,
+        loaded_indices: ArrayLike,
+        loaded_charges: ArrayLike,
+        loaded_times: ArrayLike,
+        plot_time: bool = False,
+        log_scale: bool = False,
+        title: Optional[str] = None,
+        show_all_sensors: bool = True,
+        marker_size: int = 6,
+        show_colorbar: bool = True,
+        opacity: float = 1.0,
+        dark_theme: bool = True,
+        n_disc_segments: int = 12,
+        colorscale: str = 'viridis',
+        surface_color: str = 'gray',
+        inactive_color: str = 'red',
+        inactive_opacity: float = 0.3,
+        figname: Optional[str] = None,
+    ) -> None:
         """
         Visualize detector event data in 3D using circular discs oriented according to surface normals.
         Shows red discs for sensors without charge and color-coded discs for sensors with hits.
@@ -453,7 +481,7 @@ class Detector(ABC):
         else:
             fig.show()
 
-    def _add_detector_surface(self, fig, surface_color='gray'):
+    def _add_detector_surface(self, fig: Any, surface_color: str = 'gray') -> None:
         """Add detector surface to the plot"""
         # Import here to avoid circular imports
         from .cylinder import Cylinder
@@ -467,7 +495,7 @@ class Detector(ABC):
         elif isinstance(self, Box):
             self._add_box_surface(fig, surface_color)
     
-    def _add_cylinder_surface(self, fig, surface_color='gray'):
+    def _add_cylinder_surface(self, fig: Any, surface_color: str = 'gray') -> None:
         """Add cylindrical surface to the plot with offset to avoid disc overlap"""
         # Offset to avoid overlap with discs
         offset = 0.995
@@ -526,7 +554,7 @@ class Detector(ABC):
             hoverlabel=None
         ))
     
-    def _add_sphere_surface(self, fig, surface_color='gray'):
+    def _add_sphere_surface(self, fig: Any, surface_color: str = 'gray') -> None:
         """Add spherical surface to the plot with offset to avoid disc overlap"""
         # Offset to avoid overlap with discs
         offset = 0.995
@@ -549,7 +577,7 @@ class Detector(ABC):
             hoverlabel=None
         ))
     
-    def _add_box_surface(self, fig, surface_color='gray'):
+    def _add_box_surface(self, fig: Any, surface_color: str = 'gray') -> None:
         """Add box surface to the plot with offset to avoid disc overlap"""
         # Offset to avoid overlap with discs
         offset = 0.995

@@ -2,18 +2,26 @@
 Unified geometry intersection functions for LUCiD propagation.
 Implements vectorized and optimized ray-geometry intersection algorithms.
 """
+from __future__ import annotations
+
+from typing import Any, Final
 
 import jax
 import jax.numpy as jnp
 
 
 # Geometry type constants for unified interface
-SPHERE = 0
-CYLINDER = 1 
-BOX = 2
+SPHERE: Final[int] = 0
+CYLINDER: Final[int] = 1
+BOX: Final[int] = 2
 
 
-def ray_sphere_intersection(ray_origin, ray_direction, sphere_center, sphere_radius):
+def ray_sphere_intersection(
+    ray_origin: jax.Array,       # (3,)
+    ray_direction: jax.Array,    # (3,)
+    sphere_center: jax.Array,    # (3,)
+    sphere_radius: float,
+) -> jax.Array:                  # scalar float (t, or -1)
     """
     Vectorized ray-sphere intersection using analytical solution.
     
@@ -50,7 +58,12 @@ def ray_sphere_intersection(ray_origin, ray_direction, sphere_center, sphere_rad
     return t
 
 
-def ray_cylinder_intersection(ray_origin, ray_direction, cylinder_radius, cylinder_height):
+def ray_cylinder_intersection(
+    ray_origin: jax.Array,       # (3,)
+    ray_direction: jax.Array,    # (3,)
+    cylinder_radius: float,
+    cylinder_height: float,
+) -> jax.Array:                  # scalar float (t, or -1)
     """
     Vectorized ray-cylinder intersection (infinite cylinder + caps).
     
@@ -115,7 +128,12 @@ def ray_cylinder_intersection(ray_origin, ray_direction, cylinder_radius, cylind
     return jnp.where(t == jnp.inf, -1, t)
 
 
-def ray_box_intersection_vectorized(ray_origin, ray_direction, box_min, box_max):
+def ray_box_intersection_vectorized(
+    ray_origin: jax.Array,    # (3,)
+    ray_direction: jax.Array, # (3,)
+    box_min: jax.Array,       # (3,)
+    box_max: jax.Array,       # (3,)
+) -> jax.Array:               # scalar float (t, or -1)
     """
     Optimized vectorized ray-box intersection using slab method.
     Much faster JIT compilation than face-by-face approach.
@@ -157,7 +175,13 @@ def ray_box_intersection_vectorized(ray_origin, ray_direction, box_min, box_max)
     return jnp.where(valid, t, -1)
 
 
-def ray_box_intersection(ray_origin, ray_direction, box_x, box_y, box_z):
+def ray_box_intersection(
+    ray_origin: jax.Array,    # (3,)
+    ray_direction: jax.Array, # (3,)
+    box_x: float,
+    box_y: float,
+    box_z: float,
+) -> jax.Array:               # scalar float (t, or -1)
     """
     Convenience function for axis-aligned box intersection.
     
@@ -181,7 +205,12 @@ def ray_box_intersection(ray_origin, ray_direction, box_x, box_y, box_z):
     return ray_box_intersection_vectorized(ray_origin, ray_direction, box_min, box_max)
 
 
-def unified_ray_intersection(ray_origin, ray_direction, geometry_type, geometry_params):
+def unified_ray_intersection(
+    ray_origin: jax.Array,            # (3,)
+    ray_direction: jax.Array,         # (3,)
+    geometry_type: int,               # SPHERE=0, CYLINDER=1, BOX=2
+    geometry_params: dict[str, Any],
+) -> jax.Array:                       # scalar float (t, or -1)
     """
     Unified interface for all geometry intersections.
     Uses JAX switch for efficient branching.
@@ -229,7 +258,11 @@ def unified_ray_intersection(ray_origin, ray_direction, geometry_type, geometry_
     )
 
 
-def compute_surface_normal(intersection_point, geometry_type, geometry_params):
+def compute_surface_normal(
+    intersection_point: jax.Array,     # (3,)
+    geometry_type: int,
+    geometry_params: dict[str, Any],
+) -> jax.Array:                        # (3,) unit normal
     """
     Compute surface normal at intersection point.
     
@@ -292,7 +325,11 @@ def compute_surface_normal(intersection_point, geometry_type, geometry_params):
     )
 
 
-def unified_bounds_check(points, geometry_type, geometry_params):
+def unified_bounds_check(
+    points: jax.Array,                 # (N, 3)
+    geometry_type: int,
+    geometry_params: dict[str, Any],
+) -> jax.Array:                        # (N,) bool
     """
     Unified bounds checking for all detector geometries.
     

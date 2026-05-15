@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import jax.numpy as jnp
 from jax import jit
 import jax
@@ -246,7 +248,7 @@ def WC_smooth_loss(
 
 
 @jit
-def energy_loss(simulated_counts, true_counts):
+def energy_loss(simulated_counts: jax.Array, true_counts: jax.Array) -> float:
     """
     Core energy loss computation using intensity matching.
 
@@ -292,15 +294,16 @@ def counts_loss(true: jnp.ndarray, pred: jnp.ndarray, eps: float = 1e-8) -> jnp.
 
 @jit
 def grid_origin_time_loss(
-    origin,
-    detector_positions,
-    true_times,
-    true_q,
-    t0,
-    photosensor_radius=0.25,
-    c_medium=(0.299792 / 1.33),
-    w_neg=100.0,
-):
+    origin: jax.Array,
+    detector_positions: jax.Array,
+    true_times: jax.Array,
+    true_q: jax.Array,
+    t0: float,
+    photosensor_radius: float = 0.25,
+    c_medium: float = (0.299792 / 1.33),
+    w_neg: float = 100.0,
+) -> float:
+    """Grid-based origin time loss for vertex position estimation."""
     eps = 1e-9
 
     distances = jnp.linalg.norm(detector_positions - origin[None, :], axis=1)
@@ -336,10 +339,11 @@ def grid_origin_time_loss(
     total_loss = jnp.nan_to_num(total_loss, nan=1e6, posinf=1e6, neginf=1e6)
     return total_loss
 
-def softplus(x):
+def softplus(x: jax.Array) -> jax.Array:
+    """Soft approximation to ReLU."""
     return jnp.log1p(jnp.exp(-jnp.abs(x))) + jnp.maximum(x, 0.)
 
-def smooth_pinball(r, tau=0.1, sigma=0.5):
+def smooth_pinball(r: jax.Array, tau: float = 0.1, sigma: float = 0.5) -> jax.Array:
     """
     Smooth version of pinball/quantile loss.
     Minimizer sets approx quantile_tau(r) ~= 0.
@@ -350,8 +354,17 @@ def smooth_pinball(r, tau=0.1, sigma=0.5):
     return tau * pos + (1.0 - tau) * neg
 
 @jit
-def origin_time_loss(origin, detector_positions, true_times, true_q, t0,
-                     photosensor_radius=0.25, c_medium=(0.299792/1.33), tau=0.23):
+def origin_time_loss(
+    origin: jax.Array,
+    detector_positions: jax.Array,
+    true_times: jax.Array,
+    true_q: jax.Array,
+    t0: float,
+    photosensor_radius: float = 0.25,
+    c_medium: float = (0.299792 / 1.33),
+    tau: float = 0.23,
+) -> float:
+    """Time-of-origin loss for track reconstruction."""
     d = jnp.linalg.norm(detector_positions - origin[None, :], axis=1)
     expected = (d - photosensor_radius) / c_medium
 
@@ -365,7 +378,14 @@ def origin_time_loss(origin, detector_positions, true_times, true_q, t0,
     return main
 
 @jit
-def cone_time_loss(observed_counts, simulated_time, observed_times, t0, tau=0.12):
+def cone_time_loss(
+    observed_counts: jax.Array,
+    simulated_time: jax.Array,
+    observed_times: jax.Array,
+    t0: float,
+    tau: float = 0.12,
+) -> float:
+    """Cherenkov cone timing loss."""
     r = observed_times - simulated_time - t0
     w = jnp.where(observed_counts > 0., observed_counts, 0.)
     wsum = jnp.sum(w) + 1e-8
@@ -373,7 +393,7 @@ def cone_time_loss(observed_counts, simulated_time, observed_times, t0, tau=0.12
     return main
 
 
-def segment_logsumexp(data, indices, num_segments):
+def segment_logsumexp(data: jax.Array, indices: jax.Array, num_segments: int) -> jax.Array:
     """Numerically stable log-sum-exp aggregated per segment."""
     max_vals = jax.ops.segment_max(
         data, indices, num_segments=num_segments,
@@ -386,8 +406,15 @@ def segment_logsumexp(data, indices, num_segments):
     return max_vals + jnp.log(exp_summed)
 
 
-def first_arrival_nll(log_w, flat_times, flat_indices,
-                      t_obs_per_sensor, tau, num_detectors):
+def first_arrival_nll(
+    log_w: jax.Array,
+    flat_times: jax.Array,
+    flat_indices: jax.Array,
+    t_obs_per_sensor: jax.Array,
+    tau: float,
+    num_detectors: int,
+) -> jax.Array:
+    """Negative log-likelihood based on first photon arrival."""
     t_obs_per_photon = t_obs_per_sensor[flat_indices]
     x = (t_obs_per_photon - flat_times) / tau
 
@@ -434,7 +461,7 @@ TAU_VTX_PARAM_B = 2.578522e-04  # coefficient for Energy (MeV)
 TAU_VTX_PARAM_C = -0.0442       # intercept
 
 
-def get_optimal_tau_vtx(nrays, energy_mev):
+def get_optimal_tau_vtx(nrays: float, energy_mev: float) -> float:
     """
     Get optimal tau_vtx based on learned parametrization.
 
