@@ -378,7 +378,7 @@ def run_one_event_secant(grad_fn, base_params, true_data, hit_threshold,
     flags = (jnp.float32(cw), jnp.float32(tw),
               jnp.float32(hit_threshold), jnp.float32(lambda_bg),
               jnp.float32(gm), jnp.float32(jt), jnp.float32(fac))
-    hit_counts, hit_times = true_data
+    hit_counts, _hit_times_true, hit_times = true_data
     out = {}
     for name, idx, scan_rng in SCAN_SPECS:
         alpha, g_final, slope, n_iter = secant_solve(
@@ -582,7 +582,7 @@ def main():
         detector, data_sim, num_detectors,
         entry_idx=args.start_entry, seed=args.seed_base)
     true_param_values = [x, y, z, 0.0, theta, phi, energy]
-    hit_counts, hit_times = true_data
+    hit_counts, _hit_times_true, hit_times = true_data
     _ = loss_and_grad(
         jnp.array(true_param_values), hit_times, hit_counts,
         jax.random.PRNGKey(42),

@@ -150,7 +150,7 @@ print(f'event seed={SEED_SHOW}, entry={ENTRY_SHOW}: '
       f'θ={theta:+.3f}, φ={phi:+.3f}, E={energy:.0f}, n_hit={n_hit}')
 
 # JIT warmup
-hit_counts, hit_times = true_data
+hit_counts, _hit_times_true, hit_times = true_data
 cw, tw, gm, jt, fac = _MODE_PARAMS[MODE]
 t0 = time.time()
 _ = loss_and_grad(jnp.array(true_param_values), hit_times, hit_counts,
@@ -624,7 +624,7 @@ for ev in range(N_EVENTS):
     n_hit = int(np.sum(np.asarray(true_data[0]) > 0))
     print(f'  true: pos=({x:+.2f},{y:+.2f},{z:+.2f}), E={energy:.0f}, n_hit={n_hit}')
 
-    hit_counts, hit_times = true_data
+    hit_counts, _hit_times_true, hit_times = true_data
     obs_counts = np.asarray(hit_counts)
     obs_times = hit_times
 

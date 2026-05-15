@@ -467,7 +467,7 @@ def make_loss_and_grad(loss_fn):
 def perform_scan(loss_and_grad, true_param_values, true_data,
                   param_name, param_idx, scan_range, n_points=N_SCAN_POINTS,
                   mode='both', hit_threshold=0.0, lambda_bg=0.0):
-    hit_counts, hit_times = true_data
+    hit_counts, _hit_times_true, hit_times = true_data
     scan_key = jax.random.PRNGKey(42)
 
     true_value = true_param_values[param_idx]
@@ -589,7 +589,7 @@ def main():
 
     # Warmup once
     _t0 = _time.time()
-    hit_counts, hit_times = true_data
+    hit_counts, _hit_times_true, hit_times = true_data
     _ = loss_and_grad(
         jnp.array(true_param_values), hit_times, hit_counts,
         jax.random.PRNGKey(42),
