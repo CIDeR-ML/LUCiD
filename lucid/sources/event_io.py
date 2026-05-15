@@ -276,7 +276,7 @@ def _trace_event_bucketed(
                            arrays (seg_idx_filtered, particle_idx) into kernel-flat
                            alignment
 
-    ``factor = K · max_sensors_per_cell`` is the number of (propagation
+    ``factor = K · max_candidates_per_ray`` is the number of (propagation
     iteration, sensor cell) pairs each photon contributes to in the soft-hit
     kernel. Per-sensor PE/T (``pe_per_sensor``, ``t_per_sensor``) already
     aggregate over all factor entries via segment_sum/segment_min inside
@@ -373,7 +373,7 @@ def _trace_event_bucketed(
             np.where(T_reco_chunk_np > 0, T_reco_chunk_np, np.inf),
         )
 
-        # The kernel returns flat arrays of length (K · max_sensors_per_cell · bucket_size)
+        # The kernel returns flat arrays of length (K · max_candidates_per_ray · bucket_size)
         # — one entry per (propagation iteration, sensor cell, photon) tuple — because
         # each photon's contribution is distributed across multiple (k, sensor_cell)
         # pairs in the soft-hit model. Per-sensor PE_chunk already sums these
@@ -381,7 +381,7 @@ def _trace_event_bucketed(
         # (particle, sensor) and per-(segment, sensor) totals that match PE_chunk,
         # the host aggregator needs the FULL flat arrays paired with broadcast
         # particle_idx / seg_idx — NOT a [:n_in_chunk] slice (which would only
-        # keep the (k=0, sensor_cell=0) slab, ~1/(K·max_sensors_per_cell) of data).
+        # keep the (k=0, sensor_cell=0) slab, ~1/(K·max_candidates_per_ray) of data).
         # Drop only the bucket padding (photon ids >= n_in_chunk), and emit a
         # global photon id per kept row so the host can gather per-photon arrays
         # (seg_idx_filtered, particle_idx) up to kernel-flat alignment.
@@ -513,7 +513,7 @@ def get_max_photons_per_particle(root_file_path, n_events=None):
 
 def generate_events_from_root(event_simulator, root_file_path, output_dir='events', n_events=None,
                             n_rings=1, pion_root_file_path=None,
-                            sensor_params=None, max_sensors_per_cell=4, batch_size=100):
+                            sensor_params=None, max_candidates_per_ray=4, batch_size=100):
     """
     Generate and save events from a ROOT file, with support for N rings of particles.
     Ring 1 (N=1) is always a muon, and additional rings (N>1) are pions.
@@ -536,7 +536,7 @@ def generate_events_from_root(event_simulator, root_file_path, output_dir='event
         Path to ROOT file for pions, required if n_rings > 1, by default None
     sensor_params : tuple, optional
         Sensor parameters tuple passed to event_simulator, by default None
-    max_sensors_per_cell : int, optional
+    max_candidates_per_ray : int, optional
         Maximum sensors per cell, by default 4
     batch_size : int, optional
         Number of events to accumulate before saving in parallel, by default 100

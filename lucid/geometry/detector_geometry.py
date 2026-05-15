@@ -6,6 +6,7 @@ import jax.numpy as jnp
 from lucid.geometry import generate_detector, get_material_from_config
 from lucid.wavelength.medium import MediumProperties, make_medium
 from lucid.propagation.shared import create_propagator as create_shared_propagator
+from lucid.geometry.string import StringTelescope
 
 
 class DetectorGeometry(NamedTuple):
@@ -26,7 +27,7 @@ class DetectorGeometry(NamedTuple):
     @staticmethod
     def from_config(json_filename: str,
                     temperature: float = 0.2,
-                    max_sensors_per_cell: int = 4,
+                    max_candidates_per_ray: int = 4,
                     detector_type: str = 'Cylinder',
                     **grid_params) -> 'DetectorGeometry':
         """Build a DetectorGeometry from a config JSON file.
@@ -41,7 +42,7 @@ class DetectorGeometry(NamedTuple):
             Path to detector geometry JSON.
         temperature : float or None
             Soft-assignment temperature for propagation. None uses step function.
-        max_sensors_per_cell : int
+        max_candidates_per_ray : int
             Grid cell sensor limit.
         detector_type : str
             'Cylinder', 'Sphere', or 'Box'.
@@ -54,28 +55,39 @@ class DetectorGeometry(NamedTuple):
         """
         # Normalize casing
         dt_key = detector_type.lower()
-        if dt_key not in ('cylinder', 'sphere', 'box'):
-            raise ValueError(f"detector_type must be 'cylinder', 'sphere', or 'box', got {detector_type}")
+        valid_types = ('cylinder', 'sphere', 'box', 'string')
+        if dt_key not in valid_types:
+            raise ValueError(f"detector_type must be one of {valid_types}, got {detector_type}")
 
         # Material
         material = get_material_from_config(json_filename)
         medium = make_medium(material)
 
-        # Geometry
+        # Geometry — detector_type comes from the JSON, not the parameter
         detector = generate_detector(json_filename)
+        import json as _json
+        with open(json_filename) as _f:
+            _cfg = _json.load(_f)
+        actual_type = _cfg.get('detector_type', detector_type)
         sensor_points = jnp.array(detector.all_points)
         sensor_radius = detector.S_radius
         num_sensors = len(sensor_points)
 
-        # Propagator (shared — uses detector abstract methods)
-        propagator = create_shared_propagator(
-            detector, sensor_points, sensor_radius,
-            temperature=temperature,
-            max_sensors_per_cell=max_sensors_per_cell,
-            **grid_params)
+        # Propagator — string uses its own, others use the shared one
+        if isinstance(detector, StringTelescope):
+            from lucid.propagation.string.string_propagator import create_string_propagator
+            propagator = create_string_propagator(
+                detector, sensor_radius, temperature=temperature,
+                n_closest=max_candidates_per_ray // 2)
+        else:
+            propagator = create_shared_propagator(
+                detector, sensor_points, sensor_radius,
+                temperature=temperature,
+                max_candidates_per_ray=max_candidates_per_ray,
+                **grid_params)
 
         return DetectorGeometry(
-            detector_type=detector_type,
+            detector_type=actual_type,
             sensor_points=sensor_points,
             sensor_radius=sensor_radius,
             num_sensors=num_sensors,

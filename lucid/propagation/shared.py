@@ -20,7 +20,7 @@ from lucid.overlap import create_overlap_prob
 
 
 def validate_sensor_map(assignments_geometric, inverted_sensor_map, num_sensors,
-                        detector, max_sensors_per_cell):
+                        detector, max_candidates_per_ray):
     """Check consistency between forward (sensor→cells) and inverse (cell→sensors) maps.
 
     Runs at propagator build time (numpy, not JIT). Raises warnings for
@@ -30,7 +30,7 @@ def validate_sensor_map(assignments_geometric, inverted_sensor_map, num_sensors,
     1. Index bounds — no out-of-range sensor IDs
     2. Cell coverage — fraction of cells with at least one sensor
     3. Sensor visibility — are all sensors reachable through the map?
-    4. Overcrowding — cells where geometric assignments exceed max_sensors_per_cell
+    4. Overcrowding — cells where geometric assignments exceed max_candidates_per_ray
     5. Forward-inverse consistency — geometric assignments present in inverse map
     """
     inv = np.asarray(inverted_sensor_map)
@@ -63,7 +63,7 @@ def validate_sensor_map(assignments_geometric, inverted_sensor_map, num_sensors,
             f"Sensor map: {len(missing_sensors)}/{num_sensors} sensors do not "
             f"appear in any cell's inverse map. These sensors can never be hit.")
 
-    # --- 4. Overcrowding (geometric assignments exceed max_sensors_per_cell) ---
+    # --- 4. Overcrowding (geometric assignments exceed max_candidates_per_ray) ---
     # Count how many geometric assignments each cell receives
     cell_geo_count = np.zeros(total_cells, dtype=int)
     for sensor_id in range(fwd.shape[0]):
@@ -76,10 +76,10 @@ def validate_sensor_map(assignments_geometric, inverted_sensor_map, num_sensors,
                 cell_geo_count[linear_idx] += 1
 
     max_geo = int(cell_geo_count.max()) if total_cells > 0 else 0
-    if max_geo > max_sensors_per_cell:
+    if max_geo > max_candidates_per_ray:
         warnings.warn(
             f"Sensor map: max geometric sensor assignments per cell ({max_geo}) "
-            f"exceeds max_sensors_per_cell={max_sensors_per_cell}. "
+            f"exceeds max_candidates_per_ray={max_candidates_per_ray}. "
             f"Auto-adjusting to {max_geo}.")
 
     # --- 5. Forward-inverse consistency ---
@@ -101,11 +101,11 @@ def validate_sensor_map(assignments_geometric, inverted_sensor_map, num_sensors,
         warnings.warn(
             f"Sensor map: {n_missing}/{n_checked} geometric assignments are "
             f"missing from the inverse map — likely dropped due to "
-            f"max_sensors_per_cell={max_sensors_per_cell} overflow.")
+            f"max_candidates_per_ray={max_candidates_per_ray} overflow.")
 
 
 def create_propagator(detector, sensor_positions, sensor_radius,
-                      temperature=0.2, max_sensors_per_cell=4,
+                      temperature=0.2, max_candidates_per_ray=4,
                       **grid_params):
     """Build a JIT-compiled photon propagator using detector methods.
 
@@ -117,7 +117,7 @@ def create_propagator(detector, sensor_positions, sensor_radius,
     sensor_radius : float
     temperature : float
         Soft-assignment temperature for overlap probability.
-    max_sensors_per_cell : int
+    max_candidates_per_ray : int
     **grid_params
         Geometry-specific grid parameters passed to ``detector.configure_grid()``.
         Cylinder: n_cap, n_angular, n_height.
@@ -133,9 +133,9 @@ def create_propagator(detector, sensor_positions, sensor_radius,
     num_sensors = len(sensor_positions)
 
     # Configure grid on detector — caller passes geometry-specific params.
-    # max_sensors_per_cell is always forwarded so auto-derivation can
+    # max_candidates_per_ray is always forwarded so auto-derivation can
     # ensure no cell exceeds this limit.
-    grid_params.setdefault('max_sensors_per_cell', max_sensors_per_cell)
+    grid_params.setdefault('max_candidates_per_ray', max_candidates_per_ray)
     detector.configure_grid(**grid_params)
 
     # 1. Geometric sensor-to-cell assignments
@@ -146,16 +146,16 @@ def create_propagator(detector, sensor_positions, sensor_radius,
 
     # 3. Distance-based fallback assignments (shared)
     assignments_distance = find_closest_sensors(
-        grid_centers, sensor_positions, max_sensors_per_cell)
+        grid_centers, sensor_positions, max_candidates_per_ray)
 
     # 4. Build inverted sensor map (geometry-specific decoder)
     inverted_sensor_map = detector.build_inverted_sensor_map(
         assignments_geometric, assignments_distance,
-        max_sensors_per_cell, num_sensors)
+        max_candidates_per_ray, num_sensors)
 
     # 4b. Validate the sensor map
     validate_sensor_map(assignments_geometric, inverted_sensor_map,
-                        num_sensors, detector, max_sensors_per_cell)
+                        num_sensors, detector, max_candidates_per_ray)
 
     # 5. Overlap probability (shared)
     # temperature=None → step function (hard assignment, non-differentiable)
@@ -181,7 +181,7 @@ def create_propagator(detector, sensor_positions, sensor_radius,
 
         Returns
         -------
-        dict with keys: sensor_weights, sensor_indices, times, positions,
+        dict with keys: sensor_weights, sensor_indices, sensor_distances, positions,
              normals, inside_sensor, per_sensor_positions, sensor_normals
         """
         single_ray = photon_origins.ndim == 1
@@ -206,7 +206,7 @@ def create_propagator(detector, sensor_positions, sensor_radius,
                 photon_origins, photon_directions,
                 bounds_check, overlap_prob)
 
-        (weights, sensor_times, sensor_indices,
+        (weights, sensor_distances, sensor_indices,
          sensor_normals_all, inside_sensor,
          sensor_hit_positions) = jax.vmap(
             compute_for_slot, in_axes=1, out_axes=0)(potential_sensors)
@@ -225,7 +225,7 @@ def create_propagator(detector, sensor_positions, sensor_radius,
 
         # g. Assemble result dict
         result = {
-            'times': sensor_times,
+            'sensor_distances': sensor_distances,
             'sensor_weights': weights,
             'sensor_indices': sensor_indices,
             'per_sensor_positions': sensor_hit_positions,

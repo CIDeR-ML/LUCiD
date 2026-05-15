@@ -668,7 +668,7 @@ def find_intersected_box_sensors_differentiable(ray_origins, ray_directions, sen
     )(potential_sensors.T)
     
     weights = sensor_results[0]
-    sensor_times = sensor_results[1]
+    sensor_distances = sensor_results[1]
     sensor_indices = sensor_results[2]
     sensor_normals = sensor_results[3]
     inside_sensor = sensor_results[4]
@@ -687,7 +687,7 @@ def find_intersected_box_sensors_differentiable(ray_origins, ray_directions, sen
     final_normals = intersection_results['normals']
 
     result = {
-        'times': sensor_times,
+        'sensor_distances': sensor_distances,
         'sensor_weights': weights,
         'sensor_indices': sensor_indices,
         'per_sensor_positions': sensor_hit_positions,
@@ -701,14 +701,14 @@ def find_intersected_box_sensors_differentiable(ray_origins, ray_directions, sen
 
 
 def create_inverted_box_sensor_map(assignments_geometric, assignments_distance, 
-                                    n_x, n_y, n_z, max_sensors_per_cell):
+                                    n_x, n_y, n_z, max_candidates_per_ray):
     """Create inverted sensor map for box geometry with proper grid indexing."""
     front_back_cells = n_x * n_z
     left_right_cells = n_y * n_z
     top_bottom_cells = n_x * n_y
     total_cells = 2 * (front_back_cells + left_right_cells + top_bottom_cells)
     
-    inverted_map = jnp.full((total_cells, max_sensors_per_cell), -1, dtype=jnp.int32)
+    inverted_map = jnp.full((total_cells, max_candidates_per_ray), -1, dtype=jnp.int32)
     
     def update_cell(inv_map, i):
         # Update cell i with sensors that geometrically intersect with it
@@ -755,7 +755,7 @@ def create_inverted_box_sensor_map(assignments_geometric, assignments_distance,
                      (sensor_assignments[:, 2] == cell_k)
             
             cell_matches = jnp.any(matches)
-            should_add = cell_matches & (curr_count < max_sensors_per_cell)
+            should_add = cell_matches & (curr_count < max_candidates_per_ray)
             
             new_map = jnp.where(
                 should_add,
@@ -791,7 +791,7 @@ def create_inverted_box_sensor_map(assignments_geometric, assignments_distance,
             )
             
             # Add if not duplicate and have space
-            should_add = (~is_duplicate) & (curr_count < max_sensors_per_cell)
+            should_add = (~is_duplicate) & (curr_count < max_candidates_per_ray)
             
             new_map = jnp.where(
                 should_add,
@@ -820,7 +820,7 @@ def create_inverted_box_sensor_map(assignments_geometric, assignments_distance,
 
 
 def create_box_photon_propagator(sensor_positions, sensor_radius, length=4.0, width=4.0, height=6.0,
-                                 n_x=125, n_y=125, n_z=125, temperature=0.2, max_sensors_per_cell=4):
+                                 n_x=125, n_y=125, n_z=125, temperature=0.2, max_candidates_per_ray=4):
     """
     Creates a JIT-compiled function for efficient photon propagation simulation in box geometry with optimizations.
     """
@@ -840,11 +840,11 @@ def create_box_photon_propagator(sensor_positions, sensor_radius, length=4.0, wi
     
     # Calculate grid centers for distance-based assignment
     grid_centers = calculate_box_grid_centers(length, width, height, n_x, n_y, n_z)
-    assignments_distance = find_closest_sensors(grid_centers, sensor_positions_jax, max_sensors_per_cell)
+    assignments_distance = find_closest_sensors(grid_centers, sensor_positions_jax, max_candidates_per_ray)
     
     # Create inverted sensor map
     inverted_sensor_map = create_inverted_box_sensor_map(
-        assignments_geometric, assignments_distance, n_x, n_y, n_z, max_sensors_per_cell
+        assignments_geometric, assignments_distance, n_x, n_y, n_z, max_candidates_per_ray
     )
 
     @jax.jit
