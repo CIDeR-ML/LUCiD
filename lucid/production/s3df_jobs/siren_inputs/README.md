@@ -30,9 +30,22 @@ python3 generate_jobs.py -c configs/water_mu_test.json -s
 python3 generate_jobs.py -c configs/water_mu.json -s
 python3 generate_jobs.py -c configs/water_el.json -s
 
-# 5. After all jobs finish, hadd per-cell sub-job ROOTs
+# 5. After each drain, recover any preempted/failed sub-jobs (idempotent;
+#    repeat until "missing" is 0 — the cluster's `preemptable` QoS on roma
+#    means some sub-jobs get bumped):
+./resubmit_failed.sh $OUTPUT_BASE_PATH
+
+# 6. Once nothing is missing, hadd per-cell sub-job ROOTs:
 ./merge.sh $OUTPUT_BASE_PATH
 ```
+
+The `resubmit_failed.sh` truth check is the presence of the
+`OpticalPhotons` TTree key in each cell's `output_job_*.root` —
+preempted PhotonSim jobs leave basket bytes on disk but never reach
+`DataManager::Finalize()`, so the TTree directory entry is the
+unambiguous "this job ran to completion" marker. The wrapper bridges
+the apptainer/host split (uproot lives in the container, sbatch lives
+on the host).
 
 ## Config schema
 
