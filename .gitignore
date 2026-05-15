@@ -4,11 +4,14 @@
 *.h5
 *.html
 *.png
-!figures/det_repo_img.png
-!figures/combined_3x2_charge_displays.png
 *.npy
 *.root
 sftp-config.json
+
+# Generated figure outputs (notebook artifacts, gifs, etc.)
+**/figures/*
+!figures/det_repo_img.png
+!figures/combined_3x2_charge_displays.png
 
 # Generated data from scripts
 **/generated_data/
