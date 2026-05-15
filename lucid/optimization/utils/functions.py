@@ -54,8 +54,6 @@ def cylinder_grid_points_local(center_xy, z_center, R_local, H_local, L, R, H):
     pts = []
     for i, z in enumerate(zs):
         z_global = z
-        # if z_global < 0 or z_global > H:
-        #     continue
 
         layer_shift_x = 0.0
         layer_shift_y = 0.0
@@ -161,39 +159,19 @@ def hierarchical_direction_search_cone(prediction_simulator, position, initial_t
             theta = np.arccos(np.clip(direction[2], -1.0, 1.0))
             phi = np.arctan2(direction[1], direction[0])
             
-            # # Create parameter vector for this direction
-            # test_params = jnp.array([
-            #     position[0], position[1], position[2],
-            #     initial_t0, theta, phi, energy_guess
-            # ])
-            
             search_key, _ = jax.random.split(search_key)
             
             try:
-                # # Evaluate combined loss at this direction
-                # combined_loss, vertex_loss, wc_loss, energy_loss_val = combined_product_loss(
-                #     test_params, hit_detector_positions, observed_times, observed_charge,
-                #     true_data, detector_params, search_key
-                # )
-
                 track = ParticleParams(energy=jnp.asarray(energy_guess), position=jnp.asarray(position),
                                       theta=jnp.asarray(theta), phi=jnp.asarray(phi), t0=jnp.asarray(initial_t0))
-                # Simulator returns (log_w, flat_times, flat_indices, total_charge)
                 log_w, flat_times, flat_indices, total_charge = prediction_simulator(track, search_key)
                 loss = counts_loss(observed_charge, total_charge)
-
-                # loss, _ = spatial_loss_component(
-                #     position, theta, phi, energy_guess, true_data, detector_params, search_key
-                # )
 
                 direction_result = {
                     'direction': direction.copy(),
                     'theta': float(theta),
                     'phi': float(phi),
                     'loss': float(loss),
-                    # 'vertex_loss': float(vertex_loss),
-                    # 'wc_loss': float(wc_loss),
-                    # 'energy_loss': float(energy_loss_val)
                 }
                 
                 level_results.append(direction_result)
@@ -457,17 +435,10 @@ def energy_scan_optimization(prediction_simulator, position, theta, phi, initial
             log_w, flat_times, flat_indices, total_charge = prediction_simulator(track, scan_key)
             # Use energy_loss (log ratio of total counts) for initial energy guess
             loss = energy_loss(total_charge, observed_charge)
-            # combined_loss, vertex_loss, wc_loss, energy_loss_val = energy_loss(
-            #     test_params, hit_detector_positions, observed_times, observed_charge,
-            #     true_data, detector_params, scan_key
-            # )
-            
+
             energy_result = {
                 'energy': float(energy),
                 'loss': float(loss),
-                # 'vertex_loss': float(vertex_loss),
-                # 'wc_loss': float(wc_loss),
-                # 'energy_loss': float(energy_loss_val)
             }
             
             scan_results.append(energy_result)

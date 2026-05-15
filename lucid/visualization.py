@@ -132,9 +132,6 @@ def create_detector_display(json_filename='../config/cyl_geom_config.json', spar
         # If a custom colormap is provided, override cmap (but keep norm as-is)
         if colormap is not None:
             cmap = colormap
-            # If you ever want to use colormap_norm, uncomment:
-            # if colormap_norm is not None:
-            #     norm = colormap_norm
 
         color_gradient = plt.cm.ScalarMappable(norm=norm, cmap=cmap)
 

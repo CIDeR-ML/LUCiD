@@ -417,7 +417,7 @@ def create_event_3D_visualization(
     return fig
 
 
-def create_optimization_path_3d_visualization(event_ID, all_event_results, arrow_every_n=100, figures_dir='figures/', detector_name='Unkwown'):
+def create_optimization_path_3d_visualization(event_ID, all_event_results, arrow_every_n=100, figures_dir='figures/', detector_name='Unknown'):
     """
     Create 3D visualization with multiple direction arrows and arrow heads.
     Title shows both direction and position error improvements.
@@ -549,7 +549,6 @@ def create_optimization_path_3d_visualization(event_ID, all_event_results, arrow
                   f"Pos Guess Error: {pos_guess_err:.3f}m → Final Pos Error: {pos_err:.3f}m<br>"
                   f"Dir Guess Error: {dir_guess_err:.1f}° → Final Dir Error: {dir_err:.1f}°<br>"
                   f"E Guess Error: {100*energy_guess_err/true_energy:.1f} % → Final E Error: {100*E_err/true_energy:.1f} % <br>")
-                  #f"t0 Error: {t0_err:.3f} | Loss: {combined_loss:.6f}")
 
 
     # Layout

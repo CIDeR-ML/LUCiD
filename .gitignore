@@ -45,4 +45,6 @@ s3df_jobs/*/*/*
 lucid/production/s3df_jobs/user_paths.sh
 
 
-lucid_sim.egg-info/
+*.egg-info/
+runs/
+plots/

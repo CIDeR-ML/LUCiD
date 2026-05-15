@@ -188,11 +188,6 @@ def ray_box_intersection_with_face(ray_origin, ray_direction, box_min, box_max):
     # face_side: True=negative, False=positive
     face_index = face_axis * 2 + jnp.where(face_side, 0, 1)
     
-    # For now, let's not remap face indices to avoid confusion
-    # The original system may have been working with the raw indices
-    # face_mapping = jnp.array([2, 3, 1, 0, 5, 4])  
-    # face_index = face_mapping[face_index]
-    
     return jnp.where(valid, t, -1), face_index
 
 

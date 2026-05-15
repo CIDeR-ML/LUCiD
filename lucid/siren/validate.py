@@ -204,8 +204,8 @@ class PhotonSimValidator:
             axes = axes.ravel()
 
         # Convert distance range to meters
-        distance_min_m = 0#self.distance_min / 1000.0
-        distance_max_m = 10#self.distance_max / 1000.0
+        distance_min_m = 0
+        distance_max_m = 10
 
         # Create plots
         images = []

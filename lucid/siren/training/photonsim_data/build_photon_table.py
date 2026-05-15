@@ -265,8 +265,7 @@ class AveragePhotonTable3D:
             cbar = plt.colorbar(im, ax=ax)
             cbar.set_label('log₁₀(photons/event)', rotation=270, labelpad=20)
 
-            # Mark Cherenkov angle
-            #ax.axvline(43, color='red', linestyle='--', alpha=0.7, linewidth=1)
+
 
         # 5. Integrated angular average
         ax = axes[1, 1]

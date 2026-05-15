@@ -210,10 +210,6 @@ def run_complete_optimization_adam(initial_t0, hit_detector_positions, observed_
         print(f"    Energy guess: {energy_guess:.1f} (true: {true_energy:.1f})")
 
     N_photons = jnp.sum(observed_counts)
-    # energy_guess = estimate_muon_energy_from_photon_count(N_photons, qe=qe)
-    # if verbosity >= 2:
-    #     print(f"    Observed photons: {N_photons}")
-    #     print(f"    Energy guess: {energy_guess:.1f} (true: {true_energy:.1f})")
 
     # Stage 1: Position+t0 grid search
     if verbosity >= 2:
@@ -338,7 +334,6 @@ def run_complete_optimization_adam(initial_t0, hit_detector_positions, observed_
         )
         if iteration < 25:
             scaled_updates = scaled_updates._replace(energy=jnp.zeros_like(scaled_updates.energy))
-            #scaled_updates = scaled_updates._replace(t0=jnp.zeros_like(scaled_updates.t0))
 
         # Apply scaled updates to parameters
         track = optax.apply_updates(track, scaled_updates)
@@ -497,7 +492,6 @@ def generate_event_data(event_idx, random_key, data_dir, data_simulator,
     entry_idx = event_idx % n_entries
 
     photon_data = read_photon_data_from_photonsim(data_file, entry_idx)
-    #photon_data['N'] = len(photon_data['photon_origins'])
 
     # Process photon data
     photon_origins = photon_data['photon_origins']

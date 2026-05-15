@@ -524,12 +524,8 @@ class SIRENTrainingVisualizer:
         ax.set_xlabel('Training Step', fontsize=12)
         ax.set_ylabel('Loss', fontsize=12)
         ax.set_yscale('log')
-        #ax.grid(True, alpha=0.3)
         ax.legend(fontsize=11, loc='upper right', frameon=False, handlelength=1)
-        
-        # # Simple title
-        # ax.set_title("Training Progress", fontsize=14, fontweight='bold', pad=20)
-        
+
         plt.tight_layout()
         
         if save_path:

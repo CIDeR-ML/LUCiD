@@ -227,9 +227,6 @@ def compute_sensor_intersections_base(sensor_idx, sensor_positions, sensor_radiu
     # Check if intersection point is within geometry bounds
     inside_detector_volume = geometry_bounds_check(intersection_points)
     
-    # # Use correct normals based on whether ray intersects or not
-    # normals = jnp.where(intersects[:, None], normals_intersect, normals_closest)
-
     # Final sensor condition - point must be inside both sensor and geometry
     inside_sensor = inside_spherical_sensor & inside_detector_volume
     
