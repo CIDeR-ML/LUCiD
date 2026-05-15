@@ -350,6 +350,7 @@ def setup_event_simulator(
                 "Provide a physics_config with 'medium_model' or set wavelength_mode=False.")
         if not wavelength_mode:
             return (jnp.full(n, detector_params.scatter_length),
+                    jnp.full(n, detector_params.mie_scatter_length),
                     jnp.full(n, detector_params.absorption_length),
                     None, key)
 
@@ -376,8 +377,10 @@ def setup_event_simulator(
                                _medium_wl.wavelength_grid[0],
                                _medium_wl.wavelength_grid[-1])
         sc = jnp.interp(wavelengths, _medium_wl.wavelength_grid, _medium_wl.scatter_coeff)
+        asym_sc = jnp.interp(wavelengths, _medium_wl.wavelength_grid, _medium_wl.mie_scatter_coeff) 
         ac = jnp.interp(wavelengths, _medium_wl.wavelength_grid, _medium_wl.absorption_coeff)
         scatter_lengths = 1.0 / (sc + 1e-30)
+        mie_scatter_lengths = 1.0 / (asym_sc + 1e-30)
         absorption_lengths = 1.0 / (ac + 1e-30)
 
         # QE-weight convention:
@@ -392,7 +395,7 @@ def setup_event_simulator(
             qe_weights = _qe_fn(wavelengths)
         else:
             qe_weights = None
-        return scatter_lengths, absorption_lengths, qe_weights, key
+        return scatter_lengths, mie_scatter_lengths, absorption_lengths, qe_weights, key
 
     # ================================================================
     # Core propagation (shared by all modes)
@@ -403,7 +406,7 @@ def setup_event_simulator(
         'propagate_fn', 'photon_update_fn', 'pos_grad_threshold', 'make_hits_fn'))
     def _common_propagation(
             positions, directions, intensities, times,
-            scatter_lengths, absorption_lengths,
+            scatter_lengths, mie_scatter_lengths, absorption_lengths,
             qe_per_photon,
             n_rays, detector_params, key,
             num_sensors, K, n_grad_iters, max_sensors_per_cell,
@@ -415,6 +418,8 @@ def setup_event_simulator(
         ----------
         scatter_lengths : jnp.ndarray
             Per-photon scattering lengths, shape (n_rays,).
+        mie_scatter_lengths : jnp.ndarray
+            Per-photon Mie scattering lengths, shape (n_rays,).
         absorption_lengths : jnp.ndarray
             Per-photon absorption lengths, shape (n_rays,).
         qe_per_photon : jnp.ndarray
@@ -428,6 +433,7 @@ def setup_event_simulator(
         wall_reflection_rate = detector_params.wall_reflection_rate
         sensor_reflection_rate = detector_params.sensor_reflection_rate
         qe_corrections = detector_params.qe_corrections
+        g = detector_params.g
 
         from lucid.simulation.types import PhotonState
 
@@ -451,17 +457,17 @@ def setup_event_simulator(
             key, subkey = jax.random.split(key)
             rng_keys = jax.random.split(subkey, n_rays)
 
-            # vmap: 12 args — per-photon scatter/absorption, scalar reflections
+            # vmap: 14 args — per-photon scatter/absorption, scalar g and reflections
             (new_positions, new_directions, new_times,
              detect_probs, reflection_attenuations,
              continuing_factors) = jax.vmap(
                 photon_update_fn,
                 in_axes=(0, 0, 0, 0, 0,
-                         0, None, None, 0,
+                         0, 0, None, None, None, 0,
                          0, 0, None)
             )(state.positions, state.directions, state.times,
               surface_distances, normals,
-              scatter_lengths, wall_reflection_rate, sensor_reflection_rate,
+              scatter_lengths, mie_scatter_lengths, g, wall_reflection_rate, sensor_reflection_rate,
               absorption_lengths,
               hit_sensor, rng_keys, SPEED_OF_LIGHT_MATERIAL)
 
@@ -590,9 +596,8 @@ def setup_event_simulator(
 
         # Per-photon optical properties — use PhotonSim wavelengths if available
         data_wavelengths = photon_data.get('wavelengths', None)
-        scatter_lengths, absorption_lengths, qe_weights, key = _get_optical_arrays(
+        scatter_lengths, mie_scatter_lengths, absorption_lengths, qe_weights, key = _get_optical_arrays(
             n_rays, detector_params, key, wavelengths=data_wavelengths)
-
         # Per-photon QE: wavelength curve * scalar qe (passed to make_hits, not baked into weights)
         if qe_weights is not None:
             qe_per_photon = qe_weights * detector_params.qe
@@ -602,7 +607,7 @@ def setup_event_simulator(
         _pgt = sim_config.K if pos_grad_threshold is None else pos_grad_threshold
         return _common_propagation(
             final_origins, final_directions, photon_intensities, photon_times,
-            scatter_lengths, absorption_lengths,
+            scatter_lengths, mie_scatter_lengths, absorption_lengths,
             qe_per_photon,
             n_rays, detector_params, key, NUM_SENSORS, sim_config.K, sim_config.effective_n_grad_iters, max_sensors_per_cell,
             propagate_photons, photon_update_fn,
@@ -645,7 +650,7 @@ def setup_event_simulator(
                            B_slope, B_intercept, offset))
 
         # Per-photon optical properties (Cherenkov spectrum when wavelength_mode)
-        scatter_lengths, absorption_lengths, qe_weights, key = _get_optical_arrays(
+        scatter_lengths, mie_scatter_lengths, absorption_lengths, qe_weights, key = _get_optical_arrays(
             Nphot, detector_params, opt_key)
 
         # Per-photon QE: wavelength curve * scalar qe (passed to make_hits, not baked into weights)
@@ -661,7 +666,7 @@ def setup_event_simulator(
         _pgt = sim_config.K if pos_grad_threshold is None else pos_grad_threshold
         return _common_propagation(
             photon_origins, photon_directions, photon_intensities, photon_times + t0,
-            scatter_lengths, absorption_lengths,
+            scatter_lengths, mie_scatter_lengths, absorption_lengths,
             qe_per_photon,
             Nphot, detector_params, key, NUM_SENSORS, sim_config.K, sim_config.effective_n_grad_iters, max_sensors_per_cell,
             propagate_photons, photon_update_fn,
@@ -678,7 +683,7 @@ def setup_event_simulator(
         # Source wavelength can be None (→ Cherenkov), scalar, or (Nphot,) array;
         # _get_optical_arrays normalizes the shape.
         wavelengths = getattr(source, 'wavelength', None)
-        scatter_lengths, absorption_lengths, qe_weights, key = _get_optical_arrays(
+        scatter_lengths, mie_scatter_lengths, absorption_lengths, qe_weights, key = _get_optical_arrays(
             Nphot, detector_params, opt_key, wavelengths=wavelengths)
 
         # Per-photon QE: wavelength curve * scalar qe (passed to make_hits, not baked into weights)
@@ -690,7 +695,7 @@ def setup_event_simulator(
         _pgt = sim_config.K if pos_grad_threshold is None else pos_grad_threshold
         return _common_propagation(
             photon_origins, photon_directions, photon_intensities, photon_times,
-            scatter_lengths, absorption_lengths,
+            scatter_lengths, mie_scatter_lengths, absorption_lengths,
             qe_per_photon,
             Nphot, detector_params, key, NUM_SENSORS, sim_config.K, sim_config.effective_n_grad_iters, max_sensors_per_cell,
             propagate_photons, photon_update_fn,
