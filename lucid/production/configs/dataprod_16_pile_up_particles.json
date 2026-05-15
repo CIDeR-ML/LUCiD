@@ -9,14 +9,14 @@
       "primary_source": "particles",
       "energy_distribution": "uniform",
       "particles": [
-        {"type": "mu-", "energy_min_MeV": 105, "energy_max_MeV": 1500}
+        {"type": "mu-", "energy_min_MeV": 200, "energy_max_MeV": 2000}
       ]
     },
     {
       "primary_source": "particles",
       "energy_distribution": "uniform",
       "particles": [
-        {"type": "pi+", "energy_min_MeV": 105, "energy_max_MeV": 1500}
+        {"type": "pi+", "energy_min_MeV": 200, "energy_max_MeV": 2000}
       ]
     }
   ],

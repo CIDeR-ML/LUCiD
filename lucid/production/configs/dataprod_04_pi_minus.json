@@ -10,8 +10,8 @@
   "particles": [
     {
       "type": "pi-",
-      "energy_min_MeV": 100,
-      "energy_max_MeV": 1500
+      "energy_min_MeV": 200,
+      "energy_max_MeV": 2000
     }
   ],
   "lucid_options": {
