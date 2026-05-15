@@ -78,6 +78,33 @@ N_EVENTS=$(jq -r '.n_events_per_job' "$CONFIG_FILE")
 N_PARTICLES=$(jq '.particles // [] | length' "$CONFIG_FILE")
 USE_CONFIG_NUMBER=$(jq -r 'if has("use_config_number") then .use_config_number else true end' "$CONFIG_FILE")
 
+# --- Optional time-based fan-out ---------------------------------------------
+# If the config has an `events_schedule` block, derive N_JOBS / N_EVENTS so
+# each sub-job targets ~target_seconds_per_job of wall time. Schema:
+#   "events_schedule": {
+#     "events_per_dataset":    20000,   # total events across all jobs
+#     "target_seconds_per_job": 3600,   # ~1h sub-jobs
+#     "seconds_per_event":     2.5      # measured for this config+partition
+#   }
+# Empirical seconds_per_event values per config are in DataProduction_README.md
+# (PhotonSim + LUCiD, partition-dependent). If the schedule is absent, the
+# existing flat n_jobs * n_events_per_job is used unchanged.
+EVENTS_PER_DATASET=$(jq -r '.events_schedule.events_per_dataset // empty' "$CONFIG_FILE")
+TARGET_SECONDS=$(jq -r    '.events_schedule.target_seconds_per_job // empty' "$CONFIG_FILE")
+SEC_PER_EVENT=$(jq -r     '.events_schedule.seconds_per_event // empty' "$CONFIG_FILE")
+SCHEDULE_NOTE=""
+if [ -n "$EVENTS_PER_DATASET" ] && [ -n "$TARGET_SECONDS" ] && [ -n "$SEC_PER_EVENT" ] && [ "$TEST_MODE" != true ]; then
+    # events_per_job = max(1, floor(target_seconds / seconds_per_event))
+    # n_jobs        = ceil(events_per_dataset / events_per_job)
+    read -r N_EVENTS N_JOBS <<EOF
+$(awk -v d="$EVENTS_PER_DATASET" -v t="$TARGET_SECONDS" -v s="$SEC_PER_EVENT" \
+    'BEGIN { e = int(t/s); if (e < 1) e = 1;
+             j = int((d + e - 1) / e); if (j < 1) j = 1;
+             print e, j }')
+EOF
+    SCHEDULE_NOTE="events_schedule: ${EVENTS_PER_DATASET} evts / ${TARGET_SECONDS}s target @ ${SEC_PER_EVENT}s per event"
+fi
+
 if [ "$TEST_MODE" = true ]; then
     N_EVENTS=2
 fi
@@ -132,6 +159,7 @@ fi
 echo "Description:   $CONFIG_DESC"
 echo "Energy dist:   $ENERGY_DIST"
 echo "Particles:     $N_PARTICLES"
+[ -n "$SCHEDULE_NOTE" ] && echo "Schedule:      $SCHEDULE_NOTE"
 echo "Jobs:          $N_JOBS (events/job=$N_EVENTS)"
 echo "Partition:     $EFFECTIVE_PARTITION  GPUs=$EFFECTIVE_GPUS"
 echo "Detector:      $DETECTOR"
@@ -152,6 +180,11 @@ emit_sbatch() {
     [ "$TEST_MODE" = true ] && test_flag="--test"
     local skip_lucid_flag=""
     [ "$RUN_LUCID" != "true" ] && skip_lucid_flag="--skip-lucid"
+    # When events_schedule changed N_EVENTS, thread it through so
+    # lucid-run-job sees our derived per-job count, not the JSON's
+    # `n_events_per_job` (which is the legacy field).
+    local n_events_flag=""
+    [ -n "$SCHEDULE_NOTE" ] && n_events_flag="--n-events ${N_EVENTS}"
 
     local gpu_line=""
     [ "$EFFECTIVE_GPUS" != "0" ] && gpu_line="#SBATCH --gpus=${EFFECTIVE_GPUS}"
@@ -195,7 +228,7 @@ apptainer exec --nv -B /sdf,/fs,/sdf/scratch,/lscratch,/cvmfs ${dev_binds} \\
         --config "${CONFIG_FILE}" \\
         --output-dir "${out_dir}" \\
         --detector ${DETECTOR} \\
-        --job-id ${job_id} ${test_flag} ${override_flag} ${skip_lucid_flag}
+        --job-id ${job_id} ${test_flag} ${override_flag} ${skip_lucid_flag} ${n_events_flag}
 
 echo "Job ended: \$(date)"
 EOFSBATCH

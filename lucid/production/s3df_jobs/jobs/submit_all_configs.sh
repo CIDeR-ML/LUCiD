@@ -206,6 +206,13 @@ for config_file in "${CONFIG_FILES[@]}"; do
             jq --argjson nevents "$N_EVENTS_OVERRIDE" '.n_events_per_job = $nevents' "$temp_config" > "${temp_config}.tmp" && mv "${temp_config}.tmp" "$temp_config"
         fi
 
+        # If the user is forcing flat n_jobs/n_events via -n/-e, drop any
+        # events_schedule block so generate_jobs.sh doesn't override our
+        # override with time-based planning.
+        if [ -n "$N_JOBS_OVERRIDE" ] || [ -n "$N_EVENTS_OVERRIDE" ]; then
+            jq 'del(.events_schedule)' "$temp_config" > "${temp_config}.tmp" && mv "${temp_config}.tmp" "$temp_config"
+        fi
+
         config_to_use="$temp_config"
     fi
 
