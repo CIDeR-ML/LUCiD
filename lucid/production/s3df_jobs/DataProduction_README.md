@@ -260,15 +260,35 @@ python3 ./jobs/timing_for_schedule.py \
     --events-per-dataset 20000
 ```
 
-Median LUCiD per-event times (PhotonSim adds ~2 s):
+Per-event cost on **Roma** (50-event sample per config, 2026-05-15; ranges
+are the post-cleanup energy spec: e- 1–2000 MeV, others 200–2000 MeV).
+`seconds_per_event` = median LUCiD per-event + PhotonSim_elapsed / n_events
+(slightly pessimistic — PhotonSim_elapsed includes Geant4 init).
+Suitable as a default for `events_schedule.seconds_per_event`.
 
-| Config | Description    | Ampere (GPU) | Roma (CPU) | Milano (CPU) |
-|--------|----------------|--------------|------------|--------------|
-| 000001 | muon           | 0.51 s       | 6.79 s     | 9.04 s       |
-| 000002 | charged pion   | 0.28 s       | 7.54 s     | 8.93 s       |
-| 000003 | electron       | 0.46 s       | 2.26 s     | 5.94 s       |
-| 000006 | low-e electron | 0.06 s       | 0.06 s     | 0.08 s       |
-| 000007 | mu + pi mixed  | 0.83 s       | 26.22 s    | 21.59 s      |
+| Config | Description                          | LUCiD median (s) | PhotonSim/event (s) | **s/event** |
+|--------|--------------------------------------|---:|---:|---:|
+| 000001 | single mu-                            |  3.90 | 0.94 |  **4.83** |
+| 000002 | single pi+                            |  2.89 | 0.65 |  **3.54** |
+| 000003 | single e-                             |  4.17 | 1.05 |  **5.22** |
+| 000004 | single pi-                            |  2.39 | 0.62 |  **3.00** |
+| 000005 | single pi0                            |  5.14 | 1.22 |  **6.36** |
+| 000006 | single e- (low-E, 1–20 MeV)           |  0.11 | 0.09 |  **0.20** |
+| 000007 | mu- + pi+                             |  6.05 | 1.40 |  **7.45** |
+| 000008 | e- + pi+                              |  6.55 | 1.47 |  **8.02** |
+| 000009 | e- + pi0                              |  9.19 | 2.11 | **11.30** |
+| 000010 | mu- + pi+ + pi0                       | 10.76 | 2.42 | **13.18** |
+| 000011 | mu- + pi+ + pi-                       |  8.03 | 1.94 |  **9.97** |
+| 000012 | e- + pi+ + pi0                        | 10.32 | 2.40 | **12.72** |
+| 000013 | GENIE numu                            |  2.15 | 0.58 |  **2.73** |
+| 000014 | GENIE nue                             |  2.68 | 0.69 |  **3.37** |
+| 000015 | pile-up: (mu-+pi+) + GENIE numu       |  9.31 | 0.60 |  **9.90** |
+| 000016 | pile-up: mu- + pi+ particle-gun       |  6.78 | 0.59 |  **7.37** |
+| 000017 | pile-up: GENIE numu + GENIE nue       |  6.33 | 0.84 |  **7.17** |
+| 000018 | pile-up: 2× particle-bomb (N=1–5/vtx) | 21.14 | 2.75 | **23.89** |
+
+Raw .out files preserved at
+`/sdf/data/neutrino/cjesus/new_photonsim_output/timing_20260515/SK_like/config_NNNNNN/`.
 
 ## Troubleshooting
 
