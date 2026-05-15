@@ -25,5 +25,10 @@
   },
   "n_jobs": 2,
   "n_events_per_job": 100,
+  "events_schedule": {
+    "events_per_dataset": 10000,
+    "target_seconds_per_job": 3600,
+    "seconds_per_event": 11.297
+  },
   "cleanup_root_files": true
 }
