@@ -595,7 +595,7 @@ def generate_event_data(event_idx, random_key, data_dir, data_simulator,
     key, _ = jax.random.split(key)
     true_data = jax.lax.stop_gradient(data_simulator(true_track, key, photon_data))
 
-    hit_counts, hit_times_raw = true_data
+    hit_counts, _hit_times_true, hit_times_raw = true_data
     hit_times = hit_times_raw + TRUE_T0
 
     return {
