@@ -132,9 +132,6 @@ def create_propagator(detector, sensor_positions, sensor_radius,
     sensor_positions = jnp.array(sensor_positions)
     num_sensors = len(sensor_positions)
 
-    # Configure grid on detector — caller passes geometry-specific params.
-    # max_candidates_per_ray is always forwarded so auto-derivation can
-    # ensure no cell exceeds this limit.
     grid_params.setdefault('max_candidates_per_ray', max_candidates_per_ray)
     detector.configure_grid(**grid_params)
 
@@ -165,11 +162,11 @@ def create_propagator(detector, sensor_positions, sensor_radius,
     else:
         overlap_prob = create_overlap_prob(temperature * sensor_radius, sensor_radius)
 
-    # 6. Bounds check closure
+    # 6.
     def bounds_check(positions):
         return detector.bounds_check(positions)
 
-    # 7. JIT-compiled propagation function
+    # 7.
     @jax.jit
     def propagate_photons(photon_origins, photon_directions):
         """Trace photon rays through detector geometry.

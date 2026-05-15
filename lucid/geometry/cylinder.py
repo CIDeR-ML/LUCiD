@@ -126,27 +126,20 @@ class Cylinder(Detector):
 
     def place_photosensors(self):
         """Position the photo sensor centers proportionally by surface area."""
-        # Calculate surface areas
         barrel_area = 2 * np.pi * self.r * self.H
         caps_area = 2 * np.pi * self.r**2  # Both caps combined
         total_area = barrel_area + caps_area
         
-        # Distribute sensors proportionally
         n_barrel = int(self.n_sensors * barrel_area / total_area)
         n_caps = self.n_sensors - n_barrel
         n_per_cap = n_caps // 2  # Split equally between top and bottom
         
-        # Place barrel sensors
         self.barr_points = self._place_barrel_sensors(n_barrel)
-        
-        # Place cap sensors
-        self.tcap_points = self._place_cap_sensors(n_per_cap, self.H/2)  # Top cap
-        self.bcap_points = self._place_cap_sensors(n_per_cap, -self.H/2)  # Bottom cap
-        
-        # Combine all points
+        self.tcap_points = self._place_cap_sensors(n_per_cap, self.H/2)
+        self.bcap_points = self._place_cap_sensors(n_per_cap, -self.H/2)
+
         self.all_points = np.concatenate([self.barr_points, self.tcap_points, self.bcap_points], axis=0)
-        
-        # Create ID mappings
+
         self.ID_to_position = {i: self.all_points[i] for i in range(len(self.all_points))}
         
         # Create case mappings (0=barrel, 1=top cap, 2=bottom cap)
@@ -312,17 +305,14 @@ class Cylinder(Detector):
         out[surfaces == 'bottom', 2] = -self.H / 2
         return out
 
-    # ── Algorithmic placement helpers ──────────────────────────────────
-
     def _place_barrel_sensors(self, n_sensors):
         """Place sensors on barrel surface with rectangular grid."""
         if n_sensors == 0:
             return np.array([]).reshape(0, 3)
             
-        # Calculate effective dimensions (with margins)
-        height_eff = self.H - 3 * self.S_radius  # Top and bottom margins
+        height_eff = self.H - 3 * self.S_radius
         circumference_eff = 2 * np.pi * self.r
-        
+
         # Find optimal rows and columns for approximately square spacing
         aspect_ratio = height_eff / circumference_eff
         n_rows = int(np.sqrt(n_sensors * aspect_ratio))
@@ -337,7 +327,6 @@ class Cylinder(Detector):
             else:
                 break
         
-        # Generate grid
         z_positions = np.linspace(-height_eff/2, height_eff/2, n_rows) + self.C[2]
         theta_positions = np.linspace(0, 2*np.pi, n_cols, endpoint=False)
         
@@ -355,16 +344,13 @@ class Cylinder(Detector):
         if n_sensors == 0:
             return np.array([]).reshape(0, 3)
             
-        # Calculate effective radius (with margin)
         radius_eff = self.r - 1.5 * self.S_radius
         
         if radius_eff <= 0:
             return np.array([]).reshape(0, 3)
         
-        # Generate concentric hexagonal pattern
         hex_points = generate_concentric_hexagons(n_sensors, radius_eff)
-        
-        # Convert to 3D and translate
+
         points_3d = np.zeros((len(hex_points), 3))
         points_3d[:, 0] = hex_points[:, 0] + self.C[0]
         points_3d[:, 1] = hex_points[:, 1] + self.C[1]
@@ -376,8 +362,6 @@ class Cylinder(Detector):
         """Visualize the cylinder as a wireframe with detectors"""
         fig = go.Figure()
 
-        # Create cylinder wireframe
-        # Barrel surface
         theta = np.linspace(0, 2 * np.pi, 50)
         z_barrel = np.linspace(-self.H/2, self.H/2, 20)
         theta_mesh, z_mesh = np.meshgrid(theta, z_barrel)
@@ -386,7 +370,6 @@ class Cylinder(Detector):
         y_barrel = self.r * np.sin(theta_mesh) + self.C[1]
         z_barrel_mesh = z_mesh + self.C[2]
 
-        # Add barrel wireframe
         fig.add_trace(go.Surface(
             x=x_barrel, y=y_barrel, z=z_barrel_mesh,
             opacity=0.1,
@@ -395,7 +378,6 @@ class Cylinder(Detector):
             name='Barrel Surface'
         ))
 
-        # Top cap
         r_cap = np.linspace(0, self.r, 20)
         theta_cap = np.linspace(0, 2 * np.pi, 50)
         r_mesh, theta_mesh = np.meshgrid(r_cap, theta_cap)
@@ -404,7 +386,6 @@ class Cylinder(Detector):
         y_top = r_mesh * np.sin(theta_mesh) + self.C[1]
         z_top = np.full_like(x_top, self.H/2 + self.C[2])
 
-        # Add top cap wireframe
         fig.add_trace(go.Surface(
             x=x_top, y=y_top, z=z_top,
             opacity=0.1,
@@ -413,10 +394,8 @@ class Cylinder(Detector):
             name='Top Cap'
         ))
 
-        # Bottom cap
         z_bottom = np.full_like(x_top, -self.H/2 + self.C[2])
 
-        # Add bottom cap wireframe
         fig.add_trace(go.Surface(
             x=x_top, y=y_top, z=z_bottom,
             opacity=0.1,
@@ -426,7 +405,6 @@ class Cylinder(Detector):
         ))
 
         if show_sensors:
-            # Color code sensors by type
             barrel_indices = [i for i, case in self.ID_to_case.items() if case == 0]
             tcap_indices = [i for i, case in self.ID_to_case.items() if case == 1]
             bcap_indices = [i for i, case in self.ID_to_case.items() if case == 2]
@@ -490,7 +468,6 @@ class Cylinder(Detector):
     def intersect_ray(self, origins, directions):
         """Batch ray-cylinder intersection with grid indexing."""
         from lucid.propagation.cylinder import batch_intersect_cylinder_with_grid
-        # Default grid params matching create_photon_propagator defaults
         n_cap = self._n_cap
         n_angular = self._n_angular
         n_height = self._n_height

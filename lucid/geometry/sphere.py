@@ -54,7 +54,6 @@ class Sphere(Detector):
         """Position the photo sensor centers on the sphere surface using Fibonacci spiral."""
         self.all_points = fibonacci_sphere_points_numpy(self.n_sensors, self.r) + self.C
         
-        # Create ID to position dictionary
         self.ID_to_position = {i: self.all_points[i] for i in range(len(self.all_points))}
         
         # For sphere, all sensors are on surface (case 0)
@@ -64,7 +63,6 @@ class Sphere(Detector):
         """Visualize the sphere as a wireframe with detectors"""
         fig = go.Figure()
 
-        # Create sphere wireframe
         u = np.linspace(0, 2 * np.pi, 50)
         v = np.linspace(0, np.pi, 50)
         x_sphere = self.r * np.outer(np.cos(u), np.sin(v)) + self.C[0]

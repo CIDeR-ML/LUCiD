@@ -60,13 +60,11 @@ class Box(Detector):
 
     def place_photosensors(self):
         """Position the photo sensor centers proportionally by surface area."""
-        # Calculate surface areas for each face
         front_back_area = 2 * self.L * self.H
         left_right_area = 2 * self.W * self.H
         top_bottom_area = 2 * self.L * self.W
         total_area = front_back_area + left_right_area + top_bottom_area
         
-        # Distribute sensors proportionally
         n_front_back = int(self.n_sensors * front_back_area / total_area)
         n_left_right = int(self.n_sensors * left_right_area / total_area)
         n_top_bottom = self.n_sensors - n_front_back - n_left_right
@@ -75,7 +73,6 @@ class Box(Detector):
         n_per_left_right = n_left_right // 2
         n_per_top_bottom = n_top_bottom // 2
         
-        # Place sensors on each face
         self.front_points = self._place_face_sensors(n_per_front_back, self.L, self.H, 'front')
         self.back_points = self._place_face_sensors(n_per_front_back, self.L, self.H, 'back')
         self.left_points = self._place_face_sensors(n_per_left_right, self.W, self.H, 'left')
@@ -83,14 +80,12 @@ class Box(Detector):
         self.top_points = self._place_face_sensors(n_per_top_bottom, self.L, self.W, 'top')
         self.bottom_points = self._place_face_sensors(n_per_top_bottom, self.L, self.W, 'bottom')
         
-        # Combine all points
         self.all_points = np.concatenate([
             self.front_points, self.back_points,
             self.left_points, self.right_points,
             self.top_points, self.bottom_points
         ], axis=0)
         
-        # Create ID mappings
         self.ID_to_position = {i: self.all_points[i] for i in range(len(self.all_points))}
         
         # Create case mappings (0=front, 1=back, 2=left, 3=right, 4=top, 5=bottom)
@@ -122,7 +117,6 @@ class Box(Detector):
         if n_sensors == 0:
             return np.array([]).reshape(0, 3)
             
-        # Calculate effective dimensions (with margins)
         dim1_eff = dim1 - 3 * self.S_radius
         dim2_eff = dim2 - 3 * self.S_radius
         
@@ -134,7 +128,6 @@ class Box(Detector):
         n_rows = int(np.sqrt(n_sensors / aspect_ratio))
         n_cols = n_sensors // n_rows if n_rows > 0 else n_sensors
         
-        # Adjust to get closer to target
         while n_rows * n_cols < n_sensors and n_rows > 1:
             if (n_rows + 1) * n_cols <= n_sensors:
                 n_rows += 1
@@ -143,7 +136,6 @@ class Box(Detector):
             else:
                 break
         
-        # Generate grid
         pos1 = np.linspace(-dim1_eff/2, dim1_eff/2, n_cols)
         pos2 = np.linspace(-dim2_eff/2, dim2_eff/2, n_rows)
         
@@ -169,31 +161,25 @@ class Box(Detector):
         """Visualize the box as a wireframe with detectors"""
         fig = go.Figure()
 
-        # Define box vertices
         x_min, x_max = -self.L/2 + self.C[0], self.L/2 + self.C[0]
         y_min, y_max = -self.W/2 + self.C[1], self.W/2 + self.C[1]
         z_min, z_max = -self.H/2 + self.C[2], self.H/2 + self.C[2]
         
-        # Create box edges
         edges = [
-            # Bottom face edges
             [[x_min, x_max], [y_min, y_min], [z_min, z_min]],
             [[x_max, x_max], [y_min, y_max], [z_min, z_min]],
             [[x_max, x_min], [y_max, y_max], [z_min, z_min]],
             [[x_min, x_min], [y_max, y_min], [z_min, z_min]],
-            # Top face edges
             [[x_min, x_max], [y_min, y_min], [z_max, z_max]],
             [[x_max, x_max], [y_min, y_max], [z_max, z_max]],
             [[x_max, x_min], [y_max, y_max], [z_max, z_max]],
             [[x_min, x_min], [y_max, y_min], [z_max, z_max]],
-            # Vertical edges
             [[x_min, x_min], [y_min, y_min], [z_min, z_max]],
             [[x_max, x_max], [y_min, y_min], [z_min, z_max]],
             [[x_max, x_max], [y_max, y_max], [z_min, z_max]],
             [[x_min, x_min], [y_max, y_max], [z_min, z_max]],
         ]
         
-        # Add edges as lines
         for edge in edges:
             fig.add_trace(go.Scatter3d(
                 x=edge[0], y=edge[1], z=edge[2],
@@ -202,7 +188,6 @@ class Box(Detector):
                 showlegend=False
             ))
 
-        # Add semi-transparent faces
         face_colors = ['lightblue', 'lightblue', 'lightgreen', 'lightgreen', 'lightcoral', 'lightcoral']
         face_names = ['Front', 'Back', 'Left', 'Right', 'Top', 'Bottom']
         
@@ -225,7 +210,6 @@ class Box(Detector):
         ))
 
         if show_sensors:
-            # Color code sensors by face
             colors = ['blue', 'darkblue', 'green', 'darkgreen', 'red', 'darkred']
             face_names_full = ['Front', 'Back', 'Left', 'Right', 'Top', 'Bottom']
             

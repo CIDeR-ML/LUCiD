@@ -36,10 +36,8 @@ def intersect_sphere(ray_origin, ray_direction, center, radius):
     """
     LARGE = 1e10
     
-    # Vector from ray origin to sphere center
     oc = ray_origin - center
-    
-    # Quadratic equation coefficients for sphere intersection
+
     a = jnp.sum(ray_direction * ray_direction)
     b = 2.0 * jnp.sum(oc * ray_direction)
     c = jnp.sum(oc * oc) - radius**2
@@ -98,15 +96,12 @@ def intersect_sphere_with_grid(ray_origin, ray_direction, radius, n_divisions):
     intersects, t = intersect_sphere(ray_origin, ray_direction, center, radius)
     intersection_point = ray_origin + t * ray_direction
     
-    # Convert intersection point to spherical coordinates relative to sphere center
     relative_point = intersection_point - center
-    
-    # Calculate spherical coordinates
+
     r = jnp.linalg.norm(relative_point)
     theta = jnp.arccos(jnp.clip(relative_point[2] / (r + 1e-10), -1.0, 1.0))  # polar angle [0, π]
     phi = jnp.arctan2(relative_point[1], relative_point[0]) % (2 * jnp.pi)  # azimuthal angle [0, 2π]
     
-    # Convert to grid indices
     n_theta = n_divisions
     n_phi = 2 * n_divisions  # More divisions in phi for roughly uniform cells
     
@@ -138,10 +133,8 @@ def calculate_sphere_normals(intersection_point):
     ndarray
         Normal vectors for sphere intersections (pointing outward)
     """
-    # For sphere, normal at any point is the vector from center to point
     center = jnp.array([0.0, 0.0, 0.0])
     normals = intersection_point - center
-    # Normalize
     normals = normals / (jnp.linalg.norm(normals, axis=1, keepdims=True) + 1e-10)
     return normals
 

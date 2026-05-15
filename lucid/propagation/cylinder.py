@@ -36,7 +36,6 @@ def intersect_cylinder_wall(ray_origin, ray_direction, r, h):
     """
     LARGE = 1e10
 
-    # Quadratic equation coefficients for cylinder intersection
     a = ray_direction[0]**2 + ray_direction[1]**2
     b = 2.0 * (ray_origin[0]*ray_direction[0] + ray_origin[1]*ray_direction[1])
     c = ray_origin[0]**2 + ray_origin[1]**2 - r**2
@@ -190,15 +189,15 @@ def intersect_cylinder_with_grid(ray_origin, ray_direction, r, h, n_cap, n_angul
     angular_idx = jnp.floor(angle / (2 * jnp.pi) * n_angular).astype(jnp.int32)
     angular_idx = angular_idx % n_angular  # Handle wraparound for angular dimension
     height_idx = jnp.floor((intersection_point[2] + h / 2) / h * n_height).astype(jnp.int32)
-    height_idx = jnp.clip(height_idx, 0, n_height - 1)  # Clamp to valid range
+    height_idx = jnp.clip(height_idx, 0, n_height - 1)
 
     # Calculate cap grid indices using Cartesian coordinates
     cap_x = (intersection_point[0] + r) / (2 * r)
     cap_y = (intersection_point[1] + r) / (2 * r)
     cap_x_idx = jnp.floor(cap_x * n_cap).astype(jnp.int32)
     cap_y_idx = jnp.floor(cap_y * n_cap).astype(jnp.int32)
-    cap_x_idx = jnp.clip(cap_x_idx, 0, n_cap - 1)  # Clamp to valid range
-    cap_y_idx = jnp.clip(cap_y_idx, 0, n_cap - 1)  # Clamp to valid range
+    cap_x_idx = jnp.clip(cap_x_idx, 0, n_cap - 1)
+    cap_y_idx = jnp.clip(cap_y_idx, 0, n_cap - 1)
 
     wall_indices = jnp.array([angular_idx, height_idx])
     cap_indices = jnp.array([cap_x_idx, cap_y_idx])
@@ -267,12 +266,10 @@ def cylinder_bounds_check(points, r, h):
         Boolean array indicating which points are inside cylinder
     """
     x, y, z = points[:, 0], points[:, 1], points[:, 2]
-    
-    # For x,y: check if point is within circle with radius r
+
     inside_xy_circle = (x**2 + y**2) <= r**2
-    # For z: check if |z| ≤ h/2
     inside_z_bounds = (z >= -h/2) & (z <= h/2)
-    
+
     return inside_xy_circle & inside_z_bounds
 
 
@@ -323,7 +320,7 @@ def assign_sensors_to_grid(sensors, sensor_radius, r, h, n_cap, n_angular, n_hei
             angular_idx = jnp.floor(wall_angle / (2 * jnp.pi) * n_angular).astype(jnp.int32)
             angular_idx = angular_idx % n_angular  # Handle wraparound for angular dimension
             height_idx = jnp.floor((wall_height + h / 2) / h * n_height).astype(jnp.int32)
-            height_idx = jnp.clip(height_idx, 0, n_height - 1)  # Clamp to valid range
+            height_idx = jnp.clip(height_idx, 0, n_height - 1)
 
             # Calculate overlap with neighboring cells
             angular_frac = (wall_angle / (2 * jnp.pi) * n_angular) % 1
@@ -371,9 +368,9 @@ def assign_sensors_to_grid(sensors, sensor_radius, r, h, n_cap, n_angular, n_hei
             cap_y = y
 
             x_idx = jnp.floor((cap_x + r) / (2 * r) * n_cap).astype(jnp.int32)
-            x_idx = jnp.clip(x_idx, 0, n_cap - 1)  # Clamp to valid range
+            x_idx = jnp.clip(x_idx, 0, n_cap - 1)
             y_idx = jnp.floor((cap_y + r) / (2 * r) * n_cap).astype(jnp.int32)
-            y_idx = jnp.clip(y_idx, 0, n_cap - 1)  # Clamp to valid range
+            y_idx = jnp.clip(y_idx, 0, n_cap - 1)
 
             # Calculate overlap with neighboring cells
             x_frac = ((cap_x + r) / (2 * r) * n_cap) % 1
