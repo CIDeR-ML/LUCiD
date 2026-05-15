@@ -29,8 +29,10 @@ USE_GPU=false
 PARTITION_OVERRIDE=""
 OUTPUT_OVERRIDE=""
 DETECTOR="SK_like"
+JOB_ID_START=1
+N_JOBS_OVERRIDE=""
 
-while getopts "c:stgP:o:D:h" opt; do
+while getopts "c:stgP:o:D:j:N:h" opt; do
     case $opt in
         c) CONFIG_FILE="$OPTARG";;
         s) SUBMIT_JOBS=true;;
@@ -39,8 +41,11 @@ while getopts "c:stgP:o:D:h" opt; do
         P) PARTITION_OVERRIDE="$OPTARG";;
         o) OUTPUT_OVERRIDE="$OPTARG";;
         D) DETECTOR="$OPTARG";;
+        j) JOB_ID_START="$OPTARG";;
+        N) N_JOBS_OVERRIDE="$OPTARG";;
         h) cat <<EOF
 Usage: $0 -c <config_json> [-s] [-t] [-g] [-P partition] [-o output_base] [-D detector]
+              [-j K] [-N M]
   -c  Path to dataprod JSON config (required)
   -s  Submit jobs to SLURM (default: prepare only)
   -t  Test mode — create only one job (and pass --test to lucid-run-job)
@@ -48,6 +53,12 @@ Usage: $0 -c <config_json> [-s] [-t] [-g] [-P partition] [-o output_base] [-D de
   -P  SLURM partition override
   -o  OUTPUT_BASE_PATH override
   -D  Detector geometry (default: SK_like). Picks LUCiD/config/<detector>_{geom,physics}_config.json.
+  -j  job_id offset (default: 1). Set to N+1 for a top-up wave on a dataset
+      that already has N sub-jobs, so new sub-jobs write fresh file_index shards
+      instead of clobbering submit_job_*.sbatch from the previous wave.
+  -N  Override n_jobs for this invocation. With events_schedule active, this
+      keeps the schedule's events_per_job but forces n_jobs = N. Use together
+      with -j for "add M more sub-jobs" top-ups.
 
 See lucid/production/configs/ for example JSON configs.
 EOF
@@ -107,6 +118,13 @@ fi
 
 if [ "$TEST_MODE" = true ]; then
     N_EVENTS=2
+fi
+
+# CLI -N override applies after the schedule has decided events_per_job, so
+# top-up waves can pin n_jobs explicitly while still inheriting the schedule's
+# per-job event count.
+if [ -n "$N_JOBS_OVERRIDE" ]; then
+    N_JOBS=$N_JOBS_OVERRIDE
 fi
 
 # --- Validate -----------------------------------------------------------------
@@ -274,7 +292,8 @@ if [ "$ENERGY_DIST" == "uniform" ]; then
     JOBS_TO_PROCESS=$N_JOBS
     [ "$TEST_MODE" = true ] && JOBS_TO_PROCESS=1
 
-    for (( j=1; j<=JOBS_TO_PROCESS; j++ )); do
+    j_end=$((JOB_ID_START + JOBS_TO_PROCESS - 1))
+    for (( j=JOB_ID_START; j<=j_end; j++ )); do
         JOB_ID=$(printf "%06d" "$j")
         if [ "$USE_CONFIG_NUMBER" == "true" ]; then
             JOB_NAME="photonsim_config$(printf '%06d' "$CONFIG_NUMBER")_${JOB_ID}"
@@ -316,7 +335,8 @@ elif [ "$ENERGY_DIST" == "monoenergetic" ]; then
             mkdir -p "$ENERGY_DIR/sensor" "$ENERGY_DIR/inst" "$ENERGY_DIR/seg" "$ENERGY_DIR/labl"
         fi
 
-        for (( j=1; j<=JOBS_TO_PROCESS; j++ )); do
+        j_end=$((JOB_ID_START + JOBS_TO_PROCESS - 1))
+        for (( j=JOB_ID_START; j<=j_end; j++ )); do
             JOB_ID=$(printf "%06d" "$j")
             if [ "$USE_CONFIG_NUMBER" == "true" ]; then
                 JOB_NAME="photonsim_config$(printf '%06d' "$CONFIG_NUMBER")_${e_int}MeV_${JOB_ID}"

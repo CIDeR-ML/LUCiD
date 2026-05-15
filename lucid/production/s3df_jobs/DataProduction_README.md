@@ -170,6 +170,33 @@ The `-n` / `-e` flags on `submit_all_configs.sh` still force flat
 splitting — they drop `events_schedule` from the temp config before
 fan-out.
 
+### Topping up an existing dataset
+
+Each sub-job writes a `wc_*_<file_index>.h5` shard where `file_index =
+job_id − 1`, so new sub-jobs just join the existing tree as long as
+their `job_id` doesn't collide with the previous wave. `generate_jobs.sh`
+takes two flags for this:
+
+- `-j K` — start the loop at `job_id = K` (default `1`). Set to `N + 1`
+  to top up a dataset that already has `N` sub-jobs.
+- `-N M` — pin `n_jobs = M` for this invocation, overriding the JSON /
+  `events_schedule`. Use with `-j` for "add M more sub-jobs": the new
+  sub-jobs still inherit `events_per_job` from the schedule.
+
+```bash
+# Count what's already there
+N=$(ls <OUTPUT_BASE>/SK_like/config_000001/submit_job_*.sbatch | wc -l)
+
+# Add 5 more sub-jobs (~5 × events_per_job extra events)
+./jobs/generate_jobs.sh -c configs/dataprod_01_mu.json -P milano \
+    -j $((N + 1)) -N 5 -s
+```
+
+Failure detection works the same across waves: `verify_jobs.py` walks
+every `submit_job_*.sbatch` and checks the matching shard, so a
+preempted sub-job from either wave shows up identically. Run
+`resubmit_failed.sh` before a top-up if you want a clean slate.
+
 ## Output layout
 
 Each `config_NNNNNN/` is one LUCiD **dataset**. Each job contributes
