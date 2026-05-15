@@ -42,7 +42,7 @@ def _qe_roll(flat_weights, flat_indices, flat_times,
              qe, qe_corrections, qe_key, threshold):
     """Per-photon Bernoulli QE survival.
 
-    Shared between make_hits_data and make_hits_per_segment so both modes
+    Shared between make_hits_data and make_hits_per_photon so both modes
     use identical RNG and threshold semantics.
     """
     timing_mask = (flat_weights > threshold) & (flat_times > 0)
@@ -117,28 +117,28 @@ def make_hits_data(
     return measured_charge, measured_time_true, measured_time_reco
 
 
-def make_hits_per_segment(
+def make_hits_per_photon(
         flat_weights, flat_indices, flat_times, num_detectors,
         qe=0.2, qe_corrections=None, rng_key=None, threshold=1e-5,
         apply_smearing=False, tts_sigma_ns=2.5,
-        flat_segment_idx=None, n_segments=0):
-    """Per-segment-mode hits: realistic per-sensor PLUS exact per-(segment, sensor) decomposition.
+        flat_segment_idx=None):
+    """Per-sensor totals PLUS pass-through per-photon arrays for host aggregation.
 
-    Returns ``(measured_charge, measured_time_true, measured_time_reco,
-    pe_per_seg, t_per_seg_true, t_per_seg_reco)``.
+    Per-sensor outputs (measured_charge, measured_time_true, measured_time_reco)
+    use identical QE and TTS draws as make_hits_data. The per-photon arrays are
+    returned to the host so it can do per-(segment, sensor) and per-(particle,
+    sensor) groupbys in numpy.
 
-    Per-sensor outputs use the same QE draws and TTS draws as make_hits_data.
-    The per-(segment, sensor) decomposition reuses the same qe_weights tensor,
-    so column sums of pe_per_seg equal measured_charge by construction.
-
-    When ``apply_smearing`` is true, per-photon TTS is applied before both the
-    per-sensor and per-segment segment_mins. Both true (unsmeared) and reco
-    (TTS-smeared) times are computed and returned for each granularity.
-
-    Photons with ``flat_segment_idx == -1`` (sentinel for non-meaningful
-    parent track) are routed to the ``n_segments``-th dummy bucket and
-    sliced off before return — they still contribute to the per-sensor
-    total but produce no segment row.
+    Returns
+    -------
+    measured_charge        : (num_detectors,) float32
+    measured_time_true     : (num_detectors,) float32 — first-arrival, no TTS
+    measured_time_reco     : (num_detectors,) float32 — first-arrival, TTS-smeared
+    qe_weights             : (n_rays_bucket,) float32 — 0 for QE-failed photons
+    qe_filtered_times      : (n_rays_bucket,) float32 — unsmeared per-photon times
+    qe_filtered_times_reco : (n_rays_bucket,) float32 — TTS-smeared per-photon times
+    flat_indices           : (n_rays_bucket,) int32   — per-photon sensor index
+    flat_segment_idx       : (n_rays_bucket,) int32   — per-photon segment index
     """
     rng_key, smear_time_key = jax.random.split(rng_key)
     qe_key, smear_counts_key = jax.random.split(rng_key)
@@ -147,7 +147,6 @@ def make_hits_per_segment(
         flat_weights, flat_indices, flat_times,
         qe, qe_corrections, qe_key, threshold)
 
-    # ---- Per-sensor (mirrors make_hits_data) ----
     total_charge = jax.ops.segment_sum(qe_weights, flat_indices, num_segments=num_detectors)
     detector_mins_true = jax.ops.segment_min(
         qe_filtered_times, flat_indices, num_segments=num_detectors)
@@ -179,27 +178,9 @@ def make_hits_per_segment(
     measured_time_true = jnp.where(nonzero_mask, detector_mins_true, 0.0)
     measured_time_reco = jnp.where(nonzero_mask, detector_mins_reco, 0.0)
 
-    # ---- Per-(segment, sensor) decomposition ----
-    safe_seg = jnp.where(flat_segment_idx >= 0, flat_segment_idx, n_segments)
-    combined_idx = safe_seg * num_detectors + flat_indices
-    n_buckets = (n_segments + 1) * num_detectors
-
-    pe_per_seg = jax.ops.segment_sum(
-        qe_weights, combined_idx, num_segments=n_buckets,
-    ).reshape(n_segments + 1, num_detectors)[:n_segments]
-
-    t_per_seg_true = jax.ops.segment_min(
-        qe_filtered_times, combined_idx, num_segments=n_buckets,
-    ).reshape(n_segments + 1, num_detectors)[:n_segments]
-    t_per_seg_true = jnp.where(jnp.isfinite(t_per_seg_true), t_per_seg_true, 0.0)
-
-    t_per_seg_reco = jax.ops.segment_min(
-        qe_filtered_smeared, combined_idx, num_segments=n_buckets,
-    ).reshape(n_segments + 1, num_detectors)[:n_segments]
-    t_per_seg_reco = jnp.where(jnp.isfinite(t_per_seg_reco), t_per_seg_reco, 0.0)
-
     return (measured_charge, measured_time_true, measured_time_reco,
-            pe_per_seg, t_per_seg_true, t_per_seg_reco)
+            qe_weights, qe_filtered_times, qe_filtered_smeared,
+            flat_indices, flat_segment_idx)
 
 
 def make_hits_likelihood(

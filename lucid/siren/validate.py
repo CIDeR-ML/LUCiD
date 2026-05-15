@@ -185,7 +185,7 @@ class PhotonSimValidator:
         all_masked_values = []
         for energy in energies[:4]:  # Only process first 4 energies
             reco_value = self.evaluate_photonsim_grid(energy, angle_bins, distance_bins)
-            masked_values = jnp.where(reco_value > threshold, reco_value, 0)
+            masked_values = jnp.where(reco_value > threshold, reco_value, threshold)
             all_masked_values.append(masked_values)
 
         # Determine vmax if not provided
@@ -216,7 +216,7 @@ class PhotonSimValidator:
             masked_values = all_masked_values[i]
 
             # Calculate statistics
-            valid_count = np.sum(masked_values > 0)
+            valid_count = np.sum(masked_values > threshold)
             total_weight = np.sum(masked_values)
 
             results['statistics'][energy] = {

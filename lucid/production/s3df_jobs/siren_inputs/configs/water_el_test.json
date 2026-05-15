@@ -1,0 +1,9 @@
+{
+  "name": "siren_water_el_test",
+  "description": "SIREN-input smoke test for e-: 7 energies (incl. 10/50/100 GeV), 100 events each. s/s_max axis.",
+  "material": "water",
+  "particles": [{"type": "e-"}],
+  "energy_list_MeV": [500, 1000, 2000, 5000, 10000, 50000, 100000],
+  "n_events_per_job": 100,
+  "include_extrapolated": false
+}

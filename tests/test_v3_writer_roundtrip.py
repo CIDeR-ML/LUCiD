@@ -104,6 +104,28 @@ def test_seg_event_roundtrip(v3_batch):
     np.testing.assert_array_equal(seg['n_cherenkov'], ev['segments']['n_cherenkov'])
     # No save-time shift — stored time matches input time.
     np.testing.assert_allclose(seg['time'], ev['segments']['time'])
+    # group_id is always written: the fixture omits the key, so the
+    # writer falls back to a contiguous identity range. Either way it
+    # must be present and an int32 of length n_segments.
+    assert 'group_id' in seg
+    assert seg['group_id'].dtype == np.int32
+    assert len(seg['group_id']) == 4
+
+
+def test_seg_event_group_id_roundtrip(tmp_path):
+    """Explicit group_id values written by the caller round-trip unchanged."""
+    from lucid.sources.event_io import write_seg_config_v3
+    cfg, ev, _ = build_synthetic_event()
+    # Two coarser groups: segments 0+1 → group 0, segments 2+3 → group 1.
+    ev['segments']['group_id'] = np.array([0, 0, 1, 1], dtype=np.int32)
+    seg_path = tmp_path / 'wc_seg_0000.h5'
+    src_idx = np.array([ev['source_event_idx']], dtype=np.uint32)
+    with h5py.File(seg_path, 'w') as fg:
+        write_seg_config_v3(fg, cfg, src_idx)
+        save_seg_event_v3(fg, ev, seq_idx=0)
+    seg = read_seg_event_v3(str(seg_path), 0)
+    np.testing.assert_array_equal(
+        seg['group_id'], np.array([0, 0, 1, 1], dtype=np.int32))
 
 
 def test_labl_event_roundtrip(v3_batch):

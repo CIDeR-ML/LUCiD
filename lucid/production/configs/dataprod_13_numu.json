@@ -3,7 +3,6 @@
   "name": "GENIE numu water",
   "description": "GENIE numu CC+NC interactions on a water target, isotropic direction, uniform 0.1-2 GeV neutrino energy.",
   "material": "water",
-  "output_path": "genie",
   "primary_source": "genie",
   "genie": {
     "probe_pdg": 14,

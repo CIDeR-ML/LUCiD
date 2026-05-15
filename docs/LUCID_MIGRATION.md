@@ -209,9 +209,12 @@ For Cherenkov resimulation outside Geant4:
   needing total energy.
 
 `n_cherenkov` per segment is also stored as the simulator's exact
-G4 count — useful as a forward-sim ML target. Both have been verified
-working in PhotonSim — `sum(Segment_NCherenkov) == sum(MTrack_NCherenkov)`
-per event.
+G4 count — useful as a forward-sim ML target. Both were verified at
+the time via `sum(Segment_NCherenkov) == sum(MTrack_NCherenkov)` per
+event; `MTrack_*` was retired in PhotonSim Stage 5a, so the same
+invariant now reads as `sum(Segment_NCherenkov)` summed per
+`Segment_TrackID` group equaling the previously-stored per-track
+totals.
 
 ### 4.6 Voxels dropped
 
@@ -292,7 +295,9 @@ Sanity checks pass:
 - Both branches written (`Segment_BetaStart`, `Segment_NCherenkov`
   appear in the ROOT file).
 - `sum(Segment_NCherenkov) == sum(MTrack_NCherenkov)` per event for
-  all 5 events — confirms per-step counts sum to per-track totals.
+  all 5 events — confirmed per-step counts sum to per-track totals.
+  (`MTrack_*` was retired in Stage 5a; the equivalent post-Stage-5a
+  check sums `Segment_NCherenkov` grouped by `Segment_TrackID`.)
 - β values fall in `[0, 1]` as physically expected.
 - Segment counts (~700–900 per event) consistent with merge-logic
   output unchanged.

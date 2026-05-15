@@ -122,18 +122,21 @@ def main():
     EVENT_IDX = args.event_idx
     WARMUP, RUNS = args.warmup, args.runs
 
-    # === Step 1 — root_read ===
+    # === Step 1 — root_read+categorize ===
+    # Post-Stage-5a/Stage-6, this step covers ROOT decompression + Python
+    # categorization (categorize_event + derive_meaningful_tracks +
+    # filter_segments_to_meaningful + assign_group_ids + photon→particle
+    # bucketing). The categorization piece is pure-Python over per-event
+    # arrays, so its cost scales with n_tracks and n_segments.
     def step_root_read():
         return read_particle_data_from_photonsim(
             str(args.root_file), EVENT_IDX,
-            include_track_segments=False,
-            include_segment_index=False,
         )
     particle_data, t_root = bench(step_root_read, warmup=WARMUP, runs=RUNS)
     n_particles = particle_data["n_particles"]
     total_photons = len(particle_data["photon_origins"])
     print(f"event {EVENT_IDX}: n_particles={n_particles}  total_photons={total_photons:,}")
-    print(f"root_read     : {fmt(t_root)}")
+    print(f"root_read+cat : {fmt(t_root)}")
 
     # === Step 2 — preprocess (NumPy scatter/pad) ===
     default_direction = np.array([0.0, 0.0, 1.0], dtype=np.float32)
@@ -271,7 +274,6 @@ def main():
         "PE_reco": PE_pp_np[0],
         "T_reco":  T_pp_np[0],
         "source": "PhotonSim_Particles_VMAP",
-        "include_track_segments": False,
     }
     def step_contain():
         return _compute_contained(extended_info, None)
@@ -280,7 +282,7 @@ def main():
 
     # === Summary ===
     rows = [
-        ("root_read",  t_root),
+        ("root_read+cat", t_root),
         ("preprocess", t_pre),
         ("device_put", t_dput),
         ("kernel",     t_kernel),

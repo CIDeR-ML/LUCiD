@@ -49,6 +49,11 @@ def _parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
         help="Path to dataprod JSON config (e.g. from lucid/production/configs/).",
     )
     parser.add_argument(
+        "--detector", type=str, default="SK_like",
+        help="Detector geometry to simulate against. Selects "
+             "config/<detector>_{geom,physics}_config.json.",
+    )
+    parser.add_argument(
         "--output-dir", type=str, required=True,
         help="Absolute path to the dataset directory for this config. "
              "PhotonSim ROOT and the v3 {sensor,inst,seg,labl}/ subdirs are written here.",
@@ -108,16 +113,24 @@ def _load_config(path: str) -> dict:
             raise ValueError(
                 f"Pile-up config {path!r} must declare at least 2 vertices; got {vertices!r}")
         for i, v in enumerate(vertices):
-            if v.get("primary_source") == "genie":
+            src = v.get("primary_source")
+            if src == "genie":
                 if "genie" not in v:
                     raise ValueError(
                         f"Pile-up vertex {i} primary_source='genie' but missing 'genie' block")
+            elif src == "bomb":
+                if "bomb" not in v or not isinstance(v["bomb"].get("candidates"), list):
+                    raise ValueError(
+                        f"Pile-up vertex {i} primary_source='bomb' but missing "
+                        f"'bomb.candidates' list")
             else:
                 if "particles" not in v or "energy_distribution" not in v:
                     raise ValueError(
                         f"Pile-up vertex {i} missing 'particles'/'energy_distribution'")
     elif cfg.get("primary_source") == "genie":
         required.append("genie")
+    elif cfg.get("primary_source") == "bomb":
+        required.append("bomb")
     else:
         required += ["particles", "energy_distribution"]
     for key in required:
@@ -144,6 +157,8 @@ def _build_vertex_subconfig(top_config: dict, vertex: dict) -> dict:
     sub["primary_source"] = vertex.get("primary_source", "particles")
     if sub["primary_source"] == "genie":
         sub["genie"] = vertex["genie"]
+    elif sub["primary_source"] == "bomb":
+        sub["bomb"] = vertex["bomb"]
     else:
         sub["energy_distribution"] = vertex.get(
             "energy_distribution", top_config.get("energy_distribution", "uniform"))
@@ -173,6 +188,7 @@ def _run_lucid(
     n_events: int,
     master_seed: Optional[int],
     job_id: int,
+    detector: str,
 ) -> None:
     """Import LUCiD and write the v3 four-file batch for this job.
 
@@ -186,8 +202,8 @@ def _run_lucid(
     from lucid.geometry.detector_geometry import DetectorGeometry
     from lucid.utils import base_dir_path
 
-    detector_config_path = base_dir_path() + "config/SK_like_geom_config.json"
-    physics_config_path = base_dir_path() + "config/SK_like_physics_config.json"
+    detector_config_path = base_dir_path() + f"config/{detector}_geom_config.json"
+    physics_config_path = base_dir_path() + f"config/{detector}_physics_config.json"
 
     print(f"=== Step 3: Running LUCiD v3 writer ===", flush=True)
     print(f"    ROOT file:  {root_file}")
@@ -206,15 +222,13 @@ def _run_lucid(
     lucid_opts = config.get("lucid_options", {})
     apply_smearing = bool(lucid_opts.get("apply_smearing", True))
     apply_translation = bool(lucid_opts.get("apply_translation", True))
-    # Opt-in segment <-> sensor map. Default off so existing dataprod runs are
-    # byte-identical. The matching PhotonSim macro flag
-    # (/photon/storeSegmentIndex true) must also be set; generate_macro reads
-    # the same key. When on, the simulator runs in 'per_segment' mode,
-    # which adds an exact per-(segment, sensor) decomposition next to
-    # the per-sensor totals — replacing the old two-pass approach
-    # (which used independent RNG and therefore disagreed with sensor.h5).
-    store_segment_sensor_map = bool(lucid_opts.get("store_segment_sensor_map", False))
-    hit_mode = 'per_segment' if store_segment_sensor_map else 'realistic'
+    # seg/event_NNN/sensor_hits/ is mandatory for data-mode datasets:
+    # it's the per-(segment, sensor) ground truth that inst.h5 is now
+    # aggregated from. Photon_SegmentIndex is unconditional in PhotonSim
+    # post-Stage-5a, so no macro flag is needed. The simulator runs in
+    # 'per_segment' mode, which produces an exact per-(segment, sensor)
+    # decomposition with column-sums equal to the per-sensor totals
+    # by construction (shared qe_weights — sensor_response.py:100-104).
 
     simulate_event = setup_event_simulator(
         detector_config_path,
@@ -225,7 +239,7 @@ def _run_lucid(
         apply_smearing=False,  # per-particle smearing off; PE-sum smearing applied below
         physics_config=physics_config_path,
         default_detector_params=True,
-        hit_mode=hit_mode,
+        hit_mode='per_segment',
     )
     # PAD_SIZE bucketing (see lucid/sources/event_io.py for the full rationale).
     # `None` -> module default; an explicit empty list opts back into the
@@ -250,9 +264,7 @@ def _run_lucid(
         file_index_start=file_index,
         detector_type=detector_type,
         material=material,
-        include_track_segments=True,
         primary_source=config.get("primary_source", "particles"),
-        store_segment_sensor_map=store_segment_sensor_map,
         pad_size_buckets=pad_size_buckets,
     )
     print(f"LUCiD wrote {len(saved_files)} files under {output_dir}/{{sensor,inst,seg,labl}}/")
@@ -336,6 +348,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         try:
             from lucid.production.run_genie import run_genie
             print("\n=== Step 0: GENIE event generation ===", flush=True)
+            t_genie = time.time()
             produced, total_primaries = run_genie(
                 config=config,
                 output_dir=output_dir,
@@ -343,6 +356,7 @@ def main(argv: Optional[list[str]] = None) -> int:
                 n_events=n_events,
                 seed=subproc_seeds['genie_seed'],
             )
+            print(f"GENIE elapsed: {time.time() - t_genie:.1f}s")
             print(f"GENIE rootracker: {produced}")
             print(f"GENIE total primaries (one G4 event each): {total_primaries}")
             if produced != gtrac_path:
@@ -417,6 +431,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             n_events=photonsim_events,
             master_seed=args.master_seed,
             job_id=args.job_id,
+            detector=args.detector,
         )
     except Exception as e:
         import traceback
@@ -517,6 +532,7 @@ def _main_pileup(args: argparse.Namespace, config: dict) -> int:
         if uses_genie_v and not args.skip_genie:
             try:
                 from lucid.production.run_genie import run_genie
+                t_genie = time.time()
                 produced, total_primaries = run_genie(
                     config=sub_cfg,
                     output_dir=output_dir,
@@ -524,6 +540,7 @@ def _main_pileup(args: argparse.Namespace, config: dict) -> int:
                     n_events=n_events,
                     seed=subproc_seeds["genie_seed"],
                 )
+                print(f"GENIE vertex {vidx} elapsed: {time.time() - t_genie:.1f}s")
                 # run_genie writes gntp_job_{job_id_padded_inner}.gtrac.root —
                 # move/rename to our per-vertex path.
                 if produced != gtrac_path:
@@ -578,8 +595,8 @@ def _main_pileup(args: argparse.Namespace, config: dict) -> int:
     from lucid.geometry.detector_geometry import DetectorGeometry
     from lucid.utils import base_dir_path
 
-    detector_config_path = base_dir_path() + "config/SK_like_geom_config.json"
-    physics_config_path  = base_dir_path() + "config/SK_like_physics_config.json"
+    detector_config_path = base_dir_path() + f"config/{args.detector}_geom_config.json"
+    physics_config_path  = base_dir_path() + f"config/{args.detector}_physics_config.json"
 
     det_geom = DetectorGeometry.from_config(detector_config_path)
     sensor_positions = np.asarray(det_geom.sensor_points, dtype=np.float32)
@@ -590,6 +607,7 @@ def _main_pileup(args: argparse.Namespace, config: dict) -> int:
         detector_config_path, 0, K=12, is_data=True, temperature=0.0,
         apply_smearing=False, physics_config=physics_config_path,
         default_detector_params=True,
+        hit_mode='per_segment',
     )
 
     lucid_opts = config.get("lucid_options", {})
@@ -620,7 +638,6 @@ def _main_pileup(args: argparse.Namespace, config: dict) -> int:
         file_index_start=file_index,
         detector_type=detector_type,
         material=material,
-        include_track_segments=True,
     )
     print(f"LUCiD wrote {len(saved_files)} files.")
 

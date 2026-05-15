@@ -119,7 +119,6 @@ honors:
 | `config_number` | int | unique ID, used as `config_NNNNNN` output folder |
 | `name` | string | dataset label, recorded in HDF5 provenance |
 | `material` | string | `"water"` (others later) |
-| `output_path` | string | subdir under `OUTPUT_BASE_PATH/<material>/` |
 | `primary_source` | string | `"particle_gun"` or `"genie"` |
 | `energy_distribution` | string | `"uniform"` or `"monoenergetic"` |
 | `particles` | array | per-particle type + energy ranges |
@@ -138,7 +137,7 @@ Each `config_NNNNNN/` is one LUCiD **dataset**. Each job contributes
 one **batch** (`file_index = job_id - 1`) of four parallel HDF5 files:
 
 ```
-OUTPUT_BASE_PATH/water/uniform_energy/
+OUTPUT_BASE_PATH/SK_like/           # detector chosen via submit_all_configs.sh -D <name>
 ├── config_000001/                  # dataset: "single mu-"
 │   ├── submit_job_000001.sbatch
 │   ├── job_000001-<jobid>.{out,err}
@@ -175,7 +174,7 @@ per-event timing line and produces histograms / summary tables.
 
 ```bash
 python ./jobs/report_time_performance.py --all \
-    --base-dir <OUTPUT_BASE_PATH>/water/uniform_energy \
+    --base-dir <OUTPUT_BASE_PATH>/SK_like \
     --output timing_report.png
 ```
 

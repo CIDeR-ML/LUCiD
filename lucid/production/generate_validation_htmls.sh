@@ -114,7 +114,6 @@ cat > "$MACRO_FILE" << EOF
 /output/filename ${ROOT_FILE}
 /run/initialize
 /photon/storeIndividual true
-/edep/storeIndividual false
 
 # Particles
 ${PARTICLE_COMMANDS}

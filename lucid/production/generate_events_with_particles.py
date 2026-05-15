@@ -112,6 +112,7 @@ def main():
         apply_smearing=False,  # per-particle smearing off; PE-sum smearing applied later
         physics_config=args.physics_config,
         default_detector_params=True,
+        hit_mode='per_segment',  # mandatory for data mode (seg/sensor_hits/ ground truth)
     )
     dp = simulate_event.default_detector_params
     print(f"  Wall reflection rate: {float(dp.wall_reflection_rate):.3f}")
@@ -148,7 +149,6 @@ def main():
         file_index_start=args.file_index_start,
         detector_type=detector_type,
         material=material,
-        include_track_segments=True,
     )
 
     print(f"\nWrote {len(saved_files)} files under {args.output}/"

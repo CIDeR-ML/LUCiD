@@ -3,7 +3,6 @@
   "name": "single mu-",
   "description": "Single muon with LUCiD processing",
   "material": "water",
-  "output_path": "uniform_energy",
   "energy_distribution": "uniform",
   "store_individual_photons": true,
   "run_lucid": true,
@@ -17,8 +16,7 @@
   ],
   "lucid_options": {
     "apply_smearing": true,
-    "apply_translation": true,
-    "pad_size_buckets": [10000, 100000, 250000, 500000, 1000000]
+    "apply_translation": true
   },
   "n_jobs": 2,
   "n_events_per_job": 100,

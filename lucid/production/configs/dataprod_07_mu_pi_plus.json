@@ -3,7 +3,6 @@
   "name": "mu- + pi+",
   "description": "Multi-particle events with muon and positive pion with LUCiD processing",
   "material": "water",
-  "output_path": "uniform_energy",
   "energy_distribution": "uniform",
   "store_individual_photons": true,
   "run_lucid": true,
