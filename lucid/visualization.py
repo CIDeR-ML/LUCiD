@@ -8,12 +8,14 @@ from lucid.utils import sparse_to_full
 from matplotlib.colors import LinearSegmentedColormap
 
 def create_color_gradient(max_cnts, colormap='gnuplot'):
+    """Return a ScalarMappable that maps values in [0, max_cnts] to *colormap*."""
     cmap = plt.get_cmap(colormap)
     norm = plt.Normalize(vmin=0, vmax=max_cnts)
     return plt.cm.ScalarMappable(norm=norm, cmap=cmap)
 
 
 def calculate_min_distance(positions):
+    """Return the smallest pairwise distance between *positions*, or 1.0 if fewer than two."""
     distances = pdist(positions)
     return np.min(distances) if len(distances) > 0 else 1.0
 

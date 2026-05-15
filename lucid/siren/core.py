@@ -45,10 +45,6 @@ class SIREN(nn.Module):
     hidden_omega_0: float = 30.0
     w0: float = 30.0  # Alternative parameter name for compatibility
     
-    def setup(self):
-        # Setup method - no attribute modification needed
-        pass
-    
     @nn.compact
     def __call__(self, inputs):
         # Use w0 parameter directly, falling back to separate omega_0 parameters
@@ -98,10 +94,17 @@ def torch_to_jax(tensor):
     return jnp.array(tensor.cpu().numpy())
 
 def convert_pytorch_to_jax(pytorch_state_dict: dict, jax_model: SIREN):
-    """Convert PyTorch SIREN weights to JAX/Flax format"""
+    """Convert PyTorch SIREN weights to JAX/Flax format.
+
+    Args:
+        pytorch_state_dict: PyTorch state_dict from a trained SIREN model.
+        jax_model: Target JAX SIREN model instance (used for architecture reference).
+
+    Returns:
+        FrozenDict of JAX/Flax parameters matching the model's expected structure.
+    """
     params = {}
     
-    # First sine layer (SineLayer_0)
     params['SineLayer_0'] = {
         'Dense_0': {
             'kernel': torch_to_jax(pytorch_state_dict['net.0.linear.weight'].T),
@@ -109,7 +112,6 @@ def convert_pytorch_to_jax(pytorch_state_dict: dict, jax_model: SIREN):
         }
     }
     
-    # Hidden layers (SineLayer_1 through SineLayer_3)
     for i in range(1, 4):
         params[f'SineLayer_{i}'] = {
             'Dense_0': {
@@ -118,7 +120,6 @@ def convert_pytorch_to_jax(pytorch_state_dict: dict, jax_model: SIREN):
             }
         }
     
-    # Final dense layer
     params['Dense_0'] = {
         'kernel': torch_to_jax(pytorch_state_dict['net.4.weight'].T),
         'bias': torch_to_jax(pytorch_state_dict['net.4.bias'])
@@ -136,12 +137,10 @@ def load_siren_jax(pytorch_weights_path: str):
     Returns:
         Tuple of (jax_model, jax_params)
     """
-    # Load PyTorch weights with automatic device placement
     import torch  # lazy import — torch is an optional dependency
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     pytorch_state = torch.load(pytorch_weights_path, map_location=device, weights_only=True)
     
-    # Initialize JAX model with same architecture
     jax_model = SIREN(
         hidden_features=256,
         hidden_layers=3,
@@ -149,7 +148,6 @@ def load_siren_jax(pytorch_weights_path: str):
         outermost_linear=True
     )
     
-    # Convert weights
     jax_params = convert_pytorch_to_jax(pytorch_state, jax_model)
     
     return jax_model, jax_params
@@ -165,22 +163,11 @@ def load_photonsim_siren(model_path: str):
     Returns:
         Tuple of (jax_model, jax_params, normalization_params, metadata)
     """
-    # Load model data
     data = np.load(model_path, allow_pickle=True)
-    
-    # Extract model configuration
     model_config = data['model_config'].item()
-    
-    # Create SIREN model with PhotonSim configuration
     jax_model = SIREN(**model_config)
-    
-    # Extract parameters (convert back to JAX format)
     jax_params = freeze({'params': jax.tree.map(lambda x: jnp.array(x), data['params'].item())})
-    
-    # Extract normalization parameters
     normalization_params = data['normalization_params'].item()
-    
-    # Extract metadata
     metadata = {
         'dataset_stats': data['dataset_stats'].item(),
         'final_step': int(data['final_step']),
@@ -329,7 +316,6 @@ class PhotonSimSIREN:
         print(f"Saved inference model to {output_path}")
 
 
-# Backward compatibility function
 def load_siren_model(model_path: str, model_type: str = "auto"):
     """
     Load SIREN model with automatic type detection.
@@ -342,7 +328,6 @@ def load_siren_model(model_path: str, model_type: str = "auto"):
         Appropriate model object
     """
     if model_type == "auto":
-        # Detect model type based on file extension and contents
         if model_path.endswith('.pkl'):
             model_type = "pytorch"
         elif model_path.endswith('.npz'):
@@ -381,7 +366,6 @@ def create_photonsim_siren_grid(photonsim_predictor, n_bins=250):
         distance_min, distance_max, angle_bins, distance_bins, angle_dist_grid,
         angle_mesh, distance_mesh, log_min, log_max)
     """
-    # Get the actual ranges from PhotonSim training metadata
     dataset_info = photonsim_predictor.dataset_info
     energy_min, energy_max = dataset_info['energy_range']
     angle_min, angle_max = dataset_info['angle_range']  # In radians
@@ -393,7 +377,6 @@ def create_photonsim_siren_grid(photonsim_predictor, n_bins=250):
         raise ValueError(f"Expected target normalization scheme 'log_normalized_to_01', "
                          f"but got '{target_norm['scheme']}'")
 
-    # Create n_bins x n_bins binning using actual PhotonSim training ranges
     angle_bins = jnp.linspace(angle_min, angle_max, n_bins)
     distance_bins = jnp.linspace(distance_min, distance_max, n_bins)
     angle_dist_grid = jnp.column_stack([
@@ -401,7 +384,6 @@ def create_photonsim_siren_grid(photonsim_predictor, n_bins=250):
         jnp.tile(distance_bins, n_bins)
     ])
 
-    # Create meshgrid using actual PhotonSim ranges
     angle_mesh, distance_mesh = jnp.meshgrid(angle_bins, distance_bins, indexing='ij')
     log_min = target_norm['log_min']
     log_max = target_norm['log_max']

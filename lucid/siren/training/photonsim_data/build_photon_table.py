@@ -48,7 +48,6 @@ class AveragePhotonTable3D:
         # Energy values - now use full range
         self.energy_values = list(range(energy_min, energy_max + 1, energy_step))
 
-        # No need to skip energies anymore - all files are OK
         self.skip_energies = []
 
         # Define bin ranges from histogram

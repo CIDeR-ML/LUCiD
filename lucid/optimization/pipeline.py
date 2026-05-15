@@ -124,7 +124,7 @@ def create_combined_loss_function(vertex_weight_scale, counts_weight_scale,
         c = charge_loss_val
         t = time_loss_val
         v = vertex_loss_val
-        s = 0.
+        s = 0.  # smoothing constant (placeholder, kept at zero)
 
         combined_loss = jnp.sqrt((c + s) * (t + s) * (v + s)) \
             + jnp.sqrt((c + s) * jax.lax.stop_gradient((t + s) * (v + s))) \

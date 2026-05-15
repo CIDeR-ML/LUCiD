@@ -122,7 +122,6 @@ def get_refractive_index(material='water'):
     ValueError
         If material is not supported
     """
-    # Refractive indices for different materials
     refractive_indices = {
         'water': 1.33,
         # Future materials can be added here:
@@ -138,7 +137,6 @@ def get_refractive_index(material='water'):
             f"Development for additional materials is ongoing."
         )
 
-    # Print warning that only water is fully supported
     if material != 'water':
         print(f"⚠️  WARNING: Material '{material}' is experimental.")
         print(f"   Only 'water' is fully validated and supported.")
@@ -168,13 +166,10 @@ def get_speed_of_light_in_material(material='water'):
 
     For water (n=1.33): c/n ≈ 0.2253 m/ns
     """
-    # Speed of light in vacuum (m/ns)
     SPEED_OF_LIGHT_VACUUM = 0.299792  # m/ns
 
-    # Get refractive index for the material
     n = get_refractive_index(material)
 
-    # Calculate speed of light in material
     return SPEED_OF_LIGHT_VACUUM / n
 
 def unpack_t0_params(particle_type='muon', material='water'):
@@ -193,7 +188,6 @@ def unpack_t0_params(particle_type='muon', material='water'):
     tuple
         (baseline_slope, baseline_intercept, A_slope, A_intercept, B_slope, B_intercept, offset)
     """
-    # Normalize particle type for file path
     normalized_type = normalize_particle_type_for_path(particle_type)
     with open(base_dir_path()+f'/data/{material}/{normalized_type}/t0.json', 'r') as f:
         t0_params = json.load(f)
@@ -228,14 +222,12 @@ def unpack_photonsim_params(particle_type='muon', material='water'):
         - 'num_seeds': tuple of (a, b, c) for power law: a * energy^b + c
         - 'siren_model_path': str, absolute path to SIREN model
     """
-    # Normalize particle type for file path
     normalized_type = normalize_particle_type_for_path(particle_type)
     config_path = base_dir_path()+f'/data/{material}/{normalized_type}/photonsim_params.json'
 
     with open(config_path, 'r') as f:
         photonsim_params = json.load(f)
 
-    # Construct absolute path to SIREN model
     data_dir = base_dir_path()+f'/data/{material}/{normalized_type}/'
     siren_model_path = data_dir + photonsim_params['siren_model']['path']
 
@@ -336,15 +328,11 @@ def generate_random_params(key, h=2, r=1):
 
     k1, k2, k3, k4 = jax.random.split(key, 4)
 
-    # Generate energy between 100 and 1000 MeV
     energy = 300. + 600. * jax.random.uniform(k1)
 
     # Generate random position inside detector volume (approximated as cylinder)
     position = generate_random_point_inside_cylinder(k2, h, r)
 
-    # Generate random direction angles
-    # theta: inclination angle (0 to pi)
-    # phi: azimuthal angle (0 to 2*pi)
     theta = jnp.pi * jax.random.uniform(k3)
     phi = 2.0 * jnp.pi * jax.random.uniform(k4)
 
@@ -374,25 +362,20 @@ def generate_random_point_inside_cylinder(key, h=2, r=1, offset = 0.1):
     array(3,)
         Random position coordinates inside cylinder of height h and radius r
     """
-    # Split the key for independent random operations
     key1, key2, key3 = jax.random.split(key, 3)
 
     effective_radius = r - offset
     effective_height = h - offset
 
-    # Generate cylindrical coordinates
-    # Random radius from 0 to r (using square root for uniform distribution in circle)
+    # Using square root for uniform distribution in circle
     radius = effective_radius * jnp.sqrt(jax.random.uniform(key1, shape=()))
-    # Random angle from 0 to 2π
     theta = jax.random.uniform(key2, shape=(), minval=0, maxval=2*jnp.pi)
-    # Random height from -h/2 to h/2
     z = jax.random.uniform(key3, shape=(), minval=-effective_height/2, maxval=effective_height/2)
 
-    # Convert cylindrical to Cartesian coordinates
     return jnp.array([
-        radius * jnp.cos(theta),  # x
-        radius * jnp.sin(theta),  # y
-        z                         # z
+        radius * jnp.cos(theta),
+        radius * jnp.sin(theta),
+        z
     ])
 
 
@@ -458,37 +441,26 @@ def superimpose_multiple_events(charges_list, times_list):
     if len(charges_list) != len(times_list):
         raise ValueError("charges_list and times_list must have the same length")
     
-    # Initialize with the first event
     combined_charges = charges_list[0]
     combined_times = times_list[0]
     
-    # Iteratively combine with subsequent events
     for i in range(1, len(charges_list)):
-        # Sum the charges
         combined_charges = combined_charges + charges_list[i]
-        
-        # Calculate weighted average of times
-        # Start with the product of the previous combined values
+
         time_product = combined_times * (combined_charges - charges_list[i])
-        
-        # Add the product for the current event
         time_product = time_product + times_list[i] * charges_list[i]
-        
-        # Divide by combined charges to get weighted average
+
         # When charge is 0, use 0 for time to avoid division by zero
         nonzero_mask = combined_charges > 0
-        
-        # Initialize combined times with zeros
+
         new_combined_times = jnp.zeros_like(combined_times)
-        
-        # Only calculate weighted average where there are non-zero charges
+
         weighted_times = jnp.where(
             nonzero_mask,
             time_product / combined_charges,
             0.0
         )
-        
-        # Apply the weighted times only where we have non-zero charges
+
         combined_times = jnp.where(nonzero_mask, weighted_times, new_combined_times)
     
     return combined_charges, combined_times
@@ -562,10 +534,7 @@ def calculate_particle_range(energy_mev, range_params):
     a = range_params['parameters']['a']
     b = range_params['parameters']['b']
 
-    # Calculate range in mm
     range_mm = a * energy_mev + b
-
-    # Convert to meters
     range_m = range_mm / 1000.0
 
     return range_m
@@ -586,23 +555,16 @@ def check_track_endpoint_in_detector(position, direction, energy_mev, range_para
     Returns:
         bool: True if endpoint is within bounds, False otherwise
     """
-    # Calculate range in meters
     track_range = calculate_particle_range(energy_mev, range_params)
-
-    # Calculate endpoint
     endpoint = position + track_range * direction
 
-    # Extract detector bounds
     detector_r = detector_bounds['r'] * fraction
     detector_h = detector_bounds['H'] * fraction
 
-    # Check cylindrical bounds
-    # Radial check (x, y)
     radial_distance = np.sqrt(endpoint[0]**2 + endpoint[1]**2)
     if radial_distance > detector_r:
         return False
 
-    # Height check (z)
     if abs(endpoint[2]) > detector_h / 2.0:
         return False
 
@@ -612,8 +574,6 @@ def check_track_endpoint_in_detector(position, direction, energy_mev, range_para
 def generate_random_event_params(key, detector_bounds, fraction=0.7):
     """
     Generate random event parameters based on detector geometry.
-    
-    This is the same function from optimize.py, shared for consistency.
     """
     if detector_bounds['type'] == 'cylinder':
         r_vert = jax.random.uniform(key, shape=(), minval=0, maxval=detector_bounds['r'] * fraction)
@@ -646,7 +606,6 @@ def generate_random_event_params(key, detector_bounds, fraction=0.7):
                                                      detector_bounds['y']/2, 
                                                      detector_bounds['z']/2]) * fraction)
     
-    # Random direction
     from lucid.detector_params import ParticleParams
     key, _ = jax.random.split(key)
     phi = jax.random.uniform(key, shape=(), minval=0, maxval=2*jnp.pi)
@@ -655,7 +614,6 @@ def generate_random_event_params(key, detector_bounds, fraction=0.7):
     sin_theta = jnp.sqrt(1 - cos_theta**2)
     direction = jnp.array([sin_theta * jnp.cos(phi), sin_theta * jnp.sin(phi), cos_theta])
 
-    # Random energy
     key, _ = jax.random.split(key)
     energy = jax.random.uniform(key, shape=(), minval=500.0, maxval=1500.0)
 
@@ -717,11 +675,9 @@ def smear_charges_SK_like(counts, key=None):
         jnp.where(counts < 130, counts * 0.0075, counts * 0.005)
     )
 
-    # Apply Gaussian smearing
     noise = jax.random.normal(key, shape=counts.shape) * sigma
     smeared_counts = counts + noise
 
-    # Handle non-finite results (e.g., NaN or inf)
     smeared_counts = jnp.where(jnp.isfinite(smeared_counts), smeared_counts, 0.0)
 
     # Avoid negative or unphysical charge values
@@ -753,10 +709,6 @@ def time_digitizer(times, time_resolution=0.4):
 
     return digitized_times
 
-
-# ---------------------------------------------------------------------------
-# Shared math helpers (moved from generate.py during Phase 2.2 refactor)
-# ---------------------------------------------------------------------------
 
 def jax_rotate_vector(vector, axis, angle):
     """Rotate a vector around an axis by a given angle using Rodrigues' formula.

@@ -47,7 +47,6 @@ def intersect_box_face(ray_origin, ray_direction, face_normal, face_distance):
         return (intersects_, tval_)
     
     def parallel_intersection(_):
-        # Ray is parallel to plane
         on_plane = jnp.abs(jnp.dot(ray_origin, face_normal) - face_distance) < 1e-12
         intersects_ = on_plane
         tval_ = jnp.where(on_plane, 0.0, LARGE)
@@ -104,12 +103,10 @@ def intersect_box(ray_origin, ray_direction, length, width, height):
         height/2   # Bottom face distance
     ])
     
-    # Calculate intersections with all faces
     def intersect_single_face(i):
         intersects, t = intersect_box_face(ray_origin, ray_direction, 
                                           face_normals[i], face_distances[i])
         
-        # Check if intersection point is within face bounds
         intersection_point = ray_origin + t * ray_direction
         
         if i == 0:  # Front face (+y)
@@ -136,7 +133,6 @@ def intersect_box(ray_origin, ray_direction, length, width, height):
         
         return valid_intersection, final_t
     
-    # Vectorized intersection calculation
     all_intersects = []
     all_ts = []
     

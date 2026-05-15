@@ -183,15 +183,12 @@ def compute_sensor_intersections_base(sensor_idx, sensor_positions, sensor_radiu
     # Raw to_sensor points from sensor center toward interior (inward); negating gives outward.
     normals_closest = -to_sensor / (jnp.linalg.norm(to_sensor, axis=1, keepdims=True) + 1e-10)
     
-    # Ray-sphere intersection coefficients
     a = jnp.sum(ray_d * ray_d, axis=1)  # Should be 1 for normalized directions
     b = 2.0 * jnp.sum(oc * ray_d, axis=1)
     c = jnp.sum(oc * oc, axis=1) - sensor_radius ** 2
     
-    # Discriminant determines if intersection exists
     discriminant = b ** 2 - 4 * a * c
-    
-    # Calculate actual intersection for rays that hit the sensor
+
     sqrt_term = jnp.sqrt(jnp.maximum(1e-10, discriminant))
     
     # Use numerically stable quadratic formula to prevent NaN gradients
@@ -208,7 +205,6 @@ def compute_sensor_intersections_base(sensor_idx, sensor_positions, sensor_radiu
                     jnp.where(t1 > 0, t1,  # Only t1 positive
                            jnp.where(t2 > 0, t2, -1)))  # Only t2 positive or neither
     
-    # Calculate intersection points
     intersection_points = ray_origins + t_intersect[:, None] * ray_d
     
     # Calculate normals at intersection points
@@ -219,21 +215,15 @@ def compute_sensor_intersections_base(sensor_idx, sensor_positions, sensor_radiu
     # Determine if ray intersects with sensor (add small epsilon for stability)
     intersects = (discriminant > 1e-6) & (t_intersect > 0)
    
-    # Apply overlap function to get weights
-    weights = jnp.where(valid, overlap_prob(distance), 0.0)    
-    # Check if point is inside sensor (keep as boolean)
+    weights = jnp.where(valid, overlap_prob(distance), 0.0)
     inside_spherical_sensor = distance < sensor_radius
-    
-    # Check if intersection point is within geometry bounds
+
     inside_detector_volume = geometry_bounds_check(intersection_points)
     
-    # Final sensor condition - point must be inside both sensor and geometry
     inside_sensor = inside_spherical_sensor & inside_detector_volume
-    
-    # Combine boolean conditions first, then add dimension
+
     intersects_and_inside = (intersects & inside_sensor)
-    
-    # Now use this combined condition
+
     distances = jnp.where(intersects_and_inside[:, None], t_intersect[:, None], t_closest)
     points    = jnp.where(intersects_and_inside[:, None], intersection_points, closest)
     normals   = jnp.where(intersects_and_inside[:, None], normals_intersect, normals_closest)

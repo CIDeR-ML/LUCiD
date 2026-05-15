@@ -48,10 +48,8 @@ def WC_loss(
     float
         Total loss.
     """
-    # ============= Poisson Negative Log Likelihood =============
     poisson_loss = poisson_nll(true_charge, simulated_charge, eps)
 
-    # ============= Time Loss with Charge Weighted Mean Subtraction =============
     # Mean centering with LOW threshold (include all active sensors)
     true_active = true_charge > threshold
     sim_active = simulated_charge > threshold
@@ -62,7 +60,6 @@ def WC_loss(
     true_t0 = jax.lax.stop_gradient(jnp.sum(true_time * true_weights) / (jnp.sum(true_weights) + 1e-8))
     sim_t0 = jnp.sum(simulated_time * sim_weights) / (jnp.sum(sim_weights) + 1e-8)
 
-    # Compute aligned times and loss
     both_active = jax.lax.stop_gradient(true_active & sim_active)
     diff = jnp.where(both_active,
                      jnp.abs((simulated_time - sim_t0) - (true_time - true_t0)),
@@ -125,34 +122,28 @@ def compute_simplified_loss(
     float
         Total loss.
     """
-    # Compute active masks for non-zero charges
     true_active_mask = true_charge > threshold
     sim_active_mask = simulated_charge > threshold
 
-    # Calculate total charges
     total_true_charge = jnp.sum(true_charge)
     total_sim_charge = jnp.sum(simulated_charge)
 
     # --------------------------------------
     # 1. Intensity Loss
     # --------------------------------------
-    # Log ratio of total charges (same as original)
     L_intensity = jnp.abs(jnp.log(total_sim_charge / (total_true_charge + eps))) * lambda_intensity
 
     # --------------------------------------
     # 2. Centroid Loss
     # --------------------------------------
-    # Calculate charge-weighted centroids
     true_centroid = jnp.sum(true_charge[:, None] * sensor_points, axis=0) / (total_true_charge + eps)
     sim_centroid = jnp.sum(simulated_charge[:, None] * sensor_points, axis=0) / (total_sim_charge + eps)
 
-    # Euclidean distance between centroids
     L_centroid = jnp.linalg.norm(true_centroid - sim_centroid) * lambda_centroid
 
     # --------------------------------------
     # 3. Simple Time Spread Loss
     # --------------------------------------
-    # Calculate mean times only for active locations
     true_mean_time = jax.lax.stop_gradient(jnp.sum(true_time * true_charge) / (total_true_charge + eps))
     sim_mean_time = jax.lax.stop_gradient(jnp.sum(simulated_time * simulated_charge) / (total_sim_charge + eps))
 
@@ -160,15 +151,12 @@ def compute_simplified_loss(
     true_time_centered = true_time - true_mean_time
     sim_time_centered = simulated_time - sim_mean_time
 
-    # Simple time spread comparison (standard deviation)
     true_time_var = jnp.sum(true_charge * jnp.square(true_time_centered)) / (total_true_charge + eps)
     sim_time_var = jnp.sum(simulated_charge * jnp.square(sim_time_centered)) / (total_sim_charge + eps)
     L_time_spread = jnp.abs(jnp.sqrt(true_time_var) - jnp.sqrt(sim_time_var))
 
-    # Time loss is just the spread comparison
     L_time = L_time_spread * lambda_time
 
-    # Total loss
     return L_centroid + L_intensity + L_time
 
 
@@ -219,7 +207,6 @@ def WC_smooth_loss(
     float
         Total loss.
     """
-    # ============= Compute Distance-based Gaussian Weights =============
     dist = jnp.linalg.norm(
         sensor_points[:, None, :] - sensor_points[None, :, :],
         axis=-1
@@ -228,14 +215,11 @@ def WC_smooth_loss(
     col_sums = jnp.sum(dist_weights, axis=0, keepdims=True)
     dist_weights = dist_weights / (col_sums + eps)
 
-    # ============= Apply Smoothing to Charges =============
     true_charge_smooth = dist_weights @ true_charge
     simulated_charge_smooth = dist_weights @ simulated_charge
 
-    # ============= Poisson Loss on Smoothed Charges =============
     poisson_loss = poisson_nll(true_charge_smooth, simulated_charge_smooth, eps)
 
-    # ============= Time Loss (same as original WC_loss) =============
     true_active = true_charge > threshold
     sim_active = simulated_charge > threshold
 
@@ -254,17 +238,12 @@ def WC_smooth_loss(
 
     time_loss = jnp.sum(diff) / (jnp.sum(time_norm) + eps)
 
-    # ============= Combine Losses =============
     L_charge = poisson_loss * lambda_poisson
     L_time = time_loss * lambda_time
 
     return L_charge + L_time
 
 
-
-# ===================================================================
-# Optimization loss functions (formerly in lucid/optimization/losses.py)
-# ===================================================================
 
 @jit
 def energy_loss(simulated_counts, true_counts):
@@ -324,16 +303,13 @@ def grid_origin_time_loss(
 ):
     eps = 1e-9
 
-    # --- Residuals
     distances = jnp.linalg.norm(detector_positions - origin[None, :], axis=1)
     expected_times = (distances - photosensor_radius) / c_medium
     r = true_times - expected_times - t0
 
-    # --- Active sensors
     mask = (true_q > 0.).astype(jnp.float32)
     n = jnp.sum(mask) + eps
 
-    # --- Split residuals
     r_neg = jnp.clip(-r, 0.0, jnp.inf)
     r_pos = jnp.clip(r, 0.0, jnp.inf)
 
@@ -345,7 +321,6 @@ def grid_origin_time_loss(
     n_pos = jnp.sum(pos_mask)
     has_pos = n_pos > 0
 
-    # Prevent divisions by zero
     safe_n_pos = jnp.maximum(n_pos, 1.0)
 
     sum_pos = jnp.sum(r_pos * pos_mask)
@@ -355,7 +330,6 @@ def grid_origin_time_loss(
     # NLL term (only meaningful if we have positives)
     nll_pos = (n_pos * jnp.log(mean_pos)) / (n + eps)
 
-    # Mask all positive-related terms if no positives
     total_loss = w_neg * neg_pen + has_pos * (nll_pos)
 
     # Replace NaNs by large number to avoid contamination
@@ -399,10 +373,6 @@ def cone_time_loss(observed_counts, simulated_time, observed_times, t0, tau=0.12
     return main
 
 
-# ===================================================================
-# Likelihood-based loss functions
-# ===================================================================
-
 def segment_logsumexp(data, indices, num_segments):
     """Numerically stable log-sum-exp aggregated per segment."""
     max_vals = jax.ops.segment_max(
@@ -421,11 +391,9 @@ def first_arrival_nll(log_w, flat_times, flat_indices,
     t_obs_per_photon = t_obs_per_sensor[flat_indices]
     x = (t_obs_per_photon - flat_times) / tau
 
-    # Filter invalid photons
     valid = log_w > -20.0
     safe_log_w = jnp.where(valid, log_w, -1e6)
 
-    # Normalize weights per sensor in log-space
     log_w_total = segment_logsumexp(safe_log_w, flat_indices, num_detectors)
     log_w_norm = safe_log_w - log_w_total[flat_indices]
 

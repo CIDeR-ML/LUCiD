@@ -47,7 +47,7 @@ class TrainingConfig:
     min_lr: float = 1e-7  # Minimum learning rate
     # Stability options
     optimizer: str = 'adam'  # 'adam', 'adamw', 'sgd' - back to plain Adam
-    grad_clip_norm: float = 0.0  # Gradient clipping disabled
+    grad_clip_norm: float = 0.0
     # Legacy options (only used if use_patience_scheduler = False)
     scheduler_step_size: int = 0  # Disabled by default
     scheduler_gamma: float = 0.5
@@ -352,7 +352,7 @@ class SIRENTrainer:
         # Update only the learning rate in the optimizer state
         self.state = self.state.replace(tx=new_optimizer)
         
-        logger.info(f"✅ Learning rate updated: {self.current_lr:.2e} → {new_lr:.2e}")
+        logger.info(f"Learning rate set to {new_lr:.2e}")
         
     def _check_patience_and_update_lr(self, val_loss: float):
         """Check patience and update learning rate if needed."""

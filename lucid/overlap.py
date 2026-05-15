@@ -104,11 +104,9 @@ def save_overlap_values(r: float, sigma: float, d_values: jnp.ndarray, f_values:
     f_values : jnp.ndarray
         Array of overlap probabilities
     """
-    # Create cache directory if it doesn't exist
     cache_dir = overlap_cache_dir()
     os.makedirs(cache_dir, exist_ok=True)
 
-    # Convert to Python lists for JSON serialization
     cache_data = {
         'r': float(r),
         'sigma': float(sigma),
@@ -142,7 +140,6 @@ def load_overlap_values(r: float, sigma: float) -> Optional[Tuple[jnp.ndarray, j
         with open(filename, 'r') as f:
             cache_data = json.load(f)
 
-        # Convert back to jnp arrays
         d_values = jnp.array(cache_data['d_values'])
         f_values = jnp.array(cache_data['f_values'])
         return d_values, f_values
@@ -220,23 +217,18 @@ def precompute_lookup(r: float,
     theta_vals = jnp.linspace(0, 2 * jnp.pi, n_theta)
     rho_vals = jnp.linspace(0, r, n_rho)
 
-    # Calculate transition region
     transition_start = max(0, r - 3 * sigma)  # Ensure we don't go below 0
     transition_end = r + 3 * sigma
 
-    # Dense spacing in transition region
     d_dense = jnp.linspace(transition_start, transition_end, num_dense)
 
-    # Sparse spacing before and after transition region
     if transition_start > 0:
         d_sparse_before = jnp.linspace(0, transition_start, num_sparse // 2)[:-1]
     else:
         d_sparse_before = jnp.array([])
 
-    d_max = max(d_max_factor * r, r + 5 * sigma)
-    d_sparse_after = jnp.linspace(transition_end, d_max, num_sparse // 2)[1:]
+    d_sparse_after = jnp.linspace(transition_end, d_max_factor * r, num_sparse // 2)[1:]
 
-    # Combine all regions
     d_values = jnp.concatenate((d_sparse_before, d_dense, d_sparse_after))
 
     def f_of_d(d_):
@@ -295,15 +287,6 @@ def create_overlap_prob(sigma: Optional[float],
 
         return overlap_prob
 
-    # Analytical branch for large sigma (point-source limit, <3% error for sigma >= 3r)
-    if sigma >= 3.0 * r:
-        _coeff = r ** 2 / (2.0 * sigma ** 2)
-        _inv_2s2 = 1.0 / (2.0 * sigma ** 2)
-        def overlap_prob(d: float) -> float:
-            return _coeff * jnp.exp(-d ** 2 * _inv_2s2)
-        return overlap_prob
-
-    # Try to load from cache first
     if use_cache:
         cached_values = load_overlap_values(r, sigma)
         if cached_values is not None:

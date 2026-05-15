@@ -43,7 +43,6 @@ class Detector(ABC):
 
     # ── Propagation abstract methods (Phase 9) ─────────────────────────
     # Subclasses implement these to enable the shared create_propagator().
-    # bounds_check() was added in Phase 6.
 
     def intersect_ray(self, origins, directions):
         """Batch ray-geometry intersection.
@@ -482,7 +481,6 @@ class Detector(ABC):
         y_barrel = (offset*self.r) * np.sin(theta_mesh) + self.C[1]
         z_barrel_mesh = z_mesh + self.C[2]
 
-        # Add barrel surface
         fig.add_trace(go.Surface(
             x=x_barrel, y=y_barrel, z=z_barrel_mesh,
             opacity=1.0,
@@ -495,7 +493,6 @@ class Detector(ABC):
             hoverlabel=None
         ))
 
-        # Cap surfaces
         r_cap = np.linspace(0, offset*self.r, 20)
         theta_cap = np.linspace(0, 2 * np.pi, 50)
         r_mesh, theta_mesh = np.meshgrid(r_cap, theta_cap)
@@ -503,7 +500,6 @@ class Detector(ABC):
         x_cap = r_mesh * np.cos(theta_mesh) + self.C[0]
         y_cap = r_mesh * np.sin(theta_mesh) + self.C[1]
         
-        # Top cap
         z_top = np.full_like(x_cap, (offset*self.H)/2 + self.C[2])
         fig.add_trace(go.Surface(
             x=x_cap, y=y_cap, z=z_top,
@@ -517,7 +513,6 @@ class Detector(ABC):
             hoverlabel=None
         ))
 
-        # Bottom cap
         z_bottom = np.full_like(x_cap, -(offset*self.H)/2 + self.C[2])
         fig.add_trace(go.Surface(
             x=x_cap, y=y_cap, z=z_bottom,
@@ -542,7 +537,6 @@ class Detector(ABC):
         y_sphere = (offset*self.r) * np.outer(np.sin(u), np.sin(v)) + self.C[1]
         z_sphere = (offset*self.r) * np.outer(np.ones(np.size(u)), np.cos(v)) + self.C[2]
 
-        # Add sphere surface
         fig.add_trace(go.Surface(
             x=x_sphere, y=y_sphere, z=z_sphere,
             opacity=1.0,
@@ -560,7 +554,6 @@ class Detector(ABC):
         # Offset to avoid overlap with discs
         offset = 0.995
         
-        # Define box vertices with offset
         x_min, x_max = -offset*self.L/2 + self.C[0], offset*self.L/2 + self.C[0]
         y_min, y_max = -offset*self.W/2 + self.C[1], offset*self.W/2 + self.C[1]
         z_min, z_max = -offset*self.H/2 + self.C[2], offset*self.H/2 + self.C[2]

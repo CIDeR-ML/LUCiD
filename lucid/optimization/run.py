@@ -2,7 +2,7 @@
 """
 Single Ring Track Optimization Script (Adam Optimizer)
 
-Four-stage optimization pipeline:
+Five-stage optimization pipeline:
 1. Energy estimation from photon count
 2. Hierarchical grid search for position + t0
 3. Hierarchical cone-based direction search
@@ -193,7 +193,7 @@ def main():
     PHYSICS_CONFIG = config['basic_config'].get('physics_config', None)
     print("Setting up simulators...")
     prediction_simulator = setup_event_simulator(
-        default_json_filename, Nphot, TEMPERATURE, max_candidates_per_ray=4, K=K, is_data=False,
+        default_json_filename, Nphot, TEMPERATURE, max_sensors_per_cell=4, K=K, is_data=False,
         physics_config=PHYSICS_CONFIG, default_detector_params=True
     )
 

@@ -49,7 +49,6 @@ class AverageDedxTable3D:
         # Energy values - use full range
         self.energy_values = list(range(energy_min, energy_max + 1, energy_step))
 
-        # No need to skip energies
         self.skip_energies = []
 
         # Define bin ranges from histogram (matches PhotonSim definition)

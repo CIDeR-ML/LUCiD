@@ -32,10 +32,6 @@ import numpy as np
 from lucid.utils import spherical_to_cartesian
 
 
-# ---------------------------------------------------------------------------
-# DetectorParams
-# ---------------------------------------------------------------------------
-
 class DetectorParams(NamedTuple):
     """Detector calibration parameters (JAX pytree).
 
@@ -55,10 +51,6 @@ class DetectorParams(NamedTuple):
     qe: jnp.ndarray
     qe_corrections: jnp.ndarray
 
-
-# ---------------------------------------------------------------------------
-# ParticleParams
-# ---------------------------------------------------------------------------
 
 class ParticleParams(NamedTuple):
     """Particle track parameters (JAX pytree).
@@ -107,10 +99,6 @@ from lucid.sources.calibration_sources import (  # noqa: F401, E402
     isotropic_source, laser_source,
 )
 
-
-# ---------------------------------------------------------------------------
-# File I/O
-# ---------------------------------------------------------------------------
 
 _ARRAY_SENTINEL = "__array__:"
 
@@ -309,10 +297,6 @@ def load_particle_params(filepath: str) -> ParticleParams:
             kwargs[field] = jnp.asarray(float(val), dtype=jnp.float32)
     return ParticleParams(**kwargs)
 
-
-# ---------------------------------------------------------------------------
-# Optimization helpers
-# ---------------------------------------------------------------------------
 
 def normalize_params(params, bounds_min, bounds_max):
     """Map a pytree from physical units to [0, 1] using element-wise bounds."""

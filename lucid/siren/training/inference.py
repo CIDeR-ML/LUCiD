@@ -277,6 +277,7 @@ class SIRENPredictor:
                 log_min = target_norm['log_min']
                 log_max = target_norm['log_max']
                 log_predictions = predictions * (log_max - log_min) + log_min
+                # Inverse of log10(x + 1e-2) in dataset.py; the 1e-10 is a guard against float noise
                 predictions = 10 ** log_predictions - 1e-10
         
         return predictions

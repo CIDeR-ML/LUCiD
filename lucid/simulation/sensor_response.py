@@ -4,10 +4,6 @@ import jax.numpy as jnp
 from functools import partial
 from lucid.utils import smear_times, smear_charges_SK_like
 
-# ===================================================================
-# make_hits functions
-# ===================================================================
-
 def make_hits_simulation(
         flat_weights, flat_indices, flat_times, num_detectors,
         qe=0.2, qe_corrections=None, threshold=1e-10, temperature=0.1):

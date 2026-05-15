@@ -40,12 +40,10 @@ def ray_sphere_intersection(ray_origin, ray_direction, sphere_center, sphere_rad
     
     discriminant = b**2 - 4*a*c
     
-    # Return closest positive intersection
     sqrt_disc = jnp.sqrt(jnp.maximum(discriminant, 0))
     t1 = (-b - sqrt_disc) / (2*a)
     t2 = (-b + sqrt_disc) / (2*a)
     
-    # Choose closest positive t
     t = jnp.where(t1 > 0, t1, t2)
     t = jnp.where(discriminant >= 0, t, -1)
     
@@ -79,12 +77,10 @@ def ray_cylinder_intersection(ray_origin, ray_direction, cylinder_radius, cylind
     
     discriminant = b**2 - 4*a*c
     
-    # Side intersection
     sqrt_disc = jnp.sqrt(jnp.maximum(discriminant, 0))
     t1_side = (-b - sqrt_disc) / (2*a)
     t2_side = (-b + sqrt_disc) / (2*a)
-    
-    # Check z bounds for side intersections
+
     z1 = ray_origin[2] + t1_side * ray_direction[2]
     z2 = ray_origin[2] + t2_side * ray_direction[2]
     
@@ -93,7 +89,6 @@ def ray_cylinder_intersection(ray_origin, ray_direction, cylinder_radius, cylind
     
     t_side = jnp.where(valid1, t1_side, jnp.where(valid2, t2_side, jnp.inf))
     
-    # Cap intersections
     t_top = jnp.where(
         jnp.abs(ray_direction[2]) > 1e-8,
         (cylinder_height/2 - ray_origin[2]) / ray_direction[2],
@@ -105,7 +100,6 @@ def ray_cylinder_intersection(ray_origin, ray_direction, cylinder_radius, cylind
         jnp.inf
     )
     
-    # Check if cap intersections are within radius
     r_top = jnp.linalg.norm(ray_origin[:2] + t_top * ray_direction[:2])
     r_bottom = jnp.linalg.norm(ray_origin[:2] + t_bottom * ray_direction[:2])
     
@@ -117,7 +111,6 @@ def ray_cylinder_intersection(ray_origin, ray_direction, cylinder_radius, cylind
         jnp.where(valid_bottom, t_bottom, jnp.inf)
     )
     
-    # Return closest intersection
     t = jnp.minimum(t_side, t_cap)
     return jnp.where(t == jnp.inf, -1, t)
 
@@ -265,7 +258,6 @@ def compute_surface_normal(intersection_point, geometry_type, geometry_params):
         radius = params['radius']
         height = params['height']
         
-        # Check if on cap
         z = intersection_point[2]
         on_top_cap = jnp.abs(z - height/2) < 1e-6
         on_bottom_cap = jnp.abs(z + height/2) < 1e-6

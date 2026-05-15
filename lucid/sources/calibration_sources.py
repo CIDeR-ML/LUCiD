@@ -16,11 +16,11 @@ def get_isotropic_rays(source_position, source_intensity, Nphot, key):
     """
     Fibonacci spiral using scan-based recurrence to avoid float32 precision issues.
     """
-    # Block configuration
     block_size = 1000
     n_full_blocks = Nphot // block_size
     remainder = Nphot % block_size
 
+    # (sqrt(5) - 1) / 2: Fibonacci spiral uses this for quasi-random uniform sphere coverage
     golden_ratio_inverse = jnp.float32(0.6180339887498949)
     block_increment = (block_size * golden_ratio_inverse) % 1.0
 
@@ -187,6 +187,8 @@ def generate_random_direction(key):
     """
     Generate a random direction uniformly distributed on a unit sphere.
 
+    Not JIT-compatible due to the rejection loop (variable iteration count).
+
     Parameters
     ----------
     key : jax.random.PRNGKey
@@ -198,7 +200,7 @@ def generate_random_direction(key):
         Normalized 3D vector representing a random direction
     """
     key, subkey = jax.random.split(key)
-    # Generate random points on a sphere using the Marsaglia method
+    # Marsaglia method: rejection-sample from the unit disk
     while True:
         # Generate two random numbers between -1 and 1
         u1, u2 = jax.random.uniform(subkey, shape=(2,), minval=-1.0, maxval=1.0)

@@ -112,7 +112,7 @@ def hierarchical_direction_search_cone(prediction_simulator, position, initial_t
                                      observed_times, observed_charge, true_data, energy_guess,
                                      levels, initial_div, max_angle_deg, reduction, verbosity=2):
     """
-    Hierarchical cone-based direction search using combined loss evaluation.
+    Hierarchical cone-based direction search using counts_loss evaluation.
     
     Args:
         position: [x, y, z] position (from grid search)
@@ -467,9 +467,6 @@ def energy_scan_optimization(prediction_simulator, position, theta, phi, initial
     }
 
 
-
-
-import numpy as np
 
 def performance_summary(
     energy_guess_errors,

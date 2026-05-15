@@ -87,10 +87,6 @@ def check_root_files(path="data/mu-"):
     # Check for pattern
     print("\n=== ANALYSIS ===")
     if empty_files:
-        if empty_files[0] == 460:
-            print("Problem starts at 460 MeV")
-            print("Last good file: 450 MeV" if 450 in good_files else "Unknown")
-
         # Check if it's a continuous range
         if len(empty_files) > 1:
             continuous = all(empty_files[i+1] - empty_files[i] == 10 for i in range(len(empty_files)-1))

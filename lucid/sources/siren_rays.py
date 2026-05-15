@@ -216,11 +216,9 @@ def photonsim_differentiable_get_rays(track_origin, track_direction, energy, Nph
     subkey, subkey2 = random.split(subkey)
     ray_vectors = generate_random_cone_vectors(track_direction, photon_thetas, Nphot, subkey)
 
-    # Convert ranges to meters and compute ray origins
-    ranges = smeared_dist / 1000
+    ranges = smeared_dist / 1000  # mm -> m
     ray_origins = jnp.ones((Nphot, 3)) * track_origin[None, :] + ranges[:, None] * normalize(track_direction[None, :])
 
-    # Apply boundary conditions
     new_photon_weights = jnp.squeeze(new_photon_weights)
     new_photon_weights = jnp.where(smeared_angle < angle_min, 0, new_photon_weights)
     new_photon_weights = jnp.where(smeared_angle > angle_max, 0, new_photon_weights)

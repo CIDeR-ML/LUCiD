@@ -161,7 +161,7 @@ class PhotonSimDataset:
             (self.normalized_bounds['input_max'] - self.normalized_bounds['input_min'])
         ) - 1
         
-        # Log-normalize targets for better training stability
+        # Log-normalize targets: offset avoids log(0) while staying small relative to typical target values
         self.data['targets_log'] = np.log10(self.data['targets'] + 1e-2)
         self.normalized_bounds['target_min'] = self.data['targets_log'].min()
         self.normalized_bounds['target_max'] = self.data['targets_log'].max()

@@ -65,7 +65,7 @@ def hg_sample_cos_theta(u, g):
     float
         Sampled cosine of the scattering angle, in [-1, 1].
     """
-    g_safe = jnp.clip(g, 1e-4, 1.0 - 1e-4)
+    g_safe = jnp.clip(g, 1e-4, 1.0 - 1e-4)  # clamp to avoid division by zero and NaN gradients
     term = (1.0 - g_safe**2) / (1.0 - g_safe + 2.0 * g_safe * u)
     cos_theta = (1.0 + g_safe**2 - term**2) / (2.0 * g_safe)
     return jnp.clip(cos_theta, -1.0, 1.0)

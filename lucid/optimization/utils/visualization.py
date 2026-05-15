@@ -16,16 +16,6 @@ from .geometry import (
 )
 from ...visualization import create_detector_display
 
-import os
-import numpy as np
-import plotly.graph_objects as go
-
-from lucid.optimization.utils.geometry import (
-    create_cylinder_surface, create_sphere_surface, create_box_surface,
-    compute_cone_cylinder_intersection, compute_cone_sphere_intersection, 
-    compute_cone_box_intersection, get_cherenkov_angle
-)
-
 from lucid.utils import spherical_to_cartesian  # noqa: F401 — canonical location
 
 

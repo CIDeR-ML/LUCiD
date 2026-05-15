@@ -98,7 +98,6 @@ def compute_scatter_direction(incident_dir, rng_key):
     return normalize(frame @ local_dir)
 
 
-# JAX-compatible rotation helpers (for data mode)
 def jax_normalize(v, epsilon=1e-8):
     """Normalize a vector with numerical stability using JAX."""
     norm = jnp.linalg.norm(v)

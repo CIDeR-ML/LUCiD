@@ -19,13 +19,11 @@ def generate_concentric_hexagons(n_sensors, radius_eff):
     if n_sensors == 1:
         return np.array([[0, 0]])
     
-    # Find how many complete rings we can fit
     # Solve: 1 + 3n(n+1) <= n_sensors for largest n
     n_rings = 0
     while 1 + 3 * (n_rings + 1) * (n_rings + 2) <= n_sensors:
         n_rings += 1
     
-    # Calculate spacing to fit the outermost ring within radius_eff
     if n_rings == 0:
         spacing = radius_eff  # Single sensor at center
     else:
@@ -33,15 +31,12 @@ def generate_concentric_hexagons(n_sensors, radius_eff):
     
     points = []
     
-    # Center point
     points.append([0, 0])
-    
-    # Generate concentric hexagonal rings
+
     for ring in range(1, n_rings + 1):
         ring_radius = ring * spacing
         n_sensors_in_ring = 6 * ring
         
-        # Generate points around the ring
         for i in range(n_sensors_in_ring):
             angle = 2 * np.pi * i / n_sensors_in_ring
             x = ring_radius * np.cos(angle)
@@ -86,14 +81,11 @@ def fibonacci_sphere_points_numpy(n_points, radius=1.0):
     
     indices = np.arange(0, n_points, dtype=float)
     
-    # Golden ratio
     golden_ratio = (1 + np.sqrt(5)) / 2
-    
-    # Fibonacci spiral algorithm
+
     theta = 2 * np.pi * indices / golden_ratio
     phi = np.arccos(1 - 2 * indices / n_points)
     
-    # Convert to Cartesian coordinates
     x = radius * np.sin(phi) * np.cos(theta)
     y = radius * np.sin(phi) * np.sin(theta)
     z = radius * np.cos(phi)
@@ -129,7 +121,6 @@ def create_disc_mesh(center, normal, radius, n_segments=20):
     normal = np.array(normal)
     normal = normal / np.linalg.norm(normal)  # Normalize
     
-    # Create circle in XY plane
     angles = np.linspace(0, 2*np.pi, n_segments, endpoint=False)
     circle_2d = np.column_stack([
         radius * np.cos(angles),
@@ -137,27 +128,22 @@ def create_disc_mesh(center, normal, radius, n_segments=20):
         np.zeros(n_segments)
     ])
     
-    # Add center point
     vertices_local = np.vstack([np.array([0, 0, 0]), circle_2d])
-    
-    # Calculate rotation from [0, 0, 1] to target normal
+
     z_axis = np.array([0, 0, 1])
-    
+
     if np.allclose(normal, z_axis):
-        # No rotation needed
         rotation_matrix = np.eye(3)
     elif np.allclose(normal, -z_axis):
         # 180 degree rotation around X axis
         rotation_matrix = np.array([[1, 0, 0], [0, -1, 0], [0, 0, -1]])
     else:
-        # General rotation
         axis = np.cross(z_axis, normal)
         axis = axis / np.linalg.norm(axis)
         angle = np.arccos(np.clip(np.dot(z_axis, normal), -1, 1))
         rotation = Rotation.from_rotvec(axis * angle)
         rotation_matrix = rotation.as_matrix()
     
-    # Apply rotation and translation
     vertices = (rotation_matrix @ vertices_local.T).T + center
     
     # Create triangular faces (fan triangulation from center)
