@@ -136,7 +136,7 @@ def make_hits_per_photon(
     measured_time_reco     : (num_detectors,) float32 — first-arrival, TTS-smeared
     qe_weights             : (n_rays_bucket,) float32 — 0 for QE-failed photons
     qe_filtered_times      : (n_rays_bucket,) float32 — unsmeared per-photon times
-    qe_filtered_times_reco : (n_rays_bucket,) float32 — TTS-smeared per-photon times
+    qe_filtered_smeared    : (n_rays_bucket,) float32 — TTS-smeared per-photon times
     flat_indices           : (n_rays_bucket,) int32   — per-photon sensor index
     flat_segment_idx       : (n_rays_bucket,) int32   — per-photon segment index
     """
