@@ -21,7 +21,7 @@ from lucid.sources.event_io import (
     read_labl_event_v3, read_seg_event_v3,
 )
 
-from tests._v3_event_fixture import build_synthetic_pileup_event
+from tests.io._v3_event_fixture import build_synthetic_pileup_event
 
 
 @pytest.fixture

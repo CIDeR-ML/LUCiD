@@ -3,7 +3,7 @@ import numpy as np
 
 from lucid.sources.event_io import derive_particle_idx_per_track
 
-from tests._v3_event_fixture import build_synthetic_event
+from tests.io._v3_event_fixture import build_synthetic_event
 
 
 def test_direct_and_indirect_match():

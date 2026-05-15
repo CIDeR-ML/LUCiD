@@ -8,22 +8,22 @@ import jax.numpy as jnp
 
 # Files marked @pytest.mark.slow — skip importing them unless --slow is passed.
 _SLOW_FILES = [
-    "test_containers.py",
-    "test_e2e_wavelength.py",
-    "test_integration.py",
-    "test_optics_physics.py",
-    "test_photon_step.py",
-    "test_photon_step_physics.py",
-    "test_propagation_differentiability.py",
-    "test_propagator_output.py",
-    "test_ray_intersection.py",
-    "test_sensor_map_validation.py",
-    "test_shared_propagator.py",
-    "test_shared_propagator_differentiability.py",
-    "test_shotgun_waveform.py",
-    "test_sk_like_integration.py",
-    "test_wavelength_integration.py",
-    "test_qe_importance_sampling.py",
+    "unit/test_containers.py",
+    "physics/test_optics_physics.py",
+    "physics/test_photon_step_physics.py",
+    "propagation/test_photon_step.py",
+    "propagation/test_propagator_output.py",
+    "propagation/test_shared_propagator.py",
+    "propagation/test_shared_propagator_diff.py",
+    "propagation/test_propagation_diff.py",
+    "geometry/test_ray_intersection.py",
+    "geometry/test_sensor_map.py",
+    "integration/test_integration.py",
+    "integration/test_sk_like_integration.py",
+    "integration/test_wavelength_integration.py",
+    "integration/test_qe_importance_sampling.py",
+    "integration/test_shotgun_waveform.py",
+    "e2e/test_e2e_wavelength.py",
 ]
 
 
@@ -35,7 +35,15 @@ def pytest_addoption(parser):
 def pytest_ignore_collect(collection_path, config):
     if config.getoption("--slow", default=False):
         return False
-    return collection_path.name in _SLOW_FILES
+    # Match relative path from tests/ directory
+    tests_root = collection_path.parent
+    while tests_root.name != "tests" and tests_root != tests_root.parent:
+        tests_root = tests_root.parent
+    try:
+        rel = str(collection_path.relative_to(tests_root))
+    except ValueError:
+        return False
+    return rel in _SLOW_FILES
 
 
 @pytest.fixture(scope="session")

@@ -21,7 +21,7 @@ from lucid.sources.event_io import (
     list_events_v3,
 )
 
-from tests._v3_event_fixture import build_synthetic_event
+from tests.io._v3_event_fixture import build_synthetic_event
 
 
 @pytest.fixture

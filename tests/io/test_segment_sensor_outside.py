@@ -23,7 +23,7 @@ import numpy as np
 import pytest
 
 from lucid.sources.event_io import save_seg_event_v3
-from tests._v3_event_fixture import build_synthetic_event
+from tests.io._v3_event_fixture import build_synthetic_event
 
 
 def _segment_starts_inside(start_xyz, detector_bounds):
