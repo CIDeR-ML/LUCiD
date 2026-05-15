@@ -2,13 +2,13 @@
 
 This document describes the concrete HDF5 schema for LUCiD water-Cherenkov
 simulation output, produced by the
-[LUCiD](https://github.com/...) production pipeline using PhotonSim ROOT files
+[LUCiD](https://github.com/CIDeR-ML/LUCiD) production pipeline using PhotonSim ROOT files
 as input.
 
-The general design principles, the role of each file, and the supported ML
-task patterns are documented separately in
-[DATASET_DESIGN.md](DATASET_DESIGN.md). This document specifies the
-LUCiD-specific instantiation of that design.
+The design splits detector output into four parallel HDF5 files -- raw sensor
+readout, per-particle signal decomposition, 3D track segments, and labels --
+so that each ML task can load only the modalities it needs. This document
+specifies the LUCiD-specific instantiation of that design.
 
 ## Overview
 
@@ -151,7 +151,9 @@ Notes:
 - `track_idx` is local; ranges `0..n_tracks-1`. Joins to `labl/event_NNN/per_track/`.
 - `beta_start` is the particle's β at the start of the segment — sufficient to
   reconstruct Cherenkov physics (opening angle, photon yield, spectrum) outside
-  Geant4. See [DATASET_DESIGN.md](DATASET_DESIGN.md) for rationale.
+  Geant4. Storing per-segment beta avoids re-deriving it from the kinetic
+  energy and mass, and keeps each segment self-contained for forward-simulation
+  tasks.
 - `n_cherenkov` is Geant4's exact count for this segment — direct truth label
   for forward-simulation ML.
 - Each segment row is one raw G4 sub-step (PhotonSim ships unmerged

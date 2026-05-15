@@ -1,7 +1,5 @@
 # LUCiD: a Light-based Unified Calibration and trackIng Differentiable simulation
 
-🚧 **Under Construction** — Code is being refactored and reorganized. A stable release is coming soon.
-
 A high-performance, differentiable simulation framework for optical particle detectors. This project enables gradient-based optimization of calibration parameters and particle reconstruction using automatic differentiation.
 
 ![Repository Overview](figures/combined_3x2_charge_displays.png)
@@ -13,7 +11,7 @@ Produce v3 events end-to-end on your own machine:
 - [Local quickstart](docs/QUICKSTART_LOCAL.md) — clone, build PhotonSim, `pip install -e .`, run `lucid-run-job`.
 - [S3DF quickstart](docs/QUICKSTART_S3DF.md) — SLURM + singularity deployment for SLAC users.
 
-The single-job entry point is `lucid-run-job` (`lucid/production/run_job.py`); 12 bundled configs live at `lucid/production/configs/`. See [LUCID_DATASET.md](docs/LUCID_DATASET.md) for the v3 schema.
+The single-job entry point is `lucid-run-job` (`lucid/production/run_job.py`); 18 bundled configs live at `lucid/production/configs/`. See [LUCID_DATASET.md](docs/LUCID_DATASET.md) for the v3 schema.
 
 ## Overview
 
@@ -21,7 +19,7 @@ LUCiD provides a JAX-based differentiable simulation of light propagation in opt
 
 - **Differentiable ray-tracing** with automatic differentiation for gradient-based optimization
 - **Physics-informed neural network (SIREN)** as surrogate model for Cherenkov emission
-- **Multi-geometry support**: cylindrical, spherical, and box detectors. Cylinders can be either algorithmically tiled (e.g. `SK_like`, `WCTE_like`) or built from measured PMT positions in a `.npz` file (`SK`, `HK`, `WCTE` from public WCSim geofiles)
+- **Multi-geometry support**: cylindrical, spherical, box, and string-telescope detectors. Cylinders can be either algorithmically tiled (e.g. `SK_like`, `WCTE_like`) or built from measured PMT positions in a `.npz` file (`SK`, `HK`, `WCTE` from public WCSim geofiles). String telescopes model vertical strings of DOMs in open media (ice or water), enabling IceCube-style neutrino telescope simulations
 - **Particle track reconstruction** via gradient descent with position, direction, initial time, and energy inference
 - **Detector calibration** for optical parameters (scattering, absorption, reflection, quantum efficiency)
 - **Wavelength-dependent physics**: per-photon scattering, absorption, and QE driven by medium models and PMT curves
@@ -36,7 +34,7 @@ LUCiD provides a JAX-based differentiable simulation of light propagation in opt
 - **`sensor_response.py`** - Sensor hit aggregation for simulation, data, and likelihood modes
 
 ### Geometry (`lucid/geometry/`)
-- **`cylinder.py`**, **`sphere.py`**, **`box.py`** - Detector geometries with sensor placement and ray intersection. `Cylinder` can be built either algorithmically or via `Cylinder.from_pmt_file(npz_path)` from a unified PMT-array `.npz` (used by SK, HK, WCTE).
+- **`cylinder.py`**, **`sphere.py`**, **`box.py`**, **`string.py`** - Detector geometries with sensor placement and ray intersection. `Cylinder` can be built either algorithmically or via `Cylinder.from_pmt_file(npz_path)` from a unified PMT-array `.npz` (used by SK, HK, WCTE). `String` models vertical strings of DOMs in an open medium for neutrino telescopes.
 - **`PMT_NPZ_SCHEMA.md`** - Authoritative schema for the PMT-array `.npz` files; converters in `config/scripts/` produce these from public WCSim geofiles.
 - **`registry.py`** - Detector type registration and dispatch
 
@@ -56,6 +54,8 @@ LUCiD provides a JAX-based differentiable simulation of light propagation in opt
 
 ### Sources (`lucid/sources/`)
 - **`calibration_sources.py`** - Laser and isotropic calibration sources with optional wavelength
+- **`track.py`** - Parametric Cherenkov track (muon) photon emitter for neutrino telescopes
+- **`cascade.py`** - Parametric cascade (shower) photon emitter for neutrino telescopes (1 GeV -- 10 PeV)
 - **`event_io.py`** - Interface to PhotonSim ROOT files for data-like events
 
 ### Gradient Analysis (`lucid/gradient_analysis/`)
@@ -86,8 +86,8 @@ Tutorial notebooks in `good_notebooks/` demonstrate key workflows:
 - **`tracking_opt_development.ipynb`** - Track reconstruction with Poisson loss
 - **`tracking_opt_development_likelihood.ipynb`** - Track reconstruction with likelihood loss
 - **`tracking_opt_with_gif.ipynb`** - Track optimization with GIF recording
+- **`tracking_opt_joint_loss.ipynb`** - Track reconstruction with factored-sum loss
 - **`visualize_3D_track_optimization.ipynb`** - 3D visualization of optimization paths
-- **`track_optimization_visualization.ipynb`** - Convergence analysis with bootstrap CIs
 - **`data_vs_pred_hit_predictions.ipynb`** - Compare data-like vs. prediction-like events
 
 **Calibration**
@@ -95,6 +95,7 @@ Tutorial notebooks in `good_notebooks/` demonstrate key workflows:
 - **`detector_grad_qe_convergence_multi_source.ipynb`** - QE convergence with multiple sources
 - **`laser_source_grad_analysis.ipynb`** - Laser source gradient sweeps
 - **`wavelength_calibration.ipynb`** - Wavelength-dependent calibration analysis
+- **`calibration_visualization.ipynb`** - Calibration source visualization on SK_like geometry
 
 **Loss Landscapes & Gradients**
 - **`parameter_scans_1D.ipynb`** - 1D parameter scans with Poisson loss
@@ -103,7 +104,8 @@ Tutorial notebooks in `good_notebooks/` demonstrate key workflows:
 - **`grad_loss_and_opt_in_2D.ipynb`** - 2D gradient fields with optimization trajectories
 - **`grad_loss_and_opt_in_2D_likelihood.ipynb`** - 2D gradient fields with likelihood loss
 - **`per_sensor_tau_analysis.ipynb`** - Per-sensor tau parameter analysis
+- **`bias_scan_multi_event.ipynb`** - Multi-event bias study with factored-sum Poisson loss
+- **`event_likelihood_diagnostics.ipynb`** - Per-sensor likelihood diagnostics and first-arrival validation
 
 **Performance**
 - **`computational_performance_evaluation.ipynb`** - Benchmark simulation and gradient computation
-- **`optimization_vs_variables.ipynb`** - Performance vs. photon count, sensor count, and energy

@@ -110,7 +110,7 @@ The HDF5 files are v3-format (see
 
 ```bash
 python3 -c "import h5py; f=h5py.File('/tmp/lucid-out/labl/wc_labl_0000.h5'); \
-    print('events:', len(f['event_ids'])); \
+    print('events:', len(f['config/source_event_idx'])); \
     print('dataset_name:', f.attrs.get('dataset_name', b'').decode())"
 ```
 
