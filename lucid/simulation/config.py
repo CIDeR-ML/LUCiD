@@ -41,7 +41,7 @@ class SimConfig(NamedTuple):
         # workaround for the reflection-normal curvature explosion. That is now
         # fixed at the normal level inside photon_iteration_update_factors, so
         # direction gradient can flow all K bounces.
-        return {'track': self.K, 'calibration': 2, 'data': 0}.get(self.mode, 0)
+        return {'track': self.K, 'calibration': self.K, 'data': 0}.get(self.mode, 0)
 
     @property
     def is_data(self) -> bool:
