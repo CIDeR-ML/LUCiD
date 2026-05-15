@@ -1,7 +1,11 @@
 """
 Box (rectangular prism) detector geometry implementation.
 """
+from __future__ import annotations
 
+from typing import Optional, Union
+
+import jax
 import numpy as np
 import plotly.graph_objects as go
 from .base import Detector
@@ -12,7 +16,7 @@ from .registry import register_detector
 class Box(Detector):
     """Box (rectangular prism) detector geometry"""
     
-    def __init__(self, length, width, height, n_sensors, sensor_radius):
+    def __init__(self, length: float, width: float, height: float, n_sensors: int, sensor_radius: float) -> None:
         """
         Initialize box detector.
         
@@ -38,8 +42,8 @@ class Box(Detector):
         self._n_z = None
         self.place_photosensors()
 
-    def configure_grid(self, n_x=None, n_y=None, n_z=None,
-                        max_candidates_per_ray=4):
+    def configure_grid(self, n_x: Optional[int] = None, n_y: Optional[int] = None, n_z: Optional[int] = None,
+                        max_candidates_per_ray: int = 4) -> None:
         """Set grid parameters for propagation methods.
 
         If not provided, defaults are derived from detector dimensions to
@@ -58,7 +62,7 @@ class Box(Detector):
         self._n_z = n_z if n_z is not None else max(10, int(self.H / cell_size))
 
 
-    def place_photosensors(self):
+    def place_photosensors(self) -> None:
         """Position the photo sensor centers proportionally by surface area."""
         front_back_area = 2 * self.L * self.H
         left_right_area = 2 * self.W * self.H
@@ -112,7 +116,7 @@ class Box(Detector):
             else:
                 self.ID_to_case[i] = 5
 
-    def _place_face_sensors(self, n_sensors, dim1, dim2, face):
+    def _place_face_sensors(self, n_sensors: int, dim1: float, dim2: float, face: str) -> np.ndarray:
         """Place sensors on a rectangular face with regular grid."""
         if n_sensors == 0:
             return np.array([]).reshape(0, 3)
@@ -157,7 +161,7 @@ class Box(Detector):
         
         return np.array(points[:n_sensors])  # Trim to exact count
 
-    def visualize_geometry_wireframe(self, show_sensors=True):
+    def visualize_geometry_wireframe(self, show_sensors: bool = True) -> None:
         """Visualize the box as a wireframe with detectors"""
         fig = go.Figure()
 
@@ -239,7 +243,7 @@ class Box(Detector):
 
         fig.show()
 
-    def bounds_check(self, positions):
+    def bounds_check(self, positions: jax.Array) -> jax.Array:
         """Test whether positions are inside the box."""
         import jax.numpy as jnp
         x, y, z = positions[:, 0], positions[:, 1], positions[:, 2]
@@ -249,7 +253,7 @@ class Box(Detector):
 
     # ── Propagation methods (Phase 9) ──────────────────────────────────
 
-    def intersect_ray(self, origins, directions):
+    def intersect_ray(self, origins: jax.Array, directions: jax.Array) -> tuple[jax.Array, jax.Array, tuple[jax.Array, jax.Array], jax.Array]:
         """Batch ray-box intersection with grid indexing."""
         from lucid.propagation.box import batch_intersect_box_with_grid
         n_x = self._n_x
@@ -262,12 +266,12 @@ class Box(Detector):
         surface_info = face_indices
         return intersection_point, t, grid_info, surface_info
 
-    def compute_normal(self, intersection_point, surface_info):
+    def compute_normal(self, intersection_point: jax.Array, surface_info: jax.Array) -> jax.Array:
         """Compute outward box face normals."""
         from lucid.propagation.box import calculate_box_normals
         return calculate_box_normals(surface_info)  # surface_info = face_indices
 
-    def point_to_grid_cell(self, grid_info):
+    def point_to_grid_cell(self, grid_info: tuple[jax.Array, jax.Array]) -> jax.Array:
         """Map box intersection to linear grid cell index."""
         import jax.numpy as jnp
         face_indices, grid_indices = grid_info
@@ -298,7 +302,7 @@ class Box(Detector):
         idx = offsets[face_indices] + local_idx
         return jnp.clip(idx, 0, total_cells - 1)
 
-    def assign_sensor_to_cells(self, sensors, sensor_radius):
+    def assign_sensor_to_cells(self, sensors: jax.Array, sensor_radius: float) -> jax.Array:
         """Map sensors to overlapping box grid cells."""
         from lucid.propagation.box import assign_sensors_to_box_grid
         n_x = self._n_x
@@ -307,7 +311,7 @@ class Box(Detector):
         return assign_sensors_to_box_grid(
             sensors, sensor_radius, self.L, self.W, self.H, n_x, n_y, n_z)
 
-    def grid_cell_centers(self):
+    def grid_cell_centers(self) -> jax.Array:
         """Compute centers of all box grid cells."""
         from lucid.propagation.box import calculate_box_grid_centers
         n_x = self._n_x
@@ -315,13 +319,13 @@ class Box(Detector):
         n_z = self._n_z
         return calculate_box_grid_centers(self.L, self.W, self.H, n_x, n_y, n_z)
 
-    def total_grid_cells(self):
+    def total_grid_cells(self) -> int:
         n_x = self._n_x
         n_y = self._n_y
         n_z = self._n_z
         return 2 * (n_x * n_z + n_y * n_z + n_x * n_y)
 
-    def cell_index_to_coords(self, linear_idx):
+    def cell_index_to_coords(self, linear_idx: Union[int, jax.Array]) -> tuple[jax.Array, jax.Array, jax.Array]:
         """Decode linear index to (cell_i, cell_j, face_idx) for box."""
         import jax.numpy as jnp
         n_x = self._n_x
@@ -359,7 +363,7 @@ class Box(Detector):
         face_idx = jnp.where(is_fb, fb_face, jnp.where(is_lr, lr_face, tb_face))
         return cell_i, cell_j, face_idx
 
-    def point_to_grid_cell_from_coords(self, coords):
+    def point_to_grid_cell_from_coords(self, coords: Union[list, np.ndarray, jax.Array]) -> int:
         """Convert grid coordinates to linear index.
 
         For box: coords = [cell_i, cell_j, face_idx].
@@ -372,8 +376,8 @@ class Box(Detector):
         second_dim = self._n_z if face_idx <= 3 else self._n_y
         return offsets[face_idx] + cell_i * second_dim + cell_j
 
-    def build_inverted_sensor_map(self, assignments_geometric, assignments_distance,
-                                   max_candidates_per_ray, num_sensors):
+    def build_inverted_sensor_map(self, assignments_geometric: jax.Array, assignments_distance: jax.Array,
+                                   max_candidates_per_ray: int, num_sensors: int) -> jax.Array:
         """Build cell→sensor lookup table for box."""
         from lucid.propagation.box import create_inverted_box_sensor_map
         n_x = self._n_x

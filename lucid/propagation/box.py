@@ -1,6 +1,9 @@
 """
 Box (rectangular prism) detector photon propagation functions with optimizations.
 """
+from __future__ import annotations
+
+from typing import Callable, Optional
 
 import jax
 import jax.numpy as jnp
@@ -16,7 +19,7 @@ from .geometry import ray_box_intersection_vectorized
 
 
 @jax.jit
-def intersect_box_face(ray_origin, ray_direction, face_normal, face_distance):
+def intersect_box_face(ray_origin: jax.Array, ray_direction: jax.Array, face_normal: jax.Array, face_distance: float) -> tuple[jax.Array, jax.Array]:
     """Calculate intersection of a ray with a box face (plane).
 
     Parameters
@@ -62,7 +65,7 @@ def intersect_box_face(ray_origin, ray_direction, face_normal, face_distance):
 
 
 @jax.jit
-def intersect_box(ray_origin, ray_direction, length, width, height):
+def intersect_box(ray_origin: jax.Array, ray_direction: jax.Array, length: float, width: float, height: float) -> tuple[jax.Array, jax.Array, jax.Array]:
     """Find the closest intersection point with any face of the box.
 
     Parameters
@@ -152,7 +155,7 @@ def intersect_box(ray_origin, ray_direction, length, width, height):
 
 
 @jax.jit
-def ray_box_intersection_with_face(ray_origin, ray_direction, box_min, box_max):
+def ray_box_intersection_with_face(ray_origin: jax.Array, ray_direction: jax.Array, box_min: jax.Array, box_max: jax.Array) -> tuple[jax.Array, jax.Array]:
     """
     Optimized box intersection that also returns which face was hit.
     Uses vectorized slab method for maximum performance.
@@ -188,8 +191,8 @@ def ray_box_intersection_with_face(ray_origin, ray_direction, box_min, box_max):
 
 
 @partial(jax.jit, static_argnums=(2, 3, 4, 5, 6, 7))
-def intersect_box_with_grid(ray_origin, ray_direction, length, width, height, 
-                           n_x, n_y, n_z):
+def intersect_box_with_grid(ray_origin: jax.Array, ray_direction: jax.Array, length: float, width: float, height: float,
+                           n_x: int, n_y: int, n_z: int) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array, jax.Array]:
     """Find intersection with box and compute grid cell indices.
 
     Parameters
@@ -262,7 +265,7 @@ batch_intersect_box_with_grid = jax.vmap(intersect_box_with_grid,
                                          in_axes=(0, 0, None, None, None, None, None, None))
 
 
-def calculate_box_normals(face_indices):
+def calculate_box_normals(face_indices: jax.Array) -> jax.Array:
     """
     Calculate normals for box faces.
     
@@ -289,7 +292,7 @@ def calculate_box_normals(face_indices):
     return face_normals[face_indices]
 
 
-def box_bounds_check(points, length, width, height):
+def box_bounds_check(points: jax.Array, length: float, width: float, height: float) -> jax.Array:
     """
     Check if points are within box bounds.
     
@@ -319,8 +322,8 @@ def box_bounds_check(points, length, width, height):
 
 
 @partial(jax.jit, static_argnums=(2, 3, 4, 5, 6, 7))
-def assign_sensors_to_box_grid(sensors, sensor_radius, length, width, height,
-                                n_x, n_y, n_z):
+def assign_sensors_to_box_grid(sensors: jax.Array, sensor_radius: float, length: float, width: float, height: float,
+                                n_x: int, n_y: int, n_z: int) -> jax.Array:
     """Assign sensors to box grid cells, handling overlap across cell boundaries.
 
     Parameters
@@ -502,7 +505,7 @@ def assign_sensors_to_box_grid(sensors, sensor_radius, length, width, height,
 
 
 @partial(jax.jit, static_argnums=(1, 2, 3))
-def create_sensor_box_grid_map(assignments, n_x, n_y, n_z):
+def create_sensor_box_grid_map(assignments: jax.Array, n_x: int, n_y: int, n_z: int) -> jax.Array:
     """
     Creates a grid map counting the number of sensors in each cell of the box sensor grid.
     """
@@ -553,7 +556,7 @@ def create_sensor_box_grid_map(assignments, n_x, n_y, n_z):
 
 
 @partial(jax.jit, static_argnums=(0, 1, 2, 3, 4, 5))
-def calculate_box_grid_centers(length, width, height, n_x, n_y, n_z):
+def calculate_box_grid_centers(length: float, width: float, height: float, n_x: int, n_y: int, n_z: int) -> jax.Array:
     """Calculate center points of all box grid cells"""
     centers = []
     
@@ -597,9 +600,9 @@ def calculate_box_grid_centers(length, width, height, n_x, n_y, n_z):
     return jnp.concatenate(centers, axis=0)
 
 
-def find_intersected_box_sensors_differentiable(ray_origins, ray_directions, sensor_positions, sensor_radius,
-                                                  length, width, height, n_x, n_y, n_z, 
-                                                  inverted_sensor_map, temperature, overlap_prob):
+def find_intersected_box_sensors_differentiable(ray_origins: jax.Array, ray_directions: jax.Array, sensor_positions: jax.Array, sensor_radius: float,
+                                                  length: float, width: float, height: float, n_x: int, n_y: int, n_z: int,
+                                                  inverted_sensor_map: jax.Array, temperature: float, overlap_prob: Callable[[jax.Array], jax.Array]) -> dict[str, jax.Array]:
     """
     Finds sensors intersected by rays using a differentiable approximation with overlap-based weights.
     """
@@ -691,8 +694,8 @@ def find_intersected_box_sensors_differentiable(ray_origins, ray_directions, sen
     return result if not single_ray else jax.tree_map(lambda x: x[0], result)
 
 
-def create_inverted_box_sensor_map(assignments_geometric, assignments_distance, 
-                                    n_x, n_y, n_z, max_candidates_per_ray):
+def create_inverted_box_sensor_map(assignments_geometric: jax.Array, assignments_distance: jax.Array,
+                                    n_x: int, n_y: int, n_z: int, max_candidates_per_ray: int) -> jax.Array:
     """Create inverted sensor map for box geometry with proper grid indexing."""
     front_back_cells = n_x * n_z
     left_right_cells = n_y * n_z
@@ -810,8 +813,8 @@ def create_inverted_box_sensor_map(assignments_geometric, assignments_distance,
     return final_map
 
 
-def create_box_photon_propagator(sensor_positions, sensor_radius, length=4.0, width=4.0, height=6.0,
-                                 n_x=125, n_y=125, n_z=125, temperature=0.2, max_candidates_per_ray=4):
+def create_box_photon_propagator(sensor_positions: jax.Array, sensor_radius: float, length: float = 4.0, width: float = 4.0, height: float = 6.0,
+                                 n_x: int = 125, n_y: int = 125, n_z: int = 125, temperature: Optional[float] = 0.2, max_candidates_per_ray: int = 4) -> Callable[[jax.Array, jax.Array], dict[str, jax.Array]]:
     """
     Creates a JIT-compiled function for efficient photon propagation simulation in box geometry with optimizations.
     """
@@ -839,7 +842,7 @@ def create_box_photon_propagator(sensor_positions, sensor_radius, length=4.0, wi
     )
 
     @jax.jit
-    def propagate_photons(photon_origins, photon_directions):
+    def propagate_photons(photon_origins: jax.Array, photon_directions: jax.Array) -> dict[str, jax.Array]:
         """
         Box propagation using optimized vectorized intersection and proper grid-based sensor lookup.
         """

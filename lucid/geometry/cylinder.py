@@ -1,7 +1,11 @@
 """
 Cylindrical detector geometry implementation.
 """
+from __future__ import annotations
 
+from typing import Optional, Union
+
+import jax
 import numpy as np
 import plotly.graph_objects as go
 from .base import Detector
@@ -34,7 +38,7 @@ class Cylinder(Detector):
       rather than computed.
     """
 
-    def __init__(self, radius, height, n_sensors, sensor_radius):
+    def __init__(self, radius: float, height: float, n_sensors: int, sensor_radius: float) -> None:
         """
         Initialize cylindrical detector.
         
@@ -58,8 +62,8 @@ class Cylinder(Detector):
         self._n_height = None
         self.place_photosensors()
 
-    def configure_grid(self, n_cap=None, n_angular=None, n_height=None,
-                        max_candidates_per_ray=4):
+    def configure_grid(self, n_cap: Optional[int] = None, n_angular: Optional[int] = None, n_height: Optional[int] = None,
+                        max_candidates_per_ray: int = 4) -> None:
         """Set grid parameters for propagation methods.
 
         The default sizing rule keeps each grid-cell edge **no longer
@@ -124,7 +128,7 @@ class Cylinder(Detector):
             10, int(math.ceil(2 * self.r / target)))
 
 
-    def place_photosensors(self):
+    def place_photosensors(self) -> None:
         """Position the photo sensor centers proportionally by surface area."""
         barrel_area = 2 * np.pi * self.r * self.H
         caps_area = 2 * np.pi * self.r**2  # Both caps combined
@@ -159,7 +163,7 @@ class Cylinder(Detector):
     # ── Construction from a PMT-positions npz file ────────────────────
 
     @classmethod
-    def from_pmt_file(cls, npz_file_path, snap_to_wall=True):
+    def from_pmt_file(cls, npz_file_path: str, snap_to_wall: bool = True) -> Cylinder:
         """Build a :class:`Cylinder` whose PMT positions are read from
         a unified-schema ``.npz`` file (see ``PMT_NPZ_SCHEMA.md``).
 
@@ -291,7 +295,7 @@ class Cylinder(Detector):
 
         return instance
 
-    def _snap_to_wall(self, positions, surfaces):
+    def _snap_to_wall(self, positions: np.ndarray, surfaces: np.ndarray) -> np.ndarray:
         """Project barrel PMTs radially onto ``r=self.r`` and cap PMTs
         axially onto ``z=±self.H/2``. ``positions`` and ``surfaces``
         must already share the same row order."""
@@ -305,7 +309,7 @@ class Cylinder(Detector):
         out[surfaces == 'bottom', 2] = -self.H / 2
         return out
 
-    def _place_barrel_sensors(self, n_sensors):
+    def _place_barrel_sensors(self, n_sensors: int) -> np.ndarray:
         """Place sensors on barrel surface with rectangular grid."""
         if n_sensors == 0:
             return np.array([]).reshape(0, 3)
@@ -339,7 +343,7 @@ class Cylinder(Detector):
         
         return np.array(points[:n_sensors])  # Trim to exact count
 
-    def _place_cap_sensors(self, n_sensors, z_position):
+    def _place_cap_sensors(self, n_sensors: int, z_position: float) -> np.ndarray:
         """Place sensors on cap surface with concentric hexagonal rings."""
         if n_sensors == 0:
             return np.array([]).reshape(0, 3)
@@ -358,7 +362,7 @@ class Cylinder(Detector):
         
         return points_3d
 
-    def visualize_geometry_wireframe(self, show_sensors=True):
+    def visualize_geometry_wireframe(self, show_sensors: bool = True) -> None:
         """Visualize the cylinder as a wireframe with detectors"""
         fig = go.Figure()
 
@@ -455,7 +459,7 @@ class Cylinder(Detector):
 
         fig.show()
 
-    def bounds_check(self, positions):
+    def bounds_check(self, positions: jax.Array) -> jax.Array:
         """Test whether positions are inside the cylinder."""
         import jax.numpy as jnp
         x, y, z = positions[:, 0], positions[:, 1], positions[:, 2]
@@ -465,7 +469,7 @@ class Cylinder(Detector):
 
     # ── Propagation methods (Phase 9) ──────────────────────────────────
 
-    def intersect_ray(self, origins, directions):
+    def intersect_ray(self, origins: jax.Array, directions: jax.Array) -> tuple[jax.Array, jax.Array, tuple, tuple]:
         """Batch ray-cylinder intersection with grid indexing."""
         from lucid.propagation.cylinder import batch_intersect_cylinder_with_grid
         n_cap = self._n_cap
@@ -479,13 +483,13 @@ class Cylinder(Detector):
         surface_info = (is_wall, is_top_cap)
         return intersection_point, t, grid_info, surface_info
 
-    def compute_normal(self, intersection_point, surface_info):
+    def compute_normal(self, intersection_point: jax.Array, surface_info: tuple[jax.Array, jax.Array]) -> jax.Array:
         """Compute outward cylinder surface normals."""
         from lucid.propagation.cylinder import calculate_cylinder_normals
         is_wall, is_top_cap = surface_info
         return calculate_cylinder_normals(intersection_point, is_wall, is_top_cap)
 
-    def point_to_grid_cell(self, grid_info):
+    def point_to_grid_cell(self, grid_info: tuple[jax.Array, jax.Array, jax.Array, jax.Array]) -> jax.Array:
         """Map cylinder intersection to linear grid cell index."""
         import jax.numpy as jnp
         is_wall, is_top_cap, wall_indices, cap_indices = grid_info
@@ -504,7 +508,7 @@ class Cylinder(Detector):
         total_cells = n_wall_cells + 2 * n_cap * n_cap
         return jnp.clip(idx, 0, total_cells - 1)
 
-    def assign_sensor_to_cells(self, sensors, sensor_radius):
+    def assign_sensor_to_cells(self, sensors: jax.Array, sensor_radius: float) -> jax.Array:
         """Map sensors to overlapping cylinder grid cells."""
         from lucid.propagation.cylinder import assign_sensors_to_grid
         n_cap = self._n_cap
@@ -513,7 +517,7 @@ class Cylinder(Detector):
         return assign_sensors_to_grid(
             sensors, sensor_radius, self.r, self.H, n_cap, n_angular, n_height)
 
-    def grid_cell_centers(self):
+    def grid_cell_centers(self) -> jax.Array:
         """Compute centers of all cylinder grid cells."""
         from lucid.propagation.cylinder import calculate_grid_centers
         n_cap = self._n_cap
@@ -521,13 +525,13 @@ class Cylinder(Detector):
         n_height = self._n_height
         return calculate_grid_centers(self.r, self.H, n_cap, n_angular, n_height)
 
-    def total_grid_cells(self):
+    def total_grid_cells(self) -> int:
         n_cap = self._n_cap
         n_angular = self._n_angular
         n_height = self._n_height
         return n_angular * n_height + 2 * n_cap * n_cap
 
-    def cell_index_to_coords(self, linear_idx):
+    def cell_index_to_coords(self, linear_idx: Union[int, jax.Array]) -> tuple[jax.Array, jax.Array, jax.Array]:
         """Decode linear index to (cell_i, cell_j, cell_k) for cylinder."""
         import jax.numpy as jnp
         n_cap = self._n_cap
@@ -550,7 +554,7 @@ class Cylinder(Detector):
         cell_k = jnp.where(is_wall, 0, jnp.where(is_top, 1, 2))
         return cell_i, cell_j, cell_k
 
-    def point_to_grid_cell_from_coords(self, coords):
+    def point_to_grid_cell_from_coords(self, coords: Union[list, np.ndarray, jax.Array]) -> int:
         """Convert grid coordinates (from assignment array) to linear index.
 
         For cylinder: coords = [angular_idx, height_idx, part_type]
@@ -565,8 +569,8 @@ class Cylinder(Detector):
         else:  # bottom cap
             return n_wall + self._n_cap * self._n_cap + cell_i * self._n_cap + cell_j
 
-    def build_inverted_sensor_map(self, assignments_geometric, assignments_distance,
-                                   max_candidates_per_ray, num_sensors):
+    def build_inverted_sensor_map(self, assignments_geometric: jax.Array, assignments_distance: jax.Array,
+                                   max_candidates_per_ray: int, num_sensors: int) -> jax.Array:
         """Build cell→sensor lookup table for cylinder."""
         from lucid.propagation.cylinder import create_inverted_sensor_map
         n_cap = self._n_cap

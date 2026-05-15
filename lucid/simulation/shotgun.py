@@ -5,7 +5,9 @@ and attaches a ``.batch`` helper for N-case ``vmap`` execution. All real work
 happens inside ``setup_event_simulator`` via the ``hit_mode='waveform'`` and
 ``hit_mode='shotgun_per_photon'`` paths.
 """
-from typing import Optional
+from __future__ import annotations
+
+from typing import Any, Callable, Optional
 
 import jax
 
@@ -31,8 +33,8 @@ def setup_shotgun_simulator(
     default_detector_params: bool = True,
     wavelength_sampling: str = 'cherenkov',
     use_expected_value: bool = False,
-    **grid_params,
-):
+    **grid_params: Any,
+) -> Callable:
     """Build a photon-shotgun simulator.
 
     Parameters

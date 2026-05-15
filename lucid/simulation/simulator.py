@@ -1,4 +1,6 @@
 """Event simulator factory (setup_event_simulator)."""
+from __future__ import annotations
+
 from lucid.sources.siren_rays import (
     photonsim_differentiable_get_rays,
     predict_t0,
@@ -21,7 +23,7 @@ from lucid.wavelength.spectrum import (
 
 import jax
 import jax.numpy as jnp
-from typing import Optional, Tuple
+from typing import Any, Callable, Optional, Tuple, Union
 import os
 from lucid.siren.core import create_photonsim_siren_grid
 from functools import partial
@@ -45,26 +47,26 @@ from lucid.simulation.sensor_response import (
 # ===================================================================
 
 def setup_event_simulator(
-        json_filename,
-        n_photons=1_000_000,
-        temperature=0.2,
-        K=7,
-        is_data=False,
-        is_calibration=False,
-        max_candidates_per_ray=4,
-        detector_type='Cylinder',
-        use_expected_value=True,
-        particle='muon',
-        apply_smearing=True,
-        physics_config=None,
-        default_detector_params=False,
-        wavelength_mode=True,
-        hit_mode=None,
-        n_grad_iters=None,
-        pos_grad_threshold=None,  # None → use mode default (calib:K, track:0)
-        waveform_config=None,
-        wavelength_sampling='cherenkov',
-        **grid_params):
+        json_filename: str,
+        n_photons: int = 1_000_000,
+        temperature: Optional[float] = 0.2,
+        K: int = 7,
+        is_data: bool = False,
+        is_calibration: bool = False,
+        max_candidates_per_ray: int = 4,
+        detector_type: str = 'Cylinder',
+        use_expected_value: bool = True,
+        particle: str = 'muon',
+        apply_smearing: bool = True,
+        physics_config: Optional[str] = None,
+        default_detector_params: Union[bool, DetectorParams] = False,
+        wavelength_mode: bool = True,
+        hit_mode: Optional[str] = None,
+        n_grad_iters: Optional[int] = None,
+        pos_grad_threshold: Optional[int] = None,  # None → use mode default (calib:K, track:0)
+        waveform_config: Optional[dict[str, Any]] = None,
+        wavelength_sampling: str = 'cherenkov',
+        **grid_params: Any) -> Callable:
     """
     Set up and return an event simulator using DetectorParams / ParticleParams.
 

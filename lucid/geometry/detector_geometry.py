@@ -1,6 +1,9 @@
 """DetectorGeometry container — aggregates geometry + propagator + medium."""
-from typing import NamedTuple, Optional, Callable
+from __future__ import annotations
 
+from typing import NamedTuple, Optional, Callable, Any
+
+import jax
 import jax.numpy as jnp
 
 from lucid.geometry import generate_detector, get_material_from_config
@@ -16,7 +19,7 @@ class DetectorGeometry(NamedTuple):
     ParticleModel combinations.
     """
     detector_type: str                          # 'Cylinder', 'Sphere', 'Box'
-    sensor_points: jnp.ndarray                  # (num_sensors, 3)
+    sensor_points: jax.Array                    # (num_sensors, 3)
     sensor_radius: float
     num_sensors: int
     speed_of_light: float                       # m/ns in this medium

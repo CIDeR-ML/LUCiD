@@ -1,7 +1,11 @@
 """
 Spherical detector geometry implementation.
 """
+from __future__ import annotations
 
+from typing import Optional, Union
+
+import jax
 import numpy as np
 import plotly.graph_objects as go
 from .base import Detector
@@ -13,7 +17,7 @@ from .registry import register_detector
 class Sphere(Detector):
     """Spherical detector geometry"""
     
-    def __init__(self, radius, n_sensors, sensor_radius):
+    def __init__(self, radius: float, n_sensors: int, sensor_radius: float) -> None:
         """
         Initialize spherical detector.
         
@@ -31,7 +35,7 @@ class Sphere(Detector):
         self._n_divisions = None
         self.place_photosensors()
 
-    def configure_grid(self, n_divisions=None, max_candidates_per_ray=4):
+    def configure_grid(self, n_divisions: Optional[int] = None, max_candidates_per_ray: int = 4) -> None:
         """Set grid parameters for propagation methods.
 
         If not provided, defaults are derived from sensor count to
@@ -50,7 +54,7 @@ class Sphere(Detector):
             self._n_divisions = max(10, int(math.sqrt(target_cells / 2)))
 
 
-    def place_photosensors(self):
+    def place_photosensors(self) -> None:
         """Position the photo sensor centers on the sphere surface using Fibonacci spiral."""
         self.all_points = fibonacci_sphere_points_numpy(self.n_sensors, self.r) + self.C
         
@@ -59,7 +63,7 @@ class Sphere(Detector):
         # For sphere, all sensors are on surface (case 0)
         self.ID_to_case = {i: 0 for i in range(len(self.all_points))}
 
-    def visualize_geometry_wireframe(self, show_sensors=True):
+    def visualize_geometry_wireframe(self, show_sensors: bool = True) -> None:
         """Visualize the sphere as a wireframe with detectors"""
         fig = go.Figure()
 
@@ -101,14 +105,14 @@ class Sphere(Detector):
 
         fig.show()
 
-    def bounds_check(self, positions):
+    def bounds_check(self, positions: jax.Array) -> jax.Array:
         """Test whether positions are inside the sphere."""
         import jax.numpy as jnp
         return jnp.linalg.norm(positions, axis=1) <= self.r
 
     # ── Propagation methods (Phase 9) ──────────────────────────────────
 
-    def intersect_ray(self, origins, directions):
+    def intersect_ray(self, origins: jax.Array, directions: jax.Array) -> tuple[jax.Array, jax.Array, tuple[jax.Array, jax.Array], None]:
         """Batch ray-sphere intersection with grid indexing."""
         from lucid.propagation.sphere import batch_intersect_sphere_with_grid
         n_div = self._n_divisions
@@ -118,12 +122,12 @@ class Sphere(Detector):
         surface_info = None  # sphere has uniform surface
         return intersection_point, t, grid_info, surface_info
 
-    def compute_normal(self, intersection_point, surface_info):
+    def compute_normal(self, intersection_point: jax.Array, surface_info: None) -> jax.Array:
         """Compute outward sphere surface normals."""
         from lucid.propagation.sphere import calculate_sphere_normals
         return calculate_sphere_normals(intersection_point)
 
-    def point_to_grid_cell(self, grid_info):
+    def point_to_grid_cell(self, grid_info: tuple[jax.Array, jax.Array]) -> jax.Array:
         """Map sphere intersection to linear grid cell index."""
         import jax.numpy as jnp
         theta_idx, phi_idx = grid_info
@@ -134,23 +138,23 @@ class Sphere(Detector):
         total = n_theta * n_phi
         return jnp.clip(idx, 0, total - 1)
 
-    def assign_sensor_to_cells(self, sensors, sensor_radius):
+    def assign_sensor_to_cells(self, sensors: jax.Array, sensor_radius: float) -> jax.Array:
         """Map sensors to overlapping sphere grid cells."""
         from lucid.propagation.sphere import assign_sensors_to_sphere_grid
         n_div = self._n_divisions
         return assign_sensors_to_sphere_grid(sensors, sensor_radius, self.r, n_div)
 
-    def grid_cell_centers(self):
+    def grid_cell_centers(self) -> jax.Array:
         """Compute centers of all sphere grid cells."""
         from lucid.propagation.sphere import calculate_sphere_grid_centers
         n_div = self._n_divisions
         return calculate_sphere_grid_centers(self.r, n_div)
 
-    def total_grid_cells(self):
+    def total_grid_cells(self) -> int:
         n_div = self._n_divisions
         return n_div * (2 * n_div)
 
-    def cell_index_to_coords(self, linear_idx):
+    def cell_index_to_coords(self, linear_idx: Union[int, jax.Array]) -> tuple[jax.Array, jax.Array]:
         """Decode linear index to (theta_idx, phi_idx) for sphere."""
         n_div = self._n_divisions
         n_phi = 2 * n_div
@@ -158,7 +162,7 @@ class Sphere(Detector):
         phi_idx = linear_idx % n_phi
         return theta_idx, phi_idx
 
-    def point_to_grid_cell_from_coords(self, coords):
+    def point_to_grid_cell_from_coords(self, coords: Union[list, np.ndarray, jax.Array]) -> int:
         """Convert grid coordinates to linear index.
 
         For sphere: coords = [theta_idx, phi_idx].
@@ -167,8 +171,8 @@ class Sphere(Detector):
         n_phi = 2 * self._n_divisions
         return theta_idx * n_phi + phi_idx
 
-    def build_inverted_sensor_map(self, assignments_geometric, assignments_distance,
-                                   max_candidates_per_ray, num_sensors):
+    def build_inverted_sensor_map(self, assignments_geometric: jax.Array, assignments_distance: jax.Array,
+                                   max_candidates_per_ray: int, num_sensors: int) -> jax.Array:
         """Build cell→sensor lookup table for sphere."""
         from lucid.propagation.sphere import create_inverted_sphere_sensor_map
         n_div = self._n_divisions

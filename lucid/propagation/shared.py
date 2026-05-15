@@ -5,11 +5,17 @@ create_sphere_photon_propagator, create_box_photon_propagator) with a
 single function that works for any Detector subclass implementing the
 Phase 9 abstract methods.
 """
+from __future__ import annotations
+
 import warnings
+from typing import Any, Callable, Optional, TYPE_CHECKING
 
 import jax
 import jax.numpy as jnp
 import numpy as np
+
+if TYPE_CHECKING:
+    from lucid.geometry.base import Detector
 
 from lucid.propagation.base import (
     compute_sensor_intersections_base,
@@ -19,8 +25,8 @@ from lucid.propagation.base import (
 from lucid.overlap import create_overlap_prob
 
 
-def validate_sensor_map(assignments_geometric, inverted_sensor_map, num_sensors,
-                        detector, max_candidates_per_ray):
+def validate_sensor_map(assignments_geometric: jax.Array, inverted_sensor_map: jax.Array, num_sensors: int,
+                        detector: Detector, max_candidates_per_ray: int) -> None:
     """Check consistency between forward (sensor→cells) and inverse (cell→sensors) maps.
 
     Runs at propagator build time (numpy, not JIT). Raises warnings for
@@ -104,9 +110,9 @@ def validate_sensor_map(assignments_geometric, inverted_sensor_map, num_sensors,
             f"max_candidates_per_ray={max_candidates_per_ray} overflow.")
 
 
-def create_propagator(detector, sensor_positions, sensor_radius,
-                      temperature=0.2, max_candidates_per_ray=4,
-                      **grid_params):
+def create_propagator(detector: Detector, sensor_positions: jax.Array, sensor_radius: float,
+                      temperature: Optional[float] = 0.2, max_candidates_per_ray: int = 4,
+                      **grid_params: Any) -> Callable[[jax.Array, jax.Array], dict[str, jax.Array]]:
     """Build a JIT-compiled photon propagator using detector methods.
 
     Parameters
@@ -168,7 +174,7 @@ def create_propagator(detector, sensor_positions, sensor_radius,
 
     # 7.
     @jax.jit
-    def propagate_photons(photon_origins, photon_directions):
+    def propagate_photons(photon_origins: jax.Array, photon_directions: jax.Array) -> dict[str, jax.Array]:
         """Trace photon rays through detector geometry.
 
         Parameters

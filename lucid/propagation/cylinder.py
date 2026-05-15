@@ -1,6 +1,9 @@
 """
 Cylinder-specific photon propagation functions.
 """
+from __future__ import annotations
+
+from typing import Callable, Optional
 
 import jax
 import jax.numpy as jnp
@@ -15,7 +18,7 @@ from ..overlap import create_overlap_prob
 
 
 @jax.jit
-def intersect_cylinder_wall(ray_origin, ray_direction, r, h):
+def intersect_cylinder_wall(ray_origin: jax.Array, ray_direction: jax.Array, r: float, h: float) -> tuple[jax.Array, jax.Array]:
     """Calculate intersection of a ray with a cylinder's wall.
 
     Parameters
@@ -73,7 +76,7 @@ def intersect_cylinder_wall(ray_origin, ray_direction, r, h):
 
 
 @jax.jit
-def intersect_cylinder_cap(ray_origin, ray_direction, r, z):
+def intersect_cylinder_cap(ray_origin: jax.Array, ray_direction: jax.Array, r: float, z: float) -> tuple[jax.Array, jax.Array]:
     """Calculate intersection of a ray with one of the cylinder's caps.
 
     Parameters
@@ -120,7 +123,7 @@ def intersect_cylinder_cap(ray_origin, ray_direction, r, z):
 
 
 @jax.jit
-def intersect_cylinder(ray_origin, ray_direction, r, h):
+def intersect_cylinder(ray_origin: jax.Array, ray_direction: jax.Array, r: float, h: float) -> tuple[jax.Array, jax.Array, jax.Array]:
     """Find the closest intersection point with any part of the cylinder.
 
     Parameters
@@ -156,7 +159,7 @@ def intersect_cylinder(ray_origin, ray_direction, r, h):
 
 
 @partial(jax.jit, static_argnums=(2, 3, 4, 5, 6))
-def intersect_cylinder_with_grid(ray_origin, ray_direction, r, h, n_cap, n_angular, n_height):
+def intersect_cylinder_with_grid(ray_origin: jax.Array, ray_direction: jax.Array, r: float, h: float, n_cap: int, n_angular: int, n_height: int) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array]:
     """Find intersection with cylinder and compute grid cell indices.
 
     Parameters
@@ -212,7 +215,7 @@ batch_intersect_cylinder_with_grid = jax.vmap(intersect_cylinder_with_grid,
                                               in_axes=(0, 0, None, None, None, None, None))
 
 
-def calculate_cylinder_normals(intersection_point, is_wall, is_top_cap):
+def calculate_cylinder_normals(intersection_point: jax.Array, is_wall: jax.Array, is_top_cap: jax.Array) -> jax.Array:
     """
     Calculate normals for cylinder surfaces.
     
@@ -247,7 +250,7 @@ def calculate_cylinder_normals(intersection_point, is_wall, is_top_cap):
                              bottom_cap_normal))
 
 
-def cylinder_bounds_check(points, r, h):
+def cylinder_bounds_check(points: jax.Array, r: float, h: float) -> jax.Array:
     """
     Check if points are within cylinder bounds.
     
@@ -274,7 +277,7 @@ def cylinder_bounds_check(points, r, h):
 
 
 @partial(jax.jit, static_argnums=(2, 3, 4, 5, 6))
-def assign_sensors_to_grid(sensors, sensor_radius, r, h, n_cap, n_angular, n_height):
+def assign_sensors_to_grid(sensors: jax.Array, sensor_radius: float, r: float, h: float, n_cap: int, n_angular: int, n_height: int) -> jax.Array:
     """Assign sensors to grid cells, handling overlap across cell boundaries.
 
     Parameters
@@ -433,7 +436,7 @@ def assign_sensors_to_grid(sensors, sensor_radius, r, h, n_cap, n_angular, n_hei
 
 
 @partial(jax.jit, static_argnums=(1, 2, 3))
-def create_sensor_grid_map(assignments, n_cap, n_angular, n_height):
+def create_sensor_grid_map(assignments: jax.Array, n_cap: int, n_angular: int, n_height: int) -> jax.Array:
     """
     Creates a grid map counting the number of sensors in each cell of the sensor grid.
     """
@@ -461,7 +464,7 @@ def create_sensor_grid_map(assignments, n_cap, n_angular, n_height):
 
 
 @partial(jax.jit, static_argnums=(1, 2, 3, 4))
-def calculate_grid_centers(r, h, n_cap, n_angular, n_height):
+def calculate_grid_centers(r: float, h: float, n_cap: int, n_angular: int, n_height: int) -> jax.Array:
     """Calculate center points of all grid cells"""
     # Wall centers
     angular_step = 2 * jnp.pi / n_angular
@@ -506,8 +509,8 @@ def calculate_grid_centers(r, h, n_cap, n_angular, n_height):
 
 
 @partial(jax.jit, static_argnums=(2, 3, 4, 5, 6), device=jax.devices('cpu')[0])
-def create_inverted_sensor_map(assignments_geometric, assignments_distance, n_cap, n_angular, n_height,
-                                 max_candidates_per_ray, num_sensors):
+def create_inverted_sensor_map(assignments_geometric: jax.Array, assignments_distance: jax.Array, n_cap: int, n_angular: int, n_height: int,
+                                 max_candidates_per_ray: int, num_sensors: int) -> jax.Array:
     """Create inverted sensor map prioritizing geometric intersections then closest sensors"""
     total_cells = n_angular * n_height + 2 * n_cap * n_cap
 
@@ -612,9 +615,9 @@ def create_inverted_sensor_map(assignments_geometric, assignments_distance, n_ca
     return final_map
 
 
-def find_intersected_sensors_differentiable(ray_origins, ray_directions, sensor_positions, sensor_radius, r, h,
-                                           n_cap, n_angular, n_height, inverted_sensor_map,
-                                           temperature, overlap_prob):
+def find_intersected_sensors_differentiable(ray_origins: jax.Array, ray_directions: jax.Array, sensor_positions: jax.Array, sensor_radius: float, r: float, h: float,
+                                           n_cap: int, n_angular: int, n_height: int, inverted_sensor_map: jax.Array,
+                                           temperature: float, overlap_prob: Callable[[jax.Array], jax.Array]) -> dict[str, jax.Array]:
     """
     Finds sensors intersected by rays using a differentiable approximation with overlap-based weights.
     """
@@ -687,8 +690,8 @@ def find_intersected_sensors_differentiable(ray_origins, ray_directions, sensor_
     return result if not single_ray else jax.tree_map(lambda x: x[0], result)
 
 
-def create_photon_propagator(sensor_positions, sensor_radius, r=4.0, h=6.0, n_cap=150, n_angular=250, n_height=150,
-                           temperature=0.2, max_candidates_per_ray=4):
+def create_photon_propagator(sensor_positions: jax.Array, sensor_radius: float, r: float = 4.0, h: float = 6.0, n_cap: int = 150, n_angular: int = 250, n_height: int = 150,
+                           temperature: Optional[float] = 0.2, max_candidates_per_ray: int = 4) -> Callable[[jax.Array, jax.Array], dict[str, jax.Array]]:
     """
     Creates a JIT-compiled function for efficient photon propagation simulation with overlap-based weights.
     """
@@ -718,7 +721,7 @@ def create_photon_propagator(sensor_positions, sensor_radius, r=4.0, h=6.0, n_ca
         overlap_prob = create_overlap_prob(temperature * sensor_radius, sensor_radius)
 
     @jax.jit
-    def propagate_photons(photon_origins, photon_directions):
+    def propagate_photons(photon_origins: jax.Array, photon_directions: jax.Array) -> dict[str, jax.Array]:
         return find_intersected_sensors_differentiable(
             photon_origins, photon_directions, sensor_positions, sensor_radius,
             r, h, n_cap, n_angular, n_height, inverted_sensor_map,
