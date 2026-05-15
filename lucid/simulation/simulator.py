@@ -51,7 +51,7 @@ def setup_event_simulator(
         K=7,
         is_data=False,
         is_calibration=False,
-        max_candidates_per_ray=4,
+        max_sensors_per_cell=4,
         detector_type='Cylinder',
         use_expected_value=True,
         particle='muon',
@@ -82,8 +82,8 @@ def setup_event_simulator(
         ROOT-file data mode.
     is_calibration : bool
         Calibration mode (source passed at call time).
-    max_candidates_per_ray : int
-        Maximum sensor candidates checked per ray per K step.
+    max_sensors_per_cell : int
+        Grid cell sensor limit.
     detector_type : str
         'Cylinder', 'Sphere', or 'Box'.
     use_expected_value : bool
@@ -187,7 +187,7 @@ def setup_event_simulator(
 
     det_geom = DetectorGeometry.from_config(
         json_filename, temperature=temperature,
-        max_candidates_per_ray=max_candidates_per_ray,
+        max_sensors_per_cell=max_sensors_per_cell,
         detector_type=detector_type,
         **grid_params)
 
@@ -196,8 +196,7 @@ def setup_event_simulator(
         n_photons=n_photons, K=K, mode=mode,
         use_expected_value=use_expected_value,
         apply_smearing=apply_smearing,
-        n_grad_iters=n_grad_iters,
-        max_candidates_per_ray=max_candidates_per_ray)
+        n_grad_iters=n_grad_iters)
 
     # ---- Extract fields from containers ------------------------------------
     material = det_geom.medium.material
@@ -207,9 +206,6 @@ def setup_event_simulator(
     NUM_SENSORS = det_geom.num_sensors
     Nphot = sim_config.n_photons
     propagate_photons = det_geom.propagator
-
-    from lucid.geometry.string import StringTelescope
-    _is_volume = isinstance(detector, StringTelescope)
 
     # ---- Handle qe_corrections for baked-in detector params -----------------
     if _default_dp is not None:
@@ -440,19 +436,18 @@ def setup_event_simulator(
     # ================================================================
 
     @partial(jax.jit, static_argnames=(
-        'n_rays', 'K', 'n_grad_iters', 'max_candidates_per_ray', 'num_sensors',
+        'n_rays', 'K', 'n_grad_iters', 'max_sensors_per_cell', 'num_sensors',
         'propagate_fn', 'photon_update_fn', 'pos_grad_threshold', 'make_hits_fn',
-        'n_segments', 'is_volume'))
+        'n_segments'))
     def _common_propagation(
             positions, directions, intensities, times,
             scatter_lengths, absorption_lengths,
             qe_per_photon,
             n_rays, detector_params, key,
-            num_sensors, K, n_grad_iters, max_candidates_per_ray,
+            num_sensors, K, n_grad_iters, max_sensors_per_cell,
             propagate_fn, photon_update_fn,
             pos_grad_threshold, make_hits_fn,
-            segment_idx=None, n_segments=0,
-            is_volume=False):
+            segment_idx=None, n_segments=0):
         """Core photon propagation loop.
 
         Parameters
@@ -514,65 +509,41 @@ def setup_event_simulator(
             prop_results = propagate_fn(safe_positions, safe_directions)
             depositions = prop_results['sensor_weights']
             sensor_indices = prop_results['sensor_indices']
-            sensor_distances = prop_results['sensor_distances']
+            hit_times_meters = prop_results['times']
             hit_positions = prop_results['positions']
             normals = prop_results['normals']
             inside_sensor = prop_results['inside_sensor']
 
+            hit_sensor = jnp.max(inside_sensor, axis=0)
+            surface_distances = jnp.linalg.norm(hit_positions - state.positions, axis=1) - 1e-6
+
             key, subkey = jax.random.split(key)
             rng_keys = jax.random.split(subkey, n_rays)
 
-            if is_volume:
-                # ── Volume model: per-DOM survival, no reflection ──
-                from lucid.simulation.photon_step_volume import photon_step_volume
-                seg_lengths = prop_results.get(
-                    'envelope_exit_t',
-                    jnp.linalg.norm(hit_positions - state.positions, axis=1))
-                seg_lengths = jnp.maximum(seg_lengths, 1.0)
+            # vmap: 12 args — per-photon scatter/absorption, scalar reflections
+            (new_positions, new_directions, new_times,
+             detect_probs, reflection_attenuations,
+             continuing_factors) = jax.vmap(
+                photon_update_fn,
+                in_axes=(0, 0, 0, 0, 0,
+                         0, None, None, 0,
+                         0, 0, None)
+            )(state.positions, state.directions, state.times,
+              surface_distances, normals,
+              scatter_lengths, wall_reflection_rate, sensor_reflection_rate,
+              absorption_lengths,
+              hit_sensor, rng_keys, SPEED_OF_LIGHT_MATERIAL)
 
-                (new_positions, new_directions, new_times,
-                 per_dom_charges, continuing_factors) = jax.vmap(
-                    photon_step_volume,
-                    in_axes=(0, 0, 0, 1, 1, 0, 0, 0, 0, None)
-                )(state.positions, state.directions, state.times,
-                  sensor_distances.squeeze(-1), depositions,
-                  scatter_lengths, absorption_lengths, seg_lengths,
-                  rng_keys, SPEED_OF_LIGHT_MATERIAL)
+            inside_detector = get_inside_detector_flag(new_positions)
+            safe_continuing = jnp.where(inside_detector, continuing_factors, 0.0)
 
-                inside_detector = get_inside_detector_flag(new_positions)
-                safe_continuing = jnp.where(inside_detector, continuing_factors, 0.0)
-                new_survival = state.survival * safe_continuing
+            new_survival = state.survival * safe_continuing
 
-                physical_intensities = intensities * state.survival
-                updated_weights = per_dom_charges.T * physical_intensities[None, :]
-            else:
-                # ── Surface model: shared surface_distance, reflection ──
-                hit_sensor = jnp.max(inside_sensor, axis=0)
-                surface_distances = jnp.linalg.norm(hit_positions - state.positions, axis=1) - 1e-6
-
-                (new_positions, new_directions, new_times,
-                 detect_probs, reflection_attenuations,
-                 continuing_factors) = jax.vmap(
-                    photon_update_fn,
-                    in_axes=(0, 0, 0, 0, 0,
-                             0, None, None, 0,
-                             0, 0, None)
-                )(state.positions, state.directions, state.times,
-                  surface_distances, normals,
-                  scatter_lengths, wall_reflection_rate, sensor_reflection_rate,
-                  absorption_lengths,
-                  hit_sensor, rng_keys, SPEED_OF_LIGHT_MATERIAL)
-
-                inside_detector = get_inside_detector_flag(new_positions)
-                safe_continuing = jnp.where(inside_detector, continuing_factors, 0.0)
-                new_survival = state.survival * safe_continuing
-
-                physical_intensities = intensities * state.survival
-                detected_factors = detect_probs * reflection_attenuations
-                updated_weights = depositions * physical_intensities[None, :] * detected_factors[None, :]
-
-            sensor_times_ns = sensor_distances / SPEED_OF_LIGHT_MATERIAL
-            total_times = sensor_times_ns + state.times[:, None]
+            physical_intensities = intensities * state.survival
+            detected_factors = detect_probs * reflection_attenuations
+            updated_weights = depositions * physical_intensities[None, :] * detected_factors[None, :]
+            times_ns = hit_times_meters / SPEED_OF_LIGHT_MATERIAL
+            total_times = times_ns + state.times[:, None]
 
             iter_weights = updated_weights
             iter_indices = sensor_indices
@@ -613,7 +584,7 @@ def setup_event_simulator(
         flat_times = all_times.reshape(-1)
 
         # Tile per-photon QE to match flat shape.
-        # all_weights shape: (K, max_candidates_per_ray, n_rays), C-order reshape
+        # all_weights shape: (K, max_sensors_per_cell, n_rays), C-order reshape
         # → photon index is i % n_rays
         photon_idx = jnp.arange(flat_weights.shape[0]) % n_rays
         flat_qe = qe_per_photon[photon_idx]
@@ -713,10 +684,10 @@ def setup_event_simulator(
             final_origins, final_directions, photon_intensities, photon_times,
             scatter_lengths, absorption_lengths,
             qe_per_photon,
-            n_rays, detector_params, key, NUM_SENSORS, sim_config.K, sim_config.effective_n_grad_iters, max_candidates_per_ray,
+            n_rays, detector_params, key, NUM_SENSORS, sim_config.K, sim_config.effective_n_grad_iters, max_sensors_per_cell,
             propagate_photons, photon_update_fn,
             pos_grad_threshold=_pgt, make_hits_fn=_make_hits_fn,
-            segment_idx=segment_idx, n_segments=n_segments, is_volume=_is_volume)
+            segment_idx=segment_idx, n_segments=n_segments)
 
     # Load photonsim parameters from configuration (power-law normalization, SIREN path)
     photonsim_params = unpack_photonsim_params(particle, material)
@@ -773,9 +744,9 @@ def setup_event_simulator(
             photon_origins, photon_directions, photon_intensities, photon_times + t0,
             scatter_lengths, absorption_lengths,
             qe_per_photon,
-            Nphot, detector_params, key, NUM_SENSORS, sim_config.K, sim_config.effective_n_grad_iters, max_candidates_per_ray,
+            Nphot, detector_params, key, NUM_SENSORS, sim_config.K, sim_config.effective_n_grad_iters, max_sensors_per_cell,
             propagate_photons, photon_update_fn,
-            pos_grad_threshold=_pgt, make_hits_fn=_make_hits_fn, is_volume=_is_volume)
+            pos_grad_threshold=_pgt, make_hits_fn=_make_hits_fn)
 
     @jax.jit
     def _simulation_sensor_calibration_impl(source, detector_params, key):
@@ -802,9 +773,9 @@ def setup_event_simulator(
             photon_origins, photon_directions, photon_intensities, photon_times,
             scatter_lengths, absorption_lengths,
             qe_per_photon,
-            Nphot, detector_params, key, NUM_SENSORS, sim_config.K, sim_config.effective_n_grad_iters, max_candidates_per_ray,
+            Nphot, detector_params, key, NUM_SENSORS, sim_config.K, sim_config.effective_n_grad_iters, max_sensors_per_cell,
             propagate_photons, photon_update_fn,
-            pos_grad_threshold=_pgt, make_hits_fn=_make_hits_fn, is_volume=_is_volume)
+            pos_grad_threshold=_pgt, make_hits_fn=_make_hits_fn)
 
     # ---- Return the right function ------------------------------------------
     if sim_config.is_data:

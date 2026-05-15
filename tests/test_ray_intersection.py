@@ -326,7 +326,7 @@ class TestCrossGeometry:
         r_sph = dg_sph.propagator(origins, dirs)
         r_box = dg_box.propagator(origins, dirs)
 
-        expected_keys = {'sensor_weights', 'sensor_indices', 'sensor_distances',
+        expected_keys = {'sensor_weights', 'sensor_indices', 'times',
                          'positions', 'normals', 'inside_sensor',
                          'per_sensor_positions', 'sensor_normals'}
 

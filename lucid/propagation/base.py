@@ -26,7 +26,7 @@ def process_intersection_normals(ray_origins, ray_directions, intersection_point
     intersection_point : ndarray
         Points of intersection with geometry
     t_geometry : ndarray
-        Intersection distances with geometry (meters)
+        Intersection times with geometry
     sensor_normals : ndarray
         Normal vectors for sensor intersections
     sensor_hit_positions : ndarray
@@ -103,7 +103,7 @@ def calculate_hit_properties(ray_origins, ray_directions, t_geometry, inside_sen
     ray_directions : ndarray
         Direction vectors of rays
     t_geometry : ndarray
-        Intersection distances with geometry (meters)
+        Intersection times with geometry
     inside_sensor : ndarray
         Boolean array indicating which rays hit inside sensors
     weighted_sensor_normals : ndarray
@@ -163,7 +163,7 @@ def compute_sensor_intersections_base(sensor_idx, sensor_positions, sensor_radiu
     Returns
     -------
     tuple
-        weights, distances, sensor_idx, normals, inside_sensor, points
+        weights, times, sensor_idx, normals, inside_sensor, points
     """
     valid = sensor_idx != -1
     sphere_centers = jnp.where(valid[:, None], sensor_positions[sensor_idx], jnp.zeros(3))
@@ -237,11 +237,14 @@ def compute_sensor_intersections_base(sensor_idx, sensor_positions, sensor_radiu
     intersects_and_inside = (intersects & inside_sensor)
     
     # Now use this combined condition
-    distances = jnp.where(intersects_and_inside[:, None], t_intersect[:, None], t_closest)
-    points    = jnp.where(intersects_and_inside[:, None], intersection_points, closest)
-    normals   = jnp.where(intersects_and_inside[:, None], normals_intersect, normals_closest)
+    times   = jnp.where(intersects_and_inside[:, None], t_intersect[:, None], t_closest)
+    points  = jnp.where(intersects_and_inside[:, None], intersection_points, closest)
+    normals = jnp.where(intersects_and_inside[:, None], normals_intersect, normals_closest)
 
-    return weights, distances, sensor_idx, normals, intersects_and_inside, points
+    #return weights, times, sensor_idx, normals, inside_sensor, points
+
+    # In principle we should not be using anything if intersects_and_inside is false, reflecting instead out of the detector surface.
+    return weights, times, sensor_idx, normals, intersects_and_inside, points
 
 
 @partial(jax.jit, static_argnums=(1,))
@@ -267,10 +270,10 @@ def calculate_linear_index_base(indices, grid_dims, index_map):
 
 
 @partial(jax.jit, static_argnums=(2,))
-def find_closest_sensors(grid_centers, sensor_positions, max_candidates_per_ray):
+def find_closest_sensors(grid_centers, sensor_positions, max_sensors_per_cell):
     """Find closest sensors to each grid cell center"""
     squared_distances = jnp.sum(
         (grid_centers[:, None, :] - sensor_positions[None, :, :]) ** 2,
         axis=2
     )
-    return jax.lax.top_k(-squared_distances, max_candidates_per_ray)[1]
+    return jax.lax.top_k(-squared_distances, max_sensors_per_cell)[1]

@@ -49,10 +49,10 @@ class TestCylinderSharedPropagator:
         old = create_photon_propagator(
             sensor_points, sensor_radius,
             r=det.r, h=det.H, n_cap=150, n_angular=250, n_height=150,
-            temperature=0.2, max_candidates_per_ray=4)
+            temperature=0.2, max_sensors_per_cell=4)
         new = create_propagator(
             det, sensor_points, sensor_radius,
-            temperature=0.2, max_candidates_per_ray=4,
+            temperature=0.2, max_sensors_per_cell=4,
             n_cap=150, n_angular=250, n_height=150)
 
         _compare_propagators(old, new, "Cylinder")
@@ -61,7 +61,7 @@ class TestCylinderSharedPropagator:
         det = generate_detector("config/WCTE_like_geom_config.json")
         prop = create_propagator(det, jnp.array(det.all_points), det.S_radius)
         result = prop(jnp.zeros((1, 3)), jnp.array([[1., 0., 0.]]))
-        expected = {'sensor_weights', 'sensor_indices', 'sensor_distances', 'positions',
+        expected = {'sensor_weights', 'sensor_indices', 'times', 'positions',
                     'normals', 'inside_sensor', 'per_sensor_positions', 'sensor_normals'}
         assert set(result.keys()) == expected
 
@@ -90,11 +90,11 @@ class TestSphereSharedPropagator:
         old = create_sphere_photon_propagator(
             sensor_points, sensor_radius,
             sphere_radius=det.r, n_divisions=100,
-            temperature=0.2, max_candidates_per_ray=4)
+            temperature=0.2, max_sensors_per_cell=4)
 
         new = create_propagator(
             det, sensor_points, sensor_radius,
-            temperature=0.2, max_candidates_per_ray=4,
+            temperature=0.2, max_sensors_per_cell=4,
             n_divisions=100)
 
         _compare_propagators(old, new, "Sphere")
@@ -113,11 +113,11 @@ class TestBoxSharedPropagator:
             sensor_points, sensor_radius,
             length=det.L, width=det.W, height=det.H,
             n_x=125, n_y=125, n_z=125,
-            temperature=0.2, max_candidates_per_ray=4)
+            temperature=0.2, max_sensors_per_cell=4)
 
         new = create_propagator(
             det, sensor_points, sensor_radius,
-            temperature=0.2, max_candidates_per_ray=4,
+            temperature=0.2, max_sensors_per_cell=4,
             n_x=125, n_y=125, n_z=125)
 
         _compare_propagators(old, new, "Box")

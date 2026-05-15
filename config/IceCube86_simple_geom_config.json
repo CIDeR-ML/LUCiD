@@ -1,7 +1,0 @@
-{
-  "material": "water",
-  "detector_type": "string",
-  "geometry_definitions": {
-    "npz_file_path": "icecube86_simple.npz"
-  }
-}

@@ -215,7 +215,7 @@ if os.path.exists(GEOM_CONFIG):
     det = generate_detector(GEOM_CONFIG)
     sp = jnp.array(det.all_points)
     prop = create_photon_propagator(sp, det.S_radius, r=det.r, h=det.H,
-                                    temperature=0.2, max_candidates_per_ray=4)
+                                    temperature=0.2, max_sensors_per_cell=4)
     origins = jnp.zeros((3, 3))
     dirs = jnp.array([[1., 0., 0.], [0., 1., 0.], [0., 0., 1.]])
     prop_result = prop(origins, dirs)

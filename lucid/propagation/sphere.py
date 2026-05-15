@@ -325,14 +325,14 @@ def calculate_sphere_grid_centers(radius, n_divisions):
 
 @partial(jax.jit, static_argnums=(2, 3, 4), device=jax.devices('cpu')[0])
 def create_inverted_sphere_sensor_map(assignments_geometric, assignments_distance, n_divisions,
-                                       max_candidates_per_ray, num_sensors):
+                                       max_sensors_per_cell, num_sensors):
     """Create inverted sensor map for sphere prioritizing geometric intersections then closest sensors"""
     n_theta = n_divisions
     n_phi = 2 * n_divisions
     total_cells = n_theta * n_phi
     
     # Initialize map
-    inverted_map = jnp.full((total_cells, max_candidates_per_ray), -1, dtype=jnp.int32)
+    inverted_map = jnp.full((total_cells, max_sensors_per_cell), -1, dtype=jnp.int32)
     
     def update_cell(carry, i):
         inv_map = carry
@@ -350,7 +350,7 @@ def create_inverted_sphere_sensor_map(assignments_geometric, assignments_distanc
                      (sensor_assignments[:, 1] == phi_idx)
             
             cell_matches = jnp.any(matches)
-            should_add = cell_matches & (curr_count < max_candidates_per_ray)
+            should_add = cell_matches & (curr_count < max_sensors_per_cell)
             
             new_map = jnp.where(
                 should_add,
@@ -386,7 +386,7 @@ def create_inverted_sphere_sensor_map(assignments_geometric, assignments_distanc
             )
             
             # Add if not duplicate and have space
-            should_add = (~is_duplicate) & (curr_count < max_candidates_per_ray)
+            should_add = (~is_duplicate) & (curr_count < max_sensors_per_cell)
             
             new_map = jnp.where(
                 should_add,
@@ -452,7 +452,7 @@ def find_intersected_sphere_sensors_differentiable(ray_origins, ray_directions, 
     )(potential_sensors.T)
     
     weights = sensor_results[0]
-    sensor_distances = sensor_results[1]
+    sensor_times = sensor_results[1]
     sensor_indices = sensor_results[2]
     sensor_normals = sensor_results[3]
     inside_sensor = sensor_results[4]
@@ -471,7 +471,7 @@ def find_intersected_sphere_sensors_differentiable(ray_origins, ray_directions, 
     final_normals = intersection_results['normals']
 
     result = {
-        'sensor_distances': sensor_distances,
+        'times': sensor_times,
         'sensor_weights': weights,
         'sensor_indices': sensor_indices,
         'per_sensor_positions': sensor_hit_positions,
@@ -485,7 +485,7 @@ def find_intersected_sphere_sensors_differentiable(ray_origins, ray_directions, 
 
 
 def create_sphere_photon_propagator(sensor_positions, sensor_radius, sphere_radius=4.0, n_divisions=50,
-                                   temperature=0.2, max_candidates_per_ray=4):
+                                   temperature=0.2, max_sensors_per_cell=4):
     """
     Creates a JIT-compiled function for efficient photon propagation simulation in sphere geometry.
     """
@@ -499,14 +499,14 @@ def create_sphere_photon_propagator(sensor_positions, sensor_radius, sphere_radi
     assignments_distance = find_closest_sensors(
         calculate_sphere_grid_centers(sphere_radius, n_divisions),
         sensor_positions,
-        max_candidates_per_ray
+        max_sensors_per_cell
     )
 
     inverted_sensor_map = create_inverted_sphere_sensor_map(
         assignments_geometric,
         assignments_distance,
         n_divisions,
-        max_candidates_per_ray, sensor_positions.shape[0]
+        max_sensors_per_cell, sensor_positions.shape[0]
     )
 
     if temperature is None:

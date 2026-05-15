@@ -60,7 +60,7 @@ default_dp = DetectorParams(
 # Use explicit grid params matching old defaults for cylinder
 sim = setup_event_simulator(
     GEOM, NPHOT, TEMPERATURE, K=K,
-    is_data=False, max_candidates_per_ray=4,
+    is_data=False, max_sensors_per_cell=4,
     default_detector_params=default_dp,
     n_cap=150, n_angular=250, n_height=150,
     wavelength_mode=False)

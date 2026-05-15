@@ -39,18 +39,18 @@ class Box(Detector):
         self.place_photosensors()
 
     def configure_grid(self, n_x=None, n_y=None, n_z=None,
-                        max_candidates_per_ray=4):
+                        max_sensors_per_cell=4):
         """Set grid parameters for propagation methods.
 
         If not provided, defaults are derived from detector dimensions to
-        ensure no cell exceeds ``max_candidates_per_ray`` sensors.
+        ensure no cell exceeds ``max_sensors_per_cell`` sensors.
         """
         import math
         n_placed = len(self.all_points) if self.all_points is not None else self.n_sensors
         total_area = 2 * (self.L * self.W + self.L * self.H + self.W * self.H)
-        # Target cell size from: n_placed / max_candidates_per_ray × safety
+        # Target cell size from: n_placed / max_sensors_per_cell × safety
         safety = 2.0
-        target_cells = n_placed / max_candidates_per_ray * safety
+        target_cells = n_placed / max_sensors_per_cell * safety
         cell_size = math.sqrt(total_area / max(1, target_cells))
 
         self._n_x = n_x if n_x is not None else max(10, int(self.L / cell_size))
@@ -389,7 +389,7 @@ class Box(Detector):
         return offsets[face_idx] + cell_i * second_dim + cell_j
 
     def build_inverted_sensor_map(self, assignments_geometric, assignments_distance,
-                                   max_candidates_per_ray, num_sensors):
+                                   max_sensors_per_cell, num_sensors):
         """Build cell→sensor lookup table for box."""
         from lucid.propagation.box import create_inverted_box_sensor_map
         n_x = self._n_x
@@ -397,4 +397,4 @@ class Box(Detector):
         n_z = self._n_z
         return create_inverted_box_sensor_map(
             assignments_geometric, assignments_distance,
-            n_x, n_y, n_z, max_candidates_per_ray)
+            n_x, n_y, n_z, max_sensors_per_cell)

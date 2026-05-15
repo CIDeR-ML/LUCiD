@@ -59,7 +59,7 @@ class Cylinder(Detector):
         self.place_photosensors()
 
     def configure_grid(self, n_cap=None, n_angular=None, n_height=None,
-                        max_candidates_per_ray=4):
+                        max_sensors_per_cell=4):
         """Set grid parameters for propagation methods.
 
         The default sizing rule keeps each grid-cell edge **no longer
@@ -68,7 +68,7 @@ class Cylinder(Detector):
         centre per cell; the 4-way overlap in
         :func:`assign_sensors_to_grid` then brings each cell to at
         most ~4 geometric assignments — matching the default
-        ``max_candidates_per_ray=4``.
+        ``max_sensors_per_cell=4``.
 
         The previous area/safety-factor heuristic worked for
         uniformly-placed sensors (SK, HK) but broke for clustered
@@ -82,15 +82,15 @@ class Cylinder(Detector):
         still win; the rule only supplies defaults for what is not
         passed.
 
-        ``max_candidates_per_ray`` scales the target cell area
-        proportionally — a caller passing ``max_candidates_per_ray=16``
+        ``max_sensors_per_cell`` scales the target cell area
+        proportionally — a caller passing ``max_sensors_per_cell=16``
         gets a coarser grid (edge ~2× larger) because each cell is
         allowed to hold ~4× more sensors.
         """
         import math
         import numpy as np
 
-        scale = math.sqrt(max_candidates_per_ray / 4.0)
+        scale = math.sqrt(max_sensors_per_cell / 4.0)
 
         if self.all_points is not None and len(self.all_points) >= 2:
             from scipy.spatial import cKDTree
@@ -108,7 +108,7 @@ class Cylinder(Detector):
             # the natural target for every real detector in the repo
             # (WCTE has the tightest packing at 0.9*nn_min ≈ 62mm,
             # vs floor of 40mm). When the floor activates, expect
-            # some cells to exceed max_candidates_per_ray — the
+            # some cells to exceed max_sensors_per_cell — the
             # validator in shared.py will emit a warning.
             target = max(target, self.S_radius * scale)
         else:
@@ -589,7 +589,7 @@ class Cylinder(Detector):
             return n_wall + self._n_cap * self._n_cap + cell_i * self._n_cap + cell_j
 
     def build_inverted_sensor_map(self, assignments_geometric, assignments_distance,
-                                   max_candidates_per_ray, num_sensors):
+                                   max_sensors_per_cell, num_sensors):
         """Build cell→sensor lookup table for cylinder."""
         from lucid.propagation.cylinder import create_inverted_sensor_map
         n_cap = self._n_cap
@@ -597,4 +597,4 @@ class Cylinder(Detector):
         n_height = self._n_height
         return create_inverted_sensor_map(
             assignments_geometric, assignments_distance,
-            n_cap, n_angular, n_height, max_candidates_per_ray, num_sensors)
+            n_cap, n_angular, n_height, max_sensors_per_cell, num_sensors)

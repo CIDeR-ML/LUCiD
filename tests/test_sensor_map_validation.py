@@ -17,8 +17,8 @@ pytestmark = pytest.mark.slow
 class TestAutoGridDerivation:
     """Verify configure_grid() produces sensible defaults per geometry."""
 
-    def _check_no_overcrowding(self, det, max_candidates_per_ray=4):
-        """Verify no cell exceeds max_candidates_per_ray."""
+    def _check_no_overcrowding(self, det, max_sensors_per_cell=4):
+        """Verify no cell exceeds max_sensors_per_cell."""
         import numpy as np
         sp = jnp.array(det.all_points)
         ag = np.asarray(det.assign_sensor_to_cells(sp, det.S_radius))
@@ -33,22 +33,22 @@ class TestAutoGridDerivation:
                 if 0 <= li < tc:
                     cell_count[li] += 1
         max_in_cell = int(cell_count.max()) if tc > 0 else 0
-        assert max_in_cell <= max_candidates_per_ray, \
-            f"Cell has {max_in_cell} sensors, exceeds max_candidates_per_ray={max_candidates_per_ray}"
+        assert max_in_cell <= max_sensors_per_cell, \
+            f"Cell has {max_in_cell} sensors, exceeds max_sensors_per_cell={max_sensors_per_cell}"
 
     def test_cylinder_auto_grid(self):
         det = generate_detector("config/WCTE_like_geom_config.json")
-        det.configure_grid(max_candidates_per_ray=4)
+        det.configure_grid(max_sensors_per_cell=4)
         self._check_no_overcrowding(det)
 
     def test_sphere_auto_grid(self):
         det = generate_detector("config/JUNO_geom_config.json")
-        det.configure_grid(max_candidates_per_ray=4)
+        det.configure_grid(max_sensors_per_cell=4)
         self._check_no_overcrowding(det)
 
     def test_box_auto_grid(self):
         det = generate_detector("config/nuSCOPE_geom_config.json")
-        det.configure_grid(max_candidates_per_ray=4)
+        det.configure_grid(max_sensors_per_cell=4)
         self._check_no_overcrowding(det)
 
     def test_explicit_overrides_auto(self):
@@ -84,32 +84,32 @@ class TestValidationCatchesProblems:
                 f"Unexpected warnings: {[str(x.message) for x in sensor_warnings]}"
 
     def test_warns_on_overcrowding(self):
-        """Very coarse grid should warn about exceeding max_candidates_per_ray
+        """Very coarse grid should warn about exceeding max_sensors_per_cell
         (and auto-adjust the limit rather than crashing)."""
         det = generate_detector("config/WCTE_like_geom_config.json")
-        with pytest.warns(UserWarning, match="max_candidates_per_ray"):
+        with pytest.warns(UserWarning, match="max_sensors_per_cell"):
             create_propagator(
                 det, jnp.array(det.all_points), det.S_radius,
                 n_cap=5, n_angular=5, n_height=5,
-                max_candidates_per_ray=2)
+                max_sensors_per_cell=2)
 
     def test_auto_grid_no_overcrowding_cylinder(self):
-        """Auto-derived cylinder grid must not exceed max_candidates_per_ray."""
+        """Auto-derived cylinder grid must not exceed max_sensors_per_cell."""
         det = generate_detector("config/WCTE_like_geom_config.json")
-        # Should not raise — auto grid handles max_candidates_per_ray
+        # Should not raise — auto grid handles max_sensors_per_cell
         prop = create_propagator(det, jnp.array(det.all_points), det.S_radius)
         result = prop(jnp.zeros((1, 3)), jnp.array([[1., 0., 0.]]))
         assert 'sensor_weights' in result
 
     def test_auto_grid_no_overcrowding_sphere(self):
-        """Auto-derived sphere grid must not exceed max_candidates_per_ray."""
+        """Auto-derived sphere grid must not exceed max_sensors_per_cell."""
         det = generate_detector("config/JUNO_geom_config.json")
         prop = create_propagator(det, jnp.array(det.all_points), det.S_radius)
         result = prop(jnp.zeros((1, 3)), jnp.array([[1., 0., 0.]]))
         assert 'sensor_weights' in result
 
     def test_auto_grid_no_overcrowding_box(self):
-        """Auto-derived box grid must not exceed max_candidates_per_ray."""
+        """Auto-derived box grid must not exceed max_sensors_per_cell."""
         det = generate_detector("config/nuSCOPE_geom_config.json")
         prop = create_propagator(det, jnp.array(det.all_points), det.S_radius)
         result = prop(jnp.zeros((1, 3)), jnp.array([[1., 0., 0.]]))

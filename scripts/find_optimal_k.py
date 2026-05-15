@@ -174,8 +174,7 @@ def main():
                         help="Detector name (e.g. SK_like, HK, WCTE, JUNO). "
                              "Resolves to config/<name>_geom_config.json and "
                              "config/<name>_physics_config.json.")
-    parser.add_argument("--source", default="track",
-                        choices=["laser", "isotropic", "track", "data", "cascade"],
+    parser.add_argument("--source", default="track", choices=["laser", "isotropic", "track", "data"],
                         help="Source type (default: track)")
     parser.add_argument("--nphot", type=int, default=50_000, help="Number of photons (default: 50000)")
     parser.add_argument("--k-max", type=int, default=12, help="Maximum K to test (default: 12)")
@@ -197,11 +196,7 @@ def main():
                         help="Comma-separated wavelengths (nm) for sweep "
                              "(default: 300,325,...,600)")
     parser.add_argument("--energy", type=float, default=500.0,
-                        help="Particle energy in MeV (for track/cascade mode, default: 500)")
-    parser.add_argument("--cascade-direction", type=float, nargs=3, default=[0.0, 0.0, 1.0],
-                        help="Cascade direction (default: 0 0 1 = upgoing)")
-    parser.add_argument("--n-medium", type=float, default=1.33,
-                        help="Refractive index for cascade (default: 1.33)")
+                        help="Particle energy in MeV (for track mode, default: 500)")
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
     args = parser.parse_args()
 
@@ -222,25 +217,13 @@ def main():
     det = generate_detector(args.config)
     NUM_SENSORS = len(det.all_points)
 
-    # Detect detector type from config JSON
-    import json
-    with open(args.config) as f:
-        _det_cfg = json.load(f)
-    _detector_type = _det_cfg.get('detector_type', 'cylinder').capitalize()
-    if _detector_type == 'String':
-        _detector_type = 'string'
-
     # Load detector params and curves from the physics config
     from lucid.detector_params import load_physics_config
     from lucid.wavelength.medium import load_qe_curve as _load_qe_curve
     dp, medium_path, qe_curve_path = load_physics_config(args.physics_config, NUM_SENSORS)
     qe_curve_fn = _load_qe_curve(qe_curve_path) if qe_curve_path else None
 
-    if _detector_type == 'string':
-        grid_kw = dict(lambda_abs=float(dp.absorption_length),
-                       lambda_scat=float(dp.scatter_length))
-    else:
-        grid_kw = dict(n_cap=150, n_angular=250, n_height=150)
+    grid_kw = dict(n_cap=150, n_angular=250, n_height=150)
     key = jax.random.PRNGKey(args.seed)
 
     params_info = f"detector={args.detector}"
@@ -271,7 +254,6 @@ def main():
             sim = setup_event_simulator(
                 args.config, args.nphot, temperature=args.temperature, K=args.k_max,
                 is_data=False, is_calibration=False,
-                detector_type=_detector_type,
                 physics_config=args.physics_config,
                 default_detector_params=dp_run, hit_mode='per_photon',
                 wavelength_mode=wl_mode, **grid_kw)
@@ -280,30 +262,6 @@ def main():
                 position=jnp.array([0.0, 0.0, 0.0]),
                 theta=jnp.array(0.5), phi=jnp.array(1.0), t0=jnp.array(0.0))
             out = sim(track, key)
-            n = args.nphot
-
-        elif args.source == "cascade":
-            from lucid.sources.calibration_sources import cascade_source
-            # Vertex at detector center
-            if hasattr(det, 'envelope_z_min'):
-                z_mid = (det.envelope_z_min + det.envelope_z_max) / 2
-            else:
-                z_mid = 0.0
-            src = cascade_source(
-                position=[0.0, 0.0, z_mid],
-                direction=args.cascade_direction,
-                energy_mev=args.energy,
-                n_medium=args.n_medium,
-                wavelength=wl_override,
-            )
-            sim = setup_event_simulator(
-                args.config, args.nphot, temperature=args.temperature, K=args.k_max,
-                is_data=False, is_calibration=True,
-                detector_type=_detector_type,
-                physics_config=args.physics_config,
-                default_detector_params=dp_run, hit_mode='per_photon',
-                wavelength_mode=wl_mode, **grid_kw)
-            out = sim(src, key)
             n = args.nphot
 
         elif args.source in ("laser", "isotropic"):
@@ -316,7 +274,6 @@ def main():
             sim = setup_event_simulator(
                 args.config, args.nphot, temperature=args.temperature, K=args.k_max,
                 is_data=False, is_calibration=True,
-                detector_type=_detector_type,
                 physics_config=args.physics_config,
                 default_detector_params=dp_run, hit_mode='per_photon',
                 wavelength_mode=wl_mode, **grid_kw)

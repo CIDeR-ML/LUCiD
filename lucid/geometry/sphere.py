@@ -31,22 +31,22 @@ class Sphere(Detector):
         self._n_divisions = None
         self.place_photosensors()
 
-    def configure_grid(self, n_divisions=None, max_candidates_per_ray=4):
+    def configure_grid(self, n_divisions=None, max_sensors_per_cell=4):
         """Set grid parameters for propagation methods.
 
         If not provided, defaults are derived from sensor count to
-        ensure no cell exceeds ``max_candidates_per_ray`` sensors.
+        ensure no cell exceeds ``max_sensors_per_cell`` sensors.
         """
         import math
         if n_divisions is not None:
             self._n_divisions = n_divisions
         else:
             n_placed = len(self.all_points) if self.all_points is not None else self.n_sensors
-            # total cells = 2 × n_div². Target: n_placed / max_candidates_per_ray × safety.
+            # total cells = 2 × n_div². Target: n_placed / max_sensors_per_cell × safety.
             # Polar grid has non-uniform cell sizes — equatorial cells are much
             # larger than polar cells, causing sensor crowding at the equator.
-            # Safety factor 6.0 ensures no cell exceeds max_candidates_per_ray.
-            target_cells = n_placed / max_candidates_per_ray * 8.0
+            # Safety factor 6.0 ensures no cell exceeds max_sensors_per_cell.
+            target_cells = n_placed / max_sensors_per_cell * 8.0
             self._n_divisions = max(10, int(math.sqrt(target_cells / 2)))
 
 
@@ -170,10 +170,10 @@ class Sphere(Detector):
         return theta_idx * n_phi + phi_idx
 
     def build_inverted_sensor_map(self, assignments_geometric, assignments_distance,
-                                   max_candidates_per_ray, num_sensors):
+                                   max_sensors_per_cell, num_sensors):
         """Build cell→sensor lookup table for sphere."""
         from lucid.propagation.sphere import create_inverted_sphere_sensor_map
         n_div = self._n_divisions
         return create_inverted_sphere_sensor_map(
             assignments_geometric, assignments_distance,
-            n_div, max_candidates_per_ray, num_sensors)
+            n_div, max_sensors_per_cell, num_sensors)

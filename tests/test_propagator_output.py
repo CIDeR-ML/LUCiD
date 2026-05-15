@@ -1,7 +1,7 @@
 """Tests for the photon propagator output.
 
 The propagator is the JIT-compiled function that takes photon positions
-and directions and returns intersection data (weights, indices, distances,
+and directions and returns intersection data (weights, indices, times,
 positions, normals, inside_sensor). This is the core ray-tracing engine.
 """
 import jax
@@ -27,7 +27,7 @@ class TestCylinderPropagator:
         origins = jnp.array([[0.0, 0.0, 0.0]])
         dirs = jnp.array([[1.0, 0.0, 0.0]])
         result = self.dg.propagator(origins, dirs)
-        for key in ['sensor_weights', 'sensor_indices', 'sensor_distances',
+        for key in ['sensor_weights', 'sensor_indices', 'times',
                      'positions', 'normals', 'inside_sensor']:
             assert key in result, f"Missing key: {key}"
 
@@ -49,15 +49,16 @@ class TestCylinderPropagator:
         result = self.dg.propagator(origins, dirs)
         assert jnp.all(result['sensor_weights'] >= 0)
 
-    def test_distances_positive(self):
-        """Hit distances should be positive (photon travels forward)."""
+    def test_times_positive(self):
+        """Hit times should be positive (photon travels forward)."""
         origins = jnp.zeros((3, 3))
         dirs = jnp.array([[1, 0, 0], [0, 1, 0], [0, 0, 1]], dtype=jnp.float32)
         result = self.dg.propagator(origins, dirs)
+        # times in meters — should be > 0 for hits
         valid = result['sensor_weights'] > 0
         if jnp.any(valid):
-            valid_distances = result['sensor_distances'][valid]
-            assert jnp.all(valid_distances >= 0)
+            valid_times = result['times'][valid]
+            assert jnp.all(valid_times >= 0)
 
     def test_normals_are_unit(self):
         """Surface normals should be approximately unit vectors."""
@@ -85,7 +86,7 @@ class TestCylinderPropagator:
         result = self.dg.propagator(origins, dirs)
         assert result['positions'].shape == (n_rays, 3)
         assert result['normals'].shape == (n_rays, 3)
-        # sensor_weights: (max_candidates_per_ray, n_rays)
+        # sensor_weights: (max_sensors_per_cell, n_rays)
         assert result['sensor_weights'].shape[1] == n_rays
 
     def test_propagator_is_jit_compiled(self):

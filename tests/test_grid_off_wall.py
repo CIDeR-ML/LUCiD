@@ -234,9 +234,9 @@ def _forward_assignment_stats(det):
     ('hk_geometry.npz',    'HK'),
     ('wcte_geometry.npz',  'WCTE'),
 ])
-def test_default_grid_respects_max_candidates_per_ray(repo_root, npz, label):
+def test_default_grid_respects_max_sensors_per_cell(repo_root, npz, label):
     """With the default configure_grid (nearest-neighbour sizing) plus
-    the default max_candidates_per_ray=4, no grid cell must receive more
+    the default max_sensors_per_cell=4, no grid cell must receive more
     than 4 geometric forward assignments and no sensor may be orphaned.
 
     Previously the grid was sized from cylinder surface area with a
@@ -246,12 +246,12 @@ def test_default_grid_respects_max_candidates_per_ray(repo_root, npz, label):
     actual sensor layout."""
     det = Cylinder.from_pmt_file(
         os.path.join(repo_root, 'config', npz), snap_to_wall=True)
-    det.configure_grid()            # default: max_candidates_per_ray=4
+    det.configure_grid()            # default: max_sensors_per_cell=4
     cell_counts, orphans = _forward_assignment_stats(det)
     assert orphans == 0, f"{label}: {orphans} sensors orphaned from the grid"
     assert int(cell_counts.max()) <= 4, (
         f"{label}: max forward assignments per cell is "
-        f"{cell_counts.max()} (> default max_candidates_per_ray=4); "
+        f"{cell_counts.max()} (> default max_sensors_per_cell=4); "
         f"configure_grid should be producing a finer grid. "
         f"{(cell_counts > 4).sum()} cells overflow."
     )

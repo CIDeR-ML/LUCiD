@@ -84,12 +84,12 @@ grid_kw = dict(n_cap=150, n_angular=250, n_height=150) if BACKEND == "lucid" els
 simulate_event = setup_event_simulator(
     GEOM, NPHOT, temperature=None, K=K,
     is_data=False, is_calibration=True,
-    max_candidates_per_ray=4, wavelength_mode=False, **grid_kw)
+    max_sensors_per_cell=4, wavelength_mode=False, **grid_kw)
 
 simulate_data = setup_event_simulator(
     GEOM, NPHOT_TRUE, temperature=None, K=K_TRUE,
     is_data=False, is_calibration=True,
-    max_candidates_per_ray=4,
+    max_sensors_per_cell=4,
     default_detector_params=TRUE_PARAMS, wavelength_mode=False, **grid_kw)
 
 # ── Generate true data ──────────────────────────────────────────────
