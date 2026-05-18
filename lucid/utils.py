@@ -1,15 +1,11 @@
 from __future__ import annotations
 
-import h5py
 import numpy as np
 import jax.numpy as jnp
 import jax
-from glob import glob
 import os
 import json
-import sys
 from typing import Any, Optional, TYPE_CHECKING
-from tqdm import tqdm
 
 if TYPE_CHECKING:
     from lucid.detector_params import DetectorParams, ParticleParams

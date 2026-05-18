@@ -50,7 +50,8 @@ LUCiD provides a JAX-based differentiable simulation of light propagation in opt
 
 ### Optimization (`lucid/optimization/`)
 - **`pipeline.py`** - Adam-based gradient descent for track reconstruction
-- **`algorithms.py`** - Numerical, gradient, and hybrid optimization algorithms
+- **`grid_search.py`** - Hierarchical grid and cone search for initialization
+- **`run.py`** - CLI driver for config-file-based optimization
 
 ### Sources (`lucid/sources/`)
 - **`calibration_sources.py`** - Laser and isotropic calibration sources with optional wavelength
