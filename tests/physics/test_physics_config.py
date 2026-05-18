@@ -18,7 +18,7 @@ from lucid.detector_params import (
 from lucid.wavelength.medium import load_qe_curve
 
 CONFIG_DIR = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "config"
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "config"
 )
 
 # Map: detector name -> (physics_config filename, num_sensors from geom config)

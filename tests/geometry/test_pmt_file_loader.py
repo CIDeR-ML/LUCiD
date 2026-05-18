@@ -15,7 +15,7 @@ from lucid.geometry import Cylinder, generate_detector
 
 
 REPO_CONFIG = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), '..', 'config')
+    os.path.join(os.path.dirname(__file__), '..', '..', 'config')
 )
 
 REAL_DETECTORS = [

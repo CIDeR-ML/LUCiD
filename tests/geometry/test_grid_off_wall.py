@@ -139,7 +139,7 @@ def test_sweep_off_wall_distances(cyl_dims):
 
 @pytest.fixture(scope="module")
 def repo_root():
-    return os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+    return os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 
 
 def test_snap_default_keeps_all_sensors_on_grid(repo_root):

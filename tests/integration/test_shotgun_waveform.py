@@ -20,7 +20,7 @@ pytestmark = pytest.mark.slow
 
 @pytest.fixture(scope='module')
 def wcte_paths():
-    base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    base = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     return (os.path.join(base, 'config', 'WCTE_like_geom_config.json'),
             os.path.join(base, 'config', 'WCTE_like_physics_config.json'))
 
@@ -170,7 +170,7 @@ def test_expected_waveform_plus_cherenkov_qe(wcte_paths):
     """Expected-value + Method B: still finite and positive, shape unchanged.
     Needs a physics config that provides a QE curve (SK's does; WCTE's doesn't)."""
     geom, _ = wcte_paths
-    base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    base = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     sk_phys = os.path.join(base, 'config', 'SK_physics_config.json')
     sim = setup_shotgun_simulator(
         geom, physics_config=sk_phys, n_photons=64,

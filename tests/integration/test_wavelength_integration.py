@@ -16,8 +16,8 @@ from jax import value_and_grad, jit
 
 pytestmark = pytest.mark.slow
 
-GEOM = os.path.join(os.path.dirname(__file__), '..', 'config', 'WCTE_like_geom_config.json')
-PHYSICS = os.path.join(os.path.dirname(__file__), '..', 'config', 'SK_physics_config.json')
+GEOM = os.path.join(os.path.dirname(__file__), '..', '..', 'config', 'WCTE_like_geom_config.json')
+PHYSICS = os.path.join(os.path.dirname(__file__), '..', '..', 'config', 'SK_physics_config.json')
 
 
 @pytest.fixture(scope="module")
@@ -251,7 +251,7 @@ class TestQEHandling:
 
     def test_qe_curve_loaded(self):
         from lucid.wavelength.medium import load_qe_curve
-        qe_path = os.path.join(os.path.dirname(__file__), '..', 'config', 'pmt', 'SK_QE.json')
+        qe_path = os.path.join(os.path.dirname(__file__), '..', '..', 'config', 'pmt', 'SK_QE.json')
         qe_fn = load_qe_curve(qe_path)
         # Peak QE around 370-400nm
         assert 0.15 < float(qe_fn(375.0)) < 0.25

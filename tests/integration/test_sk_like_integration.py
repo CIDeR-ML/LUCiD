@@ -15,7 +15,7 @@ from jax import value_and_grad, jit
 pytestmark = pytest.mark.slow
 
 # Use SK_like (cylinder approximation of SK, same dimensions)
-GEOM = os.path.join(os.path.dirname(__file__), '..', 'config', 'SK_like_geom_config.json')
+GEOM = os.path.join(os.path.dirname(__file__), '..', '..', 'config', 'SK_like_geom_config.json')
 GRID_KW = dict(n_cap=150, n_angular=250, n_height=150)
 
 
