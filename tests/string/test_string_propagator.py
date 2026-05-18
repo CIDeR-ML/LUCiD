@@ -53,7 +53,8 @@ def test_output_keys():
     r = prop(o, d)
     expected = {'sensor_weights', 'sensor_indices', 'sensor_distances',
                 'positions', 'normals', 'inside_sensor',
-                'per_sensor_positions', 'sensor_normals'}
+                'per_sensor_positions', 'sensor_normals',
+                'envelope_exit_t'}
     assert set(r.keys()) == expected, f"missing keys: {expected - set(r.keys())}"
 
 
