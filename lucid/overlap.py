@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import jax.numpy as jnp
 import jax
 from typing import Callable, Tuple, Optional
@@ -90,7 +92,7 @@ def overlap_cache_dir() -> str:
     return os.path.join(xdg, 'lucid', 'spatial_overlap_integrals')
 
 
-def save_overlap_values(r: float, sigma: float, d_values: jnp.ndarray, f_values: jnp.ndarray) -> None:
+def save_overlap_values(r: float, sigma: float, d_values: jax.Array, f_values: jax.Array) -> None:
     """Save overlap values to a cache file.
 
     Parameters
@@ -119,7 +121,7 @@ def save_overlap_values(r: float, sigma: float, d_values: jnp.ndarray, f_values:
         json.dump(cache_data, f)
 
 
-def load_overlap_values(r: float, sigma: float) -> Optional[Tuple[jnp.ndarray, jnp.ndarray]]:
+def load_overlap_values(r: float, sigma: float) -> Optional[Tuple[jax.Array, jax.Array]]:
     """Load overlap values from cache if they exist.
 
     Parameters
@@ -149,7 +151,7 @@ def load_overlap_values(r: float, sigma: float) -> Optional[Tuple[jnp.ndarray, j
 
 @partial(jax.jit, device=jax.devices('cpu')[0])
 def integral_f_of_d(d: float, r: float, sigma: float,
-                    theta_vals: jnp.ndarray, rho_vals: jnp.ndarray) -> float:
+                    theta_vals: jax.Array, rho_vals: jax.Array) -> float:
     """Computes the double integral of the Gaussian kernel over polar coordinates.
 
     Parameters
@@ -189,7 +191,7 @@ def precompute_lookup(r: float,
                       n_rho: int = 1000,
                       num_dense: int = 150,
                       num_sparse: int = 50,
-                      d_max_factor: float = 10.0) -> Tuple[jnp.ndarray, jnp.ndarray]:
+                      d_max_factor: float = 10.0) -> Tuple[jax.Array, jax.Array]:
     """Precomputes lookup tables for overlap probability calculation.
 
     Parameters

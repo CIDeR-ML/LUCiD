@@ -5,6 +5,16 @@ Submodules:
     spectrum   — Cherenkov wavelength sampling
     scattering — Rayleigh and Mie/HG phase function samplers
 """
+
+__all__ = [
+    "MediumProperties",
+    "make_medium",
+    "compute_effective_properties",
+    "load_qe_curve",
+    "sample_cherenkov_wavelengths",
+    "DEFAULT_WAVELENGTH_NM",
+]
+
 from lucid.wavelength.medium import MediumProperties, make_medium, compute_effective_properties, load_qe_curve
 from lucid.wavelength.spectrum import sample_cherenkov_wavelengths
 

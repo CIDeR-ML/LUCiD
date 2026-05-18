@@ -8,11 +8,11 @@ from jax.scipy.special import gammaln
 
 @jit
 def WC_loss(
-        sensor_points: jnp.ndarray,
-        true_charge: jnp.ndarray,
-        true_time: jnp.ndarray,
-        simulated_charge: jnp.ndarray,
-        simulated_time: jnp.ndarray,
+        sensor_points: jax.Array,
+        true_charge: jax.Array,
+        true_time: jax.Array,
+        simulated_charge: jax.Array,
+        simulated_time: jax.Array,
         eps: float = 1e-8,
         threshold: float = 1e-8,
         lambda_poisson: float = 1.0,
@@ -79,11 +79,11 @@ def WC_loss(
 
 @jit
 def compute_simplified_loss(
-        sensor_points: jnp.ndarray,
-        true_charge: jnp.ndarray,
-        true_time: jnp.ndarray,
-        simulated_charge: jnp.ndarray,
-        simulated_time: jnp.ndarray,
+        sensor_points: jax.Array,
+        true_charge: jax.Array,
+        true_time: jax.Array,
+        simulated_charge: jax.Array,
+        simulated_time: jax.Array,
         eps: float = 1e-8,
         threshold: float = 1e-8,
         lambda_centroid: float = 1.0,
@@ -164,11 +164,11 @@ def compute_simplified_loss(
 
 @jit
 def WC_smooth_loss(
-        sensor_points: jnp.ndarray,
-        true_charge: jnp.ndarray,
-        true_time: jnp.ndarray,
-        simulated_charge: jnp.ndarray,
-        simulated_time: jnp.ndarray,
+        sensor_points: jax.Array,
+        true_charge: jax.Array,
+        true_time: jax.Array,
+        simulated_charge: jax.Array,
+        simulated_time: jax.Array,
         tau: float = 0.05,
         eps: float = 1e-8,
         threshold: float = 1e-8,
@@ -271,7 +271,7 @@ def energy_loss(simulated_counts: jax.Array, true_counts: jax.Array) -> jax.Arra
     return jnp.abs(jnp.log(total_sim_counts / (total_true_counts + eps)))
 
 @jit
-def counts_loss(true: jnp.ndarray, pred: jnp.ndarray, eps: float = 1e-8) -> jnp.ndarray:
+def counts_loss(true: jax.Array, pred: jax.Array, eps: float = 1e-8) -> jax.Array:
     """Compute the Poisson negative log-likelihood loss.
 
     Parameters

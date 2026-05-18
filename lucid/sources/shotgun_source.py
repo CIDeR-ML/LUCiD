@@ -6,6 +6,7 @@ ShotgunSource conforms to the calibration-source callable contract
 sampling). This lets it plug into ``setup_event_simulator`` with
 ``is_calibration=True`` using the existing propagation path.
 """
+from __future__ import annotations
 
 from typing import NamedTuple, Optional, Union
 
@@ -37,10 +38,10 @@ class ShotgunSource(NamedTuple):
     matching ``IsotropicSource`` / ``LaserSource``. Wavelengths are read from
     ``source.wavelength`` by ``setup_event_simulator`` for optical lookups.
     """
-    origins: jnp.ndarray
-    directions: jnp.ndarray
-    intensities: jnp.ndarray
-    wavelength: Optional[jnp.ndarray] = None
+    origins: jax.Array
+    directions: jax.Array
+    intensities: jax.Array
+    wavelength: Optional[jax.Array] = None
 
     def __call__(self, n_photons, key, n_water=1.33):
         return self.directions, self.origins, self.intensities
@@ -51,8 +52,8 @@ def shotgun_source(
     directions,
     *,
     n_photons: Optional[int] = None,
-    wavelength: Union[float, jnp.ndarray, str, None] = None,
-    intensity: Union[float, jnp.ndarray] = 1.0,
+    wavelength: Union[float, jax.Array, str, None] = None,
+    intensity: Union[float, jax.Array] = 1.0,
 ):
     """Build a ShotgunSource with flexible broadcasting.
 

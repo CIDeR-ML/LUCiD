@@ -14,6 +14,16 @@ import jax.numpy as jnp
 import numpy as np
 from tqdm import tqdm
 
+__all__ = [
+    "full_to_sparse",
+    "sparse_to_full",
+    "save_single_event",
+    "load_single_event",
+    "get_random_root_entry_index",
+    "read_photon_data_from_root",
+    "generate_events_from_root",
+]
+
 
 def full_to_sparse(charges, times):
     """Convert full arrays to sparse representation by removing zero elements.

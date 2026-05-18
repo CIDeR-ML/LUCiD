@@ -1,4 +1,5 @@
 """Gradient analysis sweep utilities for LUCiD."""
+from __future__ import annotations
 
 import warnings
 from dataclasses import dataclass, replace

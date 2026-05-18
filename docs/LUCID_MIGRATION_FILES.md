@@ -1,3 +1,5 @@
+> **STATUS: COMPLETED.** File movements described here were executed. Retained for historical reference.
+
 # LUCiD Migration — Complete File Scope (Harsh Mode)
 
 Companion to [LUCID_MIGRATION.md](LUCID_MIGRATION.md). Assumes **harsh

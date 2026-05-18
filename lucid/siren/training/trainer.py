@@ -4,6 +4,7 @@ JAX-based SIREN Trainer for PhotonSim Data
 This module provides a reusable trainer class for SIREN networks on PhotonSim data,
 designed to be easily used from Jupyter notebooks or scripts.
 """
+from __future__ import annotations
 
 import os
 import json

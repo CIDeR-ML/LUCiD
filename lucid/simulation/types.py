@@ -4,7 +4,10 @@ These replace raw dicts, positional tuples, and ad-hoc returns with
 structured, named containers. All are registered as JAX pytrees
 (NamedTuples are pytrees by default in JAX).
 """
+from __future__ import annotations
+
 from typing import NamedTuple, Optional
+import jax
 import jax.numpy as jnp
 
 
@@ -14,10 +17,10 @@ class PhotonRays(NamedTuple):
     ``wavelengths`` is ``None`` in monochromatic mode. When wavelength
     support is active, the simulator populates it after ray generation.
     """
-    directions: jnp.ndarray         # (n_photons, 3)
-    origins: jnp.ndarray            # (n_photons, 3)
-    weights: jnp.ndarray            # (n_photons,)
-    wavelengths: Optional[jnp.ndarray] = None  # (n_photons,) nm, or None
+    directions: jax.Array         # (n_photons, 3)
+    origins: jax.Array            # (n_photons, 3)
+    weights: jax.Array            # (n_photons,)
+    wavelengths: Optional[jax.Array] = None  # (n_photons,) nm, or None
 
 
 class PropagationResult(NamedTuple):
@@ -26,12 +29,12 @@ class PropagationResult(NamedTuple):
     Replaces the dict with keys: sensor_weights, sensor_indices, times,
     positions, normals, inside_sensor.
     """
-    sensor_weights: jnp.ndarray     # (max_sensors, n_rays)
-    sensor_indices: jnp.ndarray     # (max_sensors, n_rays) int
-    times: jnp.ndarray              # (max_sensors, n_rays) meters
-    positions: jnp.ndarray          # (n_rays, 3)
-    normals: jnp.ndarray            # (n_rays, 3)
-    inside_sensor: jnp.ndarray      # (max_sensors, n_rays) bool
+    sensor_weights: jax.Array     # (max_sensors, n_rays)
+    sensor_indices: jax.Array     # (max_sensors, n_rays) int
+    times: jax.Array              # (max_sensors, n_rays) meters
+    positions: jax.Array          # (n_rays, 3)
+    normals: jax.Array            # (n_rays, 3)
+    inside_sensor: jax.Array      # (max_sensors, n_rays) bool
 
 
 class PhotonStepResult(NamedTuple):
@@ -40,8 +43,8 @@ class PhotonStepResult(NamedTuple):
     Replaces the 6-tuple: (new_pos, new_dir, new_time, detect_prob,
     reflection_attenuation, continuing_factor).
     """
-    position: jnp.ndarray           # (3,)
-    direction: jnp.ndarray          # (3,)
+    position: jax.Array           # (3,)
+    direction: jax.Array          # (3,)
     time: float
     detect_prob: float
     reflection_attenuation: float
@@ -53,8 +56,8 @@ class PhotonState(NamedTuple):
 
     Replaces the 5-tuple: (positions, directions, times, survival, key).
     """
-    positions: jnp.ndarray          # (n_rays, 3)
-    directions: jnp.ndarray         # (n_rays, 3)
-    times: jnp.ndarray              # (n_rays,)
-    survival: jnp.ndarray           # (n_rays,)
-    key: jnp.ndarray                # PRNGKey
+    positions: jax.Array          # (n_rays, 3)
+    directions: jax.Array         # (n_rays, 3)
+    times: jax.Array              # (n_rays,)
+    survival: jax.Array           # (n_rays,)
+    key: jax.Array                # PRNGKey

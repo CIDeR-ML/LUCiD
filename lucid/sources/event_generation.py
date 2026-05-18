@@ -2,8 +2,7 @@
 
 Contains ``generate_events_from_photonsim_particles``,
 ``generate_events_from_photonsim_pileup``, and their internal helpers
-(``_offset_track_ids``, ``_max_track_id``, ``_offset_track_ids_raw``,
-``_merge_pileup_streams``).
+(``_offset_track_ids_raw``, ``_merge_pileup_streams``).
 """
 from __future__ import annotations
 
@@ -46,6 +45,11 @@ from lucid.sources.v3_writer import (
     write_sensor_config_v3,
 )
 from lucid.sources.particle_physics import derive_particle_interaction_idx
+
+__all__ = [
+    "generate_events_from_photonsim_particles",
+    "generate_events_from_photonsim_pileup",
+]
 
 
 def generate_events_from_photonsim_particles(event_simulator, root_file_path,
@@ -579,72 +583,11 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
     return saved_files
 
 
-def _offset_track_ids(particle_data, offset):
-    """Shift all G4 track IDs in ``particle_data`` by ``offset``.
-
-    parent_id == 0 (primary convention) is left alone so primaries
-    remain recognizable after merging. Mutates in place and also returns
-    the max track_id seen post-shift (so the caller can advance the
-    running offset for the next vertex stream).
-    """
-    if offset == 0:
-        return _max_track_id(particle_data)
-
-    def _shift(tid):
-        return int(tid) + offset if int(tid) > 0 else 0
-
-    # meaningful_tracks: remap both the dict keys and each record's track_id / parent_id.
-    mt = particle_data.get('meaningful_tracks')
-    if mt:
-        new_mt = {}
-        for tid, t in mt.items():
-            t = dict(t)
-            t['track_id']  = _shift(t['track_id'])
-            t['parent_id'] = _shift(t['parent_id'])
-            new_mt[_shift(tid)] = t
-        particle_data['meaningful_tracks'] = new_mt
-
-    # track_info_dict: same treatment.
-    tid_dict = particle_data.get('track_info_dict')
-    if tid_dict:
-        new_tid = {}
-        for tid, t in tid_dict.items():
-            t = dict(t)
-            t['track_id']  = _shift(t.get('track_id', tid))
-            t['parent_id'] = _shift(t.get('parent_id', 0))
-            new_tid[_shift(tid)] = t
-        particle_data['track_info_dict'] = new_tid
-
-    # particles: genealogy and extended_genealogy lists of track IDs.
-    for p in particle_data.get('particles', []):
-        gen = p.get('genealogy') or []
-        p['genealogy'] = [_shift(g) for g in gen]
-        ext = p.get('extended_genealogy')
-        if ext is not None:
-            p['extended_genealogy'] = [_shift(g) for g in ext]
-        # track_info inside particle (if any) — also remap.
-        ti = p.get('track_info')
-        if ti is not None and 'track_id' in ti:
-            ti['track_id'] = _shift(ti['track_id'])
-            if 'parent_id' in ti:
-                ti['parent_id'] = _shift(ti['parent_id'])
-
-    return _max_track_id(particle_data)
-
-
-def _max_track_id(particle_data):
-    """Largest track_id present in the stream (0 if the stream is empty)."""
-    mt = particle_data.get('meaningful_tracks') or {}
-    tid_d = particle_data.get('track_info_dict') or {}
-    ids = [int(t) for t in mt.keys()] + [int(t) for t in tid_d.keys()]
-    return max(ids) if ids else 0
-
-
 def _offset_track_ids_raw(raw, offset):
     """Shift all G4 track IDs in a ``_read_event_raw`` output by ``offset``.
 
-    Same role as :func:`_offset_track_ids` but operates on the raw read
-    dict (no ``meaningful_tracks`` / ``particles`` yet — those come from
+    Shifts all G4 track IDs in the raw read dict (no ``meaningful_tracks``
+    / ``particles`` yet — those come from
     :func:`_derive_views_from_segments` after the kernel call). Shifts:
 
       - ``raw['track_info_dict']``: rekey + shift each record's ``track_id``

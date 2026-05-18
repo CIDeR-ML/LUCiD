@@ -4,6 +4,7 @@ Analysis Module for Trained SIREN Models
 This module provides classes for analyzing and evaluating trained SIREN models
 on PhotonSim data, designed to be used from Jupyter notebooks or scripts.
 """
+from __future__ import annotations
 
 import logging
 from pathlib import Path

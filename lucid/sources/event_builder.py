@@ -23,6 +23,12 @@ from lucid.sources.particle_categorization import (
     pdg_to_g4name,
 )
 
+__all__ = [
+    "derive_particle_idx_per_track",
+    "derive_track_ancestor_and_interaction",
+    "aggregate_inst_from_segments",
+]
+
 
 # =============================================================================
 # Single-axis bucketing (n_rays)
@@ -894,95 +900,3 @@ def derive_track_ancestor_and_interaction(event_dict):
     return ancestors, interaction
 
 
-def _simulate_vertex_stream(
-    *,
-    event_simulator,
-    particle_data,
-    translation_vector,
-    apply_translation,
-    n_sensors,
-    pad_size,
-    sim_key,
-):
-    """Run the vmap photon simulator for one PhotonSim stream.
-
-    Returns (PE_per_particle, T_per_particle) as numpy float32 arrays of
-    shape ``(n_particles, n_sensors)``. Inputs are mutated: track_info
-    positions get shifted by ``translation_vector`` to keep the per-track
-    info in the shifted frame. All times remain in G4 frame; the caller
-    adds per-interaction t0 afterwards to move to absolute detector frame.
-    """
-    from lucid.detector_params import ParticleParams
-
-    n_particles = particle_data['n_particles']
-    particles = particle_data['particles']
-    default_direction = np.array([0.0, 0.0, 1.0], dtype=np.float32)
-
-    batched_origins_np = np.zeros((n_particles, pad_size, 3), dtype=np.float32)
-    batched_directions_np = np.tile(default_direction, (n_particles, pad_size, 1))
-    batched_times_np = np.zeros((n_particles, pad_size), dtype=np.float32)
-    batched_wavelengths_np = np.zeros((n_particles, pad_size), dtype=np.float32)
-    N_per_particle_np = np.zeros(n_particles, dtype=np.int32)
-    track_energies_np = np.zeros(n_particles, dtype=np.float32)
-    track_positions_np = np.zeros((n_particles, 3), dtype=np.float32)
-    track_directions_np = np.zeros((n_particles, 3), dtype=np.float32)
-
-    all_origins = particle_data['photon_origins']
-    all_dirs    = particle_data['photon_directions']
-    all_times   = particle_data['photon_times']
-    all_wl      = particle_data['photon_wavelengths']
-
-    for pi, particle in enumerate(particles):
-        photon_indices = particle['photon_indices']
-        N = len(photon_indices)
-        N_per_particle_np[pi] = N
-        ti = particle['track_info']
-        if ti is not None:
-            track_energies_np[pi]   = ti['energy']
-            track_positions_np[pi]  = ti['position']
-            track_directions_np[pi] = ti['direction']
-        else:
-            track_energies_np[pi]   = particle_data.get('primary_energy', 0.0)
-            track_directions_np[pi] = default_direction
-        if apply_translation:
-            track_positions_np[pi] += translation_vector
-            if ti is not None:
-                ti['position'] = track_positions_np[pi].copy()
-        if N > 0:
-            batched_origins_np[pi, :N]      = all_origins[photon_indices]
-            batched_directions_np[pi, :N]   = all_dirs[photon_indices]
-            batched_times_np[pi, :N]        = all_times[photon_indices]
-            batched_wavelengths_np[pi, :N]  = all_wl[photon_indices]
-
-    batched_origins     = jax.device_put(batched_origins_np)
-    batched_directions  = jax.device_put(batched_directions_np)
-    batched_times       = jax.device_put(batched_times_np)
-    batched_wavelengths = jax.device_put(batched_wavelengths_np)
-    N_per_particle_array    = jax.device_put(N_per_particle_np)
-    track_energies_array    = jax.device_put(track_energies_np)
-    track_positions_array   = jax.device_put(track_positions_np)
-    track_directions_array  = jax.device_put(track_directions_np)
-
-    def _sim_one(energy, pos, dir_, po, pd, pt, pw, N, key):
-        track_params = ParticleParams.from_cartesian(
-            energy=energy, position=pos, direction=dir_, t0=0.0)
-        photonsim_data = {
-            'photon_origins': po, 'photon_directions': pd,
-            'photon_times': pt, 'wavelengths': pw, 'N': N,
-            'apply_rotation': False,
-            'rotation_axis': jnp.array([1.0, 0.0, 0.0]),
-            'rotation_angle': 0.0,
-            # Photons were already translated in NumPy by the caller; do NOT
-            # translate a second time inside the JIT simulator.
-            'apply_translation': False,
-            'translation_vector': jnp.zeros(3),
-        }
-        return event_simulator(track_params, key, photonsim_data)
-
-    simulate_all = jax.vmap(_sim_one, in_axes=(0, 0, 0, 0, 0, 0, 0, 0, 0))
-    particle_keys = jax.random.split(sim_key, n_particles)
-    PE_pp, T_pp = simulate_all(
-        track_energies_array, track_positions_array, track_directions_array,
-        batched_origins, batched_directions, batched_times, batched_wavelengths,
-        N_per_particle_array, particle_keys)
-    return np.asarray(PE_pp, dtype=np.float32), np.asarray(T_pp, dtype=np.float32)

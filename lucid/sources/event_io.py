@@ -39,7 +39,6 @@ from lucid.sources.event_builder import (       # noqa: F401
     _DEFAULT_PAD_SIZE_BUCKETS,
     _normalize_buckets,
     _warmup_buckets,
-    _simulate_vertex_stream,
 )
 
 # --- event_generation ---

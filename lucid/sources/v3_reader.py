@@ -7,6 +7,14 @@ from __future__ import annotations
 import h5py
 import numpy as np
 
+__all__ = [
+    "list_events_v3",
+    "read_sensor_event_v3",
+    "read_inst_event_v3",
+    "read_seg_event_v3",
+    "read_labl_event_v3",
+]
+
 
 def list_events_v3(filename):
     """Return the ``config/source_event_idx`` array from a v3 file."""

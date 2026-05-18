@@ -2,6 +2,7 @@
 
 Moved from lucid/generate.py and lucid/detector_params.py during Phase 2.2 refactor.
 """
+from __future__ import annotations
 
 import jax
 import jax.numpy as jnp

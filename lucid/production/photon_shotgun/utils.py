@@ -4,6 +4,8 @@ Includes position-grid builders (uniform-in-cylinder, regular grid), source
 construction for batched cases, and a small convenience for building the
 simulator + generator pair for a given detector geometry.
 """
+from __future__ import annotations
+
 from typing import Optional, Tuple
 
 import json

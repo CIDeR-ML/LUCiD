@@ -12,6 +12,12 @@ import time
 import jax
 import jax.numpy as jnp
 
+__all__ = [
+    "T0_HALF_WINDOW_NS",
+    "derive_event_keys",
+    "derive_subprocess_seeds",
+]
+
 
 # Tag constants used with jax.random.fold_in so each subprocess stream in
 # the seed hierarchy gets a distinct derivation. Value is arbitrary — it

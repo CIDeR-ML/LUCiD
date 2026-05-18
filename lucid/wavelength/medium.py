@@ -27,11 +27,11 @@ class MediumProperties(NamedTuple):
     speed_of_light: float                              # m/ns in this medium
 
     # Wavelength-dependent arrays (None = monochromatic mode)
-    wavelength_grid: Optional[jnp.ndarray] = None      # (N,) nm
-    scatter_coeff: Optional[jnp.ndarray] = None         # (N,) symmetric Rayleigh 1/m
-    absorption_coeff: Optional[jnp.ndarray] = None      # (N,) 1/m
-    refractive_index_curve: Optional[jnp.ndarray] = None  # (N,) n(lambda)
-    mie_scatter_coeff: Optional[jnp.ndarray] = None     # (N,) asymmetric Mie 1/m
+    wavelength_grid: Optional[jax.Array] = None      # (N,) nm
+    scatter_coeff: Optional[jax.Array] = None         # (N,) symmetric Rayleigh 1/m
+    absorption_coeff: Optional[jax.Array] = None      # (N,) 1/m
+    refractive_index_curve: Optional[jax.Array] = None  # (N,) n(lambda)
+    mie_scatter_coeff: Optional[jax.Array] = None     # (N,) asymmetric Mie 1/m
     mie_asymmetry: Optional[float] = None               # HG g parameter
 
 

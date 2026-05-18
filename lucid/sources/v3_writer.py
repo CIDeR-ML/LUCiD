@@ -15,6 +15,21 @@ from lucid.sources.event_builder import (
 )
 from lucid.sources.particle_physics import derive_particle_interaction_idx
 
+__all__ = [
+    "SOURCE_TYPE_PARTICLES",
+    "SOURCE_TYPE_GENIE",
+    "build_interaction_metadata",
+    "sample_translation_vector",
+    "write_sensor_config_v3",
+    "write_inst_config_v3",
+    "write_seg_config_v3",
+    "write_labl_config_v3",
+    "save_sensor_event_v3",
+    "save_inst_event_v3",
+    "save_seg_event_v3",
+    "save_labl_event_v3",
+]
+
 
 # ---------------------------------------------------------------------------
 # V3 format: four-file per-event-group HDF5 (sensor / inst / seg / labl).

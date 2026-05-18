@@ -10,6 +10,7 @@ Usage:
     python plot_training_results.py --training-dir /path/to/output --style seaborn-v0_8
     python plot_training_results.py --training-dir /path/to/output --save-format pdf --dpi 300
 """
+from __future__ import annotations
 
 import sys
 import os

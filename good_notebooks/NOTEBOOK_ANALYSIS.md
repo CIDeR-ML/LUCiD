@@ -1,6 +1,6 @@
 # LUCiD Notebook Analysis — Complete Reference
 
-This document provides a thorough analysis of all 18 notebooks in `good_notebooks/`,
+This document provides a thorough analysis of all 24 notebooks in `good_notebooks/`,
 organized by theme. It serves as the reference for building baseline comparison
 scripts and regression tests.
 

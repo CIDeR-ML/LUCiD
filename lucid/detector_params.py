@@ -46,12 +46,12 @@ class DetectorParams(NamedTuple):
     qe : jnp.ndarray                    scalar, base quantum efficiency [0, 1]
     qe_corrections : jnp.ndarray        shape (num_sensors,), per-sensor QE multipliers
     """
-    scatter_length: jnp.ndarray
-    wall_reflection_rate: jnp.ndarray
-    sensor_reflection_rate: jnp.ndarray
-    absorption_length: jnp.ndarray
-    qe: jnp.ndarray
-    qe_corrections: jnp.ndarray
+    scatter_length: jax.Array
+    wall_reflection_rate: jax.Array
+    sensor_reflection_rate: jax.Array
+    absorption_length: jax.Array
+    qe: jax.Array
+    qe_corrections: jax.Array
 
 
 class ParticleParams(NamedTuple):
@@ -65,11 +65,11 @@ class ParticleParams(NamedTuple):
     phi : jnp.ndarray       scalar, azimuthal angle radians
     t0 : jnp.ndarray        scalar, vertex time offset (ns)
     """
-    energy: jnp.ndarray
-    position: jnp.ndarray
-    theta: jnp.ndarray
-    phi: jnp.ndarray
-    t0: jnp.ndarray
+    energy: jax.Array
+    position: jax.Array
+    theta: jax.Array
+    phi: jax.Array
+    t0: jax.Array
 
     @classmethod
     def from_cartesian(cls, energy, position, direction, t0=0.0):

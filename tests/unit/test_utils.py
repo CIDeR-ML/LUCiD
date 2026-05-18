@@ -32,22 +32,22 @@ class TestSmearTimes:
     def test_deterministic(self):
         key = jax.random.PRNGKey(42)
         times = jnp.array([100.0, 200.0, 300.0, 1e6])
-        r1 = smear_times(times, 0.4, key)
-        r2 = smear_times(times, 0.4, key)
+        r1 = smear_times(times, 0.4, key=key)
+        r2 = smear_times(times, 0.4, key=key)
         npt.assert_allclose(r1, r2)
 
     def test_shape_preserved(self):
         key = jax.random.PRNGKey(0)
         times = jnp.ones(50) * 100.0
-        result = smear_times(times, 0.4, key)
+        result = smear_times(times, 0.4, key=key)
         assert result.shape == (50,)
 
     def test_resolution_scales(self):
         """Larger time_resolution → larger spread."""
         key = jax.random.PRNGKey(42)
         times = jnp.ones(1000) * 100.0
-        small = smear_times(times, 0.1, key)
-        large = smear_times(times, 2.0, key)
+        small = smear_times(times, 0.1, key=key)
+        large = smear_times(times, 2.0, key=key)
         assert jnp.std(small) < jnp.std(large)
 
 

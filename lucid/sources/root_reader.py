@@ -10,6 +10,12 @@ from __future__ import annotations
 import jax.numpy as jnp
 import numpy as np
 
+__all__ = [
+    "get_max_photons_per_particle",
+    "read_photon_data_from_photonsim",
+    "read_particle_data_from_photonsim",
+]
+
 
 def _read_photons_for_event(raw_tree, event_idx):
     """Stitch OpticalPhotonsRaw chunks for one event into flat numpy arrays.

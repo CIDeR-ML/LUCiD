@@ -17,6 +17,7 @@ Requires `uproot`. The submit step needs `sbatch` (host PATH); since uproot
 lives inside the container and sbatch lives on the host, the recommended
 driver is the sibling `resubmit_failed.sh` wrapper which bridges the two.
 """
+from __future__ import annotations
 
 import argparse
 import re

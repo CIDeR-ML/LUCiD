@@ -4,6 +4,7 @@ Training Monitor Module for SIREN Training
 This module provides classes for monitoring training progress in real-time,
 designed to be used from Jupyter notebooks or scripts.
 """
+from __future__ import annotations
 
 import json
 import logging

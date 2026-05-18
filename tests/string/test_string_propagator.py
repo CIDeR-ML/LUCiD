@@ -22,8 +22,8 @@ jax.config.update("jax_platform_name", "cpu")
 from lucid.geometry.string import StringTelescope
 from lucid.propagation.string.string_propagator import create_string_propagator
 
-CONFIG_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "config")
-NPZ = os.path.join(CONFIG_DIR, "icecube86_simple.npz")
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+NPZ = os.path.join(PROJECT_ROOT, "config", "icecube86_simple.npz")
 
 passed = failed = 0
 errors = []

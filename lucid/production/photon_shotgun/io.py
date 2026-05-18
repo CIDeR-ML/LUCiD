@@ -10,6 +10,8 @@ Two output modes:
 * ``per_photon`` — dense ``(n_cases, n_photons)`` arrays of ``detected``,
   ``sensor_id``, ``hit_time`` stored with chunked gzip.
 """
+from __future__ import annotations
+
 from typing import Optional
 
 import h5py

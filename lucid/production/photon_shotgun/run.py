@@ -19,6 +19,8 @@ SK, waveform mode::
         --chunk 20 \\
         -o runs/shotgun_SK_10k.h5
 """
+from __future__ import annotations
+
 import argparse
 import os
 import time

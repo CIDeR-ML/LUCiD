@@ -1,6 +1,6 @@
 # Comprehensive Notebook Documentation
 
-This document provides detailed documentation of all 18 notebooks in `good_notebooks/`.
+This document provides detailed documentation of all 24 notebooks in `good_notebooks/`.
 
 ---
 

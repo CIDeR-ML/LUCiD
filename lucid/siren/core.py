@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import jax
 import jax.numpy as jnp
 from jax import random
@@ -178,7 +180,7 @@ def load_photonsim_siren(model_path: str):
     return jax_model, jax_params, normalization_params, metadata
 
 
-def normalize_photonsim_inputs(inputs: jnp.ndarray, normalization_params: dict) -> jnp.ndarray:
+def normalize_photonsim_inputs(inputs: jax.Array, normalization_params: dict) -> jax.Array:
     """
     Normalize inputs according to PhotonSim training normalization.
     
@@ -216,7 +218,7 @@ def normalize_photonsim_inputs(inputs: jnp.ndarray, normalization_params: dict) 
     return normalized
 
 
-def denormalize_photonsim_output(normalized_output: jnp.ndarray, normalization_params: dict) -> jnp.ndarray:
+def denormalize_photonsim_output(normalized_output: jax.Array, normalization_params: dict) -> jax.Array:
     """
     Denormalize output according to PhotonSim training normalization.
     
@@ -252,7 +254,7 @@ class PhotonSimSIREN:
         self.model, self.params, self.normalization_params, self.metadata = load_photonsim_siren(model_path)
         self.model_path = model_path
     
-    def __call__(self, inputs: jnp.ndarray) -> jnp.ndarray:
+    def __call__(self, inputs: jax.Array) -> jax.Array:
         """
         Evaluate the model on inputs.
         

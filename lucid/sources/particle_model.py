@@ -1,4 +1,6 @@
 """ParticleModel container — SIREN model + normalization + t0 params."""
+from __future__ import annotations
+
 from typing import NamedTuple
 
 from lucid.utils import (

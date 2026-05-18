@@ -4,6 +4,7 @@ Inference module for trained SIREN models.
 This module provides functionality to load and use trained SIREN models
 for photon density predictions with proper normalization handling.
 """
+from __future__ import annotations
 
 import json
 import logging

@@ -1,3 +1,5 @@
+> **STATUS: COMPLETED.** This migration was executed during the production-interm → refactor-v2 merge. Retained for historical reference.
+
 # LUCiD Production HDF5 Migration
 
 This document specifies everything required to migrate LUCiD's HDF5 production

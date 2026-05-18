@@ -4,6 +4,7 @@ PhotonSim Dataset Module for SIREN Training
 This module provides dataset classes for loading and managing PhotonSim data,
 including both HDF5 lookup tables and pre-sampled datasets.
 """
+from __future__ import annotations
 
 import logging
 from pathlib import Path
@@ -211,7 +212,7 @@ class PhotonSimDataset:
         logger.info(f"Train samples: {len(self.train_indices):,}")
         logger.info(f"Validation samples: {len(self.val_indices):,}")
         
-    def get_sample_input(self) -> jnp.ndarray:
+    def get_sample_input(self) -> jax.Array:
         """Get a sample input for model initialization."""
         return jnp.array(self.data['inputs_normalized'][:1])
         
@@ -221,7 +222,7 @@ class PhotonSimDataset:
         rng: jax.random.PRNGKey,
         split: str = 'train',
         normalized: bool = True
-    ) -> Tuple[jnp.ndarray, jnp.ndarray]:
+    ) -> Tuple[jax.Array, jax.Array]:
         """
         Get a random batch of data.
         

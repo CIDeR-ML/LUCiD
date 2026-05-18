@@ -9,6 +9,8 @@ Two utilities:
 No cylinder unwrapping. 3D scatter matches the physical detector and reads
 directly without extra frames.
 """
+from __future__ import annotations
+
 from typing import Optional
 
 import numpy as np
