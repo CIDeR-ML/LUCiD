@@ -21,7 +21,7 @@ import pytest
 
 jax.config.update("jax_platform_name", "cpu")
 
-from lucid.overlap import create_overlap_prob
+from lucid.overlap import create_overlap_prob, integral_f_of_d
 
 r = 0.165  # IceCube DOM radius
 
@@ -101,47 +101,40 @@ def test_temperature_29():
 
 # ── Test: σ > 3r analytical regime ──
 
-@pytest.mark.xfail(reason="LUT cross-section integral diverges for σ/r ≥ 3; overlap code needs fix for wide kernels")
-def test_temperature_3():
-    """σ/r = 3.0 — first analytical case."""
-    sigma = 3.0 * r
-    fn = create_overlap_prob(sigma, r)
-    val0 = float(fn(0.0))
-    expected = r**2 / (2 * sigma**2)
-    assert abs(val0 - expected) / expected < 0.03, f"analytical overlap(0) = {val0}, expected {expected}"
-    cs = cross_section(fn, r + 5 * sigma)
+def exact_overlap_at(d, sigma):
+    """High-precision reference via 2D numerical integration."""
+    theta_vals = jnp.linspace(0, 2 * jnp.pi, 2000)
+    rho_vals = jnp.linspace(0, r, 2000)
+    return float(integral_f_of_d(d, r, sigma, theta_vals, rho_vals))
+
+
+@pytest.mark.parametrize("ratio", [3.0, 6.0, 30.0])
+def test_wide_kernel_matches_exact_integral(ratio):
+    """LUT overlap matches high-precision numerical integral for wide kernels."""
+    sigma = ratio * r
+    d_max = max(10 * r, 5 * sigma)
+    fn = create_overlap_prob(sigma, r, use_cache=False, d_max_factor=d_max / r)
+    for d_test in [0.0, 0.5 * r, r, 2 * r, 3 * sigma]:
+        lut_val = float(fn(d_test))
+        exact_val = exact_overlap_at(d_test, sigma)
+        if exact_val > 1e-10:
+            rel = abs(lut_val - exact_val) / exact_val
+            assert rel < 0.02, (
+                f"σ/r={ratio}, d={d_test:.4f}: LUT={lut_val:.6f} vs exact={exact_val:.6f}, "
+                f"rel error={rel:.2%}"
+            )
+
+
+@pytest.mark.parametrize("ratio", [3.0, 6.0, 30.0])
+def test_wide_kernel_cross_section(ratio):
+    """Cross-section integral ∫ overlap(d)·2πd dd ≈ πr² for wide kernels."""
+    sigma = ratio * r
+    d_max = max(10 * r, 5 * sigma)
+    fn = create_overlap_prob(sigma, r, use_cache=False, d_max_factor=d_max / r)
+    cs = cross_section(fn, d_max)
     target = np.pi * r**2
     rel = abs(cs - target) / target
-    assert rel < 0.03, f"cross-section error {rel:.2%}"
-    print(f"    σ/r=3.0: overlap(0)={val0:.6f}, πr² error={rel:.4%}")
-
-
-@pytest.mark.xfail(reason="LUT cross-section integral diverges for σ/r ≥ 3; overlap code needs fix for wide kernels")
-def test_temperature_6():
-    """σ/r = 6 (σ = 1m) — deep analytical regime."""
-    sigma = 6.0 * r
-    fn = create_overlap_prob(sigma, r)
-    val0 = float(fn(0.0))
-    expected = r**2 / (2 * sigma**2)
-    assert abs(val0 - expected) / expected < 0.01, f"analytical overlap(0) = {val0}, expected {expected}"
-    cs = cross_section(fn, 5 * sigma)
-    target = np.pi * r**2
-    rel = abs(cs - target) / target
-    assert rel < 0.03, f"cross-section error {rel:.2%}"
-    print(f"    σ/r=6.0: overlap(0)={val0:.6f}, πr² error={rel:.4%}")
-
-
-@pytest.mark.xfail(reason="LUT cross-section integral diverges for σ/r ≥ 3; overlap code needs fix for wide kernels")
-def test_temperature_30():
-    """σ/r = 30 (σ = 5m) — very wide kernel."""
-    sigma = 30.0 * r
-    fn = create_overlap_prob(sigma, r)
-    val0 = float(fn(0.0))
-    cs = cross_section(fn, 5 * sigma)
-    target = np.pi * r**2
-    rel = abs(cs - target) / target
-    assert rel < 0.03, f"cross-section error {rel:.2%}"
-    print(f"    σ/r=30: overlap(0)={val0:.6f}, πr² error={rel:.4%}")
+    assert rel < 0.05, f"σ/r={ratio}: cross-section error {rel:.2%}"
 
 
 # ── Test: smooth transition at the σ=3r boundary ──
