@@ -93,6 +93,16 @@ class PhotonSimDataset:
         self.energy_range = (energy_centers.min(), energy_centers.max())
         self.distance_range = (distance_centers.min(), distance_centers.max())
 
+        # Distance axis label: new tables use s/s_max ∈ [0,1] and tag it via
+        # metadata.attrs['distance_axis']. Older tables had absolute s in mm.
+        dist_axis = metadata.get('distance_axis', b'')
+        if isinstance(dist_axis, bytes):
+            dist_axis = dist_axis.decode()
+        if dist_axis == 's_over_smax':
+            dist_label = f"s/s_max range: {self.distance_range[0]:.3f}-{self.distance_range[1]:.3f}"
+        else:
+            dist_label = f"Distance range: {self.distance_range[0]:.0f}-{self.distance_range[1]:.0f} mm"
+
         # Store second dimension range with appropriate name
         if self.table_type == 'dedx':
             self.dedx_range = (second_dim_centers.min(), second_dim_centers.max())
@@ -100,14 +110,14 @@ class PhotonSimDataset:
             logger.info(f"Loaded {len(self.data['inputs']):,} data points from dE/dx lookup table")
             logger.info(f"Energy range: {self.energy_range[0]:.0f}-{self.energy_range[1]:.0f} MeV")
             logger.info(f"dE/dx range: {self.dedx_range[0]:.1f}-{self.dedx_range[1]:.1f} keV/mm")
-            logger.info(f"Distance range: {self.distance_range[0]:.0f}-{self.distance_range[1]:.0f} mm")
+            logger.info(dist_label)
         else:
             self.angle_range = (second_dim_centers.min(), second_dim_centers.max())
             self.dedx_range = None  # Not applicable
             logger.info(f"Loaded {len(self.data['inputs']):,} data points from photon lookup table")
             logger.info(f"Energy range: {self.energy_range[0]:.0f}-{self.energy_range[1]:.0f} MeV")
             logger.info(f"Angle range: {np.degrees(self.angle_range[0]):.1f}-{np.degrees(self.angle_range[1]):.1f} degrees")
-            logger.info(f"Distance range: {self.distance_range[0]:.0f}-{self.distance_range[1]:.0f} mm")
+            logger.info(dist_label)
 
         logger.info(f"Table type: {self.table_type} - {metadata.get('normalization', 'unknown')} ({metadata.get('average_units', 'unknown units')})")
 

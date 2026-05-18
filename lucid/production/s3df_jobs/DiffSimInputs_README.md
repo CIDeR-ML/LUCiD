@@ -2,6 +2,18 @@
 
 Configurations for generating PhotonSim data used as input for LUCiD. These configs produce raw photon data to generate data-like events in LUCiD, or train PhysicsSIREN in LUCiD.
 
+> **SIREN training inputs live elsewhere now.** This page covers the
+> data-like-event configs only. For the SIREN pipeline (s/s_max axis, up to
+> 100 GeV) use:
+>
+> - Stage 0 — `s_max(E)` fit scan: [`smax/README.md`](smax/README.md)
+> - Stage 1 — per-cell `photonsim.root` with `PhotonHist_AngleDistanceNorm`: [`siren_inputs/README.md`](siren_inputs/README.md)
+> - Stage 2/3 — `.h5` build + training: [`../../../docs/SIREN_TRAINING_INPUTS.md`](../../../docs/SIREN_TRAINING_INPUTS.md)
+>
+> The `water_lookup_table_*.json` configs below are the legacy pre-`s_max`
+> path (10–2000 MeV, absolute distance axis). Kept for non-SIREN reuse; do
+> not use them to train new SIREN models.
+
 ## Quick Start
 
 ```bash
@@ -68,6 +80,6 @@ See `DataProduction_README.md` for additional documentation of the job system in
 
 ## Next step
 
-For the "lookup" configurations, the per-energy ROOTs produced here feed
-into [`docs/SIREN_TRAINING_INPUTS.md`](../../../docs/SIREN_TRAINING_INPUTS.md),
-which covers the ROOT → `photon_lookup_table.h5` build and SIREN training.
+For SIREN inputs, use the new s/s_max pipeline ([`smax/`](smax/) +
+[`siren_inputs/`](siren_inputs/) + [`docs/SIREN_TRAINING_INPUTS.md`](../../../docs/SIREN_TRAINING_INPUTS.md));
+the configs documented above are for non-SIREN data-like-event generation.

@@ -127,6 +127,19 @@ Both training and validation require an HDF5 lookup table at
 PhotonSim ROOT output, see
 [`docs/SIREN_TRAINING_INPUTS.md`](../../docs/SIREN_TRAINING_INPUTS.md).
 
+### s/s_max input axis
+
+Starting with `format_version = "2.0"`, the third SIREN input is
+`s / s_max(E) ∈ [0, 1]` rather than absolute distance in mm — this is what
+lets the training energy range extend up to 100 GeV. The per-(material,
+particle) fit `s_max(E) = A·E^B` is welded into the `.h5` as
+`metadata.attrs/smax_{A, B, fit_min_mev, fit_max_mev, quantile,
+quantile_multiplier, generated_at_utc}`, so the file is self-contained — no
+external `smax_fit.csv` is needed at training or inference time. The trainer
+itself doesn't touch these attrs; they exist for the inference path
+(`lucid/sources/siren_rays.py`, not yet migrated) to convert physical `s`
+into `s/s_max` at sample time.
+
 ## Model Paths
 
 The tools automatically handle model paths:
