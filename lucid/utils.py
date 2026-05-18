@@ -631,7 +631,7 @@ def generate_random_event_params(key: jax.Array, detector_bounds: dict, fraction
                                          direction=direction, t0=jnp.array(0.0))
 
 
-def smear_times(times: jax.Array, time_resolution: float = 2.5, key: jax.Array | None = None) -> jax.Array:
+def smear_times(times: jax.Array, time_resolution: float = 2.5, *, key: jax.Array) -> jax.Array:
     """
     Gaussianly smear input times.
 

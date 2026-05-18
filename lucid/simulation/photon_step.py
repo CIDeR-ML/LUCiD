@@ -1,6 +1,8 @@
 """Photon iteration functions (sample, update_factors, custom VJP)."""
 from __future__ import annotations
 
+from typing import Any
+
 import jax
 import jax.numpy as jnp
 from lucid.simulation.optics import (
@@ -291,7 +293,7 @@ def _fwd(
     speed_of_light: float,
 ) -> tuple[
     tuple[jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array],
-    tuple[jax.Array, ...],
+    tuple[Any, ...],
 ]:
     """Forward pass for NaN-safe photon iteration."""
     outputs = photon_iteration_update_factors(
@@ -307,9 +309,9 @@ def _fwd(
 
 
 def _bwd(
-    residuals: tuple[jax.Array, ...],
+    residuals: tuple[Any, ...],
     g: tuple[jax.Array, jax.Array, jax.Array, jax.Array, jax.Array, jax.Array],
-) -> tuple[jax.Array, ...]:
+) -> tuple[Any, ...]:
     """Backward pass with NaN-sanitized gradients."""
     g_pos, g_dir, g_time, g_detect, g_refl, g_cont = g
 

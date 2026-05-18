@@ -179,7 +179,7 @@ def compute_effective_properties(
     detector_params: Any, medium: MediumProperties,
     wavelengths: jax.Array | None = None,
     qe_curve: Callable[[jax.Array], jax.Array] | None = None,
-) -> tuple[float | jax.Array, float | jax.Array, float | jax.Array]:
+) -> tuple[jax.Array, jax.Array, jax.Array]:
     """Derive per-photon effective scatter/absorption/QE from calibration
     scalars, medium corrections, and optional wavelength arrays.
 

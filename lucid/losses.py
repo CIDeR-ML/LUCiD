@@ -17,7 +17,7 @@ def WC_loss(
         threshold: float = 1e-8,
         lambda_poisson: float = 1.0,
         lambda_time: float = 1.0,
-) -> float:
+) -> jax.Array:
     """
     Optimized Loss
     Compute a loss function with two components:
@@ -89,7 +89,7 @@ def compute_simplified_loss(
         lambda_centroid: float = 1.0,
         lambda_time: float = 1.0,
         lambda_intensity: float = 0.5
-) -> float:
+) -> jax.Array:
     """
     Compute a simplified loss function with three components:
     1. Centroid loss: Distance between charge-weighted centroids
@@ -174,7 +174,7 @@ def WC_smooth_loss(
         threshold: float = 1e-8,
         lambda_poisson: float = 1.0,
         lambda_time: float = 1.0,
-) -> float:
+) -> jax.Array:
     """
     Smoothed version of WC_loss using Gaussian distance weights.
 
@@ -248,7 +248,7 @@ def WC_smooth_loss(
 
 
 @jit
-def energy_loss(simulated_counts: jax.Array, true_counts: jax.Array) -> float:
+def energy_loss(simulated_counts: jax.Array, true_counts: jax.Array) -> jax.Array:
     """
     Core energy loss computation using intensity matching.
 
@@ -302,7 +302,7 @@ def grid_origin_time_loss(
     photosensor_radius: float = 0.25,
     c_medium: float = (0.299792 / 1.33),
     w_neg: float = 100.0,
-) -> float:
+) -> jax.Array:
     """Grid-based origin time loss for vertex position estimation."""
     eps = 1e-9
 
@@ -363,7 +363,7 @@ def origin_time_loss(
     photosensor_radius: float = 0.25,
     c_medium: float = (0.299792 / 1.33),
     tau: float = 0.23,
-) -> float:
+) -> jax.Array:
     """Time-of-origin loss for track reconstruction."""
     d = jnp.linalg.norm(detector_positions - origin[None, :], axis=1)
     expected = (d - photosensor_radius) / c_medium
@@ -384,7 +384,7 @@ def cone_time_loss(
     observed_times: jax.Array,
     t0: float,
     tau: float = 0.12,
-) -> float:
+) -> jax.Array:
     """Cherenkov cone timing loss."""
     r = observed_times - simulated_time - t0
     w = jnp.where(observed_counts > 0., observed_counts, 0.)

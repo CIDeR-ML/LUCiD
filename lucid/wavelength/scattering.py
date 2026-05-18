@@ -47,7 +47,7 @@ def compute_rayleigh_scatter_direction(incident_dir: jax.Array, rng_key: jax.Arr
     return normalize(frame @ local_dir)
 
 
-def hg_sample_cos_theta(u: float, g: float) -> jax.Array:
+def hg_sample_cos_theta(u: float | jax.Array, g: float) -> jax.Array:
     """Sample cos(theta) from the Henyey-Greenstein phase function.
 
     P(cos_theta) = (1 - g^2) / (2 * (1 + g^2 - 2*g*cos_theta)^(3/2))

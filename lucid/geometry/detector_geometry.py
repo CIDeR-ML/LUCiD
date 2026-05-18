@@ -24,12 +24,12 @@ class DetectorGeometry(NamedTuple):
     num_sensors: int
     speed_of_light: float                       # m/ns in this medium
     medium: MediumProperties                    # material physics
-    detector: object = None                     # the Detector instance
+    detector: Any = None                         # Detector instance (or None)
     propagator: Optional[Callable] = None       # JIT-compiled propagate_photons
 
     @staticmethod
     def from_config(json_filename: str,
-                    temperature: float = 0.2,
+                    temperature: float | None = 0.2,
                     max_candidates_per_ray: int = 4,
                     detector_type: str = 'Cylinder',
                     **grid_params) -> 'DetectorGeometry':
