@@ -323,8 +323,8 @@ and `save_segment_batch_v2` produce the flat-CSR format and are
 
 ```
 save_sensor_event_v3(f, event_dict)         — writes one event_NNN/ group
-save_inst_event_v3(f, event_dict)           — writes one event_NNN/ group
-save_seg_event_v3(f, event_dict)            — writes one event_NNN/ group
+save_hits_event_v3(f, event_dict)           — writes one event_NNN/ group
+save_edep_event_v3(f, event_dict)            — writes one event_NNN/ group
 save_labl_event_v3(f, event_dict)           — writes one event_NNN/ group
 ```
 
@@ -335,8 +335,8 @@ group with the schema documented in `LUCID_DATASET.md`.
 
 ```
 write_sensor_config_v3(f, ...)
-write_inst_config_v3(f, ...)
-write_seg_config_v3(f, ...)
+write_hits_config_v3(f, ...)
+write_edep_config_v3(f, ...)
 write_labl_config_v3(f, ...)
 ```
 
@@ -419,8 +419,8 @@ events in memory then calls `save_sensor_batch_v2` and
 4. For each event in the batch:
    - Compute the per-event derived fields (`particle_idx` per
      track, t0-shifted times).
-   - Call `save_sensor_event_v3`, `save_inst_event_v3`,
-     `save_seg_event_v3`, `save_labl_event_v3` writing
+   - Call `save_sensor_event_v3`, `save_hits_event_v3`,
+     `save_edep_event_v3`, `save_labl_event_v3` writing
      `event_NNN/` groups.
 5. Close all four files.
 
@@ -438,8 +438,8 @@ deprecate.
 
 ```
 read_sensor_event_v3(filename, event_idx) → dict
-read_inst_event_v3(filename, event_idx) → dict
-read_seg_event_v3(filename, event_idx) → dict
+read_hits_event_v3(filename, event_idx) → dict
+read_edep_event_v3(filename, event_idx) → dict
 read_labl_event_v3(filename, event_idx) → dict
 ```
 

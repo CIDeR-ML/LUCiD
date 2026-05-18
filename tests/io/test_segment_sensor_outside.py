@@ -11,10 +11,10 @@ This file checks that invariant two ways:
 
 1. The validator helper :func:`find_outside_start_violations` correctly
    classifies a synthetic event's hits.
-2. The writer ``save_seg_event_v3`` round-trips the ``sensor_hits`` subgroup
+2. The writer ``save_edep_event_v3`` round-trips the ``sensor_hits`` subgroup
    in a way the validator can re-check on disk.
 
-The same validator can be pointed at any real ``wc_seg_NNNN.h5`` produced
+The same validator can be pointed at any real ``wc_edep_NNNN.h5`` produced
 by ``lucid-run-job`` to confirm the invariant holds end-to-end after a real
 PhotonSim+LUCiD pass.
 """
@@ -22,7 +22,7 @@ import h5py
 import numpy as np
 import pytest
 
-from lucid.sources.event_io import save_seg_event_v3
+from lucid.sources.event_io import save_edep_event_v3
 from tests.io._v3_event_fixture import build_synthetic_event
 
 
@@ -56,7 +56,7 @@ def find_outside_start_violations(seg_h5_path, detector_bounds, event_idx=0):
 
     Empty result == invariant holds for ``event_idx``. Designed to be called
     on real datasets too: the user can point this at a generated
-    ``wc_seg_NNNN.h5`` after running ``lucid-run-job`` elsewhere.
+    ``wc_edep_NNNN.h5`` after running ``lucid-run-job`` elsewhere.
     """
     with h5py.File(seg_h5_path, 'r') as f:
         grp = f[f'event_{event_idx:03d}']
@@ -82,9 +82,9 @@ _TEST_BOUNDS = {'type': 'cylinder', 'radius': 5.0, 'height': 10.0}
 
 
 def _write_event(tmp_path, event_dict):
-    seg_path = tmp_path / 'wc_seg_0000.h5'
+    seg_path = tmp_path / 'wc_edep_0000.h5'
     with h5py.File(seg_path, 'w') as f:
-        save_seg_event_v3(f, event_dict, seq_idx=0)
+        save_edep_event_v3(f, event_dict, seq_idx=0)
     return seg_path
 
 

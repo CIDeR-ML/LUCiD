@@ -1,6 +1,6 @@
 // LUCiD HDF5 worker.
 //
-// Streams four v3 files (sensor, inst, seg, labl) via h5wasm + HTTP Range,
+// Streams four v3 files (sensor, hits, edep, labl) via h5wasm + HTTP Range,
 // and decodes per-event bundles for the main viewer thread.
 //
 // Schema reference: docs/LUCID_DATASET.md (v3, post-migration).
@@ -8,12 +8,12 @@
 import h5wasm from 'https://cdn.jsdelivr.net/npm/h5wasm@0.10.1/dist/esm/hdf5_hl.js';
 
 let mod;
-let sensorF, instF, segF, lablF;
+let sensorF, hitsF, edepF, lablF;
 let nEvents = 0, nSensors = 0;
 let detectorType = '';
 let sensorPositions = null;        // Float32Array(nSensors * 3)
 let shape = {};                    // { r, halfH } or { L, W, H } or { r }
-let sourceEventIdxPerFile = {};    // { sensor: Uint32Array, inst: ..., seg: ..., labl: ... }
+let sourceEventIdxPerFile = {};    // { sensor: Uint32Array, hits: ..., edep: ..., labl: ... }
 
 // ── Attr / dataset helpers ──────────────────────────────────────────────
 
@@ -113,23 +113,23 @@ function decodeEvent(idx) {
   const k = eventKey(idx);
 
   const sEvt = sensorF.get(k);
-  const iEvt = instF.get(k);
-  const gEvt = segF.get(k);
+  const hEvt = hitsF.get(k);
+  const eEvt = edepF.get(k);
   const lEvt = lablF.get(k);
-  if (!sEvt || !iEvt || !gEvt || !lEvt) {
+  if (!sEvt || !hEvt || !eEvt || !lEvt) {
     throw new Error(`event ${idx} missing from one or more files`);
   }
 
   // Cross-file sanity check: all four should agree on source_event_idx.
   const srcIdxS = readAttr(sEvt, 'source_event_idx');
-  const srcIdxI = readAttr(iEvt, 'source_event_idx');
-  const srcIdxG = readAttr(gEvt, 'source_event_idx');
+  const srcIdxH = readAttr(hEvt, 'source_event_idx');
+  const srcIdxE = readAttr(eEvt, 'source_event_idx');
   const srcIdxL = readAttr(lEvt, 'source_event_idx');
   let warning = null;
-  if (srcIdxS !== undefined && srcIdxI !== undefined &&
-      srcIdxG !== undefined && srcIdxL !== undefined) {
-    if (!(srcIdxS === srcIdxI && srcIdxI === srcIdxG && srcIdxG === srcIdxL)) {
-      warning = `source_event_idx mismatch: sensor=${srcIdxS} inst=${srcIdxI} seg=${srcIdxG} labl=${srcIdxL}`;
+  if (srcIdxS !== undefined && srcIdxH !== undefined &&
+      srcIdxE !== undefined && srcIdxL !== undefined) {
+    if (!(srcIdxS === srcIdxH && srcIdxH === srcIdxE && srcIdxE === srcIdxL)) {
+      warning = `source_event_idx mismatch: sensor=${srcIdxS} hits=${srcIdxH} edep=${srcIdxE} labl=${srcIdxL}`;
     }
   }
 
@@ -138,36 +138,36 @@ function decodeEvent(idx) {
   const sensorPE = readDsFloat32(sEvt, 'PE');
   const sensorT = readDsFloat32(sEvt, 'T');
 
-  // Inst file.
-  const instParticle = readDsInt32(iEvt, 'particle_idx');
-  const instSIdx = readDsUint16(iEvt, 'sensor_idx');
-  const instPE = readDsFloat32(iEvt, 'PE');
-  const instT = readDsFloat32(iEvt, 'T');
-  const nParticles = readAttr(iEvt, 'n_particles') || 0;
+  // Hits file.
+  const hitsParticle = readDsInt32(hEvt, 'particle_idx');
+  const hitsSIdx = readDsUint16(hEvt, 'sensor_idx');
+  const hitsPE = readDsFloat32(hEvt, 'PE');
+  const hitsT = readDsFloat32(hEvt, 'T');
+  const nParticles = readAttr(hEvt, 'n_particles') || 0;
 
-  // Seg file.
-  const segTrackIdx = readDsInt32(gEvt, 'track_idx');
-  const segStartX = readDsFloat32(gEvt, 'start_x');
-  const segStartY = readDsFloat32(gEvt, 'start_y');
-  const segStartZ = readDsFloat32(gEvt, 'start_z');
-  const segEndX = readDsFloat32(gEvt, 'end_x');
-  const segEndY = readDsFloat32(gEvt, 'end_y');
-  const segEndZ = readDsFloat32(gEvt, 'end_z');
-  const segTime = readDsFloat32(gEvt, 'time');
-  const segEdep = readDsFloat32(gEvt, 'edep');
-  const segBeta = readDsFloat32(gEvt, 'beta_start');
-  const segNCh = readDsInt32(gEvt, 'n_cherenkov');
-  const nTracksSeg = readAttr(gEvt, 'n_tracks') || 0;
-  const nSegments = readAttr(gEvt, 'n_segments') || (segEdep ? segEdep.length : 0);
+  // Edep file.
+  const edepTrackIdx = readDsInt32(eEvt, 'track_idx');
+  const edepStartX = readDsFloat32(eEvt, 'start_x');
+  const edepStartY = readDsFloat32(eEvt, 'start_y');
+  const edepStartZ = readDsFloat32(eEvt, 'start_z');
+  const edepEndX = readDsFloat32(eEvt, 'end_x');
+  const edepEndY = readDsFloat32(eEvt, 'end_y');
+  const edepEndZ = readDsFloat32(eEvt, 'end_z');
+  const edepTime = readDsFloat32(eEvt, 'time');
+  const edepEdep = readDsFloat32(eEvt, 'edep');
+  const edepBeta = readDsFloat32(eEvt, 'beta_start');
+  const edepNCh = readDsInt32(eEvt, 'n_cherenkov');
+  const nTracksEdep = readAttr(eEvt, 'n_tracks') || 0;
+  const nSegments = readAttr(eEvt, 'n_segments') || (edepEdep ? edepEdep.length : 0);
 
   // Optional sensor_hits subgroup (present when LUCiD ran with
   // store_segment_sensor_map=true). Flat parallel arrays — one row per
   // (segment, sensor) pair — used to colour PMTs by the dominant segment
   // and to drive segment-row selection in the sidebar.
-  let segSensorHits = null;
-  const shGrp = gEvt.get('sensor_hits');
+  let edepSensorHits = null;
+  const shGrp = eEvt.get('sensor_hits');
   if (shGrp) {
-    segSensorHits = {
+    edepSensorHits = {
       segment_idx: readDsInt32(shGrp,   'segment_idx'),
       sensor_idx:  readDsUint16(shGrp,  'sensor_idx'),
       PE:          readDsFloat32(shGrp, 'PE'),
@@ -228,9 +228,9 @@ function decodeEvent(idx) {
   }
 
   const n_particles = nParticles || (genealogyOffsets ? Math.max(0, genealogyOffsets.length - 1) : 0);
-  const n_tracks = (trackPdg ? trackPdg.length : 0) || nTracksSeg;
+  const n_tracks = (trackPdg ? trackPdg.length : 0) || nTracksEdep;
 
-  const segContained = readDsBool(gEvt, 'contained');
+  const edepContained = readDsBool(eEvt, 'contained');
   return {
     warning,
     srcIdx: srcIdxS,
@@ -238,14 +238,14 @@ function decodeEvent(idx) {
     contained,
     sensor: { sensor_idx: sensorSIdx, PE: sensorPE, T: sensorT,
               nHits: sensorSIdx ? sensorSIdx.length : 0 },
-    inst: { particle_idx: instParticle, sensor_idx: instSIdx, PE: instPE, T: instT,
-            nHits: instSIdx ? instSIdx.length : 0 },
-    seg: { track_idx: segTrackIdx,
-           start_x: segStartX, start_y: segStartY, start_z: segStartZ,
-           end_x: segEndX, end_y: segEndY, end_z: segEndZ,
-           time: segTime, edep: segEdep, beta_start: segBeta, n_cherenkov: segNCh,
-           contained: segContained,
-           sensor_hits: segSensorHits,
+    hits: { particle_idx: hitsParticle, sensor_idx: hitsSIdx, PE: hitsPE, T: hitsT,
+            nHits: hitsSIdx ? hitsSIdx.length : 0 },
+    edep: { track_idx: edepTrackIdx,
+           start_x: edepStartX, start_y: edepStartY, start_z: edepStartZ,
+           end_x: edepEndX, end_y: edepEndY, end_z: edepEndZ,
+           time: edepTime, edep: edepEdep, beta_start: edepBeta, n_cherenkov: edepNCh,
+           contained: edepContained,
+           sensor_hits: edepSensorHits,
            n: nSegments },
     labl: { n_particles, n_tracks,
             per_interaction: perInteraction,
@@ -310,18 +310,18 @@ self.onmessage = async function (e) {
       // Prefetch all four files in parallel — 5 MB total for the sample.
       await Promise.all([
         mountUrl(base + '/' + manifest.sensor, 'sensor.h5'),
-        mountUrl(base + '/' + manifest.inst,   'inst.h5'),
-        mountUrl(base + '/' + manifest.seg,    'seg.h5'),
+        mountUrl(base + '/' + manifest.hits,   'hits.h5'),
+        mountUrl(base + '/' + manifest.edep,    'edep.h5'),
         mountUrl(base + '/' + manifest.labl,   'labl.h5'),
       ]);
       console.log('[h5_worker] files fetched, opening HDF5');
       sensorF = new h5wasm.File('/sensor.h5', 'r');
-      instF = new h5wasm.File('/inst.h5', 'r');
-      segF = new h5wasm.File('/seg.h5', 'r');
+      hitsF = new h5wasm.File('/hits.h5', 'r');
+      edepF = new h5wasm.File('/edep.h5', 'r');
       lablF = new h5wasm.File('/labl.h5', 'r');
 
       const sCfg = sensorF.get('config');
-      const gCfg = segF.get('config');
+      const gCfg = edepF.get('config');
       nEvents = readAttr(sCfg, 'n_events') || 0;
       nSensors = readAttr(sCfg, 'n_sensors') || 0;
       detectorType = readString(sCfg, 'detector_type') || '';
@@ -329,7 +329,7 @@ self.onmessage = async function (e) {
       sensorPositions = posDs ? new Float32Array(posDs.value) : null;
       if (!nSensors && sensorPositions) nSensors = Math.floor(sensorPositions.length / 3);
 
-      // Geometry shape params (seg/config; sensor/config usually lacks them).
+      // Geometry shape params (edep/config; sensor/config usually lacks them).
       if (gCfg) {
         const shapeAttr = readString(gCfg, 'detector_shape') ||
                           readString(gCfg, 'detector_type') || detectorType;
@@ -362,8 +362,8 @@ self.onmessage = async function (e) {
       }
 
       // source_event_idx arrays per file (for the integrity check on event load).
-      for (const [key, f] of [['sensor', sensorF], ['inst', instF],
-                              ['seg', segF], ['labl', lablF]]) {
+      for (const [key, f] of [['sensor', sensorF], ['hits', hitsF],
+                              ['edep', edepF], ['labl', lablF]]) {
         const ds = f.get('config/source_event_idx');
         if (ds) sourceEventIdxPerFile[key] = new Uint32Array(ds.value);
       }
@@ -377,7 +377,7 @@ self.onmessage = async function (e) {
         format_version: readAttr(sCfg, 'format_version'),
       };
       // Material name (used by the viewer to derive the Cherenkov β
-      // threshold for the BETA field). Stored on seg/config in v5; fall
+      // threshold for the BETA field). Stored on edep/config in v5; fall
       // back to sensor/config; default 'water' if absent.
       const material = readString(gCfg, 'material')
                     || readString(sCfg, 'material')

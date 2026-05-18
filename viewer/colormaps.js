@@ -3,7 +3,7 @@
 // LUCiD convention (from good_notebooks/cylinder_2D_displays.ipynb):
 //   - Charge (PE)  → plasma
 //   - Time         → viridis_r
-// Continuous seg colormaps: plasma (edep), viridis_r (time), viridis (β, n_cherenkov).
+// Continuous edep colormaps: plasma (edep), viridis_r (time), viridis (β, n_cherenkov).
 // Plus a fixed palette for particle categories and a hashed-hue helper for
 // generic categorical IDs (particle_idx, track_idx, pdg).
 

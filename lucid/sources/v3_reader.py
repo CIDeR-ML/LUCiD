@@ -1,4 +1,4 @@
-"""V3 four-file HDF5 readers (sensor / inst / seg / labl).
+"""V3 four-file HDF5 readers (sensor / hits / edep / labl).
 
 Standalone module — no internal LUCiD dependencies beyond ``h5py``.
 """
@@ -10,8 +10,8 @@ import numpy as np
 __all__ = [
     "list_events_v3",
     "read_sensor_event_v3",
-    "read_inst_event_v3",
-    "read_seg_event_v3",
+    "read_hits_event_v3",
+    "read_edep_event_v3",
     "read_labl_event_v3",
 ]
 
@@ -52,13 +52,13 @@ def read_sensor_event_v3(filename, event_idx):
     return _read_v3_event(filename, event_idx)
 
 
-def read_inst_event_v3(filename, event_idx):
-    """Read event ``event_idx`` from an inst v3 file."""
+def read_hits_event_v3(filename, event_idx):
+    """Read event ``event_idx`` from a hits v3 file."""
     return _read_v3_event(filename, event_idx)
 
 
-def read_seg_event_v3(filename, event_idx):
-    """Read event ``event_idx`` from a seg v3 file."""
+def read_edep_event_v3(filename, event_idx):
+    """Read event ``event_idx`` from an edep v3 file."""
     return _read_v3_event(filename, event_idx)
 
 

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Synthesize a minimal v5 LUCiD dataset for viewer smoke tests.
 
-Produces four HDF5 files matching `docs/LUCID_DATASET.md` — sensor, inst,
-seg, labl — with a small number of events and synthetic but reasonable
+Produces four HDF5 files matching `docs/LUCID_DATASET.md` — sensor, hits,
+edep, labl — with a small number of events and synthetic but reasonable
 content. Intended to exercise the browser viewer without running the
 full production pipeline. Emits the v5 schema: per_interaction/ with
 one row per source interaction (not per primary), per_interaction fields
@@ -111,7 +111,7 @@ def gen_event(rng, n_sensors, sensor_positions, n_particles=6):
     """Generate one synthetic event. Returns a dict of arrays per file."""
     # Sensor hits: each particle lights up a random radial cluster.
     sensor_hits = {}   # sensor_idx -> (PE, T)
-    inst_rows = []     # list of (particle, sensor, PE, T)
+    hits_rows = []     # list of (particle, sensor, PE, T)
     for p in range(n_particles):
         # Random "direction" — pick 3-5 clusters of 10-60 sensors.
         n_clusters = rng.integers(3, 6)
@@ -126,7 +126,7 @@ def gen_event(rng, n_sensors, sensor_positions, n_particles=6):
             for s in idx_sorted:
                 pe = rng.lognormal(0.0, 0.8)  # typical small PE
                 t = base_t + rng.normal(0, 1.5)
-                inst_rows.append((p, int(s), float(pe), float(t)))
+                hits_rows.append((p, int(s), float(pe), float(t)))
                 if s in sensor_hits:
                     prev_pe, prev_t = sensor_hits[s]
                     sensor_hits[s] = (prev_pe + pe, min(prev_t, t))
@@ -137,12 +137,12 @@ def gen_event(rng, n_sensors, sensor_positions, n_particles=6):
     sensor_PE = np.array([sensor_hits[s][0] for s in sensor_idx], dtype=np.float32)
     sensor_T = np.array([sensor_hits[s][1] for s in sensor_idx], dtype=np.float32)
 
-    inst_arr = np.array(inst_rows, dtype=[
+    hits_arr = np.array(hits_rows, dtype=[
         ('p', 'i4'), ('s', 'u2'), ('pe', 'f4'), ('t', 'f4')])
-    inst_arr.sort(order=['p', 's'])
+    hits_arr.sort(order=['p', 's'])
 
     # Segments: one straight line per particle, 30-80 segments each.
-    seg_rows = []
+    edep_rows = []
     track_rows = []
     track_idx = 0
     for p in range(n_particles):
@@ -163,15 +163,15 @@ def gen_event(rng, n_sensors, sensor_positions, n_particles=6):
                 edep = max(0.01, rng.normal(2.0, 0.5))
                 beta = min(0.99, rng.normal(0.85, 0.1))
                 ncher = int(max(0, rng.normal(5, 2)))
-                seg_rows.append((track_idx, s[0], s[1], s[2], e[0], e[1], e[2],
+                edep_rows.append((track_idx, s[0], s[1], s[2], e[0], e[1], e[2],
                                  direction[0], direction[1], direction[2],
                                  time, edep, beta, ncher))
             pdg = int(rng.choice([13, -13, 11, -11, 22, 2212, 211]))
             track_rows.append((track_idx, 0, pdg, rng.uniform(100, 1500),
-                               sum(1 for r in seg_rows[-n_seg:] for _ in [r]) * 5, p))
+                               sum(1 for r in edep_rows[-n_seg:] for _ in [r]) * 5, p))
             track_idx += 1
 
-    seg_rows = np.array(seg_rows, dtype=[
+    edep_rows = np.array(edep_rows, dtype=[
         ('track_idx', 'i4'),
         ('start_x', 'f4'), ('start_y', 'f4'), ('start_z', 'f4'),
         ('end_x', 'f4'), ('end_y', 'f4'), ('end_z', 'f4'),
@@ -180,7 +180,7 @@ def gen_event(rng, n_sensors, sensor_positions, n_particles=6):
     # Synthetic per-segment contained flag (random; this stub doesn't
     # know the detector geometry). Real datasets compute it against
     # detector_bounds in `_compute_contained`.
-    seg_contained = rng.integers(0, 2, size=len(seg_rows)).astype(bool)
+    edep_contained = rng.integers(0, 2, size=len(edep_rows)).astype(bool)
     track_rows = np.array(track_rows, dtype=[
         ('track_id', 'i4'), ('parent_id', 'i4'), ('pdg', 'i2'),
         ('init_e', 'f4'), ('n_cher', 'i4'), ('particle_idx', 'i4')])
@@ -271,11 +271,11 @@ def gen_event(rng, n_sensors, sensor_positions, n_particles=6):
 
     return {
         'sensor': {'sensor_idx': sensor_idx, 'PE': sensor_PE, 'T': sensor_T},
-        'inst':   {'particle_idx': inst_arr['p'].astype(np.int32),
-                   'sensor_idx': inst_arr['s'],
-                   'PE': inst_arr['pe'], 'T': inst_arr['t']},
-        'seg':    {**{k: seg_rows[k] for k in seg_rows.dtype.names},
-                   'contained': seg_contained},
+        'hits':   {'particle_idx': hits_arr['p'].astype(np.int32),
+                   'sensor_idx': hits_arr['s'],
+                   'PE': hits_arr['pe'], 'T': hits_arr['t']},
+        'edep':    {**{k: edep_rows[k] for k in edep_rows.dtype.names},
+                   'contained': edep_contained},
         'labl':   {
             # per_event/t0 = min(per_interaction/t0) — the earliest
             # interaction time in the event, used by downstream tools
@@ -317,7 +317,7 @@ def gen_event(rng, n_sensors, sensor_positions, n_particles=6):
             'n_particles': n_particles,
             'n_tracks':    len(track_rows),
         },
-        'n_segments': len(seg_rows),
+        'n_segments': len(edep_rows),
     }
 
 
@@ -348,13 +348,13 @@ def write_dataset(out_dir, geom, n_events, n_sensors, seed):
 
     # Build subdirectories.
     out = Path(out_dir)
-    for k in ('sensor', 'inst', 'seg', 'labl'):
+    for k in ('sensor', 'hits', 'edep', 'labl'):
         (out / k).mkdir(parents=True, exist_ok=True)
 
     paths = {
         'sensor': out / 'sensor' / 'wc_sensor_0000.h5',
-        'inst':   out / 'inst'   / 'wc_inst_0000.h5',
-        'seg':    out / 'seg'    / 'wc_seg_0000.h5',
+        'hits':   out / 'hits'   / 'wc_hits_0000.h5',
+        'edep':    out / 'edep'    / 'wc_edep_0000.h5',
         'labl':   out / 'labl'   / 'wc_labl_0000.h5',
     }
     for p in paths.values():
@@ -377,8 +377,8 @@ def write_dataset(out_dir, geom, n_events, n_sensors, seed):
     sc.create_dataset('source_event_idx', data=source_event_idx)
     sc.create_dataset('sensor_positions', data=sensor_positions)
 
-    # inst config
-    ic = fs['inst'].create_group('config')
+    # hits config
+    ic = fs['hits'].create_group('config')
     write_common_config(ic, n_events)
     ic.attrs['n_sensors'] = n_sensors
     ic.attrs['detector_type'] = geom
@@ -386,8 +386,8 @@ def write_dataset(out_dir, geom, n_events, n_sensors, seed):
     ic.create_dataset('source_event_idx', data=source_event_idx)
     ic.create_dataset('sensor_positions', data=sensor_positions)
 
-    # seg config
-    gc = fs['seg'].create_group('config')
+    # edep config
+    gc = fs['edep'].create_group('config')
     write_common_config(gc, n_events)
     gc.attrs['detector_type'] = geom
     gc.attrs['detector_shape'] = geom
@@ -415,21 +415,21 @@ def write_dataset(out_dir, geom, n_events, n_sensors, seed):
         for name, arr in ev['sensor'].items():
             g.create_dataset(name, data=arr)
 
-        # inst
-        g = fs['inst'].create_group(k)
+        # hits
+        g = fs['hits'].create_group(k)
         g.attrs['source_event_idx'] = np.uint32(e)
         g.attrs['n_particles'] = ev['labl']['n_particles']
-        g.attrs['n_particle_hits'] = len(ev['inst']['particle_idx'])
-        for name, arr in ev['inst'].items():
+        g.attrs['n_particle_hits'] = len(ev['hits']['particle_idx'])
+        for name, arr in ev['hits'].items():
             g.create_dataset(name, data=arr)
 
-        # seg
-        g = fs['seg'].create_group(k)
+        # edep
+        g = fs['edep'].create_group(k)
         g.attrs['source_event_idx'] = np.uint32(e)
         g.attrs['n_tracks'] = ev['labl']['n_tracks']
         g.attrs['n_segments'] = ev['n_segments']
         name_map = {'beta': 'beta_start', 'ncher': 'n_cherenkov'}
-        for name, arr in ev['seg'].items():
+        for name, arr in ev['edep'].items():
             g.create_dataset(name_map.get(name, name), data=arr)
 
         # labl

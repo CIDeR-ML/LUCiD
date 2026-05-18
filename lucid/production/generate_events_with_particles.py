@@ -5,8 +5,8 @@ For each batch of ``--batch-size`` events this script writes four parallel
 HDF5 files under the output dataset root:
 
     ``{output}/sensor/wc_sensor_NNNN.h5``
-    ``{output}/inst/wc_inst_NNNN.h5``
-    ``{output}/seg/wc_seg_NNNN.h5``
+    ``{output}/hits/wc_hits_NNNN.h5``
+    ``{output}/edep/wc_edep_NNNN.h5``
     ``{output}/labl/wc_labl_NNNN.h5``
 
 See ``docs/LUCID_DATASET.md`` for the full v3 schema.
@@ -38,13 +38,13 @@ from lucid.utils import base_dir_path
 def main():
     parser = argparse.ArgumentParser(
         description='Generate v3 four-file datasets from a PhotonSim particle-based ROOT file.',
-        epilog='Output goes to {output}/{sensor,inst,seg,labl}/wc_*_NNNN.h5.',
+        epilog='Output goes to {output}/{sensor,hits,edep,labl}/wc_*_NNNN.h5.',
     )
     parser.add_argument('--root-file', type=str, required=True,
                         help='Path to PhotonSim ROOT file with particle-based data.')
     parser.add_argument('--output', type=str, required=True,
                         help='Dataset root directory. Four subdirectories '
-                             '(sensor/, inst/, seg/, labl/) are created under it.')
+                             '(sensor/, hits/, edep/, labl/) are created under it.')
     parser.add_argument('--dataset-name', type=str, required=True,
                         help='Logical dataset identifier written to every config/ group.')
     parser.add_argument('--run-id', type=str, default=None,
@@ -152,7 +152,7 @@ def main():
     )
 
     print(f"\nWrote {len(saved_files)} files under {args.output}/"
-          f"{{sensor,inst,seg,labl}}/")
+          f"{{sensor,hits,edep,labl}}/")
 
 
 if __name__ == '__main__':

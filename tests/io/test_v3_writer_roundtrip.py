@@ -12,12 +12,12 @@ import numpy as np
 import pytest
 
 from lucid.sources.event_io import (
-    write_sensor_config_v3, write_inst_config_v3,
-    write_seg_config_v3, write_labl_config_v3,
-    save_sensor_event_v3, save_inst_event_v3,
-    save_seg_event_v3, save_labl_event_v3,
-    read_sensor_event_v3, read_inst_event_v3,
-    read_seg_event_v3, read_labl_event_v3,
+    write_sensor_config_v3, write_hits_config_v3,
+    write_edep_config_v3, write_labl_config_v3,
+    save_sensor_event_v3, save_hits_event_v3,
+    save_edep_event_v3, save_labl_event_v3,
+    read_sensor_event_v3, read_hits_event_v3,
+    read_edep_event_v3, read_labl_event_v3,
     list_events_v3,
 )
 
@@ -29,22 +29,22 @@ def v3_batch(tmp_path):
     cfg, ev, sensor_positions = build_synthetic_event()
     paths = {
         'sensor': tmp_path / 'wc_sensor_0000.h5',
-        'inst':   tmp_path / 'wc_inst_0000.h5',
-        'seg':    tmp_path / 'wc_seg_0000.h5',
+        'hits':   tmp_path / 'wc_hits_0000.h5',
+        'edep':    tmp_path / 'wc_edep_0000.h5',
         'labl':   tmp_path / 'wc_labl_0000.h5',
     }
     src_idx = np.array([ev['source_event_idx']], dtype=np.uint32)
     with h5py.File(paths['sensor'], 'w') as fs, \
-         h5py.File(paths['inst'],   'w') as fi, \
-         h5py.File(paths['seg'],    'w') as fg, \
+         h5py.File(paths['hits'],   'w') as fi, \
+         h5py.File(paths['edep'],    'w') as fg, \
          h5py.File(paths['labl'],   'w') as fl:
         write_sensor_config_v3(fs, cfg, src_idx, sensor_positions)
-        write_inst_config_v3(fi, cfg, src_idx, sensor_positions)
-        write_seg_config_v3(fg, cfg, src_idx)
+        write_hits_config_v3(fi, cfg, src_idx, sensor_positions)
+        write_edep_config_v3(fg, cfg, src_idx)
         write_labl_config_v3(fl, cfg, src_idx)
         save_sensor_event_v3(fs, ev, seq_idx=0)
-        save_inst_event_v3(fi, ev, seq_idx=0)
-        save_seg_event_v3(fg, ev, seq_idx=0)
+        save_hits_event_v3(fi, ev, seq_idx=0)
+        save_edep_event_v3(fg, ev, seq_idx=0)
         save_labl_event_v3(fl, ev, seq_idx=0)
     return paths, cfg, ev, sensor_positions
 
@@ -78,9 +78,9 @@ def test_sensor_event_roundtrip(v3_batch):
         assert f['config/sensor_positions'].shape == sensor_positions.shape
 
 
-def test_inst_event_roundtrip(v3_batch):
+def test_hits_event_roundtrip(v3_batch):
     paths, cfg, ev, _ = v3_batch
-    inst = read_inst_event_v3(str(paths['inst']), 0)
+    inst = read_hits_event_v3(str(paths['hits']), 0)
     assert inst['n_particles'] == 2
     # Particle 0 has 3 hits, particle 1 has 2
     assert inst['n_particle_hits'] == 5
@@ -92,9 +92,9 @@ def test_inst_event_roundtrip(v3_batch):
     assert np.allclose(inst['T'], expected_t)
 
 
-def test_seg_event_roundtrip(v3_batch):
+def test_edep_event_roundtrip(v3_batch):
     paths, cfg, ev, _ = v3_batch
-    seg = read_seg_event_v3(str(paths['seg']), 0)
+    seg = read_edep_event_v3(str(paths['edep']), 0)
     assert seg['n_tracks'] == 3
     assert seg['n_segments'] == 4
     # First two segments belong to track 0 (local idx), next two to track 2
@@ -112,18 +112,18 @@ def test_seg_event_roundtrip(v3_batch):
     assert len(seg['group_id']) == 4
 
 
-def test_seg_event_group_id_roundtrip(tmp_path):
+def test_edep_event_group_id_roundtrip(tmp_path):
     """Explicit group_id values written by the caller round-trip unchanged."""
-    from lucid.sources.event_io import write_seg_config_v3
+    from lucid.sources.event_io import write_edep_config_v3
     cfg, ev, _ = build_synthetic_event()
     # Two coarser groups: segments 0+1 → group 0, segments 2+3 → group 1.
     ev['segments']['group_id'] = np.array([0, 0, 1, 1], dtype=np.int32)
-    seg_path = tmp_path / 'wc_seg_0000.h5'
+    seg_path = tmp_path / 'wc_edep_0000.h5'
     src_idx = np.array([ev['source_event_idx']], dtype=np.uint32)
     with h5py.File(seg_path, 'w') as fg:
-        write_seg_config_v3(fg, cfg, src_idx)
-        save_seg_event_v3(fg, ev, seq_idx=0)
-    seg = read_seg_event_v3(str(seg_path), 0)
+        write_edep_config_v3(fg, cfg, src_idx)
+        save_edep_event_v3(fg, ev, seq_idx=0)
+    seg = read_edep_event_v3(str(seg_path), 0)
     np.testing.assert_array_equal(
         seg['group_id'], np.array([0, 0, 1, 1], dtype=np.int32))
 

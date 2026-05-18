@@ -56,7 +56,7 @@ def _parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     parser.add_argument(
         "--output-dir", type=str, required=True,
         help="Absolute path to the dataset directory for this config. "
-             "PhotonSim ROOT and the v3 {sensor,inst,seg,labl}/ subdirs are written here.",
+             "PhotonSim ROOT and the v3 {sensor,hits,edep,labl}/ subdirs are written here.",
     )
     parser.add_argument(
         "--job-id", type=int, required=True,
@@ -222,8 +222,8 @@ def _run_lucid(
     lucid_opts = config.get("lucid_options", {})
     apply_smearing = bool(lucid_opts.get("apply_smearing", True))
     apply_translation = bool(lucid_opts.get("apply_translation", True))
-    # seg/event_NNN/sensor_hits/ is mandatory for data-mode datasets:
-    # it's the per-(segment, sensor) ground truth that inst.h5 is now
+    # edep/event_NNN/sensor_hits/ is mandatory for data-mode datasets:
+    # it's the per-(segment, sensor) ground truth that the hits file is now
     # aggregated from. Photon_SegmentIndex is unconditional in PhotonSim
     # post-Stage-5a, so no macro flag is needed. The simulator runs in
     # 'per_segment' mode, which produces an exact per-(segment, sensor)
@@ -267,7 +267,7 @@ def _run_lucid(
         primary_source=config.get("primary_source", "particles"),
         pad_size_buckets=pad_size_buckets,
     )
-    print(f"LUCiD wrote {len(saved_files)} files under {output_dir}/{{sensor,inst,seg,labl}}/")
+    print(f"LUCiD wrote {len(saved_files)} files under {output_dir}/{{sensor,hits,edep,labl}}/")
 
 
 def main(argv: Optional[list[str]] = None) -> int:
@@ -305,7 +305,7 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     output_dir = Path(args.output_dir).resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
-    for sub in ("sensor", "inst", "seg", "labl"):
+    for sub in ("sensor", "hits", "edep", "labl"):
         (output_dir / sub).mkdir(exist_ok=True)
 
     job_id_padded = f"{args.job_id:06d}"
@@ -490,7 +490,7 @@ def _main_pileup(args: argparse.Namespace, config: dict) -> int:
 
     output_dir = Path(args.output_dir).resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
-    for sub in ("sensor", "inst", "seg", "labl"):
+    for sub in ("sensor", "hits", "edep", "labl"):
         (output_dir / sub).mkdir(exist_ok=True)
 
     vertices = config["vertices"]

@@ -1,7 +1,7 @@
 """Verify that a v3 four-file batch was written correctly.
 
 A successful `lucid-run-job` leaves, for one batch `file_index = F`,
-four files under `<output_dir>/{sensor,inst,seg,labl}/wc_*_<F:04d>.h5`.
+four files under `<output_dir>/{sensor,hits,edep,labl}/wc_*_<F:04d>.h5`.
 This module asserts:
 
     1. All four files exist and are non-zero.
@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Optional
 
 
-V3_SUBDIRS = ("sensor", "inst", "seg", "labl")
+V3_SUBDIRS = ("sensor", "hits", "edep", "labl")
 
 
 def v3_batch_paths(output_dir: os.PathLike, file_index: int) -> dict[str, Path]:

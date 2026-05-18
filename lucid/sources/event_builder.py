@@ -26,7 +26,7 @@ from lucid.sources.particle_categorization import (
 __all__ = [
     "derive_particle_idx_per_track",
     "derive_track_ancestor_and_interaction",
-    "aggregate_inst_from_segments",
+    "aggregate_hits_from_segments",
 ]
 
 
@@ -399,7 +399,7 @@ def _derive_views_from_segments(raw, photon_records=None):
         track_info=track_info_dict,
     )
 
-    # Filter Segment_* arrays to meaningful only. Keeps seg.h5 size
+    # Filter Segment_* arrays to meaningful only. Keeps edep file size
     # the same as legacy and lines up with meaningful_tracks' segment
     # offsets (which index into the filtered array).
     keep_mask, photon_segment_index = filter_segments_to_meaningful(
@@ -656,9 +656,9 @@ def _aggregate_from_photon_records(
 
       * ``(particle_idx, sensor_idx)`` -> dense ``(n_particles, n_sensors)``
         ``PE_per_particle``, ``T_per_particle``, and ``T_reco_per_particle``
-        for inst.h5;
+        for the hits file;
       * ``(seg_idx_filtered, sensor_idx)`` -> sparse triplets
-        ``{segment_idx, sensor_idx, PE, T, T_reco}`` for seg.h5
+        ``{segment_idx, sensor_idx, PE, T, T_reco}`` for the edep file
         (``segment_sensor_hits``).
 
     PE per group is the sum of QE-passing photon weights; T per group is
@@ -694,7 +694,7 @@ def _aggregate_from_photon_records(
 
     qe_pass = photon_qe_weight > 0
 
-    # ---- inst.h5: groupby (particle_idx, sensor_idx) ----
+    # ---- hits: groupby (particle_idx, sensor_idx) ----
     p_mask = qe_pass & (photon_particle_idx >= 0)
     if n_particles > 0 and p_mask.any():
         pi = photon_particle_idx[p_mask].astype(np.int64)
@@ -727,7 +727,7 @@ def _aggregate_from_photon_records(
             if finite_r.any():
                 T_reco_pp[gp[finite_r], gs[finite_r]] = T_reco_groups[finite_r]
 
-    # ---- seg.h5 sparse triplets: groupby (seg_idx_filtered, sensor_idx) ----
+    # ---- edep sparse triplets: groupby (seg_idx_filtered, sensor_idx) ----
     s_mask = qe_pass & (photon_seg_idx_filtered >= 0)
     if s_mask.any():
         seg = photon_seg_idx_filtered[s_mask].astype(np.int64)
@@ -763,14 +763,14 @@ def _aggregate_from_photon_records(
             'segment_sensor_hits': seg_hits}
 
 
-def aggregate_inst_from_segments(pe_per_seg, t_per_seg,
+def aggregate_hits_from_segments(pe_per_seg, t_per_seg,
                                   track_idx_per_segment,
                                   particle_idx_per_track,
                                   n_particles, n_sensors):
     """Aggregate per-(segment, sensor) PE/T into per-particle PE/T.
 
-    inst.h5's per-particle decomposition is a downstream view of
-    ``seg/event_NNN/sensor_hits/`` plus the segment->track->particle map.
+    The hits file's per-particle decomposition is a downstream view of
+    ``edep/event_NNN/sensor_hits/`` plus the segment->track->particle map.
     PE per particle is the sum over the particle's segments; T per
     particle is the min over the particle's segments' first-arrival
     times.
@@ -794,7 +794,7 @@ def aggregate_inst_from_segments(pe_per_seg, t_per_seg,
         Local track index per segment (0..n_tracks-1).
     particle_idx_per_track : (n_tracks,) int32
         Particle index per track; -1 for tracks without a categorized
-        ancestor (their segments are dropped from inst.h5).
+        ancestor (their segments are dropped from the hits file).
     n_particles, n_sensors : int
 
     Returns

@@ -24,8 +24,8 @@ The simulation kernel now computes **two** `segment_min` operations per call:
 
 | Output | What it is | Stored in |
 |--------|-----------|-----------|
-| `time_true` | `min(t_i)` across detected photons (no TTS) | `inst/T`, `seg/sensor_hits/T` |
-| `time_reco` | `min(t_i + eps_i)` with per-photon TTS | `sensor/T`, `inst/T_reco`, `seg/sensor_hits/T_reco` |
+| `time_true` | `min(t_i)` across detected photons (no TTS) | `hits/T`, `edep/sensor_hits/T` |
+| `time_reco` | `min(t_i + eps_i)` with per-photon TTS | `sensor/T`, `hits/T_reco`, `edep/sensor_hits/T_reco` |
 
 When `apply_smearing=False`, both are identical.
 
@@ -46,13 +46,13 @@ Post-hoc `smear_times(T_true)` calls in event_io.py have been **removed**. T_rec
 - TTS is a PMT property (independent per photoelectron), not a per-sensor property.
 - The discriminator fires on the earliest detected PE: `min(t_i + eps_i)`.
 - Charge smearing (`smear_charges_SK_like`) is still applied post-aggregation at the event level (PE is a count, not an order statistic).
-- `inst/T` and `seg/sensor_hits/T` store **true** (unsmeared) times for truth-level analysis. The TTS-smeared view is in `T_reco`.
+- `hits/T` and `edep/sensor_hits/T` store **true** (unsmeared) times for truth-level analysis. The TTS-smeared view is in `T_reco`.
 - A different particle can "win" first-arrival in reco vs truth (TTS can reorder arrivals). This is physically correct.
 
 ## What Else Changed in the Merge
 
 **From production-interm:**
-- V3 four-file HDF5 output schema (`sensor/`, `inst/`, `seg/`, `labl/`)
+- V3 four-file HDF5 output schema (`sensor/`, `hits/`, `edep/`, `labl/`)
 - Bucketed simulation with PAD_SIZE chunking (handles large showers)
 - Pile-up event merging pipeline
 - GENIE production chain (`run_job.py`, `run_genie.py`)

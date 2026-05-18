@@ -30,7 +30,7 @@ from lucid.sources.root_reader import (         # noqa: F401
 
 # --- event_builder ---
 from lucid.sources.event_builder import (       # noqa: F401
-    aggregate_inst_from_segments,
+    aggregate_hits_from_segments,
     derive_particle_idx_per_track,
     derive_track_ancestor_and_interaction,
     _aggregate_from_photon_records,
@@ -56,12 +56,12 @@ from lucid.sources.v3_writer import (           # noqa: F401
     build_interaction_metadata,
     sample_translation_vector,
     write_sensor_config_v3,
-    write_inst_config_v3,
-    write_seg_config_v3,
+    write_hits_config_v3,
+    write_edep_config_v3,
     write_labl_config_v3,
     save_sensor_event_v3,
-    save_inst_event_v3,
-    save_seg_event_v3,
+    save_hits_event_v3,
+    save_edep_event_v3,
     save_labl_event_v3,
 )
 
@@ -69,8 +69,8 @@ from lucid.sources.v3_writer import (           # noqa: F401
 from lucid.sources.v3_reader import (           # noqa: F401
     list_events_v3,
     read_sensor_event_v3,
-    read_inst_event_v3,
-    read_seg_event_v3,
+    read_hits_event_v3,
+    read_edep_event_v3,
     read_labl_event_v3,
 )
 

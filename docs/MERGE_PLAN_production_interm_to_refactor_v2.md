@@ -416,8 +416,8 @@ No backwards compatibility — add new datasets directly.
 | Writer | Current schema | After merge |
 |--------|---------------|-------------|
 | `save_sensor_event_v3` (3872) | `PE`, `T` (from PE_reco/T_reco) | **No change** — already writes reco values |
-| `save_inst_event_v3` (3903) | `PE`, `T` (from T_per_particle) | **Add `T_reco`** dataset from `T_reco_per_particle` |
-| `save_seg_event_v3` (3946) | `sensor_hits/{PE, T}` | **Add `sensor_hits/T_reco`** from `seg_hits['T_reco']` |
+| `save_hits_event_v3` (3903) | `PE`, `T` (from T_per_particle) | **Add `T_reco`** dataset from `T_reco_per_particle` |
+| `save_edep_event_v3` (3946) | `sensor_hits/{PE, T}` | **Add `sensor_hits/T_reco`** from `seg_hits['T_reco']` |
 
 ### 5.7 t0 shift block
 

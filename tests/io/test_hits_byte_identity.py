@@ -1,10 +1,10 @@
-"""Stage 3 byte-identity gate: inst.h5 is a downstream view of
-seg/event_NNN/sensor_hits/ plus the segment→track→particle map.
+"""Stage 3 byte-identity gate: hits file is a downstream view of
+edep/event_NNN/sensor_hits/ plus the segment→track→particle map.
 
 Two checks:
 
 1. ``test_aggregator_matches_oracle``: unit-tests
-   ``aggregate_inst_from_segments`` against a hand-rolled NumPy oracle
+   ``aggregate_hits_from_segments`` against a hand-rolled NumPy oracle
    on a synthetic mini-event (3 segments → 2 particles). Verifies the
    composition rules exactly:
 
@@ -12,21 +12,21 @@ Two checks:
        T  per particle = min over particle's segments of t_per_seg
                          (preserving the "0 = no hit" sentinel)
 
-2. ``test_inst_h5_aggregates_from_seg_sensor_hits`` (skip-if-no-data):
+2. ``test_hits_aggregates_from_edep_sensor_hits`` (skip-if-no-data):
    on an already-saved data-mode dataset (env var
-   ``LUCID_INST_FROM_SEG_DATASET``), reads ``inst.h5``, ``seg.h5``,
+   ``LUCID_HITS_FROM_EDEP_DATASET``), reads the hits file, the edep file,
    ``labl.h5`` and asserts that aggregating
-   ``seg/event_NNN/sensor_hits/`` over the segment→track (from
-   ``seg/event_NNN/track_idx``) and track→particle (from
+   ``edep/event_NNN/sensor_hits/`` over the segment→track (from
+   ``edep/event_NNN/track_idx``) and track→particle (from
    ``labl/event_NNN/per_track/particle_idx``) maps reproduces every
-   column of ``inst.h5/event_NNN/`` (``PE``, ``T``, ``particle_idx``,
+   column of the hits file event group (``PE``, ``T``, ``particle_idx``,
    ``sensor_idx``) bit-identically. Drive end-to-end via:
 
-       LUCID_INST_FROM_SEG_DATASET=/path/to/dataset \\
-           pytest tests/test_inst_from_segments_byte_identity.py
+       LUCID_HITS_FROM_EDEP_DATASET=/path/to/dataset \\
+           pytest tests/io/test_hits_byte_identity.py
 
    where ``/path/to/dataset`` contains
-   ``{sensor,inst,seg,labl}/wc_*_NNNN.h5`` produced by ``lucid-run-job``.
+   ``{sensor,hits,edep,labl}/wc_*_NNNN.h5`` produced by ``lucid-run-job``.
 
 Times in saved files are post-t0-shift, so the "no hit" sentinel is
 ``T == 0`` (NOT ``T > 0``); hits can be negative for early arrivals.
@@ -41,7 +41,7 @@ import numpy as np
 import pytest
 
 from lucid.sources.event_io import (
-    aggregate_inst_from_segments,
+    aggregate_hits_from_segments,
     _aggregate_from_photon_records,
 )
 
@@ -67,7 +67,7 @@ def test_aggregator_matches_oracle():
     # Two particles: track 0 → particle 0; track 1 → particle 1.
     particle_idx_per_track = np.array([0, 1], dtype=np.int32)
 
-    PE_pp, T_pp = aggregate_inst_from_segments(
+    PE_pp, T_pp = aggregate_hits_from_segments(
         pe_per_seg, t_per_seg,
         track_idx_per_segment, particle_idx_per_track,
         n_particles=2, n_sensors=n_sensors)
@@ -97,7 +97,7 @@ def test_aggregator_drops_orphan_tracks():
     track_idx_per_segment = np.array([0, 1], dtype=np.int32)
     particle_idx_per_track = np.array([0, -1], dtype=np.int32)  # track 1 orphan
 
-    PE_pp, T_pp = aggregate_inst_from_segments(
+    PE_pp, T_pp = aggregate_hits_from_segments(
         pe_per_seg, t_per_seg,
         track_idx_per_segment, particle_idx_per_track,
         n_particles=1, n_sensors=2)
@@ -109,7 +109,7 @@ def test_aggregator_drops_orphan_tracks():
 def test_aggregator_handles_empty_inputs():
     """No segments → all-zero outputs; no particles → empty outputs."""
     n_sensors = 3
-    PE_pp, T_pp = aggregate_inst_from_segments(
+    PE_pp, T_pp = aggregate_hits_from_segments(
         np.zeros((0, n_sensors), dtype=np.float32),
         np.zeros((0, n_sensors), dtype=np.float32),
         np.zeros(0, dtype=np.int32),
@@ -119,7 +119,7 @@ def test_aggregator_handles_empty_inputs():
     np.testing.assert_array_equal(PE_pp, 0.0)
     np.testing.assert_array_equal(T_pp, 0.0)
 
-    PE_pp, T_pp = aggregate_inst_from_segments(
+    PE_pp, T_pp = aggregate_hits_from_segments(
         np.array([[1.0, 0.0, 0.0]], dtype=np.float32),
         np.array([[5.0, 0.0, 0.0]], dtype=np.float32),
         np.array([0], dtype=np.int32),
@@ -132,8 +132,8 @@ def test_aggregator_from_photon_records_matches_oracle():
     """Synthetic per-photon aggregation: 5 photons → 2 segments → 2 particles.
 
     Verifies that ``_aggregate_from_photon_records`` produces the same
-    inst.h5 PE/T tensors as the dense oracle and emits the expected
-    seg.h5 sparse triplets.
+    hits PE/T tensors as the dense oracle and emits the expected
+    edep sparse triplets.
     """
     n_sensors = 2
     n_particles = 2
@@ -203,20 +203,20 @@ def test_aggregator_from_photon_records_sums_within_group():
     np.testing.assert_array_equal(sh['T'],  np.array([8.0], dtype=np.float32))
 
 
-_DATASET_ENV = 'LUCID_INST_FROM_SEG_DATASET'
+_DATASET_ENV = 'LUCID_HITS_FROM_EDEP_DATASET'
 
 
 @pytest.mark.skipif(
     _DATASET_ENV not in os.environ,
     reason=f'set {_DATASET_ENV} to a lucid-run-job output dir to run',
 )
-def test_inst_h5_aggregates_from_seg_sensor_hits():
+def test_hits_aggregates_from_edep_sensor_hits():
     """On a saved dataset, every inst.h5 column equals the aggregator's
     output over seg/sensor_hits + segment→track→particle map."""
     root = os.environ[_DATASET_ENV]
     sensor_files = sorted(glob(os.path.join(root, 'sensor', 'wc_sensor_*.h5')))
-    inst_files = sorted(glob(os.path.join(root, 'inst', 'wc_inst_*.h5')))
-    seg_files = sorted(glob(os.path.join(root, 'seg', 'wc_seg_*.h5')))
+    inst_files = sorted(glob(os.path.join(root, 'hits', 'wc_hits_*.h5')))
+    seg_files = sorted(glob(os.path.join(root, 'edep', 'wc_edep_*.h5')))
     labl_files = sorted(glob(os.path.join(root, 'labl', 'wc_labl_*.h5')))
     assert sensor_files, f'no sensor files under {root}/sensor/'
     assert len(sensor_files) == len(inst_files) == len(seg_files) == len(labl_files)

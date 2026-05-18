@@ -4,13 +4,13 @@ Visualize sensor hits for a single event from a v3 four-file dataset.
 
 Shows sensor hits colored by charge value, with arrows showing track
 directions and optional track segment polylines. Reads the four v3 files
-(sensor/inst/seg/labl) for one batch and renders one event as HTML.
+(sensor/hits/edep/labl) for one batch and renders one event as HTML.
 
 Usage:
     python visualize_particle_events.py <dataset_root> <detector_config> \\
         --event 0 [--file-index 0]
 
-``<dataset_root>`` must contain ``sensor/``, ``inst/``, ``seg/``, ``labl/``
+``<dataset_root>`` must contain ``sensor/``, ``hits/``, ``edep/``, ``labl/``
 subdirectories with ``wc_*_{file_index:04d}.h5`` files.
 """
 import os
@@ -19,8 +19,8 @@ import plotly.graph_objects as go
 from pathlib import Path
 from lucid.sources.event_io import (
     read_sensor_event_v3,
-    read_inst_event_v3,
-    read_seg_event_v3,
+    read_hits_event_v3,
+    read_edep_event_v3,
     read_labl_event_v3,
 )
 from lucid.geometry import generate_detector
@@ -30,7 +30,7 @@ import argparse
 # Parse command line arguments
 parser = argparse.ArgumentParser(description='Visualize sensor hits from a v3 four-file dataset')
 parser.add_argument('dataset_root', type=str,
-                    help='Dataset root directory containing sensor/, inst/, seg/, labl/ subdirs.')
+                    help='Dataset root directory containing sensor/, hits/, edep/, labl/ subdirs.')
 parser.add_argument('detector_config', type=str, help='Detector configuration JSON file')
 parser.add_argument('--event', type=int, default=0,
                     help='Event sequence index within the batch file (default: 0).')
@@ -50,11 +50,11 @@ min_charge = args.min_charge
 output_dir = args.output_dir
 
 sensor_file = dataset_root / 'sensor' / f'wc_sensor_{file_index:04d}.h5'
-inst_file = dataset_root / 'inst' / f'wc_inst_{file_index:04d}.h5'
-seg_file = dataset_root / 'seg' / f'wc_seg_{file_index:04d}.h5'
+hits_file = dataset_root / 'hits' / f'wc_hits_{file_index:04d}.h5'
+edep_file = dataset_root / 'edep' / f'wc_edep_{file_index:04d}.h5'
 labl_file = dataset_root / 'labl' / f'wc_labl_{file_index:04d}.h5'
 
-for p in (sensor_file, inst_file, seg_file, labl_file):
+for p in (sensor_file, hits_file, edep_file, labl_file):
     if not p.exists():
         raise FileNotFoundError(f"v3 batch file missing: {p}")
 
@@ -153,8 +153,8 @@ def get_category_name(code):
 
 # Read the four v3 files
 sensor_data = read_sensor_event_v3(str(sensor_file), event_idx)
-inst_data = read_inst_event_v3(str(inst_file), event_idx)
-seg_data = read_seg_event_v3(str(seg_file), event_idx)
+hits_data = read_hits_event_v3(str(hits_file), event_idx)
+edep_data = read_edep_event_v3(str(edep_file), event_idx)
 labl_data = read_labl_event_v3(str(labl_file), event_idx)
 
 n_sensors = detector.n_sensors
@@ -163,14 +163,14 @@ n_tracks = int(labl_data['n_tracks'])
 t0 = float(labl_data['per_interaction']['t0'][0])
 overall_contained = bool(labl_data['per_event']['contained'])
 
-# Reconstruct dense PE_per_particle / T_per_particle from inst sparse rows
+# Reconstruct dense PE_per_particle / T_per_particle from hits sparse rows
 PE_per_particle = np.zeros((n_particles, n_sensors), dtype=np.float32)
 T_per_particle = np.full((n_particles, n_sensors), np.inf, dtype=np.float32)
-if int(inst_data.get('n_particle_hits', 0)) > 0:
-    pi_arr = np.asarray(inst_data['particle_idx'], dtype=np.int32)
-    si_arr = np.asarray(inst_data['sensor_idx'], dtype=np.int32)
-    pe_arr = np.asarray(inst_data['PE'], dtype=np.float32)
-    t_arr = np.asarray(inst_data['T'], dtype=np.float32)
+if int(hits_data.get('n_particle_hits', 0)) > 0:
+    pi_arr = np.asarray(hits_data['particle_idx'], dtype=np.int32)
+    si_arr = np.asarray(hits_data['sensor_idx'], dtype=np.int32)
+    pe_arr = np.asarray(hits_data['PE'], dtype=np.float32)
+    t_arr = np.asarray(hits_data['T'], dtype=np.float32)
     PE_per_particle[pi_arr, si_arr] = pe_arr
     T_per_particle[pi_arr, si_arr] = np.where(t_arr > 0, t_arr, np.inf)
 
@@ -209,7 +209,7 @@ lucid_data = {
     'overall_contained': overall_contained,
 }
 
-# Build track_id_to_info using labl/per_track + seg first-segment per track
+# Build track_id_to_info using labl/per_track + edep first-segment per track
 track_id_to_info = {}
 pt = labl_data['per_track']
 if n_tracks > 0:
@@ -217,19 +217,19 @@ if n_tracks > 0:
     track_pdgs_labl = np.asarray(pt['pdg'], dtype=np.int32)
     track_energies_labl = np.asarray(pt['initial_energy'], dtype=np.float32)
 
-    seg_track_idx = np.asarray(seg_data['track_idx'], dtype=np.int32)
+    seg_track_idx = np.asarray(edep_data['track_idx'], dtype=np.int32)
     first_seg_for_track = np.full(n_tracks, -1, dtype=np.int32)
     for seg_row in range(seg_track_idx.size):
         ti = int(seg_track_idx[seg_row])
         if 0 <= ti < n_tracks and first_seg_for_track[ti] == -1:
             first_seg_for_track[ti] = seg_row
 
-    seg_start_x_m = np.asarray(seg_data['start_x'], dtype=np.float32)
-    seg_start_y_m = np.asarray(seg_data['start_y'], dtype=np.float32)
-    seg_start_z_m = np.asarray(seg_data['start_z'], dtype=np.float32)
-    seg_dx = np.asarray(seg_data['dir_x'], dtype=np.float32)
-    seg_dy = np.asarray(seg_data['dir_y'], dtype=np.float32)
-    seg_dz = np.asarray(seg_data['dir_z'], dtype=np.float32)
+    seg_start_x_m = np.asarray(edep_data['start_x'], dtype=np.float32)
+    seg_start_y_m = np.asarray(edep_data['start_y'], dtype=np.float32)
+    seg_start_z_m = np.asarray(edep_data['start_z'], dtype=np.float32)
+    seg_dx = np.asarray(edep_data['dir_x'], dtype=np.float32)
+    seg_dy = np.asarray(edep_data['dir_y'], dtype=np.float32)
+    seg_dz = np.asarray(edep_data['dir_z'], dtype=np.float32)
 
     for k in range(n_tracks):
         fs = int(first_seg_for_track[k])
@@ -704,9 +704,9 @@ for particle_idx in range(n_particles):
 print()
 
 # ============================================================================
-# TRACK SEGMENT VISUALIZATION (from v3 seg + labl/per_track)
+# TRACK SEGMENT VISUALIZATION (from v3 edep + labl/per_track)
 # ============================================================================
-print("Loading track segment data from v3 seg file...")
+print("Loading track segment data from v3 edep file...")
 
 has_segment_data = n_tracks > 0
 segment_trace_indices = []
@@ -726,13 +726,13 @@ if has_segment_data:
     if n_tracks > 1:
         track_seg_offsets[1:] = np.cumsum(track_n_segs[:-1])
 
-    # Segment geometry in meters (seg file stores meters)
-    seg_start_x = np.asarray(seg_data['start_x'], dtype=np.float32)
-    seg_start_y = np.asarray(seg_data['start_y'], dtype=np.float32)
-    seg_start_z = np.asarray(seg_data['start_z'], dtype=np.float32)
-    seg_end_x = np.asarray(seg_data['end_x'], dtype=np.float32)
-    seg_end_y = np.asarray(seg_data['end_y'], dtype=np.float32)
-    seg_end_z = np.asarray(seg_data['end_z'], dtype=np.float32)
+    # Segment geometry in meters (edep file stores meters)
+    seg_start_x = np.asarray(edep_data['start_x'], dtype=np.float32)
+    seg_start_y = np.asarray(edep_data['start_y'], dtype=np.float32)
+    seg_start_z = np.asarray(edep_data['start_z'], dtype=np.float32)
+    seg_end_x = np.asarray(edep_data['end_x'], dtype=np.float32)
+    seg_end_y = np.asarray(edep_data['end_y'], dtype=np.float32)
+    seg_end_z = np.asarray(edep_data['end_z'], dtype=np.float32)
 
     print(f"  Found {n_tracks} meaningful tracks with {seg_start_x.size} segments")
 

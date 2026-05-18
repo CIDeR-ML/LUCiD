@@ -1,7 +1,7 @@
 // Geometry-specific 2D unwrapping for the LUCiD viewer.
 //
 // Client-side compute — takes sensor_positions (from sensor.h5/config) plus
-// detector shape metadata (from seg.h5/config) and produces a layout that
+// detector shape metadata (from edep.h5/config) and produces a layout that
 // the 2D panel renderer can use unchanged for any geometry.
 //
 // Convention: output (u, v) are in *layout* space, where u is horizontal

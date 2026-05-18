@@ -42,7 +42,7 @@ unchanged).
    `-1`.
 
 3. **t0 shift is not applied anywhere.** Current writers store
-   G4-absolute times. `save_seg_event_v3` and `save_inst_event_v3` must
+   G4-absolute times. `save_edep_event_v3` and `save_hits_event_v3` must
    subtract `t0` at write time. `save_sensor_event_v3` smears first,
    then subtracts t0.
 
@@ -90,11 +90,11 @@ Net deletion: ~1400 LoC.
 
 **v3 writers (4) + config writers (4) + readers (4) + 1 enumerator + 1 helper:**
 
-- `save_sensor_event_v3`, `save_inst_event_v3`, `save_seg_event_v3`,
+- `save_sensor_event_v3`, `save_hits_event_v3`, `save_edep_event_v3`,
   `save_labl_event_v3`
-- `write_sensor_config_v3`, `write_inst_config_v3`,
-  `write_seg_config_v3`, `write_labl_config_v3`
-- `read_sensor_event_v3`, `read_inst_event_v3`, `read_seg_event_v3`,
+- `write_sensor_config_v3`, `write_hits_config_v3`,
+  `write_edep_config_v3`, `write_labl_config_v3`
+- `read_sensor_event_v3`, `read_hits_event_v3`, `read_edep_event_v3`,
   `read_labl_event_v3`
 - `list_events_v3(filename)` — returns `config/source_event_idx`
 - `derive_particle_idx_per_track(event_dict)` — parent-chain walk:
@@ -139,13 +139,13 @@ pass-through only, LUCiD does not consume these fields):
   ```
 
 - Shape assertion: both arrays must match `len(Segment_Edep)`.
-- In `save_seg_event_v3`, cast to `LUCID_DATASET.md` dtypes
+- In `save_edep_event_v3`, cast to `LUCID_DATASET.md` dtypes
   (`float32` for `beta_start`, `int32` for `n_cherenkov`).
 
 **Refactor `generate_events_from_photonsim_particles`** to open four
 files per batch, write `config/` groups once, and loop events calling
 `save_*_event_v3`. Drop the merge step. Apply t0 shift before calling
-`save_seg_event_v3` and `save_inst_event_v3`.
+`save_edep_event_v3` and `save_hits_event_v3`.
 
 **Remove voxel import** at line 1037 (from `lucid.production.voxelize`).
 Voxels no longer on the save path. The module itself stays (see §4.1).

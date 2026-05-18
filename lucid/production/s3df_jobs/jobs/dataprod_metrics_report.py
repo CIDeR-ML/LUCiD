@@ -12,7 +12,7 @@ by `submit_all_configs.sh` and, for each config, harvests:
     * LUCiD batch save times (`Batch N save time: X.XXXs`).
     * Step markers (Step 0/2/3/4) — used only to flag missing stages.
 * From `sacct -j <slurm_ids>` if available — Elapsed and MaxRSS per job.
-* From the on-disk `{sensor,inst,seg,labl}/wc_*.h5` tree — total bytes,
+* From the on-disk `{sensor,hits,edep,labl}/wc_*.h5` tree — total bytes,
   per-stream bytes, per-event bytes.
 
 The job-wall and PhotonSim numbers are *per job*: we report mean / min /
@@ -253,9 +253,9 @@ def _rss_to_mb(s: str) -> float | None:
 def measure_output_sizes(config_dir: Path) -> dict:
     """Return per-stream + total bytes for a config dir.
 
-    Counts all `wc_*.h5` under `{sensor,inst,seg,labl}/` plus the README.
+    Counts all `wc_*.h5` under `{sensor,hits,edep,labl}/` plus the README.
     """
-    streams = ["sensor", "inst", "seg", "labl"]
+    streams = ["sensor", "hits", "edep", "labl"]
     per_stream: dict[str, dict] = {}
     grand = 0
     for s in streams:
@@ -478,7 +478,7 @@ def write_markdown(report: dict, out_md: Path) -> None:
     # Sizes table
     lines.append("## Output size")
     lines.append("")
-    lines.append("| config | total H5 (MiB) | sensor (MiB) | inst (MiB) | seg (MiB) | labl (MiB) | bytes / event |")
+    lines.append("| config | total H5 (MiB) | sensor (MiB) | hits (MiB) | edep (MiB) | labl (MiB) | bytes / event |")
     lines.append("|---|---:|---:|---:|---:|---:|---:|")
     for cfg, data in report["configs"].items():
         if "error" in data:
@@ -490,8 +490,8 @@ def write_markdown(report: dict, out_md: Path) -> None:
             f"| `{cfg}` | "
             f"{_fmt_n(s['h5_total_bytes'], 'MB-bytes')} | "
             f"{_fmt_n(per['sensor']['bytes'], 'MB-bytes')} | "
-            f"{_fmt_n(per['inst']['bytes'], 'MB-bytes')} | "
-            f"{_fmt_n(per['seg']['bytes'], 'MB-bytes')} | "
+            f"{_fmt_n(per['hits']['bytes'], 'MB-bytes')} | "
+            f"{_fmt_n(per['edep']['bytes'], 'MB-bytes')} | "
             f"{_fmt_n(per['labl']['bytes'], 'MB-bytes')} | "
             f"{_fmt_n(bpe, 'B') if bpe else '—'} |"
         )

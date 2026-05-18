@@ -18,7 +18,7 @@ on ``TrackInfo_Category`` and ``Particle_*`` except for
 implementation processes tracks in track-id order. The sub-id is
 metadata only, never read downstream of
 ``read_particle_data_from_photonsim``, so this divergence is invisible
-to inst.h5 / labl.h5 consumers.
+to hits / labl file consumers.
 
 The meaningful-track set ("Cherenkov producers + their ancestors")
 mirrors the legacy C++ filter in ``DataManager::EndEvent`` — same
@@ -515,7 +515,7 @@ def bucket_photons_by_segment(
     Photons whose segment id is ``-1`` (sentinel) or whose owning track
     has no categorized ancestor (``particle_idx == -1``) get ``-1`` —
     those photons exist in the per-sensor total but contribute to no
-    particle row in inst.h5.
+    particle row in the hits file.
     """
     if photon_segment_index.size == 0:
         return np.array([], dtype=np.int32)

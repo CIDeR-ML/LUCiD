@@ -16,7 +16,7 @@ import { computeLayout } from './geometry_layout.js';
 let worker = null;
 let nEvents = 0, nSensors = 0;
 let detectorType = '', shape = {};
-let detectorMaterial = 'water';    // string from seg/config.material — drives β_thresh
+let detectorMaterial = 'water';    // string from edep/config.material — drives β_thresh
 
 // Cherenkov β threshold = 1/n. Materials table mirrors lucid/utils.py.
 // Used by the BETA field to remap β ∈ [β_thresh, 1] → [0, 1] so the
@@ -33,17 +33,17 @@ let sensorPositions = null;        // Float32Array(nSensors * 3)
 let layout = null;                 // from computeLayout()
 
 let curEvent = 0;
-let evtBundle = null;              // decoded {sensor, inst, seg, labl, t0, srcIdx, ...}
+let evtBundle = null;              // decoded {sensor, hits, edep, labl, t0, srcIdx, ...}
 
 // Per-PMT derived arrays (length nSensors).
 let pmtPE = null;                  // summed PE per sensor
 let pmtT = null;                   // earliest T per sensor (NaN if no hit)
 let pmtBeta = null;                // PE-weighted mean β over contributing segments per sensor (NaN if no contribution)
-let pmtDomParticle = null;         // Int32Array  (argmax-over-inst per sensor; -1 if none)
+let pmtDomParticle = null;         // Int32Array  (argmax-over-hits per sensor; -1 if none)
 let pmtHasSignal = null;           // Uint8Array
 let pmtArrivalT = null;            // Float32Array — same value used for the 3D sweep shader
 
-// inst lookups.
+// hits lookups.
 let particleToSensor = null;       // Array(nParticles) of Map<sensor, PE>
 let particleTotals = null;         // Float32Array(nParticles)  total PE per particle
 let particleInteraction = null;    // Int32Array(nParticles)
@@ -56,15 +56,15 @@ let particlePdgBucket = null;      // Int8Array(nParticles)   own-PDG bucket, wi
 // uniformity with the older shower-grouping shape.)
 let pdgRows = null;
 
-// seg/sensor_hits lookups (only populated when LUCiD ran with
+// edep/sensor_hits lookups (only populated when LUCiD ran with
 // store_segment_sensor_map=true; otherwise all stay null and Label=Segment
 // shows nothing).
 let pmtDomSegment = null;          // Int32Array(nSensors)  argmax-PE segment per sensor (-1 if none)
-let segmentToSensor = null;        // Array(seg.n) of Map<sensor, PE>
-let segmentTotals = null;          // Float32Array(seg.n)  total PE per segment
+let segmentToSensor = null;        // Array(edep.n) of Map<sensor, PE>
+let segmentTotals = null;          // Float32Array(edep.n)  total PE per segment
 
 // UI state.
-let curView = 'pmts';              // 'pmts' | 'seg'   (exclusive 3D view)
+let curView = 'pmts';              // 'pmts' | 'edep'   (exclusive 3D view)
 let curField = 'charge';           // 'charge' | 'time' | 'beta'  (continuous field)
 let curLabel = 'none';             // 'none' | 'particle' | 'pdg' | 'interaction' | 'segment'
 let logScale = true;
@@ -87,14 +87,14 @@ let sweepOn = false;
 let sweepPlaying = false;
 let simTime = 0;
 let simTMin = 0, simTMax = 0;              // currently-active-view range
-let pmtTRange = [0, 1], segTRange = [0, 1];
+let pmtTRange = [0, 1], edepTRange = [0, 1];
 let sweepSpeed = 1.0;
-// Quantile-T scope: 'off' | 'pmts' | 'seg' | 'both'. Default = PMTs only
+// Quantile-T scope: 'off' | 'pmts' | 'edep' | 'both'. Default = PMTs only
 // (the event display — where it's most visually useful); segments stay in
 // raw ns so the user can see the physical time arithmetic.
 let quantileScope = 'pmts';
 const quantilePMT = () => quantileScope === 'pmts' || quantileScope === 'both';
-const quantileSeg = () => quantileScope === 'seg'  || quantileScope === 'both';
+const quantileEdep = () => quantileScope === 'edep'  || quantileScope === 'both';
 // In 'both' mode, PMT and segment times share one quantile map so the same
 // physical time maps to the same rank on both meshes. null otherwise.
 let unionQMap = null;
@@ -102,7 +102,7 @@ let unionQMap = null;
 // Three.js.
 let renderer, scene, camera, controls;
 let pmtGeo, pmtMat, pmtMesh;
-let segGeo, segMat, segMesh;
+let edepGeo, edepMat, edepMesh;
 let outlineMesh = null;
 let outlineMat = null;
 let lastFrameTime = 0;
@@ -261,7 +261,7 @@ function normalizeValues(values, opts) {
   return { norm: out, vmin, vmax };
 }
 
-// ── PMT derivation from sensor / inst ──────────────────────────────────
+// ── PMT derivation from sensor / hits ──────────────────────────────────
 // v4 writes only signal-bearing sensors into the sparse sensor file (the
 // save_sensor_event_v3 mask keeps rows where PE > 0 OR T is a finite
 // positive time within a reasonable window). Whatever makes it through,
@@ -287,7 +287,7 @@ function deriveSensorArrays() {
   }
 }
 
-// Project per-segment β_start onto sensors via the seg/sensor_hits map.
+// Project per-segment β_start onto sensors via the edep/sensor_hits map.
 // For each sensor s:
 //   pmtBeta[s] = Σ_rows[sensor==s] (β_start[seg_idx] · PE) / Σ_rows[sensor==s] PE
 // PE-weighting is the natural choice — a row's PE is the number of detected
@@ -298,17 +298,17 @@ function deriveSensorArrays() {
 function deriveBetaProjection() {
   pmtBeta = new Float32Array(nSensors);
   for (let i = 0; i < nSensors; i++) pmtBeta[i] = NaN;
-  const seg = evtBundle && evtBundle.seg;
-  if (!seg || !seg.sensor_hits || !seg.beta_start || !seg.n) return;
-  const sh = seg.sensor_hits;
+  const edep = evtBundle && evtBundle.edep;
+  if (!edep|| !edep.sensor_hits || !edep.beta_start || !edep.n) return;
+  const sh = edep.sensor_hits;
   const segIdx = sh.segment_idx, sensorIdx = sh.sensor_idx, peArr = sh.PE;
-  const beta = seg.beta_start;
+  const beta = edep.beta_start;
   if (!segIdx || !sensorIdx || !peArr) return;
   const wsum = new Float64Array(nSensors);
   const bsum = new Float64Array(nSensors);
   for (let r = 0; r < segIdx.length; r++) {
     const sg = segIdx[r], sn = sensorIdx[r], w = peArr[r];
-    if (sg < 0 || sn < 0 || sg >= seg.n || sn >= nSensors) continue;
+    if (sg < 0 || sn < 0 || sg >= edep.n || sn >= nSensors) continue;
     if (!(w > 0)) continue;
     const b = beta[sg];
     if (!Number.isFinite(b)) continue;
@@ -320,7 +320,7 @@ function deriveBetaProjection() {
   }
 }
 
-function buildInstLookups() {
+function buildHitsLookups() {
   const n_particles = evtBundle.labl.n_particles || 0;
   particleToSensor = [];
   for (let p = 0; p < n_particles; p++) particleToSensor.push(new Map());
@@ -342,7 +342,7 @@ function buildInstLookups() {
 
   particlePdgBucket = computePdgBuckets(evtBundle.labl);
 
-  const i_ = evtBundle.inst;
+  const i_ = evtBundle.hits;
   if (!i_ || !i_.nHits) return;
 
   const perSensorBest = new Float32Array(nSensors);
@@ -388,7 +388,7 @@ function rebuildPdgRows() {
   for (let i = 0; i < pdgRows.length; i++) pdgRows[i].id = i;
 }
 
-// Mirror of buildInstLookups for the seg/sensor_hits subgroup. Populates
+// Mirror of buildHitsLookups for the edep/sensor_hits subgroup. Populates
 // pmtDomSegment / segmentToSensor / segmentTotals from the flat
 // (segment, sensor) PE rows. All three stay null when sensor_hits is
 // absent — Label=Segment renders a blank in that case.
@@ -397,9 +397,9 @@ function buildSegmentLookups() {
   segmentToSensor = null;
   segmentTotals = null;
 
-  const seg = evtBundle && evtBundle.seg;
-  const hits = seg && seg.sensor_hits;
-  const nSeg = seg ? seg.n : 0;
+  const edep = evtBundle && evtBundle.edep;
+  const hits = edep && edep.sensor_hits;
+  const nSeg = edep ? edep.n : 0;
   if (!hits || !nSeg) return;
 
   pmtDomSegment = new Int32Array(nSensors);
@@ -436,7 +436,7 @@ function pmtContValArray() {
   // Cherenkov in the active medium. Remap β ∈ [β_thresh, 1] → [0, 1]
   // so the viridis ramp covers the physically meaningful range; sub-
   // threshold β clamps to 0. Sensors without a β projection (no
-  // seg/sensor_hits row, or segmap not stored) get NaN and are
+  // edep/sensor_hits row, or segmap not stored) get NaN and are
   // excluded from the percentile pool by normalizeValues' finite check.
   if (isBeta) {
     const remapped = new Float32Array(nSensors);
@@ -500,21 +500,21 @@ function buildQuantileMapMasked(values, mask) {
   return m;
 }
 
-// Union quantile map for 'both' scope: pool signal-PMT T + all seg times
+// Union quantile map for 'both' scope: pool signal-PMT T + all edep times
 // into one distribution so identical physical times map to identical ranks.
 function refreshUnionQMap() {
   if (quantileScope !== 'both' || !evtBundle || !pmtT || !pmtHasSignal) {
     unionQMap = null;
     return;
   }
-  const seg = evtBundle.seg;
+  const edep = evtBundle.edep;
   const pool = [];
   for (let i = 0; i < pmtT.length; i++) {
     if (pmtHasSignal[i] && Number.isFinite(pmtT[i])) pool.push(pmtT[i]);
   }
-  if (seg && seg.time) {
-    for (let i = 0; i < seg.time.length; i++) {
-      if (Number.isFinite(seg.time[i])) pool.push(seg.time[i]);
+  if (edep && edep.time) {
+    for (let i = 0; i < edep.time.length; i++) {
+      if (Number.isFinite(edep.time[i])) pool.push(edep.time[i]);
     }
   }
   pool.sort((a, b) => a - b);
@@ -668,11 +668,11 @@ function pmtCatValArray() {
   return out;
 }
 
-function segContValArrays() {
-  // Seg continuous source follows Field (since seg-only labels are gone):
+function edepContValArrays() {
+  // Edep continuous source follows Field (since edep-only labels are gone):
   //   charge → edep,  time → time,  beta → beta_start.
-  const seg = evtBundle.seg;
-  if (!seg || !seg.n) return { contPerSeg: null, vmin: 0, vmax: 1 };
+  const edep = evtBundle.edep;
+  if (!edep|| !edep.n) return { contPerEdep: null, vmin: 0, vmax: 1 };
   const isTimeField = curField === 'time';
   const isBetaField = curField === 'beta';
   // β remap to [β_thresh, 1] → [0, 1]; matches the PMT β projection
@@ -680,18 +680,18 @@ function segContValArrays() {
   // hue when both are above threshold. Routed through normalizeValues
   // (with log forced off) so panel vmin/vmax/percentile sliders work.
   if (isBetaField) {
-    const remapped = new Float32Array(seg.n);
-    const b = seg.beta_start;
+    const remapped = new Float32Array(edep.n);
+    const b = edep.beta_start;
     if (b) {
       const bt = cherenkovBetaThreshold(detectorMaterial);
       const denom = Math.max(1e-6, 1.0 - bt);
-      for (let i = 0; i < seg.n; i++) {
+      for (let i = 0; i < edep.n; i++) {
         remapped[i] = Number.isFinite(b[i])
           ? Math.max(0, Math.min(1, (b[i] - bt) / denom))
           : NaN;
       }
     } else {
-      for (let i = 0; i < seg.n; i++) remapped[i] = NaN;
+      for (let i = 0; i < edep.n; i++) remapped[i] = NaN;
     }
     const { norm, vmin, vmax } = normalizeValues(remapped, {
       isTime: false,
@@ -700,21 +700,21 @@ function segContValArrays() {
       mVmin: manualVmin, mVmax: manualVmax,
       mask: null,
     });
-    return { contPerSeg: norm, vmin, vmax };
+    return { contPerEdep: norm, vmin, vmax };
   }
-  const field = isTimeField ? seg.time : seg.edep;
-  if (!field) return { contPerSeg: new Float32Array(seg.n), vmin: 0, vmax: 1 };
+  const field = isTimeField ? edep.time : edep.edep;
+  if (!field) return { contPerEdep: new Float32Array(edep.n), vmin: 0, vmax: 1 };
   const f32 = field instanceof Float32Array ? field : Float32Array.from(field);
 
   // Quantile for time: same treatment as PMTs; union map when scope=both.
-  if (isTimeField && quantileSeg()) {
+  if (isTimeField && quantileEdep()) {
     const q = unionQMap || buildQuantileMapMasked(f32, null);
-    const norm = new Float32Array(seg.n);
-    for (let i = 0; i < seg.n; i++) {
+    const norm = new Float32Array(edep.n);
+    for (let i = 0; i < edep.n; i++) {
       const v = f32[i];
       norm[i] = (Number.isFinite(v) && q.has(v)) ? q.get(v) : 0;
     }
-    return { contPerSeg: norm, vmin: 0, vmax: 1 };
+    return { contPerEdep: norm, vmin: 0, vmax: 1 };
   }
 
   const { norm, vmin, vmax } = normalizeValues(f32, {
@@ -724,17 +724,17 @@ function segContValArrays() {
     mVmin: manualVmin, mVmax: manualVmax,
     mask: null,
   });
-  return { contPerSeg: norm, vmin, vmax };
+  return { contPerEdep: norm, vmin, vmax };
 }
 
-function segCatValArrays() {
-  const seg = evtBundle.seg;
-  if (!seg || !seg.n) return null;
+function edepCatValArrays() {
+  const edep = evtBundle.edep;
+  if (!edep|| !edep.n) return null;
   const per_track = evtBundle.labl.per_track;
   const per_particle = evtBundle.labl.per_particle;
-  const out = new Float32Array(seg.n);
-  for (let i = 0; i < seg.n; i++) {
-    const t = seg.track_idx[i];
+  const out = new Float32Array(edep.n);
+  for (let i = 0; i < edep.n; i++) {
+    const t = edep.track_idx[i];
     if (curLabel === 'particle') {
       const pidx = per_track.particle_idx ? per_track.particle_idx[t] : -1;
       out[i] = pidx >= 0 ? hashHue(pidx) : 0;
@@ -778,7 +778,7 @@ function buildPMTs() {
   // arrivalT respects the Quantile-T scope:
   //   off:  raw ns
   //   pmts: per-PMT rank
-  //   seg:  raw ns (PMT not affected by 'seg' scope)
+  //   edep:  raw ns (PMT not affected by 'edep' scope)
   //   both: union rank shared with segments
   const qMap = quantilePMT() ? (unionQMap || buildQuantileMap(pmtT)) : null;
   for (let i = 0; i < nSensors; i++) {
@@ -845,20 +845,20 @@ function buildQuantileMap(values) {
 // WebGL lines render at 1px and get drowned out by PMTs. Instead we emit
 // K points per segment along its trajectory and render as fat sprites via
 // the same PMT shader. Visible and fast (~1000 segs × 6 pts = 6k points).
-const SEG_POINTS_PER = 6;
+const EDEP_POINTS_PER = 6;
 
-function buildSegments() {
-  if (segMesh) {
-    scene.remove(segMesh);
-    segGeo.dispose();
-    if (segMat) segMat.dispose();
-    segMesh = null;
+function buildEdeps() {
+  if (edepMesh) {
+    scene.remove(edepMesh);
+    edepGeo.dispose();
+    if (edepMat) edepMat.dispose();
+    edepMesh = null;
   }
-  const seg = evtBundle.seg;
-  if (!seg || !seg.n) return;
+  const edep = evtBundle.edep;
+  if (!edep|| !edep.n) return;
 
-  const n = seg.n;
-  const K = SEG_POINTS_PER;
+  const n = edep.n;
+  const K = EDEP_POINTS_PER;
   const N = n * K;
   const pos = new Float32Array(N * 3);
   const contVal = new Float32Array(N);
@@ -867,25 +867,25 @@ function buildSegments() {
   const arrivalT = new Float32Array(N);
   const hasSig = new Float32Array(N);
 
-  // Segment arrivalT respects scope: rank when seg-quantiled (or 'both'),
+  // Segment arrivalT respects scope: rank when edep-quantiled (or 'both'),
   // raw ns otherwise.
-  const segQMap = quantileSeg() ? (unionQMap || buildQuantileMap(seg.time)) : null;
-  if (segQMap) {
-    segTRange = [0, 1];
+  const edepQMap = quantileEdep() ? (unionQMap || buildQuantileMap(edep.time)) : null;
+  if (edepQMap) {
+    edepTRange = [0, 1];
   } else {
     let mn = Infinity, mx = -Infinity;
     for (let i = 0; i < n; i++) {
-      const v = seg.time[i];
+      const v = edep.time[i];
       if (Number.isFinite(v)) { if (v < mn) mn = v; if (v > mx) mx = v; }
     }
-    segTRange = [mn === Infinity ? 0 : mn, mx === -Infinity ? 1 : mx];
+    edepTRange = [mn === Infinity ? 0 : mn, mx === -Infinity ? 1 : mx];
   }
 
   for (let i = 0; i < n; i++) {
-    const sx = seg.start_x[i], sy = seg.start_y[i], sz = seg.start_z[i];
-    const ex = seg.end_x[i],   ey = seg.end_y[i],   ez = seg.end_z[i];
-    const t = seg.time[i];
-    const tMapped = segQMap ? segQMap.get(t) : t;
+    const sx = edep.start_x[i], sy = edep.start_y[i], sz = edep.start_z[i];
+    const ex = edep.end_x[i],   ey = edep.end_y[i],   ez = edep.end_z[i];
+    const t = edep.time[i];
+    const tMapped = edepQMap ? edepQMap.get(t) : t;
     for (let k = 0; k < K; k++) {
       const f = (k + 0.5) / K;
       const p = i * K + k;
@@ -897,21 +897,21 @@ function buildSegments() {
     }
   }
 
-  segGeo = new THREE.BufferGeometry();
-  segGeo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  edepGeo = new THREE.BufferGeometry();
+  edepGeo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
   const contAttr = new THREE.BufferAttribute(contVal, 1);
   contAttr.setUsage(THREE.DynamicDrawUsage);
-  segGeo.setAttribute('contVal', contAttr);
+  edepGeo.setAttribute('contVal', contAttr);
   const catAttr = new THREE.BufferAttribute(catVal, 1);
   catAttr.setUsage(THREE.DynamicDrawUsage);
-  segGeo.setAttribute('catVal', catAttr);
+  edepGeo.setAttribute('catVal', catAttr);
   const hlAttr = new THREE.BufferAttribute(hl, 1);
   hlAttr.setUsage(THREE.DynamicDrawUsage);
-  segGeo.setAttribute('hl', hlAttr);
-  segGeo.setAttribute('arrivalT', new THREE.BufferAttribute(arrivalT, 1));
-  segGeo.setAttribute('hasSignal', new THREE.BufferAttribute(hasSig, 1));
+  edepGeo.setAttribute('hl', hlAttr);
+  edepGeo.setAttribute('arrivalT', new THREE.BufferAttribute(arrivalT, 1));
+  edepGeo.setAttribute('hasSignal', new THREE.BufferAttribute(hasSig, 1));
 
-  segMat = new THREE.ShaderMaterial({
+  edepMat = new THREE.ShaderMaterial({
     vertexShader: PMT_VS, fragmentShader: PMT_FS,
     uniforms: {
       cmap:      { value: currentCmapTex() },
@@ -927,11 +927,11 @@ function buildSegments() {
     transparent: true, depthWrite: false,
   });
 
-  segMesh = new THREE.Points(segGeo, segMat);
-  segMesh.visible = (curView === 'seg');
-  scene.add(segMesh);
+  edepMesh = new THREE.Points(edepGeo, edepMat);
+  edepMesh.visible = (curView === 'edep');
+  scene.add(edepMesh);
 
-  updateSegmentColors();
+  updateEdepColors();
 }
 
 // ── Detector outline (cylinder/box/sphere wireframe) ───────────────────
@@ -1073,32 +1073,32 @@ function pmtContValArrayForField() {
   return pmtContValArray();
 }
 
-function updateSegmentColors() {
-  if (!segMat || !segGeo) return;
-  const seg = evtBundle.seg;
-  if (!seg || !seg.n) return;
+function updateEdepColors() {
+  if (!edepMat || !edepGeo) return;
+  const edep = evtBundle.edep;
+  if (!edep|| !edep.n) return;
 
   const isCat = (curLabel !== 'none');
-  segMat.uniforms.colorMode.value = isCat ? 1.0 : 0.0;
-  segMat.uniforms.cmap.value = currentCmapTex();
-  const K = SEG_POINTS_PER;
+  edepMat.uniforms.colorMode.value = isCat ? 1.0 : 0.0;
+  edepMat.uniforms.cmap.value = currentCmapTex();
+  const K = EDEP_POINTS_PER;
 
   if (isCat) {
-    const cat = segCatValArrays();
-    const out = segGeo.attributes.catVal.array;
-    for (let i = 0; i < seg.n; i++) {
+    const cat = edepCatValArrays();
+    const out = edepGeo.attributes.catVal.array;
+    for (let i = 0; i < edep.n; i++) {
       const v = cat[i];
       for (let k = 0; k < K; k++) out[i * K + k] = v;
     }
-    segGeo.attributes.catVal.needsUpdate = true;
+    edepGeo.attributes.catVal.needsUpdate = true;
   } else {
-    const { contPerSeg } = segContValArrays();
-    const out = segGeo.attributes.contVal.array;
-    for (let i = 0; i < seg.n; i++) {
-      const v = contPerSeg[i];
+    const { contPerEdep } = edepContValArrays();
+    const out = edepGeo.attributes.contVal.array;
+    for (let i = 0; i < edep.n; i++) {
+      const v = contPerEdep[i];
       for (let k = 0; k < K; k++) out[i * K + k] = v;
     }
-    segGeo.attributes.contVal.needsUpdate = true;
+    edepGeo.attributes.contVal.needsUpdate = true;
   }
   // Re-apply the selection override (it lives in the same buffer we
   // just rewrote canonically).
@@ -1163,7 +1163,7 @@ function unionContributions(particleIds) {
 function applyCorrespondence() {
   if (!pmtGeo) return;
   const pmtHL = pmtGeo.attributes.hl.array;
-  const segHL = segGeo ? segGeo.attributes.hl.array : null;
+  const segHL = edepGeo ? edepGeo.attributes.hl.array : null;
   pmtHL.fill(0);
   if (segHL) segHL.fill(0);
 
@@ -1172,7 +1172,7 @@ function applyCorrespondence() {
   const map = selectionContributions();
   const corrActive = map != null;
   pmtMat.uniforms.corrOn.value = corrActive ? 1.0 : 0.0;
-  if (segMat) segMat.uniforms.corrOn.value = corrActive ? 1.0 : 0.0;
+  if (edepMat) edepMat.uniforms.corrOn.value = corrActive ? 1.0 : 0.0;
 
   // Reset PMT catVal to the canonical (dominant-particle) hue. We do
   // this unconditionally so a prior selection-hue override is wiped
@@ -1184,29 +1184,29 @@ function applyCorrespondence() {
     pmtCV.set(pmtCatValArray());
     pmtGeo.attributes.catVal.needsUpdate = true;
   }
-  // Same for seg catVal: a per-track binary highlight + a hue override
-  // for tracks belonging to the selection so the 3D seg points read as
+  // Same for edep catVal: a per-track binary highlight + a hue override
+  // for tracks belonging to the selection so the 3D edep points read as
   // the selection's color, mirroring the PMT path. updatePMTColors can
-  // chain in here before buildSegments has rebuilt segGeo for the new
-  // event, so guard against a buffer-size mismatch — buildSegments will
-  // eventually call updateSegmentColors → applyCorrespondence with the
+  // chain in here before buildEdeps has rebuilt edepGeo for the new
+  // event, so guard against a buffer-size mismatch — buildEdeps will
+  // eventually call updateEdepColors → applyCorrespondence with the
   // correct geometry.
   let segCV = null;
   let segOK = false;
-  const K = SEG_POINTS_PER;
-  if (segGeo && isCat && evtBundle && evtBundle.seg) {
-    const seg = evtBundle.seg;
-    const buf = segGeo.attributes.catVal.array;
-    if (seg && seg.n && buf.length === seg.n * K) {
+  const K = EDEP_POINTS_PER;
+  if (edepGeo && isCat && evtBundle && evtBundle.edep) {
+    const edep = evtBundle.edep;
+    const buf = edepGeo.attributes.catVal.array;
+    if (edep && edep.n && buf.length === edep.n * K) {
       segCV = buf;
       segOK = true;
-      const segCat = segCatValArrays();
+      const segCat = edepCatValArrays();
       if (segCat) {
-        for (let i = 0; i < seg.n; i++) {
+        for (let i = 0; i < edep.n; i++) {
           const v = segCat[i];
           for (let k = 0; k < K; k++) segCV[i * K + k] = v;
         }
-        segGeo.attributes.catVal.needsUpdate = true;
+        edepGeo.attributes.catVal.needsUpdate = true;
       }
     }
   }
@@ -1249,24 +1249,24 @@ function applyCorrespondence() {
     // Segments: binary highlight if the track belongs to any particle in
     // the selected set (or, when a segment row is selected, just that
     // single segment), and — in categorical mode — override the hue to
-    // the selection's color so the bright seg points read consistently.
-    const seg = evtBundle.seg;
+    // the selection's color so the bright edep points read consistently.
+    const edep = evtBundle.edep;
     const per_track = evtBundle.labl.per_track;
-    const segHLOK = segHL && seg && seg.n && segHL.length === seg.n * K;
+    const segHLOK = segHL && edep && edep.n && segHL.length === edep.n * K;
     if (segHLOK && segSelected) {
       const sid = selectedGroup.id;
-      for (let i = 0; i < seg.n; i++) {
+      for (let i = 0; i < edep.n; i++) {
         const v = (i === sid) ? 1.0 : 0.0;
         for (let k = 0; k < K; k++) segHL[i * K + k] = v;
         if (i === sid && useSelHue && segOK) {
           for (let k = 0; k < K; k++) segCV[i * K + k] = selectionHue;
         }
       }
-      if (useSelHue && segOK) segGeo.attributes.catVal.needsUpdate = true;
+      if (useSelHue && segOK) edepGeo.attributes.catVal.needsUpdate = true;
     } else if (segHLOK && per_track && per_track.particle_idx) {
       const setLookup = new Set(particleSet);
-      for (let i = 0; i < seg.n; i++) {
-        const t = seg.track_idx[i];
+      for (let i = 0; i < edep.n; i++) {
+        const t = edep.track_idx[i];
         const p = per_track.particle_idx[t];
         const inSel = setLookup.has(p);
         const v = inSel ? 1.0 : 0.0;
@@ -1275,11 +1275,11 @@ function applyCorrespondence() {
           for (let k = 0; k < K; k++) segCV[i * K + k] = selectionHue;
         }
       }
-      if (useSelHue && segOK) segGeo.attributes.catVal.needsUpdate = true;
+      if (useSelHue && segOK) edepGeo.attributes.catVal.needsUpdate = true;
     }
   } // end corrActive
   pmtGeo.attributes.hl.needsUpdate = true;
-  if (segGeo) segGeo.attributes.hl.needsUpdate = true;
+  if (edepGeo) edepGeo.attributes.hl.needsUpdate = true;
 }
 
 // ── Sidebar (label-aware) ──────────────────────────────────────────────
@@ -1321,7 +1321,7 @@ function buildSidebar() {
   addRow('n hits',      String(evtBundle.sensor.nHits));
   addRow('n particles', String(evtBundle.labl.n_particles));
   addRow('n tracks',    String(evtBundle.labl.n_tracks));
-  addRow('n segments',  String(evtBundle.seg.n));
+  addRow('n segments',  String(evtBundle.edep.n));
 
   // v5 per_interaction summary. Split into labeled rows so the source,
   // probe, vertex, and per-primary energies are individually readable
@@ -1498,14 +1498,14 @@ function groupLabelText(kind, id, n) {
 // total PE. Shows track id and n_sensors hit. Click toggles isolation.
 function buildSidebarSegments(list) {
   if (!segmentToSensor) {
-    list.innerHTML = '<div class="event-meta-row" style="padding:8px"><span class="k">(seg/sensor_hits absent — re-run with store_segment_sensor_map=true)</span></div>';
+    list.innerHTML = '<div class="event-meta-row" style="padding:8px"><span class="k">(edep/sensor_hits absent — re-run with store_segment_sensor_map=true)</span></div>';
     return;
   }
-  const seg = evtBundle.seg;
+  const edep = evtBundle.edep;
   const per_track = evtBundle.labl.per_track;
   const trackPdg = per_track ? per_track.pdg : null;
   const ordered = [];
-  for (let i = 0; i < seg.n; i++) {
+  for (let i = 0; i < edep.n; i++) {
     if (segmentTotals[i] > 0) ordered.push(i);
   }
   ordered.sort((a, b) => segmentTotals[b] - segmentTotals[a]);
@@ -1523,7 +1523,7 @@ function buildSidebarSegments(list) {
     swatch.style.background = `rgb(${r},${g},${b})`;
     const label = document.createElement('span');
     label.className = 'particle-label';
-    const t = seg.track_idx ? seg.track_idx[id] : -1;
+    const t = edep.track_idx ? edep.track_idx[id] : -1;
     const pdg = (t >= 0 && trackPdg) ? trackPdg[t] : null;
     const pdgStr = pdg != null ? (PDG_NAMES.get(pdg) || `pdg${pdg}`) : '';
     label.textContent = `S${id} · T${t}${pdgStr ? ' · ' + pdgStr : ''}`;
@@ -1589,7 +1589,7 @@ function renderParticleInfo(info, p) {
       }
     }
   }
-  add('Σ PE (inst)', formatPE(particleTotals[p] || 0));
+  add('Σ PE (hits)', formatPE(particleTotals[p] || 0));
   add('sensors hit', String(particleToSensor[p] ? particleToSensor[p].size : 0));
   add('n tracks', String(nTracks));
   add('n Cherenkov', String(nCher));
@@ -1643,7 +1643,7 @@ function renderGroupInfo(info, group) {
   add('id', String(id));
   add('n particles', String(parts.length));
   add('particle IDs', parts.join(', '));
-  add('Σ PE (inst)', formatPE(pe));
+  add('Σ PE (hits)', formatPE(pe));
   // Sensors covered and track count from per_track.
   const covered = new Set();
   for (const p of parts) {
@@ -1801,7 +1801,7 @@ function render2D() {
   }
 
   // 2D PMT fade: pmtArrivalT lives in PMT-time space (rank or raw), but
-  // the active simTime might be in seg-time space (SEG view). Map sweep
+  // the active simTime might be in edep-time space (EDEP view). Map sweep
   // progress (0..1 through the active range) onto PMT range so the 2D
   // panel sweeps in lockstep with the 3D animation, regardless of view.
   const sweepActive = sweepOn && pmtArrivalT;
@@ -1950,7 +1950,7 @@ function animate() {
     if (simTime > simTMax + range * 0.1) simTime = simTMin;
     updateSweepUI();
     if (pmtMat) pmtMat.uniforms.simTime.value = simTime;
-    if (segMat) segMat.uniforms.simTime.value = simTime;
+    if (edepMat) edepMat.uniforms.simTime.value = simTime;
     render2D();
   }
 
@@ -1959,7 +1959,7 @@ function animate() {
 }
 
 function applyViewSweepRange() {
-  const range = curView === 'seg' ? segTRange : pmtTRange;
+  const range = curView === 'edep' ? edepTRange : pmtTRange;
   simTMin = range[0]; simTMax = range[1];
   if (!(Number.isFinite(simTMin) && Number.isFinite(simTMax) && simTMax > simTMin)) {
     simTMin = 0; simTMax = 1;
@@ -1981,10 +1981,10 @@ function applyViewSweepRange() {
     pmtMat.uniforms.simTime.value = simTime;
     pmtMat.uniforms.sweepOn.value = sweepOn ? 1.0 : 0.0;
   }
-  if (segMat) {
-    segMat.uniforms.sweepEps.value = eps;
-    segMat.uniforms.simTime.value = simTime;
-    segMat.uniforms.sweepOn.value = sweepOn ? 1.0 : 0.0;
+  if (edepMat) {
+    edepMat.uniforms.sweepEps.value = eps;
+    edepMat.uniforms.simTime.value = simTime;
+    edepMat.uniforms.sweepOn.value = sweepOn ? 1.0 : 0.0;
   }
 }
 
@@ -2033,12 +2033,12 @@ async function loadEvent(idx) {
     sweepPlaying = false;
     simTime = 0;
     deriveSensorArrays();
-    buildInstLookups();
+    buildHitsLookups();
     buildSegmentLookups();
     deriveBetaProjection();
-    refreshUnionQMap();   // needs pmtT + seg times; before buildPMTs/buildSegments
+    refreshUnionQMap();   // needs pmtT + edep times; before buildPMTs/buildEdeps
     buildPMTs();
-    buildSegments();
+    buildEdeps();
     buildOutline();
     frameCamera();
     buildSidebar();
@@ -2087,13 +2087,13 @@ function setupUI() {
   $('evInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') commitEvInput(); });
   $('evInput').addEventListener('change', commitEvInput);
 
-  // VIEW toggle (PMTs / SEG).
+  // VIEW toggle (PMTs / EDEP).
   $('viewGrp').addEventListener('click', (e) => {
     const b = e.target.closest('button'); if (!b) return;
     curView = b.dataset.v;
     for (const c of $('viewGrp').children) c.classList.toggle('active', c === b);
     if (pmtMesh) pmtMesh.visible = (curView === 'pmts');
-    if (segMesh) segMesh.visible = (curView === 'seg');
+    if (edepMesh) edepMesh.visible = (curView === 'edep');
     applyViewSweepRange();
     updateSweepUI();
   });
@@ -2105,7 +2105,7 @@ function setupUI() {
     for (const c of $('fieldGrp').children) c.classList.toggle('active', c === b);
     syncFieldDependentControls();
     updatePMTColors();
-    updateSegmentColors();
+    updateEdepColors();
     render2D();
   });
 
@@ -2117,7 +2117,7 @@ function setupUI() {
     selectedParticle = null;
     selectedGroup = null;
     updatePMTColors();
-    updateSegmentColors();
+    updateEdepColors();
     buildSidebar();
     applyCorrespondence();
     render2D();
@@ -2129,7 +2129,7 @@ function setupUI() {
     sweepOn = !sweepOn;
     syncSweepBtn();
     if (pmtMat) pmtMat.uniforms.sweepOn.value = sweepOn ? 1.0 : 0.0;
-    if (segMat) segMat.uniforms.sweepOn.value = sweepOn ? 1.0 : 0.0;
+    if (edepMat) edepMat.uniforms.sweepOn.value = sweepOn ? 1.0 : 0.0;
     if (sweepOn) sweepPlaying = true;
     updateSweepUI();
     render2D();
@@ -2144,7 +2144,7 @@ function setupUI() {
     sweepPlaying = false;
     updateSweepUI();
     if (pmtMat) pmtMat.uniforms.simTime.value = simTime;
-    if (segMat) segMat.uniforms.simTime.value = simTime;
+    if (edepMat) edepMat.uniforms.simTime.value = simTime;
     render2D();
   });
 
@@ -2184,15 +2184,15 @@ function setupUI() {
     if (controls) controls.autoRotate = autoRotate;
     syncSweepBtn();
     // Rebuild meshes (quantile may have been on, arrivalT baked into geometry).
-    if (evtBundle) { refreshUnionQMap(); buildPMTs(); buildSegments(); buildOutline(); }
+    if (evtBundle) { refreshUnionQMap(); buildPMTs(); buildEdeps(); buildOutline(); }
     if (pmtMesh) pmtMesh.visible = true;
-    if (segMesh) segMesh.visible = false;
+    if (edepMesh) edepMesh.visible = false;
     if (pmtMat) pmtMat.uniforms.sweepOn.value = 0.0;
-    if (segMat) segMat.uniforms.sweepOn.value = 0.0;
+    if (edepMat) edepMat.uniforms.sweepOn.value = 0.0;
     applyViewSweepRange();
     updateSweepUI();
     updatePMTColors();
-    updateSegmentColors();
+    updateEdepColors();
     applyCorrespondence();
     buildSidebar();
     render2D();
@@ -2208,25 +2208,25 @@ function setupUI() {
   $('settingsBtn').addEventListener('click', () => $('settingsPanel').classList.toggle('visible'));
   $('settingsClose').addEventListener('click', () => hide('settingsPanel'));
 
-  $('logChk').addEventListener('change', (e) => { logScale = e.target.checked; updatePMTColors(); updateSegmentColors(); render2D(); });
+  $('logChk').addEventListener('change', (e) => { logScale = e.target.checked; updatePMTColors(); updateEdepColors(); render2D(); });
   const updatePerc = () => {
     percMin = parseFloat($('percMin').value);
     percMax = parseFloat($('percMax').value);
     if (percMin >= percMax - 1) { percMin = Math.max(0, percMax - 1); $('percMin').value = percMin; }
     $('percVal').textContent = percMin.toFixed(1) + ' – ' + percMax.toFixed(1);
-    updatePMTColors(); updateSegmentColors(); render2D();
+    updatePMTColors(); updateEdepColors(); render2D();
   };
   $('percMin').addEventListener('input', updatePerc);
   $('percMax').addEventListener('input', updatePerc);
-  $('vminInput').addEventListener('change', (e) => { manualVmin = e.target.value.trim() === '' ? null : parseFloat(e.target.value); updatePMTColors(); updateSegmentColors(); render2D(); });
-  $('vmaxInput').addEventListener('change', (e) => { manualVmax = e.target.value.trim() === '' ? null : parseFloat(e.target.value); updatePMTColors(); updateSegmentColors(); render2D(); });
-  $('cmapSelect').addEventListener('change', (e) => { cmapName = e.target.value; updatePMTColors(); updateSegmentColors(); render2D(); });
+  $('vminInput').addEventListener('change', (e) => { manualVmin = e.target.value.trim() === '' ? null : parseFloat(e.target.value); updatePMTColors(); updateEdepColors(); render2D(); });
+  $('vmaxInput').addEventListener('change', (e) => { manualVmax = e.target.value.trim() === '' ? null : parseFloat(e.target.value); updatePMTColors(); updateEdepColors(); render2D(); });
+  $('cmapSelect').addEventListener('change', (e) => { cmapName = e.target.value; updatePMTColors(); updateEdepColors(); render2D(); });
 
   $('pmtSizeSlider').addEventListener('input', (e) => {
     pmtSize = parseFloat(e.target.value);
     $('pmtSizeVal').textContent = pmtSize.toFixed(1);
     if (pmtMat) pmtMat.uniforms.pmtSize.value = pmtSize;
-    if (segMat) segMat.uniforms.pmtSize.value = Math.max(3, pmtSize * 0.6);
+    if (edepMat) edepMat.uniforms.pmtSize.value = Math.max(3, pmtSize * 0.6);
   });
   $('showEmptyChk').addEventListener('change', (e) => {
     showEmpty = e.target.checked;
@@ -2253,15 +2253,15 @@ function setupUI() {
       // correspondence so the effect is visible even with Sweep off.
       refreshUnionQMap();
       buildPMTs();
-      buildSegments();
+      buildEdeps();
       updatePMTColors();
-      updateSegmentColors();
+      updateEdepColors();
       applyCorrespondence();
       applyViewSweepRange();
       updateSweepUI();
       render2D();
     }
-    const label = {off: 'off', pmts: 'PMTs only', seg: 'segments only', both: 'PMTs + segments'}[quantileScope];
+    const label = {off: 'off', pmts: 'PMTs only', edep: 'segments only', both: 'PMTs + segments'}[quantileScope];
     showToast(`quantile T → ${label}`);
   });
 

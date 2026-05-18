@@ -11,8 +11,8 @@ import numpy as np
 
 from lucid.sources.event_io import (
     read_sensor_event_v3,
-    read_inst_event_v3,
-    read_seg_event_v3,
+    read_hits_event_v3,
+    read_edep_event_v3,
     read_labl_event_v3,
     list_events_v3,
 )
@@ -77,10 +77,10 @@ def _resolve_dataset_paths(dataset_root_or_sensor_file, file_index):
     else:
         root = p
     sensor = root / 'sensor' / f'wc_sensor_{file_index:04d}.h5'
-    inst = root / 'inst' / f'wc_inst_{file_index:04d}.h5'
-    seg = root / 'seg' / f'wc_seg_{file_index:04d}.h5'
+    hits = root / 'hits' / f'wc_hits_{file_index:04d}.h5'
+    edep = root / 'edep' / f'wc_edep_{file_index:04d}.h5'
     labl = root / 'labl' / f'wc_labl_{file_index:04d}.h5'
-    return sensor, inst, seg, labl, file_index
+    return sensor, hits, edep, labl, file_index
 
 
 def load_event_v3(dataset_root, event_idx, file_index=0, n_sensors=None):
@@ -88,29 +88,29 @@ def load_event_v3(dataset_root, event_idx, file_index=0, n_sensors=None):
 
     The returned dict exposes dense ``(n_particles, n_sensors)`` PE/T
     matrices under keys ``Q`` and ``T`` for notebook compatibility. Raw v3
-    reader outputs are also included under ``labl`` and ``seg`` for anyone
+    reader outputs are also included under ``labl`` and ``edep`` for anyone
     who needs them.
     """
-    sensor_p, inst_p, seg_p, labl_p, file_index = _resolve_dataset_paths(
+    sensor_p, hits_p, edep_p, labl_p, file_index = _resolve_dataset_paths(
         dataset_root, file_index)
 
     if n_sensors is None:
         n_sensors = _infer_n_sensors(sensor_p)
 
     sensor = read_sensor_event_v3(str(sensor_p), event_idx)
-    inst = read_inst_event_v3(str(inst_p), event_idx)
-    seg = read_seg_event_v3(str(seg_p), event_idx)
+    hits = read_hits_event_v3(str(hits_p), event_idx)
+    edep = read_edep_event_v3(str(edep_p), event_idx)
     labl = read_labl_event_v3(str(labl_p), event_idx)
 
     n_particles = int(labl['n_particles'])
 
     PE_per_particle = np.zeros((n_particles, n_sensors), dtype=np.float32)
     T_per_particle = np.full((n_particles, n_sensors), np.inf, dtype=np.float32)
-    if int(inst.get('n_particle_hits', 0)) > 0:
-        pi = np.asarray(inst['particle_idx'], dtype=np.int32)
-        si = np.asarray(inst['sensor_idx'], dtype=np.int32)
-        PE_per_particle[pi, si] = np.asarray(inst['PE'], dtype=np.float32)
-        t_arr = np.asarray(inst['T'], dtype=np.float32)
+    if int(hits.get('n_particle_hits', 0)) > 0:
+        pi = np.asarray(hits['particle_idx'], dtype=np.int32)
+        si = np.asarray(hits['sensor_idx'], dtype=np.int32)
+        PE_per_particle[pi, si] = np.asarray(hits['PE'], dtype=np.float32)
+        t_arr = np.asarray(hits['T'], dtype=np.float32)
         T_per_particle[pi, si] = np.where(t_arr > 0, t_arr, np.inf)
 
     PE = np.zeros(n_sensors, dtype=np.float32)
@@ -135,7 +135,7 @@ def load_event_v3(dataset_root, event_idx, file_index=0, n_sensors=None):
         'Particle_Category': np.asarray(labl['per_particle']['category']),
         'contained_per_particle': np.asarray(labl['per_particle']['contained'], dtype=bool),
         'labl': labl,
-        'seg': seg,
+        'edep': edep,
     }
 
 
@@ -170,8 +170,8 @@ def print_event_info(event):
 def read_multi_event_file(dataset_root, file_index=0, verbose=False, n_sensors=None):
     """Return a list of event dicts for an entire v3 batch file.
 
-    ``dataset_root`` is the directory containing ``sensor/``, ``inst/``,
-    ``seg/``, ``labl/`` subdirectories. A direct sensor file path is also
+    ``dataset_root`` is the directory containing ``sensor/``, ``hits/``,
+    ``edep/``, ``labl/`` subdirectories. A direct sensor file path is also
     accepted; in that case ``file_index`` is parsed from the filename.
     """
     sensor_file, _, _, _, file_index = _resolve_dataset_paths(dataset_root, file_index)
