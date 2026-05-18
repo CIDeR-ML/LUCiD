@@ -36,6 +36,8 @@ python train.py --resume
 
 - `--material` - Material type (default: water)
 - `--particle` - Particle type (default: muon)
+- `--data-type` - `photon` or `dedx` (default: photon)
+- `--h5-path` - Override the conventional .h5 path. `--material` / `--particle` / `--data-type` still drive the output directory (e.g. for training off a non-standard build at `/tmp/photon_lookup_table_mu.h5`).
 - `--hidden-features` - Hidden layer size (default: 256)
 - `--hidden-layers` - Number of hidden layers (default: 3)
 - `--learning-rate` - Initial learning rate (default: 1e-4)
@@ -44,6 +46,29 @@ python train.py --resume
 - `--resume` - Resume from latest checkpoint
 
 Models are saved to: `data/{material}/{particle}/siren_training/trained_model/`
+
+### In-training prediction-vs-truth plots
+
+`lucid-train-siren` saves a PNG every `--prediction-plot-every` steps comparing
+the model's current predictions against the source lookup table at a handful
+of representative anchors. The figure has two views:
+
+- **Top**: intensity vs angle (or dE/dx for the dedx variant) at four fixed
+  `s/s_max` slices (default `0.1, 0.25, 0.5, 0.75`), one panel per slice.
+- **Bottom**: intensity vs `s/s_max`, summed over the 2nd axis.
+
+Truth curves are dashed, predictions solid, matched colour per energy.
+Output: `data/{material}/{particle}/{photon,dedx}_siren_training/prediction_plots/step_NNNNNN.png`.
+
+Flags:
+
+- `--prediction-plots` / `--no-prediction-plots` — default on.
+- `--prediction-plot-every <N>` — refresh interval (default 500).
+- `--prediction-plot-energies` — comma list of MeV (default `1000,2000,5000,10000,80000`).
+- `--prediction-plot-distance-slices` — comma list in [0, 1] (default `0.1,0.25,0.5,0.75`).
+
+Fresh runs wipe the `prediction_plots/` folder; `--resume` leaves existing
+PNGs intact so a single training produces one continuous PNG stream.
 
 ## Validation
 

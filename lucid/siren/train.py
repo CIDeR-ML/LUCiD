@@ -34,7 +34,6 @@ import matplotlib.pyplot as plt
 
 import jax
 import jax.numpy as jnp
-import torch
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -51,8 +50,14 @@ from lucid.utils import base_dir_path, setup_matplotlib_for_notebook
 class PhotonSimTrainer:
     """Main training class for PhotonSim SIREN models."""
 
-    def __init__(self, material='water', particle='muon', resume=False, data_type='photon'):
-        """Initialize trainer with material, particle type, and data type."""
+    def __init__(self, material='water', particle='muon', resume=False,
+                 data_type='photon', h5_path_override=None):
+        """Initialize trainer with material, particle type, and data type.
+
+        ``h5_path_override`` lets callers point at an arbitrary .h5 file
+        without renaming directories; output dir / checkpoints / plots still
+        land under ``data/<material>/<particle>/``.
+        """
         self.material = material
         self.particle = particle
         self.resume = resume
@@ -72,6 +77,9 @@ class PhotonSimTrainer:
             self.output_dir = self.data_dir / 'siren_training'
             self.model_name = 'photonsim_siren'
 
+        if h5_path_override is not None:
+            self.h5_path = Path(h5_path_override)
+
         # Create output directory
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -90,10 +98,6 @@ class PhotonSimTrainer:
             )
 
         print(f"✓ Found HDF5 file: {self.h5_path}")
-        
-        # Check device
-        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        print(f"✓ PyTorch device: {device}")
         print(f"✓ JAX devices: {jax.devices()}")
     
     def setup_dataset(self, val_split=0.1):
@@ -182,10 +186,11 @@ class PhotonSimTrainer:
         
         return self.trainer
     
-    def train(self, config, enable_monitoring=True):
+    def train(self, config, enable_monitoring=True,
+              prediction_plot_opts=None, val_split=0.01):
         """Run the training process."""
         # Setup dataset
-        dataset = self.setup_dataset()
+        dataset = self.setup_dataset(val_split=val_split)
         
         # Setup trainer
         trainer = self.setup_training(config)
@@ -205,7 +210,26 @@ class PhotonSimTrainer:
             # Add callback to trainer
             trainer.add_callback(live_callback)
             print("✓ Live plotting enabled")
-        
+
+        # Truth-vs-prediction snapshot callback
+        if prediction_plot_opts is not None:
+            from lucid.siren.training.prediction_plot import (
+                PredictionComparisonCallback,
+            )
+            print("\n🖼️  Setting up prediction-vs-truth plots...")
+            cb = PredictionComparisonCallback(
+                h5_path=self.h5_path,
+                dataset=dataset,
+                output_dir=self.output_dir,
+                energies_mev=prediction_plot_opts['energies'],
+                distance_slices=prediction_plot_opts['distance_slices'],
+                every=prediction_plot_opts['every'],
+                resume=self.resume,
+            )
+            trainer.add_callback(cb)
+            print(f"✓ Prediction plots → {cb.plot_dir} (every "
+                  f"{prediction_plot_opts['every']} steps)")
+
         # Start training
         print("\n🏃 Starting SIREN training...")
         print("=" * 60)
@@ -314,9 +338,35 @@ def main():
                         help='Force notebook mode for plot display')
     parser.add_argument('--seed', type=int, default=42,
                         help='Random seed (default: 42)')
-    parser.add_argument('--val-split', type=float, default=0.1,
-                        help='Validation split fraction (default: 0.1)')
-    
+    parser.add_argument('--val-split', type=float, default=0.01,
+                        help='Validation split fraction (default: 0.01)')
+
+    # Data source override
+    parser.add_argument('--h5-path', type=str, default=None,
+                        help='Override the conventional .h5 path '
+                             '(default: data/<material>/<particle>/<table>.h5). '
+                             'Material/particle/data-type still drive the '
+                             'output directory.')
+
+    # In-training prediction-vs-truth plots
+    parser.add_argument('--prediction-plots', dest='prediction_plots',
+                        action='store_true', default=True,
+                        help='Save predicted-vs-truth comparison PNGs every '
+                             '--prediction-plot-every steps (default: on).')
+    parser.add_argument('--no-prediction-plots', dest='prediction_plots',
+                        action='store_false',
+                        help='Disable the predicted-vs-truth PNG stream.')
+    parser.add_argument('--prediction-plot-every', type=int, default=500,
+                        help='Refresh interval in steps (default: 500).')
+    parser.add_argument('--prediction-plot-energies', type=str,
+                        default='1000,2000,5000,10000,80000',
+                        help='Comma-separated representative energies in MeV '
+                             '(default: 1000,2000,5000,10000,80000).')
+    parser.add_argument('--prediction-plot-distance-slices', type=str,
+                        default='0.1,0.25,0.5,0.75',
+                        help='Comma-separated s/s_max slice values, each in '
+                             '[0, 1] (default: 0.1,0.25,0.5,0.75).')
+
     args = parser.parse_args()
     
     # Configure matplotlib for notebook display if needed
@@ -370,14 +420,29 @@ def main():
         material=args.material,
         particle=args.particle,
         resume=args.resume,
-        data_type=data_type
+        data_type=data_type,
+        h5_path_override=args.h5_path,
     )
-    
+
+    # Wire up predicted-vs-truth comparison plots if enabled.
+    prediction_plot_opts = None
+    if args.prediction_plots:
+        from lucid.siren.training.prediction_plot import (
+            parse_float_list, parse_int_list,
+        )
+        prediction_plot_opts = {
+            'energies':       parse_int_list(args.prediction_plot_energies),
+            'distance_slices': parse_float_list(args.prediction_plot_distance_slices),
+            'every':          args.prediction_plot_every,
+        }
+
     # Run training
     try:
         history, trainer = trainer_manager.train(
             config=config,
-            enable_monitoring=not args.no_monitoring
+            enable_monitoring=not args.no_monitoring,
+            prediction_plot_opts=prediction_plot_opts,
+            val_split=args.val_split,
         )
     except KeyboardInterrupt:
         print("\n\n⚠️  Training interrupted by user")
