@@ -50,7 +50,7 @@ class TestDetectorGeometry:
         dg = DetectorGeometry.from_config(
             small_cylinder_config, temperature=0.2,
             detector_type='Cylinder')
-        assert dg.detector_type == 'Cylinder'
+        assert dg.detector_type == 'cylinder'
         assert dg.num_sensors == len(dg.sensor_points)
         assert dg.sensor_points.shape[1] == 3
         npt.assert_allclose(dg.speed_of_light, 0.299792 / 1.33, atol=1e-5)
