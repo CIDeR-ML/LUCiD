@@ -158,3 +158,35 @@ jobs:
             out/speed.md
           retention-days: 90
           if-no-files-found: error
+
+  test:
+    # Unit / integration tests: runs the pytest suite (fast tests only;
+    # slow tests are skipped by default via conftest.py --slow mechanism).
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - name: Log in to ghcr.io
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Resolve image tag
+        id: img
+        run: |
+          SHA="${{ github.sha }}"
+          echo "short=${SHA:0:7}" >> "$GITHUB_OUTPUT"
+          echo "image=ghcr.io/cider-ml/lucid:$SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Pull LUCiD container
+        run: docker pull ${{ steps.img.outputs.image }}
+
+      - name: Run pytest
+        run: |
+          docker run --rm \
+            ${{ steps.img.outputs.image }} \
+            bash -c "cd /opt/LUCiD && python3 -m pytest tests/ -v --tb=short"

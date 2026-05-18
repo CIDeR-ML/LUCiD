@@ -23,7 +23,11 @@ _SLOW_FILES = [
     "integration/test_wavelength_integration.py",
     "integration/test_qe_importance_sampling.py",
     "integration/test_shotgun_waveform.py",
-    "e2e/test_e2e_wavelength.py",
+    "e2e/test_e2e_calibration.py",
+    "e2e/test_e2e_track_and_data.py",
+    "e2e/test_e2e_superk.py",
+    "e2e/test_e2e_gradients.py",
+    "e2e/test_e2e_edge_cases.py",
 ]
 
 
