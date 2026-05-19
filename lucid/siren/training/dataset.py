@@ -26,7 +26,8 @@ class PhotonSimDataset:
     def __init__(self, data_path: Union[str, Path], val_split: float = 0.1,
                  zero_threshold: float = 1e-2,
                  zero_keep_frac: float = 0.002,
-                 energy_balance: str = 'none'):
+                 energy_balance: str = 'none',
+                 target_importance: float = 0.0):
         """
         Initialize dataset.
 
@@ -46,6 +47,15 @@ class PhotonSimDataset:
                 over-represented because the grid has more low-E points).
                 'uniform' — each energy gets equal probability per batch.
                 'log_uniform' — uniform in log(E) (each decade weighted equally).
+            target_importance: Mixture coefficient β ∈ [0, 1] for
+                importance-sampling on the target value within each energy.
+                Within each energy the per-sample weight is
+                ``(1-β)·uniform + β·target_normalised``. β=0 (default) leaves
+                sampling uniform across (angle, s/s_max) bins; β=1 weights
+                samples by their target value (so the sharp Cherenkov ring at
+                high E gets many more samples than the surrounding empty
+                space). Combines cleanly with ``energy_balance``: the two
+                knobs act on orthogonal axes (energy vs. within-energy shape).
         """
         if zero_threshold <= 0:
             raise ValueError(
@@ -62,11 +72,16 @@ class PhotonSimDataset:
                 f"energy_balance must be one of 'none' / 'uniform' / "
                 f"'log_uniform' (got {energy_balance!r})."
             )
+        if not 0.0 <= target_importance <= 1.0:
+            raise ValueError(
+                f"target_importance must be in [0, 1] (got {target_importance!r})."
+            )
         self.data_path = Path(data_path)
         self.val_split = val_split
         self.zero_threshold = float(zero_threshold)
         self.zero_keep_frac = float(zero_keep_frac)
         self.energy_balance = energy_balance
+        self.target_importance = float(target_importance)
         self.data_type = None
         self.data = {}
         self.normalized_bounds = {}
@@ -268,41 +283,95 @@ class PhotonSimDataset:
         logger.info(f"Train samples: {len(self.train_indices):,}")
         logger.info(f"Validation samples: {len(self.val_indices):,}")
 
-        # Optional energy-rebalancing weights. By default (energy_balance='none')
-        # we leave them as None and sample uniformly across rows — which is
-        # equivalent to weight ∝ #samples-at-that-energy (low-E over-represented
-        # because the grid is denser there).
+        # Build per-sample sampling weights from two orthogonal knobs:
+        #   - energy_balance ('none' / 'uniform' / 'log_uniform'): controls
+        #     the relative weight of each energy point in the grid.
+        #   - target_importance (β ∈ [0, 1]): within each energy, mixes
+        #     uniform sampling with target-weighted importance sampling.
+        # The two are decoupled by per-energy-normalising the target
+        # component before combining with the energy component.
         self.train_weights = None
         self.val_weights = None
-        if self.energy_balance != 'none':
+
+        need_weights = (self.energy_balance != 'none'
+                        or self.target_importance > 0.0)
+        if need_weights:
             energies = self.data['inputs'][:, 0]
+            targets  = self.data['targets'][:, 0].astype(np.float64)
             unique_e, inv = np.unique(energies, return_inverse=True)
             counts = np.bincount(inv).astype(np.float64)
+
+            # --- Energy-level weight (one value per energy) -----------------
             if self.energy_balance == 'uniform':
-                # Each energy gets equal total weight; per-sample weight = 1/N_E.
-                per_e = 1.0 / counts
-            else:  # 'log_uniform'
-                # Each log-decade of energy gets equal weight. Compute log-bin
-                # widths from the on-disk grid (use centre-difference for the
-                # interior, half-step for the endpoints).
+                e_weight = 1.0 / counts
+            elif self.energy_balance == 'log_uniform':
                 log_e = np.log(unique_e.astype(np.float64))
                 widths = np.empty_like(log_e)
                 widths[1:-1] = 0.5 * (log_e[2:] - log_e[:-2])
                 widths[0]    = log_e[1]  - log_e[0]
                 widths[-1]   = log_e[-1] - log_e[-2]
-                per_e = widths / counts
-            per_sample = per_e[inv]                  # shape (n_samples,)
+                e_weight = widths / counts
+            else:  # 'none' but target_importance > 0: keep row-uniform energy mass
+                e_weight = np.ones_like(counts)
+
+            # --- Per-energy shape: (1-β) · uniform + β · target ------------
+            beta = self.target_importance
+            if beta > 0.0:
+                # Per-energy normalisation of target weights and of the
+                # uniform component decouples the within-energy "shape" knob
+                # from the across-energy "energy_balance" knob.
+                target_sum_per_e = np.bincount(inv,
+                                                weights=np.maximum(targets, 0.0))
+                # Per-sample target component, normalised so sum-over-samples
+                # at each energy = 1.
+                with np.errstate(divide='ignore', invalid='ignore'):
+                    per_sample_target = np.where(
+                        target_sum_per_e[inv] > 0,
+                        np.maximum(targets, 0.0) / target_sum_per_e[inv],
+                        0.0,
+                    )
+                # Per-sample uniform component, also normalised per energy.
+                per_sample_uniform = 1.0 / counts[inv]
+                shape_w = (1.0 - beta) * per_sample_uniform + beta * per_sample_target
+            else:
+                shape_w = 1.0 / counts[inv]   # uniform-within-energy
+
+            # Combine: energy-level mass × within-energy shape.
+            per_sample = e_weight[inv] * counts[inv] * shape_w
+            # (e_weight[inv] * counts[inv]) is just the desired energy
+            # mass spread evenly per sample at that energy; shape_w then
+            # redistributes within the energy according to the mixture.
+
             self.train_weights = per_sample[self.train_indices]
             self.val_weights   = per_sample[self.val_indices]
-            # Normalise to a proper probability distribution.
             self.train_weights = self.train_weights / self.train_weights.sum()
             self.val_weights   = self.val_weights   / self.val_weights.sum()
+
             logger.info(
-                f"energy_balance='{self.energy_balance}': sampling will be "
-                f"weighted across {len(unique_e)} unique energies "
-                f"({unique_e[0]:.0f}–{unique_e[-1]:.0f} MeV)."
+                "Sampling weights: energy_balance='%s', target_importance=%.3g "
+                "across %d unique energies (%.0f–%.0f MeV).",
+                self.energy_balance, self.target_importance,
+                len(unique_e), unique_e[0], unique_e[-1],
             )
-        
+
+        # Precompute device-side caches so get_batch doesn't host→device
+        # transfer the 50M-element indices/weights arrays every step. For
+        # weighted sampling we also precompute the cumulative-sum once and
+        # roll our own inverse-CDF lookup: jax.random.choice(..., p=p) would
+        # recompute cumsum(p) over all ~50M samples on EVERY call (no JIT
+        # caching across calls since get_batch is invoked outside a jit
+        # boundary), which dominates per-step cost.
+        self._train_indices_jnp = jnp.asarray(self.train_indices, dtype=jnp.int32)
+        self._val_indices_jnp   = jnp.asarray(self.val_indices,   dtype=jnp.int32)
+        if self.train_weights is not None:
+            self._train_cdf_jnp = jnp.cumsum(
+                jnp.asarray(self.train_weights, dtype=jnp.float32))
+            self._val_cdf_jnp   = jnp.cumsum(
+                jnp.asarray(self.val_weights,   dtype=jnp.float32))
+        else:
+            self._train_cdf_jnp = None
+            self._val_cdf_jnp   = None
+
     def get_sample_input(self) -> jax.Array:
         """Get a sample input for model initialization."""
         return jnp.array(self.data['inputs_normalized'][:1])
@@ -326,24 +395,26 @@ class PhotonSimDataset:
         Returns:
             Tuple of (inputs, targets) arrays
         """
-        # Select indices based on split
+        # Select indices based on split. Indices and CDFs are device-cached
+        # so we don't pay the ~200 MB host→device transfer every batch.
         if split == 'train':
-            indices = self.train_indices
-            weights = self.train_weights
+            indices_jnp = self._train_indices_jnp
+            cdf_jnp     = self._train_cdf_jnp
         else:
-            indices = self.val_indices
-            weights = self.val_weights
+            indices_jnp = self._val_indices_jnp
+            cdf_jnp     = self._val_cdf_jnp
 
-        if weights is None:
-            batch_indices = jax.random.choice(rng, indices, shape=(batch_size,))
+        if cdf_jnp is None:
+            batch_indices = jax.random.choice(rng, indices_jnp,
+                                              shape=(batch_size,))
         else:
-            # Weighted sampling: pick local positions in [0, len(indices))
-            # via inverse-CDF, then map through `indices`.
-            local = jax.random.choice(
-                rng, len(indices), shape=(batch_size,),
-                p=jnp.asarray(weights),
-            )
-            batch_indices = jnp.asarray(indices)[local]
+            # Weighted inverse-CDF lookup with a precomputed cumulative sum.
+            # Equivalent to jax.random.choice(p=p, replace=True) but without
+            # recomputing cumsum(p) over the full sample array on every call.
+            u = jax.random.uniform(rng, (batch_size,)) * cdf_jnp[-1]
+            local = jnp.searchsorted(cdf_jnp, u)
+            local = jnp.clip(local, 0, indices_jnp.shape[0] - 1)
+            batch_indices = indices_jnp[local]
         
         # Get data with consistent normalization
         if normalized:

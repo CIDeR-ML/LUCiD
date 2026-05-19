@@ -1,0 +1,45 @@
+{
+  "name": "example_water_mu",
+  "description": "Example scan config for water/mu- SIREN training. Demonstrates the full knob set (energy_balance, target_importance, zero_threshold, etc.). Override any of these in `runs` to fan out hyperparameter variations. Edit and copy to a new name for your own scans.",
+
+  "baseline": {
+    "material":          "water",
+    "particle":          "muon",
+    "data_type":         "photon",
+    "h5_path":           "/sdf/home/c/cjesus/REFACTORED/LUCiD/data/water/muon/photon_lookup_table.h5",
+
+    "num_steps":         30000,
+    "learning_rate":     1e-4,
+    "min_lr":            5e-7,
+    "patience":          40,
+    "grad_clip_norm":    1.0,
+    "batch_size":        25000,
+    "val_split":         0.01,
+
+    "zero_threshold":    1e-2,
+    "zero_keep_frac":    0.002,
+
+    "energy_balance":    "none",
+    "target_importance": 0.0
+  },
+
+  "runs": [
+    {},
+    {"patience": 100},
+    {"zero_threshold": 1e-4},
+    {"energy_balance": "uniform"},
+    {"energy_balance": "uniform", "target_importance": 0.1},
+    {"batch_size": 50000, "grad_clip_norm": 5.0}
+  ],
+
+  "slurm": {
+    "partition": "turing",
+    "account":   "mli:cider-ml",
+    "time":      "04:00:00",
+    "memory":    "32000",
+    "cpus":      "4",
+    "gpus":      "1"
+  },
+
+  "output_root": "/sdf/data/neutrino/cjesus/SIREN_files/training_tests"
+}

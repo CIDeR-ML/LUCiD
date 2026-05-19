@@ -106,7 +106,8 @@ class PhotonSimTrainer:
         print(f"✓ JAX devices: {jax.devices()}")
     
     def setup_dataset(self, val_split=0.1, zero_threshold=1e-2,
-                      zero_keep_frac=0.002, energy_balance='none'):
+                      zero_keep_frac=0.002, energy_balance='none',
+                      target_importance=0.0):
         """Load and configure the dataset."""
         print("\n📊 Loading dataset...")
         self.dataset = PhotonSimDataset(
@@ -114,6 +115,7 @@ class PhotonSimTrainer:
             zero_threshold=zero_threshold,
             zero_keep_frac=zero_keep_frac,
             energy_balance=energy_balance,
+            target_importance=target_importance,
         )
 
         print(f"\nDataset info:")
@@ -200,13 +202,14 @@ class PhotonSimTrainer:
     def train(self, config, enable_monitoring=True,
               prediction_plot_opts=None, val_split=0.01,
               zero_threshold=1e-2, zero_keep_frac=0.002,
-              energy_balance='none'):
+              energy_balance='none', target_importance=0.0):
         """Run the training process."""
         # Setup dataset
         dataset = self.setup_dataset(val_split=val_split,
                                      zero_threshold=zero_threshold,
                                      zero_keep_frac=zero_keep_frac,
-                                     energy_balance=energy_balance)
+                                     energy_balance=energy_balance,
+                                     target_importance=target_importance)
         
         # Setup trainer
         trainer = self.setup_training(config)
@@ -379,6 +382,16 @@ def main():
                              "there). 'uniform' — each energy point gets "
                              "equal probability. 'log_uniform' — uniform in "
                              "log(E), so each decade is equally weighted.")
+    parser.add_argument('--target-importance', type=float, default=0.0,
+                        help='Mixture coefficient β ∈ [0, 1] for '
+                             'importance-sampling on the target value '
+                             'WITHIN each energy. Within each energy the '
+                             'per-sample weight is (1-β)·uniform + '
+                             'β·target_normalised. β=0 (default) leaves '
+                             'sampling uniform across (angle, s/s_max); β=1 '
+                             'fully weights by target (high-target bins like '
+                             'the Cherenkov ring get most of the samples). '
+                             'Combines cleanly with --energy-balance.')
 
     # Data source override
     parser.add_argument('--h5-path', type=str, default=None,
@@ -514,6 +527,7 @@ def main():
             zero_threshold=args.zero_threshold,
             zero_keep_frac=args.zero_keep_frac,
             energy_balance=args.energy_balance,
+            target_importance=args.target_importance,
         )
     except KeyboardInterrupt:
         print("\n\n⚠️  Training interrupted by user")
