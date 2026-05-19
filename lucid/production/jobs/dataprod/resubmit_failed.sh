@@ -39,7 +39,7 @@ DEV_BINDS=""
 LIST=$(mktemp)
 trap 'rm -f "${LIST}"' EXIT
 
-apptainer exec -B /sdf,/fs,/sdf/scratch,/lscratch ${DEV_BINDS} \
+apptainer exec -B "${APPTAINER_BINDS:-/sdf,/fs,/sdf/scratch,/lscratch}" ${DEV_BINDS} \
     "${LUCID_IMAGE_PATH}" \
     python3 "${SCRIPT_DIR}/verify_jobs.py" --list "${SCAN_DIR}" > "${LIST}"
 
@@ -52,16 +52,17 @@ if [ "${N}" -eq 0 ]; then
 fi
 
 if [ "${DRY_RUN}" -eq 1 ]; then
-    echo "--dry-run: would resubmit ${N} sbatches. First 10:"
+    echo "--dry-run: would resubmit ${N} submits. First 10:"
     head -10 "${LIST}"
     exit 0
 fi
 
-command -v sbatch >/dev/null || { echo "error: sbatch not on host PATH." >&2; exit 1; }
+SUBMIT_CMD="${CLUSTER_SUBMIT_CMD:-sbatch}"
+command -v "${SUBMIT_CMD}" >/dev/null || { echo "error: ${SUBMIT_CMD} not on host PATH." >&2; exit 1; }
 
 ok=0; fail=0
 while IFS= read -r sb; do
-    if sbatch "${sb}" >/dev/null 2>&1; then
+    if "${SUBMIT_CMD}" "${sb}" >/dev/null 2>&1; then
         ok=$((ok + 1))
     else
         echo "  FAILED: ${sb}" >&2

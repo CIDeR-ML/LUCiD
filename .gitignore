@@ -41,8 +41,8 @@ s3df_jobs/*/*
 s3df_jobs/*/*/*
 !s3df_jobs/*/*/*.py
 
-# Local user-paths config (template stays tracked)
-lucid/production/s3df_jobs/user_paths.sh
+# Local user-paths config (templates stay tracked)
+lucid/production/jobs/user_paths.sh
 
 
 *.egg-info/

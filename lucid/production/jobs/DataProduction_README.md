@@ -1,50 +1,56 @@
-# S3DF Production Jobs
+# Production Jobs (dataprod fan-out)
 
-SLURM fan-out for `lucid-run-job` on S3DF. The whole pipeline (gevgen →
-gntpc → PhotonSim → LUCiD, or macro → PhotonSim → LUCiD) runs inside
-the unified LUCiD apptainer image — one `apptainer exec` per job, no
-host-side build state.
+Cluster fan-out for `lucid-run-job`. The whole pipeline (gevgen → gntpc
+→ PhotonSim → LUCiD, or macro → PhotonSim → LUCiD) runs inside the
+unified LUCiD apptainer image — one `apptainer exec` per job, no
+host-side build state. SLURM (S3DF) and HTCondor (LXPLUS) are both
+supported; the cluster is picked from your active `user_paths.sh`. See
+[`docs/CLUSTER_ABSTRACTION.md`](../../../docs/CLUSTER_ABSTRACTION.md).
 
 For a higher-level walkthrough see
-[`docs/QUICKSTART_S3DF.md`](../../../docs/QUICKSTART_S3DF.md).
+[`docs/QUICKSTART_S3DF.md`](../../../docs/QUICKSTART_S3DF.md) or
+[`docs/QUICKSTART_LXPLUS.md`](../../../docs/QUICKSTART_LXPLUS.md).
 
 ## Quick start
 
 ```bash
-# 1. Pull the unified container (one-time)
-apptainer pull /sdf/data/neutrino/<user>/software/images/lucid.sif \
-    docker://ghcr.io/cider-ml/lucid:latest
+# 1. Pull the unified container (one-time) — see your cluster's QUICKSTART
+#    for the location.
 
 # 2. Configure paths
-cp user_paths.sh.template user_paths.sh
-vim user_paths.sh   # set LUCID_IMAGE_PATH, OUTPUT_BASE_PATH, SLURM_*
+cp user_paths.s3df.sh.template   user_paths.sh   # on S3DF, or
+cp user_paths.lxplus.sh.template user_paths.sh   # on LXPLUS
+vim user_paths.sh   # set LUCID_IMAGE_PATH, OUTPUT_BASE_PATH, cluster vars
 
 # 3. Test with one job per config (no submission)
-./jobs/submit_all_configs.sh -t
+./dataprod/submit_all_configs.sh -t
 
 # 4. Submit all configs
-echo "y" | ./jobs/submit_all_configs.sh -s
+echo "y" | ./dataprod/submit_all_configs.sh -s
 
 # 5. Monitor
-./jobs/monitor_jobs.sh -w
+./dataprod/monitor_jobs.s3df.sh -w        # on S3DF, or
+./dataprod/monitor_jobs.lxplus.sh -w      # on LXPLUS
 ```
 
 ## Directory layout
 
 ```
-s3df_jobs/
-├── user_paths.sh.template   # config template — copy to user_paths.sh
-├── user_paths.sh            # your overrides (gitignored)
-├── jobs/
-│   ├── generate_jobs.sh     # fan one config out into sbatch scripts
+jobs/
+├── user_paths.s3df.sh.template      # SLURM env block (copy → user_paths.sh)
+├── user_paths.lxplus.sh.template    # HTCondor env block
+├── user_paths.sh                    # your overrides (gitignored)
+├── dataprod/
+│   ├── generate_jobs.sh             # fan one config out into submit scripts
 │   ├── submit_all_configs.sh
-│   ├── verify_jobs.py       # flag finished sub-jobs that wrote no usable batch
-│   ├── resubmit_failed.sh   # re-sbatch the failures verify_jobs found
-│   ├── monitor_jobs.sh
+│   ├── verify_jobs.py               # flag finished sub-jobs that wrote no usable batch
+│   ├── resubmit_failed.sh           # re-submit the failures verify_jobs found
+│   ├── monitor_jobs.s3df.sh         # squeue-flavoured watch loop
+│   ├── monitor_jobs.lxplus.sh       # condor_q-flavoured watch loop
 │   ├── cleanup_jobs.sh
 │   └── report_time_performance.py
 └── utils/
-    ├── clean_output_data.sh # drop ROOT/log files from a finished output dir
+    ├── clean_output_data.sh         # drop ROOT/log files from a finished output dir
     └── copy_output_data.sh
 ```
 

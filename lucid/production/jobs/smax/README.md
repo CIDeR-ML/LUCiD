@@ -1,7 +1,9 @@
 # s_max parametrisation scan (Stage 0)
 
-SLURM fan-out for PhotonSim jobs whose only purpose is to fill
-`PhotonHist_Distance` per (particle, energy) cell, so the host-native
+Cluster fan-out (SLURM or HTCondor — see
+[`../../../../docs/CLUSTER_ABSTRACTION.md`](../../../../docs/CLUSTER_ABSTRACTION.md))
+for PhotonSim jobs whose only purpose is to fill `PhotonHist_Distance`
+per (particle, energy) cell, so the host-native
 `PhotonSim/tools/smax/analyze_smax.py` can fit `s_max(E) ≈ A · E^B` per
 particle. The resulting `smax_fit.csv` lives at
 `PhotonSim/data/<material>/<particle>/smax_fit.csv` and is the upstream
@@ -13,10 +15,12 @@ input that `../siren_inputs/generate_jobs.py` reads at submission time.
 ## Quick start
 
 ```bash
-# 1. Configure your paths (shared with the rest of s3df_jobs)
-cp ../user_paths.sh.template ../user_paths.sh && vim ../user_paths.sh
+# 1. Configure your paths (shared across all stages)
+cp ../user_paths.s3df.sh.template   ../user_paths.sh   # on S3DF, or
+cp ../user_paths.lxplus.sh.template ../user_paths.sh   # on LXPLUS
+vim ../user_paths.sh
 
-# 2. Prepare sbatch scripts only
+# 2. Prepare submit scripts only (no submission)
 python3 generate_jobs.py -c configs/water_mu.json
 
 # 3. Submit the full scan (mu- + e- separately)

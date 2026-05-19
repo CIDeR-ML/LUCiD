@@ -34,13 +34,13 @@ schema.
 
 ```bash
 # Test mode (1 job, 1 energy point)
-./jobs/generate_jobs.sh -c ../macros/diffsim_input/water_lookup_table_mu.json -t
+./dataprod/generate_jobs.sh -c ../macros/diffsim_input/water_lookup_table_mu.json -t
 
 # Generate all jobs (prepare only)
-./jobs/generate_jobs.sh -c ../macros/diffsim_input/water_lookup_table_mu.json
+./dataprod/generate_jobs.sh -c ../macros/diffsim_input/water_lookup_table_mu.json
 
 # Generate and submit
-./jobs/generate_jobs.sh -c ../macros/diffsim_input/water_lookup_table_mu.json -s
+./dataprod/generate_jobs.sh -c ../macros/diffsim_input/water_lookup_table_mu.json -s
 ```
 
 

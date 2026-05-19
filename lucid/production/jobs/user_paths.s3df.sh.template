@@ -8,6 +8,17 @@
 # output directory.
 
 # =============================================================================
+# Cluster identity (read by lucid.production.cluster_common.cluster)
+# =============================================================================
+# `slurm` (S3DF, NERSC, …) or `htcondor` (LXPLUS). The adapter writes the
+# matching submit-description format and uses the matching submit command.
+export CLUSTER="slurm"
+export CLUSTER_SUBMIT_CMD="sbatch"
+# Apptainer bind list (comma-separated) — the shared filesystems each
+# `apptainer exec` needs visible inside the container.
+export APPTAINER_BINDS="/sdf,/fs,/sdf/scratch,/lscratch,/cvmfs"
+
+# =============================================================================
 # Container image
 # =============================================================================
 # Unified LUCiD container. Pull and convert from ghcr.io with:

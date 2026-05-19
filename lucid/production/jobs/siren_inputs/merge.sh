@@ -64,7 +64,7 @@ while IFS= read -r -d '' cell_dir; do
     fi
 
     echo "  merging ${#parts[@]} file(s) → ${merged_root}"
-    apptainer exec -B /sdf,/fs,/sdf/scratch,/lscratch \
+    apptainer exec -B "${APPTAINER_BINDS:-/sdf,/fs,/sdf/scratch,/lscratch}" \
         "${LUCID_IMAGE_PATH}" \
         hadd -f "${merged_root}" "${parts[@]}" > /dev/null
 

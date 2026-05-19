@@ -1,11 +1,18 @@
 # SIREN-input job submission (s/s_max axis)
 
-SLURM fan-out for PhotonSim jobs that produce SIREN training inputs with
-the **`PhotonHist_AngleDistanceNorm`** histogram (opening angle vs.
-`s / s_max`). Distinct from the old data-production path
-(`../jobs/generate_jobs.sh`) in three ways:
+Fan-out for PhotonSim jobs that produce SIREN training inputs with the
+**`PhotonHist_AngleDistanceNorm`** histogram (opening angle vs.
+`s / s_max`). One code path, two clusters: which one you target is
+chosen by the `user_paths.sh` you copy into `../`. See
+[`../../../../docs/CLUSTER_ABSTRACTION.md`](../../../../docs/CLUSTER_ABSTRACTION.md)
+for the architecture and the per-cluster runbooks
+[`QUICKSTART_S3DF.md`](../../../../docs/QUICKSTART_S3DF.md) /
+[`QUICKSTART_LXPLUS.md`](../../../../docs/QUICKSTART_LXPLUS.md).
 
-| | Old path (`s3df_jobs/jobs/`) | New SIREN-input path (this dir) |
+Distinct from the data-production path (`../dataprod/generate_jobs.sh`)
+in three ways:
+
+| | Dataprod path (`../dataprod/`) | SIREN-input path (this dir) |
 |---|---|---|
 | Macro direction | `/gun/randomDirection true` | `/gun/direction 0 0 1` (matches the hardcoded +Z axis used by PhotonSim's angle histograms) |
 | `/output/smax` | not emitted | emitted per-cell, `s_max = A·E^B` from `PhotonSim/data/<material>/<particle>/smax_fit.csv` |
@@ -16,8 +23,9 @@ Both paths share the same `lucid-run-job` core and unified container.
 ## Quick start
 
 ```bash
-# 1. Configure your paths (one-time, shared with the old path)
-cp ../user_paths.sh.template ../user_paths.sh
+# 1. Configure your paths (one-time, shared across stages)
+cp ../user_paths.s3df.sh.template   ../user_paths.sh   # on S3DF, or
+cp ../user_paths.lxplus.sh.template ../user_paths.sh   # on LXPLUS
 vim ../user_paths.sh
 
 # 2. Prepare sbatch scripts only (no submission)

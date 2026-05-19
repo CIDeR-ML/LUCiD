@@ -40,7 +40,7 @@ echo "photonsim:     ${PHOTONSIM_CHECKOUT}"
 echo "container:     ${LUCID_IMAGE_PATH}"
 echo ""
 
-apptainer exec --nv -B /sdf,/fs,/sdf/scratch,/lscratch \
+apptainer exec --nv -B "${APPTAINER_BINDS:-/sdf,/fs,/sdf/scratch,/lscratch}" \
     -B "${PHOTONSIM_CHECKOUT}:/opt/PhotonSim" \
     "${LUCID_IMAGE_PATH}" \
     python3 /opt/PhotonSim/tools/smax/analyze_smax.py \

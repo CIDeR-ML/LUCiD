@@ -1,16 +1,21 @@
-# SIREN training scans on S3DF
+# SIREN training scans (Stage 3)
 
-SLURM fan-out for `lucid-train-siren` hyperparameter sweeps. Each scan config
-lists a baseline + a list of explicit per-run overrides; the driver
-materializes one output sub-folder + sbatch per run under
-`<output_root>/<scan_name>/<run_name>/`. Sub-folder names are auto-derived from
-each run's diff against the baseline so the file tree is self-documenting.
+Cluster fan-out (SLURM or HTCondor — see
+[`../../../../docs/CLUSTER_ABSTRACTION.md`](../../../../docs/CLUSTER_ABSTRACTION.md))
+for `lucid-train-siren` hyperparameter sweeps. Each scan config lists a
+baseline + a list of explicit per-run overrides; the driver materializes
+one output sub-folder + submit description per run under
+`<output_root>/<scan_name>/<run_name>/`. Sub-folder names are auto-derived
+from each run's diff against the baseline so the file tree is
+self-documenting.
 
 ## Quick start
 
 ```bash
-# 1. Configure user paths (shared with the other s3df_jobs subtools).
-cp ../user_paths.sh.template ../user_paths.sh && vim ../user_paths.sh
+# 1. Configure user paths (shared across all stages).
+cp ../user_paths.s3df.sh.template   ../user_paths.sh   # on S3DF, or
+cp ../user_paths.lxplus.sh.template ../user_paths.sh   # on LXPLUS
+vim ../user_paths.sh
 # Only LUCID_DEV_PATH and LUCID_IMAGE_PATH are read here.
 
 # 2. Prepare the scan (no submission)

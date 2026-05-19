@@ -35,17 +35,21 @@ import sys
 from pathlib import Path
 from typing import Iterator, List, Optional, Tuple
 
-# Lives next to verify_output.py inside the container's lucid install.
-from lucid.production.verify_output import V3_SUBDIRS, v3_batch_paths
+from lucid.production.cluster_common.verify import is_complete_dataprod as is_complete
 
 
-# submit_job_NNNNNN.sbatch  -> job_id = int(NNNNNN)
-SBATCH_RE = re.compile(r"^submit_job_(\d+)\.sbatch$")
+# submit_job_NNNNNN.{sbatch|sub}  -> job_id = int(NNNNNN)
+SUBMIT_RE = re.compile(r"^submit_job_(\d+)\.(?:sbatch|sub)$")
 
 
-def job_id_from_sbatch(name: str) -> Optional[int]:
-    m = SBATCH_RE.match(name)
+def job_id_from_submit(name: str) -> Optional[int]:
+    m = SUBMIT_RE.match(name)
     return int(m.group(1)) if m else None
+
+
+# Preserve the old name for callers (kept identical to the new function so we
+# don't have to chase down every reference inside this file).
+job_id_from_sbatch = job_id_from_submit
 
 
 def _read_sbatch(sbatch: Path) -> str:
@@ -94,36 +98,11 @@ def expected_n_events(sbatch: Path, override: Optional[int]) -> Optional[int]:
         return None
 
 
-def is_complete(cell_dir: Path, file_index: int,
-                expected_events: Optional[int]) -> Tuple[bool, str]:
-    """True iff the four v3 files exist with expected n_events.
-
-    Returns (ok, short_reason). `short_reason` is "" when ok.
-    """
-    import h5py
-
-    paths = v3_batch_paths(cell_dir, file_index)
-    for sub in V3_SUBDIRS:
-        p = paths[sub]
-        if not p.is_file():
-            return False, f"missing {sub}"
-        if p.stat().st_size == 0:
-            return False, f"empty {sub}"
-        try:
-            with h5py.File(p, "r") as h:
-                n = int(h["config"].attrs.get("n_events", -1))
-        except Exception as e:
-            return False, f"unreadable {sub}: {e!r}"
-        if n <= 0:
-            return False, f"bad n_events={n} in {sub}"
-        if expected_events is not None and n != expected_events:
-            return False, f"{sub} has n_events={n}, expected {expected_events}"
-    return True, ""
-
-
 def iter_sbatches(scan_dir: Path) -> Iterator[Path]:
-    """Every submit_job_*.sbatch under the scan dir, sorted."""
-    yield from sorted(scan_dir.rglob("submit_job_*.sbatch"))
+    """Every submit_job_*.{sbatch,sub} under the scan dir, sorted."""
+    submits = (list(scan_dir.rglob("submit_job_*.sbatch"))
+               + list(scan_dir.rglob("submit_job_*.sub")))
+    yield from sorted(submits)
 
 
 def main() -> int:
