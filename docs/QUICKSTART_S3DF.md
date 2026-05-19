@@ -2,7 +2,11 @@
 
 Concise runbook for the S3DF (SLAC) deployment. For a local-machine
 workflow with no cluster, see [QUICKSTART_LOCAL.md](QUICKSTART_LOCAL.md);
-for Docker on macOS/Linux, see [QUICKSTART_DOCKER.md](QUICKSTART_DOCKER.md).
+for Docker on macOS/Linux, see [QUICKSTART_DOCKER.md](QUICKSTART_DOCKER.md);
+for HTCondor on LXPLUS, see [QUICKSTART_LXPLUS.md](QUICKSTART_LXPLUS.md).
+The single code path that drives both batch deployments lives at
+`LUCiD/lucid/production/cluster_common/` — see
+[CLUSTER_ABSTRACTION.md](CLUSTER_ABSTRACTION.md).
 
 ## One-time setup
 
@@ -18,8 +22,8 @@ apptainer pull \
     docker://ghcr.io/cider-ml/lucid:latest
 
 # Configure paths
-cd lucid/production/s3df_jobs
-cp user_paths.sh.template user_paths.sh
+cd lucid/production/jobs
+cp user_paths.s3df.sh.template user_paths.sh
 ${EDITOR:-vim} user_paths.sh          # set LUCID_IMAGE_PATH, OUTPUT_BASE_PATH, ...
 ```
 
@@ -29,7 +33,7 @@ above.
 ## Submit one test run (one job per config, 2 events each)
 
 ```bash
-cd lucid/production/s3df_jobs/jobs
+cd lucid/production/jobs/dataprod
 echo "y" | ./submit_all_configs.sh -t -s -o /sdf/data/<user>/WAND/<date>_test
 ```
 
@@ -155,5 +159,5 @@ needed.
 
 - Configs: `LUCiD/lucid/production/configs/dataprod_*.json`
 - Runner: `LUCiD/lucid/production/run_job.py` (entry: `lucid-run-job`)
-- S3DF wrappers: `LUCiD/lucid/production/s3df_jobs/`
+- Production wrappers: `LUCiD/lucid/production/jobs/`
 - v3 schema spec: [LUCID_DATASET.md](LUCID_DATASET.md)
