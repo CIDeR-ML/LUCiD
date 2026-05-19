@@ -37,7 +37,7 @@ class TrainingConfig:
     weight_decay: float = 0.0  # Disabled - might have been interfering
     batch_size: int = 8192
     num_steps: int = 10000
-    checkpoint_every: int = 1000
+    checkpoint_every: int = 10000
     log_every: int = 100
     val_every: int = 100
     seed: int = 42
@@ -611,8 +611,8 @@ class SIRENTrainer:
                 file_path.unlink()
                 logger.info(f"Removed: {filename}")
                 
-        # Remove plot files
-        plot_files = list(self.output_dir.glob('*.png'))
+        # Remove plot files (both current .pdf outputs and any legacy .png)
+        plot_files = list(self.output_dir.glob('*.pdf')) + list(self.output_dir.glob('*.png'))
         for plot_file in plot_files:
             plot_file.unlink()
             logger.info(f"Removed plot: {plot_file.name}")

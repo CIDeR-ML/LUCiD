@@ -1,7 +1,7 @@
 """
 In-training prediction-vs-truth plot callback for SIREN.
 
-Drops PNGs at `<output_dir>/prediction_plots/step_NNNNNN.png` every N training
+Drops PDFs at `<output_dir>/prediction_plots/step_NNNNNN.pdf` every N training
 steps, each one comparing the trained-so-far model against the source lookup
 table at a small set of anchor points. Two views per figure:
 
@@ -27,10 +27,10 @@ import h5py
 import jax.numpy as jnp
 import numpy as np
 
-# Render PNGs via an explicit Agg canvas instead of pyplot, so the global
+# Render PDFs via an explicit PDF canvas instead of pyplot, so the global
 # matplotlib backend (e.g. Jupyter's inline backend driving the live loss/LR
 # monitor) is left alone.
-from matplotlib.backends.backend_agg import FigureCanvasAgg
+from matplotlib.backends.backend_pdf import FigureCanvasPdf
 from matplotlib.cm import viridis
 from matplotlib.figure import Figure
 
@@ -277,7 +277,7 @@ class PredictionComparisonCallback:
 
         n_cols = max(n_slices, n_xslices, 4)
         fig = Figure(figsize=(4.0 * n_cols, 10.0))
-        canvas = FigureCanvasAgg(fig)
+        canvas = FigureCanvasPdf(fig)
         gs = fig.add_gridspec(3, n_cols, height_ratios=[1.0, 1.0, 1.1])
 
         floor = 1e-6  # log-y floor so zeros don't blow up
@@ -355,8 +355,8 @@ class PredictionComparisonCallback:
         )
         fig.tight_layout(rect=(0, 0, 1, 0.97))
 
-        out_path = self.plot_dir / f"step_{step:06d}.png"
-        canvas.print_png(str(out_path))
+        out_path = self.plot_dir / f"step_{step:06d}.pdf"
+        canvas.print_pdf(str(out_path))
 
 
 def _format_xaxis_title(table_type: str, value_native: float) -> str:

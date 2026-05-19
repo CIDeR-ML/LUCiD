@@ -121,9 +121,9 @@ def find_photonsim_dir(env: Dict[str, str], override: Optional[Path]) -> Path:
     )
 
 
-def load_smax_fit(photonsim_dir: Path, material: str, particle: str
-                  ) -> Tuple[float, float, int]:
-    """Return (A, B, fit_min_mev) from smax_fit.csv. Raises if missing."""
+def load_smax_row(photonsim_dir: Path, material: str, particle: str
+                  ) -> Tuple[dict, int]:
+    """Return (csv_row_dict, fit_min_mev) from smax_fit.csv. Raises if missing."""
     path = photonsim_dir / "data" / material / particle / "smax_fit.csv"
     if not path.is_file():
         raise FileNotFoundError(
@@ -132,13 +132,23 @@ def load_smax_fit(photonsim_dir: Path, material: str, particle: str
         )
     with path.open() as fh:
         row = next(csv.DictReader(fh), None)
-    if not row or not row.get("A") or not row.get("B"):
+    if not row or not row.get("form"):
         raise ValueError(f"s_max fit at {path} is empty/incomplete.")
-    return float(row["A"]), float(row["B"]), int(row["fit_min_mev"])
+    return row, int(row["fit_min_mev"])
 
 
-def smax_at(A: float, B: float, energy_mev: float) -> float:
-    return A * (energy_mev ** B)
+# Eval s_max(E) given a CSV row from PhotonSim/data/<m>/<p>/smax_fit.csv.
+# Dispatches on row["form"]. Keep in sync with the canonical FORMS dict in
+# PhotonSim/tools/smax/analyze_smax.py.
+def _eval_smax(row: dict, energy_mev: float) -> float:
+    form = row["form"]
+    if form == "A*E^B":
+        A, B = float(row["A"]), float(row["B"])
+        return A * energy_mev ** B
+    if form == "smooth_two_power":
+        a, b1, b2, E0 = (float(row[k]) for k in ("a", "b1", "b2", "E0"))
+        return a * energy_mev ** b1 / (1.0 + (energy_mev / E0) ** (b1 - b2))
+    raise ValueError(f"unknown smax form: {form!r}")
 
 
 # --- Time-based split planning -----------------------------------------------
@@ -297,7 +307,9 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     p.add_argument("-o", "--output-base", type=Path, default=None,
                    help="Override OUTPUT_BASE_PATH from user_paths.sh.")
     p.add_argument("-P", "--partition", type=str, default=None,
-                   help="Override SLURM_PARTITION from user_paths.sh.")
+                   help="Override SLURM_PARTITION from user_paths.sh. "
+                        "Comma-separated values (e.g. 'roma,milano') round-"
+                        "robin sub-jobs across partitions to drain faster.")
     p.add_argument("-g", "--gpu", action="store_true",
                    help="Request 1 GPU per job (default: DEFAULT_GPUS).")
     p.add_argument("--user-paths", type=Path, default=USER_PATHS_DEFAULT,
@@ -358,10 +370,15 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     output_base = (args.output_base.resolve() if args.output_base
                    else Path(env["OUTPUT_BASE_PATH"]).resolve())
-    partition = args.partition or env.get("SLURM_PARTITION", "")
-    if not partition:
+    partition_spec = args.partition or env.get("SLURM_PARTITION", "")
+    if not partition_spec:
         print("error: SLURM partition not set (user_paths.sh or -P).",
               file=sys.stderr)
+        return 2
+    # Round-robin across all listed partitions (e.g. "roma,milano").
+    partitions = [p.strip() for p in partition_spec.split(",") if p.strip()]
+    if not partitions:
+        print(f"error: empty partition spec: {partition_spec!r}", file=sys.stderr)
         return 2
 
     print(f"=== SIREN-input fan-out: {name} ===")
@@ -375,14 +392,16 @@ def main(argv: Optional[List[str]] = None) -> int:
               f"(time model: t/event = {a_s:g} + {b_s_per_mev:g} * E_MeV)")
     print(f"output base:  {output_base}")
     print(f"PhotonSim:    {photonsim_dir}")
-    print(f"partition:    {partition}")
+    print(f"partition:    {partition_spec}"
+          + (f"  (round-robin across {len(partitions)} partitions)"
+             if len(partitions) > 1 else ""))
     print("")
 
     # Build cell list. Each cell: (particle, energy, smax_mm, n_jobs, evt_per_job).
     cells: List[Tuple[str, int, float, int, int]] = []
     skipped: List[str] = []
     for particle in particles:
-        A, B, fit_min = load_smax_fit(photonsim_dir, material, particle)
+        row, fit_min = load_smax_row(photonsim_dir, material, particle)
         for energy in energies:
             if energy < fit_min and not include_extrapolated:
                 skipped.append(f"{particle} @ {energy} MeV "
@@ -393,7 +412,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 target_seconds_per_job=target_s,
                 a_s=a_s, b_s_per_mev=b_s_per_mev,
             )
-            cells.append((particle, energy, smax_at(A, B, energy),
+            cells.append((particle, energy, _eval_smax(row, energy),
                           n_jobs, evt_per_job))
 
     if args.test and cells:
@@ -415,6 +434,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     print("")
 
     prepared = submitted = skipped_existing = skipped_jobs = 0
+    n_emitted = 0  # cumulative sub-jobs emitted; drives partition round-robin
     for particle, energy, smax_mm, n_jobs, evt_per_job in cells:
         cell_dir = output_base / material / particle / f"{energy}MeV"
         cell_dir.mkdir(parents=True, exist_ok=True)
@@ -446,11 +466,13 @@ def main(argv: Optional[List[str]] = None) -> int:
                 skipped_jobs += 1
                 continue
 
+            sub_partition = partitions[n_emitted % len(partitions)]
             sb = write_sbatch(
                 cell_dir=cell_dir, cell_cfg=cell_cfg, energy_mev=energy,
                 job_name=job_label, job_id=job_id, sbatch_name=sb_name,
-                env=env, partition=partition, use_gpu=args.gpu,
+                env=env, partition=sub_partition, use_gpu=args.gpu,
             )
+            n_emitted += 1
             prepared += 1
 
             if args.submit:

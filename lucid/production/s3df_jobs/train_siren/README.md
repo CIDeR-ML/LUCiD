@@ -23,7 +23,7 @@ python3 generate_jobs.py -c configs/water_mu_v1.json -t -s
 python3 generate_jobs.py -c configs/water_mu_v1.json -s
 ```
 
-Runs whose `final_training_progress.png` already exists are skipped on
+Runs whose `final_training_progress.pdf` already exists are skipped on
 re-runs of the driver, so you can append new entries to the config and run
 the same command without re-submitting the completed ones. Use
 `--no-skip-existing` to force a re-emit.
@@ -80,9 +80,9 @@ hyperparameters. To add a new knob, extend `FLAG_MAP` (CLI flag) and optionally
   │   ├── submit.sbatch
   │   ├── config.json
   │   ├── job-<slurm_id>.out / .err
-  │   ├── final_training_progress.png       # loss / LR / val-loss
+  │   ├── final_training_progress.pdf       # loss / LR / val-loss
   │   ├── training_history.json
-  │   ├── prediction_plots/step_NNNNNN.png  # truth-vs-prediction PNGs
+  │   ├── prediction_plots/step_NNNNNN.pdf  # truth-vs-prediction PDFs
   │   ├── checkpoint_step_NNNNNN.npz
   │   └── trained_model/photonsim_siren_{weights.npz,metadata.json}
   ├── p40/                                  # patience=40 run
@@ -100,16 +100,16 @@ Once the scan finishes, eyeball every loss plot side-by-side from a notebook:
 
 ```python
 from pathlib import Path
+from pdf2image import convert_from_path
 import matplotlib.pyplot as plt
-from matplotlib.image import imread
 
 root = Path('/sdf/data/neutrino/cjesus/SIREN_files/training_tests/water_mu_v1')
 for run in sorted(root.iterdir()):
-    img = imread(run / 'final_training_progress.png')
+    img = convert_from_path(run / 'final_training_progress.pdf', dpi=120)[0]
     plt.figure(figsize=(8, 4)); plt.imshow(img); plt.title(run.name); plt.axis('off')
 ```
 
-Likewise, sweep through `prediction_plots/step_*.png` to see how each run's
+Likewise, sweep through `prediction_plots/step_*.pdf` to see how each run's
 SIREN converges across the (E, angle, s/s_max) grid.
 
 ## Defaults vs. PhotonSim jobs

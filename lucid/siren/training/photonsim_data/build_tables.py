@@ -43,10 +43,33 @@ logger = logging.getLogger(__name__)
 
 FORMAT_VERSION = "2.0"
 CELL_DIR_RE = re.compile(r"^(\d+)MeV$")
-SMAX_FIT_COLS = (
-    "A", "B", "fit_min_mev", "fit_max_mev",
+
+# Per-form param columns expected in smax_fit.csv.  Keep in sync with the
+# canonical FORMS dict in PhotonSim/tools/smax/analyze_smax.py.
+_SMAX_PARAM_COLS = {
+    "A*E^B":            ("A", "B"),
+    "smooth_two_power": ("a", "b1", "b2", "E0"),
+}
+
+# Columns that every row has (in addition to form-specific params).
+_SMAX_SHARED_COLS = (
+    "fit_min_mev", "fit_max_mev",
     "quantile", "quantile_multiplier", "generated_at_utc",
 )
+
+
+def _eval_smax(form: str, params: Dict[str, Any], energy_mev: float) -> float:
+    """Evaluate s_max(E) using the named form. `params` may contain string
+    values (raw CSV cells) or floats (h5 attrs); coerced to float on use.
+    Keep in sync with FORMS in PhotonSim/tools/smax/analyze_smax.py.
+    """
+    if form == "A*E^B":
+        A, B = float(params["A"]), float(params["B"])
+        return A * energy_mev ** B
+    if form == "smooth_two_power":
+        a, b1, b2, E0 = (float(params[k]) for k in ("a", "b1", "b2", "E0"))
+        return a * energy_mev ** b1 / (1.0 + (energy_mev / E0) ** (b1 - b2))
+    raise ValueError(f"unknown smax form: {form!r}")
 
 
 # --- smax_fit.csv reader (private to the builder) ---------------------------
@@ -78,11 +101,12 @@ def _find_photonsim_dir(*, override: Optional[Path], data_dir: Path) -> Path:
 
 def _read_smax_fit_csv(photonsim_dir: Path, material: str,
                        particle: str) -> Dict[str, Any]:
-    """Return all seven `smax_fit.csv` columns as a dict.
+    """Return the form-specific params + shared columns from `smax_fit.csv`.
 
-    Raises FileNotFoundError / ValueError if the fit is missing or malformed.
-    The returned dict is what gets welded verbatim into the .h5 metadata
-    (with each key prefixed `smax_`).
+    Dispatches on the row's `form` column (currently "A*E^B" or
+    "smooth_two_power"). The returned dict is what gets welded verbatim into
+    the .h5 metadata (with each key prefixed `smax_`). Raises
+    FileNotFoundError / ValueError if the fit is missing or malformed.
     """
     path = photonsim_dir / "data" / material / particle / "smax_fit.csv"
     if not path.is_file():
@@ -94,16 +118,23 @@ def _read_smax_fit_csv(photonsim_dir: Path, material: str,
         row = next(csv.DictReader(fh), None)
     if not row:
         raise ValueError(f"s_max fit at {path} is empty.")
+    form = row.get("form")
+    if not form:
+        raise ValueError(f"s_max fit at {path} is missing the `form` column.")
+    if form not in _SMAX_PARAM_COLS:
+        raise ValueError(
+            f"s_max fit at {path} declares unknown form {form!r}. "
+            f"Known forms: {sorted(_SMAX_PARAM_COLS)}.")
     try:
-        return {
-            "A":                   float(row["A"]),
-            "B":                   float(row["B"]),
-            "fit_min_mev":         int(row["fit_min_mev"]),
-            "fit_max_mev":         int(row["fit_max_mev"]),
-            "quantile":            float(row["quantile"]),
-            "quantile_multiplier": float(row["quantile_multiplier"]),
-            "generated_at_utc":    str(row["generated_at_utc"]),
-        }
+        out: Dict[str, Any] = {"form": form}
+        for p in _SMAX_PARAM_COLS[form]:
+            out[p] = float(row[p])
+        out["fit_min_mev"]         = int(row["fit_min_mev"])
+        out["fit_max_mev"]         = int(row["fit_max_mev"])
+        out["quantile"]            = float(row["quantile"])
+        out["quantile_multiplier"] = float(row["quantile_multiplier"])
+        out["generated_at_utc"]    = str(row["generated_at_utc"])
+        return out
     except (KeyError, ValueError) as exc:
         raise ValueError(f"s_max fit at {path} is incomplete: {exc}") from exc
 
@@ -350,9 +381,17 @@ class LookupTableBuilder(ABC):
                     raise AssertionError(f"missing key: {k}")
 
             attrs = dict(f["metadata"].attrs)
-            for k in ("smax_A", "smax_B", "smax_fit_min_mev",
-                      "smax_fit_max_mev", "smax_quantile",
-                      "smax_quantile_multiplier", "smax_generated_at_utc"):
+            smax_form = attrs.get("smax_form")
+            if isinstance(smax_form, bytes):
+                smax_form = smax_form.decode()
+            if smax_form not in _SMAX_PARAM_COLS:
+                raise AssertionError(
+                    f"smax_form attr is missing or unknown ({smax_form!r}); "
+                    f"known: {sorted(_SMAX_PARAM_COLS)}")
+            required_attrs = {"smax_form"}
+            required_attrs |= {f"smax_{c}" for c in _SMAX_SHARED_COLS}
+            required_attrs |= {f"smax_{p}" for p in _SMAX_PARAM_COLS[smax_form]}
+            for k in required_attrs:
                 if k not in attrs:
                     raise AssertionError(f"missing metadata attr: {k}")
             if attrs.get("distance_axis") != b"s_over_smax" and \
@@ -410,12 +449,16 @@ class LookupTableBuilder(ABC):
                     f"raw[{i}] does not match source {src}:{self.HIST_NAME}"
                 )
 
-            A, B = float(attrs["smax_A"]), float(attrs["smax_B"])
+            params = {p: float(attrs[f"smax_{p}"])
+                      for p in _SMAX_PARAM_COLS[smax_form]}
+            param_str = ", ".join(f"{p}={params[p]:.6f}"
+                                  for p in _SMAX_PARAM_COLS[smax_form])
             logger.info(
-                "validate(): OK. smax: A=%.6f B=%.6f  fit_min=%s  fit_max=%s  "
+                "validate(): OK. smax form=%s  %s  fit_min=%s  fit_max=%s  "
                 "s_max@1GeV = %.1f mm",
-                A, B, attrs["smax_fit_min_mev"], attrs["smax_fit_max_mev"],
-                A * 1000.0 ** B,
+                smax_form, param_str,
+                attrs["smax_fit_min_mev"], attrs["smax_fit_max_mev"],
+                _eval_smax(smax_form, params, 1000.0),
             )
 
             # Cross-check the same smax row against the on-disk CSV.

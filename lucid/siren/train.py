@@ -262,7 +262,7 @@ class PhotonSimTrainer:
         
         # Plot final training history
         print("\n📈 Generating final plots...")
-        fig = trainer.plot_training_history(save_path=self.output_dir / 'final_training_progress.png')
+        fig = trainer.plot_training_history(save_path=self.output_dir / 'final_training_progress.pdf')
         plt.close(fig)  # Close to avoid memory issues
         
         # Save trained model
@@ -350,8 +350,8 @@ def main():
                         help='Log frequency (default: 10)')
     parser.add_argument('--val-every', type=int, default=50,
                         help='Validation frequency (default: 50)')
-    parser.add_argument('--checkpoint-every', type=int, default=500,
-                        help='Checkpoint frequency (default: 500)')
+    parser.add_argument('--checkpoint-every', type=int, default=10000,
+                        help='Checkpoint frequency (default: 10000)')
     
     # Other options
     parser.add_argument('--resume', action='store_true',
@@ -410,17 +410,17 @@ def main():
     # In-training prediction-vs-truth plots
     parser.add_argument('--prediction-plots', dest='prediction_plots',
                         action='store_true', default=True,
-                        help='Save predicted-vs-truth comparison PNGs every '
+                        help='Save predicted-vs-truth comparison PDFs every '
                              '--prediction-plot-every steps (default: on).')
     parser.add_argument('--no-prediction-plots', dest='prediction_plots',
                         action='store_false',
-                        help='Disable the predicted-vs-truth PNG stream.')
-    parser.add_argument('--prediction-plot-every', type=int, default=500,
-                        help='Refresh interval in steps (default: 500).')
+                        help='Disable the predicted-vs-truth PDF stream.')
+    parser.add_argument('--prediction-plot-every', type=int, default=10000,
+                        help='Refresh interval in steps (default: 10000).')
     parser.add_argument('--prediction-plot-energies', type=str,
-                        default='1000,2000,5000,10000,80000',
+                        default='200,1000,2000,5000,10000,80000',
                         help='Comma-separated representative energies in MeV '
-                             '(default: 1000,2000,5000,10000,80000).')
+                             '(default: 200,1000,2000,5000,10000,80000).')
     parser.add_argument('--prediction-plot-distance-slices', type=str,
                         default='0.1,0.25,0.5,0.75',
                         help='Comma-separated s/s_max slice values, each in '

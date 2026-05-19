@@ -243,7 +243,7 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     p.add_argument("--output-root", type=Path, default=None,
                    help="Override the config's output_root.")
     p.add_argument("--no-skip-existing", action="store_true",
-                   help="Re-emit runs whose final_training_progress.png "
+                   help="Re-emit runs whose final_training_progress.pdf "
                         "already exists (default: skip them).")
     p.add_argument("--user-paths", type=Path, default=USER_PATHS_DEFAULT,
                    help="Path to user_paths.sh "
@@ -322,7 +322,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         run_dir = scan_dir / run_name
         run_dir.mkdir(parents=True, exist_ok=True)
 
-        done_marker = run_dir / "final_training_progress.png"
+        done_marker = run_dir / "final_training_progress.pdf"
         if done_marker.is_file() and not args.no_skip_existing:
             print(f"  skip (already finished): {run_dir}")
             skipped += 1
@@ -374,7 +374,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     print(f"Output:          {scan_dir}")
     if not args.submit and prepared:
         print("\nNext: pass -s to submit. Already-finished runs (with "
-              "final_training_progress.png) are skipped by default; "
+              "final_training_progress.pdf) are skipped by default; "
               "--no-skip-existing forces a rebuild.")
     return 0
 
