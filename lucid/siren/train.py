@@ -51,12 +51,15 @@ class PhotonSimTrainer:
     """Main training class for PhotonSim SIREN models."""
 
     def __init__(self, material='water', particle='muon', resume=False,
-                 data_type='photon', h5_path_override=None):
+                 data_type='photon', h5_path_override=None,
+                 output_dir_override=None):
         """Initialize trainer with material, particle type, and data type.
 
         ``h5_path_override`` lets callers point at an arbitrary .h5 file
-        without renaming directories; output dir / checkpoints / plots still
-        land under ``data/<material>/<particle>/``.
+        without renaming directories. ``output_dir_override`` redirects every
+        artifact the trainer writes (checkpoints, prediction plots, trained
+        model, history) to a caller-chosen folder — used by the batch-scan
+        tool to land each hyperparameter combo in its own sub-folder.
         """
         self.material = material
         self.particle = particle
@@ -79,6 +82,8 @@ class PhotonSimTrainer:
 
         if h5_path_override is not None:
             self.h5_path = Path(h5_path_override)
+        if output_dir_override is not None:
+            self.output_dir = Path(output_dir_override)
 
         # Create output directory
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -100,10 +105,16 @@ class PhotonSimTrainer:
         print(f"✓ Found HDF5 file: {self.h5_path}")
         print(f"✓ JAX devices: {jax.devices()}")
     
-    def setup_dataset(self, val_split=0.1):
+    def setup_dataset(self, val_split=0.1, zero_threshold=1e-2,
+                      zero_keep_frac=0.002, energy_balance='none'):
         """Load and configure the dataset."""
         print("\n📊 Loading dataset...")
-        self.dataset = PhotonSimDataset(self.h5_path, val_split=val_split)
+        self.dataset = PhotonSimDataset(
+            self.h5_path, val_split=val_split,
+            zero_threshold=zero_threshold,
+            zero_keep_frac=zero_keep_frac,
+            energy_balance=energy_balance,
+        )
 
         print(f"\nDataset info:")
         print(f"  Data type: {self.dataset.data_type}")
@@ -187,10 +198,15 @@ class PhotonSimTrainer:
         return self.trainer
     
     def train(self, config, enable_monitoring=True,
-              prediction_plot_opts=None, val_split=0.01):
+              prediction_plot_opts=None, val_split=0.01,
+              zero_threshold=1e-2, zero_keep_frac=0.002,
+              energy_balance='none'):
         """Run the training process."""
         # Setup dataset
-        dataset = self.setup_dataset(val_split=val_split)
+        dataset = self.setup_dataset(val_split=val_split,
+                                     zero_threshold=zero_threshold,
+                                     zero_keep_frac=zero_keep_frac,
+                                     energy_balance=energy_balance)
         
         # Setup trainer
         trainer = self.setup_training(config)
@@ -223,6 +239,7 @@ class PhotonSimTrainer:
                 output_dir=self.output_dir,
                 energies_mev=prediction_plot_opts['energies'],
                 distance_slices=prediction_plot_opts['distance_slices'],
+                xaxis_slices=prediction_plot_opts['xaxis_slices'],
                 every=prediction_plot_opts['every'],
                 resume=self.resume,
             )
@@ -312,6 +329,10 @@ def main():
                         help='Total training steps (default: 30000)')
     parser.add_argument('--weight-decay', type=float, default=0.0,
                         help='Weight decay (default: 0.0)')
+    parser.add_argument('--grad-clip-norm', type=float, default=0.0,
+                        help='Clip the global gradient norm to this value '
+                             '(default: 0.0 = no clipping). Try 1.0 or 5.0 '
+                             'to tame SIREN loss spikes.')
     
     # Scheduler settings
     parser.add_argument('--patience', type=int, default=20,
@@ -340,6 +361,24 @@ def main():
                         help='Random seed (default: 42)')
     parser.add_argument('--val-split', type=float, default=0.01,
                         help='Validation split fraction (default: 0.01)')
+    parser.add_argument('--zero-threshold', type=float, default=1e-2,
+                        help='Targets <= this value are treated as "zero" '
+                             '(0.2%% are kept as anchors, the rest dropped). '
+                             'Doubles as the log offset in '
+                             'log10(target + threshold). Must be > 0. '
+                             'Default 1e-2; try 1e-6 to keep the long tail.')
+    parser.add_argument('--zero-keep-frac', type=float, default=0.002,
+                        help='Fraction of below-threshold ("zero") samples '
+                             'to keep as training anchors. 0 drops them all; '
+                             '1 keeps everything. Default 0.002 (0.2%%).')
+    parser.add_argument('--energy-balance', type=str, default='none',
+                        choices=['none', 'uniform', 'log_uniform'],
+                        help='How to weight samples across the energy grid. '
+                             "'none' (default) — uniform-across-rows (low-E "
+                             'over-represented because the grid is denser '
+                             "there). 'uniform' — each energy point gets "
+                             "equal probability. 'log_uniform' — uniform in "
+                             "log(E), so each decade is equally weighted.")
 
     # Data source override
     parser.add_argument('--h5-path', type=str, default=None,
@@ -347,6 +386,13 @@ def main():
                              '(default: data/<material>/<particle>/<table>.h5). '
                              'Material/particle/data-type still drive the '
                              'output directory.')
+    parser.add_argument('--output-dir', type=str, default=None,
+                        help='Redirect every training artifact (checkpoints, '
+                             'prediction plots, trained model, history) to '
+                             'this folder instead of '
+                             'data/<material>/<particle>/<siren_training|dedx_siren_training>. '
+                             'Used by the batch-scan tool to land each '
+                             'hyperparameter run in its own folder.')
 
     # In-training prediction-vs-truth plots
     parser.add_argument('--prediction-plots', dest='prediction_plots',
@@ -366,6 +412,17 @@ def main():
                         default='0.1,0.25,0.5,0.75',
                         help='Comma-separated s/s_max slice values, each in '
                              '[0, 1] (default: 0.1,0.25,0.5,0.75).')
+    parser.add_argument('--prediction-plot-angle-slices-deg', type=str,
+                        default='21,41,61,90',
+                        help='Photon variant only: angle slices for the new '
+                             'middle row, in degrees. Default 21,41,61,90 '
+                             '(Cherenkov θ_C ~ 41° in water, plus '
+                             '±20° and 90°).')
+    parser.add_argument('--prediction-plot-dedx-slices', type=str,
+                        default='100,250,500,800',
+                        help='dEdx variant only: dE/dx slice values for the '
+                             'new middle row, in keV/mm '
+                             '(default: 100,250,500,800).')
 
     args = parser.parse_args()
     
@@ -393,7 +450,7 @@ def main():
         
         # Optimizer
         optimizer='adam',
-        grad_clip_norm=0.0,
+        grad_clip_norm=args.grad_clip_norm,
         
         # Logging
         log_every=args.log_every,
@@ -422,6 +479,7 @@ def main():
         resume=args.resume,
         data_type=data_type,
         h5_path_override=args.h5_path,
+        output_dir_override=args.output_dir,
     )
 
     # Wire up predicted-vs-truth comparison plots if enabled.
@@ -430,9 +488,19 @@ def main():
         from lucid.siren.training.prediction_plot import (
             parse_float_list, parse_int_list,
         )
+        # The x-axis slice values live in the variant's native units (radians
+        # for photon angle, keV/mm for dedx). The CLI exposes degrees for the
+        # photon case for readability, so convert here.
+        if data_type == 'photon':
+            xaxis_slices = [float(np.radians(float(x)))
+                            for x in args.prediction_plot_angle_slices_deg.split(',')
+                            if x.strip()]
+        else:
+            xaxis_slices = parse_float_list(args.prediction_plot_dedx_slices)
         prediction_plot_opts = {
             'energies':       parse_int_list(args.prediction_plot_energies),
             'distance_slices': parse_float_list(args.prediction_plot_distance_slices),
+            'xaxis_slices':   xaxis_slices,
             'every':          args.prediction_plot_every,
         }
 
@@ -443,6 +511,9 @@ def main():
             enable_monitoring=not args.no_monitoring,
             prediction_plot_opts=prediction_plot_opts,
             val_split=args.val_split,
+            zero_threshold=args.zero_threshold,
+            zero_keep_frac=args.zero_keep_frac,
+            energy_balance=args.energy_balance,
         )
     except KeyboardInterrupt:
         print("\n\n⚠️  Training interrupted by user")

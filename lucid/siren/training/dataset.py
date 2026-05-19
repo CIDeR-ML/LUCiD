@@ -23,16 +23,50 @@ class PhotonSimDataset:
     HDF5 lookup tables or pre-sampled dataset directories.
     """
     
-    def __init__(self, data_path: Union[str, Path], val_split: float = 0.1):
+    def __init__(self, data_path: Union[str, Path], val_split: float = 0.1,
+                 zero_threshold: float = 1e-2,
+                 zero_keep_frac: float = 0.002,
+                 energy_balance: str = 'none'):
         """
         Initialize dataset.
-        
+
         Args:
             data_path: Path to HDF5 file or dataset directory
             val_split: Fraction of data to use for validation
+            zero_threshold: Targets below this value are treated as "zero".
+                Used both as the log offset in ``log10(targets + zero_threshold)``
+                and as the filter cutoff. Samples with ``target > zero_threshold``
+                are kept in full; a fraction of the rest is kept as anchors
+                for the low-density tail. Must be > 0. Default 1e-2.
+            zero_keep_frac: Fraction of below-threshold samples to keep as
+                training anchors. 0 drops all of them, 1 keeps everything.
+                Default 0.002 (0.2%).
+            energy_balance: How to weight samples across the energy grid.
+                'none' (default) — uniform across raw samples (low-E
+                over-represented because the grid has more low-E points).
+                'uniform' — each energy gets equal probability per batch.
+                'log_uniform' — uniform in log(E) (each decade weighted equally).
         """
+        if zero_threshold <= 0:
+            raise ValueError(
+                f"zero_threshold must be > 0 (got {zero_threshold!r}); "
+                f"it acts as the log offset and a value of 0 makes "
+                f"log10(target) blow up for the empty bins."
+            )
+        if not 0.0 <= zero_keep_frac <= 1.0:
+            raise ValueError(
+                f"zero_keep_frac must be in [0, 1] (got {zero_keep_frac!r})."
+            )
+        if energy_balance not in ('none', 'uniform', 'log_uniform'):
+            raise ValueError(
+                f"energy_balance must be one of 'none' / 'uniform' / "
+                f"'log_uniform' (got {energy_balance!r})."
+            )
         self.data_path = Path(data_path)
         self.val_split = val_split
+        self.zero_threshold = float(zero_threshold)
+        self.zero_keep_frac = float(zero_keep_frac)
+        self.energy_balance = energy_balance
         self.data_type = None
         self.data = {}
         self.normalized_bounds = {}
@@ -173,7 +207,7 @@ class PhotonSimDataset:
         ) - 1
         
         # Log-normalize targets: offset avoids log(0) while staying small relative to typical target values
-        self.data['targets_log'] = np.log10(self.data['targets'] + 1e-2)
+        self.data['targets_log'] = np.log10(self.data['targets'] + self.zero_threshold)
         self.normalized_bounds['target_min'] = self.data['targets_log'].min()
         self.normalized_bounds['target_max'] = self.data['targets_log'].max()
         
@@ -183,22 +217,34 @@ class PhotonSimDataset:
             (self.normalized_bounds['target_max'] - self.normalized_bounds['target_min'])
         )
         
-        # Filter data but keep 0.2% of zero values for better training coverage
-        mask = self.data['targets'][:, 0] > 1e-2
+        # Filter data but keep a fraction of zero values as low-density anchors.
+        # "Zero" is defined as target <= self.zero_threshold (which is also the
+        # log offset above — the two are paired, since anything below the
+        # offset is indistinguishable after the log transform).
+        mask = self.data['targets'][:, 0] > self.zero_threshold
         zero_mask = ~mask
-        
-        # Randomly select 0.2% of zero values to keep
+
         zero_indices = np.where(zero_mask)[0]
         if len(zero_indices) > 0:
-            n_zeros_to_keep = max(1, int(len(zero_indices) * 0.002))
-            rng = np.random.RandomState(42)
-            zeros_to_keep = rng.choice(zero_indices, size=n_zeros_to_keep, replace=False)
-            
-            # Create final mask: all non-zeros + 0.2% of zeros
+            # 0.0 → drop all zeros; 1.0 → keep everything; otherwise random
+            # subsample. ceil so a tiny non-zero fraction still keeps at least 1.
+            if self.zero_keep_frac >= 1.0:
+                zeros_to_keep = zero_indices
+            elif self.zero_keep_frac <= 0.0:
+                zeros_to_keep = np.array([], dtype=zero_indices.dtype)
+            else:
+                n_zeros_to_keep = max(1,
+                    int(np.ceil(len(zero_indices) * self.zero_keep_frac)))
+                rng = np.random.RandomState(42)
+                zeros_to_keep = rng.choice(zero_indices,
+                                           size=n_zeros_to_keep, replace=False)
+
             final_mask = mask.copy()
             final_mask[zeros_to_keep] = True
-            
-            logger.info(f"Filtered data: keeping {mask.sum():,} non-zero values + {len(zeros_to_keep):,} zero values ({len(zeros_to_keep)/len(zero_indices)*100:.1f}% of zeros)")
+
+            kept_frac_pct = (len(zeros_to_keep) / len(zero_indices) * 100
+                             if len(zero_indices) else 0.0)
+            logger.info(f"Filtered data: keeping {mask.sum():,} non-zero values + {len(zeros_to_keep):,} zero values ({kept_frac_pct:.2f}% of zeros)")
             logger.info(f"Total data points: {final_mask.sum():,} / {len(final_mask):,} ({final_mask.sum()/len(final_mask)*100:.1f}%)")
             
             # Apply the filter
@@ -218,9 +264,44 @@ class PhotonSimDataset:
         
         self.val_indices = indices[:n_val]
         self.train_indices = indices[n_val:]
-        
+
         logger.info(f"Train samples: {len(self.train_indices):,}")
         logger.info(f"Validation samples: {len(self.val_indices):,}")
+
+        # Optional energy-rebalancing weights. By default (energy_balance='none')
+        # we leave them as None and sample uniformly across rows — which is
+        # equivalent to weight ∝ #samples-at-that-energy (low-E over-represented
+        # because the grid is denser there).
+        self.train_weights = None
+        self.val_weights = None
+        if self.energy_balance != 'none':
+            energies = self.data['inputs'][:, 0]
+            unique_e, inv = np.unique(energies, return_inverse=True)
+            counts = np.bincount(inv).astype(np.float64)
+            if self.energy_balance == 'uniform':
+                # Each energy gets equal total weight; per-sample weight = 1/N_E.
+                per_e = 1.0 / counts
+            else:  # 'log_uniform'
+                # Each log-decade of energy gets equal weight. Compute log-bin
+                # widths from the on-disk grid (use centre-difference for the
+                # interior, half-step for the endpoints).
+                log_e = np.log(unique_e.astype(np.float64))
+                widths = np.empty_like(log_e)
+                widths[1:-1] = 0.5 * (log_e[2:] - log_e[:-2])
+                widths[0]    = log_e[1]  - log_e[0]
+                widths[-1]   = log_e[-1] - log_e[-2]
+                per_e = widths / counts
+            per_sample = per_e[inv]                  # shape (n_samples,)
+            self.train_weights = per_sample[self.train_indices]
+            self.val_weights   = per_sample[self.val_indices]
+            # Normalise to a proper probability distribution.
+            self.train_weights = self.train_weights / self.train_weights.sum()
+            self.val_weights   = self.val_weights   / self.val_weights.sum()
+            logger.info(
+                f"energy_balance='{self.energy_balance}': sampling will be "
+                f"weighted across {len(unique_e)} unique energies "
+                f"({unique_e[0]:.0f}–{unique_e[-1]:.0f} MeV)."
+            )
         
     def get_sample_input(self) -> jax.Array:
         """Get a sample input for model initialization."""
@@ -248,11 +329,21 @@ class PhotonSimDataset:
         # Select indices based on split
         if split == 'train':
             indices = self.train_indices
+            weights = self.train_weights
         else:
             indices = self.val_indices
-            
-        # Random sampling
-        batch_indices = jax.random.choice(rng, indices, shape=(batch_size,))
+            weights = self.val_weights
+
+        if weights is None:
+            batch_indices = jax.random.choice(rng, indices, shape=(batch_size,))
+        else:
+            # Weighted sampling: pick local positions in [0, len(indices))
+            # via inverse-CDF, then map through `indices`.
+            local = jax.random.choice(
+                rng, len(indices), shape=(batch_size,),
+                p=jnp.asarray(weights),
+            )
+            batch_indices = jnp.asarray(indices)[local]
         
         # Get data with consistent normalization
         if normalized:
@@ -307,8 +398,8 @@ class PhotonSimDataset:
         
     def denormalize_targets(self, targets_log: np.ndarray) -> np.ndarray:
         """Convert log-normalized targets back to original scale."""
-        return 10 ** targets_log - 1e-2
-        
+        return 10 ** targets_log - self.zero_threshold
+
     def denormalize_targets_from_normalized(self, targets_normalized: np.ndarray) -> np.ndarray:
         """Convert normalized log targets [0,1] back to original scale."""
         # First denormalize from [0,1] to log scale
@@ -317,7 +408,7 @@ class PhotonSimDataset:
             self.normalized_bounds['target_min']
         )
         # Then convert from log to linear scale
-        return 10 ** targets_log - 1e-2
+        return 10 ** targets_log - self.zero_threshold
         
     @property
     def has_validation(self) -> bool:

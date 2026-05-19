@@ -58,6 +58,7 @@ class PredictionComparisonCallback:
         output_dir: Path,
         energies_mev: Iterable[int],
         distance_slices: Iterable[float],
+        xaxis_slices: Iterable[float],
         every: int,
         resume: bool = False,
     ):
@@ -66,6 +67,9 @@ class PredictionComparisonCallback:
         self.every = int(every)
         self.energies_req = [int(e) for e in energies_mev]
         self.distance_slices_req = [float(s) for s in distance_slices]
+        # xaxis_slices is in the variant's native units — radians for the
+        # photon (angle) variant, keV/mm for the dedx variant.
+        self.xaxis_slices_req = [float(x) for x in xaxis_slices]
 
         self.plot_dir = Path(output_dir) / "prediction_plots"
         if not resume and self.plot_dir.is_dir():
@@ -78,6 +82,12 @@ class PredictionComparisonCallback:
                 f"dataset.table_type must be 'photon' or 'dedx' "
                 f"(got {self.table_type!r})"
             )
+
+        # Used to draw a horizontal "zero-suppression floor" on each panel —
+        # below this y-value, the trainer can't distinguish samples from zero
+        # (everything ≤ zero_threshold maps to log10(zero_threshold) after
+        # the offset+log transform). Fallback for older datasets without it.
+        self.zero_threshold = float(getattr(dataset, "zero_threshold", 1e-2))
 
         # Sanity-assert the h5 file matches the dataset table_type. Guards
         # against `--h5-path foo_photon.h5 --data-type dedx` foot-guns.
@@ -138,12 +148,20 @@ class PredictionComparisonCallback:
         self.distance_slice_indices = np.asarray(d_idx, dtype=int)
         self.distance_slices_grid = distance_centers[self.distance_slice_indices]
 
+        # Nearest-neighbor x-axis slices (angle in rad for photon,
+        # dE/dx in keV/mm for dedx).
+        x_idx = [int(np.argmin(np.abs(x_centers - xv)))
+                 for xv in self.xaxis_slices_req]
+        self.xaxis_slice_indices = np.asarray(x_idx, dtype=int)
+        self.xaxis_slices_grid = x_centers[self.xaxis_slice_indices]
+
         self.x_centers = x_centers              # (n_x,)
         self.distance_centers = distance_centers  # (n_d,)
         n_E = len(self.energy_indices)
         n_x = len(x_centers)
         n_d = len(distance_centers)
         n_slices = len(self.distance_slice_indices)
+        n_xslices = len(self.xaxis_slice_indices)
 
         # Truth caches.
         # View A: shape (n_E, n_slices, n_x). truth_A[k, m, j] = avg[i_E, j, i_d_m].
@@ -155,6 +173,11 @@ class PredictionComparisonCallback:
         self.truth_B = np.zeros((n_E, n_d), dtype=np.float64)
         for k, iE in enumerate(self.energy_indices):
             self.truth_B[k, :] = avg_table[iE, :, :].sum(axis=0)
+        # View C: shape (n_E, n_xslices, n_d). truth_C[k, p, l] = avg[i_E, i_x_p, l].
+        self.truth_C = np.zeros((n_E, n_xslices, n_d), dtype=np.float64)
+        for k, iE in enumerate(self.energy_indices):
+            for p, iX in enumerate(self.xaxis_slice_indices):
+                self.truth_C[k, p, :] = avg_table[iE, iX, :]
 
         # Pre-build the *unnormalised* model-input grids.
         # View A inputs: (n_E, n_slices, n_x, 3) → flatten to (N_A, 3).
@@ -180,6 +203,18 @@ class PredictionComparisonCallback:
             [Ev_B.ravel(), Xc_B.ravel(), Dc_B.ravel()], axis=-1,
         ).astype(np.float32)
         self.inputs_B_shape = (n_E, n_x, n_d)
+
+        # View C inputs: (n_E, n_xslices, n_d, 3) → flatten.
+        Ev_C = np.broadcast_to(self.energies_grid[:, None, None],
+                               (n_E, n_xslices, n_d))
+        Xc_C = np.broadcast_to(self.xaxis_slices_grid[None, :, None],
+                               (n_E, n_xslices, n_d))
+        Dc_C = np.broadcast_to(distance_centers[None, None, :],
+                               (n_E, n_xslices, n_d))
+        self.inputs_C_phys = np.stack(
+            [Ev_C.ravel(), Xc_C.ravel(), Dc_C.ravel()], axis=-1,
+        ).astype(np.float32)
+        self.inputs_C_shape = (n_E, n_xslices, n_d)
 
     # ---- inference helpers -------------------------------------------------
 
@@ -215,6 +250,7 @@ class PredictionComparisonCallback:
         try:
             pred_A_flat = self._predict(trainer.state, self.inputs_A_phys)
             pred_B_flat = self._predict(trainer.state, self.inputs_B_phys)
+            pred_C_flat = self._predict(trainer.state, self.inputs_C_phys)
         except Exception as exc:
             logger.warning("prediction_plot: inference failed at step %d: %s",
                            step, exc)
@@ -223,27 +259,30 @@ class PredictionComparisonCallback:
         pred_A = pred_A_flat.reshape(self.inputs_A_shape)   # (n_E, n_slices, n_x)
         pred_B_full = pred_B_flat.reshape(self.inputs_B_shape)  # (n_E, n_x, n_d)
         pred_B = pred_B_full.sum(axis=1)                    # (n_E, n_d) — sum over angle/dedx
+        pred_C = pred_C_flat.reshape(self.inputs_C_shape)   # (n_E, n_xslices, n_d)
 
-        self._save_figure(step, pred_A, pred_B)
+        self._save_figure(step, pred_A, pred_B, pred_C)
 
     # ---- rendering ---------------------------------------------------------
 
     def _save_figure(self, step: int, pred_A: np.ndarray,
-                     pred_B: np.ndarray) -> None:
+                     pred_B: np.ndarray, pred_C: np.ndarray) -> None:
         n_E = len(self.energy_indices)
         n_slices = len(self.distance_slice_indices)
+        n_xslices = len(self.xaxis_slice_indices)
 
         x_label, smax_label = _AXIS_LABELS[self.table_type]
         y_label = _INTENSITY_LABELS[self.table_type]
         colors = [viridis(t) for t in np.linspace(0.05, 0.95, n_E)]
 
-        fig = Figure(figsize=(4.0 * max(n_slices, 4), 7.0))
+        n_cols = max(n_slices, n_xslices, 4)
+        fig = Figure(figsize=(4.0 * n_cols, 10.0))
         canvas = FigureCanvasAgg(fig)
-        gs = fig.add_gridspec(2, max(n_slices, 4), height_ratios=[1.0, 1.1])
+        gs = fig.add_gridspec(3, n_cols, height_ratios=[1.0, 1.0, 1.1])
 
         floor = 1e-6  # log-y floor so zeros don't blow up
 
-        # --- View A: one panel per s/s_max slice ---------------------------
+        # --- Row 1 (view A): one panel per s/s_max slice, x = angle/dedx ---
         for m in range(n_slices):
             ax = fig.add_subplot(gs[0, m])
             for k in range(n_E):
@@ -253,6 +292,10 @@ class PredictionComparisonCallback:
                 ax.plot(self.x_centers, np.maximum(pred_A[k, m], floor),
                         "-", color=c, lw=1.4,
                         label=f"{int(self.energies_grid[k])} MeV")
+            ax.axhline(self.zero_threshold, color="red", linestyle=":",
+                       lw=0.9, alpha=0.6,
+                       label=(f"zero threshold ({self.zero_threshold:g})"
+                              if m == n_slices - 1 else None))
             ax.set_yscale("log")
             ax.set_title(f"{smax_label} = {self.distance_slices_grid[m]:.3f}")
             ax.set_xlabel(x_label)
@@ -262,8 +305,32 @@ class PredictionComparisonCallback:
             if m == n_slices - 1:
                 ax.legend(fontsize=8, loc="upper right", frameon=False)
 
-        # --- View B: marginal over angle/dedx ------------------------------
-        ax_b = fig.add_subplot(gs[1, :])
+        # --- Row 2 (view C): one panel per x-axis slice, x = s/s_max -------
+        for p in range(n_xslices):
+            ax = fig.add_subplot(gs[1, p])
+            for k in range(n_E):
+                c = colors[k]
+                ax.plot(self.distance_centers,
+                        np.maximum(self.truth_C[k, p], floor),
+                        "--", color=c, lw=1.0, alpha=0.85)
+                ax.plot(self.distance_centers,
+                        np.maximum(pred_C[k, p], floor),
+                        "-", color=c, lw=1.4,
+                        label=f"{int(self.energies_grid[k])} MeV")
+            ax.axhline(self.zero_threshold, color="red", linestyle=":",
+                       lw=0.9, alpha=0.6)
+            ax.set_yscale("log")
+            ax.set_title(_format_xaxis_title(self.table_type,
+                                             self.xaxis_slices_grid[p]))
+            ax.set_xlabel(smax_label)
+            if p == 0:
+                ax.set_ylabel(y_label)
+            ax.grid(True, which="both", alpha=0.25)
+
+        # --- Row 3 (view B): marginal over angle/dedx ----------------------
+        # No zero-threshold line here: the threshold is a per-bin concept and
+        # this panel sums over 500 bins, so the cutoff doesn't carry over.
+        ax_b = fig.add_subplot(gs[2, :])
         for k in range(n_E):
             c = colors[k]
             ax_b.plot(self.distance_centers,
@@ -290,6 +357,18 @@ class PredictionComparisonCallback:
 
         out_path = self.plot_dir / f"step_{step:06d}.png"
         canvas.print_png(str(out_path))
+
+
+def _format_xaxis_title(table_type: str, value_native: float) -> str:
+    """Subpanel title for the fixed-x-axis row.
+
+    Photon: convert rad → deg for readability.
+    dEdx:   show keV/mm directly.
+    """
+    if table_type == "photon":
+        deg = np.degrees(value_native)
+        return f"angle = {deg:.1f}°"
+    return f"dE/dx = {value_native:g} keV/mm"
 
 
 def parse_int_list(s: str) -> List[int]:
