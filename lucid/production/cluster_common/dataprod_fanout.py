@@ -84,7 +84,7 @@ def _write_readme(config_dir: Path, *, name: str, desc: str, config_id: str,
         f"## Layout\n\n"
         f"This directory is one LUCiD dataset. Each job contributes one v3 "
         f"batch (`file_index = job_id - 1`) consisting of four files spread "
-        f"across `sensor/`, `inst/`, `seg/`, `labl/`. See "
+        f"across `sensor/`, `hits/`, `edep/`, `labl/`. See "
         f"`LUCiD/docs/LUCID_DATASET.md` for the schema.\n"
     )
     (config_dir / "README.md").write_text(body)
@@ -201,7 +201,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         config_id = "N/A (use_config_number: false)"
     config_dir.mkdir(parents=True, exist_ok=True)
     if run_lucid:
-        for sub in ("sensor", "inst", "seg", "labl"):
+        for sub in ("sensor", "hits", "edep", "labl"):
             (config_dir / sub).mkdir(parents=True, exist_ok=True)
 
     # Print summary
@@ -252,7 +252,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             d = config_dir / f"{e_int}MeV"
             d.mkdir(parents=True, exist_ok=True)
             if run_lucid:
-                for sub in ("sensor", "inst", "seg", "labl"):
+                for sub in ("sensor", "hits", "edep", "labl"):
                     (d / sub).mkdir(parents=True, exist_ok=True)
             out_dirs.append(d)
     else:  # genie or other — fall back to uniform-style layout

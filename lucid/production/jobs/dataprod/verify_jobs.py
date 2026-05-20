@@ -5,7 +5,7 @@ Walks a dataprod output tree, finds every `submit_job_NNNNNN.sbatch`
 whose v3 four-file batch is missing, unreadable, or has the wrong
 n_events. The truth check is straightforward:
 
-  1. All four `wc_{sensor,inst,seg,labl}_<file_index:04d>.h5` exist
+  1. All four `wc_{sensor,hits,edep,labl}_<file_index:04d>.h5` exist
      (where `file_index = job_id - 1`).
   2. Each file opens with h5py and carries a `config/` group.
   3. `config.attrs['n_events']` equals the per-job event count requested
