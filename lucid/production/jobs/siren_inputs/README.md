@@ -41,10 +41,10 @@ vim ../user_paths.sh
 # 5. After each drain, recover any preempted/failed sub-jobs (idempotent;
 #    repeat until "missing" is 0 — the cluster's `preemptable` QoS on roma
 #    means some sub-jobs get bumped):
-./resubmit_failed.sh $OUTPUT_BASE_PATH
+./resubmit_failed.sh $SIREN_OUTPUT_BASE_PATH/training_inputs
 
 # 6. Once nothing is missing, hadd per-cell sub-job ROOTs:
-./merge.sh $OUTPUT_BASE_PATH
+./merge.sh $SIREN_OUTPUT_BASE_PATH/training_inputs
 ```
 
 The `resubmit_failed.sh` truth check is the presence of the
@@ -110,7 +110,7 @@ fitted from real v6 runs (`t/event = a + b · E_MeV`, defaults in
 Single-job cells (every cell in a smoke test, low-E cells in the full scan):
 
 ```
-<OUTPUT_BASE>/<material>/<particle>/<E>MeV/
+<SIREN_OUTPUT_BASE>/training_inputs/<material>/<particle>/<E>MeV/
   ├── photonsim.root        # PhotonHist_AngleDistance(Norm), dEdxHist_Distance, ...
   ├── photonsim_config.json
   ├── submit.sbatch
@@ -122,7 +122,7 @@ Multi-job cells (typically high-E cells when an `events_schedule` with
 splitting is active):
 
 ```
-<OUTPUT_BASE>/<material>/<particle>/<E>MeV/
+<SIREN_OUTPUT_BASE>/training_inputs/<material>/<particle>/<E>MeV/
   ├── photonsim.root          # created by merge.sh (hadd of all N sub-jobs)
   ├── photonsim_config.json
   ├── submit_job_001.sbatch ... submit_job_NNN.sbatch

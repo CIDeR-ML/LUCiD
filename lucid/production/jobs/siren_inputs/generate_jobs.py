@@ -75,7 +75,9 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     p.add_argument("-t", "--test", action="store_true",
                    help="Test mode: only the first (particle, energy) cell.")
     p.add_argument("-o", "--output-base", type=Path, default=None,
-                   help="Override OUTPUT_BASE_PATH from user_paths.sh.")
+                   help="Output root override. Default: "
+                        "<SIREN_OUTPUT_BASE_PATH>/training_inputs if set, "
+                        "else OUTPUT_BASE_PATH.")
     p.add_argument("-P", "--partition", type=str, default=None,
                    help="Override SLURM_PARTITION from user_paths.sh. "
                         "Comma-separated values (e.g. 'roma,milano') round-"
@@ -124,8 +126,15 @@ def main(argv: Optional[List[str]] = None) -> int:
     photonsim_dir = find_photonsim_dir(env, args.photonsim_dir,
                                         SCRIPT_DIR.resolve())
 
-    output_base = (args.output_base.resolve() if args.output_base
-                   else Path(env["OUTPUT_BASE_PATH"]).resolve())
+    if args.output_base:
+        output_base = args.output_base.resolve()
+    elif env.get("SIREN_OUTPUT_BASE_PATH"):
+        # Stage-specific subdir under the SIREN root keeps siren_inputs
+        # outputs disjoint from smax outputs (both layer <material>/...).
+        output_base = (Path(env["SIREN_OUTPUT_BASE_PATH"])
+                       / "training_inputs").resolve()
+    else:
+        output_base = Path(env["OUTPUT_BASE_PATH"]).resolve()
     # `partition` is SLURM-flavoured terminology; HTCondor reads the equivalent
     # from CONDOR_JOB_FLAVOUR via the adapter. The CLI -P / env var is
     # interpreted by the adapter's render_* method.

@@ -31,10 +31,10 @@ vim ../user_paths.sh
 ./generate_jobs.sh -c configs/water_mu_test.json -s
 
 # 5. Once all jobs finish, merge per-cell output_job_*.root → photonsim.root
-./merge.sh $OUTPUT_BASE_PATH
+./merge.sh $SIREN_OUTPUT_BASE_PATH/smax_parametrization
 
 # 6. Fit s_max(E) and write the CSVs
-./analyze.sh $OUTPUT_BASE_PATH
+./analyze.sh $SIREN_OUTPUT_BASE_PATH/smax_parametrization
 ```
 
 `analyze.sh` calls `PhotonSim/tools/smax/analyze_smax.py` inside the
@@ -92,7 +92,7 @@ The smoke-test config `water_mu_test.json` uses this flat form.
 For cells with one job (default):
 
 ```
-<OUTPUT_BASE>/<material>/<particle>/<E>MeV/
+<SIREN_OUTPUT_BASE>/smax_parametrization/<material>/<particle>/<E>MeV/
   ├── photonsim.root         # contains PhotonHist_Distance (1D, mm)
   ├── photonsim_config.json
   ├── submit.sbatch
@@ -103,7 +103,7 @@ For cells with one job (default):
 For cells split into N jobs (E > `split_above_MeV` in the e- config):
 
 ```
-<OUTPUT_BASE>/<material>/<particle>/<E>MeV/
+<SIREN_OUTPUT_BASE>/smax_parametrization/<material>/<particle>/<E>MeV/
   ├── photonsim.root          # created by merge.sh (hadd of all N)
   ├── photonsim_config.json
   ├── submit_job_001.sbatch ... submit_job_NNN.sbatch

@@ -37,8 +37,13 @@ export GENIE_XSEC_FILE="/opt/genie_xsec/3_04_00/G18_10a_02_11b/gxspl-min.xml.gz"
 # Output paths
 # =============================================================================
 # OUTPUT_BASE_PATH = where the per-job ROOTs are written by lucid-run-job
-# (large; EOS makes sense).
+# (large; EOS makes sense). Root for the dataset-production stage.
 export OUTPUT_BASE_PATH="/eos/user/c/cjesus/DIFFSIM/output"
+# SIREN_OUTPUT_BASE_PATH (optional): root for the SIREN-side stages. smax
+# fan-out writes under <base>/smax_parametrization/<material>/<particle>/<E>MeV/,
+# siren_inputs under <base>/training_inputs/<material>/<particle>/<E>MeV/. If
+# unset, both stages fall back to OUTPUT_BASE_PATH.
+#export SIREN_OUTPUT_BASE_PATH="/eos/user/c/cjesus/SIREN_files"
 # LOG_BASE_PATH = where the .sub's `output =`, `error =`, `log =` files
 # land. LXPLUS standard schedds reject /eos paths in these fields, so we
 # point them at AFS by default; HTCondorAdapter mirrors the output tree

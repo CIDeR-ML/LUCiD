@@ -76,7 +76,9 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     p.add_argument("-t", "--test", action="store_true",
                    help="Test mode: only the first (particle, energy) cell.")
     p.add_argument("-o", "--output-base", type=Path, default=None,
-                   help="Override OUTPUT_BASE_PATH from user_paths.sh.")
+                   help="Output root override. Default: "
+                        "<SIREN_OUTPUT_BASE_PATH>/smax_parametrization if set, "
+                        "else OUTPUT_BASE_PATH.")
     p.add_argument("-P", "--partition", type=str, default=None,
                    help="Override SLURM_PARTITION from user_paths.sh.")
     p.add_argument("-g", "--gpu", action="store_true",
@@ -108,8 +110,15 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"error: {adapter.submit_cmd} not found on PATH.", file=sys.stderr)
         return 2
 
-    output_base = (args.output_base.resolve() if args.output_base
-                   else Path(env["OUTPUT_BASE_PATH"]).resolve())
+    if args.output_base:
+        output_base = args.output_base.resolve()
+    elif env.get("SIREN_OUTPUT_BASE_PATH"):
+        # Stage-specific subdir under the SIREN root keeps smax outputs
+        # disjoint from siren_inputs outputs (both layer <material>/...).
+        output_base = (Path(env["SIREN_OUTPUT_BASE_PATH"])
+                       / "smax_parametrization").resolve()
+    else:
+        output_base = Path(env["OUTPUT_BASE_PATH"]).resolve()
     partition = args.partition or env.get("SLURM_PARTITION") or env.get("CONDOR_JOB_FLAVOUR", "")
     if not partition:
         print("error: queue partition/flavour not set "

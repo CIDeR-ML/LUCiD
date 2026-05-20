@@ -38,7 +38,14 @@ export GENIE_XSEC_FILE="/opt/genie_xsec/3_04_00/G18_10a_02_11b/gxspl-min.xml.gz"
 # =============================================================================
 # Output paths
 # =============================================================================
+# OUTPUT_BASE_PATH: root for the dataset-production stage (dataprod fan-out).
+# Files land under <base>/<detector>/config_NNNNNN/<E>MeV/.
 export OUTPUT_BASE_PATH="/path/to/your/production/output"
+# SIREN_OUTPUT_BASE_PATH (optional): root for the SIREN-side stages. smax
+# fan-out writes under <base>/smax_parametrization/<material>/<particle>/<E>MeV/,
+# siren_inputs under <base>/training_inputs/<material>/<particle>/<E>MeV/. If
+# unset, both stages fall back to OUTPUT_BASE_PATH.
+#export SIREN_OUTPUT_BASE_PATH="/path/to/your/SIREN_files"
 
 # =============================================================================
 # SLURM configuration
