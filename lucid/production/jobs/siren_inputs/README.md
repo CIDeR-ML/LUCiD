@@ -29,14 +29,14 @@ cp ../user_paths.lxplus.sh.template ../user_paths.sh   # on LXPLUS
 vim ../user_paths.sh
 
 # 2. Prepare sbatch scripts only (no submission)
-python3 generate_jobs.py -c configs/water_mu_test.json
+./generate_jobs.sh -c configs/water_mu_test.json
 
 # 3. Submit smoke test (small grid, flat 100 events/cell, 1 job per cell)
-python3 generate_jobs.py -c configs/water_mu_test.json -s
+./generate_jobs.sh -c configs/water_mu_test.json -s
 
 # 4. Submit the full scan (322-cell grid, 10k events/cell, ~1h/sub-job)
-python3 generate_jobs.py -c configs/water_mu.json -s
-python3 generate_jobs.py -c configs/water_el.json -s
+./generate_jobs.sh -c configs/water_mu.json -s
+./generate_jobs.sh -c configs/water_el.json -s
 
 # 5. After each drain, recover any preempted/failed sub-jobs (idempotent;
 #    repeat until "missing" is 0 — the cluster's `preemptable` QoS on roma

@@ -281,6 +281,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             sb_path = out_dir / f"submit_job_{job_id}.{adapter.submit_extension}"
             sb_path.write_text(body)
             sb_path.chmod(0o755)
+            # Stable marker for the bash shim's host-side submission pass.
+            print(f"[PREPARED] {sb_path}")
             prepared += 1
 
             if args.submit:

@@ -223,6 +223,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                 sb_basename=sb_basename, partition=sub_partition,
                 use_gpu=args.gpu,
             )
+            # Stable marker for the bash shim's host-side submission pass.
+            print(f"[PREPARED] {sb}")
             n_emitted += 1
             prepared += 1
 
