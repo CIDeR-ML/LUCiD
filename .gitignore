@@ -48,3 +48,5 @@ lucid/production/jobs/user_paths.sh
 *.egg-info/
 runs/
 plots/
+# Kerberos credential caches dropped by condor_submit (cwd/<user>.cc)
+**/cjesus.cc
