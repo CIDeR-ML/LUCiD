@@ -30,10 +30,16 @@ if [ "${2:-}" = "--dry-run" ]; then DRY_RUN=1; fi
 [ -d "${SCAN_DIR}" ] || { echo "error: scan dir not found: ${SCAN_DIR}" >&2; exit 1; }
 [ -n "${LUCID_IMAGE_PATH:-}" ] || { echo "error: LUCID_IMAGE_PATH not set." >&2; exit 1; }
 
+# Honour optional dev-loop binds so the container picks up the host
+# checkout's cluster_common module (resubmit_failed.py imports from it).
+DEV_BINDS=""
+[ -n "${LUCID_DEV_PATH:-}" ]     && DEV_BINDS="${DEV_BINDS} -B ${LUCID_DEV_PATH}:/opt/LUCiD"
+[ -n "${PHOTONSIM_DEV_PATH:-}" ] && DEV_BINDS="${DEV_BINDS} -B ${PHOTONSIM_DEV_PATH}:/opt/PhotonSim"
+
 LIST=$(mktemp)
 trap 'rm -f "${LIST}"' EXIT
 
-apptainer exec -B "${APPTAINER_BINDS:-/sdf,/fs,/sdf/scratch,/lscratch}" \
+apptainer exec -B "${APPTAINER_BINDS:-/sdf,/fs,/sdf/scratch,/lscratch}" ${DEV_BINDS} \
     "${LUCID_IMAGE_PATH}" \
     python3 "${SCRIPT_DIR}/resubmit_failed.py" --list "${SCAN_DIR}" > "${LIST}"
 
