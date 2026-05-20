@@ -19,13 +19,13 @@ vim ../user_paths.sh
 # Only LUCID_DEV_PATH and LUCID_IMAGE_PATH are read here.
 
 # 2. Prepare the scan (no submission)
-python3 generate_jobs.py -c configs/water_mu_v1.json
+./generate_jobs.sh -c configs/water_mu_v1.json
 
 # 3. Submit a single test run (first entry in the runs list)
-python3 generate_jobs.py -c configs/water_mu_v1.json -t -s
+./generate_jobs.sh -c configs/water_mu_v1.json -t -s
 
 # 4. Submit the full scan
-python3 generate_jobs.py -c configs/water_mu_v1.json -s
+./generate_jobs.sh -c configs/water_mu_v1.json -s
 ```
 
 Runs whose `final_training_progress.pdf` already exists are skipped on

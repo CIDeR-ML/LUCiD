@@ -186,6 +186,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                 energy_mev=energy, job_name=job_label, job_id=job_id,
                 sb_basename=sb_basename, partition=partition, use_gpu=args.gpu,
             )
+            # Stable marker for the bash shim's host-side submission pass.
+            print(f"[PREPARED] {sb}")
             prepared += 1
 
             if args.submit:

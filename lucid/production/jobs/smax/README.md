@@ -21,14 +21,14 @@ cp ../user_paths.lxplus.sh.template ../user_paths.sh   # on LXPLUS
 vim ../user_paths.sh
 
 # 2. Prepare submit scripts only (no submission)
-python3 generate_jobs.py -c configs/water_mu.json
+./generate_jobs.sh -c configs/water_mu.json
 
 # 3. Submit the full scan (mu- + e- separately)
-python3 generate_jobs.py -c configs/water_mu.json -s
-python3 generate_jobs.py -c configs/water_el.json -s
+./generate_jobs.sh -c configs/water_mu.json -s
+./generate_jobs.sh -c configs/water_el.json -s
 
 # 4. Smoke test (4 energies, 50 events each)
-python3 generate_jobs.py -c configs/water_mu_test.json -s
+./generate_jobs.sh -c configs/water_mu_test.json -s
 
 # 5. Once all jobs finish, merge per-cell output_job_*.root → photonsim.root
 ./merge.sh $OUTPUT_BASE_PATH
