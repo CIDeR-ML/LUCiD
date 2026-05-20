@@ -23,6 +23,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 from functools import partial
+from typing import NamedTuple
 
 
 # Cherenkov yield: ~340 photons per cm per MeV of track in water at 400nm
@@ -163,3 +164,40 @@ def _cone_to_world(axis, theta, phi):
 
     norms = jnp.linalg.norm(dirs, axis=1, keepdims=True)
     return dirs / (norms + 1e-30)
+
+
+class CascadeSource(NamedTuple):
+    """Cascade photon source -- callable JAX pytree.
+
+    Usage: ``source(n_photons, key)`` → ``(directions, origins, weights)``.
+    Compatible with ``setup_event_simulator(is_calibration=True)``.
+    """
+    position: jnp.ndarray
+    direction: jnp.ndarray
+    energy_mev: jnp.ndarray
+    n_medium: jnp.ndarray
+    is_hadronic: jnp.ndarray
+    wavelength: object = None
+
+    def __call__(self, n_photons, key, n_water=1.33):
+        origins, directions, weights = generate_cascade_photons(
+            self.position, self.direction, self.energy_mev,
+            n_photons, key, n_medium=self.n_medium,
+            is_hadronic=self.is_hadronic)
+        return directions, origins, weights
+
+
+def cascade_source(position, direction, energy_mev, n_medium=1.33,
+                   is_hadronic=False, wavelength=None):
+    """Create a CascadeSource with sensible defaults."""
+    if direction is None:
+        direction = [0.0, 0.0, -1.0]
+    wl = jnp.asarray(float(wavelength), dtype=jnp.float32) if wavelength is not None else None
+    return CascadeSource(
+        position=jnp.asarray(position, dtype=jnp.float32),
+        direction=jnp.asarray(direction, dtype=jnp.float32),
+        energy_mev=jnp.asarray(float(energy_mev), dtype=jnp.float32),
+        n_medium=jnp.asarray(float(n_medium), dtype=jnp.float32),
+        is_hadronic=jnp.asarray(bool(is_hadronic)),
+        wavelength=wl,
+    )

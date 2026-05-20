@@ -34,10 +34,8 @@ input[type=range]{width:100%;accent-color:#4488cc;height:14px}
   <h3>IceCube-86</h3>
   <label>Dataset</label>
   <select id="dsSel">
-    <option value="../output/cascades_sim/">Cascades</option>
-    <option value="../output/siren_tracks_fixed/">Tracks (SIREN)</option>
-    <option value="../output/deepcore_tracks/">DeepCore tracks</option>
-    <option value="../output/deepcore/">DeepCore cascades</option>
+    <option value="../../output/cascades_sim/">Cascades</option>
+    <option value="../../output/siren_tracks/">Tracks (SIREN)</option>
   </select>
   <label>Event</label><select id="evSel"></select>
   <label>Point size</label><input type="range" id="ptSz" min="0.5" max="5" step="0.1" value="2.0">
@@ -90,7 +88,7 @@ let initCP=null,initCT=null;
 let curHits=null;
 
 const C=0.2998,TLEN=300;
-let DIR='../output/cascades_sim/';
+let DIR='../../output/cascades_sim/';
 
 function inferno(t){t=Math.max(0,Math.min(1,t));
   const s=[[0,[2,1,10]],[.1,[30,5,55]],[.22,[75,10,95]],[.33,[120,20,95]],
@@ -140,6 +138,7 @@ void main(){
 
 async function loadData(){
   const[dr,er]=await Promise.all([fetch(DIR+'detector.json'),fetch(DIR+'events.json')]);
+  if(!dr.ok||!er.ok){$('info').textContent=`No data at ${DIR} — run the generation script first.`;return false;}
   det=await dr.json();evs=await er.json();
   const sel=$('evSel');sel.innerHTML='';
   evs.forEach((e,i)=>{const o=document.createElement('option');o.value=i;
@@ -340,7 +339,7 @@ function exportGif(){
     pr.textContent='Saved!';setTimeout(()=>pr.style.display='none',2000);gr.dispose();});
   pr.textContent='Encoding...';gif.render();}
 
-$('dsSel').onchange=async e=>{DIR=e.target.value;await loadData();showEvent(0);};
+$('dsSel').onchange=async e=>{DIR=e.target.value;if(await loadData()!==false){buildDet();showEvent(0);}};
 $('evSel').onchange=e=>showEvent(+e.target.value);
 $('bStr').onclick=e=>{showStr=!showStr;strGrp.visible=showStr;e.target.classList.toggle('on');};
 $('bUnh').onclick=e=>{showUnh=!showUnh;if(unhitPts)unhitPts.visible=showUnh;e.target.classList.toggle('on');};
@@ -358,7 +357,7 @@ $('bHard').onclick=()=>{an=false;anQ=0;cam.position.copy(initCP);ctrl.target.cop
 $('bGif').onclick=exportGif;
 $('spd').oninput=e=>{$('spdV').textContent=(+e.target.value).toFixed(1)+'x';};
 
-async function start(){init();await loadData();buildDet();showEvent(0);tick(0);}
+async function start(){init();if(await loadData()!==false){buildDet();showEvent(0);}tick(0);}
 start();
 </script>
 </body>
