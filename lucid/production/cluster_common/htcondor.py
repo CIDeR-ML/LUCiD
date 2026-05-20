@@ -54,7 +54,7 @@ class HTCondorAdapter(ClusterAdapter):
         return HTCONDOR_DEFAULT_BINDS
 
     def _flavour(self) -> str:
-        return self.env.get("CONDOR_JOB_FLAVOUR", "longlunch")
+        return self.env.get("CONDOR_JOB_FLAVOUR", "workday")
 
     def _train_flavour(self) -> str:
         return self.env.get("CONDOR_TRAIN_FLAVOUR", "testmatch")

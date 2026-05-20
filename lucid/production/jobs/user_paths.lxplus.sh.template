@@ -52,12 +52,14 @@ export LOG_BASE_PATH="/afs/cern.ch/work/c/cjesus/DIFFSIM/logs"
 # Picks the queue HTCondor matches against. Reference:
 #   espresso       20 min
 #   microcentury   1 h
-#   longlunch      2 h     ← default for SIREN/smax cells targeting ~1h
-#   workday        8 h
+#   longlunch      2 h
+#   workday        8 h     ← default for SIREN/smax cells (some high-E electron
+#                            cells overshoot the 2h longlunch cap and get killed
+#                            by SYSTEM_PERIODIC_REMOVE; 8h has plenty of margin)
 #   tomorrow       1 d
 #   testmatch      3 d     ← default for train_siren
 #   nextweek       1 w
-export CONDOR_JOB_FLAVOUR="longlunch"
+export CONDOR_JOB_FLAVOUR="workday"
 export CONDOR_TRAIN_FLAVOUR="testmatch"
 
 # =============================================================================

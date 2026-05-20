@@ -84,10 +84,11 @@ $OUTPUT_BASE_PATH/water/e-/<E>MeV/
 ## Walltime — picking a JobFlavour
 
 HTCondor walltime is set via `+JobFlavour` (CERN convention). The default
-in `user_paths.sh.template` is `longlunch` (2 h), matching the SIREN/smax
-default `target_seconds_per_job = 3600`. Larger cells (very high energy)
-may need `workday` (8 h) or `tomorrow` (1 d) — override per-invocation with
-`-P workday` on the CLI.
+in `user_paths.sh.template` is `workday` (8 h). The SIREN/smax planner aims
+for ~1 h per sub-job, so this is generous; we picked it because some
+high-energy electron cells (≥ 9 GeV) overshoot a tighter 2 h cap and get
+killed by `SYSTEM_PERIODIC_REMOVE`. Override per-invocation with
+`-P longlunch` (or whatever) on the CLI if you want to be stricter.
 
 | Flavour | Walltime cap |
 |---|---|
