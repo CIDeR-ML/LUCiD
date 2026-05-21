@@ -94,6 +94,14 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     p.add_argument("--no-skip-existing", action="store_true",
                    help="Re-run cells that already have photonsim.root "
                         "(default: skip them).")
+    p.add_argument("--min-energy", type=int, default=None,
+                   help="Filter the config's energy_list to E >= this value "
+                        "(MeV). Useful for restricted re-runs.")
+    p.add_argument("--max-energy", type=int, default=None,
+                   help="Filter the config's energy_list to E < this value "
+                        "(MeV). Useful for restricted re-runs (e.g. when only "
+                        "low-E cells need regenerating after a piecewise "
+                        "smax refit).")
     return p.parse_args(argv)
 
 
@@ -109,10 +117,18 @@ def main(argv: Optional[List[str]] = None) -> int:
     material = cfg["material"]
     particles = [p["type"] for p in cfg["particles"]]
     energies: List[int] = list(cfg["energy_list_MeV"])
+    if args.min_energy is not None:
+        energies = [e for e in energies if e >= args.min_energy]
+    if args.max_energy is not None:
+        energies = [e for e in energies if e < args.max_energy]
+    if not energies:
+        print("error: no energies left after --min-energy/--max-energy filter",
+              file=sys.stderr)
+        return 2
     include_extrapolated = bool(
         args.include_extrapolated or cfg.get("include_extrapolated", False)
     )
-    events_per_cell, target_s, a_s, b_s_per_mev = parse_schedule(cfg)
+    events_per_cell, events_ranges, target_s, a_s, b_s_per_mev = parse_schedule(cfg)
 
     env = load_user_paths(args.user_paths)
     adapter = get_adapter(env)
@@ -155,7 +171,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     print(f"particles:    {particles}")
     print(f"energies:     {len(energies)} cells, "
           f"{energies[0]}..{energies[-1]} MeV")
-    print(f"events/cell:  {events_per_cell:,}")
+    if events_ranges:
+        ranges_desc = ", ".join(f"<{e}MeV→{n:,}" for e, n in events_ranges)
+        print(f"events/cell:  {events_per_cell:,} (default; ranges: {ranges_desc})")
+    else:
+        print(f"events/cell:  {events_per_cell:,}")
     if target_s is not None:
         print(f"target/job:   {target_s:.0f} s "
               f"(time model: t/event = {a_s:g} + {b_s_per_mev:g} * E_MeV)")
@@ -169,6 +189,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     cells, skipped = build_cells(
         particles=particles, energies=energies, photonsim_dir=photonsim_dir,
         material=material, events_per_cell=events_per_cell,
+        events_per_cell_ranges=events_ranges,
         target_seconds_per_job=target_s, a_s=a_s, b_s_per_mev=b_s_per_mev,
         include_extrapolated=include_extrapolated,
     )

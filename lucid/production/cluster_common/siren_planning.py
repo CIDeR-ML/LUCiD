@@ -87,6 +87,16 @@ def eval_smax(row: dict, energy_mev: float) -> float:
     if form == "smooth_two_power":
         a, b1, b2, E0 = (float(row[k]) for k in ("a", "b1", "b2", "E0"))
         return a * energy_mev ** b1 / (1.0 + (energy_mev / E0) ** (b1 - b2))
+    if form == "piecewise":
+        # Two smooth_two_power pieces joined at e_join_mev with C⁰+C¹
+        # continuity. Low piece in (a, b1, b2, E0); high piece in
+        # (a_hi, b1_hi, b2_hi, E0_hi).
+        ej = float(row["e_join_mev"])
+        if energy_mev < ej:
+            a, b1, b2, E0 = (float(row[k]) for k in ("a", "b1", "b2", "E0"))
+        else:
+            a, b1, b2, E0 = (float(row[k]) for k in ("a_hi", "b1_hi", "b2_hi", "E0_hi"))
+        return a * energy_mev ** b1 / (1.0 + (energy_mev / E0) ** (b1 - b2))
     raise ValueError(f"unknown smax form: {form!r}")
 
 
@@ -161,11 +171,26 @@ def write_per_cell_config(*, cell_dir: Path, material: str, particle: str,
 
 # --- Schedule parsing --------------------------------------------------------
 
-def parse_schedule(cfg: dict) -> Tuple[int, Optional[float], float, float]:
-    """Extract (events_per_cell, target_seconds, a, b) from a SIREN-input config.
+def parse_schedule(cfg: dict
+                   ) -> Tuple[int, List[Tuple[int, int]], Optional[float], float, float]:
+    """Extract (events_default, events_ranges, target_seconds, a, b)
+    from a SIREN-input config.
 
-    Two forms accepted: an `events_schedule` block with optional `time_model`,
-    or a flat `n_events_per_job` at top level (smoke-test configs).
+    Two forms accepted:
+
+    * `events_schedule` block:
+        - `events_per_cell` (required): default per-cell event budget.
+        - `events_per_cell_ranges` (optional): list of
+          `{"e_max": <MeV>, "events_per_cell": <int>}` entries. Evaluated in
+          order against each cell's energy; the first whose `e_max` strictly
+          exceeds the energy wins. Cells above the largest `e_max` fall back
+          to the top-level `events_per_cell`.
+        - `target_seconds_per_job` (optional): wall-time target per sub-job.
+        - `time_model` (optional): `t_per_event = a + b * E_MeV` for splitting.
+    * A flat `n_events_per_job` at top level (smoke-test configs).
+
+    `events_ranges` is returned as a list of `(e_max_excl, events_per_cell)`
+    tuples, sorted by `e_max_excl`. Empty list when no ranges are defined.
     """
     sched = cfg.get("events_schedule")
     if sched:
@@ -173,13 +198,29 @@ def parse_schedule(cfg: dict) -> Tuple[int, Optional[float], float, float]:
         target_s = sched.get("target_seconds_per_job")
         target_s = float(target_s) if target_s is not None else None
         tm = {**DEFAULT_TIME_MODEL, **(sched.get("time_model") or {})}
+        ranges_raw = sched.get("events_per_cell_ranges") or []
+        ranges: List[Tuple[int, int]] = sorted(
+            (int(r["e_max"]), int(r["events_per_cell"])) for r in ranges_raw
+        )
     else:
         events_per_cell = int(cfg["n_events_per_job"])
         target_s = None
         tm = DEFAULT_TIME_MODEL
+        ranges = []
     a_s = float(tm["a_seconds_per_event"])
     b_s_per_mev = float(tm["b_seconds_per_event_per_mev"])
-    return events_per_cell, target_s, a_s, b_s_per_mev
+    return events_per_cell, ranges, target_s, a_s, b_s_per_mev
+
+
+def events_per_cell_for_energy(default_events: int,
+                               ranges: List[Tuple[int, int]],
+                               energy_mev: int) -> int:
+    """Resolve per-cell event budget via the per-range schedule, falling
+    back to ``default_events`` when no range matches."""
+    for e_max, n in ranges:
+        if energy_mev < e_max:
+            return n
+    return default_events
 
 
 # --- Cell enumeration --------------------------------------------------------
@@ -204,7 +245,9 @@ class Cell(tuple):
 
 def build_cells(*, particles: List[str], energies: List[int],
                 photonsim_dir: Path, material: str,
-                events_per_cell: int, target_seconds_per_job: Optional[float],
+                events_per_cell: int,
+                events_per_cell_ranges: Optional[List[Tuple[int, int]]],
+                target_seconds_per_job: Optional[float],
                 a_s: float, b_s_per_mev: float,
                 include_extrapolated: bool) -> Tuple[List[Cell], List[str]]:
     """Enumerate every (particle, energy) cell with its full plan.
@@ -212,7 +255,12 @@ def build_cells(*, particles: List[str], energies: List[int],
     Returns (cells, skipped_messages). Energies below `fit_min_mev` are
     skipped (with a human-readable message in the second return value)
     unless `include_extrapolated` is True.
+
+    Per-cell event budget is resolved from `events_per_cell_ranges` (if
+    set), falling back to `events_per_cell` for energies above the largest
+    range cutoff.
     """
+    ranges = events_per_cell_ranges or []
     cells: List[Cell] = []
     skipped: List[str] = []
     for particle in particles:
@@ -222,8 +270,9 @@ def build_cells(*, particles: List[str], energies: List[int],
                 skipped.append(f"{particle} @ {energy} MeV "
                                f"(< fit_min={fit_min}; pass --include-extrapolated to force)")
                 continue
+            cell_budget = events_per_cell_for_energy(events_per_cell, ranges, energy)
             n_jobs, evt_per_job = split_plan_by_time(
-                events_per_cell=events_per_cell, energy_mev=energy,
+                events_per_cell=cell_budget, energy_mev=energy,
                 target_seconds_per_job=target_seconds_per_job,
                 a_s=a_s, b_s_per_mev=b_s_per_mev,
             )

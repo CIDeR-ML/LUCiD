@@ -46,9 +46,15 @@ CELL_DIR_RE = re.compile(r"^(\d+)MeV$")
 
 # Per-form param columns expected in smax_fit.csv.  Keep in sync with the
 # canonical FORMS dict in PhotonSim/tools/smax/analyze_smax.py.
+# For "piecewise": low-piece params live in the standard (a, b1, b2, E0)
+# columns; high-piece params in (a_hi, b1_hi, b2_hi, E0_hi); plus the
+# scalar join energy in e_join_mev.
 _SMAX_PARAM_COLS = {
     "A*E^B":            ("A", "B"),
     "smooth_two_power": ("a", "b1", "b2", "E0"),
+    "piecewise":        ("a", "b1", "b2", "E0",
+                         "e_join_mev",
+                         "a_hi", "b1_hi", "b2_hi", "E0_hi"),
 }
 
 # Columns that every row has (in addition to form-specific params).
@@ -68,6 +74,13 @@ def _eval_smax(form: str, params: Dict[str, Any], energy_mev: float) -> float:
         return A * energy_mev ** B
     if form == "smooth_two_power":
         a, b1, b2, E0 = (float(params[k]) for k in ("a", "b1", "b2", "E0"))
+        return a * energy_mev ** b1 / (1.0 + (energy_mev / E0) ** (b1 - b2))
+    if form == "piecewise":
+        ej = float(params["e_join_mev"])
+        if energy_mev < ej:
+            a, b1, b2, E0 = (float(params[k]) for k in ("a", "b1", "b2", "E0"))
+        else:
+            a, b1, b2, E0 = (float(params[k]) for k in ("a_hi", "b1_hi", "b2_hi", "E0_hi"))
         return a * energy_mev ** b1 / (1.0 + (energy_mev / E0) ** (b1 - b2))
     raise ValueError(f"unknown smax form: {form!r}")
 
