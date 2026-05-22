@@ -206,14 +206,14 @@ def unpack_t0_params(particle_type: str = 'muon', material: str = 'water') -> tu
         t0_params['delta_parameterization']['offset']
     )
 
-def unpack_photonsim_params(particle_type: str = 'muon', material: str = 'water') -> dict:
+def unpack_siren_params(particle_type: str = 'muon', material: str = 'water') -> dict:
     """
-    Load and unpack photon simulation parameters for a given particle type and material.
+    Load SIREN inference parameters for a given particle type and material from
+    `data/<material>/<particle>/siren_params.json`.
 
-    The total-photon normalization and importance-sampling seed counts that
-    `photonsim_params.json` used to carry are gone: SIREN inference now derives
-    `N_photons(E)` and `s_max(E)` from the trained model's metadata (the `nphot`
-    and `smax` blocks). This loader only resolves the SIREN model path.
+    `N_photons(E)` and `s_max(E)` come from the trained model's metadata (the
+    `nphot` / `smax` blocks); this loader resolves the model path and the
+    ray-sampling knobs.
 
     Parameters
     ----------
@@ -226,19 +226,21 @@ def unpack_photonsim_params(particle_type: str = 'muon', material: str = 'water'
     -------
     dict
         Dictionary containing:
-        - 'siren_model_path': str, absolute path to SIREN model
+        - 'siren_model_path': str, absolute path to the SIREN model
+        - 'ray_sampling': dict, {'grid_bins': int, 'threshold': float} — the
+          first-pass grid resolution and the relative seed threshold for the
+          importance-sampling ray generator (empty dict if not configured).
     """
     normalized_type = normalize_particle_type_for_path(particle_type)
-    config_path = base_dir_path()+f'/data/{material}/{normalized_type}/photonsim_params.json'
+    data_dir = base_dir_path() + f'/data/{material}/{normalized_type}/'
+    config_path = data_dir + 'siren_params.json'
 
     with open(config_path, 'r') as f:
-        photonsim_params = json.load(f)
-
-    data_dir = base_dir_path()+f'/data/{material}/{normalized_type}/'
-    siren_model_path = data_dir + photonsim_params['siren_model']['path']
+        siren_params = json.load(f)
 
     return {
-        'siren_model_path': siren_model_path
+        'siren_model_path': data_dir + siren_params['siren_model']['path'],
+        'ray_sampling': siren_params.get('ray_sampling', {}),
     }
 
 def spherical_to_cartesian(theta: jax.Array, phi: jax.Array) -> jax.Array:

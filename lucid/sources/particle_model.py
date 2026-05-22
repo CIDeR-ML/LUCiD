@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import NamedTuple
 
-from lucid.utils import unpack_t0_params, unpack_photonsim_params
+from lucid.utils import unpack_t0_params, unpack_siren_params
 from lucid.siren.core import build_photonsim_context
 from lucid.siren.training.inference import SIRENPredictor
 
@@ -45,10 +45,10 @@ class ParticleModel(NamedTuple):
             If SIREN model data is not found for this particle/material.
         """
         # Resolve the SIREN model path, load it, and build the inference context
-        # (domain ranges + s_max(E) / N_photons(E) closures).
-        photonsim_params = unpack_photonsim_params(particle, material)
-        predictor = SIRENPredictor(photonsim_params['siren_model_path'])
-        context = build_photonsim_context(predictor)
+        # (domain ranges + s_max(E) / N_photons(E) closures + ray-sampling knobs).
+        siren_params = unpack_siren_params(particle, material)
+        predictor = SIRENPredictor(siren_params['siren_model_path'])
+        context = build_photonsim_context(predictor, siren_params['ray_sampling'])
 
         # t0 timing parameters
         t0_params = unpack_t0_params(particle, material)

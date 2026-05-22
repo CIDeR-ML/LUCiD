@@ -61,7 +61,7 @@ from lucid.sources.siren_rays import (
     generate_random_cone_vectors, make_photonsim_ray_fn, evaluate_siren_lhs,
 )
 from lucid.utils import normalize
-from lucid.utils import base_dir_path, setup_matplotlib_for_notebook
+from lucid.utils import base_dir_path, setup_matplotlib_for_notebook, unpack_siren_params
 
 plt.rcParams['text.usetex'] = False
 plt.rcParams['font.family'] = 'serif'
@@ -120,7 +120,8 @@ class PhotonSimValidator:
               f"Distance: {self.distance_min}-{self.distance_max} mm")
         
         # Build the SIREN inference context + the track-mode ray generator.
-        self.ctx = build_photonsim_context(self.photonsim_predictor)
+        ray_sampling = unpack_siren_params(particle, material)['ray_sampling']
+        self.ctx = build_photonsim_context(self.photonsim_predictor, ray_sampling)
         self.ray_fn = make_photonsim_ray_fn(self.ctx)
 
         # Standard simulation parameters

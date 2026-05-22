@@ -179,6 +179,8 @@ class PhotonSimContext(NamedTuple):
     log_max:       float
     s_max_fn:      Callable        # s_max(E_mev) -> mm
     n_photons_fn:  Callable        # N_photons(E_mev) -> total photons/event
+    grid_bins:     int             # first-pass grid resolution (per axis)
+    threshold:     float           # seed threshold, fraction of per-energy grid max
 
 
 def make_smax_fn(smax: dict) -> Callable:
@@ -224,16 +226,26 @@ def make_power_law_fn(nphot: dict) -> Callable:
     return lambda E: jnp.maximum(a * E ** b + c, 0.0)
 
 
-def build_photonsim_context(photonsim_predictor) -> PhotonSimContext:
+# Defaults for the ray-sampling knobs when `siren_params.json` omits them.
+_DEFAULT_RAY_SAMPLING = {"grid_bins": 250, "threshold": 0.05}
+
+
+def build_photonsim_context(photonsim_predictor,
+                            ray_sampling: dict = None) -> PhotonSimContext:
     """Resolve a ``SIRENPredictor`` into a :class:`PhotonSimContext`.
 
     Reads the dataset ranges, the SIREN architecture (``metadata['model_config']``
     — no longer hardcoded), the target-normalization log range, and builds the
     ``s_max(E)`` / ``N_photons(E)`` closures from the ``smax`` / ``nphot``
-    metadata blocks. Replaces the old ``create_photonsim_siren_grid`` — there is
-    no precomputed grid any more (the ray function samples the phase space
-    directly).
+    metadata blocks.
+
+    ``ray_sampling`` is the ``ray_sampling`` block from ``siren_params.json``
+    (``{'grid_bins', 'threshold'}``); missing keys fall back to
+    ``_DEFAULT_RAY_SAMPLING``. It drives the importance-sampling ray generator:
+    a first-pass ``grid_bins x grid_bins`` SIREN evaluation, then seeding only
+    in bins above ``threshold * max`` of that grid.
     """
+    rs = {**_DEFAULT_RAY_SAMPLING, **(ray_sampling or {})}
     meta = photonsim_predictor.metadata
     dataset_info = photonsim_predictor.dataset_info
     energy_min, energy_max = dataset_info['energy_range']
@@ -266,4 +278,6 @@ def build_photonsim_context(photonsim_predictor) -> PhotonSimContext:
         log_max=float(target_norm['log_max']),
         s_max_fn=make_smax_fn(meta['smax']),
         n_photons_fn=make_power_law_fn(meta['nphot']),
+        grid_bins=int(rs['grid_bins']),
+        threshold=float(rs['threshold']),
     )

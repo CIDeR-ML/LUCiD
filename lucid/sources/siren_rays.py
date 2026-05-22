@@ -5,18 +5,27 @@ given energy, the SIREN model predicts the photon density over the
 ``(opening-angle, s/s_max)`` phase space; this module turns that into a set of
 weighted photon rays.
 
-Approach (post s/s_max refactor):
-  * Latin-Hypercube sample ``Nphot`` points over the ``(angle, s/s_max)``
-    domain — area-uniform, so no region is left undersampled.
-  * One SIREN evaluation at those points.
-  * The SIREN-predicted weights are normalised to a PMF and multiplied by the
-    physical photon count ``N_photons(E)`` — so ``sum(intensity) == N_photons(E)``
-    exactly. SIREN supplies the *shape*, the stored power law supplies the *scale*.
-  * The dimensionless ``s/s_max`` coordinate is converted to a physical
-    distance ``s = (s/s_max)·s_max(E)`` along the track.
+Approach — two-pass importance sampling:
+  1. Evaluate the SIREN on a ``grid_bins x grid_bins`` grid over the
+     ``(angle, s/s_max)`` domain (first pass).
+  2. Seed the ``Nphot`` rays only in grid bins whose weight clears
+     ``threshold * max(grid)`` — drawn uniformly within the *area* of those
+     bins (a categorical bin pick + uniform jitter) — then evaluate the SIREN
+     a second time at the jittered seed points.
 
-There is no fixed grid and no importance sampling — the compact s/s_max phase
-space makes both unnecessary.
+Concentrating the rays in the bright part of the phase space (the Cherenkov
+pattern is sharply peaked) means a few rays describe it well — area-uniform
+sampling over the whole domain wastes most rays on near-zero weight. The seed
+region is computed on the fly from the SIREN values + a threshold knob (from
+``siren_params.json``); there is no parametrised seed-count function.
+
+Per-ray intensity is ``(w / Σw) * N_photons(E)``: SIREN supplies the *shape*
+(a PMF), a stored power law supplies the *scale*, so ``sum(intensity)`` equals
+``N_photons(E)`` exactly. No extra normalisation is needed — the discarded
+sub-threshold tail is simply folded into the kept rays.
+
+The dimensionless ``s/s_max`` coordinate is converted to a physical distance
+``s = (s/s_max)·s_max(E)`` along the track.
 """
 
 import jax
@@ -100,16 +109,34 @@ def normalize_inputs_jit(inputs, energy_min, energy_max, angle_min, angle_max,
     return jnp.stack([normalized_energy, normalized_angle, normalized_distance], axis=1)
 
 
+def _siren_weights(ctx, model_params, energy, angle, s_over_smax):
+    """Evaluate the SIREN at the given (angle, s/s_max) points for ``energy``.
+
+    Returns denormalised, non-negative photon-density weights. Shared by the
+    grid pass, the seed pass, and the LHS diagnostic helper.
+    """
+    grid = jnp.stack([
+        jnp.full_like(angle, energy),   # energy (MeV)
+        angle,                          # opening angle (radians)
+        s_over_smax,                    # s / s_max  ∈ [0, 1]
+    ], axis=1)
+    normalized = normalize_inputs_jit(
+        grid, ctx.energy_min, ctx.energy_max,
+        ctx.angle_min, ctx.angle_max,
+        ctx.smax_dist_min, ctx.smax_dist_max,
+    )
+    raw, _ = ctx.model.apply(model_params, normalized)
+    w = denormalize_log_predictions(jnp.squeeze(raw), ctx.log_max, ctx.log_min)
+    return jnp.maximum(w, 0.0)
+
+
 def latin_hypercube_2d(key, nphot, x_lo, x_hi, y_lo, y_hi):
     """Area-uniform Latin-Hypercube sample of ``nphot`` points over the 2D box
     ``[x_lo, x_hi] x [y_lo, y_hi]``.
 
     Each axis is split into ``nphot`` equal strata with exactly one sample per
     stratum (``(perm + uniform_jitter) / nphot``); two independent permutations
-    pair the axes so the strata are decorrelated. The result is area-uniform —
-    no importance weighting — so no region can be left severely undersampled.
-
-    ``nphot`` is a Python int (it sizes the permutations / jitter arrays).
+    pair the axes so the strata are decorrelated.
     """
     k_px, k_py, k_jx, k_jy = random.split(key, 4)
     perm_x = random.permutation(k_px, nphot)
@@ -124,59 +151,80 @@ def latin_hypercube_2d(key, nphot, x_lo, x_hi, y_lo, y_hi):
 
 
 def evaluate_siren_lhs(ctx, model_params, energy, nphot, key):
-    """Draw ``nphot`` LHS points over the (angle, s/s_max) domain, evaluate the
-    SIREN once, and return ``(weights, angle, s_over_smax)``.
+    """Draw ``nphot`` area-uniform LHS points over the whole (angle, s/s_max)
+    domain and evaluate the SIREN once.
 
-    ``weights`` are the denormalised photon densities, **before** PMF
-    normalisation — the raw SIREN prediction. Shared by the ray function and
-    the ``validate.py`` integral diagnostic (which sums the raw weights as a
-    Monte-Carlo estimate of the phase-space integral).
+    Returns ``(weights, angle, s_over_smax)`` with raw (pre-PMF) weights. Used
+    by the ``validate.py`` integral diagnostic, which sums the raw weights over
+    an area-uniform draw as a Monte-Carlo estimate of the phase-space integral.
     """
     angle, s_over_smax = latin_hypercube_2d(
         key, nphot,
         ctx.angle_min, ctx.angle_max,
         ctx.smax_dist_min, ctx.smax_dist_max,
     )
-    grid = jnp.stack([
-        jnp.full_like(angle, energy),   # energy (MeV)
-        angle,                          # opening angle (radians)
-        s_over_smax,                    # s / s_max  ∈ [0, 1]
-    ], axis=1)
-    normalized = normalize_inputs_jit(
-        grid, ctx.energy_min, ctx.energy_max,
-        ctx.angle_min, ctx.angle_max,
-        ctx.smax_dist_min, ctx.smax_dist_max,
-    )
-    raw, _ = ctx.model.apply(model_params, normalized)
-    w = denormalize_log_predictions(jnp.squeeze(raw), ctx.log_max, ctx.log_min)
-    return jnp.maximum(w, 0.0), angle, s_over_smax
+    w = _siren_weights(ctx, model_params, energy, angle, s_over_smax)
+    return w, angle, s_over_smax
 
 
 def make_photonsim_ray_fn(ctx):
-    """Build the jitted track-mode ray generator for a given model context.
+    """Build the jitted track-mode ray generator for a model context.
 
     ``ctx`` is a :class:`lucid.siren.core.PhotonSimContext` (SIREN model,
-    domain ranges, log-normalisation range, and the ``s_max(E)`` / ``N_photons(E)``
-    closures). The simulator builds this once at setup.
+    domain ranges, log-normalisation range, the ``s_max(E)`` / ``N_photons(E)``
+    closures, and the ``grid_bins`` / ``threshold`` ray-sampling knobs). The
+    simulator builds this once at setup.
 
     Returns ``photonsim_differentiable_get_rays(track_origin, track_direction,
     energy, Nphot, model_params, key)`` -> ``(ray_vectors, ray_origins,
-    photon_intensities)``:
-
-      * one SIREN evaluation at ``Nphot`` LHS points;
-      * ``s/s_max`` -> physical mm via ``ctx.s_max_fn(E)``;
-      * ``intensity = (w / Σw) · N_photons(E)`` — so the per-ray intensities
-        sum to the physical photon count for that energy.
+    photon_intensities)`` using the two-pass importance sampling described in
+    the module docstring.
     """
+    g = ctx.grid_bins
+    # Bin-center grid over (angle, s/s_max) — constant, closed over.
+    a_edges = jnp.linspace(ctx.angle_min, ctx.angle_max, g + 1)
+    s_edges = jnp.linspace(ctx.smax_dist_min, ctx.smax_dist_max, g + 1)
+    a_centers = 0.5 * (a_edges[:-1] + a_edges[1:])
+    s_centers = 0.5 * (s_edges[:-1] + s_edges[1:])
+    a_bin_w = (float(a_centers[1] - a_centers[0]) if g > 1
+               else float(ctx.angle_max - ctx.angle_min))
+    s_bin_w = (float(s_centers[1] - s_centers[0]) if g > 1
+               else float(ctx.smax_dist_max - ctx.smax_dist_min))
+    AA, SS = jnp.meshgrid(a_centers, s_centers, indexing='ij')
+    grid_angle = AA.ravel()      # (g*g,) bin-center angles
+    grid_s = SS.ravel()          # (g*g,) bin-center s/s_max
+    threshold = ctx.threshold
 
     @partial(jax.jit, static_argnums=(3,))
     def photonsim_differentiable_get_rays(track_origin, track_direction,
                                           energy, Nphot, model_params, key):
-        eval_key, cone_key = random.split(key)
+        pick_key, jit_key, cone_key = random.split(key, 3)
 
-        # One SIREN evaluation over an area-uniform LHS draw of the phase space.
-        w, angle, s_over_smax = evaluate_siren_lhs(
-            ctx, model_params, energy, Nphot, eval_key)
+        # --- pass 1: SIREN on the bin-center grid ---
+        grid_w = _siren_weights(ctx, model_params, energy, grid_angle, grid_s)
+
+        # --- seed region: bins at/above threshold * per-energy grid max.
+        # `>=` keeps the peak bin (threshold < 1) and degrades gracefully to
+        # the whole domain if the grid is all-zero (sub-threshold energy).
+        thresh = threshold * jnp.max(grid_w)
+        above = grid_w >= thresh                          # (g*g,) bool mask
+
+        # Uniformly pick Nphot of the M above-threshold bins. Drawing a rank in
+        # [0, M) and mapping it to a bin via searchsorted on the inclusive
+        # cumulative count keeps everything (Nphot,)- and (g*g,)-sized — unlike
+        # random.categorical, which would materialise a (Nphot, g*g) array.
+        csum = jnp.cumsum(above.astype(jnp.int32))        # (g*g,), runs 0..M
+        n_seed_bins = csum[-1]                            # M (traced scalar)
+        rank = random.randint(pick_key, (Nphot,), 0, n_seed_bins)
+        bin_idx = jnp.searchsorted(csum, rank + 1)        # r-th above-thresh bin
+
+        # --- uniform jitter within the chosen bins (uniform over their area) ---
+        jitter = random.uniform(jit_key, (2, Nphot)) - 0.5
+        angle = grid_angle[bin_idx] + jitter[0] * a_bin_w
+        s_over_smax = grid_s[bin_idx] + jitter[1] * s_bin_w
+
+        # --- pass 2: SIREN at the jittered seed points ---
+        w = _siren_weights(ctx, model_params, energy, angle, s_over_smax)
 
         # s/s_max -> physical distance along the track (mm -> m for origins).
         physical_dist_mm = s_over_smax * ctx.s_max_fn(energy)

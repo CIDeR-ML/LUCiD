@@ -10,7 +10,7 @@ from lucid.propagation.sphere import create_sphere_photon_propagator
 from lucid.propagation.box import create_box_photon_propagator, box_bounds_check
 from lucid.geometry import generate_detector, get_material_from_config
 from lucid.utils import (
-    unpack_t0_params, unpack_photonsim_params,
+    unpack_t0_params, unpack_siren_params,
     get_speed_of_light_in_material,
     spherical_to_cartesian, base_dir_path,
     smear_times, smear_charges_SK_like,
@@ -721,8 +721,8 @@ def setup_event_simulator(
             pos_grad_threshold=_pgt, make_hits_fn=_make_hits_fn,
             segment_idx=segment_idx, is_volume=_is_volume)
 
-    # Load photonsim parameters from configuration (SIREN model path).
-    photonsim_params = unpack_photonsim_params(particle, material)
+    # Load SIREN inference parameters (model path + ray-sampling knobs).
+    siren_params = unpack_siren_params(particle, material)
 
     @jax.jit
     def _simulation_without_data_impl(particle_params, detector_params, key):
@@ -826,9 +826,9 @@ def setup_event_simulator(
         else:
             return _simulation_sensor_calibration_impl
     else:
-        model_base_path = photonsim_params['siren_model_path']
+        model_base_path = siren_params['siren_model_path']
         photonsim_predictor = SIRENPredictor(model_base_path)
-        ctx = build_photonsim_context(photonsim_predictor)
+        ctx = build_photonsim_context(photonsim_predictor, siren_params['ray_sampling'])
         ray_fn = make_photonsim_ray_fn(ctx)
         model_params = photonsim_predictor.params
         t0_params = unpack_t0_params(particle, material)

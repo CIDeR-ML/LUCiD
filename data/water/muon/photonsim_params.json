@@ -1,6 +1,0 @@
-{
-    "siren_model": {
-        "path": "siren_training/trained_model/photonsim_siren",
-        "description": "Relative path to SIREN model within the particle/material directory"
-    }
-}
