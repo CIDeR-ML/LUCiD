@@ -28,7 +28,15 @@ sftp-config.json
 **/debug/
 !data/
 !data/**/
-!data/**/photonsim_params.json
+!data/**/siren_params.json
+
+# `!data/**/` above un-ignores every directory under data/ (needed so git
+# can descend to siren_params.json) — re-ignore the leftovers it exposes:
+# Jupyter checkpoints, and the SIREN model dirs/symlinks (machine-local).
+data/**/.ipynb_checkpoints/
+data/**/siren_training
+data/**/siren_training_pre_ssmax/
+data/**/dedx_siren_training
 
 # Ignore s3df_jobs folder except .py and .md files
 s3df_jobs/*
