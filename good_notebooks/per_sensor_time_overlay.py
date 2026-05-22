@@ -121,7 +121,7 @@ def build_simulators():
         physics_config=PHYSICS_CONFIG, default_detector_params=True)
 
     prediction_simulator = setup_event_simulator(
-        DEFAULT_JSON_FILENAME, NPHOT_PRED, TEMPERATURE, max_sensors_per_cell=4, K=K_PRED,
+        DEFAULT_JSON_FILENAME, NPHOT_PRED, TEMPERATURE, max_candidates_per_ray=4, K=K_PRED,
         is_data=False, hit_mode='per_photon',
         physics_config=PHYSICS_CONFIG, default_detector_params=True)
 
@@ -151,6 +151,13 @@ def build_event(detector, data_simulator, prediction_simulator, key):
         photon_data['photon_directions'] = photon_directions
     photon_data['photon_times'] = jnp.pad(
         photon_times, (0, pad), mode='constant', constant_values=0)
+    # Per-photon wavelengths must be padded to match the other photon arrays:
+    # the data simulator sizes its optical arrays by photon_origins.shape[0].
+    # `mode='edge'` keeps the pad values inside the medium's wavelength grid
+    # (padded photons carry intensity 0, so the value itself is inert).
+    if 'wavelengths' in photon_data and pad > 0:
+        photon_data['wavelengths'] = jnp.pad(
+            photon_data['wavelengths'], (0, pad), mode='edge')
     photon_data['N'] = n
 
     # Random vertex inside 60% of the detector volume

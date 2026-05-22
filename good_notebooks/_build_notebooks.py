@@ -91,9 +91,6 @@ from parameter_scans_1D_gaussian import (
     make_loss_fn, make_loss_and_grad, perform_scan, _MODE_PARAMS,
 )
 import multi_event_bias_joint as meb
-import sim_total_compare as stc
-import check_total_norm as ctn
-import distribution_compare as dc
 from lucid.geometry import generate_detector
 from lucid.simulation import setup_event_simulator
 
@@ -122,7 +119,7 @@ data_sim = setup_event_simulator(
 
 pred_sim = setup_event_simulator(
     DEFAULT_JSON_FILENAME, NPHOT_PRED, 0.10,
-    max_sensors_per_cell=4, K=K_PRED,
+    max_candidates_per_ray=4, K=K_PRED,
     is_data=False, hit_mode='per_photon',
     wavelength_mode=WAVELENGTH_MODE,
     physics_config=PHYSICS_CONFIG, default_detector_params=True)
@@ -478,7 +475,7 @@ data_sim = setup_event_simulator(
     physics_config=PHYSICS_CONFIG, default_detector_params=True)
 pred_sim = setup_event_simulator(
     DEFAULT_JSON_FILENAME, NPHOT_PRED, 0.10,
-    max_sensors_per_cell=4, K=K_PRED,
+    max_candidates_per_ray=4, K=K_PRED,
     is_data=False, hit_mode='per_photon',
     wavelength_mode=WAVELENGTH_MODE,
     physics_config=PHYSICS_CONFIG, default_detector_params=True)
