@@ -1,5 +1,7 @@
 __all__ = [
-    "photonsim_differentiable_get_rays",
+    "make_photonsim_ray_fn",
+    "evaluate_siren_lhs",
+    "latin_hypercube_2d",
     "predict_t0",
     "predict_t0_wrapper",
     "IsotropicSource",
@@ -15,7 +17,9 @@ __all__ = [
 ]
 
 from lucid.sources.siren_rays import (
-    photonsim_differentiable_get_rays,
+    make_photonsim_ray_fn,
+    evaluate_siren_lhs,
+    latin_hypercube_2d,
     predict_t0,
     predict_t0_wrapper,
 )

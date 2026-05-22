@@ -7,6 +7,6 @@ This module provides:
 - Validation tools for trained models
 """
 
-from .core import SIREN, SineLayer, create_photonsim_siren_grid
+from .core import SIREN, SineLayer, PhotonSimContext, build_photonsim_context
 
-__all__ = ['SIREN', 'SineLayer', 'create_photonsim_siren_grid']
+__all__ = ['SIREN', 'SineLayer', 'PhotonSimContext', 'build_photonsim_context']

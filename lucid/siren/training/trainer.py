@@ -842,6 +842,34 @@ class SIRENTrainer:
                 info[col] = val
         return info
 
+    def _build_nphot_info(self) -> Optional[dict]:
+        """Pull the N_photons(E) power-law fit out of the h5 metadata into a
+        clean block for the trained-model JSON. Returns None if the dataset's
+        h5 carries no `nphot_form` attr (a table built before the fit existed).
+
+        LUCiD inference uses this as the absolute photon-count normalization:
+        SIREN supplies the shape (a PMF), this fit supplies the scale.
+        """
+        ds_meta = getattr(self.dataset, 'metadata', None) or {}
+
+        def _decode(v):
+            return v.decode() if isinstance(v, bytes) else v
+
+        form = _decode(ds_meta.get('nphot_form'))
+        if form is None:
+            return None
+
+        info: Dict[str, Any] = {"form": form}
+        for k in ("a", "b", "c", "r_squared"):
+            val = ds_meta.get(f"nphot_{k}")
+            if val is not None:
+                info[k] = float(val)
+        for k in ("fit_min_mev", "fit_max_mev"):
+            val = ds_meta.get(f"nphot_{k}")
+            if val is not None:
+                info[k] = int(val)
+        return info
+
     def save_trained_model(self, output_dir: Path, model_name: str = "siren_model"):
         """
         Save the trained SIREN model with all necessary metadata for inference.
@@ -917,6 +945,12 @@ class SIRENTrainer:
         smax_info = self._build_smax_info()
         if smax_info is not None:
             metadata['smax'] = smax_info
+
+        # N_photons(E) power-law fit — the absolute photon-count normalization
+        # LUCiD inference multiplies the SIREN-predicted PMF by.
+        nphot_info = self._build_nphot_info()
+        if nphot_info is not None:
+            metadata['nphot'] = nphot_info
 
         # Save metadata as JSON
         metadata_path = output_dir / f"{model_name}_metadata.json"

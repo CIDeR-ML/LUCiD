@@ -210,6 +210,11 @@ def unpack_photonsim_params(particle_type: str = 'muon', material: str = 'water'
     """
     Load and unpack photon simulation parameters for a given particle type and material.
 
+    The total-photon normalization and importance-sampling seed counts that
+    `photonsim_params.json` used to carry are gone: SIREN inference now derives
+    `N_photons(E)` and `s_max(E)` from the trained model's metadata (the `nphot`
+    and `smax` blocks). This loader only resolves the SIREN model path.
+
     Parameters
     ----------
     particle_type : str, optional
@@ -221,8 +226,6 @@ def unpack_photonsim_params(particle_type: str = 'muon', material: str = 'water'
     -------
     dict
         Dictionary containing:
-        - 'tot_n_photons_normalization': tuple of (a, b, c) for power law: a * energy^b + c
-        - 'num_seeds': tuple of (a, b, c) for power law: a * energy^b + c
         - 'siren_model_path': str, absolute path to SIREN model
     """
     normalized_type = normalize_particle_type_for_path(particle_type)
@@ -234,18 +237,7 @@ def unpack_photonsim_params(particle_type: str = 'muon', material: str = 'water'
     data_dir = base_dir_path()+f'/data/{material}/{normalized_type}/'
     siren_model_path = data_dir + photonsim_params['siren_model']['path']
 
-    # Extract individual parameters (power law: a * x^b + c)
     return {
-        'tot_n_photons_normalization': (
-            photonsim_params['tot_n_photons_normalization']['a'],
-            photonsim_params['tot_n_photons_normalization']['b'],
-            photonsim_params['tot_n_photons_normalization']['c']
-        ),
-        'num_seeds': (
-            photonsim_params['num_seeds']['a'],
-            photonsim_params['num_seeds']['b'],
-            photonsim_params['num_seeds']['c']
-        ),
         'siren_model_path': siren_model_path
     }
 

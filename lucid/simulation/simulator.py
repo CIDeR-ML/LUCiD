@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from lucid.sources.siren_rays import (
-    photonsim_differentiable_get_rays,
+    make_photonsim_ray_fn,
     predict_t0,
 )
 from lucid.propagation.cylinder import create_photon_propagator
@@ -25,7 +25,7 @@ import jax
 import jax.numpy as jnp
 from typing import Any, Callable, Optional, Tuple, Union
 import os
-from lucid.siren.core import create_photonsim_siren_grid
+from lucid.siren.core import build_photonsim_context
 from functools import partial
 from lucid.siren.training.inference import SIRENPredictor
 
@@ -721,31 +721,25 @@ def setup_event_simulator(
             pos_grad_threshold=_pgt, make_hits_fn=_make_hits_fn,
             segment_idx=segment_idx, is_volume=_is_volume)
 
-    # Load photonsim parameters from configuration (power-law normalization, SIREN path)
+    # Load photonsim parameters from configuration (SIREN model path).
     photonsim_params = unpack_photonsim_params(particle, material)
-    tot_n_photons_a, tot_n_photons_b, tot_n_photons_c = photonsim_params['tot_n_photons_normalization']
-    num_seeds_a, num_seeds_b, num_seeds_c = photonsim_params['num_seeds']
 
     @jax.jit
-    def tot_n_photons_normalization(x):
-        """Power law: a * energy^b + c. Parameters loaded from config."""
-        return tot_n_photons_a * jnp.power(x, tot_n_photons_b) + tot_n_photons_c
+    def _simulation_without_data_impl(particle_params, detector_params, key):
+        """SIREN track mode: particle_params is ParticleParams.
 
-    @jax.jit
-    def _simulation_without_data_impl(particle_params, detector_params, key, grid_data, model_params):
-        """SIREN mode: particle_params is ParticleParams."""
+        Closes over `ray_fn`, `model_params` and `t0_params`, which are
+        assigned in the track-mode branch below (late binding — this impl is
+        only ever called through that branch's return)."""
         energy = particle_params.energy
         track_origin = particle_params.position
         track_direction = particle_params.direction  # property
 
         key, ray_key, opt_key = jax.random.split(key, 3)
-        photon_directions, photon_origins, photon_weights = photonsim_differentiable_get_rays(
-            track_origin, track_direction, energy, Nphot, grid_data, model_params, ray_key,
-            num_seeds_a, num_seeds_b, num_seeds_c
-        )
-
-        total_photons_norm = tot_n_photons_normalization(energy)
-        photon_intensities = (total_photons_norm * photon_weights) / Nphot
+        # ray_fn returns photon_intensities already normalised so that
+        # sum(intensities) == N_photons(energy) — no separate rescaling.
+        photon_directions, photon_origins, photon_intensities = ray_fn(
+            track_origin, track_direction, energy, Nphot, model_params, ray_key)
         photon_times = jnp.zeros((Nphot,))
 
         distances_to_vertex = jnp.linalg.norm(photon_origins - track_origin, axis=1) * 1000
@@ -834,17 +828,15 @@ def setup_event_simulator(
     else:
         model_base_path = photonsim_params['siren_model_path']
         photonsim_predictor = SIRENPredictor(model_base_path)
-        grid_data = create_photonsim_siren_grid(photonsim_predictor)
+        ctx = build_photonsim_context(photonsim_predictor)
+        ray_fn = make_photonsim_ray_fn(ctx)
         model_params = photonsim_predictor.params
         t0_params = unpack_t0_params(particle, material)
         if _default_dp is not None:
             @jax.jit
             def _sim_track_default(particle_params, key):
-                return _simulation_without_data_impl(particle_params, _default_dp, key,
-                                                     grid_data=grid_data, model_params=model_params)
+                return _simulation_without_data_impl(particle_params, _default_dp, key)
             _sim_track_default.default_detector_params = _default_dp
             return _sim_track_default
         else:
-            return partial(_simulation_without_data_impl,
-                           grid_data=grid_data,
-                           model_params=model_params)
+            return _simulation_without_data_impl

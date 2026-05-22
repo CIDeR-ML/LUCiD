@@ -19,9 +19,9 @@ import numpy as np
 
 from lucid.geometry.string import StringTelescope
 from lucid.propagation.string.fast import create_fast_string_simulator
-from lucid.siren.core import create_photonsim_siren_grid
+from lucid.siren.core import build_photonsim_context
 from lucid.siren.training.inference import SIRENPredictor
-from lucid.sources.siren_rays import photonsim_differentiable_get_rays
+from lucid.sources.siren_rays import make_photonsim_ray_fn
 from lucid.utils import base_dir_path
 
 CONFIG_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "config")
@@ -38,15 +38,15 @@ SPEED = 0.2254
 
 
 def generate_siren_track_photons(track_origin, track_direction, n_photons, key,
-                                  grid_data, model_params):
-    ray_vectors, ray_origins, photon_weights = photonsim_differentiable_get_rays(
+                                  ray_fn, model_params):
+    ray_vectors, ray_origins, photon_intensities = ray_fn(
         track_origin, track_direction, SIREN_ENERGY, n_photons,
-        grid_data, model_params, key,
+        model_params, key,
     )
     offsets = ray_origins - track_origin[None, :]
     ray_origins_scaled = track_origin[None, :] + F * offsets
-    photon_weights_scaled = photon_weights * F
-    return ray_vectors, ray_origins_scaled, photon_weights_scaled
+    photon_intensities_scaled = photon_intensities * F
+    return ray_vectors, ray_origins_scaled, photon_intensities_scaled
 
 
 def main():
@@ -63,7 +63,8 @@ def main():
     data_dir = os.path.join(base_dir_path(), 'data', 'water', 'muon')
     model_path = os.path.join(data_dir, 'siren_training', 'trained_model', 'photonsim_siren')
     predictor = SIRENPredictor(model_path)
-    grid_data = create_photonsim_siren_grid(predictor)
+    ctx = build_photonsim_context(predictor)
+    ray_fn = make_photonsim_ray_fn(ctx)
     model_params = predictor.params
 
     # Save detector geometry for the viewer
@@ -104,7 +105,7 @@ def main():
         track_direction = dir_raw / (jnp.linalg.norm(dir_raw) + 1e-10)
 
         ray_vectors, ray_origins, photon_weights = generate_siren_track_photons(
-            track_origin, track_direction, N_PHOTONS, gen_key, grid_data, model_params)
+            track_origin, track_direction, N_PHOTONS, gen_key, ray_fn, model_params)
 
         dom_charges, dom_time_weighted = sim(
             ray_origins, ray_vectors, photon_weights, K, sim_key)
