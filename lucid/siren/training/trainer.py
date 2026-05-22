@@ -473,7 +473,15 @@ class SIRENTrainer:
         # Final checkpoint
         if self.output_dir:
             self.save_checkpoint(total_steps, final=True)
-            
+
+        # Final callback pass at step == total_steps so prediction-plot and
+        # any other periodic hooks see the final weights. The training loop
+        # uses range(start, total) (exclusive upper bound), so the last
+        # in-loop step is total_steps - 1 — without this, the last plot is
+        # for step total_steps - log_every, not total_steps.
+        for callback in self.callbacks:
+            callback(self, total_steps)
+
         elapsed_time = time.time() - start_time
         logger.info(f"Training completed in {elapsed_time:.2f} seconds")
         
@@ -734,6 +742,21 @@ class SIRENTrainer:
             'distance_range': [float(self.dataset.distance_range[0]), float(self.dataset.distance_range[1])],
         }
 
+        # Carry material/particle through from h5 metadata when available so
+        # LUCiD inference knows which fit row to apply at runtime.
+        ds_meta = getattr(self.dataset, 'metadata', None) or {}
+        for k in ('material', 'particle'):
+            v = ds_meta.get(k)
+            if isinstance(v, bytes):
+                v = v.decode()
+            if v is not None:
+                info[k] = v
+        dist_axis = ds_meta.get('distance_axis')
+        if isinstance(dist_axis, bytes):
+            dist_axis = dist_axis.decode()
+        if dist_axis:
+            info['distance_axis'] = dist_axis
+
         # Get dedx_range if available
         dedx_range = getattr(self.dataset, 'dedx_range', None)
         angle_range = getattr(self.dataset, 'angle_range', None)
@@ -759,6 +782,64 @@ class SIRENTrainer:
                 'photon_density': 'photons/mm^2'
             }
 
+        return info
+
+    # Param-name lists per form, kept in sync with FORMS in
+    # PhotonSim/tools/smax/analyze_smax.py and _SMAX_PARAM_COLS in
+    # lucid/siren/training/photonsim_data/build_tables.py.
+    _SMAX_PARAM_COLS = {
+        "A*E^B":            ("A", "B"),
+        "smooth_two_power": ("a", "b1", "b2", "E0"),
+        "piecewise":        ("a", "b1", "b2", "E0",
+                             "e_join_mev",
+                             "a_hi", "b1_hi", "b2_hi", "E0_hi"),
+    }
+    _SMAX_SHARED_COLS = (
+        "fit_min_mev", "fit_max_mev",
+        "quantile", "quantile_multiplier", "generated_at_utc",
+    )
+
+    def _build_smax_info(self) -> Optional[dict]:
+        """Pull the smax parametrization out of the h5 metadata into a clean
+        block for the trained-model JSON. Returns None if the dataset wasn't
+        loaded from an h5 lookup table that carries an `smax_form` attr.
+        """
+        ds_meta = getattr(self.dataset, 'metadata', None) or {}
+
+        def _decode(v):
+            return v.decode() if isinstance(v, bytes) else v
+
+        form = _decode(ds_meta.get('smax_form'))
+        # Legacy h5 (muon photon table) stored just smax_A / smax_B and no
+        # `smax_form` attr. Infer A*E^B in that case.
+        if form is None and ('smax_A' in ds_meta and 'smax_B' in ds_meta):
+            form = "A*E^B"
+        if form not in self._SMAX_PARAM_COLS:
+            return None
+
+        params: Dict[str, float] = {}
+        for name in self._SMAX_PARAM_COLS[form]:
+            val = ds_meta.get(f"smax_{name}")
+            if val is None:
+                logger.warning(
+                    "smax param %s missing from dataset metadata for form=%s; "
+                    "smax block will be incomplete.", name, form)
+                continue
+            params[name] = float(val)
+
+        info: Dict[str, Any] = {"form": form, "params": params}
+        for col in self._SMAX_SHARED_COLS:
+            val = ds_meta.get(f"smax_{col}")
+            if val is None:
+                continue
+            val = _decode(val)
+            # Numeric columns: coerce; strings (generated_at_utc) stay as-is.
+            if col in ("fit_min_mev", "fit_max_mev"):
+                info[col] = int(val)
+            elif col in ("quantile", "quantile_multiplier"):
+                info[col] = float(val)
+            else:
+                info[col] = val
         return info
 
     def save_trained_model(self, output_dir: Path, model_name: str = "siren_model"):
@@ -829,7 +910,14 @@ class SIRENTrainer:
                     'linear_min': make_json_serializable(self.dataset.normalized_bounds['linear_target_min']),
                     'linear_max': make_json_serializable(self.dataset.normalized_bounds['linear_target_max'])
                 }
-        
+
+        # s_max parametrization (form + params + fit range) so LUCiD inference
+        # can compute s_max(E) per primary and feed s/s_max to SIREN without
+        # consulting the original h5 lookup table.
+        smax_info = self._build_smax_info()
+        if smax_info is not None:
+            metadata['smax'] = smax_info
+
         # Save metadata as JSON
         metadata_path = output_dir / f"{model_name}_metadata.json"
         with open(metadata_path, 'w') as f:

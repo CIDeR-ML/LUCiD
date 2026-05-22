@@ -77,6 +77,34 @@ unknown keys raise at config-load time so typos don't silently drop
 hyperparameters. To add a new knob, extend `FLAG_MAP` (CLI flag) and optionally
 `NAME_MAP` (short label for folder names) in `generate_jobs.py`.
 
+## Standard training recipe
+
+The current production seed-scans (`water_{mu,el}_*_seed_scan_p100_ti02_n150k`)
+all use this baseline — proven to converge for both photon and dE/dx tables.
+The config-name suffix encodes it: `p100` = patience 100, `ti02` =
+target_importance 0.2, `n150k` = 150k steps.
+
+```json
+"baseline": {
+  "num_steps":         150000,
+  "learning_rate":     1e-4,
+  "min_lr":            5e-7,
+  "patience":          100,
+  "grad_clip_norm":    1.0,
+  "zero_threshold":    1e-3,
+  "zero_keep_frac":    0.5,
+  "energy_balance":    "uniform",
+  "target_importance": 0.2,
+  "batch_size":        25000,
+  "val_split":         0.01
+}
+```
+
+A scan runs 10 seeds (`runs: [{"seed": 1}, … {"seed": 10}]`) on the `turing`
+partition. Seed yield is imperfect — typically ~4–6 of 10 seeds converge and
+the rest diverge — so a 10-seed scan plus `rank_seeds.py` (below) is the
+intended way to obtain one good model.
+
 ## Output layout
 
 ```
@@ -101,7 +129,19 @@ overrides) so you can always recover what produced the artifacts there.
 
 ## Comparing runs
 
-Once the scan finishes, eyeball every loss plot side-by-side from a notebook:
+Once the scan finishes, rank the seeds by loss to pick the model to promote:
+
+```bash
+apptainer exec -B /sdf/data/neutrino "$LUCID_IMAGE_PATH" /opt/conda/bin/python3 \
+    rank_seeds.py <output_root>/<scan_name> [--sort final_val|best_val|final_train]
+```
+
+`rank_seeds.py` reads each `seed*/trained_model/*_metadata.json` and
+`training_history.json`, prints a table of final train / val loss + best-ever
+val loss, and names the best seed (default ranking: final val loss). Works for
+both photon and dE/dx scans.
+
+To eyeball every loss plot side-by-side from a notebook instead:
 
 ```python
 from pathlib import Path
