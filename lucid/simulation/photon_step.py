@@ -5,13 +5,14 @@ from lucid.simulation.optics import (
     normalize, compute_reflection_direction, sample_cosine_hemisphere,
     sample_scatter_distance, compute_scatter_direction,
 )
+from lucid.wavelength.scattering import compute_mie_scatter_direction
 
 # Photon iteration functions (12-arg signatures: dual reflection, no tau_gs)
 # ===================================================================
 
 def photon_iteration_sample(
         position, direction, time, surface_distance,
-        normal, scatter_length, wall_reflection_rate, sensor_reflection_rate,
+        normal, scatter_length, mie_scatter_length, g, wall_reflection_rate, sensor_reflection_rate,
         absorption_length,
         hit_sensor, rng_key, speed_of_light):
     """
@@ -67,6 +68,7 @@ def photon_iteration_sample(
     k1, k2, k3, k4 = jax.random.split(rng_key, 4)
 
     reflection_rate = jnp.where(hit_sensor, sensor_reflection_rate, wall_reflection_rate)
+    scatter_length = jnp.minimum(scatter_length, mie_scatter_length)
     scatter_distance = sample_scatter_distance(surface_distance, scatter_length, k2)
 
     reach_surface_prob = jnp.exp(-surface_distance / scatter_length)
@@ -96,11 +98,12 @@ def photon_iteration_sample(
     diffuse_dir = sample_cosine_hemisphere(inward_normal, k4)
     reflection_dir = jnp.where(hit_sensor, specular_dir, diffuse_dir)
     scatter_dir = compute_scatter_direction(direction, k3)
+    asym_scatter_dir = compute_mie_scatter_direction(direction, k3, g)
 
     new_dir = jnp.where(
         reflects,
         reflection_dir,
-        jnp.where(scatters, scatter_dir, direction),
+        jnp.where(scatters, asym_scatter_dir, direction),
     )
 
     distance_traveled = jnp.where(scatters, scatter_distance, surface_distance)
@@ -121,7 +124,7 @@ def photon_iteration_sample(
 
 def photon_iteration_update_factors(
         position, direction, time, surface_distance,
-        normal, scatter_length, wall_reflection_rate, sensor_reflection_rate,
+        normal, scatter_length, mie_scatter_length, g, wall_reflection_rate, sensor_reflection_rate,
         absorption_length,
         hit_sensor, rng_key, speed_of_light):
     """
@@ -176,9 +179,15 @@ def photon_iteration_update_factors(
     reflection_rate = jnp.where(hit_sensor, sensor_reflection_rate, wall_reflection_rate)
     scatter_distance = sample_scatter_distance(surface_distance, scatter_length, k2)
 
-    ratio = surface_distance / scatter_length
-    reach_surface_prob = jnp.exp(-ratio)
-    scatter_prob = -jnp.expm1(-ratio)
+    # Transport mean free path correction: g reduces the effective scattering rate by (1-g)/L_mie.
+    # Physical basis: forward-peaked scattering (high g) does not randomise photon direction,
+    # so the effective transport scattering coefficient is (1-g)/mie_scatter_length.
+    # This gives g a direct, low-variance gradient path through reach_surface_prob/detect_prob,
+    # evaluated for every photon in every iteration (no step-function gating).
+    mie_safe = jnp.maximum(mie_scatter_length, 1e-6)
+    effective_ratio = surface_distance * (1.0 / scatter_length + (1.0 - g) / mie_safe)
+    reach_surface_prob = jnp.exp(-effective_ratio)
+    scatter_prob = -jnp.expm1(-effective_ratio)
 
     reflect_prob = reach_surface_prob * reflection_rate
     detect_prob = reach_surface_prob * (1 - reflection_rate)
@@ -218,9 +227,10 @@ def photon_iteration_update_factors(
     diffuse_dir = sample_cosine_hemisphere(inward_normal, k3)
     reflection_dir = jnp.where(hit_sensor, specular_dir, diffuse_dir)
     scatter_dir = compute_scatter_direction(direction, k3)
+    asym_scatter_dir = compute_mie_scatter_direction(direction, k3, g)
 
     new_pos = surface_weight * surface_pos + scatter_weight * scatter_pos
-    new_dir = normalize(surface_weight * reflection_dir + scatter_weight * scatter_dir)
+    new_dir = normalize(surface_weight * reflection_dir + scatter_weight * asym_scatter_dir)
 
     continuing_factor = reflect_prob * reflection_attenuation + scatter_prob * scatter_attenuation
 
@@ -237,34 +247,34 @@ def photon_iteration_update_factors(
 @jax.custom_vjp
 def photon_iteration_update_factors_safe(
         position, direction, time, surface_distance,
-        normal, scatter_length, wall_reflection_rate, sensor_reflection_rate,
+        normal, scatter_length, mie_scatter_length, g, wall_reflection_rate, sensor_reflection_rate,
         absorption_length,
         hit_sensor, rng_key, speed_of_light):
     return photon_iteration_update_factors(
         position, direction, time, surface_distance,
-        normal, scatter_length, wall_reflection_rate, sensor_reflection_rate,
+        normal, scatter_length, mie_scatter_length, g, wall_reflection_rate, sensor_reflection_rate,
         absorption_length,
         hit_sensor, rng_key, speed_of_light)
 
 
 def _fwd(position, direction, time, surface_distance,
-         normal, scatter_length, wall_reflection_rate, sensor_reflection_rate,
+         normal, scatter_length, mie_scatter_length, g, wall_reflection_rate, sensor_reflection_rate,
          absorption_length,
          hit_sensor, rng_key, speed_of_light):
     outputs = photon_iteration_update_factors(
         position, direction, time, surface_distance,
-        normal, scatter_length, wall_reflection_rate, sensor_reflection_rate,
+        normal, scatter_length, mie_scatter_length, g, wall_reflection_rate, sensor_reflection_rate,
         absorption_length,
         hit_sensor, rng_key, speed_of_light)
     residuals = (position, direction, time, surface_distance,
-                 normal, scatter_length, wall_reflection_rate, sensor_reflection_rate,
+                 normal, scatter_length, mie_scatter_length, g, wall_reflection_rate, sensor_reflection_rate,
                  absorption_length,
                  hit_sensor, rng_key, speed_of_light)
     return outputs, residuals
 
 
-def _bwd(residuals, g):
-    g_pos, g_dir, g_time, g_detect, g_refl, g_cont = g
+def _bwd(residuals, cotangents):
+    g_pos, g_dir, g_time, g_detect, g_refl, g_cont = cotangents
 
     g_pos = jnp.nan_to_num(g_pos, nan=0.0, posinf=0.0, neginf=0.0)
     g_dir = jnp.nan_to_num(g_dir, nan=0.0, posinf=0.0, neginf=0.0)

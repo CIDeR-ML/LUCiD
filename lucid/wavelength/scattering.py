@@ -68,7 +68,7 @@ def hg_sample_cos_theta(u, g):
     g_safe = jnp.clip(g, 1e-4, 1.0 - 1e-4)
     term = (1.0 - g_safe**2) / (1.0 - g_safe + 2.0 * g_safe * u)
     cos_theta = (1.0 + g_safe**2 - term**2) / (2.0 * g_safe)
-    return jnp.clip(cos_theta, -1.0, 1.0)
+    return jnp.clip(cos_theta, -1.0 + 1e-6, 1.0 - 1e-6)
 
 
 def compute_mie_scatter_direction(incident_dir, rng_key, g=0.95):
