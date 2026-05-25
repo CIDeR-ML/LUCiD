@@ -93,7 +93,7 @@ def _load_medium_json(json_path):
 _LEGACY_WATER_PATH = os.path.join(os.path.dirname(__file__), "..", "..", "config", "materials", "water.json")
 
 
-def make_medium(material: str = "water",
+def make_medium(material: str = "water", 
                 wavelength_grid: Optional[jnp.ndarray] = None,
                 medium_model_path: str = None) -> MediumProperties:
     """Build a MediumProperties from a material name or model file.
@@ -102,6 +102,8 @@ def make_medium(material: str = "water",
     ----------
     material : str
         Currently only ``"water"`` is supported.
+    g : float
+        Mie scattering asymmetry parameter (Henyey-Greenstein g parameter).
     wavelength_grid : jnp.ndarray, optional
         If provided, wavelength-dependent arrays are computed on this grid.
         If ``None``, only scalar properties are populated (monochromatic mode).
@@ -204,6 +206,7 @@ def compute_effective_properties(detector_params, medium, wavelengths=None,
     if wavelengths is None:
         # Monochromatic: scalar passthrough
         return (detector_params.scatter_length,
+                detector_params.mie_scatter_length,
                 detector_params.absorption_length,
                 detector_params.qe)
 
@@ -213,19 +216,32 @@ def compute_effective_properties(detector_params, medium, wavelengths=None,
 
     wl_grid = medium.wavelength_grid
     scatter_at_wl = jnp.interp(wavelengths, wl_grid, medium.scatter_coeff)
+    print("scatter_at_wl", scatter_at_wl)
+    mie_scatter_at_wl = jnp.interp(wavelengths, wl_grid, medium.mie_scatter_coeff)  
+    print("mie_scatter_at_wl", mie_scatter_at_wl)
     scatter_at_ref = jnp.interp(ref_wl, wl_grid, medium.scatter_coeff)
+    print("scatter_at_ref", scatter_at_ref)
+    mie_scatter_at_ref = jnp.interp(ref_wl, wl_grid, medium.mie_scatter_coeff)
+    print("mie_scatter_at_ref", mie_scatter_at_ref)
     scatter_correction = scatter_at_ref / (scatter_at_wl + 1e-30)
+    print("scatter_correction", scatter_correction)
+    mie_scatter_correction = mie_scatter_at_ref / (mie_scatter_at_wl + 1e-30)
+    print("mie_scatter_correction", mie_scatter_correction)
+
 
     abs_at_wl = jnp.interp(wavelengths, wl_grid, medium.absorption_coeff)
     abs_at_ref = jnp.interp(ref_wl, wl_grid, medium.absorption_coeff)
     abs_correction = abs_at_ref / (abs_at_wl + 1e-30)
 
     eff_scatter = detector_params.scatter_length * scatter_correction
+    print("eff_scatter", eff_scatter)
     eff_absorption = detector_params.absorption_length * abs_correction
+    eff_mie_scatter = detector_params.mie_scatter_length * mie_scatter_correction
+    print("eff_mie_scatter", eff_mie_scatter)
 
     if qe_curve is not None:
         eff_qe = detector_params.qe * qe_curve(wavelengths)
     else:
         eff_qe = detector_params.qe
 
-    return eff_scatter, eff_absorption, eff_qe
+    return eff_scatter, eff_mie_scatter, eff_absorption, eff_qe

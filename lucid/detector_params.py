@@ -42,6 +42,8 @@ class DetectorParams(NamedTuple):
     Fields
     ------
     scatter_length : jnp.ndarray        scalar, meters
+    g : jnp.ndarray                     scalar, Henyey-Greenstein asymmetry [0, 1]
+    mie_scatter_length : jnp.ndarray    scalar, meters
     wall_reflection_rate : jnp.ndarray   scalar, [0, 1]
     sensor_reflection_rate : jnp.ndarray scalar, [0, 1]
     absorption_length : jnp.ndarray      scalar, meters
@@ -49,6 +51,8 @@ class DetectorParams(NamedTuple):
     qe_corrections : jnp.ndarray        shape (num_sensors,), per-sensor QE multipliers
     """
     scatter_length: jnp.ndarray
+    g: jnp.ndarray
+    mie_scatter_length: jnp.ndarray
     wall_reflection_rate: jnp.ndarray
     sensor_reflection_rate: jnp.ndarray
     absorption_length: jnp.ndarray
@@ -339,6 +343,8 @@ def default_bounds(num_sensors: int):
     """
     bounds_min = DetectorParams(
         scatter_length=jnp.array(0.0),
+        g = jnp.array(0.0),
+        mie_scatter_length = jnp.array(0.0),
         wall_reflection_rate=jnp.array(0.0),
         sensor_reflection_rate=jnp.array(0.0),
         absorption_length=jnp.array(0.0),
@@ -347,6 +353,8 @@ def default_bounds(num_sensors: int):
     )
     bounds_max = DetectorParams(
         scatter_length=jnp.array(100.0),
+        g = jnp.array(1.0),
+        mie_scatter_length = jnp.array(100.0),
         wall_reflection_rate=jnp.array(0.5),
         sensor_reflection_rate=jnp.array(0.4),
         absorption_length=jnp.array(500.0),
@@ -386,6 +394,8 @@ def create_default_detector_params(num_sensors: int) -> DetectorParams:
     """Sensible initialization defaults for calibration optimization."""
     return DetectorParams(
         scatter_length=jnp.array(50.0),
+        g = jnp.array(0.85),
+        mie_scatter_length = jnp.array(50.0),
         wall_reflection_rate=jnp.array(0.2),
         sensor_reflection_rate=jnp.array(0.2),
         absorption_length=jnp.array(150.0),
@@ -415,6 +425,8 @@ def default_gradient_scales(num_sensors: int) -> DetectorParams:
     """
     return DetectorParams(
         scatter_length=jnp.array(1.0),
+        g = jnp.array(1.0),
+        mie_scatter_length = jnp.array(1.0),
         wall_reflection_rate=jnp.array(1.0),
         sensor_reflection_rate=jnp.array(1.0),
         absorption_length=jnp.array(1.0),
