@@ -67,6 +67,7 @@ def setup_event_simulator(
         pos_grad_threshold: Optional[int] = None,  # None → use mode default (calib:K, track:0)
         waveform_config: Optional[dict[str, Any]] = None,
         wavelength_sampling: str = 'cherenkov',
+        medium_override: Optional[Any] = None,
         **grid_params: Any) -> Callable:
     """
     Set up and return an event simulator using DetectorParams / ParticleParams.
@@ -150,19 +151,22 @@ def setup_event_simulator(
         When ``default_detector_params`` is ``False``:
 
         - **Calibration** ``(source, detector_params, key) -> result``
-        - **Track**       ``(particle_params, detector_params, medium, key) -> result``
+        - **Track**       ``(particle_params, detector_params, key) -> result``
         - **Data**        ``(particle_params, detector_params, key, photon_data) -> result``
 
         When ``default_detector_params`` is truthy (``True`` or a ``DetectorParams``):
 
         - **Calibration** ``(source, key) -> result``
-        - **Track**       ``(particle_params, medium, key) -> result``
+        - **Track**       ``(particle_params, key) -> result``
         - **Data**        ``(particle_params, key, photon_data) -> result``
 
-        In track mode, ``medium`` is the differentiable ``MediumProperties``
-        pytree returned by ``make_medium(material)`` — gradients flow through
-        the scintillation scalars when the medium enables scintillation.
-        Cherenkov-only callers still need to construct and pass it.
+        When the closed-over medium enables scintillation, the simulator
+        reads the 10 scintillation scalars (S, kB, C, tau_*, R_1, moyal_*)
+        directly from ``detector_params`` — gradients flow through them
+        the same way they flow through ``qe`` / ``scatter_length``. The
+        material JSON's ``scintillation`` block populates these fields
+        automatically via ``load_physics_config``; callers can override
+        any field in the physics config.
 
         When detector params are baked in, the returned function also exposes
         a ``.default_detector_params`` attribute for inspection.
@@ -198,6 +202,39 @@ def setup_event_simulator(
         max_candidates_per_ray=max_candidates_per_ray,
         detector_type=detector_type,
         **grid_params)
+
+    # Swap the medium loaded from the geom config for a user-supplied one.
+    # The detector hardware (sensor positions / propagator) is untouched —
+    # only the material physics changes. Lets a notebook reuse a single
+    # geometry config across, e.g., water → WbLS or different
+    # `emission_processes` settings without spinning up parallel JSONs.
+    if medium_override is not None:
+        det_geom = det_geom._replace(
+            medium=medium_override,
+            speed_of_light=medium_override.speed_of_light,
+        )
+
+        # When the override enables scintillation but the physics_config's
+        # original medium_model didn't carry a scintillation block (e.g. the
+        # user kept SK_physics_config.json which points at water.json), the
+        # DetectorParams loaded above has NaN scintillation fields. Pull the
+        # defaults from the override's material JSON so the user doesn't
+        # have to construct a separate WbLS physics config just to populate
+        # them — explicit physics_config values still win.
+        if (_default_dp is not None
+            and "scintillation" in medium_override.emission_processes):
+            from lucid.wavelength.medium import _MATERIALS_DIR
+            from lucid.detector_params import _scintillation_defaults_from_medium
+            override_mat = os.path.join(
+                _MATERIALS_DIR, f"{medium_override.material}.json")
+            if os.path.exists(override_mat):
+                scint_defaults = _scintillation_defaults_from_medium(override_mat)
+                patch = {}
+                for k, v in scint_defaults.items():
+                    if bool(jnp.isnan(getattr(_default_dp, k))):
+                        patch[k] = jnp.asarray(float(v), dtype=jnp.float32)
+                if patch:
+                    _default_dp = _default_dp._replace(**patch)
 
     mode = 'data' if is_data else ('calibration' if is_calibration else 'track')
     sim_config = SimConfig(
@@ -763,14 +800,14 @@ def setup_event_simulator(
     _n_total = _n_cher + _n_scint
 
     @jax.jit
-    def _simulation_without_data_impl(particle_params, detector_params, medium, key):
-        """SIREN track mode: particle_params is ParticleParams, medium is a
-        differentiable MediumProperties pytree (gradients flow through the
-        scintillation scalars when the medium enables scintillation).
+    def _simulation_without_data_impl(particle_params, detector_params, key):
+        """SIREN track mode: particle_params is ParticleParams.
 
         Closes over ``cher_ray_fn`` / ``scint_ray_fn`` / model params / t0
         params + the static photon-count split derived from
-        ``medium.emission_processes`` and ``medium.cherenkov_fraction``."""
+        ``medium.emission_processes`` and ``medium.cherenkov_fraction``.
+        Scintillation scalars (S, kB, C, tau_*, R_1, moyal_*) are read from
+        ``detector_params``; gradients flow through them via jax.grad."""
         energy = particle_params.energy
         track_origin = particle_params.position
         track_direction = particle_params.direction
@@ -809,9 +846,11 @@ def setup_event_simulator(
             sc_dirs, sc_origins, sc_intens, sc_tdelay, sc_wls = scint_ray_fn(
                 track_origin, track_direction, energy, _n_scint,
                 dedx_model_params, scint_key,
-                medium.S, medium.kB, medium.C,
-                medium.tau_r, medium.tau_1, medium.tau_2, medium.R_1,
-                medium.moyal_amp, medium.moyal_loc, medium.moyal_scale,
+                detector_params.S, detector_params.kB, detector_params.C,
+                detector_params.tau_r, detector_params.tau_1,
+                detector_params.tau_2, detector_params.R_1,
+                detector_params.moyal_amp, detector_params.moyal_loc,
+                detector_params.moyal_scale,
             )
             sc_distances_mm = jnp.linalg.norm(sc_origins - track_origin, axis=1) * 1000
             sc_t0 = jax.lax.stop_gradient(
@@ -937,9 +976,9 @@ def setup_event_simulator(
         t0_params = unpack_t0_params(particle, material)
         if _default_dp is not None:
             @jax.jit
-            def _sim_track_default(particle_params, medium, key):
+            def _sim_track_default(particle_params, key):
                 return _simulation_without_data_impl(
-                    particle_params, _default_dp, medium, key)
+                    particle_params, _default_dp, key)
             _sim_track_default.default_detector_params = _default_dp
             return _sim_track_default
         else:

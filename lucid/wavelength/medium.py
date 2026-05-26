@@ -24,10 +24,14 @@ class MediumProperties(NamedTuple):
     ``None`` when running in monochromatic mode and populated when
     wavelength support is active.
 
-    Scintillation fields (``S``, ``kB``, ``C``, ``tau_*``, ``R_1``,
-    ``moyal_*``) are differentiable ``jax.Array`` scalars — only read when
-    ``"scintillation"`` is in ``emission_processes``. For non-scintillating
-    media they default to NaN to fail loud if accidentally used.
+    The scintillation gradient targets (light yield, timing, emission
+    spectrum) live on :class:`lucid.detector_params.DetectorParams`. This
+    container only carries the static, non-differentiable dispatch knobs
+    that the simulator reads at setup time:
+
+    * ``emission_processes`` — selects Cherenkov, Scintillation, or both.
+    * ``scintillation_lambda_min / lambda_max`` — Moyal sampling window.
+    * ``cherenkov_fraction`` — n_photons split when both processes run.
     """
     material: str
     refractive_index: float
@@ -46,30 +50,6 @@ class MediumProperties(NamedTuple):
     mie_scatter_coeff: Optional[jax.Array] = None     # (N,) asymmetric Mie 1/m
     mie_asymmetry: Optional[float] = None               # HG g parameter
 
-    # --- Scintillation: Chou light-yield model (3 differentiable params) -
-    # Chou: dL/dx = S * (dE/dx) / [1 + kB*(dE/dx) + C*(dE/dx)²]. Birks-only
-    # is recovered by setting C=0. Units: S [ph/MeV], kB [mm/keV], C [(mm/keV)²].
-    S:  jax.Array = jnp.nan
-    kB: jax.Array = jnp.nan
-    C:  jax.Array = jnp.nan
-
-    # --- Scintillation: biexponential timing (4 differentiable params) ----
-    # p(t) = R_1 * g(t; tau_r, tau_1) + (1-R_1) * g(t; tau_r, tau_2),
-    # g(t; tau_r, tau_d) = (exp(-t/tau_d) - exp(-t/tau_r)) / (tau_d - tau_r).
-    # Units: tau_* in ns; R_1 dimensionless ∈ [0,1].
-    tau_r: jax.Array = jnp.nan
-    tau_1: jax.Array = jnp.nan
-    tau_2: jax.Array = jnp.nan
-    R_1:   jax.Array = jnp.nan
-
-    # --- Scintillation: emission spectrum (3 differentiable Moyal params)-
-    # p(λ) = amp * moyal_pdf(λ; loc, scale), evaluated on the window
-    # [scintillation_lambda_min, scintillation_lambda_max] nm; outside that
-    # window the ray weight is forced to zero.
-    moyal_amp:   jax.Array = jnp.nan
-    moyal_loc:   jax.Array = jnp.nan
-    moyal_scale: jax.Array = jnp.nan
-
     # --- Scintillation: static knobs (not differentiable) -----------------
     scintillation_lambda_min: float = 340.0
     scintillation_lambda_max: float = 550.0
@@ -78,47 +58,6 @@ class MediumProperties(NamedTuple):
     # scintillation (floored to a multiple of 5 internally for the
     # 5-time-twin scheme).
     cherenkov_fraction: float = 0.5
-
-
-# --- JAX pytree registration ------------------------------------------------
-# MediumProperties carries both differentiable jax.Array scalars (the
-# scintillation gradient targets) and static metadata (the string `material`,
-# the `emission_processes` tuple, the lambda window, the cherenkov split).
-# JAX's default NamedTuple-as-pytree treatment puts every field on the leaf
-# side, which fails the moment a string field hits a jit'd function.
-#
-# Registering it explicitly lets us route the metadata through aux_data
-# (static) and the rest through children (traced) — gradients flow through
-# the array fields, the strings/tuples stay Python-level constants.
-
-_MEDIUM_STATIC_FIELDS = (
-    'material',
-    'emission_processes',
-    'scintillation_lambda_min',
-    'scintillation_lambda_max',
-    'cherenkov_fraction',
-    'mie_asymmetry',          # Python float, not differentiable
-)
-_MEDIUM_DYNAMIC_FIELDS = tuple(
-    f for f in MediumProperties._fields if f not in _MEDIUM_STATIC_FIELDS
-)
-
-
-def _medium_tree_flatten(m: MediumProperties):
-    children = tuple(getattr(m, f) for f in _MEDIUM_DYNAMIC_FIELDS)
-    aux_data = tuple(getattr(m, f) for f in _MEDIUM_STATIC_FIELDS)
-    return children, aux_data
-
-
-def _medium_tree_unflatten(aux_data, children) -> MediumProperties:
-    kwargs = dict(zip(_MEDIUM_STATIC_FIELDS, aux_data))
-    kwargs.update(zip(_MEDIUM_DYNAMIC_FIELDS, children))
-    return MediumProperties(**kwargs)
-
-
-jax.tree_util.register_pytree_node(
-    MediumProperties, _medium_tree_flatten, _medium_tree_unflatten,
-)
 
 
 # ---------------------------------------------------------------------------
@@ -182,36 +121,27 @@ _MATERIALS_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "config", "
 
 
 def _scintillation_kwargs_from(data: dict) -> dict:
-    """Extract scintillation kwargs from a material JSON, or return defaults.
+    """Extract the *static* scintillation dispatch knobs from a material JSON.
+
+    The differentiable values (light yield, timing, spectrum) live on
+    :class:`DetectorParams` and are sourced via ``load_physics_config``;
+    this loader only returns what the simulator needs at setup time to
+    decide which surrogates to run and where the Moyal sampling window is.
 
     A material is non-scintillating if it lacks a ``"scintillation"`` block
-    or that block does not include ``"scintillation"`` in
-    ``emission_processes``. In that case all 10 differentiable scalars stay
-    NaN (sentinel) — code paths that read them assert via
-    ``"scintillation" in medium.emission_processes`` first.
+    or that block does not list ``"scintillation"`` in ``emission_processes``.
     """
     scint = data.get("scintillation")
     if scint is None:
         return {"emission_processes": ("cherenkov",)}
 
-    ly      = scint["light_yield"]      # {"S", "kB", "C"}
-    timing  = scint["timing"]           # {"tau_r", "tau_1", "tau_2", "R_1"}
-    spec    = scint["spectrum"]         # {"moyal_amp", "moyal_loc", "moyal_scale", "lambda_min", "lambda_max"}
-    split   = scint.get("photon_split", {"cherenkov_fraction": 0.5})
-
-    f32 = lambda v: jnp.asarray(float(v), dtype=jnp.float32)
-
     procs = tuple(scint.get("emission_processes", ("cherenkov", "scintillation")))
+    spec  = scint.get("spectrum", {})
+    split = scint.get("photon_split", {"cherenkov_fraction": 0.5})
     return {
-        "emission_processes":         procs,
-        "S":  f32(ly["S"]),  "kB": f32(ly["kB"]), "C": f32(ly["C"]),
-        "tau_r": f32(timing["tau_r"]), "tau_1": f32(timing["tau_1"]),
-        "tau_2": f32(timing["tau_2"]), "R_1":   f32(timing["R_1"]),
-        "moyal_amp":   f32(spec["moyal_amp"]),
-        "moyal_loc":   f32(spec["moyal_loc"]),
-        "moyal_scale": f32(spec["moyal_scale"]),
-        "scintillation_lambda_min": float(spec["lambda_min"]),
-        "scintillation_lambda_max": float(spec["lambda_max"]),
+        "emission_processes":       procs,
+        "scintillation_lambda_min": float(spec.get("lambda_min", 340.0)),
+        "scintillation_lambda_max": float(spec.get("lambda_max", 550.0)),
         "cherenkov_fraction":       float(split["cherenkov_fraction"]),
     }
 

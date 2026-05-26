@@ -37,14 +37,30 @@ from lucid.utils import spherical_to_cartesian
 class DetectorParams(NamedTuple):
     """Detector calibration parameters (JAX pytree).
 
-    Fields
-    ------
-    scatter_length : jnp.ndarray        scalar, meters
+    Bulk-optical + sensor fields
+    ----------------------------
+    scatter_length : jnp.ndarray         scalar, meters
     wall_reflection_rate : jnp.ndarray   scalar, [0, 1]
     sensor_reflection_rate : jnp.ndarray scalar, [0, 1]
     absorption_length : jnp.ndarray      scalar, meters
-    qe : jnp.ndarray                    scalar, base quantum efficiency [0, 1]
-    qe_corrections : jnp.ndarray        shape (num_sensors,), per-sensor QE multipliers
+    qe : jnp.ndarray                     scalar, base quantum efficiency [0, 1]
+    qe_corrections : jnp.ndarray         shape (num_sensors,), per-sensor QE multipliers
+
+    Scintillation fields (only meaningful when the closed-over medium has
+    ``"scintillation"`` in its ``emission_processes``; left as ``NaN`` for
+    non-scintillating detectors and never read in that case)
+    -----------------------------------------------------------------------
+    S, kB, C : jnp.ndarray               Chou light yield. dL/dx = S * (dE/dx) /
+                                          (1 + kB*(dE/dx) + C*(dE/dx)²).
+                                          Units: S [ph/MeV], kB [mm/keV],
+                                          C [(mm/keV)²]. Set C=0 for Birks-only.
+    tau_r, tau_1, tau_2, R_1 : jnp.ndarray  Mixture biexponential timing.
+                                          p(t) = R_1 g(t; tau_r, tau_1) +
+                                          (1-R_1) g(t; tau_r, tau_2), tau in ns.
+    moyal_amp, moyal_loc, moyal_scale : jnp.ndarray
+                                          Emission-spectrum shape — used
+                                          inside the medium's wavelength
+                                          window (medium.scintillation_lambda_*).
     """
     scatter_length: jax.Array
     wall_reflection_rate: jax.Array
@@ -52,6 +68,19 @@ class DetectorParams(NamedTuple):
     absorption_length: jax.Array
     qe: jax.Array
     qe_corrections: jax.Array
+    # Scintillation — light yield (Chou)
+    S:  jax.Array = jnp.nan
+    kB: jax.Array = jnp.nan
+    C:  jax.Array = jnp.nan
+    # Scintillation — biexponential timing
+    tau_r: jax.Array = jnp.nan
+    tau_1: jax.Array = jnp.nan
+    tau_2: jax.Array = jnp.nan
+    R_1:   jax.Array = jnp.nan
+    # Scintillation — Moyal emission spectrum
+    moyal_amp:   jax.Array = jnp.nan
+    moyal_loc:   jax.Array = jnp.nan
+    moyal_scale: jax.Array = jnp.nan
 
 
 class ParticleParams(NamedTuple):
@@ -223,6 +252,37 @@ def load_detector_params(filepath: str, num_sensors: int | None = None,
     return dp
 
 
+def _scintillation_defaults_from_medium(medium_model_path: str | None) -> dict:
+    """Pull DetectorParams-bound scintillation values from a material JSON.
+
+    The material file (e.g. ``config/materials/wbls.json``) is the canonical
+    home for the scintillator's physical numbers — the physics config inherits
+    them so detector configs don't have to copy the WBLS spec verbatim.
+    Returns an empty dict for non-scintillating media (no ``scintillation``
+    block) or when no material model is referenced.
+    """
+    if not medium_model_path:
+        return {}
+    with open(medium_model_path) as f:
+        m = json.load(f)
+    scint = m.get("scintillation")
+    if not scint:
+        return {}
+    ly  = scint.get("light_yield", {})
+    tm  = scint.get("timing",      {})
+    sp  = scint.get("spectrum",    {})
+    pick = lambda d, k: d[k] if k in d else None
+    out = {
+        "S":  pick(ly, "S"),  "kB": pick(ly, "kB"), "C": pick(ly, "C"),
+        "tau_r": pick(tm, "tau_r"), "tau_1": pick(tm, "tau_1"),
+        "tau_2": pick(tm, "tau_2"), "R_1":   pick(tm, "R_1"),
+        "moyal_amp":   pick(sp, "moyal_amp"),
+        "moyal_loc":   pick(sp, "moyal_loc"),
+        "moyal_scale": pick(sp, "moyal_scale"),
+    }
+    return {k: v for k, v in out.items() if v is not None}
+
+
 def load_physics_config(filepath: str, num_sensors: int | None = None,
                         scalar_ref_wavelength: float | None = None) -> tuple[DetectorParams, str | None, str | None]:
     """Load a composable physics config — returns DetectorParams plus extras.
@@ -254,9 +314,17 @@ def load_physics_config(filepath: str, num_sensors: int | None = None,
     medium_model_path = os.path.join(config_dir, medium_model) if medium_model else None
     qe_curve_path = os.path.join(config_dir, qe_curve) if qe_curve else None
 
+    # If the material JSON carries a `scintillation` block, use it as the
+    # default source of the 10 scintillation scalars on DetectorParams.
+    # The physics_config can still override any individual field by naming it
+    # at the top level. Cherenkov-only materials never enter this branch.
+    scint_defaults = _scintillation_defaults_from_medium(medium_model_path)
+
     kwargs = {}
     for field in DetectorParams._fields:
         val = data.get(field, None)
+        if val is None and field in scint_defaults:
+            val = scint_defaults[field]
         kwargs[field] = _resolve_field(val, config_dir)
 
     _project_missing_scalars(kwargs, medium_model_path, qe_curve_path,
@@ -330,6 +398,12 @@ def default_bounds(num_sensors: int):
         absorption_length=jnp.array(0.0),
         qe=jnp.array(0.0),
         qe_corrections=jnp.zeros(num_sensors),
+        # Scintillation — physical lower bounds.
+        S=jnp.array(0.0),  kB=jnp.array(0.0), C=jnp.array(0.0),
+        tau_r=jnp.array(0.0), tau_1=jnp.array(0.0), tau_2=jnp.array(0.0),
+        R_1=jnp.array(0.0),
+        moyal_amp=jnp.array(0.0),
+        moyal_loc=jnp.array(300.0), moyal_scale=jnp.array(1.0),
     )
     bounds_max = DetectorParams(
         scatter_length=jnp.array(100.0),
@@ -338,6 +412,12 @@ def default_bounds(num_sensors: int):
         absorption_length=jnp.array(500.0),
         qe=jnp.array(1.0),
         qe_corrections=jnp.full(num_sensors, 2.0),
+        # Scintillation — generous upper bounds (LS ~ 10k ph/MeV; tau_2 ~ 100 ns).
+        S=jnp.array(1.0e4),  kB=jnp.array(1.0e-3), C=jnp.array(1.0e-7),
+        tau_r=jnp.array(5.0), tau_1=jnp.array(10.0), tau_2=jnp.array(100.0),
+        R_1=jnp.array(1.0),
+        moyal_amp=jnp.array(1000.0),
+        moyal_loc=jnp.array(600.0), moyal_scale=jnp.array(100.0),
     )
     return bounds_min, bounds_max
 
@@ -369,7 +449,13 @@ def make_optimization_mask(params, trainable_fields):
 
 
 def create_default_detector_params(num_sensors: int) -> DetectorParams:
-    """Sensible initialization defaults for calibration optimization."""
+    """Sensible initialization defaults for calibration optimization.
+
+    Scintillation fields default to NaN — they're only read when the closed-over
+    medium has ``"scintillation"`` in its ``emission_processes``, and in that
+    case the WbLS / scintillator values come from the material JSON via
+    ``load_physics_config``.
+    """
     return DetectorParams(
         scatter_length=jnp.array(50.0),
         wall_reflection_rate=jnp.array(0.2),
@@ -406,4 +492,10 @@ def default_gradient_scales(num_sensors: int) -> DetectorParams:
         absorption_length=jnp.array(1.0),
         qe=jnp.array(1.0),
         qe_corrections=jnp.full(num_sensors, 0.1),
+        # Scintillation — uniform scale 1.0 by default.
+        S=jnp.array(1.0),  kB=jnp.array(1.0), C=jnp.array(1.0),
+        tau_r=jnp.array(1.0), tau_1=jnp.array(1.0), tau_2=jnp.array(1.0),
+        R_1=jnp.array(1.0),
+        moyal_amp=jnp.array(1.0),
+        moyal_loc=jnp.array(1.0), moyal_scale=jnp.array(1.0),
     )
