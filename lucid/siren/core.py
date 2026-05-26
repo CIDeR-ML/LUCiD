@@ -5,12 +5,12 @@ import jax.numpy as jnp
 from jax import random
 import flax.linen as nn
 import numpy as np
-from typing import Sequence, Callable, Any, NamedTuple
+from typing import Sequence, Callable, Any, NamedTuple, Optional
 from flax.core.frozen_dict import freeze
 
 __all__ = [
     'SineLayer', 'SIREN',
-    'PhotonSimContext', 'build_photonsim_context',
+    'SirenContext', 'build_cherenkov_context', 'build_dedx_context',
     'make_smax_fn', 'make_power_law_fn',
     'torch_to_jax', 'convert_pytorch_to_jax', 'load_siren_jax',
 ]
@@ -156,29 +156,38 @@ def load_siren_jax(pytorch_weights_path: str):
     return jax_model, jax_params
 
 
-# --- PhotonSim track-mode inference context ---------------------------------
+# --- SIREN surrogate inference context ---------------------------------
 
 
-class PhotonSimContext(NamedTuple):
-    """Everything `photonsim_differentiable_get_rays` needs, resolved once at
-    model-load time.
+class SirenContext(NamedTuple):
+    """Inference-time inputs shared between the Cherenkov and dE/dx SIREN
+    surrogates.
+
+    Each SIREN is a 3D scalar field over ``(energy, axis2, s/s_max)``. The
+    2nd axis is opening angle for Cherenkov, dE/dx for the energy-loss
+    surrogate; ``axis2_min/axis2_max`` carry whatever range applies. All other
+    fields play identical roles for both surrogates. ``n_photons_fn`` is the
+    Cherenkov absolute-count normalization and is left ``None`` for dE/dx
+    contexts (scintillation gets its absolute scale from the medium's
+    light-yield parameters instead).
 
     A plain Python container — it holds a Flax module + Python closures +
-    floats, so it is never traced. The ray-function factory
-    (`make_photonsim_ray_fn`) closes over it; `model_params` (a real pytree) is
-    passed separately as a traced argument.
+    floats, so it is never traced. The ray-function factories
+    (``make_cherenkov_surrogate_fn`` / ``make_scintillation_surrogate_fn``)
+    close over it; ``model_params`` (a real pytree) is passed separately as
+    a traced argument.
     """
     model:         SIREN
     energy_min:    float
     energy_max:    float
-    angle_min:     float
-    angle_max:     float
+    axis2_min:     float          # opening angle (Cherenkov) or dE/dx (dedx)
+    axis2_max:     float
     smax_dist_min: float          # s/s_max range the model was trained on
     smax_dist_max: float          #   (dataset_info['distance_range'])
     log_min:       float          # target_normalization log range
     log_max:       float
     s_max_fn:      Callable        # s_max(E_mev) -> mm
-    n_photons_fn:  Callable        # N_photons(E_mev) -> total photons/event
+    n_photons_fn:  Optional[Callable]   # N_photons(E_mev) -> total photons/event (Cherenkov only)
     grid_bins:     int             # first-pass grid resolution (per axis)
     threshold:     float           # seed threshold, fraction of per-energy grid max
 
@@ -230,26 +239,21 @@ def make_power_law_fn(nphot: dict) -> Callable:
 _DEFAULT_RAY_SAMPLING = {"grid_bins": 250, "threshold": 0.05}
 
 
-def build_photonsim_context(photonsim_predictor,
-                            ray_sampling: dict = None) -> PhotonSimContext:
-    """Resolve a ``SIRENPredictor`` into a :class:`PhotonSimContext`.
+def _build_siren_context(predictor, ray_sampling: dict | None,
+                         axis2_key: str, require_nphot: bool) -> SirenContext:
+    """Shared SIREN-context resolver — used by both Cherenkov and dE/dx
+    surrogates.
 
-    Reads the dataset ranges, the SIREN architecture (``metadata['model_config']``
-    — no longer hardcoded), the target-normalization log range, and builds the
-    ``s_max(E)`` / ``N_photons(E)`` closures from the ``smax`` / ``nphot``
-    metadata blocks.
-
-    ``ray_sampling`` is the ``ray_sampling`` block from ``siren_params.json``
-    (``{'grid_bins', 'threshold'}``); missing keys fall back to
-    ``_DEFAULT_RAY_SAMPLING``. It drives the importance-sampling ray generator:
-    a first-pass ``grid_bins x grid_bins`` SIREN evaluation, then seeding only
-    in bins above ``threshold * max`` of that grid.
+    ``axis2_key`` is the ``dataset_info`` key that carries the 2nd-axis range
+    (``'angle_range'`` for Cherenkov, ``'dedx_range'`` for dE/dx). The
+    ``nphot`` block is required only for Cherenkov contexts; dE/dx contexts
+    return ``n_photons_fn=None``.
     """
     rs = {**_DEFAULT_RAY_SAMPLING, **(ray_sampling or {})}
-    meta = photonsim_predictor.metadata
-    dataset_info = photonsim_predictor.dataset_info
+    meta = predictor.metadata
+    dataset_info = predictor.dataset_info
     energy_min, energy_max = dataset_info['energy_range']
-    angle_min, angle_max = dataset_info['angle_range']        # radians
+    axis2_min, axis2_max = dataset_info[axis2_key]
     dist_min, dist_max = dataset_info['distance_range']       # s/s_max ∈ [0,1]
 
     target_norm = meta['target_normalization']
@@ -262,22 +266,49 @@ def build_photonsim_context(photonsim_predictor,
         raise ValueError(
             "trained-model metadata has no 'smax' block — this model predates "
             "s/s_max support. Retrain or re-sync the model metadata.")
-    if 'nphot' not in meta:
+    if require_nphot and 'nphot' not in meta:
         raise ValueError(
             "trained-model metadata has no 'nphot' block — rebuild the h5 with "
             "the N_photons fit and re-sync the model metadata.")
 
     model = SIREN(**meta['model_config'])
 
-    return PhotonSimContext(
+    return SirenContext(
         model=model,
         energy_min=float(energy_min), energy_max=float(energy_max),
-        angle_min=float(angle_min), angle_max=float(angle_max),
+        axis2_min=float(axis2_min), axis2_max=float(axis2_max),
         smax_dist_min=float(dist_min), smax_dist_max=float(dist_max),
         log_min=float(target_norm['log_min']),
         log_max=float(target_norm['log_max']),
         s_max_fn=make_smax_fn(meta['smax']),
-        n_photons_fn=make_power_law_fn(meta['nphot']),
+        n_photons_fn=make_power_law_fn(meta['nphot']) if require_nphot else None,
         grid_bins=int(rs['grid_bins']),
         threshold=float(rs['threshold']),
     )
+
+
+def build_cherenkov_context(predictor,
+                            ray_sampling: dict | None = None) -> SirenContext:
+    """Resolve a Cherenkov ``SIRENPredictor`` into a :class:`SirenContext`.
+
+    The 2nd axis is the opening angle (radians). ``n_photons_fn`` is the
+    Cherenkov power-law fit from the ``nphot`` metadata block.
+
+    ``ray_sampling`` is the ``ray_sampling`` block from ``siren_params.json``
+    (``{'grid_bins', 'threshold'}``); missing keys fall back to
+    ``_DEFAULT_RAY_SAMPLING``.
+    """
+    return _build_siren_context(predictor, ray_sampling,
+                                axis2_key='angle_range', require_nphot=True)
+
+
+def build_dedx_context(predictor,
+                       ray_sampling: dict | None = None) -> SirenContext:
+    """Resolve a dE/dx ``SIRENPredictor`` into a :class:`SirenContext`.
+
+    The 2nd axis is dE/dx (keV/mm). ``n_photons_fn`` is ``None`` — the
+    scintillation surrogate gets its absolute photon count from the medium's
+    light-yield parameters (S, kB, C), not from a stored curve.
+    """
+    return _build_siren_context(predictor, ray_sampling,
+                                axis2_key='dedx_range', require_nphot=False)

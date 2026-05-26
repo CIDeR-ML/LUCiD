@@ -212,8 +212,8 @@ def unpack_siren_params(particle_type: str = 'muon', material: str = 'water') ->
     `data/<material>/<particle>/siren_params.json`.
 
     `N_photons(E)` and `s_max(E)` come from the trained model's metadata (the
-    `nphot` / `smax` blocks); this loader resolves the model path and the
-    ray-sampling knobs.
+    `nphot` / `smax` blocks); this loader resolves the model paths and the
+    ray-sampling knobs for both the Cherenkov and dE/dx surrogates.
 
     Parameters
     ----------
@@ -226,10 +226,15 @@ def unpack_siren_params(particle_type: str = 'muon', material: str = 'water') ->
     -------
     dict
         Dictionary containing:
-        - 'siren_model_path': str, absolute path to the SIREN model
-        - 'ray_sampling': dict, {'grid_bins': int, 'threshold': float} — the
-          first-pass grid resolution and the relative seed threshold for the
+        - 'siren_model_path': str, absolute path to the Cherenkov SIREN model.
+        - 'ray_sampling': dict, ``{'grid_bins': int, 'threshold': float}`` —
+          first-pass grid resolution and seed threshold for the Cherenkov
           importance-sampling ray generator (empty dict if not configured).
+        - 'dedx_model_path': str or None, absolute path to the dE/dx SIREN
+          model (None if no ``dedx_model`` block is present — only required
+          when the medium enables scintillation).
+        - 'dedx_sampling': dict, same shape as ``ray_sampling``, driving the
+          scintillation surrogate's first-pass grid.
     """
     normalized_type = normalize_particle_type_for_path(particle_type)
     data_dir = base_dir_path() + f'/data/{material}/{normalized_type}/'
@@ -238,9 +243,14 @@ def unpack_siren_params(particle_type: str = 'muon', material: str = 'water') ->
     with open(config_path, 'r') as f:
         siren_params = json.load(f)
 
+    dedx_block = siren_params.get('dedx_model')
+    dedx_path = data_dir + dedx_block['path'] if dedx_block else None
+
     return {
         'siren_model_path': data_dir + siren_params['siren_model']['path'],
         'ray_sampling': siren_params.get('ray_sampling', {}),
+        'dedx_model_path': dedx_path,
+        'dedx_sampling': siren_params.get('dedx_sampling', {}),
     }
 
 def spherical_to_cartesian(theta: jax.Array, phi: jax.Array) -> jax.Array:

@@ -19,9 +19,9 @@ import numpy as np
 
 from lucid.geometry.string import StringTelescope
 from lucid.propagation.string.fast import create_fast_string_simulator
-from lucid.siren.core import build_photonsim_context
+from lucid.siren.core import build_cherenkov_context
 from lucid.siren.training.inference import SIRENPredictor
-from lucid.sources.siren_rays import make_photonsim_ray_fn
+from lucid.sources.siren_rays import make_cherenkov_surrogate_fn
 from lucid.utils import base_dir_path
 
 CONFIG_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "config")
@@ -63,8 +63,8 @@ def main():
     data_dir = os.path.join(base_dir_path(), 'data', 'water', 'muon')
     model_path = os.path.join(data_dir, 'siren_training', 'trained_model', 'photonsim_siren')
     predictor = SIRENPredictor(model_path)
-    ctx = build_photonsim_context(predictor)
-    ray_fn = make_photonsim_ray_fn(ctx)
+    ctx = build_cherenkov_context(predictor)
+    ray_fn = make_cherenkov_surrogate_fn(ctx)
     model_params = predictor.params
 
     # Save detector geometry for the viewer

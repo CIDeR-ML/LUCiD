@@ -56,9 +56,9 @@ from lucid.siren.training.dataset import PhotonSimDataset
 
 # Import tools
 from lucid.siren.core import SIREN
-from lucid.siren.core import build_photonsim_context
+from lucid.siren.core import build_cherenkov_context
 from lucid.sources.siren_rays import (
-    generate_random_cone_vectors, make_photonsim_ray_fn, evaluate_siren_lhs,
+    generate_random_cone_vectors, make_cherenkov_surrogate_fn, evaluate_siren_lhs,
 )
 from lucid.utils import normalize
 from lucid.utils import base_dir_path, setup_matplotlib_for_notebook, unpack_siren_params
@@ -121,8 +121,8 @@ class PhotonSimValidator:
         
         # Build the SIREN inference context + the track-mode ray generator.
         ray_sampling = unpack_siren_params(particle, material)['ray_sampling']
-        self.ctx = build_photonsim_context(self.photonsim_predictor, ray_sampling)
-        self.ray_fn = make_photonsim_ray_fn(self.ctx)
+        self.ctx = build_cherenkov_context(self.photonsim_predictor, ray_sampling)
+        self.ray_fn = make_cherenkov_surrogate_fn(self.ctx)
 
         # Standard simulation parameters
         self.origin = jnp.array([0.5, 0.0, -0.5])

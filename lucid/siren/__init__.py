@@ -7,6 +7,12 @@ This module provides:
 - Validation tools for trained models
 """
 
-from .core import SIREN, SineLayer, PhotonSimContext, build_photonsim_context
+from .core import (
+    SIREN, SineLayer, SirenContext,
+    build_cherenkov_context, build_dedx_context,
+)
 
-__all__ = ['SIREN', 'SineLayer', 'PhotonSimContext', 'build_photonsim_context']
+__all__ = [
+    'SIREN', 'SineLayer', 'SirenContext',
+    'build_cherenkov_context', 'build_dedx_context',
+]

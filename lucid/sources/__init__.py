@@ -1,5 +1,6 @@
 __all__ = [
-    "make_photonsim_ray_fn",
+    "make_cherenkov_surrogate_fn",
+    "make_scintillation_surrogate_fn",
     "evaluate_siren_lhs",
     "latin_hypercube_2d",
     "predict_t0",
@@ -17,7 +18,8 @@ __all__ = [
 ]
 
 from lucid.sources.siren_rays import (
-    make_photonsim_ray_fn,
+    make_cherenkov_surrogate_fn,
+    make_scintillation_surrogate_fn,
     evaluate_siren_lhs,
     latin_hypercube_2d,
     predict_t0,
