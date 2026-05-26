@@ -161,12 +161,15 @@ def setup_event_simulator(
         - **Data**        ``(particle_params, key, photon_data) -> result``
 
         When the closed-over medium enables scintillation, the simulator
-        reads the 10 scintillation scalars (S, kB, C, tau_*, R_1, moyal_*)
-        directly from ``detector_params`` — gradients flow through them
-        the same way they flow through ``qe`` / ``scatter_length``. The
-        material JSON's ``scintillation`` block populates these fields
-        automatically via ``load_physics_config``; callers can override
-        any field in the physics config.
+        reads ``S, kB, C, tau_rise, tau_fall`` directly from
+        ``detector_params`` — gradients flow through them the same way
+        they flow through ``qe`` / ``scatter_length``. The Moyal spectrum
+        params (``moyal_loc, moyal_scale``) are consumed once at setup to
+        bake the inverse-CDF wavelength sampler and are not currently
+        gradient-flowing. The material JSON's ``scintillation`` block
+        populates the DetectorParams fields automatically via
+        ``load_physics_config``; callers can override any field in the
+        physics config.
 
         When detector params are baked in, the returned function also exposes
         a ``.default_detector_params`` attribute for inspection.
@@ -787,12 +790,11 @@ def setup_event_simulator(
 
     if _has_cherenkov and _has_scintillation:
         _n_cher  = int(round(Nphot * float(_medium.cherenkov_fraction)))
-        _n_scint = ((Nphot - _n_cher) // 5) * 5            # 5-time-twin floor
+        _n_scint = Nphot - _n_cher
     elif _has_cherenkov:
         _n_cher, _n_scint = Nphot, 0
     elif _has_scintillation:
-        _n_cher = 0
-        _n_scint = (Nphot // 5) * 5
+        _n_cher, _n_scint = 0, Nphot
     else:
         raise ValueError(
             f"medium {_medium.material!r} has no emission_processes enabled "
@@ -806,8 +808,9 @@ def setup_event_simulator(
         Closes over ``cher_ray_fn`` / ``scint_ray_fn`` / model params / t0
         params + the static photon-count split derived from
         ``medium.emission_processes`` and ``medium.cherenkov_fraction``.
-        Scintillation scalars (S, kB, C, tau_*, R_1, moyal_*) are read from
-        ``detector_params``; gradients flow through them via jax.grad."""
+        Scintillation calibration scalars (S, kB, C, tau_rise, tau_fall)
+        are read from ``detector_params``; gradients flow through them
+        via jax.grad."""
         energy = particle_params.energy
         track_origin = particle_params.position
         track_direction = particle_params.direction
@@ -847,10 +850,7 @@ def setup_event_simulator(
                 track_origin, track_direction, energy, _n_scint,
                 dedx_model_params, scint_key,
                 detector_params.S, detector_params.kB, detector_params.C,
-                detector_params.tau_r, detector_params.tau_1,
-                detector_params.tau_2, detector_params.R_1,
-                detector_params.moyal_amp, detector_params.moyal_loc,
-                detector_params.moyal_scale,
+                detector_params.tau_rise, detector_params.tau_fall,
             )
             sc_distances_mm = jnp.linalg.norm(sc_origins - track_origin, axis=1) * 1000
             sc_t0 = jax.lax.stop_gradient(
@@ -964,6 +964,23 @@ def setup_event_simulator(
                     f"medium {_medium.material!r} enables scintillation but "
                     f"data/{material}/{particle}/siren_params.json has no "
                     f"'dedx_model' block — add one pointing to the dE/dx SIREN.")
+            # Moyal sampling parameters are static (they bake the inverse-CDF
+            # lookup at factory time). Resolve from the material JSON — the
+            # override material if given, else the physics_config's medium_model.
+            from lucid.wavelength.medium import _MATERIALS_DIR
+            from lucid.detector_params import _scintillation_defaults_from_medium
+            scint_material_path = (
+                os.path.join(_MATERIALS_DIR, f"{medium_override.material}.json")
+                if medium_override is not None
+                else _medium_model_path
+            )
+            scint_defaults = _scintillation_defaults_from_medium(scint_material_path)
+            if 'moyal_loc' not in scint_defaults or 'moyal_scale' not in scint_defaults:
+                raise ValueError(
+                    f"material {_medium.material!r} enables scintillation but "
+                    f"{scint_material_path!r} has no spectrum.moyal_loc / "
+                    f"moyal_scale — the surrogate cannot build its inverse-CDF "
+                    f"wavelength sampler.")
             dedx_predictor = SIRENPredictor(siren_params['dedx_model_path'])
             dedx_ctx = build_dedx_context(
                 dedx_predictor, siren_params['dedx_sampling'])
@@ -971,6 +988,8 @@ def setup_event_simulator(
                 dedx_ctx,
                 _medium.scintillation_lambda_min,
                 _medium.scintillation_lambda_max,
+                moyal_loc=scint_defaults['moyal_loc'],
+                moyal_scale=scint_defaults['moyal_scale'],
             )
             dedx_model_params = dedx_predictor.params
         t0_params = unpack_t0_params(particle, material)

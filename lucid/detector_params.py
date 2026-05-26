@@ -54,13 +54,22 @@ class DetectorParams(NamedTuple):
                                           (1 + kB*(dE/dx) + C*(dE/dx)²).
                                           Units: S [ph/MeV], kB [mm/keV],
                                           C [(mm/keV)²]. Set C=0 for Birks-only.
-    tau_r, tau_1, tau_2, R_1 : jnp.ndarray  Mixture biexponential timing.
-                                          p(t) = R_1 g(t; tau_r, tau_1) +
-                                          (1-R_1) g(t; tau_r, tau_2), tau in ns.
+    tau_rise, tau_fall : jnp.ndarray     Rise+fall hypoexp emission timing.
+                                          ``g(t; τ_rise, τ_fall) =
+                                          (e^(-t/τ_fall) - e^(-t/τ_rise))
+                                          / (τ_fall - τ_rise)``, sampled
+                                          directly via the hypoexp sum.
+                                          Units: ns. Both differentiable.
     moyal_amp, moyal_loc, moyal_scale : jnp.ndarray
-                                          Emission-spectrum shape — used
-                                          inside the medium's wavelength
-                                          window (medium.scintillation_lambda_*).
+                                          Emission-spectrum shape. Currently
+                                          ``moyal_loc / moyal_scale`` are
+                                          consumed at setup time (closed
+                                          into the inverse-CDF lookup) and
+                                          ``moyal_amp`` is unused — they sit
+                                          here so future calibration can
+                                          plug them back into the per-ray
+                                          intensity / sampling closure
+                                          without changing the API.
     """
     scatter_length: jax.Array
     wall_reflection_rate: jax.Array
@@ -72,12 +81,11 @@ class DetectorParams(NamedTuple):
     S:  jax.Array = jnp.nan
     kB: jax.Array = jnp.nan
     C:  jax.Array = jnp.nan
-    # Scintillation — biexponential timing
-    tau_r: jax.Array = jnp.nan
-    tau_1: jax.Array = jnp.nan
-    tau_2: jax.Array = jnp.nan
-    R_1:   jax.Array = jnp.nan
-    # Scintillation — Moyal emission spectrum
+    # Scintillation — rise+fall hypoexp timing (differentiable)
+    tau_rise: jax.Array = jnp.nan
+    tau_fall: jax.Array = jnp.nan
+    # Scintillation — Moyal emission spectrum (currently closed over at
+    # setup; preserved on the gradient pytree for future use)
     moyal_amp:   jax.Array = jnp.nan
     moyal_loc:   jax.Array = jnp.nan
     moyal_scale: jax.Array = jnp.nan
@@ -274,8 +282,8 @@ def _scintillation_defaults_from_medium(medium_model_path: str | None) -> dict:
     pick = lambda d, k: d[k] if k in d else None
     out = {
         "S":  pick(ly, "S"),  "kB": pick(ly, "kB"), "C": pick(ly, "C"),
-        "tau_r": pick(tm, "tau_r"), "tau_1": pick(tm, "tau_1"),
-        "tau_2": pick(tm, "tau_2"), "R_1":   pick(tm, "R_1"),
+        "tau_rise": pick(tm, "tau_rise"),
+        "tau_fall": pick(tm, "tau_fall"),
         "moyal_amp":   pick(sp, "moyal_amp"),
         "moyal_loc":   pick(sp, "moyal_loc"),
         "moyal_scale": pick(sp, "moyal_scale"),
@@ -400,8 +408,7 @@ def default_bounds(num_sensors: int):
         qe_corrections=jnp.zeros(num_sensors),
         # Scintillation — physical lower bounds.
         S=jnp.array(0.0),  kB=jnp.array(0.0), C=jnp.array(0.0),
-        tau_r=jnp.array(0.0), tau_1=jnp.array(0.0), tau_2=jnp.array(0.0),
-        R_1=jnp.array(0.0),
+        tau_rise=jnp.array(0.0), tau_fall=jnp.array(0.0),
         moyal_amp=jnp.array(0.0),
         moyal_loc=jnp.array(300.0), moyal_scale=jnp.array(1.0),
     )
@@ -412,10 +419,9 @@ def default_bounds(num_sensors: int):
         absorption_length=jnp.array(500.0),
         qe=jnp.array(1.0),
         qe_corrections=jnp.full(num_sensors, 2.0),
-        # Scintillation — generous upper bounds (LS ~ 10k ph/MeV; tau_2 ~ 100 ns).
+        # Scintillation — generous upper bounds (LS ~ 10k ph/MeV).
         S=jnp.array(1.0e4),  kB=jnp.array(1.0e-3), C=jnp.array(1.0e-7),
-        tau_r=jnp.array(5.0), tau_1=jnp.array(10.0), tau_2=jnp.array(100.0),
-        R_1=jnp.array(1.0),
+        tau_rise=jnp.array(5.0), tau_fall=jnp.array(100.0),
         moyal_amp=jnp.array(1000.0),
         moyal_loc=jnp.array(600.0), moyal_scale=jnp.array(100.0),
     )
@@ -494,8 +500,7 @@ def default_gradient_scales(num_sensors: int) -> DetectorParams:
         qe_corrections=jnp.full(num_sensors, 0.1),
         # Scintillation — uniform scale 1.0 by default.
         S=jnp.array(1.0),  kB=jnp.array(1.0), C=jnp.array(1.0),
-        tau_r=jnp.array(1.0), tau_1=jnp.array(1.0), tau_2=jnp.array(1.0),
-        R_1=jnp.array(1.0),
+        tau_rise=jnp.array(1.0), tau_fall=jnp.array(1.0),
         moyal_amp=jnp.array(1.0),
         moyal_loc=jnp.array(1.0), moyal_scale=jnp.array(1.0),
     )

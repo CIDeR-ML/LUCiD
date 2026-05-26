@@ -40,15 +40,13 @@
       "C":  1.33e-9
     },
     "timing": {
-      "_comment": "Biexponential mixture, 10% WbLS values from Caravaca 2020 Table 2.",
-      "tau_r": 0.13,
-      "tau_1": 2.70,
-      "tau_2": 27.05,
-      "R_1":   0.94
+      "_comment": "Single rise+fall hypoexponential — sampled directly via T_rise + T_fall, T_X ~ Exp(tau_X). 10% WbLS fast component from Caravaca 2020 Table 2 (tau_r=0.13, tau_1=2.70). The slow tau_2=27.05 ns component (R_1=0.06) is dropped — it carries 6% of the integrated emission and adds noise to the simulator without a calibration handle to exploit it.",
+      "tau_rise": 0.13,
+      "tau_fall": 2.70
     },
     "spectrum": {
-      "_comment": "Moyal (approximate Landau) fit to WbLS emission spectrum from arXiv:2003.10491. Outside [lambda_min, lambda_max] the ray weight is zero.",
-      "moyal_amp":   60.19178618,
+      "_comment": "Moyal (approximate Landau) fit to WbLS emission spectrum from arXiv:2003.10491. The surrogate samples directly from this distribution truncated to [lambda_min, lambda_max] via an inverse-CDF lookup; moyal_amp is dormant (preserved on DetectorParams for future reactivation).",
+      "moyal_amp":   1.0,
       "moyal_loc":   373.26120442,
       "moyal_scale": 14.77305198,
       "lambda_min":  340.0,

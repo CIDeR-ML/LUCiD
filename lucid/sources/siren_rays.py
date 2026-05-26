@@ -279,69 +279,104 @@ def _sample_isotropic(key, n):
                       cos_theta], axis=1)
 
 
-def _biexp_pdf(t, tau_r, tau_1, tau_2, R_1):
-    """Mixture-biexponential emission-time PDF.
+def _biexp_pdf(t, tau_rise, tau_fall):
+    """Rise+fall emission-time PDF.
 
-    ``g(t; tau_r, tau_d) = (exp(-t/tau_d) - exp(-t/tau_r)) / (tau_d - tau_r)``;
-    ``p(t) = R_1 g(t; tau_r, tau_1) + (1-R_1) g(t; tau_r, tau_2)``.
+    ``g(t; τ_rise, τ_fall) = (exp(-t/τ_fall) - exp(-t/τ_rise)) / (τ_fall - τ_rise)``,
+    the density of ``T = T_rise + T_fall`` with ``T_rise ~ Exp(τ_rise)``,
+    ``T_fall ~ Exp(τ_fall)`` (hypoexponential sum). The simulator samples ``T``
+    directly via the reparametrization in :func:`_sample_hypoexp`; this PDF is
+    kept so it can be plotted / compared against an empirical histogram.
 
-    Both ``tau_d - tau_r`` denominators get a tiny epsilon to stay
-    differentiable at the (unphysical) degenerate point ``tau_d == tau_r``.
+    The ``τ_fall - τ_rise`` denominator gets a tiny epsilon to stay
+    differentiable at the (unphysical) degenerate point ``τ_fall == τ_rise``.
     """
-    def g(tau_d):
-        denom = (tau_d - tau_r) + 1e-9
-        return (jnp.exp(-t / tau_d) - jnp.exp(-t / tau_r)) / denom
-    return R_1 * g(tau_1) + (1.0 - R_1) * g(tau_2)
+    denom = (tau_fall - tau_rise) + 1e-9
+    return (jnp.exp(-t / tau_fall) - jnp.exp(-t / tau_rise)) / denom
+
+
+def _sample_hypoexp(key, n, tau_rise, tau_fall):
+    """Sample ``n`` times from the rise+fall biexp PDF via the hypoexp sum.
+
+    ``T = -τ_rise · log(U₁) + -τ_fall · log(U₂)`` with ``U₁, U₂ ~ U(0, 1)``
+    independent. Differentiable wrt both τ via reparametrization — they appear
+    only as scalar multipliers on the uniform-derived `log(U)`s.
+
+    The ``minval=jnp.finfo(jnp.float32).tiny`` is to keep `log(U)` finite when
+    U lands exactly at 0.
+    """
+    k1, k2 = random.split(key)
+    tiny = jnp.finfo(jnp.float32).tiny
+    u1 = random.uniform(k1, (n,), minval=tiny, maxval=1.0)
+    u2 = random.uniform(k2, (n,), minval=tiny, maxval=1.0)
+    return -tau_rise * jnp.log(u1) + -tau_fall * jnp.log(u2)
 
 
 def _moyal_pdf(x, loc, scale):
     """Moyal PDF — used as the WbLS emission-spectrum shape.
 
     ``f(x; mu, sigma) = (1/(sigma·sqrt(2π))) · exp(-0.5·(z + exp(-z)))``
-    where ``z = (x - mu)/sigma``. The medium-level ``moyal_amp`` then scales
-    this into the per-photon wavelength weight.
+    where ``z = (x - mu)/sigma``. The surrogate samples directly from the
+    truncated Moyal via an inverse-CDF lookup built once at factory time —
+    see :func:`_build_moyal_inverse_cdf`.
     """
     z = (x - loc) / scale
     return (1.0 / (scale * jnp.sqrt(2.0 * jnp.pi))) * jnp.exp(
         -0.5 * (z + jnp.exp(-z)))
 
 
-# Maximum emission delay sampled from the biexponential. 10× tau_2 of 10%
-# WbLS (27 ns) covers >99.94% of the integrated PDF — additional photons
-# past this are accepted as a negligible truncation.
-_SCINTILLATION_T_MAX_NS = 200.0
+def _build_moyal_inverse_cdf(lambda_min, lambda_max, moyal_loc, moyal_scale,
+                              n_knots: int = 512):
+    """Precompute the inverse CDF of the Moyal distribution truncated to
+    ``[lambda_min, lambda_max]``.
+
+    Returns ``(cdf_knots, lambda_knots)`` ready for ``jnp.interp(u, ...)``.
+    Built once at factory time (Python eval — the result is closed over as
+    a JAX constant inside the jit'd ray fn). The truncation re-normalizes
+    the CDF to span [0, 1] over the window — outside the window the
+    surrogate emits zero rays by construction.
+    """
+    lambda_grid = jnp.linspace(lambda_min, lambda_max, n_knots)
+    pdf = _moyal_pdf(lambda_grid, moyal_loc, moyal_scale)
+    # Cumulative trapezoidal integral
+    bw = lambda_grid[1:] - lambda_grid[:-1]
+    cdf = jnp.concatenate([jnp.array([0.0]),
+                           jnp.cumsum(0.5 * (pdf[:-1] + pdf[1:]) * bw)])
+    cdf = cdf / cdf[-1]
+    return cdf, lambda_grid
 
 
 def make_scintillation_surrogate_fn(dedx_ctx, scint_lambda_min, scint_lambda_max,
-                                    T_max_ns: float = _SCINTILLATION_T_MAX_NS):
+                                    moyal_loc: float, moyal_scale: float):
     """Build the jitted scintillation ray generator for a dE/dx SIREN context.
 
-    Two-pass importance sampling on the dE/dx SIREN:
-      1. Evaluate the dE/dx SIREN on a ``grid_bins x grid_bins`` grid over
-         ``(dE/dx, s/s_max)`` and threshold on the energy density
-         ``w · dE/dx`` (rare-but-very-ionizing bins are kept).
-      2. Pick ``N_deposits = Nphot // 5`` bins from the seed region, jitter,
-         re-evaluate the SIREN — these are the energy deposits along the
-         track.
+    Same two-pass importance-sampling structure as the Cherenkov surrogate —
+    one ray per SIREN evaluation point. For ``Nphot`` rays:
 
-    Each deposit emits 5 rays. Direction, emission delay (biexp mixture) and
-    wavelength (Moyal) are independently sampled per ray. The per-ray
-    intensity is::
+    1. Evaluate the dE/dx SIREN on a ``grid_bins x grid_bins`` grid over
+       ``(dE/dx, s/s_max)`` and threshold on the energy density ``w · dE/dx``
+       (rare-but-very-ionizing bins are kept).
+    2. Pick ``Nphot`` bins from the seed region, jitter, re-evaluate the
+       SIREN — each bin is one energy deposit along the track, emitting one
+       ray.
 
-        (photons_per_deposit / 5)
-            · p_biexp(t_j; tau_r, tau_1, tau_2, R_1) · T_max
-            · moyal_amp · moyal_pdf(λ_j; loc, scale) · (λ_max - λ_min)
+    Per-ray intensity is the Chou-quenched photon count for that deposit::
 
-    with ``photons_per_deposit = S · dE_i / (1 + kB·d_i + C·d_i²)`` (Chou)
-    and ``dE_i = E · (w_i·d_i) / Σ(w·d)`` (PMF — sums to E across deposits).
+        intensity_i = S · dE_i / (1 + kB · d_i + C · d_i²)
 
-    All 10 medium-level scintillation scalars (S, kB, C, tau_r, tau_1, tau_2,
-    R_1, moyal_amp/loc/scale) are arguments of the returned function so
-    gradients flow through to them.
+    where ``dE_i = E · (w_i · d_i) / Σ(w · d)`` (PMF — sums to E across rays).
+    Direction is isotropic per ray; emission delay is sampled directly from
+    the rise+fall biexp PDF via the hypoexp sum (``-τ_rise·log(U₁) +
+    -τ_fall·log(U₂)``); wavelength is sampled directly from the Moyal CDF
+    inverse (precomputed once at factory time on the
+    ``[lambda_min, lambda_max]`` window).
+
+    Differentiable wrt the 5 runtime args (S, kB, C, τ_rise, τ_fall). The
+    Moyal sampling parameters (``moyal_loc``, ``moyal_scale``) are factory
+    args — closed over as the inverse-CDF lookup; not gradient targets.
 
     Returns ``scintillation_get_rays(track_origin, track_direction, energy,
-    Nphot, model_params, key, S, kB, C, tau_r, tau_1, tau_2, R_1,
-    moyal_amp, moyal_loc, moyal_scale)`` ->
+    Nphot, model_params, key, S, kB, C, tau_rise, tau_fall)`` ->
     ``(ray_vectors, ray_origins, intensities, t_delays, wavelengths)``.
     ``t_delays`` are biexp samples relative to the deposit time; the caller
     is expected to add the Cherenkov ``predict_t0(s, E)`` baseline (the time
@@ -361,18 +396,16 @@ def make_scintillation_surrogate_fn(dedx_ctx, scint_lambda_min, scint_lambda_max
     grid_dedx = DD.ravel()       # (g*g,) bin-center dE/dx (keV/mm)
     grid_s = SS.ravel()          # (g*g,) bin-center s/s_max
     threshold = dedx_ctx.threshold
-    lambda_window = float(scint_lambda_max - scint_lambda_min)
-    lambda_min_f = float(scint_lambda_min)
-    lambda_max_f = float(scint_lambda_max)
+
+    # Moyal inverse-CDF lookup, truncated to [lambda_min, lambda_max].
+    # Built once here in Python; closed over as a JAX constant in the ray fn.
+    _moyal_cdf, _moyal_lam = _build_moyal_inverse_cdf(
+        scint_lambda_min, scint_lambda_max, moyal_loc, moyal_scale)
 
     @partial(jax.jit, static_argnums=(3,))
     def scintillation_get_rays(track_origin, track_direction, energy, Nphot,
                                model_params, key,
-                               S, kB, C,
-                               tau_r, tau_1, tau_2, R_1,
-                               moyal_amp, moyal_loc, moyal_scale):
-        # Each deposit emits 5 rays varying in time/direction/wavelength.
-        n_deposits = Nphot // 5
+                               S, kB, C, tau_rise, tau_fall):
         pick_key, jit_key, dir_key, t_key, lam_key = random.split(key, 5)
 
         # --- pass 1: dE/dx SIREN on the bin-center grid ---
@@ -384,57 +417,45 @@ def make_scintillation_surrogate_fn(dedx_ctx, scint_lambda_min, scint_lambda_max
         thresh = threshold * jnp.max(energy_density)
         above = energy_density >= thresh
 
-        # Uniformly pick n_deposits of the M above-threshold bins (same
+        # Uniformly pick Nphot of the M above-threshold bins (same
         # randint + searchsorted trick as the Cherenkov path).
         csum = jnp.cumsum(above.astype(jnp.int32))
         n_seed_bins = csum[-1]
-        rank = random.randint(pick_key, (n_deposits,), 0, n_seed_bins)
+        rank = random.randint(pick_key, (Nphot,), 0, n_seed_bins)
         bin_idx = jnp.searchsorted(csum, rank + 1)
 
         # --- uniform jitter within the chosen bins ---
-        jitter = random.uniform(jit_key, (2, n_deposits)) - 0.5
+        jitter = random.uniform(jit_key, (2, Nphot)) - 0.5
         dedx_i = grid_dedx[bin_idx] + jitter[0] * d_bin_w
         s_i = grid_s[bin_idx] + jitter[1] * s_bin_w
 
         # --- pass 2: dE/dx SIREN at jittered deposit points ---
         w_i = _siren_weights(dedx_ctx, model_params, energy, dedx_i, s_i)
 
-        # --- energy PMF: dE_i = E · (w·d) / Σ(w·d), sums to E ---
+        # --- energy PMF: dE_i = E · (w·d) / Σ(w·d), sums to E across rays ---
         wd = w_i * dedx_i
         dE = energy * wd / jnp.maximum(jnp.sum(wd), 1e-30)
 
-        # --- Birks/Chou per-deposit photon count ---
-        photons_per_deposit = S * dE / (1.0 + kB * dedx_i + C * dedx_i ** 2)
+        # --- Birks/Chou per-ray photon count (= intensities) ---
+        intensities = S * dE / (1.0 + kB * dedx_i + C * dedx_i ** 2)
 
         # s/s_max -> physical distance along the track (mm -> m for origins).
         physical_dist_mm = s_i * dedx_ctx.s_max_fn(energy)
         ranges_m = physical_dist_mm / 1000.0
-        deposit_origins = (track_origin[None, :]
-                           + ranges_m[:, None] * normalize(track_direction)[None, :])
-
-        # --- replicate each deposit 5 times: origin + photon count are
-        # shared across the 5; direction / time / wavelength vary per ray.
-        ray_origins = jnp.repeat(deposit_origins, 5, axis=0)
-        photons_per_ray = jnp.repeat(photons_per_deposit, 5) / 5.0
+        ray_origins = (track_origin[None, :]
+                       + ranges_m[:, None] * normalize(track_direction)[None, :])
 
         # --- per-ray isotropic directions ---
         ray_vectors = _sample_isotropic(dir_key, Nphot)
 
-        # --- per-ray biexp time sample (uniform proposal + reweight) ---
-        t_uniform = random.uniform(t_key, (Nphot,), minval=0.0, maxval=T_max_ns)
-        time_weight = _biexp_pdf(t_uniform, tau_r, tau_1, tau_2, R_1) * T_max_ns
+        # --- per-ray emission delay (hypoexp sum — direct sample) ---
+        t_delays = _sample_hypoexp(t_key, Nphot, tau_rise, tau_fall)
 
-        # --- per-ray Moyal wavelength sample (uniform proposal + reweight)
-        # Sampling inside [λ_min, λ_max] only — the user-supplied window
-        # already enforces the "0 photons outside" cutoff.
-        wavelengths = random.uniform(lam_key, (Nphot,),
-                                     minval=lambda_min_f, maxval=lambda_max_f)
-        lambda_weight = (moyal_amp * _moyal_pdf(wavelengths, moyal_loc, moyal_scale)
-                         * lambda_window)
+        # --- per-ray wavelength (Moyal inverse-CDF lookup) ---
+        u = random.uniform(lam_key, (Nphot,))
+        wavelengths = jnp.interp(u, _moyal_cdf, _moyal_lam)
 
-        intensities = photons_per_ray * time_weight * lambda_weight
-
-        return ray_vectors, ray_origins, intensities, t_uniform, wavelengths
+        return ray_vectors, ray_origins, intensities, t_delays, wavelengths
 
     return scintillation_get_rays
 
