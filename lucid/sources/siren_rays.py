@@ -234,10 +234,16 @@ def make_cherenkov_surrogate_fn(ctx):
         rank = random.randint(pick_key, (Nphot,), 0, n_seed_bins)
         bin_idx = jnp.searchsorted(csum, rank + 1)        # r-th above-thresh bin
 
-        # --- uniform jitter within the chosen bins (uniform over their area) ---
-        jitter = random.uniform(jit_key, (2, Nphot)) - 0.5
-        angle = grid_angle[bin_idx] + jitter[0] * a_bin_w
-        s_over_smax = grid_s[bin_idx] + jitter[1] * s_bin_w
+        # --- LHS-stratified jitter within the chosen bins ---
+        # Same role as the previous independent-uniform jitter, but the
+        # N jitter pairs are Latin-Hypercube-stratified across [-0.5, 0.5]²
+        # — rays in the same bin land in different jitter strata; sub-bin
+        # coverage of the Nphot rays is uniform rather than randomly
+        # clustered.
+        jit_a, jit_s = latin_hypercube_2d(
+            jit_key, Nphot, -0.5, 0.5, -0.5, 0.5)
+        angle = grid_angle[bin_idx] + jit_a * a_bin_w
+        s_over_smax = grid_s[bin_idx] + jit_s * s_bin_w
 
         # --- pass 2: SIREN at the jittered seed points ---
         w = _siren_weights(ctx, model_params, energy, angle, s_over_smax)
@@ -269,11 +275,18 @@ def make_cherenkov_surrogate_fn(ctx):
 
 @partial(jax.jit, static_argnums=(1,))
 def _sample_isotropic(key, n):
-    """Sample ``n`` uniform unit vectors on the sphere."""
-    k1, k2 = random.split(key)
-    cos_theta = 2.0 * random.uniform(k1, (n,)) - 1.0
+    """Sample ``n`` unit vectors approximately uniformly on the sphere via
+    Latin-Hypercube draws in ``(cos θ, φ)``.
+
+    Independent uniform draws leave random "thin spots" on the sphere that
+    show up as patchiness on the detector display; LHS guarantees every
+    cos θ stratum and every φ stratum is hit exactly once across the n
+    samples, dropping sphere-coverage error from O(1/√n) to O(1/n).
+    """
+    u_cos, u_phi = latin_hypercube_2d(key, n, 0.0, 1.0, 0.0, 1.0)
+    cos_theta = 2.0 * u_cos - 1.0
     sin_theta = jnp.sqrt(jnp.maximum(1.0 - cos_theta ** 2, 0.0))
-    phi = 2.0 * jnp.pi * random.uniform(k2, (n,))
+    phi = 2.0 * jnp.pi * u_phi
     return jnp.stack([sin_theta * jnp.cos(phi),
                       sin_theta * jnp.sin(phi),
                       cos_theta], axis=1)
@@ -424,10 +437,11 @@ def make_scintillation_surrogate_fn(dedx_ctx, scint_lambda_min, scint_lambda_max
         rank = random.randint(pick_key, (Nphot,), 0, n_seed_bins)
         bin_idx = jnp.searchsorted(csum, rank + 1)
 
-        # --- uniform jitter within the chosen bins ---
-        jitter = random.uniform(jit_key, (2, Nphot)) - 0.5
-        dedx_i = grid_dedx[bin_idx] + jitter[0] * d_bin_w
-        s_i = grid_s[bin_idx] + jitter[1] * s_bin_w
+        # --- LHS-stratified jitter within the chosen bins ---
+        jit_d, jit_s = latin_hypercube_2d(
+            jit_key, Nphot, -0.5, 0.5, -0.5, 0.5)
+        dedx_i = grid_dedx[bin_idx] + jit_d * d_bin_w
+        s_i = grid_s[bin_idx] + jit_s * s_bin_w
 
         # --- pass 2: dE/dx SIREN at jittered deposit points ---
         w_i = _siren_weights(dedx_ctx, model_params, energy, dedx_i, s_i)
