@@ -77,12 +77,23 @@ unknown keys raise at config-load time so typos don't silently drop
 hyperparameters. To add a new knob, extend `FLAG_MAP` (CLI flag) and optionally
 `NAME_MAP` (short label for folder names) in `generate_jobs.py`.
 
-## Standard training recipe
+## Nominal training prescription
 
-The current production seed-scans (`water_{mu,el}_*_seed_scan_p100_ti02_n150k`)
-all use this baseline — proven to converge for both photon and dE/dx tables.
-The config-name suffix encodes it: `p100` = patience 100, `ti02` =
-target_importance 0.2, `n150k` = 150k steps.
+When the task is "(re)train SIREN for `<material>/<particle>`, photon or
+dE/dx", use the **nominal** scan configs:
+
+| Config | Lookup table | Output folder |
+|---|---|---|
+| `water_mu_dedx_seed_scan_nominal.json` | `LUCiD/data/water/muon/dedx_lookup_table.h5` | `<output_root>/water_mu_dedx_seed_scan_nominal/` |
+| (older suffix-named configs `..._p100_ti02_n150k.json` carry the same hyperparameters and are kept around for historical scans.) | | |
+
+These all share one baseline that has been verified to converge for both
+photon and dE/dx tables. A scan runs **10 seeds** on the `turing` partition;
+seed yield is imperfect — typically ~4–6 of 10 seeds converge and the rest
+diverge — so the 10-seed fan-out plus `rank_seeds.py` (below) is the intended
+way to obtain one good model.
+
+Baseline (json form, as the configs encode it):
 
 ```json
 "baseline": {
@@ -100,10 +111,49 @@ target_importance 0.2, `n150k` = 150k steps.
 }
 ```
 
-A scan runs 10 seeds (`runs: [{"seed": 1}, … {"seed": 10}]`) on the `turing`
-partition. Seed yield is imperfect — typically ~4–6 of 10 seeds converge and
-the rest diverge — so a 10-seed scan plus `rank_seeds.py` (below) is the
-intended way to obtain one good model.
+Equivalent `lucid-train-siren` CLI invocation for a single seed (this is
+what `generate_jobs.py` writes into each `submit.sbatch` under the hood):
+
+```bash
+lucid-train-siren \
+    --material water --particle muon --data-type dedx \
+    --h5-path /sdf/.../LUCiD/data/water/muon/dedx_lookup_table.h5 \
+    --num-steps 150000 \
+    --learning-rate 1e-4 --min-lr 5e-7 \
+    --patience 100 --grad-clip-norm 1.0 \
+    --zero-threshold 1e-3 --zero-keep-frac 0.5 \
+    --energy-balance uniform --target-importance 0.2 \
+    --batch-size 25000 --val-split 0.01 \
+    --seed <N>
+```
+
+`generate_jobs.py` is the recommended path — it materialises the 10 seeds,
+the SLURM/HTCondor `submit.sbatch`, the per-run `config.json`, and skips
+already-completed runs automatically. Bypass it only for one-off debugging.
+
+Standard end-to-end for a (material, particle) where the upstream
+`training_inputs/<material>/<particle>/<E>MeV/photonsim.root` aggregates
+have just been (re)generated:
+
+```bash
+# 1. Rebuild the lookup table from the fresh Stage-1 inputs.
+apptainer exec -B /sdf/data/neutrino "$LUCID_IMAGE_PATH" \
+    /opt/conda/bin/lucid-build-dedx-table \
+        --data-dir /sdf/data/neutrino/cjesus/SIREN_files/training_inputs \
+        --material water --particle mu- \
+        --output   /sdf/.../LUCiD/data/water/muon/dedx_lookup_table.h5
+
+# 2. Submit the 10-seed nominal scan.
+./generate_jobs.sh -c configs/water_mu_dedx_seed_scan_nominal.json -s
+
+# 3. Once seeds finish, rank and promote.
+apptainer exec -B /sdf/data/neutrino "$LUCID_IMAGE_PATH" /opt/conda/bin/python3 \
+    rank_seeds.py <output_root>/water_mu_dedx_seed_scan_nominal
+```
+
+(For the photon-table variant, swap `dedx` → `photon`, use the matching
+photon scan config, and point `lucid-build-photon-table` at the same
+`training_inputs` root.)
 
 ## Output layout
 
