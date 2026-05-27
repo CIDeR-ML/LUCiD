@@ -3,7 +3,7 @@
 Validate per-energy PhotonSim ROOT files before building the SIREN lookup table.
 
 Scans `<data-dir>/<E>MeV/output.root` and reports missing, empty, corrupted,
-and good files (with the photon count from `PhotonHist_AngleDistance`).
+and good files (with the photon count from `PhotonHist_AngleDistanceNorm`).
 
 Used as a sanity check before invoking `lucid-build-photon-table`. See
 `docs/SIREN_TRAINING_INPUTS.md` for the full pipeline.
@@ -51,9 +51,9 @@ def check_root_files(path="data/mu-"):
                 if len(keys) == 0:
                     empty_files.append(energy)
                     print(f"{energy:4d} MeV: NO OBJECTS (size: {file_size/1024/1024:.1f} MB)")
-                elif any("PhotonHist_AngleDistance" in key for key in keys):
+                elif any("PhotonHist_AngleDistanceNorm" in key for key in keys):
                     # Access with the cycle number
-                    hist_key = next(key for key in keys if "PhotonHist_AngleDistance" in key)
+                    hist_key = next(key for key in keys if "PhotonHist_AngleDistanceNorm" in key)
                     hist = f[hist_key]
                     photons = hist.values().sum()
                     good_files.append(energy)
