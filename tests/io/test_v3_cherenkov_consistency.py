@@ -43,7 +43,7 @@ def test_beta_and_ncherenkov_passthrough(edep_path):
 
 
 def test_dtypes_match_spec(edep_path):
-    p, _ = seg_path
+    p, _ = edep_path
     with h5py.File(p, 'r') as f:
         grp = f['event_000']
         assert grp['beta_start'].dtype == np.float32
@@ -70,7 +70,7 @@ def test_sum_ncherenkov_per_track(edep_path):
         ev['meaningful_tracks'][200]['n_cherenkov'],
     ])
     # Sum over segments grouped by track_idx
-    summed = np.bincount(seg['track_idx'], weights=edep['n_cherenkov'],
+    summed = np.bincount(edep['track_idx'], weights=edep['n_cherenkov'],
                          minlength=3).astype(np.int32)
     # Note: in the synthetic fixture the per-segment counts don't match the
     # per-track totals exactly; the important assertion is shape + dtype,
