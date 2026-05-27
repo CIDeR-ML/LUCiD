@@ -45,6 +45,15 @@ These apply across all four files:
 - **Cross-file alignment**: parallel filenames (`*_NNNN.h5`) and matching
   `event_NNN/` group names align modalities. Each `event_NNN/` carries an
   `source_event_idx` attribute that loaders cross-check.
+- **Emission-process encoding**: per-row `emission_process: int8` columns on
+  `hits/` and `edep/sensor_hits/` tag which physical process produced each
+  charge contribution. Enum: `0 = Cherenkov`, `1 = scintillation`. A given
+  `(particle_idx, sensor_idx)` (or `(segment_idx, sensor_idx)`) pair can appear
+  in multiple rows differing only in `emission_process` when both processes
+  contribute. Cherenkov-only datasets carry the column with all-zeros so
+  consumers can group/filter by it without a presence check. Pre-Phase-0
+  datasets that lack the column read as all-zeros via the reader's backward-
+  compat default.
 
 ## Provenance block (every file's `config/`)
 
@@ -105,14 +114,17 @@ hits.h5
     ├── particle_idx          (n_particle_hits,) int32   — local FK to labl/per_particle row
     ├── sensor_idx            (n_particle_hits,) uint16
     ├── PE                    (n_particle_hits,) float32   — pre-smearing per-particle
-    └── T                     (n_particle_hits,) float32   — pre-smearing per-particle, detector frame
+    ├── T                     (n_particle_hits,) float32   — pre-smearing per-particle, detector frame
+    └── emission_process      (n_particle_hits,) int8     — 0=Cherenkov, 1=scintillation
 ```
 
 Notes:
 - `particle_idx` is local to the event (`0..n_particles-1`).
-- Within one event, multiple rows can share the same `(particle_idx, sensor_idx)`
-  is not expected — particle decomposition is one entry per (particle, sensor)
-  pair where PE > 0.
+- A `(particle_idx, sensor_idx)` pair can appear in **multiple rows** differing
+  only in `emission_process` when both processes contribute to that sensor from
+  that particle. Cherenkov-only datasets emit one row per pair, all with
+  `emission_process = 0`. Aggregating PE/T over the `emission_process` axis
+  recovers a process-agnostic per-(particle, sensor) view.
 - Loaders that train on `hits/` alone use `sensor_positions` from this file's
   `config/` to map `sensor_idx` to physical positions.
 
@@ -144,7 +156,8 @@ edep.h5
         ├── segment_idx           (n_segment_hits,) int32  — FK to this event's segments (0..n_segments-1)
         ├── sensor_idx            (n_segment_hits,) uint16 — FK to sensor_positions
         ├── PE                    (n_segment_hits,) float32 — segment's contribution to that sensor's PE
-        └── T                     (n_segment_hits,) float32 — segment's first-arrival time on that sensor (ns, detector frame)
+        ├── T                     (n_segment_hits,) float32 — segment's first-arrival time on that sensor (ns, detector frame)
+        └── emission_process      (n_segment_hits,) int8    — 0=Cherenkov, 1=scintillation
 ```
 
 Notes:

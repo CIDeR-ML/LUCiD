@@ -53,13 +53,34 @@ def read_sensor_event_v3(filename, event_idx):
 
 
 def read_hits_event_v3(filename, event_idx):
-    """Read event ``event_idx`` from a hits v3 file."""
-    return _read_v3_event(filename, event_idx)
+    """Read event ``event_idx`` from a hits v3 file.
+
+    Backward-compat: pre-Phase-0 datasets (no ``emission_process`` column)
+    get an all-zeros (Cherenkov) default of length ``n_particle_hits`` so
+    consumers can group/filter by emission process without a presence check.
+    """
+    out = _read_v3_event(filename, event_idx)
+    if 'emission_process' not in out and 'particle_idx' in out:
+        out['emission_process'] = np.zeros(
+            len(out['particle_idx']), dtype=np.int8)
+    return out
 
 
 def read_edep_event_v3(filename, event_idx):
-    """Read event ``event_idx`` from an edep v3 file."""
-    return _read_v3_event(filename, event_idx)
+    """Read event ``event_idx`` from an edep v3 file.
+
+    Backward-compat: pre-Phase-0 ``sensor_hits/`` subgroups (when present
+    but lacking the ``emission_process`` column) get an all-zeros default
+    of length ``n_segment_hits``.
+    """
+    out = _read_v3_event(filename, event_idx)
+    sh = out.get('sensor_hits')
+    if (isinstance(sh, dict)
+            and 'emission_process' not in sh
+            and 'segment_idx' in sh):
+        sh['emission_process'] = np.zeros(
+            len(sh['segment_idx']), dtype=np.int8)
+    return out
 
 
 def read_labl_event_v3(filename, event_idx):

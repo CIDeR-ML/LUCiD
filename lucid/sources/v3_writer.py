@@ -18,6 +18,8 @@ from lucid.sources.particle_physics import derive_particle_interaction_idx
 __all__ = [
     "SOURCE_TYPE_PARTICLES",
     "SOURCE_TYPE_GENIE",
+    "EMISSION_PROCESS_CHERENKOV",
+    "EMISSION_PROCESS_SCINTILLATION",
     "build_interaction_metadata",
     "sample_translation_vector",
     "write_sensor_config_v3",
@@ -42,6 +44,13 @@ _V3_FORMAT_VERSION = 5
 # per_interaction/source_type encoding
 SOURCE_TYPE_PARTICLES = 0
 SOURCE_TYPE_GENIE     = 1
+
+# emission_process column encoding on hits.h5 + edep.h5/sensor_hits/.
+# Per-row tag identifying which physical process produced the contribution.
+# Cherenkov-only datasets emit the column with all-zeros (Cherenkov), so
+# downstream consumers can always group/filter by it without a presence check.
+EMISSION_PROCESS_CHERENKOV     = 0
+EMISSION_PROCESS_SCINTILLATION = 1
 
 
 def _source_type_code(primary_source):
@@ -504,6 +513,13 @@ def save_hits_event_v3(f, event_dict, seq_idx):
         t_reco_arr = _cat(t_reco_parts, np.float32)
         grp.create_dataset('T_reco', data=t_reco_arr, **_GZIP_OPTS)
 
+    # emission_process: per-row physical-process tag. Phase 0 writes all-zeros
+    # (Cherenkov) unconditionally; Phase 2 replaces this with the real per-row
+    # value when a per-process hits structure is supplied via event_dict.
+    emp_arr = np.full(particle_idx_arr.size,
+                      EMISSION_PROCESS_CHERENKOV, dtype=np.int8)
+    grp.create_dataset('emission_process', data=emp_arr, **_GZIP_OPTS)
+
 
 def save_edep_event_v3(f, event_dict, seq_idx):
     """Write a single event_NNN/ group to an already-open edep v3 file.
@@ -608,6 +624,14 @@ def save_edep_event_v3(f, event_dict, seq_idx):
             sh.create_dataset('T_reco',
                               data=np.asarray(seg_sen['T_reco'], dtype=np.float32),
                               **_GZIP_OPTS)
+        # emission_process: per-row physical-process tag. Phase 0 writes
+        # all-zeros (Cherenkov) unconditionally; Phase 2 sets real values
+        # when scintillation rows are concatenated in.
+        sh.create_dataset(
+            'emission_process',
+            data=np.full(len(seg_sen['PE']),
+                         EMISSION_PROCESS_CHERENKOV, dtype=np.int8),
+            **_GZIP_OPTS)
         sh.attrs['n_segment_hits'] = int(len(seg_sen['PE']))
         grp.attrs['has_segment_sensor_map'] = True
 
