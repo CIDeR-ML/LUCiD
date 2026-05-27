@@ -225,7 +225,7 @@ class LookupTableBuilder(ABC):
     X_AXIS_BINS: int       # 500 for both current variants
     X_RANGE: Tuple[float, float]      # (0, π) or (0, 1000)
     AVERAGE_UNITS: str     # "photons/event" or "entries/event"
-    TOTAL_KEY: str         # "total_photons" or "total_entries"
+    TOTAL_KEY: str         # "total_photons" or "total_edep"
     DEFAULT_OUTPUT_NAME: str   # filename if --output is a directory
 
     DISTANCE_BINS = 500
@@ -598,12 +598,17 @@ class DedxLookupBuilder(LookupTableBuilder):
     X_AXIS_NAME = "dedx"
     X_AXIS_BINS = 500
     X_RANGE = (0.0, 1000.0)
-    AVERAGE_UNITS = "entries/event"
-    TOTAL_KEY = "total_entries"
+    AVERAGE_UNITS = "MeV/event"
+    TOTAL_KEY = "total_edep"
     DEFAULT_OUTPUT_NAME = "dedx_lookup_table.h5"
 
     def _write_extra_attrs(self, meta_group: h5py.Group) -> None:
         meta_group.attrs["data_type"] = "dedx"
+        # PhotonSim fills dEdxHist_DistanceNorm with weight = step_edep / MeV
+        # (DataManager.cc); the resulting table is an *energy density* over
+        # (dE/dx, s/s_max), not a count density. Downstream surrogates use
+        # this flag to skip an otherwise-needed dE/dx multiplication.
+        meta_group.attrs["weighting_scheme"] = "edep"
 
 
 # --- Helpers ----------------------------------------------------------------

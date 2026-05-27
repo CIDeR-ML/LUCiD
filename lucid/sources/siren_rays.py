@@ -364,25 +364,50 @@ def make_scintillation_surrogate_fn(dedx_ctx, scint_lambda_min, scint_lambda_max
     """Build the jitted scintillation ray generator for a dE/dx SIREN context.
 
     Same two-pass importance-sampling structure as the Cherenkov surrogate —
-    one ray per SIREN evaluation point. For ``Nphot`` rays:
+    one ray per SIREN evaluation point — plus a Rao-Blackwell collapse over
+    the dE/dx axis to kill the per-ray d fluctuation that the original
+    formula carried through both the energy PMF and the Birks denominator.
+
+    Assumes an **edep-weighted** dE/dx SIREN: the underlying PhotonSim
+    histogram is filled with ``weight = step_edep / MeV`` (not unit counts),
+    so ``grid_w`` is already an *energy density* over ``(dE/dx, s/s_max)``.
+    The threshold and per-ray PMF therefore use ``w`` directly; no extra
+    multiplication by ``d`` is needed. Equivalently, ``<d>_s`` collapses
+    against an edep-weighted distribution of d, which equals
+    ``<d²>_count / <d>_count`` — the "typical d where the energy is", not
+    the "typical d where the steps are". Either is a defensible meaning of
+    "typical"; edep-weighted is the physically right one for Birks math
+    because Birks quenches *energy*, not steps.
+
+    For ``Nphot`` rays:
 
     1. Evaluate the dE/dx SIREN on a ``grid_bins x grid_bins`` grid over
-       ``(dE/dx, s/s_max)`` and threshold on the energy density ``w · dE/dx``
-       (rare-but-very-ionizing bins are kept).
-    2. Pick ``Nphot`` bins from the seed region, jitter, re-evaluate the
-       SIREN — each bin is one energy deposit along the track, emitting one
-       ray.
+       ``(dE/dx, s/s_max)``.
+    2. Compute the conditional mean ``<d>_s = Σ_d w(d, s)·d / Σ_d w(d, s)``
+       for every s-bin from the full grid (no threshold mask).
+    3. Threshold the grid on ``w`` directly (an edep density); pick ``Nphot``
+       bins from the seed region, LHS-jitter, re-evaluate the SIREN to get
+       the per-ray edep weight ``w_i``.
+    4. 3-point parabolic Lagrange interpolation of ``<d>_s`` at the jittered
+       s gives the per-ray "typical dE/dx" ``d_typ_i``.
 
-    Per-ray intensity is the Chou-quenched photon count for that deposit::
+    Per-ray intensity is the Chou-quenched photon count with ``d_i``
+    replaced by ``d_typ_i`` in the Birks denominator::
 
-        intensity_i = S · dE_i / (1 + kB · d_i + C · d_i²)
+        dE_i        = E · w_i / Σ_j w_j
+        intensity_i = S · dE_i / (1 + kB · d_typ_i + C · d_typ_i²)
 
-    where ``dE_i = E · (w_i · d_i) / Σ(w · d)`` (PMF — sums to E across rays).
-    Direction is isotropic per ray; emission delay is sampled directly from
-    the rise+fall biexp PDF via the hypoexp sum (``-τ_rise·log(U₁) +
-    -τ_fall·log(U₂)``); wavelength is sampled directly from the Moyal CDF
-    inverse (precomputed once at factory time on the
-    ``[lambda_min, lambda_max]`` window).
+    The per-ray sample's d_i is still used to evaluate ``w_i`` (so the
+    per-ray SIREN energy gradient is preserved), but no longer leaks
+    bin-to-bin d-axis variance into the intensity. ``<d>_s`` depends on
+    ``grid_w`` and hence on the input energy, adding a second SIREN-side
+    gradient pathway through the Rao-Blackwell collapse.
+
+    Direction is isotropic per ray (LHS on cos θ, φ); emission delay is
+    sampled directly from the rise+fall biexp PDF via the hypoexp sum
+    (``-τ_rise·log(U₁) + -τ_fall·log(U₂)``); wavelength is sampled
+    directly from the Moyal CDF inverse (precomputed once at factory time
+    on the ``[lambda_min, lambda_max]`` window).
 
     Differentiable wrt the 5 runtime args (S, kB, C, τ_rise, τ_fall). The
     Moyal sampling parameters (``moyal_loc``, ``moyal_scale``) are factory
@@ -424,11 +449,26 @@ def make_scintillation_surrogate_fn(dedx_ctx, scint_lambda_min, scint_lambda_max
         # --- pass 1: dE/dx SIREN on the bin-center grid ---
         grid_w = _siren_weights(dedx_ctx, model_params, energy, grid_dedx, grid_s)
 
-        # --- seed region: threshold on the energy density w·dE/dx so
-        # rare-but-very-ionizing bins (low w, high dE/dx) are kept.
-        energy_density = grid_w * grid_dedx
-        thresh = threshold * jnp.max(energy_density)
-        above = energy_density >= thresh
+        # --- conditional mean dE/dx given s (Rao-Blackwell over the d-axis) ---
+        # The per-ray sample's d_i is a noisy draw from p(d | s_i); collapsing
+        # the d-axis analytically using the SIREN's full distribution gives a
+        # smooth-in-s "typical dE/dx" that we use in place of d_i in both the
+        # energy PMF and the Birks denominator. Uses all d-bins (no threshold
+        # mask) — the threshold decides *where to sample*, not what the
+        # physical conditional distribution of dE/dx looks like at that s.
+        # `grid_w` is laid out row-major from meshgrid(indexing='ij'), so
+        # reshape(g, g)[i, j] = SIREN at (d_centers[i], s_centers[j]).
+        grid_w_2d      = grid_w.reshape(g, g)                            # (g_d, g_s)
+        weighted_d_sum = jnp.sum(grid_w_2d * d_centers[:, None], axis=0) # (g_s,)
+        total_w_at_s   = jnp.sum(grid_w_2d, axis=0)                       # (g_s,)
+        expected_d     = weighted_d_sum / jnp.maximum(total_w_at_s, 1e-30)
+
+        # --- seed region: threshold directly on grid_w. The SIREN is trained
+        # on an edep-weighted PhotonSim histogram, so grid_w is already an
+        # energy density (no extra dE/dx multiplication needed). High-dE/dx
+        # bins are kept by the weighting itself.
+        thresh = threshold * jnp.max(grid_w)
+        above = grid_w >= thresh
 
         # Uniformly pick Nphot of the M above-threshold bins (same
         # randint + searchsorted trick as the Cherenkov path).
@@ -443,15 +483,36 @@ def make_scintillation_surrogate_fn(dedx_ctx, scint_lambda_min, scint_lambda_max
         dedx_i = grid_dedx[bin_idx] + jit_d * d_bin_w
         s_i = grid_s[bin_idx] + jit_s * s_bin_w
 
-        # --- pass 2: dE/dx SIREN at jittered deposit points ---
+        # --- pass 2: dE/dx SIREN at jittered deposit points (per-ray w_i,
+        # still used as the per-ray frequency weight in the energy PMF) ---
         w_i = _siren_weights(dedx_ctx, model_params, energy, dedx_i, s_i)
 
-        # --- energy PMF: dE_i = E · (w·d) / Σ(w·d), sums to E across rays ---
-        wd = w_i * dedx_i
-        dE = energy * wd / jnp.maximum(jnp.sum(wd), 1e-30)
+        # --- 3-point Lagrange interpolation of <d>_s at the jittered s ---
+        # bin_idx = d_idx · g + s_idx (row-major flat index from meshgrid +
+        # ravel above), so s_idx = bin_idx % g and the t in [-0.5, 0.5] of
+        # the parabolic Lagrange is jit_s itself. Boundary s-bins clamp the
+        # missing neighbour to the home bin — the resulting overshoot is
+        # bounded by ~0.125 · (neighbour gap) at the very edge of the grid.
+        s_idx = bin_idx % g
+        k_lo = jnp.clip(s_idx - 1, 0, g - 1)
+        k_hi = jnp.clip(s_idx + 1, 0, g - 1)
+        y_lo = expected_d[k_lo]
+        y_ct = expected_d[s_idx]
+        y_hi = expected_d[k_hi]
+        t = jit_s
+        d_typ = ((t * (t - 1.0) / 2.0) * y_lo
+                 + (1.0 - t * t)        * y_ct
+                 + (t * (t + 1.0) / 2.0) * y_hi)
 
-        # --- Birks/Chou per-ray photon count (= intensities) ---
-        intensities = S * dE / (1.0 + kB * dedx_i + C * dedx_i ** 2)
+        # --- energy PMF + Birks/Chou, evaluated at the typical dE/dx ---
+        # w_i is already an edep weight (PhotonSim fills the dE/dx hist
+        # weighted by step edep), so the per-ray energy share is
+        # w_i / Σw_j directly. Per-ray d-axis fluctuation is gone; per-ray
+        # frequency variation still comes from w_i (preserves the energy
+        # gradient through the per-ray SIREN call).
+        # sum(intensities) ≈ S·E·<1/(1+kB·<d>_s+...)>_w.
+        dE = energy * w_i / jnp.maximum(jnp.sum(w_i), 1e-30)
+        intensities = S * dE / (1.0 + kB * d_typ + C * d_typ ** 2)
 
         # s/s_max -> physical distance along the track (mm -> m for origins).
         physical_dist_mm = s_i * dedx_ctx.s_max_fn(energy)
