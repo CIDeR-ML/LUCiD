@@ -7,8 +7,8 @@
 
 import { PMT_VS, PMT_FS } from './shaders.js';
 import {
-  PLASMA_STOPS, VIRIDIS_STOPS, VIRIDIS_R_STOPS, INFERNO_R_STOPS,
-  hashHue, plasmaRGB, viridisRGB, viridisRRGB, hsl2rgb,
+  PLASMA_STOPS, VIRIDIS_STOPS, VIRIDIS_R_STOPS, INFERNO_R_STOPS, RDBU_STOPS,
+  hashHue, plasmaRGB, viridisRGB, viridisRRGB, rdBuRGB, hsl2rgb,
 } from './colormaps.js';
 import { computeLayout } from './geometry_layout.js';
 
@@ -35,13 +35,31 @@ let layout = null;                 // from computeLayout()
 let curEvent = 0;
 let evtBundle = null;              // decoded {sensor, hits, edep, labl, t0, srcIdx, ...}
 
-// Per-PMT derived arrays (length nSensors).
-let pmtPE = null;                  // summed PE per sensor
-let pmtT = null;                   // earliest T per sensor (NaN if no hit)
+// Per-PMT derived arrays (length nSensors). pmtPE / pmtT / pmtHasSignal are
+// the *active* views — applyEmissionFilter swaps them between the sensor.h5
+// derived combined arrays (filter == 'all') and the hits.h5 derived per-
+// process arrays (filter == 'cher' / 'scint'). Everything downstream reads
+// these three and is filter-agnostic.
+let pmtPE = null;                  // summed PE per sensor (active set)
+let pmtT = null;                   // earliest T per sensor (NaN if no hit) (active set)
+let pmtHasSignal = null;           // Uint8Array (active set)
 let pmtBeta = null;                // PE-weighted mean β over contributing segments per sensor (NaN if no contribution)
 let pmtDomParticle = null;         // Int32Array  (argmax-over-hits per sensor; -1 if none)
-let pmtHasSignal = null;           // Uint8Array
 let pmtArrivalT = null;            // Float32Array — same value used for the 3D sweep shader
+// Backing arrays per emission slice. Built once per event load by
+// derivePMTArrays; applyEmissionFilter selects which set the active
+// references point at.
+//   pmtPE_all/T_all/HasSignal_all  — from sensor.h5 (combined, smeared,
+//     includes orphan-track photons that hits.h5 drops).
+//   pmtPE_cher/T_cher/HasSignal_cher — sum of hits.h5 rows with
+//     emission_process==0 (Cherenkov), per sensor. Pre-smearing, drops
+//     orphan-track photons. Same definition for the scint variant.
+let pmtPE_all = null,  pmtT_all = null,  pmtHasSignal_all = null;
+let pmtPE_cher = null, pmtT_cher = null, pmtHasSignal_cher = null;
+let pmtPE_scint = null, pmtT_scint = null, pmtHasSignal_scint = null;
+// Per-sensor Cherenkov fraction f = PE_cher / (PE_cher + PE_scint).
+// NaN where both are zero. Drives the CHER FRAC continuous field.
+let pmtCherFraction = null;
 
 // hits lookups.
 let particleToSensor = null;       // Array(nParticles) of Map<sensor, PE>
@@ -65,8 +83,14 @@ let segmentTotals = null;          // Float32Array(edep.n)  total PE per segment
 
 // UI state.
 let curView = 'pmts';              // 'pmts' | 'edep'   (exclusive 3D view)
-let curField = 'charge';           // 'charge' | 'time' | 'beta'  (continuous field)
+let curField = 'charge';           // 'charge' | 'time' | 'beta' | 'cher_frac'  (continuous field)
 let curLabel = 'none';             // 'none' | 'particle' | 'pdg' | 'interaction' | 'segment'
+// Per-sensor signal restricted to one emission process (or 'all' for the
+// kernel-accumulator combined signal). When the dataset has only a single
+// emission process — pure Cherenkov or pure scintillation — the dropdown +
+// CHER FRAC field stay hidden and the filter is locked to 'all'.
+let emissionFilter = 'all';        // 'all' | 'cher' | 'scint'
+let datasetHasBothProcesses = false;
 let logScale = true;
 let percMin = 1, percMax = 99;
 let manualVmin = null, manualVmax = null;
@@ -108,7 +132,7 @@ let outlineMat = null;
 let lastFrameTime = 0;
 
 // Colormap textures.
-let texPlasma, texViridis, texViridisR, texInfernoR;
+let texPlasma, texViridis, texViridisR, texInfernoR, texRdBu;
 
 // 2D.
 let c2d, ctx2d;
@@ -134,6 +158,7 @@ function showToast(msg) {
 function currentCmapName() {
   if (cmapName !== 'auto') return cmapName;
   if (curField === 'beta') return 'viridis';
+  if (curField === 'cher_frac') return 'rdbu';
   return curField === 'charge' ? 'plasma' : 'viridis_r';
 }
 
@@ -142,6 +167,7 @@ function currentCmapRGB(t) {
   if (name === 'plasma') return plasmaRGB(t);
   if (name === 'viridis') return viridisRGB(t);
   if (name === 'viridis_r') return viridisRRGB(t);
+  if (name === 'rdbu') return rdBuRGB(t);
   return viridisRGB(t);
 }
 
@@ -151,6 +177,7 @@ function currentCmapTex() {
   if (name === 'viridis') return texViridis;
   if (name === 'viridis_r') return texViridisR;
   if (name === 'inferno_r') return texInfernoR;
+  if (name === 'rdbu') return texRdBu;
   return texViridis;
 }
 
@@ -267,23 +294,104 @@ function normalizeValues(values, opts) {
 // positive time within a reasonable window). Whatever makes it through,
 // we still filter here with PE > 0 to guard against edge cases.
 function deriveSensorArrays() {
-  pmtPE = new Float32Array(nSensors);
-  pmtT = new Float32Array(nSensors);
-  for (let i = 0; i < nSensors; i++) pmtT[i] = NaN;
-  pmtHasSignal = new Uint8Array(nSensors);
-
+  // 'All' slice: from sensor.h5 (combined, smeared, includes orphan-track
+  // photons). Same as the legacy single-slice path.
+  pmtPE_all = new Float32Array(nSensors);
+  pmtT_all = new Float32Array(nSensors);
+  for (let i = 0; i < nSensors; i++) pmtT_all[i] = NaN;
+  pmtHasSignal_all = new Uint8Array(nSensors);
   const s = evtBundle.sensor;
   if (s && s.nHits) {
     for (let i = 0; i < s.nHits; i++) {
       const si = s.sensor_idx[i];
       const pe = s.PE[i];
-      pmtPE[si] += pe;
+      pmtPE_all[si] += pe;
       if (pe > 0) {
         const t = s.T[i];
-        if (Number.isNaN(pmtT[si]) || t < pmtT[si]) pmtT[si] = t;
-        pmtHasSignal[si] = 1;
+        if (Number.isNaN(pmtT_all[si]) || t < pmtT_all[si]) pmtT_all[si] = t;
+        pmtHasSignal_all[si] = 1;
       }
     }
+  }
+
+  // Per-process slices: sum hits.h5 rows by emission_process. These drop
+  // orphan-track photons (rows where particle_idx < 0 don't reach hits.h5
+  // — but those tracks' Cherenkov / scintillation contributions still show
+  // up in the 'All' slice via sensor.h5). Pre-smearing.
+  pmtPE_cher = new Float32Array(nSensors);
+  pmtPE_scint = new Float32Array(nSensors);
+  pmtT_cher = new Float32Array(nSensors);
+  pmtT_scint = new Float32Array(nSensors);
+  for (let i = 0; i < nSensors; i++) { pmtT_cher[i] = NaN; pmtT_scint[i] = NaN; }
+  pmtHasSignal_cher = new Uint8Array(nSensors);
+  pmtHasSignal_scint = new Uint8Array(nSensors);
+  const h = evtBundle.hits;
+  if (h && h.nHits && h.emission_process) {
+    const sIdx = h.sensor_idx, pe = h.PE, t = h.T, ep = h.emission_process;
+    for (let i = 0; i < h.nHits; i++) {
+      const si = sIdx[i];
+      const p = pe[i];
+      if (!(p > 0)) continue;
+      if (ep[i] === 1) {
+        pmtPE_scint[si] += p;
+        if (Number.isNaN(pmtT_scint[si]) || t[i] < pmtT_scint[si]) pmtT_scint[si] = t[i];
+        pmtHasSignal_scint[si] = 1;
+      } else {
+        // emission_process == 0 (Cherenkov); also catches any pre-Phase-0
+        // dataset that lacks the column (h5_worker defaults to all-zeros).
+        pmtPE_cher[si] += p;
+        if (Number.isNaN(pmtT_cher[si]) || t[i] < pmtT_cher[si]) pmtT_cher[si] = t[i];
+        pmtHasSignal_cher[si] = 1;
+      }
+    }
+  }
+
+  // Per-sensor Cherenkov fraction: f = PE_cher / (PE_cher + PE_scint).
+  // NaN where neither process contributes (no signal sensor) so the
+  // percentile / colormap path masks them out — same convention as pmtBeta.
+  pmtCherFraction = new Float32Array(nSensors);
+  for (let i = 0; i < nSensors; i++) {
+    const num = pmtPE_cher[i];
+    const den = num + pmtPE_scint[i];
+    pmtCherFraction[i] = (den > 0) ? (num / den) : NaN;
+  }
+
+  // applyEmissionFilter() wires the active views (pmtPE / pmtT /
+  // pmtHasSignal) to the slice selected by the current dropdown state.
+  applyEmissionFilter();
+}
+
+// Detect whether the loaded event carries both Cherenkov and scintillation
+// rows. Used at first-event-load time to decide whether to expose the
+// EMISSION dropdown + CHER FRAC button. Locked across the dataset so the
+// toolbar doesn't shape-shift when navigating events with different
+// process composition (e.g. an event where every scintillation photon
+// happened to QE-fail would otherwise hide the dropdown for that one).
+function detectDualEmission(bundle) {
+  const ep = bundle && bundle.hits && bundle.hits.emission_process;
+  if (!ep || !ep.length) return false;
+  // Single-pass any-mismatch check — cheap, terminates on first 1.
+  const first = ep[0];
+  for (let i = 1; i < ep.length; i++) if (ep[i] !== first) return true;
+  return false;
+}
+
+// Repoint the active per-sensor arrays to the slice selected by
+// emissionFilter. Cheap (alias swap, no copy). Call after derivePMTArrays
+// (event load) and after the dropdown changes.
+function applyEmissionFilter() {
+  if (emissionFilter === 'cher') {
+    pmtPE = pmtPE_cher;
+    pmtT  = pmtT_cher;
+    pmtHasSignal = pmtHasSignal_cher;
+  } else if (emissionFilter === 'scint') {
+    pmtPE = pmtPE_scint;
+    pmtT  = pmtT_scint;
+    pmtHasSignal = pmtHasSignal_scint;
+  } else {
+    pmtPE = pmtPE_all;
+    pmtT  = pmtT_all;
+    pmtHasSignal = pmtHasSignal_all;
   }
 }
 
@@ -348,7 +456,20 @@ function buildHitsLookups() {
   const perSensorBest = new Float32Array(nSensors);
   for (let i = 0; i < nSensors; i++) perSensorBest[i] = -Infinity;
 
+  // EMISSION filter applies to LABEL coloring too: when the user has
+  // restricted to one process, the per-particle contribution maps + the
+  // sidebar totals reflect that process only. The filter value lives on
+  // emissionFilter and the per-row tag on i_.emission_process (always
+  // present — h5_worker defaults to all-zeros on pre-Phase-0 datasets).
+  const ep = i_.emission_process;
+  const wantCher  = (emissionFilter === 'cher');
+  const wantScint = (emissionFilter === 'scint');
   for (let i = 0; i < i_.nHits; i++) {
+    if (ep) {
+      const e = ep[i];
+      if (wantCher && e !== 0) continue;
+      if (wantScint && e !== 1) continue;
+    }
     const p = i_.particle_idx[i];
     const s = i_.sensor_idx[i];
     const pe = i_.PE[i];
@@ -412,8 +533,22 @@ function buildSegmentLookups() {
   segmentTotals = new Float32Array(nSeg);
 
   const segIdx = hits.segment_idx, senIdx = hits.sensor_idx, pe = hits.PE;
+  const ep = hits.emission_process;
   const n = pe ? pe.length : 0;
+  // EMISSION filter applies to the LABEL=Segment side too: sensors get
+  // colored by the segment that dominates *the selected process's*
+  // contribution. The segment table itself stays untouched (segments
+  // don't have an intrinsic process — they emit both Cherenkov and
+  // scintillation simultaneously; only the per-(segment, sensor) hits
+  // carry the process tag).
+  const wantCher  = (emissionFilter === 'cher');
+  const wantScint = (emissionFilter === 'scint');
   for (let i = 0; i < n; i++) {
+    if (ep) {
+      const e = ep[i];
+      if (wantCher && e !== 0) continue;
+      if (wantScint && e !== 1) continue;
+    }
     const sg = segIdx[i];
     const s = senIdx[i];
     const v = pe[i];
@@ -432,6 +567,27 @@ function buildSegmentLookups() {
 function pmtContValArray() {
   const isTime = curField === 'time';
   const isBeta = curField === 'beta';
+  const isCherFrac = curField === 'cher_frac';
+  // Cherenkov fraction: f = PE_cher / (PE_cher + PE_scint). Bounded in
+  // [0, 1] with a natural anchor at 0.5 → use the diverging rdbu map and
+  // disable log scale (same handling as β). Sensors with no signal in
+  // either process get NaN and are masked out of the percentile pool —
+  // same convention as pmtBeta. The cher/scint masks are unioned because
+  // a sensor lit by either process is a valid sample of the fraction.
+  if (isCherFrac) {
+    const mask = new Uint8Array(nSensors);
+    for (let i = 0; i < nSensors; i++) {
+      mask[i] = (pmtHasSignal_cher && pmtHasSignal_scint
+                 && (pmtHasSignal_cher[i] || pmtHasSignal_scint[i])) ? 1 : 0;
+    }
+    return normalizeValues(pmtCherFraction || new Float32Array(nSensors), {
+      isTime: false,
+      isLog: false,
+      pMin: 0, pMax: 100,   // no percentile clip — fraction is already in [0,1]
+      mVmin: 0, mVmax: 1,   // anchor the diverging map symmetrically
+      mask,
+    });
+  }
   // β is intrinsically bounded in [0, 1] but only β > 1/n produces
   // Cherenkov in the active medium. Remap β ∈ [β_thresh, 1] → [0, 1]
   // so the viridis ramp covers the physically meaningful range; sub-
@@ -1906,6 +2062,7 @@ function labelText() {
   if (curLabel === 'interaction') return 'Interaction';
   if (curLabel === 'segment') return 'Segment';
   if (curField === 'beta') return 'β (Č-remapped)';
+  if (curField === 'cher_frac') return 'Č fraction';
   return curField === 'charge' ? 'PE' : 'T (ns)';
 }
 
@@ -1934,6 +2091,7 @@ function initThree() {
   texViridis = makeCmapTex(VIRIDIS_STOPS);
   texViridisR = makeCmapTex(VIRIDIS_R_STOPS);
   texInfernoR = makeCmapTex(INFERNO_R_STOPS);
+  texRdBu = makeCmapTex(RDBU_STOPS);
 }
 
 // ── Animate loop ───────────────────────────────────────────────────────
@@ -1988,15 +2146,46 @@ function applyViewSweepRange() {
   }
 }
 
-// Reflect field-dependent control eligibility. Currently used to disable
-// the log-scale toggle in BETA mode (β is bounded; log doesn't apply).
+// Reflect emission-process eligibility in the toolbar:
+//   - EMISSION dropdown + CHER FRAC button only present when the dataset
+//     carries rows from both Cherenkov and scintillation. Pure datasets
+//     keep the legacy toolbar.
+//   - CHER FRAC button disabled / faded when emissionFilter != 'all'
+//     (single-process slices have trivial f = 0 or 1 — see option (α) in
+//     the design notes).
+function syncEmissionUI() {
+  const sel  = $('emissionSelect');
+  const lbl  = $('emissionLabel');
+  const sep  = $('emissionSep');
+  const cher = $('fieldCherFrac');
+  if (!sel || !lbl || !sep || !cher) return;
+  const showDual = !!datasetHasBothProcesses;
+  sel.style.display  = showDual ? '' : 'none';
+  lbl.style.display  = showDual ? '' : 'none';
+  sep.style.display  = showDual ? '' : 'none';
+  cher.style.display = showDual ? '' : 'none';
+  sel.value = emissionFilter;
+  const cherUsable = showDual && emissionFilter === 'all';
+  cher.disabled = !cherUsable;
+  cher.style.opacity = cherUsable ? '' : '0.4';
+  cher.title = (!showDual)
+    ? 'CHER FRAC only available on datasets with both Cherenkov and scintillation'
+    : (emissionFilter === 'all'
+        ? ''
+        : 'CHER FRAC is meaningless under a single-process EMISSION filter — set EMISSION=All to enable.');
+}
+
+// Reflect field-dependent control eligibility. Disables the log-scale
+// toggle for the bounded-ratio fields (β and Cherenkov fraction).
 function syncFieldDependentControls() {
   const chk = $('logChk');
   if (!chk) return;
-  if (curField === 'beta') {
+  if (curField === 'beta' || curField === 'cher_frac') {
     chk.disabled = true;
     chk.parentElement.style.opacity = '0.4';
-    chk.parentElement.title = 'Log scale not applicable to β';
+    chk.parentElement.title = (curField === 'beta')
+      ? 'Log scale not applicable to β'
+      : 'Log scale not applicable to Cherenkov fraction';
   } else {
     chk.disabled = false;
     chk.parentElement.style.opacity = '';
@@ -2032,6 +2221,13 @@ async function loadEvent(idx) {
     selectedGroup = null;
     sweepPlaying = false;
     simTime = 0;
+    // Dataset-level emission introspection. Latch on (OR-accumulate): once
+    // we've seen an event with both Cherenkov and scintillation rows,
+    // expose the EMISSION dropdown for the rest of the session even if
+    // later events happen to have only one process represented (rare edge
+    // case where all of one process QE-failed on a given event).
+    datasetHasBothProcesses = datasetHasBothProcesses || detectDualEmission(d);
+    syncEmissionUI();
     deriveSensorArrays();
     buildHitsLookups();
     buildSegmentLookups();
@@ -2098,9 +2294,16 @@ function setupUI() {
     updateSweepUI();
   });
 
-  // Field toggle (Charge / Time / Beta).
+  // Field toggle (Charge / Time / Beta / Cher Frac).
   $('fieldGrp').addEventListener('click', (e) => {
     const b = e.target.closest('button'); if (!b) return;
+    // CHER FRAC is only meaningful when both processes are unfiltered. The
+    // button is hidden / disabled in those cases, but guard anyway so a
+    // programmatic click is a no-op rather than a wrong-looking render.
+    if (b.dataset.v === 'cher_frac'
+        && (!datasetHasBothProcesses || emissionFilter !== 'all')) {
+      return;
+    }
     curField = b.dataset.v;
     for (const c of $('fieldGrp').children) c.classList.toggle('active', c === b);
     syncFieldDependentControls();
@@ -2120,6 +2323,36 @@ function setupUI() {
     updateEdepColors();
     buildSidebar();
     applyCorrespondence();
+    render2D();
+  });
+
+  // Emission dropdown (only present when the dataset has both processes;
+  // syncEmissionUI hides the controls + locks emissionFilter to 'all' for
+  // single-process datasets).
+  $('emissionSelect').addEventListener('change', (e) => {
+    emissionFilter = e.target.value;
+    // CHER FRAC is only meaningful unfiltered (per the design decision —
+    // single-process slices have trivial f = 0 or 1 everywhere). Snap the
+    // FIELD back to CHARGE if the user filters down while CHER FRAC is on.
+    if (curField === 'cher_frac' && emissionFilter !== 'all') {
+      curField = 'charge';
+      for (const c of $('fieldGrp').children)
+        c.classList.toggle('active', c.dataset.v === 'charge');
+      syncFieldDependentControls();
+    }
+    syncEmissionUI();
+    applyEmissionFilter();
+    // Selection state stays valid (it indexes particles, not sensors), but
+    // the per-particle and per-segment contribution maps depend on which
+    // emission_process rows were summed in. Rebuild both lookups so the
+    // LABEL coloring + sidebar totals match the active slice.
+    buildHitsLookups();
+    buildSegmentLookups();
+    refreshUnionQMap();
+    buildPMTs();
+    updatePMTColors();
+    applyCorrespondence();
+    buildSidebar();
     render2D();
   });
 
@@ -2152,6 +2385,7 @@ function setupUI() {
   $('resetBtn').addEventListener('click', () => {
     // Toolbar state.
     curView = 'pmts'; curField = 'charge'; curLabel = 'none';
+    emissionFilter = 'all';
     selectedParticle = null; selectedGroup = null;
     sweepOn = false; sweepPlaying = false; quantileScope = 'pmts';
     simTime = 0;
@@ -2179,6 +2413,8 @@ function setupUI() {
     $('sweepSpeed').value = sweepSpeed; $('sweepSpeedVal').textContent = sweepSpeed.toFixed(1);
     for (const c of $('viewGrp').children) c.classList.toggle('active', c.dataset.v === 'pmts');
     for (const c of $('fieldGrp').children) c.classList.toggle('active', c.dataset.v === 'charge');
+    syncEmissionUI();
+    if (evtBundle) applyEmissionFilter();
     syncFieldDependentControls();
     $('rotBtn').classList.toggle('active', autoRotate);
     if (controls) controls.autoRotate = autoRotate;

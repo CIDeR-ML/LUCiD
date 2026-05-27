@@ -46,7 +46,8 @@ Then open **http://127.0.0.1:8765/**. The page shows `html loaded, waiting for v
 
 - **Event ← / → / input** — navigate events (commits on Enter or blur).
 - **VIEW · `PMTs | SEG`** — exclusive 3D view: either the PMT event display or the truth-segment point cloud.
-- **FIELD · `CHARGE | TIME`** — drives continuous coloring of the active view (PE / edep for charge; earliest-hit T / segment time for time). Colormap auto-switches (plasma for charge, viridis_r for time).
+- **FIELD · `CHARGE | TIME | BETA | CHER FRAC*`** — drives continuous coloring of the active view (PE / edep for charge; earliest-hit T / segment time for time; per-segment β for beta; Cherenkov fraction f = PE_cher / (PE_cher + PE_scint) per sensor for cher frac). Colormap auto-switches (plasma for charge, viridis_r for time, viridis for β, diverging blue↔red for cher frac). `CHER FRAC*` is only shown on datasets with both Cherenkov and scintillation rows.
+- **EMISSION · `All | Cherenkov | Scintillation`*** — only shown on datasets with both emission processes. Restricts the per-sensor PE/T to a single process: `All` shows the combined sensor signal (matches `sensor.h5`); `Cherenkov` and `Scintillation` derive each sensor's PE/T from `hits.h5` rows tagged with the chosen `emission_process`. The LABEL coloring + sidebar totals re-aggregate against the active slice — so `LABEL=Particle` under `EMISSION=Cherenkov` shows the dominant particle for each PMT's Cherenkov contribution. `CHER FRAC` is disabled when the filter is single-process (the ratio is trivially 1 or 0 in those slices).
 - **LABEL** — categorical override.
   - `None` (default): use FIELD (continuous).
   - `Particle` — hashed hue per particle (PMTs via argmax over `inst.PE`; segs via `track → particle_idx`).

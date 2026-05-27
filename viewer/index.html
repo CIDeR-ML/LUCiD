@@ -43,6 +43,9 @@
       <button data-v="charge" class="active">CHARGE</button>
       <button data-v="time">TIME</button>
       <button data-v="beta">BETA</button>
+      <!-- CHER FRAC: per-sensor PE_cher / (PE_cher + PE_scint). Only shown
+           when the dataset has both emission processes. JS unhides on load. -->
+      <button data-v="cher_frac" id="fieldCherFrac" style="display:none">CHER FRAC</button>
     </div>
 
     <div class="sep"></div>
@@ -58,6 +61,17 @@
     </select>
 
     <div class="sep"></div>
+
+    <!-- EMISSION restricts the per-sensor PE/T to a single emission process.
+         Only shown when the dataset has both Cherenkov + scintillation rows.
+         JS unhides on load. -->
+    <span class="toolbar-label" id="emissionLabel" style="display:none">EMISSION</span>
+    <select id="emissionSelect" style="display:none">
+      <option value="all" selected>All</option>
+      <option value="cher">Cherenkov</option>
+      <option value="scint">Scintillation</option>
+    </select>
+    <div class="sep" id="emissionSep" style="display:none"></div>
 
     <div class="btn-group"><button id="sweepBtn">TIME SWEEP</button></div>
     <div class="btn-group"><button id="resetBtn">RESET</button></div>

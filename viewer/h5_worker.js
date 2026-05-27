@@ -62,6 +62,10 @@ function readDsInt16(grp, name) {
   const d = grp.get(name); if (!d) return null;
   return new Int16Array(d.value);
 }
+function readDsInt8(grp, name) {
+  const d = grp.get(name); if (!d) return null;
+  return new Int8Array(d.value);
+}
 // HDF5 bool → Uint8Array (0/1). Callers use !!arr[i] to consume as JS bool.
 function readDsBool(grp, name) {
   const d = grp.get(name); if (!d) return null;
@@ -143,6 +147,13 @@ function decodeEvent(idx) {
   const hitsSIdx = readDsUint16(hEvt, 'sensor_idx');
   const hitsPE = readDsFloat32(hEvt, 'PE');
   const hitsT = readDsFloat32(hEvt, 'T');
+  // emission_process column: per-row int8 tag (0=Cherenkov, 1=scintillation).
+  // Added in the LUCiD Phase 0 schema delta — readers default to all-zeros on
+  // pre-change datasets via the Python reader, but the worker has its own
+  // h5wasm path so we synthesize the same fallback here when the column is
+  // absent (Cherenkov-only legacy datasets).
+  let hitsEmission = readDsInt8(hEvt, 'emission_process');
+  if (!hitsEmission && hitsSIdx) hitsEmission = new Int8Array(hitsSIdx.length);
   const nParticles = readAttr(hEvt, 'n_particles') || 0;
 
   // Edep file.
@@ -167,11 +178,15 @@ function decodeEvent(idx) {
   let edepSensorHits = null;
   const shGrp = eEvt.get('sensor_hits');
   if (shGrp) {
+    const shSIdx = readDsUint16(shGrp, 'sensor_idx');
+    let shEmission = readDsInt8(shGrp, 'emission_process');
+    if (!shEmission && shSIdx) shEmission = new Int8Array(shSIdx.length);
     edepSensorHits = {
-      segment_idx: readDsInt32(shGrp,   'segment_idx'),
-      sensor_idx:  readDsUint16(shGrp,  'sensor_idx'),
-      PE:          readDsFloat32(shGrp, 'PE'),
-      T:           readDsFloat32(shGrp, 'T'),
+      segment_idx:      readDsInt32(shGrp,   'segment_idx'),
+      sensor_idx:       shSIdx,
+      PE:               readDsFloat32(shGrp, 'PE'),
+      T:                readDsFloat32(shGrp, 'T'),
+      emission_process: shEmission,
     };
   }
 
@@ -239,6 +254,7 @@ function decodeEvent(idx) {
     sensor: { sensor_idx: sensorSIdx, PE: sensorPE, T: sensorT,
               nHits: sensorSIdx ? sensorSIdx.length : 0 },
     hits: { particle_idx: hitsParticle, sensor_idx: hitsSIdx, PE: hitsPE, T: hitsT,
+            emission_process: hitsEmission,
             nHits: hitsSIdx ? hitsSIdx.length : 0 },
     edep: { track_idx: edepTrackIdx,
            start_x: edepStartX, start_y: edepStartY, start_z: edepStartZ,

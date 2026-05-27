@@ -32,6 +32,20 @@ export const INFERNO_R_STOPS = [
   [0.60, '#932667'], [0.80, '#420a68'], [1.00, '#0d0829'],
 ];
 
+// Diverging blue↔red, anchored at 0.5 (matplotlib RdBu reversed). Used for
+// the Cherenkov-fraction FIELD on WbLS-style datasets where each sensor's
+// signal is a mixture of Cherenkov and scintillation photons:
+//   t=0  → all scintillation (cool blue)
+//   t=0.5 → equal mix       (near-white)
+//   t=1  → all Cherenkov     (warm red)
+// Sequential maps don't communicate the natural mid-anchor of a ratio in
+// [0, 1], so a diverging palette is the right idiom here.
+export const RDBU_STOPS = [
+  [0.00, '#053061'], [0.10, '#2166ac'], [0.25, '#4393c3'],
+  [0.40, '#92c5de'], [0.50, '#f7f7f7'], [0.60, '#f4a582'],
+  [0.75, '#d6604d'], [0.90, '#b2182b'], [1.00, '#67001f'],
+];
+
 // ── Parsing / interpolation ─────────────────────────────────────────────
 
 export function parseHex(h) {
@@ -60,6 +74,7 @@ export function interpolate(stops, t) {
 export function plasmaRGB(t)    { return interpolate(PLASMA_STOPS, t); }
 export function viridisRGB(t)   { return interpolate(VIRIDIS_STOPS, t); }
 export function viridisRRGB(t)  { return interpolate(VIRIDIS_R_STOPS, t); }
+export function rdBuRGB(t)      { return interpolate(RDBU_STOPS, t); }
 
 // Registry for name-based lookup.
 export const NAMED_STOPS = {
@@ -67,6 +82,7 @@ export const NAMED_STOPS = {
   viridis:   VIRIDIS_STOPS,
   viridis_r: VIRIDIS_R_STOPS,
   inferno_r: INFERNO_R_STOPS,
+  rdbu:      RDBU_STOPS,
 };
 
 // ── HSL → RGB ───────────────────────────────────────────────────────────
