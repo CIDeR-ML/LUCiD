@@ -143,12 +143,9 @@ def main():
         apply_smearing=args.apply_smearing,
         apply_rotation=args.apply_rotation,
         apply_translation=args.apply_translation,
-        detector_config_path=args.config,
         dataset_name=args.dataset_name,
         run_id=args.run_id,
         file_index_start=args.file_index_start,
-        detector_type=detector_type,
-        material=material,
     )
 
     print(f"\nWrote {len(saved_files)} files under {args.output}/"

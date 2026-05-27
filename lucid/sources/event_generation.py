@@ -59,15 +59,39 @@ __all__ = [
 ]
 
 
+def _detector_bounds_from_det_geom(det_geom):
+    """Compute the ``detector_bounds`` dict from a ``DetectorGeometry``.
+
+    Mirrors the per-shape branches that used to parse ``detector_config_path``
+    JSON, but reads ``det_geom.detector_type`` and the per-shape attributes
+    of ``det_geom.detector`` (e.g. ``Cylinder.r/H``, ``Sphere.r``,
+    ``Box.L/W/H``) so the data-path wrapper doesn't have to re-load the
+    geometry config. Returns ``None`` for shapes that don't enclose a
+    canonical volume (e.g. 'string' arrays).
+    """
+    if det_geom is None or det_geom.detector is None:
+        return None
+    dt = str(det_geom.detector_type).lower()
+    d = det_geom.detector
+    if dt == 'cylinder':
+        return {'type': 'cylinder', 'radius': float(d.r), 'height': float(d.H)}
+    if dt == 'sphere':
+        return {'type': 'sphere', 'radius': float(d.r)}
+    if dt == 'box':
+        return {'type': 'box',
+                'length': float(d.L),
+                'width':  float(d.W),
+                'height': float(d.H)}
+    return None
+
+
 def generate_events_from_photonsim_particles(event_simulator, root_file_path,
                                              sensor_positions, output_dir=None,
                                              n_events=None, batch_size=100, master_seed=None,
                                              job_id=1,
                                              apply_smearing=False, apply_rotation=False, apply_translation=False,
-                                             detector_config_path=None,
                                              dataset_name='unnamed_dataset', run_id=None,
-                                             file_index_start=0, detector_type='cylinder',
-                                             material='water',
+                                             file_index_start=0,
                                              primary_source='particles',
                                              pad_size_buckets=None):
     """Generate events from a PhotonSim ROOT file, writing v3 four-file batches.
@@ -100,20 +124,22 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
         ``master_seed`` across jobs yields independent RNG streams.
     apply_smearing, apply_rotation, apply_translation : bool
         Transform toggles; rotation is ignored (PhotonSim handles it).
-    detector_config_path : str, optional
-        Required when ``apply_translation=True``; also used for seg config
-        geometry attrs.
     dataset_name : str
         Provenance: dataset identifier written to every ``config/`` group.
     run_id : str, optional
         Provenance: unique batch identifier; auto-UUID4 if None.
     file_index_start : int
         Index of the first batch file in this invocation (default 0).
-    detector_type, material : str
-        Provenance: detector geometry type and medium.
     primary_source : str
         'particles' or 'genie'. Written into ``per_interaction/source_type``
         for every event of this batch.
+
+    Notes
+    -----
+    ``detector_type`` / ``material`` / ``detector_bounds`` are derived
+    internally from ``event_simulator.det_geom`` and ``event_simulator.medium``
+    (attached by :func:`setup_event_simulator`). No separate
+    ``detector_config_path`` arg is needed.
     """
     source_type_code = _source_type_code(primary_source)
     import uproot
@@ -123,7 +149,6 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
     from pathlib import Path
     from lucid.detector_params import ParticleParams
     import numpy as np
-    import json
     from lucid.utils import smear_charges_SK_like
 
     # Generate random seed if not provided
@@ -200,38 +225,25 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
         print(f"         PhotonSim already generates tracks with random directions, so rotation is unnecessary.")
     print(f"Saving events to directory: {output_dir}")
 
-    # Load detector bounds for containment calculation and (optionally) translation
-    detector_bounds = None
-    if apply_translation and detector_config_path is None:
-        raise ValueError("detector_config_path must be provided when apply_translation=True")
-
-    if detector_config_path is not None:
-        with open(detector_config_path, 'r') as f:
-            config = json.load(f)
-
-        detector_type = config.get('detector_type', 'cylinder')
-        geom_def = config['geometry_definitions']
-
-        if detector_type == 'cylinder':
-            detector_bounds = {
-                'type': 'cylinder',
-                'radius': geom_def['radius'],
-                'height': geom_def['height']
-            }
-        elif detector_type == 'sphere':
-            detector_bounds = {
-                'type': 'sphere',
-                'radius': geom_def['radius']
-            }
-        elif detector_type == 'box':
-            detector_bounds = {
-                'type': 'box',
-                'length': geom_def['length'],
-                'width': geom_def['width'],
-                'height': geom_def['height']
-            }
-
-        print(f"Detector bounds loaded: {detector_bounds}")
+    # Provenance + detector_bounds derived from the simulator's attached
+    # geometry. setup_event_simulator stamps `.det_geom` and `.medium` on
+    # the returned callable (alongside `.default_detector_params`) so the
+    # data-path wrapper doesn't have to re-load any config files.
+    det_geom = getattr(event_simulator, 'det_geom', None)
+    if det_geom is None:
+        raise ValueError(
+            "event_simulator has no .det_geom attribute — rebuild via "
+            "setup_event_simulator(..., default_detector_params=True or "
+            "DetectorParams) which attaches the geometry.")
+    detector_type = str(det_geom.detector_type)
+    material = str(det_geom.medium.material)
+    detector_bounds = _detector_bounds_from_det_geom(det_geom)
+    if apply_translation and detector_bounds is None:
+        raise ValueError(
+            f"apply_translation=True requires a detector with canonical "
+            f"bounds; got detector_type={detector_type!r} (no bounds defined).")
+    if detector_bounds is not None:
+        print(f"Detector bounds: {detector_bounds}")
 
     saved_files = []
     event_times = []  # Track event processing times
@@ -700,12 +712,9 @@ def generate_events_from_photonsim_pileup(
     job_id=1,
     apply_smearing=False,
     apply_translation=False,
-    detector_config_path=None,
     dataset_name='unnamed_pileup_dataset',
     run_id=None,
     file_index_start=0,
-    detector_type='cylinder',
-    material='water',
 ):
     """Generate pile-up events by merging N PhotonSim streams per event.
 
@@ -729,7 +738,6 @@ def generate_events_from_photonsim_pileup(
     import time as _time
     import uuid
     import subprocess
-    import json
     from pathlib import Path
 
     if len(root_file_paths) != len(vertex_primary_sources):
@@ -788,23 +796,22 @@ def generate_events_from_photonsim_pileup(
     # per-vertex loop. Pile-up shares the same compiled kernel.
     _warmup_buckets(event_simulator, rays_buckets)
 
-    # Detector bounds for vertex sampling + containment (same as non-pile-up).
-    detector_bounds = None
-    if detector_config_path is not None:
-        with open(detector_config_path) as fj:
-            cfg = json.load(fj)
-        detector_type_from_cfg = cfg.get('detector_type', 'cylinder')
-        gd = cfg['geometry_definitions']
-        if detector_type_from_cfg == 'cylinder':
-            detector_bounds = {'type': 'cylinder', 'radius': gd['radius'], 'height': gd['height']}
-        elif detector_type_from_cfg == 'sphere':
-            detector_bounds = {'type': 'sphere', 'radius': gd['radius']}
-        elif detector_type_from_cfg == 'box':
-            detector_bounds = {'type': 'box',
-                               'length': gd['length'], 'width': gd['width'],
-                               'height': gd['height']}
+    # Provenance + detector_bounds derived from event_simulator.det_geom /
+    # .medium, attached by setup_event_simulator. Same pattern as the
+    # single-vertex path; see _detector_bounds_from_det_geom for details.
+    det_geom = getattr(event_simulator, 'det_geom', None)
+    if det_geom is None:
+        raise ValueError(
+            "event_simulator has no .det_geom attribute — rebuild via "
+            "setup_event_simulator(..., default_detector_params=True or "
+            "DetectorParams) which attaches the geometry.")
+    detector_type = str(det_geom.detector_type)
+    material = str(det_geom.medium.material)
+    detector_bounds = _detector_bounds_from_det_geom(det_geom)
     if apply_translation and detector_bounds is None:
-        raise ValueError("detector_config_path required when apply_translation=True.")
+        raise ValueError(
+            f"apply_translation=True requires a detector with canonical "
+            f"bounds; got detector_type={detector_type!r} (no bounds defined).")
 
     saved_files = []
     event_times = []

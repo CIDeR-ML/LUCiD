@@ -258,12 +258,9 @@ def _run_lucid(
         apply_smearing=apply_smearing,
         apply_rotation=False,  # PhotonSim already randomizes directions
         apply_translation=apply_translation,
-        detector_config_path=detector_config_path,
         dataset_name=config["name"],
         run_id=None,           # auto-UUID4
         file_index_start=file_index,
-        detector_type=detector_type,
-        material=material,
         primary_source=config.get("primary_source", "particles"),
         pad_size_buckets=pad_size_buckets,
     )
@@ -603,8 +600,6 @@ def _main_pileup(args: argparse.Namespace, config: dict) -> int:
 
     det_geom = DetectorGeometry.from_config(detector_config_path)
     sensor_positions = np.asarray(det_geom.sensor_points, dtype=np.float32)
-    detector_type = str(det_geom.detector_type)
-    material = str(det_geom.medium.material)
 
     simulate_event = setup_event_simulator(
         detector_config_path, 0, K=12, is_data=True, temperature=0.0,
@@ -635,12 +630,9 @@ def _main_pileup(args: argparse.Namespace, config: dict) -> int:
         job_id=args.job_id,
         apply_smearing=apply_smearing,
         apply_translation=apply_translation,
-        detector_config_path=detector_config_path,
         dataset_name=config["name"],
         run_id=None,
         file_index_start=file_index,
-        detector_type=detector_type,
-        material=material,
     )
     print(f"LUCiD wrote {len(saved_files)} files.")
 

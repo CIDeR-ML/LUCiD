@@ -173,10 +173,11 @@ def setup_event_simulator(
 
         When detector params are baked in, the returned function also exposes
         a ``.default_detector_params`` attribute for inspection. The
-        returned callable also carries a ``.medium`` attribute
-        (``det_geom.medium``, including any ``medium_override``) so the
-        data-path wrapper can read the same medium block that was baked
-        into the kernel.
+        returned callable also carries ``.medium`` and ``.det_geom``
+        attributes (the ``DetectorGeometry`` and its ``MediumProperties``
+        as resolved at setup time, including any ``medium_override``) so
+        the data-path wrapper can derive material / detector_type /
+        detector_bounds without re-loading the config files.
     """
     # ---- Resolve default_detector_params ------------------------------------
     _medium_model_path = None
@@ -937,6 +938,7 @@ def setup_event_simulator(
                     particle_params, _default_dp, key, photon_data)
             _sim_data_default.default_detector_params = _default_dp
             _sim_data_default.medium = _medium
+            _sim_data_default.det_geom = det_geom
             return _sim_data_default
         else:
             return _simulation_with_data_impl
@@ -947,6 +949,7 @@ def setup_event_simulator(
                 return _simulation_sensor_calibration_impl(source, _default_dp, key)
             _sim_calibration_default.default_detector_params = _default_dp
             _sim_calibration_default.medium = _medium
+            _sim_calibration_default.det_geom = det_geom
             return _sim_calibration_default
         else:
             return _simulation_sensor_calibration_impl
@@ -1001,6 +1004,7 @@ def setup_event_simulator(
                     particle_params, _default_dp, key)
             _sim_track_default.default_detector_params = _default_dp
             _sim_track_default.medium = _medium
+            _sim_track_default.det_geom = det_geom
             return _sim_track_default
         else:
             return _simulation_without_data_impl
