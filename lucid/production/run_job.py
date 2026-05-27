@@ -305,8 +305,11 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     output_dir = Path(args.output_dir).resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
-    for sub in ("sensor", "hits", "edep", "labl"):
-        (output_dir / sub).mkdir(exist_ok=True)
+    # The sensor/hits/edep/labl subdirs are pre-created by the host-side
+    # fan-out (dataprod_fanout.py) before any sub-job is submitted, so the
+    # worker doesn't race other sub-jobs to create them. event_generation.py
+    # still mkdirs them defensively before opening h5 files, but by then
+    # PhotonSim has run and any storage metadata lag has long since cleared.
 
     job_id_padded = f"{args.job_id:06d}"
     file_index = args.job_id - 1
@@ -490,8 +493,8 @@ def _main_pileup(args: argparse.Namespace, config: dict) -> int:
 
     output_dir = Path(args.output_dir).resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
-    for sub in ("sensor", "hits", "edep", "labl"):
-        (output_dir / sub).mkdir(exist_ok=True)
+    # sensor/hits/edep/labl subdirs are pre-created by dataprod_fanout.py;
+    # see the corresponding comment in the main run_job entry above.
 
     vertices = config["vertices"]
     n_vertices = len(vertices)
