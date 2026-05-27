@@ -639,6 +639,191 @@ def derive_particle_idx_per_track(event_dict):
     return out
 
 
+def run_event_process_pipeline(
+        *,
+        event_simulator,
+        raw,
+        photon_origins_np,
+        photon_directions_np,
+        photon_times_np,
+        photon_wavelengths_np,
+        photon_segment_index_raw,
+        n_sensors,
+        rays_buckets,
+        sim_key):
+    """Run kernel + derive_views + aggregator for **one** photon stream.
+
+    The single-vertex and pile-up data-mode drivers both call this once per
+    emission process when scintillation is active (Option C: one kernel call
+    per process, see ``.claude/plans/scintillation-data-mode.md``). For
+    Cherenkov-only events it's called exactly once.
+
+    Returns a dict with everything needed to combine across processes:
+      * per-sensor kernel accumulators (PE / T / T_reco) — used to compute
+        the process-combined ``PE_true`` / ``T_true`` at the writer boundary;
+      * per-particle dense PE/T tensors from the aggregator — sparsified
+        with an ``emission_process`` tag at writer time;
+      * the sparse ``segment_sensor_hits`` triplet dict from the aggregator —
+        the caller concatenates per-process dicts with a per-row
+        ``emission_process`` column on the way to ``save_edep_event_v3``;
+      * the full ``particle_data`` view (categorization, segments, etc.) —
+        the caller uses the first process's view as the canonical event-
+        level structure (the segment table is identical across processes).
+    """
+    (pe_per_sensor_np, t_per_sensor_np, t_reco_per_sensor_np,
+     photon_qe_w, photon_qe_t, photon_qe_t_reco,
+     photon_sen_i, photon_seg_i_raw, photon_gid) = _trace_event_bucketed(
+        event_simulator,
+        photon_origins_np, photon_directions_np,
+        photon_times_np, photon_wavelengths_np,
+        photon_segment_index_raw,
+        n_sensors, rays_buckets,
+        sim_key,
+    )
+
+    # _derive_views_from_segments reads raw['photon_segment_index_raw'] to
+    # compute the filtered photon_segment_index. For the scintillation pass
+    # we swap in the per-process indices via a shallow copy so the original
+    # raw dict (used by other code paths) stays untouched.
+    raw_for_derive = dict(raw)
+    raw_for_derive['photon_segment_index_raw'] = photon_segment_index_raw
+    particle_data = _derive_views_from_segments(raw_for_derive, photon_records={
+        'qe_weight':         photon_qe_w,
+        'qe_time':           photon_qe_t,
+        'qe_time_reco':      photon_qe_t_reco,
+        'sensor_idx':        photon_sen_i,
+        'seg_idx_raw':       photon_seg_i_raw,
+        'photon_global_idx': photon_gid,
+    })
+
+    pr = particle_data['photon_records_filtered']
+    agg = _aggregate_from_photon_records(
+        pr['qe_weight'], pr['qe_time'], pr['sensor_idx'],
+        pr['seg_idx_filtered'], pr['particle_idx'],
+        n_particles=particle_data['n_particles'], n_sensors=n_sensors,
+        photon_qe_time_reco=pr.get('qe_time_reco'))
+
+    return {
+        'pe_per_sensor':       pe_per_sensor_np,
+        't_per_sensor':        t_per_sensor_np,
+        't_reco_per_sensor':   t_reco_per_sensor_np,
+        'PE_per_particle':     agg['PE_per_particle'],
+        'T_per_particle':      agg['T_per_particle'],
+        'T_reco_per_particle': agg['T_reco_per_particle'],
+        'segment_sensor_hits': agg['segment_sensor_hits'],
+        'particle_data':       particle_data,
+    }
+
+
+def combine_t_per_sensor_across_processes(t_arrays):
+    """Min over processes with the 0-as-no-hit sentinel convention.
+
+    Each per-process ``t_per_sensor`` array (shape ``(n_sensors,)``) carries
+    0 where no photon hit that sensor and a real arrival time elsewhere.
+    To combine into a single per-sensor first-arrival across processes,
+    map 0 → +inf, take elementwise min, map +inf → 0.
+    """
+    if not t_arrays:
+        return np.zeros(0, dtype=np.float32)
+    masked = [np.where(np.asarray(t) > 0, t, np.inf) for t in t_arrays]
+    combined = np.minimum.reduce(masked)
+    return np.where(np.isfinite(combined), combined, 0.0).astype(np.float32)
+
+
+def build_hits_sparse_per_process(process_outputs, n_particles):
+    """Sparse-merge per-process dense PE/T tensors into hits-file rows.
+
+    For each emission process and each particle row of its dense
+    ``(n_particles, n_sensors)`` ``PE_per_particle`` tensor, extract the
+    sensors where PE > 0 and emit one row per ``(particle, sensor)``
+    pair tagged with the process's ``process_id``. The same
+    ``(particle_idx, sensor_idx)`` pair can therefore appear in multiple
+    rows differing only in ``emission_process``.
+
+    Returns a dict shaped for ``save_hits_event_v3``'s ``hits_sparse``
+    input path: 1-D arrays for ``particle_idx`` / ``sensor_idx`` / ``PE``
+    / ``T`` / ``T_reco`` / ``emission_process``, all the same length.
+    """
+    particle_idx_parts, sensor_idx_parts = [], []
+    pe_parts, t_parts, t_reco_parts, emp_parts = [], [], [], []
+    for p_out in process_outputs:
+        pe_pp = np.asarray(p_out['PE_per_particle'], dtype=np.float32)
+        t_pp = np.asarray(p_out['T_per_particle'], dtype=np.float32)
+        t_reco_pp = np.asarray(p_out['T_reco_per_particle'], dtype=np.float32)
+        proc_id = int(p_out['process_id'])
+        for i in range(n_particles):
+            mask = pe_pp[i] > 0
+            idx = np.where(mask)[0]
+            if idx.size == 0:
+                continue
+            particle_idx_parts.append(np.full(idx.shape[0], i, dtype=np.int32))
+            sensor_idx_parts.append(idx.astype(np.uint16))
+            pe_parts.append(pe_pp[i, mask].astype(np.float32))
+            t_vals = t_pp[i, mask]
+            t_vals = np.where(np.isfinite(t_vals), t_vals, np.float32(0.0))
+            t_parts.append(t_vals.astype(np.float32))
+            t_reco_vals = t_reco_pp[i, mask]
+            t_reco_vals = np.where(
+                np.isfinite(t_reco_vals), t_reco_vals, np.float32(0.0))
+            t_reco_parts.append(t_reco_vals.astype(np.float32))
+            emp_parts.append(np.full(idx.shape[0], proc_id, dtype=np.int8))
+
+    def _cat(xs, dt):
+        return np.concatenate(xs).astype(dt) if xs else np.array([], dtype=dt)
+
+    return {
+        'particle_idx':     _cat(particle_idx_parts, np.int32),
+        'sensor_idx':       _cat(sensor_idx_parts,   np.uint16),
+        'PE':               _cat(pe_parts,           np.float32),
+        'T':                _cat(t_parts,            np.float32),
+        'T_reco':           _cat(t_reco_parts,       np.float32),
+        'emission_process': _cat(emp_parts,          np.int8),
+    }
+
+
+def build_seg_hits_merged_per_process(process_outputs):
+    """Concat per-process ``segment_sensor_hits`` triplets with a process tag.
+
+    Each per-process aggregator output carries a sparse
+    ``{segment_idx, sensor_idx, PE, T, T_reco?}`` dict. Concatenate them
+    along axis=0 and add an ``emission_process`` column whose value is the
+    source process_id of each row. Returned dict drops directly into
+    ``event_dict['segment_sensor_hits']`` for ``save_edep_event_v3``.
+    """
+    seg_idx_parts, sensor_idx_parts = [], []
+    pe_parts, t_parts, t_reco_parts, emp_parts = [], [], [], []
+    has_t_reco_any = False
+    for p_out in process_outputs:
+        sh = p_out['segment_sensor_hits']
+        if sh['PE'].size == 0:
+            continue
+        seg_idx_parts.append(sh['segment_idx'])
+        sensor_idx_parts.append(sh['sensor_idx'])
+        pe_parts.append(sh['PE'])
+        t_parts.append(sh['T'])
+        if 'T_reco' in sh:
+            t_reco_parts.append(sh['T_reco'])
+            has_t_reco_any = True
+        else:
+            t_reco_parts.append(sh['T'])
+        emp_parts.append(np.full(
+            sh['PE'].shape[0], int(p_out['process_id']), dtype=np.int8))
+
+    def _cat(xs, dt):
+        return np.concatenate(xs).astype(dt) if xs else np.array([], dtype=dt)
+
+    out = {
+        'segment_idx':      _cat(seg_idx_parts,    np.int32),
+        'sensor_idx':       _cat(sensor_idx_parts, np.uint16),
+        'PE':               _cat(pe_parts,         np.float32),
+        'T':                _cat(t_parts,          np.float32),
+        'emission_process': _cat(emp_parts,        np.int8),
+    }
+    if has_t_reco_any:
+        out['T_reco'] = _cat(t_reco_parts, np.float32)
+    return out
+
+
 def _aggregate_from_photon_records(
         photon_qe_weight,
         photon_qe_time,

@@ -461,63 +461,83 @@ def save_sensor_event_v3(f, event_dict, seq_idx):
 def save_hits_event_v3(f, event_dict, seq_idx):
     """Write a single event_NNN/ group to an already-open hits v3 file.
 
-    Stores the per-particle PE/T decomposition as FK rows keyed by
-    ``particle_idx`` (local to the event). Times in ``T_per_particle``
-    are expected in absolute detector frame — no shift is applied here.
+    Two input shapes accepted on ``event_dict``:
+
+    * **Legacy / Cherenkov-only**: ``PE_per_particle``, ``T_per_particle``
+      (and optional ``T_reco_per_particle``) as dense ``(n_particles,
+      n_sensors)`` tensors. The writer sparsifies via the ``pe > 0`` mask
+      and emits ``emission_process = EMISSION_PROCESS_CHERENKOV`` on every
+      row.
+    * **Per-process (Phase 2+)**: ``hits_sparse`` — a dict of pre-merged
+      sparse columns ``particle_idx`` / ``sensor_idx`` / ``PE`` / ``T``
+      (and optional ``T_reco``) plus an ``emission_process`` int8 column,
+      one row per (particle, sensor, emission_process) triple. The
+      sparsification + per-process tagging is done by the caller (e.g.
+      ``generate_events_from_photonsim_particles`` after running the
+      Cherenkov and scintillation aggregator passes); the writer writes
+      the columns verbatim.
+
+    Times are expected in absolute detector frame — no shift applied here.
     """
     grp = f.create_group(_event_group_name(seq_idx))
     grp.attrs['source_event_idx'] = int(event_dict['source_event_idx'])
     grp.attrs['n_particles'] = int(event_dict['n_particles'])
 
-    pe_pp = np.asarray(event_dict['PE_per_particle'], dtype=np.float32)
-    t_pp = np.asarray(event_dict['T_per_particle'], dtype=np.float32)
-    n_p = pe_pp.shape[0]
+    if 'hits_sparse' in event_dict:
+        sparse = event_dict['hits_sparse']
+        particle_idx_arr = np.asarray(sparse['particle_idx'], dtype=np.int32)
+        sensor_idx_arr   = np.asarray(sparse['sensor_idx'],   dtype=np.uint16)
+        pe_arr           = np.asarray(sparse['PE'],           dtype=np.float32)
+        t_arr            = np.asarray(sparse['T'],            dtype=np.float32)
+        emp_arr          = np.asarray(sparse['emission_process'], dtype=np.int8)
+        t_reco_arr = (np.asarray(sparse['T_reco'], dtype=np.float32)
+                      if 'T_reco' in sparse else None)
+    else:
+        pe_pp = np.asarray(event_dict['PE_per_particle'], dtype=np.float32)
+        t_pp = np.asarray(event_dict['T_per_particle'], dtype=np.float32)
+        n_p = pe_pp.shape[0]
 
-    t_reco_pp = event_dict.get('T_reco_per_particle')
-    if t_reco_pp is not None:
-        t_reco_pp = np.asarray(t_reco_pp, dtype=np.float32)
-
-    particle_idx_parts, sensor_idx_parts, pe_parts, t_parts = [], [], [], []
-    t_reco_parts = []
-    for i in range(n_p):
-        mask = pe_pp[i] > 0
-        idx = np.where(mask)[0]
-        if idx.size == 0:
-            continue
-        particle_idx_parts.append(np.full(idx.shape[0], i, dtype=np.int32))
-        sensor_idx_parts.append(idx.astype(np.uint16))
-        pe_parts.append(pe_pp[i, mask].astype(np.float32))
-        t_vals = t_pp[i, mask]
-        t_vals = np.where(np.isfinite(t_vals), t_vals, np.float32(0.0))
-        t_parts.append(t_vals.astype(np.float32))
+        t_reco_pp = event_dict.get('T_reco_per_particle')
         if t_reco_pp is not None:
-            t_reco_vals = t_reco_pp[i, mask]
-            t_reco_vals = np.where(np.isfinite(t_reco_vals), t_reco_vals, np.float32(0.0))
-            t_reco_parts.append(t_reco_vals.astype(np.float32))
+            t_reco_pp = np.asarray(t_reco_pp, dtype=np.float32)
 
-    def _cat(xs, dtype):
-        return np.concatenate(xs).astype(dtype) if xs else np.array([], dtype=dtype)
+        particle_idx_parts, sensor_idx_parts, pe_parts, t_parts = [], [], [], []
+        t_reco_parts = []
+        for i in range(n_p):
+            mask = pe_pp[i] > 0
+            idx = np.where(mask)[0]
+            if idx.size == 0:
+                continue
+            particle_idx_parts.append(np.full(idx.shape[0], i, dtype=np.int32))
+            sensor_idx_parts.append(idx.astype(np.uint16))
+            pe_parts.append(pe_pp[i, mask].astype(np.float32))
+            t_vals = t_pp[i, mask]
+            t_vals = np.where(np.isfinite(t_vals), t_vals, np.float32(0.0))
+            t_parts.append(t_vals.astype(np.float32))
+            if t_reco_pp is not None:
+                t_reco_vals = t_reco_pp[i, mask]
+                t_reco_vals = np.where(np.isfinite(t_reco_vals), t_reco_vals, np.float32(0.0))
+                t_reco_parts.append(t_reco_vals.astype(np.float32))
 
-    particle_idx_arr = _cat(particle_idx_parts, np.int32)
-    sensor_idx_arr = _cat(sensor_idx_parts, np.uint16)
-    pe_arr = _cat(pe_parts, np.float32)
-    t_arr = _cat(t_parts, np.float32)
+        def _cat(xs, dtype):
+            return np.concatenate(xs).astype(dtype) if xs else np.array([], dtype=dtype)
+
+        particle_idx_arr = _cat(particle_idx_parts, np.int32)
+        sensor_idx_arr = _cat(sensor_idx_parts, np.uint16)
+        pe_arr = _cat(pe_parts, np.float32)
+        t_arr = _cat(t_parts, np.float32)
+        t_reco_arr = (_cat(t_reco_parts, np.float32)
+                      if t_reco_pp is not None else None)
+        emp_arr = np.full(particle_idx_arr.size,
+                          EMISSION_PROCESS_CHERENKOV, dtype=np.int8)
 
     grp.attrs['n_particle_hits'] = int(particle_idx_arr.size)
     grp.create_dataset('particle_idx', data=particle_idx_arr, **_GZIP_OPTS)
     grp.create_dataset('sensor_idx', data=sensor_idx_arr, **_GZIP_OPTS)
     grp.create_dataset('PE', data=pe_arr, **_GZIP_OPTS)
     grp.create_dataset('T', data=t_arr, **_GZIP_OPTS)
-
-    if t_reco_pp is not None:
-        t_reco_arr = _cat(t_reco_parts, np.float32)
+    if t_reco_arr is not None:
         grp.create_dataset('T_reco', data=t_reco_arr, **_GZIP_OPTS)
-
-    # emission_process: per-row physical-process tag. Phase 0 writes all-zeros
-    # (Cherenkov) unconditionally; Phase 2 replaces this with the real per-row
-    # value when a per-process hits structure is supplied via event_dict.
-    emp_arr = np.full(particle_idx_arr.size,
-                      EMISSION_PROCESS_CHERENKOV, dtype=np.int8)
     grp.create_dataset('emission_process', data=emp_arr, **_GZIP_OPTS)
 
 
@@ -624,14 +644,16 @@ def save_edep_event_v3(f, event_dict, seq_idx):
             sh.create_dataset('T_reco',
                               data=np.asarray(seg_sen['T_reco'], dtype=np.float32),
                               **_GZIP_OPTS)
-        # emission_process: per-row physical-process tag. Phase 0 writes
-        # all-zeros (Cherenkov) unconditionally; Phase 2 sets real values
-        # when scintillation rows are concatenated in.
-        sh.create_dataset(
-            'emission_process',
-            data=np.full(len(seg_sen['PE']),
-                         EMISSION_PROCESS_CHERENKOV, dtype=np.int8),
-            **_GZIP_OPTS)
+        # emission_process: per-row physical-process tag. Caller-provided
+        # column wins; falls back to all-zeros (Cherenkov) for legacy
+        # callers that don't merge per-process sparse rows themselves.
+        emp_arr = seg_sen.get('emission_process')
+        if emp_arr is None:
+            emp_arr = np.full(len(seg_sen['PE']),
+                              EMISSION_PROCESS_CHERENKOV, dtype=np.int8)
+        else:
+            emp_arr = np.asarray(emp_arr, dtype=np.int8)
+        sh.create_dataset('emission_process', data=emp_arr, **_GZIP_OPTS)
         sh.attrs['n_segment_hits'] = int(len(seg_sen['PE']))
         grp.attrs['has_segment_sensor_map'] = True
 

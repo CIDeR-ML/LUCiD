@@ -27,8 +27,15 @@ from lucid.sources.event_builder import (
     _normalize_buckets,
     _trace_event_bucketed,
     _warmup_buckets,
+    build_hits_sparse_per_process,
+    build_seg_hits_merged_per_process,
+    combine_t_per_sensor_across_processes,
+    run_event_process_pipeline,
 )
+from lucid.sources.scintillation_photons import expand_segments_to_photons
 from lucid.sources.v3_writer import (
+    EMISSION_PROCESS_CHERENKOV,
+    EMISSION_PROCESS_SCINTILLATION,
     SOURCE_TYPE_GENIE,
     SOURCE_TYPE_PARTICLES,
     _compute_contained,
@@ -349,66 +356,116 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
             print(f"    [timing] preprocess {time.perf_counter() - _t_pre:.3f}s", flush=True)
 
             # ----------------------------------------------------------------
-            # Phase 2 — bucketed trace (per-photon flat lists out).
+            # Build per-process photon-stream inputs. Always Cherenkov from
+            # the PhotonSim arrays we just read; scintillation gets added
+            # when the medium baked into the kernel has it in
+            # ``emission_processes`` (Option C: one kernel call per process,
+            # see .claude/plans/scintillation-data-mode.md).
             # ----------------------------------------------------------------
-            print(f"    Running bucketed trace "
-                  f"(rays_buckets={list(pad_size_buckets)})...", flush=True)
+            medium = getattr(event_simulator, 'medium', None)
+            has_scintillation = (
+                medium is not None
+                and "scintillation" in medium.emission_processes
+            )
+
+            process_inputs = [{
+                'process_id':                EMISSION_PROCESS_CHERENKOV,
+                'photon_origins':            photon_origins_np,
+                'photon_directions':         photon_directions_np,
+                'photon_times':              photon_times_np,
+                'photon_wavelengths':        photon_wavelengths_np,
+                'photon_segment_index_raw':  photon_segment_index_raw,
+            }]
+
+            if has_scintillation:
+                _dp = event_simulator.default_detector_params
+                _medium_params = {
+                    'S':           float(_dp.S),
+                    'kB':          float(_dp.kB),
+                    'C':           float(_dp.C),
+                    'tau_rise':    float(_dp.tau_rise),
+                    'tau_fall':    float(_dp.tau_fall),
+                    'moyal_loc':   float(_dp.moyal_loc),
+                    'moyal_scale': float(_dp.moyal_scale),
+                    'lambda_min':  float(medium.scintillation_lambda_min),
+                    'lambda_max':  float(medium.scintillation_lambda_max),
+                }
+                _scint_rng = np.random.default_rng(event_keys['scint_seed'])
+                # raw['segments_raw'] has already been translated above
+                # (positions in vertex-shifted frame, mm). The expander
+                # converts to m on the way out, so its photon_origins are
+                # already in the absolute detector frame — no extra add.
+                _scint_ph = expand_segments_to_photons(
+                    raw['segments_raw'], _medium_params, _scint_rng)
+                process_inputs.append({
+                    'process_id':               EMISSION_PROCESS_SCINTILLATION,
+                    'photon_origins':           _scint_ph['photon_origins'],
+                    'photon_directions':        _scint_ph['photon_directions'],
+                    'photon_times':             _scint_ph['photon_times'],
+                    'photon_wavelengths':       _scint_ph['photon_wavelengths'],
+                    'photon_segment_index_raw': _scint_ph['photon_segment_index_raw'],
+                })
+
+            # ----------------------------------------------------------------
+            # Phase 2-4 per emission process: bucketed kernel + derive_views
+            # + aggregator. Per-process sim_key folded off master_key by
+            # process_id so each process gets a distinct kernel RNG stream.
+            # ----------------------------------------------------------------
+            print(f"    Running per-process pipeline "
+                  f"({len(process_inputs)} process(es), "
+                  f"rays_buckets={list(pad_size_buckets)})...", flush=True)
             sim_start_time = time.time()
             _t_sim = time.perf_counter()
-            pe_per_sensor_np, t_per_sensor_np, t_reco_per_sensor_np, \
-                photon_qe_w, photon_qe_t, photon_qe_t_reco, \
-                photon_sen_i, photon_seg_i_raw, \
-                photon_gid = \
-                _trace_event_bucketed(
-                    event_simulator,
-                    photon_origins_np, photon_directions_np,
-                    photon_times_np, photon_wavelengths_np,
-                    photon_segment_index_raw,
-                    n_sensors, pad_size_buckets,
-                    master_key,
+            process_outputs = []
+            for _p_in in process_inputs:
+                _sim_key_p = jax.random.fold_in(
+                    master_key, int(_p_in['process_id']))
+                _out = run_event_process_pipeline(
+                    event_simulator=event_simulator,
+                    raw=raw,
+                    photon_origins_np=_p_in['photon_origins'],
+                    photon_directions_np=_p_in['photon_directions'],
+                    photon_times_np=_p_in['photon_times'],
+                    photon_wavelengths_np=_p_in['photon_wavelengths'],
+                    photon_segment_index_raw=_p_in['photon_segment_index_raw'],
+                    n_sensors=n_sensors,
+                    rays_buckets=pad_size_buckets,
+                    sim_key=_sim_key_p,
                 )
+                _out['process_id'] = _p_in['process_id']
+                process_outputs.append(_out)
             sim_elapsed = time.time() - sim_start_time
             print(f"    Simulation completed in {sim_elapsed:.2f}s", flush=True)
             print(f"    [timing] simulate {time.perf_counter() - _t_sim:.3f}s", flush=True)
 
-            # ----------------------------------------------------------------
-            # Phase 3 — derive views (categorize, filter, build photon records).
-            # ----------------------------------------------------------------
             _t_post = time.perf_counter()
-            particle_data = _derive_views_from_segments(raw, photon_records={
-                'qe_weight':         photon_qe_w,
-                'qe_time':           photon_qe_t,
-                'qe_time_reco':      photon_qe_t_reco,
-                'sensor_idx':        photon_sen_i,
-                'seg_idx_raw':       photon_seg_i_raw,
-                'photon_global_idx': photon_gid,
-            })
+
+            # Canonical event-level view comes from the Cherenkov pipeline
+            # (process_outputs[0]) — the segment table and particle
+            # categorization are identical across processes (same `raw`).
+            particle_data = process_outputs[0]['particle_data']
             n_particles = particle_data['n_particles']
             particles = particle_data['particles']
             n_segments = int(particle_data['segments']['n_segments'])
 
             # ----------------------------------------------------------------
-            # Phase 4 — host aggregation: hits PE/T + edep sparse triplets.
+            # Combine across processes:
+            #   per-sensor PE_true   : sum
+            #   per-sensor T_true    : min (with 0-as-no-hit handling)
+            #   per-sensor T_reco    : min
+            #   hits.h5 rows         : per-(particle, sensor, process) sparse
+            #   edep/sensor_hits     : per-(segment, sensor, process) sparse
             # ----------------------------------------------------------------
-            pr = particle_data['photon_records_filtered']
-            agg = _aggregate_from_photon_records(
-                pr['qe_weight'], pr['qe_time'], pr['sensor_idx'],
-                pr['seg_idx_filtered'], pr['particle_idx'],
-                n_particles=n_particles, n_sensors=n_sensors,
-                photon_qe_time_reco=pr.get('qe_time_reco'))
-            PE_per_particle      = agg['PE_per_particle']
-            T_per_particle       = agg['T_per_particle']
-            T_reco_per_particle  = agg['T_reco_per_particle']
-            seg_hits             = agg['segment_sensor_hits']
+            PE_true = jnp.asarray(np.sum(
+                [p['pe_per_sensor'] for p in process_outputs], axis=0))
+            T_true = jnp.asarray(combine_t_per_sensor_across_processes(
+                [p['t_per_sensor'] for p in process_outputs]))
+            T_reco = jnp.asarray(combine_t_per_sensor_across_processes(
+                [p['t_reco_per_sensor'] for p in process_outputs]))
 
-            # PE_true / T_true (per-sensor pre-smearing) come from the
-            # kernel's per-sensor accumulator: includes every photon's
-            # contribution, even orphan-track photons that the
-            # aggregator drops from the hits file. T_reco (per-sensor,
-            # TTS-smeared first-arrival) also comes from the kernel.
-            PE_true = jnp.asarray(pe_per_sensor_np)
-            T_true  = jnp.asarray(t_per_sensor_np)
-            T_reco  = jnp.asarray(t_reco_per_sensor_np)
+            hits_sparse = build_hits_sparse_per_process(
+                process_outputs, n_particles)
+            seg_hits = build_seg_hits_merged_per_process(process_outputs)
 
             # Apply charge smearing if requested. T_reco already
             # carries kernel-side TTS smearing; no host-side time
@@ -420,13 +477,9 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
                 PE_reco = PE_true
 
             # Convert JAX arrays to numpy BEFORE storing in extended_info.
-            # Critical for thread-safe saving with ThreadPoolExecutor, and
-            # ``np.array`` (not ``asarray``) on the JAX-backed values
-            # ensures we own a writable host buffer for the in-place
-            # t0 shift below — JAX buffers come back read-only.
-            PE_per_particle     = np.asarray(PE_per_particle, dtype=np.float32)
-            T_per_particle      = np.asarray(T_per_particle,  dtype=np.float32)
-            T_reco_per_particle = np.asarray(T_reco_per_particle, dtype=np.float32)
+            # ``np.array`` (not ``asarray``) ensures we own a writable host
+            # buffer for the in-place t0 shift below — JAX buffers are
+            # read-only on the host.
             PE_true = np.array(PE_true, dtype=np.float32, copy=True)
             T_true  = np.array(T_true,  dtype=np.float32, copy=True)
             PE_reco = np.array(PE_reco, dtype=np.float32, copy=True)
@@ -437,17 +490,19 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
             # Only the single-vertex path is in this function today; the
             # pile-up path applies per-vertex t0 in its merger. The
             # positivity mask preserves "no-hit" sentinels (0/inf) on the
-            # dense per-sensor / per-particle tensors. seg_hits['T'] is
-            # sparse — every entry is a real hit, so a flat += suffices.
+            # dense per-sensor accumulators; hits_sparse / seg_hits are
+            # already sparse (every row is a real hit) so a flat += suffices.
             t0_f32 = np.float32(t0)
-            np.add(T_per_particle,      t0_f32, out=T_per_particle,      where=T_per_particle > 0)
-            np.add(T_reco_per_particle, t0_f32, out=T_reco_per_particle, where=T_reco_per_particle > 0)
-            np.add(T_true,              t0_f32, out=T_true,              where=T_true > 0)
-            np.add(T_reco,              t0_f32, out=T_reco,              where=T_reco > 0)
-            if seg_hits is not None and seg_hits['T'].size > 0:
+            np.add(T_true,  t0_f32, out=T_true,  where=T_true  > 0)
+            np.add(T_reco,  t0_f32, out=T_reco,  where=T_reco  > 0)
+            if hits_sparse['T'].size > 0:
+                hits_sparse['T'] = hits_sparse['T'] + t0_f32
+            if hits_sparse.get('T_reco') is not None and hits_sparse['T_reco'].size > 0:
+                hits_sparse['T_reco'] = hits_sparse['T_reco'] + t0_f32
+            if seg_hits is not None and seg_hits['PE'].size > 0:
                 seg_hits['T'] = seg_hits['T'] + t0_f32
-            if seg_hits is not None and seg_hits.get('T_reco') is not None and seg_hits['T_reco'].size > 0:
-                seg_hits['T_reco'] = seg_hits['T_reco'] + t0_f32
+                if 'T_reco' in seg_hits and seg_hits['T_reco'].size > 0:
+                    seg_hits['T_reco'] = seg_hits['T_reco'] + t0_f32
             # Segments always carry meaningful times — shift all of them.
             if 'segments' in particle_data and particle_data['segments'].get('n_segments', 0) > 0:
                 particle_data['segments']['time'] = \
@@ -472,9 +527,10 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
                 'track_info_dict': particle_data['track_info_dict'],
                 'primary_to_interaction': primary_to_interaction,
                 'interaction_metadata': [interaction_meta],
-                'PE_per_particle': PE_per_particle,
-                'T_per_particle': T_per_particle,
-                'T_reco_per_particle': T_reco_per_particle,
+                # Phase 2 hits payload: pre-sparse rows tagged with
+                # emission_process per row. ``save_hits_event_v3`` consumes
+                # ``hits_sparse`` directly (skip the dense-mask path).
+                'hits_sparse': hits_sparse,
                 'PE_reco': PE_reco,
                 'T_reco': T_reco,
                 'source': 'PhotonSim_Particles_VMAP',
@@ -485,9 +541,10 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
                 extended_info['segments'] = particle_data['segments']
 
             # edep sparse triplets came directly from the host aggregator
-            # (seg_hits dict already in writer-ready shape). Skip the
-            # writer wiring when there are no hits at all (dark event /
-            # all photons orphan-segmented).
+            # (seg_hits dict already in writer-ready shape, with an
+            # emission_process column folded in by
+            # build_seg_hits_merged_per_process). Skip the writer wiring
+            # when there are no hits at all.
             if seg_hits is not None and seg_hits['PE'].size > 0:
                 extended_info['segment_sensor_hits'] = seg_hits
 
@@ -817,53 +874,104 @@ def generate_events_from_photonsim_pileup(
                         seg_raw_i['end_y_mm']   = seg_raw_i['end_y_mm']   + float(vertex_i[1]) * 1000.0
                         seg_raw_i['end_z_mm']   = seg_raw_i['end_z_mm']   + float(vertex_i[2]) * 1000.0
 
-                # Phase 2 — bucketed trace for this vertex (per-photon out).
+                # Build per-process inputs for this vertex (Cherenkov +
+                # optional scintillation). Same pattern as the single-vertex
+                # path — Option C, one kernel call per process.
+                medium = getattr(event_simulator, 'medium', None)
+                has_scintillation_i = (
+                    medium is not None
+                    and "scintillation" in medium.emission_processes
+                )
+                process_inputs_i = [{
+                    'process_id':               EMISSION_PROCESS_CHERENKOV,
+                    'photon_origins':           photon_origins_i,
+                    'photon_directions':        photon_directions_i,
+                    'photon_times':             photon_times_i,
+                    'photon_wavelengths':       photon_wavelengths_i,
+                    'photon_segment_index_raw': photon_segment_index_i.astype(np.int64),
+                }]
+                if has_scintillation_i:
+                    _dp = event_simulator.default_detector_params
+                    _medium_params = {
+                        'S':           float(_dp.S),
+                        'kB':          float(_dp.kB),
+                        'C':           float(_dp.C),
+                        'tau_rise':    float(_dp.tau_rise),
+                        'tau_fall':    float(_dp.tau_fall),
+                        'moyal_loc':   float(_dp.moyal_loc),
+                        'moyal_scale': float(_dp.moyal_scale),
+                        'lambda_min':  float(medium.scintillation_lambda_min),
+                        'lambda_max':  float(medium.scintillation_lambda_max),
+                    }
+                    _scint_rng = np.random.default_rng(event_keys['scint_seed'])
+                    # segments_raw already vertex-translated above; expander
+                    # output's photon_origins are already in absolute frame.
+                    _scint_ph = expand_segments_to_photons(
+                        raw['segments_raw'], _medium_params, _scint_rng)
+                    process_inputs_i.append({
+                        'process_id':               EMISSION_PROCESS_SCINTILLATION,
+                        'photon_origins':           _scint_ph['photon_origins'],
+                        'photon_directions':        _scint_ph['photon_directions'],
+                        'photon_times':             _scint_ph['photon_times'],
+                        'photon_wavelengths':       _scint_ph['photon_wavelengths'],
+                        'photon_segment_index_raw': _scint_ph['photon_segment_index_raw'],
+                    })
+
+                # Phase 2-4 per emission process for this vertex.
                 _t_sim = _time.time()
-                (pe_sensor_i, t_sensor_i, t_reco_sensor_i,
-                 qe_w_i, qe_t_i, qe_t_reco_i,
-                 sen_i_i, seg_i_raw_i, gid_i) = \
-                    _trace_event_bucketed(
-                        event_simulator,
-                        photon_origins_i, photon_directions_i,
-                        photon_times_i, photon_wavelengths_i,
-                        photon_segment_index_i,
-                        n_sensors, rays_buckets,
-                        event_keys['sim_key'],
+                process_outputs_i = []
+                for _p_in in process_inputs_i:
+                    _sim_key_p = jax.random.fold_in(
+                        event_keys['sim_key'], int(_p_in['process_id']))
+                    _out = run_event_process_pipeline(
+                        event_simulator=event_simulator,
+                        raw=raw,
+                        photon_origins_np=_p_in['photon_origins'],
+                        photon_directions_np=_p_in['photon_directions'],
+                        photon_times_np=_p_in['photon_times'],
+                        photon_wavelengths_np=_p_in['photon_wavelengths'],
+                        photon_segment_index_raw=_p_in['photon_segment_index_raw'],
+                        n_sensors=n_sensors,
+                        rays_buckets=rays_buckets,
+                        sim_key=_sim_key_p,
                     )
+                    _out['process_id'] = _p_in['process_id']
+                    process_outputs_i.append(_out)
                 print(f"      [timing] simulate {_time.time() - _t_sim:.3f}s", flush=True)
 
-                # Phase 3 — derive views (categorize, filter, build photon records).
-                particle_data_i = _derive_views_from_segments(raw, photon_records={
-                    'qe_weight':         qe_w_i,
-                    'qe_time':           qe_t_i,
-                    'qe_time_reco':      qe_t_reco_i,
-                    'sensor_idx':        sen_i_i,
-                    'seg_idx_raw':       seg_i_raw_i,
-                    'photon_global_idx': gid_i,
-                })
+                # Canonical particle_data from Cherenkov pass (segments table
+                # identical across processes).
+                particle_data_i = process_outputs_i[0]['particle_data']
                 n_particles_i = particle_data_i['n_particles']
 
-                # Phase 4 — host aggregation: per-vertex hits PE/T + sparse edep hits.
-                pr_i = particle_data_i['photon_records_filtered']
-                agg_i = _aggregate_from_photon_records(
-                    pr_i['qe_weight'], pr_i['qe_time'], pr_i['sensor_idx'],
-                    pr_i['seg_idx_filtered'], pr_i['particle_idx'],
-                    n_particles=n_particles_i, n_sensors=n_sensors,
-                    photon_qe_time_reco=pr_i.get('qe_time_reco'))
-                PE_i           = agg_i['PE_per_particle']
-                T_i            = agg_i['T_per_particle']
-                T_reco_i       = agg_i['T_reco_per_particle']
-                seg_hits_i     = agg_i['segment_sensor_hits']
+                # Per-vertex combined per-sensor PE/T (across processes), plus
+                # the writer-ready sparse rows tagged with emission_process.
+                pe_sensor_i = np.sum(
+                    [p['pe_per_sensor'] for p in process_outputs_i], axis=0)
+                t_sensor_i = combine_t_per_sensor_across_processes(
+                    [p['t_per_sensor'] for p in process_outputs_i])
+                t_reco_sensor_i = combine_t_per_sensor_across_processes(
+                    [p['t_reco_per_sensor'] for p in process_outputs_i])
+                hits_sparse_i = build_hits_sparse_per_process(
+                    process_outputs_i, n_particles_i)
+                seg_hits_i = build_seg_hits_merged_per_process(process_outputs_i)
 
-                # Apply +t0_i to shift simulator output into absolute detector frame.
+                # Apply +t0_i to shift this vertex's outputs into the absolute
+                # detector frame. All time arrays are sparse from here.
                 t0_f32 = np.float32(t0_i)
-                np.add(T_i,      t0_f32, out=T_i,      where=T_i > 0)
-                np.add(T_reco_i, t0_f32, out=T_reco_i, where=T_reco_i > 0)
-                # seg_hits['T'] is sparse — every entry is a real hit, flat += suffices.
-                if seg_hits_i['T'].size > 0:
+                pe_sensor_i = pe_sensor_i.astype(np.float32, copy=False)
+                t_sensor_i = t_sensor_i.copy()
+                t_reco_sensor_i = t_reco_sensor_i.copy()
+                np.add(t_sensor_i,      t0_f32, out=t_sensor_i,      where=t_sensor_i      > 0)
+                np.add(t_reco_sensor_i, t0_f32, out=t_reco_sensor_i, where=t_reco_sensor_i > 0)
+                if hits_sparse_i['T'].size > 0:
+                    hits_sparse_i['T'] = hits_sparse_i['T'] + t0_f32
+                if hits_sparse_i.get('T_reco') is not None and hits_sparse_i['T_reco'].size > 0:
+                    hits_sparse_i['T_reco'] = hits_sparse_i['T_reco'] + t0_f32
+                if seg_hits_i is not None and seg_hits_i['PE'].size > 0:
                     seg_hits_i['T'] = seg_hits_i['T'] + t0_f32
-                if seg_hits_i.get('T_reco') is not None and seg_hits_i['T_reco'].size > 0:
-                    seg_hits_i['T_reco'] = seg_hits_i['T_reco'] + t0_f32
+                    if 'T_reco' in seg_hits_i and seg_hits_i['T_reco'].size > 0:
+                        seg_hits_i['T_reco'] = seg_hits_i['T_reco'] + t0_f32
                 # Same shift for segment times.
                 if particle_data_i['segments'].get('n_segments', 0) > 0:
                     particle_data_i['segments']['time'] = (
@@ -874,9 +982,10 @@ def generate_events_from_photonsim_pileup(
                     'particles':              particle_data_i['particles'],
                     'meaningful_tracks':      particle_data_i['meaningful_tracks'],
                     'segments':               particle_data_i['segments'],
-                    'PE_per_particle':        PE_i,
-                    'T_per_particle':         T_i,
-                    'T_reco_per_particle':    T_reco_i,
+                    'pe_per_sensor':          pe_sensor_i,
+                    't_per_sensor':           t_sensor_i,
+                    't_reco_per_sensor':      t_reco_sensor_i,
+                    'hits_sparse':            hits_sparse_i,
                     'seg_hits':               seg_hits_i,
                     'interaction_meta':       build_interaction_metadata(
                         particle_data_i, t0=t0_i, vertex_xyz=vertex_i,
@@ -986,9 +1095,6 @@ def _merge_pileup_streams(streams, *, n_sensors, apply_smearing,
         'dir_x':   [], 'dir_y':   [], 'dir_z':   [],
         'edep': [], 'time': [], 'beta_start': [], 'n_cherenkov': [],
     }
-    PE_per_stream      = []
-    T_per_stream       = []
-    T_reco_per_stream  = []
 
     # One interaction per stream. `interaction_metadata[i]` comes straight
     # from `build_interaction_metadata(...)` at stream-processing time —
@@ -1002,15 +1108,17 @@ def _merge_pileup_streams(streams, *, n_sensors, apply_smearing,
         for tid in meta['primary_track_ids']:
             primary_to_interaction[int(tid)] = i
 
-    # Per-vertex sparse edep hits. Each stream's ``seg_hits`` carries
-    # segment indices that are local to that vertex's filtered segment
-    # table (0..n_seg_v-1); the merged edep file wants global indices into
-    # the concatenated segment table, so each stream's segment_idx is
-    # shifted by the cumulative segment count of preceding streams.
-    # Streams' segments are disjoint by construction (track ids were
-    # offset upstream so meaningful_tracks don't overlap across streams),
-    # which mirrors today's `np.concatenate(axis=0)` row-offset semantics.
+    # Per-vertex sparse hits.h5 + edep/sensor_hits. Each stream's index
+    # columns are vertex-local; we shift them into the merged event's row
+    # spaces (particle_idx by cumulative particle count, segment_idx by
+    # cumulative segment count). Streams' particles and segments are
+    # disjoint by construction (track ids were offset upstream).
+    hits_sparse_shifted = []
     seg_hits_shifted = []
+    pe_sensor_streams = []
+    t_sensor_streams = []
+    t_reco_sensor_streams = []
+    particle_offset = 0
     seg_offset = 0
     for s in streams:
         all_particles.extend(s['particles'])
@@ -1020,55 +1128,56 @@ def _merge_pileup_streams(streams, *, n_sensors, apply_smearing,
         if n_seg_v > 0:
             for k in all_segs:
                 all_segs[k].append(np.asarray(segs[k]))
-        PE_per_stream.append(s['PE_per_particle'])
-        T_per_stream.append(s['T_per_particle'])
-        T_reco_per_stream.append(s['T_reco_per_particle'])
+        pe_sensor_streams.append(s['pe_per_sensor'])
+        t_sensor_streams.append(s['t_per_sensor'])
+        t_reco_sensor_streams.append(s['t_reco_per_sensor'])
+
+        hs = s.get('hits_sparse')
+        if hs is not None and hs['PE'].size > 0:
+            entry = {
+                'particle_idx':     hs['particle_idx'] + np.int32(particle_offset),
+                'sensor_idx':       hs['sensor_idx'],
+                'PE':               hs['PE'],
+                'T':                hs['T'],
+                'emission_process': hs['emission_process'],
+            }
+            if 'T_reco' in hs:
+                entry['T_reco'] = hs['T_reco']
+            hits_sparse_shifted.append(entry)
+
         sh = s.get('seg_hits')
         if sh is not None and sh['PE'].size > 0:
             shifted = {
-                'segment_idx': sh['segment_idx'] + np.int32(seg_offset),
-                'sensor_idx':  sh['sensor_idx'],
-                'PE':          sh['PE'],
-                'T':           sh['T'],
+                'segment_idx':      sh['segment_idx'] + np.int32(seg_offset),
+                'sensor_idx':       sh['sensor_idx'],
+                'PE':               sh['PE'],
+                'T':                sh['T'],
+                'emission_process': sh['emission_process'],
             }
             if 'T_reco' in sh:
                 shifted['T_reco'] = sh['T_reco']
             seg_hits_shifted.append(shifted)
+
+        particle_offset += len(s['particles'])
         seg_offset += n_seg_v
 
     n_particles_total = len(all_particles)
-    PE_per_particle = (np.concatenate(PE_per_stream, axis=0)
-                       if PE_per_stream and sum(x.shape[0] for x in PE_per_stream) > 0
-                       else np.zeros((0, n_sensors), dtype=np.float32))
-    T_per_particle  = (np.concatenate(T_per_stream, axis=0)
-                       if T_per_stream and sum(x.shape[0] for x in T_per_stream) > 0
-                       else np.zeros((0, n_sensors), dtype=np.float32))
-    T_reco_per_particle = (np.concatenate(T_reco_per_stream, axis=0)
-                           if T_reco_per_stream and sum(x.shape[0] for x in T_reco_per_stream) > 0
-                           else np.zeros((0, n_sensors), dtype=np.float32))
 
-    # Aggregate across particles for sensor/inst files
-    if PE_per_particle.shape[0] > 0:
-        PE_true = np.sum(PE_per_particle, axis=0).astype(np.float32)
-        masked = np.where(T_per_particle > 0, T_per_particle, np.inf)
-        T_true = np.min(masked, axis=0)
-        T_true = np.where(np.isfinite(T_true), T_true, 0.0).astype(np.float32)
+    # Per-sensor PE_true / T_true: sum / sentinel-aware min across the
+    # per-vertex per-sensor arrays (each already process-combined upstream
+    # via combine_t_per_sensor_across_processes).
+    if pe_sensor_streams:
+        PE_true = np.sum(pe_sensor_streams, axis=0).astype(np.float32)
+        T_true = combine_t_per_sensor_across_processes(t_sensor_streams)
+        T_reco = combine_t_per_sensor_across_processes(t_reco_sensor_streams)
     else:
         PE_true = np.zeros(n_sensors, dtype=np.float32)
         T_true  = np.zeros(n_sensors, dtype=np.float32)
-
-    # T_reco: kernel-provided TTS-smeared first-arrival, aggregated
-    # across particles via the same min-reduce pattern as T_true.
-    if T_reco_per_particle.shape[0] > 0:
-        masked_reco = np.where(T_reco_per_particle > 0, T_reco_per_particle, np.inf)
-        T_reco = np.min(masked_reco, axis=0)
-        T_reco = np.where(np.isfinite(T_reco), T_reco, 0.0).astype(np.float32)
-    else:
-        T_reco = np.zeros(n_sensors, dtype=np.float32)
+        T_reco  = np.zeros(n_sensors, dtype=np.float32)
 
     # Charge smearing is still host-side (SK-like Poisson model);
     # time smearing is now kernel-side (TTS), so only PE gets smeared here.
-    if apply_smearing and PE_per_particle.shape[0] > 0:
+    if apply_smearing and PE_true.sum() > 0:
         from lucid.utils import smear_charges_SK_like
         smear_pe_key, _unused_t_key = jax.random.split(smear_key)
         PE_reco = np.asarray(
@@ -1084,6 +1193,30 @@ def _merge_pileup_streams(streams, *, n_sensors, apply_smearing,
     else:
         seg_merged = {'n_segments': 0}
 
+    # Concat the per-vertex sparse hits rows (already particle_idx-shifted
+    # into the merged per_particle row space).
+    if hits_sparse_shifted:
+        has_t_reco_any = all('T_reco' in d for d in hits_sparse_shifted)
+        merged_hits_sparse = {
+            'particle_idx':     np.concatenate([d['particle_idx']     for d in hits_sparse_shifted]).astype(np.int32),
+            'sensor_idx':       np.concatenate([d['sensor_idx']       for d in hits_sparse_shifted]).astype(np.uint16),
+            'PE':               np.concatenate([d['PE']               for d in hits_sparse_shifted]).astype(np.float32),
+            'T':                np.concatenate([d['T']                for d in hits_sparse_shifted]).astype(np.float32),
+            'emission_process': np.concatenate([d['emission_process'] for d in hits_sparse_shifted]).astype(np.int8),
+        }
+        if has_t_reco_any:
+            merged_hits_sparse['T_reco'] = np.concatenate(
+                [d['T_reco'] for d in hits_sparse_shifted]).astype(np.float32)
+    else:
+        merged_hits_sparse = {
+            'particle_idx':     np.empty(0, dtype=np.int32),
+            'sensor_idx':       np.empty(0, dtype=np.uint16),
+            'PE':               np.empty(0, dtype=np.float32),
+            'T':                np.empty(0, dtype=np.float32),
+            'T_reco':           np.empty(0, dtype=np.float32),
+            'emission_process': np.empty(0, dtype=np.int8),
+        }
+
     merged = {
         'n_particles': int(n_particles_total),
         'particles': all_particles,
@@ -1094,9 +1227,7 @@ def _merge_pileup_streams(streams, *, n_sensors, apply_smearing,
         # writer consumes these to populate the per_interaction/ subgroup).
         'interaction_metadata':   interaction_metadata,
         'primary_to_interaction': primary_to_interaction,
-        'PE_per_particle':      PE_per_particle,
-        'T_per_particle':       T_per_particle,
-        'T_reco_per_particle':  T_reco_per_particle,
+        'hits_sparse': merged_hits_sparse,
         'PE_reco': PE_reco,
         'T_reco':  T_reco,
     }
@@ -1105,10 +1236,11 @@ def _merge_pileup_streams(streams, *, n_sensors, apply_smearing,
     # shifted into the merged segment table's row space).
     if seg_hits_shifted:
         merged_seg_hits = {
-            'segment_idx': np.concatenate([d['segment_idx'] for d in seg_hits_shifted]).astype(np.int32),
-            'sensor_idx':  np.concatenate([d['sensor_idx']  for d in seg_hits_shifted]).astype(np.uint16),
-            'PE':          np.concatenate([d['PE']          for d in seg_hits_shifted]).astype(np.float32),
-            'T':           np.concatenate([d['T']           for d in seg_hits_shifted]).astype(np.float32),
+            'segment_idx':      np.concatenate([d['segment_idx']      for d in seg_hits_shifted]).astype(np.int32),
+            'sensor_idx':       np.concatenate([d['sensor_idx']       for d in seg_hits_shifted]).astype(np.uint16),
+            'PE':               np.concatenate([d['PE']               for d in seg_hits_shifted]).astype(np.float32),
+            'T':                np.concatenate([d['T']                for d in seg_hits_shifted]).astype(np.float32),
+            'emission_process': np.concatenate([d['emission_process'] for d in seg_hits_shifted]).astype(np.int8),
         }
         if all('T_reco' in d for d in seg_hits_shifted):
             merged_seg_hits['T_reco'] = np.concatenate(

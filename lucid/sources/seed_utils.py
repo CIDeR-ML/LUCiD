@@ -24,6 +24,7 @@ __all__ = [
 # just has to be stable and distinct across tags.
 _SUBPROC_PHOTONSIM_TAG = 0xB107
 _SUBPROC_GENIE_TAG     = 0x6E1E
+_SUBPROC_SCINT_TAG     = 0x5C17
 
 # t0 draw half-window (ns). Applied symmetrically per interaction:
 # t0 ~ Uniform(-T0_HALF_WINDOW_NS, +T0_HALF_WINDOW_NS). Wide enough to
@@ -47,9 +48,13 @@ def derive_event_keys(master_seed, job_id, event_idx, interaction_idx=0):
     independent — reusing a CLI seed across jobs no longer collides, and
     pile-up interactions within one event get distinct draws.
 
-    Returns a dict with ``vertex_seed`` / ``t0_seed`` (concrete ints for
-    ``np.random.default_rng``) and ``sim_key`` / ``smear_key`` (JAX keys
-    to be consumed directly by ``jax.random.*``).
+    Returns a dict with ``vertex_seed`` / ``t0_seed`` / ``scint_seed``
+    (concrete ints for ``np.random.default_rng``) and ``sim_key`` /
+    ``smear_key`` (JAX keys to be consumed directly by ``jax.random.*``).
+    ``scint_seed`` drives the scintillation segment-expander RNG when the
+    data-mode medium has ``scintillation`` in its ``emission_processes``;
+    it's derived deterministically from the same hierarchy so reruns at
+    the same ``master_seed`` are byte-equivalent.
     """
     master_seed = _resolve_master_seed(master_seed)
     base = jax.random.PRNGKey(master_seed)
@@ -57,9 +62,14 @@ def derive_event_keys(master_seed, job_id, event_idx, interaction_idx=0):
     event_key = jax.random.fold_in(job_key, int(event_idx))
     interaction_key = jax.random.fold_in(event_key, int(interaction_idx))
     vertex_key, t0_key, sim_key, smear_key = jax.random.split(interaction_key, 4)
+    # scint_seed is derived via a separate fold_in tag (not appended to the
+    # split above) so the existing 4-way split's keys stay bit-identical for
+    # Cherenkov-only datasets at the same master_seed.
+    scint_key = jax.random.fold_in(interaction_key, _SUBPROC_SCINT_TAG)
     return {
         'vertex_seed': int(jax.random.randint(vertex_key, (), 1, 2**31 - 1)),
         't0_seed':     int(jax.random.randint(t0_key,     (), 1, 2**31 - 1)),
+        'scint_seed':  int(jax.random.randint(scint_key,  (), 1, 2**31 - 1)),
         'sim_key':     sim_key,
         'smear_key':   smear_key,
     }
