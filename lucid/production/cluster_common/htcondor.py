@@ -75,6 +75,36 @@ class HTCondorAdapter(ClusterAdapter):
             parts.append(f"{self.env['PHOTONSIM_DEV_PATH']}:/opt/PhotonSim")
         return ",".join(parts)
 
+    def _env_block(self) -> str:
+        """`environment = "..."` for the submit description.
+
+        Only used for vars HTCondor reliably propagates into the
+        container's process env. PhotonSim binary override is inlined
+        into the bash command instead — see `_env_prefix()`.
+        """
+        return f"GENIE_XSEC_FILE={self.env.get('GENIE_XSEC_FILE', '')}"
+
+    def _env_prefix(self) -> str:
+        """Bash-shell-scope env assignments to prepend to the inner command.
+
+        Used because HTCondor's transparent Singularity wrapper doesn't
+        forward submit-description `environment = "..."` vars into the
+        container's process env reliably (it forwards only `_CONDOR_*`
+        plus a fixed allow-list). Inlining `KEY=val cmd ...` sets the
+        var in the bash shell that runs *inside* the container, which
+        always works.
+
+        When PHOTONSIM_DEV_PATH is set, override PHOTONSIM_BIN to point
+        at the host's freshly-built binary via /afs (unconditionally
+        bound). This bypasses the nested-bind issue where HTCondor's
+        Singularity silently ignores `<host>:/opt/PhotonSim` once
+        `/afs` is already bound at the top level, leaving the image's
+        baked binary in effect.
+        """
+        if not self.env.get("PHOTONSIM_DEV_PATH"):
+            return ""
+        return f"PHOTONSIM_BIN={self.env['PHOTONSIM_DEV_PATH']}/build/PhotonSim "
+
     def _log_dir(self, cell_dir: Path) -> Path:
         """Where the .sub's `output =`, `error =`, `log =` files land.
 
@@ -111,7 +141,7 @@ class HTCondorAdapter(ClusterAdapter):
         # whole thing as one string when wrapped in double quotes.
         run_args = " ".join(extra_run_flags)
         bash_cmd = (
-            f"lucid-run-job "
+            f"{self._env_prefix()}lucid-run-job "
             f"--config {cell_cfg} "
             f"--output-dir {cell_dir} "
             f"{run_args}"
@@ -121,8 +151,7 @@ class HTCondorAdapter(ClusterAdapter):
             f"universe                = vanilla\n"
             f"executable              = /bin/bash\n"
             f"arguments               = \"-c '{bash_cmd}'\"\n"
-            f"environment             = "
-            f"\"GENIE_XSEC_FILE={self.env.get('GENIE_XSEC_FILE', '')}\"\n"
+            f"environment             = \"{self._env_block()}\"\n"
             f"output                  = {log_dir}/{log_stem}-$(ClusterId).$(ProcId).out\n"
             f"error                   = {log_dir}/{log_stem}-$(ClusterId).$(ProcId).err\n"
             f"log                     = {log_dir}/{log_stem}-$(ClusterId).$(ProcId).log\n"
@@ -186,7 +215,7 @@ class HTCondorAdapter(ClusterAdapter):
             flags.append(f"--override-energy-MeV {override_energy_mev}")
         run_args = " ".join(flags)
         bash_cmd = (
-            f"lucid-run-job --config {config_path} "
+            f"{self._env_prefix()}lucid-run-job --config {config_path} "
             f"--output-dir {cell_dir} {run_args}"
         )
         return (
@@ -194,8 +223,7 @@ class HTCondorAdapter(ClusterAdapter):
             f"universe                = vanilla\n"
             f"executable              = /bin/bash\n"
             f"arguments               = \"-c '{bash_cmd}'\"\n"
-            f"environment             = "
-            f"\"GENIE_XSEC_FILE={self.env.get('GENIE_XSEC_FILE', '')}\"\n"
+            f"environment             = \"{self._env_block()}\"\n"
             f"output                  = {log_dir}/job_{job_id}-$(ClusterId).$(ProcId).out\n"
             f"error                   = {log_dir}/job_{job_id}-$(ClusterId).$(ProcId).err\n"
             f"log                     = {log_dir}/job_{job_id}-$(ClusterId).$(ProcId).log\n"
