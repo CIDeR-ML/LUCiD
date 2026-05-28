@@ -538,37 +538,47 @@ def make_scintillation_surrogate_fn(dedx_ctx, scint_lambda_min, scint_lambda_max
 # ---------------------------------------------------------------------------
 # t0 (Cherenkov vertex-time baseline — shared with scintillation as the
 # deposit-time anchor; scintillation adds its biexp delay on top)
+#
+# Schema: stretched_exp_delay_v1
+#   t(d, E) = d / c  +  A(E) * (exp((d/λ(E))^β(E)) − 1)
+#   log10 A(E) = cA + mA * log10 E
+#   log10 λ(E) = cL + mL * log10 E
+#   β(E)       = bB0 + bB1 * log10 E + bB2 * (log10 E)^2
+#
+# Seven params total. The d/c term uses vacuum c because the underlying
+# PhotonSim hist stores delay relative to vacuum-c (muon track time at
+# β ≈ 1). Distance is in mm, energy in MeV, time in ns.
 # ---------------------------------------------------------------------------
+
+_C_MM_PER_NS = 299.792  # vacuum c in PhotonSim units
 
 
 @jit
-def predict_t0(distance, energy, baseline_slope, baseline_intercept,
-                   A_slope, A_intercept, B_slope, B_intercept, offset):
+def predict_t0(distance, energy, cA, mA, cL, mL, bB0, bB1, bB2):
+    """Photon emission time t(d, E) for the Cherenkov vertex-time baseline.
+
+    Returns d/c + delay, where delay is the stretched-exp parametrisation
+    fit from PhotonHist_TimeDistanceNorm. JAX-jitted; all params are
+    scalars so the function vmaps cleanly over distance.
     """
-    JAX JIT-compatible version of predict_t0.
-    Parameters are passed as individual arrays/scalars instead of nested dict.
-    """
-    # Baseline from 1000 MeV linear fit
-    baseline = baseline_slope * distance + baseline_intercept
-
-    # Calculate delta timing
-    log10_A = A_slope * energy + A_intercept
-    B = B_slope * energy + B_intercept
-    delta = 10**log10_A * jnp.power(distance, B) + offset
-
-    return baseline + delta
+    log_E = jnp.log10(energy)
+    A = 10.0 ** (cA + mA * log_E)
+    lam = 10.0 ** (cL + mL * log_E)
+    beta = bB0 + bB1 * log_E + bB2 * log_E * log_E
+    arg = jnp.power(jnp.clip(distance / lam, 1e-12, None), beta)
+    delay = A * (jnp.exp(arg) - 1.0)
+    return distance / _C_MM_PER_NS + delay
 
 
-# Helper function to unpack your existing params dict
 def predict_t0_wrapper(distance, energy, params):
-    """Wrapper to use your existing params dict structure"""
+    """Evaluate predict_t0 from a nested-dict params (the t0.json structure)."""
     return predict_t0(
         distance, energy,
-        params['baseline']['slope'],
-        params['baseline']['intercept'],
-        params['delta_parameterization']['A_slope'],
-        params['delta_parameterization']['A_intercept'],
-        params['delta_parameterization']['B_slope'],
-        params['delta_parameterization']['B_intercept'],
-        params['delta_parameterization']['offset']
+        params['A']['log10_intercept'],
+        params['A']['log10_slope_logE'],
+        params['lambda']['log10_intercept'],
+        params['lambda']['log10_slope_logE'],
+        params['beta']['const'],
+        params['beta']['slope_logE'],
+        params['beta']['slope_logE_sq'],
     )
