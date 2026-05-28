@@ -53,6 +53,7 @@ input[type=range]{width:100%;accent-color:#4488cc;height:14px}
     <button id="bReset">Reset</button>
     <button id="bHard">&#8634;</button>
     <button id="bGif">GIF</button>
+    <button id="bMp4">MP4</button>
   </div>
   <label>Speed</label><input type="range" id="spd" min="0.05" max="3" step="0.05" value="0.5">
   <span id="spdV" style="color:#445">0.5x</span>
@@ -69,7 +70,7 @@ input[type=range]{width:100%;accent-color:#4488cc;height:14px}
 
 <script src="https://cdn.jsdelivr.net/npm/gif.js@0.2.0/dist/gif.js"></script>
 <script type="importmap">
-{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"}}
+{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/","mp4-muxer":"https://cdn.jsdelivr.net/npm/mp4-muxer@5.1.3/build/mp4-muxer.mjs"}}
 </script>
 <script type="module">
 import * as THREE from 'three';
@@ -87,7 +88,8 @@ let an=false,anQ=0,tMin=0,tMax=1000,lastT=0;
 let initCP=null,initCT=null;
 let curHits=null;
 
-const C=0.2998,TLEN=300;
+const C=0.2998;
+let TLEN=300;
 let DIR='../../output/cascades_sim/';
 
 function inferno(t){t=Math.max(0,Math.min(1,t));
@@ -182,17 +184,17 @@ function clearHits(){
   trkMat=null;curHits=null;}
 
 function computeNorm(hits){
-  // Normalize charges: p1/p99 of log10 or linear
-  const qs=hits.map(h=>h.q);
+  // Normalize charges: only use hits with q >= 0.01 for scale range
+  const sigHits=hits.filter(h=>h.q>=0.01);
+  const ref=sigHits.length>=5?sigHits:hits;
   if(useLog){
-    const lqs=qs.map(q=>Math.log10(Math.max(q,1e-10)));
-    lqs.sort((a,b)=>a-b);
+    const lqs=ref.map(h=>Math.log10(h.q)).sort((a,b)=>a-b);
     const p1=lqs[Math.floor(lqs.length*0.01)];
     const p99=lqs[Math.floor(lqs.length*0.99)];
     return hits.map(h=>{const lq=Math.log10(Math.max(h.q,1e-10));
       return Math.max(0,Math.min(1,(lq-p1)/(p99-p1+1e-10)));});
   } else {
-    const sq=[...qs].sort((a,b)=>a-b);
+    const sq=ref.map(h=>h.q).sort((a,b)=>a-b);
     const p1=sq[Math.floor(sq.length*0.01)];
     const p99=sq[Math.floor(sq.length*0.99)];
     return hits.map(h=>Math.max(0,Math.min(1,(h.q-p1)/(p99-p1+1e-10))));
@@ -246,6 +248,8 @@ function showEvent(idx){
   const d=ev.track_direction||ev.direction;
   const isCascade=!!ev.vertex; // cascades have 'vertex', tracks have 'track_origin'
   if(!isCascade&&o&&d){
+    // Compute track length from time range so muon and wavefront stay in sync
+    TLEN=(tMax-tMin)*C;
     trkMat=new LineMaterial({color:0x44ddff,linewidth:5,transparent:true,opacity:0.7,
       worldUnits:false,resolution:new THREE.Vector2(innerWidth,innerHeight)});
     buildTrk(o,d,-20,TLEN);
@@ -279,8 +283,9 @@ function drawCbar(){
   for(let y=0;y<c.height;y++){const t=1-y/c.height,rgb=inferno(t);
     x.fillStyle=`rgb(${rgb[0]|0},${rgb[1]|0},${rgb[2]|0})`;x.fillRect(0,y,c.width,1);}
   if(!curHits||!curHits.length)return;
-  const qs=curHits.map(h=>useLog?Math.log10(Math.max(h.q,1e-10)):h.q);
-  qs.sort((a,b)=>a-b);
+  const sigHits=curHits.filter(h=>h.q>=0.01);
+  const ref=sigHits.length>=5?sigHits:curHits;
+  const qs=ref.map(h=>useLog?Math.log10(h.q):h.q).sort((a,b)=>a-b);
   $('cbMn').textContent=(qs[Math.floor(qs.length*0.01)]).toFixed(1);
   $('cbMx').textContent=(qs[Math.floor(qs.length*0.99)]).toFixed(1);
   $('cbLabel').textContent=useLog?'log₁₀(Q)':'Q';}
@@ -313,14 +318,9 @@ function tick(ts){
     }else{u.anOn.value=0;updTrk(0,false);ctrl.autoRotate=false;}}
   ctrl.update();updTBar();ren.render(scene,cam);}
 
-function exportGif(){
-  const pr=$('gProg');pr.style.display='block';pr.textContent='Capturing...';
-  const w=640,h=480;
+function renderFrames(w,h,nF,onFrame,onDone){
   const gr=new THREE.WebGLRenderer({antialias:true,preserveDrawingBuffer:true});gr.setSize(w,h);
   const gc=cam.clone();gc.aspect=w/h;gc.updateProjectionMatrix();
-  const gif=new GIF({workers:2,quality:8,width:w,height:h,
-    workerScript:'gif.worker.js'});
-  const nF=100;
   if(hitMesh)hitMesh.material.uniforms.anOn.value=1;
   const bA=Math.atan2(cam.position.y-ctrl.target.y,cam.position.x-ctrl.target.x);
   const cR=Math.sqrt((cam.position.x-ctrl.target.x)**2+(cam.position.y-ctrl.target.y)**2);
@@ -331,13 +331,58 @@ function exportGif(){
     gc.position.set(ctrl.target.x+cR*Math.cos(ang),ctrl.target.y+cR*Math.sin(ang),cZ);
     gc.lookAt(ctrl.target);if(trkMat)trkMat.resolution.set(w,h);
     gr.render(scene,gc);
+    onFrame(gr.domElement,f);}
+  onDone(gr);}
+
+function exportGif(){
+  const pr=$('gProg');pr.style.display='block';pr.textContent='Capturing...';
+  const w=1280,h=960,nF=270;
+  const gif=new GIF({workers:2,quality:8,width:w,height:h,workerScript:'gif.worker.js'});
+  renderFrames(w,h,nF,(canvas,f)=>{
     const cv=document.createElement('canvas');cv.width=w;cv.height=h;
-    cv.getContext('2d').drawImage(gr.domElement,0,0);
-    gif.addFrame(cv,{delay:60});pr.textContent=`${f+1}/${nF}`;}
-  gif.on('finished',blob=>{const a=document.createElement('a');a.href=URL.createObjectURL(blob);
-    a.download=`icecube_ev${$('evSel').value}.gif`;a.click();
-    pr.textContent='Saved!';setTimeout(()=>pr.style.display='none',2000);gr.dispose();});
-  pr.textContent='Encoding...';gif.render();}
+    cv.getContext('2d').drawImage(canvas,0,0);
+    gif.addFrame(cv,{delay:22});pr.textContent=`${f+1}/${nF}`;
+  },gr=>{
+    gif.on('finished',blob=>{const a=document.createElement('a');a.href=URL.createObjectURL(blob);
+      a.download=`icecube_ev${$('evSel').value}.gif`;a.click();
+      pr.textContent='Saved!';setTimeout(()=>pr.style.display='none',2000);gr.dispose();});
+    pr.textContent='Encoding...';gif.render();});}
+
+async function exportMp4(){
+  const pr=$('gProg');pr.style.display='block';pr.textContent='Loading encoder...';
+  const {Muxer,ArrayBufferTarget}=await import('mp4-muxer');
+  const w=1280,h=960,nF=338,fps=45;
+  const muxer=new Muxer({target:new ArrayBufferTarget(),
+    video:{codec:'avc',width:w,height:h},fastStart:'in-memory'});
+  const encoder=new VideoEncoder({
+    output:(chunk,meta)=>muxer.addVideoChunk(chunk,meta),
+    error:e=>console.error('VideoEncoder error:',e)});
+  encoder.configure({codec:'avc1.640028',width:w,height:h,
+    bitrate:8_000_000,framerate:fps});
+  const gr=new THREE.WebGLRenderer({antialias:true,preserveDrawingBuffer:true});gr.setSize(w,h);
+  const gc=cam.clone();gc.aspect=w/h;gc.updateProjectionMatrix();
+  if(hitMesh)hitMesh.material.uniforms.anOn.value=1;
+  const bA=Math.atan2(cam.position.y-ctrl.target.y,cam.position.x-ctrl.target.x);
+  const cR=Math.sqrt((cam.position.x-ctrl.target.x)**2+(cam.position.y-ctrl.target.y)**2);
+  const cZ=cam.position.z;
+  for(let f=0;f<nF;f++){
+    const q=-0.03+(f/nF)*1.13;
+    if(hitMesh)hitMesh.material.uniforms.anQ.value=q;updTrk(q,true);
+    const ang=bA+(f/nF)*Math.PI*0.3;
+    gc.position.set(ctrl.target.x+cR*Math.cos(ang),ctrl.target.y+cR*Math.sin(ang),cZ);
+    gc.lookAt(ctrl.target);if(trkMat)trkMat.resolution.set(w,h);
+    gr.render(scene,gc);
+    const frame=new VideoFrame(gr.domElement,{timestamp:f*(1_000_000/fps)});
+    encoder.encode(frame,{keyFrame:f%30===0});
+    frame.close();
+    pr.textContent=`${f+1}/${nF}`;
+    if(f%10===0)await new Promise(r=>setTimeout(r,0));}
+  await encoder.flush();encoder.close();
+  muxer.finalize();
+  const blob=new Blob([muxer.target.buffer],{type:'video/mp4'});
+  const a=document.createElement('a');a.href=URL.createObjectURL(blob);
+  a.download=`icecube_ev${$('evSel').value}.mp4`;a.click();
+  pr.textContent='Saved!';setTimeout(()=>pr.style.display='none',2000);gr.dispose();}
 
 $('dsSel').onchange=async e=>{DIR=e.target.value;if(await loadData()!==false){buildDet();showEvent(0);}};
 $('evSel').onchange=e=>showEvent(+e.target.value);
@@ -355,6 +400,7 @@ $('bHard').onclick=()=>{an=false;anQ=0;cam.position.copy(initCP);ctrl.target.cop
   $('spdV').textContent='0.5x';$('rot').value=0.1;useLog=true;$('bLog').classList.add('on');
   showEvent(+$('evSel').value);};
 $('bGif').onclick=exportGif;
+$('bMp4').onclick=exportMp4;
 $('spd').oninput=e=>{$('spdV').textContent=(+e.target.value).toFixed(1)+'x';};
 
 async function start(){init();if(await loadData()!==false){buildDet();showEvent(0);}tick(0);}

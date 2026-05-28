@@ -22,8 +22,8 @@ from lucid.simulation.simulator import setup_event_simulator
 from lucid.sources.cascade import cascade_source
 
 CONFIG_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "config")
-GEOM_CONFIG = os.path.join(CONFIG_DIR, "IceCube86_simple_geom_config.json")
-PHYS_CONFIG = os.path.join(CONFIG_DIR, "IceCube86_physics_config.json")
+GEOM_CONFIG = os.path.join(CONFIG_DIR, "IceCube86_full_geom_config.json")
+PHYS_CONFIG = os.path.join(CONFIG_DIR, "IceCube86_ice_physics_config.json")
 OUTPUT_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "output", "cascades_sim")
 
 N_PHOTONS = 1_000_000

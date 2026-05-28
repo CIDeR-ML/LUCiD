@@ -25,7 +25,7 @@ from lucid.sources.siren_rays import make_cherenkov_surrogate_fn
 from lucid.utils import base_dir_path
 
 CONFIG_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "config")
-SIMPLE_NPZ = os.path.join(CONFIG_DIR, "icecube86_simple.npz")
+FULL_NPZ = os.path.join(CONFIG_DIR, "icecube86_full.npz")
 OUTPUT_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "output", "siren_tracks")
 
 F = 30
@@ -53,7 +53,7 @@ def main():
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 
     print(f"Loading detector and SIREN...")
-    det = StringTelescope.from_npz(SIMPLE_NPZ)
+    det = StringTelescope.from_npz(FULL_NPZ)
 
     sim = create_fast_string_simulator(
         det, det.S_radius, temperature=TEMPERATURE,
