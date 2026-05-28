@@ -224,7 +224,7 @@ class DedxValidator:
             axes[i].set_visible(False)
 
         # Add colorbar
-        cbar = fig.colorbar(images[-1], ax=axes[:len(energies)], label='Intensity (entries/event)', shrink=0.8)
+        cbar = fig.colorbar(images[-1], ax=axes[:len(energies)], label='Intensity (MeV/event)', shrink=0.8)
 
         fig.suptitle(f'dE/dx SIREN Model - {self.material}/{self.particle}', fontsize=14)
 

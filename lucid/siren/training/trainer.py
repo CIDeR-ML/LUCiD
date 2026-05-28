@@ -769,7 +769,7 @@ class SIRENTrainer:
                 'energy': 'MeV',
                 'dedx': 'keV/mm',
                 'distance': 'mm',
-                'density': 'entries/event'
+                'density': 'MeV/event'
             }
         else:
             # Photon table: second dimension is angle
