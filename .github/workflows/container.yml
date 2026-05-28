@@ -2,7 +2,7 @@ name: Build and push lucid container
 
 on:
   push:
-    branches: [main, production-interm]
+    branches: [main, refactor-v2]
     paths:
       - 'container/**'
       - 'lucid/**'
