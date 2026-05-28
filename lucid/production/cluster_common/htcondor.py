@@ -139,7 +139,12 @@ class HTCondorAdapter(ClusterAdapter):
         )
 
     def render_siren_cell(self, *, cell_dir, cell_cfg, energy_mev, job_name,
-                          job_id, partition, use_gpu):
+                          job_id, partition, use_gpu, array_spec=None):
+        if array_spec is not None:
+            raise NotImplementedError(
+                "SLURM job-array mode (--array) has no HTCondor equivalent here; "
+                "submit per-job on HTCondor (omit --array)."
+            )
         return self._cell_submit(
             cell_dir=cell_dir, cell_cfg=cell_cfg, energy_mev=energy_mev,
             job_name=job_name, job_id=job_id, partition=partition,

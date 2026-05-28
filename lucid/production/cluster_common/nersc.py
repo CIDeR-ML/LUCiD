@@ -51,10 +51,12 @@ class NerscAdapter(SlurmAdapter):
 
     def _common_header(self, *, partition: str, job_name: str,
                        cell_dir: Path, log_stem: str,
-                       cpus: str, gpus: str, memory: str, time: str) -> str:
+                       cpus: str, gpus: str, memory: str, time: str,
+                       array_spec: str | None = None) -> str:
         # `partition` is ignored on Perlmutter (no --partition); cpu/gpu is
         # selected by --constraint, and the SlurmAdapter render methods encode
-        # GPU-ness in `gpus` ("0" => CPU job).
+        # GPU-ness in `gpus` ("0" => CPU job). `array_spec`, when set, makes this
+        # a SLURM array (one submission per cell) with `%A_%a` log naming.
         is_gpu = gpus != "0"
         constraint = "gpu" if is_gpu else "cpu"
         qos = self.env.get("SLURM_QOS", "shared")
@@ -64,14 +66,17 @@ class NerscAdapter(SlurmAdapter):
         else:
             account = self.env.get("SLURM_ACCOUNT", "")
         gpu_line = f"#SBATCH --gpus={gpus}\n" if is_gpu else ""
+        array_line = f"#SBATCH --array={array_spec}\n" if array_spec else ""
+        log_suffix = "%A_%a" if array_spec else "%j"
         return (
             f"#!/bin/bash\n"
             f"#SBATCH --qos={qos}\n"
             f"#SBATCH --constraint={constraint}\n"
             f"#SBATCH --account={account}\n"
             f"#SBATCH --job-name={job_name}\n"
-            f"#SBATCH --output={cell_dir}/{log_stem}-%j.out\n"
-            f"#SBATCH --error={cell_dir}/{log_stem}-%j.err\n"
+            f"#SBATCH --output={cell_dir}/{log_stem}-{log_suffix}.out\n"
+            f"#SBATCH --error={cell_dir}/{log_stem}-{log_suffix}.err\n"
+            f"{array_line}"
             f"#SBATCH --nodes=1\n"
             f"#SBATCH --ntasks=1\n"
             f"#SBATCH --cpus-per-task={cpus}\n"

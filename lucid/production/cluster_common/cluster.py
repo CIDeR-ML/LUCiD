@@ -75,7 +75,8 @@ class ClusterAdapter(ABC):
     @abstractmethod
     def render_siren_cell(self, *, cell_dir: Path, cell_cfg: Path,
                           energy_mev: int, job_name: str, job_id: int,
-                          partition: str, use_gpu: bool) -> str: ...
+                          partition: str, use_gpu: bool,
+                          array_spec: Optional[str] = None) -> str: ...
 
     @abstractmethod
     def render_smax_cell(self, *, cell_dir: Path, cell_cfg: Path,
@@ -125,18 +126,24 @@ class SlurmAdapter(ClusterAdapter):
 
     def _common_header(self, *, partition: str, job_name: str,
                        cell_dir: Path, log_stem: str,
-                       cpus: str, gpus: str, memory: str, time: str) -> str:
+                       cpus: str, gpus: str, memory: str, time: str,
+                       array_spec: Optional[str] = None) -> str:
         # `log_stem` is the prefix passed to `#SBATCH --output=...-%j.out`.
         # siren / smax use `job-NNN`; dataprod uses `job_NNNNNN` (verify_jobs.py
-        # SBATCH_RE depends on this distinction).
+        # SBATCH_RE depends on this distinction). When `array_spec` is set the
+        # job is a SLURM array (one submission, one task per sub-job) and logs
+        # switch to the array-aware `%A_%a` suffix.
         gpu_line = f"#SBATCH --gpus={gpus}\n" if gpus != "0" else ""
+        array_line = f"#SBATCH --array={array_spec}\n" if array_spec else ""
+        log_suffix = "%A_%a" if array_spec else "%j"
         return (
             f"#!/bin/bash\n"
             f"#SBATCH --partition={partition}\n"
             f"#SBATCH --account={self.env['SLURM_ACCOUNT']}\n"
             f"#SBATCH --job-name={job_name}\n"
-            f"#SBATCH --output={cell_dir}/{log_stem}-%j.out\n"
-            f"#SBATCH --error={cell_dir}/{log_stem}-%j.err\n"
+            f"#SBATCH --output={cell_dir}/{log_stem}-{log_suffix}.out\n"
+            f"#SBATCH --error={cell_dir}/{log_stem}-{log_suffix}.err\n"
+            f"{array_line}"
             f"#SBATCH --nodes=1\n"
             f"#SBATCH --ntasks=1\n"
             f"#SBATCH --cpus-per-task={cpus}\n"
@@ -152,18 +159,23 @@ class SlurmAdapter(ClusterAdapter):
 
     def _siren_or_smax(self, *, cell_dir: Path, cell_cfg: Path, energy_mev: int,
                        job_name: str, job_id: int, partition: str,
-                       use_gpu: bool) -> str:
+                       use_gpu: bool, array_spec: Optional[str] = None) -> str:
         # Uses 3-digit `job-{job_id:03d}` log naming, matching the cell-based
-        # workflows (siren_inputs and smax).
+        # workflows (siren_inputs and smax). In array mode one submission covers
+        # the whole cell: the per-task `--job-id` comes from SLURM_ARRAY_TASK_ID
+        # so each task still writes its own output_job_<id>.root (merge.sh-ready).
         cpus = self.env.get("DEFAULT_CPUS", "1")
         memory = self.env.get("DEFAULT_MEMORY", "16000")
         time = self.env.get("DEFAULT_TIME", "08:00:00")
         gpus = "1" if use_gpu else self.env.get("DEFAULT_GPUS", "0")
+        log_stem = "job" if array_spec else f"job-{job_id:03d}"
         header = self._common_header(
             partition=partition, job_name=job_name, cell_dir=cell_dir,
-            log_stem=f"job-{job_id:03d}",
+            log_stem=log_stem,
             cpus=cpus, gpus=gpus, memory=memory, time=time,
+            array_spec=array_spec,
         )
+        job_id_expr = "${SLURM_ARRAY_TASK_ID}" if array_spec else str(job_id)
         body = (
             f"\nexport APPTAINERENV_GENIE_XSEC_FILE={self.env.get('GENIE_XSEC_FILE', '')}\n"
             f"{self._container_exec(use_gpu=use_gpu)} \\\n"
@@ -171,7 +183,7 @@ class SlurmAdapter(ClusterAdapter):
             f"    lucid-run-job \\\n"
             f"        --config \"{cell_cfg}\" \\\n"
             f"        --output-dir \"{cell_dir}\" \\\n"
-            f"        --job-id {job_id} \\\n"
+            f"        --job-id {job_id_expr} \\\n"
             f"        --skip-lucid \\\n"
             f"        --override-energy-MeV {energy_mev}\n"
             f"\necho \"Job ended: $(date)\"\n"
@@ -179,11 +191,11 @@ class SlurmAdapter(ClusterAdapter):
         return header + body
 
     def render_siren_cell(self, *, cell_dir, cell_cfg, energy_mev, job_name,
-                          job_id, partition, use_gpu):
+                          job_id, partition, use_gpu, array_spec=None):
         return self._siren_or_smax(
             cell_dir=cell_dir, cell_cfg=cell_cfg, energy_mev=energy_mev,
             job_name=job_name, job_id=job_id, partition=partition,
-            use_gpu=use_gpu,
+            use_gpu=use_gpu, array_spec=array_spec,
         )
 
     def render_smax_cell(self, *, cell_dir, cell_cfg, energy_mev, job_name,

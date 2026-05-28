@@ -50,17 +50,33 @@ USER_PATHS_DEFAULT = JOBS_DIR / "user_paths.sh"
 
 def write_submit(*, adapter, cell_dir: Path, cell_cfg: Path, energy_mev: int,
                  job_name: str, job_id: int, sb_basename: str,
-                 partition: str, use_gpu: bool) -> Path:
-    """Render and write the cluster's submit-description file for one sub-job."""
+                 partition: str, use_gpu: bool,
+                 array_spec: Optional[str] = None) -> Path:
+    """Render and write the cluster's submit-description file for one sub-job.
+
+    When `array_spec` is set the file is a single SLURM array covering a whole
+    cell (one task per sub-job); otherwise it is one submit file per sub-job.
+    """
     body = adapter.render_siren_cell(
         cell_dir=cell_dir, cell_cfg=cell_cfg, energy_mev=energy_mev,
         job_name=job_name, job_id=job_id, partition=partition,
-        use_gpu=use_gpu,
+        use_gpu=use_gpu, array_spec=array_spec,
     )
     out = cell_dir / f"{sb_basename}.{adapter.submit_extension}"
     out.write_text(body)
     out.chmod(0o755)
     return out
+
+
+def format_array_spec(missing: List[int], total: int) -> str:
+    """SLURM --array spec for a sorted list of task ids.
+
+    A full 1..total set collapses to "1-total"; a sparse recovery subset is
+    emitted as an explicit comma list (SLURM accepts e.g. "3,7,9").
+    """
+    if missing == list(range(1, total + 1)):
+        return f"1-{total}"
+    return ",".join(str(i) for i in missing)
 
 
 # --- Driver ------------------------------------------------------------------
@@ -73,6 +89,12 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
                         "(see configs/water_mu_test.json for an example).")
     p.add_argument("-s", "--submit", action="store_true",
                    help="Submit jobs to SLURM (default: prepare sbatch only).")
+    p.add_argument("--array", action="store_true",
+                   help="Submit one SLURM job array per cell (one task per "
+                        "sub-job) instead of one sbatch per sub-job. Collapses "
+                        "the submission count from total-jobs to total-cells; "
+                        "re-running only re-submits still-missing task ids. "
+                        "SLURM clusters only.")
     p.add_argument("-t", "--test", action="store_true",
                    help="Test mode: only the first (particle, energy) cell.")
     p.add_argument("-o", "--output-base", type=Path, default=None,
@@ -133,6 +155,10 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     env = load_user_paths(args.user_paths)
     adapter = get_adapter(env)
+    if args.array and adapter.submit_cmd != "sbatch":
+        print("error: --array is only supported on SLURM clusters (sbatch).",
+              file=sys.stderr)
+        return 2
     if args.submit and shutil.which(adapter.submit_cmd) is None:
         print(f"error: {adapter.submit_cmd} not found on PATH; "
               f"submission requires this cluster.", file=sys.stderr)
@@ -211,6 +237,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     print(f"total cells:   {len(cells)}")
     print(f"total jobs:    {total_jobs}")
     print(f"total events:  {total_events:,}")
+    if args.array:
+        print(f"submit mode:   job arrays (1 sbatch/cell -> "
+              f"{len(cells)} submissions, {total_jobs} tasks)")
     print("")
 
     prepared = submitted = skipped_existing = skipped_jobs = 0
@@ -232,6 +261,50 @@ def main(argv: Optional[List[str]] = None) -> int:
             events_per_job=cell.events_per_job, n_jobs=cell.n_jobs,
             name=cell_name,
         )
+
+        if args.array:
+            # One SLURM array per cell. Submit only task ids whose output ROOT
+            # is still missing, so a re-run is self-recovering (no separate
+            # resubmit pass). Each task writes output_job_<id>.root via
+            # SLURM_ARRAY_TASK_ID, leaving merge.sh unchanged.
+            missing = []
+            for job_id in range(1, cell.n_jobs + 1):
+                out_root = cell_dir / f"output_job_{job_id:06d}.root"
+                if out_root.is_file() and not args.no_skip_existing:
+                    skipped_jobs += 1
+                else:
+                    missing.append(job_id)
+            if not missing:
+                print(f"  skip (all {cell.n_jobs} job(s) exist): {cell_dir}")
+                continue
+
+            array_spec = format_array_spec(missing, cell.n_jobs)
+            sub_partition = partitions[n_emitted % len(partitions)]
+            sb = write_submit(
+                adapter=adapter, cell_dir=cell_dir, cell_cfg=cell_cfg,
+                energy_mev=cell.energy_mev, job_name=cell_name, job_id=1,
+                sb_basename="submit_array", partition=sub_partition,
+                use_gpu=args.gpu, array_spec=array_spec,
+            )
+            print(f"[PREPARED] {sb}")
+            n_emitted += 1
+            prepared += len(missing)
+
+            if args.submit:
+                r = subprocess.run([adapter.submit_cmd, str(sb)],
+                                   capture_output=True, text=True)
+                if r.returncode != 0:
+                    print(f"  FAILED {adapter.submit_cmd} for {cell_name}: "
+                          f"{r.stderr.strip()}", file=sys.stderr)
+                    continue
+                submitted += len(missing)
+                print(f"  submitted {cell_name}  (s_max={cell.smax_mm:.1f} mm, "
+                      f"{cell.events_per_job} evts/task, array={array_spec})  "
+                      f"-> {r.stdout.strip()}")
+            else:
+                print(f"  prepared  {cell_name}  (s_max={cell.smax_mm:.1f} mm, "
+                      f"{cell.events_per_job} evts/task, array={array_spec})  -> {sb}")
+            continue
 
         for job_id in range(1, cell.n_jobs + 1):
             if cell.n_jobs == 1:
