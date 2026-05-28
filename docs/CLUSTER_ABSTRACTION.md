@@ -1,14 +1,17 @@
 # Cluster abstraction
 
 How the production pipeline targets multiple batch clusters (currently
-SLURM on S3DF and HTCondor on LXPLUS) from a single code base. The
-short version: shared planning + a single per-cluster
-`ClusterAdapter` class, dispatched at runtime from a sticky env var
-in your active `user_paths.sh`.
+SLURM on S3DF, SLURM on NERSC/Perlmutter, and HTCondor on LXPLUS) from a
+single code base. The short version: shared planning + a single
+per-cluster `ClusterAdapter` class, dispatched at runtime from a sticky
+env var in your active `user_paths.sh`.
 
 For per-cluster runbooks, see:
 
 - [`QUICKSTART_S3DF.md`](QUICKSTART_S3DF.md) — SLURM at SLAC.
+- [`QUICKSTART_NERSC.md`](QUICKSTART_NERSC.md) — SLURM on Perlmutter
+  (`NerscAdapter` subclasses `SlurmAdapter`: `--qos`/`--constraint`
+  instead of `--partition`, cvmfs apptainer, `dune`/`dune_g` accounts).
 - [`QUICKSTART_LXPLUS.md`](QUICKSTART_LXPLUS.md) — HTCondor at CERN.
 
 ## Architecture

@@ -38,7 +38,7 @@ if [ "$NEEDS_USER_PATHS" -eq 0 ]; then
     if [ -f "${USER_PATHS}" ]; then
         # shellcheck disable=SC1090
         source "${USER_PATHS}"
-        apptainer exec \
+        "${APPTAINER_BIN:-apptainer}" exec \
             ${APPTAINER_BINDS:+-B "${APPTAINER_BINDS}"} \
             -B "${LUCID_ROOT}:/opt/LUCiD" \
             "${LUCID_IMAGE_PATH}" \
@@ -76,7 +76,7 @@ APPTAINER_OPTS+=(-B "${LUCID_ROOT}:/opt/LUCiD")
 TMPOUT="$(mktemp -t lucid-train.XXXXXX)"
 trap 'rm -f "${TMPOUT}"' EXIT
 
-apptainer exec "${APPTAINER_OPTS[@]}" "${LUCID_IMAGE_PATH}" \
+"${APPTAINER_BIN:-apptainer}" exec "${APPTAINER_OPTS[@]}" "${LUCID_IMAGE_PATH}" \
     /opt/conda/bin/python3 /opt/LUCiD/lucid/production/jobs/train_siren/generate_jobs.py \
         --user-paths "${USER_PATHS}" "${PY_ARGS[@]}" \
     | tee "${TMPOUT}"

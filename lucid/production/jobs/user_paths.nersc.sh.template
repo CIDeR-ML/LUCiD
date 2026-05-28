@@ -1,0 +1,90 @@
+#!/bin/bash
+# User-specific paths configuration for NERSC / Perlmutter (SLURM) — TEMPLATE
+# Copy to user_paths.sh and edit. Do NOT commit user_paths.sh.
+#
+# Same `apptainer exec lucid.sif lucid-run-job ...` pipeline as S3DF, but:
+#   - Perlmutter has no system apptainer; we use the cvmfs OSG build.
+#   - submit directives are --qos/--constraint, not --partition.
+#   - CPU jobs charge `dune`; GPU jobs charge `dune_g` (the `_g` variant).
+# Outputs and the container .sif live on CFS (backed up, not purged).
+
+# =============================================================================
+# Cluster identity (read by lucid.production.cluster_common.cluster)
+# =============================================================================
+# `nersc` selects NerscAdapter (subclass of SlurmAdapter): SLURM scheduler,
+# Perlmutter submit directives, cvmfs apptainer.
+export CLUSTER="nersc"
+export CLUSTER_SUBMIT_CMD="sbatch"
+# Apptainer bind list (comma-separated): NERSC global filesystems the
+# container needs visible. Set explicitly (not just relying on the adapter
+# default) because the host-side fan-out hop in jobs/*/generate_jobs.sh also
+# binds these so the in-container Python can read configs / write sbatch files
+# on CFS.
+export APPTAINER_BINDS="/global/cfs,/global/homes,/global/u1,/pscratch,/dvs_ro,/cvmfs"
+
+# =============================================================================
+# Container runtime + image
+# =============================================================================
+# Perlmutter ships no apptainer/singularity. The cvmfs OSG build runs the
+# .sif fine; this is the binary every emitted sbatch calls.
+export APPTAINER_BIN="/cvmfs/oasis.opensciencegrid.org/mis/apptainer/current/bin/apptainer"
+# Unified LUCiD container, pulled to CFS (persistent — NOT scratch, which is
+# purged). Pull/convert with:
+#   export APPTAINER_CACHEDIR="$SCRATCH/.apptainer_cache"
+#   export APPTAINER_TMPDIR="$SCRATCH/.apptainer_tmp"
+#   "$APPTAINER_BIN" pull /global/cfs/cdirs/dune/users/$USER/software/images/lucid.sif \
+#       docker://ghcr.io/cider-ml/lucid:latest
+export LUCID_IMAGE_PATH="/global/cfs/cdirs/dune/users/cjesus/software/images/lucid.sif"
+
+# =============================================================================
+# GENIE cross-section splines
+# =============================================================================
+# Path *inside* the container. Default points at the `G18_10a_02_11b` spline
+# bundled in the LUCiD image — matches the in-repo dataprod_*.json configs and
+# needs no cvmfs at runtime. /cvmfs is bound (above) if you point this at a
+# cvmfs-staged spline for a different tune.
+export GENIE_XSEC_FILE="/opt/genie_xsec/3_04_00/G18_10a_02_11b/gxspl-min.xml.gz"
+
+# =============================================================================
+# Output paths (all on CFS — persistent)
+# =============================================================================
+# OUTPUT_BASE_PATH: root for the dataset-production stage (dataprod fan-out).
+# Files land under <base>/<detector>/config_NNNNNN/. Mirrors S3DF DORAEMON.
+export OUTPUT_BASE_PATH="/global/cfs/cdirs/dune/users/cjesus/DORAEMON"
+# SIREN_OUTPUT_BASE_PATH: root for the SIREN-side stages. smax fan-out writes
+# under <base>/smax_parametrization/<material>/<particle>/<E>MeV/, siren_inputs
+# under <base>/training_inputs/<material>/<particle>/<E>MeV/.
+export SIREN_OUTPUT_BASE_PATH="/global/cfs/cdirs/dune/users/cjesus/SIREN_files"
+
+# =============================================================================
+# SLURM configuration (Perlmutter)
+# =============================================================================
+# Default is CPU. NerscAdapter emits --constraint=cpu and charges SLURM_ACCOUNT
+# for CPU jobs (DEFAULT_GPUS=0), and --constraint=gpu charging SLURM_ACCOUNT_GPU
+# for GPU jobs (use_gpu / -g). QOS is shared so single-core/single-GPU cells are
+# charged fractionally and schedule faster.
+export SLURM_ACCOUNT="dune"        # CPU: dataset production, SIREN inputs, smax
+export SLURM_ACCOUNT_GPU="dune_g"  # GPU: only when a job explicitly requests it
+export SLURM_QOS="shared"
+# SLURM_PARTITION is unused on Perlmutter (kept only because the planners read
+# it as a label); the adapter ignores it in favour of --qos/--constraint.
+export SLURM_PARTITION="cpu"
+
+# =============================================================================
+# Resource defaults
+# =============================================================================
+export DEFAULT_CPUS="1"
+export DEFAULT_MEMORY="4096"    # MB; PhotonSim/GENIE cells stay well under 4 GB
+export DEFAULT_GPUS="0"         # CPU by default; GPU stages override to 1
+export DEFAULT_TIME="12:00:00"  # shared QOS allows up to 48h on Perlmutter
+
+# =============================================================================
+# Dev-loop bind mounts
+# =============================================================================
+# Bind the local checkouts into the container so jobs run your code, not the
+# baked copy (which can lag the active branch). LUCID_DEV_PATH is set by
+# default; each emitted sbatch adds `-B <path>:/opt/LUCiD` to its apptainer exec.
+export LUCID_DEV_PATH="/global/u1/c/cjesus/DIFFSIM/LUCiD"
+# PhotonSim is C++: only set this if you change its source, and rebuild the host
+# build/ against the image first (see QUICKSTART_NERSC.md).
+# export PHOTONSIM_DEV_PATH="/global/u1/c/cjesus/DIFFSIM/PhotonSim"

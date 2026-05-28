@@ -49,7 +49,7 @@ if [ "$NEEDS_USER_PATHS" -eq 0 ]; then
     if [ -f "${USER_PATHS}" ]; then
         # shellcheck disable=SC1090
         source "${USER_PATHS}"
-        apptainer exec \
+        "${APPTAINER_BIN:-apptainer}" exec \
             ${APPTAINER_BINDS:+-B "${APPTAINER_BINDS}"} \
             -B "${LUCID_ROOT}:/opt/LUCiD" \
             "${LUCID_IMAGE_PATH}" \
@@ -99,7 +99,7 @@ fi
 TMPOUT="$(mktemp -t lucid-dataprod.XXXXXX)"
 trap 'rm -f "${TMPOUT}"' EXIT
 
-apptainer exec "${APPTAINER_OPTS[@]}" "${LUCID_IMAGE_PATH}" \
+"${APPTAINER_BIN:-apptainer}" exec "${APPTAINER_OPTS[@]}" "${LUCID_IMAGE_PATH}" \
     /opt/conda/bin/python3 -m lucid.production.cluster_common.dataprod_fanout \
         --user-paths "${USER_PATHS}" "${PY_ARGS[@]}" \
     | tee "${TMPOUT}"

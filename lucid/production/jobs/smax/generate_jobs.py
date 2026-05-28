@@ -41,6 +41,7 @@ if str(LUCID_ROOT) not in sys.path:
     sys.path.insert(0, str(LUCID_ROOT))
 
 from lucid.production.cluster_common import htcondor  # noqa: E402, F401
+from lucid.production.cluster_common import nersc  # noqa: E402, F401  registers adapter
 from lucid.production.cluster_common.cluster import get_adapter  # noqa: E402
 from lucid.production.cluster_common.smax_planning import (  # noqa: E402
     events_for, parse_schedule, split_plan, write_per_cell_config,

@@ -36,8 +36,9 @@ from typing import List, Optional
 
 from .cluster import get_adapter
 from .user_paths import load_user_paths
-# Side-effect: registers HTCondorAdapter in the cluster factory.
+# Side-effect: registers the HTCondor and NERSC adapters in the cluster factory.
 from . import htcondor  # noqa: F401
+from . import nersc  # noqa: F401
 
 
 def _slugify(name: str) -> str:

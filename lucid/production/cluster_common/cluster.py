@@ -109,6 +109,20 @@ class SlurmAdapter(ClusterAdapter):
     def _default_binds(self) -> str:
         return SLURM_DEFAULT_BINDS
 
+    def _container_exec(self, *, use_gpu: bool) -> str:
+        """`apptainer exec ...` prefix, up to (not including) the image path.
+
+        Factored out so per-site SLURM subclasses (e.g. NERSC, where the
+        apptainer binary isn't on PATH and `--nv` must be gated on GPU) can
+        swap the container-runtime invocation without re-implementing the
+        whole render body. The base SLURM behaviour is unchanged: always
+        `apptainer exec --nv` with the cluster bind list plus dev-loop binds.
+        """
+        binds = self.apptainer_binds
+        dev = _dev_binds(self.env)
+        dev_part = f" {dev}" if dev else ""
+        return f"apptainer exec --nv -B {binds}{dev_part}"
+
     def _common_header(self, *, partition: str, job_name: str,
                        cell_dir: Path, log_stem: str,
                        cpus: str, gpus: str, memory: str, time: str) -> str:
@@ -150,12 +164,9 @@ class SlurmAdapter(ClusterAdapter):
             log_stem=f"job-{job_id:03d}",
             cpus=cpus, gpus=gpus, memory=memory, time=time,
         )
-        binds = self.apptainer_binds
-        dev = _dev_binds(self.env)
-        dev_part = f" {dev}" if dev else ""
         body = (
             f"\nexport APPTAINERENV_GENIE_XSEC_FILE={self.env.get('GENIE_XSEC_FILE', '')}\n"
-            f"apptainer exec --nv -B {binds}{dev_part} \\\n"
+            f"{self._container_exec(use_gpu=use_gpu)} \\\n"
             f"    {self.env['LUCID_IMAGE_PATH']} \\\n"
             f"    lucid-run-job \\\n"
             f"        --config \"{cell_cfg}\" \\\n"
@@ -197,9 +208,6 @@ class SlurmAdapter(ClusterAdapter):
             log_stem=f"job_{job_id}",   # job_id is a zero-padded string for dataprod
             cpus=cpus, gpus=gpus, memory=memory, time=time,
         )
-        binds = self.apptainer_binds
-        dev = _dev_binds(self.env)
-        dev_part = f" {dev}" if dev else ""
         flags = []
         if test:
             flags.append("--test")
@@ -213,7 +221,7 @@ class SlurmAdapter(ClusterAdapter):
         body = (
             f"\n# Unified container: GEANT4 + ROOT + GENIE + PhotonSim + LUCiD.\n"
             f"export APPTAINERENV_GENIE_XSEC_FILE={self.env.get('GENIE_XSEC_FILE', '')}\n"
-            f"apptainer exec --nv -B {binds}{dev_part} \\\n"
+            f"{self._container_exec(use_gpu=use_gpu)} \\\n"
             f"    {self.env['LUCID_IMAGE_PATH']} \\\n"
             f"    lucid-run-job \\\n"
             f"        --config \"{config_path}\" \\\n"
