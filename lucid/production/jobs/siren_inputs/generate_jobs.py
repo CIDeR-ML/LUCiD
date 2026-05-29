@@ -79,6 +79,134 @@ def format_array_spec(missing: List[int], total: int) -> str:
     return ",".join(str(i) for i in missing)
 
 
+# --- Node packing ------------------------------------------------------------
+
+# Worker pool run inside one container exec per node: run each manifest line's
+# lucid-run-job unit, N at a time, across the node's cores. Per-unit failures
+# don't abort the node — missing outputs are recovered by re-running (skip-on-
+# existing). Manifest line fields (space-separated): <cfg> <out_dir> <job_id> <E>.
+PACK_WORKER_SH = """#!/bin/bash
+set -uo pipefail
+MANIFEST="$1"
+N="$2"
+echo "pack worker: $(wc -l < "$MANIFEST") units, -P ${N}"
+xargs -a "$MANIFEST" -P "$N" -L1 bash -c 'lucid-run-job --config "$1" --output-dir "$2" --job-id "$3" --skip-lucid --override-energy-MeV "$4"' _ || echo "pack worker: some units returned nonzero; missing outputs recovered on re-run"
+exit 0
+"""
+
+
+def _fmt_hms(seconds: float) -> str:
+    s = int(seconds)
+    return f"{s // 3600:02d}:{(s % 3600) // 60:02d}:{s % 60:02d}"
+
+
+def fan_out_pack(*, adapter, cells, output_base: Path, material: str, name: str,
+                 a_s: float, b_s_per_mev: float, n_bins: int, n_workers: int,
+                 submit: bool, no_skip_existing: bool) -> int:
+    """Flatten all un-done units, runtime-bin them into `n_bins` whole-node jobs.
+
+    Each bin becomes one `regular` node that runs its units in parallel via the
+    container worker pool. Units are balanced across bins by estimated runtime
+    (longest-processing-time first) so node wall-times stay even. Each unit still
+    writes its own output_job_<id>.root, so merge.sh and skip-on-existing
+    recovery are unchanged.
+    """
+    units = []   # (est_seconds, cell_cfg, cell_dir, job_id, energy_mev)
+    skipped_cells = skipped_jobs = 0
+    for cell in cells:
+        cell_dir = output_base / material / cell.particle / f"{cell.energy_mev}MeV"
+        cell_dir.mkdir(parents=True, exist_ok=True)
+        if (cell_dir / "photonsim.root").is_file() and not no_skip_existing:
+            skipped_cells += 1
+            continue
+        cell_name = f"siren_{material}_{cell.particle}_{cell.energy_mev}MeV"
+        cell_cfg = write_per_cell_config(
+            cell_dir=cell_dir, material=material, particle=cell.particle,
+            energy_mev=cell.energy_mev, smax_mm=cell.smax_mm,
+            events_per_job=cell.events_per_job, n_jobs=cell.n_jobs, name=cell_name,
+        )
+        for job_id in range(1, cell.n_jobs + 1):
+            if (cell_dir / f"output_job_{job_id:06d}.root").is_file() and not no_skip_existing:
+                skipped_jobs += 1
+                continue
+            est = cell.events_per_job * (a_s + b_s_per_mev * cell.energy_mev)
+            units.append((est, str(cell_cfg), str(cell_dir), job_id, cell.energy_mev))
+
+    if not units:
+        print(f"Nothing to pack — all units done (skipped {skipped_cells} cells, "
+              f"{skipped_jobs} jobs).")
+        return 0
+
+    units.sort(reverse=True)                       # longest first
+    n_bins = max(1, min(n_bins, len(units)))
+    bins: List[list] = [[] for _ in range(n_bins)]
+    load = [0.0] * n_bins
+    for u in units:
+        i = min(range(n_bins), key=lambda k: load[k])
+        bins[i].append(u)
+        load[i] += u[0]
+    bins = [b for b in bins if b]
+
+    pack_dir = output_base / "_pack" / name
+    pack_dir.mkdir(parents=True, exist_ok=True)
+    run_script = pack_dir / "run_node.sh"
+    run_script.write_text(PACK_WORKER_SH)
+    run_script.chmod(0o755)
+
+    print(f"submit mode:   node-pack ({len(bins)} whole-node 'regular' jobs, "
+          f"{n_workers} workers/node, {len(units)} units)")
+    print(f"pack dir:      {pack_dir}")
+    print("")
+
+    prepared = submitted = 0
+    for bi, b in enumerate(bins, 1):
+        manifest = pack_dir / f"node_{bi:03d}.manifest"
+        manifest.write_text(
+            "".join(f"{cfg} {cdir} {jid} {E}\n" for (_, cfg, cdir, jid, E) in b)
+        )
+        bin_total = sum(u[0] for u in b)
+        longest = max(u[0] for u in b)
+        # Wall = max(longest single unit, perfectly-parallel time) + margin.
+        wall_s = max(longest, bin_total / n_workers) * 1.5 + 600.0
+        wall_s = max(1800.0, min(wall_s, 48 * 3600.0))
+        wall = _fmt_hms(wall_s)
+        job_name = f"siren_pack_{name}_n{bi:03d}"
+        sb = pack_dir / f"node_{bi:03d}.sbatch"
+        sb.write_text(adapter.render_siren_pack(
+            job_name=job_name, log_dir=pack_dir, manifest=manifest,
+            run_script=run_script, n_workers=n_workers, wall=wall,
+        ))
+        sb.chmod(0o755)
+        print(f"[PREPARED] {sb}")
+        prepared += 1
+        compute_h = bin_total / n_workers / 3600.0
+        if submit:
+            r = subprocess.run([adapter.submit_cmd, str(sb)],
+                               capture_output=True, text=True)
+            if r.returncode != 0:
+                print(f"  FAILED {adapter.submit_cmd} for {job_name}: "
+                      f"{r.stderr.strip()}", file=sys.stderr)
+                continue
+            submitted += 1
+            print(f"  submitted {job_name}  ({len(b)} units, ~{compute_h:.1f}h "
+                  f"compute, wall {wall})  -> {r.stdout.strip()}")
+        else:
+            print(f"  prepared  {job_name}  ({len(b)} units, ~{compute_h:.1f}h "
+                  f"compute, wall {wall})  -> {sb}")
+
+    print("")
+    print("=== Pack fan-out complete ===")
+    print(f"Node jobs:       {prepared}")
+    print(f"Submitted:       {submitted}")
+    print(f"Units packed:    {len(units)}")
+    print(f"Skipped cells:   {skipped_cells}")
+    print(f"Skipped jobs:    {skipped_jobs}")
+    print(f"Output root:     {output_base / material}")
+    print("")
+    print("Next: once jobs finish, run merge.sh to hadd per-cell ROOTs.")
+    return 0
+
+
 # --- Driver ------------------------------------------------------------------
 
 def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
@@ -95,6 +223,13 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
                         "the submission count from total-jobs to total-cells; "
                         "re-running only re-submits still-missing task ids. "
                         "SLURM clusters only.")
+    p.add_argument("--pack", nargs="?", type=int, const=10, default=None,
+                   metavar="N",
+                   help="Pack all work units into N whole-node 'regular' jobs "
+                        "(default 10), each running its units in parallel across "
+                        "the node's cores. Far fewer scheduler units than --array "
+                        "and much better throughput when the shared partition is "
+                        "oversubscribed. NERSC only; mutually exclusive with --array.")
     p.add_argument("-t", "--test", action="store_true",
                    help="Test mode: only the first (particle, energy) cell.")
     p.add_argument("-o", "--output-base", type=Path, default=None,
@@ -159,6 +294,16 @@ def main(argv: Optional[List[str]] = None) -> int:
         print("error: --array is only supported on SLURM clusters (sbatch).",
               file=sys.stderr)
         return 2
+    if args.pack is not None:
+        if args.array:
+            print("error: --pack and --array are mutually exclusive.",
+                  file=sys.stderr)
+            return 2
+        if adapter.submit_cmd != "sbatch" or not hasattr(adapter, "render_siren_pack"):
+            print(f"error: --pack is not supported on cluster {adapter.name!r} "
+                  "(needs a SLURM adapter implementing render_siren_pack).",
+                  file=sys.stderr)
+            return 2
     if args.submit and shutil.which(adapter.submit_cmd) is None:
         print(f"error: {adapter.submit_cmd} not found on PATH; "
               f"submission requires this cluster.", file=sys.stderr)
@@ -241,6 +386,14 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"submit mode:   job arrays (1 sbatch/cell -> "
               f"{len(cells)} submissions, {total_jobs} tasks)")
     print("")
+
+    if args.pack is not None:
+        return fan_out_pack(
+            adapter=adapter, cells=cells, output_base=output_base,
+            material=material, name=name, a_s=a_s, b_s_per_mev=b_s_per_mev,
+            n_bins=args.pack, n_workers=int(env.get("PACK_WORKERS", "128")),
+            submit=args.submit, no_skip_existing=args.no_skip_existing,
+        )
 
     prepared = submitted = skipped_existing = skipped_jobs = 0
     n_emitted = 0

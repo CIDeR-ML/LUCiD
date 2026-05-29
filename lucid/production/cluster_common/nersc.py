@@ -90,6 +90,43 @@ class NerscAdapter(SlurmAdapter):
             f"echo \"Node:         $(hostname)\"\n"
         )
 
+    def render_siren_pack(self, *, job_name: str, log_dir: Path, manifest: Path,
+                          run_script: Path, n_workers: int, wall: str) -> str:
+        """Whole-node packed SIREN job: one `regular` node runs many work units
+        in parallel via the container's xargs worker pool (see run_script).
+
+        Charges the CPU account on `--qos=regular --constraint=cpu` with
+        `--exclusive` (the whole node), so a single submission drains a manifest
+        of units instead of fanning out one shared sub-job each. Each unit still
+        writes its own output_job_<id>.root, so merge.sh/recovery are unchanged.
+        """
+        account = self.env.get("SLURM_ACCOUNT", "")
+        genie = self.env.get("GENIE_XSEC_FILE", "")
+        return (
+            f"#!/bin/bash\n"
+            f"#SBATCH --qos=regular\n"
+            f"#SBATCH --constraint=cpu\n"
+            f"#SBATCH --account={account}\n"
+            f"#SBATCH --job-name={job_name}\n"
+            f"#SBATCH --output={log_dir}/{job_name}-%j.out\n"
+            f"#SBATCH --error={log_dir}/{job_name}-%j.err\n"
+            f"#SBATCH --nodes=1\n"
+            f"#SBATCH --exclusive\n"
+            f"#SBATCH --time={wall}\n"
+            f"\n"
+            f"set -eu -o pipefail\n"
+            f"echo \"SLURM Job ID: ${{SLURM_JOB_ID}}\"\n"
+            f"echo \"Job started:  $(date)\"\n"
+            f"echo \"Node:         $(hostname)\"\n"
+            f"echo \"Workers:      {n_workers}\"\n"
+            f"\n"
+            f"export APPTAINERENV_GENIE_XSEC_FILE={genie}\n"
+            f"{self._container_exec(use_gpu=False)} \\\n"
+            f"    {self.env['LUCID_IMAGE_PATH']} \\\n"
+            f"    bash {run_script} {manifest} {n_workers}\n"
+            f"\necho \"Job ended: $(date)\"\n"
+        )
+
     def render_train_run(self, *, run_dir, run_name, cli_args, slurm):
         # train_siren's GPU/SLURM defaults (partition=roma, account=mli:cider-ml)
         # are SLAC values and aren't wired for Perlmutter yet. Fail loudly

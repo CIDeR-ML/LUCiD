@@ -103,15 +103,40 @@ LUCiD dataset.
 
 ## SIREN-input scan (electrons)
 
+> Run `generate_jobs.py` with **`/usr/bin/python3.11`**: it's a host-side
+> submitter (it calls `sbatch`, which only works on the login node, not in the
+> container), and the bare `python3` here is 3.6.15 — too old for the script.
+
+**Submission modes** — same work units, different SLURM packaging:
+- *(default)* one sbatch per sub-job; simple, fine for small scans.
+- `--array` — one job array per cell; far fewer submissions, self-recovering.
+- `--pack[=N]` — `N` whole-node `regular` jobs, each running its units in
+  parallel across the node's cores (in-container `xargs` pool). **Use this when
+  the `shared` partition is oversubscribed** — single-core `shared` jobs get
+  starved waiting for fractional slots, whereas a handful of whole-node
+  `regular` jobs schedule and then burst 128 units at once. NERSC-only.
+
+Recommended flow (electrons), smoke test first:
+
 ```bash
 cd lucid/production/jobs/siren_inputs
-python3 generate_jobs.py -c configs/water_el.json -t      # prepare, inspect the .sbatch
-python3 generate_jobs.py -c configs/water_el.json -t -s   # submit one smoke-test cell
+# smoke: one cell as a packed node job; confirm it lands + output is correct
+/usr/bin/python3.11 generate_jobs.py -c configs/water_el.json --pack -t -s
 squeue -u $USER
-python3 generate_jobs.py -c configs/water_el.json -s      # full scan
-./resubmit_failed.sh $SIREN_OUTPUT_BASE_PATH              # recover failed sub-jobs
-./merge.sh $SIREN_OUTPUT_BASE_PATH                        # hadd per-cell ROOTs
+# full scan: ~10 whole-node jobs draining all cells in parallel
+/usr/bin/python3.11 generate_jobs.py -c configs/water_el.json --pack -s
+# after each drain wave: validate (OpticalPhotons truth key) + resubmit only
+# the missing/incomplete units; repeat until "0 invalid"
+./recover.sh -c configs/water_el.json
+# then hadd each cell's output_job_*.root -> photonsim.root
+./merge.sh $SIREN_OUTPUT_BASE_PATH/training_inputs
 ```
+
+Recovery tool split: **`recover.sh`** drives `--array`/`--pack` recovery
+(output-driven — deletes ROOTs lacking the `OpticalPhotons` key, then resubmits
+only those). `resubmit_failed.sh` is for the per-job (default) mode used on
+S3DF/LXPLUS and does **not** understand array/pack. Note both `recover.sh` and
+`merge.sh` take the `…/training_inputs` subdir, not `$SIREN_OUTPUT_BASE_PATH`.
 
 Cells land under `$SIREN_OUTPUT_BASE_PATH/training_inputs/<material>/<particle>/<E>MeV/`.
 
@@ -143,11 +168,34 @@ export PHOTONSIM_DEV_PATH="/global/u1/c/$(whoami)/DIFFSIM/PhotonSim"
 
 As on every cluster: if you change PhotonSim **source** under the dev path,
 rebuild the host PhotonSim against the container's GEANT4/ROOT before
-re-submitting (Python changes in LUCiD are picked up live):
+re-submitting (Python changes in LUCiD are picked up live).
+
+**First build** — the host `build/` doesn't exist yet (fresh `PhotonSim`
+checkout). Configure with the same flags the image uses
+(`LUCiD/container/Dockerfile`), then build. The two non-obvious flags:
+`-DCMAKE_PREFIX_PATH=/opt/conda` makes cmake pick conda's expat (the system
+expat is too old for Geant4), and the linker flags point `ld` at conda's newer
+`libstdc++` — the system one lacks the `GLIBCXX_3.4.32` / `CXXABI_1.3.15`
+symbols the conda Geant4/Qt libs reference, so the link fails without them:
 
 ```bash
-"$APPTAINER_BIN" exec -B /global/cfs,/global/homes,/pscratch,/cvmfs \
-    -B "$PHOTONSIM_DEV_PATH:/opt/PhotonSim" \
+"$APPTAINER_BIN" exec -B "$APPTAINER_BINDS" -B "$PHOTONSIM_DEV_PATH:/opt/PhotonSim" \
+    "$LUCID_IMAGE_PATH" \
+    bash -lc 'cmake -S /opt/PhotonSim -B /opt/PhotonSim/build \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_PREFIX_PATH=/opt/conda \
+        -DCMAKE_EXE_LINKER_FLAGS="-L/opt/conda/lib -Wl,-rpath,/opt/conda/lib" \
+        -DCMAKE_SHARED_LINKER_FLAGS="-L/opt/conda/lib -Wl,-rpath,/opt/conda/lib" \
+        -DGeant4_DIR=$(geant4-config --prefix)/lib/cmake/Geant4 \
+        -DROOT_DIR=/opt/root/v6-30-04/cmake \
+      && cmake --build /opt/PhotonSim/build -j 4'
+```
+
+**Incremental rebuild** — `build/` already configured (after the first build,
+or after `git pull` in `PhotonSim/`); just rebuild:
+
+```bash
+"$APPTAINER_BIN" exec -B "$APPTAINER_BINDS" -B "$PHOTONSIM_DEV_PATH:/opt/PhotonSim" \
     "$LUCID_IMAGE_PATH" \
     bash -lc 'cmake --build /opt/PhotonSim/build -j 4'
 ```

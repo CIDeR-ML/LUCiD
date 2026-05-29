@@ -55,6 +55,33 @@ unambiguous "this job ran to completion" marker. The wrapper bridges
 the apptainer/host split (uproot lives in the container, sbatch lives
 on the host).
 
+## Submission modes & recovery
+
+`generate_jobs.py` packages the same work units three ways (the per-cell
+config and `output_job_*.root` outputs are identical across all three, so
+`merge.sh` is unchanged):
+
+- **default** — one submit file per sub-job (`submit.sbatch` /
+  `submit_job_NNN.sbatch`). Used by the per-job clusters (S3DF/LXPLUS).
+- **`--array`** (SLURM) — one job array per cell; collapses submissions from
+  total-sub-jobs to total-cells. Each task maps `--job-id` to
+  `$SLURM_ARRAY_TASK_ID`.
+- **`--pack[=N]`** (SLURM; NERSC-wired) — `N` whole-node `regular` jobs, each
+  running its units in parallel across the node's cores via an in-container
+  worker pool. Far fewer scheduler units and much better throughput when the
+  `shared` partition is oversubscribed.
+
+Recovery matches the mode — both use the `OpticalPhotons` truth check and are
+idempotent (repeat until nothing is missing, then `merge.sh`):
+
+- **per-job (default)** → `./resubmit_failed.sh <scan_dir>` — enumerates
+  `submit*.sbatch` and resubmits those whose ROOT is missing/incomplete.
+- **`--array` / `--pack`** → `./recover.sh -c <config> [--array]` —
+  output-driven: deletes ROOTs lacking the `OpticalPhotons` key, then re-runs
+  the generator in the same mode so its skip-on-existence logic resubmits only
+  the missing units. `resubmit_failed.sh` cannot drive array/pack (there are no
+  per-sub-job submit files to enumerate).
+
 ## Config schema
 
 Two forms are supported. Smoke-test configs use a flat
