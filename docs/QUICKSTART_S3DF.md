@@ -39,11 +39,11 @@ repo by passing `--store-dir`:
 
 ```bash
 cd LUCiD
-./scripts/download_data.sh --store-dir /sdf/data/neutrino/cjesus/CERNBOX
+./scripts/download_data.sh --store-dir /sdf/data/neutrino/cjesus/CIDER/CERNBOX
 ```
 
 This writes the real files under
-`/sdf/data/neutrino/cjesus/CERNBOX/water/muon/` and points
+`/sdf/data/neutrino/cjesus/CIDER/CERNBOX/water/muon/` and points
 `data/water/muon/` at them via symlinks. `data/wbls/muon/` is wired up
 as relative symlinks into `../../water/muon/`, so wbls reuses the same
 ROOT + SIREN files as water. Only the 1000 MeV ROOT is fetched by

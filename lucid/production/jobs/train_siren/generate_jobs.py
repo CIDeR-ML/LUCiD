@@ -59,7 +59,7 @@ SLURM_DEFAULTS: Dict[str, str] = {
     "gpus":      "1",
 }
 
-DEFAULT_OUTPUT_ROOT = Path("/sdf/data/neutrino/cjesus/SIREN_files/training_tests")
+DEFAULT_OUTPUT_ROOT = Path("/sdf/data/neutrino/cjesus/CIDER/SIREN_files/training_tests")
 
 
 def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:

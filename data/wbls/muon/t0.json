@@ -30,7 +30,7 @@
     },
     "provenance": {
         "source": "PhotonSim/tools/t0_correction/calculate_t0.py",
-        "scan_dir": "/sdf/data/neutrino/cjesus/SIREN_files/t0_parametrization/water/mu-/inputs",
+        "scan_dir": "/sdf/data/neutrino/cjesus/CIDER/SIREN_files/t0_parametrization/water/mu-/inputs",
         "n_energies": 307,
         "energy_range_mev": [
             150,

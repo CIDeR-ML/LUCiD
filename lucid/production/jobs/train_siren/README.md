@@ -68,7 +68,7 @@ the same command without re-submitting the completed ones. Use
     "gpus":      "1"
   },
 
-  "output_root": "/sdf/data/neutrino/cjesus/SIREN_files/training_tests"
+  "output_root": "/sdf/data/neutrino/cjesus/CIDER/SIREN_files/training_tests"
 }
 ```
 
@@ -139,7 +139,7 @@ have just been (re)generated:
 # 1. Rebuild the lookup table from the fresh Stage-1 inputs.
 apptainer exec -B /sdf/data/neutrino "$LUCID_IMAGE_PATH" \
     /opt/conda/bin/lucid-build-dedx-table \
-        --data-dir /sdf/data/neutrino/cjesus/SIREN_files/training_inputs \
+        --data-dir /sdf/data/neutrino/cjesus/CIDER/SIREN_files/training_inputs \
         --material water --particle mu- \
         --output   /sdf/.../LUCiD/data/water/muon/dedx_lookup_table.h5
 
@@ -198,7 +198,7 @@ from pathlib import Path
 from pdf2image import convert_from_path
 import matplotlib.pyplot as plt
 
-root = Path('/sdf/data/neutrino/cjesus/SIREN_files/training_tests/water_mu_v1')
+root = Path('/sdf/data/neutrino/cjesus/CIDER/SIREN_files/training_tests/water_mu_v1')
 for run in sorted(root.iterdir()):
     img = convert_from_path(run / 'final_training_progress.pdf', dpi=120)[0]
     plt.figure(figsize=(8, 4)); plt.imshow(img); plt.title(run.name); plt.axis('off')

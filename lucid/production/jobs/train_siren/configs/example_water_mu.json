@@ -41,5 +41,5 @@
     "gpus":      "1"
   },
 
-  "output_root": "/sdf/data/neutrino/cjesus/SIREN_files/training_tests"
+  "output_root": "/sdf/data/neutrino/cjesus/CIDER/SIREN_files/training_tests"
 }
