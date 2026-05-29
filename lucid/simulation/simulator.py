@@ -817,10 +817,10 @@ def setup_event_simulator(
 
         key, cher_key, scint_key, opt_key = jax.random.split(key, 4)
 
-        predict_t0_vec = jax.vmap(predict_t0, in_axes=(0, None, None, None, None, None, None, None, None))
-        # stretched_exp_delay_v1: (cA, mA, cL, mL, bB0, bB1, bB2) — see
-        # lucid.sources.siren_rays.predict_t0.
-        cA, mA, cL, mL, bB0, bB1, bB2 = t0_params
+        predict_t0_vec = jax.vmap(predict_t0, in_axes=(0, None, None, None, None))
+        # stretched_exp_delay: (a_coeffs, lambda_coeffs, beta_coeffs), each a
+        # length-4 cubic in log10 E — see lucid.sources.siren_rays.predict_t0.
+        a_coeffs, l_coeffs, b_coeffs = t0_params
 
         # --- Cherenkov branch ---
         if _has_cherenkov:
@@ -830,7 +830,7 @@ def setup_event_simulator(
             ch_distances_mm = jnp.linalg.norm(ch_origins - track_origin, axis=1) * 1000
             ch_t0 = jax.lax.stop_gradient(
                 predict_t0_vec(ch_distances_mm, energy,
-                               cA, mA, cL, mL, bB0, bB1, bB2))
+                               a_coeffs, l_coeffs, b_coeffs))
             # Cherenkov wavelengths: sampled inline so we can concatenate with
             # scintillation. When monochromatic mode, ch_wls stays None and the
             # all-cherenkov branch falls back to the legacy code path.
@@ -855,7 +855,7 @@ def setup_event_simulator(
             sc_distances_mm = jnp.linalg.norm(sc_origins - track_origin, axis=1) * 1000
             sc_t0 = jax.lax.stop_gradient(
                 predict_t0_vec(sc_distances_mm, energy,
-                               cA, mA, cL, mL, bB0, bB1, bB2))
+                               a_coeffs, l_coeffs, b_coeffs))
             sc_times = sc_t0 + sc_tdelay
 
         # --- Concatenate the enabled processes ---
