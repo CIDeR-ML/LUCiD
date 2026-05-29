@@ -1,4 +1,6 @@
 .DS_Store
+# Claude Code local state / worktrees (never commit)
+.claude/
 *.pdf
 *.pkl
 *.h5
