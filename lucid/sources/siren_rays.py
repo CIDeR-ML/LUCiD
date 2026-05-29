@@ -539,32 +539,36 @@ def make_scintillation_surrogate_fn(dedx_ctx, scint_lambda_min, scint_lambda_max
 # t0 (Cherenkov vertex-time baseline — shared with scintillation as the
 # deposit-time anchor; scintillation adds its biexp delay on top)
 #
-# Schema: stretched_exp_delay_v1
+# Schema: stretched_exp_delay
 #   t(d, E) = d / c  +  A(E) * (exp((d/λ(E))^β(E)) − 1)
-#   log10 A(E) = cA + mA * log10 E
-#   log10 λ(E) = cL + mL * log10 E
-#   β(E)       = bB0 + bB1 * log10 E + bB2 * (log10 E)^2
+#   log10 A(E), log10 λ(E) and β(E) are each a cubic in log10 E:
+#       value = c0 + c1·logE + c2·logE² + c3·logE³   (coeffs ascending)
 #
-# Seven params total. The d/c term uses vacuum c because the underlying
-# PhotonSim hist stores delay relative to vacuum-c (muon track time at
-# β ≈ 1). Distance is in mm, energy in MeV, time in ns.
+# Three length-4 coefficient vectors total. The d/c term uses vacuum c
+# because the underlying PhotonSim hist stores delay relative to vacuum-c
+# (muon track time at β ≈ 1). Distance is in mm, energy in MeV, time in ns.
 # ---------------------------------------------------------------------------
 
 _C_MM_PER_NS = 299.792  # vacuum c in PhotonSim units
 
 
 @jit
-def predict_t0(distance, energy, cA, mA, cL, mL, bB0, bB1, bB2):
+def predict_t0(distance, energy, a_coeffs, l_coeffs, b_coeffs):
     """Photon emission time t(d, E) for the Cherenkov vertex-time baseline.
 
-    Returns d/c + delay, where delay is the stretched-exp parametrisation
-    fit from PhotonHist_TimeDistanceNorm. JAX-jitted; all params are
-    scalars so the function vmaps cleanly over distance.
+    log10 A, log10 λ and β are each a cubic in log10 E; a_coeffs, l_coeffs,
+    b_coeffs are length-4, ascending (c0 + c1·x + c2·x² + c3·x³). Returns
+    d/c + delay, the stretched-exp parametrisation fit from
+    PhotonHist_TimeDistanceNorm. JAX-jitted; vmaps cleanly over distance.
     """
-    log_E = jnp.log10(energy)
-    A = 10.0 ** (cA + mA * log_E)
-    lam = 10.0 ** (cL + mL * log_E)
-    beta = bB0 + bB1 * log_E + bB2 * log_E * log_E
+    x = jnp.log10(energy)
+
+    def _cubic(c):
+        return c[0] + c[1] * x + c[2] * x * x + c[3] * x * x * x
+
+    A = 10.0 ** _cubic(a_coeffs)
+    lam = 10.0 ** _cubic(l_coeffs)
+    beta = _cubic(b_coeffs)
     arg = jnp.power(jnp.clip(distance / lam, 1e-12, None), beta)
     delay = A * (jnp.exp(arg) - 1.0)
     return distance / _C_MM_PER_NS + delay
@@ -574,11 +578,7 @@ def predict_t0_wrapper(distance, energy, params):
     """Evaluate predict_t0 from a nested-dict params (the t0.json structure)."""
     return predict_t0(
         distance, energy,
-        params['A']['log10_intercept'],
-        params['A']['log10_slope_logE'],
-        params['lambda']['log10_intercept'],
-        params['lambda']['log10_slope_logE'],
-        params['beta']['const'],
-        params['beta']['slope_logE'],
-        params['beta']['slope_logE_sq'],
+        params['A']['log10_poly_logE'],
+        params['lambda']['log10_poly_logE'],
+        params['beta']['poly_logE'],
     )

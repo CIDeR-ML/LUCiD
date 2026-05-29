@@ -21,7 +21,7 @@ class ParticleModel(NamedTuple):
     siren_predictor: object         # SIRENPredictor instance
     context: object                 # SirenContext from build_cherenkov_context
     model_params: dict              # Flax model params
-    t0_params: tuple                # (baseline_slope, baseline_intercept, A_slope, ...)
+    t0_params: tuple                # (a_coeffs, lambda_coeffs, beta_coeffs), cubic-in-log10E
     particle: str                   # e.g. 'muon', 'electron'
 
     @staticmethod

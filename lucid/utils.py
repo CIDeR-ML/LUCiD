@@ -179,10 +179,11 @@ def unpack_t0_params(particle_type: str = 'muon', material: str = 'water') -> tu
     """
     Load and unpack t0 timing parameters for a given particle type and material.
 
-    Schema: ``stretched_exp_delay_v1`` —
+    Schema: ``stretched_exp_delay`` —
         ``t(d, E) = d/c + A(E)·(exp((d/λ(E))^β(E)) − 1)``
-    with ``log10 A``, ``log10 λ`` linear in ``log10 E`` and ``β`` quadratic
-    in ``log10 E``. Distance in mm, energy in MeV, time in ns.
+    with ``log10 A``, ``log10 λ`` and ``β`` each a cubic in ``log10 E``
+    (coeffs ascending: ``c0 + c1·logE + c2·logE² + c3·logE³``). Distance in
+    mm, energy in MeV, time in ns.
 
     Parameters
     ----------
@@ -193,8 +194,9 @@ def unpack_t0_params(particle_type: str = 'muon', material: str = 'water') -> tu
 
     Returns
     -------
-    tuple of 7 floats
-        ``(cA, mA, cL, mL, bB0, bB1, bB2)`` — matches the
+    tuple of three coefficient tuples
+        ``(a_coeffs, lambda_coeffs, beta_coeffs)``, each length-4 ascending
+        in ``log10 E`` — matches the
         :func:`lucid.sources.siren_rays.predict_t0` signature exactly.
     """
     normalized_type = normalize_particle_type_for_path(particle_type)
@@ -203,20 +205,16 @@ def unpack_t0_params(particle_type: str = 'muon', material: str = 'water') -> tu
         t0_params = json.load(f)
 
     form = t0_params.get('form')
-    if form != 'stretched_exp_delay_v1':
+    if form != 'stretched_exp_delay':
         raise ValueError(
             f"{path}: unsupported t0 schema {form!r}; expected "
-            f"'stretched_exp_delay_v1'. Regenerate with "
+            f"'stretched_exp_delay'. Regenerate with "
             f"PhotonSim/tools/t0_correction/calculate_t0.py."
         )
     return (
-        t0_params['A']['log10_intercept'],
-        t0_params['A']['log10_slope_logE'],
-        t0_params['lambda']['log10_intercept'],
-        t0_params['lambda']['log10_slope_logE'],
-        t0_params['beta']['const'],
-        t0_params['beta']['slope_logE'],
-        t0_params['beta']['slope_logE_sq'],
+        tuple(t0_params['A']['log10_poly_logE']),
+        tuple(t0_params['lambda']['log10_poly_logE']),
+        tuple(t0_params['beta']['poly_logE']),
     )
 
 def unpack_siren_params(particle_type: str = 'muon', material: str = 'water') -> dict:
