@@ -1,17 +1,19 @@
 #!/bin/bash
 #
-# Download LUCiD example data (water muon) from the CERNBox public share.
+# Download LUCiD example data (water muon + electron) from the CERNBox
+# public share.
 #
-# Default:             real files land in   LUCiD/data/water/muon/
-# With --store-dir D:  real files land in   D/water/muon/   and
-#                      LUCiD/data/water/muon/ holds symlinks pointing there.
+# Default:             real files land in   LUCiD/data/water/{muon,electron}/
+# With --store-dir D:  real files land in   D/water/{muon,electron}/   and
+#                      LUCiD/data/water/{muon,electron}/ holds symlinks there.
 #
-# In both cases data/wbls/muon/ is populated with relative symlinks into
-# ../../water/muon/ (ROOT + SIREN), so wbls reuses the water files.
+# In both cases data/wbls/{muon,electron}/ is populated with relative symlinks
+# into ../../water/{muon,electron}/ (ROOT + SIREN), so wbls reuses the water
+# files.
 #
-# The share holds three muon ROOT energies (500/1000/1500 MeV). Only
-# 1000 MeV is fetched by default; use --all-energies for all three. The
-# SIREN trained models (Cherenkov + dE/dx) are always fetched.
+# The share holds three ROOT energies per particle (500/1000/1500 MeV). Only
+# 1000 MeV is fetched by default; use --all-energies for all three. The SIREN
+# trained models (Cherenkov + dE/dx) are always fetched, for both particles.
 
 set -euo pipefail
 
@@ -25,6 +27,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LUCID_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 DATA_DIR="${LUCID_ROOT}/data"
 
+# CERNBox uses short particle names (mu-, e-); the repo's data/ tree uses long
+# names (muon, electron). Each entry is "<cernbox_name> <repo_name>".
+PARTICLES=("mu- muon" "e- electron")
+
 # --- defaults ----------------------------------------------------------------
 STORE_DIR=""
 ENERGIES=(1000)
@@ -33,19 +39,20 @@ usage() {
     cat <<EOF
 Usage: $(basename "$0") [--store-dir DIR] [--all-energies | --energies "E1 E2"]
 
-Downloads LUCiD water-muon example data (ROOT + trained SIREN models) from the
-CERNBox share and wires up data/wbls/muon/ as symlinks reusing the water files.
+Downloads LUCiD water example data (ROOT + trained SIREN models) for both muon
+and electron from the CERNBox share, and wires up data/wbls/{muon,electron}/ as
+symlinks reusing the water files.
 
 Options:
-  --store-dir DIR     Put the real files under DIR/water/muon/ and leave
-                      symlinks in LUCiD/data/water/muon/. Default: store the
-                      files directly in LUCiD/data/water/muon/.
-                      On S3DF use: --store-dir /sdf/data/neutrino/cjesus/CERNBOX
-  --all-energies      Fetch all ROOT energies (500, 1000, 1500 MeV).
+  --store-dir DIR     Put the real files under DIR/water/{muon,electron}/ and
+                      leave symlinks in LUCiD/data/water/{muon,electron}/.
+                      Default: store the files directly in LUCiD/data/.
+                      On S3DF use: --store-dir /sdf/data/neutrino/cjesus/CIDER/CERNBOX
+  --all-energies      Fetch all ROOT energies (500, 1000, 1500 MeV) per particle.
   --energies "LIST"   Space-separated ROOT energies in MeV (e.g. "500 1000").
   -h, --help          Show this help.
 
-Default ROOT energy: 1000 MeV only (~0.97 GB).
+Default ROOT energy: 1000 MeV only, for both mu- and e-.
 EOF
 }
 
@@ -70,25 +77,18 @@ for tool in curl python3; do
     fi
 done
 
-# --- resolve storage roots ---------------------------------------------------
-WATER_MUON_DATA="${DATA_DIR}/water/muon"
 if [[ -n "$STORE_DIR" ]]; then
     mkdir -p "$STORE_DIR"
     STORE_DIR="$(cd "$STORE_DIR" && pwd)"          # absolutize
-    WATER_MUON_STORE="${STORE_DIR}/water/muon"
-else
-    WATER_MUON_STORE="$WATER_MUON_DATA"
 fi
-mkdir -p "$WATER_MUON_STORE"
 
 echo "======================================"
 echo "LUCiD Data Download"
 echo "======================================"
 echo "Source     : CERNBox share ${SHARE_TOKEN}"
+echo "Particles  : muon, electron"
 echo "Energies   : ${ENERGIES[*]} MeV"
-echo "Real files : ${WATER_MUON_STORE}"
-echo "data/ view : ${WATER_MUON_DATA}"
-if [[ -n "$STORE_DIR" ]]; then echo "Mode       : external store + symlinks"; else echo "Mode       : in-repo"; fi
+if [[ -n "$STORE_DIR" ]]; then echo "Mode       : external store + symlinks ($STORE_DIR)"; else echo "Mode       : in-repo"; fi
 echo ""
 
 # --- helpers -----------------------------------------------------------------
@@ -97,7 +97,7 @@ dav_get() {
     local rel="$1" dest="$2" url remote_size local_size
     url="${DAV_BASE}/${rel}"
     mkdir -p "$(dirname "$dest")"
-    remote_size="$(curl -fsSL -I -u "${SHARE_TOKEN}:" "$url" \
+    remote_size="$(curl -fsSL --retry 3 -I -u "${SHARE_TOKEN}:" "$url" \
         | tr -d '\r' | awk 'tolower($1)=="content-length:"{print $2}' | tail -1)"
     if [[ -f "$dest" && -n "$remote_size" ]]; then
         local_size="$(wc -c < "$dest" | tr -d '[:space:]')"
@@ -112,7 +112,7 @@ dav_get() {
 
 # List every file (not dir) under a remote dir; prints paths relative to share root.
 dav_list() {
-    curl -fsSL -X PROPFIND -H "Depth: infinity" -u "${SHARE_TOKEN}:" "${DAV_BASE}/$1/" \
+    curl -fsSL --retry 3 -X PROPFIND -H "Depth: infinity" -u "${SHARE_TOKEN}:" "${DAV_BASE}/$1/" \
     | python3 -c '
 import sys, re, os, urllib.parse as up
 tok = os.environ["SHARE_TOKEN"]
@@ -136,79 +136,105 @@ drop_symlink() {
     return 0
 }
 
-# --- 1. clear stale SIREN symlinks at the store location ---------------------
-drop_symlink "${WATER_MUON_STORE}/siren_training"
-drop_symlink "${WATER_MUON_STORE}/dedx_siren_training"
-
-# --- 2. ROOT files -----------------------------------------------------------
-echo "Downloading ROOT file(s)..."
-for E in "${ENERGIES[@]}"; do
-    fname="${E}MeV_100events.root"
-    dav_get "ROOT_files/water/mu-/${fname}" "${WATER_MUON_STORE}/${fname}"
-done
-
-# --- 3. SIREN trained models -------------------------------------------------
-# Remap CERNBox dir names to the repo's layout:
-#   cherenkov -> siren_training        dedx -> dedx_siren_training
-echo "Downloading SIREN model files..."
-SIREN_TMP="$(mktemp)"
-dav_list "SIREN_files/water/mu-" > "$SIREN_TMP"
-while IFS= read -r rel; do
-    [[ -z "$rel" ]] && continue
-    sub="${rel#SIREN_files/water/mu-/}"
-    case "$sub" in
-        cherenkov/*) dest_sub="siren_training/${sub#cherenkov/}" ;;
-        dedx/*)      dest_sub="dedx_siren_training/${sub#dedx/}" ;;
-        *)           dest_sub="$sub" ;;
-    esac
-    dav_get "$rel" "${WATER_MUON_STORE}/${dest_sub}"
-done < "$SIREN_TMP"
-rm -f "$SIREN_TMP"
-
-# Entries that make up a complete water-muon set (used for the symlink steps).
-ENTRIES=(siren_training dedx_siren_training)
-for E in "${ENERGIES[@]}"; do ENTRIES+=("${E}MeV_100events.root"); done
-
-# --- 4. external store -> data/ symlinks -------------------------------------
-if [[ -n "$STORE_DIR" ]]; then
-    echo "Linking data/water/muon -> store..."
-    mkdir -p "$WATER_MUON_DATA"
-    for entry in "${ENTRIES[@]}"; do
-        rm -rf "${WATER_MUON_DATA:?}/${entry}"
-        ln -s "${WATER_MUON_STORE}/${entry}" "${WATER_MUON_DATA}/${entry}"
-    done
-fi
-
-# --- 5. wbls reuses water (relative symlinks) --------------------------------
-echo "Wiring up data/wbls/muon -> water (symlinks)..."
-WBLS_MUON_DATA="${DATA_DIR}/wbls/muon"
-mkdir -p "$WBLS_MUON_DATA"
-for entry in "${ENTRIES[@]}"; do
-    rm -rf "${WBLS_MUON_DATA:?}/${entry}"
-    ln -s "../../water/muon/${entry}" "${WBLS_MUON_DATA}/${entry}"
-done
-
-# --- 6. verify ---------------------------------------------------------------
-echo ""
-echo "Verifying..."
+# --- verify bookkeeping ------------------------------------------------------
 ok=1
 check() {
     if [[ -e "$1" ]]; then echo "  ok   ${1#"$LUCID_ROOT"/}"; else echo "  MISS ${1#"$LUCID_ROOT"/}"; ok=0; fi
 }
-check "${WATER_MUON_DATA}/siren_training/trained_model/photonsim_siren_weights.npz"
-check "${WATER_MUON_DATA}/dedx_siren_training/trained_model/dedx_siren_weights.npz"
-check "${WBLS_MUON_DATA}/siren_training/trained_model/photonsim_siren_weights.npz"
-for E in "${ENERGIES[@]}"; do
-    check "${WATER_MUON_DATA}/${E}MeV_100events.root"
-    check "${WBLS_MUON_DATA}/${E}MeV_100events.root"
+
+# --- per-particle fetch ------------------------------------------------------
+# fetch_particle <cernbox_particle> <repo_particle>   e.g. "mu- muon" / "e- electron"
+fetch_particle() {
+    local cb="$1" repo="$2"
+    local data="${DATA_DIR}/water/${repo}" store wbls="${DATA_DIR}/wbls/${repo}"
+    if [[ -n "$STORE_DIR" ]]; then store="${STORE_DIR}/water/${repo}"; else store="$data"; fi
+    mkdir -p "$store"
+
+    echo "--------------------------------------"
+    echo "water/${repo}  (CERNBox: ${cb})"
+    echo "  real files : ${store}"
+    echo "  data/ view : ${data}"
+    echo ""
+
+    # 1. clear stale SIREN symlinks at the store location
+    drop_symlink "${store}/siren_training"
+    drop_symlink "${store}/dedx_siren_training"
+
+    # 2. ROOT files
+    echo "Downloading ROOT file(s)..."
+    local E fname
+    for E in "${ENERGIES[@]}"; do
+        fname="${E}MeV_100events.root"
+        dav_get "ROOT_files/water/${cb}/${fname}" "${store}/${fname}"
+    done
+
+    # 3. SIREN trained models. Remap CERNBox dir names to the repo's layout:
+    #    cherenkov -> siren_training        dedx -> dedx_siren_training
+    echo "Downloading SIREN model files..."
+    local siren_tmp rel sub dest_sub
+    siren_tmp="$(mktemp)"
+    dav_list "SIREN_files/water/${cb}" > "$siren_tmp"
+    while IFS= read -r rel; do
+        [[ -z "$rel" ]] && continue
+        sub="${rel#SIREN_files/water/${cb}/}"
+        case "$sub" in
+            cherenkov/*) dest_sub="siren_training/${sub#cherenkov/}" ;;
+            dedx/*)      dest_sub="dedx_siren_training/${sub#dedx/}" ;;
+            *)           dest_sub="$sub" ;;
+        esac
+        dav_get "$rel" "${store}/${dest_sub}"
+    done < "$siren_tmp"
+    rm -f "$siren_tmp"
+
+    # Entries that make up a complete set (used for the symlink steps).
+    local entries=(siren_training dedx_siren_training) entry
+    for E in "${ENERGIES[@]}"; do entries+=("${E}MeV_100events.root"); done
+
+    # 4. external store -> data/ symlinks
+    if [[ -n "$STORE_DIR" ]]; then
+        echo "Linking data/water/${repo} -> store..."
+        mkdir -p "$data"
+        for entry in "${entries[@]}"; do
+            rm -rf "${data:?}/${entry}"
+            ln -s "${store}/${entry}" "${data}/${entry}"
+        done
+    fi
+
+    # 5. wbls reuses water (relative symlinks)
+    echo "Wiring up data/wbls/${repo} -> water (symlinks)..."
+    mkdir -p "$wbls"
+    for entry in "${entries[@]}"; do
+        rm -rf "${wbls:?}/${entry}"
+        ln -s "../../water/${repo}/${entry}" "${wbls}/${entry}"
+    done
+
+    # 6. verify
+    echo ""
+    echo "Verifying water/${repo}..."
+    check "${data}/siren_training/trained_model/photonsim_siren_weights.npz"
+    check "${data}/dedx_siren_training/trained_model/dedx_siren_weights.npz"
+    check "${wbls}/siren_training/trained_model/photonsim_siren_weights.npz"
+    for E in "${ENERGIES[@]}"; do
+        check "${data}/${E}MeV_100events.root"
+        check "${wbls}/${E}MeV_100events.root"
+    done
+    echo ""
+}
+
+# --- run for each particle ---------------------------------------------------
+for spec in "${PARTICLES[@]}"; do
+    # shellcheck disable=SC2086
+    fetch_particle ${spec}
 done
 
-echo ""
 if [[ "$ok" == 1 ]]; then
     echo "======================================"
     echo "Download complete."
-    echo "  water: ${WATER_MUON_DATA}"
-    echo "  wbls : ${WBLS_MUON_DATA} (symlinks -> water)"
+    for spec in "${PARTICLES[@]}"; do
+        repo="${spec#* }"
+        echo "  water/${repo} : ${DATA_DIR}/water/${repo}"
+        echo "  wbls/${repo}  : ${DATA_DIR}/wbls/${repo} (symlinks -> water)"
+    done
     echo "======================================"
 else
     echo "Some files are missing - see MISS lines above." >&2
