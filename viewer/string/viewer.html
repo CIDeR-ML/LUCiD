@@ -33,12 +33,7 @@ input[type=range]{width:100%;accent-color:#4488cc;height:14px}
 <div id="ui">
   <h3>IceCube-86</h3>
   <label>Dataset</label>
-  <select id="dsSel">
-    <option value="../../output/siren_tracks_muon/">Muon tracks</option>
-    <option value="../../output/siren_tracks_electron/">Electron tracks</option>
-    <option value="../../output/cascades_sim/">Cascades</option>
-    <option value="../../output/siren_tracks/">Tracks (old)</option>
-  </select>
+  <select id="dsSel"></select>
   <label>Event</label><select id="evSel"></select>
   <label>Point size</label><input type="range" id="ptSz" min="0.5" max="5" step="0.1" value="2.0">
   <label>Emphasis</label><input type="range" id="emph" min="0.5" max="4" step="0.1" value="2.0">
@@ -92,7 +87,29 @@ let curHits=null;
 
 const C=0.2998;
 let TLEN=300;
-let DIR='../../output/siren_tracks_muon/';
+let DIR='';
+const OUTPUT_BASE='../../output/';
+
+async function discoverDatasets(){
+  const sel=$('dsSel');sel.innerHTML='';
+  const r=await fetch(OUTPUT_BASE);
+  if(!r.ok){sel.innerHTML='<option>No output/ found</option>';return false;}
+  const html=await r.text();
+  const dirs=[...html.matchAll(/href="([^"]+?)\/"/g)].map(m=>m[1])
+    .filter(d=>!d.startsWith('.')&&d!=='..');
+  const valid=[];
+  for(const d of dirs){
+    const base=OUTPUT_BASE+d+'/';
+    const [dr,er]=await Promise.all([fetch(base+'detector.json',{method:'HEAD'}),
+                                     fetch(base+'events.json',{method:'HEAD'})]);
+    if(dr.ok&&er.ok)valid.push(d);}
+  if(!valid.length){sel.innerHTML='<option>No datasets found</option>';return false;}
+  valid.sort();
+  for(const d of valid){
+    const o=document.createElement('option');o.value=OUTPUT_BASE+d+'/';
+    o.text=d.replace(/_/g,' ');sel.appendChild(o);}
+  DIR=sel.value;
+  return true;}
 
 function inferno(t){t=Math.max(0,Math.min(1,t));
   const s=[[0,[2,1,10]],[.1,[30,5,55]],[.22,[75,10,95]],[.33,[120,20,95]],
@@ -407,7 +424,7 @@ $('bGif').onclick=exportGif;
 $('bMp4').onclick=exportMp4;
 $('spd').oninput=e=>{$('spdV').textContent=(+e.target.value).toFixed(1)+'x';};
 
-async function start(){init();if(await loadData()!==false){buildDet();showEvent(0);}tick(0);}
+async function start(){init();if(await discoverDatasets()&&await loadData()!==false){buildDet();showEvent(0);}tick(0);}
 start();
 </script>
 </body>
