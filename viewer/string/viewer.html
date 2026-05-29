@@ -34,8 +34,10 @@ input[type=range]{width:100%;accent-color:#4488cc;height:14px}
   <h3>IceCube-86</h3>
   <label>Dataset</label>
   <select id="dsSel">
+    <option value="../../output/siren_tracks_muon/">Muon tracks</option>
+    <option value="../../output/siren_tracks_electron/">Electron tracks</option>
     <option value="../../output/cascades_sim/">Cascades</option>
-    <option value="../../output/siren_tracks/">Tracks (SIREN)</option>
+    <option value="../../output/siren_tracks/">Tracks (old)</option>
   </select>
   <label>Event</label><select id="evSel"></select>
   <label>Point size</label><input type="range" id="ptSz" min="0.5" max="5" step="0.1" value="2.0">
@@ -90,7 +92,7 @@ let curHits=null;
 
 const C=0.2998;
 let TLEN=300;
-let DIR='../../output/cascades_sim/';
+let DIR='../../output/siren_tracks_muon/';
 
 function inferno(t){t=Math.max(0,Math.min(1,t));
   const s=[[0,[2,1,10]],[.1,[30,5,55]],[.22,[75,10,95]],[.33,[120,20,95]],
@@ -144,7 +146,8 @@ async function loadData(){
   det=await dr.json();evs=await er.json();
   const sel=$('evSel');sel.innerHTML='';
   evs.forEach((e,i)=>{const o=document.createElement('option');o.value=i;
-    const eStr=e.energy_gev?` ${(e.energy_gev/1000).toFixed(0)}TeV`:(e.energy_tev?` ${e.energy_tev.toFixed(0)}TeV`:'');
+    const eGev=e.energy_gev||0;
+    const eStr=eGev>=1000?` ${(eGev/1000).toFixed(0)}TeV`:(eGev>0?` ${eGev}GeV`:'');
     const typeStr=e.is_hadronic!==undefined?(e.is_hadronic?' had':' em'):'';
     o.text=`${i}:${typeStr} ${e.n_doms_hit}DOMs${eStr}`;sel.appendChild(o);});}
 
@@ -248,8 +251,7 @@ function showEvent(idx){
   const d=ev.track_direction||ev.direction;
   const isCascade=!!ev.vertex; // cascades have 'vertex', tracks have 'track_origin'
   if(!isCascade&&o&&d){
-    // Compute track length from time range so muon and wavefront stay in sync
-    TLEN=(tMax-tMin)*C;
+    TLEN=ev.track_length_m||(tMax-tMin)*C;
     trkMat=new LineMaterial({color:0x44ddff,linewidth:5,transparent:true,opacity:0.7,
       worldUnits:false,resolution:new THREE.Vector2(innerWidth,innerHeight)});
     buildTrk(o,d,-20,TLEN);
@@ -267,7 +269,8 @@ function showEvent(idx){
   drawCbar();
   const tRng=hasT?` | ${(tMax-tMin).toFixed(0)}ns`:'';
   const isCasc=!!ev.vertex;
-  const eInfo=ev.energy_gev?` | ${(ev.energy_gev/1000).toFixed(0)} TeV${ev.is_hadronic?' had':' em'}`:'';
+  const eGev=ev.energy_gev||0;
+  const eInfo=eGev>=1000?` | ${(eGev/1000).toFixed(0)} TeV${ev.is_hadronic?' had':' em'}`:(eGev>0?` | ${eGev} GeV${ev.is_hadronic!==undefined?(ev.is_hadronic?' had':' em'):''}`:``);
   const typeLabel=isCasc?'Cascade':'Track';
   $('info').innerHTML=`${typeLabel} <span>${idx}</span>${eInfo} | <span>${hits.length}</span> DOMs | Q <span>${ev.total_charge.toFixed(0)}</span>${tRng}`;
   updTBar();}
@@ -297,15 +300,16 @@ function updTBar(){
 function updTrk(tFrac,isAn){
   const ev=evs[+$('evSel').value];if(!ev)return;
   const isCascade=!!ev.vertex;
-  if(isCascade){if(trkDot)trkDot.visible=showTrk;return;} // cascade: vertex dot only, no line animation
+  if(isCascade){if(trkDot)trkDot.visible=showTrk;return;}
   const o=ev.track_origin,d=ev.track_direction;
   if(!o||!d)return;
   if(!isAn){if(trkLine)buildTrk(o,d,-20,TLEN);if(trkDot)trkDot.visible=false;return;}
-  const muonFrac=Math.max(0,Math.min(1, tFrac*(tMax-tMin)/(TLEN/C)));
-  const front=-20+muonFrac*(TLEN+20);
+  // Muon position from absolute time: at t=tMin+tFrac*(tMax-tMin), muon is at t*C
+  const tAbs=tMin+tFrac*(tMax-tMin);
+  const front=Math.min(tAbs*C,TLEN);
   buildTrk(o,d,-20,front);
   if(trkDot){trkDot.position.set(o[0]+d[0]*front,o[1]+d[1]*front,o[2]+d[2]*front);
-    trkDot.visible=showTrk&&muonFrac<1;}}
+    trkDot.visible=showTrk&&front<TLEN;}}
 
 function tick(ts){
   requestAnimationFrame(tick);

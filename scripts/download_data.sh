@@ -208,7 +208,16 @@ fetch_particle() {
         ln -s "../../water/${repo}/${entry}" "${wbls}/${entry}"
     done
 
-    # 6. verify
+    # 6. ice reuses water SIREN models (siren_params.json and t0.json are tracked in git)
+    local ice="${DATA_DIR}/ice/${repo}"
+    echo "Wiring up data/ice/${repo} model dirs -> water (symlinks)..."
+    mkdir -p "$ice"
+    for entry in siren_training dedx_siren_training; do
+        rm -rf "${ice:?}/${entry}"
+        ln -s "../../water/${repo}/${entry}" "${ice}/${entry}"
+    done
+
+    # 7. verify
     echo ""
     echo "Verifying water/${repo}..."
     check "${data}/siren_training/trained_model/photonsim_siren_weights.npz"
@@ -234,6 +243,7 @@ if [[ "$ok" == 1 ]]; then
         repo="${spec#* }"
         echo "  water/${repo} : ${DATA_DIR}/water/${repo}"
         echo "  wbls/${repo}  : ${DATA_DIR}/wbls/${repo} (symlinks -> water)"
+        echo "  ice/${repo}   : ${DATA_DIR}/ice/${repo} (model symlinks -> water)"
     done
     echo "======================================"
 else

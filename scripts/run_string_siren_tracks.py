@@ -1,73 +1,94 @@
 """
-Batch SIREN track simulation: 20 events, 1M photons each, GPU.
+Batch SIREN track simulation for IceCube-86 string detector.
 
-Uses the fast string simulator (brute-force + lax.scan) for ~18× speedup
-over the old DDA/hash pipeline.
+Uses setup_event_simulator in track mode with the standard string propagator.
+Generates muon and electron events at IceCube-relevant energies.
 
-Run: python string/batch_siren_tracks.py
+Run:
+    python scripts/run_string_siren_tracks.py
+    python scripts/run_string_siren_tracks.py --particle electron
 """
 
-import sys
+import argparse
+import json
 import os
+import sys
+import time
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import time
-import json
 import jax
 import jax.numpy as jnp
 import numpy as np
 
-from lucid.geometry.string import StringTelescope
-from lucid.propagation.string.fast import create_fast_string_simulator
+from lucid.detector_params import ParticleParams
 from lucid.siren.core import build_cherenkov_context
 from lucid.siren.training.inference import SIRENPredictor
 from lucid.sources.siren_rays import make_cherenkov_surrogate_fn
-from lucid.utils import base_dir_path
+from lucid.simulation.simulator import setup_event_simulator
+from lucid.utils import unpack_siren_params
 
 CONFIG_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "config")
-FULL_NPZ = os.path.join(CONFIG_DIR, "icecube86_full.npz")
-OUTPUT_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "output", "siren_tracks")
+GEOM_CONFIG = os.path.join(CONFIG_DIR, "IceCube86_full_geom_config.json")
+PHYS_CONFIG = os.path.join(CONFIG_DIR, "IceCube86_ice_physics_config.json")
 
-F = 30
 N_PHOTONS = 1_000_000
-K = 15
-TEMPERATURE = 0.2
+K = 20
 N_EVENTS = 20
-SIREN_ENERGY = 2000.0  # MeV
-SPEED = 0.2254
+
+ENERGIES_GEV = [5, 10, 15, 20, 30, 40, 50, 60, 70, 70,
+                80, 80, 80, 90, 90, 90, 100, 100, 100, 100]
 
 
-def generate_siren_track_photons(track_origin, track_direction, n_photons, key,
-                                  ray_fn, model_params):
-    ray_vectors, ray_origins, photon_intensities = ray_fn(
-        track_origin, track_direction, SIREN_ENERGY, n_photons,
-        model_params, key,
-    )
-    offsets = ray_origins - track_origin[None, :]
-    ray_origins_scaled = track_origin[None, :] + F * offsets
-    photon_intensities_scaled = photon_intensities * F
-    return ray_vectors, ray_origins_scaled, photon_intensities_scaled
+def compute_track_length(particle, energy_mev):
+    """Compute the p95 emission extent for the viewer track line."""
+    sp = unpack_siren_params(particle, 'ice')
+    predictor = SIRENPredictor(sp['siren_model_path'])
+    ctx = build_cherenkov_context(predictor, sp['ray_sampling'])
+    ray_fn = make_cherenkov_surrogate_fn(ctx)
+
+    key = jax.random.PRNGKey(0)
+    origin = jnp.array([0.0, 0.0, 0.0])
+    direction = jnp.array([0.0, 0.0, 1.0])
+    _, origins, intens = ray_fn(origin, direction, energy_mev, 50000, predictor.params, key)
+    along = np.array(origins[:, 2])
+    w = np.array(intens)
+    order = np.argsort(along)
+    cum_w = np.cumsum(w[order]) / w.sum()
+    p95 = float(along[order][np.searchsorted(cum_w, 0.95)])
+    return max(p95, 5.0)
 
 
 def main():
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    parser = argparse.ArgumentParser(description="IceCube-86 SIREN track simulation")
+    parser.add_argument("--particle", default="muon", choices=["muon", "electron"])
+    args = parser.parse_args()
 
-    print(f"Loading detector and SIREN...")
-    det = StringTelescope.from_npz(FULL_NPZ)
+    particle = args.particle
+    output_dir = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "output", f"siren_tracks_{particle}")
+    os.makedirs(output_dir, exist_ok=True)
 
-    sim = create_fast_string_simulator(
-        det, det.S_radius, temperature=TEMPERATURE,
-        lambda_abs=100.0, lambda_scat=30.0,
-        speed_of_light=SPEED)
+    print(f"Building simulator: {particle}, {N_PHOTONS:,} photons, K={K}")
+    sim = setup_event_simulator(
+        GEOM_CONFIG,
+        n_photons=N_PHOTONS,
+        temperature=None,
+        K=K,
+        is_calibration=False,
+        detector_type='string',
+        physics_config=PHYS_CONFIG,
+        default_detector_params=True,
+        hit_mode='aggregated',
+        wavelength_mode=False,
+        particle=particle,
+        use_expected_value=True,
+    )
 
-    data_dir = os.path.join(base_dir_path(), 'data', 'water', 'muon')
-    model_path = os.path.join(data_dir, 'siren_training', 'trained_model', 'photonsim_siren')
-    predictor = SIRENPredictor(model_path)
-    ctx = build_cherenkov_context(predictor)
-    ray_fn = make_cherenkov_surrogate_fn(ctx)
-    model_params = predictor.params
+    det = sim.det_geom.detector
+    z_mid = (det.envelope_z_min + det.envelope_z_max) / 2
 
-    # Save detector geometry for the viewer
     det_info = {
         'string_anchors': det.string_anchors.tolist(),
         'string_tops': det.string_tops.tolist(),
@@ -80,71 +101,80 @@ def main():
         'envelope_z_max': det.envelope_z_max,
         'sensor_radius': det.S_radius,
     }
-    with open(os.path.join(OUTPUT_DIR, 'detector.json'), 'w') as f:
+    with open(os.path.join(output_dir, 'detector.json'), 'w') as f:
         json.dump(det_info, f)
 
-    print(f"\nSimulating {N_EVENTS} events: {N_PHOTONS:,} photons, K={K}, F={F}")
+    # Precompute track lengths per unique energy
+    unique_energies = sorted(set(ENERGIES_GEV))
+    track_lengths = {}
+    print("Computing track lengths...")
+    for e_gev in unique_energies:
+        track_lengths[e_gev] = compute_track_length(particle, e_gev * 1000.0)
+        print(f"  {e_gev:4d} GeV -> {track_lengths[e_gev]:.1f} m")
+
+    print(f"\nSimulating {N_EVENTS} {particle} events")
     print(f"Backend: {jax.default_backend()}")
     print(f"{'='*70}")
 
     all_events = []
     event_times = []
-    z_mid = (det.envelope_z_min + det.envelope_z_max) / 2
 
     for ev in range(N_EVENTS):
         t0 = time.perf_counter()
+        energy_gev = ENERGIES_GEV[ev]
+        energy_mev = energy_gev * 1000.0
 
         key = jax.random.PRNGKey(ev * 1000 + 42)
-        key, k1, k2, gen_key, sim_key = jax.random.split(key, 5)
+        key, k1, k2 = jax.random.split(key, 3)
 
-        origin_offset = jax.random.uniform(k1, (3,), minval=-50.0, maxval=50.0)
-        origin_offset = origin_offset.at[2].set(origin_offset[2] * 5)
-        track_origin = jnp.array([0.0, 0.0, z_mid]) + origin_offset
+        offset = jax.random.uniform(k1, (3,), minval=-80.0, maxval=80.0)
+        offset = offset.at[2].set(offset[2] * 4)
+        origin = jnp.array([0.0, 0.0, z_mid]) + offset
 
         dir_raw = jax.random.normal(k2, (3,))
-        track_direction = dir_raw / (jnp.linalg.norm(dir_raw) + 1e-10)
+        direction = dir_raw / (jnp.linalg.norm(dir_raw) + 1e-10)
 
-        ray_vectors, ray_origins, photon_weights = generate_siren_track_photons(
-            track_origin, track_direction, N_PHOTONS, gen_key, ray_fn, model_params)
+        pp = ParticleParams.from_cartesian(
+            energy=energy_mev, position=origin.tolist(),
+            direction=direction.tolist(), t0=0.0)
 
-        dom_charges, dom_time_weighted = sim(
-            ray_origins, ray_vectors, photon_weights, K, sim_key)
-        jax.block_until_ready(dom_charges)
+        charges, times = sim(pp, key)
+        jax.block_until_ready(charges)
 
         elapsed = time.perf_counter() - t0
         event_times.append(elapsed)
 
-        charges_np = np.array(dom_charges)
-        time_weighted_np = np.array(dom_time_weighted)
+        charges_np = np.array(charges)
+        times_np = np.array(times)
         hit_mask = charges_np > 1e-6
-        dom_times_np = np.where(hit_mask, time_weighted_np / (charges_np + 1e-30), 0.0)
+        dom_times_np = np.where(hit_mask, times_np, 0.0)
 
-        np.savez(os.path.join(OUTPUT_DIR, f'event_{ev:03d}.npz'),
-                 track_origin=np.array(track_origin),
-                 track_direction=np.array(track_direction),
+        np.savez(os.path.join(output_dir, f'event_{ev:03d}.npz'),
+                 track_origin=np.array(origin),
+                 track_direction=np.array(direction),
                  dom_charges=charges_np,
                  dom_times=dom_times_np,
                  hit_mask=hit_mask)
 
         hit_ids = np.where(hit_mask)[0].tolist()
-        hit_charges = charges_np[hit_mask].tolist()
-        hit_times = dom_times_np[hit_mask].tolist()
         all_events.append({
             'event_idx': ev,
-            'track_origin': np.array(track_origin).tolist(),
-            'track_direction': np.array(track_direction).tolist(),
+            'track_origin': np.array(origin).tolist(),
+            'track_direction': np.array(direction).tolist(),
+            'energy_gev': energy_gev,
+            'track_length_m': track_lengths[energy_gev],
             'n_doms_hit': int(hit_mask.sum()),
             'total_charge': float(charges_np.sum()),
             'hit_dom_ids': hit_ids,
-            'hit_charges': hit_charges,
-            'hit_times_ns': hit_times,
+            'hit_charges': charges_np[hit_mask].tolist(),
+            'hit_times_ns': dom_times_np[hit_mask].tolist(),
         })
 
         tag = " (JIT)" if ev == 0 else ""
-        print(f"  Event {ev:2d}: {int(hit_mask.sum()):4d} DOMs, "
-              f"Q={charges_np.sum():10.0f}, {elapsed:.1f}s{tag}")
+        print(f"  Event {ev:2d} [{energy_gev:4d} GeV]: {int(hit_mask.sum()):4d} DOMs, "
+              f"Q={charges_np.sum():10.1f}, {elapsed:.1f}s{tag}")
 
-    with open(os.path.join(OUTPUT_DIR, 'events.json'), 'w') as f:
+    with open(os.path.join(output_dir, 'events.json'), 'w') as f:
         json.dump(all_events, f)
 
     jit_time = event_times[0]
@@ -153,11 +183,8 @@ def main():
     std_time = np.std(run_times) if run_times else 0
 
     print(f"\n{'='*70}")
-    print(f"Timing:")
-    print(f"  Event 0 (includes JIT): {jit_time:.1f}s")
-    print(f"  Events 1-{N_EVENTS-1} (post-JIT): {mean_time:.2f} +/- {std_time:.2f} s/event")
-    print(f"  Total wall time: {sum(event_times):.1f}s")
-    print(f"Output: {OUTPUT_DIR}/")
+    print(f"Timing: JIT={jit_time:.1f}s, post-JIT={mean_time:.2f}+/-{std_time:.2f} s/event")
+    print(f"Output: {output_dir}/")
 
 
 if __name__ == "__main__":
