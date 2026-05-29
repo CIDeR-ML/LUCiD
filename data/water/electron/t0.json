@@ -1,39 +1,39 @@
 {
     "form": "stretched_exp_delay",
     "description": "t(d, E) = d/c + A(E)*(exp((d/lambda(E))^beta(E)) - 1)  -- d in mm, E in MeV, t in ns.  log10 A, log10 lambda and beta are each a cubic in log10 E; coeffs ascending [c0, c1, c2, c3].",
-    "particle": "mu-",
+    "particle": "e-",
     "material": "water",
     "c_mm_per_ns": 299.792,
     "A": {
         "log10_poly_logE": [
-            -1.1413985390790495,
-            -0.0011668309968835447,
-            -0.0686782496860596,
-            0.0030851333761081207
+            -7.783257552728808,
+            7.96148634038347,
+            -2.51167272574354,
+            0.23183216873378845
         ]
     },
     "lambda": {
         "log10_poly_logE": [
-            -0.511328234243701,
-            1.0056354608899198,
-            0.16246432315097153,
-            -0.026539761397066784
+            1.5749264518842665,
+            5.051656325360716,
+            -1.8942445041188805,
+            0.19407255595936607
         ]
     },
     "beta": {
         "poly_logE": [
-            11.557064373395278,
-            -11.460626157203176,
-            3.8278235678067194,
-            -0.3852743551667546
+            -0.7732205333497753,
+            0.9499201559578477,
+            -0.14231517486337136,
+            0.0011170776048438826
         ]
     },
     "provenance": {
         "source": "PhotonSim/tools/t0_correction/calculate_t0.py",
-        "scan_dir": "/sdf/data/neutrino/cjesus/CIDER/SIREN_files/t0_parametrization/water/mu-/inputs",
-        "n_energies": 307,
+        "scan_dir": "/sdf/data/neutrino/cjesus/CIDER/SIREN_files/t0_parametrization/water/e-/inputs",
+        "n_energies": 329,
         "energy_range_mev": [
-            150,
+            11,
             100000
         ]
     }
