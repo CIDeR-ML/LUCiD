@@ -50,6 +50,10 @@ export OUTPUT_BASE_PATH="/path/to/your/production/output"
 # =============================================================================
 # SLURM configuration
 # =============================================================================
+# SLURM_PARTITION takes a single partition (e.g. "ampere") or a comma list that
+# round-robins jobs across partitions, weighted by an optional :N. For CPU
+# dataprod, "roma:130,milano:272" splits jobs by node count to drain faster.
+# Keep it single-valued on NERSC/HTCondor (they read one target here).
 export SLURM_PARTITION="ampere"
 export SLURM_ACCOUNT="your-account:your-group"
 

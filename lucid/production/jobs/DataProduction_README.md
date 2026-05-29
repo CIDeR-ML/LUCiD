@@ -203,6 +203,22 @@ every `submit_job_*.sbatch` and checks the matching shard, so a
 preempted sub-job from either wave shows up identically. Run
 `resubmit_failed.sh` before a top-up if you want a clean slate.
 
+### Spreading across partitions (weighted round-robin)
+
+A comma-separated `SLURM_PARTITION` (or `-P`) round-robins sub-jobs across
+partitions, weighted by an optional `:N` suffix; a single value targets one
+partition:
+
+```bash
+export SLURM_PARTITION="roma:130,milano:272"   # weight by node count
+```
+
+Each sub-job is stamped with one partition by a smooth weighted round-robin,
+chosen at generation time, and the fan-out prints the resulting split. Which
+partitions to use, the weights, and why the choice is per-job are
+cluster-specific — see your cluster's quickstart, e.g.
+[`docs/QUICKSTART_S3DF.md`](../../../docs/QUICKSTART_S3DF.md).
+
 ## Output layout
 
 Each `config_NNNNNN/` is one LUCiD **dataset**. Each job contributes

@@ -12,7 +12,9 @@ CLI surface:
     -s, --submit         submit jobs (default: prepare only)
     -t, --test           test mode — one job, 2 events
     -g, --gpu            request 1 GPU per job
-    -P, --partition      override SLURM_PARTITION / CONDOR_JOB_FLAVOUR
+    -P, --partition      override SLURM_PARTITION / CONDOR_JOB_FLAVOUR;
+                         a comma list (e.g. "roma:130,milano:272") round-robins
+                         jobs across targets, weighted by the optional :N
     -o, --output-base    override OUTPUT_BASE_PATH from user_paths.sh
     -D, --detector       detector geometry (default: SK_like)
     -j, --job-id-start   job_id offset (default: 1)
@@ -45,6 +47,60 @@ def _slugify(name: str) -> str:
     """Filesystem-safe slug. Mirrors bash: + → plus, - → minus, space → _."""
     s = name.replace("+", "plus").replace("-", "minus").replace(" ", "_")
     return re.sub(r"_+", "_", s)
+
+
+def _parse_partition_spec(spec: str) -> List[tuple]:
+    """Parse a partition/flavour spec into ``[(name, weight), ...]``.
+
+    Accepts ``"roma:130,milano:272"`` (node-weighted round-robin),
+    ``"roma,milano"`` (equal round-robin, weight 1 each), or a bare
+    ``"roma"`` / ``"workday"`` (single target). A ``:N`` suffix counts as a
+    weight only when ``N`` is a positive integer; anything else is treated as
+    part of the name, so single SLURM partitions, HTCondor flavours, and
+    empty specs pass through untouched (the multi-target path never engages
+    for them). Returns ``[]`` for an empty/blank spec.
+    """
+    out: List[tuple] = []
+    for tok in spec.split(","):
+        tok = tok.strip()
+        if not tok:
+            continue
+        name, weight = tok, 1
+        if ":" in tok:
+            head, tail = tok.rsplit(":", 1)
+            if head and tail.isdigit() and int(tail) > 0:
+                name, weight = head, int(tail)
+        out.append((name, weight))
+    return out
+
+
+class _WeightedRoundRobin:
+    """Smooth weighted round-robin (nginx-style), deterministic per process.
+
+    Successive ``next()`` calls return target names interleaved in proportion
+    to their integer weights — e.g. weights (130, 272) yield milano roughly
+    twice as often as roma, spread out rather than blocked. A single target
+    degenerates to always returning that name.
+    """
+
+    def __init__(self, weighted: List[tuple]):
+        self.names = [n for n, _ in weighted]
+        self.weights = [w for _, w in weighted]
+        self.total = sum(self.weights)
+        self._current = [0] * len(self.names)
+        self.counts = {n: 0 for n in self.names}
+
+    def next(self) -> str:
+        if len(self.names) == 1:
+            self.counts[self.names[0]] += 1
+            return self.names[0]
+        for i, w in enumerate(self.weights):
+            self._current[i] += w
+        best = max(range(len(self.names)), key=lambda i: self._current[i])
+        self._current[best] -= self.total
+        name = self.names[best]
+        self.counts[name] += 1
+        return name
 
 
 def _events_schedule_plan(cfg: dict, n_events_default: int, n_jobs_default: int,
@@ -103,7 +159,9 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     p.add_argument("-g", "--gpu", action="store_true",
                    help="request 1 GPU per job")
     p.add_argument("-P", "--partition", type=str, default=None,
-                   help="override SLURM_PARTITION / CONDOR_JOB_FLAVOUR")
+                   help="override SLURM_PARTITION / CONDOR_JOB_FLAVOUR. A "
+                        "comma list (e.g. 'roma:130,milano:272') round-robins "
+                        "jobs across targets, weighted by the optional :N.")
     p.add_argument("-o", "--output-base", type=Path, default=None,
                    help="override OUTPUT_BASE_PATH from user_paths.sh")
     p.add_argument("-D", "--detector", type=str, default="SK_like",
@@ -191,6 +249,13 @@ def main(argv: Optional[List[str]] = None) -> int:
                    else Path(env["OUTPUT_BASE_PATH"]).resolve())
     partition = (args.partition or env.get("SLURM_PARTITION")
                  or env.get("CONDOR_JOB_FLAVOUR", ""))
+    # A comma-separated spec round-robins jobs across targets, weighted by an
+    # optional `:N` per target (e.g. node counts). A single target (the usual
+    # case on NERSC/HTCondor) degenerates to the previous constant behaviour;
+    # an empty spec is passed through verbatim.
+    parsed_parts = _parse_partition_spec(partition)
+    wrr = _WeightedRoundRobin(parsed_parts) if parsed_parts else None
+    multi_partition = len(parsed_parts) > 1
 
     detector = args.detector
     output_base_dir = output_base / detector
@@ -217,7 +282,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     if schedule_note:
         print(f"Schedule:      {schedule_note}")
     print(f"Jobs:          {n_jobs} (events/job={n_events})")
-    print(f"Partition:     {partition}  GPUs={'1' if args.gpu else env.get('DEFAULT_GPUS', '0')}")
+    if multi_partition:
+        plan = ", ".join(f"{n}:{w}" for n, w in parsed_parts)
+        print(f"Partition:     {partition}  "
+              f"(weighted round-robin → {plan})  "
+              f"GPUs={'1' if args.gpu else env.get('DEFAULT_GPUS', '0')}")
+    else:
+        print(f"Partition:     {partition}  GPUs={'1' if args.gpu else env.get('DEFAULT_GPUS', '0')}")
     print(f"Detector:      {detector}")
     print(f"Output dir:    {config_dir}\n")
 
@@ -272,9 +343,10 @@ def main(argv: Optional[List[str]] = None) -> int:
             else:
                 job_name = f"photonsim_{slug}_{e_label}{job_id}"
 
+            job_partition = wrr.next() if wrr is not None else partition
             body = adapter.render_dataprod_job(
                 cell_dir=out_dir, config_path=args.config, detector=detector,
-                job_id=job_id, job_name=job_name, partition=partition,
+                job_id=job_id, job_name=job_name, partition=job_partition,
                 use_gpu=args.gpu, test=args.test, skip_lucid=skip_lucid_flag,
                 n_events=n_events if schedule_note else None,
                 override_energy_mev=energy,
@@ -306,6 +378,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     print("\n=== Fan-out complete ===")
     print(f"Prepared:  {prepared}")
     print(f"Submitted: {submitted}")
+    if multi_partition and wrr is not None:
+        split = ", ".join(f"{n}={wrr.counts[n]}" for n, _ in parsed_parts)
+        print(f"Partition split: {split}")
     print(f"Config dir: {config_dir}")
     return 0
 

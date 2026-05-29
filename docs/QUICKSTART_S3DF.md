@@ -82,6 +82,27 @@ Each job of a config writes its own batch (`file_index = job_id - 1`)
 into shared `{sensor,hits,edep,labl}/` subdirs — the whole config dir
 is one LUCiD dataset.
 
+## Spreading jobs across roma + milano
+
+The two CPU batch partitions are `roma` (130 nodes) and `milano`
+(272 nodes). To use both, set `SLURM_PARTITION` to a comma list weighted
+by node count; the dataprod fan-out round-robins each sub-job onto one of
+them in that proportion:
+
+```bash
+export SLURM_PARTITION="roma:130,milano:272"
+```
+
+Refresh the counts with `sinfo -h -p <part> -o %D | awk '{s+=$1} END{print s}'`.
+
+The split is fixed per sub-job at generation time because the account's
+SLURM associations are per-partition (`mli:cider-ml@roma`,
+`mli:cider-ml@milano` are distinct). As a result SLURM rejects a single
+multi-partition request (`--partition=roma,milano`), and `scontrol` cannot
+move an already-queued job to the other partition — both fail with an
+invalid account/partition error. To rebalance a wave that is already
+queued, `scancel` it and resubmit.
+
 ## Dev loop — bind-mount your checkouts
 
 Same pattern as Docker, via `apptainer exec -B`:
