@@ -51,7 +51,7 @@ class TestMediumProperties:
 
     def test_unknown_material_raises(self):
         import pytest  # noqa: F811
-        with pytest.raises(ValueError, match="Unknown material"):
+        with pytest.raises(ValueError, match="No material config"):
             make_medium("ice")
 
 
