@@ -24,7 +24,7 @@ import numpy as np
 from lucid.detector_params import ParticleParams
 from lucid.siren.core import build_cherenkov_context
 from lucid.siren.training.inference import SIRENPredictor
-from lucid.sources.siren_rays import make_cherenkov_surrogate_fn
+from lucid.sources.siren_rays import _siren_weights
 from lucid.simulation.simulator import setup_event_simulator
 from lucid.utils import unpack_siren_params
 
@@ -40,23 +40,27 @@ ENERGIES_GEV = [5, 10, 15, 20, 30, 40, 50, 60, 70, 70,
                 80, 80, 80, 90, 90, 90, 100, 100, 100, 100]
 
 
-def compute_track_length(particle, energy_mev):
-    """Compute the p95 emission extent for the viewer track line."""
+def compute_track_lengths(particle, energies_mev):
+    """Compute p95 emission extent per energy by integrating the SIREN grid."""
     sp = unpack_siren_params(particle, 'ice')
     predictor = SIRENPredictor(sp['siren_model_path'])
     ctx = build_cherenkov_context(predictor, sp['ray_sampling'])
-    ray_fn = make_cherenkov_surrogate_fn(ctx)
 
-    key = jax.random.PRNGKey(0)
-    origin = jnp.array([0.0, 0.0, 0.0])
-    direction = jnp.array([0.0, 0.0, 1.0])
-    _, origins, intens = ray_fn(origin, direction, energy_mev, 50000, predictor.params, key)
-    along = np.array(origins[:, 2])
-    w = np.array(intens)
-    order = np.argsort(along)
-    cum_w = np.cumsum(w[order]) / w.sum()
-    p95 = float(along[order][np.searchsorted(cum_w, 0.95)])
-    return max(p95, 5.0)
+    n_a, n_s = 20, 60
+    angles = jnp.linspace(0.1, 3.0, n_a)
+    s_vals = jnp.linspace(0.01, 0.99, n_s)
+    AA, SS = jnp.meshgrid(angles, s_vals, indexing='ij')
+    a_flat, s_flat = AA.ravel(), SS.ravel()
+
+    results = {}
+    for e_mev in energies_mev:
+        w = _siren_weights(ctx, predictor.params, float(e_mev), a_flat, s_flat)
+        profile = w.reshape(n_a, n_s).sum(axis=0)
+        cum = jnp.cumsum(profile) / profile.sum()
+        p95_s = float(s_vals[int(jnp.searchsorted(cum, 0.95))])
+        smax_m = float(ctx.s_max_fn(jnp.array(float(e_mev)))) / 1000
+        results[e_mev] = max(p95_s * smax_m, 5.0)
+    return results
 
 
 def main():
@@ -105,11 +109,11 @@ def main():
         json.dump(det_info, f)
 
     # Precompute track lengths per unique energy
-    unique_energies = sorted(set(ENERGIES_GEV))
-    track_lengths = {}
+    unique_mev = sorted(set(e * 1000.0 for e in ENERGIES_GEV))
     print("Computing track lengths...")
-    for e_gev in unique_energies:
-        track_lengths[e_gev] = compute_track_length(particle, e_gev * 1000.0)
+    lengths_mev = compute_track_lengths(particle, unique_mev)
+    track_lengths = {int(e / 1000): l for e, l in lengths_mev.items()}
+    for e_gev in sorted(track_lengths):
         print(f"  {e_gev:4d} GeV -> {track_lengths[e_gev]:.1f} m")
 
     print(f"\nSimulating {N_EVENTS} {particle} events")
