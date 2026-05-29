@@ -30,6 +30,25 @@ ${EDITOR:-vim} user_paths.sh          # set LUCID_IMAGE_PATH, OUTPUT_BASE_PATH, 
 Point `LUCID_IMAGE_PATH` in `user_paths.sh` at the `.sif` produced
 above.
 
+## Download example data
+
+`scripts/download_data.sh` pulls the water-muon example data (ROOT +
+trained SIREN models) from the CERNBox share. On S3DF, keep the large
+files on the shared `neutrino` filesystem and leave only symlinks in the
+repo by passing `--store-dir`:
+
+```bash
+cd LUCiD
+./scripts/download_data.sh --store-dir /sdf/data/neutrino/cjesus/CERNBOX
+```
+
+This writes the real files under
+`/sdf/data/neutrino/cjesus/CERNBOX/water/muon/` and points
+`data/water/muon/` at them via symlinks. `data/wbls/muon/` is wired up
+as relative symlinks into `../../water/muon/`, so wbls reuses the same
+ROOT + SIREN files as water. Only the 1000 MeV ROOT is fetched by
+default; add `--all-energies` for 500/1000/1500 MeV.
+
 ## Submit one test run (one job per config, 2 events each)
 
 ```bash
