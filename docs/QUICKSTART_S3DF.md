@@ -85,15 +85,17 @@ is one LUCiD dataset.
 ## Spreading jobs across roma + milano
 
 The two CPU batch partitions are `roma` (130 nodes) and `milano`
-(272 nodes). To use both, set `SLURM_PARTITION` to a comma list weighted
-by node count; the dataprod fan-out round-robins each sub-job onto one of
-them in that proportion:
+(272 nodes). To use both, set `SLURM_PARTITION` in your `user_paths.sh` to
+a comma list weighted by node count; the dataprod fan-out round-robins each
+sub-job onto one of them in that proportion:
 
 ```bash
 export SLURM_PARTITION="roma:130,milano:272"
 ```
 
-Refresh the counts with `sinfo -h -p <part> -o %D | awk '{s+=$1} END{print s}'`.
+`user_paths.sh` is per-user and gitignored, so set this in your own copy —
+it is not shared via the repo. Refresh the counts with
+`sinfo -h -p <part> -o %D | awk '{s+=$1} END{print s}'`.
 
 The split is fixed per sub-job at generation time because the account's
 SLURM associations are per-partition (`mli:cider-ml@roma`,
