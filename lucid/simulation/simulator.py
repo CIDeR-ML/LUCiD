@@ -63,6 +63,9 @@ def setup_event_simulator(
         pos_grad_threshold=None,  # None → use mode default (calib:K, track:0)
         waveform_config=None,
         wavelength_sampling='cherenkov',
+        overlap_st_width_frac=0.35,
+        overlap_renorm=1.0,
+        overlap_mode='interp',
         **grid_params):
     """
     Set up and return an event simulator using DetectorParams / ParticleParams.
@@ -123,6 +126,17 @@ def setup_event_simulator(
           use only when the output is interpreted as a density estimate.
           Rejected at setup when ``wavelength_mode=False``, no QE curve is
           loaded, or ``is_data=True``.
+    overlap_st_width_frac : float
+        Straight-through surrogate width (fraction of sensor radius) for the
+        hard-step overlap gradient. Backward-only; default 0.35.
+    overlap_renorm : float
+        Soft-overlap renormalization constant C = hard_total/soft_total
+        (restores the ~1% total/energy lost to inter-sensor gaps without
+        changing the gradient direction). Default 1.0 = OFF (byte-identical).
+    overlap_mode : str
+        Soft-overlap lookup interpolation: ``'interp'`` (default, piecewise
+        linear) or ``'cubic'`` (C2 natural spline — correct curvature for the
+        autodiff Hessian wrt photon→sensor distance).
 
     Returns
     -------
@@ -172,6 +186,9 @@ def setup_event_simulator(
         json_filename, temperature=temperature,
         max_sensors_per_cell=max_sensors_per_cell,
         detector_type=detector_type,
+        overlap_st_width_frac=overlap_st_width_frac,
+        overlap_renorm=overlap_renorm,
+        overlap_mode=overlap_mode,
         **grid_params)
 
     mode = 'data' if is_data else ('calibration' if is_calibration else 'track')
