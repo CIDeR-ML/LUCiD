@@ -67,7 +67,7 @@ class TestQEWeightedSampler:
 class TestSetupTimeErrors:
     def _make_dp(self, n_sensors):
         from lucid.detector_params import DetectorParams
-        return DetectorParams(
+        return DetectorParams.from_flat(
             scatter_length=50., wall_reflection_rate=0.2,
             sensor_reflection_rate=0.2, absorption_length=50.,
             qe=0.2, qe_corrections=jnp.ones(n_sensors))
