@@ -33,16 +33,20 @@ GEOM = os.path.join(_ROOT, 'config', 'SK_like_geom_config.json')
 GK = dict(n_cap=150, n_angular=250, n_height=150)
 QUICK = os.environ.get('CAMPAIGN_QUICK', '0') == '1'
 NPH = int(float(os.environ.get('NPH', '5e5' if QUICK else '1e6')))
-INTENS = 5_000_000_000
+# Per-source photon budget (~mie_hunter scale) so the CRB σ land in the comparable
+# 0.1–5% range rather than the 0.00% of an enormous-statistics run.
+INTENS = float(os.environ.get('INTENS', '1e8'))
 REPORT = os.path.join(_HERE, 'CAMPAIGN_RESULTS.md')
 
 det = generate_detector(GEOM)
 NS = len(det.all_points)
 H = det.H
 
-# Truth detector params — SK-like, finite Mie so L_M is a live (measurable) parameter.
+# Truth detector params — SK-like. Mie is OPTICALLY THIN (L_M ~ few×10³ m, p_mie≈2%,
+# τ_Mie≈0.006) as in real water / mie_hunter — so L_M is a WEAK, hard-to-measure parameter
+# (CRB ~few %), unlike an unphysically thick L_M which would make it trivially tight.
 DP_TRUE = DetectorParams.from_flat(
-    scatter_length=70.0, mie_scatter_length=30.0, g=0.9,
+    scatter_length=70.0, mie_scatter_length=3000.0, g=0.9,
     wall_reflection_rate=0.20, sensor_reflection_rate=0.20,
     absorption_length=60.0, qe=0.07, qe_corrections=jnp.ones(NS))
 
@@ -111,11 +115,19 @@ def main():
         except Exception:
             emit(f'> CRB[{name}] FAILED:\n```\n{traceback.format_exc()}\n```')
             crb_by_set[name] = np.full(len(FIELDS7), np.nan)
+    def fmt_sigma(s):
+        if not np.isfinite(s):
+            return 'n/a'
+        pct = s * 100
+        if pct >= 1e3:
+            return '>1e3%'        # degenerate / unconstrained
+        if pct >= 1.0:
+            return f'{pct:.2f}%'
+        return f'{pct:.3g}%'      # show small σ with 3 sig-figs (not rounded to 0.00%)
     for j, f in enumerate(FIELDS7):
         row = f'| {LABEL[f]} | '
         for name in SS:
-            s = crb_by_set[name][j]
-            row += (f'{s*100:.2f}% | ' if np.isfinite(s) and s < 100 else ('>1e4% | ' if np.isfinite(s) else 'n/a | '))
+            row += fmt_sigma(crb_by_set[name][j]) + ' | '
         row += f'{MIE_REF.get(LABEL[f], "")} |'
         emit(row)
     emit('')
