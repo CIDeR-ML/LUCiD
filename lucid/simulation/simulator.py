@@ -279,15 +279,16 @@ def setup_event_simulator(
                                     qe=qe, qe_corrections=qe_corrections)
 
     def _make_hits_realistic(flat_weights, flat_indices, flat_times, num_sensors, qe_key, qe, qe_corrections, response=None):
+        tts = 0.0 if response is None else response[3]
         return make_hits_data(flat_weights, flat_indices, flat_times, num_sensors,
                               qe=qe, qe_corrections=qe_corrections,
-                              rng_key=qe_key, apply_smearing=sim_config.apply_smearing)
+                              rng_key=qe_key, apply_smearing=sim_config.apply_smearing, tts=tts)
 
     def _make_hits_moments(flat_weights, flat_indices, flat_times, num_sensors, qe_key, qe, qe_corrections, response=None):
-        gain, t0, spe_width, _tts = response
+        gain, t0, spe_width, tts = response
         return make_hits_moments(flat_weights, flat_indices, flat_times, num_sensors,
                                  qe=qe, qe_corrections=qe_corrections,
-                                 gain=gain, spe_width=spe_width, t0=t0)
+                                 gain=gain, spe_width=spe_width, t0=t0, tts=tts)
 
     # Shotgun hit modes (waveform + per-photon). Defaults match SK-realistic
     # PMT behaviour; override via ``waveform_config``.
