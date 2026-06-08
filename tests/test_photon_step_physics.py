@@ -29,6 +29,8 @@ def _base_args(key, **overrides):
         surface_distance=2.0,
         normal=jnp.array([0.0, 0.0, -1.0]),
         scatter_length=50.0,
+        mie_scatter_length=1.0e9,  # ≈ no Mie channel
+        g=0.0,
         wall_reflection_rate=0.5,
         sensor_reflection_rate=0.3,
         absorption_length=100.0,
@@ -41,63 +43,86 @@ def _base_args(key, **overrides):
 
 
 class TestAbsorptionAttenuation:
-    """Beer-Lambert: attenuation = exp(-distance / absorption_length)."""
+    """Beer-Lambert: attenuation = exp(-distance / absorption_length).
+
+    In the current engine the surface-absorption factor is folded into
+    ``detect_prob`` (``reflection_attenuation`` is always 1.0). The Beer-Lambert
+    term is isolated as ``detect_prob(L_abs) / detect_prob(inf)``, which divides
+    out the (L_abs-independent) reach × (1 - refl_rate) baseline.
+    """
+
+    def _absorption_factor(self, key, d, L_abs, **overrides):
+        """detect_prob(L_abs) / detect_prob(inf) = exp(-d / L_abs)."""
+        args = _base_args(key, surface_distance=d, absorption_length=L_abs,
+                          **overrides)
+        _, _, _, dp, _, _, _ = photon_iteration_update_factors(**args)
+        args_inf = _base_args(key, surface_distance=d, absorption_length=1e12,
+                              **overrides)
+        _, _, _, dp_inf, _, _, _ = photon_iteration_update_factors(**args_inf)
+        return float(dp) / float(dp_inf)
 
     def test_attenuation_value(self):
-        """reflection_attenuation should be exp(-d/L_abs) for update_factors."""
+        """The absorption factor in detect_prob should be exp(-d/L_abs)."""
         key = jax.random.PRNGKey(42)
         d = 2.0
         L_abs = 100.0
-        args = _base_args(key, surface_distance=d, absorption_length=L_abs)
-        _, _, _, _, refl_atten, _ = photon_iteration_update_factors(**args)
-        expected = jnp.exp(-d / L_abs)
-        npt.assert_allclose(refl_atten, expected, atol=1e-5)
+        factor = self._absorption_factor(key, d, L_abs)
+        expected = float(jnp.exp(-d / L_abs))
+        npt.assert_allclose(factor, expected, atol=1e-5)
+        # reflection_attenuation is now folded into detect_prob (always 1.0).
+        _, _, _, _, refl_atten, _, _ = photon_iteration_update_factors(
+            **_base_args(key, surface_distance=d, absorption_length=L_abs))
+        npt.assert_allclose(refl_atten, 1.0, atol=1e-5)
 
     def test_short_absorption_strong_attenuation(self):
         """Short absorption length → strong attenuation (near 0)."""
         key = jax.random.PRNGKey(42)
-        args = _base_args(key, surface_distance=5.0, absorption_length=1.0)
-        _, _, _, _, refl_atten, _ = photon_iteration_update_factors(**args)
-        assert float(refl_atten) < 0.01  # exp(-5) ≈ 0.0067
+        factor = self._absorption_factor(key, 5.0, 1.0)
+        assert factor < 0.01  # exp(-5) ≈ 0.0067
 
     def test_infinite_absorption_no_attenuation(self):
         """Very large absorption length → negligible attenuation (near 1)."""
         key = jax.random.PRNGKey(42)
-        args = _base_args(key, surface_distance=2.0, absorption_length=1e6)
-        _, _, _, _, refl_atten, _ = photon_iteration_update_factors(**args)
-        npt.assert_allclose(refl_atten, 1.0, atol=1e-4)
+        factor = self._absorption_factor(key, 2.0, 1e6)
+        npt.assert_allclose(factor, 1.0, atol=1e-4)
 
 
 class TestDetectionProbability:
     """Detection probability = P(reach surface) × P(not reflect)."""
 
     def test_detection_prob_formula(self):
-        """detect_prob = exp(-D/S) × (1 - reflection_rate) for update_factors."""
+        """detect_prob = reach × (1 - reflection_rate) × atten_surf, where
+        reach = exp(-D × (1/S + 1/L_mie)) and atten_surf = exp(-D/L_abs).
+
+        With L_mie ≈ ∞ the Mie channel is negligible.
+        """
         key = jax.random.PRNGKey(42)
-        D, S = 2.0, 50.0
+        D, S, L_abs = 2.0, 50.0, 100.0
         sensor_refl = 0.3
         args = _base_args(key, surface_distance=D, scatter_length=S,
+                          absorption_length=L_abs,
                           sensor_reflection_rate=sensor_refl, hit_sensor=True)
-        _, _, _, detect_prob, _, _ = photon_iteration_update_factors(**args)
-        expected = jnp.exp(-D / S) * (1 - sensor_refl)
+        _, _, _, detect_prob, _, _, _ = photon_iteration_update_factors(**args)
+        expected = jnp.exp(-D / S) * (1 - sensor_refl) * jnp.exp(-D / L_abs)
         npt.assert_allclose(detect_prob, expected, atol=1e-5)
 
     def test_detection_prob_uses_wall_rate_for_wall(self):
         """When hit_sensor=False, wall_reflection_rate is used."""
         key = jax.random.PRNGKey(42)
-        D, S = 2.0, 50.0
+        D, S, L_abs = 2.0, 50.0, 100.0
         wall_refl = 0.5
         args = _base_args(key, surface_distance=D, scatter_length=S,
+                          absorption_length=L_abs,
                           wall_reflection_rate=wall_refl, hit_sensor=False)
-        _, _, _, detect_prob, _, _ = photon_iteration_update_factors(**args)
-        expected = jnp.exp(-D / S) * (1 - wall_refl)
+        _, _, _, detect_prob, _, _, _ = photon_iteration_update_factors(**args)
+        expected = jnp.exp(-D / S) * (1 - wall_refl) * jnp.exp(-D / L_abs)
         npt.assert_allclose(detect_prob, expected, atol=1e-5)
 
     def test_no_detection_on_wall(self):
         """Walls with 100% reflection should have 0 detection probability."""
         key = jax.random.PRNGKey(42)
         args = _base_args(key, wall_reflection_rate=1.0, hit_sensor=False)
-        _, _, _, detect_prob, _, _ = photon_iteration_update_factors(**args)
+        _, _, _, detect_prob, _, _, _ = photon_iteration_update_factors(**args)
         npt.assert_allclose(detect_prob, 0.0, atol=1e-5)
 
 
@@ -112,7 +137,7 @@ class TestTimeOfFlight:
         args = _base_args(key, surface_distance=D, speed_of_light=c, time=5.0)
         # update_factors uses STE — distance is a mix of surface and scatter
         # For sample mode hitting surface: time advance = D / c
-        _, _, new_time, _, _, _ = photon_iteration_update_factors(**args)
+        _, _, new_time, _, _, _, _ = photon_iteration_update_factors(**args)
         # Time should be > initial time
         assert float(new_time) > 5.0
 
@@ -131,7 +156,7 @@ class TestPositionAdvancement:
         # but should be approximately along the direction
         args = _base_args(key, position=pos, direction=direction,
                           surface_distance=D, normal=normal)
-        new_pos, _, _, _, _, _ = photon_iteration_update_factors(**args)
+        new_pos, _, _, _, _, _, _ = photon_iteration_update_factors(**args)
         # z-component should have increased (we moved along +z)
         assert float(new_pos[2]) > 0.0
 
@@ -144,7 +169,7 @@ class TestContinuingFactor:
         This is the probability conservation: either detected or continues."""
         key = jax.random.PRNGKey(42)
         args = _base_args(key)
-        _, _, _, detect_prob, refl_atten, cont_factor = \
+        _, _, _, detect_prob, refl_atten, cont_factor, _ = \
             photon_iteration_update_factors(**args)
         # continuing_factor = reflect_prob * refl_atten + scatter_prob * scatter_atten
         # detect_prob = reach_prob * (1 - refl_rate)
@@ -162,7 +187,7 @@ class TestSampleVsUpdateFactors:
         results = []
         for i in range(50):
             k = jax.random.fold_in(key, i)
-            _, _, _, detect, _, _ = photon_iteration_sample(**_base_args(k))
+            _, _, _, detect, _, _, _ = photon_iteration_sample(**_base_args(k))
             results.append(float(detect))
         unique = set(results)
         assert unique.issubset({0.0, 1.0}), f"Expected binary, got {unique}"
@@ -171,19 +196,19 @@ class TestSampleVsUpdateFactors:
         """Update factors mode: detect_prob is continuous in (0, 1)."""
         key = jax.random.PRNGKey(42)
         args = _base_args(key)
-        _, _, _, detect, _, _ = photon_iteration_update_factors(**args)
+        _, _, _, detect, _, _, _ = photon_iteration_update_factors(**args)
         assert 0.0 < float(detect) < 1.0
 
     def test_sample_detection_rate_matches_expected(self):
         """Over many samples, mean detection should ≈ update_factors detect_prob."""
         key = jax.random.PRNGKey(42)
         args = _base_args(key)
-        _, _, _, expected_detect, _, _ = photon_iteration_update_factors(**args)
+        _, _, _, expected_detect, _, _, _ = photon_iteration_update_factors(**args)
 
         detections = []
         for i in range(5000):
             k = jax.random.fold_in(jax.random.PRNGKey(0), i)
-            _, _, _, d, _, _ = photon_iteration_sample(**_base_args(k))
+            _, _, _, d, _, _, _ = photon_iteration_sample(**_base_args(k))
             detections.append(float(d))
         npt.assert_allclose(jnp.array(detections).mean(), float(expected_detect), atol=0.03)
 
@@ -196,7 +221,7 @@ class TestCustomVJPGradients:
         key = jax.random.PRNGKey(42)
         def loss_fn(pos):
             args = _base_args(key, position=pos)
-            _, _, _, detect_prob, _, _ = photon_iteration_update_factors_safe(**args)
+            _, _, _, detect_prob, _, _, _ = photon_iteration_update_factors_safe(**args)
             return detect_prob
         grad = jax.grad(loss_fn)(jnp.array([0.0, 0.0, 0.0]))
         assert jnp.all(jnp.isfinite(grad))
@@ -206,7 +231,7 @@ class TestCustomVJPGradients:
         key = jax.random.PRNGKey(42)
         def loss_fn(scatter_length):
             args = _base_args(key, scatter_length=scatter_length)
-            _, _, _, detect_prob, _, _ = photon_iteration_update_factors_safe(**args)
+            _, _, _, detect_prob, _, _, _ = photon_iteration_update_factors_safe(**args)
             return detect_prob
         grad = jax.grad(loss_fn)(50.0)
         assert jnp.isfinite(grad)
@@ -214,12 +239,17 @@ class TestCustomVJPGradients:
         assert float(grad) > 0
 
     def test_gradient_through_absorption(self):
-        """Gradient of attenuation w.r.t. absorption_length should be positive."""
+        """Gradient w.r.t. absorption_length should be positive.
+
+        Absorption is now folded into detect_prob (reflection_attenuation is a
+        constant 1.0): longer absorption length → less attenuation → higher
+        detection probability.
+        """
         key = jax.random.PRNGKey(42)
         def loss_fn(abs_length):
             args = _base_args(key, absorption_length=abs_length)
-            _, _, _, _, refl_atten, _ = photon_iteration_update_factors_safe(**args)
-            return refl_atten
+            _, _, _, detect_prob, _, _, _ = photon_iteration_update_factors_safe(**args)
+            return detect_prob
         grad = jax.grad(loss_fn)(100.0)
         assert jnp.isfinite(grad)
         # Longer absorption length → less attenuation → higher value

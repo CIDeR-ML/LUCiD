@@ -95,11 +95,11 @@ class TestFullPipelineGradients:
             hit_sensor = jnp.max(result['inside_sensor'], axis=0)
 
             keys = jax.random.split(key, 5)
-            _, _, _, detect_probs, refl_attens, _ = jax.vmap(
+            _, _, _, detect_probs, refl_attens, _, _ = jax.vmap(
                 photon_iteration_update_factors_safe,
-                in_axes=(0, 0, 0, 0, 0, None, None, None, None, 0, 0, None)
+                in_axes=(0, 0, 0, 0, 0, None, None, None, None, None, None, 0, 0, None)
             )(origins, dirs, jnp.zeros(5), surface_distances, normals,
-              scatter_length, 0.5, 0.3, 100.0,
+              scatter_length, 1.0e9, 0.0, 0.5, 0.3, 100.0,
               hit_sensor, keys, 0.2253)
 
             # 3. Sensor response

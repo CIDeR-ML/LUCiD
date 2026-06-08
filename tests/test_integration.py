@@ -40,10 +40,11 @@ class TestOpticsToPhotonStep:
         result = photon_iteration_update_factors(
             position=jnp.zeros(3), direction=new_dir, time=0.0,
             surface_distance=2.0, normal=jnp.array([0.0, 0.0, -1.0]),
-            scatter_length=50.0, wall_reflection_rate=0.5,
+            scatter_length=50.0, mie_scatter_length=1.0e9, g=0.0,
+            wall_reflection_rate=0.5,
             sensor_reflection_rate=0.3, absorption_length=100.0,
             hit_sensor=True, rng_key=k2, speed_of_light=0.2253)
-        new_pos, new_dir2, new_time, dp, ra, cf = result
+        new_pos, new_dir2, new_time, dp, ra, cf, logp = result
         assert jnp.all(jnp.isfinite(new_pos))
         assert jnp.all(jnp.isfinite(new_dir2))
         assert jnp.isfinite(new_time)
@@ -102,11 +103,12 @@ class TestGradientFlowEndToEnd:
         key = jax.random.PRNGKey(42)
 
         def loss_fn(position):
-            _, _, _, detect_prob, _, _ = photon_iteration_update_factors_safe(
+            _, _, _, detect_prob, _, _, _ = photon_iteration_update_factors_safe(
                 position=position, direction=jnp.array([0., 0., 1.]),
                 time=0.0, surface_distance=2.0,
                 normal=jnp.array([0., 0., -1.]),
-                scatter_length=50.0, wall_reflection_rate=0.5,
+                scatter_length=50.0, mie_scatter_length=1.0e9, g=0.0,
+                wall_reflection_rate=0.5,
                 sensor_reflection_rate=0.3, absorption_length=100.0,
                 hit_sensor=True, rng_key=key, speed_of_light=0.2253)
             return detect_prob
@@ -235,9 +237,13 @@ class TestWavelengthModuleJIT:
         def compute(wavelengths):
             return compute_effective_properties(dp, m, wavelengths=wavelengths)
 
-        eff_s, eff_a, eff_qe = compute(jnp.array([350., 500.]))
+        # compute_effective_properties now returns a 4-tuple:
+        # (eff_scatter, eff_mie_scatter, eff_absorption, eff_qe).
+        eff_s, eff_mie, eff_a, eff_qe = compute(jnp.array([350., 500.]))
         assert eff_s.shape == (2,)
         assert jnp.all(jnp.isfinite(eff_s))
+        assert eff_mie.shape == (2,)
+        assert jnp.all(jnp.isfinite(eff_mie))
 
     def test_cherenkov_sampling_in_jit(self):
         from lucid.wavelength.spectrum import sample_cherenkov_wavelengths
@@ -273,8 +279,10 @@ class TestSimConfigIntegration:
         # Track mode: gradient flows all K bounces (normal-fix inside photon step
         # eliminates the curvature-compounding explosion that used to require 0)
         assert SimConfig(mode='track', K=7).effective_n_grad_iters == 7
-        # Calibration: n_grad_iters=2 (gradient flows for first 2 iterations)
-        assert SimConfig(mode='calibration').effective_n_grad_iters == 2
+        # Calibration: defaults to K (gradient flows all bounces, like track);
+        # default K is 7.
+        assert SimConfig(mode='calibration').effective_n_grad_iters == 7
+        assert SimConfig(mode='calibration', K=5).effective_n_grad_iters == 5
         # Data: n_grad_iters=0
         assert SimConfig(mode='data').effective_n_grad_iters == 0
         # Explicit override takes precedence
