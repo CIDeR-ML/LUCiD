@@ -87,8 +87,11 @@ def main():
     emit('CRB = fractional σ on log-params, ×√12 honesty factor (the implicit engine is √12 quieter than Poisson).')
     emit('')
 
+    # wavelength_mode=False ⇒ the forward uses the DetectorParams SCALAR optical fields
+    # (scatter/mie/absorption lengths). In wavelength_mode=True those scalars are ignored
+    # (lengths come from the medium curves) — λ-curve fitting is a separate spectral campaign.
     sim = setup_event_simulator(GEOM, NPH, temperature=None, K=8, is_calibration=True,
-                                hit_mode='aggregated', **GK)
+                                hit_mode='aggregated', wavelength_mode=False, **GK)
     SS = src_sets()
     nb_h = 2 if QUICK else 3
 
@@ -149,7 +152,7 @@ def main():
     emit('')
     try:
         sim_m = setup_event_simulator(GEOM, NPH, temperature=None, K=8, is_calibration=True,
-                                      hit_mode='moments', **GK)
+                                      hit_mode='moments', wavelength_mode=False, **GK)
         rng = np.random.default_rng(3)
         gain = np.exp(0.12 * rng.standard_normal(NS)); gain /= np.exp(np.mean(np.log(gain)))
         w_true = 0.35
