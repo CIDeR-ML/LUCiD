@@ -36,7 +36,7 @@ from lucid.simulation.photon_step import (
 )
 from lucid.simulation.reflection import get_reflection_model
 from lucid.simulation.sensor_response import (
-    make_hits_simulation, make_hits_data, make_hits_likelihood,
+    make_hits_simulation, make_hits_data, make_hits_likelihood, make_hits_moments,
     build_make_hits_waveform, build_make_hits_waveform_expected,
     build_make_hits_per_photon_shotgun,
 )
@@ -254,7 +254,7 @@ def setup_event_simulator(
         return detector.bounds_check(positions)
 
     # ---- Resolve hit_mode ---------------------------------------------------
-    _VALID_HIT_MODES = ('aggregated', 'per_photon', 'realistic',
+    _VALID_HIT_MODES = ('aggregated', 'per_photon', 'realistic', 'moments',
                         'waveform', 'waveform_expected', 'shotgun_per_photon')
     if hit_mode is None:
         if sim_config.is_data:
@@ -268,18 +268,26 @@ def setup_event_simulator(
             f"hit_mode must be one of {_VALID_HIT_MODES} or None, got {hit_mode!r}")
 
     # ---- make_hits wrapper selection ----------------------------------------
-    def _make_hits_aggregated(flat_weights, flat_indices, flat_times, num_sensors, qe_key, qe, qe_corrections):
+    # Every wrapper accepts a trailing ``response`` bundle (gain, t0, spe_width, tts)
+    # built from DetectorParams at call time; only the moments mode consumes it.
+    def _make_hits_aggregated(flat_weights, flat_indices, flat_times, num_sensors, qe_key, qe, qe_corrections, response=None):
         return make_hits_simulation(flat_weights, flat_indices, flat_times, num_sensors,
                                     qe=qe, qe_corrections=qe_corrections)
 
-    def _make_hits_per_photon(flat_weights, flat_indices, flat_times, num_sensors, qe_key, qe, qe_corrections):
+    def _make_hits_per_photon(flat_weights, flat_indices, flat_times, num_sensors, qe_key, qe, qe_corrections, response=None):
         return make_hits_likelihood(flat_weights, flat_indices, flat_times, num_sensors,
                                     qe=qe, qe_corrections=qe_corrections)
 
-    def _make_hits_realistic(flat_weights, flat_indices, flat_times, num_sensors, qe_key, qe, qe_corrections):
+    def _make_hits_realistic(flat_weights, flat_indices, flat_times, num_sensors, qe_key, qe, qe_corrections, response=None):
         return make_hits_data(flat_weights, flat_indices, flat_times, num_sensors,
                               qe=qe, qe_corrections=qe_corrections,
                               rng_key=qe_key, apply_smearing=sim_config.apply_smearing)
+
+    def _make_hits_moments(flat_weights, flat_indices, flat_times, num_sensors, qe_key, qe, qe_corrections, response=None):
+        gain, t0, spe_width, _tts = response
+        return make_hits_moments(flat_weights, flat_indices, flat_times, num_sensors,
+                                 qe=qe, qe_corrections=qe_corrections,
+                                 gain=gain, spe_width=spe_width, t0=t0)
 
     # Shotgun hit modes (waveform + per-photon). Defaults match SK-realistic
     # PMT behaviour; override via ``waveform_config``.
@@ -291,7 +299,7 @@ def setup_event_simulator(
     if hit_mode == 'waveform':
         _wf_fn = build_make_hits_waveform(n_photons=n_photons, **_wf_cfg)
         def _make_hits_waveform(flat_weights, flat_indices, flat_times, num_sensors,
-                                qe_key, qe, qe_corrections):
+                                qe_key, qe, qe_corrections, response=None):
             return _wf_fn(flat_weights, flat_indices, flat_times, num_sensors,
                           qe_key, qe, qe_corrections)
     elif hit_mode == 'waveform_expected':
@@ -301,7 +309,7 @@ def setup_event_simulator(
         _wf_exp_fn = build_make_hits_waveform_expected(
             n_photons=n_photons, **_wf_exp_cfg)
         def _make_hits_waveform_expected(flat_weights, flat_indices, flat_times, num_sensors,
-                                         qe_key, qe, qe_corrections):
+                                         qe_key, qe, qe_corrections, response=None):
             return _wf_exp_fn(flat_weights, flat_indices, flat_times, num_sensors,
                               qe_key, qe, qe_corrections)
     elif hit_mode == 'shotgun_per_photon':
@@ -310,7 +318,7 @@ def setup_event_simulator(
             tts_sigma_ns=_wf_cfg['tts_sigma_ns'],
             smear_time=_wf_cfg['smear_time'])
         def _make_hits_shotgun_pp(flat_weights, flat_indices, flat_times, num_sensors,
-                                  qe_key, qe, qe_corrections):
+                                  qe_key, qe, qe_corrections, response=None):
             return _pp_fn(flat_weights, flat_indices, flat_times, num_sensors,
                           qe_key, qe, qe_corrections)
 
@@ -318,6 +326,7 @@ def setup_event_simulator(
         'aggregated': _make_hits_aggregated,
         'per_photon': _make_hits_per_photon,
         'realistic': _make_hits_realistic,
+        'moments': _make_hits_moments,
         'waveform': _make_hits_waveform if hit_mode == 'waveform' else None,
         'waveform_expected': _make_hits_waveform_expected if hit_mode == 'waveform_expected' else None,
         'shotgun_per_photon': _make_hits_shotgun_pp if hit_mode == 'shotgun_per_photon' else None,
@@ -580,8 +589,13 @@ def setup_event_simulator(
         flat_qe = qe_per_photon[photon_idx]
 
         key, qe_key = jax.random.split(key)
+        # Calibrated PMT response bundle (gain, t0, spe_width, tts) — consumed by the
+        # 'moments' mode; ignored by the others. Neutral defaults ⇒ byte-identical.
+        response = (detector_params.per_pmt.gain, detector_params.per_pmt.t0,
+                    detector_params.response.spe_width, detector_params.response.tts)
         return make_hits_fn(
-            flat_weights, flat_indices, flat_times, num_sensors, qe_key, flat_qe, qe_corrections)
+            flat_weights, flat_indices, flat_times, num_sensors, qe_key, flat_qe, qe_corrections,
+            response)
 
     # ================================================================
     # Mode-specific simulation functions
