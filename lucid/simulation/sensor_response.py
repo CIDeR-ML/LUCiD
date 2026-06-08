@@ -44,6 +44,65 @@ def make_hits_simulation(
     return measured_charge, measured_time
 
 
+def make_hits_moments(
+        flat_weights, flat_indices, flat_times, num_detectors,
+        qe=0.2, qe_corrections=None, gain=None, spe_width=0.0, t0=None,
+        threshold=1e-10, temperature=0.1):
+    """Compound-Poisson charge MOMENTS + first-arrival time, per sensor.
+
+    The per-PMT charge is compound-Poisson: rate ``μ[s] = Σ flat_weights·qe·qe_corr``
+    (expected detected photo-electrons), single-PE charge ~ (mean ``gain[s]``,
+    relative width ``w = spe_width``). The validated moments (mie_hunter/chargedata.py):
+
+        E[Q][s]   = gain[s] · μ[s]
+        Var[Q][s] = gain[s]² · (1 + w²) · μ[s]
+
+    The mean alone measures the degenerate product QE·gain; the variance measures the
+    RATE μ (``v/m² = (1+w²)/μ``) and so BREAKS the per-PMT QE↔gain degeneracy and yields
+    the SPE width. Time is the same soft-min first-arrival as ``make_hits_simulation``
+    plus a per-PMT offset ``t0[s]`` (SK TQ-map).
+
+    Neutral defaults (gain=1, w=0, t0=0) give ``mean = var = μ`` and the unshifted
+    first-arrival — i.e. the charge/time of ``make_hits_simulation`` with an extra
+    variance output equal to the charge.
+
+    Returns
+    -------
+    mean_charge, var_charge, measured_time : each (num_detectors,)
+    """
+    per_photon_qe = qe * qe_corrections[flat_indices]
+    qe_weights = flat_weights * per_photon_qe
+
+    valid_mask = (qe_weights > threshold) & (flat_times > 0) & jnp.isfinite(flat_times)
+    filtered_times = jnp.where(valid_mask, flat_times, jnp.inf)
+
+    detector_mins = jax.ops.segment_min(filtered_times, flat_indices, num_segments=num_detectors)
+    photon_offsets = detector_mins[flat_indices]
+    shifted_times = jnp.where(valid_mask, flat_times - photon_offsets, jnp.inf)
+    exp_terms = jnp.where(valid_mask, jnp.exp(-shifted_times / temperature), 0.0)
+    exp_sums = jax.ops.segment_sum(exp_terms, flat_indices, num_segments=num_detectors)
+    segment_min_time = detector_mins - temperature * jnp.log(exp_sums + 1e-20)
+    has_photons = jnp.isfinite(detector_mins)
+    segment_min_time = jnp.where(has_photons, segment_min_time, jnp.inf)
+
+    # Rate μ (expected PE count), then the compound-Poisson moments.
+    mu = jax.ops.segment_sum(qe_weights, flat_indices, num_segments=num_detectors)
+    g = jnp.ones(num_detectors) if gain is None else gain
+    mean_charge_raw = g * mu
+    var_charge_raw = (g ** 2) * (1.0 + spe_width ** 2) * mu
+
+    # Per-PMT time offset (TQ-map t0).
+    t0_arr = jnp.zeros(num_detectors) if t0 is None else t0
+    measured_time_raw = segment_min_time + t0_arr
+
+    nonzero_mask = (mu > threshold) & jnp.isfinite(segment_min_time)
+    mean_charge = jnp.where(nonzero_mask, mean_charge_raw, 0.0)
+    var_charge = jnp.where(nonzero_mask, var_charge_raw, 0.0)
+    measured_time = jnp.where(nonzero_mask, measured_time_raw, 0.0)
+
+    return mean_charge, var_charge, measured_time
+
+
 def make_hits_data(
         flat_weights, flat_indices, flat_times, num_detectors,
         qe=0.2, qe_corrections=None, rng_key=None, threshold=1e-5, apply_smearing=False):
