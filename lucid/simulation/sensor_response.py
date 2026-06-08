@@ -44,9 +44,24 @@ def make_hits_simulation(
     return measured_charge, measured_time
 
 
+def _expected_min_normal(occ):
+    """Smooth approx of E[min of ``occ`` iid N(0,1)] as a function of the continuous
+    expected occupancy ``occ`` (≤0; →0 as occ→1, → −√(2 ln occ) for large occ).
+
+    Blom's order-statistic approximation E[max_n] = Φ⁻¹((n−α)/(n−2α+1)), α=0.375,
+    negated for the minimum, clamped so occ<1 gives no early-bias (a single photon's
+    arrival has E[N(0,1)]=0). This is the occupancy-dependent first-arrival bias that
+    a per-photon transit-time spread (TTS) imprints on the segment-min time.
+    """
+    n = jnp.clip(occ, 1.0, None)
+    alpha = 0.375
+    p = (n - alpha) / (n - 2.0 * alpha + 1.0)
+    return -jax.scipy.special.ndtri(jnp.clip(p, 1e-6, 1.0 - 1e-6))
+
+
 def make_hits_moments(
         flat_weights, flat_indices, flat_times, num_detectors,
-        qe=0.2, qe_corrections=None, gain=None, spe_width=0.0, t0=None,
+        qe=0.2, qe_corrections=None, gain=None, spe_width=0.0, t0=None, tts=0.0,
         threshold=1e-10, temperature=0.1):
     """Compound-Poisson charge MOMENTS + first-arrival time, per sensor.
 
@@ -91,9 +106,11 @@ def make_hits_moments(
     mean_charge_raw = g * mu
     var_charge_raw = (g ** 2) * (1.0 + spe_width ** 2) * mu
 
-    # Per-PMT time offset (TQ-map t0).
+    # Per-PMT time offset (TQ-map t0) + TTS occupancy-bias: the per-photon transit-time
+    # spread (sigma=tts) pulls the first-arrival earlier by tts·E[min over μ photons].
     t0_arr = jnp.zeros(num_detectors) if t0 is None else t0
-    measured_time_raw = segment_min_time + t0_arr
+    tts_bias = tts * _expected_min_normal(mu)            # ≤0; →0 at tts=0 (byte-identical)
+    measured_time_raw = segment_min_time + t0_arr + tts_bias
 
     nonzero_mask = (mu > threshold) & jnp.isfinite(segment_min_time)
     mean_charge = jnp.where(nonzero_mask, mean_charge_raw, 0.0)
@@ -105,8 +122,15 @@ def make_hits_moments(
 
 def make_hits_data(
         flat_weights, flat_indices, flat_times, num_detectors,
-        qe=0.2, qe_corrections=None, rng_key=None, threshold=1e-5, apply_smearing=False):
-    """Data-mode hits with Bernoulli QE, segment_min timing, and optional SK-like smearing."""
+        qe=0.2, qe_corrections=None, rng_key=None, threshold=1e-5, apply_smearing=False,
+        tts=0.0):
+    """Data-mode hits with Bernoulli QE, segment_min timing, and optional SK-like smearing.
+
+    ``tts`` (ns) is the per-photon transit-time-spread sigma applied to each photon's
+    time BEFORE the first-arrival segment_min (so the min carries the correct early
+    bias). The module env ``TTS_NS`` still overrides when larger (legacy). ``tts=0``
+    (and env unset) ⇒ no smear (byte-identical).
+    """
     timing_mask = (flat_weights > threshold) & (flat_times > 0)
     filtered_times = jnp.where(timing_mask, flat_times, jnp.inf)
 
@@ -121,10 +145,12 @@ def make_hits_data(
     detection_probs = jax.random.uniform(qe_key, shape=flat_weights.shape)
     detected_mask = detection_probs < per_photon_qe
     qe_weights = flat_weights * detected_mask.astype(jnp.float32)
-    # PER-PHOTON TTS: smear each detected photon's time BEFORE the first-arrival min (env TTS_NS).
-    photon_times = flat_times
-    if _TTS_PERPHOTON_NS > 0:
-        photon_times = flat_times + jax.random.normal(smear_time_key, shape=flat_times.shape) * _TTS_PERPHOTON_NS
+    # PER-PHOTON TTS: smear each detected photon's time BEFORE the first-arrival min.
+    # Driven by the dp.response.tts field (env TTS_NS overrides when larger, legacy).
+    # Applied unconditionally scaled by eff_tts (0 ⇒ no shift, byte-identical) so the
+    # key stream is stable and tts stays differentiable.
+    eff_tts = jnp.maximum(jnp.asarray(tts), _TTS_PERPHOTON_NS)
+    photon_times = flat_times + jax.random.normal(smear_time_key, shape=flat_times.shape) * eff_tts
     qe_filtered_times = jnp.where(detected_mask & timing_mask, photon_times, jnp.inf)
 
     total_charge = jax.ops.segment_sum(qe_weights, flat_indices, num_segments=num_detectors)
