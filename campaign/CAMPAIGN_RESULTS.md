@@ -52,3 +52,16 @@ measured Fano v/m median = 1.1228  (expect g·(1+w²) ≈ 1.1225 at median g≈1
 **Bottom line:** the consolidated `lucid/` (one DiCE forward + nested DetectorParams + λ-curves + pluggable reflection + charge-variance/timing observables + one GN+Schur+Fisher fitter) reproduces the mie_hunter calibration physics end-to-end on the real geometry.
 
 _Campaign finished in 23.9 min (QUICK; intensity 1e8)._
+
+## 5. Spectral λ-curve identifiability (fisher_wl2 analog)
+
+wavelength_mode=True; monochromatic lasers at the control λ [337.0, 375.0, 398.0, 405.0, 445.0] nm + 3 iso; fit the per-control-point optical λ-deviation curves. CRB = per-control-point fractional σ (×√12). Each λ constrains the curve AT its own control point.
+
+| curve | 337nm | 375nm | 398nm | 405nm | 445nm | DOF(<3%) |
+|---|---|---|---|---|---|---|
+| L_abs(λ) | 2.82% | 2.26% | 2.10% | 1.55% | 0.75% | 5/5 |
+| L_R(λ) | 0.01% | 0.01% | 0.01% | 0.01% | 0.01% | 5/5 |
+
+Reproduces mie_hunter fisher_wl2: each control point of the absorption / Rayleigh λ-deviation curve is independently constrained (~1–3% per point) by the laser at that wavelength — the flexible-curve identifiability, now via the unified DetectorParams λ-deviation leaves + the Step-4 GN/Fisher fitter.
+
+_Spectral CRB finished in 8.6 min._
