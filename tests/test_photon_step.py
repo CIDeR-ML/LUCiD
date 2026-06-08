@@ -11,6 +11,7 @@ from lucid.simulation import (
     photon_iteration_update_factors,
     photon_iteration_update_factors_safe,
 )
+from lucid.simulation.reflection import ScalarReflection
 
 
 def _make_photon_args(key):
@@ -24,10 +25,11 @@ def _make_photon_args(key):
         scatter_length=50.0,
         mie_scatter_length=1.0e9,  # ≈ no Mie channel
         g=0.0,
-        wall_reflection_rate=0.5,
-        sensor_reflection_rate=0.3,
+        refl_params=ScalarReflection(wall_rate=jnp.asarray(0.5),
+                                     sensor_rate=jnp.asarray(0.3)),
         absorption_length=100.0,
         hit_sensor=True,
+        lam=jnp.asarray(0.0),
         rng_key=key,
         speed_of_light=0.2253,
     )

@@ -14,6 +14,7 @@ from lucid.simulation.photon_step import (
     photon_iteration_update_factors,
     photon_iteration_update_factors_safe,
 )
+from lucid.simulation.reflection import ScalarReflection
 from lucid.simulation.sensor_response import (
     make_hits_simulation, make_hits_likelihood,
 )
@@ -113,9 +114,10 @@ class TestPhotonStepGradientFlow:
                 normal=jnp.array([0., 0., -1.]),
                 scatter_length=scatter_length,
                 mie_scatter_length=1.0e9, g=0.0,
-                wall_reflection_rate=0.5, sensor_reflection_rate=0.3,
+                refl_params=ScalarReflection(wall_rate=jnp.asarray(0.5),
+                                             sensor_rate=jnp.asarray(0.3)),
                 absorption_length=100.0, hit_sensor=True,
-                rng_key=key, speed_of_light=0.2253)
+                lam=jnp.asarray(0.0), rng_key=key, speed_of_light=0.2253)
             return detect_prob
         g = jax.grad(loss)(50.0)
         assert jnp.isfinite(g)
@@ -131,10 +133,10 @@ class TestPhotonStepGradientFlow:
                 time=0.0, surface_distance=2.0,
                 normal=jnp.array([0., 0., -1.]),
                 scatter_length=50.0, mie_scatter_length=1.0e9, g=0.0,
-                wall_reflection_rate=0.5,
-                sensor_reflection_rate=sensor_refl,
+                refl_params=ScalarReflection(wall_rate=jnp.asarray(0.5),
+                                             sensor_rate=sensor_refl),
                 absorption_length=100.0, hit_sensor=True,
-                rng_key=key, speed_of_light=0.2253)
+                lam=jnp.asarray(0.0), rng_key=key, speed_of_light=0.2253)
             return detect_prob
         g = jax.grad(loss)(0.3)
         assert jnp.isfinite(g)
@@ -154,9 +156,11 @@ class TestPhotonStepGradientFlow:
                 time=0.0, surface_distance=2.0,
                 normal=jnp.array([0., 0., -1.]),
                 scatter_length=50.0, mie_scatter_length=1.0e9, g=0.0,
-                wall_reflection_rate=0.5,
-                sensor_reflection_rate=0.3, absorption_length=abs_length,
-                hit_sensor=True, rng_key=key, speed_of_light=0.2253)
+                refl_params=ScalarReflection(wall_rate=jnp.asarray(0.5),
+                                             sensor_rate=jnp.asarray(0.3)),
+                absorption_length=abs_length,
+                hit_sensor=True, lam=jnp.asarray(0.0),
+                rng_key=key, speed_of_light=0.2253)
             return detect_prob
         g = jax.grad(loss)(100.0)
         assert jnp.isfinite(g)
@@ -171,9 +175,11 @@ class TestPhotonStepGradientFlow:
                 time=0.0, surface_distance=1e-8,  # degenerate: nearly zero distance
                 normal=jnp.array([0., 0., -1.]),
                 scatter_length=50.0, mie_scatter_length=1.0e9, g=0.0,
-                wall_reflection_rate=0.5,
-                sensor_reflection_rate=0.3, absorption_length=100.0,
-                hit_sensor=True, rng_key=key, speed_of_light=0.2253)
+                refl_params=ScalarReflection(wall_rate=jnp.asarray(0.5),
+                                             sensor_rate=jnp.asarray(0.3)),
+                absorption_length=100.0,
+                hit_sensor=True, lam=jnp.asarray(0.0),
+                rng_key=key, speed_of_light=0.2253)
             return dp
         g = jax.grad(loss)(jnp.zeros(3))
         assert jnp.all(jnp.isfinite(g)), f"NaN in gradient: {g}"
