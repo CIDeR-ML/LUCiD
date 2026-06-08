@@ -107,11 +107,12 @@ class TestPhotonStepGradientFlow:
         Gradient should be positive."""
         key = jax.random.PRNGKey(42)
         def loss(scatter_length):
-            _, _, _, detect_prob, _, _ = photon_iteration_update_factors_safe(
+            _, _, _, detect_prob, _, _, _ = photon_iteration_update_factors_safe(
                 position=jnp.zeros(3), direction=jnp.array([0., 0., 1.]),
                 time=0.0, surface_distance=2.0,
                 normal=jnp.array([0., 0., -1.]),
                 scatter_length=scatter_length,
+                mie_scatter_length=1.0e9, g=0.0,
                 wall_reflection_rate=0.5, sensor_reflection_rate=0.3,
                 absorption_length=100.0, hit_sensor=True,
                 rng_key=key, speed_of_light=0.2253)
@@ -125,11 +126,12 @@ class TestPhotonStepGradientFlow:
         Gradient should be negative."""
         key = jax.random.PRNGKey(42)
         def loss(sensor_refl):
-            _, _, _, detect_prob, _, _ = photon_iteration_update_factors_safe(
+            _, _, _, detect_prob, _, _, _ = photon_iteration_update_factors_safe(
                 position=jnp.zeros(3), direction=jnp.array([0., 0., 1.]),
                 time=0.0, surface_distance=2.0,
                 normal=jnp.array([0., 0., -1.]),
-                scatter_length=50.0, wall_reflection_rate=0.5,
+                scatter_length=50.0, mie_scatter_length=1.0e9, g=0.0,
+                wall_reflection_rate=0.5,
                 sensor_reflection_rate=sensor_refl,
                 absorption_length=100.0, hit_sensor=True,
                 rng_key=key, speed_of_light=0.2253)
@@ -140,17 +142,22 @@ class TestPhotonStepGradientFlow:
 
     def test_grad_attenuation_wrt_absorption_length(self):
         """Longer absorption length → less attenuation → higher factor.
-        Gradient should be positive."""
+        Gradient should be positive.
+
+        Absorption is now folded into detect_prob (reflection_attenuation is a
+        constant 1.0), so the attenuation gradient is read from detect_prob.
+        """
         key = jax.random.PRNGKey(42)
         def loss(abs_length):
-            _, _, _, _, refl_atten, _ = photon_iteration_update_factors_safe(
+            _, _, _, detect_prob, _, _, _ = photon_iteration_update_factors_safe(
                 position=jnp.zeros(3), direction=jnp.array([0., 0., 1.]),
                 time=0.0, surface_distance=2.0,
                 normal=jnp.array([0., 0., -1.]),
-                scatter_length=50.0, wall_reflection_rate=0.5,
+                scatter_length=50.0, mie_scatter_length=1.0e9, g=0.0,
+                wall_reflection_rate=0.5,
                 sensor_reflection_rate=0.3, absorption_length=abs_length,
                 hit_sensor=True, rng_key=key, speed_of_light=0.2253)
-            return refl_atten
+            return detect_prob
         g = jax.grad(loss)(100.0)
         assert jnp.isfinite(g)
         assert float(g) > 0
@@ -159,11 +166,12 @@ class TestPhotonStepGradientFlow:
         """The custom VJP should produce finite gradients even with degenerate inputs."""
         key = jax.random.PRNGKey(42)
         def loss(pos):
-            _, _, _, dp, _, _ = photon_iteration_update_factors_safe(
+            _, _, _, dp, _, _, _ = photon_iteration_update_factors_safe(
                 position=pos, direction=jnp.array([0., 0., 1.]),
                 time=0.0, surface_distance=1e-8,  # degenerate: nearly zero distance
                 normal=jnp.array([0., 0., -1.]),
-                scatter_length=50.0, wall_reflection_rate=0.5,
+                scatter_length=50.0, mie_scatter_length=1.0e9, g=0.0,
+                wall_reflection_rate=0.5,
                 sensor_reflection_rate=0.3, absorption_length=100.0,
                 hit_sensor=True, rng_key=key, speed_of_light=0.2253)
             return dp

@@ -216,17 +216,11 @@ def compute_effective_properties(detector_params, medium, wavelengths=None,
 
     wl_grid = medium.wavelength_grid
     scatter_at_wl = jnp.interp(wavelengths, wl_grid, medium.scatter_coeff)
-    print("scatter_at_wl", scatter_at_wl)
-    mie_scatter_at_wl = jnp.interp(wavelengths, wl_grid, medium.mie_scatter_coeff)  
-    print("mie_scatter_at_wl", mie_scatter_at_wl)
+    mie_scatter_at_wl = jnp.interp(wavelengths, wl_grid, medium.mie_scatter_coeff)
     scatter_at_ref = jnp.interp(ref_wl, wl_grid, medium.scatter_coeff)
-    print("scatter_at_ref", scatter_at_ref)
     mie_scatter_at_ref = jnp.interp(ref_wl, wl_grid, medium.mie_scatter_coeff)
-    print("mie_scatter_at_ref", mie_scatter_at_ref)
     scatter_correction = scatter_at_ref / (scatter_at_wl + 1e-30)
-    print("scatter_correction", scatter_correction)
     mie_scatter_correction = mie_scatter_at_ref / (mie_scatter_at_wl + 1e-30)
-    print("mie_scatter_correction", mie_scatter_correction)
 
 
     abs_at_wl = jnp.interp(wavelengths, wl_grid, medium.absorption_coeff)
@@ -234,10 +228,8 @@ def compute_effective_properties(detector_params, medium, wavelengths=None,
     abs_correction = abs_at_ref / (abs_at_wl + 1e-30)
 
     eff_scatter = detector_params.scattering.scatter_length * scatter_correction
-    print("eff_scatter", eff_scatter)
     eff_absorption = detector_params.absorption.absorption_length * abs_correction
     eff_mie_scatter = detector_params.scattering.mie_scatter_length * mie_scatter_correction
-    print("eff_mie_scatter", eff_mie_scatter)
 
     if qe_curve is not None:
         eff_qe = detector_params.response.qe * qe_curve(wavelengths)
