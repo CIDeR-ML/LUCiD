@@ -15,6 +15,7 @@ from lucid.utils import (
 )
 from lucid.detector_params import DetectorParams, ParticleParams, load_detector_params, load_physics_config
 from lucid.wavelength.medium import make_medium, load_qe_curve, qe_curve_bounds
+from lucid.wavelength.optical_model import evaluate_optical_model, OpticalArrays
 from lucid.wavelength.spectrum import (
     sample_cherenkov_wavelengths, build_qe_weighted_cherenkov_sampler,
 )
@@ -368,11 +369,12 @@ def setup_event_simulator(
                 "wavelength_mode=True but no medium model was loaded. "
                 "Provide a physics_config with 'medium_model' or set wavelength_mode=False.")
         if not wavelength_mode:
-            return (jnp.full(n, detector_params.scattering.scatter_length),
-                    jnp.full(n, detector_params.scattering.mie_scatter_length),
-                    jnp.full(n, detector_params.absorption.absorption_length),
-                    None, key)
+            # Monochromatic / scalar mode: the pure optical model broadcasts the
+            # DetectorParams scalars (wavelengths=None path).
+            oa = evaluate_optical_model(detector_params, None, _medium_wl, n)
+            return (oa.scatter_len, oa.mie_len, oa.abs_len, oa.qe, key)
 
+        # --- λ sampling (a SOURCE concern; the optical model only evaluates) ---
         # Normalize wavelength input to per-photon array:
         #   None   → sample Cherenkov spectrum (Method A or B depending on
         #            wavelength_sampling)
@@ -392,29 +394,18 @@ def setup_event_simulator(
             if wavelengths.ndim == 0:
                 wavelengths = jnp.full(n, wavelengths)
 
-        wavelengths = jnp.clip(wavelengths,
-                               _medium_wl.wavelength_grid[0],
-                               _medium_wl.wavelength_grid[-1])
-        sc = jnp.interp(wavelengths, _medium_wl.wavelength_grid, _medium_wl.scatter_coeff)
-        asym_sc = jnp.interp(wavelengths, _medium_wl.wavelength_grid, _medium_wl.mie_scatter_coeff) 
-        ac = jnp.interp(wavelengths, _medium_wl.wavelength_grid, _medium_wl.absorption_coeff)
-        scatter_lengths = 1.0 / (sc + 1e-30)
-        mie_scatter_lengths = 1.0 / (asym_sc + 1e-30)
-        absorption_lengths = 1.0 / (ac + 1e-30)
-
+        # --- per-photon optical evaluation (pure seam) ---
         # QE-weight convention:
-        #   • Method B sampled here  → the λ-dependence of QE is already in
-        #     the sampling distribution, so the per-photon weight collapses
-        #     to the scalar <QE>_C.
+        #   • Method B sampled here  → the λ-dependence of QE is already in the
+        #     sampling distribution, so the per-photon weight collapses to the
+        #     scalar <QE>_C (override below; qe_fn not threaded here).
         #   • Otherwise (explicit wavelengths, PhotonSim data, or Method A):
         #     the per-photon weight must include qe_fn(λ).
-        if sampled_via_qe_importance:
-            qe_weights = jnp.full(n, _mean_qe_c)
-        elif _qe_fn is not None:
-            qe_weights = _qe_fn(wavelengths)
-        else:
-            qe_weights = None
-        return scatter_lengths, mie_scatter_lengths, absorption_lengths, qe_weights, key
+        oa = evaluate_optical_model(
+            detector_params, wavelengths, _medium_wl, n,
+            qe_fn=None if sampled_via_qe_importance else _qe_fn)
+        qe_weights = jnp.full(n, _mean_qe_c) if sampled_via_qe_importance else oa.qe
+        return oa.scatter_len, oa.mie_len, oa.abs_len, qe_weights, key
 
     # ================================================================
     # Core propagation (shared by all modes)
