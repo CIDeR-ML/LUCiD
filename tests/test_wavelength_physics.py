@@ -60,13 +60,14 @@ class TestEffectivePropertyPhysics:
     def test_shorter_wavelength_scatters_more(self):
         """Photons at shorter wavelengths should have shorter effective scatter length."""
         from lucid.detector_params import DetectorParams
-        dp = DetectorParams(scatter_length=50.0, wall_reflection_rate=0.5,
+        dp = DetectorParams(scatter_length=50.0, mie_scatter_length=1000.0, g=0.9,
+                            wall_reflection_rate=0.5,
                             sensor_reflection_rate=0.3, absorption_length=100.0,
                             qe=0.2, qe_corrections=jnp.ones(10))
         wl = jnp.linspace(300.0, 700.0, 100)
         m = make_medium("water", wavelength_grid=wl)
         wavelengths = jnp.array([350.0, 600.0])
-        eff_s, _, _ = compute_effective_properties(dp, m, wavelengths=wavelengths)
+        eff_s, _, _, _ = compute_effective_properties(dp, m, wavelengths=wavelengths)
         # 350nm photon should scatter more (shorter effective scatter length)
         assert float(eff_s[0]) < float(eff_s[1])
 

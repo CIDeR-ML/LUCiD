@@ -2,6 +2,7 @@
 Cylinder-specific photon propagation functions.
 """
 
+import os
 import jax
 import jax.numpy as jnp
 from functools import partial
@@ -12,6 +13,15 @@ from .base import (
     find_closest_sensors
 )
 from ..overlap import create_overlap_prob
+
+# Grazing-ray sqrt regularization for the wall-intersection discriminant. 0 -> legacy hard floor
+# sqrt(max(disc, 1e-6)) (C0 kink at the threshold + near-divergent 2nd derivative just above it,
+# which inflates the autodiff TRACK Hessian: the wall sqrt recurs once per scatter iteration). A
+# value eps>0 -> SMOOTH additive floor sqrt(max(disc,0)+eps): C-inf on the hit side (disc>0, where
+# all interior rays live since c=x0^2+y0^2-r^2<0 => disc>0), curvature capped at ~1/(4 eps^1.5)
+# instead of diverging, so the 2nd-order AD matches FD. Forward bias is O(eps/(2 sqrt(disc))), i.e.
+# only rays within ~sqrt(eps) of tangency move. Default 0 keeps the forward byte-identical.
+_CYL_SQRT_EPS = float(os.environ.get('CYL_SQRT_EPS', '0'))
 
 
 @jax.jit
@@ -45,7 +55,14 @@ def intersect_cylinder_wall(ray_origin, ray_direction, r, h):
     epsilon = 1e-6
 
     def side_branch(_):
-        sqrt_disc = jnp.sqrt(jnp.maximum(0.0, discriminant))
+        # SAFE sqrt: clamp the discriminant away from 0 so a grazing/tangent ray (disc->0) does not give
+        # the sqrt-at-zero 0/0 gradient (d/dx sqrt(x)=1/(2 sqrt x) -> inf). This is a 2nd-order-AD NaN source.
+        # Legacy hard floor leaves a near-divergent 2nd derivative just above threshold; _CYL_SQRT_EPS>0
+        # switches to a C-inf additive floor that keeps the wall-intersection curvature finite (see top).
+        if _CYL_SQRT_EPS > 0:
+            sqrt_disc = jnp.sqrt(jnp.maximum(discriminant, 0.0) + _CYL_SQRT_EPS)
+        else:
+            sqrt_disc = jnp.sqrt(jnp.maximum(discriminant, 1e-6))
         t1 = (-b - sqrt_disc) / (2*a)
         t2 = (-b + sqrt_disc) / (2*a)
         t1, t2 = jnp.minimum(t1, t2), jnp.maximum(t1, t2)

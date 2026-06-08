@@ -7,6 +7,29 @@ import os
 import json
 from lucid.utils import base_dir_path
 
+def _natural_cubic_moments(x, y):
+    """Second derivatives M_i for the natural cubic spline through (x, y), with M_0 = M_{n-1} = 0.
+    Solved once at build time (Thomas algorithm); supports non-uniform knots. Used by the 'cubic'
+    overlap mode to give a value-exact-at-knots AND C2 (continuous-curvature) overlap, so the
+    autodiff Hessian wrt the photon->sensor distance is correct (unlike the C0 jnp.interp lookup)."""
+    import numpy as _np
+    x = _np.asarray(x, dtype=float); y = _np.asarray(y, dtype=float); n = x.shape[0]
+    if n < 3:
+        return _np.zeros(n)
+    h = _np.diff(x)
+    a = _np.zeros(n); b = _np.zeros(n); c = _np.zeros(n); rhs = _np.zeros(n)
+    b[0] = 1.0; b[n - 1] = 1.0                              # natural BC: M_0 = M_{n-1} = 0
+    for i in range(1, n - 1):
+        a[i] = h[i - 1]; b[i] = 2.0 * (h[i - 1] + h[i]); c[i] = h[i]
+        rhs[i] = 6.0 * ((y[i + 1] - y[i]) / h[i] - (y[i] - y[i - 1]) / h[i - 1])
+    for i in range(1, n):                                  # forward elimination
+        w = a[i] / b[i - 1]; b[i] -= w * c[i - 1]; rhs[i] -= w * rhs[i - 1]
+    M = _np.zeros(n); M[n - 1] = rhs[n - 1] / b[n - 1]      # back substitution
+    for i in range(n - 2, -1, -1):
+        M[i] = (rhs[i] - c[i] * M[i + 1]) / b[i]
+    return M
+
+
 def gaussian_kernel(rho: float, theta: float, d: float, r: float, sigma: float) -> float:
     """2D Gaussian distribution centered at the origin with std sigma.
 
@@ -271,12 +294,59 @@ def create_overlap_prob(sigma: Optional[float],
     if r <= 0:
         raise ValueError("r must be positive.")
 
-    # Use step function if sigma is None or very small
+    # Use step function if sigma is None or very small.
+    # STRAIGHT-THROUGH: the forward value is the hard step (occupancy/forward unchanged), but
+    # the BACKWARD pass uses a smooth sigmoid surrogate so the deposit retains a gradient wrt
+    # the photon->sensor distance (hence wrt the track position/direction). Without this, a hard
+    # step has zero gradient a.e. and charge cannot constrain position. Forward is byte-identical
+    # to the step, so this is NOT a soft-temperature (the model output is unchanged).
     if sigma is None or sigma < 0.02 * r:
+        # surrogate width for the backward gradient only (fwd stays hard). Narrower -> sharper
+        # (larger-magnitude) spatial gradient, closer to the true local slope; wider -> smoother.
+        # ST_WIDTH_FRAC<=0 -> PURE HARD step (no backward surrogate): overlap contributes zero
+        # gradient; the track/position gradient then flows ONLY through DiCE score + smooth physics.
+        st_frac = float(os.environ.get('ST_WIDTH_FRAC', '0.35'))
+
+        if st_frac <= 0.0:
+            def overlap_prob(d: float) -> float:
+                return jnp.where(d < r, 1.0, 0.0)            # hard, grad 0 a.e. (no surrogate)
+            return overlap_prob
+
+        st_width = st_frac * r
+
         def overlap_prob(d: float) -> float:
-            return jnp.where(d < r, 1.0, 0.0)
+            hard = jnp.where(d < r, 1.0, 0.0)
+            soft = jax.nn.sigmoid((r - d) / st_width)
+            return jax.lax.stop_gradient(hard - soft) + soft   # fwd = hard; grad = d(soft)/dd
 
         return overlap_prob
+
+    # SOFT-OVERLAP RENORMALIZATION (env-gated, default 1.0 = OFF, byte-identical).
+    # The soft overlap f(d) = mass of a sigma-Gaussian (centered at the photon) inside the sensor disk.
+    # Convolution conserves the integral ONLY if all the spread is captured; the fraction landing in the
+    # GAPS between sensors (no sensor to catch it) is LOST -> the soft total under-counts the hard top-hat
+    # by ~1% (worse in sparse/dim regions). A GLOBAL constant C = hard_total/soft_total restores the total
+    # (and hence the energy) without changing the gradient DIRECTION (it is a pure scale). Calibrate C once
+    # per detector (ratio of temp=None to temp=0.1 total charge). See MISMATCH_PLAN.md.
+    _RENORM = float(os.environ.get('OVERLAP_RENORM', '1.0'))
+
+    # HESSIAN-DEBUG (env-gated): replace the piecewise-linear jnp.interp lookup with an analytic
+    # smooth surrogate. jnp.interp is C0 -> its 2nd derivative is 0 a.e. with delta spikes at knots,
+    # so the overlap's contribution to the AUTODIFF Hessian via the photon->sensor distance d (track
+    # pos/dir) is structurally wrong while FD sees the true curvature. An erf/logistic form is C-inf.
+    _ov_mode = os.environ.get('OVERLAP_ANALYTIC', '')
+    if _ov_mode == 'erf':
+        # 0.5*(1-erf((d-r)/(sqrt(2) sigma))): smooth approx of the Gaussian-blurred disk edge.
+        def overlap_prob(d: float) -> float:
+            return 0.5 * (1.0 - jax.lax.erf((d - r) / (jnp.sqrt(2.0) * sigma)))
+        return overlap_prob
+    if _ov_mode == 'logistic':
+        def overlap_prob(d: float) -> float:
+            return jax.nn.sigmoid((r - d) / sigma)
+        return overlap_prob
+    # _ov_mode == 'cubic' falls through: load the EXACT lookup below, then interpolate it with a
+    # natural cubic spline (C2) instead of jnp.interp (C0) -- value-exact at the knots AND correct
+    # curvature, so it carries value, gradient, AND Hessian wrt the photon->sensor distance.
 
     # Try to load from cache first
     if use_cache:
@@ -293,9 +363,26 @@ def create_overlap_prob(sigma: Optional[float],
             r, sigma, n_theta, n_rho, num_dense, num_sparse, d_max_factor
         )
 
+    if _ov_mode == 'cubic':
+        # Natural cubic spline through the precomputed knots: passes through the exact overlap value at
+        # every knot (so value+gradient match the lookup) and is C2 (continuous 2nd derivative), so the
+        # autodiff Hessian wrt d is correct -- unlike jnp.interp (C0: 2nd deriv 0 a.e. + delta spikes).
+        _M = _natural_cubic_moments(d_values, f_values)
+        _xk = jnp.asarray(d_values); _yk = jnp.asarray(f_values); _Mk = jnp.asarray(_M)
+        _hk = _xk[1:] - _xk[:-1]
+        _nseg = _xk.shape[0] - 1
+        def overlap_prob(d: float) -> float:
+            d_c = jnp.clip(d, _xk[0], _xk[-1])
+            i = jnp.clip(jnp.searchsorted(_xk, d_c) - 1, 0, _nseg - 1)
+            x0 = _xk[i]; x1 = _xk[i + 1]; y0 = _yk[i]; y1 = _yk[i + 1]
+            m0 = _Mk[i]; m1 = _Mk[i + 1]; h = _hk[i]
+            A = (x1 - d_c) / h; B = (d_c - x0) / h
+            return _RENORM * (A * y0 + B * y1 + ((A ** 3 - A) * m0 + (B ** 3 - B) * m1) * (h * h) / 6.0)
+        return overlap_prob
+
     def overlap_prob(d: float) -> float:
         d_clamped = jnp.clip(d, d_values[0], d_values[-1])
-        return jnp.interp(d_clamped, d_values, f_values)
+        return _RENORM * jnp.interp(d_clamped, d_values, f_values)
 
     return overlap_prob
 

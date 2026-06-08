@@ -429,9 +429,6 @@ def first_arrival_nll(log_w, flat_times, flat_indices,
     log_w_total = segment_logsumexp(safe_log_w, flat_indices, num_detectors)
     log_w_norm = safe_log_w - log_w_total[flat_indices]
 
-    # N_s = expected photon count per sensor
-    N_s = jnp.exp(log_w_total)
-
     # log f(t_obs) — mixture density
     log_kernel = (jax.nn.log_sigmoid(x)
                   + jax.nn.log_sigmoid(-x)
@@ -445,8 +442,29 @@ def first_arrival_nll(log_w, flat_times, flat_indices,
         log_w_norm + jax.nn.log_sigmoid(-x), flat_indices, num_detectors
     )
 
+    # --- Empty/degenerate-segment safety -------------------------------------
+    # A sensor with no predicted photons yields segment_logsumexp = -inf for all
+    # three terms, so the raw order-statistic loss below is (inf - inf) = NaN.
+    # Worse, masking the output afterwards does NOT remove the NaN gradient
+    # (0 * NaN = NaN in the VJP). Floor the per-sensor log terms to a finite
+    # value so the loss is finite *everywhere*; the floor's max() gate also
+    # zeros the gradient on empty segments. Real sensors (log_w_total ~ O(1))
+    # are nowhere near the floor, so well-posed numerics are unchanged.
+    LOG_FLOOR = -60.0
+    empty = log_w_total <= (LOG_FLOOR + 1.0)
+    log_w_total_s = jnp.maximum(log_w_total, LOG_FLOOR)
+    log_f_s = jnp.maximum(log_f, LOG_FLOOR)
+    log_one_minus_F_s = jnp.maximum(log_one_minus_F, LOG_FLOOR)
+
+    # N_s = expected photon count per sensor (clamped to keep exp finite)
+    N_s = jnp.exp(jnp.clip(log_w_total_s, LOG_FLOOR, 50.0))
+
     # Order statistic NLL: -log[N_s · f · (1-F)^{N_s-1}]
-    loss = -log_w_total - log_f - (N_s - 1) * log_one_minus_F
+    loss = -log_w_total_s - log_f_s - (N_s - 1) * log_one_minus_F_s
+
+    # Empty segments contribute nothing (caller decides whether to penalise the
+    # missing prediction via the charge term); finite loss -> clean gradient.
+    loss = jnp.where(empty, 0.0, loss)
 
     return loss
 

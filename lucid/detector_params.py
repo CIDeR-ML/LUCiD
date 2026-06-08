@@ -169,15 +169,24 @@ def _resolve_field(val, config_dir):
     return jnp.asarray(float(val))
 
 
+# Essential scalars — must come from a value or be projectable from a curve, else error.
 _PROJECTABLE_FIELDS = ("scatter_length", "absorption_length", "qe")
+
+# Mie-engine scalars (``mie_scatter_length``, ``g``) were added later; existing configs
+# omit them. Project from the medium when one is referenced (its ``mie_scatter_coeff`` /
+# ``mie_asymmetry``); otherwise fall back to a "no Mie" default — never raise and never
+# leave them NaN (a NaN ``g`` poisons the expected-value photon step: effective_ratio =
+# ... (1-g)/L_M → NaN → zero charge + NaN gradients). ``mie_scatter_length`` huge ⇒
+# 1/L_M ≈ 0 (no Mie channel), which makes ``g`` immaterial.
+_MIE_DEFAULTS = {"mie_scatter_length": 1.0e9, "g": 0.0}
 
 
 def _project_missing_scalars(kwargs, medium_path, qe_path, ref_wavelength_nm,
                              source_filepath):
     """Fill NaN scalar fields by evaluating wavelength curves at ``ref_wavelength_nm``.
 
-    Modifies *kwargs* in place. Raises if a scalar is missing and no curve is
-    available to project from.
+    Modifies *kwargs* in place. Raises if an *essential* scalar is missing and no curve
+    is available to project from. Mie scalars fall back to a no-Mie default instead.
     """
     for field in _PROJECTABLE_FIELDS:
         v = kwargs[field]
@@ -205,6 +214,22 @@ def _project_missing_scalars(kwargs, medium_path, qe_path, ref_wavelength_nm,
             coeff = m.scatter_coeff if field == "scatter_length" else m.absorption_coeff
             scalar = float(1.0 / (coeff[0] + 1e-30))
 
+        kwargs[field] = jnp.asarray(scalar, dtype=jnp.float32)
+
+    # Mie scalars: project from the medium if present, else default to "no Mie".
+    for field, default in _MIE_DEFAULTS.items():
+        v = kwargs[field]
+        if v.ndim != 0 or not bool(jnp.isnan(v)):
+            continue
+        if medium_path is not None:
+            from lucid.wavelength.medium import make_medium
+            wl_grid = jnp.array([ref_wavelength_nm], dtype=jnp.float32)
+            m = make_medium("water", wavelength_grid=wl_grid,
+                            medium_model_path=medium_path)
+            scalar = (float(m.mie_asymmetry) if field == "g"
+                      else float(1.0 / (m.mie_scatter_coeff[0] + 1e-30)))
+        else:
+            scalar = default
         kwargs[field] = jnp.asarray(scalar, dtype=jnp.float32)
 
 

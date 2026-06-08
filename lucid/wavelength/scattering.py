@@ -71,6 +71,27 @@ def hg_sample_cos_theta(u, g):
     return jnp.clip(cos_theta, -1.0 + 1e-6, 1.0 - 1e-6)
 
 
+def hg_logpdf(mu, g):
+    """log of the Henyey-Greenstein phase function at cos(angle) ``mu``.
+
+    log P(μ) = log(1-g²) - log 2 - 1.5·log(1 + g² - 2·g·μ).
+    This is the DiCE score density for the Mie scatter angle (carries the ``g``
+    gradient). ``g`` clamped for NaN-free grads. (mu is the SAMPLED cosine, so the
+    caller passes ``stop_gradient(mu)``.)
+    """
+    g = jnp.clip(g, 1e-4, 1.0 - 1e-4)
+    return jnp.log(1.0 - g**2) - jnp.log(2.0) - 1.5 * jnp.log(1.0 + g**2 - 2.0 * g * mu)
+
+
+def rayleigh_logpdf(mu):
+    """log of the Rayleigh phase function at cos(angle) ``mu``: log(3/8) + log(1+μ²).
+
+    The DiCE score density for the Rayleigh scatter angle (no free parameter; constant
+    in the optimised params, but kept for symmetry with ``hg_logpdf`` in the score).
+    """
+    return jnp.log(3.0 / 8.0) + jnp.log(1.0 + mu**2)
+
+
 def compute_mie_scatter_direction(incident_dir, rng_key, g=0.95):
     """Mie (Henyey-Greenstein) scattering direction.
 

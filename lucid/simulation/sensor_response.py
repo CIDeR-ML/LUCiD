@@ -1,8 +1,14 @@
 """Sensor response: make_hits_* functions."""
+import os
 import jax
 import jax.numpy as jnp
 from functools import partial
 from lucid.utils import smear_times, smear_charges_SK_like
+
+# Per-PHOTON transit-time-spread (TTS) sigma in ns for data-mode truth, env-gated (0 = off, default).
+# Applied to each photon's time BEFORE the first-arrival segment_min, so the min carries the correct
+# TTS early-bias (smearing the per-sensor min instead would be symmetric and physically wrong).
+_TTS_PERPHOTON_NS = float(os.environ.get('TTS_NS', '0'))
 
 # ===================================================================
 # make_hits functions
@@ -56,16 +62,23 @@ def make_hits_data(
     detection_probs = jax.random.uniform(qe_key, shape=flat_weights.shape)
     detected_mask = detection_probs < per_photon_qe
     qe_weights = flat_weights * detected_mask.astype(jnp.float32)
-    qe_filtered_times = jnp.where(detected_mask & timing_mask, flat_times, jnp.inf)
+    # PER-PHOTON TTS: smear each detected photon's time BEFORE the first-arrival min (env TTS_NS).
+    photon_times = flat_times
+    if _TTS_PERPHOTON_NS > 0:
+        photon_times = flat_times + jax.random.normal(smear_time_key, shape=flat_times.shape) * _TTS_PERPHOTON_NS
+    qe_filtered_times = jnp.where(detected_mask & timing_mask, photon_times, jnp.inf)
 
     total_charge = jax.ops.segment_sum(qe_weights, flat_indices, num_segments=num_detectors)
     detector_mins = jax.ops.segment_min(qe_filtered_times, flat_indices, num_segments=num_detectors)
 
+    # CHARGE is gated on a valid first-arrival time (detector_mins>0 & finite).
     nonzero_mask = (total_charge > 1e-10) & (detector_mins > 0) & jnp.isfinite(detector_mins)
 
     if apply_smearing:
+        # PER-SENSOR gate (was scalar jnp.any → empty sensors got smeared inf/1e6 garbage,
+        # PORT_PLAN §4.3): only lit sensors carry a time; empty sensors are exactly 0.
         measured_time = jnp.where(
-            jnp.any(nonzero_mask),
+            nonzero_mask,
             smear_times(detector_mins, key=smear_time_key),
             0.0
         )
@@ -75,7 +88,7 @@ def make_hits_data(
             0
         )
     else:
-        measured_time = jnp.where(jnp.any(nonzero_mask), detector_mins, 0.0)
+        measured_time = jnp.where(nonzero_mask, detector_mins, 0.0)
         measured_charge = jnp.where(nonzero_mask, total_charge, 0)
 
     return measured_charge, measured_time

@@ -60,28 +60,32 @@ class TestEffectiveProperties:
         """With wavelengths=None, effective properties equal scalar inputs."""
         from lucid.detector_params import DetectorParams
         dp = DetectorParams(
-            scatter_length=50.0, wall_reflection_rate=0.5,
+            scatter_length=50.0, mie_scatter_length=1000.0, g=0.9,
+            wall_reflection_rate=0.5,
             sensor_reflection_rate=0.3, absorption_length=100.0,
             qe=0.2, qe_corrections=jnp.ones(10),
         )
         m = make_medium("water")
-        eff_s, eff_a, eff_qe = compute_effective_properties(dp, m)
+        eff_s, eff_mie_s, eff_a, eff_qe = compute_effective_properties(dp, m)
         assert eff_s == 50.0
+        assert eff_mie_s == 1000.0
         assert eff_a == 100.0
         assert eff_qe == 0.2
 
     def test_wavelength_active_returns_arrays(self):
         from lucid.detector_params import DetectorParams
         dp = DetectorParams(
-            scatter_length=50.0, wall_reflection_rate=0.5,
+            scatter_length=50.0, mie_scatter_length=1000.0, g=0.9,
+            wall_reflection_rate=0.5,
             sensor_reflection_rate=0.3, absorption_length=100.0,
             qe=0.2, qe_corrections=jnp.ones(10),
         )
         wl = jnp.linspace(300.0, 700.0, 100)
         m = make_medium("water", wavelength_grid=wl)
         wavelengths = jnp.array([350.0, 400.0, 500.0, 600.0])
-        eff_s, eff_a, eff_qe = compute_effective_properties(dp, m, wavelengths=wavelengths)
+        eff_s, eff_mie_s, eff_a, eff_qe = compute_effective_properties(dp, m, wavelengths=wavelengths)
         assert eff_s.shape == (4,)
+        assert eff_mie_s.shape == (4,)
         assert eff_a.shape == (4,)
 
 
