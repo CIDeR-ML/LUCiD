@@ -1,8 +1,24 @@
 """Cherenkov spectrum sampling.
 
 Provides wavelength sampling from the Cherenkov radiation spectrum
-``dN/dlambda ~ 1/lambda^2`` via exact inverse-CDF sampling.
+``dN/dlambda ~ 1/lambda^2`` via exact inverse-CDF sampling, plus a small
+``Spectrum`` abstraction (Monochromatic / PowerLaw / QEWeighted) that names the
+λ-sampling laws as first-class, composable objects.
+
+A Spectrum exposes a uniform interface::
+
+    spectrum.sample(key, n, lambda_min, lambda_max) -> (n,) wavelengths in nm
+    spectrum.mean_qe -> float or None   (the scalar <QE>_C, set only by QEWeighted)
+
+so a calibration source can own its spectrum and the simulator can ask it for
+per-photon λ. The three concrete spectra wrap the inverse-CDF samplers below:
+Monochromatic = a constant λ (a laser line), PowerLaw(2) = the bare Cherenkov
+1/λ² broadband spectrum, QEWeighted = QE(λ)·1/λ² importance sampling (a
+production-only density estimate — NOT a literal shot realization, and it must
+NOT be used to *fit* QE since it bakes the unknown into the sampling law).
 """
+from typing import Callable, NamedTuple, Optional
+
 import jax
 import jax.numpy as jnp
 
@@ -85,3 +101,53 @@ def build_qe_weighted_cherenkov_sampler(qe_fn, lambda_min, lambda_max,
         return jnp.interp(u, cdf_qc, lam)
 
     return sample_fn, mean_qe
+
+
+# ---------------------------------------------------------------------------
+# Spectrum abstraction — named λ-sampling laws as first-class objects.
+# Uniform interface:  spectrum.sample(key, n, lambda_min, lambda_max) -> (n,) nm
+#                     spectrum.mean_qe -> float | None
+# These wrap the inverse-CDF samplers above; PowerLaw(2) delegates to
+# sample_cherenkov_wavelengths so the bare-Cherenkov path stays byte-identical.
+# ---------------------------------------------------------------------------
+
+class Monochromatic:
+    """A single laser line: every photon at ``wavelength`` (nm)."""
+
+    def __init__(self, wavelength):
+        self.wavelength = float(wavelength)
+        self.mean_qe = None
+
+    def sample(self, key, n, lambda_min=None, lambda_max=None):
+        return jnp.full(n, self.wavelength)
+
+
+class PowerLaw:
+    """Broadband ``dN/dλ ∝ λ^(-exponent)``. exponent=2 ⇒ bare Cherenkov."""
+
+    def __init__(self, exponent=2.0):
+        self.exponent = float(exponent)
+        self.mean_qe = None
+
+    def sample(self, key, n, lambda_min, lambda_max):
+        if self.exponent == 2.0:
+            return sample_cherenkov_wavelengths(key, n, lambda_min, lambda_max)
+        # general power law via inverse-CDF of λ^(1-p)
+        u = jax.random.uniform(key, shape=(n,))
+        a = 1.0 - self.exponent
+        lo, hi = lambda_min ** a, lambda_max ** a
+        return (lo + u * (hi - lo)) ** (1.0 / a)
+
+
+class QEWeighted:
+    """QE(λ)·1/λ² importance sampling. Production-only density estimate — NOT a
+    literal shot realization and must NOT be used to FIT QE (it bakes QE into the
+    sampling law). ``mean_qe`` is the scalar <QE>_C that replaces the per-photon
+    QE weight when this spectrum is used."""
+
+    def __init__(self, qe_fn, lambda_min, lambda_max, n_grid=500):
+        self._sample, self.mean_qe = build_qe_weighted_cherenkov_sampler(
+            qe_fn, lambda_min, lambda_max, n_grid)
+
+    def sample(self, key, n, lambda_min=None, lambda_max=None):
+        return self._sample(key, n)

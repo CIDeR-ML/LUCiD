@@ -70,6 +70,7 @@ def setup_event_simulator(
         overlap_mode='interp',
         reflection_model='scalar',
         reflection_wavelength=400.0,
+        spectrum=None,
         **grid_params):
     """
     Set up and return an event simulator using DetectorParams / ParticleParams.
@@ -152,6 +153,11 @@ def setup_event_simulator(
         Wavelength (nm) fed to the reflection model's dispersion (cathode/glass
         Fresnel). Exact for monochromatic-laser calibration; ignored by the
         scalar model. Default 400 nm.
+    spectrum : Spectrum or None
+        Optional λ-sampling law (``lucid.wavelength`` Monochromatic / PowerLaw /
+        QEWeighted). When given it supersedes ``wavelength_sampling`` for broadband
+        sampling and provides the scalar ``<QE>_C`` collapse via ``spectrum.mean_qe``.
+        Default ``None`` reproduces the ``wavelength_sampling`` behaviour.
 
     Returns
     -------
@@ -413,7 +419,11 @@ def setup_event_simulator(
         sampled_via_qe_importance = False
         if wavelengths is None:
             key, wl_key = jax.random.split(key)
-            if wavelength_sampling == 'cherenkov_qe':
+            if spectrum is not None:
+                # Explicit Spectrum object supersedes the wavelength_sampling string.
+                wavelengths = spectrum.sample(wl_key, n, _wl_lo, _wl_hi)
+                sampled_via_qe_importance = spectrum.mean_qe is not None
+            elif wavelength_sampling == 'cherenkov_qe':
                 wavelengths = _qe_sampler(wl_key, n)
                 sampled_via_qe_importance = True
             else:
@@ -434,7 +444,12 @@ def setup_event_simulator(
         oa = evaluate_optical_model(
             detector_params, wavelengths, _medium_wl, n,
             qe_fn=None if sampled_via_qe_importance else _qe_fn)
-        qe_weights = jnp.full(n, _mean_qe_c) if sampled_via_qe_importance else oa.qe
+        # The scalar <QE>_C comes from the Spectrum when one was used, else the
+        # built-in QE-weighted sampler.
+        _collapse_qe = (spectrum.mean_qe
+                        if (spectrum is not None and spectrum.mean_qe is not None)
+                        else _mean_qe_c)
+        qe_weights = jnp.full(n, _collapse_qe) if sampled_via_qe_importance else oa.qe
         return oa.scatter_len, oa.mie_len, oa.abs_len, qe_weights, key
 
     # ================================================================
