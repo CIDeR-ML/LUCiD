@@ -30,6 +30,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from lucid.utils import spherical_to_cartesian
+from lucid.wavelength.optical_model import N_CONTROL as _N_CTRL
 
 
 # ---------------------------------------------------------------------------
@@ -44,10 +45,20 @@ class ScatteringParams(NamedTuple):
     scatter_length : jnp.ndarray        scalar, meters (Rayleigh scatter length)
     mie_scatter_length : jnp.ndarray    scalar, meters
     g : jnp.ndarray                     scalar, Henyey-Greenstein asymmetry [0, 1]
+    rayleigh_dev : jnp.ndarray          (n_ctrl,) λ-deviation curve, default ones (≡1)
+    mie_dev : jnp.ndarray               (n_ctrl,) λ-deviation curve, default ones (≡1)
+
+    ``rayleigh_dev`` / ``mie_dev`` are the fittable wavelength-deviation curves at
+    the control wavelengths (:data:`lucid.wavelength.optical_model.CONTROL_WAVELENGTHS_NM`):
+    in wavelength mode the per-photon length is ``L_ref(λ) / interp(λ, control_λ, curve)``.
+    An all-ones curve reproduces the pure medium reference (byte-identical). They are
+    ignored in monochromatic mode.
     """
     scatter_length: jnp.ndarray
     mie_scatter_length: jnp.ndarray
     g: jnp.ndarray
+    rayleigh_dev: jnp.ndarray
+    mie_dev: jnp.ndarray
 
 
 class AbsorptionParams(NamedTuple):
@@ -56,8 +67,12 @@ class AbsorptionParams(NamedTuple):
     Fields
     ------
     absorption_length : jnp.ndarray     scalar, meters
+    abs_dev : jnp.ndarray               (n_ctrl,) λ-deviation curve, default ones (≡1)
+
+    ``abs_dev`` is the fittable wavelength-deviation curve; see ``ScatteringParams``.
     """
     absorption_length: jnp.ndarray
+    abs_dev: jnp.ndarray
 
 
 class ReflectionParams(NamedTuple):
@@ -80,14 +95,17 @@ class ResponseParams(NamedTuple):
     qe : jnp.ndarray         scalar, base quantum efficiency [0, 1]
     spe_width : jnp.ndarray  scalar, single-photoelectron charge resolution (default 0.0)
     tts : jnp.ndarray        scalar, transit-time spread, ns (default 0.0)
+    qe_dev : jnp.ndarray     (n_ctrl,) QE λ-deviation curve, default ones (≡1)
 
     ``spe_width`` and ``tts`` are calibrated PMT-response fields. Their neutral
     defaults (0.0) leave the current forward model unchanged; wiring them into
-    ``make_hits`` is a later step.
+    ``make_hits`` is a later step. ``qe_dev`` multiplies the per-photon QE weight
+    ``qe_fn(λ)`` in wavelength mode (≡1 default; see ``ScatteringParams``).
     """
     qe: jnp.ndarray
     spe_width: jnp.ndarray
     tts: jnp.ndarray
+    qe_dev: jnp.ndarray
 
 
 class PerPmtParams(NamedTuple):
@@ -148,12 +166,16 @@ class DetectorParams(NamedTuple):
             scatter_length=50.0,
             mie_scatter_length=_MIE_DEFAULTS["mie_scatter_length"],
             g=_MIE_DEFAULTS["g"],
+            rayleigh_dev=jnp.ones(_N_CTRL),
+            mie_dev=jnp.ones(_N_CTRL),
             absorption_length=100.0,
+            abs_dev=jnp.ones(_N_CTRL),
             wall_reflection_rate=0.0,
             sensor_reflection_rate=0.0,
             qe=0.2,
             spe_width=0.0,
             tts=0.0,
+            qe_dev=jnp.ones(_N_CTRL),
             qe_corrections=jnp.ones(ns),
             gain=jnp.ones(ns),
             t0=jnp.zeros(ns),
@@ -343,6 +365,11 @@ _NEUTRAL_DEFAULTS = {
     "walk": 0.0,
 }
 
+# Wavelength λ-deviation curves (one value per control wavelength). Existing configs
+# omit them → loaded NaN scalar → filled with an all-ones curve (≡ pure medium
+# reference, byte-identical). A config may supply a curve as an inline list instead.
+_DEV_CURVE_FIELDS = ("rayleigh_dev", "mie_dev", "abs_dev", "qe_dev")
+
 
 def _project_missing_scalars(kwargs, medium_path, qe_path, ref_wavelength_nm,
                              source_filepath):
@@ -400,6 +427,12 @@ def _project_missing_scalars(kwargs, medium_path, qe_path, ref_wavelength_nm,
         v = kwargs[field]
         if v.ndim == 0 and bool(jnp.isnan(v)):
             kwargs[field] = jnp.asarray(default, dtype=jnp.float32)
+
+    # λ-deviation curves: an all-ones curve (≡ pure reference) when absent.
+    for field in _DEV_CURVE_FIELDS:
+        v = kwargs[field]
+        if v.ndim == 0 and bool(jnp.isnan(v)):
+            kwargs[field] = jnp.ones(_N_CTRL, dtype=jnp.float32)
 
 
 def load_detector_params(filepath: str, num_sensors: int = None,
@@ -549,12 +582,16 @@ def default_bounds(num_sensors: int):
         scatter_length=jnp.array(0.0),
         mie_scatter_length=jnp.array(0.0),
         g=jnp.array(0.0),
+        rayleigh_dev=jnp.full(_N_CTRL, 0.1),
+        mie_dev=jnp.full(_N_CTRL, 0.1),
         absorption_length=jnp.array(0.0),
+        abs_dev=jnp.full(_N_CTRL, 0.1),
         wall_reflection_rate=jnp.array(0.0),
         sensor_reflection_rate=jnp.array(0.0),
         qe=jnp.array(0.0),
         spe_width=jnp.array(0.0),
         tts=jnp.array(0.0),
+        qe_dev=jnp.full(_N_CTRL, 0.1),
         qe_corrections=jnp.zeros(num_sensors),
         gain=jnp.full(num_sensors, 0.3),
         t0=jnp.full(num_sensors, -10.0),
@@ -564,12 +601,16 @@ def default_bounds(num_sensors: int):
         scatter_length=jnp.array(100.0),
         mie_scatter_length=jnp.array(100.0),
         g=jnp.array(1.0),
+        rayleigh_dev=jnp.full(_N_CTRL, 10.0),
+        mie_dev=jnp.full(_N_CTRL, 10.0),
         absorption_length=jnp.array(500.0),
+        abs_dev=jnp.full(_N_CTRL, 10.0),
         wall_reflection_rate=jnp.array(0.5),
         sensor_reflection_rate=jnp.array(0.4),
         qe=jnp.array(1.0),
         spe_width=jnp.array(1.0),
         tts=jnp.array(5.0),
+        qe_dev=jnp.full(_N_CTRL, 10.0),
         qe_corrections=jnp.full(num_sensors, 2.0),
         gain=jnp.full(num_sensors, 3.0),
         t0=jnp.full(num_sensors, 10.0),
@@ -623,12 +664,16 @@ def create_default_detector_params(num_sensors: int) -> DetectorParams:
         scatter_length=jnp.array(50.0),
         mie_scatter_length=jnp.array(50.0),
         g=jnp.array(0.85),
+        rayleigh_dev=jnp.ones(_N_CTRL),
+        mie_dev=jnp.ones(_N_CTRL),
         absorption_length=jnp.array(150.0),
+        abs_dev=jnp.ones(_N_CTRL),
         wall_reflection_rate=jnp.array(0.2),
         sensor_reflection_rate=jnp.array(0.2),
         qe=jnp.array(0.2),
         spe_width=jnp.array(0.0),
         tts=jnp.array(0.0),
+        qe_dev=jnp.ones(_N_CTRL),
         qe_corrections=jnp.ones(num_sensors),
         gain=jnp.ones(num_sensors),
         t0=jnp.zeros(num_sensors),
@@ -659,12 +704,16 @@ def default_gradient_scales(num_sensors: int) -> DetectorParams:
         scatter_length=jnp.array(1.0),
         mie_scatter_length=jnp.array(1.0),
         g=jnp.array(1.0),
+        rayleigh_dev=jnp.ones(_N_CTRL),
+        mie_dev=jnp.ones(_N_CTRL),
         absorption_length=jnp.array(1.0),
+        abs_dev=jnp.ones(_N_CTRL),
         wall_reflection_rate=jnp.array(1.0),
         sensor_reflection_rate=jnp.array(1.0),
         qe=jnp.array(1.0),
         spe_width=jnp.array(1.0),
         tts=jnp.array(1.0),
+        qe_dev=jnp.ones(_N_CTRL),
         qe_corrections=jnp.full(num_sensors, 0.1),
         gain=jnp.full(num_sensors, 0.1),
         t0=jnp.full(num_sensors, 0.1),

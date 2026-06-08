@@ -9,9 +9,13 @@ import os
 import jax.numpy as jnp
 import numpy.testing as npt
 
+import jax
+
 from lucid.detector_params import DetectorParams
 from lucid.wavelength.medium import make_medium, load_qe_curve
-from lucid.wavelength.optical_model import evaluate_optical_model, OpticalArrays
+from lucid.wavelength.optical_model import (
+    evaluate_optical_model, OpticalArrays, CONTROL_WAVELENGTHS_NM, N_CONTROL,
+)
 
 _SK_QE_PATH = os.path.join(os.path.dirname(__file__), '..', 'config', 'pmt', 'SK_QE.json')
 
@@ -78,3 +82,55 @@ class TestWavelengthMode:
         assert oa.qe is not None
         wl_clamped = jnp.clip(wavelengths, m.wavelength_grid[0], m.wavelength_grid[-1])
         npt.assert_allclose(oa.qe, qe_fn(wl_clamped), rtol=1e-6)
+
+
+class TestDeviationCurves:
+    def test_default_curves_are_unit(self):
+        """Default DetectorParams carry all-ones (≡1) λ-deviation curves."""
+        dp = _dp()
+        assert dp.scattering.rayleigh_dev.shape == (N_CONTROL,)
+        npt.assert_allclose(dp.scattering.rayleigh_dev, 1.0)
+        npt.assert_allclose(dp.scattering.mie_dev, 1.0)
+        npt.assert_allclose(dp.absorption.abs_dev, 1.0)
+        npt.assert_allclose(dp.response.qe_dev, 1.0)
+
+    def test_unit_deviation_is_pure_reference(self):
+        """dev ≡ 1 reproduces the bare medium reference (byte-identical)."""
+        dp = _dp()
+        wl_grid = jnp.linspace(300.0, 700.0, 200)
+        m = make_medium("water", wavelength_grid=wl_grid)
+        wavelengths = jnp.array([350.0, 400.0, 500.0, 600.0])
+        oa = evaluate_optical_model(dp, wavelengths, m, 4)
+        sc = jnp.interp(wavelengths, m.wavelength_grid, m.scatter_coeff)
+        npt.assert_allclose(oa.scatter_len, 1.0 / (sc + 1e-30), rtol=1e-6)
+
+    def test_deviation_scales_length_at_control_point(self):
+        """At a control wavelength, length = reference / curve value there."""
+        # Rayleigh deviation = 2.0 at every control point → half the length.
+        dev = jnp.full(N_CONTROL, 2.0)
+        dp = _dp()._replace(
+            scattering=_dp().scattering._replace(rayleigh_dev=dev))
+        wl_grid = jnp.linspace(300.0, 700.0, 200)
+        m = make_medium("water", wavelength_grid=wl_grid)
+        lam = jnp.array([CONTROL_WAVELENGTHS_NM[2]])  # exactly on a control knot
+        oa = evaluate_optical_model(dp, lam, m, 1)
+        sc = jnp.interp(lam, m.wavelength_grid, m.scatter_coeff)
+        npt.assert_allclose(oa.scatter_len, (1.0 / (sc + 1e-30)) / 2.0, rtol=1e-6)
+
+    def test_gradient_flows_to_deviation_curve(self):
+        """The fit can differentiate a scalar loss wrt the deviation curve leaf."""
+        wl_grid = jnp.linspace(300.0, 700.0, 200)
+        m = make_medium("water", wavelength_grid=wl_grid)
+        lam = jnp.array([360.0, 400.0, 440.0])
+
+        def loss(dev):
+            dp = _dp()._replace(
+                absorption=_dp().absorption._replace(abs_dev=dev))
+            oa = evaluate_optical_model(dp, lam, m, 3)
+            return jnp.sum(oa.abs_len)
+
+        g = jax.grad(loss)(jnp.ones(N_CONTROL))
+        assert g.shape == (N_CONTROL,)
+        assert jnp.all(jnp.isfinite(g))
+        # abs_len = ref / dev, so d/d(dev) < 0 at the constrained knots.
+        assert float(jnp.sum(g)) < 0.0
