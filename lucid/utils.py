@@ -429,11 +429,11 @@ def print_propagation_params(sensor_params):
     """
     print("Propagation Parameters:")
     print("─" * 20)
-    print(f"Scatter Length: {sensor_params.scatter_length:.2f} m")
-    print(f"Wall Reflection Rate: {sensor_params.wall_reflection_rate:.2f}")
-    print(f"Sensor Reflection Rate: {sensor_params.sensor_reflection_rate:.2f}")
-    print(f"Absorption Length: {sensor_params.absorption_length:.2f} m")
-    print(f"QE: {sensor_params.qe:.4f}")
+    print(f"Scatter Length: {sensor_params.scattering.scatter_length:.2f} m")
+    print(f"Wall Reflection Rate: {sensor_params.reflection.wall_reflection_rate:.2f}")
+    print(f"Sensor Reflection Rate: {sensor_params.reflection.sensor_reflection_rate:.2f}")
+    print(f"Absorption Length: {sensor_params.absorption.absorption_length:.2f} m")
+    print(f"QE: {sensor_params.response.qe:.4f}")
     print("─" * 20)
 
 def superimpose_multiple_events(charges_list, times_list):

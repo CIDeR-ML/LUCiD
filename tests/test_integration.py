@@ -227,7 +227,7 @@ class TestWavelengthModuleJIT:
         from lucid.wavelength.medium import make_medium, compute_effective_properties
         from lucid.detector_params import DetectorParams
         m = make_medium("water", wavelength_grid=jnp.linspace(300., 700., 100))
-        dp = DetectorParams(scatter_length=50., wall_reflection_rate=0.5,
+        dp = DetectorParams.from_flat(scatter_length=50., wall_reflection_rate=0.5,
                             sensor_reflection_rate=0.3, absorption_length=100.,
                             qe=0.2, qe_corrections=jnp.ones(10))
 

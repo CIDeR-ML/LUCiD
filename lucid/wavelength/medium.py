@@ -205,10 +205,10 @@ def compute_effective_properties(detector_params, medium, wavelengths=None,
     """
     if wavelengths is None:
         # Monochromatic: scalar passthrough
-        return (detector_params.scatter_length,
-                detector_params.mie_scatter_length,
-                detector_params.absorption_length,
-                detector_params.qe)
+        return (detector_params.scattering.scatter_length,
+                detector_params.scattering.mie_scatter_length,
+                detector_params.absorption.absorption_length,
+                detector_params.response.qe)
 
     # Wavelength-active: per-photon corrections
     # Reference wavelength (fixed at Cherenkov peak, not grid midpoint)
@@ -233,15 +233,15 @@ def compute_effective_properties(detector_params, medium, wavelengths=None,
     abs_at_ref = jnp.interp(ref_wl, wl_grid, medium.absorption_coeff)
     abs_correction = abs_at_ref / (abs_at_wl + 1e-30)
 
-    eff_scatter = detector_params.scatter_length * scatter_correction
+    eff_scatter = detector_params.scattering.scatter_length * scatter_correction
     print("eff_scatter", eff_scatter)
-    eff_absorption = detector_params.absorption_length * abs_correction
-    eff_mie_scatter = detector_params.mie_scatter_length * mie_scatter_correction
+    eff_absorption = detector_params.absorption.absorption_length * abs_correction
+    eff_mie_scatter = detector_params.scattering.mie_scatter_length * mie_scatter_correction
     print("eff_mie_scatter", eff_mie_scatter)
 
     if qe_curve is not None:
-        eff_qe = detector_params.qe * qe_curve(wavelengths)
+        eff_qe = detector_params.response.qe * qe_curve(wavelengths)
     else:
-        eff_qe = detector_params.qe
+        eff_qe = detector_params.response.qe
 
     return eff_scatter, eff_mie_scatter, eff_absorption, eff_qe

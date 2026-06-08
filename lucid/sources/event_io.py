@@ -1626,12 +1626,12 @@ def save_single_event(event_data, particle_params, sensor_params, event_number=0
             params_group.create_dataset('track_direction', data=np.array(particle_params.direction))
 
         detector_group = f.create_group('sensor_params')
-        detector_group.create_dataset('scatter_length', data=np.array(sensor_params.scatter_length))
-        detector_group.create_dataset('wall_reflection_rate', data=np.array(sensor_params.wall_reflection_rate))
-        detector_group.create_dataset('sensor_reflection_rate', data=np.array(sensor_params.sensor_reflection_rate))
-        detector_group.create_dataset('absorption_length', data=np.array(sensor_params.absorption_length))
-        detector_group.create_dataset('qe', data=np.array(sensor_params.qe))
-        detector_group.create_dataset('qe_corrections', data=np.array(sensor_params.qe_corrections))
+        detector_group.create_dataset('scatter_length', data=np.array(sensor_params.scattering.scatter_length))
+        detector_group.create_dataset('wall_reflection_rate', data=np.array(sensor_params.reflection.wall_reflection_rate))
+        detector_group.create_dataset('sensor_reflection_rate', data=np.array(sensor_params.reflection.sensor_reflection_rate))
+        detector_group.create_dataset('absorption_length', data=np.array(sensor_params.absorption.absorption_length))
+        detector_group.create_dataset('qe', data=np.array(sensor_params.response.qe))
+        detector_group.create_dataset('qe_corrections', data=np.array(sensor_params.per_pmt.qe_corrections))
 
         # Save event data and number
         event_group = f.create_group('event')
@@ -1687,16 +1687,28 @@ def load_single_event(filename, num_sensors, sparse=True, calibration_mode=False
                 energy=track_energy, position=track_origin,
                 direction=track_direction, t0=jnp.array(0.0))
 
-        # Load detector parameters
+        # Load detector parameters. The on-disk format is flat and predates the
+        # Mie / response / per-PMT fields, so fill those with neutral (no-Mie /
+        # identity) defaults to build the nested DetectorParams.
+        from lucid.detector_params import _nest_flat_kwargs, _MIE_DEFAULTS
         detector_group = f['sensor_params']
-        sensor_params = DetectorParams(
+        qe_corr = jnp.array(detector_group['qe_corrections'][()])
+        ns = qe_corr.shape[0] if qe_corr.ndim >= 1 else 1
+        sensor_params = _nest_flat_kwargs(dict(
             scatter_length=jnp.array(detector_group['scatter_length'][()]),
+            mie_scatter_length=jnp.asarray(_MIE_DEFAULTS['mie_scatter_length'], jnp.float32),
+            g=jnp.asarray(_MIE_DEFAULTS['g'], jnp.float32),
+            absorption_length=jnp.array(detector_group['absorption_length'][()]),
             wall_reflection_rate=jnp.array(detector_group['wall_reflection_rate'][()]),
             sensor_reflection_rate=jnp.array(detector_group['sensor_reflection_rate'][()]),
-            absorption_length=jnp.array(detector_group['absorption_length'][()]),
             qe=jnp.array(detector_group['qe'][()]),
-            qe_corrections=jnp.array(detector_group['qe_corrections'][()]),
-        )
+            spe_width=jnp.asarray(0.0, jnp.float32),
+            tts=jnp.asarray(0.0, jnp.float32),
+            qe_corrections=qe_corr,
+            gain=jnp.ones(ns, jnp.float32),
+            t0=jnp.zeros(ns, jnp.float32),
+            walk=jnp.zeros(ns, jnp.float32),
+        ))
 
         # Load event data
         event_group = f['event']

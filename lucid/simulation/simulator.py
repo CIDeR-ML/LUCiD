@@ -192,10 +192,12 @@ def setup_event_simulator(
 
     # ---- Handle qe_corrections for baked-in detector params -----------------
     if _default_dp is not None:
-        qe_corr = _default_dp.qe_corrections
+        qe_corr = _default_dp.per_pmt.qe_corrections
         # If scalar placeholder (from null in JSON), broadcast to NUM_SENSORS
         if qe_corr.ndim == 0:
-            _default_dp = _default_dp._replace(qe_corrections=jnp.ones(NUM_SENSORS) * qe_corr)
+            _default_dp = _default_dp._replace(
+                per_pmt=_default_dp.per_pmt._replace(
+                    qe_corrections=jnp.ones(NUM_SENSORS) * qe_corr))
         elif len(qe_corr) != NUM_SENSORS:
             raise ValueError(
                 f"qe_corrections has {len(qe_corr)} elements "
@@ -349,9 +351,9 @@ def setup_event_simulator(
                 "wavelength_mode=True but no medium model was loaded. "
                 "Provide a physics_config with 'medium_model' or set wavelength_mode=False.")
         if not wavelength_mode:
-            return (jnp.full(n, detector_params.scatter_length),
-                    jnp.full(n, detector_params.mie_scatter_length),
-                    jnp.full(n, detector_params.absorption_length),
+            return (jnp.full(n, detector_params.scattering.scatter_length),
+                    jnp.full(n, detector_params.scattering.mie_scatter_length),
+                    jnp.full(n, detector_params.absorption.absorption_length),
                     None, key)
 
         # Normalize wavelength input to per-photon array:
@@ -430,10 +432,10 @@ def setup_event_simulator(
             Sensor response aggregation function.
         """
 
-        wall_reflection_rate = detector_params.wall_reflection_rate
-        sensor_reflection_rate = detector_params.sensor_reflection_rate
-        qe_corrections = detector_params.qe_corrections
-        g = detector_params.g
+        wall_reflection_rate = detector_params.reflection.wall_reflection_rate
+        sensor_reflection_rate = detector_params.reflection.sensor_reflection_rate
+        qe_corrections = detector_params.per_pmt.qe_corrections
+        g = detector_params.scattering.g
 
         from lucid.simulation.types import PhotonState
 
@@ -615,9 +617,9 @@ def setup_event_simulator(
             n_rays, detector_params, key, wavelengths=data_wavelengths)
         # Per-photon QE: wavelength curve * scalar qe (passed to make_hits, not baked into weights)
         if qe_weights is not None:
-            qe_per_photon = qe_weights * detector_params.qe
+            qe_per_photon = qe_weights * detector_params.response.qe
         else:
-            qe_per_photon = jnp.full(n_rays, detector_params.qe)
+            qe_per_photon = jnp.full(n_rays, detector_params.response.qe)
 
         _pgt = sim_config.K if pos_grad_threshold is None else pos_grad_threshold
         return _common_propagation(
@@ -671,9 +673,9 @@ def setup_event_simulator(
 
         # Per-photon QE: wavelength curve * scalar qe (passed to make_hits, not baked into weights)
         if qe_weights is not None:
-            qe_per_photon = qe_weights * detector_params.qe
+            qe_per_photon = qe_weights * detector_params.response.qe
         else:
-            qe_per_photon = jnp.full(Nphot, detector_params.qe)
+            qe_per_photon = jnp.full(Nphot, detector_params.response.qe)
 
         # Track-mode position-gradient default: was 0 (always stop) as a workaround
         # for the reflection-normal curvature explosion. The normal-fix now lives
@@ -704,9 +706,9 @@ def setup_event_simulator(
 
         # Per-photon QE: wavelength curve * scalar qe (passed to make_hits, not baked into weights)
         if qe_weights is not None:
-            qe_per_photon = qe_weights * detector_params.qe
+            qe_per_photon = qe_weights * detector_params.response.qe
         else:
-            qe_per_photon = jnp.full(Nphot, detector_params.qe)
+            qe_per_photon = jnp.full(Nphot, detector_params.response.qe)
 
         _pgt = sim_config.K if pos_grad_threshold is None else pos_grad_threshold
         return _common_propagation(

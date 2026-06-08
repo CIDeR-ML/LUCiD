@@ -29,7 +29,7 @@ def detector():
 def detector_params(detector):
     from lucid.detector_params import DetectorParams
     N = len(detector.all_points)
-    return DetectorParams(
+    return DetectorParams.from_flat(
         scatter_length=50.0,
         wall_reflection_rate=0.2,
         sensor_reflection_rate=0.2,

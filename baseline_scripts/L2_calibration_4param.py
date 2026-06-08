@@ -55,7 +55,7 @@ sensor_points = jnp.array(det.all_points)
 NUM_SENSORS = len(sensor_points)
 
 # True parameters — matching SK_physics_config.json
-TRUE_PARAMS = DetectorParams(
+TRUE_PARAMS = DetectorParams.from_flat(
     scatter_length=50.0,
     wall_reflection_rate=0.2,
     sensor_reflection_rate=0.2,
@@ -71,10 +71,11 @@ source = laser_source(
 
 bounds_min, bounds_max = default_bounds(NUM_SENSORS)
 bounds_min = bounds_min._replace(
-    scatter_length=jnp.array(5.0),
-    wall_reflection_rate=jnp.array(0.05),
-    sensor_reflection_rate=jnp.array(0.05),
-    absorption_length=jnp.array(10.0),
+    scattering=bounds_min.scattering._replace(scatter_length=jnp.array(5.0)),
+    reflection=bounds_min.reflection._replace(
+        wall_reflection_rate=jnp.array(0.05),
+        sensor_reflection_rate=jnp.array(0.05)),
+    absorption=bounds_min.absorption._replace(absorption_length=jnp.array(10.0)),
 )
 
 # ── Simulators ───────────────────────────────────────────────────────
@@ -103,19 +104,19 @@ print(f"  True data: charge_sum={float(jnp.sum(true_data[0])):.1f}, "
 
 # ── Initial guess (perturbed from true) ─────────────────────────────
 mults = jax.random.uniform(key_init, (4,), minval=0.5, maxval=1.5)
-init_params = DetectorParams(
-    scatter_length=jnp.clip(TRUE_PARAMS.scatter_length * mults[0], 5.0, 100.0),
-    wall_reflection_rate=jnp.clip(TRUE_PARAMS.wall_reflection_rate * mults[1], 0.05, 0.5),
-    sensor_reflection_rate=jnp.clip(TRUE_PARAMS.sensor_reflection_rate * mults[2], 0.05, 0.4),
-    absorption_length=jnp.clip(TRUE_PARAMS.absorption_length * mults[3], 10.0, 500.0),
-    qe=TRUE_PARAMS.qe,
-    qe_corrections=TRUE_PARAMS.qe_corrections,
+init_params = DetectorParams.from_flat(
+    scatter_length=jnp.clip(TRUE_PARAMS.scattering.scatter_length * mults[0], 5.0, 100.0),
+    wall_reflection_rate=jnp.clip(TRUE_PARAMS.reflection.wall_reflection_rate * mults[1], 0.05, 0.5),
+    sensor_reflection_rate=jnp.clip(TRUE_PARAMS.reflection.sensor_reflection_rate * mults[2], 0.05, 0.4),
+    absorption_length=jnp.clip(TRUE_PARAMS.absorption.absorption_length * mults[3], 10.0, 500.0),
+    qe=TRUE_PARAMS.response.qe,
+    qe_corrections=TRUE_PARAMS.per_pmt.qe_corrections,
 )
 
-print(f"  Init: scatter={float(init_params.scatter_length):.1f}  "
-      f"wall_refl={float(init_params.wall_reflection_rate):.3f}  "
-      f"sensor_refl={float(init_params.sensor_reflection_rate):.3f}  "
-      f"absorption={float(init_params.absorption_length):.1f}")
+print(f"  Init: scatter={float(init_params.scattering.scatter_length):.1f}  "
+      f"wall_refl={float(init_params.reflection.wall_reflection_rate):.3f}  "
+      f"sensor_refl={float(init_params.reflection.sensor_reflection_rate):.3f}  "
+      f"absorption={float(init_params.absorption.absorption_length):.1f}")
 
 # ── Loss function ────────────────────────────────────────────────────
 @jit
@@ -168,16 +169,16 @@ for step in range(ADAM_ITERS):
     dp = denormalize_params(params, bounds_min, bounds_max)
     loss_history.append(float(loss))
     param_history.append([
-        float(dp.scatter_length), float(dp.wall_reflection_rate),
-        float(dp.sensor_reflection_rate), float(dp.absorption_length),
+        float(dp.scattering.scatter_length), float(dp.reflection.wall_reflection_rate),
+        float(dp.reflection.sensor_reflection_rate), float(dp.absorption.absorption_length),
     ])
 
     if step % 50 == 0 or step == ADAM_ITERS - 1:
         print(f"  Step {step:3d}: loss={float(loss):.6f}  "
-              f"scatter={float(dp.scatter_length):.1f}  "
-              f"wall_refl={float(dp.wall_reflection_rate):.3f}  "
-              f"sensor_refl={float(dp.sensor_reflection_rate):.3f}  "
-              f"absorption={float(dp.absorption_length):.1f}")
+              f"scatter={float(dp.scattering.scatter_length):.1f}  "
+              f"wall_refl={float(dp.reflection.wall_reflection_rate):.3f}  "
+              f"sensor_refl={float(dp.reflection.sensor_reflection_rate):.3f}  "
+              f"absorption={float(dp.absorption.absorption_length):.1f}")
 
 t_opt_end = time.perf_counter()
 print(f"  Optimization: {t_opt_end - t_opt_start:.1f}s ({ADAM_ITERS} steps)")
@@ -185,8 +186,8 @@ print(f"  Optimization: {t_opt_end - t_opt_start:.1f}s ({ADAM_ITERS} steps)")
 # ── Convergence check ────────────────────────────────────────────────
 final = denormalize_params(params, bounds_min, bounds_max)
 true_arr = np.array([50.0, 0.2, 0.2, 50.0])
-final_arr = np.array([float(final.scatter_length), float(final.wall_reflection_rate),
-                      float(final.sensor_reflection_rate), float(final.absorption_length)])
+final_arr = np.array([float(final.scattering.scatter_length), float(final.reflection.wall_reflection_rate),
+                      float(final.reflection.sensor_reflection_rate), float(final.absorption.absorption_length)])
 errors = np.abs(final_arr - true_arr)
 rel_errors = errors / true_arr
 
@@ -200,16 +201,16 @@ for i, name in enumerate(names):
 results = {
     "loss_curve": loss_history,
     "param_history": param_history,
-    "final_scatter_length": float(final.scatter_length),
-    "final_wall_reflection": float(final.wall_reflection_rate),
-    "final_sensor_reflection": float(final.sensor_reflection_rate),
-    "final_absorption_length": float(final.absorption_length),
+    "final_scatter_length": float(final.scattering.scatter_length),
+    "final_wall_reflection": float(final.reflection.wall_reflection_rate),
+    "final_sensor_reflection": float(final.reflection.sensor_reflection_rate),
+    "final_absorption_length": float(final.absorption.absorption_length),
     "true_scatter_length": 50.0,
     "true_wall_reflection": 0.2,
     "true_sensor_reflection": 0.2,
     "true_absorption_length": 50.0,
-    "init_params": [float(init_params.scatter_length), float(init_params.wall_reflection_rate),
-                    float(init_params.sensor_reflection_rate), float(init_params.absorption_length)],
+    "init_params": [float(init_params.scattering.scatter_length), float(init_params.reflection.wall_reflection_rate),
+                    float(init_params.reflection.sensor_reflection_rate), float(init_params.absorption.absorption_length)],
     "settings": {
         "Nphot": NPHOT, "K": K, "Nphot_true": NPHOT_TRUE, "K_true": K_TRUE,
         "adam_lr": ADAM_LR, "adam_iters": ADAM_ITERS, "warmup_frac": WARMUP_FRAC,

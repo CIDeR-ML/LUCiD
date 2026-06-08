@@ -125,9 +125,9 @@ def main():
     # Load detector parameters from physics config
     print(f"\nLoading physics configuration: {args.physics_config}")
     sensor_params, _, _ = load_physics_config(args.physics_config)
-    print(f"  Wall reflection rate: {float(sensor_params.wall_reflection_rate):.3f}")
-    print(f"  Sensor reflection rate: {float(sensor_params.sensor_reflection_rate):.3f}")
-    print(f"  QE (scalar): {float(sensor_params.qe):.3f}")
+    print(f"  Wall reflection rate: {float(sensor_params.reflection.wall_reflection_rate):.3f}")
+    print(f"  Sensor reflection rate: {float(sensor_params.reflection.sensor_reflection_rate):.3f}")
+    print(f"  QE (scalar): {float(sensor_params.response.qe):.3f}")
 
     # Setup event simulator with physics config for wavelength-dependent QE and medium model
     print(f"\nSetting up event simulator")

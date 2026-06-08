@@ -48,7 +48,7 @@ else:
 det = generate_detector(GEOM)
 NUM_SENSORS = len(det.all_points)
 
-default_dp = DetectorParams(
+default_dp = DetectorParams.from_flat(
     scatter_length=50.0,
     wall_reflection_rate=0.2,
     sensor_reflection_rate=0.2,

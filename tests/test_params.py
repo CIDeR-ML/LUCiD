@@ -8,24 +8,25 @@ from lucid.detector_params import (
 )
 
 
+def _make_dp(num_sensors=10):
+    """Build a nested DetectorParams from flat values (test convenience)."""
+    return DetectorParams.from_flat(
+        scatter_length=50.0, mie_scatter_length=1000.0, g=0.9,
+        wall_reflection_rate=0.5, sensor_reflection_rate=0.3,
+        absorption_length=100.0, qe=0.2,
+        qe_corrections=jnp.ones(num_sensors),
+    )
+
+
 class TestDetectorParams:
     def test_construction_and_fields(self):
-        dp = DetectorParams(
-            scatter_length=50.0,
-            mie_scatter_length=1000.0,
-            g=0.9,
-            wall_reflection_rate=0.5,
-            sensor_reflection_rate=0.3,
-            absorption_length=100.0,
-            qe=0.2,
-            qe_corrections=jnp.ones(10),
-        )
-        assert dp.scatter_length == 50.0
-        assert dp.wall_reflection_rate == 0.5
-        assert dp.sensor_reflection_rate == 0.3
-        assert dp.absorption_length == 100.0
-        assert dp.qe == 0.2
-        assert dp.qe_corrections.shape == (10,)
+        dp = _make_dp()
+        assert dp.scattering.scatter_length == 50.0
+        assert dp.reflection.wall_reflection_rate == 0.5
+        assert dp.reflection.sensor_reflection_rate == 0.3
+        assert dp.absorption.absorption_length == 100.0
+        assert dp.response.qe == 0.2
+        assert dp.per_pmt.qe_corrections.shape == (10,)
 
 
 class TestParticleParams:
@@ -56,47 +57,29 @@ class TestParticleParams:
 
 class TestNormalizeDenormalize:
     def test_round_trip(self):
-        dp = DetectorParams(
-            scatter_length=50.0,
-            mie_scatter_length=1000.0,
-            g=0.9,
-            wall_reflection_rate=0.5,
-            sensor_reflection_rate=0.3,
-            absorption_length=100.0,
-            qe=0.2,
-            qe_corrections=jnp.ones(10),
-        )
+        dp = _make_dp()
         bounds_min, bounds_max = default_bounds(10)
         normed = normalize_params(dp, bounds_min, bounds_max)
         back = denormalize_params(normed, bounds_min, bounds_max)
-        npt.assert_allclose(back.scatter_length, 50.0, atol=1e-4)
-        npt.assert_allclose(back.qe, 0.2, atol=1e-5)
-        npt.assert_allclose(back.wall_reflection_rate, 0.5, atol=1e-5)
+        npt.assert_allclose(back.scattering.scatter_length, 50.0, atol=1e-4)
+        npt.assert_allclose(back.response.qe, 0.2, atol=1e-5)
+        npt.assert_allclose(back.reflection.wall_reflection_rate, 0.5, atol=1e-5)
 
     def test_normalized_in_01(self):
-        dp = DetectorParams(
-            scatter_length=50.0,
-            mie_scatter_length=1000.0,
-            g=0.9,
-            wall_reflection_rate=0.5,
-            sensor_reflection_rate=0.3,
-            absorption_length=100.0,
-            qe=0.2,
-            qe_corrections=jnp.ones(10),
-        )
+        dp = _make_dp()
         bounds_min, bounds_max = default_bounds(10)
         normed = normalize_params(dp, bounds_min, bounds_max)
-        assert 0.0 <= float(normed.scatter_length) <= 1.0
-        assert 0.0 <= float(normed.qe) <= 1.0
+        assert 0.0 <= float(normed.scattering.scatter_length) <= 1.0
+        assert 0.0 <= float(normed.response.qe) <= 1.0
 
 
 class TestDefaultBounds:
     def test_scatter_range(self):
         lo, hi = default_bounds(10)
-        assert float(lo.scatter_length) == 0.0
-        assert float(hi.scatter_length) == 100.0
+        assert float(lo.scattering.scatter_length) == 0.0
+        assert float(hi.scattering.scatter_length) == 100.0
 
     def test_qe_corrections_shape(self):
         lo, hi = default_bounds(50)
-        assert lo.qe_corrections.shape == (50,)
-        assert hi.qe_corrections.shape == (50,)
+        assert lo.per_pmt.qe_corrections.shape == (50,)
+        assert hi.per_pmt.qe_corrections.shape == (50,)

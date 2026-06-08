@@ -136,7 +136,7 @@ def detector():
 def base_dp(detector):
     from lucid.detector_params import DetectorParams
     N = len(detector.all_points)
-    return DetectorParams(
+    return DetectorParams.from_flat(
         scatter_length=50.0, wall_reflection_rate=0.2,
         sensor_reflection_rate=0.2, absorption_length=50.0,
         qe=0.2, qe_corrections=jnp.ones(N))
@@ -245,13 +245,8 @@ class TestGradients:
         key = jax.random.PRNGKey(5)
 
         def loss(qe_scalar):
-            dp = DetectorParams(
-                scatter_length=base_dp.scatter_length,
-                wall_reflection_rate=base_dp.wall_reflection_rate,
-                sensor_reflection_rate=base_dp.sensor_reflection_rate,
-                absorption_length=base_dp.absorption_length,
-                qe=qe_scalar,
-                qe_corrections=base_dp.qe_corrections)
+            dp = base_dp._replace(
+                response=base_dp.response._replace(qe=qe_scalar))
             c, _ = sim(src, dp, key)
             return jnp.sum(c)
 
@@ -272,16 +267,11 @@ class TestGradients:
             wavelength_sampling='cherenkov_qe')
         src = isotropic_source(position=[0., 0., 0.], intensity=1.0)
         key = jax.random.PRNGKey(6)
-        N = base_dp.qe_corrections.shape[0]
+        N = base_dp.per_pmt.qe_corrections.shape[0]
 
         def loss(corrections):
-            dp = DetectorParams(
-                scatter_length=base_dp.scatter_length,
-                wall_reflection_rate=base_dp.wall_reflection_rate,
-                sensor_reflection_rate=base_dp.sensor_reflection_rate,
-                absorption_length=base_dp.absorption_length,
-                qe=base_dp.qe,
-                qe_corrections=corrections)
+            dp = base_dp._replace(
+                per_pmt=base_dp.per_pmt._replace(qe_corrections=corrections))
             c, _ = sim(src, dp, key)
             return jnp.sum(c)
 

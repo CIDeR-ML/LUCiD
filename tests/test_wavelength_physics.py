@@ -60,7 +60,7 @@ class TestEffectivePropertyPhysics:
     def test_shorter_wavelength_scatters_more(self):
         """Photons at shorter wavelengths should have shorter effective scatter length."""
         from lucid.detector_params import DetectorParams
-        dp = DetectorParams(scatter_length=50.0, mie_scatter_length=1000.0, g=0.9,
+        dp = DetectorParams.from_flat(scatter_length=50.0, mie_scatter_length=1000.0, g=0.9,
                             wall_reflection_rate=0.5,
                             sensor_reflection_rate=0.3, absorption_length=100.0,
                             qe=0.2, qe_corrections=jnp.ones(10))
