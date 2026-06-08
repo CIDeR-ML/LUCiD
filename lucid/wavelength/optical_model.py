@@ -27,6 +27,25 @@ from typing import NamedTuple, Optional
 import jax.numpy as jnp
 
 
+# Control wavelengths (nm) at which the fittable λ-deviation curves are anchored.
+# These are the SK calibration-laser lines; the deviation field of every optical
+# property is a value PER control wavelength, interpolated to each photon's λ.
+# A FIXED grid (not a DetectorParams field) so the curve length and this grid
+# agree by construction. ``dev ≡ 1`` reproduces the pure medium reference.
+CONTROL_WAVELENGTHS_NM = (337.0, 375.0, 398.0, 405.0, 445.0)
+N_CONTROL = len(CONTROL_WAVELENGTHS_NM)
+
+
+def _deviation(wl, control_lambda, curve):
+    """Per-photon multiplicative deviation = interp(λ, control_λ, curve).
+
+    ``curve`` is the (n_ctrl,) DetectorParams leaf; an all-ones curve gives a
+    flat deviation of 1 (pure reference). ``jnp.interp`` clamps λ outside the
+    control grid to the endpoint values (flat extrapolation).
+    """
+    return jnp.interp(wl, jnp.asarray(control_lambda), curve)
+
+
 class OpticalArrays(NamedTuple):
     """Per-photon optical properties consumed by the transport step.
 
@@ -44,7 +63,7 @@ class OpticalArrays(NamedTuple):
 
 
 def evaluate_optical_model(detector_params, wavelengths, medium, n_photons,
-                           *, qe_fn=None):
+                           *, qe_fn=None, control_lambda=CONTROL_WAVELENGTHS_NM):
     """Evaluate per-photon optical properties.
 
     Parameters
@@ -62,13 +81,28 @@ def evaluate_optical_model(detector_params, wavelengths, medium, n_photons,
         Number of photons (used to broadcast scalars in monochromatic mode).
     qe_fn : callable, optional
         ``qe_fn(λ) -> qe_fraction``. Applied per-photon in wavelength mode only.
+    control_lambda : sequence of float
+        Control wavelengths (nm) anchoring the DetectorParams λ-deviation curves.
+        Defaults to :data:`CONTROL_WAVELENGTHS_NM`.
 
     Returns
     -------
     OpticalArrays
+
+    Notes
+    -----
+    In wavelength mode every optical length is the fixed medium reference scaled
+    by a fittable multiplicative deviation:
+    ``length(λ) = (1 / coeff_ref(λ)) / interp(λ, control_λ, dev_curve)``. The
+    deviation curves are DetectorParams leaves (``scattering.rayleigh_dev`` /
+    ``scattering.mie_dev`` / ``absorption.abs_dev`` / ``response.qe_dev``); an
+    all-ones curve gives ``dev ≡ 1`` and reproduces the pure medium reference
+    exactly. Monochromatic mode (``wavelengths is None``) uses the scalar fields
+    and ignores the deviation curves.
     """
     sp = detector_params.scattering
     ab = detector_params.absorption
+    rp = detector_params.response
 
     if wavelengths is None:
         # Monochromatic / scalar mode: the fittable DetectorParams scalars,
@@ -80,18 +114,25 @@ def evaluate_optical_model(detector_params, wavelengths, medium, n_photons,
             qe=None,
         )
 
-    # Wavelength mode: clamp λ into the medium grid, then length = 1 / coeff(λ).
+    # Wavelength mode: clamp λ into the medium grid, then length = 1 / coeff(λ),
+    # scaled by the per-property multiplicative deviation curve (dev ≡ 1 default).
     wl = jnp.clip(jnp.asarray(wavelengths),
                   medium.wavelength_grid[0], medium.wavelength_grid[-1])
     sc = jnp.interp(wl, medium.wavelength_grid, medium.scatter_coeff)
     asym = jnp.interp(wl, medium.wavelength_grid, medium.mie_scatter_coeff)
     ac = jnp.interp(wl, medium.wavelength_grid, medium.absorption_coeff)
 
-    qe = qe_fn(wl) if qe_fn is not None else None
+    dev_r = _deviation(wl, control_lambda, sp.rayleigh_dev)
+    dev_m = _deviation(wl, control_lambda, sp.mie_dev)
+    dev_a = _deviation(wl, control_lambda, ab.abs_dev)
+
+    qe = None
+    if qe_fn is not None:
+        qe = qe_fn(wl) * _deviation(wl, control_lambda, rp.qe_dev)
 
     return OpticalArrays(
-        scatter_len=1.0 / (sc + 1e-30),
-        mie_len=1.0 / (asym + 1e-30),
-        abs_len=1.0 / (ac + 1e-30),
+        scatter_len=(1.0 / (sc + 1e-30)) / dev_r,
+        mie_len=(1.0 / (asym + 1e-30)) / dev_m,
+        abs_len=(1.0 / (ac + 1e-30)) / dev_a,
         qe=qe,
     )
