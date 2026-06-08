@@ -37,8 +37,12 @@ class PropagationResult(NamedTuple):
 class PhotonStepResult(NamedTuple):
     """Output of one photon iteration step (sample or update_factors).
 
-    Replaces the 6-tuple: (new_pos, new_dir, new_time, detect_prob,
-    reflection_attenuation, continuing_factor).
+    7-tuple: (new_pos, new_dir, new_time, detect_prob,
+    reflection_attenuation, continuing_factor, logp_increment).
+
+    ``logp_increment`` is the per-photon DiCE score increment for this step
+    (``lf + la`` for the differentiable step; ``0.0`` for the sampling step).
+    The scan body accumulates it into ``PhotonState.log_p``.
     """
     position: jnp.ndarray           # (3,)
     direction: jnp.ndarray          # (3,)
@@ -46,15 +50,20 @@ class PhotonStepResult(NamedTuple):
     detect_prob: float
     reflection_attenuation: float
     continuing_factor: float
+    logp_increment: float
 
 
 class PhotonState(NamedTuple):
     """Carry state for the jax.lax.scan propagation loop.
 
-    Replaces the 5-tuple: (positions, directions, times, survival, key).
+    6-tuple: (positions, directions, times, survival, key, log_p).
+
+    ``log_p`` is the per-photon accumulated DiCE score (sum of ``lf + la`` over
+    prior steps); the implicit-capture deposit reads the PRE-step ``log_p``.
     """
     positions: jnp.ndarray          # (n_rays, 3)
     directions: jnp.ndarray         # (n_rays, 3)
     times: jnp.ndarray              # (n_rays,)
     survival: jnp.ndarray           # (n_rays,)
     key: jnp.ndarray                # PRNGKey
+    log_p: jnp.ndarray              # (n_rays,)

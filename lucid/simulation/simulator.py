@@ -451,16 +451,23 @@ def setup_event_simulator(
             normals = prop_results['normals']
             inside_sensor = prop_results['inside_sensor']
 
+            normals = jax.lax.stop_gradient(normals)   # detach the reflection normal (Igehy 1/r curvature term compounds across bounces)
+
             hit_sensor = jnp.max(inside_sensor, axis=0)
-            surface_distances = jnp.linalg.norm(hit_positions - state.positions, axis=1) - 1e-6
+            # SAFE norm: eps INSIDE the sqrt so the gradient is finite when a photon sits on a surface
+            # (hit==pos -> |Δ|=0 -> jnp.linalg.norm has a 0/0 NaN gradient). This is the 2nd-order-AD NaN.
+            surface_distances = jnp.sqrt(jnp.sum((hit_positions - state.positions)**2, axis=1) + 1e-12) - 1e-6
 
             key, subkey = jax.random.split(key)
             rng_keys = jax.random.split(subkey, n_rays)
 
-            # vmap: 14 args — per-photon scatter/absorption, scalar g and reflections
+            # vmap: 14 args — per-photon scatter/absorption, scalar g and reflections.
+            # Step returns a 7-tuple; the 7th is the per-photon DiCE score increment
+            # (lf+la for the differentiable step, 0.0 for the sampling step). The
+            # PRE-step log_p (state.log_p) is what the implicit-capture deposit consumes.
             (new_positions, new_directions, new_times,
              detect_probs, reflection_attenuations,
-             continuing_factors) = jax.vmap(
+             continuing_factors, logp_increments) = jax.vmap(
                 photon_update_fn,
                 in_axes=(0, 0, 0, 0, 0,
                          0, 0, None, None, None, 0,
@@ -477,7 +484,11 @@ def setup_event_simulator(
             new_survival = state.survival * safe_continuing
 
             physical_intensities = intensities * state.survival
-            detected_factors = detect_probs * reflection_attenuations
+            # DiCE magic box from the PRE-step log_p: forward value = 1 (charge unchanged),
+            # gradient = the accumulated optical score for deposits at this step. The sampling
+            # path keeps log_p=0 → dice_dep=1 (no effect), so the data oracle is untouched.
+            dice_dep = jnp.exp(state.log_p - jax.lax.stop_gradient(state.log_p))   # (n_rays,)
+            detected_factors = detect_probs * reflection_attenuations * dice_dep
             updated_weights = depositions * physical_intensities[None, :] * detected_factors[None, :]
             times_ns = hit_times_meters / SPEED_OF_LIGHT_MATERIAL
             total_times = times_ns + state.times[:, None]
@@ -494,12 +505,15 @@ def setup_event_simulator(
             next_pos = jnp.where(i < pos_grad_threshold, new_positions, jax.lax.stop_gradient(new_positions))
             next_dir = jnp.where(i < n_grad_iters, new_directions, jax.lax.stop_gradient(new_directions))
 
+            new_log_p = state.log_p + logp_increments   # accumulate score for FUTURE deposits
+
             new_state = PhotonState(
                 positions=next_pos,
                 directions=next_dir,
                 times=new_times,
                 survival=new_survival,
                 key=key,
+                log_p=new_log_p,
             )
             outputs = (iter_weights, iter_indices, iter_times)
             return new_state, outputs
@@ -510,6 +524,7 @@ def setup_event_simulator(
             times=times,
             survival=initial_survival,
             key=key,
+            log_p=jnp.zeros(n_rays),
         )
         propagation_step_remat = jax.remat(propagation_step)
 
@@ -643,11 +658,12 @@ def setup_event_simulator(
         distances_to_vertex = jnp.linalg.norm(photon_origins - track_origin, axis=1) * 1000
         predict_t0_vec = jax.vmap(predict_t0, in_axes=(0, None, None, None, None, None, None, None, None))
         baseline_slope, baseline_intercept, A_slope, A_intercept, B_slope, B_intercept, offset = t0_params
-        t0 = jax.lax.stop_gradient(
-            predict_t0_vec(distances_to_vertex, energy,
-                           baseline_slope, baseline_intercept,
-                           A_slope, A_intercept,
-                           B_slope, B_intercept, offset))
+        # Emission-time baseline predict_t0(distance_to_vertex, energy) is detached: the TIME term does not
+        # carry ENERGY/VERTEX gradient through the emission-time model (those flow via the geometry/charge terms).
+        t0 = jax.lax.stop_gradient(predict_t0_vec(distances_to_vertex, energy,
+                                                  baseline_slope, baseline_intercept,
+                                                  A_slope, A_intercept,
+                                                  B_slope, B_intercept, offset))
 
         # Per-photon optical properties (Cherenkov spectrum when wavelength_mode)
         scatter_lengths, mie_scatter_lengths, absorption_lengths, qe_weights, key = _get_optical_arrays(

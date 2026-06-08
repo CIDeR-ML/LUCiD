@@ -105,6 +105,13 @@ def test_field_presence(det_name, loaded_configs):
             assert bool(jnp.all(jnp.isclose(val, 1.0))), (
                 f"{det_name}.qe_corrections missing → should be neutral 1.0, "
                 f"got {val}")
+        elif field in ("mie_scatter_length", "g"):
+            # Mie scalars are projected from the medium when one is referenced,
+            # else default to "no Mie" (mie_scatter_length huge, g=0). Always
+            # finite — a NaN here would poison the expected-value photon step.
+            assert val.ndim == 0 and bool(jnp.isfinite(val)), (
+                f"{det_name}.{field} should be filled (projected or no-Mie "
+                f"default), not NaN; got {float(val)}")
         else:
             # Non-projectable scalars (reflections): NaN placeholder if absent.
             assert val.ndim == 0 and bool(jnp.isnan(val)), (

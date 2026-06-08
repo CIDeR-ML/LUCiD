@@ -12,6 +12,8 @@ class TestDetectorParams:
     def test_construction_and_fields(self):
         dp = DetectorParams(
             scatter_length=50.0,
+            mie_scatter_length=1000.0,
+            g=0.9,
             wall_reflection_rate=0.5,
             sensor_reflection_rate=0.3,
             absorption_length=100.0,
@@ -56,6 +58,8 @@ class TestNormalizeDenormalize:
     def test_round_trip(self):
         dp = DetectorParams(
             scatter_length=50.0,
+            mie_scatter_length=1000.0,
+            g=0.9,
             wall_reflection_rate=0.5,
             sensor_reflection_rate=0.3,
             absorption_length=100.0,
@@ -72,6 +76,8 @@ class TestNormalizeDenormalize:
     def test_normalized_in_01(self):
         dp = DetectorParams(
             scatter_length=50.0,
+            mie_scatter_length=1000.0,
+            g=0.9,
             wall_reflection_rate=0.5,
             sensor_reflection_rate=0.3,
             absorption_length=100.0,

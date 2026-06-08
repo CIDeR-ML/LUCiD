@@ -4,8 +4,11 @@ import jax.numpy as jnp
 from lucid.simulation.optics import (
     normalize, compute_reflection_direction, sample_cosine_hemisphere,
     sample_scatter_distance, compute_scatter_direction,
+    create_local_frame, solve_rayleigh_inverse_cdf,
 )
-from lucid.wavelength.scattering import compute_mie_scatter_direction
+from lucid.wavelength.scattering import (
+    compute_mie_scatter_direction, hg_sample_cos_theta, hg_logpdf, rayleigh_logpdf,
+)
 
 # Photon iteration functions (12-arg signatures: dual reflection, no tau_gs)
 # ===================================================================
@@ -65,10 +68,14 @@ def photon_iteration_sample(
         Factor for continuing photons (0.0 if detected, attenuation if continues)
     """
 
-    k1, k2, k3, k4 = jax.random.split(rng_key, 4)
+    k1, k2, k3, k4, k5, k6 = jax.random.split(rng_key, 6)
 
     reflection_rate = jnp.where(hit_sensor, sensor_reflection_rate, wall_reflection_rate)
-    scatter_length = jnp.minimum(scatter_length, mie_scatter_length)
+    # Combine Rayleigh + Mie by RATES (NOT min): total scatter coeff = 1/L_R + 1/L_M.
+    mie_safe = jnp.maximum(mie_scatter_length, 1e-6)
+    inv_total = 1.0 / scatter_length + 1.0 / mie_safe
+    scatter_length = 1.0 / inv_total                 # effective combined scatter length
+    p_mie = (1.0 / mie_safe) / inv_total             # P(a scatter is Mie) = (1/L_M)/(1/L_R+1/L_M)
     scatter_distance = sample_scatter_distance(surface_distance, scatter_length, k2)
 
     reach_surface_prob = jnp.exp(-surface_distance / scatter_length)
@@ -97,21 +104,24 @@ def photon_iteration_sample(
     specular_dir = compute_reflection_direction(direction, normal)
     diffuse_dir = sample_cosine_hemisphere(inward_normal, k4)
     reflection_dir = jnp.where(hit_sensor, specular_dir, diffuse_dir)
-    scatter_dir = compute_scatter_direction(direction, k3)
-    asym_scatter_dir = compute_mie_scatter_direction(direction, k3, g)
+    rayleigh_dir = compute_scatter_direction(direction, k3)
+    mie_dir = compute_mie_scatter_direction(direction, k3, g)
+    is_mie = jax.random.uniform(k5) < p_mie          # choose Mie vs Rayleigh per scatter (~5% Mie at physical L)
+    chosen_scatter_dir = jnp.where(is_mie, mie_dir, rayleigh_dir)
 
     new_dir = jnp.where(
         reflects,
         reflection_dir,
-        jnp.where(scatters, asym_scatter_dir, direction),
+        jnp.where(scatters, chosen_scatter_dir, direction),
     )
 
     distance_traveled = jnp.where(scatters, scatter_distance, surface_distance)
     new_time = time + distance_traveled / speed_of_light
 
-    # Binary absorption sampling (Bernoulli)
+    # Binary absorption sampling (Bernoulli) — DEDICATED key k6 (was k3, which is also used
+    # for the scatter direction → absorption was correlated with scatter angle; PORT_PLAN §4.3).
     survival_prob = jnp.exp(-distance_traveled / absorption_length)
-    u_absorption = jax.random.uniform(k3)
+    u_absorption = jax.random.uniform(k6)
     survives_absorption = u_absorption < survival_prob
     attenuation = survives_absorption.astype(jnp.float32)
 
@@ -119,7 +129,11 @@ def photon_iteration_sample(
     reflection_attenuation = attenuation
     continuing_factor = jnp.where(detects, 0.0, attenuation)
 
-    return new_pos, new_dir, new_time, detect_prob, reflection_attenuation, continuing_factor
+    # 7th return: DiCE score increment. The sampling path is the truth/data generator and
+    # carries no score -> 0.0 (keeps the shared scan-body step signature consistent).
+    logp_increment = jnp.zeros_like(new_time)
+
+    return new_pos, new_dir, new_time, detect_prob, reflection_attenuation, continuing_factor, logp_increment
 
 
 def photon_iteration_update_factors(
@@ -174,70 +188,89 @@ def photon_iteration_update_factors(
         Factor for continuation (reflection or scatter).
     """
 
-    k1, k2, k3 = jax.random.split(rng_key, 3)
+    # Ported from mie_hunter/implicit_engine_lik.py (per-photon body; the function is vmapped
+    # over photons in the scan). Analog two-channel free path + Mie/Rayleigh Bernoulli + DiCE
+    # score + implicit-capture deposit. Gradient design (see mie_hunter/PORT_PLAN.md):
+    #   • TRACK params flow PATHWISE — geometry (surface_distance Dd, direction, per-sensor
+    #     distances) kept LIVE → `reach`, positions and time carry the track gradient.
+    #   • OPTICAL scatter-rate/angle params flow through the DiCE score `lf`/`la`; `d` and `Dd`
+    #     are stop_gradient'd INSIDE the score so it carries optical gradients only (no double
+    #     count with the pathwise `reach`). The per-step increment `lf+la` is returned and
+    #     accumulated into PhotonState.log_p; the scan body folds dice_dep=exp(logp−sg(logp)).
+    #   • OPTICAL gradient into the arrival TIME flows via the reparameterised LIVE free path
+    #     `d_live` (Option C, low variance); decision/trajectory use the detached `d`.
+    k = jax.random.split(rng_key, 8)
+    sg = jax.lax.stop_gradient
 
     reflection_rate = jnp.where(hit_sensor, sensor_reflection_rate, wall_reflection_rate)
-    scatter_distance = sample_scatter_distance(surface_distance, scatter_length, k2)
-
-    # Transport mean free path correction: g reduces the effective scattering rate by (1-g)/L_mie.
-    # Physical basis: forward-peaked scattering (high g) does not randomise photon direction,
-    # so the effective transport scattering coefficient is (1-g)/mie_scatter_length.
-    # This gives g a direct, low-variance gradient path through reach_surface_prob/detect_prob,
-    # evaluated for every photon in every iteration (no step-function gating).
     mie_safe = jnp.maximum(mie_scatter_length, 1e-6)
-    effective_ratio = surface_distance * (1.0 / scatter_length + (1.0 - g) / mie_safe)
-    reach_surface_prob = jnp.exp(-effective_ratio)
-    scatter_prob = -jnp.expm1(-effective_ratio)
+    mu_tot = 1.0 / scatter_length + 1.0 / mie_safe                 # full two-channel scatter rate
+    p_mie = scatter_length / (scatter_length + mie_safe)           # P(a scatter is Mie)
 
-    reflect_prob = reach_surface_prob * reflection_rate
-    detect_prob = reach_surface_prob * (1 - reflection_rate)
+    # Analog free path. d_live LIVE in mu_tot (reparam → optical gradient into TIME);
+    # d detached for the hard decision, trajectory and scores (charge ≡ validated engine).
+    u0 = jax.random.uniform(k[0])
+    d_live = -jnp.log1p(-sg(u0)) / mu_tot
+    d = sg(d_live)
+    Dd = surface_distance                                         # LIVE → pathwise track gradient
+    is_scat = d < Dd
 
-    reflection_attenuation = jnp.exp(-surface_distance / absorption_length)
-    scatter_attenuation = jnp.exp(-scatter_distance / absorption_length)
+    dist = jnp.where(is_scat, d, Dd)
+    atten = jnp.exp(-dist / absorption_length)                    # absorption survival to event
 
-    # Straight-Through Estimator for action selection:
-    # Sample discrete action, but let soft probabilities flow in backward pass
-    probs = jnp.array([reach_surface_prob, scatter_prob])
-    probs_normalized = probs / (jnp.sum(probs) + 1e-10)
+    # Mie/Rayleigh Bernoulli + the matching angle samplers
+    is_mie = jax.random.uniform(k[2]) < sg(p_mie)
+    ua = jax.random.uniform(k[3])
+    phi = jax.random.uniform(k[4]) * 2.0 * jnp.pi
+    cmie = hg_sample_cos_theta(ua, sg(g))
+    cray = jnp.clip(solve_rayleigh_inverse_cdf(ua), -1.0, 1.0)
+    cth = jnp.where(is_mie, cmie, cray)
+    sth = jnp.sqrt(jnp.clip(1.0 - cth**2, 0.0, 1.0))
+    frame = create_local_frame(direction)
+    local = jnp.array([sth * jnp.cos(phi), sth * jnp.sin(phi), cth])
+    scat_dir = normalize(frame @ local)
 
-    u = jax.random.uniform(k1)
-    hard_choice = (u < probs_normalized[0]).astype(jnp.float32)
-    hard_weights = jnp.array([hard_choice, 1.0 - hard_choice])
-    action_weights = hard_weights - jax.lax.stop_gradient(probs_normalized) + probs_normalized
-
-    surface_weight = action_weights[0]
-    scatter_weight = action_weights[1]
-
-    # The fraction of 'errors' for a given epsilon change with the detector size.
-    # This is because the numerical error in direction over a large distance translates
-    # into a relatively larger deviation. For HK-size epsilon 1e-4 translates into a few
-    # tens of rays going out of the detector per each million after several steps.
-    # The rule of thumb is that epsilon needs to go down/up proportionally to the detector size.
+    # Reflection direction — detach the normal (Igehy 1999 curvature term): letting the
+    # gradient flow through the normal compounds ~1/r_sensor across K bounces → blowups.
     epsilon = 1e-4
-    # Detach the normal on the reflection path (Igehy 1999 Eq. 22 curvature term).
-    # Letting the gradient flow through the normal compounds a factor of ~1/r_sensor
-    # across K bounces, producing ~10^5-10^6 STE blowups for angular parameters.
-    # Stop-gradient here removes that compounding while keeping the forward value unchanged.
-    normal_refl = jax.lax.stop_gradient(normal)
-    inward_normal = -normal_refl  # into-medium direction, gradient-detached for reflection path
-    surface_pos = position + surface_distance * normalize(direction) + epsilon * normalize(inward_normal)
-    scatter_pos = position + scatter_distance * normalize(direction)
-
+    normal_refl = sg(normal)   # detach the reflection normal (Igehy 1999 curvature term: a live normal compounds ~1/r across bounces)
+    inward_normal = -normal_refl
     specular_dir = compute_reflection_direction(direction, normal_refl)
-    diffuse_dir = sample_cosine_hemisphere(inward_normal, k3)
+    diffuse_dir = sample_cosine_hemisphere(inward_normal, k[5])
     reflection_dir = jnp.where(hit_sensor, specular_dir, diffuse_dir)
-    scatter_dir = compute_scatter_direction(direction, k3)
-    asym_scatter_dir = compute_mie_scatter_direction(direction, k3, g)
+    new_dir = jnp.where(is_scat, scat_dir, reflection_dir)
 
-    new_pos = surface_weight * surface_pos + scatter_weight * scatter_pos
-    new_dir = normalize(surface_weight * reflection_dir + scatter_weight * asym_scatter_dir)
+    # Positions (hard, detached free path d): scatter point vs surface point.
+    dir_n = normalize(direction)
+    scatter_pos = position + d * dir_n
+    surface_pos = position + Dd * dir_n + epsilon * normalize(inward_normal)
+    new_pos = jnp.where(is_scat, scatter_pos, surface_pos)
 
-    continuing_factor = reflect_prob * reflection_attenuation + scatter_prob * scatter_attenuation
+    # DiCE scores — d, Dd, cmie, cray, p_mie, g-sample DETACHED so the score carries OPTICAL
+    # gradients only (via live mu_tot, p_mie, g coefficients), never a track gradient.
+    lf = jnp.where(is_scat, jnp.log(mu_tot) - mu_tot * sg(d), -mu_tot * sg(Dd))
+    la = jnp.where(is_scat,
+                   jnp.where(is_mie,
+                             jnp.log(p_mie) + hg_logpdf(sg(cmie), g),
+                             jnp.log1p(-p_mie) + rayleigh_logpdf(sg(cray))),
+                   0.0)
+    logp_increment = lf + la
 
-    distance_traveled = surface_weight * surface_distance + scatter_weight * scatter_distance
-    new_time = time + distance_traveled / speed_of_light
+    # Implicit-capture deposit factor (expected detected charge, Rao-Blackwellised over the
+    # free-path decision). Dd LIVE → pathwise track gradient through `reach`/`atten_surf`.
+    # No qe (applied in make_hits); no dice_dep (the scan body multiplies it from PRE-step log_p).
+    reach = jnp.exp(-mu_tot * Dd)
+    atten_surf = jnp.exp(-Dd / absorption_length)
+    detect_prob = reach * (1.0 - reflection_rate) * atten_surf
+    reflection_attenuation = jnp.ones_like(detect_prob)           # folded into detect_prob
+    continuing_factor = jnp.where(is_scat, atten, reflection_rate * atten)
 
-    return new_pos, new_dir, new_time, detect_prob, reflection_attenuation, continuing_factor
+    # Arrival-time path uses the LIVE free path d_live (Option C reparam → optical L_M
+    # gradient into time at low variance); Dd LIVE → pathwise track-time gradient.
+    distance_for_time = jnp.where(is_scat, d_live, Dd)
+    new_time = time + distance_for_time / speed_of_light
+
+    return new_pos, new_dir, new_time, detect_prob, reflection_attenuation, continuing_factor, logp_increment
 
 
 # ===================================================================
@@ -274,7 +307,7 @@ def _fwd(position, direction, time, surface_distance,
 
 
 def _bwd(residuals, cotangents):
-    g_pos, g_dir, g_time, g_detect, g_refl, g_cont = cotangents
+    g_pos, g_dir, g_time, g_detect, g_refl, g_cont, g_logp = cotangents
 
     g_pos = jnp.nan_to_num(g_pos, nan=0.0, posinf=0.0, neginf=0.0)
     g_dir = jnp.nan_to_num(g_dir, nan=0.0, posinf=0.0, neginf=0.0)
@@ -282,9 +315,10 @@ def _bwd(residuals, cotangents):
     g_detect = jnp.nan_to_num(g_detect, nan=0.0, posinf=0.0, neginf=0.0)
     g_refl = jnp.nan_to_num(g_refl, nan=0.0, posinf=0.0, neginf=0.0)
     g_cont = jnp.nan_to_num(g_cont, nan=0.0, posinf=0.0, neginf=0.0)
+    g_logp = jnp.nan_to_num(g_logp, nan=0.0, posinf=0.0, neginf=0.0)
 
     _, vjp_fn = jax.vjp(photon_iteration_update_factors, *residuals)
-    return vjp_fn((g_pos, g_dir, g_time, g_detect, g_refl, g_cont))
+    return vjp_fn((g_pos, g_dir, g_time, g_detect, g_refl, g_cont, g_logp))
 
 
 photon_iteration_update_factors_safe.defvjp(_fwd, _bwd)

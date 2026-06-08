@@ -50,6 +50,7 @@ class TestPhotonState:
             times=jnp.zeros(10),
             survival=jnp.ones(10),
             key=jax.random.PRNGKey(0),
+            log_p=jnp.zeros(10),
         )
         assert state.positions.shape == (10, 3)
 
@@ -62,6 +63,7 @@ class TestPhotonState:
                 times=state.times + 1.0,
                 survival=state.survival * 0.9,
                 key=state.key,
+                log_p=state.log_p,
             )
             return new_state, state.times
 
@@ -71,6 +73,7 @@ class TestPhotonState:
             times=jnp.zeros(5),
             survival=jnp.ones(5),
             key=jax.random.PRNGKey(42),
+            log_p=jnp.zeros(5),
         )
         final_state, all_times = jax.lax.scan(step, init, jnp.arange(10))
         # After 10 steps, positions should be 10 * 0.1 = 1.0
@@ -90,6 +93,7 @@ class TestPhotonState:
                 times=state.times,
                 survival=state.survival,
                 key=state.key,
+                log_p=state.log_p,
             )
         state = PhotonState(
             positions=jnp.ones((3, 3)),
@@ -97,6 +101,7 @@ class TestPhotonState:
             times=jnp.zeros(3),
             survival=jnp.ones(3),
             key=jax.random.PRNGKey(0),
+            log_p=jnp.zeros(3),
         )
         result = update(state)
         npt.assert_allclose(result.positions, 2.0 * jnp.ones((3, 3)))
@@ -111,6 +116,7 @@ class TestPhotonStepResult:
             detect_prob=0.7,
             reflection_attenuation=0.98,
             continuing_factor=0.3,
+            logp_increment=0.0,
         )
         assert result.detect_prob == 0.7
 
@@ -123,6 +129,7 @@ class TestPhotonStepResult:
             detect_prob=jnp.float32(0.7),
             reflection_attenuation=jnp.float32(0.98),
             continuing_factor=jnp.float32(0.3),
+            logp_increment=jnp.float32(0.0),
         )
         doubled = jax.tree.map(lambda x: x * 2, r)
         npt.assert_allclose(doubled.time, 10.0)
@@ -158,6 +165,7 @@ class TestJITCompatibility:
                     times=state.times + 0.1 / 0.3,
                     survival=state.survival * 0.95,
                     key=state.key,
+                    log_p=state.log_p,
                 )
                 return new_state, state.survival
             return jax.lax.scan(step, init_state, jnp.arange(5))
@@ -168,6 +176,7 @@ class TestJITCompatibility:
             times=jnp.zeros(3),
             survival=jnp.ones(3),
             key=jax.random.PRNGKey(0),
+            log_p=jnp.zeros(3),
         )
         final, all_survival = run_scan(init)
         assert final.positions.shape == (3, 3)
@@ -187,6 +196,7 @@ class TestJITCompatibility:
                     detect_prob=0.5,
                     reflection_attenuation=0.99,
                     continuing_factor=0.49,
+                    logp_increment=0.0,
                 )
             return jax.vmap(single)(positions)
 
@@ -219,6 +229,7 @@ class TestJITCompatibility:
                 times=jnp.zeros(positions.shape[0]),
                 survival=jnp.ones(positions.shape[0]),
                 key=jax.random.PRNGKey(0),
+                log_p=jnp.zeros(positions.shape[0]),
             )
             return jnp.sum(state.positions ** 2)
 
