@@ -259,7 +259,10 @@ def create_overlap_prob(sigma: Optional[float],
                         num_dense: int = 150,
                         num_sparse: int = 50,
                         d_max_factor: float = 10.0,
-                        use_cache: bool = True) -> Callable[[float], float]:
+                        use_cache: bool = True,
+                        st_width_frac: float = 0.35,
+                        renorm: float = 1.0,
+                        mode: str = 'interp') -> Callable[[float], float]:
     """Creates a function that calculates overlap probability between sensor and photon.
 
     Parameters
@@ -280,6 +283,18 @@ def create_overlap_prob(sigma: Optional[float],
         Maximum distance as multiple of radius, by default 10.0
     use_cache : bool, optional
         Whether to use cached values if available, by default True
+    st_width_frac : float, optional
+        Straight-through surrogate width (fraction of r) for the hard-step
+        overlap (sigma None / tiny). Backward gradient only; forward stays the
+        hard step. ``<= 0`` -> pure hard step, no surrogate. Default 0.35.
+    renorm : float, optional
+        Global soft-overlap renormalization constant C = hard_total/soft_total
+        (restores the total/energy lost to inter-sensor gaps without changing
+        the gradient direction). Default 1.0 = OFF (byte-identical).
+    mode : str, optional
+        Lookup interpolation for the soft overlap: ``'interp'`` (default,
+        piecewise-linear jnp.interp) or ``'cubic'`` (natural cubic spline, C2 —
+        correct curvature for the autodiff Hessian wrt the photon->sensor distance).
 
     Returns
     -------
@@ -303,9 +318,9 @@ def create_overlap_prob(sigma: Optional[float],
     if sigma is None or sigma < 0.02 * r:
         # surrogate width for the backward gradient only (fwd stays hard). Narrower -> sharper
         # (larger-magnitude) spatial gradient, closer to the true local slope; wider -> smoother.
-        # ST_WIDTH_FRAC<=0 -> PURE HARD step (no backward surrogate): overlap contributes zero
+        # st_width_frac<=0 -> PURE HARD step (no backward surrogate): overlap contributes zero
         # gradient; the track/position gradient then flows ONLY through DiCE score + smooth physics.
-        st_frac = float(os.environ.get('ST_WIDTH_FRAC', '0.35'))
+        st_frac = st_width_frac
 
         if st_frac <= 0.0:
             def overlap_prob(d: float) -> float:
@@ -321,30 +336,16 @@ def create_overlap_prob(sigma: Optional[float],
 
         return overlap_prob
 
-    # SOFT-OVERLAP RENORMALIZATION (env-gated, default 1.0 = OFF, byte-identical).
+    # SOFT-OVERLAP RENORMALIZATION (default 1.0 = OFF, byte-identical).
     # The soft overlap f(d) = mass of a sigma-Gaussian (centered at the photon) inside the sensor disk.
     # Convolution conserves the integral ONLY if all the spread is captured; the fraction landing in the
     # GAPS between sensors (no sensor to catch it) is LOST -> the soft total under-counts the hard top-hat
     # by ~1% (worse in sparse/dim regions). A GLOBAL constant C = hard_total/soft_total restores the total
     # (and hence the energy) without changing the gradient DIRECTION (it is a pure scale). Calibrate C once
     # per detector (ratio of temp=None to temp=0.1 total charge). See MISMATCH_PLAN.md.
-    _RENORM = float(os.environ.get('OVERLAP_RENORM', '1.0'))
+    _RENORM = renorm
 
-    # HESSIAN-DEBUG (env-gated): replace the piecewise-linear jnp.interp lookup with an analytic
-    # smooth surrogate. jnp.interp is C0 -> its 2nd derivative is 0 a.e. with delta spikes at knots,
-    # so the overlap's contribution to the AUTODIFF Hessian via the photon->sensor distance d (track
-    # pos/dir) is structurally wrong while FD sees the true curvature. An erf/logistic form is C-inf.
-    _ov_mode = os.environ.get('OVERLAP_ANALYTIC', '')
-    if _ov_mode == 'erf':
-        # 0.5*(1-erf((d-r)/(sqrt(2) sigma))): smooth approx of the Gaussian-blurred disk edge.
-        def overlap_prob(d: float) -> float:
-            return 0.5 * (1.0 - jax.lax.erf((d - r) / (jnp.sqrt(2.0) * sigma)))
-        return overlap_prob
-    if _ov_mode == 'logistic':
-        def overlap_prob(d: float) -> float:
-            return jax.nn.sigmoid((r - d) / sigma)
-        return overlap_prob
-    # _ov_mode == 'cubic' falls through: load the EXACT lookup below, then interpolate it with a
+    # mode == 'cubic' falls through: load the EXACT lookup below, then interpolate it with a
     # natural cubic spline (C2) instead of jnp.interp (C0) -- value-exact at the knots AND correct
     # curvature, so it carries value, gradient, AND Hessian wrt the photon->sensor distance.
 
@@ -363,7 +364,7 @@ def create_overlap_prob(sigma: Optional[float],
             r, sigma, n_theta, n_rho, num_dense, num_sparse, d_max_factor
         )
 
-    if _ov_mode == 'cubic':
+    if mode == 'cubic':
         # Natural cubic spline through the precomputed knots: passes through the exact overlap value at
         # every knot (so value+gradient match the lookup) and is C2 (continuous 2nd derivative), so the
         # autodiff Hessian wrt d is correct -- unlike jnp.interp (C0: 2nd deriv 0 a.e. + delta spikes).

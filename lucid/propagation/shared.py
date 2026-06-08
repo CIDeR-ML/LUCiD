@@ -106,6 +106,8 @@ def validate_sensor_map(assignments_geometric, inverted_sensor_map, num_sensors,
 
 def create_propagator(detector, sensor_positions, sensor_radius,
                       temperature=0.2, max_sensors_per_cell=4,
+                      overlap_st_width_frac=0.35, overlap_renorm=1.0,
+                      overlap_mode='interp',
                       **grid_params):
     """Build a JIT-compiled photon propagator using detector methods.
 
@@ -117,6 +119,13 @@ def create_propagator(detector, sensor_positions, sensor_radius,
     sensor_radius : float
     temperature : float
         Soft-assignment temperature for overlap probability.
+    overlap_st_width_frac : float
+        Straight-through surrogate width (fraction of r) for the hard-step
+        overlap. Backward-gradient only; default 0.35.
+    overlap_renorm : float
+        Soft-overlap renormalization constant C (default 1.0 = OFF).
+    overlap_mode : str
+        Soft-overlap lookup interpolation: 'interp' (default) or 'cubic'.
     max_sensors_per_cell : int
     **grid_params
         Geometry-specific grid parameters passed to ``detector.configure_grid()``.
@@ -161,9 +170,13 @@ def create_propagator(detector, sensor_positions, sensor_radius,
     # temperature=None → step function (hard assignment, non-differentiable)
     # temperature=float → Gaussian kernel with sigma = temperature * sensor_radius
     if temperature is None:
-        overlap_prob = create_overlap_prob(None, sensor_radius)
+        overlap_prob = create_overlap_prob(
+            None, sensor_radius,
+            st_width_frac=overlap_st_width_frac, renorm=overlap_renorm, mode=overlap_mode)
     else:
-        overlap_prob = create_overlap_prob(temperature * sensor_radius, sensor_radius)
+        overlap_prob = create_overlap_prob(
+            temperature * sensor_radius, sensor_radius,
+            st_width_frac=overlap_st_width_frac, renorm=overlap_renorm, mode=overlap_mode)
 
     # 6. Bounds check closure
     def bounds_check(positions):

@@ -2,7 +2,6 @@
 Cylinder-specific photon propagation functions.
 """
 
-import os
 import jax
 import jax.numpy as jnp
 from functools import partial
@@ -21,7 +20,10 @@ from ..overlap import create_overlap_prob
 # all interior rays live since c=x0^2+y0^2-r^2<0 => disc>0), curvature capped at ~1/(4 eps^1.5)
 # instead of diverging, so the 2nd-order AD matches FD. Forward bias is O(eps/(2 sqrt(disc))), i.e.
 # only rays within ~sqrt(eps) of tangency move. Default 0 keeps the forward byte-identical.
-_CYL_SQRT_EPS = float(os.environ.get('CYL_SQRT_EPS', '0'))
+# Module-level numerical knob (no longer env-read). Only affects the legacy ``intersect_cylinder_side``
+# helper, which is NOT on the active shared-propagator path (that intersects via lucid/propagation/
+# geometry.py). Default 0 keeps the forward byte-identical; a 2nd-order-AD Hessian study can raise it.
+_CYL_SQRT_EPS = 0.0
 
 
 @jax.jit

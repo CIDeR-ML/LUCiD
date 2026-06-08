@@ -28,6 +28,9 @@ class DetectorGeometry(NamedTuple):
                     temperature: float = 0.2,
                     max_sensors_per_cell: int = 4,
                     detector_type: str = 'Cylinder',
+                    overlap_st_width_frac: float = 0.35,
+                    overlap_renorm: float = 1.0,
+                    overlap_mode: str = 'interp',
                     **grid_params) -> 'DetectorGeometry':
         """Build a DetectorGeometry from a config JSON file.
 
@@ -45,6 +48,12 @@ class DetectorGeometry(NamedTuple):
             Grid cell sensor limit.
         detector_type : str
             'Cylinder', 'Sphere', or 'Box'.
+        overlap_st_width_frac : float
+            Straight-through overlap surrogate width (fraction of r); default 0.35.
+        overlap_renorm : float
+            Soft-overlap renormalization constant C; default 1.0 = OFF.
+        overlap_mode : str
+            Soft-overlap lookup interpolation: 'interp' (default) or 'cubic'.
         **grid_params
             Geometry-specific grid parameters forwarded to ``create_propagator()``.
             Cylinder: n_cap, n_angular, n_height.
@@ -72,6 +81,9 @@ class DetectorGeometry(NamedTuple):
             detector, sensor_points, sensor_radius,
             temperature=temperature,
             max_sensors_per_cell=max_sensors_per_cell,
+            overlap_st_width_frac=overlap_st_width_frac,
+            overlap_renorm=overlap_renorm,
+            overlap_mode=overlap_mode,
             **grid_params)
 
         return DetectorGeometry(
