@@ -13,6 +13,7 @@ import pytest
 from lucid.propagation.shared import create_propagator
 from lucid.geometry import generate_detector
 from lucid.simulation.photon_step import photon_iteration_update_factors_safe
+from lucid.simulation.reflection import ScalarReflection
 from lucid.simulation.sensor_response import make_hits_simulation
 
 pytestmark = pytest.mark.slow
@@ -95,12 +96,14 @@ class TestFullPipelineGradients:
             hit_sensor = jnp.max(result['inside_sensor'], axis=0)
 
             keys = jax.random.split(key, 5)
+            refl_params = ScalarReflection(wall_rate=jnp.asarray(0.5),
+                                           sensor_rate=jnp.asarray(0.3))
             _, _, _, detect_probs, refl_attens, _, _ = jax.vmap(
                 photon_iteration_update_factors_safe,
-                in_axes=(0, 0, 0, 0, 0, None, None, None, None, None, None, 0, 0, None)
+                in_axes=(0, 0, 0, 0, 0, None, None, None, None, None, 0, None, 0, None)
             )(origins, dirs, jnp.zeros(5), surface_distances, normals,
-              scatter_length, 1.0e9, 0.0, 0.5, 0.3, 100.0,
-              hit_sensor, keys, 0.2253)
+              scatter_length, 1.0e9, 0.0, refl_params, 100.0,
+              hit_sensor, jnp.asarray(0.0), keys, 0.2253)
 
             # 3. Sensor response
             depositions = result['sensor_weights']

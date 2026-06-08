@@ -20,6 +20,7 @@ from lucid.simulation.photon_step import (
     photon_iteration_update_factors,
     photon_iteration_update_factors_safe,
 )
+from lucid.simulation.reflection import ScalarReflection
 from lucid.simulation.sensor_response import (
     make_hits_simulation, make_hits_likelihood,
 )
@@ -41,9 +42,10 @@ class TestOpticsToPhotonStep:
             position=jnp.zeros(3), direction=new_dir, time=0.0,
             surface_distance=2.0, normal=jnp.array([0.0, 0.0, -1.0]),
             scatter_length=50.0, mie_scatter_length=1.0e9, g=0.0,
-            wall_reflection_rate=0.5,
-            sensor_reflection_rate=0.3, absorption_length=100.0,
-            hit_sensor=True, rng_key=k2, speed_of_light=0.2253)
+            refl_params=ScalarReflection(wall_rate=jnp.asarray(0.5),
+                                         sensor_rate=jnp.asarray(0.3)),
+            absorption_length=100.0,
+            hit_sensor=True, lam=jnp.asarray(0.0), rng_key=k2, speed_of_light=0.2253)
         new_pos, new_dir2, new_time, dp, ra, cf, logp = result
         assert jnp.all(jnp.isfinite(new_pos))
         assert jnp.all(jnp.isfinite(new_dir2))
@@ -108,9 +110,10 @@ class TestGradientFlowEndToEnd:
                 time=0.0, surface_distance=2.0,
                 normal=jnp.array([0., 0., -1.]),
                 scatter_length=50.0, mie_scatter_length=1.0e9, g=0.0,
-                wall_reflection_rate=0.5,
-                sensor_reflection_rate=0.3, absorption_length=100.0,
-                hit_sensor=True, rng_key=key, speed_of_light=0.2253)
+                refl_params=ScalarReflection(wall_rate=jnp.asarray(0.5),
+                                             sensor_rate=jnp.asarray(0.3)),
+                absorption_length=100.0,
+                hit_sensor=True, lam=jnp.asarray(0.0), rng_key=key, speed_of_light=0.2253)
             return detect_prob
 
         pos = jnp.array([0.5, 0.5, 0.5])

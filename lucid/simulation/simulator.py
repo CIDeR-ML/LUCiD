@@ -32,8 +32,9 @@ from lucid.simulation.optics import (
     normalize, jax_normalize, jax_rotate_vector,
 )
 from lucid.simulation.photon_step import (
-    photon_iteration_sample, photon_iteration_update_factors_safe,
+    photon_iteration_sample, make_photon_iteration_update_factors_safe,
 )
+from lucid.simulation.reflection import get_reflection_model
 from lucid.simulation.sensor_response import (
     make_hits_simulation, make_hits_data, make_hits_likelihood,
     build_make_hits_waveform, build_make_hits_waveform_expected,
@@ -67,6 +68,7 @@ def setup_event_simulator(
         overlap_st_width_frac=0.35,
         overlap_renorm=1.0,
         overlap_mode='interp',
+        reflection_model='scalar',
         **grid_params):
     """
     Set up and return an event simulator using DetectorParams / ParticleParams.
@@ -221,13 +223,19 @@ def setup_event_simulator(
                 f"qe_corrections has {len(qe_corr)} elements "
                 f"but detector has {NUM_SENSORS} sensors")
 
+    # ---- Reflection model (pluggable; default 'scalar' = byte-identical) -----
+    # reflection_fn is captured statically in the differentiable step's closure;
+    # build_refl_params packs the model's parameters out of DetectorParams.
+    reflection_fn, build_refl_params = get_reflection_model(reflection_model)
+
     # ---- Select photon update function --------------------------------------
     if sim_config.is_data:
         photon_update_fn = photon_iteration_sample
     elif sim_config.use_expected_value is False:
         photon_update_fn = photon_iteration_sample
     else:
-        photon_update_fn = jax.remat(photon_iteration_update_factors_safe)
+        photon_update_fn = jax.remat(
+            make_photon_iteration_update_factors_safe(reflection_fn))
 
     # ---- Geometry bounds check (delegates to detector method) ----------------
     def get_inside_detector_flag(positions):
@@ -440,8 +448,12 @@ def setup_event_simulator(
             Sensor response aggregation function.
         """
 
-        wall_reflection_rate = detector_params.reflection.wall_reflection_rate
-        sensor_reflection_rate = detector_params.reflection.sensor_reflection_rate
+        # Packed reflection params for the pluggable reflection model (default scalar →
+        # ScalarReflection(wall_rate, sensor_rate)). build_refl_params is chosen at setup.
+        refl_params = build_refl_params(detector_params)
+        # Wavelength fed to the reflection model. Scalar reflection ignores it; a per-photon
+        # λ array is threaded here once a wavelength-dependent reflection model is wired.
+        refl_lam = jnp.asarray(0.0)
         qe_corrections = detector_params.per_pmt.qe_corrections
         g = detector_params.scattering.g
 
@@ -471,22 +483,24 @@ def setup_event_simulator(
             key, subkey = jax.random.split(key)
             rng_keys = jax.random.split(subkey, n_rays)
 
-            # vmap: 14 args — per-photon scatter/absorption, scalar g and reflections.
-            # Step returns a 7-tuple; the 7th is the per-photon DiCE score increment
-            # (lf+la for the differentiable step, 0.0 for the sampling step). The
-            # PRE-step log_p (state.log_p) is what the implicit-capture deposit consumes.
+            # vmap: 14 args — per-photon scatter/absorption, scalar g, packed refl_params
+            # pytree (broadcast, in_axes None), per-photon hit_sensor + rng, scalar lam
+            # (a wavelength placeholder for scalar reflection; per-photon λ is threaded when
+            # a wavelength-dependent reflection model is used). Step returns a 7-tuple; the
+            # 7th is the per-photon DiCE score increment (lf+la+lr for the differentiable
+            # step, 0.0 for the sampling step). PRE-step log_p drives the implicit deposit.
             (new_positions, new_directions, new_times,
              detect_probs, reflection_attenuations,
              continuing_factors, logp_increments) = jax.vmap(
                 photon_update_fn,
                 in_axes=(0, 0, 0, 0, 0,
-                         0, 0, None, None, None, 0,
-                         0, 0, None)
+                         0, 0, None, None, 0,
+                         0, None, 0, None)
             )(state.positions, state.directions, state.times,
               surface_distances, normals,
-              scatter_lengths, mie_scatter_lengths, g, wall_reflection_rate, sensor_reflection_rate,
+              scatter_lengths, mie_scatter_lengths, g, refl_params,
               absorption_lengths,
-              hit_sensor, rng_keys, SPEED_OF_LIGHT_MATERIAL)
+              hit_sensor, refl_lam, rng_keys, SPEED_OF_LIGHT_MATERIAL)
 
             inside_detector = get_inside_detector_flag(new_positions)
             safe_continuing = jnp.where(inside_detector, continuing_factors, 0.0)
