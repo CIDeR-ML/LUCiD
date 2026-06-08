@@ -25,8 +25,11 @@ class TestSimConfig:
         assert cfg.effective_n_grad_iters == cfg.K
 
     def test_calibration_mode_grad_iters(self):
+        # Calibration mode now lets the direction gradient flow through all K
+        # bounces (same as track mode); the old n_grad_iters=2 cap was removed
+        # after the reflection-normal curvature fix.
         cfg = SimConfig(mode='calibration')
-        assert cfg.effective_n_grad_iters == 2
+        assert cfg.effective_n_grad_iters == cfg.K
 
     def test_data_mode_grad_iters(self):
         cfg = SimConfig(mode='data')
