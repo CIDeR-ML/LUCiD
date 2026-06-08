@@ -80,11 +80,27 @@ class ReflectionParams(NamedTuple):
 
     Fields
     ------
-    wall_reflection_rate : jnp.ndarray   scalar, [0, 1]
-    sensor_reflection_rate : jnp.ndarray scalar, [0, 1]
+    wall_reflection_rate : jnp.ndarray   scalar, [0, 1] — scalar-model wall rate
+    sensor_reflection_rate : jnp.ndarray scalar, [0, 1] — scalar-model sensor rate
+    wall_R0 : jnp.ndarray        blacksheet normal-incidence reflectance (Schlick)
+    wall_p : jnp.ndarray         blacksheet Schlick angular exponent
+    wall_fspec : jnp.ndarray     blacksheet specular fraction (1-fspec diffuse)
+    cathode_nr : jnp.ndarray     PMT cathode real refractive index
+    cathode_nk : jnp.ndarray     PMT cathode imaginary index (absorption)
+    sensor_fspec : jnp.ndarray   PMT specular fraction (1-fspec diffuse)
+
+    The first two drive the default ``scalar`` reflection model. The remaining six
+    parameterise the ``angular`` model (Schlick blacksheet + multilayer-Fresnel
+    cathode); they are inert unless ``reflection_model='angular'``.
     """
     wall_reflection_rate: jnp.ndarray
     sensor_reflection_rate: jnp.ndarray
+    wall_R0: jnp.ndarray
+    wall_p: jnp.ndarray
+    wall_fspec: jnp.ndarray
+    cathode_nr: jnp.ndarray
+    cathode_nk: jnp.ndarray
+    sensor_fspec: jnp.ndarray
 
 
 class ResponseParams(NamedTuple):
@@ -172,6 +188,12 @@ class DetectorParams(NamedTuple):
             abs_dev=jnp.ones(_N_CTRL),
             wall_reflection_rate=0.0,
             sensor_reflection_rate=0.0,
+            wall_R0=_ANGULAR_REFL_DEFAULTS["wall_R0"],
+            wall_p=_ANGULAR_REFL_DEFAULTS["wall_p"],
+            wall_fspec=_ANGULAR_REFL_DEFAULTS["wall_fspec"],
+            cathode_nr=_ANGULAR_REFL_DEFAULTS["cathode_nr"],
+            cathode_nk=_ANGULAR_REFL_DEFAULTS["cathode_nk"],
+            sensor_fspec=_ANGULAR_REFL_DEFAULTS["sensor_fspec"],
             qe=0.2,
             spe_width=0.0,
             tts=0.0,
@@ -370,6 +392,18 @@ _NEUTRAL_DEFAULTS = {
 # reference, byte-identical). A config may supply a curve as an inline list instead.
 _DEV_CURVE_FIELDS = ("rayleigh_dev", "mie_dev", "abs_dev", "qe_dev")
 
+# Angular-reflection-model scalars (Schlick blacksheet + multilayer-Fresnel cathode).
+# Inert unless reflection_model='angular'; configs omit them → filled with physical
+# defaults. Bialkali cathode ~ n_r=2.8, n_k=1.5; blacksheet near-diffuse low-R0.
+_ANGULAR_REFL_DEFAULTS = {
+    "wall_R0": 0.05,
+    "wall_p": 1.0,
+    "wall_fspec": 0.0,
+    "cathode_nr": 2.8,
+    "cathode_nk": 1.5,
+    "sensor_fspec": 0.0,
+}
+
 
 def _project_missing_scalars(kwargs, medium_path, qe_path, ref_wavelength_nm,
                              source_filepath):
@@ -433,6 +467,12 @@ def _project_missing_scalars(kwargs, medium_path, qe_path, ref_wavelength_nm,
         v = kwargs[field]
         if v.ndim == 0 and bool(jnp.isnan(v)):
             kwargs[field] = jnp.ones(_N_CTRL, dtype=jnp.float32)
+
+    # Angular-reflection scalars: physical defaults when absent (inert for scalar model).
+    for field, default in _ANGULAR_REFL_DEFAULTS.items():
+        v = kwargs[field]
+        if v.ndim == 0 and bool(jnp.isnan(v)):
+            kwargs[field] = jnp.asarray(default, dtype=jnp.float32)
 
 
 def load_detector_params(filepath: str, num_sensors: int = None,
@@ -588,6 +628,8 @@ def default_bounds(num_sensors: int):
         abs_dev=jnp.full(_N_CTRL, 0.1),
         wall_reflection_rate=jnp.array(0.0),
         sensor_reflection_rate=jnp.array(0.0),
+        wall_R0=jnp.array(0.0), wall_p=jnp.array(0.5), wall_fspec=jnp.array(0.0),
+        cathode_nr=jnp.array(1.5), cathode_nk=jnp.array(0.0), sensor_fspec=jnp.array(0.0),
         qe=jnp.array(0.0),
         spe_width=jnp.array(0.0),
         tts=jnp.array(0.0),
@@ -607,6 +649,8 @@ def default_bounds(num_sensors: int):
         abs_dev=jnp.full(_N_CTRL, 10.0),
         wall_reflection_rate=jnp.array(0.5),
         sensor_reflection_rate=jnp.array(0.4),
+        wall_R0=jnp.array(0.5), wall_p=jnp.array(12.0), wall_fspec=jnp.array(1.0),
+        cathode_nr=jnp.array(4.0), cathode_nk=jnp.array(4.0), sensor_fspec=jnp.array(1.0),
         qe=jnp.array(1.0),
         spe_width=jnp.array(1.0),
         tts=jnp.array(5.0),
@@ -670,6 +714,12 @@ def create_default_detector_params(num_sensors: int) -> DetectorParams:
         abs_dev=jnp.ones(_N_CTRL),
         wall_reflection_rate=jnp.array(0.2),
         sensor_reflection_rate=jnp.array(0.2),
+        wall_R0=jnp.array(_ANGULAR_REFL_DEFAULTS["wall_R0"]),
+        wall_p=jnp.array(_ANGULAR_REFL_DEFAULTS["wall_p"]),
+        wall_fspec=jnp.array(_ANGULAR_REFL_DEFAULTS["wall_fspec"]),
+        cathode_nr=jnp.array(_ANGULAR_REFL_DEFAULTS["cathode_nr"]),
+        cathode_nk=jnp.array(_ANGULAR_REFL_DEFAULTS["cathode_nk"]),
+        sensor_fspec=jnp.array(_ANGULAR_REFL_DEFAULTS["sensor_fspec"]),
         qe=jnp.array(0.2),
         spe_width=jnp.array(0.0),
         tts=jnp.array(0.0),
@@ -710,6 +760,8 @@ def default_gradient_scales(num_sensors: int) -> DetectorParams:
         abs_dev=jnp.ones(_N_CTRL),
         wall_reflection_rate=jnp.array(1.0),
         sensor_reflection_rate=jnp.array(1.0),
+        wall_R0=jnp.array(1.0), wall_p=jnp.array(1.0), wall_fspec=jnp.array(1.0),
+        cathode_nr=jnp.array(1.0), cathode_nk=jnp.array(1.0), sensor_fspec=jnp.array(1.0),
         qe=jnp.array(1.0),
         spe_width=jnp.array(1.0),
         tts=jnp.array(1.0),
