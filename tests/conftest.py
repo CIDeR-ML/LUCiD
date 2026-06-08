@@ -16,6 +16,7 @@ _SLOW_FILES = [
     "test_photon_step_physics.py",
     "test_propagation_differentiability.py",
     "test_propagator_output.py",
+    "test_reflection_integration.py",
     "test_ray_intersection.py",
     "test_sensor_map_validation.py",
     "test_shared_propagator.py",

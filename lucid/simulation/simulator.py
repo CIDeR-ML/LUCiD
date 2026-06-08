@@ -69,6 +69,7 @@ def setup_event_simulator(
         overlap_renorm=1.0,
         overlap_mode='interp',
         reflection_model='scalar',
+        reflection_wavelength=400.0,
         **grid_params):
     """
     Set up and return an event simulator using DetectorParams / ParticleParams.
@@ -140,6 +141,17 @@ def setup_event_simulator(
         Soft-overlap lookup interpolation: ``'interp'`` (default, piecewise
         linear) or ``'cubic'`` (C2 natural spline — correct curvature for the
         autodiff Hessian wrt photon→sensor distance).
+    reflection_model : str
+        Reflection model: ``'scalar'`` (default, byte-identical — angle/λ-
+        independent wall/sensor rates, hard direction) or ``'angular'`` (Schlick
+        blacksheet wall + multilayer-Fresnel cathode sensor, with a specular/
+        diffuse direction mixture). The angular model reads the
+        ``DetectorParams.reflection`` fields ``wall_R0/wall_p/wall_fspec`` and
+        ``cathode_nr/cathode_nk/sensor_fspec``.
+    reflection_wavelength : float
+        Wavelength (nm) fed to the reflection model's dispersion (cathode/glass
+        Fresnel). Exact for monochromatic-laser calibration; ignored by the
+        scalar model. Default 400 nm.
 
     Returns
     -------
@@ -451,9 +463,11 @@ def setup_event_simulator(
         # Packed reflection params for the pluggable reflection model (default scalar →
         # ScalarReflection(wall_rate, sensor_rate)). build_refl_params is chosen at setup.
         refl_params = build_refl_params(detector_params)
-        # Wavelength fed to the reflection model. Scalar reflection ignores it; a per-photon
-        # λ array is threaded here once a wavelength-dependent reflection model is wired.
-        refl_lam = jnp.asarray(0.0)
+        # Wavelength fed to the reflection model. Scalar reflection ignores it; the angular
+        # (Fresnel) model uses it for the cathode/glass dispersion. A scalar reflection
+        # wavelength is exact for monochromatic-laser calibration (the validated case); a
+        # per-photon λ array can be threaded here later for broadband sources.
+        refl_lam = jnp.asarray(reflection_wavelength)
         qe_corrections = detector_params.per_pmt.qe_corrections
         g = detector_params.scattering.g
 

@@ -75,10 +75,104 @@ def scalar_reflection(direction, normal, hit_sensor, refl_params, lam, key):
 
 
 # ---------------------------------------------------------------------------
+# Angular model — Schlick blacksheet (wall) + multilayer-Fresnel cathode (sensor).
+# Ported from the validated mie_hunter/refl_engine2.py. The reflectivity MAGNITUDE
+# (R0w, pw, nr, nk) is PATHWISE-exact because cth_inc uses sg(normal); the spec/diff
+# DIRECTION mix (fractions fw, fs) is a DISCRETE branch carried by a DiCE score lr.
+# ---------------------------------------------------------------------------
+
+N_WATER = 1.33
+
+
+def n_glass(lam):
+    """SK PMT-glass dispersion n_g(λ), λ in nm."""
+    return 1.472 + 3670.0 / (lam * lam)
+
+
+def fresnel_rr(ci, n_i, n_t):
+    """Unpolarised Fresnel reflectance, real→real (ci = cos incidence).
+
+    Returns (R, cos_transmit); total-internal-reflection clamps R→1.
+    """
+    s2t = (n_i / n_t) ** 2 * (1.0 - ci * ci)
+    ct = jnp.sqrt(jnp.clip(1.0 - s2t, 0.0, 1.0))
+    rs = (n_i * ci - n_t * ct) / (n_i * ci + n_t * ct + 1e-12)
+    rp = (n_t * ci - n_i * ct) / (n_t * ci + n_i * ct + 1e-12)
+    R = 0.5 * (rs * rs + rp * rp)
+    return jnp.clip(jnp.where(s2t >= 1.0, 1.0, R), 0.0, 1.0), ct
+
+
+def fresnel_rc(ci, n_i, n_c):
+    """Unpolarised Fresnel reflectance, real→COMPLEX (absorbing cathode)."""
+    ci = ci.astype(jnp.complex64)
+    n_i = jnp.asarray(n_i, jnp.complex64)
+    n_c = jnp.asarray(n_c, jnp.complex64)
+    ct = jnp.sqrt(1.0 - (n_i / n_c) ** 2 * (1.0 - ci * ci))
+    rs = (n_i * ci - n_c * ct) / (n_i * ci + n_c * ct)
+    rp = (n_c * ci - n_i * ct) / (n_c * ci + n_i * ct)
+    return jnp.clip(0.5 * (jnp.abs(rs) ** 2 + jnp.abs(rp) ** 2).real, 0.0, 1.0)
+
+
+def pmt_reflectance(cth_inc, lam, n_r, n_k):
+    """Effective 4-level PMT reflectance: water→glass(λ)→cathode(n_r+i·n_k),
+    two incoherent Fresnel interfaces summed over multi-bounce."""
+    ng = n_glass(lam)
+    R1, ctg = fresnel_rr(cth_inc, N_WATER, ng)              # water→glass (real)
+    R2 = fresnel_rc(ctg, ng, jnp.asarray(n_r) + 1j * jnp.asarray(n_k))  # glass→cathode (complex)
+    return jnp.clip(R1 + (1.0 - R1) ** 2 * R2 / (1.0 - R1 * R2 + 1e-9), 0.0, 0.999)
+
+
+class AngularReflection(NamedTuple):
+    """``refl_params`` for the angular reflection model.
+
+    Fields
+    ------
+    R0w : jnp.ndarray   blacksheet normal-incidence reflectance (Schlick)
+    pw : jnp.ndarray    blacksheet Schlick angular exponent
+    fw : jnp.ndarray    blacksheet specular fraction (1-fw diffuse)
+    nr : jnp.ndarray    cathode real refractive index
+    nk : jnp.ndarray    cathode imaginary refractive index (absorption)
+    fs : jnp.ndarray    cathode specular fraction (1-fs diffuse)
+    """
+    R0w: jnp.ndarray
+    pw: jnp.ndarray
+    fw: jnp.ndarray
+    nr: jnp.ndarray
+    nk: jnp.ndarray
+    fs: jnp.ndarray
+
+
+def angular_reflection(direction, normal, hit_sensor, refl_params, lam, key):
+    """Schlick blacksheet (wall) + multilayer-Fresnel cathode (sensor) reflection.
+
+    Magnitude is angle/λ-dependent and pathwise-exact (cth_inc uses sg(normal));
+    the reflected direction is a specular/diffuse mixture whose discrete branch is
+    carried by the returned DiCE score ``lr``.
+    """
+    normal_refl = sg(normal)
+    cth_inc = jnp.clip(jnp.abs(jnp.sum(direction * normal_refl)), 0.0, 1.0)
+
+    Rw = refl_params.R0w + (1.0 - refl_params.R0w) * (1.0 - cth_inc) ** jnp.clip(refl_params.pw, 0.5, 12.0)
+    Rs = pmt_reflectance(cth_inc, lam, refl_params.nr, refl_params.nk)
+    refl_prob = jnp.clip(jnp.where(hit_sensor, Rs, Rw), 0.0, 0.999)
+
+    # Direction: specular/diffuse mixture, fraction f_eff per surface. is_spec is a
+    # DISCRETE branch → DiCE-scored (reflected photons only; score detaches f_eff).
+    kd, ks = jax.random.split(key)
+    f_eff = jnp.clip(jnp.where(hit_sensor, refl_params.fs, refl_params.fw), 1e-3, 1.0 - 1e-3)
+    is_spec = jax.random.uniform(ks) < sg(f_eff)
+    specular_dir = compute_reflection_direction(direction, normal_refl)
+    diffuse_dir = sample_cosine_hemisphere(-normal_refl, kd)
+    refl_dir = jnp.where(is_spec, specular_dir, diffuse_dir)
+    lr_score = jnp.where(is_spec, jnp.log(f_eff), jnp.log1p(-f_eff))
+    return refl_prob, refl_dir, lr_score
+
+
+# ---------------------------------------------------------------------------
 # Model registry — name → (reflection_fn, build_refl_params(detector_params)).
 # build_refl_params extracts the model's parameters from a DetectorParams pytree.
-# Angular models (Schlick wall / multilayer-Fresnel sensor) are registered in a
-# later step; the scalar model is the byte-identical default.
+# The scalar model is the byte-identical default; 'angular' needs per-photon λ
+# (wavelength_mode=True), threaded by the simulator.
 # ---------------------------------------------------------------------------
 
 def _build_scalar_params(detector_params):
@@ -88,9 +182,19 @@ def _build_scalar_params(detector_params):
     )
 
 
+def _build_angular_params(detector_params):
+    r = detector_params.reflection
+    return AngularReflection(R0w=r.wall_R0, pw=r.wall_p, fw=r.wall_fspec,
+                             nr=r.cathode_nr, nk=r.cathode_nk, fs=r.sensor_fspec)
+
+
 REFLECTION_MODELS = {
     'scalar': (scalar_reflection, _build_scalar_params),
+    'angular': (angular_reflection, _build_angular_params),
 }
+
+# Reflection models that require a per-photon wavelength (→ wavelength_mode=True).
+WAVELENGTH_REFLECTION_MODELS = frozenset({'angular'})
 
 
 def get_reflection_model(name):
