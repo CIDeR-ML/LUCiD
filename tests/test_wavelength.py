@@ -59,7 +59,7 @@ class TestEffectiveProperties:
     def test_monochromatic_passthrough(self):
         """With wavelengths=None, effective properties equal scalar inputs."""
         from lucid.detector_params import DetectorParams
-        dp = DetectorParams(
+        dp = DetectorParams.from_flat(
             scatter_length=50.0, mie_scatter_length=1000.0, g=0.9,
             wall_reflection_rate=0.5,
             sensor_reflection_rate=0.3, absorption_length=100.0,
@@ -74,7 +74,7 @@ class TestEffectiveProperties:
 
     def test_wavelength_active_returns_arrays(self):
         from lucid.detector_params import DetectorParams
-        dp = DetectorParams(
+        dp = DetectorParams.from_flat(
             scatter_length=50.0, mie_scatter_length=1000.0, g=0.9,
             wall_reflection_rate=0.5,
             sensor_reflection_rate=0.3, absorption_length=100.0,

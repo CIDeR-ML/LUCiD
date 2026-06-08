@@ -30,7 +30,7 @@ def detector():
 def base_dp(detector):
     from lucid.detector_params import DetectorParams
     N = len(detector.all_points)
-    return DetectorParams(
+    return DetectorParams.from_flat(
         scatter_length=50.0, wall_reflection_rate=0.2,
         sensor_reflection_rate=0.2, absorption_length=50.0,
         qe=0.2, qe_corrections=jnp.ones(N),
@@ -240,8 +240,8 @@ class TestGradients:
         loss, grads = value_and_grad(loss_fn)(base_dp)
         assert jnp.isfinite(loss)
         # wall_reflection_rate and sensor_reflection_rate gradients should be nonzero
-        assert jnp.isfinite(grads.wall_reflection_rate)
-        assert jnp.isfinite(grads.sensor_reflection_rate)
+        assert jnp.isfinite(grads.reflection.wall_reflection_rate)
+        assert jnp.isfinite(grads.reflection.sensor_reflection_rate)
 
 
 # ── QE handling ────────────────────────────────────────────────────

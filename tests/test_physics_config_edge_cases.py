@@ -37,7 +37,29 @@ DETECTOR_INFO = {
     "nuSCOPE": ("nuSCOPE_physics_config.json",   5000),
 }
 
-DETECTOR_PARAMS_FIELDS = DetectorParams._fields
+# DetectorParams is now nested by physics. These tests check the FLAT JSON
+# schema -> leaf-field projection semantics, so iterate the ORIGINAL flat leaf
+# fields (the new response/per-PMT placeholders carry neutral defaults, not the
+# NaN "missing" semantics asserted below).
+DETECTOR_PARAMS_FIELDS = (
+    "scatter_length", "g", "mie_scatter_length",
+    "wall_reflection_rate", "sensor_reflection_rate",
+    "absorption_length", "qe", "qe_corrections",
+)
+
+# Map each flat leaf field to its sub-tuple so getattr resolves through nesting.
+_LEAF_PARENT = {
+    "scatter_length": "scattering", "mie_scatter_length": "scattering", "g": "scattering",
+    "absorption_length": "absorption",
+    "wall_reflection_rate": "reflection", "sensor_reflection_rate": "reflection",
+    "qe": "response", "spe_width": "response", "tts": "response",
+    "qe_corrections": "per_pmt", "gain": "per_pmt", "t0": "per_pmt", "walk": "per_pmt",
+}
+
+
+def _leaf(params, field):
+    """Fetch a flat leaf field from the nested DetectorParams pytree."""
+    return getattr(getattr(params, _LEAF_PARENT[field]), field)
 
 
 @pytest.fixture(scope="module")
@@ -78,7 +100,7 @@ def test_field_presence(det_name, loaded_configs):
         raw = json.load(f)
 
     for field in DETECTOR_PARAMS_FIELDS:
-        val = getattr(params, field)
+        val = _leaf(params, field)
         if field in raw and raw[field] is not None:
             raw_val = raw[field]
             if isinstance(raw_val, (int, float)):
@@ -128,7 +150,7 @@ def test_sk_missing_fields_project_from_curves(loaded_configs):
 
     for field in ["scatter_length", "absorption_length", "qe"]:
         assert field not in sk_raw, f"SK config unexpectedly has '{field}'"
-        val = getattr(sk_params, field)
+        val = _leaf(sk_params, field)
         assert val.ndim == 0, f"SK.{field} should be scalar, got shape {val.shape}"
         assert bool(jnp.isfinite(val)) and float(val) > 0, (
             f"SK.{field} should be projected (finite, positive), got {float(val)}")
@@ -180,7 +202,7 @@ def test_qe_curve_path(det_name, loaded_configs):
 @pytest.mark.parametrize("det_name", ["WCTE", "EOS", "SK", "SK_like", "HK"])
 def test_scalar_qe_corrections_expansion(det_name, loaded_configs):
     params, _, _, _, n_sensors = loaded_configs[det_name]
-    qe_c = params.qe_corrections
+    qe_c = params.per_pmt.qe_corrections
     assert qe_c.shape == (n_sensors,), (
         f"{det_name} qe_corrections shape {qe_c.shape}, expected ({n_sensors},)")
     assert jnp.allclose(qe_c, 1.0)
@@ -189,7 +211,7 @@ def test_scalar_qe_corrections_expansion(det_name, loaded_configs):
 def test_juno_file_qe_corrections(loaded_configs):
     """JUNO has qe_corrections loaded from file — 10000 elements, all finite/positive."""
     params = loaded_configs["JUNO"][0]
-    qe_c = params.qe_corrections
+    qe_c = params.per_pmt.qe_corrections
     assert qe_c.shape == (10000,)
     assert bool(jnp.all(jnp.isfinite(qe_c)))
     assert bool(jnp.all(qe_c > 0))
@@ -198,8 +220,8 @@ def test_juno_file_qe_corrections(loaded_configs):
 def test_scalar_qe_stays_scalar_without_num_sensors():
     wcte_path = os.path.join(CONFIG_DIR, "WCTE_physics_config.json")
     params, _, _ = load_physics_config(wcte_path, num_sensors=None)
-    assert params.qe_corrections.ndim == 0
-    assert jnp.allclose(params.qe_corrections, 1.0)
+    assert params.per_pmt.qe_corrections.ndim == 0
+    assert jnp.allclose(params.per_pmt.qe_corrections, 1.0)
 
 
 # ---------------------------------------------------------------------------
@@ -208,14 +230,14 @@ def test_scalar_qe_stays_scalar_without_num_sensors():
 def test_sk_with_real_num_sensors():
     sk_path = os.path.join(CONFIG_DIR, "SK_physics_config.json")
     p, _, _ = load_physics_config(sk_path, num_sensors=11146)
-    assert p.qe_corrections.shape == (11146,)
+    assert p.per_pmt.qe_corrections.shape == (11146,)
 
 
 def test_sk_with_alt_num_sensors():
     """SK config has scalar qe_corrections, so it expands to any requested size."""
     sk_path = os.path.join(CONFIG_DIR, "SK_physics_config.json")
     p, _, _ = load_physics_config(sk_path, num_sensors=11000)
-    assert p.qe_corrections.shape == (11000,)
+    assert p.per_pmt.qe_corrections.shape == (11000,)
 
 
 def test_juno_file_qe_corrections_keep_length():
@@ -223,19 +245,19 @@ def test_juno_file_qe_corrections_keep_length():
     num_sensors — no automatic truncation/padding. This is expected behavior."""
     juno_path = os.path.join(CONFIG_DIR, "JUNO_physics_config.json")
     p, _, _ = load_physics_config(juno_path, num_sensors=5000)
-    assert p.qe_corrections.shape[0] == 10000  # original file length, not 5000
+    assert p.per_pmt.qe_corrections.shape[0] == 10000  # original file length, not 5000
 
 
 def test_juno_with_correct_num_sensors():
     juno_path = os.path.join(CONFIG_DIR, "JUNO_physics_config.json")
     p, _, _ = load_physics_config(juno_path, num_sensors=10000)
-    assert p.qe_corrections.shape == (10000,)
+    assert p.per_pmt.qe_corrections.shape == (10000,)
 
 
 def test_juno_with_no_num_sensors():
     juno_path = os.path.join(CONFIG_DIR, "JUNO_physics_config.json")
     p, _, _ = load_physics_config(juno_path, num_sensors=None)
-    assert p.qe_corrections.ndim >= 1
+    assert p.per_pmt.qe_corrections.ndim >= 1
 
 
 # ---------------------------------------------------------------------------
@@ -248,7 +270,7 @@ def test_load_detector_params_returns_container(det_name):
     params = load_detector_params(cfg_path, num_sensors=n_sensors)
     assert isinstance(params, DetectorParams)
     for field in DETECTOR_PARAMS_FIELDS:
-        val = getattr(params, field)
+        val = _leaf(params, field)
         assert hasattr(val, "shape"), f"{det_name}.{field} is not a jax array"
 
 
@@ -265,7 +287,7 @@ def test_missing_projectable_fields_are_projected(det_name):
     for field in _PROJECTABLE:
         if field in raw:
             continue
-        val = getattr(params, field)
+        val = _leaf(params, field)
         assert val.ndim == 0 and bool(jnp.isfinite(val)) and float(val) > 0, (
             f"load_detector_params({det_name}).{field} should be projected "
             f"from curves (finite, positive), got {float(val)}")

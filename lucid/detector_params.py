@@ -36,28 +36,132 @@ from lucid.utils import spherical_to_cartesian
 # DetectorParams
 # ---------------------------------------------------------------------------
 
-class DetectorParams(NamedTuple):
-    """Detector calibration parameters (JAX pytree).
+class ScatteringParams(NamedTuple):
+    """Scattering optical properties (JAX pytree sub-tuple).
 
     Fields
     ------
-    scatter_length : jnp.ndarray        scalar, meters
-    g : jnp.ndarray                     scalar, Henyey-Greenstein asymmetry [0, 1]
+    scatter_length : jnp.ndarray        scalar, meters (Rayleigh scatter length)
     mie_scatter_length : jnp.ndarray    scalar, meters
-    wall_reflection_rate : jnp.ndarray   scalar, [0, 1]
-    sensor_reflection_rate : jnp.ndarray scalar, [0, 1]
-    absorption_length : jnp.ndarray      scalar, meters
-    qe : jnp.ndarray                    scalar, base quantum efficiency [0, 1]
-    qe_corrections : jnp.ndarray        shape (num_sensors,), per-sensor QE multipliers
+    g : jnp.ndarray                     scalar, Henyey-Greenstein asymmetry [0, 1]
     """
     scatter_length: jnp.ndarray
-    g: jnp.ndarray
     mie_scatter_length: jnp.ndarray
+    g: jnp.ndarray
+
+
+class AbsorptionParams(NamedTuple):
+    """Absorption optical properties (JAX pytree sub-tuple).
+
+    Fields
+    ------
+    absorption_length : jnp.ndarray     scalar, meters
+    """
+    absorption_length: jnp.ndarray
+
+
+class ReflectionParams(NamedTuple):
+    """Reflection optical properties (JAX pytree sub-tuple).
+
+    Fields
+    ------
+    wall_reflection_rate : jnp.ndarray   scalar, [0, 1]
+    sensor_reflection_rate : jnp.ndarray scalar, [0, 1]
+    """
     wall_reflection_rate: jnp.ndarray
     sensor_reflection_rate: jnp.ndarray
-    absorption_length: jnp.ndarray
+
+
+class ResponseParams(NamedTuple):
+    """Global PMT response properties (JAX pytree sub-tuple).
+
+    Fields
+    ------
+    qe : jnp.ndarray         scalar, base quantum efficiency [0, 1]
+    spe_width : jnp.ndarray  scalar, single-photoelectron charge resolution (default 0.0)
+    tts : jnp.ndarray        scalar, transit-time spread, ns (default 0.0)
+
+    ``spe_width`` and ``tts`` are calibrated PMT-response fields. Their neutral
+    defaults (0.0) leave the current forward model unchanged; wiring them into
+    ``make_hits`` is a later step.
+    """
     qe: jnp.ndarray
+    spe_width: jnp.ndarray
+    tts: jnp.ndarray
+
+
+class PerPmtParams(NamedTuple):
+    """Per-sensor PMT calibration properties (JAX pytree sub-tuple).
+
+    Fields
+    ------
+    qe_corrections : jnp.ndarray  shape (num_sensors,), per-sensor QE multipliers
+    gain : jnp.ndarray            shape (num_sensors,), per-sensor gain (default ones)
+    t0 : jnp.ndarray              shape (num_sensors,), per-sensor time offset, ns (default zeros)
+    walk : jnp.ndarray            shape (num_sensors,), per-sensor time-walk (default zeros)
+
+    ``gain``, ``t0`` and ``walk`` are placeholders for a later calibration step;
+    their neutral defaults leave the current forward model unchanged.
+    """
     qe_corrections: jnp.ndarray
+    gain: jnp.ndarray
+    t0: jnp.ndarray
+    walk: jnp.ndarray
+
+
+class DetectorParams(NamedTuple):
+    """Detector calibration parameters (JAX pytree), nested by physics.
+
+    Sub-tuples
+    ----------
+    scattering : ScatteringParams   scatter_length, mie_scatter_length, g
+    absorption : AbsorptionParams   absorption_length
+    reflection : ReflectionParams   wall_reflection_rate, sensor_reflection_rate
+    response   : ResponseParams     qe, spe_width, tts
+    per_pmt    : PerPmtParams        qe_corrections, gain, t0, walk
+    """
+    scattering: ScatteringParams
+    absorption: AbsorptionParams
+    reflection: ReflectionParams
+    response: ResponseParams
+    per_pmt: PerPmtParams
+
+    @classmethod
+    def from_flat(cls, *, num_sensors=None, **flat):
+        """Build a nested ``DetectorParams`` from FLAT leaf-field values.
+
+        Convenience constructor mirroring the on-disk flat JSON schema: pass
+        any subset of the leaf fields (``scatter_length``, ``qe``,
+        ``qe_corrections``, ...) and the rest are filled with neutral defaults
+        (no-Mie scattering, identity response/per-PMT) so the forward is
+        unchanged. Per-sensor placeholder fields (``gain``/``t0``/``walk``)
+        default to ``(num_sensors,)`` arrays; ``num_sensors`` is inferred from
+        ``qe_corrections`` when not given.
+        """
+        ns = num_sensors
+        if ns is None and "qe_corrections" in flat:
+            qc = jnp.asarray(flat["qe_corrections"])
+            ns = int(qc.shape[0]) if qc.ndim >= 1 else 1
+        if ns is None:
+            ns = 1
+        defaults = dict(
+            scatter_length=50.0,
+            mie_scatter_length=_MIE_DEFAULTS["mie_scatter_length"],
+            g=_MIE_DEFAULTS["g"],
+            absorption_length=100.0,
+            wall_reflection_rate=0.0,
+            sensor_reflection_rate=0.0,
+            qe=0.2,
+            spe_width=0.0,
+            tts=0.0,
+            qe_corrections=jnp.ones(ns),
+            gain=jnp.ones(ns),
+            t0=jnp.zeros(ns),
+            walk=jnp.zeros(ns),
+        )
+        defaults.update(flat)
+        merged = {k: jnp.asarray(v) for k, v in defaults.items()}
+        return _nest_flat_kwargs(merged)
 
 
 # ---------------------------------------------------------------------------
@@ -119,6 +223,52 @@ from lucid.sources.calibration_sources import (  # noqa: F401, E402
 _ARRAY_SENTINEL = "__array__:"
 
 
+# ---------------------------------------------------------------------------
+# Flat <-> nested mapping.
+#
+# The on-disk JSON format keeps FLAT physics-config keys (scatter_length, qe,
+# qe_corrections, ...). In-memory the pytree is nested by physics. These helpers
+# translate between the two representations.
+# ---------------------------------------------------------------------------
+
+# leaf field name -> (sub-tuple attribute on DetectorParams, sub-tuple class)
+_SUBTUPLES = (
+    ("scattering", ScatteringParams),
+    ("absorption", AbsorptionParams),
+    ("reflection", ReflectionParams),
+    ("response", ResponseParams),
+    ("per_pmt", PerPmtParams),
+)
+
+# Ordered list of every leaf (flat) field name across all sub-tuples.
+_FLAT_FIELDS = tuple(
+    field for _, cls in _SUBTUPLES for field in cls._fields
+)
+
+# leaf field name -> sub-tuple attribute name (e.g. 'scatter_length' -> 'scattering')
+_FIELD_TO_SUBTUPLE = {
+    field: attr for attr, cls in _SUBTUPLES for field in cls._fields
+}
+
+
+def _nest_flat_kwargs(flat: dict) -> DetectorParams:
+    """Build a nested ``DetectorParams`` from a flat ``{leaf_field: value}`` dict."""
+    subs = {}
+    for attr, cls in _SUBTUPLES:
+        subs[attr] = cls(**{f: flat[f] for f in cls._fields})
+    return DetectorParams(**subs)
+
+
+def _flatten_detector_params(params: DetectorParams) -> dict:
+    """Walk a nested ``DetectorParams`` to a flat ``{leaf_field: value}`` dict."""
+    flat = {}
+    for attr, cls in _SUBTUPLES:
+        sub = getattr(params, attr)
+        for f in cls._fields:
+            flat[f] = getattr(sub, f)
+    return flat
+
+
 def save_detector_params(params: DetectorParams, filepath: str):
     """Save DetectorParams to JSON + companion .npy files for arrays.
 
@@ -129,8 +279,9 @@ def save_detector_params(params: DetectorParams, filepath: str):
     dirpath = os.path.dirname(filepath) or "."
     stem = os.path.splitext(os.path.basename(filepath))[0]
     data = {}
-    for field in DetectorParams._fields:
-        val = getattr(params, field)
+    flat = _flatten_detector_params(params)
+    for field in _FLAT_FIELDS:
+        val = flat[field]
         arr = np.asarray(val)
         if arr.ndim == 0:
             data[field] = float(arr)
@@ -179,6 +330,18 @@ _PROJECTABLE_FIELDS = ("scatter_length", "absorption_length", "qe")
 # ... (1-g)/L_M → NaN → zero charge + NaN gradients). ``mie_scatter_length`` huge ⇒
 # 1/L_M ≈ 0 (no Mie channel), which makes ``g`` immaterial.
 _MIE_DEFAULTS = {"mie_scatter_length": 1.0e9, "g": 0.0}
+
+# New calibrated-response / per-PMT placeholder fields (added with the nested
+# refactor). Existing configs omit them entirely → loaded NaN → filled with a
+# neutral default so the forward is unchanged. Per-sensor fields (gain/t0/walk)
+# are kept scalar here and broadcast to (num_sensors,) by the caller.
+_NEUTRAL_DEFAULTS = {
+    "spe_width": 0.0,
+    "tts": 0.0,
+    "gain": 1.0,
+    "t0": 0.0,
+    "walk": 0.0,
+}
 
 
 def _project_missing_scalars(kwargs, medium_path, qe_path, ref_wavelength_nm,
@@ -231,6 +394,12 @@ def _project_missing_scalars(kwargs, medium_path, qe_path, ref_wavelength_nm,
         else:
             scalar = default
         kwargs[field] = jnp.asarray(scalar, dtype=jnp.float32)
+
+    # New response / per-PMT placeholder scalars: neutral defaults when absent.
+    for field, default in _NEUTRAL_DEFAULTS.items():
+        v = kwargs[field]
+        if v.ndim == 0 and bool(jnp.isnan(v)):
+            kwargs[field] = jnp.asarray(default, dtype=jnp.float32)
 
 
 def load_detector_params(filepath: str, num_sensors: int = None,
@@ -293,8 +462,12 @@ def load_physics_config(filepath: str, num_sensors: int = None,
     medium_model_path = os.path.join(config_dir, medium_model) if medium_model else None
     qe_curve_path = os.path.join(config_dir, qe_curve) if qe_curve else None
 
+    # Read FLAT JSON keys for every leaf field. New response/per_pmt fields
+    # (spe_width, tts, gain, t0, walk) are typically absent from existing configs;
+    # _resolve_field returns NaN, which _project_missing_scalars fills with the
+    # neutral default below.
     kwargs = {}
-    for field in DetectorParams._fields:
+    for field in _FLAT_FIELDS:
         val = data.get(field, None)
         kwargs[field] = _resolve_field(val, config_dir)
 
@@ -308,8 +481,14 @@ def load_physics_config(filepath: str, num_sensors: int = None,
             # to neutral (1.0) rather than poisoning the array.
             fill = jnp.where(jnp.isnan(qe_corr), jnp.float32(1.0), qe_corr)
             kwargs['qe_corrections'] = jnp.ones(num_sensors) * fill
+        # Per-sensor placeholders (gain/t0/walk): broadcast scalar neutral
+        # defaults to (num_sensors,) so the in-memory pytree is well-shaped.
+        for field, neutral in (('gain', 1.0), ('t0', 0.0), ('walk', 0.0)):
+            v = kwargs[field]
+            if v.ndim == 0:
+                kwargs[field] = jnp.full(num_sensors, neutral, dtype=jnp.float32)
 
-    return DetectorParams(**kwargs), medium_model_path, qe_curve_path
+    return _nest_flat_kwargs(kwargs), medium_model_path, qe_curve_path
 
 
 def save_particle_params(params: ParticleParams, filepath: str):
@@ -366,26 +545,36 @@ def default_bounds(num_sensors: int):
     -------
     bounds_min, bounds_max : DetectorParams
     """
-    bounds_min = DetectorParams(
+    bounds_min = _nest_flat_kwargs(dict(
         scatter_length=jnp.array(0.0),
-        g = jnp.array(0.0),
-        mie_scatter_length = jnp.array(0.0),
+        mie_scatter_length=jnp.array(0.0),
+        g=jnp.array(0.0),
+        absorption_length=jnp.array(0.0),
         wall_reflection_rate=jnp.array(0.0),
         sensor_reflection_rate=jnp.array(0.0),
-        absorption_length=jnp.array(0.0),
         qe=jnp.array(0.0),
+        spe_width=jnp.array(0.0),
+        tts=jnp.array(0.0),
         qe_corrections=jnp.zeros(num_sensors),
-    )
-    bounds_max = DetectorParams(
+        gain=jnp.full(num_sensors, 0.3),
+        t0=jnp.full(num_sensors, -10.0),
+        walk=jnp.full(num_sensors, -5.0),
+    ))
+    bounds_max = _nest_flat_kwargs(dict(
         scatter_length=jnp.array(100.0),
-        g = jnp.array(1.0),
-        mie_scatter_length = jnp.array(100.0),
+        mie_scatter_length=jnp.array(100.0),
+        g=jnp.array(1.0),
+        absorption_length=jnp.array(500.0),
         wall_reflection_rate=jnp.array(0.5),
         sensor_reflection_rate=jnp.array(0.4),
-        absorption_length=jnp.array(500.0),
         qe=jnp.array(1.0),
+        spe_width=jnp.array(1.0),
+        tts=jnp.array(5.0),
         qe_corrections=jnp.full(num_sensors, 2.0),
-    )
+        gain=jnp.full(num_sensors, 3.0),
+        t0=jnp.full(num_sensors, 10.0),
+        walk=jnp.full(num_sensors, 5.0),
+    ))
     return bounds_min, bounds_max
 
 
@@ -405,28 +594,46 @@ def make_optimization_mask(params, trainable_fields):
         Leaves are ``True`` (scalar or array-shaped) where the field is
         trainable, ``False`` otherwise.  Suitable for ``optax.masked``.
     """
-    mask_dict = {}
-    for field in params._fields:
-        val = getattr(params, field)
-        if field in trainable_fields:
-            mask_dict[field] = jax.tree.map(lambda x: True, val)
-        else:
-            mask_dict[field] = jax.tree.map(lambda x: False, val)
-    return type(params)(**mask_dict)
+    def build(node):
+        # Recurse into nested NamedTuples, keying the decision on the LEAF field
+        # name. For DetectorParams this descends scattering/absorption/... into
+        # their leaf fields (scatter_length, gain, tts, ...).
+        fields = getattr(type(node), "_fields", None)
+        if fields is None:
+            # Reached a leaf array — caller decided trainability already.
+            raise RuntimeError("build() expects a NamedTuple node")
+        out = {}
+        for field in fields:
+            val = getattr(node, field)
+            sub_fields = getattr(type(val), "_fields", None)
+            if sub_fields is not None:
+                # Nested sub-tuple: recurse (decision happens on its leaves).
+                out[field] = build(val)
+            else:
+                flag = field in trainable_fields
+                out[field] = jax.tree.map(lambda x: flag, val)
+        return type(node)(**out)
+
+    return build(params)
 
 
 def create_default_detector_params(num_sensors: int) -> DetectorParams:
     """Sensible initialization defaults for calibration optimization."""
-    return DetectorParams(
+    return _nest_flat_kwargs(dict(
         scatter_length=jnp.array(50.0),
-        g = jnp.array(0.85),
-        mie_scatter_length = jnp.array(50.0),
+        mie_scatter_length=jnp.array(50.0),
+        g=jnp.array(0.85),
+        absorption_length=jnp.array(150.0),
         wall_reflection_rate=jnp.array(0.2),
         sensor_reflection_rate=jnp.array(0.2),
-        absorption_length=jnp.array(150.0),
         qe=jnp.array(0.2),
+        spe_width=jnp.array(0.0),
+        tts=jnp.array(0.0),
         qe_corrections=jnp.ones(num_sensors),
-    )
+        gain=jnp.ones(num_sensors),
+        t0=jnp.zeros(num_sensors),
+        walk=jnp.zeros(num_sensors),
+    ))
 
 
 def create_default_particle_params() -> ParticleParams:
@@ -448,13 +655,18 @@ def default_gradient_scales(num_sensors: int) -> DetectorParams:
 
         scaled_grads = jax.tree.map(lambda g, s: g * s, grads, scales)
     """
-    return DetectorParams(
+    return _nest_flat_kwargs(dict(
         scatter_length=jnp.array(1.0),
-        g = jnp.array(1.0),
-        mie_scatter_length = jnp.array(1.0),
+        mie_scatter_length=jnp.array(1.0),
+        g=jnp.array(1.0),
+        absorption_length=jnp.array(1.0),
         wall_reflection_rate=jnp.array(1.0),
         sensor_reflection_rate=jnp.array(1.0),
-        absorption_length=jnp.array(1.0),
         qe=jnp.array(1.0),
+        spe_width=jnp.array(1.0),
+        tts=jnp.array(1.0),
         qe_corrections=jnp.full(num_sensors, 0.1),
-    )
+        gain=jnp.full(num_sensors, 0.1),
+        t0=jnp.full(num_sensors, 0.1),
+        walk=jnp.full(num_sensors, 0.1),
+    ))

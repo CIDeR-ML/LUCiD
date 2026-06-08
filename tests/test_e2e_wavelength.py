@@ -138,7 +138,7 @@ def test_3_calibration_manual_dp():
     det = generate_detector(SK_LIKE_GEOM)
     N = len(det.all_points)
 
-    dp = DetectorParams(
+    dp = DetectorParams.from_flat(
         scatter_length=jnp.array(50.0),
         wall_reflection_rate=jnp.array(0.2),
         sensor_reflection_rate=jnp.array(0.2),
@@ -175,7 +175,7 @@ def test_4_calibration_scalar_forced():
     det = generate_detector(SK_LIKE_GEOM)
     N = len(det.all_points)
 
-    dp = DetectorParams(
+    dp = DetectorParams.from_flat(
         scatter_length=jnp.array(50.0),
         wall_reflection_rate=jnp.array(0.2),
         sensor_reflection_rate=jnp.array(0.2),
@@ -277,7 +277,7 @@ def test_6_data_old_root():
     det = generate_detector(SK_LIKE_GEOM)
     N = len(det.all_points)
 
-    dp = DetectorParams(
+    dp = DetectorParams.from_flat(
         scatter_length=jnp.array(50.0),
         wall_reflection_rate=jnp.array(0.2),
         sensor_reflection_rate=jnp.array(0.2),
@@ -349,7 +349,7 @@ def test_7_data_new_root():
     det = generate_detector(SK_LIKE_GEOM)
     N = len(det.all_points)
 
-    dp = DetectorParams(
+    dp = DetectorParams.from_flat(
         scatter_length=jnp.array(50.0),
         wall_reflection_rate=jnp.array(0.2),
         sensor_reflection_rate=jnp.array(0.2),
@@ -445,7 +445,7 @@ def test_9_gradient_flow():
     N = len(det.all_points)
     sp = jnp.array(det.all_points)
 
-    dp = DetectorParams(
+    dp = DetectorParams.from_flat(
         scatter_length=jnp.array(50.0),
         wall_reflection_rate=jnp.array(0.2),
         sensor_reflection_rate=jnp.array(0.2),
@@ -482,8 +482,8 @@ def test_9_gradient_flow():
     try:
         loss, grads = jax.value_and_grad(loss_fn)(dp)
 
-        wall_grad_finite = bool(jnp.isfinite(grads.wall_reflection_rate))
-        sensor_grad_finite = bool(jnp.isfinite(grads.sensor_reflection_rate))
+        wall_grad_finite = bool(jnp.isfinite(grads.reflection.wall_reflection_rate))
+        sensor_grad_finite = bool(jnp.isfinite(grads.reflection.sensor_reflection_rate))
         loss_finite = bool(jnp.isfinite(loss))
         all_grads_finite = all(bool(jnp.all(jnp.isfinite(g)))
                                for g in jax.tree.leaves(grads))
@@ -493,10 +493,10 @@ def test_9_gradient_flow():
                f"loss={float(loss):.6f}")
         report("9b_gradient_wall_reflection_finite",
                wall_grad_finite,
-               f"grad_wall_reflection_rate={float(grads.wall_reflection_rate):.6e}")
+               f"grad_wall_reflection_rate={float(grads.reflection.wall_reflection_rate):.6e}")
         report("9c_gradient_sensor_reflection_finite",
                sensor_grad_finite,
-               f"grad_sensor_reflection_rate={float(grads.sensor_reflection_rate):.6e}")
+               f"grad_sensor_reflection_rate={float(grads.reflection.sensor_reflection_rate):.6e}")
         report("9d_all_gradients_finite",
                all_grads_finite,
                f"grad fields: {[f for f in DetectorParams._fields]}")
@@ -561,7 +561,7 @@ def test_10_edge_cases():
 
     det = generate_detector(WCTE_GEOM)
     N = len(det.all_points)
-    dp = DetectorParams(
+    dp = DetectorParams.from_flat(
         scatter_length=jnp.array(50.0),
         wall_reflection_rate=jnp.array(0.2),
         sensor_reflection_rate=jnp.array(0.2),

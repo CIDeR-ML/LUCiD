@@ -105,12 +105,15 @@ def main():
     # Downsize qe_corrections to this geometry's sensor count.
     from lucid.detector_params import DetectorParams
     N_sensors = len(det.all_points)
-    dp = DetectorParams(
-        scatter_length=dp_full.scatter_length,
-        wall_reflection_rate=dp_full.wall_reflection_rate,
-        sensor_reflection_rate=dp_full.sensor_reflection_rate,
-        absorption_length=dp_full.absorption_length,
-        qe=dp_full.qe,
+    dp = DetectorParams.from_flat(
+        num_sensors=N_sensors,
+        scatter_length=dp_full.scattering.scatter_length,
+        mie_scatter_length=dp_full.scattering.mie_scatter_length,
+        g=dp_full.scattering.g,
+        wall_reflection_rate=dp_full.reflection.wall_reflection_rate,
+        sensor_reflection_rate=dp_full.reflection.sensor_reflection_rate,
+        absorption_length=dp_full.absorption.absorption_length,
+        qe=dp_full.response.qe,
         qe_corrections=jnp.ones(N_sensors),
     )
 

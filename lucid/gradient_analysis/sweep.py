@@ -59,22 +59,49 @@ class SweepParam:
 # Helpers
 # ---------------------------------------------------------------------------
 
+def _find_leaf(params, field):
+    """Locate a (possibly nested) leaf ``field``.
+
+    Returns ``(parent, attr)`` where ``getattr(parent, attr)`` is the leaf.
+    Supports both flat NamedTuples (``ParticleParams``) and DetectorParams'
+    physics-nested sub-tuples — ``field`` keys on the LEAF name (e.g.
+    ``'scatter_length'``, ``'gain'``).
+    """
+    if field in getattr(type(params), "_fields", ()):
+        return params, field
+    for attr in getattr(type(params), "_fields", ()):
+        child = getattr(params, attr)
+        if field in getattr(type(child), "_fields", ()):
+            return child, field
+    raise AttributeError(f"{type(params).__name__} has no leaf field {field!r}")
+
+
 def get_param_value(params, sp):
-    """Extract scalar value for a SweepParam from a NamedTuple."""
-    val = getattr(params, sp.field)
+    """Extract scalar value for a SweepParam from a (possibly nested) NamedTuple."""
+    parent, attr = _find_leaf(params, sp.field)
+    val = getattr(parent, attr)
     return float(val[sp.index]) if sp.index is not None else float(val)
 
 
 def set_param_value(params, sp, value):
-    """Return params with one field replaced according to SweepParam."""
-    arr = getattr(params, sp.field)
+    """Return params with one (possibly nested) leaf field replaced."""
+    parent, attr = _find_leaf(params, sp.field)
+    arr = getattr(parent, attr)
     idx = sp.index if sp.index is not None else ()
-    return params._replace(**{sp.field: arr.at[idx].set(value)})
+    new_parent = parent._replace(**{attr: arr.at[idx].set(value)})
+    if parent is params:
+        return new_parent  # flat case: leaf lived directly on params
+    # Nested: find which top-level attr holds `parent` and replace it.
+    for top_attr in type(params)._fields:
+        if getattr(params, top_attr) is parent:
+            return params._replace(**{top_attr: new_parent})
+    raise AttributeError(f"could not locate sub-tuple for field {sp.field!r}")
 
 
 def get_grad_component(grads, sp):
-    """Extract the gradient component for a SweepParam."""
-    val = getattr(grads, sp.field)
+    """Extract the gradient component for a (possibly nested) SweepParam."""
+    parent, attr = _find_leaf(grads, sp.field)
+    val = getattr(parent, attr)
     return float(val[sp.index]) if sp.index is not None else float(val)
 
 
