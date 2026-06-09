@@ -21,7 +21,7 @@ from lucid.geometry import generate_detector
 from lucid.simulation import setup_event_simulator
 from lucid.sources import laser_source, isotropic_source
 from lucid.detector_params import DetectorParams
-from lucid.fitting import build_calibration_problem, crb
+from lucid.fitting import build_problem, crb
 from lucid.wavelength.optical_model import CONTROL_WAVELENGTHS_NM
 
 GEOM = os.path.join(_ROOT, 'config', 'SK_like_geom_config.json')
@@ -62,7 +62,7 @@ def main():
     THR = 0.03
     for field, name in [('abs_dev', 'L_abs(λ)'), ('rayleigh_dev', 'L_R(λ)')]:
         try:
-            prob = build_calibration_problem(sim, srcs, dp, [field], key=jax.random.PRNGKey(1))
+            prob = build_problem(sim, srcs, dp, [field], key=jax.random.PRNGKey(1))
             c = crb(prob['source_models'], prob['theta_true'], NS, nb_h=2)
             sig = c['sigma']
             dof = int(np.sum(sig < THR))

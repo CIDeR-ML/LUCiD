@@ -27,7 +27,7 @@ from lucid.geometry import generate_detector
 from lucid.simulation import setup_event_simulator
 from lucid.sources import isotropic_source, laser_source
 from lucid.detector_params import DetectorParams
-from lucid.fitting import build_calibration_problem, fit, crb
+from lucid.fitting import build_problem, fit, crb
 
 GEOM = os.path.join(_ROOT, 'config', 'SK_like_geom_config.json')
 GK = dict(n_cap=150, n_angular=250, n_height=150)
@@ -115,7 +115,7 @@ def main():
     for name, srcs in SS.items():
         try:
             t0 = time.time()
-            prob = build_calibration_problem(sim, srcs, DP_TRUE, FIELDS7, key=jax.random.PRNGKey(1))
+            prob = build_problem(sim, srcs, DP_TRUE, FIELDS7, key=jax.random.PRNGKey(1))
             c = crb(prob['source_models'], prob['theta_true'], NS, nb_h=nb_h)
             crb_by_set[name] = c['sigma']
             emit(f'> built CRB[{name}] in {time.time()-t0:.0f}s')
@@ -148,7 +148,7 @@ def main():
     emit('')
     try:
         srcs = SS['multi_source']
-        prob = build_calibration_problem(sim, srcs, DP_TRUE, FIELDS7, key=jax.random.PRNGKey(1))
+        prob = build_problem(sim, srcs, DP_TRUE, FIELDS7, key=jax.random.PRNGKey(1))
         rng = np.random.default_rng(0)
         start = prob['theta0'] + rng.uniform(-0.2, 0.2, len(FIELDS7))
         steps = 50 if QUICK else 120
