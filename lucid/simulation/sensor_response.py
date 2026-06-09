@@ -45,55 +45,82 @@ def make_hits_simulation(
 
 
 import numpy as _np
-from scipy.special import ndtri as _ndtri, gammaln as _gammaln
+from scipy.special import gammaln as _gammaln, log_ndtr as _log_ndtr
 
 # ---------------------------------------------------------------------------
-# TTS occupancy early-bias: E[min of N iid N(0,1) | N ~ Poisson(μ), N≥1].
+# TTS occupancy order-statistic, Poisson-conditioned: the per-PMT first-arrival.
 #
-# A per-PE transit-time spread sigma pulls a PMT's first-arrival earlier by
-# sigma·E[min over its detected PEs]. The detected count is Poisson(μ) and the
-# first-arrival is only recorded when N≥1, so the physical bias is the
-# Poisson-MIXED, N≥1-CONDITIONED order statistic — NOT E[min of exactly μ draws].
-# These agree at high occupancy but diverge badly at μ≲1, which is exactly the
-# low-occupancy regime where the timing levers (wall_refl, blue L_abs below their
-# charge floors) live — so the conditioning is not a detail.
+# A per-PE transit-time spread sigma makes a PMT with N detected PEs report
+#   first_arrival = t_geo + sigma · min(z_1..z_N),  z_i ~ N(0,1).
+# N is Poisson(μ) and the hit is only recorded when N≥1, so over flashes
+#   E[first - t_geo] = sigma · E[min | N~Poisson(μ), N≥1]      (the EARLY BIAS → t0/mean)
+#   Var[first]       = sigma² · Var[min | N~Poisson(μ), N≥1]   (the SPREAD → TTS)
+# Both are Poisson-MIXED, N≥1-CONDITIONED order statistics — NOT the "μ fixed draws"
+# version, which fails badly at μ≲1, exactly the low-occupancy regime where the timing
+# levers live. The MEAN bias is nearly degenerate with a per-PMT t0 (t0 absorbs it), so
+# TTS is identified from the VARIANCE (the spread is t0-independent) — hence both lookups.
 #
-# Built once at import from the Blom per-count means m_n = E[min of n N(0,1)]
-# (deterministic, no simulation); evaluated in the forward by jnp.interp.
+# Built once at import by exact quadrature of the order-statistic density
+#   f_n(x) = n φ(x) S(x)^(n-1),  S = 1-Φ,  giving m_n=E[min_n], v_n=Var[min_n],
+# then Poisson-conditioned over μ. Deterministic; evaluated in-forward by jnp.interp.
 # ---------------------------------------------------------------------------
 _NMAX_PE = 600
-_n_pe = _np.arange(1, _NMAX_PE + 1)
-_BLOM_A = 0.375
-_m_n = -_ndtri((_n_pe - _BLOM_A) / (_n_pe - 2.0 * _BLOM_A + 1.0))   # E[min of n], ≤0; m_1=0
 
 
-def _build_occ_bias_table():
+def _order_stat_moments():
+    """Exact E[min of n N(0,1)] and Var[min of n] for n=1..NMAX via quadrature."""
+    x = _np.linspace(-12.0, 8.0, 8000)
+    dx = x[1] - x[0]
+    logphi = -0.5 * x * x - 0.5 * _np.log(2.0 * _np.pi)
+    logS = _log_ndtr(-x)                                  # log(1-Φ(x)), stable
+    n = _np.arange(1, _NMAX_PE + 1)
+    m = _np.zeros(_NMAX_PE); v = _np.zeros(_NMAX_PE)
+    for i, nn in enumerate(n):
+        f = _np.exp(_np.log(nn) + logphi + (nn - 1) * logS)
+        norm = f.sum() * dx
+        mi = (x * f).sum() * dx / norm
+        qi = (x * x * f).sum() * dx / norm
+        m[i] = mi; v[i] = max(qi - mi * mi, 1e-9)
+    return m, v
+
+
+_M_N, _V_N = _order_stat_moments()
+
+
+def _build_occ_tables():
     mu_grid = _np.concatenate([[1e-8], _np.geomspace(1e-3, 400.0, 800)])
-    bias = _np.zeros_like(mu_grid)
+    bias = _np.zeros_like(mu_grid); var = _np.zeros_like(mu_grid)
+    n = _np.arange(1, _NMAX_PE + 1)
     for i, mu in enumerate(mu_grid):
         if mu < 1e-6:
-            bias[i] = 0.0                       # only N=1 contributes → m_1 = 0
+            bias[i] = _M_N[0]; var[i] = _V_N[0]          # only N=1 (m_1≈0, v_1≈1)
             continue
-        logp = -mu + _n_pe * _np.log(mu) - _gammaln(_n_pe + 1.0)   # log P(N=n)
-        w = _np.exp(logp)
-        denom = 1.0 - _np.exp(-mu)              # P(N≥1)
-        bias[i] = float(_np.sum(w * _m_n) / max(denom, 1e-300))
-    return mu_grid, bias
+        logp = -mu + n * _np.log(mu) - _gammaln(n + 1.0)
+        w = _np.exp(logp) / max(1.0 - _np.exp(-mu), 1e-300)   # P(N=n | N≥1)
+        em = float(_np.sum(w * _M_N))
+        e2 = float(_np.sum(w * (_V_N + _M_N ** 2)))           # E[min² | N≥1]
+        bias[i] = em; var[i] = max(e2 - em * em, 1e-9)
+    return mu_grid, bias, var
 
 
-_OCC_MU_GRID_NP, _OCC_BIAS_NP = _build_occ_bias_table()
+_OCC_MU_GRID_NP, _OCC_BIAS_NP, _OCC_VAR_NP = _build_occ_tables()
 _OCC_MU_GRID = jnp.asarray(_OCC_MU_GRID_NP)
 _OCC_BIAS = jnp.asarray(_OCC_BIAS_NP)
+_OCC_VAR = jnp.asarray(_OCC_VAR_NP)
 
 
 def _occ_bias_mean(mu):
     """Poisson-conditioned TTS occupancy early-bias E[min | N~Poisson(μ), N≥1] (≤0).
-
-    →0 as μ→0 (a lone PE has E[N(0,1)]=0) and → −√(2 ln μ) for large μ. Differentiable
-    in μ via ``jnp.interp``. Replaces the cruder Blom-of-μ approximation (which ignored
-    the Poisson count fluctuation and the N≥1 conditioning, failing at low occupancy).
-    """
+    →0 as μ→0, → −√(2 ln μ) for large μ. The per-PMT first-arrival MEAN shift is
+    ``tts · _occ_bias_mean(μ)``. Differentiable in μ via ``jnp.interp``."""
     return jnp.interp(mu, _OCC_MU_GRID, _OCC_BIAS)
+
+
+def _occ_bias_var(mu):
+    """Poisson-conditioned Var[min | N~Poisson(μ), N≥1] (∈(0,1]). The per-PMT
+    first-arrival VARIANCE is ``tts² · _occ_bias_var(μ)`` — the t0-independent signal
+    that identifies TTS. →1 as μ→0 (a single N(0,1)), shrinks as occupancy rises."""
+    return jnp.interp(mu, _OCC_MU_GRID, _OCC_VAR)
 
 
 def make_hits_moments(
