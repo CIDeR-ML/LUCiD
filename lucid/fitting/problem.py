@@ -1,110 +1,136 @@
-"""Bridge: DetectorParams + setup_event_simulator → a Gauss-Newton/Fisher problem.
+"""Bridge: a DetectorParams + setup_event_simulator calibration → the GN/Fisher inputs.
 
-Turns a calibration setup (a sim callable ``sim(source, detector_params, key)`` plus a
-truth ``DetectorParams`` and a list of sources) into the ``SourceModel`` forwards,
-initial ``theta`` vector, and truth observables the generic fitter/Fisher consume.
+You name the leaves you fit; everything else is read from structure (see
+:mod:`lucid.fitting.partition`). ``calibrate`` partitions ``dp_true`` into trained/frozen
+pytrees, builds the per-source forwards that ``combine`` the optimiser vector back into a
+full DetectorParams, and returns the inputs the generic
+:func:`lucid.fitting.gauss_newton.fit` and :func:`lucid.fitting.fisher.crb` consume.
 
-The GLOBAL parameters being fitted are a chosen subset of DetectorParams LEAF fields
-(scalars or λ-curve arrays); they are raveled into a single LOG-space vector ``theta``
-(all calibration globals are positive). The per-PMT QE/gain factor is the multiplicative
-Schur block ``k`` — handled by the fitter, not part of ``theta`` — so the forwards set
-``qe_corrections=1`` and the truth bakes in the truth ``k``.
+Global leaves (scalars + λ-curves) become the dense GN block, each optimised in its
+natural space (log for positive-bounded, linear for signed); the single per-PMT leaf
+(e.g. ``qe_corrections``) is the multiplicative Schur block ``k`` handled inside ``fit``.
+
+    res = calibrate(sim, sources, dp_true,
+                    train=['scatter_length', 'absorption_length', 'qe_corrections'])
 """
 
 import numpy as np
 import jax
 import jax.numpy as jnp
 
-from lucid.detector_params import _flatten_detector_params, _nest_flat_kwargs
-from lucid.fitting.gauss_newton import SourceModel
+from lucid.fitting.gauss_newton import SourceModel, fit as _gn_fit
+from lucid.fitting.partition import partition, combine, classify
+from lucid.detector_params import _FIELD_TO_SUBTUPLE as _F2S
 
 
-def _ravel_fields(flat, fields):
-    """Concatenate the named leaf values (flattened) into one vector; return (vec, shapes)."""
-    parts, shapes = [], []
-    for f in fields:
-        v = np.asarray(flat[f], dtype=np.float64).ravel()
-        shapes.append((f, np.asarray(flat[f]).shape))
-        parts.append(v)
-    return np.concatenate(parts) if parts else np.zeros(0), shapes
+def _sub(leaf):
+    """Leaf name → owning sub-tuple attribute (e.g. 'scatter_length' → 'scattering')."""
+    return _F2S[leaf]
 
 
-def _unravel_fields(vec, shapes):
-    """Inverse of ``_ravel_fields``: split ``vec`` back into {field: array}."""
-    out, i = {}, 0
-    for f, shp in shapes:
-        size = int(np.prod(shp)) if shp else 1
-        out[f] = jnp.asarray(vec[i:i + size]).reshape(shp)
-        i += size
-    return out
+def _to_opt(value, space):
+    a = jnp.asarray(value)
+    return jnp.log(jnp.clip(a, 1e-12, None)) if space == 'log' else a
 
 
-def build_calibration_problem(sim, sources, dp_true, trainable_fields,
-                              *, per_pmt_field='qe_corrections', truth_k=None,
-                              key=None, num_sensors=None):
-    """Build the fitter inputs for a charge calibration.
+def _from_opt(vec, space):
+    return jnp.exp(vec) if space == 'log' else vec
+
+
+def build_problem(sim, sources, dp_true, train, *, truth_k=None, key=None,
+                  n_sensors=None):
+    """Partition ``dp_true`` by ``train`` and assemble the fitter inputs.
 
     Parameters
     ----------
-    sim : callable
-        Calibration simulator ``sim(source, detector_params, key) -> (charges, times)``
-        (from ``setup_event_simulator(..., is_calibration=True)``; ``hit_mode='aggregated'``).
-    sources : list
-        Calibration source objects passed to ``sim``.
-    dp_true : DetectorParams
-        Truth detector parameters.
-    trainable_fields : list[str]
-        Flat leaf names of the GLOBAL parameters to fit (e.g. 'scatter_length',
-        'absorption_length', 'mie_scatter_length', 'g', 'wall_reflection_rate',
-        'sensor_reflection_rate', 'qe', or λ-curve arrays like 'abs_dev').
-    per_pmt_field : str
-        The per-PMT multiplicative factor (default 'qe_corrections'); the truth bakes
-        in ``truth_k`` and the forwards use 1.
-    truth_k : array (num_sensors,) or None
-        Truth per-PMT factor (defaults ones).
+    sim : callable ``sim(source, detector_params, key) -> (charges, times)``.
+    sources : list of calibration source objects.
+    dp_true : DetectorParams truth.
+    train : iterable[str]
+        Leaf names / dotted paths to fit. Scalars & ``(N_CTRL,)`` curves form the global
+        block; the ONE ``(NS,)`` leaf (if any) is the per-PMT Schur factor.
+    truth_k : (NS,) or None — truth per-PMT factor baked into the observables (default 1).
 
     Returns
     -------
-    dict with: ``source_models`` (list[SourceModel]), ``theta0`` (log truth globals),
-    ``theta_true`` (== theta0), ``truth_charge`` (list per source), ``unravel`` (vec→dp),
-    ``shapes``, ``lk_true`` (log truth_k), ``num_sensors``.
+    dict with ``source_models``, ``theta0``/``theta_true`` (optimiser-space globals),
+    ``truth_charge`` (per source), ``unravel`` (vec[,k] → DetectorParams), ``spec``
+    (the :func:`classify` map), ``lk_true``, ``n_sensors``.
     """
     if key is None:
         key = jax.random.PRNGKey(0)
-    flat_true = {k: np.asarray(v) for k, v in _flatten_detector_params(dp_true).items()}
-    ns = num_sensors if num_sensors is not None else int(np.asarray(flat_true[per_pmt_field]).shape[0])
-    if truth_k is None:
-        truth_k = np.ones(ns)
+    theta_tree, fixed_tree = partition(dp_true, train)
+    spec = classify(theta_tree, n_sensors)
+    ns = spec['n_sensors']
+    glob = spec['globals']
+    ppmt = spec['per_pmt']
+    if len(ppmt) > 1:
+        raise ValueError(f"charge calibration supports one per-PMT Schur leaf, got "
+                         f"{[n for n, _, _ in ppmt]}")
+    pp_name = ppmt[0][0] if ppmt else None
 
-    vec_true, shapes = _ravel_fields(flat_true, trainable_fields)
-    theta0 = np.log(np.clip(vec_true, 1e-12, None))
+    # global optimiser vector (per-leaf space), in classify order
+    layout, parts = [], []
+    for n, sh, sp in glob:
+        val = getattr(getattr(theta_tree, _sub(n)), n)
+        parts.append(np.asarray(_to_opt(val, sp)).ravel())
+        layout.append((n, int(np.prod(sh)) if sh else 1, sp, sh))
+    theta0 = np.concatenate(parts) if parts else np.zeros(0)
 
-    flat_true_j = {k: jnp.asarray(v) for k, v in flat_true.items()}
+    truth_k = np.ones(ns) if truth_k is None else np.asarray(truth_k, float)
 
-    def unravel(theta_log, k_value=1.0):
-        """Build a DetectorParams from the log-global vector; per-PMT field set to k_value.
-        Fully JAX-traceable (called inside the jitted forward)."""
-        overrides = _unravel_fields(jnp.exp(jnp.asarray(theta_log)), shapes)
-        flat = dict(flat_true_j)
-        flat.update(overrides)
-        flat[per_pmt_field] = jnp.asarray(k_value) * jnp.ones(ns)
-        return _nest_flat_kwargs(flat)
+    def unravel(theta_vec, k_value=1.0):
+        """Optimiser vector (+ per-PMT factor) → full DetectorParams (JAX-traceable)."""
+        theta_vec = jnp.asarray(theta_vec)
+        updates, i = {}, 0
+        for n, sz, sp, sh in layout:
+            updates[n] = _from_opt(theta_vec[i:i + sz], sp).reshape(sh)
+            i += sz
+        th = theta_tree
+        for n, val in updates.items():
+            sub = _sub(n)
+            th = th._replace(**{sub: getattr(th, sub)._replace(**{n: val})})
+        if pp_name is not None:
+            sub = _sub(pp_name)
+            th = th._replace(**{sub: getattr(th, sub)._replace(
+                **{pp_name: jnp.asarray(k_value) * jnp.ones(ns)})})
+        return combine(th, fixed_tree)
 
-    # Truth observables: charge at the truth globals with the truth per-PMT k baked in.
-    flat_k = {k: jnp.asarray(v) for k, v in flat_true.items()}
-    flat_k[per_pmt_field] = jnp.asarray(truth_k)
-    dp_truth_k = _nest_flat_kwargs(flat_k)
-    truth_charge = [np.array(sim(src, dp_truth_k, key)[0]) for src in sources]
+    # truth observables: globals at truth, per-PMT factor = truth_k
+    dp_truth = unravel(theta0, 1.0)
+    if pp_name is not None:
+        sub = _sub(pp_name)
+        dp_truth = dp_truth._replace(**{sub: getattr(dp_truth, sub)._replace(
+            **{pp_name: jnp.asarray(truth_k)})})
+    truth_charge = [np.array(sim(src, dp_truth, key)[0]) for src in sources]
 
-    # Forwards: per-sensor MEAN charge at k=1 for each source (ek used as the sim key).
     def make_forward(src):
-        def forward(theta_log, ek, pk):
-            return sim(src, unravel(theta_log, 1.0), ek)[0]
+        def forward(theta_vec, ek, pk):
+            return sim(src, unravel(theta_vec, 1.0), ek)[0]
         return forward
-
     source_models = [SourceModel(make_forward(src)) for src in sources]
 
-    return dict(source_models=source_models, theta0=theta0, theta_true=theta0,
-                truth_charge=truth_charge, unravel=unravel, shapes=shapes,
-                lk_true=np.log(np.clip(truth_k, 1e-6, None)), num_sensors=ns,
-                trainable_fields=list(trainable_fields))
+    return dict(source_models=source_models, theta0=theta0, theta_true=theta0.copy(),
+                truth_charge=truth_charge, unravel=unravel, spec=spec,
+                lk_true=np.log(np.clip(truth_k, 1e-6, None)), n_sensors=ns,
+                pp_name=pp_name, layout=layout)
+
+
+def calibrate(sim, sources, dp_true, train, *, truth_k=None, key=None,
+              n_sensors=None, **fit_kw):
+    """End-to-end: :func:`build_problem` then run the constrained-Schur GN fit.
+
+    Extra keyword args are forwarded to :func:`lucid.fitting.gauss_newton.fit`.
+    Returns the ``fit`` result dict augmented with the ``problem`` and a ``dp_hat``
+    DetectorParams reconstructed at the fitted optimiser vector + per-PMT factor.
+    """
+    prob = build_problem(sim, sources, dp_true, train, truth_k=truth_k, key=key,
+                         n_sensors=n_sensors)
+    res = _gn_fit(prob['source_models'], prob['truth_charge'], prob['theta0'],
+                  prob['n_sensors'], **fit_kw)
+    res['problem'] = prob
+    # dp_hat carries the fitted per-PMT factor k (the recovered per-sensor correction),
+    # which the forward applied on top of qe_corrections=1.
+    res['dp_hat'] = prob['unravel'](res['log_theta'] if 'log_theta' in res else res['theta'],
+                                    res.get('k', 1.0))
+    return res
