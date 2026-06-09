@@ -15,3 +15,4 @@ from lucid.fitting.gauss_newton import (
 )
 from lucid.fitting.fisher import crb, SQRT12
 from lucid.fitting.problem import build_calibration_problem
+from lucid.fitting.timing import calibrate_timing
