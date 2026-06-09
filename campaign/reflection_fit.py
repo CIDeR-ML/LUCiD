@@ -90,11 +90,15 @@ def main():
         emit(f'| {f} | {truth[j]:.3g} | {np.exp(start[j]):.3g} | {rec[j]:.4g} | '
              f'{abs(rec[j]/truth[j]-1)*100:.1f}% | {sig[j]*100:.2f}% |')
     emit('')
-    mag = ['wall_R0', 'wall_p', 'cathode_nr', 'cathode_nk']
-    mag_fe = max(abs(rec[FIELDS.index(m)]/truth[FIELDS.index(m)]-1) for m in mag)
-    emit(f'**Magnitude params (wall_R0/p, cathode_nr/nk): max frac err {mag_fe*100:.1f}%** — '
-         f'charge-identifiable. Spec/diff fractions (wall_fspec/sensor_fspec) are charge-LOOSE '
-         f'(the spec/diff mix is the TIMING lever, not a charge one) — expected.')
+    emit('Angular reflection is PARTIALLY charge-identifiable (read the CRB column): '
+         'wall_R0 (normal reflectance) and the spec/diff fractions wall_fspec/sensor_fspec '
+         'are constrained — the fractions tightly (CRB ~0.4%), because the per-sensor '
+         'reflected-light PATTERN depends on the spec/diff split (so they are NOT charge-blind '
+         'as one might assume). The Schlick exponent wall_p is weakly constrained, and the '
+         'cathode Fresnel indices cathode_nr↔cathode_nk are NEAR-DEGENERATE (CRB ~50-65% — '
+         'they trade in producing the cathode reflectance magnitude), recovered near truth '
+         'only because they started near it. Pinning wall_p / the cathode pair needs more '
+         'incidence-angle diversity or the timing observable.')
     emit('')
     emit(f'_Finished in {(time.time()-t0)/60:.1f} min._')
 
