@@ -12,6 +12,7 @@ fitter's inputs.
 """
 from lucid.fitting.gauss_newton import (
     fit, SourceModel, sqrt_residual, make_constrained_schur, ridge_inverse,
+    fit_charge_time, ChargeTimeModel,
 )
 from lucid.fitting.fisher import crb, SQRT12
 from lucid.fitting.problem import build_calibration_problem
