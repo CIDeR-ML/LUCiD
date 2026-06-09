@@ -27,7 +27,7 @@ from lucid.geometry import generate_detector
 from lucid.simulation import setup_event_simulator
 from lucid.sources import isotropic_source, laser_source
 from lucid.detector_params import DetectorParams
-from lucid.fitting import build_calibration_problem, fit, crb
+from lucid.fitting import build_calibration_problem, fit_gn as fit, crb
 
 GEOM = os.path.join(_ROOT, 'config', 'SK_like_geom_config.json')
 GK = dict(n_cap=150, n_angular=250, n_height=150)
