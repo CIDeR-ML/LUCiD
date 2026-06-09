@@ -134,8 +134,14 @@ class PerPmtParams(NamedTuple):
     t0 : jnp.ndarray              shape (num_sensors,), per-sensor time offset, ns (default zeros)
     walk : jnp.ndarray            shape (num_sensors,), per-sensor time-walk (default zeros)
 
-    ``gain``, ``t0`` and ``walk`` are placeholders for a later calibration step;
-    their neutral defaults leave the current forward model unchanged.
+    ``gain`` (charge moments) and ``t0`` (first-arrival offset, the TQ-map constant) are
+    live calibration parameters. ``walk`` is the **electronics time-walk** (the charge-
+    AMPLITUDE-dependent threshold-crossing shift) — a distinct effect from the TTS
+    occupancy order-statistic that already lives in ``make_hits_moments``. It has **no
+    mechanism in the first-arrival engine** (which has no pulse shape / discriminator),
+    so it is INERT here and reserved for a future waveform-based timing calibration; do
+    not expect it to be fit by the first-arrival path. Neutral defaults leave the forward
+    unchanged.
     """
     qe_corrections: jnp.ndarray
     gain: jnp.ndarray
