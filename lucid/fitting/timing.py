@@ -55,6 +55,10 @@ def calibrate_timing(fa_mean_obs, fa_var_obs, t_geo, mu, n_flashes, *,
     W = (mu > 0).astype(float) if weights is None else np.asarray(weights, float)
     lit = W > 0
     n_lit = int(lit.sum())
+    if n_lit == 0:
+        return dict(t0_hat=np.zeros(NS), tts_hat=float('nan'), t0_floor=np.zeros(NS),
+                    tts_floor=float('inf'), lit=lit, n_lit=0,
+                    b_mean=np.zeros(NS), b_var=np.zeros(NS))
 
     b_mean = np.asarray(_occ_bias_mean(jnp.asarray(mu)))     # E[min | N≥1]
     b_var = np.asarray(_occ_bias_var(jnp.asarray(mu)))       # Var[min | N≥1]
