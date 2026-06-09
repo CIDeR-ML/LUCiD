@@ -8,7 +8,7 @@ exercised without the heavy photon forward.
 import numpy as np
 import jax.numpy as jnp
 
-from lucid.fitting import fit, crb, SourceModel
+from lucid.fitting import fit_gn as fit, crb, SourceModel
 from lucid.fitting.gauss_newton import make_constrained_schur, ridge_inverse
 
 
