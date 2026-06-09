@@ -1,25 +1,17 @@
-"""Calibration / reconstruction fitting.
+"""Unified calibration / reconstruction fitting.
 
-A fit is ``loss(params, key) -> scalar`` over a params pytree. The DEFAULT solver is the
-canonical optax loop — reverse-mode ``grad`` over the whole pytree, no flatten/Schur/FD:
+A single Gauss-Newton machine (consistent fixed-dataset, cached-Jacobian, constrained
+per-PMT Schur, median ridge) + the matching Fisher/CRB at truth (×√12 honesty), plus a
+bridge that turns a DetectorParams + setup_event_simulator calibration setup into the
+fitter's inputs.
 
-    from lucid.fitting import make_loss, fit, charge, gauge_mean_log
-    loss   = make_loss(sim, sources, observations, terms=[charge])
-    dp_hat = fit(loss, dp0, project=gauge_mean_log)
-
-New observable → add a term; new parameter → a leaf in the pytree; reconstruction → pass a
-track pytree; joint → pass ``(dp, track)``. The Gauss-Newton + Schur solver (``fit_gn``) and
-the Fisher/CRB (``crb``) stay available as the opt-in advanced path on the same contract.
+    from lucid.fitting import build_calibration_problem, fit, crb
+    prob = build_calibration_problem(sim, sources, dp_true, ['scatter_length', ...])
+    res  = fit(prob['source_models'], prob['truth_charge'], prob['theta0'], prob['num_sensors'])
+    cov  = crb(prob['source_models'], prob['theta_true'], prob['num_sensors'])
 """
-# Default fitter + loss primitives (the simple, pytree-native path).
-from lucid.fitting.optimize import fit, gauge_mean_log, gauge_mean
-from lucid.fitting.loss import (
-    make_loss, sqrt_mse, charge, charge_var, first_arrival,
-)
-
-# Advanced solver: Gauss-Newton + constrained per-PMT Schur + Fisher/CRB.
 from lucid.fitting.gauss_newton import (
-    fit as fit_gn, SourceModel, sqrt_residual, make_constrained_schur, ridge_inverse,
+    fit, SourceModel, sqrt_residual, make_constrained_schur, ridge_inverse,
 )
 from lucid.fitting.fisher import crb, SQRT12
 from lucid.fitting.problem import build_calibration_problem
