@@ -1,22 +1,18 @@
 """Unified calibration / reconstruction fitting.
 
 A single Gauss-Newton machine (consistent fixed-dataset, cached-Jacobian, constrained
-per-PMT Schur, median ridge) + the matching Fisher/CRB at truth (×√12 honesty). A
-calibration is specified by *partitioning* a DetectorParams — you name the leaves you
-fit and the fitter reads routing/space/gauge from their structure (no role table):
+per-PMT Schur, median ridge) + the matching Fisher/CRB at truth (×√12 honesty), plus a
+bridge that turns a DetectorParams + setup_event_simulator calibration setup into the
+fitter's inputs.
 
-    from lucid.fitting import calibrate
-    res = calibrate(sim, sources, dp_true,
-                    train=['scatter_length', 'absorption_length', 'qe_corrections'])
-    # res['dp_hat'] is the recovered DetectorParams; res['k'] the per-PMT factor.
-
-Lower-level: ``build_problem`` returns the fitter inputs; ``partition``/``combine`` are
-the structural split/merge; ``fit``/``crb`` are the generic optimiser + Fisher bound.
+    from lucid.fitting import build_calibration_problem, fit, crb
+    prob = build_calibration_problem(sim, sources, dp_true, ['scatter_length', ...])
+    res  = fit(prob['source_models'], prob['truth_charge'], prob['theta0'], prob['num_sensors'])
+    cov  = crb(prob['source_models'], prob['theta_true'], prob['num_sensors'])
 """
 from lucid.fitting.gauss_newton import (
     fit, SourceModel, sqrt_residual, make_constrained_schur, ridge_inverse,
 )
 from lucid.fitting.fisher import crb, SQRT12
-from lucid.fitting.partition import partition, combine, classify, trained_leaves
-from lucid.fitting.problem import build_problem, calibrate
+from lucid.fitting.problem import build_calibration_problem
 from lucid.fitting.timing import calibrate_timing
