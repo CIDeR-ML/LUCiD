@@ -107,9 +107,15 @@ def main():
          f'(truth spread 12%; per-seed corr median '
          f'{np.median([np.corrcoef(krec[m][klit], k_true[klit])[0,1] for m in range(M)]):.3f}).')
     emit('')
-    emit('Realized/CRB ≈ 1 (or below) confirms the recipe is statistically efficient on REAL '
-         'Poisson shot-noise and that the CRB×√12 is the honest bound (the implicit engine is '
-         '√12 quieter, so a fit ON the implicit engine looks ~√12 too good — quote the bound).')
+    emit('FINDING (negative): the joint Schur-k GN DIVERGES on a SINGLE-draw shot-noise '
+         'dataset — the charge-setting globals (L_abs, wall) collapse and the 10⁴ free per-PMT '
+         'k overfit the per-sensor noise (low corr, large σ), even at NPH=1e6. The implicit '
+         'engine (and the CRB) validate IDENTIFIABILITY but not OPTIMIZER STABILITY on raw '
+         'shot noise; the √N Jensen bias at low PE adds a downward pull. The documented '
+         'stabilizers — Polyak iterate-averaging + ridge, the closed-form k=Q/M + bake '
+         'staging (which IS stable on shot noise, slope 1.000), or multi-flash data averaging '
+         '— are required and are NOT yet in the unified fit_gn. That is the concrete next step '
+         'to truly close #4; quote the CRB×√12 as the honest bound meanwhile.')
     emit('')
     emit(f'_Finished in {(time.time()-t0)/60:.1f} min._')
 
