@@ -46,9 +46,17 @@ LABEL = ['g', 'L_R', 'L_M', 'L_abs', 'wall', 'sensor', 'qe']
 
 def make_sources(det, H, R):
     """Return the list of source objects for the SRC key."""
+    import math
     def L(pos, d): return laser_source(position=pos, direction=d, intensity=INTENS)
     def I(pos): return isotropic_source(position=pos, intensity=INTENS)
     top, bot = H/2 - 0.1, -H/2 + 0.1
+    def Adir(deg):                      # laser direction `deg` from vertical (toward +x)
+        return [math.sin(math.radians(deg)), 0.0, -math.cos(math.radians(deg))]
+    # location-sweep combos (laser_down + iso at varying radius; laser at varying angle)
+    loc = {f'laser_iso_r{int(f*100)}': [L([0, 0, top], [0, 0, -1]), I([R*f, 0, 0])]
+           for f in (0.0, 0.25, 0.5, 0.75, 0.95)}
+    loc.update({f'laserA{a}_iso': [L([0, 0, top], Adir(a)), I([0, 0, 0])] for a in (15, 30, 45, 60)})
+    loc.update({'iso_zhi': [I([0, 0, H*0.35])], 'iso_zmid': [I([0, 0, H*0.18])]})
     reg = {
         'laser_down': [L([0, 0, top], [0, 0, -1])],
         'laser_up': [L([0, 0, bot], [0, 0, 1])],
@@ -66,6 +74,7 @@ def make_sources(det, H, R):
         'all': [L([0, 0, top], [0, 0, -1]), L([0, 0, bot], [0, 0, 1]),
                 L([R - 0.1, 0, 0], [-1, 0, 0]), I([0, 0, 0]), I([R/2, 0, 0])],
     }
+    reg.update(loc)
     return reg[SRC]
 
 
