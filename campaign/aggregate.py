@@ -100,6 +100,36 @@ def main():
                      f'{(sh.get("sigma",0)/max(sh.get("crb",1e-9),1e-9)):.2f} |')
         emit('')
 
+    # --- per-PMT QE-map k=Q/M (tags kpmt_*) ---
+    kp = sorted([(j['src'], int(j['nph']), j['kpmt']) for k, j in d.items()
+                 if k.startswith('kpmt_') and 'kpmt' in j], key=lambda x: (x[0], x[1]))
+    if kp:
+        emit('## per-PMT QE-map k=Q/M (shot noise) vs budget — corr & RMS (truth spread 12%)')
+        emit('')
+        emit('| src | N | corr | RMS | n_lit |')
+        emit('|---|---|---|---|---|')
+        for s, n, m in kp:
+            emit(f'| {s} | {n:.0e} | {m["corr"]:.3f} | {pct(m["rms"])} | {m["nlit"]} |')
+        emit('')
+        emit('Photon-limited: RMS≈1/√(per-sensor occupancy); resolving the 12% spread needs '
+             'μ≫70 (high budget or multi-flash averaging). multi_laser_iso > laser_iso > iso_center.')
+        emit('')
+
+    # --- timing (tags tm_*) ---
+    tm = sorted([(j['src'], int(j['nph']), j['timing']) for k, j in d.items()
+                 if k.startswith('tm_') and 'timing' in j], key=lambda x: (x[0], x[1]))
+    if tm:
+        emit('## Timing (joint charge+time fit) vs budget — t0 (T-map), tts, Q-map')
+        emit('')
+        emit('| src | N | tts ferr | t0 corr | t0 RMS (ns) | k corr | qe ferr | L_abs ferr |')
+        emit('|---|---|---|---|---|---|---|---|')
+        for s, n, m in tm:
+            g = m.get('globals', {})
+            emit(f'| {s} | {n:.0e} | {pct(m["tts_ferr"])} | {m["t0_corr"]:.3f} | '
+                 f'{m["t0_rms"]:.2f} | {m["k_corr"]:.3f} | {pct(g.get("qe",float("nan")))} | '
+                 f'{pct(g.get("absorption_length",float("nan")))} |')
+        emit('')
+
     with open(REPORT, 'w') as f:
         f.write('\n'.join(L) + '\n')
     print(f'wrote {REPORT} ({len(d)} configs)')

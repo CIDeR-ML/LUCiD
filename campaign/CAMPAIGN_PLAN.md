@@ -85,3 +85,11 @@ dominates. Best single config = `all` (3 laser + 2 iso); for sensor_refl specifi
 a wall-region iso or tilt the laser.
 N-TARGETS (budget to hit ~1% CRB, laser_iso): qe ~1.7e8, L_abs ~1e9, wall ~4e9, sensor ~1e10
 (sensor needs ~60× qe's budget — or better geometry, not just photons).
+
+### P5 per-PMT QE-map k=Q/M N-scaling (DONE) — shot noise
+RMS = 30-70% on SINGLE-flash shot-noise data (corr 0.03→0.41 as budget 1e5→3e6) — well
+above the 12% truth spread ⇒ PHOTON-limited: RMS ≈ 1/√(per-sensor occupancy μ). Resolving a
+12% PMT-to-PMT spread needs μ≫70 → much higher budget OR multi-flash averaging (√N_flash).
+multi_laser_iso > laser_iso > iso_center (more light/sensor + more PMTs lit; n_lit rises to
+~all 10764 by 3e6). NOTE vs gap-5 (RMS 8%): gap-5 used the IMPLICIT (noise-free) forward; the
+physical single-flash QE map is shot-limited. The per-PMT map is the most photon-hungry output.
