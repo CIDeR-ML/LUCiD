@@ -65,10 +65,11 @@ def grid(phase):
         # shot-noise budget = integer-PE count → NPH = INTENS = the budget (sample mode).
         # Stabilized recipe (bake_k+polyak+Anscombe). Two source sets, budgets that fit 11GB.
         out = []
+        msd = os.environ.get('MSEEDS', '4')
         for s in ['laser_iso', 'multi_laser_iso']:
             for n in ['1e5', '3e5', '1e6', '3e6']:
                 out.append(J(f'rs_{s}_N{n}', NPH=n, INTENS=n, SRC=s, GRID='0', NB_H='2',
-                             RECOVER='1', SHOT='1', M='4', STEPS='60',
+                             RECOVER='1', SHOT='1', M=msd, STEPS='60',
                              BAKE_K='1', POLYAK='12', EPS='0.375'))
         return out
     raise SystemExit(f'unknown phase {phase}')
