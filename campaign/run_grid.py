@@ -53,6 +53,14 @@ def grid(phase):
                 out.append(J(f'kpmt_{s}_N{n}', NPH=n, INTENS=n, SRC=s, GRID='0',
                              KPMT='1', NB_H='1'))
         return out
+    if phase == 'timing_nscan':
+        # joint charge+timing fit (t0/tts/Q-map/T-map) vs budget (NPH=INTENS → occupancy ↑)
+        out = []
+        for s in ['laser_iso', 'multi_laser_iso']:
+            for n in ['1e5', '3e5', '1e6', '3e6']:
+                out.append(J(f'tm_{s}_N{n}', NPH=n, INTENS=n, SRC=s, GRID='0',
+                             TIMING='1', STEPS='80', NB_H='2'))
+        return out
     if phase == 'recover_shot_nscan':
         # shot-noise budget = integer-PE count → NPH = INTENS = the budget (sample mode).
         # Stabilized recipe (bake_k+polyak+Anscombe). Two source sets, budgets that fit 11GB.
