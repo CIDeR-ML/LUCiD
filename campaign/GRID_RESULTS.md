@@ -114,3 +114,22 @@
 | multi_laser_iso_N3e6 | 3e+06 | sensor | 33.94% | 2.66% | +18.0% | 1.20% | 0.04 |
 | multi_laser_iso_N3e6 | 3e+06 | qe | 4.60% | 0.00% | -4.4% | 0.90% | 0.20 |
 
+## per-PMT QE-map k=Q/M (shot noise) vs budget — corr & RMS (truth spread 12%)
+
+| src | N | corr | RMS | n_lit |
+|---|---|---|---|---|
+| iso_center | 1e+05 | 0.028 | 50.75% | 2096 |
+| iso_center | 3e+05 | 0.073 | 58.38% | 5117 |
+| iso_center | 1e+06 | 0.151 | 65.16% | 9391 |
+| iso_center | 3e+06 | 0.279 | 44.22% | 10703 |
+| laser_iso | 1e+05 | 0.054 | 65.60% | 2944 |
+| laser_iso | 3e+05 | 0.073 | 64.37% | 6358 |
+| laser_iso | 1e+06 | 0.175 | 61.98% | 10056 |
+| laser_iso | 3e+06 | 0.337 | 36.86% | 10754 |
+| multi_laser_iso | 1e+05 | 0.075 | 71.26% | 4311 |
+| multi_laser_iso | 3e+05 | 0.125 | 65.64% | 8009 |
+| multi_laser_iso | 1e+06 | 0.239 | 52.77% | 10569 |
+| multi_laser_iso | 3e+06 | 0.413 | 29.29% | 10763 |
+
+Photon-limited: RMS≈1/√(per-sensor occupancy); resolving the 12% spread needs μ≫70 (high budget or multi-flash averaging). multi_laser_iso > laser_iso > iso_center.
+
