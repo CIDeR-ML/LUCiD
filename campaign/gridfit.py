@@ -18,7 +18,8 @@ from lucid.geometry import generate_detector
 from lucid.simulation import setup_event_simulator
 from lucid.sources import laser_source, isotropic_source
 from lucid.detector_params import DetectorParams
-from lucid.fitting import build_calibration_problem, fit, crb
+from lucid.fitting import build_calibration_problem, fit, crb, fit_charge_time, ChargeTimeModel
+from lucid.detector_params import _flatten_detector_params, _nest_flat_kwargs
 
 GEOM = os.path.join(_ROOT, 'config', 'SK_like_geom_config.json')
 GK = dict(n_cap=150, n_angular=250, n_height=150) if os.environ.get('GRID', '1') == '1' \
@@ -36,6 +37,12 @@ EPS = float(os.environ.get('EPS', '1e-8'))
 BAKE_K = os.environ.get('BAKE_K', '0') == '1'
 POLYAK = int(os.environ.get('POLYAK', '0'))
 PERT = float(os.environ.get('PERT', '0.15'))
+KPMT = os.environ.get('KPMT', '0') == '1'        # per-PMT QE-map k=Q/M recovery (shot)
+KSPREAD = float(os.environ.get('KSPREAD', '0.12'))
+TIMING = os.environ.get('TIMING', '0') == '1'    # joint charge+timing fit (t0/tts vs N)
+T0SPREAD = float(os.environ.get('T0SPREAD', '3.0'))
+TTS = float(os.environ.get('TTS', '2.0'))
+WTIME = float(os.environ.get('WTIME', '0.3'))
 TAG = os.environ.get('TAG', f'{SRC}_N{NPH:.0e}')
 OUT = os.path.join(_HERE, 'grid_out'); os.makedirs(OUT, exist_ok=True)
 
@@ -127,6 +134,29 @@ def main():
                                       crb=float(c['sigma'][i]))
                        for i in range(len(FIELDS))}
         out['shot_M'] = M
+
+    if KPMT:
+        # per-PMT QE map via closed-form pooled k̂=ΣQ/ΣM on shot-noise data (the Q-map recipe)
+        rng = np.random.default_rng(0)
+        ktrue = np.exp(KSPREAD * rng.standard_normal(NS)); ktrue /= np.exp(np.mean(np.log(ktrue)))
+        dpk = DetectorParams.from_flat(
+            scatter_length=70., mie_scatter_length=3000., g=0.9, wall_reflection_rate=.2,
+            sensor_reflection_rate=.2, absorption_length=60., qe=0.07,
+            qe_corrections=jnp.asarray(ktrue))
+        sim_data = setup_event_simulator(GEOM, NPH, temperature=None, K=K, is_calibration=True,
+                                         use_expected_value=False, hit_mode='realistic',
+                                         apply_smearing=False, wavelength_mode=False, **GK)
+        Qsum = np.zeros(NS); Msum = np.zeros(NS) + 1e-12
+        for j, s in enumerate(srcs):
+            Qsum += np.asarray(sim_data(s, dpk, jax.random.PRNGKey(11 + j))[0])
+            Msum += np.asarray(sim(s, dp, jax.random.PRNGKey(99 + j))[0])   # dp has k=1
+        lit = (Qsum > 0) & (Msum > 0)
+        kh = np.where(lit, Qsum / Msum, 1.0)
+        kh = np.where(lit, kh / np.exp(np.mean(np.log(kh[lit]))), 1.0)
+        ktg = ktrue / np.exp(np.mean(np.log(ktrue[lit])))
+        out['kpmt'] = dict(corr=float(np.corrcoef(kh[lit], ktg[lit])[0, 1]),
+                           rms=float(np.sqrt(np.mean((kh[lit] / ktg[lit] - 1) ** 2))),
+                           nlit=int(lit.sum()), spread=KSPREAD)
 
     out['t_total'] = time.time() - t0
     with open(os.path.join(OUT, f'{TAG}.json'), 'w') as f:
