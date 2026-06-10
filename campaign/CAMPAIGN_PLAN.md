@@ -29,3 +29,16 @@ Single: `laser_down`, `laser_up`, `laser_wall`, `laser_diag`, `iso_center`,
 
 ## Running log
 (appended as runs complete)
+
+### P1 CRB N-scaling (DONE) — corrected (vary INTENS, NPH=1e6 fixed)
+CRB ∝ 1/√budget EXACTLY for all 7 params (√budget check = 1.00 across the board) — the
+Fisher bound is purely photon-limited (no systematics in the bound). Hierarchy (fixed
+budget): L_R≈g≈L_M (tightest) ≪ qe < L_abs < wall < sensor (loosest, info-limited).
+qe: 43%@1e5 → 0.43%@1e9; L_abs 94%→0.94%; sensor 328%→3.3%. So qe hits ~1% near 1.7e8.
+
+### P3 source/location CRB scan (DONE, budget 1e7)
+SINGLE source → amplitude params (L_abs/qe/wall/sensor) DEGENERATE (σ~1e5%, per-PMT k
+absorbs them); SHAPE params (L_R/g/L_M) stay constrained. Multi-source breaks the
+degeneracy; tightest = `all` (3 laser + 2 iso): L_abs 3.8%/qe 2.0%/wall 9.3%/sensor 15%.
+multi_laser_iso(4) close behind; iso_ring(4) looser on reflection (lasers > iso for
+reflection geometry). sensor_refl always the loosest reflectivity.

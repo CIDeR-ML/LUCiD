@@ -81,7 +81,8 @@ def main():
     sim = setup_event_simulator(GEOM, NPH, temperature=None, K=K, is_calibration=True,
                                 hit_mode='aggregated', wavelength_mode=False, **GK)
 
-    out = dict(tag=TAG, src=SRC, nph=NPH, k_iter=K, n_sources=len(srcs), grid=GK)
+    out = dict(tag=TAG, src=SRC, nph=NPH, intens=INTENS, k_iter=K,
+               n_sources=len(srcs), grid=GK)
 
     prob = build_calibration_problem(sim, srcs, dp, FIELDS, key=jax.random.PRNGKey(1), eps=EPS)
     c = crb(prob['source_models'], prob['theta_true'], NS, nb_h=NB_H)
