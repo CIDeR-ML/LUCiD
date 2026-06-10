@@ -57,3 +57,31 @@ Realized error = max(bias, scatter), and the two halves scale differently:
 - multi_laser_iso tightens CRB + somewhat reduces biases vs laser_iso, but amplitude biases
   are occupancy-driven (similar). BOTTOM LINE: CRB is 1/√N for all; the FIT reaches it only
   where neither the fit-floor (shape) nor the occupancy bias (amplitude) dominates.
+
+### loc_scan source-LOCATION sweep (DONE, budget 1e7) + P4 SYNTHESIS
+Location findings:
+- SINGLE isotropic constrains nothing well (uniform light → even L_R degenerate ~1e4%);
+  SINGLE laser pins the SHAPE params. ⇒ lasers carry geometric/shape info, iso does not.
+- iso toward the wall (r0→r95) OR laser tilt (15°→60°) IMPROVES sensor_refl (32.8%→~22%)
+  and qe (4.3%→2.8%): wider range of incidence angles on PMTs/walls constrains the
+  angle-dependent reflection + response.
+- L_abs (~9.4%) and L_R (~0.05%) are LOCATION-INSENSITIVE (bulk/shape, set by total light).
+
+## P4 SYNTHESIS — calibration taxonomy on the unified recipe
+PER-PARAMETER verdict (charge-only, the validated GN recipe):
+- L_R, g, L_M  — SHAPE params. Tightest CRB (≪0.1% at high budget). Constrained by ANY
+  laser (single source OK). FIT-LIMITED in practice (~0.1-2% realized floor, flat in N) —
+  the optimizer/forward noise, not photons, sets the floor. Location-insensitive.
+- qe          — needs SOURCE DIVERSITY (single→degenerate). CRB~1%@budget 1.7e8. De-biases
+  with occupancy (−96%@1e5→−0.2%@3e6 budget on shot noise). Off-center iso helps a little.
+- L_abs       — diversity-gated, CRB~3-9% (multi). Location-insensitive. Bias-limited on
+  shot noise at low occupancy; the hardest BULK param.
+- wall, sensor— the REFLECTION split: sensor_refl ALWAYS loosest (few photons hit sensors).
+  Helped MOST by wide-incidence-angle illumination (iso-at-wall / tilted laser) — sensor
+  32.8%→22% by moving the iso to r95. Bias-limited on shot noise, occupancy-driven.
+SCALING LAWS: CRB ∝ 1/√(physical budget) for ALL params (P1). The FIT reaches the CRB only
+where neither (a) the shape fit-floor (~0.1-2%, flat) nor (b) the amplitude occupancy-bias
+dominates. Best single config = `all` (3 laser + 2 iso); for sensor_refl specifically add
+a wall-region iso or tilt the laser.
+N-TARGETS (budget to hit ~1% CRB, laser_iso): qe ~1.7e8, L_abs ~1e9, wall ~4e9, sensor ~1e10
+(sensor needs ~60× qe's budget — or better geometry, not just photons).
