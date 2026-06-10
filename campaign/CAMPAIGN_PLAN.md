@@ -42,3 +42,18 @@ absorbs them); SHAPE params (L_R/g/L_M) stay constrained. Multi-source breaks th
 degeneracy; tightest = `all` (3 laser + 2 iso): L_abs 3.8%/qe 2.0%/wall 9.3%/sensor 15%.
 multi_laser_iso(4) close behind; iso_ring(4) looser on reflection (lasers > iso for
 reflection geometry). sensor_refl always the loosest reflectivity.
+
+### P2 N-scaling of the FIT (DONE) — recovery + shot-noise, stabilized (bake_k+polyak+Anscombe)
+Realized error = max(bias, scatter), and the two halves scale differently:
+- SHAPE (L_R/g/L_M): ~UNBIASED on shot noise (|bias|≤ few %); realized σ FLOORS at ~0.1-2%,
+  ABOVE the ultra-tight CRB (σ/CRB rises 0.4→3-8 as budget 1e5→3e6) ⇒ FIT/forward-limited,
+  ~FLAT in N, not photon-limited.
+- qe: shot bias −96%@1e5 → −0.2%@3e6 (laser_iso) — monotone de-biasing with occupancy.
+  VALIDATES #4: the stabilized recipe recovers qe to ~unbiased at adequate occupancy (vs the
+  −50% divergence with no stabilizers). So #4 closes with stabilizers + high N.
+- L_abs/wall/sensor: BIAS-limited at low N (low occupancy + √N Jensen + reflection
+  degeneracy), bias shrinks with N (L_abs −85→−20%, wall/sensor →~+18% by 3e6) — the hardest,
+  occupancy/degeneracy-limited. Need higher budget than 3e6 to de-bias fully.
+- multi_laser_iso tightens CRB + somewhat reduces biases vs laser_iso, but amplitude biases
+  are occupancy-driven (similar). BOTTOM LINE: CRB is 1/√N for all; the FIT reaches it only
+  where neither the fit-floor (shape) nor the occupancy bias (amplitude) dominates.
