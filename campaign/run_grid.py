@@ -37,6 +37,13 @@ def grid(phase):
                   GRID='0', NB_H='3') for s in SRC_KEYS]
     if phase == 'all_crb':
         return grid('crb_nscan') + grid('crb_srcscan')
+    if phase == 'loc_scan':
+        # location sweep at fixed budget: iso radius (laser+iso) + laser angle + iso height
+        keys = (['laser_iso_r0', 'laser_iso_r25', 'laser_iso_r50', 'laser_iso_r75', 'laser_iso_r95']
+                + ['laserA15_iso', 'laserA30_iso', 'laserA45_iso', 'laserA60_iso']
+                + ['iso_center', 'iso_zmid', 'iso_zhi'])
+        return [J(f'loc_{s}_I{I_SRC}', NPH=NPH_FIX, INTENS=I_SRC, SRC=s, GRID='0', NB_H='3')
+                for s in keys]
     if phase == 'recover_shot_nscan':
         # shot-noise budget = integer-PE count → NPH = INTENS = the budget (sample mode).
         # Stabilized recipe (bake_k+polyak+Anscombe). Two source sets, budgets that fit 11GB.
