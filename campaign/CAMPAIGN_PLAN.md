@@ -93,3 +93,26 @@ above the 12% truth spread ⇒ PHOTON-limited: RMS ≈ 1/√(per-sensor occupanc
 multi_laser_iso > laser_iso > iso_center (more light/sensor + more PMTs lit; n_lit rises to
 ~all 10764 by 3e6). NOTE vs gap-5 (RMS 8%): gap-5 used the IMPLICIT (noise-free) forward; the
 physical single-flash QE map is shot-limited. The per-PMT map is the most photon-hungry output.
+
+### P6 timing (t0/tts/T-map) N-scaling (DONE) — joint charge+time fit_charge_time
+The whole TQ map recovered jointly, occupancy-limited:
+- tts ferr 100%@1e5 → 45%@3e5 → 5%@1e6 → 0%@3e6 (laser_iso): tts (charge-INVISIBLE) is
+  recovered via the time residual; the occupancy bias signal strengthens with N. Validates
+  gap-3 (timing-as-GN-residual) end-to-end across N.
+- t0 (T-map) corr 0.19→0.96, RMS 13.96→0.90ns (resolves the 3ns spread); ~1/√N at high N.
+- Q-map k corr 0.40→0.92 — MUCH cleaner than the shot-noise closed-form (0.41) because the
+  joint fit uses the EXPECTED forward (implicit vs shot again).
+- optics qe/L_abs → ~few% by 3e6 (multi_laser_iso: qe 0.6%/L_abs 1.9%); multi ≳ laser_iso.
+Timing calibration needs N≳1e6 for a usable T-map; 3e6 for tts~0 and t0 RMS<1ns.
+
+## CAMPAIGN COMPLETE — overall taxonomy (charge + variance + timing, unified GN recipe)
+Every parameter falls into one of three limiting regimes:
+1. SHAPE (L_R/g/L_M): CRB ≪0.1%; constrained by any laser; FIT-FLOOR-limited ~0.1-2% (flat
+   in N) — optimizer/forward noise, not photons.
+2. AMPLITUDE/BULK (qe, L_abs): need source diversity; CRB 1/√budget; on shot noise
+   OCCUPANCY-limited (Jensen bias de-biases with N: qe→unbiased by 3e6).
+3. GEOMETRY-COUPLED (wall, sensor, t0, tts): reflection split (sensor always loosest) +
+   timing; helped by wide-incidence-angle illumination (iso-at-wall/tilted laser); timing
+   occupancy-limited (t0 RMS<1ns, tts~0 by 3e6); per-PMT maps photon-hungry (multi-flash).
+The unified recipe (GN+Schur + stabilizers Polyak/bake_k/Anscombe + the timing residual)
+reproduces & extends all the prior mie_hunter calibration physics on the real geometry.
