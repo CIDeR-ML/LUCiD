@@ -83,6 +83,27 @@ class TestGaussNewtonRecovery:
         assert np.abs(res['log_theta'] - THETA_TRUE).max() > 0.1
 
 
+class TestStabilizers:
+    def test_bake_k_recovers_globals_two_sources(self):
+        """Closed-form k=ΣQ/ΣM bake (GN on globals only) recovers θ + k on diverse sources."""
+        srcs = [SourceModel(_make_toy_forward(_A1)), SourceModel(_make_toy_forward(_A2))]
+        truth = _truth_charges()
+        start = THETA_TRUE + np.array([0.4, -0.3, 0.5, 0.3])
+        res = fit(srcs, truth, start, NS, steps=200, refresh=5, nb_h=1,
+                  step_max=0.3, ridge=1e-4, mu=0.02, bake_k=True)
+        assert np.abs(res['log_theta'] - THETA_TRUE).max() < 0.05
+        kr = res['k'] / K_TRUE; kr /= np.exp(np.mean(np.log(kr)))
+        assert np.std(np.log(kr)) < 0.05
+
+    def test_polyak_returns_averaged_iterate(self):
+        srcs = [SourceModel(_make_toy_forward(_A1)), SourceModel(_make_toy_forward(_A2))]
+        truth = _truth_charges()
+        start = THETA_TRUE + np.array([0.4, -0.3, 0.5, 0.3])
+        res = fit(srcs, truth, start, NS, steps=200, refresh=5, nb_h=1,
+                  step_max=0.3, ridge=1e-4, mu=0.02, polyak=20)
+        assert np.abs(res['log_theta'] - THETA_TRUE).max() < 0.05
+
+
 class TestFisherCRB:
     def test_crb_positive_and_honesty_factor(self):
         src = SourceModel(_toy_forward)

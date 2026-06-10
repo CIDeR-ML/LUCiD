@@ -124,7 +124,7 @@ class SourceModel:
 def fit(sources, truth_list, theta0, n_sensors, *,
         weights=None, lk0=None, steps=300, refresh=15, ridge=0.02, mu=0.3,
         eps=1e-8, step_max=0.08, kstep_max=0.3, fix=(), seed=0, nb_r=3, nb_h=4,
-        gauge_k=True):
+        gauge_k=True, polyak=0, bake_k=False):
     """Run the constrained-Schur Gauss-Newton fit.
 
     Parameters
@@ -143,6 +143,15 @@ def fit(sources, truth_list, theta0, n_sensors, *,
         Initial log per-PMT factor (defaults to zeros, i.e. k=1).
     fix : iterable[int]
         Indices of theta to hold fixed (zero gradient/step).
+    polyak : int
+        If >0, return the AVERAGE of the last ``polyak`` iterates (theta and k) instead of
+        the final one (Polyak/Ruppert iterate-averaging). Stabilises noisy/shot-noise fits;
+        default 0 = off (return the final iterate, byte-identical to before).
+    bake_k : bool
+        If True, replace the free per-PMT Schur block with the CLOSED-FORM pooled estimate
+        ``k = ΣQ / ΣM(theta)`` (re-baked each step from the data + current model), and run
+        Gauss-Newton on the GLOBALS ONLY. This is the shot-noise-robust per-PMT recipe (the
+        free Schur-k overfits a single noisy draw); default False = free Schur-k as before.
 
     Returns
     -------
@@ -153,15 +162,29 @@ def fit(sources, truth_list, theta0, n_sensors, *,
     n_params = int(np.asarray(theta0).shape[0])
     W = np.ones(n_sensors) if weights is None else np.asarray(weights, float)
     t_sqrt = [jnp.sqrt(jnp.asarray(truth_list[i]) + eps) for i in range(S)]
+    t_data = [np.asarray(truth_list[i], float) for i in range(S)]
     lp = jnp.asarray(theta0)
     lkv = jnp.zeros(n_sensors) if lk0 is None else jnp.asarray(lk0)
     fix = list(fix)
+    _zns = jnp.zeros(n_sensors)
 
     history = np.zeros((steps, n_params))
+    lp_acc = np.zeros(n_params); lk_acc = np.zeros(n_sensors); n_acc = 0
     Jcache = Htk = Minv = Pinv = None
 
     for s in range(steps):
         kb = 1000 + 777 * seed + 13 * s
+
+        if bake_k:
+            # closed-form pooled k = ΣQ / ΣM(theta) (M = model mean charge at k=1), gauged.
+            Qsum = np.zeros(n_sensors); Msum = np.zeros(n_sensors) + 1e-12
+            for i in range(S):
+                Mi = np.array(sg(sources[i].m(lp, _zns, *_keys(kb + 7000 * i)))) ** 2
+                Qsum += t_data[i]; Msum += Mi
+            lkv = jnp.asarray(np.log(np.clip(Qsum / Msum, 1e-6, None)))
+            if gauge_k:
+                lkv = lkv - jnp.mean(lkv)
+
         # residuals on the fixed per-step dataset
         rA, mA = [], []
         for i in range(S):
@@ -180,29 +203,40 @@ def fit(sources, truth_list, theta0, n_sensors, *,
                 Htk += (Jcache[i] * W[:, None]).T * Jk[None, :]
                 Hkk += W * (Jk * Jk)
             Htt /= S; Htk /= S; Hkk /= S
-            Minv = make_constrained_schur(Hkk) if gauge_k else (lambda X: (1.0 / Hkk) * X if np.ndim(X) == 1 else (1.0 / Hkk)[:, None] * X)
-            Pinv = ridge_inverse(Htt - Htk @ Minv(Htk.T), ridge=ridge, mu=mu)
+            if bake_k:                                   # k is fixed → no Schur reduction
+                Minv = None
+                Pinv = ridge_inverse(Htt, ridge=ridge, mu=mu)
+            else:
+                Minv = make_constrained_schur(Hkk) if gauge_k else (lambda X: (1.0 / Hkk) * X if np.ndim(X) == 1 else (1.0 / Hkk)[:, None] * X)
+                Pinv = ridge_inverse(Htt - Htk @ Minv(Htk.T), ridge=ridge, mu=mu)
 
         gt = np.zeros(n_params); gk = np.zeros(n_sensors)
         for i in range(S):
             gt += Jcache[i].T @ (W * rA[i])
             gk += W * (0.5 * mA[i]) * rA[i]
         gt /= S; gk /= S
-        geff = gt - Htk @ Minv(gk)
+        geff = gt if bake_k else gt - Htk @ Minv(gk)
         for i in fix:
             geff[i] = 0.0
         dth = -(Pinv @ geff)
         for i in fix:
             dth[i] = 0.0
-        dlk = -Minv(gk + Htk.T @ dth)
         lp = lp + jnp.asarray(np.clip(dth, -step_max, step_max))
-        lkv = lkv + jnp.asarray(np.clip(dlk, -kstep_max, kstep_max))
-        if gauge_k:
-            lkv = lkv - jnp.mean(lkv)
+        if not bake_k:                                   # free Schur-k step
+            dlk = -Minv(gk + Htk.T @ dth)
+            lkv = lkv + jnp.asarray(np.clip(dlk, -kstep_max, kstep_max))
+            if gauge_k:
+                lkv = lkv - jnp.mean(lkv)
         history[s] = np.array(jnp.exp(lp))
+        if polyak and s >= steps - polyak:               # accumulate the iterate tail
+            lp_acc += np.array(lp); lk_acc += np.array(lkv); n_acc += 1
 
-    return dict(theta=np.array(jnp.exp(lp)), log_theta=np.array(lp),
-                k=np.clip(np.array(jnp.exp(lkv)), 1e-6, None), history=history)
+    if polyak and n_acc:
+        lp_out = lp_acc / n_acc; lk_out = lk_acc / n_acc
+    else:
+        lp_out = np.array(lp); lk_out = np.array(lkv)
+    return dict(theta=np.exp(lp_out), log_theta=lp_out,
+                k=np.clip(np.exp(lk_out), 1e-6, None), history=history)
 
 
 class ChargeTimeModel:
