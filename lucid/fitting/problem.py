@@ -41,7 +41,7 @@ def _unravel_fields(vec, shapes):
 
 def build_calibration_problem(sim, sources, dp_true, trainable_fields,
                               *, per_pmt_field='qe_corrections', truth_k=None,
-                              key=None, num_sensors=None):
+                              key=None, num_sensors=None, eps=1e-8):
     """Build the fitter inputs for a charge calibration.
 
     Parameters
@@ -102,7 +102,11 @@ def build_calibration_problem(sim, sources, dp_true, trainable_fields,
             return sim(src, unravel(theta_log, 1.0), ek)[0]
         return forward
 
-    source_models = [SourceModel(make_forward(src)) for src in sources]
+    # eps is the √-residual offset: the default 1e-8 is the plain variance-stabilizing √-MSE;
+    # eps=3/8 is the ANSCOMBE transform √(x+3/8), which removes the Poisson Jensen bias
+    # (E[√Q]²≈μ−¼) that otherwise collapses the amplitude globals ~−1/(4μ) on low-occupancy
+    # shot-noise data. Both the model m and the truth √ must use the same offset.
+    source_models = [SourceModel(make_forward(src), eps=eps) for src in sources]
 
     return dict(source_models=source_models, theta0=theta0, theta_true=theta0,
                 truth_charge=truth_charge, unravel=unravel, shapes=shapes,
