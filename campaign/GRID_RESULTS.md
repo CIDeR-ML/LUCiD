@@ -133,3 +133,16 @@
 
 Photon-limited: RMS≈1/√(per-sensor occupancy); resolving the 12% spread needs μ≫70 (high budget or multi-flash averaging). multi_laser_iso > laser_iso > iso_center.
 
+## Timing (joint charge+time fit) vs budget — t0 (T-map), tts, Q-map
+
+| src | N | tts ferr | t0 corr | t0 RMS (ns) | k corr | qe ferr | L_abs ferr |
+|---|---|---|---|---|---|---|---|
+| laser_iso | 1e+05 | 99.79% | 0.194 | 13.96 | 0.397 | 6.68% | 25.92% |
+| laser_iso | 3e+05 | 45.49% | 0.489 | 5.29 | 0.579 | 29.86% | 33.80% |
+| laser_iso | 1e+06 | 4.58% | 0.848 | 1.87 | 0.808 | 10.43% | 17.30% |
+| laser_iso | 3e+06 | 0.23% | 0.957 | 0.90 | 0.921 | 2.31% | 5.22% |
+| multi_laser_iso | 1e+05 | 35.63% | 0.222 | 12.40 | 0.384 | 22.86% | 269.56% |
+| multi_laser_iso | 3e+05 | 34.80% | 0.530 | 4.73 | 0.642 | 1.33% | 2.70% |
+| multi_laser_iso | 1e+06 | 6.03% | 0.863 | 1.74 | 0.838 | 5.00% | 5.08% |
+| multi_laser_iso | 3e+06 | 0.66% | 0.964 | 0.82 | 0.935 | 0.63% | 1.86% |
+
