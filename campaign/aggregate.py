@@ -70,6 +70,19 @@ def main():
                  + ' | '.join(pct(j['crb'][p]) for p in PARAMS) + ' |')
         emit('')
 
+    # --- location sweep (tags loc_*) ---
+    lc = sorted([(k.replace('loc_', '').rsplit('_I', 1)[0], j) for k, j in d.items()
+                 if k.startswith('loc_')], key=lambda x: x[0])
+    if lc:
+        emit('## CRB vs source LOCATION (budget 1e7, NPH=1e6) — fractional σ')
+        emit('')
+        emit('| location config | nsrc | ' + ' | '.join(PARAMS) + ' |')
+        emit('|' + '---|' * (len(PARAMS) + 2))
+        for name, j in lc:
+            emit(f'| {name} | {j.get("n_sources","?")} | '
+                 + ' | '.join(pct(j['crb'][p]) for p in PARAMS) + ' |')
+        emit('')
+
     # --- recover + shot (tags rs_*) ---
     rs = sorted([(j['nph'], k, j) for k, j in d.items() if k.startswith('rs_')])
     if rs:
