@@ -15,7 +15,12 @@ OUT = os.path.join(_HERE, 'grid_out'); os.makedirs(OUT, exist_ok=True)
 SRC_KEYS = ['laser_down', 'laser_up', 'laser_wall', 'laser_diag', 'iso_center',
             'iso_off', 'iso_top', 'laser_iso', 'multi_laser', 'multi_laser_iso',
             'iso_ring', 'all']
-N_LIST = ['1e5', '3e5', '1e6', '3e6', '1e7']     # 1e7 probes the 11GB ceiling (may OOM)
+# The PHYSICAL photon budget (source intensity) sets the CRB (σ ∝ 1/√budget). NPH is only
+# the SIMULATED resolution (forward accuracy ~1/√NPH) — held FIXED so the N-scan isolates
+# the budget, not FD-Jacobian noise. So the "N" we scan is INTENS, with NPH fixed.
+I_LIST = ['1e5', '1e6', '1e7', '1e8', '1e9']     # physical photon budgets
+NPH_FIX = '1e6'                                  # simulated resolution (fits 11GB at GRID=0)
+I_SRC = '1e7'                                    # budget for the source/location scan
 
 
 def J(tag, **env):
@@ -23,19 +28,22 @@ def J(tag, **env):
 
 
 def grid(phase):
-    # GRID='0' (reduced geometry) for 11GB memory headroom + consistency across N.
+    # GRID='0' (reduced geometry) for 11GB memory headroom + consistency.
     if phase == 'crb_nscan':
-        return [J(f'crb_laser_iso_N{n}', NPH=n, SRC='laser_iso', GRID='0', NB_H='3') for n in N_LIST]
+        return [J(f'crb_laser_iso_I{i}', NPH=NPH_FIX, INTENS=i, SRC='laser_iso',
+                  GRID='0', NB_H='3') for i in I_LIST]
     if phase == 'crb_srcscan':
-        return [J(f'crb_{s}_N1e6', NPH='1e6', SRC=s, GRID='0', NB_H='3') for s in SRC_KEYS]
+        return [J(f'crb_{s}_I{I_SRC}', NPH=NPH_FIX, INTENS=I_SRC, SRC=s,
+                  GRID='0', NB_H='3') for s in SRC_KEYS]
     if phase == 'all_crb':
         return grid('crb_nscan') + grid('crb_srcscan')
     if phase == 'recover_shot_nscan':
-        # implicit recovery + shot-noise scatter (stabilized recipe) vs N, two source sets
+        # shot-noise budget = integer-PE count → NPH = INTENS = the budget (sample mode).
+        # Stabilized recipe (bake_k+polyak+Anscombe). Two source sets, budgets that fit 11GB.
         out = []
         for s in ['laser_iso', 'multi_laser_iso']:
-            for n in N_LIST:
-                out.append(J(f'rs_{s}_N{n}', NPH=n, SRC=s, GRID='1', NB_H='2',
+            for n in ['1e5', '3e5', '1e6', '3e6']:
+                out.append(J(f'rs_{s}_N{n}', NPH=n, INTENS=n, SRC=s, GRID='0', NB_H='2',
                              RECOVER='1', SHOT='1', M='4', STEPS='60',
                              BAKE_K='1', POLYAK='12', EPS='0.375'))
         return out
