@@ -102,10 +102,13 @@ def main():
              'degeneracy) — the staged recipe.')
         emit('')
         fa = run(['abs_dev']); fr = run(['rayleigh_dev'])
-        emit(f'**Per-curve max frac err: L_abs(λ)={fa*100:.1f}%, L_R(λ)={fr*100:.1f}%** — with the '
-             f'other curve known, each reaches ≈its CRB. Contrast the ~13% JOINT fit: the joint '
-             f'floor was the abs↔Rayleigh per-λ degeneracy, NOT the optimizer — the recipe '
-             f'recovers each curve; pinning both at once needs the staging or more diversity.')
+        emit(f'**L_abs(λ) max {fa*100:.1f}%** (≈/below its ~2% CRB) — reaches the bound once NOT '
+             f'degenerate with Rayleigh, so the ~13% JOINT floor WAS the abs↔Rayleigh per-λ '
+             f'degeneracy (not the optimizer). **BUT L_R(λ) max {fr*100:.1f}%** even fit ALONE '
+             f'(CRB 0.01%): Rayleigh is the STIFF direction — its Hessian is huge, so the '
+             f'proportional ridge (∝diag) OVER-DAMPS it and it under-moves (the documented '
+             f'"L_R stiff/under" behavior). Fix = Polyak iterate-averaging / reduced ridge on '
+             f'the stiff direction — the SAME stabilizer #4 needs, missing from unified fit_gn.')
     else:
         mfe = run(['abs_dev', 'rayleigh_dev'])
         emit(f'**Max per-point fractional recovery error = {mfe*100:.1f}%** (joint abs+Rayleigh '
