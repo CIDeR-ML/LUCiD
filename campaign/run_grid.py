@@ -44,6 +44,15 @@ def grid(phase):
                 + ['iso_center', 'iso_zmid', 'iso_zhi'])
         return [J(f'loc_{s}_I{I_SRC}', NPH=NPH_FIX, INTENS=I_SRC, SRC=s, GRID='0', NB_H='3')
                 for s in keys]
+    if phase == 'kpmt_nscan':
+        # per-PMT QE-map k=Q/M recovery vs integer-PE budget (NPH=INTENS); uniform iso lights
+        # every PMT, so iso_center is the natural Q-map source; compare to laser combos.
+        out = []
+        for s in ['iso_center', 'laser_iso', 'multi_laser_iso']:
+            for n in ['1e5', '3e5', '1e6', '3e6']:
+                out.append(J(f'kpmt_{s}_N{n}', NPH=n, INTENS=n, SRC=s, GRID='0',
+                             KPMT='1', NB_H='1'))
+        return out
     if phase == 'recover_shot_nscan':
         # shot-noise budget = integer-PE count → NPH = INTENS = the budget (sample mode).
         # Stabilized recipe (bake_k+polyak+Anscombe). Two source sets, budgets that fit 11GB.
