@@ -35,6 +35,7 @@ STEPS = int(os.environ.get('STEPS', '50'))
 NB_H = int(os.environ.get('NB_H', '2'))
 BAKE_K = os.environ.get('BAKE_K', '0') == '1'
 POLYAK = int(os.environ.get('POLYAK', '0'))
+EPS = float(os.environ.get('EPS', '1e-8'))     # 0.375 = Anscombe √(x+3/8) (Poisson bias-correct)
 REPORT = os.path.join(_HERE, 'SHOTNOISE_RESULTS.md')
 
 FIELDS = ['scatter_length', 'absorption_length', 'wall_reflection_rate', 'qe']
@@ -73,11 +74,11 @@ def main():
          f'grid={GK}, sources=[laser_down, iso], {M} noise seeds, {STEPS} steps/fit.')
     emit(f'DATA = sample-mode shot noise (use_expected_value=False); MODEL = expected forward.')
     emit(f'Stabilizers: bake_k={BAKE_K} (closed-form k=ΣQ/ΣM, no free Schur-k), polyak={POLYAK} '
-         f'(iterate-averaging).')
+         f'(iterate-averaging), eps={EPS} ({"ANSCOMBE √(x+3/8) Poisson-bias-correct" if EPS > 0.1 else "plain √-MSE"}).')
     emit('')
 
     prob = build_calibration_problem(sim_model, srcs, dp1, FIELDS, truth_k=k_true,
-                                     key=jax.random.PRNGKey(1))
+                                     key=jax.random.PRNGKey(1), eps=EPS)
     theta_true = prob['theta_true']
     truth_vals = np.exp(theta_true)
     cr = crb(prob['source_models'], theta_true, NS, lk_true=prob['lk_true'], nb_h=NB_H)
@@ -89,7 +90,7 @@ def main():
                       for j, s in enumerate(srcs)]
         res = fit(prob['source_models'], truth_shot, theta_true, NS,    # start AT truth → measure scatter
                   steps=STEPS, refresh=max(20, STEPS // 2), nb_h=NB_H, seed=m,
-                  bake_k=BAKE_K, polyak=POLYAK)
+                  bake_k=BAKE_K, polyak=POLYAK, eps=EPS)
         rec[m] = res['theta']; krec[m] = res['k']
         emit(f'  seed {m} done ({time.time()-t0:.0f}s)')
 
