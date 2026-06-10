@@ -158,6 +158,52 @@ def main():
                            rms=float(np.sqrt(np.mean((kh[lit] / ktg[lit] - 1) ** 2))),
                            nlit=int(lit.sum()), spread=KSPREAD)
 
+    if TIMING:
+        # joint charge+timing fit (fit_charge_time): recover optical globals + tts (global
+        # block) + per-PMT k (Q-map) + per-PMT t0 (T-map) on the moments-mode forward.
+        rng = np.random.default_rng(0)
+        ktrue = np.exp(KSPREAD * rng.standard_normal(NS)); ktrue /= np.exp(np.mean(np.log(ktrue)))
+        t0true = T0SPREAD * rng.standard_normal(NS); t0true -= t0true.mean()
+        base = dict(scatter_length=70., mie_scatter_length=3000., g=0.9, wall_reflection_rate=.2,
+                    sensor_reflection_rate=.2, absorption_length=60., qe=0.07, spe_width=0.35, tts=TTS)
+        dp_true = DetectorParams.from_flat(qe_corrections=jnp.asarray(ktrue),
+                                           t0=jnp.asarray(t0true), **base)
+        flat_t = {kk: np.asarray(v) for kk, v in _flatten_detector_params(dp_true).items()}
+        sim_m = setup_event_simulator(GEOM, NPH, temperature=None, K=K, is_calibration=True,
+                                      hit_mode='moments', wavelength_mode=False, **GK)
+        TF = ['scatter_length', 'absorption_length', 'wall_reflection_rate',
+              'sensor_reflection_rate', 'qe', 'tts']
+        theta0 = np.log(np.array([float(flat_t[f]) for f in TF]))
+
+        def unravel(theta, k_value=1.0):
+            flat = {kk: jnp.asarray(v) for kk, v in flat_t.items()}
+            for i, f in enumerate(TF):
+                flat[f] = jnp.exp(theta[i])
+            flat['qe_corrections'] = jnp.asarray(k_value) * jnp.ones(NS)
+            flat['t0'] = jnp.zeros(NS)
+            return _nest_flat_kwargs(flat)
+
+        def mk(src):
+            def fwd(theta, ek, pk):
+                mean, var, tarr = sim_m(src, unravel(theta, 1.0), ek)
+                return mean, tarr
+            return fwd
+        models = [ChargeTimeModel(mk(s)) for s in srcs]
+        tc = [np.asarray(sim_m(s, dp_true, jax.random.PRNGKey(1))[0]) for s in srcs]
+        ttv = [np.asarray(sim_m(s, dp_true, jax.random.PRNGKey(1))[2]) for s in srcs]
+        start = theta0 + rng.uniform(-PERT, PERT, theta0.shape)
+        rt = fit_charge_time(models, tc, ttv, start, NS, steps=STEPS, refresh=15, w_time=WTIME,
+                             nb_h=NB_H, step_max=0.1, kstep_max=0.3, t0step_max=1.5)
+        truthv = np.exp(theta0)
+        lit = ttv[-1] > 0
+        t0t = t0true - t0true[lit].mean(); t0h = rt['t0'] - rt['t0'][lit].mean()
+        out['timing'] = dict(
+            globals={TF[i]: float(abs(rt['theta'][i]/truthv[i]-1)) for i in range(len(TF))},
+            tts_ferr=float(abs(rt['theta'][TF.index('tts')]/TTS-1)),
+            t0_corr=float(np.corrcoef(t0h[lit], t0t[lit])[0, 1]),
+            t0_rms=float(np.sqrt(np.mean((t0h[lit]-t0t[lit])**2))), t0_spread=T0SPREAD,
+            k_corr=float(np.corrcoef(rt['k'][lit], ktrue[lit])[0, 1]))
+
     out['t_total'] = time.time() - t0
     with open(os.path.join(OUT, f'{TAG}.json'), 'w') as f:
         json.dump(out, f, indent=2)
