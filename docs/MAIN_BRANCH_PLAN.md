@@ -361,3 +361,90 @@ is the general nesting point that *would* let a future sibling forward add its o
 (`SimParams(detector=…, particle=…, <future>=…)`) and reuse the inference half — without baking anything
 sibling-specific into main today. Build the umbrella now (cheap); it's the single forward-agnostic
 fittable-params contract the whole inference layer targets.
+
+---
+
+## 13. Big design questions from the 5-agent review (JAX-expert, veteran, newcomer, diff-MC, maintainability)
+Convergent findings that RESHAPE the plan. ⚠️ = revises a prior decision; ★ = new hard requirement.
+
+**B1 ⚠️ The photon-step `custom_vjp` is a `nan_to_num` backstop, not a real custom derivative** (JAX-expert).
+`_bwd` is just `jax.vjp(_core,…)` after scrubbing NaN cotangents to zero — it defines NO derivative, only
+hides NaNs (which *masks* gradient bugs) and, as the cost, **blocks forward-mode/`jacfwd`** → that is the
+SOLE reason the whole fitter is FD. Recommendation: **drive NaNs to zero at the source (§6 discipline) and
+drop the `custom_vjp`** (or gate the scrub as opt-in debug). Then forward-mode works and FD-GN can become a
+**matrix-free autodiff Gauss-Newton** (`jvp`/`vjp` + CG/`lineax`), collapsing "FD-GN vs autodiff" into "one
+differentiable forward, two solvers"; FD becomes a *test oracle*, not the production Jacobian.
+
+**B2 ⚠️ But "autodiff-first" must be MEASURED, not asserted — the score-variance caveat** (diff-MC + veteran).
+FD-GN differentiates the EXPECTED (mean-field, deterministic-given-keys) engine — it never pays the
+DiCE-score variance. Reverse-mode autodiff through the *same* forward DOES (score is 5-16× higher-variance for
+the hard optical-time grad), and **every** validated number (calib CRB, recon 13cm floor) was FD-GN. So B1's
+"matrix-free GN via jvp" still routes discrete decisions through the noisy score channel. RESOLUTION: autodiff
+is the right DEFAULT only for the **pathwise** regime (smooth optical calib under the importance emitter;
+NN/`Field` params where FD can't scale); **FD-GN stays the RECOMMENDED solver for score-dominated recon** until
+proven. The architecture (pure forward + swappable backend) already supports the split — only the word
+"default" is at stake. ★ **THE gating experiment (run before committing D1):** fit the validated recon
+problem with Adam/L-BFGS on the reverse-mode (score-carrying) gradient from the same starts — does it reach the
+13cm floor, at what NKEYS/wall-clock, and does energy still freeze without the SCALE9 metric? If yes →
+autodiff-first justified; if no → autodiff-default only for pathwise/NN, GN recommended for recon.
+
+**B3 ★ The SIREN emitter flip (score→importance) can SILENTLY invalidate the entire recon record** (veteran's
+merge-blocker). Recon's whole validated record (floor, basins, wanderer fraction, energy-bias coherence) was
+measured on the SCORE emitter; importance diverges exactly off-E_CAL where recon operates. A single-event smoke
+≠ reproducing the study. DECISION: restore the score path as an `emitter='score'` FACTORY (not deleted, not an
+env var); keep BOTH until importance reproduces the **≥100-event study** (median vtx/dir/E AND wanderer
+fraction). Cheap pre-check first: compare per-PMT charge + energy gradient of both emitters at 600/1050/1500
+MeV at fixed truth geometry.
+
+**B4 ★ Plan ≠ code ≠ notebooks — THREE different APIs** (newcomer + maintainability). The §10.5/§12 interface
+(`fit(forward, residual=, solver=)`, `SimParams`, `Field`, `gradient_channel`) exists in ZERO lines; `lucid/
+fitting/` has a different API; no notebook imports `lucid.fitting`; the only runnable recon example uses the
+to-be-DELETED `pipeline.py`. ACTIONS: (a) banner this doc as a PROPOSAL; (b) make ONE API real and mark the
+others; (c) ship 3 runnable `examples/hello_{simulate,calibrate,reconstruct}.py` (≤20 lines each, one figure).
+This is the #1 newcomer lever.
+
+**B5 ★ Make the contract EXECUTABLE, not prose** (newcomer + maintainability + JAX-expert). The `(r,J,W)` /
+nuisance / `forward→Observables` contracts live only in docstrings → they drift (proven: line citations
+drifted, the `max_sensors_per_cell`↔`max_candidates_per_ray` rename is half-finished and the wrong name
+**silently vanishes into `**grid_params`** at `simulator.py:74`). FIX (keeps the minimalism — NOT dataclasses):
+`typing.Protocol` + `TypedDict` for `fit`/`residual`/nuisance/`CALIB_GN`/`RECON_GN` (zero runtime, restores
+IDE/`grep`/`pyright`), a NamedTuple `Observables`, + a one-time `_check_blocks(blocks)` shape/W-convention
+assert at the top of `assemble_normal`. `CONTRACTS.md` becomes a pointer, not the source of truth.
+
+**B6 ★ Pin/ratchet the invariants or they RE-ROT** (maintainability — the unifying mandate). The env sprawl
+WILL re-accrete (recon already re-grew what unify deleted at `41096e3`). REQUIRE: (i) a CI grep-ratchet that
+fails on any `os.environ` in `lucid/` outside a ~3-entry infra allowlist + a blessed `debug=` channel so the
+urge has a sanctioned home; (ii) byte-pins BEFORE the §8-step-4 refactor — `ridge_inverse(indefinite H)`,
+`assemble_normal` intermediate blocks + the `fit_charge_time` two-block Schur, toy-fit `log_theta/k` @1e-6, one
+CRB σ, a two-`Problem`-coexistence test (the de-env's reason to exist), AMP_DETACH gradient-routing,
+TOT_N_SCALE-on-μ-only, SCALE9, `counts_loss(normalize=)` both ways; (iii) capture the order-stat `tnll`
+reference FROM `LUCiD_recon` and the substrate md5s **this week, before any deletion** (untracked → a git pin
+snapshots NOTHING; archive = tarball + annotated tag + a `PROVENANCE.md` mapping each memory finding → its
+repro script, pushed to remote, human-gated). §11's net is necessary-but-insufficient — add (ii)'s three gaps.
+
+**B7 ★ Conditioning is first-class for the autodiff backend too** (diff-MC). SCALE9 preconditioning is
+MANDATORY (raw F → energy freeze). Adam only self-scales by gradient magnitude (not curvature) and is
+corrupted by score noise; vanilla L-BFGS on a score gradient is the WRONG tool (its secant pairs assume a
+deterministic gradient). ★ VERIFY `particle_scale()=(hi−lo)` actually reproduces SCALE9 (range-scale vs
+curvature-scale may NOT match → silently de-tunes the mandatory preconditioner); default the autodiff backend
+to run in `reparam`-scaled coords + support a one-shot Fisher-diagonal whitening; add an energy-freeze
+regression assertion.
+
+**B8 ★ Mixed tiny-structured + dense-NN params need BLOCK-structured optimization** (diff-MC + JAX-expert).
+One global LR/Adam-state spanning ~9 scalars and 10⁴ NN weights is a conditioning failure. The `Field`/param-
+KIND should carry an *optimizer scale*, and mixed fits use `optax.multi_transform` per-KIND, or the HYBRID
+(FD-GN+Schur on structured, autodiff on the NN block) §11 names. Also: `SimParams` mixing tiny + multi-MB
+leaves under one jitted/donated/checkpointed pytree needs a written static/traced partition + "dense leaves
+ride autodiff+optax+orbax only" rule + ONE serialization path (orbax, retire the JSON+`.npy` sidecar).
+
+**B9 — Framework boundary** (JAX-expert): keep hand-rolled NamedTuples for params (don't adopt equinox as a
+base class) and the genuinely-novel Schur/ridge/gauge/readout core; but evaluate `jaxopt.LevenbergMarquardt`
+for the LM mechanics and make the autodiff-default path *literally optax*, not a 2nd hand-rolled loop. The
+metadata table should GENERATE the ~6 per-field dicts and assert `set(table)==set(_fields)` at import (steal
+`eqx.field`'s metadata IDEA as data, not its base class).
+
+### The decision that gates everything
+**B2's experiment.** Autodiff-first is the load-bearing assumption of D1, and it has NEVER been tested on the
+real forward — every result is FD-GN. Run the recon-floor + calib autodiff-vs-GN bake-off FIRST; it changes
+only the word "default," not the architecture, but it's the difference between an honest foundation and one
+cornered the day someone trusts an unvalidated autodiff calibration number.
