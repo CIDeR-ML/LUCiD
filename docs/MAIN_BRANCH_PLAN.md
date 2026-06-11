@@ -8,6 +8,24 @@
 > `examples/hello_{simulate,calibrate,reconstruct}.py` for ≤20-line runnable entry points
 > against the real API. When this plan's interface is built, this banner comes down. (B4.)
 
+> **UNIFICATION PROGRESS** (worktree `unification`, 2026-06-11). The §8 plan is being
+> executed. **Done:** U1 de-env (the TTS `os.environ` leak removed; `lucid/` now has ZERO env
+> reads, ratcheted by a test) · U2 recon provenance snapshot (`archive/`, read-only from
+> LUCiD_recon, before any deletion) · U3 byte-pin test net (`tests/test_unification_pins.py`:
+> `ridge_inverse`, `counts_loss(normalize=)`, the order-stat time loss + AMP_DETACH, JointParams,
+> env-ratchet) · U4 `counts_loss(normalize=)` + `make_sim_pair` helper · U5 `JointParams` +
+> `particle_bounds`/`joint_bounds` · U7 **recon ported into `lucid/`** (`losses.first_arrival_window_nll`
+> + `fitting/recon.py` `ReconModel`/`fit_track`; the 9-param Fisher-GN, validated end-to-end —
+> captures a track to ~15 cm). Full fast suite green (380+5). **Decisions:** U6 (merge the two GN
+> loops) — **declined**: calibration GN (Schur-k, √-MSE, cached-J, ×√12 CRB) and recon GN
+> (SCALE9-precond, additive Levenberg, autodiff-g + FD-Fisher) are structurally distinct
+> optimizers; per B9 keep both as clean library code, don't force a leaky single loop. **Deferred:**
+> U4 cosmetic `max_candidates_per_ray` rename (low value); U8 `pipeline.py` deletion (needs a
+> recon-runner CLI + `run.py` thin-shim + a GPU check that `lucid-optimize` still works — clean
+> follow-up now that `fit_track` exists + provenance is captured); U9 archive of `mie_hunter/`
+> `campaign/` (untracked, not in this branch). The risky **B2 autodiff-vs-FD-GN gate** and the
+> **SIREN `emitter='score'` factory** (B3 merge-blocker) remain open by design.
+
 **Purpose.** This is the consolidation plan refined for *simplicity + generality* — the shape
 LUCiD's **main branch** should take. It supersedes the heavier abstraction in
 `RECON_CONSOLIDATION.md` (v2 + §14); v2 remains the detailed **port mechanics** (line-anchored
