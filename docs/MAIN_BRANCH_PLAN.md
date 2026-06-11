@@ -188,3 +188,53 @@ pin; an `@slow` recon floor smoke (bias-limited vtx~13cm/dir~1.8°/E~2.3%, NOT m
 
 ### Verdict
 The closures+kwargs simplification **helps** extensibility for the whole fitting/loss layer (loss term, nuisance, observable-block are all LOCAL closures; `assemble_normal` dedups real code) and is **orthogonal** to the one HARD case (transport physics is a `custom_vjp` problem, not a fitting one). It mildly **hurts discoverability** (no types → read the source), mitigated by seam #3. So: keep the simplified fitting design; add seam #1 (process registry) to make "new physics" local; add seams #2-3 (metadata table + written contracts) to de-risk the checklists. With these, every common extension is one local edit.
+
+---
+
+## 10. The general extension architecture (think bigger than per-case seams)
+
+Don't enumerate seams ad hoc — derive them. LUCiD is **two halves joined by one contract**:
+
+- **MODEL** (forward): `source → transport[optical processes] → surfaces[reflection] → sensors[response]`, over a `geometry`, under a `spectrum`/`medium`, producing **observables**. A pipeline of differentiable stages.
+- **INFERENCE** (fitting): consumes a differentiable `loss(params)` (or `residual_and_jac → (r,J,W) blocks`) and produces **estimates + uncertainties**.
+- **THE CONTRACT joining them:** `params` (a pytree: `DetectorParams ⊕ ParticleParams`) + a differentiable `forward(params) → observables` + `observation` ⇒ a differentiable scalar. **The model never knows the optimizer; the optimizer never knows the physics.** Every inference backend (GN today; Adam/L-BFGS/CRB/MCMC tomorrow) is just a consumer of "a differentiable scalar of a params pytree." This decoupling IS the generality — keep it sacred.
+
+### 10.1 The ONE universal seam pattern (apply it everywhere on the MODEL side)
+Reflection already discovered it; name it and reuse it. A **Component** =
+`(params_pytree, fn(state, params, lam, key) -> (effect, logp_increment), gradient_channel, registry_key)`:
+1. fittable params in a **single packed pytree** (so the `custom_vjp` core arglist never grows),
+2. a differentiable `fn` with a fixed signature, selected by a **registry/factory**,
+3. a declared **gradient channel** — pathwise (reparam) or DiCE-`logp_increment` (score), folded into `log_p`,
+4. params that **auto-flow into `DetectorParams`** (via the §9-seam-2 metadata table) and thus into the fitter for free.
+`reflection.py` is the reference instance. Making **optical-process, sensor-response, and source/emitter** all instances of this one pattern is what turns "add physics" from HARD into LOCAL — *and* makes the codebase teachable (one pattern, many plugins) instead of N bespoke factories.
+
+### 10.2 The full extension-axis map (each axis = a seam; status now → what to add)
+| Axis | Seam now | Add for main |
+|---|---|---|
+| geometry | `@register_detector` ✓ | fold the residual `if cls is …` construction chain into the registry |
+| source / **emitter** | duck-typed callable ✓ | `emitter=` factory (importance default, score opt-in) under the Component pattern |
+| **optical process** (scatter/abs/WLS) | **HARD** | `OpticalProcess` registry = the Component pattern on the medium step (§9 seam-1) |
+| surface / reflection | factory ✓ (**the reference**) | — |
+| sensor / **observable** | `hit_mode` factory ✓ | a written output-shape contract; timing as a declared `time_model`, not buried in each `make_hits` |
+| spectrum / **medium** | `Spectrum` obj ✓ | a `medium` registry (water/ice/scint) mirroring reflection; `config/materials` is the data side |
+| **parameters** | nested pytree + generic tree-walks ✓ | per-field metadata table (§9 seam-2); `particle_bounds()`; a **reparameterization seam** (`unpack` owns log/sin-cos) |
+| loss / residual | closure ✓ (**the best seam**) | written contract (§9 seam-3) |
+| **prior / regularization** | **MISSING** | a first-class additive term — see 10.3 |
+| nuisance (marginalized block) | closure list (proposed) ✓ | `Jk`+gauge contract |
+| **inference backend** | GN only | make the `loss(params)`/`residual_and_jac` contract explicit so Adam/L-BFGS/CRB(/MCMC) are interchangeable consumers — no model change |
+| **gradient estimator** (per stochastic decision) | DiCE score vs pathwise, ad hoc | declare it per-decision via the Component's `gradient_channel` — see 10.3 |
+| **batch / event axis** | implicit | guarantee `forward`+`loss` are `vmap`-able over events (recon = many events; calib = pooled); state it as an invariant |
+| data / IO | `is_data` path + flat-JSON + save/load ✓ | keep; one loader contract |
+| study / orchestration | sweeps + `run_pool` (proposed) ✓ | JSON sidecar; one `summarize()` |
+
+### 10.3 The genuinely NEW seams worth adding (not just "make existing things pluggable")
+- **Priors / regularization — the biggest real gap.** A general inference framework must let you add a prior on params (Gaussian prior, a smoothness prior on per-PMT QE, the stiff-param ridge as a *prior* not a hack). Today there is none. Cleanest seam: a `priors` list of `(r, J, W)`-producing closures appended to the residual blocks (a prior is just another residual: `r = (θ−θ₀)/σ`, `J = ∂θ/∂θ`), so it flows through `assemble_normal` with **zero new machinery** — the same `(r,J,W)` contract. This unifies "data term + prior term" and makes calibration regularization and Bayesian-MAP fits first-class.
+- **Inference-backend agnosticism — formalize, don't build.** The user already saw GN-vs-optax. The lesson: the model exposes `loss(params)`; GN, Adam, CRB, and a future sampler are all consumers. Write the contract (`params pytree → differentiable scalar`, plus the `residual_and_jac` refinement for GN/CRB), so swapping the backend is a consumer choice, not a model rewrite. This is why the v3 fitting design must NOT bake optimizer assumptions into the model side.
+- **Per-decision gradient estimator — design-for, defer.** The deepest generality of a differentiable MC: each random choice (emission bin, scatter type/angle, reflection branch) declares pathwise/score/reparam. LUCiD has instances (emitter importance-vs-score; the `lf/la/lr` DiCE scores). A general `gradient_channel` on the Component (10.1) is the hook; a full estimator-registry is the DTRAX frontier — design the hook now, defer the registry.
+- **Multi-physics / cross-detector — the boundary, out of scope.** Scintillator/TPC/charged-particle transport (the DTRAX line) is a different forward. State it as the explicit generality boundary so main stays focused on optical photons; the Component + contract design is what would *let* a sibling forward reuse the inference half later.
+
+### 10.4 Build-now vs design-for-but-defer
+- **Build into main now (cheap, foundational):** the Component pattern (unifies optical-process/reflection/sensor/source); the explicit model↔inference contract; **priors as `(r,J,W)` closures** (fills the real gap, zero new machinery); the param metadata table + `particle_bounds` + the `unpack` reparameterization seam; the batch-axis invariant.
+- **Design-for, defer:** the per-decision estimator registry; MCMC/posterior UQ; cross-detector multi-physics. Each has a *hook* in the above (gradient_channel; the loss-contract; the Component+contract decoupling) so they're additive later, never a rewrite.
+
+**The general principle:** one Component pattern on the model side, one `(r,J,W)`/`loss(params)` contract on the inference side, and a metadata table binding params to both. Every axis above is then either a registry entry, a closure, or a pytree field — and "add physics / change the loss / add a prior / swap the optimizer" are all *the same kind of one-place edit*.
