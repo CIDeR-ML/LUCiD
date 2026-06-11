@@ -1,5 +1,13 @@
 # MAIN_BRANCH_PLAN.md — the simplified, general LUCiD foundation (v3)
 
+> ⚠️ **STATUS: PROPOSAL, not the current API.** The `fit(forward, residual=, solver=)` /
+> `SimParams` / `Field` / `gradient_channel` interface in §10.5/§12 exists in **zero lines of
+> code** — it is the target shape, not what ships today. The **canonical, validated, runnable
+> API right now is `lucid.fitting`**: `build_calibration_problem(...) → fit(...) / crb(...)`
+> (Gauss-Newton + per-PMT Schur, the recipe the whole campaign ran on). See
+> `examples/hello_{simulate,calibrate,reconstruct}.py` for ≤20-line runnable entry points
+> against the real API. When this plan's interface is built, this banner comes down. (B4.)
+
 **Purpose.** This is the consolidation plan refined for *simplicity + generality* — the shape
 LUCiD's **main branch** should take. It supersedes the heavier abstraction in
 `RECON_CONSOLIDATION.md` (v2 + §14); v2 remains the detailed **port mechanics** (line-anchored
