@@ -20,6 +20,11 @@ drivers + 3 decisions + delete the sprawl** — not merge transport physics.
 ---
 
 ## 1. Fitting interface — the leanest general form (REPLACES v2 §1-2 dataclasses)
+> **ADOPTED REFINEMENT (see §10.5):** the single `residual_and_jac` closure below is superseded by
+> a **pure `forward(params,key)→Observables` + a pluggable `residual=` form + `priors=`/`nuisance=`/
+> `reparam=` inference pieces**. §1 still describes the GN engine internals (assembler, Schur, kwargs)
+> faithfully — read it for those; read §10.5 for the adopted model/inference boundary.
+
 The user rejected role-tables, marker pytrees, Const/Curve, and an over-wrapped builder. v2's
 `Problem`/`OptConfig`/`LossConfig`/`Nuisance` dataclasses are the same smell under new names.
 **Keep the two collapses that remove real duplicated CODE; drop the wrappers around ARGUMENTS.**
@@ -258,3 +263,59 @@ dp_hat = fit(forward_calib, obs, dp0, residual='sqrt_mse',  nuisance=[k],  prior
 trk_hat = fit(forward_track, evt, th9, residual=['poisson','order_stat_time'], nuisance=[], reparam=sincos, **RECON_GN)
 ```
 This is *more general AND simpler* than v3 §1: the forward is pure and reused; "change the loss," "add a prior," "add a nuisance," "swap the optimizer," "reparameterize" are five independent one-arg edits; and the √-MSE↔Poisson choice (the irreducible 10%) is now a `residual=` value, not a rewritten closure. **Recommendation: adopt this split — pure `forward`, a `residual=` registry, `priors=`/`nuisance=`/`reparam=` lists — as the v3 fitting interface, superseding the single `residual_and_jac` closure.** It keeps every algorithm byte-for-byte (the fitter still builds the same `(r,J,W)` blocks) while making the model/inference boundary exact.
+
+---
+
+## 11. Worked extension: a neural-net spatial-purity field (stress-test of the architecture)
+Scenario: water purity (absorption length) varies in space; model it `L_abs(r) = NN_φ(r)`, and for
+each ray sample/integrate it between the ray's start and end points. **Where do the NN weights φ go?
+How does it tie in? Does it just go in `dp`?**
+
+**Short answer: yes, φ goes in `dp` — but "just" undersells it.** It is a detector property, and a JAX
+pytree nests arbitrary structure, so `dp.absorption.purity_field = φ` (a pytree of MLP weight arrays)
+is the right home and `jax.tree`/`grad`/`ravel` all work on it. But it is a new param **KIND**, and it
+exercises two seams that scalar/curve/per-PMT params never do. Walk it through the architecture:
+
+**(1) The forward tie-in = the `OpticalProcess` Component (§10.1), no step surgery.** A spatial
+absorption is exactly a process plugin: `absorption_fn(ray_start, ray_end, φ, lam) -> attenuation`,
+which evaluates `NN_φ` along the segment (e.g. n-point quadrature of `∫ ds/NN_φ(r(s))`, or the
+start/end average for the cheap version) and returns the per-ray attenuation weight. Its params (φ)
+ride in the **single packed pytree** the Component pattern already passes, so the `custom_vjp` core
+arglist does NOT grow. Its **`gradient_channel` is PATHWISE** — attenuation is a smooth function of
+`NN_φ(r)`, so reverse-mode grad flows to φ with no DiCE score (unlike a discrete branch). This is the
+direct payoff of building seam #1: "add a spatially-varying process" is one new Component, not a step
+rewrite. (Cost note: `NN_φ` is evaluated per-ray × quadrature-point × K iterations — keep the net small
+and `vmap` it; this is the real expense, not the plumbing.)
+
+**(2) It forces param-KIND, not just shape (generalize the §9 metadata table).** The per-field metadata
+`(min,max,scale,default)` assumes a scalar/array with simple bounds. φ has thousands of weights with NO
+natural per-weight bounds, is optimized in RAW space (not normalized to [0,1]), and serializes as a
+checkpoint (`.npz`, like the SIREN net) NOT flat-JSON. So `make_optimization_mask`/`normalize_params`
+(generic tree-walks) still work — but `default_bounds`/`from_flat`/the JSON loader do NOT cover φ. The
+fix: each field declares a **KIND** — `scalar | curve | per_pmt | field_nn` — and the kind drives
+bounds/normalize/optimize-space/serialization. `field_nn` = no bounds, raw space, checkpoint I/O, skip
+the flat-JSON shim. This is the metadata table (§9 seam-2) generalized from "shape" to "kind"; it is the
+one param-system change φ requires.
+
+**(3) It forces the inference backend to be AUTODIFF, not FD-GN — and φ is NOT a Schur block.** Two
+"many-param" cases are now distinct:
+- per-PMT k/t0 (10⁴ params) are **separable** (each touches one sensor) → the analytic diagonal **Schur**
+  nuisance. FD-cheap.
+- φ (10³-10⁴ NN weights) is **dense and global** (every weight affects every ray) → NOT separable, NOT a
+  Schur block. **FD-GN cannot fit it** (FD = one forward per weight → infeasible). It must be fit by
+  **reverse-mode autodiff** (which already flows through the forward — validated). So φ-calibration uses
+  the **autodiff backend** of the `loss(params)` contract (Adam/optax/L-BFGS), while the scalar/per-PMT
+  params can still use FD-GN. The clean realization: a **HYBRID fit** — FD-GN+Schur for the small
+  structured params, autodiff for the φ block — or all-autodiff. This is precisely why §10's
+  "backend-agnostic `loss(params)` contract" must be real: φ is the case that needs the autodiff backend
+  the GN recipe can't provide. (The GN recipe stays for the structured params; φ rides autodiff.)
+
+**Verdict / what φ teaches the design:** the architecture absorbs it cleanly *given the seams we already
+recommended* — φ goes in `dp` (pytree), the forward tie-in is one `OpticalProcess` Component (pathwise
+grad), and it needs no new concepts beyond (a) **param-KIND** in the metadata table (`field_nn`: raw
+space, no bounds, checkpoint I/O) and (b) the **autodiff inference path** for dense/global param blocks
+(FD-GN handles only small + separable params). Both are already "design-for" hooks in §10 — φ is the
+concrete case that justifies building them. It also marks the boundary of FD-GN: **FD-GN scales to small
+globals + separable (Schur) per-PMT; dense/structured/NN params require autodiff.** So the main-branch
+fitter should expose BOTH a GN entry (structured/calibration) and an autodiff entry (NN/dense), sharing
+the `forward`+`residual`+`priors` contract — not one optimizer pretending to do both.
