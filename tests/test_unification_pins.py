@@ -99,3 +99,29 @@ def test_joint_params_bounds_and_helpers():
     assert bool(mask.particle.energy) is True
     assert bool(mask.detector.scattering.scatter_length) is True
     assert bool(mask.detector.response.qe) is False
+
+
+def test_no_env_reads_in_lucid_package():
+    """Ratchet (B6): the lucid/ package must have ZERO os.environ/os.getenv reads.
+
+    Import-time env reads (the TTS leak, U1) break two-Problem coexistence and make the
+    forward non-reproducible. After the de-env there are none; this fails the day one
+    re-accretes (route physics/model knobs through DetectorParams/SimConfig/args instead).
+    """
+    import os
+    import re
+    root = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'lucid')
+    pat = re.compile(r'os\.environ|os\.getenv|getenv\(')
+    offenders = []
+    for dirpath, _, files in os.walk(root):
+        if '__pycache__' in dirpath:
+            continue
+        for fn in files:
+            if not fn.endswith('.py'):
+                continue
+            p = os.path.join(dirpath, fn)
+            with open(p) as f:
+                for i, line in enumerate(f, 1):
+                    if pat.search(line) and not line.lstrip().startswith('#'):
+                        offenders.append(f'{p}:{i}: {line.strip()}')
+    assert not offenders, 'env reads re-accreted in lucid/:\n' + '\n'.join(offenders)
