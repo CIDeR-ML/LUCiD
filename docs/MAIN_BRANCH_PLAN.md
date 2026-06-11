@@ -319,3 +319,45 @@ concrete case that justifies building them. It also marks the boundary of FD-GN:
 globals + separable (Schur) per-PMT; dense/structured/NN params require autodiff.** So the main-branch
 fitter should expose BOTH a GN entry (structured/calibration) and an autodiff entry (NN/dense), sharing
 the `forward`+`residual`+`priors` contract — not one optimizer pretending to do both.
+
+---
+
+## 12. Design decisions (user-chosen) + their refinements
+
+**D1 — Fitter: AUTODIFF-FIRST, GN opt-in.** Default `fit(forward, obs, params0, residual=, priors=, …)` is
+reverse-mode autodiff over the params pytree (optax/L-BFGS) — works for everything incl dense/NN fields.
+The validated FD-GN+Schur recipe is `solver='gn'` (opt-in), for the small-globals + separable-per-PMT
+*calibration* cases where it's the precision/efficiency winner. Both share `forward`+`residual`+`priors`.
+⚠️ IMPLICATION: the calibration precision/CRB results were all FD-GN — so `solver='gn'` must stay
+first-class and calibration users reach for it; the autodiff default must be *good enough* for the common
+case (and is the ONLY option for dense/NN/field params, where FD-GN can't scale). CRB likewise: FD/HVP for
+structured params, autodiff-Fisher where applicable.
+
+**D2 — Params live in `dp`; spatially-varying properties are `Field`s with a PLUGGABLE MODEL.** A physical
+property that may vary in space is `Field(model, params)` with `model ∈ {constant, poly, nn, …}` via a
+field-model registry (the Component pattern §10.1 applied to a field). **Today's scalar is the `constant`
+field** — so this GENERALIZES the current params, it doesn't bolt on: `dp.absorption.purity =
+Field('constant', 60.)` reproduces today; `Field('poly', coeffs)` / `Field('nn', φ)` add spatial variation,
+evaluated in the forward as `field.model(position, field.params)`, gradient PATHWISE (smooth → autodiff).
+- **Param KIND packages the inference assumptions** ("think more about the kinds"): a kind answers
+  *element-wise bounds? flat-JSON-serializable? separable (per-PMT→Schur)? grad-method (FD vs autodiff)?
+  eval-how?* → `scalar`/`curve`/`per_pmt` = bounded, flat-JSON, FD-OK; `field(constant)` = the scalar case;
+  `field(poly)` = bounded-ish coeffs, autodiff/FD; `field(nn)` = raw-space, NO per-weight bounds,
+  checkpoint-serialized (not flat-JSON), autodiff-ONLY, NOT a Schur block (dense/global). The §9 metadata
+  table is keyed on KIND; the kind drives bounds/normalize/serialize/grad-method/eval.
+
+**D3 — `gradient_channel` = pathwise vs DiCE-score.** Pathwise = smooth, ordinary autodiff (most physics,
+incl fields); score = a param-dependent DISCRETE draw carries a `log p` term folded into `log_p` (scatter
+type/angle, reflection branch, emission bin). It's a property of how the forward is written, and it's what
+makes the autodiff-first fitter work *through* the stochastic MC. Plugin-reach decision: **add a Component
+only where the physics needs a new draw/field — don't force-refactor sensor/source now**; the
+gradient_channel concept stays uniform across whatever Components exist.
+
+**D4 — Top-level `SimParams` umbrella (generalizes `JointParams`).** The fittable object is a general
+container `SimParams(detector=DetectorParams, particle=ParticleParams, …)` — a pytree. The fitter fits
+whatever trainable leaves it holds (via `make_optimization_mask`); calib trains the `detector` sub-tree,
+recon the `particle` sub-tree, joint both. DTRAX is a SEPARATE project — **ignore it now**, but `SimParams`
+is the general nesting point that *would* let a future sibling forward add its own param sub-tree
+(`SimParams(detector=…, particle=…, <future>=…)`) and reuse the inference half — without baking anything
+sibling-specific into main today. Build the umbrella now (cheap); it's the single forward-agnostic
+fittable-params contract the whole inference layer targets.
