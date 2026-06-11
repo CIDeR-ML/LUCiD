@@ -290,7 +290,8 @@ def energy_loss(simulated_counts, true_counts):
     return jnp.abs(jnp.log(total_sim_counts / (total_true_counts + eps)))
 
 @jit
-def counts_loss(true: jnp.ndarray, pred: jnp.ndarray, eps: float = 1e-8) -> jnp.ndarray:
+def counts_loss(true: jnp.ndarray, pred: jnp.ndarray, eps: float = 1e-8,
+                normalize: bool = True) -> jnp.ndarray:
     """Compute the Poisson negative log-likelihood loss.
 
     Parameters
@@ -301,6 +302,10 @@ def counts_loss(true: jnp.ndarray, pred: jnp.ndarray, eps: float = 1e-8) -> jnp.
         Predicted values (non-negative).
     eps : float, optional
         Small constant to prevent log(0), by default 1e-8.
+    normalize : bool, optional
+        If True (default), divide by ``sum(true)`` (the historical behavior — preserves
+        every existing caller). If False, return the raw ``sum(nll)`` — the form recon
+        reconstruction uses (normalizing by the total light kills the energy constraint).
 
     Returns
     -------
@@ -308,8 +313,9 @@ def counts_loss(true: jnp.ndarray, pred: jnp.ndarray, eps: float = 1e-8) -> jnp.
         Poisson negative log-likelihood loss.
     """
     nll = pred - true * jnp.log(pred + eps) + gammaln(true + 1.0)
-    normalized_nll = jnp.sum(nll) / (jnp.sum(true) + eps)
-    return normalized_nll
+    total = jnp.sum(nll)
+    # jnp.where (not a Python ``if``) so ``normalize`` stays jit-traceable as a flag.
+    return jnp.where(normalize, total / (jnp.sum(true) + eps), total)
 
 @jit
 def grid_origin_time_loss(

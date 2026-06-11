@@ -1,14 +1,8 @@
 """Sensor response: make_hits_* functions."""
-import os
 import jax
 import jax.numpy as jnp
 from functools import partial
 from lucid.utils import smear_times, smear_charges_SK_like
-
-# Per-PHOTON transit-time-spread (TTS) sigma in ns for data-mode truth, env-gated (0 = off, default).
-# Applied to each photon's time BEFORE the first-arrival segment_min, so the min carries the correct
-# TTS early-bias (smearing the per-sensor min instead would be symmetric and physically wrong).
-_TTS_PERPHOTON_NS = float(os.environ.get('TTS_NS', '0'))
 
 # ===================================================================
 # make_hits functions
@@ -190,8 +184,8 @@ def make_hits_data(
 
     ``tts`` (ns) is the per-photon transit-time-spread sigma applied to each photon's
     time BEFORE the first-arrival segment_min (so the min carries the correct early
-    bias). The module env ``TTS_NS`` still overrides when larger (legacy). ``tts=0``
-    (and env unset) ⇒ no smear (byte-identical).
+    bias). Passed via ``detector_params.response.tts`` at call time. ``tts=0`` ⇒ no
+    smear (byte-identical).
     """
     timing_mask = (flat_weights > threshold) & (flat_times > 0)
     filtered_times = jnp.where(timing_mask, flat_times, jnp.inf)
@@ -208,10 +202,9 @@ def make_hits_data(
     detected_mask = detection_probs < per_photon_qe
     qe_weights = flat_weights * detected_mask.astype(jnp.float32)
     # PER-PHOTON TTS: smear each detected photon's time BEFORE the first-arrival min.
-    # Driven by the dp.response.tts field (env TTS_NS overrides when larger, legacy).
-    # Applied unconditionally scaled by eff_tts (0 ⇒ no shift, byte-identical) so the
-    # key stream is stable and tts stays differentiable.
-    eff_tts = jnp.maximum(jnp.asarray(tts), _TTS_PERPHOTON_NS)
+    # Driven by the dp.response.tts field. Applied unconditionally scaled by tts (0 ⇒ no
+    # shift, byte-identical) so the key stream is stable and tts stays differentiable.
+    eff_tts = jnp.asarray(tts)
     photon_times = flat_times + jax.random.normal(smear_time_key, shape=flat_times.shape) * eff_tts
     qe_filtered_times = jnp.where(detected_mask & timing_mask, photon_times, jnp.inf)
 
