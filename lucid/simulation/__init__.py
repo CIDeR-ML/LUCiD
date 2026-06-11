@@ -1,5 +1,5 @@
 """Simulation package — split from monolithic simulation.py."""
-from lucid.simulation.simulator import setup_event_simulator
+from lucid.simulation.simulator import setup_event_simulator, make_sim_pair
 from lucid.simulation.optics import (
     normalize, jax_normalize, compute_reflection_direction,
     create_local_frame, sample_scatter_distance, solve_rayleigh_inverse_cdf,
