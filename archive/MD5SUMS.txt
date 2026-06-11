@@ -1,0 +1,15 @@
+# MD5SUMS of KEY ported files + shared substrate
+# Source: /sdf/group/neutrino/omara/LUCiD_recon (branch reconstruction-mie, commit 19a282a44586a5d3a866f48c67b832d6c6e80b30)
+# Snapshot date: 2026-06-11
+# md5  relative-path
+
+179a364c0af4bdf87430ac3958660673  gn_fisher_recon.py
+3b34203bd9a4a21864eb1bb9db5025e2  recon_harness.py
+cdfddae456138289c4e680dc928041f4  recon_ps_setup.py
+96e7bea1757901ce5aa1c7b1393b4ded  RECO_PIPELINE.md
+1a5a8695ae7fc9c3f7ccc916fbd93945  lucid/sources/siren_rays.py
+32c96427e0fd0ab89aa53e63cd3aeddd  lucid/losses.py
+2d6990a7df797fbbce773c15e3e9ae81  lucid/simulation/sensor_response.py
+cbb435beba41c426f664adc17d833ce2  lucid/simulation/photon_step.py
+1017c3274a9770bc5b330e069ba9f8aa  data/water/muon/siren_training/trained_model/photonsim_siren_weights.npz
+c273663eac148fd1dfaf5692cb5c5476  config/SK_geom_config.json
