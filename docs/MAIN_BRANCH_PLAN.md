@@ -228,8 +228,8 @@ Reflection already discovered it; name it and reuse it. A **Component** =
 | study / orchestration | sweeps + `run_pool` (proposed) ✓ | JSON sidecar; one `summarize()` |
 
 ### 10.3 The genuinely NEW seams worth adding (not just "make existing things pluggable")
-- **Priors / regularization — the biggest real gap.** A general inference framework must let you add a prior on params (Gaussian prior, a smoothness prior on per-PMT QE, the stiff-param ridge as a *prior* not a hack). Today there is none. Cleanest seam: a `priors` list of `(r, J, W)`-producing closures appended to the residual blocks (a prior is just another residual: `r = (θ−θ₀)/σ`, `J = ∂θ/∂θ`), so it flows through `assemble_normal` with **zero new machinery** — the same `(r,J,W)` contract. This unifies "data term + prior term" and makes calibration regularization and Bayesian-MAP fits first-class.
-- **Inference-backend agnosticism — formalize, don't build.** The user already saw GN-vs-optax. The lesson: the model exposes `loss(params)`; GN, Adam, CRB, and a future sampler are all consumers. Write the contract (`params pytree → differentiable scalar`, plus the `residual_and_jac` refinement for GN/CRB), so swapping the backend is a consumer choice, not a model rewrite. This is why the v3 fitting design must NOT bake optimizer assumptions into the model side.
+- **Priors / regularization — the biggest real gap, and it lives in the INFERENCE layer, NOT the model.** A prior is a function of params ALONE (no forward), so it is purely an objective/inference concern — do NOT weave it into the model's `residual_and_jac` (that closure must stay forward-only). Specific seam: a `priors=()` argument on the fitter, each prior a **param-only** term (most generally `log_prior(params) -> scalar`; in practice a `gaussian_prior(field, μ, σ)` helper). Each backend consumes it its own way — GN linearizes a Gaussian to a trivial forward-free `(r,J,W)` block (`r=(θ−θ₀)/σ`, `J=I`), Adam autodiffs it, CRB adds it to the Fisher — so the prior spec is backend-agnostic. Payoff: (a) calibration regularization + Bayesian-MAP become first-class, (b) **the stiff-param ridge IS a Gaussian prior** — express it as one and the "ridge hack" and "prior" unify, (c) the model stays pure.
+- **Inference-backend agnosticism — formalize, don't build.** The user already saw GN-vs-optax. The lesson: the model exposes `forward(params)→obs`; GN, Adam, CRB, and a future sampler are all consumers of "a differentiable scalar of params." Write the contract so swapping the backend is a consumer choice, not a model rewrite. This is why priors (and the residual *form*) are inference-side, never baked into the model.
 - **Per-decision gradient estimator — design-for, defer.** The deepest generality of a differentiable MC: each random choice (emission bin, scatter type/angle, reflection branch) declares pathwise/score/reparam. LUCiD has instances (emitter importance-vs-score; the `lf/la/lr` DiCE scores). A general `gradient_channel` on the Component (10.1) is the hook; a full estimator-registry is the DTRAX frontier — design the hook now, defer the registry.
 - **Multi-physics / cross-detector — the boundary, out of scope.** Scintillator/TPC/charged-particle transport (the DTRAX line) is a different forward. State it as the explicit generality boundary so main stays focused on optical photons; the Component + contract design is what would *let* a sibling forward reuse the inference half later.
 
@@ -238,3 +238,23 @@ Reflection already discovered it; name it and reuse it. A **Component** =
 - **Design-for, defer:** the per-decision estimator registry; MCMC/posterior UQ; cross-detector multi-physics. Each has a *hook* in the above (gradient_channel; the loss-contract; the Component+contract decoupling) so they're additive later, never a rewrite.
 
 **The general principle:** one Component pattern on the model side, one `(r,J,W)`/`loss(params)` contract on the inference side, and a metadata table binding params to both. Every axis above is then either a registry entry, a closure, or a pytree field — and "add physics / change the loss / add a prior / swap the optimizer" are all *the same kind of one-place edit*.
+
+### 10.5 The crisp model/inference split (the specific recommendation)
+Putting priors in inference forces the cleanest cut, and it is sharper than v3's hand-written `residual_and_jac`. Make the **model a single pure function** and let the **fitter COMPOSE the objective** from small inference-side pieces:
+
+- **MODEL (pure, the only thing you write per forward):** `forward(params, key) -> Observables` where `Observables` is a NamedTuple (`mean_charge, var_charge, time, ...`). Knows nothing about loss/prior/optimizer. Built from the Component plugins (§10.1).
+- **INFERENCE pieces (all small, composable, passed to the fitter — none in the model):**
+  - `residual` — the loss FORM, a pluggable choice: `residual_fn(pred_Obs, obs) -> (r, W)` (registry: `sqrt_mse | poisson | anscombe | order_stat_time`). This is "change the loss" = a one-arg swap, NOT rewriting a closure. The fitter chains it with the forward-FD to make `J = (∂r/∂Obs)·(∂Obs/∂θ)` — and the expensive `∂Obs/∂θ` is shared across residual forms (charge √-MSE and charge-variance reuse one forward-FD).
+  - `priors` — param-only terms (10.3); forward-free.
+  - `nuisance` — marginalized per-PMT blocks (closures: k, t0, gain).
+  - `reparam` — the `unpack`/scale map (log for positives, sin/cos for angles); defaults to identity.
+- **THE FITTER** composes `objective = Σ residual(forward(θ), obs) + Σ priors(θ)`, marginalizes `nuisance`, in `reparam` coords, and hands it to a backend (GN default; the same objective feeds Adam/CRB).
+
+So the entire per-problem spec collapses to ONE small call — no per-problem `residual_and_jac` to hand-write:
+```python
+# calibration
+dp_hat = fit(forward_calib, obs, dp0, residual='sqrt_mse',  nuisance=[k],  priors=[ridge_prior], **CALIB_GN)
+# reconstruction
+trk_hat = fit(forward_track, evt, th9, residual=['poisson','order_stat_time'], nuisance=[], reparam=sincos, **RECON_GN)
+```
+This is *more general AND simpler* than v3 §1: the forward is pure and reused; "change the loss," "add a prior," "add a nuisance," "swap the optimizer," "reparameterize" are five independent one-arg edits; and the √-MSE↔Poisson choice (the irreducible 10%) is now a `residual=` value, not a rewritten closure. **Recommendation: adopt this split — pure `forward`, a `residual=` registry, `priors=`/`nuisance=`/`reparam=` lists — as the v3 fitting interface, superseding the single `residual_and_jac` closure.** It keeps every algorithm byte-for-byte (the fitter still builds the same `(r,J,W)` blocks) while making the model/inference boundary exact.
