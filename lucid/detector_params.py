@@ -256,6 +256,18 @@ class ParticleParams(NamedTuple):
         return spherical_to_cartesian(self.theta, self.phi)
 
 
+class JointParams(NamedTuple):
+    """Umbrella for jointly-fitted detector + particle parameters — the ``SimParams`` seed (D4).
+
+    A plain NamedTuple of the two existing pytrees, so the generic optimization helpers
+    (:func:`normalize_params`, :func:`make_optimization_mask`) descend into it unchanged. A
+    future sibling forward (e.g. DTRAX track params) extends this by adding a field — nothing
+    else changes. Optimizing ``(detector, particle)`` jointly is self-calibration.
+    """
+    detector: DetectorParams
+    particle: ParticleParams
+
+
 # ---------------------------------------------------------------------------
 # Calibration source types — canonical home is lucid.sources.calibration_sources
 # Re-exported here for backwards compatibility.
@@ -667,6 +679,31 @@ def default_bounds(num_sensors: int):
         walk=jnp.full(num_sensors, 5.0),
     ))
     return bounds_min, bounds_max
+
+
+def particle_bounds(detector_r, detector_h, *, energy_min=0.0, energy_max=5000.0,
+                    t0_range=50.0):
+    """Return ``(bounds_min, bounds_max)`` :class:`ParticleParams` with physical ranges.
+
+    Position is bounded by the cylinder (``±r`` in x/y, ``±h/2`` in z); ``theta∈[0,π]``,
+    ``phi∈[-π,π]``, ``energy∈[energy_min, energy_max]`` MeV, ``t0∈[±t0_range]`` ns. Mirrors
+    :func:`default_bounds` for the particle pytree so the same normalize/denormalize helpers
+    apply (and :func:`joint_bounds` stacks the two for a self-calibration fit).
+    """
+    r = float(detector_r); h2 = float(detector_h) / 2.0; pi = float(jnp.pi)
+    bmin = ParticleParams(energy=jnp.asarray(energy_min), position=jnp.array([-r, -r, -h2]),
+                          theta=jnp.asarray(0.0), phi=jnp.asarray(-pi), t0=jnp.asarray(-t0_range))
+    bmax = ParticleParams(energy=jnp.asarray(energy_max), position=jnp.array([r, r, h2]),
+                          theta=jnp.asarray(pi), phi=jnp.asarray(pi), t0=jnp.asarray(t0_range))
+    return bmin, bmax
+
+
+def joint_bounds(num_sensors, detector_r, detector_h, **particle_kw):
+    """``(bounds_min, bounds_max)`` :class:`JointParams` = detector :func:`default_bounds`
+    + :func:`particle_bounds` — the bounds for a joint detector+track (self-calibration) fit."""
+    dmin, dmax = default_bounds(num_sensors)
+    pmin, pmax = particle_bounds(detector_r, detector_h, **particle_kw)
+    return JointParams(dmin, pmin), JointParams(dmax, pmax)
 
 
 def make_optimization_mask(params, trainable_fields):

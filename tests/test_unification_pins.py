@@ -45,3 +45,57 @@ def test_counts_loss_normalize_flag():
     assert float(poisson_nll(true, pred)) == norm            # alias unchanged
     np.testing.assert_allclose(raw, norm * (float(true.sum()) + eps), rtol=1e-6)
     assert raw > norm                                        # Σtrue=11 > 1 ⇒ raw larger
+
+
+def test_first_arrival_window_nll_pin_and_amp_detach():
+    """The ported order-statistic time loss: value pin + the AMP_DETACH gradient routing.
+
+    Synthetic 2-PMT event (3 photons on PMT0, 2 on PMT1; PMT1 unlit in the data). The time
+    term's gradient MUST flow only through predicted times — zero through the photon weights
+    and the per-PMT total μ (charge owns counts, time owns geometry). CPU-deterministic.
+    """
+    import jax
+    import jax.numpy as jnp
+    from lucid.losses import first_arrival_window_nll
+    ND = 2
+    fi = jnp.array([0, 0, 0, 1, 1]); ft = jnp.array([10., 11., 12., 20., 21.]); lw = jnp.zeros(5)
+    ot = jnp.array([10.5, 20.5]); mu = jnp.array([3., 2.]); oc = jnp.array([3., 0.])
+    t = first_arrival_window_nll(lw, ft, fi, ot, mu, oc, ND, sigma=2.5, delta=1.0)
+    np.testing.assert_allclose(np.asarray(t), [1.9178959, 0.0], atol=1e-5)   # value pin + unlit→0
+    f = lambda a, b, c: jnp.sum(first_arrival_window_nll(a, b, fi, ot, c, oc, ND))
+    np.testing.assert_allclose(np.asarray(jax.grad(f, 0)(lw, ft, mu)), 0.0, atol=1e-12)  # ∂/∂weights = 0
+    np.testing.assert_allclose(np.asarray(jax.grad(f, 2)(lw, ft, mu)), 0.0, atol=1e-12)  # ∂/∂μ = 0
+    assert np.abs(np.asarray(jax.grad(f, 1)(lw, ft, mu))).sum() > 0.1        # ∂/∂times ≠ 0
+
+
+def test_joint_params_bounds_and_helpers():
+    """JointParams (D4 umbrella) + particle_bounds/joint_bounds work with the generic
+    normalize/denormalize/mask helpers unchanged."""
+    import jax
+    import jax.numpy as jnp
+    from lucid.detector_params import (
+        JointParams, DetectorParams, ParticleParams, particle_bounds, joint_bounds,
+        normalize_params, denormalize_params, make_optimization_mask)
+    NS = 16
+    pmin, pmax = particle_bounds(16.9, 36.2)
+    assert isinstance(pmin, ParticleParams)
+    np.testing.assert_allclose(np.asarray(pmin.position), [-16.9, -16.9, -18.1])
+    np.testing.assert_allclose(np.asarray(pmax.position), [16.9, 16.9, 18.1])
+    jmin, jmax = joint_bounds(NS, 16.9, 36.2)
+    assert isinstance(jmin, JointParams) and isinstance(jmin.detector, DetectorParams)
+
+    # a sample JointParams + normalize/denormalize round-trip through the generic helpers
+    dp = DetectorParams.from_flat(scatter_length=70., mie_scatter_length=3000., g=0.9,
+                                  wall_reflection_rate=.2, sensor_reflection_rate=.2,
+                                  absorption_length=60., qe=0.07, qe_corrections=jnp.ones(NS))
+    track = ParticleParams.from_cartesian(1050., [1., 2., 3.], [0., 0., 1.], 0.)
+    jp = JointParams(dp, track)
+    back = denormalize_params(normalize_params(jp, jmin, jmax), jmin, jmax)
+    np.testing.assert_allclose(np.asarray(back.particle.position), [1., 2., 3.], rtol=1e-4)
+    np.testing.assert_allclose(float(back.detector.scattering.scatter_length), 70., rtol=1e-4)
+
+    # mask selects leaves by name across BOTH sub-pytrees
+    mask = make_optimization_mask(jp, {'energy', 'scatter_length'})
+    assert bool(mask.particle.energy) is True
+    assert bool(mask.detector.scattering.scatter_length) is True
+    assert bool(mask.detector.response.qe) is False

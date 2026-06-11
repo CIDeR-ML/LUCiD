@@ -1,7 +1,7 @@
 import jax.numpy as jnp
 from jax import jit
 import jax
-from jax.scipy.special import gammaln
+from jax.scipy.special import gammaln, erf
 
 
 @jit
@@ -473,6 +473,59 @@ def first_arrival_nll(log_w, flat_times, flat_indices,
     loss = jnp.where(empty, 0.0, loss)
 
     return loss
+
+
+def _log1mexp(a):
+    """Numerically-stable ``log(1 - exp(a))`` for ``a < 0`` (Mächler 2012)."""
+    a = jnp.minimum(a, -1e-7)
+    return jnp.where(a > -0.6931, jnp.log(-jnp.expm1(a)), jnp.log1p(-jnp.exp(a)))
+
+
+def first_arrival_window_nll(log_w, flat_times, flat_indices, t_obs_per_sensor,
+                             mu_total, obs_counts, num_detectors,
+                             sigma=2.5, delta=1.0):
+    """Windowed first-arrival ORDER-STATISTIC time NLL — the reconstruction time term.
+
+    Mean-field-correct first arrival (the recon recipe, RECO_PIPELINE §3.2). The
+    expected-value engine cannot represent a model ``min`` (an order statistic), so instead
+    build ``R(t) = Σ wᵢ·½(1+erf((t−tᵢ)/(σ√2)))`` = the expected cumulative photon count before
+    ``t`` (a MEAN, hence engine-exact), the analytic survival ``S(t) = (μ − R(t))/μ``, and the
+    count-conditioned NLL over the window ``[t_obs ± δ/2]``::
+
+        tnll = −n·log S(t_lo) − log( S(t_lo)ⁿ − S(t_hi)ⁿ )
+
+    AMP_DETACH is baked in: the photon weights ``ww`` and the per-PMT total ``μ`` are
+    ``stop_gradient``'d, so this term's gradient flows ONLY through the predicted times
+    ``flat_times`` — charge owns counts/energy, time owns geometry (without the detach the two
+    terms fight and energy blows up). Per-PMT; unlit PMTs (``obs_counts<=0``) contribute 0.
+
+    Parameters
+    ----------
+    log_w, flat_times, flat_indices : per-photon log-weight, predicted arrival time, sensor idx
+        (the ``per_photon`` hit-mode outputs).
+    t_obs_per_sensor : (num_detectors,) observed first-arrival time, ALREADY t0-shifted.
+    mu_total : (num_detectors,) predicted per-PMT total charge ``μ``.
+    obs_counts : (num_detectors,) observed per-PMT count ``n``.
+    num_detectors : int.
+    sigma : per-photon time resolution (= TTS), ns. delta : window width, ns.
+
+    Returns
+    -------
+    (num_detectors,) per-PMT time NLL (sum it for the scalar term).
+    """
+    sq = jnp.sqrt(2.0)
+    ww = jax.lax.stop_gradient(jnp.exp(jnp.clip(log_w, -60, 20)))      # AMP_DETACH (weights)
+    muS = jax.lax.stop_gradient(jnp.maximum(mu_total, 1e-8))           # AMP_DETACH (total)
+    tobs = t_obs_per_sensor[flat_indices]
+    Rlo = jax.ops.segment_sum(ww * 0.5 * (1 + erf((tobs - delta / 2 - flat_times) / (sigma * sq))),
+                              flat_indices, num_segments=num_detectors)
+    Rhi = jax.ops.segment_sum(ww * 0.5 * (1 + erf((tobs + delta / 2 - flat_times) / (sigma * sq))),
+                              flat_indices, num_segments=num_detectors)
+    Slo = jnp.clip((muS - Rlo) / muS, 1e-12, 1.)
+    Shi = jnp.clip((muS - Rhi) / muS, 1e-12, 1.)
+    n = jnp.maximum(obs_counts, 0.)
+    a = jnp.minimum(n * (jnp.log(Shi) - jnp.log(Slo)), -1e-9)
+    return jnp.where(obs_counts > 0, -n * jnp.log(Slo) - _log1mexp(a), 0.)
 
 
 # =============================================================================
