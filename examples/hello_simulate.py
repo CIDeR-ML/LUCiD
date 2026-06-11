@@ -10,10 +10,10 @@ from lucid.detector_params import ParticleParams
 from lucid.visualization import create_detector_display
 
 GEOM, PHYS = 'config/SK_like_geom_config.json', 'config/SK_like_physics_config.json'
-# (small grid + photon count keep this a ~10s demo; production uses ~1e6 photons, full grid)
+# Full grid so every PMT is reachable (a coarse grid drops sensors → exact-zero → white holes).
 sim = setup_event_simulator(GEOM, 200_000, K=4, physics_config=PHYS,
                             default_detector_params=True, particle='muon',
-                            n_cap=40, n_angular=80, n_height=40)
+                            n_cap=150, n_angular=250, n_height=150)
 
 track = ParticleParams.from_cartesian(energy=1000., position=[0., 0., 0.],
                                       direction=[1., 0., 0.], t0=0.)       # horizontal → barrel ring
@@ -21,5 +21,5 @@ charge = np.asarray(sim(track, jax.random.PRNGKey(0))[3])                  # (n_
 print(f'{(charge > 0).sum()} of {charge.size} PMTs lit, total charge {charge.sum():.0f} pe')
 
 display = create_detector_display(GEOM, sparse=False)                      # canonical unrolled display
-display(charge, np.zeros_like(charge), file_name='hello_simulate.png', perc_max=99.5)
+display(charge, np.zeros_like(charge), file_name='hello_simulate.png', perc_min=0.0, perc_max=99.5)
 print('wrote hello_simulate.png')
