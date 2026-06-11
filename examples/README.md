@@ -1,16 +1,16 @@
 # LUCiD hello-world examples
 
 Three short runnable scripts against the **real, current** API — the fastest way to see what
-LUCiD does. They auto-detect the platform (GPU if present, else CPU) and write one figure or
-table each. `hello_simulate` / `hello_reconstruct` are quick anywhere (~10–20 s warm); on a
-GPU `hello_calibrate` (1e6 photons + Fisher/CRB + 100 GN steps) is ~1–2 min — much slower on
-CPU. They use a reduced detector grid for speed; production uses the full grid.
+LUCiD does. They auto-detect the platform (GPU if present, else CPU) and write a figure or
+table. `hello_simulate` is quick anywhere (~15 s warm); `hello_calibrate` (1e6 photons +
+Fisher/CRB + 100 GN steps) and `hello_reconstruct` (100+-step Fisher-GN) are ~1–3 min on a
+GPU, much slower on CPU. They use a reduced detector grid for speed; production uses the full grid.
 
 ```bash
 pip install -e .
 python examples/hello_simulate.py      # forward: muon -> per-PMT charge (event display)
 python examples/hello_calibrate.py     # calibration: recover optical params + Cramer-Rao bound
-python examples/hello_reconstruct.py   # reconstruction: muon energy from observed light
+python examples/hello_reconstruct.py   # reconstruction: full 9-param track fit (Fisher-GN)
 ```
 
 Expected `hello_calibrate` output (7 globals recovered, all 10764 per-PMT gains marginalised):
@@ -31,19 +31,23 @@ reflectivity — the timing-observable frontier.)
 
 | script | what it shows | API it calls |
 |--------|---------------|--------------|
-| `hello_simulate.py` | the differentiable forward `ParticleParams → per-sensor charge`, drawn as an unrolled-cylinder event display | `setup_event_simulator` |
+| `hello_simulate.py` | the differentiable forward `ParticleParams → per-sensor charge`, drawn with the canonical unrolled-cylinder event display (Cherenkov ring on the barrel) | `setup_event_simulator`, `create_detector_display` |
 | `hello_calibrate.py` | the validated Gauss-Newton + per-PMT-Schur fit recovering optical scales from calibration sources, vs the Fisher/CRB bound | `lucid.fitting`: `build_calibration_problem`, `fit`, `crb` |
-| `hello_reconstruct.py` | reconstructing muon energy by scanning the forward (Stage-0 of the production pipeline); the loss landscape is smooth with a clean minimum at truth | `setup_event_simulator` |
+| `hello_reconstruct.py` | full 9-parameter track reconstruction (E, vertex, direction, t0) by Fisher-Gauss-Newton, mirroring LUCiD_recon's latest case | `setup_event_simulator` |
 
 ## Notes
 
 - **Calibration is the gradient-fitting showcase.** `hello_calibrate.py` exercises the real
   optimizer (`lucid.fitting`) — the same recipe the calibration campaign ran on.
-- **Reconstruction here is a forward scan, by design.** Full multi-parameter track
-  reconstruction (vertex/direction/t0/energy by gradient descent) lives in
-  `lucid.optimization` and is the subject of `docs/RECON_CONSOLIDATION.md`. The energy
-  gradient through the SIREN emitter carries DiCE-score noise, so robust *gradient* recon
-  needs the conditioning + loss treatment documented there — out of scope for a 20-line demo.
+- **Reconstruction mirrors LUCiD_recon's latest case** (`gn_fisher_recon.py` /
+  `RECO_PIPELINE.md`): a 9-parameter `[E, x, y, z, dir, t0]` Fisher-Gauss-Newton fit on a
+  Poisson-charge + first-arrival **order-statistic-time** loss, run in SCALE9-preconditioned
+  coordinates with finite-difference Jacobians (the DiCE `custom_vjp` blocks `jacfwd`, and the
+  autodiff track-Hessian is indefinite, so a PSD Fisher metric is built and stepped against).
+  The demo uses SK_like geometry and **SIREN-sampled** truth (self-contained, no GEANT4 ROOT),
+  so it shows the optimizer + loss machinery and its self-consistent floor — not the
+  GEANT4-vs-SIREN cone mismatch that sets the ~13 cm physics floor (`RECO_PIPELINE.md` §6).
+  It captures a track from ~0.7 m / ~2.5° / ~125 MeV off down to ~cm / sub-degree / few-MeV.
 - The `fit(forward, residual=, solver=)` / `SimParams` / `Field` interface described in
   `docs/MAIN_BRANCH_PLAN.md` is a **proposal**, not yet built. These examples call the
   canonical API that exists today.
