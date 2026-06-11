@@ -165,3 +165,26 @@ optimizers, losses, hit-mode internals stay behind `from lucid.fitting import �
 pin toy-fit `log_theta`/`k` to 1e-6 (not 0.05); one e2e calib fit on WCTE fixture; order-stat `tnll`
 value-pin (capture reference from recon FIRST); amp_detach gradient-routing test; `counts_loss(normalize=False)`
 pin; an `@slow` recon floor smoke (bias-limited vtx~13cm/dir~1.8°/E~2.3%, NOT matched-SIREN best).
+
+---
+
+## 9. Extensibility — what it takes to add physics / change the loss / etc.
+(Audited against the code. Classes: **LOCAL** = one place via a seam · **CHECKLIST** = 2-3 known spots · **HARD** = no seam, ripples through the `custom_vjp`.)
+
+| Extension | Class | What you touch |
+|---|---|---|
+| **Change/add a LOSS term** (new charge/time residual) | **LOCAL** | edit the `residual_and_jac` closure → add/replace one `(r,J,W)` block. `fit`/`assemble_normal` never see the form. (Notebook API: add to `lucid.losses` + the one `likelihood_loss`.) **The design's best seam.** |
+| **Add a per-PMT NUISANCE** (e.g. per-PMT gain, 3rd Schur block) | **LOCAL** (under v3) | append a nuisance closure (`Jk` + gauge) to the `nuisance` list; `assemble_normal` loops it. (Today it's a 2-block hardcode in `fit_charge_time` — v3 turns it into the loop.) |
+| **Add a SOURCE / GEOMETRY** | **LOCAL** | source = callable-NamedTuple + factory (duck-typed by `sim`); geometry = `@register_detector`. (Wart: geometry *construction* still has an `if cls is Cylinder/...` chain — a 2nd spot.) |
+| **New reflection model** | **LOCAL** | `reflection.py`: new fn + params-NamedTuple + 1 registry line + `build_refl_params` line. The reference seam. |
+| **Add a fitted PARAMETER** (`DetectorParams`/`ParticleParams` leaf) | **CHECKLIST** | auto-flows through `normalize`/`make_optimization_mask`/`from_flat` (generic tree-walks); but hand-edit ~5 explicit per-field dicts (`default_bounds`, `default_gradient_scales`, `create_default_*`, `from_flat` defaults, JSON-loader `_NEUTRAL_DEFAULTS`) **+ the forward consumer** — each fails loudly (`_nest_flat_kwargs` requires every field; a missed loader default NaN-poisons the forward). |
+| **Add an OBSERVABLE** (waveform / new time stat) | **CHECKLIST** | `make_hits` IS a factory (new `make_hits_*` + builder + 1 dict entry + `_VALID_HIT_MODES`); but the per-photon-vs-aggregated output shape has no contract — if the observable needs more than `(flat_weights,indices,times)` + the `response` bundle, you touch `_common_propagation`. Timing semantics live *inside* each `make_hits` (no separable "time model"). |
+| **Add NEW TRANSPORT PHYSICS** (new scatter type / WLS / 2nd absorption) | **HARD** | no seam. Reflection is seamed but scatter/absorption are hard-coded inline in TWO step twins (`photon_iteration_update_factors` + `_sample`), behind a fixed-arg `custom_vjp` `_core` whose arglist + the hand-written `vmap in_axes` literal + `OpticalArrays` + the 5-tuple threading all reshape together. Only the DiCE `log_p` folding is already general. |
+
+### The 3 seams to ADD (so the hard/checklist cases become local) — adopt into the plan:
+1. **An `OpticalProcess`/`ScatterModel` registry mirroring `reflection.py`** — the highest-value addition and the real answer to "add new physics." Generalize reflection's pattern (single **packed-pytree** params arg + a `process_fn(...)->(factors, logp_increment)` closed statically into the step factory + the DiCE-score channel) to the medium step, so Mie/WLS/new-absorption is a one-file change instead of editing the `custom_vjp` core + both step twins + the `vmap in_axes` + `OpticalArrays`. This is the one place the forward is NOT yet "one engine with plugins."
+2. **A single per-field metadata table for `DetectorParams`** (`name → min,max,scale,default,live-in-mode`) that the ~5 generator dicts read — collapses "edit 5-7 places or NaN-poison" into one table edit, and doubles as the live-field matrix (§2). Add `particle_bounds()`/`particle_scale()` so `ParticleParams` matches.
+3. **Written CONTRACTS for the closure surfaces** — because v3 trades typed dataclasses for closures+kwargs, the contract of `residual_and_jac` (shapes, `W` convention), the nuisance closure (`Jk`+gauge), and the `make_hits` output shapes live only in docstrings. Write them down (a `fitting/CONTRACTS.md` or rich docstrings). This is the mitigation for the one place simplification *hurts*: extensibility stays high, **discoverability** drops without types.
+
+### Verdict
+The closures+kwargs simplification **helps** extensibility for the whole fitting/loss layer (loss term, nuisance, observable-block are all LOCAL closures; `assemble_normal` dedups real code) and is **orthogonal** to the one HARD case (transport physics is a `custom_vjp` problem, not a fitting one). It mildly **hurts discoverability** (no types → read the source), mitigated by seam #3. So: keep the simplified fitting design; add seam #1 (process registry) to make "new physics" local; add seams #2-3 (metadata table + written contracts) to de-risk the checklists. With these, every common extension is one local edit.
