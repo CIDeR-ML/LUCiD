@@ -217,19 +217,28 @@ def fit_track(model, obs_counts, obs_times, start, *, nkeys=4, niters=250, lr=8.
     return out
 
 
-def fit_track_multistart(model, obs_counts, obs_times, starts, *, nkeys=4, seed=0, **kw):
-    """Run :func:`fit_track` from several seeds and keep the LOWEST-LOSS result.
+def fit_track_multistart(model, obs_counts, obs_times, starts, *, nkeys=4, seed=0,
+                         prefer=0, margin=0.01, **kw):
+    """Run :func:`fit_track` from several seeds and keep the best by a MARGIN-GATED data loss.
 
     The time-multilateration seed (:func:`seed_vertex_time`) nails the transverse vertex but is
     biased forward along the track (it finds the Cherenkov time-centroid, ~½ a track-length ahead
     of the vertex); the charge-grid seed is the reverse — fine longitudinally on most events,
     but it loses inward-pointing tracks where the ring is vertex-degenerate. The two are
-    COMPLEMENTARY, so fitting from both and arbitrating by the converged data loss gets the best
-    of each: provably never worse than either seed alone, and it rescues the inward-track tail.
+    COMPLEMENTARY, so fitting from both and arbitrating by the converged data loss rescues the
+    inward-track tail (wanderers >1 m → 0, RMS halved on a 100-event GEANT4 study).
 
-    ``starts`` is a list of 9-vectors. Returns ``(best_theta, info)`` where ``info`` has
-    ``which`` (winning seed index), ``losses`` (per-seed converged loss), and ``per_seed`` (the
-    list of ``(theta, history)`` from each :func:`fit_track`, ``hist=True``).
+    But plain argmin OVER-SELECTS the time seed: the SIREN-emission bias means the loss minimum
+    isn't exactly at truth, so on easy events the forward-biased basin can score a marginally
+    lower loss yet a worse vertex (28/100 events regressed >5 cm at margin=0). The fix is a
+    relative ``margin``: keep the ``prefer``-th seed (the charge grid — longitudinally unbiased
+    on the bulk) unless another seed beats it by ``margin`` × |loss|. A 1% margin picks the time
+    seed only on the ~4/100 decisive rescues, leaving the median tied with the charge-only
+    baseline while still killing the tail (validated retrospectively over the loss/error grid).
+
+    ``starts`` is a list of 9-vectors (put the safe default first → ``prefer=0``). Returns
+    ``(best_theta, info)`` with ``info`` = ``which`` (winning seed index), ``losses`` (per-seed
+    converged loss), and ``per_seed`` (each ``(theta, history)`` from :func:`fit_track`).
     """
     oc = jnp.asarray(obs_counts); ot = jnp.asarray(obs_times)
     keys = [jax.random.PRNGKey(seed + s) for s in range(nkeys)]
@@ -239,5 +248,9 @@ def fit_track_multistart(model, obs_counts, obs_times, starts, *, nkeys=4, seed=
 
     per_seed = [fit_track(model, oc, ot, s, nkeys=nkeys, seed=seed, hist=True, **kw) for s in starts]
     losses = [dloss(th) for th, _ in per_seed]
-    which = int(np.argmin(losses))
+    # margin gate: switch off the preferred seed only when another beats it DECISIVELY
+    base = losses[prefer]; thr = base - margin * abs(base); which = prefer
+    cand = [i for i in range(len(losses)) if i != prefer and losses[i] < thr]
+    if cand:
+        which = min(cand, key=lambda i: losses[i])
     return per_seed[which][0], dict(which=which, losses=losses, per_seed=per_seed)
