@@ -126,6 +126,7 @@ for ev in EVENTS:
         seA, seB = errs(seedA, th9, d), errs(seedB, th9, d)
         fe = errs(res, th9, d); fA = errs(MS['per_seed'][0][0], th9, d); fB = errs(MS['per_seed'][1][0], th9, d)
         np.savez(os.path.join(OUT, f'ev{ev:03d}.npz'), truth=th9, tdir=d, seedA=seedA, seedB=seedB, fit=res,
+                 fitA=MS['per_seed'][0][0], fitB=MS['per_seed'][1][0],   # per-seed 9-vecs: truth-rescorable
                  traj=H['traj'], gnorm=H['gnorm'], best_iter=H['best_iter'], which=MS['which'],
                  losses=np.array(MS['losses']), seedA_err=np.array(seA), seedB_err=np.array(seB),
                  fitA_err=np.array(fA), fitB_err=np.array(fB), fit_err=np.array(fe),
