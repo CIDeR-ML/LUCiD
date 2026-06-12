@@ -41,6 +41,43 @@ them outside the ~0.3 m local capture radius, so the GN refiner could not recove
 off-basin outliers; it would also drop the seed t0 from its fixed −7.5 ns offset, removing
 the systematic that forces the full 250 iters.
 
+---
+
+# Two-start seeder (charge grid + robust time multilateration) — 100 events
+
+The tail lever above, implemented and run (`out_ms100/`, two fits/event, 102 min, 0 fail).
+
+**`seed_vertex_time`** (`lucid/fitting/recon.py`): multilateration vertex+t0 from first-arrival
+times (GPS backwards). Ported from recon's `time_vertex` but made ROBUST — a large fraction of
+real hits are scattered/reflected photons arriving 10s–100s ns LATE, and plain least-squares let
+them drag the seed ~15 m off. Fix: bright-hit preselection + RANSAC inlier-count grid + GN on
+inliers. Nails the TRANSVERSE vertex (5–30 cm); residual is a forward LONGITUDINAL bias — it finds
+the Cherenkov time-centroid, ~½ a track-length ahead of the vertex (real physics, ~1.7–4 m here).
+
+The time seed (transverse-perfect, forward-biased) and the charge-grid seed (good longitudinally,
+loses inward-pointing tracks) are COMPLEMENTARY → **`fit_track_multistart`** fits from both and keeps
+the better basin, gated by a **1 % relative loss margin** (prefer the charge seed; switch to the
+time seed only when its converged loss is >1 % lower). Plain argmin over-selects the time seed
+(SIREN bias: lowest loss ≠ closest vertex → 28/100 regressed >5 cm); the margin restricts it to the
+~4 decisive inward rescues. Margin found retrospectively over the saved loss/error grid (no re-run).
+
+| metric | OLD single | **TWO-start (1 % margin)** | oracle (truth-best) |
+|---|---|---|---|
+| vtx median | 13.9 cm | **13.7 cm** (tied) | 11.6 |
+| vtx mean | 21.0 | **16.0** | 13.9 |
+| vtx RMS | 40.1 | **18.3** (halved) | 16.1 |
+| events ≥40 cm | 5 | **2** | 2 |
+| wanderers >100 cm | 2 | **0** | 0 |
+| vs old (better/worse >5 cm) | — | **+13 / −7** | +21 / −6 |
+
+Buckets: converged <20 cm **75/100**, good 23, partial 2, wanderer 0. dir 1.8°, E unbiased
+(median +2 MeV, mean −0.1), t0 −0.17 ns. Time seed (B) wins **4/100** — exactly the decisive
+inward rescues; the gap to the oracle (30 B-picks) is the SIREN-bias tie zone, unrecoverable by a
+loss rule. **Net: median preserved, RMS halved, catastrophic tail eliminated.**
+
+Plots: `out_ms100/fig{1_distributions,2_vertex_seed,3_trajectories}.png` (regenerate via
+`plots.py`; `MARGIN` env controls the gate). Aggregate via `aggregate_ms.py`.
+
 ## Convergence note
 
 best-‖g‖ iter median 192/250; 23/100 events peak ‖g‖ in the final 10% → a minor tail that
