@@ -78,6 +78,37 @@ loss rule. **Net: median preserved, RMS halved, catastrophic tail eliminated.**
 Plots: `out_ms100/fig{1_distributions,2_vertex_seed,3_trajectories}.png` (regenerate via
 `plots.py`; `MARGIN` env controls the gate). Aggregate via `aggregate_ms.py`.
 
+---
+
+# Truth definition — exact gun truth, not PCA of photon origins
+
+`derive_truth` originally took the truth vertex/direction from **PCA of the photon origins**.
+That is a PROXY: the photon origins are Cherenkov emission points along the muon path, and the
+muon **multiple-scatters**, so PCA fits the AVERAGE of the curved track — vertex pulled by the
+lateral scatter excursion, direction = path-average, not the initial direction.
+
+The muon gun is trivially known: verified from the ROOT (`EdepPos` is empty, but the
+most-upstream primary-Cherenkov emission is **(0,0,0) for every event**), the muon fires from the
+**ORIGIN in +z**. `rand_tf` applies a known rotation+shift `(R, sh)`, so the **exact truth is just
+that transform of (origin, +z)** — `vtx = (0−c)@Rᵀ + c + sh`, `dir = ẑ@Rᵀ`. No PCA. The data is
+independent of the truth label (data mode reads the ROOT photons; the track arg is vestigial —
+`simulator.py::_simulation_with_data_impl`), so the fits are unchanged — only the scoring changes.
+`worker.py::rand_tf` now returns the exact truth; re-score saved runs with `rescore_truth.py`.
+
+The PCA proxy was **3.5 cm / 2.28°** off the true initial track. Re-scoring the 100 fits:
+
+| | vs PCA proxy (old) | **vs EXACT gun truth** |
+|---|---|---|
+| vertex median | 15.7 cm | **15.4 cm** (≈ unchanged — proxy err washes out) |
+| direction median | 1.68° | **1.01°** |
+| direction mean | 1.85° | **1.10°** |
+
+**Direction resolution is ~1.0°, not ~1.8°** — the recon fits the Cherenkov ring (bright early
+track ≈ initial direction) and recovers the INITIAL direction better than PCA-of-all-origins does;
+we had been comparing it to a reference that was itself 2.3° off. Vertex (~15 cm) is robust to the
+truth definition. Energy/t0 unchanged (truth energy fixed, t0=0 either way).
+Figure: `out_ms100/fig4_truth_correction.png`.
+
 ## Convergence note
 
 best-‖g‖ iter median 192/250; 23/100 events peak ‖g‖ in the final 10% → a minor tail that

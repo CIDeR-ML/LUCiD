@@ -59,17 +59,19 @@ def rand_tf(raw, ev):                                    # randomize geometry in
     raw = dict(raw); O = np.asarray(raw['photon_origins']).astype(float)
     D = np.asarray(raw['photon_directions']).astype(float); R = _rotax(axis, beta); c = O.mean(0)
     raw['photon_origins'] = (O - c) @ R.T + c + sh; raw['photon_directions'] = D @ R.T
-    return raw
+    # EXACT truth: the muon gun fires from the ORIGIN (0,0,0) in +z (verified from the ROOT:
+    # most-upstream primary-Cherenkov emission is (0,0,0) for every event); apply the SAME
+    # transform. This is the physical initial track — NOT a PCA of the photon origins, which
+    # fits the AVERAGE of the multiple-scattered path (off by ~3.5cm / ~2.3deg, see RESULTS.md).
+    vtx_true = ((np.zeros(3) - c) @ R.T + c + sh) / 100.0     # meters
+    dir_true = np.array([0., 0., 1.]) @ R.T                   # transformed +z
+    return raw, vtx_true, dir_true
 
 
-def derive_truth(raw):                                   # truth vertex/dir via PCA of photon origins
-    P = np.asarray(raw['photon_origins']) / 100.0; tt = np.asarray(raw['photon_times']); C = P - P.mean(0)
-    _, _, vt = np.linalg.svd(C, full_matrices=False); d = vt[0]; proj = C @ d
-    if np.corrcoef(proj, tt)[0, 1] < 0: d = -d; proj = -proj
-    vtx = P.mean(0) + proj.min() * d
+def truth9(vtx, d, energy):                              # physical (vertex, direction, energy) -> 9-vec + dir
     pol = float(np.arccos(np.clip(d[2], -1, 1))); az = float(np.arctan2(d[1], d[0]))
-    return np.array([float(raw['energy']), vtx[0], vtx[1], vtx[2],
-                     np.sin(pol), np.cos(pol), np.sin(az), np.cos(az), 0.]), d
+    return np.array([float(energy), vtx[0], vtx[1], vtx[2],
+                     np.sin(pol), np.cos(pol), np.sin(az), np.cos(az), 0.]), np.asarray(d)
 
 
 def pad_event(raw):
@@ -94,8 +96,8 @@ def errs(x, th9, d):
 for ev in EVENTS:
     t0 = time.time()
     try:
-        raw = rand_tf(read_photon_data_from_photonsim(ROOT, ev), ev)
-        th9, d = derive_truth(raw); pd = pad_event(raw)
+        raw, vtx_true, dir_true = rand_tf(read_photon_data_from_photonsim(ROOT, ev), ev)
+        th9, d = truth9(vtx_true, dir_true, raw['energy']); pd = pad_event(raw)
         c, t = jax.lax.stop_gradient(data_sim(track_from_vec9(jnp.asarray(th9)),
                                               jax.random.PRNGKey(7000 + ev), pd))
         oc = np.asarray(c); ot = np.where(oc > 0, np.asarray(t), 0.)
