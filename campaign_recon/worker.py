@@ -116,7 +116,7 @@ for ev in range(E0, E0 + EC):
         se, fe = errs(seed, th9, d), errs(res, th9, d)
         np.savez(os.path.join(OUT, f'ev{ev:03d}.npz'), truth=th9, tdir=d, seed=seed, fit=res,
                  traj=H['traj'], gnorm=H['gnorm'], best_iter=H['best_iter'],
-                 seed_err=np.array(se), fit_err=np.array(fe), n_hit=int(hit.sum()), q_tot=float(oc.sum()))
+                 seed_err=np.array(se), fit_err=np.array(fe), n_hit=int((oc > 0).sum()), q_tot=float(oc.sum()))
         print(f'ev{ev:03d} seed vtx{se[0]:5.0f}cm dir{se[1]:4.1f} E{se[2]:+5.0f} t0{se[3]:+5.1f} | '
               f'fit vtx{fe[0]:5.1f}cm dir{fe[1]:4.2f} E{fe[2]:+6.1f} t0{fe[3]:+5.2f} [{time.time()-t0:.0f}s]', flush=True)
     except Exception as e:
