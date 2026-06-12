@@ -109,6 +109,27 @@ we had been comparing it to a reference that was itself 2.3° off. Vertex (~15 c
 truth definition. Energy/t0 unchanged (truth energy fixed, t0=0 either way).
 Figure: `out_ms100/fig4_truth_correction.png`.
 
+## FINAL result — two-start (1% margin) scored vs exact gun truth (100 events)
+
+`out_ms100/` re-run with `worker.rand_tf` returning the exact truth and saving per-seed fit
+9-vecs; `aggregate_ms`/`plots` recompute everything (seeds, per-seed fits, margin selection,
+trajectories, old baseline) vs exact truth via `truth_exact.py`.
+
+| metric | OLD single-start | **TWO-start, 1% margin** |
+|---|---|---|
+| vertex median | 13.2 cm | **11.9 cm** |
+| vertex mean / RMS | 20.4 / 40.0 | **14.2 / 17.1** |
+| direction median | — | **0.94°** (mean 1.00) |
+| energy | — | **unbiased** (median +1.8, mean −1.0 MeV, RMS 13) |
+| t0 | — | **−0.06 ns** median (RMS 0.54) |
+| converged <20 cm | — | **81/100** |
+| ≥40 cm / wanderers >100 cm | 5 / 2 | **2 / 0** |
+
+vs old single-start (both vs exact): RMS 40→17 (more than halved), wanderers 2→0, median
+13.2→11.9; +16/−7 events. Time seed won 5/100 (the decisive inward rescues). Honest headline
+recon resolution: **vertex ~12 cm, direction ~1.0°, energy unbiased, t0 ~0.5 ns RMS.**
+Plots regenerated vs exact truth: `out_ms100/fig{1,2,3}.png`.
+
 ## Convergence note
 
 best-‖g‖ iter median 192/250; 23/100 events peak ‖g‖ in the final 10% → a minor tail that
