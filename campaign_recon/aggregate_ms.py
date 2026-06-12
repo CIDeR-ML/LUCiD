@@ -3,21 +3,25 @@ Reports convergence buckets, which-seed-won stats, and old-vs-new resolution sid
 import os, glob, numpy as np
 HERE = os.path.dirname(os.path.abspath(__file__))
 NEW = os.environ.get('OUT', os.path.join(HERE, 'out_ms100'))
+from truth_exact import exact_truth, fit_err_exact
 MARGIN = float(os.environ.get('MARGIN', '0.01'))                 # pick B only if it beats A by >1% loss
 nf = sorted(glob.glob(os.path.join(NEW, 'ev*.npz')))
 D = [np.load(f) for f in nf]; N = len(D)
-# margin-gated arbitration (recomputed from saved per-seed losses + errors; prefer A=charge seed)
-L = np.array([d['losses'] for d in D]); relgap = (L[:, 0] - L[:, 1]) / np.abs(L[:, 0])
-which = (relgap > MARGIN).astype(int)
-fit = np.array([d['fitB_err'] if w else d['fitA_err'] for d, w in zip(D, which)])
-fa = np.array([d['fitA_err'][0] for d in D]); fb = np.array([d['fitB_err'][0] for d in D])
-print(f'(arbitration: 1% loss margin, prefer charge seed; MARGIN={MARGIN})')
-# old single-start baseline, matched by event id
 ev_ids = [int(os.path.basename(f)[2:5]) for f in nf]
+ET = exact_truth(ev_ids)                                          # exact gun truth per event
+# per-seed errors vs EXACT truth, recomputed from the saved 9-vecs (truth-source-independent)
+errA = np.array([fit_err_exact(d['fitA'], *ET[ev]) for d, ev in zip(D, ev_ids)])
+errB = np.array([fit_err_exact(d['fitB'], *ET[ev]) for d, ev in zip(D, ev_ids)])
+L = np.array([d['losses'] for d in D]); relgap = (L[:, 0] - L[:, 1]) / np.abs(L[:, 0])
+which = (relgap > MARGIN).astype(int)                             # margin-gated, prefer A=charge seed
+fit = np.where(which[:, None] == 1, errB, errA)                  # (N,4) margin-selected error vs exact
+fa = errA[:, 0]; fb = errB[:, 0]
+print(f'(arbitration: {MARGIN*100:.0f}% loss margin, prefer charge seed; scored vs EXACT gun truth)')
+# old single-start baseline, matched by event id — ALSO re-scored vs exact (its 'fit' 9-vec)
 old = []
 for ev in ev_ids:
     of = os.path.join(HERE, 'out', f'ev{ev:03d}.npz')
-    old.append(np.load(of)['fit_err'][0] if os.path.exists(of) else np.nan)
+    old.append(fit_err_exact(np.load(of)['fit'], *ET[ev])[0] if os.path.exists(of) else np.nan)
 old = np.array(old)
 
 

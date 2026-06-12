@@ -5,12 +5,13 @@ Usage: PYTHONPATH=. python campaign_recon/plots.py
 import os, glob, numpy as np
 import matplotlib; matplotlib.use('Agg')
 import matplotlib.pyplot as plt
+from truth_exact import exact_truth, fit_err_exact, vec9_dir as _vd
 HERE = os.path.dirname(os.path.abspath(__file__))
 NEW = os.environ.get('NEW', os.path.join(HERE, 'out_ms100'))
 OLD = os.path.join(HERE, 'out')
 
 
-def vec9_dir(v):
+def vec9_dir(v):                                    # vectorized form (for trajectory arrays)
     st, ct, sp, cp = v[..., 4], v[..., 5], v[..., 6], v[..., 7]
     nt = np.hypot(st, ct); npp = np.hypot(sp, cp)
     return np.stack([st / nt * cp / npp, st / nt * sp / npp, ct / nt], -1)
@@ -20,15 +21,19 @@ MARGIN = float(os.environ.get('MARGIN', '0.01'))    # arbitration: pick time-see
 nf = sorted(glob.glob(os.path.join(NEW, 'ev*.npz')))
 D = [np.load(f) for f in nf]
 N = len(D)
-# margin-gated arbitration (recomputed from saved per-seed losses + errors; prefer A=charge seed)
+ev_ids = [int(os.path.basename(f)[2:5]) for f in nf]
+ET = exact_truth(ev_ids)                            # exact gun truth per event — score EVERYTHING vs this
+# per-seed errors vs EXACT truth, recomputed from saved 9-vecs; margin-gated (prefer A=charge)
+errA = np.array([fit_err_exact(d['fitA'], *ET[ev]) for d, ev in zip(D, ev_ids)])
+errB = np.array([fit_err_exact(d['fitB'], *ET[ev]) for d, ev in zip(D, ev_ids)])
 L = np.array([d['losses'] for d in D]); relgap = (L[:, 0] - L[:, 1]) / np.abs(L[:, 0])
 which = (relgap > MARGIN).astype(int)               # winning seed under the 1% margin
-fit = np.array([d['fitB_err'] if w else d['fitA_err'] for d, w in zip(D, which)])  # (N,4)
+fit = np.where(which[:, None] == 1, errB, errA)     # (N,4) margin-selected, vs exact
 which_saved = np.array([int(d['which']) for d in D])  # the basin whose trajectory was saved (argmin)
-seedA = np.array([d['seedA_err'][0] for d in D]); seedB = np.array([d['seedB_err'][0] for d in D])
-# old baseline matched
-ev_ids = [int(os.path.basename(f)[2:5]) for f in nf]
-old = np.array([np.load(os.path.join(OLD, f'ev{e:03d}.npz'))['fit_err'][0]
+seedA = np.array([fit_err_exact(d['seedA'], *ET[ev])[0] for d, ev in zip(D, ev_ids)])
+seedB = np.array([fit_err_exact(d['seedB'], *ET[ev])[0] for d, ev in zip(D, ev_ids)])
+# old single-start baseline, re-scored vs exact too
+old = np.array([fit_err_exact(np.load(os.path.join(OLD, f'ev{e:03d}.npz'))['fit'], *ET[e])[0]
                 if os.path.exists(os.path.join(OLD, f'ev{e:03d}.npz')) else np.nan for e in ev_ids])
 
 # ---------- Figure 1: final-result distributions ----------
@@ -60,8 +65,9 @@ ax[1].plot([0, 400], [0, 400], 'k--', lw=0.7, alpha=0.5)
 ax[1].set_xlabel('best seed vtx |Δ| (cm)'); ax[1].set_ylabel('fit vtx |Δ| (cm)')
 ax[1].set_title('seed → fit (color = winning seed: blue=A charge, red=B time)'); ax[1].grid(alpha=0.25)
 ax[1].set_xlim(0, 400); ax[1].set_ylim(0, max(60, fit[:, 0].max() * 1.1))
-# which seed won, split by inwardness
-cw = np.array([float(d['tdir'] @ (lambda r: r / (np.linalg.norm(r) + 1e-9))(np.r_[d['truth'][1:3], 0.])) for d in D])
+# which seed won, split by inwardness (cWall from exact truth)
+cw = np.array([float(ET[ev][1] @ (lambda r: r / (np.linalg.norm(r) + 1e-9))(np.r_[ET[ev][0][:2], 0.]))
+               for ev in ev_ids])
 ax[2].scatter(cw, fit[:, 0], c=which, cmap='coolwarm', s=28, edgecolor='k', lw=0.3)
 ax[2].set_xlabel('cWall (track·outward-radial; <0 = inward)'); ax[2].set_ylabel('fit vtx |Δ| (cm)')
 ax[2].set_title(f'B(time) won {int((which==1).sum())}/{N}, A(charge) {int((which==0).sum())}/{N}'); ax[2].grid(alpha=0.25)
@@ -70,12 +76,12 @@ fig.tight_layout(); fig.savefig(os.path.join(NEW, 'fig2_vertex_seed.png'), dpi=1
 
 # ---------- Figure 3: per-parameter optimization trajectories ----------
 fig, ax = plt.subplots(2, 3, figsize=(15, 8))
-for d in D:
-    tr = d['traj']; th = d['truth']; it = np.arange(len(tr))
-    pos_err = np.linalg.norm(tr[:, 1:4] - th[1:4], axis=1) * 100
-    dirs = vec9_dir(tr); dtru = d['tdir']
-    ang = np.degrees(np.arccos(np.clip(dirs @ dtru, -1, 1)))
-    e_err = tr[:, 0] - th[0]; t0_err = tr[:, 8] - th[8]
+for d, ev in zip(D, ev_ids):
+    tr = d['traj']; vtx_true, dir_true = ET[ev]; it = np.arange(len(tr))   # score traj vs EXACT truth
+    pos_err = np.linalg.norm(tr[:, 1:4] - vtx_true, axis=1) * 100
+    dirs = vec9_dir(tr)
+    ang = np.degrees(np.arccos(np.clip(dirs @ dir_true, -1, 1)))
+    e_err = tr[:, 0] - 1050.; t0_err = tr[:, 8] - 0.
     c = 'crimson' if int(d['which']) == 1 else '#3477b8'   # color = saved (lower-loss) basin of this traj
     ax[0, 0].plot(it, pos_err, c=c, alpha=0.35, lw=0.7)
     ax[0, 1].plot(it, ang, c=c, alpha=0.35, lw=0.7)
