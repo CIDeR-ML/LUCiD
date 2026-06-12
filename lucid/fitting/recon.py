@@ -76,9 +76,10 @@ class ReconModel:
 
         def _perpmt(t9, oc, ot, key):
             lw, ft, fi, tot = pred(track_from_vec9(t9), key)
-            mu = jnp.maximum(tot * self.tot_n_scale, 1e-8)
-            tobs = ot - t9[8]                                    # free t0 shifts the observed times
-            tnll = first_arrival_window_nll(lw, ft, fi, tobs, mu, oc, self.ND,
+            mu = jnp.maximum(tot * self.tot_n_scale, 1e-8)       # SCALED charge (carries energy)
+            mu_surv = jnp.maximum(tot, 1e-8)                     # UNSCALED survival denom — must NOT
+            tobs = ot - t9[8]                                    # be scaled (else far-capture dies,
+            tnll = first_arrival_window_nll(lw, ft, fi, tobs, mu_surv, oc, self.ND,  # RECO_PIPELINE §3.4)
                                             sigma=self.sigma, delta=self.delta)
             return mu, tnll
 
