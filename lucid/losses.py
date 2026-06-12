@@ -504,7 +504,10 @@ def first_arrival_window_nll(log_w, flat_times, flat_indices, t_obs_per_sensor,
     log_w, flat_times, flat_indices : per-photon log-weight, predicted arrival time, sensor idx
         (the ``per_photon`` hit-mode outputs).
     t_obs_per_sensor : (num_detectors,) observed first-arrival time, ALREADY t0-shifted.
-    mu_total : (num_detectors,) predicted per-PMT total charge ``μ``.
+    mu_total : (num_detectors,) predicted per-PMT total ``μ`` — the survival denominator
+        ``S=(μ−R)/μ``. Pass the UNSCALED engine total (NOT a ``tot_n_scale``-scaled charge):
+        scaling the survival denominator corrupts ``S`` and collapses far-capture (the recon
+        recipe keeps it unscaled — RECO_PIPELINE §3.4). It is ``stop_gradient``'d here anyway.
     obs_counts : (num_detectors,) observed per-PMT count ``n``.
     num_detectors : int.
     sigma : per-photon time resolution (= TTS), ns. delta : window width, ns.
