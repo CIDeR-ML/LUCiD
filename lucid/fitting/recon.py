@@ -59,6 +59,65 @@ def vec9_from_track(energy, position, direction, t0=0.0):
                      np.sin(pol), np.cos(pol), np.sin(az), np.cos(az), float(t0)])
 
 
+def seed_vertex_time(pos, obs_counts, obs_times, *, vspeed=0.2167, vgrid=11, tankr=None,
+                     tankz=None, n_refine=20, gate=18.0, bright_frac=0.6, q_edge=0.10):
+    """Robust multilateration vertex + t0 seed from first-arrival times — pure geometry, NO
+    forward sim.
+
+    The charge ring fixes direction but is degenerate in *where along the track* the vertex sits;
+    first-arrival *times* break that by triangulation (GPS run backwards). A DIRECT photon at PMT
+    ``P`` arriving at ``T`` left the vertex ``v`` at ``t0`` and travelled straight at the water
+    group velocity ``vspeed`` (m/ns): ``T ≈ t0 + |P-v|/vspeed``. The vertex is where the spheres
+    of constant time-of-flight intersect.
+
+    ROBUSTNESS is essential on real data: a large fraction of hits are SCATTERED / REFLECTED
+    photons that arrive tens-to-hundreds of ns LATE (one-sided), and dim PMTs are scattered-
+    dominated (a bright PMT is ~90% direct light). A plain least-squares fit lets those late
+    outliers drag the vertex metres off (porting the recon's un-robust ``time_vertex`` put the
+    seed ~15 m out). So: (1) keep the brightest ``bright_frac`` of hits; (2) the coarse ``vgrid³``
+    tank scan scores each candidate by WEIGHTED INLIER COUNT — ``t0`` from the early edge
+    (quantile ``q_edge`` of the back-projected emission time), a hit is an inlier if its residual
+    is within ``±gate`` ns (scattered light, being late, falls outside); (3) a 20-step 3D
+    Gauss-Newton polish runs on INLIERS ONLY (re-selected each step), ``t0`` the closed-form
+    weighted-mean inlier residual. ``gate`` ~18 ns admits the direct core (track extent + TTS)
+    while rejecting scatter. ``tankr``/``tankz`` default to the PMT-array extent.
+
+    Returns ``(vtx (3,), t0 float)`` — feed straight into :func:`vec9_from_track`.
+    """
+    pos = np.asarray(pos, float)
+    if tankr is None: tankr = float(np.hypot(pos[:, 0], pos[:, 1]).max())
+    if tankz is None: tankz = float(np.abs(pos[:, 2]).max())
+    oc = np.asarray(obs_counts, float); ot = np.asarray(obs_times, float)
+    hit = oc > 0
+    P = pos[hit]; T = ot[hit]; q = np.maximum(oc[hit], 0.)
+    if 0. < bright_frac < 1. and hit.sum() > 50:                # drop the dim (scatter-dominated) tail
+        bm = q >= np.quantile(q, 1. - bright_frac); P, T, q = P[bm], T[bm], q[bm]
+    w = np.sqrt(q)
+
+    gx, gy, gz = np.meshgrid(np.linspace(-tankr, tankr, vgrid), np.linspace(-tankr, tankr, vgrid),
+                             np.linspace(-tankz, tankz, vgrid), indexing='ij')
+    grid = np.stack([gx.ravel(), gy.ravel(), gz.ravel()], 1)
+    grid = grid[np.hypot(grid[:, 0], grid[:, 1]) <= tankr]
+    best = (-1.0, grid[0])
+    for v in grid:                                             # coarse scan: maximise weighted inliers
+        d = T - np.linalg.norm(P - v, axis=1) / vspeed         # back-projected emission time
+        res = d - np.quantile(d, q_edge)                       # reference to the early edge
+        s = w[(res > -gate) & (res < gate)].sum()
+        if s > best[0]: best = (s, v)
+    v = best[1].astype(float); t0 = float(np.quantile(T - np.linalg.norm(P - v, axis=1) / vspeed, q_edge))
+    for _ in range(n_refine):                                  # GN polish on INLIERS only
+        r = np.linalg.norm(P - v, axis=1) + 1e-6; pt = r / vspeed; d = T - pt
+        res = d - np.quantile(d, q_edge); inl = (res > -gate) & (res < gate)
+        Pi, ri, pti, wi, Ti = P[inl], r[inl], pt[inl], w[inl], T[inl]
+        sw = wi.sum() + 1e-12; t0 = float(np.sum(wi * (Ti - pti)) / sw); resid = Ti - t0 - pti
+        g = (Pi - v) / ri[:, None]; J = g / vspeed
+        Hh = (J * wi[:, None]).T @ J + 1e-3 * np.eye(3); gg = (J * wi[:, None]).T @ resid
+        v = v - np.clip(np.linalg.solve(Hh, gg), -2., 2.)      # v <- v - (JᵀWJ)⁻¹JᵀW·resid (inliers)
+        rxy = np.hypot(v[0], v[1]); s = min(1.0, tankr / max(rxy, 1e-6))
+        v[0] *= s; v[1] *= s; v[2] = np.clip(v[2], -tankz, tankz)
+    return v, float(t0)
+
+
 class ReconModel:
     """Wraps a per-photon track predictor into the per-PMT ``(μ charge, time-NLL)`` the recon
     Fisher-GN consumes, plus the assembled loss / gradient / FD Fisher metric.
@@ -156,3 +215,29 @@ def fit_track(model, obs_counts, obs_times, start, *, nkeys=4, niters=250, lr=8.
     if hist:
         return out, dict(traj=np.array(traj), gnorm=np.array(gnorms), best_iter=int(np.argmin(gnorms)))
     return out
+
+
+def fit_track_multistart(model, obs_counts, obs_times, starts, *, nkeys=4, seed=0, **kw):
+    """Run :func:`fit_track` from several seeds and keep the LOWEST-LOSS result.
+
+    The time-multilateration seed (:func:`seed_vertex_time`) nails the transverse vertex but is
+    biased forward along the track (it finds the Cherenkov time-centroid, ~½ a track-length ahead
+    of the vertex); the charge-grid seed is the reverse — fine longitudinally on most events,
+    but it loses inward-pointing tracks where the ring is vertex-degenerate. The two are
+    COMPLEMENTARY, so fitting from both and arbitrating by the converged data loss gets the best
+    of each: provably never worse than either seed alone, and it rescues the inward-track tail.
+
+    ``starts`` is a list of 9-vectors. Returns ``(best_theta, info)`` where ``info`` has
+    ``which`` (winning seed index), ``losses`` (per-seed converged loss), and ``per_seed`` (the
+    list of ``(theta, history)`` from each :func:`fit_track`, ``hist=True``).
+    """
+    oc = jnp.asarray(obs_counts); ot = jnp.asarray(obs_times)
+    keys = [jax.random.PRNGKey(seed + s) for s in range(nkeys)]
+
+    def dloss(th):                                              # data loss at th, averaged over keys
+        return float(np.mean([float(model.loss(th, oc, ot, k)) for k in keys]))
+
+    per_seed = [fit_track(model, oc, ot, s, nkeys=nkeys, seed=seed, hist=True, **kw) for s in starts]
+    losses = [dloss(th) for th, _ in per_seed]
+    which = int(np.argmin(losses))
+    return per_seed[which][0], dict(which=which, losses=losses, per_seed=per_seed)

@@ -15,7 +15,8 @@ from lucid.geometry import generate_detector
 from lucid.simulation import setup_event_simulator
 from lucid.detector_params import load_detector_params
 from lucid.sources.event_io import read_photon_data_from_photonsim
-from lucid.fitting import ReconModel, fit_track, vec9_dir, track_from_vec9
+from lucid.fitting import (ReconModel, fit_track_multistart, vec9_dir, track_from_vec9,
+                           seed_vertex_time)
 from lucid.fitting.recon import vec9_from_track
 from lucid.optimization.grid_search import hierarchical_position_grid_search, get_detector_bounds
 from lucid.optimization.utils.functions import (
@@ -27,6 +28,8 @@ PHYS = os.path.join(_ROOT_DIR, 'config/SK_like_physics_config.json')
 K, NBUF, FIDR, FIDZ = 8, 400_000, 12., 12.
 GRID = dict(n_cap=80, n_angular=120, n_height=80)
 E0 = int(os.environ.get('EVENT_START', '0')); EC = int(os.environ.get('EVENT_COUNT', '20'))
+EVLIST = os.environ.get('EVENT_LIST', '')                          # comma-list overrides the range
+EVENTS = [int(x) for x in EVLIST.split(',')] if EVLIST else list(range(E0, E0 + EC))
 OUT = os.environ.get('OUT', os.path.join(_ROOT_DIR, 'campaign_recon/out')); os.makedirs(OUT, exist_ok=True)
 
 det = generate_detector(GEOM); ND = len(det.all_points); POS = np.asarray(det.all_points)
@@ -88,7 +91,7 @@ def errs(x, th9, d):
     return [dv, dd, float(x[0] - th9[0]), float(x[8] - th9[8])]      # vtx cm, dir deg, dE MeV, dt0 ns
 
 
-for ev in range(E0, E0 + EC):
+for ev in EVENTS:
     t0 = time.time()
     try:
         raw = rand_tf(read_photon_data_from_photonsim(ROOT, ev), ev)
@@ -96,28 +99,36 @@ for ev in range(E0, E0 + EC):
         c, t = jax.lax.stop_gradient(data_sim(track_from_vec9(jnp.asarray(th9)),
                                               jax.random.PRNGKey(7000 + ev), pd))
         oc = np.asarray(c); ot = np.where(oc > 0, np.asarray(t), 0.)
-        # FULL fixed-shape (n_sensors,) arrays for EVERY stage — origin_time_loss masks by q>0
-        # so misses (q=0) contribute nothing, identical to a hit-subset but with a FIXED shape,
-        # so the @jit'd geometric loss compiles ONCE (not once per event's variable n_hit).
+        # FULL fixed-shape (n_sensors,) arrays for the forward seed stages (energy/direction)
+        # so the @jit'd losses compile ONCE (not once per event's variable n_hit).
         ocf, otf, POSf = jnp.asarray(oc), jnp.asarray(ot), jnp.asarray(POS)
-        # --- 3-stage data-driven seed ---
+        # --- TWO complementary data-driven seeds (energy shared); cone direction per vertex ---
         e0 = energy_scan_optimization(pred, jnp.zeros(3), jnp.arccos(1 / jnp.sqrt(3)), jnp.pi / 4, 0.,
                                       POSf, otf, ocf, (ocf, otf), 1000., 700., 12, 0)['best_energy']
-        p1 = hierarchical_position_grid_search(POSf, otf, ocf, jnp.asarray(th9[1:4]), 0.0, 0.0,
+
+        def make_seed(vtx, t0g):                               # vertex+t0 -> cone direction -> 9-vec
+            c2 = hierarchical_direction_search_cone(pred, jnp.asarray(vtx), t0g, POSf, otf, ocf,
+                                                    (ocf, otf), e0, 3, 8, 90., 0.5, 0)
+            dg = np.array([np.sin(c2['best_theta']) * np.cos(c2['best_phi']),
+                           np.sin(c2['best_theta']) * np.sin(c2['best_phi']), np.cos(c2['best_theta'])])
+            return vec9_from_track(e0, np.asarray(vtx), dg, t0=t0g)
+        # seed A: charge-grid (good longitudinally on most events; loses inward-pointing tracks)
+        p1 = hierarchical_position_grid_search(POSf, otf, ocf, jnp.zeros(3), 0.0, 0.0,   # zeros = no truth
                                                bounds, n_div=5, t0_n_div=5, levels=6, verbosity=0)
-        vtx, t0g = np.asarray(p1['best_position']), float(p1['best_t0'])
-        c2 = hierarchical_direction_search_cone(pred, jnp.asarray(vtx), t0g, POSf, otf, ocf,
-                                                (ocf, otf), e0, 3, 8, 90., 0.5, 0)
-        dirg = np.array([np.sin(c2['best_theta']) * np.cos(c2['best_phi']),
-                         np.sin(c2['best_theta']) * np.sin(c2['best_phi']), np.cos(c2['best_theta'])])
-        seed = vec9_from_track(e0, vtx, dirg, t0=t0g)
-        # --- full Fisher-GN fit from the seed, keep history ---
-        res, H = fit_track(model, oc, ot, seed, nkeys=4, niters=250, hist=True)
-        se, fe = errs(seed, th9, d), errs(res, th9, d)
-        np.savez(os.path.join(OUT, f'ev{ev:03d}.npz'), truth=th9, tdir=d, seed=seed, fit=res,
-                 traj=H['traj'], gnorm=H['gnorm'], best_iter=H['best_iter'],
-                 seed_err=np.array(se), fit_err=np.array(fe), n_hit=int((oc > 0).sum()), q_tot=float(oc.sum()))
-        print(f'ev{ev:03d} seed vtx{se[0]:5.0f}cm dir{se[1]:4.1f} E{se[2]:+5.0f} t0{se[3]:+5.1f} | '
-              f'fit vtx{fe[0]:5.1f}cm dir{fe[1]:4.2f} E{fe[2]:+6.1f} t0{fe[3]:+5.2f} [{time.time()-t0:.0f}s]', flush=True)
+        seedA = make_seed(np.asarray(p1['best_position']), float(p1['best_t0']))
+        # seed B: TIME multilateration (transverse-perfect; forward-biased -> rescues inward tracks)
+        seedB = make_seed(*seed_vertex_time(POS, oc, ot))
+        # --- two-start Fisher-GN fit: keep the lower-loss basin ---
+        res, MS = fit_track_multistart(model, oc, ot, [seedA, seedB], nkeys=4, niters=250)
+        H = MS['per_seed'][MS['which']][1]
+        seA, seB = errs(seedA, th9, d), errs(seedB, th9, d)
+        fe = errs(res, th9, d); fA = errs(MS['per_seed'][0][0], th9, d); fB = errs(MS['per_seed'][1][0], th9, d)
+        np.savez(os.path.join(OUT, f'ev{ev:03d}.npz'), truth=th9, tdir=d, seedA=seedA, seedB=seedB, fit=res,
+                 traj=H['traj'], gnorm=H['gnorm'], best_iter=H['best_iter'], which=MS['which'],
+                 losses=np.array(MS['losses']), seedA_err=np.array(seA), seedB_err=np.array(seB),
+                 fitA_err=np.array(fA), fitB_err=np.array(fB), fit_err=np.array(fe),
+                 n_hit=int((oc > 0).sum()), q_tot=float(oc.sum()))
+        print(f'ev{ev:03d} seedA vtx{seA[0]:5.0f} B vtx{seB[0]:5.0f} | fitA{fA[0]:6.1f} fitB{fB[0]:6.1f} '
+              f'-> WIN={"AB"[MS["which"]]} vtx{fe[0]:5.1f}cm dir{fe[1]:4.2f} E{fe[2]:+6.1f} t0{fe[3]:+5.2f} [{time.time()-t0:.0f}s]', flush=True)
     except Exception as e:
         print(f'ev{ev:03d} FAILED: {type(e).__name__}: {e} [{time.time()-t0:.0f}s]', flush=True)
