@@ -95,13 +95,15 @@ for ev in range(E0, E0 + EC):
         th9, d = derive_truth(raw); pd = pad_event(raw)
         c, t = jax.lax.stop_gradient(data_sim(track_from_vec9(jnp.asarray(th9)),
                                               jax.random.PRNGKey(7000 + ev), pd))
-        oc = np.asarray(c); ot = np.where(oc > 0, np.asarray(t), 0.); hit = oc > 0
-        hp, oth, och = jnp.asarray(POS[hit]), jnp.asarray(ot[hit]), jnp.asarray(oc[hit])
+        oc = np.asarray(c); ot = np.where(oc > 0, np.asarray(t), 0.)
+        # FULL fixed-shape (n_sensors,) arrays for EVERY stage — origin_time_loss masks by q>0
+        # so misses (q=0) contribute nothing, identical to a hit-subset but with a FIXED shape,
+        # so the @jit'd geometric loss compiles ONCE (not once per event's variable n_hit).
         ocf, otf, POSf = jnp.asarray(oc), jnp.asarray(ot), jnp.asarray(POS)
         # --- 3-stage data-driven seed ---
         e0 = energy_scan_optimization(pred, jnp.zeros(3), jnp.arccos(1 / jnp.sqrt(3)), jnp.pi / 4, 0.,
                                       POSf, otf, ocf, (ocf, otf), 1000., 700., 12, 0)['best_energy']
-        p1 = hierarchical_position_grid_search(hp, oth, och, jnp.asarray(th9[1:4]), 0.0, 0.0,
+        p1 = hierarchical_position_grid_search(POSf, otf, ocf, jnp.asarray(th9[1:4]), 0.0, 0.0,
                                                bounds, n_div=5, t0_n_div=5, levels=6, verbosity=0)
         vtx, t0g = np.asarray(p1['best_position']), float(p1['best_t0'])
         c2 = hierarchical_direction_search_cone(pred, jnp.asarray(vtx), t0g, POSf, otf, ocf,
