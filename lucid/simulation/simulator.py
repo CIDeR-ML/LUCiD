@@ -823,37 +823,3 @@ def setup_event_simulator(
                            model_params=model_params)
 
 
-def make_sim_pair(json_filename, n_photons=1_000_000, K=8, particle='muon',
-                  physics_config=None, default_detector_params=False,
-                  hard_detector_params=None, wavelength_mode=True,
-                  soft_temperature=0.1, soft_hit_mode='per_photon',
-                  hard_hit_mode='realistic', apply_smearing=False,
-                  pos_grad_threshold=None, n_grad_iters=None, **grid_params):
-    """Build the ``(predictor, data_sim)`` pair used by reconstruction, sharing geometry /
-    ``physics_config`` / ``particle`` / grid so the two forwards cannot silently diverge.
-
-    Both sims MUST share ``physics_config`` — a dropped one mis-normalises one sim's
-    wavelength-mode QE/medium, making the sampled-data total ~6x the model total and running
-    the fitted energy away. This helper makes that impossible by construction.
-
-    - ``predictor`` — the expected-value per-photon forward (``temperature=soft_temperature``,
-      gradients flow all ``K`` iterations); the differentiable model the fit steps.
-    - ``data_sim`` — the hard Bernoulli-sampled ``realistic`` forward; generates truth data.
-
-    ``default_detector_params`` is used by the predictor; ``hard_detector_params`` (e.g. a
-    ``DetectorParams`` with ``response.tts`` set) overrides the data sim's params when given,
-    else it shares ``default_detector_params``. Returns ``(predictor, data_sim)``.
-    """
-    shared = dict(json_filename=json_filename, n_photons=n_photons, K=K, particle=particle,
-                  physics_config=physics_config, wavelength_mode=wavelength_mode, **grid_params)
-    predictor = setup_event_simulator(
-        temperature=soft_temperature, hit_mode=soft_hit_mode, use_expected_value=True,
-        default_detector_params=default_detector_params,
-        pos_grad_threshold=(K if pos_grad_threshold is None else pos_grad_threshold),
-        n_grad_iters=(K if n_grad_iters is None else n_grad_iters), **shared)
-    data_sim = setup_event_simulator(
-        temperature=None, hit_mode=hard_hit_mode, use_expected_value=False,
-        apply_smearing=apply_smearing,
-        default_detector_params=(default_detector_params if hard_detector_params is None
-                                 else hard_detector_params), **shared)
-    return predictor, data_sim

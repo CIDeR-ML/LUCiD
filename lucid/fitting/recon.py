@@ -119,7 +119,7 @@ class ReconModel:
 
 
 def fit_track(model, obs_counts, obs_times, start, *, nkeys=4, niters=250, lr=8.0,
-              ridge_i=0.3, lam=0.01, refresh=8, seed=0, readout='ming'):
+              ridge_i=0.3, lam=0.01, refresh=8, seed=0, readout='ming', hist=False):
     """Consistent Fisher-Gauss-Newton track fit, SCALE9-preconditioned (RECO_PIPELINE §4).
 
     Parameters mirror the finalized recipe. The step is solved in SCALE9-scaled coordinates
@@ -128,7 +128,9 @@ def fit_track(model, obs_counts, obs_times, start, *, nkeys=4, niters=250, lr=8.
     ``ridge_i=0`` is forbidden, runs t0 away). ``lr`` amplifies the consistent GN under-shoot.
 
     Returns the 9-vector at the min‖g‖ iterate (``readout='ming'``, robust to the LR overshoot)
-    or the final iterate (``'final'``).
+    or the final iterate (``'final'``). If ``hist=True``, returns ``(theta, history)`` where
+    ``history`` is a dict with the full per-iteration ``traj`` ((niters+1, 9) θ trajectory) and
+    ``gnorm`` ((niters+1,) scaled ‖g‖) — for campaign trajectory analysis.
     """
     oc = jnp.asarray(obs_counts); ot = jnp.asarray(obs_times)
     keys = [jax.random.PRNGKey(seed + s) for s in range(nkeys)]
@@ -139,7 +141,7 @@ def fit_track(model, obs_counts, obs_times, start, *, nkeys=4, niters=250, lr=8.
         return np.mean([np.asarray(model.grad(th, oc, ot, k)) for k in keys], 0)
 
     th = np.asarray(start, float); best = (1e18, th.copy()); F = None
-    g = G(th)
+    g = G(th); traj = [th.copy()]; gnorms = [float(np.linalg.norm(g * S))]
     for it in range(niters):
         if F is None or it % refresh == 0:
             F = model.fisher(th, oc, ot, keys, fdh)
@@ -149,4 +151,8 @@ def fit_track(model, obs_counts, obs_times, start, *, nkeys=4, niters=250, lr=8.
         du = -lr * np.linalg.solve(Fs + marq + rI + 1e-9 * np.eye(9), gs)
         th = th + S * du; g = G(th); gn = float(np.linalg.norm(g * S))
         if gn < best[0]: best = (gn, th.copy())
-    return best[1] if readout == 'ming' else th
+        traj.append(th.copy()); gnorms.append(gn)
+    out = best[1] if readout == 'ming' else th
+    if hist:
+        return out, dict(traj=np.array(traj), gnorm=np.array(gnorms), best_iter=int(np.argmin(gnorms)))
+    return out

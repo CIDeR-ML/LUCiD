@@ -12,7 +12,7 @@ Run: python examples/seed_reconstruct.py
 """
 import jax, jax.numpy as jnp, numpy as np
 from lucid.geometry import generate_detector
-from lucid.simulation import make_sim_pair
+from lucid.simulation import setup_event_simulator
 from lucid.detector_params import load_detector_params
 from lucid.fitting import ReconModel, fit_track, vec9_from_track, vec9_dir, track_from_vec9
 from lucid.optimization.grid_search import hierarchical_position_grid_search, get_detector_bounds
@@ -24,11 +24,15 @@ GRID = dict(n_cap=40, n_angular=80, n_height=40)
 det = generate_detector(GEOM); ND = len(det.all_points)
 POS = np.asarray(det.all_points); bounds = get_detector_bounds(det)
 
+pred = setup_event_simulator(GEOM, 250_000, temperature=0.1, K=K, hit_mode='per_photon',
+                             physics_config=PHYS, default_detector_params=True, particle='muon',
+                             wavelength_mode=True, pos_grad_threshold=K, n_grad_iters=K, **GRID)
 dp_data = load_detector_params(PHYS, num_sensors=ND)
 dp_data = dp_data._replace(response=dp_data.response._replace(tts=jnp.asarray(2.5)))
-pred, data_sim = make_sim_pair(GEOM, 250_000, K=K, particle='muon', physics_config=PHYS,
-                               default_detector_params=True, hard_detector_params=dp_data,
-                               wavelength_mode=True, **GRID)
+data_sim = setup_event_simulator(GEOM, 250_000, temperature=None, K=K, use_expected_value=False,
+                                 hit_mode='realistic', apply_smearing=False, particle='muon',
+                                 physics_config=PHYS, default_detector_params=dp_data,
+                                 wavelength_mode=True, **GRID)
 
 # truth track + sampled data (the ONLY thing the seeder sees: oc, ot at hit PMTs)
 TE, TPOS, TDIR = 1050., [1.5, -0.8, 2.0], [0.3, 0.1, 0.95]
