@@ -13,7 +13,8 @@
 > reads, ratcheted by a test) · U2 recon provenance snapshot (`archive/`, read-only from
 > LUCiD_recon, before any deletion) · U3 byte-pin test net (`tests/test_unification_pins.py`:
 > `ridge_inverse`, `counts_loss(normalize=)`, the order-stat time loss + AMP_DETACH, JointParams,
-> env-ratchet) · U4 `counts_loss(normalize=)` + `make_sim_pair` helper · U5 `JointParams` +
+> env-ratchet) · U4 `counts_loss(normalize=)` (the `make_sim_pair` helper was added then REMOVED —
+> too thin a wrapper over two `setup_event_simulator` calls; examples inline them) · U5 `JointParams` +
 > `particle_bounds`/`joint_bounds` · U7 **recon ported into `lucid/`** (`losses.first_arrival_window_nll`
 > + `fitting/recon.py` `ReconModel`/`fit_track`; the 9-param Fisher-GN, validated end-to-end —
 > captures a track to ~15 cm). Full fast suite green (380+5). **Decisions:** U6 (merge the two GN

@@ -33,7 +33,7 @@ reflectivity — the timing-observable frontier.)
 |--------|---------------|--------------|
 | `hello_simulate.py` | the differentiable forward `ParticleParams → per-sensor charge`, drawn with the canonical unrolled-cylinder event display (Cherenkov ring on the barrel) | `setup_event_simulator`, `create_detector_display` |
 | `hello_calibrate.py` | the validated Gauss-Newton + per-PMT-Schur fit recovering optical scales from calibration sources, vs the Fisher/CRB bound | `lucid.fitting`: `build_calibration_problem`, `fit`, `crb` |
-| `hello_reconstruct.py` | full 9-parameter track reconstruction (E, vertex, direction, t0) by Fisher-Gauss-Newton, mirroring LUCiD_recon's latest case | `make_sim_pair`, `lucid.fitting`: `ReconModel`, `fit_track` |
+| `hello_reconstruct.py` | full 9-parameter track reconstruction (E, vertex, direction, t0) by Fisher-Gauss-Newton, mirroring LUCiD_recon's latest case | `setup_event_simulator`, `lucid.fitting`: `ReconModel`, `fit_track` |
 
 ## Notes
 

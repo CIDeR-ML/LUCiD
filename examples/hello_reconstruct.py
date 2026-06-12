@@ -14,7 +14,7 @@ Run: python examples/hello_reconstruct.py
 """
 import jax, jax.numpy as jnp, numpy as np
 from lucid.geometry import generate_detector
-from lucid.simulation import make_sim_pair
+from lucid.simulation import setup_event_simulator
 from lucid.detector_params import load_detector_params
 from lucid.fitting import ReconModel, fit_track, vec9_from_track, vec9_dir, track_from_vec9, SCALE9
 
@@ -22,14 +22,20 @@ GEOM, PHYS, K = 'config/SK_like_geom_config.json', 'config/SK_like_physics_confi
 GRID = dict(n_cap=40, n_angular=80, n_height=40)
 ND = len(generate_detector(GEOM).all_points)
 
-# soft per-photon predictor + hard sampled-data sim, sharing config (make_sim_pair guarantees
-# both get physics_config — a dropped one mis-normalises the data ~6x and runs energy away).
-# Data carries 2.5 ns per-photon TTS via dp.response.tts (post de-env: a field, not an env var).
+# SIREN predictor (SOFT, per-photon; gradients flow all K iterations). Both sims MUST get
+# physics_config — a dropped one mis-normalises the wavelength QE (data ~6x model, energy runs away).
+pred = setup_event_simulator(GEOM, 250_000, temperature=0.1, K=K, hit_mode='per_photon',
+                             physics_config=PHYS, default_detector_params=True, particle='muon',
+                             wavelength_mode=True, pos_grad_threshold=K, n_grad_iters=K, **GRID)
+# self-consistent SIREN-sampled truth (HARD) with 2.5 ns per-photon TTS baked via dp.response.tts.
+# NOTE: the SIREN emitter applies a fixed-proposal importance reweight that is exact only at
+# E_CAL=1050 MeV; this self-consistent demo is honest there. The real recon uses GEANT4 data.
 dp_data = load_detector_params(PHYS, num_sensors=ND)
 dp_data = dp_data._replace(response=dp_data.response._replace(tts=jnp.asarray(2.5)))
-pred, data_sim = make_sim_pair(GEOM, 250_000, K=K, particle='muon', physics_config=PHYS,
-                               default_detector_params=True, hard_detector_params=dp_data,
-                               wavelength_mode=True, **GRID)
+data_sim = setup_event_simulator(GEOM, 250_000, temperature=None, K=K, use_expected_value=False,
+                                 hit_mode='realistic', apply_smearing=False, particle='muon',
+                                 physics_config=PHYS, default_detector_params=dp_data,
+                                 wavelength_mode=True, **GRID)
 
 model = ReconModel(pred, ND, sigma=2.5, delta=1.0)
 
