@@ -456,3 +456,57 @@ def create_detector_comparison_display(json_filename='config/cyl_geom_config.jso
         plt.show()
 
     return display_detector_data
+
+def unroll_layout(detector):
+    """2D unrolled-cylinder layout for a detector — the canonical seam (barrel → strip, caps above/
+    below). Returns ``dict(x, y, cases, diameter, xlim, ylim)`` with per-sensor 2D positions.
+
+    The same transform `create_detector_display` uses inline; exposed module-level so animation and
+    custom displays reuse it instead of re-deriving it.
+    """
+    radius, height = detector.r, detector.H
+    pos = np.array(detector.all_points)
+    cases = np.array([detector.ID_to_case[i] for i in range(len(pos))])
+    n = len(pos); x = np.zeros(n); y = np.zeros(n); caps = 1.05 * height / 2 + radius
+    b = cases == 0
+    th = (np.arctan2(pos[b, 1], pos[b, 0]) + np.pi * 3 / 2) % (2 * np.pi) / 2
+    x[b] = th * radius * 2; y[b] = pos[b, 2]
+    t = cases == 1; x[t] = pos[t, 0] + np.pi * radius; y[t] = caps + pos[t, 1]
+    bo = cases == 2; x[bo] = pos[bo, 0] + np.pi * radius; y[bo] = -caps - pos[bo, 1]
+    xy = np.column_stack((x, y)); d = calculate_min_distance(xy)
+    return dict(x=x, y=y, cases=cases, diameter=d,
+                xlim=(x.min() - d, x.max() + d), ylim=(y.min() - d, y.max() + d))
+
+
+def animate_event(detector, charges, times, out_path='event.gif', n_frames=40, fps=12, cmap='gnuplot'):
+    """Animate a single event's PMT hits arriving over time on the 2D unrolled detector → a GIF.
+
+    Consolidates the inline `render_frame`/`create_gif` notebook copies. ``detector`` is a detector
+    object (or a geometry-JSON path); ``charges``/``times`` are per-sensor arrays. Sensors light up
+    in time order (cumulative); unlit/not-yet-arrived sensors are light grey. Writes ``out_path``
+    and returns it. Needs ``imageio``.
+    """
+    import imageio.v2 as imageio
+    if isinstance(detector, str):
+        detector = generate_detector(detector)
+    L = unroll_layout(detector)
+    charges = np.asarray(charges); times = np.asarray(times); hit = charges > 0
+    if not hit.any():
+        raise ValueError('no lit sensors')
+    tlo, thi = np.quantile(times[hit], 0.02), np.quantile(times[hit], 0.98)
+    cmax = np.quantile(charges[hit], 0.98); thresholds = np.linspace(tlo, thi, n_frames)
+    sm = create_color_gradient(cmax, cmap); frames = []
+    for tcut in thresholds:
+        fig, ax = plt.subplots(figsize=(9, 9 * (L['ylim'][1] - L['ylim'][0]) / (L['xlim'][1] - L['xlim'][0])),
+                               facecolor='white')
+        ax.scatter(L['x'], L['y'], s=4, c='0.88')                      # all sensors, faint
+        on = hit & (times <= tcut)
+        if on.any():
+            ax.scatter(L['x'][on], L['y'][on], s=18, c=sm.to_rgba(charges[on]))
+        ax.set(xlim=L['xlim'], ylim=L['ylim']); ax.set_aspect('equal'); ax.axis('off')
+        ax.set_title(f't ≤ {tcut:.0f} ns  ({int(on.sum())} hits)', fontsize=10)
+        fig.canvas.draw(); w, h = fig.canvas.get_width_height()
+        frames.append(np.frombuffer(fig.canvas.buffer_rgba(), np.uint8).reshape(h, w, 4)[..., :3].copy())
+        plt.close(fig)
+    imageio.mimsave(out_path, frames, fps=fps)
+    return out_path
