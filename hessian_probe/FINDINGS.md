@@ -113,3 +113,39 @@ calibration Jacobian/Hessian from FD to AD (jacfwd). AD==FD for the 4 pathwise c
 correct low-variance reference for the 3 discrete channels (FD there is noise, agreeing only in
 expectation). For literal per-key AD==FD on the discrete channels, reparameterize the decisions
 pathwise (separate, bigger change). The custom_vjp removal is the single highest-value fix.
+
+## MECHANISM — WHY each param behaves as it does (derived from the step + CONFIRMED by kscan.py)
+
+Every optical param enters the per-PMT charge through one or both of two channels:
+- **DEPOSIT** = `detect_prob = reach·(1-refl_prob)·atten_surf`, `reach=exp(-mu_tot·Dd)` — the
+  RAO-BLACKWELLISED expected deposit (Dd is geometry, fixed; the free-path decision is integrated
+  out). PURE PATHWISE in its params. -> AD==FD EXACT at ALL K.
+- **TRAJECTORY** = the SAMPLED hard path (`is_scat`, `is_mie`, scatter direction). Optical params
+  enter it via the DiCE SCORE `lf/la` (decision vars `d`,`cmie` detached). A step's decision only
+  affects a LATER step's deposit (via `dice_dep=exp(log_p_{<k})`), so the trajectory channel is
+  ZERO at K=1 and GROWS with K. AD computes the score (low variance); FD-CRN computes the
+  reparam-through-the-branch (rare O(1) decision flips amplified by 1/h -> variance ∝ 1/h, blows up).
+
+Per parameter:
+| param | channels | K=1 | K>=2 |
+|---|---|---|---|
+| absorption_length | DEPOSIT only (atten_surf) | AD==FD (var ratio 1.0) | AD==FD (1.0 at EVERY K) |
+| wall/sensor_reflection_rate | DEPOSIT only (1-refl_prob; scalar model lr=0) | AD==FD | AD==FD |
+| qe | DEPOSIT only (linear in make_hits) | AD==FD | AD==FD |
+| scatter_length | DEPOSIT (reach via mu_tot) + TRAJECTORY (free-path lf) | AD==FD var 1.0 | var(FD)/var(AD) 1e4-2.4e4 |
+| mie_scatter_length | + Mie/Rayleigh split (la); THIN channel 1/mie<<1/scatter | AD==FD var 1.0 | var ratio 6e3-1.2e5 |
+| g (HG asym) | TRAJECTORY ONLY (enters only hg_logpdf; sampler detaches g) | grad == 0 | appears; var ratio ~3e2 |
+
+KSCAN (Nphot=20k, 48 keys): scatter K=1 AD=-10.47±1.96 FD=-10.46±1.96 (ratio 1.0) -> K=8 FD std 1001
+(ratio 24000); mie K=1 ratio 1.0 -> K=8 ratio 1.2e5; g K=1 grad=0 -> K=8 AD=+1.29±12.9 FD=-50.8±239;
+absorption ratio 1.0 at K=1,2,4,8. PREDICTION CONFIRMED.
+
+## Why "AD==FD" is the WRONG goal for scatter/mie/g
+The score (current AD) is the LOW-variance UNBIASED Rao-Blackwellised estimator. Forcing AD==FD
+per-key means computing the reparam-through-the-branch gradient = the HIGH-variance one; done with a
+HARD is_scat it also MISSES the boundary-delta term -> BIASED; done with a SOFT branch it carries an
+O(tau) temperature bias. So matching FD degrades AD. The right framing: AD (score) and FD (reparam)
+are two unbiased estimators of the SAME gradient; AD is ~140x lower std; the ONLY reason calibration
+uses FD is the custom_vjp blocking jacfwd. FIX = drop custom_vjp, use jacfwd (the low-var AD score
+Jacobian) for ALL params. AD==FD exact on the 4 deposit-only channels; AD is the SUPERIOR reference
+on the 3 trajectory channels. (Per-key AD==FD there is neither achievable nor desirable.)
