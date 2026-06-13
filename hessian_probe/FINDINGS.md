@@ -161,3 +161,21 @@ retrace): forward 3.2ms | jacfwd 4.4ms (1.4x forward, all 7 tangents fused) | re
 jax.hessian 8.0ms | FD Jacobian 24.1ms. => **jacfwd is 5.5x FASTER than FD** AND exact + ~140x
 lower variance. Compile is one-time, amortized over the fit's Jacobian rebuilds (FD compiles SLOWER,
 30.7s). NO steady-state bottleneck. The ONLY gate is the custom_vjp removal + NaN audit.
+
+## CORRECTION (hesstruth.py, 2000 keys): the DiCE Hessian is CORRECT — earlier "BAD" was FD-noise
+The user was right: DiCE gives unbiased Hessians by construction. Ground-truth test = compare
+E[DiCE/AD Hessian] to the TRUE ∂²E[L] built from FD of the EXPECTED (low-variance) AD gradient,
+many keys. RESULT: every parameter AGREES (z<=1.0), incl scatter/mie/g:
+  scatter: DiCE +26.31±0.26  GT +31.88±7.60  (z=0.7)   mie: +0.10 vs +0.04   g: +52.96±16.7 vs +83.31±26.9
+  pathwise (abs/refl/qe): z=0.0 exact.
+Gradient many-key: all params AD==FD in expectation (z<=1.1).
+
+=> NO 2nd-order DiCE bug. My earlier match.py 'BAD' Hessian map used a 64-key CENTRAL-DIFFERENCE OF
+THE GRADIENT as the FD reference, which compounds the discrete channels' variance into noise -> it
+disagreed with AD because the FD REFERENCE was wrong, not the AD Hessian. Note the error bars: the
+DiCE/AD Hessian (scatter ±0.26) is ~30x LOWER variance than any FD Hessian (±7.6 at 2000 keys).
+
+REVISED CONCLUSION: the DiCE/AD Jacobian AND Hessian are exact + unbiased + low-variance for ALL
+params. FD is never a valid per-key reference for the trajectory channels (scatter/mie/g) — gradient
+OR Hessian. The fix is unchanged and strengthened: drop the custom_vjp, use jacfwd (Jacobian) +
+jax.hessian (Hessian); both are correct by DiCE construction and far less noisy than FD.
