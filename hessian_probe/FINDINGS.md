@@ -149,3 +149,15 @@ are two unbiased estimators of the SAME gradient; AD is ~140x lower std; the ONL
 uses FD is the custom_vjp blocking jacfwd. FIX = drop custom_vjp, use jacfwd (the low-var AD score
 Jacobian) for ALL params. AD==FD exact on the 4 deposit-only channels; AD is the SUPERIOR reference
 on the 3 trajectory channels. (Per-key AD==FD there is neither achievable nor desirable.)
+
+## DO WE GET AD FOR ALL PARAMS + COST (allparams.py, timing.py — custom_vjp removed)
+YES. 7 optical globals: jacfwd (10764,7) finite, matches reverse grad (Δ 2e-5), NO OOM; jax.hessian
+(7,7) finite+symmetric. Per-PMT k (10764-dim): charge EXACTLY linear in k (M(2k)/M(k)=2.0000) ->
+Jk=0.5m analytic, NO AD needed. jacrev over ND OOMs (55GB) -> jacfwd is the right mode (few inputs,
+many outputs). NaN-finite at 4/4 perturbed points.
+
+PROPERLY JITTED — the earlier "7s/17s" were one-time COMPILE. Steady-state (key a TRACED arg, no
+retrace): forward 3.2ms | jacfwd 4.4ms (1.4x forward, all 7 tangents fused) | reverse grad 5.9ms |
+jax.hessian 8.0ms | FD Jacobian 24.1ms. => **jacfwd is 5.5x FASTER than FD** AND exact + ~140x
+lower variance. Compile is one-time, amortized over the fit's Jacobian rebuilds (FD compiles SLOWER,
+30.7s). NO steady-state bottleneck. The ONLY gate is the custom_vjp removal + NaN audit.
