@@ -1,18 +1,19 @@
-# good_notebooks — curated LUCiD notebooks (by workflow)
+# good_notebooks — curated LUCiD notebooks (new-user journey)
 
-Reorganized into workflow folders (unification, 2026-06). All paths are relative to the
-notebook's folder (`../../config`, `../../lucid`). Canonical APIs: forward =
-`setup_event_simulator`; reconstruction = `lucid.fitting.fit_track_multistart` (+ `seed_vertex_time`);
-calibration = `lucid.fitting.build_calibration_problem`/`fit`/`crb`; losses = `lucid.losses`;
-parameter sweeps = `lucid.gradient_analysis`.
+Thin notebooks that **import the library seams and tell a story** (machinery lives in `lucid/`,
+not inline — see `STRUCTURE.md`). Paths are relative to each notebook's folder (`../../config`,
+`../../lucid`). Start at `00_quickstart`, then follow the journey.
 
-| Folder | What | Canonical API |
-|--------|------|---------------|
-| [reconstruction/](reconstruction/) | track fits (vertex/dir/energy/t0) | `lucid.fitting.fit_track_multistart` |
-| [calibration/](calibration/) | detector params (scatter/abs/refl/QE/λ/timing) | `lucid.fitting.build_calibration_problem`/`fit`/`crb` |
-| [gradients/](gradients/) | loss landscapes + 1D/2D parameter scans | `lucid.losses` + `lucid.gradient_analysis` |
-| [visualization/](visualization/) | event / detector displays (shared) | `setup_event_simulator` + geometry display |
-| [infrastructure/](infrastructure/) | benchmarks, SIREN training, data-vs-pred | various |
-| [archive/](archive/) | superseded, kept for reference | — |
+| step | notebook | seam |
+|------|----------|------|
+| 0 | [`00_quickstart`](00_quickstart.ipynb) | forward + `visualization.create_detector_display` |
+| 1 | [`reconstruction/two_start_reconstruction`](reconstruction/) ⭐ | `fitting.fit_track_multistart` |
+| 1b | [`reconstruction/recon_anatomy`](reconstruction/) | `+ fitting.analysis` (why it works) |
+| 2 | [`calibration/calibrate_optics`](calibration/) ⭐ | `fitting.build_calibration_problem`/`fit`/`crb` |
+| 3 | [`gradients/loss_landscapes`](gradients/) ⭐ | `gradient_analysis` sweeps over `ReconModel.loss` |
+| 4 | [`displays/event_displays`](displays/) ⭐ | `visualization` (2D + animation + 3D) |
+| — | [`infrastructure/`](infrastructure/) | benchmarks, SIREN training, data-vs-pred |
 
-`NOTEBOOK_ANALYSIS.md` / `NOTEBOOK_DOCUMENTATION.md` = the full per-notebook reference.
+⭐ = the canonical entry for that workflow. `calibration/` and `gradients/` also hold deeper
+scenario/study notebooks. `extend`: `../examples/` (≤20-line scripts) + `lucid/fitting/contracts.py`.
+Superseded fat notebooks → `archive/`. Full per-notebook reference: `NOTEBOOK_ANALYSIS.md`.
