@@ -101,6 +101,51 @@ def test_joint_params_bounds_and_helpers():
     assert bool(mask.detector.response.qe) is False
 
 
+def test_seed_vertex_time_recovers_point_source():
+    """seed_vertex_time (robust multilateration) recovers a POINT source to ~cm/ns.
+
+    The un-robust port put the seed ~15 m off (scattered/late-photon outliers); the robust
+    version (bright preselection + RANSAC inlier grid + GN on inliers) must recover a clean
+    point source. CPU, no forward. Pins the robustness, not just a loose bound.
+    """
+    from lucid.fitting import seed_vertex_time
+    rng = np.random.default_rng(0)
+    th = rng.uniform(0, 2 * np.pi, 3000); zc = rng.uniform(-18, 18, 3000)
+    POS = np.column_stack([16.9 * np.cos(th), 16.9 * np.sin(th), zc])          # cylinder wall PMTs
+    vtrue = np.array([5., -3., 7.]); t0true = 4.0; VS = 0.2167
+    T = t0true + np.linalg.norm(POS - vtrue, axis=1) / VS
+    oc = (rng.uniform(size=len(POS)) < 0.4).astype(float) * 3.                 # ~40% lit, q=3
+    ot = np.where(oc > 0, T + rng.normal(0, 0.5, len(POS)), 0.)                # 0.5 ns jitter
+    v, t0 = seed_vertex_time(POS, oc, ot)
+    assert np.linalg.norm(v - vtrue) * 100 < 5.0                              # <5 cm (not 15 m)
+    assert abs(t0 - t0true) < 1.0
+
+
+def test_fit_track_multistart_margin_arbitration():
+    """fit_track_multistart margin gate: prefer seed A; switch to B only if B beats A by margin.
+
+    Plain argmin over-selects the (forward-biased) time seed via SIREN-bias ties; the 1% margin
+    restricts the switch to decisive rescues. Pins the decision logic with a stubbed fit_track +
+    a controlled model.loss (no forward). The seed id is encoded in start[0]."""
+    import jax.numpy as jnp
+    import lucid.fitting.recon as R
+    orig = R.fit_track
+    R.fit_track = lambda model, oc, ot, s, **kw: (np.asarray(s, float), {})    # stub: no fitting
+    try:
+        class M:
+            def __init__(self, losses): self.losses = losses                  # {seed_id: loss}
+            def loss(self, t9, oc, ot, key): return self.losses[int(round(float(t9[0])))]
+        A = np.zeros(9); B = np.zeros(9); B[0] = 1.                            # ids 0, 1
+        oc = jnp.zeros(2); ot = jnp.zeros(2)
+        for la, lb, want in [(100., 95., 1),    # B 5% lower -> B (decisive)
+                             (100., 99.5, 0),   # B 0.5% lower -> A (within margin)
+                             (100., 110., 0)]:  # B higher -> A
+            _, info = R.fit_track_multistart(M({0: la, 1: lb}), oc, ot, [A, B], nkeys=1, margin=0.01)
+            assert info['which'] == want, (la, lb, want, info['which'])
+    finally:
+        R.fit_track = orig
+
+
 def test_no_env_reads_in_lucid_package():
     """Ratchet (B6): the lucid/ package must have ZERO os.environ/os.getenv reads.
 
