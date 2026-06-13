@@ -41,6 +41,12 @@ from lucid.optimization.utils.functions import (
     hierarchical_direction_search_cone, energy_scan_optimization)
 
 
+def load_config(path):
+    """Load a JSON config file (kept as a small public helper — notebooks import it)."""
+    with open(path) as f:
+        return json.load(f)
+
+
 def _events(cfg):
     ev = cfg.get('events', {'start': 0, 'count': 1})
     if isinstance(ev, dict):
@@ -51,7 +57,7 @@ def _events(cfg):
 def main():
     ap = argparse.ArgumentParser(description='Single-track reconstruction (Fisher-GN two-start).')
     ap.add_argument('config_file')
-    cfg = json.load(open(ap.parse_args().config_file))
+    cfg = load_config(ap.parse_args().config_file)
 
     GEOM = cfg['geom']; PHYS = cfg.get('physics_config')
     data = cfg['data']; root = sorted(glob.glob(os.path.join(data, '*.root')))[0] if os.path.isdir(data) else data
