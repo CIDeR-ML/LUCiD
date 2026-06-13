@@ -161,6 +161,21 @@ def test_fitting_contracts_protocols():
     assert not isinstance(42, CalibForward)                                  # non-callable rejected
 
 
+def test_fitting_analysis_seam():
+    """lucid.fitting.analysis — the result-analysis seam (moved inside from 5 inline notebook copies).
+
+    Pin the vertex longitudinal/transverse decomposition (deterministic) + resolution_stats keys.
+    """
+    from lucid.fitting import resolution_stats, vertex_residual, angular_error_deg
+    # vertex 0.3 m along +z, 0.4 m in +x; true dir +z -> lon=0.3, tra=0.4 (m -> ×100 cm by caller)
+    lon, tra = vertex_residual([0.4, 0.0, 0.3], [0.0, 0.0, 0.0], [0.0, 0.0, 1.0])
+    np.testing.assert_allclose([lon, tra], [0.3, 0.4], atol=1e-9)
+    np.testing.assert_allclose(angular_error_deg([1, 0, 0], [0, 0, 1]), 90.0, atol=1e-6)
+    s = resolution_stats(np.array([1., -2., 3., -4., 5.]))
+    assert s['n'] == 5 and set(s) >= {'median', 'mean', 'rms', 'containment', 'median_ci'}
+    np.testing.assert_allclose(s['rms'], np.sqrt((np.array([1, 4, 9, 16, 25])).mean()), rtol=1e-9)
+
+
 def test_no_env_reads_in_lucid_package():
     """Ratchet (B6): the lucid/ package must have ZERO os.environ/os.getenv reads.
 
