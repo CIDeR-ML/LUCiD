@@ -103,11 +103,16 @@ The PCA proxy was **3.5 cm / 2.28°** off the true initial track. Re-scoring the
 | direction median | 1.68° | **1.01°** |
 | direction mean | 1.85° | **1.10°** |
 
-**Direction resolution is ~1.0°, not ~1.8°** — the recon fits the Cherenkov ring (bright early
-track ≈ initial direction) and recovers the INITIAL direction better than PCA-of-all-origins does;
-we had been comparing it to a reference that was itself 2.3° off. Vertex (~15 cm) is robust to the
-truth definition. Energy/t0 unchanged (truth energy fixed, t0=0 either way).
-Figure: `out_ms100/fig4_truth_correction.png`.
+**Direction resolution is ~1.0°, not ~1.8°.** PCA-of-emission is **fundamentally wrong as a truth
+reference, not merely a different metric.** The gun INJECTS a known (vertex, direction) — that is
+ground truth by construction, computable exactly via the rand_tf transform. PCA of the emission
+points is a *corrupted estimator* of it: biased by the emission profile along the track, by the
+muon's multiple scattering (PCA of a curved path's emission ≠ the initial axis), and by off-axis
+delta-ray photons. Scoring against it measures "how close is the fit to a bad estimate," and since
+the recon recovers the INITIAL direction better than PCA does (it weights the bright early ring),
+PCA-as-truth literally penalizes the fit for *beating* PCA. **Always score against the exact gun
+truth.** Vertex (~15 cm) is robust to the choice (proxy washes out); direction is the one PCA
+corrupted (1.0° true vs a 1.8° artifact). Energy/t0 unaffected. Figure: `out_ms100/fig4_truth_correction.png`.
 
 ## FINAL result — two-start (1% margin) scored vs exact gun truth (100 events)
 
