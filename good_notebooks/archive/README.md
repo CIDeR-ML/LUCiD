@@ -8,8 +8,9 @@ notebooks. Not maintained; relative paths may need a tweak to run.
 - `tracking_opt_development` — heuristic counts-loss 5-stage.
 - `tracking_opt_development_likelihood` — likelihood-loss 5-stage.
 - `tracking_opt_with_gif` — convergence GIF (animation now in `../displays/event_displays`).
-- `visualize_3D_track_optimization` — **JUNO sphere** recon (the only non-cylinder example —
-  worth re-porting to `fit_track_multistart` if a multi-geometry demo is wanted).
+
+(The JUNO-sphere `visualize_3D_track_optimization` is **kept** in `../reconstruction/` — the only
+non-cylinder example.)
 
 **Displays (inline display helpers → use `../displays/event_displays`):**
 - `cylinder_2D_displays` — 2D + pred-vs-data comparison.

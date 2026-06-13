@@ -11,5 +11,7 @@ energy unbiased, t0 ~0.5 ns RMS, 0 wanderers (`../../campaign_recon/RESULTS.md`)
   convergence, and the residual split via `lucid.fitting.analysis`. (GPU-validated.)
 - **track_optimization_visualization** — post-hoc convergence / longitudinal-transverse residual stats.
 - **optimization_vs_variables** — recon resolution vs Nrays / energy / #sensors (analysis-only).
+- **visualize_3D_track_optimization** — recon on the **JUNO sphere** (the non-cylinder geometry
+  example), 3D Plotly. (Legacy inline optimizer; port to `fit_track_multistart` when convenient.)
 
-Superseded inline-Adam notebooks (5-stage, GIF, JUNO sphere) are in `../archive/`.
+Superseded inline-Adam notebooks (5-stage, GIF) are in `../archive/`.
