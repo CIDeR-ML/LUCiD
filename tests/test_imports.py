@@ -40,7 +40,6 @@ MODULES = [
     "lucid.siren.core",
     "lucid.optimization",
     "lucid.optimization.grid_search",
-    "lucid.optimization.pipeline",
     "lucid.optimization.run",
     "lucid.wavelength",
     "lucid.wavelength.medium",

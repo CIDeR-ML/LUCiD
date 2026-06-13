@@ -3261,3 +3261,26 @@ def read_sensor_event_v2(filename, event_index, n_sensors=None):
         'light_containment_by_particle': particle_cont,
         'Particle_CategorizedGenealogy': np.array(genealogies, dtype=object),
     }
+
+
+def pad_photon_data(raw, nbuf):
+    """Pad a PhotonSim event (from :func:`read_photon_data_from_photonsim`) to a FIXED ``nbuf``
+    photon buffer for the data-mode simulator — salvaged from the retired ``pipeline.py``.
+
+    The simulator masks photons beyond the true count ``N`` (``photon_intensities = arange < N``),
+    so the padding region (zeros / default +z direction) contributes nothing. Returns the
+    ``photon_data`` dict the ``is_data=True`` simulator consumes plus the true count ``N``.
+    """
+    raw = dict(raw); n = int(np.asarray(raw['photon_origins']).shape[0]); pad_n = max(0, nbuf - n)
+
+    def pad(a):
+        a = jnp.asarray(a)
+        a = jnp.pad(a, ((0, pad_n), (0, 0))) if a.ndim == 2 else jnp.pad(a, (0, pad_n))
+        return a[:nbuf]
+    pd = {'photon_origins': pad(raw['photon_origins']), 'photon_directions': pad(raw['photon_directions']),
+          'photon_times': pad(raw['photon_times']), 'N': jnp.asarray(min(n, nbuf)),
+          'apply_rotation': False, 'rotation_axis': jnp.array([1., 0., 0.]), 'rotation_angle': jnp.array(0.),
+          'apply_translation': False, 'translation_vector': jnp.zeros(3)}
+    if 'wavelengths' in raw:
+        pd['wavelengths'] = pad(raw['wavelengths'])
+    return pd, min(n, nbuf)
