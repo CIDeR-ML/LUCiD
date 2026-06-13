@@ -67,3 +67,49 @@ agree only in expectation.
 3. **Hessian**: inherits the split. Pathwise params → AD Hessian (rev-over-rev) should match FD-of-grad
    once gradients match. NOTE: `jax.hessian` (jacfwd∘jacrev) RAN in the scalar-path probe without the
    custom_vjp forward-mode error — re-verify whether B1's forward-mode block actually bites here.
+
+## RIGOROUS RESOLUTION (decisive experiments: deep.py, bias.py, fwdmode.py, fwdmode2.py)
+
+### The clean two-category truth (per PHYSICAL CHANNEL, mode-independent)
+- **PATHWISE channels — AD == FD EXACT** (truncation-limited; h-scan: FD==AD at h=1e-2/1e-3,
+  degrades only by roundoff at h<=1e-4): **absorption_length, wall_reflection_rate,
+  sensor_reflection_rate, qe** (mono) and **abs_dev, qe_dev** (λ-mode deviation curves).
+- **DISCRETE-decision channels — AD (score) and FD (CRN) share the SAME EXPECTATION but FD is
+  ~19,000x higher variance**: **scatter_length, mie_scatter_length, g** (mono) and **rayleigh_dev,
+  mie_dev** (λ-mode). DECISIVE (bias.py, linear functional, n=2048): AD=-22.86±0.18 (std 8.1) vs
+  FD=-30.9±25 (std 1135) -> |AD-FD|/sigma_FD<1.5 (consistent => both UNBIASED). FD-CRN DIVERGES as
+  h->0 (variance ∝ 1/h); the SourceModel "CRN-FD is clean and low-noise" claim is FALSE here. **AD
+  is the correct LOW-variance gradient; FD is unbiased but catastrophically noisy.**
+
+### wavelength_mode is ORTHOGONAL
+λ-mode scalars are inert (ΔM~5e-7 under ×e pert = numerical noise); the λ-mode trainables are the
+deviation curves, which carry the SAME pathwise/discrete split. Mode is a routing detail, not the
+AD issue. (Add a guard: fitting an inert field for the mode should warn, not silently give 0 grad.)
+
+### Why FD is used + THE FIX (B1, validated)
+- The GN needs the (ND x P) Jacobian. **jacfwd** (P forward passes) is the efficient way -> BLOCKED
+  by the custom_vjp ("can't apply forward-mode autodiff (jvp) to a custom_vjp function"; confirmed).
+  **jacrev** over ND sensors OOMs. So FD is the only efficient fallback -> noisy for discrete params.
+- The earlier "jax.hessian WORKED" was an ARTIFACT of the λ-mode disconnected (zero) gradient.
+- **FIX = drop the custom_vjp** (it only scrubs NaN cotangents; the safe-norm eps at simulator.py:520
+  already drives the known NaN to 0). VALIDATED (fwdmode2.py, plain step): jacfwd(L)==jacrev(L)
+  exactly, finite; **jacfwd FULL (10764,2) Jacobian runs, finite, NO OOM**. => the efficient
+  low-variance AD Jacobian is available for ALL params, retiring FD.
+
+### What this means for "AD == FD" and the Hessian
+1. PATHWISE params: AD == FD already (gradient AND Hessian).
+2. DISCRETE params: AD (score) and FD (reparam) agree only IN EXPECTATION (FD ~140x noisier in std).
+   Per-key AD==FD is NOT achievable without REPARAMETERIZING the discrete decisions to pathwise
+   (live `d` + soft `is_scat`/`is_mie` + reparam HG-angle in `g`) -- a forward change with a
+   temperature-bias tradeoff. The BETTER move: use AD (it's the correct low-variance estimator);
+   the "match" to assert is jacfwd == jacrev (holds exactly), not AD == noisy-FD.
+3. HESSIAN: post-custom_vjp-removal, jax.hessian (jacfwd∘jacrev) works -> AD Hessian available.
+   GN metric JᵀWJ from the AD Jacobian is self-consistent. True-Hessian discrete blocks inherit the
+   same score-vs-reparam expectation-only agreement (worse at 2nd order).
+
+### Recommendation
+Drop the custom_vjp (drive NaNs to zero at source) -> jacfwd/jax.hessian work -> switch the
+calibration Jacobian/Hessian from FD to AD (jacfwd). AD==FD for the 4 pathwise channels; AD is the
+correct low-variance reference for the 3 discrete channels (FD there is noise, agreeing only in
+expectation). For literal per-key AD==FD on the discrete channels, reparameterize the decisions
+pathwise (separate, bigger change). The custom_vjp removal is the single highest-value fix.
