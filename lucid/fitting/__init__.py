@@ -22,3 +22,6 @@ from lucid.fitting.recon import (
     SCALE9, seed_vertex_time,
 )
 from lucid.fitting.contracts import CalibForward, PerPhotonPredictor
+from lucid.fitting.analysis import (
+    bootstrap_ci, resolution_stats, vertex_residual, angular_error_deg,
+)
