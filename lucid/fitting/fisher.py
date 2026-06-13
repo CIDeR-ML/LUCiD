@@ -63,7 +63,7 @@ def crb(sources, theta_true, n_sensors, *, lk_true=None, weights=None,
         Ji = np.zeros((n_sensors, n_params))
         for h in range(nb_h):
             ek, pk = _keys(7_000_000 + 1000 * i + h)
-            Ji += sources[i].fd_jacobian(theta, lk, ek, pk)
+            Ji += sources[i].ad_jacobian(theta, lk, ek, pk)
         Ji /= nb_h
         mi = np.array(sources[i].m(theta, lk, *_keys(7_000_000 + 1000 * i)))
         Jk = 0.5 * mi

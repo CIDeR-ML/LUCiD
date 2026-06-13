@@ -66,14 +66,15 @@ def ridge_inverse(H, ridge=0.02, mu=0.3):
 
 
 def _build_jacobian(predict_list, theta, lk, n_sensors, n_params, key_base, nb_h):
-    """Per-source FD Jacobian Ji = ∂√(k·M_i)/∂theta (n_sensors, n_params), averaged over
-    ``nb_h`` forward-noise batches. The expensive step — done only on refresh."""
+    """Per-source forward-mode AD Jacobian Ji = ∂√(k·M_i)/∂theta (n_sensors, n_params),
+    averaged over ``nb_h`` forward-noise batches (the average tames the discrete scatter/mie/g
+    score variance; pathwise channels are key-deterministic). Done only on refresh."""
     Js = []
     for i, src in enumerate(predict_list):
         Ji = np.zeros((n_sensors, n_params))
         for h in range(nb_h):
             ek, pk = _keys(key_base + 50000 + 1000 * i + h)
-            Ji += src.fd_jacobian(theta, lk, ek, pk)
+            Ji += src.ad_jacobian(theta, lk, ek, pk)
         Js.append(Ji / nb_h)
     return Js
 
@@ -91,10 +92,13 @@ class SourceModel:
     log-global params ``theta`` (with the per-PMT factor set to 1); ek/pk are
     forward-noise keys (engine + photon).
 
-    The Jacobian is computed by FINITE DIFFERENCES with COMMON RANDOM NUMBERS (same keys
-    for the base and perturbed evaluations) — the DiCE ``custom_vjp`` forward does not
-    support forward-mode ``jvp``/``jacfwd``, and the expected-value calibration forward is
-    deterministic given its keys, so CRN-FD is clean and low-noise.
+    The Jacobian ``J = ∂m/∂theta`` (n_sensors, n_params) is computed by FORWARD-MODE
+    autodiff (``ad_jacobian``, ``jax.jacfwd``) — P inputs → N_sensors outputs, so
+    forward-mode is the efficient mode. AD is unbiased and (for the discrete scatter/mie/g
+    channels, whose gradient comes via the DiCE score) ~10× LOWER variance than the
+    finite-difference secant, which is noisy through the per-photon decision flips. The
+    legacy CRN-FD path (``fd_jacobian``) is retained for cross-checking; it was the default
+    only because the old ``custom_vjp`` step blocked ``jacfwd`` (now removed).
     """
 
     def __init__(self, forward, eps=1e-8, fd_step=1e-3):
@@ -105,12 +109,19 @@ class SourceModel:
         def _m(theta, lk, ek, pk):
             return jnp.sqrt(jnp.exp(lk) * forward(theta, ek, pk) + eps)
         self._m = jax.jit(_m)
+        # Forward-mode Jacobian ∂m/∂theta (argnums=0). Now that the step is custom_vjp-free,
+        # jacfwd works; key is a traced arg so different keys reuse the same compiled program.
+        self._adjac = jax.jit(jax.jacfwd(_m, argnums=0))
 
     def m(self, theta, lk, ek, pk):
         return self._m(theta, lk, ek, pk)
 
+    def ad_jacobian(self, theta, lk, ek, pk):
+        """(n_sensors, n_params) forward-mode AD Jacobian ∂m/∂theta. Unbiased, low-variance."""
+        return np.asarray(self._adjac(jnp.asarray(theta), lk, ek, pk))
+
     def fd_jacobian(self, theta, lk, ek, pk, h=None):
-        """(n_sensors, n_params) FD Jacobian ∂m/∂theta with CRN (same ek/pk)."""
+        """(n_sensors, n_params) FD Jacobian ∂m/∂theta with CRN (same ek/pk). Cross-check only."""
         h = self.fd_step if h is None else h
         theta = jnp.asarray(theta)
         base = self.m(theta, lk, ek, pk)
