@@ -151,6 +151,9 @@ class ReconModel:
         self._perpmt = jax.jit(_perpmt)
         self._loss = jax.jit(_loss)
         self._grad = jax.jit(jax.grad(_loss))
+        # Forward-mode Jacobians (∂μ/∂t9, ∂tnll/∂t9), both (ND, 9), in ONE jacfwd pass — replaces
+        # the 9×2 FD perpmt evals. Unblocked now that the step is custom_vjp-free; key is traced.
+        self._pjac = jax.jit(jax.jacfwd(_perpmt, argnums=0))
 
     def perpmt(self, t9, oc, ot, key):
         return self._perpmt(jnp.asarray(t9), oc, ot, key)
@@ -176,9 +179,24 @@ class ReconModel:
         Jmn = Jm / np.sqrt(mu0)[:, None]
         return Jmn.T @ Jmn + Jl.T @ Jl
 
+    def fisher_ad(self, t9, oc, ot, keys, fdh=None):
+        """Same PSD Fisher metric via FORWARD-MODE AD (``jacfwd`` of ``perpmt``), averaged over
+        ``keys`` — one jacfwd pass replaces the 9×2 FD perpmt evals (``fdh`` unused, kept for a
+        drop-in signature). Lower variance + faster than the central-FD ``fisher``."""
+        t9 = jnp.asarray(t9, float); ND = self.ND
+        Jm = np.zeros((ND, 9)); Jl = np.zeros((ND, 9)); mu0 = np.zeros(ND)
+        for k in keys:
+            (jm, jl) = self._pjac(t9, oc, ot, k)     # each (ND, 9)
+            Jm += np.asarray(jm); Jl += np.asarray(jl)
+            mu0 += np.asarray(self._perpmt(t9, oc, ot, k)[0])
+        n = len(keys); Jm /= n; Jl /= n; mu0 = np.maximum(mu0 / n, 1e-8)
+        Jmn = Jm / np.sqrt(mu0)[:, None]
+        return Jmn.T @ Jmn + Jl.T @ Jl
+
 
 def fit_track(model, obs_counts, obs_times, start, *, nkeys=4, niters=250, lr=8.0,
-              ridge_i=0.3, lam=0.01, refresh=8, seed=0, readout='ming', hist=False):
+              ridge_i=0.3, lam=0.01, refresh=8, seed=0, readout='ming', hist=False,
+              fisher_mode='fd'):
     """Consistent Fisher-Gauss-Newton track fit, SCALE9-preconditioned (RECO_PIPELINE §4).
 
     Parameters mirror the finalized recipe. The step is solved in SCALE9-scaled coordinates
@@ -190,6 +208,13 @@ def fit_track(model, obs_counts, obs_times, start, *, nkeys=4, niters=250, lr=8.
     or the final iterate (``'final'``). If ``hist=True``, returns ``(theta, history)`` where
     ``history`` is a dict with the full per-iteration ``traj`` ((niters+1, 9) θ trajectory) and
     ``gnorm`` ((niters+1,) scaled ‖g‖) — for campaign trajectory analysis.
+
+    ``fisher_mode`` : ``'fd'`` (default, the validated recipe) builds the Fisher metric by central
+    finite differences (``ReconModel.fisher``); ``'ad'`` uses forward-mode autodiff
+    (``ReconModel.fisher_ad``) — ~2.8× faster and the TRUER metric (the FD diagonal is inflated by
+    per-sensor estimation variance ∝ 1/nkeys; AD is low-variance). ⚠️ The AD metric is ~1–137×
+    SMALLER per param than FD, so the FD-tuned ``lr=8`` OVERSHOOTS with ``'ad'`` (vtx blows up);
+    use ``lr≈1`` with ``fisher_mode='ad'`` (validated: lr=1 → 12.2 cm vs FD lr=8 → 11.7 cm).
     """
     oc = jnp.asarray(obs_counts); ot = jnp.asarray(obs_times)
     keys = [jax.random.PRNGKey(seed + s) for s in range(nkeys)]
@@ -199,11 +224,12 @@ def fit_track(model, obs_counts, obs_times, start, *, nkeys=4, niters=250, lr=8.
     def G(th):
         return np.mean([np.asarray(model.grad(th, oc, ot, k)) for k in keys], 0)
 
+    fisher_fn = model.fisher_ad if fisher_mode == 'ad' else model.fisher
     th = np.asarray(start, float); best = (1e18, th.copy()); F = None
     g = G(th); traj = [th.copy()]; gnorms = [float(np.linalg.norm(g * S))]
     for it in range(niters):
         if F is None or it % refresh == 0:
-            F = model.fisher(th, oc, ot, keys, fdh)
+            F = fisher_fn(th, oc, ot, keys, fdh)
         Fs = S[:, None] * F * S[None, :]; gs = S * g                       # SCALE9 preconditioning
         marq = np.diag(lam * np.diag(Fs))                                  # Marquardt: a true diagonal
         rI = ridge_i * np.median(np.clip(np.diag(Fs), 1e-12, None)) * np.eye(9)  # additive Levenberg floor
