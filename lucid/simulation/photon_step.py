@@ -286,15 +286,22 @@ def photon_iteration_update_factors(
 # a new reflection model never reshapes _fwd/_bwd residuals or cotangents.
 
 def make_photon_iteration_update_factors_safe(reflection_fn=scalar_reflection):
-    """Build a custom_vjp-wrapped expected-value step using ``reflection_fn``.
+    """Build the expected-value step closed over ``reflection_fn`` (a static model choice).
 
-    The backward pass sanitises NaN/Inf cotangents to zero (a 2nd-order-AD
-    backstop for the recon FD/HVP Hessian; the forward is driven NaN-free at the
-    source). ``reflection_fn`` is closed over, not an argument — it is a static
-    model choice.
+    Historically this wrapped the step in a ``jax.custom_vjp`` whose backward scrubbed
+    NaN/Inf cotangents — a backstop for a sqrt-at-zero 0/0 in the surface-distance norm
+    (a reflected photon sitting exactly on the surface it just hit → |Δ|=0 → 0·∞). That
+    0/0 is now removed AT THE SOURCE by the eps-inside-sqrt floors (``simulator.py``
+    surface_distances ``+1e-12``; the cylinder discriminant ``maximum(·,1e-6)``), so the
+    backstop is unnecessary and is dropped. The reason to drop it: ``custom_vjp`` blocks
+    forward-mode (``jvp``/``jacfwd``), which the calibration/recon Jacobians need (P inputs
+    → N_sensors outputs → forward-mode is the efficient, low-variance mode). Forward is
+    byte-identical; the gradient/Hessian are now the true unbiased AD values. Verified
+    NaN-free without the backstop across ~3·10⁴ grad/Hessian evals over random + on-surface
+    stress geometries (hessian_probe/recon_nan_thorough.py).
     """
 
-    def _core(position, direction, time, surface_distance,
+    def _step(position, direction, time, surface_distance,
               normal, scatter_length, mie_scatter_length, g, refl_params,
               absorption_length, hit_sensor, lam, rng_key, speed_of_light):
         return photon_iteration_update_factors(
@@ -303,19 +310,7 @@ def make_photon_iteration_update_factors_safe(reflection_fn=scalar_reflection):
             absorption_length, hit_sensor, lam, rng_key, speed_of_light,
             reflection_fn=reflection_fn)
 
-    safe = jax.custom_vjp(_core)
-
-    def _fwd(*args):
-        return _core(*args), args
-
-    def _bwd(residuals, cotangents):
-        cotangents = jax.tree_util.tree_map(
-            lambda c: jnp.nan_to_num(c, nan=0.0, posinf=0.0, neginf=0.0), cotangents)
-        _, vjp_fn = jax.vjp(_core, *residuals)
-        return vjp_fn(cotangents)
-
-    safe.defvjp(_fwd, _bwd)
-    return safe
+    return _step
 
 
 # Module-level default (scalar reflection) — the byte-identical drop-in.
