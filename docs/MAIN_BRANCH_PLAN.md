@@ -8,24 +8,31 @@
 > `examples/hello_{simulate,calibrate,reconstruct}.py` for ≤20-line runnable entry points
 > against the real API. When this plan's interface is built, this banner comes down. (B4.)
 
-> **UNIFICATION PROGRESS** (worktree `unification`, 2026-06-11). The §8 plan is being
-> executed. **Done:** U1 de-env (the TTS `os.environ` leak removed; `lucid/` now has ZERO env
-> reads, ratcheted by a test) · U2 recon provenance snapshot (`archive/`, read-only from
-> LUCiD_recon, before any deletion) · U3 byte-pin test net (`tests/test_unification_pins.py`:
-> `ridge_inverse`, `counts_loss(normalize=)`, the order-stat time loss + AMP_DETACH, JointParams,
-> env-ratchet) · U4 `counts_loss(normalize=)` (the `make_sim_pair` helper was added then REMOVED —
-> too thin a wrapper over two `setup_event_simulator` calls; examples inline them) · U5 `JointParams` +
+> **UNIFICATION PROGRESS** (worktree `unification`, 2026-06-12). The §8 plan is essentially
+> complete on the package side. **Done:** U1 de-env (TTS `os.environ` leak removed; `lucid/` has
+> ZERO env reads, ratcheted by a test) · U2 recon provenance snapshot (`archive/`) · U3 byte-pin
+> test net (`tests/test_unification_pins.py`, now 9: `ridge_inverse`, `counts_loss(normalize=)`,
+> order-stat time loss + AMP_DETACH, JointParams, env-ratchet, **`seed_vertex_time` recovery**,
+> **`fit_track_multistart` margin**, **B5 Protocol contracts**) · U4 `counts_loss(normalize=)`
+> (`make_sim_pair` added then REMOVED — too thin; examples inline) · U5 `JointParams` +
 > `particle_bounds`/`joint_bounds` · U7 **recon ported into `lucid/`** (`losses.first_arrival_window_nll`
-> + `fitting/recon.py` `ReconModel`/`fit_track`; the 9-param Fisher-GN, validated end-to-end —
-> captures a track to ~15 cm). Full fast suite green (380+5). **Decisions:** U6 (merge the two GN
-> loops) — **declined**: calibration GN (Schur-k, √-MSE, cached-J, ×√12 CRB) and recon GN
-> (SCALE9-precond, additive Levenberg, autodiff-g + FD-Fisher) are structurally distinct
-> optimizers; per B9 keep both as clean library code, don't force a leaky single loop. **Deferred:**
-> U4 cosmetic `max_candidates_per_ray` rename (low value); U8 `pipeline.py` deletion (needs a
-> recon-runner CLI + `run.py` thin-shim + a GPU check that `lucid-optimize` still works — clean
-> follow-up now that `fit_track` exists + provenance is captured); U9 archive of `mie_hunter/`
-> `campaign/` (untracked, not in this branch). The risky **B2 autodiff-vs-FD-GN gate** and the
-> **SIREN `emitter='score'` factory** (B3 merge-blocker) remain open by design.
+> + `fitting/recon.py`) and **extended**: `seed_vertex_time` (robust time multilateration) +
+> `fit_track_multistart` (charge ‖ time two-start, 1% loss margin). Validated end-to-end on a
+> **100-event GEANT4 campaign vs the EXACT gun truth**: vtx ~12 cm, dir ~1.0°, energy unbiased, t0
+> ~0.5 ns RMS, 0 wanderers (campaign_recon/RESULTS.md). · **U8 DONE**: 612-line dead Adam
+> `pipeline.py` deleted; `lucid-optimize` (`optimization/run.py`) is now a lean config-driven
+> Fisher-GN two-start recon CLI; PhotonSim load+pad salvaged to `event_io.pad_photon_data`. · **B5
+> DONE**: executable `Protocol` contracts (`fitting/contracts.py`: `CalibForward`,
+> `PerPhotonPredictor`). **Decisions:** U6 (merge the two GN loops) — **declined** (calibration GN
+> Schur-k/√-MSE/cached-J/×√12-CRB vs recon GN SCALE9-precond/Levenberg/FD-Fisher are structurally
+> distinct; per B9 keep both as clean library code). **Remaining for a full merge:** (a) the §13
+> **gating experiments — B2 autodiff-vs-FD-GN** and **B3 SIREN `emitter='score'` factory +
+> importance re-validation** (decide D1/the architecture; harness ready in campaign_recon/); (b)
+> the §10.5/§12 **grand architecture** (pure forward + `residual=`/`priors=`/`nuisance=`/`reparam=`
+> + Component pattern + param-KIND + `SimParams`) — GATED by B2, build only what the experiments
+> justify; (c) cosmetic: `max_candidates_per_ray` rename, fold top-level `campaign/`+`campaign_recon/`
+> study dirs into `scripts/` (cleanly separated — `lucid/` imports neither). The package
+> (`lucid/` + tests + examples) is merge-ready; the open items are architecture/decision, not cleanup.
 
 **Purpose.** This is the consolidation plan refined for *simplicity + generality* — the shape
 LUCiD's **main branch** should take. It supersedes the heavier abstraction in
