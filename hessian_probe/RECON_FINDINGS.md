@@ -62,3 +62,44 @@ Baseline AD Hessian: min-eig -7.9e7, neg-diag 8/9, cond 2.5e34 (indefinite garba
     exist). After flooring: indefinite -> ~PSD.
   - AD GRADIENT biased by the multi-bounce is_scat decision-flip (Dd detached in score) + floor
     cell jumps -> needs a SCORE for the geometry decision or a soft is_scat/soft cell-assignment.
+
+---
+
+# ⚠️ CORRECTION (many-key test, recon_manykey.py) — sections (2)(3) above were SINGLE-KEY ARTIFACTS
+
+The conclusions "AD Hessian broken" and "AD gradient biased" were drawn from a SINGLE key, comparing
+AD to FD/eigenvalues. That repeats the exact calibration-arc mistake: FD-CRN through discrete branches
+is the NOISY estimator, and a random-sign loss Σc·charge has NO reason to be PSD. The rigorous test —
+AD-mean vs FD-mean over MANY keys (z-score), and AD-Hessian vs GT = d/dθ E[∇L] — settles it:
+
+**GRADIENT (200 keys, all 9 params, K=1 AND K=8): AD == FD in expectation. Every z < 1.2 → AGREE.**
+  - The single-key `grad_rel` 0.14→0.92 was pure FD VARIANCE. At K=8, std(FD) ≈ 12× std(AD)
+    (x: 2060 vs 173; cosθ: 2872 vs 821). AD (DiCE score) is the LOW-VARIANCE UNBIASED estimator;
+    FD-CRN variance explodes through the multi-bounce decision-flips. **AD is NOT biased.** There is
+    no is_scat-flip gradient bug — same Rao-Blackwell story as the calibration discrete params.
+
+**HESSIAN DIAG (200 keys, K=1 AND K=8): E[AD H_jj] == GT = d/dθ E[∇L]. Every z ≤ 1.1 → AGREE.**
+  - The indefinite "8/9 neg-diag, −6e5" spectrum is the CORRECT 2nd derivative of the random-c probe
+    loss — NOT a pathology. AD reproduces the true Hessian. (A physical loss — Poisson NLL / √-MSE —
+    is locally PSD; Σc·charge with c~N(0,1) is indefinite by construction.) The sqrt eps floors change
+    the MAGNITUDE/conditioning of genuine grazing/on-surface curvature; they do not fix a "bug".
+
+**So nothing in the recon AD path is wrong.** The eps-toggle factorial measured real geometric
+curvature (correctly reported by AD), not numerical breakage.
+
+## NaN backstop is unnecessary (recon_nan_stress.py, PLAIN step, no custom_vjp/nan_to_num)
+300 keys × 5 STRESS geometries (near-wall grazing, on-cap, axis-aligned, near-tangent-to-wall — the
+exact on-surface / 0/0 firing conditions) at K=8: **NaN val 0, grad 0, Hessian 0 everywhere.**
+The eps-INSIDE-sqrt floors (surface-dist `+1e-12`; discriminant `maximum(·,1e-6)`) remove the 0/0 at
+source. custom_vjp+nan_to_num provably never needs to fire.
+
+## FINAL — the correct fix (NO SIREN replacement)
+1. **Drop the custom_vjp wrapper** (`make_photon_iteration_update_factors_safe` → plain step). It only
+   ever scrubbed measure-zero sqrt-at-zero cotangents that the eps-inside-sqrt floors already prevent.
+   This is the whole point: removing it UNBLOCKS forward-mode (jacfwd/jvp), the correct memory-light
+   mode for the few-input→many-output recon/calibration Jacobian.
+2. **Keep the eps-inside-sqrt floors** (surface-distance `+1e-12`; ray discriminant). Optionally switch
+   the discriminant default to the C∞ additive floor (`_CYL_SQRT_EPS>0`) for better Hessian
+   CONDITIONING at grazing rays — a conditioning nicety, not a correctness fix.
+3. AD gradient and Hessian are unbiased and LOWER variance than FD (≈12× at K=8) → prefer AD over the
+   current FD Jacobian in the fitter. SIREN emitter stays exactly as is — it was never the problem.
