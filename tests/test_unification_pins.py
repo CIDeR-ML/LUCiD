@@ -146,6 +146,21 @@ def test_fit_track_multistart_margin_arbitration():
         R.fit_track = orig
 
 
+def test_fitting_contracts_protocols():
+    """B5: the closure-surface contracts are executable (Protocol), not just docstrings.
+
+    The two opaque fitting callables (calibration forward, recon per-photon predictor) are
+    typed Protocols so they're grep/pyright/IDE-checkable. Pin that they import, are
+    runtime_checkable, and a conforming callable satisfies them."""
+    from lucid.fitting import CalibForward, PerPhotonPredictor
+    assert callable(getattr(CalibForward, '__instancecheck__', None))        # runtime_checkable
+    calib = lambda theta, ek, pk: None
+    pred = lambda track, key: (None, None, None, None)
+    assert isinstance(calib, CalibForward)
+    assert isinstance(pred, PerPhotonPredictor)
+    assert not isinstance(42, CalibForward)                                  # non-callable rejected
+
+
 def test_no_env_reads_in_lucid_package():
     """Ratchet (B6): the lucid/ package must have ZERO os.environ/os.getenv reads.
 
