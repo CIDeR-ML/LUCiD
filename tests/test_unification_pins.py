@@ -177,19 +177,28 @@ def test_fitting_analysis_seam():
 
 
 def test_no_env_reads_in_lucid_package():
-    """Ratchet (B6): the lucid/ package must have ZERO os.environ/os.getenv reads.
+    """Ratchet (B6): the lucid/ FORWARD/PHYSICS path must have ZERO os.environ/os.getenv reads.
 
     Import-time env reads (the TTS leak, U1) break two-Problem coexistence and make the
     forward non-reproducible. After the de-env there are none; this fails the day one
     re-accretes (route physics/model knobs through DetectorParams/SimConfig/args instead).
+
+    EXEMPT: ``lucid/production/`` — the data-production ORCHESTRATION layer is env-driven
+    by design (external-binary paths PHOTONSIM_BIN / GENIE_PREFIX / GENIE_XSEC_FILE; cluster
+    scheduling). These are infra config, not forward/physics knobs, and never touch the
+    differentiable forward. The ratchet stays strict for simulation/sources/geometry/
+    wavelength/fitting/siren/optimization.
     """
     import os
     import re
     root = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'lucid')
+    _EXEMPT = (os.path.join(root, 'production') + os.sep,)
     pat = re.compile(r'os\.environ|os\.getenv|getenv\(')
     offenders = []
     for dirpath, _, files in os.walk(root):
         if '__pycache__' in dirpath:
+            continue
+        if any((dirpath + os.sep).startswith(e) for e in _EXEMPT):
             continue
         for fn in files:
             if not fn.endswith('.py'):
