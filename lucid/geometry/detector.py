@@ -9,6 +9,7 @@ from .registry import get_detector_class
 from .cylinder import Cylinder  # noqa: F401
 from .sphere import Sphere      # noqa: F401
 from .box import Box            # noqa: F401
+from .string import StringTelescope  # noqa: F401  (telescope / volume detectors)
 
 
 def load_detector_config(file_path):
@@ -131,6 +132,9 @@ def generate_detector(file_path):
     elif cls is Box:
         return cls(geom_def['length'], geom_def['width'], geom_def['height'],
                    geom_def['n_sensors'], geom_def['sensor_radius'])
+    elif cls is StringTelescope:
+        # Telescope geometry: per-DOM positions live in an NPZ next to the config.
+        return cls.from_config(file_path)
     else:
         # Future-proof: class was registered but we don't know its constructor.
         raise NotImplementedError(

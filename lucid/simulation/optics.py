@@ -44,11 +44,22 @@ def create_local_frame(z):
     return jnp.stack([x, y, z])
 
 
-def sample_scatter_distance(D, S, rng_key):
-    """Sample from a truncated exponential (scatter before surface)."""
+def sample_scatter_distance(D, S, rng_key, eps=0.0):
+    """Sample from a truncated exponential (scatter before surface).
+
+    ``eps`` floors the ``log1p`` argument at ``-1 + eps`` to keep the
+    distance (and its gradient) finite. With the default ``eps=0`` this is a
+    no-op for the surface step (``-u·prob_term`` is strictly > -1 there, so the
+    floor never binds — byte-identical). The volume step passes ``eps>0``: when
+    ``segment_length ≫ S`` the truncation saturates (``prob_term→1``) and an
+    unclamped ``log1p`` runs to ``-inf`` → ``scatter_distance→+inf`` → a
+    ``0·inf`` NaN in ``d(exp(-dist/λ_abs))/dS``. The floor caps the distance at
+    ``-S·log(eps)`` so the gradient stays finite.
+    """
     u = jax.random.uniform(rng_key)
     prob_term = -jnp.expm1(-D / S)
-    return -S * jnp.log1p(-u * prob_term)
+    arg = jnp.maximum(-u * prob_term, -1.0 + eps)
+    return -S * jnp.log1p(arg)
 
 
 def solve_rayleigh_inverse_cdf(u):

@@ -22,7 +22,7 @@ from lucid.geometry.registry import _REGISTRY
 class TestRegistryLookup:
     def test_all_types_registered(self):
         types = list_detector_types()
-        assert sorted(types) == ['box', 'cylinder', 'sphere']
+        assert sorted(types) == ['box', 'cylinder', 'sphere', 'string']
 
     def test_case_insensitive(self):
         assert get_detector_class('cylinder') is Cylinder
