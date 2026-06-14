@@ -2,7 +2,8 @@
 from typing import NamedTuple
 
 from lucid.utils import unpack_t0_params, unpack_siren_params
-from lucid.sources.siren_rays import build_cherenkov_context, make_cherenkov_surrogate_fn
+from lucid.siren.core import build_cherenkov_context
+from lucid.sources.siren_rays import make_cherenkov_surrogate_fn
 from lucid.siren.training.inference import SIRENPredictor
 
 

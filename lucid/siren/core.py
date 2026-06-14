@@ -1,14 +1,17 @@
+from __future__ import annotations
+
 import jax
 import jax.numpy as jnp
 from jax import random
 import flax.linen as nn
 import numpy as np
-from typing import Sequence, Callable, Any
+from typing import Sequence, Callable, Any, NamedTuple, Optional
 from flax.core.frozen_dict import freeze
 
 __all__ = [
     'SineLayer', 'SIREN',
-    'create_photonsim_siren_grid',
+    'SirenContext', 'build_cherenkov_context', 'build_dedx_context',
+    'make_smax_fn', 'make_power_law_fn',
     'torch_to_jax', 'convert_pytorch_to_jax', 'load_siren_jax',
 ]
 
@@ -16,24 +19,24 @@ class SineLayer(nn.Module):
     features: int
     is_first: bool = False
     omega_0: float = 30.0
-    
+
     @nn.compact
     def __call__(self, inputs):
         input_dim = inputs.shape[-1]
-        
+
         # Initialize weights following SIREN paper
         if self.is_first:
             weight_init = nn.initializers.uniform(scale=1/input_dim)
         else:
             scale = np.sqrt(6/input_dim) / self.omega_0
             weight_init = nn.initializers.uniform(scale=scale)
-            
+
         x = nn.Dense(
             features=self.features,
             kernel_init=weight_init,
             bias_init=nn.initializers.uniform(scale=1)
         )(inputs)
-        
+
         return jnp.sin(self.omega_0 * x)
 
 class SIREN(nn.Module):
@@ -44,24 +47,20 @@ class SIREN(nn.Module):
     first_omega_0: float = 30.0
     hidden_omega_0: float = 30.0
     w0: float = 30.0  # Alternative parameter name for compatibility
-    
-    def setup(self):
-        # Setup method - no attribute modification needed
-        pass
-    
+
     @nn.compact
     def __call__(self, inputs):
         # Use w0 parameter directly, falling back to separate omega_0 parameters
         first_omega = self.w0 if self.w0 != 30.0 else self.first_omega_0
         hidden_omega = self.w0 if self.w0 != 30.0 else self.hidden_omega_0
-        
+
         x = SineLayer(
             features=self.hidden_features,
             is_first=True,
             omega_0=first_omega,
             name='SineLayer_0'
         )(inputs)
-        
+
         for i in range(self.hidden_layers):
             x = SineLayer(
                 features=self.hidden_features,
@@ -69,7 +68,7 @@ class SIREN(nn.Module):
                 omega_0=hidden_omega,
                 name=f'SineLayer_{i+1}'
             )(x)
-            
+
         if self.outermost_linear:
             scale = np.sqrt(6/self.hidden_features) / hidden_omega
             init = nn.initializers.uniform(scale=scale)
@@ -86,10 +85,10 @@ class SIREN(nn.Module):
                 omega_0=hidden_omega,
                 name='SineLayer_final'
             )(x)
-        
+
         # Always square the output for compatibility with trained models
         x = x * x
-            
+
         return x, inputs
 
 def torch_to_jax(tensor):
@@ -98,18 +97,24 @@ def torch_to_jax(tensor):
     return jnp.array(tensor.cpu().numpy())
 
 def convert_pytorch_to_jax(pytorch_state_dict: dict, jax_model: SIREN):
-    """Convert PyTorch SIREN weights to JAX/Flax format"""
+    """Convert PyTorch SIREN weights to JAX/Flax format.
+
+    Args:
+        pytorch_state_dict: PyTorch state_dict from a trained SIREN model.
+        jax_model: Target JAX SIREN model instance (used for architecture reference).
+
+    Returns:
+        FrozenDict of JAX/Flax parameters matching the model's expected structure.
+    """
     params = {}
-    
-    # First sine layer (SineLayer_0)
+
     params['SineLayer_0'] = {
         'Dense_0': {
             'kernel': torch_to_jax(pytorch_state_dict['net.0.linear.weight'].T),
             'bias': torch_to_jax(pytorch_state_dict['net.0.linear.bias'])
         }
     }
-    
-    # Hidden layers (SineLayer_1 through SineLayer_3)
+
     for i in range(1, 4):
         params[f'SineLayer_{i}'] = {
             'Dense_0': {
@@ -117,294 +122,193 @@ def convert_pytorch_to_jax(pytorch_state_dict: dict, jax_model: SIREN):
                 'bias': torch_to_jax(pytorch_state_dict[f'net.{i}.linear.bias'])
             }
         }
-    
-    # Final dense layer
+
     params['Dense_0'] = {
         'kernel': torch_to_jax(pytorch_state_dict['net.4.weight'].T),
         'bias': torch_to_jax(pytorch_state_dict['net.4.bias'])
     }
-    
+
     return freeze({'params': params})
 
 def load_siren_jax(pytorch_weights_path: str):
     """
     Load PyTorch SIREN weights and create equivalent JAX model. Works with both CPU and GPU-saved weights.
-    
+
     Args:
         pytorch_weights_path: Path to saved PyTorch weights
-    
+
     Returns:
         Tuple of (jax_model, jax_params)
     """
-    # Load PyTorch weights with automatic device placement
     import torch  # lazy import — torch is an optional dependency
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     pytorch_state = torch.load(pytorch_weights_path, map_location=device, weights_only=True)
-    
-    # Initialize JAX model with same architecture
+
     jax_model = SIREN(
         hidden_features=256,
         hidden_layers=3,
         out_features=1,
         outermost_linear=True
     )
-    
-    # Convert weights
+
     jax_params = convert_pytorch_to_jax(pytorch_state, jax_model)
-    
+
     return jax_model, jax_params
 
 
-def load_photonsim_siren(model_path: str):
+# --- SIREN surrogate inference context ---------------------------------
+
+
+class SirenContext(NamedTuple):
+    """Inference-time inputs shared between the Cherenkov and dE/dx SIREN
+    surrogates.
+
+    Each SIREN is a 3D scalar field over ``(energy, axis2, s/s_max)``. The
+    2nd axis is opening angle for Cherenkov, dE/dx for the energy-loss
+    surrogate; ``axis2_min/axis2_max`` carry whatever range applies. All other
+    fields play identical roles for both surrogates. ``n_photons_fn`` is the
+    Cherenkov absolute-count normalization and is left ``None`` for dE/dx
+    contexts (scintillation gets its absolute scale from the medium's
+    light-yield parameters instead).
+
+    A plain Python container — it holds a Flax module + Python closures +
+    floats, so it is never traced. The ray-function factories
+    (``make_cherenkov_surrogate_fn`` / ``make_scintillation_surrogate_fn``)
+    close over it; ``model_params`` (a real pytree) is passed separately as
+    a traced argument.
     """
-    Load PhotonSim-trained SIREN model (native JAX format).
-    
-    Args:
-        model_path: Path to saved PhotonSim SIREN model (.npz file)
-    
-    Returns:
-        Tuple of (jax_model, jax_params, normalization_params, metadata)
+    model:         SIREN
+    energy_min:    float
+    energy_max:    float
+    axis2_min:     float          # opening angle (Cherenkov) or dE/dx (dedx)
+    axis2_max:     float
+    smax_dist_min: float          # s/s_max range the model was trained on
+    smax_dist_max: float          #   (dataset_info['distance_range'])
+    log_min:       float          # target_normalization log range
+    log_max:       float
+    s_max_fn:      Callable        # s_max(E_mev) -> mm
+    n_photons_fn:  Optional[Callable]   # N_photons(E_mev) -> total photons/event (Cherenkov only)
+    grid_bins:     int             # first-pass grid resolution (per axis)
+    threshold:     float           # seed threshold, fraction of per-energy grid max
+
+
+def make_smax_fn(smax: dict) -> Callable:
+    """Build a jittable ``s_max(E_mev) -> mm`` closure from a trained-model
+    ``smax`` metadata block.
+
+    The ``form`` is fixed per model, so it is dispatched in Python here; the
+    returned closure is fully traceable (the ``piecewise`` branch uses
+    ``jnp.where``). Mirrors ``_eval_smax`` in
+    ``PhotonSim/tools/smax/analyze_smax.py`` and ``build_tables.py``.
     """
-    # Load model data
-    data = np.load(model_path, allow_pickle=True)
-    
-    # Extract model configuration
-    model_config = data['model_config'].item()
-    
-    # Create SIREN model with PhotonSim configuration
-    jax_model = SIREN(**model_config)
-    
-    # Extract parameters (convert back to JAX format)
-    jax_params = freeze({'params': jax.tree.map(lambda x: jnp.array(x), data['params'].item())})
-    
-    # Extract normalization parameters
-    normalization_params = data['normalization_params'].item()
-    
-    # Extract metadata
-    metadata = {
-        'dataset_stats': data['dataset_stats'].item(),
-        'final_step': int(data['final_step']),
-        'final_train_loss': float(data['final_train_loss']) if data['final_train_loss'] is not None else None,
-        'final_val_loss': float(data['final_val_loss']) if data['final_val_loss'] is not None else None,
-    }
-    
-    return jax_model, jax_params, normalization_params, metadata
+    form = smax['form']
+    p = smax['params']
+    if form == 'A*E^B':
+        A, B = float(p['A']), float(p['B'])
+        return lambda E: A * E ** B
+    if form == 'smooth_two_power':
+        a, b1, b2, E0 = (float(p[k]) for k in ('a', 'b1', 'b2', 'E0'))
+        return lambda E: a * E ** b1 / (1.0 + (E / E0) ** (b1 - b2))
+    if form == 'piecewise':
+        ej = float(p['e_join_mev'])
+        a, b1, b2, E0 = (float(p[k]) for k in ('a', 'b1', 'b2', 'E0'))
+        ah, bh1, bh2, Eh0 = (float(p[k])
+                             for k in ('a_hi', 'b1_hi', 'b2_hi', 'E0_hi'))
+
+        def _piecewise(E):
+            low = a * E ** b1 / (1.0 + (E / E0) ** (b1 - b2))
+            high = ah * E ** bh1 / (1.0 + (E / Eh0) ** (bh1 - bh2))
+            return jnp.where(E < ej, low, high)
+
+        return _piecewise
+    raise ValueError(f"unknown smax form: {form!r}")
 
 
-def normalize_photonsim_inputs(inputs: jnp.ndarray, normalization_params: dict) -> jnp.ndarray:
+def make_power_law_fn(nphot: dict) -> Callable:
+    """Build a jittable ``N_photons(E_mev)`` closure from a trained-model
+    ``nphot`` metadata block (form ``'A*E^B+C'``).
+
+    Clamped at 0 — the ``a*E^b+c`` fit can dip slightly negative below the
+    Cherenkov threshold.
     """
-    Normalize inputs according to PhotonSim training normalization.
-    
-    Args:
-        inputs: Input array [N, 3] with [energy, angle, distance]
-        normalization_params: Normalization parameters from training
-    
-    Returns:
-        Normalized inputs in [-1, 1] range
+    a, b, c = float(nphot['a']), float(nphot['b']), float(nphot['c'])
+    return lambda E: jnp.maximum(a * E ** b + c, 0.0)
+
+
+# Defaults for the ray-sampling knobs when `siren_params.json` omits them.
+_DEFAULT_RAY_SAMPLING = {"grid_bins": 250, "threshold": 0.05}
+
+
+def _build_siren_context(predictor, ray_sampling: dict | None,
+                         axis2_key: str, require_nphot: bool) -> SirenContext:
+    """Shared SIREN-context resolver — used by both Cherenkov and dE/dx
+    surrogates.
+
+    ``axis2_key`` is the ``dataset_info`` key that carries the 2nd-axis range
+    (``'angle_range'`` for Cherenkov, ``'dedx_range'`` for dE/dx). The
+    ``nphot`` block is required only for Cherenkov contexts; dE/dx contexts
+    return ``n_photons_fn=None``.
     """
-    if not normalization_params['normalize_inputs']:
-        return inputs
-    
-    energy_range = normalization_params['energy_range']
-    angle_range = normalization_params['angle_range']
-    distance_range = normalization_params['distance_range']
-    
-    normalized = jnp.zeros_like(inputs)
-    
-    # Energy: [min_energy, max_energy] -> [-1, 1]
-    normalized = normalized.at[:, 0].set(
-        2 * (inputs[:, 0] - energy_range[0]) / (energy_range[1] - energy_range[0]) - 1
-    )
-    
-    # Angle: [0, max_angle] -> [-1, 1]
-    normalized = normalized.at[:, 1].set(
-        2 * (inputs[:, 1] - angle_range[0]) / (angle_range[1] - angle_range[0]) - 1
-    )
-    
-    # Distance: [0, max_distance] -> [-1, 1]
-    normalized = normalized.at[:, 2].set(
-        2 * (inputs[:, 2] - distance_range[0]) / (distance_range[1] - distance_range[0]) - 1
-    )
-    
-    return normalized
-
-
-def denormalize_photonsim_output(normalized_output: jnp.ndarray, normalization_params: dict) -> jnp.ndarray:
-    """
-    Denormalize output according to PhotonSim training normalization.
-    
-    Args:
-        normalized_output: Normalized output from model
-        normalization_params: Normalization parameters from training
-    
-    Returns:
-        Denormalized output (photon counts)
-    """
-    if not normalization_params['normalize_output']:
-        return normalized_output
-    
-    output_scale = normalization_params['output_scale']
-    return normalized_output * output_scale
-
-
-class PhotonSimSIREN:
-    """
-    Wrapper class for PhotonSim-trained SIREN models.
-    
-    This class provides a convenient interface for using PhotonSim-trained
-    SIREN models with automatic normalization and denormalization.
-    """
-    
-    def __init__(self, model_path: str):
-        """
-        Initialize PhotonSim SIREN model.
-        
-        Args:
-            model_path: Path to saved PhotonSim SIREN model
-        """
-        self.model, self.params, self.normalization_params, self.metadata = load_photonsim_siren(model_path)
-        self.model_path = model_path
-    
-    def __call__(self, inputs: jnp.ndarray) -> jnp.ndarray:
-        """
-        Evaluate the model on inputs.
-        
-        Args:
-            inputs: Input array [N, 3] with [energy, angle, distance]
-        
-        Returns:
-            Photon counts [N,]
-        """
-        # Normalize inputs
-        normalized_inputs = normalize_photonsim_inputs(inputs, self.normalization_params)
-        
-        # Forward pass
-        output, _ = self.model.apply(self.params, normalized_inputs)
-        
-        # Ensure correct shape
-        if output.ndim > 1:
-            output = output.squeeze()
-        
-        # Denormalize output
-        denormalized_output = denormalize_photonsim_output(output, self.normalization_params)
-        
-        return denormalized_output
-    
-    def get_model_info(self) -> dict:
-        """Get information about the model."""
-        return {
-            'model_path': self.model_path,
-            'model_config': {
-                'hidden_features': self.model.hidden_features,
-                'hidden_layers': self.model.hidden_layers,
-                'out_features': self.model.out_features,
-                'w0': self.model.w0,
-            },
-            'normalization_params': self.normalization_params,
-            'metadata': self.metadata,
-        }
-    
-    def save_for_inference(self, output_path: str):
-        """
-        Save model in a format optimized for inference.
-        
-        Args:
-            output_path: Path to save inference-ready model
-        """
-        inference_data = {
-            'params': self.params,
-            'model_config': {
-                'hidden_features': self.model.hidden_features,
-                'hidden_layers': self.model.hidden_layers,
-                'out_features': self.model.out_features,
-                'w0': self.model.w0,
-            },
-            'normalization_params': self.normalization_params,
-        }
-        
-        # Convert JAX arrays to numpy for saving
-        inference_data_np = jax.tree.map(lambda x: np.array(x) if hasattr(x, 'shape') else x, inference_data)
-        
-        np.savez(output_path, **inference_data_np)
-        print(f"Saved inference model to {output_path}")
-
-
-# Backward compatibility function
-def load_siren_model(model_path: str, model_type: str = "auto"):
-    """
-    Load SIREN model with automatic type detection.
-    
-    Args:
-        model_path: Path to model file
-        model_type: "pytorch", "photonsim", or "auto" for automatic detection
-    
-    Returns:
-        Appropriate model object
-    """
-    if model_type == "auto":
-        # Detect model type based on file extension and contents
-        if model_path.endswith('.pkl'):
-            model_type = "pytorch"
-        elif model_path.endswith('.npz'):
-            # Check if it contains PhotonSim-specific keys
-            try:
-                data = np.load(model_path, allow_pickle=True)
-                if 'model_config' in data and 'normalization_params' in data:
-                    model_type = "photonsim"
-                else:
-                    model_type = "pytorch"
-            except:
-                model_type = "pytorch"
-        else:
-            model_type = "pytorch"
-    
-    if model_type == "photonsim":
-        return PhotonSimSIREN(model_path)
-    else:
-        return load_siren_jax(model_path)
-
-
-def create_photonsim_siren_grid(photonsim_predictor, n_bins=250):
-    """Create a precomputed grid for SIREN model evaluation.
-
-    Parameters
-    ----------
-    photonsim_predictor : SIRENPredictor
-        Trained SIREN predictor instance
-    n_bins : int
-        Number of bins for angle and distance dimensions
-
-    Returns
-    -------
-    tuple
-        Grid data tuple: (n_bins, energy_min, energy_max, angle_min, angle_max,
-        distance_min, distance_max, angle_bins, distance_bins, angle_dist_grid,
-        angle_mesh, distance_mesh, log_min, log_max)
-    """
-    # Get the actual ranges from PhotonSim training metadata
-    dataset_info = photonsim_predictor.dataset_info
+    rs = {**_DEFAULT_RAY_SAMPLING, **(ray_sampling or {})}
+    meta = predictor.metadata
+    dataset_info = predictor.dataset_info
     energy_min, energy_max = dataset_info['energy_range']
-    angle_min, angle_max = dataset_info['angle_range']  # In radians
-    distance_min, distance_max = dataset_info['distance_range']  # In mm
+    axis2_min, axis2_max = dataset_info[axis2_key]
+    dist_min, dist_max = dataset_info['distance_range']       # s/s_max ∈ [0,1]
 
-    # Validate target normalization scheme
-    target_norm = photonsim_predictor.metadata['target_normalization']
+    target_norm = meta['target_normalization']
     if target_norm['scheme'] != 'log_normalized_to_01':
-        raise ValueError(f"Expected target normalization scheme 'log_normalized_to_01', "
-                         f"but got '{target_norm['scheme']}'")
+        raise ValueError(
+            f"Expected target normalization scheme 'log_normalized_to_01', "
+            f"but got '{target_norm['scheme']}'")
 
-    # Create n_bins x n_bins binning using actual PhotonSim training ranges
-    angle_bins = jnp.linspace(angle_min, angle_max, n_bins)
-    distance_bins = jnp.linspace(distance_min, distance_max, n_bins)
-    angle_dist_grid = jnp.column_stack([
-        jnp.repeat(angle_bins, n_bins),
-        jnp.tile(distance_bins, n_bins)
-    ])
+    if 'smax' not in meta:
+        raise ValueError(
+            "trained-model metadata has no 'smax' block — this model predates "
+            "s/s_max support. Retrain or re-sync the model metadata.")
+    if require_nphot and 'nphot' not in meta:
+        raise ValueError(
+            "trained-model metadata has no 'nphot' block — rebuild the h5 with "
+            "the N_photons fit and re-sync the model metadata.")
 
-    # Create meshgrid using actual PhotonSim ranges
-    angle_mesh, distance_mesh = jnp.meshgrid(angle_bins, distance_bins, indexing='ij')
-    log_min = target_norm['log_min']
-    log_max = target_norm['log_max']
+    model = SIREN(**meta['model_config'])
 
-    return n_bins, energy_min, energy_max, angle_min, angle_max, distance_min, distance_max, angle_bins, \
-        distance_bins, angle_dist_grid, angle_mesh, distance_mesh, log_min, log_max
+    return SirenContext(
+        model=model,
+        energy_min=float(energy_min), energy_max=float(energy_max),
+        axis2_min=float(axis2_min), axis2_max=float(axis2_max),
+        smax_dist_min=float(dist_min), smax_dist_max=float(dist_max),
+        log_min=float(target_norm['log_min']),
+        log_max=float(target_norm['log_max']),
+        s_max_fn=make_smax_fn(meta['smax']),
+        n_photons_fn=make_power_law_fn(meta['nphot']) if require_nphot else None,
+        grid_bins=int(rs['grid_bins']),
+        threshold=float(rs['threshold']),
+    )
+
+
+def build_cherenkov_context(predictor,
+                            ray_sampling: dict | None = None) -> SirenContext:
+    """Resolve a Cherenkov ``SIRENPredictor`` into a :class:`SirenContext`.
+
+    The 2nd axis is the opening angle (radians). ``n_photons_fn`` is the
+    Cherenkov power-law fit from the ``nphot`` metadata block.
+
+    ``ray_sampling`` is the ``ray_sampling`` block from ``siren_params.json``
+    (``{'grid_bins', 'threshold'}``); missing keys fall back to
+    ``_DEFAULT_RAY_SAMPLING``.
+    """
+    return _build_siren_context(predictor, ray_sampling,
+                                axis2_key='angle_range', require_nphot=True)
+
+
+def build_dedx_context(predictor,
+                       ray_sampling: dict | None = None) -> SirenContext:
+    """Resolve a dE/dx ``SIRENPredictor`` into a :class:`SirenContext`.
+
+    The 2nd axis is dE/dx (keV/mm). ``n_photons_fn`` is ``None`` — the
+    scintillation surrogate gets its absolute photon count from the medium's
+    light-yield parameters (S, kB, C), not from a stored curve.
+    """
+    return _build_siren_context(predictor, ray_sampling,
+                                axis2_key='dedx_range', require_nphot=False)

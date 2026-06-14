@@ -56,10 +56,12 @@ from lucid.siren.training.dataset import PhotonSimDataset
 
 # Import tools
 from lucid.siren.core import SIREN
-from lucid.siren.core import create_photonsim_siren_grid
-from lucid.sources.siren_rays import generate_random_cone_vectors, photonsim_differentiable_get_rays
+from lucid.siren.core import build_cherenkov_context
+from lucid.sources.siren_rays import (
+    generate_random_cone_vectors, make_cherenkov_surrogate_fn, evaluate_siren_lhs,
+)
 from lucid.utils import normalize
-from lucid.utils import base_dir_path, setup_matplotlib_for_notebook
+from lucid.utils import base_dir_path, setup_matplotlib_for_notebook, unpack_siren_params
 
 plt.rcParams['text.usetex'] = False
 plt.rcParams['font.family'] = 'serif'
@@ -117,15 +119,10 @@ class PhotonSimValidator:
               f"Angle: {np.degrees(self.angle_min):.1f}°-{np.degrees(self.angle_max):.1f}°, "
               f"Distance: {self.distance_min}-{self.distance_max} mm")
         
-        # Create table data for ray generation
-        self.table_data = create_photonsim_siren_grid(self.photonsim_predictor)
-
-        # Load num_seeds parameters from configuration
-        from lucid.utils import unpack_photonsim_params
-        photonsim_params = unpack_photonsim_params(particle, material)
-        self.num_seeds_a, self.num_seeds_b, self.num_seeds_c = photonsim_params['num_seeds']
-
-        print(f"Loaded num_seeds parameters: a={self.num_seeds_a:.6f}, b={self.num_seeds_b:.6f}, c={self.num_seeds_c:.2f}")
+        # Build the SIREN inference context + the track-mode ray generator.
+        ray_sampling = unpack_siren_params(particle, material)['ray_sampling']
+        self.ctx = build_cherenkov_context(self.photonsim_predictor, ray_sampling)
+        self.ray_fn = make_cherenkov_surrogate_fn(self.ctx)
 
         # Standard simulation parameters
         self.origin = jnp.array([0.5, 0.0, -0.5])
@@ -185,7 +182,7 @@ class PhotonSimValidator:
         all_masked_values = []
         for energy in energies[:4]:  # Only process first 4 energies
             reco_value = self.evaluate_photonsim_grid(energy, angle_bins, distance_bins)
-            masked_values = jnp.where(reco_value > threshold, reco_value, 0)
+            masked_values = jnp.where(reco_value > threshold, reco_value, threshold)
             all_masked_values.append(masked_values)
 
         # Determine vmax if not provided
@@ -204,8 +201,8 @@ class PhotonSimValidator:
             axes = axes.ravel()
 
         # Convert distance range to meters
-        distance_min_m = 0#self.distance_min / 1000.0
-        distance_max_m = 10#self.distance_max / 1000.0
+        distance_min_m = 0
+        distance_max_m = 10
 
         # Create plots
         images = []
@@ -216,7 +213,7 @@ class PhotonSimValidator:
             masked_values = all_masked_values[i]
 
             # Calculate statistics
-            valid_count = np.sum(masked_values > 0)
+            valid_count = np.sum(masked_values > threshold)
             total_weight = np.sum(masked_values)
 
             results['statistics'][energy] = {
@@ -352,230 +349,87 @@ class PhotonSimValidator:
         return results
     
     def integral_analysis(self, energies=None, nphot=1000000, output_dir=None):
+        """Diagnostic: SIREN's phase-space integral vs the stored N_photons(E).
+
+        For each energy, draw one area-uniform LHS set over (angle, s/s_max),
+        evaluate SIREN once, and form a Monte-Carlo estimate of the total
+        photons/event:  mean(weights) * N_HIST_BINS. Compare it against
+          * the stored N_photons(E) power law (ctx.n_photons_fn), and
+          * the raw table sum (dataset.get_total_counts_for_energy).
+
+        SIREN supplies only the *shape* during inference; this checks that the
+        shape also *integrates* consistently with the absolute normalization.
+        A flat ratio ~ 1 is good; an energy-dependent ratio flags drift.
         """
-        Perform n-photon integral analysis.
-        
-        Args:
-            energies: List of energies to analyze
-            nphot: Number of photons for analysis
-            output_dir: Directory to save results
-        """
-        print(f"\n=== N-Photon Integral Analysis ===")
-        
+        print("\n=== SIREN integral vs N_photons(E) diagnostic ===")
+
         if energies is None:
-            energies = np.linspace(100, 1900, 50)
-        
-        print(f"Analyzing {len(energies)} energies from {energies[0]} to {energies[-1]} MeV")
-        print(f"N-photons: {nphot:,}")
-        
-        tot_real_photons = []
-        tot_pred_photons = []
-        
+            energies = np.linspace(max(self.energy_min, 100.0),
+                                   min(self.energy_max, 10000.0), 40)
+        energies = np.asarray(energies, dtype=float)
+        print(f"Analyzing {len(energies)} energies, "
+              f"{energies[0]:.0f}..{energies[-1]:.0f} MeV (nphot={nphot:,})")
+
+        # Training histogram resolution: mean(weight) * N_BINS estimates the
+        # total photons/event over the (angle, s/s_max) domain.
+        n_hist_bins = 500 * 500
+
+        siren_mc, stored, real = [], [], []
+        key = self.key
         for energy in energies:
-            # Get real photon count from dataset
-            real_count = self.dataset.get_total_counts_for_energy(energy)
-            tot_real_photons.append(real_count)
-            
-            # Get predicted photon count using configured num_seeds parameters
-            _, _, photon_weights = photonsim_differentiable_get_rays(
-                self.origin, self.direction, energy, nphot, self.table_data, self.model_params, self.key,
-                self.num_seeds_a, self.num_seeds_b, self.num_seeds_c
-            )
-            pred_count = np.sum(photon_weights)
-            tot_pred_photons.append(pred_count)
-            
-            if len(tot_real_photons) % 10 == 0:
-                print(f"  Processed {len(tot_real_photons)}/{len(energies)} energies")
-        
-        # Calculate ratio and fit
-        y_data = np.array(tot_real_photons) / (np.array(tot_pred_photons) / nphot)
+            key, sub = random.split(key)
+            w, _, _ = evaluate_siren_lhs(self.ctx, self.model_params,
+                                         float(energy), int(nphot), sub)
+            siren_mc.append(float(jnp.mean(w)) * n_hist_bins)
+            stored.append(float(self.ctx.n_photons_fn(float(energy))))
+            real.append(float(self.dataset.get_total_counts_for_energy(energy)))
 
-        # Filter data for energies above Cherenkov threshold
-        fit_mask = np.array(energies) >= 250 # assume it is a muon
-        energies_fit = np.array(energies)[fit_mask]
-        y_data_fit = y_data[fit_mask]
+        siren_mc = np.array(siren_mc)
+        stored = np.array(stored)
+        real = np.array(real)
+        ratio = siren_mc / np.where(stored > 0, stored, np.nan)
 
-        print(f"Using {len(energies_fit)}/{len(energies)} data points for power law fit (energies ≥ 250 MeV)")
-
-        # Define power law function: y = a * x^b + c
-        def power_law(x, a, b, c):
-            return a * np.power(x, b) + c
-
-        # Power law fit on filtered data
-        try:
-            popt, pcov = curve_fit(power_law, energies_fit, y_data_fit, p0=[1000.0, 0.3, -2000.])
-            a_fit, b_fit, c_fit = popt
-
-            # Calculate R-squared
-            residuals = y_data_fit - power_law(energies_fit, *popt)
-            ss_res = np.sum(residuals**2)
-            ss_tot = np.sum((y_data_fit - np.mean(y_data_fit))**2)
-            r_squared = 1 - (ss_res / ss_tot)
-
-            # Calculate standard errors
-            perr = np.sqrt(np.diag(pcov))
-            a_err, b_err, c_err = perr
-
-            # Generate fit line
-            line = power_law(np.array(energies), *popt)
-
-            print(f"\nPower Law Fit Results:")
-            print(f"  Equation: y = {a_fit:.6f} * x^{b_fit:.6f} + {c_fit:.6f}")
-            print(f"  Parameters: a = {a_fit:.6f} ± {a_err:.6f}")
-            print(f"              b = {b_fit:.6f} ± {b_err:.6f}")
-            print(f"              c = {c_fit:.6f} ± {c_err:.6f}")
-            print(f"  R-squared: {r_squared:.6f}")
-
-        except Exception as e:
-            print(f"Warning: Power law fit failed: {e}")
-            print(f"Falling back to linear fit...")
-            slope, intercept, r_value, p_value, std_err = stats.linregress(energies_fit, y_data_fit)
-            line = slope * energies + intercept
-            a_fit, b_fit, c_fit = slope, 1.0, intercept
-            a_err, b_err, c_err = std_err, 0.0, 0.0
-            r_squared = r_value**2
-            print(f"  Linear fallback: y = {slope:.6f}x + {intercept:.6f}")
-            print(f"  R-squared: {r_squared:.4f}")
-
-        # Apply correction function
-        def corr_function(x):
-            return power_law(x, a_fit, b_fit, c_fit)
-
-        y_corrected = np.array(tot_real_photons) / (corr_function(energies) * np.array(tot_pred_photons) / nphot)
-
-        # Fit corrected data (also filtered for energies >= 200 MeV)
-        y_corrected_fit = y_corrected[fit_mask]
-        try:
-            popt_corr, pcov_corr = curve_fit(power_law, energies_fit, y_corrected_fit, p0=[1.0, 1.0, 0.0])
-            a_corr, b_corr, c_corr = popt_corr
-
-            # Calculate R-squared for corrected fit
-            residuals_corr = y_corrected_fit - power_law(energies_fit, *popt_corr)
-            ss_res_corr = np.sum(residuals_corr**2)
-            ss_tot_corr = np.sum((y_corrected_fit - np.mean(y_corrected_fit))**2)
-            r_squared_corr = 1 - (ss_res_corr / ss_tot_corr)
-
-            # Calculate standard errors for corrected fit
-            perr_corr = np.sqrt(np.diag(pcov_corr))
-            a_err_corr, b_err_corr, c_err_corr = perr_corr
-
-            # Generate fit line
-            line_corr = power_law(np.array(energies), *popt_corr)
-
-        except Exception as e:
-            print(f"Warning: Power law fit for corrected data failed: {e}")
-            slope_corr, intercept_corr, r_value_corr, _, std_err_corr = stats.linregress(energies_fit, y_corrected_fit)
-            line_corr = slope_corr * energies + intercept_corr
-            a_corr, b_corr, c_corr = slope_corr, 1.0, intercept_corr
-            a_err_corr, b_err_corr, c_err_corr = std_err_corr, 0.0, 0.0
-            r_squared_corr = r_value_corr**2
-        
-        # Create visualization
-        fig, axes = plt.subplots(1, 2, figsize=(10, 4))
-
-        # Original data
-        axes[0].plot(energies, y_data, 'bo', label='All Data', markersize=3, alpha=0.6)
-        axes[0].plot(energies_fit, y_data_fit, 'ro', label='Fit Data (≥200 MeV)', markersize=3)
-        axes[0].plot(energies, line, 'r-', label=f'Power law fit (R²={r_squared:.4f})', linewidth=2)
+        fig, axes = plt.subplots(1, 2, figsize=(11, 4))
+        axes[0].plot(energies, real, 'k.', label='table sum (real)', ms=5)
+        axes[0].plot(energies, stored, 'b-', label='N_photons(E) stored fit', lw=2)
+        axes[0].plot(energies, siren_mc, 'r--', label='SIREN MC integral', lw=2)
         axes[0].set_xlabel('Energy (MeV)')
-        axes[0].set_ylabel('Ratio')
-        axes[0].set_title('Original Data vs Power Law Fit')
+        axes[0].set_ylabel('Total photons / event')
+        axes[0].set_title('SIREN integral vs N_photons(E)')
         axes[0].legend(fontsize=9)
         axes[0].grid(True, alpha=0.3)
 
-        # Add fit equation to plot
-        fit_text = f'y = {a_fit:.4f}·x$^{{{b_fit:.4f}}}$ + {c_fit:.2f}'
-        axes[0].text(0.05, 0.95, fit_text, transform=axes[0].transAxes,
-                    fontsize=9, va='top',
-                    bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
-
-        # Corrected data
-        axes[1].plot(energies, y_corrected, 'go', label='All Corrected Data', markersize=3, alpha=0.6)
-        axes[1].plot(energies_fit, y_corrected_fit, 'mo', label='Fit Data (≥200 MeV)', markersize=3)
-        axes[1].plot(energies, line_corr, 'r-', label=f'Power law fit (R²={r_squared_corr:.4f})', linewidth=2)
+        axes[1].plot(energies, ratio, 'r.-', ms=5)
+        axes[1].axhline(1.0, color='k', ls=':', lw=1)
         axes[1].set_xlabel('Energy (MeV)')
-        axes[1].set_ylabel('Corrected Ratio')
-        axes[1].set_title('Corrected Data vs Power Law Fit')
-        axes[1].legend(fontsize=9)
+        axes[1].set_ylabel('SIREN MC integral / stored')
+        axes[1].set_title('Ratio (flat ~1 = consistent)')
         axes[1].grid(True, alpha=0.3)
-        axes[1].set_xlim(500,1500)
-        axes[1].set_ylim(0.95,1.05)
-
-        # Add corrected fit equation to plot
-        fit_text_corr = f'y = {a_corr:.4f}·x$^{{{b_corr:.4f}}}$ + {c_corr:.2f}'
-        axes[1].text(0.05, 0.95, fit_text_corr, transform=axes[1].transAxes,
-                    fontsize=9, va='top',
-                    bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
-
-        fig.suptitle('N-Photon Integral Analysis (Power Law Fit)', fontsize=16)
+        fig.suptitle('SIREN Integral Diagnostic', fontsize=14)
         fig.tight_layout()
-        
-        # Save results
-        results = {
-            'energies': energies.tolist(),
-            'real_photons': tot_real_photons,
-            'pred_photons': tot_pred_photons,
-            'nphot': nphot,
-            'fit_type': 'power_law',
-            'fit_equation': 'y = a * x^b + c',
-            'fit_filter': {
-                'min_energy': 200,
-                'energies_used': energies_fit.tolist(),
-                'data_points_used': len(energies_fit),
-                'total_data_points': len(energies)
-            },
-            'original_fit': {
-                'a': a_fit,
-                'b': b_fit,
-                'c': c_fit,
-                'a_err': a_err,
-                'b_err': b_err,
-                'c_err': c_err,
-                'r_squared': r_squared,
-                'equation': f'y = {a_fit:.6f} * x^{b_fit:.6f} + {c_fit:.6f}'
-            },
-            'corrected_fit': {
-                'a': a_corr,
-                'b': b_corr,
-                'c': c_corr,
-                'a_err': a_err_corr,
-                'b_err': b_err_corr,
-                'c_err': c_err_corr,
-                'r_squared': r_squared_corr,
-                'equation': f'y = {a_corr:.6f} * x^{b_corr:.6f} + {c_corr:.6f}'
-            }
-        }
-        
-        # Print summary
-        print("\n" + "="*70)
-        print("SUMMARY OF POWER LAW FITS (y = a * x^b + c)")
-        print("="*70)
-        print("\nOriginal Fit:")
-        print(f"  Equation: y = {a_fit:.6f} * x^{b_fit:.6f} + {c_fit:.6f}")
-        print(f"  R-squared: {r_squared:.6f}")
-        print(f"  Parameters:")
-        print(f"    a = {a_fit:.6f} ± {a_err:.6f}")
-        print(f"    b = {b_fit:.6f} ± {b_err:.6f}")
-        print(f"    c = {c_fit:.6f} ± {c_err:.6f}")
 
-        print("\nCorrected Fit:")
-        print(f"  Equation: y = {a_corr:.6f} * x^{b_corr:.6f} + {c_corr:.6f}")
-        print(f"  R-squared: {r_squared_corr:.6f}")
-        print(f"  Parameters:")
-        print(f"    a = {a_corr:.6f} ± {a_err_corr:.6f}")
-        print(f"    b = {b_corr:.6f} ± {b_err_corr:.6f}")
-        print(f"    c = {c_corr:.6f} ± {c_err_corr:.6f}")
-        print("="*70)
+        finite = ratio[np.isfinite(ratio)]
+        if finite.size:
+            print(f"  ratio (SIREN MC / stored): mean={finite.mean():.4f}  "
+                  f"min={finite.min():.4f}  max={finite.max():.4f}")
 
         if output_dir:
             os.makedirs(output_dir, exist_ok=True)
-            fig.savefig(f"{output_dir}/integral_analysis.png", dpi=150, bbox_inches='tight')
-            print(f"\nIntegral analysis results saved to: {output_dir}/integral_analysis.png")
+            fig.savefig(f"{output_dir}/integral_analysis.png",
+                        dpi=150, bbox_inches='tight')
+            print(f"  saved {output_dir}/integral_analysis.png")
 
         plt.show()
 
-        return results
-    
+        return {
+            'energies': energies.tolist(),
+            'siren_mc_integral': siren_mc.tolist(),
+            'stored_n_photons': stored.tolist(),
+            'table_sum_real': real.tolist(),
+            'ratio_siren_over_stored': ratio.tolist(),
+            'nphot': int(nphot),
+        }
+
     def calculate_opening_angles(self, ray_vectors, direction):
         """Calculate opening angles between ray vectors and reference direction."""
         direction_norm = direction / jnp.linalg.norm(direction)
@@ -811,32 +665,32 @@ class PhotonSimValidator:
             
             print(f"  Processing energy {energy:.0f} MeV ({i+1}/{n_energies})")
             
-            # Generate rays using configured num_seeds parameters
-            ray_vectors, ray_origins, photon_weights = photonsim_differentiable_get_rays(
-                self.origin, self.direction, energy, nphot, self.table_data, self.model_params, self.key,
-                self.num_seeds_a, self.num_seeds_b, self.num_seeds_c
-            )
-            
+            # Generate rays (LHS sampling, one SIREN eval; intensities are
+            # already normalised so sum(intensities) == N_photons(energy)).
+            ray_vectors, ray_origins, photon_intensities = self.ray_fn(
+                self.origin, self.direction, energy, int(nphot),
+                self.model_params, self.key)
+
             # Calculate ranges and angles
             ranges = jnp.linalg.norm(ray_origins - self.origin, axis=1)
             angles = self.calculate_opening_angles(ray_vectors, self.direction)
-            
+
             # Calculate statistics
-            total_weight = float(jnp.sum(photon_weights))
-            
+            total_weight = float(jnp.sum(photon_intensities))
+
             results['statistics'][energy] = {
-                'total_weight': total_weight,
+                'total_intensity': total_weight,
                 'mean_range': float(jnp.mean(ranges)),
                 'mean_angle': float(jnp.mean(angles))
             }
-            
+
             # Create 2D histogram
             h = axes[row, col].hist2d(
                 ranges, angles,
-                weights=photon_weights.squeeze(),
+                weights=photon_intensities.squeeze(),
                 bins=[500, 500],
                 cmap='viridis',
-                norm=LogNorm(vmin=3.5), # our num_seeds fit should be cutting at ~4
+                norm=LogNorm(),
                 range=[[0, 10], [0, 3.14]]
             )
             

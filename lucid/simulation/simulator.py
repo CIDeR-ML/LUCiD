@@ -1,9 +1,10 @@
 """Event simulator factory (setup_event_simulator)."""
 from lucid.sources.siren_rays import (
     make_cherenkov_surrogate_fn,
-    build_cherenkov_context,
+    make_scintillation_surrogate_fn,
     predict_t0,
 )
+from lucid.siren.core import build_cherenkov_context, build_dedx_context
 from lucid.propagation.cylinder import create_photon_propagator
 from lucid.propagation.sphere import create_sphere_photon_propagator
 from lucid.propagation.box import create_box_photon_propagator, box_bounds_check
@@ -15,7 +16,7 @@ from lucid.utils import (
     smear_times, smear_charges_SK_like,
 )
 from lucid.detector_params import DetectorParams, ParticleParams, load_detector_params, load_physics_config
-from lucid.wavelength.medium import make_medium, load_qe_curve, qe_curve_bounds
+from lucid.wavelength.medium import make_medium, load_qe_curve, qe_curve_bounds, _MATERIALS_DIR
 from lucid.wavelength.optical_model import evaluate_optical_model, OpticalArrays
 from lucid.wavelength.spectrum import (
     sample_cherenkov_wavelengths, build_qe_weighted_cherenkov_sampler,
@@ -700,13 +701,102 @@ def setup_event_simulator(
     # own count/range model (nphot/smax) in the trained-model metadata, read in the context.
     siren_cfg = unpack_siren_params(particle, material)
 
+    # ---- Track-mode emission-process dispatch (refactor-v2 wbls/scint merge) ----
+    # The medium's `emission_processes` tuple decides which surrogates run. The
+    # Cherenkov/Scintillation photon-count split (when both run) is a static,
+    # material-level knob (`medium.cherenkov_fraction`). Water has only
+    # ("cherenkov",) → `_has_scintillation` is False → the scintillation branch is
+    # never even traced, so the Cherenkov-only path below stays byte-identical.
+    _medium = det_geom.medium
+    _has_cherenkov = "cherenkov" in _medium.emission_processes
+    _has_scintillation = "scintillation" in _medium.emission_processes
+    if _has_scintillation and not wavelength_mode:
+        raise ValueError(
+            "Scintillation emission requires wavelength_mode=True (the Moyal "
+            "wavelength sampler feeds the per-photon spectral weight).")
+    if _has_cherenkov and _has_scintillation:
+        _n_cher = int(round(Nphot * float(_medium.cherenkov_fraction)))
+        _n_scint = Nphot - _n_cher
+    elif _has_cherenkov:
+        _n_cher, _n_scint = Nphot, 0
+    elif _has_scintillation:
+        _n_cher, _n_scint = 0, Nphot
+    else:
+        raise ValueError(
+            f"medium {_medium.material!r} has no emission_processes enabled "
+            f"({_medium.emission_processes!r}).")
+    _n_total = _n_cher + _n_scint
+
     @jax.jit
     def _simulation_without_data_impl(particle_params, detector_params, key, model_params):
-        """SIREN mode: particle_params is ParticleParams."""
+        """SIREN mode: particle_params is ParticleParams.
+
+        ``model_params`` is the Cherenkov SIREN params (threaded). When the medium
+        scintillates the scintillation surrogate (``scint_ray_fn``) and its dE/dx
+        net (``dedx_model_params``) are closed over from the build section, and the
+        per-photon arrays are the Cherenkov+Scintillation concatenation.
+        """
         energy = particle_params.energy
         track_origin = particle_params.position
         track_direction = particle_params.direction  # property
 
+        a_c, l_c, b_c = t0_params      # cubic stretched_exp_delay coeffs (three length-4 cubics in log10 E)
+        _pt0 = jax.vmap(predict_t0, in_axes=(0, None, None, None, None))
+        _pgt = sim_config.K if pos_grad_threshold is None else pos_grad_threshold
+
+        if _has_scintillation:
+            # ---- Cherenkov + Scintillation (wbls) / scintillation-only path ----
+            key, cher_key, scint_key, opt_key, wl_key = jax.random.split(key, 5)
+            parts_dirs, parts_origins, parts_intens, parts_times, parts_wls = [], [], [], [], []
+
+            if _has_cherenkov:
+                ch_dirs, ch_origins, ch_intens = cherenkov_get_rays(
+                    track_origin, track_direction, energy, _n_cher, model_params, cher_key)
+                ch_dist_mm = jnp.linalg.norm(ch_origins - track_origin, axis=1) * 1000
+                ch_t0 = jax.lax.stop_gradient(_pt0(ch_dist_mm, energy,
+                                                   jnp.asarray(a_c), jnp.asarray(l_c), jnp.asarray(b_c)))
+                if wavelength_sampling == 'cherenkov_qe':
+                    ch_wls = _qe_sampler(wl_key, _n_cher)
+                else:
+                    ch_wls = sample_cherenkov_wavelengths(
+                        wl_key, _n_cher, lambda_min=_wl_lo, lambda_max=_wl_hi)
+                parts_dirs.append(ch_dirs); parts_origins.append(ch_origins)
+                parts_intens.append(ch_intens); parts_times.append(ch_t0); parts_wls.append(ch_wls)
+
+            # Scintillation surrogate: isotropic rays, Chou-quenched weights (S/kB/C),
+            # biexp emission delay (tau_rise/tau_fall) on top of the t0 baseline, Moyal λ.
+            s = detector_params.scintillation
+            sc_dirs, sc_origins, sc_intens, sc_tdelay, sc_wls = scint_ray_fn(
+                track_origin, track_direction, energy, _n_scint,
+                dedx_model_params, scint_key,
+                s.S, s.kB, s.C, s.tau_rise, s.tau_fall)
+            sc_dist_mm = jnp.linalg.norm(sc_origins - track_origin, axis=1) * 1000
+            sc_t0 = jax.lax.stop_gradient(_pt0(sc_dist_mm, energy,
+                                               jnp.asarray(a_c), jnp.asarray(l_c), jnp.asarray(b_c)))
+            parts_dirs.append(sc_dirs); parts_origins.append(sc_origins)
+            parts_intens.append(sc_intens); parts_times.append(sc_t0 + sc_tdelay); parts_wls.append(sc_wls)
+
+            photon_directions = jnp.concatenate(parts_dirs)
+            photon_origins = jnp.concatenate(parts_origins)
+            photon_intensities = jnp.concatenate(parts_intens)
+            photon_times = jnp.concatenate(parts_times)
+            wavelengths = jnp.concatenate(parts_wls)
+
+            scatter_lengths, mie_scatter_lengths, absorption_lengths, qe_weights, key = _get_optical_arrays(
+                _n_total, detector_params, opt_key, wavelengths=wavelengths)
+            if qe_weights is not None:
+                qe_per_photon = qe_weights * detector_params.response.qe
+            else:
+                qe_per_photon = jnp.full(_n_total, detector_params.response.qe)
+            return _common_propagation(
+                photon_origins, photon_directions, photon_intensities, photon_times,
+                scatter_lengths, mie_scatter_lengths, absorption_lengths,
+                qe_per_photon,
+                _n_total, detector_params, key, NUM_SENSORS, sim_config.K, sim_config.effective_n_grad_iters, max_candidates_per_ray,
+                propagate_photons, photon_update_fn,
+                pos_grad_threshold=_pgt, make_hits_fn=_make_hits_fn)
+
+        # ---- Cherenkov-only path (byte-identical to pre-scint forward) ----
         key, ray_key, opt_key = jax.random.split(key, 3)
         # New refactor-v2 Cherenkov emitter: intensities already carry the absolute count
         # (pmf × n_photons_fn(E)); no separate normalization or mean_topk amplitude.
@@ -717,8 +807,6 @@ def setup_event_simulator(
         distances_to_vertex = jnp.linalg.norm(photon_origins - track_origin, axis=1) * 1000
         # Emission-time baseline t0(distance_to_vertex, energy), DETACHED: the TIME term does not carry
         # ENERGY/VERTEX gradient through the emission-time model (those flow via geometry/charge).
-        a_c, l_c, b_c = t0_params      # cubic stretched_exp_delay coeffs (three length-4 cubics in log10 E)
-        _pt0 = jax.vmap(predict_t0, in_axes=(0, None, None, None, None))
         t0 = jax.lax.stop_gradient(_pt0(distances_to_vertex, energy,
                                         jnp.asarray(a_c), jnp.asarray(l_c), jnp.asarray(b_c)))
 
@@ -732,11 +820,6 @@ def setup_event_simulator(
         else:
             qe_per_photon = jnp.full(Nphot, detector_params.response.qe)
 
-        # Track-mode position-gradient default: was 0 (always stop) as a workaround
-        # for the reflection-normal curvature explosion. The normal-fix now lives
-        # inside photon_iteration_update_factors, so position gradient can flow
-        # all K bounces.
-        _pgt = sim_config.K if pos_grad_threshold is None else pos_grad_threshold
         return _common_propagation(
             photon_origins, photon_directions, photon_intensities, photon_times + t0,
             scatter_lengths, mie_scatter_lengths, absorption_lengths,
@@ -803,6 +886,34 @@ def setup_event_simulator(
         cherenkov_get_rays = make_cherenkov_surrogate_fn(
             build_cherenkov_context(photonsim_predictor, siren_cfg['ray_sampling']))
         t0_params = unpack_t0_params(particle, material)   # (a_coeffs, l_coeffs, b_coeffs) cubic
+
+        # Scintillation surrogate — built only when the medium scintillates (wbls).
+        # Closed over by _simulation_without_data_impl's scintillation branch.
+        if _has_scintillation:
+            if siren_cfg['dedx_model_path'] is None:
+                raise ValueError(
+                    f"medium {_medium.material!r} enables scintillation but "
+                    f"data/{material}/{particle}/siren_params.json has no 'dedx_model' "
+                    f"block — add one pointing to the dE/dx SIREN.")
+            # Moyal sampling params are static (they bake the inverse-CDF lookup at
+            # factory time). Resolve from the material JSON's scintillation.spectrum.
+            from lucid.detector_params import _scintillation_defaults_from_medium
+            scint_material_path = os.path.join(_MATERIALS_DIR, f"{material}.json")
+            scint_defaults = _scintillation_defaults_from_medium(scint_material_path)
+            if 'moyal_loc' not in scint_defaults or 'moyal_scale' not in scint_defaults:
+                raise ValueError(
+                    f"material {_medium.material!r} enables scintillation but "
+                    f"{scint_material_path!r} has no scintillation.spectrum.moyal_loc / "
+                    f"moyal_scale — the surrogate cannot build its λ inverse-CDF sampler.")
+            dedx_predictor = SIRENPredictor(siren_cfg['dedx_model_path'])
+            dedx_model_params = dedx_predictor.params
+            scint_ray_fn = make_scintillation_surrogate_fn(
+                build_dedx_context(dedx_predictor, siren_cfg['dedx_sampling']),
+                _medium.scintillation_lambda_min,
+                _medium.scintillation_lambda_max,
+                moyal_loc=scint_defaults['moyal_loc'],
+                moyal_scale=scint_defaults['moyal_scale'],
+            )
         if _default_dp is not None:
             @jax.jit
             def _sim_track_default(particle_params, key):
