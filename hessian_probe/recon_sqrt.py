@@ -23,7 +23,7 @@ for eps in [0.0, 1e-6, 1e-4, 1e-2, 1e-1]:
     CYL._CYL_SQRT_EPS = eps                       # set BEFORE building (jit captures it at trace)
     pred = SIM.setup_event_simulator(GEOM, NPH, temperature=0.1, K=K, hit_mode='per_photon',
         physics_config=PHYS, default_detector_params=True, particle='muon', wavelength_mode=True,
-        pos_grad_threshold=K, n_grad_iters=K, max_sensors_per_cell=MC, **GRID)
+        pos_grad_threshold=K, n_grad_iters=K, max_candidates_per_ray=MC, **GRID)
     def L(t): return jnp.sum(c * pred(track_from_vec9(t), jax.random.PRNGKey(3))[3])
     H = np.asarray(jax.hessian(L)(t9)); g = np.asarray(jax.grad(L)(t9))
     h = 1e-3; gF = np.array([float((L(t9.at[i].add(h)) - L(t9.at[i].add(-h)))/(2*h)) for i in range(9)])

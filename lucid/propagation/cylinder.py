@@ -529,12 +529,12 @@ def calculate_grid_centers(r, h, n_cap, n_angular, n_height):
 
 @partial(jax.jit, static_argnums=(2, 3, 4, 5, 6), device=jax.devices('cpu')[0])
 def create_inverted_sensor_map(assignments_geometric, assignments_distance, n_cap, n_angular, n_height,
-                                 max_sensors_per_cell, num_sensors):
+                                 max_candidates_per_ray, num_sensors):
     """Create inverted sensor map prioritizing geometric intersections then closest sensors"""
     total_cells = n_angular * n_height + 2 * n_cap * n_cap
 
     # Initialize map
-    inverted_map = jnp.full((total_cells, max_sensors_per_cell), -1, dtype=jnp.int32)
+    inverted_map = jnp.full((total_cells, max_candidates_per_ray), -1, dtype=jnp.int32)
 
     def update_cell(carry, i):
         inv_map = carry
@@ -570,7 +570,7 @@ def create_inverted_sensor_map(assignments_geometric, assignments_distance, n_ca
                       (sensor_assignments[:, 2] == cell_k)
 
             cell_matches = jnp.any(matches)
-            should_add = cell_matches & (curr_count < max_sensors_per_cell)
+            should_add = cell_matches & (curr_count < max_candidates_per_ray)
 
             new_map = jnp.where(
                 should_add,
@@ -606,7 +606,7 @@ def create_inverted_sensor_map(assignments_geometric, assignments_distance, n_ca
             )
 
             # Add if not duplicate and have space
-            should_add = (~is_duplicate) & (curr_count < max_sensors_per_cell)
+            should_add = (~is_duplicate) & (curr_count < max_candidates_per_ray)
 
             new_map = jnp.where(
                 should_add,
@@ -710,7 +710,7 @@ def find_intersected_sensors_differentiable(ray_origins, ray_directions, sensor_
 
 
 def create_photon_propagator(sensor_positions, sensor_radius, r=4.0, h=6.0, n_cap=150, n_angular=250, n_height=150,
-                           temperature=0.2, max_sensors_per_cell=4):
+                           temperature=0.2, max_candidates_per_ray=4):
     """
     Creates a JIT-compiled function for efficient photon propagation simulation with overlap-based weights.
     """
@@ -723,14 +723,14 @@ def create_photon_propagator(sensor_positions, sensor_radius, r=4.0, h=6.0, n_ca
     assignments_distance = find_closest_sensors(
         calculate_grid_centers(r, h, n_cap, n_angular, n_height),
         sensor_positions,
-        max_sensors_per_cell
+        max_candidates_per_ray
     )
 
     inverted_sensor_map = create_inverted_sensor_map(
         assignments_geometric,
         assignments_distance,
         n_cap, n_angular, n_height,
-        max_sensors_per_cell, sensor_positions.shape[0]
+        max_candidates_per_ray, sensor_positions.shape[0]
     )
 
     if temperature is None:

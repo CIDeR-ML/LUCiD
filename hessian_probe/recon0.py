@@ -1,6 +1,6 @@
 """RECON path: reproduce the AD-gradient NaN + AD-Hessian breakage that motivated the custom_vjp.
 Track params t9=[E,x,y,z,sinθ,cosθ,sinφ,cosφ,t0] flow PATHWISE through the SIREN emitter + the
-GEOMETRY (ray-trace, surface distances, sensor assignment, max_sensors_per_cell). Compare SAFE step
+GEOMETRY (ray-trace, surface distances, sensor assignment, max_candidates_per_ray). Compare SAFE step
 (custom_vjp+nan_to_num) vs PLAIN step (no custom_vjp): does AD grad go NaN? Is the AD Hessian
 finite/PSD? FD reference. Loss = Σ c·total_charge (clean linear functional of per-PMT charge)."""
 import os, sys
@@ -25,7 +25,7 @@ GRID = dict(n_cap=80, n_angular=120, n_height=80)
 pred = SIM.setup_event_simulator(GEOM, NPH, temperature=0.1, K=K, hit_mode='per_photon',
                                  physics_config=PHYS, default_detector_params=True, particle='muon',
                                  wavelength_mode=True, pos_grad_threshold=K, n_grad_iters=K,
-                                 max_sensors_per_cell=MC, **GRID)
+                                 max_candidates_per_ray=MC, **GRID)
 ND = SIM.generate_detector(GEOM).all_points.shape[0] if hasattr(SIM, 'generate_detector') else None
 from lucid.geometry import generate_detector
 ND = len(generate_detector(GEOM).all_points)
