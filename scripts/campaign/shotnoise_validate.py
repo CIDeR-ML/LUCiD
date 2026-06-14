@@ -8,7 +8,7 @@ forward, over M independent noise seeds, and compare the realized seed-to-seed s
 the CRB σ (×√12). Expectation (from the shot-noise study): realized ≲ CRB (the √12 honesty
 factor is the bound; the implicit engine is √12 quieter than Poisson).
 
-Usage: CUDA_VISIBLE_DEVICES=<g> python campaign/shotnoise_validate.py
+Usage: CUDA_VISIBLE_DEVICES=<g> python scripts/campaign/shotnoise_validate.py
 Env: NPH, K, M (seeds), STEPS, NB_H, GRID.
 """
 import os, sys, time
@@ -16,7 +16,7 @@ import numpy as np
 import jax
 import jax.numpy as jnp
 
-_HERE = os.path.dirname(os.path.abspath(__file__)); _ROOT = os.path.dirname(_HERE)
+_HERE = os.path.dirname(os.path.abspath(__file__)); _ROOT = os.path.dirname(os.path.dirname(_HERE))
 sys.path.insert(0, _ROOT)
 
 from lucid.geometry import generate_detector

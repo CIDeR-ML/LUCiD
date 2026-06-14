@@ -30,7 +30,7 @@ GRID = dict(n_cap=80, n_angular=120, n_height=80)
 E0 = int(os.environ.get('EVENT_START', '0')); EC = int(os.environ.get('EVENT_COUNT', '20'))
 EVLIST = os.environ.get('EVENT_LIST', '')                          # comma-list overrides the range
 EVENTS = [int(x) for x in EVLIST.split(',')] if EVLIST else list(range(E0, E0 + EC))
-OUT = os.environ.get('OUT', os.path.join(_ROOT_DIR, 'campaign_recon/out')); os.makedirs(OUT, exist_ok=True)
+OUT = os.environ.get('OUT', os.path.join(_ROOT_DIR, 'scripts/campaign_recon/out')); os.makedirs(OUT, exist_ok=True)
 # keys×photons study knobs: NKEYS grad/Fisher PRNG keys, NPH predictor photons, FISHER_MODE fd|ad,
 # LR (ad metric is smaller -> use ~1; fd -> ~8, see fit_track docstring), NITERS.
 NKEYS = int(os.environ.get('NKEYS', '4')); NPH = int(os.environ.get('NPH', '250000'))

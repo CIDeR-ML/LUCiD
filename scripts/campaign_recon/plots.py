@@ -1,6 +1,6 @@
 """Distributions of the two-start recon results + per-parameter optimization-trajectory plots.
 Reads out_ms100/ (two-start) and out/ (old single-start baseline). Writes PNGs to OUT dir.
-Usage: PYTHONPATH=. python campaign_recon/plots.py
+Usage: PYTHONPATH=. python scripts/campaign_recon/plots.py
 """
 import os, glob, numpy as np
 import matplotlib; matplotlib.use('Agg')

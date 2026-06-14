@@ -7,7 +7,7 @@ per-PMT spread AND a smooth position-correlated QE trend (the dangerous case —
 trend lives in the optical band and would otherwise bias the reflectivities; k̂=Q/M captures
 it). Gauge mean(log k)=0. Independent data/model keys give a realistic forward-noise scatter.
 
-Usage: CUDA_VISIBLE_DEVICES=<g> python campaign/per_pmt_fit.py
+Usage: CUDA_VISIBLE_DEVICES=<g> python scripts/campaign/per_pmt_fit.py
 Env: NPH, K, TREND (smooth-trend amplitude), KSPREAD, GRID.
 """
 import os, sys, time
@@ -15,7 +15,7 @@ import numpy as np
 import jax
 import jax.numpy as jnp
 
-_HERE = os.path.dirname(os.path.abspath(__file__)); _ROOT = os.path.dirname(_HERE)
+_HERE = os.path.dirname(os.path.abspath(__file__)); _ROOT = os.path.dirname(os.path.dirname(_HERE))
 sys.path.insert(0, _ROOT)
 
 from lucid.geometry import generate_detector

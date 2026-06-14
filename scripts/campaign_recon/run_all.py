@@ -1,5 +1,5 @@
 """Dispatch the 100-event seeded recon across NGPU GPUs (contiguous event blocks, one job/GPU).
-Usage: NGPU=5 NEVENTS=100 python campaign_recon/run_all.py"""
+Usage: NGPU=5 NEVENTS=100 python scripts/campaign_recon/run_all.py"""
 import os, sys, subprocess, time
 
 _HERE = os.path.dirname(os.path.abspath(__file__))

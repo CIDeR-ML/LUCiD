@@ -43,9 +43,11 @@
 > with B2 = "AD-first works", the §10.5/§12 **grand architecture** (pure forward + `residual=`/`reparam=`/
 > `gradient_channel` + Component + `SimParams`) was largely motivated by managing FD-vs-AD / score-vs-
 > pathwise gradient channels — that motivation is GONE. **Recommendation: DE-SCOPE §10.5; `lucid.fitting`
-> + the AD Jacobians IS the canonical fitter; take the proposal banner down.** **Remaining for merge is now
-> only cosmetic:** `max_candidates_per_ray` rename (7 notebooks), fold `campaign/`+`campaign_recon/` study
-> dirs into `scripts/` (cleanly separated — `lucid/` imports neither). The package (`lucid/` + tests +
+> + the AD Jacobians IS the canonical fitter; take the proposal banner down.** **Cosmetic cleanup DONE
+> (2026-06-14):** (1) `max_sensors_per_cell` is the sole canonical arg — `max_candidates_per_ray` exists
+> in ZERO code/notebooks (the recon notebooks that used it were archived in the reorg), no alias needed;
+> (2) `campaign/`+`campaign_recon/` folded into `scripts/` (`git mv` + internal `_ROOT`/path-literal fixes;
+> `lucid/` imports neither). The package (`lucid/` + tests +
 > examples) is merge-ready.
 
 **Purpose.** This is the consolidation plan refined for *simplicity + generality* — the shape
@@ -152,9 +154,10 @@ The one flag that can't default-share: `eigen_clip` (True calib indefinite-FD / 
 
 ## 4. Notebook-driven simplifications (the real usage; from the good_notebooks survey)
 The notebooks are the API spec. They reveal the boilerplate to KILL and one hard rename:
-- ⚠️ **`max_sensors_per_cell` (unify) vs `max_candidates_per_ray` (recon)** — a half-finished rename;
-  recon notebooks pass the new name but it falls unused into `**grid_params`. **Pick ONE name**, make
-  it an explicit arg (or alias both). 7 recon notebooks affected.
+- ✅ **`max_sensors_per_cell` (unify) vs `max_candidates_per_ray` (recon)** — RESOLVED (2026-06-14):
+  `max_sensors_per_cell` is the sole canonical, explicit arg (`setup_event_simulator` default 4);
+  `max_candidates_per_ray` now appears in ZERO code/notebooks (the recon notebooks that passed it were
+  archived in the reorg), so no alias was needed — the silent-`**grid_params` trap is gone.
 - **`make_sim_pair(geom, physics, ...)`** — ~12 notebooks copy-paste paired prediction(temp .1,K7)/
   data(temp 0,K20) simulators. One helper.
 - **`run_calibration(...)` entry point** — calibration notebooks hand-roll the

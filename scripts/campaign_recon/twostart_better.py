@@ -45,6 +45,6 @@ for ev in EVS:
     seed=vec9_from_track(e0,vtx_corr,dg,t0=t0g)
     res=fit_track(model,oc,ot,seed,nkeys=4,niters=250)
     fv=np.linalg.norm(res[1:4]-vtx_true)*100; sv=np.linalg.norm(np.asarray(vtx_t)-vtx_true)*100; cv=np.linalg.norm(vtx_corr-vtx_true)*100
-    ts=np.load(f'campaign_recon/out_ms100/ev{ev:03d}.npz')
+    ts=np.load(f'scripts/campaign_recon/out_ms100/ev{ev:03d}.npz')
     import numpy as _np; tsfit=min(_np.linalg.norm(ts['fitA'][1:4]-vtx_true),_np.linalg.norm(ts['fitB'][1:4]-vtx_true))*100
     print(f'  ev{ev:03d}: time-seed {sv:5.0f} -> corrected {cv:5.0f} -> single-fit {fv:6.1f}cm | two-start best {tsfit:6.1f}cm',flush=True)

@@ -7,7 +7,7 @@ cd "$ROOT"
 NEV=100; PERGPU=20; NGPU=5
 run_combo () {
   local NAME=$1 NK=$2 NP=$3
-  local OUTDIR="$ROOT/campaign_recon/out_$NAME"
+  local OUTDIR="$ROOT/scripts/campaign_recon/out_$NAME"
   mkdir -p "$OUTDIR"
   echo "=== combo $NAME: NKEYS=$NK NPH=$NP -> $OUTDIR ($(date)) ==="
   pids=()
@@ -15,7 +15,7 @@ run_combo () {
     local START=$((g*PERGPU))
     CUDA_VISIBLE_DEVICES=$g NKEYS=$NK NPH=$NP FISHER_MODE=ad LR=1 NITERS=250 \
       EVENT_START=$START EVENT_COUNT=$PERGPU OUT="$OUTDIR" \
-      python campaign_recon/worker.py > "$OUTDIR/gpu$g.log" 2>&1 &
+      python scripts/campaign_recon/worker.py > "$OUTDIR/gpu$g.log" 2>&1 &
     pids+=($!)
   done
   for p in "${pids[@]}"; do wait "$p"; done

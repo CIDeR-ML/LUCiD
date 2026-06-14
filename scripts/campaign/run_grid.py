@@ -1,6 +1,6 @@
 """Dispatch a grid of gridfit.py configs across all GPUs (one process per GPU, round-robin).
 
-Usage: NGPU=5 PHASE=<phase> python campaign/run_grid.py
+Usage: NGPU=5 PHASE=<phase> python scripts/campaign/run_grid.py
 Phases: 'crb_nscan', 'crb_srcscan', 'recover_shot_nscan', 'all_crb'.
 Each job runs `CUDA_VISIBLE_DEVICES=<g> TAG=<tag> <env> python gridfit.py`, logging to
 grid_out/<tag>.log; results land in grid_out/<tag>.json.

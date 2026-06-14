@@ -6,7 +6,7 @@ point, and the combined Fisher gives the per-control-point CRB σ for each curve
 the mie_hunter fisher_wl2 table, now on the consolidated base (3.1b dev curves + 3.4
 Spectrum + Step-4 fitter, all in lucid/).
 
-Appends to campaign/CAMPAIGN_RESULTS.md. Usage: CUDA_VISIBLE_DEVICES=<g> python campaign/spectral_crb.py
+Appends to scripts/campaign/CAMPAIGN_RESULTS.md. Usage: CUDA_VISIBLE_DEVICES=<g> python scripts/campaign/spectral_crb.py
 """
 import os, sys, time
 import numpy as np
@@ -14,7 +14,7 @@ import jax
 import jax.numpy as jnp
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
-_ROOT = os.path.dirname(_HERE)
+_ROOT = os.path.dirname(os.path.dirname(_HERE))
 sys.path.insert(0, _ROOT)
 
 from lucid.geometry import generate_detector

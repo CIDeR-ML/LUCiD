@@ -10,9 +10,9 @@ against the recorded mie_hunter results:
   3. A full GN recovery fit on the diverse-source config (recovered vs truth).
   4. Charge variance (moments mode): recover per-PMT gain + SPE width w (Fano v/m=g(1+w²)).
 
-Writes campaign/CAMPAIGN_RESULTS.md incrementally so partial progress is preserved.
+Writes scripts/campaign/CAMPAIGN_RESULTS.md incrementally so partial progress is preserved.
 Env: CAMPAIGN_QUICK=1 (fewer steps/photons), NPH, SK geom is fixed.
-Usage: CUDA_VISIBLE_DEVICES=<g> python campaign/run_campaign.py
+Usage: CUDA_VISIBLE_DEVICES=<g> python scripts/campaign/run_campaign.py
 """
 import os, sys, time, traceback
 import numpy as np
@@ -20,7 +20,7 @@ import jax
 import jax.numpy as jnp
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
-_ROOT = os.path.dirname(_HERE)
+_ROOT = os.path.dirname(os.path.dirname(_HERE))
 sys.path.insert(0, _ROOT)
 
 from lucid.geometry import generate_detector
