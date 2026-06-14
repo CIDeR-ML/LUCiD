@@ -1,5 +1,20 @@
 # RECONCILIATION_PLAN.md — `unification` (base) + `refactor-v2` (features) → one `main`
 
+> ## DECISIONS LOCKED (2026-06-14)
+> - **Base:** `unification` (groundwork) + `refactor-v2` features on top.
+> - **DetectorParams:** nested tree + `ScintillationParams` sub-tuple; `from_flat` flat-JSON wire format
+>   stays canonical (refactor-v2 ice/WbLS material blocks slot into it). Scintillation = ONE sub-tuple.
+> - **t0 model:** **PORT refactor-v2's cubic `predict_t0` + re-fit `t0.json` NOW** (not linear); the dir/t0
+>   recon floor is **re-validated against the cubic** in Phase 6 (becomes the new reference).
+> - **Ice fitting:** **B-fit IS IN THE MERGE** — wire the volume step into the DiCE forward so `fitting`
+>   `jacfwd` flows through → ice λ_scat/λ_abs calibrate via the exact reparam gradient. (B-mie deferred; no
+>   sample mode — ice = expectation by nature.)
+> - **Optics seam:** **`optical_model.py` stays canonical**; bridge refactor-v2's scintillation emission +
+>   ice/WbLS media INTO it (do NOT adopt make_medium+spectrum as the fitting seam).
+> - **Execution:** Phase 0 now (provenance + tripwire + cut `integration/unify-main`) + a merged-
+>   DetectorParams PROPOSAL doc for the refactor-v2 author; pause before landing Phase 1 code. Nothing
+>   pushed to origin yet.
+
 > ## CONSENSUS VERDICT (two independent code-grounded agent reviews, 2026-06-14)
 > **Direction APPROVED with caveats — both reviewers: feasible.** The base-side review largely
 > REFUTED the main fear (unification independently carries every substantive water-mode fix
