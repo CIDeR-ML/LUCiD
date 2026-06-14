@@ -149,22 +149,55 @@ class PerPmtParams(NamedTuple):
     walk: jnp.ndarray
 
 
+class ScintillationParams(NamedTuple):
+    """Scintillation emission properties (JAX pytree sub-tuple). Added for the
+    refactor-v2 multi-material merge (wbls/ice scintillator support).
+
+    Fields
+    ------
+    S, kB, C : jnp.ndarray   Chou light yield  dL/dx = S·(dE/dx)/(1+kB·(dE/dx)+C·(dE/dx)²)
+                             [S ph/MeV, kB mm/keV, C (mm/keV)²]. LIVE-differentiable.
+    tau_rise, tau_fall : jnp.ndarray  hypoexp emission timing (ns). LIVE-differentiable.
+    moyal_amp, moyal_loc, moyal_scale : jnp.ndarray  emission-spectrum shape. Currently
+                             BAKED from the material JSON at setup (closed into the Moyal
+                             inverse-CDF), so dormant on the pytree — carried for a future
+                             reparametrized-sampler calibration; moyal_amp is unused.
+
+    All default to 0.0 (NEUTRAL: S=0 → zero scintillation light → forward byte-identical
+    for non-scintillating media; finite, NOT NaN, so the generic normalize/bounds tree-walk
+    never poisons). Only READ when the closed-over medium has ``"scintillation"`` in its
+    ``emission_processes``. Excluded from optimization by default (not in any default
+    trainable-field set).
+    """
+    S: jnp.ndarray = jnp.asarray(0.0, jnp.float32)
+    kB: jnp.ndarray = jnp.asarray(0.0, jnp.float32)
+    C: jnp.ndarray = jnp.asarray(0.0, jnp.float32)
+    tau_rise: jnp.ndarray = jnp.asarray(0.0, jnp.float32)
+    tau_fall: jnp.ndarray = jnp.asarray(0.0, jnp.float32)
+    moyal_amp: jnp.ndarray = jnp.asarray(0.0, jnp.float32)
+    moyal_loc: jnp.ndarray = jnp.asarray(0.0, jnp.float32)
+    moyal_scale: jnp.ndarray = jnp.asarray(0.0, jnp.float32)
+
+
 class DetectorParams(NamedTuple):
     """Detector calibration parameters (JAX pytree), nested by physics.
 
     Sub-tuples
     ----------
-    scattering : ScatteringParams   scatter_length, mie_scatter_length, g
-    absorption : AbsorptionParams   absorption_length
-    reflection : ReflectionParams   wall_reflection_rate, sensor_reflection_rate
-    response   : ResponseParams     qe, spe_width, tts
-    per_pmt    : PerPmtParams        qe_corrections, gain, t0, walk
+    scattering   : ScatteringParams   scatter_length, mie_scatter_length, g
+    absorption   : AbsorptionParams   absorption_length
+    reflection   : ReflectionParams   wall_reflection_rate, sensor_reflection_rate
+    response     : ResponseParams     qe, spe_width, tts
+    per_pmt      : PerPmtParams        qe_corrections, gain, t0, walk
+    scintillation: ScintillationParams S, kB, C, tau_*, moyal_* (appended LAST so the
+                   existing 23-leaf flatten order is preserved; neutral=0 for non-scint media)
     """
     scattering: ScatteringParams
     absorption: AbsorptionParams
     reflection: ReflectionParams
     response: ResponseParams
     per_pmt: PerPmtParams
+    scintillation: ScintillationParams
 
     @classmethod
     def from_flat(cls, *, num_sensors=None, **flat):
@@ -208,6 +241,8 @@ class DetectorParams(NamedTuple):
             gain=jnp.ones(ns),
             t0=jnp.zeros(ns),
             walk=jnp.zeros(ns),
+            S=0.0, kB=0.0, C=0.0, tau_rise=0.0, tau_fall=0.0,    # scintillation: neutral (S=0 → no scint light)
+            moyal_amp=0.0, moyal_loc=0.0, moyal_scale=0.0,
         )
         defaults.update(flat)
         merged = {k: jnp.asarray(v) for k, v in defaults.items()}
@@ -300,6 +335,7 @@ _SUBTUPLES = (
     ("reflection", ReflectionParams),
     ("response", ResponseParams),
     ("per_pmt", PerPmtParams),
+    ("scintillation", ScintillationParams),     # appended LAST — preserves the existing leaf order
 )
 
 # Ordered list of every leaf (flat) field name across all sub-tuples.
@@ -314,10 +350,16 @@ _FIELD_TO_SUBTUPLE = {
 
 
 def _nest_flat_kwargs(flat: dict) -> DetectorParams:
-    """Build a nested ``DetectorParams`` from a flat ``{leaf_field: value}`` dict."""
+    """Build a nested ``DetectorParams`` from a flat ``{leaf_field: value}`` dict.
+
+    Tolerant of OMITTED fields for sub-tuples whose NamedTuple supplies defaults
+    (currently ``ScintillationParams``, all 0.0) — so callers that predate the scint
+    sub-tuple (hardcoded flat dicts) build unchanged. Sub-tuples without field defaults
+    (the original five) still require every leaf (a missing one raises, as before).
+    """
     subs = {}
     for attr, cls in _SUBTUPLES:
-        subs[attr] = cls(**{f: flat[f] for f in cls._fields})
+        subs[attr] = cls(**{f: flat[f] for f in cls._fields if f in flat})
     return DetectorParams(**subs)
 
 
@@ -410,6 +452,14 @@ _NEUTRAL_DEFAULTS = {
 # reference, byte-identical). A config may supply a curve as an inline list instead.
 _DEV_CURVE_FIELDS = ("rayleigh_dev", "mie_dev", "abs_dev", "qe_dev")
 
+# Scintillation scalars (refactor-v2 wbls/ice merge). Configs without a 'scintillation'
+# block omit them → loaded NaN scalar → filled 0.0 (NEUTRAL: S=0 → no scint light; finite
+# so normalize/bounds never poison). A scintillating material JSON supplies real values.
+_SCINT_DEFAULTS = {
+    "S": 0.0, "kB": 0.0, "C": 0.0, "tau_rise": 0.0, "tau_fall": 0.0,
+    "moyal_amp": 0.0, "moyal_loc": 0.0, "moyal_scale": 0.0,
+}
+
 # Angular-reflection-model scalars (Schlick blacksheet + multilayer-Fresnel cathode).
 # Inert unless reflection_model='angular'; configs omit them → filled with physical
 # defaults. Bialkali cathode ~ n_r=2.8, n_k=1.5; blacksheet near-diffuse low-R0.
@@ -488,6 +538,12 @@ def _project_missing_scalars(kwargs, medium_path, qe_path, ref_wavelength_nm,
 
     # Angular-reflection scalars: physical defaults when absent (inert for scalar model).
     for field, default in _ANGULAR_REFL_DEFAULTS.items():
+        v = kwargs[field]
+        if v.ndim == 0 and bool(jnp.isnan(v)):
+            kwargs[field] = jnp.asarray(default, dtype=jnp.float32)
+
+    # Scintillation scalars: neutral 0.0 when absent (non-scintillating media never read them).
+    for field, default in _SCINT_DEFAULTS.items():
         v = kwargs[field]
         if v.ndim == 0 and bool(jnp.isnan(v)):
             kwargs[field] = jnp.asarray(default, dtype=jnp.float32)
@@ -656,6 +712,9 @@ def default_bounds(num_sensors: int):
         gain=jnp.full(num_sensors, 0.3),
         t0=jnp.full(num_sensors, -10.0),
         walk=jnp.full(num_sensors, -5.0),
+        S=jnp.array(0.0), kB=jnp.array(0.0), C=jnp.array(0.0),       # scintillation (inert unless fit)
+        tau_rise=jnp.array(0.0), tau_fall=jnp.array(0.0),
+        moyal_amp=jnp.array(0.0), moyal_loc=jnp.array(0.0), moyal_scale=jnp.array(0.0),
     ))
     bounds_max = _nest_flat_kwargs(dict(
         scatter_length=jnp.array(100.0),
@@ -677,6 +736,9 @@ def default_bounds(num_sensors: int):
         gain=jnp.full(num_sensors, 3.0),
         t0=jnp.full(num_sensors, 10.0),
         walk=jnp.full(num_sensors, 5.0),
+        S=jnp.array(5000.0), kB=jnp.array(1e-3), C=jnp.array(1e-6), # scintillation physical ranges
+        tau_rise=jnp.array(10.0), tau_fall=jnp.array(50.0),
+        moyal_amp=jnp.array(10.0), moyal_loc=jnp.array(600.0), moyal_scale=jnp.array(100.0),
     ))
     return bounds_min, bounds_max
 
