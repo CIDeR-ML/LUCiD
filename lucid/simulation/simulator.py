@@ -1,6 +1,7 @@
 """Event simulator factory (setup_event_simulator)."""
 from lucid.sources.siren_rays import (
-    photonsim_differentiable_get_rays,
+    make_cherenkov_surrogate_fn,
+    build_cherenkov_context,
     predict_t0,
 )
 from lucid.propagation.cylinder import create_photon_propagator
@@ -24,7 +25,6 @@ import jax
 import jax.numpy as jnp
 from typing import Optional, Tuple
 import os
-from lucid.siren.core import create_photonsim_siren_grid
 from functools import partial
 from lucid.siren.training.inference import SIRENPredictor
 
@@ -696,31 +696,28 @@ def setup_event_simulator(
             propagate_photons, photon_update_fn,
             pos_grad_threshold=_pgt, make_hits_fn=_make_hits_fn)
 
-    # Load photonsim parameters from configuration (power-law normalization, SIREN path)
+    # Load photonsim parameters: SIREN path + the N_photons(E) power-law count model.
     photonsim_params = unpack_photonsim_params(particle, material)
     tot_n_photons_a, tot_n_photons_b, tot_n_photons_c = photonsim_params['tot_n_photons_normalization']
-    num_seeds_a, num_seeds_b, num_seeds_c = photonsim_params['num_seeds']
+
+    def n_photons_fn(E):
+        """Total Cherenkov photons N(E) = a·E^b + c (clamped ≥0) — the new emitter's
+        absolute scale (refactor-v2 reads this from the net's 'nphot' metadata; ours
+        from tot_n_photons_normalization). Replaces the old importance amplitude."""
+        return jnp.maximum(tot_n_photons_a * jnp.power(E, tot_n_photons_b) + tot_n_photons_c, 0.0)
 
     @jax.jit
-    def tot_n_photons_normalization(x):
-        """Power law: a * energy^b + c. Parameters loaded from config."""
-        return tot_n_photons_a * jnp.power(x, tot_n_photons_b) + tot_n_photons_c
-
-    @jax.jit
-    def _simulation_without_data_impl(particle_params, detector_params, key, grid_data, model_params):
+    def _simulation_without_data_impl(particle_params, detector_params, key, model_params):
         """SIREN mode: particle_params is ParticleParams."""
         energy = particle_params.energy
         track_origin = particle_params.position
         track_direction = particle_params.direction  # property
 
         key, ray_key, opt_key = jax.random.split(key, 3)
-        photon_directions, photon_origins, photon_weights = photonsim_differentiable_get_rays(
-            track_origin, track_direction, energy, Nphot, grid_data, model_params, ray_key,
-            num_seeds_a, num_seeds_b, num_seeds_c
-        )
-
-        total_photons_norm = tot_n_photons_normalization(energy)
-        photon_intensities = (total_photons_norm * photon_weights) / Nphot
+        # New refactor-v2 Cherenkov emitter: intensities already carry the absolute count
+        # (pmf × n_photons_fn(E)); no separate normalization or mean_topk amplitude.
+        photon_directions, photon_origins, photon_intensities = cherenkov_get_rays(
+            track_origin, track_direction, energy, Nphot, model_params, ray_key)
         photon_times = jnp.zeros((Nphot,))
 
         distances_to_vertex = jnp.linalg.norm(photon_origins - track_origin, axis=1) * 1000
@@ -805,19 +802,21 @@ def setup_event_simulator(
     else:
         model_base_path = photonsim_params['siren_model_path']
         photonsim_predictor = SIRENPredictor(model_base_path)
-        grid_data = create_photonsim_siren_grid(photonsim_predictor)
         model_params = photonsim_predictor.params
+        # Build the new Cherenkov emitter once (closes over the SIREN context: net + domain
+        # ranges + n_photons_fn). Referenced as a closure var by _simulation_without_data_impl.
+        cherenkov_get_rays = make_cherenkov_surrogate_fn(
+            build_cherenkov_context(photonsim_predictor, n_photons_fn,
+                                    photonsim_params.get('ray_sampling')))
         t0_params = unpack_t0_params(particle, material)   # (a_coeffs, l_coeffs, b_coeffs) cubic
         if _default_dp is not None:
             @jax.jit
             def _sim_track_default(particle_params, key):
                 return _simulation_without_data_impl(particle_params, _default_dp, key,
-                                                     grid_data=grid_data, model_params=model_params)
+                                                     model_params=model_params)
             _sim_track_default.default_detector_params = _default_dp
             return _sim_track_default
         else:
-            return partial(_simulation_without_data_impl,
-                           grid_data=grid_data,
-                           model_params=model_params)
+            return partial(_simulation_without_data_impl, model_params=model_params)
 
 
