@@ -13,7 +13,7 @@ declare -A NK=( [B5]=1 [C5]=1 [D5]=1 )
 declare -A NP=( [B5]=250000 [C5]=500000 [D5]=1000000 )
 run_combo () {
   local NAME=$1
-  local OUTDIR="$ROOT/campaign_recon/out_$NAME"
+  local OUTDIR="$ROOT/scripts/campaign_recon/out_$NAME"
   mkdir -p "$OUTDIR"
   echo "=== $NAME: NKEYS=${NK[$NAME]} NPH=${NP[$NAME]} NITERS=500 GPUS='$GPUS' -> $OUTDIR ($(date)) ==="
   pids=()
@@ -23,7 +23,7 @@ run_combo () {
     [ $((START+CNT)) -gt $NEV ] && CNT=$((NEV-START)); [ $CNT -le 0 ] && { i=$((i+1)); continue; }
     CUDA_VISIBLE_DEVICES=$g NKEYS=${NK[$NAME]} NPH=${NP[$NAME]} FISHER_MODE=ad LR=1 NITERS=500 \
       EVENT_START=$START EVENT_COUNT=$CNT OUT="$OUTDIR" \
-      python campaign_recon/worker.py > "$OUTDIR/gpu$g.log" 2>&1 &
+      python scripts/campaign_recon/worker.py > "$OUTDIR/gpu$g.log" 2>&1 &
     pids+=($!); i=$((i+1))
   done
   for p in "${pids[@]}"; do wait "$p"; done

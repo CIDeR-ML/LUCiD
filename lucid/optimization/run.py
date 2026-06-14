@@ -5,7 +5,7 @@ The validated recon path (MAIN_BRANCH_PLAN U8): the retired 5-stage Adam ``pipel
 replaced by the Fisher-Gauss-Newton two-start fit (``lucid.fitting.fit_track_multistart``):
 energy scan → charge-grid vertex ‖ time-multilateration vertex (each + a cone direction) →
 GN fit from both seeds, keep the lower-loss basin (1% margin). Reconstructs to ~12 cm / ~1.0°
-on 1 GeV muons (RESULTS in campaign_recon/). For the ≤20-line library form see
+on 1 GeV muons (RESULTS in scripts/campaign_recon/). For the ≤20-line library form see
 ``examples/hello_reconstruct.py``.
 
 Usage:  lucid-optimize <config.json>     (or  python -m lucid.optimization.run <config.json>)

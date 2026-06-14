@@ -9,7 +9,7 @@ This is the unified multi-observable capstone — charge gives the optics + QE m
 gives the T-map + tts and breaks charge-blind directions. Truth bakes a per-PMT k spread,
 a per-PMT t0 spread, and tts; the fit recovers all from a perturbed start.
 
-Usage: CUDA_VISIBLE_DEVICES=<g> python campaign/capstone.py
+Usage: CUDA_VISIBLE_DEVICES=<g> python scripts/campaign/capstone.py
 Env: NPH, K, STEPS, PERT, NB_H, WTIME, KSPREAD, T0SPREAD, TTS, GRID.
 """
 import os, sys, time
@@ -17,7 +17,7 @@ import numpy as np
 import jax
 import jax.numpy as jnp
 
-_HERE = os.path.dirname(os.path.abspath(__file__)); _ROOT = os.path.dirname(_HERE)
+_HERE = os.path.dirname(os.path.abspath(__file__)); _ROOT = os.path.dirname(os.path.dirname(_HERE))
 sys.path.insert(0, _ROOT)
 
 from lucid.geometry import generate_detector

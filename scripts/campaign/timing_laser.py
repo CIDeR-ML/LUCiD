@@ -19,7 +19,7 @@ Approach (2 runs, sample mode, integer-PE shots via intensity=NPH):
     the true TTS, the halo sits far above → select the sharp set DATA-DRIVEN (no truth);
   - t0_hat = data_mean − ref_mean (gauge mean(t0)=0), RMS vs truth on the sharp PMTs.
 
-Usage: CUDA_VISIBLE_DEVICES=<g> python campaign/timing_laser.py
+Usage: CUDA_VISIBLE_DEVICES=<g> python scripts/campaign/timing_laser.py
 Env: M, NPH(=intensity), TTS, ST0, SHARP_Q (sharp-PMT quantile).
 """
 import os, sys, time
@@ -27,7 +27,7 @@ import numpy as np
 import jax
 import jax.numpy as jnp
 
-_HERE = os.path.dirname(os.path.abspath(__file__)); _ROOT = os.path.dirname(_HERE)
+_HERE = os.path.dirname(os.path.abspath(__file__)); _ROOT = os.path.dirname(os.path.dirname(_HERE))
 sys.path.insert(0, _ROOT)
 
 from lucid.geometry import generate_detector

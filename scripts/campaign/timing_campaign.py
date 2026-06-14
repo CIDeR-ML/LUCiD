@@ -14,7 +14,7 @@ intensity=NPH), accumulates the per-PMT first-arrival mean & variance, and:
      The t0+TTS estimator itself is validated on the timingcal data model in
      tests/test_timing_calibration.py.
 
-Usage: CUDA_VISIBLE_DEVICES=<g> python campaign/timing_campaign.py
+Usage: CUDA_VISIBLE_DEVICES=<g> python scripts/campaign/timing_campaign.py
 Env: M (flashes per run), NPH (=intensity), TTS, ST0.
 """
 import os, sys, time
@@ -22,7 +22,7 @@ import numpy as np
 import jax
 import jax.numpy as jnp
 
-_HERE = os.path.dirname(os.path.abspath(__file__)); _ROOT = os.path.dirname(_HERE)
+_HERE = os.path.dirname(os.path.abspath(__file__)); _ROOT = os.path.dirname(os.path.dirname(_HERE))
 sys.path.insert(0, _ROOT)
 
 from lucid.geometry import generate_detector

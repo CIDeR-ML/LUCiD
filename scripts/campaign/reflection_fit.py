@@ -9,7 +9,7 @@ trade). Charge identifies the MAGNITUDE params (wall_R0, wall_p, cathode_nr, cat
 the spec/diff fractions (wall_fspec, sensor_fspec) ride the DiCE score and are charge-LOOSE
 (they are the timing lever, not a charge one) — expected, per the timing findings.
 
-Usage: CUDA_VISIBLE_DEVICES=<g> python campaign/reflection_fit.py
+Usage: CUDA_VISIBLE_DEVICES=<g> python scripts/campaign/reflection_fit.py
 Env: NPH, K, STEPS, PERT, NB_H, GRID.
 """
 import os, sys, time
@@ -17,7 +17,7 @@ import numpy as np
 import jax
 import jax.numpy as jnp
 
-_HERE = os.path.dirname(os.path.abspath(__file__)); _ROOT = os.path.dirname(_HERE)
+_HERE = os.path.dirname(os.path.abspath(__file__)); _ROOT = os.path.dirname(os.path.dirname(_HERE))
 sys.path.insert(0, _ROOT)
 
 from lucid.geometry import generate_detector

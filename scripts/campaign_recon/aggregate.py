@@ -1,4 +1,4 @@
-"""Aggregate campaign_recon/out/ev*.npz → seed/fit resolution + CONVERGENCE diagnostics."""
+"""Aggregate scripts/campaign_recon/out/ev*.npz → seed/fit resolution + CONVERGENCE diagnostics."""
 import os, glob, numpy as np
 
 OUT = os.environ.get('OUT', os.path.join(os.path.dirname(os.path.abspath(__file__)), 'out'))

@@ -9,7 +9,7 @@ Monochromatic lasers at each control λ + isotropic at each control λ give the 
 diversity needed to separate abs(λ) from rayleigh(λ) at each wavelength (a laser alone at
 one λ constrains only that knot of one curve — see spectral_crb).
 
-Usage: CUDA_VISIBLE_DEVICES=<g> python campaign/spectral_fit.py
+Usage: CUDA_VISIBLE_DEVICES=<g> python scripts/campaign/spectral_fit.py
 Env: NPH, K, STEPS, PERT, NB_H, GRID (1=full 150s, 0=reduced).
 """
 import os, sys, time
@@ -17,7 +17,7 @@ import numpy as np
 import jax
 import jax.numpy as jnp
 
-_HERE = os.path.dirname(os.path.abspath(__file__)); _ROOT = os.path.dirname(_HERE)
+_HERE = os.path.dirname(os.path.abspath(__file__)); _ROOT = os.path.dirname(os.path.dirname(_HERE))
 sys.path.insert(0, _ROOT)
 
 from lucid.geometry import generate_detector
