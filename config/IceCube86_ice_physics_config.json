@@ -1,0 +1,10 @@
+{
+  "medium_model": "materials/ice.json",
+  "qe_curve": "pmt/SK_QE.json",
+  "scatter_length": 30.0,
+  "absorption_length": 100.0,
+  "wall_reflection_rate": 0.0,
+  "sensor_reflection_rate": 0.0,
+  "qe": 0.25,
+  "qe_corrections": 1.0
+}

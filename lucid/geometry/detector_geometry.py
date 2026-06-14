@@ -61,33 +61,46 @@ class DetectorGeometry(NamedTuple):
             Box: n_x, n_y, n_z.
             If not provided, auto-derived from detector geometry.
         """
-        # Normalize casing
+        # Normalize casing. 'string' = telescope / volume detector (IceCube-style).
         dt_key = detector_type.lower()
-        if dt_key not in ('cylinder', 'sphere', 'box'):
-            raise ValueError(f"detector_type must be 'cylinder', 'sphere', or 'box', got {detector_type}")
+        if dt_key not in ('cylinder', 'sphere', 'box', 'string'):
+            raise ValueError(
+                f"detector_type must be 'cylinder', 'sphere', 'box', or 'string', got {detector_type}")
 
         # Material
         material = get_material_from_config(json_filename)
         medium = make_medium(material)
 
-        # Geometry
+        # Geometry — the actual class is dispatched from the JSON's detector_type
+        # (the detector_type arg may be the caller default 'Cylinder').
         detector = generate_detector(json_filename)
+        import json as _json
+        with open(json_filename) as _f:
+            actual_type = _json.load(_f).get('detector_type', detector_type)
         sensor_points = jnp.array(detector.all_points)
         sensor_radius = detector.S_radius
         num_sensors = len(sensor_points)
 
-        # Propagator (shared — uses detector abstract methods)
-        propagator = create_shared_propagator(
-            detector, sensor_points, sensor_radius,
-            temperature=temperature,
-            max_candidates_per_ray=max_candidates_per_ray,
-            overlap_st_width_frac=overlap_st_width_frac,
-            overlap_renorm=overlap_renorm,
-            overlap_mode=overlap_mode,
-            **grid_params)
+        # Propagator — string telescopes use the volume (per-DOM) propagator;
+        # surface detectors (cylinder/sphere/box) use the shared grid propagator.
+        from lucid.geometry.string import StringTelescope
+        if isinstance(detector, StringTelescope):
+            from lucid.propagation.string.string_propagator import create_string_propagator
+            propagator = create_string_propagator(
+                detector, sensor_radius, temperature=temperature,
+                n_closest=max(1, max_candidates_per_ray // 2))
+        else:
+            propagator = create_shared_propagator(
+                detector, sensor_points, sensor_radius,
+                temperature=temperature,
+                max_candidates_per_ray=max_candidates_per_ray,
+                overlap_st_width_frac=overlap_st_width_frac,
+                overlap_renorm=overlap_renorm,
+                overlap_mode=overlap_mode,
+                **grid_params)
 
         return DetectorGeometry(
-            detector_type=detector_type,
+            detector_type=actual_type,
             sensor_points=sensor_points,
             sensor_radius=sensor_radius,
             num_sensors=num_sensors,
