@@ -235,32 +235,16 @@ def photonsim_differentiable_get_rays(track_origin, track_direction, energy, Nph
     return ray_vectors, ray_origins, weights
 
 
-@jit
-def predict_t0(distance, energy, baseline_slope, baseline_intercept,
-                   A_slope, A_intercept, B_slope, B_intercept, offset):
-    """
-    JAX JIT-compatible version of predict_t0.
-    Parameters are passed as individual arrays/scalars instead of nested dict.
-    """
-    # Baseline from 1000 MeV linear fit
-    baseline = baseline_slope * distance + baseline_intercept
-
-    # Calculate delta timing
-    log10_A = A_slope * energy + A_intercept
-    B = B_slope * energy + B_intercept
-    delta = 10**log10_A * jnp.power(distance, B) + offset
-
-    return baseline + delta
+_C_MM_PER_NS = 299.792  # vacuum c in PhotonSim units (mm/ns)
 
 
-def predict_t0_cubic(distance, energy, a_coeffs, l_coeffs, b_coeffs, c_mm_per_ns):
-    """Photon emission-time baseline t(d,E) — refactor-v2 stretched-exponential form.
+def predict_t0(distance, energy, a_coeffs, l_coeffs, b_coeffs):
+    """Photon emission-time baseline ``t(d,E)`` (refactor-v2 stretched_exp_delay form).
 
     ``t(d,E) = d/c + A(E)·(exp((d/λ(E))^β(E)) − 1)`` with d in mm, E in MeV, t in ns.
     ``log10 A``, ``log10 λ`` and ``β`` are each a CUBIC in ``log10 E``; a/l/b_coeffs are
-    length-4 ascending ``[c0,c1,c2,c3]``. Fit over a wider energy range (150–100000 MeV,
-    307 energies) than the legacy linear form. JAX-jitted; vmaps cleanly over distance.
-    Differentiable in E and d (used detached for emission-time, like the linear form).
+    length-4 ascending ``[c0,c1,c2,c3]`` (loaded from the ``t0.json`` cubic schema). Fit over
+    150–100000 MeV. Differentiable in E and d; used detached (stop_gradient) for emission-time.
     """
     x = jnp.log10(energy)
 
@@ -272,19 +256,14 @@ def predict_t0_cubic(distance, energy, a_coeffs, l_coeffs, b_coeffs, c_mm_per_ns
     beta = _cubic(b_coeffs)
     arg = jnp.power(jnp.clip(distance / lam, 1e-12, None), beta)
     delay = A * (jnp.exp(arg) - 1.0)
-    return distance / c_mm_per_ns + delay
+    return distance / _C_MM_PER_NS + delay
 
 
-# Helper function to unpack your existing params dict
 def predict_t0_wrapper(distance, energy, params):
-    """Wrapper to use your existing params dict structure"""
+    """Evaluate :func:`predict_t0` from a nested-dict ``t0.json`` (the cubic schema)."""
     return predict_t0(
         distance, energy,
-        params['baseline']['slope'],
-        params['baseline']['intercept'],
-        params['delta_parameterization']['A_slope'],
-        params['delta_parameterization']['A_intercept'],
-        params['delta_parameterization']['B_slope'],
-        params['delta_parameterization']['B_intercept'],
-        params['delta_parameterization']['offset']
+        params['A']['log10_poly_logE'],
+        params['lambda']['log10_poly_logE'],
+        params['beta']['poly_logE'],
     )
