@@ -12,7 +12,6 @@ from lucid.sources.siren_rays import (          # noqa: F401
     generate_random_cone_vectors,
     denormalize_log_predictions,
     normalize_inputs_jit,
-    photonsim_differentiable_get_rays,
     predict_t0,
     predict_t0_wrapper,
 )

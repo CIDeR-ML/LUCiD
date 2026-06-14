@@ -7,6 +7,7 @@ import jax
 import jax.numpy as jnp
 from jax import random, jit
 from functools import partial
+from typing import NamedTuple
 from lucid.siren.core import SIREN
 from lucid.utils import normalize, generate_orthonormal_basis, jax_rotate_vector_local
 
@@ -90,149 +91,118 @@ def normalize_inputs_jit(inputs, energy_min, energy_max, angle_min, angle_max, d
 
     return normalized_inputs
 
-@partial(jax.jit, static_argnums=(3,))
-def photonsim_differentiable_get_rays(track_origin, track_direction, energy, Nphot,
-                                         table_data, model_params, key, num_seeds_a=0.035882, num_seeds_b=1.417106, num_seeds_c=2.75):
+class SirenContext(NamedTuple):
+    """Inference-time SIREN context for the Cherenkov surrogate (refactor-v2 form). A plain
+    Python container (Flax module + float fields + closures) — never traced; ``model_params``
+    is passed separately as the traced argument to the ray factory."""
+    model: object
+    energy_min: float
+    energy_max: float
+    axis2_min: float
+    axis2_max: float
+    smax_dist_min: float
+    smax_dist_max: float
+    log_min: float
+    log_max: float
+    s_max_fn: object        # s_max(E_mev) -> mm
+    n_photons_fn: object    # N_photons(E_mev) -> total photons/event
+    grid_bins: int
+    threshold: float
+
+
+def _siren_weights(ctx, model_params, energy, axis2, s_over_smax):
+    """Evaluate the SIREN at (axis2, s/s_max) for ``energy``; returns non-negative weights."""
+    grid = jnp.stack([jnp.full_like(axis2, energy), axis2, s_over_smax], axis=1)
+    normalized = normalize_inputs_jit(grid, ctx.energy_min, ctx.energy_max,
+                                      ctx.axis2_min, ctx.axis2_max,
+                                      ctx.smax_dist_min, ctx.smax_dist_max)
+    raw, _ = ctx.model.apply(model_params, normalized)
+    w = denormalize_log_predictions(jnp.squeeze(raw), ctx.log_max, ctx.log_min)
+    return jnp.maximum(w, 0.0)
+
+
+def latin_hypercube_2d(key, nphot, x_lo, x_hi, y_lo, y_hi):
+    """Area-uniform Latin-Hypercube sample of ``nphot`` points over [x_lo,x_hi]x[y_lo,y_hi]."""
+    k_px, k_py, k_jx, k_jy = random.split(key, 4)
+    perm_x = random.permutation(k_px, nphot)
+    perm_y = random.permutation(k_py, nphot)
+    jit_x = random.uniform(k_jx, (nphot,))
+    jit_y = random.uniform(k_jy, (nphot,))
+    u_x = (perm_x + jit_x) / nphot
+    u_y = (perm_y + jit_y) / nphot
+    return x_lo + u_x * (x_hi - x_lo), y_lo + u_y * (y_hi - y_lo)
+
+
+def make_cherenkov_surrogate_fn(ctx):
+    """Build the jitted Cherenkov ray generator (refactor-v2 two-pass importance sampling).
+
+    Returns ``cherenkov_get_rays(track_origin, track_direction, energy, Nphot, model_params, key)``
+    -> ``(ray_vectors, ray_origins, intensities)``; ``sum(intensities) == n_photons_fn(E)``.
     """
-    Generate photon rays using SIREN model for photon generation.
+    g = ctx.grid_bins
+    a_edges = jnp.linspace(ctx.axis2_min, ctx.axis2_max, g + 1)
+    s_edges = jnp.linspace(ctx.smax_dist_min, ctx.smax_dist_max, g + 1)
+    a_centers = 0.5 * (a_edges[:-1] + a_edges[1:])
+    s_centers = 0.5 * (s_edges[:-1] + s_edges[1:])
+    a_bin_w = float(a_centers[1] - a_centers[0]) if g > 1 else float(ctx.axis2_max - ctx.axis2_min)
+    s_bin_w = float(s_centers[1] - s_centers[0]) if g > 1 else float(ctx.smax_dist_max - ctx.smax_dist_min)
+    AA, SS = jnp.meshgrid(a_centers, s_centers, indexing='ij')
+    grid_angle = AA.ravel()
+    grid_s = SS.ravel()
+    threshold = ctx.threshold
 
-    Parameters
-    ----------
-    track_origin : jnp.ndarray
-        3D position of the track origin
-    track_direction : jnp.ndarray
-        3D direction vector of the track
-    energy : float
-        Energy of the particle in MeV
-    Nphot : int
-        Number of photons to generate
-    table_data : tuple
-        Grid data for SIREN model evaluation
-    model_params : dict
-        SIREN model parameters
-    key : jax.random.PRNGKey
-        Random key for sampling
-    num_seeds_a : float, optional
-        Parameter 'a' for power law num_seeds calculation, default 0.035882
-    num_seeds_b : float, optional
-        Parameter 'b' for power law num_seeds calculation, default 1.417106
-    num_seeds_c : float, optional
-        Parameter 'c' for power law num_seeds calculation, default 2.75
+    @partial(jax.jit, static_argnums=(3,))
+    def cherenkov_get_rays(track_origin, track_direction, energy, Nphot, model_params, key):
+        pick_key, jit_key, cone_key = random.split(key, 3)
+        grid_w = _siren_weights(ctx, model_params, energy, grid_angle, grid_s)  # pass 1: grid
+        thresh = threshold * jnp.max(grid_w)
+        above = grid_w >= thresh
+        csum = jnp.cumsum(above.astype(jnp.int32))
+        rank = random.randint(pick_key, (Nphot,), 0, csum[-1])
+        bin_idx = jnp.searchsorted(csum, rank + 1)                              # r-th above-thresh bin
+        jit_a, jit_s = latin_hypercube_2d(jit_key, Nphot, -0.5, 0.5, -0.5, 0.5)
+        angle = grid_angle[bin_idx] + jit_a * a_bin_w
+        s_over_smax = grid_s[bin_idx] + jit_s * s_bin_w
+        w = _siren_weights(ctx, model_params, energy, angle, s_over_smax)       # pass 2: seeds
+        physical_dist_mm = s_over_smax * ctx.s_max_fn(energy)
+        ranges_m = physical_dist_mm / 1000.0
+        ray_origins = track_origin[None, :] + ranges_m[:, None] * normalize(track_direction)[None, :]
+        ray_vectors = generate_random_cone_vectors(track_direction, angle, Nphot, cone_key)
+        pmf = w / jnp.maximum(jnp.sum(w), 1e-30)                                # SIREN shape -> PMF
+        intensities = pmf * ctx.n_photons_fn(energy)                           # x absolute count
+        return ray_vectors, ray_origins, intensities
 
-    Returns
-    -------
-    ray_vectors : jnp.ndarray
-        Array of photon direction vectors
-    ray_origins : jnp.ndarray
-        Array of photon origin positions
-    photon_weights : jnp.ndarray
-        Array of photon weights
+    return cherenkov_get_rays
+
+
+def build_cherenkov_context(predictor, n_photons_fn, ray_sampling=None):
+    """SirenContext from OUR trained-model metadata + a count closure.
+
+    Adapted for unification's PHYSICAL-distance net: the SIREN 3rd axis is physical distance
+    (``dataset_info['distance_range']`` mm), so smax_dist range = that physical range and
+    ``s_max_fn = 1.0`` — i.e. s_over_smax IS the physical distance in mm, queried as the net
+    was trained. The absolute count comes from ``n_photons_fn`` (= tot_n_photons_normalization;
+    refactor-v2 reads it from the net's 'nphot' metadata block, ours passes it in).
     """
-    key, subkey = random.split(key)
-
-    n_bins, energy_min, energy_max, angle_min, angle_max, distance_min, distance_max, angle_bins, distance_bins, angle_dist_grid, angle_mesh, distance_mesh, log_min, log_max = table_data
-
-    # ============================================================================
-    # FIRST EVALUATION: Full grid to get photon weights for sampling
-    # ============================================================================
-    evaluation_grid = jnp.stack([
-        jnp.full_like(angle_mesh, energy).ravel(),  # Energy (MeV)
-        angle_mesh.ravel(),                         # Angle (radians)
-        distance_mesh.ravel(),                      # Distance (mm)
-    ], axis=1)
-
-    normalized_grid = normalize_inputs_jit(evaluation_grid, energy_min, energy_max, angle_min, angle_max, distance_min, distance_max)
-
-    # Initialize SIREN model
-    model = SIREN(
-        hidden_features=256,
-        hidden_layers=3,
-        out_features=1,
+    rs = {"grid_bins": 250, "threshold": 0.05}
+    if ray_sampling:
+        rs.update(ray_sampling)
+    meta = predictor.metadata
+    di = meta['dataset_info']
+    tn = meta['target_normalization']
+    emin, emax = di['energy_range']
+    amin, amax = di['angle_range']
+    dmin, dmax = di['distance_range']
+    return SirenContext(
+        model=predictor.model,
+        energy_min=float(emin), energy_max=float(emax),
+        axis2_min=float(amin), axis2_max=float(amax),
+        smax_dist_min=float(dmin), smax_dist_max=float(dmax),
+        log_min=float(tn['log_min']), log_max=float(tn['log_max']),
+        s_max_fn=lambda E: 1.0,
+        n_photons_fn=n_photons_fn,
+        grid_bins=int(rs['grid_bins']), threshold=float(rs['threshold']),
     )
-
-    # SIREN emission density over the (angle, distance) grid (single call at this energy).
-    log_pred, _ = model.apply(model_params, normalized_grid)
-    density = jnp.clip(denormalize_log_predictions(jnp.squeeze(log_pred), log_max, log_min), 1e-12, None)
-    angle_dist_mesh = jnp.array(angle_dist_grid)
-    n_grid = angle_dist_mesh.shape[0]
-    p_emit = density / jnp.sum(density)
-
-    # Low-discrepancy SYSTEMATIC stratification for the importance resample.
-    key, sampling_key = random.split(key)
-    u0 = random.uniform(sampling_key, ()) / Nphot
-    us = u0 + jnp.arange(Nphot) / Nphot
-
-    # SIREN density at the FIXED reference energy E_CAL -> the energy-INDEPENDENT proposal. mean_topk keeps
-    # the validated total emission normalization (Σ = Nphot·mean_topk).
-    E_CAL = 1050.0
-    cal_grid = jnp.stack([jnp.full((n_grid,), E_CAL), angle_dist_mesh[:, 0], angle_dist_mesh[:, 1]], axis=1)
-    cal_norm = normalize_inputs_jit(cal_grid, energy_min, energy_max, angle_min, angle_max, distance_min, distance_max)
-    cal_log, _ = model.apply(model_params, cal_norm)
-    cal_dens = jax.lax.stop_gradient(jnp.clip(denormalize_log_predictions(jnp.squeeze(cal_log), log_max, log_min), 1e-12, None))
-    ns_cal = jnp.int32(num_seeds_a * jnp.power(E_CAL, num_seeds_b) + num_seeds_c)
-    ds_sorted = jnp.sort(cal_dens)[::-1]
-    mean_topk = jnp.sum(jnp.where(jnp.arange(n_grid) < ns_cal, ds_sorted, 0.0)) / ns_cal
-
-    # Resample the (angle,distance) bins at E_CAL (selection ENERGY-INDEPENDENT); reweight each photon by
-    # the smooth density ratio p_emit(E)/p_emit(E_CAL) (pathwise, exact 1st+2nd order; ==1 at E=E_CAL).
-    p_cal = cal_dens / jnp.sum(cal_dens)
-    cdf_cal = jnp.cumsum(p_cal)
-    idx_A = jnp.clip(jnp.searchsorted(cdf_cal, us), 0, n_grid - 1)
-    selected = angle_dist_mesh[idx_A]
-    sampled_angle = selected[:, 0]
-    sampled_dist = selected[:, 1]
-    weight_factor = p_emit[idx_A] / jax.lax.stop_gradient(p_cal[idx_A])
-
-    # ============================================================================
-    # STRATIFIED SAMPLING: Better coverage than pure MC
-    # ============================================================================
-    bin_width_angle = (angle_max - angle_min) / n_bins
-    bin_width_dist = (distance_max - distance_min) / n_bins
-
-    # Create stratified samples: divide [0, 1] into Nphot strata
-    # Then shuffle to avoid systematic bias
-    key, subkey_angle = random.split(key)
-    key, subkey_dist = random.split(key)
-    key, subkey_jitter_angle = random.split(key)
-    key, subkey_jitter_dist = random.split(key)
-
-    # Permute stratum indices for random assignment
-    strata_indices_angle = random.permutation(subkey_angle, Nphot)
-    strata_indices_dist = random.permutation(subkey_dist, Nphot)
-
-    # Sample within each stratum: (stratum_index + uniform[0,1]) / Nphot
-    jitter_angle = random.uniform(subkey_jitter_angle, (Nphot,))
-    jitter_dist = random.uniform(subkey_jitter_dist, (Nphot,))
-
-    strata_angle = (strata_indices_angle + jitter_angle) / Nphot
-    strata_dist = (strata_indices_dist + jitter_dist) / Nphot
-
-    # Map from [0, 1] to [-bin_width/2, bin_width/2]
-    stratified_angle = (strata_angle - 0.5) * bin_width_angle
-    stratified_dist = (strata_dist - 0.5) * bin_width_dist
-
-    smeared_angle = sampled_angle + stratified_angle
-    smeared_dist = sampled_dist + stratified_dist
-
-    photon_thetas = smeared_angle
-
-    # Generate ray vectors and origins
-    subkey, subkey2 = random.split(subkey)
-    ray_vectors = generate_random_cone_vectors(track_direction, photon_thetas, Nphot, subkey)
-
-    # Convert ranges to meters and compute ray origins
-    ranges = smeared_dist / 1000
-    ray_origins = jnp.ones((Nphot, 3)) * track_origin[None, :] + ranges[:, None] * normalize(track_direction[None, :])
-
-    # Per-photon weight = mean_topk * the smooth importance ratio (== mean_topk at E_CAL). The total emission
-    # is Σ = Nphot*mean_topk; the physical profile is ∝ density (correct Cherenkov ring width ~11°).
-    weights = mean_topk * weight_factor
-    weights = jnp.where(smeared_angle < angle_min, 0.0, weights)
-    weights = jnp.where(smeared_angle > angle_max, 0.0, weights)
-    weights = jnp.where(smeared_dist < distance_min, 0.0, weights)
-    weights = jnp.where(smeared_dist > distance_max, 0.0, weights)
-
-    return ray_vectors, ray_origins, weights
 
 
 _C_MM_PER_NS = 299.792  # vacuum c in PhotonSim units (mm/ns)

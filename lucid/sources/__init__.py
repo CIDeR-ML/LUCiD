@@ -1,5 +1,6 @@
 from lucid.sources.siren_rays import (
-    photonsim_differentiable_get_rays,
+    make_cherenkov_surrogate_fn,
+    build_cherenkov_context,
     predict_t0,
     predict_t0_wrapper,
 )
