@@ -36,6 +36,36 @@
 >    goal** (a new phase, post-merge). LUCiD becomes a true tank+telescope inference tool, not water-core
 >    + ice-forward.
 
+> ## SIREN + OPTICS + MATERIALS — AUTHOR-CONFIRMED DECISIONS (2026-06-14)
+> Settled with the refactor-v2 author after two code-grounded deep dives:
+> - **SIREN emitter: use refactor-v2's NEW emitter AS-IS — NO manual importance reweight.** Adopt its
+>   `n_photons_fn(E)` as the single count/energy model, `s/s_max` sampling axis, cubic t0, per-material
+>   nets (water/ice/wbls/electron), scintillation surrogate, new `siren_params.json` schema. DROP
+>   unification's importance reweight + `tot_n_photons_normalization` + `mean_topk` amplitude. Philosophy:
+>   do it properly with `n_photons` only; **if the function has errors, recreate the function** — don't
+>   patch with a reweight. ⚠️ CAVEAT (the test that matters): the bare emitter's known energy-gradient
+>   bias is in the emission SHAPE (categorical seed-pick at runtime E), NOT the count — `n_photons_fn`
+>   fixes the count's E-dependence. So Phase 6 gates on a SPECIFIC **energy-gradient test (AD ∂loss/∂E vs
+>   noise-averaged FD/truth slope, K=1 and K=8)**, not just forward count parity. If it passes → "n_photons
+>   only" suffices. If the shape's E-dependence bites → fix is in the emitter sampling (reparam), still not
+>   a bolt-on reweight. "Recreate as needed" lands on whichever the gradient test implicates.
+> - **t0: cubic** `predict_t0` + re-fit `t0.json` (refactor-v2's), per (material, particle). It's
+>   `stop_gradient`-detached so it changes the forward time TARGET (moves the dir/t0 floor) but adds no
+>   new gradient hazard. Re-validate the timing floor against it (Phase 6).
+> - **Optics seam: keep `optical_model.py` + Rayleigh+Mie+`g` transport CANONICAL**; bridge refactor-v2's
+>   emission processes + ice/wbls materials onto it. The two paths reconcile on disjoint axes (make_medium
+>   = reference curves; optical_model = fittable λ-deviation multiplier; emission = upstream ray-gen).
+>   ⚠️ refactor-v2's transport has NO Mie (3-field optics) — we KEEP unification's Mie (validated + B-mie),
+>   so its Mie-less optics is NOT adopted.
+> - **Scintillation photons scatter via the SAME bulk Rayleigh+Mie+`g` transport** as Cherenkov (physically
+>   correct; free with the bridge; changes wbls/ice scint forward vs current refactor-v2 — intended).
+> - **MediumProperties: additive** — append `emission_processes`/`cherenkov_fraction`/scint-λ-range
+>   (defaulted) to unification's `MediumProperties`; `optical_model` ignores them. ice/wbls material JSONs
+>   load through unification's `make_medium` unchanged (bulk curves share water.json's schema).
+> - **Modularity: ADOPT refactor-v2's** (sources split: root_reader/event_builder/v3_writer/…), preserving
+>   unification-only symbols the fitting/recon path imports (`pad_photon_data`). **custom_vjp drop: OK**
+>   (conditional on rigorous NaN-stress + AD==FD testing). **Nesting: OK** if done correctly (leaf-order pin).
+
 > ## CONSENSUS VERDICT (two independent code-grounded agent reviews, 2026-06-14)
 > **Direction APPROVED with caveats — both reviewers: feasible.** The base-side review largely
 > REFUTED the main fear (unification independently carries every substantive water-mode fix
