@@ -73,6 +73,7 @@ def setup_event_simulator(
         reflection_model='scalar',
         reflection_wavelength=400.0,
         spectrum=None,
+        cherenkov_photon_norm=1.0,
         **grid_params):
     """
     Set up and return an event simulator using DetectorParams / ParticleParams.
@@ -814,6 +815,7 @@ def setup_event_simulator(
             if _has_cherenkov:
                 ch_dirs, ch_origins, ch_intens = cherenkov_get_rays(
                     track_origin, track_direction, energy, _n_cher, model_params, cher_key)
+                ch_intens = ch_intens * cherenkov_photon_norm   # emitter absolute-normalization calibration
                 ch_dist_mm = jnp.linalg.norm(ch_origins - track_origin, axis=1) * 1000
                 ch_t0 = jax.lax.stop_gradient(_pt0(ch_dist_mm, energy,
                                                    jnp.asarray(a_c), jnp.asarray(l_c), jnp.asarray(b_c)))
@@ -864,6 +866,7 @@ def setup_event_simulator(
         # (pmf × n_photons_fn(E)); no separate normalization or mean_topk amplitude.
         photon_directions, photon_origins, photon_intensities = cherenkov_get_rays(
             track_origin, track_direction, energy, Nphot, model_params, ray_key)
+        photon_intensities = photon_intensities * cherenkov_photon_norm   # emitter absolute-normalization calibration
         photon_times = jnp.zeros((Nphot,))
 
         distances_to_vertex = jnp.linalg.norm(photon_origins - track_origin, axis=1) * 1000
