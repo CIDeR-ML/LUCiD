@@ -1,12 +1,16 @@
 # MAIN_BRANCH_PLAN.md — the simplified, general LUCiD foundation (v3)
 
-> ⚠️ **STATUS: PROPOSAL, not the current API.** The `fit(forward, residual=, solver=)` /
-> `SimParams` / `Field` / `gradient_channel` interface in §10.5/§12 exists in **zero lines of
-> code** — it is the target shape, not what ships today. The **canonical, validated, runnable
-> API right now is `lucid.fitting`**: `build_calibration_problem(...) → fit(...) / crb(...)`
-> (Gauss-Newton + per-PMT Schur, the recipe the whole campaign ran on). See
-> `examples/hello_{simulate,calibrate,reconstruct}.py` for ≤20-line runnable entry points
-> against the real API. When this plan's interface is built, this banner comes down. (B4.)
+> ⚠️ **STATUS: §10.5/§12 interface DE-SCOPED (2026-06-13); `lucid.fitting` is canonical.** The
+> `fit(forward, residual=, solver=)` / `SimParams` / `Field` / `gradient_channel` interface in
+> §10.5/§12 exists in **zero lines of code** and is **no longer planned to be built.** Its main
+> motivation was managing FD-vs-AD / score-vs-pathwise gradient channels; the **B2 gating experiment
+> answered "AD-first just works"** (jacfwd Fisher/Jacobian == FD, lower-variance, merged 8cd99d5), so
+> that motivation is gone. The **canonical, validated, runnable API is `lucid.fitting`**:
+> `build_calibration_problem(...) → fit(...) / crb(...)` (Gauss-Newton + per-PMT Schur) for
+> calibration, and `ReconModel`/`fit_track`/`fit_track_multistart` (AD-Fisher GN) for reconstruction.
+> See `examples/hello_{simulate,calibrate,reconstruct}.py` for ≤20-line runnable entry points. §10.5/§12
+> are kept below as a REJECTED design record, not a roadmap. Remaining merge work is cosmetic only
+> (rename + fold study dirs into `scripts/`).
 
 > **UNIFICATION PROGRESS** (worktree `unification`, 2026-06-12). The §8 plan is essentially
 > complete on the package side. **Done:** U1 de-env (TTS `os.environ` leak removed; `lucid/` has
@@ -25,14 +29,24 @@
 > DONE**: executable `Protocol` contracts (`fitting/contracts.py`: `CalibForward`,
 > `PerPhotonPredictor`). **Decisions:** U6 (merge the two GN loops) — **declined** (calibration GN
 > Schur-k/√-MSE/cached-J/×√12-CRB vs recon GN SCALE9-precond/Levenberg/FD-Fisher are structurally
-> distinct; per B9 keep both as clean library code). **Remaining for a full merge:** (a) the §13
-> **gating experiments — B2 autodiff-vs-FD-GN** and **B3 SIREN `emitter='score'` factory +
-> importance re-validation** (decide D1/the architecture; harness ready in campaign_recon/); (b)
-> the §10.5/§12 **grand architecture** (pure forward + `residual=`/`priors=`/`nuisance=`/`reparam=`
-> + Component pattern + param-KIND + `SimParams`) — GATED by B2, build only what the experiments
-> justify; (c) cosmetic: `max_candidates_per_ray` rename, fold top-level `campaign/`+`campaign_recon/`
-> study dirs into `scripts/` (cleanly separated — `lucid/` imports neither). The package
-> (`lucid/` + tests + examples) is merge-ready; the open items are architecture/decision, not cleanup.
+> distinct; per B9 keep both as clean library code). **Gating experiments — BOTH RESOLVED (2026-06-13):**
+> **B2 (autodiff-vs-FD)** — ANSWERED: AD (jacfwd) Fisher/Jacobian reproduces FD, lower-variance + 2.8×
+> faster; `custom_vjp` dropped, forward-mode unblocked; merged (8cd99d5) into `gauss_newton`/`fisher`/
+> `recon`. A 100-event + keys×photons recon campaign on the AD path hit the floor (vtx ~12 cm, dir ~1°,
+> energy unbiased at 4 keys; `campaign_recon/KP_RESULTS.md`). **B3 (SIREN emitter)** — RESOLVED: main
+> ALREADY ships the fixed-proposal IMPORTANCE emitter (`sources/siren_rays.py`, pathwise, 2nd-order-exact
+> in E); the DiCE-**score** path is GONE from `lucid/` (left with the `lucid/dice/`→DTRAX extraction). The
+> §3.3 gate ("re-validate the floor before flipping to importance") is SATISFIED — every recent campaign
+> ran on the importance emitter and hit the floor, and the energy gradient through it is sign-reliable +
+> AD==FD even at K=1 (`campaign_recon/emitter_grad_probe.py`). The old "Adam-on-log-E goes the wrong way /
+> score-noise sign-unreliable" worry was the dead score path; it does not apply. **Consequence for scope:**
+> with B2 = "AD-first works", the §10.5/§12 **grand architecture** (pure forward + `residual=`/`reparam=`/
+> `gradient_channel` + Component + `SimParams`) was largely motivated by managing FD-vs-AD / score-vs-
+> pathwise gradient channels — that motivation is GONE. **Recommendation: DE-SCOPE §10.5; `lucid.fitting`
+> + the AD Jacobians IS the canonical fitter; take the proposal banner down.** **Remaining for merge is now
+> only cosmetic:** `max_candidates_per_ray` rename (7 notebooks), fold `campaign/`+`campaign_recon/` study
+> dirs into `scripts/` (cleanly separated — `lucid/` imports neither). The package (`lucid/` + tests +
+> examples) is merge-ready.
 
 **Purpose.** This is the consolidation plan refined for *simplicity + generality* — the shape
 LUCiD's **main branch** should take. It supersedes the heavier abstraction in
@@ -117,11 +131,22 @@ The one flag that can't default-share: `eigen_clip` (True calib indefinite-FD / 
 2. **`photon_step` signature**: adopt unify's `refl_params`+`lam`+`reflection_fn=` FACTORY form
    (`make_photon_iteration_update_factors_safe`) over recon's scalar-rate module-level `@custom_vjp`.
    Output 7-tuple identical (no DiCE reconciliation).
-3. **SIREN emitter** ⚠️ the riskiest: recon default = DiCE-SCORE live-resample; unify default =
-   fixed-proposal IMPORTANCE (lower-variance, pathwise-exact). **Main default = importance**; keep
-   **score as an explicit `emitter='score'` factory** (mirror `reflection_model=`), NOT an env var.
-   **Gate the flip behind re-validating the §8 recon floor** (recon's basin/Hessian/13cm-floor record
-   was measured on the score path). Delete `SIREN_SMOOTH/MARGINAL/CONTINUOUS` experiments.
+3. **SIREN emitter** — ✅ **RESOLVED (2026-06-13), not a blocker.** Main default IS already
+   fixed-proposal IMPORTANCE (`sources/siren_rays.py`: resample bins ONCE at `E_CAL`, reweight by the
+   smooth ratio `p(E)/p(E_CAL)` — pathwise, exact 1st+2nd order in E). The DiCE-SCORE path was NEVER
+   merged and its machinery is GONE (`lucid/dice/`→DTRAX), so there is no flip to make and no
+   `emitter='score'` factory to add unless a proposal-coverage failure appears (none seen across the
+   energy range; importance covers it). **The gate is satisfied:** the recon floor was re-measured ON
+   the importance emitter by the 2026-06 campaigns (vtx ~12 cm, dir ~1°, energy unbiased @4 keys), and
+   the energy gradient through it is sign-reliable + AD==FD even at K=1 (`emitter_grad_probe.py`). The
+   single-key energy bias seen in the keys×photons study is finite-sample MC Jensen bias (cancels with
+   key-averaging), NOT a score-estimator artifact. `SIREN_SMOOTH/MARGINAL/CONTINUOUS` already absent.
+
+   **Fundamentals (score vs importance):** both differentiate `dL/dθ` through θ-dependent photon
+   sampling. SCORE (DiCE/REINFORCE) samples from `p_θ` directly and adds `L·∂log p_θ/∂θ` — unbiased but
+   high-variance (the single-key noise we measured). IMPORTANCE samples once from a θ-INDEPENDENT
+   proposal and moves all θ-dependence into a smooth differentiable weight → pathwise, low-variance, no
+   score term, AD-native. With AD working, importance is strictly the better choice for this emitter.
 
 ---
 
