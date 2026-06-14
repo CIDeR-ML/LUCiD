@@ -15,6 +15,27 @@
 >   DetectorParams PROPOSAL doc for the refactor-v2 author; pause before landing Phase 1 code. Nothing
 >   pushed to origin yet.
 
+> ## FUNDAMENTAL CHOICES (locked 2026-06-14) — the vision the merge serves
+> The two branches embody two ideas: **unification = LUCiD as a differentiable INFERENCE INSTRUMENT**
+> (gradient-first; validated recon floor + calibration CRB are sacred) vs **refactor-v2 = LUCiD as a
+> differentiable MULTI-PHYSICS PRODUCTION SIMULATOR** (generality-first; many geometries/media/particles
+> + dataset production). The merged `main` adopts the AMBITIOUS synthesis:
+> 1. **North star = CO-EQUAL** (no default veto). Inference fidelity AND production generality are both
+>    first-class; tensions are resolved case-by-case, NOT by one side overriding. Practical rule: the
+>    Phase-0 tripwire still CATCHES any regression to the validated water floor, but a production feature
+>    that trips it is not auto-rejected — it triggers a deliberate case-by-case decision. Neither
+>    "production needs X" nor "fitting wants Y" is a silent trump.
+> 2. **ONE forward engine, regime modes** (no separate backends — the plan's fallback is OFF). A single
+>    differentiable forward carries water = **hard-sample** mode (countable photons, CRB honesty) and
+>    ice = **DiCE-expectation** mode (uncountable). All new physics (volume/string/scint) lands as a
+>    BRANCH/MODE in the one engine, sharing the PhotonState/`log_p` convention — not a parallel forward.
+> 3. **Telescope = CO-EQUAL, FIRST-CLASS.** ice/string get calibration AND reconstruction to the SAME
+>    validated bar as water. ⚠️ **This EXPANDS scope vs the earlier scoping:** B-mie (Mie + anisotropy
+>    `g` on the volume step) is now a COMMITTED first-class deliverable (sequenced later, but NOT
+>    optional/deferred-indefinitely), and **ice RECONSTRUCTION with its own validated floor is now a
+>    goal** (a new phase, post-merge). LUCiD becomes a true tank+telescope inference tool, not water-core
+>    + ice-forward.
+
 > ## CONSENSUS VERDICT (two independent code-grounded agent reviews, 2026-06-14)
 > **Direction APPROVED with caveats — both reviewers: feasible.** The base-side review largely
 > REFUTED the main fear (unification independently carries every substantive water-mode fix
@@ -120,7 +141,8 @@
 | A | **String geometry** | `lucid/geometry/string.py`, `string_sizing.py`, geom type-hints | additive | new `@register_detector`; verify Cylinder path (what fitting uses) unchanged |
 | B-fwd | **Volume scattering — FORWARD** (ice) | `lucid/simulation/photon_step_volume.py` | forward port | reparam-pathwise (EXACT) for λ_scat/λ_abs; port forward; NaN-stress new geom |
 | B-fit | **Volume step → proper DiCE-forward citizen** (ice) | integrate into PhotonState/forward | **in scope now** | PhotonState/`log_p` consistency so `fitting` `jacfwd` flows through → ice λ_scat/λ_abs calibrate via the exact reparam gradient. Gate: AD==FD on ice optical params + forward weight-budget. NO shot-noise mode (ice = expectation by nature; true photon count unknowable). |
-| B-mie | **Volume Mie + anisotropy `g`** (ice) | phase function in `optics.py` | **LATER (deferred)** | replace fixed-Rayleigh `compute_scatter_direction` with Rayleigh+Mie+`g`; `g`-gradient via reparam/score; physically needed for forward-peaked ice |
+| B-mie | **Volume Mie + anisotropy `g`** (ice) | phase function in `optics.py` | **committed, sequenced LATER** (not optional — telescope co-equal) | replace fixed-Rayleigh `compute_scatter_direction` with Rayleigh+Mie+`g`; `g`-gradient via reparam/score; physically needed for forward-peaked ice |
+| R | **Ice/string RECONSTRUCTION floor** | new fitting + validation phase | **committed, post-merge phase** (telescope co-equal) | bring ice/string track recon to its own validated floor (the telescope analog of the water recon campaign); needs B-fit+B-mie first |
 | C | **Scintillation + materials** | scint surrogate; ice/electron/WbLS material JSON + loaders | **FORK — careful** | scint scalars → `ScintillationParams` sub-tuple is mechanical (D); BUT scint EMISSION lives in refactor-v2's `MediumProperties` (`emission_processes`/`cherenkov_fraction`/scint λ-range) which unification lacks, and refactor-v2 DELETED `optical_model.py` (unification's optics seam) — must RECONCILE the forked `wavelength/{medium,spectrum,optical_model}` layer, not drop a branch |
 | D | **DetectorParams: add scintillation** | `lucid/detector_params.py` | **keystone — careful** | KEEP unification's nested tree; ADD `ScintillationParams`; route refactor-v2 material loaders through `from_flat` |
 | E | **`setup_event_simulator` union args** | `lucid/simulation/simulator.py` | union signature | ADD refactor-v2's `medium_override` + string/scint modes; KEEP unification's `reflection_model/reflection_wavelength/spectrum/overlap_*` |
