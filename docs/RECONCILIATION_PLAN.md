@@ -6,17 +6,19 @@
 > refactor-v2 made — outward normal, stop_gradient reflection normal, per-photon QE, per-photon
 > TTS-before-min, key-split, QE-Cherenkov — and is AHEAD on Mie/AD-cleanliness). The features-side
 > review GREEN-LIT differentiability of the gating item (volume scatter uses no `custom_vjp`, no
-> non-diff ops; direct `vmap` beside the surface step). **⚠️ REFINED (code read, 2026-06-14): "AD-clean"
-> ≠ "DiCE/fitting-correct" for ice.** `photon_step_volume.py` is FORWARD-ready and even pathwise-correct
-> for λ_scat/λ_abs (`sample_scatter_distance` is an inverse-CDF REPARAMETERIZATION → `∂d/∂λ` is pathwise,
-> no score needed, cleaner than the surface DiCE-score). BUT it is **NOT calibration/recon-ready for ice**:
-> (i) `compute_scatter_direction` is a FIXED Rayleigh phase function — **no Mie, no anisotropy `g`** (ice
-> is strongly forward-peaked `g≈0.9` → physically wrong; and adding `g` is where the real DiCE-score/reparam
-> work appears); (ii) **no hard-sample shot-noise mode** (the surface step's exact-Poisson engine that the
-> CRB honesty rests on has no volume analog); (iii) **no `log_p`/score carry** (estimator-family + PhotonState
-> mismatch vs the surface step). So volume scatter is **two deliverables**: (B-fwd) port forward-only now;
-> (B-fit) a SEPARATE, intent-gated DiCE+Mie+`g`+sample-mode rewrite ONLY if ice fitting is a goal — built
-> against unification's DiCE/log_p/sample machinery (another reason unification is the right base).
+> non-diff ops; direct `vmap` beside the surface step). **⚠️ REFINED (code read + scope decision,
+> 2026-06-14):** `photon_step_volume.py` is FORWARD-ready and **pathwise-EXACT for λ_scat/λ_abs**
+> (`sample_scatter_distance` is an inverse-CDF REPARAMETERIZATION → `∂d/∂λ` pathwise, no score needed;
+> this is "the DiCE way" and the propagation gradient is exact). **Methodology note: ice is intrinsically
+> an EXPECTATION problem** — the true photon count is unknowable (unlike water Cherenkov), so the
+> DiCE/soft-weight expectation forward IS the correct method, NOT an approximation. Therefore **a
+> hard-sample/shot-noise mode is correctly ABSENT — not a gap** (do NOT build a volume sample engine).
+> What remains for ice FITTING-correctness, scoped: **(now) integrate the volume step as a proper citizen
+> of unification's DiCE forward** — PhotonState/`log_p` consistency so `lucid/fitting`'s `jacfwd` flows
+> through it cleanly and ice λ_scat/λ_abs calibrate via the exact reparam gradient; **(later) add Mie +
+> anisotropic `g`** to the phase function (currently fixed Rayleigh — physically incomplete for
+> forward-peaked ice; `g`'s gradient via reparam/score when added). Validation = AD==FD on ice optical
+> params + forward weight-budget conservation (NO sample-engine cross-check — none exists by design).
 > Required corrections, now folded in below:
 >
 > 1. **"Byte-identical by construction" → "by tripwire + discipline."** Safety is procedural, not
@@ -101,8 +103,9 @@
 | # | Feature | Files (refactor-v2) | Class | Notes / care |
 |---|---|---|---|---|
 | A | **String geometry** | `lucid/geometry/string.py`, `string_sizing.py`, geom type-hints | additive | new `@register_detector`; verify Cylinder path (what fitting uses) unchanged |
-| B-fwd | **Volume scattering — FORWARD** (ice) | `lucid/simulation/photon_step_volume.py` | forward port | reparam-pathwise for λ_scat/λ_abs; port forward-only, label "fitting-not-validated"; NaN-stress new geom |
-| B-fit | **Volume scattering — FITTING-correct** (ice) | rewrite of above | **scoped sub-project, intent-gated** | ONLY if ice calib/recon wanted: add Mie + anisotropic `g` phase (→ `g`-gradient via reparam/score), hard-sample shot-noise mode, `log_p`/PhotonState carry; gate AD==FD on ice optical params + sample-engine cross-check. Build on unification's DiCE machinery |
+| B-fwd | **Volume scattering — FORWARD** (ice) | `lucid/simulation/photon_step_volume.py` | forward port | reparam-pathwise (EXACT) for λ_scat/λ_abs; port forward; NaN-stress new geom |
+| B-fit | **Volume step → proper DiCE-forward citizen** (ice) | integrate into PhotonState/forward | **in scope now** | PhotonState/`log_p` consistency so `fitting` `jacfwd` flows through → ice λ_scat/λ_abs calibrate via the exact reparam gradient. Gate: AD==FD on ice optical params + forward weight-budget. NO shot-noise mode (ice = expectation by nature; true photon count unknowable). |
+| B-mie | **Volume Mie + anisotropy `g`** (ice) | phase function in `optics.py` | **LATER (deferred)** | replace fixed-Rayleigh `compute_scatter_direction` with Rayleigh+Mie+`g`; `g`-gradient via reparam/score; physically needed for forward-peaked ice |
 | C | **Scintillation + materials** | scint surrogate; ice/electron/WbLS material JSON + loaders | **FORK — careful** | scint scalars → `ScintillationParams` sub-tuple is mechanical (D); BUT scint EMISSION lives in refactor-v2's `MediumProperties` (`emission_processes`/`cherenkov_fraction`/scint λ-range) which unification lacks, and refactor-v2 DELETED `optical_model.py` (unification's optics seam) — must RECONCILE the forked `wavelength/{medium,spectrum,optical_model}` layer, not drop a branch |
 | D | **DetectorParams: add scintillation** | `lucid/detector_params.py` | **keystone — careful** | KEEP unification's nested tree; ADD `ScintillationParams`; route refactor-v2 material loaders through `from_flat` |
 | E | **`setup_event_simulator` union args** | `lucid/simulation/simulator.py` | union signature | ADD refactor-v2's `medium_override` + string/scint modes; KEEP unification's `reflection_model/reflection_wavelength/spectrum/overlap_*` |
