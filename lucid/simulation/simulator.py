@@ -907,6 +907,8 @@ def setup_event_simulator(
             def _sim_data_default(particle_params, key, photon_data):
                 return _simulation_with_data_impl(particle_params, _default_dp, key, photon_data)
             _sim_data_default.default_detector_params = _default_dp
+            _sim_data_default.medium = det_geom.medium      # production introspection
+            _sim_data_default.det_geom = det_geom           # (event_generation reads these)
             return _sim_data_default
         else:
             return _simulation_with_data_impl
@@ -916,6 +918,8 @@ def setup_event_simulator(
             def _sim_calibration_default(source, key):
                 return _simulation_sensor_calibration_impl(source, _default_dp, key)
             _sim_calibration_default.default_detector_params = _default_dp
+            _sim_calibration_default.medium = det_geom.medium
+            _sim_calibration_default.det_geom = det_geom
             return _sim_calibration_default
         else:
             return _simulation_sensor_calibration_impl
@@ -963,6 +967,8 @@ def setup_event_simulator(
                 return _simulation_without_data_impl(particle_params, _default_dp, key,
                                                      model_params=model_params)
             _sim_track_default.default_detector_params = _default_dp
+            _sim_track_default.medium = det_geom.medium
+            _sim_track_default.det_geom = det_geom
             return _sim_track_default
         else:
             return partial(_simulation_without_data_impl, model_params=model_params)
