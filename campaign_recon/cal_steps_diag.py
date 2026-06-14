@@ -27,8 +27,8 @@ start = prob['theta0'] + np.random.default_rng(0).uniform(-.15, .15, prob['theta
 STEPS = [100, 400, 1000, 2500]
 res = {s: fit(prob['source_models'], prob['truth_charge'], start, NS, steps=s, refresh=15, nb_h=2) for s in STEPS}
 print('STEPS', STEPS)
-print('%-20s %6s %7s | err vs truth (%) at each step count' % ('field', 'CRB%', 'start%'))
+print('field                  CRB%   start% | fractional err vs truth (pct) at each step count')
 for i, f in enumerate(FIELDS):
-    err = lambda s: 100 * (np.asarray(res[s]['theta'])[i] / truth[i] - 1)
-    row = ' '.join('%+7.1f' % err(s) for s in STEPS)
-    print('%-20s %6.2f %+7.1f | %s' % (f, 100 * sig[i], 100 * (np.exp(start[i]) / truth[i] - 1), row))
+    row = ' '.join('{:+7.1f}'.format(100 * (np.asarray(res[s]['theta'])[i] / truth[i] - 1)) for s in STEPS)
+    print('{:20s} {:6.2f} {:+7.1f} | {}'.format(
+        f, 100 * sig[i], 100 * (np.exp(start[i]) / truth[i] - 1), row))

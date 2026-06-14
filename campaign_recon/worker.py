@@ -31,6 +31,11 @@ E0 = int(os.environ.get('EVENT_START', '0')); EC = int(os.environ.get('EVENT_COU
 EVLIST = os.environ.get('EVENT_LIST', '')                          # comma-list overrides the range
 EVENTS = [int(x) for x in EVLIST.split(',')] if EVLIST else list(range(E0, E0 + EC))
 OUT = os.environ.get('OUT', os.path.join(_ROOT_DIR, 'campaign_recon/out')); os.makedirs(OUT, exist_ok=True)
+# keys×photons study knobs: NKEYS grad/Fisher PRNG keys, NPH predictor photons, FISHER_MODE fd|ad,
+# LR (ad metric is smaller -> use ~1; fd -> ~8, see fit_track docstring), NITERS.
+NKEYS = int(os.environ.get('NKEYS', '4')); NPH = int(os.environ.get('NPH', '250000'))
+FISHER_MODE = os.environ.get('FISHER_MODE', 'fd'); LR = float(os.environ.get('LR', '8.0'))
+NITERS = int(os.environ.get('NITERS', '250'))
 
 det = generate_detector(GEOM); ND = len(det.all_points); POS = np.asarray(det.all_points)
 bounds = get_detector_bounds(det)
@@ -39,9 +44,10 @@ dp_data = dp_data._replace(response=dp_data.response._replace(tts=jnp.asarray(2.
 data_sim = setup_event_simulator(GEOM, NBUF, temperature=None, K=K, is_data=True, hit_mode='realistic',
                                  physics_config=PHYS, default_detector_params=dp_data, particle='muon',
                                  wavelength_mode=True, apply_smearing=False, **GRID)
-pred = setup_event_simulator(GEOM, 250_000, temperature=0.1, K=K, hit_mode='per_photon',
+pred = setup_event_simulator(GEOM, NPH, temperature=0.1, K=K, hit_mode='per_photon',
                              physics_config=PHYS, default_detector_params=True, particle='muon',
                              wavelength_mode=True, pos_grad_threshold=K, n_grad_iters=K, **GRID)
+print(f'combo: NKEYS={NKEYS} NPH={NPH} FISHER_MODE={FISHER_MODE} LR={LR} NITERS={NITERS}', flush=True)
 model = ReconModel(pred, ND, sigma=2.5, delta=1.0)
 
 
@@ -121,16 +127,21 @@ for ev in EVENTS:
         # seed B: TIME multilateration (transverse-perfect; forward-biased -> rescues inward tracks)
         seedB = make_seed(*seed_vertex_time(POS, oc, ot))
         # --- two-start Fisher-GN fit: keep the lower-loss basin ---
-        res, MS = fit_track_multistart(model, oc, ot, [seedA, seedB], nkeys=4, niters=250)
-        H = MS['per_seed'][MS['which']][1]
+        res, MS = fit_track_multistart(model, oc, ot, [seedA, seedB], nkeys=NKEYS, niters=NITERS,
+                                       lr=LR, fisher_mode=FISHER_MODE)
+        H = MS['per_seed'][MS['which']][1]; HA = MS['per_seed'][0][1]; HB = MS['per_seed'][1][1]
         seA, seB = errs(seedA, th9, d), errs(seedB, th9, d)
         fe = errs(res, th9, d); fA = errs(MS['per_seed'][0][0], th9, d); fB = errs(MS['per_seed'][1][0], th9, d)
         np.savez(os.path.join(OUT, f'ev{ev:03d}.npz'), truth=th9, tdir=d, seedA=seedA, seedB=seedB, fit=res,
                  fitA=MS['per_seed'][0][0], fitB=MS['per_seed'][1][0],   # per-seed 9-vecs: truth-rescorable
                  traj=H['traj'], gnorm=H['gnorm'], best_iter=H['best_iter'], which=MS['which'],
+                 trajA=HA['traj'], gnormA=HA['gnorm'], best_iterA=HA['best_iter'],   # full per-seed trajectories
+                 trajB=HB['traj'], gnormB=HB['gnorm'], best_iterB=HB['best_iter'],
                  losses=np.array(MS['losses']), seedA_err=np.array(seA), seedB_err=np.array(seB),
                  fitA_err=np.array(fA), fitB_err=np.array(fB), fit_err=np.array(fe),
-                 n_hit=int((oc > 0).sum()), q_tot=float(oc.sum()))
+                 n_hit=int((oc > 0).sum()), q_tot=float(oc.sum()),
+                 nkeys=NKEYS, nph=NPH, fisher_mode=FISHER_MODE, lr=LR)   # combo provenance
+
         print(f'ev{ev:03d} seedA vtx{seA[0]:5.0f} B vtx{seB[0]:5.0f} | fitA{fA[0]:6.1f} fitB{fB[0]:6.1f} '
               f'-> WIN={"AB"[MS["which"]]} vtx{fe[0]:5.1f}cm dir{fe[1]:4.2f} E{fe[2]:+6.1f} t0{fe[3]:+5.2f} [{time.time()-t0:.0f}s]', flush=True)
     except Exception as e:
