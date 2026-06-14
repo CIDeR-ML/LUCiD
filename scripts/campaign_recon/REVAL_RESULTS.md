@@ -48,3 +48,46 @@ the "recreate the n_photons function as needed" path (yield AND per-PMT shape AN
 Interim: `cherenkov_photon_norm=1.66` gets vtx ~22 cm / dir ~1° (dir already beats
 baseline); the energy/shape and the −1.6 ns t0 offset need the new net + `t0.json`
 revisited, not a scalar.
+
+---
+
+## Exact cause decomposition (old vs new emitter, same recon code)
+
+Apples-to-apples baseline is `out_ms` (OLD emitter, SAME merged recon worker), not the
+single-start RESULTS.md (13.9cm). Comparing on overlapping events:
+
+| | vtx | dir | dE | dt0 |
+|---|---|---|---|---|
+| out_ms (OLD emitter) | 23.5 cm | 1.88° | **−1 MeV** | **+0.20 ns** |
+| reval166 (NEW, ×1.66) | 22.0 cm | 1.05° | **+70 MeV** | **−1.6 ns** |
+
+**Vertex & direction MATCH (new ≈ or better).** Only energy + t0 regressed. Decomposed by
+direct old-vs-new-vs-GEANT4 forward comparison at truth geometry:
+
+1. **Photon YIELD −1.66×** — GEANT4 ROOT stores 357k photons @1050 MeV; the new net's
+   `nphot(1050)=215k` (old net matched GEANT4). The old net's `tot_n_photons` (~11.8k) was
+   an importance-reweight normalization; the new net's `nphot` is a physical-ish count that
+   under-fits the true Cherenkov yield by 1.66. → `cherenkov_photon_norm=1.66` (committed).
+
+2. **Charge SHAPE — not the problem.** Both emitters are equally diffuse (the DiCE soft
+   forward + SIREN smoothness): old nlit>0 = 10,681 / 35% charge on GEANT4-dark PMTs /
+   bright-ring ratio 0.673; new 10,683 / 27% / 0.748. The new emitter's charge is actually
+   slightly *better*. This is why vtx/dir are fine.
+
+3. **Emission TIMING +1.16 ns** — new emitter first-arrival vs GEANT4 = **+0.74 ns** (late);
+   old = **−0.42 ns** (early). The `predict_t0` cubics are nearly identical (≤0.04 ns over
+   d=2–5 m), so the shift is in the photon **emission geometry** (longitudinal `s/s_max ×
+   s_max(E)` placement / time distribution), not the t0 model. It drives recon **t0 −1.6 ns**
+   (absorbed) and, via the time↔energy Fisher coupling, **E +70…+150** (the fit drifts there
+   even from the truth seed → genuine joint-loss-minimum bias, not optimizer noise).
+
+## Verdict — reachable
+
+The merge is correct (emitter wired right; q_tot scales, AD==FD; calibration CRB intact —
+hello_calibrate recovers all 7 params within bound). The recon delta is **two net-
+calibration offsets** in the new s/s_max net vs the old/GEANT4: **(1) yield 1.66×** and
+**(2) emission timing ~1.16 ns**. Charge shape, vertex, direction already match. To reach the
+old result: re-calibrate the new net's `nphot` (×1.66 → matches GEANT4) and its emission-time
+/ longitudinal placement to GEANT4 (the t0/timing scan), OR carry the `cherenkov_photon_norm`
++ a small emission-time offset as interim constants. Both are net/emitter calibration, not
+recon-pipeline regressions.
