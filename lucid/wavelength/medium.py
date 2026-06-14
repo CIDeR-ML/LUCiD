@@ -32,6 +32,15 @@ class MediumProperties(NamedTuple):
     mie_scatter_coeff: Optional[jnp.ndarray] = None     # (N,) asymmetric Mie 1/m
     mie_asymmetry: Optional[float] = None               # HG g parameter
 
+    # --- Emission dispatch (static, non-differentiable; the multi-material merge) ---
+    # APPENDED LAST so existing positional MediumProperties(...) construction is unchanged.
+    # Differentiable scintillation values (S/kB/C/tau/moyal) live on DetectorParams; these are
+    # the setup-time knobs the simulator reads to pick Cherenkov vs scintillation surrogates.
+    emission_processes: tuple = ("cherenkov",)          # ("cherenkov",) | ("cherenkov","scintillation")
+    scintillation_lambda_min: float = 340.0             # Moyal sampling window (nm)
+    scintillation_lambda_max: float = 550.0
+    cherenkov_fraction: float = 0.5                     # n_photons split when both processes run
+
 
 # ---------------------------------------------------------------------------
 # QE curve loading
@@ -91,9 +100,33 @@ def _load_medium_json(json_path):
 
 # Legacy default path (used when no explicit path is given)
 _LEGACY_WATER_PATH = os.path.join(os.path.dirname(__file__), "..", "..", "config", "materials", "water.json")
+# Default material lookup dir: config/materials/<material>.json (multi-material merge).
+_MATERIALS_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "config", "materials")
 
 
-def make_medium(material: str = "water", 
+def _scintillation_kwargs_from(data: dict) -> dict:
+    """Extract the STATIC scintillation dispatch knobs from a material JSON.
+
+    The differentiable values (light yield S/kB/C, timing tau, spectrum moyal) live on
+    DetectorParams and are sourced via ``load_physics_config``; this returns only what the
+    simulator needs at setup to pick surrogates + the Moyal window. A material is
+    non-scintillating if it lacks a ``"scintillation"`` block (→ Cherenkov-only defaults).
+    """
+    scint = data.get("scintillation")
+    if scint is None:
+        return {"emission_processes": ("cherenkov",)}
+    procs = tuple(scint.get("emission_processes", ("cherenkov", "scintillation")))
+    spec = scint.get("spectrum", {})
+    split = scint.get("photon_split", {"cherenkov_fraction": 0.5})
+    return {
+        "emission_processes": procs,
+        "scintillation_lambda_min": float(spec.get("lambda_min", 340.0)),
+        "scintillation_lambda_max": float(spec.get("lambda_max", 550.0)),
+        "cherenkov_fraction": float(split["cherenkov_fraction"]),
+    }
+
+
+def make_medium(material: str = "water",
                 wavelength_grid: Optional[jnp.ndarray] = None,
                 medium_model_path: str = None) -> MediumProperties:
     """Build a MediumProperties from a material name or model file.
@@ -101,28 +134,32 @@ def make_medium(material: str = "water",
     Parameters
     ----------
     material : str
-        Currently only ``"water"`` is supported.
-    g : float
-        Mie scattering asymmetry parameter (Henyey-Greenstein g parameter).
+        Material name. Used to locate ``config/materials/<material>.json`` when no explicit
+        ``medium_model_path`` is given (e.g. ``"water"``, ``"ice"``, ``"wbls"``).
     wavelength_grid : jnp.ndarray, optional
         If provided, wavelength-dependent arrays are computed on this grid.
         If ``None``, only scalar properties are populated (monochromatic mode).
     medium_model_path : str, optional
-        Explicit path to the medium model JSON file. If ``None``, falls back
-        to the legacy bundled ``water.json``.
+        Explicit path to the medium model JSON file. If ``None``, resolves
+        ``config/materials/<material>.json`` (water falls back to the legacy bundled path).
 
     Returns
     -------
     MediumProperties
     """
-    if material != "water":
-        raise ValueError(f"Unknown material '{material}'. Supported: 'water'.")
-
     if medium_model_path is not None:
         data = _load_medium_json(medium_model_path)
     else:
-        data = _load_medium_json(_LEGACY_WATER_PATH)
+        path = os.path.join(_MATERIALS_DIR, f"{material}.json")
+        if not os.path.exists(path):
+            if material == "water":
+                path = _LEGACY_WATER_PATH
+            else:
+                raise ValueError(f"No material config at {path!r}. Add a "
+                                 f"config/materials/{material}.json or pass medium_model_path.")
+        data = _load_medium_json(path)
 
+    scint_kwargs = _scintillation_kwargs_from(data)     # static emission dispatch
     n = data["refractive_index"]
     c_vac = data["speed_of_light_vacuum_m_per_ns"]
     c_medium = c_vac / n
@@ -132,6 +169,7 @@ def make_medium(material: str = "water",
             material=material,
             refractive_index=n,
             speed_of_light=c_medium,
+            **scint_kwargs,
         )
 
     wl = jnp.asarray(wavelength_grid, dtype=jnp.float32)
@@ -168,6 +206,7 @@ def make_medium(material: str = "water",
         refractive_index_curve=jnp.full_like(wl, n),  # constant n for now
         mie_scatter_coeff=alpha_asym,
         mie_asymmetry=g,
+        **scint_kwargs,
     )
 
 

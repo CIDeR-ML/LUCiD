@@ -50,9 +50,17 @@ class TestMediumProperties:
         assert float(m.scatter_coeff[0]) > float(m.scatter_coeff[-1])
 
     def test_unknown_material_raises(self):
+        # water/ice/wbls are now real materials (multi-material merge); a material with
+        # no config/materials/<name>.json still raises.
         import pytest  # noqa: F811
-        with pytest.raises(ValueError, match="Unknown material"):
-            make_medium("ice")
+        with pytest.raises(ValueError, match="No material config"):
+            make_medium("unobtainium")
+
+    def test_known_materials_load(self):
+        # ice/wbls load; wbls carries the scintillation emission dispatch.
+        assert make_medium("ice").refractive_index == 1.309
+        assert "scintillation" in make_medium("wbls").emission_processes
+        assert make_medium("water").emission_processes == ("cherenkov",)
 
 
 class TestEffectiveProperties:

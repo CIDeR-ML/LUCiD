@@ -1,0 +1,60 @@
+{
+  "material": "wbls",
+  "_comment_composition": "10% water-based liquid scintillator. Bulk optical properties are inherited from pure water (negligible difference at 10% mass fraction); only the scintillation block is the actual WbLS physics.",
+  "refractive_index": 1.33,
+  "speed_of_light_vacuum_m_per_ns": 0.299792,
+
+  "scattering": {
+    "source": "SK calibration paper (arXiv:1307.0162) — reused from water; WbLS bulk scattering differs by <1% at 10% mass fraction.",
+    "symmetric": {
+      "description": "Rayleigh + symmetric Mie: alpha_sym = P4/lambda^4 * (1 + P5/lambda^2)",
+      "P4": 8.51e7,
+      "P5": 1.14e5
+    },
+    "asymmetric": {
+      "description": "Forward Mie: alpha_asym = P6 * (1 + P7/lambda^4 * (lambda - P8)^2)",
+      "P6": 1.00e-4,
+      "P7": 4.62e6,
+      "P8": 392.0,
+      "default_asymmetry_g": 0.95
+    }
+  },
+
+  "absorption": {
+    "source": "SK calibration paper + Pope & Fry (1997) — reused from water.",
+    "description": "alpha_abs = P0*P1/lambda^4 + C(lambda); C = power law (<464nm) or Pope&Fry (>=464nm)",
+    "P0": 0.624,
+    "P1": 2.96e7,
+    "P2": 3.24e-2,
+    "P3": 10.9,
+    "pope_fry_wavelengths_nm": [464, 470, 480, 490, 500, 510, 520, 530, 540, 550, 560, 570, 580, 590, 600, 610, 620, 630, 640, 650, 660, 670, 680, 690, 700],
+    "pope_fry_absorption_m_inv": [0.0054, 0.0058, 0.0064, 0.0082, 0.0257, 0.0357, 0.0477, 0.0507, 0.0558, 0.0638, 0.0708, 0.0799, 0.108, 0.157, 0.244, 0.289, 0.309, 0.319, 0.329, 0.349, 0.4, 0.43, 0.45, 0.5, 0.65]
+  },
+
+  "scintillation": {
+    "emission_processes": ["cherenkov", "scintillation"],
+    "light_yield": {
+      "_comment": "Chou parametrization (Birks + bimolecular). 10% WbLS: S from Caravaca 2020 (arXiv:2006.00173) linear fit S(c=10) = 127.9*10 + 108.3 = 1387.3 ph/MeV. kB and C from Callaghan 2023 (arXiv:2210.03876) Table 6 Chou row.",
+      "S":  1387.3,
+      "kB": 1.65e-5,
+      "C":  1.33e-9
+    },
+    "timing": {
+      "_comment": "Single rise+fall hypoexponential — sampled directly via T_rise + T_fall, T_X ~ Exp(tau_X). 10% WbLS fast component from Caravaca 2020 Table 2 (tau_r=0.13, tau_1=2.70). The slow tau_2=27.05 ns component (R_1=0.06) is dropped — it carries 6% of the integrated emission and adds noise to the simulator without a calibration handle to exploit it.",
+      "tau_rise": 0.13,
+      "tau_fall": 2.70
+    },
+    "spectrum": {
+      "_comment": "Moyal (approximate Landau) fit to WbLS emission spectrum from arXiv:2003.10491. The surrogate samples directly from this distribution truncated to [lambda_min, lambda_max] via an inverse-CDF lookup; moyal_amp is dormant (preserved on DetectorParams for future reactivation).",
+      "moyal_amp":   1.0,
+      "moyal_loc":   373.26120442,
+      "moyal_scale": 14.77305198,
+      "lambda_min":  340.0,
+      "lambda_max":  550.0
+    },
+    "photon_split": {
+      "_comment": "Static ratio used only when both Cherenkov and Scintillation are enabled. 0.5 = equal-cost split of the user's n_photons budget.",
+      "cherenkov_fraction": 0.5
+    }
+  }
+}
