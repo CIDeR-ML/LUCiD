@@ -175,14 +175,32 @@ def make_cherenkov_surrogate_fn(ctx):
     return cherenkov_get_rays
 
 
-def build_cherenkov_context(predictor, n_photons_fn, ray_sampling=None):
-    """SirenContext from OUR trained-model metadata + a count closure.
+def make_smax_fn(smax: dict):
+    """``s_max(E_mev) -> mm`` closure from a trained-model 'smax' metadata block."""
+    form = smax['form']
+    p = smax['params']
+    if form == 'A*E^B':
+        A, B = float(p['A']), float(p['B'])
+        return lambda E: A * E ** B
+    if form == 'smooth_two_power':
+        a, b1, b2, E0 = (float(p[k]) for k in ('a', 'b1', 'b2', 'E0'))
+        return lambda E: a * E ** b1 / (1.0 + (E / E0) ** (b1 - b2))
+    raise ValueError(f"unknown smax form: {form!r}")
 
-    Adapted for unification's PHYSICAL-distance net: the SIREN 3rd axis is physical distance
-    (``dataset_info['distance_range']`` mm), so smax_dist range = that physical range and
-    ``s_max_fn = 1.0`` — i.e. s_over_smax IS the physical distance in mm, queried as the net
-    was trained. The absolute count comes from ``n_photons_fn`` (= tot_n_photons_normalization;
-    refactor-v2 reads it from the net's 'nphot' metadata block, ours passes it in).
+
+def make_power_law_fn(nphot: dict):
+    """``N_photons(E_mev) -> total photons`` from a trained-model 'nphot' block (A*E^B+C, clamped ≥0)."""
+    a, b, c = float(nphot['a']), float(nphot['b']), float(nphot['c'])
+    return lambda E: jnp.maximum(a * E ** b + c, 0.0)
+
+
+def build_cherenkov_context(predictor, ray_sampling=None):
+    """SirenContext from the trained-model metadata (refactor-v2 native form).
+
+    The s/s_max-trained Cherenkov net carries everything: ``dataset_info['distance_range']``
+    is the normalized s/s_max ∈ [0,1] axis, and the 'smax'/'nphot' metadata blocks give the
+    energy-dependent track range s_max(E) and the absolute photon count N_photons(E). The
+    emitter maps s/s_max → physical mm via s_max(E) and scales by n_photons_fn(E).
     """
     rs = {"grid_bins": 250, "threshold": 0.05}
     if ray_sampling:
@@ -190,6 +208,9 @@ def build_cherenkov_context(predictor, n_photons_fn, ray_sampling=None):
     meta = predictor.metadata
     di = meta['dataset_info']
     tn = meta['target_normalization']
+    if 'smax' not in meta or 'nphot' not in meta:
+        raise ValueError("trained-model metadata lacks 'smax'/'nphot' blocks (s/s_max support); "
+                         "re-sync the model via scripts/download_data.sh.")
     emin, emax = di['energy_range']
     amin, amax = di['angle_range']
     dmin, dmax = di['distance_range']
@@ -199,8 +220,8 @@ def build_cherenkov_context(predictor, n_photons_fn, ray_sampling=None):
         axis2_min=float(amin), axis2_max=float(amax),
         smax_dist_min=float(dmin), smax_dist_max=float(dmax),
         log_min=float(tn['log_min']), log_max=float(tn['log_max']),
-        s_max_fn=lambda E: 1.0,
-        n_photons_fn=n_photons_fn,
+        s_max_fn=make_smax_fn(meta['smax']),
+        n_photons_fn=make_power_law_fn(meta['nphot']),
         grid_bins=int(rs['grid_bins']), threshold=float(rs['threshold']),
     )
 

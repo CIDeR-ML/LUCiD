@@ -1,0 +1,9 @@
+{
+    "siren_model": {
+        "path": "siren_training/trained_model/photonsim_siren"
+    },
+    "ray_sampling": {
+        "grid_bins": 250,
+        "threshold": 0.05
+    }
+}
