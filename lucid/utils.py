@@ -191,23 +191,33 @@ def unpack_t0_params(particle_type='muon', material='water'):
     Returns
     -------
     tuple
-        (baseline_slope, baseline_intercept, A_slope, A_intercept, B_slope, B_intercept, offset)
+        ``(form, payload)``. ``form='cubic'`` (refactor-v2 stretched_exp_delay):
+        ``payload=(a_coeffs, l_coeffs, b_coeffs, c_mm_per_ns)`` (three length-4 cubic-in-log10E
+        coeff lists + speed). ``form='linear'`` (legacy): ``payload`` is the 7-tuple
+        ``(baseline_slope, baseline_intercept, A_slope, A_intercept, B_slope, B_intercept, offset)``.
     """
     # Normalize particle type for file path
     normalized_type = normalize_particle_type_for_path(particle_type)
     with open(base_dir_path()+f'/data/{material}/{normalized_type}/t0.json', 'r') as f:
         t0_params = json.load(f)
 
-    # Extract individual parameters from nested dict structure
-    return (
+    if t0_params.get('form') == 'stretched_exp_delay':       # refactor-v2 CUBIC schema
+        return ('cubic', (
+            t0_params['A']['log10_poly_logE'],
+            t0_params['lambda']['log10_poly_logE'],
+            t0_params['beta']['poly_logE'],
+            float(t0_params.get('c_mm_per_ns', 299.792)),
+        ))
+    # Legacy LINEAR schema (baseline + delta_parameterization).
+    return ('linear', (
         t0_params['baseline']['slope'],
         t0_params['baseline']['intercept'],
         t0_params['delta_parameterization']['A_slope'],
         t0_params['delta_parameterization']['A_intercept'],
         t0_params['delta_parameterization']['B_slope'],
         t0_params['delta_parameterization']['B_intercept'],
-        t0_params['delta_parameterization']['offset']
-    )
+        t0_params['delta_parameterization']['offset'],
+    ))
 
 def unpack_photonsim_params(particle_type='muon', material='water'):
     """

@@ -252,6 +252,29 @@ def predict_t0(distance, energy, baseline_slope, baseline_intercept,
 
     return baseline + delta
 
+
+def predict_t0_cubic(distance, energy, a_coeffs, l_coeffs, b_coeffs, c_mm_per_ns):
+    """Photon emission-time baseline t(d,E) — refactor-v2 stretched-exponential form.
+
+    ``t(d,E) = d/c + A(E)·(exp((d/λ(E))^β(E)) − 1)`` with d in mm, E in MeV, t in ns.
+    ``log10 A``, ``log10 λ`` and ``β`` are each a CUBIC in ``log10 E``; a/l/b_coeffs are
+    length-4 ascending ``[c0,c1,c2,c3]``. Fit over a wider energy range (150–100000 MeV,
+    307 energies) than the legacy linear form. JAX-jitted; vmaps cleanly over distance.
+    Differentiable in E and d (used detached for emission-time, like the linear form).
+    """
+    x = jnp.log10(energy)
+
+    def _cubic(c):
+        return c[0] + c[1] * x + c[2] * x * x + c[3] * x * x * x
+
+    A = 10.0 ** _cubic(a_coeffs)
+    lam = 10.0 ** _cubic(l_coeffs)
+    beta = _cubic(b_coeffs)
+    arg = jnp.power(jnp.clip(distance / lam, 1e-12, None), beta)
+    delay = A * (jnp.exp(arg) - 1.0)
+    return distance / c_mm_per_ns + delay
+
+
 # Helper function to unpack your existing params dict
 def predict_t0_wrapper(distance, energy, params):
     """Wrapper to use your existing params dict structure"""

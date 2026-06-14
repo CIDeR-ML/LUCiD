@@ -1,5 +1,6 @@
 """Event simulator factory (setup_event_simulator)."""
-from lucid.sources.siren_rays import (
+from lucid.sources.siren_rays import (  # noqa: F401
+    predict_t0_cubic,
     photonsim_differentiable_get_rays,
     predict_t0,
 )
@@ -724,14 +725,19 @@ def setup_event_simulator(
         photon_times = jnp.zeros((Nphot,))
 
         distances_to_vertex = jnp.linalg.norm(photon_origins - track_origin, axis=1) * 1000
-        predict_t0_vec = jax.vmap(predict_t0, in_axes=(0, None, None, None, None, None, None, None, None))
-        baseline_slope, baseline_intercept, A_slope, A_intercept, B_slope, B_intercept, offset = t0_params
-        # Emission-time baseline predict_t0(distance_to_vertex, energy) is detached: the TIME term does not
-        # carry ENERGY/VERTEX gradient through the emission-time model (those flow via the geometry/charge terms).
-        t0 = jax.lax.stop_gradient(predict_t0_vec(distances_to_vertex, energy,
-                                                  baseline_slope, baseline_intercept,
-                                                  A_slope, A_intercept,
-                                                  B_slope, B_intercept, offset))
+        # Emission-time baseline t0(distance_to_vertex, energy), DETACHED: the TIME term does not carry
+        # ENERGY/VERTEX gradient through the emission-time model (those flow via geometry/charge). _T0_FORM
+        # selects refactor-v2's CUBIC stretched-exp ('cubic') vs the legacy LINEAR ('linear') — a Python
+        # branch on the static setup-time tag, traced out at jit.
+        if _T0_FORM == 'cubic':
+            a_c, l_c, b_c, c_mm = _T0_PAYLOAD
+            _pt0 = jax.vmap(predict_t0_cubic, in_axes=(0, None, None, None, None, None))
+            t0 = jax.lax.stop_gradient(_pt0(distances_to_vertex, energy,
+                                            jnp.asarray(a_c), jnp.asarray(l_c), jnp.asarray(b_c), c_mm))
+        else:
+            bs, bi, As, Ai, Bs, Bi, off = _T0_PAYLOAD
+            _pt0 = jax.vmap(predict_t0, in_axes=(0, None, None, None, None, None, None, None, None))
+            t0 = jax.lax.stop_gradient(_pt0(distances_to_vertex, energy, bs, bi, As, Ai, Bs, Bi, off))
 
         # Per-photon optical properties (Cherenkov spectrum when wavelength_mode)
         scatter_lengths, mie_scatter_lengths, absorption_lengths, qe_weights, key = _get_optical_arrays(
@@ -809,7 +815,7 @@ def setup_event_simulator(
         photonsim_predictor = SIRENPredictor(model_base_path)
         grid_data = create_photonsim_siren_grid(photonsim_predictor)
         model_params = photonsim_predictor.params
-        t0_params = unpack_t0_params(particle, material)
+        _T0_FORM, _T0_PAYLOAD = unpack_t0_params(particle, material)   # ('cubic'|'linear', coeffs)
         if _default_dp is not None:
             @jax.jit
             def _sim_track_default(particle_params, key):
