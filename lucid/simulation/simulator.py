@@ -9,7 +9,7 @@ from lucid.propagation.sphere import create_sphere_photon_propagator
 from lucid.propagation.box import create_box_photon_propagator, box_bounds_check
 from lucid.geometry import generate_detector, get_material_from_config
 from lucid.utils import (
-    unpack_t0_params, unpack_photonsim_params,
+    unpack_t0_params, unpack_siren_params,
     get_speed_of_light_in_material,
     spherical_to_cartesian, base_dir_path,
     smear_times, smear_charges_SK_like,
@@ -696,15 +696,9 @@ def setup_event_simulator(
             propagate_photons, photon_update_fn,
             pos_grad_threshold=_pgt, make_hits_fn=_make_hits_fn)
 
-    # Load photonsim parameters: SIREN path + the N_photons(E) power-law count model.
-    photonsim_params = unpack_photonsim_params(particle, material)
-    tot_n_photons_a, tot_n_photons_b, tot_n_photons_c = photonsim_params['tot_n_photons_normalization']
-
-    def n_photons_fn(E):
-        """Total Cherenkov photons N(E) = a·E^b + c (clamped ≥0) — the new emitter's
-        absolute scale (refactor-v2 reads this from the net's 'nphot' metadata; ours
-        from tot_n_photons_normalization). Replaces the old importance amplitude."""
-        return jnp.maximum(tot_n_photons_a * jnp.power(E, tot_n_photons_b) + tot_n_photons_c, 0.0)
+    # SIREN config: model path + ray-sampling knobs. The s/s_max-trained net carries its
+    # own count/range model (nphot/smax) in the trained-model metadata, read in the context.
+    siren_cfg = unpack_siren_params(particle, material)
 
     @jax.jit
     def _simulation_without_data_impl(particle_params, detector_params, key, model_params):
@@ -800,14 +794,14 @@ def setup_event_simulator(
         else:
             return _simulation_sensor_calibration_impl
     else:
-        model_base_path = photonsim_params['siren_model_path']
+        model_base_path = siren_cfg['siren_model_path']
         photonsim_predictor = SIRENPredictor(model_base_path)
         model_params = photonsim_predictor.params
         # Build the new Cherenkov emitter once (closes over the SIREN context: net + domain
-        # ranges + n_photons_fn). Referenced as a closure var by _simulation_without_data_impl.
+        # ranges + smax/nphot from the trained-model metadata). Referenced as a closure var
+        # by _simulation_without_data_impl.
         cherenkov_get_rays = make_cherenkov_surrogate_fn(
-            build_cherenkov_context(photonsim_predictor, n_photons_fn,
-                                    photonsim_params.get('ray_sampling')))
+            build_cherenkov_context(photonsim_predictor, siren_cfg['ray_sampling']))
         t0_params = unpack_t0_params(particle, material)   # (a_coeffs, l_coeffs, b_coeffs) cubic
         if _default_dp is not None:
             @jax.jit
