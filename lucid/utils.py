@@ -177,52 +177,86 @@ def get_speed_of_light_in_material(material='water'):
     # Calculate speed of light in material
     return SPEED_OF_LIGHT_VACUUM / n
 
-def unpack_t0_params(particle_type='muon', material='water'):
+def unpack_t0_params(particle_type: str = 'muon', material: str = 'water') -> tuple:
     """
     Load and unpack t0 timing parameters for a given particle type and material.
+
+    Schema: ``stretched_exp_delay`` —
+        ``t(d, E) = d/c + A(E)·(exp((d/λ(E))^β(E)) − 1)``
+    with ``log10 A``, ``log10 λ`` and ``β`` each a cubic in ``log10 E``
+    (coeffs ascending: ``c0 + c1·logE + c2·logE² + c3·logE³``). Distance in
+    mm, energy in MeV, time in ns.
 
     Parameters
     ----------
     particle_type : str, optional
-        Particle type (e.g., 'mu-', 'mu+', 'e-', 'e+', 'pi-', 'pi+', 'muon', 'pion', 'electron'), by default 'muon'
+        Particle type (e.g., 'mu-', 'muon'), by default 'muon'
     material : str, optional
         Material type, by default 'water'
 
     Returns
     -------
-    tuple
-        ``(a_coeffs, l_coeffs, b_coeffs)`` — the three length-4 cubic-in-log10E coefficient
-        lists of the ``stretched_exp_delay`` t0 model (see :func:`lucid.sources.siren_rays.predict_t0`).
+    tuple of three coefficient tuples
+        ``(a_coeffs, lambda_coeffs, beta_coeffs)``, each length-4 ascending
+        in ``log10 E`` — matches the
+        :func:`lucid.sources.siren_rays.predict_t0` signature exactly.
     """
-    # Normalize particle type for file path
     normalized_type = normalize_particle_type_for_path(particle_type)
-    with open(base_dir_path()+f'/data/{material}/{normalized_type}/t0.json', 'r') as f:
+    path = base_dir_path() + f'/data/{material}/{normalized_type}/t0.json'
+    with open(path, 'r') as f:
         t0_params = json.load(f)
+
+    form = t0_params.get('form')
+    if form != 'stretched_exp_delay':
+        raise ValueError(
+            f"{path}: unsupported t0 schema {form!r}; expected "
+            f"'stretched_exp_delay'. Regenerate with "
+            f"PhotonSim/tools/t0_correction/calculate_t0.py."
+        )
     return (
-        t0_params['A']['log10_poly_logE'],
-        t0_params['lambda']['log10_poly_logE'],
-        t0_params['beta']['poly_logE'],
+        tuple(t0_params['A']['log10_poly_logE']),
+        tuple(t0_params['lambda']['log10_poly_logE']),
+        tuple(t0_params['beta']['poly_logE']),
     )
 
-def unpack_siren_params(particle_type='muon', material='water'):
-    """Load the SIREN config (``siren_params.json``, refactor-v2 schema) for a
-    (particle, material).
+def unpack_siren_params(particle_type: str = 'muon', material: str = 'water') -> dict:
+    """
+    Load SIREN inference parameters for a given particle type and material from
+    `data/<material>/<particle>/siren_params.json`.
 
-    The s/s_max-trained net carries its count/range model (``nphot``/``smax``) in the
-    trained-model metadata, so this only needs the model path + ray-sampling knobs.
+    `N_photons(E)` and `s_max(E)` come from the trained model's metadata (the
+    `nphot` / `smax` blocks); this loader resolves the model paths and the
+    ray-sampling knobs for both the Cherenkov and dE/dx surrogates.
 
     Returns
     -------
-    dict with ``'siren_model_path'`` (absolute path to the trained model, no extension)
-    and ``'ray_sampling'`` (dict: grid_bins/threshold, or {} → emitter defaults).
+    dict
+        Dictionary containing:
+        - 'siren_model_path': str, absolute path to the Cherenkov SIREN model.
+        - 'ray_sampling': dict, ``{'grid_bins': int, 'threshold': float}`` —
+          first-pass grid resolution and seed threshold for the Cherenkov
+          importance-sampling ray generator (empty dict if not configured).
+        - 'dedx_model_path': str or None, absolute path to the dE/dx SIREN
+          model (None if no ``dedx_model`` block is present — only required
+          when the medium enables scintillation).
+        - 'dedx_sampling': dict, same shape as ``ray_sampling``, driving the
+          scintillation surrogate's first-pass grid.
     """
     normalized_type = normalize_particle_type_for_path(particle_type)
     data_dir = base_dir_path() + f'/data/{material}/{normalized_type}/'
-    with open(data_dir + 'siren_params.json', 'r') as f:
-        sp = json.load(f)
+    config_path = data_dir + 'siren_params.json'
+
+    with open(config_path, 'r') as f:
+        siren_params = json.load(f)
+
+    dedx_block = siren_params.get('dedx_model')
+    dedx_path = data_dir + dedx_block['path'] if dedx_block else None
+
     return {
-        'siren_model_path': data_dir + sp['siren_model']['path'],
-        'ray_sampling': sp.get('ray_sampling', {}),
+        'siren_model_path': data_dir + siren_params['siren_model']['path'],
+        'ray_sampling': siren_params.get('ray_sampling', {}),
+        'dedx_model_path': dedx_path,
+        'dedx_sampling': siren_params.get('dedx_sampling', {}),
     }
 
 def spherical_to_cartesian(theta, phi):

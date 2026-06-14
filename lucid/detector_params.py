@@ -460,6 +460,36 @@ _SCINT_DEFAULTS = {
     "moyal_amp": 0.0, "moyal_loc": 0.0, "moyal_scale": 0.0,
 }
 
+
+def _scintillation_defaults_from_medium(medium_model_path):
+    """Pull DetectorParams-bound scintillation values from a material JSON.
+
+    The material file (e.g. ``config/materials/wbls.json``) is the canonical home
+    for the scintillator's physical numbers — the physics config inherits them so
+    detector configs don't have to copy the WbLS spec verbatim. Returns an empty
+    dict for non-scintillating media (no ``scintillation`` block, e.g. water) or
+    when no material model is referenced — so water stays neutral (S=0).
+    """
+    if not medium_model_path:
+        return {}
+    with open(medium_model_path) as f:
+        m = json.load(f)
+    scint = m.get("scintillation")
+    if not scint:
+        return {}
+    ly = scint.get("light_yield", {})
+    tm = scint.get("timing", {})
+    sp = scint.get("spectrum", {})
+    pick = lambda d, k: d[k] if k in d else None
+    out = {
+        "S": pick(ly, "S"), "kB": pick(ly, "kB"), "C": pick(ly, "C"),
+        "tau_rise": pick(tm, "tau_rise"), "tau_fall": pick(tm, "tau_fall"),
+        "moyal_amp": pick(sp, "moyal_amp"),
+        "moyal_loc": pick(sp, "moyal_loc"),
+        "moyal_scale": pick(sp, "moyal_scale"),
+    }
+    return {k: v for k, v in out.items() if v is not None}
+
 # Angular-reflection-model scalars (Schlick blacksheet + multilayer-Fresnel cathode).
 # Inert unless reflection_model='angular'; configs omit them → filled with physical
 # defaults. Bialkali cathode ~ n_r=2.8, n_k=1.5; blacksheet near-diffuse low-R0.
@@ -617,6 +647,16 @@ def load_physics_config(filepath: str, num_sensors: int = None,
     for field in _FLAT_FIELDS:
         val = data.get(field, None)
         kwargs[field] = _resolve_field(val, config_dir)
+
+    # Scintillation scalars: a scintillating material JSON (wbls) supplies the
+    # physical S/kB/C/tau/moyal values; inherit them for any scint field the
+    # config left absent (NaN). Water's material has no scintillation block →
+    # this is a no-op and _project_missing_scalars fills the neutral 0.0.
+    scint_defaults = _scintillation_defaults_from_medium(medium_model_path)
+    for field, val in scint_defaults.items():
+        v = kwargs.get(field)
+        if v is not None and v.ndim == 0 and bool(jnp.isnan(v)):
+            kwargs[field] = jnp.asarray(val, dtype=jnp.float32)
 
     _project_missing_scalars(kwargs, medium_model_path, qe_curve_path,
                              ref_wl, filepath)

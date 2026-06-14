@@ -1,0 +1,41 @@
+{
+    "form": "stretched_exp_delay",
+    "description": "t(d, E) = d/c + A(E)*(exp((d/lambda(E))^beta(E)) - 1)  -- d in mm, E in MeV, t in ns.  log10 A, log10 lambda and beta are each a cubic in log10 E; coeffs ascending [c0, c1, c2, c3].",
+    "particle": "mu-",
+    "material": "wbls",
+    "c_mm_per_ns": 299.792,
+    "A": {
+        "log10_poly_logE": [
+            -1.1413985390790495,
+            -0.0011668309968835447,
+            -0.0686782496860596,
+            0.0030851333761081207
+        ]
+    },
+    "lambda": {
+        "log10_poly_logE": [
+            -0.511328234243701,
+            1.0056354608899198,
+            0.16246432315097153,
+            -0.026539761397066784
+        ]
+    },
+    "beta": {
+        "poly_logE": [
+            11.557064373395278,
+            -11.460626157203176,
+            3.8278235678067194,
+            -0.3852743551667546
+        ]
+    },
+    "provenance": {
+        "source": "PhotonSim/tools/t0_correction/calculate_t0.py",
+        "scan_dir": "/sdf/data/neutrino/cjesus/CIDER/SIREN_files/t0_parametrization/water/mu-/inputs",
+        "n_energies": 307,
+        "energy_range_mev": [
+            150,
+            100000
+        ],
+        "note": "Copied from data/water/muon/t0.json so the reader does not crash. WbLS Cherenkov-emission physics differs from water; re-fit before using for any WbLS analysis."
+    }
+}
