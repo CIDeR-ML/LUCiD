@@ -1,0 +1,18 @@
+{
+  "name": "smax_water_el_lowE",
+  "description": "Sub-100 MeV s_max scan for e- in water. Fills the gap below the existing fit window (fit_min_mev=100). 1..20 MeV every 1 MeV, then 30..90 MeV every 10 MeV. 100 MeV is intentionally omitted (already in legacy smax_scan_v2 tree). Each cell gets 10k events via the schedule (E < anchor).",
+  "material": "water",
+  "particles": [{"type": "e-"}],
+  "energy_list_MeV": [
+    1, 2, 3, 4, 5, 6, 7, 8, 9, 10,
+    11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
+    30, 40, 50, 60, 70, 80, 90
+  ],
+  "events_schedule": {
+    "base": 10000,
+    "anchor_MeV": 1000,
+    "floor": 1000,
+    "split_above_MeV": 10000,
+    "target_events_per_job": 100
+  }
+}

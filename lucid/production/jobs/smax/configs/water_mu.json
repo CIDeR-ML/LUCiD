@@ -1,0 +1,21 @@
+{
+  "name": "smax_water_mu",
+  "description": "s_max parametrisation scan for mu- in water. 34-energy grid up to 100 GeV; 10x stats of the schedule that produced the original smax_data.csv.",
+  "material": "water",
+  "particles": [{"type": "mu-"}],
+  "energy_list_MeV": [
+    100, 125, 150, 175, 200,
+    275, 350, 425, 500,
+    625, 750, 875, 1000,
+    1250, 1500, 1750, 2000,
+    2750, 3500, 4250, 5000,
+    6250, 7500, 8750, 10000,
+    20000, 30000, 40000, 50000,
+    60000, 70000, 80000, 90000, 100000
+  ],
+  "events_schedule": {
+    "base": 5000,
+    "anchor_MeV": 1000,
+    "floor": 100
+  }
+}

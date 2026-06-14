@@ -1,0 +1,76 @@
+#!/bin/bash
+# User-specific paths configuration for S3DF — TEMPLATE
+# Copy to user_paths.sh and edit. Do NOT commit user_paths.sh.
+#
+# All production runs go through one `apptainer exec lucid.sif lucid-run-job
+# ...` per SLURM job. The unified container ships GEANT4 + ROOT + GENIE +
+# PhotonSim + LUCiD, so the only host-side state is the .sif file and the
+# output directory.
+
+# =============================================================================
+# Cluster identity (read by lucid.production.cluster_common.cluster)
+# =============================================================================
+# `slurm` (S3DF, NERSC, …) or `htcondor` (LXPLUS). The adapter writes the
+# matching submit-description format and uses the matching submit command.
+export CLUSTER="slurm"
+export CLUSTER_SUBMIT_CMD="sbatch"
+# Apptainer bind list (comma-separated) — the shared filesystems each
+# `apptainer exec` needs visible inside the container.
+export APPTAINER_BINDS="/sdf,/fs,/sdf/scratch,/lscratch,/cvmfs"
+
+# =============================================================================
+# Container image
+# =============================================================================
+# Unified LUCiD container. Pull and convert from ghcr.io with:
+#   apptainer pull lucid.sif docker://ghcr.io/cider-ml/lucid:latest
+export LUCID_IMAGE_PATH="/path/to/your/lucid.sif"
+
+# =============================================================================
+# GENIE cross-section splines
+# =============================================================================
+# Path *inside* the container. The default points at the `G18_10a_02_11b`
+# spline bundled in the LUCiD image — matches the in-repo dataprod_*.json
+# configs and needs no cvmfs at runtime. To use a different tune, point at
+# the matching spline file (mount /cvmfs into the container if it lives
+# there).
+export GENIE_XSEC_FILE="/opt/genie_xsec/3_04_00/G18_10a_02_11b/gxspl-min.xml.gz"
+
+# =============================================================================
+# Output paths
+# =============================================================================
+# OUTPUT_BASE_PATH: root for the dataset-production stage (dataprod fan-out).
+# Files land under <base>/<detector>/config_NNNNNN/<E>MeV/.
+export OUTPUT_BASE_PATH="/path/to/your/production/output"
+# SIREN_OUTPUT_BASE_PATH (optional): root for the SIREN-side stages. smax
+# fan-out writes under <base>/smax_parametrization/<material>/<particle>/<E>MeV/,
+# siren_inputs under <base>/training_inputs/<material>/<particle>/<E>MeV/. If
+# unset, both stages fall back to OUTPUT_BASE_PATH.
+#export SIREN_OUTPUT_BASE_PATH="/path/to/your/SIREN_files"
+
+# =============================================================================
+# SLURM configuration
+# =============================================================================
+# SLURM_PARTITION takes a single partition (e.g. "ampere") or a comma list that
+# round-robins jobs across partitions, weighted by an optional :N. For CPU
+# dataprod, "roma:130,milano:272" splits jobs by node count to drain faster.
+# Keep it single-valued on NERSC/HTCondor (they read one target here).
+export SLURM_PARTITION="ampere"
+export SLURM_ACCOUNT="your-account:your-group"
+
+# =============================================================================
+# Resource defaults
+# =============================================================================
+export DEFAULT_CPUS="1"
+export DEFAULT_MEMORY="39936"   # MB
+export DEFAULT_GPUS="1"
+export DEFAULT_TIME="23:00:00"
+
+# =============================================================================
+# Optional: dev-loop bind mounts
+# =============================================================================
+# If set, generate_jobs.sh adds `-B <path>:/opt/{LUCiD,PhotonSim}` to each
+# sbatch's `apptainer exec`, shadowing the baked container copy with your
+# host checkout. Useful for validating source-level changes under SLURM
+# without rebuilding the container. Leave unset for frozen-container runs.
+# export LUCID_DEV_PATH="/path/to/your/LUCiD"
+# export PHOTONSIM_DEV_PATH="/path/to/your/PhotonSim"

@@ -267,7 +267,10 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
             energy=track_energy, position=track_pos, direction=track_dir, t0=0.0,
         )
         photonsim_data = {
-            'photon_origins': photon_origins,
+            # Unify-on-cm: the simulator's data impl divides photon_origins by 100
+            # (cm->m, matching the recon pad_photon_data convention). root_reader /
+            # event_generation work in METERS, so convert m->cm here at the boundary.
+            'photon_origins': photon_origins * 100.0,
             'photon_directions': photon_dirs,
             'photon_times': photon_times,
             'wavelengths': photon_wavelengths,

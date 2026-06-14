@@ -1,0 +1,86 @@
+#!/bin/bash
+# User-specific paths configuration for LXPLUS / HTCondor — TEMPLATE
+# Copy to user_paths.sh and edit. Do NOT commit user_paths.sh.
+#
+# The same `apptainer exec lucid.sif lucid-run-job ...` pipeline as on
+# S3DF, but submitted via condor_submit and writing outputs to EOS. On
+# LXPLUS, AFS holds source checkouts (read-only at job time) and EOS
+# holds outputs and the container .sif.
+
+# =============================================================================
+# Cluster identity (read by lucid.production.cluster_common.cluster)
+# =============================================================================
+export CLUSTER="htcondor"
+export CLUSTER_SUBMIT_CMD="condor_submit"
+# Apptainer bind list — AFS for source, EOS for outputs, cvmfs for GENIE.
+export APPTAINER_BINDS="/afs,/eos,/cvmfs"
+
+# =============================================================================
+# Container image
+# =============================================================================
+# Unified LUCiD container. Pull and convert from ghcr.io with:
+#   mkdir -p /eos/user/$USER_INITIAL/$USER/DIFFSIM/containers
+#   apptainer pull /eos/user/.../DIFFSIM/containers/lucid.sif \
+#       docker://ghcr.io/cider-ml/lucid:latest
+export LUCID_IMAGE_PATH="/eos/user/c/cjesus/DIFFSIM/containers/lucid.sif"
+
+# =============================================================================
+# GENIE cross-section splines
+# =============================================================================
+# Path *inside* the container. The default points at the `G18_10a_02_11b`
+# spline bundled in the LUCiD image — matches the in-repo dataprod_*.json
+# configs and needs no cvmfs at runtime. To use a different tune, point at
+# the matching spline file (cvmfs is already bound via APPTAINER_BINDS).
+export GENIE_XSEC_FILE="/opt/genie_xsec/3_04_00/G18_10a_02_11b/gxspl-min.xml.gz"
+
+# =============================================================================
+# Output paths
+# =============================================================================
+# OUTPUT_BASE_PATH = where the per-job ROOTs are written by lucid-run-job
+# (large; EOS makes sense). Root for the dataset-production stage.
+export OUTPUT_BASE_PATH="/eos/user/c/cjesus/DIFFSIM/output"
+# SIREN_OUTPUT_BASE_PATH (optional): root for the SIREN-side stages. smax
+# fan-out writes under <base>/smax_parametrization/<material>/<particle>/<E>MeV/,
+# siren_inputs under <base>/training_inputs/<material>/<particle>/<E>MeV/. If
+# unset, both stages fall back to OUTPUT_BASE_PATH.
+#export SIREN_OUTPUT_BASE_PATH="/eos/user/c/cjesus/SIREN_files"
+# LOG_BASE_PATH = where the .sub's `output =`, `error =`, `log =` files
+# land. LXPLUS standard schedds reject /eos paths in these fields, so we
+# point them at AFS by default; HTCondorAdapter mirrors the output tree
+# under this root for symmetry. (If you're on an EosSubmit schedd that
+# allows /eos in submit descriptions, set this to a /eos path too.)
+export LOG_BASE_PATH="/afs/cern.ch/work/c/cjesus/DIFFSIM/logs"
+
+# =============================================================================
+# HTCondor job-flavour defaults (the LXPLUS walltime knob)
+# =============================================================================
+# Picks the queue HTCondor matches against. Reference:
+#   espresso       20 min
+#   microcentury   1 h
+#   longlunch      2 h
+#   workday        8 h     ← default for SIREN/smax cells (some high-E electron
+#                            cells overshoot the 2h longlunch cap and get killed
+#                            by SYSTEM_PERIODIC_REMOVE; 8h has plenty of margin)
+#   tomorrow       1 d
+#   testmatch      3 d     ← default for train_siren
+#   nextweek       1 w
+export CONDOR_JOB_FLAVOUR="workday"
+export CONDOR_TRAIN_FLAVOUR="testmatch"
+
+# =============================================================================
+# Resource defaults
+# =============================================================================
+export DEFAULT_CPUS="1"
+export DEFAULT_MEMORY="4000"   # MB; PhotonSim cells stay well under 4 GB
+export DEFAULT_GPUS="0"        # SIREN-input / smax: 0; train_siren overrides
+# DEFAULT_TIME has no HTCondor analogue — JobFlavour above sets walltime.
+
+# =============================================================================
+# Optional: dev-loop bind mounts
+# =============================================================================
+# If set, generate_jobs.py adds `-B <path>:/opt/{LUCiD,PhotonSim}` to each
+# submit description's `apptainer exec`, shadowing the baked container copy
+# with your host checkout. Useful for validating source-level changes under
+# HTCondor without rebuilding the container.
+# export LUCID_DEV_PATH="/afs/cern.ch/work/c/cjesus/DIFFSIM/LUCiD"
+# export PHOTONSIM_DEV_PATH="/afs/cern.ch/work/c/cjesus/DIFFSIM/PhotonSim"

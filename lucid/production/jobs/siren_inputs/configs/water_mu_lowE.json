@@ -1,0 +1,16 @@
+{
+  "name": "siren_water_mu_lowE",
+  "description": "Extend mu- SIREN-input grid down to 150 MeV (10 MeV step, 35 cells). Requires include_extrapolated=true since fit_min_mev=500 MeV. Existing >=500 MeV cells are untouched; the 500 MeV boundary cell is auto-skipped by the driver. 10k events/cell.",
+  "material": "water",
+  "particles": [{"type": "mu-"}],
+  "energy_list_MeV": [150, 160, 170, 180, 190, 200, 210, 220, 230, 240, 250, 260, 270, 280, 290, 300, 310, 320, 330, 340, 350, 360, 370, 380, 390, 400, 410, 420, 430, 440, 450, 460, 470, 480, 490],
+  "events_schedule": {
+    "events_per_cell": 10000,
+    "target_seconds_per_job": 3600,
+    "time_model": {
+      "a_seconds_per_event": 0.06,
+      "b_seconds_per_event_per_mev": 4.22e-4
+    }
+  },
+  "include_extrapolated": true
+}
