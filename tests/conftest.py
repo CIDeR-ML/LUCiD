@@ -25,6 +25,7 @@ _SLOW_FILES = [
     "test_sk_like_integration.py",
     "test_wavelength_integration.py",
     "test_qe_importance_sampling.py",
+    "test_tripwire.py",
 ]
 
 
