@@ -23,7 +23,7 @@ t9 = jnp.asarray(vec9_from_track(1050.,[2.0,-1.0,3.0],[0.2,0.1,0.97],0.0), float
 LBL = ['E','x','y','z','sinth','costh','sinph','cosph','t0']
 pred = SIM.setup_event_simulator(GEOM, NPH, temperature=0.1, K=K, hit_mode='per_photon',
     physics_config=PHYS, default_detector_params=True, particle='muon', wavelength_mode=True,
-    pos_grad_threshold=K, n_grad_iters=K, max_sensors_per_cell=MC, **GRID)
+    pos_grad_threshold=K, n_grad_iters=K, max_candidates_per_ray=MC, **GRID)
 def L(t,k): return jnp.sum(c * pred(track_from_vec9(t), k)[3])
 gad = jax.jit(jax.grad(L)); had = jax.jit(jax.hessian(L))
 MODE = os.environ.get('MODE','both')  # 'grad' | 'hess' | 'both'

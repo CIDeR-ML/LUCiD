@@ -182,7 +182,7 @@ class TestTrackModeKConvergence:
         """Helper: compute per-ray, per-iteration charge arrays."""
         (log_w, _, _, _), K, NPHOT = track_output
         chunk = len(log_w) // K
-        max_sc = chunk // NPHOT  # max_sensors_per_cell
+        max_sc = chunk // NPHOT  # max_candidates_per_ray
         weights_per_k = jnp.exp(log_w.reshape(K, chunk))
         # Sum across sensor cells to get per-ray charge per iteration
         w_per_ray = weights_per_k.reshape(K, max_sc, NPHOT).sum(axis=1)  # (K, NPHOT)

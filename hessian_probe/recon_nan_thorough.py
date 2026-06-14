@@ -40,7 +40,7 @@ TOTAL = dict(val=0, grad=0, hess=0, nval=0, ngrad=0, nhess=0)
 for K in KS:
     pred = SIM.setup_event_simulator(GEOM, NPH, temperature=0.1, K=K, hit_mode='per_photon',
         physics_config=PHYS, default_detector_params=True, particle='muon', wavelength_mode=True,
-        pos_grad_threshold=K, n_grad_iters=K, max_sensors_per_cell=MC, **GRID)
+        pos_grad_threshold=K, n_grad_iters=K, max_candidates_per_ray=MC, **GRID)
     def L(t,k): return jnp.sum(c * pred(track_from_vec9(t), k)[3])
     gad = jax.jit(jax.grad(L)); had = jax.jit(jax.hessian(L))
     nv=ng=nh=cv=cg=ch=0

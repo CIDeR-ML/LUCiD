@@ -44,8 +44,12 @@
 > `gradient_channel` + Component + `SimParams`) was largely motivated by managing FD-vs-AD / score-vs-
 > pathwise gradient channels — that motivation is GONE. **Recommendation: DE-SCOPE §10.5; `lucid.fitting`
 > + the AD Jacobians IS the canonical fitter; take the proposal banner down.** **Cosmetic cleanup DONE
-> (2026-06-14):** (1) `max_sensors_per_cell` is the sole canonical arg — `max_candidates_per_ray` exists
-> in ZERO code/notebooks (the recon notebooks that used it were archived in the reorg), no alias needed;
+> (2026-06-14):** (1) the grid arg was RENAMED `max_sensors_per_cell` → **`max_candidates_per_ray`** to
+> ADOPT `refactor-v2`'s canonical name (refactor-v2 uses `max_candidates_per_ray` pervasively across
+> `lucid/geometry`+`lucid/propagation`+`simulator`; semantically identical — default 4, `sqrt(n/4)` cell
+> sizing — so a pure rename that ALIGNS the shared core files and shrinks the future refactor-v2 merge
+> diff). 54 files (code+notebooks+tests). ⚠️ corrects an earlier note that said "no rename needed" —
+> that was scoped to unification-in-isolation; reconciling with the active refactor-v2 line requires it.
 > (2) `campaign/`+`campaign_recon/` folded into `scripts/` (`git mv` + internal `_ROOT`/path-literal fixes;
 > `lucid/` imports neither). The package (`lucid/` + tests +
 > examples) is merge-ready.
@@ -154,10 +158,14 @@ The one flag that can't default-share: `eigen_clip` (True calib indefinite-FD / 
 
 ## 4. Notebook-driven simplifications (the real usage; from the good_notebooks survey)
 The notebooks are the API spec. They reveal the boilerplate to KILL and one hard rename:
-- ✅ **`max_sensors_per_cell` (unify) vs `max_candidates_per_ray` (recon)** — RESOLVED (2026-06-14):
-  `max_sensors_per_cell` is the sole canonical, explicit arg (`setup_event_simulator` default 4);
-  `max_candidates_per_ray` now appears in ZERO code/notebooks (the recon notebooks that passed it were
-  archived in the reorg), so no alias was needed — the silent-`**grid_params` trap is gone.
+- ✅ **`max_sensors_per_cell` → `max_candidates_per_ray`** — RENAMED (2026-06-14) to ADOPT `refactor-v2`'s
+  canonical name. refactor-v2 (the active/ahead line, 300+ commits past unification) uses
+  `max_candidates_per_ray` pervasively (`lucid/geometry/{box,cylinder,sphere,detector_geometry}`,
+  all of `lucid/propagation/`, `simulator.py` default 4); unification had `max_sensors_per_cell`.
+  Semantically identical (default 4, `sqrt(n/4)` cell-area sizing), so a pure global rename — done
+  across 54 files (lucid core + tests + notebooks + scripts). This ALIGNS the shared core files with
+  refactor-v2 and shrinks the eventual merge diff. ⚠️ supersedes the same-day "no rename needed" note,
+  which was scoped to unification alone — the refactor-v2 reconciliation requires the rename.
 - **`make_sim_pair(geom, physics, ...)`** — ~12 notebooks copy-paste paired prediction(temp .1,K7)/
   data(temp 0,K20) simulators. One helper.
 - **`run_calibration(...)` entry point** — calibration notebooks hand-roll the

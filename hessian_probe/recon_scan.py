@@ -1,5 +1,5 @@
 """Systematically locate (1) the Hessian breaker and (2) the NaN trigger in the RECON path.
-(1) MC (max_sensors_per_cell) x K scan: AD Hessian min-eig / neg-diag / cond + AD-vs-FD grad rel.
+(1) MC (max_candidates_per_ray) x K scan: AD Hessian min-eig / neg-diag / cond + AD-vs-FD grad rel.
 (2) NaN hunt: PLAIN step over many keys/tracks -> any NaN in grad or Hessian?
 FD Hessian (central diff of the loss) as the 'good' reference for conditioning."""
 import os, sys
@@ -23,7 +23,7 @@ t9 = jnp.asarray(vec9_from_track(1050., [2.0, -1.0, 3.0], [0.2, 0.1, 0.97], 0.0)
 def build(MC, K):
     return SIM.setup_event_simulator(GEOM, NPH, temperature=0.1, K=K, hit_mode='per_photon',
         physics_config=PHYS, default_detector_params=True, particle='muon', wavelength_mode=True,
-        pos_grad_threshold=K, n_grad_iters=K, max_sensors_per_cell=MC, **GRID)
+        pos_grad_threshold=K, n_grad_iters=K, max_candidates_per_ray=MC, **GRID)
 
 def analyze(pred, key):
     def L(t): return jnp.sum(c * pred(track_from_vec9(t), key)[3])

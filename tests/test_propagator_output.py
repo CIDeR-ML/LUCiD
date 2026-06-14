@@ -86,7 +86,7 @@ class TestCylinderPropagator:
         result = self.dg.propagator(origins, dirs)
         assert result['positions'].shape == (n_rays, 3)
         assert result['normals'].shape == (n_rays, 3)
-        # sensor_weights: (max_sensors_per_cell, n_rays)
+        # sensor_weights: (max_candidates_per_ray, n_rays)
         assert result['sensor_weights'].shape[1] == n_rays
 
     def test_propagator_is_jit_compiled(self):

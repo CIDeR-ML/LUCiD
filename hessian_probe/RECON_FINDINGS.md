@@ -27,7 +27,7 @@ LUCiD_unification. Probes: recon0.py (reproduce), recon_scan.py (MC×K + NaN hun
 - GEOMETRY (cylinder): `sqrt(discriminant)` ray-intersection (2nd deriv ~1/disc^1.5 -> blows up for
   near-tangent rays); `argmin(ts)`/`min(ts)` surface choice (kink where wall≈cap); `floor` cell
   index (sensor-set JUMPS at cell boundaries — deterministic, NO score, so AD MISSES them ->
-  gradient BIAS, FD sees them); max_sensors_per_cell truncation.
+  gradient BIAS, FD sees them); max_candidates_per_ray truncation.
 - STEP (photon_step): is_scat hard branch + detached reflection normal (multi-bounce, K>=2).
 
 ## Discriminator (recon_scan.py, running): MC∈{4,16,64} K∈{1,2,8}

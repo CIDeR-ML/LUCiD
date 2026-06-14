@@ -21,7 +21,7 @@ R = float(getattr(det, 'R', 16.9)); Hd = float(getattr(det, 'H', 36.0))
 c = jnp.asarray(np.random.default_rng(0).standard_normal(ND))
 pred = SIM.setup_event_simulator(GEOM, NPH, temperature=0.1, K=K, hit_mode='per_photon',
     physics_config=PHYS, default_detector_params=True, particle='muon', wavelength_mode=True,
-    pos_grad_threshold=K, n_grad_iters=K, max_sensors_per_cell=MC, **GRID)
+    pos_grad_threshold=K, n_grad_iters=K, max_candidates_per_ray=MC, **GRID)
 def L(t, k): return jnp.sum(c * pred(track_from_vec9(t), k)[3])
 gad = jax.jit(jax.grad(L)); had = jax.jit(jax.hessian(L))
 # STRESS configs: (label, vtx, dir). near-wall + radial (photons hit wall at near-grazing),
