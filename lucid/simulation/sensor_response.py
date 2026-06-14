@@ -234,6 +234,61 @@ def make_hits_data(
     return measured_charge, measured_time
 
 
+def make_hits_per_photon(
+        flat_weights, flat_indices, flat_times, num_detectors,
+        qe=0.2, qe_corrections=None, rng_key=None, threshold=1e-5,
+        apply_smearing=False, tts=0.0, flat_segment_idx=None):
+    """Per-sensor totals PLUS pass-through per-photon arrays for host aggregation.
+
+    The production v3 'hits' file needs a per-(segment, sensor) PE decomposition,
+    which is done on the host in NumPy. This mode returns the per-sensor measured
+    charge/time (identical QE + TTS draws to :func:`make_hits_data`) AND the
+    surviving per-photon arrays (QE-weight, true + TTS-smeared times, sensor index,
+    segment index) so the caller can group them however it likes.
+
+    ``tts`` (ns) is the per-photon transit-time-spread sigma (from
+    ``detector_params.response.tts``); ``tts=0`` ⇒ no smear. Mirrors make_hits_data's
+    RNG/threshold semantics so the per-sensor outputs match the realistic mode.
+
+    Returns
+    -------
+    (measured_charge, measured_time_true, measured_time_reco,
+     qe_weights, qe_filtered_times, qe_filtered_smeared, flat_indices, flat_segment_idx)
+    """
+    rng_key, smear_time_key = jax.random.split(rng_key)
+    qe_key, smear_counts_key = jax.random.split(rng_key)
+
+    timing_mask = (flat_weights > threshold) & (flat_times > 0)
+    per_photon_qe = qe * qe_corrections[flat_indices] if qe_corrections is not None else qe
+    detection_probs = jax.random.uniform(qe_key, shape=flat_weights.shape)
+    detected_mask = detection_probs < per_photon_qe
+    qe_weights = flat_weights * detected_mask.astype(jnp.float32)
+
+    # First-arrival WITHOUT TTS (true) and WITH per-photon TTS (reco).
+    qe_filtered_times = jnp.where(detected_mask & timing_mask, flat_times, jnp.inf)
+    eff_tts = jnp.asarray(tts)
+    smeared_times = flat_times + jax.random.normal(smear_time_key, shape=flat_times.shape) * eff_tts
+    qe_filtered_smeared = jnp.where(detected_mask & timing_mask, smeared_times, jnp.inf)
+
+    total_charge = jax.ops.segment_sum(qe_weights, flat_indices, num_segments=num_detectors)
+    detector_mins_true = jax.ops.segment_min(qe_filtered_times, flat_indices, num_segments=num_detectors)
+    detector_mins_reco = jax.ops.segment_min(qe_filtered_smeared, flat_indices, num_segments=num_detectors)
+
+    nonzero_mask = ((total_charge > 1e-10) & (detector_mins_true > 0)
+                    & jnp.isfinite(detector_mins_true))
+    if apply_smearing:
+        measured_charge = jnp.where(
+            nonzero_mask, smear_charges_SK_like(total_charge, key=smear_counts_key), 0.0)
+    else:
+        measured_charge = jnp.where(nonzero_mask, total_charge, 0.0)
+    measured_time_true = jnp.where(nonzero_mask, detector_mins_true, 0.0)
+    measured_time_reco = jnp.where(nonzero_mask, detector_mins_reco, 0.0)
+
+    return (measured_charge, measured_time_true, measured_time_reco,
+            qe_weights, qe_filtered_times, qe_filtered_smeared,
+            flat_indices, flat_segment_idx)
+
+
 def make_hits_likelihood(
         flat_weights, flat_indices, flat_times, num_detectors,
         qe=0.2, qe_corrections=None, threshold=1e-10):

@@ -38,6 +38,7 @@ from lucid.simulation.photon_step import (
 from lucid.simulation.reflection import get_reflection_model
 from lucid.simulation.sensor_response import (
     make_hits_simulation, make_hits_data, make_hits_likelihood, make_hits_moments,
+    make_hits_per_photon,
     build_make_hits_waveform, build_make_hits_waveform_expected,
     build_make_hits_per_photon_shotgun,
 )
@@ -265,7 +266,7 @@ def setup_event_simulator(
         return detector.bounds_check(positions)
 
     # ---- Resolve hit_mode ---------------------------------------------------
-    _VALID_HIT_MODES = ('aggregated', 'per_photon', 'realistic', 'moments',
+    _VALID_HIT_MODES = ('aggregated', 'per_photon', 'realistic', 'moments', 'per_segment',
                         'waveform', 'waveform_expected', 'shotgun_per_photon')
     if hit_mode is None:
         if sim_config.is_data:
@@ -281,25 +282,34 @@ def setup_event_simulator(
     # ---- make_hits wrapper selection ----------------------------------------
     # Every wrapper accepts a trailing ``response`` bundle (gain, t0, spe_width, tts)
     # built from DetectorParams at call time; only the moments mode consumes it.
-    def _make_hits_aggregated(flat_weights, flat_indices, flat_times, num_sensors, qe_key, qe, qe_corrections, response=None):
+    def _make_hits_aggregated(flat_weights, flat_indices, flat_times, num_sensors, qe_key, qe, qe_corrections, response=None, flat_segment_idx=None):
         return make_hits_simulation(flat_weights, flat_indices, flat_times, num_sensors,
                                     qe=qe, qe_corrections=qe_corrections)
 
-    def _make_hits_per_photon(flat_weights, flat_indices, flat_times, num_sensors, qe_key, qe, qe_corrections, response=None):
+    def _make_hits_per_photon(flat_weights, flat_indices, flat_times, num_sensors, qe_key, qe, qe_corrections, response=None, flat_segment_idx=None):
         return make_hits_likelihood(flat_weights, flat_indices, flat_times, num_sensors,
                                     qe=qe, qe_corrections=qe_corrections)
 
-    def _make_hits_realistic(flat_weights, flat_indices, flat_times, num_sensors, qe_key, qe, qe_corrections, response=None):
+    def _make_hits_realistic(flat_weights, flat_indices, flat_times, num_sensors, qe_key, qe, qe_corrections, response=None, flat_segment_idx=None):
         tts = 0.0 if response is None else response[3]
         return make_hits_data(flat_weights, flat_indices, flat_times, num_sensors,
                               qe=qe, qe_corrections=qe_corrections,
                               rng_key=qe_key, apply_smearing=sim_config.apply_smearing, tts=tts)
 
-    def _make_hits_moments(flat_weights, flat_indices, flat_times, num_sensors, qe_key, qe, qe_corrections, response=None):
+    def _make_hits_moments(flat_weights, flat_indices, flat_times, num_sensors, qe_key, qe, qe_corrections, response=None, flat_segment_idx=None):
         gain, t0, spe_width, tts = response
         return make_hits_moments(flat_weights, flat_indices, flat_times, num_sensors,
                                  qe=qe, qe_corrections=qe_corrections,
                                  gain=gain, spe_width=spe_width, t0=t0, tts=tts)
+
+    def _make_hits_per_segment(flat_weights, flat_indices, flat_times, num_sensors, qe_key, qe, qe_corrections, response=None, flat_segment_idx=None):
+        # Production v3: per-sensor totals + per-photon pass-through arrays (incl the
+        # per-photon segment index) for the host-side per-(segment, sensor) groupby.
+        tts = 0.0 if response is None else response[3]
+        return make_hits_per_photon(flat_weights, flat_indices, flat_times, num_sensors,
+                                    qe=qe, qe_corrections=qe_corrections,
+                                    rng_key=qe_key, apply_smearing=sim_config.apply_smearing,
+                                    tts=tts, flat_segment_idx=flat_segment_idx)
 
     # Shotgun hit modes (waveform + per-photon). Defaults match SK-realistic
     # PMT behaviour; override via ``waveform_config``.
@@ -311,7 +321,7 @@ def setup_event_simulator(
     if hit_mode == 'waveform':
         _wf_fn = build_make_hits_waveform(n_photons=n_photons, **_wf_cfg)
         def _make_hits_waveform(flat_weights, flat_indices, flat_times, num_sensors,
-                                qe_key, qe, qe_corrections, response=None):
+                                qe_key, qe, qe_corrections, response=None, flat_segment_idx=None):
             return _wf_fn(flat_weights, flat_indices, flat_times, num_sensors,
                           qe_key, qe, qe_corrections)
     elif hit_mode == 'waveform_expected':
@@ -321,7 +331,7 @@ def setup_event_simulator(
         _wf_exp_fn = build_make_hits_waveform_expected(
             n_photons=n_photons, **_wf_exp_cfg)
         def _make_hits_waveform_expected(flat_weights, flat_indices, flat_times, num_sensors,
-                                         qe_key, qe, qe_corrections, response=None):
+                                         qe_key, qe, qe_corrections, response=None, flat_segment_idx=None):
             return _wf_exp_fn(flat_weights, flat_indices, flat_times, num_sensors,
                               qe_key, qe, qe_corrections)
     elif hit_mode == 'shotgun_per_photon':
@@ -330,7 +340,7 @@ def setup_event_simulator(
             tts_sigma_ns=_wf_cfg['tts_sigma_ns'],
             smear_time=_wf_cfg['smear_time'])
         def _make_hits_shotgun_pp(flat_weights, flat_indices, flat_times, num_sensors,
-                                  qe_key, qe, qe_corrections, response=None):
+                                  qe_key, qe, qe_corrections, response=None, flat_segment_idx=None):
             return _pp_fn(flat_weights, flat_indices, flat_times, num_sensors,
                           qe_key, qe, qe_corrections)
 
@@ -339,6 +349,7 @@ def setup_event_simulator(
         'per_photon': _make_hits_per_photon,
         'realistic': _make_hits_realistic,
         'moments': _make_hits_moments,
+        'per_segment': _make_hits_per_segment,
         'waveform': _make_hits_waveform if hit_mode == 'waveform' else None,
         'waveform_expected': _make_hits_waveform_expected if hit_mode == 'waveform_expected' else None,
         'shotgun_per_photon': _make_hits_shotgun_pp if hit_mode == 'shotgun_per_photon' else None,
@@ -472,7 +483,7 @@ def setup_event_simulator(
             n_rays, detector_params, key,
             num_sensors, K, n_grad_iters, max_candidates_per_ray,
             propagate_fn, photon_update_fn,
-            pos_grad_threshold, make_hits_fn, is_volume=False):
+            pos_grad_threshold, make_hits_fn, is_volume=False, segment_idx=None):
         """Core photon propagation loop.
 
         Parameters
@@ -653,9 +664,12 @@ def setup_event_simulator(
         # 'moments' mode; ignored by the others. Neutral defaults ⇒ byte-identical.
         response = (detector_params.per_pmt.gain, detector_params.per_pmt.t0,
                     detector_params.response.spe_width, detector_params.response.tts)
+        # Per-photon segment id (per_segment mode), broadcast to flat shape via the
+        # same i % n_rays trick as flat_qe. None for every other mode → byte-identical.
+        flat_segment_idx = (segment_idx[photon_idx] if segment_idx is not None else None)
         return make_hits_fn(
             flat_weights, flat_indices, flat_times, num_sensors, qe_key, flat_qe, qe_corrections,
-            response)
+            response, flat_segment_idx=flat_segment_idx)
 
     # ================================================================
     # Mode-specific simulation functions
@@ -731,6 +745,10 @@ def setup_event_simulator(
         else:
             qe_per_photon = jnp.full(n_rays, detector_params.response.qe)
 
+        # Per-photon segment id for the per_segment production hit mode (int32, padded
+        # with -1). None for recon data (pad_photon_data) → other hit modes ignore it.
+        _segment_idx = photon_data.get('photon_segment_index', None)
+
         _pgt = sim_config.K if pos_grad_threshold is None else pos_grad_threshold
         return _common_propagation(
             final_origins, final_directions, photon_intensities, photon_times,
@@ -738,7 +756,8 @@ def setup_event_simulator(
             qe_per_photon,
             n_rays, detector_params, key, NUM_SENSORS, sim_config.K, sim_config.effective_n_grad_iters, max_candidates_per_ray,
             propagate_photons, photon_update_fn,
-            pos_grad_threshold=_pgt, make_hits_fn=_make_hits_fn, is_volume=_is_volume)
+            pos_grad_threshold=_pgt, make_hits_fn=_make_hits_fn, is_volume=_is_volume,
+            segment_idx=_segment_idx)
 
     # SIREN config: model path + ray-sampling knobs. The s/s_max-trained net carries its
     # own count/range model (nphot/smax) in the trained-model metadata, read in the context.
