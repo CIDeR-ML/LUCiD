@@ -66,6 +66,33 @@
 >   unification-only symbols the fitting/recon path imports (`pad_photon_data`). **custom_vjp drop: OK**
 >   (conditional on rigorous NaN-stress + AD==FD testing). **Nesting: OK** if done correctly (leaf-order pin).
 
+> ## PRODUCTION + SCINTILLATION FINDINGS (agent deep dive, 2026-06-14)
+> - **Scintillation calibration is AD-CLEAN as-is for `S, kB, C, tau_rise, tau_fall`** (verdict B.4):
+>   `intensities=(S·E/N)/(1+kB·d+C·d²)` is smooth (d is SIREN/energy-derived, independent of S/kB/C); τ
+>   enters via reparam `-τ·log(U)`; all stochastic ops (R-sampling, isotropic, Moyal) sit on the
+>   energy/constant path, NOT the calib-param path → unbiased `jacfwd`. **So wbls scint fitting works
+>   without emitter rework** (good for telescope-co-equal). EXCEPTIONS (intentional, defer): `moyal_*` are
+>   baked-at-setup (not differentiable — need a reparam'd Moyal sampler to fit the spectrum), the
+>   `cherenkov_fraction` budget split is a discrete `int(round)`, and DATA-mode scint (Poisson draws) is
+>   non-diff (production-only, never on a gradient path).
+> - ⚠️ **Adding unification's Mie to scint photons SHIFTS wbls/ice scint-mode numerics** (the wbls assets
+>   were tuned vs refactor-v2's Mie-less optics), and the v3 byte-identity tests are Cherenkov-ONLY so they
+>   WON'T catch it → add a dedicated **wbls scint-mode forward validation** when scint lands.
+> - **PRODUCTION is NOT wholesale-additive (verdict A.5)** — outer layers (cluster_common, configs, jobs,
+>   generate_macro, run_genie, verify) are safe, but FOUR hard forward couplings must be ported into the
+>   base first (these are Phase-4 prerequisites, NOT Phase-1 blockers): (i) **`hit_mode='per_segment'`** —
+>   unification DROPPED it (kept `moments`); it's the v3 data-mode backbone (`make_hits_per_segment`,
+>   per-(segment,sensor) decomposition) → must port into simulator `_VALID_HIT_MODES` + sensor_response;
+>   (ii) **stamp `.medium` + `.det_geom`** on the returned callables (unification stamps only
+>   `.default_detector_params`; the v3 generators read all three); (iii) **flat→nested scint reads** —
+>   `event_generation.py` reads flat `dp.S/.kB/.C/.tau_*/.moyal_*` → become `dp.scintillation.*`;
+>   (iv) **port the whole new `lucid/sources/` subtree** (`seed_utils, root_reader, event_builder,
+>   event_generation, v3_writer, v3_reader, particle_physics, legacy_io`) preserving `pad_photon_data` +
+>   bucketed tracing (`_trace_event_bucketed`) — the new modular `event_io` shim WINS over the legacy
+>   monolith. The v3 `emission_process` tagging is done in NumPy by the caller AFTER the forward, so the
+>   writer is forward-shape-independent (byte tests survive the optics merge as long as the Cherenkov
+>   per-segment numerics are preserved).
+
 > ## CONSENSUS VERDICT (two independent code-grounded agent reviews, 2026-06-14)
 > **Direction APPROVED with caveats — both reviewers: feasible.** The base-side review largely
 > REFUTED the main fear (unification independently carries every substantive water-mode fix
