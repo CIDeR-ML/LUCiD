@@ -47,10 +47,11 @@ data_sim = setup_event_simulator(GEOM, NBUF, temperature=None, K=K, is_data=True
 # CHERENKOV_NORM: emitter absolute-normalization calibration (the new s/s_max net's nphot
 # block is ~1.66x low vs GEANT4 — re-validation finding; 1.0 = uncorrected new net).
 CHNORM = float(os.environ.get('CHERENKOV_NORM', '1.0'))
+SMAXNORM = float(os.environ.get('CHERENKOV_SMAX', '1.0'))   # longitudinal s_max(E) stretch
 pred = setup_event_simulator(GEOM, NPH, temperature=0.1, K=K, hit_mode='per_photon',
                              physics_config=PHYS, default_detector_params=True, particle='muon',
                              wavelength_mode=True, pos_grad_threshold=K, n_grad_iters=K,
-                             cherenkov_photon_norm=CHNORM, **GRID)
+                             cherenkov_photon_norm=CHNORM, cherenkov_smax_norm=SMAXNORM, **GRID)
 print(f'combo: NKEYS={NKEYS} NPH={NPH} FISHER_MODE={FISHER_MODE} LR={LR} NITERS={NITERS}', flush=True)
 model = ReconModel(pred, ND, sigma=2.5, delta=1.0)
 
