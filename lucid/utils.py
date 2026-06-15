@@ -509,27 +509,15 @@ def superimpose_multiple_events(charges_list, times_list):
 #   print_event_kinematics, full_to_sparse (copy), sparse_to_full (copy)
 # ---------------------------------------------------------------------------
 
-# Backward-compat re-exports so existing imports keep working
-from lucid.sources.event_io import (               # noqa: F401
-    save_single_event,
-    load_single_event,
-    get_random_root_entry_index,
-    read_photon_data_from_root,
-    get_pdg_code,
-    get_particle_mass,
-    save_single_event_with_extended_info,
-    save_single_event_with_particle_info,
-    merge_event_files,
-    read_multi_folder_events,
-    read_event_file,
-    extract_particle_properties,
-    analyze_loaded_particle,
-    analyze_event_directory,
-    PARTICLE_MASSES,
-    momentum_to_angles_and_energy,
-    analyze_event_kinematics,
-    print_event_kinematics,
-)
+# Backward-compat re-exports from lucid.sources.event_io live at the BOTTOM of
+# this module (see end of file). They must be imported AFTER normalize() /
+# generate_orthonormal_basis() are defined: event_io pulls in
+# lucid.sources.siren_rays, which does `from lucid.utils import normalize`, so a
+# top-of-module re-export here would be a circular import (normalize undefined
+# yet). Keeping it last lets `import lucid.utils` and the documented
+# `from lucid.detector_params import ...` path work without the eager-__init__
+# pre-warm that previously masked the cycle.
+
 
 def load_range_params(particle, medium):
     """
@@ -819,3 +807,31 @@ def generate_orthonormal_basis(v):
     w = jnp.cross(v, u)
 
     return jnp.stack([u, w, v], axis=-1)
+
+
+# ---------------------------------------------------------------------------
+# Backward-compat re-exports so existing `from lucid.utils import ...` keep
+# working. Placed at the END of the module (after normalize /
+# generate_orthonormal_basis are defined) to avoid the circular import via
+# lucid.sources.siren_rays -> lucid.utils.normalize. See the note near the top.
+# ---------------------------------------------------------------------------
+from lucid.sources.event_io import (               # noqa: F401,E402
+    save_single_event,
+    load_single_event,
+    get_random_root_entry_index,
+    read_photon_data_from_root,
+    get_pdg_code,
+    get_particle_mass,
+    save_single_event_with_extended_info,
+    save_single_event_with_particle_info,
+    merge_event_files,
+    read_multi_folder_events,
+    read_event_file,
+    extract_particle_properties,
+    analyze_loaded_particle,
+    analyze_event_directory,
+    PARTICLE_MASSES,
+    momentum_to_angles_and_energy,
+    analyze_event_kinematics,
+    print_event_kinematics,
+)

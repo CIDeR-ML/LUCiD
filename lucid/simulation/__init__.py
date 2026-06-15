@@ -11,6 +11,7 @@ from lucid.simulation.photon_step import (
 )
 from lucid.simulation.sensor_response import (
     make_hits_simulation, make_hits_data, make_hits_likelihood,
+    make_hits_per_photon,
     build_make_hits_waveform, build_make_hits_per_photon_shotgun,
 )
 from lucid.simulation.types import (
