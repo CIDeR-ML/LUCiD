@@ -73,8 +73,7 @@ def setup_event_simulator(
         reflection_model='scalar',
         reflection_wavelength=400.0,
         spectrum=None,
-        cherenkov_photon_norm=1.0,
-        cherenkov_smax_norm=1.0,
+        cherenkov_emission_band=None,
         **grid_params):
     """
     Set up and return an event simulator using DetectorParams / ParticleParams.
@@ -382,6 +381,24 @@ def setup_event_simulator(
         _medium_wl = None
         _qe_fn = None
 
+    # ---- Cherenkov λ-SAMPLING band (Method A) ----------------------------
+    # The medium grid + QE machinery stay clamped to [_wl_lo, _wl_hi] (the
+    # [300,700]∩QE window the water medium covers). But the net's nphot(E) is
+    # the photon count over the GEANT4 EMISSION band (e.g. [275,674] nm), which
+    # extends past the QE/medium window. Sampling only over [_wl_lo,_wl_hi]
+    # treats all nphot photons as detectable → over-counts charge by the
+    # QE-dead fringe fraction (~17%, drives recon dE ≈ −13%). Sampling over the
+    # true emission band instead lets QE(λ)=0 (out-of-knot) and the medium
+    # interp-clamp make the fringe photons INERT, so the detected charge uses
+    # the correct in-band fraction with NO scalar norm. Default None →
+    # byte-identical (sample over [_wl_lo,_wl_hi]); pass the net's GEANT4
+    # emission band to fix the normalization.
+    if cherenkov_emission_band is not None:
+        _sample_lo = float(cherenkov_emission_band[0])
+        _sample_hi = float(cherenkov_emission_band[1])
+    else:
+        _sample_lo, _sample_hi = _wl_lo, _wl_hi
+
     # ---- Wavelength sampling mode ----------------------------------------
     # 'cherenkov'   : Method A — λ ~ 1/λ², per-photon QE weight = qe_fn(λ).
     # 'cherenkov_qe': Method B — λ ~ QE(λ)/λ² (importance sampling),
@@ -446,7 +463,7 @@ def setup_event_simulator(
                 sampled_via_qe_importance = True
             else:
                 wavelengths = sample_cherenkov_wavelengths(
-                    wl_key, n, lambda_min=_wl_lo, lambda_max=_wl_hi)
+                    wl_key, n, lambda_min=_sample_lo, lambda_max=_sample_hi)
         else:
             wavelengths = jnp.asarray(wavelengths)
             if wavelengths.ndim == 0:
@@ -816,7 +833,6 @@ def setup_event_simulator(
             if _has_cherenkov:
                 ch_dirs, ch_origins, ch_intens = cherenkov_get_rays(
                     track_origin, track_direction, energy, _n_cher, model_params, cher_key)
-                ch_intens = ch_intens * cherenkov_photon_norm   # emitter absolute-normalization calibration
                 ch_dist_mm = jnp.linalg.norm(ch_origins - track_origin, axis=1) * 1000
                 ch_t0 = jax.lax.stop_gradient(_pt0(ch_dist_mm, energy,
                                                    jnp.asarray(a_c), jnp.asarray(l_c), jnp.asarray(b_c)))
@@ -867,7 +883,6 @@ def setup_event_simulator(
         # (pmf × n_photons_fn(E)); no separate normalization or mean_topk amplitude.
         photon_directions, photon_origins, photon_intensities = cherenkov_get_rays(
             track_origin, track_direction, energy, Nphot, model_params, ray_key)
-        photon_intensities = photon_intensities * cherenkov_photon_norm   # emitter absolute-normalization calibration
         photon_times = jnp.zeros((Nphot,))
 
         distances_to_vertex = jnp.linalg.norm(photon_origins - track_origin, axis=1) * 1000
@@ -954,12 +969,6 @@ def setup_event_simulator(
         # ranges + smax/nphot from the trained-model metadata). Referenced as a closure var
         # by _simulation_without_data_impl.
         _cher_ctx = build_cherenkov_context(photonsim_predictor, siren_cfg['ray_sampling'])
-        if cherenkov_smax_norm != 1.0:
-            # Stretch the longitudinal track scale s_max(E) — the new net's emission is
-            # ~15% short vs GEANT4 (front-loaded), an energy-biasing defect orthogonal to
-            # the nphot yield knob. 1.0 = no-op (byte-identical).
-            _base_smax = _cher_ctx.s_max_fn
-            _cher_ctx = _cher_ctx._replace(s_max_fn=lambda E: _base_smax(E) * cherenkov_smax_norm)
         cherenkov_get_rays = make_cherenkov_surrogate_fn(_cher_ctx)
         t0_params = unpack_t0_params(particle, material)   # (a_coeffs, l_coeffs, b_coeffs) cubic
 
