@@ -1,6 +1,16 @@
 """Shared fixtures for the LUCiD test suite."""
 import os
-os.environ["JAX_PLATFORM_NAME"] = "cpu"
+# Force CPU-only BEFORE importing jax. JAX_PLATFORM_NAME alone does NOT stop
+# jaxlib's CUDA plugin from probing the GPU at import: on a node whose NVIDIA
+# UVM driver is wedged or heavily contended (e.g. concurrent GPU jobs), that
+# probe blocks the process in uninterruptible D-state (wchan
+# uvm_gpu_retain_by_uuid) — which looks like the whole suite "hanging forever"
+# and gets it killed. Hiding the GPU and setting the authoritative JAX_PLATFORMS
+# var makes the fast suite never touch the driver. setdefault leaves an explicit
+# CUDA_VISIBLE_DEVICES (e.g. a deliberate GPU run) untouched.
+os.environ.setdefault("CUDA_VISIBLE_DEVICES", "")
+os.environ["JAX_PLATFORMS"] = "cpu"
+os.environ["JAX_PLATFORM_NAME"] = "cpu"  # back-compat with older jaxlib
 
 import pytest
 import jax
