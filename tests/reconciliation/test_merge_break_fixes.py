@@ -84,6 +84,17 @@ def test_event_io_routes_to_raw_schema_no_keyerror(tmp_path):
     np.testing.assert_allclose(o, oc * 100.0, rtol=1e-4)
 
 
+def test_particle_reader_rejects_chunked_schema(tmp_path):
+    """The legacy particle-genealogy reader read_particle_data_from_photonsim only
+    supports the legacy (per-photon-on-OpticalPhotons) schema. On a chunked
+    OpticalPhotonsRaw ROOT it must raise a clear, actionable error pointing at the
+    v3 chain — NOT a cryptic uproot KeyInFileError deep in tree.arrays()."""
+    from lucid.sources.event_io import read_particle_data_from_photonsim
+    _write_raw_root(str(tmp_path / "raw.root"))
+    with pytest.raises(KeyError, match="chunked PhotonSim schema|OpticalPhotonsRaw"):
+        read_particle_data_from_photonsim(str(tmp_path / "raw.root"), 0)
+
+
 def test_scintillation_params_nested_access():
     """The WbLS data path reads scintillation scalars via .scintillation.*; the flat alias does
     not exist (and must not be reintroduced)."""
