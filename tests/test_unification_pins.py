@@ -186,13 +186,20 @@ def test_no_env_reads_in_lucid_package():
     EXEMPT: ``lucid/production/`` — the data-production ORCHESTRATION layer is env-driven
     by design (external-binary paths PHOTONSIM_BIN / GENIE_PREFIX / GENIE_XSEC_FILE; cluster
     scheduling). These are infra config, not forward/physics knobs, and never touch the
-    differentiable forward. The ratchet stays strict for simulation/sources/geometry/
-    wavelength/fitting/siren/optimization.
+    differentiable forward. Also EXEMPT: ``lucid/siren/training/photonsim_data/`` — the
+    OFFLINE SIREN lookup-table builders that interface with the external PhotonSim checkout
+    (PHOTONSIM_DEV_PATH, a ``--photonsim-dir`` CLI fallback) — same external-path class as
+    PHOTONSIM_BIN, offline data orchestration, never touches the differentiable forward. The
+    ratchet stays strict for simulation/sources/geometry/wavelength/fitting/optimization and
+    the SIREN forward/model code (everything in siren/ EXCEPT the photonsim_data builders).
     """
     import os
     import re
     root = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'lucid')
-    _EXEMPT = (os.path.join(root, 'production') + os.sep,)
+    _EXEMPT = (
+        os.path.join(root, 'production') + os.sep,
+        os.path.join(root, 'siren', 'training', 'photonsim_data') + os.sep,
+    )
     pat = re.compile(r'os\.environ|os\.getenv|getenv\(')
     offenders = []
     for dirpath, _, files in os.walk(root):
