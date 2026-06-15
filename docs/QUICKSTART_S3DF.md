@@ -131,6 +131,41 @@ export PHOTONSIM_DEV_PATH="$PWD/PhotonSim"
 echo "y" | ./submit_all_configs.sh -t -s -o /sdf/data/<user>/dev_test
 ```
 
+## Running the JAX stack on a GPU
+
+The container's baked `jaxlib` is **CPU-only** — `jax.devices()` returns
+`CpuDevice` even on a GPU node with `--nv`. The CUDA build is not in the
+`.sif`; it lives in a separate user-site env that gets layered onto the
+container at run time:
+
+```
+LUCID_ENV_BASE=/sdf/data/neutrino/cjesus/python_envs/lucid
+```
+
+This holds the `jax-cuda12-plugin` + `nvidia-*-cu12` wheels matched to the
+container's `jax 0.4.38`, plus `optax`. Inject it with
+`APPTAINERENV_PYTHONUSERBASE` (this maps to `PYTHONUSERBASE` inside the
+container, so its `site-packages` is added to the user-site path) and add
+`--nv`. The interactive/Jupyter recipe is in
+[`JUPYTER_SETUP.md`](../../JUPYTER_SETUP.md) (lives under `NB_VALIDATION/`);
+for a batch job the same two ingredients apply:
+
+```bash
+APPTAINERENV_PYTHONUSERBASE=/sdf/data/neutrino/cjesus/python_envs/lucid \
+APPTAINERENV_PYTHONPATH="" \
+apptainer exec --nv -B /sdf,/fs,/sdf/scratch,/lscratch,/cvmfs \
+    -B "$PWD/LUCiD:/opt/LUCiD" \
+    "$LUCID_IMAGE_PATH" \
+    /opt/conda/bin/python3 /opt/LUCiD/<your_script>.py
+```
+
+`jax.devices()` then returns `CudaDevice`. To run against a bind-mounted
+checkout *and* the GPU env, put the checkout's root first on `sys.path` so
+its `lucid` wins over the env's editable `lucid` (which points at the
+`NB_VALIDATION/` tree). Request a GPU node via `--partition=turing`
+(RTX 2080 Ti) or `ampere`/`ada`/`hopper`; the SIREN GPU training is the
+only *production* GPU path and uses PyTorch, not JAX.
+
 ## Useful commands
 
 ```bash
