@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>LUCiD Event Viewer</title>
+<link rel="stylesheet" href="viewer.css">
+</head>
+<body>
+
+<div id="overlay"><div class="spinner"></div><div class="msg" id="overlayMsg">Loading event...</div></div>
+
+<div id="loading">
+  <h1>LUCiD</h1>
+  <div class="sub">Event Viewer</div>
+  <div id="loadStatus">html loaded, waiting for viewer.js...</div>
+</div>
+
+<div id="app">
+  <div id="toolbar">
+    <div class="logo">LUCiD</div>
+    <div class="sep"></div>
+    <span class="toolbar-label">EVENT</span>
+    <div class="btn-group">
+      <button id="evPrev">&larr;</button>
+      <input type="number" id="evInput" value="0" min="0">
+      <button id="evNext">&rarr;</button>
+    </div>
+    <span id="evTotal" class="toolbar-label"></span>
+    <div class="sep"></div>
+
+    <!-- 3D view mode: either the PMT event display OR the truth segments. -->
+    <span class="toolbar-label">VIEW</span>
+    <div class="btn-group" id="viewGrp">
+      <button data-v="pmts" class="active">PMTs</button>
+      <button data-v="edep">EDEP</button>
+    </div>
+
+    <div class="sep"></div>
+
+    <!-- Continuous field toggle: drives coloring of whichever view is active. -->
+    <span class="toolbar-label">FIELD</span>
+    <div class="btn-group" id="fieldGrp">
+      <button data-v="charge" class="active">CHARGE</button>
+      <button data-v="time">TIME</button>
+      <button data-v="beta">BETA</button>
+      <!-- CHER FRAC: per-sensor PE_cher / (PE_cher + PE_scint). Only shown
+           when the dataset has both emission processes. JS unhides on load. -->
+      <button data-v="cher_frac" id="fieldCherFrac" style="display:none">CHER FRAC</button>
+    </div>
+
+    <div class="sep"></div>
+
+    <!-- Label overrides continuous coloring with categorical labels. -->
+    <span class="toolbar-label">LABEL</span>
+    <select id="labelSelect">
+      <option value="none" selected>None</option>
+      <option value="particle">Particle</option>
+      <option value="pdg">PDG</option>
+      <option value="interaction">Interaction</option>
+      <option value="segment">Segment</option>
+    </select>
+
+    <div class="sep"></div>
+
+    <!-- EMISSION restricts the per-sensor PE/T to a single emission process.
+         Only shown when the dataset has both Cherenkov + scintillation rows.
+         JS unhides on load. -->
+    <span class="toolbar-label" id="emissionLabel" style="display:none">EMISSION</span>
+    <select id="emissionSelect" style="display:none">
+      <option value="all" selected>All</option>
+      <option value="cher">Cherenkov</option>
+      <option value="scint">Scintillation</option>
+    </select>
+    <div class="sep" id="emissionSep" style="display:none"></div>
+
+    <div class="btn-group"><button id="sweepBtn">TIME SWEEP</button></div>
+    <div class="btn-group"><button id="resetBtn">RESET</button></div>
+    <div class="btn-group"><button id="rotBtn" class="active">ROTATE</button></div>
+    <div class="btn-group"><button id="settingsBtn">&#x2699;</button></div>
+    <div id="status">Connecting...</div>
+  </div>
+
+  <div id="settingsPanel">
+    <button class="close" id="settingsClose">&times;</button>
+    <div class="settings-section">VISUALIZATION</div>
+    <label style="display:flex;align-items:center;gap:6px">
+      <input type="checkbox" id="logChk" checked> Log scale
+    </label>
+    <label>Percentile clip: <span id="percVal">1 – 99</span></label>
+    <div class="dual-slider">
+      <input type="range" id="percMin" min="0" max="50" step="0.5" value="1">
+      <input type="range" id="percMax" min="50" max="100" step="0.5" value="99">
+    </div>
+    <label>Manual vmin <span class="hint">(blank → percentile)</span></label>
+    <input type="number" id="vminInput" placeholder="auto" step="any">
+    <label>Manual vmax</label>
+    <input type="number" id="vmaxInput" placeholder="auto" step="any">
+    <label>Colormap</label>
+    <select id="cmapSelect">
+      <option value="auto" selected>Auto (Charge→plasma · Time→viridis_r)</option>
+      <option value="plasma">plasma</option>
+      <option value="viridis">viridis</option>
+      <option value="viridis_r">viridis_r</option>
+      <option value="inferno_r">inferno_r</option>
+    </select>
+
+    <div class="settings-divider">3D</div>
+    <label>PMT disc size: <span id="pmtSizeVal">10</span> px</label>
+    <input type="range" id="pmtSizeSlider" min="2" max="24" step="0.5" value="10">
+    <label style="display:flex;align-items:center;gap:6px">
+      <input type="checkbox" id="showEmptyChk" checked> Show empty PMTs (silhouette)
+    </label>
+    <label style="display:flex;align-items:center;gap:6px">
+      <input type="checkbox" id="showMeshChk" checked> Detector outline
+    </label>
+    <label>Outline thickness: <span id="outlineWidthVal">1.0</span> px</label>
+    <input type="range" id="outlineWidthSlider" min="0.5" max="6" step="0.5" value="1">
+
+    <div class="settings-divider">TIME SWEEP</div>
+    <label>Speed (×): <span id="sweepSpeedVal">1.0</span></label>
+    <input type="range" id="sweepSpeed" min="0.1" max="10" step="0.1" value="1.0">
+    <label>Quantile-transform T applied to</label>
+    <select id="quantileScope">
+      <option value="off">Off</option>
+      <option value="pmts" selected>PMT event display</option>
+      <option value="edep">Segments</option>
+      <option value="both">Both (shared union rank)</option>
+    </select>
+  </div>
+
+  <div id="main">
+    <div id="sidebar">
+      <div class="sidebar-title"><span id="sidebarTitle">PARTICLES</span> <span class="sidebar-hint">· click to isolate</span></div>
+      <div id="particleList"></div>
+      <div class="sidebar-title">EVENT META</div>
+      <div id="eventMeta"></div>
+      <div class="sidebar-title">SELECTION</div>
+      <div id="selectionInfo"></div>
+    </div>
+    <div id="panel3d">
+      <div class="panel-label" id="label3dText">3D</div>
+      <div class="panel-actions">
+        <button class="pa-btn" id="save3d" title="Save PNG">&#x2B73;</button>
+      </div>
+      <div id="sweepBar">
+        <button id="sweepPlayPause" title="Play/Pause">&#x25B6;</button>
+        <input type="range" id="sweepScrubber" min="0" max="1" step="0.001" value="0">
+        <span id="sweepTimeLabel">0.0 ns</span>
+      </div>
+    </div>
+    <div id="divider"></div>
+    <div id="panel2d">
+      <div class="panel-label" id="label2dText">UNWRAPPED</div>
+      <div class="panel-actions">
+        <button class="pa-btn" id="save2d" title="Save PNG">&#x2B73;</button>
+      </div>
+      <canvas id="canvas2d"></canvas>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+<!-- Fat lines for the detector outline (proper thickness control across
+     all browsers — vanilla LineBasicMaterial.linewidth is capped at 1px
+     by ANGLE on Chrome/Safari). -->
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/lines/LineSegmentsGeometry.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/lines/LineMaterial.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/lines/LineSegments2.js"></script>
+<script type="module" src="viewer.js"></script>
+</body>
+</html>

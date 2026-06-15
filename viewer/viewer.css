@@ -1,0 +1,205 @@
+* { margin: 0; padding: 0; box-sizing: border-box }
+
+body {
+  background: #080808; color: #d0d0d0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  overflow: hidden; height: 100vh;
+}
+
+/* Loading screen */
+#loading {
+  position: fixed; inset: 0; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; z-index: 100; background: #080808;
+}
+#loading h1 { font-size: 26px; font-weight: 300; letter-spacing: 5px; color: #29b6f6; margin-bottom: 8px }
+#loading .sub { color: #555; font-size: 13px; margin-bottom: 28px }
+#loadStatus { margin-top: 14px; color: #666; font-size: 12px; font-family: 'SF Mono', 'Fira Code', monospace }
+
+/* App layout */
+#app { display: none; height: 100vh; flex-direction: column }
+#main { display: flex; flex: 1; min-height: 0 }
+#sidebar {
+  width: 240px; flex-shrink: 0;
+  background: rgba(255,255,255,.02);
+  border-right: 1px solid rgba(255,255,255,.05);
+  overflow-y: auto; padding: 10px 6px;
+}
+#panel3d { flex: 1; position: relative; overflow: hidden; min-width: 0 }
+#divider { width: 1px; background: rgba(255,255,255,.05); flex-shrink: 0 }
+#panel2d { flex: 1; position: relative; overflow: hidden; min-width: 0 }
+#canvas2d { display: block; width: 100%; height: 100%; cursor: crosshair }
+
+/* Toolbar */
+#toolbar {
+  height: 48px; display: flex; align-items: center; padding: 0 14px;
+  background: rgba(255,255,255,.025); border-bottom: 1px solid rgba(255,255,255,.05);
+  gap: 10px; flex-shrink: 0;
+}
+.logo { font-size: 14px; font-weight: 600; letter-spacing: 3px; color: #29b6f6 }
+.sep { width: 1px; height: 20px; background: rgba(255,255,255,.08) }
+.toolbar-label { font-size: 10px; color: #666; letter-spacing: 1px; font-weight: 600 }
+
+/* Buttons */
+.btn-group { display: flex; border: 1px solid rgba(255,255,255,.08); border-radius: 5px; overflow: hidden }
+.btn-group button {
+  padding: 5px 11px; background: transparent; border: none; color: #888;
+  font-size: 11px; font-weight: 600; letter-spacing: 1px; cursor: pointer; transition: all .15s;
+  min-width: 42px;
+}
+.btn-group button.active { background: rgba(41,182,246,.14); color: #29b6f6 }
+.btn-group button:hover:not(.active) { color: #ddd; background: rgba(255,255,255,.04) }
+
+/* Inputs */
+#evInput {
+  background: #141414; color: #29b6f6; border: none; font-size: 12px; font-weight: 600;
+  font-family: inherit; width: 56px; text-align: center; padding: 5px 2px;
+}
+#labelSelect, #cmapSelect {
+  background: #141414; color: #29b6f6; border: 1px solid rgba(41,182,246,.25);
+  border-radius: 5px; padding: 4px 8px; font-size: 11px; font-weight: 600;
+  font-family: inherit; cursor: pointer;
+}
+
+#status {
+  margin-left: auto; font-size: 10px; color: #666;
+  font-family: 'SF Mono', 'Fira Code', monospace; max-width: 40%;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+/* Sidebar */
+.sidebar-title {
+  font-size: 10px; color: #29b6f6; letter-spacing: 2px; font-weight: 600;
+  padding: 10px 8px 6px; border-top: 1px solid rgba(255,255,255,.05);
+}
+.sidebar-hint { color: #555; font-weight: 400; letter-spacing: 0.5px; }
+.sidebar-title:first-child { border-top: none; padding-top: 2px }
+#particleList, #eventMeta { padding: 2px 0 }
+
+.particle-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 8px; cursor: pointer; border-radius: 4px;
+  font-size: 11px; color: #bbb; margin: 2px 0;
+  transition: background .12s;
+}
+.particle-row:hover { background: rgba(255,255,255,.05); color: #fff }
+.particle-row.selected { background: rgba(41,182,246,.12); color: #29b6f6 }
+.particle-swatch {
+  width: 10px; height: 10px; border-radius: 50%;
+  flex-shrink: 0; border: 1px solid rgba(255,255,255,.2);
+}
+.particle-label { flex: 1; font-weight: 500 }
+.particle-meta { color: #666; font-size: 10px; font-family: 'SF Mono', monospace }
+
+.event-meta-row {
+  display: flex; justify-content: space-between;
+  padding: 3px 8px; font-size: 11px; color: #aaa;
+}
+.event-meta-row .k { color: #666 }
+.event-meta-row .v { font-family: 'SF Mono', monospace; color: #29b6f6;
+                      max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.selection-head {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 8px; color: #29b6f6; font-size: 11px; font-weight: 600;
+}
+.selection-swatch {
+  width: 12px; height: 12px; border-radius: 50%;
+  flex-shrink: 0; border: 1px solid rgba(255,255,255,.3);
+}
+
+/* Panel labels / actions */
+.panel-label {
+  position: absolute; top: 8px; left: 12px; font-size: 10px; color: #666;
+  letter-spacing: 2px; text-transform: uppercase; pointer-events: none; z-index: 2;
+}
+.panel-actions {
+  position: absolute; top: 6px; right: 10px; display: flex; gap: 4px; z-index: 3;
+}
+.pa-btn {
+  background: rgba(30,30,30,.6); border: 1px solid rgba(255,255,255,.12); color: #999;
+  width: 28px; height: 28px; border-radius: 4px; cursor: pointer;
+  font-size: 16px; display: flex; align-items: center; justify-content: center;
+  padding: 0; line-height: 1; opacity: 0.6; transition: opacity .15s, color .15s;
+  backdrop-filter: blur(4px);
+}
+.pa-btn:hover { opacity: 1; color: #29b6f6; border-color: rgba(41,182,246,.3) }
+#toast {
+  position: fixed; bottom: 40px; left: 50%; transform: translateX(-50%);
+  background: rgba(20,20,20,.9); color: #eee; padding: 8px 18px;
+  border-radius: 6px; font-size: 12px; pointer-events: none; opacity: 0;
+  transition: opacity .25s; z-index: 100;
+}
+#toast.visible { opacity: 1 }
+
+/* Loading overlay */
+#overlay {
+  display: none; position: fixed; inset: 0; background: rgba(8,8,8,.85);
+  z-index: 50; align-items: center; justify-content: center; flex-direction: column;
+}
+#overlay.visible { display: flex }
+#overlay .spinner {
+  width: 28px; height: 28px; border: 3px solid #333; border-top-color: #29b6f6;
+  border-radius: 50%; animation: spin .8s linear infinite; margin-bottom: 12px;
+}
+#overlay .msg { color: #999; font-size: 13px; letter-spacing: 1px }
+@keyframes spin { to { transform: rotate(360deg) } }
+
+/* Settings panel */
+#settingsPanel {
+  display: none; position: fixed; top: 48px; right: 10px;
+  background: #141414; border: 1px solid rgba(255,255,255,.1);
+  border-radius: 8px; padding: 14px 16px; z-index: 60; width: 260px;
+  max-height: calc(100vh - 60px); overflow-y: auto;
+}
+#settingsPanel .close {
+  position: absolute; top: 6px; right: 8px; background: none; border: none;
+  color: #666; font-size: 16px; cursor: pointer; padding: 2px 6px;
+}
+#settingsPanel.visible { display: block }
+#settingsPanel label { display: block; font-size: 11px; color: #888; margin-bottom: 4px; letter-spacing: .5px }
+#settingsPanel .hint { color: #555; font-size: 10px; font-weight: 400 }
+#settingsPanel input[type=range] { width: 100%; margin: 2px 0 10px; accent-color: #29b6f6 }
+#settingsPanel input[type=number] {
+  width: 100%; background: #1f1f1f; color: #ccc; border: 1px solid #2a2a2a;
+  border-radius: 4px; padding: 4px 8px; font-size: 11px; margin-bottom: 10px;
+}
+#settingsPanel select {
+  width: 100%; background: #1f1f1f; color: #ccc; border: 1px solid #2a2a2a;
+  border-radius: 4px; padding: 4px 8px; font-size: 11px; margin-bottom: 10px;
+}
+.settings-section, .settings-divider {
+  color: #29b6f6; font-size: 10px; letter-spacing: 1px; font-weight: 600;
+  margin-bottom: 8px;
+}
+.settings-divider { margin: 12px 0 8px; border-top: 1px solid #282828; padding-top: 10px }
+
+.dual-slider { display: flex; flex-direction: column; margin-bottom: 10px }
+.dual-slider input[type=range] { margin: 0 }
+
+/* Time-sweep bar (inside 3D panel) */
+#sweepBar {
+  display: none; position: absolute; bottom: 8px; left: 12px; right: 12px;
+  height: 30px; background: rgba(15,15,15,.8);
+  border: 1px solid rgba(255,255,255,.08); border-radius: 6px;
+  align-items: center; padding: 0 10px; gap: 8px; z-index: 4;
+  backdrop-filter: blur(4px);
+}
+#sweepBar.visible { display: flex }
+#sweepBar button {
+  background: none; border: 1px solid rgba(255,255,255,.12); color: #ccc;
+  width: 28px; height: 28px; border-radius: 4px; cursor: pointer;
+  font-size: 14px; display: flex; align-items: center; justify-content: center;
+}
+#sweepBar button.active { color: #29b6f6; border-color: rgba(41,182,246,.3) }
+#sweepScrubber {
+  flex: 1; height: 4px; -webkit-appearance: none; appearance: none;
+  background: #333; border-radius: 2px; outline: none;
+}
+#sweepScrubber::-webkit-slider-thumb {
+  -webkit-appearance: none; width: 14px; height: 14px;
+  background: #29b6f6; border-radius: 50%; cursor: pointer;
+}
+#sweepTimeLabel {
+  font-size: 10px; color: #888; font-family: 'SF Mono', monospace;
+  min-width: 80px; text-align: right;
+}
