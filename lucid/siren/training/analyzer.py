@@ -4,6 +4,7 @@ Analysis Module for Trained SIREN Models
 This module provides classes for analyzing and evaluating trained SIREN models
 on PhotonSim data, designed to be used from Jupyter notebooks or scripts.
 """
+from __future__ import annotations
 
 import logging
 from pathlib import Path
@@ -674,13 +675,6 @@ class TrainingAnalyzer:
             
         siren_2d = siren_predictions.reshape(angle_mesh.shape)
         
-        # DEBUG: Check prediction scales
-        print(f"DEBUG - Energy {actual_energy:.0f} MeV angular profile:")
-        print(f"  Table slice range: {table_slice.min():.2e} to {table_slice.max():.2e}")
-        print(f"  SIREN slice range: {siren_2d.min():.2e} to {siren_2d.max():.2e}")
-        print(f"  Scale ratio (SIREN/Table): {siren_2d.mean()/table_slice.mean():.2e}")
-        print(f"  Scaling factor to match: {table_slice.mean()/siren_2d.mean():.2f}")
-        
         # Average SIREN predictions over distance (same masking as table)
         siren_profile = np.zeros(len(angle_centers))
         for i in range(len(angle_centers)):
@@ -773,12 +767,6 @@ class TrainingAnalyzer:
             distance_mesh.flatten()
         ], axis=-1)
         
-        # DEBUG: Check coordinate ranges
-        print(f"DEBUG - Distance profile coordinate ranges:")
-        print(f"  Energy: {actual_energy:.0f} MeV")
-        print(f"  Angle range: {angle_centers.min():.3f} to {angle_centers.max():.3f} rad")
-        print(f"  Distance range: {distance_centers.min():.0f} to {distance_centers.max():.0f} mm")
-        
         # Normalize coordinates for SIREN
         input_min = self.dataset.normalized_bounds['input_min']
         input_max = self.dataset.normalized_bounds['input_max']
@@ -798,11 +786,6 @@ class TrainingAnalyzer:
             siren_predictions = siren_predictions_norm
             
         siren_2d = siren_predictions.reshape(angle_mesh.shape)
-        
-        # DEBUG: Check prediction scales
-        print(f"DEBUG - Distance profile scales:")
-        print(f"  Table slice range: {table_slice.min():.2e} to {table_slice.max():.2e}")
-        print(f"  SIREN slice range: {siren_2d.min():.2e} to {siren_2d.max():.2e}")
         
         # Average SIREN predictions over angle (same masking as table)
         siren_profile = np.zeros(len(distance_centers))
@@ -908,12 +891,6 @@ class TrainingAnalyzer:
             
         siren_slice = siren_predictions.reshape(angle_mesh.shape)
         
-        # DEBUG: Check prediction scales for 2D plots
-        print(f"DEBUG - Energy {actual_energy:.0f} MeV 2D difference:")
-        print(f"  Table 2D range: {table_slice.min():.2e} to {table_slice.max():.2e}")
-        print(f"  SIREN 2D range: {siren_slice.min():.2e} to {siren_slice.max():.2e}")
-        print(f"  Scale ratio (SIREN/Table): {siren_slice.mean()/table_slice.mean():.2e}")
-        
         # Compute difference: SIREN - Table
         diff_slice = siren_slice - table_slice
         
@@ -941,20 +918,13 @@ class TrainingAnalyzer:
                         cbar = plt.colorbar(pcol, ax=ax)
                         cbar.set_label('SIREN - Table Difference')
                         
-                    # DEBUG: Print grid coverage info
-                    print(f"DEBUG - 2D plot coverage for {actual_energy:.0f} MeV:")
-                    print(f"  Grid shape: {diff_slice.shape}")
-                    print(f"  Valid points: {np.sum(valid_mask)}/{diff_slice.size}")
-                    print(f"  Data difference range: {diff_slice.min():.2e} to {diff_slice.max():.2e}")
-                    print(f"  Color range (fixed): -1.0 to 1.0")
-                    print(f"  Zero table values: {np.sum(table_slice < 1e-10)}/{table_slice.size}")
                 else:
                     # If no difference range, show uniform field
                     ax.text(0.5, 0.5, 'No significant\ndifference', 
                            ha='center', va='center', transform=ax.transAxes)
                     
             except Exception as e:
-                print(f"DEBUG - 2D plotting failed: {e}")
+                print(f"2D plotting failed: {e}")
                 # Fallback: simple scatter if main plot fails
                 valid_points = valid_mask
                 if np.sum(valid_points) > 0:
