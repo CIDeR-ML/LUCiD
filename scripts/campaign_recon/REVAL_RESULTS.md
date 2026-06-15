@@ -91,3 +91,42 @@ old result: re-calibrate the new net's `nphot` (×1.66 → matches GEANT4) and i
 / longitudinal placement to GEANT4 (the t0/timing scan), OR carry the `cherenkov_photon_norm`
 + a small emission-time offset as interim constants. Both are net/emitter calibration, not
 recon-pipeline regressions.
+
+---
+
+## SIREN emission vs GEANT4 — pre-propagation, multi-event (the energy mismatch)
+
+Comparing the EMITTED photons directly (no propagation; raw ROOT frame = vertex 0 / +z;
+origins cm→m), new SIREN vs 20-GEANT4-event average (7.1M photons):
+
+**Longitudinal emission quantiles (the ENERGY mismatch):**
+
+| | 50% | 90% | 99% | track end |
+|---|---|---|---|---|
+| GEANT4 (20 ev) | 2.16 | 4.08 | 4.70 m | 4.86±0.15 m |
+| new SIREN ×1.00 | 1.77 | 3.46 | 4.03 m | 4.17 m |
+| ratio G4/new | 1.22 | 1.18 | 1.17 | — |
+
+The new SIREN's longitudinal emission is **uniformly compressed ~0.85×** (front-loaded) — a
+1050 MeV muon's light looks ~15% short ⇒ reconstructs LOW in energy. This is the SIREN
+**energy mismatch**, and it is ORTHOGONAL to the `nphot` yield knob (which rescales magnitude,
+not extent). Decomposition of the 1.66 yield gap: length 1.13× × per-meter-density 1.47×.
+
+**Fix = `s_max(E)` (longitudinal scale).** `s_max ×1.18` puts the emitted longitudinal onto
+GEANT4 (50/90/99% → 2.09/4.08/4.76 m) and in recon pulls dE +87→+50 MeV (mean +80→+59) — the
+predicted direction. Added `setup_event_simulator(cherenkov_smax_norm=1.0)` knob (byte-
+identical at 1.0). A single scalar isn't a complete fix (the longitudinal SHAPE differs and
+couples to vertex), but it confirms the diagnosis.
+
+**Angular ring:** new is too sharp — 81% in 39–43° vs GEANT4's 54%, missing the 30–36° and
+43–46° shoulders (dispersion + multiple scattering + delta-ray Cherenkov the straight-track
+SIREN doesn't model). Affects vtx/dir-level, not energy.
+
+## Full SIREN-vs-GEANT4 verdict
+
+The new s/s_max net does NOT exactly match GEANT4 in four separable ways: **(1) yield 1.66×
+low** (nphot under-fit), **(2) longitudinal ~15% short** (s_max under-fit / front-loaded
+density — THE energy mismatch), **(3) emission timing +1.16 ns late** (drives recon t0), **(4)
+ring too narrow** (delta-ray/scattering not modeled). The old net matched on (1)+(2). Proper
+fix = re-calibrate/retrain the new net (nphot + longitudinal density/s_max + t0); interim
+levers `cherenkov_photon_norm` + `cherenkov_smax_norm` (committed, byte-identical at 1.0).

@@ -74,6 +74,7 @@ def setup_event_simulator(
         reflection_wavelength=400.0,
         spectrum=None,
         cherenkov_photon_norm=1.0,
+        cherenkov_smax_norm=1.0,
         **grid_params):
     """
     Set up and return an event simulator using DetectorParams / ParticleParams.
@@ -952,8 +953,14 @@ def setup_event_simulator(
         # Build the new Cherenkov emitter once (closes over the SIREN context: net + domain
         # ranges + smax/nphot from the trained-model metadata). Referenced as a closure var
         # by _simulation_without_data_impl.
-        cherenkov_get_rays = make_cherenkov_surrogate_fn(
-            build_cherenkov_context(photonsim_predictor, siren_cfg['ray_sampling']))
+        _cher_ctx = build_cherenkov_context(photonsim_predictor, siren_cfg['ray_sampling'])
+        if cherenkov_smax_norm != 1.0:
+            # Stretch the longitudinal track scale s_max(E) — the new net's emission is
+            # ~15% short vs GEANT4 (front-loaded), an energy-biasing defect orthogonal to
+            # the nphot yield knob. 1.0 = no-op (byte-identical).
+            _base_smax = _cher_ctx.s_max_fn
+            _cher_ctx = _cher_ctx._replace(s_max_fn=lambda E: _base_smax(E) * cherenkov_smax_norm)
+        cherenkov_get_rays = make_cherenkov_surrogate_fn(_cher_ctx)
         t0_params = unpack_t0_params(particle, material)   # (a_coeffs, l_coeffs, b_coeffs) cubic
 
         # Scintillation surrogate — built only when the medium scintillates (wbls).
