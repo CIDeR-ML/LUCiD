@@ -115,9 +115,9 @@ def main():
         hit_mode='per_segment',  # mandatory for data mode (seg/sensor_hits/ ground truth)
     )
     dp = simulate_event.default_detector_params
-    print(f"  Wall reflection rate: {float(dp.wall_reflection_rate):.3f}")
-    print(f"  Sensor reflection rate: {float(dp.sensor_reflection_rate):.3f}")
-    print(f"  QE (scalar): {float(dp.qe):.3f}")
+    print(f"  Wall reflection rate: {float(dp.reflection.wall_reflection_rate):.3f}")
+    print(f"  Sensor reflection rate: {float(dp.reflection.sensor_reflection_rate):.3f}")
+    print(f"  QE (scalar): {float(dp.response.qe):.3f}")
 
     print(f"\nGenerating v3 dataset:")
     print(f"  Source ROOT: {args.root_file}")
