@@ -1,5 +1,10 @@
 # Event Output Format V2
 
+> **Superseded by [LUCID_DATASET.md](LUCID_DATASET.md) for v3 output.**
+> This file is retained for historical reference only. V2 writers were
+> removed from `lucid/sources/event_io.py` during the v3 migration; any
+> surviving v2 batches should be treated as read-only archival data.
+
 ## Overview
 
 Production events are stored in two separate HDF5 files per batch:

@@ -41,9 +41,14 @@ LUCiD provides a JAX-based differentiable simulation of light propagation in opt
 ### SIREN (`lucid/siren/`)
 - Physics-informed neural network for Cherenkov emission modeling
 
-### Optimization (`lucid/optimization/`)
-- **`pipeline.py`** - Adam-based gradient descent for track reconstruction
-- **`algorithms.py`** - Numerical, gradient, and hybrid optimization algorithms
+### Reconstruction & calibration (`lucid/fitting/`)
+- **`recon.py`** - `ReconModel` + `fit_track` / `fit_track_multistart` (Fisher-Gauss-Newton track fit)
+- **`gauss_newton.py`, `fisher.py`** - GN/Schur solver and Fisher/CRB tooling
+- **`timing.py`** - per-PMT t0/TTS calibrator
+
+### Optimization driver (`lucid/optimization/`)
+- **`run.py`** - the `lucid-optimize` config-driven reconstruction entry point
+- **`grid_search.py`** - hierarchical position/direction seed search
 
 ### Sources (`lucid/sources/`)
 - **`calibration_sources.py`** - Laser and isotropic calibration sources with optional wavelength

@@ -1,0 +1,43 @@
+# BuildKit picks up this file when building with container/Dockerfile and
+# uses it instead of any .dockerignore at the context root. Patterns are
+# relative to the build context (the parent dir containing LUCiD/ and
+# PhotonSim/).
+#
+# Goal: keep the COPY layers' checksums stable across host-side build
+# artifacts and editor/pytest scratch, so Docker's layer cache survives
+# local rebuilds and the ~5 min PhotonSim compile doesn't rerun when
+# only build artifacts change.
+
+# Source-tree build output (most important: PhotonSim/build/ gets wiped
+# inside the image anyway by Dockerfile:67, but keeping it out of the
+# COPY checksum avoids pointless cache invalidation).
+**/build/
+
+# VCS metadata — Dockerfile sets SETUPTOOLS_SCM_PRETEND_VERSION so we
+# don't need .git inside the image for version inference.
+**/.git/
+**/.github/
+**/.gitignore
+**/.gitattributes
+
+# Python packaging/test scratch
+**/*.egg-info/
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+**/.pytest_cache/
+**/.ipynb_checkpoints/
+
+# Editor / OS scratch
+**/.DS_Store
+**/.vscode/
+**/.idea/
+**/.claude/
+
+# Local dev outputs that have no business being baked into the image
+**/output/
+**/generated_data/
+**/test_events/
+**/trained_model/
+**/siren_training/
+**/debug/
