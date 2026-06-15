@@ -148,6 +148,14 @@ Emitted longitudinal (no propagation), new vs old vs 20-event GEANT4:
 | 90% | 4.14 | 4.08 | 3.46 m |
 | 99% | 4.82 | 4.70 | 4.03 m |
 
+> **⚠️ SUPERSEDED — see "CORRECTED DIAGNOSIS" at the bottom of this file.** The
+> conclusions below ("new net is less GEANT4-faithful / needs retraining / s_max is
+> ~15% short") were drawn against the *stale 1050 MeV recon ROOT* and *with the default
+> `ray_sampling.threshold=0.05`*. Re-checked against the freshly-downloaded GEANT4 (same
+> production the net was trained on), the new net is GEANT4-faithful in yield, longitudinal,
+> AND angle. The two recon-affecting effects are a **data wavelength-band mismatch** and an
+> **emitter sampling-threshold knob** — neither is a net defect. Read the bottom section.
+
 **The OLD net's longitudinal matches GEANT4 to ~1–3%; the NEW net is ~15% short.** The whole
 energy mismatch is the new net's `s/s_max × s_max(E)` reparametrization (introduced for
 energy generalization) compressing the track — the old direct-physical-distance net had it
@@ -158,3 +166,178 @@ not a saved-wavelength difference. New net is also better-FIT to its data (val l
 0.075) — the defect is the parametrization/training target, not fit quality. Revisit fix:
 correct the new net's `s_max(E)` / longitudinal density + `nphot` + t0 to GEANT4 (the
 `cherenkov_smax_norm` / `cherenkov_photon_norm` knobs target exactly these, byte-identical@1.0).
+
+---
+
+# CORRECTED DIAGNOSIS — the new net IS GEANT4-faithful (downloaded-GEANT4 re-check)
+
+Re-ran `download_data.sh` into a fresh worktree (`LUCiD_dlcheck/`) to compare the new net
+against the **exact GEANT4 production it was trained on** (`1000MeV_100events.root`, 100 ev),
+which the old 1050 MeV recon ROOT is NOT. The downloaded ROOT carries a **`PhotonWavelength`**
+branch (the old recon ROOT does not), so the wavelength cutoffs are now directly measurable.
+This overturns the "net needs retraining" read above. **Both** recon-affecting effects are
+non-net.
+
+## 1. YIELD 1.66× — it's a WAVELENGTH-CUTOFF difference in the DATA, not the net
+
+| | photons/event | per-MeV |
+|---|---|---|
+| downloaded GEANT4 @1000 MeV (`NOpticalPhotons`) | **202,254** | 202 |
+| old recon ROOT @1050 MeV (`NOpticalPhotons`) | **358,049** | 341 |
+| new net `nphot(1000)` | **203,673** | — |
+| new net `nphot(1050)` | 215,422 | — |
+
+- **new net nphot(1000) = 203,673 vs downloaded GEANT4 202,254 → ratio 1.007.** The net
+  reproduces the new-production yield to **0.7 %**.
+- The old recon ROOT has **1.68× more photons per MeV** than the new production. Cause =
+  **different Cherenkov wavelength band.** The downloaded ROOT's `PhotonWavelength` cutoffs
+  are **[275, 674] nm** (sharp). Cherenkov `dN/dλ ∝ 1/λ²`, so yield `∝ 1/λ₁ − 1/λ₂`:
+  - new band [275,674]: integral 0.002153
+  - old band **[200,700]**: integral 0.003571 → **ratio 1.659** ≈ the observed 1.66×.
+  The old recon ROOT was generated with a **wider (bluer) band ≈[200,700] nm**; the extra blue
+  photons (1/λ² is steep there) are the entire 1.66×. The net is correct for the **new**
+  [275,674] band; the recon "data" is from a different (older) PhotonSim wavelength config.
+
+## 2. LONGITUDINAL "15 % short" + RING "too sharp" — it's the EMITTER THRESHOLD KNOB, not s_max
+
+The net's **raw density** marginal (grid-evaluate the SIREN, integrate over angle) matches the
+downloaded GEANT4 to **<0.5 %** at the same energy:
+
+| longitudinal (m), E=1000 | 50% | 90% | 99% |
+|---|---|---|---|
+| downloaded GEANT4 | 2.094 | 3.916 | 4.502 |
+| new net **raw density** | 2.083 | 3.903 | 4.492 |
+
+The compression appears only in the **emitter's sampled rays**, and it is caused by
+`ray_sampling.threshold` (siren_params.json, default **0.05**): the seed pass keeps only grid
+bins with density ≥ 5 % of peak, discarding the low-density Cherenkov **tail** (and the angular
+**shoulders**). Sweep at E=1000:
+
+| emitter `threshold` | 50% | 90% | 99% | z_max (m) | ring frac[39–43°] |
+|---|---|---|---|---|---|
+| **0.05** (default) | 1.690 | 3.297 | 3.853 | 3.999 | 0.803 (too sharp) |
+| 0.01 | 2.072 | 3.843 | 4.393 | 4.549 | — |
+| **0.001** | 2.077 | 3.901 | 4.483 | 4.739 | 0.589 |
+| 0.0 | 2.082 | 3.904 | 4.488 | 5.288 | — |
+| GEANT4 target | 2.094 | 3.916 | 4.502 | — | 0.561 |
+
+At `threshold≈0.001` the emitter matches GEANT4 in **both** longitudinal (<0.5 %) and ring
+width (0.589 vs 0.561). The default 0.05 truncates the tail → ~15 % longitudinal compression
+(→ recon E +70) **and** over-sharpens the ring. **One config knob, not a net retrain, and not
+s_max.** (s_max(1000)=5.29 m is fine; the density inside [0,0.999]·s_max is correct — 0.05 just
+refuses to sample where the net says "few photons.")
+
+## Bottom line
+
+The merged engine + new s/s_max net is **GEANT4-faithful** (yield 0.7 %, longitudinal <0.5 %,
+ring matched). The REVAL recon delta vs the old baseline is **not** a net defect:
+
+1. **Yield 1.66×** = the recon truth ROOT (1050 MeV) was generated with a **wider Cherenkov
+   band ≈[200,700] nm**; the new GEANT4/net use **[275,674] nm**. To reproduce the old recon
+   numbers, either compare against GEANT4 made with the matching band, or accept the new band
+   as the production standard (then the `cherenkov_photon_norm` knob is unnecessary).
+2. **Longitudinal/ring** = `ray_sampling.threshold=0.05` truncates the emitted tail/shoulders.
+   Set `threshold≈0.001` (siren_params.json) to recover the GEANT4 longitudinal + ring. This is
+   the real fix behind the `cherenkov_smax_norm` interim knob — and it's free (just samples the
+   tail the net already models). Tradeoff: more seed bins → marginally more rays; verify recon
+   cost.
+
+Repro scripts/data: `LUCiD_dlcheck/data/water/muon/1000MeV_100events.root` (downloaded,
+`OpticalPhotonsRaw` tree with `PhotonWavelength`); evaluation snippets in this session.
+
+---
+
+# WAVELENGTH-CONSISTENT RE-TEST — the norm is NOT a real fix (it was stale-data bookkeeping)
+
+Pulling on "why do we need cherenkov_photon_norm": traced the full λ → QE → detect chain and
+re-ran recon on the **new GEANT4 ROOT** (carries true `PhotonWavelength`) so the data path
+QE-weights by TRUE λ. Scripts: `band_consistent_test.py` (+ loader for the OpticalPhotonsRaw
+chunked schema), `opt_multi_truthseed.py` (old-ROOT corrected-vs-uncorrected).
+
+## The 1.66× is a DATA-PATH ARTIFACT, not a model scale
+
+The detected charge = (emitted count) × ⟨QE⟩ × geometry; data and model sample λ ~ 1/λ² over the
+**same** band and apply the **same** qe_fn, so ⟨QE⟩ CANCELS — the 1.66× is purely the emitted
+COUNT ratio. QE-weighted integrals show why the count gap is spurious:
+
+| band | emitted ∫1/λ² | **QE-detected ∫1/λ²·QE** |
+|---|---|---|
+| NEW [275,674] | 0.002152 | **0.000238** |
+| OLD [200,700] | 0.003571 | **0.000238** |
+
+Emitted ratio OLD/NEW = **1.659**; **QE-detected ratio = 1.000**. The QE curve only spans
+[294,648] nm, so the old band's extra photons in [200,294]+[648,700] are QE-dead — physically
+undetectable. Both bands deliver the SAME detectable charge. The old recon ROOT has **no
+`PhotonWavelength` branch**, so the data path (simulator.py:740, `wavelengths=None`) gives every
+one of its 358k photons a FRESH λ over [300,648] + a detectable ⟨QE⟩ — laundering the QE-dead
+blue/red into the detection band → data charge 1.66× too high. `cherenkov_photon_norm=1.66` just
+rescales the model to the laundered charge.
+
+## Empirical confirmation (5 ev each)
+
+| config | data | norm | thr | data/model q | TRUTH-seed vtx / dE / dt0 |
+|---|---|---|---|---|---|
+| uncorrected | old ROOT | 1.0 | 0.05 | 1.66 | 32.5 cm / **+586** / −1.86 |
+| "corrected" | old ROOT | 1.66 | 0.001 | ~1.0 | 15.2 cm / **−18** / −0.33 |
+| band-consistent | NEW ROOT | **1.0** | 0.001 | **0.84** | 17.1 cm / **−135 (−13.5%)** / +0.26 |
+
+The 1.66× COLLAPSES to 0.84 on band-consistent data with NO norm — the artifact is resolved.
+The old-ROOT "corrected" dE≈0 was partly two errors cancelling (laundered-high data × norm-up).
+
+## The residual 0.84 is a SEPARATE, genuine model band-clamp bug
+
+Model samples λ over **[300,648]** (water-medium floor 300 ∩ QE support 294–648), but real
+Cherenkov spans **[275,674]**. **14.3% of real photons are <300 nm** (+2.7% >648) — physically
+lost (UV absorption + QE≈0), correctly dropped in the data — but the net's `nphot=203k` counts
+the full [275,674] emission and the model samples them all into [300,648], so it **over-detects
+~17%**. Predicted `⟨QE⟩_data/⟨QE⟩_model = 0.1101/0.1326 = 0.831` ≈ observed **0.837**. This drives
+dE −13.5%. Honest fix = a ~0.83 model-side normalization (or sample the true emission band so the
+medium/QE fringe self-cancels) — NOT a +1.66 scalar, and it points the OPPOSITE way.
+
+## Verdict
+
+- **`cherenkov_photon_norm`: DROP IT.** The 1.66× was λ-bookkeeping on stale data (old ROOT has
+  no per-photon wavelengths). Use ROOTs with `PhotonWavelength`.
+- **Real residual:** model λ-sampling band [300,648] vs net emission band [275,674] → ~0.83
+  over-count (the QE/medium-floor fringe). Small, physical, model-side. The proper normalization
+  to chase, if any.
+- **`ray_sampling.threshold=0.001`: KEEP.** Genuine, independent longitudinal/ring fix.
+
+---
+
+# RESOLUTION — emission-band fix removes the residual with NO scalar norm
+
+Root cause of the residual 0.84 over-count (dE −13.5%): the simulator sampled model λ over
+[300,648] (water floor ∩ QE) while the net's nphot counts the GEANT4 EMISSION band [275,674],
+so the QE-dead fringe was never represented. FIX (committed, byte-identical default): new
+`setup_event_simulator(cherenkov_emission_band=(lo,hi))` param samples Method-A λ over the net's
+emission band; QE(λ)=0 (out-of-knot) + the medium interp-clamp make the fringe photons INERT, so
+the detected charge uses the correct in-band fraction. Default `None` = byte-identical (84
+targeted tests + unification pins pass).
+
+5-event truth-seed fit, NEW ROOT (true λ), NO norm, threshold=0.001:
+
+| config | data/model q (median) | vtx | dir | dE | dt0 |
+|---|---|---|---|---|---|
+| sample [300,648] (clamp) | 0.84 | 17.1 cm | 0.91° | **−135 (−13.5%)** | +0.26 |
+| sample [275,674] (**fix**) | **0.998** | **14.6 cm** | 0.78° | **−20 (−2.0%)** | +0.08 |
+
+The emission-band fix drives q_tot → 1.0 and dE → −2% with NO `cherenkov_photon_norm`. This is the
+old-emitter baseline floor (13.9 cm / dE≈0 / dt0 −0.20). Final recipe for band-consistent recon:
+**(1)** data ROOT with `PhotonWavelength` (so QE applies to true λ); **(2)** `cherenkov_emission_band`
+= the net's GEANT4 emission band [275,674]; **(3)** `ray_sampling.threshold≈0.001`. No scalar norm.
+
+---
+
+# EXPLICIT emission band — it's an ENERGY cutoff [1.84, 4.51] eV (not a round nm)
+
+The PhotonSim Cherenkov generation cutoff is set in photon ENERGY (Geant4 RINDEX optical range),
+not wavelength. Exact per-photon extremes (muon AND electron, 5-decimal agreement):
+  min E = 1.84000 eV  -> 673.83 nm  (long-λ cutoff)
+  max E = 4.51000 eV  -> 274.91 nm  (short-λ cutoff)
+matches the ROOT `PhotonHist_Wavelength` nonzero span [274,674] (1 nm bins). So the authoritative
+band is **[1.84, 4.51] eV = [274.91, 673.83] nm**, identical for muon/electron at all energies
+(scaling_wl_check: wl=[274.9,673.8] for all 6 files; net nphot/G4 = muon 1.015/1.007/1.003,
+electron 1.001/1.000/0.999 @ 500/1000/1500). The eyeballed (275,674) is ~0.1 nm off at each edge
+(<0.1% in-band fraction, below shot noise) — use cherenkov_emission_band=(274.91, 673.83) for the
+exact value. Constant: hc = 1239.841984 eV·nm.
