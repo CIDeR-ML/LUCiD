@@ -6,6 +6,15 @@ A high-performance, differentiable simulation framework for optical particle det
 
 ![Repository Overview](figures/combined_3x2_charge_displays.png)
 
+## Quick start
+
+Produce v3 events end-to-end on your own machine:
+
+- [Local quickstart](docs/QUICKSTART_LOCAL.md) — clone, build PhotonSim, `pip install -e .`, run `lucid-run-job`.
+- [S3DF quickstart](docs/QUICKSTART_S3DF.md) — SLURM + singularity deployment for SLAC users.
+
+The single-job entry point is `lucid-run-job` (`lucid/production/run_job.py`); 18 bundled configs live at `lucid/production/configs/`. See [LUCID_DATASET.md](docs/LUCID_DATASET.md) for the v3 schema.
+
 ## Overview
 
 LUCiD provides a JAX-based differentiable simulation of light propagation in optical detectors. Key features include:
@@ -27,7 +36,7 @@ LUCiD provides a JAX-based differentiable simulation of light propagation in opt
 - **`sensor_response.py`** - Sensor hit aggregation for simulation, data, and likelihood modes
 
 ### Geometry (`lucid/geometry/`)
-- **`cylinder.py`**, **`sphere.py`**, **`box.py`** - Detector geometries with sensor placement and ray intersection. `Cylinder` can be built either algorithmically or via `Cylinder.from_pmt_file(npz_path)` from a unified PMT-array `.npz` (used by SK, HK, WCTE).
+- **`cylinder.py`**, **`sphere.py`**, **`box.py`**, **`string.py`** - Detector geometries with sensor placement and ray intersection. `Cylinder` can be built either algorithmically or via `Cylinder.from_pmt_file(npz_path)` from a unified PMT-array `.npz` (used by SK, HK, WCTE). `String` models vertical strings of DOMs in an open medium for neutrino telescopes.
 - **`PMT_NPZ_SCHEMA.md`** - Authoritative schema for the PMT-array `.npz` files; converters in `config/scripts/` produce these from public WCSim geofiles.
 - **`registry.py`** - Detector type registration and dispatch
 
@@ -52,6 +61,8 @@ LUCiD provides a JAX-based differentiable simulation of light propagation in opt
 
 ### Sources (`lucid/sources/`)
 - **`calibration_sources.py`** - Laser and isotropic calibration sources with optional wavelength
+- **`track.py`** - Parametric Cherenkov track (muon) photon emitter for neutrino telescopes
+- **`cascade.py`** - Parametric cascade (shower) photon emitter for neutrino telescopes (1 GeV -- 10 PeV)
 - **`event_io.py`** - Interface to PhotonSim ROOT files for data-like events
 
 ### Gradient Analysis (`lucid/gradient_analysis/`)
