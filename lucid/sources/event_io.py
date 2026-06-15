@@ -545,6 +545,22 @@ def read_particle_data_from_photonsim(root_file_path, entry_index, include_track
     root_file = uproot.open(root_file_path)
     tree = root_file['OpticalPhotons']
 
+    # Schema guard: the particle-genealogy path reads the per-photon branches
+    # (PhotonPosX, ...) directly off OpticalPhotons. The current chunked PhotonSim
+    # schema relocates those into a separate OpticalPhotonsRaw tree, so they raise
+    # a cryptic KeyInFileError here. Fail loudly with guidance instead -- the v3
+    # production chain (lucid-run-job -> lucid.sources.event_generation, backed by
+    # root_reader) handles the chunked schema natively; this legacy monolith path
+    # requires a legacy (per-photon-on-OpticalPhotons) ROOT.
+    if 'PhotonPosX' not in tree.keys():
+        raise KeyError(
+            f"{root_file_path!r} uses the chunked PhotonSim schema (per-photon "
+            "branches live in 'OpticalPhotonsRaw', not 'OpticalPhotons'). The "
+            "particle-genealogy reader read_particle_data_from_photonsim only "
+            "supports the legacy schema. Use the v3 production chain "
+            "(lucid-run-job / lucid.sources.event_generation) for chunked ROOTs."
+        )
+
     # Read all necessary data for the specified entry
     branches_to_read = [
         'PrimaryEnergy',
@@ -1278,7 +1294,13 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path, se
 
                 # Scatter photons
                 if N > 0:
-                    batched_origins_np[particle_idx, :N] = all_photon_origins_np[photon_indices]
+                    # batched_origins feed the is_data simulator, whose input contract
+                    # is CENTIMETRES (it divides by 100 internally, simulator.py "cm to m").
+                    # all_photon_origins_np is in METRES here (converted at line ~1191 for
+                    # the translation + light-containment maths below), so convert back to
+                    # cm at this boundary. Without the *100 the simulator's /100 double-
+                    # converts and every photon origin lands 100x too small (silent bug).
+                    batched_origins_np[particle_idx, :N] = all_photon_origins_np[photon_indices] * 100.0
                     batched_directions_np[particle_idx, :N] = all_photon_directions_np[photon_indices]
                     batched_times_np[particle_idx, :N] = all_photon_times_np[photon_indices]
                     batched_wavelengths_np[particle_idx, :N] = all_photon_wavelengths_np[photon_indices]
