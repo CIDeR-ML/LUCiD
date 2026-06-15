@@ -13,7 +13,7 @@ scintillation/param-tree merge):
 """
 import os, sys, json
 import numpy as np, jax, jax.numpy as jnp
-sys.path.insert(0, '/sdf/group/neutrino/omara/LUCiD_unification')
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 from lucid.geometry import generate_detector
 from lucid.simulation import setup_event_simulator
 from lucid.detector_params import DetectorParams, _flatten_detector_params
@@ -22,7 +22,7 @@ from lucid.fitting import build_calibration_problem
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REF = os.path.join(HERE, 'tripwire_water_ref.npz')
-GEOM = '/sdf/group/neutrino/omara/LUCiD_unification/config/SK_like_geom_config.json'
+GEOM = os.path.join(os.path.dirname(os.path.dirname(HERE)), 'config', 'SK_like_geom_config.json')
 SEED, NPH, K = 20240614, 500_000, 8
 GRID = dict(n_cap=100, n_angular=150, n_height=100)
 FIELDS = ['g', 'scatter_length', 'mie_scatter_length', 'absorption_length',

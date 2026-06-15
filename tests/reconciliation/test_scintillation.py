@@ -15,7 +15,7 @@ import pytest
 import jax
 import jax.numpy as jnp
 
-ROOT = '/sdf/group/neutrino/omara/LUCiD_unification'
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 WBLS_GEOM = os.path.join(ROOT, 'config/SK_like_wbls_geom_config.json')
 WBLS_PHYS = os.path.join(ROOT, 'config/SK_like_wbls_physics_config.json')
 _DEDX_NET = os.path.join(ROOT, 'data/wbls/muon/dedx_siren_training/trained_model/dedx_siren_weights.npz')

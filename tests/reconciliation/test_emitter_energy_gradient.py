@@ -17,7 +17,7 @@ import pytest
 import jax
 import jax.numpy as jnp
 
-ROOT = '/sdf/group/neutrino/omara/LUCiD_unification'
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 GEOM = os.path.join(ROOT, 'config/SK_like_geom_config.json')
 PHYS = os.path.join(ROOT, 'config/SK_like_physics_config.json')
 _NET = os.path.join(ROOT, 'data/water/muon/siren_training/trained_model/photonsim_siren_weights.npz')
