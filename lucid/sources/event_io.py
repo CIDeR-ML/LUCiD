@@ -448,6 +448,21 @@ def read_photon_data_from_photonsim(root_file_path, entry_index):
     # Access the tree
     tree = root_file['OpticalPhotons']
 
+    # --- schema routing ---------------------------------------------------------------
+    # The CURRENT PhotonSim build stores per-photon scalars in the chunked OpticalPhotonsRaw
+    # tree (OpticalPhotons then holds only Segment_*/metadata, no PhotonPosX...); the LEGACY
+    # build kept PhotonPosX... directly on OpticalPhotons. If the per-photon branches are absent
+    # here, delegate to the canonical chunked reader (lucid.sources.root_reader, which returns
+    # positions in METERS) and convert to this module's historical CM convention — so callers
+    # bound to event_io (optimization/run.py, generate.py, the recon campaign scripts) work on
+    # BOTH schemas with identical units. Without this, new ROOTs raised KeyInFileError: 'PhotonPosX'.
+    if 'PhotonPosX' not in tree.keys():
+        from lucid.sources.root_reader import read_photon_data_from_photonsim as _read_raw_m
+        result = dict(_read_raw_m(root_file_path, entry_index))            # positions in METERS
+        result['photon_origins'] = jnp.asarray(result['photon_origins']) * 100.0  # m -> cm
+        return result
+
+    # --- legacy OpticalPhotons schema (per-photon branches on the main tree) -----------
     # Determine which branches to read
     branches = ['PrimaryEnergy', 'PhotonPosX', 'PhotonPosY', 'PhotonPosZ',
                 'PhotonDirX', 'PhotonDirY', 'PhotonDirZ', 'PhotonTime']

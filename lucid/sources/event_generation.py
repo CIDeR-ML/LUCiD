@@ -393,15 +393,17 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
             }]
 
             if has_scintillation:
-                _dp = event_simulator.default_detector_params
+                # Scintillation scalars live on the NESTED ScintillationParams sub-tuple of
+                # DetectorParams (no flat alias) — read via `.scintillation.*`.
+                _sc = event_simulator.default_detector_params.scintillation
                 _medium_params = {
-                    'S':           float(_dp.S),
-                    'kB':          float(_dp.kB),
-                    'C':           float(_dp.C),
-                    'tau_rise':    float(_dp.tau_rise),
-                    'tau_fall':    float(_dp.tau_fall),
-                    'moyal_loc':   float(_dp.moyal_loc),
-                    'moyal_scale': float(_dp.moyal_scale),
+                    'S':           float(_sc.S),
+                    'kB':          float(_sc.kB),
+                    'C':           float(_sc.C),
+                    'tau_rise':    float(_sc.tau_rise),
+                    'tau_fall':    float(_sc.tau_fall),
+                    'moyal_loc':   float(_sc.moyal_loc),
+                    'moyal_scale': float(_sc.moyal_scale),
                     'lambda_min':  float(medium.scintillation_lambda_min),
                     'lambda_max':  float(medium.scintillation_lambda_max),
                 }
@@ -901,15 +903,16 @@ def generate_events_from_photonsim_pileup(
                     'photon_segment_index_raw': photon_segment_index_i.astype(np.int64),
                 }]
                 if has_scintillation_i:
-                    _dp = event_simulator.default_detector_params
+                    # Nested ScintillationParams sub-tuple (no flat alias) — read via `.scintillation.*`.
+                    _sc = event_simulator.default_detector_params.scintillation
                     _medium_params = {
-                        'S':           float(_dp.S),
-                        'kB':          float(_dp.kB),
-                        'C':           float(_dp.C),
-                        'tau_rise':    float(_dp.tau_rise),
-                        'tau_fall':    float(_dp.tau_fall),
-                        'moyal_loc':   float(_dp.moyal_loc),
-                        'moyal_scale': float(_dp.moyal_scale),
+                        'S':           float(_sc.S),
+                        'kB':          float(_sc.kB),
+                        'C':           float(_sc.C),
+                        'tau_rise':    float(_sc.tau_rise),
+                        'tau_fall':    float(_sc.tau_fall),
+                        'moyal_loc':   float(_sc.moyal_loc),
+                        'moyal_scale': float(_sc.moyal_scale),
                         'lambda_min':  float(medium.scintillation_lambda_min),
                         'lambda_max':  float(medium.scintillation_lambda_max),
                     }
