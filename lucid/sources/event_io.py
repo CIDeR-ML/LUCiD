@@ -1015,7 +1015,7 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path, se
                                              n_events=None, batch_size=100, master_seed=None,
                                              apply_smearing=False, apply_rotation=False, apply_translation=False,
                                              detector_config_path=None, merge_output=True, merged_filename='merged_events.h5',
-                                             include_track_segments=False, include_voxels=False):
+                                             include_track_segments=False):
     """
     VMAP-OPTIMIZED VERSION: Generate and save events using batched particle processing.
 
@@ -1065,7 +1065,6 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path, se
     import json
     from lucid.utils import smear_charges_SK_like, smear_times
     pass  # save_single_event_with_particle_info and merge_event_files are now local
-    from lucid.production.voxelize import VoxelGridConfig, voxelize_from_photon_indices, pack_voxel_data_for_hdf5
 
     # Generate random seed if not provided
     if master_seed is None:
@@ -1431,33 +1430,6 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path, se
                 if total_photons_all_particles > 0:
                     overall_light_containment = float(total_photons_inside_all_particles) / total_photons_all_particles
 
-            # ========================================================================
-            # VOXELIZATION (optional)
-            # Convert photon positions to sparse voxel representation
-            # ========================================================================
-            packed_voxel_data = None
-            if include_voxels:
-                print(f"    Voxelizing photon positions...", flush=True)
-                voxel_start_time = time.time()
-
-                # Get photon indices for each particle
-                particle_photon_indices_list = [particle['photon_indices'] for particle in particles]
-
-                # Voxelize using positions in meters
-                voxel_config = VoxelGridConfig()
-                voxel_data = voxelize_from_photon_indices(
-                    all_photon_origins_np,  # Already in meters
-                    particle_photon_indices_list,
-                    voxel_config
-                )
-
-                # Pack for HDF5 storage
-                packed_voxel_data = pack_voxel_data_for_hdf5(voxel_data)
-
-                voxel_elapsed = time.time() - voxel_start_time
-                total_voxels = np.sum(voxel_data['n_nonzero_voxels'])
-                print(f"    Voxelization: {total_voxels:,} voxels in {voxel_elapsed:.3f}s", flush=True)
-
             # Create filename
             event_number = event_idx
             filename = os.path.join(output_dir, f'event_{event_number}.h5')
@@ -1481,13 +1453,6 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path, se
                 # Track segment data (if included)
                 'include_track_segments': include_track_segments
             }
-
-            # Add voxel data if included
-            if packed_voxel_data is not None:
-                extended_info['voxel_n_nonzero'] = packed_voxel_data['voxel_n_nonzero']
-                extended_info['voxel_offsets'] = packed_voxel_data['voxel_offsets']
-                extended_info['voxel_flat_indices'] = packed_voxel_data['voxel_flat_indices']
-                extended_info['voxel_counts'] = packed_voxel_data['voxel_counts']
 
             # Add meaningful tracks and segments if requested
             if include_track_segments and 'meaningful_tracks' in particle_data:
@@ -2030,9 +1995,6 @@ def save_single_event_with_particle_info(extended_info, event_number=0, filename
     Segments (optional):
     - Start/End positions, Direction, Edep, Time
 
-    Voxel data (sparse representation):
-    - voxel_n_nonzero, voxel_offsets, voxel_flat_indices, voxel_counts
-
     Parameters
     ----------
     extended_info : dict
@@ -2122,13 +2084,6 @@ def save_single_event_with_particle_info(extended_info, event_number=0, filename
         # Containment metrics
         f.create_dataset('overall_light_containment', data=np.float64(extended_info['overall_light_containment']))
         f.create_dataset('light_containment_by_particle', data=np.array(extended_info['light_containment_by_particle'], dtype=np.float64))
-
-        # Voxel data (sparse representation)
-        if 'voxel_n_nonzero' in extended_info:
-            f.create_dataset('voxel_n_nonzero', data=np.asarray(extended_info['voxel_n_nonzero'], dtype=np.int32))
-            f.create_dataset('voxel_offsets', data=np.asarray(extended_info['voxel_offsets'], dtype=np.int32))
-            f.create_dataset('voxel_flat_indices', data=np.asarray(extended_info['voxel_flat_indices'], dtype=np.int64))
-            f.create_dataset('voxel_counts', data=np.asarray(extended_info['voxel_counts'], dtype=np.int32))
 
         # File attributes
         f.attrs['source'] = extended_info['source']
@@ -3043,40 +2998,6 @@ def save_sensor_batch_v2(batch_events, filename, n_sensors,
         f.create_dataset('particle_hit_sensor_idx', data=pp_hit_idx, **_GZIP_OPTS)
         f.create_dataset('particle_hit_PE', data=pp_hit_pe, **_GZIP_OPTS)
         f.create_dataset('particle_hit_T', data=pp_hit_t, **_GZIP_OPTS)
-
-        # Voxel data (optional)
-        voxel_events = [e for e in batch_events if 'voxel_n_nonzero' in e]
-        if voxel_events:
-            vox_off = [0]
-            vox_idx_list = []
-            vox_cnt_list = []
-            for ev in batch_events:
-                if 'voxel_n_nonzero' in ev:
-                    nnz = np.asarray(ev['voxel_n_nonzero'], dtype=np.int32)
-                    offsets_ev = np.asarray(ev['voxel_offsets'], dtype=np.int32)
-                    flat_idx = np.asarray(ev['voxel_flat_indices'], dtype=np.int64)
-                    counts = np.asarray(ev['voxel_counts'], dtype=np.int32)
-                    # Per-particle voxels for this event
-                    n_p = ev['n_particles']
-                    for p in range(n_p):
-                        start = int(offsets_ev[p])
-                        end = start + int(nnz[p])
-                        vox_idx_list.append(flat_idx[start:end])
-                        vox_cnt_list.append(counts[start:end])
-                        vox_off.append(vox_off[-1] + int(nnz[p]))
-                else:
-                    # No voxels for this event — add empty entries per particle
-                    for _ in range(ev['n_particles']):
-                        vox_off.append(vox_off[-1])
-
-            f.create_dataset('voxel_particle_offsets',
-                             data=np.array(vox_off, dtype=np.uint32), **_GZIP_OPTS)
-            f.create_dataset('voxel_flat_indices',
-                             data=np.concatenate(vox_idx_list) if vox_idx_list else np.array([], dtype=np.int64),
-                             **_GZIP_OPTS)
-            f.create_dataset('voxel_counts',
-                             data=np.concatenate(vox_cnt_list) if vox_cnt_list else np.array([], dtype=np.int32),
-                             **_GZIP_OPTS)
 
     return filename
 
