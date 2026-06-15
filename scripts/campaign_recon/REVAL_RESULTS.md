@@ -130,3 +130,31 @@ density — THE energy mismatch), **(3) emission timing +1.16 ns late** (drives 
 ring too narrow** (delta-ray/scattering not modeled). The old net matched on (1)+(2). Proper
 fix = re-calibrate/retrain the new net (nphot + longitudinal density/s_max + t0); interim
 levers `cherenkov_photon_norm` + `cherenkov_smax_norm` (committed, byte-identical at 1.0).
+
+---
+
+## WHY the old net matched (the structural root cause)
+
+OLD net inputs = `(energy, angle, DISTANCE)` with **distance in physical mm, range 10–9990 mm**
+(≈ up to 10 m). It predicts density over physical distance DIRECTLY and places photons there.
+NEW net inputs = `(energy, angle, s/s_max)` with distance normalized to **[0.001, 0.999]**, then
+physical distance is rebuilt via a SEPARATE `s_max(E)` power-law fit.
+
+Emitted longitudinal (no propagation), new vs old vs 20-event GEANT4:
+
+| quantile | OLD emitter | GEANT4 | NEW emitter |
+|---|---|---|---|
+| 50% | 2.20 | 2.16 | 1.77 m |
+| 90% | 4.14 | 4.08 | 3.46 m |
+| 99% | 4.82 | 4.70 | 4.03 m |
+
+**The OLD net's longitudinal matches GEANT4 to ~1–3%; the NEW net is ~15% short.** The whole
+energy mismatch is the new net's `s/s_max × s_max(E)` reparametrization (introduced for
+energy generalization) compressing the track — the old direct-physical-distance net had it
+right. **Wavelengths: NEITHER net stores/uses them** (both predict λ-integrated density; the
+emitter samples λ + applies QE identically), so wavelength handling is the same for both —
+the new net's λ-sensitivity in recon is a downstream symptom of the compressed longitudinal,
+not a saved-wavelength difference. New net is also better-FIT to its data (val loss 0.018 vs
+0.075) — the defect is the parametrization/training target, not fit quality. Revisit fix:
+correct the new net's `s_max(E)` / longitudinal density + `nphot` + t0 to GEANT4 (the
+`cherenkov_smax_norm` / `cherenkov_photon_norm` knobs target exactly these, byte-identical@1.0).
