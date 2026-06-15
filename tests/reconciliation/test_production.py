@@ -9,7 +9,7 @@ import os
 import glob
 import pytest
 
-ROOT = '/sdf/group/neutrino/omara/LUCiD_unification'
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 CONFIGS = os.path.join(ROOT, 'lucid/production/configs')
 
 

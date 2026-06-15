@@ -15,7 +15,7 @@ import numpy as np
 import jax
 import jax.numpy as jnp
 
-ROOT = '/sdf/group/neutrino/omara/LUCiD_unification'
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 GEOM = os.path.join(ROOT, 'config/IceCube86_simple_geom_config.json')
 PHYS = os.path.join(ROOT, 'config/IceCube86_physics_config.json')
 

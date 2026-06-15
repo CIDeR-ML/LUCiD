@@ -318,7 +318,7 @@ def main():
                         medium_model_path=medium_path)
     wavelengths = [float(w.strip()) for w in args.wavelength_list.split(",")]
 
-    qe_info = "QE from curve" if qe_curve_fn is not None else f"QE={float(dp.qe):.4f} scalar"
+    qe_info = "QE from curve" if qe_curve_fn is not None else f"QE={float(dp.response.qe):.4f} scalar"
     print(f"\nSweeping {len(wavelengths)} wavelengths for source={args.source}, "
           f"K_max={args.k_max}  ({qe_info})")
     print(f"{'wl(nm)':>6s}  {'L_scat':>8s}  {'L_abs':>8s}  {'QE':>8s}  "
@@ -330,11 +330,11 @@ def main():
         sc = float(jnp.interp(wl, medium.wavelength_grid, medium.scatter_coeff))
         ac = float(jnp.interp(wl, medium.wavelength_grid, medium.absorption_coeff))
         L_s, L_a = 1.0 / sc, 1.0 / ac
-        qe_wl = float(qe_curve_fn(jnp.array(wl))) if qe_curve_fn is not None else float(dp.qe)
+        qe_wl = float(qe_curve_fn(jnp.array(wl))) if qe_curve_fn is not None else float(dp.response.qe)
         dp_wl = dp._replace(
-            scatter_length=jnp.array(L_s),
-            absorption_length=jnp.array(L_a),
-            qe=jnp.array(qe_wl))
+            scattering=dp.scattering._replace(scatter_length=jnp.array(L_s)),
+            absorption=dp.absorption._replace(absorption_length=jnp.array(L_a)),
+            response=dp.response._replace(qe=jnp.array(qe_wl)))
 
         result, n, total, elapsed = run_one(dp_wl, wl_override=wl)
 
