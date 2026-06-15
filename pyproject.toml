@@ -25,15 +25,22 @@ dependencies = [
 
 [project.optional-dependencies]
 training = ["torch>=2.0"]
-dev = ["pytest>=7.0", "nbmake"]
+notebooks = ["jupyterlab>=4.0", "ipykernel>=6.0", "nbmake"]
+dev = ["pytest>=7.0", "lucid-sim[notebooks]"]
+all = ["lucid-sim[training,notebooks,dev]"]
 
 [project.scripts]
 lucid-optimize = "lucid.optimization.run:main"
 lucid-train-siren = "lucid.siren.train:main"
 lucid-run-job = "lucid.production.run_job:main"
+lucid-build-photon-table = "lucid.siren.training.photonsim_data.build_photon_table:main"
+lucid-build-dedx-table = "lucid.siren.training.photonsim_data.build_dedx_table:main"
 
 [tool.setuptools.packages.find]
 include = ["lucid*"]
+
+[tool.setuptools.package-data]
+"lucid.production.configs" = ["*.json"]
 
 [tool.pytest.ini_options]
 markers = [
