@@ -127,11 +127,19 @@ def test_string_volume_optical_gradient_ad_matches_fd_single_step():
     (Rayleigh), mie_scatter_length (Mie), and absorption_length, all of which enter the
     deposit through the rate-combined effective length / absorption weight.
 
-    NOTE: this validates the deposit (single-step) gradient. The MULTI-STEP (K>1)
-    trajectory gradient is NOT yet AD-faithful — the discrete per-step DOM-candidate
-    selection in the string propagator is non-differentiable (AD diverges from FD as K
-    grows). Making the full multi-bounce ice forward AD==FD (a differentiable candidate
-    selection) is the open 'volume → DiCE-forward citizen' work and the ice-recon gate.
+    NOTE on the MULTI-STEP (K>1) gradient (measured, noise-controlled — mean over
+    ~80 keys at 200k photons, K=4): the pathwise AD gradient for the trajectory-
+    affecting optical params is UNBIASED — it is statistically consistent with the
+    common-random-number finite difference (gap ~0.3 sigma; both ~0 for this
+    source-on-DOM config) — but it is a very HIGH-VARIANCE estimator: per-key AD std
+    is ~50x the FD's, because the discrete per-step DOM-candidate selection
+    (top_k strings / searchsorted DOM-bracket / argmin, string_propagator.py:141/166/195)
+    injects large per-key gradient spikes that average out but do not cancel per key,
+    and that variance grows with K. So single-key AD is unusable for ice recon; the
+    many-key mean converges. The open 'volume → DiCE-forward citizen' work is therefore
+    VARIANCE REDUCTION (a soft/differentiable candidate selection, or CRN/antithetic
+    sampling), NOT a bias fix. (Earlier single-key AD-vs-FD comparisons that suggested a
+    'wrong-sign / diverging' gradient were shot noise, not bias.)
     """
     sim, dp = _string_sim_and_dp(K=1)
     src = _string_src()
