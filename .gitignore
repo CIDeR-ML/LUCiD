@@ -47,3 +47,7 @@ campaign/grid_out/
 
 # Per-user cluster config (copied from a user_paths.*.sh.template); never commit
 lucid/production/jobs/user_paths.sh
+
+# Personal dev/research scratch (kept on disk, not tracked)
+hessian_probe/
+scripts/campaign_recon/
