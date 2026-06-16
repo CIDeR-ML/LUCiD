@@ -20,6 +20,15 @@ the full flag list (`--batch-size`, `--n-events`, `--master-seed`,
 
 **Units:** meters, nanoseconds, MeV throughout.
 
+## Medium / scintillation (WbLS)
+
+The medium is set by the **detector config** (`--detector`), not by the
+dataprod config's `material` field. The default `--detector SK_like` is
+water → Cherenkov-only output (every `emission_process` row is 0). To
+produce scintillation, run with `--detector SK_like_wbls`; the log then
+reports `geometry: cylinder / wbls` and `emission_process` carries both
+Cherenkov (0) and scintillation (1) hits.
+
 ## End-to-end (PhotonSim + LUCiD + HTMLs)
 
 `generate_validation_htmls.sh` runs PhotonSim, feeds its ROOT into the
