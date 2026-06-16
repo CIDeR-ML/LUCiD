@@ -21,7 +21,7 @@ Helpers:
     save_particle_params / load_particle_params
 """
 
-from typing import NamedTuple
+from typing import Any, NamedTuple
 import json
 import os
 
@@ -68,11 +68,18 @@ class AbsorptionParams(NamedTuple):
     ------
     absorption_length : jnp.ndarray     scalar, meters
     abs_dev : jnp.ndarray               (n_ctrl,) λ-deviation curve, default ones (≡1)
+    field_params : Any                  spatial-map params (pytree leaf), default None ⇒
+                                        homogeneous. The *representation* (poly/siren) is
+                                        static, fixed at setup via ``simulation.fields``;
+                                        only these values are traced/optimized. ``None`` is
+                                        an empty subtree → byte-identical homogeneous run and
+                                        preserves the existing flatten leaf order.
 
     ``abs_dev`` is the fittable wavelength-deviation curve; see ``ScatteringParams``.
     """
     absorption_length: jnp.ndarray
     abs_dev: jnp.ndarray
+    field_params: Any = None
 
 
 class ReflectionParams(NamedTuple):
@@ -339,8 +346,17 @@ _SUBTUPLES = (
 )
 
 # Ordered list of every leaf (flat) field name across all sub-tuples.
+# Opaque optimizer-only leaves: present in the JAX pytree (so grad/optax see them when
+# populated) but NOT physical scalar/array fields — excluded from the flat save/load,
+# leaf-order, and projection machinery. ``field_params`` holds a poly/siren weight pytree
+# whose representation is static (``simulation.fields``); it is persisted separately, not
+# via the per-field JSON+npy path. Keeping it out here preserves the byte-identical flat
+# field contract (and the reconciliation leaf-order tripwire) when no field is configured.
+_OPAQUE_FIELDS = frozenset({"field_params"})
+
 _FLAT_FIELDS = tuple(
     field for _, cls in _SUBTUPLES for field in cls._fields
+    if field not in _OPAQUE_FIELDS
 )
 
 # leaf field name -> sub-tuple attribute name (e.g. 'scatter_length' -> 'scattering')
@@ -369,6 +385,8 @@ def _flatten_detector_params(params: DetectorParams) -> dict:
     for attr, cls in _SUBTUPLES:
         sub = getattr(params, attr)
         for f in cls._fields:
+            if f in _OPAQUE_FIELDS:
+                continue
             flat[f] = getattr(sub, f)
     return flat
 

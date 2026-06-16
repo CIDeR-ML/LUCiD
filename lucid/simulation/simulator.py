@@ -74,6 +74,10 @@ def setup_event_simulator(
         reflection_wavelength=400.0,
         spectrum=None,
         cherenkov_emission_band=None,
+        absorption_field=None,
+        field_hparams=None,
+        field_gauge=False,
+        n_field_eval=1,
         **grid_params):
     """
     Set up and return an event simulator using DetectorParams / ParticleParams.
@@ -253,14 +257,30 @@ def setup_event_simulator(
     # build_refl_params packs the model's parameters out of DetectorParams.
     reflection_fn, build_refl_params = get_reflection_model(reflection_model)
 
+    # ---- Spatial absorption field (optional; None = homogeneous, byte-identical) ----
+    # The representation + geometry are static (captured in the step closure); only the
+    # fittable params live in DetectorParams.absorption.field_params (traced). Built once
+    # here from the detector's own R/H, so the encoding is geometry-correct (no hardcoding).
+    absorption_field_fn = None
+    if absorption_field is not None and absorption_field != 'uniform':
+        from lucid.simulation.fields import make_field
+        absorption_field_fn, _ = make_field(
+            absorption_field, R=float(detector.r), H=float(detector.H),
+            gauge=field_gauge, **(field_hparams or {}))
+
     # ---- Select photon update function --------------------------------------
+    # The spatial field is only wired into the differentiable expected-value step; the
+    # sampling (data) path takes no field_params yet, so field_active is gated to that path.
     if sim_config.is_data:
         photon_update_fn = photon_iteration_sample
     elif sim_config.use_expected_value is False:
         photon_update_fn = photon_iteration_sample
     else:
         photon_update_fn = jax.remat(
-            make_photon_iteration_update_factors_safe(reflection_fn))
+            make_photon_iteration_update_factors_safe(
+                reflection_fn, field_fn=absorption_field_fn, n_field_eval=n_field_eval))
+    field_active = absorption_field_fn is not None and not (
+        sim_config.is_data or sim_config.use_expected_value is False)
 
     # ---- Geometry bounds check (delegates to detector method) ----------------
     def get_inside_detector_flag(positions):
@@ -524,6 +544,8 @@ def setup_event_simulator(
         # Packed reflection params for the pluggable reflection model (default scalar →
         # ScalarReflection(wall_rate, sensor_rate)). build_refl_params is chosen at setup.
         refl_params = build_refl_params(detector_params)
+        # Spatial-absorption-field params packed out of the pytree (None when homogeneous).
+        field_params = detector_params.absorption.field_params
         # Wavelength fed to the reflection model. Scalar reflection ignores it; the angular
         # (Fresnel) model uses it for the cathode/glass dispersion. A scalar reflection
         # wavelength is exact for monochromatic-laser calibration (the validated case); a
@@ -610,18 +632,34 @@ def setup_event_simulator(
             # a wavelength-dependent reflection model is used). Step returns a 7-tuple; the
             # 7th is the per-photon DiCE score increment (lf+la+lr for the differentiable
             # step, 0.0 for the sampling step). PRE-step log_p drives the implicit deposit.
-            (new_positions, new_directions, new_times,
-             detect_probs, reflection_attenuations,
-             continuing_factors, logp_increments) = jax.vmap(
-                photon_update_fn,
-                in_axes=(0, 0, 0, 0, 0,
-                         0, 0, None, None, 0,
-                         0, None, 0, None)
-            )(state.positions, state.directions, state.times,
-              surface_distances, normals,
-              scatter_lengths, mie_scatter_lengths, g, refl_params,
-              absorption_lengths,
-              hit_sensor, refl_lam, rng_keys, SPEED_OF_LIGHT_MATERIAL)
+            if not field_active:
+                # Homogeneous absorption — the original 14-arg call, untouched (byte-identical).
+                (new_positions, new_directions, new_times,
+                 detect_probs, reflection_attenuations,
+                 continuing_factors, logp_increments) = jax.vmap(
+                    photon_update_fn,
+                    in_axes=(0, 0, 0, 0, 0,
+                             0, 0, None, None, 0,
+                             0, None, 0, None)
+                )(state.positions, state.directions, state.times,
+                  surface_distances, normals,
+                  scatter_lengths, mie_scatter_lengths, g, refl_params,
+                  absorption_lengths,
+                  hit_sensor, refl_lam, rng_keys, SPEED_OF_LIGHT_MATERIAL)
+            else:
+                # Spatial absorption field — field_params (15th arg) broadcast (in_axes None).
+                (new_positions, new_directions, new_times,
+                 detect_probs, reflection_attenuations,
+                 continuing_factors, logp_increments) = jax.vmap(
+                    photon_update_fn,
+                    in_axes=(0, 0, 0, 0, 0,
+                             0, 0, None, None, 0,
+                             0, None, 0, None, None)
+                )(state.positions, state.directions, state.times,
+                  surface_distances, normals,
+                  scatter_lengths, mie_scatter_lengths, g, refl_params,
+                  absorption_lengths,
+                  hit_sensor, refl_lam, rng_keys, SPEED_OF_LIGHT_MATERIAL, field_params)
 
             inside_detector = get_inside_detector_flag(new_positions)
             safe_continuing = jnp.where(inside_detector, continuing_factors, 0.0)

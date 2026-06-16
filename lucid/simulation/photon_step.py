@@ -138,12 +138,29 @@ def photon_iteration_sample(
     return new_pos, new_dir, new_time, detect_prob, reflection_attenuation, continuing_factor, logp_increment
 
 
+def _field_optical_factor(field_fn, field_params, position, direction, dist, n_eval):
+    """Line-integrated spatial-absorption multiplier ``mean_i field(x_i)`` over a step.
+
+    The absorption optical depth becomes ``(dist / L_abs) * mean_i field(x_i)``. Sample
+    geometry is gradient-DETACHED (``sg``), so the field contributes only its magnitude and
+    its own ``field_params`` gradient — the existing track/optical gradients keep their
+    original structure (and ``field_fn is None`` skips this entirely → byte-identical).
+    """
+    sg = jax.lax.stop_gradient
+    dir_n = normalize(sg(direction))
+    base = sg(position)
+    ts = jnp.linspace(0.0, 1.0, n_eval + 2)[1:-1]                  # (n_eval,) interior midpoints
+    pts = base[None, :] + ts[:, None] * (sg(dist) * dir_n)[None, :]  # (n_eval, 3)
+    return jnp.mean(field_fn(field_params, pts))
+
+
 def photon_iteration_update_factors(
         position, direction, time, surface_distance,
         normal, scatter_length, mie_scatter_length, g, refl_params,
         absorption_length,
         hit_sensor, lam, rng_key, speed_of_light,
-        reflection_fn=scalar_reflection):
+        reflection_fn=scalar_reflection, field_fn=None, field_params=None,
+        n_field_eval=1):
     """
     Expected-value photon update with Straight-Through Estimator (STE).
 
@@ -218,7 +235,18 @@ def photon_iteration_update_factors(
     is_scat = d < Dd
 
     dist = jnp.where(is_scat, d, Dd)
-    atten = jnp.exp(-dist / absorption_length)                    # absorption survival to event
+    # Spatial-absorption multiplier: ONE field evaluation per step (piecewise-constant field
+    # over the step), SHARED by the event-survival (atten) and surface-deposit (atten_surf)
+    # hooks below. Sampled over the surface ray [0, Dd] (the step's full spatial extent;
+    # dist ≤ Dd). This is the irreducible 1 (×n_field_eval) eval/photon/step — half the work
+    # of evaluating each hook's segment separately. field_fn is None ⇒ phi unused and the
+    # homogeneous path stays byte-identical.
+    if field_fn is None:
+        atten = jnp.exp(-dist / absorption_length)                # absorption survival to event
+    else:
+        # NB: named field_mult (NOT phi — `phi` is reused below for the scatter azimuth angle).
+        field_mult = _field_optical_factor(field_fn, field_params, position, direction, Dd, n_field_eval)
+        atten = jnp.exp(-dist / absorption_length * field_mult)
 
     # Mie/Rayleigh Bernoulli + the matching angle samplers
     is_mie = jax.random.uniform(k[2]) < sg(p_mie)
@@ -264,7 +292,10 @@ def photon_iteration_update_factors(
     # free-path decision). Dd LIVE → pathwise track gradient through `reach`/`atten_surf`.
     # No qe (applied in make_hits); no dice_dep (the scan body multiplies it from PRE-step log_p).
     reach = jnp.exp(-mu_tot * Dd)
-    atten_surf = jnp.exp(-Dd / absorption_length)
+    if field_fn is None:
+        atten_surf = jnp.exp(-Dd / absorption_length)
+    else:
+        atten_surf = jnp.exp(-Dd / absorption_length * field_mult)  # reuse the single per-step factor
     detect_prob = reach * (1.0 - refl_prob) * atten_surf
     reflection_attenuation = jnp.ones_like(detect_prob)           # folded into detect_prob
     continuing_factor = jnp.where(is_scat, atten, refl_prob * atten)
@@ -285,8 +316,16 @@ def photon_iteration_update_factors(
 # custom_vjp signature stays fixed (refl_params is a single packed pytree arg) —
 # a new reflection model never reshapes _fwd/_bwd residuals or cotangents.
 
-def make_photon_iteration_update_factors_safe(reflection_fn=scalar_reflection):
+def make_photon_iteration_update_factors_safe(reflection_fn=scalar_reflection,
+                                              field_fn=None, n_field_eval=1):
     """Build the expected-value step closed over ``reflection_fn`` (a static model choice).
+
+    ``field_fn`` is the optional static spatial-absorption map (from
+    ``simulation.fields.make_field``). When ``None`` the step is byte-identical to the
+    homogeneous engine and ``field_params`` is never referenced; when set, the per-step
+    ``field_params`` pytree leaf is passed at call time (vmapped, broadcast) and the
+    absorption hooks line-integrate the map over the step. ``n_field_eval`` (static) is the
+    number of interior sample points per step.
 
     Historically this wrapped the step in a ``jax.custom_vjp`` whose backward scrubbed
     NaN/Inf cotangents — a backstop for a sqrt-at-zero 0/0 in the surface-distance norm
@@ -303,12 +342,14 @@ def make_photon_iteration_update_factors_safe(reflection_fn=scalar_reflection):
 
     def _step(position, direction, time, surface_distance,
               normal, scatter_length, mie_scatter_length, g, refl_params,
-              absorption_length, hit_sensor, lam, rng_key, speed_of_light):
+              absorption_length, hit_sensor, lam, rng_key, speed_of_light,
+              field_params=None):
         return photon_iteration_update_factors(
             position, direction, time, surface_distance,
             normal, scatter_length, mie_scatter_length, g, refl_params,
             absorption_length, hit_sensor, lam, rng_key, speed_of_light,
-            reflection_fn=reflection_fn)
+            reflection_fn=reflection_fn, field_fn=field_fn, field_params=field_params,
+            n_field_eval=n_field_eval)
 
     return _step
 
