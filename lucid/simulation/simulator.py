@@ -549,8 +549,9 @@ def setup_event_simulator(
                 # ── Volume model (string telescope): per-DOM survival, NO reflection ──
                 # Each candidate DOM gets an independent detection weight from its distance
                 # along the ray; the photon always scatters in the open medium (no wall).
-                # Rayleigh-only for now (Mie on the volume phase function is a later step);
-                # no DiCE score increment → log_p is carried through unchanged.
+                # Two-channel Rayleigh+Mie scatter (forward-peaked Mie needed for ice);
+                # g enters only the reparametrised HG sampler so its gradient is exact.
+                # No DiCE score increment → log_p is carried through unchanged.
                 from lucid.simulation.photon_step_volume import photon_step_volume
                 sensor_distances = prop_results['sensor_distances']     # (n_cand, n_rays, 1)
                 seg_lengths = jnp.maximum(prop_results['envelope_exit_t'], 1.0)   # (n_rays,)
@@ -559,11 +560,11 @@ def setup_event_simulator(
                 (new_positions, new_directions, new_times,
                  per_dom_charges, continuing_factors) = jax.vmap(
                     photon_step_volume,
-                    in_axes=(0, 0, 0, 1, 1, 0, 0, 0, 0, None)
+                    in_axes=(0, 0, 0, 1, 1, 0, 0, 0, 0, 0, None, None)
                 )(state.positions, state.directions, state.times,
                   sensor_distances.squeeze(-1), depositions,
-                  scatter_lengths, absorption_lengths, seg_lengths,
-                  rng_keys, SPEED_OF_LIGHT_MATERIAL)
+                  scatter_lengths, mie_scatter_lengths, absorption_lengths, seg_lengths,
+                  rng_keys, SPEED_OF_LIGHT_MATERIAL, g)
 
                 inside_detector = get_inside_detector_flag(new_positions)
                 safe_continuing = jnp.where(inside_detector, continuing_factors, 0.0)
