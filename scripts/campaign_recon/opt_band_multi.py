@@ -111,7 +111,24 @@ def errs(x, th9, d):
 
 OUT = os.environ.get('OUT', os.path.join(_ROOT, 'scripts/campaign_recon/plots'))
 os.makedirs(OUT, exist_ok=True)
+# NPH + event-start in the tag so the photon-count sweep AND event chunks of the same
+# config write distinct files (no overwrite; merged at analysis time).
+_tag = f'{PARTICLE}_{ENERGY}_nph{NPH}_ev{min(EVENTS):03d}'
 ratios = []; biases = []; evdone = []; trajs = []
+
+
+def save_npz():
+    if not trajs: return
+    np.savez(os.path.join(OUT, f'optb_{_tag}.npz'),
+             particle=PARTICLE, energy=ENERGY, nph=NPH, niters=NITERS,
+             events=np.array(evdone), ratio=np.array(ratios), bias=np.array(biases),  # bias: vtx_cm,dir_deg,dE_MeV,dt0_ns
+             traj_err=np.array([tr['err'] for tr in trajs]),       # (n_ev, niters+1, 4)
+             traj_gnorm=np.array([tr['gnorm'] for tr in trajs]),   # (n_ev, niters+1)
+             traj_vec=np.array([tr['vec'] for tr in trajs]),       # (n_ev, niters+1, 9) RAW 9-vec
+             truth9=np.array([tr['th9'] for tr in trajs]),         # (n_ev, 9) truth 9-vec
+             best_iter=np.array([tr['best_iter'] for tr in trajs]))
+
+
 for ev in EVENTS:
     t0 = time.time()
     try:
@@ -132,22 +149,18 @@ for ev in EVENTS:
         eT = errs(rT, th9, dir_true); biases.append(eT); evdone.append(ev)
         # per-iteration trajectory metrics (vtx-err cm, dir deg, dE, dt0) + scaled gnorm
         per_iter = np.array([errs(x, th9, dir_true) for x in H['traj']])   # (niters+1, 4)
-        trajs.append({'err': per_iter, 'gnorm': np.asarray(H['gnorm']), 'best_iter': int(H['best_iter'])})
+        trajs.append({'err': per_iter, 'gnorm': np.asarray(H['gnorm']), 'best_iter': int(H['best_iter']),
+                      'vec': np.asarray(H['traj']), 'th9': th9.copy()})   # full 9-vec trajectory + truth
         print(f'ev{ev:03d} n_hit{int((oc>0).sum()):5d} q{data_q:7.0f} mq{mq:7.0f} R{ratio:5.3f} '
               f'| vtx{eT[0]:6.1f}cm dir{eT[1]:4.2f} dE{eT[2]:+6.0f}({100*eT[2]/E_true:+5.1f}%) dt0{eT[3]:+5.2f} [{time.time()-t0:.0f}s]', flush=True)
+        save_npz()   # incremental — crash-safe for long unattended runs
     except Exception as e:
         print(f'ev{ev:03d} FAILED: {type(e).__name__}: {e} [{time.time()-t0:.0f}s]', flush=True)
 
 R = np.array(ratios); B = np.array(biases)
-# save per-event metrics + per-iteration trajectories (rectangular: all share NITERS)
-_tag = f'{PARTICLE}_{ENERGY}'
-np.savez(os.path.join(OUT, f'optb_{_tag}.npz'),
-         particle=PARTICLE, energy=ENERGY, events=np.array(evdone), ratio=R, bias=B,  # bias cols: vtx_cm,dir_deg,dE_MeV,dt0_ns
-         traj_err=np.array([tr['err'] for tr in trajs]),       # (n_ev, niters+1, 4)
-         traj_gnorm=np.array([tr['gnorm'] for tr in trajs]),   # (n_ev, niters+1)
-         best_iter=np.array([tr['best_iter'] for tr in trajs]))
+save_npz()
 print(f'saved {OUT}/optb_{_tag}.npz', flush=True)
-print(f'\n=== SUMMARY {PARTICLE} {ENERGY}MeV ({len(B)} ev, no norm, band={CHER_BAND}, thr={THRESH}) ===', flush=True)
+print(f'\n=== SUMMARY {PARTICLE} {ENERGY}MeV nph{NPH} ({len(B)} ev, no norm, band={CHER_BAND}, thr={THRESH}) ===', flush=True)
 print(f'q_tot ratio: median {np.median(R):.3f} mean {R.mean():.3f} std {R.std():.3f}', flush=True)
 print(f'vtx cm : median {np.median(B[:,0]):.1f} mean {B[:,0].mean():.1f} RMS {np.sqrt((B[:,0]**2).mean()):.1f}', flush=True)
 print(f'dir deg: median {np.median(B[:,1]):.2f} mean {B[:,1].mean():.2f}', flush=True)
