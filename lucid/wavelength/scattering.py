@@ -9,7 +9,11 @@ main simulation propagation loop (which uses the Rayleigh sampler from
 import jax
 import jax.numpy as jnp
 from lucid.utils import normalize
-from lucid.simulation.optics import create_local_frame, solve_rayleigh_inverse_cdf
+# create_local_frame / solve_rayleigh_inverse_cdf are imported lazily inside the
+# functions below (not at module top) to avoid a circular import: importing
+# lucid.simulation.optics runs lucid/simulation/__init__ -> simulator -> photon_step,
+# and photon_step imports back from this module. A module-top import here breaks
+# `import lucid.wavelength.scattering` when it is the first import in a process.
 
 
 def compute_rayleigh_scatter_direction(incident_dir, rng_key):
@@ -29,6 +33,7 @@ def compute_rayleigh_scatter_direction(incident_dir, rng_key):
     jnp.ndarray
         (3,) scattered direction (unit vector).
     """
+    from lucid.simulation.optics import create_local_frame, solve_rayleigh_inverse_cdf
     k1, k2 = jax.random.split(rng_key)
     u1 = jax.random.uniform(k1)
     u2 = jax.random.uniform(k2)
@@ -109,6 +114,7 @@ def compute_mie_scatter_direction(incident_dir, rng_key, g=0.95):
     jnp.ndarray
         (3,) scattered direction (unit vector).
     """
+    from lucid.simulation.optics import create_local_frame
     k1, k2 = jax.random.split(rng_key)
     u1 = jax.random.uniform(k1)
     u2 = jax.random.uniform(k2)

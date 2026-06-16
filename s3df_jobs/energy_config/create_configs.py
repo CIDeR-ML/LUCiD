@@ -2,7 +2,7 @@ import json
 
 data = {
   "basic_config": {
-    "default_json_filename": "/sdf/home/c/cjesus/REFACTORED/LUCiD/config/SK_geom_config.json",
+    "default_json_filename": "config/SK_geom_config.json",
     "data_dir": "",
     "temperature": 0.1,
     "n_events": 100,
@@ -37,7 +37,7 @@ for i, E in enumerate(energies):
         nphot = 200_000
 
     data["basic_config"]["nphot"] = nphot
-    data["basic_config"]["data_dir"] = f"/sdf/data/neutrino/cjesus/photonsim_output/water/monoenergetic/event_by_event/mu-/{E}MeV/"
+    data["basic_config"]["data_dir"] = f"/path/to/photonsim_output/water/monoenergetic/event_by_event/mu-/{E}MeV/"
     with open(f"opt_config_{i}.json", "w") as f:
         json.dump(data, f, indent=2)
     print(f"Config {i}: E={E}MeV, nphot={data['basic_config']['nphot']}")

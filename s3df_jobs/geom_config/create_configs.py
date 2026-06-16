@@ -3,7 +3,7 @@ import json
 data = {
   "basic_config": {
     "default_json_filename": "",
-    "data_dir": "/sdf/data/neutrino/cjesus/photonsim_output/water/monoenergetic/event_by_event/mu-/1050MeV/",
+    "data_dir": "/path/to/photonsim_output/water/monoenergetic/event_by_event/mu-/1050MeV/",
     "temperature": 0.1,
     "n_events": 150,
     "k": 7,
@@ -27,7 +27,7 @@ data = {
 sensor_counts = [2000, 4000, 6000, 8000, 10000, 12000, 14000, 16000, 18000, 20000]
 
 for i, n_sensors in enumerate(sensor_counts):
-    data["basic_config"]["default_json_filename"] = f"/sdf/home/c/cjesus/REFACTORED/LUCiD/s3df_jobs/geom_config/geom_list/detector_{n_sensors}_sensors.json"
+    data["basic_config"]["default_json_filename"] = f"s3df_jobs/geom_config/geom_list/detector_{n_sensors}_sensors.json"
     with open(f"opt_config_{i}.json", "w") as f:
         json.dump(data, f, indent=2)
     print(f"Config {i}: n_sensors={n_sensors}, nphot=75000, n_events=150")

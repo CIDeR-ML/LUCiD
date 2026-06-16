@@ -2,8 +2,8 @@ import json
 
 data = {
   "basic_config": {
-    "default_json_filename": "/sdf/home/c/cjesus/REFACTORED/LUCiD/config/SK_geom_config.json",
-    "data_dir": "/sdf/data/neutrino/cjesus/photonsim_output/water/monoenergetic/event_by_event/mu-/1050MeV/",
+    "default_json_filename": "config/SK_geom_config.json",
+    "data_dir": "/path/to/photonsim_output/water/monoenergetic/event_by_event/mu-/1050MeV/",
     "temperature": 0.1,
     "n_events": 500,
     "k": 7,

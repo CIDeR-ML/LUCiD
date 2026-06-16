@@ -3,9 +3,9 @@ import json
 # Base structure
 data = {
   "basic_config": {
-    "default_json_filename": "/sdf/home/c/cjesus/Dev/LUCiD/config/SK_geom_config.json",
+    "default_json_filename": "config/SK_geom_config.json",
     "data_file": "../data/water/muon/muon_gun_1050_MeV_100_events_fixed_energy.root",
-    "data_dir": "/sdf/data/neutrino/cjesus/photonsim_output/water/monoenergetic/event_by_event/mu-/1050MeV/",
+    "data_dir": "/path/to/photonsim_output/water/monoenergetic/event_by_event/mu-/1050MeV/",
     "temperature": 0.1,
     "n_events": 100,
     "k": 7,
