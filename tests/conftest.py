@@ -37,6 +37,12 @@ _SLOW_FILES = [
     "test_qe_importance_sampling.py",
     "test_qe_setup_broadcast.py",
     "test_tripwire.py",
+    # e2e simulation smoke tests (build detectors + run sims; ~90s total)
+    "test_e2e_calibration.py",
+    "test_e2e_track_and_data.py",
+    "test_e2e_superk.py",
+    "test_e2e_gradients.py",
+    "test_e2e_edge_cases.py",
 ]
 
 
