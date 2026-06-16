@@ -5,32 +5,38 @@ float in the medium at different distances along the photon ray. Each DOM
 gets its own reach probability based on its distance from the photon origin.
 
 No reflection — photons either scatter in the medium, are absorbed, or
-are detected by a DOM. The detection weight per DOM is:
+are detected by a DOM. The detection weight per DOM is the implicit-capture
+(Rao-Blackwellised) expected charge:
 
-    charge_j = overlap(d_perp_j) × exp(-d_j / λ_scat) × exp(-d_j / λ_abs)
+    charge_j = overlap(d_perp_j) × exp(-d_j · mu_tot) × exp(-d_j / λ_abs)
 
-where exp(-d/λ_scat) is the probability of remaining on the ray (STE soft
-weight, not a hard gate on scatter_dist), and exp(-d/λ_abs) is the weight
-attenuation from absorption. These are kept separate for clarity and to
-support independent wavelength dependence.
+where exp(-d·mu_tot) is the probability of remaining on the ray to distance d
+(``mu_tot`` = combined Rayleigh+Mie scatter rate) and exp(-d/λ_abs) is the
+absorption survival. These are kept separate to support independent wavelength
+dependence.
 
-The continuing factor is:
+Gradient design — this is a DiCE-forward citizen, mirroring the water
+``photon_step``:
+  * TRACK params flow PATHWISE — geometry (per-DOM distances, direction,
+    position) is kept LIVE, so the deposit and the carried position/time carry
+    the track gradient.
+  * OPTICAL scatter-rate/asymmetry params (λ_R, λ_M, g) flow through the DiCE
+    SCORE (``logp_increment`` = free-path log-prob + Mie/Rayleigh angle log-prob),
+    with the sampled free path ``d`` and the cos-angles DETACHED inside the score
+    so it carries optical gradients only (via the live ``mu_tot``/``p_mie``/``g``
+    coefficients). The increment is accumulated into ``PhotonState.log_p`` and the
+    scan body folds ``dice_dep = exp(log_p − sg(log_p))`` into each future deposit.
+    The sampled free path is detached for the trajectory (``new_position`` uses
+    ``sg(d)``), so the optical gradient does NOT take the high-variance pathwise
+    route through the discrete DOM-candidate selection — it rides the score.
+  * λ_abs flows PATHWISE through the deposit / continuing weight (a deterministic
+    attenuation, not a sampled decision — exact and low-variance).
 
-    continuing = (1 - Σ_j charge_j) × exp(-scatter_dist / λ_abs)
+Two-channel scatter combines λ_R and λ_M by RATE: mu_tot = 1/λ_R + 1/λ_M,
+p_mie = (1/λ_M)/mu_tot.
 
-Weight budget: deposited + continuing ≤ 1 (difference is absorbed).
-
-Scattering is a two-channel Rayleigh+Mie mixture (forward-peaked Mie is
-physically required for ice). The two channels combine by RATE:
-
-    1/λ_scat_eff = 1/λ_R + 1/λ_M ,   p_mie = (1/λ_M) / (1/λ_R + 1/λ_M)
-
-λ_scat_eff drives the reach + free path (so λ_R and λ_M both carry an exact
-reparam gradient through the deposit), and the scattered direction is drawn
-from the Rayleigh phase function with probability (1-p_mie) and the
-Henyey-Greenstein (Mie) phase function — reparametrised in the asymmetry g,
-so g carries an exact pathwise gradient — with probability p_mie. This
-mirrors the validated water ``photon_step`` mixture.
+The step returns ``logp_increment``; the simulator's volume branch applies the
+pre-step ``dice_dep`` to the deposit and accumulates ``log_p``.
 """
 
 import jax
@@ -40,9 +46,10 @@ from functools import partial
 from lucid.utils import normalize
 from lucid.simulation.optics import (
     sample_scatter_distance,
-    compute_scatter_direction,
+    create_local_frame,
+    solve_rayleigh_inverse_cdf,
 )
-from lucid.wavelength.scattering import compute_mie_scatter_direction
+from lucid.wavelength.scattering import hg_sample_cos_theta, hg_logpdf, rayleigh_logpdf
 
 
 def photon_step_volume(
@@ -59,73 +66,63 @@ def photon_step_volume(
     speed_of_light,
     g,
 ):
-    """Single volume photon step with per-DOM survival (Rayleigh+Mie scatter).
-
-    Parameters
-    ----------
-    position : (3,)           current photon position
-    direction : (3,)          current photon direction
-    time : scalar             current photon time (ns)
-    per_dom_distances : (max_dom,)  distance along ray to each candidate DOM (meters)
-    per_dom_overlaps : (max_dom,)   overlap weight for each candidate DOM
-    scatter_length : scalar   Rayleigh λ_R for this photon (meters)
-    mie_scatter_length : scalar  Mie λ_M for this photon (meters)
-    absorption_length : scalar  λ_abs for this photon (meters)
-    segment_length : scalar   max propagation distance this step (envelope exit)
-    rng_key : PRNGKey
-    speed_of_light : scalar   m/ns in medium
-    g : scalar                Henyey-Greenstein asymmetry for the Mie channel [0,1]
+    """Single volume photon step with per-DOM survival (DiCE Rayleigh+Mie scatter).
 
     Returns
     -------
-    new_position : (3,)
-    new_direction : (3,)
-    new_time : scalar
-    per_dom_charges : (max_dom,)   per-DOM detection weights (NOT multiplied by intensity)
+    new_position, new_direction, new_time : photon state for the next step
+    per_dom_charges : (max_dom,)   implicit-capture per-DOM deposit (× intensity later)
     continuing_factor : scalar     photon weight surviving to next K step
+    logp_increment : scalar        DiCE score increment (free-path + angle), accumulated
+                                   into PhotonState.log_p for future deposits
     """
-    k1, k2, k3 = jax.random.split(rng_key, 3)
+    sg = jax.lax.stop_gradient
+    k = jax.random.split(rng_key, 5)
 
-    # Two-channel scatter: combine Rayleigh + Mie by RATE (NOT min); the effective
-    # free path drives both the per-DOM reach and the sampled free path, so λ_R and
-    # λ_M each carry an exact reparam gradient through the deposit.
+    # Two-channel scatter rate (LIVE → direct optical gradient into the deposit).
     mie_safe = jnp.maximum(mie_scatter_length, 1e-6)
-    inv_total = 1.0 / scatter_length + 1.0 / mie_safe
-    scatter_length_eff = 1.0 / inv_total
-    p_mie = (1.0 / mie_safe) / inv_total              # P(a scatter is Mie)
+    mu_tot = 1.0 / scatter_length + 1.0 / mie_safe
+    p_mie = (1.0 / mie_safe) / mu_tot                  # P(a scatter is Mie)
 
     safe_distances = jnp.maximum(per_dom_distances, 0.0)
 
-    # Scatter reach: probability photon is still on this ray at distance d
-    scatter_reach = jnp.exp(-safe_distances / scatter_length_eff)
-    # Absorption: weight attenuation to distance d (reduces intensity, not direction)
+    # Implicit-capture deposit: prob of reaching DOM j (mu_tot LIVE) × absorption survival.
+    scatter_reach = jnp.exp(-safe_distances * mu_tot)
     absorb_weight = jnp.exp(-safe_distances / absorption_length)
-
-    # Per-DOM charge: detection probability × surviving weight
     per_dom_charges = per_dom_overlaps * scatter_reach * absorb_weight
-
     total_detected = jnp.sum(per_dom_charges)
 
-    # Scatter: sample how far the photon goes before scattering. eps>0 floors the
-    # truncated-exponential log so a long envelope segment (segment_length ≫ λ_scat,
-    # routine for a sparse telescope) keeps the distance + its optical-param gradient
-    # finite (caps the sampled distance at ~16·λ_scat, whose weight exp(-16) is ~0).
-    scatter_distance = sample_scatter_distance(segment_length, scatter_length_eff, k1, eps=1e-7)
-    scatter_attenuation = jnp.exp(-scatter_distance / absorption_length)
-
-    # Continuing factor: not detected AND survived absorption
+    # Free path: sampled from the truncated exponential on [0, segment_length]; LIVE in
+    # mu_tot (reparam) for the time, DETACHED for the trajectory + decision + score.
+    d_live = sample_scatter_distance(segment_length, 1.0 / mu_tot, k[0], eps=1e-7)
+    d = sg(d_live)
+    scatter_attenuation = jnp.exp(-d / absorption_length)   # absorption survival (λ_abs grad direct)
     continuing_factor = (1.0 - total_detected) * scatter_attenuation
 
-    # New position and direction (always scatter — no wall to hit). The scattered
-    # direction is a Rayleigh/Mie mixture: g enters only the Mie (HG) sampler, which
-    # is reparametrised, so g's gradient is exact; the Rayleigh/Mie choice is a hard
-    # Bernoulli on p_mie (same as the validated water step).
-    rayleigh_dir = compute_scatter_direction(direction, k2)
-    mie_dir = compute_mie_scatter_direction(direction, k2, g)
-    is_mie = jax.random.uniform(k3) < p_mie
-    new_direction = jnp.where(is_mie, mie_dir, rayleigh_dir)
+    # Scattered direction: Mie/Rayleigh mixture; g DETACHED in the sampler (scored below).
+    is_mie = jax.random.uniform(k[1]) < sg(p_mie)
+    ua = jax.random.uniform(k[2])
+    phi = jax.random.uniform(k[3]) * 2.0 * jnp.pi
+    cmie = hg_sample_cos_theta(ua, sg(g))
+    cray = jnp.clip(solve_rayleigh_inverse_cdf(ua), -1.0, 1.0)
+    cth = jnp.where(is_mie, cmie, cray)
+    sth = jnp.sqrt(jnp.clip(1.0 - cth ** 2, 0.0, 1.0))
+    frame = create_local_frame(direction)
+    local = jnp.array([sth * jnp.cos(phi), sth * jnp.sin(phi), cth])
+    new_direction = normalize(frame @ local)
 
-    new_position = position + scatter_distance * normalize(direction)
-    new_time = time + scatter_distance / speed_of_light
+    # Trajectory: detached free path → optical gradient rides the score, not the pathwise
+    # route through the discrete DOM-candidate selection. direction LIVE → track gradient.
+    new_position = position + d * normalize(direction)
+    new_time = time + d_live / speed_of_light            # Option C: live free path → optical time grad
 
-    return new_position, new_direction, new_time, per_dom_charges, continuing_factor
+    # DiCE score (optical only): truncated-exponential free-path log-pdf + Mie/Rayleigh angle
+    # log-pdf. d, segment_length, cmie, cray DETACHED so the score carries optical gradients
+    # via the live mu_tot / p_mie / g coefficients (never a track gradient).
+    lf = jnp.log(mu_tot) - mu_tot * d - jnp.log1p(-jnp.exp(-mu_tot * sg(segment_length)))
+    la = jnp.where(is_mie,
+                   jnp.log(p_mie) + hg_logpdf(sg(cmie), g),
+                   jnp.log1p(-p_mie) + rayleigh_logpdf(sg(cray)))
+    logp_increment = lf + la
+
+    return new_position, new_direction, new_time, per_dom_charges, continuing_factor, logp_increment
