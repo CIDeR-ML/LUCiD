@@ -112,7 +112,11 @@ the simulator call, so both lines share one data impl.
 
 Phases 1–4 are landed on `unification` (= `integration/unify-main`): merged DetectorParams,
 emission dispatch, cubic t0, native SIREN emitter, scintillation, volume scatter + string
-telescopes, modular sources, per_segment, and the production subsystem. Remaining: Mie on
-the volume phase function (sequenced later), full GPU re-validation campaigns (recon floor /
-calibration CRB), and an end-to-end production run (needs the external PhotonSim/GENIE
+telescopes, modular sources, per_segment, and the production subsystem. The volume phase
+function now carries the Rayleigh+Mie+g mixture (B-mie), with the single-step ice-optical
+deposit gradient validated AD==FD. Remaining: the MULTI-STEP (K>1) ice forward is not yet
+AD-faithful — the discrete per-step DOM-candidate selection in the string propagator is
+non-differentiable (AD diverges from FD as K grows), which gates the ice/string
+reconstruction floor (B-fit → R); plus full GPU re-validation campaigns (recon floor /
+calibration CRB) and an end-to-end production run (needs the external PhotonSim/GENIE
 binaries). See `docs/RECONCILIATION_PLAN.md` for the full plan and per-phase findings.
