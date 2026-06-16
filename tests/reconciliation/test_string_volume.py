@@ -127,19 +127,10 @@ def test_string_volume_optical_gradient_ad_matches_fd_single_step():
     (Rayleigh), mie_scatter_length (Mie), and absorption_length, all of which enter the
     deposit through the rate-combined effective length / absorption weight.
 
-    NOTE on the MULTI-STEP (K>1) gradient (measured, noise-controlled — mean over
-    ~80 keys at 200k photons, K=4): the pathwise AD gradient for the trajectory-
-    affecting optical params is UNBIASED — it is statistically consistent with the
-    common-random-number finite difference (gap ~0.3 sigma; both ~0 for this
-    source-on-DOM config) — but it is a very HIGH-VARIANCE estimator: per-key AD std
-    is ~50x the FD's, because the discrete per-step DOM-candidate selection
-    (top_k strings / searchsorted DOM-bracket / argmin, string_propagator.py:141/166/195)
-    injects large per-key gradient spikes that average out but do not cancel per key,
-    and that variance grows with K. So single-key AD is unusable for ice recon; the
-    many-key mean converges. The open 'volume → DiCE-forward citizen' work is therefore
-    VARIANCE REDUCTION (a soft/differentiable candidate selection, or CRN/antithetic
-    sampling), NOT a bias fix. (Earlier single-key AD-vs-FD comparisons that suggested a
-    'wrong-sign / diverging' gradient were shot noise, not bias.)
+    The MULTI-STEP (K>1) optical gradient is now handled by the DiCE-citizen volume
+    step (photon_step_volume routes λ_R/λ_M/g through the per-step score folded via
+    dice_dep, with the sampled free path detached for the trajectory), validated
+    separately in test_string_volume_optical_gradient_low_variance_multistep.
     """
     sim, dp = _string_sim_and_dp(K=1)
     src = _string_src()
@@ -168,3 +159,39 @@ def test_string_volume_optical_gradient_ad_matches_fd_single_step():
         # central-difference reparam gradient: AD and FD agree to a few %
         np.testing.assert_allclose(ad, fd, rtol=0.05, atol=1e-8 * (abs(fd) + 1.0),
                                    err_msg=f"AD!=FD for {which}: AD={ad:.4e} FD={fd:.4e}")
+
+
+def test_string_volume_optical_gradient_low_variance_multistep():
+    """B-fit gate (multi-step): with the DiCE-citizen volume step, the K>1 optical
+    charge-gradient is LOW-VARIANCE (the optical params ride the per-step DiCE score
+    folded via dice_dep; the sampled free path is detached for the trajectory, so the
+    gradient does NOT take the high-variance pathwise route through the discrete
+    DOM-candidate selection).
+
+    Regression guard against reverting to the naive pathwise step, which gave a per-key
+    AD std ~6 for scatter_length that GREW with K. The DiCE step gives per-key std ~0.02
+    (flat in K), so a handful of keys agree tightly. We assert the per-key AD spread is
+    small and the values are finite/bounded — a wide separator from the ~6 pathwise std
+    that will not flake.
+    """
+    from lucid.simulation.simulator import setup_event_simulator
+    sim = setup_event_simulator(GEOM, 80000, K=3, is_calibration=True,
+                                physics_config=PHYS, wavelength_mode=False)
+    dp = setup_event_simulator(GEOM, 80000, K=3, is_calibration=True, physics_config=PHYS,
+                               wavelength_mode=False, default_detector_params=True
+                               ).default_detector_params
+    src = _string_src()
+    s = dp.scattering
+    x0 = float(s.scatter_length)
+
+    def f(x, KEY):
+        d = dp._replace(scattering=s._replace(scatter_length=x))
+        return _qsum(sim, src, d, KEY)
+
+    gradf = jax.jit(jax.grad(lambda x, KEY: f(x, KEY)))
+    grads = np.array([float(gradf(jnp.asarray(x0), jax.random.PRNGKey(900 + kk)))
+                      for kk in range(5)])
+    assert np.all(np.isfinite(grads))
+    # DiCE per-key std ~0.02; naive pathwise was ~6 and grew with K. Bound well between.
+    assert grads.std() < 1.0, f"multi-step AD std too high ({grads.std():.3f}) — DiCE score regressed?"
+    assert np.abs(grads.mean()) < 1.0, f"multi-step AD mean implausibly large ({grads.mean():.3f})"

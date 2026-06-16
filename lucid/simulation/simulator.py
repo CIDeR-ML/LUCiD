@@ -549,16 +549,18 @@ def setup_event_simulator(
                 # ── Volume model (string telescope): per-DOM survival, NO reflection ──
                 # Each candidate DOM gets an independent detection weight from its distance
                 # along the ray; the photon always scatters in the open medium (no wall).
-                # Two-channel Rayleigh+Mie scatter (forward-peaked Mie needed for ice);
-                # g enters only the reparametrised HG sampler so its gradient is exact.
-                # No DiCE score increment → log_p is carried through unchanged.
+                # Two-channel Rayleigh+Mie scatter (forward-peaked Mie needed for ice), as a
+                # DiCE-forward citizen mirroring the water step: the optical (λ_R/λ_M/g)
+                # charge-gradient rides the per-step score (logp_increment) folded via dice_dep,
+                # NOT the high-variance pathwise route through the discrete DOM-candidate
+                # selection. Track params flow pathwise; λ_abs flows pathwise (deterministic).
                 from lucid.simulation.photon_step_volume import photon_step_volume
                 sensor_distances = prop_results['sensor_distances']     # (n_cand, n_rays, 1)
                 seg_lengths = jnp.maximum(prop_results['envelope_exit_t'], 1.0)   # (n_rays,)
                 key, subkey = jax.random.split(key)
                 rng_keys = jax.random.split(subkey, n_rays)
                 (new_positions, new_directions, new_times,
-                 per_dom_charges, continuing_factors) = jax.vmap(
+                 per_dom_charges, continuing_factors, logp_increments) = jax.vmap(
                     photon_step_volume,
                     in_axes=(0, 0, 0, 1, 1, 0, 0, 0, 0, 0, None, None)
                 )(state.positions, state.directions, state.times,
@@ -570,15 +572,20 @@ def setup_event_simulator(
                 safe_continuing = jnp.where(inside_detector, continuing_factors, 0.0)
                 new_survival = state.survival * safe_continuing
 
-                physical_intensities = intensities * state.survival
+                # DiCE magic box from the PRE-step log_p: forward value = 1 (charge unchanged),
+                # reverse-mode injects the accumulated optical score so the deposit carries the
+                # gradient of the probability the photon's trajectory reached this step.
+                dice_dep = jnp.exp(state.log_p - jax.lax.stop_gradient(state.log_p))   # (n_rays,)
+                physical_intensities = intensities * state.survival * dice_dep
                 updated_weights = per_dom_charges.T * physical_intensities[None, :]
                 total_times = sensor_distances / SPEED_OF_LIGHT_MATERIAL + state.times[:, None]
 
                 next_pos = jnp.where(i < pos_grad_threshold, new_positions, jax.lax.stop_gradient(new_positions))
                 next_dir = jnp.where(i < n_grad_iters, new_directions, jax.lax.stop_gradient(new_directions))
+                new_log_p = state.log_p + logp_increments   # accumulate optical score for FUTURE deposits
                 new_state = PhotonState(
                     positions=next_pos, directions=next_dir, times=new_times,
-                    survival=new_survival, key=key, log_p=state.log_p)
+                    survival=new_survival, key=key, log_p=new_log_p)
                 outputs = (updated_weights, sensor_indices, total_times.squeeze(-1))
                 return new_state, outputs
 

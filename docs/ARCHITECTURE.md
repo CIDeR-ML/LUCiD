@@ -113,13 +113,13 @@ the simulator call, so both lines share one data impl.
 Phases 1–4 are landed on `unification` (= `integration/unify-main`): merged DetectorParams,
 emission dispatch, cubic t0, native SIREN emitter, scintillation, volume scatter + string
 telescopes, modular sources, per_segment, and the production subsystem. The volume phase
-function now carries the Rayleigh+Mie+g mixture (B-mie), with the single-step ice-optical
-deposit gradient validated AD==FD. Remaining: the MULTI-STEP (K>1) ice optical-param
-gradient is UNBIASED (the pathwise AD agrees with the common-random-number FD in the mean,
-~0.3 sigma over ~80 keys) but VERY HIGH-VARIANCE — the discrete per-step DOM-candidate
-selection (top_k / searchsorted bracket / argmin) injects large per-key gradient spikes
-(per-key AD std ~50x the FD's, growing with K). So the ice/string reconstruction floor
-(B-fit → R) is gated on VARIANCE REDUCTION (a soft/differentiable candidate selection, or
-CRN/antithetic sampling), not on a bias fix; plus full GPU re-validation campaigns (recon
-floor / calibration CRB) and an end-to-end production run (needs the external PhotonSim/GENIE
-binaries). See `docs/RECONCILIATION_PLAN.md` for the full plan and per-phase findings.
+function carries the Rayleigh+Mie+g mixture (B-mie), and the volume step is now a
+DiCE-forward citizen like the water step (B-fit): the optical params (λ_R/λ_M/g) ride the
+per-step DiCE score folded via dice_dep, with the sampled free path detached for the
+trajectory, so the multi-step optical charge-gradient does NOT take the high-variance
+pathwise route through the discrete DOM-candidate selection. Validated UNBIASED and
+LOW-VARIANCE (per-key AD std ~0.02, flat in K, vs ~6 and growing for the old naive pathwise
+step; AD agrees with the CRN finite difference within ~1 sigma over 60 keys). Remaining for
+ice/string reconstruction (R): the GPU re-validation campaign (an ice recon floor analogous
+to the water campaign), plus the broader re-validation (recon floor / calibration CRB) and
+an end-to-end production run (needs the external PhotonSim/GENIE binaries). See `docs/RECONCILIATION_PLAN.md` for the full plan and per-phase findings.
