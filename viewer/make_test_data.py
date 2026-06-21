@@ -2,7 +2,7 @@
 """Synthesize a minimal v5 LUCiD dataset for viewer smoke tests.
 
 Produces four HDF5 files matching `docs/LUCID_DATASET.md` — sensor, hits,
-edep, labl — with a small number of events and synthetic but reasonable
+step, labl — with a small number of events and synthetic but reasonable
 content. Intended to exercise the browser viewer without running the
 full production pipeline. Emits the v5 schema: per_interaction/ with
 one row per source interaction (not per primary), per_interaction fields
@@ -274,7 +274,7 @@ def gen_event(rng, n_sensors, sensor_positions, n_particles=6):
         'hits':   {'particle_idx': hits_arr['p'].astype(np.int32),
                    'sensor_idx': hits_arr['s'],
                    'PE': hits_arr['pe'], 'T': hits_arr['t']},
-        'edep':    {**{k: edep_rows[k] for k in edep_rows.dtype.names},
+        'step':    {**{k: edep_rows[k] for k in edep_rows.dtype.names},
                    'contained': edep_contained},
         'labl':   {
             # per_event/t0 = min(per_interaction/t0) — the earliest
@@ -348,13 +348,13 @@ def write_dataset(out_dir, geom, n_events, n_sensors, seed):
 
     # Build subdirectories.
     out = Path(out_dir)
-    for k in ('sensor', 'hits', 'edep', 'labl'):
+    for k in ('sensor', 'hits', 'step', 'labl'):
         (out / k).mkdir(parents=True, exist_ok=True)
 
     paths = {
         'sensor': out / 'sensor' / 'wc_sensor_0000.h5',
         'hits':   out / 'hits'   / 'wc_hits_0000.h5',
-        'edep':    out / 'edep'    / 'wc_edep_0000.h5',
+        'step':    out / 'step'    / 'wc_step_0000.h5',
         'labl':   out / 'labl'   / 'wc_labl_0000.h5',
     }
     for p in paths.values():
@@ -386,8 +386,8 @@ def write_dataset(out_dir, geom, n_events, n_sensors, seed):
     ic.create_dataset('source_event_idx', data=source_event_idx)
     ic.create_dataset('sensor_positions', data=sensor_positions)
 
-    # edep config
-    gc = fs['edep'].create_group('config')
+    # step config
+    gc = fs['step'].create_group('config')
     write_common_config(gc, n_events)
     gc.attrs['detector_type'] = geom
     gc.attrs['detector_shape'] = geom
@@ -423,13 +423,13 @@ def write_dataset(out_dir, geom, n_events, n_sensors, seed):
         for name, arr in ev['hits'].items():
             g.create_dataset(name, data=arr)
 
-        # edep
-        g = fs['edep'].create_group(k)
+        # step
+        g = fs['step'].create_group(k)
         g.attrs['source_event_idx'] = np.uint32(e)
         g.attrs['n_tracks'] = ev['labl']['n_tracks']
         g.attrs['n_segments'] = ev['n_segments']
         name_map = {'beta': 'beta_start', 'ncher': 'n_cherenkov'}
-        for name, arr in ev['edep'].items():
+        for name, arr in ev['step'].items():
             g.create_dataset(name_map.get(name, name), data=arr)
 
         # labl

@@ -14,7 +14,7 @@ python -m lucid.production.generate_events_with_particles \
     --apply-smearing
 ```
 
-Writes `{output}/{sensor,hits,edep,labl}/wc_*_0000.h5`. Use `--help` for
+Writes `{output}/{sensor,hits,step,labl}/wc_*_0000.h5`. Use `--help` for
 the full flag list (`--batch-size`, `--n-events`, `--master-seed`,
 `--physics-config`, ...).
 

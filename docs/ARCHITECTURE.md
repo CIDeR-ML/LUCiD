@@ -89,7 +89,7 @@ Moyal spectrum) that WbLS inherits.
 - **Production** (`lucid/production/`): `lucid-run-job` drives GENIE → Geant4 macro →
   PhotonSim subprocess (`$PHOTONSIM_BIN`) → the LUCiD v3 writer. `event_generation.py` reads
   ROOT photons (meters), feeds the simulator with `hit_mode='per_segment'` (per-(segment,
-  sensor) PE), and writes four parallel HDF5 files (`sensor/ hits/ edep/ labl/`). The
+  sensor) PE), and writes four parallel HDF5 files (`sensor/ hits/ step/ labl/`). The
   modular data-gen layer (`root_reader, event_builder, v3_writer, seed_utils, …`) is
   self-contained; cluster scheduling lives in `cluster_common/`.
 

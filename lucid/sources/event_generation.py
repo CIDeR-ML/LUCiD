@@ -44,11 +44,11 @@ from lucid.sources.v3_writer import (
     sample_translation_vector,
     save_hits_event_v3,
     save_labl_event_v3,
-    save_edep_event_v3,
+    save_step_event_v3,
     save_sensor_event_v3,
     write_hits_config_v3,
     write_labl_config_v3,
-    write_edep_config_v3,
+    write_step_config_v3,
     write_sensor_config_v3,
 )
 from lucid.sources.particle_physics import derive_particle_interaction_idx
@@ -98,7 +98,7 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
 
     For each batch of events, writes four HDF5 files under ``output_dir``:
     ``sensor/wc_sensor_NNNN.h5``, ``hits/wc_hits_NNNN.h5``,
-    ``edep/wc_edep_NNNN.h5``, ``labl/wc_labl_NNNN.h5``. See
+    ``step/wc_step_NNNN.h5``, ``labl/wc_labl_NNNN.h5``. See
     ``docs/LUCID_DATASET.md`` for the full schema.
 
     Parameters
@@ -183,7 +183,7 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
 
     # Create output directory tree
     out_root = Path(output_dir)
-    for subdir in ('sensor', 'hits', 'edep', 'labl'):
+    for subdir in ('sensor', 'hits', 'step', 'labl'):
         (out_root / subdir).mkdir(parents=True, exist_ok=True)
 
     source_file_abs = os.path.abspath(root_file_path)
@@ -471,7 +471,7 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
             #   per-sensor T_true    : min (with 0-as-no-hit handling)
             #   per-sensor T_reco    : min
             #   hits.h5 rows         : per-(particle, sensor, process) sparse
-            #   edep/sensor_hits     : per-(segment, sensor, process) sparse
+            #   step/sensor_hits     : per-(segment, sensor, process) sparse
             # ----------------------------------------------------------------
             PE_true = jnp.asarray(np.sum(
                 [p['pe_per_sensor'] for p in process_outputs], axis=0))
@@ -557,7 +557,7 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
                 extended_info['meaningful_tracks'] = particle_data['meaningful_tracks']
                 extended_info['segments'] = particle_data['segments']
 
-            # edep sparse triplets came directly from the host aggregator
+            # step sparse triplets came directly from the host aggregator
             # (seg_hits dict already in writer-ready shape, with an
             # emission_process column folded in by
             # build_seg_hits_merged_per_process). Skip the writer wiring
@@ -590,7 +590,7 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
         file_idx = int(file_index_start + batch_idx)
         sensor_path = out_root / 'sensor' / f'wc_sensor_{file_idx:04d}.h5'
         hits_path = out_root / 'hits' / f'wc_hits_{file_idx:04d}.h5'
-        edep_path = out_root / 'edep' / f'wc_edep_{file_idx:04d}.h5'
+        step_path = out_root / 'step' / f'wc_step_{file_idx:04d}.h5'
         labl_path = out_root / 'labl' / f'wc_labl_{file_idx:04d}.h5'
 
         batch_src_idx = np.asarray(batch_indices, dtype=np.uint32)
@@ -613,7 +613,7 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
             'label_names': ['category'],
         }
 
-        # Optional geometry hints for edep config
+        # Optional geometry hints for step config
         if detector_bounds is not None:
             config_meta['detector_shape'] = detector_bounds['type']
             if detector_bounds['type'] == 'cylinder':
@@ -628,26 +628,26 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
                     [-l/2, l/2, -w/2, w/2, -h/2, h/2], dtype=np.float32)
 
         with h5py.File(sensor_path, 'w') as fs, h5py.File(hits_path, 'w') as fi, \
-                h5py.File(edep_path, 'w') as fg, h5py.File(labl_path, 'w') as fl:
+                h5py.File(step_path, 'w') as fg, h5py.File(labl_path, 'w') as fl:
             write_sensor_config_v3(fs, config_meta, batch_src_idx, sensor_positions_np)
             write_hits_config_v3(fi, config_meta, batch_src_idx, sensor_positions_np)
-            write_edep_config_v3(fg, config_meta, batch_src_idx)
+            write_step_config_v3(fg, config_meta, batch_src_idx)
             write_labl_config_v3(fl, config_meta, batch_src_idx)
 
             for seq_idx, evdict in enumerate(batch_data):
                 save_sensor_event_v3(fs, evdict, seq_idx)
                 save_hits_event_v3(fi, evdict, seq_idx)
-                save_edep_event_v3(fg, evdict, seq_idx)
+                save_step_event_v3(fg, evdict, seq_idx)
                 save_labl_event_v3(fl, evdict, seq_idx)
 
-        saved_files.extend([str(sensor_path), str(hits_path), str(edep_path), str(labl_path)])
+        saved_files.extend([str(sensor_path), str(hits_path), str(step_path), str(labl_path)])
 
         t_save = time.time() - t_save_start
         print(f"Batch {batch_idx+1} save time: {t_save:.3f}s\n")
 
     print(f"\nSuccessfully wrote {num_batches} batches "
           f"({len(saved_files)} files total) to {output_dir}/"
-          f"{{sensor,hits,edep,labl}}/")
+          f"{{sensor,hits,step,labl}}/")
 
     # Print average event time
     if event_times:
@@ -727,7 +727,7 @@ def generate_events_from_photonsim_pileup(
     vertex's interaction. For each event index, we draw an independent
     absolute t0 and fiducial vertex per vertex, simulate each vertex's
     photons, remap G4 track IDs to avoid collisions, and merge the
-    per-vertex results into one event_dict. Sensor/hits/edep/labl are
+    per-vertex results into one event_dict. Sensor/hits/step/labl are
     written using the same v3 writers as the single-vertex path.
 
     Parameters
@@ -774,7 +774,7 @@ def generate_events_from_photonsim_pileup(
         git_commit = 'unknown'  # de-env (B6): git rev-parse above is primary; no env read in the forward/sources path
 
     out_root = Path(output_dir)
-    for sub in ('sensor', 'hits', 'edep', 'labl'):
+    for sub in ('sensor', 'hits', 'step', 'labl'):
         (out_root / sub).mkdir(parents=True, exist_ok=True)
 
     # Determine common number of events across all ROOT files.
@@ -1030,7 +1030,7 @@ def generate_events_from_photonsim_pileup(
         file_idx = int(file_index_start + batch_idx)
         sensor_path = out_root / 'sensor' / f'wc_sensor_{file_idx:04d}.h5'
         hits_path   = out_root / 'hits'   / f'wc_hits_{file_idx:04d}.h5'
-        edep_path   = out_root / 'edep'   / f'wc_edep_{file_idx:04d}.h5'
+        step_path   = out_root / 'step'   / f'wc_step_{file_idx:04d}.h5'
         labl_path   = out_root / 'labl'   / f'wc_labl_{file_idx:04d}.h5'
 
         batch_src_idx = np.asarray(batch_indices, dtype=np.uint32)
@@ -1060,24 +1060,24 @@ def generate_events_from_photonsim_pileup(
         _t_save = _time.time()
         with h5py.File(sensor_path, 'w') as fs, \
              h5py.File(hits_path,   'w') as fi, \
-             h5py.File(edep_path,   'w') as fg, \
+             h5py.File(step_path,   'w') as fg, \
              h5py.File(labl_path,   'w') as fl:
             write_sensor_config_v3(fs, config_meta, batch_src_idx, sensor_positions_np)
             write_hits_config_v3(fi, config_meta, batch_src_idx, sensor_positions_np)
-            write_edep_config_v3(fg, config_meta, batch_src_idx)
+            write_step_config_v3(fg, config_meta, batch_src_idx)
             write_labl_config_v3(fl, config_meta, batch_src_idx)
             for seq_idx, ev in enumerate(batch_data):
                 save_sensor_event_v3(fs, ev, seq_idx)
                 save_hits_event_v3(fi, ev, seq_idx)
-                save_edep_event_v3(fg, ev, seq_idx)
+                save_step_event_v3(fg, ev, seq_idx)
                 save_labl_event_v3(fl, ev, seq_idx)
 
-        saved_files.extend([str(sensor_path), str(hits_path), str(edep_path), str(labl_path)])
+        saved_files.extend([str(sensor_path), str(hits_path), str(step_path), str(labl_path)])
         print(f"Batch {batch_idx+1} save time: {_time.time() - _t_save:.3f}s\n")
 
     print(f"\nSuccessfully wrote {num_batches} batches "
           f"({len(saved_files)} files total) to {output_dir}/"
-          f"{{sensor,hits,edep,labl}}/")
+          f"{{sensor,hits,step,labl}}/")
 
     if event_times:
         print(f"\nAverage pile-up event time: "
@@ -1121,7 +1121,7 @@ def _merge_pileup_streams(streams, *, n_sensors, apply_smearing,
         for tid in meta['primary_track_ids']:
             primary_to_interaction[int(tid)] = i
 
-    # Per-vertex sparse hits.h5 + edep/sensor_hits. Each stream's index
+    # Per-vertex sparse hits.h5 + step/sensor_hits. Each stream's index
     # columns are vertex-local; we shift them into the merged event's row
     # spaces (particle_idx by cumulative particle count, segment_idx by
     # cumulative segment count). Streams' particles and segments are
@@ -1245,7 +1245,7 @@ def _merge_pileup_streams(streams, *, n_sensors, apply_smearing,
         'T_reco':  T_reco,
     }
 
-    # Concat the per-vertex sparse edep triplets (already segment_idx-
+    # Concat the per-vertex sparse step triplets (already segment_idx-
     # shifted into the merged segment table's row space).
     if seg_hits_shifted:
         merged_seg_hits = {
