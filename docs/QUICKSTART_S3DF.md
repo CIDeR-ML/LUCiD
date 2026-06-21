@@ -62,7 +62,7 @@ Each config produces:
 <OUT>/<detector>/config_NNNNNN/      # default detector: SK_like
 ├── sensor/wc_sensor_0000.h5
 ├── hits/wc_hits_0000.h5
-├── edep/wc_edep_0000.h5
+├── step/wc_step_0000.h5
 └── labl/wc_labl_0000.h5
 ```
 
@@ -79,7 +79,7 @@ echo "y" | ./submit_all_configs.sh -s -o /sdf/data/<user>/production/<name>
 ```
 
 Each job of a config writes its own batch (`file_index = job_id - 1`)
-into shared `{sensor,hits,edep,labl}/` subdirs — the whole config dir
+into shared `{sensor,hits,step,labl}/` subdirs — the whole config dir
 is one LUCiD dataset.
 
 ## Spreading jobs across roma + milano

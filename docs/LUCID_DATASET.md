@@ -19,7 +19,7 @@ the same per-event indexing:
 dataset_root/
 ├── sensor/    wc_sensor_NNNN.h5    — raw PMT readout (post-smearing)
 ├── hits/      wc_hits_NNNN.h5      — per-particle decomposition of PMT signal
-├── edep/       wc_edep_NNNN.h5       — 3D track segments (Geant4 truth)
+├── step/       wc_step_NNNN.h5       — 3D track segments (Geant4 truth)
 └── labl/      wc_labl_NNNN.h5      — labels, truth metadata, dimension tables
 ```
 
@@ -39,14 +39,14 @@ These apply across all four files:
   `[0, count_for_this_event)`. No global IDs are used as indices anywhere.
 - **Foreign keys**: cross-table joins within an event use FK columns
   (`particle_idx`, `track_idx`) rather than CSR offset arithmetic.
-- **Time convention**: all times in `sensor/`, `hits/`, and `edep/` are stored
+- **Time convention**: all times in `sensor/`, `hits/`, and `step/` are stored
   in the **detector frame** — the per-event `t0` offset has been added at
   write time. The truth `t0` itself lives in `labl/event_NNN/per_event/t0`.
 - **Cross-file alignment**: parallel filenames (`*_NNNN.h5`) and matching
   `event_NNN/` group names align modalities. Each `event_NNN/` carries an
   `source_event_idx` attribute that loaders cross-check.
 - **Emission-process encoding**: per-row `emission_process: int8` columns on
-  `hits/` and `edep/sensor_hits/` tag which physical process produced each
+  `hits/` and `step/sensor_hits/` tag which physical process produced each
   charge contribution. Enum: `0 = Cherenkov`, `1 = scintillation`. A given
   `(particle_idx, sensor_idx)` (or `(segment_idx, sensor_idx)`) pair can appear
   in multiple rows differing only in `emission_process` when both processes
@@ -128,13 +128,13 @@ Notes:
 - Loaders that train on `hits/` alone use `sensor_positions` from this file's
   `config/` to map `sensor_idx` to physical positions.
 
-### `edep.h5` — 3D Geant4 track segments
+### `step.h5` — 3D Geant4 track segments
 
 Per-segment truth from Geant4: trajectory geometry, energy deposition,
 direction, kinetic state.
 
 ```
-edep.h5
+step.h5
 ├── config/
 │   ├── attrs: provenance + detector_type, material, detector_shape,
 │   │           detector_bbox (6,), detector_radius, detector_half_height, detector_axis (3,)
@@ -239,7 +239,7 @@ Notes:
     DecayElectron, SecondaryPion, Gamma) — typically ~8 per event. Used to
     decompose the PMT signal in `hits/`.
   - **Tracks** (`per_track`) are full Geant4 tracks — typically ~600 per
-    event. The 3D truth in `edep/` is organized at this granularity.
+    event. The 3D truth in `step/` is organized at this granularity.
 - Each track maps to exactly one particle via `particle_idx`. The mapping is
   derived at write time by walking the parent chain from each track until it
   reaches a categorized particle. Verified injective on production data
@@ -291,10 +291,10 @@ To produce this layout, the LUCiD writer (`lucid/sources/event_io.py`) needs:
 
 2. **LUCiD writer changes**:
    - Split current `sensor_events_*.h5` into `sensor/`, `hits/`, partial `labl/`.
-   - Split current `segment_events_*.h5` into `edep/`, partial `labl/`.
+   - Split current `segment_events_*.h5` into `step/`, partial `labl/`.
    - Add per-event H5 group structure inside each output file.
    - Add provenance block to all four files.
-   - Apply `t0` shift to `edep/event_NNN/time` at write time (currently stored
+   - Apply `t0` shift to `step/event_NNN/time` at write time (currently stored
      as Geant4-absolute).
    - Compute `particle_idx` per track from the genealogy chain at write time.
 
@@ -329,13 +329,13 @@ home in this layout. Mapping table:
 | `overall_containment` | `labl/event_NNN/per_event/contained` (bool) |
 | `genealogy_data`, `genealogy_offsets` | `labl/event_NNN/per_particle/genealogy_data`, `genealogy_offsets` |
 | `ext_genealogy_data`, `ext_genealogy_offsets` | `labl/event_NNN/per_particle/ext_genealogy_data`, `ext_genealogy_offsets` |
-| `start_x/y/z`, `end_x/y/z`, `dir_x/y/z` | `edep/event_NNN/start_*`, `end_*`, `dir_*` |
-| `edep`, `time` | `edep/event_NNN/edep`, `time` (time now t0-shifted) |
+| `start_x/y/z`, `end_x/y/z`, `dir_x/y/z` | `step/event_NNN/start_*`, `end_*`, `dir_*` |
+| `edep`, `time` | `step/event_NNN/edep`, `time` (time now t0-shifted) |
 | `track_id`, `parent_id`, `pdg`, `initial_energy`, `n_cherenkov` (per-track) | `labl/event_NNN/per_track/{track_id, parent_id, pdg, initial_energy, n_cherenkov}` |
 | `segment_offset`, `track_event_offset` | dropped — replaced by per-event grouping + `track_idx` column |
 | `master_seed` | `config/lucid_master_seed` (renamed for clarity) |
 | `detector_config`, `detector_type`, `material`, `smearing_applied`, `format_version`, `source` | `sensor/config/` attrs |
 | `root_file` | `source_file` provenance attr |
-| Voxel datasets (`voxel_*`) | dropped — superseded by `edep/` |
+| Voxel datasets (`voxel_*`) | dropped — superseded by `step/` |
 
 Newly added fields are listed in "Production-side requirements" above.

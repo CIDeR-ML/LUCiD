@@ -12,7 +12,7 @@ import numpy as np
 from lucid.sources.v3_reader import (
     read_sensor_event_v3,
     read_hits_event_v3,
-    read_edep_event_v3,
+    read_step_event_v3,
     read_labl_event_v3,
     list_events_v3,
 )
@@ -78,9 +78,9 @@ def _resolve_dataset_paths(dataset_root_or_sensor_file, file_index):
         root = p
     sensor = root / 'sensor' / f'wc_sensor_{file_index:04d}.h5'
     hits = root / 'hits' / f'wc_hits_{file_index:04d}.h5'
-    edep = root / 'edep' / f'wc_edep_{file_index:04d}.h5'
+    step = root / 'step' / f'wc_step_{file_index:04d}.h5'
     labl = root / 'labl' / f'wc_labl_{file_index:04d}.h5'
-    return sensor, hits, edep, labl, file_index
+    return sensor, hits, step, labl, file_index
 
 
 def load_event_v3(dataset_root, event_idx, file_index=0, n_sensors=None):
@@ -88,10 +88,10 @@ def load_event_v3(dataset_root, event_idx, file_index=0, n_sensors=None):
 
     The returned dict exposes dense ``(n_particles, n_sensors)`` PE/T
     matrices under keys ``Q`` and ``T`` for notebook compatibility. Raw v3
-    reader outputs are also included under ``labl`` and ``edep`` for anyone
+    reader outputs are also included under ``labl`` and ``step`` for anyone
     who needs them.
     """
-    sensor_p, hits_p, edep_p, labl_p, file_index = _resolve_dataset_paths(
+    sensor_p, hits_p, step_p, labl_p, file_index = _resolve_dataset_paths(
         dataset_root, file_index)
 
     if n_sensors is None:
@@ -99,7 +99,7 @@ def load_event_v3(dataset_root, event_idx, file_index=0, n_sensors=None):
 
     sensor = read_sensor_event_v3(str(sensor_p), event_idx)
     hits = read_hits_event_v3(str(hits_p), event_idx)
-    edep = read_edep_event_v3(str(edep_p), event_idx)
+    step = read_step_event_v3(str(step_p), event_idx)
     labl = read_labl_event_v3(str(labl_p), event_idx)
 
     n_particles = int(labl['n_particles'])
@@ -135,7 +135,7 @@ def load_event_v3(dataset_root, event_idx, file_index=0, n_sensors=None):
         'Particle_Category': np.asarray(labl['per_particle']['category']),
         'contained_per_particle': np.asarray(labl['per_particle']['contained'], dtype=bool),
         'labl': labl,
-        'edep': edep,
+        'step': step,
     }
 
 
@@ -171,7 +171,7 @@ def read_multi_event_file(dataset_root, file_index=0, verbose=False, n_sensors=N
     """Return a list of event dicts for an entire v3 batch file.
 
     ``dataset_root`` is the directory containing ``sensor/``, ``hits/``,
-    ``edep/``, ``labl/`` subdirectories. A direct sensor file path is also
+    ``step/``, ``labl/`` subdirectories. A direct sensor file path is also
     accepted; in that case ``file_index`` is parsed from the filename.
     """
     sensor_file, _, _, _, file_index = _resolve_dataset_paths(dataset_root, file_index)

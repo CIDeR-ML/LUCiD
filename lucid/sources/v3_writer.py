@@ -1,4 +1,4 @@
-"""V3 four-file HDF5 writers (sensor / hits / edep / labl) and containment.
+"""V3 four-file HDF5 writers (sensor / hits / step / labl) and containment.
 
 Contains all ``write_*_config_v3``, ``save_*_event_v3`` functions,
 ``_compute_contained``, ``_source_type_code``, ``build_interaction_metadata``,
@@ -24,17 +24,17 @@ __all__ = [
     "sample_translation_vector",
     "write_sensor_config_v3",
     "write_hits_config_v3",
-    "write_edep_config_v3",
+    "write_step_config_v3",
     "write_labl_config_v3",
     "save_sensor_event_v3",
     "save_hits_event_v3",
-    "save_edep_event_v3",
+    "save_step_event_v3",
     "save_labl_event_v3",
 ]
 
 
 # ---------------------------------------------------------------------------
-# V3 format: four-file per-event-group HDF5 (sensor / hits / edep / labl).
+# V3 format: four-file per-event-group HDF5 (sensor / hits / step / labl).
 # See docs/LUCID_DATASET.md for the full schema.
 # ---------------------------------------------------------------------------
 
@@ -45,7 +45,7 @@ _V3_FORMAT_VERSION = 5
 SOURCE_TYPE_PARTICLES = 0
 SOURCE_TYPE_GENIE     = 1
 
-# emission_process column encoding on hits.h5 + edep.h5/sensor_hits/.
+# emission_process column encoding on hits.h5 + step.h5/sensor_hits/.
 # Per-row tag identifying which physical process produced the contribution.
 # Cherenkov-only datasets emit the column with all-zeros (Cherenkov), so
 # downstream consumers can always group/filter by it without a presence check.
@@ -82,10 +82,10 @@ def _compute_contained(event_dict, detector_bounds):
     Segment positions are assumed to be in the detector frame (already
     shifted by the per-interaction translation_vector when applicable);
     the inside test uses the post-translation coordinates so the answer
-    matches what the edep file actually stores.
+    matches what the step file actually stores.
 
     Segment-to-track mapping uses cumulative ``n_segments`` over tracks
-    in dict-insertion order — the same invariant ``save_edep_event_v3``
+    in dict-insertion order — the same invariant ``save_step_event_v3``
     relies on — so the helper works for both single-stream events and
     merged pile-up streams where per-track ``segment_offset`` fields are
     stream-local and no longer valid in the merged flat array.
@@ -148,7 +148,7 @@ def _compute_contained(event_dict, detector_bounds):
     # ------------------------------------------------------------------
     # Per-track contained, vectorized.
     # Group segments per meaningful track via cumulative n_segments (the
-    # save_edep_event_v3 invariant). A track is contained iff every owned
+    # save_step_event_v3 invariant). A track is contained iff every owned
     # segment is contained. Zero-segment tracks -> True (no-evidence).
     # ------------------------------------------------------------------
     n_tracks = len(meaningful_tracks)
@@ -394,8 +394,8 @@ def write_hits_config_v3(f, config_meta, source_event_idx, sensor_positions):
                        **_GZIP_OPTS)
 
 
-def write_edep_config_v3(f, config_meta, source_event_idx):
-    """Write the config/ group of an edep v3 file."""
+def write_step_config_v3(f, config_meta, source_event_idx):
+    """Write the config/ group of a step v3 file."""
     cfg = _write_common_config_attrs(f, config_meta)
     cfg.attrs['detector_type'] = str(config_meta['detector_type'])
     cfg.attrs['material'] = str(config_meta['material'])
@@ -541,8 +541,8 @@ def save_hits_event_v3(f, event_dict, seq_idx):
     grp.create_dataset('emission_process', data=emp_arr, **_GZIP_OPTS)
 
 
-def save_edep_event_v3(f, event_dict, seq_idx):
-    """Write a single event_NNN/ group to an already-open edep v3 file.
+def save_step_event_v3(f, event_dict, seq_idx):
+    """Write a single event_NNN/ group to an already-open step v3 file.
 
     Each segment row gets a local ``track_idx`` FK (0..n_tracks-1). Times are
     shifted by ``t0`` so they live in the detector frame. ``beta_start`` and
