@@ -97,30 +97,60 @@ def main():
     print(f"Wrote {OUTDIR}/two_boundary_sensor_response.png")
 
 
+def _gamma_axis(ax):
+    """Add a secondary top axis: source–sensor opening angle γ in degrees (γ = arccos cosγ)."""
+    top = ax.secondary_xaxis("top",
+                             functions=(lambda c: np.degrees(np.arccos(np.clip(c, -1, 1))),
+                                        lambda g: np.cos(np.radians(g))))
+    top.set_xticks([0, 30, 60, 90, 120, 150, 180])
+    top.set_xlabel(r"opening angle $\gamma$ between source and sensor (deg)", fontsize=9)
+
+
 def _plot(R, cos, Mc, Mm, edge):
     import matplotlib; matplotlib.use("Agg"); import matplotlib.pyplot as plt
     from matplotlib.colors import LogNorm
-    fig, (a1, a2) = plt.subplots(1, 2, figsize=(13.5, 5.2))
+    fig, (a1, a2) = plt.subplots(1, 2, figsize=(14.5, 5.8))
     ext = [cos[0], cos[-1], R[0], R[-1]]
-    # Panel 1: the single-sensor response field g(r_s, cosγ), contrast (real detector)
+    XLAB = (r"$\cos\gamma$    ($+1$: sensor directly over source  →  $-1$: sensor on far side)")
+
+    # ---- Panel 1: the single-sensor response field g(r_s, γ) ----
     im1 = a1.imshow(Mc, origin="lower", aspect="auto", extent=ext, cmap="turbo",
-                    norm=LogNorm(vmin=max(Mc[Mc > 0].min(), Mc.max()*1e-3), vmax=Mc.max()))
-    a1.axhline(R_STAR, color="w", ls=":", lw=1); a1.text(-0.95, R_STAR+0.1, "TIR threshold r*", color="w", fontsize=8)
-    a1.set_xlabel(r"$\cos\gamma$  (source–sensor opening angle; +1 = sensor over source)")
-    a1.set_ylabel("source radius $r_s$ (m)")
-    a1.set_title("Single-sensor response field $g(r_s,\\gamma)$  (LAB-LS/water)")
-    fig.colorbar(im1, ax=a1, label="charge at sensor (azimuthal avg)")
-    # Panel 2: interface ratio contrast/matched + ray-traced TIR shadow boundary
+                    norm=LogNorm(vmin=max(Mc[Mc > 0].min(), Mc.max() * 1e-3), vmax=Mc.max()))
+    a1.axhline(R_STAR, color="w", ls=":", lw=1.2)
+    a1.text(-0.97, R_STAR + 0.15, f"TIR threshold  r* = {R_STAR:.1f} m", color="w", fontsize=8)
+    a1.annotate("source ≈ next to\nthis sensor → bright\n(1/d², d=R_out−r_s)",
+                xy=(0.97, R[-1] - 0.3), xytext=(0.2, 15.5), color="w", fontsize=8, ha="center",
+                arrowprops=dict(arrowstyle="->", color="w", lw=1.2))
+    a1.set_xlabel(XLAB); a1.set_ylabel(r"source radius $r_s$ (m)   [0 = centre, 17.5 = interface]")
+    a1.set_title("Charge one sensor sees vs. where the source is\n"
+                 r"response field $g(r_s,\gamma)$, LAB-LS / water", fontsize=11)
+    _gamma_axis(a1)
+    fig.colorbar(im1, ax=a1, label="charge at the sensor (azimuthal avg, log)")
+
+    # ---- Panel 2: interface signature = ratio to the no-index-step control ----
     ratio = Mc / np.maximum(Mm, 1e-9)
     im2 = a2.imshow(ratio, origin="lower", aspect="auto", extent=ext, cmap="RdBu_r", vmin=0.4, vmax=1.6)
     good = np.isfinite(edge)
     a2.plot(edge[good], R[good], "k-", lw=2, label="forward direct-beam edge (grazing ray)")
-    a2.axhline(R_STAR, color="k", ls=":", lw=1)
-    a2.set_xlabel(r"$\cos\gamma$"); a2.set_ylabel("source radius $r_s$ (m)")
-    a2.set_title("Interface signature  contrast/matched\nblue = direct light TIR-removed; line = forward-beam edge")
+    a2.axhline(R_STAR, color="k", ls=":", lw=1.2)
+    a2.text(-0.97, R_STAR + 0.15, f"r* = {R_STAR:.1f} m", color="k", fontsize=8)
+    a2.text(0.7, 17.0, "TIR shadow\n(direct light removed)", color="navy", fontsize=8, ha="center")
+    a2.text(-0.35, 12.5, "refraction\ncaustic (lens)", color="darkred", fontsize=8, ha="center")
+    a2.set_xlabel(XLAB); a2.set_ylabel(r"source radius $r_s$ (m)")
+    a2.set_title("What the interface alone does (bulk divided out)\n"
+                 "ratio to a matched-index control:  red > 1 lensing,  blue < 1 TIR", fontsize=11)
+    _gamma_axis(a2)
     a2.legend(fontsize=8, loc="lower left")
-    fig.colorbar(im2, ax=a2, label="contrast / matched")
+    fig.colorbar(im2, ax=a2, label="contrast / matched  (interface transfer)")
+
     fig.tight_layout(); fig.savefig(os.path.join(OUTDIR, "two_boundary_sensor_response.png"), dpi=130)
+
+
+def plot_from_json():
+    """Re-make the figure from the saved JSON (no simulation)."""
+    d = json.load(open(os.path.join(OUTDIR, "two_boundary_sensor_response.json")))
+    _plot(np.array(d["r"]), np.array(d["cos"]), np.array(d["contrast"]),
+          np.array(d["matched"]), np.array(d["shadow_cos"], dtype=float))
 
 
 if __name__ == "__main__":
