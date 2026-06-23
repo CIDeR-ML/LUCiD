@@ -38,7 +38,10 @@ R_IN, R_OUT = 17.5, 19.5
 N_W, N_LS = 1.33, 1.48
 THETA_C = np.arcsin(N_W / N_LS)
 R_STAR = R_IN * np.sin(THETA_C)            # 15.73 m TIR threshold
-WAVELENGTH, INTENSITY, N_RAYS, K = 430.0, 50_000_000.0, 500_000, 24
+# K=32: the matched/non-TIR side converges by K=16, but the TIR (contrast) source needs
+# K~32-48 to fully converge (whispering-gallery trapped photons; see two_boundary_K_tir.py).
+# K=24 over-estimates the interface loss by ~0.2 pp; K=32 is 99.9% converged.
+WAVELENGTH, INTENSITY, N_RAYS, K = 430.0, 50_000_000.0, 500_000, 32
 N_BATCH = 24
 OUTDIR = os.path.join(os.path.dirname(__file__), "out")
 
