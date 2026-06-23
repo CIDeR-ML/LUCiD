@@ -34,6 +34,7 @@ from lucid.simulation.optics import (
 )
 from lucid.simulation.photon_step import (
     photon_iteration_sample, make_photon_iteration_update_factors_safe,
+    photon_iteration_sample_nested, make_photon_iteration_update_factors_nested_safe,
 )
 from lucid.simulation.reflection import get_reflection_model
 from lucid.simulation.sensor_response import (
@@ -262,6 +263,24 @@ def setup_event_simulator(
         photon_update_fn = jax.remat(
             make_photon_iteration_update_factors_safe(reflection_fn))
 
+    # ---- Two-medium (nested) setup -------------------------------------------
+    # Closed over by _common_propagation. For single-medium detectors _IS_NESTED is
+    # False → the nested branch is never traced and the forward stays byte-identical.
+    _IS_NESTED = det_geom.is_nested
+    if _IS_NESTED:
+        SPEED_OF_LIGHT_OUTER = det_geom.speed_of_light_outer
+        N_INNER = float(det_geom.medium.refractive_index)
+        N_OUTER = float(det_geom.medium_outer.refractive_index)
+        if sim_config.is_data or sim_config.use_expected_value is False:
+            photon_update_fn_nested = photon_iteration_sample_nested
+        else:
+            photon_update_fn_nested = jax.remat(
+                make_photon_iteration_update_factors_nested_safe(reflection_fn))
+    else:
+        SPEED_OF_LIGHT_OUTER = None
+        N_INNER = N_OUTER = None
+        photon_update_fn_nested = None
+
     # ---- Geometry bounds check (delegates to detector method) ----------------
     def get_inside_detector_flag(positions):
         return detector.bounds_check(positions)
@@ -375,10 +394,16 @@ def setup_event_simulator(
         _wl_grid = jnp.linspace(_wl_lo, _wl_hi, 200)
         _medium_wl = make_medium(material, wavelength_grid=_wl_grid,
                                  medium_model_path=_medium_model_path)
+        # Outer-medium wavelength curves for the nested two-medium detector (resolved
+        # by material name from config/materials/<outer>.json). None for single-medium.
+        _medium_wl_outer = (make_medium(det_geom.medium_outer.material,
+                                        wavelength_grid=_wl_grid)
+                            if _IS_NESTED else None)
         _qe_fn = load_qe_curve(_qe_curve_path) if _qe_curve_path else None
     else:
         _wl_lo, _wl_hi = 300.0, 700.0
         _medium_wl = None
+        _medium_wl_outer = None
         _qe_fn = None
 
     # ---- Cherenkov λ-SAMPLING band (Method A) ----------------------------
@@ -487,6 +512,43 @@ def setup_event_simulator(
         qe_weights = jnp.full(n, _collapse_qe) if sampled_via_qe_importance else oa.qe
         return oa.scatter_len, oa.mie_len, oa.abs_len, qe_weights, key
 
+    def _get_optical_arrays_nested(n, detector_params, key, wavelengths=None):
+        """Per-photon optics for BOTH media of a nested detector at the SAME wavelengths.
+
+        Pure absorption (no re-emission) ⇒ each photon's λ is fixed for its whole life, so
+        we resolve λ once and evaluate the optical model against the inner and the outer
+        medium curves. The per-photon QE weight is a PMT property (applied at the outer
+        surface) and is shared. Returns
+        ``(sl_in, ml_in, al_in, sl_out, ml_out, al_out, qe_weights, key)``.
+        """
+        if not wavelength_mode:
+            # Monochromatic: both media broadcast the DetectorParams scalars (identical
+            # optics; only the interface n + speed differ). Physical per-medium optics
+            # need wavelength_mode (or per-medium DetectorParams scalars, a later phase).
+            oa = evaluate_optical_model(detector_params, None, _medium_wl, n)
+            return (oa.scatter_len, oa.mie_len, oa.abs_len,
+                    oa.scatter_len, oa.mie_len, oa.abs_len, oa.qe, key)
+
+        # Resolve wavelengths once (sample Cherenkov 1/λ² when None; else broadcast/use).
+        if wavelengths is None:
+            key, wl_key = jax.random.split(key)
+            if spectrum is not None:
+                wavelengths = spectrum.sample(wl_key, n, _wl_lo, _wl_hi)
+            elif wavelength_sampling == 'cherenkov_qe':
+                wavelengths = _qe_sampler(wl_key, n)
+            else:
+                wavelengths = sample_cherenkov_wavelengths(
+                    wl_key, n, lambda_min=_sample_lo, lambda_max=_sample_hi)
+        else:
+            wavelengths = jnp.asarray(wavelengths)
+            if wavelengths.ndim == 0:
+                wavelengths = jnp.full(n, wavelengths)
+
+        oa_in = evaluate_optical_model(detector_params, wavelengths, _medium_wl, n, qe_fn=_qe_fn)
+        oa_out = evaluate_optical_model(detector_params, wavelengths, _medium_wl_outer, n, qe_fn=None)
+        return (oa_in.scatter_len, oa_in.mie_len, oa_in.abs_len,
+                oa_out.scatter_len, oa_out.mie_len, oa_out.abs_len, oa_in.qe, key)
+
     # ================================================================
     # Core propagation (shared by all modes)
     # ================================================================
@@ -502,7 +564,9 @@ def setup_event_simulator(
             n_rays, detector_params, key,
             num_sensors, K, n_grad_iters, max_candidates_per_ray,
             propagate_fn, photon_update_fn,
-            pos_grad_threshold, make_hits_fn, is_volume=False, segment_idx=None):
+            pos_grad_threshold, make_hits_fn, is_volume=False, segment_idx=None,
+            scatter_lengths_outer=None, mie_scatter_lengths_outer=None,
+            absorption_lengths_outer=None, initial_medium_id=None):
         """Core photon propagation loop.
 
         Parameters
@@ -610,18 +674,44 @@ def setup_event_simulator(
             # a wavelength-dependent reflection model is used). Step returns a 7-tuple; the
             # 7th is the per-photon DiCE score increment (lf+la+lr for the differentiable
             # step, 0.0 for the sampling step). PRE-step log_p drives the implicit deposit.
-            (new_positions, new_directions, new_times,
-             detect_probs, reflection_attenuations,
-             continuing_factors, logp_increments) = jax.vmap(
-                photon_update_fn,
-                in_axes=(0, 0, 0, 0, 0,
-                         0, 0, None, None, 0,
-                         0, None, 0, None)
-            )(state.positions, state.directions, state.times,
-              surface_distances, normals,
-              scatter_lengths, mie_scatter_lengths, g, refl_params,
-              absorption_lengths,
-              hit_sensor, refl_lam, rng_keys, SPEED_OF_LIGHT_MATERIAL)
+            if _IS_NESTED:
+                # Two-medium: select per-photon optics + speed by the photon's current
+                # medium, hand the interface flag + medium id + the two refractive
+                # indices to the nested step (it returns the updated medium id 8th).
+                mid = state.medium_id
+                in_inner = (mid == 0)
+                sl_p = jnp.where(in_inner, scatter_lengths, scatter_lengths_outer)
+                ml_p = jnp.where(in_inner, mie_scatter_lengths, mie_scatter_lengths_outer)
+                al_p = jnp.where(in_inner, absorption_lengths, absorption_lengths_outer)
+                spd_p = jnp.where(in_inner, SPEED_OF_LIGHT_MATERIAL, SPEED_OF_LIGHT_OUTER)
+                hit_interface = prop_results['hit_interface']
+                (new_positions, new_directions, new_times,
+                 detect_probs, reflection_attenuations,
+                 continuing_factors, logp_increments, new_medium_id) = jax.vmap(
+                    photon_update_fn_nested,
+                    in_axes=(0, 0, 0, 0, 0,
+                             0, 0, None, None, 0,
+                             0, None, 0, 0,
+                             0, 0, None, None)
+                )(state.positions, state.directions, state.times,
+                  surface_distances, normals,
+                  sl_p, ml_p, g, refl_params, al_p,
+                  hit_sensor, refl_lam, rng_keys, spd_p,
+                  hit_interface, mid, N_INNER, N_OUTER)
+            else:
+                (new_positions, new_directions, new_times,
+                 detect_probs, reflection_attenuations,
+                 continuing_factors, logp_increments) = jax.vmap(
+                    photon_update_fn,
+                    in_axes=(0, 0, 0, 0, 0,
+                             0, 0, None, None, 0,
+                             0, None, 0, None)
+                )(state.positions, state.directions, state.times,
+                  surface_distances, normals,
+                  scatter_lengths, mie_scatter_lengths, g, refl_params,
+                  absorption_lengths,
+                  hit_sensor, refl_lam, rng_keys, SPEED_OF_LIGHT_MATERIAL)
+                new_medium_id = None
 
             inside_detector = get_inside_detector_flag(new_positions)
             safe_continuing = jnp.where(inside_detector, continuing_factors, 0.0)
@@ -635,7 +725,12 @@ def setup_event_simulator(
             dice_dep = jnp.exp(state.log_p - jax.lax.stop_gradient(state.log_p))   # (n_rays,)
             detected_factors = detect_probs * reflection_attenuations * dice_dep
             updated_weights = depositions * physical_intensities[None, :] * detected_factors[None, :]
-            times_ns = hit_times_meters / SPEED_OF_LIGHT_MATERIAL
+            # Final hop to the sensor uses the speed of the photon's current medium. For a
+            # sensor hit the photon is always in the outer medium (it crossed the interface
+            # in an earlier step); per-photon spd_p captures that, scalar for single-medium.
+            # hit_times_meters is (max_cand, n_rays, 1); per-photon speed → (1, n_rays, 1).
+            _final_speed = spd_p[None, :, None] if _IS_NESTED else SPEED_OF_LIGHT_MATERIAL
+            times_ns = hit_times_meters / _final_speed
             total_times = times_ns + state.times[:, None]
 
             iter_weights = updated_weights
@@ -659,6 +754,7 @@ def setup_event_simulator(
                 survival=new_survival,
                 key=key,
                 log_p=new_log_p,
+                medium_id=new_medium_id,   # None (single-medium) carries through unchanged
             )
             outputs = (iter_weights, iter_indices, iter_times)
             return new_state, outputs
@@ -670,6 +766,7 @@ def setup_event_simulator(
             survival=initial_survival,
             key=key,
             log_p=jnp.zeros(n_rays),
+            medium_id=initial_medium_id,    # None for single-medium; (n_rays,) int for nested
         )
         propagation_step_remat = jax.remat(propagation_step)
 
@@ -788,7 +885,10 @@ def setup_event_simulator(
 
     # SIREN config: model path + ray-sampling knobs. The s/s_max-trained net carries its
     # own count/range model (nphot/smax) in the trained-model metadata, read in the context.
-    siren_cfg = unpack_siren_params(particle, material)
+    # Only track mode uses the SIREN surrogate; calibration/data sources supply their own
+    # photons, so don't require a data/<material>/<particle>/siren_params.json for them
+    # (lets calibration-only materials like a LAB-LS buffer run without a SIREN).
+    siren_cfg = unpack_siren_params(particle, material) if mode == 'track' else None
 
     # ---- Track-mode emission-process dispatch (refactor-v2 wbls/scint merge) ----
     # The medium's `emission_processes` tuple decides which surrogates run. The
@@ -919,15 +1019,44 @@ def setup_event_simulator(
 
     @jax.jit
     def _simulation_sensor_calibration_impl(source, detector_params, key):
-        """Calibration mode: source is a callable (IsotropicSource or LaserSource)."""
+        """Calibration mode: source is a callable (IsotropicSource or LaserSource).
+
+        Point sources are the supported two-medium source (the spectrum is a pluggable
+        knob: ``source.wavelength=None`` → Cherenkov 1/λ², scalar → monochromatic laser,
+        ``(Nphot,)`` → an explicit spectrum). For nested detectors each photon's
+        ``medium_id`` is initialised from its emission radius and BOTH media's per-photon
+        optics are evaluated at the same wavelengths.
+        """
         key, source_key, opt_key = jax.random.split(key, 3)
         photon_directions, photon_origins, photon_intensities = source(Nphot, source_key)
         photon_times = jnp.zeros((Nphot,))
 
-        # Per-photon optical properties
         # Source wavelength can be None (→ Cherenkov), scalar, or (Nphot,) array;
-        # _get_optical_arrays normalizes the shape.
+        # the optical-array helpers normalize the shape.
         wavelengths = getattr(source, 'wavelength', None)
+        _pgt = sim_config.K if pos_grad_threshold is None else pos_grad_threshold
+
+        if _IS_NESTED:
+            (sl_in, ml_in, al_in, sl_out, ml_out, al_out,
+             qe_weights, key) = _get_optical_arrays_nested(
+                Nphot, detector_params, opt_key, wavelengths=wavelengths)
+            if qe_weights is not None:
+                qe_per_photon = qe_weights * detector_params.response.qe
+            else:
+                qe_per_photon = jnp.full(Nphot, detector_params.response.qe)
+            # Per-photon initial medium from the emission point (0 inner / 1 outer).
+            medium_id0 = detector.region_of(photon_origins)
+            return _common_propagation(
+                photon_origins, photon_directions, photon_intensities, photon_times,
+                sl_in, ml_in, al_in,
+                qe_per_photon,
+                Nphot, detector_params, key, NUM_SENSORS, sim_config.K,
+                sim_config.effective_n_grad_iters, max_candidates_per_ray,
+                propagate_photons, photon_update_fn,
+                pos_grad_threshold=_pgt, make_hits_fn=_make_hits_fn, is_volume=_is_volume,
+                scatter_lengths_outer=sl_out, mie_scatter_lengths_outer=ml_out,
+                absorption_lengths_outer=al_out, initial_medium_id=medium_id0)
+
         scatter_lengths, mie_scatter_lengths, absorption_lengths, qe_weights, key = _get_optical_arrays(
             Nphot, detector_params, opt_key, wavelengths=wavelengths)
 
@@ -937,7 +1066,6 @@ def setup_event_simulator(
         else:
             qe_per_photon = jnp.full(Nphot, detector_params.response.qe)
 
-        _pgt = sim_config.K if pos_grad_threshold is None else pos_grad_threshold
         return _common_propagation(
             photon_origins, photon_directions, photon_intensities, photon_times,
             scatter_lengths, mie_scatter_lengths, absorption_lengths,

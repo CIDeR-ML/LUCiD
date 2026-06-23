@@ -14,6 +14,8 @@ from lucid.geometry.detector_geometry import DetectorGeometry
 from lucid.propagation.nested_sphere import (
     intersect_two_spheres_forward, batch_intersect_two_spheres,
 )
+from lucid.simulation.photon_step import _interface_refract_reflect
+from lucid.simulation.reflection import fresnel_rr
 
 CONFIG = "config/JUNO_nested_geom_config.json"
 R_IN, R_OUT = 17.5, 19.5
@@ -82,6 +84,60 @@ class TestTwoSphereIntersection:
         npt.assert_array_equal(np.asarray(hi), [True, True])
 
 
+class TestInterfacePhysics:
+    """Analytic Snell / Fresnel / TIR + flux conservation — the PRIMARY physics gate
+    (validation is internal-consistency only, so these must be airtight)."""
+    N_LS, N_W = 1.48, 1.33   # high-contrast LAB-LS <-> water
+
+    def test_fresnel_flux_conservation(self):
+        # R + T = 1 across all incidence angles (T = 1 - R by construction).
+        for deg in [0, 20, 40, 55, 63, 70, 85]:
+            ci = np.cos(np.deg2rad(deg))
+            R, ct = fresnel_rr(jnp.array(ci), self.N_LS, self.N_W)
+            assert 0.0 <= float(R) <= 1.0
+
+    def test_normal_incidence_reflectance(self):
+        # R0 = ((n1-n2)/(n1+n2))^2 at normal incidence.
+        R, ct = fresnel_rr(jnp.array(1.0), self.N_LS, self.N_W)
+        R0 = ((self.N_LS - self.N_W) / (self.N_LS + self.N_W)) ** 2
+        npt.assert_allclose(float(R), R0, atol=1e-6)
+
+    def test_total_internal_reflection(self):
+        # Dense->light past the critical angle (arcsin(1.33/1.48) ~ 64 deg) => R = 1.
+        theta_c = np.rad2deg(np.arcsin(self.N_W / self.N_LS))
+        ci = np.cos(np.deg2rad(theta_c + 5))
+        R, ct = fresnel_rr(jnp.array(ci), self.N_LS, self.N_W)
+        npt.assert_allclose(float(R), 1.0, atol=1e-6)
+
+    def test_snell_refraction_angle(self):
+        # 45 deg incidence, inner(1.48)->outer(1.33). Transmitted angle obeys Snell.
+        d = jnp.array([1.0, 1.0, 0.0]) / jnp.sqrt(2.0)   # 45 deg to +x
+        radial = jnp.array([1.0, 0.0, 0.0])              # outward normal
+        new_dir, new_mid, score, transmit = _interface_refract_reflect(
+            d, radial, jnp.array(0), self.N_LS, self.N_W, jnp.array(0.0))  # u=0 -> transmit
+        assert bool(transmit) is True
+        assert int(new_mid) == 1                          # medium flipped inner->outer
+        npt.assert_allclose(float(jnp.linalg.norm(new_dir)), 1.0, atol=1e-5)
+        # transmitted angle: sin t2 = (n1/n2) sin t1
+        sin_t1 = np.sqrt(0.5)
+        sin_t2 = (self.N_LS / self.N_W) * sin_t1
+        cos_t2 = np.sqrt(1 - sin_t2 ** 2)
+        npt.assert_allclose(abs(float(jnp.dot(new_dir, radial))), cos_t2, atol=1e-4)
+
+    def test_tir_reflects_and_keeps_medium(self):
+        # 75 deg incidence inner->outer is beyond critical => must reflect, medium unchanged.
+        ang = np.deg2rad(75)
+        d = jnp.array([np.cos(ang), np.sin(ang), 0.0])
+        radial = jnp.array([1.0, 0.0, 0.0])
+        new_dir, new_mid, score, transmit = _interface_refract_reflect(
+            d, radial, jnp.array(0), self.N_LS, self.N_W, jnp.array(0.0))  # u=0
+        assert bool(transmit) is False                    # T=0 at TIR => no transmit even at u=0
+        assert int(new_mid) == 0                          # medium unchanged
+        # specular reflection about the radial normal: x-component flips
+        npt.assert_allclose(float(new_dir[0]), -np.cos(ang), atol=1e-5)
+        npt.assert_allclose(float(new_dir[1]), np.sin(ang), atol=1e-5)
+
+
 class TestNestedPropagator:
     def test_build_and_dict_keys(self):
         dg = DetectorGeometry.from_config(CONFIG, detector_type='nested_sphere')
@@ -106,3 +162,61 @@ class TestNestedPropagator:
         assert w[1] > 0.0
         # interface rays' geometry hit is on the inner sphere
         npt.assert_allclose(np.linalg.norm(np.asarray(res['positions'])[0]), R_IN, atol=1e-3)
+
+
+class TestNestedForward:
+    """End-to-end calibration forward through the two-medium engine."""
+
+    @staticmethod
+    def _dp():
+        from lucid.detector_params import DetectorParams
+        return DetectorParams.from_flat(
+            scatter_length=50.0, wall_reflection_rate=0.2, sensor_reflection_rate=0.2,
+            absorption_length=50.0, qe=0.065, qe_corrections=jnp.ones(10000))
+
+    @pytest.mark.slow
+    def test_invisible_interface_matches_single_sphere(self, tmp_path):
+        # inner==outer material + equal n ⇒ the interface is optically transparent, so a
+        # nested wbls/wbls detector must reproduce a single wbls sphere at the outer radius.
+        import json
+        from lucid.simulation import setup_event_simulator
+        from lucid.sources import isotropic_source
+        single = tmp_path / "single.json"
+        single.write_text(json.dumps({
+            "material": "wbls", "detector_type": "sphere",
+            "geometry_definitions": {"radius": 19.5, "n_sensors": 10000, "sensor_radius": 0.25}}))
+        nested = tmp_path / "nested.json"
+        nested.write_text(json.dumps({
+            "material": "wbls", "inner_material": "wbls", "outer_material": "wbls",
+            "detector_type": "nested_sphere",
+            "geometry_definitions": {"inner_radius": 17.5, "outer_radius": 19.5,
+                                     "n_sensors": 10000, "sensor_radius": 0.25}}))
+        dp = self._dp()
+        src = isotropic_source(position=[0., 0., 0.], intensity=50_000_000, wavelength=420.0)
+        KW = dict(temperature=None, K=16, is_calibration=True, wavelength_mode=True,
+                  physics_config="config/JUNO_nested_physics_config.json")
+        c_ref, _ = setup_event_simulator(str(single), 300000, detector_type='sphere', **KW)(
+            src, dp, jax.random.PRNGKey(0))
+        c_nest, _ = setup_event_simulator(str(nested), 300000, detector_type='nested_sphere', **KW)(
+            src, dp, jax.random.PRNGKey(0))
+        ratio = float(c_nest.sum()) / float(c_ref.sum())
+        assert abs(ratio - 1.0) < 0.01, f"invisible interface ratio {ratio:.4f} != 1"
+
+    @pytest.mark.slow
+    def test_high_contrast_tir_reduces_charge(self):
+        # LAB-LS (n=1.48) inside water (n=1.33): TIR beyond the 64° critical angle traps
+        # light in the LS, so detected charge is materially below the transparent case.
+        from lucid.simulation import setup_event_simulator
+        from lucid.sources import isotropic_source
+        dp = self._dp()
+        src = isotropic_source(position=[0., 0., 0.], intensity=50_000_000, wavelength=430.0)
+        KW = dict(temperature=None, K=20, is_calibration=True, wavelength_mode=True,
+                  detector_type='nested_sphere')
+        c_w, _ = setup_event_simulator(
+            'config/JUNO_nested_geom_config.json', 300000,
+            physics_config='config/JUNO_nested_physics_config.json', **KW)(src, dp, jax.random.PRNGKey(0))
+        c_l, _ = setup_event_simulator(
+            'config/JUNO_nested_labls_geom_config.json', 300000,
+            physics_config='config/JUNO_nested_labls_physics_config.json', **KW)(src, dp, jax.random.PRNGKey(0))
+        assert float(c_l.sum()) < 0.9 * float(c_w.sum())   # TIR + 28m Rayleigh measurably reduce charge
+        assert float(c_l.sum()) > 0.5 * float(c_w.sum())   # but not catastrophically

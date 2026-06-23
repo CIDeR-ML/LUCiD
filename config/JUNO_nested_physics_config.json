@@ -1,0 +1,7 @@
+{
+  "medium_model": "materials/wbls.json",
+  "wall_reflection_rate": 0.2,
+  "sensor_reflection_rate": 0.2,
+  "qe": 0.065,
+  "qe_corrections": null
+}
