@@ -21,7 +21,7 @@ Helpers:
     save_particle_params / load_particle_params
 """
 
-from typing import NamedTuple
+from typing import NamedTuple, Optional
 import json
 import os
 
@@ -179,6 +179,20 @@ class ScintillationParams(NamedTuple):
     moyal_scale: jnp.ndarray = jnp.asarray(0.0, jnp.float32)
 
 
+class OuterOptics(NamedTuple):
+    """Per-medium optical bundle for the OUTER medium of a nested two-medium detector.
+
+    Holds the fittable scattering + absorption leaves for the outer (buffer/water)
+    medium, so calibration can optimise each medium's optics independently (the inner
+    medium uses the top-level ``DetectorParams.scattering`` / ``absorption``). Built via
+    :meth:`DetectorParams.with_outer_optics`. When ``DetectorParams.outer_optics is None``
+    (every single-medium detector, and a nested forward that hasn't split the optics) both
+    media share the top-level bundle — no extra leaves, forward byte-identical.
+    """
+    scattering: ScatteringParams
+    absorption: AbsorptionParams
+
+
 class DetectorParams(NamedTuple):
     """Detector calibration parameters (JAX pytree), nested by physics.
 
@@ -191,6 +205,11 @@ class DetectorParams(NamedTuple):
     per_pmt      : PerPmtParams        qe_corrections, gain, t0, walk
     scintillation: ScintillationParams S, kB, C, tau_*, moyal_* (appended LAST so the
                    existing 23-leaf flatten order is preserved; neutral=0 for non-scint media)
+    outer_optics : OuterOptics | None  per-medium OUTER optics for nested detectors.
+                   ``None`` (default) ⇒ no extra leaves, both media share the top-level
+                   bundle, forward byte-identical. NOT part of ``_SUBTUPLES`` so the flat
+                   save/load/normalize machinery ignores it; only JAX pytree ops (grad,
+                   tree_map) descend into it when present, so its leaves are fittable.
     """
     scattering: ScatteringParams
     absorption: AbsorptionParams
@@ -198,6 +217,19 @@ class DetectorParams(NamedTuple):
     response: ResponseParams
     per_pmt: PerPmtParams
     scintillation: ScintillationParams
+    outer_optics: Optional[OuterOptics] = None
+
+    def with_outer_optics(self, scattering=None, absorption=None):
+        """Return a copy with a separately-fittable OUTER-medium optical bundle.
+
+        Defaults each outer sub-bundle to a copy of the corresponding inner (top-level)
+        bundle, so ``dp.with_outer_optics()`` is forward-identical but now exposes the
+        outer medium's scatter/absorption leaves for independent calibration. Pass an
+        explicit ``ScatteringParams`` / ``AbsorptionParams`` to seed different values.
+        """
+        return self._replace(outer_optics=OuterOptics(
+            scattering=self.scattering if scattering is None else scattering,
+            absorption=self.absorption if absorption is None else absorption))
 
     @classmethod
     def from_flat(cls, *, num_sensors=None, **flat):

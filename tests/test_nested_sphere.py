@@ -84,6 +84,34 @@ class TestTwoSphereIntersection:
         npt.assert_array_equal(np.asarray(hi), [True, True])
 
 
+class TestSingleMediumUnaffected:
+    """Phase-0 tripwire: the two-medium additions must not touch the single-medium path."""
+
+    def test_detector_params_leaf_count_unchanged(self):
+        # outer_optics defaults to None ⇒ contributes ZERO pytree leaves ⇒ existing
+        # flatten order / normalize / grad machinery is identical for single-medium.
+        from lucid.detector_params import DetectorParams
+        dp = DetectorParams.from_flat(qe=0.065, qe_corrections=jnp.ones(50))
+        assert dp.outer_optics is None
+        n_leaves = len(jax.tree_util.tree_leaves(dp))
+        assert len(jax.tree_util.tree_leaves(dp._replace())) == n_leaves
+
+    def test_with_outer_optics_adds_only_outer_leaves(self):
+        from lucid.detector_params import DetectorParams
+        dp = DetectorParams.from_flat(qe=0.065, qe_corrections=jnp.ones(50))
+        base = len(jax.tree_util.tree_leaves(dp))
+        split = len(jax.tree_util.tree_leaves(dp.with_outer_optics()))
+        # ScatteringParams (5) + AbsorptionParams (2) = 7 new leaves.
+        assert split - base == 7
+
+    def test_single_sphere_propagator_has_no_interface_key(self):
+        # The nested-only 'hit_interface' key must not appear in the single-sphere dict.
+        dg = DetectorGeometry.from_config("config/JUNO_geom_config.json", detector_type='sphere')
+        assert not dg.is_nested
+        res = dg.propagator(jnp.array([[0., 0., 0.]]), jnp.array([[1., 0., 0.]]))
+        assert 'hit_interface' not in res
+
+
 class TestInterfacePhysics:
     """Analytic Snell / Fresnel / TIR + flux conservation — the PRIMARY physics gate
     (validation is internal-consistency only, so these must be airtight)."""
