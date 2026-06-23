@@ -545,7 +545,14 @@ def setup_event_simulator(
                 wavelengths = jnp.full(n, wavelengths)
 
         oa_in = evaluate_optical_model(detector_params, wavelengths, _medium_wl, n, qe_fn=_qe_fn)
-        oa_out = evaluate_optical_model(detector_params, wavelengths, _medium_wl_outer, n, qe_fn=None)
+        # Outer medium: use the separately-fittable outer optical bundle when present
+        # (per-medium calibration); else share the inner bundle's deviation curves.
+        dp_outer = detector_params
+        if detector_params.outer_optics is not None:
+            dp_outer = detector_params._replace(
+                scattering=detector_params.outer_optics.scattering,
+                absorption=detector_params.outer_optics.absorption)
+        oa_out = evaluate_optical_model(dp_outer, wavelengths, _medium_wl_outer, n, qe_fn=None)
         return (oa_in.scatter_len, oa_in.mie_len, oa_in.abs_len,
                 oa_out.scatter_len, oa_out.mie_len, oa_out.abs_len, oa_in.qe, key)
 
