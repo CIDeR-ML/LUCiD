@@ -75,7 +75,9 @@ def main():
     ci = np.cos(np.radians(thetas))
     R_an = np.array([float(fresnel_rr(jnp.array(c), N_LS, N_W)[0]) for c in ci])
     T_an = 1 - R_an
-    snell = np.degrees(np.arcsin(np.clip(N_LS / N_W * np.sin(np.radians(thetas)), 0, 1)))
+    # Snell θ_t exists only for θ_i <= θc; past θc there is NO refracted ray (TIR) → NaN
+    sin_t = N_LS / N_W * np.sin(np.radians(thetas))
+    snell = np.where(sin_t <= 1.0, np.degrees(np.arcsin(np.clip(sin_t, 0, 1))), np.nan)
     print(f"θc={THETA_C:.1f}°, r*={R_STAR:.2f} m")
     print("forward threshold scan...")
     radii, fwd = forward_threshold()
@@ -96,9 +98,10 @@ def _plot(th, T_emp, T_an, th_t, snell, radii, fwd):
     b.plot(th, snell, "k-", lw=2, label=r"analytic Snell  $n_{LS}\sin\theta_i=n_W\sin\theta_t$")
     b.plot(th, th_t, "o", color="C0", ms=4, label="engine refracted angle")
     b.axvline(THETA_C, color="C3", ls="--", lw=1.2)
-    b.axhline(90, color="gray", ls=":", lw=1)
+    b.text(THETA_C + 1, 20, f"θc={THETA_C:.0f}°\n(no refracted ray beyond)", color="C3", fontsize=8)
     b.set_xlabel("incidence angle θ_i (deg)"); b.set_ylabel("refracted angle θ_t (deg)")
-    b.set_title("(B) Snell refraction\nrefracted ray bends, no solution past θc"); b.legend(fontsize=8); b.grid(alpha=0.3)
+    b.set_xlim(0, 90); b.set_ylim(0, 95)
+    b.set_title("(B) Snell refraction\nrefracted ray bends; terminates at θc (TIR)"); b.legend(fontsize=8); b.grid(alpha=0.3)
     # C: forward threshold
     c.axhline(1.0, color="k", ls=":", lw=1)
     c.axvspan(R_STAR, 17.5, color="C3", alpha=0.08)

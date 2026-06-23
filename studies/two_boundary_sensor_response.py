@@ -116,8 +116,6 @@ def _plot(R, cos, Mc, Mm, edge):
     # ---- Panel 1: the single-sensor response field g(r_s, γ) ----
     im1 = a1.imshow(Mc, origin="lower", aspect="auto", extent=ext, cmap="turbo",
                     norm=LogNorm(vmin=max(Mc[Mc > 0].min(), Mc.max() * 1e-3), vmax=Mc.max()))
-    a1.axhline(R_STAR, color="w", ls="--", lw=1.0)
-    a1.text(-0.97, R_STAR + 0.2, r"$r^*$", color="w", fontsize=10)
     a1.set_xlabel(XLAB); a1.set_ylabel(r"source radius $r_s$ (m)")
     a1.set_title(r"Charge collected by one sensor vs. source position", fontsize=11)
     _gamma_axis(a1)
