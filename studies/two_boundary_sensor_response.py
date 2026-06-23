@@ -110,12 +110,14 @@ def _plot(R, cos, Mc, Mm, edge):
     import matplotlib; matplotlib.use("Agg"); import matplotlib.pyplot as plt
     from matplotlib.colors import LogNorm
     fig, (a1, a2) = plt.subplots(1, 2, figsize=(14.5, 5.8))
-    ext = [cos[0], cos[-1], R[0], R[-1]]
     XLAB = (r"$\cos\gamma$    ($+1$: sensor directly over source  →  $-1$: sensor on far side)")
+    # pcolormesh (not imshow): source radii are sampled NON-uniformly (dense near the
+    # interface), so use the real (cos, r_s) coordinates — imshow's uniform-grid assumption
+    # would place the dense near-interface rows at the wrong radius.
 
     # ---- Panel 1: the single-sensor response field g(r_s, γ) ----
-    im1 = a1.imshow(Mc, origin="lower", aspect="auto", extent=ext, cmap="turbo",
-                    norm=LogNorm(vmin=max(Mc[Mc > 0].min(), Mc.max() * 1e-3), vmax=Mc.max()))
+    im1 = a1.pcolormesh(cos, R, Mc, cmap="turbo", shading="nearest",
+                        norm=LogNorm(vmin=max(Mc[Mc > 0].min(), Mc.max() * 1e-3), vmax=Mc.max()))
     a1.set_xlabel(XLAB); a1.set_ylabel(r"source radius $r_s$ (m)")
     a1.set_title(r"Charge collected by one sensor vs. source position", fontsize=11)
     _gamma_axis(a1)
@@ -123,7 +125,7 @@ def _plot(R, cos, Mc, Mm, edge):
 
     # ---- Panel 2: interface signature = ratio to the no-index-step control ----
     ratio = Mc / np.maximum(Mm, 1e-9)
-    im2 = a2.imshow(ratio, origin="lower", aspect="auto", extent=ext, cmap="RdBu_r", vmin=0.4, vmax=1.6)
+    im2 = a2.pcolormesh(cos, R, ratio, cmap="RdBu_r", shading="nearest", vmin=0.4, vmax=1.6)
     a2.set_xlabel(XLAB); a2.set_ylabel(r"source radius $r_s$ (m)")
     a2.set_title(r"Interface effect (ratio to matched-index control)", fontsize=11)
     _gamma_axis(a2)
