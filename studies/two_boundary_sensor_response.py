@@ -116,32 +116,22 @@ def _plot(R, cos, Mc, Mm, edge):
     # ---- Panel 1: the single-sensor response field g(r_s, γ) ----
     im1 = a1.imshow(Mc, origin="lower", aspect="auto", extent=ext, cmap="turbo",
                     norm=LogNorm(vmin=max(Mc[Mc > 0].min(), Mc.max() * 1e-3), vmax=Mc.max()))
-    a1.axhline(R_STAR, color="w", ls=":", lw=1.2)
-    a1.text(-0.97, R_STAR + 0.15, f"TIR threshold  r* = {R_STAR:.1f} m", color="w", fontsize=8)
-    a1.annotate("source ≈ next to\nthis sensor → bright\n(1/d², d=R_out−r_s)",
-                xy=(0.97, R[-1] - 0.3), xytext=(0.2, 15.5), color="w", fontsize=8, ha="center",
-                arrowprops=dict(arrowstyle="->", color="w", lw=1.2))
-    a1.set_xlabel(XLAB); a1.set_ylabel(r"source radius $r_s$ (m)   [0 = centre, 17.5 = interface]")
-    a1.set_title("Charge one sensor sees vs. where the source is\n"
-                 r"response field $g(r_s,\gamma)$, LAB-LS / water", fontsize=11)
+    a1.axhline(R_STAR, color="w", ls="--", lw=1.0)
+    a1.text(-0.97, R_STAR + 0.2, r"$r^*$", color="w", fontsize=10)
+    a1.set_xlabel(XLAB); a1.set_ylabel(r"source radius $r_s$ (m)")
+    a1.set_title(r"Charge collected by one sensor vs. source position", fontsize=11)
     _gamma_axis(a1)
-    fig.colorbar(im1, ax=a1, label="charge at the sensor (azimuthal avg, log)")
+    fig.colorbar(im1, ax=a1, label="mean charge per sensor (log)")
 
     # ---- Panel 2: interface signature = ratio to the no-index-step control ----
     ratio = Mc / np.maximum(Mm, 1e-9)
     im2 = a2.imshow(ratio, origin="lower", aspect="auto", extent=ext, cmap="RdBu_r", vmin=0.4, vmax=1.6)
-    good = np.isfinite(edge)
-    a2.plot(edge[good], R[good], "k-", lw=2, label="forward direct-beam edge (grazing ray)")
-    a2.axhline(R_STAR, color="k", ls=":", lw=1.2)
-    a2.text(-0.97, R_STAR + 0.15, f"r* = {R_STAR:.1f} m", color="k", fontsize=8)
-    a2.text(0.7, 17.0, "TIR shadow\n(direct light removed)", color="navy", fontsize=8, ha="center")
-    a2.text(-0.35, 12.5, "refraction\ncaustic (lens)", color="darkred", fontsize=8, ha="center")
+    a2.axhline(R_STAR, color="k", ls="--", lw=1.0)
+    a2.text(-0.97, R_STAR + 0.2, r"$r^*$", color="k", fontsize=10)
     a2.set_xlabel(XLAB); a2.set_ylabel(r"source radius $r_s$ (m)")
-    a2.set_title("What the interface alone does (bulk divided out)\n"
-                 "ratio to a matched-index control:  red > 1 lensing,  blue < 1 TIR", fontsize=11)
+    a2.set_title(r"Interface effect (ratio to matched-index control)", fontsize=11)
     _gamma_axis(a2)
-    a2.legend(fontsize=8, loc="lower left")
-    fig.colorbar(im2, ax=a2, label="contrast / matched  (interface transfer)")
+    fig.colorbar(im2, ax=a2, label="contrast / matched")
 
     fig.tight_layout(); fig.savefig(os.path.join(OUTDIR, "two_boundary_sensor_response.png"), dpi=130)
 
