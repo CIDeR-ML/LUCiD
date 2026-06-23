@@ -56,10 +56,16 @@ class PhotonStepResult(NamedTuple):
 class PhotonState(NamedTuple):
     """Carry state for the jax.lax.scan propagation loop.
 
-    6-tuple: (positions, directions, times, survival, key, log_p).
+    7-tuple: (positions, directions, times, survival, key, log_p, medium_id).
 
     ``log_p`` is the per-photon accumulated DiCE score (sum of ``lf + la`` over
     prior steps); the implicit-capture deposit reads the PRE-step ``log_p``.
+
+    ``medium_id`` is the per-photon current medium index for nested two-medium
+    detectors (0 = inner, 1 = outer). For single-medium detectors it is an all-zero
+    carried array that no computation reads → the forward stays byte-identical.
+    Defaults to ``None`` so legacy 6-field positional construction still works
+    (the scan body always supplies it explicitly).
     """
     positions: jnp.ndarray          # (n_rays, 3)
     directions: jnp.ndarray         # (n_rays, 3)
@@ -67,3 +73,4 @@ class PhotonState(NamedTuple):
     survival: jnp.ndarray           # (n_rays,)
     key: jnp.ndarray                # PRNGKey
     log_p: jnp.ndarray              # (n_rays,)
+    medium_id: Optional[jnp.ndarray] = None   # (n_rays,) int, nested only

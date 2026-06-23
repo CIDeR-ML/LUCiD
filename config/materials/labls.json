@@ -1,0 +1,34 @@
+{
+  "material": "labls",
+  "_comment_composition": "LAB-based liquid scintillator (linear alkylbenzene solvent), the real JUNO target. Bulk optical transport is dominated by the LAB solvent (PPO/bis-MSB fluors set EMISSION, which point-source calibration does not use, so no scintillation block here). Unlike wbls.json/water.json this does NOT inherit the SK water parametrization — LAB is chemically distinct (n=1.48 vs 1.33; Rayleigh ~28 m vs ~250 m at 430 nm), giving the high-contrast LS<->water interface (critical angle ~64 deg, significant TIR).",
+  "refractive_index": 1.48,
+  "_comment_refractive_index": "LAB n_D = 1.4833 at 589 nm (sodium D); dispersion raises it to ~1.49 at the 430 nm scintillation/Cherenkov peak. Single scalar 1.48 used here (critical angle vs water 1.33 is 64.0 deg). See 'Refractive index in the JUNO liquid scintillator' (Eur. Phys. J. C, 2024).",
+  "speed_of_light_vacuum_m_per_ns": 0.299792,
+
+  "scattering": {
+    "source": "Rayleigh scattering of LAB: arXiv:1504.01001 (Eur.Phys.J.C 75 (2015) 545), L_Rayleigh(430 nm) = 28.2 +/- 1.0 m via Einstein-Smoluchowski-Cabannes. NOT the SK water parametrization.",
+    "symmetric": {
+      "description": "Pure Rayleigh law alpha_sym = P4/lambda^4 (P5=0): Rayleigh scattering is fundamentally lambda^-4. P4 normalised so 1/alpha_sym(430 nm) = 28.2 m -> P4 = 430^4 / 28.2 = 1.212e9.",
+      "P4": 1.212e9,
+      "P5": 0.0
+    },
+    "asymmetric": {
+      "description": "Forward Mie alpha_asym = P6*(1 + P7/lambda^4*(lambda-P8)^2). Purified LAB scattering is Rayleigh-dominated; Mie (residual particulates) is removed by purification -> P6=0 (negligible Mie). The LAB Rayleigh anisotropy (depolarization ratio 0.31, arXiv:1504.01001) is already folded into the measured scattering length above.",
+      "P6": 0.0,
+      "P7": 4.62e6,
+      "P8": 392.0,
+      "default_asymmetry_g": 0.0
+    }
+  },
+
+  "absorption": {
+    "source": "EFFECTIVE absorption (pure-absorption model, no re-emission — see docs/TWO_BOUNDARY_PLAN.md). Derived from the JUNO attenuation-length requirement L_att(430 nm) >= 20 m (arXiv:1507.05613) MINUS the measured Rayleigh scattering L_scat = 28.2 m: 1/L_abs = 1/20 - 1/28.2 => L_abs(430 nm) = 68.8 m (alpha_abs = 0.01454 /m). This is a fit-TARGET prior, not a measured LAB absorption spectrum.",
+    "description": "Flat effective absorption alpha_abs = P0*P2 (P1=0 -> no UV lambda^-4 term; P3=0 -> lambda-independent). LAB has no measured absorption spectrum in this functional form, so a flat L_abs is the honest prior; the pope_fry table repeats the same constant so alpha_abs is flat across the whole band.",
+    "P0": 1.0,
+    "P1": 0.0,
+    "P2": 0.01454,
+    "P3": 0.0,
+    "pope_fry_wavelengths_nm": [464, 470, 480, 490, 500, 510, 520, 530, 540, 550, 560, 570, 580, 590, 600, 610, 620, 630, 640, 650, 660, 670, 680, 690, 700],
+    "pope_fry_absorption_m_inv": [0.01454, 0.01454, 0.01454, 0.01454, 0.01454, 0.01454, 0.01454, 0.01454, 0.01454, 0.01454, 0.01454, 0.01454, 0.01454, 0.01454, 0.01454, 0.01454, 0.01454, 0.01454, 0.01454, 0.01454, 0.01454, 0.01454, 0.01454, 0.01454, 0.01454]
+  }
+}
