@@ -101,10 +101,14 @@ def find_intersected_nested_sphere_sensors(ray_origins, ray_directions,
         ray_origins = ray_origins[None, :]
         ray_directions = ray_directions[None, :]
 
-    # 1. Outer-sphere sensor lookup — identical to the single-sphere propagator.
+    # 1. Outer-sphere sensor lookup — identical to the single-sphere propagator, but WITH
+    #    the PMT cosθ angular acceptance (sensors are on the outer sphere → radial normal).
+    #    Without it, grazing rays over-detect and position-dependent charge is biased (the
+    #    two-medium contrast/matched ratios were contaminated by this).
     result = find_intersected_sphere_sensors_differentiable(
         ray_origins, ray_directions, sensor_positions, sensor_radius,
-        r_outer, n_divisions, inverted_sensor_map, temperature, overlap_prob)
+        r_outer, n_divisions, inverted_sensor_map, temperature, overlap_prob,
+        apply_radial_cos=True)
 
     # 2. Nearest forward surface among the two spheres.
     t_hit, hit_inner, inner_pts, inner_norms = batch_intersect_two_spheres(

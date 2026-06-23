@@ -416,9 +416,13 @@ def create_inverted_sphere_sensor_map(assignments_geometric, assignments_distanc
 
 def find_intersected_sphere_sensors_differentiable(ray_origins, ray_directions, sensor_positions, sensor_radius,
                                                     radius, n_divisions, inverted_sensor_map,
-                                                    temperature, overlap_prob):
+                                                    temperature, overlap_prob, apply_radial_cos=False):
     """
     Finds sensors intersected by rays using a differentiable approximation with overlap-based weights.
+
+    ``apply_radial_cos`` adds the PMT cosθ angular acceptance (sphere-radial normal);
+    see :func:`lucid.propagation.base.compute_sensor_intersections_base`. Default False
+    keeps the single-sphere forward byte-identical.
     """
     single_ray = ray_origins.ndim == 1
     if single_ray:
@@ -447,7 +451,8 @@ def find_intersected_sphere_sensors_differentiable(ray_origins, ray_directions, 
     sensor_results = jax.vmap(
         lambda det_idx: compute_sensor_intersections_base(
             det_idx, sensor_positions, sensor_radius,
-            ray_origins, ray_directions, bounds_check, overlap_prob
+            ray_origins, ray_directions, bounds_check, overlap_prob,
+            apply_radial_cos=apply_radial_cos
         )
     )(potential_sensors.T)
     
@@ -519,6 +524,6 @@ def create_sphere_photon_propagator(sensor_positions, sensor_radius, sphere_radi
         return find_intersected_sphere_sensors_differentiable(
             photon_origins, photon_directions, sensor_positions, sensor_radius,
             sphere_radius, n_divisions, inverted_sensor_map,
-            temperature, overlap_prob)
+            temperature, overlap_prob, apply_radial_cos=True)
 
     return propagate_photons

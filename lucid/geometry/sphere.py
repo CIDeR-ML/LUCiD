@@ -12,7 +12,12 @@ from .registry import register_detector
 @register_detector('sphere')
 class Sphere(Detector):
     """Spherical detector geometry"""
-    
+
+    # Sensors lie on a sphere centred at the origin ⇒ their outward normal is radial.
+    # The propagator reads this to apply the PMT cosθ angular acceptance (conservation fix).
+    sensors_radial = True
+
+
     def __init__(self, radius, n_sensors, sensor_radius):
         """
         Initialize spherical detector.
