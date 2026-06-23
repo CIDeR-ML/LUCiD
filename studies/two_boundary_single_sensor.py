@@ -54,13 +54,13 @@ def main():
         _circle(ax, R_OUT, color="k", lw=1.5)            # sensor sphere
         _circle(ax, R_IN, color="k", lw=1.0, ls="--")    # LS / water interface
         ax.plot(0, R_OUT, marker="v", ms=14, color="yellow", mec="k", mew=1.2, zorder=5)
-        ax.text(0, R_OUT + 1.1, "the chosen\nsensor", ha="center", fontsize=8)
+        ax.text(0, R_OUT + 1.1, "sensor", ha="center", fontsize=8)
         ax.set_aspect("equal"); ax.set_xlim(-R_OUT - 1, R_OUT + 1); ax.set_ylim(-R_OUT - 1, R_OUT + 2)
         ax.set_xlabel("source x (m)"); ax.set_ylabel("source z (m)")
 
     cm = a1.pcolormesh(X, Z, charge, cmap="turbo", shading="auto",
                        norm=LogNorm(vmin=np.nanmax(charge) * 1e-2, vmax=np.nanmax(charge)))
-    a1.set_title("Charge in the chosen sensor vs. source position")
+    a1.set_title("Charge in the sensor vs. source position")
     fig.colorbar(cm, ax=a1, fraction=0.046, label="charge in that sensor (log)")
 
     rm = a2.pcolormesh(X, Z, ratio, cmap="RdBu_r", shading="auto", vmin=0.4, vmax=1.6)
