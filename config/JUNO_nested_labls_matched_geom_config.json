@@ -1,0 +1,12 @@
+{
+  "material": "labls",
+  "inner_material": "labls",
+  "outer_material": "water_n148",
+  "detector_type": "nested_sphere",
+  "geometry_definitions": {
+    "inner_radius": 17.5,
+    "outer_radius": 19.5,
+    "n_sensors": 10000,
+    "sensor_radius": 0.25
+  }
+}
