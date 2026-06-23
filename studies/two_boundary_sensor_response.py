@@ -97,22 +97,6 @@ def main():
     print(f"Wrote {OUTDIR}/two_boundary_sensor_response.png")
 
 
-def tir_band_curve(n_r=80):
-    """TIR-shadow boundary in (cosγ, r_s): the locus where the straight source→sensor ray
-    hits the interface at exactly the critical angle, b(r_s,γ) = R_in sinθc = R_STAR.
-    Returns r_s and the two cosγ edges of the band (NaN below the onset radius r*)."""
-    rs = np.linspace(R_STAR, R_IN - 0.05, n_r)
-    g = np.linspace(1e-4, np.pi - 1e-4, 4000)
-    cg, sg = np.cos(g), np.sin(g)
-    lo, hi = np.full(n_r, np.nan), np.full(n_r, np.nan)
-    for i, r in enumerate(rs):
-        b = r * R_OUT * sg / np.sqrt(R_OUT**2 + r**2 - 2 * R_OUT * r * cg)
-        m = b > R_STAR
-        if m.any():
-            lo[i], hi[i] = cg[m].min(), cg[m].max()
-    return rs, lo, hi
-
-
 def _gamma_axis(ax):
     """Add a secondary top axis: source–sensor opening angle γ in degrees (γ = arccos cosγ)."""
     top = ax.secondary_xaxis("top",
@@ -140,16 +124,9 @@ def _plot(R, cos, Mc, Mm, edge):
     # ---- Panel 2: interface signature = ratio to the no-index-step control ----
     ratio = Mc / np.maximum(Mm, 1e-9)
     im2 = a2.imshow(ratio, origin="lower", aspect="auto", extent=ext, cmap="RdBu_r", vmin=0.4, vmax=1.6)
-    # TIR-shadow boundary curve (not a horizontal line): where the direct ray hits the
-    # interface at the critical angle. The blue (TIR) deficit lies between its two edges.
-    rs, lo, hi = tir_band_curve()
-    a2.plot(lo, rs, "k-", lw=1.6); a2.plot(hi, rs, "k-", lw=1.6,
-            label=r"TIR onset  $b(r_s,\gamma)=R_{in}\sin\theta_c$")
-    a2.set_xlim(cos[0], cos[-1]); a2.set_ylim(R[0], R[-1])
     a2.set_xlabel(XLAB); a2.set_ylabel(r"source radius $r_s$ (m)")
     a2.set_title(r"Interface effect (ratio to matched-index control)", fontsize=11)
     _gamma_axis(a2)
-    a2.legend(fontsize=8, loc="lower left")
     fig.colorbar(im2, ax=a2, label="contrast / matched")
 
     fig.tight_layout(); fig.savefig(os.path.join(OUTDIR, "two_boundary_sensor_response.png"), dpi=130)
