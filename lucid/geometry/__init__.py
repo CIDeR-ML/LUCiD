@@ -18,6 +18,7 @@ from .base import Detector
 from .cylinder import Cylinder
 from .sphere import Sphere
 from .box import Box
+from .nested_sphere import NestedSphere
 
 # Import detector functions
 from .detector import (
@@ -43,6 +44,7 @@ __all__ = [
     'Cylinder',
     'Sphere',
     'Box',
+    'NestedSphere',
 
     # Detector functions
     'load_detector_config',
