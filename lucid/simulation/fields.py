@@ -19,8 +19,10 @@ Design (see also the reflection-model precedent in ``reflection.py``):
   structural change that triggers a (deliberate, rare) recompile.
 
 * The **parameters** (poly coefficients, siren weights) are the only traced, optimizable
-  quantity. They live as a single pytree leaf ``DetectorParams.absorption.field_params``
-  and flow through grad / optax / normalize like any other calibration parameter.
+  quantity. They live as a single pytree leaf ``DetectorParams.absorption.field_params`` and
+  flow through grad / optax. Being a high-dim representation pytree with no physical bounds, the
+  leaf is *opaque*: ``normalize_params`` passes it through un-normalized (optimize it directly),
+  and ``save_detector_params`` does not persist it (round-trips to ``None`` — re-fit at use).
 
 ``make_field`` returns the matched pair ``(apply_fn, init_params)`` so the static closure
 and the traced leaf are always built together with consistent pytree structure (treedef).
@@ -42,6 +44,7 @@ Conventions
 """
 
 from typing import Any, Callable, Tuple
+import warnings
 
 import numpy as np
 import jax
@@ -142,8 +145,11 @@ def _make_poly(R: float, H: float,
     # so the fittable vector stays length n_coeff and the constant mode is pinned to 0.
     flat = np.array([i * n_z * n_a + j * n_a + m
                      for i in range(n_r) for j in range(n_z) for m in range(n_a)
-                     if not (i == 0 and j == 0 and m == 0)])
+                     if not (i == 0 and j == 0 and m == 0)], dtype=np.int64)
     n_coeff = len(flat)
+    if n_coeff == 0:
+        raise ValueError("poly field has no non-constant modes (deg_r=deg_z=n_azim=0); "
+                         "increase deg_r/deg_z/n_azim or use 'uniform'.")
 
     def apply(field_params, xyz):
         # Scatter the gauge-fixed coeff vector into the dense tensor ONCE (per call, not per
@@ -269,6 +275,17 @@ def _make_siren_grid(R: float, H: float,
 # Gauge fix — remove the field↔global-L_abs degeneracy
 # ---------------------------------------------------------------------------
 
+def _reference_set(R: float, H: float, n_ref: int, seed: int) -> jnp.ndarray:
+    """Fixed ``(n_ref, 3)`` uniform-in-cylinder reference points (m), for pinning a field's
+    mean/RMS. Frozen at make_field time (own seed) ⇒ the gauge/normalization is deterministic and
+    depends only on ``field_params`` (not the query points), so it is vmap-invariant."""
+    rng = np.random.default_rng(seed)
+    rr = R * np.sqrt(rng.uniform(size=n_ref))
+    th = rng.uniform(-np.pi, np.pi, size=n_ref)
+    zz = rng.uniform(-H / 2.0, H / 2.0, size=n_ref)
+    return jnp.asarray(np.stack([rr * np.cos(th), rr * np.sin(th), zz], axis=-1), jnp.float32)
+
+
 def _gauge_fix(apply: Callable, R: float, H: float, n_ref: int = 2048,
                seed: int = 12345) -> Callable:
     """Wrap a field apply so its spatial-deviation mean is pinned to 0.
@@ -281,11 +298,7 @@ def _gauge_fix(apply: Callable, R: float, H: float, n_ref: int = 2048,
     depends only on ``field_params`` (not the query points) ⇒ vmap-invariant, hoisted to
     once per step. Zero/identity params ⇒ mean already 0 ⇒ byte-identical (still ≡ 1).
     """
-    rng = np.random.default_rng(seed)
-    rr = R * np.sqrt(rng.uniform(size=n_ref))
-    th = rng.uniform(-np.pi, np.pi, size=n_ref)
-    zz = rng.uniform(-H / 2.0, H / 2.0, size=n_ref)
-    ref = jnp.asarray(np.stack([rr * np.cos(th), rr * np.sin(th), zz], axis=-1), jnp.float32)
+    ref = _reference_set(R, H, n_ref, seed)
 
     def gauged(field_params, xyz):
         mean_dev = jnp.mean(apply(field_params, ref)) - 1.0   # mean of (field − 1) over ref
@@ -294,11 +307,42 @@ def _gauge_fix(apply: Callable, R: float, H: float, n_ref: int = 2048,
     return gauged
 
 
+def _norm_amp(apply: Callable, base_init, R: float, H: float, n_ref: int = 2048,
+              seed: int = 777, init_amp: float = 0.05):
+    """Reparameterize a field as ``1 + amp · shape(x)`` where ``shape`` is the base field's
+    deviation NORMALIZED to mean-0, unit-RMS (over a fixed reference set), and ``amp`` is an
+    explicit learned scalar (stored as ``log_amp``).
+
+    This removes BOTH degenerate/runaway directions at once: the SIREN (or any base rep) can
+    only set the *pattern* — its overall scale is divided out, so it can never blow up to
+    spatially absorb a wrong global ``L_abs`` (the failure mode of the plain gauge, where the
+    mean is pinned but the amplitude floats free). The magnitude lives in one well-conditioned
+    scalar ``amp``, learned alongside the nominal absorption rate. ``field_params`` becomes the
+    dict ``{'w': base_params, 'log_amp': scalar}``.
+    """
+    ref = _reference_set(R, H, n_ref, seed)
+
+    def normamp(field_params, xyz):
+        w = field_params['w']
+        dref = apply(w, ref) - 1.0                                   # base deviation over ref
+        mu = jnp.mean(dref)
+        # eps INSIDE the sqrt: at an identity/zero init (poly, grid) the deviation is exactly 0, so
+        # var=0 and an outside-the-sqrt floor would leave d√var/dw = 1/(2√0) = NaN on the very first
+        # step. Inside the sqrt the gradient stays finite (same pattern as encode_cylindrical's r).
+        sig = jnp.sqrt(jnp.mean((dref - mu) ** 2) + 1e-12)
+        dev = apply(w, xyz) - 1.0
+        return 1.0 + jnp.exp(field_params['log_amp']) * (dev - mu) / sig
+
+    init = {'w': base_init, 'log_amp': jnp.asarray(np.log(init_amp), jnp.float32)}
+    return normamp, init
+
+
 # ---------------------------------------------------------------------------
 # Public factory
 # ---------------------------------------------------------------------------
 
 def make_field(kind: str, *, R: float, H: float, gauge: bool = False,
+               normamp: bool = False, init_amp: float = 0.05,
                **hparams) -> Tuple[Callable, Any]:
     """Build a spatial field: returns ``(apply_fn, init_params)``.
 
@@ -312,8 +356,16 @@ def make_field(kind: str, *, R: float, H: float, gauge: bool = False,
     R, H   : detector radius / height (m), from ``det_geom.detector`` — drives the encoding
     gauge  : if True, pin the field's spatial-deviation mean to 0 (removes the field↔L_abs
              degeneracy — REQUIRED for a joint global+field calibration). Identity-preserving.
+    normamp: if True, reparameterize as ``1 + exp(log_amp)·unit-RMS-shape``, putting the magnitude
+             in one well-conditioned scalar (``field_params`` becomes ``{'w':…, 'log_amp':…}``).
+             **Takes precedence over and disables ``gauge``.** Best for reps with a free constant
+             mode (siren/siren_grid); the zero-init reps (poly/grid) start ill-conditioned (large
+             initial grad, finite) since their deviation is exactly 0 at init.
+    init_amp: initial amplitude for ``normamp`` (default 0.05).
     hparams: representation hyperparameters (e.g. poly ``deg_r``, ``deg_z``, ``n_azim``)
     """
+    if normamp and gauge:
+        warnings.warn("make_field: normamp=True takes precedence; gauge=True is ignored.", stacklevel=2)
     if kind == 'uniform':
         return _make_uniform()
     elif kind == 'poly':
@@ -327,6 +379,8 @@ def make_field(kind: str, *, R: float, H: float, gauge: bool = False,
     else:
         raise ValueError(
             f"unknown field kind {kind!r} (have: 'uniform', 'poly', 'siren', 'grid', 'siren_grid')")
+    if normamp:                                  # 1 + amp·unit-normalized-shape (supersedes gauge)
+        return _norm_amp(apply, init, R, H, init_amp=init_amp)
     if gauge:
         apply = _gauge_fix(apply, R, H)
     return apply, init

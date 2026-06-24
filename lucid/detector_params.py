@@ -348,10 +348,11 @@ _SUBTUPLES = (
 # Ordered list of every leaf (flat) field name across all sub-tuples.
 # Opaque optimizer-only leaves: present in the JAX pytree (so grad/optax see them when
 # populated) but NOT physical scalar/array fields — excluded from the flat save/load,
-# leaf-order, and projection machinery. ``field_params`` holds a poly/siren weight pytree
-# whose representation is static (``simulation.fields``); it is persisted separately, not
-# via the per-field JSON+npy path. Keeping it out here preserves the byte-identical flat
-# field contract (and the reconciliation leaf-order tripwire) when no field is configured.
+# leaf-order, normalize, and projection machinery. ``field_params`` holds a poly/siren weight
+# pytree whose representation is static (``simulation.fields``). It is NOT persisted: save/load
+# round-trips it to ``None`` (re-fit at use), since the representation/shape is set at setup time
+# and only the values are traced. Keeping it out here preserves the byte-identical flat-field
+# contract (and the reconciliation leaf-order tripwire) when no field is configured.
 _OPAQUE_FIELDS = frozenset({"field_params"})
 
 _FLAT_FIELDS = tuple(
@@ -727,20 +728,48 @@ def load_particle_params(filepath: str) -> ParticleParams:
 # Optimization helpers
 # ---------------------------------------------------------------------------
 
+def _pop_field_params(params):
+    """Pop the opaque ``absorption.field_params`` leaf (if populated) so the normalize tree-map
+    runs over only the bounded scalar params. Returns ``(stripped_params, field_params)``; a no-op
+    (returns ``params, None``) for anything without a populated field_params (incl. raw pytrees).
+
+    ``field_params`` (the spatial-field weights) is a high-dim representation pytree with no
+    physical per-coefficient bounds; it is optimized directly, not via normalize — exactly as it is
+    excluded from the flat save/load (``_OPAQUE_FIELDS``). Stripping it keeps the bounds pytree
+    (which never carries it) structurally matched, so the tree-map cannot fail on a mismatch.
+    """
+    fp = getattr(getattr(params, 'absorption', None), 'field_params', None)
+    if fp is None:
+        return params, None
+    return params._replace(absorption=params.absorption._replace(field_params=None)), fp
+
+
 def normalize_params(params, bounds_min, bounds_max):
-    """Map a pytree from physical units to [0, 1] using element-wise bounds."""
-    return jax.tree.map(
+    """Map a pytree from physical units to [0, 1] using element-wise bounds.
+
+    ``field_params`` is passed through un-normalized (see ``_pop_field_params``)."""
+    params, fp = _pop_field_params(params)
+    out = jax.tree.map(
         lambda v, lo, hi: (v - lo) / (hi - lo + 1e-8),
         params, bounds_min, bounds_max,
     )
+    if fp is not None:
+        out = out._replace(absorption=out.absorption._replace(field_params=fp))
+    return out
 
 
 def denormalize_params(normalized, bounds_min, bounds_max):
-    """Map a pytree from [0, 1] back to physical units."""
-    return jax.tree.map(
+    """Map a pytree from [0, 1] back to physical units.
+
+    ``field_params`` is passed through unchanged (see ``_pop_field_params``)."""
+    normalized, fp = _pop_field_params(normalized)
+    out = jax.tree.map(
         lambda v, lo, hi: v * (hi - lo) + lo,
         normalized, bounds_min, bounds_max,
     )
+    if fp is not None:
+        out = out._replace(absorption=out.absorption._replace(field_params=fp))
+    return out
 
 
 def default_bounds(num_sensors: int):
