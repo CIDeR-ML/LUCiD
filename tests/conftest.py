@@ -43,6 +43,7 @@ _SLOW_FILES = [
     "test_e2e_superk.py",
     "test_e2e_gradients.py",
     "test_e2e_edge_cases.py",
+    "test_absorption_field_e2e.py",
 ]
 
 
