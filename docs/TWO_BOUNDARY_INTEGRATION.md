@@ -251,6 +251,50 @@ Acceptance gates (all must pass; numbers recorded in the PR):
 Explicitly NOT gated in PR2 (deferred to PR1): detection-fraction = coverage (needs cosθ);
 clean absolute interface-loss percentages; cylinder/box angular acceptance.
 
+## 4e. PR2 building blocks VALIDATED + reviewed (2026-06-24)
+
+Worktree `LUCiD_pr2`, branch `pr2-two-medium-generic`. Gates 1–4 pass (unit + end-to-end
+byte-identity incl. gradient; surface-list 0-mismatch; invisible-interface; analytic
+Snell/Fresnel/TIR). 3-agent pre-integration review done; design sound (byte-identity robust at
+N=100k / extremes / rbg PRNG). Hardening landed (`47b8a94`): NaN-grad fix in
+`surfaces.sphere_forward_t` (eps-inside-sqrt), `region_of_spheres` S=0 guard, `nearest_interface`
+`t_outer` fold-in, ported physics comments.
+
+**Final param layout DECISION:** primary medium stays top-level (`dp.scattering`/`dp.absorption`
+unchanged — zero churn to `optical_model.py`/`event_io.py`/scripts); surrounding shells =
+`outer_media: tuple[MediumParams, ...]` (N-native: N=2→1 entry, N=3→2, no refactor), registered
+into `default_bounds`/`make_optimization_mask`/`save-load`. `optics_stack = [primary]+outer_media`,
+gathered by `medium_id`. NOT the symmetric `dp.media[i]` rename (high churn, no N=2 benefit).
+
+**cosθ:** strip `apply_radial_cos` from the nested propagator → PR2 genuinely no-cosθ; keeps
+gate 3 self-consistent (matches the no-cosθ decision). The general cosθ fix stays PR1.
+
+### Integration roadmap (ordered; from the integration review)
+1. **Setup guard** (`simulator.py` ~L219): compute I; `raise NotImplementedError` for
+   `I>0 and mode in {track,data}` (nested = calibration/point-source only).
+2. **Geometry plumbing** (`detector_geometry.py`): expose `n_regions`/interface centers+radii/
+   `speed_stack` (keep inner/outer compat for the existing nested JSONs).
+3. **Propagator** (`nested_sphere.py`): swap `intersect_two_spheres_forward` → `surfaces.nearest_interface`
+   (+ the `t_outer` outer-surface comparison — net-new, needs fresh validation); strip cosθ.
+4. **Factory wiring** (`simulator.py` L35-38, L257-282): one import; one `photon_update_fn` via
+   `make_photon_step`; drop `photon_update_fn_nested`. Re-run gate 1 against the REAL import.
+5. **Optics unify** (`simulator.py` L454-557): merge `_get_optical_arrays*` → R-region stack
+   resolver. Validate R=1 stack == legacy single output.
+6. **Scan-body collapse** (`simulator.py` L684-739): gather `optics_stack[mid]`/`speed_stack[mid]`;
+   keep ONE `if has_interface` only around the vmap arity (7- vs 8-tuple is static in JAX).
+   Keep `medium_id=None` for R=1 (preserves the unchanged scan pytree → gate-1 byte-identity).
+7. **Calibration impl** (`simulator.py` L1027-1082): route through the unified resolver + `region_of`.
+8. **DetectorParams** (`detector_params.py`): `outer_media` tuple + bounds/mask/save; migration =
+   absent ⇒ `outer_media=()` (existing params load unchanged).
+9. **Retire** `*_nested` step fns (`photon_step.py` L375-554); update the 2 study scripts +
+   `tests/test_nested_sphere.py`. Keep single-medium `photon_iteration_*` (wide import surface).
+10. **Tests:** promote gate 1/2 to pytest; add split-prefix invariant + DiCE-unbiased
+    interface-grad (gate 6) + outer_media round-trip (gate 7).
+
+Gotchas to respect: don't "tidy" the non-contiguous `update_factors` key slots (k[0..5]+k[8]);
+`_interface_refract_reflect` stays binary (fine for N=2, not N≥3); interface n is scalar
+(monochromatic-exact; a Cherenkov-spectrum source is an approximation until n(λ) is threaded).
+
 ## 5. Accepted-by-decision (carry forward, don't silently ship as "done")
 Pure absorption (no LS re-emission); point sources only (no SIREN-in-LS); interface n fixed
 (not a fit target); acrylic lumped (until the N=3 region path lands); idealized outer wall.
