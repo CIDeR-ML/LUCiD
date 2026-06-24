@@ -39,6 +39,9 @@ def make_photon_step(mode, has_interface, reflection_fn=scalar_reflection):
                  normal, scatter_length, mie_scatter_length, g, refl_params,
                  absorption_length, hit_sensor, lam, rng_key, speed_of_light,
                  hit_interface=None, medium_id=None, n_inner=None, n_outer=None):
+            # 6 keys single-medium; +1 (k[6]) for the sampled interface transmit/reflect outcome.
+            # JAX split-prefix (split(k,6)==split(k,7)[:6]) keeps k[0..5] — and thus the whole
+            # single-medium stream — byte-identical to the legacy 6-split. `lam` is unused (MC path).
             k = jax.random.split(rng_key, 7 if has_interface else 6)
             reflection_rate = jnp.where(hit_sensor, refl_params.sensor_rate, refl_params.wall_rate)
             mie_safe = jnp.maximum(mie_scatter_length, 1e-6)
@@ -88,6 +91,8 @@ def make_photon_step(mode, has_interface, reflection_fn=scalar_reflection):
 
             distance_traveled = jnp.where(scatters, scatter_distance, surface_distance)
             new_time = time + distance_traveled / speed_of_light
+            # Binary absorption on a DEDICATED key k[5] — must stay distinct from the scatter-dir
+            # key k[2], else absorption correlates with scatter angle (PORT_PLAN §4.3).
             survival_prob = jnp.exp(-distance_traveled / absorption_length)
             attenuation = (jax.random.uniform(k[5]) < survival_prob).astype(jnp.float32)
             detect_prob = detects.astype(jnp.float32)
@@ -105,6 +110,11 @@ def make_photon_step(mode, has_interface, reflection_fn=scalar_reflection):
                  normal, scatter_length, mie_scatter_length, g, refl_params,
                  absorption_length, hit_sensor, lam, rng_key, speed_of_light,
                  hit_interface=None, medium_id=None, n_inner=None, n_outer=None):
+            # 8 keys single-medium (k[6],k[7] unused, kept for split-prefix parity); +1 (k[8])
+            # for the sampled interface outcome. Gradient design (PORT_PLAN): TRACK params flow
+            # PATHWISE (Dd/positions/time LIVE); OPTICAL scatter params flow via the DiCE score
+            # lf/la with d,Dd,cmie,cray STOP-GRADIENT'd inside it (no double count with the
+            # pathwise `reach`); the optical time gradient rides the LIVE reparam free path d_live.
             k = jax.random.split(rng_key, 9 if has_interface else 8)
             sg = jax.lax.stop_gradient
             mie_safe = jnp.maximum(mie_scatter_length, 1e-6)

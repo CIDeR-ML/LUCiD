@@ -25,25 +25,33 @@ def sphere_forward_t(origin, direction, center, radius):
     b = 2.0 * jnp.sum(oc * direction)
     c = jnp.sum(oc * oc) - radius * radius
     disc = b * b - 4.0 * a * c
-    sq = jnp.sqrt(jnp.maximum(disc, 0.0))
+    # eps floor INSIDE the sqrt (a small POSITIVE value, not maximum(disc, 0)): at a tangent/miss
+    # disc<=0 makes sqrt'(0)=inf meet maximum's zero subgradient → inf*0 = NaN reverse-mode grad.
+    # Flooring to 1e-12 keeps sqrt' finite while the flat side of maximum zeroes the chain → clean 0.
+    sq = jnp.sqrt(jnp.maximum(disc, 1e-12))
     t_small = (-b - sq) / (2.0 * a)
     t_large = (-b + sq) / (2.0 * a)
     t = jnp.where(t_small > eps, t_small, jnp.where(t_large > eps, t_large, _LARGE))
     valid = (disc >= 0.0) & (t < _LARGE)
+    # sanitize the dead (miss) branch so no garbage t leaks a gradient through the outer where
     return jnp.where(valid, t, _LARGE), valid
 
 
-def nearest_interface(origin, direction, centers, radii):
+def nearest_interface(origin, direction, centers, radii, t_outer=None):
     """Nearest forward interface surface among a stack of spheres.
 
-    centers (S,3), radii (S,). Returns (t, which, hit, point, normal). `hit` is whether any
-    interface is forward (False ⇒ no interface in this step). For S=0 (single-medium) callers
-    skip this entirely.
+    centers (S,3), radii (S,). Returns (t, which, hit, point, normal). `hit` is whether an
+    interface is the surface this step actually crosses: any interface is forward AND — when
+    ``t_outer`` (the distance to the instrumented/outer surface) is given — nearer than it.
+    Folding the outer comparison in here keeps the propagator from re-deriving it. For S=0
+    (single-medium) callers skip this entirely.
     """
     ts, valids = jax.vmap(lambda c, r: sphere_forward_t(origin, direction, c, r))(centers, radii)
     which = jnp.argmin(ts)
     t = ts[which]
     hit = valids[which] & (t < _LARGE)
+    if t_outer is not None:
+        hit = hit & (t < t_outer)   # an interface only counts if it is crossed before the outer surface
     point = origin + t * direction
     nrm = point - centers[which]
     normal = nrm / (jnp.linalg.norm(nrm) + 1e-10)   # outward (sign-agnostic for the interface)
@@ -52,8 +60,15 @@ def nearest_interface(origin, direction, centers, radii):
 
 def region_of_spheres(positions, centers, radii):
     """Region id for points given inner spheres: 0..S-1 = inside the k-th inner sphere
-    (first enclosing), S = outside all (outermost region). Matches `r >= r_inner` for one
-    inner sphere centred at origin."""
+    (first enclosing), S = outside all (outermost region). Matches `r >= r_inner` (boundary →
+    outer) for one inner sphere centred at origin.
+
+    Assumes the inner spheres are NESTED or DISJOINT; for genuinely overlapping inner spheres a
+    point in the overlap resolves to the lowest index. S=0 (single-medium) ⇒ all region 0.
+    """
+    S = centers.shape[0]
+    if S == 0:
+        return jnp.zeros(positions.shape[0], jnp.int32)
     # inside[k] = |p - c_k| < r_k
     d = positions[:, None, :] - centers[None, :, :]           # (N, S, 3)
     inside = jnp.linalg.norm(d, axis=-1) < radii[None, :]     # (N, S)
