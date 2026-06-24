@@ -26,6 +26,7 @@ import jax
 import jax.numpy as jnp
 from typing import Optional, Tuple
 import os
+import warnings
 from functools import partial
 from lucid.siren.training.inference import SIRENPredictor
 
@@ -77,6 +78,8 @@ def setup_event_simulator(
         absorption_field=None,
         field_hparams=None,
         field_gauge=False,
+        field_normamp=False,
+        field_init_amp=0.05,
         n_field_eval=1,
         **grid_params):
     """
@@ -262,11 +265,22 @@ def setup_event_simulator(
     # fittable params live in DetectorParams.absorption.field_params (traced). Built once
     # here from the detector's own R/H, so the encoding is geometry-correct (no hardcoding).
     absorption_field_fn = None
+    _field_init_params = None          # identity-correction leaf; used as the default when a field
+                                       # is configured but DetectorParams.field_params is still None
     if absorption_field is not None and absorption_field != 'uniform':
+        # The field encoding is cylindrical (r, θ, z) — guard non-cylinder detectors explicitly
+        # rather than crash on a missing .r/.H attribute (sphere has no H, box has no r) or, worse,
+        # silently mis-encode a sphere with cylindrical coordinates.
+        if not (hasattr(detector, 'r') and hasattr(detector, 'H')):
+            raise ValueError(
+                f"absorption_field={absorption_field!r} requires a cylinder detector — the field "
+                f"encoding is cylindrical (r, θ, z). Got {type(detector).__name__}, which lacks "
+                f"r/H. Spatial absorption fields currently support cylinder geometry only.")
         from lucid.simulation.fields import make_field
-        absorption_field_fn, _ = make_field(
+        absorption_field_fn, _field_init_params = make_field(
             absorption_field, R=float(detector.r), H=float(detector.H),
-            gauge=field_gauge, **(field_hparams or {}))
+            gauge=field_gauge, normamp=field_normamp, init_amp=field_init_amp,
+            **(field_hparams or {}))
 
     # ---- Select photon update function --------------------------------------
     # The spatial field is only wired into the differentiable expected-value step; the
@@ -281,6 +295,13 @@ def setup_event_simulator(
                 reflection_fn, field_fn=absorption_field_fn, n_field_eval=n_field_eval))
     field_active = absorption_field_fn is not None and not (
         sim_config.is_data or sim_config.use_expected_value is False)
+    if absorption_field_fn is not None and not field_active:
+        # A configured field is dropped on the sampling/data path (no field hook there). Warn
+        # loudly: calibrating against data generated this way would fit a field that never shaped
+        # the truth — a silent science bug otherwise.
+        warnings.warn(
+            f"absorption_field={absorption_field!r} is set but the data/sample path does not apply "
+            f"spatial fields — the field is IGNORED for this simulator.", stacklevel=2)
 
     # ---- Geometry bounds check (delegates to detector method) ----------------
     def get_inside_detector_flag(positions):
@@ -545,7 +566,18 @@ def setup_event_simulator(
         # ScalarReflection(wall_rate, sensor_rate)). build_refl_params is chosen at setup.
         refl_params = build_refl_params(detector_params)
         # Spatial-absorption-field params packed out of the pytree (None when homogeneous).
+        # If a field is configured but the leaf was never seeded (the config-loaded default is
+        # None), fall back to the field's own init rather than feeding None into field_fn — which
+        # would silently produce NaN. Both conditions are static (Python bool / treedef), so this
+        # resolves at trace time with no runtime branch. NOTE the init is identity (field ≡ 1) for
+        # poly/grid but NON-identity (~10%) for siren/siren_grid, so warn rather than silently apply.
         field_params = detector_params.absorption.field_params
+        if field_active and field_params is None:
+            warnings.warn(
+                "absorption_field is configured but DetectorParams.absorption.field_params is None; "
+                "using the field's init (identity for poly/grid, ~10% deviation for siren). Seed "
+                "field_params to control the field.", stacklevel=2)
+            field_params = _field_init_params
         # Wavelength fed to the reflection model. Scalar reflection ignores it; the angular
         # (Fresnel) model uses it for the cathode/glass dispersion. A scalar reflection
         # wavelength is exact for monochromatic-laser calibration (the validated case); a
