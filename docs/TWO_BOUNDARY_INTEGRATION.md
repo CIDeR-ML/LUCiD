@@ -140,6 +140,117 @@ score, the byte-identical degenerate limit (now N=1), the conservation gate.
 
 ---
 
+## 4b. Decisions locked (2026-06-24)
+
+1. **Split merge:** PR1 = generalized cosθ fix, PR2 = two-medium (depends on PR1).
+2. **cosθ: generalize to ALL geometries** via per-sensor outward normals + pluggable
+   `accept(cosθ)`. Subsumes/removes the sphere-only `apply_radial_cos`/`sensors_radial` hack.
+3. **Region model: N-region INDEX design, ship N=2.** Refactor the binary hardcoding to a
+   general region-index abstraction; only exercise N=2 now (acrylic/nested-cylinder = config later).
+4. **Integrate per-region optics now** into the DetectorParams bounds/mask/save machinery.
+
+### PR1 — generalized angular acceptance (land first)
+1. Add `sensor_normals` (per-sensor outward unit normals) to every surface `Detector`:
+   sphere = radial; cylinder = barrel radial-in-xy + caps ±ẑ (reuse the wall/cap split);
+   box = face normal. (String/volume detector is out of scope — different capture path.)
+2. Generalize `compute_sensor_intersections_base`: replace `apply_radial_cos` with the
+   per-candidate `sensor_normals`; apply `accept(cosθ)`, `cosθ = |ray_d·n_sensor|`, `accept`
+   pluggable (default identity-cosθ; room for a measured angular-QE curve).
+3. Thread `sensor_normals` from the detector through `create_propagator` (shared) + the
+   sphere/nested propagators; delete the `sensors_radial` shortcut.
+4. Extend `studies/sphere_detection_conservation.py` to **sphere + cylinder + box**; gate
+   each at flat-detected-fraction = coverage.
+5. Full fast suite green; **re-run + re-record the calibration/recon floors** (they shift).
+
+## 4c. PR2 generic design — VALIDATED by prototype (2026-06-24)
+
+Reordered: **PR2 (two-medium) first, PR1 (cosθ) later.** Two agents prototyped + ran the
+generic structure; both pass. PR2 is **decoupled from cosθ** (orthogonal sensor-model
+concern) and built so **single-medium is the degenerate `R=1, I=0` case, not a special branch.**
+
+**Transport — one factory-built step (kills the `_nested` duplication + `_IS_NESTED`).**
+`make_photon_step(mode, has_interface, reflection_fn)` statically specializes on
+`has_interface`: False ⇒ **bit-identical** to today's single-medium step (verified
+`array_equal`, sample + expected-value), with a **conditional key-split** (6/8 vs 7/9) so the
+interface code + extra key are never traced at I=0 (byte-identity independent of JAX's
+split-prefix property, smaller jaxpr). Per-photon optics by **gather `optics_stack[medium_id]`**
+(R=1 ⇒ the one array, differentiable). Two-arity factory so the R=1 vmap keeps the 14-arg/
+7-tuple signature and `medium_id=None` (unchanged scan pytree); R≥2 adds the interface args +
+`new_medium_id`. Simulator parameterized by `(R, I)`; `_get_optical_arrays` unified (resolve λ
+once, evaluate over R region-bundles → `(R, n)` arrays); the calibration/`_common_propagation`/
+`_final_speed` branches all collapse. Gotchas: `update_factors` uses non-contiguous key indices
+(k[0..5]+k[8]) — keep the same slots; prefer the conditional split over always-7.
+
+**Geometry — sensor-free interface-surface list (replaces `intersect_two_spheres_forward`).**
+A `Surface` list (tagged-tuple, JAX-traceable; each: `intersect_forward(o,d)->(t,valid,normal)`,
+`inside(pos)->bool`, metadata = (region_inner, region_outer) + n-pair). Per step:
+`nearest_forward_surface([interfaces] + [outer sensor surface])` → `(t, which, normal)`,
+`hit_interface = which∈interfaces`; `region_of` = `inside()` priority scan. **Single-medium =
+empty interface list** ⇒ plain outer-surface lookup. Verified to reproduce the current
+concentric-sphere behavior with **0 mismatches (4000 rays + 5000 region pts)**, and to handle
+inner≠outer shape (sphere-in-cylinder) and non-concentric inner. The interface physics
+(`_interface_refract_reflect`) is already normal-sign-agnostic (`abs(cos)`), so only a
+consistent outward normal is needed. **Key structural split:** the OUTER instrumented surface
+stays the existing per-shape sensor propagator (sphere/cylinder/box) + its grid/sensor-map/
+acceptance; the INNER region geometry is the generic sensor-free surface list in front of it.
+(So sphere-in-cylinder later = cylinder sensor propagator + a spherical interface surface; out
+of scope now, but the abstraction already supports it.)
+
+Prototypes: scratchpad `proto.py` (step/optics), `proto_surfaces.py` (geometry).
+
+### PR2 — N-region two-medium (depends on PR1)  [SUPERSEDED by §4c for the generic structure]
+1. **Region abstraction:** `Detector.region_of(pos)→[0,N)`, `n_regions`, interface radii;
+   `DetectorGeometry` stores `media: list[MediumProperties]`, `radii: (N−1,)`.
+2. **medium_id as N-index:** gather optics `sl[medium_id]` (not `where==0`); `next_medium`
+   lookup (concentric spheres: outward→+1, inward→−1).
+3. **Interface:** `_interface_refract_reflect` takes `n_from/n_to` (caller indexes by region),
+   made **λ-capable**; multi-interface aware.
+4. **Propagator:** generalize `intersect_two_spheres_forward`→N spheres, return
+   `hit_interface_idx`.
+5. **Simulator:** `_IS_NESTED`→`N_REGIONS`; `_get_optical_arrays_nested`→N-region; **wire
+   `medium_id` init + nested optics for track/data** (or explicitly reject nested+track).
+6. **DetectorParams:** register per-region optics in `_SUBTUPLES` (or equivalent) so
+   `default_bounds` / `make_optimization_mask` / `save+load` all respect them.
+7. **Config:** `regions: [{material, outer_radius}, …]` schema; loop in `generate_detector`
+   / `from_config`. Keep an inner/outer compat shim for the existing nested JSONs.
+8. **Re-validate:** N=1 byte-identical; N=2 invisible-interface + analytic Snell/Fresnel/TIR +
+   forward TIR threshold; DiCE-unbiased grad incl. sampled interface; mask + JSON round-trip
+   for region optics.
+
+## 4d. PR2 acceptance checklist (DRAFT — for sign-off before implementing)
+
+Scope: generic two-medium **transport** — `(R,I)` parameterization, factory photon step,
+surface-list inner geometry, `optics_stack[medium_id]` gather, symmetric `DetectorParams`
+(inner/outer `MediumParams`), **N=2**, **no cosθ** (PR1), **calibration/point-source only**
+(track+data nested raise a clear `NotImplementedError`).
+
+Acceptance gates (all must pass; numbers recorded in the PR):
+1. **Single-medium byte-identity (R=1, I=0).** Forward hits **and** an AD gradient are
+   `array_equal` to current `main` for sphere, cylinder, box (the factory's no-interface
+   specialization + empty interface list + unchanged scan pytree). This is THE gate that
+   proves single-medium isn't perturbed.
+2. **Surface-list reproduces the old geometry.** `nearest_forward_surface` + `region_of` on
+   two concentric spheres == the retired `intersect_two_spheres_forward` (0 mismatches over a
+   ray + region-point sweep). jit+vmap clean.
+3. **Invisible interface.** Nested with inner≡outer material and n_inner=n_outer reproduces a
+   single sphere at R_out (ratio ≈ 1) — valid here because *both* use the same (no-cosθ)
+   detection.
+4. **Analytic interface physics.** Snell + Fresnel R₀ + TIR + R+T=1 unit tests on the
+   interface kernel (independent of detection).
+5. **Forward TIR onset.** Contrast/matched ratio is ≈1 below r* and drops above (the geometric
+   threshold emerges). NOTE: the ratio *magnitude* is biased by the detection over-count until
+   PR1 — gate the threshold/onset, not the absolute %.
+6. **DiCE-unbiased gradient** through the sampled interface (AD vs FD on an interface-sensitive
+   loss).
+7. **Param machinery.** `DetectorParams` save/load round-trips inner+outer; `make_optimization_mask`
+   and `default_bounds` cover both media; normalize/denormalize descend correctly. Documented
+   migration for any existing saved params.
+8. **Mode guard.** Nested + track and nested + data raise a clear `NotImplementedError`.
+9. **Full fast suite green** (`pytest tests/`), incl. the updated `test_nested_sphere.py`.
+
+Explicitly NOT gated in PR2 (deferred to PR1): detection-fraction = coverage (needs cosθ);
+clean absolute interface-loss percentages; cylinder/box angular acceptance.
+
 ## 5. Accepted-by-decision (carry forward, don't silently ship as "done")
 Pure absorption (no LS re-emission); point sources only (no SIREN-in-LS); interface n fixed
 (not a fit target); acrylic lumped (until the N=3 region path lands); idealized outer wall.
