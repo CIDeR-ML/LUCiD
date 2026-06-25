@@ -524,6 +524,6 @@ def create_sphere_photon_propagator(sensor_positions, sensor_radius, sphere_radi
         return find_intersected_sphere_sensors_differentiable(
             photon_origins, photon_directions, sensor_positions, sensor_radius,
             sphere_radius, n_divisions, inverted_sensor_map,
-            temperature, overlap_prob, apply_radial_cos=True)
+            temperature, overlap_prob)   # cosθ acceptance is PR1 (off here; PR2 is cosθ-free)
 
     return propagate_photons
