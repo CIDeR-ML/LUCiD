@@ -13,13 +13,13 @@ import pytest
 
 from lucid.sources.v3_writer import (
     write_sensor_config_v3, write_hits_config_v3,
-    write_edep_config_v3, write_labl_config_v3,
+    write_step_config_v3, write_labl_config_v3,
     save_sensor_event_v3, save_hits_event_v3,
-    save_edep_event_v3, save_labl_event_v3,
+    save_step_event_v3, save_labl_event_v3,
 )
 from lucid.sources.v3_reader import (
     read_sensor_event_v3, read_hits_event_v3,
-    read_edep_event_v3, read_labl_event_v3,
+    read_step_event_v3, read_labl_event_v3,
     list_events_v3,
 )
 
@@ -32,21 +32,21 @@ def v3_batch(tmp_path):
     paths = {
         'sensor': tmp_path / 'wc_sensor_0000.h5',
         'hits':   tmp_path / 'wc_hits_0000.h5',
-        'edep':    tmp_path / 'wc_edep_0000.h5',
+        'step':    tmp_path / 'wc_step_0000.h5',
         'labl':   tmp_path / 'wc_labl_0000.h5',
     }
     src_idx = np.array([ev['source_event_idx']], dtype=np.uint32)
     with h5py.File(paths['sensor'], 'w') as fs, \
          h5py.File(paths['hits'],   'w') as fi, \
-         h5py.File(paths['edep'],    'w') as fg, \
+         h5py.File(paths['step'],    'w') as fg, \
          h5py.File(paths['labl'],   'w') as fl:
         write_sensor_config_v3(fs, cfg, src_idx, sensor_positions)
         write_hits_config_v3(fi, cfg, src_idx, sensor_positions)
-        write_edep_config_v3(fg, cfg, src_idx)
+        write_step_config_v3(fg, cfg, src_idx)
         write_labl_config_v3(fl, cfg, src_idx)
         save_sensor_event_v3(fs, ev, seq_idx=0)
         save_hits_event_v3(fi, ev, seq_idx=0)
-        save_edep_event_v3(fg, ev, seq_idx=0)
+        save_step_event_v3(fg, ev, seq_idx=0)
         save_labl_event_v3(fl, ev, seq_idx=0)
     return paths, cfg, ev, sensor_positions
 
@@ -94,9 +94,9 @@ def test_hits_event_roundtrip(v3_batch):
     assert np.allclose(inst['T'], expected_t)
 
 
-def test_edep_event_roundtrip(v3_batch):
+def test_step_event_roundtrip(v3_batch):
     paths, cfg, ev, _ = v3_batch
-    seg = read_edep_event_v3(str(paths['edep']), 0)
+    seg = read_step_event_v3(str(paths['step']), 0)
     assert seg['n_tracks'] == 3
     assert seg['n_segments'] == 4
     # First two segments belong to track 0 (local idx), next two to track 2
@@ -114,18 +114,18 @@ def test_edep_event_roundtrip(v3_batch):
     assert len(seg['group_id']) == 4
 
 
-def test_edep_event_group_id_roundtrip(tmp_path):
+def test_step_event_group_id_roundtrip(tmp_path):
     """Explicit group_id values written by the caller round-trip unchanged."""
-    from lucid.sources.v3_writer import write_edep_config_v3
+    from lucid.sources.v3_writer import write_step_config_v3
     cfg, ev, _ = build_synthetic_event()
     # Two coarser groups: segments 0+1 → group 0, segments 2+3 → group 1.
     ev['segments']['group_id'] = np.array([0, 0, 1, 1], dtype=np.int32)
-    seg_path = tmp_path / 'wc_edep_0000.h5'
+    seg_path = tmp_path / 'wc_step_0000.h5'
     src_idx = np.array([ev['source_event_idx']], dtype=np.uint32)
     with h5py.File(seg_path, 'w') as fg:
-        write_edep_config_v3(fg, cfg, src_idx)
-        save_edep_event_v3(fg, ev, seq_idx=0)
-    seg = read_edep_event_v3(str(seg_path), 0)
+        write_step_config_v3(fg, cfg, src_idx)
+        save_step_event_v3(fg, ev, seq_idx=0)
+    seg = read_step_event_v3(str(seg_path), 0)
     np.testing.assert_array_equal(
         seg['group_id'], np.array([0, 0, 1, 1], dtype=np.int32))
 

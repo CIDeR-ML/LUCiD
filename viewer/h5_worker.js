@@ -1,6 +1,6 @@
 // LUCiD HDF5 worker.
 //
-// Streams four v3 files (sensor, hits, edep, labl) via h5wasm + HTTP Range,
+// Streams four v3 files (sensor, hits, step, labl) via h5wasm + HTTP Range,
 // and decodes per-event bundles for the main viewer thread.
 //
 // Schema reference: docs/LUCID_DATASET.md (v3, post-migration).
@@ -133,7 +133,7 @@ function decodeEvent(idx) {
   if (srcIdxS !== undefined && srcIdxH !== undefined &&
       srcIdxE !== undefined && srcIdxL !== undefined) {
     if (!(srcIdxS === srcIdxH && srcIdxH === srcIdxE && srcIdxE === srcIdxL)) {
-      warning = `source_event_idx mismatch: sensor=${srcIdxS} hits=${srcIdxH} edep=${srcIdxE} labl=${srcIdxL}`;
+      warning = `source_event_idx mismatch: sensor=${srcIdxS} hits=${srcIdxH} step=${srcIdxE} labl=${srcIdxL}`;
     }
   }
 
@@ -156,7 +156,7 @@ function decodeEvent(idx) {
   if (!hitsEmission && hitsSIdx) hitsEmission = new Int8Array(hitsSIdx.length);
   const nParticles = readAttr(hEvt, 'n_particles') || 0;
 
-  // Edep file.
+  // Step file.
   const edepTrackIdx = readDsInt32(eEvt, 'track_idx');
   const edepStartX = readDsFloat32(eEvt, 'start_x');
   const edepStartY = readDsFloat32(eEvt, 'start_y');
@@ -327,7 +327,7 @@ self.onmessage = async function (e) {
       await Promise.all([
         mountUrl(base + '/' + manifest.sensor, 'sensor.h5'),
         mountUrl(base + '/' + manifest.hits,   'hits.h5'),
-        mountUrl(base + '/' + manifest.edep,    'edep.h5'),
+        mountUrl(base + '/' + manifest.step,    'edep.h5'),
         mountUrl(base + '/' + manifest.labl,   'labl.h5'),
       ]);
       console.log('[h5_worker] files fetched, opening HDF5');
@@ -345,7 +345,7 @@ self.onmessage = async function (e) {
       sensorPositions = posDs ? new Float32Array(posDs.value) : null;
       if (!nSensors && sensorPositions) nSensors = Math.floor(sensorPositions.length / 3);
 
-      // Geometry shape params (edep/config; sensor/config usually lacks them).
+      // Geometry shape params (step/config; sensor/config usually lacks them).
       if (gCfg) {
         const shapeAttr = readString(gCfg, 'detector_shape') ||
                           readString(gCfg, 'detector_type') || detectorType;
@@ -393,7 +393,7 @@ self.onmessage = async function (e) {
         format_version: readAttr(sCfg, 'format_version'),
       };
       // Material name (used by the viewer to derive the Cherenkov β
-      // threshold for the BETA field). Stored on edep/config in v5; fall
+      // threshold for the BETA field). Stored on step/config in v5; fall
       // back to sensor/config; default 'water' if absent.
       const material = readString(gCfg, 'material')
                     || readString(sCfg, 'material')

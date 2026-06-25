@@ -399,7 +399,7 @@ def _derive_views_from_segments(raw, photon_records=None):
         track_info=track_info_dict,
     )
 
-    # Filter Segment_* arrays to meaningful only. Keeps edep file size
+    # Filter Segment_* arrays to meaningful only. Keeps step file size
     # the same as legacy and lines up with meaningful_tracks' segment
     # offsets (which index into the filtered array).
     keep_mask, photon_segment_index = filter_segments_to_meaningful(
@@ -665,7 +665,7 @@ def run_event_process_pipeline(
         with an ``emission_process`` tag at writer time;
       * the sparse ``segment_sensor_hits`` triplet dict from the aggregator —
         the caller concatenates per-process dicts with a per-row
-        ``emission_process`` column on the way to ``save_edep_event_v3``;
+        ``emission_process`` column on the way to ``save_step_event_v3``;
       * the full ``particle_data`` view (categorization, segments, etc.) —
         the caller uses the first process's view as the canonical event-
         level structure (the segment table is identical across processes).
@@ -788,7 +788,7 @@ def build_seg_hits_merged_per_process(process_outputs):
     ``{segment_idx, sensor_idx, PE, T, T_reco?}`` dict. Concatenate them
     along axis=0 and add an ``emission_process`` column whose value is the
     source process_id of each row. Returned dict drops directly into
-    ``event_dict['segment_sensor_hits']`` for ``save_edep_event_v3``.
+    ``event_dict['segment_sensor_hits']`` for ``save_step_event_v3``.
     """
     seg_idx_parts, sensor_idx_parts = [], []
     pe_parts, t_parts, t_reco_parts, emp_parts = [], [], [], []
@@ -843,7 +843,7 @@ def _aggregate_from_photon_records(
         ``PE_per_particle``, ``T_per_particle``, and ``T_reco_per_particle``
         for the hits file;
       * ``(seg_idx_filtered, sensor_idx)`` -> sparse triplets
-        ``{segment_idx, sensor_idx, PE, T, T_reco}`` for the edep file
+        ``{segment_idx, sensor_idx, PE, T, T_reco}`` for the step file
         (``segment_sensor_hits``).
 
     PE per group is the sum of QE-passing photon weights; T per group is
@@ -912,7 +912,7 @@ def _aggregate_from_photon_records(
             if finite_r.any():
                 T_reco_pp[gp[finite_r], gs[finite_r]] = T_reco_groups[finite_r]
 
-    # ---- edep sparse triplets: groupby (seg_idx_filtered, sensor_idx) ----
+    # ---- step sparse triplets: groupby (seg_idx_filtered, sensor_idx) ----
     s_mask = qe_pass & (photon_seg_idx_filtered >= 0)
     if s_mask.any():
         seg = photon_seg_idx_filtered[s_mask].astype(np.int64)
@@ -955,7 +955,7 @@ def aggregate_hits_from_segments(pe_per_seg, t_per_seg,
     """Aggregate per-(segment, sensor) PE/T into per-particle PE/T.
 
     The hits file's per-particle decomposition is a downstream view of
-    ``edep/event_NNN/sensor_hits/`` plus the segment->track->particle map.
+    ``step/event_NNN/sensor_hits/`` plus the segment->track->particle map.
     PE per particle is the sum over the particle's segments; T per
     particle is the min over the particle's segments' first-arrival
     times.

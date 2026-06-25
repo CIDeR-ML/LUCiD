@@ -61,7 +61,7 @@ Output structure under `/tmp/my_dataset/`:
 ```
 sensor/wc_sensor_0000.h5
 hits/wc_hits_0000.h5
-edep/wc_edep_0000.h5
+step/wc_step_0000.h5
 labl/wc_labl_0000.h5
 ```
 

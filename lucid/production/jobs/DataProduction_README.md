@@ -231,7 +231,7 @@ OUTPUT_BASE_PATH/SK_like/           # detector chosen via submit_all_configs.sh 
 │   ├── job_000001-<jobid>.{out,err}
 │   ├── sensor/wc_sensor_0000.h5    # ─┐
 │   ├── hits/wc_hits_0000.h5        #  ├── batch 0 (job 1)
-│   ├── edep/wc_edep_0000.h5        #  │
+│   ├── step/wc_step_0000.h5        #  │
 │   ├── labl/wc_labl_0000.h5        # ─┘
 │   ├── sensor/wc_sensor_0001.h5    # ─┐ batch 1 (job 2)
 │   └── ...                         #  │
@@ -258,7 +258,7 @@ scancel -u $USER -n photonsi
 ## Finding and resubmitting failed jobs
 
 `verify_jobs.py` walks a dataprod tree, locates every `submit_job_*.sbatch`,
-and flags ones whose v3 batch (`wc_{sensor,hits,edep,labl}_<file_index>.h5`)
+and flags ones whose v3 batch (`wc_{sensor,hits,step,labl}_<file_index>.h5`)
 is missing, unreadable, or whose `config/n_events` attr doesn't match the
 per-job event count baked into the sbatch (or its parent config JSON).
 Datasets need no merging — each `file_index` batch is its own shard — so
