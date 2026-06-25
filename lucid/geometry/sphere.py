@@ -13,10 +13,11 @@ from .registry import register_detector
 class Sphere(Detector):
     """Spherical detector geometry"""
 
-    # Sensors lie on a sphere centred at the origin ⇒ their outward normal is radial.
-    # The propagator reads this to apply the PMT cosθ angular acceptance (conservation fix).
-    sensors_radial = True
-
+    # NOTE: the PMT cosθ angular-acceptance model (the detection-conservation fix) is PR1,
+    # a separate change that touches ALL geometries via per-sensor normals. PR2 (two-medium
+    # transport) is intentionally cosθ-free so it stays orthogonal to the sensor model and
+    # additive against main. `sensors_radial` is therefore not set here (propagator default
+    # is no cosθ); PR1 reintroduces the acceptance generally.
 
     def __init__(self, radius, n_sensors, sensor_radius):
         """
