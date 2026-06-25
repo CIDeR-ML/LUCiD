@@ -72,7 +72,6 @@ def region_of_spheres(positions, centers, radii):
     # inside[k] = |p - c_k| < r_k
     d = positions[:, None, :] - centers[None, :, :]           # (N, S, 3)
     inside = jnp.linalg.norm(d, axis=-1) < radii[None, :]     # (N, S)
-    S = centers.shape[0]
     first = jnp.argmax(inside, axis=1)                        # first True, or 0 if none
     any_in = jnp.any(inside, axis=1)
     return jnp.where(any_in, first, S).astype(jnp.int32)

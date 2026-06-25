@@ -25,6 +25,11 @@ class StringTelescope(Detector):
     per-string fitted axes, arc-length offsets, and curvature at
     construction time.
 
+    Note: DOMs are ~4π spherical modules with no single photocathode-cap normal, so this
+    geometry intentionally exposes NO ``sensor_normals`` — the PMT cosθ angular acceptance
+    (which models a flat projected cathode) does not apply, and the volume propagator uses
+    a per-DOM distance weight instead.
+
     Parameters
     ----------
     dom_xyz : (N_str, max_dom, 3) — per-DOM positions, NaN-padded

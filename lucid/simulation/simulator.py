@@ -6,7 +6,6 @@ from lucid.sources.siren_rays import (
 )
 from lucid.siren.core import build_cherenkov_context, build_dedx_context
 from lucid.propagation.cylinder import create_photon_propagator
-from lucid.propagation.sphere import create_sphere_photon_propagator
 from lucid.propagation.box import create_box_photon_propagator, box_bounds_check
 from lucid.geometry import generate_detector, get_material_from_config
 from lucid.utils import (

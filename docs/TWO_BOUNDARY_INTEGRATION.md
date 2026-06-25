@@ -316,6 +316,27 @@ scalar interface n. `intersect_two_spheres_forward` kept as the tested legacy ge
 reference. Remaining for a follow-up: N≥3 generalization of the interface kernel; n(λ);
 PR1 (general cosθ).
 
+## 4g. PR1 LANDED — general cosθ acceptance (supersedes §1, §4b cosθ items)
+
+PR1 is now on the SAME branch (commit `6e5f5bd`), so the "PR2 is cosθ-free / PR1 is a
+follow-up" framing in §1/§4b/§4e is superseded. What shipped:
+- `compute_sensor_intersections_base` takes per-sensor `sensor_normals` (the radial-only
+  `apply_radial_cos`/`sensors_radial` are gone). `Sphere` (radial), `Cylinder` (barrel
+  xy-radial + caps ±ẑ), and `Box` (face normals) expose `sensor_normals`; `StringTelescope`
+  intentionally does not (4π DOMs, no cathode cap). So **all surface geometries now apply
+  cosθ** — the §1 "sphere-only, production cylinders still over-detect" gap is closed.
+- `studies/sensor_detection_conservation.py` shows detected fraction = coverage flat across
+  source position for sphere AND cylinder (the old `sphere_detection_conservation.py` —
+  written to demonstrate the bug — was retired; it would now show the fix).
+
+⚠️ **Forward-model normalization shift (intended, but flag for downstream).** Adding cosθ
+makes the single-medium sphere/cylinder forward NOT byte-identical to pre-PR1 main — total
+detected charge drops (~−12% centred, more off-centre on a cylinder). This is the
+conservation correction, but it rescales charge/energy, so anything calibrated against the
+old scale (trained SIREN nets, energy scale, the recon vertex/energy floors) must be
+re-validated. No fast test asserts absolute charge; `tests/test_pr2_generic.py::TestCosThetaNormals`
+pins the normals + the cosθ factor so the change is intentional and visible.
+
 ## 5. Accepted-by-decision (carry forward, don't silently ship as "done")
 Pure absorption (no LS re-emission); point sources only (no SIREN-in-LS); interface n fixed
 (not a fit target); acrylic lumped (until the N=3 region path lands); idealized outer wall.
