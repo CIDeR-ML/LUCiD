@@ -32,10 +32,7 @@ from lucid.siren.training.inference import SIRENPredictor
 from lucid.simulation.optics import (
     normalize, jax_normalize, jax_rotate_vector,
 )
-from lucid.simulation.photon_step import (
-    photon_iteration_sample, make_photon_iteration_update_factors_safe,
-    photon_iteration_sample_nested, make_photon_iteration_update_factors_nested_safe,
-)
+from lucid.simulation.photon_step_factory import make_photon_step
 from lucid.simulation.reflection import get_reflection_model
 from lucid.simulation.sensor_response import (
     make_hits_simulation, make_hits_data, make_hits_likelihood, make_hits_moments,
@@ -254,32 +251,33 @@ def setup_event_simulator(
     # build_refl_params packs the model's parameters out of DetectorParams.
     reflection_fn, build_refl_params = get_reflection_model(reflection_model)
 
-    # ---- Select photon update function --------------------------------------
-    if sim_config.is_data:
-        photon_update_fn = photon_iteration_sample
-    elif sim_config.use_expected_value is False:
-        photon_update_fn = photon_iteration_sample
+    # ---- Two-medium (nested) detection ---------------------------------------
+    # _IS_NESTED == has_interface (I>0). For single-medium it is False → the interface
+    # code (and its extra RNG key) is never traced and the forward stays byte-identical.
+    # Nested transport is calibration-only: track/data need SIREN-in-LS + per-mode
+    # medium_id init, which are not wired (fail fast at setup, not at call time).
+    _IS_NESTED = det_geom.is_nested
+    if _IS_NESTED and not sim_config.is_calibration:
+        raise NotImplementedError(
+            "nested/two-medium transport is calibration-only (point sources); track and "
+            "data modes need SIREN-in-LS emission + per-mode medium_id init (not yet wired)")
+
+    # ---- Photon update function (ONE factory step, statically specialized on has_interface) --
+    # make_photon_step(..., False) is byte-identical to the legacy single-medium step;
+    # (..., True) is the legacy nested step (Snell/Fresnel/TIR + the 8th medium_id output).
+    if sim_config.is_data or sim_config.use_expected_value is False:
+        photon_update_fn = make_photon_step('sample', _IS_NESTED)
     else:
         photon_update_fn = jax.remat(
-            make_photon_iteration_update_factors_safe(reflection_fn))
+            make_photon_step('update_factors', _IS_NESTED, reflection_fn))
 
-    # ---- Two-medium (nested) setup -------------------------------------------
-    # Closed over by _common_propagation. For single-medium detectors _IS_NESTED is
-    # False → the nested branch is never traced and the forward stays byte-identical.
-    _IS_NESTED = det_geom.is_nested
     if _IS_NESTED:
         SPEED_OF_LIGHT_OUTER = det_geom.speed_of_light_outer
         N_INNER = float(det_geom.medium.refractive_index)
         N_OUTER = float(det_geom.medium_outer.refractive_index)
-        if sim_config.is_data or sim_config.use_expected_value is False:
-            photon_update_fn_nested = photon_iteration_sample_nested
-        else:
-            photon_update_fn_nested = jax.remat(
-                make_photon_iteration_update_factors_nested_safe(reflection_fn))
     else:
         SPEED_OF_LIGHT_OUTER = None
         N_INNER = N_OUTER = None
-        photon_update_fn_nested = None
 
     # ---- Geometry bounds check (delegates to detector method) ----------------
     def get_inside_detector_flag(positions):
@@ -695,7 +693,7 @@ def setup_event_simulator(
                 (new_positions, new_directions, new_times,
                  detect_probs, reflection_attenuations,
                  continuing_factors, logp_increments, new_medium_id) = jax.vmap(
-                    photon_update_fn_nested,
+                    photon_update_fn,   # factory step, has_interface=True (8-tuple incl. new_medium_id)
                     in_axes=(0, 0, 0, 0, 0,
                              0, 0, None, None, 0,
                              0, None, 0, 0,
