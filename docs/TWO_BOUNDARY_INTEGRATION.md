@@ -295,6 +295,27 @@ Gotchas to respect: don't "tidy" the non-contiguous `update_factors` key slots (
 `_interface_refract_reflect` stays binary (fine for N=2, not N≥3); interface n is scalar
 (monochromatic-exact; a Cherenkov-spectrum source is an approximation until n(λ) is threaded).
 
+## 4f. PR2 INTEGRATION COMPLETE (2026-06-24)
+
+All 10 roadmap steps landed on `pr2-two-medium-generic`; full fast suite green.
+- `824ccad` factory wired into the simulator (one `make_photon_step` specialized on
+  `has_interface`); `photon_update_fn_nested` removed; setup guard (nested = calibration-only).
+  Verified byte-identical to the legacy reference (single+nested charge/time/grad).
+- `b14df23` `DetectorParams.outer_media` (N-native; `outer_optics` is now a property); mask
+  recurses tuples; `default_bounds(.., n_outer_media)`; save/load. Forward byte-identical.
+- `0e4bb3b` nested propagator uses `surfaces.nearest_interface(+t_outer)`. Byte-identical.
+- `102f799` cosθ stripped (PR2 cosθ-free; PR1 owns the general acceptance). Nested suite
+  `--slow` green (invisible-interface ≈1, TIR intact).
+- `36cae78` retired the 239-line nested step duplication; `tests/test_pr2_generic.py` (20
+  tests: factory==legacy, split-prefix, surfaces==legacy, NaN-free grads, outer_media
+  round-trips); removed transitional study scripts.
+
+Single-medium is now the `R=1/I=0` degenerate case of ONE unified step + ONE surface-list
+geometry. Kept (binary, fine for N=2): `_interface_refract_reflect` (binary medium_id),
+scalar interface n. `intersect_two_spheres_forward` kept as the tested legacy geometry
+reference. Remaining for a follow-up: N≥3 generalization of the interface kernel; n(λ);
+PR1 (general cosθ).
+
 ## 5. Accepted-by-decision (carry forward, don't silently ship as "done")
 Pure absorption (no LS re-emission); point sources only (no SIREN-in-LS); interface n fixed
 (not a fit target); acrylic lumped (until the N=3 region path lands); idealized outer wall.
