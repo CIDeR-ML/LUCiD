@@ -139,7 +139,7 @@ def calculate_hit_properties(ray_origins, ray_directions, t_geometry, inside_sen
 
 def compute_sensor_intersections_base(sensor_idx, sensor_positions, sensor_radius,
                                         ray_origins, ray_directions, geometry_bounds_check,
-                                        overlap_prob, sensor_normals=None):
+                                        overlap_prob, apply_angular_acceptance=False):
     """
     Base function to compute sensor intersections for any geometry.
 
@@ -159,16 +159,16 @@ def compute_sensor_intersections_base(sensor_idx, sensor_positions, sensor_radiu
         Function that checks if a point is within the geometry bounds
     overlap_prob : callable
         Function that calculates overlap probability
-    sensor_normals : ndarray or None
-        Per-sensor OUTWARD unit normals ``(n_sensors, 3)``. When given, apply the PMT
-        angular acceptance ``cosθ`` (projected photocathode area) using the candidate
-        sensor's own normal — general for any geometry (sphere=radial, cylinder=xy-radial
-        on the barrel/±ẑ on the caps, box=face normal). The capture models a sensor as a
-        3-D sphere with a θ-independent π·r² cross-section; the physical cap has π·r²·cosθ,
-        so without this factor grazing rays are over-detected and the detected fraction
-        exceeds the sensor coverage (a position-dependent bias up to ~1.7×; see
-        studies/sensor_detection_conservation.py). ``None`` (default) keeps every existing
-        caller byte-identical.
+    apply_angular_acceptance : bool
+        Apply the PMT cosθ angular acceptance (projected photocathode area) using the
+        sensor's RADIAL outward normal (``sensor_pos/|sensor_pos|`` — valid for sensors on a
+        sphere centred at the origin, i.e. the JUNO case). A sensor's capture is modelled as
+        a θ-independent π·r² disk; the physical cap is π·r²·cosθ, so without this factor
+        grazing rays are over-detected and the detected fraction exceeds the geometric sensor
+        coverage (a position-dependent bias up to ~1.7×; see
+        studies/sensor_detection_conservation.py). Default ``False`` keeps every existing
+        caller byte-identical; opted in per detector via ``apply_angular_acceptance`` in the
+        geometry config.
 
     Returns
     -------
@@ -231,12 +231,13 @@ def compute_sensor_intersections_base(sensor_idx, sensor_positions, sensor_radiu
    
     # Apply overlap function to get weights
     weights = jnp.where(valid, overlap_prob(distance), 0.0)
-    # PMT angular acceptance: project the capture cross-section by cosθ (ray vs the
-    # candidate sensor's OWN outward normal). Restores conservation (detected fraction =
-    # coverage, incidence-independent); inert at normal incidence. sensor_normals is None or
-    # a static array, so the off path compiles identically.
-    if sensor_normals is not None:
-        snorm = jnp.where(valid[:, None], sensor_normals[sensor_idx], jnp.zeros(3))
+    # PMT angular acceptance: project the capture cross-section by cosθ (ray vs the sensor's
+    # RADIAL outward normal — sensor_pos/|sensor_pos|, valid for an origin-centred sphere).
+    # Restores conservation (detected fraction = coverage, incidence-independent); inert at
+    # normal incidence. apply_angular_acceptance is a static bool, so the off path compiles
+    # identically (the cosθ ops are not traced).
+    if apply_angular_acceptance:
+        snorm = sphere_centers / (jnp.linalg.norm(sphere_centers, axis=1, keepdims=True) + 1e-10)
         cos_inc = jnp.abs(jnp.sum(ray_d * snorm, axis=1))
         weights = weights * cos_inc
     # Check if point is inside sensor (keep as boolean)

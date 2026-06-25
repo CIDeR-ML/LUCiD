@@ -213,20 +213,14 @@ def create_propagator(detector, sensor_positions, sensor_radius,
         potential_sensors = jax.lax.stop_gradient(inverted_sensor_map[idx])
 
         # d. Compute sensor intersections (shared, vmapped over sensor slots).
-        #    The PMT cosθ angular acceptance is OPT-IN: applied only when the detector config
-        #    sets apply_angular_acceptance AND the geometry exposes per-sensor normals. Default
-        #    OFF → sensor_normals=None → byte-identical to the legacy capture (no charge rescale
-        #    on existing detectors). The geometry always PROVIDES the normals (the capability);
-        #    the config decides the POLICY.
-        _sensor_normals = None
-        if apply_angular_acceptance and getattr(detector, 'sensor_normals', None) is not None:
-            _sensor_normals = jnp.asarray(detector.sensor_normals)   # numpy → device array for the gather
-
+        #    The PMT cosθ angular acceptance (radial normal) is OPT-IN per detector config
+        #    (apply_angular_acceptance); default OFF is byte-identical. Radial is correct for
+        #    sphere/nested_sphere (the JUNO case that opts in).
         def compute_for_slot(slot_sensors):
             return compute_sensor_intersections_base(
                 slot_sensors, sensor_positions, sensor_radius,
                 photon_origins, photon_directions,
-                bounds_check, overlap_prob, sensor_normals=_sensor_normals)
+                bounds_check, overlap_prob, apply_angular_acceptance=apply_angular_acceptance)
 
         (weights, sensor_times, sensor_indices,
          sensor_normals_all, inside_sensor,
