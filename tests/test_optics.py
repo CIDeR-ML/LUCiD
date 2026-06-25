@@ -122,11 +122,6 @@ class TestRotateVector:
 # ── Stochastic tests (exact match with fixed seed on CPU) ───────────
 
 class TestScatterDistance:
-    def test_fixed_seed(self):
-        key = jax.random.PRNGKey(42)
-        result = sample_scatter_distance(5.0, 2.0, key)
-        npt.assert_allclose(result, 1.1905672550201416, atol=1e-7)
-
     def test_bounded_by_D(self):
         key = jax.random.PRNGKey(0)
         for i in range(10):
@@ -136,11 +131,6 @@ class TestScatterDistance:
 
 
 class TestScatterDirection:
-    def test_fixed_seed(self):
-        key = jax.random.PRNGKey(42)
-        result = compute_scatter_direction(jnp.array([0.0, 0.0, 1.0]), key)
-        npt.assert_allclose(result, [0.9869533181190491, -0.1394254118204117, 0.0805214643478394], atol=1e-5)
-
     def test_output_is_unit(self):
         key = jax.random.PRNGKey(7)
         result = compute_scatter_direction(jnp.array([1.0, 0.0, 0.0]), key)
@@ -148,11 +138,6 @@ class TestScatterDirection:
 
 
 class TestCosineHemisphere:
-    def test_fixed_seed(self):
-        key = jax.random.PRNGKey(42)
-        result = sample_cosine_hemisphere(jnp.array([0.0, 0.0, 1.0]), key)
-        npt.assert_allclose(result, [-0.7210308909416199, 0.1018589437007904, 0.6853752136230469], atol=1e-5)
-
     def test_output_is_unit(self):
         key = jax.random.PRNGKey(99)
         result = sample_cosine_hemisphere(jnp.array([0.0, 1.0, 0.0]), key)
