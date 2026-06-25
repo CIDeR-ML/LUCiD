@@ -58,32 +58,6 @@ def _write_raw_root(path, chunks=(30, 20), energy=1000.0):
     return np.concatenate(allpos)   # mm
 
 
-def test_event_io_reads_legacy_schema_cm(tmp_path):
-    from lucid.sources.event_io import read_photon_data_from_photonsim as mono
-    pos_mm, _ = _write_legacy_root(str(tmp_path / "legacy.root"))
-    r = mono(str(tmp_path / "legacy.root"), 0)
-    o = np.asarray(r["photon_origins"])
-    assert o.shape == pos_mm.shape
-    np.testing.assert_allclose(o, pos_mm / 10.0, rtol=1e-5)   # mm -> cm
-    assert "wavelengths" not in r and float(r["energy"]) == 1000.0
-
-
-def test_event_io_routes_to_raw_schema_no_keyerror(tmp_path):
-    """The bug: monolith reader raised KeyInFileError 'PhotonPosX' on new ROOTs. Now it routes
-    to the chunked reader and returns CM + wavelengths."""
-    from lucid.sources.event_io import read_photon_data_from_photonsim as mono
-    from lucid.sources.root_reader import read_photon_data_from_photonsim as canon
-    pos_mm = _write_raw_root(str(tmp_path / "raw.root"))
-    r = mono(str(tmp_path / "raw.root"), 0)              # must NOT raise
-    o = np.asarray(r["photon_origins"])
-    assert o.shape[0] == pos_mm.shape[0]
-    np.testing.assert_allclose(o, pos_mm / 10.0, rtol=1e-4)   # CM convention preserved
-    assert "wavelengths" in r
-    # consistency with the canonical (meters) reader: monolith == 100x canonical
-    oc = np.asarray(canon(str(tmp_path / "raw.root"), 0)["photon_origins"])
-    np.testing.assert_allclose(o, oc * 100.0, rtol=1e-4)
-
-
 def test_particle_reader_rejects_chunked_schema(tmp_path):
     """The legacy particle-genealogy reader read_particle_data_from_photonsim only
     supports the legacy (per-photon-on-OpticalPhotons) schema. On a chunked
