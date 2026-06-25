@@ -1,6 +1,7 @@
 {
   "material": "water",
   "detector_type": "sphere",
+  "apply_angular_acceptance": true,
   "geometry_definitions": {
     "radius": 17.5,
     "n_sensors": 10000,

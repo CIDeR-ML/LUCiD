@@ -3,6 +3,7 @@
   "inner_material": "labls",
   "outer_material": "water_n148",
   "detector_type": "nested_sphere",
+  "apply_angular_acceptance": true,
   "geometry_definitions": {
     "inner_radius": 17.5,
     "outer_radius": 19.5,

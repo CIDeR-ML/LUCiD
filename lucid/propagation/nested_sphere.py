@@ -90,7 +90,8 @@ batch_intersect_two_spheres = jax.vmap(
 def find_intersected_nested_sphere_sensors(ray_origins, ray_directions,
                                            sensor_positions, sensor_radius,
                                            r_inner, r_outer, n_divisions,
-                                           inverted_sensor_map, temperature, overlap_prob):
+                                           inverted_sensor_map, temperature, overlap_prob,
+                                           apply_angular_acceptance=False):
     """Outer-sphere sensor lookup (reused) with inner-interface override.
 
     Computes the single-sphere result at ``r_outer`` (sensors), then for rays whose
@@ -102,10 +103,13 @@ def find_intersected_nested_sphere_sensors(ray_origins, ray_directions,
         ray_origins = ray_origins[None, :]
         ray_directions = ray_directions[None, :]
 
-    # 1. Outer-sphere sensor lookup — identical to the single-sphere propagator, with the PMT
-    #    cosθ angular acceptance (sensors on the outer sphere ⇒ radial outward normals). Same
-    #    detection model as the single sphere, so the invisible-interface check stays consistent.
-    sensor_normals = sensor_positions / (jnp.linalg.norm(sensor_positions, axis=1, keepdims=True) + 1e-10)
+    # 1. Outer-sphere sensor lookup — identical to the single-sphere propagator. The PMT cosθ
+    #    angular acceptance (sensors on the outer sphere ⇒ radial outward normals) is OPT-IN via
+    #    the detector config (apply_angular_acceptance); default OFF keeps it byte-identical and
+    #    consistent with a single sphere that hasn't opted in.
+    sensor_normals = None
+    if apply_angular_acceptance:
+        sensor_normals = sensor_positions / (jnp.linalg.norm(sensor_positions, axis=1, keepdims=True) + 1e-10)
     result = find_intersected_sphere_sensors_differentiable(
         ray_origins, ray_directions, sensor_positions, sensor_radius,
         r_outer, n_divisions, inverted_sensor_map, temperature, overlap_prob,
@@ -145,7 +149,7 @@ def create_nested_sphere_propagator(sensor_positions, sensor_radius,
                                     r_inner, r_outer, n_divisions=50,
                                     temperature=0.2, max_candidates_per_ray=4,
                                     overlap_st_width_frac=0.35, overlap_renorm=1.0,
-                                    overlap_mode='interp'):
+                                    overlap_mode='interp', apply_angular_acceptance=False):
     """JIT-compiled photon propagator for the nested two-sphere geometry.
 
     Sensors live on the outer sphere; the grid/sensor-map machinery is the
@@ -178,6 +182,6 @@ def create_nested_sphere_propagator(sensor_positions, sensor_radius,
         return find_intersected_nested_sphere_sensors(
             photon_origins, photon_directions, sensor_positions, sensor_radius,
             r_inner, r_outer, n_divisions, inverted_sensor_map,
-            temperature, overlap_prob)
+            temperature, overlap_prob, apply_angular_acceptance=apply_angular_acceptance)
 
     return propagate_photons

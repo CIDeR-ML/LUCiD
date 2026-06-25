@@ -107,7 +107,7 @@ def validate_sensor_map(assignments_geometric, inverted_sensor_map, num_sensors,
 def create_propagator(detector, sensor_positions, sensor_radius,
                       temperature=0.2, max_candidates_per_ray=4,
                       overlap_st_width_frac=0.35, overlap_renorm=1.0,
-                      overlap_mode='interp',
+                      overlap_mode='interp', apply_angular_acceptance=False,
                       **grid_params):
     """Build a JIT-compiled photon propagator using detector methods.
 
@@ -213,12 +213,14 @@ def create_propagator(detector, sensor_positions, sensor_radius,
         potential_sensors = jax.lax.stop_gradient(inverted_sensor_map[idx])
 
         # d. Compute sensor intersections (shared, vmapped over sensor slots).
-        #    Any geometry exposing per-sensor outward normals gets the PMT cosθ angular
-        #    acceptance (the conservation fix); geometries without normals keep the legacy
-        #    capture (None → byte-identical).
-        _sensor_normals = getattr(detector, 'sensor_normals', None)
-        if _sensor_normals is not None:
-            _sensor_normals = jnp.asarray(_sensor_normals)   # geometry returns numpy; gather needs a device array
+        #    The PMT cosθ angular acceptance is OPT-IN: applied only when the detector config
+        #    sets apply_angular_acceptance AND the geometry exposes per-sensor normals. Default
+        #    OFF → sensor_normals=None → byte-identical to the legacy capture (no charge rescale
+        #    on existing detectors). The geometry always PROVIDES the normals (the capability);
+        #    the config decides the POLICY.
+        _sensor_normals = None
+        if apply_angular_acceptance and getattr(detector, 'sensor_normals', None) is not None:
+            _sensor_normals = jnp.asarray(detector.sensor_normals)   # numpy → device array for the gather
 
         def compute_for_slot(slot_sensors):
             return compute_sensor_intersections_base(
