@@ -31,6 +31,7 @@ from .sphere import (
     create_inverted_sphere_sensor_map,
 )
 from .base import find_closest_sensors
+from .surfaces import sphere_forward_t, nearest_interface
 from ..overlap import create_overlap_prob
 
 
@@ -110,9 +111,20 @@ def find_intersected_nested_sphere_sensors(ray_origins, ray_directions,
         r_outer, n_divisions, inverted_sensor_map, temperature, overlap_prob,
         apply_radial_cos=True)
 
-    # 2. Nearest forward surface among the two spheres.
-    t_hit, hit_inner, inner_pts, inner_norms = batch_intersect_two_spheres(
-        ray_origins, ray_directions, r_inner, r_outer)
+    # 2. Inner interface vs the outer sphere, via the generic surface list. The inner region
+    #    is ONE interface surface (a sphere at the origin, radius r_inner); a ray "hits the
+    #    interface" only if it crosses that surface before the outer (sensor) sphere. This
+    #    generalizes intersect_two_spheres_forward (offset / non-spherical inner) and reduces
+    #    to it exactly for two concentric spheres (validated: 0 mismatches).
+    _inner_centers = jnp.zeros((1, 3))
+    _inner_radii = jnp.asarray([r_inner])
+
+    def _interface_hit(o, d):
+        t_out, _ = sphere_forward_t(o, d, jnp.zeros(3), r_outer)
+        _t, _which, hit, pt, nrm = nearest_interface(o, d, _inner_centers, _inner_radii, t_outer=t_out)
+        return hit, pt, nrm
+
+    hit_inner, inner_pts, inner_norms = jax.vmap(_interface_hit)(ray_origins, ray_directions)
 
     # 3. Override geometry hit for interface rays; mask their sensor weights.
     hi = hit_inner[:, None]                                   # (n_rays, 1)
