@@ -90,25 +90,22 @@ class PhotonSimValidator:
         if model_path is None:
             model_path = Path(base_dir) / 'data' / material / particle / 'siren_training' / 'trained_model' / 'photonsim_siren'
         
-        # Default h5 path with material/particle structure
+        # Default h5 path with material/particle structure. The lookup table is
+        # only needed by integral_analysis (the "integral" subcommand); every
+        # other study evaluates the SIREN model alone, so we load it lazily via
+        # the ``dataset`` property instead of requiring it here.
         if h5_path is None:
             h5_path = Path(base_dir) / 'data' / material / particle / 'photon_lookup_table.h5'
-            if not h5_path.exists():
-                raise FileNotFoundError(
-                    f"HDF5 lookup table not found at {h5_path}\n"
-                    f"Please ensure the PhotonSim table exists for {material}/{particle}"
-                )
-        
+        self._h5_path = h5_path
+        self._dataset = None
+
         print(f"🎯 PhotonSim SIREN Validation")
         print(f"  Material: {material}")
         print(f"  Particle: {particle}")
         print(f"Loading model from: {model_path}")
         self.photonsim_predictor = SIRENPredictor(model_path)
         self.model_params = self.photonsim_predictor.params
-        
-        print(f"Loading dataset from: {h5_path}")
-        self.dataset = PhotonSimDataset(h5_path)
-        
+
         # Get training ranges
         self.dataset_info = self.photonsim_predictor.dataset_info
         self.energy_min, self.energy_max = self.dataset_info['energy_range']
@@ -131,6 +128,27 @@ class PhotonSimValidator:
 
         print("✅ PhotonSim validator initialized successfully")
     
+    @property
+    def dataset(self):
+        """Lazily-loaded PhotonSim lookup table.
+
+        Only ``integral_analysis`` consumes the table; loading is deferred to
+        first access so the model-only studies (energy/cutoff/valid-points/rays)
+        run without it. Raises a clear error here if the table is missing.
+        """
+        if self._dataset is None:
+            h5_path = Path(self._h5_path)
+            if not h5_path.exists():
+                raise FileNotFoundError(
+                    f"HDF5 lookup table not found at {h5_path}\n"
+                    f"Please ensure the PhotonSim table exists for "
+                    f"{self.material}/{self.particle} (only needed by the "
+                    f"'integral' study)."
+                )
+            print(f"Loading dataset from: {h5_path}")
+            self._dataset = PhotonSimDataset(h5_path)
+        return self._dataset
+
     def evaluate_photonsim_grid(self, energy, angle_bins, distance_bins):
         """Evaluate PhotonSim model on angle/distance grid for given energy."""
         angle_mesh, distance_mesh = jnp.meshgrid(angle_bins, distance_bins, indexing='ij')
@@ -146,7 +164,8 @@ class PhotonSimValidator:
         photon_weights = self.photonsim_predictor.predict_batch(evaluation_grid)
         return np.array(photon_weights).reshape(len(angle_bins), len(distance_bins))
     
-    def energy_study(self, energies=None, threshold=4, vmax=None, output_dir=None):
+    def energy_study(self, energies=None, threshold=4, vmax=None, output_dir=None,
+                     fmt='png'):
         """
         Perform energy comparison analysis at fixed threshold.
 
@@ -162,11 +181,11 @@ class PhotonSimValidator:
         if energies is None:
             energies = [500, 1000, 1500]
 
-        # Create analysis grid
+        # Create analysis grid. The angle axis is fixed; the distance axis is
+        # built per-energy below in physical metres (its span depends on s_max(E)).
         n_angle_bins = 250
         n_distance_bins = 250
         angle_bins = np.linspace(self.angle_min, self.angle_max, n_angle_bins)
-        distance_bins = np.linspace(self.distance_min, self.distance_max, n_distance_bins)
 
         print(f"Grid: {n_angle_bins}×{n_distance_bins} points")
         print(f"Energies: {energies} MeV")
@@ -178,16 +197,33 @@ class PhotonSimValidator:
             'statistics': {}
         }
 
-        # First pass: collect all masked values to determine vmax if not provided
+        # First pass: evaluate SIREN over the whole panel for each energy and
+        # collect masked values (also used to determine vmax if not provided).
+        # The distance axis runs 0 → ceil(s_max(E)) metres so the heatmap fills
+        # the rounded axis. Physical distance is converted to s/s_max and clipped
+        # to the trained range — beyond s_max(E) (the track end) the SIREN is not
+        # valid and the already sub-threshold tail floors out, so no garbage
+        # extrapolation leaks into the panel.
         all_masked_values = []
+        all_axis_max_m = []
         for energy in energies[:4]:  # Only process first 4 energies
-            reco_value = self.evaluate_photonsim_grid(energy, angle_bins, distance_bins)
+            s_max_m = float(self.ctx.s_max_fn(energy)) / 1000.0
+            axis_max_m = float(np.ceil(s_max_m))
+            phys_distance_m = np.linspace(0.0, axis_max_m, n_distance_bins)
+            s_over_smax = np.clip(phys_distance_m / s_max_m,
+                                  self.distance_min, self.distance_max)
+            reco_value = self.evaluate_photonsim_grid(energy, angle_bins, s_over_smax)
             masked_values = jnp.where(reco_value > threshold, reco_value, threshold)
             all_masked_values.append(masked_values)
+            all_axis_max_m.append(axis_max_m)
 
-        # Determine vmax if not provided
+        # Determine vmax if not provided. Use the 99.99th percentile across all
+        # panels (shared colour scale) rather than the absolute max, so a few
+        # bright outliers don't compress the dynamic range of the rest.
         if vmax is None:
-            vmax = max(np.max(mv) for mv in all_masked_values)
+            pooled = np.concatenate(
+                [np.asarray(mv).ravel() for mv in all_masked_values])
+            vmax = float(np.percentile(pooled, 99.99))
 
         # Create visualization - determine layout
         n_energies = len(energies)
@@ -200,10 +236,6 @@ class PhotonSimValidator:
             fig, axes = plt.subplots(2, 2, figsize=(10, 7), constrained_layout=True)
             axes = axes.ravel()
 
-        # Convert distance range to meters
-        distance_min_m = 0
-        distance_max_m = 10
-
         # Create plots
         images = []
         for i, energy in enumerate(energies):
@@ -211,6 +243,10 @@ class PhotonSimValidator:
                 break
 
             masked_values = all_masked_values[i]
+
+            # Distance axis is physical metres, 0 → ceil(s_max(E)) (see first pass).
+            distance_min_m = 0.0
+            distance_max_m = all_axis_max_m[i]
 
             # Calculate statistics
             valid_count = np.sum(masked_values > threshold)
@@ -231,6 +267,14 @@ class PhotonSimValidator:
 
             # X-axis label on all plots
             axes[i].set_xlabel('Distance (m)')
+
+            # Round the axis limit up to a clean integer metre (see first pass)
+            # and show exactly three ticks: 0, the midpoint, and the max. ``%g``
+            # drops trailing zeros (3 not 3.0) while keeping a .5 midpoint.
+            axes[i].set_xlim(0.0, distance_max_m)
+            xticks = np.linspace(0.0, distance_max_m, 3)
+            axes[i].set_xticks(xticks)
+            axes[i].set_xticklabels([f'{t:g}' for t in xticks])
 
             # Y-axis: only show label and ticks on leftmost plots
             if n_energies <= 4:
@@ -263,8 +307,9 @@ class PhotonSimValidator:
 
         if output_dir:
             os.makedirs(output_dir, exist_ok=True)
-            fig.savefig(f"{output_dir}/energy_study_threshold_{threshold}.png", dpi=150, bbox_inches='tight')
-            print(f"Energy study results saved to: {output_dir}/energy_study_threshold_{threshold}.png")
+            out_path = f"{output_dir}/energy_study_threshold_{threshold}.{fmt}"
+            fig.savefig(out_path, dpi=150, bbox_inches='tight')
+            print(f"Energy study results saved to: {out_path}")
 
         plt.show()
 
@@ -785,6 +830,9 @@ def main():
     energy_parser.add_argument('--energies', type=str, default='500,1000,1500', help='Comma-separated energies (MeV)')
     energy_parser.add_argument('--threshold', type=float, default=4, help='Fixed threshold value')
     energy_parser.add_argument('--vmax', type=float, help='Maximum value for colorbar (optional)')
+    energy_parser.add_argument('--format', type=str, default='png',
+                               choices=['png', 'pdf', 'svg'],
+                               help='Output figure format (default: png)')
     energy_parser.add_argument('--output', type=str, help='Output directory')
     energy_parser.add_argument('--save', action='store_true', help='Save results to output directory')
     energy_parser.add_argument('--notebook-mode', action='store_true', help='Force notebook mode for plot display')
@@ -879,7 +927,8 @@ def main():
         energies = [float(x) for x in args.energies.split(',')]
         output_dir = get_output_dir(args)
         vmax = args.vmax if hasattr(args, 'vmax') else None
-        validator.energy_study(energies=energies, threshold=args.threshold, vmax=vmax, output_dir=output_dir)
+        validator.energy_study(energies=energies, threshold=args.threshold, vmax=vmax,
+                               output_dir=output_dir, fmt=args.format)
 
     elif args.command == 'valid-points':
         energies = None
