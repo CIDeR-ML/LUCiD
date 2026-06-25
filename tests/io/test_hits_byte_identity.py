@@ -1,5 +1,5 @@
 """Stage 3 byte-identity gate: hits file is a downstream view of
-edep/event_NNN/sensor_hits/ plus the segment→track→particle map.
+step/event_NNN/sensor_hits/ plus the segment→track→particle map.
 
 Two checks:
 
@@ -12,21 +12,21 @@ Two checks:
        T  per particle = min over particle's segments of t_per_seg
                          (preserving the "0 = no hit" sentinel)
 
-2. ``test_hits_aggregates_from_edep_sensor_hits`` (skip-if-no-data):
+2. ``test_hits_aggregates_from_step_sensor_hits`` (skip-if-no-data):
    on an already-saved data-mode dataset (env var
-   ``LUCID_HITS_FROM_EDEP_DATASET``), reads the hits file, the edep file,
+   ``LUCID_HITS_FROM_STEP_DATASET``), reads the hits file, the step file,
    ``labl.h5`` and asserts that aggregating
-   ``edep/event_NNN/sensor_hits/`` over the segment→track (from
-   ``edep/event_NNN/track_idx``) and track→particle (from
+   ``step/event_NNN/sensor_hits/`` over the segment→track (from
+   ``step/event_NNN/track_idx``) and track→particle (from
    ``labl/event_NNN/per_track/particle_idx``) maps reproduces every
    column of the hits file event group (``PE``, ``T``, ``particle_idx``,
    ``sensor_idx``) bit-identically. Drive end-to-end via:
 
-       LUCID_HITS_FROM_EDEP_DATASET=/path/to/dataset \\
+       LUCID_HITS_FROM_STEP_DATASET=/path/to/dataset \\
            pytest tests/io/test_hits_byte_identity.py
 
    where ``/path/to/dataset`` contains
-   ``{sensor,hits,edep,labl}/wc_*_NNNN.h5`` produced by ``lucid-run-job``.
+   ``{sensor,hits,step,labl}/wc_*_NNNN.h5`` produced by ``lucid-run-job``.
 
 Times in saved files are post-t0-shift, so the "no hit" sentinel is
 ``T == 0`` (NOT ``T > 0``); hits can be negative for early arrivals.
@@ -133,7 +133,7 @@ def test_aggregator_from_photon_records_matches_oracle():
 
     Verifies that ``_aggregate_from_photon_records`` produces the same
     hits PE/T tensors as the dense oracle and emits the expected
-    edep sparse triplets.
+    step sparse triplets.
     """
     n_sensors = 2
     n_particles = 2
@@ -203,20 +203,20 @@ def test_aggregator_from_photon_records_sums_within_group():
     np.testing.assert_array_equal(sh['T'],  np.array([8.0], dtype=np.float32))
 
 
-_DATASET_ENV = 'LUCID_HITS_FROM_EDEP_DATASET'
+_DATASET_ENV = 'LUCID_HITS_FROM_STEP_DATASET'
 
 
 @pytest.mark.skipif(
     _DATASET_ENV not in os.environ,
     reason=f'set {_DATASET_ENV} to a lucid-run-job output dir to run',
 )
-def test_hits_aggregates_from_edep_sensor_hits():
+def test_hits_aggregates_from_step_sensor_hits():
     """On a saved dataset, every inst.h5 column equals the aggregator's
     output over seg/sensor_hits + segment→track→particle map."""
     root = os.environ[_DATASET_ENV]
     sensor_files = sorted(glob(os.path.join(root, 'sensor', 'wc_sensor_*.h5')))
     inst_files = sorted(glob(os.path.join(root, 'hits', 'wc_hits_*.h5')))
-    seg_files = sorted(glob(os.path.join(root, 'edep', 'wc_edep_*.h5')))
+    seg_files = sorted(glob(os.path.join(root, 'step', 'wc_step_*.h5')))
     labl_files = sorted(glob(os.path.join(root, 'labl', 'wc_labl_*.h5')))
     assert sensor_files, f'no sensor files under {root}/sensor/'
     assert len(sensor_files) == len(inst_files) == len(seg_files) == len(labl_files)

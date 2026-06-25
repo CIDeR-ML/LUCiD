@@ -92,7 +92,7 @@ Per [`docs/LUCID_DATASET.md`](../docs/LUCID_DATASET.md). The viewer reads:
 - `event_NNN/attrs`: `source_event_idx`, `n_particles`, `n_particle_hits`.
 - `event_NNN/{particle_idx (i32), sensor_idx (u16), PE (f32), T (f32)}`.
 
-**edep.h5**
+**step.h5**
 - `config/attrs`: `detector_shape`, `detector_radius`, `detector_half_height`, plus provenance.
 - `event_NNN/attrs`: `source_event_idx`, `n_tracks`, `n_segments`.
 - `event_NNN/{track_idx, start_{x,y,z}, end_{x,y,z}, dir_{x,y,z} (f16), time, edep, beta_start, n_cherenkov, contained (bool)}`.
@@ -112,8 +112,8 @@ Cross-file integrity: `source_event_idx` is compared across all four files on ea
 These caught me out during development — documenting so they don't catch you:
 
 - **Sentinel rows in `sensor.h5`**. The writer emits a row per sensor-of-interest even when no real photon arrived, with `PE = 0` and `T = −t0` (i.e. shifted zero). The viewer filters these: a PMT is treated as "has signal" only if accumulated `PE > 0`. Sentinel sensors render as the gray silhouette.
-- **`t0` can be negative**. The writer jitters each event's emission time within roughly ±15 ns so the detector reads events at random clock phases (matches real-data triggering). Sensor/edep/inst times are stored as `t − t0` (detector frame, t=0 = trigger moment); the raw truth `t0` lives in `labl/per_event/t0`.
-- **Units**. `sensor_positions` and all `edep/*` coordinates are in **meters**. Times are in **ns**. Energies in MeV.
+- **`t0` can be negative**. The writer jitters each event's emission time within roughly ±15 ns so the detector reads events at random clock phases (matches real-data triggering). Sensor/step/inst times are stored as `t − t0` (detector frame, t=0 = trigger moment); the raw truth `t0` lives in `labl/per_event/t0`.
+- **Units**. `sensor_positions` and all `step/*` coordinates are in **meters**. Times are in **ns**. Energies in MeV.
 - **Ancestor/interaction are per-track** and consistent across all tracks of a given particle. The viewer derives per-particle ancestor/interaction by picking any one of the particle's tracks.
 
 ## Implementation notes

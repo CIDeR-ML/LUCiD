@@ -1,4 +1,4 @@
-"""V3 four-file HDF5 readers (sensor / hits / edep / labl).
+"""V3 four-file HDF5 readers (sensor / hits / step / labl).
 
 Standalone module — no internal LUCiD dependencies beyond ``h5py``.
 """
@@ -11,7 +11,7 @@ __all__ = [
     "list_events_v3",
     "read_sensor_event_v3",
     "read_hits_event_v3",
-    "read_edep_event_v3",
+    "read_step_event_v3",
     "read_labl_event_v3",
 ]
 
@@ -66,8 +66,8 @@ def read_hits_event_v3(filename, event_idx):
     return out
 
 
-def read_edep_event_v3(filename, event_idx):
-    """Read event ``event_idx`` from an edep v3 file.
+def read_step_event_v3(filename, event_idx):
+    """Read event ``event_idx`` from a step v3 file.
 
     Backward-compat: pre-Phase-0 ``sensor_hits/`` subgroups (when present
     but lacking the ``emission_process`` column) get an all-zeros default

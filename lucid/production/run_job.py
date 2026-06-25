@@ -56,7 +56,7 @@ def _parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     parser.add_argument(
         "--output-dir", type=str, required=True,
         help="Absolute path to the dataset directory for this config. "
-             "PhotonSim ROOT and the v3 {sensor,hits,edep,labl}/ subdirs are written here.",
+             "PhotonSim ROOT and the v3 {sensor,hits,step,labl}/ subdirs are written here.",
     )
     parser.add_argument(
         "--job-id", type=int, required=True,
@@ -222,7 +222,7 @@ def _run_lucid(
     lucid_opts = config.get("lucid_options", {})
     apply_smearing = bool(lucid_opts.get("apply_smearing", True))
     apply_translation = bool(lucid_opts.get("apply_translation", True))
-    # edep/event_NNN/sensor_hits/ is mandatory for data-mode datasets:
+    # step/event_NNN/sensor_hits/ is mandatory for data-mode datasets:
     # it's the per-(segment, sensor) ground truth that the hits file is now
     # aggregated from. Photon_SegmentIndex is unconditional in PhotonSim
     # post-Stage-5a, so no macro flag is needed. The simulator runs in
@@ -264,7 +264,7 @@ def _run_lucid(
         primary_source=config.get("primary_source", "particles"),
         pad_size_buckets=pad_size_buckets,
     )
-    print(f"LUCiD wrote {len(saved_files)} files under {output_dir}/{{sensor,hits,edep,labl}}/")
+    print(f"LUCiD wrote {len(saved_files)} files under {output_dir}/{{sensor,hits,step,labl}}/")
 
 
 def main(argv: Optional[list[str]] = None) -> int:
@@ -302,7 +302,7 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     output_dir = Path(args.output_dir).resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
-    # The sensor/hits/edep/labl subdirs are pre-created by the host-side
+    # The sensor/hits/step/labl subdirs are pre-created by the host-side
     # fan-out (dataprod_fanout.py) before any sub-job is submitted, so the
     # worker doesn't race other sub-jobs to create them. event_generation.py
     # still mkdirs them defensively before opening h5 files, but by then
@@ -490,7 +490,7 @@ def _main_pileup(args: argparse.Namespace, config: dict) -> int:
 
     output_dir = Path(args.output_dir).resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
-    # sensor/hits/edep/labl subdirs are pre-created by dataprod_fanout.py;
+    # sensor/hits/step/labl subdirs are pre-created by dataprod_fanout.py;
     # see the corresponding comment in the main run_job entry above.
 
     vertices = config["vertices"]
