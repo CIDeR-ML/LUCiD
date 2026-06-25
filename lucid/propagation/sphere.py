@@ -524,6 +524,8 @@ def create_sphere_photon_propagator(sensor_positions, sensor_radius, sphere_radi
         return find_intersected_sphere_sensors_differentiable(
             photon_origins, photon_directions, sensor_positions, sensor_radius,
             sphere_radius, n_divisions, inverted_sensor_map,
-            temperature, overlap_prob)   # cosθ acceptance is PR1 (off here; PR2 is cosθ-free)
+            temperature, overlap_prob)   # no cosθ by design — legacy no-cosθ baseline (the
+            # production sphere goes through shared.create_propagator, which applies cosθ via
+            # detector.sensor_normals); kept as the byte-identical reference in tests.
 
     return propagate_photons
