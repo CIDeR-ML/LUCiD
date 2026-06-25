@@ -179,18 +179,21 @@ class ScintillationParams(NamedTuple):
     moyal_scale: jnp.ndarray = jnp.asarray(0.0, jnp.float32)
 
 
-class OuterOptics(NamedTuple):
-    """Per-medium optical bundle for the OUTER medium of a nested two-medium detector.
+class MediumParams(NamedTuple):
+    """Fittable transport optics of ONE non-primary medium (a shell around the primary).
 
-    Holds the fittable scattering + absorption leaves for the outer (buffer/water)
-    medium, so calibration can optimise each medium's optics independently (the inner
-    medium uses the top-level ``DetectorParams.scattering`` / ``absorption``). Built via
-    :meth:`DetectorParams.with_outer_optics`. When ``DetectorParams.outer_optics is None``
-    (every single-medium detector, and a nested forward that hasn't split the optics) both
-    media share the top-level bundle — no extra leaves, forward byte-identical.
+    Holds the scattering + absorption leaves for one surrounding medium so calibration can
+    optimise each medium's optics independently. The PRIMARY (innermost/active) medium stays
+    the top-level ``DetectorParams.scattering`` / ``absorption``; the surrounding shells live
+    in ``DetectorParams.outer_media`` (a tuple, region 1..N-1). N-native: N=2 ⇒ one entry,
+    N=3 (LS/acrylic/water) ⇒ two, with no structural change.
     """
     scattering: ScatteringParams
     absorption: AbsorptionParams
+
+
+# Back-compat alias: the outer bundle used to be called OuterOptics.
+OuterOptics = MediumParams
 
 
 class DetectorParams(NamedTuple):
@@ -205,11 +208,12 @@ class DetectorParams(NamedTuple):
     per_pmt      : PerPmtParams        qe_corrections, gain, t0, walk
     scintillation: ScintillationParams S, kB, C, tau_*, moyal_* (appended LAST so the
                    existing 23-leaf flatten order is preserved; neutral=0 for non-scint media)
-    outer_optics : OuterOptics | None  per-medium OUTER optics for nested detectors.
-                   ``None`` (default) ⇒ no extra leaves, both media share the top-level
-                   bundle, forward byte-identical. NOT part of ``_SUBTUPLES`` so the flat
-                   save/load/normalize machinery ignores it; only JAX pytree ops (grad,
-                   tree_map) descend into it when present, so its leaves are fittable.
+    outer_media  : tuple[MediumParams, ...]  surrounding-shell optics (regions 1..N-1) for
+                   nested detectors. Default ``()`` ⇒ single-medium: zero extra leaves, both
+                   the pytree and the forward byte-identical. N-native (a tuple, grows with N).
+                   NOT in ``_SUBTUPLES`` (it is not a flat-leaf bundle); the bounds / mask /
+                   save-load machinery handle it explicitly, and JAX pytree ops descend it so
+                   its leaves are fittable.
     """
     scattering: ScatteringParams
     absorption: AbsorptionParams
@@ -217,19 +221,31 @@ class DetectorParams(NamedTuple):
     response: ResponseParams
     per_pmt: PerPmtParams
     scintillation: ScintillationParams
-    outer_optics: Optional[OuterOptics] = None
+    outer_media: tuple = ()
+
+    @property
+    def outer_optics(self):
+        """Back-compat view: the first surrounding medium (region 1) or ``None``.
+
+        Lets call sites written against the old single ``outer_optics`` field keep working
+        over the new ``outer_media`` tuple (e.g. the simulator's per-medium optics select).
+        """
+        return self.outer_media[0] if self.outer_media else None
+
+    def with_outer_media(self, *media):
+        """Return a copy whose surrounding shells are the given ``MediumParams`` (region 1..N-1)."""
+        return self._replace(outer_media=tuple(media))
 
     def with_outer_optics(self, scattering=None, absorption=None):
-        """Return a copy with a separately-fittable OUTER-medium optical bundle.
+        """Return a copy with ONE separately-fittable surrounding-medium bundle (region 1).
 
-        Defaults each outer sub-bundle to a copy of the corresponding inner (top-level)
-        bundle, so ``dp.with_outer_optics()`` is forward-identical but now exposes the
-        outer medium's scatter/absorption leaves for independent calibration. Pass an
-        explicit ``ScatteringParams`` / ``AbsorptionParams`` to seed different values.
+        Defaults the outer bundle to a copy of the primary (top-level) scattering/absorption,
+        so ``dp.with_outer_optics()`` is forward-identical but exposes the outer medium's
+        leaves for independent calibration. (Two-medium convenience over ``with_outer_media``.)
         """
-        return self._replace(outer_optics=OuterOptics(
+        return self._replace(outer_media=(MediumParams(
             scattering=self.scattering if scattering is None else scattering,
-            absorption=self.absorption if absorption is None else absorption))
+            absorption=self.absorption if absorption is None else absorption),))
 
     @classmethod
     def from_flat(cls, *, num_sensors=None, **flat):
@@ -405,6 +421,23 @@ def _flatten_detector_params(params: DetectorParams) -> dict:
     return flat
 
 
+def _medium_to_jsonable(m) -> dict:
+    """Flatten a MediumParams (scattering+absorption leaves) to a JSON-able dict (arrays inline)."""
+    d = {}
+    for sub in (m.scattering, m.absorption):
+        for f in type(sub)._fields:
+            v = np.asarray(getattr(sub, f))
+            d[f] = float(v) if v.ndim == 0 else v.tolist()
+    return d
+
+
+def _medium_from_jsonable(d: dict):
+    """Rebuild a MediumParams from a flat dict (inverse of _medium_to_jsonable)."""
+    scat = ScatteringParams(**{f: jnp.asarray(d[f]) for f in ScatteringParams._fields})
+    absb = AbsorptionParams(**{f: jnp.asarray(d[f]) for f in AbsorptionParams._fields})
+    return MediumParams(scattering=scat, absorption=absb)
+
+
 def save_detector_params(params: DetectorParams, filepath: str):
     """Save DetectorParams to JSON + companion .npy files for arrays.
 
@@ -425,6 +458,9 @@ def save_detector_params(params: DetectorParams, filepath: str):
             npy_name = f"{stem}_{field}.npy"
             np.save(os.path.join(dirpath, npy_name), arr)
             data[field] = f"{_ARRAY_SENTINEL}{npy_name}"
+    # Surrounding-shell optics (regions 1..N-1): serialize inline as a list of bundles.
+    if params.outer_media:
+        data["outer_media"] = [_medium_to_jsonable(m) for m in params.outer_media]
     with open(filepath, "w") as f:
         json.dump(data, f, indent=2)
 
@@ -707,7 +743,11 @@ def load_physics_config(filepath: str, num_sensors: int = None,
             if v.ndim == 0:
                 kwargs[field] = jnp.full(num_sensors, neutral, dtype=jnp.float32)
 
-    return _nest_flat_kwargs(kwargs), medium_model_path, qe_curve_path
+    dp = _nest_flat_kwargs(kwargs)
+    outer_media = data.get("outer_media")
+    if outer_media:
+        dp = dp._replace(outer_media=tuple(_medium_from_jsonable(d) for d in outer_media))
+    return dp, medium_model_path, qe_curve_path
 
 
 def save_particle_params(params: ParticleParams, filepath: str):
@@ -757,8 +797,13 @@ def denormalize_params(normalized, bounds_min, bounds_max):
     )
 
 
-def default_bounds(num_sensors: int):
+def default_bounds(num_sensors: int, n_outer_media: int = 0):
     """Return ``(bounds_min, bounds_max)`` DetectorParams with physical ranges.
+
+    ``n_outer_media`` (default 0) mirrors the primary scattering/absorption bounds into that
+    many surrounding-shell bundles, so the bounds' ``outer_media`` matches a params pytree that
+    carries ``n_outer_media`` shells — required for ``normalize_params``/``denormalize_params``
+    (which zip by tree structure). 0 ⇒ ``outer_media=()`` (single-medium).
 
     Returns
     -------
@@ -812,6 +857,14 @@ def default_bounds(num_sensors: int):
         tau_rise=jnp.array(10.0), tau_fall=jnp.array(50.0),
         moyal_amp=jnp.array(10.0), moyal_loc=jnp.array(600.0), moyal_scale=jnp.array(100.0),
     ))
+    if n_outer_media:
+        # Each surrounding shell's optics share the primary's scattering/absorption ranges.
+        om_min = tuple(MediumParams(bounds_min.scattering, bounds_min.absorption)
+                       for _ in range(n_outer_media))
+        om_max = tuple(MediumParams(bounds_max.scattering, bounds_max.absorption)
+                       for _ in range(n_outer_media))
+        bounds_min = bounds_min._replace(outer_media=om_min)
+        bounds_max = bounds_max._replace(outer_media=om_max)
     return bounds_min, bounds_max
 
 
@@ -871,6 +924,11 @@ def make_optimization_mask(params, trainable_fields):
             if sub_fields is not None:
                 # Nested sub-tuple: recurse (decision happens on its leaves).
                 out[field] = build(val)
+            elif isinstance(val, (tuple, list)):
+                # Sequence of sub-bundles (e.g. outer_media): recurse into each element so its
+                # leaves key on their OWN field names (a MediumParams' scatter_length obeys the
+                # same trainability as the primary's). Empty ⇒ () (single-medium, no leaves).
+                out[field] = type(val)(build(v) for v in val)
             else:
                 flag = field in trainable_fields
                 out[field] = jax.tree.map(lambda x: flag, val)
