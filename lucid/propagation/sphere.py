@@ -416,12 +416,12 @@ def create_inverted_sphere_sensor_map(assignments_geometric, assignments_distanc
 
 def find_intersected_sphere_sensors_differentiable(ray_origins, ray_directions, sensor_positions, sensor_radius,
                                                     radius, n_divisions, inverted_sensor_map,
-                                                    temperature, overlap_prob, apply_radial_cos=False):
+                                                    temperature, overlap_prob, sensor_normals=None):
     """
     Finds sensors intersected by rays using a differentiable approximation with overlap-based weights.
 
-    ``apply_radial_cos`` adds the PMT cosθ angular acceptance (sphere-radial normal);
-    see :func:`lucid.propagation.base.compute_sensor_intersections_base`. Default False
+    ``sensor_normals`` (per-sensor outward normals) adds the PMT cosθ angular acceptance;
+    see :func:`lucid.propagation.base.compute_sensor_intersections_base`. Default None
     keeps the single-sphere forward byte-identical.
     """
     single_ray = ray_origins.ndim == 1
@@ -452,7 +452,7 @@ def find_intersected_sphere_sensors_differentiable(ray_origins, ray_directions, 
         lambda det_idx: compute_sensor_intersections_base(
             det_idx, sensor_positions, sensor_radius,
             ray_origins, ray_directions, bounds_check, overlap_prob,
-            apply_radial_cos=apply_radial_cos
+            sensor_normals=sensor_normals
         )
     )(potential_sensors.T)
     

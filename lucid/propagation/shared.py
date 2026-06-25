@@ -213,16 +213,18 @@ def create_propagator(detector, sensor_positions, sensor_radius,
         potential_sensors = jax.lax.stop_gradient(inverted_sensor_map[idx])
 
         # d. Compute sensor intersections (shared, vmapped over sensor slots).
-        #    Spherical detectors get the PMT cosθ angular acceptance (radial sensor normal)
-        #    — the conservation fix; cylinder/box keep the legacy capture until their
-        #    per-sensor normals are threaded in.
-        _radial_cos = getattr(detector, 'sensors_radial', False)
+        #    Any geometry exposing per-sensor outward normals gets the PMT cosθ angular
+        #    acceptance (the conservation fix); geometries without normals keep the legacy
+        #    capture (None → byte-identical).
+        _sensor_normals = getattr(detector, 'sensor_normals', None)
+        if _sensor_normals is not None:
+            _sensor_normals = jnp.asarray(_sensor_normals)   # geometry returns numpy; gather needs a device array
 
         def compute_for_slot(slot_sensors):
             return compute_sensor_intersections_base(
                 slot_sensors, sensor_positions, sensor_radius,
                 photon_origins, photon_directions,
-                bounds_check, overlap_prob, apply_radial_cos=_radial_cos)
+                bounds_check, overlap_prob, sensor_normals=_sensor_normals)
 
         (weights, sensor_times, sensor_indices,
          sensor_normals_all, inside_sensor,

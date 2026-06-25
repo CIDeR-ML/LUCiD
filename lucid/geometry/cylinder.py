@@ -163,6 +163,23 @@ class Cylinder(Detector):
             else:
                 self.ID_to_case[i] = 2
 
+    @property
+    def sensor_normals(self):
+        """Per-sensor OUTWARD unit normals: xy-radial on the barrel, ±ẑ on the caps.
+
+        Uses the exact barrel/cap classification (ID_to_case: 0=barrel, 1=top, 2=bottom),
+        set on both the generated and from-file paths. Read by the shared propagator for the
+        PMT cosθ angular acceptance; numpy (no eager JAX), converted at the propagator boundary.
+        """
+        pts = np.asarray(self.all_points)
+        cases = np.array([self.ID_to_case[i] for i in range(len(pts))])
+        xy = (pts - np.asarray(self.C)).copy()
+        xy[:, 2] = 0.0
+        normals = xy / (np.linalg.norm(xy, axis=1, keepdims=True) + 1e-10)   # barrel default
+        normals[cases == 1] = np.array([0.0, 0.0, 1.0])                       # top cap → +ẑ
+        normals[cases == 2] = np.array([0.0, 0.0, -1.0])                      # bottom cap → −ẑ
+        return normals
+
     # ── Construction from a PMT-positions npz file ────────────────────
 
     @classmethod

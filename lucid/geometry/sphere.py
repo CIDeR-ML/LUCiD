@@ -13,11 +13,8 @@ from .registry import register_detector
 class Sphere(Detector):
     """Spherical detector geometry"""
 
-    # NOTE: the PMT cosθ angular-acceptance model (the detection-conservation fix) is PR1,
-    # a separate change that touches ALL geometries via per-sensor normals. PR2 (two-medium
-    # transport) is intentionally cosθ-free so it stays orthogonal to the sensor model and
-    # additive against main. `sensors_radial` is therefore not set here (propagator default
-    # is no cosθ); PR1 reintroduces the acceptance generally.
+    # The PMT cosθ angular acceptance is applied generally via the `sensor_normals` property
+    # (radial here), which the shared propagator reads — see compute_sensor_intersections_base.
 
     def __init__(self, radius, n_sensors, sensor_radius):
         """
@@ -65,6 +62,16 @@ class Sphere(Detector):
         
         # For sphere, all sensors are on surface (case 0)
         self.ID_to_case = {i: 0 for i in range(len(self.all_points))}
+
+    @property
+    def sensor_normals(self):
+        """Per-sensor OUTWARD unit normals — radial (sensors lie on the sphere surface).
+
+        Read by the shared propagator to apply the PMT cosθ angular acceptance. Returned as
+        numpy (no eager JAX in geometry); converted to a device array at the propagator boundary.
+        """
+        v = np.asarray(self.all_points) - np.asarray(self.C)
+        return v / (np.linalg.norm(v, axis=1, keepdims=True) + 1e-10)
 
     def visualize_geometry_wireframe(self, show_sensors=True):
         """Visualize the sphere as a wireframe with detectors"""
