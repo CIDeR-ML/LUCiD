@@ -87,6 +87,9 @@ class DetectorGeometry(NamedTuple):
         with open(json_filename) as _f:
             _cfg = _json.load(_f)
         actual_type = _cfg.get('detector_type', detector_type)
+        # PMT cosθ angular acceptance is OPT-IN per detector (default OFF → existing detectors
+        # byte-identical / no charge rescale). JUNO configs set "apply_angular_acceptance": true.
+        _apply_cos = bool(_cfg.get('apply_angular_acceptance', False))
         sensor_points = jnp.array(detector.all_points)
         sensor_radius = detector.S_radius
         num_sensors = len(sensor_points)
@@ -106,7 +109,8 @@ class DetectorGeometry(NamedTuple):
                 detector.r_inner, detector.r_outer, detector._n_divisions,
                 temperature=temperature, max_candidates_per_ray=max_candidates_per_ray,
                 overlap_st_width_frac=overlap_st_width_frac,
-                overlap_renorm=overlap_renorm, overlap_mode=overlap_mode)
+                overlap_renorm=overlap_renorm, overlap_mode=overlap_mode,
+                apply_angular_acceptance=_apply_cos)
             return DetectorGeometry(
                 detector_type=actual_type, sensor_points=sensor_points,
                 sensor_radius=sensor_radius, num_sensors=num_sensors,
@@ -132,6 +136,7 @@ class DetectorGeometry(NamedTuple):
                 overlap_st_width_frac=overlap_st_width_frac,
                 overlap_renorm=overlap_renorm,
                 overlap_mode=overlap_mode,
+                apply_angular_acceptance=_apply_cos,
                 **grid_params)
 
         return DetectorGeometry(

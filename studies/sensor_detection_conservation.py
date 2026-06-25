@@ -22,6 +22,26 @@ from lucid.geometry.detector_geometry import DetectorGeometry
 N_RAYS = 200_000
 
 
+def _cfg(d):
+    """Write a tmp geometry config (with the cosθ acceptance OPTED IN) and return its path.
+
+    The PMT cosθ acceptance is opt-in per detector (default off); this study demonstrates the
+    cosθ-ON conservation, so it sets ``apply_angular_acceptance`` itself rather than relying on
+    which standing configs have opted in.
+    """
+    import os, json, tempfile
+    d = dict(d); d["apply_angular_acceptance"] = True
+    p = os.path.join(tempfile.mkdtemp(), "geom.json")
+    json.dump(d, open(p, "w"))
+    return p
+
+
+SPHERE_CFG = _cfg({"material": "water", "detector_type": "sphere",
+                   "geometry_definitions": {"radius": 17.5, "n_sensors": 10000, "sensor_radius": 0.25}})
+CYL_CFG = _cfg({"material": "water", "detector_type": "cylinder",
+                "geometry_definitions": {"radius": 8.0, "height": 16.0, "n_sensors": 5000, "sensor_radius": 0.25}})
+
+
 def _isotropic(origin, n, seed):
     r = np.random.RandomState(seed)
     d = r.normal(size=(n, 3))
@@ -94,10 +114,10 @@ def _plot(panels, outpath):
 
 def main():
     print("backend:", jax.default_backend(), " — detected fraction should be FLAT = coverage")
-    ok_s, ds, fs, cs = run("SPHERE (JUNO, R=17.5)", "config/JUNO_geom_config.json", "sphere",
+    ok_s, ds, fs, cs = run("SPHERE (R=17.5)", SPHERE_CFG, "sphere",
                            [[0, 0, float(z)] for z in np.linspace(0, 16.5, 12)], sphere_coverage)
-    ok_c, dc, fc, cc = run("CYLINDER (SK-like)", "config/SK_geom_config.json", "cylinder",
-                           [[float(x), 0, 0] for x in np.linspace(0, 14, 10)], cylinder_coverage)
+    ok_c, dc, fc, cc = run("CYLINDER (R=8, H=16)", CYL_CFG, "cylinder",
+                           [[float(x), 0, 0] for x in np.linspace(0, 7, 10)], cylinder_coverage)
     print("\nCONSERVATION:", "PASS" if (ok_s and ok_c) else "FAIL")
     _plot([("Sphere (JUNO)", ds, fs, cs), ("Cylinder (SK-like)", dc, fc, cc)],
           "studies/out/sensor_detection_conservation.png")

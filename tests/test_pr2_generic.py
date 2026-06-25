@@ -202,3 +202,32 @@ class TestCosThetaNormals:
         for d, expect in [(jnp.array([0., 0., -1.]), 1.0), (jnp.array([1., 0., 0.]), 0.0)]:
             cos_inc = float(jnp.abs(jnp.sum((d / jnp.linalg.norm(d)) * nrm[0])))
             assert abs(cos_inc - expect) < 1e-6
+
+
+class TestCosThetaOptIn:
+    """cosθ acceptance is OPT-IN: off by default, on only when the config sets the flag."""
+
+    def _propagator(self, apply_flag):
+        import os, json, tempfile
+        from lucid.geometry.detector_geometry import DetectorGeometry
+        cfg = {"material": "water", "detector_type": "sphere",
+               "geometry_definitions": {"radius": 5.0, "n_sensors": 600, "sensor_radius": 0.3}}
+        if apply_flag:
+            cfg["apply_angular_acceptance"] = True
+        p = os.path.join(tempfile.mkdtemp(), "g.json")
+        json.dump(cfg, open(p, "w"))
+        return DetectorGeometry.from_config(p, detector_type="sphere", temperature=None).propagator
+
+    def _detected(self, prop, origin, n=8000, seed=0):
+        r = np.random.RandomState(seed)
+        d = r.normal(size=(n, 3)); d /= np.linalg.norm(d, axis=1, keepdims=True)
+        o = np.broadcast_to(np.asarray(origin, np.float32), (n, 3))
+        res = prop(jnp.asarray(o, jnp.float32), jnp.asarray(d, jnp.float32))
+        return float(jnp.sum(res['sensor_weights']))
+
+    def test_default_off_overcounts_relative_to_opt_in(self):
+        # Off-centre source near the wall: without cosθ (default) grazing rays over-count, so the
+        # detected weight exceeds the cosθ-projected (opt-in) value. Proves the flag gates cosθ.
+        off = self._detected(self._propagator(False), [0, 0, 4.0])
+        on = self._detected(self._propagator(True), [0, 0, 4.0])
+        assert off > on * 1.1

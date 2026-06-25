@@ -329,13 +329,18 @@ follow-up" framing in §1/§4b/§4e is superseded. What shipped:
   source position for sphere AND cylinder (the old `sphere_detection_conservation.py` —
   written to demonstrate the bug — was retired; it would now show the fix).
 
-⚠️ **Forward-model normalization shift (intended, but flag for downstream).** Adding cosθ
-makes the single-medium sphere/cylinder forward NOT byte-identical to pre-PR1 main — total
-detected charge drops (~−12% centred, more off-centre on a cylinder). This is the
-conservation correction, but it rescales charge/energy, so anything calibrated against the
-old scale (trained SIREN nets, energy scale, the recon vertex/energy floors) must be
-re-validated. No fast test asserts absolute charge; `tests/test_pr2_generic.py::TestCosThetaNormals`
-pins the normals + the cosθ factor so the change is intentional and visible.
+**cosθ is OPT-IN (default OFF).** To avoid silently rescaling every existing detector's charge,
+the acceptance is a per-detector config flag `apply_angular_acceptance` (default `false`), read in
+`DetectorGeometry.from_config` and threaded to the propagators (`create_propagator` /
+`create_nested_sphere_propagator`). Capability vs policy: geometries always PROVIDE `sensor_normals`;
+the config decides whether to APPLY cosθ. Default off ⇒ SK/HK/WCTE and every non-opted detector stay
+byte-identical to pre-PR1 main (no charge rescale). The JUNO configs (`JUNO_*_geom_config.json`) set
+`"apply_angular_acceptance": true` — so only the JUNO case gets the conservation-correct sensor model.
+
+⚠️ **For opted-in (JUNO) detectors only:** cosθ rescales detected charge (~−12% centred, more
+off-centre), so JUNO results calibrated on the old (no-cosθ) scale need re-validation. Detectors that
+have NOT opted in are unaffected. Tests: `TestCosThetaNormals` pins the per-geometry normals;
+`TestCosThetaOptIn` pins that the flag gates cosθ (default off over-counts vs opted-in).
 
 ## 5. Accepted-by-decision (carry forward, don't silently ship as "done")
 Pure absorption (no LS re-emission); point sources only (no SIREN-in-LS); interface n fixed
