@@ -102,14 +102,14 @@ def find_intersected_nested_sphere_sensors(ray_origins, ray_directions,
         ray_origins = ray_origins[None, :]
         ray_directions = ray_directions[None, :]
 
-    # 1. Outer-sphere sensor lookup — identical to the single-sphere propagator. cosθ angular
-    #    acceptance is PR1 (a separate, all-geometry sensor-model change); PR2 is cosθ-free, so
-    #    the nested and single-sphere detection use the SAME model (keeps the invisible-interface
-    #    check self-consistent). The over-detection bias only skews the study contrast ratios,
-    #    not the two-medium transport itself.
+    # 1. Outer-sphere sensor lookup — identical to the single-sphere propagator, with the PMT
+    #    cosθ angular acceptance (sensors on the outer sphere ⇒ radial outward normals). Same
+    #    detection model as the single sphere, so the invisible-interface check stays consistent.
+    sensor_normals = sensor_positions / (jnp.linalg.norm(sensor_positions, axis=1, keepdims=True) + 1e-10)
     result = find_intersected_sphere_sensors_differentiable(
         ray_origins, ray_directions, sensor_positions, sensor_radius,
-        r_outer, n_divisions, inverted_sensor_map, temperature, overlap_prob)
+        r_outer, n_divisions, inverted_sensor_map, temperature, overlap_prob,
+        sensor_normals=sensor_normals)
 
     # 2. Inner interface vs the outer sphere, via the generic surface list. The inner region
     #    is ONE interface surface (a sphere at the origin, radius r_inner); a ray "hits the
