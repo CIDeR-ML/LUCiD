@@ -117,19 +117,6 @@ class Box(Detector):
             else:
                 self.ID_to_case[i] = 5
 
-    @property
-    def sensor_normals(self):
-        """Per-sensor OUTWARD unit normals — the normal of the face each sensor sits on.
-
-        Uses ID_to_case (0=front +y, 1=back −y, 2=left −x, 3=right +x, 4=top +z, 5=bottom −z).
-        Read by the shared propagator for the PMT cosθ angular acceptance; numpy (no eager JAX),
-        converted to a device array at the propagator boundary.
-        """
-        face_n = np.array([[0., 1., 0.], [0., -1., 0.], [-1., 0., 0.],
-                           [1., 0., 0.], [0., 0., 1.], [0., 0., -1.]])
-        cases = np.array([self.ID_to_case[i] for i in range(len(self.all_points))])
-        return face_n[cases]
-
     def _place_face_sensors(self, n_sensors, dim1, dim2, face):
         """Place sensors on a rectangular face with regular grid."""
         if n_sensors == 0:

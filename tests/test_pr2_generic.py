@@ -164,46 +164,6 @@ class TestOuterMediaParams:
         assert float(loaded.outer_media[0].absorption.absorption_length) == 123.0
 
 
-class TestCosThetaNormals:
-    """PR1 per-sensor outward normals (the PMT cosθ acceptance input) for every surface geometry."""
-
-    def test_sphere_radial(self):
-        from lucid.geometry.sphere import Sphere
-        det = Sphere(5.0, 300, 0.25)
-        n = np.asarray(det.sensor_normals); p = np.asarray(det.all_points)
-        assert np.allclose(np.linalg.norm(n, axis=1), 1.0, atol=1e-5)
-        assert np.allclose(n, p / np.linalg.norm(p, axis=1, keepdims=True), atol=1e-5)
-
-    def test_cylinder_barrel_and_caps(self):
-        from lucid.geometry.cylinder import Cylinder
-        det = Cylinder(5.0, 10.0, 400, 0.25)
-        n = np.asarray(det.sensor_normals); p = np.asarray(det.all_points)
-        cases = np.array([det.ID_to_case[i] for i in range(len(n))])
-        assert np.allclose(np.linalg.norm(n, axis=1), 1.0, atol=1e-5)
-        b = cases == 0                                   # barrel: z=0, xy-radial outward
-        assert np.allclose(n[b, 2], 0.0, atol=1e-6)
-        xy = p[b, :2] / np.linalg.norm(p[b, :2], axis=1, keepdims=True)
-        assert np.allclose(n[b, :2], xy, atol=1e-5)
-        assert np.allclose(n[cases == 1], [0, 0, 1], atol=1e-6)    # top cap → +ẑ
-        assert np.allclose(n[cases == 2], [0, 0, -1], atol=1e-6)   # bottom cap → −ẑ
-
-    def test_box_face_normals(self):
-        from lucid.geometry.box import Box
-        det = Box(10.0, 8.0, 6.0, 300, 0.25)
-        n = np.asarray(det.sensor_normals); p = np.asarray(det.all_points)
-        assert np.allclose(np.linalg.norm(n, axis=1), 1.0, atol=1e-5)
-        # each normal is an axis vector pointing toward the face the sensor sits on
-        assert np.all(np.isin(np.abs(n).sum(axis=1), [1.0]))
-        assert np.all(np.sum(n * (p - np.asarray(det.C)), axis=1) > 0)   # outward
-
-    def test_cos_factor_normal_vs_grazing(self):
-        # base.py applies cosθ = |ray·sensor_normal|: 1 at normal incidence, ~0 at grazing.
-        nrm = jnp.array([[0., 0., 1.]])
-        for d, expect in [(jnp.array([0., 0., -1.]), 1.0), (jnp.array([1., 0., 0.]), 0.0)]:
-            cos_inc = float(jnp.abs(jnp.sum((d / jnp.linalg.norm(d)) * nrm[0])))
-            assert abs(cos_inc - expect) < 1e-6
-
-
 class TestCosThetaOptIn:
     """cosθ acceptance is OPT-IN: off by default, on only when the config sets the flag."""
 

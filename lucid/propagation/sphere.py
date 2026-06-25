@@ -416,12 +416,12 @@ def create_inverted_sphere_sensor_map(assignments_geometric, assignments_distanc
 
 def find_intersected_sphere_sensors_differentiable(ray_origins, ray_directions, sensor_positions, sensor_radius,
                                                     radius, n_divisions, inverted_sensor_map,
-                                                    temperature, overlap_prob, sensor_normals=None):
+                                                    temperature, overlap_prob, apply_angular_acceptance=False):
     """
     Finds sensors intersected by rays using a differentiable approximation with overlap-based weights.
 
-    ``sensor_normals`` (per-sensor outward normals) adds the PMT cosθ angular acceptance;
-    see :func:`lucid.propagation.base.compute_sensor_intersections_base`. Default None
+    ``apply_angular_acceptance`` adds the PMT cosθ angular acceptance (radial normal);
+    see :func:`lucid.propagation.base.compute_sensor_intersections_base`. Default False
     keeps the single-sphere forward byte-identical.
     """
     single_ray = ray_origins.ndim == 1
@@ -452,7 +452,7 @@ def find_intersected_sphere_sensors_differentiable(ray_origins, ray_directions, 
         lambda det_idx: compute_sensor_intersections_base(
             det_idx, sensor_positions, sensor_radius,
             ray_origins, ray_directions, bounds_check, overlap_prob,
-            sensor_normals=sensor_normals
+            apply_angular_acceptance=apply_angular_acceptance
         )
     )(potential_sensors.T)
     
@@ -525,7 +525,7 @@ def create_sphere_photon_propagator(sensor_positions, sensor_radius, sphere_radi
             photon_origins, photon_directions, sensor_positions, sensor_radius,
             sphere_radius, n_divisions, inverted_sensor_map,
             temperature, overlap_prob)   # no cosθ by design — legacy no-cosθ baseline (the
-            # production sphere goes through shared.create_propagator, which applies cosθ via
-            # detector.sensor_normals); kept as the byte-identical reference in tests.
+            # production sphere goes through shared.create_propagator, which applies cosθ when
+            # apply_angular_acceptance is set); kept as the byte-identical reference in tests.
 
     return propagate_photons

@@ -7,9 +7,9 @@ source position instead of staying equal to the geometric sensor coverage.
 
 This script isolates the propagator GEOMETRY (no photon step / optics): it fires isotropic
 rays from a source and sums the propagator's per-sensor weights. With the cosθ acceptance
-(applied via each geometry's `sensor_normals`), the detected fraction must be FLAT and equal
-to the coverage (Σ sensor area / total surface area) for every source position — on the
-sphere AND the cylinder.
+(opt-in via apply_angular_acceptance; radial normal, for a sphere centred at the origin), the
+detected fraction must be FLAT and equal to the coverage (Σ sensor area / total surface area)
+for every source position. The study opts in via its own tmp config.
 
 Run:  JAX_PLATFORM_NAME=cpu python studies/sensor_detection_conservation.py
 """
@@ -38,8 +38,6 @@ def _cfg(d):
 
 SPHERE_CFG = _cfg({"material": "water", "detector_type": "sphere",
                    "geometry_definitions": {"radius": 17.5, "n_sensors": 10000, "sensor_radius": 0.25}})
-CYL_CFG = _cfg({"material": "water", "detector_type": "cylinder",
-                "geometry_definitions": {"radius": 8.0, "height": 16.0, "n_sensors": 5000, "sensor_radius": 0.25}})
 
 
 def _isotropic(origin, n, seed):
@@ -63,16 +61,6 @@ def sphere_coverage(dg):
     n = dg.sensor_points.shape[0]
     rs = dg.sensor_radius
     return n * np.pi * rs**2 / (4 * np.pi * R**2)
-
-
-def cylinder_coverage(dg):
-    p = np.asarray(dg.sensor_points)
-    n = p.shape[0]
-    rs = dg.sensor_radius
-    R = float(np.linalg.norm(p[:, :2], axis=1).max())
-    H = float(p[:, 2].max() - p[:, 2].min())
-    area = 2 * np.pi * R * H + 2 * np.pi * R**2          # barrel + two caps
-    return n * np.pi * rs**2 / area
 
 
 def run(name, config, dtype, radii, coverage_fn):
@@ -115,12 +103,9 @@ def _plot(panels, outpath):
 def main():
     print("backend:", jax.default_backend(), " — detected fraction should be FLAT = coverage")
     ok_s, ds, fs, cs = run("SPHERE (R=17.5)", SPHERE_CFG, "sphere",
-                           [[0, 0, float(z)] for z in np.linspace(0, 16.5, 12)], sphere_coverage)
-    ok_c, dc, fc, cc = run("CYLINDER (R=8, H=16)", CYL_CFG, "cylinder",
-                           [[float(x), 0, 0] for x in np.linspace(0, 7, 10)], cylinder_coverage)
-    print("\nCONSERVATION:", "PASS" if (ok_s and ok_c) else "FAIL")
-    _plot([("Sphere (JUNO)", ds, fs, cs), ("Cylinder (SK-like)", dc, fc, cc)],
-          "studies/out/sensor_detection_conservation.png")
+                           [[0, 0, float(z)] for z in np.linspace(0, 16.5, 14)], sphere_coverage)
+    print("\nCONSERVATION:", "PASS" if ok_s else "FAIL")
+    _plot([("Sphere", ds, fs, cs)], "studies/out/sensor_detection_conservation.png")
 
 
 if __name__ == "__main__":

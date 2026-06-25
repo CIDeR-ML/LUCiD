@@ -104,16 +104,13 @@ def find_intersected_nested_sphere_sensors(ray_origins, ray_directions,
         ray_directions = ray_directions[None, :]
 
     # 1. Outer-sphere sensor lookup — identical to the single-sphere propagator. The PMT cosθ
-    #    angular acceptance (sensors on the outer sphere ⇒ radial outward normals) is OPT-IN via
-    #    the detector config (apply_angular_acceptance); default OFF keeps it byte-identical and
+    #    angular acceptance (radial normal — sensors are on the outer sphere) is OPT-IN via the
+    #    detector config (apply_angular_acceptance); default OFF keeps it byte-identical and
     #    consistent with a single sphere that hasn't opted in.
-    sensor_normals = None
-    if apply_angular_acceptance:
-        sensor_normals = sensor_positions / (jnp.linalg.norm(sensor_positions, axis=1, keepdims=True) + 1e-10)
     result = find_intersected_sphere_sensors_differentiable(
         ray_origins, ray_directions, sensor_positions, sensor_radius,
         r_outer, n_divisions, inverted_sensor_map, temperature, overlap_prob,
-        sensor_normals=sensor_normals)
+        apply_angular_acceptance=apply_angular_acceptance)
 
     # 2. Inner interface vs the outer sphere, via the generic surface list. The inner region
     #    is ONE interface surface (a sphere at the origin, radius r_inner); a ray "hits the
