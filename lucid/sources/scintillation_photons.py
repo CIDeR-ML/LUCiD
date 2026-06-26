@@ -32,7 +32,31 @@ from lucid.sources.v3_writer import EMISSION_PROCESS_SCINTILLATION
 
 __all__ = [
     "expand_segments_to_photons",
+    "scintillation_medium_params",
 ]
+
+
+def scintillation_medium_params(detector_params, medium) -> dict:
+    """Assemble the ``medium_params`` dict for :func:`expand_segments_to_photons`
+    from a simulator's ``DetectorParams`` + ``MediumProperties``.
+
+    The scintillation scalars live on the nested ``DetectorParams.scintillation``
+    sub-tuple; the spectrum truncation window comes from the medium. Mirrors the
+    inline assembly in ``event_generation.py`` so the data-mode loaders and the
+    production path stay in sync.
+    """
+    sc = detector_params.scintillation
+    return {
+        'S':           float(sc.S),
+        'kB':          float(sc.kB),
+        'C':           float(sc.C),
+        'tau_rise':    float(sc.tau_rise),
+        'tau_fall':    float(sc.tau_fall),
+        'moyal_loc':   float(sc.moyal_loc),
+        'moyal_scale': float(sc.moyal_scale),
+        'lambda_min':  float(medium.scintillation_lambda_min),
+        'lambda_max':  float(medium.scintillation_lambda_max),
+    }
 
 
 _C_MM_PER_NS = 299.792458    # speed of light in vacuum, mm/ns

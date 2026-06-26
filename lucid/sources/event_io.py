@@ -422,6 +422,28 @@ def generate_multi_folder_events(event_simulator, root_file_path, folder_names, 
     return results
 
 
+def read_event_data_from_photonsim(root_file_path, entry_index,
+                                   emission_processes=("cherenkov",),
+                                   medium_params=None, rng=None):
+    """event_io-surface wrapper of
+    :func:`lucid.sources.root_reader.read_event_data_from_photonsim`.
+
+    Reads injectable per-photon arrays for the requested emission processes
+    (Cherenkov from ``OpticalPhotonsRaw``; scintillation expanded from the
+    dE/dx segments and appended to the Cherenkov list) and returns
+    ``photon_origins`` in CM — this module's historical convention, which is
+    what the ``is_data`` simulator's ``/100`` expects — exactly mirroring
+    :func:`read_photon_data_from_photonsim`. See the root_reader function for
+    the full parameter and return description.
+    """
+    from lucid.sources.root_reader import (
+        read_event_data_from_photonsim as _read_event_data_m)
+    result = dict(_read_event_data_m(
+        root_file_path, entry_index, emission_processes, medium_params, rng))
+    result['photon_origins'] = jnp.asarray(result['photon_origins']) * 100.0  # m -> cm
+    return result
+
+
 def read_photon_data_from_photonsim(root_file_path, entry_index):
     """
     Read photon data from a PhotonSim ROOT file for a specific entry.

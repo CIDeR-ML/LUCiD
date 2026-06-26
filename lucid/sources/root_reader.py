@@ -13,8 +13,106 @@ import numpy as np
 __all__ = [
     "get_max_photons_per_particle",
     "read_photon_data_from_photonsim",
+    "read_event_data_from_photonsim",
     "read_particle_data_from_photonsim",
 ]
+
+
+def read_event_data_from_photonsim(root_file_path, entry_index,
+                                   emission_processes=("cherenkov",),
+                                   medium_params=None, rng=None):
+    """Read injectable per-photon arrays for one event, for the requested
+    emission processes, ready to feed the ``is_data`` simulator.
+
+    This is the data-mode analogue of the forward Cherenkov+scintillation path:
+    Cherenkov photons are loaded from ``OpticalPhotonsRaw`` and scintillation
+    photons are **expanded from the dE/dx segments** (``Segment_*``) via
+    :func:`lucid.sources.scintillation_photons.expand_segments_to_photons` and
+    **appended to the Cherenkov list**, so the simulator ray-traces both streams
+    in a single call.
+
+    Parameters
+    ----------
+    root_file_path : str
+    entry_index : int
+    emission_processes : tuple of str
+        Any non-empty subset of ``("cherenkov", "scintillation")``. Pick a
+        single process to get that process's photons alone (e.g. for a
+        per-process fraction map), or both for the full event.
+    medium_params : Mapping or None
+        Required when ``"scintillation"`` is requested — the scintillation
+        scalars (see :func:`expand_segments_to_photons`). Build it with
+        :func:`lucid.sources.scintillation_photons.scintillation_medium_params`.
+    rng : numpy.random.Generator or None
+        Required when ``"scintillation"`` is requested (per-event RNG).
+
+    Returns
+    -------
+    dict
+        Combined per-photon arrays, in the SAME metre convention as
+        :func:`read_photon_data_from_photonsim` (the caller applies the
+        m->cm boundary and any rotation/translation exactly as for Cherenkov):
+
+        - ``photon_origins``           : (N, 3) float32, meters
+        - ``photon_directions``        : (N, 3) float32, unit vectors
+        - ``photon_times``             : (N,)   float32, ns (G4 frame)
+        - ``wavelengths``              : (N,)   float32, nm
+        - ``photon_emission_process``  : (N,)   int8, per-photon process tag
+          (``EMISSION_PROCESS_CHERENKOV`` / ``EMISSION_PROCESS_SCINTILLATION``)
+        - ``N``                        : int, total photon count
+        - ``energy``                   : float, primary energy (MeV)
+    """
+    from lucid.sources.scintillation_photons import expand_segments_to_photons
+    from lucid.sources.v3_writer import (
+        EMISSION_PROCESS_CHERENKOV, EMISSION_PROCESS_SCINTILLATION)
+
+    procs = tuple(emission_processes)
+    valid = {"cherenkov", "scintillation"}
+    bad = set(procs) - valid
+    if bad:
+        raise ValueError(f"unknown emission_processes {sorted(bad)}; "
+                         f"valid: {sorted(valid)}")
+    if not procs:
+        raise ValueError("emission_processes must be non-empty")
+
+    raw = _read_event_raw(root_file_path, entry_index)
+
+    O, D, T, W, P = [], [], [], [], []
+    if "cherenkov" in procs:
+        nc = int(np.asarray(raw["photon_origins"]).shape[0])
+        O.append(np.asarray(raw["photon_origins"], dtype=np.float32))
+        D.append(np.asarray(raw["photon_directions"], dtype=np.float32))
+        T.append(np.asarray(raw["photon_times"], dtype=np.float32))
+        W.append(np.asarray(raw["photon_wavelengths"], dtype=np.float32))
+        P.append(np.full(nc, EMISSION_PROCESS_CHERENKOV, dtype=np.int8))
+    if "scintillation" in procs:
+        if medium_params is None or rng is None:
+            raise ValueError("emission_processes includes 'scintillation' but "
+                             "medium_params and/or rng were not provided")
+        sc = expand_segments_to_photons(raw["segments_raw"], medium_params, rng)
+        O.append(np.asarray(sc["photon_origins"], dtype=np.float32))
+        D.append(np.asarray(sc["photon_directions"], dtype=np.float32))
+        T.append(np.asarray(sc["photon_times"], dtype=np.float32))
+        W.append(np.asarray(sc["photon_wavelengths"], dtype=np.float32))
+        P.append(np.asarray(sc["photon_emission_process"], dtype=np.int8))
+
+    origins = (np.concatenate(O, axis=0) if O
+               else np.zeros((0, 3), dtype=np.float32))
+    directions = (np.concatenate(D, axis=0) if D
+                  else np.zeros((0, 3), dtype=np.float32))
+    times = np.concatenate(T) if T else np.zeros(0, dtype=np.float32)
+    wls = np.concatenate(W) if W else np.zeros(0, dtype=np.float32)
+    procarr = np.concatenate(P) if P else np.zeros(0, dtype=np.int8)
+
+    return {
+        "photon_origins": jnp.asarray(origins),
+        "photon_directions": jnp.asarray(directions),
+        "photon_times": jnp.asarray(times),
+        "wavelengths": jnp.asarray(wls),
+        "photon_emission_process": procarr,
+        "N": int(origins.shape[0]),
+        "energy": float(raw["primary_energy"]),
+    }
 
 
 def _read_photons_for_event(raw_tree, event_idx):
