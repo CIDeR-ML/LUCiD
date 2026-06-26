@@ -36,6 +36,7 @@ from lucid.sources.event_io import (             # noqa: F401
     generate_events_from_root,
     generate_multi_folder_events,
     read_photon_data_from_photonsim,
+    read_event_data_from_photonsim,
     read_particle_data_from_photonsim,
     generate_events_from_photonsim,
     generate_events_from_photonsim_particles,
