@@ -1,0 +1,54 @@
+# Configuration reference
+
+Each detector is defined by two JSON files in `config/`. They are parsed by
+`lucid/detector_params.py` (`load_detector_params`, `load_physics_config`) and
+`lucid/geometry/` (`DetectorGeometry.from_config`).
+
+## Geometry config — `*_geom_config.json`
+
+| key | meaning |
+|-----|---------|
+| `material` | `"water"`, `"wbls"`, `"ice"`, … — selects the medium model and the SIREN emitter path |
+| `detector_type` | `cylinder` / `sphere` / `box` / `string` / `nested_sphere` — selects the registry class |
+| `geometry_definitions` | shape & sensor placement (fields depend on `detector_type`) |
+
+`geometry_definitions` by type:
+
+- **cylinder**: `radius`, `height`, `n_sensors`, `sensor_radius`
+- **sphere**: `radius`, `n_sensors`, `sensor_radius`
+- **box**: `length`, `width`, `height`, `n_sensors`, `sensor_radius`
+- **string**: `npz_file_path` (DOM positions; see `PMT_NPZ_SCHEMA.md`)
+
+Measured cylinders (SK/HK/WCTE) come from a PMT-array `.npz` via `Cylinder.from_pmt_file` — see
+`lucid/geometry/PMT_NPZ_SCHEMA.md`.
+
+## Physics config — `*_physics_config.json`
+
+A **flat** set of optical properties; each is independently scalar or wavelength-dependent.
+Common keys:
+
+| key | meaning |
+|-----|---------|
+| `scatter_length`, `mie_scatter_length` | Rayleigh / Mie scattering lengths (m) |
+| `g` | Mie asymmetry parameter |
+| `absorption_length` | absorption length (m) |
+| `wall_reflection_rate`, `sensor_reflection_rate` | reflectivities |
+| `qe` | global quantum efficiency; `qe_corrections` | per-PMT QE multipliers |
+
+**How each value is interpreted:**
+
+- a **number** → scalar;
+- a **list** → inline per-element array;
+- `null` / missing → *projected* from a referenced λ-curve evaluated at `scalar_ref_wavelength`
+  (default 400 nm), if the property has an associated curve; otherwise a neutral default;
+- `"path/to/file.json"` → loaded from JSON; `"__array__:file.npy"` → loaded from a companion `.npy`.
+
+Two extra keys are resolved relative to the config directory (and reference model files rather
+than being stored on `DetectorParams`):
+
+- `medium_model` → a medium-model JSON (e.g. under `config/materials/`)
+- `qe_curve` → a PMT QE-curve JSON (e.g. under `config/pmt/`)
+
+These configs map onto the `DetectorParams` pytree — see
+[DetectorParams vs args](../DETECTOR_PARAMS_VS_ARGS.md) for which fields are fittable and how the
+scalar/wavelength choice is represented in code.

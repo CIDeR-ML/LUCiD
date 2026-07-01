@@ -58,3 +58,6 @@ mie_hunter/
 *.executed.ipynb
 # Generated animations (e.g. tutorials/event.gif from animate_event)
 *.gif
+
+# MkDocs build output
+site/
