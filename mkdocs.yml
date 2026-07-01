@@ -1,0 +1,69 @@
+site_name: LUCiD
+site_description: Differentiable photon simulation for optical particle detectors
+site_url: https://cider-ml.github.io/LUCiD/
+repo_url: https://github.com/CIDeR-ML/LUCiD
+repo_name: CIDeR-ML/LUCiD
+docs_dir: docs
+
+theme:
+  name: material
+  features:
+    - navigation.sections
+    - navigation.top
+    - content.code.copy
+    - content.code.annotate
+    - search.suggest
+    - search.highlight
+  palette:
+    - scheme: default
+      toggle: { icon: material/weather-night, name: Dark mode }
+    - scheme: slate
+      toggle: { icon: material/weather-sunny, name: Light mode }
+
+plugins:
+  - search
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.highlight
+  - pymdownx.superfences
+  - pymdownx.arithmatex: { generic: true }
+  - tables
+  - toc: { permalink: true }
+
+extra_javascript:
+  - https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js
+
+# Kept in the repo for reference, not published:
+exclude_docs: |
+  internal/
+
+nav:
+  - Home: index.md
+  - Getting Started:
+      - Install: getting-started/install.md
+      - Quickstart: getting-started/quickstart.md
+      - Local (with PhotonSim): QUICKSTART_LOCAL.md
+      - Docker: QUICKSTART_DOCKER.md
+  - Concepts:
+      - The photon pipeline: concepts/photon-pipeline.md
+      - Geometry & configuration: concepts/geometry.md
+      - Architecture: ARCHITECTURE.md
+      - Parameters (DetectorParams): DETECTOR_PARAMS_VS_ARGS.md
+      - SIREN surrogate: SIREN_TRAINING_INPUTS.md
+      - Wavelength physics: WAVELENGTH_DESIGN.md
+  - Reconstruction: RECONSTRUCTION.md
+  - Calibration: CALIBRATION.md
+  - Data & Production:
+      - v3 dataset schema: LUCID_DATASET.md
+      - Working with v3 data: reference/working-with-v3-data.md
+      - Cluster deployment: CLUSTER_ABSTRACTION.md
+      - S3DF: QUICKSTART_S3DF.md
+      - NERSC: QUICKSTART_NERSC.md
+      - LXPLUS: QUICKSTART_LXPLUS.md
+      - WbLS notes: WBLS_INFORMATION.md
+  - Reference:
+      - CLI: reference/cli.md
+      - Configuration: reference/config.md
+  - Contributing: https://github.com/CIDeR-ML/LUCiD/blob/main/CONTRIBUTING.md
