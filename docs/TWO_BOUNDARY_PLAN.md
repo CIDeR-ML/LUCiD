@@ -1,6 +1,7 @@
 # Two-boundary / two-medium extension plan (JUNO-like: scintillator inside, water outside)
 
-Status: **plan only — nothing implemented.** Author: scoping pass, 2026-06-22.
+Status: **IMPLEMENTED on branch `feature/two-boundary-nested-sphere`** (2026-06-22).
+Scoping + decisions below; implementation summary at the very bottom (§7).
 
 This document scopes extending LUCiD from a single homogeneous medium bounded by one
 outer surface to a **nested two-medium detector**: an inner liquid-scintillator (LS)
@@ -282,3 +283,52 @@ and are non-negotiable; the degenerate/invisible-interface gates only validate t
 - **Adjacent fidelity items (flag, not strictly "two boundaries"):** LS absorption/
   re-emission (§4.2), an LS-specific scattering model, realistic `cherenkov_fraction`,
   LS-trained SIREN, and (later) the 12 cm acrylic as a third thin shell.
+
+---
+
+## 7. Implementation summary (2026-06-22, branch `feature/two-boundary-nested-sphere`)
+
+All phases landed and tested. Commits: Phase 1 (021b30e), Phases 2/3/5 (d7552b4),
+Phase 4 + Phase 0 (aebee12).
+
+**Phase 1 — geometry.** `lucid/geometry/nested_sphere.py::NestedSphere(Sphere)` (inner +
+outer radii, sensors on the outer sphere, `region_of()` for medium init).
+`lucid/propagation/nested_sphere.py`: `intersect_two_spheres_forward` (nearest forward
+surface among the two spheres, both directions) + `create_nested_sphere_propagator` (wraps
+the validated single-sphere sensor lookup at R_out, overrides positions/normals and masks
+sensor weights for interface-hit rays, adds a per-ray `hit_interface` flag).
+`DetectorGeometry.from_config` builds inner+outer media and the nested propagator.
+
+**Phases 2/3/5 — transport.** `PhotonState` gains per-photon `medium_id` (None for
+single-medium → carried unchanged). `photon_step.py`: `_interface_refract_reflect`
+(Snell + Fresnel via `fresnel_rr` + TIR, transmit/reflect **sampled** Bernoulli(T),
+DiCE-scored) and dedicated nested steps (sample + expected-value) returning the updated
+medium id; single-medium steps untouched. `simulator.py`: an `_IS_NESTED`-gated branch
+selects per-photon optics + speed by `medium_id`, threads `hit_interface`, evaluates both
+media's optics at the same per-photon λ; calibration point sources init `medium_id` from
+the emission radius. SIREN config is now loaded only in track mode (calibration-only
+materials need no `siren_params.json`).
+
+**Phase 4 — per-medium fittable optics.** `DetectorParams.outer_optics: OuterOptics | None`
+(last field, default None → zero leaves → single-medium byte-identical; not in
+`_SUBTUPLES` so flat save/load/normalize ignore it). `dp.with_outer_optics()` exposes the
+outer medium's scatter/absorption leaves; gradients verified to flow per-medium. Follow-up:
+wire these leaves into the optimizer driver's bounds/normalize helpers.
+
+**Materials.** `config/materials/labls.json` (real JUNO LAB-LS) with SOURCED optics —
+Rayleigh L=28.2 m @430 nm (arXiv:1504.01001, pure λ⁻⁴), n=1.48, Mie=0 (purified,
+Rayleigh-dominated), effective L_abs=68.8 m (JUNO attenuation ≥20 m ⊖ Rayleigh 28.2 m;
+the pure-absorption fit-target prior, NOT a fabricated spectrum). Configs:
+`config/JUNO_nested_geom_config.json` (WbLS/water) + `JUNO_nested_labls_*` (LAB/water).
+
+**Validation (`tests/test_nested_sphere.py`, 22 tests).** Two-sphere intersection (both
+directions); analytic Snell/Fresnel R₀/TIR + flux; invisible-interface (wbls/wbls) matches
+a single sphere to 0.02%; high-contrast LAB/water shows TIR trapping ~21% of the light +
+later arrivals; Phase-0 leaf-count + propagator-key separation. Single-medium regression:
+92-test targeted run + params suite green (byte-identity preserved).
+
+**Known limitations (accepted decisions / flagged).** Pure absorption — no re-emission
+(LAB `L_abs` is effective); LAB absorption spectrum is a flat prior (no literature curve);
+nested spheres only; idealized outer wall; point sources only (no SIREN tracks);
+interface n fixed (not fit). The soft-`temperature` sphere overlap deposits ~0 charge for
+the JUNO sensor geometry — pre-existing, orthogonal; calibration uses `temperature=None`.
