@@ -11,7 +11,11 @@ Runnable tools beyond the console entry points (`lucid-run-job`, `lucid-optimize
 | `download_data.sh` | Fetch the example SIREN emitter + PhotonSim tables from CERNBox (wires up wbls/ice symlinks) | run once after install |
 | `benchmark_forward.py` | Forward + `value_and_grad` wall-time vs (N photons, K), track & calibration | perf sizing / claims |
 | `generate_example_events.py` | Write simple per-event HDF5 (Q/T + truth) from a PhotonSim ROOT (not the heavy v3 dataset) | tutorials / tests / quick studies |
+| `geofile_to_npz.py` | Convert a WCSim-style detector geofile (`.txt`) → a PMT-array `.npz` (schema `lucid/geometry/PMT_NPZ_SCHEMA.md`) | add/reproduce a measured detector |
 | `visualize_detector.py` | Render any `*_geom_config.json` (3D scatter for all geometries; 2D unrolled for cylinders) | sanity-check a geometry |
+| `inspect_dataset.py` | Text summary of a v3 dataset batch (sensor/hits/step/labl) | inspect produced data |
+| `check_gradients.py` | AD vs finite-difference gradient check (pathwise params); reports the score-estimated params | verify differentiability |
+| `train_siren_pipeline.py` | Single-node SIREN training pipeline: build tables → train (photon + dE/dx) → validate (optional PhotonSim generation) | train the emitter end-to-end |
 | `reconstruct_dataset.py` | Reconstruct a whole PhotonSim ROOT (two-start seed → Fisher-GN) and report vtx/dir/E/t0 resolution | recon study at scale |
 | `calibrate_campaign.py` | Calibrate optical params from a source set over N random starts; recovery vs the Cramér-Rao bound | calibration study |
 | `find_optimal_k.py` | Minimum scatter-iteration count `K` for a target charge fraction | geometry tuning |
