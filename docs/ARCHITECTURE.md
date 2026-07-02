@@ -122,4 +122,4 @@ LOW-VARIANCE (per-key AD std ~0.02, flat in K, vs ~6 and growing for the old nai
 step; AD agrees with the CRN finite difference within ~1 sigma over 60 keys). Remaining for
 ice/string reconstruction (R): the GPU re-validation campaign (an ice recon floor analogous
 to the water campaign), plus the broader re-validation (recon floor / calibration CRB) and
-an end-to-end production run (needs the external PhotonSim/GENIE binaries). See `docs/RECONCILIATION_PLAN.md` for the full plan and per-phase findings.
+an end-to-end production run (needs the external PhotonSim/GENIE binaries).

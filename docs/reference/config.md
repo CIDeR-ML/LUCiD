@@ -9,7 +9,7 @@ Each detector is defined by two JSON files in `config/`. They are parsed by
 | key | meaning |
 |-----|---------|
 | `material` | `"water"`, `"wbls"`, `"ice"`, … — selects the medium model and the SIREN emitter path |
-| `detector_type` | `cylinder` / `sphere` / `box` / `string` / `nested_sphere` — selects the registry class |
+| `detector_type` | `cylinder` / `sphere` / `box` / `string` — selects the registry class |
 | `geometry_definitions` | shape & sensor placement (fields depend on `detector_type`) |
 
 `geometry_definitions` by type:

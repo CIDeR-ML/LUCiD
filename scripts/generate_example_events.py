@@ -44,7 +44,7 @@ def main():
         c, t = jax.lax.stop_gradient(sim(dummy, jax.random.PRNGKey(1000 + ev), pd))
         charge = np.asarray(c); time_ = np.where(charge > 0, np.asarray(t), 0.)
         origins = np.asarray(raw['photon_origins']).astype(float)
-        vtx = origins.mean(0) / 100.0                                   # ROOT is mm -> m (approx event centroid)
+        vtx = origins.mean(0) / 100.0                                   # reader returns cm -> m (approx event centroid)
         path = os.path.join(args.out, f'event_{ev}.h5')
         with h5py.File(path, 'w') as f:
             f.create_dataset('charge', data=charge)

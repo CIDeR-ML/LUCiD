@@ -2,8 +2,7 @@
 
 How LUCiD calibrates detector optics — per-PMT quantum efficiency `k` plus the global optical
 parameters (absorption `L_abs`, Rayleigh `L_R`, Mie `L_M`, wall/sensor reflectivity, QE spectrum,
-`n_real`) — by gradient descent through the differentiable forward. Companion: `docs/CALIBRATION_FRAMEWORK.md`
-(API / partition-combine), `examples/hello_calibrate.py` (runnable end-to-end), `docs/WAVELENGTH_DESIGN.md`.
+`n_real`) — by gradient descent through the differentiable forward.(API / partition-combine), `examples/hello_calibrate.py` (runnable end-to-end), `docs/WAVELENGTH_DESIGN.md`.
 
 ## What is measured
 

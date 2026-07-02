@@ -12,12 +12,11 @@ geometry has a matching propagator in `lucid/propagation/`.
 | `sphere` | `Sphere` | JUNO, TAO |
 | `box` | `Box` | test / segmented geometries |
 | `string` | `StringTelescope` | IceCube-style neutrino telescopes (DOMs on vertical strings) |
-| `nested_sphere` | `NestedSphere` | two-medium (e.g. JUNO-like) detectors |
 
 Cylinders can be built **algorithmically** (`SK_like`, `WCTE_like`) or from **measured PMT
 positions** via `Cylinder.from_pmt_file(npz)` (`SK`, `HK`, `WCTE` from public WCSim geofiles). The
-`.npz` schema is documented in `lucid/geometry/PMT_NPZ_SCHEMA.md`; converters live in
-`config/scripts/`.
+`.npz` schema is documented in `lucid/geometry/PMT_NPZ_SCHEMA.md`; convert a geofile to a
+schema `.npz` with `scripts/geofile_to_npz.py`.
 
 ## Two JSON files per detector
 

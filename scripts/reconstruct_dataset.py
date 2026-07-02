@@ -72,8 +72,8 @@ def main():
     ap.add_argument('--fidr', type=float, default=12.0, help='fiducial radius (m)')
     ap.add_argument('--fidz', type=float, default=12.0, help='fiducial half-height (m)')
     ap.add_argument('--cherenkov-band', type=float, nargs=2, default=[274.91, 673.83],
-                    metavar=('LO', 'HI'), help='model Cherenkov emission band in nm (GEANT4-consistent); '
-                    'pass e.g. --cherenkov-band 0 0 is not allowed — omit via editing to disable')
+                    metavar=('LO', 'HI'), help='model Cherenkov emission band [LO HI] in nm '
+                    '(GEANT4-consistent); use "--cherenkov-band 0 0" for an unbanded model')
     args = ap.parse_args()
 
     os.makedirs(args.out, exist_ok=True)
@@ -89,7 +89,7 @@ def main():
     # [274.91, 673.83] nm so QE applies to the true band (GEANT4-consistent; see campaign_recon
     # REVAL_RESULTS.md). Vertex/direction hit the SIREN-emitter floor (~15 cm / sub-degree);
     # a residual energy bias (~few %) reflects SIREN-vs-GEANT4 emission fidelity, not the fit.
-    band = tuple(args.cherenkov_band) if args.cherenkov_band else None
+    band = tuple(args.cherenkov_band) if args.cherenkov_band and args.cherenkov_band[1] > 0 else None
     pred = setup_event_simulator(args.geom, args.nph, temperature=0.1, K=8, hit_mode='per_photon',
                                  physics_config=args.physics, default_detector_params=True,
                                  particle='muon', wavelength_mode=True, pos_grad_threshold=8,

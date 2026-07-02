@@ -43,15 +43,14 @@ reflectivity — the timing-observable frontier.)
 
 - **Calibration is the gradient-fitting showcase.** `hello_calibrate.py` exercises the real
   optimizer (`lucid.fitting`) — the same recipe the calibration campaign ran on.
-- **Reconstruction mirrors LUCiD_recon's latest case** (`gn_fisher_recon.py` /
-  `RECO_PIPELINE.md`): a 9-parameter `[E, x, y, z, dir, t0]` Fisher-Gauss-Newton fit on a
+- **Reconstruction** is a 9-parameter `[E, x, y, z, dir, t0]` Fisher-Gauss-Newton fit on a
   Poisson-charge + first-arrival **order-statistic-time** loss, run in SCALE9-preconditioned
   coordinates with finite-difference Jacobians (the DiCE `custom_vjp` blocks `jacfwd`, and the
   autodiff track-Hessian is indefinite, so a PSD Fisher metric is built and stepped against).
   The demo uses SK_like geometry and **SIREN-sampled** truth (self-contained, no GEANT4 ROOT),
   so it shows the optimizer + loss machinery and its self-consistent floor — not the
-  GEANT4-vs-SIREN cone mismatch that sets the ~13 cm physics floor (`RECO_PIPELINE.md` §6).
+  GEANT4-vs-SIREN cone mismatch that sets the ~13 cm physics floor.
   It captures a track from ~0.7 m / ~2.5° / ~125 MeV off down to ~cm / sub-degree / few-MeV.
 - The `fit(forward, residual=, solver=)` / `SimParams` / `Field` interface described in
-  `docs/MAIN_BRANCH_PLAN.md` is a **proposal**, not yet built. These examples call the
+  `docs/internal/MAIN_BRANCH_PLAN.md` is a **proposal**, not yet built. These examples call the
   canonical API that exists today.

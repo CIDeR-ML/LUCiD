@@ -1,0 +1,6 @@
+{
+  "geom": "config/SK_like_geom_config.json",
+  "physics_config": "config/SK_like_physics_config.json",
+  "data": "data/water/muon/1000MeV_100events.root",
+  "events": {"start": 0, "count": 5}
+}
