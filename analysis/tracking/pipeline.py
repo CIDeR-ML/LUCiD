@@ -54,21 +54,25 @@ DEFAULT_CONFIG = {
     'event_start': 0,
     'n_rays': 250_000,                   # NPH: per-photon predictor photon budget (the "nrays" axis)
     'K': 8,
-    'nbuf': 400_000,
+    'nbuf': 'auto',                      # data buffer: 'auto' = max photons/event measured from
+                                         # the ROOT file (a fixed int overrides)
     'fidr': 12.0,                        # fiducial radius (m) for random vertex placement
     'fidz': 12.0,                        # fiducial half-height (m)
+    'containment_margin': 0.95,          # accept a placement only if vertex + s_max(E)·dir is
+                                         # inside this fraction of the detector (None disables)
     'tts': 2.5,                          # transit-time spread (ns) baked into the data sim
     'grid': {'n_cap': 80, 'n_angular': 120, 'n_height': 80},
     'cherenkov_band': [274.91, 673.83],  # model λ band (nm); None disables
     'gn': {'nkeys': 4, 'niters': 250, 'lr': 8.0, 'fisher_mode': 'fd',
            'sigma': 2.5, 'delta': 1.0, 'tot_n_scale': 1.0},
-    # seeder knobs: the energy scan window (center it on the sample's nominal energy) and the
-    # charge-grid t0 search grid (keep SYMMETRIC even for asymmetric true-t0 samples).
-    'seed': {'energy_center': 1000.0, 'energy_delta': 700.0, 'energy_steps': 12,
-             't0_min': -15.0, 't0_max': 15.0, 't0_n_div': 5},
+    # seeder knobs: one generous energy-scan window covering every study energy
+    # (200..3000 MeV in 50 MeV steps -> seed-E quantization ~25 MeV), and the charge-grid t0
+    # search grid (keep SYMMETRIC even for asymmetric true-t0 samples; must cover true_t0_range).
+    'seed': {'energy_center': 1600.0, 'energy_delta': 1400.0, 'energy_steps': 57,
+             't0_min': -20.0, 't0_max': 20.0, 't0_n_div': 9},
     # true t0 per event, drawn uniform in [lo, hi] (ns) and injected by shifting the photon
-    # times; [0, 0] = the historical fixed t0=0.
-    'true_t0_range': [0.0, 0.0],
+    # times; [0, 0] pins the historical fixed t0=0.
+    'true_t0_range': [-15.0, 15.0],
     'placement_seed_base': 100003,
     'data_seed_base': 7000,
 }
@@ -95,33 +99,66 @@ def _resolve(p):
 
 # --------------------------------------------------------------------------- geometry / truth
 
+def load_smax_m(particle, material='water'):
+    """Per-particle ``s_max(E_MeV) -> meters`` from the trained-SIREN metadata.
+
+    Uses the canonical parametrization LUCiD ships with each trained model
+    (``data/<material>/<particle>/siren_training/trained_model/photonsim_siren_metadata.json``,
+    the same fit PhotonSim's ``smax_fit.csv`` carries) via :func:`lucid.siren.core.make_smax_fn`
+    — NOT the legacy range parametrization in ``check_track_endpoint_in_detector``. Both muon
+    and electron models carry the block.
+    """
+    import json as _json
+    from lucid.siren.core import make_smax_fn
+    meta = _json.loads((REPO_ROOT / 'data' / material / particle / 'siren_training' /
+                        'trained_model' / 'photonsim_siren_metadata.json').read_text())
+    fn = make_smax_fn(meta['smax'])
+    return lambda E: float(fn(float(E))) / 1000.0          # mm -> m
+
+
 def _rotax(u, deg):
     a = np.radians(deg); ca, sa = np.cos(a), np.sin(a); u = u / np.linalg.norm(u)
     ux = np.array([[0, -u[2], u[1]], [u[2], 0, -u[0]], [-u[1], u[0], 0]])
     return np.eye(3) * ca + sa * ux + (1 - ca) * np.outer(u, u)
 
 
-def rand_tf(raw, ev, fidr, fidz, seed_base):
+def rand_tf(raw, ev, fidr, fidz, seed_base, *, track_len_m=None, bounds=None, margin=0.95,
+            max_tries=200):
     """Randomize the gun geometry into the fiducial volume (reproducible per (config, event)).
 
     Draws an isotropic rotation (uniform-in-cosine polar tilt about an in-plane axis) and a
     uniform-in-volume shift inside the (fidr, fidz) cylinder. Applies it to the photons AND to
     the gun's exact (origin, +z), so the returned ``(vtx_true, dir_true)`` is exact truth.
+
+    CONTAINMENT: if ``track_len_m`` (the s_max(E) projected track length) and ``bounds`` (from
+    ``get_detector_bounds``) are given, placements whose endpoint ``vtx + track_len·dir`` falls
+    outside ``margin`` × the detector are rejected and redrawn (same rng stream, so the accepted
+    placement is still reproducible per (config, event)). After ``max_tries`` the last draw is
+    kept with a warning — only reachable if (fidr, fidz, margin) leave almost no phase space.
     """
+    from lucid.optimization.grid_search import is_point_inside_detector
     rng = np.random.default_rng(seed_base + ev)
-    beta = np.degrees(np.arccos(rng.uniform(-1, 1)))
-    al = rng.uniform(0, 2 * np.pi); axis = np.array([-np.sin(al), np.cos(al), 0.])
-    rr = fidr * np.sqrt(rng.uniform()); ph = rng.uniform(0, 2 * np.pi)
-    sh = np.array([rr * np.cos(ph), rr * np.sin(ph), rng.uniform(-fidz, fidz)]) * 100.0   # cm
-    raw = dict(raw)
+    check = track_len_m is not None and bounds is not None and margin is not None
     O = np.asarray(raw['photon_origins']).astype(float)
+    c = O.mean(0)                                               # rotation pivot: photon centroid (cm)
+    for attempt in range(max_tries):
+        beta = np.degrees(np.arccos(rng.uniform(-1, 1)))
+        al = rng.uniform(0, 2 * np.pi); axis = np.array([-np.sin(al), np.cos(al), 0.])
+        rr = fidr * np.sqrt(rng.uniform()); ph = rng.uniform(0, 2 * np.pi)
+        sh = np.array([rr * np.cos(ph), rr * np.sin(ph), rng.uniform(-fidz, fidz)]) * 100.0  # cm
+        R = _rotax(axis, beta)
+        vtx = ((np.zeros(3) - c) @ R.T + c + sh) / 100.0       # the gun origin, transformed (m)
+        d = np.array([0., 0., 1.]) @ R.T
+        if not check or is_point_inside_detector(vtx + track_len_m * d, bounds, margin):
+            break
+    else:
+        print(f"  WARNING ev{ev}: no contained placement in {max_tries} tries "
+              f"(len={track_len_m:.1f} m, margin={margin}); keeping last draw", flush=True)
+    raw = dict(raw)
     D = np.asarray(raw['photon_directions']).astype(float)
-    R = _rotax(axis, beta); c = O.mean(0)
     raw['photon_origins'] = (O - c) @ R.T + c + sh
     raw['photon_directions'] = D @ R.T
-    vtx_true = ((np.zeros(3) - c) @ R.T + c + sh) / 100.0      # meters
-    dir_true = np.array([0., 0., 1.]) @ R.T                    # transformed +z
-    return raw, vtx_true, dir_true
+    return raw, vtx, d
 
 
 def truth9(vtx, d, energy, t0=0.0):
@@ -211,6 +248,19 @@ class TrackingPipeline:
         self.ND = len(self.det.all_points)
         self.POS = np.asarray(self.det.all_points)
         self.bounds = get_detector_bounds(self.det)
+        # per-particle s_max(E) -> m, for the placement containment check
+        self.smax_m = load_smax_m(part) if config.get('containment_margin') else None
+
+        # nbuf 'auto': size the data buffer to the LARGEST event in the ROOT file, so no event
+        # is silently truncated by _pad_event (461k photons/event at 2.1 GeV vs the old fixed
+        # 400k). The resolved int is written back into the config for provenance.
+        if config['nbuf'] in ('auto', None):
+            import uproot
+            with uproot.open(str(_resolve(config['root_file']))) as f:
+                nmax = int(f['OpticalPhotons']['NOpticalPhotons'].array(library='np').max())
+            config['nbuf'] = nmax
+            if verbose:
+                print(f"[pipeline] nbuf auto -> {nmax} (max photons/event in ROOT)", flush=True)
 
         # grid params are GEOMETRY-SPECIFIC (cylinder: n_cap/n_angular/n_height; sphere:
         # n_divisions; box: n_x/n_y/n_z). The defaults are the cylinder trio, so on a
@@ -277,9 +327,12 @@ class TrackingPipeline:
         cfg = self.cfg; POS = self.POS
         t_start = time.time()
 
+        raw = read_photon_data_from_photonsim(str(_resolve(cfg['root_file'])), ev)
+        track_len = self.smax_m(raw['energy']) if self.smax_m is not None else None
         raw, vtx_true, dir_true = rand_tf(
-            read_photon_data_from_photonsim(str(_resolve(cfg['root_file'])), ev), ev,
-            cfg['fidr'], cfg['fidz'], cfg['placement_seed_base'])
+            raw, ev, cfg['fidr'], cfg['fidz'], cfg['placement_seed_base'],
+            track_len_m=track_len, bounds=self.bounds,
+            margin=cfg.get('containment_margin'))
         # true t0: uniform in true_t0_range, injected by SHIFTING the photon emission times so
         # the realistic data actually moves (the is_data sim takes times from the photons, not
         # the track). Own rng stream (base+7919) so placement draws stay unchanged vs t0=[0,0].
