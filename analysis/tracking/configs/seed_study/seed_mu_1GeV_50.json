@@ -1,0 +1,13 @@
+{
+  "name": "seed_mu_1GeV_50",
+  "particle": "muon",
+  "study": "nrays",
+  "geom_config": "config/SK_like_geom_config.json",
+  "phys_config": "config/SK_like_physics_config.json",
+  "root_file": "data/water/muon/1000MeV_100events.root",
+  "energy_nominal_MeV": 1000,
+  "n_events": 50,
+  "event_start": 0,
+  "n_rays": 100000,
+  "gn": {"nkeys": 4, "niters": 250, "lr": 8.0, "fisher_mode": "fd", "sigma": 2.5, "delta": 1.0, "tot_n_scale": 1.0}
+}
