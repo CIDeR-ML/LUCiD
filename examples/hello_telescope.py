@@ -33,7 +33,7 @@ cas_sim = setup_event_simulator(GEOM, 500_000, K=4, temperature=0.2, is_calibrat
                                 detector_type='string', physics_config=PHYS,
                                 default_detector_params=True, hit_mode='aggregated',
                                 wavelength_mode=False)
-src = cascade_source(position=centroid, direction=[0., 0., 1.], energy_mev=100_000.)
+src = cascade_source(position=centroid, direction=[0., 0., 1.], energy_mev=100_000., n_medium=1.31)  # ice
 q_cas = np.asarray(jax.lax.stop_gradient(cas_sim(src, jax.random.PRNGKey(1)))[0])
 print(f'cascade    (100 GeV, EM shower):  {(q_cas > 0).sum():4d} / {q_cas.size} DOMs lit, '
       f'total {q_cas.sum():.0f} pe')

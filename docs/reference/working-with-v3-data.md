@@ -24,11 +24,11 @@ dictionaries; `lucid.sources.v3_reader` holds the low-level readers.
 ```python
 from lucid.production.data_prod_utils import read_multi_event_file, load_event_v3, print_event_info
 
-data = read_multi_event_file('out/')      # resolves sensor/hits/step/labl for the batch
-ev = load_event_v3(data, event_index=0)   # one event as a dict of arrays
+events = read_multi_event_file('out/')    # list of per-event dicts (loads the batch)
+ev = events[0]                            # one event as a dict of arrays
 print_event_info(ev)                      # kinematics + summary
-# loop:
-# for i in range(n_events): ev = load_event_v3(data, i); ...
+# a single event without loading the whole batch:
+# ev = load_event_v3('out/', 0)           # (dataset_root, event_idx)
 ```
 
 The `read_production_output.ipynb` notebook under `lucid/production/notebooks/` is the worked

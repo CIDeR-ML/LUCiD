@@ -53,14 +53,14 @@ Narrated notebooks in [`tutorials/`](tutorials/):
 | `event_displays` | 2D / animation / 3D event views across geometries and materials |
 
 Short, copy-paste **scripts** live in [`examples/`](examples/):
-`hello_simulate.py`, `hello_reconstruct.py`, `hello_calibrate.py`, `seed_reconstruct.py`.
+`hello_simulate.py`, `hello_reconstruct.py`, `hello_calibrate.py`, `seed_reconstruct.py`, `hello_telescope.py`.
 
 ## Package layout
 
 - **`lucid/simulation/`** — `setup_event_simulator` (the JIT-compiled forward hub),
   `photon_step`, `sensor_response`.
-- **`lucid/geometry/`** — registry-dispatched detectors (`cylinder`, `sphere`, `box`, `string`,
-  `nested_sphere`); `Cylinder.from_pmt_file(npz)` for measured SK/HK/WCTE arrays.
+- **`lucid/geometry/`** — registry-dispatched detectors (`cylinder`, `sphere`, `box`, `string`);
+  `Cylinder.from_pmt_file(npz)` for measured SK/HK/WCTE arrays.
 - **`lucid/propagation/`** — differentiable ray–geometry intersection and multi-bounce transport.
 - **`lucid/wavelength/`** — wavelength-dependent optics (`medium`, `spectrum`, `optical_model`).
 - **`lucid/siren/`** — SIREN surrogate for Cherenkov/dE-dx emission (trained on PhotonSim tables).

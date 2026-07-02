@@ -119,7 +119,7 @@ lucid-train-siren --material water --particle muon
 `PhotonSimDataset` (`lucid/siren/training/dataset.py`) auto-detects whether the
 file has `data/photon_table_average` or `data/dedx_table_average` and picks the
 right interpolation grid. Full training/validation walkthrough:
-[`lucid/siren/README.md`](../lucid/siren/README.md).
+[`lucid/siren/README.md`](https://github.com/CIDeR-ML/LUCiD/blob/main/lucid/siren/README.md).
 
 ## Troubleshooting
 
@@ -139,9 +139,9 @@ right interpolation grid. Full training/validation walkthrough:
 - [`docs/QUICKSTART_S3DF.md`](QUICKSTART_S3DF.md) — running PhotonSim under SLURM at SLAC.
 - [`docs/QUICKSTART_LXPLUS.md`](QUICKSTART_LXPLUS.md) — running PhotonSim under HTCondor at CERN.
 - [`docs/CLUSTER_ABSTRACTION.md`](CLUSTER_ABSTRACTION.md) — how the same code drives both.
-- [`lucid/production/jobs/smax/README.md`](../lucid/production/jobs/smax/README.md) — Stage 0.
-- [`lucid/production/jobs/siren_inputs/README.md`](../lucid/production/jobs/siren_inputs/README.md) — Stage 1.
-- [`lucid/siren/README.md`](../lucid/siren/README.md) — Stage 3.
+- [`lucid/production/jobs/smax/README.md`](https://github.com/CIDeR-ML/LUCiD/blob/main/lucid/production/jobs/smax/README.md) — Stage 0.
+- [`lucid/production/jobs/siren_inputs/README.md`](https://github.com/CIDeR-ML/LUCiD/blob/main/lucid/production/jobs/siren_inputs/README.md) — Stage 1.
+- [`lucid/siren/README.md`](https://github.com/CIDeR-ML/LUCiD/blob/main/lucid/siren/README.md) — Stage 3.
 
 ## Next steps (not yet wired up)
 
