@@ -21,6 +21,7 @@ from lucid.fitting.recon import (
     ReconModel, fit_track, fit_track_multistart, track_from_vec9, vec9_from_track, vec9_dir,
     SCALE9, seed_vertex_time,
 )
+from lucid.fitting import report
 from lucid.fitting.contracts import CalibForward, PerPhotonPredictor
 from lucid.fitting.analysis import (
     bootstrap_ci, resolution_stats, vertex_residual, angular_error_deg,
