@@ -21,6 +21,7 @@ __all__ = [
     "SOURCE_TYPE_SUPERNOVA",
     "EMISSION_PROCESS_CHERENKOV",
     "EMISSION_PROCESS_SCINTILLATION",
+    "EMISSION_PROCESS_DARK",
     "build_interaction_metadata",
     "sample_translation_vector",
     "write_sensor_config_v3",
@@ -53,6 +54,7 @@ SOURCE_TYPE_SUPERNOVA = 2
 # downstream consumers can always group/filter by it without a presence check.
 EMISSION_PROCESS_CHERENKOV     = 0
 EMISSION_PROCESS_SCINTILLATION = 1
+EMISSION_PROCESS_DARK          = 2   # electronic dark-noise contribution (particle_idx = -1)
 
 
 def _source_type_code(primary_source):
