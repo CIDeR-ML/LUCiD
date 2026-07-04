@@ -490,7 +490,8 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
                 segment_idx=deposits['segment_idx'],
                 emission_process=deposits['emission_process'],
                 n_sensors=int(n_sensors), model=digitizer_model, rng=digi_rng,
-                dark_rate_khz=float(digitizer_model.get('dark_rate_khz', 0.0)))
+                dark_rate_khz=float(digitizer_model.get('dark_rate_khz', 0.0)),
+                apply_resolution=apply_smearing)
 
             # Shift G4/vertex-frame times into the absolute detector frame by
             # adding t0. Every digit / decomposition row is a real hit, so a

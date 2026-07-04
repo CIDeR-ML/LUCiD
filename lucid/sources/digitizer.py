@@ -286,6 +286,7 @@ def digitize_and_decompose(
     sensor_idx, charge, t_true, t_reco, particle_idx, segment_idx, emission_process,
     n_sensors: int, model: dict, rng: np.random.Generator,
     dark_rate_khz: float = 0.0, readout_pad_ns: float = 100.0,
+    apply_resolution: bool = True,
 ):
     """Full host-side hit-making: per-photon deposits -> digits + decomposition.
 
@@ -338,8 +339,14 @@ def digitize_and_decompose(
                 [emission_process, np.full(d_s.size, EMISSION_PROCESS_DARK, np.int64)])
 
     res = digitize_event(sensor_idx, t_reco, charge, n_sensors, model)
-    pe_reco, t_reco_digit = apply_readout_resolution(
-        res.digit_pe_true, res.digit_time, model, rng)
+    if apply_resolution:
+        pe_reco, t_reco_digit = apply_readout_resolution(
+            res.digit_pe_true, res.digit_time, model, rng)
+    else:
+        # No readout smearing (mirrors the legacy apply_smearing=False path):
+        # digits carry true integrated charge and first-arrival time.
+        pe_reco = res.digit_pe_true.astype(np.float32)
+        t_reco_digit = res.digit_time.astype(np.float32)
     sensor_digits = {
         "sensor_idx": res.digit_sensor_idx.astype(np.uint16),
         "PE": pe_reco,
