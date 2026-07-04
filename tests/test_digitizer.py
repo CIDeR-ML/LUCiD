@@ -6,7 +6,8 @@ import numpy as np
 
 from lucid.sources.digitizer import (
     MODEL_PRESETS, resolve_model_config, digitize_event, generate_dark_noise,
-    charge_resolution_sigma,
+    charge_resolution_sigma, apply_readout_resolution, digitize_and_decompose,
+    EMISSION_PROCESS_DARK,
 )
 
 
@@ -128,6 +129,81 @@ def test_dark_noise_generation_and_labelling():
     dark_digit = r.photon_digit_idx[is_dark][0]
     assert dark_digit >= 0
     np.testing.assert_allclose(r.digit_pe_true[dark_digit], 1.0)
+
+
+def test_apply_readout_resolution():
+    rng = _rng()
+    pe_true = np.array([1.0, 5.0, 100.0])
+    t = np.array([10.0, 20.0, 30.0])
+    # basic (sk_like, no time jitter): pe within a few sigma, time unchanged
+    pr, tr = apply_readout_resolution(pe_true, t, resolve_model_config("basic"), rng)
+    assert (pr >= 0).all()
+    np.testing.assert_allclose(tr, t)  # time_res_ns=0 for basic
+    # qbee applies time jitter (0.3 ns) -> times move
+    pr2, tr2 = apply_readout_resolution(pe_true, t, resolve_model_config("qbee"), _rng())
+    assert not np.allclose(tr2, t)
+
+
+def test_decompose_basic_single_digit_and_conserves():
+    # basic: one digit per sensor; hits/seg decomposition sums to the digit.
+    sensor = np.array([0, 0, 1])
+    charge = np.array([1.0, 2.0, 3.0])
+    t_true = np.array([10.0, 11.0, 20.0])
+    t_reco = np.array([10.5, 11.5, 20.5])
+    particle = np.array([0, 0, 1])
+    segment = np.array([0, 0, 5])
+    emp = np.array([0, 0, 0])
+    sd, hits, seg = digitize_and_decompose(
+        sensor_idx=sensor, charge=charge, t_true=t_true, t_reco=t_reco,
+        particle_idx=particle, segment_idx=segment, emission_process=emp,
+        n_sensors=2, model=resolve_model_config("basic"), rng=_rng())
+    assert sd["sensor_idx"].shape[0] == 2          # one digit per sensor
+    # hits: (p0,s0,d?) PE=3 ; (p1,s1,d?) PE=3
+    assert hits["particle_idx"].tolist() == [0, 1]
+    np.testing.assert_allclose(sorted(hits["PE"]), [3.0, 3.0])
+    # digit_idx maps to the sensor's digit; every hits row has a valid digit
+    assert (hits["digit_idx"] >= 0).all() and hits["digit_idx"].max() < 2
+    # seg decomposition mirrors it (real segments)
+    assert sorted(seg["segment_idx"].tolist()) == [0, 5]
+    np.testing.assert_allclose(sorted(seg["PE"]), [3.0, 3.0])
+
+
+def test_decompose_multihit_splits_digit_idx():
+    # qbee: one particle, one sensor, two time-separated bunches -> two digits,
+    # two hits rows with different digit_idx.
+    sensor = np.array([4, 4])
+    charge = np.array([2.0, 1.5])
+    t = np.array([1000.0, 3000.0])
+    sd, hits, seg = digitize_and_decompose(
+        sensor_idx=sensor, charge=charge, t_true=t, t_reco=t,
+        particle_idx=np.array([0, 0]), segment_idx=np.array([0, 1]),
+        emission_process=np.array([0, 0]),
+        n_sensors=8, model=resolve_model_config("qbee"), rng=_rng())
+    assert sd["sensor_idx"].shape[0] == 2
+    assert (hits["sensor_idx"] == 4).all()
+    assert sorted(hits["digit_idx"].tolist()) == [0, 1]   # split across digits
+    np.testing.assert_allclose(sorted(hits["PE"]), [1.5, 2.0])
+
+
+def test_decompose_dark_is_labelled():
+    rng = np.random.default_rng(0)
+    # one real deposit + dark noise on a big detector over a long window
+    sensor = np.array([2]); charge = np.array([3.0])
+    t = np.array([500.0])
+    sd, hits, seg = digitize_and_decompose(
+        sensor_idx=sensor, charge=charge, t_true=t, t_reco=t,
+        particle_idx=np.array([0]), segment_idx=np.array([0]),
+        emission_process=np.array([0]),
+        n_sensors=2000, model=resolve_model_config("qbee"), rng=rng,
+        dark_rate_khz=50.0, readout_pad_ns=1e6)   # force plenty of dark hits
+    dark_rows = hits["emission_process"] == EMISSION_PROCESS_DARK
+    assert dark_rows.any(), "expected dark-labelled hits rows"
+    # dark rows carry particle_idx = -1 and never appear in the segment table
+    assert (hits["particle_idx"][dark_rows] == -1).all()
+    assert (seg["segment_idx"] >= 0).all()   # seg table has no dark
+    # the real deposit is still present and correctly attributed
+    real = (hits["particle_idx"] == 0)
+    assert real.any() and np.isclose(hits["PE"][real].sum(), 3.0)
 
 
 def _run_all():
