@@ -228,6 +228,153 @@ def digitize_event(
     )
 
 
+def apply_readout_resolution(
+    digit_pe_true: np.ndarray,
+    digit_time: np.ndarray,
+    model: dict,
+    rng: np.random.Generator,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Apply the model's charge resolution and optional electronics time jitter.
+
+    Uniform across all models (including ``basic``): charge is smeared **once**
+    by the model's ``charge_res`` (never stacked on anything else), and time
+    gets an additive electronics jitter ``time_res_ns`` that is distinct from —
+    and on top of — the PMT TTS already carried in ``digit_time``. Returns
+    ``(pe_reco, t_reco)`` as float32.
+    """
+    pe_true = np.asarray(digit_pe_true, dtype=np.float64)
+    if pe_true.size:
+        sigma = charge_resolution_sigma(pe_true, model.get("charge_res", "sk_like"))
+        pe_reco = np.clip(pe_true + rng.normal(size=pe_true.shape) * sigma, 0.0, None)
+    else:
+        pe_reco = pe_true
+    t = np.asarray(digit_time, dtype=np.float64).copy()
+    t_res = float(model.get("time_res_ns", 0.0))
+    if t_res > 0.0 and t.size:
+        t = t + rng.normal(size=t.shape) * t_res
+    return pe_reco.astype(np.float32), t.astype(np.float32)
+
+
+def _group_reduce(key_cols: tuple, pe: np.ndarray, t: np.ndarray, t_reco: np.ndarray):
+    """Group rows by the tuple of integer key columns; PE=sum, T/T_reco=min.
+
+    Returns ``(key_cols_out, PE, T, T_reco)`` where ``key_cols_out`` are the
+    per-group key values (same tuple arity as ``key_cols``). ``key_cols[0]`` is
+    the primary sort key. Mirrors the lexsort+reduceat groupby used elsewhere.
+    """
+    n = pe.shape[0]
+    if n == 0:
+        empty = np.empty(0, dtype=np.int64)
+        return (tuple(empty for _ in key_cols),
+                np.empty(0, np.float64), np.empty(0, np.float64), np.empty(0, np.float64))
+    order = np.lexsort(tuple(reversed(key_cols)))  # key_cols[0] primary
+    cols_s = [np.asarray(c)[order] for c in key_cols]
+    pe_s, t_s, tr_s = pe[order], t[order], t_reco[order]
+    change = np.zeros(n, dtype=bool)
+    change[0] = True
+    for c in cols_s:
+        change[1:] |= c[1:] != c[:-1]
+    starts = np.flatnonzero(change)
+    return ([c[starts] for c in cols_s],
+            np.add.reduceat(pe_s, starts),
+            np.minimum.reduceat(t_s, starts),
+            np.minimum.reduceat(tr_s, starts))
+
+
+def digitize_and_decompose(
+    *,
+    sensor_idx, charge, t_true, t_reco, particle_idx, segment_idx, emission_process,
+    n_sensors: int, model: dict, rng: np.random.Generator,
+    dark_rate_khz: float = 0.0, readout_pad_ns: float = 100.0,
+):
+    """Full host-side hit-making: per-photon deposits -> digits + decomposition.
+
+    Windows the per-deposit ``(sensor, t_reco, charge)`` list into digits, adds
+    optional dark noise (tagged ``emission_process=DARK``, ``particle_idx=-1``,
+    ``segment_idx=-1``), applies the model's readout resolution, and aggregates
+    the per-deposit charge into the ``digit_idx``-aware decompositions.
+
+    All input arrays are per detected deposit (QE already applied upstream),
+    in the G4/vertex time frame — the caller applies the per-interaction t0
+    shift to the returned times.
+
+    Returns ``(sensor_digits, hits_sparse, seg_hits)``:
+      * ``sensor_digits``: ``{sensor_idx, PE, T}`` — the recorded digits (a
+        sensor index may repeat). ``sensor.h5``.
+      * ``hits_sparse``: ``{particle_idx, sensor_idx, digit_idx, PE, T, T_reco,
+        emission_process}`` — per-(source, sensor, digit) rows; dark rows carry
+        ``particle_idx=-1`` / ``emission_process=DARK``. ``hits.h5``.
+      * ``seg_hits``: ``{segment_idx, sensor_idx, digit_idx, PE, T, T_reco,
+        emission_process}`` — real deposits only (dark has no segment).
+    """
+    sensor_idx = np.asarray(sensor_idx, dtype=np.int64)
+    charge = np.asarray(charge, dtype=np.float64)
+    t_true = np.asarray(t_true, dtype=np.float64)
+    t_reco = np.asarray(t_reco, dtype=np.float64)
+    particle_idx = np.asarray(particle_idx, dtype=np.int64)
+    segment_idx = np.asarray(segment_idx, dtype=np.int64)
+    emission_process = np.asarray(emission_process, dtype=np.int64)
+
+    # Drop non-finite times (undetected/invalid deposits carry +inf).
+    finite = np.isfinite(t_reco) & np.isfinite(t_true) & (charge > 0)
+    if not finite.all():
+        sensor_idx, charge, t_true, t_reco, particle_idx, segment_idx, emission_process = (
+            a[finite] for a in (sensor_idx, charge, t_true, t_reco,
+                                particle_idx, segment_idx, emission_process))
+
+    # Dark noise, over the event's readout span (± pad), tagged as DARK.
+    if dark_rate_khz > 0.0 and t_reco.size:
+        t_lo = float(t_reco.min()) - readout_pad_ns
+        t_hi = float(t_reco.max()) + readout_pad_ns
+        d_s, d_t, d_q = generate_dark_noise(n_sensors, dark_rate_khz, t_lo, t_hi, rng)
+        if d_s.size:
+            sensor_idx = np.concatenate([sensor_idx, d_s])
+            charge = np.concatenate([charge, d_q])
+            t_true = np.concatenate([t_true, d_t])
+            t_reco = np.concatenate([t_reco, d_t])
+            particle_idx = np.concatenate([particle_idx, np.full(d_s.size, -1, np.int64)])
+            segment_idx = np.concatenate([segment_idx, np.full(d_s.size, -1, np.int64)])
+            emission_process = np.concatenate(
+                [emission_process, np.full(d_s.size, EMISSION_PROCESS_DARK, np.int64)])
+
+    res = digitize_event(sensor_idx, t_reco, charge, n_sensors, model)
+    pe_reco, t_reco_digit = apply_readout_resolution(
+        res.digit_pe_true, res.digit_time, model, rng)
+    sensor_digits = {
+        "sensor_idx": res.digit_sensor_idx.astype(np.uint16),
+        "PE": pe_reco,
+        "T": t_reco_digit,
+    }
+
+    didx = res.photon_digit_idx
+    is_dark = emission_process == EMISSION_PROCESS_DARK
+
+    # hits.h5: keep digit-assigned deposits with a real particle OR dark.
+    hmask = (didx >= 0) & ((particle_idx >= 0) | is_dark)
+    hk, hPE, hT, hTR = _group_reduce(
+        (particle_idx[hmask], sensor_idx[hmask], didx[hmask], emission_process[hmask]),
+        charge[hmask], t_true[hmask], t_reco[hmask])
+    hits_sparse = {
+        "particle_idx": hk[0].astype(np.int32), "sensor_idx": hk[1].astype(np.uint16),
+        "digit_idx": hk[2].astype(np.int32), "emission_process": hk[3].astype(np.int8),
+        "PE": hPE.astype(np.float32), "T": hT.astype(np.float32),
+        "T_reco": hTR.astype(np.float32),
+    }
+
+    # step/sensor_hits: real deposits only (dark has no segment).
+    smask = (didx >= 0) & (segment_idx >= 0)
+    sk, sPE, sT, sTR = _group_reduce(
+        (segment_idx[smask], sensor_idx[smask], didx[smask], emission_process[smask]),
+        charge[smask], t_true[smask], t_reco[smask])
+    seg_hits = {
+        "segment_idx": sk[0].astype(np.int32), "sensor_idx": sk[1].astype(np.uint16),
+        "digit_idx": sk[2].astype(np.int32), "emission_process": sk[3].astype(np.int8),
+        "PE": sPE.astype(np.float32), "T": sT.astype(np.float32),
+        "T_reco": sTR.astype(np.float32),
+    }
+    return sensor_digits, hits_sparse, seg_hits
+
+
 def generate_dark_noise(
     n_sensors: int,
     rate_khz: float,
