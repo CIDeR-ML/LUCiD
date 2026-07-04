@@ -219,20 +219,32 @@ def make_cherenkov_surrogate_fn(ctx):
         # --- pass 1: SIREN on the bin-center grid ---
         grid_w = _siren_weights(ctx, model_params, energy, grid_angle, grid_s)
 
-        # --- seed region: bins at/above threshold * per-energy grid max.
-        # `>=` keeps the peak bin (threshold < 1) and degrades gracefully to
-        # the whole domain if the grid is all-zero (sub-threshold energy).
-        thresh = threshold * jnp.max(grid_w)
-        above = grid_w >= thresh                          # (g*g,) bool mask
+        if ctx.seed_mode == 'importance':
+            # --- seed bins ∝ grid density (importance sampling). The uniform-over-
+            # kept-bins mode below cuts every bin under threshold*max — collectively
+            # ~5% of the emission (the wide-angle tail; the ring peak sets the max)
+            # — and renormalisation pours it into the ring. Sampling the seed bin
+            # from the grid density keeps the FULL domain (threshold unused) at no
+            # variance cost: the per-ray weight divides out the proposal, so
+            # w/q ≈ 1 for a smooth density instead of spanning orders of magnitude.
+            cw = jnp.cumsum(grid_w)
+            u = random.uniform(pick_key, (Nphot,), minval=0.0, maxval=cw[-1])
+            bin_idx = jnp.clip(jnp.searchsorted(cw, u), 0, grid_w.shape[0] - 1)
+        else:
+            # --- seed region: bins at/above threshold * per-energy grid max.
+            # `>=` keeps the peak bin (threshold < 1) and degrades gracefully to
+            # the whole domain if the grid is all-zero (sub-threshold energy).
+            thresh = threshold * jnp.max(grid_w)
+            above = grid_w >= thresh                          # (g*g,) bool mask
 
-        # Uniformly pick Nphot of the M above-threshold bins. Drawing a rank in
-        # [0, M) and mapping it to a bin via searchsorted on the inclusive
-        # cumulative count keeps everything (Nphot,)- and (g*g,)-sized — unlike
-        # random.categorical, which would materialise a (Nphot, g*g) array.
-        csum = jnp.cumsum(above.astype(jnp.int32))        # (g*g,), runs 0..M
-        n_seed_bins = csum[-1]                            # M (traced scalar)
-        rank = random.randint(pick_key, (Nphot,), 0, n_seed_bins)
-        bin_idx = jnp.searchsorted(csum, rank + 1)        # r-th above-thresh bin
+            # Uniformly pick Nphot of the M above-threshold bins. Drawing a rank in
+            # [0, M) and mapping it to a bin via searchsorted on the inclusive
+            # cumulative count keeps everything (Nphot,)- and (g*g,)-sized — unlike
+            # random.categorical, which would materialise a (Nphot, g*g) array.
+            csum = jnp.cumsum(above.astype(jnp.int32))        # (g*g,), runs 0..M
+            n_seed_bins = csum[-1]                            # M (traced scalar)
+            rank = random.randint(pick_key, (Nphot,), 0, n_seed_bins)
+            bin_idx = jnp.searchsorted(csum, rank + 1)        # r-th above-thresh bin
 
         # --- LHS-stratified jitter within the chosen bins ---
         # Same role as the previous independent-uniform jitter, but the
@@ -247,6 +259,10 @@ def make_cherenkov_surrogate_fn(ctx):
 
         # --- pass 2: SIREN at the jittered seed points ---
         w = _siren_weights(ctx, model_params, energy, angle, s_over_smax)
+        if ctx.seed_mode == 'importance':
+            # importance weight: target f(jittered point) / proposal q(bin) — the density
+            # cancels to ~1 within a bin, so ray weights stay O(1) across the whole domain.
+            w = w / jnp.maximum(grid_w[bin_idx], 1e-30)
 
         # s/s_max -> physical distance along the track (mm -> m for origins).
         physical_dist_mm = s_over_smax * ctx.s_max_fn(energy)

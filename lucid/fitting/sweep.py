@@ -37,7 +37,7 @@ import os, json, time, subprocess
 
 # Recipe = the committed default (5312c93 + the time_weight knob). Override (partially) via run_sweep(recipe=...).
 DEFAULT_RECIPE = dict(lr=4.0, lr_final=1.5, ridge_i=0.1, lam=0.01,
-                      nkeys=8, niters=150, refresh=8, time_weight=1.0)
+                      nkeys=8, niters=150, refresh=8, time_weight=1.0, trust=3.0)
 POSE_STRIDE = 1000          # pose_seed = pose_seed_base + event*STRIDE + pose  (stable across configs)
 DEFAULT_DATA_ROOT = "/sdf/group/neutrino/omara/LUCiD_dlcheck/data/water/{particle}/{energy}MeV_100events.root"
 DEFAULT_GEOM = "config/SK_like_geom_config.json"
@@ -82,9 +82,11 @@ def _make_engine(cfg):
     geom = cfg["geom"] if os.path.isabs(cfg["geom"]) else os.path.join(root, cfg["geom"])
     phys = cfg["phys"] if os.path.isabs(cfg["phys"]) else os.path.join(root, cfg["phys"])
 
-    _orig = SIM.unpack_siren_params                                   # force the low ray-sampling tail
-    def _patched(p, m):
-        c = dict(_orig(p, m)); c["ray_sampling"] = {**c.get("ray_sampling", {}), "threshold": 0.001}; return c
+    _orig = SIM.unpack_siren_params                                   # importance seed sampling: keeps
+    def _patched(p, m):                                               # the full angular tail (threshold
+        c = dict(_orig(p, m))                                         # unused). Explicit so recon is
+        c["ray_sampling"] = {**c.get("ray_sampling", {}), "seed_mode": "importance"}  # robust to the code default.
+        return c
     SIM.unpack_siren_params = _patched
 
     det = generate_detector(geom); ND = len(det.all_points)
@@ -100,8 +102,12 @@ def _make_engine(cfg):
         pred = setup_event_simulator(geom, int(nph), temperature=0.1, K=K, hit_mode="per_photon",
             physics_config=phys, default_detector_params=True, particle=particle, wavelength_mode=True,
             pos_grad_threshold=K, n_grad_iters=K, cherenkov_emission_band=band, max_candidates_per_ray=4)
+        # energy_from_scale (mode 'simtotal'): the charge energy-gradient is routed through the
+        # SIM's total charge, not the shape — removes the profile-bias that a small emission-shape
+        # misspecification otherwise puts on energy via the soft (E↔geometry) degeneracy.
         model = ReconModel(pred, ND, sigma=float(cfg["tts"]), delta=1.0,
-                           time_weight=float(cfg["recipe"].get("time_weight", 1.0)))
+                           time_weight=float(cfg["recipe"].get("time_weight", 1.0)),
+                           energy_from_scale=True, energy_scale_mode="simtotal")
         return data_sim, pred, model
     return dict(geom=geom, phys=phys, ND=ND, POS=POS, bounds=bounds, K=K, NBUF=NBUF, build=build, det=det, root=root)
 
@@ -235,7 +241,8 @@ def _run_shard(cfg, shard, nshards, out_dir):
             res, H = fit_track(model, oc, ot, seed, nkeys=rec["nkeys"], niters=rec["niters"], lr=rec["lr"],
                                lr_final=rec["lr_final"], ridge_i=rec["ridge_i"], lam=rec["lam"],
                                refresh=rec["refresh"], refresh_final=rec.get("refresh_final"),
-                               refresh_switch=rec.get("refresh_switch", 0.5), fisher_mode="ad", hist=True)
+                               refresh_switch=rec.get("refresh_switch", 0.5), fisher_mode="ad", hist=True,
+                               trust=rec.get("trust"))
             wall = time.time() - ts
             traj = np.asarray(H["traj"]); dl, e1, e2 = _basis(dirt)
             def lt(x):
@@ -254,7 +261,11 @@ def _run_shard(cfg, shard, nshards, out_dir):
                        vtx_err=vtot, vtx_long=vlong, vtx_trans=vtran,
                        dir_deg=float(np.degrees(np.arccos(np.clip(vec9_dir(res) @ dirt, -1, 1)))),
                        dE=float(res[0] - E), dt0=float(res[8]), conv_iter=int(conv), wall=float(wall),
-                       n_hit=int((oc > 0).sum()), total_charge=float(oc.sum()))
+                       n_hit=int((oc > 0).sum()), total_charge=float(oc.sum()),
+                       # full fitted/seed 9-vecs + signed truth frame: keeps the row re-scorable
+                       # (vtx_long above is |·|; the signed value needs the vectors)
+                       fit9=[float(x) for x in res], seed9=[float(x) for x in seed],
+                       truth9=[float(x) for x in th9], dir_true=[float(x) for x in dirt])
         except Exception as e:                                               # never lose a shard to one bad fit
             row = dict(particle=w["particle"], energy=w["energy"], nph=w["nph"], event=w["event"], pose=w["pose"],
                        error=str(e)[:300])
