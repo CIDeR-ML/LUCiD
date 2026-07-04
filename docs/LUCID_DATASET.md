@@ -207,7 +207,8 @@ labl.h5
     ├── per_interaction/                         (1 row for non-pile-up; N rows for N-way pile-up)
     │   ├── source_type, t0, vertex_{x,y,z}       — see save_labl_event_v3 docstring
     │   ├── n_primaries, n_particles              — ints per interaction
-    │   ├── neutrino_pdg, neutrino_energy_MeV     — GENIE-only, zeroed for particle-gun
+    │   ├── neutrino_pdg, neutrino_energy_MeV     — GENIE/supernova-only, zeroed for particle-gun
+    │   ├── interaction_channel, channel          — supernova-only: sntools channel code (int) + name ("ibd"/"es"/"o16e"/"o16eb")
     │   ├── contained                            (n_interactions,) bool — AND over particles attributed to this interaction; False if interaction has no particles
     │   └── CSR primary_{track_ids,pdgs,energies}_{offsets,data}
     ├── per_particle/                            (~8 rows for typical LUCiD events)

@@ -84,8 +84,20 @@ def _parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--skip-genie", action="store_true",
-        help="Skip the GENIE step (gevgen+gntpc). Has no effect when "
-             "primary_source != 'genie'.",
+        help="Skip the rooTracker-generator step (GENIE gevgen+gntpc, or "
+             "sntools for supernova). Has no effect when primary_source is "
+             "particle-gun/bomb.",
+    )
+    parser.add_argument(
+        "--sn-model", type=str, default=None,
+        help="Supernova model name; selects an entry in the config's "
+             "supernova.models. The fan-out passes one per model×ordering "
+             "subcase. Only used when primary_source == 'supernova'.",
+    )
+    parser.add_argument(
+        "--sn-ordering", type=str, default=None,
+        help="Mass-ordering label (NMO/IMO/noosc) → sntools --transformation. "
+             "Only used when primary_source == 'supernova'.",
     )
     parser.add_argument(
         "--skip-photonsim", action="store_true",
@@ -129,6 +141,8 @@ def _load_config(path: str) -> dict:
                         f"Pile-up vertex {i} missing 'particles'/'energy_distribution'")
     elif cfg.get("primary_source") == "genie":
         required.append("genie")
+    elif cfg.get("primary_source") == "supernova":
+        required.append("supernova")
     elif cfg.get("primary_source") == "bomb":
         required.append("bomb")
     else:
@@ -328,6 +342,11 @@ def main(argv: Optional[list[str]] = None) -> int:
     # separate processes and still agree on the path.
     gtrac_path = output_dir / f"gntp_job_{job_id_padded}.gtrac.root"
     uses_genie = config.get("primary_source") == "genie"
+    uses_supernova = config.get("primary_source") == "supernova"
+    # Both GENIE and supernova feed PhotonSim through the rooTracker /
+    # /gun/genieInput path; the macro builder and beamOn-count handling are
+    # shared, only the Step-0 generator differs.
+    uses_rootracker = uses_genie or uses_supernova
 
     # Step 0: GENIE event generation (only when the config requests it).
     # GENIE configs use primary-by-primary injection in PhotonSim: gevgen
@@ -380,6 +399,52 @@ def main(argv: Optional[list[str]] = None) -> int:
             photonsim_events = int(marker.read_text().strip())
             print(f"GENIE primary count from cache: {photonsim_events}")
 
+    # Step 0 (supernova): sntools event generation → rooTracker. Mirrors the
+    # GENIE path — one sntools event per rooTracker entry, and beamOn is set to
+    # the entry count. The burst size is data-driven; --test / --n-events /
+    # supernova.cap_events truncate it for validation runs.
+    if uses_supernova and not args.skip_genie:
+        try:
+            from lucid.production.run_supernova import run_supernova
+            print("\n=== Step 0: supernova (sntools) event generation ===", flush=True)
+            sn_cap = None
+            if args.test:
+                sn_cap = 2
+            elif args.n_events is not None:
+                sn_cap = args.n_events
+            elif config["supernova"].get("cap_events") is not None:
+                sn_cap = int(config["supernova"]["cap_events"])
+            t_sn = time.time()
+            produced, n_entries = run_supernova(
+                config=config,
+                output_dir=output_dir,
+                job_id=args.job_id,
+                model_name=args.sn_model,
+                ordering=args.sn_ordering,
+                seed=subproc_seeds['genie_seed'],
+                cap_events=sn_cap,
+            )
+            print(f"sntools elapsed: {time.time() - t_sn:.1f}s")
+            print(f"supernova rootracker: {produced} ({n_entries} events)")
+            if produced != gtrac_path:
+                print(f"Warning: sntools output {produced} != expected {gtrac_path}")
+            photonsim_events = n_entries
+            (output_dir / f"gntp_job_{job_id_padded}.primaries.txt"
+             ).write_text(str(n_entries) + "\n")
+        except Exception as e:
+            print(f"supernova step failed: {e}", file=sys.stderr)
+            return EXIT_PHOTONSIM
+    elif uses_supernova and args.skip_genie and not args.skip_photonsim:
+        if not gtrac_path.is_file():
+            print(f"Error: --skip-genie set but {gtrac_path} does not exist "
+                  f"(required for PhotonSim step with primary_source=supernova).",
+                  file=sys.stderr)
+            return EXIT_PHOTONSIM
+        marker = output_dir / f"gntp_job_{job_id_padded}.primaries.txt"
+        if marker.is_file():
+            photonsim_events = int(marker.read_text().strip())
+            print(f"supernova event count from cache: {photonsim_events}")
+
     # Step 1+2: Generate macro and run PhotonSim
     if not args.skip_photonsim:
         from lucid.production.generate_macro import generate_macro
@@ -389,7 +454,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             output_root_file=root_filename,
             n_events=photonsim_events,
             override_energy_MeV=args.override_energy_MeV,
-            genie_rootracker=str(gtrac_path) if uses_genie else None,
+            genie_rootracker=str(gtrac_path) if uses_rootracker else None,
             photonsim_seeds=(subproc_seeds['photonsim_seed1'],
                              subproc_seeds['photonsim_seed2']),
         )
@@ -447,6 +512,23 @@ def main(argv: Optional[list[str]] = None) -> int:
         print(f"    {m}")
     if not ok:
         return EXIT_VERIFY
+
+    # Supernova: stamp the interaction channel (IBD/ES/o16e/o16eb) into the
+    # labl truth from the sidecar run_supernova wrote next to the rooTracker.
+    # Non-fatal: a valid dataset must not fail over truth annotation.
+    if uses_supernova:
+        try:
+            from lucid.production.run_supernova import annotate_labl_channels
+            labl_path = output_dir / "labl" / f"wc_labl_{file_index:04d}.h5"
+            sidecar = output_dir / f"gntp_job_{job_id_padded}.channels.json"
+            if labl_path.is_file() and sidecar.is_file():
+                n_ann = annotate_labl_channels(labl_path, sidecar)
+                print(f"Annotated interaction channel into {n_ann} labl events")
+            else:
+                print(f"Warning: channel sidecar/labl missing "
+                      f"({sidecar.name} / {labl_path.name}); skipped channel annotation")
+        except Exception as e:
+            print(f"Warning: channel annotation failed: {e}")
 
     # Step 5: Cleanup ROOT if requested
     cleanup = bool(config.get("cleanup_root_files", False)) and not args.keep_root

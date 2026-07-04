@@ -127,7 +127,7 @@ honors:
 | `config_number` | int | unique ID, used as `config_NNNNNN` output folder |
 | `name` | string | dataset label, recorded in HDF5 provenance |
 | `material` | string | `"water"` (others later) |
-| `primary_source` | string | `"particle_gun"` or `"genie"` |
+| `primary_source` | string | `"particle_gun"`, `"genie"`, `"bomb"`, or `"supernova"` |
 | `energy_distribution` | string | `"uniform"` or `"monoenergetic"` |
 | `particles` | array | per-particle type + energy ranges |
 | `lucid_options` | object | LUCiD writer flags (smearing, translation, etc.) |
@@ -139,6 +139,12 @@ honors:
 gevgen → gntpc → PhotonSim → LUCiD, all in-container, using
 `$GENIE_XSEC_FILE` (which is exported into the container as
 `APPTAINERENV_GENIE_XSEC_FILE`).
+
+`primary_source: "supernova"` chains sntools → rooTracker → PhotonSim →
+LUCiD instead, and fans out into `config_NNNNNN/<model>/<ordering>/`
+subcases (one per `supernova.models × supernova.orderings`). It needs a
+`supernova` block and `SN_ENV_BASE` (sntools+snewpy) rather than GENIE.
+See `lucid/production/README.md` § "Supernova bursts (sntools)".
 
 ### Time-based fan-out (`events_schedule`)
 
