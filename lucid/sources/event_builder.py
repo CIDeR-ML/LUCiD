@@ -730,6 +730,46 @@ def combine_t_per_sensor_across_processes(t_arrays):
     return np.where(np.isfinite(combined), combined, 0.0).astype(np.float32)
 
 
+def gather_photon_deposits(process_outputs):
+    """Flatten per-deposit photon records across emission processes.
+
+    Each process output carries per-(photon, sensor) detected deposits in
+    ``particle_data['photon_records_filtered']`` (QE already applied upstream).
+    This concatenates them into flat arrays for the digitizer, tagging each row
+    with the process's ``process_id`` as the ``emission_process``. Returns a
+    dict of equal-length arrays (empty when no deposits / no records).
+    """
+    S, W, TT, TR, PI, SEG, EMP = [], [], [], [], [], [], []
+    for p_out in process_outputs:
+        pr = (p_out.get('particle_data') or {}).get('photon_records_filtered')
+        if not pr:
+            continue
+        w = np.asarray(pr['qe_weight'])
+        if w.size == 0:
+            continue
+        proc = int(p_out.get('process_id', 0))
+        S.append(np.asarray(pr['sensor_idx']))
+        W.append(w)
+        TT.append(np.asarray(pr['qe_time']))
+        TR.append(np.asarray(pr.get('qe_time_reco', pr['qe_time'])))
+        PI.append(np.asarray(pr['particle_idx']))
+        SEG.append(np.asarray(pr['seg_idx_filtered']))
+        EMP.append(np.full(w.size, proc, dtype=np.int64))
+
+    def _cat(xs, dt):
+        return np.concatenate(xs).astype(dt) if xs else np.array([], dtype=dt)
+
+    return {
+        'sensor_idx':       _cat(S, np.int64),
+        'charge':           _cat(W, np.float64),
+        't_true':           _cat(TT, np.float64),
+        't_reco':           _cat(TR, np.float64),
+        'particle_idx':     _cat(PI, np.int64),
+        'segment_idx':      _cat(SEG, np.int64),
+        'emission_process': _cat(EMP, np.int64),
+    }
+
+
 def build_hits_sparse_per_process(process_outputs, n_particles):
     """Sparse-merge per-process dense PE/T tensors into hits-file rows.
 
