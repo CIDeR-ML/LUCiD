@@ -9,7 +9,7 @@ Two flavours:
     unambiguous truth marker).
 
   - `is_complete_dataprod(cell_dir, file_index, expected_events)` — a
-    dataprod sub-job has finished iff all four v3 files exist, open with
+    dataprod sub-job has finished iff all four files exist, open with
     h5py, and report the expected `config.attrs['n_events']`.
 
 Both used to live inline in `jobs/dataprod/verify_jobs.py` and
@@ -36,18 +36,18 @@ def is_complete_siren(root_path: Path) -> bool:
 
 def is_complete_dataprod(cell_dir: Path, file_index: int,
                           expected_events: Optional[int]) -> Tuple[bool, str]:
-    """True iff the four v3 files exist with expected n_events.
+    """True iff the four files exist with expected n_events.
 
     Returns (ok, short_reason). `short_reason` is "" when ok. Imports
-    h5py and the v3 layout helpers lazily so this module is importable
+    h5py and the layout helpers lazily so this module is importable
     in environments without h5py (e.g. on the lxplus host outside the
     container).
     """
     import h5py
-    from lucid.production.verify_output import V3_SUBDIRS, v3_batch_paths
+    from lucid.production.verify_output import SUBDIRS, batch_paths
 
-    paths = v3_batch_paths(cell_dir, file_index)
-    for sub in V3_SUBDIRS:
+    paths = batch_paths(cell_dir, file_index)
+    for sub in SUBDIRS:
         p = paths[sub]
         if not p.is_file():
             return False, f"missing {sub}"

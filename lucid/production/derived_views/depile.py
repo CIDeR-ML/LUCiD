@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""De-pile a v3 pile-up dataset: split each event's N interactions into N separate
+"""De-pile a pile-up dataset: split each event's N interactions into N separate
 single-interaction events (Option A — one folder, ~2x events).
 
 ROOT-free: pure re-indexing of the stored sensor/hits/step/labl files.
@@ -12,7 +12,7 @@ Source event e (interactions 0..M-1) -> dest events [e*M_max ... ] sequential.
 Processes ONE file index (resumable: re-run skips files whose dest event count
 already matches). Usage: depile.py SRC_DIR DST_DIR FILE_INDEX
 
-Dataset-agnostic: works on any v3 pile-up dataset. See submit_depile_array.sbatch
+Dataset-agnostic: works on any pile-up dataset. See submit_depile_array.sbatch
 in this directory for the SLURM array driver, and README.md for the derived-view
 family (relabel_*.py) and the hard-won gotchas.
 """

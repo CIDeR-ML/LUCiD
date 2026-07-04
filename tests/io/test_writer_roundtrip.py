@@ -1,7 +1,7 @@
-"""End-to-end roundtrip test for v3 writers + readers.
+"""End-to-end roundtrip test for writers + readers.
 
-Builds a synthetic event, writes it through all four v3 save functions,
-reads it back via the v3 readers, and verifies every documented dataset
+Builds a synthetic event, writes it through all four save functions,
+reads it back via the readers, and verifies every documented dataset
 and attr is present with the right dtype / shape.
 """
 import os
@@ -11,23 +11,23 @@ import h5py
 import numpy as np
 import pytest
 
-from lucid.sources.v3_writer import (
-    write_sensor_config_v3, write_hits_config_v3,
-    write_step_config_v3, write_labl_config_v3,
-    save_sensor_event_v3, save_hits_event_v3,
-    save_step_event_v3, save_labl_event_v3,
+from lucid.sources.writer import (
+    write_sensor_config, write_hits_config,
+    write_step_config, write_labl_config,
+    save_sensor_event, save_hits_event,
+    save_step_event, save_labl_event,
 )
-from lucid.sources.v3_reader import (
-    read_sensor_event_v3, read_hits_event_v3,
-    read_step_event_v3, read_labl_event_v3,
-    list_events_v3,
+from lucid.sources.reader import (
+    read_sensor_event, read_hits_event,
+    read_step_event, read_labl_event,
+    list_events,
 )
 
-from tests.io._v3_event_fixture import build_synthetic_event
+from tests.io._event_fixture import build_synthetic_event
 
 
 @pytest.fixture
-def v3_batch(tmp_path):
+def batch(tmp_path):
     cfg, ev, sensor_positions = build_synthetic_event()
     paths = {
         'sensor': tmp_path / 'wc_sensor_0000.h5',
@@ -40,19 +40,19 @@ def v3_batch(tmp_path):
          h5py.File(paths['hits'],   'w') as fi, \
          h5py.File(paths['step'],    'w') as fg, \
          h5py.File(paths['labl'],   'w') as fl:
-        write_sensor_config_v3(fs, cfg, src_idx, sensor_positions)
-        write_hits_config_v3(fi, cfg, src_idx, sensor_positions)
-        write_step_config_v3(fg, cfg, src_idx)
-        write_labl_config_v3(fl, cfg, src_idx)
-        save_sensor_event_v3(fs, ev, seq_idx=0)
-        save_hits_event_v3(fi, ev, seq_idx=0)
-        save_step_event_v3(fg, ev, seq_idx=0)
-        save_labl_event_v3(fl, ev, seq_idx=0)
+        write_sensor_config(fs, cfg, src_idx, sensor_positions)
+        write_hits_config(fi, cfg, src_idx, sensor_positions)
+        write_step_config(fg, cfg, src_idx)
+        write_labl_config(fl, cfg, src_idx)
+        save_sensor_event(fs, ev, seq_idx=0)
+        save_hits_event(fi, ev, seq_idx=0)
+        save_step_event(fg, ev, seq_idx=0)
+        save_labl_event(fl, ev, seq_idx=0)
     return paths, cfg, ev, sensor_positions
 
 
-def test_config_present_in_all_files(v3_batch):
-    paths, cfg, ev, _ = v3_batch
+def test_config_present_in_all_files(batch):
+    paths, cfg, ev, _ = batch
     for name, path in paths.items():
         with h5py.File(path, 'r') as f:
             assert 'config' in f, f"{name} missing config group"
@@ -65,9 +65,9 @@ def test_config_present_in_all_files(v3_batch):
                 np.array([ev['source_event_idx']], dtype=np.uint32))
 
 
-def test_sensor_event_roundtrip(v3_batch):
-    paths, cfg, ev, sensor_positions = v3_batch
-    sensor = read_sensor_event_v3(str(paths['sensor']), 0)
+def test_sensor_event_roundtrip(batch):
+    paths, cfg, ev, sensor_positions = batch
+    sensor = read_sensor_event(str(paths['sensor']), 0)
     # Sensors 0..4 have PE; others don't
     assert sensor['n_hits'] == 5
     # Stored T equals input T: save_* no longer shifts — the caller is
@@ -80,9 +80,9 @@ def test_sensor_event_roundtrip(v3_batch):
         assert f['config/sensor_positions'].shape == sensor_positions.shape
 
 
-def test_hits_event_roundtrip(v3_batch):
-    paths, cfg, ev, _ = v3_batch
-    inst = read_hits_event_v3(str(paths['hits']), 0)
+def test_hits_event_roundtrip(batch):
+    paths, cfg, ev, _ = batch
+    inst = read_hits_event(str(paths['hits']), 0)
     assert inst['n_particles'] == 2
     # Particle 0 has 3 hits, particle 1 has 2
     assert inst['n_particle_hits'] == 5
@@ -94,9 +94,9 @@ def test_hits_event_roundtrip(v3_batch):
     assert np.allclose(inst['T'], expected_t)
 
 
-def test_step_event_roundtrip(v3_batch):
-    paths, cfg, ev, _ = v3_batch
-    seg = read_step_event_v3(str(paths['step']), 0)
+def test_step_event_roundtrip(batch):
+    paths, cfg, ev, _ = batch
+    seg = read_step_event(str(paths['step']), 0)
     assert seg['n_tracks'] == 3
     assert seg['n_segments'] == 4
     # First two segments belong to track 0 (local idx), next two to track 2
@@ -116,23 +116,23 @@ def test_step_event_roundtrip(v3_batch):
 
 def test_step_event_group_id_roundtrip(tmp_path):
     """Explicit group_id values written by the caller round-trip unchanged."""
-    from lucid.sources.v3_writer import write_step_config_v3
+    from lucid.sources.writer import write_step_config
     cfg, ev, _ = build_synthetic_event()
     # Two coarser groups: segments 0+1 → group 0, segments 2+3 → group 1.
     ev['segments']['group_id'] = np.array([0, 0, 1, 1], dtype=np.int32)
     seg_path = tmp_path / 'wc_step_0000.h5'
     src_idx = np.array([ev['source_event_idx']], dtype=np.uint32)
     with h5py.File(seg_path, 'w') as fg:
-        write_step_config_v3(fg, cfg, src_idx)
-        save_step_event_v3(fg, ev, seq_idx=0)
-    seg = read_step_event_v3(str(seg_path), 0)
+        write_step_config(fg, cfg, src_idx)
+        save_step_event(fg, ev, seq_idx=0)
+    seg = read_step_event(str(seg_path), 0)
     np.testing.assert_array_equal(
         seg['group_id'], np.array([0, 0, 1, 1], dtype=np.int32))
 
 
-def test_labl_event_roundtrip(v3_batch):
-    paths, cfg, ev, _ = v3_batch
-    labl = read_labl_event_v3(str(paths['labl']), 0)
+def test_labl_event_roundtrip(batch):
+    paths, cfg, ev, _ = batch
+    labl = read_labl_event(str(paths['labl']), 0)
     assert labl['n_particles'] == 2
     assert labl['n_tracks'] == 3
     # per_event: contained scalar + t0 = min(per_interaction/t0)
@@ -181,15 +181,15 @@ def test_labl_event_roundtrip(v3_batch):
     np.testing.assert_array_equal(pt['interaction'], np.array([0, 0, 0], dtype=np.int32))
 
 
-def test_list_events_v3(v3_batch):
-    paths, _, ev, _ = v3_batch
+def test_list_events(batch):
+    paths, _, ev, _ = batch
     for path in paths.values():
-        idx = list_events_v3(str(path))
+        idx = list_events(str(path))
         np.testing.assert_array_equal(idx, [ev['source_event_idx']])
 
 
-def test_source_event_idx_matches_across_files(v3_batch):
-    paths, _, ev, _ = v3_batch
+def test_source_event_idx_matches_across_files(batch):
+    paths, _, ev, _ = batch
     for path in paths.values():
         with h5py.File(path, 'r') as f:
             assert f['event_000'].attrs['source_event_idx'] == ev['source_event_idx']

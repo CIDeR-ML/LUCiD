@@ -1,8 +1,8 @@
-"""Shared synthetic event_dict fixture for v3 writer/reader tests.
+"""Shared synthetic event_dict fixture for writer/reader tests.
 
 Builds a small event with 2 particles, 3 tracks, 4 segments and a handful of
 sensor hits. Structured to match what ``generate_events_from_photonsim_particles``
-produces just before calling the v3 save functions.
+produces just before calling the save functions.
 """
 import numpy as np
 

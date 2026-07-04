@@ -240,7 +240,7 @@ def make_hits_per_photon(
         apply_smearing=False, tts=0.0, flat_segment_idx=None):
     """Per-sensor totals PLUS pass-through per-photon arrays for host aggregation.
 
-    The production v3 'hits' file needs a per-(segment, sensor) PE decomposition,
+    The production 'hits' file needs a per-(segment, sensor) PE decomposition,
     which is done on the host in NumPy. This mode returns the per-sensor measured
     charge/time (identical QE + TTS draws to :func:`make_hits_data`) AND the
     surviving per-photon arrays (QE-weight, true + TTS-smeared times, sensor index,

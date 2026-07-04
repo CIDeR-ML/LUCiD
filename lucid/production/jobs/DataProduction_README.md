@@ -152,7 +152,7 @@ S3DF's `preemptable` QoS occasionally bumps jobs, and SLURM time limits
 are easier to live with when each sub-job is short. To target ~1h per
 sub-job, add an `events_schedule` block to the config — `generate_jobs.sh`
 will derive `n_jobs` and `n_events_per_job` automatically (overriding the
-flat fields). Each sub-job still produces one independent v3 batch
+flat fields). Each sub-job still produces one independent batch
 (`file_index = job_id - 1`), so no merge step is needed afterwards.
 
 ```json
@@ -245,7 +245,7 @@ OUTPUT_BASE_PATH/SK_like/           # detector chosen via submit_all_configs.sh 
 ```
 
 See [`docs/LUCID_DATASET.md`](../../../docs/LUCID_DATASET.md) for the
-v3 schema (sensor / hits / edep / labl files, `config/` provenance
+schema (sensor / hits / edep / labl files, `config/` provenance
 group, particle categorization, segment merging rules).
 
 ## Monitoring & cleanup
@@ -264,7 +264,7 @@ scancel -u $USER -n photonsi
 ## Finding and resubmitting failed jobs
 
 `verify_jobs.py` walks a dataprod tree, locates every `submit_job_*.sbatch`,
-and flags ones whose v3 batch (`wc_{sensor,hits,step,labl}_<file_index>.h5`)
+and flags ones whose batch (`wc_{sensor,hits,step,labl}_<file_index>.h5`)
 is missing, unreadable, or whose `config/n_events` attr doesn't match the
 per-job event count baked into the sbatch (or its parent config JSON).
 Datasets need no merging — each `file_index` batch is its own shard — so

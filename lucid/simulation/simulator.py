@@ -304,7 +304,7 @@ def setup_event_simulator(
                                  gain=gain, spe_width=spe_width, t0=t0, tts=tts)
 
     def _make_hits_per_segment(flat_weights, flat_indices, flat_times, num_sensors, qe_key, qe, qe_corrections, response=None, flat_segment_idx=None):
-        # Production v3: per-sensor totals + per-photon pass-through arrays (incl the
+        # Production: per-sensor totals + per-photon pass-through arrays (incl the
         # per-photon segment index) for the host-side per-(segment, sensor) groupby.
         tts = 0.0 if response is None else response[3]
         return make_hits_per_photon(flat_weights, flat_indices, flat_times, num_sensors,
