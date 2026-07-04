@@ -592,6 +592,7 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
             'smearing_applied': bool(apply_smearing),
             'smearing_charge_function': 'SK_like' if apply_smearing else 'none',
             'smearing_time_function': 'SK_like' if apply_smearing else 'none',
+            'digitizer_model': str(digitizer_model['model']),
             'label_names': ['category'],
         }
 

@@ -46,11 +46,12 @@ These apply across all four files:
   `event_NNN/` group names align modalities. Each `event_NNN/` carries an
   `source_event_idx` attribute that loaders cross-check.
 - **Emission-process encoding**: per-row `emission_process: int8` columns on
-  `hits/` and `step/sensor_hits/` tag which physical process produced each
-  charge contribution. Enum: `0 = Cherenkov`, `1 = scintillation`. A given
-  `(particle_idx, sensor_idx)` (or `(segment_idx, sensor_idx)`) pair can appear
-  in multiple rows differing only in `emission_process` when both processes
-  contribute. Cherenkov-only datasets carry the column with all-zeros so
+  `hits/` and `step/sensor_hits/` tag what produced each charge contribution.
+  Enum: `0 = Cherenkov`, `1 = scintillation`, `2 = dark noise` (electronics, on
+  `hits/` only — dark has no segment). A given `(particle_idx, sensor_idx,
+  digit_idx)` (or `(segment_idx, sensor_idx, digit_idx)`) key can appear in
+  multiple rows differing only in `emission_process` when more than one process
+  contributes. Cherenkov-only datasets carry the column with all-zeros so
   consumers can group/filter by it without a presence check. Pre-Phase-0
   datasets that lack the column read as all-zeros via the reader's backward-
   compat default.
@@ -75,27 +76,37 @@ for integrity checks and fast event enumeration.
 
 ## File schemas
 
-### `sensor.h5` — raw PMT readout
+### `sensor.h5` — recorded PMT digits (hit-making output)
 
-Post-smearing, t0-shifted. This is what the detector electronics would see.
+Post-smearing, t0-shifted. This is what the detector electronics record — a
+list of **digits** produced by the digitizer (see `lucid/sources/digitizer.py`).
+A digit is one recorded hit: charge integrated over a per-sensor time window at
+its first-arrival time. **A `sensor_idx` may appear in more than one row** when
+light arrives in well-separated time clusters (delayed coincidence, pile-up,
+dark noise). The `basic` model (default) uses an infinite window, so it yields
+exactly one digit per sensor — the legacy one-hit-per-sensor behaviour.
 
 ```
 sensor.h5
 ├── config/
 │   ├── attrs: provenance + n_sensors, detector_type, material,
-│   │           smearing_applied, smearing_charge_function, smearing_time_function
+│   │           smearing_applied, smearing_charge_function, smearing_time_function,
+│   │           digitizer_model   — "basic" | "ski" | "qbee" | "hk"
 │   ├── source_event_idx      (n_events,) uint32
 │   └── sensor_positions      (n_sensors, 3) float32
 └── event_NNN/
-    │ attrs: source_event_idx, n_hits
-    ├── sensor_idx            (n_hits,) uint16
-    ├── PE                    (n_hits,) float32   — post-smearing photoelectrons
-    └── T                     (n_hits,) float32   — first-hit time, detector frame
+    │ attrs: source_event_idx, n_hits   (= number of digits)
+    ├── sensor_idx            (n_hits,) uint16   — PMT index; may repeat (multi-hit)
+    ├── PE                    (n_hits,) float32   — digit charge (post readout resolution)
+    └── T                     (n_hits,) float32   — digit first-arrival time, detector frame
 ```
 
 Notes:
-- `sensor_idx` is the PMT index (0..n_sensors-1).
-- `PE` and `T` are sparse over PMTs that registered any hit in the event.
+- `sensor_idx` is the PMT index (0..n_sensors-1); one row per **digit**, not per PMT.
+- `hits.h5` / `step.h5` rows carry a `digit_idx` FK into this file's per-event
+  digit list, decomposing each digit's charge by source (and dark noise).
+- Digitizer model + electronics parameters come from the detector physics
+  config's optional `"digitizer"` block; absent ⇒ `basic`.
 - Sensor file is the only file that needs smearing parameters in its config.
 
 ### `hits.h5` — per-particle PMT decomposition
@@ -111,14 +122,20 @@ hits.h5
 │   └── sensor_positions      (n_sensors, 3) float32   — duplicated for standalone use
 └── event_NNN/
     │ attrs: source_event_idx, n_particles, n_particle_hits
-    ├── particle_idx          (n_particle_hits,) int32   — local FK to labl/per_particle row
+    ├── particle_idx          (n_particle_hits,) int32   — local FK to labl/per_particle row; -1 for dark noise
+    ├── digit_idx             (n_particle_hits,) int32   — FK to sensor.h5 digit (which recorded hit)
     ├── sensor_idx            (n_particle_hits,) uint16
-    ├── PE                    (n_particle_hits,) float32   — pre-smearing per-particle
-    ├── T                     (n_particle_hits,) float32   — pre-smearing per-particle, detector frame
-    └── emission_process      (n_particle_hits,) int8     — 0=Cherenkov, 1=scintillation
+    ├── PE                    (n_particle_hits,) float32   — pre-smearing per-source contribution
+    ├── T                     (n_particle_hits,) float32   — pre-smearing per-source, detector frame
+    └── emission_process      (n_particle_hits,) int8     — 0=Cherenkov, 1=scintillation, 2=dark noise
 ```
 
 Notes:
+- Each row is one `(source, sensor, digit, emission_process)` contribution;
+  summing `PE` over the rows of a given `(sensor_idx, digit_idx)` gives that
+  `sensor.h5` digit's charge. **Dark noise** is a labelled source:
+  `emission_process = 2` with `particle_idx = -1` (no owning particle / segment),
+  so "dark contribution to a recorded hit" = filter `emission_process == 2`.
 - `particle_idx` is local to the event (`0..n_particles-1`).
 - A `(particle_idx, sensor_idx)` pair can appear in **multiple rows** differing
   only in `emission_process` when both processes contribute to that sensor from
@@ -151,12 +168,13 @@ step.h5
     ├── n_cherenkov                (n_segments,) int32     — Cherenkov photons emitted in segment
     ├── group_id                   (n_segments,) int32     — coarser segment grouping (see notes)
     ├── contained                  (n_segments,) bool      — both endpoints inside detector_bounds
-    └── sensor_hits/                — flat per-(segment, sensor) PE/T (n_segment_hits rows)
+    └── sensor_hits/                — flat per-(segment, sensor, digit) PE/T (n_segment_hits rows)
         │ attrs: n_segment_hits
         ├── segment_idx           (n_segment_hits,) int32  — FK to this event's segments (0..n_segments-1)
+        ├── digit_idx             (n_segment_hits,) int32  — FK to the sensor.h5 digit
         ├── sensor_idx            (n_segment_hits,) uint16 — FK to sensor_positions
-        ├── PE                    (n_segment_hits,) float32 — segment's contribution to that sensor's PE
-        ├── T                     (n_segment_hits,) float32 — segment's first-arrival time on that sensor (ns, detector frame)
+        ├── PE                    (n_segment_hits,) float32 — segment's contribution to that (sensor, digit) PE
+        ├── T                     (n_segment_hits,) float32 — segment's first-arrival time in that digit (ns, detector frame)
         └── emission_process      (n_segment_hits,) int8    — 0=Cherenkov, 1=scintillation
 ```
 

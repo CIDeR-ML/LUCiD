@@ -376,6 +376,8 @@ def write_sensor_config_v3(f, config_meta, source_event_idx, sensor_positions):
         config_meta.get('smearing_charge_function', 'default'))
     cfg.attrs['smearing_time_function'] = str(
         config_meta.get('smearing_time_function', 'default'))
+    # digitizer (hit-making) model; default 'basic' for callers that don't set it.
+    cfg.attrs['digitizer_model'] = str(config_meta.get('digitizer_model', 'basic'))
     cfg.create_dataset('source_event_idx',
                        data=np.asarray(source_event_idx, dtype=np.uint32),
                        **_GZIP_OPTS)
