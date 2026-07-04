@@ -3,7 +3,7 @@
 Contains the bucketing/JIT-warmup chain, the bucketed photon
 propagation kernel wrapper, segment view derivation
 (``_derive_views_from_segments``), host-side photon-record aggregation,
-and track/particle derivation helpers used by the v3 writers.
+and track/particle derivation helpers used by the writers.
 """
 from __future__ import annotations
 
@@ -437,7 +437,7 @@ def _derive_views_from_segments(raw, photon_records=None):
         cherenkov_count_by_mt_track=cherenkov_count_by_mt_track,
     )
 
-    # Plumb category / sub_id back into track_info_dict so save_labl_event_v3
+    # Plumb category / sub_id back into track_info_dict so save_labl_event
     # (and any other consumer) can read it. Iterate once over the category
     # dict (sub_id is a strict subset) and look up each track once.
     cat_dict = cat_result.category_by_track_id
@@ -672,7 +672,7 @@ def run_event_process_pipeline(
         with an ``emission_process`` tag at writer time;
       * the sparse ``segment_sensor_hits`` triplet dict from the aggregator —
         the caller concatenates per-process dicts with a per-row
-        ``emission_process`` column on the way to ``save_step_event_v3``;
+        ``emission_process`` column on the way to ``save_step_event``;
       * the full ``particle_data`` view (categorization, segments, etc.) —
         the caller uses the first process's view as the canonical event-
         level structure (the segment table is identical across processes).
@@ -797,7 +797,7 @@ def build_hits_sparse_per_process(process_outputs, n_particles):
     ``(particle_idx, sensor_idx)`` pair can therefore appear in multiple
     rows differing only in ``emission_process``.
 
-    Returns a dict shaped for ``save_hits_event_v3``'s ``hits_sparse``
+    Returns a dict shaped for ``save_hits_event``'s ``hits_sparse``
     input path: 1-D arrays for ``particle_idx`` / ``sensor_idx`` / ``PE``
     / ``T`` / ``T_reco`` / ``emission_process``, all the same length.
     """
@@ -845,7 +845,7 @@ def build_seg_hits_merged_per_process(process_outputs):
     ``{segment_idx, sensor_idx, PE, T, T_reco?}`` dict. Concatenate them
     along axis=0 and add an ``emission_process`` column whose value is the
     source process_id of each row. Returned dict drops directly into
-    ``event_dict['segment_sensor_hits']`` for ``save_step_event_v3``.
+    ``event_dict['segment_sensor_hits']`` for ``save_step_event``.
     """
     seg_idx_parts, sensor_idx_parts = [], []
     pe_parts, t_parts, t_reco_parts, emp_parts = [], [], [], []

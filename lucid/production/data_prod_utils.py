@@ -1,20 +1,20 @@
-"""Notebook/scripting helpers for loading v3 LUCiD dataset batches.
+"""Notebook/scripting helpers for loading LUCiD dataset batches.
 
 The notebooks under ``lucid/production/notebooks/`` import from this module.
 Functions mirror the old API names (``read_multi_event_file``,
 ``get_track_hits``, ``get_particle_name``, ``print_event_info``) but read
-the four-file v3 layout documented in ``docs/LUCID_DATASET.md``.
+the four-file layout documented in ``docs/LUCID_DATASET.md``.
 """
 
 from pathlib import Path
 import numpy as np
 
-from lucid.sources.v3_reader import (
-    read_sensor_event_v3,
-    read_hits_event_v3,
-    read_step_event_v3,
-    read_labl_event_v3,
-    list_events_v3,
+from lucid.sources.reader import (
+    read_sensor_event,
+    read_hits_event,
+    read_step_event,
+    read_labl_event,
+    list_events,
 )
 
 
@@ -83,11 +83,11 @@ def _resolve_dataset_paths(dataset_root_or_sensor_file, file_index):
     return sensor, hits, step, labl, file_index
 
 
-def load_event_v3(dataset_root, event_idx, file_index=0, n_sensors=None):
-    """Load a single event from a v3 dataset batch and return a dict.
+def load_event(dataset_root, event_idx, file_index=0, n_sensors=None):
+    """Load a single event from a dataset batch and return a dict.
 
     The returned dict exposes dense ``(n_particles, n_sensors)`` PE/T
-    matrices under keys ``Q`` and ``T`` for notebook compatibility. Raw v3
+    matrices under keys ``Q`` and ``T`` for notebook compatibility. Raw
     reader outputs are also included under ``labl`` and ``step`` for anyone
     who needs them.
     """
@@ -97,10 +97,10 @@ def load_event_v3(dataset_root, event_idx, file_index=0, n_sensors=None):
     if n_sensors is None:
         n_sensors = _infer_n_sensors(sensor_p)
 
-    sensor = read_sensor_event_v3(str(sensor_p), event_idx)
-    hits = read_hits_event_v3(str(hits_p), event_idx)
-    step = read_step_event_v3(str(step_p), event_idx)
-    labl = read_labl_event_v3(str(labl_p), event_idx)
+    sensor = read_sensor_event(str(sensor_p), event_idx)
+    hits = read_hits_event(str(hits_p), event_idx)
+    step = read_step_event(str(step_p), event_idx)
+    labl = read_labl_event(str(labl_p), event_idx)
 
     n_particles = int(labl['n_particles'])
 
@@ -143,7 +143,7 @@ def get_track_hits(event, track_idx):
     """Return (indices, Q, T) for one particle row of an event dict.
 
     ``track_idx`` is the local particle index (0..n_particles-1). The name
-    is kept for backwards compatibility with older notebooks; in v3 these
+    is kept for backwards compatibility with older notebooks; in these
     rows correspond to Geant4-categorized particles, not individual tracks.
     """
     Q_row = event['Q'][track_idx]
@@ -168,20 +168,20 @@ def print_event_info(event):
 
 
 def read_multi_event_file(dataset_root, file_index=0, verbose=False, n_sensors=None):
-    """Return a list of event dicts for an entire v3 batch file.
+    """Return a list of event dicts for an entire batch file.
 
     ``dataset_root`` is the directory containing ``sensor/``, ``hits/``,
     ``step/``, ``labl/`` subdirectories. A direct sensor file path is also
     accepted; in that case ``file_index`` is parsed from the filename.
     """
     sensor_file, _, _, _, file_index = _resolve_dataset_paths(dataset_root, file_index)
-    source_event_idx = list_events_v3(str(sensor_file))
+    source_event_idx = list_events(str(sensor_file))
     n_events = len(source_event_idx)
     if n_sensors is None:
         n_sensors = _infer_n_sensors(sensor_file)
     events = []
     for i in range(n_events):
-        ev = load_event_v3(dataset_root, i, file_index=file_index, n_sensors=n_sensors)
+        ev = load_event(dataset_root, i, file_index=file_index, n_sensors=n_sensors)
         events.append(ev)
         if verbose:
             print_event_info(ev)

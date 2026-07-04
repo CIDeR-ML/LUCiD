@@ -1,4 +1,4 @@
-"""Verify that a v3 four-file batch was written correctly.
+"""Verify that a four-file batch was written correctly.
 
 A successful `lucid-run-job` leaves, for one batch `file_index = F`,
 four files under `<output_dir>/{sensor,hits,step,labl}/wc_*_<F:04d>.h5`.
@@ -19,14 +19,14 @@ from pathlib import Path
 from typing import Optional
 
 
-V3_SUBDIRS = ("sensor", "hits", "step", "labl")
+SUBDIRS = ("sensor", "hits", "step", "labl")
 
 
-def v3_batch_paths(output_dir: os.PathLike, file_index: int) -> dict[str, Path]:
+def batch_paths(output_dir: os.PathLike, file_index: int) -> dict[str, Path]:
     """Return the expected four-file paths for a given batch."""
     root = Path(output_dir)
     tag = f"{file_index:04d}"
-    return {sub: root / sub / f"wc_{sub}_{tag}.h5" for sub in V3_SUBDIRS}
+    return {sub: root / sub / f"wc_{sub}_{tag}.h5" for sub in SUBDIRS}
 
 
 def verify_batch(
@@ -34,10 +34,10 @@ def verify_batch(
     file_index: int,
     expected_dataset_name: Optional[str] = None,
 ) -> tuple[bool, list[str]]:
-    """Check the four v3 files for one batch. Return (ok, messages)."""
+    """Check the four files for one batch. Return (ok, messages)."""
     import h5py
 
-    paths = v3_batch_paths(output_dir, file_index)
+    paths = batch_paths(output_dir, file_index)
     messages: list[str] = []
     ok = True
 

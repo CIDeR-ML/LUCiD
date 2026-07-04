@@ -1,6 +1,6 @@
-"""V3 four-file HDF5 writers (sensor / hits / step / labl) and containment.
+"""four-file HDF5 writers (sensor / hits / step / labl) and containment.
 
-Contains all ``write_*_config_v3``, ``save_*_event_v3`` functions,
+Contains all ``write_*_config``, ``save_*_event`` functions,
 ``_compute_contained``, ``_source_type_code``, ``build_interaction_metadata``,
 ``sample_translation_vector``, and the ``SOURCE_TYPE_*`` constants.
 """
@@ -24,24 +24,24 @@ __all__ = [
     "EMISSION_PROCESS_DARK",
     "build_interaction_metadata",
     "sample_translation_vector",
-    "write_sensor_config_v3",
-    "write_hits_config_v3",
-    "write_step_config_v3",
-    "write_labl_config_v3",
-    "save_sensor_event_v3",
-    "save_hits_event_v3",
-    "save_step_event_v3",
-    "save_labl_event_v3",
+    "write_sensor_config",
+    "write_hits_config",
+    "write_step_config",
+    "write_labl_config",
+    "save_sensor_event",
+    "save_hits_event",
+    "save_step_event",
+    "save_labl_event",
 ]
 
 
 # ---------------------------------------------------------------------------
-# V3 format: four-file per-event-group HDF5 (sensor / hits / step / labl).
+# format: four-file per-event-group HDF5 (sensor / hits / step / labl).
 # See docs/LUCID_DATASET.md for the full schema.
 # ---------------------------------------------------------------------------
 
 _GZIP_OPTS = dict(compression='gzip', compression_opts=4)
-_V3_FORMAT_VERSION = 5
+_FORMAT_VERSION = 5
 
 # per_interaction/source_type encoding
 SOURCE_TYPE_PARTICLES = 0
@@ -91,7 +91,7 @@ def _compute_contained(event_dict, detector_bounds):
     matches what the step file actually stores.
 
     Segment-to-track mapping uses cumulative ``n_segments`` over tracks
-    in dict-insertion order — the same invariant ``save_step_event_v3``
+    in dict-insertion order — the same invariant ``save_step_event``
     relies on — so the helper works for both single-stream events and
     merged pile-up streams where per-track ``segment_offset`` fields are
     stream-local and no longer valid in the merged flat array.
@@ -154,7 +154,7 @@ def _compute_contained(event_dict, detector_bounds):
     # ------------------------------------------------------------------
     # Per-track contained, vectorized.
     # Group segments per meaningful track via cumulative n_segments (the
-    # save_step_event_v3 invariant). A track is contained iff every owned
+    # save_step_event invariant). A track is contained iff every owned
     # segment is contained. Zero-segment tracks -> True (no-evidence).
     # ------------------------------------------------------------------
     n_tracks = len(meaningful_tracks)
@@ -353,9 +353,9 @@ def sample_translation_vector(detector_bounds, rng):
 
 
 def _write_common_config_attrs(f, config_meta):
-    """Create ``config/`` group with provenance attrs common to all v3 files."""
+    """Create ``config/`` group with provenance attrs common to all files."""
     cfg = f.require_group('config')
-    cfg.attrs['format_version'] = _V3_FORMAT_VERSION
+    cfg.attrs['format_version'] = _FORMAT_VERSION
     cfg.attrs['n_events'] = int(config_meta['n_events'])
     cfg.attrs['git_commit'] = str(config_meta.get('git_commit', 'unknown'))
     cfg.attrs['run_id'] = str(config_meta['run_id'])
@@ -367,8 +367,8 @@ def _write_common_config_attrs(f, config_meta):
     return cfg
 
 
-def write_sensor_config_v3(f, config_meta, source_event_idx, sensor_positions):
-    """Write the config/ group of a sensor v3 file."""
+def write_sensor_config(f, config_meta, source_event_idx, sensor_positions):
+    """Write the config/ group of a sensor file."""
     cfg = _write_common_config_attrs(f, config_meta)
     cfg.attrs['n_sensors'] = int(config_meta['n_sensors'])
     cfg.attrs['detector_type'] = str(config_meta['detector_type'])
@@ -388,8 +388,8 @@ def write_sensor_config_v3(f, config_meta, source_event_idx, sensor_positions):
                        **_GZIP_OPTS)
 
 
-def write_hits_config_v3(f, config_meta, source_event_idx, sensor_positions):
-    """Write the config/ group of a hits v3 file."""
+def write_hits_config(f, config_meta, source_event_idx, sensor_positions):
+    """Write the config/ group of a hits file."""
     cfg = _write_common_config_attrs(f, config_meta)
     cfg.attrs['n_sensors'] = int(config_meta['n_sensors'])
     cfg.attrs['detector_type'] = str(config_meta['detector_type'])
@@ -402,8 +402,8 @@ def write_hits_config_v3(f, config_meta, source_event_idx, sensor_positions):
                        **_GZIP_OPTS)
 
 
-def write_step_config_v3(f, config_meta, source_event_idx):
-    """Write the config/ group of a step v3 file."""
+def write_step_config(f, config_meta, source_event_idx):
+    """Write the config/ group of a step file."""
     cfg = _write_common_config_attrs(f, config_meta)
     cfg.attrs['detector_type'] = str(config_meta['detector_type'])
     cfg.attrs['material'] = str(config_meta['material'])
@@ -421,8 +421,8 @@ def write_step_config_v3(f, config_meta, source_event_idx):
                        **_GZIP_OPTS)
 
 
-def write_labl_config_v3(f, config_meta, source_event_idx):
-    """Write the config/ group of a labl v3 file."""
+def write_labl_config(f, config_meta, source_event_idx):
+    """Write the config/ group of a labl file."""
     cfg = _write_common_config_attrs(f, config_meta)
     label_names = list(config_meta.get('label_names', ['category']))
     cfg.attrs['label_names'] = np.array(label_names, dtype=h5py.string_dtype())
@@ -435,8 +435,8 @@ def _event_group_name(seq_idx):
     return f'event_{int(seq_idx):03d}'
 
 
-def save_sensor_event_v3(f, event_dict, seq_idx):
-    """Write a single event_NNN/ group to an already-open sensor v3 file.
+def save_sensor_event(f, event_dict, seq_idx):
+    """Write a single event_NNN/ group to an already-open sensor file.
 
     ``event_dict`` must contain: ``source_event_idx``, ``PE_reco``,
     ``T_reco``. Times in ``T_reco`` are expected in absolute detector
@@ -474,8 +474,8 @@ def save_sensor_event_v3(f, event_dict, seq_idx):
     grp.create_dataset('T', data=t_sparse, **_GZIP_OPTS)
 
 
-def save_hits_event_v3(f, event_dict, seq_idx):
-    """Write a single event_NNN/ group to an already-open hits v3 file.
+def save_hits_event(f, event_dict, seq_idx):
+    """Write a single event_NNN/ group to an already-open hits file.
 
     Two input shapes accepted on ``event_dict``:
 
@@ -566,8 +566,8 @@ def save_hits_event_v3(f, event_dict, seq_idx):
     grp.create_dataset('emission_process', data=emp_arr, **_GZIP_OPTS)
 
 
-def save_step_event_v3(f, event_dict, seq_idx):
-    """Write a single event_NNN/ group to an already-open step v3 file.
+def save_step_event(f, event_dict, seq_idx):
+    """Write a single event_NNN/ group to an already-open step file.
 
     Each segment row gets a local ``track_idx`` FK (0..n_tracks-1). Times are
     shifted by ``t0`` so they live in the detector frame. ``beta_start`` and
@@ -692,8 +692,8 @@ def save_step_event_v3(f, event_dict, seq_idx):
         grp.attrs['has_segment_sensor_map'] = True
 
 
-def save_labl_event_v3(f, event_dict, seq_idx):
-    """Write a single event_NNN/ group to an already-open labl v5 file.
+def save_labl_event(f, event_dict, seq_idx):
+    """Write a single event_NNN/ group to an already-open labl file.
 
     Subgroups:
     * ``per_event/`` — contained (bool) + t0 (= min per_interaction/t0).
@@ -831,7 +831,7 @@ def save_labl_event_v3(f, event_dict, seq_idx):
 
 
 def _write_per_interaction(pi_grp, event_dict, ancestor, interaction):
-    """Populate the per_interaction/ subgroup for v5.
+    """Populate the per_interaction/ subgroup.
 
     One row per interaction — a single G4 event in non-pile-up events
     (so always one row) and one vertex stream in pile-up events (N rows

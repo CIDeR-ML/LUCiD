@@ -13,17 +13,17 @@ import h5py
 import numpy as np
 import pytest
 
-from lucid.sources.v3_writer import (
-    write_sensor_config_v3, write_hits_config_v3,
-    write_step_config_v3, write_labl_config_v3,
-    save_sensor_event_v3, save_hits_event_v3,
-    save_step_event_v3, save_labl_event_v3,
+from lucid.sources.writer import (
+    write_sensor_config, write_hits_config,
+    write_step_config, write_labl_config,
+    save_sensor_event, save_hits_event,
+    save_step_event, save_labl_event,
 )
-from lucid.sources.v3_reader import (
-    read_labl_event_v3, read_step_event_v3,
+from lucid.sources.reader import (
+    read_labl_event, read_step_event,
 )
 
-from tests.io._v3_event_fixture import build_synthetic_pileup_event
+from tests.io._event_fixture import build_synthetic_pileup_event
 
 
 @pytest.fixture
@@ -40,20 +40,20 @@ def pileup_batch(tmp_path):
          h5py.File(paths['hits'],   'w') as fi, \
          h5py.File(paths['step'],    'w') as fg, \
          h5py.File(paths['labl'],   'w') as fl:
-        write_sensor_config_v3(fs, cfg, src, sp)
-        write_hits_config_v3(fi, cfg, src, sp)
-        write_step_config_v3(fg, cfg, src)
-        write_labl_config_v3(fl, cfg, src)
-        save_sensor_event_v3(fs, ev, seq_idx=0)
-        save_hits_event_v3(fi, ev, seq_idx=0)
-        save_step_event_v3(fg, ev, seq_idx=0)
-        save_labl_event_v3(fl, ev, seq_idx=0)
+        write_sensor_config(fs, cfg, src, sp)
+        write_hits_config(fi, cfg, src, sp)
+        write_step_config(fg, cfg, src)
+        write_labl_config(fl, cfg, src)
+        save_sensor_event(fs, ev, seq_idx=0)
+        save_hits_event(fi, ev, seq_idx=0)
+        save_step_event(fg, ev, seq_idx=0)
+        save_labl_event(fl, ev, seq_idx=0)
     return paths, cfg, ev
 
 
 def test_per_interaction_has_two_rows(pileup_batch):
     paths, cfg, ev = pileup_batch
-    labl = read_labl_event_v3(str(paths['labl']), 0)
+    labl = read_labl_event(str(paths['labl']), 0)
     pi = labl['per_interaction']
     assert len(pi['t0']) == 2
     # Rank 0 (mu- primary, track 100) carries vertex A's t0
@@ -67,7 +67,7 @@ def test_per_interaction_has_two_rows(pileup_batch):
 
 def test_primary_lists_and_n_particles_per_interaction(pileup_batch):
     paths, cfg, ev = pileup_batch
-    labl = read_labl_event_v3(str(paths['labl']), 0)
+    labl = read_labl_event(str(paths['labl']), 0)
     pi = labl['per_interaction']
     # Vertex A primary: track 100 (mu-); vertex B primary: track 300 (pi+).
     np.testing.assert_array_equal(pi['primary_track_ids_offsets'], [0, 1, 2])
@@ -81,7 +81,7 @@ def test_primary_lists_and_n_particles_per_interaction(pileup_batch):
 
 def test_neutrino_metadata_per_interaction(pileup_batch):
     paths, cfg, ev = pileup_batch
-    labl = read_labl_event_v3(str(paths['labl']), 0)
+    labl = read_labl_event(str(paths['labl']), 0)
     pi = labl['per_interaction']
     # Vertex A: particle-gun, no probe. Vertex B: synthetic GENIE numu.
     np.testing.assert_array_equal(pi['neutrino_pdg'], [0, 14])
@@ -90,7 +90,7 @@ def test_neutrino_metadata_per_interaction(pileup_batch):
 
 def test_per_particle_interaction_idx(pileup_batch):
     paths, cfg, ev = pileup_batch
-    labl = read_labl_event_v3(str(paths['labl']), 0)
+    labl = read_labl_event(str(paths['labl']), 0)
     pp = labl['per_particle']
     # Particle 0 (mu-, gen=[100]) and 1 (e-, gen=[100,150]) trace back to
     # primary 100 → interaction 0. Particle 2 (pi+, gen=[300]) →
@@ -103,7 +103,7 @@ def test_per_event_t0_is_min_of_per_interaction(pileup_batch):
     single-scalar convenience for downstream tools. For this fixture,
     t0_a = -17.0 and t0_b = 123.4, so per_event/t0 = -17.0."""
     paths, cfg, ev = pileup_batch
-    labl = read_labl_event_v3(str(paths['labl']), 0)
+    labl = read_labl_event(str(paths['labl']), 0)
     t0_min = float(min(labl['per_interaction']['t0']))
     assert float(labl['per_event']['t0']) == pytest.approx(t0_min)
     assert float(labl['per_event']['t0']) == pytest.approx(-17.0)
@@ -111,7 +111,7 @@ def test_per_event_t0_is_min_of_per_interaction(pileup_batch):
 
 def test_per_track_interaction_is_vertex_index(pileup_batch):
     paths, cfg, ev = pileup_batch
-    labl = read_labl_event_v3(str(paths['labl']), 0)
+    labl = read_labl_event(str(paths['labl']), 0)
     pt = labl['per_track']
     # Tracks are inserted in the event_dict in the order: 100, 150, 300.
     np.testing.assert_array_equal(pt['track_id'], [100, 150, 300])
@@ -129,5 +129,5 @@ def test_step_time_preserved_with_per_vertex_shift(pileup_batch):
     frame (+t0 applied per vertex). The writer must not shift further;
     the time array on read equals the input."""
     paths, cfg, ev = pileup_batch
-    seg = read_step_event_v3(str(paths['step']), 0)
+    seg = read_step_event(str(paths['step']), 0)
     np.testing.assert_allclose(seg['time'], ev['segments']['time'], atol=1e-5)

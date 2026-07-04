@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-Visualize sensor hits for a single event from a v3 four-file dataset.
+Visualize sensor hits for a single event from a four-file dataset.
 
 Shows sensor hits colored by charge value, with arrows showing track
-directions and optional track segment polylines. Reads the four v3 files
+directions and optional track segment polylines. Reads the four files
 (sensor/hits/step/labl) for one batch and renders one event as HTML.
 
 Usage:
@@ -17,18 +17,18 @@ import os
 import numpy as np
 import plotly.graph_objects as go
 from pathlib import Path
-from lucid.sources.v3_reader import (
-    read_sensor_event_v3,
-    read_hits_event_v3,
-    read_step_event_v3,
-    read_labl_event_v3,
+from lucid.sources.reader import (
+    read_sensor_event,
+    read_hits_event,
+    read_step_event,
+    read_labl_event,
 )
 from lucid.geometry import generate_detector
 from lucid.geometry.utils import calculate_surface_normals, create_disc_mesh
 import argparse
 
 # Parse command line arguments
-parser = argparse.ArgumentParser(description='Visualize sensor hits from a v3 four-file dataset')
+parser = argparse.ArgumentParser(description='Visualize sensor hits from a four-file dataset')
 parser.add_argument('dataset_root', type=str,
                     help='Dataset root directory containing sensor/, hits/, step/, labl/ subdirs.')
 parser.add_argument('detector_config', type=str, help='Detector configuration JSON file')
@@ -56,7 +56,7 @@ labl_file = dataset_root / 'labl' / f'wc_labl_{file_index:04d}.h5'
 
 for p in (sensor_file, hits_file, step_file, labl_file):
     if not p.exists():
-        raise FileNotFoundError(f"v3 batch file missing: {p}")
+        raise FileNotFoundError(f"batch file missing: {p}")
 
 print("="*70)
 print(f"SENSOR VISUALIZATION BY PARTICLE")
@@ -141,7 +141,7 @@ def create_cylinder(start, end, radius, n_segments=12):
     return vertices[:, 0], vertices[:, 1], vertices[:, 2], faces_i, faces_j, faces_k
 
 
-print(f"Loading event {event_idx} from v3 batch file_index={file_index}...")
+print(f"Loading event {event_idx} from batch file_index={file_index}...")
 print()
 
 # Category names mapping (255 = Unknown, sentinel for uncategorized)
@@ -151,11 +151,11 @@ category_names_map = {0: "Primary", 1: "DecayElectron", 2: "SecondaryPion",
 def get_category_name(code):
     return category_names_map.get(int(code), f'Category_{int(code)}')
 
-# Read the four v3 files
-sensor_data = read_sensor_event_v3(str(sensor_file), event_idx)
-hits_data = read_hits_event_v3(str(hits_file), event_idx)
-step_data = read_step_event_v3(str(step_file), event_idx)
-labl_data = read_labl_event_v3(str(labl_file), event_idx)
+# Read the four files
+sensor_data = read_sensor_event(str(sensor_file), event_idx)
+hits_data = read_hits_event(str(hits_file), event_idx)
+step_data = read_step_event(str(step_file), event_idx)
+labl_data = read_labl_event(str(labl_file), event_idx)
 
 n_sensors = detector.n_sensors
 n_particles = int(labl_data['n_particles'])
@@ -704,9 +704,9 @@ for particle_idx in range(n_particles):
 print()
 
 # ============================================================================
-# TRACK SEGMENT VISUALIZATION (from v3 step + labl/per_track)
+# TRACK SEGMENT VISUALIZATION (from step + labl/per_track)
 # ============================================================================
-print("Loading track segment data from v3 step file...")
+print("Loading track segment data from step file...")
 
 has_segment_data = n_tracks > 0
 segment_trace_indices = []

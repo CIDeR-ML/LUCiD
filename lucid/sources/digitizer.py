@@ -60,7 +60,7 @@ MODEL_PRESETS: dict[str, dict] = {
 }
 
 # emission_process encoding for the hits.h5 decomposition. 0/1 mirror
-# v3_writer's EMISSION_PROCESS_{CHERENKOV,SCINTILLATION}; DARK tags noise digits.
+# the writer's EMISSION_PROCESS_{CHERENKOV,SCINTILLATION}; DARK tags noise digits.
 EMISSION_PROCESS_DARK = 2
 
 

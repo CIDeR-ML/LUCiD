@@ -63,7 +63,7 @@ def read_event_data_from_photonsim(root_file_path, entry_index,
         - ``energy``                   : float, primary energy (MeV)
     """
     from lucid.sources.scintillation_photons import expand_segments_to_photons
-    from lucid.sources.v3_writer import (
+    from lucid.sources.writer import (
         EMISSION_PROCESS_CHERENKOV, EMISSION_PROCESS_SCINTILLATION)
 
     procs = tuple(emission_processes)

@@ -223,7 +223,7 @@ labl.h5
     │   ├── t0                                   ()   float32 — true emission time
     │   └── contained                            ()   bool    — True iff every meaningful segment is fully inside detector; False for empty events
     ├── per_interaction/                         (1 row for non-pile-up; N rows for N-way pile-up)
-    │   ├── source_type, t0, vertex_{x,y,z}       — see save_labl_event_v3 docstring
+    │   ├── source_type, t0, vertex_{x,y,z}       — see save_labl_event docstring
     │   ├── n_primaries, n_particles              — ints per interaction
     │   ├── neutrino_pdg, neutrino_energy_MeV     — GENIE/supernova-only, zeroed for particle-gun
     │   ├── interaction_channel, channel          — supernova-only: sntools channel code (int) + name ("ibd"/"es"/"o16e"/"o16eb")

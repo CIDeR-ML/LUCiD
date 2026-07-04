@@ -27,7 +27,7 @@ from lucid.sources.scintillation_photons import (
     _sample_hypoexp_np,
     expand_segments_to_photons,
 )
-from lucid.sources.v3_writer import (
+from lucid.sources.writer import (
     EMISSION_PROCESS_SCINTILLATION,
 )
 

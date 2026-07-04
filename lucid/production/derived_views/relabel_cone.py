@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Derived-view demo: relabel each hit PMT as inside/outside the Cherenkov cone.
 
-Takes a v3 dataset, and WITHOUT re-simulating, recomputes a per-hit label from the
+Takes a dataset, and WITHOUT re-simulating, recomputes a per-hit label from the
 stored truth (interaction vertex + primary-track direction + sensor positions):
 
     angle(PMT) = angle between (sensor_pos - vertex) and primary track direction

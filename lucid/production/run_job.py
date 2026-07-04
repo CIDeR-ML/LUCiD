@@ -1,7 +1,7 @@
 """Single-job end-to-end runner for the LUCiD production chain.
 
 One invocation generates a Geant4 macro from a dataprod JSON config,
-runs PhotonSim (C++ binary, via subprocess), runs LUCiD's v3 writer
+runs PhotonSim (C++ binary, via subprocess), runs LUCiD's writer
 (in-process Python call), and verifies the resulting four-file batch.
 
 Entry point for the `lucid-run-job` console script.
@@ -13,11 +13,11 @@ Optional env vars:
     JAX_PLATFORMS   — e.g. `cpu` for determinism (set before import).
 
 Exit codes:
-    0   success; all four v3 files present and valid
+    0   success; all four files present and valid
     10  config load / schema error
     20  PhotonSim failure
     30  LUCiD failure
-    40  v3 verification failure
+    40  verification failure
     1   generic
 """
 from __future__ import annotations
@@ -41,7 +41,7 @@ EXIT_VERIFY = 40
 
 def _parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Run one job of the LUCiD production chain: PhotonSim → LUCiD v3 writer.",
+        description="Run one job of the LUCiD production chain: PhotonSim → LUCiD writer.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument(
@@ -56,11 +56,11 @@ def _parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     parser.add_argument(
         "--output-dir", type=str, required=True,
         help="Absolute path to the dataset directory for this config. "
-             "PhotonSim ROOT and the v3 {sensor,hits,step,labl}/ subdirs are written here.",
+             "PhotonSim ROOT and the {sensor,hits,step,labl}/ subdirs are written here.",
     )
     parser.add_argument(
         "--job-id", type=int, required=True,
-        help="1-based job id. Maps to v3 file_index = job_id - 1.",
+        help="1-based job id. Maps to file_index = job_id - 1.",
     )
     parser.add_argument(
         "--test", action="store_true",
@@ -107,7 +107,7 @@ def _parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--skip-lucid", action="store_true",
-        help="Run macro generation + PhotonSim only; stop before LUCiD v3 writer. "
+        help="Run macro generation + PhotonSim only; stop before LUCiD writer. "
              "Use in multi-process workflows where LUCiD runs in a different environment "
              "(e.g., inside a singularity image) than PhotonSim.",
     )
@@ -216,7 +216,7 @@ def _run_lucid(
     job_id: int,
     detector: str,
 ) -> None:
-    """Import LUCiD and write the v3 four-file batch for this job.
+    """Import LUCiD and write the four-file batch for this job.
 
     Imports are deferred so that `--help` works without jax/numpy/uproot
     installed (e.g. on the login node).
@@ -231,7 +231,7 @@ def _run_lucid(
     detector_config_path = base_dir_path() + f"config/{detector}_geom_config.json"
     physics_config_path = base_dir_path() + f"config/{detector}_physics_config.json"
 
-    print(f"=== Step 3: Running LUCiD v3 writer ===", flush=True)
+    print(f"=== Step 3: Running LUCiD writer ===", flush=True)
     print(f"    ROOT file:  {root_file}")
     print(f"    Output dir: {output_dir}")
     print(f"    Dataset:    {config['name']}")
@@ -369,7 +369,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     # GENIE configs use primary-by-primary injection in PhotonSim: gevgen
     # produces N interactions, run_genie counts the total status==1 primaries
     # across those, and we set /run/beamOn (and LUCiD's n_events) to that
-    # primary count so the downstream v3 dataset has one entry per primary.
+    # primary count so the downstream dataset has one entry per primary.
     photonsim_events = n_events
 
     # Derive per-subprocess seeds from the (master_seed, job_id, vertex_idx=0)
@@ -521,8 +521,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         traceback.print_exc()
         return EXIT_LUCID
 
-    # Step 4: Verify v3 output
-    print("\n=== Step 4: Verifying v3 output ===", flush=True)
+    # Step 4: Verify output
+    print("\n=== Step 4: Verifying output ===", flush=True)
     from lucid.production.verify_output import verify_batch
     ok, messages = verify_batch(output_dir, file_index, expected_dataset_name=config["name"])
     for m in messages:
@@ -566,7 +566,7 @@ def main(argv: Optional[list[str]] = None) -> int:
 
 
 def _main_pileup(args: argparse.Namespace, config: dict) -> int:
-    """Run a pile-up job: N PhotonSim streams -> merged v3 event."""
+    """Run a pile-up job: N PhotonSim streams -> merged event."""
     n_events = args.n_events
     if args.test:
         n_events = 2
@@ -737,7 +737,7 @@ def _main_pileup(args: argparse.Namespace, config: dict) -> int:
     print(f"LUCiD wrote {len(saved_files)} files.")
 
     # Step 4: Verify
-    print("\n=== Step 4: Verifying v3 output ===", flush=True)
+    print("\n=== Step 4: Verifying output ===", flush=True)
     from lucid.production.verify_output import verify_batch
     ok, messages = verify_batch(output_dir, file_index, expected_dataset_name=config["name"])
     for m in messages:

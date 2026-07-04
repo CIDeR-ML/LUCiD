@@ -1,6 +1,6 @@
 # LUCiD Production Pipeline
 
-Turns a PhotonSim particle-based ROOT file into a v3 four-file HDF5 dataset
+Turns a PhotonSim particle-based ROOT file into a four-file HDF5 dataset
 (`sensor/`, `inst/`, `seg/`, `labl/`). Full schema in
 [`docs/LUCID_DATASET.md`](../../docs/LUCID_DATASET.md).
 
@@ -74,7 +74,7 @@ carries `interaction_channel` (sntools' integer NUANCE code) and `channel`
 (string — `"ibd"`, `"es"`, `"o16e"`, `"o16eb"`). sntools' channel code has no
 slot in the rooTracker, so `run_supernova.py` writes it to a per-event sidecar
 aligned 1:1 with the rooTracker entries, and the runner stamps it into the
-labl truth after the v3 writer completes.
+labl truth after the writer completes.
 
 A dataset fans out into one `<model>/<ordering>/` subcase per
 `supernova.models × supernova.orderings` — mass ordering maps to sntools'
