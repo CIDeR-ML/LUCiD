@@ -260,6 +260,15 @@ def _run_lucid(
     # legacy single-PAD_SIZE-from-file-max path (one JIT compile, no chunking).
     pad_size_buckets = lucid_opts.get("pad_size_buckets", None)
 
+    # Digitizer (sensor hit-making) model comes from the detector physics
+    # config's optional "digitizer" block; absent -> "basic" (legacy behaviour).
+    digitizer_cfg = None
+    try:
+        with open(physics_config_path) as _pf:
+            digitizer_cfg = json.load(_pf).get("digitizer")
+    except (OSError, ValueError):
+        digitizer_cfg = None
+
     saved_files = generate_events_from_photonsim_particles(
         event_simulator=simulate_event,
         root_file_path=str(root_file),
@@ -277,6 +286,7 @@ def _run_lucid(
         file_index_start=file_index,
         primary_source=config.get("primary_source", "particles"),
         pad_size_buckets=pad_size_buckets,
+        digitizer=digitizer_cfg,
     )
     print(f"LUCiD wrote {len(saved_files)} files under {output_dir}/{{sensor,hits,step,labl}}/")
 

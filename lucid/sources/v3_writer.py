@@ -442,19 +442,27 @@ def save_sensor_event_v3(f, event_dict, seq_idx):
     grp = f.create_group(_event_group_name(seq_idx))
     grp.attrs['source_event_idx'] = int(event_dict['source_event_idx'])
 
-    pe = np.asarray(event_dict['PE_reco'], dtype=np.float32)
-    t = np.asarray(event_dict['T_reco'], dtype=np.float32)
-
-    # A "hit" is a sensor with real charge: pe > 0. SK-like charge smearing
-    # preserves zero (sigma=0 when counts=0), so pe == 0 => no photon ever
-    # reached this sensor. Drop such sensors even if smear_times fabricated
-    # a noisy time for them. The isfinite & <1e5 checks catch smear_times'
-    # 1e6 non-finite sentinel. Absolute time can legitimately be negative
-    # (t0 in [-250, +250] ns), so no lower bound.
-    mask = (pe > 0) & np.isfinite(t) & (t < 1e5)
-    indices = np.where(mask)[0].astype(np.uint16)
-    pe_sparse = pe[mask].astype(np.float32)
-    t_sparse = np.where(np.isfinite(t[mask]), t[mask], np.float32(0.0)).astype(np.float32)
+    if 'sensor_digits' in event_dict:
+        # Digitizer path: a pre-sparsified list of recorded digits. A sensor
+        # index may repeat (multi-hit models); ``basic`` yields one row per
+        # sensor. All rows are real hits — no masking needed.
+        sd = event_dict['sensor_digits']
+        indices = np.asarray(sd['sensor_idx'], dtype=np.uint16)
+        pe_sparse = np.asarray(sd['PE'], dtype=np.float32)
+        t_sparse = np.asarray(sd['T'], dtype=np.float32)
+    else:
+        # Legacy dense path (non-digitizer callers, e.g. calibration).
+        pe = np.asarray(event_dict['PE_reco'], dtype=np.float32)
+        t = np.asarray(event_dict['T_reco'], dtype=np.float32)
+        # A "hit" is a sensor with real charge: pe > 0. SK-like charge smearing
+        # preserves zero (sigma=0 when counts=0), so pe == 0 => no photon ever
+        # reached this sensor. The isfinite & <1e5 checks catch smear_times'
+        # 1e6 non-finite sentinel. Absolute time can legitimately be negative
+        # (t0 in [-250, +250] ns), so no lower bound.
+        mask = (pe > 0) & np.isfinite(t) & (t < 1e5)
+        indices = np.where(mask)[0].astype(np.uint16)
+        pe_sparse = pe[mask].astype(np.float32)
+        t_sparse = np.where(np.isfinite(t[mask]), t[mask], np.float32(0.0)).astype(np.float32)
 
     grp.attrs['n_hits'] = int(indices.size)
     grp.create_dataset('sensor_idx', data=indices, **_GZIP_OPTS)
@@ -496,7 +504,11 @@ def save_hits_event_v3(f, event_dict, seq_idx):
         emp_arr          = np.asarray(sparse['emission_process'], dtype=np.int8)
         t_reco_arr = (np.asarray(sparse['T_reco'], dtype=np.float32)
                       if 'T_reco' in sparse else None)
+        # digit_idx (FK -> sensor.h5 digit row) present in the digitizer path.
+        digit_idx_arr = (np.asarray(sparse['digit_idx'], dtype=np.int32)
+                         if 'digit_idx' in sparse else None)
     else:
+        digit_idx_arr = None
         pe_pp = np.asarray(event_dict['PE_per_particle'], dtype=np.float32)
         t_pp = np.asarray(event_dict['T_per_particle'], dtype=np.float32)
         n_p = pe_pp.shape[0]
@@ -536,7 +548,12 @@ def save_hits_event_v3(f, event_dict, seq_idx):
                           EMISSION_PROCESS_CHERENKOV, dtype=np.int8)
 
     grp.attrs['n_particle_hits'] = int(particle_idx_arr.size)
+    # digit_idx links each decomposition row to its sensor.h5 digit. Legacy /
+    # non-digitizer callers (one hit per sensor) get all-zeros.
+    if digit_idx_arr is None:
+        digit_idx_arr = np.zeros(particle_idx_arr.size, dtype=np.int32)
     grp.create_dataset('particle_idx', data=particle_idx_arr, **_GZIP_OPTS)
+    grp.create_dataset('digit_idx', data=digit_idx_arr, **_GZIP_OPTS)
     grp.create_dataset('sensor_idx', data=sensor_idx_arr, **_GZIP_OPTS)
     grp.create_dataset('PE', data=pe_arr, **_GZIP_OPTS)
     grp.create_dataset('T', data=t_arr, **_GZIP_OPTS)
@@ -632,8 +649,17 @@ def save_step_event_v3(f, event_dict, seq_idx):
     seg_sen = event_dict.get('segment_sensor_hits')
     if seg_sen is not None:
         sh = grp.create_group('sensor_hits')
+        n_seg_hits = int(np.asarray(seg_sen['segment_idx']).size)
         sh.create_dataset('segment_idx',
                           data=np.asarray(seg_sen['segment_idx'], dtype=np.int32),
+                          **_GZIP_OPTS)
+        # digit_idx (FK -> sensor.h5 digit); legacy callers get all-zeros so the
+        # sensor_hits -> hits -> sensor aggregation stays digit-consistent.
+        digit_idx_arr = seg_sen.get('digit_idx')
+        if digit_idx_arr is None:
+            digit_idx_arr = np.zeros(n_seg_hits, dtype=np.int32)
+        sh.create_dataset('digit_idx',
+                          data=np.asarray(digit_idx_arr, dtype=np.int32),
                           **_GZIP_OPTS)
         sh.create_dataset('sensor_idx',
                           data=np.asarray(seg_sen['sensor_idx'], dtype=np.uint16),

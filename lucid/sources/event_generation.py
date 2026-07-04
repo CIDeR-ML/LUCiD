@@ -29,9 +29,11 @@ from lucid.sources.event_builder import (
     _warmup_buckets,
     build_hits_sparse_per_process,
     build_seg_hits_merged_per_process,
+    gather_photon_deposits,
     combine_t_per_sensor_across_processes,
     run_event_process_pipeline,
 )
+from lucid.sources.digitizer import digitize_and_decompose, resolve_model_config
 from lucid.sources.scintillation_photons import expand_segments_to_photons
 from lucid.sources.v3_writer import (
     EMISSION_PROCESS_CHERENKOV,
@@ -93,7 +95,8 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
                                              dataset_name='unnamed_dataset', run_id=None,
                                              file_index_start=0,
                                              primary_source='particles',
-                                             pad_size_buckets=None):
+                                             pad_size_buckets=None,
+                                             digitizer=None):
     """Generate events from a PhotonSim ROOT file, writing v3 four-file batches.
 
     For each batch of events, writes four HDF5 files under ``output_dir``:
@@ -212,10 +215,14 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
     use_bucketing = True
     print(f"  Using rays buckets: {list(pad_size_buckets)}")
 
+    digitizer_model = resolve_model_config(digitizer)
+
     print(f"\nGenerating {n_events} events using VMAP-OPTIMIZED particle-based processing...")
     print(f"Using batch size of {batch_size} events for multithreaded I/O")
     print(f"Apply smearing: {apply_smearing}")
     print(f"Apply translation: {apply_translation}")
+    print(f"Digitizer model: {digitizer_model['model']} "
+          f"(dark_rate_khz={digitizer_model.get('dark_rate_khz', 0.0)})")
     # Note: Rotation is not applied in this workflow because PhotonSim already generates
     # primaries with random isotropic directions (/gun/randomDirection true). The photon
     # and track data are already in randomized coordinate frames, so rotation in LUCiD
@@ -466,60 +473,35 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
             n_segments = int(particle_data['segments']['n_segments'])
 
             # ----------------------------------------------------------------
-            # Combine across processes:
-            #   per-sensor PE_true   : sum
-            #   per-sensor T_true    : min (with 0-as-no-hit handling)
-            #   per-sensor T_reco    : min
-            #   hits.h5 rows         : per-(particle, sensor, process) sparse
-            #   step/sensor_hits     : per-(segment, sensor, process) sparse
+            # Hit-making (digitization): window the per-photon deposits into
+            # digits and build the digit_idx-aware decomposition. The model
+            # comes from the detector config; `basic` (default) reproduces the
+            # legacy first-arrival + summed-charge one-hit-per-sensor.
+            #   sensor.h5           : digit list (sensor_idx may repeat)
+            #   hits.h5 rows        : per-(particle, sensor, digit, process)
+            #   step/sensor_hits    : per-(segment, sensor, digit, process)
             # ----------------------------------------------------------------
-            PE_true = jnp.asarray(np.sum(
-                [p['pe_per_sensor'] for p in process_outputs], axis=0))
-            T_true = jnp.asarray(combine_t_per_sensor_across_processes(
-                [p['t_per_sensor'] for p in process_outputs]))
-            T_reco = jnp.asarray(combine_t_per_sensor_across_processes(
-                [p['t_reco_per_sensor'] for p in process_outputs]))
+            deposits = gather_photon_deposits(process_outputs)
+            digi_rng = np.random.default_rng([int(master_seed or 0), int(event_idx)])
+            sensor_digits, hits_sparse, seg_hits = digitize_and_decompose(
+                sensor_idx=deposits['sensor_idx'], charge=deposits['charge'],
+                t_true=deposits['t_true'], t_reco=deposits['t_reco'],
+                particle_idx=deposits['particle_idx'],
+                segment_idx=deposits['segment_idx'],
+                emission_process=deposits['emission_process'],
+                n_sensors=int(n_sensors), model=digitizer_model, rng=digi_rng,
+                dark_rate_khz=float(digitizer_model.get('dark_rate_khz', 0.0)))
 
-            hits_sparse = build_hits_sparse_per_process(
-                process_outputs, n_particles)
-            seg_hits = build_seg_hits_merged_per_process(process_outputs)
-
-            # Apply charge smearing if requested. T_reco already
-            # carries kernel-side TTS smearing; no host-side time
-            # smear needed.
-            if apply_smearing:
-                smear_pe_key, _unused_t_key = jax.random.split(event_keys['smear_key'])
-                PE_reco = smear_charges_SK_like(PE_true, key=smear_pe_key)
-            else:
-                PE_reco = PE_true
-
-            # Convert JAX arrays to numpy BEFORE storing in extended_info.
-            # ``np.array`` (not ``asarray``) ensures we own a writable host
-            # buffer for the in-place t0 shift below — JAX buffers are
-            # read-only on the host.
-            PE_true = np.array(PE_true, dtype=np.float32, copy=True)
-            T_true  = np.array(T_true,  dtype=np.float32, copy=True)
-            PE_reco = np.array(PE_reco, dtype=np.float32, copy=True)
-            T_reco  = np.array(T_reco,  dtype=np.float32, copy=True)
-
-            # Shift simulator outputs from G4-frame (origin at vertex) into
-            # absolute detector frame by adding the per-interaction t0.
-            # Only the single-vertex path is in this function today; the
-            # pile-up path applies per-vertex t0 in its merger. The
-            # positivity mask preserves "no-hit" sentinels (0/inf) on the
-            # dense per-sensor accumulators; hits_sparse / seg_hits are
-            # already sparse (every row is a real hit) so a flat += suffices.
+            # Shift G4/vertex-frame times into the absolute detector frame by
+            # adding t0. Every digit / decomposition row is a real hit, so a
+            # flat add suffices (no no-hit sentinels to preserve).
             t0_f32 = np.float32(t0)
-            np.add(T_true,  t0_f32, out=T_true,  where=T_true  > 0)
-            np.add(T_reco,  t0_f32, out=T_reco,  where=T_reco  > 0)
-            if hits_sparse['T'].size > 0:
-                hits_sparse['T'] = hits_sparse['T'] + t0_f32
-            if hits_sparse.get('T_reco') is not None and hits_sparse['T_reco'].size > 0:
-                hits_sparse['T_reco'] = hits_sparse['T_reco'] + t0_f32
-            if seg_hits is not None and seg_hits['PE'].size > 0:
-                seg_hits['T'] = seg_hits['T'] + t0_f32
-                if 'T_reco' in seg_hits and seg_hits['T_reco'].size > 0:
-                    seg_hits['T_reco'] = seg_hits['T_reco'] + t0_f32
+            for _d, _keys in ((sensor_digits, ('T',)),
+                              (hits_sparse, ('T', 'T_reco')),
+                              (seg_hits, ('T', 'T_reco'))):
+                for _k in _keys:
+                    if _k in _d and _d[_k].size:
+                        _d[_k] = _d[_k] + t0_f32
             # Segments always carry meaningful times — shift all of them.
             if 'segments' in particle_data and particle_data['segments'].get('n_segments', 0) > 0:
                 particle_data['segments']['time'] = \
@@ -544,12 +526,11 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
                 'track_info_dict': particle_data['track_info_dict'],
                 'primary_to_interaction': primary_to_interaction,
                 'interaction_metadata': [interaction_meta],
-                # Phase 2 hits payload: pre-sparse rows tagged with
-                # emission_process per row. ``save_hits_event_v3`` consumes
-                # ``hits_sparse`` directly (skip the dense-mask path).
+                # hits payload: per-(particle, sensor, digit, process) rows
+                # (with digit_idx). ``save_hits_event_v3`` consumes it directly.
                 'hits_sparse': hits_sparse,
-                'PE_reco': PE_reco,
-                'T_reco': T_reco,
+                # sensor.h5 digit list produced by the digitizer.
+                'sensor_digits': sensor_digits,
                 'source': 'PhotonSim_Particles_VMAP',
             }
 
