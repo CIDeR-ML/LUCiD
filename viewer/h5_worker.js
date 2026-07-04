@@ -147,6 +147,12 @@ function decodeEvent(idx) {
   const hitsSIdx = readDsUint16(hEvt, 'sensor_idx');
   const hitsPE = readDsFloat32(hEvt, 'PE');
   const hitsT = readDsFloat32(hEvt, 'T');
+  // digit_idx: FK into sensor.h5's per-event digit list (which recorded hit
+  // each decomposition row belongs to). Absent on pre-digitizer datasets —
+  // synthesize all-zeros (one digit per sensor) so the HIT slice degrades to
+  // the single-hit case.
+  let hitsDigit = readDsInt32(hEvt, 'digit_idx');
+  if (!hitsDigit && hitsSIdx) hitsDigit = new Int32Array(hitsSIdx.length);
   // emission_process column: per-row int8 tag (0=Cherenkov, 1=scintillation).
   // Added in the LUCiD Phase 0 schema delta — readers default to all-zeros on
   // pre-change datasets via the Python reader, but the worker has its own
@@ -254,7 +260,7 @@ function decodeEvent(idx) {
     sensor: { sensor_idx: sensorSIdx, PE: sensorPE, T: sensorT,
               nHits: sensorSIdx ? sensorSIdx.length : 0 },
     hits: { particle_idx: hitsParticle, sensor_idx: hitsSIdx, PE: hitsPE, T: hitsT,
-            emission_process: hitsEmission,
+            emission_process: hitsEmission, digit_idx: hitsDigit,
             nHits: hitsSIdx ? hitsSIdx.length : 0 },
     edep: { track_idx: edepTrackIdx,
            start_x: edepStartX, start_y: edepStartY, start_z: edepStartZ,
