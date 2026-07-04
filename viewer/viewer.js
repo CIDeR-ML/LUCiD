@@ -57,6 +57,15 @@ let pmtArrivalT = null;            // Float32Array — same value used for the 3
 let pmtPE_all = null,  pmtT_all = null,  pmtHasSignal_all = null;
 let pmtPE_cher = null, pmtT_cher = null, pmtHasSignal_cher = null;
 let pmtPE_scint = null, pmtT_scint = null, pmtHasSignal_scint = null;
+//   pmtPE_dark/... — sum of hits.h5 rows with emission_process==2 (electronic
+//     dark noise, particle_idx==-1). Only populated when dark rows exist.
+let pmtPE_dark = null, pmtT_dark = null, pmtHasSignal_dark = null;
+// Sentinel dominant-"particle" value for a dark-noise-dominated sensor under
+// the LABEL=Particle coloring while EMISSION=Dark (dark has no owning particle).
+const DARK_LABEL = -2;
+// Reserved categorical hue for the dark-noise category (cyan; distinct from the
+// low-index particle hues 0/0.618/0.236/0.854). catVal is a hue in [0,1).
+const DARK_HUE = 0.5;
 // Per-sensor Cherenkov fraction f = PE_cher / (PE_cher + PE_scint).
 // NaN where both are zero. Drives the CHER FRAC continuous field.
 let pmtCherFraction = null;
@@ -89,8 +98,9 @@ let curLabel = 'none';             // 'none' | 'particle' | 'pdg' | 'interaction
 // kernel-accumulator combined signal). When the dataset has only a single
 // emission process — pure Cherenkov or pure scintillation — the dropdown +
 // CHER FRAC field stay hidden and the filter is locked to 'all'.
-let emissionFilter = 'all';        // 'all' | 'cher' | 'scint'
+let emissionFilter = 'all';        // 'all' | 'cher' | 'scint' | 'dark'
 let datasetHasBothProcesses = false;
+let datasetHasDark = false;         // any emission_process==2 (dark-noise) rows seen
 let logScale = true;
 let percMin = 1, percMax = 99;
 let manualVmin = null, manualVmax = null;
@@ -320,11 +330,14 @@ function deriveSensorArrays() {
   // up in the 'All' slice via sensor.h5). Pre-smearing.
   pmtPE_cher = new Float32Array(nSensors);
   pmtPE_scint = new Float32Array(nSensors);
+  pmtPE_dark = new Float32Array(nSensors);
   pmtT_cher = new Float32Array(nSensors);
   pmtT_scint = new Float32Array(nSensors);
-  for (let i = 0; i < nSensors; i++) { pmtT_cher[i] = NaN; pmtT_scint[i] = NaN; }
+  pmtT_dark = new Float32Array(nSensors);
+  for (let i = 0; i < nSensors; i++) { pmtT_cher[i] = NaN; pmtT_scint[i] = NaN; pmtT_dark[i] = NaN; }
   pmtHasSignal_cher = new Uint8Array(nSensors);
   pmtHasSignal_scint = new Uint8Array(nSensors);
+  pmtHasSignal_dark = new Uint8Array(nSensors);
   const h = evtBundle.hits;
   if (h && h.nHits && h.emission_process) {
     const sIdx = h.sensor_idx, pe = h.PE, t = h.T, ep = h.emission_process;
@@ -336,8 +349,13 @@ function deriveSensorArrays() {
         pmtPE_scint[si] += p;
         if (Number.isNaN(pmtT_scint[si]) || t[i] < pmtT_scint[si]) pmtT_scint[si] = t[i];
         pmtHasSignal_scint[si] = 1;
+      } else if (ep[i] === 2) {
+        // emission_process == 2 (electronic dark noise).
+        pmtPE_dark[si] += p;
+        if (Number.isNaN(pmtT_dark[si]) || t[i] < pmtT_dark[si]) pmtT_dark[si] = t[i];
+        pmtHasSignal_dark[si] = 1;
       } else {
-        // emission_process == 0 (Cherenkov); also catches any pre-Phase-0
+        // emission_process == 0 (Cherenkov); also catches any pre-change
         // dataset that lacks the column (h5_worker defaults to all-zeros).
         pmtPE_cher[si] += p;
         if (Number.isNaN(pmtT_cher[si]) || t[i] < pmtT_cher[si]) pmtT_cher[si] = t[i];
@@ -376,6 +394,16 @@ function detectDualEmission(bundle) {
   return false;
 }
 
+// Detect whether the loaded event carries dark-noise rows (emission_process==2).
+// Locked across the dataset (like detectDualEmission) so the Dark slice stays
+// available even on events where dark noise happened to land nowhere.
+function detectDark(bundle) {
+  const ep = bundle && bundle.hits && bundle.hits.emission_process;
+  if (!ep) return false;
+  for (let i = 0; i < ep.length; i++) if (ep[i] === 2) return true;
+  return false;
+}
+
 // Repoint the active per-sensor arrays to the slice selected by
 // emissionFilter. Cheap (alias swap, no copy). Call after derivePMTArrays
 // (event load) and after the dropdown changes.
@@ -388,6 +416,10 @@ function applyEmissionFilter() {
     pmtPE = pmtPE_scint;
     pmtT  = pmtT_scint;
     pmtHasSignal = pmtHasSignal_scint;
+  } else if (emissionFilter === 'dark') {
+    pmtPE = pmtPE_dark;
+    pmtT  = pmtT_dark;
+    pmtHasSignal = pmtHasSignal_dark;
   } else {
     pmtPE = pmtPE_all;
     pmtT  = pmtT_all;
@@ -464,16 +496,22 @@ function buildHitsLookups() {
   const ep = i_.emission_process;
   const wantCher  = (emissionFilter === 'cher');
   const wantScint = (emissionFilter === 'scint');
+  const wantDark  = (emissionFilter === 'dark');
   for (let i = 0; i < i_.nHits; i++) {
-    if (ep) {
-      const e = ep[i];
-      if (wantCher && e !== 0) continue;
-      if (wantScint && e !== 1) continue;
-    }
-    const p = i_.particle_idx[i];
+    const e = ep ? ep[i] : 0;
+    if (wantCher && e !== 0) continue;
+    if (wantScint && e !== 1) continue;
+    if (wantDark && e !== 2) continue;
     const s = i_.sensor_idx[i];
     const pe = i_.PE[i];
-    if (p < 0 || p >= n_particles) continue;
+    if (wantDark) {
+      // Dark-noise rows have no owning particle (particle_idx == -1); colour
+      // the dominated sensor with the dedicated DARK category instead.
+      if (pe > perSensorBest[s]) { perSensorBest[s] = pe; pmtDomParticle[s] = DARK_LABEL; }
+      continue;
+    }
+    const p = i_.particle_idx[i];
+    if (p < 0 || p >= n_particles) continue;   // dark/orphan rows under non-dark slices
     particleToSensor[p].set(s, (particleToSensor[p].get(s) || 0) + pe);
     particleTotals[p] += pe;
     if (pe > perSensorBest[s]) {
@@ -543,7 +581,9 @@ function buildSegmentLookups() {
   // carry the process tag).
   const wantCher  = (emissionFilter === 'cher');
   const wantScint = (emissionFilter === 'scint');
+  const wantDark  = (emissionFilter === 'dark');   // sensor_hits carries no dark rows
   for (let i = 0; i < n; i++) {
+    if (wantDark) continue;   // dark slice has no segment contributions
     if (ep) {
       const e = ep[i];
       if (wantCher && e !== 0) continue;
@@ -813,6 +853,7 @@ function pmtCatValArray() {
   }
   for (let i = 0; i < nSensors; i++) {
     const p = pmtDomParticle[i];
+    if (p === DARK_LABEL) { out[i] = DARK_HUE; continue; }   // dark-noise category
     if (p < 0) { out[i] = 0; continue; }
     if (curLabel === 'particle') {
       out[i] = hashHue(p);
@@ -2159,11 +2200,20 @@ function syncEmissionUI() {
   const sep  = $('emissionSep');
   const cher = $('fieldCherFrac');
   if (!sel || !lbl || !sep || !cher) return;
-  const showDual = !!datasetHasBothProcesses;
-  sel.style.display  = showDual ? '' : 'none';
-  lbl.style.display  = showDual ? '' : 'none';
-  sep.style.display  = showDual ? '' : 'none';
-  cher.style.display = showDual ? '' : 'none';
+  const showDual = !!datasetHasBothProcesses;          // both photon processes -> cher/scint + CHER FRAC
+  const hasSlices = showDual || !!datasetHasDark;      // any emission slicing (incl. dark)
+  sel.style.display  = hasSlices ? '' : 'none';
+  lbl.style.display  = hasSlices ? '' : 'none';
+  sep.style.display  = hasSlices ? '' : 'none';
+  cher.style.display = showDual ? '' : 'none';         // CHER FRAC only when both photon processes exist
+  // Per-option visibility: cher/scint only under dual photon processes; Dark
+  // only when dark rows exist.
+  for (const v of ['cher', 'scint']) {
+    const o = sel.querySelector(`option[value="${v}"]`);
+    if (o) o.style.display = showDual ? '' : 'none';
+  }
+  const darkOpt = sel.querySelector('option[value="dark"]');
+  if (darkOpt) darkOpt.style.display = datasetHasDark ? '' : 'none';
   sel.value = emissionFilter;
   const cherUsable = showDual && emissionFilter === 'all';
   cher.disabled = !cherUsable;
@@ -2227,6 +2277,7 @@ async function loadEvent(idx) {
     // later events happen to have only one process represented (rare edge
     // case where all of one process QE-failed on a given event).
     datasetHasBothProcesses = datasetHasBothProcesses || detectDualEmission(d);
+    datasetHasDark = datasetHasDark || detectDark(d);
     syncEmissionUI();
     deriveSensorArrays();
     buildHitsLookups();
