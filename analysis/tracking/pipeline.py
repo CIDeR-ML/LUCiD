@@ -73,7 +73,36 @@ DEFAULT_CONFIG = {
     # true t0 per event, drawn uniform in [lo, hi] (ns) and injected by shifting the photon
     # times; [0, 0] pins the historical fixed t0=0.
     'true_t0_range': [-15.0, 15.0],
+    # fix the energy to its TRUE value: seeds get E_true (energy scan skipped) and the GN step
+    # in E is exactly zero (gradient + Fisher row/col masked). Diagnostic mode.
+    'fix_energy': False,
+    # opposite diagnostic: pin ALL params at truth except E — single start from the truth
+    # 9-vector, only the energy moves.
+    'fix_geometry': False,
+    # override the SIREN emitter's ray_sampling.threshold (None = value in siren_params.json,
+    # 0.05). Lower values sample dimmer (angle, s) bins — recovers the angular tails and the
+    # track end the 0.05 cut drops (see siren_emission_check).
+    'siren_threshold': None,
+    # False (default): build all three seeds, pick ONE by the pre-GN margin-gated data loss
+    # (prefer seedA unless another beats it by 1%) and run a single GN fit (~2.2x faster).
+    # True: full three-start fit_track_multistart with post-GN selection.
+    'multistart': False,
+    # E-refit stage: after the main fit, freeze ALL params at the fit values and re-optimize E
+    # alone for this many 1-D Gauss-Newton iterations on a DIFFERENT loss — the total-charge
+    # match L = 0.5 (sum mu(E) - sum q_obs)^2, whose AD gradient is faithful and whose minimum
+    # sits at the unbiased energy (grad_vs_fd_qtot). 0 disables.
+    'e_refit_iters': 0,
+    # force the single-track start: None (default) = pre-GN margin-gated loss pick among
+    # A/B/F; 'A'|'B'|'F' = always track that seed (skips the pick's 3x nkeys loss evals).
+    'force_seed': None,
     'placement_seed_base': 100003,
+    # placement rng seed = base + event * stride. stride=1 is OUR historical scheme; stride=1000
+    # matches the upstream sweep's pose_seed (lucid/fitting/sweep.py POSE_STRIDE, pose=0).
+    # To reproduce the upstream truth treatment EXACTLY set, per config:
+    #   {"placement_seed_stride": 1000, "containment_margin": null, "true_t0_range": [0, 0]}
+    # and to come back to ours simply omit them (defaults: stride 1, containment 0.95,
+    # t0 free in [-15, 15]).
+    'placement_seed_stride': 1,
     'data_seed_base': 7000,
 }
 
@@ -224,6 +253,33 @@ def seed_errors(seed, th9, d):
                      ddeg, float(seed[0] - th9[0]), float(seed[8] - th9[8])])
 
 
+class _FixedParamsModel:
+    """Freeze a subset of the 9 track params in the Fisher-GN without touching lucid.fitting.
+
+    Delegates to a ReconModel but zeroes the gradient entries and Fisher rows/cols of the fixed
+    indices. In fit_track's step ``A = Fs + lam·diag(Fs) + rI + 1e-9I`` the fixed rows reduce to
+    ``[Aii, 0, ...]`` with ``gs[i]=0``, so ``du[i] = 0`` EXACTLY — fixed params stay at their
+    seed values — and the min-||g|| readout scores the free parameters only.
+    """
+
+    def __init__(self, base, fixed_idx):
+        self._m = base; self.ND = base.ND; self._idx = list(fixed_idx)
+
+    def loss(self, *a, **k): return self._m.loss(*a, **k)
+    def perpmt(self, *a, **k): return self._m.perpmt(*a, **k)
+
+    def grad(self, *a, **k):
+        g = np.array(self._m.grad(*a, **k), float); g[self._idx] = 0.0; return g
+
+    def fisher(self, *a, **k):
+        F = np.array(self._m.fisher(*a, **k), float)
+        F[self._idx, :] = 0.0; F[:, self._idx] = 0.0; return F
+
+    def fisher_ad(self, *a, **k):
+        F = np.array(self._m.fisher_ad(*a, **k), float)
+        F[self._idx, :] = 0.0; F[:, self._idx] = 0.0; return F
+
+
 # --------------------------------------------------------------------------- pipeline
 
 class TrackingPipeline:
@@ -243,6 +299,22 @@ class TrackingPipeline:
         self.cfg = config
         geom = str(_resolve(config['geom_config'])); phys = str(_resolve(config['phys_config']))
         grid = config['grid']; K = config['K']; part = config['particle']
+
+        # siren_threshold: patch the ray_sampling block the simulator loads internally
+        # (setup_event_simulator has no kwarg for it). Affects only the SIREN emitter (pred);
+        # the is_data sim never samples from the SIREN.
+        if config.get('siren_threshold') is not None:
+            import lucid.simulation.simulator as _sim
+            _orig_unpack = _sim.unpack_siren_params
+            thr = float(config['siren_threshold'])
+
+            def _patched(particle_type='muon', material='water'):
+                d = _orig_unpack(particle_type, material)
+                d['ray_sampling'] = dict(d['ray_sampling'], threshold=thr)
+                return d
+            _sim.unpack_siren_params = _patched
+            if verbose:
+                print(f"[pipeline] siren ray_sampling.threshold -> {thr}", flush=True)
 
         self.det = generate_detector(geom)
         self.ND = len(self.det.all_points)
@@ -288,6 +360,7 @@ class TrackingPipeline:
         gn = config['gn']
         self.model = ReconModel(self.pred, self.ND, sigma=gn['sigma'], delta=gn['delta'],
                                 tot_n_scale=gn['tot_n_scale'])
+        self._qtot_vg = None                       # lazy jit for the E-refit stage
         if verbose:
             print(f"[pipeline] {part} | {self.ND} PMTs | n_rays={config['n_rays']} | "
                   f"geom={Path(geom).name} | root={Path(str(config['root_file'])).name}", flush=True)
@@ -329,8 +402,11 @@ class TrackingPipeline:
 
         raw = read_photon_data_from_photonsim(str(_resolve(cfg['root_file'])), ev)
         track_len = self.smax_m(raw['energy']) if self.smax_m is not None else None
+        # placement seed: base + ev*stride (stride 1000 + no containment + t0 [0,0]
+        # reproduces the upstream sweep poses exactly; see DEFAULT_CONFIG comment).
+        pseed = cfg['placement_seed_base'] + ev * (cfg.get('placement_seed_stride', 1) - 1)
         raw, vtx_true, dir_true = rand_tf(
-            raw, ev, cfg['fidr'], cfg['fidz'], cfg['placement_seed_base'],
+            raw, ev, cfg['fidr'], cfg['fidz'], pseed,
             track_len_m=track_len, bounds=self.bounds,
             margin=cfg.get('containment_margin'))
         # true t0: uniform in true_t0_range, injected by SHIFTING the photon emission times so
@@ -351,12 +427,22 @@ class TrackingPipeline:
         oc = np.asarray(c); ot = np.where(oc > 0, np.asarray(t), 0.)
         ocf, otf, POSf = jnp.asarray(oc), jnp.asarray(ot), jnp.asarray(POS)
 
+        if cfg.get('fix_geometry'):
+            # free-E diagnostic starts from truth — no seeder needed
+            return dict(ev=int(ev), energy_true=float(raw['energy']), th9=th9, d=d,
+                        oc=oc, ot=ot, seedA=None, seedB=None,
+                        n_hit=int((oc > 0).sum()), q_tot=float(oc.sum()),
+                        seed_seconds=float(time.time() - t_start))
+
         # --- seeds: shared energy scan, two complementary vertices, cone direction each ------
         sd = cfg['seed']
-        e0 = energy_scan_optimization(self.pred, jnp.zeros(3), jnp.arccos(1 / jnp.sqrt(3)),
-                                      jnp.pi / 4, 0., POSf, otf, ocf, (ocf, otf),
-                                      sd['energy_center'], sd['energy_delta'],
-                                      sd['energy_steps'], 0)['best_energy']
+        if cfg.get('fix_energy'):
+            e0 = float(raw['energy'])                      # E pinned to truth; no scan
+        else:
+            e0 = energy_scan_optimization(self.pred, jnp.zeros(3), jnp.arccos(1 / jnp.sqrt(3)),
+                                          jnp.pi / 4, 0., POSf, otf, ocf, (ocf, otf),
+                                          sd['energy_center'], sd['energy_delta'],
+                                          sd['energy_steps'], 0)['best_energy']
 
         def make_seed(vtx, t0g):
             c2 = hierarchical_direction_search_cone(self.pred, jnp.asarray(vtx), t0g, POSf, otf,
@@ -414,6 +500,57 @@ class TrackingPipeline:
             loss_pick=(0 if lossA <= lossB else 1), loss_pick_gated=pick_gated, loss_pick3=pick3,
             n_hit=P['n_hit'], q_tot=P['q_tot'], seconds=P['seed_seconds'])
 
+    def reconstruct_free_E(self, ev):
+        """Diagnostic: geometry+t0 pinned at TRUTH, only E free — single GN start from truth."""
+        from lucid.fitting import fit_track, vec9_dir
+        gn = self.cfg['gn']
+        P = self._prepare_event(ev)
+        th9, d, oc, ot = P['th9'], P['d'], P['oc'], P['ot']
+        t_start = time.time()
+        model = _FixedParamsModel(self.model, list(range(1, 9)))     # E (idx 0) free
+        res, H = fit_track(model, oc, ot, th9, nkeys=gn['nkeys'], niters=gn['niters'],
+                           lr=gn['lr'], fisher_mode=gn['fisher_mode'], hist=True)
+
+        def _errs(x):
+            dv = float(np.linalg.norm((np.asarray(x) - th9)[1:4]) * 100)
+            dd = float(np.degrees(np.arccos(np.clip(vec9_dir(x) @ d, -1, 1))))
+            return np.array([dv, dd, float(x[0] - th9[0]), float(x[8] - th9[8])])
+
+        return dict(
+            ev=int(ev), energy_true=P['energy_true'],
+            truth_vec9=th9, truth_phys=vec9_to_phys(th9), tdir=d,
+            fit_vec9=np.asarray(res), fit_phys=vec9_to_phys(res),
+            traj_win=H['traj'], traj_win_phys=traj_to_phys(H['traj']),
+            gnorm_win=H['gnorm'], best_iter_win=int(H['best_iter']), which=0,
+            fit_err=_errs(res), n_hit=P['n_hit'], q_tot=P['q_tot'],
+            seconds=P['seed_seconds'] + float(time.time() - t_start))
+
+    def _e_refit(self, t9, oc, niters):
+        """Stage-2 energy refit: all params FROZEN at the fit, E alone re-optimized on the
+        total-charge loss L = 0.5 (Qpred(E) - Qobs)^2 by 1-D Gauss-Newton
+        (E <- E - (Qpred - Qobs)/ (dQpred/dE)), key-averaged. Returns (t9', E history)."""
+        from lucid.fitting import track_from_vec9
+        gn = self.cfg['gn']; tns = float(gn['tot_n_scale'])
+        if self._qtot_vg is None:
+            def qtot(t9j, key):
+                _, _, _, tot = self.pred(track_from_vec9(t9j), key)
+                return jnp.sum(jnp.maximum(tot * tns, 1e-8))
+            self._qtot_vg = jax.jit(jax.value_and_grad(qtot))
+        keys = [jax.random.PRNGKey(gn.get('seed', 0) + s) for s in range(gn['nkeys'])]
+        q_obs = float(np.sum(oc))
+        t = np.array(t9, float); hist = [t[0]]
+        for _ in range(int(niters)):
+            qs, gs = [], []
+            for k in keys:
+                q, g = self._qtot_vg(jnp.asarray(t), k)
+                qs.append(float(q)); gs.append(float(np.asarray(g)[0]))
+            Q = float(np.mean(qs)); dQdE = float(np.mean(gs))
+            if abs(dQdE) < 1e-9:
+                break
+            t[0] -= np.clip((Q - q_obs) / dQdE, -200.0, 200.0)   # 1-D GN step, clipped
+            hist.append(t[0])
+        return t, np.array(hist)
+
     def reconstruct(self, ev):
         """Reconstruct one PhotonSim event (seeds + three-start Fisher-GN). Returns numpy dict.
 
@@ -423,44 +560,81 @@ class TrackingPipeline:
         (50-event seed studies): best-or-equal vertex in every regime, t0 RMS ~7 ns -> ~2 ns, and
         the post-GN margin-gated loss pick (prefer=A) rescues the rare fusion failures (JUNO).
         """
-        from lucid.fitting import fit_track_multistart, vec9_dir
+        from lucid.fitting import fit_track, fit_track_multistart, vec9_dir
+        if self.cfg.get('fix_geometry'):
+            return self.reconstruct_free_E(ev)
         gn = self.cfg['gn']
         P = self._prepare_event(ev)
         th9, d, oc, ot = P['th9'], P['d'], P['oc'], P['ot']
         seedA, seedB = P['seedA'], P['seedB']
         seedF = fuse_seeds(seedA, seedB)
+        starts = [seedA, seedB, seedF]
         t_start = time.time()
-
-        # --- three-start Fisher-GN fit; keep the lowest-loss basin, retain all trajectories ---
-        res, MS = fit_track_multistart(self.model, oc, ot, [seedA, seedB, seedF],
-                                       nkeys=gn['nkeys'], niters=gn['niters'], lr=gn['lr'],
-                                       fisher_mode=gn['fisher_mode'])
-        HA = MS['per_seed'][0][1]; HB = MS['per_seed'][1][1]; HF = MS['per_seed'][2][1]
-        H = MS['per_seed'][MS['which']][1]
+        model = _FixedParamsModel(self.model, [0]) if self.cfg.get('fix_energy') else self.model
 
         def _errs(x):
             dv = float(np.linalg.norm((np.asarray(x) - th9)[1:4]) * 100)          # vertex cm
             dd = float(np.degrees(np.arccos(np.clip(vec9_dir(x) @ d, -1, 1))))     # direction deg
             return np.array([dv, dd, float(x[0] - th9[0]), float(x[8] - th9[8])])  # +dE MeV, +dt0 ns
 
-        return dict(
+        rec = dict(
             ev=int(ev), energy_true=P['energy_true'],
             truth_vec9=th9, truth_phys=vec9_to_phys(th9), tdir=d,
             seedA_vec9=np.asarray(seedA), seedB_vec9=np.asarray(seedB),
             seedF_vec9=np.asarray(seedF),
             seedA_phys=vec9_to_phys(seedA), seedB_phys=vec9_to_phys(seedB),
             seedF_phys=vec9_to_phys(seedF),
-            fit_vec9=np.asarray(res), fit_phys=vec9_to_phys(res),
-            fitA_vec9=np.asarray(MS['per_seed'][0][0]), fitB_vec9=np.asarray(MS['per_seed'][1][0]),
-            fitF_vec9=np.asarray(MS['per_seed'][2][0]),
-            trajA=HA['traj'], trajB=HB['traj'], trajF=HF['traj'], traj_win=H['traj'],
-            traj_win_phys=traj_to_phys(H['traj']),
-            gnormA=HA['gnorm'], gnormB=HB['gnorm'], gnormF=HF['gnorm'], gnorm_win=H['gnorm'],
-            best_iterA=int(HA['best_iter']), best_iterB=int(HB['best_iter']),
-            best_iterF=int(HF['best_iter']),
-            best_iter_win=int(H['best_iter']), which=int(MS['which']),
-            losses=np.asarray(MS['losses']),
             seedA_err=_errs(seedA), seedB_err=_errs(seedB), seedF_err=_errs(seedF),
-            fit_err=_errs(res),
-            n_hit=P['n_hit'], q_tot=P['q_tot'],
+            n_hit=P['n_hit'], q_tot=P['q_tot'])
+
+        if self.cfg.get('multistart'):
+            # --- three-start Fisher-GN; post-GN margin-gated selection, all trajectories ---
+            res, MS = fit_track_multistart(model, oc, ot, starts,
+                                           nkeys=gn['nkeys'], niters=gn['niters'], lr=gn['lr'],
+                                           fisher_mode=gn['fisher_mode'])
+            HA = MS['per_seed'][0][1]; HB = MS['per_seed'][1][1]; HF = MS['per_seed'][2][1]
+            H = MS['per_seed'][MS['which']][1]
+            rec.update(
+                fitA_vec9=np.asarray(MS['per_seed'][0][0]),
+                fitB_vec9=np.asarray(MS['per_seed'][1][0]),
+                fitF_vec9=np.asarray(MS['per_seed'][2][0]),
+                trajA=HA['traj'], trajB=HB['traj'], trajF=HF['traj'],
+                gnormA=HA['gnorm'], gnormB=HB['gnorm'], gnormF=HF['gnorm'],
+                best_iterA=int(HA['best_iter']), best_iterB=int(HB['best_iter']),
+                best_iterF=int(HF['best_iter']),
+                which=int(MS['which']), losses=np.asarray(MS['losses']))
+        else:
+            # --- single tracking (default): pre-GN margin-gated loss pick, ONE GN fit -------
+            # Same gate as the validated seed study: prefer seedA unless another seed's data
+            # loss beats it by margin x |loss| (the pick went to fused on 92-100% there).
+            # force_seed 'A'|'B'|'F' bypasses the pick entirely.
+            if self.cfg.get('force_seed'):
+                pick = {'A': 0, 'B': 1, 'F': 2}[self.cfg['force_seed']]
+                losses = [0.0, 0.0, 0.0]
+            else:
+                keys = [jax.random.PRNGKey(gn.get('seed', 0) + s) for s in range(gn['nkeys'])]
+
+                def dloss(s):
+                    return float(np.mean([float(self.model.loss(np.asarray(s), oc, ot, k))
+                                          for k in keys]))
+                losses = [dloss(s) for s in starts]
+                gate = losses[0] - 0.01 * abs(losses[0])
+                cand = [i for i in (1, 2) if losses[i] < gate]
+                pick = min(cand, key=lambda i: losses[i]) if cand else 0
+            res, H = fit_track(model, oc, ot, starts[pick], nkeys=gn['nkeys'],
+                               niters=gn['niters'], lr=gn['lr'],
+                               fisher_mode=gn['fisher_mode'], hist=True)
+            rec.update(which=int(pick), losses=np.asarray(losses))
+
+        # optional stage 2: freeze everything at the fit, refit E alone on the Qtot loss
+        if self.cfg.get('e_refit_iters', 0) > 0 and not self.cfg.get('fix_energy'):
+            rec['fit_preErefit_vec9'] = np.asarray(res)
+            res, ehist = self._e_refit(res, oc, self.cfg['e_refit_iters'])
+            rec['e_refit_hist'] = ehist
+
+        rec.update(
+            fit_vec9=np.asarray(res), fit_phys=vec9_to_phys(res), fit_err=_errs(res),
+            traj_win=H['traj'], traj_win_phys=traj_to_phys(H['traj']),
+            gnorm_win=H['gnorm'], best_iter_win=int(H['best_iter']),
             seconds=P['seed_seconds'] + float(time.time() - t_start))
+        return rec
