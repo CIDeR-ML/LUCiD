@@ -175,55 +175,80 @@ def digitize_event(
     threshold = float(model.get("threshold_pe", 0.0))
 
     photon_digit_idx = np.full(n_ph, -1, dtype=np.int32)
-    d_sensor: list[int] = []
-    d_pe: list[float] = []
-    d_t: list[float] = []
+    if n_ph == 0:
+        return DigitizeResult(
+            digit_sensor_idx=np.empty(0, np.int32), digit_pe_true=np.empty(0, np.float32),
+            digit_time=np.empty(0, np.float32), photon_digit_idx=photon_digit_idx)
 
-    if n_ph:
-        # Group photons by sensor, time-ordered within each group.
-        order = np.lexsort((times, sensor_idx))
-        s_sorted = sensor_idx[order]
-        t_sorted = times[order]
-        q_sorted = charges[order]
+    # Sort by (sensor, time); find per-sensor group boundaries. Vectorized.
+    order = np.lexsort((times, sensor_idx))
+    s_sorted = sensor_idx[order]
+    t_sorted = times[order]
+    q_sorted = charges[order]
+    change = np.empty(n_ph, dtype=bool)
+    change[0] = True
+    change[1:] = s_sorted[1:] != s_sorted[:-1]
+    gstart = np.flatnonzero(change)
+    gend = np.empty(gstart.size, dtype=np.int64)
+    gend[:-1] = gstart[1:]
+    gend[-1] = n_ph
+    gsize = gend - gstart
+    first_t = t_sorted[gstart]                        # min time (sorted) per group
+    span = t_sorted[gend - 1] - first_t
+    gcharge = np.add.reduceat(q_sorted, gstart)
+    # A group is "simple" if all its light fits in one integration window —
+    # then it is exactly one digit (sum charge, first-arrival time). The
+    # sequential window loop is only needed for groups that span more than the
+    # window (delayed light). `basic` (window=inf) => every group is simple.
+    simple = span <= window
 
-        digit_counter = 0
-        start = 0
-        while start < n_ph:
-            s = s_sorted[start]
-            end = start
-            while end < n_ph and s_sorted[end] == s:
-                end += 1
-            gt = t_sorted[start:end]
-            gq = q_sorted[start:end]
-            gpos = order[start:end]
-            m = end - start
+    pdi_sorted = np.full(n_ph, -1, dtype=np.int32)     # in sorted order
+    # --- simple groups: fully vectorized ---
+    simple_pass = simple & (gcharge >= threshold)
+    n_simple = int(simple_pass.sum())
+    digit_id_per_group = np.full(gstart.size, -1, dtype=np.int64)
+    digit_id_per_group[simple_pass] = np.arange(n_simple)
+    pdi_sorted = np.repeat(digit_id_per_group, gsize).astype(np.int32)
+    d_sensor = [s_sorted[gstart[simple_pass]].astype(np.int32)]
+    d_pe = [gcharge[simple_pass].astype(np.float32)]
+    d_t = [first_t[simple_pass].astype(np.float32)]
+    digit_counter = n_simple
 
-            i = 0
-            while i < m:
-                t0 = gt[i]
-                upper = t0 + window
-                j = i
-                pe = 0.0
-                while j < m and gt[j] <= upper:
-                    pe += gq[j]
-                    j += 1
-                if pe >= threshold:
-                    photon_digit_idx[gpos[i:j]] = digit_counter
-                    d_sensor.append(int(s))
-                    d_pe.append(float(pe))
-                    d_t.append(float(t0))
-                    digit_counter += 1
-                # Deadtime veto: hits in (upper, upper+deadtime] are dropped.
-                dead_end = upper + deadtime
-                while j < m and gt[j] <= dead_end:
-                    j += 1
-                i = j
-            start = end
+    # --- complex groups: the sliding-window loop, only where needed ---
+    for g in np.flatnonzero(~simple):
+        i0, i1 = int(gstart[g]), int(gend[g])
+        gt = t_sorted[i0:i1]
+        gq = q_sorted[i0:i1]
+        m = i1 - i0
+        i = 0
+        s_val = int(s_sorted[i0])
+        while i < m:
+            t0 = gt[i]
+            upper = t0 + window
+            j = i
+            pe = 0.0
+            while j < m and gt[j] <= upper:
+                pe += gq[j]
+                j += 1
+            if pe >= threshold:
+                pdi_sorted[i0 + i:i0 + j] = digit_counter
+                d_sensor.append(np.int32(s_val))
+                d_pe.append(np.float32(pe))
+                d_t.append(np.float32(t0))
+                digit_counter += 1
+            dead_end = upper + deadtime
+            while j < m and gt[j] <= dead_end:
+                j += 1
+            i = j
 
+    photon_digit_idx[order] = pdi_sorted
     return DigitizeResult(
-        digit_sensor_idx=np.asarray(d_sensor, dtype=np.int32),
-        digit_pe_true=np.asarray(d_pe, dtype=np.float32),
-        digit_time=np.asarray(d_t, dtype=np.float32),
+        digit_sensor_idx=np.concatenate([np.atleast_1d(a) for a in d_sensor]).astype(np.int32)
+            if digit_counter else np.empty(0, np.int32),
+        digit_pe_true=np.concatenate([np.atleast_1d(a) for a in d_pe]).astype(np.float32)
+            if digit_counter else np.empty(0, np.float32),
+        digit_time=np.concatenate([np.atleast_1d(a) for a in d_t]).astype(np.float32)
+            if digit_counter else np.empty(0, np.float32),
         photon_digit_idx=photon_digit_idx,
     )
 
@@ -255,25 +280,61 @@ def apply_readout_resolution(
     return pe_reco.astype(np.float32), t.astype(np.float32)
 
 
+def _encode_keys(key_cols):
+    """Pack integer key columns into one int64 composite (mixed radix).
+
+    A single ``argsort`` on the composite is much faster than an N-array
+    ``lexsort`` (one pass vs one per key). Returns ``(composite, ok)``; ``ok``
+    is False if the radix product would overflow int64 (caller falls back to
+    lexsort). ``key_cols[0]`` is the most-significant key.
+    """
+    shifted, radices = [], []
+    for c in key_cols:
+        c = np.asarray(c, dtype=np.int64)
+        mn = int(c.min()) if c.size else 0
+        s = c - mn                                   # -> non-negative (handles -1)
+        shifted.append(s)
+        radices.append((int(s.max()) + 1) if s.size else 1)
+    prod = 1
+    for r in radices:
+        prod *= r
+        if prod >= (1 << 62):
+            return None, False
+    key = shifted[0].copy()
+    for s, r in zip(shifted[1:], radices[1:]):
+        key = key * r + s
+    return key, True
+
+
 def _group_reduce(key_cols: tuple, pe: np.ndarray, t: np.ndarray, t_reco: np.ndarray):
     """Group rows by the tuple of integer key columns; PE=sum, T/T_reco=min.
 
     Returns ``(key_cols_out, PE, T, T_reco)`` where ``key_cols_out`` are the
     per-group key values (same tuple arity as ``key_cols``). ``key_cols[0]`` is
-    the primary sort key. Mirrors the lexsort+reduceat groupby used elsewhere.
+    the primary sort key. Sorts on a single int64 composite key (falls back to
+    lexsort only if the composite would overflow).
     """
     n = pe.shape[0]
     if n == 0:
         empty = np.empty(0, dtype=np.int64)
         return (tuple(empty for _ in key_cols),
                 np.empty(0, np.float64), np.empty(0, np.float64), np.empty(0, np.float64))
-    order = np.lexsort(tuple(reversed(key_cols)))  # key_cols[0] primary
+    composite, ok = _encode_keys(key_cols)
+    if ok:
+        order = np.argsort(composite, kind="stable")
+        comp_s = composite[order]
+        change = np.empty(n, dtype=bool)
+        change[0] = True
+        change[1:] = comp_s[1:] != comp_s[:-1]
+    else:
+        order = np.lexsort(tuple(reversed(key_cols)))
+        cols_tmp = [np.asarray(c)[order] for c in key_cols]
+        change = np.zeros(n, dtype=bool)
+        change[0] = True
+        for c in cols_tmp:
+            change[1:] |= c[1:] != c[:-1]
     cols_s = [np.asarray(c)[order] for c in key_cols]
     pe_s, t_s, tr_s = pe[order], t[order], t_reco[order]
-    change = np.zeros(n, dtype=bool)
-    change[0] = True
-    for c in cols_s:
-        change[1:] |= c[1:] != c[:-1]
     starts = np.flatnonzero(change)
     return ([c[starts] for c in cols_s],
             np.add.reduceat(pe_s, starts),

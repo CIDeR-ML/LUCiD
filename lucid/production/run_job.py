@@ -114,6 +114,18 @@ def _parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+def _read_digitizer_cfg(physics_config_path: str):
+    """Read the optional 'digitizer' block from a detector physics config.
+
+    Returns the block (str or dict) or None (-> 'basic') when absent/unreadable.
+    """
+    try:
+        with open(physics_config_path) as f:
+            return json.load(f).get("digitizer")
+    except (OSError, ValueError):
+        return None
+
+
 def _load_config(path: str) -> dict:
     with open(path) as f:
         cfg = json.load(f)
@@ -262,12 +274,7 @@ def _run_lucid(
 
     # Digitizer (sensor hit-making) model comes from the detector physics
     # config's optional "digitizer" block; absent -> "basic" (legacy behaviour).
-    digitizer_cfg = None
-    try:
-        with open(physics_config_path) as _pf:
-            digitizer_cfg = json.load(_pf).get("digitizer")
-    except (OSError, ValueError):
-        digitizer_cfg = None
+    digitizer_cfg = _read_digitizer_cfg(physics_config_path)
 
     saved_files = generate_events_from_photonsim_particles(
         event_simulator=simulate_event,
@@ -725,6 +732,7 @@ def _main_pileup(args: argparse.Namespace, config: dict) -> int:
         dataset_name=config["name"],
         run_id=None,
         file_index_start=file_index,
+        digitizer=_read_digitizer_cfg(physics_config_path),
     )
     print(f"LUCiD wrote {len(saved_files)} files.")
 

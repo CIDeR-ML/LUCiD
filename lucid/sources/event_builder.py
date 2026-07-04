@@ -650,8 +650,15 @@ def run_event_process_pipeline(
         photon_segment_index_raw,
         n_sensors,
         rays_buckets,
-        sim_key):
+        sim_key,
+        compute_aggregate=True):
     """Run kernel + derive_views + aggregator for **one** photon stream.
+
+    ``compute_aggregate=False`` skips the host per-(particle/segment, sensor)
+    aggregation (``_aggregate_from_photon_records``) — the digitizer path
+    rebuilds the decomposition itself from ``particle_data`` and never reads
+    ``PE_per_particle`` / ``segment_sensor_hits``, so running it there is dead
+    work. The kept per-photon records live in the returned ``particle_data``.
 
     The single-vertex and pile-up data-mode drivers both call this once per
     emission process when scintillation is active (Option C: one kernel call
@@ -696,21 +703,23 @@ def run_event_process_pipeline(
         'photon_global_idx': photon_gid,
     })
 
-    pr = particle_data['photon_records_filtered']
-    agg = _aggregate_from_photon_records(
-        pr['qe_weight'], pr['qe_time'], pr['sensor_idx'],
-        pr['seg_idx_filtered'], pr['particle_idx'],
-        n_particles=particle_data['n_particles'], n_sensors=n_sensors,
-        photon_qe_time_reco=pr.get('qe_time_reco'))
+    agg = None
+    if compute_aggregate:
+        pr = particle_data['photon_records_filtered']
+        agg = _aggregate_from_photon_records(
+            pr['qe_weight'], pr['qe_time'], pr['sensor_idx'],
+            pr['seg_idx_filtered'], pr['particle_idx'],
+            n_particles=particle_data['n_particles'], n_sensors=n_sensors,
+            photon_qe_time_reco=pr.get('qe_time_reco'))
 
     return {
         'pe_per_sensor':       pe_per_sensor_np,
         't_per_sensor':        t_per_sensor_np,
         't_reco_per_sensor':   t_reco_per_sensor_np,
-        'PE_per_particle':     agg['PE_per_particle'],
-        'T_per_particle':      agg['T_per_particle'],
-        'T_reco_per_particle': agg['T_reco_per_particle'],
-        'segment_sensor_hits': agg['segment_sensor_hits'],
+        'PE_per_particle':     agg['PE_per_particle'] if agg else None,
+        'T_per_particle':      agg['T_per_particle'] if agg else None,
+        'T_reco_per_particle': agg['T_reco_per_particle'] if agg else None,
+        'segment_sensor_hits': agg['segment_sensor_hits'] if agg else None,
         'particle_data':       particle_data,
     }
 
@@ -747,14 +756,22 @@ def gather_photon_deposits(process_outputs):
         w = np.asarray(pr['qe_weight'])
         if w.size == 0:
             continue
+        # Keep only DETECTED photo-electrons (qe_weight > 0). The kernel-flat
+        # records carry one row per (photon, candidate-sensor, step) — the vast
+        # majority are QE-failed / zero-weight. Masking here (as
+        # _aggregate_from_photon_records does) collapses tens of millions of
+        # rows to the ~detected PE before any concat/pool/sort downstream.
+        keep = w > 0
+        if not keep.any():
+            continue
         proc = int(p_out.get('process_id', 0))
-        S.append(np.asarray(pr['sensor_idx']))
-        W.append(w)
-        TT.append(np.asarray(pr['qe_time']))
-        TR.append(np.asarray(pr.get('qe_time_reco', pr['qe_time'])))
-        PI.append(np.asarray(pr['particle_idx']))
-        SEG.append(np.asarray(pr['seg_idx_filtered']))
-        EMP.append(np.full(w.size, proc, dtype=np.int64))
+        S.append(np.asarray(pr['sensor_idx'])[keep])
+        W.append(w[keep])
+        TT.append(np.asarray(pr['qe_time'])[keep])
+        TR.append(np.asarray(pr.get('qe_time_reco', pr['qe_time']))[keep])
+        PI.append(np.asarray(pr['particle_idx'])[keep])
+        SEG.append(np.asarray(pr['seg_idx_filtered'])[keep])
+        EMP.append(np.full(int(keep.sum()), proc, dtype=np.int64))
 
     def _cat(xs, dt):
         return np.concatenate(xs).astype(dt) if xs else np.array([], dtype=dt)

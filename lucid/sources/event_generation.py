@@ -455,6 +455,7 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
                     n_sensors=n_sensors,
                     rays_buckets=pad_size_buckets,
                     sim_key=_sim_key_p,
+                    compute_aggregate=False,  # digitizer rebuilds the decomposition
                 )
                 _out['process_id'] = _p_in['process_id']
                 process_outputs.append(_out)
@@ -703,6 +704,7 @@ def generate_events_from_photonsim_pileup(
     dataset_name='unnamed_pileup_dataset',
     run_id=None,
     file_index_start=0,
+    digitizer=None,
 ):
     """Generate pile-up events by merging N PhotonSim streams per event.
 
@@ -739,6 +741,9 @@ def generate_events_from_photonsim_pileup(
     master_seed = _resolve_master_seed(master_seed)
     print(f"Pile-up: master_seed={master_seed}, job_id={job_id}, "
           f"n_vertices={N_vertices}")
+    digitizer_model = resolve_model_config(digitizer)
+    print(f"Digitizer model: {digitizer_model['model']} "
+          f"(dark_rate_khz={digitizer_model.get('dark_rate_khz', 0.0)})")
 
     if run_id is None:
         run_id = str(uuid.uuid4())
@@ -930,6 +935,7 @@ def generate_events_from_photonsim_pileup(
                         n_sensors=n_sensors,
                         rays_buckets=rays_buckets,
                         sim_key=_sim_key_p,
+                        compute_aggregate=False,  # digitizer rebuilds the decomposition
                     )
                     _out['process_id'] = _p_in['process_id']
                     process_outputs_i.append(_out)
@@ -940,49 +946,24 @@ def generate_events_from_photonsim_pileup(
                 particle_data_i = process_outputs_i[0]['particle_data']
                 n_particles_i = particle_data_i['n_particles']
 
-                # Per-vertex combined per-sensor PE/T (across processes), plus
-                # the writer-ready sparse rows tagged with emission_process.
-                pe_sensor_i = np.sum(
-                    [p['pe_per_sensor'] for p in process_outputs_i], axis=0)
-                t_sensor_i = combine_t_per_sensor_across_processes(
-                    [p['t_per_sensor'] for p in process_outputs_i])
-                t_reco_sensor_i = combine_t_per_sensor_across_processes(
-                    [p['t_reco_per_sensor'] for p in process_outputs_i])
-                hits_sparse_i = build_hits_sparse_per_process(
-                    process_outputs_i, n_particles_i)
-                seg_hits_i = build_seg_hits_merged_per_process(process_outputs_i)
-
-                # Apply +t0_i to shift this vertex's outputs into the absolute
-                # detector frame. All time arrays are sparse from here.
-                t0_f32 = np.float32(t0_i)
-                pe_sensor_i = pe_sensor_i.astype(np.float32, copy=False)
-                t_sensor_i = t_sensor_i.copy()
-                t_reco_sensor_i = t_reco_sensor_i.copy()
-                np.add(t_sensor_i,      t0_f32, out=t_sensor_i,      where=t_sensor_i      > 0)
-                np.add(t_reco_sensor_i, t0_f32, out=t_reco_sensor_i, where=t_reco_sensor_i > 0)
-                if hits_sparse_i['T'].size > 0:
-                    hits_sparse_i['T'] = hits_sparse_i['T'] + t0_f32
-                if hits_sparse_i.get('T_reco') is not None and hits_sparse_i['T_reco'].size > 0:
-                    hits_sparse_i['T_reco'] = hits_sparse_i['T_reco'] + t0_f32
-                if seg_hits_i is not None and seg_hits_i['PE'].size > 0:
-                    seg_hits_i['T'] = seg_hits_i['T'] + t0_f32
-                    if 'T_reco' in seg_hits_i and seg_hits_i['T_reco'].size > 0:
-                        seg_hits_i['T_reco'] = seg_hits_i['T_reco'] + t0_f32
-                # Same shift for segment times.
+                # Per-vertex per-photon deposits for cross-vertex digitization:
+                # the merger pools them across vertices (in absolute time, with
+                # per-vertex particle/segment offsets) and windows them once, so
+                # overlapping pile-up light merges into shared digits. Segment
+                # times are still shifted per-vertex here (they carry absolute
+                # times downstream, consistent with the digit times).
+                deposits_i = gather_photon_deposits(process_outputs_i)
                 if particle_data_i['segments'].get('n_segments', 0) > 0:
                     particle_data_i['segments']['time'] = (
                         np.asarray(particle_data_i['segments']['time'], dtype=np.float32)
-                        + t0_f32)
+                        + np.float32(t0_i))
 
                 streams.append({
                     'particles':              particle_data_i['particles'],
                     'meaningful_tracks':      particle_data_i['meaningful_tracks'],
                     'segments':               particle_data_i['segments'],
-                    'pe_per_sensor':          pe_sensor_i,
-                    't_per_sensor':           t_sensor_i,
-                    't_reco_per_sensor':      t_reco_sensor_i,
-                    'hits_sparse':            hits_sparse_i,
-                    'seg_hits':               seg_hits_i,
+                    'deposits':               deposits_i,
+                    't0':                     float(t0_i),
                     'interaction_meta':       build_interaction_metadata(
                         particle_data_i, t0=t0_i, vertex_xyz=vertex_i,
                         source_type_code=source_type_code_i),
@@ -994,9 +975,8 @@ def generate_events_from_photonsim_pileup(
             merged = _merge_pileup_streams(
                 streams, n_sensors=n_sensors,
                 apply_smearing=apply_smearing,
-                smear_key=derive_event_keys(
-                    master_seed, job_id, event_idx,
-                    interaction_idx=N_vertices)['smear_key'],
+                digitizer_model=digitizer_model,
+                digi_rng=np.random.default_rng([int(master_seed or 0), int(event_idx)]),
                 detector_bounds=detector_bounds,
             )
             print(f"    [timing] merge {_time.time() - _t_merge:.3f}s", flush=True)
@@ -1032,6 +1012,7 @@ def generate_events_from_photonsim_pileup(
             'smearing_applied': bool(apply_smearing),
             'smearing_charge_function': 'SK_like' if apply_smearing else 'none',
             'smearing_time_function': 'SK_like' if apply_smearing else 'none',
+            'digitizer_model': str(digitizer_model['model']),
             'label_names': ['category'],
         }
         if detector_bounds is not None:
@@ -1069,7 +1050,7 @@ def generate_events_from_photonsim_pileup(
 
 
 def _merge_pileup_streams(streams, *, n_sensors, apply_smearing,
-                          smear_key, detector_bounds):
+                          digitizer_model, digi_rng, detector_bounds):
     """Merge per-vertex streams into a single event_dict.
 
     Per-interaction metadata (t0, vertex_xyz, source_type) is broadcast
@@ -1080,7 +1061,13 @@ def _merge_pileup_streams(streams, *, n_sensors, apply_smearing,
     declared order with monotonically increasing track IDs, so a
     primary's range uniquely identifies its source stream.
 
-    ``smear_key`` is a jax key (not a concrete seed).
+    Hit-making is **cross-vertex**: every vertex's per-photon deposits are
+    pooled into one absolute-time list — each shifted by its ``t0`` and its
+    ``particle_idx`` / ``segment_idx`` offset by the same cumulative counts
+    used to merge the particle/segment tables — then windowed once by
+    ``digitize_and_decompose``. Overlapping pile-up light therefore merges
+    into shared digits, and each digit's charge decomposes across the
+    contributing vertices' particles.
     """
     # Concatenate particles, meaningful_tracks, segments (all post-remap).
     all_particles = []
@@ -1109,11 +1096,13 @@ def _merge_pileup_streams(streams, *, n_sensors, apply_smearing,
     # spaces (particle_idx by cumulative particle count, segment_idx by
     # cumulative segment count). Streams' particles and segments are
     # disjoint by construction (track ids were offset upstream).
-    hits_sparse_shifted = []
-    seg_hits_shifted = []
-    pe_sensor_streams = []
-    t_sensor_streams = []
-    t_reco_sensor_streams = []
+    # Pool every vertex's per-photon deposits into one absolute-time list.
+    # Each deposit's particle_idx / segment_idx is shifted by the *same*
+    # cumulative offsets used to merge the particle/segment tables (the -1
+    # dark/orphan sentinel is preserved); its times are shifted by the
+    # vertex t0. digitize_and_decompose then windows the pool once.
+    pool = {k: [] for k in ('sensor_idx', 'charge', 't_true', 't_reco',
+                            'particle_idx', 'segment_idx', 'emission_process')}
     particle_offset = 0
     seg_offset = 0
     for s in streams:
@@ -1124,63 +1113,27 @@ def _merge_pileup_streams(streams, *, n_sensors, apply_smearing,
         if n_seg_v > 0:
             for k in all_segs:
                 all_segs[k].append(np.asarray(segs[k]))
-        pe_sensor_streams.append(s['pe_per_sensor'])
-        t_sensor_streams.append(s['t_per_sensor'])
-        t_reco_sensor_streams.append(s['t_reco_per_sensor'])
 
-        hs = s.get('hits_sparse')
-        if hs is not None and hs['PE'].size > 0:
-            entry = {
-                'particle_idx':     hs['particle_idx'] + np.int32(particle_offset),
-                'sensor_idx':       hs['sensor_idx'],
-                'PE':               hs['PE'],
-                'T':                hs['T'],
-                'emission_process': hs['emission_process'],
-            }
-            if 'T_reco' in hs:
-                entry['T_reco'] = hs['T_reco']
-            hits_sparse_shifted.append(entry)
-
-        sh = s.get('seg_hits')
-        if sh is not None and sh['PE'].size > 0:
-            shifted = {
-                'segment_idx':      sh['segment_idx'] + np.int32(seg_offset),
-                'sensor_idx':       sh['sensor_idx'],
-                'PE':               sh['PE'],
-                'T':                sh['T'],
-                'emission_process': sh['emission_process'],
-            }
-            if 'T_reco' in sh:
-                shifted['T_reco'] = sh['T_reco']
-            seg_hits_shifted.append(shifted)
+        dep = s.get('deposits') or {}
+        d_sensor = np.asarray(dep.get('sensor_idx', np.empty(0, np.int64)))
+        if d_sensor.size:
+            t0v = np.float64(s['t0'])
+            pi = np.asarray(dep['particle_idx']).astype(np.int64, copy=True)
+            pi[pi >= 0] += particle_offset       # preserve -1 (dark/orphan)
+            si = np.asarray(dep['segment_idx']).astype(np.int64, copy=True)
+            si[si >= 0] += seg_offset
+            pool['sensor_idx'].append(d_sensor.astype(np.int64))
+            pool['charge'].append(np.asarray(dep['charge'], np.float64))
+            pool['t_true'].append(np.asarray(dep['t_true'], np.float64) + t0v)
+            pool['t_reco'].append(np.asarray(dep['t_reco'], np.float64) + t0v)
+            pool['particle_idx'].append(pi)
+            pool['segment_idx'].append(si)
+            pool['emission_process'].append(np.asarray(dep['emission_process'], np.int64))
 
         particle_offset += len(s['particles'])
         seg_offset += n_seg_v
 
     n_particles_total = len(all_particles)
-
-    # Per-sensor PE_true / T_true: sum / sentinel-aware min across the
-    # per-vertex per-sensor arrays (each already process-combined upstream
-    # via combine_t_per_sensor_across_processes).
-    if pe_sensor_streams:
-        PE_true = np.sum(pe_sensor_streams, axis=0).astype(np.float32)
-        T_true = combine_t_per_sensor_across_processes(t_sensor_streams)
-        T_reco = combine_t_per_sensor_across_processes(t_reco_sensor_streams)
-    else:
-        PE_true = np.zeros(n_sensors, dtype=np.float32)
-        T_true  = np.zeros(n_sensors, dtype=np.float32)
-        T_reco  = np.zeros(n_sensors, dtype=np.float32)
-
-    # Charge smearing is still host-side (SK-like Poisson model);
-    # time smearing is now kernel-side (TTS), so only PE gets smeared here.
-    if apply_smearing and PE_true.sum() > 0:
-        from lucid.utils import smear_charges_SK_like
-        smear_pe_key, _unused_t_key = jax.random.split(smear_key)
-        PE_reco = np.asarray(
-            smear_charges_SK_like(jnp.asarray(PE_true), key=smear_pe_key),
-            dtype=np.float32)
-    else:
-        PE_reco = PE_true.copy()
 
     # Merge segment arrays
     if all_segs['time']:
@@ -1189,29 +1142,21 @@ def _merge_pileup_streams(streams, *, n_sensors, apply_smearing,
     else:
         seg_merged = {'n_segments': 0}
 
-    # Concat the per-vertex sparse hits rows (already particle_idx-shifted
-    # into the merged per_particle row space).
-    if hits_sparse_shifted:
-        has_t_reco_any = all('T_reco' in d for d in hits_sparse_shifted)
-        merged_hits_sparse = {
-            'particle_idx':     np.concatenate([d['particle_idx']     for d in hits_sparse_shifted]).astype(np.int32),
-            'sensor_idx':       np.concatenate([d['sensor_idx']       for d in hits_sparse_shifted]).astype(np.uint16),
-            'PE':               np.concatenate([d['PE']               for d in hits_sparse_shifted]).astype(np.float32),
-            'T':                np.concatenate([d['T']                for d in hits_sparse_shifted]).astype(np.float32),
-            'emission_process': np.concatenate([d['emission_process'] for d in hits_sparse_shifted]).astype(np.int8),
-        }
-        if has_t_reco_any:
-            merged_hits_sparse['T_reco'] = np.concatenate(
-                [d['T_reco'] for d in hits_sparse_shifted]).astype(np.float32)
-    else:
-        merged_hits_sparse = {
-            'particle_idx':     np.empty(0, dtype=np.int32),
-            'sensor_idx':       np.empty(0, dtype=np.uint16),
-            'PE':               np.empty(0, dtype=np.float32),
-            'T':                np.empty(0, dtype=np.float32),
-            'T_reco':           np.empty(0, dtype=np.float32),
-            'emission_process': np.empty(0, dtype=np.int8),
-        }
+    def _catp(key, dt):
+        return np.concatenate(pool[key]).astype(dt) if pool[key] else np.array([], dtype=dt)
+
+    # Cross-vertex digitization: one windowing pass over the pooled deposits.
+    sensor_digits, merged_hits_sparse, merged_seg_hits = digitize_and_decompose(
+        sensor_idx=_catp('sensor_idx', np.int64),
+        charge=_catp('charge', np.float64),
+        t_true=_catp('t_true', np.float64),
+        t_reco=_catp('t_reco', np.float64),
+        particle_idx=_catp('particle_idx', np.int64),
+        segment_idx=_catp('segment_idx', np.int64),
+        emission_process=_catp('emission_process', np.int64),
+        n_sensors=n_sensors, model=digitizer_model, rng=digi_rng,
+        dark_rate_khz=float(digitizer_model.get('dark_rate_khz', 0.0)),
+        apply_resolution=apply_smearing)
 
     merged = {
         'n_particles': int(n_particles_total),
@@ -1224,23 +1169,9 @@ def _merge_pileup_streams(streams, *, n_sensors, apply_smearing,
         'interaction_metadata':   interaction_metadata,
         'primary_to_interaction': primary_to_interaction,
         'hits_sparse': merged_hits_sparse,
-        'PE_reco': PE_reco,
-        'T_reco':  T_reco,
+        'sensor_digits': sensor_digits,
     }
-
-    # Concat the per-vertex sparse step triplets (already segment_idx-
-    # shifted into the merged segment table's row space).
-    if seg_hits_shifted:
-        merged_seg_hits = {
-            'segment_idx':      np.concatenate([d['segment_idx']      for d in seg_hits_shifted]).astype(np.int32),
-            'sensor_idx':       np.concatenate([d['sensor_idx']       for d in seg_hits_shifted]).astype(np.uint16),
-            'PE':               np.concatenate([d['PE']               for d in seg_hits_shifted]).astype(np.float32),
-            'T':                np.concatenate([d['T']                for d in seg_hits_shifted]).astype(np.float32),
-            'emission_process': np.concatenate([d['emission_process'] for d in seg_hits_shifted]).astype(np.int8),
-        }
-        if all('T_reco' in d for d in seg_hits_shifted):
-            merged_seg_hits['T_reco'] = np.concatenate(
-                [d['T_reco'] for d in seg_hits_shifted]).astype(np.float32)
+    if merged_seg_hits['PE'].size > 0:
         merged['segment_sensor_hits'] = merged_seg_hits
 
     # Geometric containment (same derivation as the single-vertex path;
