@@ -88,7 +88,9 @@ class ClusterAdapter(ABC):
                             detector: str, job_id: str, job_name: str,
                             partition: str, use_gpu: bool, test: bool,
                             skip_lucid: bool, n_events: Optional[int],
-                            override_energy_mev: Optional[float]) -> str: ...
+                            override_energy_mev: Optional[float],
+                            sn_model: Optional[str] = None,
+                            sn_ordering: Optional[str] = None) -> str: ...
 
     @abstractmethod
     def render_train_run(self, *, run_dir: Path, run_name: str,
@@ -208,7 +210,8 @@ class SlurmAdapter(ClusterAdapter):
 
     def render_dataprod_job(self, *, cell_dir, config_path, detector, job_id,
                             job_name, partition, use_gpu, test, skip_lucid,
-                            n_events, override_energy_mev):
+                            n_events, override_energy_mev,
+                            sn_model=None, sn_ordering=None):
         # Uses 6-digit `job_{job_id}` log naming, matching the dataprod
         # convention (verify_jobs.py SBATCH_RE matches this).
         cpus = self.env.get("DEFAULT_CPUS", "1")
@@ -229,10 +232,21 @@ class SlurmAdapter(ClusterAdapter):
             flags.extend(["--n-events", str(n_events)])
         if override_energy_mev is not None:
             flags.extend(["--override-energy-MeV", str(override_energy_mev)])
+        if sn_model is not None:
+            flags.extend(["--sn-model", str(sn_model)])
+        if sn_ordering is not None:
+            flags.extend(["--sn-ordering", str(sn_ordering)])
         flag_str = " ".join(flags)
+        # Supernova jobs resolve sntools from a CFS PYTHONUSERBASE (SN_ENV_BASE)
+        # bound into the container Python — mirrors LUCID_ENV_BASE for training.
+        sn_env_line = ""
+        if sn_model is not None and self.env.get("SN_ENV_BASE"):
+            sn_env_line = (
+                f"export APPTAINERENV_PYTHONUSERBASE=\"{self.env['SN_ENV_BASE']}\"\n")
         body = (
             f"\n# Unified container: GEANT4 + ROOT + GENIE + PhotonSim + LUCiD.\n"
             f"export APPTAINERENV_GENIE_XSEC_FILE={self.env.get('GENIE_XSEC_FILE', '')}\n"
+            f"{sn_env_line}"
             f"{self._container_exec(use_gpu=use_gpu)} \\\n"
             f"    {self.env['LUCID_IMAGE_PATH']} \\\n"
             f"    lucid-run-job \\\n"

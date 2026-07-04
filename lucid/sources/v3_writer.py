@@ -18,6 +18,7 @@ from lucid.sources.particle_physics import derive_particle_interaction_idx
 __all__ = [
     "SOURCE_TYPE_PARTICLES",
     "SOURCE_TYPE_GENIE",
+    "SOURCE_TYPE_SUPERNOVA",
     "EMISSION_PROCESS_CHERENKOV",
     "EMISSION_PROCESS_SCINTILLATION",
     "build_interaction_metadata",
@@ -44,6 +45,7 @@ _V3_FORMAT_VERSION = 5
 # per_interaction/source_type encoding
 SOURCE_TYPE_PARTICLES = 0
 SOURCE_TYPE_GENIE     = 1
+SOURCE_TYPE_SUPERNOVA = 2
 
 # emission_process column encoding on hits.h5 + step.h5/sensor_hits/.
 # Per-row tag identifying which physical process produced the contribution.
@@ -57,6 +59,8 @@ def _source_type_code(primary_source):
     """Map config's ``primary_source`` string to the per_interaction/source_type int."""
     if primary_source == 'genie':
         return SOURCE_TYPE_GENIE
+    if primary_source == 'supernova':
+        return SOURCE_TYPE_SUPERNOVA
     return SOURCE_TYPE_PARTICLES
 
 
@@ -807,7 +811,7 @@ def _write_per_interaction(pi_grp, event_dict, ancestor, interaction):
     shot into a single row.
 
     Fields:
-      * ``source_type``           (uint8)   — 0=particles, 1=genie.
+      * ``source_type``           (uint8)   — 0=particles, 1=genie, 2=supernova.
       * ``t0`` / ``vertex_x/y/z`` (float32) — interaction time + vertex.
       * ``n_primaries``           (int32)   — count of ``parent_id==0``
                                               tracks in this interaction.

@@ -202,7 +202,8 @@ class HTCondorAdapter(ClusterAdapter):
 
     def render_dataprod_job(self, *, cell_dir, config_path, detector, job_id,
                             job_name, partition, use_gpu, test, skip_lucid,
-                            n_events, override_energy_mev):
+                            n_events, override_energy_mev,
+                            sn_model=None, sn_ordering=None):
         cpus = self.env.get("DEFAULT_CPUS", "1")
         memory_mb = self.env.get("DEFAULT_MEMORY", "4000")
         gpus = "1" if use_gpu else self.env.get("DEFAULT_GPUS", "0")
@@ -218,6 +219,10 @@ class HTCondorAdapter(ClusterAdapter):
             flags.append(f"--n-events {n_events}")
         if override_energy_mev is not None:
             flags.append(f"--override-energy-MeV {override_energy_mev}")
+        if sn_model is not None:
+            flags.append(f"--sn-model {sn_model}")
+        if sn_ordering is not None:
+            flags.append(f"--sn-ordering {sn_ordering}")
         run_args = " ".join(flags)
         bash_cmd = (
             f"{self._env_prefix()}lucid-run-job --config {config_path} "
