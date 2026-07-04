@@ -60,7 +60,7 @@ apptainer exec --nv -B {BINDS} \\
     {a.image} \\
     /opt/conda/bin/python3 {run_script} \\
         --config {cfg_path} \\
-        --output {out_dir}
+        --output {out_dir} {a.extra_args}
 
 echo "=== done  $(date) ==="
 """
@@ -74,6 +74,8 @@ def main():
     ap.add_argument('--job-name', default=None)
     ap.add_argument('--run-script', default='run_study.py',
                     help="script in analysis/tracking/ to run (run_study.py | seed_study.py)")
+    ap.add_argument('--extra-args', default='',
+                    help='extra CLI args appended to the run script invocation')
     ap.add_argument('--partition', default='turing', help='GPU partition (default turing)')
     ap.add_argument('--account', default='mli:cider-ml')
     ap.add_argument('--image', default=DEFAULT_IMAGE)

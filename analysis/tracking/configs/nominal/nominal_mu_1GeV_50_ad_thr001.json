@@ -1,0 +1,13 @@
+{
+  "name": "nominal_mu_1GeV_50_ad_thr001",
+  "particle": "muon",
+  "study": "nominal",
+  "geom_config": "config/SK_like_geom_config.json",
+  "phys_config": "config/SK_like_physics_config.json",
+  "root_file": "/sdf/data/neutrino/cjesus/CIDER/ROOT_files/LARGE_files/water/mu-/1000MeV_500events.root",
+  "energy_nominal_MeV": 1000,
+  "n_events": 50,
+  "event_start": 0,
+  "siren_threshold": 0.01,
+  "gn": {"fisher_mode": "ad", "lr": 1.0}
+}
