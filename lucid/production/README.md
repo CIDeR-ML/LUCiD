@@ -53,10 +53,11 @@ in separated time clusters (delayed coincidence, pile-up, dark noise), so
 `hits.h5` decomposition (`emission_process = 2`, `particle_idx = -1`). See
 `docs/LUCID_DATASET.md`.
 
-> Scope: the digitizer is wired for single-vertex configs. **Pile-up** configs
-> currently produce `basic`-equivalent output (one digit per sensor,
-> `digit_idx = 0`) regardless of the configured model — cross-vertex
-> digitization is a follow-up.
+**Pile-up** is digitized **cross-vertex**: all vertices' per-photon deposits are
+pooled in absolute time and windowed once, so light from different vertices that
+overlaps on a PMT within the integration window merges into one digit (with the
+decomposition attributing its charge across the contributing vertices). `basic`
+pile-up reproduces the legacy per-sensor first-arrival + summed charge.
 
 ## Supernova bursts (sntools)
 
