@@ -29,6 +29,35 @@ produce scintillation, run with `--detector SK_like_wbls`; the log then
 reports `geometry: cylinder / wbls` and `emission_process` carries both
 Cherenkov (0) and scintillation (1) hits.
 
+## Digitizer / hit-making
+
+Sensor hit-making is a per-sensor sliding-window integrator
+(`lucid/sources/digitizer.py`). The model is set by an optional `"digitizer"`
+block in the **detector physics config** (e.g. `config/SK_like_physics_config.json`);
+absent ⇒ `basic`.
+
+```json
+"digitizer": { "model": "qbee", "dark_rate_khz": 0.0 }
+```
+
+Models: **`basic`** (∞ window → one digit per sensor, the legacy behaviour and
+default), **`ski`** (SK-I ATM), **`qbee`** (SK-IV/V QBEE/QTC, 400 ns gate / ~900 ns
+deadtime), **`hk`** (Hyper-K, dead-time-free; parameters provisional). Any
+parameter (`integration_window_ns`, `deadtime_ns`, `threshold_pe`, `charge_res`,
+`time_res_ns`, `dark_rate_khz`) is overridable in the block.
+
+Non-`basic` models can record **multiple digits per sensor** when light arrives
+in separated time clusters (delayed coincidence, pile-up, dark noise), so
+`sensor.h5` becomes a digit list and `hits.h5` / `step/sensor_hits` carry a
+`digit_idx` FK. **Dark noise** (off by default) is a labelled source in the
+`hits.h5` decomposition (`emission_process = 2`, `particle_idx = -1`). See
+`docs/LUCID_DATASET.md`.
+
+> Scope: the digitizer is wired for single-vertex configs. **Pile-up** configs
+> currently produce `basic`-equivalent output (one digit per sensor,
+> `digit_idx = 0`) regardless of the configured model — cross-vertex
+> digitization is a follow-up.
+
 ## Supernova bursts (sntools)
 
 `primary_source: "supernova"` injects supernova-burst neutrino interactions
