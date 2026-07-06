@@ -81,3 +81,27 @@ def test_trigger_config_attrs(digit_batch):
         assert str(a['trigger']).strip("b'\"") == 'sliding_window' or a['trigger'] == 'sliding_window'
         assert int(a['trigger_n_thr']) == 30
         assert float(a['trigger_window_ns']) == 200.0
+
+
+def test_float64_preserves_subns_on_second_scale_offset(tmp_path):
+    """The float64 time schema must hold sub-ns light timing on a burst-scale
+    (~1e9 ns) t0 offset — the supernova motivation. float32 would collapse the
+    0.4 ns TDC steps into a single value at 1e9."""
+    import h5py, numpy as np
+    from lucid.sources.writer import write_sensor_config, save_sensor_event
+    from lucid.sources.reader import read_sensor_event
+    from tests.io._event_fixture import build_synthetic_digit_event
+
+    cfg, ev, pos = build_synthetic_digit_event()
+    offset = 1.0e9                                   # 1 s in ns (mid-burst)
+    ev['sensor_digits']['T'] = np.array(
+        [offset + 0.0, offset + 0.4, offset + 0.8, offset + 1.2], np.float64)
+    p = tmp_path / 'wc_sensor_0000.h5'
+    with h5py.File(p, 'w') as f:
+        write_sensor_config(f, cfg, np.array([0], np.uint32), pos)
+        save_sensor_event(f, ev, 0)
+    T = read_sensor_event(str(p), 0)['T']
+    assert T.dtype == np.float64
+    # the four 0.4 ns steps survive exactly (float32 would round them together)
+    np.testing.assert_allclose(np.diff(T), [0.4, 0.4, 0.4], atol=1e-6)
+    assert len(np.unique(T)) == 4

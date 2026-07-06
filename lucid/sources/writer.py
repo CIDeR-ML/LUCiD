@@ -42,6 +42,10 @@ __all__ = [
 
 _GZIP_OPTS = dict(compression='gzip', compression_opts=4)
 _FORMAT_VERSION = 5
+# All absolute times are stored float64: a supernova burst spans seconds
+# (~1e9-1e10 ns) while the light timing is sub-ns, which float32 cannot hold
+# jointly. The extra width compresses away (the low mantissa bits are ~zero).
+_TIME_DTYPE = np.float64
 
 # per_interaction/source_type encoding
 SOURCE_TYPE_PARTICLES = 0
@@ -460,11 +464,11 @@ def save_sensor_event(f, event_dict, seq_idx):
         sd = event_dict['sensor_digits']
         indices = np.asarray(sd['sensor_idx'], dtype=np.uint16)
         pe_sparse = np.asarray(sd['PE'], dtype=np.float32)
-        t_sparse = np.asarray(sd['T'], dtype=np.float32)
+        t_sparse = np.asarray(sd['T'], dtype=_TIME_DTYPE)
     else:
         # Legacy dense path (non-digitizer callers, e.g. calibration).
         pe = np.asarray(event_dict['PE_reco'], dtype=np.float32)
-        t = np.asarray(event_dict['T_reco'], dtype=np.float32)
+        t = np.asarray(event_dict['T_reco'], dtype=_TIME_DTYPE)
         # A "hit" is a sensor with real charge: pe > 0. SK-like charge smearing
         # preserves zero (sigma=0 when counts=0), so pe == 0 => no photon ever
         # reached this sensor. The isfinite & <1e5 checks catch smear_times'
@@ -473,7 +477,7 @@ def save_sensor_event(f, event_dict, seq_idx):
         mask = (pe > 0) & np.isfinite(t) & (t < 1e5)
         indices = np.where(mask)[0].astype(np.uint16)
         pe_sparse = pe[mask].astype(np.float32)
-        t_sparse = np.where(np.isfinite(t[mask]), t[mask], np.float32(0.0)).astype(np.float32)
+        t_sparse = np.where(np.isfinite(t[mask]), t[mask], np.float32(0.0)).astype(_TIME_DTYPE)
 
     grp.attrs['n_hits'] = int(indices.size)
     grp.create_dataset('sensor_idx', data=indices, **_GZIP_OPTS)
@@ -511,9 +515,9 @@ def save_hits_event(f, event_dict, seq_idx):
         particle_idx_arr = np.asarray(sparse['particle_idx'], dtype=np.int32)
         sensor_idx_arr   = np.asarray(sparse['sensor_idx'],   dtype=np.uint16)
         pe_arr           = np.asarray(sparse['PE'],           dtype=np.float32)
-        t_arr            = np.asarray(sparse['T'],            dtype=np.float32)
+        t_arr            = np.asarray(sparse['T'],            dtype=_TIME_DTYPE)
         emp_arr          = np.asarray(sparse['emission_process'], dtype=np.int8)
-        t_reco_arr = (np.asarray(sparse['T_reco'], dtype=np.float32)
+        t_reco_arr = (np.asarray(sparse['T_reco'], dtype=_TIME_DTYPE)
                       if 'T_reco' in sparse else None)
         # digit_idx (FK -> sensor.h5 digit row) present in the digitizer path.
         digit_idx_arr = (np.asarray(sparse['digit_idx'], dtype=np.int32)
@@ -521,12 +525,12 @@ def save_hits_event(f, event_dict, seq_idx):
     else:
         digit_idx_arr = None
         pe_pp = np.asarray(event_dict['PE_per_particle'], dtype=np.float32)
-        t_pp = np.asarray(event_dict['T_per_particle'], dtype=np.float32)
+        t_pp = np.asarray(event_dict['T_per_particle'], dtype=_TIME_DTYPE)
         n_p = pe_pp.shape[0]
 
         t_reco_pp = event_dict.get('T_reco_per_particle')
         if t_reco_pp is not None:
-            t_reco_pp = np.asarray(t_reco_pp, dtype=np.float32)
+            t_reco_pp = np.asarray(t_reco_pp, dtype=_TIME_DTYPE)
 
         particle_idx_parts, sensor_idx_parts, pe_parts, t_parts = [], [], [], []
         t_reco_parts = []
@@ -552,8 +556,8 @@ def save_hits_event(f, event_dict, seq_idx):
         particle_idx_arr = _cat(particle_idx_parts, np.int32)
         sensor_idx_arr = _cat(sensor_idx_parts, np.uint16)
         pe_arr = _cat(pe_parts, np.float32)
-        t_arr = _cat(t_parts, np.float32)
-        t_reco_arr = (_cat(t_reco_parts, np.float32)
+        t_arr = _cat(t_parts, _TIME_DTYPE)
+        t_reco_arr = (_cat(t_reco_parts, _TIME_DTYPE)
                       if t_reco_pp is not None else None)
         emp_arr = np.full(particle_idx_arr.size,
                           EMISSION_PROCESS_CHERENKOV, dtype=np.int8)
@@ -630,7 +634,7 @@ def save_step_event(f, event_dict, seq_idx):
             'dir_y': (seg['dir_y'], np.float16),
             'dir_z': (seg['dir_z'], np.float16),
             'edep': (seg['edep'], np.float32),
-            'time': (np.asarray(seg['time'], dtype=np.float32), np.float32),
+            'time': (np.asarray(seg['time'], dtype=_TIME_DTYPE), _TIME_DTYPE),
             'beta_start': (seg['beta_start'], np.float32),
             'n_cherenkov': (seg['n_cherenkov'], np.int32),
             'group_id': (group_id_arr, np.int32),
@@ -646,7 +650,7 @@ def save_step_event(f, event_dict, seq_idx):
                             ('end_y', np.float32), ('end_z', np.float32),
                             ('dir_x', np.float16), ('dir_y', np.float16),
                             ('dir_z', np.float16), ('edep', np.float32),
-                            ('time', np.float32), ('beta_start', np.float32),
+                            ('time', _TIME_DTYPE), ('beta_start', np.float32),
                             ('n_cherenkov', np.int32), ('group_id', np.int32),
                             ('contained', bool)):
             grp.create_dataset(name, data=_empty(dtype), **_GZIP_OPTS)
@@ -679,11 +683,11 @@ def save_step_event(f, event_dict, seq_idx):
                           data=np.asarray(seg_sen['PE'], dtype=np.float32),
                           **_GZIP_OPTS)
         sh.create_dataset('T',
-                          data=np.asarray(seg_sen['T'], dtype=np.float32),
+                          data=np.asarray(seg_sen['T'], dtype=_TIME_DTYPE),
                           **_GZIP_OPTS)
         if 'T_reco' in seg_sen:
             sh.create_dataset('T_reco',
-                              data=np.asarray(seg_sen['T_reco'], dtype=np.float32),
+                              data=np.asarray(seg_sen['T_reco'], dtype=_TIME_DTYPE),
                               **_GZIP_OPTS)
         # emission_process: per-row physical-process tag. Caller-provided
         # column wins; falls back to all-zeros (Cherenkov) for legacy
@@ -756,7 +760,7 @@ def save_labl_event(f, event_dict, seq_idx):
                           data=np.bool_(event_dict['contained']))
     pi_t0 = pi_grp['t0'][()]
     pe_grp.create_dataset('t0',
-                          data=np.float32(float(np.min(pi_t0))))
+                          data=_TIME_DTYPE(float(np.min(pi_t0))))
 
     # --- per_window (trigger gates) ---
     # Dimension table of readout windows: start/end (detector frame) and a CSR
@@ -766,8 +770,8 @@ def save_labl_event(f, event_dict, seq_idx):
     if pw is not None:
         pw_grp = grp.create_group('per_window')
         pw_grp.attrs['n_windows'] = int(np.asarray(pw['window_start']).shape[0])
-        pw_grp.create_dataset('window_start', data=np.asarray(pw['window_start'], np.float32), **_GZIP_OPTS)
-        pw_grp.create_dataset('window_end', data=np.asarray(pw['window_end'], np.float32), **_GZIP_OPTS)
+        pw_grp.create_dataset('window_start', data=np.asarray(pw['window_start'], _TIME_DTYPE), **_GZIP_OPTS)
+        pw_grp.create_dataset('window_end', data=np.asarray(pw['window_end'], _TIME_DTYPE), **_GZIP_OPTS)
         pw_grp.create_dataset('digit_offsets', data=np.asarray(pw['digit_offsets'], np.int32), **_GZIP_OPTS)
 
     # --- per_particle ---
@@ -900,7 +904,7 @@ def _write_per_interaction(pi_grp, event_dict, ancestor, interaction):
     # Scalars per interaction
     source_type_arr = np.array(
         [int(s['source_type']) for s in interactions], dtype=np.uint8)
-    t0_arr = np.array([float(s['t0']) for s in interactions], dtype=np.float32)
+    t0_arr = np.array([float(s['t0']) for s in interactions], dtype=_TIME_DTYPE)
     vx_arr = np.stack(
         [np.asarray(s['vertex_xyz'], dtype=np.float32) for s in interactions], axis=0)
     assert vx_arr.shape == (n_interactions, 3)

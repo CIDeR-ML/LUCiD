@@ -513,18 +513,20 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
 
             # Shift G4/vertex-frame times into the absolute detector frame by
             # adding t0. Every digit / decomposition row is a real hit, so a
-            # flat add suffices (no no-hit sentinels to preserve).
-            t0_f32 = np.float32(t0)
+            # flat add suffices (no no-hit sentinels to preserve). Done in
+            # float64: t0 can reach second-scale (supernova bursts) where
+            # float32 loses the sub-ns light timing.
+            t0_f64 = np.float64(t0)
             for _d, _keys in ((sensor_digits, ('T',)),
                               (hits_sparse, ('T', 'T_reco')),
                               (seg_hits, ('T', 'T_reco'))):
                 for _k in _keys:
                     if _k in _d and _d[_k].size:
-                        _d[_k] = _d[_k] + t0_f32
+                        _d[_k] = _d[_k].astype(np.float64) + t0_f64
             # Segments always carry meaningful times — shift all of them.
             if 'segments' in particle_data and particle_data['segments'].get('n_segments', 0) > 0:
                 particle_data['segments']['time'] = \
-                    np.asarray(particle_data['segments']['time'], dtype=np.float32) + t0_f32
+                    np.asarray(particle_data['segments']['time'], dtype=np.float64) + t0_f64
 
             # Readout trigger (detector frame): keep only in-gate digits
             # (canonically re-sorted, digit_idx remapped), record the gates as
@@ -992,8 +994,8 @@ def generate_events_from_photonsim_pileup(
                 deposits_i = gather_photon_deposits(process_outputs_i)
                 if particle_data_i['segments'].get('n_segments', 0) > 0:
                     particle_data_i['segments']['time'] = (
-                        np.asarray(particle_data_i['segments']['time'], dtype=np.float32)
-                        + np.float32(t0_i))
+                        np.asarray(particle_data_i['segments']['time'], dtype=np.float64)
+                        + np.float64(t0_i))
 
                 streams.append({
                     'particles':              particle_data_i['particles'],
