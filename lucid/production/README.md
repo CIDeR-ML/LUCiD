@@ -117,16 +117,3 @@ model's SNEWPY data file. Requires sntools+snewpy on `SN_ENV_BASE`
 (see `jobs/user_paths.nersc.sh.template`); the shipped analytic `gamma`
 fluxes + the built-in MSW transformations validate end-to-end with no
 download.
-
-## End-to-end (PhotonSim + LUCiD + HTMLs)
-
-`generate_validation_htmls.sh` runs PhotonSim, feeds its ROOT into the
-script above, and emits per-event HTML visualizations. Currently wired
-for S3DF (Singularity image + `/sdf/...` paths); adapt for local use.
-
-```bash
-./lucid/production/generate_validation_htmls.sh -c 07 -n 5
-```
-
-A longer doc with the full pipeline walkthrough and a portable wrapper
-will land later.
