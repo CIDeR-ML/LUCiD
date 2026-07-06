@@ -1,10 +1,10 @@
-"""Unit tests for lucid.sources.digitizer (Phase 1: standalone, not yet wired).
+"""Unit tests for lucid.simulation.digitizer (Phase 1: standalone, not yet wired).
 
 Runnable directly (``python tests/test_digitizer.py``) or under pytest.
 """
 import numpy as np
 
-from lucid.sources.digitizer import (
+from lucid.simulation.digitizer import (
     MODEL_PRESETS, resolve_model_config, digitize_event, generate_dark_noise,
     charge_resolution_sigma, apply_readout_resolution, digitize_and_decompose,
     EMISSION_PROCESS_DARK,

@@ -79,7 +79,7 @@ for integrity checks and fast event enumeration.
 ### `sensor.h5` — recorded PMT digits (hit-making output)
 
 Post-smearing, t0-shifted. This is what the detector electronics record — a
-list of **digits** produced by the digitizer (see `lucid/sources/digitizer.py`).
+list of **digits** produced by the digitizer (see `lucid/simulation/digitizer.py`).
 A digit is one recorded hit: charge integrated over a per-sensor time window at
 its first-arrival time. **A `sensor_idx` may appear in more than one row** when
 light arrives in well-separated time clusters (delayed coincidence, pile-up,
@@ -108,6 +108,13 @@ Notes:
 - Digitizer model + electronics parameters come from the detector physics
   config's optional `"digitizer"` block; absent ⇒ `basic`.
 - Sensor file is the only file that needs smearing parameters in its config.
+- **Readout trigger** (optional `"trigger"` block in the physics config; provenance
+  in `config/` attrs `trigger*`): a sliding-window coincidence trigger keeps only
+  in-gate digits and **drops events that don't trigger** (they are absent, leaving
+  gaps in `source_event_idx`). Triggered datasets write digits in a **canonical
+  `(window_idx, sensor_idx, T)` order**, so each readout window is a contiguous
+  digit slice (see `labl/…/per_window`) and a PMT's hits within a window are
+  time-ordered. Untriggered datasets keep the digitizer's native order.
 
 ### `hits.h5` — per-particle PMT decomposition
 
@@ -222,6 +229,11 @@ labl.h5
     ├── per_event/
     │   ├── t0                                   ()   float32 — true emission time
     │   └── contained                            ()   bool    — True iff every meaningful segment is fully inside detector; False for empty events
+    ├── per_window/                              (triggered datasets only; n_win readout windows)
+    │   │ attrs: n_windows
+    │   ├── window_start                         (n_win,)   float32 — gate start, detector frame [ns]
+    │   ├── window_end                           (n_win,)   float32 — gate end
+    │   └── digit_offsets                        (n_win+1,) int32   — CSR into sensor.h5: window w = digit rows [off[w], off[w+1])
     ├── per_interaction/                         (1 row for non-pile-up; N rows for N-way pile-up)
     │   ├── source_type, t0, vertex_{x,y,z}       — see save_labl_event docstring
     │   ├── n_primaries, n_particles              — ints per interaction

@@ -33,7 +33,8 @@ from lucid.sources.event_builder import (
     combine_t_per_sensor_across_processes,
     run_event_process_pipeline,
 )
-from lucid.sources.digitizer import digitize_and_decompose, resolve_model_config
+from lucid.simulation.digitizer import digitize_and_decompose, resolve_model_config
+from lucid.simulation.trigger import TriggerConfig, apply_trigger
 from lucid.sources.scintillation_photons import expand_segments_to_photons
 from lucid.sources.writer import (
     EMISSION_PROCESS_CHERENKOV,
@@ -87,6 +88,17 @@ def _detector_bounds_from_det_geom(det_geom):
     return None
 
 
+def _trigger_config_meta(cfg):
+    """Trigger provenance for the four-file ``config/`` attrs."""
+    if cfg is None:
+        return {'trigger': 'none'}
+    return {'trigger': 'sliding_window',
+            'trigger_window_ns': float(cfg.window_ns),
+            'trigger_n_thr': int(cfg.n_thr),
+            'trigger_pad_before_ns': float(cfg.pad_before_ns),
+            'trigger_pad_after_ns': float(cfg.pad_after_ns)}
+
+
 def generate_events_from_photonsim_particles(event_simulator, root_file_path,
                                              sensor_positions, output_dir=None,
                                              n_events=None, batch_size=100, master_seed=None,
@@ -96,7 +108,7 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
                                              file_index_start=0,
                                              primary_source='particles',
                                              pad_size_buckets=None,
-                                             digitizer=None):
+                                             digitizer=None, trigger=None):
     """Generate events from a PhotonSim ROOT file, writing four-file batches.
 
     For each batch of events, writes four HDF5 files under ``output_dir``:
@@ -216,6 +228,7 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
     print(f"  Using rays buckets: {list(pad_size_buckets)}")
 
     digitizer_model = resolve_model_config(digitizer)
+    trigger_cfg = TriggerConfig.from_block(trigger)
 
     print(f"\nGenerating {n_events} events using VMAP-OPTIMIZED particle-based processing...")
     print(f"Using batch size of {batch_size} events for multithreaded I/O")
@@ -223,6 +236,10 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
     print(f"Apply translation: {apply_translation}")
     print(f"Digitizer model: {digitizer_model['model']} "
           f"(dark_rate_khz={digitizer_model.get('dark_rate_khz', 0.0)})")
+    if trigger_cfg is not None:
+        print(f"Trigger: W={trigger_cfg.window_ns}ns N_thr={trigger_cfg.n_thr} "
+              f"pad={trigger_cfg.pad_before_ns}/{trigger_cfg.pad_after_ns}ns "
+              f"(non-triggering events dropped)")
     # Note: Rotation is not applied in this workflow because PhotonSim already generates
     # primaries with random isotropic directions (/gun/randomDirection true). The photon
     # and track data are already in randomized coordinate frames, so rotation in LUCiD
@@ -509,6 +526,17 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
                 particle_data['segments']['time'] = \
                     np.asarray(particle_data['segments']['time'], dtype=np.float32) + t0_f32
 
+            # Readout trigger (detector frame): keep only in-gate digits
+            # (canonically re-sorted, digit_idx remapped), record the gates as
+            # per_window; drop the event entirely when nothing triggers.
+            per_window = None
+            if trigger_cfg is not None:
+                _trig = apply_trigger(sensor_digits, hits_sparse, seg_hits, trigger_cfg)
+                if _trig is None:
+                    print(f"    event {event_idx}: no trigger — event dropped", flush=True)
+                    continue
+                sensor_digits, hits_sparse, seg_hits, per_window = _trig
+
             # Create filename
             event_number = event_idx
             filename = os.path.join(output_dir, f'event_{event_number}.h5')
@@ -533,6 +561,8 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
                 'hits_sparse': hits_sparse,
                 # sensor.h5 digit list produced by the digitizer.
                 'sensor_digits': sensor_digits,
+                # trigger gates for this event (None when the trigger is off).
+                'per_window': per_window,
                 'source': 'PhotonSim_Particles_VMAP',
             }
 
@@ -594,6 +624,7 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
             'smearing_charge_function': 'SK_like' if apply_smearing else 'none',
             'smearing_time_function': 'SK_like' if apply_smearing else 'none',
             'digitizer_model': str(digitizer_model['model']),
+            **_trigger_config_meta(trigger_cfg),
             'label_names': ['category'],
         }
 
@@ -705,6 +736,7 @@ def generate_events_from_photonsim_pileup(
     run_id=None,
     file_index_start=0,
     digitizer=None,
+    trigger=None,
 ):
     """Generate pile-up events by merging N PhotonSim streams per event.
 
@@ -742,8 +774,13 @@ def generate_events_from_photonsim_pileup(
     print(f"Pile-up: master_seed={master_seed}, job_id={job_id}, "
           f"n_vertices={N_vertices}")
     digitizer_model = resolve_model_config(digitizer)
+    trigger_cfg = TriggerConfig.from_block(trigger)
     print(f"Digitizer model: {digitizer_model['model']} "
           f"(dark_rate_khz={digitizer_model.get('dark_rate_khz', 0.0)})")
+    if trigger_cfg is not None:
+        print(f"Trigger: W={trigger_cfg.window_ns}ns N_thr={trigger_cfg.n_thr} "
+              f"pad={trigger_cfg.pad_before_ns}/{trigger_cfg.pad_after_ns}ns "
+              f"(non-triggering events dropped)")
 
     if run_id is None:
         run_id = str(uuid.uuid4())
@@ -983,6 +1020,17 @@ def generate_events_from_photonsim_pileup(
             merged['source_event_idx'] = int(event_idx)
             merged['source'] = 'PhotonSim_Pileup'
 
+            # Readout trigger: keep in-gate digits, record gates, drop untriggered.
+            if trigger_cfg is not None:
+                _trig = apply_trigger(merged['sensor_digits'], merged['hits_sparse'],
+                                      merged.get('segment_sensor_hits'), trigger_cfg)
+                if _trig is None:
+                    print(f"    event {event_idx}: no trigger — event dropped", flush=True)
+                    continue
+                merged['sensor_digits'], merged['hits_sparse'], _seg, merged['per_window'] = _trig
+                if _seg is not None:
+                    merged['segment_sensor_hits'] = _seg
+
             batch_data.append(merged)
             batch_indices.append(int(event_idx))
             event_total_time = _time.time() - t_start
@@ -1013,6 +1061,7 @@ def generate_events_from_photonsim_pileup(
             'smearing_charge_function': 'SK_like' if apply_smearing else 'none',
             'smearing_time_function': 'SK_like' if apply_smearing else 'none',
             'digitizer_model': str(digitizer_model['model']),
+            **_trigger_config_meta(trigger_cfg),
             'label_names': ['category'],
         }
         if detector_bounds is not None:
