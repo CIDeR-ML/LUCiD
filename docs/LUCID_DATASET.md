@@ -91,7 +91,7 @@ sensor.h5
 ├── config/
 │   ├── attrs: provenance + n_sensors, detector_type, material,
 │   │           smearing_applied, smearing_charge_function, smearing_time_function,
-│   │           digitizer_model   — "basic" | "ski" | "qbee" | "hk"
+│   │           digitizer_model   — "basic" | "ski" | "hk"
 │   ├── source_event_idx      (n_events,) uint32
 │   └── sensor_positions      (n_sensors, 3) float32
 └── event_NNN/

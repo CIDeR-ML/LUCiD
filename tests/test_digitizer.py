@@ -17,7 +17,7 @@ def _rng():
 
 def test_resolve_model_config():
     assert resolve_model_config(None)["model"] == "basic"
-    assert resolve_model_config("qbee")["integration_window_ns"] == 400.0
+    assert resolve_model_config("ski")["integration_window_ns"] == 200.0
     m = resolve_model_config({"model": "hk", "dark_rate_khz": 5.0, "threshold_pe": 0.3})
     assert m["model"] == "hk" and m["dark_rate_khz"] == 5.0 and m["threshold_pe"] == 0.3
     # untouched preset defaults still present
@@ -49,26 +49,31 @@ def test_basic_collapses_to_one_digit_per_sensor():
     assert (r.photon_digit_idx >= 0).all()
 
 
-def test_multi_hit_when_separated_beyond_window_plus_deadtime():
-    # qbee: window 400 ns, deadtime 900 ns → a second bunch >1300 ns later is
-    # a separate digit; a bunch within the deadtime is vetoed (dropped).
-    model = resolve_model_config("qbee")
+def test_multi_hit_and_deadtime_veto():
+    # ski: window 200 ns, deadtime 0 → a bunch beyond the window opens a fresh
+    # digit and nothing is vetoed. The same photons under a deadtime override
+    # veto the in-deadtime bunch — exercising the deadtime code path.
     sensor = np.array([7, 7, 7, 7])
-    #        prompt bunch (2 pe) | in-deadtime hit (dropped) | late bunch (1.5 pe)
     times = np.array([1000.0, 1100.0, 1600.0, 3000.0])
     charges = np.array([1.0, 1.0, 5.0, 1.5])
-    r = digitize_event(sensor, times, charges, n_sensors=8, model=model)
-    # window [1000,1400] integrates the first two (pe=2). 1600 is within
-    # (1400, 1400+900=2300] deadtime → vetoed. 3000 opens a new digit.
-    assert r.n_digits == 2
-    np.testing.assert_allclose(sorted(r.digit_pe_true), [1.5, 2.0])
-    # the deadtime-vetoed photon (index 2) is dropped
-    assert r.photon_digit_idx[2] == -1
-    assert (r.photon_digit_idx[[0, 1, 3]] >= 0).all()
+    # window [1000,1200] integrates the first two (pe=2); 1600 opens a digit
+    # (pe=5); 3000 opens a third (pe=1.5). deadtime 0 → all three kept.
+    r = digitize_event(sensor, times, charges, n_sensors=8,
+                       model=resolve_model_config("ski"))
+    assert r.n_digits == 3
+    np.testing.assert_allclose(sorted(r.digit_pe_true), [1.5, 2.0, 5.0])
+    assert (r.photon_digit_idx >= 0).all()
+    # deadtime override: after [1000,1200] the (1200, 2100] window is dead, so
+    # the 1600 bunch is vetoed; 3000 opens a new digit.
+    model_dt = resolve_model_config({"model": "ski", "deadtime_ns": 900.0})
+    r2 = digitize_event(sensor, times, charges, n_sensors=8, model=model_dt)
+    assert r2.n_digits == 2
+    np.testing.assert_allclose(sorted(r2.digit_pe_true), [1.5, 2.0])
+    assert r2.photon_digit_idx[2] == -1
 
 
 def test_threshold_drops_subthreshold_digit():
-    model = resolve_model_config("qbee")  # threshold 0.25 pe
+    model = resolve_model_config("ski")  # threshold 0.25 pe
     sensor = np.array([3, 3])
     times = np.array([500.0, 2000.0])
     charges = np.array([0.1, 1.0])   # first digit below threshold, second above
@@ -97,7 +102,7 @@ def test_charge_sigma_models():
     np.testing.assert_allclose(charge_resolution_sigma(np.array([10.0]), "sk_like"), [0.12])
     np.testing.assert_allclose(charge_resolution_sigma(np.array([50.0]), "sk_like"), [0.375])
     np.testing.assert_allclose(charge_resolution_sigma(np.array([200.0]), "sk_like"), [1.0])
-    # float model: single-pe sigma f, scales as f*sqrt(Q)
+    # float-override path (legacy/basic only): single-pe sigma f, scales f*sqrt(Q)
     np.testing.assert_allclose(charge_resolution_sigma(np.array([1.0]), 0.1), [0.1])
     np.testing.assert_allclose(charge_resolution_sigma(np.array([4.0]), 0.1), [0.2])
 
@@ -123,7 +128,7 @@ def test_dark_noise_generation_and_labelling():
     cat_q = np.concatenate([real_q, dark_q])
     is_dark = np.array([False, True])
     r = digitize_event(cat_s, cat_t, cat_q, n_sensors=10,
-                       model=resolve_model_config("qbee"))
+                       model=resolve_model_config("ski"))
     assert r.n_digits == 2
     # the dark photon lands in a distinct (later) digit; caller can tag it
     dark_digit = r.photon_digit_idx[is_dark][0]
@@ -135,13 +140,14 @@ def test_apply_readout_resolution():
     rng = _rng()
     pe_true = np.array([1.0, 5.0, 100.0])
     t = np.array([10.0, 20.0, 30.0])
-    # basic (sk_like, no time jitter): pe within a few sigma, time unchanged
+    # basic (legacy sk_like, no time model): pe within a few sigma, time unchanged
     pr, tr = apply_readout_resolution(pe_true, t, resolve_model_config("basic"), rng)
     assert (pr >= 0).all()
-    np.testing.assert_allclose(tr, t)  # time_res_ns=0 for basic
-    # qbee applies time jitter (0.3 ns) -> times move
-    pr2, tr2 = apply_readout_resolution(pe_true, t, resolve_model_config("qbee"), _rng())
+    np.testing.assert_allclose(tr, t)  # time_model "none" for basic
+    # ski applies the SPE charge + charge-dependent Gaussian time jitter -> both move
+    pr2, tr2 = apply_readout_resolution(pe_true, t, resolve_model_config("ski"), _rng())
     assert not np.allclose(tr2, t)
+    assert not np.allclose(pr2, pe_true) and (pr2 >= 0).all()
 
 
 def test_decompose_basic_single_digit_and_conserves():
@@ -169,7 +175,7 @@ def test_decompose_basic_single_digit_and_conserves():
 
 
 def test_decompose_multihit_splits_digit_idx():
-    # qbee: one particle, one sensor, two time-separated bunches -> two digits,
+    # ski: one particle, one sensor, two bunches >200 ns apart -> two digits,
     # two hits rows with different digit_idx.
     sensor = np.array([4, 4])
     charge = np.array([2.0, 1.5])
@@ -178,7 +184,7 @@ def test_decompose_multihit_splits_digit_idx():
         sensor_idx=sensor, charge=charge, t_true=t, t_reco=t,
         particle_idx=np.array([0, 0]), segment_idx=np.array([0, 1]),
         emission_process=np.array([0, 0]),
-        n_sensors=8, model=resolve_model_config("qbee"), rng=_rng())
+        n_sensors=8, model=resolve_model_config("ski"), rng=_rng())
     assert sd["sensor_idx"].shape[0] == 2
     assert (hits["sensor_idx"] == 4).all()
     assert sorted(hits["digit_idx"].tolist()) == [0, 1]   # split across digits
@@ -194,7 +200,7 @@ def test_decompose_dark_is_labelled():
         sensor_idx=sensor, charge=charge, t_true=t, t_reco=t,
         particle_idx=np.array([0]), segment_idx=np.array([0]),
         emission_process=np.array([0]),
-        n_sensors=2000, model=resolve_model_config("qbee"), rng=rng,
+        n_sensors=2000, model=resolve_model_config("ski"), rng=rng,
         dark_rate_khz=50.0, readout_pad_ns=1e6)   # force plenty of dark hits
     dark_rows = hits["emission_process"] == EMISSION_PROCESS_DARK
     assert dark_rows.any(), "expected dark-labelled hits rows"
