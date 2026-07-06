@@ -170,8 +170,8 @@ def apply_trigger(sensor_digits: dict, hits_sparse: dict, seg_hits: dict,
     counts = np.bincount(win_sorted, minlength=gates.shape[0])
     digit_offsets = np.concatenate([[0], np.cumsum(counts)]).astype(np.int32)
     per_window = {
-        "window_start": gates[:, 0].astype(np.float32),
-        "window_end": gates[:, 1].astype(np.float32),
+        "window_start": gates[:, 0].astype(np.float64),
+        "window_end": gates[:, 1].astype(np.float64),
         "digit_offsets": digit_offsets,
     }
     return new_sd, new_hits, new_seg, per_window
