@@ -459,12 +459,15 @@ def digitize_and_decompose(
     emission_process = np.asarray(emission_process, dtype=np.int64)
 
     # Drop non-finite/undetected deposits and cap the readout time at
-    # _MAX_DIGIT_TIME_NS. Late nuclear-channel photons (neutron capture, nuclear
-    # de-excitation) legitimately arrive at ms–s scales, far outside any real
-    # readout window; capping here keeps digits, the decomposition, and the dark
-    # window all bounded and consistent. No lower bound (t0 ∈ [-250,250] ns).
-    finite = (np.isfinite(t_reco) & np.isfinite(t_true) & (charge > 0)
-              & (t_reco < _MAX_DIGIT_TIME_NS))
+    # _MAX_DIGIT_TIME_NS *relative to the earliest deposit*. Late nuclear-channel
+    # photons (neutron capture, nuclear de-excitation) legitimately arrive at
+    # ms–s scales after their interaction, far outside any real readout window;
+    # capping the late tail keeps digits, the decomposition, and the dark window
+    # bounded. The cap must be relative: an absolute cap would drop an entire
+    # supernova interaction sitting at t0 ~ ms–s. No lower bound.
+    valid = np.isfinite(t_reco) & np.isfinite(t_true) & (charge > 0)
+    t_ref = np.min(t_reco[valid]) if valid.any() else 0.0
+    finite = valid & ((t_reco - t_ref) < _MAX_DIGIT_TIME_NS)
     if not finite.all():
         sensor_idx, charge, t_true, t_reco, particle_idx, segment_idx, emission_process = (
             a[finite] for a in (sensor_idx, charge, t_true, t_reco,
