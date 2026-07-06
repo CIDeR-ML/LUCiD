@@ -183,10 +183,14 @@ def _parse_nuance(path: Path) -> list[dict]:
             tok = line.split()
             kind = tok[1]
             if kind == "begin":
-                cur = {"incoming": [], "outgoing": [], "code": 0}
+                cur = {"incoming": [], "outgoing": [], "code": 0, "time_ms": 0.0}
             elif kind == "nuance" and cur is not None:
                 # `$ nuance <code>` — the interaction channel code.
                 cur["code"] = int(tok[2])
+            elif kind == "vertex" and cur is not None:
+                # `$ vertex x y z t` — t is the interaction time in ms
+                # (sntools event.time, post-bounce). The burst time we preserve.
+                cur["time_ms"] = float(tok[5])
             elif kind == "track" and cur is not None:
                 pdg = int(tok[2])
                 e = float(tok[3])
@@ -390,16 +394,25 @@ def run_supernova(
             "sntools produced 0 events — check distance/time window/flux "
             "(a too-distant SN or too-narrow window yields no interactions)")
 
+    # Order the whole burst by interaction time before capping, so a cap keeps
+    # the burst onset (earliest interactions) in time order and the all-at-once
+    # generator sees a monotone timeline. sntools sorts within a single run, but
+    # per-channel runs are concatenated unsorted.
+    all_events.sort(key=lambda e: e.get("time_ms", 0.0))
     capped = all_events if cap_events is None else all_events[:cap_events]
     n_entries = _write_rootracker(capped, gtrac_file, cap=None)
 
-    # Sidecar: per-entry channel code, aligned 1:1 with rooTracker entries (and
-    # therefore with LUCiD's event order). The StdHep rooTracker has no channel
-    # field, so annotate_labl_channels() reads this to stamp the channel into
-    # the labl truth after LUCiD writes the batch.
+    # Sidecars, each aligned 1:1 with rooTracker entries (and therefore LUCiD's
+    # event order). The StdHep rooTracker carries neither the channel nor the
+    # burst time, so we write them alongside:
+    #   .channels.json — sntools channel code (annotate_labl_channels stamps it)
+    #   .times.json    — interaction time in ms (the all-at-once generator turns
+    #                    each into a per-interaction t0 = global_t0 + time_ms*1e6)
     import json
     sidecar = output_dir / f"gntp_job_{job_padded}.channels.json"
     sidecar.write_text(json.dumps([int(e["code"]) for e in capped]))
+    times_sidecar = output_dir / f"gntp_job_{job_padded}.times.json"
+    times_sidecar.write_text(json.dumps([float(e.get("time_ms", 0.0)) for e in capped]))
 
     if cap_events is not None:
         print(f"    capped to {n_entries} of {len(all_events)} events (validation)", flush=True)
