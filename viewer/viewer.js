@@ -111,6 +111,25 @@ let hitFilter = 0;
 let maxHits = 1;
 let sensorDigits = null;    // Array(nSensors): sensor.h5 row indices per sensor, arrival-ordered
 let selectedDigit = null;   // Int32Array(nSensors): chosen digit row (== hits.digit_idx) or -1
+
+// TRIGGER WINDOW slice (triggered datasets only). 'all' shows every digit; an
+// integer w restricts to readout window w's digits (a contiguous sensor.h5 row
+// range from the per_window CSR digit_offsets), and the HIT slice then indexes
+// within that window. Outer slice: composes with EMISSION and HIT.
+let windowFilter = 'all';
+let windows = null;         // { window_start, window_end, digit_offsets } or null
+
+// [lo, hi) sensor.h5 digit rows for the active window ([0, nHits) when 'all' or
+// the dataset carries no per_window). digit_idx == the sensor.h5 row index, so
+// hits.h5 rows are in-window iff lo <= digit_idx < hi.
+function windowRange() {
+  const s = evtBundle && evtBundle.sensor;
+  const n = s ? s.nHits : 0;
+  if (windowFilter === 'all' || !windows || !windows.digit_offsets) return [0, n];
+  const off = windows.digit_offsets, w = windowFilter;
+  if (w < 0 || w + 1 >= off.length) return [0, n];
+  return [off[w], off[w + 1]];
+}
 let logScale = true;
 let percMin = 1, percMax = 99;
 let manualVmin = null, manualVmax = null;
@@ -321,8 +340,9 @@ function buildSensorDigits() {
   maxHits = 1;
   const s = evtBundle && evtBundle.sensor;
   if (!s || !s.nHits) return;
+  const [lo, hi] = windowRange();       // restrict to the active trigger window
   const buckets = new Array(nSensors);
-  for (let i = 0; i < s.nHits; i++) {
+  for (let i = lo; i < hi; i++) {
     const si = s.sensor_idx[i];
     (buckets[si] || (buckets[si] = [])).push(i);
   }
@@ -354,6 +374,7 @@ function computeSelectedDigit() {
 function deriveSensorArrays() {
   buildSensorDigits();
   computeSelectedDigit();
+  const [wLo, wHi] = windowRange();   // active trigger-window digit-row range
 
   // 'All' slice: from sensor.h5. hitFilter==0 sums every digit per sensor
   // (charge) at the first-arrival time (== legacy). hitFilter==k shows only
@@ -365,7 +386,7 @@ function deriveSensorArrays() {
   const s = evtBundle.sensor;
   if (s && s.nHits) {
     if (hitFilter === 0) {
-      for (let i = 0; i < s.nHits; i++) {
+      for (let i = wLo; i < wHi; i++) {          // window-restricted
         const si = s.sensor_idx[i];
         const pe = s.PE[i];
         pmtPE_all[si] += pe;
@@ -407,6 +428,8 @@ function deriveSensorArrays() {
     const dg = h.digit_idx;
     for (let i = 0; i < h.nHits; i++) {
       const si = sIdx[i];
+      // TRIGGER WINDOW slice: keep only rows whose digit is in the window range.
+      if (windowFilter !== 'all' && dg && (dg[i] < wLo || dg[i] >= wHi)) continue;
       // HIT slice: keep only rows belonging to the selected digit on each PMT.
       if (hitFilter !== 0 && (!dg || dg[i] !== selectedDigit[si])) continue;
       const p = pe[i];
@@ -564,8 +587,11 @@ function buildHitsLookups() {
   const wantScint = (emissionFilter === 'scint');
   const wantDark  = (emissionFilter === 'dark');
   const dg = i_.digit_idx;
+  const [wLo, wHi] = windowRange();
   for (let i = 0; i < i_.nHits; i++) {
     const s = i_.sensor_idx[i];
+    // TRIGGER WINDOW slice: keep only rows whose digit is in the window range.
+    if (windowFilter !== 'all' && dg && (dg[i] < wLo || dg[i] >= wHi)) continue;
     // HIT slice: keep only rows belonging to the selected digit on each PMT.
     if (hitFilter !== 0 && (!dg || dg[i] !== selectedDigit[s])) continue;
     const e = ep ? ep[i] : 0;
@@ -1636,7 +1662,12 @@ function buildSidebar() {
 }
 
 function buildSidebarParticles(list, n) {
+  let shown = 0;
   for (let p = 0; p < n; p++) {
+    // Hide particles that contribute no PE in the active EMISSION/HIT slice,
+    // mirroring the PDG rows — so the list tracks the selected hit (a particle
+    // whose light all landed in an earlier digit drops out of the Nth-hit view).
+    if ((particleTotals[p] || 0) <= 0) continue;
     const row = document.createElement('div');
     row.className = 'particle-row';
     if (p === selectedParticle) row.classList.add('selected');
@@ -1660,6 +1691,10 @@ function buildSidebarParticles(list, n) {
       render2D();
     });
     list.appendChild(row);
+    shown++;
+  }
+  if (shown === 0) {
+    list.innerHTML = '<div class="event-meta-row" style="padding:8px"><span class="k">(no particles with hits)</span></div>';
   }
 }
 
@@ -2323,6 +2358,33 @@ function syncHitUI() {
   sel.value = String(hitFilter);
 }
 
+// TRIGGER WINDOW dropdown: shown on triggered datasets (per_window present).
+// `All` = every stored digit; `Wk` restricts to readout window k, and the HIT
+// dropdown then indexes within that window. Labeled by each gate's time range.
+function syncWindowUI() {
+  const sel = $('windowSelect'), lbl = $('windowLabel'), sep = $('windowSep');
+  if (!sel || !lbl || !sep) return;
+  const nwin = windows && windows.window_start ? windows.window_start.length : 0;
+  const show = nwin >= 1;
+  sel.style.display = show ? '' : 'none';
+  lbl.style.display = show ? '' : 'none';
+  sep.style.display = show ? '' : 'none';
+  if (!show) return;
+  if (sel.options.length !== nwin + 1) {
+    sel.innerHTML = '';
+    const optAll = document.createElement('option');
+    optAll.value = 'all'; optAll.textContent = 'All';
+    sel.appendChild(optAll);
+    for (let w = 0; w < nwin; w++) {
+      const o = document.createElement('option');
+      o.value = String(w);
+      o.textContent = `W${w + 1} (${windows.window_start[w].toFixed(0)}–${windows.window_end[w].toFixed(0)}ns)`;
+      sel.appendChild(o);
+    }
+  }
+  sel.value = String(windowFilter);
+}
+
 // Reflect field-dependent control eligibility. Disables the log-scale
 // toggle for the bounded-ratio fields (β and Cherenkov fraction).
 function syncFieldDependentControls() {
@@ -2376,9 +2438,15 @@ async function loadEvent(idx) {
     // case where all of one process QE-failed on a given event).
     datasetHasBothProcesses = datasetHasBothProcesses || detectDualEmission(d);
     datasetHasDark = datasetHasDark || detectDark(d);
+    // Trigger windows (triggered datasets only). Clamp a stale selection when
+    // navigating to an event with fewer windows.
+    windows = (d.labl && d.labl.per_window) || null;
+    const _nwin = windows && windows.window_start ? windows.window_start.length : 0;
+    if (windowFilter !== 'all' && windowFilter >= _nwin) windowFilter = 'all';
     syncEmissionUI();
     deriveSensorArrays();   // sets maxHits (+ clamps a stale hitFilter)
     syncHitUI();
+    syncWindowUI();
     buildHitsLookups();
     buildSegmentLookups();
     deriveBetaProjection();
@@ -2523,6 +2591,23 @@ function setupUI() {
     render2D();
   });
 
+  // TRIGGER WINDOW dropdown: restricts the digit set to one readout window;
+  // re-derives every slice and rebuilds the HIT options (maxHits is per-window).
+  $('windowSelect').addEventListener('change', (e) => {
+    windowFilter = e.target.value === 'all' ? 'all' : parseInt(e.target.value, 10);
+    deriveSensorArrays();
+    syncHitUI();               // window changes the per-sensor digit count
+    applyEmissionFilter();
+    buildHitsLookups();
+    buildSegmentLookups();
+    refreshUnionQMap();
+    buildPMTs();
+    updatePMTColors();
+    applyCorrespondence();
+    buildSidebar();
+    render2D();
+  });
+
   // Correspondence toggle.
   // Time sweep toggle.
   $('sweepBtn').addEventListener('click', () => {
@@ -2554,6 +2639,7 @@ function setupUI() {
     curView = 'pmts'; curField = 'charge'; curLabel = 'none';
     emissionFilter = 'all';
     hitFilter = 0;
+    windowFilter = 'all';
     selectedParticle = null; selectedGroup = null;
     sweepOn = false; sweepPlaying = false; quantileScope = 'pmts';
     simTime = 0;
@@ -2586,6 +2672,7 @@ function setupUI() {
     // slices for the 'All'/'All-hits' state and rebuild the label lookups.
     if (evtBundle) { deriveSensorArrays(); buildHitsLookups(); buildSegmentLookups(); }
     syncHitUI();
+    syncWindowUI();
     syncFieldDependentControls();
     $('rotBtn').classList.toggle('active', autoRotate);
     if (controls) controls.autoRotate = autoRotate;

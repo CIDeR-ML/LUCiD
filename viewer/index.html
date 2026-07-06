@@ -74,6 +74,15 @@
     </select>
     <div class="sep" id="emissionSep" style="display:none"></div>
 
+    <!-- TRIGGER WINDOW restricts the digit set to one readout window (triggered
+         datasets only; from labl/per_window). The HIT dropdown nests inside it.
+         Populated by JS on load; hidden when the dataset has no trigger windows. -->
+    <span class="toolbar-label" id="windowLabel" style="display:none">TRIGGER WINDOW</span>
+    <select id="windowSelect" style="display:none">
+      <option value="all" selected>All</option>
+    </select>
+    <div class="sep" id="windowSep" style="display:none"></div>
+
     <!-- HIT selects which recorded digit to show per PMT when the digitizer
          produced more than one (delayed coincidence, pile-up, dark noise).
          All = summed charge / first-arrival time (legacy). Options + visibility
