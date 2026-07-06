@@ -29,6 +29,49 @@ def batch_paths(output_dir: os.PathLike, file_index: int) -> dict[str, Path]:
     return {sub: root / sub / f"wc_{sub}_{tag}.h5" for sub in SUBDIRS}
 
 
+def _check_digit_invariants(paths, n_sample: int = 3) -> tuple[bool, list[str]]:
+    """Sample events and check the cross-file digit_idx FK + per_window CSR.
+
+    - hits.h5 / step.sensor_hits ``digit_idx`` are in range and satisfy
+      ``sensor_idx == sensor.h5.sensor_idx[digit_idx]``.
+    - ``labl/per_window/digit_offsets`` is a valid CSR over the digit list
+      (starts at 0, ends at n_digits, monotonic).
+    """
+    import h5py
+    import numpy as np
+
+    msgs: list[str] = []
+    ok = True
+    try:
+        with h5py.File(paths["sensor"], "r") as sf, h5py.File(paths["hits"], "r") as hf, \
+                h5py.File(paths["step"], "r") as gf, h5py.File(paths["labl"], "r") as lf:
+            evs = sorted(k for k in sf if k.startswith("event_"))[:n_sample]
+            for e in evs:
+                si = sf[e]["sensor_idx"][:]
+                nd = si.shape[0]
+                hd = hf[e]["digit_idx"][:]
+                if hd.size and not (hd.min() >= 0 and hd.max() < nd
+                                    and (hf[e]["sensor_idx"][:] == si[hd]).all()):
+                    msgs.append(f"BAD_DIGIT_FK(hits): {e}"); ok = False
+                sh = gf[e].get("sensor_hits")
+                if sh is not None and "digit_idx" in sh:
+                    sd = sh["digit_idx"][:]
+                    if sd.size and not (sd.min() >= 0 and sd.max() < nd
+                                        and (sh["sensor_idx"][:] == si[sd]).all()):
+                        msgs.append(f"BAD_DIGIT_FK(step): {e}"); ok = False
+                pw = lf[e].get("per_window")
+                if pw is not None:
+                    off = pw["digit_offsets"][:]
+                    if not (off[0] == 0 and off[-1] == nd and (np.diff(off) >= 0).all()):
+                        msgs.append(f"BAD_PER_WINDOW_CSR: {e} (offsets end {int(off[-1])} != n_digits {nd})")
+                        ok = False
+            if ok:
+                msgs.append(f"OK invariants (digit_idx FK, per_window CSR) on {len(evs)} sampled events")
+    except Exception as exc:
+        msgs.append(f"INVARIANT_CHECK_ERROR: {exc!r}"); ok = False
+    return ok, msgs
+
+
 def verify_batch(
     output_dir: os.PathLike,
     file_index: int,
@@ -83,5 +126,11 @@ def verify_batch(
         messages.append(
             f"OK {sub:<6} size={size:>10} dataset_name={name!r} file_index={fi} n_events={n_events}"
         )
+
+    # Cross-file schema invariants (only when the four files are all readable).
+    if ok:
+        inv_ok, inv_msgs = _check_digit_invariants(paths)
+        messages.extend(inv_msgs)
+        ok = ok and inv_ok
 
     return ok, messages
