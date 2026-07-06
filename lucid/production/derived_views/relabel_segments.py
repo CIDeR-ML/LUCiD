@@ -15,7 +15,7 @@ many particles at every kink; large theta -> the cascade stays one particle.
 The number of particles changes with theta -> per_particle is rebuilt to match.
 
 Rewrites: labl/per_track/particle_idx, labl/per_particle (full rebuild),
-and re-aggregates hits/ from edep/sensor_hits under the new definition.
+and re-aggregates hits/ from step/sensor_hits under the new definition.
 
 Usage: relabel_segments.py SRC DST THETA_DEG
 """
@@ -31,7 +31,7 @@ if os.path.exists(dst):
     shutil.rmtree(dst)
 shutil.copytree(src, dst)
 labl_f = sorted(glob.glob(os.path.join(dst, "labl/*.h5")))[0]
-edep_f = sorted(glob.glob(os.path.join(dst, "edep/*.h5")))[0]
+edep_f = sorted(glob.glob(os.path.join(dst, "step/*.h5")))[0]
 hits_f = sorted(glob.glob(os.path.join(dst, "hits/*.h5")))[0]
 
 class UF:
@@ -57,6 +57,7 @@ for ev in evs:
         sh_pe = sh["PE"][:]; sh_t = sh["T"][:]
         sh_treco = sh["T_reco"][:] if "T_reco" in sh else sh["T"][:]
         sh_emis = sh["emission_process"][:]
+        sh_digit = sh["digit_idx"][:]
     with h5py.File(labl_f, "r") as h:
         pt = h[ev]["per_track"]
         track_id = pt["track_id"][:]; parent_id = pt["parent_id"][:]; pdg = pt["pdg"][:]
@@ -135,7 +136,7 @@ for ev in evs:
     hit_newp = seg_to_newp[sh_seg]
     key = {}
     for i in range(len(sh_seg)):
-        k = (int(hit_newp[i]), int(sh_sensor[i]), int(sh_emis[i]))
+        k = (int(hit_newp[i]), int(sh_sensor[i]), int(sh_digit[i]), int(sh_emis[i]))
         a = key.get(k)
         if a is None: key[k] = [sh_pe[i], sh_t[i], sh_treco[i]]
         else:
@@ -143,15 +144,17 @@ for ev in evs:
     ks = list(key.keys())
     hp = np.array([k[0] for k in ks], np.int32)
     hs = np.array([k[1] for k in ks], np.uint16)
-    he = np.array([k[2] for k in ks], np.int8)
+    hd = np.array([k[2] for k in ks], np.int32)          # digit_idx (FK preserved)
+    he = np.array([k[3] for k in ks], np.int8)
     hpe = np.array([key[k][0] for k in ks], np.float32)
     ht  = np.array([key[k][1] for k in ks], np.float32)
     htr = np.array([key[k][2] for k in ks], np.float32)
     with h5py.File(hits_f, "r+") as h:
         g = h[ev]
-        for nm in ("particle_idx", "sensor_idx", "PE", "T", "T_reco", "emission_process"):
+        for nm in ("particle_idx", "digit_idx", "sensor_idx", "PE", "T", "T_reco", "emission_process"):
             if nm in g: del g[nm]
         g.create_dataset("particle_idx", data=hp)
+        g.create_dataset("digit_idx", data=hd)
         g.create_dataset("sensor_idx", data=hs)
         g.create_dataset("PE", data=hpe)
         g.create_dataset("T", data=ht)
