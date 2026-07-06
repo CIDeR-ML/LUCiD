@@ -1221,3 +1221,326 @@ def _merge_pileup_streams(streams, *, n_sensors, apply_smearing,
     merged['contained_per_interaction'] = cont['per_interaction']
     merged['contained']                 = cont['overall']
     return merged
+
+
+def _group_interactions_by_gap(t0_sorted, coupling_ns):
+    """Cut time-sorted interactions into causally-independent chunks.
+
+    A gap ``> coupling_ns`` between consecutive interactions means the two sides
+    can share neither charge (integration window) nor a trigger window, so a
+    boundary there introduces no discretization. ``coupling_ns`` is
+    ``max(integration_window, trigger_window + padding)``. Returns a list of
+    index lists into ``t0_sorted``.
+    """
+    if len(t0_sorted) == 0:
+        return []
+    chunks = []
+    cur = [0]
+    for i in range(1, len(t0_sorted)):
+        if t0_sorted[i] - t0_sorted[i - 1] > coupling_ns:
+            chunks.append(cur)
+            cur = [i]
+        else:
+            cur.append(i)
+    chunks.append(cur)
+    return chunks
+
+
+def _concat_triggered_chunks(chunks):
+    """Concatenate already-digitized + triggered chunk event_dicts into one.
+
+    Each chunk is a full event_dict (from ``_merge_pileup_streams`` + the
+    trigger) whose digits are canonically ordered within the chunk. Chunks are
+    time-ordered, so concatenating them preserves the global ``(window, sensor,
+    T)`` canonical order. Digit-referencing indices are shifted by cumulative
+    counts: ``digit_idx`` by digits, ``particle_idx`` by particles,
+    ``segment_idx`` by segments, and per_window ``digit_offsets`` by digits.
+    """
+    if not chunks:
+        return None
+    if len(chunks) == 1:
+        return chunks[0]
+
+    HITCOLS = ('particle_idx', 'digit_idx', 'sensor_idx', 'PE', 'T', 'T_reco', 'emission_process')
+    SEGCOLS = ('segment_idx', 'digit_idx', 'sensor_idx', 'PE', 'T', 'T_reco', 'emission_process')
+    SEGKEYS = ('start_x', 'start_y', 'start_z', 'end_x', 'end_y', 'end_z',
+               'dir_x', 'dir_y', 'dir_z', 'edep', 'time', 'beta_start', 'n_cherenkov')
+    has_seg_hits = any('segment_sensor_hits' in c for c in chunks)
+    has_windows = any(c.get('per_window') is not None for c in chunks)
+
+    sd = {'sensor_idx': [], 'PE': [], 'T': []}
+    hits = {k: [] for k in HITCOLS}
+    segh = {k: [] for k in SEGCOLS}
+    pw = {'window_start': [], 'window_end': [], 'digit_offsets': []}
+    all_particles, all_tracks, all_meta = [], {}, []
+    all_segs = {k: [] for k in SEGKEYS}
+    cont_seg, cont_part, cont_int = [], [], []
+    dig_off = part_off = seg_off = 0
+
+    for c in chunks:
+        n_dig = int(np.asarray(c['sensor_digits']['sensor_idx']).shape[0])
+        n_part = len(c['particles'])
+        n_seg = int(c['segments'].get('n_segments', 0))
+
+        for k in sd:
+            sd[k].append(np.asarray(c['sensor_digits'][k]))
+        h = c['hits_sparse']
+        for k in HITCOLS:
+            v = np.asarray(h[k])
+            if k == 'digit_idx':
+                v = v + dig_off
+            elif k == 'particle_idx':
+                v = np.where(v >= 0, v + part_off, v)
+            hits[k].append(v)
+        if has_seg_hits:
+            sh = c.get('segment_sensor_hits')
+            if sh is not None:
+                for k in SEGCOLS:
+                    v = np.asarray(sh[k])
+                    if k == 'digit_idx':
+                        v = v + dig_off
+                    elif k == 'segment_idx':
+                        v = np.where(v >= 0, v + seg_off, v)
+                    segh[k].append(v)
+        pwc = c.get('per_window')
+        if pwc is not None:
+            pw['window_start'].append(np.asarray(pwc['window_start']))
+            pw['window_end'].append(np.asarray(pwc['window_end']))
+            pw['digit_offsets'].append(np.asarray(pwc['digit_offsets'])[1:] + dig_off)
+
+        all_particles.extend(c['particles'])
+        all_tracks.update(c['meaningful_tracks'])
+        if n_seg > 0:
+            for k in SEGKEYS:
+                all_segs[k].append(np.asarray(c['segments'][k]))
+        all_meta.extend(c['interaction_metadata'])
+        cont_seg.append(np.asarray(c['contained_per_segment']))
+        cont_part.append(np.asarray(c['contained_per_particle']))
+        cont_int.append(np.asarray(c['contained_per_interaction']))
+
+        dig_off += n_dig
+        part_off += n_part
+        seg_off += n_seg
+
+    out = {
+        'n_particles': len(all_particles),
+        'particles': all_particles,
+        'track_info_dict': {},
+        'meaningful_tracks': all_tracks,
+        'sensor_digits': {k: np.concatenate(v) for k, v in sd.items()},
+        'hits_sparse': {k: np.concatenate(v) for k, v in hits.items()},
+        'interaction_metadata': all_meta,
+        'primary_to_interaction': {int(tid): i for i, m in enumerate(all_meta)
+                                   for tid in m['primary_track_ids']},
+        'contained_per_segment': np.concatenate(cont_seg) if cont_seg else np.array([], bool),
+        'contained_per_particle': np.concatenate(cont_part),
+        'contained_per_interaction': np.concatenate(cont_int),
+    }
+    out['contained'] = bool(np.all(out['contained_per_interaction']))
+    if all_segs['time']:
+        out['segments'] = {k: np.concatenate(v) for k, v in all_segs.items()}
+        out['segments']['n_segments'] = int(out['segments']['time'].shape[0])
+    else:
+        out['segments'] = {'n_segments': 0}
+    if has_seg_hits and segh['digit_idx']:
+        out['segment_sensor_hits'] = {k: np.concatenate(v) for k, v in segh.items()}
+    if has_windows and pw['window_start']:
+        out['per_window'] = {
+            'window_start': np.concatenate(pw['window_start']),
+            'window_end': np.concatenate(pw['window_end']),
+            'digit_offsets': np.concatenate([np.array([0], np.int64)] + pw['digit_offsets']),
+        }
+    return out
+
+
+def generate_events_from_photonsim_supernova(
+    event_simulator,
+    burst_root_file,
+    interaction_times_ms,
+    sensor_positions,
+    output_dir=None,
+    master_seed=None,
+    job_id=1,
+    apply_smearing=False,
+    apply_translation=False,
+    dataset_name='unnamed_supernova_dataset',
+    run_id=None,
+    file_index_start=0,
+    digitizer=None,
+    trigger=None,
+    source_event_idx=0,
+):
+    """Generate ONE all-at-once supernova event from a burst PhotonSim file.
+
+    The burst's M interactions (one PhotonSim entry each) are placed at their
+    true times: ``t0_i = global_t0 + interaction_times_ms[i] * 1e6`` (ns), where
+    ``global_t0`` is a single ±250 ns offset for the whole burst. Interactions
+    are cut into causally-independent chunks at time gaps wider than the
+    coupling distance ``max(integration_window, trigger_window + padding)``; each
+    chunk is pool-digitized (dark over just its span) and passed through the
+    sliding-window trigger, so dark stays bounded and no boundary splits a
+    trigger cluster or a charge-sharing coincidence. The surviving (triggered)
+    chunks are concatenated into one event; sub-threshold interactions drop out.
+    """
+    import uproot
+    import uuid
+    import subprocess
+    from pathlib import Path
+
+    master_seed = _resolve_master_seed(master_seed)
+    digitizer_model = resolve_model_config(digitizer)
+    trigger_cfg = TriggerConfig.from_block(trigger)
+    if run_id is None:
+        run_id = str(uuid.uuid4())
+    sensor_positions_np = np.asarray(sensor_positions, dtype=np.float32)
+    n_sensors = int(sensor_positions_np.shape[0])
+
+    try:
+        git_commit = subprocess.check_output(
+            ['git', 'rev-parse', 'HEAD'],
+            cwd=os.path.dirname(os.path.abspath(__file__)),
+            stderr=subprocess.DEVNULL).decode().strip()
+    except Exception:
+        git_commit = 'unknown'
+
+    with uproot.open(burst_root_file) as f:
+        M = int(f['OpticalPhotons'].num_entries)
+    times_ms = np.asarray(interaction_times_ms, dtype=np.float64)
+    if times_ms.shape[0] != M:
+        raise ValueError(
+            f"interaction_times_ms ({times_ms.shape[0]}) != burst entries ({M})")
+
+    # Burst-level key for the single global t0, using a high sentinel index so
+    # it can't collide with the per-interaction keys (0..M-1). fold_in needs a
+    # non-negative uint32.
+    burst_keys = derive_event_keys(master_seed, job_id, source_event_idx,
+                                   interaction_idx=0x7FFFFFFF)
+    global_t0 = float(np.random.default_rng(
+        seed=burst_keys['t0_seed']).uniform(-T0_HALF_WINDOW_NS, T0_HALF_WINDOW_NS))
+    t0_abs_ns = global_t0 + times_ms * 1.0e6           # ms -> ns, float64
+    order = np.argsort(t0_abs_ns, kind='stable')
+    t0_sorted = t0_abs_ns[order]
+
+    integ = float(digitizer_model.get('integration_window_ns', 200.0))
+    trig_span = (trigger_cfg.window_ns + trigger_cfg.pad_before_ns
+                 + trigger_cfg.pad_after_ns) if trigger_cfg is not None else 0.0
+    coupling_ns = max(integ, trig_span)
+    chunks = _group_interactions_by_gap(t0_sorted, coupling_ns)
+    span_ms = (t0_sorted[-1] - t0_sorted[0]) / 1e6 if M else 0.0
+    print(f"Supernova: {M} interactions, global_t0={global_t0:+.1f}ns, "
+          f"span={span_ms:.2f}ms, coupling={coupling_ns:.0f}ns -> "
+          f"{len(chunks)} causally-independent chunks", flush=True)
+
+    rays_buckets = _normalize_buckets(_DEFAULT_PAD_SIZE_BUCKETS)
+    _warmup_buckets(event_simulator, rays_buckets)
+    det_geom = getattr(event_simulator, 'det_geom', None)
+    if det_geom is None:
+        raise ValueError("event_simulator has no .det_geom attribute.")
+    detector_type = str(det_geom.detector_type)
+    material = str(det_geom.medium.material)
+    detector_bounds = _detector_bounds_from_det_geom(det_geom)
+    if apply_translation and detector_bounds is None:
+        raise ValueError("apply_translation=True requires a detector with bounds.")
+
+    running_offset = 0
+    surviving = []
+    for cidx, chunk in enumerate(chunks):
+        streams = []
+        for local_i in chunk:
+            entry = int(order[local_i])
+            t0_i = float(t0_sorted[local_i])
+            ev_keys = derive_event_keys(master_seed, job_id, source_event_idx,
+                                        interaction_idx=entry)
+            if apply_translation:
+                vtx = sample_translation_vector(
+                    detector_bounds, np.random.default_rng(seed=ev_keys['vertex_seed']))
+            else:
+                vtx = np.zeros(3, dtype=np.float32)
+            raw = _read_event_raw(str(burst_root_file), entry)
+            stream, stream_max = _simulate_interaction_stream(
+                event_simulator, raw, t0=t0_i, vertex=vtx,
+                source_type_code=_source_type_code('supernova'),
+                running_offset=running_offset, n_sensors=n_sensors,
+                rays_buckets=rays_buckets, event_keys=ev_keys,
+                apply_translation=apply_translation)
+            streams.append(stream)
+            running_offset = stream_max + 1
+
+        merged_chunk = _merge_pileup_streams(
+            streams, n_sensors=n_sensors, apply_smearing=apply_smearing,
+            digitizer_model=digitizer_model,
+            digi_rng=np.random.default_rng(
+                [int(master_seed), int(source_event_idx), int(cidx)]),
+            detector_bounds=detector_bounds)
+
+        if trigger_cfg is not None:
+            trig = apply_trigger(merged_chunk['sensor_digits'], merged_chunk['hits_sparse'],
+                                 merged_chunk.get('segment_sensor_hits'), trigger_cfg)
+            if trig is None:
+                continue
+            merged_chunk['sensor_digits'], merged_chunk['hits_sparse'], _seg, \
+                merged_chunk['per_window'] = trig
+            if _seg is not None:
+                merged_chunk['segment_sensor_hits'] = _seg
+            elif 'segment_sensor_hits' in merged_chunk:
+                del merged_chunk['segment_sensor_hits']
+        surviving.append(merged_chunk)
+
+    n_trig = len(surviving)
+    print(f"Supernova: {n_trig}/{len(chunks)} chunks triggered", flush=True)
+    merged = _concat_triggered_chunks(surviving)
+    if merged is None:
+        print("Supernova: no chunk triggered — no event written", flush=True)
+        return []
+    merged['source_event_idx'] = int(source_event_idx)
+    merged['source'] = 'PhotonSim_Supernova'
+
+    out_root = Path(output_dir)
+    for sub in ('sensor', 'hits', 'step', 'labl'):
+        (out_root / sub).mkdir(parents=True, exist_ok=True)
+    file_idx = int(file_index_start)
+    paths = {sub: out_root / sub / f'wc_{sub}_{file_idx:04d}.h5'
+             for sub in ('sensor', 'hits', 'step', 'labl')}
+    batch_src_idx = np.array([int(source_event_idx)], dtype=np.uint32)
+    config_meta = {
+        'n_events': 1,
+        'git_commit': git_commit,
+        'run_id': run_id,
+        'dataset_name': dataset_name,
+        'file_index': file_idx,
+        'source_file': os.path.abspath(str(burst_root_file)),
+        'lucid_master_seed': int(master_seed),
+        'photonsim_seed': -1,
+        'n_sensors': n_sensors,
+        'detector_type': detector_type,
+        'material': material,
+        'smearing_applied': bool(apply_smearing),
+        'smearing_charge_function': 'SK_like' if apply_smearing else 'none',
+        'smearing_time_function': 'SK_like' if apply_smearing else 'none',
+        'digitizer_model': str(digitizer_model['model']),
+        **_trigger_config_meta(trigger_cfg),
+        'label_names': ['category'],
+    }
+    if detector_bounds is not None:
+        config_meta['detector_shape'] = detector_bounds['type']
+        if detector_bounds['type'] == 'cylinder':
+            config_meta['detector_radius'] = detector_bounds['radius']
+            config_meta['detector_half_height'] = detector_bounds['height'] / 2.0
+
+    with h5py.File(paths['sensor'], 'w') as fs, h5py.File(paths['hits'], 'w') as fi, \
+            h5py.File(paths['step'], 'w') as fg, h5py.File(paths['labl'], 'w') as fl:
+        write_sensor_config(fs, config_meta, batch_src_idx, sensor_positions_np)
+        write_hits_config(fi, config_meta, batch_src_idx, sensor_positions_np)
+        write_step_config(fg, config_meta, batch_src_idx)
+        write_labl_config(fl, config_meta, batch_src_idx)
+        save_sensor_event(fs, merged, 0)
+        save_hits_event(fi, merged, 0)
+        save_step_event(fg, merged, 0)
+        save_labl_event(fl, merged, 0)
+
+    n_dig = int(np.asarray(merged['sensor_digits']['sensor_idx']).shape[0])
+    n_win = int(np.asarray(merged.get('per_window', {}).get('window_start', [])).shape[0]) \
+        if 'per_window' in merged else 0
+    print(f"Supernova: wrote 1 event — {n_dig} digits in {n_win} windows "
+          f"from {n_trig} triggered interactions", flush=True)
+    return [str(paths[sub]) for sub in ('sensor', 'hits', 'step', 'labl')]
