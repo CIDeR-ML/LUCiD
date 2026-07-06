@@ -205,6 +205,18 @@ function decodeEvent(idx) {
   const t0 = perEvtGrp ? readAttrOrScalar(perEvtGrp, 't0') : 0;
   const contained = perEvtGrp ? readScalarBool(perEvtGrp, 'contained') : false;
 
+  // per_window (triggered datasets only): readout gates + CSR digit_offsets
+  // into sensor.h5 (window w = sensor digit rows [off[w], off[w+1])).
+  const perWinGrp = lEvt.get('per_window');
+  let perWindow = null;
+  if (perWinGrp) {
+    perWindow = {
+      window_start:  readDsFloat32(perWinGrp, 'window_start'),
+      window_end:    readDsFloat32(perWinGrp, 'window_end'),
+      digit_offsets: readDsInt32(perWinGrp,   'digit_offsets'),
+    };
+  }
+
   // v5 per_interaction: one row per source interaction (one G4 event
   // worth of primaries + their descendants). CSR primary_{track_ids,
   // pdgs, energies} lists carry each interaction's primary particles.
@@ -270,6 +282,7 @@ function decodeEvent(idx) {
            sensor_hits: edepSensorHits,
            n: nSegments },
     labl: { n_particles, n_tracks,
+            per_window: perWindow,
             per_interaction: perInteraction,
             per_particle: { contained: containedPerParticle, genealogy, genealogy_offsets: genealogyOffsets },
             per_track: { track_id: trackId, pdg: trackPdg, particle_idx: trackParticleIdx,
