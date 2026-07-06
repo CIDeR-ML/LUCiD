@@ -83,6 +83,11 @@ MODEL_PRESETS: dict[str, dict] = {
 # the writer's EMISSION_PROCESS_{CHERENKOV,SCINTILLATION}; DARK tags noise digits.
 EMISSION_PROCESS_DARK = 2
 
+# Readout time cap (ns): deposits later than this are dropped before windowing.
+# Late nuclear-channel light (n-capture, de-excitation) reaches ms–s; no real
+# detector records it. Matches the legacy sensor-writer ``t < 1e5`` convention.
+_MAX_DIGIT_TIME_NS = 1e5
+
 
 @dataclass
 class DigitizeResult:
@@ -453,8 +458,13 @@ def digitize_and_decompose(
     segment_idx = np.asarray(segment_idx, dtype=np.int64)
     emission_process = np.asarray(emission_process, dtype=np.int64)
 
-    # Drop non-finite times (undetected/invalid deposits carry +inf).
-    finite = np.isfinite(t_reco) & np.isfinite(t_true) & (charge > 0)
+    # Drop non-finite/undetected deposits and cap the readout time at
+    # _MAX_DIGIT_TIME_NS. Late nuclear-channel photons (neutron capture, nuclear
+    # de-excitation) legitimately arrive at ms–s scales, far outside any real
+    # readout window; capping here keeps digits, the decomposition, and the dark
+    # window all bounded and consistent. No lower bound (t0 ∈ [-250,250] ns).
+    finite = (np.isfinite(t_reco) & np.isfinite(t_true) & (charge > 0)
+              & (t_reco < _MAX_DIGIT_TIME_NS))
     if not finite.all():
         sensor_idx, charge, t_true, t_reco, particle_idx, segment_idx, emission_process = (
             a[finite] for a in (sensor_idx, charge, t_true, t_reco,
