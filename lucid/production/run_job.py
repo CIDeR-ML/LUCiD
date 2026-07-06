@@ -290,6 +290,36 @@ def _run_lucid(
     # Readout trigger from the optional "trigger" block; absent -> off.
     trigger_cfg = _read_trigger_cfg(physics_config_path)
 
+    # Supernova: model the whole burst as ONE all-at-once event. Every sntools
+    # interaction (one PhotonSim entry) is placed at its true time (from the
+    # .times.json sidecar) via a shared global t0; the generator chunks the
+    # burst at causal gaps, digitizes + triggers each chunk, and concatenates.
+    if config.get("primary_source") == "supernova":
+        import json
+        from lucid.sources.event_generation import generate_events_from_photonsim_supernova
+        times_path = output_dir / f"gntp_job_{job_id:06d}.times.json"
+        interaction_times_ms = json.loads(times_path.read_text())
+        saved_files = generate_events_from_photonsim_supernova(
+            event_simulator=simulate_event,
+            burst_root_file=str(root_file),
+            interaction_times_ms=interaction_times_ms,
+            sensor_positions=sensor_positions,
+            output_dir=str(output_dir),
+            master_seed=master_seed,
+            job_id=job_id,
+            apply_smearing=apply_smearing,
+            apply_translation=apply_translation,
+            dataset_name=config["name"],
+            run_id=None,
+            file_index_start=file_index,
+            digitizer=digitizer_cfg,
+            trigger=trigger_cfg,
+            source_event_idx=0,
+        )
+        print(f"LUCiD wrote {len(saved_files)} files under "
+              f"{output_dir}/{{sensor,hits,step,labl}}/")
+        return
+
     saved_files = generate_events_from_photonsim_particles(
         event_simulator=simulate_event,
         root_file_path=str(root_file),
