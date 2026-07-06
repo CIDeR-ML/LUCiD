@@ -7,7 +7,7 @@ stored truth (interaction vertex + primary-track direction + sensor positions):
     angle(PMT) = angle between (sensor_pos - vertex) and primary track direction
     label = 1 (inside cone)  if angle <= theta_cut   else 0 (outside)
 
-The label is written into the `emission_process` column of hits/ and edep/sensor_hits/
+The label is written into the `emission_process` column of hits/ and step/sensor_hits/
 so the existing viewer renders it via its emission toggle. Same events, different
 theta_cut -> a different downstream label definition. No propagation is rerun.
 
@@ -29,7 +29,7 @@ def first(name):
 
 sensor_f = first("sensor/*.h5")
 hits_f   = first("hits/*.h5")
-edep_f   = first("edep/*.h5")
+edep_f   = first("step/*.h5")
 labl_f   = first("labl/*.h5")
 
 with h5py.File(sensor_f, "r") as h:
