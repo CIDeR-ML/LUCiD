@@ -364,6 +364,13 @@ def _write_common_config_attrs(f, config_meta):
     cfg.attrs['source_file'] = str(config_meta['source_file'])
     cfg.attrs['lucid_master_seed'] = int(config_meta['lucid_master_seed'])
     cfg.attrs['photonsim_seed'] = int(config_meta.get('photonsim_seed', -1))
+    # Trigger provenance ("none" when the readout trigger is off).
+    cfg.attrs['trigger'] = str(config_meta.get('trigger', 'none'))
+    if config_meta.get('trigger', 'none') != 'none':
+        cfg.attrs['trigger_window_ns'] = float(config_meta['trigger_window_ns'])
+        cfg.attrs['trigger_n_thr'] = int(config_meta['trigger_n_thr'])
+        cfg.attrs['trigger_pad_before_ns'] = float(config_meta['trigger_pad_before_ns'])
+        cfg.attrs['trigger_pad_after_ns'] = float(config_meta['trigger_pad_after_ns'])
     return cfg
 
 
@@ -750,6 +757,18 @@ def save_labl_event(f, event_dict, seq_idx):
     pi_t0 = pi_grp['t0'][()]
     pe_grp.create_dataset('t0',
                           data=np.float32(float(np.min(pi_t0))))
+
+    # --- per_window (trigger gates) ---
+    # Dimension table of readout windows: start/end (detector frame) and a CSR
+    # digit_offsets into sensor.h5 (window w = digit rows [off[w], off[w+1])).
+    # Present only for triggered datasets; absent when the trigger is off.
+    pw = event_dict.get('per_window')
+    if pw is not None:
+        pw_grp = grp.create_group('per_window')
+        pw_grp.attrs['n_windows'] = int(np.asarray(pw['window_start']).shape[0])
+        pw_grp.create_dataset('window_start', data=np.asarray(pw['window_start'], np.float32), **_GZIP_OPTS)
+        pw_grp.create_dataset('window_end', data=np.asarray(pw['window_end'], np.float32), **_GZIP_OPTS)
+        pw_grp.create_dataset('digit_offsets', data=np.asarray(pw['digit_offsets'], np.int32), **_GZIP_OPTS)
 
     # --- per_particle ---
     pp_grp = grp.create_group('per_particle')

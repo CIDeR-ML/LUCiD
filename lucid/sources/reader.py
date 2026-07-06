@@ -94,5 +94,7 @@ def read_labl_event(filename, event_idx):
     ``per_particle`` (category, contained, genealogy CSR,
     interaction_idx), and ``per_track`` (track_id, parent_id, pdg,
     initial_energy, n_cherenkov, particle_idx, ancestor, interaction).
+    Triggered datasets additionally carry ``per_window`` (window_start,
+    window_end, digit_offsets — the CSR into sensor.h5 digits).
     """
     return _read_event(filename, event_idx)

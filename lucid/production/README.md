@@ -32,7 +32,7 @@ Cherenkov (0) and scintillation (1) hits.
 ## Digitizer / hit-making
 
 Sensor hit-making is a per-sensor sliding-window integrator
-(`lucid/sources/digitizer.py`). The model is set by an optional `"digitizer"`
+(`lucid/simulation/digitizer.py`). The model is set by an optional `"digitizer"`
 block in the **detector physics config** (e.g. `config/SK_like_physics_config.json`);
 absent ⇒ `basic`.
 
@@ -41,7 +41,7 @@ absent ⇒ `basic`.
 ```
 
 Models (every electronics/PMT number sourced from WCSim — see
-`lucid/sources/digitizer.py` for `WCSim/...` citations):
+`lucid/simulation/digitizer.py` for `WCSim/...` citations):
 - **`basic`** — ∞ window → one digit per sensor, the legacy first-arrival + summed
   charge behaviour (default; idealized passthrough).
 - **`ski`** — SK 20″ PMT (`PMT20inch`): 200 ns window, no deadtime, 0.25 pe

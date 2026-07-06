@@ -126,6 +126,18 @@ def _read_digitizer_cfg(physics_config_path: str):
         return None
 
 
+def _read_trigger_cfg(physics_config_path: str):
+    """Read the optional 'trigger' block from a detector physics config.
+
+    Returns the block (dict) or None (trigger off) when absent/unreadable.
+    """
+    try:
+        with open(physics_config_path) as f:
+            return json.load(f).get("trigger")
+    except (OSError, ValueError):
+        return None
+
+
 def _load_config(path: str) -> dict:
     with open(path) as f:
         cfg = json.load(f)
@@ -275,6 +287,8 @@ def _run_lucid(
     # Digitizer (sensor hit-making) model comes from the detector physics
     # config's optional "digitizer" block; absent -> "basic" (legacy behaviour).
     digitizer_cfg = _read_digitizer_cfg(physics_config_path)
+    # Readout trigger from the optional "trigger" block; absent -> off.
+    trigger_cfg = _read_trigger_cfg(physics_config_path)
 
     saved_files = generate_events_from_photonsim_particles(
         event_simulator=simulate_event,
@@ -294,6 +308,7 @@ def _run_lucid(
         primary_source=config.get("primary_source", "particles"),
         pad_size_buckets=pad_size_buckets,
         digitizer=digitizer_cfg,
+        trigger=trigger_cfg,
     )
     print(f"LUCiD wrote {len(saved_files)} files under {output_dir}/{{sensor,hits,step,labl}}/")
 
@@ -733,6 +748,7 @@ def _main_pileup(args: argparse.Namespace, config: dict) -> int:
         run_id=None,
         file_index_start=file_index,
         digitizer=_read_digitizer_cfg(physics_config_path),
+        trigger=_read_trigger_cfg(physics_config_path),
     )
     print(f"LUCiD wrote {len(saved_files)} files.")
 
