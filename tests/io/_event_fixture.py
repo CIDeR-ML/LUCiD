@@ -271,3 +271,52 @@ def build_synthetic_pileup_event(source_event_idx=0, n_sensors=20,
         'label_names': ['category'],
     }
     return config_meta, event_dict, sensor_positions
+
+
+def build_synthetic_digit_event(source_event_idx=0, t0=7.5, n_sensors=20):
+    """Base event augmented with the digitizer's digit-list payload.
+
+    Exercises the multi-hit / digit_idx / dark / per_window schema that the
+    dense ``build_synthetic_event`` path doesn't cover: sensor 5 carries two
+    digits (prompt + delayed), sensor 7 is a pure dark digit, and the four
+    digits are grouped into two trigger windows. Written in the canonical
+    ``(window, sensor, T)`` order the digitizer produces.
+    """
+    config_meta, event_dict, sensor_positions = build_synthetic_event(
+        source_event_idx, t0, n_sensors)
+
+    # 4 digits, canonical (window, sensor, T): window 0 = {s5@50, s6@52},
+    # window 1 = {s5@3000 (delayed => multi-hit), s7@3005 (dark)}.
+    event_dict['sensor_digits'] = {
+        'sensor_idx': np.array([5, 6, 5, 7], np.uint16),
+        'PE':         np.array([3.0, 2.0, 1.5, 1.0], np.float32),
+        'T':          np.array([50., 52., 3000., 3005.], np.float32),
+    }
+    event_dict['hits_sparse'] = {
+        'particle_idx':     np.array([0, 0, 1, -1], np.int32),   # last = dark
+        'digit_idx':        np.array([0, 1, 2, 3], np.int32),
+        'sensor_idx':       np.array([5, 6, 5, 7], np.uint16),
+        'PE':               np.array([3.0, 2.0, 1.5, 1.0], np.float32),
+        'T':                np.array([50., 52., 3000., 3005.], np.float32),
+        'T_reco':           np.array([50., 52., 3000., 3005.], np.float32),
+        'emission_process': np.array([0, 0, 0, 2], np.int8),     # 2 = DARK
+    }
+    event_dict['segment_sensor_hits'] = {                        # real deposits only (no dark)
+        'segment_idx':      np.array([0, 0, 2], np.int32),
+        'digit_idx':        np.array([0, 1, 2], np.int32),
+        'sensor_idx':       np.array([5, 6, 5], np.uint16),
+        'PE':               np.array([3.0, 2.0, 1.5], np.float32),
+        'T':                np.array([50., 52., 3000.], np.float32),
+        'T_reco':           np.array([50., 52., 3000.], np.float32),
+        'emission_process': np.array([0, 0, 0], np.int8),
+    }
+    event_dict['per_window'] = {
+        'window_start':  np.array([40., 2990.], np.float32),
+        'window_end':    np.array([60., 3010.], np.float32),
+        'digit_offsets': np.array([0, 2, 4], np.int32),          # CSR: w0=[0,2), w1=[2,4)
+    }
+    config_meta.update({
+        'trigger': 'sliding_window', 'trigger_window_ns': 200.0, 'trigger_n_thr': 30,
+        'trigger_pad_before_ns': 30.0, 'trigger_pad_after_ns': 30.0,
+    })
+    return config_meta, event_dict, sensor_positions
