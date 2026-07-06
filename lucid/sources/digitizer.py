@@ -13,13 +13,26 @@ preset with an infinite integration window, so every sensor collapses to one
 digit (first-arrival time, summed charge), reproducing the historical
 one-hit-per-sensor behaviour.
 
-Models (parameters justified in the design notes / commit message):
+Models. Every electronics/PMT number is taken from the WCSim source (the SK/HK
+reference simulation); citations are ``WCSim/...`` paths, verifiable in the
+checkout. ``basic`` is the idealized passthrough (kept for backward parity);
+``ski`` and ``hk`` are physical models differing in their PMT response:
 
-    basic   window=inf,   deadtime=0,    thr=0      — legacy first-arrival+sum
-    ski     window=200ns, deadtime=0,    thr~0.2pe  — SK-I (WCSim SKI model)
-    qbee    window=400ns, deadtime~900ns,thr=0.25pe — SK-IV/V QBEE/QTC
-    hk      window=200ns*,deadtime~0,    thr=0.25pe — Hyper-K (dead-time free)
-    (* hk window/threshold are provisional; dead-time-free is the firm trait.)
+    basic  window=inf,  deadtime=0, thr=0     — legacy first-arrival + summed charge
+    ski    window=200ns, deadtime=0, thr=0.25pe, dark=4.2kHz — SK 20" (WCSim PMT20inch)
+    hk     window=200ns, deadtime=0, thr=0.25pe, dark=4.2kHz — HK 20" Box&Line (R12860)
+
+Provenance (all in ``WCSim/``, the checkout alongside LUCiD):
+  * window 200 ns / deadtime 0 ns — ``include/WCSimWCDigitizer.hh:97-98`` (the
+    only digitizer WCSim ships is SKI; there is no separate QBEE model).
+  * charge = per-photoelectron SPE spectrum, sampled and summed. We fit each
+    PMT's tabulated SPE CDF (``src/WCSimPMTObject.cc`` ``Getqpe``) to a
+    Gaussian+exponential (Bellamy et al. 1994, NIM A 339 468); see ``_SPE_*``.
+  * time = charge-dependent PMT jitter — ``src/WCSimPMTObject.cc`` HitTimeSmearing
+    (SK ``:88-99`` Gaussian; HK ``:2124-2138`` Gaussian+exp tail) + 0.4 ns TDC
+    truncation (``WCSimWCDigitizer.hh:99``).
+  * dark rate 4.2 kHz — ``src/WCSimPMTObject.cc:262`` (SK-I; WCSim uses the same
+    value for the HK B&L PMT, ``:2295``).
 
 The model is chosen from the detector physics config (a ``"digitizer"`` block);
 absent ⇒ ``basic``. Dark noise is off by default; when enabled it is generated
@@ -38,25 +51,32 @@ from typing import Optional, Union
 import numpy as np
 
 
+# --- Single-photoelectron (SPE) charge spectra -------------------------------
+# Gaussian+exponential (Bellamy 1994) fits to WCSim's tabulated SPE CDF
+# (``WCSimPMTObject.cc`` ``Getqpe``): mixture weight ``w`` of the exponential
+# low-charge tail (scale ``tau``) vs the Gaussian main peak (``mu``, ``sig``).
+# ``fit_mean`` is the raw mean of one SPE draw in p.e.; the sampler divides it
+# out so reco charge is unbiased (mean = photoelectron count) while the *shape*
+# (resolution) is preserved. KS vs the tabulated LUT quoted per PMT.
+_SPE_SK = dict(w=0.2970, mu=1.1288, sig=0.5587, tau=0.1978, fit_mean=0.852)  # KS 5.1%
+_SPE_HK = dict(w=0.2026, mu=1.1019, sig=0.3495, tau=0.5857, fit_mean=0.997)  # KS 1.0%
+
 # --- Model presets -----------------------------------------------------------
-# window/deadtime/time in ns; threshold in p.e.; charge_res is either the string
-# "sk_like" (the SK charge-dependent fractional resolution) or a float f giving
-# a single-p.e. sigma that scales as f·sqrt(Q). dark_rate_khz default 0 (off);
-# set it (e.g. 4.2) to enable dark noise. `provisional` flags not-yet-final
-# parameter sets (HK).
+# window/deadtime in ns; threshold in p.e.; dark_rate_khz per PMT.
+#   charge_model: "legacy" (basic → the old sk_like fractional smear, for parity)
+#                 or "spe"  (sample+sum the per-pe SPE spectrum in ``spe``).
+#   time_model:   "none" | "sk_gauss" | "hk_emg"  (charge-dependent PMT jitter);
+#                 tdc_ns is the electronics timing truncation applied after.
 MODEL_PRESETS: dict[str, dict] = {
     "basic": dict(integration_window_ns=None, deadtime_ns=0.0, threshold_pe=0.0,
-                  charge_res="sk_like", time_res_ns=0.0, dark_rate_khz=0.0,
-                  provisional=False),
-    "ski":  dict(integration_window_ns=200.0, deadtime_ns=0.0, threshold_pe=0.2,
-                 charge_res="sk_like", time_res_ns=0.0, dark_rate_khz=0.0,
-                 provisional=False),
-    "qbee": dict(integration_window_ns=400.0, deadtime_ns=900.0, threshold_pe=0.25,
-                 charge_res=0.1, time_res_ns=0.3, dark_rate_khz=0.0,
-                 provisional=False),
+                  charge_model="legacy", charge_res="sk_like",
+                  time_model="none", tdc_ns=0.0, dark_rate_khz=0.0, provisional=False),
+    "ski":  dict(integration_window_ns=200.0, deadtime_ns=0.0, threshold_pe=0.25,
+                 charge_model="spe", spe=_SPE_SK,
+                 time_model="sk_gauss", tdc_ns=0.4, dark_rate_khz=4.2, provisional=False),
     "hk":   dict(integration_window_ns=200.0, deadtime_ns=0.0, threshold_pe=0.25,
-                 charge_res=0.05, time_res_ns=0.3, dark_rate_khz=0.0,
-                 provisional=True),
+                 charge_model="spe", spe=_SPE_HK,
+                 time_model="hk_emg", tdc_ns=0.4, dark_rate_khz=4.2, provisional=False),
 }
 
 # emission_process encoding for the hits.h5 decomposition. 0/1 mirror
@@ -115,15 +135,13 @@ def resolve_model_config(cfg: Union[None, str, dict]) -> dict:
 
 
 def charge_resolution_sigma(pe_true: np.ndarray, charge_res: Union[str, float]) -> np.ndarray:
-    """Per-digit charge-resolution sigma (p.e.).
+    """Per-digit charge-resolution sigma (p.e.) for the legacy ``basic`` path only.
 
-    ``"sk_like"``: the SK charge-dependent fractional resolution (arXiv:1307.0162
-    Table 2), matching ``lucid.utils.smear_charges_SK_like``. A float ``f``:
-    single-p.e. sigma scaling as ``f·sqrt(max(Q,1))`` (SPE spread added in
-    quadrature over Q p.e.), so ``f`` is the 1-p.e. resolution (qbee 0.1, hk 0.05).
-
-    The caller applies the smear (so ``basic``/``ski`` = ``"sk_like"`` reuse the
-    existing keyed ``smear_charges_SK_like`` for parity; float models use this).
+    ``ski``/``hk`` now use the physical per-photoelectron SPE spectrum
+    (:func:`_sample_spe_charge`); this remains for ``basic``'s ``"sk_like"``
+    smear, matching ``lucid.utils.smear_charges_SK_like`` for byte-parity with
+    the historical output. (A float ``f`` gives ``f·sqrt(max(Q,1))``, retained
+    for config overrides.)
     """
     q = np.asarray(pe_true, dtype=np.float64)
     if charge_res == "sk_like":
@@ -253,30 +271,88 @@ def digitize_event(
     )
 
 
+def _sample_spe_charge(pe_true: np.ndarray, spe: dict, rng: np.random.Generator) -> np.ndarray:
+    """Reco charge = sum of N per-photoelectron SPE draws, N = round(pe_true).
+
+    Each photoelectron draws from the Gaussian+exponential SPE mixture (``spe``).
+    The N-fold sum is sampled **exactly** (not a CLT approximation) and in
+    O(n_digits): split the N pes into ``k ~ Binomial(N, 1-w)`` Gaussian-core pes
+    and ``N-k`` exponential-tail pes, then
+
+        Σ k Gaussians = Normal(k·mu, √k·sig)      Σ (N-k) Exp(tau) = Gamma(N-k, tau).
+
+    The exact per-pe shape is what makes the low-pe response (dark noise = 1 pe,
+    single-photon hits) faithful. Normalized by the SPE ``fit_mean`` so the mean
+    reco charge equals the photoelectron count.
+    """
+    q = np.asarray(pe_true, dtype=np.float64)
+    n = np.maximum(1, np.rint(q)).astype(np.int64)          # photoelectron count
+    w, mu, sig, tau = spe["w"], spe["mu"], spe["sig"], spe["tau"]
+    k = rng.binomial(n, 1.0 - w)                            # Gaussian-core pes
+    nmk = n - k                                             # exponential-tail pes
+    charge = rng.normal(k * mu, np.sqrt(k) * sig)           # Σ Gaussians (0 if k=0)
+    tail = nmk > 0
+    if tail.any():
+        charge[tail] += rng.gamma(nmk[tail], tau)          # Σ Exp(tau) = Gamma
+    return np.clip(charge / spe["fit_mean"], 0.0, None)
+
+
+def _sample_time_jitter(digit_time: np.ndarray, digit_pe: np.ndarray,
+                        model: dict, rng: np.random.Generator) -> np.ndarray:
+    """Charge-dependent PMT time jitter + electronics TDC truncation.
+
+    ``sk_gauss`` — WCSim ``PMT20inch::HitTimeSmearing`` (``WCSimPMTObject.cc:88-99``):
+        Gaussian, sigma = max(0.58, 0.33 + sqrt(10/Q)) ns.
+    ``hk_emg``   — WCSim ``BoxandLine20inchHQE::HitTimeSmearing`` (``:2124-2138``):
+        exponentially-modified Gaussian, Normal(-0.2, sigma(Q)) plus a positive
+        exponential late tail of mean 1/lambda(Q).
+    Then truncate to the TDC step ``tdc_ns`` (WCSim SKI timing precision 0.4 ns).
+    """
+    t = np.asarray(digit_time, dtype=np.float64).copy()
+    if t.size == 0:
+        return t
+    Q = np.maximum(np.asarray(digit_pe, dtype=np.float64), 1e-6)
+    tm = model.get("time_model", "none")
+    if tm == "sk_gauss":
+        sig = np.maximum(0.58, 0.33 + np.sqrt(10.0 / Q))
+        t = t + rng.normal(0.0, sig)
+    elif tm == "hk_emg":
+        s = (0.6314, 0.06260, 0.5711, 23.96)               # WCSim sig_param
+        sig_low = s[0] * (np.exp(-s[1] * Q) + s[2])
+        hc0 = 2 * s[0] * s[1] * s[3] * np.sqrt(s[3]) * np.exp(-s[1] * s[3])
+        hc1 = s[0] * ((1 - 2 * s[1] * s[3]) * np.exp(-s[1] * s[3]) + s[2])
+        sig = np.where(Q < s[3], sig_low, hc0 / np.sqrt(Q) + hc1)
+        lam = 0.4113 + 0.07827 * Q                         # WCSim lambda_param
+        t = t + rng.normal(-0.2, sig) - np.log(1.0 - rng.random(t.shape)) / lam
+    tdc = float(model.get("tdc_ns", 0.0))
+    if tdc > 0.0:
+        t = np.round(t / tdc) * tdc
+    return t
+
+
 def apply_readout_resolution(
     digit_pe_true: np.ndarray,
     digit_time: np.ndarray,
     model: dict,
     rng: np.random.Generator,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Apply the model's charge resolution and optional electronics time jitter.
+    """Apply the model's charge response and charge-dependent time jitter.
 
-    Uniform across all models (including ``basic``): charge is smeared **once**
-    by the model's ``charge_res`` (never stacked on anything else), and time
-    gets an additive electronics jitter ``time_res_ns`` that is distinct from —
-    and on top of — the PMT TTS already carried in ``digit_time``. Returns
-    ``(pe_reco, t_reco)`` as float32.
+    ``charge_model="spe"`` (``ski``/``hk``) samples+sums the per-photoelectron
+    SPE spectrum; ``"legacy"`` (``basic``) keeps the historical ``sk_like``
+    fractional smear for byte-parity. Time gets the PMT's charge-dependent jitter
+    (:func:`_sample_time_jitter`), on top of the TTS already in ``digit_time``.
+    Returns ``(pe_reco, t_reco)`` as float32.
     """
     pe_true = np.asarray(digit_pe_true, dtype=np.float64)
-    if pe_true.size:
+    if pe_true.size == 0:
+        pe_reco = pe_true
+    elif model.get("charge_model", "legacy") == "spe":
+        pe_reco = _sample_spe_charge(pe_true, model["spe"], rng)
+    else:
         sigma = charge_resolution_sigma(pe_true, model.get("charge_res", "sk_like"))
         pe_reco = np.clip(pe_true + rng.normal(size=pe_true.shape) * sigma, 0.0, None)
-    else:
-        pe_reco = pe_true
-    t = np.asarray(digit_time, dtype=np.float64).copy()
-    t_res = float(model.get("time_res_ns", 0.0))
-    if t_res > 0.0 and t.size:
-        t = t + rng.normal(size=t.shape) * t_res
+    t = _sample_time_jitter(digit_time, pe_true, model, rng)
     return pe_reco.astype(np.float32), t.astype(np.float32)
 
 

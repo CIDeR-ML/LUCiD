@@ -37,19 +37,26 @@ block in the **detector physics config** (e.g. `config/SK_like_physics_config.js
 absent ⇒ `basic`.
 
 ```json
-"digitizer": { "model": "qbee", "dark_rate_khz": 0.0 }
+"digitizer": { "model": "ski" }
 ```
 
-Models: **`basic`** (∞ window → one digit per sensor, the legacy behaviour and
-default), **`ski`** (SK-I ATM), **`qbee`** (SK-IV/V QBEE/QTC, 400 ns gate / ~900 ns
-deadtime), **`hk`** (Hyper-K, dead-time-free; parameters provisional). Any
-parameter (`integration_window_ns`, `deadtime_ns`, `threshold_pe`, `charge_res`,
-`time_res_ns`, `dark_rate_khz`) is overridable in the block.
+Models (every electronics/PMT number sourced from WCSim — see
+`lucid/sources/digitizer.py` for `WCSim/...` citations):
+- **`basic`** — ∞ window → one digit per sensor, the legacy first-arrival + summed
+  charge behaviour (default; idealized passthrough).
+- **`ski`** — SK 20″ PMT (`PMT20inch`): 200 ns window, no deadtime, 0.25 pe
+  threshold, per-photoelectron SPE charge, charge-dependent Gaussian time jitter,
+  4.2 kHz dark.
+- **`hk`** — HK 20″ Box&Line PMT (`BoxandLine20inchHQE`): same window/threshold,
+  its own (sharper) SPE + exponentially-modified-Gaussian time jitter, 4.2 kHz dark.
+
+Any parameter (`integration_window_ns`, `deadtime_ns`, `threshold_pe`,
+`dark_rate_khz`, …) is overridable in the block.
 
 Non-`basic` models can record **multiple digits per sensor** when light arrives
 in separated time clusters (delayed coincidence, pile-up, dark noise), so
 `sensor.h5` becomes a digit list and `hits.h5` / `step/sensor_hits` carry a
-`digit_idx` FK. **Dark noise** (off by default) is a labelled source in the
+`digit_idx` FK. **Dark noise** is a labelled source in the
 `hits.h5` decomposition (`emission_process = 2`, `particle_idx = -1`). See
 `docs/LUCID_DATASET.md`.
 
