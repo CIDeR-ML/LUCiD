@@ -722,6 +722,113 @@ def _offset_track_ids_raw(raw, offset):
     return max((int(t) for t in tid_d.keys()), default=0)
 
 
+def _simulate_interaction_stream(
+    event_simulator, raw, *, t0, vertex, source_type_code, running_offset,
+    n_sensors, rays_buckets, event_keys, apply_translation,
+):
+    """Simulate one interaction's photons and build a merge-stream dict.
+
+    Shared by the pile-up and supernova drivers. Given a raw PhotonSim entry
+    plus this interaction's absolute ``t0`` (ns) and fiducial ``vertex`` (m), it
+    remaps track IDs (offset by ``running_offset`` so streams don't collide),
+    runs the per-process (Cherenkov [+ scintillation]) photon pipeline, and
+    returns ``(stream, stream_max)`` — ``stream`` ready for
+    ``_merge_pileup_streams``, ``stream_max`` the highest track id used (caller
+    sets ``running_offset = stream_max + 1``). Segment times are shifted into
+    the absolute frame here (float64), consistent with the digit times the
+    merger builds from ``deposits``.
+    """
+    import time as _time
+    stream_max = _offset_track_ids_raw(raw, running_offset)
+
+    total_photons = int(raw['photon_origins'].shape[0])
+    n_segments_raw = int(raw['segments_raw']['n_segments'])
+    print(f"      raw: photons={total_photons:,}  segments={n_segments_raw:,}", flush=True)
+
+    photon_origins       = raw['photon_origins'].astype(np.float32, copy=False)
+    photon_directions    = raw['photon_directions'].astype(np.float32, copy=False)
+    photon_times         = raw['photon_times'].astype(np.float32, copy=False)
+    photon_wavelengths   = raw['photon_wavelengths'].astype(np.float32, copy=False)
+    photon_segment_index = np.asarray(raw['photon_segment_index_raw'], dtype=np.int32)
+    if apply_translation:
+        vertex = np.asarray(vertex, dtype=np.float32)
+        photon_origins = photon_origins + vertex[None, :]
+        seg_raw = raw['segments_raw']
+        if n_segments_raw > 0:
+            for _a, _c in (('start_x_mm', 0), ('start_y_mm', 1), ('start_z_mm', 2),
+                           ('end_x_mm', 0), ('end_y_mm', 1), ('end_z_mm', 2)):
+                seg_raw[_a] = seg_raw[_a] + float(vertex[_c]) * 1000.0
+
+    medium = getattr(event_simulator, 'medium', None)
+    has_scintillation = (medium is not None
+                         and "scintillation" in medium.emission_processes)
+    process_inputs = [{
+        'process_id':               EMISSION_PROCESS_CHERENKOV,
+        'photon_origins':           photon_origins,
+        'photon_directions':        photon_directions,
+        'photon_times':             photon_times,
+        'photon_wavelengths':       photon_wavelengths,
+        'photon_segment_index_raw': photon_segment_index.astype(np.int64),
+    }]
+    if has_scintillation:
+        _sc = event_simulator.default_detector_params.scintillation
+        _medium_params = {
+            'S': float(_sc.S), 'kB': float(_sc.kB), 'C': float(_sc.C),
+            'tau_rise': float(_sc.tau_rise), 'tau_fall': float(_sc.tau_fall),
+            'moyal_loc': float(_sc.moyal_loc), 'moyal_scale': float(_sc.moyal_scale),
+            'lambda_min': float(medium.scintillation_lambda_min),
+            'lambda_max': float(medium.scintillation_lambda_max),
+        }
+        _scint_rng = np.random.default_rng(event_keys['scint_seed'])
+        _scint_ph = expand_segments_to_photons(
+            raw['segments_raw'], _medium_params, _scint_rng)
+        process_inputs.append({
+            'process_id':               EMISSION_PROCESS_SCINTILLATION,
+            'photon_origins':           _scint_ph['photon_origins'],
+            'photon_directions':        _scint_ph['photon_directions'],
+            'photon_times':             _scint_ph['photon_times'],
+            'photon_wavelengths':       _scint_ph['photon_wavelengths'],
+            'photon_segment_index_raw': _scint_ph['photon_segment_index_raw'],
+        })
+
+    _t_sim = _time.time()
+    process_outputs = []
+    for _p_in in process_inputs:
+        _sim_key_p = jax.random.fold_in(event_keys['sim_key'], int(_p_in['process_id']))
+        _out = run_event_process_pipeline(
+            event_simulator=event_simulator, raw=raw,
+            photon_origins_np=_p_in['photon_origins'],
+            photon_directions_np=_p_in['photon_directions'],
+            photon_times_np=_p_in['photon_times'],
+            photon_wavelengths_np=_p_in['photon_wavelengths'],
+            photon_segment_index_raw=_p_in['photon_segment_index_raw'],
+            n_sensors=n_sensors, rays_buckets=rays_buckets, sim_key=_sim_key_p,
+            compute_aggregate=False,  # digitizer rebuilds the decomposition
+        )
+        _out['process_id'] = _p_in['process_id']
+        process_outputs.append(_out)
+    print(f"      [timing] simulate {_time.time() - _t_sim:.3f}s", flush=True)
+
+    particle_data = process_outputs[0]['particle_data']
+    deposits = gather_photon_deposits(process_outputs)
+    if particle_data['segments'].get('n_segments', 0) > 0:
+        particle_data['segments']['time'] = (
+            np.asarray(particle_data['segments']['time'], dtype=np.float64)
+            + np.float64(t0))
+
+    stream = {
+        'particles':         particle_data['particles'],
+        'meaningful_tracks': particle_data['meaningful_tracks'],
+        'segments':          particle_data['segments'],
+        'deposits':          deposits,
+        't0':                float(t0),
+        'interaction_meta':  build_interaction_metadata(
+            particle_data, t0=t0, vertex_xyz=vertex,
+            source_type_code=source_type_code),
+    }
+    return stream, stream_max
+
+
 def generate_events_from_photonsim_pileup(
     event_simulator,
     root_file_paths,
@@ -878,135 +985,14 @@ def generate_events_from_photonsim_pileup(
                       f"xyz=({vertex_i[0]:.3f}, {vertex_i[1]:.3f}, {vertex_i[2]:.3f}) m",
                       flush=True)
 
-                # Phase 1 — read raw event from this vertex's ROOT file.
                 raw = _read_event_raw(str(root_file_paths[vidx]), event_idx)
-
-                # Remap G4 track IDs on the raw dict so streams don't
-                # collide. After this, both ``track_info_dict`` keys and
-                # ``segments_raw['track_id']`` carry the offset; the
-                # downstream categorization in
-                # ``_derive_views_from_segments`` produces already-shifted
-                # ``meaningful_tracks`` / ``particles`` naturally.
-                stream_max = _offset_track_ids_raw(raw, running_offset)
-
-                source_type_code_i = _source_type_code(vertex_primary_sources[vidx])
-                total_photons_i = int(raw['photon_origins'].shape[0])
-                n_segments_raw_i = int(raw['segments_raw']['n_segments'])
-                print(f"      raw: photons={total_photons_i:,}  "
-                      f"segments={n_segments_raw_i:,}", flush=True)
-
-                # Apply this vertex's translation to the raw photon origins
-                # + raw segment table (mm scale on segments).
-                photon_origins_i      = raw['photon_origins'].astype(np.float32, copy=False)
-                photon_directions_i   = raw['photon_directions'].astype(np.float32, copy=False)
-                photon_times_i        = raw['photon_times'].astype(np.float32, copy=False)
-                photon_wavelengths_i  = raw['photon_wavelengths'].astype(np.float32, copy=False)
-                photon_segment_index_i = np.asarray(raw['photon_segment_index_raw'], dtype=np.int32)
-                if apply_translation:
-                    photon_origins_i = photon_origins_i + vertex_i[None, :]
-                    seg_raw_i = raw['segments_raw']
-                    if n_segments_raw_i > 0:
-                        seg_raw_i['start_x_mm'] = seg_raw_i['start_x_mm'] + float(vertex_i[0]) * 1000.0
-                        seg_raw_i['start_y_mm'] = seg_raw_i['start_y_mm'] + float(vertex_i[1]) * 1000.0
-                        seg_raw_i['start_z_mm'] = seg_raw_i['start_z_mm'] + float(vertex_i[2]) * 1000.0
-                        seg_raw_i['end_x_mm']   = seg_raw_i['end_x_mm']   + float(vertex_i[0]) * 1000.0
-                        seg_raw_i['end_y_mm']   = seg_raw_i['end_y_mm']   + float(vertex_i[1]) * 1000.0
-                        seg_raw_i['end_z_mm']   = seg_raw_i['end_z_mm']   + float(vertex_i[2]) * 1000.0
-
-                # Build per-process inputs for this vertex (Cherenkov +
-                # optional scintillation). Same pattern as the single-vertex
-                # path — Option C, one kernel call per process.
-                medium = getattr(event_simulator, 'medium', None)
-                has_scintillation_i = (
-                    medium is not None
-                    and "scintillation" in medium.emission_processes
-                )
-                process_inputs_i = [{
-                    'process_id':               EMISSION_PROCESS_CHERENKOV,
-                    'photon_origins':           photon_origins_i,
-                    'photon_directions':        photon_directions_i,
-                    'photon_times':             photon_times_i,
-                    'photon_wavelengths':       photon_wavelengths_i,
-                    'photon_segment_index_raw': photon_segment_index_i.astype(np.int64),
-                }]
-                if has_scintillation_i:
-                    # Nested ScintillationParams sub-tuple (no flat alias) — read via `.scintillation.*`.
-                    _sc = event_simulator.default_detector_params.scintillation
-                    _medium_params = {
-                        'S':           float(_sc.S),
-                        'kB':          float(_sc.kB),
-                        'C':           float(_sc.C),
-                        'tau_rise':    float(_sc.tau_rise),
-                        'tau_fall':    float(_sc.tau_fall),
-                        'moyal_loc':   float(_sc.moyal_loc),
-                        'moyal_scale': float(_sc.moyal_scale),
-                        'lambda_min':  float(medium.scintillation_lambda_min),
-                        'lambda_max':  float(medium.scintillation_lambda_max),
-                    }
-                    _scint_rng = np.random.default_rng(event_keys['scint_seed'])
-                    # segments_raw already vertex-translated above; expander
-                    # output's photon_origins are already in absolute frame.
-                    _scint_ph = expand_segments_to_photons(
-                        raw['segments_raw'], _medium_params, _scint_rng)
-                    process_inputs_i.append({
-                        'process_id':               EMISSION_PROCESS_SCINTILLATION,
-                        'photon_origins':           _scint_ph['photon_origins'],
-                        'photon_directions':        _scint_ph['photon_directions'],
-                        'photon_times':             _scint_ph['photon_times'],
-                        'photon_wavelengths':       _scint_ph['photon_wavelengths'],
-                        'photon_segment_index_raw': _scint_ph['photon_segment_index_raw'],
-                    })
-
-                # Phase 2-4 per emission process for this vertex.
-                _t_sim = _time.time()
-                process_outputs_i = []
-                for _p_in in process_inputs_i:
-                    _sim_key_p = jax.random.fold_in(
-                        event_keys['sim_key'], int(_p_in['process_id']))
-                    _out = run_event_process_pipeline(
-                        event_simulator=event_simulator,
-                        raw=raw,
-                        photon_origins_np=_p_in['photon_origins'],
-                        photon_directions_np=_p_in['photon_directions'],
-                        photon_times_np=_p_in['photon_times'],
-                        photon_wavelengths_np=_p_in['photon_wavelengths'],
-                        photon_segment_index_raw=_p_in['photon_segment_index_raw'],
-                        n_sensors=n_sensors,
-                        rays_buckets=rays_buckets,
-                        sim_key=_sim_key_p,
-                        compute_aggregate=False,  # digitizer rebuilds the decomposition
-                    )
-                    _out['process_id'] = _p_in['process_id']
-                    process_outputs_i.append(_out)
-                print(f"      [timing] simulate {_time.time() - _t_sim:.3f}s", flush=True)
-
-                # Canonical particle_data from Cherenkov pass (segments table
-                # identical across processes).
-                particle_data_i = process_outputs_i[0]['particle_data']
-                n_particles_i = particle_data_i['n_particles']
-
-                # Per-vertex per-photon deposits for cross-vertex digitization:
-                # the merger pools them across vertices (in absolute time, with
-                # per-vertex particle/segment offsets) and windows them once, so
-                # overlapping pile-up light merges into shared digits. Segment
-                # times are still shifted per-vertex here (they carry absolute
-                # times downstream, consistent with the digit times).
-                deposits_i = gather_photon_deposits(process_outputs_i)
-                if particle_data_i['segments'].get('n_segments', 0) > 0:
-                    particle_data_i['segments']['time'] = (
-                        np.asarray(particle_data_i['segments']['time'], dtype=np.float64)
-                        + np.float64(t0_i))
-
-                streams.append({
-                    'particles':              particle_data_i['particles'],
-                    'meaningful_tracks':      particle_data_i['meaningful_tracks'],
-                    'segments':               particle_data_i['segments'],
-                    'deposits':               deposits_i,
-                    't0':                     float(t0_i),
-                    'interaction_meta':       build_interaction_metadata(
-                        particle_data_i, t0=t0_i, vertex_xyz=vertex_i,
-                        source_type_code=source_type_code_i),
-                })
+                stream, stream_max = _simulate_interaction_stream(
+                    event_simulator, raw, t0=t0_i, vertex=vertex_i,
+                    source_type_code=_source_type_code(vertex_primary_sources[vidx]),
+                    running_offset=running_offset, n_sensors=n_sensors,
+                    rays_buckets=rays_buckets, event_keys=event_keys,
+                    apply_translation=apply_translation)
+                streams.append(stream)
                 running_offset = stream_max + 1
 
             # ---- merge streams into one event_dict ----
