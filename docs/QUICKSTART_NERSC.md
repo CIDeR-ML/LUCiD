@@ -23,7 +23,7 @@ Only the per-cluster `NerscAdapter` (`cluster_common/nersc.py`, selected by
 |---|---|
 | `/global/u1/<i>/<user>/DIFFSIM/` (= `/global/homes/...`) | Source checkouts (`LUCiD`, `PhotonSim`). Home quota. |
 | `/global/cfs/cdirs/dune/users/<user>/software/images/` | Container `.sif` (multi-GB). CFS is backed up and **not purged**. |
-| `/global/cfs/cdirs/dune/users/<user>/DORAEMON/` | `OUTPUT_BASE_PATH` — dataset-production outputs (`<detector>/config_NNNNNN/`). |
+| `/global/cfs/cdirs/dune/users/<user>/DORAEMON/` | `OUTPUT_BASE_PATH` — dataset-production outputs (`<detector>/<block>/<split>/config_NN/`). |
 | `/global/cfs/cdirs/dune/users/<user>/SIREN_files/` | `SIREN_OUTPUT_BASE_PATH` — `training_inputs/`, `smax_parametrization/`, plus `timing_results/`, `training_stable/`, `training_tests/`. |
 | `$SCRATCH` (`/pscratch/sd/<i>/<user>`) | Scratch; **purged** — only use for the apptainer pull cache/tmp, never outputs or the image. |
 
@@ -75,19 +75,33 @@ cd lucid/production/jobs/dataprod
 echo "y" | ./submit_all_configs.sh -t -s -o /global/cfs/cdirs/dune/users/$(whoami)/DORAEMON/WAND/$(date +%Y%m%d)_test
 ```
 
-Each config produces:
+Configs live in per-block folders under `lucid/production/configs/<block>/`,
+where `<block>` is one of **GeV** (single particles + particle-bomb +
+multiparticle + GENIE), **Solar** (low-energy e⁻), **SN** (supernova bursts), or
+**Test** (dev). Each file is `NN_name.json` (2-digit, numbering restarts per
+block) and declares its own `detector` plus `nominal_train` / `nominal_test`.
+
+Each config produces one dataset per split:
 
 ```
-<OUT>/<detector>/config_NNNNNN/      # default detector: SK_like
+<OUT>/<detector>/<block>/<split>/config_NN/     # e.g. HK/GeV/train/config_01
 ├── sensor/wc_sensor_0000.h5
 ├── hits/wc_hits_0000.h5
 ├── step/wc_step_0000.h5
 └── labl/wc_labl_0000.h5
 ```
 
-Pass `-D <name>` to run the same configs against a different geometry
-(`-D HK`, `-D WCTE`); the name selects
-`LUCiD/config/<detector>_{geom,physics}_config.json`.
+- **GeV / Solar** carry a `train` / `test` split layer; a config with
+  `nominal_train: 0` (multiparticle, GENIE) is **test-only**. Train and test get
+  disjoint master seeds, so the two datasets never share an event.
+- **SN / Test** are flat (no split layer): `<detector>/SN/config_NN/…`. Supernova
+  additionally nests `<model>/<ordering>/` below the config dir.
+- Job counts come from `nominal_<split> / (target_seconds_per_job /
+  seconds_per_event)`; supernova is one all-at-once burst per job.
+
+The detector for both the output path and the run comes from the config's
+`detector` field; the `-D <name>` flag is only a fallback for configs that omit
+it (it selects `LUCiD/config/<detector>_{geom,physics}_config.json`).
 
 ## Full production
 

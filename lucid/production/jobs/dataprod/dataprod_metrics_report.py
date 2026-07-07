@@ -519,7 +519,9 @@ def write_markdown(report: dict, out_md: Path) -> None:
 
 
 def discover_configs(base_dir: Path) -> list[Path]:
-    return sorted(p for p in base_dir.glob("config_*") if p.is_dir())
+    # Recursive: config_NN dirs live under <detector>/<block>/[<split>]/ in the
+    # block layout (and directly under base_dir in the legacy flat layout).
+    return sorted(p for p in base_dir.rglob("config_*") if p.is_dir())
 
 
 def hint_n_events_per_job(config_dir: Path) -> int | None:
