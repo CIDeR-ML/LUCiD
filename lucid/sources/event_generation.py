@@ -1403,8 +1403,11 @@ def generate_events_from_photonsim_supernova(
     except Exception:
         git_commit = 'unknown'
 
-    with uproot.open(burst_root_file) as f:
-        M = int(f['OpticalPhotons'].num_entries)
+    # Open the burst ROOT once and reuse the handle for every entry read —
+    # re-opening per interaction re-parses the tree metadata each time (~10x
+    # read cost over a full burst).
+    burst_file = uproot.open(burst_root_file)
+    M = int(burst_file['OpticalPhotons'].num_entries)
     times_ms = np.asarray(interaction_times_ms, dtype=np.float64)
     if times_ms.shape[0] != M:
         raise ValueError(
@@ -1456,7 +1459,7 @@ def generate_events_from_photonsim_supernova(
                     detector_bounds, np.random.default_rng(seed=ev_keys['vertex_seed']))
             else:
                 vtx = np.zeros(3, dtype=np.float32)
-            raw = _read_event_raw(str(burst_root_file), entry)
+            raw = _read_event_raw(str(burst_root_file), entry, opened_file=burst_file)
             stream, stream_max = _simulate_interaction_stream(
                 event_simulator, raw, t0=t0_i, vertex=vtx,
                 source_type_code=_source_type_code('supernova'),
@@ -1486,6 +1489,7 @@ def generate_events_from_photonsim_supernova(
                 del merged_chunk['segment_sensor_hits']
         surviving.append(merged_chunk)
 
+    burst_file.close()
     n_trig = len(surviving)
     print(f"Supernova: {n_trig}/{len(chunks)} chunks triggered", flush=True)
     merged = _concat_triggered_chunks(surviving)
