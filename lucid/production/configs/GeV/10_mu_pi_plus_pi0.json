@@ -1,8 +1,11 @@
 {
-  "config_number": 12,
-  "name": "e- + pi+ + pi0",
-  "description": "Multi-particle events with electron, positive pion and neutral pion with LUCiD processing",
+  "name": "mu- + pi+ + pi0",
+  "description": "Multi-particle events with muon, positive pion and neutral pion with LUCiD processing",
   "material": "water",
+  "nominal_train": 0,
+  "nominal_test": 50000,
+  "seconds_per_event": 13.176,
+  "target_seconds_per_job": 3600,
   "detector": "HK",
   "digitizer": {
     "model": "hk"
@@ -23,8 +26,8 @@
   "disable_decays": false,
   "particles": [
     {
-      "type": "e-",
-      "energy_min_MeV": 1,
+      "type": "mu-",
+      "energy_min_MeV": 200,
       "energy_max_MeV": 2000
     },
     {
@@ -41,13 +44,6 @@
   "lucid_options": {
     "apply_smearing": true,
     "apply_translation": true
-  },
-  "n_jobs": 2,
-  "n_events_per_job": 100,
-  "events_schedule": {
-    "events_per_dataset": 10000,
-    "target_seconds_per_job": 3600,
-    "seconds_per_event": 12.722
   },
   "cleanup_root_files": true
 }

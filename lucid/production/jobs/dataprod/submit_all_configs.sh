@@ -3,11 +3,13 @@
 # Usage: ./submit_all_configs.sh [-p pattern] [-s] [-t] [-d] [-n n_jobs] [-e events] [-g] [-P partition]
 
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
-# Bundled dataprod configs live at LUCiD/lucid/production/configs/
+# Bundled dataprod configs live under LUCiD/lucid/production/configs/<block>/
+# (block = GeV, Solar, SN, Test), one NN_name.json per config.
 CONFIG_DIR="${SCRIPT_DIR}/../../configs"
 
-# Default values
-PATTERN="dataprod*.json"
+# Default values. Configs live one level down in per-block folders, so the
+# default pattern matches any block config (override -p to filter, e.g. GeV/*).
+PATTERN="*.json"
 SUBMIT_JOBS=false
 TEST_MODE=false
 DRY_RUN=false
@@ -67,7 +69,7 @@ if [ ! -d "$CONFIG_DIR" ]; then
 fi
 
 # Find matching config files
-mapfile -t CONFIG_FILES < <(find "$CONFIG_DIR" -maxdepth 1 -name "$PATTERN" -type f | sort)
+mapfile -t CONFIG_FILES < <(find "$CONFIG_DIR" -mindepth 2 -maxdepth 2 -name "$PATTERN" -type f | sort)
 
 if [ ${#CONFIG_FILES[@]} -eq 0 ]; then
     echo "No configuration files found matching pattern: $PATTERN"

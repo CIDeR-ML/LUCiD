@@ -206,17 +206,31 @@ def main(argv: Optional[List[str]] = None) -> int:
               file=sys.stderr)
         return 1
 
-    config_number = cfg.get("config_number", -1)
+    # Config identity. New-style configs live in a per-block folder (GeV / Solar /
+    # SN / Test) and carry nominal_{train,test}; the block is the parent folder and
+    # the 2-digit config number is the filename prefix (NN_name.json). Legacy flat
+    # configs keep config_number / n_jobs / n_events_per_job inside the JSON.
+    new_style = ("nominal_test" in cfg) or ("nominal_train" in cfg)
+    block = args.config.parent.name if new_style else None
+    if new_style:
+        m = re.match(r"^(\d+)_", args.config.stem)
+        if not m:
+            print(f"Error: block config filename must start with 'NN_' "
+                  f"(got {args.config.stem!r})", file=sys.stderr)
+            return 1
+        config_number = int(m.group(1))
+        use_config_number = True
+    else:
+        config_number = cfg.get("config_number", -1)
+        use_config_number = bool(cfg.get("use_config_number", True))
+
     name = cfg["name"]
     desc = cfg.get("description", "")
     material = cfg["material"]
     primary_source = cfg.get("primary_source", "particle_gun")
     energy_dist = cfg.get("energy_distribution", "uniform")
     run_lucid = bool(cfg.get("run_lucid", True))
-    n_events = int(cfg["n_events_per_job"])
-    n_jobs = int(cfg["n_jobs"])
     n_particles = len(cfg.get("particles") or [])
-    use_config_number = bool(cfg.get("use_config_number", True))
 
     if primary_source not in ("genie", "supernova") and energy_dist not in ("monoenergetic", "uniform"):
         print(f"Error: energy_distribution must be 'monoenergetic' or "
@@ -236,13 +250,51 @@ def main(argv: Optional[List[str]] = None) -> int:
               f"exist.", file=sys.stderr)
         return 1
 
-    n_events, n_jobs, schedule_note = _events_schedule_plan(
-        cfg, n_events, n_jobs, args.test,
-    )
-    if args.test:
-        n_events = 2
+    # Split plan. GeV / Solar carry a train/test layer (each from its own
+    # nominal_*); SN / Test are flat (one dataset from nominal_test). Legacy flat
+    # configs run a single pass. Per-split sizing:
+    #   n_jobs = ceil(nominal / (target_seconds_per_job / seconds_per_event));
+    # supernova is one all-at-once burst per job. Train/test get disjoint master
+    # seeds so the two datasets never share an event.
+    SPLIT_BLOCKS = {"GeV", "Solar"}
+    SEED_BASE = {"train": 10_000_000, "test": 20_000_000, None: 30_000_000}
+
+    def _plan(n_total):
+        if args.test:
+            return 2, 1
+        if primary_source == "supernova":
+            return 1, max(1, int(n_total))
+        spe = cfg.get("seconds_per_event")
+        tgt = float(cfg.get("target_seconds_per_job", 3600))
+        epj = (max(1, int(tgt / float(spe))) if spe
+               else int(cfg.get("n_events_per_job", n_total) or n_total))
+        return epj, max(1, (int(n_total) + epj - 1) // epj)
+
+    # each entry: (split_name|None, path_component|None, n_events, n_jobs, seed_base)
+    splits: List[tuple] = []
+    if new_style:
+        if block in SPLIT_BLOCKS:
+            for sp in ("train", "test"):
+                n_tot = int(cfg.get(f"nominal_{sp}", 0) or 0)
+                if n_tot <= 0:
+                    continue
+                epj, njob = _plan(n_tot)
+                splits.append((sp, sp, epj, njob, SEED_BASE[sp]))
+        else:
+            epj, njob = _plan(int(cfg.get("nominal_test", 0) or 0))
+            splits.append((None, None, epj, njob, SEED_BASE[None]))
+    else:
+        n_events = int(cfg["n_events_per_job"])
+        n_jobs = int(cfg["n_jobs"])
+        n_events, n_jobs, _ = _events_schedule_plan(cfg, n_events, n_jobs, args.test)
+        if args.test:
+            n_events = 2
+        splits.append((None, None, n_events, n_jobs, None))
     if args.n_jobs_override is not None:
-        n_jobs = args.n_jobs_override
+        splits = [(a, b, c, args.n_jobs_override, e) for (a, b, c, _, e) in splits]
+    if not splits:
+        print("Error: nothing to generate (no split has nominal > 0)", file=sys.stderr)
+        return 1
 
     # Effective resources
     output_base = (args.output_base.resolve() if args.output_base
@@ -257,144 +309,140 @@ def main(argv: Optional[List[str]] = None) -> int:
     wrr = _WeightedRoundRobin(parsed_parts) if parsed_parts else None
     multi_partition = len(parsed_parts) > 1
 
-    detector = args.detector
-    output_base_dir = output_base / detector
-    if use_config_number:
-        config_dir = output_base_dir / f"config_{int(config_number):06d}"
-        config_id = f"{int(config_number):06d}"
-    else:
-        config_dir = output_base_dir
-        config_id = "N/A (use_config_number: false)"
-    config_dir.mkdir(parents=True, exist_ok=True)
-    if run_lucid:
-        for sub in ("sensor", "hits", "step", "labl"):
-            (config_dir / sub).mkdir(parents=True, exist_ok=True)
-
-    # Print summary
+    # The dataset config owns its detector (new-style); --detector is the fallback.
+    detector = cfg.get("detector", args.detector)
     print(f"=== lucid-run-job {adapter.name} fan-out ===\n")
-    if use_config_number:
-        print(f"Configuration: {name} (config_{config_id})")
+    if new_style:
+        print(f"Configuration: {name}  [{block}/config_{int(config_number):02d}]")
+    elif use_config_number:
+        print(f"Configuration: {name} (config_{int(config_number):06d})")
     else:
         print(f"Configuration: {name} (no config subfolder)")
     print(f"Description:   {desc}")
-    print(f"Energy dist:   {energy_dist}")
-    print(f"Particles:     {n_particles}")
-    if schedule_note:
-        print(f"Schedule:      {schedule_note}")
-    print(f"Jobs:          {n_jobs} (events/job={n_events})")
+    print(f"Detector:      {detector}")
+    print("Splits:        " + ", ".join(
+        f"{(s[0] or 'flat')}={s[3]}job×{s[2]}ev" for s in splits))
     if multi_partition:
         plan = ", ".join(f"{n}:{w}" for n, w in parsed_parts)
-        print(f"Partition:     {partition}  "
-              f"(weighted round-robin → {plan})  "
-              f"GPUs={'1' if args.gpu else env.get('DEFAULT_GPUS', '0')}")
+        print(f"Partition:     {partition}  (weighted round-robin → {plan})")
     else:
-        print(f"Partition:     {partition}  GPUs={'1' if args.gpu else env.get('DEFAULT_GPUS', '0')}")
-    print(f"Detector:      {detector}")
-    print(f"Output dir:    {config_dir}\n")
+        print(f"Partition:     {partition}  "
+              f"GPUs={'1' if args.gpu else env.get('DEFAULT_GPUS', '0')}")
+    print()
 
     slug = _slugify(name)
     submitted = 0
     prepared = 0
     skip_lucid_flag = not run_lucid
 
-    # Subcases. Each is (out_dir, label, override_energy, sn_model, sn_ordering)
-    # and drives one fan of `jobs_to_process` jobs:
-    #   uniform        → one subcase in the config dir
-    #   monoenergetic  → one <E>MeV/ subdir per scanned energy
-    #   supernova      → one <model>/<ordering>/ subdir per (model × ordering)
     def _prep_subdir(d: Path) -> None:
         d.mkdir(parents=True, exist_ok=True)
         if run_lucid:
             for sub in ("sensor", "hits", "step", "labl"):
                 (d / sub).mkdir(parents=True, exist_ok=True)
 
-    subcases: List[tuple] = []
-    if primary_source == "supernova":
-        sn = cfg.get("supernova") or {}
-        models = sn.get("models") or []
-        orderings = sn.get("orderings") or [sn.get("ordering", "NMO")]
-        if not models:
-            print("Error: primary_source=supernova requires a non-empty "
-                  "supernova.models list", file=sys.stderr)
-            return 1
-        for m in models:
-            mname = m.get("name")
-            if not mname:
-                print("Error: each supernova.models entry needs a 'name'",
-                      file=sys.stderr)
-                return 1
-            for ordering in orderings:
-                d = config_dir / _slugify(mname) / _slugify(str(ordering))
-                _prep_subdir(d)
-                label = f"{_slugify(mname)}_{_slugify(str(ordering))}_"
-                subcases.append((d, label, None, mname, str(ordering)))
-    elif energy_dist == "monoenergetic":
-        single_e = cfg.get("energy_MeV")
-        scan = cfg.get("energy_scan") or {}
-        if single_e is not None:
-            energies = [float(single_e)]
-        elif "start_MeV" in scan and "stop_MeV" in scan and "step_MeV" in scan:
-            start = scan["start_MeV"]; stop = scan["stop_MeV"]; step = scan["step_MeV"]
-            energies = []
-            e = start
-            # Match bash's `for ((e=start; e<=stop; e+=step))` semantics.
-            while e <= stop:
-                energies.append(float(e))
-                e += step
+    for split_name, split_comp, n_events, n_jobs, seed_base in splits:
+        # Output dir: OUTPUT_BASE/<detector>/[<block>]/[<split>]/config_{NN|NNNNNN}
+        out_base_dir = output_base / detector
+        if block:
+            out_base_dir = out_base_dir / block
+        if split_comp:
+            out_base_dir = out_base_dir / split_comp
+        if use_config_number:
+            width = 2 if new_style else 6
+            config_dir = out_base_dir / f"config_{int(config_number):0{width}d}"
+            config_id = f"{int(config_number):0{width}d}"
         else:
-            print("Error: monoenergetic requires 'energy_MeV' or "
-                  "'energy_scan.{start,stop,step}_MeV'", file=sys.stderr)
-            return 1
-        for energy in energies:
-            d = config_dir / f"{int(round(energy))}MeV"
-            _prep_subdir(d)
-            subcases.append((d, f"{int(round(energy))}MeV_", float(energy), None, None))
-    else:  # uniform, genie, or other — one subcase in the config dir
-        subcases.append((config_dir, "", None, None, None))
+            config_dir = out_base_dir
+            config_id = "N-A"
+        _prep_subdir(config_dir)
+        print(f"[{split_name or 'flat'}] {n_jobs} job(s) × {n_events} events → {config_dir}")
 
-    jobs_to_process = 1 if args.test else n_jobs
-
-    for out_dir, sub_label, override_energy, sn_model, sn_ordering in subcases:
-        j_end = args.job_id_start + jobs_to_process - 1
-        for j in range(args.job_id_start, j_end + 1):
-            job_id = f"{j:06d}"
-            if use_config_number:
-                job_name = f"photonsim_config{config_id}_{sub_label}{job_id}"
+        # Subcases: supernova → <model>/<ordering>/, monoenergetic → <E>MeV/,
+        # everything else → the config dir itself.
+        subcases: List[tuple] = []
+        if primary_source == "supernova":
+            sn = cfg.get("supernova") or {}
+            models = sn.get("models") or []
+            orderings = sn.get("orderings") or [sn.get("ordering", "NMO")]
+            if not models:
+                print("Error: primary_source=supernova requires a non-empty "
+                      "supernova.models list", file=sys.stderr)
+                return 1
+            for msn in models:
+                mname = msn.get("name")
+                if not mname:
+                    print("Error: each supernova.models entry needs a 'name'",
+                          file=sys.stderr)
+                    return 1
+                for ordering in orderings:
+                    d = config_dir / _slugify(mname) / _slugify(str(ordering))
+                    _prep_subdir(d)
+                    subcases.append((d, f"{_slugify(mname)}_{_slugify(str(ordering))}_",
+                                     None, mname, str(ordering)))
+        elif energy_dist == "monoenergetic":
+            single_e = cfg.get("energy_MeV")
+            scan = cfg.get("energy_scan") or {}
+            if single_e is not None:
+                energies = [float(single_e)]
+            elif "start_MeV" in scan and "stop_MeV" in scan and "step_MeV" in scan:
+                start = scan["start_MeV"]; stop = scan["stop_MeV"]; step = scan["step_MeV"]
+                energies = []
+                e = start
+                while e <= stop:
+                    energies.append(float(e))
+                    e += step
             else:
-                job_name = f"photonsim_{slug}_{sub_label}{job_id}"
+                print("Error: monoenergetic requires 'energy_MeV' or "
+                      "'energy_scan.{start,stop,step}_MeV'", file=sys.stderr)
+                return 1
+            for energy in energies:
+                d = config_dir / f"{int(round(energy))}MeV"
+                _prep_subdir(d)
+                subcases.append((d, f"{int(round(energy))}MeV_", float(energy), None, None))
+        else:
+            subcases.append((config_dir, "", None, None, None))
 
-            job_partition = wrr.next() if wrr is not None else partition
-            body = adapter.render_dataprod_job(
-                cell_dir=out_dir, config_path=args.config, detector=detector,
-                job_id=job_id, job_name=job_name, partition=job_partition,
-                use_gpu=args.gpu, test=args.test, skip_lucid=skip_lucid_flag,
-                n_events=n_events if schedule_note else None,
-                override_energy_mev=override_energy,
-                sn_model=sn_model, sn_ordering=sn_ordering,
-            )
-            sb_path = out_dir / f"submit_job_{job_id}.{adapter.submit_extension}"
-            sb_path.write_text(body)
-            sb_path.chmod(0o755)
-            # Stable marker for the bash shim's host-side submission pass.
-            print(f"[PREPARED] {sb_path}")
-            prepared += 1
-
-            if args.submit:
-                r = subprocess.run([adapter.submit_cmd, str(sb_path)],
-                                   capture_output=True, text=True)
-                if r.returncode == 0:
-                    submitted += 1
+        jobs_to_process = 1 if args.test else n_jobs
+        for out_dir, sub_label, override_energy, sn_model, sn_ordering in subcases:
+            for j in range(args.job_id_start, args.job_id_start + jobs_to_process):
+                job_id = f"{j:06d}"
+                sp_tag = f"{split_name}_" if split_name else ""
+                if use_config_number:
+                    job_name = f"photonsim_config{config_id}_{sp_tag}{sub_label}{job_id}"
                 else:
-                    print(f"  FAILED {adapter.submit_cmd} for {job_name}: "
-                          f"{r.stderr.strip()}", file=sys.stderr)
-        if args.test:
-            break  # one subcase in test mode
+                    job_name = f"photonsim_{slug}_{sp_tag}{sub_label}{job_id}"
+                job_partition = wrr.next() if wrr is not None else partition
+                master_seed = (seed_base + j) if seed_base is not None else None
+                body = adapter.render_dataprod_job(
+                    cell_dir=out_dir, config_path=args.config, detector=detector,
+                    job_id=job_id, job_name=job_name, partition=job_partition,
+                    use_gpu=args.gpu, test=args.test, skip_lucid=skip_lucid_flag,
+                    n_events=n_events, override_energy_mev=override_energy,
+                    sn_model=sn_model, sn_ordering=sn_ordering,
+                    master_seed=master_seed,
+                )
+                sb_path = out_dir / f"submit_job_{job_id}.{adapter.submit_extension}"
+                sb_path.write_text(body)
+                sb_path.chmod(0o755)
+                print(f"[PREPARED] {sb_path}")
+                prepared += 1
+                if args.submit:
+                    r = subprocess.run([adapter.submit_cmd, str(sb_path)],
+                                       capture_output=True, text=True)
+                    if r.returncode == 0:
+                        submitted += 1
+                    else:
+                        print(f"  FAILED {adapter.submit_cmd} for {job_name}: "
+                              f"{r.stderr.strip()}", file=sys.stderr)
+            if args.test:
+                break  # one subcase in test mode
 
-    _write_readme(
-        config_dir, name=name, desc=desc, config_id=config_id,
-        material=material, energy_dist=energy_dist,
-        n_jobs=n_jobs, n_events=n_events, n_particles=n_particles,
-    )
+        _write_readme(
+            config_dir, name=name, desc=desc, config_id=config_id,
+            material=material, energy_dist=energy_dist,
+            n_jobs=n_jobs, n_events=n_events, n_particles=n_particles,
+        )
 
     print("\n=== Fan-out complete ===")
     print(f"Prepared:  {prepared}")
@@ -402,7 +450,6 @@ def main(argv: Optional[List[str]] = None) -> int:
     if multi_partition and wrr is not None:
         split = ", ".join(f"{n}={wrr.counts[n]}" for n, _ in parsed_parts)
         print(f"Partition split: {split}")
-    print(f"Config dir: {config_dir}")
     return 0
 
 
