@@ -11,11 +11,11 @@
     "mode": "trigger"
   },
   "trigger": {
-    "_note": "PROVISIONAL real (high-E) trigger \u2014 pending HK trigger study",
+    "_note": "HK high-E real trigger \u2014 validated on muons (muon 99.9%, Michel 99.4% hits kept, 0 dark windows) and config_18 pile-up (99.97% physics hits kept, 0 dark windows)",
     "window_ns": 200.0,
     "n_thr": 45,
-    "pad_before_ns": 100.0,
-    "pad_after_ns": 100.0
+    "pad_before_ns": 300.0,
+    "pad_after_ns": 300.0
   },
   "primary_source": "bomb",
   "bomb": {
