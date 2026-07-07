@@ -299,8 +299,9 @@ def main():
             print(f"Error: Directory not found: {args.base_dir}")
             return 1
 
-        # Find all config directories
-        config_dirs = sorted(glob.glob(os.path.join(args.base_dir, 'config_*')))
+        # Find all config directories (recursive: block/split layers in the block layout)
+        config_dirs = sorted(glob.glob(os.path.join(args.base_dir, '**', 'config_*'),
+                                       recursive=True))
 
         if not config_dirs:
             print(f"No config_* directories found in {args.base_dir}")

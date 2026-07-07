@@ -151,7 +151,7 @@ def main() -> int:
         return 2
 
     rows: list[dict] = []
-    for cdir in sorted(args.base_dir.glob("config_*")):
+    for cdir in sorted(args.base_dir.rglob("config_*")):   # recursive: block/split layers
         m = re.match(r"^config_(\d+)$", cdir.name)
         if not m:
             continue
