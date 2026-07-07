@@ -3,6 +3,14 @@
   "name": "single low energy e-",
   "description": "Low energy electrons with LUCiD processing",
   "material": "water",
+  "detector": "HK",
+  "digitizer": {
+    "model": "hk"
+  },
+  "selection": {
+    "mode": "min_physics_hits",
+    "n": 3
+  },
   "energy_distribution": "uniform",
   "store_individual_photons": true,
   "run_lucid": true,

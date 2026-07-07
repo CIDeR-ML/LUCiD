@@ -1,14 +1,19 @@
 {
   "config_number": 91,
   "name": "supernova burst water 50kpc (all-at-once)",
-  "description": "Supernova-burst neutrinos at 50 kpc, modeled all-at-once: the whole burst is ONE event. Every sntools interaction is placed at its true time (from the .times.json sidecar) via a shared random global t0; the generator chunks the burst at causal gaps, digitizes each chunk (dark included + labelled), and concatenates. Readout is fully specified here: detector SK_like, ski digitizer + 4.2 kHz dark. Selection is trigger-free (low-E 'fake trigger'): keep every interaction with >= n real Cherenkov hits, so the dataset isn't biased by a trigger choice — apply/study real triggers downstream using the emission_process labels. cap_events limits the burst size for quick tests; remove it for the full ~900-interaction burst.",
+  "description": "Supernova-burst neutrinos at 50 kpc, modeled all-at-once: the whole burst is ONE event. Every sntools interaction is placed at its true time (from the .times.json sidecar) via a shared random global t0; the generator chunks the burst at causal gaps, digitizes each chunk (dark included + labelled), and concatenates. Readout is fully specified here: detector SK_like, ski digitizer + 4.2 kHz dark. Selection is trigger-free (low-E 'fake trigger'): keep every interaction with >= n real Cherenkov hits, so the dataset isn't biased by a trigger choice \u2014 apply/study real triggers downstream using the emission_process labels. cap_events limits the burst size for quick tests; remove it for the full ~900-interaction burst.",
   "material": "water",
+  "detector": "HK",
+  "digitizer": {
+    "model": "hk"
+  },
+  "selection": {
+    "mode": "min_physics_hits",
+    "n": 3
+  },
   "primary_source": "supernova",
-  "detector": "SK_like",
-  "digitizer": { "model": "ski", "dark_rate_khz": 4.2 },
-  "selection": { "mode": "min_physics_hits", "n": 3 },
   "supernova": {
-    "detector": "SuperK",
+    "detector": "HyperK",
     "distance_kpc": 50.0,
     "channels": "all",
     "cap_events": 25,
@@ -19,7 +24,9 @@
         "flux_file": "lucid/production/configs/sn_fluxes/analytic_burst_gamma.txt"
       }
     ],
-    "orderings": ["NMO"]
+    "orderings": [
+      "NMO"
+    ]
   },
   "store_individual_photons": true,
   "run_lucid": true,

@@ -360,6 +360,7 @@ def _run_lucid(
         pad_size_buckets=pad_size_buckets,
         digitizer=digitizer_cfg,
         trigger=trigger_cfg,
+        min_physics_hits=_read_min_physics_hits(config, default=None),
     )
     print(f"LUCiD wrote {len(saved_files)} files under {output_dir}/{{sensor,hits,step,labl}}/")
 

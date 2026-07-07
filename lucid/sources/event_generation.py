@@ -78,7 +78,8 @@ def _detector_bounds_from_det_geom(det_geom):
     dt = str(det_geom.detector_type).lower()
     d = det_geom.detector
     if dt == 'cylinder':
-        return {'type': 'cylinder', 'radius': float(d.r), 'height': float(d.H)}
+        return {'type': 'cylinder', 'radius': float(d.r), 'height': float(d.H),
+                'sensor_radius': float(getattr(d, 'sensor_radius', 0.25))}
     if dt == 'sphere':
         return {'type': 'sphere', 'radius': float(d.r)}
     if dt == 'box':
@@ -109,7 +110,8 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
                                              file_index_start=0,
                                              primary_source='particles',
                                              pad_size_buckets=None,
-                                             digitizer=None, trigger=None):
+                                             digitizer=None, trigger=None,
+                                             min_physics_hits=None):
     """Generate events from a PhotonSim ROOT file, writing four-file batches.
 
     For each batch of events, writes four HDF5 files under ``output_dir``:
@@ -237,7 +239,10 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
     print(f"Apply translation: {apply_translation}")
     print(f"Digitizer model: {digitizer_model['model']} "
           f"(dark_rate_khz={digitizer_model.get('dark_rate_khz', 0.0)})")
-    if trigger_cfg is not None:
+    if min_physics_hits is not None:
+        print(f"Selection: min_physics_hits >= {min_physics_hits} "
+              f"(low-E truth cut; sub-threshold events dropped, dark kept + labelled)")
+    elif trigger_cfg is not None:
         print(f"Trigger: W={trigger_cfg.window_ns}ns N_thr={trigger_cfg.n_thr} "
               f"pad={trigger_cfg.pad_before_ns}/{trigger_cfg.pad_after_ns}ns "
               f"(non-triggering events dropped)")
@@ -529,11 +534,21 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
                 particle_data['segments']['time'] = \
                     np.asarray(particle_data['segments']['time'], dtype=np.float64) + t0_f64
 
-            # Readout trigger (detector frame): keep only in-gate digits
-            # (canonically re-sorted, digit_idx remapped), record the gates as
-            # per_window; drop the event entirely when nothing triggers.
+            # Selection (detector frame). Low-E 'fake trigger' (min_physics_hits):
+            # keep the event as one window iff it has >= N real hits, dark kept +
+            # labelled. Otherwise the real readout trigger keeps in-gate digits.
+            # Either way the event is dropped when it fails, and per_window records
+            # the surviving window(s).
             per_window = None
-            if trigger_cfg is not None:
+            if min_physics_hits is not None:
+                _sel = _keep_chunk_min_physics_hits(
+                    {'sensor_digits': sensor_digits, 'hits_sparse': hits_sparse,
+                     'segment_sensor_hits': seg_hits}, min_physics_hits)
+                if _sel is None:
+                    print(f"    event {event_idx}: < {min_physics_hits} physics hits — dropped", flush=True)
+                    continue
+                sensor_digits, hits_sparse, seg_hits, per_window = _sel
+            elif trigger_cfg is not None:
                 _trig = apply_trigger(sensor_digits, hits_sparse, seg_hits, trigger_cfg)
                 if _trig is None:
                     print(f"    event {event_idx}: no trigger — event dropped", flush=True)
@@ -628,6 +643,9 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
             'smearing_time_function': 'SK_like' if apply_smearing else 'none',
             'digitizer_model': str(digitizer_model['model']),
             **_trigger_config_meta(trigger_cfg),
+            'selection': ('min_physics_hits' if min_physics_hits is not None else 'trigger'),
+            'selection_min_physics_hits': (int(min_physics_hits)
+                                           if min_physics_hits is not None else 0),
             'label_names': ['category'],
         }
 
@@ -1499,8 +1517,12 @@ def generate_events_from_photonsim_supernova(
             ev_keys = derive_event_keys(master_seed, job_id, source_event_idx,
                                         interaction_idx=entry)
             if apply_translation:
+                # SN fills nearly the whole inner volume (r<=0.995R, |z|<=0.995 H/2)
+                # and redraws any vertex landing inside a PMT.
                 vtx = sample_translation_vector(
-                    detector_bounds, np.random.default_rng(seed=ev_keys['vertex_seed']))
+                    detector_bounds, np.random.default_rng(seed=ev_keys['vertex_seed']),
+                    r_frac=0.995, z_frac=0.995, sensor_positions=sensor_positions_np,
+                    pmt_radius=detector_bounds.get('sensor_radius', 0.25))
             else:
                 vtx = np.zeros(3, dtype=np.float32)
             raw = _read_event_raw(str(burst_root_file), entry, opened_file=burst_file)
