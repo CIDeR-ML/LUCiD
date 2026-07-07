@@ -114,11 +114,12 @@ def _parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def _read_digitizer_cfg(physics_config_path: str):
-    """Read the optional 'digitizer' block from a detector physics config.
-
-    Returns the block (str or dict) or None (-> 'basic') when absent/unreadable.
+def _read_digitizer_cfg(config: dict, physics_config_path: str):
+    """Digitizer block for this dataset. The dataset config owns it; falls back
+    to the detector physics config for backward compat. None -> 'basic'.
     """
+    if config.get("digitizer") is not None:
+        return config["digitizer"]
     try:
         with open(physics_config_path) as f:
             return json.load(f).get("digitizer")
@@ -126,16 +127,32 @@ def _read_digitizer_cfg(physics_config_path: str):
         return None
 
 
-def _read_trigger_cfg(physics_config_path: str):
-    """Read the optional 'trigger' block from a detector physics config.
-
-    Returns the block (dict) or None (trigger off) when absent/unreadable.
+def _read_trigger_cfg(config: dict, physics_config_path: str):
+    """Trigger block for this dataset. The dataset config owns it; falls back to
+    the detector physics config for backward compat. None -> trigger off.
     """
+    if config.get("trigger") is not None:
+        return config["trigger"]
     try:
         with open(physics_config_path) as f:
             return json.load(f).get("trigger")
     except (OSError, ValueError):
         return None
+
+
+def _read_min_physics_hits(config: dict, default=3):
+    """Truth-level selection knob (low-energy 'fake trigger'). A dataset config's
+    ``selection`` block picks the mode: ``{"mode": "min_physics_hits", "n": N}``
+    keeps interactions with >= N real hits; ``{"mode": "trigger"}`` defers to the
+    real readout trigger (returns None). Backward compat: ``supernova.min_physics_hits``.
+    """
+    sel = config.get("selection")
+    if isinstance(sel, dict):
+        if sel.get("mode") == "trigger":
+            return None
+        if sel.get("mode") == "min_physics_hits":
+            return int(sel.get("n", default))
+    return config.get("supernova", {}).get("min_physics_hits", default)
 
 
 def _load_config(path: str) -> dict:
@@ -286,9 +303,9 @@ def _run_lucid(
 
     # Digitizer (sensor hit-making) model comes from the detector physics
     # config's optional "digitizer" block; absent -> "basic" (legacy behaviour).
-    digitizer_cfg = _read_digitizer_cfg(physics_config_path)
+    digitizer_cfg = _read_digitizer_cfg(config, physics_config_path)
     # Readout trigger from the optional "trigger" block; absent -> off.
-    trigger_cfg = _read_trigger_cfg(physics_config_path)
+    trigger_cfg = _read_trigger_cfg(config, physics_config_path)
 
     # Supernova: model the whole burst as ONE all-at-once event. Every sntools
     # interaction (one PhotonSim entry) is placed at its true time (from the
@@ -301,7 +318,7 @@ def _run_lucid(
         from lucid.sources.event_generation import generate_events_from_photonsim_supernova
         times_path = output_dir / f"gntp_job_{job_id:06d}.times.json"
         interaction_times_ms = json.loads(times_path.read_text())
-        min_phys = config.get("supernova", {}).get("min_physics_hits", 3)
+        min_phys = _read_min_physics_hits(config, default=3)
         saved_files = generate_events_from_photonsim_supernova(
             event_simulator=simulate_event,
             burst_root_file=str(root_file),
@@ -356,6 +373,10 @@ def main(argv: Optional[list[str]] = None) -> int:
     except Exception as e:
         print(f"Error loading config {args.config!r}: {e}", file=sys.stderr)
         return EXIT_CONFIG
+
+    # The dataset config owns which detector to use (geometry + medium); the
+    # --detector CLI flag is only the fallback default.
+    args.detector = config.get("detector", args.detector)
 
     if config.get("pile_up"):
         return _main_pileup(args, config)
@@ -781,8 +802,8 @@ def _main_pileup(args: argparse.Namespace, config: dict) -> int:
         dataset_name=config["name"],
         run_id=None,
         file_index_start=file_index,
-        digitizer=_read_digitizer_cfg(physics_config_path),
-        trigger=_read_trigger_cfg(physics_config_path),
+        digitizer=_read_digitizer_cfg(config, physics_config_path),
+        trigger=_read_trigger_cfg(config, physics_config_path),
     )
     print(f"LUCiD wrote {len(saved_files)} files.")
 
