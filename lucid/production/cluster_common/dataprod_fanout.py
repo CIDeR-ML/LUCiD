@@ -408,8 +408,9 @@ def main(argv: Optional[List[str]] = None) -> int:
             for j in range(args.job_id_start, args.job_id_start + jobs_to_process):
                 job_id = f"{j:06d}"
                 sp_tag = f"{split_name}_" if split_name else ""
+                blk_tag = f"{block}_" if block else ""   # disambiguate per-block config_NN
                 if use_config_number:
-                    job_name = f"photonsim_config{config_id}_{sp_tag}{sub_label}{job_id}"
+                    job_name = f"photonsim_{blk_tag}config{config_id}_{sp_tag}{sub_label}{job_id}"
                 else:
                     job_name = f"photonsim_{slug}_{sp_tag}{sub_label}{job_id}"
                 job_partition = wrr.next() if wrr is not None else partition
