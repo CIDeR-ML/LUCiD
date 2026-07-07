@@ -3,14 +3,36 @@
   "name": "pile-up: (mu- + pi+) + GENIE numu",
   "description": "Two overlapping interactions per event: vertex 0 is a particle-gun (mu- + pi+) shot, vertex 1 is a GENIE numu interaction on water. Each vertex draws an independent absolute interaction time t0 ~ Uniform(-250, 250) ns and its own fiducial vertex position.",
   "material": "water",
+  "detector": "HK",
+  "digitizer": {
+    "model": "hk"
+  },
+  "selection": {
+    "mode": "trigger"
+  },
+  "trigger": {
+    "_note": "PROVISIONAL real (high-E) trigger \u2014 pending HK trigger study",
+    "window_ns": 200.0,
+    "n_thr": 45,
+    "pad_before_ns": 100.0,
+    "pad_after_ns": 100.0
+  },
   "pile_up": true,
   "vertices": [
     {
       "primary_source": "particles",
       "energy_distribution": "uniform",
       "particles": [
-        {"type": "mu-", "energy_min_MeV": 200, "energy_max_MeV": 2000},
-        {"type": "pi+", "energy_min_MeV": 200, "energy_max_MeV": 2000}
+        {
+          "type": "mu-",
+          "energy_min_MeV": 200,
+          "energy_max_MeV": 2000
+        },
+        {
+          "type": "pi+",
+          "energy_min_MeV": 200,
+          "energy_max_MeV": 2000
+        }
       ]
     },
     {

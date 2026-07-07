@@ -3,6 +3,20 @@
   "name": "mu- + pi+ + pi-",
   "description": "Multi-particle events with muon, positive pion and negative pion with LUCiD processing",
   "material": "water",
+  "detector": "HK",
+  "digitizer": {
+    "model": "hk"
+  },
+  "selection": {
+    "mode": "trigger"
+  },
+  "trigger": {
+    "_note": "PROVISIONAL real (high-E) trigger \u2014 pending HK trigger study",
+    "window_ns": 200.0,
+    "n_thr": 45,
+    "pad_before_ns": 100.0,
+    "pad_after_ns": 100.0
+  },
   "energy_distribution": "uniform",
   "store_individual_photons": true,
   "run_lucid": true,
@@ -33,7 +47,7 @@
   "events_schedule": {
     "events_per_dataset": 10000,
     "target_seconds_per_job": 3600,
-    "seconds_per_event": 9.970
+    "seconds_per_event": 9.97
   },
   "cleanup_root_files": true
 }

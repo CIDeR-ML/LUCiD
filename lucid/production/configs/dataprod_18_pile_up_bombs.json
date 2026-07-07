@@ -3,6 +3,20 @@
   "name": "pile-up: 2 x particle-bomb",
   "description": "Two overlapping 'particle bomb' interactions per event. Each vertex draws a per-event multiplicity N=Uniform(1,5), then samples N particles (with replacement) from the candidate pool {e-, e+, mu-, mu+, pi+, pi-, pi0}. Kinetic energies are uniform in [1, 2000] MeV for electrons and [200, 2000] MeV for the rest, with an isotropic direction. Pile-up is at the LUCiD level: each vertex draws an independent absolute t0 ~ Uniform(-250, 250) ns and its own fiducial vertex position.",
   "material": "water",
+  "detector": "HK",
+  "digitizer": {
+    "model": "hk"
+  },
+  "selection": {
+    "mode": "trigger"
+  },
+  "trigger": {
+    "_note": "PROVISIONAL real (high-E) trigger \u2014 pending HK trigger study",
+    "window_ns": 200.0,
+    "n_thr": 45,
+    "pad_before_ns": 100.0,
+    "pad_after_ns": 100.0
+  },
   "pile_up": true,
   "vertices": [
     {
@@ -11,13 +25,41 @@
         "min_particles": 1,
         "max_particles": 5,
         "candidates": [
-          {"type": "e-",  "energy_min_MeV":   1, "energy_max_MeV": 2000},
-          {"type": "e+",  "energy_min_MeV":   1, "energy_max_MeV": 2000},
-          {"type": "mu-", "energy_min_MeV": 200, "energy_max_MeV": 2000},
-          {"type": "mu+", "energy_min_MeV": 200, "energy_max_MeV": 2000},
-          {"type": "pi+", "energy_min_MeV": 200, "energy_max_MeV": 2000},
-          {"type": "pi-", "energy_min_MeV": 200, "energy_max_MeV": 2000},
-          {"type": "pi0", "energy_min_MeV": 200, "energy_max_MeV": 2000}
+          {
+            "type": "e-",
+            "energy_min_MeV": 1,
+            "energy_max_MeV": 2000
+          },
+          {
+            "type": "e+",
+            "energy_min_MeV": 1,
+            "energy_max_MeV": 2000
+          },
+          {
+            "type": "mu-",
+            "energy_min_MeV": 200,
+            "energy_max_MeV": 2000
+          },
+          {
+            "type": "mu+",
+            "energy_min_MeV": 200,
+            "energy_max_MeV": 2000
+          },
+          {
+            "type": "pi+",
+            "energy_min_MeV": 200,
+            "energy_max_MeV": 2000
+          },
+          {
+            "type": "pi-",
+            "energy_min_MeV": 200,
+            "energy_max_MeV": 2000
+          },
+          {
+            "type": "pi0",
+            "energy_min_MeV": 200,
+            "energy_max_MeV": 2000
+          }
         ]
       }
     },
@@ -27,13 +69,41 @@
         "min_particles": 1,
         "max_particles": 5,
         "candidates": [
-          {"type": "e-",  "energy_min_MeV":   1, "energy_max_MeV": 2000},
-          {"type": "e+",  "energy_min_MeV":   1, "energy_max_MeV": 2000},
-          {"type": "mu-", "energy_min_MeV": 200, "energy_max_MeV": 2000},
-          {"type": "mu+", "energy_min_MeV": 200, "energy_max_MeV": 2000},
-          {"type": "pi+", "energy_min_MeV": 200, "energy_max_MeV": 2000},
-          {"type": "pi-", "energy_min_MeV": 200, "energy_max_MeV": 2000},
-          {"type": "pi0", "energy_min_MeV": 200, "energy_max_MeV": 2000}
+          {
+            "type": "e-",
+            "energy_min_MeV": 1,
+            "energy_max_MeV": 2000
+          },
+          {
+            "type": "e+",
+            "energy_min_MeV": 1,
+            "energy_max_MeV": 2000
+          },
+          {
+            "type": "mu-",
+            "energy_min_MeV": 200,
+            "energy_max_MeV": 2000
+          },
+          {
+            "type": "mu+",
+            "energy_min_MeV": 200,
+            "energy_max_MeV": 2000
+          },
+          {
+            "type": "pi+",
+            "energy_min_MeV": 200,
+            "energy_max_MeV": 2000
+          },
+          {
+            "type": "pi-",
+            "energy_min_MeV": 200,
+            "energy_max_MeV": 2000
+          },
+          {
+            "type": "pi0",
+            "energy_min_MeV": 200,
+            "energy_max_MeV": 2000
+          }
         ]
       }
     }

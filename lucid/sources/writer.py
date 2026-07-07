@@ -317,43 +317,60 @@ def build_interaction_metadata(particle_data, *, t0, vertex_xyz, source_type_cod
     }
 
 
-def sample_translation_vector(detector_bounds, rng):
+def sample_translation_vector(detector_bounds, rng, *, r_frac=0.9, z_frac=0.9,
+                              sensor_positions=None, pmt_radius=0.0, max_tries=100):
     """Draw a random vertex inside the fiducial volume of the detector.
 
-    Cylinder: uniform in (r, theta, z) with r <= 0.9*R, |z| <= 0.45*H.
-    Sphere:   uniform in the 0.9*R ball.
-    Box:      uniform in the 0.9-fraction-scaled box.
+    Cylinder: uniform in (r, theta, z) with r <= r_frac*R, |z| <= z_frac*H/2.
+    Sphere:   uniform in the r_frac*R ball.
+    Box:      uniform in the {r,z}_frac-scaled box.
+
+    Defaults (r_frac = z_frac = 0.9, no PMT rejection) reproduce the standard
+    fiducial used by all single-vertex / pile-up configs. The supernova path
+    passes r_frac = z_frac = 0.995 and ``sensor_positions`` + ``pmt_radius`` to
+    fill nearly the whole inner volume while redrawing any vertex that lands
+    inside a PMT (SN-only).
 
     Returns a length-3 float32 array in meters.
     """
     if detector_bounds is None:
         return np.zeros(3, dtype=np.float32)
     kind = detector_bounds['type']
-    if kind == 'cylinder':
-        r_max = detector_bounds['radius'] * 0.9
-        h_max = detector_bounds['height'] * 0.9 / 2.0
-        u = rng.uniform(0, 1, size=3).astype(np.float32)
-        r = r_max * np.sqrt(u[0])
-        theta = 2.0 * np.pi * u[1]
-        z = (2.0 * u[2] - 1.0) * h_max
-        return np.array([r * np.cos(theta), r * np.sin(theta), z], dtype=np.float32)
-    if kind == 'sphere':
-        r_max = detector_bounds['radius'] * 0.9
-        u = rng.uniform(0, 1, size=3).astype(np.float32)
-        r = r_max * (u[0] ** (1.0 / 3.0))
-        cos_t = 2.0 * u[1] - 1.0
-        phi = 2.0 * np.pi * u[2]
-        sin_t = np.sqrt(1.0 - cos_t * cos_t)
-        return r * np.array([sin_t * np.cos(phi), sin_t * np.sin(phi), cos_t],
-                            dtype=np.float32)
-    if kind == 'box':
-        u = rng.uniform(0, 1, size=3).astype(np.float32)
-        return np.array([
-            (2.0 * u[0] - 1.0) * detector_bounds['length'] * 0.45,
-            (2.0 * u[1] - 1.0) * detector_bounds['width']  * 0.45,
-            (2.0 * u[2] - 1.0) * detector_bounds['height'] * 0.45,
-        ], dtype=np.float32)
-    raise ValueError(f"Unknown detector_bounds type: {kind!r}")
+    tree = None
+    if sensor_positions is not None and pmt_radius > 0.0:
+        from scipy.spatial import cKDTree
+        tree = cKDTree(np.asarray(sensor_positions, dtype=np.float64))
+
+    def _draw():
+        u = rng.uniform(0, 1, size=3)
+        if kind == 'cylinder':
+            r = (detector_bounds['radius'] * r_frac) * np.sqrt(u[0])
+            theta = 2.0 * np.pi * u[1]
+            z = (2.0 * u[2] - 1.0) * detector_bounds['height'] * z_frac / 2.0
+            return np.array([r * np.cos(theta), r * np.sin(theta), z], dtype=np.float32)
+        if kind == 'sphere':
+            r = (detector_bounds['radius'] * r_frac) * (u[0] ** (1.0 / 3.0))
+            cos_t = 2.0 * u[1] - 1.0
+            phi = 2.0 * np.pi * u[2]
+            sin_t = np.sqrt(1.0 - cos_t * cos_t)
+            return (r * np.array([sin_t * np.cos(phi), sin_t * np.sin(phi), cos_t])
+                    ).astype(np.float32)
+        if kind == 'box':
+            return np.array([
+                (2.0 * u[0] - 1.0) * detector_bounds['length'] * r_frac / 2.0,
+                (2.0 * u[1] - 1.0) * detector_bounds['width']  * r_frac / 2.0,
+                (2.0 * u[2] - 1.0) * detector_bounds['height'] * z_frac / 2.0,
+            ], dtype=np.float32)
+        raise ValueError(f"Unknown detector_bounds type: {kind!r}")
+
+    v = _draw()
+    if tree is None:
+        return v
+    for _ in range(max_tries):                       # redraw vertices inside a PMT
+        if tree.query(v.astype(np.float64))[0] > pmt_radius:
+            return v
+        v = _draw()
+    return v                                         # give up (vanishingly unlikely)
 
 
 def _write_common_config_attrs(f, config_meta):
