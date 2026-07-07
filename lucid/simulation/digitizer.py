@@ -87,6 +87,11 @@ EMISSION_PROCESS_DARK = 2
 # Late nuclear-channel light (n-capture, de-excitation) reaches ms–s; no real
 # detector records it. Matches the legacy sensor-writer ``t < 1e5`` convention.
 _MAX_DIGIT_TIME_NS = 1e5
+# Times are float64 throughout hit-making: a supernova interaction sits at an
+# absolute t0 of ~1e9-1e10 ns, where float32 (ULP ~64-1024 ns) collapses distinct
+# digit/dark times to identical values — spuriously piling dark hits into a
+# single window and firing false triggers. Charge stays float32.
+_T_DTYPE = np.float64
 
 
 @dataclass
@@ -201,7 +206,7 @@ def digitize_event(
     if n_ph == 0:
         return DigitizeResult(
             digit_sensor_idx=np.empty(0, np.int32), digit_pe_true=np.empty(0, np.float32),
-            digit_time=np.empty(0, np.float32), photon_digit_idx=photon_digit_idx)
+            digit_time=np.empty(0, _T_DTYPE), photon_digit_idx=photon_digit_idx)
 
     # Sort by (sensor, time); find per-sensor group boundaries. Vectorized.
     order = np.lexsort((times, sensor_idx))
@@ -234,7 +239,7 @@ def digitize_event(
     pdi_sorted = np.repeat(digit_id_per_group, gsize).astype(np.int32)
     d_sensor = [s_sorted[gstart[simple_pass]].astype(np.int32)]
     d_pe = [gcharge[simple_pass].astype(np.float32)]
-    d_t = [first_t[simple_pass].astype(np.float32)]
+    d_t = [first_t[simple_pass].astype(_T_DTYPE)]
     digit_counter = n_simple
 
     # --- complex groups: the sliding-window loop, only where needed ---
@@ -257,7 +262,7 @@ def digitize_event(
                 pdi_sorted[i0 + i:i0 + j] = digit_counter
                 d_sensor.append(np.int32(s_val))
                 d_pe.append(np.float32(pe))
-                d_t.append(np.float32(t0))
+                d_t.append(_T_DTYPE(t0))
                 digit_counter += 1
             dead_end = upper + deadtime
             while j < m and gt[j] <= dead_end:
@@ -270,8 +275,8 @@ def digitize_event(
             if digit_counter else np.empty(0, np.int32),
         digit_pe_true=np.concatenate([np.atleast_1d(a) for a in d_pe]).astype(np.float32)
             if digit_counter else np.empty(0, np.float32),
-        digit_time=np.concatenate([np.atleast_1d(a) for a in d_t]).astype(np.float32)
-            if digit_counter else np.empty(0, np.float32),
+        digit_time=np.concatenate([np.atleast_1d(a) for a in d_t]).astype(_T_DTYPE)
+            if digit_counter else np.empty(0, _T_DTYPE),
         photon_digit_idx=photon_digit_idx,
     )
 
@@ -358,7 +363,7 @@ def apply_readout_resolution(
         sigma = charge_resolution_sigma(pe_true, model.get("charge_res", "sk_like"))
         pe_reco = np.clip(pe_true + rng.normal(size=pe_true.shape) * sigma, 0.0, None)
     t = _sample_time_jitter(digit_time, pe_true, model, rng)
-    return pe_reco.astype(np.float32), t.astype(np.float32)
+    return pe_reco.astype(np.float32), t.astype(_T_DTYPE)
 
 
 def _encode_keys(key_cols):
@@ -496,7 +501,7 @@ def digitize_and_decompose(
         # No readout smearing (mirrors the legacy apply_smearing=False path):
         # digits carry true integrated charge and first-arrival time.
         pe_reco = res.digit_pe_true.astype(np.float32)
-        t_reco_digit = res.digit_time.astype(np.float32)
+        t_reco_digit = res.digit_time.astype(_T_DTYPE)
     sensor_digits = {
         "sensor_idx": res.digit_sensor_idx.astype(np.uint16),
         "PE": pe_reco,
@@ -514,8 +519,8 @@ def digitize_and_decompose(
     hits_sparse = {
         "particle_idx": hk[0].astype(np.int32), "sensor_idx": hk[1].astype(np.uint16),
         "digit_idx": hk[2].astype(np.int32), "emission_process": hk[3].astype(np.int8),
-        "PE": hPE.astype(np.float32), "T": hT.astype(np.float32),
-        "T_reco": hTR.astype(np.float32),
+        "PE": hPE.astype(np.float32), "T": hT.astype(_T_DTYPE),
+        "T_reco": hTR.astype(_T_DTYPE),
     }
 
     # step/sensor_hits: real deposits only (dark has no segment).
@@ -526,8 +531,8 @@ def digitize_and_decompose(
     seg_hits = {
         "segment_idx": sk[0].astype(np.int32), "sensor_idx": sk[1].astype(np.uint16),
         "digit_idx": sk[2].astype(np.int32), "emission_process": sk[3].astype(np.int8),
-        "PE": sPE.astype(np.float32), "T": sT.astype(np.float32),
-        "T_reco": sTR.astype(np.float32),
+        "PE": sPE.astype(np.float32), "T": sT.astype(_T_DTYPE),
+        "T_reco": sTR.astype(_T_DTYPE),
     }
     return sensor_digits, hits_sparse, seg_hits
 
