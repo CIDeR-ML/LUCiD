@@ -50,7 +50,6 @@ def is_complete_dataprod(cell_dir: Path, file_index: int,
 
     paths = batch_paths(cell_dir, file_index)
     n_by_sub = {}
-    triggered = False
     for sub in SUBDIRS:
         p = paths[sub]
         if not p.is_file():
@@ -60,10 +59,15 @@ def is_complete_dataprod(cell_dir: Path, file_index: int,
         try:
             with h5py.File(p, "r") as h:
                 n_by_sub[sub] = int(h["config"].attrs.get("n_events", -1))
-                triggered = triggered or str(h["config"].attrs.get("trigger", "none")) != "none"
+                # Completion flag is the authoritative health signal: a job killed
+                # mid-write leaves files that exist (opened 'w' before the event
+                # loop) but with complete=False. Absent => a pre-flag file, assume
+                # complete for backward compatibility.
+                if not bool(h["config"].attrs.get("complete", True)):
+                    return False, f"incomplete {sub} (config/complete != True)"
         except Exception as e:
             return False, f"unreadable {sub}: {e!r}"
-        if n_by_sub[sub] <= 0:
+        if n_by_sub[sub] < 0:
             return False, f"bad n_events={n_by_sub[sub]} in {sub}"
 
     # The four files are written together, so they must agree on n_events.
@@ -71,15 +75,10 @@ def is_complete_dataprod(cell_dir: Path, file_index: int,
         return False, f"n_events mismatch across files: {n_by_sub}"
     n = next(iter(n_by_sub.values()))
 
-    if expected_events is not None:
-        # A triggered dataset drops non-triggering events, so it writes n <=
-        # expected; an untriggered job writes exactly the requested count. A
-        # crashed/preempted job leaves *no* file (the batch is written
-        # all-or-nothing after the event loop, caught above as "missing"), so a
-        # written-but-short n can only be trigger drops -> accept it.
-        if triggered:
-            if n > expected_events:
-                return False, f"n_events={n} > expected {expected_events}"
-        elif n != expected_events:
-            return False, f"n_events={n}, expected {expected_events}"
+    # The count is allowed to vary: any selection (real trigger or the low-E
+    # min_physics_hits truth cut) drops events, so a complete job writes
+    # n <= expected. Crashes are caught by the completion flag above, not inferred
+    # from the count, so n < expected on a complete job is just selection inefficiency.
+    if expected_events is not None and n > expected_events:
+        return False, f"n_events={n} > expected {expected_events}"
     return True, ""
