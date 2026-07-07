@@ -45,6 +45,7 @@ from lucid.sources.writer import (
     _compute_contained,
     _source_type_code,
     build_interaction_metadata,
+    mark_config_complete,
     sample_translation_vector,
     save_hits_event,
     save_labl_event,
@@ -628,6 +629,7 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
 
         config_meta = {
             'n_events': len(batch_data),
+            'n_events_requested': int(batch_size_actual),
             'git_commit': git_commit,
             'run_id': run_id,
             'dataset_name': dataset_name,
@@ -675,6 +677,7 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
                 save_hits_event(fi, evdict, seq_idx)
                 save_step_event(fg, evdict, seq_idx)
                 save_labl_event(fl, evdict, seq_idx)
+            mark_config_complete(fs, fi, fg, fl)   # all events written => healthy
 
         saved_files.extend([str(sensor_path), str(hits_path), str(step_path), str(labl_path)])
 
@@ -1054,6 +1057,7 @@ def generate_events_from_photonsim_pileup(
         batch_src_idx = np.asarray(batch_indices, dtype=np.uint32)
         config_meta = {
             'n_events': len(batch_data),
+            'n_events_requested': int(end_idx - start_idx),
             'git_commit': git_commit,
             'run_id': run_id,
             'dataset_name': dataset_name,
@@ -1091,6 +1095,7 @@ def generate_events_from_photonsim_pileup(
                 save_hits_event(fi, ev, seq_idx)
                 save_step_event(fg, ev, seq_idx)
                 save_labl_event(fl, ev, seq_idx)
+            mark_config_complete(fs, fi, fg, fl)   # all events written => healthy
 
         saved_files.extend([str(sensor_path), str(hits_path), str(step_path), str(labl_path)])
         print(f"Batch {batch_idx+1} save time: {_time.time() - _t_save:.3f}s\n")
@@ -1621,6 +1626,7 @@ def generate_events_from_photonsim_supernova(
         save_hits_event(fi, merged, 0)
         save_step_event(fg, merged, 0)
         save_labl_event(fl, merged, 0)
+        mark_config_complete(fs, fi, fg, fl)   # event written => healthy
 
     n_dig = int(np.asarray(merged['sensor_digits']['sensor_idx']).shape[0])
     n_win = int(np.asarray(merged.get('per_window', {}).get('window_start', [])).shape[0]) \

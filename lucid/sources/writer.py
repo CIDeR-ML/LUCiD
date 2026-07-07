@@ -378,6 +378,14 @@ def _write_common_config_attrs(f, config_meta):
     cfg = f.require_group('config')
     cfg.attrs['format_version'] = _FORMAT_VERSION
     cfg.attrs['n_events'] = int(config_meta['n_events'])
+    # Number of events *attempted* (before trigger/selection drops). n_events is
+    # the number kept, so (requested - n_events) is the selection inefficiency.
+    if 'n_events_requested' in config_meta:
+        cfg.attrs['n_events_requested'] = int(config_meta['n_events_requested'])
+    # Completion flag: set to True only after every event is written (see
+    # mark_config_complete). Absent/False => the job was killed mid-write and the
+    # file is incomplete. Health checks gate on this, not on n_events.
+    cfg.attrs['complete'] = False
     cfg.attrs['git_commit'] = str(config_meta.get('git_commit', 'unknown'))
     cfg.attrs['run_id'] = str(config_meta['run_id'])
     cfg.attrs['dataset_name'] = str(config_meta['dataset_name'])
@@ -399,6 +407,18 @@ def _write_common_config_attrs(f, config_meta):
         cfg.attrs['selection_min_physics_hits'] = int(
             config_meta.get('selection_min_physics_hits', 0))
     return cfg
+
+
+def mark_config_complete(*files):
+    """Stamp ``config/complete = True`` on each open HDF5 file.
+
+    Call this ONLY after every event has been written to all files, so a job that
+    is killed mid-write leaves the flag ``False``. Health checks treat a missing
+    or False flag as an incomplete (unhealthy) file — the number of events is
+    allowed to vary (trigger/selection drops), so it is not the health signal.
+    """
+    for f in files:
+        f['config'].attrs['complete'] = True
 
 
 def write_sensor_config(f, config_meta, source_event_idx, sensor_positions):

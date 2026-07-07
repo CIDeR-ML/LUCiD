@@ -102,6 +102,11 @@ def verify_batch(
                 name = cfg_attrs.get("dataset_name", "<missing>")
                 fi = int(cfg_attrs.get("file_index", -1))
                 n_events = int(cfg_attrs.get("n_events", -1))
+                # Health is the completion flag, not the event count (trigger/
+                # selection make the count vary). Absent => a pre-flag file, treat
+                # as complete for backward compatibility.
+                complete = bool(cfg_attrs.get("complete", True))
+                n_req = int(cfg_attrs.get("n_events_requested", n_events))
         except Exception as e:
             messages.append(f"UNREADABLE: {path}: {e!r}")
             ok = False
@@ -113,9 +118,16 @@ def verify_batch(
             )
             ok = False
 
-        if n_events <= 0:
+        if not complete:
+            messages.append(f"INCOMPLETE: {path} config/complete != True (job killed mid-write?)")
+            ok = False
+
+        if n_events < 0:
             messages.append(f"BAD_N_EVENTS: {path} has n_events={n_events}")
             ok = False
+        elif n_events == 0:
+            # Not fatal: a selection may legitimately drop every event. Complete + empty.
+            messages.append(f"EMPTY_KEPT: {path} kept 0/{n_req} events (selection dropped all)")
 
         if expected_dataset_name is not None and name != expected_dataset_name:
             messages.append(
@@ -123,8 +135,10 @@ def verify_batch(
             )
             ok = False
 
+        drop = f" (kept {n_events}/{n_req})" if n_req != n_events else ""
         messages.append(
-            f"OK {sub:<6} size={size:>10} dataset_name={name!r} file_index={fi} n_events={n_events}"
+            f"OK {sub:<6} size={size:>10} dataset_name={name!r} file_index={fi} "
+            f"n_events={n_events}{drop} complete={complete}"
         )
 
     # Cross-file schema invariants (only when the four files are all readable).
