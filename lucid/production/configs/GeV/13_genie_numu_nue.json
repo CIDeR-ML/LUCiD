@@ -1,8 +1,11 @@
 {
-  "config_number": 7,
-  "name": "mu- + pi+",
-  "description": "Multi-particle events with muon and positive pion with LUCiD processing",
+  "name": "genie numu+nue mixed",
+  "description": "GENIE CC+NC on water, numu (14) + nue (12) randomly mixed per job. Test set for flavour-agnostic reco.",
   "material": "water",
+  "nominal_train": 0,
+  "nominal_test": 50000,
+  "seconds_per_event": 3.05,
+  "target_seconds_per_job": 3600,
   "detector": "HK",
   "digitizer": {
     "model": "hk"
@@ -17,32 +20,25 @@
     "pad_before_ns": 300.0,
     "pad_after_ns": 300.0
   },
-  "energy_distribution": "uniform",
+  "primary_source": "genie",
+  "genie": {
+    "probe_pdg": [
+      12,
+      14
+    ],
+    "target": "water",
+    "energy_min_GeV": 0.1,
+    "energy_max_GeV": 2.0,
+    "tune": "G18_10a_02_11b",
+    "event_generator_list": "CC+NC",
+    "direction": "isotropic"
+  },
   "store_individual_photons": true,
   "run_lucid": true,
   "disable_decays": false,
-  "particles": [
-    {
-      "type": "mu-",
-      "energy_min_MeV": 200,
-      "energy_max_MeV": 2000
-    },
-    {
-      "type": "pi+",
-      "energy_min_MeV": 200,
-      "energy_max_MeV": 2000
-    }
-  ],
   "lucid_options": {
     "apply_smearing": true,
     "apply_translation": true
-  },
-  "n_jobs": 2,
-  "n_events_per_job": 100,
-  "events_schedule": {
-    "events_per_dataset": 10000,
-    "target_seconds_per_job": 3600,
-    "seconds_per_event": 7.447
   },
   "cleanup_root_files": true
 }

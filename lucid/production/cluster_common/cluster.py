@@ -211,7 +211,7 @@ class SlurmAdapter(ClusterAdapter):
     def render_dataprod_job(self, *, cell_dir, config_path, detector, job_id,
                             job_name, partition, use_gpu, test, skip_lucid,
                             n_events, override_energy_mev,
-                            sn_model=None, sn_ordering=None):
+                            sn_model=None, sn_ordering=None, master_seed=None):
         # Uses 6-digit `job_{job_id}` log naming, matching the dataprod
         # convention (verify_jobs.py SBATCH_RE matches this).
         cpus = self.env.get("DEFAULT_CPUS", "1")
@@ -236,6 +236,8 @@ class SlurmAdapter(ClusterAdapter):
             flags.extend(["--sn-model", str(sn_model)])
         if sn_ordering is not None:
             flags.extend(["--sn-ordering", str(sn_ordering)])
+        if master_seed is not None:
+            flags.extend(["--master-seed", str(master_seed)])
         flag_str = " ".join(flags)
         # Supernova jobs resolve sntools from a CFS PYTHONUSERBASE (SN_ENV_BASE)
         # bound into the container Python — mirrors LUCID_ENV_BASE for training.

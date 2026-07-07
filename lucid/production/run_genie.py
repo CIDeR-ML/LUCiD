@@ -104,7 +104,12 @@ def run_genie(
     if "genie" not in config:
         raise GenieError("config missing 'genie' block (primary_source=genie requires it)")
     g = config["genie"]
-    probe = int(g["probe_pdg"])
+    # probe_pdg may be a single PDG or a list to mix (e.g. [12, 14] for nue+numu).
+    # With a list, alternate deterministically by job so the dataset is balanced
+    # across flavours (each job's file is single-flavour; the set is 50/50).
+    probes = g["probe_pdg"]
+    probes = [int(p) for p in (probes if isinstance(probes, list) else [probes])]
+    probe = probes[(job_id - 1) % len(probes)]
     emin = float(g["energy_min_GeV"])
     emax = float(g["energy_max_GeV"])
     tune = str(g.get("tune", "G18_10a_02_11b"))

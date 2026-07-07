@@ -1,8 +1,11 @@
 {
-  "config_number": 19,
   "name": "particle bomb (single vertex)",
   "description": "Single 'particle bomb' interaction per event (no pile-up). Draws a per-event multiplicity N=Uniform(1,5), then samples N particles (with replacement) from the candidate pool {e-, e+, mu-, mu+, pi+, pi-, pi0}. Kinetic energies are uniform in [1, 2000] MeV for electrons and [200, 2000] MeV for the rest, isotropic direction. Same physics as config_18 but with a single vertex.",
   "material": "water",
+  "nominal_train": 1000000,
+  "nominal_test": 50000,
+  "seconds_per_event": 12.0,
+  "target_seconds_per_job": 3600,
   "detector": "HK",
   "digitizer": {
     "model": "hk"
@@ -66,7 +69,5 @@
     "apply_smearing": true,
     "apply_translation": true
   },
-  "n_jobs": 1,
-  "n_events_per_job": 20,
   "cleanup_root_files": true
 }
