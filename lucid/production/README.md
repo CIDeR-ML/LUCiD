@@ -4,6 +4,24 @@ Turns a PhotonSim particle-based ROOT file into a four-file HDF5 dataset
 (`sensor/`, `inst/`, `seg/`, `labl/`). Full schema in
 [`docs/LUCID_DATASET.md`](../../docs/LUCID_DATASET.md).
 
+## Config blocks
+
+Configs live under `configs/<block>/NN_name.json` (2-digit, numbering restarts
+per block):
+
+| block | contents | splits |
+|---|---|---|
+| `GeV` | single particles (01–05), particle-bomb (06), multiparticle (07–12), GENIE numu+nue (13) | 01–06 train+test (1M/50k); 07–13 **test-only** (50k) |
+| `Solar` | low-energy e⁻ (01) | train+test (1M/50k) |
+| `SN` | supernova bursts (01) | flat |
+| `Test` | dev/scratch (pile-up bombs 01) | flat |
+
+Each config declares its `detector` and `nominal_train` / `nominal_test`; the
+fanout writes `OUTPUT_BASE/<detector>/<block>/[<split>]/config_NN/` and sizes jobs
+from `nominal / (target_seconds_per_job / seconds_per_event)`. Train/test datasets
+use disjoint master seeds. See
+[`jobs/dataprod/`](jobs/dataprod/) and [`docs/QUICKSTART_NERSC.md`](../../docs/QUICKSTART_NERSC.md).
+
 ## Example
 
 ```bash
@@ -88,17 +106,17 @@ A dataset fans out into one `<model>/<ordering>/` subcase per
 `AdiabaticMSW_NMO` / `AdiabaticMSW_IMO` transformation:
 
 ```
-config_000090/
+<detector>/SN/config_NN/                     # SN block is flat (no train/test)
   analytic_accretion/{NMO,IMO}/{sensor,hits,step,labl}/
   analytic_hot/{NMO,IMO}/{sensor,hits,step,labl}/
 ```
 
-Config block (see `configs/dataprod_90_supernova.json`):
+Config block (see `configs/SN/01_supernova_50kpc.json`):
 
 ```json
 "primary_source": "supernova",
 "supernova": {
-  "detector": "SuperK",        // sntools fiducial → realistic event count
+  "detector": "HyperK",        // sntools fiducial → realistic event count
   "distance_kpc": 10.0,
   "channels": "all",           // or ["ibd","es","o16e","o16eb"]
   "cap_events": 50,            // omit/null for a full realistic burst
