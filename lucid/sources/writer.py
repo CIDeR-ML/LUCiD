@@ -375,6 +375,12 @@ def _write_common_config_attrs(f, config_meta):
         cfg.attrs['trigger_n_thr'] = int(config_meta['trigger_n_thr'])
         cfg.attrs['trigger_pad_before_ns'] = float(config_meta['trigger_pad_before_ns'])
         cfg.attrs['trigger_pad_after_ns'] = float(config_meta['trigger_pad_after_ns'])
+    # Selection provenance: how interactions were kept. "trigger" = the readout
+    # trigger above; "min_physics_hits" = the trigger-free truth cut (supernova).
+    if 'selection' in config_meta:
+        cfg.attrs['selection'] = str(config_meta['selection'])
+        cfg.attrs['selection_min_physics_hits'] = int(
+            config_meta.get('selection_min_physics_hits', 0))
     return cfg
 
 

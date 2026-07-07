@@ -1,13 +1,14 @@
 {
   "config_number": 91,
   "name": "supernova burst water 50kpc (all-at-once)",
-  "description": "Supernova-burst neutrinos at 50 kpc, modeled all-at-once: the whole burst is ONE event. Every sntools interaction is placed at its true time (from the .times.json sidecar) via a shared random global t0; the generator chunks the burst at causal gaps, digitizes + triggers each chunk, and concatenates the survivors. Use SK_like_ski_dark (ski digitizer + 4.2 kHz dark + sliding-window trigger) as the LUCiD detector. cap_events limits the burst size for quick tests; remove it for the full ~900-interaction burst.",
+  "description": "Supernova-burst neutrinos at 50 kpc, modeled all-at-once: the whole burst is ONE event. Every sntools interaction is placed at its true time (from the .times.json sidecar) via a shared random global t0; the generator chunks the burst at causal gaps, digitizes each chunk (dark included + labelled), and concatenates. Selection is trigger-free: keep every interaction with >= min_physics_hits real Cherenkov hits (default 3), so the dataset isn't biased by a trigger choice — apply/study triggers downstream using the emission_process labels. Use SK_like_ski_dark (ski digitizer + 4.2 kHz dark). cap_events limits the burst size for quick tests; remove it for the full ~900-interaction burst.",
   "material": "water",
   "primary_source": "supernova",
   "supernova": {
     "detector": "SuperK",
     "distance_kpc": 50.0,
     "channels": "all",
+    "min_physics_hits": 3,
     "cap_events": 25,
     "models": [
       {

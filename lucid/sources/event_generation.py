@@ -38,6 +38,7 @@ from lucid.simulation.trigger import TriggerConfig, apply_trigger
 from lucid.sources.scintillation_photons import expand_segments_to_photons
 from lucid.sources.writer import (
     EMISSION_PROCESS_CHERENKOV,
+    EMISSION_PROCESS_DARK,
     EMISSION_PROCESS_SCINTILLATION,
     SOURCE_TYPE_GENIE,
     SOURCE_TYPE_PARTICLES,
@@ -1353,6 +1354,48 @@ def _concat_triggered_chunks(chunks):
     return out
 
 
+def _keep_chunk_min_physics_hits(merged_chunk, min_hits):
+    """Truth-level SN selection (trigger-free): keep the chunk as ONE readout
+    window iff it has >= ``min_hits`` *physics* digits (a digit with any
+    non-dark contribution). Coincident dark digits are kept and stay tagged
+    ``emission_process = dark`` so analysis can enable/disable them. Digits are
+    sorted into canonical (sensor, T) order (single window) with digit_idx
+    remapped. Returns ``(sensor_digits, hits_sparse, seg_hits, per_window)`` or
+    ``None`` to drop the interaction.
+    """
+    sd = merged_chunk['sensor_digits']
+    hits = merged_chunk['hits_sparse']
+    seg = merged_chunk.get('segment_sensor_hits')
+    nd = int(np.asarray(sd['sensor_idx']).shape[0])
+    if nd == 0:
+        return None
+    hd = np.asarray(hits['digit_idx'])
+    ep = np.asarray(hits['emission_process'])
+    phys = np.zeros(nd, dtype=bool)
+    np.logical_or.at(phys, hd[ep != EMISSION_PROCESS_DARK], True)
+    if int(phys.sum()) < min_hits:
+        return None
+
+    T = np.asarray(sd['T'])
+    order = np.lexsort((T, np.asarray(sd['sensor_idx'])))   # canonical (sensor, T)
+    remap = np.empty(nd, dtype=np.int64)
+    remap[order] = np.arange(nd)
+    sd_out = {k: np.asarray(v)[order] for k, v in sd.items()}
+    hits_out = dict(hits)
+    hits_out['digit_idx'] = remap[hd].astype(hd.dtype)
+    seg_out = None
+    if seg is not None:
+        sdi = np.asarray(seg['digit_idx'])
+        seg_out = dict(seg)
+        seg_out['digit_idx'] = remap[sdi].astype(sdi.dtype)
+    per_window = {
+        'window_start':  np.array([float(T.min())], dtype=np.float64),
+        'window_end':    np.array([float(T.max())], dtype=np.float64),
+        'digit_offsets': np.array([0, nd], dtype=np.int32),
+    }
+    return sd_out, hits_out, seg_out, per_window
+
+
 def generate_events_from_photonsim_supernova(
     event_simulator,
     burst_root_file,
@@ -1368,6 +1411,7 @@ def generate_events_from_photonsim_supernova(
     file_index_start=0,
     digitizer=None,
     trigger=None,
+    min_physics_hits=3,
     source_event_idx=0,
 ):
     """Generate ONE all-at-once supernova event from a burst PhotonSim file.
@@ -1476,25 +1520,36 @@ def generate_events_from_photonsim_supernova(
                 [int(master_seed), int(source_event_idx), int(cidx)]),
             detector_bounds=detector_bounds)
 
-        if trigger_cfg is not None:
-            trig = apply_trigger(merged_chunk['sensor_digits'], merged_chunk['hits_sparse'],
-                                 merged_chunk.get('segment_sensor_hits'), trigger_cfg)
-            if trig is None:
-                continue
-            merged_chunk['sensor_digits'], merged_chunk['hits_sparse'], _seg, \
-                merged_chunk['per_window'] = trig
-            if _seg is not None:
-                merged_chunk['segment_sensor_hits'] = _seg
-            elif 'segment_sensor_hits' in merged_chunk:
-                del merged_chunk['segment_sensor_hits']
+        # Selection. Default (min_physics_hits): trigger-free truth cut — keep the
+        # interaction as one readout window iff it has >= N physics hits, so the
+        # dataset isn't biased by a trigger choice (dark is kept + labelled).
+        # Falls back to the sliding-window trigger when min_physics_hits is None.
+        if min_physics_hits is not None:
+            sel = _keep_chunk_min_physics_hits(merged_chunk, min_physics_hits)
+        elif trigger_cfg is not None:
+            sel = apply_trigger(merged_chunk['sensor_digits'], merged_chunk['hits_sparse'],
+                                merged_chunk.get('segment_sensor_hits'), trigger_cfg)
+        else:
+            sel = (merged_chunk['sensor_digits'], merged_chunk['hits_sparse'],
+                   merged_chunk.get('segment_sensor_hits'), merged_chunk.get('per_window'))
+        if sel is None:
+            continue
+        merged_chunk['sensor_digits'], merged_chunk['hits_sparse'], _seg, \
+            merged_chunk['per_window'] = sel
+        if _seg is not None:
+            merged_chunk['segment_sensor_hits'] = _seg
+        elif 'segment_sensor_hits' in merged_chunk:
+            del merged_chunk['segment_sensor_hits']
         surviving.append(merged_chunk)
 
     burst_file.close()
-    n_trig = len(surviving)
-    print(f"Supernova: {n_trig}/{len(chunks)} chunks triggered", flush=True)
+    n_kept = len(surviving)
+    _sel_desc = (f">= {min_physics_hits} physics hits" if min_physics_hits is not None
+                 else "triggered")
+    print(f"Supernova: {n_kept}/{len(chunks)} interactions kept ({_sel_desc})", flush=True)
     merged = _concat_triggered_chunks(surviving)
     if merged is None:
-        print("Supernova: no chunk triggered — no event written", flush=True)
+        print("Supernova: no interaction kept — no event written", flush=True)
         return []
     merged['source_event_idx'] = int(source_event_idx)
     merged['source'] = 'PhotonSim_Supernova'
@@ -1523,6 +1578,9 @@ def generate_events_from_photonsim_supernova(
         'smearing_time_function': 'SK_like' if apply_smearing else 'none',
         'digitizer_model': str(digitizer_model['model']),
         **_trigger_config_meta(trigger_cfg),
+        'selection': ('min_physics_hits' if min_physics_hits is not None else 'trigger'),
+        'selection_min_physics_hits': (int(min_physics_hits)
+                                       if min_physics_hits is not None else 0),
         'label_names': ['category'],
     }
     if detector_bounds is not None:
@@ -1546,5 +1604,5 @@ def generate_events_from_photonsim_supernova(
     n_win = int(np.asarray(merged.get('per_window', {}).get('window_start', [])).shape[0]) \
         if 'per_window' in merged else 0
     print(f"Supernova: wrote 1 event — {n_dig} digits in {n_win} windows "
-          f"from {n_trig} triggered interactions", flush=True)
+          f"from {n_kept} kept interactions", flush=True)
     return [str(paths[sub]) for sub in ('sensor', 'hits', 'step', 'labl')]
