@@ -749,6 +749,7 @@ def _offset_track_ids_raw(raw, offset):
 def _simulate_interaction_stream(
     event_simulator, raw, *, t0, vertex, source_type_code, running_offset,
     n_sensors, rays_buckets, event_keys, apply_translation,
+    interaction_channel=None,
 ):
     """Simulate one interaction's photons and build a merge-stream dict.
 
@@ -848,7 +849,8 @@ def _simulate_interaction_stream(
         't0':                float(t0),
         'interaction_meta':  build_interaction_metadata(
             particle_data, t0=t0, vertex_xyz=vertex,
-            source_type_code=source_type_code),
+            source_type_code=source_type_code,
+            interaction_channel=interaction_channel),
     }
     return stream, stream_max
 
@@ -1430,6 +1432,8 @@ def generate_events_from_photonsim_supernova(
     burst_root_file,
     interaction_times_ms,
     sensor_positions,
+    interaction_channels=None,
+    sn_direction=None,
     output_dir=None,
     master_seed=None,
     job_id=1,
@@ -1549,12 +1553,15 @@ def generate_events_from_photonsim_supernova(
             else:
                 vtx = np.zeros(3, dtype=np.float32)
             raw = _read_event_raw(str(burst_root_file), entry, opened_file=burst_file)
+            chan = (int(interaction_channels[entry])
+                    if interaction_channels is not None
+                    and entry < len(interaction_channels) else None)
             stream, stream_max = _simulate_interaction_stream(
                 event_simulator, raw, t0=t0_i, vertex=vtx,
                 source_type_code=_source_type_code('supernova'),
                 running_offset=running_offset, n_sensors=n_sensors,
                 rays_buckets=rays_buckets, event_keys=ev_keys,
-                apply_translation=apply_translation)
+                apply_translation=apply_translation, interaction_channel=chan)
             streams.append(stream)
             running_offset = stream_max + 1
 
@@ -1626,6 +1633,7 @@ def generate_events_from_photonsim_supernova(
         'selection': ('min_physics_hits' if min_physics_hits is not None else 'trigger'),
         'selection_min_physics_hits': (int(min_physics_hits)
                                        if min_physics_hits is not None else 0),
+        'sn_direction': [float(x) for x in (sn_direction or [0.0, 0.0, 1.0])],
         'label_names': ['category'],
     }
     if detector_bounds is not None:
