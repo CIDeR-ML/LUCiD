@@ -39,7 +39,7 @@ Their shared flag set is documented in the
 
 ## `lucid-run-job` — produce a dataset
 Single-job production: generates a GEANT4 macro, runs the external **PhotonSim** binary (path from
-`PHOTONSIM_BIN`), and writes the four-file HDF5 dataset. GENIE-flux configs additionally chain
+`PHOTONSIM_BIN`), and writes the four parallel HDF5 batch files. GENIE-flux configs additionally chain
 `gevgen`→`gntpc`. Configs live in block subdirectories (`GeV/`, `SN/`, `Solar/`, `Test/`).
 ```bash
 export PHOTONSIM_BIN=/path/to/PhotonSim/build/PhotonSim

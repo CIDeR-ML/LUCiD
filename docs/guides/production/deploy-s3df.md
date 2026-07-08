@@ -146,9 +146,7 @@ This holds the `jax-cuda12-plugin` + `nvidia-*-cu12` wheels matched to the
 container's `jax 0.4.38`, plus `optax`. Inject it with
 `APPTAINERENV_PYTHONUSERBASE` (this maps to `PYTHONUSERBASE` inside the
 container, so its `site-packages` is added to the user-site path) and add
-`--nv`. The interactive/Jupyter recipe is in
-`JUPYTER_SETUP.md` (lives under `NB_VALIDATION/`);
-for a batch job the same two ingredients apply:
+`--nv`. For a batch job the same two ingredients apply:
 
 ```bash
 APPTAINERENV_PYTHONUSERBASE=/sdf/data/neutrino/<user>/python_envs/lucid \

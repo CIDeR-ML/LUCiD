@@ -2,6 +2,10 @@
 
 ## Detectors are registry-dispatched
 
+Throughout LUCiD, **sensor** is the generic term for a light detector; **PMT**
+(photomultiplier tube) is the tank-geometry instance and **DOM** (digital optical module)
+the string-telescope instance of the same concept.
+
 Geometries register themselves with a decorator (`@register_detector('cylinder')`) and are built
 by `generate_detector(config)`, which looks up the class from the config's `detector_type`. Each
 geometry has a matching propagator in `lucid/propagation/`.
