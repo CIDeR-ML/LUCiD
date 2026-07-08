@@ -5,7 +5,7 @@ pipeline stops at `sensor_response`: a per-PMT charge and a soft-min first-arriv
 front-end electronics don't record that directly — they integrate charge in time windows, apply
 a threshold, and a separate DAQ decides whether to read the event out at all. `lucid/simulation/digitizer.py`
 and `lucid/simulation/trigger.py` model that stage. They are plain NumPy (no JAX, no gradients)
-and only run in the production path ([`lucid-run-job`](cli.md#lucid-run-job--produce-a-dataset),
+and only run in the production path ([`lucid-run-job`](cli.md#lucid-run-job-produce-a-dataset),
 see also the [local production guide](../guides/production/local.md)), not in the reconstruction
 or calibration forward model.
 
