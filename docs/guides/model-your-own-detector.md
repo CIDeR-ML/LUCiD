@@ -184,7 +184,7 @@ reference to a wavelength-dependent curve ([concepts: materials](../concepts/mat
 full field table in the [configuration reference](../reference/config.md)). Two real
 styles already in the repo:
 
-```json title="config/SK_like_physics_config.json (all scalar)"
+```json title="config/EOS_physics_config.json (all scalar)"
 {
   "scatter_length": 50.0,
   "absorption_length": 50.0,
@@ -195,7 +195,7 @@ styles already in the repo:
 }
 ```
 
-```json title="config/EOS_physics_config.json (curve-referenced)"
+```json title="config/SK_like_physics_config.json (curve-referenced)"
 {
   "medium_model": "materials/water.json",
   "qe_curve": "pmt/SK_QE.json",
