@@ -16,6 +16,12 @@ medium, propagator, photon source, and per-PMT response, and returns a **JIT-com
 callable** `(ParticleParams|source|photon_data, DetectorParams, key) → hits`. Everything is
 differentiable end-to-end (`lax.scan`/`vmap`/`jit`, DiCE soft weights).
 
+Passing `default_detector_params=True` (as the [quickstart](../getting-started/quickstart.md)
+does) bakes the detector params into the closure and drops them from the
+signature, so the callable is invoked with two args — `(particle_params, key)` —
+and exposes the baked tuple as `.default_detector_params`. Leave it `False` (the
+default) when you need to differentiate w.r.t. `DetectorParams` (calibration).
+
 Behaviour is selected by **regime flags / config**, not separate engines:
 
 | Axis | Modes | Selected by |
