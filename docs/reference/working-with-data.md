@@ -11,7 +11,7 @@ indexing, under `<output_dir>/{sensor,hits,step,labl}/wc_*_<F:04d>.h5`:
 | `labl`   | `labl/wc_labl_NNNN.h5`     | labels, truth metadata, and dimension tables (truth `t0` lives here) |
 
 Detector times in `sensor`/`hits`/`step` are in the **detector frame** (per-event `t0` already
-added); truth `t0` is in `labl`. The full schema is in the [dataset reference](../LUCID_DATASET.md).
+added); truth `t0` is in `labl`. The full schema is in the [dataset reference](dataset-schema.md).
 
 > Note: older datasets may name the segment modality `edep` instead of `step`.
 
@@ -35,7 +35,8 @@ labels = read_labl_event(paths['labl'], 0)       # nested: per_event / per_inter
 For a quick look from the terminal, `python scripts/inspect_dataset.py --path out/`
 prints event counts, charge/hit statistics, and per-event array shapes
 (`--event N` for one event in detail). The `viewer/` app (`python viewer/serve_viewer.py <dataset_dir>`, `--open` to launch a browser, `--host` for SSH-tunnel use)
-gives an interactive 3D event display over the same files.
+gives an interactive 3D event display over the same files (`viewer/README.md` documents
+its FIELD / EMISSION / HIT / LABEL controls).
 
 ## Derived views
 

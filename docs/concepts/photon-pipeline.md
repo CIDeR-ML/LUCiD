@@ -15,7 +15,9 @@ sources  →  propagation  →  photon_step (× K)  →  sensor_response
   bounces.
 - **`lucid/simulation/photon_step.py`** does the per-step physics — scatter, reflect, absorb —
   with *soft* weights (a `temperature` controls the softness) so the whole thing is
-  differentiable rather than a hard Monte-Carlo branch.
+  differentiable rather than a hard Monte-Carlo branch. Where a branch stays genuinely
+  discrete, its gradient is carried by a DiCE score correction — the same technique the
+  architecture page calls "DiCE soft weights".
 - **`lucid/simulation/sensor_response.py`** aggregates photon weights into per-PMT charge and a
   soft-min first-arrival time.
 
@@ -24,7 +26,7 @@ kernel: **`lucid/simulation/digitizer.py`** decomposes the per-PMT signal into d
 charge sampling, per-sensor time-window integration, dark noise) and
 **`lucid/simulation/trigger.py`** applies an optional sliding-window readout trigger. These
 model detector electronics for dataset realism; the differentiable inference path stops at
-`sensor_response`. See the [dataset schema](../LUCID_DATASET.md) for what they write.
+`sensor_response`. See the [dataset schema](../reference/dataset-schema.md) for what they write.
 
 ## The one entry point: `setup_event_simulator`
 
@@ -38,6 +40,11 @@ JSON, builds the detector, picks the propagator, wires the photon source, and re
 | Calibration | `is_calibration=True`, `hit_mode='aggregated'` | `(source, detector_params, key) → (charge, time)` |
 | Data-like | `is_data=True`, `hit_mode='realistic'` | `(particle_params, detector_params, key, photon_data) → (charge, time)` |
 
+The table shows the three everyday modes; `hit_mode` has more values for special outputs —
+`moments` (charge moments per PMT), `per_segment` (per-(track-segment, sensor) attribution for
+dataset production), `waveform`/`waveform_expected` (time-binned waveforms), and
+`shotgun_per_photon` (per-photon records for diagnostics).
+
 Other important arguments: `n_photons`, `K` (scatter iterations), `temperature` (soft→hard),
 `wavelength_mode` (per-photon λ physics vs scalar), `default_detector_params` (bake the detector
 params in so the callable drops that argument), and `detector_type`.
@@ -48,4 +55,4 @@ Because every step is differentiable, `jax.grad` of a loss over the per-PMT outp
 gradients with respect to **particle** parameters (energy, vertex, direction, t₀ →
 reconstruction) *and* **detector** parameters (scattering, absorption, reflection, QE →
 calibration). That is what turns both problems into gradient-based optimization — see
-[Reconstruction](../RECONSTRUCTION.md) and [Calibration](../CALIBRATION.md).
+[Reconstruction](../guides/reconstruction.md) and [Calibration](../guides/calibration.md).

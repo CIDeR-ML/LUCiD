@@ -3,7 +3,7 @@
 // Streams four v3 files (sensor, hits, step, labl) via h5wasm + HTTP Range,
 // and decodes per-event bundles for the main viewer thread.
 //
-// Schema reference: docs/LUCID_DATASET.md (v3, post-migration).
+// Schema reference: docs/reference/dataset-schema.md (v3, post-migration).
 
 import h5wasm from 'https://cdn.jsdelivr.net/npm/h5wasm@0.10.1/dist/esm/hdf5_hl.js';
 

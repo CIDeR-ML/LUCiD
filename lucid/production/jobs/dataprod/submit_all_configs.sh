@@ -142,7 +142,7 @@ if [ -n "$DETECTOR_OVERRIDE" ]; then
 fi
 echo ""
 
-# Override configs go on shared FS and persist past sbatch return; see QUICKSTART_S3DF.md.
+# Override configs go on shared FS and persist past sbatch return; see docs/guides/production/deploy-s3df.md.
 TEMP_DIR=""
 if [ -n "$N_JOBS_OVERRIDE" ] || [ -n "$N_EVENTS_OVERRIDE" ]; then
     BASE_FOR_TEMP="${OUTPUT_OVERRIDE:-$OUTPUT_BASE_PATH}"

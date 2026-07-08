@@ -1,7 +1,7 @@
 """geofile_to_npz — convert a WCSim-style detector geofile (.txt) to a PMT-array .npz.
 
 `lucid.geometry.Cylinder.from_pmt_file()` reads a `.npz` conforming to
-`lucid/geometry/PMT_NPZ_SCHEMA.md`. The example detectors (SK/HK/WCTE) ship those `.npz` files,
+`docs/reference/pmt-npz-schema.md`. The example detectors (SK/HK/WCTE) ship those `.npz` files,
 but the *converter* that produces them from the source `config/geofile_*.txt` was previously kept
 only locally — so users could not reproduce or add a measured detector. This is that converter.
 
@@ -61,7 +61,7 @@ def to_npz(path):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('geofile', help='source geofile .txt (cm)')
-    ap.add_argument('out', help='output .npz (schema: lucid/geometry/PMT_NPZ_SCHEMA.md)')
+    ap.add_argument('out', help='output .npz (schema: docs/reference/pmt-npz-schema.md)')
     args = ap.parse_args()
     d = to_npz(args.geofile)
     np.savez(args.out, **d)

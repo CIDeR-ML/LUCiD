@@ -80,7 +80,7 @@ Below the event-meta block, the sidebar shows a **SELECTION** info card:
 
 ## Data contract
 
-Per [`docs/LUCID_DATASET.md`](../docs/LUCID_DATASET.md). The viewer reads:
+Per [`docs/reference/dataset-schema.md`](../docs/reference/dataset-schema.md). The viewer reads:
 
 **sensor.h5**
 - `config/attrs`: `n_events`, `n_sensors`, `detector_type`, `dataset_name`, provenance.

@@ -2,8 +2,9 @@
 
 **One differentiable forward engine with regime modes**, serving two co-equal lines —
 inference/calibration (gradient-descent reconstruction, detector calibration) and
-production (PhotonSim → datasets) — and three co-equal first-class detector
-families (water/WbLS Cherenkov tanks, ice/water string telescopes).
+production (PhotonSim → datasets) — across two detector families: water/WbLS
+Cherenkov tanks and ice/water string telescopes (see the
+[bundled detectors](../getting-started/detectors.md)).
 
 Units are **meters, nanoseconds, MeV** throughout.
 
@@ -39,7 +40,7 @@ registry drives generic tree-walks):
 (wall/sensor; scalar or angular Schlick/Fresnel) · `response` (qe, spe_width, tts) ·
 `per_pmt` (qe_corrections, gain, t0, walk) · `scintillation` (S, kB, C, tau_rise, tau_fall,
 moyal_*) — plus fittable per-wavelength `*_dev` deviation curves on the optical properties
-(see [wavelength physics](concepts/wavelength.md)). Each sub-tuple has
+(see [wavelength physics](wavelength.md)). Each sub-tuple has
 normalize/denormalize + bounds, so any subset can be optimized
 directly. Non-scintillating media leave the scintillation block at neutral 0 (no light) —
 so adding it kept the water forward byte-identical.
@@ -53,8 +54,10 @@ looks up the class. `DetectorGeometry.from_config` builds geometry + medium
 - **cylinder / sphere / box** → `lucid/propagation/*` surface propagators (grid-celled
   sensor lookup, soft overlap, reflection).
 - **string** (`lucid/geometry/string.py::StringTelescope`, DOM positions from an NPZ) →
-  `lucid/propagation/string/string_propagator.py` (skew-line ray↔string distance, top-K
-  strings, DOM-bracket snap, per-DOM overlap + envelope-exit fallback).
+  `lucid/propagation/string/string_propagator.py`: each ray is matched to its nearest
+  strings, then snapped to the nearest DOMs (IceCube-style optical modules) along each,
+  with a fallback for rays that exit the instrumented volume. Implementation details live
+  in the module docstrings.
 
 ## Emission sources
 

@@ -1,8 +1,8 @@
 # LXPLUS Quickstart — Production on HTCondor
 
 Concise runbook for the CERN LXPLUS deployment. Pairs with
-[QUICKSTART_S3DF.md](QUICKSTART_S3DF.md) (same pipeline, SLURM at SLAC)
-and [CLUSTER_ABSTRACTION.md](CLUSTER_ABSTRACTION.md) (architecture).
+[deploy-s3df.md](deploy-s3df.md) (same pipeline, SLURM at SLAC)
+and [cluster-abstraction.md](cluster-abstraction.md) (architecture).
 
 ## Filesystem layout (typical LXPLUS account)
 
@@ -159,4 +159,4 @@ writable, so the cache lives next to the source. No setup needed.
   `jobs/<stage>/configs/*.json` (per-stage).
 - Runner: `LUCiD/lucid/production/run_job.py` (entry: `lucid-run-job`).
 - Production wrappers: `LUCiD/lucid/production/jobs/`.
-- Architecture: [CLUSTER_ABSTRACTION.md](CLUSTER_ABSTRACTION.md).
+- Architecture: [cluster-abstraction.md](cluster-abstraction.md).

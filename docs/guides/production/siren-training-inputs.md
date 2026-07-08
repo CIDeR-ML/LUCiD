@@ -24,7 +24,7 @@ Stage outputs:
 | Stage | Tool | Output |
 |---|---|---|
 | 0. Fit `s_max(E)` | `lucid/production/jobs/smax/` + `PhotonSim/tools/smax/analyze_smax.py` | `PhotonSim/data/<material>/<particle>/smax_fit.csv` (one-row CSV with `A, B, fit_min_mev, fit_max_mev, quantile, quantile_multiplier, generated_at_utc`) |
-| 1. Per-cell sim | `lucid/production/jobs/siren_inputs/` (SLURM or HTCondor — see `CLUSTER_ABSTRACTION.md`) | `<OUT>/<material>/<particle>/<E>MeV/photonsim.root` for each cell |
+| 1. Per-cell sim | `lucid/production/jobs/siren_inputs/` (SLURM or HTCondor — see `cluster-abstraction.md`) | `<OUT>/<material>/<particle>/<E>MeV/photonsim.root` for each cell |
 | 2. Aggregate | `lucid-build-photon-table` / `lucid-build-dedx-table` | `photon_lookup_table.h5` / `dedx_lookup_table.h5` |
 | 3. Train | `lucid-train-siren` | SIREN weights |
 
@@ -136,9 +136,9 @@ right interpolation grid. Full training/validation walkthrough:
 
 ## Related
 
-- [`docs/QUICKSTART_S3DF.md`](QUICKSTART_S3DF.md) — running PhotonSim under SLURM at SLAC.
-- [`docs/QUICKSTART_LXPLUS.md`](QUICKSTART_LXPLUS.md) — running PhotonSim under HTCondor at CERN.
-- [`docs/CLUSTER_ABSTRACTION.md`](CLUSTER_ABSTRACTION.md) — how the same code drives both.
+- [`deploy-s3df.md`](deploy-s3df.md) — running PhotonSim under SLURM at SLAC.
+- [`deploy-lxplus.md`](deploy-lxplus.md) — running PhotonSim under HTCondor at CERN.
+- [`cluster-abstraction.md`](cluster-abstraction.md) — how the same code drives both.
 - [`lucid/production/jobs/smax/README.md`](https://github.com/CIDeR-ML/LUCiD/blob/main/lucid/production/jobs/smax/README.md) — Stage 0.
 - [`lucid/production/jobs/siren_inputs/README.md`](https://github.com/CIDeR-ML/LUCiD/blob/main/lucid/production/jobs/siren_inputs/README.md) — Stage 1.
 - [`lucid/siren/README.md`](https://github.com/CIDeR-ML/LUCiD/blob/main/lucid/siren/README.md) — Stage 3.

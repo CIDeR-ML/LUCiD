@@ -1,6 +1,22 @@
-# WbLS scintillation
+# Materials
 
-## Light yield
+Every detector pairs its geometry with a **material** — a JSON in `config/materials/`
+carrying the medium's optical reference curves and, where relevant, its scintillation
+parameters. Three ship with LUCiD:
+
+| Material | File | Notes |
+|---|---|---|
+| Water | `config/materials/water.json` | Rayleigh 1/λ⁴ scattering; absorption = SK-calibration power law (blue) spliced onto Pope & Fry (1997) data (red) |
+| WbLS | `config/materials/wbls.json` | water-based liquid scintillator: inherits water's bulk optics (negligible difference at ~10% mass fraction) and adds the scintillation block below |
+| Ice | `config/materials/ice.json` | placeholder using the water functional form with ice-tuned parameters; suitable for geometry/workflow studies, not ice-optics precision work |
+
+How the curves are consumed per photon — and which parts are fittable — is described in
+[wavelength physics](wavelength.md). The rest of this page collects the measured
+scintillation parametrizations behind the WbLS material.
+
+## WbLS scintillation
+
+### Light yield
 
 Chou parametrization (Birks + bimolecular term):
 
@@ -29,7 +45,7 @@ S–kB correlation in the Chou fit is 87.4% (full covariance in Callaghan 2023 T
 
 Source: Callaghan 2023 (arXiv:2210.03876), Table 6. Sample oxygenated (atmospheric).
 
-## Emission timing
+### Emission timing
 
 Two-decay biexponential with shared rise time:
 

@@ -24,7 +24,7 @@ sim = setup_event_simulator('config/SK_like_geom_config.json', 250_000, K=6,
 # a 1 GeV muon from the centre, along +x
 track = ParticleParams.from_cartesian(energy=1000., position=[0,0,0], direction=[1,0,0], t0=0.)
 charge, time = (np.asarray(x) for x in sim(track, jax.random.PRNGKey(0)))
-print((charge > 0).sum(), 'PMTs lit,', charge.sum(), 'pe')
+print((charge > 0).sum(), 'PMTs lit,', charge.sum(), 'pe')   # pe = photoelectrons, LUCiD's charge unit
 
 create_detector_display('config/SK_like_geom_config.json')(charge, time)   # 2D unrolled ring
 ```
@@ -44,6 +44,20 @@ The narrated notebooks in `tutorials/` walk the main workflows:
 | `event_displays` | 2D / animation / 3D across geometries & materials |
 
 Short copy-paste scripts live in `examples/` (`hello_simulate`, `hello_reconstruct`,
-`hello_calibrate`, `seed_reconstruct`).
+`hello_calibrate`, `seed_reconstruct`, and `hello_telescope` for an IceCube-style
+string detector). Browse the [bundled detectors](detectors.md) to see every geometry
+these can run against.
 
 Then read the [concepts](../concepts/photon-pipeline.md) to understand how the forward model works.
+
+## If something goes wrong
+
+- **`FileNotFoundError` under `data/`** — the SIREN weights or example events aren't
+  downloaded yet; run `./scripts/download_data.sh` from the repo root.
+- **Zero PMTs lit** — usually a geometry/units problem (position outside the tank,
+  direction pointing at the wall from close range); try the defaults above first.
+- **JAX device warnings or slow first call** — the first invocation JIT-compiles
+  (tens of seconds on CPU is normal); subsequent calls are fast. Set
+  `JAX_PLATFORM_NAME=cpu` to silence GPU probing on machines without one.
+- **Different numbers than a colleague** — results depend on the PRNG key and photon
+  count; fix both (`PRNGKey(0)`, same `n_photons`) for byte-comparable output.

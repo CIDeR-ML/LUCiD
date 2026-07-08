@@ -37,7 +37,7 @@ Usage:
 
 GENIE configs need ``GENIE_XSEC_FILE`` set in the environment to a
 spline matching the tune declared in the config; see
-``LUCiD/docs/QUICKSTART_DOCKER.md``. When the variable is unset the
+``LUCiD/docs/guides/production/docker.md``. When the variable is unset the
 GENIE configs are silently skipped (with a note in the report).
 """
 

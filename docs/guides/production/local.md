@@ -1,7 +1,7 @@
 # Local Quickstart — Produce events on any machine
 
 > **On macOS, or prefer a container?** See
-> [QUICKSTART_DOCKER.md](QUICKSTART_DOCKER.md) — one `docker build`,
+> [docker.md](docker.md) — one `docker build`,
 > then one `docker run`, with GEANT4 + ROOT + GENIE already set up.
 
 Three steps to a working dataset with no S3DF, no SLURM, no
@@ -65,7 +65,7 @@ step/wc_step_0000.h5
 labl/wc_labl_0000.h5
 ```
 
-See [LUCID_DATASET.md](LUCID_DATASET.md) for the schema.
+See [../../reference/dataset-schema.md](../../reference/dataset-schema.md) for the schema.
 
 ## 4. Inspect in a browser (optional)
 
@@ -91,7 +91,7 @@ done
 ```
 
 For SLURM or HPC submission on S3DF, see
-[QUICKSTART_S3DF.md](QUICKSTART_S3DF.md).
+[deploy-s3df.md](deploy-s3df.md).
 
 ## Neutrino-flux configs (GENIE chain)
 
@@ -125,7 +125,7 @@ and `G21_11a_00_000` tunes pre-baked. All in-repo GENIE configs
 `G18_10a_02_11b` so they work in-container out of the box. For other
 tunes, point `GENIE_XSEC_FILE` at your own spline.
 
-See [QUICKSTART_DOCKER.md](QUICKSTART_DOCKER.md) for more Docker
+See [docker.md](docker.md) for more Docker
 details (bind-mount dev loop, Rosetta setup, etc.).
 
 ## Troubleshooting

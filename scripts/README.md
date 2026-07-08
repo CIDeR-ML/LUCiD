@@ -11,7 +11,7 @@ Runnable tools beyond the console entry points (`lucid-run-job`, `lucid-optimize
 | `download_data.sh` | Fetch the example SIREN emitter + PhotonSim tables from CERNBox (wires up wbls/ice symlinks) | run once after install |
 | `benchmark_forward.py` | Forward + `value_and_grad` wall-time vs (N photons, K), track & calibration | perf sizing / claims |
 | `generate_example_events.py` | Write simple per-event HDF5 (Q/T + truth) from a PhotonSim ROOT (not the full four-file dataset) | tutorials / tests / quick studies |
-| `geofile_to_npz.py` | Convert a WCSim-style detector geofile (`.txt`) → a PMT-array `.npz` (schema `lucid/geometry/PMT_NPZ_SCHEMA.md`) | add/reproduce a measured detector |
+| `geofile_to_npz.py` | Convert a WCSim-style detector geofile (`.txt`) → a PMT-array `.npz` (schema `docs/reference/pmt-npz-schema.md`) | add/reproduce a measured detector |
 | `visualize_detector.py` | Render any `*_geom_config.json` (3D scatter for all geometries; 2D unrolled for cylinders) | sanity-check a geometry |
 | `inspect_dataset.py` | Text summary of a dataset batch (sensor/hits/step/labl) | inspect produced data |
 | `check_gradients.py` | AD vs finite-difference gradient check (pathwise params); reports the score-estimated params | verify differentiability |

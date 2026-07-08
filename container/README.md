@@ -12,10 +12,10 @@ Dockerfile adds conda GEANT4 11.3 + PhotonSim + LUCiD.
 ## Pull (default path)
 
 - Docker: `docker pull ghcr.io/cider-ml/lucid:latest` — see
-  [../docs/QUICKSTART_DOCKER.md](../docs/QUICKSTART_DOCKER.md).
+  [../docs/guides/production/docker.md](../docs/guides/production/docker.md).
 - Apptainer/S3DF:
   `apptainer pull lucid.sif docker://ghcr.io/cider-ml/lucid:latest` —
-  see [../docs/QUICKSTART_S3DF.md](../docs/QUICKSTART_S3DF.md).
+  see [../docs/guides/production/deploy-s3df.md](../docs/guides/production/deploy-s3df.md).
 
 ## Rebuild (only for Dockerfile edits)
 

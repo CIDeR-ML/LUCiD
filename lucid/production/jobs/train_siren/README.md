@@ -1,7 +1,7 @@
 # SIREN training scans (Stage 3)
 
 Cluster fan-out (SLURM or HTCondor — see
-[`../../../../docs/CLUSTER_ABSTRACTION.md`](../../../../docs/CLUSTER_ABSTRACTION.md))
+[`../../../../docs/guides/production/cluster-abstraction.md`](../../../../docs/guides/production/cluster-abstraction.md))
 for `lucid-train-siren` hyperparameter sweeps. Each scan config lists a
 baseline + a list of explicit per-run overrides; the driver materializes
 one output sub-folder + submit description per run under

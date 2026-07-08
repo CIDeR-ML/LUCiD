@@ -7,9 +7,9 @@ cross-section splines for the `AR23_20i_00_000`, `G18_10a_02_11b`, and
 `G21_11a_00_000` tunes ship with the underlying NUISANCE base, so runs
 work offline.
 
-For S3DF/SLURM see [QUICKSTART_S3DF.md](QUICKSTART_S3DF.md); for a
+For S3DF/SLURM see [deploy-s3df.md](deploy-s3df.md); for a
 host-native install (no container) see
-[QUICKSTART_LOCAL.md](QUICKSTART_LOCAL.md).
+[local.md](local.md).
 
 ## Prerequisites
 
@@ -106,7 +106,7 @@ land in <1 min.
 ## 4. Inspect the output
 
 The HDF5 files are LUCiD-format (see
-[LUCID_DATASET.md](LUCID_DATASET.md)). To browse on the host:
+[../../reference/dataset-schema.md](../../reference/dataset-schema.md)). To browse on the host:
 
 ```bash
 python3 -c "import h5py; f=h5py.File('/tmp/lucid-out/labl/wc_labl_0000.h5'); \

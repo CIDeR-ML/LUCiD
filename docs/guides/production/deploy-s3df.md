@@ -1,12 +1,12 @@
 # S3DF Quickstart — Production on SLURM
 
 Concise runbook for the S3DF (SLAC) deployment. For a local-machine
-workflow with no cluster, see [QUICKSTART_LOCAL.md](QUICKSTART_LOCAL.md);
-for Docker on macOS/Linux, see [QUICKSTART_DOCKER.md](QUICKSTART_DOCKER.md);
-for HTCondor on LXPLUS, see [QUICKSTART_LXPLUS.md](QUICKSTART_LXPLUS.md).
+workflow with no cluster, see [local.md](local.md);
+for Docker on macOS/Linux, see [docker.md](docker.md);
+for HTCondor on LXPLUS, see [deploy-lxplus.md](deploy-lxplus.md).
 The single code path that drives both batch deployments lives at
 `LUCiD/lucid/production/cluster_common/` — see
-[CLUSTER_ABSTRACTION.md](CLUSTER_ABSTRACTION.md).
+[cluster-abstraction.md](cluster-abstraction.md).
 
 ## One-time setup
 
@@ -237,4 +237,4 @@ needed.
 - Configs: `LUCiD/lucid/production/configs/{GeV,SN,Solar,Test}/NN_name.json`
 - Runner: `LUCiD/lucid/production/run_job.py` (entry: `lucid-run-job`)
 - Production wrappers: `LUCiD/lucid/production/jobs/`
-- schema spec: [LUCID_DATASET.md](LUCID_DATASET.md)
+- schema spec: [../../reference/dataset-schema.md](../../reference/dataset-schema.md)

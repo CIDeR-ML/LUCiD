@@ -4,7 +4,13 @@ How LUCiD calibrates detector optics — per-PMT quantum efficiency `k` plus the
 parameters (absorption `L_abs`, Rayleigh `L_R`, Mie `L_M`, wall/sensor reflectivity, QE
 spectrum, `n_real`) — by gradient descent through the differentiable forward. See also:
 `lucid.fitting` (`build_calibration_problem` / `fit` / `crb`), `examples/hello_calibrate.py`
-(runnable end-to-end), and [wavelength physics](concepts/wavelength.md).
+(runnable end-to-end), and [wavelength physics](../concepts/wavelength.md).
+
+!!! note "Runnable entry points"
+    `examples/hello_calibrate.py` and the `calibration_optimization` tutorial fit **scalar**
+    optics (`wavelength_mode=False`). The spectral λ-deviation machinery described below is
+    code-complete (`lucid.wavelength.optical_model`), but a wavelength-mode calibration
+    notebook does not exist yet.
 
 ## What is measured
 
@@ -50,7 +56,7 @@ is directly optimizable. Two tiers:
 ## Wavelength consistency (shared with reconstruction)
 
 Calibration runs `wavelength_mode=True` and applies `qe_fn(λ)` per photon. The same
-band-consistency principle from [reconstruction](RECONSTRUCTION.md) applies: a broadband
+band-consistency principle from [reconstruction](reconstruction.md) applies: a broadband
 Cherenkov `qe(λ)` fit must sample the **bare 1/λ² spectrum over the physical emission band**
 and apply differentiable `qe(λ)` — an importance sampler that bakes the assumed QE into the λ
 distribution cannot be used to *fit* QE. Broadband sources measure only the spectrum integral

@@ -16,7 +16,9 @@ LUCiD runs in one of two regimes, selected by `wavelength_mode` on
 `lucid.wavelength.medium.make_medium(material, wavelength_grid)` builds the reference curves
 from `config/materials/<material>.json`:
 
-- **Rayleigh scattering** — a 1/λ⁴ law anchored to the material's measured scattering length.
+- **Rayleigh scattering** — a 1/λ⁴ law anchored to the material's measured scattering length
+  (Mie scattering adds a second length and an asymmetry parameter `g` controlling how
+  forward-peaked it is).
 - **Absorption** — for water: the SK-calibration power law in the blue spliced onto the
   Pope & Fry (1997) measured data in the red.
 - **Refractive index / group velocity** — dispersion for Cherenkov angle and photon timing.
@@ -57,6 +59,6 @@ calibration fits *departures* from known physics rather than refitting the physi
   projected from the referenced λ-curve at `scalar_ref_wavelength` (400 nm by default), so
   the two regimes agree at the reference wavelength by construction.
 
-See [Parameters (DetectorParams)](../DETECTOR_PARAMS_VS_ARGS.md) for how the fittable leaves
-are organized, and [Calibration](../CALIBRATION.md) for how the deviation curves are
+See [Parameters (DetectorParams)](detector-params-vs-args.md) for how the fittable leaves
+are organized, and [Calibration](../guides/calibration.md) for how the deviation curves are
 constrained by laser + isotropic source data.

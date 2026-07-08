@@ -8,13 +8,13 @@ reconstruction** become gradient-based optimization in a single framework.
 Accompanies the paper *"End-to-end Differentiable Calibration and Reconstruction for Optical
 Particle Detectors"* — [arXiv:2602.24129](https://arxiv.org/abs/2602.24129).
 
-## What is it?
-
-LUCiD is a [JAX](https://github.com/google/jax)-based simulation of optical photon transport in
-particle detectors — water-Cherenkov tanks, scintillator (WbLS), and neutrino telescopes. The
-entire forward model (emission → ray tracing → scatter/reflect/absorb → per-PMT charge & time) is
-JIT-compiled and differentiable, so you can take gradients of detector observables with respect
-to particle properties *and* detector parameters. Units are **meters, nanoseconds, MeV**.
+LUCiD is for physicists and ML researchers who want a differentiable optical detector —
+water-Cherenkov tanks, water-based liquid scintillator (WbLS), or neutrino telescopes — to
+simulate, reconstruct, and calibrate with gradients. The whole forward model (emission → ray
+tracing → scatter/reflect/absorb → per-PMT charge & time) is JIT-compiled JAX; a **SIREN**
+surrogate (a small neural net trained on GEANT4 photon tables) supplies the light emission.
+Units are **meters, nanoseconds, MeV**. Sixteen detector configurations ship in-tree, from
+Super-Kamiokande to IceCube — see the [bundled detectors](getting-started/detectors.md).
 
 ## What can I do with it?
 
@@ -22,10 +22,10 @@ to particle properties *and* detector parameters. Units are **meters, nanosecond
 |------------|-----------|
 | See something work in a minute | [Getting started](getting-started/install.md) → `examples/hello_simulate.py` |
 | Simulate & display an event | Concepts: [the photon pipeline](concepts/photon-pipeline.md); tutorial `00_quickstart` |
-| Reconstruct a track | [Reconstruction](RECONSTRUCTION.md); `examples/hello_reconstruct.py`; `lucid-optimize` |
-| Calibrate optical parameters | [Calibration](CALIBRATION.md); `examples/hello_calibrate.py` |
+| Reconstruct a track | [Reconstruction](guides/reconstruction.md); `examples/hello_reconstruct.py`; `lucid-optimize` |
+| Calibrate optical parameters | [Calibration](guides/calibration.md); `examples/hello_calibrate.py` |
 | Model a specific detector | Concepts: [geometry & configuration](concepts/geometry.md) |
-| Produce a dataset (GEANT4/PhotonSim) | [dataset schema](LUCID_DATASET.md); `lucid-run-job` |
+| Produce a dataset (GEANT4/PhotonSim) | [dataset schema](reference/dataset-schema.md); `lucid-run-job` |
 
 ## The framework at a glance
 
@@ -36,7 +36,7 @@ to particle properties *and* detector parameters. Units are **meters, nanosecond
 - **SIREN emitter** — a physics-informed surrogate replaces GEANT4 for Cherenkov/dE-dx emission
   inside the differentiable loop.
 - **Gradient-based calibration & reconstruction** — a shared Gauss-Newton engine (`lucid.fitting`)
-  with Fisher / Cramér-Rao uncertainties.
+  with Fisher / Cramér–Rao uncertainties.
 
 ## Cite
 
