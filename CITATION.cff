@@ -14,7 +14,6 @@ authors:
     given-names: Patrick
   - family-names: Terao
     given-names: Kazuhiro
-license: Apache-2.0
 repository-code: "https://github.com/CIDeR-ML/LUCiD"
 url: "https://cider-ml.github.io/LUCiD/"
 preferred-citation:
