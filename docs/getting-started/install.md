@@ -38,7 +38,8 @@ materials work out of the box.
 python examples/hello_simulate.py
 ```
 
-You should see a muon simulated in an SK-like tank and its per-PMT Cherenkov ring displayed.
+It prints a line like `"1476 of 10764 PMTs lit, total charge 30887 pe"` and writes the
+Cherenkov-ring display to `hello_simulate.png`.
 If it fails with a `FileNotFoundError` pointing at a SIREN model path under `data/`, run
 `./scripts/download_data.sh` first.
 
