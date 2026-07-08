@@ -25,7 +25,7 @@ is directly optimizable. Two tiers:
    the absorption/QE point at finite photon counts). The spatial smoothing acts as a frequency
    projector: smooth optical fields are low-frequency across the sensor array while per-PMT `k`
    is white, so smoothing isolates the globals. Optimizer: a consistent fixed-dataset
-   Gauss-Newton with an additive ridge and a min-gradient readout.
+   Gauss-Newton with an additive ridge (optional Polyak tail-averaging of the iterates).
 3. **per-PMT `k`: closed-form `k = Q/M`** — the ratio of observed to predicted charge per
    sensor under an isotropic source.
 4. **One bake alternation.** Without baking the estimated `k̂` back into the forward, white
@@ -54,8 +54,8 @@ band-consistency principle from [reconstruction](RECONSTRUCTION.md) applies: a b
 Cherenkov `qe(λ)` fit must sample the **bare 1/λ² spectrum over the physical emission band**
 and apply differentiable `qe(λ)` — an importance sampler that bakes the assumed QE into the λ
 distribution cannot be used to *fit* QE. Broadband sources measure only the spectrum integral
-(amplitudes + `k`); **monochromatic lasers anchor `qe(λᵢ)`**. The QE knot range is
-[294, 648] nm; the medium grid is [300, 700] nm.
+(amplitudes + `k`); **monochromatic lasers anchor `qe(λᵢ)`**. The bundled SK QE curve
+spans ≈294–648 nm; the medium grid is [300, 700] nm.
 
 ## Uncertainty: quote the CRB, not the sim toy-MC
 
