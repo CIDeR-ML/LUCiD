@@ -45,7 +45,15 @@ def to_npz(path):
     pmt_type = r[:, 2].astype(np.int32)
     positions_mm = r[:, 3:6] * 10.0                          # cm -> mm
     directions = r[:, 6:9].astype(np.float64)
-    radius_m, height_m = radius_cm / 100.0, height_cm / 100.0
+    # radius/height from the PMT-position envelope (matches the shipped .npz files
+    # exactly); the header values are truncated to 2 decimals and can undershoot
+    # the true PMT extent.
+    radius_m = float(np.hypot(positions_mm[:, 0], positions_mm[:, 1]).max()) / 1000.0
+    height_m = 2.0 * float(np.abs(positions_mm[:, 2]).max()) / 1000.0
+    hdr_r, hdr_h = radius_cm / 100.0, height_cm / 100.0
+    if abs(hdr_r - radius_m) > 0.01 or abs(hdr_h - height_m) > 0.01:
+        print(f'  note: header radius/height ({hdr_r:.3f}/{hdr_h:.3f} m) differ from the '
+              f'PMT envelope ({radius_m:.5f}/{height_m:.5f} m); using the envelope.')
     # surface: nearest face — cap if closer to a z-cap plane than to the barrel wall.
     x, y, z = positions_mm[:, 0], positions_mm[:, 1], positions_mm[:, 2]
     r_xy = np.hypot(x, y)

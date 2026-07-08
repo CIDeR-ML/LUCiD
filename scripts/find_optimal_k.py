@@ -1,30 +1,24 @@
 #!/usr/bin/env python3
-"""Find the optimal K (max scattering iterations) for a given detector configuration.
+"""find_optimal_k — how many scatter iterations (K) does a detector need?
 
-Runs the simulation at a large K_max and analyzes per-iteration charge deposition
-to determine the minimum K needed to capture a target fraction of total charge
-for a specified percentile of rays.
+Sweeps K and reports where per-sensor charge converges (target fraction of the
+K_max result at a chosen percentile).
 
-Works in both monochromatic and wavelength-dependent modes. When wavelength
-dependence is active, scatter_length and absorption_length vary per photon,
-potentially requiring higher K at wavelengths with longer mean free paths.
+Run:
+    # default: full wavelength-dependent physics (medium + QE curve honored)
+    python scripts/find_optimal_k.py --detector SK_like
+    python scripts/find_optimal_k.py --detector WCTE --k-max 15 --target 0.995 --percentile 99
 
-Usage:
-    # Monochromatic (default physics)
-    python scripts/find_optimal_k.py --config config/SK_like_geom_config.json
+    # per-wavelength monochromatic scan instead of the default
+    python scripts/find_optimal_k.py --detector SK_like --sweep-wavelengths \
+        --wavelength-list 350,400,450,500
 
-    # With wavelength dependence
-    python scripts/find_optimal_k.py --config config/SK_like_geom_config.json --wavelength
+    # other sources (default: track)
+    python scripts/find_optimal_k.py --detector SK_like --source laser
+    python scripts/find_optimal_k.py --detector SK_like --source isotropic
+    python scripts/find_optimal_k.py --detector SK_like --source data --root-file <file.root>
 
-    # Custom parameters
-    python scripts/find_optimal_k.py --config config/WCTE_geom_config.json \
-        --scatter-length 100 --absorption-length 200 --k-max 15 \
-        --target 0.995 --percentile 99
-
-    # Different source types
-    python scripts/find_optimal_k.py --config config/SK_like_geom_config.json --source laser
-    python scripts/find_optimal_k.py --config config/SK_like_geom_config.json --source isotropic
-    python scripts/find_optimal_k.py --config config/SK_like_geom_config.json --source track
+`--detector NAME` resolves config/<NAME>_geom_config.json + config/<NAME>_physics_config.json.
 """
 import argparse
 import sys
