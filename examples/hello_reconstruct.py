@@ -1,15 +1,13 @@
 """hello_reconstruct — full track reconstruction via lucid.fitting.recon.
 
-Mirrors LUCiD_recon's latest case (gn_fisher_recon.py), now as library
-code: a 9-parameter [E, x, y, z, dir, t0] Fisher-Gauss-Newton fit on a Poisson-charge +
-first-arrival ORDER-STATISTIC-time loss, SCALE9-preconditioned, FD Jacobians (the DiCE
-custom_vjp blocks jacfwd, and the autodiff track-Hessian is indefinite, so a PSD Fisher
-metric is built and stepped against). AMP_DETACH, min-grad readout — all in `lucid.fitting`.
+The production recon recipe as library code: a 9-parameter [E, x, y, z, dir, t0]
+Fisher-Gauss-Newton fit on a Poisson-charge + first-arrival order-statistic time loss,
+SCALE9-preconditioned, with a PSD Fisher metric — all in `lucid.fitting`.
 
 Self-contained-demo simplifications: SK_like geometry (not the measured SK .npz) and
-SIREN-SAMPLED truth (no GEANT4 ROOT) — exercises the optimizer + loss + its self-consistent
-floor, not the GEANT4-vs-SIREN cone mismatch that sets the ~13 cm physics floor (§6). TTS is
-now baked via dp.response.tts (post de-env), not an env var. Fast on GPU (~2-3 min).
+SIREN-SAMPLED truth (no GEANT4 ROOT) — this exercises the optimizer + loss machinery on a
+self-consistent problem; model mismatch against real GEANT4 data adds a floor this demo
+doesn't probe. TTS is baked via dp.response.tts. Fast on GPU (~2-3 min).
 Run: python examples/hello_reconstruct.py
 """
 import jax, jax.numpy as jnp, numpy as np
@@ -28,8 +26,8 @@ pred = setup_event_simulator(GEOM, 250_000, temperature=0.1, K=K, hit_mode='per_
                              physics_config=PHYS, default_detector_params=True, particle='muon',
                              wavelength_mode=True, pos_grad_threshold=K, n_grad_iters=K, **GRID)
 # self-consistent SIREN-sampled truth (HARD) with 2.5 ns per-photon TTS baked via dp.response.tts.
-# NOTE: the SIREN emitter applies a fixed-proposal importance reweight that is exact only at
-# E_CAL=1050 MeV; this self-consistent demo is honest there. The real recon uses GEANT4 data.
+# NOTE: this self-consistent demo generates truth at the energy where the emitter's
+# importance reweight is exact. The real recon uses GEANT4 data.
 dp_data = load_detector_params(PHYS, num_sensors=ND)
 dp_data = dp_data._replace(response=dp_data.response._replace(tts=jnp.asarray(2.5)))
 data_sim = setup_event_simulator(GEOM, 250_000, temperature=None, K=K, use_expected_value=False,
