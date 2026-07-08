@@ -75,41 +75,6 @@ def scalar_reflection(direction, normal, hit_sensor, refl_params, lam, key):
 
 
 # ---------------------------------------------------------------------------
-# Scalar-mix model — angle/λ-independent MAGNITUDE (wall/sensor rates) but a
-# specular/diffuse DIRECTION mixture (fractions fw, fs). Magnitude pathwise; the
-# spec/diff direction is a DISCRETE branch carried by a DiCE score. No per-photon
-# wavelength needed, so it drops into the scalar (wavelength_mode=False) calibration.
-# ---------------------------------------------------------------------------
-
-class ScalarMixReflection(NamedTuple):
-    """``refl_params`` for the scalar specular/diffuse-mixture reflection model."""
-    wall_rate: jnp.ndarray
-    sensor_rate: jnp.ndarray
-    wall_fspec: jnp.ndarray
-    sensor_fspec: jnp.ndarray
-
-
-def scalar_mix_reflection(direction, normal, hit_sensor, refl_params, lam, key):
-    """Angle/λ-independent reflection MAGNITUDE with a specular/diffuse DIRECTION mixture.
-
-    Reflection probability is the scalar wall/sensor rate (pathwise). Each reflected photon
-    goes specular with probability ``fspec`` and diffuse (cosine-hemisphere) otherwise — a
-    DISCRETE branch carried by the DiCE score ``lr`` (the score detaches ``f_eff``). ``lam`` unused.
-    """
-    refl_prob = jnp.where(hit_sensor, refl_params.sensor_rate, refl_params.wall_rate)
-    normal_refl = sg(normal)
-    kd, ks = jax.random.split(key)
-    f_eff = jnp.clip(jnp.where(hit_sensor, refl_params.sensor_fspec, refl_params.wall_fspec),
-                     1e-3, 1.0 - 1e-3)
-    is_spec = jax.random.uniform(ks) < sg(f_eff)
-    specular_dir = compute_reflection_direction(direction, normal_refl)
-    diffuse_dir = sample_cosine_hemisphere(-normal_refl, kd)
-    refl_dir = jnp.where(is_spec, specular_dir, diffuse_dir)
-    lr_score = jnp.where(is_spec, jnp.log(f_eff), jnp.log1p(-f_eff))
-    return refl_prob, refl_dir, lr_score
-
-
-# ---------------------------------------------------------------------------
 # Angular model — Schlick blacksheet (wall) + multilayer-Fresnel cathode (sensor).
 # Ported from the validated mie_hunter/refl_engine2.py. The reflectivity MAGNITUDE
 # (R0w, pw, nr, nk) is PATHWISE-exact because cth_inc uses sg(normal); the spec/diff
@@ -217,13 +182,6 @@ def _build_scalar_params(detector_params):
     )
 
 
-def _build_scalar_mix_params(detector_params):
-    r = detector_params.reflection
-    return ScalarMixReflection(
-        wall_rate=r.wall_reflection_rate, sensor_rate=r.sensor_reflection_rate,
-        wall_fspec=r.wall_fspec, sensor_fspec=r.sensor_fspec)
-
-
 def _build_angular_params(detector_params):
     r = detector_params.reflection
     return AngularReflection(R0w=r.wall_R0, pw=r.wall_p, fw=r.wall_fspec,
@@ -232,7 +190,6 @@ def _build_angular_params(detector_params):
 
 REFLECTION_MODELS = {
     'scalar': (scalar_reflection, _build_scalar_params),
-    'scalar_mix': (scalar_mix_reflection, _build_scalar_mix_params),
     'angular': (angular_reflection, _build_angular_params),
 }
 
