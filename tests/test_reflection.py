@@ -5,6 +5,7 @@ import numpy.testing as npt
 
 from lucid.simulation.reflection import (
     ScalarReflection, scalar_reflection,
+    ScalarMixReflection, scalar_mix_reflection,
     AngularReflection, angular_reflection,
     pmt_reflectance, get_reflection_model,
 )
@@ -92,3 +93,76 @@ class TestRegistry:
         import pytest
         with pytest.raises(ValueError, match="Unknown reflection model"):
             get_reflection_model('quantum')
+
+
+class TestScalarMixModel:
+    def _params(self, fw=0.55, fs=0.90):
+        return ScalarMixReflection(wall_rate=jnp.asarray(0.05), sensor_rate=jnp.asarray(0.25),
+                                   wall_fspec=jnp.asarray(fw), sensor_fspec=jnp.asarray(fs))
+
+    def test_registered(self):
+        fn, builder = get_reflection_model('scalar_mix')
+        assert fn is scalar_mix_reflection
+        dp = create_default_detector_params(10)
+        rp = builder(dp)
+        assert isinstance(rp, ScalarMixReflection)
+
+    def test_magnitude_matches_scalar_rates(self):
+        """Reflection PROBABILITY is the plain wall/sensor rate (pathwise, fspec-independent)."""
+        rp = self._params()
+        pw, _, _ = scalar_mix_reflection(_DIR, _NORMAL, False, rp, jnp.asarray(0.0), _KEY)
+        ps, _, _ = scalar_mix_reflection(_DIR, _NORMAL, True, rp, jnp.asarray(0.0), _KEY)
+        npt.assert_allclose(pw, 0.05)
+        npt.assert_allclose(ps, 0.25)
+
+    def test_specular_fraction_monte_carlo(self):
+        """The sampled specular fraction matches fspec (the discrete DiCE branch)."""
+        rp = self._params(fw=0.3)
+        from lucid.simulation.optics import compute_reflection_direction
+        spec_dir = compute_reflection_direction(_DIR, _NORMAL)
+        n_spec = 0
+        n = 2000
+        for i in range(n):
+            _, d, _ = scalar_mix_reflection(_DIR, _NORMAL, False, rp, jnp.asarray(0.0),
+                                            jax.random.PRNGKey(i))
+            if bool(jnp.allclose(d, spec_dir, atol=1e-6)):
+                n_spec += 1
+        frac = n_spec / n
+        assert abs(frac - 0.3) < 0.03, frac
+
+    def test_dice_score_is_branch_logprob(self):
+        """lr_score == log f on the specular branch, log(1-f) on the diffuse branch, and its
+        gradient wrt fspec matches the analytic score derivative."""
+        f = 0.3
+        rp = self._params(fw=f)
+
+        def lr_of_f(fval, key):
+            rpf = self._params(fw=fval)
+            _, _, lr = scalar_mix_reflection(_DIR, _NORMAL, False, rpf, jnp.asarray(0.0), key)
+            return lr
+
+        from lucid.simulation.optics import compute_reflection_direction
+        spec_dir = compute_reflection_direction(_DIR, _NORMAL)
+        seen = set()
+        for i in range(200):
+            key = jax.random.PRNGKey(i)
+            _, d, lr = scalar_mix_reflection(_DIR, _NORMAL, False, rp, jnp.asarray(0.0), key)
+            is_spec = bool(jnp.allclose(d, spec_dir, atol=1e-6))
+            expected = jnp.log(f) if is_spec else jnp.log1p(-f)
+            npt.assert_allclose(lr, expected, rtol=1e-5)
+            g = jax.grad(lr_of_f)(jnp.asarray(f), key)
+            expected_g = 1.0 / f if is_spec else -1.0 / (1.0 - f)
+            npt.assert_allclose(g, expected_g, rtol=1e-4)
+            seen.add(is_spec)
+            if len(seen) == 2 and i > 50:
+                break
+        assert seen == {True, False}
+
+    def test_default_fspec_is_fully_diffuse(self):
+        """Configs that never set the fspec fields get 0.0 -> clipped to ~fully diffuse.
+        Documents the behavior change vs 'scalar' (always-specular sensors)."""
+        dp = create_default_detector_params(10)
+        _, builder = get_reflection_model('scalar_mix')
+        rp = builder(dp)
+        npt.assert_allclose(rp.wall_fspec, 0.0)
+        npt.assert_allclose(rp.sensor_fspec, 0.0)
