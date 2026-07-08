@@ -18,7 +18,8 @@ def photon_iteration_sample(
         position, direction, time, surface_distance,
         normal, scatter_length, mie_scatter_length, g, refl_params,
         absorption_length,
-        hit_sensor, lam, rng_key, speed_of_light):
+        hit_sensor, lam, rng_key, speed_of_light,
+        reflection_fn=scalar_reflection):
     """
     Sampling version of photon iteration that makes binary decisions.
 
@@ -71,8 +72,14 @@ def photon_iteration_sample(
 
     k1, k2, k3, k4, k5, k6 = jax.random.split(rng_key, 6)
 
-    # MC path keeps inline scalar reflection (unpacks the packed refl_params); ``lam`` unused.
-    reflection_rate = jnp.where(hit_sensor, refl_params.sensor_rate, refl_params.wall_rate)
+    # Reflection is delegated to the SAME pluggable model the differentiable path uses, so the
+    # sampled (data/truth) forward and the expected-value forward agree on reflection physics
+    # (magnitude AND specular/diffuse direction) for every model — not just 'scalar'. The DiCE
+    # score (3rd return) is discarded: sampling is a real MC draw, not a soft expectation.
+    # k4 (the legacy inline-diffuse key) is passed in, so the default 'scalar' model reproduces
+    # the previous hard-coded walls-diffuse/sensors-specular behavior BIT-FOR-BIT.
+    reflection_rate, reflection_dir, _lr_unused = reflection_fn(
+        direction, normal, hit_sensor, refl_params, lam, k4)
     # Combine Rayleigh + Mie by RATES (NOT min): total scatter coeff = 1/L_R + 1/L_M.
     mie_safe = jnp.maximum(mie_scatter_length, 1e-6)
     inv_total = 1.0 / scatter_length + 1.0 / mie_safe
@@ -103,9 +110,6 @@ def photon_iteration_sample(
         position + surface_distance * normalize(direction) + epsilon * normalize(inward_normal),
     )
 
-    specular_dir = compute_reflection_direction(direction, normal)
-    diffuse_dir = sample_cosine_hemisphere(inward_normal, k4)
-    reflection_dir = jnp.where(hit_sensor, specular_dir, diffuse_dir)
     rayleigh_dir = compute_scatter_direction(direction, k3)
     mie_dir = compute_mie_scatter_direction(direction, k3, g)
     is_mie = jax.random.uniform(k5) < p_mie          # choose Mie vs Rayleigh per scatter (~5% Mie at physical L)
