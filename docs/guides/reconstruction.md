@@ -4,10 +4,10 @@ How LUCiD reconstructs a track `(energy, vertex, direction, t0)` from per-PMT ch
 hit times. Runnable entry points: `examples/hello_reconstruct.py`, `examples/seed_reconstruct.py`,
 the `track_optimization` tutorial, and the `lucid-optimize` CLI.
 
-Because the forward model is differentiable, the fit optimizes against **exact autodiff
-derivatives** of the loss — not finite differences and not a library of precomputed templates —
-so all nine parameters move together under Gauss-Newton curvature, with no per-parameter scan
-grid and no interpolation between templates.
+Because the forward model is differentiable, the refinement step optimizes against **exact
+autodiff derivatives** of the loss — not finite differences, and not a library of precomputed
+templates — so all nine parameters move together under Gauss-Newton curvature (the coarse grid
+below is only a *seed* for this gradient fit, not the fit itself).
 
 ## Minimal fit
 
