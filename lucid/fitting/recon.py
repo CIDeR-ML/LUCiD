@@ -6,8 +6,9 @@ time) observables by Gauss-Newton on a PSD Fisher metric
 
     F = Jμᵀ diag(1/μ) Jμ   (charge Poisson Fisher)  +  Jlᵀ Jl   (time NLL score-covariance)
 
-built by FINITE DIFFERENCES (the DiCE ``custom_vjp`` blocks ``jacfwd``, and the autodiff
-track-Hessian is indefinite) and solved in **SCALE9-preconditioned** coordinates — mandatory:
+built by FORWARD-MODE AD (``jacfwd`` of ``perpmt`` — the DiCE ``custom_vjp`` that used to block it
+is gone; this is the PSD GN metric, NOT the indefinite raw autodiff Hessian; ``'fd'`` central-FD
+kept as legacy) and solved in **SCALE9-preconditioned** coordinates — mandatory:
 the raw F is position-dominated (F_xx ~ 1e5 vs F_EE ~ 1) so energy freezes without it. The
 gradient ``g`` is reverse-mode autodiff (it DOES flow through the custom_vjp). Charge = Poisson
 NLL (un-normalised — carries E + longitudinal/transverse vertex); time = the windowed
@@ -16,8 +17,18 @@ direction, t0, transverse vertex), AMP_DETACH baked in. Readout = the min‖g‖
 
 ``pred`` is a per-photon track simulator: ``setup_event_simulator(..., hit_mode='per_photon',
 pos_grad_threshold=K, n_grad_iters=K)`` returning ``(log_w, flat_times, flat_indices,
-total_charge)``. Finalized knobs (RECO_PIPELINE §4): LR=8, RIDGE_I=0.3, REFRESH=8, NKEYS=4,
-SIGMA=2.5(=TTS), DELTA=1.0, min‖g‖.
+total_charge)``. Tuned knobs (AD HP sweep, SK muon, NPH-robust 50k↔150k): ``fisher_mode='ad'``,
+``lr=4`` annealed to ``lr_final=1.5``, ``ridge_i=0.1``, ``refresh=8``, ``nkeys=8``, ``niters=150``.
+The annealed lr (big early steps → settle low) converges ~2× faster than the old constant ``lr=2``
+(conv P90 ≤81 vs ~86-150 iters), VALIDATED resolution-neutral + 0-divergence across muon+electron ×
+{500,1000,1500} MeV @150k (150 events, same-event paired vs the old lr2/250 recipe — Δvtx within
+±1.7cm/bootstrap, mean ~0). ``lr=5`` was faster still but diverged ~1.3% of events, so ``lr=4`` is the
+robust pick; keep ``ridge_i=0.1`` (raising it with high lr destabilises). ``niters=150`` covers the
+slowest cell's P90 + the last-40 Polyak window; ``readout='polyak'`` (median ties min‖g‖ BUT a single iterate has a ~2× worse tail — ‖g‖ dips on
+noise fluctuations where the vtx is far; the last-40 average suppresses that). The ~15cm vertex floor
+is SIREN-emitter-bias-limited (readout-probe-proven: min-data-loss readout = Polyak = the loss
+minimum; the ~4cm "oracle" is an unreachable fluctuation toward truth), NOT optimizer-limited.
+SIGMA=2.5(=TTS), DELTA=1.0.
 """
 import numpy as np
 import jax
@@ -128,14 +139,58 @@ class ReconModel:
     emitter, 1.0 for a self-consistent forward).
     """
 
-    def __init__(self, pred, num_detectors, sigma=2.5, delta=1.0, tot_n_scale=1.0):
+    def __init__(self, pred, num_detectors, sigma=2.5, delta=1.0, tot_n_scale=1.0,
+                 time_weight=1.0, energy_from_scale=True, nphot_fn=None,
+                 energy_scale_mode='simtotal'):
         self.pred = pred
         self.ND = int(num_detectors)
         self.sigma = float(sigma); self.delta = float(delta); self.tot_n_scale = float(tot_n_scale)
+        self.time_weight = float(time_weight)                # explicit charge↔time weight on the time NLL.
+        #   1.0 = the from-first-principles joint NLL  P(n)·P(t|n) = charge + conditional first-arrival;
+        #   validated optimal (a balance sweep found tw=1 best; tw>1 trades a hair of P68 for failures).
+        # energy_from_scale (DEFAULT True): route the charge term's ENERGY gradient through the TOTAL
+        #   charge only (the Poisson factorises exactly into Poisson(Q;A)·Multinomial(shape) — energy
+        #   lives in the scale A, geometry in the shape). Removes the profile bias a small emission-
+        #   shape misspecification otherwise puts on energy via the soft (E↔geometry) degeneracy:
+        #   validated 200 fits @1 GeV muon, dE −29.7±2.1 → +2.6±1.5, σ 30→21, geometry unchanged.
+        #   Write μ = scale(E)·μ(sgE,g): forward value unchanged, ∂/∂E flows only through the global
+        #   scale → ∂L/∂E ∝ (Σμ−Q); ∂/∂geometry still carries the per-PMT shape. Charge analog of the
+        #   time term's AMP_DETACH. Set False for the raw per-PMT-Poisson energy estimate.
+        #   energy_scale_mode: 'simtotal' (default, self-contained, uses the sim's own total; costs a
+        #   2nd forward pass per _perpmt -> ~2x the Fisher/Jacobian cost) or 'nphot' (single pass,
+        #   needs nphot_fn = the emitter's ctx.n_photons_fn). NOTE: under energy_from_scale the time
+        #   term is built from the energy-DETACHED shape pass too, so (like AMP_DETACH for its
+        #   amplitude) it carries no energy gradient — energy comes ONLY from the total-charge scale.
+        self.energy_from_scale = bool(energy_from_scale)
+        self.nphot_fn = nphot_fn
+        self.energy_scale_mode = str(energy_scale_mode)       # 'nphot' | 'simtotal'
+        #   'nphot'   : energy scale = analytic nphot(E) ratio (noise-free scalar; needs nphot_fn).
+        #   'simtotal': energy scale = the SIM'S OWN total A=Σμ(E,g) — a 2nd forward pass at LIVE E
+        #               supplies A's exact ∂/∂E (real acceptance E-dependence), no nphot curve. The
+        #               shape pass (detached E) supplies pᵢ=μᵢ/A → μ=A·pᵢ routes ∂/∂E through A only.
+        if self.energy_from_scale and self.energy_scale_mode == 'nphot' and nphot_fn is None:
+            raise ValueError("energy_from_scale + mode 'nphot' requires nphot_fn (the emitter n_photons_fn)")
 
         def _perpmt(t9, oc, ot, key):
-            lw, ft, fi, tot = pred(track_from_vec9(t9), key)
-            mu = jnp.maximum(tot * self.tot_n_scale, 1e-8)       # SCALED charge (carries energy)
+            if self.energy_from_scale:
+                t9s = t9.at[0].set(jax.lax.stop_gradient(t9[0]))   # detach E in the shape
+                lw, ft, fi, tot = pred(track_from_vec9(t9s), key)  # μ(sgE, g): geometry-live shape
+                if self.energy_scale_mode == 'simtotal':
+                    # energy scale from the sim's own total at LIVE E (values identical to the shape
+                    # pass since sgE==E in value; only the E-gradient differs). μ = A_live · pᵢ.
+                    _, _, _, tot_live = pred(track_from_vec9(t9), key)
+                    A_live = jnp.sum(tot_live)                     # Σμ(E,g): carries ∂A/∂E and ∂A/∂g
+                    A_shape = jnp.maximum(jnp.sum(tot), 1e-8)      # Σμ(sgE,g): ∂/∂g only
+                    mu = jnp.maximum(tot * (A_live / A_shape) * self.tot_n_scale, 1e-8)
+                else:                                              # 'nphot': analytic scale ratio
+                    # nphot(E)=A·E^b+c crosses zero near ~137 MeV -> escale sign-flip below it; floor it.
+                    _npn = jnp.maximum(self.nphot_fn(t9[0]), 1e3)
+                    _npd = jnp.maximum(self.nphot_fn(jax.lax.stop_gradient(t9[0])), 1e3)
+                    escale = _npn / _npd                          # =1 in value, carries ∂/∂E
+                    mu = jnp.maximum(tot * escale * self.tot_n_scale, 1e-8)
+            else:
+                lw, ft, fi, tot = pred(track_from_vec9(t9), key)
+                mu = jnp.maximum(tot * self.tot_n_scale, 1e-8)       # SCALED charge (carries energy)
             mu_surv = jnp.maximum(tot, 1e-8)                     # UNSCALED survival denom — must NOT
             tobs = ot - t9[8]                                    # be scaled (else far-capture dies,
             tnll = first_arrival_window_nll(lw, ft, fi, tobs, mu_surv, oc, self.ND,  # RECO_PIPELINE §3.4)
@@ -146,7 +201,7 @@ class ReconModel:
             mu, tnll = _perpmt(t9, oc, ot, key)
             # eps=0: μ is already floored at 1e-8 so log(μ) is safe, and this matches the
             # validated recon RAW Poisson exactly (a nonzero eps shifts the dim-PMT gradient).
-            return counts_loss(oc, mu, eps=0.0, normalize=False) + jnp.sum(tnll)
+            return counts_loss(oc, mu, eps=0.0, normalize=False) + self.time_weight * jnp.sum(tnll)
 
         self._perpmt = jax.jit(_perpmt)
         self._loss = jax.jit(_loss)
@@ -194,9 +249,10 @@ class ReconModel:
         return Jmn.T @ Jmn + Jl.T @ Jl
 
 
-def fit_track(model, obs_counts, obs_times, start, *, nkeys=4, niters=250, lr=8.0,
-              ridge_i=0.3, lam=0.01, refresh=8, seed=0, readout='ming', hist=False,
-              fisher_mode='fd'):
+def fit_track(model, obs_counts, obs_times, start, *, nkeys=8, niters=150, lr=4.0,
+              lr_final=1.5, ridge_i=0.1, lam=0.01, refresh=8, refresh_final=None, refresh_switch=0.5,
+              seed=0, readout='polyak', polyak_w=40, hist=False, fisher_mode='ad',
+              verbose=False, truth=None, trust='auto'):
     """Consistent Fisher-Gauss-Newton track fit, SCALE9-preconditioned (RECO_PIPELINE §4).
 
     Parameters mirror the finalized recipe. The step is solved in SCALE9-scaled coordinates
@@ -204,18 +260,31 @@ def fit_track(model, obs_counts, obs_times, start, *, nkeys=4, niters=250, lr=8.
     Levenberg floor ``ridge_i·median(diag Fs)·I`` (bounds the flat t0↔longitudinal eigenvalue —
     ``ridge_i=0`` is forbidden, runs t0 away). ``lr`` amplifies the consistent GN under-shoot.
 
-    Returns the 9-vector at the min‖g‖ iterate (``readout='ming'``, robust to the LR overshoot)
-    or the final iterate (``'final'``). If ``hist=True``, returns ``(theta, history)`` where
+    Readout (which iterate to return): ``'polyak'`` (DEFAULT) averages the last ``polyak_w`` iterates —
+    robust to the noise-floor wandering (the AD-tuned win); ``'ming'`` the min‖g‖ iterate; ``'final'``
+    the last. If ``hist=True``, returns ``(theta, history)`` where
     ``history`` is a dict with the full per-iteration ``traj`` ((niters+1, 9) θ trajectory) and
     ``gnorm`` ((niters+1,) scaled ‖g‖) — for campaign trajectory analysis.
 
-    ``fisher_mode`` : ``'fd'`` (default, the validated recipe) builds the Fisher metric by central
-    finite differences (``ReconModel.fisher``); ``'ad'`` uses forward-mode autodiff
-    (``ReconModel.fisher_ad``) — ~2.8× faster and the TRUER metric (the FD diagonal is inflated by
-    per-sensor estimation variance ∝ 1/nkeys; AD is low-variance). ⚠️ The AD metric is ~1–137×
-    SMALLER per param than FD, so the FD-tuned ``lr=8`` OVERSHOOTS with ``'ad'`` (vtx blows up);
-    use ``lr≈1`` with ``fisher_mode='ad'`` (validated: lr=1 → 12.2 cm vs FD lr=8 → 11.7 cm).
+    ``fisher_mode`` : ``'ad'`` (DEFAULT) builds the PSD Gauss-Newton/Fisher metric
+    ``Jμᵀdiag(1/μ)Jμ + JlᵀJl`` by forward-mode autodiff (``ReconModel.fisher_ad``, jacfwd of
+    ``perpmt`` — unblocked since the step is custom_vjp-free). It is the TRUER metric (the FD
+    diagonal is inflated by per-sensor estimation variance ∝ 1/nkeys) and ~2.8× faster, and is
+    PSD by construction (NOT the indefinite raw autodiff Hessian). ``'fd'`` keeps the legacy central
+    finite-difference metric (``ReconModel.fisher``). ⚠️ The AD metric is ~1–137× SMALLER per param
+    than FD, so the FD-tuned ``lr=8`` OVERSHOOTS with ``'ad'`` — retune the step/damping
+    (``lr``/``lr_final``/``ridge_i``) for AD (rough validated point: ``lr≈1``). With AD the metric is
+    cheap+low-variance, so ``refresh=1`` (recompute every step) is affordable.
+
+    ``verbose=True`` shows a live ‖g‖ progress bar and prints a result table (pass ``truth`` — a
+    9-vector — to include per-parameter errors).
     """
+    from . import report
+    # trust='auto': apply the step clip ONLY when the model routes energy through the total-charge
+    # scale (which steepens the energy gradient and needs it); the plain per-PMT recipe gets trust=None
+    # → byte-identical to the pre-trust behavior. Pass an explicit float/None to override.
+    if trust == 'auto':
+        trust = 3.0 if getattr(model, 'energy_from_scale', False) else None
     oc = jnp.asarray(obs_counts); ot = jnp.asarray(obs_times)
     keys = [jax.random.PRNGKey(seed + s) for s in range(nkeys)]
     fdh = 0.4 * SCALE9
@@ -227,24 +296,55 @@ def fit_track(model, obs_counts, obs_times, start, *, nkeys=4, niters=250, lr=8.
     fisher_fn = model.fisher_ad if fisher_mode == 'ad' else model.fisher
     th = np.asarray(start, float); best = (1e18, th.copy()); F = None
     g = G(th); traj = [th.copy()]; gnorms = [float(np.linalg.norm(g * S))]
-    for it in range(niters):
-        if F is None or it % refresh == 0:
-            F = fisher_fn(th, oc, ot, keys, fdh)
+    # Refresh-cadence schedule: recompute the Fisher every `refresh` iters early, then every
+    # `refresh_final` (smaller = fresher) after `refresh_switch·niters`. The ref2/ref1 resolution gain
+    # comes from a fresh metric in the LATE precision phase; spending it only there recovers most of the
+    # gain at far less cost than constant low refresh. refresh_final=None → constant `refresh` (unchanged).
+    sw = int(refresh_switch * niters); since = 0
+    pbar = report.progress(range(niters), desc='track fit', total=niters, verbose=verbose)
+    for it in pbar:
+        r_it = refresh if (refresh_final is None or it < sw) else refresh_final
+        if F is None or since >= r_it or (refresh_final is not None and it == sw):
+            F = fisher_fn(th, oc, ot, keys, fdh); since = 0
+        since += 1
         Fs = S[:, None] * F * S[None, :]; gs = S * g                       # SCALE9 preconditioning
         marq = np.diag(lam * np.diag(Fs))                                  # Marquardt: a true diagonal
         rI = ridge_i * np.median(np.clip(np.diag(Fs), 1e-12, None)) * np.eye(9)  # additive Levenberg floor
-        du = -lr * np.linalg.solve(Fs + marq + rI + 1e-9 * np.eye(9), gs)
-        th = th + S * du; g = G(th); gn = float(np.linalg.norm(g * S))
+        # optional LR anneal lr->lr_final (linear): small late steps can't kick the fit OUT of a
+        # converged basin (the late-divergence failure mode), so the trajectory settles at the min.
+        lr_it = lr if lr_final is None else lr + (lr_final - lr) * (it / max(1, niters - 1))
+        du = -lr_it * np.linalg.solve(Fs + marq + rI + 1e-9 * np.eye(9), gs)
+        if trust is not None:                       # trust-region step clip (see trust='auto' above):
+            du = np.clip(du, -trust, trust)         # |Δθ_k| ≤ trust·SCALE9_k. Active by default only
+            #   for energy_from_scale models (else disabled → the plain recipe is byte-identical);
+            #   required once energy_from_scale steepens the energy gradient (else ~1/10 events run away).
+        th_new = th + S * du; g_new = G(th_new)
+        # NaN/Inf-reject trust guard: the big early steps of the annealed lr=4 occasionally overshoot
+        # into a degenerate region (~0.3% of events, seen at 250k) where the next gradient blows up.
+        # Reject any step that produces a non-finite θ/gradient (keep the previous iterate) so a single
+        # bad step can't poison the Polyak readout into NaN. Clean fits never trip this → resolution
+        # unchanged; would-be-divergent fits get a bounded result instead.
+        if np.isfinite(th_new).all() and np.isfinite(g_new).all():
+            th, g = th_new, g_new
+        gn = float(np.linalg.norm(g * S))
         if gn < best[0]: best = (gn, th.copy())
         traj.append(th.copy()); gnorms.append(gn)
-    out = best[1] if readout == 'ming' else th
+        pbar.set_postfix_str(f'‖g‖={gn:.2e}')
+    if readout == 'polyak':        # avg the last polyak_w iterates — robust to the floor wandering
+        out = np.mean(np.array(traj)[-polyak_w:], axis=0)   # (the ‖g‖ never vanishes at the biased
+    elif readout == 'ming':        # minimum, so a single iterate wanders; averaging settles it)
+        out = best[1]
+    else:
+        out = th
+    if verbose:
+        report.emit(report.track_table(out, truth=truth, dir_of=vec9_dir))
     if hist:
         return out, dict(traj=np.array(traj), gnorm=np.array(gnorms), best_iter=int(np.argmin(gnorms)))
     return out
 
 
 def fit_track_multistart(model, obs_counts, obs_times, starts, *, nkeys=4, seed=0,
-                         prefer=0, margin=0.01, **kw):
+                         prefer=0, margin=0.01, verbose=False, truth=None, **kw):
     """Run :func:`fit_track` from several seeds and keep the best by a MARGIN-GATED data loss.
 
     The time-multilateration seed (:func:`seed_vertex_time`) nails the transverse vertex but is
@@ -279,4 +379,11 @@ def fit_track_multistart(model, obs_counts, obs_times, starts, *, nkeys=4, seed=
     cand = [i for i in range(len(losses)) if i != prefer and losses[i] < thr]
     if cand:
         which = min(cand, key=lambda i: losses[i])
+    if verbose:
+        from . import report
+        rows = [[f'seed {i}' + ('  ← kept' if i == which else ''), f'{losses[i]:.4e}']
+                for i in range(len(losses))]
+        report.emit(report.rule('multistart — margin-gated seed selection'))
+        report.emit(report.table(['start', 'converged data loss'], rows))
+        report.emit(report.track_table(per_seed[which][0], truth=truth, dir_of=vec9_dir))
     return per_seed[which][0], dict(which=which, losses=losses, per_seed=per_seed)
