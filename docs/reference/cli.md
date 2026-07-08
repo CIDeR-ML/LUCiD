@@ -26,15 +26,15 @@ lucid-build-dedx-table      # -> dedx_siren_training input .h5
 ```
 Modules: `lucid.siren.training.photonsim_data.build_photon_table` / `build_dedx_table`.
 
-## `lucid-run-job` — produce a v3 dataset
+## `lucid-run-job` — produce a dataset
 Single-job production: generates a GEANT4 macro, runs the external **PhotonSim** binary (path from
-`PHOTONSIM_BIN`), and writes the v3 HDF5 dataset. GENIE-flux configs additionally chain
-`gevgen`→`gntpc`.
+`PHOTONSIM_BIN`), and writes the four-file HDF5 dataset. GENIE-flux configs additionally chain
+`gevgen`→`gntpc`. Configs live in block subdirectories (`GeV/`, `SN/`, `Solar/`, `Test/`).
 ```bash
 export PHOTONSIM_BIN=/path/to/PhotonSim/build/PhotonSim
-lucid-run-job --config lucid/production/configs/dataprod_01_mu.json \
-              --n-events 1000 --job-id 0 --master-seed 42 --output-dir out/
+lucid-run-job --config lucid/production/configs/GeV/01_mu.json \
+              --n-events 1000 --job-id 1 --master-seed 42 --output-dir out/
 ```
-Module: `lucid.production.run_job`. See the [v3 dataset schema](../LUCID_DATASET.md),
+Module: `lucid.production.run_job`. See the [dataset schema](../LUCID_DATASET.md),
 [cluster deployment](../CLUSTER_ABSTRACTION.md), and the local
 [quickstart](../QUICKSTART_LOCAL.md).
