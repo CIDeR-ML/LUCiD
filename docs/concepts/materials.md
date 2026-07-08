@@ -49,6 +49,11 @@ S–kB correlation in the Chou fit is 87.4% (full covariance in Callaghan 2023 T
     two-component fit below is dropped — `wbls.json`'s own comments record this
     simplification.
 
+    Scintillation emission requires **`wavelength_mode=True`** at
+    `setup_event_simulator` — the surrogate draws per-photon wavelengths from the
+    Moyal spectrum, so `setup_event_simulator` raises if a scintillating medium is
+    paired with `wavelength_mode=False`.
+
 Source: Callaghan 2023 (arXiv:2210.03876), Table 6. Sample oxygenated (atmospheric).
 
 ### Emission timing

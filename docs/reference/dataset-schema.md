@@ -275,6 +275,13 @@ Notes:
     decompose the PMT signal in `hits/`.
   - **Tracks** (`per_track`) are full Geant4 tracks — typically ~600 per
     event. The 3D truth in `step/` is organized at this granularity.
+
+  "The reconstructed track" (what a vertex/energy/direction fit targets — a
+  primary and its physically meaningful decay products) lives at the
+  **`per_particle`** granularity, *not* the ~600 `per_track` Geant4 sub-tracks:
+  the ~600 rows are the raw simulation bookkeeping (every delta ray, every
+  scattered secondary), which is why `hits/` decomposes by `particle_idx`, not
+  `track_idx`.
 - Each track maps to exactly one particle via `particle_idx`. The mapping is
   derived at write time by walking the parent chain from each track until it
   reaches a categorized particle. Verified injective on production data
