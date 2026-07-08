@@ -314,7 +314,6 @@ def _run_lucid(
     # by default: keep interactions with >= min_physics_hits real hits (dark
     # kept + labelled), so the dataset isn't biased by a trigger choice.
     if config.get("primary_source") == "supernova":
-        import json
         from lucid.sources.event_generation import generate_events_from_photonsim_supernova
         times_path = output_dir / f"gntp_job_{job_id:06d}.times.json"
         interaction_times_ms = json.loads(times_path.read_text())

@@ -155,14 +155,17 @@ def main() -> int:
         m = re.match(r"^config_(\d+)$", cdir.name)
         if not m:
             continue
+        # Label by the path relative to the detector base (<block>/<split>/config_NN)
+        # so same-numbered configs across blocks/splits stay distinct.
+        cid = str(cdir.relative_to(args.base_dir))
         out = latest_job_out(cdir)
         if out is None:
-            rows.append({"config_id": cdir.name, "status": "NO_OUT"})
+            rows.append({"config_id": cid, "status": "NO_OUT"})
             continue
         st = parse_out(out)
         s_per = derive_seconds_per_event(st)
         rows.append({
-            "config_id":            cdir.name,
+            "config_id":            cid,
             "config_number":        int(m.group(1)),
             "status":               "OK" if s_per is not None else "EMPTY",
             "out_file":             st["out_file"],

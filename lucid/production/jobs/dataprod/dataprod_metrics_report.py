@@ -573,8 +573,14 @@ def main(argv=None) -> int:
         "configs": {},
     }
 
+    base = args.base_dir.resolve()
     for cfg_dir in roots:
-        name = cfg_dir.name
+        # Label by <block>/<split>/config_NN so same-numbered configs across
+        # blocks stay distinct in the block layout (falls back to config_NN flat).
+        try:
+            name = str(cfg_dir.relative_to(base))
+        except ValueError:
+            name = cfg_dir.name
         try:
             n_per = args.n_events_per_job or hint_n_events_per_job(cfg_dir)
             report["configs"][name] = combine_config(cfg_dir, n_per)
