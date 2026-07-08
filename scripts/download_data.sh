@@ -97,8 +97,8 @@ dav_get() {
     local rel="$1" dest="$2" url remote_size local_size
     url="${DAV_BASE}/${rel}"
     mkdir -p "$(dirname "$dest")"
-    remote_size="$(curl -fsSL --retry 3 -I -u "${SHARE_TOKEN}:" "$url" \
-        | tr -d '\r' | awk 'tolower($1)=="content-length:"{print $2}' | tail -1)"
+    remote_size="$(curl -fsSL --retry 3 -I -u "${SHARE_TOKEN}:" "$url" 2>/dev/null \
+        | tr -d '\r' | awk 'tolower($1)=="content-length:"{print $2}' | tail -1 || true)"
     if [[ -f "$dest" && -n "$remote_size" ]]; then
         local_size="$(wc -c < "$dest" | tr -d '[:space:]')"
         if [[ "$local_size" == "$remote_size" ]]; then
@@ -107,8 +107,13 @@ dav_get() {
         fi
     fi
     echo "  [get ] ${rel}"
-    curl -fSL --retry 3 -C - -u "${SHARE_TOKEN}:" "$url" -o "$dest"
+    if ! curl -fSL --retry 3 -C - -u "${SHARE_TOKEN}:" "$url" -o "$dest"; then
+        echo "  [FAIL] ${rel} (continuing; see the verification summary below)"
+        FAILED_GETS=$((FAILED_GETS + 1))
+        return 1
+    fi
 }
+FAILED_GETS=0
 
 # List every file (not dir) under a remote dir; prints paths relative to share root.
 dav_list() {
@@ -165,7 +170,8 @@ fetch_particle() {
     local E fname
     for E in "${ENERGIES[@]}"; do
         fname="${E}MeV_100events.root"
-        dav_get "ROOT_files/water/${cb}/${fname}" "${store}/${fname}"
+        drop_symlink "${store}/${fname}"
+        dav_get "ROOT_files/water/${cb}/${fname}" "${store}/${fname}" || true
     done
 
     # 3. SIREN trained models. Remap CERNBox dir names to the repo's layout:
@@ -182,7 +188,7 @@ fetch_particle() {
             dedx/*)      dest_sub="dedx_siren_training/${sub#dedx/}" ;;
             *)           dest_sub="$sub" ;;
         esac
-        dav_get "$rel" "${store}/${dest_sub}"
+        dav_get "$rel" "${store}/${dest_sub}" || true
     done < "$siren_tmp"
     rm -f "$siren_tmp"
 

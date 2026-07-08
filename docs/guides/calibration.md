@@ -21,6 +21,12 @@ is directly optimizable. Two tiers:
   `sensor_refl`, `qe` spectral multipliers, `n_real`, SPE width, etc.
 - **per-PMT `k`** (the QE map — one multiplier per sensor, ~10⁴ of them).
 
+With `reflection_model='scalar_mix'`, the wall/sensor **specular fractions**
+(`wall_fspec`/`sensor_fspec`) are additional fittable levers — the specular-vs-diffuse
+direction split is carried by a DiCE score, so it calibrates from charge patterns without
+per-photon wavelengths. Set the `*_fspec` keys explicitly in the physics config when using
+this model (they default to 0 = fully diffuse).
+
 ## Recipe (per-sensor QE + all globals)
 
 1. **Source diversity is the lever.** Mix wall lasers (several wavelengths and positions) with

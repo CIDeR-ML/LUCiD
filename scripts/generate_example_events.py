@@ -44,13 +44,13 @@ def main():
         c, t = jax.lax.stop_gradient(sim(dummy, jax.random.PRNGKey(1000 + ev), pd))
         charge = np.asarray(c); time_ = np.where(charge > 0, np.asarray(t), 0.)
         origins = np.asarray(raw['photon_origins']).astype(float)
-        vtx = origins.mean(0) / 100.0                                   # reader returns cm -> m (approx event centroid)
+        vtx = origins.mean(0) / 100.0     # cm -> m; centroid of photon EMISSION points, NOT the primary vertex
         path = os.path.join(args.out, f'event_{ev}.h5')
         with h5py.File(path, 'w') as f:
             f.create_dataset('charge', data=charge)
             f.create_dataset('time', data=time_)
             f.create_dataset('sensor_positions', data=np.asarray(det.all_points))
-            f.attrs['truth_vertex_m'] = vtx
+            f.attrs['photon_centroid_m'] = vtx   # NOT the primary vertex (no vertex branch in the ROOT reader)
             f.attrs['n_hit'] = int((charge > 0).sum())
         print(f'  event_{ev}.h5: {int((charge>0).sum())} hit PMTs, {charge.sum():.0f} pe')
     print('done')

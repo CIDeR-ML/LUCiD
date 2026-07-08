@@ -203,6 +203,19 @@ window: [983.2, 1237.6] ns
 clears easily on the 40-hit burst and produces one gate, dropping the 2 digits that fell outside
 `window_ns + pad` of the burst.
 
+## Known behaviors
+
+Two edge cases worth knowing when interpreting datasets:
+
+- **Dark noise needs at least one real hit.** The dark-noise window is derived from the
+  event's real-hit time range, so an event with zero detected physics photons produces zero
+  dark digits (it cannot dark-trigger on its own).
+- **Trigger decisions are grid-sensitive at exact ties.** Digit times are TDC-rounded
+  (0.4 ns) and the default 200 ns window is an exact multiple of that grid, so a hit landing
+  on the same tick as another hit's window expiration can momentarily satisfy the threshold —
+  a 1 ns shift in one arrival can toggle a marginal trigger. Only relevant for events sitting
+  exactly at `n_thr`.
+
 ## Choosing a model
 
 Use `basic` for anything where the electronics response itself isn't the point — quick
