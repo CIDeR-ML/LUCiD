@@ -64,5 +64,5 @@ Slow tests are gated **two ways**: `conftest.py` skips a hardcoded list of slow 
 - Do not commit rendered notebook outputs (`*.executed.ipynb`) or generated artifacts
   (`*.gif`, plots, data) — they are gitignored; regenerate or build them in CI.
 
-By contributing you agree that your contributions are licensed under the project's
-[Apache-2.0](LICENSE) license.
+By contributing you agree that your contributions will be licensed under the
+project's license once it is finalized.

@@ -8,8 +8,6 @@ dynamic = ["version"]
 description = "Differentiable photon simulation for optical particle detectors"
 readme = "README.md"
 requires-python = ">=3.9"
-license = "Apache-2.0"
-license-files = ["LICENSE"]
 authors = [
     { name = "Omar Alterkait", email = "omar.alterkait@tufts.edu" },
     { name = "César Jesús-Valls" },

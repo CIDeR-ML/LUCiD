@@ -102,4 +102,4 @@ If you use LUCiD, please cite the paper (see [`CITATION.cff`](CITATION.cff)):
 
 ## License
 
-Apache-2.0 — see [`LICENSE`](LICENSE).
+The license is being finalized and will be added shortly.
