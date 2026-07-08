@@ -16,9 +16,10 @@ from lucid.sources.cascade import cascade_source
 
 GEOM = 'config/IceCube86_full_geom_config.json'
 PHYS = 'config/IceCube86_ice_physics_config.json'
+K = 15   # ice scatters strongly (p_scat~0.77); K=15 keeps the multiple-scatter tail (K=4 dropped ~35%)
 
 # --- through-going muon track (particle sim) ---
-trk_sim = setup_event_simulator(GEOM, 500_000, K=4, temperature=None, is_calibration=False,
+trk_sim = setup_event_simulator(GEOM, 500_000, K=K, temperature=None, is_calibration=False,
                                 detector_type='string', physics_config=PHYS,
                                 default_detector_params=True, hit_mode='aggregated',
                                 wavelength_mode=False, particle='muon', use_expected_value=True)
@@ -29,7 +30,7 @@ print(f'muon track (100 GeV, horizontal): {(q_trk > 0).sum():4d} / {q_trk.size} 
       f'total {q_trk.sum():.0f} pe')
 
 # --- cascade / shower (source sim) ---
-cas_sim = setup_event_simulator(GEOM, 500_000, K=4, temperature=0.2, is_calibration=True,
+cas_sim = setup_event_simulator(GEOM, 500_000, K=K, temperature=0.2, is_calibration=True,
                                 detector_type='string', physics_config=PHYS,
                                 default_detector_params=True, hit_mode='aggregated',
                                 wavelength_mode=False)
