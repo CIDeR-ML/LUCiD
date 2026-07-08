@@ -18,7 +18,7 @@ Optional extras:
 | `[dev]` | pytest, jupyter, nbmake | development & tests |
 | `[all]` | everything | |
 
-e.g. `pip install -e .[dev]`.
+e.g. `pip install -e .[dev]` (there is also a `[notebooks]` extra, pulled in by `[dev]`/`[all]`).
 
 ## Get the example data
 

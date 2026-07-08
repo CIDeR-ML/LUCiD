@@ -22,7 +22,9 @@ from `config/materials/<material>.json`:
 - **Absorption** — for water: the SK-calibration power law in the blue joined onto the
   Pope & Fry (1997) measured data in the red, blended smoothly across the ~464 nm seam so
   gradients stay kink-free.
-- **Refractive index / group velocity** — dispersion for Cherenkov angle and photon timing.
+- **Refractive index** — currently a single constant `n` per material (no dispersion):
+  the Cherenkov angle and photon timing use one `n`/light-speed per event. A per-λ index
+  is a natural extension the medium format already reserves space for.
 
 The medium grid spans [300, 700] nm. Materials are composable: `water`, `wbls`, and `ice`
 each have their own JSON (WbLS inherits water's bulk optics; the bundled ice file is an

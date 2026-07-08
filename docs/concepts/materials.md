@@ -43,6 +43,12 @@ Source: Caravaca 2020 (arXiv:2006.00173), linear fit through 1%, 5%, 10% datapoi
 
 S–kB correlation in the Chou fit is 87.4% (full covariance in Callaghan 2023 Table 7).
 
+!!! note "What LUCiD implements"
+    The simulation samples a single rise/fall hypoexponential (`tau_rise`, `tau_fall`);
+    the slow second decay component (τ₂ ≈ 27 ns, R₁ ≈ 0.06) from the measured
+    two-component fit below is dropped — `wbls.json`'s own comments record this
+    simplification.
+
 Source: Callaghan 2023 (arXiv:2210.03876), Table 6. Sample oxygenated (atmospheric).
 
 ### Emission timing
