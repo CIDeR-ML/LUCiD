@@ -140,17 +140,57 @@ class ReconModel:
     """
 
     def __init__(self, pred, num_detectors, sigma=2.5, delta=1.0, tot_n_scale=1.0,
-                 time_weight=1.0):
+                 time_weight=1.0, energy_from_scale=True, nphot_fn=None,
+                 energy_scale_mode='simtotal'):
         self.pred = pred
         self.ND = int(num_detectors)
         self.sigma = float(sigma); self.delta = float(delta); self.tot_n_scale = float(tot_n_scale)
         self.time_weight = float(time_weight)                # explicit charge↔time weight on the time NLL.
         #   1.0 = the from-first-principles joint NLL  P(n)·P(t|n) = charge + conditional first-arrival;
         #   validated optimal (a balance sweep found tw=1 best; tw>1 trades a hair of P68 for failures).
+        # energy_from_scale (DEFAULT True): route the charge term's ENERGY gradient through the TOTAL
+        #   charge only (the Poisson factorises exactly into Poisson(Q;A)·Multinomial(shape) — energy
+        #   lives in the scale A, geometry in the shape). Removes the profile bias a small emission-
+        #   shape misspecification otherwise puts on energy via the soft (E↔geometry) degeneracy:
+        #   validated 200 fits @1 GeV muon, dE −29.7±2.1 → +2.6±1.5, σ 30→21, geometry unchanged.
+        #   Write μ = scale(E)·μ(sgE,g): forward value unchanged, ∂/∂E flows only through the global
+        #   scale → ∂L/∂E ∝ (Σμ−Q); ∂/∂geometry still carries the per-PMT shape. Charge analog of the
+        #   time term's AMP_DETACH. Set False for the raw per-PMT-Poisson energy estimate.
+        #   energy_scale_mode: 'simtotal' (default, self-contained, uses the sim's own total; costs a
+        #   2nd forward pass per _perpmt -> ~2x the Fisher/Jacobian cost) or 'nphot' (single pass,
+        #   needs nphot_fn = the emitter's ctx.n_photons_fn). NOTE: under energy_from_scale the time
+        #   term is built from the energy-DETACHED shape pass too, so (like AMP_DETACH for its
+        #   amplitude) it carries no energy gradient — energy comes ONLY from the total-charge scale.
+        self.energy_from_scale = bool(energy_from_scale)
+        self.nphot_fn = nphot_fn
+        self.energy_scale_mode = str(energy_scale_mode)       # 'nphot' | 'simtotal'
+        #   'nphot'   : energy scale = analytic nphot(E) ratio (noise-free scalar; needs nphot_fn).
+        #   'simtotal': energy scale = the SIM'S OWN total A=Σμ(E,g) — a 2nd forward pass at LIVE E
+        #               supplies A's exact ∂/∂E (real acceptance E-dependence), no nphot curve. The
+        #               shape pass (detached E) supplies pᵢ=μᵢ/A → μ=A·pᵢ routes ∂/∂E through A only.
+        if self.energy_from_scale and self.energy_scale_mode == 'nphot' and nphot_fn is None:
+            raise ValueError("energy_from_scale + mode 'nphot' requires nphot_fn (the emitter n_photons_fn)")
 
         def _perpmt(t9, oc, ot, key):
-            lw, ft, fi, tot = pred(track_from_vec9(t9), key)
-            mu = jnp.maximum(tot * self.tot_n_scale, 1e-8)       # SCALED charge (carries energy)
+            if self.energy_from_scale:
+                t9s = t9.at[0].set(jax.lax.stop_gradient(t9[0]))   # detach E in the shape
+                lw, ft, fi, tot = pred(track_from_vec9(t9s), key)  # μ(sgE, g): geometry-live shape
+                if self.energy_scale_mode == 'simtotal':
+                    # energy scale from the sim's own total at LIVE E (values identical to the shape
+                    # pass since sgE==E in value; only the E-gradient differs). μ = A_live · pᵢ.
+                    _, _, _, tot_live = pred(track_from_vec9(t9), key)
+                    A_live = jnp.sum(tot_live)                     # Σμ(E,g): carries ∂A/∂E and ∂A/∂g
+                    A_shape = jnp.maximum(jnp.sum(tot), 1e-8)      # Σμ(sgE,g): ∂/∂g only
+                    mu = jnp.maximum(tot * (A_live / A_shape) * self.tot_n_scale, 1e-8)
+                else:                                              # 'nphot': analytic scale ratio
+                    # nphot(E)=A·E^b+c crosses zero near ~137 MeV -> escale sign-flip below it; floor it.
+                    _npn = jnp.maximum(self.nphot_fn(t9[0]), 1e3)
+                    _npd = jnp.maximum(self.nphot_fn(jax.lax.stop_gradient(t9[0])), 1e3)
+                    escale = _npn / _npd                          # =1 in value, carries ∂/∂E
+                    mu = jnp.maximum(tot * escale * self.tot_n_scale, 1e-8)
+            else:
+                lw, ft, fi, tot = pred(track_from_vec9(t9), key)
+                mu = jnp.maximum(tot * self.tot_n_scale, 1e-8)       # SCALED charge (carries energy)
             mu_surv = jnp.maximum(tot, 1e-8)                     # UNSCALED survival denom — must NOT
             tobs = ot - t9[8]                                    # be scaled (else far-capture dies,
             tnll = first_arrival_window_nll(lw, ft, fi, tobs, mu_surv, oc, self.ND,  # RECO_PIPELINE §3.4)
@@ -212,7 +252,7 @@ class ReconModel:
 def fit_track(model, obs_counts, obs_times, start, *, nkeys=8, niters=150, lr=4.0,
               lr_final=1.5, ridge_i=0.1, lam=0.01, refresh=8, refresh_final=None, refresh_switch=0.5,
               seed=0, readout='polyak', polyak_w=40, hist=False, fisher_mode='ad',
-              verbose=False, truth=None):
+              verbose=False, truth=None, trust='auto'):
     """Consistent Fisher-Gauss-Newton track fit, SCALE9-preconditioned (RECO_PIPELINE §4).
 
     Parameters mirror the finalized recipe. The step is solved in SCALE9-scaled coordinates
@@ -240,6 +280,11 @@ def fit_track(model, obs_counts, obs_times, start, *, nkeys=8, niters=150, lr=4.
     9-vector — to include per-parameter errors).
     """
     from . import report
+    # trust='auto': apply the step clip ONLY when the model routes energy through the total-charge
+    # scale (which steepens the energy gradient and needs it); the plain per-PMT recipe gets trust=None
+    # → byte-identical to the pre-trust behavior. Pass an explicit float/None to override.
+    if trust == 'auto':
+        trust = 3.0 if getattr(model, 'energy_from_scale', False) else None
     oc = jnp.asarray(obs_counts); ot = jnp.asarray(obs_times)
     keys = [jax.random.PRNGKey(seed + s) for s in range(nkeys)]
     fdh = 0.4 * SCALE9
@@ -269,6 +314,10 @@ def fit_track(model, obs_counts, obs_times, start, *, nkeys=8, niters=150, lr=4.
         # converged basin (the late-divergence failure mode), so the trajectory settles at the min.
         lr_it = lr if lr_final is None else lr + (lr_final - lr) * (it / max(1, niters - 1))
         du = -lr_it * np.linalg.solve(Fs + marq + rI + 1e-9 * np.eye(9), gs)
+        if trust is not None:                       # trust-region step clip (see trust='auto' above):
+            du = np.clip(du, -trust, trust)         # |Δθ_k| ≤ trust·SCALE9_k. Active by default only
+            #   for energy_from_scale models (else disabled → the plain recipe is byte-identical);
+            #   required once energy_from_scale steepens the energy gradient (else ~1/10 events run away).
         th_new = th + S * du; g_new = G(th_new)
         # NaN/Inf-reject trust guard: the big early steps of the annealed lr=4 occasionally overshoot
         # into a degenerate region (~0.3% of events, seen at 250k) where the next gradient blows up.
