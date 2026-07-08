@@ -219,6 +219,8 @@ def _run_shard(cfg, shard, nshards, out_dir):
         if (w["particle"], w["nph"]) != cur:                                  # (re)build sim on group change
             data_sim, pred, model = eng["build"](w["particle"], w["nph"]); cur = (w["particle"], w["nph"])
         rp = cfg["data_root"].format(particle=w["particle"], energy=w["energy"])
+        if not os.path.isabs(rp):  # resolve like geom/phys: repo root, not cwd
+            rp = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), rp)
         raw0 = _read_event(rp, w["event"])
         pose_seed = cfg["pose_seed_base"] + w["event"] * POSE_STRIDE + w["pose"]
         raw, vtx, dirt = _rand_tf(raw0, pose_seed, cfg["fidr"], cfg["fidz"])
