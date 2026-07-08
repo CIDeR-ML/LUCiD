@@ -415,11 +415,15 @@ def main(argv: Optional[List[str]] = None) -> int:
                     job_name = f"photonsim_{slug}_{sp_tag}{sub_label}{job_id}"
                 job_partition = wrr.next() if wrr is not None else partition
                 master_seed = (seed_base + j) if seed_base is not None else None
+                # Supernova is one all-at-once burst per job — do NOT pass
+                # --n-events, or run_job would read it as the interaction cap and
+                # truncate the burst to n_events; let it use supernova.cap_events.
+                job_n_events = None if primary_source == "supernova" else n_events
                 body = adapter.render_dataprod_job(
                     cell_dir=out_dir, config_path=args.config, detector=detector,
                     job_id=job_id, job_name=job_name, partition=job_partition,
                     use_gpu=args.gpu, test=args.test, skip_lucid=skip_lucid_flag,
-                    n_events=n_events, override_energy_mev=override_energy,
+                    n_events=job_n_events, override_energy_mev=override_energy,
                     sn_model=sn_model, sn_ordering=sn_ordering,
                     master_seed=master_seed,
                 )
