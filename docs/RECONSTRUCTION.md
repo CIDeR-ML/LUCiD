@@ -2,9 +2,7 @@
 
 How LUCiD reconstructs a track `(energy, vertex, direction, t0)` from per-PMT charge + first
 hit times, and the **band-consistent forward recipe** established in the merged-engine
-re-validation. Companion deep-dives: `scripts/campaign_recon/REVAL_RESULTS.md` (wavelength /
-yield diagnosis), `scripts/campaign_recon/GRADOPT_CHECK.md` (gradient/Fisher/optimizer
-validation), `docs/RECON_CONSOLIDATION.md` (library layout).
+re-validation.
 
 ## Pipeline
 
@@ -44,7 +42,7 @@ is needed — the SIREN net is GEANT4-faithful (see below).
 emission band is universally [274.91, 673.83] nm. The old "1.66× low" reading came entirely from
 fitting a wide-band ([200,700] nm) stale ROOT with a narrow-band model.
 
-## Gradient / Fisher / optimizer (validated, `GRADOPT_CHECK.md`)
+## Gradient / Fisher / optimizer (validated)
 
 - AD gradient unbiased for t0/x/y (AD/profile 0.90–1.07); longitudinal z ~1.5× soft (documented);
   angles kinky → Fisher-driven, not raw-gradient-driven.

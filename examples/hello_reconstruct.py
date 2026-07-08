@@ -1,6 +1,6 @@
 """hello_reconstruct — full track reconstruction via lucid.fitting.recon.
 
-Mirrors LUCiD_recon's latest case (gn_fisher_recon.py / RECO_PIPELINE.md), now as library
+Mirrors LUCiD_recon's latest case (gn_fisher_recon.py), now as library
 code: a 9-parameter [E, x, y, z, dir, t0] Fisher-Gauss-Newton fit on a Poisson-charge +
 first-arrival ORDER-STATISTIC-time loss, SCALE9-preconditioned, FD Jacobians (the DiCE
 custom_vjp blocks jacfwd, and the autodiff track-Hessian is indefinite, so a PSD Fisher
