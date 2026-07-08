@@ -9,8 +9,8 @@ Runs the full track reconstruction (seed search → Fisher-Gauss-Newton fit) fro
 ```bash
 lucid-optimize lucid/optimization/configs/example_water_mu.json
 ```
-Prints per-event seed → fit progress and writes the fitted track parameters + residuals to the
-config's output directory. Module: `lucid.optimization.run`. For an interactive walk-through
+Prints per-event seed → fit progress and writes one `.npz` per event (fitted 9-vector,
+direction, winning seed, loss trajectory) to the config's output directory. Module: `lucid.optimization.run`. For an interactive walk-through
 see the `track_optimization` tutorial or `examples/hello_reconstruct.py` /
 `examples/seed_reconstruct.py`.
 
@@ -20,8 +20,10 @@ extra / torch).
 ```bash
 lucid-train-siren --material water --particle muon --data-type photon
 ```
-Writes checkpoints + `siren_params.json` under the material/particle data directory and
-prints per-epoch losses. The training loop has ~30 further flags (architecture, LR schedule,
+Writes `.npz` checkpoints, `training_history.json`, and the trained model
+(`trained_model/<name>_metadata.json` + `<name>_weights.npz`) under the material/particle
+data directory, printing per-epoch losses. (The `siren_params.json` the simulator loads is
+a separate hand-maintained pointer config — update its `path` to switch to a new model.) The training loop has ~30 further flags (architecture, LR schedule,
 energy-balance sampling, validation plots) — run `lucid-train-siren --help` for the full set.
 Module: `lucid.siren.train`. Build its input tables first with the two table builders below.
 

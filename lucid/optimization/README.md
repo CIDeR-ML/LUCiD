@@ -2,10 +2,11 @@
 
 Seed search + the config-driven reconstruction entry point.
 
-- **`grid_search.py`** — hierarchical charge-weighted position grid search and direction
-  cone search; provides the reconstruction seeds (`hierarchical_position_grid_search`,
-  `hierarchical_direction_search_cone`, `energy_scan_optimization`,
-  `get_detector_bounds`).
+- **`grid_search.py`** — hierarchical charge-weighted position grid search
+  (`hierarchical_position_grid_search`, `get_detector_bounds`).
+- **`utils/`** — the direction cone search and energy scan
+  (`utils/functions.py`: `hierarchical_direction_search_cone`,
+  `energy_scan_optimization`) plus geometry/visualization helpers.
 - **`run.py`** — the `lucid-optimize` console entry point: full track reconstruction
   (seeding → `lucid.fitting.fit_track_multistart` Fisher-Gauss-Newton fit) driven by a
   JSON config; see `configs/example_water_mu.json`.
