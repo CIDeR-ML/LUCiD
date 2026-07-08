@@ -6,7 +6,7 @@ reconstruct.
 ```bash
 git clone https://github.com/CIDeR-ML/LUCiD.git
 cd LUCiD
-pip install -e .              # core (JAX, etc.)
+pip install -e .              # editable install (required: config/ and data/ resolve relative to the repo)
 ```
 
 Optional extras:
