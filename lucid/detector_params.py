@@ -566,7 +566,10 @@ def _project_missing_scalars(kwargs, medium_path, qe_path, ref_wavelength_nm,
         if v.ndim == 0 and bool(jnp.isnan(v)):
             kwargs[field] = jnp.ones(_N_CTRL, dtype=jnp.float32)
 
-    # Angular-reflection scalars: physical defaults when absent (inert for scalar model).
+    # Angular/mixture-reflection scalars: physical defaults when absent. Inert for the
+    # 'scalar' model; CONSUMED by 'angular' and 'scalar_mix' — note the fspec defaults are
+    # 0.0 (= fully diffuse under scalar_mix), so set wall_fspec/sensor_fspec explicitly in
+    # the physics config when selecting reflection_model='scalar_mix'.
     for field, default in _ANGULAR_REFL_DEFAULTS.items():
         v = kwargs[field]
         if v.ndim == 0 and bool(jnp.isnan(v)):
