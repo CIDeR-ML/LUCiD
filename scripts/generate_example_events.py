@@ -1,7 +1,7 @@
 """generate_example_events — write a few lightweight per-event HDF5 files (Q/T + truth).
 
 Produces the simple single-event files (per-PMT charge + first-arrival time + truth track) that
-tutorials, tests, and quick studies want — WITHOUT the heavyweight 4-file v3 production dataset
+tutorials, tests, and quick studies want — WITHOUT the heavyweight four-file production dataset
 (that's `lucid-run-job`). Reads a PhotonSim ROOT file and runs the data-mode forward.
 
 Run:  python scripts/generate_example_events.py --root data/water/muon/1000MeV_100events.root \

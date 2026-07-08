@@ -56,8 +56,8 @@ nav:
   - Reconstruction: RECONSTRUCTION.md
   - Calibration: CALIBRATION.md
   - Data & Production:
-      - v3 dataset schema: LUCID_DATASET.md
-      - Working with v3 data: reference/working-with-v3-data.md
+      - Dataset schema: LUCID_DATASET.md
+      - Working with data: reference/working-with-data.md
       - Cluster deployment: CLUSTER_ABSTRACTION.md
       - S3DF: QUICKSTART_S3DF.md
       - NERSC: QUICKSTART_NERSC.md

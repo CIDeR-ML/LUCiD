@@ -25,7 +25,7 @@ to particle properties *and* detector parameters. Units are **meters, nanosecond
 | Reconstruct a track | [Reconstruction](RECONSTRUCTION.md); `examples/hello_reconstruct.py`; `lucid-optimize` |
 | Calibrate optical parameters | [Calibration](CALIBRATION.md); `examples/hello_calibrate.py` |
 | Model a specific detector | Concepts: [geometry & configuration](concepts/geometry.md) |
-| Produce a dataset (GEANT4/PhotonSim) | [v3 dataset](LUCID_DATASET.md); `lucid-run-job` |
+| Produce a dataset (GEANT4/PhotonSim) | [dataset schema](LUCID_DATASET.md); `lucid-run-job` |
 
 ## The framework at a glance
 

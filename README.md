@@ -36,7 +36,7 @@ the docs at **https://cider-ml.github.io/LUCiD/**.
   read the achievable uncertainty from the Fisher / Cramér–Rao bound — `examples/hello_calibrate.py`.
 - **Model diverse detectors**: cylinder (SK / HK / WCTE, algorithmic or from measured PMT
   `.npz`), sphere (JUNO), box, and neutrino-telescope strings (IceCube); water, WbLS, and ice.
-- **Produce datasets** from GEANT4/PhotonSim (+ optional GENIE flux) → v3 HDF5 — `lucid-run-job`.
+- **Produce datasets** from GEANT4/PhotonSim (+ optional GENIE flux) → four-file HDF5 — `lucid-run-job`.
 
 ## Tutorials
 
@@ -64,19 +64,19 @@ Short, copy-paste **scripts** live in [`examples/`](examples/):
 - **`lucid/propagation/`** — differentiable ray–geometry intersection and multi-bounce transport.
 - **`lucid/wavelength/`** — wavelength-dependent optics (`medium`, `spectrum`, `optical_model`).
 - **`lucid/siren/`** — SIREN surrogate for Cherenkov/dE-dx emission (trained on PhotonSim tables).
-- **`lucid/sources/`** — track/cascade/calibration emitters and v3 event I/O.
+- **`lucid/sources/`** — track/cascade/calibration emitters and dataset event I/O.
 - **`lucid/fitting/`** — the Gauss-Newton engine: reconstruction (`ReconModel`,
   `fit_track_multistart`) and calibration (`build_calibration_problem`, `fit`, `crb`).
 - **`lucid/optimization/`** — hierarchical seed search + the `lucid-optimize` driver.
 - **`lucid/gradient_analysis/`** — 1D/2D loss-landscape sweeps.
-- **`lucid/production/`** — PhotonSim/GENIE → v3 HDF5 chain and cluster deployment.
+- **`lucid/production/`** — PhotonSim/GENIE → HDF5 dataset chain and cluster deployment.
 
 Console entry points: `lucid-optimize`, `lucid-train-siren`, `lucid-run-job`,
 `lucid-build-photon-table`, `lucid-build-dedx-table`.
 
-## Data & production (PhotonSim / GENIE → v3 HDF5)
+## Data & production (PhotonSim / GENIE → HDF5)
 
-Generating training data or v3 datasets uses the external
+Generating training data or datasets uses the external
 [PhotonSim](https://github.com/cesarjesusvalls/PhotonSim) GEANT4 utility (only needed for this
 chain, not for simulate/calibrate/reconstruct):
 
@@ -88,7 +88,7 @@ lucid-run-job --config lucid/production/configs/dataprod_01_mu.json \
 
 See [docs/QUICKSTART_LOCAL.md](docs/QUICKSTART_LOCAL.md) (local), the cluster runbooks
 (`docs/QUICKSTART_{S3DF,NERSC,LXPLUS}.md`, fronted by
-[docs/CLUSTER_ABSTRACTION.md](docs/CLUSTER_ABSTRACTION.md)), and the v3 schema in
+[docs/CLUSTER_ABSTRACTION.md](docs/CLUSTER_ABSTRACTION.md)), and the dataset schema in
 [docs/LUCID_DATASET.md](docs/LUCID_DATASET.md). The container
 `ghcr.io/cider-ml/lucid:latest` ships PhotonSim + GENIE pre-built.
 
