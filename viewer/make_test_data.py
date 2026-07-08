@@ -458,7 +458,7 @@ def write_dataset(out_dir, geom, n_events, n_sensors, seed):
 
 
 def main():
-    ap = argparse.ArgumentParser(description='Synthesize a v3 LUCiD dataset for viewer testing.')
+    ap = argparse.ArgumentParser(description='Synthesize a stub LUCiD dataset for viewer testing.')
     ap.add_argument('--out', '-o', default='./test_data', help='Output directory')
     ap.add_argument('--geom', '-g', choices=('cylinder', 'box', 'sphere'), default='cylinder')
     ap.add_argument('--events', '-e', type=int, default=5)

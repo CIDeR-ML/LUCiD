@@ -3,5 +3,5 @@
 Access by name:
 
     from importlib.resources import files
-    path = files("lucid.production.configs").joinpath("dataprod_01_mu.json")
+    path = files("lucid.production.configs").joinpath("GeV/01_mu.json")
 """
