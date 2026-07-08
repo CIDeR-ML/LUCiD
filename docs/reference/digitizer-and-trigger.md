@@ -74,6 +74,12 @@ and a real readout trigger (excerpted — the file has the usual particle/energy
 }
 ```
 
+Note that this block's `n_thr: 45` and `pad_*: 300.0` **override** the `TriggerConfig` library
+defaults (`n_thr=30`, `pad_before_ns=pad_after_ns=30`, documented under [The trigger](#the-trigger)
+below). That is deliberate: the bundled HK configs ship a *tuned* trigger for that detector, so the
+class defaults are a neutral fallback, not the operating point any shipped config runs at — read the
+config block, not the dataclass, to know what a given dataset used.
+
 `lucid/production/configs/GeV/11_mu_pi_plus_pi_minus.json` (three-particle event on the same
 detector) uses the identical digitizer/trigger block — the block is copied per dataset config, not
 inherited automatically, so multi-particle and single-particle configs for the same detector must
