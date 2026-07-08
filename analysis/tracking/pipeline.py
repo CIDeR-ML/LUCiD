@@ -64,7 +64,12 @@ DEFAULT_CONFIG = {
     'grid': {'n_cap': 80, 'n_angular': 120, 'n_height': 80},
     'cherenkov_band': [274.91, 673.83],  # model λ band (nm); None disables
     'gn': {'nkeys': 4, 'niters': 250, 'lr': 8.0, 'fisher_mode': 'fd',
-           'sigma': 2.5, 'delta': 1.0, 'tot_n_scale': 1.0},
+           'sigma': 2.5, 'delta': 1.0, 'tot_n_scale': 1.0,
+           # energy_scale_mode (new-lib only): 'nphot' (DEFAULT since the paired 250k test:
+           # physics identical to simtotal within 0.4 MeV p68 per event, 1.8x faster; single
+           # pass, analytic nphot(E) scale, nphot_fn built from the emitter context) or
+           # 'simtotal' (2nd forward pass, exact dA/dE).
+           'energy_scale_mode': 'nphot'},
     # seeder knobs: one generous energy-scan window covering every study energy
     # (200..3000 MeV in 50 MeV steps -> seed-E quantization ~25 MeV), and the charge-grid t0
     # search grid (keep SYMMETRIC even for asymmetric true-t0 samples; must cover true_t0_range).
@@ -79,9 +84,9 @@ DEFAULT_CONFIG = {
     # opposite diagnostic: pin ALL params at truth except E — single start from the truth
     # 9-vector, only the energy moves.
     'fix_geometry': False,
-    # override the SIREN emitter's ray_sampling.threshold (None = value in siren_params.json,
-    # 0.05). Lower values sample dimmer (angle, s) bins — recovers the angular tails and the
-    # track end the 0.05 cut drops (see siren_emission_check).
+    # override the SIREN emitter's ray_sampling.threshold. LEGACY-ONLY since upstream a270a55:
+    # the default seed_mode='importance' keeps the full emission domain and ignores threshold
+    # (it only matters if ray_sampling.seed_mode is set back to 'uniform').
     'siren_threshold': None,
     # False (default): build all three seeds, pick ONE by the pre-GN margin-gated data loss
     # (prefer seedA unless another beats it by 1%) and run a single GN fit (~2.2x faster).
@@ -264,6 +269,8 @@ class _FixedParamsModel:
 
     def __init__(self, base, fixed_idx):
         self._m = base; self.ND = base.ND; self._idx = list(fixed_idx)
+        # pass through so fit_track's trust='auto' sees the energy_from_scale flag (97c33ea)
+        self.energy_from_scale = getattr(base, 'energy_from_scale', False)
 
     def loss(self, *a, **k): return self._m.loss(*a, **k)
     def perpmt(self, *a, **k): return self._m.perpmt(*a, **k)
@@ -350,7 +357,7 @@ class TrackingPipeline:
             physics_config=phys, default_detector_params=dp, particle=part,
             wavelength_mode=True, apply_smearing=False, **grid)
 
-        pred_kw = dict(temperature=0.1, K=K, hit_mode='per_photon', physics_config=phys,
+        pred_kw = dict(temperature=config.get('pred_temperature', 0.1), K=K, hit_mode='per_photon', physics_config=phys,
                        default_detector_params=True, particle=part, wavelength_mode=True,
                        pos_grad_threshold=K, n_grad_iters=K, **grid)
         if config.get('cherenkov_band'):
@@ -358,8 +365,79 @@ class TrackingPipeline:
         self.pred = setup_event_simulator(geom, config['n_rays'], **pred_kw)
 
         gn = config['gn']
+        if gn.get('tts_walk_corr'):
+            # CLOSURE-BIAS TEST: correct the observed first-arrival for the TTS
+            # order-statistic early walk, tobs_corr = tobs - tts*E[min of n std normals]
+            # (E[min_n] < 0, so the correction shifts tobs LATER, back to the geometric
+            # reference). Wraps lucid.fitting.recon.first_arrival_window_nll BEFORE the
+            # ReconModel is built so the model's jitted loss picks up the wrapper.
+            import lucid.fitting.recon as _rec
+            from scipy.special import erf as _serf
+            _tts = float(config.get('tts', 2.5))
+            _xs = np.linspace(-9, 9, 6001)
+            _phi = np.exp(-_xs**2 / 2) / np.sqrt(2 * np.pi)
+            _Phi = 0.5 * (1 + _serf(_xs / np.sqrt(2)))
+            _ns = np.unique(np.round(np.logspace(0, 3.4, 240)).astype(int))
+            _mn = np.array([np.trapezoid(_xs * nn * _phi * (1 - _Phi)**(nn - 1), _xs) for nn in _ns])
+            _lnj = jnp.asarray(np.log(_ns.astype(float))); _mnj = jnp.asarray(_mn)
+            _cond = gn.get('tts_walk_cond', 'n')
+            if _cond == 'mu':
+                # MODEL-side conditioning: Poisson-mixed, N>=1-conditioned E[min] evaluated at
+                # the PREDICTED per-PMT total mu (smooth in the track parameters, so the shift
+                # injects NO data noise -- the flaw of conditioning on the observed count n).
+                from scipy.stats import poisson as _poisson
+                _mus = np.logspace(-2, 3.6, 300)
+                _mbar = np.zeros_like(_mus)
+                for _i, _m in enumerate(_mus):
+                    _nmax = int(max(20, _m + 8 * np.sqrt(_m) + 5))
+                    _ns2 = np.arange(1, _nmax + 1)
+                    _pn = _poisson.pmf(_ns2, _m) / max(1e-300, 1.0 - np.exp(-_m))
+                    _mn_at = np.interp(np.log(_ns2.astype(float)), np.log(_ns.astype(float)), _mn)
+                    _mbar[_i] = float(np.sum(_pn * _mn_at))
+                _lmuj = jnp.asarray(np.log(_mus)); _mbarj = jnp.asarray(_mbar)
+            _orig_fawn = _rec.first_arrival_window_nll
+            if not getattr(_rec, '_fawn_wrapped', False):
+                _lam = float(gn.get('tts_walk_scale', 1.0))
+                if _cond == 'mu':
+                    def _fawn_corr(log_w, flat_times, flat_indices, t_obs, mu_total, obs_counts,
+                                   num_detectors, sigma=2.5, delta=1.0):
+                        mu = jax.lax.stop_gradient(jnp.maximum(mu_total, 1e-2))
+                        mn = jnp.interp(jnp.log(mu), _lmuj, _mbarj)
+                        return _orig_fawn(log_w, flat_times, flat_indices,
+                                          t_obs - _lam * _tts * mn, mu_total, obs_counts,
+                                          num_detectors, sigma=sigma, delta=delta)
+                else:
+                    def _fawn_corr(log_w, flat_times, flat_indices, t_obs, mu_total, obs_counts,
+                                   num_detectors, sigma=2.5, delta=1.0):
+                        nn = jnp.maximum(obs_counts, 1.0)
+                        mn = jnp.interp(jnp.log(nn), _lnj, _mnj)
+                        return _orig_fawn(log_w, flat_times, flat_indices,
+                                          t_obs - _lam * _tts * mn, mu_total, obs_counts,
+                                          num_detectors, sigma=sigma, delta=delta)
+                _rec.first_arrival_window_nll = _fawn_corr
+                _rec._fawn_wrapped = True
+            if verbose:
+                print('[pipeline] tts_walk_corr ACTIVE (order-statistic tobs correction)', flush=True)
+        _esm = gn.get('energy_scale_mode', 'simtotal')
+        _model_kw = {}
+        if _esm != 'simtotal':
+            # 'nphot': single-pass energy scale from the analytic nphot(E) curve — build the
+            # emitter context (same metadata the predictor uses) to get n_photons_fn.
+            from lucid.utils import unpack_siren_params
+            from lucid.siren.core import build_cherenkov_context
+            from lucid.siren.training.inference import SIRENPredictor
+            _scfg = unpack_siren_params(part, 'water')
+            _ctx = build_cherenkov_context(SIRENPredictor(_scfg['siren_model_path']),
+                                           _scfg['ray_sampling'])
+            _model_kw = dict(energy_scale_mode='nphot', nphot_fn=_ctx.n_photons_fn)
+            if verbose:
+                print(f"[pipeline] energy_scale_mode -> nphot (single-pass)", flush=True)
+        if gn.get('time_weight', 1.0) != 1.0:
+            _model_kw['time_weight'] = float(gn['time_weight'])
+            if verbose:
+                print(f"[pipeline] time_weight -> {gn['time_weight']}", flush=True)
         self.model = ReconModel(self.pred, self.ND, sigma=gn['sigma'], delta=gn['delta'],
-                                tot_n_scale=gn['tot_n_scale'])
+                                tot_n_scale=gn['tot_n_scale'], **_model_kw)
         self._qtot_vg = None                       # lazy jit for the E-refit stage
         if verbose:
             print(f"[pipeline] {part} | {self.ND} PMTs | n_rays={config['n_rays']} | "
@@ -385,6 +463,45 @@ class TrackingPipeline:
             pd['wavelengths'] = tile(raw['wavelengths'])
         return pd
 
+    def _siren_pseudodata(self, raw, ev):
+        """CLOSURE TEST: replace the PhotonSim photons with photons sampled from the SIREN
+        emitter itself (same energy, same photon count, gun frame: origin 0 along +z).
+        Origins on the track axis, directions from the emitter, emission times from the
+        model's own predict_t0 curve. Reconstruction of these events tests the estimator
+        with data drawn from its OWN model - any surviving bias is intrinsic to the
+        likelihood/detection machinery, not data-model mismatch."""
+        import jax
+        if getattr(self, '_pseudo_ctx', None) is None:
+            from lucid.utils import unpack_siren_params, unpack_t0_params
+            from lucid.siren.core import build_cherenkov_context
+            from lucid.siren.training.inference import SIRENPredictor
+            from lucid.sources.siren_rays import make_cherenkov_surrogate_fn
+            scfg = unpack_siren_params(self.cfg['particle'], 'water')
+            pred = SIRENPredictor(scfg['siren_model_path'])
+            ctx = build_cherenkov_context(pred, dict(scfg['ray_sampling']))
+            self._pseudo_ctx = (ctx, make_cherenkov_surrogate_fn(ctx), pred,
+                                unpack_t0_params(self.cfg['particle'], 'water'))
+        ctx, get_rays, spred, (a_c, l_c, b_c) = self._pseudo_ctx
+        E = float(raw['energy']); n_phot = len(np.asarray(raw['photon_origins']))
+        vec, org, inten = get_rays(jnp.zeros(3), jnp.array([0., 0., 1.]), jnp.asarray(E),
+                                   250_000, spred.params, jax.random.PRNGKey(900_000 + ev))
+        w = np.asarray(inten, float); w = np.clip(w, 0, None); w /= w.sum()
+        rng = np.random.default_rng(910_000 + ev)
+        idx = rng.choice(len(w), size=n_phot, p=w)
+        org = np.asarray(org, float)[idx]; vec = np.asarray(vec, float)[idx]
+        s_mm = np.clip(org[:, 2], 0, None) * 1000.0
+        x = np.log10(E)
+        def _cub(c):
+            return c[0] + c[1]*x + c[2]*x*x + c[3]*x*x*x
+        A = 10.0 ** _cub(np.asarray(a_c)); lam = 10.0 ** _cub(np.asarray(l_c))
+        beta = _cub(np.asarray(b_c))
+        t = s_mm / 299.792 + A * np.expm1(np.power(np.clip(s_mm / lam, 1e-12, None), beta))
+        out = dict(raw)
+        out['photon_origins'] = org * 100.0          # m -> cm (gun frame convention)
+        out['photon_directions'] = vec
+        out['photon_times'] = t
+        return out
+
     def _prepare_event(self, ev):
         """Load, place in the FV, simulate realistic data, and build BOTH seeds — NO Gauss-Newton.
 
@@ -401,6 +518,8 @@ class TrackingPipeline:
         t_start = time.time()
 
         raw = read_photon_data_from_photonsim(str(_resolve(cfg['root_file'])), ev)
+        if cfg.get('pseudodata'):
+            raw = self._siren_pseudodata(raw, ev)
         track_len = self.smax_m(raw['energy']) if self.smax_m is not None else None
         # placement seed: base + ev*stride (stride 1000 + no containment + t0 [0,0]
         # reproduces the upstream sweep poses exactly; see DEFAULT_CONFIG comment).
@@ -499,6 +618,119 @@ class TrackingPipeline:
             lossA=lossA, lossB=lossB, lossF=lossF,
             loss_pick=(0 if lossA <= lossB else 1), loss_pick_gated=pick_gated, loss_pick3=pick3,
             n_hit=P['n_hit'], q_tot=P['q_tot'], seconds=P['seed_seconds'])
+
+    def _split_fns(self):
+        """Jitted per-term (grad, jacobian) builders replicating ReconModel._perpmt exactly.
+
+        nphot energy-scale mode only (the campaign default): mu carries the analytic escale,
+        the survival denominator stays unscaled -- byte-matched to recon.py so the projected
+        fitter optimizes the SAME objective, just with an anisotropic time-term contribution.
+        """
+        if getattr(self, '_splitf', None) is not None:
+            return self._splitf
+        from lucid.fitting import track_from_vec9
+        from lucid.losses import counts_loss, first_arrival_window_nll
+        gn = self.cfg['gn']
+        if gn.get('energy_scale_mode', 'nphot') != 'nphot':
+            raise NotImplementedError('time_soft_mode=project requires energy_scale_mode=nphot')
+        sigma, delta = float(gn['sigma']), float(gn['delta'])
+        tns = float(gn['tot_n_scale']); ND = self.ND
+        nphot_fn = self.model.nphot_fn
+
+        def perpmt(t9, oc, ot, key):
+            lw, ft, fi, tot = self.pred(track_from_vec9(t9), key)
+            npn = jnp.maximum(nphot_fn(t9[0]), 1e3)
+            npd = jnp.maximum(nphot_fn(jax.lax.stop_gradient(t9[0])), 1e3)
+            mu = jnp.maximum(tot * (npn / npd) * tns, 1e-8)
+            mu_surv = jnp.maximum(tot, 1e-8)
+            tnll = first_arrival_window_nll(lw, ft, fi, ot - t9[8], mu_surv, oc, ND,
+                                            sigma=sigma, delta=delta)
+            return mu, tnll
+
+        def LQ(t9, oc, ot, key):
+            mu, _ = perpmt(t9, oc, ot, key)
+            return counts_loss(oc, mu, eps=0.0, normalize=False)
+
+        def LT(t9, oc, ot, key):
+            _, tnll = perpmt(t9, oc, ot, key)
+            return jnp.sum(tnll)
+
+        self._splitf = dict(
+            gQ=jax.jit(jax.grad(LQ)), gT=jax.jit(jax.grad(LT)),
+            pjac=jax.jit(jax.jacfwd(perpmt, argnums=0)),
+            perpmt=jax.jit(perpmt))
+        return self._splitf
+
+    def _fit_track_projected(self, oc, ot, start):
+        """fit_track (ad recipe) with the TIME term's soft-mode component projected out.
+
+        Soft mode v = (0.285 m along the CURRENT direction, +1 ns of t0) in SCALE9 coords --
+        the measured vertex-t0 degeneracy. Per iteration: g = gQ + P gT, F = FQ + P FT P with
+        P = I - vv^T. The time term keeps full transverse/direction/stiff-t0 power but cannot
+        pull along the degeneracy. Recipe knobs mirror fit_track (lr 4->1.5, lam .01,
+        ridge_i .1, refresh 8, trust 3, NaN guard, Polyak-40).
+        """
+        from lucid.fitting.recon import SCALE9
+        gn = self.cfg['gn']
+        nkeys, niters = gn['nkeys'], gn['niters']
+        lr, lr_final, lam, ridge_i, refresh = float(gn['lr']), 1.5, 0.01, 0.1, 8
+        trust, polyak_w = 3.0, 40
+        F = self._split_fns()
+        ocj, otj = jnp.asarray(oc), jnp.asarray(ot)
+        keys = [jax.random.PRNGKey(s) for s in range(nkeys)]
+        S = SCALE9
+
+        def grads(th):
+            t9 = jnp.asarray(th)
+            gq = np.mean([np.asarray(F['gQ'](t9, ocj, otj, k)) for k in keys], 0)
+            gt = np.mean([np.asarray(F['gT'](t9, ocj, otj, k)) for k in keys], 0)
+            return gq, gt
+
+        def fishers(th):
+            t9 = jnp.asarray(th)
+            FQ = np.zeros((9, 9)); FT = np.zeros((9, 9))
+            for k in keys:
+                Jmu, Jl = F['pjac'](t9, ocj, otj, k)
+                mu, _ = F['perpmt'](t9, ocj, otj, k)
+                Jmu = np.asarray(Jmu); Jl = np.asarray(Jl); mu = np.asarray(mu)
+                FQ += (Jmu / np.clip(mu, 1e-8, None)[:, None]).T @ Jmu
+                FT += np.asarray(Jl).T @ np.asarray(Jl)
+            return FQ / nkeys, FT / nkeys
+
+        def soft_P(th):
+            st, ct, sp, cp = th[4], th[5], th[6], th[7]
+            nt = np.hypot(st, ct); npp = np.hypot(sp, cp)
+            stn, ctn, spn, cpn = st / nt, ct / nt, sp / npp, cp / npp
+            u = np.array([stn * cpn, stn * spn, ctn])
+            v = np.zeros(9); v[1:4] = 0.285 * u; v[8] = 1.0
+            vs = v / S; vs = vs / np.linalg.norm(vs)
+            return np.eye(9) - np.outer(vs, vs)
+
+        th = np.asarray(start, float)
+        gq, gt = grads(th)
+        traj = [th.copy()]; gnorms = []
+        FQ = FT = None; since = 0
+        for it in range(niters):
+            if FQ is None or since >= refresh:
+                FQ, FT = fishers(th); since = 0
+            since += 1
+            P = soft_P(th)
+            gs = S * gq + P @ (S * gt)
+            Fs = (S[:, None] * FQ * S[None, :]) + P @ (S[:, None] * FT * S[None, :]) @ P
+            marq = np.diag(lam * np.diag(Fs))
+            rI = ridge_i * np.median(np.clip(np.diag(Fs), 1e-12, None)) * np.eye(9)
+            lr_it = lr + (lr_final - lr) * (it / max(1, niters - 1))
+            du = -lr_it * np.linalg.solve(Fs + marq + rI + 1e-9 * np.eye(9), gs)
+            du = np.clip(du, -trust, trust)
+            th_new = th + S * du
+            gq_n, gt_n = grads(th_new)
+            if np.isfinite(th_new).all() and np.isfinite(gq_n).all() and np.isfinite(gt_n).all():
+                th, gq, gt = th_new, gq_n, gt_n
+            gn_ = float(np.linalg.norm(S * (gq + gt)))
+            traj.append(th.copy()); gnorms.append(gn_)
+        out = np.mean(np.array(traj)[-polyak_w:], axis=0)
+        return out, dict(traj=np.array(traj), gnorm=np.array(gnorms),
+                         best_iter=int(np.argmin(gnorms)))
 
     def reconstruct_free_E(self, ev):
         """Diagnostic: geometry+t0 pinned at TRUTH, only E free — single GN start from truth."""
@@ -621,9 +853,12 @@ class TrackingPipeline:
                 gate = losses[0] - 0.01 * abs(losses[0])
                 cand = [i for i in (1, 2) if losses[i] < gate]
                 pick = min(cand, key=lambda i: losses[i]) if cand else 0
-            res, H = fit_track(model, oc, ot, starts[pick], nkeys=gn['nkeys'],
-                               niters=gn['niters'], lr=gn['lr'],
-                               fisher_mode=gn['fisher_mode'], hist=True)
+            if gn.get('time_soft_mode') == 'project':
+                res, H = self._fit_track_projected(oc, ot, starts[pick])
+            else:
+                res, H = fit_track(model, oc, ot, starts[pick], nkeys=gn['nkeys'],
+                                   niters=gn['niters'], lr=gn['lr'],
+                                   fisher_mode=gn['fisher_mode'], hist=True)
             rec.update(which=int(pick), losses=np.asarray(losses))
 
         # optional stage 2: freeze everything at the fit, refit E alone on the Qtot loss
