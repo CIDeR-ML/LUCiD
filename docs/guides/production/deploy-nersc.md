@@ -1,4 +1,4 @@
-# NERSC Quickstart — Production on Perlmutter (SLURM)
+# NERSC (Perlmutter) — production on SLURM
 
 Concise runbook for the NERSC / Perlmutter deployment. Pairs with
 [deploy-s3df.md](deploy-s3df.md) (same pipeline, SLURM at SLAC),

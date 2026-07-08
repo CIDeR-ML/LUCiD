@@ -1,4 +1,4 @@
-# Docker Quickstart — Produce events on macOS or generic Linux
+# Docker production — produce events on macOS or generic Linux
 
 This runbook targets **macOS (Apple Silicon or Intel)** and any Linux
 machine without Apptainer/Singularity. The published image bundles

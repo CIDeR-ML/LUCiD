@@ -133,11 +133,11 @@ particle or track), so `sensor.h5` stays a clean `(sensor_idx, PE, T)` list whil
 records which contribution was noise.
 
 Real deposits pass through a readout time cap before dark generation: anything later than
-`_MAX_DIGIT_TIME_NS = 1e5` ns (100 μs) relative to the event's reference time is dropped before
-windowing — and since the dark-noise window is built from the surviving hits' time range, dark
-counts are bounded by construction. This exists for late nuclear-channel light (neutron capture, de-excitation), which can
-legitimately arrive ms–s after the primary interaction — far outside anything a real detector
-reads out — and keeps the digit list, the decomposition, and the dark-noise window bounded.
+`_MAX_DIGIT_TIME_NS = 1e5` ns (100 μs) relative to the event's reference time is dropped
+before windowing. The cap exists for late nuclear-channel light (neutron capture,
+de-excitation), which can legitimately arrive ms–s after the primary interaction — far
+outside anything a real detector reads out. Since the dark-noise window is then built from
+the surviving hits' time range, the dark counts are bounded by construction too.
 
 ## Try it without PhotonSim
 

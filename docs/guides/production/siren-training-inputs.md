@@ -143,10 +143,10 @@ right interpolation grid. Full training/validation walkthrough:
 - [`lucid/production/jobs/siren_inputs/README.md`](https://github.com/CIDeR-ML/LUCiD/blob/main/lucid/production/jobs/siren_inputs/README.md) — Stage 1.
 - [`lucid/siren/README.md`](https://github.com/CIDeR-ML/LUCiD/blob/main/lucid/siren/README.md) — Stage 3.
 
-## Next steps (not yet wired up)
+## How inference consumes this
 
-SIREN inference (`lucid/sources/siren_rays.py`, `lucid/siren/core.py`) still
-feeds the model `(E, angle, distance_mm)`. Once the trainer consumes the new
-`s/s_max` axis, inference must read `smax_A` / `smax_B` from the .h5 metadata
-to convert physical `s` → `s/s_max` at sample time. The fit lives in the .h5
-specifically so this can happen without re-reading any external CSV.
+SIREN inference (`lucid/sources/siren_rays.py`, `lucid/siren/core.py`) operates in the
+same `s/s_max` coordinate the tables are built in: the trained-model metadata carries the
+`smax(E)` fit, so each sampled `s/s_max` converts to a physical emission distance at
+runtime with no external CSV. Nothing further needs wiring — a newly trained model drops
+in by pointing `siren_params.json` at its `trained_model/` directory.
