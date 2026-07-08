@@ -46,7 +46,9 @@ their neutral defaults here and fitted by calibration — see
 
 Production dataset configs (`lucid/production/configs/`) additionally carry `digitizer`,
 `trigger`, and `selection` blocks — those are electronics/DAQ settings, not `DetectorParams`;
-see [digitizer & trigger](digitizer-and-trigger.md).
+see [digitizer & trigger](digitizer-and-trigger.md). The `selection` block picks an event-keeping
+`mode`: `"trigger"` defers to the real readout trigger, while `"min_physics_hits"` (with `"n": N`)
+is a cheap truth-level cut keeping interactions with at least `N` real hits.
 
 **How each value is interpreted:**
 
