@@ -119,9 +119,10 @@ here.
 ## Dark noise
 
 Dark counts are generated directly in `digitizer.py` (`generate_dark_noise`): a Poisson number of
-hits per sensor with mean `rate_khz · Δt · 1e-3` (rate in kHz, `Δt` in ns), spread uniformly across
-the event's readout span (the true/reco time range of the real hits, padded by
-`readout_pad_ns`, default 100 ns), each worth `charge_pe=1.0` p.e. before the digitizer sees it.
+hits per sensor with mean `rate_khz · Δt · 1e-6` (rate in kHz, `Δt` in ns — the `1e-6` converts
+kHz·ns to a count), spread uniformly across the event's readout span (the time range of the real
+hits, padded by `readout_pad_ns`, default 100 ns), each worth `charge_pe=1.0` p.e. before the
+digitizer sees it.
 These synthetic hits are concatenated onto the real photon list before windowing, so a dark hit
 can extend a digit's integration window or is absorbed into one if it falls inside a real pulse.
 
@@ -131,9 +132,10 @@ tags every dark-noise row with `emission_process = EMISSION_PROCESS_DARK` (value
 particle or track), so `sensor.h5` stays a clean `(sensor_idx, PE, T)` list while `hits.h5` still
 records which contribution was noise.
 
-Both real and dark deposits pass through a shared readout time cap: anything later than
+Real deposits pass through a readout time cap before dark generation: anything later than
 `_MAX_DIGIT_TIME_NS = 1e5` ns (100 μs) relative to the event's reference time is dropped before
-windowing. This exists for late nuclear-channel light (neutron capture, de-excitation), which can
+windowing — and since the dark-noise window is built from the surviving hits' time range, dark
+counts are bounded by construction. This exists for late nuclear-channel light (neutron capture, de-excitation), which can
 legitimately arrive ms–s after the primary interaction — far outside anything a real detector
 reads out — and keeps the digit list, the decomposition, and the dark-noise window bounded.
 
