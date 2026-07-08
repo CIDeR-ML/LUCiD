@@ -100,7 +100,7 @@ def main():
                                                bounds, n_div=5, t0_n_div=5, levels=6, verbosity=0)
         seedA = make_seed(np.asarray(p1['best_position']), float(p1['best_t0']))
         seedB = make_seed(*seed_vertex_time(POS, oc, ot))
-        res, MS = fit_track_multistart(model, oc, ot, [seedA, seedB], nkeys=4, niters=250)
+        res, MS = fit_track_multistart(model, oc, ot, [seedA, seedB])
         np.savez(os.path.join(OUT, f'ev{ev:04d}.npz'), fit=res, direction=vec9_dir(res),
                  which=MS['which'], losses=np.array(MS['losses']),
                  n_hit=int((oc > 0).sum()), q_tot=float(oc.sum()), event=ev)

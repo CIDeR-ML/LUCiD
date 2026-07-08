@@ -73,14 +73,14 @@ def _summarize(label, A, B, n_photons):
           f"(Method B with N={n_photons} matches A with this many)")
 
 
-def _build_sim(geom, dp, phys, n_photons, sampling, use_expected_value):
+def _build_sim(geom, dp, phys, n_photons, sampling, use_expected_value, K=4):
     # Force `hit_mode='aggregated'` so both modes return (charges, times) shape
     # (num_sensors,). Varying only use_expected_value isolates the propagator.
     return setup_event_simulator(
         geom,
         n_photons=n_photons,
         temperature=None if not use_expected_value else 0.2,
-        K=4,
+        K=K,
         is_calibration=True,
         default_detector_params=dp,
         physics_config=phys,
@@ -132,9 +132,9 @@ def main():
 
         t0 = time.time()
         sim_A = _build_sim(args.detector, dp, args.physics_config, args.n_photons,
-                           'cherenkov', use_ev)
+                           'cherenkov', use_ev, K=args.K)
         sim_B = _build_sim(args.detector, dp, args.physics_config, args.n_photons,
-                           'cherenkov_qe', use_ev)
+                           'cherenkov_qe', use_ev, K=args.K)
         print(f"  [setup {time.time()-t0:.1f}s]")
 
         for pos in positions:
