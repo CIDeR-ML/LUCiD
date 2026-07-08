@@ -237,4 +237,4 @@ needed.
 - Configs: `LUCiD/lucid/production/configs/dataprod_*.json`
 - Runner: `LUCiD/lucid/production/run_job.py` (entry: `lucid-run-job`)
 - Production wrappers: `LUCiD/lucid/production/jobs/`
-- v3 schema spec: [LUCID_DATASET.md](LUCID_DATASET.md)
+- schema spec: [LUCID_DATASET.md](LUCID_DATASET.md)

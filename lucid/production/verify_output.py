@@ -1,4 +1,4 @@
-"""Verify that a v3 four-file batch was written correctly.
+"""Verify that a four-file batch was written correctly.
 
 A successful `lucid-run-job` leaves, for one batch `file_index = F`,
 four files under `<output_dir>/{sensor,hits,step,labl}/wc_*_<F:04d>.h5`.
@@ -19,14 +19,57 @@ from pathlib import Path
 from typing import Optional
 
 
-V3_SUBDIRS = ("sensor", "hits", "step", "labl")
+SUBDIRS = ("sensor", "hits", "step", "labl")
 
 
-def v3_batch_paths(output_dir: os.PathLike, file_index: int) -> dict[str, Path]:
+def batch_paths(output_dir: os.PathLike, file_index: int) -> dict[str, Path]:
     """Return the expected four-file paths for a given batch."""
     root = Path(output_dir)
     tag = f"{file_index:04d}"
-    return {sub: root / sub / f"wc_{sub}_{tag}.h5" for sub in V3_SUBDIRS}
+    return {sub: root / sub / f"wc_{sub}_{tag}.h5" for sub in SUBDIRS}
+
+
+def _check_digit_invariants(paths, n_sample: int = 3) -> tuple[bool, list[str]]:
+    """Sample events and check the cross-file digit_idx FK + per_window CSR.
+
+    - hits.h5 / step.sensor_hits ``digit_idx`` are in range and satisfy
+      ``sensor_idx == sensor.h5.sensor_idx[digit_idx]``.
+    - ``labl/per_window/digit_offsets`` is a valid CSR over the digit list
+      (starts at 0, ends at n_digits, monotonic).
+    """
+    import h5py
+    import numpy as np
+
+    msgs: list[str] = []
+    ok = True
+    try:
+        with h5py.File(paths["sensor"], "r") as sf, h5py.File(paths["hits"], "r") as hf, \
+                h5py.File(paths["step"], "r") as gf, h5py.File(paths["labl"], "r") as lf:
+            evs = sorted(k for k in sf if k.startswith("event_"))[:n_sample]
+            for e in evs:
+                si = sf[e]["sensor_idx"][:]
+                nd = si.shape[0]
+                hd = hf[e]["digit_idx"][:]
+                if hd.size and not (hd.min() >= 0 and hd.max() < nd
+                                    and (hf[e]["sensor_idx"][:] == si[hd]).all()):
+                    msgs.append(f"BAD_DIGIT_FK(hits): {e}"); ok = False
+                sh = gf[e].get("sensor_hits")
+                if sh is not None and "digit_idx" in sh:
+                    sd = sh["digit_idx"][:]
+                    if sd.size and not (sd.min() >= 0 and sd.max() < nd
+                                        and (sh["sensor_idx"][:] == si[sd]).all()):
+                        msgs.append(f"BAD_DIGIT_FK(step): {e}"); ok = False
+                pw = lf[e].get("per_window")
+                if pw is not None:
+                    off = pw["digit_offsets"][:]
+                    if not (off[0] == 0 and off[-1] == nd and (np.diff(off) >= 0).all()):
+                        msgs.append(f"BAD_PER_WINDOW_CSR: {e} (offsets end {int(off[-1])} != n_digits {nd})")
+                        ok = False
+            if ok:
+                msgs.append(f"OK invariants (digit_idx FK, per_window CSR) on {len(evs)} sampled events")
+    except Exception as exc:
+        msgs.append(f"INVARIANT_CHECK_ERROR: {exc!r}"); ok = False
+    return ok, msgs
 
 
 def verify_batch(
@@ -34,10 +77,10 @@ def verify_batch(
     file_index: int,
     expected_dataset_name: Optional[str] = None,
 ) -> tuple[bool, list[str]]:
-    """Check the four v3 files for one batch. Return (ok, messages)."""
+    """Check the four files for one batch. Return (ok, messages)."""
     import h5py
 
-    paths = v3_batch_paths(output_dir, file_index)
+    paths = batch_paths(output_dir, file_index)
     messages: list[str] = []
     ok = True
 
@@ -59,6 +102,11 @@ def verify_batch(
                 name = cfg_attrs.get("dataset_name", "<missing>")
                 fi = int(cfg_attrs.get("file_index", -1))
                 n_events = int(cfg_attrs.get("n_events", -1))
+                # Health is the completion flag, not the event count (trigger/
+                # selection make the count vary). Absent => a pre-flag file, treat
+                # as complete for backward compatibility.
+                complete = bool(cfg_attrs.get("complete", True))
+                n_req = int(cfg_attrs.get("n_events_requested", n_events))
         except Exception as e:
             messages.append(f"UNREADABLE: {path}: {e!r}")
             ok = False
@@ -70,9 +118,16 @@ def verify_batch(
             )
             ok = False
 
-        if n_events <= 0:
+        if not complete:
+            messages.append(f"INCOMPLETE: {path} config/complete != True (job killed mid-write?)")
+            ok = False
+
+        if n_events < 0:
             messages.append(f"BAD_N_EVENTS: {path} has n_events={n_events}")
             ok = False
+        elif n_events == 0:
+            # Not fatal: a selection may legitimately drop every event. Complete + empty.
+            messages.append(f"EMPTY_KEPT: {path} kept 0/{n_req} events (selection dropped all)")
 
         if expected_dataset_name is not None and name != expected_dataset_name:
             messages.append(
@@ -80,8 +135,16 @@ def verify_batch(
             )
             ok = False
 
+        drop = f" (kept {n_events}/{n_req})" if n_req != n_events else ""
         messages.append(
-            f"OK {sub:<6} size={size:>10} dataset_name={name!r} file_index={fi} n_events={n_events}"
+            f"OK {sub:<6} size={size:>10} dataset_name={name!r} file_index={fi} "
+            f"n_events={n_events}{drop} complete={complete}"
         )
+
+    # Cross-file schema invariants (only when the four files are all readable).
+    if ok:
+        inv_ok, inv_msgs = _check_digit_invariants(paths)
+        messages.extend(inv_msgs)
+        ok = ok and inv_ok
 
     return ok, messages

@@ -1,6 +1,6 @@
 """Shared pytest fixtures for tests/io/.
 
-Wraps the builder functions in ``_v3_event_fixture`` as pytest fixtures so
+Wraps the builder functions in ``_event_fixture`` as pytest fixtures so
 test modules can request them by name instead of importing the helpers
 directly.
 
@@ -19,7 +19,7 @@ Two flavours are provided for each builder:
 
 import pytest
 
-from tests.io._v3_event_fixture import (
+from tests.io._event_fixture import (
     build_synthetic_event,
     build_synthetic_pileup_event,
 )

@@ -29,27 +29,32 @@ from lucid.sources.event_builder import (
     _warmup_buckets,
     build_hits_sparse_per_process,
     build_seg_hits_merged_per_process,
+    gather_photon_deposits,
     combine_t_per_sensor_across_processes,
     run_event_process_pipeline,
 )
+from lucid.simulation.digitizer import digitize_and_decompose, resolve_model_config
+from lucid.simulation.trigger import TriggerConfig, apply_trigger
 from lucid.sources.scintillation_photons import expand_segments_to_photons
-from lucid.sources.v3_writer import (
+from lucid.sources.writer import (
     EMISSION_PROCESS_CHERENKOV,
+    EMISSION_PROCESS_DARK,
     EMISSION_PROCESS_SCINTILLATION,
     SOURCE_TYPE_GENIE,
     SOURCE_TYPE_PARTICLES,
     _compute_contained,
     _source_type_code,
     build_interaction_metadata,
+    mark_config_complete,
     sample_translation_vector,
-    save_hits_event_v3,
-    save_labl_event_v3,
-    save_step_event_v3,
-    save_sensor_event_v3,
-    write_hits_config_v3,
-    write_labl_config_v3,
-    write_step_config_v3,
-    write_sensor_config_v3,
+    save_hits_event,
+    save_labl_event,
+    save_step_event,
+    save_sensor_event,
+    write_hits_config,
+    write_labl_config,
+    write_step_config,
+    write_sensor_config,
 )
 from lucid.sources.particle_physics import derive_particle_interaction_idx
 
@@ -74,7 +79,8 @@ def _detector_bounds_from_det_geom(det_geom):
     dt = str(det_geom.detector_type).lower()
     d = det_geom.detector
     if dt == 'cylinder':
-        return {'type': 'cylinder', 'radius': float(d.r), 'height': float(d.H)}
+        return {'type': 'cylinder', 'radius': float(d.r), 'height': float(d.H),
+                'sensor_radius': float(getattr(d, 'sensor_radius', 0.25))}
     if dt == 'sphere':
         return {'type': 'sphere', 'radius': float(d.r)}
     if dt == 'box':
@@ -85,6 +91,17 @@ def _detector_bounds_from_det_geom(det_geom):
     return None
 
 
+def _trigger_config_meta(cfg):
+    """Trigger provenance for the four-file ``config/`` attrs."""
+    if cfg is None:
+        return {'trigger': 'none'}
+    return {'trigger': 'sliding_window',
+            'trigger_window_ns': float(cfg.window_ns),
+            'trigger_n_thr': int(cfg.n_thr),
+            'trigger_pad_before_ns': float(cfg.pad_before_ns),
+            'trigger_pad_after_ns': float(cfg.pad_after_ns)}
+
+
 def generate_events_from_photonsim_particles(event_simulator, root_file_path,
                                              sensor_positions, output_dir=None,
                                              n_events=None, batch_size=100, master_seed=None,
@@ -93,8 +110,10 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
                                              dataset_name='unnamed_dataset', run_id=None,
                                              file_index_start=0,
                                              primary_source='particles',
-                                             pad_size_buckets=None):
-    """Generate events from a PhotonSim ROOT file, writing v3 four-file batches.
+                                             pad_size_buckets=None,
+                                             digitizer=None, trigger=None,
+                                             min_physics_hits=None):
+    """Generate events from a PhotonSim ROOT file, writing four-file batches.
 
     For each batch of events, writes four HDF5 files under ``output_dir``:
     ``sensor/wc_sensor_NNNN.h5``, ``hits/wc_hits_NNNN.h5``,
@@ -116,7 +135,7 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
     n_events : int, optional
         Number of events to generate (default: all entries in the ROOT file).
     batch_size : int
-        Number of events per v3 batch file.
+        Number of events per batch file.
     master_seed : int, optional
         JAX PRNG seed; random if None.
     job_id : int
@@ -212,10 +231,22 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
     use_bucketing = True
     print(f"  Using rays buckets: {list(pad_size_buckets)}")
 
+    digitizer_model = resolve_model_config(digitizer)
+    trigger_cfg = TriggerConfig.from_block(trigger)
+
     print(f"\nGenerating {n_events} events using VMAP-OPTIMIZED particle-based processing...")
     print(f"Using batch size of {batch_size} events for multithreaded I/O")
     print(f"Apply smearing: {apply_smearing}")
     print(f"Apply translation: {apply_translation}")
+    print(f"Digitizer model: {digitizer_model['model']} "
+          f"(dark_rate_khz={digitizer_model.get('dark_rate_khz', 0.0)})")
+    if min_physics_hits is not None:
+        print(f"Selection: min_physics_hits >= {min_physics_hits} "
+              f"(low-E truth cut; sub-threshold events dropped, dark kept + labelled)")
+    elif trigger_cfg is not None:
+        print(f"Trigger: W={trigger_cfg.window_ns}ns N_thr={trigger_cfg.n_thr} "
+              f"pad={trigger_cfg.pad_before_ns}/{trigger_cfg.pad_after_ns}ns "
+              f"(non-triggering events dropped)")
     # Note: Rotation is not applied in this workflow because PhotonSim already generates
     # primaries with random isotropic directions (/gun/randomDirection true). The photon
     # and track data are already in randomized coordinate frames, so rotation in LUCiD
@@ -448,6 +479,7 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
                     n_sensors=n_sensors,
                     rays_buckets=pad_size_buckets,
                     sim_key=_sim_key_p,
+                    compute_aggregate=False,  # digitizer rebuilds the decomposition
                 )
                 _out['process_id'] = _p_in['process_id']
                 process_outputs.append(_out)
@@ -466,64 +498,65 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
             n_segments = int(particle_data['segments']['n_segments'])
 
             # ----------------------------------------------------------------
-            # Combine across processes:
-            #   per-sensor PE_true   : sum
-            #   per-sensor T_true    : min (with 0-as-no-hit handling)
-            #   per-sensor T_reco    : min
-            #   hits.h5 rows         : per-(particle, sensor, process) sparse
-            #   step/sensor_hits     : per-(segment, sensor, process) sparse
+            # Hit-making (digitization): window the per-photon deposits into
+            # digits and build the digit_idx-aware decomposition. The model
+            # comes from the detector config; `basic` (default) reproduces the
+            # legacy first-arrival + summed-charge one-hit-per-sensor.
+            #   sensor.h5           : digit list (sensor_idx may repeat)
+            #   hits.h5 rows        : per-(particle, sensor, digit, process)
+            #   step/sensor_hits    : per-(segment, sensor, digit, process)
             # ----------------------------------------------------------------
-            PE_true = jnp.asarray(np.sum(
-                [p['pe_per_sensor'] for p in process_outputs], axis=0))
-            T_true = jnp.asarray(combine_t_per_sensor_across_processes(
-                [p['t_per_sensor'] for p in process_outputs]))
-            T_reco = jnp.asarray(combine_t_per_sensor_across_processes(
-                [p['t_reco_per_sensor'] for p in process_outputs]))
+            deposits = gather_photon_deposits(process_outputs)
+            # Fold job_id in (like the sim/scint keys) so reusing a master_seed
+            # across jobs still gives independent dark/SPE/jitter streams.
+            digi_rng = np.random.default_rng([int(master_seed or 0), int(job_id), int(event_idx)])
+            sensor_digits, hits_sparse, seg_hits = digitize_and_decompose(
+                sensor_idx=deposits['sensor_idx'], charge=deposits['charge'],
+                t_true=deposits['t_true'], t_reco=deposits['t_reco'],
+                particle_idx=deposits['particle_idx'],
+                segment_idx=deposits['segment_idx'],
+                emission_process=deposits['emission_process'],
+                n_sensors=int(n_sensors), model=digitizer_model, rng=digi_rng,
+                dark_rate_khz=float(digitizer_model.get('dark_rate_khz', 0.0)),
+                apply_resolution=apply_smearing)
 
-            hits_sparse = build_hits_sparse_per_process(
-                process_outputs, n_particles)
-            seg_hits = build_seg_hits_merged_per_process(process_outputs)
-
-            # Apply charge smearing if requested. T_reco already
-            # carries kernel-side TTS smearing; no host-side time
-            # smear needed.
-            if apply_smearing:
-                smear_pe_key, _unused_t_key = jax.random.split(event_keys['smear_key'])
-                PE_reco = smear_charges_SK_like(PE_true, key=smear_pe_key)
-            else:
-                PE_reco = PE_true
-
-            # Convert JAX arrays to numpy BEFORE storing in extended_info.
-            # ``np.array`` (not ``asarray``) ensures we own a writable host
-            # buffer for the in-place t0 shift below — JAX buffers are
-            # read-only on the host.
-            PE_true = np.array(PE_true, dtype=np.float32, copy=True)
-            T_true  = np.array(T_true,  dtype=np.float32, copy=True)
-            PE_reco = np.array(PE_reco, dtype=np.float32, copy=True)
-            T_reco  = np.array(T_reco,  dtype=np.float32, copy=True)
-
-            # Shift simulator outputs from G4-frame (origin at vertex) into
-            # absolute detector frame by adding the per-interaction t0.
-            # Only the single-vertex path is in this function today; the
-            # pile-up path applies per-vertex t0 in its merger. The
-            # positivity mask preserves "no-hit" sentinels (0/inf) on the
-            # dense per-sensor accumulators; hits_sparse / seg_hits are
-            # already sparse (every row is a real hit) so a flat += suffices.
-            t0_f32 = np.float32(t0)
-            np.add(T_true,  t0_f32, out=T_true,  where=T_true  > 0)
-            np.add(T_reco,  t0_f32, out=T_reco,  where=T_reco  > 0)
-            if hits_sparse['T'].size > 0:
-                hits_sparse['T'] = hits_sparse['T'] + t0_f32
-            if hits_sparse.get('T_reco') is not None and hits_sparse['T_reco'].size > 0:
-                hits_sparse['T_reco'] = hits_sparse['T_reco'] + t0_f32
-            if seg_hits is not None and seg_hits['PE'].size > 0:
-                seg_hits['T'] = seg_hits['T'] + t0_f32
-                if 'T_reco' in seg_hits and seg_hits['T_reco'].size > 0:
-                    seg_hits['T_reco'] = seg_hits['T_reco'] + t0_f32
+            # Shift G4/vertex-frame times into the absolute detector frame by
+            # adding t0. Every digit / decomposition row is a real hit, so a
+            # flat add suffices (no no-hit sentinels to preserve). Done in
+            # float64: t0 can reach second-scale (supernova bursts) where
+            # float32 loses the sub-ns light timing.
+            t0_f64 = np.float64(t0)
+            for _d, _keys in ((sensor_digits, ('T',)),
+                              (hits_sparse, ('T', 'T_reco')),
+                              (seg_hits, ('T', 'T_reco'))):
+                for _k in _keys:
+                    if _k in _d and _d[_k].size:
+                        _d[_k] = _d[_k].astype(np.float64) + t0_f64
             # Segments always carry meaningful times — shift all of them.
             if 'segments' in particle_data and particle_data['segments'].get('n_segments', 0) > 0:
                 particle_data['segments']['time'] = \
-                    np.asarray(particle_data['segments']['time'], dtype=np.float32) + t0_f32
+                    np.asarray(particle_data['segments']['time'], dtype=np.float64) + t0_f64
+
+            # Selection (detector frame). Low-E 'fake trigger' (min_physics_hits):
+            # keep the event as one window iff it has >= N real hits, dark kept +
+            # labelled. Otherwise the real readout trigger keeps in-gate digits.
+            # Either way the event is dropped when it fails, and per_window records
+            # the surviving window(s).
+            per_window = None
+            if min_physics_hits is not None:
+                _sel = _keep_chunk_min_physics_hits(
+                    {'sensor_digits': sensor_digits, 'hits_sparse': hits_sparse,
+                     'segment_sensor_hits': seg_hits}, min_physics_hits)
+                if _sel is None:
+                    print(f"    event {event_idx}: < {min_physics_hits} physics hits — dropped", flush=True)
+                    continue
+                sensor_digits, hits_sparse, seg_hits, per_window = _sel
+            elif trigger_cfg is not None:
+                _trig = apply_trigger(sensor_digits, hits_sparse, seg_hits, trigger_cfg)
+                if _trig is None:
+                    print(f"    event {event_idx}: no trigger — event dropped", flush=True)
+                    continue
+                sensor_digits, hits_sparse, seg_hits, per_window = _trig
 
             # Create filename
             event_number = event_idx
@@ -544,12 +577,13 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
                 'track_info_dict': particle_data['track_info_dict'],
                 'primary_to_interaction': primary_to_interaction,
                 'interaction_metadata': [interaction_meta],
-                # Phase 2 hits payload: pre-sparse rows tagged with
-                # emission_process per row. ``save_hits_event_v3`` consumes
-                # ``hits_sparse`` directly (skip the dense-mask path).
+                # hits payload: per-(particle, sensor, digit, process) rows
+                # (with digit_idx). ``save_hits_event`` consumes it directly.
                 'hits_sparse': hits_sparse,
-                'PE_reco': PE_reco,
-                'T_reco': T_reco,
+                # sensor.h5 digit list produced by the digitizer.
+                'sensor_digits': sensor_digits,
+                # trigger gates for this event (None when the trigger is off).
+                'per_window': per_window,
                 'source': 'PhotonSim_Particles_VMAP',
             }
 
@@ -583,8 +617,8 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
             event_times.append(event_total_time)
             print(f"    Event total time: {event_total_time:.2f}s", flush=True)
 
-        # Write this batch as four v3 files (sensor/inst/seg/labl)
-        print(f"Saving batch {batch_idx+1} as v3 four-file group...")
+        # Write this batch as four files (sensor/inst/seg/labl)
+        print(f"Saving batch {batch_idx+1} as four-file group...")
         t_save_start = time.time()
 
         file_idx = int(file_index_start + batch_idx)
@@ -597,6 +631,7 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
 
         config_meta = {
             'n_events': len(batch_data),
+            'n_events_requested': int(batch_size_actual),
             'git_commit': git_commit,
             'run_id': run_id,
             'dataset_name': dataset_name,
@@ -610,6 +645,11 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
             'smearing_applied': bool(apply_smearing),
             'smearing_charge_function': 'SK_like' if apply_smearing else 'none',
             'smearing_time_function': 'SK_like' if apply_smearing else 'none',
+            'digitizer_model': str(digitizer_model['model']),
+            **_trigger_config_meta(trigger_cfg),
+            'selection': ('min_physics_hits' if min_physics_hits is not None else 'trigger'),
+            'selection_min_physics_hits': (int(min_physics_hits)
+                                           if min_physics_hits is not None else 0),
             'label_names': ['category'],
         }
 
@@ -629,16 +669,17 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
 
         with h5py.File(sensor_path, 'w') as fs, h5py.File(hits_path, 'w') as fi, \
                 h5py.File(step_path, 'w') as fg, h5py.File(labl_path, 'w') as fl:
-            write_sensor_config_v3(fs, config_meta, batch_src_idx, sensor_positions_np)
-            write_hits_config_v3(fi, config_meta, batch_src_idx, sensor_positions_np)
-            write_step_config_v3(fg, config_meta, batch_src_idx)
-            write_labl_config_v3(fl, config_meta, batch_src_idx)
+            write_sensor_config(fs, config_meta, batch_src_idx, sensor_positions_np)
+            write_hits_config(fi, config_meta, batch_src_idx, sensor_positions_np)
+            write_step_config(fg, config_meta, batch_src_idx)
+            write_labl_config(fl, config_meta, batch_src_idx)
 
             for seq_idx, evdict in enumerate(batch_data):
-                save_sensor_event_v3(fs, evdict, seq_idx)
-                save_hits_event_v3(fi, evdict, seq_idx)
-                save_step_event_v3(fg, evdict, seq_idx)
-                save_labl_event_v3(fl, evdict, seq_idx)
+                save_sensor_event(fs, evdict, seq_idx)
+                save_hits_event(fi, evdict, seq_idx)
+                save_step_event(fg, evdict, seq_idx)
+                save_labl_event(fl, evdict, seq_idx)
+            mark_config_complete(fs, fi, fg, fl)   # all events written => healthy
 
         saved_files.extend([str(sensor_path), str(hits_path), str(step_path), str(labl_path)])
 
@@ -705,6 +746,115 @@ def _offset_track_ids_raw(raw, offset):
     return max((int(t) for t in tid_d.keys()), default=0)
 
 
+def _simulate_interaction_stream(
+    event_simulator, raw, *, t0, vertex, source_type_code, running_offset,
+    n_sensors, rays_buckets, event_keys, apply_translation,
+    interaction_channel=None,
+):
+    """Simulate one interaction's photons and build a merge-stream dict.
+
+    Shared by the pile-up and supernova drivers. Given a raw PhotonSim entry
+    plus this interaction's absolute ``t0`` (ns) and fiducial ``vertex`` (m), it
+    remaps track IDs (offset by ``running_offset`` so streams don't collide),
+    runs the per-process (Cherenkov [+ scintillation]) photon pipeline, and
+    returns ``(stream, stream_max)`` — ``stream`` ready for
+    ``_merge_pileup_streams``, ``stream_max`` the highest track id used (caller
+    sets ``running_offset = stream_max + 1``). Segment times are shifted into
+    the absolute frame here (float64), consistent with the digit times the
+    merger builds from ``deposits``.
+    """
+    import time as _time
+    stream_max = _offset_track_ids_raw(raw, running_offset)
+
+    total_photons = int(raw['photon_origins'].shape[0])
+    n_segments_raw = int(raw['segments_raw']['n_segments'])
+    print(f"      raw: photons={total_photons:,}  segments={n_segments_raw:,}", flush=True)
+
+    photon_origins       = raw['photon_origins'].astype(np.float32, copy=False)
+    photon_directions    = raw['photon_directions'].astype(np.float32, copy=False)
+    photon_times         = raw['photon_times'].astype(np.float32, copy=False)
+    photon_wavelengths   = raw['photon_wavelengths'].astype(np.float32, copy=False)
+    photon_segment_index = np.asarray(raw['photon_segment_index_raw'], dtype=np.int32)
+    if apply_translation:
+        vertex = np.asarray(vertex, dtype=np.float32)
+        photon_origins = photon_origins + vertex[None, :]
+        seg_raw = raw['segments_raw']
+        if n_segments_raw > 0:
+            for _a, _c in (('start_x_mm', 0), ('start_y_mm', 1), ('start_z_mm', 2),
+                           ('end_x_mm', 0), ('end_y_mm', 1), ('end_z_mm', 2)):
+                seg_raw[_a] = seg_raw[_a] + float(vertex[_c]) * 1000.0
+
+    medium = getattr(event_simulator, 'medium', None)
+    has_scintillation = (medium is not None
+                         and "scintillation" in medium.emission_processes)
+    process_inputs = [{
+        'process_id':               EMISSION_PROCESS_CHERENKOV,
+        'photon_origins':           photon_origins,
+        'photon_directions':        photon_directions,
+        'photon_times':             photon_times,
+        'photon_wavelengths':       photon_wavelengths,
+        'photon_segment_index_raw': photon_segment_index.astype(np.int64),
+    }]
+    if has_scintillation:
+        _sc = event_simulator.default_detector_params.scintillation
+        _medium_params = {
+            'S': float(_sc.S), 'kB': float(_sc.kB), 'C': float(_sc.C),
+            'tau_rise': float(_sc.tau_rise), 'tau_fall': float(_sc.tau_fall),
+            'moyal_loc': float(_sc.moyal_loc), 'moyal_scale': float(_sc.moyal_scale),
+            'lambda_min': float(medium.scintillation_lambda_min),
+            'lambda_max': float(medium.scintillation_lambda_max),
+        }
+        _scint_rng = np.random.default_rng(event_keys['scint_seed'])
+        _scint_ph = expand_segments_to_photons(
+            raw['segments_raw'], _medium_params, _scint_rng)
+        process_inputs.append({
+            'process_id':               EMISSION_PROCESS_SCINTILLATION,
+            'photon_origins':           _scint_ph['photon_origins'],
+            'photon_directions':        _scint_ph['photon_directions'],
+            'photon_times':             _scint_ph['photon_times'],
+            'photon_wavelengths':       _scint_ph['photon_wavelengths'],
+            'photon_segment_index_raw': _scint_ph['photon_segment_index_raw'],
+        })
+
+    _t_sim = _time.time()
+    process_outputs = []
+    for _p_in in process_inputs:
+        _sim_key_p = jax.random.fold_in(event_keys['sim_key'], int(_p_in['process_id']))
+        _out = run_event_process_pipeline(
+            event_simulator=event_simulator, raw=raw,
+            photon_origins_np=_p_in['photon_origins'],
+            photon_directions_np=_p_in['photon_directions'],
+            photon_times_np=_p_in['photon_times'],
+            photon_wavelengths_np=_p_in['photon_wavelengths'],
+            photon_segment_index_raw=_p_in['photon_segment_index_raw'],
+            n_sensors=n_sensors, rays_buckets=rays_buckets, sim_key=_sim_key_p,
+            compute_aggregate=False,  # digitizer rebuilds the decomposition
+        )
+        _out['process_id'] = _p_in['process_id']
+        process_outputs.append(_out)
+    print(f"      [timing] simulate {_time.time() - _t_sim:.3f}s", flush=True)
+
+    particle_data = process_outputs[0]['particle_data']
+    deposits = gather_photon_deposits(process_outputs)
+    if particle_data['segments'].get('n_segments', 0) > 0:
+        particle_data['segments']['time'] = (
+            np.asarray(particle_data['segments']['time'], dtype=np.float64)
+            + np.float64(t0))
+
+    stream = {
+        'particles':         particle_data['particles'],
+        'meaningful_tracks': particle_data['meaningful_tracks'],
+        'segments':          particle_data['segments'],
+        'deposits':          deposits,
+        't0':                float(t0),
+        'interaction_meta':  build_interaction_metadata(
+            particle_data, t0=t0, vertex_xyz=vertex,
+            source_type_code=source_type_code,
+            interaction_channel=interaction_channel),
+    }
+    return stream, stream_max
+
+
 def generate_events_from_photonsim_pileup(
     event_simulator,
     root_file_paths,
@@ -720,6 +870,8 @@ def generate_events_from_photonsim_pileup(
     dataset_name='unnamed_pileup_dataset',
     run_id=None,
     file_index_start=0,
+    digitizer=None,
+    trigger=None,
 ):
     """Generate pile-up events by merging N PhotonSim streams per event.
 
@@ -728,7 +880,7 @@ def generate_events_from_photonsim_pileup(
     absolute t0 and fiducial vertex per vertex, simulate each vertex's
     photons, remap G4 track IDs to avoid collisions, and merge the
     per-vertex results into one event_dict. Sensor/hits/step/labl are
-    written using the same v3 writers as the single-vertex path.
+    written using the same writers as the single-vertex path.
 
     Parameters
     ----------
@@ -756,6 +908,14 @@ def generate_events_from_photonsim_pileup(
     master_seed = _resolve_master_seed(master_seed)
     print(f"Pile-up: master_seed={master_seed}, job_id={job_id}, "
           f"n_vertices={N_vertices}")
+    digitizer_model = resolve_model_config(digitizer)
+    trigger_cfg = TriggerConfig.from_block(trigger)
+    print(f"Digitizer model: {digitizer_model['model']} "
+          f"(dark_rate_khz={digitizer_model.get('dark_rate_khz', 0.0)})")
+    if trigger_cfg is not None:
+        print(f"Trigger: W={trigger_cfg.window_ns}ns N_thr={trigger_cfg.n_thr} "
+              f"pad={trigger_cfg.pad_before_ns}/{trigger_cfg.pad_after_ns}ns "
+              f"(non-triggering events dropped)")
 
     if run_id is None:
         run_id = str(uuid.uuid4())
@@ -851,159 +1011,14 @@ def generate_events_from_photonsim_pileup(
                       f"xyz=({vertex_i[0]:.3f}, {vertex_i[1]:.3f}, {vertex_i[2]:.3f}) m",
                       flush=True)
 
-                # Phase 1 — read raw event from this vertex's ROOT file.
                 raw = _read_event_raw(str(root_file_paths[vidx]), event_idx)
-
-                # Remap G4 track IDs on the raw dict so streams don't
-                # collide. After this, both ``track_info_dict`` keys and
-                # ``segments_raw['track_id']`` carry the offset; the
-                # downstream categorization in
-                # ``_derive_views_from_segments`` produces already-shifted
-                # ``meaningful_tracks`` / ``particles`` naturally.
-                stream_max = _offset_track_ids_raw(raw, running_offset)
-
-                source_type_code_i = _source_type_code(vertex_primary_sources[vidx])
-                total_photons_i = int(raw['photon_origins'].shape[0])
-                n_segments_raw_i = int(raw['segments_raw']['n_segments'])
-                print(f"      raw: photons={total_photons_i:,}  "
-                      f"segments={n_segments_raw_i:,}", flush=True)
-
-                # Apply this vertex's translation to the raw photon origins
-                # + raw segment table (mm scale on segments).
-                photon_origins_i      = raw['photon_origins'].astype(np.float32, copy=False)
-                photon_directions_i   = raw['photon_directions'].astype(np.float32, copy=False)
-                photon_times_i        = raw['photon_times'].astype(np.float32, copy=False)
-                photon_wavelengths_i  = raw['photon_wavelengths'].astype(np.float32, copy=False)
-                photon_segment_index_i = np.asarray(raw['photon_segment_index_raw'], dtype=np.int32)
-                if apply_translation:
-                    photon_origins_i = photon_origins_i + vertex_i[None, :]
-                    seg_raw_i = raw['segments_raw']
-                    if n_segments_raw_i > 0:
-                        seg_raw_i['start_x_mm'] = seg_raw_i['start_x_mm'] + float(vertex_i[0]) * 1000.0
-                        seg_raw_i['start_y_mm'] = seg_raw_i['start_y_mm'] + float(vertex_i[1]) * 1000.0
-                        seg_raw_i['start_z_mm'] = seg_raw_i['start_z_mm'] + float(vertex_i[2]) * 1000.0
-                        seg_raw_i['end_x_mm']   = seg_raw_i['end_x_mm']   + float(vertex_i[0]) * 1000.0
-                        seg_raw_i['end_y_mm']   = seg_raw_i['end_y_mm']   + float(vertex_i[1]) * 1000.0
-                        seg_raw_i['end_z_mm']   = seg_raw_i['end_z_mm']   + float(vertex_i[2]) * 1000.0
-
-                # Build per-process inputs for this vertex (Cherenkov +
-                # optional scintillation). Same pattern as the single-vertex
-                # path — Option C, one kernel call per process.
-                medium = getattr(event_simulator, 'medium', None)
-                has_scintillation_i = (
-                    medium is not None
-                    and "scintillation" in medium.emission_processes
-                )
-                process_inputs_i = [{
-                    'process_id':               EMISSION_PROCESS_CHERENKOV,
-                    'photon_origins':           photon_origins_i,
-                    'photon_directions':        photon_directions_i,
-                    'photon_times':             photon_times_i,
-                    'photon_wavelengths':       photon_wavelengths_i,
-                    'photon_segment_index_raw': photon_segment_index_i.astype(np.int64),
-                }]
-                if has_scintillation_i:
-                    # Nested ScintillationParams sub-tuple (no flat alias) — read via `.scintillation.*`.
-                    _sc = event_simulator.default_detector_params.scintillation
-                    _medium_params = {
-                        'S':           float(_sc.S),
-                        'kB':          float(_sc.kB),
-                        'C':           float(_sc.C),
-                        'tau_rise':    float(_sc.tau_rise),
-                        'tau_fall':    float(_sc.tau_fall),
-                        'moyal_loc':   float(_sc.moyal_loc),
-                        'moyal_scale': float(_sc.moyal_scale),
-                        'lambda_min':  float(medium.scintillation_lambda_min),
-                        'lambda_max':  float(medium.scintillation_lambda_max),
-                    }
-                    _scint_rng = np.random.default_rng(event_keys['scint_seed'])
-                    # segments_raw already vertex-translated above; expander
-                    # output's photon_origins are already in absolute frame.
-                    _scint_ph = expand_segments_to_photons(
-                        raw['segments_raw'], _medium_params, _scint_rng)
-                    process_inputs_i.append({
-                        'process_id':               EMISSION_PROCESS_SCINTILLATION,
-                        'photon_origins':           _scint_ph['photon_origins'],
-                        'photon_directions':        _scint_ph['photon_directions'],
-                        'photon_times':             _scint_ph['photon_times'],
-                        'photon_wavelengths':       _scint_ph['photon_wavelengths'],
-                        'photon_segment_index_raw': _scint_ph['photon_segment_index_raw'],
-                    })
-
-                # Phase 2-4 per emission process for this vertex.
-                _t_sim = _time.time()
-                process_outputs_i = []
-                for _p_in in process_inputs_i:
-                    _sim_key_p = jax.random.fold_in(
-                        event_keys['sim_key'], int(_p_in['process_id']))
-                    _out = run_event_process_pipeline(
-                        event_simulator=event_simulator,
-                        raw=raw,
-                        photon_origins_np=_p_in['photon_origins'],
-                        photon_directions_np=_p_in['photon_directions'],
-                        photon_times_np=_p_in['photon_times'],
-                        photon_wavelengths_np=_p_in['photon_wavelengths'],
-                        photon_segment_index_raw=_p_in['photon_segment_index_raw'],
-                        n_sensors=n_sensors,
-                        rays_buckets=rays_buckets,
-                        sim_key=_sim_key_p,
-                    )
-                    _out['process_id'] = _p_in['process_id']
-                    process_outputs_i.append(_out)
-                print(f"      [timing] simulate {_time.time() - _t_sim:.3f}s", flush=True)
-
-                # Canonical particle_data from Cherenkov pass (segments table
-                # identical across processes).
-                particle_data_i = process_outputs_i[0]['particle_data']
-                n_particles_i = particle_data_i['n_particles']
-
-                # Per-vertex combined per-sensor PE/T (across processes), plus
-                # the writer-ready sparse rows tagged with emission_process.
-                pe_sensor_i = np.sum(
-                    [p['pe_per_sensor'] for p in process_outputs_i], axis=0)
-                t_sensor_i = combine_t_per_sensor_across_processes(
-                    [p['t_per_sensor'] for p in process_outputs_i])
-                t_reco_sensor_i = combine_t_per_sensor_across_processes(
-                    [p['t_reco_per_sensor'] for p in process_outputs_i])
-                hits_sparse_i = build_hits_sparse_per_process(
-                    process_outputs_i, n_particles_i)
-                seg_hits_i = build_seg_hits_merged_per_process(process_outputs_i)
-
-                # Apply +t0_i to shift this vertex's outputs into the absolute
-                # detector frame. All time arrays are sparse from here.
-                t0_f32 = np.float32(t0_i)
-                pe_sensor_i = pe_sensor_i.astype(np.float32, copy=False)
-                t_sensor_i = t_sensor_i.copy()
-                t_reco_sensor_i = t_reco_sensor_i.copy()
-                np.add(t_sensor_i,      t0_f32, out=t_sensor_i,      where=t_sensor_i      > 0)
-                np.add(t_reco_sensor_i, t0_f32, out=t_reco_sensor_i, where=t_reco_sensor_i > 0)
-                if hits_sparse_i['T'].size > 0:
-                    hits_sparse_i['T'] = hits_sparse_i['T'] + t0_f32
-                if hits_sparse_i.get('T_reco') is not None and hits_sparse_i['T_reco'].size > 0:
-                    hits_sparse_i['T_reco'] = hits_sparse_i['T_reco'] + t0_f32
-                if seg_hits_i is not None and seg_hits_i['PE'].size > 0:
-                    seg_hits_i['T'] = seg_hits_i['T'] + t0_f32
-                    if 'T_reco' in seg_hits_i and seg_hits_i['T_reco'].size > 0:
-                        seg_hits_i['T_reco'] = seg_hits_i['T_reco'] + t0_f32
-                # Same shift for segment times.
-                if particle_data_i['segments'].get('n_segments', 0) > 0:
-                    particle_data_i['segments']['time'] = (
-                        np.asarray(particle_data_i['segments']['time'], dtype=np.float32)
-                        + t0_f32)
-
-                streams.append({
-                    'particles':              particle_data_i['particles'],
-                    'meaningful_tracks':      particle_data_i['meaningful_tracks'],
-                    'segments':               particle_data_i['segments'],
-                    'pe_per_sensor':          pe_sensor_i,
-                    't_per_sensor':           t_sensor_i,
-                    't_reco_per_sensor':      t_reco_sensor_i,
-                    'hits_sparse':            hits_sparse_i,
-                    'seg_hits':               seg_hits_i,
-                    'interaction_meta':       build_interaction_metadata(
-                        particle_data_i, t0=t0_i, vertex_xyz=vertex_i,
-                        source_type_code=source_type_code_i),
-                })
+                stream, stream_max = _simulate_interaction_stream(
+                    event_simulator, raw, t0=t0_i, vertex=vertex_i,
+                    source_type_code=_source_type_code(vertex_primary_sources[vidx]),
+                    running_offset=running_offset, n_sensors=n_sensors,
+                    rays_buckets=rays_buckets, event_keys=event_keys,
+                    apply_translation=apply_translation)
+                streams.append(stream)
                 running_offset = stream_max + 1
 
             # ---- merge streams into one event_dict ----
@@ -1011,14 +1026,24 @@ def generate_events_from_photonsim_pileup(
             merged = _merge_pileup_streams(
                 streams, n_sensors=n_sensors,
                 apply_smearing=apply_smearing,
-                smear_key=derive_event_keys(
-                    master_seed, job_id, event_idx,
-                    interaction_idx=N_vertices)['smear_key'],
+                digitizer_model=digitizer_model,
+                digi_rng=np.random.default_rng([int(master_seed or 0), int(job_id), int(event_idx)]),
                 detector_bounds=detector_bounds,
             )
             print(f"    [timing] merge {_time.time() - _t_merge:.3f}s", flush=True)
             merged['source_event_idx'] = int(event_idx)
             merged['source'] = 'PhotonSim_Pileup'
+
+            # Readout trigger: keep in-gate digits, record gates, drop untriggered.
+            if trigger_cfg is not None:
+                _trig = apply_trigger(merged['sensor_digits'], merged['hits_sparse'],
+                                      merged.get('segment_sensor_hits'), trigger_cfg)
+                if _trig is None:
+                    print(f"    event {event_idx}: no trigger — event dropped", flush=True)
+                    continue
+                merged['sensor_digits'], merged['hits_sparse'], _seg, merged['per_window'] = _trig
+                if _seg is not None:
+                    merged['segment_sensor_hits'] = _seg
 
             batch_data.append(merged)
             batch_indices.append(int(event_idx))
@@ -1036,6 +1061,7 @@ def generate_events_from_photonsim_pileup(
         batch_src_idx = np.asarray(batch_indices, dtype=np.uint32)
         config_meta = {
             'n_events': len(batch_data),
+            'n_events_requested': int(end_idx - start_idx),
             'git_commit': git_commit,
             'run_id': run_id,
             'dataset_name': dataset_name,
@@ -1049,6 +1075,8 @@ def generate_events_from_photonsim_pileup(
             'smearing_applied': bool(apply_smearing),
             'smearing_charge_function': 'SK_like' if apply_smearing else 'none',
             'smearing_time_function': 'SK_like' if apply_smearing else 'none',
+            'digitizer_model': str(digitizer_model['model']),
+            **_trigger_config_meta(trigger_cfg),
             'label_names': ['category'],
         }
         if detector_bounds is not None:
@@ -1062,15 +1090,16 @@ def generate_events_from_photonsim_pileup(
              h5py.File(hits_path,   'w') as fi, \
              h5py.File(step_path,   'w') as fg, \
              h5py.File(labl_path,   'w') as fl:
-            write_sensor_config_v3(fs, config_meta, batch_src_idx, sensor_positions_np)
-            write_hits_config_v3(fi, config_meta, batch_src_idx, sensor_positions_np)
-            write_step_config_v3(fg, config_meta, batch_src_idx)
-            write_labl_config_v3(fl, config_meta, batch_src_idx)
+            write_sensor_config(fs, config_meta, batch_src_idx, sensor_positions_np)
+            write_hits_config(fi, config_meta, batch_src_idx, sensor_positions_np)
+            write_step_config(fg, config_meta, batch_src_idx)
+            write_labl_config(fl, config_meta, batch_src_idx)
             for seq_idx, ev in enumerate(batch_data):
-                save_sensor_event_v3(fs, ev, seq_idx)
-                save_hits_event_v3(fi, ev, seq_idx)
-                save_step_event_v3(fg, ev, seq_idx)
-                save_labl_event_v3(fl, ev, seq_idx)
+                save_sensor_event(fs, ev, seq_idx)
+                save_hits_event(fi, ev, seq_idx)
+                save_step_event(fg, ev, seq_idx)
+                save_labl_event(fl, ev, seq_idx)
+            mark_config_complete(fs, fi, fg, fl)   # all events written => healthy
 
         saved_files.extend([str(sensor_path), str(hits_path), str(step_path), str(labl_path)])
         print(f"Batch {batch_idx+1} save time: {_time.time() - _t_save:.3f}s\n")
@@ -1086,7 +1115,7 @@ def generate_events_from_photonsim_pileup(
 
 
 def _merge_pileup_streams(streams, *, n_sensors, apply_smearing,
-                          smear_key, detector_bounds):
+                          digitizer_model, digi_rng, detector_bounds):
     """Merge per-vertex streams into a single event_dict.
 
     Per-interaction metadata (t0, vertex_xyz, source_type) is broadcast
@@ -1097,7 +1126,13 @@ def _merge_pileup_streams(streams, *, n_sensors, apply_smearing,
     declared order with monotonically increasing track IDs, so a
     primary's range uniquely identifies its source stream.
 
-    ``smear_key`` is a jax key (not a concrete seed).
+    Hit-making is **cross-vertex**: every vertex's per-photon deposits are
+    pooled into one absolute-time list — each shifted by its ``t0`` and its
+    ``particle_idx`` / ``segment_idx`` offset by the same cumulative counts
+    used to merge the particle/segment tables — then windowed once by
+    ``digitize_and_decompose``. Overlapping pile-up light therefore merges
+    into shared digits, and each digit's charge decomposes across the
+    contributing vertices' particles.
     """
     # Concatenate particles, meaningful_tracks, segments (all post-remap).
     all_particles = []
@@ -1126,11 +1161,13 @@ def _merge_pileup_streams(streams, *, n_sensors, apply_smearing,
     # spaces (particle_idx by cumulative particle count, segment_idx by
     # cumulative segment count). Streams' particles and segments are
     # disjoint by construction (track ids were offset upstream).
-    hits_sparse_shifted = []
-    seg_hits_shifted = []
-    pe_sensor_streams = []
-    t_sensor_streams = []
-    t_reco_sensor_streams = []
+    # Pool every vertex's per-photon deposits into one absolute-time list.
+    # Each deposit's particle_idx / segment_idx is shifted by the *same*
+    # cumulative offsets used to merge the particle/segment tables (the -1
+    # dark/orphan sentinel is preserved); its times are shifted by the
+    # vertex t0. digitize_and_decompose then windows the pool once.
+    pool = {k: [] for k in ('sensor_idx', 'charge', 't_true', 't_reco',
+                            'particle_idx', 'segment_idx', 'emission_process', 't_ref')}
     particle_offset = 0
     seg_offset = 0
     for s in streams:
@@ -1141,63 +1178,30 @@ def _merge_pileup_streams(streams, *, n_sensors, apply_smearing,
         if n_seg_v > 0:
             for k in all_segs:
                 all_segs[k].append(np.asarray(segs[k]))
-        pe_sensor_streams.append(s['pe_per_sensor'])
-        t_sensor_streams.append(s['t_per_sensor'])
-        t_reco_sensor_streams.append(s['t_reco_per_sensor'])
 
-        hs = s.get('hits_sparse')
-        if hs is not None and hs['PE'].size > 0:
-            entry = {
-                'particle_idx':     hs['particle_idx'] + np.int32(particle_offset),
-                'sensor_idx':       hs['sensor_idx'],
-                'PE':               hs['PE'],
-                'T':                hs['T'],
-                'emission_process': hs['emission_process'],
-            }
-            if 'T_reco' in hs:
-                entry['T_reco'] = hs['T_reco']
-            hits_sparse_shifted.append(entry)
-
-        sh = s.get('seg_hits')
-        if sh is not None and sh['PE'].size > 0:
-            shifted = {
-                'segment_idx':      sh['segment_idx'] + np.int32(seg_offset),
-                'sensor_idx':       sh['sensor_idx'],
-                'PE':               sh['PE'],
-                'T':                sh['T'],
-                'emission_process': sh['emission_process'],
-            }
-            if 'T_reco' in sh:
-                shifted['T_reco'] = sh['T_reco']
-            seg_hits_shifted.append(shifted)
+        dep = s.get('deposits') or {}
+        d_sensor = np.asarray(dep.get('sensor_idx', np.empty(0, np.int64)))
+        if d_sensor.size:
+            t0v = np.float64(s['t0'])
+            pi = np.asarray(dep['particle_idx']).astype(np.int64, copy=True)
+            pi[pi >= 0] += particle_offset       # preserve -1 (dark/orphan)
+            si = np.asarray(dep['segment_idx']).astype(np.int64, copy=True)
+            si[si >= 0] += seg_offset
+            pool['sensor_idx'].append(d_sensor.astype(np.int64))
+            pool['charge'].append(np.asarray(dep['charge'], np.float64))
+            pool['t_true'].append(np.asarray(dep['t_true'], np.float64) + t0v)
+            pool['t_reco'].append(np.asarray(dep['t_reco'], np.float64) + t0v)
+            # Per-deposit interaction t0, so the late-light cap is measured against
+            # THIS interaction, not the chunk's earliest deposit (per-interaction cap).
+            pool['t_ref'].append(np.full(d_sensor.size, t0v, np.float64))
+            pool['particle_idx'].append(pi)
+            pool['segment_idx'].append(si)
+            pool['emission_process'].append(np.asarray(dep['emission_process'], np.int64))
 
         particle_offset += len(s['particles'])
         seg_offset += n_seg_v
 
     n_particles_total = len(all_particles)
-
-    # Per-sensor PE_true / T_true: sum / sentinel-aware min across the
-    # per-vertex per-sensor arrays (each already process-combined upstream
-    # via combine_t_per_sensor_across_processes).
-    if pe_sensor_streams:
-        PE_true = np.sum(pe_sensor_streams, axis=0).astype(np.float32)
-        T_true = combine_t_per_sensor_across_processes(t_sensor_streams)
-        T_reco = combine_t_per_sensor_across_processes(t_reco_sensor_streams)
-    else:
-        PE_true = np.zeros(n_sensors, dtype=np.float32)
-        T_true  = np.zeros(n_sensors, dtype=np.float32)
-        T_reco  = np.zeros(n_sensors, dtype=np.float32)
-
-    # Charge smearing is still host-side (SK-like Poisson model);
-    # time smearing is now kernel-side (TTS), so only PE gets smeared here.
-    if apply_smearing and PE_true.sum() > 0:
-        from lucid.utils import smear_charges_SK_like
-        smear_pe_key, _unused_t_key = jax.random.split(smear_key)
-        PE_reco = np.asarray(
-            smear_charges_SK_like(jnp.asarray(PE_true), key=smear_pe_key),
-            dtype=np.float32)
-    else:
-        PE_reco = PE_true.copy()
 
     # Merge segment arrays
     if all_segs['time']:
@@ -1206,29 +1210,22 @@ def _merge_pileup_streams(streams, *, n_sensors, apply_smearing,
     else:
         seg_merged = {'n_segments': 0}
 
-    # Concat the per-vertex sparse hits rows (already particle_idx-shifted
-    # into the merged per_particle row space).
-    if hits_sparse_shifted:
-        has_t_reco_any = all('T_reco' in d for d in hits_sparse_shifted)
-        merged_hits_sparse = {
-            'particle_idx':     np.concatenate([d['particle_idx']     for d in hits_sparse_shifted]).astype(np.int32),
-            'sensor_idx':       np.concatenate([d['sensor_idx']       for d in hits_sparse_shifted]).astype(np.uint16),
-            'PE':               np.concatenate([d['PE']               for d in hits_sparse_shifted]).astype(np.float32),
-            'T':                np.concatenate([d['T']                for d in hits_sparse_shifted]).astype(np.float32),
-            'emission_process': np.concatenate([d['emission_process'] for d in hits_sparse_shifted]).astype(np.int8),
-        }
-        if has_t_reco_any:
-            merged_hits_sparse['T_reco'] = np.concatenate(
-                [d['T_reco'] for d in hits_sparse_shifted]).astype(np.float32)
-    else:
-        merged_hits_sparse = {
-            'particle_idx':     np.empty(0, dtype=np.int32),
-            'sensor_idx':       np.empty(0, dtype=np.uint16),
-            'PE':               np.empty(0, dtype=np.float32),
-            'T':                np.empty(0, dtype=np.float32),
-            'T_reco':           np.empty(0, dtype=np.float32),
-            'emission_process': np.empty(0, dtype=np.int8),
-        }
+    def _catp(key, dt):
+        return np.concatenate(pool[key]).astype(dt) if pool[key] else np.array([], dtype=dt)
+
+    # Cross-vertex digitization: one windowing pass over the pooled deposits.
+    sensor_digits, merged_hits_sparse, merged_seg_hits = digitize_and_decompose(
+        sensor_idx=_catp('sensor_idx', np.int64),
+        charge=_catp('charge', np.float64),
+        t_true=_catp('t_true', np.float64),
+        t_reco=_catp('t_reco', np.float64),
+        particle_idx=_catp('particle_idx', np.int64),
+        segment_idx=_catp('segment_idx', np.int64),
+        emission_process=_catp('emission_process', np.int64),
+        t_ref=_catp('t_ref', np.float64),   # per-interaction late-light cap reference
+        n_sensors=n_sensors, model=digitizer_model, rng=digi_rng,
+        dark_rate_khz=float(digitizer_model.get('dark_rate_khz', 0.0)),
+        apply_resolution=apply_smearing)
 
     merged = {
         'n_particles': int(n_particles_total),
@@ -1236,28 +1233,14 @@ def _merge_pileup_streams(streams, *, n_sensors, apply_smearing,
         'track_info_dict': {},  # unused by writers; merged into meaningful_tracks
         'meaningful_tracks': all_tracks,
         'segments': seg_merged,
-        # v5 per-interaction routing (one entry per vertex stream; the
+        # per-interaction routing (one entry per vertex stream; the
         # writer consumes these to populate the per_interaction/ subgroup).
         'interaction_metadata':   interaction_metadata,
         'primary_to_interaction': primary_to_interaction,
         'hits_sparse': merged_hits_sparse,
-        'PE_reco': PE_reco,
-        'T_reco':  T_reco,
+        'sensor_digits': sensor_digits,
     }
-
-    # Concat the per-vertex sparse step triplets (already segment_idx-
-    # shifted into the merged segment table's row space).
-    if seg_hits_shifted:
-        merged_seg_hits = {
-            'segment_idx':      np.concatenate([d['segment_idx']      for d in seg_hits_shifted]).astype(np.int32),
-            'sensor_idx':       np.concatenate([d['sensor_idx']       for d in seg_hits_shifted]).astype(np.uint16),
-            'PE':               np.concatenate([d['PE']               for d in seg_hits_shifted]).astype(np.float32),
-            'T':                np.concatenate([d['T']                for d in seg_hits_shifted]).astype(np.float32),
-            'emission_process': np.concatenate([d['emission_process'] for d in seg_hits_shifted]).astype(np.int8),
-        }
-        if all('T_reco' in d for d in seg_hits_shifted):
-            merged_seg_hits['T_reco'] = np.concatenate(
-                [d['T_reco'] for d in seg_hits_shifted]).astype(np.float32)
+    if merged_seg_hits['PE'].size > 0:
         merged['segment_sensor_hits'] = merged_seg_hits
 
     # Geometric containment (same derivation as the single-vertex path;
@@ -1270,3 +1253,410 @@ def _merge_pileup_streams(streams, *, n_sensors, apply_smearing,
     merged['contained_per_interaction'] = cont['per_interaction']
     merged['contained']                 = cont['overall']
     return merged
+
+
+def _group_interactions_by_gap(t0_sorted, coupling_ns):
+    """Cut time-sorted interactions into causally-independent chunks.
+
+    A gap ``> coupling_ns`` between consecutive interactions means the two sides
+    can share neither charge (integration window) nor a trigger window, so a
+    boundary there introduces no discretization. ``coupling_ns`` is
+    ``max(integration_window, trigger_window + padding)``. Returns a list of
+    index lists into ``t0_sorted``.
+    """
+    if len(t0_sorted) == 0:
+        return []
+    chunks = []
+    cur = [0]
+    for i in range(1, len(t0_sorted)):
+        if t0_sorted[i] - t0_sorted[i - 1] > coupling_ns:
+            chunks.append(cur)
+            cur = [i]
+        else:
+            cur.append(i)
+    chunks.append(cur)
+    return chunks
+
+
+def _concat_triggered_chunks(chunks):
+    """Concatenate already-digitized + triggered chunk event_dicts into one.
+
+    Each chunk is a full event_dict (from ``_merge_pileup_streams`` + the
+    trigger) whose digits are canonically ordered within the chunk. Chunks are
+    time-ordered, so concatenating them preserves the global ``(window, sensor,
+    T)`` canonical order. Digit-referencing indices are shifted by cumulative
+    counts: ``digit_idx`` by digits, ``particle_idx`` by particles,
+    ``segment_idx`` by segments, and per_window ``digit_offsets`` by digits.
+    """
+    if not chunks:
+        return None
+    if len(chunks) == 1:
+        return chunks[0]
+
+    HITCOLS = ('particle_idx', 'digit_idx', 'sensor_idx', 'PE', 'T', 'T_reco', 'emission_process')
+    SEGCOLS = ('segment_idx', 'digit_idx', 'sensor_idx', 'PE', 'T', 'T_reco', 'emission_process')
+    SEGKEYS = ('start_x', 'start_y', 'start_z', 'end_x', 'end_y', 'end_z',
+               'dir_x', 'dir_y', 'dir_z', 'edep', 'time', 'beta_start', 'n_cherenkov')
+    has_seg_hits = any('segment_sensor_hits' in c for c in chunks)
+    has_windows = any(c.get('per_window') is not None for c in chunks)
+
+    sd = {'sensor_idx': [], 'PE': [], 'T': []}
+    hits = {k: [] for k in HITCOLS}
+    segh = {k: [] for k in SEGCOLS}
+    pw = {'window_start': [], 'window_end': [], 'digit_offsets': []}
+    all_particles, all_tracks, all_meta = [], {}, []
+    all_segs = {k: [] for k in SEGKEYS}
+    cont_seg, cont_part, cont_int = [], [], []
+    dig_off = part_off = seg_off = 0
+
+    for c in chunks:
+        n_dig = int(np.asarray(c['sensor_digits']['sensor_idx']).shape[0])
+        n_part = len(c['particles'])
+        n_seg = int(c['segments'].get('n_segments', 0))
+
+        for k in sd:
+            sd[k].append(np.asarray(c['sensor_digits'][k]))
+        h = c['hits_sparse']
+        for k in HITCOLS:
+            v = np.asarray(h[k])
+            if k == 'digit_idx':
+                v = v + dig_off
+            elif k == 'particle_idx':
+                v = np.where(v >= 0, v + part_off, v)
+            hits[k].append(v)
+        if has_seg_hits:
+            sh = c.get('segment_sensor_hits')
+            if sh is not None:
+                for k in SEGCOLS:
+                    v = np.asarray(sh[k])
+                    if k == 'digit_idx':
+                        v = v + dig_off
+                    elif k == 'segment_idx':
+                        v = np.where(v >= 0, v + seg_off, v)
+                    segh[k].append(v)
+        pwc = c.get('per_window')
+        if pwc is not None:
+            pw['window_start'].append(np.asarray(pwc['window_start']))
+            pw['window_end'].append(np.asarray(pwc['window_end']))
+            pw['digit_offsets'].append(np.asarray(pwc['digit_offsets'])[1:] + dig_off)
+
+        all_particles.extend(c['particles'])
+        all_tracks.update(c['meaningful_tracks'])
+        if n_seg > 0:
+            for k in SEGKEYS:
+                all_segs[k].append(np.asarray(c['segments'][k]))
+        all_meta.extend(c['interaction_metadata'])
+        cont_seg.append(np.asarray(c['contained_per_segment']))
+        cont_part.append(np.asarray(c['contained_per_particle']))
+        cont_int.append(np.asarray(c['contained_per_interaction']))
+
+        dig_off += n_dig
+        part_off += n_part
+        seg_off += n_seg
+
+    out = {
+        'n_particles': len(all_particles),
+        'particles': all_particles,
+        'track_info_dict': {},
+        'meaningful_tracks': all_tracks,
+        'sensor_digits': {k: np.concatenate(v) for k, v in sd.items()},
+        'hits_sparse': {k: np.concatenate(v) for k, v in hits.items()},
+        'interaction_metadata': all_meta,
+        'primary_to_interaction': {int(tid): i for i, m in enumerate(all_meta)
+                                   for tid in m['primary_track_ids']},
+        'contained_per_segment': np.concatenate(cont_seg) if cont_seg else np.array([], bool),
+        'contained_per_particle': np.concatenate(cont_part),
+        'contained_per_interaction': np.concatenate(cont_int),
+    }
+    out['contained'] = bool(np.all(out['contained_per_interaction']))
+    if all_segs['time']:
+        out['segments'] = {k: np.concatenate(v) for k, v in all_segs.items()}
+        out['segments']['n_segments'] = int(out['segments']['time'].shape[0])
+    else:
+        out['segments'] = {'n_segments': 0}
+    if has_seg_hits and segh['digit_idx']:
+        out['segment_sensor_hits'] = {k: np.concatenate(v) for k, v in segh.items()}
+    if has_windows and pw['window_start']:
+        out['per_window'] = {
+            'window_start': np.concatenate(pw['window_start']),
+            'window_end': np.concatenate(pw['window_end']),
+            'digit_offsets': np.concatenate([np.array([0], np.int64)] + pw['digit_offsets']),
+        }
+    return out
+
+
+def _keep_chunk_min_physics_hits(merged_chunk, min_hits):
+    """Truth-level SN selection (trigger-free): keep the chunk as ONE readout
+    window iff it has >= ``min_hits`` *physics* digits (a digit with any
+    non-dark contribution). Coincident dark digits are kept and stay tagged
+    ``emission_process = dark`` so analysis can enable/disable them. Digits are
+    sorted into canonical (sensor, T) order (single window) with digit_idx
+    remapped. Returns ``(sensor_digits, hits_sparse, seg_hits, per_window)`` or
+    ``None`` to drop the interaction.
+    """
+    sd = merged_chunk['sensor_digits']
+    hits = merged_chunk['hits_sparse']
+    seg = merged_chunk.get('segment_sensor_hits')
+    nd = int(np.asarray(sd['sensor_idx']).shape[0])
+    if nd == 0:
+        return None
+    hd = np.asarray(hits['digit_idx'])
+    ep = np.asarray(hits['emission_process'])
+    phys = np.zeros(nd, dtype=bool)
+    np.logical_or.at(phys, hd[ep != EMISSION_PROCESS_DARK], True)
+    if int(phys.sum()) < min_hits:
+        return None
+
+    T = np.asarray(sd['T'])
+    order = np.lexsort((T, np.asarray(sd['sensor_idx'])))   # canonical (sensor, T)
+    remap = np.empty(nd, dtype=np.int64)
+    remap[order] = np.arange(nd)
+    sd_out = {k: np.asarray(v)[order] for k, v in sd.items()}
+    hits_out = dict(hits)
+    hits_out['digit_idx'] = remap[hd].astype(hd.dtype)
+    seg_out = None
+    if seg is not None:
+        sdi = np.asarray(seg['digit_idx'])
+        seg_out = dict(seg)
+        seg_out['digit_idx'] = remap[sdi].astype(sdi.dtype)
+    per_window = {
+        'window_start':  np.array([float(T.min())], dtype=np.float64),
+        'window_end':    np.array([float(T.max())], dtype=np.float64),
+        'digit_offsets': np.array([0, nd], dtype=np.int32),
+    }
+    return sd_out, hits_out, seg_out, per_window
+
+
+def generate_events_from_photonsim_supernova(
+    event_simulator,
+    burst_root_file,
+    interaction_times_ms,
+    sensor_positions,
+    interaction_channels=None,
+    sn_direction=None,
+    output_dir=None,
+    master_seed=None,
+    job_id=1,
+    apply_smearing=False,
+    apply_translation=False,
+    dataset_name='unnamed_supernova_dataset',
+    run_id=None,
+    file_index_start=0,
+    digitizer=None,
+    trigger=None,
+    min_physics_hits=3,
+    source_event_idx=0,
+):
+    """Generate ONE all-at-once supernova event from a burst PhotonSim file.
+
+    The burst's M interactions (one PhotonSim entry each) are placed at their
+    true times: ``t0_i = global_t0 + interaction_times_ms[i] * 1e6`` (ns), where
+    ``global_t0`` is a single ±250 ns offset for the whole burst. Interactions
+    are cut into causally-independent chunks at time gaps wider than the
+    coupling distance ``max(integration_window, trigger_window + padding)``; each
+    chunk is pool-digitized (dark over just its span) and passed through the
+    sliding-window trigger, so dark stays bounded and no boundary splits a
+    trigger cluster or a charge-sharing coincidence. The surviving (triggered)
+    chunks are concatenated into one event; sub-threshold interactions drop out.
+    """
+    import uproot
+    import uuid
+    import subprocess
+    from pathlib import Path
+
+    master_seed = _resolve_master_seed(master_seed)
+    digitizer_model = resolve_model_config(digitizer)
+    trigger_cfg = TriggerConfig.from_block(trigger)
+    # Supernova requires a windowed digitizer (ski/hk) and the truth-based
+    # selection (min_physics_hits) — the real readout trigger can't tag the
+    # low-energy SN interactions. Fail early (before sntools/PhotonSim) rather
+    # than crash later or write a silently-wrong dataset.
+    if not digitizer_model.get('integration_window_ns'):
+        raise ValueError(
+            "Supernova needs a windowed digitizer (ski/hk); got "
+            f"{digitizer_model.get('model')!r}. Set digitizer.model to ski or hk.")
+    if min_physics_hits is None:
+        raise ValueError(
+            "Supernova needs the truth-based selection (selection.mode = "
+            "min_physics_hits), not the readout trigger.")
+    if run_id is None:
+        run_id = str(uuid.uuid4())
+    sensor_positions_np = np.asarray(sensor_positions, dtype=np.float32)
+    n_sensors = int(sensor_positions_np.shape[0])
+
+    try:
+        git_commit = subprocess.check_output(
+            ['git', 'rev-parse', 'HEAD'],
+            cwd=os.path.dirname(os.path.abspath(__file__)),
+            stderr=subprocess.DEVNULL).decode().strip()
+    except Exception:
+        git_commit = 'unknown'
+
+    # Open the burst ROOT once and reuse the handle for every entry read —
+    # re-opening per interaction re-parses the tree metadata each time (~10x
+    # read cost over a full burst).
+    burst_file = uproot.open(burst_root_file)
+    M = int(burst_file['OpticalPhotons'].num_entries)
+    times_ms = np.asarray(interaction_times_ms, dtype=np.float64)
+    if times_ms.shape[0] != M:
+        raise ValueError(
+            f"interaction_times_ms ({times_ms.shape[0]}) != burst entries ({M})")
+
+    # Burst-level key for the single global t0, using a high sentinel index so
+    # it can't collide with the per-interaction keys (0..M-1). fold_in needs a
+    # non-negative uint32.
+    burst_keys = derive_event_keys(master_seed, job_id, source_event_idx,
+                                   interaction_idx=0x7FFFFFFF)
+    global_t0 = float(np.random.default_rng(
+        seed=burst_keys['t0_seed']).uniform(-T0_HALF_WINDOW_NS, T0_HALF_WINDOW_NS))
+    t0_abs_ns = global_t0 + times_ms * 1.0e6           # ms -> ns, float64
+    order = np.argsort(t0_abs_ns, kind='stable')
+    t0_sorted = t0_abs_ns[order]
+
+    integ = float(digitizer_model.get('integration_window_ns') or 200.0)
+    trig_span = (trigger_cfg.window_ns + trigger_cfg.pad_before_ns
+                 + trigger_cfg.pad_after_ns) if trigger_cfg is not None else 0.0
+    coupling_ns = max(integ, trig_span)
+    chunks = _group_interactions_by_gap(t0_sorted, coupling_ns)
+    span_ms = (t0_sorted[-1] - t0_sorted[0]) / 1e6 if M else 0.0
+    print(f"Supernova: {M} interactions, global_t0={global_t0:+.1f}ns, "
+          f"span={span_ms:.2f}ms, coupling={coupling_ns:.0f}ns -> "
+          f"{len(chunks)} causally-independent chunks", flush=True)
+
+    rays_buckets = _normalize_buckets(_DEFAULT_PAD_SIZE_BUCKETS)
+    _warmup_buckets(event_simulator, rays_buckets)
+    det_geom = getattr(event_simulator, 'det_geom', None)
+    if det_geom is None:
+        raise ValueError("event_simulator has no .det_geom attribute.")
+    detector_type = str(det_geom.detector_type)
+    material = str(det_geom.medium.material)
+    detector_bounds = _detector_bounds_from_det_geom(det_geom)
+    if apply_translation and detector_bounds is None:
+        raise ValueError("apply_translation=True requires a detector with bounds.")
+
+    running_offset = 0
+    surviving = []
+    for cidx, chunk in enumerate(chunks):
+        streams = []
+        for local_i in chunk:
+            entry = int(order[local_i])
+            t0_i = float(t0_sorted[local_i])
+            ev_keys = derive_event_keys(master_seed, job_id, source_event_idx,
+                                        interaction_idx=entry)
+            if apply_translation:
+                # SN fills nearly the whole inner volume (r<=0.995R, |z|<=0.995 H/2)
+                # and redraws any vertex landing inside a PMT.
+                vtx = sample_translation_vector(
+                    detector_bounds, np.random.default_rng(seed=ev_keys['vertex_seed']),
+                    r_frac=0.995, z_frac=0.995, sensor_positions=sensor_positions_np,
+                    pmt_radius=detector_bounds.get('sensor_radius', 0.25))
+            else:
+                vtx = np.zeros(3, dtype=np.float32)
+            raw = _read_event_raw(str(burst_root_file), entry, opened_file=burst_file)
+            chan = (int(interaction_channels[entry])
+                    if interaction_channels is not None
+                    and entry < len(interaction_channels) else None)
+            stream, stream_max = _simulate_interaction_stream(
+                event_simulator, raw, t0=t0_i, vertex=vtx,
+                source_type_code=_source_type_code('supernova'),
+                running_offset=running_offset, n_sensors=n_sensors,
+                rays_buckets=rays_buckets, event_keys=ev_keys,
+                apply_translation=apply_translation, interaction_channel=chan)
+            streams.append(stream)
+            running_offset = stream_max + 1
+
+        merged_chunk = _merge_pileup_streams(
+            streams, n_sensors=n_sensors, apply_smearing=apply_smearing,
+            digitizer_model=digitizer_model,
+            digi_rng=np.random.default_rng(
+                [int(master_seed), int(job_id), int(source_event_idx), int(cidx)]),
+            detector_bounds=detector_bounds)
+
+        # Selection. Default (min_physics_hits): trigger-free truth cut — keep the
+        # interaction as one readout window iff it has >= N physics hits, so the
+        # dataset isn't biased by a trigger choice (dark is kept + labelled).
+        # Falls back to the sliding-window trigger when min_physics_hits is None.
+        if min_physics_hits is not None:
+            sel = _keep_chunk_min_physics_hits(merged_chunk, min_physics_hits)
+        elif trigger_cfg is not None:
+            sel = apply_trigger(merged_chunk['sensor_digits'], merged_chunk['hits_sparse'],
+                                merged_chunk.get('segment_sensor_hits'), trigger_cfg)
+        else:
+            sel = (merged_chunk['sensor_digits'], merged_chunk['hits_sparse'],
+                   merged_chunk.get('segment_sensor_hits'), merged_chunk.get('per_window'))
+        if sel is None:
+            continue
+        merged_chunk['sensor_digits'], merged_chunk['hits_sparse'], _seg, \
+            merged_chunk['per_window'] = sel
+        if _seg is not None:
+            merged_chunk['segment_sensor_hits'] = _seg
+        elif 'segment_sensor_hits' in merged_chunk:
+            del merged_chunk['segment_sensor_hits']
+        surviving.append(merged_chunk)
+
+    burst_file.close()
+    n_kept = len(surviving)
+    _sel_desc = (f">= {min_physics_hits} physics hits" if min_physics_hits is not None
+                 else "triggered")
+    print(f"Supernova: {n_kept}/{len(chunks)} interactions kept ({_sel_desc})", flush=True)
+    merged = _concat_triggered_chunks(surviving)
+    if merged is None:
+        print("Supernova: no interaction kept — no event written", flush=True)
+        return []
+    merged['source_event_idx'] = int(source_event_idx)
+    merged['source'] = 'PhotonSim_Supernova'
+
+    out_root = Path(output_dir)
+    for sub in ('sensor', 'hits', 'step', 'labl'):
+        (out_root / sub).mkdir(parents=True, exist_ok=True)
+    file_idx = int(file_index_start)
+    paths = {sub: out_root / sub / f'wc_{sub}_{file_idx:04d}.h5'
+             for sub in ('sensor', 'hits', 'step', 'labl')}
+    batch_src_idx = np.array([int(source_event_idx)], dtype=np.uint32)
+    config_meta = {
+        'n_events': 1,
+        'git_commit': git_commit,
+        'run_id': run_id,
+        'dataset_name': dataset_name,
+        'file_index': file_idx,
+        'source_file': os.path.abspath(str(burst_root_file)),
+        'lucid_master_seed': int(master_seed),
+        'photonsim_seed': -1,
+        'n_sensors': n_sensors,
+        'detector_type': detector_type,
+        'material': material,
+        'smearing_applied': bool(apply_smearing),
+        'smearing_charge_function': 'SK_like' if apply_smearing else 'none',
+        'smearing_time_function': 'SK_like' if apply_smearing else 'none',
+        'digitizer_model': str(digitizer_model['model']),
+        **_trigger_config_meta(trigger_cfg),
+        'selection': ('min_physics_hits' if min_physics_hits is not None else 'trigger'),
+        'selection_min_physics_hits': (int(min_physics_hits)
+                                       if min_physics_hits is not None else 0),
+        'sn_direction': [float(x) for x in (sn_direction or [0.0, 0.0, 1.0])],
+        'label_names': ['category'],
+    }
+    if detector_bounds is not None:
+        config_meta['detector_shape'] = detector_bounds['type']
+        if detector_bounds['type'] == 'cylinder':
+            config_meta['detector_radius'] = detector_bounds['radius']
+            config_meta['detector_half_height'] = detector_bounds['height'] / 2.0
+
+    with h5py.File(paths['sensor'], 'w') as fs, h5py.File(paths['hits'], 'w') as fi, \
+            h5py.File(paths['step'], 'w') as fg, h5py.File(paths['labl'], 'w') as fl:
+        write_sensor_config(fs, config_meta, batch_src_idx, sensor_positions_np)
+        write_hits_config(fi, config_meta, batch_src_idx, sensor_positions_np)
+        write_step_config(fg, config_meta, batch_src_idx)
+        write_labl_config(fl, config_meta, batch_src_idx)
+        save_sensor_event(fs, merged, 0)
+        save_hits_event(fi, merged, 0)
+        save_step_event(fg, merged, 0)
+        save_labl_event(fl, merged, 0)
+        mark_config_complete(fs, fi, fg, fl)   # event written => healthy
+
+    n_dig = int(np.asarray(merged['sensor_digits']['sensor_idx']).shape[0])
+    n_win = int(np.asarray(merged.get('per_window', {}).get('window_start', [])).shape[0]) \
+        if 'per_window' in merged else 0
+    print(f"Supernova: wrote 1 event — {n_dig} digits in {n_win} windows "
+          f"from {n_kept} kept interactions", flush=True)
+    return [str(paths[sub]) for sub in ('sensor', 'hits', 'step', 'labl')]

@@ -1,10 +1,10 @@
-# Local Quickstart — Produce v3 events on any machine
+# Local Quickstart — Produce events on any machine
 
 > **On macOS, or prefer a container?** See
 > [QUICKSTART_DOCKER.md](QUICKSTART_DOCKER.md) — one `docker build`,
 > then one `docker run`, with GEANT4 + ROOT + GENIE already set up.
 
-Three steps to a working v3 dataset with no S3DF, no SLURM, no
+Three steps to a working dataset with no S3DF, no SLURM, no
 singularity.
 
 ## Prerequisites
@@ -65,7 +65,7 @@ step/wc_step_0000.h5
 labl/wc_labl_0000.h5
 ```
 
-See [LUCID_DATASET.md](LUCID_DATASET.md) for the v3 schema.
+See [LUCID_DATASET.md](LUCID_DATASET.md) for the schema.
 
 ## 4. Inspect in a browser (optional)
 
@@ -146,7 +146,7 @@ details (bind-mount dev loop, Rosetta setup, etc.).
 1. Parse the JSON config.
 2. Generate a Geant4 macro (`job_<id>.mac`).
 3. Run `$PHOTONSIM_BIN <macro>` (subprocess) → ROOT file.
-4. Run the LUCiD v3 writer in-process → four `wc_*_NNNN.h5` files.
+4. Run the LUCiD writer in-process → four `wc_*_NNNN.h5` files.
 5. Verify the four files open cleanly and carry the right provenance.
 6. Delete the ROOT file if `cleanup_root_files: true` in the config.
 
