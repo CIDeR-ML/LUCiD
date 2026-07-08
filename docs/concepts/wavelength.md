@@ -21,7 +21,9 @@ from `config/materials/<material>.json`:
   forward-peaked it is).
 - **Absorption** — for water: the SK-calibration power law in the blue joined onto the
   Pope & Fry (1997) measured data in the red, blended smoothly across the ~464 nm seam so
-  gradients stay kink-free.
+  gradients stay kink-free. On top of *both* branches rides an always-on `P0·P1/λ⁴` term
+  (`alpha_abs = P0·P1/λ⁴ + C` in `medium.py`, `C` = the blue-power-law-or-Pope-Fry piece) — the
+  short-wavelength absorption tail is part of SK's own model, not a separate addition.
 - **Refractive index** — currently a single constant `n` per material (no dispersion):
   the Cherenkov angle and photon timing use one `n`/light-speed per event. A per-λ index
   is a natural extension the medium format already reserves space for.
@@ -45,7 +47,8 @@ L_prop(λ)  = L_ref(λ)   /  dev(λ)            # more deviation → shorter len
 Each optical property carries its `*_dev` curve in `DetectorParams` (`rayleigh_dev`,
 `mie_dev`, `abs_dev`, `qe_dev`) — one
 value per control wavelength, anchored at the SK calibration-laser lines
-(337, 375, 398, 405, 445 nm) and interpolated to each photon's λ with flat extrapolation
+(337, 375, 398, 405, 445 nm — though 398 nm is SK's timing/diffuser laser rather than one of the
+transparency lasers) and interpolated to each photon's λ with flat extrapolation
 outside the grid. A deviation curve of all ones reproduces the pure reference exactly, so
 calibration fits *departures* from known physics rather than refitting the physics itself.
 
@@ -61,6 +64,25 @@ calibration fits *departures* from known physics rather than refitting the physi
 - **Scalar projection**: configs that choose a scalar representation for a property get it
   projected from the referenced λ-curve at `scalar_ref_wavelength` (400 nm by default), so
   the two regimes agree at the reference wavelength by construction.
+
+## `wavelength_sampling`: bare spectrum vs QE-weighted
+
+When LUCiD samples the wavelengths itself (track mode, or calibration with `source.wavelength=None`),
+`wavelength_sampling` on `setup_event_simulator` chooses *how*:
+
+- **`'cherenkov'`** (default) — sample λ from the bare `1/λ²` Cherenkov spectrum and give each
+  photon the explicit per-photon weight `qe_fn(λ)`. The QE curve is carried *outside* the sampler,
+  so it stays visible as a distinct factor in every photon's weight.
+- **`'cherenkov_qe'`** — sample λ from `QE(λ)/λ²` directly (inverse-CDF), so the per-photon weight
+  collapses to the scalar mean `⟨QE⟩_C`. This is variance-optimal in expected-value mode (it puts
+  samples where they are detectable), but it *folds QE into the sampling distribution*. Rejected at
+  setup when `wavelength_mode=False`, no QE curve is loaded, or `is_data=True`.
+
+The practical consequence: **fitting QE requires the bare spectrum (`'cherenkov'`)**. Once QE is
+baked into the sampling law (`'cherenkov_qe'`), the per-photon weight no longer carries `qe(λ)` as a
+free factor, so a gradient of the loss w.r.t. the QE curve has nothing to act on. Use
+`'cherenkov_qe'` for variance-reduced forward densities; use `'cherenkov'` whenever QE (or its
+`qe_dev` deviation curve) is being calibrated.
 
 See [Parameters (DetectorParams)](detector-params-vs-args.md) for how the fittable leaves
 are organized, and [Calibration](../guides/calibration.md) for how the deviation curves are
