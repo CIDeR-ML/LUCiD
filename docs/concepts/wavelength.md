@@ -1,0 +1,61 @@
+# Wavelength physics
+
+LUCiD runs in one of two regimes, selected by `wavelength_mode` on
+`setup_event_simulator`:
+
+- **Scalar (monochromatic) mode** — every photon carries the same optical properties: the
+  fittable scalars in `DetectorParams` (`scatter_length`, `mie_scatter_length`,
+  `absorption_length`, `qe`, …). Fast, and sufficient whenever the wavelength dependence is
+  not the question being asked.
+- **Wavelength mode** — every photon carries its own λ, and scattering/absorption/QE are
+  evaluated per photon from medium reference curves. This is the physically faithful mode
+  used for spectral calibration and wavelength-consistent reconstruction.
+
+## The medium reference
+
+`lucid.wavelength.medium.make_medium(material, wavelength_grid)` builds the reference curves
+from `config/materials/<material>.json`:
+
+- **Rayleigh scattering** — a 1/λ⁴ law anchored to the material's measured scattering length.
+- **Absorption** — for water: the SK-calibration power law in the blue spliced onto the
+  Pope & Fry (1997) measured data in the red, blended smoothly across the seam so the curve
+  (and its gradients) are kink-free.
+- **Refractive index / group velocity** — dispersion for Cherenkov angle and photon timing.
+
+The medium grid spans [300, 700] nm. Materials are composable: `water`, `wbls`, and `ice`
+each have their own JSON (WbLS inherits water's bulk optics; the bundled ice file is an
+acknowledged placeholder using the water functional form).
+
+## Reference × deviation: what is fittable
+
+Per-photon evaluation happens in one place — `lucid.wavelength.optical_model.
+evaluate_optical_model` — under a single decomposition:
+
+```
+property(λ) = reference(λ)  ×  deviation(λ; DetectorParams)
+```
+
+The **reference** is fixed medium physics from the curves above. The **deviation** is the
+fittable part: each optical property (Rayleigh, Mie, absorption, QE) carries a short
+`*_dev` curve in `DetectorParams` (`rayleigh_dev`, `mie_dev`, `abs_dev`, `qe_dev`) — one
+value per control wavelength, anchored at the SK calibration-laser lines
+(337, 375, 398, 405, 445 nm) and interpolated to each photon's λ with flat extrapolation
+outside the grid. A deviation curve of all ones reproduces the pure reference exactly, so
+calibration fits *departures* from known physics rather than refitting the physics itself.
+
+## QE and Cherenkov sampling
+
+- **QE**: in wavelength mode each photon is weighted by `qe_fn(λ)` built from the PMT's
+  measured QE curve (`config/pmt/`, knots spanning [294, 648] nm); in scalar mode a single QE
+  enters at hit-making instead.
+- **Cherenkov spectrum**: track sources sample the 1/λ² Cherenkov spectrum over the physical
+  emission band (`cherenkov_emission_band` on `setup_event_simulator`). Photons outside the
+  QE knots or medium grid contribute nothing, which is exactly the physical statement that
+  they are undetectable.
+- **Scalar projection**: configs that choose a scalar representation for a property get it
+  projected from the referenced λ-curve at `scalar_ref_wavelength` (400 nm by default), so
+  the two regimes agree at the reference wavelength by construction.
+
+See [Parameters (DetectorParams)](../DETECTOR_PARAMS_VS_ARGS.md) for how the fittable leaves
+are organized, and [Calibration](../CALIBRATION.md) for how the deviation curves are
+constrained by laser + isotropic source data.

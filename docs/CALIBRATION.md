@@ -1,66 +1,74 @@
-# Calibration — recipe & findings
+# Calibration
 
 How LUCiD calibrates detector optics — per-PMT quantum efficiency `k` plus the global optical
-parameters (absorption `L_abs`, Rayleigh `L_R`, Mie `L_M`, wall/sensor reflectivity, QE spectrum,
-`n_real`) — by gradient descent through the differentiable forward.(API / partition-combine), `examples/hello_calibrate.py` (runnable end-to-end), `docs/WAVELENGTH_DESIGN.md`.
+parameters (absorption `L_abs`, Rayleigh `L_R`, Mie `L_M`, wall/sensor reflectivity, QE
+spectrum, `n_real`) — by gradient descent through the differentiable forward. See also:
+`lucid.fitting` (`build_calibration_problem` / `fit` / `crb`), `examples/hello_calibrate.py`
+(runnable end-to-end), and [wavelength physics](concepts/wavelength.md).
 
 ## What is measured
 
 `DetectorParams` is a JAX pytree with normalize/denormalize + bounds, so every optical property
 is directly optimizable. Two tiers:
-- **~19 global optical params** (scalars or λ-curves): `L_abs`, `L_R`, `L_M`, `wall_refl`,
-  `sensor_refl`, `qe` spectral multipliers, `n_real`, SPE width `w`, etc.
-- **per-PMT `k`** (QE map, ~10⁴ sensors).
 
-## Recipe (per-sensor QE + all globals — the validated path)
+- **Global optical params** (scalars or λ-curves): `L_abs`, `L_R`, `L_M`, `wall_refl`,
+  `sensor_refl`, `qe` spectral multipliers, `n_real`, SPE width, etc.
+- **per-PMT `k`** (the QE map — one multiplier per sensor, ~10⁴ of them).
 
-1. **Source diversity is the lever.** Mix wall lasers (several λ + positions) + an isotropic
-   volume source. Diversity breaks the key degeneracies — `L_M↔k`, `L_abs↔qe`, wall↔sensor —
-   and makes `L_M` measurable with a plain absorption loss (no cross-term gymnastics).
-2. **Globals: τ-smoothed √-MSE loss**, NOT Poisson-NLL (which biases `L_abs`/`qe` ~1.3%). The
-   τ-smoothing is a spatial-frequency projector: smooth optical fields are low-freq, per-PMT `k`
-   is white/high-freq, so τ-smoothing isolates the globals. Optimizer: **consistent
-   fixed-dataset Gauss-Newton, `CLIP=0` additive ridge**, min‖g‖ readout → reaches near-CRB on
-   6/7 parameter classes.
-3. **per-PMT `k`: closed-form `k = Q/M`** (τ=0, isotropic source, slope 1.000, scatter ~1/√N).
-4. **One bake alternation.** Without baking `k̂`, white per-PMT `k` leaks into the flattest global
-   direction (e.g. `wall_refl`) and inflates its floor; baking `k̂` (estimate bakes as well as the
-   oracle) restores it. Gauge: fix `mean(log k)=0` (else a `qe↔mean(k)` offset ~exp(ε²/2)).
-   ⚠️ A SMOOTH (position-correlated) QE trend is the dangerous case — it lives in the optical band
-   and, ignored, DIVERGES the reflectivities; per-sensor `k̂=Q/M` captures it, but needs a
-   bootstrap `k̂` from a rough θ (naive `k̂=1` first pass diverges).
+## Recipe (per-sensor QE + all globals)
+
+1. **Source diversity is the lever.** Mix wall lasers (several wavelengths and positions) with
+   an isotropic volume source. Diversity breaks the key degeneracies — `L_M↔k`, `L_abs↔qe`,
+   wall↔sensor reflectivity — and makes the scattering lengths measurable with a plain charge
+   loss.
+2. **Globals: a smoothed square-root-MSE loss**, not Poisson-NLL (the NLL's weighting biases
+   the absorption/QE point at finite photon counts). The spatial smoothing acts as a frequency
+   projector: smooth optical fields are low-frequency across the sensor array while per-PMT `k`
+   is white, so smoothing isolates the globals. Optimizer: a consistent fixed-dataset
+   Gauss-Newton with an additive ridge and a min-gradient readout.
+3. **per-PMT `k`: closed-form `k = Q/M`** — the ratio of observed to predicted charge per
+   sensor under an isotropic source.
+4. **One bake alternation.** Without baking the estimated `k̂` back into the forward, white
+   per-PMT variation leaks into the flattest global direction (typically a reflectivity) and
+   inflates its uncertainty; one alternation restores it. Fix the gauge with `mean(log k)=0`,
+   otherwise a global QE↔mean(k) offset is unconstrained. A **smooth, position-correlated QE
+   trend is the dangerous case** — it mimics the optical fields, and if ignored it drags the
+   reflectivities away; the per-sensor `k̂=Q/M` step captures it, but needs a bootstrap `k̂`
+   from a rough global fit first.
 
 ## Observable complementarity
 
-- **Charge** — most parameters, especially anything coupling to total light + the longitudinal/
+- **Charge** — constrains most parameters, especially anything coupling to total light or the
   spatial charge shape. Per-PMT `k` is pure charge.
-- **Timing (first-arrival)** — geometric, ⊥ to absorption; it IS the lever for the
-  scattering/reflection *geometry*: low-occupancy single-PE timing recovers `wall_refl` ~4–5×,
-  `qe` ~1.4×, blue `L_abs` ~1.3×. It CANNOT measure `L_M` (Mie is optically thin → charge-
-  invisible AND timing-invisible at the per-event level).
-- **Charge variance** — breaks the per-PMT QE↔gain degeneracy + measures the SPE width `w`.
+- **Timing (first-arrival)** — geometric and largely orthogonal to absorption; it is the lever
+  for the scattering/reflection *geometry*: low-occupancy single-PE timing constrains the wall
+  reflectivity far better than charge alone. It cannot measure `L_M` at typical detector
+  scales (Mie scattering is optically thin — nearly invisible to both charge and per-event
+  timing).
+- **Charge variance** — breaks the per-PMT QE↔gain degeneracy and measures the SPE width.
 
 ## Wavelength consistency (shared with reconstruction)
 
 Calibration runs `wavelength_mode=True` and applies `qe_fn(λ)` per photon. The same
-band-consistency principle from reconstruction applies: a broadband Cherenkov `qe(λ)` fit must
-sample the **bare 1/λ² spectrum over the physical emission band** and apply differentiable
-`qe(λ)` — the production `cherenkov_qe` importance-sampler bakes the unknown QE into the λ
-distribution and cannot be used to FIT qe. Broadband sources measure only the spectrum integral
-(amplitudes + `k`); **monochromatic lasers anchor `qe(λ_i)`**. The QE knot range is [294, 648] nm;
-the medium grid is [300, 700] nm.
+band-consistency principle from [reconstruction](RECONSTRUCTION.md) applies: a broadband
+Cherenkov `qe(λ)` fit must sample the **bare 1/λ² spectrum over the physical emission band**
+and apply differentiable `qe(λ)` — an importance sampler that bakes the assumed QE into the λ
+distribution cannot be used to *fit* QE. Broadband sources measure only the spectrum integral
+(amplitudes + `k`); **monochromatic lasers anchor `qe(λᵢ)`**. The QE knot range is
+[294, 648] nm; the medium grid is [300, 700] nm.
 
 ## Uncertainty: quote the CRB, not the sim toy-MC
 
-Fit uncertainty = inverse Poisson Fisher at θ_true, `¼(JᵀJ)⁻¹` (autodiff jvp, log-params →
-fractional). Representative: `L_M` σ ~5%, corr `L_abs↔qe` ≈ −0.78. ⚠️ The implicit-capture
-(expected-value) engine is ~√12 quieter than real Poisson shot noise → noise-free fits look √12
-too good. Use `sample_engine.py` (exact Bernoulli per-photon quanta) for honest shot-noise
-validation; otherwise quote the CRB. Per-PMT `k` reaches ~1% at a few×10⁸ photons; smooth
-λ-curves are systematics/prior-limited (flat in N), only per-PMT `k` is photon-limited (1/√N).
+Fit uncertainty comes from the inverse Poisson Fisher information at the fitted point
+(`lucid.fitting.crb`; autodiff JVPs, log-params give fractional errors). One caveat: the
+expected-value (implicit-capture) engine is quieter than real Poisson shot noise, so noise-free
+closure fits look better than reality — validate shot noise with sampled per-photon quanta, or
+simply quote the CRB. Per-PMT `k` improves as 1/√N with photon statistics; smooth λ-curves
+become systematics-limited rather than photon-limited.
 
 ## Frontier
 
-The biggest untapped lever is the **timing observable** for the reflectivities + blue `L_abs`
-(all charge-only work to date zeroes reflected/late-photon time). The flexible-curve engine
-(`wl_engine2`) supports free λ-deviation curves (28/30 DOF) for beyond-SK spectral calibration.
+The biggest untapped lever is the **timing observable** for the reflectivities and blue-end
+absorption — charge-only calibration ignores the arrival-time information that reflected and
+late photons carry. Free per-λ deviation curves on the optical properties extend the same
+machinery to beyond-nominal spectral calibration.

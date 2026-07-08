@@ -19,6 +19,13 @@ sources  →  propagation  →  photon_step (× K)  →  sensor_response
 - **`lucid/simulation/sensor_response.py`** aggregates photon weights into per-PMT charge and a
   soft-min first-arrival time.
 
+For **data production** there is one more, non-differentiable stage after the simulator
+kernel: **`lucid/simulation/digitizer.py`** decomposes the per-PMT signal into digits (SPE
+charge sampling, per-sensor time-window integration, dark noise) and
+**`lucid/simulation/trigger.py`** applies an optional sliding-window readout trigger. These
+model detector electronics for dataset realism; the differentiable inference path stops at
+`sensor_response`. See the [dataset schema](../LUCID_DATASET.md) for what they write.
+
 ## The one entry point: `setup_event_simulator`
 
 `lucid.simulation.setup_event_simulator(json_filename, ...)` is the hub. It reads the geometry
