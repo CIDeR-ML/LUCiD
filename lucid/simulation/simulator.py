@@ -147,11 +147,13 @@ def setup_event_simulator(
         autodiff Hessian wrt photon→sensor distance).
     reflection_model : str
         Reflection model: ``'scalar'`` (default, byte-identical — angle/λ-
-        independent wall/sensor rates, hard direction) or ``'angular'`` (Schlick
-        blacksheet wall + multilayer-Fresnel cathode sensor, with a specular/
-        diffuse direction mixture). The angular model reads the
-        ``DetectorParams.reflection`` fields ``wall_R0/wall_p/wall_fspec`` and
-        ``cathode_nr/cathode_nk/sensor_fspec``.
+        independent wall/sensor rates, hard direction), ``'scalar_mix'`` (the
+        scalar rates plus a specular/diffuse direction mixture via
+        ``wall_fspec/sensor_fspec``, DiCE-scored — no per-photon λ needed), or
+        ``'angular'`` (Schlick blacksheet wall + multilayer-Fresnel cathode
+        sensor, with a specular/diffuse direction mixture). The angular model
+        reads the ``DetectorParams.reflection`` fields ``wall_R0/wall_p/
+        wall_fspec`` and ``cathode_nr/cathode_nk/sensor_fspec``.
     reflection_wavelength : float
         Wavelength (nm) fed to the reflection model's dispersion (cathode/glass
         Fresnel). Exact for monochromatic-laser calibration; ignored by the
