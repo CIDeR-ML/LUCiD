@@ -88,3 +88,18 @@ export LUCID_DEV_PATH="/global/u1/c/cjesus/DIFFSIM/LUCiD"
 # PhotonSim is C++: only set this if you change its source, and rebuild the host
 # build/ against the image first (see QUICKSTART_NERSC.md).
 # export PHOTONSIM_DEV_PATH="/global/u1/c/cjesus/DIFFSIM/PhotonSim"
+
+# =============================================================================
+# Supernova generator (sntools) — only needed for primary_source=supernova
+# =============================================================================
+# sntools + snewpy are NOT in the base image; install them once into a CFS
+# PYTHONUSERBASE built against the container Python, then point SN_ENV_BASE at
+# it. Each supernova sbatch exports APPTAINERENV_PYTHONUSERBASE=$SN_ENV_BASE so
+# the container Python imports sntools from here (mirrors LUCID_ENV_BASE).
+#   export SN_ENV_BASE="/global/cfs/cdirs/dune/users/$USER/software/sn_env"
+#   "$APPTAINER_BIN" exec -B /global/cfs,/global/homes,/global/u1,/cvmfs "$LUCID_IMAGE_PATH" \
+#       bash -lc "PYTHONUSERBASE=$SN_ENV_BASE python3 -m pip install --user sntools snewpy"
+# Compute nodes have no network — for SNEWPY-<Model> fluxes, pre-download the
+# model data on a login node before submitting (the built-in AdiabaticMSW
+# transformations and the shipped analytic `gamma` fluxes need no download).
+# export SN_ENV_BASE="/global/cfs/cdirs/dune/users/cjesus/software/sn_env"

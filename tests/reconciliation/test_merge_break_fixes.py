@@ -62,7 +62,7 @@ def test_particle_reader_rejects_chunked_schema(tmp_path):
     """The legacy particle-genealogy reader read_particle_data_from_photonsim only
     supports the legacy (per-photon-on-OpticalPhotons) schema. On a chunked
     OpticalPhotonsRaw ROOT it must raise a clear, actionable error pointing at the
-    v3 chain — NOT a cryptic uproot KeyInFileError deep in tree.arrays()."""
+    production chain — NOT a cryptic uproot KeyInFileError deep in tree.arrays()."""
     from lucid.sources.event_io import read_particle_data_from_photonsim
     _write_raw_root(str(tmp_path / "raw.root"))
     with pytest.raises(KeyError, match="chunked PhotonSim schema|OpticalPhotonsRaw"):

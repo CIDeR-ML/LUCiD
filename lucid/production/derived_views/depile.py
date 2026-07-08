@@ -1,18 +1,21 @@
 #!/usr/bin/env python3
-"""De-pile a v3 pile-up dataset: split each event's N interactions into N separate
+"""De-pile a pile-up dataset: split each event's N interactions into N separate
 single-interaction events (Option A — one folder, ~2x events).
 
 ROOT-free: pure re-indexing of the stored sensor/hits/step/labl files.
 - per_track / per_particle / per_interaction sliced to one interaction (FKs remapped)
 - step segments + sensor_hits filtered & remapped; hits filtered & remapped
-- sensor re-aggregated from that interaction's sensor_hits
+- sensor rebuilt as this interaction's digit list (keyed by original digit_idx,
+  so multi-hit is preserved), and digit_idx is remapped in hits/sensor_hits
 - the per-segment 'edep' VALUE dataset is preserved
+Dark hits (particle_idx<0, detector-level) and per_window (trigger, detector-
+level) are not carried into the single-interaction views.
 Source event e (interactions 0..M-1) -> dest events [e*M_max ... ] sequential.
 
 Processes ONE file index (resumable: re-run skips files whose dest event count
 already matches). Usage: depile.py SRC_DIR DST_DIR FILE_INDEX
 
-Dataset-agnostic: works on any v3 pile-up dataset. See submit_depile_array.sbatch
+Dataset-agnostic: works on any pile-up dataset. See submit_depile_array.sbatch
 in this directory for the SLURM array driver, and README.md for the derived-view
 family (relabel_*.py) and the hard-won gotchas.
 """
@@ -83,7 +86,23 @@ for e in src_events:
         tmap=remap(pt["interaction"].shape[0],kt); pmap=remap(pp["interaction_idx"].shape[0],kp)
         kseg = kt[seg["track_idx"]]; smap=remap(seg["track_idx"].shape[0],kseg)
         ksh = kseg[sh["segment_idx"]]
-        kh = kp[hit["particle_idx"]]
+        _hpi = hit["particle_idx"]                       # dark (particle_idx<0) excluded
+        kh = (_hpi >= 0) & kp[np.where(_hpi >= 0, _hpi, 0)]
+        # Rebuild this interaction's digit list from its sensor_hits, keyed by the
+        # ORIGINAL digit_idx (multi-hit preserved: a PMT may own several digits).
+        # dmap remaps old digit_idx -> new sensor row so hits/sensor_hits stay linked.
+        n_orig_dig = int(sen["sensor_idx"].shape[0])
+        k_did=sh["digit_idx"][ksh]; k_sid=sh["sensor_idx"][ksh]; k_pe=sh["PE"][ksh]; k_t=sh["T"][ksh]
+        dmap=np.full(max(n_orig_dig,1),-1,np.int64)
+        if k_did.size:
+            order=np.argsort(k_did,kind="stable"); ds=k_did[order]
+            starts=np.concatenate(([0],np.flatnonzero(ds[1:]!=ds[:-1])+1))
+            old_dig=ds[starts]; new_sid=k_sid[order][starts]
+            new_pe=np.add.reduceat(k_pe[order],starts); new_t=np.minimum.reduceat(k_t[order],starts)
+            dmap[old_dig]=np.arange(old_dig.size)
+        else:
+            old_dig=np.array([],np.int64); new_sid=np.array([],np.uint16)
+            new_pe=np.array([],np.float32); new_t=np.array([],np.float32)
         en=f"event_{out:03d}"
         # ---- labl ----
         lg=Lw.create_group(en)
@@ -122,6 +141,7 @@ for e in src_events:
         for k,v in sh.items():
             nv=v[ksh]
             if k=="segment_idx": nv=smap[nv].astype(v.dtype)
+            elif k=="digit_idx": nv=dmap[nv].astype(v.dtype)
             gsh.create_dataset(k,data=nv,**GZ)
         gg.attrs["source_event_idx"]=np.uint32(src_idx); gg.attrs["n_tracks"]=np.int64(int(kt.sum())); gg.attrs["n_segments"]=np.int64(int(kseg.sum())); gg.attrs["has_segment_sensor_map"]=np.True_
         gsh.attrs["n_segment_hits"]=np.int64(int(ksh.sum()))
@@ -130,20 +150,14 @@ for e in src_events:
         for k,v in hit.items():
             nv=v[kh]
             if k=="particle_idx": nv=pmap[nv].astype(v.dtype)
+            elif k=="digit_idx": nv=dmap[nv].astype(v.dtype)
             hg.create_dataset(k,data=nv,**GZ)
         hg.attrs["source_event_idx"]=np.uint32(src_idx); hg.attrs["n_particles"]=np.int64(int(kp.sum())); hg.attrs["n_particle_hits"]=np.int64(int(kh.sum()))
-        # ---- sensor: re-aggregate from this interaction's sensor_hits ----
-        ksid=sh["sensor_idx"][ksh]; kpe=sh["PE"][ksh]; kt_=sh["T"][ksh]
-        if ksid.size:
-            order=np.argsort(ksid); ksid=ksid[order]; kpe=kpe[order]; kt_=kt_[order]
-            uniq,first=np.unique(ksid,return_index=True)
-            pe=np.add.reduceat(kpe,first); tt=np.minimum.reduceat(kt_,first)
-        else:
-            uniq=np.array([],np.uint16); pe=np.array([],np.float32); tt=np.array([],np.float32)
+        # ---- sensor: the per-digit list rebuilt above (multi-hit preserved) ----
         sg=Sw.create_group(en)
-        sg.create_dataset("sensor_idx",data=uniq.astype(np.uint16),**GZ)
-        sg.create_dataset("PE",data=pe.astype(np.float32),**GZ); sg.create_dataset("T",data=tt.astype(np.float32),**GZ)
-        sg.attrs["source_event_idx"]=np.uint32(src_idx); sg.attrs["n_hits"]=np.int64(int(uniq.size))
+        sg.create_dataset("sensor_idx",data=new_sid.astype(np.uint16),**GZ)
+        sg.create_dataset("PE",data=new_pe.astype(np.float32),**GZ); sg.create_dataset("T",data=new_t.astype(np.float32),**GZ)
+        sg.attrs["source_event_idx"]=np.uint32(src_idx); sg.attrs["n_hits"]=np.int64(int(old_dig.size))
         out_src_idx.append(src_idx); out+=1
 
 # fix config source_event_idx + n_events on all four

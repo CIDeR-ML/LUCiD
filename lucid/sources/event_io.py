@@ -570,7 +570,7 @@ def read_particle_data_from_photonsim(root_file_path, entry_index, include_track
     # Schema guard: the particle-genealogy path reads the per-photon branches
     # (PhotonPosX, ...) directly off OpticalPhotons. The current chunked PhotonSim
     # schema relocates those into a separate OpticalPhotonsRaw tree, so they raise
-    # a cryptic KeyInFileError here. Fail loudly with guidance instead -- the v3
+    # a cryptic KeyInFileError here. Fail loudly with guidance instead -- the
     # production chain (lucid-run-job -> lucid.sources.event_generation, backed by
     # root_reader) handles the chunked schema natively; this legacy monolith path
     # requires a legacy (per-photon-on-OpticalPhotons) ROOT.
@@ -579,7 +579,7 @@ def read_particle_data_from_photonsim(root_file_path, entry_index, include_track
             f"{root_file_path!r} uses the chunked PhotonSim schema (per-photon "
             "branches live in 'OpticalPhotonsRaw', not 'OpticalPhotons'). The "
             "particle-genealogy reader read_particle_data_from_photonsim only "
-            "supports the legacy schema. Use the v3 production chain "
+            "supports the legacy schema. Use the production chain "
             "(lucid-run-job / lucid.sources.event_generation) for chunked ROOTs."
         )
 

@@ -3,7 +3,7 @@
 Contains the bucketing/JIT-warmup chain, the bucketed photon
 propagation kernel wrapper, segment view derivation
 (``_derive_views_from_segments``), host-side photon-record aggregation,
-and track/particle derivation helpers used by the v3 writers.
+and track/particle derivation helpers used by the writers.
 """
 from __future__ import annotations
 
@@ -437,7 +437,7 @@ def _derive_views_from_segments(raw, photon_records=None):
         cherenkov_count_by_mt_track=cherenkov_count_by_mt_track,
     )
 
-    # Plumb category / sub_id back into track_info_dict so save_labl_event_v3
+    # Plumb category / sub_id back into track_info_dict so save_labl_event
     # (and any other consumer) can read it. Iterate once over the category
     # dict (sub_id is a strict subset) and look up each track once.
     cat_dict = cat_result.category_by_track_id
@@ -650,8 +650,15 @@ def run_event_process_pipeline(
         photon_segment_index_raw,
         n_sensors,
         rays_buckets,
-        sim_key):
+        sim_key,
+        compute_aggregate=True):
     """Run kernel + derive_views + aggregator for **one** photon stream.
+
+    ``compute_aggregate=False`` skips the host per-(particle/segment, sensor)
+    aggregation (``_aggregate_from_photon_records``) — the digitizer path
+    rebuilds the decomposition itself from ``particle_data`` and never reads
+    ``PE_per_particle`` / ``segment_sensor_hits``, so running it there is dead
+    work. The kept per-photon records live in the returned ``particle_data``.
 
     The single-vertex and pile-up data-mode drivers both call this once per
     emission process when scintillation is active (Option C: one kernel call
@@ -665,7 +672,7 @@ def run_event_process_pipeline(
         with an ``emission_process`` tag at writer time;
       * the sparse ``segment_sensor_hits`` triplet dict from the aggregator —
         the caller concatenates per-process dicts with a per-row
-        ``emission_process`` column on the way to ``save_step_event_v3``;
+        ``emission_process`` column on the way to ``save_step_event``;
       * the full ``particle_data`` view (categorization, segments, etc.) —
         the caller uses the first process's view as the canonical event-
         level structure (the segment table is identical across processes).
@@ -696,21 +703,23 @@ def run_event_process_pipeline(
         'photon_global_idx': photon_gid,
     })
 
-    pr = particle_data['photon_records_filtered']
-    agg = _aggregate_from_photon_records(
-        pr['qe_weight'], pr['qe_time'], pr['sensor_idx'],
-        pr['seg_idx_filtered'], pr['particle_idx'],
-        n_particles=particle_data['n_particles'], n_sensors=n_sensors,
-        photon_qe_time_reco=pr.get('qe_time_reco'))
+    agg = None
+    if compute_aggregate:
+        pr = particle_data['photon_records_filtered']
+        agg = _aggregate_from_photon_records(
+            pr['qe_weight'], pr['qe_time'], pr['sensor_idx'],
+            pr['seg_idx_filtered'], pr['particle_idx'],
+            n_particles=particle_data['n_particles'], n_sensors=n_sensors,
+            photon_qe_time_reco=pr.get('qe_time_reco'))
 
     return {
         'pe_per_sensor':       pe_per_sensor_np,
         't_per_sensor':        t_per_sensor_np,
         't_reco_per_sensor':   t_reco_per_sensor_np,
-        'PE_per_particle':     agg['PE_per_particle'],
-        'T_per_particle':      agg['T_per_particle'],
-        'T_reco_per_particle': agg['T_reco_per_particle'],
-        'segment_sensor_hits': agg['segment_sensor_hits'],
+        'PE_per_particle':     agg['PE_per_particle'] if agg else None,
+        'T_per_particle':      agg['T_per_particle'] if agg else None,
+        'T_reco_per_particle': agg['T_reco_per_particle'] if agg else None,
+        'segment_sensor_hits': agg['segment_sensor_hits'] if agg else None,
         'particle_data':       particle_data,
     }
 
@@ -730,6 +739,54 @@ def combine_t_per_sensor_across_processes(t_arrays):
     return np.where(np.isfinite(combined), combined, 0.0).astype(np.float32)
 
 
+def gather_photon_deposits(process_outputs):
+    """Flatten per-deposit photon records across emission processes.
+
+    Each process output carries per-(photon, sensor) detected deposits in
+    ``particle_data['photon_records_filtered']`` (QE already applied upstream).
+    This concatenates them into flat arrays for the digitizer, tagging each row
+    with the process's ``process_id`` as the ``emission_process``. Returns a
+    dict of equal-length arrays (empty when no deposits / no records).
+    """
+    S, W, TT, TR, PI, SEG, EMP = [], [], [], [], [], [], []
+    for p_out in process_outputs:
+        pr = (p_out.get('particle_data') or {}).get('photon_records_filtered')
+        if not pr:
+            continue
+        w = np.asarray(pr['qe_weight'])
+        if w.size == 0:
+            continue
+        # Keep only DETECTED photo-electrons (qe_weight > 0). The kernel-flat
+        # records carry one row per (photon, candidate-sensor, step) — the vast
+        # majority are QE-failed / zero-weight. Masking here (as
+        # _aggregate_from_photon_records does) collapses tens of millions of
+        # rows to the ~detected PE before any concat/pool/sort downstream.
+        keep = w > 0
+        if not keep.any():
+            continue
+        proc = int(p_out.get('process_id', 0))
+        S.append(np.asarray(pr['sensor_idx'])[keep])
+        W.append(w[keep])
+        TT.append(np.asarray(pr['qe_time'])[keep])
+        TR.append(np.asarray(pr.get('qe_time_reco', pr['qe_time']))[keep])
+        PI.append(np.asarray(pr['particle_idx'])[keep])
+        SEG.append(np.asarray(pr['seg_idx_filtered'])[keep])
+        EMP.append(np.full(int(keep.sum()), proc, dtype=np.int64))
+
+    def _cat(xs, dt):
+        return np.concatenate(xs).astype(dt) if xs else np.array([], dtype=dt)
+
+    return {
+        'sensor_idx':       _cat(S, np.int64),
+        'charge':           _cat(W, np.float64),
+        't_true':           _cat(TT, np.float64),
+        't_reco':           _cat(TR, np.float64),
+        'particle_idx':     _cat(PI, np.int64),
+        'segment_idx':      _cat(SEG, np.int64),
+        'emission_process': _cat(EMP, np.int64),
+    }
+
+
 def build_hits_sparse_per_process(process_outputs, n_particles):
     """Sparse-merge per-process dense PE/T tensors into hits-file rows.
 
@@ -740,7 +797,7 @@ def build_hits_sparse_per_process(process_outputs, n_particles):
     ``(particle_idx, sensor_idx)`` pair can therefore appear in multiple
     rows differing only in ``emission_process``.
 
-    Returns a dict shaped for ``save_hits_event_v3``'s ``hits_sparse``
+    Returns a dict shaped for ``save_hits_event``'s ``hits_sparse``
     input path: 1-D arrays for ``particle_idx`` / ``sensor_idx`` / ``PE``
     / ``T`` / ``T_reco`` / ``emission_process``, all the same length.
     """
@@ -788,7 +845,7 @@ def build_seg_hits_merged_per_process(process_outputs):
     ``{segment_idx, sensor_idx, PE, T, T_reco?}`` dict. Concatenate them
     along axis=0 and add an ``emission_process`` column whose value is the
     source process_id of each row. Returned dict drops directly into
-    ``event_dict['segment_sensor_hits']`` for ``save_step_event_v3``.
+    ``event_dict['segment_sensor_hits']`` for ``save_step_event``.
     """
     seg_idx_parts, sensor_idx_parts = [], []
     pe_parts, t_parts, t_reco_parts, emp_parts = [], [], [], []

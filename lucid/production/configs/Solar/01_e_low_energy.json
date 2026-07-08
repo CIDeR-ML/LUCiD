@@ -1,0 +1,33 @@
+{
+  "name": "single low energy e-",
+  "description": "Low energy electrons with LUCiD processing",
+  "material": "water",
+  "nominal_train": 1000000,
+  "nominal_test": 50000,
+  "seconds_per_event": 0.195,
+  "target_seconds_per_job": 3600,
+  "detector": "HK",
+  "digitizer": {
+    "model": "hk"
+  },
+  "selection": {
+    "mode": "min_physics_hits",
+    "n": 3
+  },
+  "energy_distribution": "uniform",
+  "store_individual_photons": true,
+  "run_lucid": true,
+  "disable_decays": false,
+  "particles": [
+    {
+      "type": "e-",
+      "energy_min_MeV": 1,
+      "energy_max_MeV": 20
+    }
+  ],
+  "lucid_options": {
+    "apply_smearing": true,
+    "apply_translation": true
+  },
+  "cleanup_root_files": true
+}

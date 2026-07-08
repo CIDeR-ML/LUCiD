@@ -17,7 +17,7 @@ Pure NumPy, no JAX dependence. Fully vectorized via ``np.repeat`` — no
 Python loop over segments. The output dict matches the per-photon key
 names that :func:`lucid.sources.root_reader._read_event_raw` produces
 for Cherenkov photons, plus an ``photon_emission_process`` column
-tagged as :data:`lucid.sources.v3_writer.EMISSION_PROCESS_SCINTILLATION`.
+tagged as :data:`lucid.sources.writer.EMISSION_PROCESS_SCINTILLATION`.
 
 See ``.claude/plans/scintillation-data-mode.md`` for the wider design.
 """
@@ -28,7 +28,7 @@ from typing import Mapping
 
 import numpy as np
 
-from lucid.sources.v3_writer import EMISSION_PROCESS_SCINTILLATION
+from lucid.sources.writer import EMISSION_PROCESS_SCINTILLATION
 
 __all__ = [
     "expand_segments_to_photons",

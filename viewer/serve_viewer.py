@@ -233,6 +233,11 @@ def main():
     parser.add_argument('data_dir', help='Directory containing production HDF5 files')
     parser.add_argument('--dataset', '-d', help='Dataset name (auto-detected if only one)')
     parser.add_argument('--port', '-p', type=int, default=8765)
+    parser.add_argument('--host', default='127.0.0.1',
+                        help='Bind address. Default 127.0.0.1 (localhost only). '
+                             'Use 0.0.0.0 to serve on all interfaces — e.g. when '
+                             'viewing over an SSH tunnel pinned to a specific '
+                             'remote node (ssh -L PORT:<node>:PORT ...).')
     parser.add_argument('--open', '-o', action='store_true',
                         help='Open browser automatically')
     args = parser.parse_args()
@@ -264,7 +269,7 @@ def main():
 
     class ThreadedServer(ThreadingMixIn, HTTPServer):
         daemon_threads = True
-    server = ThreadedServer(('127.0.0.1', args.port), RangeHandler)
+    server = ThreadedServer((args.host, args.port), RangeHandler)
     print(f"\n{url}")
     print("Ctrl+C to stop\n")
 

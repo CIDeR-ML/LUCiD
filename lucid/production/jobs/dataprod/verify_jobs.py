@@ -2,7 +2,7 @@
 """Identify dataprod jobs that did not finish.
 
 Walks a dataprod output tree, finds every `submit_job_NNNNNN.sbatch`
-whose v3 four-file batch is missing, unreadable, or has the wrong
+whose four-file batch is missing, unreadable, or has the wrong
 n_events. The truth check is straightforward:
 
   1. All four `wc_{sensor,hits,step,labl}_<file_index:04d>.h5` exist
