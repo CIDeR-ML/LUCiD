@@ -13,8 +13,15 @@ section. We drive it once per ``(model, ordering)`` subcase:
 * the **mass ordering** is sntools' ``--transformation`` — NMO → the
   built-in ``AdiabaticMSW_NMO``, IMO → ``AdiabaticMSW_IMO`` (no SNEWPY
   download needed for the MSW transformations);
-* the **model** is an sntools flux ``(file, format)`` — a self-contained
-  ``gamma`` analytic flux, a bundled ``nakazato`` file, or ``SNEWPY-<Model>``.
+* the **model** is an sntools flux ``(flux_file, format)``. For the physics
+  default ``SNEWPY-<Model>`` (e.g. ``SNEWPY-Nakazato_2013``), ``flux_file`` names
+  a model file under the SNEWPY cache (``~/.cache/astropy/snewpy/models/<Model>/``)
+  which must be **pre-downloaded once** — compute nodes may lack network::
+
+      python -c "import astropy.units as u; from snewpy.models.ccsn import Nakazato_2013; \
+          Nakazato_2013(progenitor_mass=20*u.Msun, revival_time=100*u.ms, metallicity=0.02, eos='shen')"
+
+  Non-SNEWPY formats (``gamma``, ``nakazato`` ASCII) take a repo-relative path.
 
 Each sntools event becomes one rooTracker entry: the incoming neutrino is
 written as a ``StdHepStatus==0`` track (PhotonSim records it as the true
@@ -329,7 +336,23 @@ def run_supernova(
     if not fmt or not flux_file:
         raise SupernovaError(
             f"model {model.get('name')!r} needs both 'format' and 'flux_file'")
-    flux_file = str(_resolve_flux_file(flux_file))
+    # SNEWPY-* formats: flux_file is a model file under the SNEWPY cache
+    # (<model_path>/<Model>/<file>). sntools abspath()s the path relative to CWD,
+    # so we must hand it the absolute cache path (the model must be pre-downloaded;
+    # see the module docstring). Other formats (gamma, nakazato ASCII) are
+    # repo-relative files.
+    if str(fmt).startswith("SNEWPY-"):
+        from snewpy import model_path as _snewpy_cache
+        _model = str(fmt)[len("SNEWPY-"):]
+        cand = Path(_snewpy_cache) / _model / flux_file
+        if not cand.is_file():
+            raise SupernovaError(
+                f"SNEWPY model file not found in cache: {cand}. Pre-download it "
+                f"once (see run_supernova module docstring) — compute nodes may "
+                f"lack network.")
+        flux_file = str(cand)
+    else:
+        flux_file = str(_resolve_flux_file(flux_file))
 
     ordering = ordering or sn.get("ordering") or "NMO"
     transformation = _transformation_for(ordering)
