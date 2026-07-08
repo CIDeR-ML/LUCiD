@@ -55,7 +55,7 @@ once you are ready to generate a full training or production dataset rather
 than a handful of test events.
 
 Production configs live under `lucid/production/configs/<block>/`, grouped
-into blocks (`GeV`, `Solar`, `SN`, `Test`) that each bundle a set of particle
+into blocks (`GeV`, `SN`, `Solar`, `Test`) that each bundle a set of particle
 and interaction choices with their own train/test event counts — pick a
 config from there (or write your own alongside them) for any of the paths
 above.
