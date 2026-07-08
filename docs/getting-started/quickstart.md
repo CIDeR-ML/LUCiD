@@ -58,6 +58,7 @@ Then read the [concepts](../concepts/photon-pipeline.md) to understand how the f
   direction pointing at the wall from close range); try the defaults above first.
 - **JAX device warnings or slow first call** — the first invocation JIT-compiles
   (tens of seconds on CPU is normal); subsequent calls are fast. Set
-  `JAX_PLATFORM_NAME=cpu` to silence GPU probing on machines without one.
+  `JAX_PLATFORMS=cpu` to keep JAX off the GPU entirely (the older
+  `JAX_PLATFORM_NAME` alone does not stop the CUDA plugin from probing).
 - **Different numbers than a colleague** — results depend on the PRNG key and photon
   count; fix both (`PRNGKey(0)`, same `n_photons`) for byte-comparable output.
