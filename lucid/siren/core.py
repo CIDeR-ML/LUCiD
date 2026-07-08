@@ -209,6 +209,8 @@ class SirenContext(NamedTuple):
     n_photons_fn:  Optional[Callable]   # N_photons(E_mev) -> total photons/event (Cherenkov only)
     grid_bins:     int             # first-pass grid resolution (per axis)
     threshold:     float           # seed threshold, fraction of per-energy grid max
+    seed_mode:     str = 'importance'  # 'uniform' (legacy: uniform over >=threshold bins) |
+    #   'importance' (bins ∝ grid density; keeps the sub-threshold tail, threshold unused)
 
 
 def make_smax_fn(smax: dict) -> Callable:
@@ -255,7 +257,7 @@ def make_power_law_fn(nphot: dict) -> Callable:
 
 
 # Defaults for the ray-sampling knobs when `siren_params.json` omits them.
-_DEFAULT_RAY_SAMPLING = {"grid_bins": 250, "threshold": 0.05}
+_DEFAULT_RAY_SAMPLING = {"grid_bins": 250, "threshold": 0.05, "seed_mode": "importance"}
 
 
 def _build_siren_context(predictor, ray_sampling: dict | None,
@@ -303,6 +305,7 @@ def _build_siren_context(predictor, ray_sampling: dict | None,
         n_photons_fn=make_power_law_fn(meta['nphot']) if require_nphot else None,
         grid_bins=int(rs['grid_bins']),
         threshold=float(rs['threshold']),
+        seed_mode=str(rs['seed_mode']),
     )
 
 
