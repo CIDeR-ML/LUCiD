@@ -18,9 +18,9 @@ the `track_optimization` tutorial, and the `lucid-optimize` CLI.
   SCALE9-preconditioned, with an autodiff Fisher metric (`fisher_mode='ad'`, the default), a
   learning-rate schedule (`lr=4.0` → `lr_final=1.5`), an additive Levenberg floor, and a
   Polyak-averaged readout (`readout='polyak'`).
-- **Seeding**: `lucid.optimization.grid_search` — a charge-weighted position grid plus a
-  time-multilateration vertex/t0 seed; `fit_track_multistart` runs both starts and keeps the
-  winner by a loss-margin gate.
+- **Seeding**: a charge-weighted position grid (`lucid.optimization.grid_search`) plus a
+  time-multilateration vertex/t0 seed (`lucid.fitting.seed_vertex_time`);
+  `fit_track_multistart` runs both starts and keeps the winner by a loss-margin gate.
 
 ## Wavelength-consistent forward (use this)
 
@@ -32,7 +32,7 @@ scalar photon-yield normalization is needed.
    as detectable and inflate the apparent charge.
 2. **`cherenkov_emission_band=(274.91, 673.83)`** on `setup_event_simulator`. The SIREN net's
    `nphot(E)` counts photons over the PhotonSim Cherenkov emission band
-   [1.84, 4.51] eV = [274.91, 673.83] nm; sampling the model λ over that same band lets
+   [274.91, 673.83] nm (4.51 down to 1.84 eV); sampling the model λ over that same band lets
    `qe_fn(λ)=0` outside the QE knots plus the medium interp-clamp make the out-of-band fringe
    inert, so detected charge uses the correct in-band fraction.
 3. **Emitter sampling**: the default SIREN emitter uses importance seed-sampling over the full
