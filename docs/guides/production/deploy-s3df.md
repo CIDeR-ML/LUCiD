@@ -1,4 +1,4 @@
-# S3DF Quickstart — Production on SLURM
+# S3DF (SLAC) — production on SLURM
 
 Concise runbook for the S3DF (SLAC) deployment. For a local-machine
 workflow with no cluster, see [local.md](local.md);
@@ -168,7 +168,7 @@ only *production* GPU path and uses PyTorch, not JAX.
 
 ```bash
 # Monitor
-./monitor_jobs.sh -w
+./dataprod/monitor_jobs.s3df.sh -w
 
 # Cancel all my production jobs
 scancel -u $USER -n photonsi

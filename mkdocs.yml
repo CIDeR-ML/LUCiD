@@ -60,12 +60,12 @@ nav:
           - Overview: guides/production/index.md
           - Local (with PhotonSim): guides/production/local.md
           - Docker: guides/production/docker.md
-          - Training the SIREN emitter: guides/production/siren-training-inputs.md
           - Cluster deployment:
               - How cluster targeting works: guides/production/cluster-abstraction.md
               - S3DF (SLAC): guides/production/deploy-s3df.md
               - NERSC (Perlmutter): guides/production/deploy-nersc.md
               - LXPLUS (CERN): guides/production/deploy-lxplus.md
+          - Training the SIREN emitter: guides/production/siren-training-inputs.md
   - Reference:
       - CLI: reference/cli.md
       - Configuration: reference/config.md

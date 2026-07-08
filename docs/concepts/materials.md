@@ -6,7 +6,7 @@ parameters. Three ship with LUCiD:
 
 | Material | File | Notes |
 |---|---|---|
-| Water | `config/materials/water.json` | Rayleigh 1/λ⁴ scattering; absorption = SK-calibration power law (blue) spliced onto Pope & Fry (1997) data (red) |
+| Water | `config/materials/water.json` | Rayleigh 1/λ⁴ scattering; absorption = SK-calibration power law (blue) joined onto Pope & Fry (1997) data (red), smoothly blended at the ~464 nm seam |
 | WbLS | `config/materials/wbls.json` | water-based liquid scintillator: inherits water's bulk optics (negligible difference at ~10% mass fraction) and adds the scintillation block below |
 | Ice | `config/materials/ice.json` | placeholder using the water functional form with ice-tuned parameters; suitable for geometry/workflow studies, not ice-optics precision work |
 

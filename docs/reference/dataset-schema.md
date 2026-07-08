@@ -22,7 +22,7 @@ the same per-event indexing:
 dataset_root/
 ├── sensor/    wc_sensor_NNNN.h5    — raw PMT readout (post-smearing)
 ├── hits/      wc_hits_NNNN.h5      — per-particle decomposition of PMT signal
-├── step/       wc_step_NNNN.h5       — 3D track segments (Geant4 truth)
+├── step/      wc_step_NNNN.h5       — 3D track segments (Geant4 truth)
 └── labl/      wc_labl_NNNN.h5      — labels, truth metadata, dimension tables
 ```
 

@@ -30,4 +30,4 @@ docker build --platform linux/amd64 --provenance=false --sbom=false \
 (ghcr.io has trouble with them for this package). Cold build is ~10 min
 on Apple Silicon. Editing LUCiD source retriggers only the last layer
 (~30 s). For a quicker dev loop without rebuilding, bind-mount the
-checkout — see QUICKSTART_DOCKER §3.
+checkout — see docs/guides/production/docker.md §3.

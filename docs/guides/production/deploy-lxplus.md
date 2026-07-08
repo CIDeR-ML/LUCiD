@@ -1,7 +1,8 @@
-# LXPLUS Quickstart — Production on HTCondor
+# LXPLUS (CERN) — production on HTCondor
 
 Concise runbook for the CERN LXPLUS deployment. Pairs with
-[deploy-s3df.md](deploy-s3df.md) (same pipeline, SLURM at SLAC)
+[deploy-s3df.md](deploy-s3df.md) (same pipeline, SLURM at SLAC),
+[deploy-nersc.md](deploy-nersc.md) (SLURM at NERSC),
 and [cluster-abstraction.md](cluster-abstraction.md) (architecture).
 
 ## Filesystem layout (typical LXPLUS account)

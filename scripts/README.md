@@ -26,7 +26,7 @@ Reconstruction / calibration at the single-event or single-config level: see
 [`../examples/`](../examples/) (`hello_reconstruct`, `seed_reconstruct`, `hello_calibrate`,
 `hello_telescope`) and `lucid-optimize`.
 
-## Research / campaign (internal, git-ignored)
+## Research / campaign (internal)
 
 - `campaign/` — the calibration research campaign (CRB, per-PMT QE, reflection, spectral,
   timing, shot-noise studies). SK-hardcoded, env-var-driven; the portable subset is

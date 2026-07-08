@@ -144,3 +144,15 @@ examples fail loudly without SIREN weights.
 pages · make `download_data.sh` explicit in quickstarts.
 **P2 (polish):** CODE_OF_CONDUCT · CHANGELOG · issue/PR templates · move planning `.md` to
 `docs/internal/` · Colab badges · CI jobs · (PyPI later — not now).
+
+
+## Deferred for the initial public release (decided 2026-07-08, not forgotten)
+
+- `reference/api.md` (mkdocstrings) — would pull JAX into the docs CI build.
+- Retirement of `good_notebooks/` + `notebooks/` (~70 MiB) — tutorials/ is canonical.
+- Heading-case + admonition style normalization across the runbooks.
+- `mkdocs-redirects` for the pre-restructure URLs — old site was live ~1 week; revisit
+  only if inbound 404s appear.
+- Real SPICE-Lea ice optics (ice.json stays a documented water-form placeholder).
+- Non-editable-install support (wheels don't ship `config/`/`data/`; documented in
+  install.md).

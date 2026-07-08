@@ -55,7 +55,8 @@ is directly optimizable. Two tiers:
 
 ## Wavelength consistency (shared with reconstruction)
 
-Calibration runs `wavelength_mode=True` and applies `qe_fn(λ)` per photon. The same
+In wavelength mode (`wavelength_mode=True` — the spectral path noted at the top of this
+page), calibration applies `qe_fn(λ)` per photon. The same
 band-consistency principle from [reconstruction](reconstruction.md) applies: a broadband
 Cherenkov `qe(λ)` fit must sample the **bare 1/λ² spectrum over the physical emission band**
 and apply differentiable `qe(λ)` — an importance sampler that bakes the assumed QE into the λ

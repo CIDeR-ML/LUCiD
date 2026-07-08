@@ -68,7 +68,7 @@ The sidebar contents depend on the current Label:
 Click a row to isolate that particle (or union of particles in the group): its PMT contributions pop at near-full brightness, non-contributors fade to ~8% alpha, and segments belonging to the selection stay bright. Click the same row again to deselect. Changing Label clears the selection.
 
 Below the event-meta block, the sidebar shows a **SELECTION** info card:
-- For a particle: category name, edep containment, Σ PE from inst, sensors hit, n tracks, n Cherenkov, max initial energy, PDG set, genealogy chain.
+- For a particle: category name, edep containment, Σ PE from hits, sensors hit, n tracks, n Cherenkov, max initial energy, PDG set, genealogy chain.
 - For a group: kind, id, particle IDs in the group, Σ PE, sensors hit, n tracks.
 
 ### Settings drawer
@@ -112,7 +112,7 @@ Cross-file integrity: `source_event_idx` is compared across all four files on ea
 These caught me out during development — documenting so they don't catch you:
 
 - **Sentinel rows in `sensor.h5`**. The writer emits a row per sensor-of-interest even when no real photon arrived, with `PE = 0` and `T = −t0` (i.e. shifted zero). The viewer filters these: a PMT is treated as "has signal" only if accumulated `PE > 0`. Sentinel sensors render as the gray silhouette.
-- **`t0` can be negative**. The writer jitters each event's emission time within roughly ±15 ns so the detector reads events at random clock phases (matches real-data triggering). Sensor/step/inst times are stored as `t − t0` (detector frame, t=0 = trigger moment); the raw truth `t0` lives in `labl/per_event/t0`.
+- **`t0` can be negative**. The writer jitters each event's emission time within roughly ±15 ns so the detector reads events at random clock phases (matches real-data triggering). Sensor/step/hits times are stored as `t − t0` (detector frame, t=0 = trigger moment); the raw truth `t0` lives in `labl/per_event/t0`.
 - **Units**. `sensor_positions` and all `step/*` coordinates are in **meters**. Times are in **ns**. Energies in MeV.
 - **Ancestor/interaction are per-track** and consistent across all tracks of a given particle. The viewer derives per-particle ancestor/interaction by picking any one of the particle's tracks.
 

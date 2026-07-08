@@ -32,9 +32,9 @@ scalar photon-yield normalization is needed.
    as detectable and inflate the apparent charge.
 2. **`cherenkov_emission_band=(274.91, 673.83)`** on `setup_event_simulator`. The SIREN net's
    `nphot(E)` counts photons over the PhotonSim Cherenkov emission band
-   [274.91, 673.83] nm (4.51 down to 1.84 eV); sampling the model λ over that same band lets
-   `qe_fn(λ)=0` outside the QE knots plus the medium interp-clamp make the out-of-band fringe
-   inert, so detected charge uses the correct in-band fraction.
+   [274.91, 673.83] nm (4.51 down to 1.84 eV); sampling the model λ over that same band makes the
+   out-of-band fringe inert — `qe_fn(λ)` is zero outside the QE knots and the medium curves
+   clamp — so detected charge uses the correct in-band fraction.
 3. **Emitter sampling**: the default SIREN emitter uses importance seed-sampling over the full
    emission profile, so the low-density longitudinal tail and wide-angle shoulders are kept
    without any tuning. (A `ray_sampling.threshold` knob exists only for the legacy

@@ -1,4 +1,4 @@
-# Local Quickstart — Produce events on any machine
+# Local production — produce events on any machine
 
 > **On macOS, or prefer a container?** See
 > [docker.md](docker.md) — one `docker build`,
