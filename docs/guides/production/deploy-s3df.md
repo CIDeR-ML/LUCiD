@@ -82,6 +82,70 @@ Each job of a config writes its own batch (`file_index = job_id - 1`)
 into shared `{sensor,hits,step,labl}/` subdirs — the whole config dir
 is one LUCiD dataset.
 
+## Sizing a production run
+
+The fan-out splits a config's event budget into equal jobs. The math lives
+in `cluster_common/dataprod_fanout.py::_plan`, driven by two fields the config
+carries (`lucid/production/configs/<block>/NN_name.json`):
+
+- `seconds_per_event` — measured per-event PhotonSim+LUCiD wall time.
+- `target_seconds_per_job` — the wall-time target each job is sized to (3600 s
+  in the shipped configs).
+
+From those:
+
+```
+events_per_job = floor(target_seconds_per_job / seconds_per_event)
+n_jobs         = ceil(nominal_events / events_per_job)
+core-hours     ≈ nominal_events × seconds_per_event / 3600
+```
+
+Each job is **single-core** (`DEFAULT_CPUS=1` in `user_paths.sh`), so
+"core-hours" is the honest cost unit; the shipped S3DF template also reserves
+~40 GB (`DEFAULT_MEMORY=39936`) and a 23 h wall ceiling (`DEFAULT_TIME`) per
+job — the ceiling, not the expected ~1 h runtime.
+
+Worked example — **`GeV/01_mu.json`, the 1,000,000-event train split**
+(`seconds_per_event = 4.833`, `target_seconds_per_job = 3600`):
+
+```
+events_per_job = floor(3600 / 4.833)      = 744
+n_jobs         = ceil(1_000_000 / 744)    = 1345
+core-hours     ≈ 1_000_000 × 4.833 / 3600 ≈ 1343
+```
+
+So ~1,345 jobs of 744 events each, ~1,343 core-hours of compute. A few more
+shipped configs for scale (all at the 1 M train budget, `target=3600`):
+
+| Config | `seconds_per_event` | events/job | jobs (1 M) | core-hours (1 M) |
+|---|--:|--:|--:|--:|
+| `GeV/01_mu`   | 4.833 |    744 |  1,345 | ~1,343 |
+| `GeV/03_e`    | 5.220 |    689 |  1,452 | ~1,450 |
+| `GeV/06_pbomb`| 12.00 |    300 |  3,334 | ~3,333 |
+| `Solar/01_e_low_energy` | 0.195 | 18,461 | 55 | ~54 |
+
+(GeV configs `07`–`13` set `nominal_train = 0` — test-only, `nominal_test =
+50000`, so their full pass is the 50 k test split, ~1/20 of the above.
+Supernova configs are one all-at-once burst per job, `n_jobs = nominal_test`.)
+
+### Estimating on-disk size
+
+Per-event byte size is **not** a stable constant: the two heavy files
+(`step/` per-(segment, sensor) hits and `sensor/`/`hits/` digits) scale with
+occupancy, which depends on the detector, energy, and pile-up — so a GeV muon
+in HK and a solar electron differ by orders of magnitude. The one bounded part
+is `labl/` (~8 `per_particle` rows and ~600 `per_track` rows per event; see the
+[schema](../../reference/dataset-schema.md)), and it is usually the smallest of
+the four. **Measure, don't guess:** run one full (non-`--test`) batch, then
+
+```bash
+du -sh <OUT>/<detector>/config_NNNNNN/{sensor,hits,step,labl}/wc_*_0000.h5
+```
+
+and divide by that batch's `n_events` for a MB/event figure you can multiply up
+to the full run. The `--test` batches (2 events) over-count fixed per-file
+overhead, so size from a real batch, not a test one.
+
 ## Spreading jobs across roma + milano
 
 The two CPU batch partitions are `roma` (130 nodes) and `milano`
@@ -176,6 +240,66 @@ scancel -u $USER -n photonsi
 # Inspect one output with the viewer (see viewer/README.md for SSH tunneling)
 python3 /path/to/LUCiD/viewer/serve_viewer.py <OUT>/SK_like/config_000001
 ```
+
+## Verify and resume a run
+
+Preemption and node failures leave some jobs incomplete. The completion check
+is a truth marker, not a guess (`cluster_common/verify.py::is_complete_dataprod`):
+a batch is done iff all four `wc_{sensor,hits,step,labl}_NNNN.h5` open with
+h5py, agree on `config/n_events`, carry `config/complete == True`, and hold
+`n_events <= expected` (selection may drop events, but a crash-killed job
+fails the `complete` flag).
+
+`verify_jobs.py` walks every `submit_job_*.sbatch` under a scan dir and reports
+which batches fail that check. For a human summary:
+
+```bash
+cd lucid/production/jobs/dataprod
+apptainer exec -B /sdf,/fs,/sdf/scratch,/lscratch "$LUCID_IMAGE_PATH" \
+    python3 verify_jobs.py <OUT>/<detector>          # e.g. .../SK_like
+```
+
+(It runs inside the container because it needs h5py.) To resubmit the failures,
+use the wrapper — it runs `verify_jobs.py --list` in the container, then
+`sbatch`es the failed paths on the host:
+
+```bash
+./resubmit_failed.sh <OUT>/<detector>               # add --dry-run to preview
+```
+
+It is idempotent: rerun it after each drain wave until it prints
+`failed/missing jobs: 0`.
+
+**Where logs land.** Each dataprod job writes to its own config dir (the
+`cell_dir`), named by the render header in `cluster_common/cluster.py`:
+
+```
+<OUT>/<detector>/config_NNNNNN/job_NNNNNN-<slurm_job_id>.out
+<OUT>/<detector>/config_NNNNNN/job_NNNNNN-<slurm_job_id>.err
+```
+
+so a failing job's stderr sits right next to the four `{sensor,hits,step,labl}/`
+subdirs it should have written. (SLURM-array submissions switch the suffix to
+`%A_%a`.)
+
+### Post-run completeness checklist
+
+1. **All jobs complete** — `verify_jobs.py` prints `failed/missing: 0`. This is
+   the authoritative crash check.
+2. **Delivered vs requested** — count events actually written and compare to the
+   requested `nominal_*`. A shortfall is expected for **triggered** (`GeV`) and
+   `min_physics_hits` (`Solar`/`SN`) configs: non-triggering / sub-threshold
+   events are legitimately dropped, so `delivered <= requested` is normal, not a
+   failure.
+3. **Trigger-dropped events show as gaps** — dropped events are simply absent, so
+   the per-batch `config/source_event_idx` array (and the `event_NNN/`
+   `source_event_idx` attrs) has holes rather than a dense `0..n-1` run. Reconcile
+   against the source ROOT's entry count to see the trigger/selection efficiency;
+   do not treat the gaps as missing output.
+4. **Smoke-test first** — before a full wave, always run the `--test` pattern
+   (one job per config, 2 events: `submit_all_configs.sh -t -s ...`) and confirm
+   all four files appear per config. It catches path/env/container breakage in
+   minutes instead of after thousands of core-hours.
 
 ## What each sbatch does
 
