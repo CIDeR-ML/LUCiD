@@ -53,7 +53,9 @@ see [digitizer & trigger](digitizer-and-trigger.md).
 - a **number** → scalar;
 - a **list** → inline per-element array;
 - `null` / missing → *projected* from a referenced λ-curve evaluated at `scalar_ref_wavelength`
-  (default 400 nm), if the property has an associated curve; otherwise a neutral default;
+  (default 400 nm), if the property has an associated curve. Optional properties otherwise
+  fall back to a neutral default; the essential three (`scatter_length`,
+  `absorption_length`, `qe`) instead raise a `ValueError` if nothing can supply them;
 - `"path/to/file.json"` → loaded from JSON; `"__array__:file.npy"` → loaded from a companion `.npy`.
 
 Two extra keys are resolved relative to the config directory (and reference model files rather
