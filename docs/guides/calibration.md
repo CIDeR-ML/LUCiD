@@ -82,7 +82,10 @@ per-surface fractions `wall_fspec`/`sensor_fspec` (the discrete specular-vs-diff
 carried by a DiCE score). The angular model reads the `DetectorParams.reflection` fields
 (`wall_R0`/`wall_p`/`wall_fspec`, `cathode_nr`/`cathode_nk`/`sensor_fspec`) and **requires
 `wavelength_mode=True`** for the λ-dependent magnitude; the `*_fspec` fields default to 0 (fully
-diffuse) and are inert under the default `reflection_model='scalar'`.
+diffuse) and are inert under the default `reflection_model='scalar'`. A third model,
+`reflection_model='scalar_mix'`, keeps the scalar rate *magnitudes* but adds the same
+specular/diffuse `*_fspec` direction split — so those fractions become fittable **without**
+`wavelength_mode`, which is the cheaper lever for a scalar calibration.
 
 ## Recipe (per-sensor QE + all globals)
 
