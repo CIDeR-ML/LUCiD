@@ -62,3 +62,5 @@ Then read the [concepts](../concepts/photon-pipeline.md) to understand how the f
   `JAX_PLATFORM_NAME` alone does not stop the CUDA plugin from probing).
 - **Different numbers than a colleague** — results depend on the PRNG key and photon
   count; fix both (`PRNGKey(0)`, same `n_photons`) for byte-comparable output.
+- **No display appears** — on a headless machine (SSH, no X) the display call silently
+  no-ops; pass `file_name='ring.png'` to the display call to save the figure instead.
