@@ -45,7 +45,7 @@ Each linked file below is a self-contained plan for one concern.
 | Docs scope | general guidance only; no results/numbers | ✅ |
 | PyPI | not for now (GitHub + hosted docs) | ✅ |
 | Docs hosting | GitHub Pages under `CIDeR-ML/LUCiD` (same repo) | ✅ |
-| LICENSE | Apache-2.0 (confirm SLAC/OTL doesn't mandate otherwise) | ✅ |
+| LICENSE | pending institutional sign-off | ⏳ |
 | `studies/` | keep for now (active + code-referenced) | ✅ |
 | Branch | fresh `chore/cleanup` off updated `main` (fast-forward local `main` first) | ✅ |
 | In-flight branches | most to be deleted later; do not depend on / touch them | ✅ |
@@ -63,9 +63,7 @@ Each linked file below is a self-contained plan for one concern.
 
 ## Decisions locked (2026-06-30)
 
-1. **LICENSE = Apache-2.0** (matches JAX; explicit patent grant given SLAC/national-lab
-   authorship). ⚠️ Advisory only: confirm the SLAC/Stanford OTL doesn't *mandate* a different
-   license before public release. See `04_RELEASE_READINESS.md`.
+1. **LICENSE** — pending institutional sign-off; see `04_RELEASE_READINESS.md`.
 2. **`studies/` = KEEP for now** — active validation suite + referenced by
    `lucid/propagation/base.py`; do not delete. See `01_REPO_HYGIENE.md`.
 3. **Docs hosting = GitHub Pages under `CIDeR-ML/LUCiD`** (same repo, no custom domain).

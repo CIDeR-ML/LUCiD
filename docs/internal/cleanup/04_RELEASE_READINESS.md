@@ -2,23 +2,11 @@
 
 **Status:** proposal. Content-only; no publishing, no CI runs in this pass.
 
-## LICENSE (needs your decision)
+## LICENSE
 
-No LICENSE file exists → the repo is currently legally "all rights reserved" (a hard blocker
-for a public release). Options, all permissive:
-
-| License | Adds over MIT | Ecosystem norm |
-|---------|---------------|----------------|
-| MIT | — (shortest, no patent grant) | many small ML libs |
-| BSD-3-Clause | + non-endorsement (no use of authors'/institution name to promote derivatives) | scientific Python (NumPy/SciPy/scikit-learn) |
-| Apache-2.0 | + explicit patent grant + patent-retaliation + "state changes" | **JAX**, TensorFlow, institutional projects |
-
-**DECISION: Apache-2.0** — same license as JAX (zero friction, familiar to users) and the
-explicit patent grant is worth having given **SLAC/national-lab authorship**. `LICENSE` file
-added at repo root; set `license = "Apache-2.0"` + `license-files` in `pyproject.toml`.
-
-⚠️ Advisory: still confirm the Stanford/SLAC tech-transfer (OTL) office doesn't *mandate* a
-different license before the public release — that would override.
+The license decision is pending institutional sign-off; the LICENSE file and the
+`license` / `license-files` keys in `pyproject.toml` land together as one commit once
+that completes.
 
 ## `pyproject.toml` metadata (currently missing)
 
@@ -32,13 +20,11 @@ authors = [
   {name = "César Jesús-Valls"}, {name = "Ryo Matsumoto"},
   {name = "Patrick de Perio"}, {name = "Kazuhiro Terao"},
 ]
-license = "Apache-2.0"          # per decision above
 keywords = ["differentiable-simulation", "jax", "particle-physics",
             "cherenkov", "neutrino", "calibration", "reconstruction"]
 classifiers = [
   "Development Status :: 4 - Beta",
   "Intended Audience :: Science/Research",
-  "License :: OSI Approved :: Apache Software License",
   "Programming Language :: Python :: 3.9",
   "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: 3.11",
@@ -123,7 +109,7 @@ run-example **silently fails** until `scripts/download_data.sh` runs.
 
 | File | Priority | Note |
 |------|----------|------|
-| `LICENSE` | P0 | per decision above |
+| `LICENSE` | P0 | pending sign-off |
 | `pyproject` metadata + tag `v0.1.0` | P0 | version/build |
 | `CITATION.cff` | P1 | drafted above; GitHub renders "Cite this repository" |
 | `CONTRIBUTING.md` | P1 | dev setup, `--slow` gating, inside/outside rule (harvest from `CLAUDE.md` + `good_notebooks/STRUCTURE.md`) |
@@ -151,7 +137,7 @@ docs/notebook/pip release needs. Planned additions (ubuntu, CPU JAX, `JAX_PLATFO
 
 ## Path to public (priority-ordered)
 
-**P0 (legal/build):** LICENSE (+ OTL confirm) · `pyproject` metadata · tag `v0.1.0` ·
+**P0 (legal/build):** LICENSE (pending sign-off) · `pyproject` metadata · tag `v0.1.0` ·
 examples fail loudly without SIREN weights.
 **P1 (launch quality):** README rewrite · `CLAUDE.md` fixes · `mkdocs.yml` + `[docs]` extra ·
 `CONTRIBUTING.md` + `CITATION.cff` · commit `tutorials/` · author the fresh Concept/Reference
