@@ -19,8 +19,9 @@ from `config/materials/<material>.json`:
 - **Rayleigh scattering** — a 1/λ⁴ law anchored to the material's measured scattering length
   (Mie scattering adds a second length and an asymmetry parameter `g` controlling how
   forward-peaked it is).
-- **Absorption** — for water: the SK-calibration power law in the blue spliced onto the
-  Pope & Fry (1997) measured data in the red.
+- **Absorption** — for water: the SK-calibration power law in the blue joined onto the
+  Pope & Fry (1997) measured data in the red, blended smoothly across the ~464 nm seam so
+  gradients stay kink-free.
 - **Refractive index / group velocity** — dispersion for Cherenkov angle and photon timing.
 
 The medium grid spans [300, 700] nm. Materials are composable: `water`, `wbls`, and `ice`

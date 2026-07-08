@@ -33,7 +33,7 @@ Common keys:
 | `g` | Mie asymmetry parameter |
 | `absorption_length` | absorption length (m) |
 | `wall_reflection_rate`, `sensor_reflection_rate` | scalar reflectivities |
-| `wall_R0`, `wall_p`, `wall_fspec` | angular wall-reflection model (Schlick base reflectivity, exponent, specular fraction) — used when `reflection_model='angular'` |
+| `wall_R0`, `wall_p`, `wall_fspec` | angular wall-reflection model (Schlick base reflectivity, exponent, specular fraction) — used when `reflection_model='angular'`; `'scalar_mix'` combines the scalar rates with the `*_fspec` specular/diffuse split |
 | `cathode_nr`, `cathode_nk`, `sensor_fspec` | angular sensor/cathode reflection (Fresnel n, k; specular fraction) |
 | `qe` | global quantum efficiency |
 | `qe_corrections`, `gain`, `t0`, `walk` | per-PMT response arrays (QE multiplier, charge gain, time offset, TQ-walk slope) |
