@@ -51,3 +51,13 @@ lucid/production/jobs/user_paths.sh
 # Personal dev/research scratch (kept on disk, not tracked)
 hessian_probe/
 scripts/campaign_recon/
+baseline_scripts/
+mie_hunter/
+
+# Executed notebooks (rendered copies) — never commit; regenerate or build in CI
+*.executed.ipynb
+# Generated animations (e.g. tutorials/event.gif from animate_event)
+*.gif
+
+# MkDocs build output
+site/

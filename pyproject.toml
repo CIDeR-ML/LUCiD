@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=64", "setuptools-scm>=8"]
+requires = ["setuptools>=77", "setuptools-scm>=8"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -8,6 +8,28 @@ dynamic = ["version"]
 description = "Differentiable photon simulation for optical particle detectors"
 readme = "README.md"
 requires-python = ">=3.9"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+authors = [
+    { name = "Omar Alterkait", email = "omar.alterkait@tufts.edu" },
+    { name = "César Jesús-Valls" },
+    { name = "Ryo Matsumoto" },
+    { name = "Patrick de Perio" },
+    { name = "Kazuhiro Terao" },
+]
+keywords = [
+    "differentiable-simulation", "jax", "particle-physics",
+    "cherenkov", "neutrino", "calibration", "reconstruction",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Physics",
+]
 dependencies = [
     "jax>=0.4.20",
     "jaxlib>=0.4.20",
@@ -23,11 +45,18 @@ dependencies = [
     "uproot>=5.0",
 ]
 
+[project.urls]
+Homepage = "https://github.com/CIDeR-ML/LUCiD"
+Documentation = "https://cider-ml.github.io/LUCiD/"
+Repository = "https://github.com/CIDeR-ML/LUCiD"
+Issues = "https://github.com/CIDeR-ML/LUCiD/issues"
+
 [project.optional-dependencies]
 training = ["torch>=2.0"]
 notebooks = ["jupyterlab>=4.0", "ipykernel>=6.0", "nbmake"]
+docs = ["mkdocs-material>=9.5", "mkdocs-jupyter>=0.24", "mkdocstrings[python]>=0.24"]
 dev = ["pytest>=7.0", "lucid-sim[notebooks]"]
-all = ["lucid-sim[training,notebooks,dev]"]
+all = ["lucid-sim[training,notebooks,docs,dev]"]
 
 [project.scripts]
 lucid-optimize = "lucid.optimization.run:main"

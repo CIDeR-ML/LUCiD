@@ -1,0 +1,40 @@
+cff-version: 1.2.0
+title: "LUCiD: Differentiable photon simulation for optical particle detectors"
+message: "If you use this software, please cite the accompanying paper."
+type: software
+authors:
+  - family-names: Alterkait
+    given-names: Omar
+    email: omar.alterkait@tufts.edu
+  - family-names: Jesús-Valls
+    given-names: César
+  - family-names: Matsumoto
+    given-names: Ryo
+  - family-names: de Perio
+    given-names: Patrick
+  - family-names: Terao
+    given-names: Kazuhiro
+license: Apache-2.0
+repository-code: "https://github.com/CIDeR-ML/LUCiD"
+url: "https://cider-ml.github.io/LUCiD/"
+preferred-citation:
+  type: article
+  title: "End-to-end Differentiable Calibration and Reconstruction for Optical Particle Detectors"
+  authors:
+    - family-names: Alterkait
+      given-names: Omar
+    - family-names: Jesús-Valls
+      given-names: César
+    - family-names: Matsumoto
+      given-names: Ryo
+    - family-names: de Perio
+      given-names: Patrick
+    - family-names: Terao
+      given-names: Kazuhiro
+  year: 2026
+  journal: "arXiv preprint"
+  url: "https://arxiv.org/abs/2602.24129"
+  identifiers:
+    - type: other
+      value: "arXiv:2602.24129"
+      description: "arXiv preprint identifier"
