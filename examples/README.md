@@ -35,7 +35,7 @@ reflectivity — the timing-observable frontier.)
 |--------|---------------|--------------|
 | `hello_simulate.py` | the differentiable forward `ParticleParams → per-sensor charge`, drawn with the canonical unrolled-cylinder event display (Cherenkov ring on the barrel) | `setup_event_simulator`, `create_detector_display` |
 | `hello_calibrate.py` | the validated Gauss-Newton + per-PMT-Schur fit recovering optical scales from calibration sources, vs the Fisher/CRB bound | `lucid.fitting`: `build_calibration_problem`, `fit`, `crb` |
-| `hello_reconstruct.py` | full 9-parameter track reconstruction (E, vertex, direction, t0) by Fisher-Gauss-Newton, mirroring LUCiD_recon's latest case | `setup_event_simulator`, `lucid.fitting`: `ReconModel`, `fit_track` |
+| `hello_reconstruct.py` | full 9-parameter track reconstruction (E, vertex, direction, t0) by Fisher-Gauss-Newton, the production recon recipe | `setup_event_simulator`, `lucid.fitting`: `ReconModel`, `fit_track` |
 | `seed_reconstruct.py` | the honest pipeline: a data-driven initial guess (energy scan → vertex/t0 grid → cone direction) from `lucid.optimization`, then refine with `fit_track` | `lucid.optimization.grid_search` / `utils.functions`, `lucid.fitting` |
 | `hello_telescope.py` | a neutrino-telescope string array (IceCube, ice): a through-going muon **track** and a **cascade** shower, DOM counts for each | `setup_event_simulator(detector_type='string')`, `lucid.sources.cascade` |
 
@@ -48,9 +48,9 @@ reflectivity — the timing-observable frontier.)
   coordinates with finite-difference Jacobians (the DiCE `custom_vjp` blocks `jacfwd`, and the
   autodiff track-Hessian is indefinite, so a PSD Fisher metric is built and stepped against).
   The demo uses SK_like geometry and **SIREN-sampled** truth (self-contained, no GEANT4 ROOT),
-  so it shows the optimizer + loss machinery and its self-consistent floor — not the
-  GEANT4-vs-SIREN cone mismatch that sets the ~13 cm physics floor.
-  It captures a track from ~0.7 m / ~2.5° / ~125 MeV off down to ~cm / sub-degree / few-MeV.
+  so it shows the optimizer + loss machinery on a self-consistent problem — model
+  mismatch against real GEANT4 data adds a floor this demo doesn't probe. It captures a
+  track from a far-off start down to a tight fit.
 - The `fit(forward, residual=, solver=)` / `SimParams` / `Field` interface described in
   `docs/internal/MAIN_BRANCH_PLAN.md` is a **proposal**, not yet built. These examples call the
   canonical API that exists today.

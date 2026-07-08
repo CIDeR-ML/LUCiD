@@ -1,13 +1,12 @@
 # LUCiD Event Viewer
 
 Browser-based interactive viewer for LUCiD production HDF5 output:
-raw PMT readout (`sensor`), per-particle decomposition (`inst`), Geant4
-truth segments (`seg`), and truth labels (`labl`). Supports cylinder,
+raw PMT readout (`sensor`), per-particle decomposition (`hits`), Geant4
+truth segments (`step`), and truth labels (`labl`). Supports cylinder,
 box, and sphere geometries.
 
-Modeled on the [JAXTPC viewer](../../../JAXTPC/viewer/) — Three.js 3D +
-Canvas2D unwrapped 2D — adapted to water-Cherenkov PMT displays with
-particle-level correspondence.
+Three.js 3D + Canvas2D unwrapped 2D, adapted to water-Cherenkov PMT displays
+with particle-level correspondence.
 
 ## Files
 
@@ -51,7 +50,7 @@ Then open **http://127.0.0.1:8765/**. The page shows `html loaded, waiting for v
 - **HIT · `All | 1st | 2nd | …`** — only shown when the digitizer recorded more than one **digit** on some PMT (delayed coincidence, pile-up, dark noise → `sensor.h5` is a multi-row digit list). `All` (default) sums each PMT's digit charge at its first-arrival time — identical to the legacy one-digit-per-PMT look. `Nth` shows only the PMTs with ≥N digits, coloured by that digit's charge/time; both FIELD and LABEL re-aggregate to the selected digit (via the `digit_idx` FK from `hits.h5`), so stepping through hits reveals e.g. a muon's prompt digit vs its Michel-electron delayed digit. Resets to `All` automatically when navigating to an event with fewer digits.
 - **LABEL** — categorical override.
   - `None` (default): use FIELD (continuous).
-  - `Particle` — hashed hue per particle (PMTs via argmax over `inst.PE`; segs via `track → particle_idx`).
+  - `Particle` — hashed hue per particle (PMTs via argmax over `hits.PE`; segs via `track → particle_idx`).
   - `Category` — fixed hue per LUCiD category (Primary / DecayElec / SecPion / Gamma / …).
   - `Ancestor` — hashed hue per primary track_id (root of each track's parent chain, from `labl/per_track/ancestor`).
   - `Interaction` — hashed hue per interaction rank (`labl/per_track/interaction` — 0-based index among the event's primaries).

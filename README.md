@@ -38,7 +38,7 @@ the docs at **https://cider-ml.github.io/LUCiD/**.
   read the achievable uncertainty from the Fisher / Cramér–Rao bound — `examples/hello_calibrate.py`.
 - **Model diverse detectors**: cylinder (SK / HK / WCTE, algorithmic or from measured PMT
   `.npz`), sphere (JUNO), box, and neutrino-telescope strings (IceCube); water, WbLS, and ice.
-- **Produce datasets** from GEANT4/PhotonSim (+ optional GENIE flux) → four-file HDF5 — `lucid-run-job`.
+- **Produce datasets** from GEANT4/PhotonSim (+ optional GENIE flux) → four parallel HDF5 files — `lucid-run-job`.
 
 ## Tutorials
 
@@ -89,7 +89,7 @@ lucid-run-job --config lucid/production/configs/GeV/01_mu.json \
 ```
 
 See [docs/guides/production/local.md](docs/guides/production/local.md) (local), the cluster runbooks
-(`docs/QUICKSTART_{S3DF,NERSC,LXPLUS}.md`, fronted by
+(`docs/guides/production/deploy-{s3df,nersc,lxplus}.md`, fronted by
 [docs/guides/production/cluster-abstraction.md](docs/guides/production/cluster-abstraction.md)), and the dataset schema in
 [docs/reference/dataset-schema.md](docs/reference/dataset-schema.md). The container
 `ghcr.io/cider-ml/lucid:latest` ships PhotonSim + GENIE pre-built.

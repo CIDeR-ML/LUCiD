@@ -5,7 +5,7 @@ A cylindrical detector whose PMT positions come from an external file
 disk as a NumPy `.npz` whose contents follow the schema described
 here. :py:meth:`lucid.geometry.Cylinder.from_pmt_file` reads any
 file that conforms to this schema; conversion scripts that produce
-new files (in `config/scripts/`) must respect it.
+new files (the portable converter is `scripts/geofile_to_npz.py`; `config/scripts/` is a local scratch area) must respect it.
 
 ## Coordinate convention
 

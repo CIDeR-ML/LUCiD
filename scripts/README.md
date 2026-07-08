@@ -34,6 +34,7 @@ Reconstruction / calibration at the single-event or single-config level: see
 - `campaign_recon/` — the reconstruction research campaign + diagnostics; the portable subset is
   `reconstruct_dataset.py` above.
 
-These are kept on disk for the team but are **git-ignored** (personal research scratch). Cluster
+`campaign_recon/` is git-ignored (personal research scratch); `campaign/` is tracked
+(its `grid_out/` results directory is not). Cluster
 deployment lives in `../lucid/production/jobs/` (portable SLURM/HTCondor/NERSC) and `../s3df_jobs/`
 (SLAC-specific).
