@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate v3 four-file datasets from a PhotonSim particle-based ROOT file.
+"""Generate four-file datasets from a PhotonSim particle-based ROOT file.
 
 For each batch of ``--batch-size`` events this script writes four parallel
 HDF5 files under the output dataset root:
@@ -9,7 +9,7 @@ HDF5 files under the output dataset root:
     ``{output}/step/wc_step_NNNN.h5``
     ``{output}/labl/wc_labl_NNNN.h5``
 
-See ``docs/LUCID_DATASET.md`` for the full v3 schema.
+See ``docs/LUCID_DATASET.md`` for the full schema.
 
 Usage:
     python generate_events_with_particles.py \\
@@ -37,7 +37,7 @@ from lucid.utils import base_dir_path
 
 def main():
     parser = argparse.ArgumentParser(
-        description='Generate v3 four-file datasets from a PhotonSim particle-based ROOT file.',
+        description='Generate four-file datasets from a PhotonSim particle-based ROOT file.',
         epilog='Output goes to {output}/{sensor,hits,step,labl}/wc_*_NNNN.h5.',
     )
     parser.add_argument('--root-file', type=str, required=True,
@@ -119,7 +119,7 @@ def main():
     print(f"  Sensor reflection rate: {float(dp.reflection.sensor_reflection_rate):.3f}")
     print(f"  QE (scalar): {float(dp.response.qe):.3f}")
 
-    print(f"\nGenerating v3 dataset:")
+    print(f"\nGenerating dataset:")
     print(f"  Source ROOT: {args.root_file}")
     print(f"  Output root: {args.output}")
     print(f"  Dataset name: {args.dataset_name}")

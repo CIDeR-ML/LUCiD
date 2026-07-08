@@ -63,7 +63,7 @@ def read_event_data_from_photonsim(root_file_path, entry_index,
         - ``energy``                   : float, primary energy (MeV)
     """
     from lucid.sources.scintillation_photons import expand_segments_to_photons
-    from lucid.sources.v3_writer import (
+    from lucid.sources.writer import (
         EMISSION_PROCESS_CHERENKOV, EMISSION_PROCESS_SCINTILLATION)
 
     procs = tuple(emission_processes)
@@ -264,7 +264,7 @@ def read_photon_data_from_photonsim(root_file_path, entry_index):
 
     return result
 
-def _read_event_raw(root_file_path, entry_index):
+def _read_event_raw(root_file_path, entry_index, opened_file=None):
     """Read one PhotonSim event from ROOT into a raw dict — no categorization.
 
     This is the I/O-only half of the legacy ``read_particle_data_from_photonsim``.
@@ -296,7 +296,10 @@ def _read_event_raw(root_file_path, entry_index):
     import uproot
     import numpy as np
 
-    root_file = uproot.open(root_file_path)
+    # Reuse a caller-provided open handle when given (avoids re-opening +
+    # re-parsing the tree/branch metadata on every entry — a ~10x read cost
+    # when a driver reads many entries from one file, e.g. a supernova burst).
+    root_file = opened_file if opened_file is not None else uproot.open(root_file_path)
     tree = root_file['OpticalPhotons']
 
     # Per-photon scalar measurements live on a sister tree

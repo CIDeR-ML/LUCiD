@@ -57,6 +57,15 @@ let pmtArrivalT = null;            // Float32Array — same value used for the 3
 let pmtPE_all = null,  pmtT_all = null,  pmtHasSignal_all = null;
 let pmtPE_cher = null, pmtT_cher = null, pmtHasSignal_cher = null;
 let pmtPE_scint = null, pmtT_scint = null, pmtHasSignal_scint = null;
+//   pmtPE_dark/... — sum of hits.h5 rows with emission_process==2 (electronic
+//     dark noise, particle_idx==-1). Only populated when dark rows exist.
+let pmtPE_dark = null, pmtT_dark = null, pmtHasSignal_dark = null;
+// Sentinel dominant-"particle" value for a dark-noise-dominated sensor under
+// the LABEL=Particle coloring while EMISSION=Dark (dark has no owning particle).
+const DARK_LABEL = -2;
+// Reserved categorical hue for the dark-noise category (cyan; distinct from the
+// low-index particle hues 0/0.618/0.236/0.854). catVal is a hue in [0,1).
+const DARK_HUE = 0.5;
 // Per-sensor Cherenkov fraction f = PE_cher / (PE_cher + PE_scint).
 // NaN where both are zero. Drives the CHER FRAC continuous field.
 let pmtCherFraction = null;
@@ -89,8 +98,38 @@ let curLabel = 'none';             // 'none' | 'particle' | 'pdg' | 'interaction
 // kernel-accumulator combined signal). When the dataset has only a single
 // emission process — pure Cherenkov or pure scintillation — the dropdown +
 // CHER FRAC field stay hidden and the filter is locked to 'all'.
-let emissionFilter = 'all';        // 'all' | 'cher' | 'scint'
+let emissionFilter = 'all';        // 'all' | 'cher' | 'scint' | 'dark'
 let datasetHasBothProcesses = false;
+let datasetHasDark = false;         // any emission_process==2 (dark-noise) rows seen
+// HIT slice: which recorded hit (digit) to show per sensor. 0 = 'all' (sum
+// charge / first-arrival time — the default, == legacy one-hit-per-sensor).
+// k>=1 selects the k-th digit (by arrival time) on each sensor; PMTs with
+// fewer than k digits go dark in that slice. maxHits = largest per-sensor
+// digit count in the current event (drives the dropdown range). Both FIELD
+// and LABEL re-aggregate against the active hit slice (via digit_idx).
+let hitFilter = 0;
+let maxHits = 1;
+let sensorDigits = null;    // Array(nSensors): sensor.h5 row indices per sensor, arrival-ordered
+let selectedDigit = null;   // Int32Array(nSensors): chosen digit row (== hits.digit_idx) or -1
+
+// TRIGGER WINDOW slice (triggered datasets only). 'all' shows every digit; an
+// integer w restricts to readout window w's digits (a contiguous sensor.h5 row
+// range from the per_window CSR digit_offsets), and the HIT slice then indexes
+// within that window. Outer slice: composes with EMISSION and HIT.
+let windowFilter = 'all';
+let windows = null;         // { window_start, window_end, digit_offsets } or null
+
+// [lo, hi) sensor.h5 digit rows for the active window ([0, nHits) when 'all' or
+// the dataset carries no per_window). digit_idx == the sensor.h5 row index, so
+// hits.h5 rows are in-window iff lo <= digit_idx < hi.
+function windowRange() {
+  const s = evtBundle && evtBundle.sensor;
+  const n = s ? s.nHits : 0;
+  if (windowFilter === 'all' || !windows || !windows.digit_offsets) return [0, n];
+  const off = windows.digit_offsets, w = windowFilter;
+  if (w < 0 || w + 1 >= off.length) return [0, n];
+  return [off[w], off[w + 1]];
+}
 let logScale = true;
 let percMin = 1, percMax = 99;
 let manualVmin = null, manualVmax = null;
@@ -293,23 +332,78 @@ function normalizeValues(values, opts) {
 // save_sensor_event_v3 mask keeps rows where PE > 0 OR T is a finite
 // positive time within a reasonable window). Whatever makes it through,
 // we still filter here with PE > 0 to guard against edge cases.
+// Group sensor.h5 digit rows by sensor, arrival-time ordered. sensorDigits[s]
+// is the list of sensor.h5 row indices for PMT s (a row index IS that digit's
+// hits.digit_idx). Sets maxHits = largest per-sensor digit count.
+function buildSensorDigits() {
+  sensorDigits = new Array(nSensors);
+  maxHits = 1;
+  const s = evtBundle && evtBundle.sensor;
+  if (!s || !s.nHits) return;
+  const [lo, hi] = windowRange();       // restrict to the active trigger window
+  const buckets = new Array(nSensors);
+  for (let i = lo; i < hi; i++) {
+    const si = s.sensor_idx[i];
+    (buckets[si] || (buckets[si] = [])).push(i);
+  }
+  const T = s.T;
+  for (let si = 0; si < nSensors; si++) {
+    const rows = buckets[si];
+    if (!rows) continue;
+    rows.sort((a, b) => T[a] - T[b]);   // arrival-time order
+    sensorDigits[si] = rows;
+    if (rows.length > maxHits) maxHits = rows.length;
+  }
+  // Navigating to an event with fewer digits invalidates a deeper HIT
+  // selection — fall back to 'All' so the display never silently blanks.
+  if (hitFilter > maxHits) hitFilter = 0;
+}
+
+// For the active hitFilter, record each sensor's chosen digit row (== its
+// hits.digit_idx) or -1 when that sensor has fewer than `hitFilter` digits.
+function computeSelectedDigit() {
+  selectedDigit = new Int32Array(nSensors).fill(-1);
+  if (hitFilter <= 0 || !sensorDigits) return;
+  const k = hitFilter - 1;
+  for (let si = 0; si < nSensors; si++) {
+    const rows = sensorDigits[si];
+    if (rows && k < rows.length) selectedDigit[si] = rows[k];
+  }
+}
+
 function deriveSensorArrays() {
-  // 'All' slice: from sensor.h5 (combined, smeared, includes orphan-track
-  // photons). Same as the legacy single-slice path.
+  buildSensorDigits();
+  computeSelectedDigit();
+  const [wLo, wHi] = windowRange();   // active trigger-window digit-row range
+
+  // 'All' slice: from sensor.h5. hitFilter==0 sums every digit per sensor
+  // (charge) at the first-arrival time (== legacy). hitFilter==k shows only
+  // the selected digit's charge/time on each PMT that has >=k digits.
   pmtPE_all = new Float32Array(nSensors);
   pmtT_all = new Float32Array(nSensors);
   for (let i = 0; i < nSensors; i++) pmtT_all[i] = NaN;
   pmtHasSignal_all = new Uint8Array(nSensors);
   const s = evtBundle.sensor;
   if (s && s.nHits) {
-    for (let i = 0; i < s.nHits; i++) {
-      const si = s.sensor_idx[i];
-      const pe = s.PE[i];
-      pmtPE_all[si] += pe;
-      if (pe > 0) {
-        const t = s.T[i];
-        if (Number.isNaN(pmtT_all[si]) || t < pmtT_all[si]) pmtT_all[si] = t;
-        pmtHasSignal_all[si] = 1;
+    if (hitFilter === 0) {
+      for (let i = wLo; i < wHi; i++) {          // window-restricted
+        const si = s.sensor_idx[i];
+        const pe = s.PE[i];
+        pmtPE_all[si] += pe;
+        if (pe > 0) {
+          const t = s.T[i];
+          if (Number.isNaN(pmtT_all[si]) || t < pmtT_all[si]) pmtT_all[si] = t;
+          pmtHasSignal_all[si] = 1;
+        }
+      }
+    } else {
+      for (let si = 0; si < nSensors; si++) {
+        const d = selectedDigit[si];
+        if (d < 0) continue;
+        const pe = s.PE[d];
+        pmtPE_all[si] = pe;
+        pmtT_all[si] = s.T[d];
+        if (pe > 0) pmtHasSignal_all[si] = 1;
       }
     }
   }
@@ -320,24 +414,37 @@ function deriveSensorArrays() {
   // up in the 'All' slice via sensor.h5). Pre-smearing.
   pmtPE_cher = new Float32Array(nSensors);
   pmtPE_scint = new Float32Array(nSensors);
+  pmtPE_dark = new Float32Array(nSensors);
   pmtT_cher = new Float32Array(nSensors);
   pmtT_scint = new Float32Array(nSensors);
-  for (let i = 0; i < nSensors; i++) { pmtT_cher[i] = NaN; pmtT_scint[i] = NaN; }
+  pmtT_dark = new Float32Array(nSensors);
+  for (let i = 0; i < nSensors; i++) { pmtT_cher[i] = NaN; pmtT_scint[i] = NaN; pmtT_dark[i] = NaN; }
   pmtHasSignal_cher = new Uint8Array(nSensors);
   pmtHasSignal_scint = new Uint8Array(nSensors);
+  pmtHasSignal_dark = new Uint8Array(nSensors);
   const h = evtBundle.hits;
   if (h && h.nHits && h.emission_process) {
     const sIdx = h.sensor_idx, pe = h.PE, t = h.T, ep = h.emission_process;
+    const dg = h.digit_idx;
     for (let i = 0; i < h.nHits; i++) {
       const si = sIdx[i];
+      // TRIGGER WINDOW slice: keep only rows whose digit is in the window range.
+      if (windowFilter !== 'all' && dg && (dg[i] < wLo || dg[i] >= wHi)) continue;
+      // HIT slice: keep only rows belonging to the selected digit on each PMT.
+      if (hitFilter !== 0 && (!dg || dg[i] !== selectedDigit[si])) continue;
       const p = pe[i];
       if (!(p > 0)) continue;
       if (ep[i] === 1) {
         pmtPE_scint[si] += p;
         if (Number.isNaN(pmtT_scint[si]) || t[i] < pmtT_scint[si]) pmtT_scint[si] = t[i];
         pmtHasSignal_scint[si] = 1;
+      } else if (ep[i] === 2) {
+        // emission_process == 2 (electronic dark noise).
+        pmtPE_dark[si] += p;
+        if (Number.isNaN(pmtT_dark[si]) || t[i] < pmtT_dark[si]) pmtT_dark[si] = t[i];
+        pmtHasSignal_dark[si] = 1;
       } else {
-        // emission_process == 0 (Cherenkov); also catches any pre-Phase-0
+        // emission_process == 0 (Cherenkov); also catches any pre-change
         // dataset that lacks the column (h5_worker defaults to all-zeros).
         pmtPE_cher[si] += p;
         if (Number.isNaN(pmtT_cher[si]) || t[i] < pmtT_cher[si]) pmtT_cher[si] = t[i];
@@ -376,6 +483,16 @@ function detectDualEmission(bundle) {
   return false;
 }
 
+// Detect whether the loaded event carries dark-noise rows (emission_process==2).
+// Locked across the dataset (like detectDualEmission) so the Dark slice stays
+// available even on events where dark noise happened to land nowhere.
+function detectDark(bundle) {
+  const ep = bundle && bundle.hits && bundle.hits.emission_process;
+  if (!ep) return false;
+  for (let i = 0; i < ep.length; i++) if (ep[i] === 2) return true;
+  return false;
+}
+
 // Repoint the active per-sensor arrays to the slice selected by
 // emissionFilter. Cheap (alias swap, no copy). Call after derivePMTArrays
 // (event load) and after the dropdown changes.
@@ -388,6 +505,10 @@ function applyEmissionFilter() {
     pmtPE = pmtPE_scint;
     pmtT  = pmtT_scint;
     pmtHasSignal = pmtHasSignal_scint;
+  } else if (emissionFilter === 'dark') {
+    pmtPE = pmtPE_dark;
+    pmtT  = pmtT_dark;
+    pmtHasSignal = pmtHasSignal_dark;
   } else {
     pmtPE = pmtPE_all;
     pmtT  = pmtT_all;
@@ -464,16 +585,28 @@ function buildHitsLookups() {
   const ep = i_.emission_process;
   const wantCher  = (emissionFilter === 'cher');
   const wantScint = (emissionFilter === 'scint');
+  const wantDark  = (emissionFilter === 'dark');
+  const dg = i_.digit_idx;
+  const [wLo, wHi] = windowRange();
   for (let i = 0; i < i_.nHits; i++) {
-    if (ep) {
-      const e = ep[i];
-      if (wantCher && e !== 0) continue;
-      if (wantScint && e !== 1) continue;
+    const s = i_.sensor_idx[i];
+    // TRIGGER WINDOW slice: keep only rows whose digit is in the window range.
+    if (windowFilter !== 'all' && dg && (dg[i] < wLo || dg[i] >= wHi)) continue;
+    // HIT slice: keep only rows belonging to the selected digit on each PMT.
+    if (hitFilter !== 0 && (!dg || dg[i] !== selectedDigit[s])) continue;
+    const e = ep ? ep[i] : 0;
+    if (wantCher && e !== 0) continue;
+    if (wantScint && e !== 1) continue;
+    if (wantDark && e !== 2) continue;
+    const pe = i_.PE[i];
+    if (wantDark) {
+      // Dark-noise rows have no owning particle (particle_idx == -1); colour
+      // the dominated sensor with the dedicated DARK category instead.
+      if (pe > perSensorBest[s]) { perSensorBest[s] = pe; pmtDomParticle[s] = DARK_LABEL; }
+      continue;
     }
     const p = i_.particle_idx[i];
-    const s = i_.sensor_idx[i];
-    const pe = i_.PE[i];
-    if (p < 0 || p >= n_particles) continue;
+    if (p < 0 || p >= n_particles) continue;   // dark/orphan rows under non-dark slices
     particleToSensor[p].set(s, (particleToSensor[p].get(s) || 0) + pe);
     particleTotals[p] += pe;
     if (pe > perSensorBest[s]) {
@@ -543,7 +676,9 @@ function buildSegmentLookups() {
   // carry the process tag).
   const wantCher  = (emissionFilter === 'cher');
   const wantScint = (emissionFilter === 'scint');
+  const wantDark  = (emissionFilter === 'dark');   // sensor_hits carries no dark rows
   for (let i = 0; i < n; i++) {
+    if (wantDark) continue;   // dark slice has no segment contributions
     if (ep) {
       const e = ep[i];
       if (wantCher && e !== 0) continue;
@@ -813,6 +948,7 @@ function pmtCatValArray() {
   }
   for (let i = 0; i < nSensors; i++) {
     const p = pmtDomParticle[i];
+    if (p === DARK_LABEL) { out[i] = DARK_HUE; continue; }   // dark-noise category
     if (p < 0) { out[i] = 0; continue; }
     if (curLabel === 'particle') {
       out[i] = hashHue(p);
@@ -1526,7 +1662,12 @@ function buildSidebar() {
 }
 
 function buildSidebarParticles(list, n) {
+  let shown = 0;
   for (let p = 0; p < n; p++) {
+    // Hide particles that contribute no PE in the active EMISSION/HIT slice,
+    // mirroring the PDG rows — so the list tracks the selected hit (a particle
+    // whose light all landed in an earlier digit drops out of the Nth-hit view).
+    if ((particleTotals[p] || 0) <= 0) continue;
     const row = document.createElement('div');
     row.className = 'particle-row';
     if (p === selectedParticle) row.classList.add('selected');
@@ -1550,6 +1691,10 @@ function buildSidebarParticles(list, n) {
       render2D();
     });
     list.appendChild(row);
+    shown++;
+  }
+  if (shown === 0) {
+    list.innerHTML = '<div class="event-meta-row" style="padding:8px"><span class="k">(no particles with hits)</span></div>';
   }
 }
 
@@ -2159,11 +2304,20 @@ function syncEmissionUI() {
   const sep  = $('emissionSep');
   const cher = $('fieldCherFrac');
   if (!sel || !lbl || !sep || !cher) return;
-  const showDual = !!datasetHasBothProcesses;
-  sel.style.display  = showDual ? '' : 'none';
-  lbl.style.display  = showDual ? '' : 'none';
-  sep.style.display  = showDual ? '' : 'none';
-  cher.style.display = showDual ? '' : 'none';
+  const showDual = !!datasetHasBothProcesses;          // both photon processes -> cher/scint + CHER FRAC
+  const hasSlices = showDual || !!datasetHasDark;      // any emission slicing (incl. dark)
+  sel.style.display  = hasSlices ? '' : 'none';
+  lbl.style.display  = hasSlices ? '' : 'none';
+  sep.style.display  = hasSlices ? '' : 'none';
+  cher.style.display = showDual ? '' : 'none';         // CHER FRAC only when both photon processes exist
+  // Per-option visibility: cher/scint only under dual photon processes; Dark
+  // only when dark rows exist.
+  for (const v of ['cher', 'scint']) {
+    const o = sel.querySelector(`option[value="${v}"]`);
+    if (o) o.style.display = showDual ? '' : 'none';
+  }
+  const darkOpt = sel.querySelector('option[value="dark"]');
+  if (darkOpt) darkOpt.style.display = datasetHasDark ? '' : 'none';
   sel.value = emissionFilter;
   const cherUsable = showDual && emissionFilter === 'all';
   cher.disabled = !cherUsable;
@@ -2173,6 +2327,62 @@ function syncEmissionUI() {
     : (emissionFilter === 'all'
         ? ''
         : 'CHER FRAC is meaningless under a single-process EMISSION filter — set EMISSION=All to enable.');
+}
+
+// HIT dropdown: rebuild the option list for the current event's maxHits and
+// show it only when some PMT recorded more than one digit. Called on event
+// load (after deriveSensorArrays sets maxHits). Options: All, 1st, 2nd, …
+function syncHitUI() {
+  const sel = $('hitSelect'), lbl = $('hitLabel'), sep = $('hitSep');
+  if (!sel || !lbl || !sep) return;
+  const show = maxHits > 1;
+  sel.style.display = show ? '' : 'none';
+  lbl.style.display = show ? '' : 'none';
+  sep.style.display = show ? '' : 'none';
+  // Rebuild options only when the count changed (cheap guard against churn).
+  if (sel.options.length !== maxHits + 1) {
+    const ordinal = (k) => {
+      const s = ['th', 'st', 'nd', 'rd'], v = k % 100;
+      return k + (s[(v - 20) % 10] || s[v] || s[0]);
+    };
+    sel.innerHTML = '';
+    const optAll = document.createElement('option');
+    optAll.value = '0'; optAll.textContent = 'All';
+    sel.appendChild(optAll);
+    for (let k = 1; k <= maxHits; k++) {
+      const o = document.createElement('option');
+      o.value = String(k); o.textContent = ordinal(k);
+      sel.appendChild(o);
+    }
+  }
+  sel.value = String(hitFilter);
+}
+
+// TRIGGER WINDOW dropdown: shown on triggered datasets (per_window present).
+// `All` = every stored digit; `Wk` restricts to readout window k, and the HIT
+// dropdown then indexes within that window. Labeled by each gate's time range.
+function syncWindowUI() {
+  const sel = $('windowSelect'), lbl = $('windowLabel'), sep = $('windowSep');
+  if (!sel || !lbl || !sep) return;
+  const nwin = windows && windows.window_start ? windows.window_start.length : 0;
+  const show = nwin >= 1;
+  sel.style.display = show ? '' : 'none';
+  lbl.style.display = show ? '' : 'none';
+  sep.style.display = show ? '' : 'none';
+  if (!show) return;
+  if (sel.options.length !== nwin + 1) {
+    sel.innerHTML = '';
+    const optAll = document.createElement('option');
+    optAll.value = 'all'; optAll.textContent = 'All';
+    sel.appendChild(optAll);
+    for (let w = 0; w < nwin; w++) {
+      const o = document.createElement('option');
+      o.value = String(w);
+      o.textContent = `W${w + 1} (${windows.window_start[w].toFixed(0)}–${windows.window_end[w].toFixed(0)}ns)`;
+      sel.appendChild(o);
+    }
+  }
+  sel.value = String(windowFilter);
 }
 
 // Reflect field-dependent control eligibility. Disables the log-scale
@@ -2227,8 +2437,16 @@ async function loadEvent(idx) {
     // later events happen to have only one process represented (rare edge
     // case where all of one process QE-failed on a given event).
     datasetHasBothProcesses = datasetHasBothProcesses || detectDualEmission(d);
+    datasetHasDark = datasetHasDark || detectDark(d);
+    // Trigger windows (triggered datasets only). Clamp a stale selection when
+    // navigating to an event with fewer windows.
+    windows = (d.labl && d.labl.per_window) || null;
+    const _nwin = windows && windows.window_start ? windows.window_start.length : 0;
+    if (windowFilter !== 'all' && windowFilter >= _nwin) windowFilter = 'all';
     syncEmissionUI();
-    deriveSensorArrays();
+    deriveSensorArrays();   // sets maxHits (+ clamps a stale hitFilter)
+    syncHitUI();
+    syncWindowUI();
     buildHitsLookups();
     buildSegmentLookups();
     deriveBetaProjection();
@@ -2356,6 +2574,40 @@ function setupUI() {
     render2D();
   });
 
+  // HIT dropdown (only present when some PMT has >1 digit). Re-derives every
+  // per-sensor slice against the selected digit and rebuilds the label + sidebar
+  // so FIELD and LABEL stay coherent on the same hit.
+  $('hitSelect').addEventListener('change', (e) => {
+    hitFilter = parseInt(e.target.value, 10) || 0;
+    deriveSensorArrays();
+    applyEmissionFilter();
+    buildHitsLookups();
+    buildSegmentLookups();
+    refreshUnionQMap();
+    buildPMTs();
+    updatePMTColors();
+    applyCorrespondence();
+    buildSidebar();
+    render2D();
+  });
+
+  // TRIGGER WINDOW dropdown: restricts the digit set to one readout window;
+  // re-derives every slice and rebuilds the HIT options (maxHits is per-window).
+  $('windowSelect').addEventListener('change', (e) => {
+    windowFilter = e.target.value === 'all' ? 'all' : parseInt(e.target.value, 10);
+    deriveSensorArrays();
+    syncHitUI();               // window changes the per-sensor digit count
+    applyEmissionFilter();
+    buildHitsLookups();
+    buildSegmentLookups();
+    refreshUnionQMap();
+    buildPMTs();
+    updatePMTColors();
+    applyCorrespondence();
+    buildSidebar();
+    render2D();
+  });
+
   // Correspondence toggle.
   // Time sweep toggle.
   $('sweepBtn').addEventListener('click', () => {
@@ -2386,6 +2638,8 @@ function setupUI() {
     // Toolbar state.
     curView = 'pmts'; curField = 'charge'; curLabel = 'none';
     emissionFilter = 'all';
+    hitFilter = 0;
+    windowFilter = 'all';
     selectedParticle = null; selectedGroup = null;
     sweepOn = false; sweepPlaying = false; quantileScope = 'pmts';
     simTime = 0;
@@ -2414,7 +2668,11 @@ function setupUI() {
     for (const c of $('viewGrp').children) c.classList.toggle('active', c.dataset.v === 'pmts');
     for (const c of $('fieldGrp').children) c.classList.toggle('active', c.dataset.v === 'charge');
     syncEmissionUI();
-    if (evtBundle) applyEmissionFilter();
+    // hitFilter/emissionFilter both reset above — re-derive the per-sensor
+    // slices for the 'All'/'All-hits' state and rebuild the label lookups.
+    if (evtBundle) { deriveSensorArrays(); buildHitsLookups(); buildSegmentLookups(); }
+    syncHitUI();
+    syncWindowUI();
     syncFieldDependentControls();
     $('rotBtn').classList.toggle('active', autoRotate);
     if (controls) controls.autoRotate = autoRotate;

@@ -11,7 +11,7 @@ This file checks that invariant two ways:
 
 1. The validator helper :func:`find_outside_start_violations` correctly
    classifies a synthetic event's hits.
-2. The writer ``save_step_event_v3`` round-trips the ``sensor_hits`` subgroup
+2. The writer ``save_step_event`` round-trips the ``sensor_hits`` subgroup
    in a way the validator can re-check on disk.
 
 The same validator can be pointed at any real ``wc_step_NNNN.h5`` produced
@@ -22,8 +22,8 @@ import h5py
 import numpy as np
 import pytest
 
-from lucid.sources.v3_writer import save_step_event_v3
-from tests.io._v3_event_fixture import build_synthetic_event
+from lucid.sources.writer import save_step_event
+from tests.io._event_fixture import build_synthetic_event
 
 
 def _segment_starts_inside(start_xyz, detector_bounds):
@@ -84,7 +84,7 @@ _TEST_BOUNDS = {'type': 'cylinder', 'radius': 5.0, 'height': 10.0}
 def _write_event(tmp_path, event_dict):
     seg_path = tmp_path / 'wc_step_0000.h5'
     with h5py.File(seg_path, 'w') as f:
-        save_step_event_v3(f, event_dict, seq_idx=0)
+        save_step_event(f, event_dict, seq_idx=0)
     return seg_path
 
 

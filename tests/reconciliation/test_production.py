@@ -1,6 +1,6 @@
 """Phase-5 reconciliation — production subsystem present + well-formed.
 
-A full PhotonSim→v3 run needs the external PhotonSim/GENIE binaries ($PHOTONSIM_BIN),
+A full PhotonSim→dataset run needs the external PhotonSim/GENIE binaries ($PHOTONSIM_BIN),
 so this validates what runs without them: the entry point + helpers import, the
 lucid-run-job CLI parses, and every shipped dataprod config is well-formed.
 """
