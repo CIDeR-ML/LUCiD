@@ -12,6 +12,48 @@ spectrum, `n_real`) — by gradient descent through the differentiable forward. 
     code-complete (`lucid.wavelength.optical_model`), but a wavelength-mode calibration
     notebook does not exist yet.
 
+## Minimal calibration
+
+Build the problem, take the Cramér-Rao bound at truth, fit — the condensed shape of
+`examples/hello_calibrate.py`. Calibration uses lasers + a flasher (no SIREN emitter), so it
+needs no downloaded emitter weights:
+
+```python
+import jax, jax.numpy as jnp, numpy as np
+from lucid.geometry import generate_detector
+from lucid.simulation import setup_event_simulator
+from lucid.sources import laser_source, isotropic_source
+from lucid.detector_params import DetectorParams
+from lucid.fitting import build_calibration_problem, fit, crb
+
+GEOM = 'config/SK_like_geom_config.json'
+det = generate_detector(GEOM); NS = len(det.all_points)
+top, bot, R = det.H/2 - .1, -det.H/2 + .1, det.r
+
+# truth optics; per-PMT qe_corrections is the k map (all-ones here)
+dp = DetectorParams.from_flat(scatter_length=70., mie_scatter_length=3000., g=0.9,
+                              absorption_length=60., wall_reflection_rate=.2,
+                              sensor_reflection_rate=.2, qe=0.07, qe_corrections=jnp.ones(NS))
+
+# source diversity is the lever: wall lasers (several positions) + an isotropic flasher
+sources = [laser_source(position=[0, 0, top], direction=[0, 0, -1], intensity=1e6),
+           laser_source(position=[0, 0, bot], direction=[0, 0,  1], intensity=1e6),
+           laser_source(position=[R-.1, 0, 0], direction=[-1, 0, 0], intensity=1e6),
+           isotropic_source(position=[0, 0, 0], intensity=1e6)]
+sim = setup_event_simulator(GEOM, 1_000_000, temperature=None, K=8, is_calibration=True,
+                            hit_mode='aggregated', wavelength_mode=False)
+
+# globals to recover; the ~10^4 per-PMT k are marginalized analytically (Schur complement)
+FIELDS = ['g', 'scatter_length', 'mie_scatter_length', 'absorption_length',
+          'wall_reflection_rate', 'sensor_reflection_rate', 'qe']
+prob  = build_calibration_problem(sim, sources, dp, FIELDS, key=jax.random.PRNGKey(1))
+sigma = crb(prob['source_models'], prob['theta_true'], NS)['sigma']       # Cramer-Rao bound, per field
+start = prob['theta0'] + np.random.default_rng(0).uniform(-.15, .15, prob['theta0'].shape)
+res   = fit(prob['source_models'], prob['truth_charge'], start, NS, steps=100, refresh=15, nb_h=2)
+# res['theta'] = fitted globals; compare to np.exp(prob['theta0']) (truth) and sigma (the bound).
+# theta0/theta_true are in log space; res['k'] holds the recovered per-PMT map.
+```
+
 ## What is measured
 
 `DetectorParams` is a JAX pytree with normalize/denormalize + bounds, so every optical property
@@ -21,11 +63,26 @@ is directly optimizable. Two tiers:
   `sensor_refl`, `qe` spectral multipliers, `n_real`, SPE width, etc.
 - **per-PMT `k`** (the QE map — one multiplier per sensor, ~10⁴ of them).
 
-With `reflection_model='scalar_mix'`, the wall/sensor **specular fractions**
-(`wall_fspec`/`sensor_fspec`) are additional fittable levers — the specular-vs-diffuse
-direction split is carried by a DiCE score, so it calibrates from charge patterns without
-per-photon wavelengths. Set the `*_fspec` keys explicitly in the physics config when using
-this model (they default to 0 = fully diffuse).
+The shorthand above maps to the physics-config / `DetectorParams.from_flat` field names:
+
+| shorthand | config key |
+|-----------|-----------|
+| `L_abs` | `absorption_length` |
+| `L_R` (Rayleigh) | `scatter_length` |
+| `L_M` (Mie) | `mie_scatter_length` (with asymmetry `g`) |
+| `wall_refl` | `wall_reflection_rate` |
+| `sensor_refl` | `sensor_reflection_rate` |
+| `qe` | `qe` |
+| per-PMT `k` | `qe_corrections` |
+
+With `reflection_model='angular'`, reflection gains fittable levers beyond the two scalar
+rates: the reflectance *magnitude* is angle- and λ-dependent (Schlick blacksheet wall +
+multilayer-Fresnel cathode), and the reflected *direction* is a specular/diffuse mixture with
+per-surface fractions `wall_fspec`/`sensor_fspec` (the discrete specular-vs-diffuse branch is
+carried by a DiCE score). The angular model reads the `DetectorParams.reflection` fields
+(`wall_R0`/`wall_p`/`wall_fspec`, `cathode_nr`/`cathode_nk`/`sensor_fspec`) and **requires
+`wavelength_mode=True`** for the λ-dependent magnitude; the `*_fspec` fields default to 0 (fully
+diffuse) and are inert under the default `reflection_model='scalar'`.
 
 ## Recipe (per-sensor QE + all globals)
 
@@ -65,8 +122,11 @@ In wavelength mode (`wavelength_mode=True` — the spectral path noted at the to
 page), calibration applies `qe_fn(λ)` per photon. The same
 band-consistency principle from [reconstruction](reconstruction.md) applies: a broadband
 Cherenkov `qe(λ)` fit must sample the **bare 1/λ² spectrum over the physical emission band**
-and apply differentiable `qe(λ)` — an importance sampler that bakes the assumed QE into the λ
-distribution cannot be used to *fit* QE. Broadband sources measure only the spectrum integral
+and apply differentiable `qe(λ)` — i.e. keep `setup_event_simulator`'s default
+`wavelength_sampling='cherenkov'` (λ ~ 1/λ², per-photon weight `qe_fn(λ)`). The alternative
+`wavelength_sampling='cherenkov_qe'` importance-samples λ ~ QE(λ)/λ² and collapses the weight to
+a scalar ⟨QE⟩, baking the assumed QE into the λ distribution — so it **cannot be used to *fit*
+QE**. Broadband sources measure only the spectrum integral
 (amplitudes + `k`); **monochromatic lasers anchor `qe(λᵢ)`**. The bundled SK QE curve
 spans ≈294–648 nm; the medium grid is [300, 700] nm.
 
@@ -78,6 +138,23 @@ expected-value (implicit-capture) engine is quieter than real Poisson shot noise
 closure fits look better than reality — validate shot noise with sampled per-photon quanta, or
 simply quote the CRB. Per-PMT `k` improves as 1/√N with photon statistics; smooth λ-curves
 become systematics-limited rather than photon-limited.
+
+## If the calibration misbehaves
+
+- **A degenerate fit** (parameters trade off, huge CRB on some direction) — add **source
+  diversity**. A single source leaves `L_M↔k`, `L_abs↔qe`, and wall↔sensor reflectivity
+  degenerate; mixing wall lasers (several positions/wavelengths) with an isotropic flasher breaks
+  them and makes the scattering lengths measurable.
+- **per-PMT `k` runs away** (a global QE↔mean-`k` offset drifts) — fix the gauge with
+  `mean(log k)=0` (the `gauge_k` step, on by default). If white per-PMT variation is leaking into
+  the flattest global (usually a reflectivity), run **one bake alternation** (`bake_k=True`) to
+  fold `k̂` back into the forward.
+- **CRB disagrees with a sim toy-MC** — expected: the expected-value (implicit-capture) engine is
+  quieter than real Poisson shot noise (the `crb` bound carries a ×√12 honesty factor). Validate
+  with sampled per-photon quanta (`use_expected_value=False`), or just quote the CRB.
+- **Poisson-NLL biases `L_abs`/`qe`** — use the smoothed square-root-MSE loss instead (the NLL's
+  finite-count weighting biases the absorption/QE point); the smoothing also isolates the
+  low-frequency globals from the white per-PMT `k`.
 
 ## Frontier
 

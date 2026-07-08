@@ -29,6 +29,39 @@ print((charge > 0).sum(), 'PMTs lit,', charge.sum(), 'pe')   # pe = photoelectro
 create_detector_display('config/SK_like_geom_config.json', sparse=False)(charge, time)   # 2D unrolled ring
 ```
 
+!!! note "`hit_mode` and `K` here"
+    This synthetic-track call is a **2-argument** callable — `sim(track, key)` returning
+    `(charge, time)` — because `default_detector_params=True` bakes the detector params in.
+    Its `hit_mode='realistic'` is valid track-mode usage and is *distinct* from **data mode**
+    (`is_data=True`), whose `realistic` row in the [pipeline table](../concepts/photon-pipeline.md)
+    is a 4-argument callable fed per-PMT hits from a ROOT file. `K=6` scatter iterations is
+    display-quality; use `K≥8` for [reconstruction](../guides/reconstruction.md) and
+    [calibration](../guides/calibration.md).
+
+## Shapes, gradients, GPU
+
+`sim` returns two arrays — `charge` and `time` — each of shape `(n_sensors,)` and dtype
+`float32` (10764 for this SK-like tank: one entry per PMT, `0` where a PMT saw no light).
+Because the whole forward is JAX, it differentiates and batches with no extra machinery:
+
+```python
+import jax.numpy as jnp
+
+# exact autodiff gradient of total detected charge w.r.t. track energy — one line
+def total_charge(E):
+    return sim(track._replace(energy=E), jax.random.PRNGKey(0))[0].sum()
+print(jax.grad(total_charge)(1000.))     # ≈ 3.0 pe/MeV (charge scales ~linearly with energy)
+
+# batch a whole energy scan in a single call with vmap
+energies = jnp.array([500., 1000., 1500.])
+charges, times = jax.vmap(lambda E: sim(track._replace(energy=E), jax.random.PRNGKey(0)))(energies)
+print(charges.shape)                     # (3, 10764)
+```
+
+!!! note "GPU"
+    JAX runs this on a GPU automatically whenever one is visible — no code change. Set
+    `JAX_PLATFORMS=cpu` to keep it on the CPU (reproducible CI, or a shared node).
+
 ## Where to go next
 
 The narrated notebooks in `tutorials/` walk the main workflows:
