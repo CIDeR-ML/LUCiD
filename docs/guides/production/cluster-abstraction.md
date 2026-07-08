@@ -110,6 +110,21 @@ import time. Every entrypoint imports `htcondor` unconditionally (a
 no-op cost when `CLUSTER=slurm`, since `SlurmAdapter` lives in
 `cluster.py` and stays the default).
 
+## Verifying and resuming (cluster-agnostic)
+
+Completion truth is shared, not per-cluster: `cluster_common/verify.py` holds
+`is_complete_dataprod` (four files open, agree on `config/n_events`, carry
+`config/complete == True`, `n_events <= expected`) and `is_complete_siren` (ROOT
+has the `OpticalPhotons` TTree). Every stage's `verify_jobs.py` /
+`resubmit_failed.*` reuses these, so the resume loop is the same regardless of
+`CLUSTER`: run the stage's verify in `--list` mode inside the container (it needs
+h5py/uproot), then resubmit the listed jobs with `$CLUSTER_SUBMIT_CMD` on the
+host (`sbatch` or `condor_submit`). The wrappers already read that env var, so
+one command works on both clusters. The concrete SLURM invocations — plus the
+post-run completeness checklist (trigger-dropped events as `source_event_idx`
+gaps, delivered-vs-requested reconciliation, the `--test` smoke pattern) — are in
+[`deploy-s3df.md`](deploy-s3df.md#verify-and-resume-a-run).
+
 ## Adding a third cluster
 
 1. **New adapter** at `cluster_common/<cluster>.py`:

@@ -25,6 +25,12 @@ Writes `.npz` checkpoints, `training_history.json`, and the trained model
 data directory, printing per-epoch losses. (The `siren_params.json` the simulator loads is
 a separate hand-maintained pointer config — update its `path` to switch to a new model.) The training loop has ~30 further flags (architecture, LR schedule,
 energy-balance sampling, validation plots) — run `lucid-train-siren --help` for the full set.
+Judge convergence from the held-out validation loss (`val_split`, default 1%),
+not the training loss: watch `val_loss` in `training_history.json` (also plotted
+to `final_training_progress.pdf`) flatten, and check the in-training
+prediction-vs-truth plots track the surrogate against the table. The LR schedule
+is patience-based (`--patience`, default 20), so a plateauing `val_loss` with no
+further LR drops is the signal to stop.
 Module: `lucid.siren.train`. Build its input tables first with the two table builders below.
 
 ## `lucid-build-photon-table` / `lucid-build-dedx-table` — SIREN training inputs
