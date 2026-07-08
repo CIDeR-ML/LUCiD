@@ -46,15 +46,21 @@ def main():
         return
 
     if args.event is None:
-        # summary over all events
-        n_hit, q_tot = [], []
+        # summary over all events. Sensor events carry sensor_idx / PE / T; a sensor
+        # index may repeat under multi-hit digitizer models, so count digits and
+        # unique hit PMTs separately.
+        n_digit, n_pmt, q_tot = [], [], []
         for ev in range(n):
             s = read_sensor_event(paths['sensor'], ev)
-            q = np.asarray(s.get('charge', s.get('Q', [])))
-            n_hit.append(int((q > 0).sum())); q_tot.append(float(q.sum()))
-        n_hit, q_tot = np.array(n_hit), np.array(q_tot)
-        print(f'  hit PMTs / event : mean {n_hit.mean():.0f}  min {n_hit.min()}  max {n_hit.max()}')
-        print(f'  total charge     : mean {q_tot.mean():.0f}  min {q_tot.min():.0f}  max {q_tot.max():.0f}')
+            q = np.asarray(s.get('PE', []))
+            idx = np.asarray(s.get('sensor_idx', []))
+            n_digit.append(len(q))
+            n_pmt.append(len(np.unique(idx)) if idx.size else 0)
+            q_tot.append(float(q.sum()))
+        n_digit, n_pmt, q_tot = np.array(n_digit), np.array(n_pmt), np.array(q_tot)
+        print(f'  digits / event   : mean {n_digit.mean():.0f}  min {n_digit.min()}  max {n_digit.max()}')
+        print(f'  hit PMTs / event : mean {n_pmt.mean():.0f}  min {n_pmt.min()}  max {n_pmt.max()}')
+        print(f'  total PE         : mean {q_tot.mean():.0f}  min {q_tot.min():.0f}  max {q_tot.max():.0f}')
         print('  (use --event N for per-event detail)')
     else:
         ev = args.event

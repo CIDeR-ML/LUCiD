@@ -67,7 +67,7 @@ lucid-build-dedx-table = "lucid.siren.training.photonsim_data.build_dedx_table:m
 include = ["lucid*"]
 
 [tool.setuptools.package-data]
-"lucid.production.configs" = ["*.json"]
+"lucid.production.configs" = ["**/*.json"]
 
 [tool.pytest.ini_options]
 markers = [
