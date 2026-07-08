@@ -95,6 +95,42 @@ r, H, S_radius, n_sensors, C, npz_file_path, snap_to_wall,
 _n_cap, _n_angular, _n_height
 ```
 
+## String / DOM detectors — a separate `.npz` layout
+
+String telescopes (`detector_type: "string"`, IceCube-like) use a **different**
+`.npz` schema, read by :py:meth:`lucid.geometry.StringTelescope.from_npz`
+(`lucid/geometry/string.py`). It stores per-DOM positions grouped by string
+rather than a flat PMT list, and — unlike the cylinder schema above — its
+positions are in **metres**, not millimetres. There is no `positions_mm`-style
+suffix precisely because the units differ; do not mix the two conventions.
+
+### Required arrays / scalars
+
+| Key              | Shape                  | dtype       | Units | Meaning                                                       |
+|------------------|------------------------|-------------|-------|---------------------------------------------------------------|
+| `dom_xyz`        | `(N_str, max_dom, 3)`  | `float64`   | m     | Per-DOM positions, grouped by string; **NaN-padded** to `max_dom` |
+| `n_dom_per_str`  | `(N_str,)`             | `int32`     | —     | Actual DOM count on each string (rows past this are the NaN pad) |
+| `sensor_radius`  | scalar                 | `float64`   | m     | DOM glass-sphere radius                                       |
+| `envelope_radius`| scalar                 | `float64`   | m     | Radius of the bounding cylinder used for ray entry/exit clipping |
+| `envelope_z_min` | scalar                 | `float64`   | m     | Bottom of the bounding cylinder (`z`)                        |
+| `envelope_z_max` | scalar                 | `float64`   | m     | Top of the bounding cylinder (`z`)                          |
+
+`N_str` is the number of strings, `max_dom` the longest string's DOM count
+(shorter strings are NaN-padded to it). There is no closed detector surface —
+the envelope cylinder is only a clipping/inside-detector volume, not a
+reflective wall.
+
+Files in the repo may also carry informational scalars such as `n_strings`,
+`max_dom_per_str`, and `total_doms`; the loader does **not** read them (they are
+derivable from `dom_xyz` / `n_dom_per_str`) and they can be omitted.
+
+### No converter script yet
+
+The cylinder path has a portable converter (`scripts/geofile_to_npz.py`); there
+is **no equivalent string-npz generator** in the repo yet. String `.npz` files
+(e.g. `config/icecube86_simple.npz`) are produced ad hoc — write the six keys
+above directly with `numpy.savez`.
+
 ## Versioning
 
 If/when this schema needs a breaking change, add a `schema_version`

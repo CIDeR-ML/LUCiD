@@ -7,7 +7,8 @@
   → it's an **arg** (passed to `setup_event_simulator` / the forward), not a pytree leaf.
 
 Corollary: a leaf only earns a place in a fit pytree if some run might list it in `trainable_fields`. Everything that is
-always-fixed (geometry, the medium *reference* shapes, the soft-overlap correction, the group velocity) is an arg.
+always-fixed (geometry, the medium *reference* shapes, the soft-overlap correction, the medium light
+speed `c/n`) is an arg.
 
 ## Three fittable pytrees (the optimization state) — `trainable_fields` selects across them
 | pytree | holds | free in |
@@ -63,14 +64,19 @@ Notes / decisions per field:
 | **N (photons), K (bounces), temperature (soft overlap), rng/keys** | runtime/differentiability knobs |
 | **response mode** (expected-value model vs sampled truth) | which response, not a parameter |
 | **soft-overlap correction** | a differentiability correction constant, depends on geometry+temperature, not a detector property |
-| **n_group / speed_of_light** | known constant from the medium; we don't calibrate c |
+| **medium light speed** `c/n` (timing velocity) | the single non-dispersive index `n` sets one light speed per event; a known medium constant, not calibrated. NB this is the *bulk* index — distinct from the fittable Fresnel cathode indices `cathode_nr`/`cathode_nk` in the reflection block |
 | **numerical guards** | numerical config, not physics |
 | **medium material name, wavelength band [lo,hi]** | source/medium config |
 
 ## Borderline calls (resolved)
 - **TTS / SPE width** → DetectorParams (calibrated). Not config.
 - **Soft-overlap correction** → arg/config (a differentiability correction, not a physical detector parameter).
-- **n_group (timing velocity)** → arg (known). Promote to a frozen DetectorParams field only if a future study fits it.
+- **medium light speed `c/n` (timing velocity)** → arg (known). The medium currently uses one
+  non-dispersive index `n`, so timing rides on a single light speed per event (see
+  [wavelength physics](wavelength.md)); it is *not* a group velocity and there is no dispersion
+  yet. Promote to a frozen DetectorParams field only if a future study fits it. The bulk `n` stays
+  frozen — the only refractive indices a fit ever touches are the Fresnel cathode `cathode_nr`/
+  `cathode_nk` (and those default frozen too).
 - **g, cathode n_imag** → DetectorParams fields, default frozen.
 - **control_λ** → arg/config (the basis grid), must stay consistent with the `*_dev` field lengths.
 - **Source position/intensity** → SourceParams (fittable nuisance) when uncertain; the *nominal* setup is an arg.
@@ -86,5 +92,5 @@ Notes / decisions per field:
   (`per_pmt` is the Schur block; `tts`/`spe_width` are real fields; reflection is a superset
   the chosen model picks from).
 - Everything else — geometry, medium reference shapes, `control_λ`, the source setup, the
-  reflection-model choice, `N`/`K`/`temperature`, the overlap correction, `n_group`,
-  numerical guards — is an **arg**.
+  reflection-model choice, `N`/`K`/`temperature`, the overlap correction, the medium light speed
+  `c/n`, numerical guards — is an **arg**.
