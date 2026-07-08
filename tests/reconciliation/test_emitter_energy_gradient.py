@@ -10,6 +10,12 @@ gradient. This pins, on a water track forward:
   - reverse-mode AD agrees with a common-random-number central finite difference
     (the emitter's energy dependence is differentiable, not score-noisy).
 
+⚠️ AD is the accurate, LOW-VARIANCE estimator; CRN-FD is noisy (its sem is ~10× AD's,
+and it grows as h→0) because the importance sampler's bin choice is a discrete
+``searchsorted`` that remaps rays between the E±h evals. So the check is: KEY-AVERAGE both
+and require AD within FD's own noise band — not a single-key 5% match (which trips on the
+FD noise, not any AD error). See the SIREN seed_mode='importance' investigation.
+
 Needs the downloaded Cherenkov SIREN net; skipped when absent.
 """
 import os
@@ -33,24 +39,28 @@ def test_emitter_energy_gradient_ad_matches_fd():
     from lucid.simulation.simulator import setup_event_simulator
     from lucid.detector_params import ParticleParams
 
+    import numpy as np
     sim = setup_event_simulator(GEOM, 30000, K=4, physics_config=PHYS,
                                 wavelength_mode=False, default_detector_params=True)
     pp = ParticleParams(energy=jnp.array(500.0), position=jnp.array([0., 0., 0.]),
                         theta=jnp.array(0.1), phi=jnp.array(0.2), t0=jnp.array(0.0))
-    key = jax.random.PRNGKey(0)   # fixed key ⇒ common random numbers for AD and FD
 
-    def q_tot(E):
+    def q_tot(E, key):
         return jnp.sum(sim(pp._replace(energy=E), key)[3])   # hits[3] = per-PMT charge
 
-    E0 = jnp.array(500.0)
-    g_ad = float(jax.grad(q_tot)(E0))
-    h = 5.0
-    g_fd = float((q_tot(E0 + h) - q_tot(E0 - h)) / (2 * h))
+    E0 = jnp.array(500.0); h = 5.0; K = 8
+    g_ad_fn = jax.jit(jax.grad(q_tot))
+    ad = np.array([float(g_ad_fn(E0, jax.random.PRNGKey(k))) for k in range(K)])
+    fd = np.array([float((q_tot(E0 + h, jax.random.PRNGKey(k))            # per-key CRN central FD
+                          - q_tot(E0 - h, jax.random.PRNGKey(k))) / (2 * h)) for k in range(K)])
 
-    assert g_ad > 0.0                      # more energy ⇒ more light
-    assert g_fd > 0.0
-    # AD matches CRN-FD to a few percent (sampling-noise floor at this photon count).
-    assert abs(g_ad - g_fd) <= 0.05 * abs(g_fd) + 1e-3, f"AD {g_ad} vs FD {g_fd}"
+    assert ad.mean() > 0.0                 # more energy ⇒ more light
+    assert fd.mean() > 0.0
+    # AD is the low-variance estimator; require its key-mean within FD's own 3σ noise band
+    # (a single-key 5% match fails on FD noise, not AD error — see module docstring).
+    sem_fd = fd.std() / np.sqrt(K)
+    assert abs(ad.mean() - fd.mean()) <= 3 * sem_fd + 0.03 * abs(fd.mean()), \
+        f"AD {ad.mean():.3f} vs FD {fd.mean():.3f} (fd sem {sem_fd:.3f})"
 
 
 def test_emitter_charge_scales_with_energy():
