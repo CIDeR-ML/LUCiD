@@ -317,12 +317,25 @@ def _run_lucid(
         from lucid.sources.event_generation import generate_events_from_photonsim_supernova
         times_path = output_dir / f"gntp_job_{job_id:06d}.times.json"
         interaction_times_ms = json.loads(times_path.read_text())
+        # Per-interaction sntools channel (ibd/es/o16...), stamped into
+        # per_interaction/interaction_channel by the generator alongside the
+        # neutrino flavor/energy/time truth.
+        chan_path = output_dir / f"gntp_job_{job_id:06d}.channels.json"
+        interaction_channels = (json.loads(chan_path.read_text())
+                                if chan_path.is_file() else None)
+        # True SN direction (unit vector), recorded into the labl truth for
+        # direction-pointing studies. Default +z if the sidecar is absent.
+        dir_path = output_dir / f"gntp_job_{job_id:06d}.direction.json"
+        sn_direction = (json.loads(dir_path.read_text())
+                        if dir_path.is_file() else [0.0, 0.0, 1.0])
         min_phys = _read_min_physics_hits(config, default=3)
         saved_files = generate_events_from_photonsim_supernova(
             event_simulator=simulate_event,
             burst_root_file=str(root_file),
             interaction_times_ms=interaction_times_ms,
             sensor_positions=sensor_positions,
+            interaction_channels=interaction_channels,
+            sn_direction=sn_direction,
             output_dir=str(output_dir),
             master_seed=master_seed,
             job_id=job_id,
@@ -600,22 +613,9 @@ def main(argv: Optional[list[str]] = None) -> int:
     if not ok:
         return EXIT_VERIFY
 
-    # Supernova: stamp the interaction channel (IBD/ES/o16e/o16eb) into the
-    # labl truth from the sidecar run_supernova wrote next to the rooTracker.
-    # Non-fatal: a valid dataset must not fail over truth annotation.
-    if uses_supernova:
-        try:
-            from lucid.production.run_supernova import annotate_labl_channels
-            labl_path = output_dir / "labl" / f"wc_labl_{file_index:04d}.h5"
-            sidecar = output_dir / f"gntp_job_{job_id_padded}.channels.json"
-            if labl_path.is_file() and sidecar.is_file():
-                n_ann = annotate_labl_channels(labl_path, sidecar)
-                print(f"Annotated interaction channel into {n_ann} labl events")
-            else:
-                print(f"Warning: channel sidecar/labl missing "
-                      f"({sidecar.name} / {labl_path.name}); skipped channel annotation")
-        except Exception as e:
-            print(f"Warning: channel annotation failed: {e}")
+    # (Supernova interaction channel is now stamped into per_interaction/
+    # interaction_channel by the all-at-once generator, alongside the neutrino
+    # flavor/energy/time — no post-hoc labl annotation needed.)
 
     # Step 5: Cleanup ROOT if requested
     cleanup = bool(config.get("cleanup_root_files", False)) and not args.keep_root

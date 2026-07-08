@@ -284,7 +284,8 @@ def _compute_contained(event_dict, detector_bounds):
             'overall':         overall}
 
 
-def build_interaction_metadata(particle_data, *, t0, vertex_xyz, source_type_code):
+def build_interaction_metadata(particle_data, *, t0, vertex_xyz, source_type_code,
+                               interaction_channel=None):
     """Assemble the per-interaction metadata dict consumed by ``_write_per_interaction``.
 
     One interaction corresponds to one G4 event in the non-pile-up path
@@ -311,6 +312,8 @@ def build_interaction_metadata(particle_data, *, t0, vertex_xyz, source_type_cod
         'source_type': int(source_type_code),
         'neutrino_pdg': int(particle_data.get('neutrino_pdg', 0)),
         'neutrino_energy_MeV': float(particle_data.get('neutrino_energy_MeV', 0.0)),
+        # supernova interaction channel (sntools code, -1 if not a SN interaction)
+        'interaction_channel': int(interaction_channel) if interaction_channel is not None else -1,
         'primary_track_ids': primary_tids,
         'primary_pdgs': primary_pdgs,
         'primary_energies': primary_energies,
@@ -406,6 +409,9 @@ def _write_common_config_attrs(f, config_meta):
         cfg.attrs['selection'] = str(config_meta['selection'])
         cfg.attrs['selection_min_physics_hits'] = int(
             config_meta.get('selection_min_physics_hits', 0))
+    # Supernova true direction (unit vector) for pointing studies.
+    if 'sn_direction' in config_meta:
+        cfg.attrs['sn_direction'] = np.asarray(config_meta['sn_direction'], dtype=np.float64)
     return cfg
 
 
@@ -955,6 +961,10 @@ def _write_per_interaction(pi_grp, event_dict, ancestor, interaction):
         [int(s['neutrino_pdg']) for s in interactions], dtype=np.int16)
     neutrino_ke_arr = np.array(
         [float(s['neutrino_energy_MeV']) for s in interactions], dtype=np.float32)
+    # supernova interaction channel (sntools code; -1 for non-SN). Together with
+    # neutrino_pdg / neutrino_energy_MeV / t0 this gives the SN truth per interaction.
+    channel_arr = np.array(
+        [int(s.get('interaction_channel', -1)) for s in interactions], dtype=np.int32)
     n_primaries_per_interaction = np.array(
         [len(s['primary_track_ids']) for s in interactions], dtype=np.int32)
 
@@ -992,6 +1002,7 @@ def _write_per_interaction(pi_grp, event_dict, ancestor, interaction):
     pi_grp.create_dataset('n_particles',         data=n_particles_per_interaction,**_GZIP_OPTS)
     pi_grp.create_dataset('neutrino_pdg',        data=neutrino_pdg_arr,   **_GZIP_OPTS)
     pi_grp.create_dataset('neutrino_energy_MeV', data=neutrino_ke_arr,    **_GZIP_OPTS)
+    pi_grp.create_dataset('interaction_channel', data=channel_arr,        **_GZIP_OPTS)
     pi_grp.create_dataset('contained',           data=contained_arr,      **_GZIP_OPTS)
     pi_grp.create_dataset('primary_track_ids_offsets', data=tid_offsets,  **_GZIP_OPTS)
     pi_grp.create_dataset('primary_track_ids_data',    data=tid_data,     **_GZIP_OPTS)

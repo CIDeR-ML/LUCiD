@@ -228,8 +228,35 @@ def _p4_gev(pdg: int, e_mev: float, dx: float, dy: float, dz: float) -> tuple:
     return (dx * p * gev, dy * p * gev, dz * p * gev, e_mev * gev)
 
 
+def _rotation_from_z(direction) -> Optional["object"]:
+    """3x3 rotation matrix mapping +z (sntools' fixed SN axis) onto the unit
+    vector ``direction``. Returns None when ``direction`` is +z (no rotation).
+
+    Used to point the whole supernova at a chosen sky direction while preserving
+    every interaction's internal kinematics — a single global rotation, not a
+    per-interaction one. Same for all jobs of a dataset, so the true SN direction
+    is well-defined for pointing studies.
+    """
+    import numpy as np
+    d = np.asarray(direction, dtype=np.float64)
+    n = np.linalg.norm(d)
+    if n == 0:
+        raise SupernovaError("supernova.direction must be a non-zero vector")
+    d = d / n
+    z = np.array([0.0, 0.0, 1.0])
+    if np.allclose(d, z):
+        return None
+    if np.allclose(d, -z):
+        return np.diag([1.0, -1.0, -1.0])            # 180 deg about x
+    v = np.cross(z, d)
+    s = float(np.linalg.norm(v))
+    c = float(np.dot(z, d))
+    vx = np.array([[0.0, -v[2], v[1]], [v[2], 0.0, -v[0]], [-v[1], v[0], 0.0]])
+    return np.eye(3) + vx + vx @ vx * ((1.0 - c) / (s * s))
+
+
 def _write_rootracker(events: list[dict], out_path: Path,
-                      cap: Optional[int] = None) -> int:
+                      cap: Optional[int] = None, rotation=None) -> int:
     """Write events to a gRooTracker TTree; return the entry count.
 
     Reproduces GENIE's rooTracker layout — a ``TTree`` named ``gRooTracker``
@@ -259,13 +286,18 @@ def _write_rootracker(events: list[dict], out_path: Path,
     max_np = 1
     for evt in events:
         rows: list[tuple] = []
+        def _dir(dx, dy, dz):
+            if rotation is None:
+                return dx, dy, dz
+            r = rotation @ np.array([dx, dy, dz], dtype=np.float64)
+            return float(r[0]), float(r[1]), float(r[2])
         # Incoming neutrino(s): status 0 → PhotonSim records true nu pdg/energy.
         for (ppdg, e, dx, dy, dz) in evt["incoming"]:
             if ppdg in NEUTRINO_PDGS:
-                rows.append((ppdg, 0, _p4_gev(ppdg, e, dx, dy, dz)))
+                rows.append((ppdg, 0, _p4_gev(ppdg, e, *_dir(dx, dy, dz))))
         # Outgoing final-state particles: status 1 → injected as G4 primaries.
         for (ppdg, e, dx, dy, dz) in evt["outgoing"]:
-            rows.append((ppdg, 1, _p4_gev(ppdg, e, dx, dy, dz)))
+            rows.append((ppdg, 1, _p4_gev(ppdg, e, *_dir(dx, dy, dz))))
         if len(rows) > KMAX_PARTICLES:
             rows = rows[:KMAX_PARTICLES]
         rows_per_event.append(rows)
@@ -423,12 +455,20 @@ def run_supernova(
     # per-channel runs are concatenated unsorted.
     all_events.sort(key=lambda e: e.get("time_ms", 0.0))
     capped = all_events if cap_events is None else all_events[:cap_events]
-    n_entries = _write_rootracker(capped, gtrac_file, cap=None)
+    # SN direction: sntools fixes the incoming neutrino to +z, so a single global
+    # rotation (same for all jobs) points the whole burst at supernova.direction
+    # while preserving every interaction's internal kinematics — no per-vertex
+    # rotation. Default +z (identity). Recorded in a sidecar so the true direction
+    # is available downstream for pointing studies.
+    sn_direction = [float(x) for x in (sn.get("direction") or [0.0, 0.0, 1.0])]
+    rotation = _rotation_from_z(sn_direction)
+    n_entries = _write_rootracker(capped, gtrac_file, cap=None, rotation=rotation)
 
     # Sidecars, each aligned 1:1 with rooTracker entries (and therefore LUCiD's
     # event order). The StdHep rooTracker carries neither the channel nor the
     # burst time, so we write them alongside:
-    #   .channels.json — sntools channel code (annotate_labl_channels stamps it)
+    #   .channels.json — sntools channel code (the generator stamps it into
+    #                    per_interaction/interaction_channel)
     #   .times.json    — interaction time in ms (the all-at-once generator turns
     #                    each into a per-interaction t0 = global_t0 + time_ms*1e6)
     import json
@@ -436,6 +476,11 @@ def run_supernova(
     sidecar.write_text(json.dumps([int(e["code"]) for e in capped]))
     times_sidecar = output_dir / f"gntp_job_{job_padded}.times.json"
     times_sidecar.write_text(json.dumps([float(e.get("time_ms", 0.0)) for e in capped]))
+    # True SN direction (unit vector) — same for the whole burst; the generator
+    # records it in the labl truth for direction-pointing studies.
+    _dnorm = sum(x * x for x in sn_direction) ** 0.5 or 1.0
+    dir_sidecar = output_dir / f"gntp_job_{job_padded}.direction.json"
+    dir_sidecar.write_text(json.dumps([x / _dnorm for x in sn_direction]))
 
     if cap_events is not None:
         print(f"    capped to {n_entries} of {len(all_events)} events (validation)", flush=True)
@@ -444,46 +489,3 @@ def run_supernova(
     print(f"    channels: {dict(chan_hist)}", flush=True)
     print(f"    wrote {n_entries} rooTracker entries → {gtrac_file}", flush=True)
     return gtrac_file, n_entries
-
-
-def annotate_labl_channels(labl_path: Path, sidecar_path: Path) -> int:
-    """Stamp the supernova interaction channel into an already-written labl file.
-
-    Adds ``per_interaction/interaction_channel`` (int32, sntools code) and
-    ``per_interaction/channel`` (variable-length string, e.g. ``"ibd"``) to
-    each ``event_NNN`` group, read from the ``sidecar_path`` code list written
-    by run_supernova. Event groups are ordered 1:1 with rooTracker entries, so
-    ``event_i`` gets code ``codes[i]``.
-
-    Returns the number of events annotated. If the event/sidecar counts
-    disagree (which would mean the 1:1 ordering assumption broke) nothing is
-    written and 0 is returned — misaligned truth is worse than none.
-    """
-    import json
-    import h5py
-    import numpy as np
-
-    codes = json.loads(Path(sidecar_path).read_text())
-    with h5py.File(labl_path, "r+") as f:
-        ev_groups = sorted(k for k in f.keys() if k.startswith("event_"))
-        if len(ev_groups) != len(codes):
-            print(f"    WARNING: labl has {len(ev_groups)} events but sidecar has "
-                  f"{len(codes)} channels — skipping channel annotation (misaligned).",
-                  flush=True)
-            return 0
-        str_dt = h5py.special_dtype(vlen=str)
-        for i, gname in enumerate(ev_groups):
-            pi = f[gname]["per_interaction"]
-            n_int = pi["source_type"].shape[0]  # 1 for non-pile-up SN events
-            code = int(codes[i])
-            name = CHANNEL_CODE_TO_NAME.get(code, "unknown")
-            for ds_name, data in (
-                ("interaction_channel", np.full(n_int, code, dtype=np.int32)),
-                ("channel", np.array([name] * n_int, dtype=object)),
-            ):
-                if ds_name in pi:
-                    del pi[ds_name]
-                pi.create_dataset(
-                    ds_name, data=data,
-                    dtype=str_dt if ds_name == "channel" else None)
-    return len(ev_groups)
