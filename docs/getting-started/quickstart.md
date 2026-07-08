@@ -26,7 +26,7 @@ track = ParticleParams.from_cartesian(energy=1000., position=[0,0,0], direction=
 charge, time = (np.asarray(x) for x in sim(track, jax.random.PRNGKey(0)))
 print((charge > 0).sum(), 'PMTs lit,', charge.sum(), 'pe')   # pe = photoelectrons, LUCiD's charge unit
 
-create_detector_display('config/SK_like_geom_config.json')(charge, time)   # 2D unrolled ring
+create_detector_display('config/SK_like_geom_config.json', sparse=False)(charge, time)   # 2D unrolled ring
 ```
 
 ## Where to go next
