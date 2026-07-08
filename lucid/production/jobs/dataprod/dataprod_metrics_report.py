@@ -519,7 +519,9 @@ def write_markdown(report: dict, out_md: Path) -> None:
 
 
 def discover_configs(base_dir: Path) -> list[Path]:
-    return sorted(p for p in base_dir.glob("config_*") if p.is_dir())
+    # Recursive: config_NN dirs live under <detector>/<block>/[<split>]/ in the
+    # block layout (and directly under base_dir in the legacy flat layout).
+    return sorted(p for p in base_dir.rglob("config_*") if p.is_dir())
 
 
 def hint_n_events_per_job(config_dir: Path) -> int | None:
@@ -571,8 +573,14 @@ def main(argv=None) -> int:
         "configs": {},
     }
 
+    base = args.base_dir.resolve()
     for cfg_dir in roots:
-        name = cfg_dir.name
+        # Label by <block>/<split>/config_NN so same-numbered configs across
+        # blocks stay distinct in the block layout (falls back to config_NN flat).
+        try:
+            name = str(cfg_dir.relative_to(base))
+        except ValueError:
+            name = cfg_dir.name
         try:
             n_per = args.n_events_per_job or hint_n_events_per_job(cfg_dir)
             report["configs"][name] = combine_config(cfg_dir, n_per)

@@ -1,7 +1,7 @@
 """Single-job end-to-end runner for the LUCiD production chain.
 
 One invocation generates a Geant4 macro from a dataprod JSON config,
-runs PhotonSim (C++ binary, via subprocess), runs LUCiD's v3 writer
+runs PhotonSim (C++ binary, via subprocess), runs LUCiD's writer
 (in-process Python call), and verifies the resulting four-file batch.
 
 Entry point for the `lucid-run-job` console script.
@@ -13,11 +13,11 @@ Optional env vars:
     JAX_PLATFORMS   — e.g. `cpu` for determinism (set before import).
 
 Exit codes:
-    0   success; all four v3 files present and valid
+    0   success; all four files present and valid
     10  config load / schema error
     20  PhotonSim failure
     30  LUCiD failure
-    40  v3 verification failure
+    40  verification failure
     1   generic
 """
 from __future__ import annotations
@@ -41,7 +41,7 @@ EXIT_VERIFY = 40
 
 def _parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Run one job of the LUCiD production chain: PhotonSim → LUCiD v3 writer.",
+        description="Run one job of the LUCiD production chain: PhotonSim → LUCiD writer.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument(
@@ -56,11 +56,11 @@ def _parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     parser.add_argument(
         "--output-dir", type=str, required=True,
         help="Absolute path to the dataset directory for this config. "
-             "PhotonSim ROOT and the v3 {sensor,hits,step,labl}/ subdirs are written here.",
+             "PhotonSim ROOT and the {sensor,hits,step,labl}/ subdirs are written here.",
     )
     parser.add_argument(
         "--job-id", type=int, required=True,
-        help="1-based job id. Maps to v3 file_index = job_id - 1.",
+        help="1-based job id. Maps to file_index = job_id - 1.",
     )
     parser.add_argument(
         "--test", action="store_true",
@@ -84,8 +84,20 @@ def _parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--skip-genie", action="store_true",
-        help="Skip the GENIE step (gevgen+gntpc). Has no effect when "
-             "primary_source != 'genie'.",
+        help="Skip the rooTracker-generator step (GENIE gevgen+gntpc, or "
+             "sntools for supernova). Has no effect when primary_source is "
+             "particle-gun/bomb.",
+    )
+    parser.add_argument(
+        "--sn-model", type=str, default=None,
+        help="Supernova model name; selects an entry in the config's "
+             "supernova.models. The fan-out passes one per model×ordering "
+             "subcase. Only used when primary_source == 'supernova'.",
+    )
+    parser.add_argument(
+        "--sn-ordering", type=str, default=None,
+        help="Mass-ordering label (NMO/IMO/noosc) → sntools --transformation. "
+             "Only used when primary_source == 'supernova'.",
     )
     parser.add_argument(
         "--skip-photonsim", action="store_true",
@@ -95,11 +107,52 @@ def _parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--skip-lucid", action="store_true",
-        help="Run macro generation + PhotonSim only; stop before LUCiD v3 writer. "
+        help="Run macro generation + PhotonSim only; stop before LUCiD writer. "
              "Use in multi-process workflows where LUCiD runs in a different environment "
              "(e.g., inside a singularity image) than PhotonSim.",
     )
     return parser.parse_args(argv)
+
+
+def _read_digitizer_cfg(config: dict, physics_config_path: str):
+    """Digitizer block for this dataset. The dataset config owns it; falls back
+    to the detector physics config for backward compat. None -> 'basic'.
+    """
+    if config.get("digitizer") is not None:
+        return config["digitizer"]
+    try:
+        with open(physics_config_path) as f:
+            return json.load(f).get("digitizer")
+    except (OSError, ValueError):
+        return None
+
+
+def _read_trigger_cfg(config: dict, physics_config_path: str):
+    """Trigger block for this dataset. The dataset config owns it; falls back to
+    the detector physics config for backward compat. None -> trigger off.
+    """
+    if config.get("trigger") is not None:
+        return config["trigger"]
+    try:
+        with open(physics_config_path) as f:
+            return json.load(f).get("trigger")
+    except (OSError, ValueError):
+        return None
+
+
+def _read_min_physics_hits(config: dict, default=3):
+    """Truth-level selection knob (low-energy 'fake trigger'). A dataset config's
+    ``selection`` block picks the mode: ``{"mode": "min_physics_hits", "n": N}``
+    keeps interactions with >= N real hits; ``{"mode": "trigger"}`` defers to the
+    real readout trigger (returns None). Backward compat: ``supernova.min_physics_hits``.
+    """
+    sel = config.get("selection")
+    if isinstance(sel, dict):
+        if sel.get("mode") == "trigger":
+            return None
+        if sel.get("mode") == "min_physics_hits":
+            return int(sel.get("n", default))
+    return config.get("supernova", {}).get("min_physics_hits", default)
 
 
 def _load_config(path: str) -> dict:
@@ -129,6 +182,8 @@ def _load_config(path: str) -> dict:
                         f"Pile-up vertex {i} missing 'particles'/'energy_distribution'")
     elif cfg.get("primary_source") == "genie":
         required.append("genie")
+    elif cfg.get("primary_source") == "supernova":
+        required.append("supernova")
     elif cfg.get("primary_source") == "bomb":
         required.append("bomb")
     else:
@@ -190,7 +245,7 @@ def _run_lucid(
     job_id: int,
     detector: str,
 ) -> None:
-    """Import LUCiD and write the v3 four-file batch for this job.
+    """Import LUCiD and write the four-file batch for this job.
 
     Imports are deferred so that `--help` works without jax/numpy/uproot
     installed (e.g. on the login node).
@@ -205,7 +260,7 @@ def _run_lucid(
     detector_config_path = base_dir_path() + f"config/{detector}_geom_config.json"
     physics_config_path = base_dir_path() + f"config/{detector}_physics_config.json"
 
-    print(f"=== Step 3: Running LUCiD v3 writer ===", flush=True)
+    print(f"=== Step 3: Running LUCiD writer ===", flush=True)
     print(f"    ROOT file:  {root_file}")
     print(f"    Output dir: {output_dir}")
     print(f"    Dataset:    {config['name']}")
@@ -246,6 +301,58 @@ def _run_lucid(
     # legacy single-PAD_SIZE-from-file-max path (one JIT compile, no chunking).
     pad_size_buckets = lucid_opts.get("pad_size_buckets", None)
 
+    # Digitizer (sensor hit-making) model comes from the detector physics
+    # config's optional "digitizer" block; absent -> "basic" (legacy behaviour).
+    digitizer_cfg = _read_digitizer_cfg(config, physics_config_path)
+    # Readout trigger from the optional "trigger" block; absent -> off.
+    trigger_cfg = _read_trigger_cfg(config, physics_config_path)
+
+    # Supernova: model the whole burst as ONE all-at-once event. Every sntools
+    # interaction (one PhotonSim entry) is placed at its true time (from the
+    # .times.json sidecar) via a shared global t0; the generator chunks the
+    # burst at causal gaps and digitizes each chunk. Selection is trigger-free
+    # by default: keep interactions with >= min_physics_hits real hits (dark
+    # kept + labelled), so the dataset isn't biased by a trigger choice.
+    if config.get("primary_source") == "supernova":
+        from lucid.sources.event_generation import generate_events_from_photonsim_supernova
+        times_path = output_dir / f"gntp_job_{job_id:06d}.times.json"
+        interaction_times_ms = json.loads(times_path.read_text())
+        # Per-interaction sntools channel (ibd/es/o16...), stamped into
+        # per_interaction/interaction_channel by the generator alongside the
+        # neutrino flavor/energy/time truth.
+        chan_path = output_dir / f"gntp_job_{job_id:06d}.channels.json"
+        interaction_channels = (json.loads(chan_path.read_text())
+                                if chan_path.is_file() else None)
+        # True SN direction (unit vector), recorded into the labl truth for
+        # direction-pointing studies. Default +z if the sidecar is absent.
+        dir_path = output_dir / f"gntp_job_{job_id:06d}.direction.json"
+        sn_direction = (json.loads(dir_path.read_text())
+                        if dir_path.is_file() else [0.0, 0.0, 1.0])
+        min_phys = _read_min_physics_hits(config, default=3)
+        saved_files = generate_events_from_photonsim_supernova(
+            event_simulator=simulate_event,
+            burst_root_file=str(root_file),
+            interaction_times_ms=interaction_times_ms,
+            sensor_positions=sensor_positions,
+            interaction_channels=interaction_channels,
+            sn_direction=sn_direction,
+            output_dir=str(output_dir),
+            master_seed=master_seed,
+            job_id=job_id,
+            apply_smearing=apply_smearing,
+            apply_translation=apply_translation,
+            dataset_name=config["name"],
+            run_id=None,
+            file_index_start=file_index,
+            digitizer=digitizer_cfg,
+            trigger=trigger_cfg,
+            min_physics_hits=min_phys,
+            source_event_idx=0,
+        )
+        print(f"LUCiD wrote {len(saved_files)} files under "
+              f"{output_dir}/{{sensor,hits,step,labl}}/")
+        return
+
     saved_files = generate_events_from_photonsim_particles(
         event_simulator=simulate_event,
         root_file_path=str(root_file),
@@ -263,6 +370,9 @@ def _run_lucid(
         file_index_start=file_index,
         primary_source=config.get("primary_source", "particles"),
         pad_size_buckets=pad_size_buckets,
+        digitizer=digitizer_cfg,
+        trigger=trigger_cfg,
+        min_physics_hits=_read_min_physics_hits(config, default=None),
     )
     print(f"LUCiD wrote {len(saved_files)} files under {output_dir}/{{sensor,hits,step,labl}}/")
 
@@ -276,6 +386,10 @@ def main(argv: Optional[list[str]] = None) -> int:
     except Exception as e:
         print(f"Error loading config {args.config!r}: {e}", file=sys.stderr)
         return EXIT_CONFIG
+
+    # The dataset config owns which detector to use (geometry + medium); the
+    # --detector CLI flag is only the fallback default.
+    args.detector = config.get("detector", args.detector)
 
     if config.get("pile_up"):
         return _main_pileup(args, config)
@@ -328,12 +442,17 @@ def main(argv: Optional[list[str]] = None) -> int:
     # separate processes and still agree on the path.
     gtrac_path = output_dir / f"gntp_job_{job_id_padded}.gtrac.root"
     uses_genie = config.get("primary_source") == "genie"
+    uses_supernova = config.get("primary_source") == "supernova"
+    # Both GENIE and supernova feed PhotonSim through the rooTracker /
+    # /gun/genieInput path; the macro builder and beamOn-count handling are
+    # shared, only the Step-0 generator differs.
+    uses_rootracker = uses_genie or uses_supernova
 
     # Step 0: GENIE event generation (only when the config requests it).
     # GENIE configs use primary-by-primary injection in PhotonSim: gevgen
     # produces N interactions, run_genie counts the total status==1 primaries
     # across those, and we set /run/beamOn (and LUCiD's n_events) to that
-    # primary count so the downstream v3 dataset has one entry per primary.
+    # primary count so the downstream dataset has one entry per primary.
     photonsim_events = n_events
 
     # Derive per-subprocess seeds from the (master_seed, job_id, vertex_idx=0)
@@ -380,6 +499,52 @@ def main(argv: Optional[list[str]] = None) -> int:
             photonsim_events = int(marker.read_text().strip())
             print(f"GENIE primary count from cache: {photonsim_events}")
 
+    # Step 0 (supernova): sntools event generation → rooTracker. Mirrors the
+    # GENIE path — one sntools event per rooTracker entry, and beamOn is set to
+    # the entry count. The burst size is data-driven; --test / --n-events /
+    # supernova.cap_events truncate it for validation runs.
+    if uses_supernova and not args.skip_genie:
+        try:
+            from lucid.production.run_supernova import run_supernova
+            print("\n=== Step 0: supernova (sntools) event generation ===", flush=True)
+            sn_cap = None
+            if args.test:
+                sn_cap = 2
+            elif args.n_events is not None:
+                sn_cap = args.n_events
+            elif config["supernova"].get("cap_events") is not None:
+                sn_cap = int(config["supernova"]["cap_events"])
+            t_sn = time.time()
+            produced, n_entries = run_supernova(
+                config=config,
+                output_dir=output_dir,
+                job_id=args.job_id,
+                model_name=args.sn_model,
+                ordering=args.sn_ordering,
+                seed=subproc_seeds['genie_seed'],
+                cap_events=sn_cap,
+            )
+            print(f"sntools elapsed: {time.time() - t_sn:.1f}s")
+            print(f"supernova rootracker: {produced} ({n_entries} events)")
+            if produced != gtrac_path:
+                print(f"Warning: sntools output {produced} != expected {gtrac_path}")
+            photonsim_events = n_entries
+            (output_dir / f"gntp_job_{job_id_padded}.primaries.txt"
+             ).write_text(str(n_entries) + "\n")
+        except Exception as e:
+            print(f"supernova step failed: {e}", file=sys.stderr)
+            return EXIT_PHOTONSIM
+    elif uses_supernova and args.skip_genie and not args.skip_photonsim:
+        if not gtrac_path.is_file():
+            print(f"Error: --skip-genie set but {gtrac_path} does not exist "
+                  f"(required for PhotonSim step with primary_source=supernova).",
+                  file=sys.stderr)
+            return EXIT_PHOTONSIM
+        marker = output_dir / f"gntp_job_{job_id_padded}.primaries.txt"
+        if marker.is_file():
+            photonsim_events = int(marker.read_text().strip())
+            print(f"supernova event count from cache: {photonsim_events}")
+
     # Step 1+2: Generate macro and run PhotonSim
     if not args.skip_photonsim:
         from lucid.production.generate_macro import generate_macro
@@ -389,7 +554,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             output_root_file=root_filename,
             n_events=photonsim_events,
             override_energy_MeV=args.override_energy_MeV,
-            genie_rootracker=str(gtrac_path) if uses_genie else None,
+            genie_rootracker=str(gtrac_path) if uses_rootracker else None,
             photonsim_seeds=(subproc_seeds['photonsim_seed1'],
                              subproc_seeds['photonsim_seed2']),
         )
@@ -439,14 +604,18 @@ def main(argv: Optional[list[str]] = None) -> int:
         traceback.print_exc()
         return EXIT_LUCID
 
-    # Step 4: Verify v3 output
-    print("\n=== Step 4: Verifying v3 output ===", flush=True)
+    # Step 4: Verify output
+    print("\n=== Step 4: Verifying output ===", flush=True)
     from lucid.production.verify_output import verify_batch
     ok, messages = verify_batch(output_dir, file_index, expected_dataset_name=config["name"])
     for m in messages:
         print(f"    {m}")
     if not ok:
         return EXIT_VERIFY
+
+    # (Supernova interaction channel is now stamped into per_interaction/
+    # interaction_channel by the all-at-once generator, alongside the neutrino
+    # flavor/energy/time — no post-hoc labl annotation needed.)
 
     # Step 5: Cleanup ROOT if requested
     cleanup = bool(config.get("cleanup_root_files", False)) and not args.keep_root
@@ -467,7 +636,7 @@ def main(argv: Optional[list[str]] = None) -> int:
 
 
 def _main_pileup(args: argparse.Namespace, config: dict) -> int:
-    """Run a pile-up job: N PhotonSim streams -> merged v3 event."""
+    """Run a pile-up job: N PhotonSim streams -> merged event."""
     n_events = args.n_events
     if args.test:
         n_events = 2
@@ -633,11 +802,13 @@ def _main_pileup(args: argparse.Namespace, config: dict) -> int:
         dataset_name=config["name"],
         run_id=None,
         file_index_start=file_index,
+        digitizer=_read_digitizer_cfg(config, physics_config_path),
+        trigger=_read_trigger_cfg(config, physics_config_path),
     )
     print(f"LUCiD wrote {len(saved_files)} files.")
 
     # Step 4: Verify
-    print("\n=== Step 4: Verifying v3 output ===", flush=True)
+    print("\n=== Step 4: Verifying output ===", flush=True)
     from lucid.production.verify_output import verify_batch
     ok, messages = verify_batch(output_dir, file_index, expected_dataset_name=config["name"])
     for m in messages:

@@ -1,4 +1,4 @@
-# Docker Quickstart — Produce v3 events on macOS or generic Linux
+# Docker Quickstart — Produce events on macOS or generic Linux
 
 This runbook targets **macOS (Apple Silicon or Intel)** and any Linux
 machine without Apptainer/Singularity. The published image bundles
@@ -105,7 +105,7 @@ land in <1 min.
 
 ## 4. Inspect the output
 
-The HDF5 files are v3-format (see
+The HDF5 files are LUCiD-format (see
 [LUCID_DATASET.md](LUCID_DATASET.md)). To browse on the host:
 
 ```bash

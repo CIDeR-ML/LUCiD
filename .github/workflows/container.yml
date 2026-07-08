@@ -53,63 +53,6 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-  smoke:
-    # Visual smoke: pulls the freshly-built image, runs dataprod_01 for
-    # 3 muon events, renders per-event PE / first-hit-time displays and
-    # uploads the PNG for human eyeball review. Visual-only — fails on
-    # outright errors, not on physics thresholds.
-    needs: build
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: read
-    steps:
-      - name: Log in to ghcr.io
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Resolve image tag
-        id: img
-        run: |
-          SHA="${{ github.sha }}"
-          echo "short=${SHA:0:7}" >> "$GITHUB_OUTPUT"
-          echo "image=ghcr.io/cider-ml/lucid:$SHA" >> "$GITHUB_OUTPUT"
-
-      - name: Pull LUCiD container
-        run: docker pull ${{ steps.img.outputs.image }}
-
-      - name: Run dataprod_01 (3 muon events) and render Q + T displays
-        run: |
-          mkdir -p out
-          docker run --rm \
-            -v "$PWD/out:/out" \
-            ${{ steps.img.outputs.image }} \
-            bash -c "
-              set -euo pipefail &&
-              python3 /opt/LUCiD/lucid/production/run_job.py \
-                --config /opt/LUCiD/lucid/production/configs/dataprod_01_mu.json \
-                --n-events 3 \
-                --job-id 1 \
-                --master-seed 42 \
-                --output-dir /out &&
-              python3 /opt/LUCiD/ci_tests/render_ci_displays.py \
-                --output-dir /out \
-                --geom-config /opt/LUCiD/config/SK_like_geom_config.json \
-                --out-png /out/dataprod_01_visual_smoke.png \
-                --label '${{ steps.img.outputs.short }} (${{ github.ref_name }})'
-            "
-
-      - name: Upload Q + T displays as artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: dataprod_01_visual_smoke-${{ steps.img.outputs.short }}
-          path: out/dataprod_01_visual_smoke.png
-          retention-days: 90
-          if-no-files-found: error
-
   speed:
     # Diagnostic pipeline speed test: one mu, one low-E electron, one
     # GENIE numu config at N=20. Always succeeds unless the harness

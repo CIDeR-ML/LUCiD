@@ -1,0 +1,47 @@
+{
+  "name": "supernova burst water 50kpc (all-at-once)",
+  "description": "Supernova-burst neutrinos at 50 kpc, modeled all-at-once: the whole burst is ONE event. Every sntools interaction is placed at its true time (from the .times.json sidecar) via a shared random global t0; the generator chunks the burst at causal gaps, digitizes each chunk (dark included + labelled), and concatenates. Readout: detector HK, hk digitizer + 4.2 kHz dark. Flux: SNEWPY Nakazato_2013 (20 Msun, shen EOS, 100 ms revival) \u2014 model data must be pre-downloaded to the SNEWPY cache (see run_supernova). Selection is trigger-free (low-E 'fake trigger'): keep every interaction with >= n real Cherenkov hits, so the dataset isn't biased by a trigger choice \u2014 apply/study real triggers downstream using the emission_process labels. cap_events limits the burst for quick tests; remove it for the full burst.",
+  "material": "water",
+  "nominal_train": 0,
+  "nominal_test": 5,
+  "seconds_per_event": 300.0,
+  "target_seconds_per_job": 3600,
+  "detector": "HK",
+  "digitizer": {
+    "model": "hk"
+  },
+  "selection": {
+    "mode": "min_physics_hits",
+    "n": 3
+  },
+  "primary_source": "supernova",
+  "supernova": {
+    "detector": "HyperK",
+    "distance_kpc": 50.0,
+    "channels": "all",
+    "direction": [
+      0.0,
+      0.0,
+      1.0
+    ],
+    "cap_events": 25,
+    "models": [
+      {
+        "name": "nakazato_20Msun_shen_trev100",
+        "format": "SNEWPY-Nakazato_2013",
+        "flux_file": "nakazato-shen-z0.02-t_rev100ms-s20.0.fits"
+      }
+    ],
+    "orderings": [
+      "NMO"
+    ]
+  },
+  "store_individual_photons": true,
+  "run_lucid": true,
+  "disable_decays": false,
+  "lucid_options": {
+    "apply_smearing": true,
+    "apply_translation": true
+  },
+  "cleanup_root_files": false
+}

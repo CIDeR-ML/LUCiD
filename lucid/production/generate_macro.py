@@ -302,25 +302,47 @@ def _generate_genie_macro(
     rootracker_path: str,
     photonsim_seeds: Optional[Tuple[int, int]] = None,
 ) -> str:
-    """Emit a Geant4 macro that reads primaries from a GENIE rootracker file."""
+    """Emit a Geant4 macro that reads primaries from a rootracker file.
+
+    Shared by the GENIE and supernova (sntools) sources — both inject
+    final-state particles through ``/gun/genieInput``. For supernova the
+    rootracker carries sntools' physical kinematics, so directions are used
+    as-is (``/gun/genieIsotropic false``) rather than randomized.
+    """
     config_name = config.get("name", "")
     config_number = config.get("config_number", -1)
     material = config.get("material", "")
-    g = config.get("genie", {})
-    probe = g.get("probe_pdg", "?")
-    emin = g.get("energy_min_GeV", "?")
-    emax = g.get("energy_max_GeV", "?")
-    isotropic = str(g.get("direction", "isotropic")).lower() == "isotropic"
+    is_supernova = config.get("primary_source") == "supernova"
+    if is_supernova:
+        g = config.get("supernova", {})
+        probe = "SN nu"
+        emin = emax = "SN spectrum"
+        # sntools gives real outgoing directions; keep them (non-isotropic),
+        # unless the config explicitly overrides.
+        isotropic = str(g.get("direction", "physical")).lower() == "isotropic"
+        source_label = "supernova / sntools"
+    else:
+        g = config.get("genie", {})
+        probe = g.get("probe_pdg", "?")
+        emin = g.get("energy_min_GeV", "?")
+        emax = g.get("energy_max_GeV", "?")
+        isotropic = str(g.get("direction", "isotropic")).lower() == "isotropic"
+        source_label = "GENIE"
     store_individual = bool(config.get("store_individual_photons", False))
     disable_decays = bool(config.get("disable_decays", False))
 
     lines: list[str] = []
-    lines.append("# PhotonSim macro (GENIE primary source)")
+    lines.append(f"# PhotonSim macro ({source_label} primary source)")
     lines.append(f"# Configuration: {config_name}")
     lines.append(f"# Config Number: {config_number:06d}")
     lines.append(f"# Material: {material}")
-    lines.append(f"# Probe PDG: {probe}, E range [{emin}, {emax}] GeV, "
-                 f"direction: {'isotropic' if isotropic else 'GENIE beam axis'}")
+    if is_supernova:
+        model = g.get("model") or ", ".join(m.get("name", "?") for m in g.get("models", []))
+        lines.append(f"# Supernova model(s): {model}; distance {g.get('distance_kpc', '?')} kpc; "
+                     f"direction: {'isotropic' if isotropic else 'sntools kinematics'}")
+    else:
+        lines.append(f"# Probe PDG: {probe}, E range [{emin}, {emax}] GeV, "
+                     f"direction: {'isotropic' if isotropic else 'GENIE beam axis'}")
     lines.append("")
     lines.append("# Set output filename before initialization")
     lines.append(f"/output/filename {output_root_file}")

@@ -70,8 +70,28 @@
       <option value="all" selected>All</option>
       <option value="cher">Cherenkov</option>
       <option value="scint">Scintillation</option>
+      <option value="dark">Dark</option>
     </select>
     <div class="sep" id="emissionSep" style="display:none"></div>
+
+    <!-- TRIGGER WINDOW restricts the digit set to one readout window (triggered
+         datasets only; from labl/per_window). The HIT dropdown nests inside it.
+         Populated by JS on load; hidden when the dataset has no trigger windows. -->
+    <span class="toolbar-label" id="windowLabel" style="display:none">TRIGGER WINDOW</span>
+    <select id="windowSelect" style="display:none">
+      <option value="all" selected>All</option>
+    </select>
+    <div class="sep" id="windowSep" style="display:none"></div>
+
+    <!-- HIT selects which recorded digit to show per PMT when the digitizer
+         produced more than one (delayed coincidence, pile-up, dark noise).
+         All = summed charge / first-arrival time (legacy). Options + visibility
+         are populated by JS on load; hidden when every PMT has <=1 digit. -->
+    <span class="toolbar-label" id="hitLabel" style="display:none">HIT</span>
+    <select id="hitSelect" style="display:none">
+      <option value="0" selected>All</option>
+    </select>
+    <div class="sep" id="hitSep" style="display:none"></div>
 
     <div class="btn-group"><button id="sweepBtn">TIME SWEEP</button></div>
     <div class="btn-group"><button id="resetBtn">RESET</button></div>

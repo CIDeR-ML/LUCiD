@@ -33,7 +33,7 @@ from lucid.sources.event_io import (
     read_particle_data_from_photonsim,
     get_max_photons_per_particle,
 )
-from lucid.sources.v3_writer import (
+from lucid.sources.writer import (
     build_interaction_metadata,
     _compute_contained,
 )
