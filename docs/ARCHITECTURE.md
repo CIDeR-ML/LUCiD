@@ -1,7 +1,6 @@
-# LUCiD architecture (merged engine)
+# LUCiD architecture
 
-This document describes LUCiD after the `unification` ↔ `refactor-v2` reconciliation:
-**one differentiable forward engine with regime modes**, serving two co-equal lines —
+**One differentiable forward engine with regime modes**, serving two co-equal lines —
 inference/calibration (gradient-descent reconstruction, detector calibration) and
 production (PhotonSim → datasets) — and three co-equal first-class detector
 families (water/WbLS Cherenkov tanks, ice/water string telescopes).
@@ -25,11 +24,11 @@ Behaviour is selected by **regime flags / config**, not separate engines:
 | **Emission** | Cherenkov · **+ scintillation** | `medium.emission_processes` (+ `cherenkov_fraction` split) |
 | **Optics** | scalar · wavelength-dependent (Rayleigh + Mie + g) | `wavelength_mode`, physics config |
 | **Source** | SIREN track · calibration source · ROOT/PhotonSim data | `is_calibration` / `is_data` |
-| **Readout** | aggregated · per_photon · realistic · moments · **per_segment** · waveform(_expected) · shotgun | `hit_mode` |
+| **Readout** | aggregated · per_photon · realistic · moments · **per_segment** · waveform(_expected) · shotgun_per_photon | `hit_mode` |
 
-The surface (cylinder/sphere/box, Cherenkov-only, water) path is **byte-identical** to the
-pre-merge forward — every regime addition is gated so it is never even traced for that path.
-This is locked by `tests/reconciliation/test_tripwire.py`.
+The surface (cylinder/sphere/box, Cherenkov-only, water) path is locked **byte-identical**
+by a tripwire test — every regime addition is gated so it is never even traced for that
+path (`tests/reconciliation/test_tripwire.py`).
 
 ## Differentiable parameters: nested `DetectorParams`
 
@@ -39,7 +38,9 @@ registry drives generic tree-walks):
 `scattering` (scatter_length, mie_scatter_length, g) · `absorption` · `reflection`
 (wall/sensor; scalar or angular Schlick/Fresnel) · `response` (qe, spe_width, tts) ·
 `per_pmt` (qe_corrections, gain, t0, walk) · `scintillation` (S, kB, C, tau_rise, tau_fall,
-moyal_*). Each sub-tuple has normalize/denormalize + bounds, so any subset can be optimized
+moyal_*) — plus fittable per-wavelength `*_dev` deviation curves on the optical properties
+(see [wavelength physics](concepts/wavelength.md)). Each sub-tuple has
+normalize/denormalize + bounds, so any subset can be optimized
 directly. Non-scintillating media leave the scintillation block at neutral 0 (no light) —
 so adding it kept the water forward byte-identical.
 
@@ -89,8 +90,11 @@ Moyal spectrum) that WbLS inherits.
 - **Production** (`lucid/production/`): `lucid-run-job` drives GENIE → Geant4 macro →
   PhotonSim subprocess (`$PHOTONSIM_BIN`) → the LUCiD writer. `event_generation.py` reads
   ROOT photons (meters), feeds the simulator with `hit_mode='per_segment'` (per-(segment,
-  sensor) PE), and writes four parallel HDF5 files (`sensor/ hits/ step/ labl/`). The
-  modular data-gen layer (`root_reader, event_builder, writer, seed_utils, …`) is
+  sensor) PE), then applies the **digitizer** (`lucid/simulation/digitizer.py` — SPE charge
+  sampling, per-sensor time-window integration into digits, dark noise) and, where the
+  dataset config asks for it, a **readout trigger** (`lucid/simulation/trigger.py`,
+  sliding-window), before writing four parallel HDF5 files (`sensor/ hits/ step/ labl/`).
+  The modular data-gen layer (`root_reader, event_builder, writer, seed_utils, …`) is
   self-contained; cluster scheduling lives in `cluster_common/`.
 
 **Unit convention (unify-on-cm):** the simulator data boundary is **cm** (matching
@@ -107,19 +111,3 @@ the simulator call, so both lines share one data impl.
 - **Differentiability**: scintillation Chou gradients correctly signed; volume optical-param
   gradients finite through multi-scatter (`test_scintillation.py`, `test_string_volume.py`);
   the new emitter's energy gradient matches FD (`test_emitter_energy_gradient.py`).
-
-## Reconciliation status
-
-Phases 1–4 are landed on `unification` (= `integration/unify-main`): merged DetectorParams,
-emission dispatch, cubic t0, native SIREN emitter, scintillation, volume scatter + string
-telescopes, modular sources, per_segment, and the production subsystem. The volume phase
-function carries the Rayleigh+Mie+g mixture (B-mie), and the volume step is now a
-DiCE-forward citizen like the water step (B-fit): the optical params (λ_R/λ_M/g) ride the
-per-step DiCE score folded via dice_dep, with the sampled free path detached for the
-trajectory, so the multi-step optical charge-gradient does NOT take the high-variance
-pathwise route through the discrete DOM-candidate selection. Validated UNBIASED and
-LOW-VARIANCE (per-key AD std ~0.02, flat in K, vs ~6 and growing for the old naive pathwise
-step; AD agrees with the CRN finite difference within ~1 sigma over 60 keys). Remaining for
-ice/string reconstruction (R): the GPU re-validation campaign (an ice recon floor analogous
-to the water campaign), plus the broader re-validation (recon floor / calibration CRB) and
-an end-to-end production run (needs the external PhotonSim/GENIE binaries).

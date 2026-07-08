@@ -52,7 +52,7 @@ nav:
       - Architecture: ARCHITECTURE.md
       - Parameters (DetectorParams): DETECTOR_PARAMS_VS_ARGS.md
       - SIREN surrogate: SIREN_TRAINING_INPUTS.md
-      - Wavelength physics: WAVELENGTH_DESIGN.md
+      - Wavelength physics: concepts/wavelength.md
   - Reconstruction: RECONSTRUCTION.md
   - Calibration: CALIBRATION.md
   - Data & Production:
