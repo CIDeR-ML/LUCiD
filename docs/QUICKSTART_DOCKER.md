@@ -43,7 +43,7 @@ docker run --rm --platform linux/amd64 \
     -v /tmp/lucid-out:/out \
     lucid:latest \
     lucid-run-job \
-        --config /opt/LUCiD/lucid/production/configs/dataprod_01_mu.json \
+        --config /opt/LUCiD/lucid/production/configs/GeV/01_mu.json \
         --output-dir /out --job-id 1 --test
 ```
 
@@ -67,7 +67,7 @@ docker run --rm --platform linux/amd64 \
     -e GENIE_XSEC_FILE=/opt/genie_xsec/3_04_00/G18_10a_02_11b/gxspl-min.xml.gz \
     lucid:latest \
     lucid-run-job \
-        --config /opt/LUCiD/lucid/production/configs/dataprod_13_numu.json \
+        --config /opt/LUCiD/lucid/production/configs/GeV/13_genie_numu_nue.json \
         --output-dir /out --job-id 1 --test
 ```
 
@@ -83,7 +83,7 @@ docker run --rm --platform linux/amd64 \
     -v "$PWD/LUCiD:/opt/LUCiD" \
     -v /tmp/lucid-out:/out \
     lucid:latest \
-    lucid-run-job --config /opt/LUCiD/lucid/production/configs/dataprod_01_mu.json \
+    lucid-run-job --config /opt/LUCiD/lucid/production/configs/GeV/01_mu.json \
                   --output-dir /out --job-id 1 --test
 ```
 
@@ -96,7 +96,7 @@ docker run --rm --platform linux/amd64 \
     -v /tmp/lucid-out:/out \
     lucid:latest \
     bash -c "cmake --build /opt/PhotonSim/build -j && \
-             lucid-run-job --config /opt/LUCiD/lucid/production/configs/dataprod_01_mu.json \
+             lucid-run-job --config /opt/LUCiD/lucid/production/configs/GeV/01_mu.json \
                            --output-dir /out --job-id 1 --test"
 ```
 

@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """LUCiD Viewer — local file server with HTTP Range support.
 
-Serves LUCiD production v3 HDF5 files (sensor/hits/step/labl) and the viewer
+Serves LUCiD production HDF5 files (sensor/hits/step/labl) and the viewer
 frontend. Files are matched by filename pattern ``wc_{kind}_NNNN.h5``
 (or ``{dataset}_{kind}_NNNN.h5``).
 
 Supports flat directories and subdirectory layouts
 (``dataset_root/{sensor,hits,step,labl}/wc_*_NNNN.h5``), per
-``docs/LUCID_MIGRATION.md`` §3.
+``docs/LUCID_DATASET.md``.
 
 Usage:
     python3 viewer/serve_viewer.py production_run/
@@ -229,7 +229,7 @@ class RangeHandler(SimpleHTTPRequestHandler):
 
 def main():
     parser = argparse.ArgumentParser(
-        description='LUCiD Viewer — serve production v3 HDF5 for browser visualization')
+        description='LUCiD Viewer — serve production HDF5 for browser visualization')
     parser.add_argument('data_dir', help='Directory containing production HDF5 files')
     parser.add_argument('--dataset', '-d', help='Dataset name (auto-detected if only one)')
     parser.add_argument('--port', '-p', type=int, default=8765)

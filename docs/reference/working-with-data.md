@@ -34,7 +34,7 @@ labels = read_labl_event(paths['labl'], 0)       # nested: per_event / per_inter
 
 For a quick look from the terminal, `python scripts/inspect_dataset.py --path out/`
 prints event counts, charge/hit statistics, and per-event array shapes
-(`--event N` for one event in detail). The `viewer/` app (`python viewer/serve_viewer.py`)
+(`--event N` for one event in detail). The `viewer/` app (`python viewer/serve_viewer.py <dataset_dir>`, `--open` to launch a browser, `--host` for SSH-tunnel use)
 gives an interactive 3D event display over the same files.
 
 ## Derived views

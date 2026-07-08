@@ -12,7 +12,7 @@ and [CLUSTER_ABSTRACTION.md](CLUSTER_ABSTRACTION.md) (architecture).
 | `/eos/user/<i>/<user>/DIFFSIM/containers/` | Container `.sif` (multi-GB; AFS work is too small). |
 | `/eos/user/<i>/<user>/DIFFSIM/` | EOS user space; available for bulk staging outside the batch flow. |
 
-`<i>` is the first letter of `<user>` (e.g. `c` for `cjesus`).
+`<i>` is the first letter of `<user>`.
 
 > **LXPLUS HTCondor gotcha — outputs must NOT be on EOS.** Standard
 > LXPLUS schedds (bigbird*) reject submit descriptions whose `output`,
@@ -155,7 +155,7 @@ writable, so the cache lives next to the source. No setup needed.
 
 ## Paths / conventions
 
-- Configs: `LUCiD/lucid/production/configs/dataprod_*.json` (dataprod);
+- Configs: `LUCiD/lucid/production/configs/{GeV,SN,Solar,Test}/NN_name.json`;
   `jobs/<stage>/configs/*.json` (per-stage).
 - Runner: `LUCiD/lucid/production/run_job.py` (entry: `lucid-run-job`).
 - Production wrappers: `LUCiD/lucid/production/jobs/`.

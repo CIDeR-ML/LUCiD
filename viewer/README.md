@@ -1,6 +1,6 @@
 # LUCiD Event Viewer
 
-Browser-based interactive viewer for LUCiD v3 production HDF5 output:
+Browser-based interactive viewer for LUCiD production HDF5 output:
 raw PMT readout (`sensor`), per-particle decomposition (`inst`), Geant4
 truth segments (`seg`), and truth labels (`labl`). Supports cylinder,
 box, and sphere geometries.
@@ -14,7 +14,7 @@ particle-level correspondence.
 | File | Role |
 |---|---|
 | `serve_viewer.py`     | Local HTTP server with byte-range support |
-| `make_test_data.py`   | Stub v3 dataset generator (for pre-migration smoke tests) |
+| `make_test_data.py`   | Stub dataset generator (for smoke tests) |
 | `index.html`          | Viewer entry point |
 | `viewer.css`          | Styles |
 | `viewer.js`           | Main module (Three.js + Canvas2D + UI) |
@@ -31,11 +31,11 @@ particle-level correspondence.
 ## Quick start
 
 ```bash
-# Against a real v3 dataset (production output or regenerated sample)
+# Against a real dataset (production output or regenerated sample)
 python3 serve_viewer.py /path/to/dataset_root --open
 
 # Against the stub dataset in this repo
-python3 serve_viewer.py ./sample_v3 --port 8765 --open
+python3 serve_viewer.py ./sample_data --port 8765 --open
 ```
 
 Then open **http://127.0.0.1:8765/**. The page shows `html loaded, waiting for viewer.js...` while modules parse; proceeds to mount/fetch status; then drops you into the viewer.
@@ -146,6 +146,6 @@ python3 make_test_data.py --out /tmp/stub --geom cylinder --events 5
 python3 serve_viewer.py /tmp/stub --port 8766 --open
 ```
 
-The stub honors the v3 schema but has synthetic sensor hits/segments; won't match any real physics. For debugging the viewer shell it's sufficient.
+The stub honors the dataset schema but has synthetic sensor hits/segments; won't match any real physics. For debugging the viewer shell it's sufficient.
 
 Diagnostic logging is sprinkled through module init and worker startup; open DevTools → Console and look for lines prefixed `[viewer]` / `[h5_worker]`. On a JS parse error the page stalls on `html loaded, waiting for viewer.js...` — check the Console for the exception (that's how I caught the pdgName object-literal bug).

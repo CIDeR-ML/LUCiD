@@ -247,7 +247,8 @@ labl.h5
     │   ├── genealogy_data                       (vlen int32) — categorized chain
     │   ├── genealogy_offsets                    (n_particles+1,) uint32
     │   ├── ext_genealogy_data                   (vlen int32) — full Geant4 chain
-    │   └── ext_genealogy_offsets                (n_particles+1,) uint32
+    │   ├── ext_genealogy_offsets                (n_particles+1,) uint32
+    │   └── interaction_idx                      (n_particles,) int32 — row into per_interaction/
     └── per_track/                               (~600 rows for typical LUCiD events)
         ├── track_id            (n_tracks,) int32   — Geant4 track ID (truth metadata)
         ├── parent_id           (n_tracks,) int32
@@ -287,8 +288,8 @@ Notes:
 For an event:
 
 ```
-inst hit (h)  ──particle_idx[h]──►  labl/per_particle row (p)
-seg segment (s)  ──track_idx[s]──►  labl/per_track row (k)
+hits hit (h)  ──particle_idx[h]──►  labl/per_particle row (p)
+step segment (s)  ──track_idx[s]──►  labl/per_track row (k)
 labl/per_track row (k)  ──particle_idx[k]──►  labl/per_particle row (p)
 ```
 
@@ -297,14 +298,14 @@ arithmetic, no graph walking, no cross-event references.
 
 ## Tasks → files (LUCiD-specific)
 
-| Task | sensor | inst | seg | labl |
+| Task | sensor | hits | step | labl |
 |---|:-:|:-:|:-:|:-:|
 | SSL on raw PMT readout | x | | | |
 | SSL on per-particle PMT decomposition | | x | | |
 | SSL on 3D segments | | | x | |
 | Per-segment Cherenkov forward simulation (resimulate photons from segments) | | | x | |
-| sensor → inst denoising / deconvolution | x | x | | |
-| sensor → seg reconstruction (vertex, energy, direction) | x | | x | |
+| sensor → hits denoising / deconvolution | x | x | | |
+| sensor → step reconstruction (vertex, energy, direction) | x | | x | |
 | Per-PMT semantic / instance segmentation | | x | | x |
 | 3D semantic / instance segmentation on segments | | | x | x |
 | Event classification or regression (energy, direction, vertex via primary) | x | x | | x |
@@ -353,7 +354,7 @@ home in this layout. Mapping table:
 | `particle_hit_offsets`, `particle_event_offset` | dropped — replaced by per-event grouping + `particle_idx` column |
 | `sensor_positions` | `sensor/config/sensor_positions` + `hits/config/sensor_positions` |
 | `t0` | `labl/event_NNN/per_event/t0` (shifted into all `T`/`time` at write time) |
-| `n_particles` | attr on `event_NNN/` in inst, labl |
+| `n_particles` | attr on `event_NNN/` in hits, labl |
 | `event_number` | renamed to `source_event_idx` — attr on every `event_NNN/`, plus `config/source_event_idx` array in every file |
 | `particle_category` | `labl/event_NNN/per_particle/category` |
 | `particle_containment` | `labl/event_NNN/per_particle/contained` (bool) |

@@ -27,7 +27,7 @@ Only the per-cluster `NerscAdapter` (`cluster_common/nersc.py`, selected by
 | `/global/cfs/cdirs/dune/users/<user>/SIREN_files/` | `SIREN_OUTPUT_BASE_PATH` — `training_inputs/`, `smax_parametrization/`, plus `timing_results/`, `training_stable/`, `training_tests/`. |
 | `$SCRATCH` (`/pscratch/sd/<i>/<user>`) | Scratch; **purged** — only use for the apptainer pull cache/tmp, never outputs or the image. |
 
-`<i>` is the first letter of `<user>` (e.g. `c` for `cjesus`).
+`<i>` is the first letter of `<user>`.
 
 > **Why CFS, not scratch.** `$SCRATCH` is periodically purged. The `.sif`
 > image and all outputs live on CFS so they survive. Scratch is used only as
@@ -242,7 +242,7 @@ of the pipeline is unaffected.
 
 ## Paths / conventions
 
-- Configs: `LUCiD/lucid/production/configs/dataprod_*.json` (dataprod);
+- Configs: `LUCiD/lucid/production/configs/{GeV,SN,Solar,Test}/NN_name.json`;
   `jobs/<stage>/configs/*.json` (per-stage).
 - Runner: `LUCiD/lucid/production/run_job.py` (entry: `lucid-run-job`).
 - Production wrappers: `LUCiD/lucid/production/jobs/`.

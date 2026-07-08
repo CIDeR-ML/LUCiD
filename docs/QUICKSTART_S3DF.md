@@ -39,11 +39,11 @@ repo by passing `--store-dir`:
 
 ```bash
 cd LUCiD
-./scripts/download_data.sh --store-dir /sdf/data/neutrino/cjesus/CIDER/CERNBOX
+./scripts/download_data.sh --store-dir /sdf/data/neutrino/<user>/CERNBOX
 ```
 
 This writes the real files under
-`/sdf/data/neutrino/cjesus/CIDER/CERNBOX/water/muon/` and points
+`/sdf/data/neutrino/<user>/CERNBOX/water/muon/` and points
 `data/water/muon/` at them via symlinks. `data/wbls/muon/` is wired up
 as relative symlinks into `../../water/muon/`, so wbls reuses the same
 ROOT + SIREN files as water. Only the 1000 MeV ROOT is fetched by
@@ -114,7 +114,7 @@ apptainer exec \
     -B "$PWD/LUCiD:/opt/LUCiD" \
     -B "$PWD/PhotonSim:/opt/PhotonSim" \
     "$LUCID_IMAGE_PATH" \
-    lucid-run-job --config /opt/LUCiD/lucid/production/configs/dataprod_01_mu.json \
+    lucid-run-job --config /opt/LUCiD/lucid/production/configs/GeV/01_mu.json \
                   --output-dir /tmp/out --job-id 1 --test
 ```
 
@@ -139,7 +139,7 @@ The container's baked `jaxlib` is **CPU-only** — `jax.devices()` returns
 container at run time:
 
 ```
-LUCID_ENV_BASE=/sdf/data/neutrino/cjesus/python_envs/lucid
+LUCID_ENV_BASE=/sdf/data/neutrino/<user>/python_envs/lucid
 ```
 
 This holds the `jax-cuda12-plugin` + `nvidia-*-cu12` wheels matched to the
@@ -151,7 +151,7 @@ container, so its `site-packages` is added to the user-site path) and add
 for a batch job the same two ingredients apply:
 
 ```bash
-APPTAINERENV_PYTHONUSERBASE=/sdf/data/neutrino/cjesus/python_envs/lucid \
+APPTAINERENV_PYTHONUSERBASE=/sdf/data/neutrino/<user>/python_envs/lucid \
 APPTAINERENV_PYTHONPATH="" \
 apptainer exec --nv -B /sdf,/fs,/sdf/scratch,/lscratch,/cvmfs \
     -B "$PWD/LUCiD:/opt/LUCiD" \
@@ -234,7 +234,7 @@ needed.
 
 ## Paths / conventions
 
-- Configs: `LUCiD/lucid/production/configs/dataprod_*.json`
+- Configs: `LUCiD/lucid/production/configs/{GeV,SN,Solar,Test}/NN_name.json`
 - Runner: `LUCiD/lucid/production/run_job.py` (entry: `lucid-run-job`)
 - Production wrappers: `LUCiD/lucid/production/jobs/`
 - schema spec: [LUCID_DATASET.md](LUCID_DATASET.md)

@@ -39,6 +39,7 @@ python examples/hello_simulate.py
 ```
 
 You should see a muon simulated in an SK-like tank and its per-PMT Cherenkov ring displayed.
-If you get a "SIREN weights not found" error, run `./scripts/download_data.sh` first.
+If it fails with a `FileNotFoundError` pointing at a SIREN model path under `data/`, run
+`./scripts/download_data.sh` first.
 
 Next: the [quickstart](quickstart.md).

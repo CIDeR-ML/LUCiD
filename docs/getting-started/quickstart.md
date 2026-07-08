@@ -37,7 +37,7 @@ The narrated notebooks in `tutorials/` walk the main workflows:
 |----------|----------|
 | `00_quickstart` | simulate + display |
 | `track_optimization` | reconstruct a track (+ a sphere example) |
-| `calibration_optimization` | calibrate optical parameters vs the CRB |
+| `calibration_optimization` | calibrate optical parameters + quote uncertainties |
 | `calibration_gradients` | calibration loss landscape, Hessian, before/after |
 | `track_gradients` | reconstruction loss landscapes |
 | `data_vs_prediction` | per-PMT likelihood: data vs model |
