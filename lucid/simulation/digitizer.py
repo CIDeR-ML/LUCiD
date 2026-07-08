@@ -433,7 +433,7 @@ def digitize_and_decompose(
     sensor_idx, charge, t_true, t_reco, particle_idx, segment_idx, emission_process,
     n_sensors: int, model: dict, rng: np.random.Generator,
     dark_rate_khz: float = 0.0, readout_pad_ns: float = 100.0,
-    apply_resolution: bool = True,
+    apply_resolution: bool = True, t_ref=None,
 ):
     """Full host-side hit-making: per-photon deposits -> digits + decomposition.
 
@@ -464,15 +464,21 @@ def digitize_and_decompose(
     emission_process = np.asarray(emission_process, dtype=np.int64)
 
     # Drop non-finite/undetected deposits and cap the readout time at
-    # _MAX_DIGIT_TIME_NS *relative to the earliest deposit*. Late nuclear-channel
-    # photons (neutron capture, nuclear de-excitation) legitimately arrive at
-    # ms–s scales after their interaction, far outside any real readout window;
-    # capping the late tail keeps digits, the decomposition, and the dark window
-    # bounded. The cap must be relative: an absolute cap would drop an entire
-    # supernova interaction sitting at t0 ~ ms–s. No lower bound.
+    # _MAX_DIGIT_TIME_NS *relative to each deposit's own interaction*. Late
+    # nuclear-channel photons (neutron capture, nuclear de-excitation) legitimately
+    # arrive at ms–s scales after their interaction, far outside any real readout
+    # window; capping the late tail keeps digits, the decomposition, and the dark
+    # window bounded. The reference must be per-interaction: ``t_ref`` (per-deposit
+    # interaction t0) is passed by the pooled pile-up/supernova path so a later
+    # interaction in a dense chunk is not measured against the chunk's earliest
+    # deposit; a single-vertex event (t_ref=None) uses the earliest deposit, which
+    # is its own interaction. No lower bound.
     valid = np.isfinite(t_reco) & np.isfinite(t_true) & (charge > 0)
-    t_ref = np.min(t_reco[valid]) if valid.any() else 0.0
-    finite = valid & ((t_reco - t_ref) < _MAX_DIGIT_TIME_NS)
+    if t_ref is None:
+        ref = np.min(t_reco[valid]) if valid.any() else 0.0
+    else:
+        ref = np.asarray(t_ref, dtype=np.float64)
+    finite = valid & ((t_reco - ref) < _MAX_DIGIT_TIME_NS)
     if not finite.all():
         sensor_idx, charge, t_true, t_reco, particle_idx, segment_idx, emission_process = (
             a[finite] for a in (sensor_idx, charge, t_true, t_reco,

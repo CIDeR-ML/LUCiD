@@ -1165,7 +1165,7 @@ def _merge_pileup_streams(streams, *, n_sensors, apply_smearing,
     # dark/orphan sentinel is preserved); its times are shifted by the
     # vertex t0. digitize_and_decompose then windows the pool once.
     pool = {k: [] for k in ('sensor_idx', 'charge', 't_true', 't_reco',
-                            'particle_idx', 'segment_idx', 'emission_process')}
+                            'particle_idx', 'segment_idx', 'emission_process', 't_ref')}
     particle_offset = 0
     seg_offset = 0
     for s in streams:
@@ -1189,6 +1189,9 @@ def _merge_pileup_streams(streams, *, n_sensors, apply_smearing,
             pool['charge'].append(np.asarray(dep['charge'], np.float64))
             pool['t_true'].append(np.asarray(dep['t_true'], np.float64) + t0v)
             pool['t_reco'].append(np.asarray(dep['t_reco'], np.float64) + t0v)
+            # Per-deposit interaction t0, so the late-light cap is measured against
+            # THIS interaction, not the chunk's earliest deposit (per-interaction cap).
+            pool['t_ref'].append(np.full(d_sensor.size, t0v, np.float64))
             pool['particle_idx'].append(pi)
             pool['segment_idx'].append(si)
             pool['emission_process'].append(np.asarray(dep['emission_process'], np.int64))
@@ -1217,6 +1220,7 @@ def _merge_pileup_streams(streams, *, n_sensors, apply_smearing,
         particle_idx=_catp('particle_idx', np.int64),
         segment_idx=_catp('segment_idx', np.int64),
         emission_process=_catp('emission_process', np.int64),
+        t_ref=_catp('t_ref', np.float64),   # per-interaction late-light cap reference
         n_sensors=n_sensors, model=digitizer_model, rng=digi_rng,
         dark_rate_khz=float(digitizer_model.get('dark_rate_khz', 0.0)),
         apply_resolution=apply_smearing)
@@ -1459,6 +1463,18 @@ def generate_events_from_photonsim_supernova(
     master_seed = _resolve_master_seed(master_seed)
     digitizer_model = resolve_model_config(digitizer)
     trigger_cfg = TriggerConfig.from_block(trigger)
+    # Supernova requires a windowed digitizer (ski/hk) and the truth-based
+    # selection (min_physics_hits) — the real readout trigger can't tag the
+    # low-energy SN interactions. Fail early (before sntools/PhotonSim) rather
+    # than crash later or write a silently-wrong dataset.
+    if not digitizer_model.get('integration_window_ns'):
+        raise ValueError(
+            "Supernova needs a windowed digitizer (ski/hk); got "
+            f"{digitizer_model.get('model')!r}. Set digitizer.model to ski or hk.")
+    if min_physics_hits is None:
+        raise ValueError(
+            "Supernova needs the truth-based selection (selection.mode = "
+            "min_physics_hits), not the readout trigger.")
     if run_id is None:
         run_id = str(uuid.uuid4())
     sensor_positions_np = np.asarray(sensor_positions, dtype=np.float32)
@@ -1493,7 +1509,7 @@ def generate_events_from_photonsim_supernova(
     order = np.argsort(t0_abs_ns, kind='stable')
     t0_sorted = t0_abs_ns[order]
 
-    integ = float(digitizer_model.get('integration_window_ns', 200.0))
+    integ = float(digitizer_model.get('integration_window_ns') or 200.0)
     trig_span = (trigger_cfg.window_ns + trigger_cfg.pad_before_ns
                  + trigger_cfg.pad_after_ns) if trigger_cfg is not None else 0.0
     coupling_ns = max(integ, trig_span)
