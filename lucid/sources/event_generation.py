@@ -507,7 +507,9 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
             #   step/sensor_hits    : per-(segment, sensor, digit, process)
             # ----------------------------------------------------------------
             deposits = gather_photon_deposits(process_outputs)
-            digi_rng = np.random.default_rng([int(master_seed or 0), int(event_idx)])
+            # Fold job_id in (like the sim/scint keys) so reusing a master_seed
+            # across jobs still gives independent dark/SPE/jitter streams.
+            digi_rng = np.random.default_rng([int(master_seed or 0), int(job_id), int(event_idx)])
             sensor_digits, hits_sparse, seg_hits = digitize_and_decompose(
                 sensor_idx=deposits['sensor_idx'], charge=deposits['charge'],
                 t_true=deposits['t_true'], t_reco=deposits['t_reco'],
@@ -1023,7 +1025,7 @@ def generate_events_from_photonsim_pileup(
                 streams, n_sensors=n_sensors,
                 apply_smearing=apply_smearing,
                 digitizer_model=digitizer_model,
-                digi_rng=np.random.default_rng([int(master_seed or 0), int(event_idx)]),
+                digi_rng=np.random.default_rng([int(master_seed or 0), int(job_id), int(event_idx)]),
                 detector_bounds=detector_bounds,
             )
             print(f"    [timing] merge {_time.time() - _t_merge:.3f}s", flush=True)
@@ -1544,7 +1546,7 @@ def generate_events_from_photonsim_supernova(
             streams, n_sensors=n_sensors, apply_smearing=apply_smearing,
             digitizer_model=digitizer_model,
             digi_rng=np.random.default_rng(
-                [int(master_seed), int(source_event_idx), int(cidx)]),
+                [int(master_seed), int(job_id), int(source_event_idx), int(cidx)]),
             detector_bounds=detector_bounds)
 
         # Selection. Default (min_physics_hits): trigger-free truth cut — keep the

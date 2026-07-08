@@ -310,8 +310,13 @@ def main():
         print(f"Found {len(config_dirs)} config directories")
 
         for config_dir in config_dirs:
+            if not os.path.isdir(config_dir):
+                continue
             result = analyze_config(config_dir)
             if result:
+                # Distinguish same-numbered configs across blocks/splits by their
+                # path relative to the detector base (<block>/<split>/config_NN).
+                result['config_id'] = os.path.relpath(config_dir, args.base_dir)
                 results.append(result)
 
     else:

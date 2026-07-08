@@ -7,8 +7,9 @@ SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 # (block = GeV, Solar, SN, Test), one NN_name.json per config.
 CONFIG_DIR="${SCRIPT_DIR}/../../configs"
 
-# Default values. Configs live one level down in per-block folders, so the
-# default pattern matches any block config (override -p to filter, e.g. GeV/*).
+# Default values. Configs live one level down in per-block folders. -p is a
+# path glob matched against <block>/<file>: default "*.json" = all blocks;
+# "GeV/*.json" = one block; "GeV/0[1-6]_*.json" = a subset.
 PATTERN="*.json"
 SUBMIT_JOBS=false
 TEST_MODE=false
@@ -34,7 +35,7 @@ while getopts "p:stdn:e:gP:o:D:h" opt; do
         o) OUTPUT_OVERRIDE="$OPTARG";;
         D) DETECTOR_OVERRIDE="$OPTARG";;
         h) echo "Usage: $0 [-p pattern] [-s] [-t] [-d] [-n n_jobs] [-e events] [-g] [-P partition] [-o output_base] [-D detector]"
-           echo "  -p: Pattern to match config files (default: dataprod*.json)"
+           echo "  -p: Path glob under configs/ (default: *.json = all; e.g. GeV/*.json)"
            echo "  -s: Submit jobs to SLURM (default: prepare only)"
            echo "  -t: Test mode - create only one job per config"
            echo "  -d: Dry run - show what would be submitted without doing it"
@@ -69,7 +70,7 @@ if [ ! -d "$CONFIG_DIR" ]; then
 fi
 
 # Find matching config files
-mapfile -t CONFIG_FILES < <(find "$CONFIG_DIR" -mindepth 2 -maxdepth 2 -name "$PATTERN" -type f | sort)
+mapfile -t CONFIG_FILES < <(find "$CONFIG_DIR" -mindepth 2 -maxdepth 2 -type f -path "*/$PATTERN" | sort)
 
 if [ ${#CONFIG_FILES[@]} -eq 0 ]; then
     echo "No configuration files found matching pattern: $PATTERN"

@@ -23,6 +23,8 @@ import sys, os, shutil, glob
 import numpy as np
 import h5py
 
+EMISSION_PROCESS_DARK = 2   # schema constant (lucid.sources.writer): dark-noise hit
+
 src, dst, theta = sys.argv[1], sys.argv[2], float(sys.argv[3])
 cos_thr = np.cos(np.deg2rad(theta))
 EM = {11, -11, 22}
@@ -147,20 +149,23 @@ for ev in evs:
     hd = np.array([k[2] for k in ks], np.int32)          # digit_idx (FK preserved)
     he = np.array([k[3] for k in ks], np.int8)
     hpe = np.array([key[k][0] for k in ks], np.float32)
-    ht  = np.array([key[k][1] for k in ks], np.float32)
-    htr = np.array([key[k][2] for k in ks], np.float32)
+    ht  = np.array([key[k][1] for k in ks], np.float64)   # absolute time stays float64
+    htr = np.array([key[k][2] for k in ks], np.float64)
+    _cols = ("particle_idx", "digit_idx", "sensor_idx", "PE", "T", "T_reco", "emission_process")
+    _phys = {"particle_idx": hp, "digit_idx": hd, "sensor_idx": hs,
+             "PE": hpe, "T": ht, "T_reco": htr, "emission_process": he}
     with h5py.File(hits_f, "r+") as h:
         g = h[ev]
-        for nm in ("particle_idx", "digit_idx", "sensor_idx", "PE", "T", "T_reco", "emission_process"):
+        # Dark-noise hits (emission_process==2) exist only in hits/ — sensor_hits
+        # carries no dark — so preserve them unchanged; relabeling reassigns
+        # physics particle_idx only, it must not drop dark.
+        dark = g["emission_process"][:] == EMISSION_PROCESS_DARK
+        keep = {nm: g[nm][:][dark] for nm in _cols}
+        for nm in _cols:
             if nm in g: del g[nm]
-        g.create_dataset("particle_idx", data=hp)
-        g.create_dataset("digit_idx", data=hd)
-        g.create_dataset("sensor_idx", data=hs)
-        g.create_dataset("PE", data=hpe)
-        g.create_dataset("T", data=ht)
-        g.create_dataset("T_reco", data=htr)
-        g.create_dataset("emission_process", data=he)
-        g.attrs["n_particle_hits"] = np.int64(len(hp))   # keep hits count attrs in sync
+        for nm in _cols:
+            g.create_dataset(nm, data=np.concatenate([_phys[nm], keep[nm]]))
+        g.attrs["n_particle_hits"] = np.int64(len(hp) + int(dark.sum()))
         if "n_particles" in g.attrs:
             g.attrs["n_particles"] = np.int64(N)
 

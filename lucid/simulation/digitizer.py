@@ -112,7 +112,7 @@ class DigitizeResult:
     """
     digit_sensor_idx: np.ndarray  # (D,) int32
     digit_pe_true: np.ndarray     # (D,) float32 — summed detected charge
-    digit_time: np.ndarray        # (D,) float32 — first-arrival time in window
+    digit_time: np.ndarray        # (D,) _T_DTYPE (float64) — first-arrival time in window
     photon_digit_idx: np.ndarray  # (P,) int32 — input photon -> digit, -1 if dropped
 
     @property
@@ -230,7 +230,6 @@ def digitize_event(
     # window (delayed light). `basic` (window=inf) => every group is simple.
     simple = span <= window
 
-    pdi_sorted = np.full(n_ph, -1, dtype=np.int32)     # in sorted order
     # --- simple groups: fully vectorized ---
     simple_pass = simple & (gcharge >= threshold)
     n_simple = int(simple_pass.sum())
@@ -352,7 +351,8 @@ def apply_readout_resolution(
     SPE spectrum; ``"legacy"`` (``basic``) keeps the historical ``sk_like``
     fractional smear for byte-parity. Time gets the PMT's charge-dependent jitter
     (:func:`_sample_time_jitter`), on top of the TTS already in ``digit_time``.
-    Returns ``(pe_reco, t_reco)`` as float32.
+    Returns ``(pe_reco float32, t_reco _T_DTYPE=float64)`` — time stays float64 to
+    avoid ULP collapse at supernova absolute times; do not narrow it to float32.
     """
     pe_true = np.asarray(digit_pe_true, dtype=np.float64)
     if pe_true.size == 0:
