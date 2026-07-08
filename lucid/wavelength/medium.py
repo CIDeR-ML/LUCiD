@@ -191,9 +191,17 @@ def make_medium(material: str = "water",
     pf_wl = jnp.array(ab["pope_fry_wavelengths_nm"], dtype=jnp.float32)
     pf_abs = jnp.array(ab["pope_fry_absorption_m_inv"], dtype=jnp.float32)
 
+    # Eq.(15) power-law fit (blue) spliced onto the Pope&Fry data (red) at 464 nm.
+    # The two pieces differ by ~12% at the seam, so a hard switch leaves a kink; blend
+    # them with a C2 smootherstep over a +-12 nm window. (The blend WEIGHT is C2; the
+    # result inherits the piecewise-linear knot kinks of the interpolated Pope&Fry
+    # table itself — tiny, but not strictly C2.)
     C_powerlaw = P0 * P2 * (wl / 500.0) ** P3
     C_popefry = jnp.interp(wl, pf_wl, pf_abs)
-    C = jnp.where(wl <= 464.0, C_powerlaw, C_popefry)
+    _bw = 12.0
+    _t = jnp.clip((wl - (464.0 - _bw)) / (2.0 * _bw), 0.0, 1.0)
+    _s = _t * _t * _t * (_t * (_t * 6.0 - 15.0) + 10.0)   # smootherstep (C2)
+    C = (1.0 - _s) * C_powerlaw + _s * C_popefry
     alpha_abs = P0 * P1 / (wl ** 4) + C
 
     return MediumProperties(
