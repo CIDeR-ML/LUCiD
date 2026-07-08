@@ -37,7 +37,7 @@ __all__ = [
 
 # ---------------------------------------------------------------------------
 # format: four-file per-event-group HDF5 (sensor / hits / step / labl).
-# See docs/LUCID_DATASET.md for the full schema.
+# See docs/reference/dataset-schema.md for the full schema.
 # ---------------------------------------------------------------------------
 
 _GZIP_OPTS = dict(compression='gzip', compression_opts=4)

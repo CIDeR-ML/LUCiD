@@ -11,7 +11,7 @@
 # On S3DF, Apptainer pulls the same image directly:
 #   apptainer pull lucid.sif docker://ghcr.io/cider-ml/lucid:latest
 #
-# See docs/QUICKSTART_DOCKER.md and docs/QUICKSTART_S3DF.md.
+# See docs/guides/production/docker.md and docs/guides/production/deploy-s3df.md.
 
 FROM --platform=linux/amd64 nuisancemc/tutorial:nuint2024
 

@@ -4,10 +4,10 @@ Fan-out for PhotonSim jobs that produce SIREN training inputs with the
 **`PhotonHist_AngleDistanceNorm`** histogram (opening angle vs.
 `s / s_max`). One code path, two clusters: which one you target is
 chosen by the `user_paths.sh` you copy into `../`. See
-[`../../../../docs/CLUSTER_ABSTRACTION.md`](../../../../docs/CLUSTER_ABSTRACTION.md)
+[`../../../../docs/guides/production/cluster-abstraction.md`](../../../../docs/guides/production/cluster-abstraction.md)
 for the architecture and the per-cluster runbooks
-[`QUICKSTART_S3DF.md`](../../../../docs/QUICKSTART_S3DF.md) /
-[`QUICKSTART_LXPLUS.md`](../../../../docs/QUICKSTART_LXPLUS.md).
+[`docs/guides/production/deploy-s3df.md`](../../../../docs/guides/production/deploy-s3df.md) /
+[`docs/guides/production/deploy-lxplus.md`](../../../../docs/guides/production/deploy-lxplus.md).
 
 Distinct from the data-production path (`../dataprod/generate_jobs.sh`)
 in three ways:
@@ -182,5 +182,5 @@ figure.
 
 `lucid-build-photon-table` consumes the per-energy ROOTs into a single
 .h5 keyed by energy. See
-[`../../../../docs/SIREN_TRAINING_INPUTS.md`](../../../../docs/SIREN_TRAINING_INPUTS.md)
+[`../../../../docs/guides/production/siren-training-inputs.md`](../../../../docs/guides/production/siren-training-inputs.md)
 for the schema and the post-build training step.

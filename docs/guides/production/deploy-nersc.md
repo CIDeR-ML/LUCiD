@@ -1,9 +1,9 @@
 # NERSC Quickstart — Production on Perlmutter (SLURM)
 
 Concise runbook for the NERSC / Perlmutter deployment. Pairs with
-[QUICKSTART_S3DF.md](QUICKSTART_S3DF.md) (same pipeline, SLURM at SLAC),
-[QUICKSTART_LXPLUS.md](QUICKSTART_LXPLUS.md) (HTCondor at CERN), and
-[CLUSTER_ABSTRACTION.md](CLUSTER_ABSTRACTION.md) (architecture). The single
+[deploy-s3df.md](deploy-s3df.md) (same pipeline, SLURM at SLAC),
+[deploy-lxplus.md](deploy-lxplus.md) (HTCondor at CERN), and
+[cluster-abstraction.md](cluster-abstraction.md) (architecture). The single
 code path that drives every batch deployment lives at
 `LUCiD/lucid/production/cluster_common/`.
 
@@ -36,7 +36,7 @@ Only the per-cluster `NerscAdapter` (`cluster_common/nersc.py`, selected by
 ## One-time setup
 
 ```bash
-# Clone both repos (gh is installed + authed; see CLAUDE.md)
+# Clone both repos (use gh auth login, or plain git clone with https)
 cd /global/u1/$(whoami | head -c1)/$(whoami)/DIFFSIM   # or wherever
 gh repo clone cesarjesusvalls/PhotonSim
 gh repo clone CIDeR-ML/LUCiD
@@ -247,4 +247,4 @@ of the pipeline is unaffected.
 - Runner: `LUCiD/lucid/production/run_job.py` (entry: `lucid-run-job`).
 - Production wrappers: `LUCiD/lucid/production/jobs/`.
 - Adapter: `cluster_common/nersc.py` (`CLUSTER=nersc`).
-- Architecture: [CLUSTER_ABSTRACTION.md](CLUSTER_ABSTRACTION.md).
+- Architecture: [cluster-abstraction.md](cluster-abstraction.md).

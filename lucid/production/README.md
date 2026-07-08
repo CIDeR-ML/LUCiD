@@ -2,7 +2,7 @@
 
 Turns a PhotonSim particle-based ROOT file into a four-file HDF5 dataset
 (`sensor/`, `inst/`, `seg/`, `labl/`). Full schema in
-[`docs/LUCID_DATASET.md`](../../docs/LUCID_DATASET.md).
+[`docs/reference/dataset-schema.md`](../../docs/reference/dataset-schema.md).
 
 ## Config blocks
 
@@ -20,7 +20,7 @@ Each config declares its `detector` and `nominal_train` / `nominal_test`; the
 fanout writes `OUTPUT_BASE/<detector>/<block>/[<split>]/config_NN/` and sizes jobs
 from `nominal / (target_seconds_per_job / seconds_per_event)`. Train/test datasets
 use disjoint master seeds. See
-[`jobs/dataprod/`](jobs/dataprod/) and [`docs/QUICKSTART_NERSC.md`](../../docs/QUICKSTART_NERSC.md).
+[`jobs/dataprod/`](jobs/dataprod/) and [`docs/guides/production/deploy-nersc.md`](../../docs/guides/production/deploy-nersc.md).
 
 ## Example
 
@@ -76,7 +76,7 @@ in separated time clusters (delayed coincidence, pile-up, dark noise), so
 `sensor.h5` becomes a digit list and `hits.h5` / `step/sensor_hits` carry a
 `digit_idx` FK. **Dark noise** is a labelled source in the
 `hits.h5` decomposition (`emission_process = 2`, `particle_idx = -1`). See
-`docs/LUCID_DATASET.md`.
+`docs/reference/dataset-schema.md`.
 
 **Pile-up** is digitized **cross-vertex**: all vertices' per-photon deposits are
 pooled in absolute time and windowed once, so light from different vertices that

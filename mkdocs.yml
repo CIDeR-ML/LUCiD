@@ -44,26 +44,33 @@ nav:
   - Getting Started:
       - Install: getting-started/install.md
       - Quickstart: getting-started/quickstart.md
-      - Local (with PhotonSim): QUICKSTART_LOCAL.md
-      - Docker: QUICKSTART_DOCKER.md
+      - Bundled detectors: getting-started/detectors.md
   - Concepts:
       - The photon pipeline: concepts/photon-pipeline.md
       - Geometry & configuration: concepts/geometry.md
-      - Architecture: ARCHITECTURE.md
-      - Parameters (DetectorParams): DETECTOR_PARAMS_VS_ARGS.md
-      - SIREN surrogate: SIREN_TRAINING_INPUTS.md
+      - Architecture: concepts/architecture.md
+      - Parameters (DetectorParams): concepts/detector-params-vs-args.md
       - Wavelength physics: concepts/wavelength.md
-  - Reconstruction: RECONSTRUCTION.md
-  - Calibration: CALIBRATION.md
-  - Data & Production:
-      - Dataset schema: LUCID_DATASET.md
-      - Working with data: reference/working-with-data.md
-      - Cluster deployment: CLUSTER_ABSTRACTION.md
-      - S3DF: QUICKSTART_S3DF.md
-      - NERSC: QUICKSTART_NERSC.md
-      - LXPLUS: QUICKSTART_LXPLUS.md
-      - WbLS notes: WBLS_INFORMATION.md
+      - Materials (water / WbLS / ice): concepts/materials.md
+  - Guides:
+      - Reconstruction: guides/reconstruction.md
+      - Calibration: guides/calibration.md
+      - Model your own detector: guides/model-your-own-detector.md
+      - Producing datasets:
+          - Overview: guides/production/index.md
+          - Local (with PhotonSim): guides/production/local.md
+          - Docker: guides/production/docker.md
+          - Training the SIREN emitter: guides/production/siren-training-inputs.md
+          - Cluster deployment:
+              - How cluster targeting works: guides/production/cluster-abstraction.md
+              - S3DF (SLAC): guides/production/deploy-s3df.md
+              - NERSC (Perlmutter): guides/production/deploy-nersc.md
+              - LXPLUS (CERN): guides/production/deploy-lxplus.md
   - Reference:
       - CLI: reference/cli.md
       - Configuration: reference/config.md
+      - Dataset schema: reference/dataset-schema.md
+      - Working with data: reference/working-with-data.md
+      - Digitizer & trigger: reference/digitizer-and-trigger.md
+      - PMT .npz schema: reference/pmt-npz-schema.md
   - Contributing: https://github.com/CIDeR-ML/LUCiD/blob/main/CONTRIBUTING.md

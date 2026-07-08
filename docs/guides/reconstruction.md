@@ -42,9 +42,10 @@ scalar photon-yield normalization is needed.
 4. `wavelength_mode=True`, a realistic per-photon transit-time spread
    (`DetectorParams.response.tts`, e.g. 2.5 ns), and `K≥8` scatter iterations.
 
-> Legacy `cherenkov_photon_norm` / `cherenkov_smax_norm` scalars were **removed** — they
-> compensated for stale wide-band data and emitter truncation; the physical settings above
-> supersede them. `cherenkov_emission_band` is a wavelength band, not a scaling fudge.
+!!! note "History: no scaling fudges"
+    Legacy `cherenkov_photon_norm` / `cherenkov_smax_norm` scalars were **removed** — they
+    compensated for stale wide-band data and emitter truncation; the physical settings above
+    supersede them. `cherenkov_emission_band` is a wavelength band, not a scaling factor.
 
 ## What constrains what
 

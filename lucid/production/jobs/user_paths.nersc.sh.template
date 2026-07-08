@@ -86,7 +86,7 @@ export DEFAULT_TIME="12:00:00"  # shared QOS allows up to 48h on Perlmutter
 # default; each emitted sbatch adds `-B <path>:/opt/LUCiD` to its apptainer exec.
 export LUCID_DEV_PATH="/global/u1/c/cjesus/DIFFSIM/LUCiD"
 # PhotonSim is C++: only set this if you change its source, and rebuild the host
-# build/ against the image first (see QUICKSTART_NERSC.md).
+# build/ against the image first (see docs/guides/production/deploy-nersc.md).
 # export PHOTONSIM_DEV_PATH="/global/u1/c/cjesus/DIFFSIM/PhotonSim"
 
 # =============================================================================

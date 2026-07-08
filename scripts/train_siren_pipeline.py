@@ -67,7 +67,7 @@ def main():
         if args.generate:
             print('[Stage 0-1] PhotonSim s_max scan + training-data generation')
             print('  (single-node PhotonSim runs; see lucid/production/jobs/{smax,siren_inputs} '
-                  'for the cluster version and docs/SIREN_TRAINING_INPUTS.md)')
+                  'for the cluster version and docs/guides/production/siren-training-inputs.md)')
             # PhotonSim generation is delegated to the production tooling; wired here as a guarded
             # placeholder so the pipeline is explicit. A local loop over the energy grid would call
             # `lucid-run-job` per cell — heavy, and PhotonSim-binary-dependent.

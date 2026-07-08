@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Synthesize a minimal v5 LUCiD dataset for viewer smoke tests.
 
-Produces four HDF5 files matching `docs/LUCID_DATASET.md` — sensor, hits,
+Produces four HDF5 files matching `docs/reference/dataset-schema.md` — sensor, hits,
 step, labl — with a small number of events and synthetic but reasonable
 content. Intended to exercise the browser viewer without running the
 full production pipeline. Emits the v5 schema: per_interaction/ with

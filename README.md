@@ -7,10 +7,12 @@ reconstruction become gradient-based optimization in one framework.
 Accompanies the paper *"End-to-end Differentiable Calibration and Reconstruction for Optical
 Particle Detectors"* — [arXiv:2602.24129](https://arxiv.org/abs/2602.24129).
 
-![Repository Overview](figures/combined_3x2_charge_displays.png)
+![Per-PMT charge displays for six detector geometries](figures/combined_3x2_charge_displays.png)
 
 LUCiD is a [JAX](https://github.com/google/jax)-based simulation of optical photon transport in
-particle detectors — water-Cherenkov tanks, scintillator (WbLS), and neutrino telescopes. Units
+particle detectors — water-Cherenkov tanks, water-based liquid scintillator (WbLS), and neutrino
+telescopes. Inside the loop, a **SIREN** (a small sinusoidal neural network trained on
+GEANT4/PhotonSim photon tables) stands in for GEANT4 as the differentiable light emitter. Units
 are **meters, nanoseconds, MeV** throughout.
 
 ## Install & first event
@@ -86,10 +88,10 @@ lucid-run-job --config lucid/production/configs/GeV/01_mu.json \
               --n-events 1000 --job-id 1 --master-seed 42 --output-dir out/
 ```
 
-See [docs/QUICKSTART_LOCAL.md](docs/QUICKSTART_LOCAL.md) (local), the cluster runbooks
+See [docs/guides/production/local.md](docs/guides/production/local.md) (local), the cluster runbooks
 (`docs/QUICKSTART_{S3DF,NERSC,LXPLUS}.md`, fronted by
-[docs/CLUSTER_ABSTRACTION.md](docs/CLUSTER_ABSTRACTION.md)), and the dataset schema in
-[docs/LUCID_DATASET.md](docs/LUCID_DATASET.md). The container
+[docs/guides/production/cluster-abstraction.md](docs/guides/production/cluster-abstraction.md)), and the dataset schema in
+[docs/reference/dataset-schema.md](docs/reference/dataset-schema.md). The container
 `ghcr.io/cider-ml/lucid:latest` ships PhotonSim + GENIE pre-built.
 
 ## Citation

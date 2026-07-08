@@ -9,7 +9,7 @@ HDF5 files under the output dataset root:
     ``{output}/step/wc_step_NNNN.h5``
     ``{output}/labl/wc_labl_NNNN.h5``
 
-See ``docs/LUCID_DATASET.md`` for the full schema.
+See ``docs/reference/dataset-schema.md`` for the full schema.
 
 Usage:
     python generate_events_with_particles.py \\

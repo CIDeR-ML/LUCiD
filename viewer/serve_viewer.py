@@ -7,7 +7,7 @@ frontend. Files are matched by filename pattern ``wc_{kind}_NNNN.h5``
 
 Supports flat directories and subdirectory layouts
 (``dataset_root/{sensor,hits,step,labl}/wc_*_NNNN.h5``), per
-``docs/LUCID_DATASET.md``.
+``docs/reference/dataset-schema.md``.
 
 Usage:
     python3 viewer/serve_viewer.py production_run/

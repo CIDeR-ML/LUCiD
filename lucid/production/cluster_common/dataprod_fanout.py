@@ -142,7 +142,7 @@ def _write_readme(config_dir: Path, *, name: str, desc: str, config_id: str,
         f"This directory is one LUCiD dataset. Each job contributes one "
         f"batch (`file_index = job_id - 1`) consisting of four files spread "
         f"across `sensor/`, `hits/`, `step/`, `labl/`. See "
-        f"`LUCiD/docs/LUCID_DATASET.md` for the schema.\n"
+        f"`LUCiD/docs/reference/dataset-schema.md` for the schema.\n"
     )
     (config_dir / "README.md").write_text(body)
 

@@ -8,11 +8,11 @@ env var in your active `user_paths.sh`.
 
 For per-cluster runbooks, see:
 
-- [`QUICKSTART_S3DF.md`](QUICKSTART_S3DF.md) — SLURM at SLAC.
-- [`QUICKSTART_NERSC.md`](QUICKSTART_NERSC.md) — SLURM on Perlmutter
+- [`deploy-s3df.md`](deploy-s3df.md) — SLURM at SLAC.
+- [`deploy-nersc.md`](deploy-nersc.md) — SLURM on Perlmutter
   (`NerscAdapter` subclasses `SlurmAdapter`: `--qos`/`--constraint`
   instead of `--partition`, cvmfs apptainer, `dune`/`dune_g` accounts).
-- [`QUICKSTART_LXPLUS.md`](QUICKSTART_LXPLUS.md) — HTCondor at CERN.
+- [`deploy-lxplus.md`](deploy-lxplus.md) — HTCondor at CERN.
 
 ## Architecture
 
@@ -132,7 +132,7 @@ no-op cost when `CLUSTER=slurm`, since `SlurmAdapter` lives in
    `CLUSTER=mycluster` plus the cluster-specific env keys.
 4. **New `dataprod/monitor_jobs.<cluster>.sh`** if the queue tool isn't
    `squeue` or `condor_q`.
-5. Run the per-cluster verification from `QUICKSTART_LXPLUS.md` Step
+5. Run the per-cluster verification from `deploy-lxplus.md` Step
    5/6 against the new cluster.
 
 No other files change.

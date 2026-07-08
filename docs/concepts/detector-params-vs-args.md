@@ -35,7 +35,7 @@ DetectorParams(
 )
 ```
 The `*_dev` leaves are the fittable λ-deviation curves — one value per control wavelength
-(see [wavelength physics](concepts/wavelength.md)); `dev ≡ 1` reproduces the pure medium
+(see [wavelength physics](wavelength.md)); `dev ≡ 1` reproduces the pure medium
 reference.
 
 Notes / decisions per field:
@@ -79,8 +79,12 @@ Notes / decisions per field:
 > either a pytree leaf or an explicit argument, and this is enforced by a repo test
 > (`test_no_env_reads_in_lucid_package`).
 
-## One-line
-A leaf is in a fit pytree iff some run might calibrate it; DetectorParams = the detector's physical+response DOF nested
-by physics (with `per_pmt` the Schur block, `tts`/`spe_width` fields, reflection a superset the model picks from);
-everything else — geometry, the medium reference shapes, control_λ, the source setup, the reflection-model choice, N/K/
-temperature, the overlap correction, n_group, numerical guards — is an arg.
+## In short
+
+- A leaf belongs in a fit pytree **iff some run might calibrate it**.
+- `DetectorParams` = the detector's physical + response degrees of freedom, nested by physics
+  (`per_pmt` is the Schur block; `tts`/`spe_width` are real fields; reflection is a superset
+  the chosen model picks from).
+- Everything else — geometry, medium reference shapes, `control_λ`, the source setup, the
+  reflection-model choice, `N`/`K`/`temperature`, the overlap correction, `n_group`,
+  numerical guards — is an **arg**.

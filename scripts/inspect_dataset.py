@@ -3,7 +3,7 @@
 `lucid-run-job` writes four parallel HDF5 files per batch under
 `<output_dir>/{sensor,hits,step,labl}/wc_*_<F:04d>.h5`. This prints a text summary — event
 count, per-event array shapes, charge/hit stats — without needing a notebook or a graphics
-window. Full schema: docs/LUCID_DATASET.md.
+window. Full schema: docs/reference/dataset-schema.md.
 
 Run:  python scripts/inspect_dataset.py --path OUTDIR              # batch 0 of a dataset dir
       python scripts/inspect_dataset.py --path OUTDIR --batch 2    # another file_index

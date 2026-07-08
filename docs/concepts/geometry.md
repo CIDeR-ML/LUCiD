@@ -11,11 +11,13 @@ geometry has a matching propagator in `lucid/propagation/`.
 | `cylinder` | `Cylinder` | SK, HK, WCTE (algorithmic `*_like`, or measured PMTs via `.npz`) |
 | `sphere` | `Sphere` | JUNO, TAO |
 | `box` | `Box` | test / segmented geometries |
-| `string` | `StringTelescope` | IceCube-style neutrino telescopes (DOMs on vertical strings) |
+| `string` | `StringTelescope` | IceCube-style neutrino telescopes (DOMs — digital optical modules — on vertical strings) |
 
 Cylinders can be built **algorithmically** (`SK_like`, `WCTE_like`) or from **measured PMT
-positions** via `Cylinder.from_pmt_file(npz)` (`SK`, `HK`, `WCTE` from public WCSim geofiles). The
-`.npz` schema is documented in `lucid/geometry/PMT_NPZ_SCHEMA.md`; convert a geofile to a
+positions** via `Cylinder.from_pmt_file(npz)` (`SK`, `HK`, `WCTE` from public WCSim geofiles —
+SK/HK = Super-/Hyper-Kamiokande, WCTE = the Water Cherenkov Test Experiment). The full set of
+bundled configurations is catalogued in [bundled detectors](../getting-started/detectors.md). The
+`.npz` schema is documented in `../reference/pmt-npz-schema.md`; convert a geofile to a
 schema `.npz` with `scripts/geofile_to_npz.py`.
 
 ## Two JSON files per detector
