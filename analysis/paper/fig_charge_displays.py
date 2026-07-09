@@ -44,9 +44,9 @@ DEFAULT_ROOT = REPO_ROOT / 'data' / 'water' / 'muon' / '1000MeV_100events.root'
 
 # (label, geom config, physics config) — one water event rendered in each geometry.
 DETECTORS = [
-    ('Box',      'MidBox_geom_config.json',  'MidBox_physics_config.json'),
     ('Cylinder', 'SK_like_geom_config.json', 'SK_like_physics_config.json'),
     ('Sphere',   'JUNO_geom_config.json',    'JUNO_physics_config.json'),
+    ('Box',      'MidBox_geom_config.json',  'MidBox_physics_config.json'),
 ]
 COLUMNS = ['Data', 'Prediction']
 
