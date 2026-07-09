@@ -1,0 +1,1945 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Differentiable photon simulation for optical particle detectors">
+      
+      
+      
+        <link rel="canonical" href="https://cider-ml.github.io/LUCiD/reference/digitizer-and-trigger/">
+      
+      
+        <link rel="prev" href="../working-with-data/">
+      
+      
+        <link rel="next" href="../pmt-npz-schema/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+    
+    
+      
+        <title>Digitizer & trigger - LUCiD</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.484c7ddc.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#digitizer-trigger" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="LUCiD" class="md-header__button md-logo" aria-label="LUCiD" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            LUCiD
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Digitizer & trigger
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m17.75 4.09-2.53 1.94.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94L12.44 4l1.06-3 1.06 3zm3.5 6.91-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95zm-2.28 4.95c.83-.08 1.72 1.1 1.19 1.85-.32.45-.66.87-1.08 1.27C15.17 23 8.84 23 4.94 19.07c-3.91-3.9-3.91-10.24 0-14.14.4-.4.82-.76 1.27-1.08.75-.53 1.93.36 1.85 1.19-.27 2.86.69 5.83 2.89 8.02a9.96 9.96 0 0 0 8.02 2.89m-1.64 2.02a12.08 12.08 0 0 1-7.8-3.47c-2.17-2.19-3.33-5-3.49-7.82-2.81 3.14-2.7 7.96.31 10.98 3.02 3.01 7.84 3.12 10.98.31"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 7a5 5 0 0 1 5 5 5 5 0 0 1-5 5 5 5 0 0 1-5-5 5 5 0 0 1 5-5m0 2a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0-7 2.39 3.42C13.65 5.15 12.84 5 12 5s-1.65.15-2.39.42zM3.34 7l4.16-.35A7.2 7.2 0 0 0 5.94 8.5c-.44.74-.69 1.5-.83 2.29zm.02 10 1.76-3.77a7.131 7.131 0 0 0 2.38 4.14zM20.65 7l-1.77 3.79a7.02 7.02 0 0 0-2.38-4.15zm-.01 10-4.14.36c.59-.51 1.12-1.14 1.54-1.86.42-.73.69-1.5.83-2.29zM12 22l-2.41-3.44c.74.27 1.55.44 2.41.44.82 0 1.63-.17 2.37-.44z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/CIDeR-ML/LUCiD" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    CIDeR-ML/LUCiD
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="LUCiD" class="md-nav__button md-logo" aria-label="LUCiD" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    LUCiD
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/CIDeR-ML/LUCiD" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    CIDeR-ML/LUCiD
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting Started
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Getting Started
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/install/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Install
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/quickstart/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quickstart
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/detectors/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Bundled detectors
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Concepts
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Concepts
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/photon-pipeline/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The photon pipeline
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/geometry/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Geometry & configuration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/detector-params-vs-args/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Parameters (DetectorParams)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/wavelength/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Wavelength physics
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/materials/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Materials (water / WbLS / ice)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Guides
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Guides
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/reconstruction/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reconstruction
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/calibration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Calibration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/model-your-own-detector/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Model your own detector
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4_4" id="__nav_4_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Producing datasets
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Producing datasets
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/production/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/production/local/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Local (with PhotonSim)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/production/docker/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Docker
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_4_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4_4_4" id="__nav_4_4_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Cluster deployment
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_4_4_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4_4_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Cluster deployment
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/production/cluster-abstraction/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    How cluster targeting works
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/production/deploy-s3df/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    S3DF (SLAC)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/production/deploy-nersc/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    NERSC (Perlmutter)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/production/deploy-lxplus/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    LXPLUS (CERN)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guides/production/siren-training-inputs/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Training the SIREN emitter
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../cli/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    CLI
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../config/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Configuration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../dataset-schema/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Dataset schema
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../working-with-data/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Working with data
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Digitizer & trigger
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Digitizer & trigger
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#the-digitizer-models" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The digitizer models
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#config-keys" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Config keys
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-trigger" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The trigger
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dark-noise" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Dark noise
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#try-it-without-photonsim" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Try it without PhotonSim
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#known-behaviors" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Known behaviors
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#choosing-a-model" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Choosing a model
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../pmt-npz-schema/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    PMT .npz schema
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="https://github.com/CIDeR-ML/LUCiD/blob/main/CONTRIBUTING.md" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Contributing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#the-digitizer-models" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The digitizer models
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#config-keys" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Config keys
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-trigger" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The trigger
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dark-noise" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Dark noise
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#try-it-without-photonsim" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Try it without PhotonSim
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#known-behaviors" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Known behaviors
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#choosing-a-model" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Choosing a model
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="digitizer-trigger">Digitizer &amp; trigger<a class="headerlink" href="#digitizer-trigger" title="Permanent link">&para;</a></h1>
+<p>The <a href="../../concepts/photon-pipeline/">photon pipeline</a> is differentiable end to end, but that
+pipeline stops at <code>sensor_response</code>: a per-PMT charge and a soft-min first-arrival time. Real
+front-end electronics don't record that directly — they integrate charge in time windows, apply
+a threshold, and a separate DAQ decides whether to read the event out at all. <code>lucid/simulation/digitizer.py</code>
+and <code>lucid/simulation/trigger.py</code> model that stage. They are plain NumPy (no JAX, no gradients)
+and only run in the production path (<a href="../cli/#lucid-run-job-produce-a-dataset"><code>lucid-run-job</code></a>,
+see also the <a href="../../guides/production/local/">local production guide</a>), not in the reconstruction
+or calibration forward model.</p>
+<h2 id="the-digitizer-models">The digitizer models<a class="headerlink" href="#the-digitizer-models" title="Permanent link">&para;</a></h2>
+<p><code>digitizer.py</code> turns a flat per-photon list <code>(sensor_idx, time, charge)</code> into <strong>digits</strong> — recorded
+hits, one row per integration window that clears threshold. A sensor can produce more than one
+digit per event if light arrives in separated time clusters (delayed coincidence, pile-up, dark
+noise). Every model shares the same windowing code path; <code>basic</code> is not special-cased, it is
+simply the preset with an infinite integration window, so every sensor collapses to exactly one
+digit — the historical one-hit-per-sensor behavior, reproduced for backward compatibility.</p>
+<p>The three presets, from <code>MODEL_PRESETS</code> in <code>lucid/simulation/digitizer.py</code>:</p>
+<table>
+<thead>
+<tr>
+<th>model</th>
+<th>integration window</th>
+<th>deadtime</th>
+<th>threshold</th>
+<th>charge model</th>
+<th>time model</th>
+<th>dark rate</th>
+<th>WCSim provenance</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>basic</code></td>
+<td>infinite (<code>None</code>)</td>
+<td>0 ns</td>
+<td>0 pe</td>
+<td><code>legacy</code> (the historical <code>sk_like</code> fractional smear)</td>
+<td><code>none</code></td>
+<td>0 kHz</td>
+<td>none — idealized passthrough, kept for parity</td>
+</tr>
+<tr>
+<td><code>ski</code></td>
+<td>200 ns</td>
+<td>0 ns</td>
+<td>0.25 pe</td>
+<td><code>spe</code> (sampled SK SPE spectrum)</td>
+<td><code>sk_gauss</code></td>
+<td>4.2 kHz</td>
+<td><code>WCSimWCDigitizer.hh:97-98</code> (window/deadtime), <code>WCSimPMTObject.cc</code> <code>Getqpe</code> + HitTimeSmearing <code>:88-99</code> (SK charge/time), <code>:262</code> (dark rate)</td>
+</tr>
+<tr>
+<td><code>hk</code></td>
+<td>200 ns</td>
+<td>0 ns</td>
+<td>0.25 pe</td>
+<td><code>spe</code> (sampled HK SPE spectrum)</td>
+<td><code>hk_emg</code></td>
+<td>4.2 kHz</td>
+<td>same digitizer as <code>ski</code> (WCSim ships one digitizer, SKI — there is no separate QBEE model); <code>WCSimPMTObject.cc</code> HitTimeSmearing <code>:2124-2138</code> (HK Box&amp;Line time response, <code>R12860</code>), <code>:2295</code> (dark rate)</td>
+</tr>
+</tbody>
+</table>
+<p>Both <code>ski</code> and <code>hk</code> also apply a 0.4 ns TDC truncation after the time-jitter model (WCSim SKI
+timing precision, <code>WCSimWCDigitizer.hh:99</code>), and sample charge from a fitted Gaussian+exponential
+single-photoelectron spectrum (Bellamy et al. 1994, NIM A 339 468) rather than a Gaussian
+resolution function. <code>ski</code>'s SPE fit and <code>hk</code>'s SPE fit differ (<code>_SPE_SK</code> vs <code>_SPE_HK</code> in the
+module) — <code>hk</code>'s HitTimeSmearing is also a different functional form (exponentially-modified
+Gaussian vs pure Gaussian for <code>ski</code>).</p>
+<p>Algorithm, per sensor (<code>digitize_event</code>, mirroring WCSim's SKI integrator): sort hits by time,
+open an integration window at the first hit, sum charge over <code>[t0, t0+window]</code>, emit a digit if
+the integrated charge clears <code>threshold</code>, veto hits for the following <code>deadtime</code>, and repeat from
+the next surviving hit. <code>window=None</code> makes every group "simple" (fits in one window), which is
+what makes <code>basic</code> collapse to one digit per sensor.</p>
+<h2 id="config-keys">Config keys<a class="headerlink" href="#config-keys" title="Permanent link">&para;</a></h2>
+<p>A dataset config (the JSON passed to <code>lucid-run-job --config ...</code>) enables the digitizer and
+trigger with two optional top-level blocks, <code>"digitizer"</code> and <code>"trigger"</code>. Both are read by
+<code>_read_digitizer_cfg</code> / <code>_read_trigger_cfg</code> in <code>lucid/production/run_job.py</code>: the dataset config
+owns the block if present; otherwise the loader falls back to the detector's
+<code>*_physics_config.json</code> (see the <a href="../config/">config reference</a> for that file's other keys —
+backward compatibility with older configs that put digitizer/trigger settings there); if neither
+has it, digitizer defaults to <code>basic</code> and the trigger is off.</p>
+<p><code>"digitizer"</code> may be a bare model name or a dict with a <code>"model"</code> key plus overrides — any extra
+key (e.g. <code>dark_rate_khz</code>, <code>threshold_pe</code>) is merged on top of the preset
+(<code>resolve_model_config</code> in <code>digitizer.py</code> does <code>dict(MODEL_PRESETS[name]).update(overrides)</code>).</p>
+<p><code>lucid/production/configs/GeV/01_mu.json</code> (single muon, HK detector) enables the <code>hk</code> digitizer
+and a real readout trigger (excerpted — the file has the usual particle/energy/output keys too):</p>
+<div class="highlight"><pre><span></span><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">&quot;detector&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;HK&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;digitizer&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nt">&quot;model&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;hk&quot;</span>
+<span class="w">  </span><span class="p">},</span>
+<span class="w">  </span><span class="nt">&quot;selection&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nt">&quot;mode&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;trigger&quot;</span>
+<span class="w">  </span><span class="p">},</span>
+<span class="w">  </span><span class="nt">&quot;trigger&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nt">&quot;window_ns&quot;</span><span class="p">:</span><span class="w"> </span><span class="mf">200.0</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">&quot;n_thr&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">45</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">&quot;pad_before_ns&quot;</span><span class="p">:</span><span class="w"> </span><span class="mf">300.0</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">&quot;pad_after_ns&quot;</span><span class="p">:</span><span class="w"> </span><span class="mf">300.0</span>
+<span class="w">  </span><span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div>
+<p>Note that this block's <code>n_thr: 45</code> and <code>pad_*: 300.0</code> <strong>override</strong> the <code>TriggerConfig</code> library
+defaults (<code>n_thr=30</code>, <code>pad_before_ns=pad_after_ns=30</code>, documented under <a href="#the-trigger">The trigger</a>
+below). That is deliberate: the bundled HK configs ship a <em>tuned</em> trigger for that detector, so the
+class defaults are a neutral fallback, not the operating point any shipped config runs at — read the
+config block, not the dataclass, to know what a given dataset used.</p>
+<p><code>lucid/production/configs/GeV/11_mu_pi_plus_pi_minus.json</code> (three-particle event on the same
+detector) uses the identical digitizer/trigger block — the block is copied per dataset config, not
+inherited automatically, so multi-particle and single-particle configs for the same detector must
+each declare it if they want the same electronics model.</p>
+<p>The <code>"selection"</code> block is a separate, truth-level knob (<code>_read_min_physics_hits</code> in
+<code>run_job.py</code>) that decides which interactions are written at all: <code>{"mode": "min_physics_hits",
+"n": N}</code> keeps interactions with at least <code>N</code> real (non-dark) hits — a cheap stand-in trigger that
+doesn't touch digits — while <code>{"mode": "trigger"}</code> defers entirely to the real readout trigger
+below (in which case <code>_read_min_physics_hits</code> returns <code>None</code> and the digit-level gate is the only
+filter).</p>
+<h2 id="the-trigger">The trigger<a class="headerlink" href="#the-trigger" title="Permanent link">&para;</a></h2>
+<p><code>trigger.py</code> implements a sliding-window hit-sum trigger over the detector-wide digit times — the
+SK-like N200 trigger, applied after digitization rather than to raw photon hits. <code>TriggerConfig</code>
+holds four fields:</p>
+<ul>
+<li><code>window_ns</code> — the coincidence window width (SK-like default 200 ns; distinct from the
+  digitizer's own per-sensor integration window).</li>
+<li><code>n_thr</code> — the detector-wide hit multiplicity that must be reached inside the window to fire
+  (default 30).</li>
+<li><code>pad_before_ns</code> / <code>pad_after_ns</code> — how far the recorded gate extends before the up-crossing and
+  after the down-crossing (default 30 ns each; a config may also set a single symmetric <code>pad_ns</code>,
+  which <code>TriggerConfig.from_block</code> expands to both).</li>
+</ul>
+<p><code>find_trigger_gates</code> computes a trailing-window multiplicity <code>m(t) = #hits in (t-window, t]</code>,
+opens a gate when it crosses <code>n_thr</code> <strong>up</strong> (minus <code>pad_before_ns</code>), closes it on the following
+down-crossing (plus <code>pad_after_ns</code>), and merges overlapping gates. <code>apply_trigger</code> keeps only
+in-gate digits, canonically re-sorts them by <code>(window, sensor_idx, T)</code>, remaps the <code>digit_idx</code>
+foreign keys in the hits/segment decompositions, and returns the per-window gate list alongside
+the filtered digits — or <code>None</code> if nothing in the event crossed threshold.</p>
+<p>Selection interacts with the trigger at the event level, not just the digit level: when a config
+sets <code>"selection": {"mode": "trigger"}</code>, an event that never crosses <code>n_thr</code> produces no windows
+at all, and <code>apply_trigger</code> returning <code>None</code> means the whole event is dropped from the dataset —
+it doesn't appear as an empty entry, it is simply <strong>absent</strong>, leaving gaps in the batch's
+<code>source_event_idx</code>. The recorded per-window gates themselves (<code>window_start</code>, <code>window_end</code>, and
+the CSR <code>digit_offsets</code> into the sensor digit list) are written to <code>labl.h5</code>'s <code>per_window</code> group
+— see the <a href="../dataset-schema/">dataset schema</a> for the exact layout rather than duplicating it
+here.</p>
+<h2 id="dark-noise">Dark noise<a class="headerlink" href="#dark-noise" title="Permanent link">&para;</a></h2>
+<p>Dark counts are generated directly in <code>digitizer.py</code> (<code>generate_dark_noise</code>): a Poisson number of
+hits per sensor with mean <code>rate_khz · Δt · 1e-6</code> (rate in kHz, <code>Δt</code> in ns — the <code>1e-6</code> converts
+kHz·ns to a count), spread uniformly across the event's readout span (the time range of the real
+hits, padded by <code>readout_pad_ns</code>, default 100 ns), each worth <code>charge_pe=1.0</code> p.e. before the
+digitizer sees it.
+These synthetic hits are concatenated onto the real photon list before windowing, so a dark hit
+can extend a digit's integration window or is absorbed into one if it falls inside a real pulse.</p>
+<p>Dark digits are labelled in the <code>hits.h5</code> decomposition, not hidden: <code>digitize_and_decompose</code>
+tags every dark-noise row with <code>emission_process = EMISSION_PROCESS_DARK</code> (value <code>2</code>, alongside
+<code>0</code> = Cherenkov and <code>1</code> = scintillation) and <code>particle_idx = -1</code> / <code>segment_idx = -1</code> (no owning
+particle or track), so <code>sensor.h5</code> stays a clean <code>(sensor_idx, PE, T)</code> list while <code>hits.h5</code> still
+records which contribution was noise.</p>
+<p>Real deposits pass through a readout time cap before dark generation: anything later than
+<code>_MAX_DIGIT_TIME_NS = 1e5</code> ns (100 μs) relative to the event's reference time is dropped
+before windowing. The cap exists for late nuclear-channel light (neutron capture,
+de-excitation), which can legitimately arrive ms–s after the primary interaction — far
+outside anything a real detector reads out. Since the dark-noise window is then built from
+the surviving hits' time range, the dark counts are bounded by construction too.</p>
+<h2 id="try-it-without-photonsim">Try it without PhotonSim<a class="headerlink" href="#try-it-without-photonsim" title="Permanent link">&para;</a></h2>
+<p>The digitizer and trigger are pure NumPy functions over <code>(sensor_idx, time, charge)</code> arrays, so
+you can exercise them on a synthetic event without running PhotonSim or importing JAX:</p>
+<div class="highlight"><pre><span></span><code><span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">lucid.simulation.digitizer</span><span class="w"> </span><span class="kn">import</span> <span class="n">resolve_model_config</span><span class="p">,</span> <span class="n">digitize_and_decompose</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">lucid.simulation.trigger</span><span class="w"> </span><span class="kn">import</span> <span class="n">TriggerConfig</span><span class="p">,</span> <span class="n">apply_trigger</span>
+
+<span class="n">rng</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">default_rng</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+
+<span class="c1"># A synthetic &quot;event&quot;: 40 photon hits on distinct PMTs (of 5000 in the detector),</span>
+<span class="c1"># arriving in a fast ~15 ns burst around t=1000 ns, one photoelectron each, all</span>
+<span class="c1"># from the same truth particle/segment.</span>
+<span class="n">n_sensors</span> <span class="o">=</span> <span class="mi">5000</span>
+<span class="n">n_hits</span> <span class="o">=</span> <span class="mi">40</span>
+<span class="n">sensor_idx</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="n">n_hits</span><span class="p">)</span>
+<span class="n">t_true</span> <span class="o">=</span> <span class="mf">1000.0</span> <span class="o">+</span> <span class="n">rng</span><span class="o">.</span><span class="n">uniform</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">15</span><span class="p">,</span> <span class="n">n_hits</span><span class="p">)</span>
+<span class="n">t_reco</span> <span class="o">=</span> <span class="n">t_true</span><span class="o">.</span><span class="n">copy</span><span class="p">()</span>               <span class="c1"># no TTS in this toy example</span>
+<span class="n">charge</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">ones</span><span class="p">(</span><span class="n">n_hits</span><span class="p">)</span>
+<span class="n">particle_idx</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="n">n_hits</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">int64</span><span class="p">)</span>
+<span class="n">segment_idx</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="n">n_hits</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">int64</span><span class="p">)</span>
+<span class="n">emission_process</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="n">n_hits</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">int64</span><span class="p">)</span>   <span class="c1"># 0 = Cherenkov</span>
+
+<span class="n">model</span> <span class="o">=</span> <span class="n">resolve_model_config</span><span class="p">(</span><span class="s2">&quot;hk&quot;</span><span class="p">)</span>   <span class="c1"># HK preset: 200 ns window, 0.25 pe thr, 4.2 kHz dark</span>
+
+<span class="n">sensor_digits</span><span class="p">,</span> <span class="n">hits_sparse</span><span class="p">,</span> <span class="n">seg_hits</span> <span class="o">=</span> <span class="n">digitize_and_decompose</span><span class="p">(</span>
+    <span class="n">sensor_idx</span><span class="o">=</span><span class="n">sensor_idx</span><span class="p">,</span> <span class="n">charge</span><span class="o">=</span><span class="n">charge</span><span class="p">,</span> <span class="n">t_true</span><span class="o">=</span><span class="n">t_true</span><span class="p">,</span> <span class="n">t_reco</span><span class="o">=</span><span class="n">t_reco</span><span class="p">,</span>
+    <span class="n">particle_idx</span><span class="o">=</span><span class="n">particle_idx</span><span class="p">,</span> <span class="n">segment_idx</span><span class="o">=</span><span class="n">segment_idx</span><span class="p">,</span> <span class="n">emission_process</span><span class="o">=</span><span class="n">emission_process</span><span class="p">,</span>
+    <span class="n">n_sensors</span><span class="o">=</span><span class="n">n_sensors</span><span class="p">,</span> <span class="n">model</span><span class="o">=</span><span class="n">model</span><span class="p">,</span> <span class="n">rng</span><span class="o">=</span><span class="n">rng</span><span class="p">,</span>
+    <span class="n">dark_rate_khz</span><span class="o">=</span><span class="n">model</span><span class="p">[</span><span class="s2">&quot;dark_rate_khz&quot;</span><span class="p">],</span> <span class="n">readout_pad_ns</span><span class="o">=</span><span class="mf">100.0</span><span class="p">)</span>
+
+<span class="n">n_dark</span> <span class="o">=</span> <span class="nb">int</span><span class="p">((</span><span class="n">hits_sparse</span><span class="p">[</span><span class="s2">&quot;emission_process&quot;</span><span class="p">]</span> <span class="o">==</span> <span class="mi">2</span><span class="p">)</span><span class="o">.</span><span class="n">sum</span><span class="p">())</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;digits: </span><span class="si">{</span><span class="n">sensor_digits</span><span class="p">[</span><span class="s1">&#39;sensor_idx&#39;</span><span class="p">]</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="si">}</span><span class="s2"> &quot;</span>
+      <span class="sa">f</span><span class="s2">&quot;(physics hits: </span><span class="si">{</span><span class="n">n_hits</span><span class="si">}</span><span class="s2">, dark-tagged hit rows: </span><span class="si">{</span><span class="n">n_dark</span><span class="si">}</span><span class="s2">)&quot;</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;mean digit charge: </span><span class="si">{</span><span class="n">sensor_digits</span><span class="p">[</span><span class="s1">&#39;PE&#39;</span><span class="p">]</span><span class="o">.</span><span class="n">mean</span><span class="p">()</span><span class="si">:</span><span class="s2">.3f</span><span class="si">}</span><span class="s2"> pe &quot;</span>
+      <span class="sa">f</span><span class="s2">&quot;(sample sigma: </span><span class="si">{</span><span class="n">sensor_digits</span><span class="p">[</span><span class="s1">&#39;PE&#39;</span><span class="p">]</span><span class="o">.</span><span class="n">std</span><span class="p">()</span><span class="si">:</span><span class="s2">.3f</span><span class="si">}</span><span class="s2">)&quot;</span><span class="p">)</span>
+
+<span class="n">trig_cfg</span> <span class="o">=</span> <span class="n">TriggerConfig</span><span class="p">()</span>  <span class="c1"># window_ns=200, n_thr=30, pad_before/after=30 ns</span>
+<span class="n">result</span> <span class="o">=</span> <span class="n">apply_trigger</span><span class="p">(</span><span class="n">sensor_digits</span><span class="p">,</span> <span class="n">hits_sparse</span><span class="p">,</span> <span class="n">seg_hits</span><span class="p">,</span> <span class="n">trig_cfg</span><span class="p">)</span>
+<span class="k">if</span> <span class="n">result</span> <span class="ow">is</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="nb">print</span><span class="p">(</span><span class="s2">&quot;no trigger fired&quot;</span><span class="p">)</span>
+<span class="k">else</span><span class="p">:</span>
+    <span class="n">triggered_sd</span><span class="p">,</span> <span class="n">triggered_hits</span><span class="p">,</span> <span class="n">triggered_seg</span><span class="p">,</span> <span class="n">per_window</span> <span class="o">=</span> <span class="n">result</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;trigger fired: </span><span class="si">{</span><span class="n">per_window</span><span class="p">[</span><span class="s1">&#39;window_start&#39;</span><span class="p">]</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="si">}</span><span class="s2"> window(s), &quot;</span>
+          <span class="sa">f</span><span class="s2">&quot;kept </span><span class="si">{</span><span class="n">triggered_sd</span><span class="p">[</span><span class="s1">&#39;sensor_idx&#39;</span><span class="p">]</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="si">}</span><span class="s2">/</span><span class="si">{</span><span class="n">sensor_digits</span><span class="p">[</span><span class="s1">&#39;sensor_idx&#39;</span><span class="p">]</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="si">}</span><span class="s2"> digits&quot;</span><span class="p">)</span>
+    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;window: [</span><span class="si">{</span><span class="n">per_window</span><span class="p">[</span><span class="s1">&#39;window_start&#39;</span><span class="p">][</span><span class="mi">0</span><span class="p">]</span><span class="si">:</span><span class="s2">.1f</span><span class="si">}</span><span class="s2">, </span><span class="si">{</span><span class="n">per_window</span><span class="p">[</span><span class="s1">&#39;window_end&#39;</span><span class="p">][</span><span class="mi">0</span><span class="p">]</span><span class="si">:</span><span class="s2">.1f</span><span class="si">}</span><span class="s2">] ns&quot;</span><span class="p">)</span>
+</code></pre></div>
+<p>Output (seeded, deterministic):</p>
+<div class="highlight"><pre><span></span><code>digits: 44 (physics hits: 40, dark-tagged hit rows: 4)
+mean digit charge: 0.987 pe (sample sigma: 0.436)
+trigger fired: 1 window(s), kept 42/44 digits
+window: [983.2, 1237.6] ns
+</code></pre></div>
+<p>44 digits from 40 physics hits because 4.2 kHz of dark noise over the ~215 ns readout span across
+5000 sensors adds a handful of extra single-pe digits (here, 4); the trigger's default <code>n_thr=30</code>
+clears easily on the 40-hit burst and produces one gate, dropping the 2 digits that fell outside
+<code>window_ns + pad</code> of the burst.</p>
+<h2 id="known-behaviors">Known behaviors<a class="headerlink" href="#known-behaviors" title="Permanent link">&para;</a></h2>
+<p>Two edge cases worth knowing when interpreting datasets:</p>
+<ul>
+<li><strong>Dark noise needs at least one real hit.</strong> The dark-noise window is derived from the
+  event's real-hit time range, so an event with zero detected physics photons produces zero
+  dark digits (it cannot dark-trigger on its own).</li>
+<li><strong>Trigger decisions are grid-sensitive at exact ties.</strong> Digit times are TDC-rounded
+  (0.4 ns) and the default 200 ns window is an exact multiple of that grid, so a hit landing
+  on the same tick as another hit's window expiration can momentarily satisfy the threshold —
+  a 1 ns shift in one arrival can toggle a marginal trigger. Only relevant for events sitting
+  exactly at <code>n_thr</code>.</li>
+</ul>
+<h2 id="choosing-a-model">Choosing a model<a class="headerlink" href="#choosing-a-model" title="Permanent link">&para;</a></h2>
+<p>Use <code>basic</code> for anything where the electronics response itself isn't the point — quick
+turnaround datasets, ML training sets where you want the historical one-hit-per-sensor charge/time
+pair, or comparisons against older LUCiD datasets. Switch to <code>ski</code> or <code>hk</code> when you need the SPE
+charge resolution, PMT time jitter, and TDC granularity that a real SK- or HK-like readout
+contributes, e.g. when validating against WCSim or characterizing low-charge/near-threshold
+behavior. Only turn on the trigger block if you specifically care about DAQ acceptance and
+dark-noise-driven false triggers; if you just want to drop low-activity interactions, the cheaper
+<code>selection.mode = "min_physics_hits"</code> truth-level cut avoids running the digit-level trigger
+machinery entirely.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.sections", "navigation.top", "content.code.copy", "content.code.annotate", "search.suggest", "search.highlight"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+        <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+      
+    
+  </body>
+</html>
