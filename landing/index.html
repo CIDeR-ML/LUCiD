@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LUCiD — Differentiable photon simulation for optical particle detectors</title>
+  <meta name="description" content="LUCiD is the first end-to-end differentiable optical particle-detector simulator. Gradients flow through emission, propagation, scattering, and sensor response, turning calibration and track reconstruction into gradient-based optimization.">
+  <link rel="icon" type="image/svg+xml" href="assets/favicon.svg">
+  <link rel="stylesheet" href="styles.css">
+  <meta property="og:title" content="LUCiD — Differentiable photon simulation">
+  <meta property="og:description" content="End-to-end differentiable optical particle-detector simulator in JAX.">
+  <meta property="og:type" content="website">
+  <meta property="og:image" content="assets/detectors.png">
+</head>
+<body>
+  <header class="nav">
+    <a class="brand" href="./">
+      <img src="assets/favicon.svg" alt="" width="28" height="28">
+      <span>LUCiD</span>
+    </a>
+    <nav class="nav-links">
+      <a href="docs/">Docs</a>
+      <a href="https://arxiv.org/abs/2602.24129">Paper</a>
+      <a href="https://github.com/CIDeR-ML/LUCiD">GitHub</a>
+      <button id="theme-toggle" class="theme-toggle" aria-label="Toggle theme" title="Toggle light/dark">◐</button>
+    </nav>
+  </header>
+
+  <main>
+    <!-- HERO -->
+    <section class="hero">
+      <div class="hero-copy">
+        <p class="eyebrow">JAX · differentiable · end-to-end</p>
+        <h1>Differentiable photon simulation<br>for optical particle detectors</h1>
+        <p class="lede">
+          <strong>LUCiD</strong> is the first end-to-end <em>differentiable</em> optical
+          detector simulator. Gradients flow through emission, propagation, scattering, and
+          sensor response — so <strong>calibration</strong> and <strong>track
+          reconstruction</strong> become gradient-based optimization in one framework.
+        </p>
+        <div class="cta-row">
+          <a class="btn btn-primary" href="docs/">Read the docs →</a>
+          <a class="btn btn-ghost" href="docs/getting-started/install/">Install &amp; first event</a>
+        </div>
+        <p class="paper-note">
+          Accompanies <a href="https://arxiv.org/abs/2602.24129">arXiv:2602.24129</a> ·
+          water-Cherenkov · WbLS · neutrino telescopes · units in m, ns, MeV
+        </p>
+      </div>
+      <div class="hero-art">
+        <img src="assets/detectors.png" alt="Per-PMT charge displays for six detector geometries simulated in LUCiD" loading="eager">
+        <p class="art-caption">Per-PMT charge across six bundled geometries — one differentiable forward model.</p>
+      </div>
+    </section>
+
+    <!-- AT A GLANCE -->
+    <section class="band">
+      <h2>The framework at a glance</h2>
+      <div class="grid grid-4">
+        <article class="card">
+          <h3>One differentiable hub</h3>
+          <p><code>setup_event_simulator</code> returns a JIT-compiled callable mapping
+          (source, detector params) → per-PMT charge &amp; time. Everything downstream is
+          <code>vmap</code>/<code>scan</code>/<code>jit</code>.</p>
+        </article>
+        <article class="card">
+          <h3>Diverse geometries</h3>
+          <p>Cylinder (SK / HK / WCTE), sphere (JUNO), box, and neutrino-telescope strings
+          (IceCube). Water, water-based liquid scintillator, and ice — sixteen configs ship
+          in-tree.</p>
+        </article>
+        <article class="card">
+          <h3>SIREN light emitter</h3>
+          <p>A physics-informed sinusoidal network trained on GEANT4/PhotonSim photon tables
+          stands in for GEANT4 <em>inside</em> the differentiable loop.</p>
+        </article>
+        <article class="card">
+          <h3>Gradient calibration &amp; recon</h3>
+          <p>A shared Gauss–Newton engine (<code>lucid.fitting</code>) with Fisher /
+          Cramér–Rao uncertainties fits optical parameters and particle tracks alike.</p>
+        </article>
+      </div>
+    </section>
+
+    <!-- WHAT CAN I DO -->
+    <section class="band alt">
+      <h2>What do you want to do?</h2>
+      <div class="grid grid-3">
+        <a class="card card-link" href="docs/concepts/photon-pipeline/">
+          <h3>Simulate &amp; display an event →</h3>
+          <p>Follow a photon from emission to per-PMT hits through the differentiable
+          pipeline, then render the event.</p>
+        </a>
+        <a class="card card-link" href="docs/guides/reconstruction/">
+          <h3>Reconstruct a track →</h3>
+          <p>Fit vertex, direction, and energy by gradient descent through the forward
+          model with the Gauss–Newton engine.</p>
+        </a>
+        <a class="card card-link" href="docs/guides/calibration/">
+          <h3>Calibrate optical parameters →</h3>
+          <p>Recover scattering, absorption, reflectivity, and QE — with Cramér–Rao error
+          bars — from calibration sources.</p>
+        </a>
+      </div>
+    </section>
+
+    <!-- QUICKSTART CODE -->
+    <section class="band split">
+      <div class="split-copy">
+        <h2>Up and running in one <code>pip install</code></h2>
+        <p>The core install needs only JAX — <strong>no GEANT4 or PhotonSim</strong> — to
+        simulate, calibrate, and reconstruct. The example emitter and photon tables download
+        with one script.</p>
+        <a class="btn btn-ghost" href="docs/getting-started/quickstart/">Full quickstart →</a>
+      </div>
+      <div class="split-code">
+<pre><code><span class="c"># core install — just JAX</span>
+pip install -e .
+<span class="c"># example SIREN emitter + PhotonSim tables</span>
+./scripts/download_data.sh
+
+<span class="c"># simulate your first event</span>
+python examples/hello_simulate.py</code></pre>
+      </div>
+    </section>
+
+    <!-- CITE -->
+    <section class="band cite">
+      <h2>Cite LUCiD</h2>
+      <p>If LUCiD helps your work, please cite the paper:</p>
+      <blockquote>
+        Alterkait, Jesús-Valls, Matsumoto, de Perio, Terao,
+        <em>End-to-end Differentiable Calibration and Reconstruction for Optical Particle
+        Detectors</em>, <a href="https://arxiv.org/abs/2602.24129">arXiv:2602.24129</a> (2026).
+      </blockquote>
+      <p class="fine">See <a href="https://github.com/CIDeR-ML/LUCiD/blob/main/CITATION.cff"><code>CITATION.cff</code></a> for machine-readable metadata.</p>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <div class="footer-inner">
+      <div>
+        <a class="brand" href="./">
+          <img src="assets/favicon.svg" alt="" width="24" height="24">
+          <span>LUCiD</span>
+        </a>
+        <p class="fine">Light-based Unified Calibration and trackIng Differentiable simulation.</p>
+      </div>
+      <nav class="footer-links">
+        <a href="docs/">Documentation</a>
+        <a href="docs/getting-started/install/">Install</a>
+        <a href="https://github.com/CIDeR-ML/LUCiD">GitHub</a>
+        <a href="https://arxiv.org/abs/2602.24129">Paper</a>
+      </nav>
+    </div>
+    <p class="fine copyright">Built with JAX · CIDeR-ML</p>
+  </footer>
+
+  <script>
+    (function () {
+      var key = 'lucid-theme';
+      var root = document.documentElement;
+      var saved = localStorage.getItem(key);
+      if (saved) root.setAttribute('data-theme', saved);
+      document.getElementById('theme-toggle').addEventListener('click', function () {
+        var cur = root.getAttribute('data-theme');
+        if (!cur) cur = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+        var next = cur === 'dark' ? 'light' : 'dark';
+        root.setAttribute('data-theme', next);
+        localStorage.setItem(key, next);
+      });
+    })();
+  </script>
+</body>
+</html>
