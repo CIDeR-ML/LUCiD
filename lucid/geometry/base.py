@@ -141,8 +141,14 @@ class Detector(ABC):
                                      plot_time=False, log_scale=False, title=None, 
                                      show_all_sensors=True, marker_size=6, show_colorbar=True,
                                      opacity=1.0, dark_theme=True, n_disc_segments=12, 
-                                     colorscale='viridis', surface_color='gray', 
-                                     inactive_color='red', inactive_opacity=0.3, figname=None):
+                                     colorscale='viridis', surface_color='gray',
+                                     inactive_color='red', inactive_opacity=0.3,
+                                     cmin=None, cmax=None, colorbar_label=None,
+                                     colorbar_thickness=20, colorbar_tickfont_size=None,
+                                     colorbar_x=1.0, colorbar_len=0.5,
+                                     colorbar_tickfont_family=None,
+                                     colorbar_tickvals=None, colorbar_ticktext=None,
+                                     figname=None, return_fig=False):
         """
         Visualize detector event data in 3D using circular discs oriented according to surface normals.
         Shows red discs for sensors without charge and color-coded discs for sensors with hits.
@@ -289,7 +295,12 @@ class Detector(ABC):
             if not log_scale:
                 colorbar_title = 'Time (ns)' if plot_time else 'Charge (PE)'
                 plot_color_values = color_values
-            
+
+            # Optional explicit colorbar label (e.g. for a ratio/fraction map
+            # where 'Charge (PE)' would be misleading).
+            if colorbar_label is not None:
+                colorbar_title = colorbar_label
+
             # Sort points by depth (z-coordinate) for better depth rendering
             depth_order = np.argsort(hit_positions[:, 2])
             hit_positions_sorted = hit_positions[depth_order]
@@ -301,6 +312,11 @@ class Detector(ABC):
             # Calculate surface normals for sorted sensors
             normals_sorted = calculate_surface_normals(self, sorted_indices)
             color_min, color_max = plot_color_values_sorted.min(), plot_color_values_sorted.max()
+            # Optional explicit colour range (e.g. pin a fraction map to [0, 1]).
+            if cmin is not None:
+                color_min = float(cmin)
+            if cmax is not None:
+                color_max = float(cmax)
             color_normalized = plot_color_values_sorted
             
             # Create individual disc meshes for hit sensors
@@ -349,24 +365,33 @@ class Detector(ABC):
                     lighting=dict(ambient=0.8, diffuse=0.8, specular=0.1),
                     showscale=show_colorbar
                 )
-                
+
+                # Pin the colour range (data min/max, or the explicit cmin/cmax)
+                # so the mapping is well-defined with or without a colorbar.
+                mesh_trace.update(cmin=color_min, cmax=color_max)
+
                 # Add colorbar settings if requested
                 if show_colorbar:
-                    # Map normalized color range back to original values for colorbar
-                    mesh_trace.update(
-                        cmin=color_min,
-                        cmax=color_max,
-                        colorbar=dict(
-                            title=dict(
-                                text=colorbar_title,
-                                font=dict(color=colorbar_color)
-                            ),
-                            tickfont=dict(color=colorbar_color),
-                            thickness=20,
-                            len=0.5,
-                            x=1.0
-                        )
+                    tickfont = dict(color=colorbar_color)
+                    if colorbar_tickfont_size is not None:
+                        tickfont['size'] = colorbar_tickfont_size
+                    if colorbar_tickfont_family is not None:
+                        tickfont['family'] = colorbar_tickfont_family
+                    colorbar_cfg = dict(
+                        title=dict(
+                            text=colorbar_title,
+                            font=dict(color=colorbar_color)
+                        ),
+                        tickfont=tickfont,
+                        thickness=colorbar_thickness,
+                        len=colorbar_len,
+                        x=colorbar_x
                     )
+                    if colorbar_tickvals is not None:
+                        colorbar_cfg['tickvals'] = colorbar_tickvals
+                    if colorbar_ticktext is not None:
+                        colorbar_cfg['ticktext'] = colorbar_ticktext
+                    mesh_trace.update(colorbar=colorbar_cfg)
                 
                 fig.add_trace(mesh_trace)
                 
@@ -447,6 +472,10 @@ class Detector(ABC):
             margin=dict(l=0, r=margin_right+0, t=0, b=0)
         )
         
+        # Return the figure object instead of displaying (e.g. for montaging).
+        if return_fig:
+            return fig
+
         # Save figure if filename is provided
         if figname:
             fig.write_image(figname, width=2000, height=2000, scale=2)
