@@ -2,7 +2,7 @@
 import jax
 import jax.numpy as jnp
 from lucid.simulation.optics import (
-    normalize, compute_reflection_direction, sample_cosine_hemisphere,
+    normalize,
     sample_scatter_distance, compute_scatter_direction,
     create_local_frame, solve_rayleigh_inverse_cdf,
 )
