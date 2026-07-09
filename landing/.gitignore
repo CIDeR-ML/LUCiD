@@ -1,0 +1,5 @@
+# The repo-root .gitignore excludes *.html / *.png / *.gif globally.
+# The landing page legitimately ships these, so re-include them here.
+!*.html
+!*.svg
+!assets/*.png

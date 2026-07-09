@@ -1,4 +1,8 @@
-# LUCiD
+# Documentation
+
+Welcome to the LUCiD docs. For the project overview, see the
+[LUCiD home page](../); this section is the technical documentation — install,
+concepts, guides, and reference.
 
 **Light-based Unified Calibration and trackIng Differentiable simulation** — the first
 end-to-end *differentiable* optical particle-detector simulator. Gradients flow through
