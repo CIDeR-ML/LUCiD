@@ -256,10 +256,14 @@ def setup_event_simulator(
     reflection_fn, build_refl_params = get_reflection_model(reflection_model)
 
     # ---- Select photon update function --------------------------------------
+    # Both paths get the SAME reflection model. The sampling path (data / non-expected-value
+    # truth) previously hard-coded scalar reflection, which silently desynced it from the
+    # differentiable forward whenever reflection_model != 'scalar'; binding reflection_fn here
+    # keeps the truth generator and the expected-value model consistent.
     if sim_config.is_data:
-        photon_update_fn = photon_iteration_sample
+        photon_update_fn = partial(photon_iteration_sample, reflection_fn=reflection_fn)
     elif sim_config.use_expected_value is False:
-        photon_update_fn = photon_iteration_sample
+        photon_update_fn = partial(photon_iteration_sample, reflection_fn=reflection_fn)
     else:
         photon_update_fn = jax.remat(
             make_photon_iteration_update_factors_safe(reflection_fn))

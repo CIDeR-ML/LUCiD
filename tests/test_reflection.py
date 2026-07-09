@@ -166,3 +166,50 @@ class TestScalarMixModel:
         rp = builder(dp)
         npt.assert_allclose(rp.wall_fspec, 0.0)
         npt.assert_allclose(rp.sensor_fspec, 0.0)
+
+
+class TestSamplePathHonorsModel:
+    """The sampling (data/truth) path must use the SAME reflection model as the
+    differentiable path — regression for the fix that unified photon_iteration_sample."""
+
+    def _reflect_args(self, refl_params, key):
+        # scatter_length huge -> always reaches the surface; sensor_rate=1 -> always reflects.
+        return dict(
+            position=jnp.zeros(3), direction=_DIR, time=jnp.asarray(0.0),
+            surface_distance=jnp.asarray(1.0), normal=_NORMAL,
+            scatter_length=jnp.asarray(1e9), mie_scatter_length=jnp.asarray(1e9),
+            g=jnp.asarray(0.9), refl_params=refl_params, absorption_length=jnp.asarray(1e9),
+            hit_sensor=jnp.asarray(True), lam=jnp.asarray(400.0), rng_key=key,
+            speed_of_light=jnp.asarray(0.2254))
+
+    def test_default_reflection_fn_is_scalar(self):
+        from lucid.simulation.photon_step import photon_iteration_sample
+        rp = ScalarReflection(wall_rate=jnp.asarray(1.0), sensor_rate=jnp.asarray(1.0))
+        for i in range(20):
+            k = jax.random.PRNGKey(i)
+            a = photon_iteration_sample(**self._reflect_args(rp, k))
+            b = photon_iteration_sample(**self._reflect_args(rp, k), reflection_fn=scalar_reflection)
+            for x, y in zip(a, b):
+                npt.assert_array_equal(x, y)   # default == explicit scalar, bit-for-bit
+
+    def test_sample_path_honors_scalar_mix(self):
+        from lucid.simulation.photon_step import photon_iteration_sample
+        from lucid.simulation.optics import compute_reflection_direction
+        specular = compute_reflection_direction(_DIR, _NORMAL)
+        sca = ScalarReflection(wall_rate=jnp.asarray(1.0), sensor_rate=jnp.asarray(1.0))
+        mix_spec = ScalarMixReflection(wall_rate=jnp.asarray(1.0), sensor_rate=jnp.asarray(1.0),
+                                       wall_fspec=jnp.asarray(0.0), sensor_fspec=jnp.asarray(1.0))
+        mix_diff = ScalarMixReflection(wall_rate=jnp.asarray(1.0), sensor_rate=jnp.asarray(1.0),
+                                       wall_fspec=jnp.asarray(0.0), sensor_fspec=jnp.asarray(0.0))
+        k = jax.random.PRNGKey(0)
+        # scalar sensor reflection is specular
+        d_sca = photon_iteration_sample(**self._reflect_args(sca, k), reflection_fn=scalar_reflection)[1]
+        npt.assert_allclose(d_sca, specular, atol=1e-6)
+        # scalar_mix sensor_fspec=1 -> also specular (honored)
+        d_mix_spec = photon_iteration_sample(**self._reflect_args(mix_spec, k),
+                                             reflection_fn=scalar_mix_reflection)[1]
+        npt.assert_allclose(d_mix_spec, specular, atol=1e-6)
+        # scalar_mix sensor_fspec=0 -> diffuse, NOT specular (proves the model is honored)
+        d_mix_diff = photon_iteration_sample(**self._reflect_args(mix_diff, k),
+                                             reflection_fn=scalar_mix_reflection)[1]
+        assert not bool(jnp.allclose(d_mix_diff, specular, atol=1e-3))
