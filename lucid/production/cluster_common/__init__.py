@@ -7,5 +7,5 @@ apptainer bind list — live in `cluster.py` as `ClusterAdapter` subclasses
 that are selected at runtime from the `CLUSTER` env var sourced via
 `user_paths.sh`.
 
-See `LUCiD/docs/CLUSTER_ABSTRACTION.md` for the architecture overview.
+See `LUCiD/docs/guides/production/cluster-abstraction.md` for the architecture overview.
 """

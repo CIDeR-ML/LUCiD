@@ -118,7 +118,7 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
     For each batch of events, writes four HDF5 files under ``output_dir``:
     ``sensor/wc_sensor_NNNN.h5``, ``hits/wc_hits_NNNN.h5``,
     ``step/wc_step_NNNN.h5``, ``labl/wc_labl_NNNN.h5``. See
-    ``docs/LUCID_DATASET.md`` for the full schema.
+    ``docs/reference/dataset-schema.md`` for the full schema.
 
     Parameters
     ----------

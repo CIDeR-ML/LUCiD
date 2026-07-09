@@ -372,7 +372,8 @@ def fit_track_multistart(model, obs_counts, obs_times, starts, *, nkeys=4, seed=
     def dloss(th):                                              # data loss at th, averaged over keys
         return float(np.mean([float(model.loss(th, oc, ot, k)) for k in keys]))
 
-    per_seed = [fit_track(model, oc, ot, s, nkeys=nkeys, seed=seed, hist=True, **kw) for s in starts]
+    per_seed = [fit_track(model, oc, ot, s, nkeys=nkeys, seed=seed, hist=True, verbose=verbose, **kw)
+                for s in starts]
     losses = [dloss(th) for th, _ in per_seed]
     # margin gate: switch off the preferred seed only when another beats it DECISIVELY
     base = losses[prefer]; thr = base - margin * abs(base); which = prefer

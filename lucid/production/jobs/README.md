@@ -7,12 +7,12 @@ by your `user_paths.sh`. Supported today: SLURM (S3DF) and HTCondor
 (LXPLUS).
 
 For the architecture see
-[`../../../docs/CLUSTER_ABSTRACTION.md`](../../../docs/CLUSTER_ABSTRACTION.md).
+[`../../../docs/guides/production/cluster-abstraction.md`](../../../docs/guides/production/cluster-abstraction.md).
 
 For per-cluster runbooks see
-[`../../../docs/QUICKSTART_S3DF.md`](../../../docs/QUICKSTART_S3DF.md)
+[`../../../docs/guides/production/deploy-s3df.md`](../../../docs/guides/production/deploy-s3df.md)
 and
-[`../../../docs/QUICKSTART_LXPLUS.md`](../../../docs/QUICKSTART_LXPLUS.md).
+[`../../../docs/guides/production/deploy-lxplus.md`](../../../docs/guides/production/deploy-lxplus.md).
 
 ## Layout
 
@@ -53,7 +53,7 @@ description (`.sbatch` for SLURM, `.sub` for HTCondor).
 ## Adding a third cluster
 
 See the "Adding a third cluster" section of
-[`../../../docs/CLUSTER_ABSTRACTION.md`](../../../docs/CLUSTER_ABSTRACTION.md).
+[`../../../docs/guides/production/cluster-abstraction.md`](../../../docs/guides/production/cluster-abstraction.md).
 Short version: write one new adapter under
 `lucid/production/cluster_common/<cluster>.py`, drop a
 `user_paths.<cluster>.sh.template` alongside the existing two, and

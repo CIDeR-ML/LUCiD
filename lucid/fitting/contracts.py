@@ -19,10 +19,10 @@ weight ``W`` either a per-row vector (lit-mask | 1/μ) or ``None``≡identity; t
 ``H = Σ (J·W)ᵀ J`` and gradient ``g = Σ (J·W)ᵀ r``. ``W`` is PRIVATE to each model's residual
 form (√-MSE vs Poisson) — the GN loop never sees the form.
 
-Recon recipe knobs (the validated ``RECON_GN``, RECO_PIPELINE §4; passed as kwargs to
-``fit_track``): ``nkeys=4, niters=250, lr=8.0, ridge_i=0.3, lam=0.01, refresh=8, readout='ming'``,
-SCALE9-preconditioned, AMP_DETACH in the time term. Calibration uses the GN+Schur defaults in
-``gauss_newton.fit`` (``ridge``/``mu``/``eigen_clip=True``/``readout='last'``).
+Recon recipe knobs (the validated Fisher-GN recipe, matching ``fit_track``'s current
+defaults): ``nkeys=8, niters=150, lr=4.0, lr_final=1.5, ridge_i=0.1, lam=0.01, refresh=8,
+readout='polyak'``, SCALE9-preconditioned, AMP_DETACH in the time term. Calibration uses the
+GN+Schur defaults in ``gauss_newton.fit`` (``ridge``/``mu``/``eigen_clip=True``/``readout='last'``).
 """
 from __future__ import annotations
 from typing import Protocol, Tuple, TYPE_CHECKING, runtime_checkable

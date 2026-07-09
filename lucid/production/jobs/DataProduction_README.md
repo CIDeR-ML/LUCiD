@@ -5,11 +5,11 @@ Cluster fan-out for `lucid-run-job`. The whole pipeline (gevgen → gntpc
 unified LUCiD apptainer image — one `apptainer exec` per job, no
 host-side build state. SLURM (S3DF) and HTCondor (LXPLUS) are both
 supported; the cluster is picked from your active `user_paths.sh`. See
-[`docs/CLUSTER_ABSTRACTION.md`](../../../docs/CLUSTER_ABSTRACTION.md).
+[`docs/guides/production/cluster-abstraction.md`](../../../docs/guides/production/cluster-abstraction.md).
 
 For a higher-level walkthrough see
-[`docs/QUICKSTART_S3DF.md`](../../../docs/QUICKSTART_S3DF.md) or
-[`docs/QUICKSTART_LXPLUS.md`](../../../docs/QUICKSTART_LXPLUS.md).
+[`docs/guides/production/deploy-s3df.md`](../../../docs/guides/production/deploy-s3df.md) or
+[`docs/guides/production/deploy-lxplus.md`](../../../docs/guides/production/deploy-lxplus.md).
 
 ## Quick start
 
@@ -223,7 +223,7 @@ Each sub-job is stamped with one partition by a smooth weighted round-robin,
 chosen at generation time, and the fan-out prints the resulting split. Which
 partitions to use, the weights, and why the choice is per-job are
 cluster-specific — see your cluster's quickstart, e.g.
-[`docs/QUICKSTART_S3DF.md`](../../../docs/QUICKSTART_S3DF.md).
+[`docs/guides/production/deploy-s3df.md`](../../../docs/guides/production/deploy-s3df.md).
 
 ## Output layout
 
@@ -244,7 +244,7 @@ OUTPUT_BASE_PATH/SK_like/           # detector chosen via submit_all_configs.sh 
 └── config_000002/
 ```
 
-See [`docs/LUCID_DATASET.md`](../../../docs/LUCID_DATASET.md) for the
+See [`docs/reference/dataset-schema.md`](../../../docs/reference/dataset-schema.md) for the
 schema (sensor / hits / edep / labl files, `config/` provenance
 group, particle categorization, segment merging rules).
 
