@@ -79,6 +79,13 @@ for integrity checks and fast event enumeration.
 
 ## File schemas
 
+!!! note "Time fields are `float64`"
+    Every time-valued dataset (`T`, `T_reco`, `time`, `t0`, `window_start/end`) is written as
+    `float64` (`_TIME_DTYPE`/`_T_DTYPE` in `lucid/sources/writer.py` and
+    `lucid/simulation/digitizer.py`). An absolute supernova `t0` sits at ~1e9–1e10 ns, where
+    `float32` (ULP ~64–1024 ns) would collapse distinct digit/dark times. Charge (`PE`) stays
+    `float32`.
+
 ### `sensor.h5` — recorded PMT digits (hit-making output)
 
 Post-smearing, t0-shifted. This is what the detector electronics record — a
@@ -101,7 +108,7 @@ sensor.h5
     │ attrs: source_event_idx, n_hits   (= number of digits)
     ├── sensor_idx            (n_hits,) uint16   — PMT index; may repeat (multi-hit)
     ├── PE                    (n_hits,) float32   — digit charge (post readout resolution)
-    └── T                     (n_hits,) float32   — digit first-arrival time, detector frame
+    └── T                     (n_hits,) float64   — digit first-arrival time, detector frame
 ```
 
 Notes:
@@ -136,7 +143,7 @@ hits.h5
     ├── digit_idx             (n_particle_hits,) int32   — FK to sensor.h5 digit (which recorded hit)
     ├── sensor_idx            (n_particle_hits,) uint16
     ├── PE                    (n_particle_hits,) float32   — pre-smearing per-source contribution
-    ├── T                     (n_particle_hits,) float32   — pre-smearing per-source, detector frame
+    ├── T                     (n_particle_hits,) float64   — pre-smearing per-source, detector frame
     └── emission_process      (n_particle_hits,) int8     — 0=Cherenkov, 1=scintillation, 2=dark noise
 ```
 
@@ -172,7 +179,7 @@ step.h5
     ├── start_x, start_y, start_z   (n_segments,) float32  — meters
     ├── end_x, end_y, end_z         (n_segments,) float32  — meters
     ├── dir_x, dir_y, dir_z         (n_segments,) float16
-    ├── time                       (n_segments,) float32   — ns, detector frame (t0-shifted)
+    ├── time                       (n_segments,) float64   — ns, detector frame (t0-shifted)
     ├── edep                       (n_segments,) float32   — MeV
     ├── beta_start                 (n_segments,) float32   — particle β at segment start
     ├── n_cherenkov                (n_segments,) int32     — Cherenkov photons emitted in segment
@@ -184,7 +191,7 @@ step.h5
         ├── digit_idx             (n_segment_hits,) int32  — FK to the sensor.h5 digit
         ├── sensor_idx            (n_segment_hits,) uint16 — FK to sensor_positions
         ├── PE                    (n_segment_hits,) float32 — segment's contribution to that (sensor, digit) PE
-        ├── T                     (n_segment_hits,) float32 — segment's first-arrival time in that digit (ns, detector frame)
+        ├── T                     (n_segment_hits,) float64 — segment's first-arrival time in that digit (ns, detector frame)
         └── emission_process      (n_segment_hits,) int8    — 0=Cherenkov, 1=scintillation
 ```
 
@@ -230,18 +237,18 @@ labl.h5
 └── event_NNN/
     │ attrs: source_event_idx, n_particles, n_tracks
     ├── per_event/
-    │   ├── t0                                   ()   float32 — true emission time
+    │   ├── t0                                   ()   float64 — true emission time
     │   └── contained                            ()   bool    — True iff every meaningful segment is fully inside detector; False for empty events
     ├── per_window/                              (triggered datasets only; n_win readout windows)
     │   │ attrs: n_windows
-    │   ├── window_start                         (n_win,)   float32 — gate start, detector frame [ns]
-    │   ├── window_end                           (n_win,)   float32 — gate end
+    │   ├── window_start                         (n_win,)   float64 — gate start, detector frame [ns]
+    │   ├── window_end                           (n_win,)   float64 — gate end
     │   └── digit_offsets                        (n_win+1,) int32   — CSR into sensor.h5: window w = digit rows [off[w], off[w+1])
     ├── per_interaction/                         (1 row for non-pile-up; N rows for N-way pile-up)
     │   ├── source_type, t0, vertex_{x,y,z}       — see save_labl_event docstring
     │   ├── n_primaries, n_particles              — ints per interaction
     │   ├── neutrino_pdg, neutrino_energy_MeV     — GENIE/supernova-only, zeroed for particle-gun
-    │   ├── interaction_channel, channel          — supernova-only: sntools channel code (int) + name ("ibd"/"es"/"o16e"/"o16eb")
+    │   ├── interaction_channel                   — supernova-only: sntools channel code (int32; e.g. ibd/es/o16e/o16eb)
     │   ├── contained                            (n_interactions,) bool — AND over particles attributed to this interaction; False if interaction has no particles
     │   └── CSR primary_{track_ids,pdgs,energies}_{offsets,data}
     ├── per_particle/                            (~8 rows for typical LUCiD events)

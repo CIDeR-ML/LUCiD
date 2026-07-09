@@ -59,16 +59,21 @@ echo "y" | ./submit_all_configs.sh -t -s -o /sdf/data/<user>/WAND/<date>_test
 Each config produces:
 
 ```
-<OUT>/<detector>/config_NNNNNN/      # default detector: SK_like
+<OUT>/<detector>/<block>/<split>/config_NN/   # e.g. HK/GeV/train/config_01
 ├── sensor/wc_sensor_0000.h5
 ├── hits/wc_hits_0000.h5
 ├── step/wc_step_0000.h5
 └── labl/wc_labl_0000.h5
 ```
 
-To run the same configs against a different geometry, pass `-D <name>`
-to `submit_all_configs.sh` (e.g. `-D HK`, `-D WCTE`). The name selects
-`LUCiD/config/<detector>_{geom,physics}_config.json`.
+The output path is `<detector>/<block>/<split>/config_NN`, where `<block>` is the
+config's parent folder (`GeV` / `Solar` / `SN` / `Test`) and `<split>` is `train`/`test`
+for the split blocks (`SN`/`Test` are flat, with no split layer). `config_NN` is
+zero-padded to **2** digits for the shipped (new-style) configs (`config_01` … `config_16`).
+The detector geometry comes from each config's own `detector` field — every shipped config
+sets it (`HK`). The `-D <name>` flag to `submit_all_configs.sh` (e.g. `-D WCTE`) is only a
+*fallback* for configs that omit `detector`; when a config sets it, `-D` is ignored. The name
+selects `LUCiD/config/<detector>_{geom,physics}_config.json`.
 
 ## Full production
 
@@ -139,7 +144,7 @@ is `labl/` (~8 `per_particle` rows and ~600 `per_track` rows per event; see the
 the four. **Measure, don't guess:** run one full (non-`--test`) batch, then
 
 ```bash
-du -sh <OUT>/<detector>/config_NNNNNN/{sensor,hits,step,labl}/wc_*_0000.h5
+du -sh <OUT>/<detector>/<block>/<split>/config_NN/{sensor,hits,step,labl}/wc_*_0000.h5
 ```
 
 and divide by that batch's `n_events` for a MB/event figure you can multiply up
@@ -234,11 +239,12 @@ only *production* GPU path and uses PyTorch, not JAX.
 # Monitor
 ./dataprod/monitor_jobs.s3df.sh -w
 
-# Cancel all my production jobs
-scancel -u $USER -n photonsi
+# Cancel all my production jobs (SLURM job names start with "photonsim_";
+# scancel -n needs an exact name, so filter with squeue instead)
+scancel $(squeue -u "$USER" -h -o "%i %j" | awk '$2 ~ /^photonsim_/ {print $1}')
 
 # Inspect one output with the viewer (see viewer/README.md for SSH tunneling)
-python3 /path/to/LUCiD/viewer/serve_viewer.py <OUT>/SK_like/config_000001
+python3 /path/to/LUCiD/viewer/serve_viewer.py <OUT>/HK/GeV/train/config_01
 ```
 
 ## Verify and resume a run
@@ -256,7 +262,7 @@ which batches fail that check. For a human summary:
 ```bash
 cd lucid/production/jobs/dataprod
 apptainer exec -B /sdf,/fs,/sdf/scratch,/lscratch "$LUCID_IMAGE_PATH" \
-    python3 verify_jobs.py <OUT>/<detector>          # e.g. .../SK_like
+    python3 verify_jobs.py <OUT>/<detector>          # e.g. .../HK
 ```
 
 (It runs inside the container because it needs h5py.) To resubmit the failures,
@@ -274,8 +280,8 @@ It is idempotent: rerun it after each drain wave until it prints
 `cell_dir`), named by the render header in `cluster_common/cluster.py`:
 
 ```
-<OUT>/<detector>/config_NNNNNN/job_NNNNNN-<slurm_job_id>.out
-<OUT>/<detector>/config_NNNNNN/job_NNNNNN-<slurm_job_id>.err
+<OUT>/<detector>/<block>/<split>/config_NN/job_NNNNNN-<slurm_job_id>.out
+<OUT>/<detector>/<block>/<split>/config_NN/job_NNNNNN-<slurm_job_id>.err
 ```
 
 so a failing job's stderr sits right next to the four `{sensor,hits,step,labl}/`

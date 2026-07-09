@@ -15,7 +15,7 @@ Optional extras:
 |-------|------|-----|
 | `[training]` | `torch` | training the SIREN emitter |
 | `[docs]` | mkdocs-material, mkdocs-jupyter, mkdocstrings | building this documentation |
-| `[dev]` | pytest, jupyter, nbmake | development & tests |
+| `[dev]` | pytest, plus `[notebooks]` (jupyterlab, ipykernel, nbmake) | development & tests |
 | `[all]` | everything | |
 
 e.g. `pip install -e .[dev]` (there is also a `[notebooks]` extra, pulled in by `[dev]`/`[all]`).
@@ -38,7 +38,7 @@ materials work out of the box.
 python examples/hello_simulate.py
 ```
 
-It prints a line like `"1476 of 10764 PMTs lit, total charge 30887 pe"` and writes the
+It prints a line like `"10764 of 10764 PMTs lit, total charge 2650 pe"` and writes the
 Cherenkov-ring display to `hello_simulate.png`.
 If it fails with a `FileNotFoundError` pointing at a SIREN model path under `data/`, run
 `./scripts/download_data.sh` first.
