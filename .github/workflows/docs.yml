@@ -4,13 +4,24 @@ on:
     branches: [main]
     paths:
       - 'docs/**'
+      - 'landing/**'
       - 'mkdocs.yml'
       - '.github/workflows/docs.yml'
   workflow_dispatch:
+
+# Serve the site straight from a Pages artifact (no gh-pages branch).
 permissions:
-  contents: write
+  contents: read
+  pages: write
+  id-token: write
+
+# Never run two deploys at once; let a newer push cancel an in-flight one.
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
 jobs:
-  deploy:
+  build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -18,5 +29,22 @@ jobs:
         with:
           python-version: '3.11'
       - run: pip install mkdocs-material
-      - run: mkdocs build --strict
-      - run: mkdocs gh-deploy --force
+      # Custom landing page at the site root...
+      - run: |
+          mkdir -p _site
+          cp -r landing/. _site/
+      # ...and the mkdocs docs beneath it at /docs/.
+      - run: mkdocs build --strict -d _site/docs
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
