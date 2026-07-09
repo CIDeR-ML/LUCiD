@@ -1,7 +1,7 @@
 # s_max parametrisation scan (Stage 0)
 
 Cluster fan-out (SLURM or HTCondor — see
-[`../../../../docs/CLUSTER_ABSTRACTION.md`](../../../../docs/CLUSTER_ABSTRACTION.md))
+[`../../../../docs/guides/production/cluster-abstraction.md`](../../../../docs/guides/production/cluster-abstraction.md))
 for PhotonSim jobs whose only purpose is to fill `PhotonHist_Distance`
 per (particle, energy) cell, so the host-native
 `PhotonSim/tools/smax/analyze_smax.py` can fit `s_max(E) ≈ A · E^B` per

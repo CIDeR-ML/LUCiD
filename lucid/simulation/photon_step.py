@@ -298,7 +298,7 @@ def make_photon_iteration_update_factors_safe(reflection_fn=scalar_reflection):
     → N_sensors outputs → forward-mode is the efficient, low-variance mode). Forward is
     byte-identical; the gradient/Hessian are now the true unbiased AD values. Verified
     NaN-free without the backstop across ~3·10⁴ grad/Hessian evals over random + on-surface
-    stress geometries (hessian_probe/recon_nan_thorough.py).
+    stress geometries.
     """
 
     def _step(position, direction, time, surface_distance,

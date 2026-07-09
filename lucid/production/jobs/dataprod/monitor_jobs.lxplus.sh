@@ -4,7 +4,7 @@
 # Counterpart of monitor_jobs.s3df.sh (which uses squeue). squeue and
 # condor_q output are too different for one parser, so each cluster has
 # its own monitor; the rest of the production pipeline is cluster-
-# agnostic (see ../../../../docs/CLUSTER_ABSTRACTION.md).
+# agnostic (see ../../../../docs/guides/production/cluster-abstraction.md).
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BLUE='\033[0;34m'; NC='\033[0m'
 

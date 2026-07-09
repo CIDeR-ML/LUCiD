@@ -1,7 +1,7 @@
 """
 Tests for :meth:`lucid.geometry.Cylinder.from_pmt_file` — the unified
 loader that builds a :class:`Cylinder` from a PMT-positions ``.npz``
-file. See ``lucid/geometry/PMT_NPZ_SCHEMA.md`` for the schema.
+file. See ``docs/reference/pmt-npz-schema.md`` for the schema.
 """
 
 import os

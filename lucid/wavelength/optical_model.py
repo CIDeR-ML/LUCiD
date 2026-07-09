@@ -15,7 +15,7 @@ Two regimes, one return type (:class:`OpticalArrays`):
   curves at each photon's λ (``length = 1 / coeff(λ)``) and, if a ``qe_fn`` is given,
   the per-photon QE weight ``qe_fn(λ)``.
 
-The design target (see ``docs/WAVELENGTH_DESIGN.md``) is one decomposition
+The design target (see ``docs/internal/WAVELENGTH_DESIGN.md``) is one decomposition
 ``prop(λ) = reference(λ) · deviation(λ; DetectorParams)`` where the reference is fixed
 medium physics and the deviation is the fittable curve. This module is that seam; the
 deviation layer is added on top of it without changing this contract (deviation ≡ 1

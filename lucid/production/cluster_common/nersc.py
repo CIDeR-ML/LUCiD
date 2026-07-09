@@ -133,7 +133,7 @@ class NerscAdapter(SlurmAdapter):
         # rather than emit a sbatch that calls a bare `apptainer` not on PATH.
         raise NotImplementedError(
             "train_siren is not yet wired for NERSC/Perlmutter. "
-            "See LUCiD/docs/QUICKSTART_NERSC.md (train_siren follow-up): the "
+            "See LUCiD/docs/guides/production/deploy-nersc.md (train_siren follow-up): the "
             "GPU defaults in jobs/train_siren/generate_jobs.py still carry SLAC "
             "values (partition=roma, account=mli:cider-ml) and need dune_g + "
             "--constraint=gpu before GPU training can run here."

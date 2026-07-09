@@ -18,7 +18,7 @@ Console-script entry points (declared in pyproject.toml):
   * `lucid-build-photon-table`  → `main_photon`
   * `lucid-build-dedx-table`    → `main_dedx`
 
-See `docs/SIREN_TRAINING_INPUTS.md` for the full pipeline.
+See `docs/guides/production/siren-training-inputs.md` for the full pipeline.
 """
 
 from __future__ import annotations

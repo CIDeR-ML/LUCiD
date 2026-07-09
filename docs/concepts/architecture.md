@@ -1,0 +1,123 @@
+# LUCiD architecture
+
+**One differentiable forward engine with regime modes**, serving two co-equal lines —
+inference/calibration (gradient-descent reconstruction, detector calibration) and
+production (PhotonSim → datasets) — across two detector families: water/WbLS
+Cherenkov tanks and ice/water string telescopes (see the
+[bundled detectors](../getting-started/detectors.md)).
+
+Units are **meters, nanoseconds, MeV** throughout.
+
+## The one engine: `setup_event_simulator`
+
+`lucid/simulation/simulator.py::setup_event_simulator(json_filename, ...)` is the central
+assembly point. It reads a geometry JSON + a physics config, builds the detector geometry,
+medium, propagator, photon source, and per-PMT response, and returns a **JIT-compiled
+callable** `(ParticleParams|source|photon_data, DetectorParams, key) → hits`. Everything is
+differentiable end-to-end (`lax.scan`/`vmap`/`jit`, DiCE soft weights).
+
+Passing `default_detector_params=True` (as the [quickstart](../getting-started/quickstart.md)
+does) bakes the detector params into the closure and drops them from the
+signature, so the callable is invoked with two args — `(particle_params, key)` —
+and exposes the baked tuple as `.default_detector_params`. Leave it `False` (the
+default) when you need to differentiate w.r.t. `DetectorParams` (calibration).
+
+Behaviour is selected by **regime flags / config**, not separate engines:
+
+| Axis | Modes | Selected by |
+|------|-------|-------------|
+| **Geometry** | cylinder · sphere · box · **string (telescope)** | geom JSON `detector_type` (registry dispatch) |
+| **Propagation** | surface (reflection) · **volume (per-DOM, no wall)** | `is_volume = isinstance(detector, StringTelescope)` |
+| **Emission** | Cherenkov · **+ scintillation** | `medium.emission_processes` (+ `cherenkov_fraction` split) |
+| **Optics** | scalar · wavelength-dependent (Rayleigh + Mie + g) | `wavelength_mode`, physics config |
+| **Source** | SIREN track · calibration source · ROOT/PhotonSim data | `is_calibration` / `is_data` |
+| **Readout** | aggregated · per_photon · realistic · moments · **per_segment** · waveform(_expected) · shotgun_per_photon | `hit_mode` |
+
+The surface (cylinder/sphere/box, Cherenkov-only, water) path is locked **byte-identical**
+by a tripwire test — every regime addition is gated so it is never even traced for that
+path (`tests/reconciliation/test_tripwire.py`).
+
+## Differentiable parameters: nested `DetectorParams`
+
+`lucid/detector_params.py` — a JAX-pytree of physics-grouped sub-tuples (the `_SUBTUPLES`
+registry drives generic tree-walks):
+
+`scattering` (scatter_length, mie_scatter_length, g) · `absorption` · `reflection`
+(wall/sensor; scalar or angular Schlick/Fresnel) · `response` (qe, spe_width, tts) ·
+`per_pmt` (qe_corrections, gain, t0, walk) · `scintillation` (S, kB, C, tau_rise, tau_fall,
+moyal_*) — plus fittable per-wavelength `*_dev` deviation curves on the optical properties
+(see [wavelength physics](wavelength.md)). Each sub-tuple has
+normalize/denormalize + bounds, so any subset can be optimized
+directly. Non-scintillating media leave the scintillation block at neutral 0 (no light) —
+so adding it kept the water forward byte-identical.
+
+## Geometry (registry-dispatched)
+
+`lucid/geometry/registry.py` holds `@register_detector(name)`; `generate_detector(config)`
+looks up the class. `DetectorGeometry.from_config` builds geometry + medium
+(`make_medium(material)`) + propagator:
+
+- **cylinder / sphere / box** → `lucid/propagation/*` surface propagators (grid-celled
+  sensor lookup, soft overlap, reflection).
+- **string** (`lucid/geometry/string.py::StringTelescope`, DOM positions from an NPZ) →
+  `lucid/propagation/string/string_propagator.py`: each ray is matched to its nearest
+  strings, then snapped to the nearest DOMs (IceCube-style optical modules) along each,
+  with a fallback for rays that exit the instrumented volume. Implementation details live
+  in the module docstrings.
+
+## Emission sources
+
+- **SIREN Cherenkov** (`lucid/sources/siren_rays.py` + `lucid/siren/core.py`): a
+  sinusoidal net trained on PhotonSim photon tables over `(E, angle, s/s_max)`. The
+  trained-model metadata carries the count+range model — `smax(E)` (track range) and
+  `nphot(E)` (photon budget) — so each ray's intensity is `pmf × n_photons_fn(E)` directly,
+  with no manual reweighting. Emission time `t0(d,E)` is a stretched-exponential cubic.
+- **Scintillation** (`make_scintillation_surrogate_fn`): a dE/dx SIREN drives isotropic
+  rays with Chou-quenched weights (`S/(1+kB·d+C·d²)`), a biexponential emission delay
+  (`tau_rise/tau_fall`), and Moyal-sampled wavelengths. Built only when the medium
+  scintillates; concatenated with Cherenkov rays.
+- **Calibration sources** (`calibration_sources.py`): laser / isotropic, source passed at
+  call time.
+- **Data** (`event_io.py` recon path + `event_generation.py` production path): photons read
+  from PhotonSim ROOT files.
+
+## Config system
+
+Two JSONs per detector in `config/`: `*_geom_config.json` (shape, sensors) and
+`*_physics_config.json` (optical properties, composable — each property independently scalar
+or λ-dependent, referencing `config/materials/*.json` + `config/pmt/*` QE curves). Material
+JSONs carry the medium spec, including the `scintillation` block (light yield, timing,
+Moyal spectrum) that WbLS inherits.
+
+## The two lines on one engine
+
+- **Inference / calibration** (`lucid/fitting/`, `lucid/optimization/`): build the
+  simulator, take gradients of a loss (Poisson NLL, likelihood, factored) w.r.t.
+  `DetectorParams` / `ParticleParams`, solve with Gauss-Newton+Schur / Adam. Fisher/CRB from
+  autodiff. The data path loads ROOT photons via `pad_photon_data` (origins in **cm**, the
+  simulator divides by 100).
+- **Production** (`lucid/production/`): `lucid-run-job` drives GENIE → Geant4 macro →
+  PhotonSim subprocess (`$PHOTONSIM_BIN`) → the LUCiD writer. `event_generation.py` reads
+  ROOT photons (meters) and feeds the simulator with `hit_mode='per_segment'`
+  (per-(segment, sensor) PE). The **digitizer** (`lucid/simulation/digitizer.py` — SPE
+  charge sampling, per-sensor time-window integration into digits, dark noise) then turns
+  the photon deposits into readout, and, where the dataset config asks for it, a
+  **readout trigger** (`lucid/simulation/trigger.py`, sliding-window) gates the event.
+  The result is four parallel HDF5 files (`sensor/ hits/ step/ labl/`). The modular
+  data-gen layer (`root_reader, event_builder, writer, seed_utils, …`) is self-contained;
+  cluster scheduling lives in `cluster_common/`.
+
+**Unit convention (unify-on-cm):** the simulator data boundary is **cm** (matching
+`pad_photon_data`). `event_generation` works in meters and multiplies photon origins ×100 at
+the simulator call, so both lines share one data impl.
+
+## Invariants (enforced by `tests/`)
+
+- **Water byte-identical** forward (scalar + wavelength) + AD-Fisher + leaf order —
+  `tests/reconciliation/test_tripwire.py` (re-capture with `CAPTURE=1`).
+- **Env-free forward**: zero `os.environ` reads in the forward/physics path
+  (`test_no_env_reads_in_lucid_package`); `lucid/production/` is exempt (env-driven
+  orchestration — `PHOTONSIM_BIN`, GENIE, cluster).
+- **Differentiability**: scintillation Chou gradients correctly signed; volume optical-param
+  gradients finite through multi-scatter (`test_scintillation.py`, `test_string_volume.py`);
+  the new emitter's energy gradient matches FD (`test_emitter_energy_gradient.py`).
