@@ -28,7 +28,9 @@ from `config/materials/<material>.json`:
   the Cherenkov angle and photon timing use one `n`/light-speed per event. A per-λ index
   is a natural extension the medium format already reserves space for.
 
-The medium grid spans [300, 700] nm. Materials are composable: `water`, `wbls`, and `ice`
+The medium grid spans [300, 700] nm by default, but is narrowed to the loaded PMT QE
+curve's support when one is set — `[max(300, qe_lo), min(700, qe_hi)]` — so for the bundled
+SK curve the effective grid is ≈[300, 648] nm. Materials are composable: `water`, `wbls`, and `ice`
 each have their own JSON (WbLS inherits water's bulk optics; the bundled ice file is an
 acknowledged placeholder using the water functional form).
 
@@ -58,9 +60,11 @@ calibration fits *departures* from known physics rather than refitting the physi
   measured QE curve (`config/pmt/`; e.g. the bundled SK curve spans ≈294–648 nm); in scalar mode a single QE
   enters at hit-making instead.
 - **Cherenkov spectrum**: track sources sample the 1/λ² Cherenkov spectrum over the physical
-  emission band (`cherenkov_emission_band` on `setup_event_simulator`). Photons outside the
-  QE knots or medium grid contribute nothing, which is exactly the physical statement that
-  they are undetectable.
+  emission band (`cherenkov_emission_band` on `setup_event_simulator`) and weight each photon
+  by `qe_fn(λ)`. Note that a photon's λ is *clamped to the medium grid* before the QE lookup, so
+  a λ falling outside the grid takes the nearest grid-edge QE value rather than a zero weight —
+  keep the emission band inside the grid/QE support if you want out-of-band light genuinely
+  suppressed.
 - **Scalar projection**: configs that choose a scalar representation for a property get it
   projected from the referenced λ-curve at `scalar_ref_wavelength` (400 nm by default), so
   the two regimes agree at the reference wavelength by construction.

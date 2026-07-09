@@ -94,13 +94,16 @@ photon_lookup_table.h5     # or dedx_lookup_table.h5
     │   angle_bins, distance_bins, angle_range_{min,max},
     │   distance_range_{min,max}, table_shape, total_photons,
     │   smax_{A, B, fit_min_mev, fit_max_mev, quantile,
-    │         quantile_multiplier, generated_at_utc}
+    │         quantile_multiplier, generated_at_utc},
+    │   nphot_{a, b, c, r_squared, fit_min_mev, fit_max_mev, form}
+    │         (power-law fit of per-event yield vs energy)
     └── events_per_file       structured (energy: i4, events: i4)
 ```
 
 dE/dx variant: substitute `photon_table_*` → `dedx_table_*`,
-`angle_*` → `dedx_*` (0..1000 keV/mm), `total_photons` → `total_entries`,
-`average_units = "entries/event"`, and add `data_type = "dedx"`.
+`angle_*` → `dedx_*` (0..1000 keV/mm), `total_photons` → `total_edep`,
+`average_units = "MeV/event"`, and add `data_type = "dedx"` and
+`weighting_scheme = "edep"`.
 
 ## Stage 3 — training
 

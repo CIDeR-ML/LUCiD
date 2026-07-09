@@ -97,15 +97,16 @@ Moyal spectrum) that WbLS inherits.
   autodiff. The data path loads ROOT photons via `pad_photon_data` (origins in **cm**, the
   simulator divides by 100).
 - **Production** (`lucid/production/`): `lucid-run-job` drives GENIE → Geant4 macro →
-  PhotonSim subprocess (`$PHOTONSIM_BIN`) → the LUCiD writer. `event_generation.py` reads
-  ROOT photons (meters) and feeds the simulator with `hit_mode='per_segment'`
+  PhotonSim subprocess (`$PHOTONSIM_BIN`) → the LUCiD writer. `lucid/sources/event_generation.py`
+  reads ROOT photons (meters) and feeds the simulator with `hit_mode='per_segment'`
   (per-(segment, sensor) PE). The **digitizer** (`lucid/simulation/digitizer.py` — SPE
   charge sampling, per-sensor time-window integration into digits, dark noise) then turns
   the photon deposits into readout, and, where the dataset config asks for it, a
   **readout trigger** (`lucid/simulation/trigger.py`, sliding-window) gates the event.
   The result is four parallel HDF5 files (`sensor/ hits/ step/ labl/`). The modular
-  data-gen layer (`root_reader, event_builder, writer, seed_utils, …`) is self-contained;
-  cluster scheduling lives in `cluster_common/`.
+  data-gen layer these steps use (`event_generation, root_reader, event_builder, writer,
+  seed_utils, …`) lives in `lucid/sources/`; cluster scheduling lives in
+  `lucid/production/cluster_common/`.
 
 **Unit convention (unify-on-cm):** the simulator data boundary is **cm** (matching
 `pad_photon_data`). `event_generation` works in meters and multiplies photon origins ×100 at

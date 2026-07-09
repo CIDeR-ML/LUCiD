@@ -160,14 +160,14 @@ Cells land under `$SIREN_OUTPUT_BASE_PATH/training_inputs/<material>/<particle>/
 # Monitor (squeue-flavoured, same as S3DF)
 ./dataprod/monitor_jobs.nersc.sh -w
 
-# Cancel all my production jobs
-scancel -u $USER -n photonsi
+# Cancel all my production jobs (job names start with "photonsim_")
+scancel $(squeue -u "$USER" -h -o "%i %j" | awk '$2 ~ /^photonsim_/ {print $1}')
 
 # Live queue
 squeue -u $USER
 
 # Inspect one output with the viewer (see viewer/README.md for SSH tunneling)
-python3 /path/to/LUCiD/viewer/serve_viewer.py <OUT>/SK_like/config_000001
+python3 /path/to/LUCiD/viewer/serve_viewer.py <OUT>/HK/GeV/train/config_01
 ```
 
 ## Dev loop — bind-mount your checkouts
