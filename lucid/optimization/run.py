@@ -73,7 +73,7 @@ def main():
     dp_data = dp_data._replace(response=dp_data.response._replace(tts=jnp.asarray(float(TTS))))
     data_sim = setup_event_simulator(GEOM, NBUF, temperature=None, K=K, is_data=True, hit_mode='realistic',
                                      physics_config=PHYS, default_detector_params=dp_data, particle='muon',
-                                     wavelength_mode=True, apply_smearing=False, **GRID)
+                                     wavelength_mode=True, charge_resolution=None, **GRID)
     pred = setup_event_simulator(GEOM, NPH, temperature=0.1, K=K, hit_mode='per_photon', physics_config=PHYS,
                                  default_detector_params=True, particle='muon', wavelength_mode=True,
                                  pos_grad_threshold=K, n_grad_iters=K, **GRID)

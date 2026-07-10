@@ -20,7 +20,7 @@ def test_scalar_qe_corrections_broadcasts_at_setup():
         K=4,
         is_data=True,
         temperature=0.0,
-        apply_smearing=False,
+        charge_resolution=None,
         physics_config=base_dir_path() + 'config/SK_like_physics_config.json',
         default_detector_params=True,
     )

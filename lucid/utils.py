@@ -718,6 +718,56 @@ def smear_charges_SK_like(counts, key=None):
     return smeared_counts
 
 
+def smear_charges_spe(counts, key=None, spe=None):
+    """Per-photoelectron single-photoelectron (SPE) charge smearing (JAX).
+
+    Physical alternative to :func:`smear_charges_SK_like`: instead of a single
+    charge-dependent fractional Gaussian per sensor, each detected photoelectron
+    draws a charge from a Gaussian+exponential SPE mixture (Bellamy 1994,
+    NIM A 339 468) fit to WCSim's tabulated SK PMT SPE CDF. The reco charge is
+    the exact N-fold sum (N = round(counts)):
+
+        k ~ Binomial(N, 1-w)  Gaussian-core pes -> Normal(k*mu, sqrt(k)*sig)
+        N-k                    exponential-tail pes -> Gamma(N-k, tau)
+
+    normalized by the SPE ``fit_mean`` so <Q> = photoelectron count (unbiased);
+    only the resolution/shape is imposed. JAX port of
+    ``lucid.simulation.digitizer._sample_spe_charge`` (same ``_SPE_SK`` params).
+
+    Args:
+        counts: per-sensor detected photoelectron counts.
+        key: JAX random key for reproducibility.
+        spe: SPE mixture dict (w, mu, sig, tau, fit_mean); defaults to the SK PMT
+             ``_SPE_SK`` from the digitizer.
+
+    Returns:
+        smeared_counts: SPE-sampled charge (p.e.), same shape as ``counts``.
+    """
+    if key is None:
+        raise ValueError("key must be provided for reproducibility.")
+    if spe is None:
+        from lucid.simulation.digitizer import _SPE_SK as spe
+    w, mu, sig, tau, fit_mean = (spe["w"], spe["mu"], spe["sig"],
+                                 spe["tau"], spe["fit_mean"])
+
+    # Photoelectron count per sensor (>=1 so the gamma/normal draws are well
+    # defined; empty sensors are masked out by the caller's nonzero gate).
+    n = jnp.maximum(1.0, jnp.round(counts)).astype(jnp.float32)
+    k_key, g_key, t_key = jax.random.split(key, 3)
+
+    k = jax.random.binomial(k_key, n, 1.0 - w)            # Gaussian-core pe count
+    nmk = n - k                                           # exponential-tail pe count
+
+    # Sum of k Gaussians = Normal(k*mu, sqrt(k)*sig); Sum of nmk Exp(tau) = Gamma.
+    gauss = k * mu + jnp.sqrt(k) * sig * jax.random.normal(g_key, shape=counts.shape)
+    gamma = jax.random.gamma(t_key, jnp.maximum(nmk, 1.0), shape=counts.shape) * tau
+    tail = jnp.where(nmk > 0.0, gamma, 0.0)
+
+    smeared_counts = (gauss + tail) / fit_mean
+    smeared_counts = jnp.where(jnp.isfinite(smeared_counts), smeared_counts, 0.0)
+    return jnp.clip(smeared_counts, 0.0, None)
+
+
 def time_digitizer(times, time_resolution=0.4):
     """
     Digitize input times to bin centers.

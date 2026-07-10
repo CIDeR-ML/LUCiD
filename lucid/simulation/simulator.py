@@ -58,7 +58,7 @@ def setup_event_simulator(
         detector_type='Cylinder',
         use_expected_value=True,
         particle='muon',
-        apply_smearing=True,
+        charge_resolution=None,
         physics_config=None,
         default_detector_params=False,
         wavelength_mode=True,
@@ -101,8 +101,11 @@ def setup_event_simulator(
     particle : str
         Particle type (e.g., 'muon', 'electron'). Used to load SIREN model,
         t0 parameters, and photon normalization from config.
-    apply_smearing : bool
-        If True, apply SK-like charge and time smearing in data mode.
+    charge_resolution : str or None
+        Per-sensor charge-resolution model in data mode: None (raw Poisson counts),
+        "Abe_2013" (SK fractional Gaussian), or "Bellamy_94" (per-photoelectron SPE
+        spectrum, WCSim SK PMT). Timing resolution comes solely from the per-photon
+        TTS (``detector_params.response.tts``).
     physics_config : str or None
         Path to physics config JSON (e.g. ``SK_physics_config.json``).
         Required when ``default_detector_params=True``.
@@ -219,7 +222,7 @@ def setup_event_simulator(
     sim_config = SimConfig(
         n_photons=n_photons, K=K, mode=mode,
         use_expected_value=use_expected_value,
-        apply_smearing=apply_smearing,
+        charge_resolution=charge_resolution,
         n_grad_iters=n_grad_iters)
 
     # ---- Extract fields from containers ------------------------------------
@@ -295,7 +298,8 @@ def setup_event_simulator(
         tts = 0.0 if response is None else response[3]
         return make_hits_data(flat_weights, flat_indices, flat_times, num_sensors,
                               qe=qe, qe_corrections=qe_corrections,
-                              rng_key=qe_key, apply_smearing=sim_config.apply_smearing, tts=tts)
+                              rng_key=qe_key, tts=tts,
+                              charge_resolution=sim_config.charge_resolution)
 
     def _make_hits_moments(flat_weights, flat_indices, flat_times, num_sensors, qe_key, qe, qe_corrections, response=None, flat_segment_idx=None):
         gain, t0, spe_width, tts = response
@@ -309,8 +313,8 @@ def setup_event_simulator(
         tts = 0.0 if response is None else response[3]
         return make_hits_per_photon(flat_weights, flat_indices, flat_times, num_sensors,
                                     qe=qe, qe_corrections=qe_corrections,
-                                    rng_key=qe_key, apply_smearing=sim_config.apply_smearing,
-                                    tts=tts, flat_segment_idx=flat_segment_idx)
+                                    rng_key=qe_key, tts=tts, flat_segment_idx=flat_segment_idx,
+                                    charge_resolution=sim_config.charge_resolution)
 
     # Shotgun hit modes (waveform + per-photon). Defaults match SK-realistic
     # PMT behaviour; override via ``waveform_config``.
