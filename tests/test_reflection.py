@@ -158,14 +158,14 @@ class TestScalarMixModel:
                 break
         assert seen == {True, False}
 
-    def test_default_fspec_is_fully_diffuse(self):
-        """Configs that never set the fspec fields get 0.0 -> clipped to ~fully diffuse.
-        Documents the behavior change vs 'scalar' (always-specular sensors)."""
+    def test_default_fspec_is_sk_physical(self):
+        """Configs that never set the fspec fields get the SK-lit specular fractions
+        (wall 0.55, sensor 0.90) — the default 'scalar_mix' model's physical mixture."""
         dp = create_default_detector_params(10)
         _, builder = get_reflection_model('scalar_mix')
         rp = builder(dp)
-        npt.assert_allclose(rp.wall_fspec, 0.0)
-        npt.assert_allclose(rp.sensor_fspec, 0.0)
+        npt.assert_allclose(rp.wall_fspec, 0.55)
+        npt.assert_allclose(rp.sensor_fspec, 0.90)
 
 
 class TestSamplePathHonorsModel:

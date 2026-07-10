@@ -66,6 +66,7 @@ The following attrs appear on `config/` of every file:
 - `format_version` (int)
 - `n_events` (int)
 - `git_commit` (str) — LUCiD repository commit
+- `reflection_model` (str) — reflection model used (`scalar_mix` default, `scalar`, or `angular`) — distinguishes datasets by reflection physics
 - `run_id` (str) — unique batch identifier
 - `dataset_name` (str)
 - `file_index` (int) — NNNN of `wc_*_NNNN.h5`

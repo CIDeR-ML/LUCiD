@@ -25,8 +25,9 @@ and returns
 
 The model is chosen at setup and captured in the photon step's closure, so the
 ``custom_vjp`` step signature stays fixed (``refl_params`` is a single packed pytree
-argument) — adding a new model never reshapes it. ``scalar_reflection`` is the default
-and reproduces the legacy angle-independent behaviour byte-for-byte.
+argument) — adding a new model never reshapes it. ``scalar_mix`` is the DEFAULT (scalar
+rates + a specular/diffuse direction mixture); ``scalar_reflection`` is the legacy model
+that reproduces the pre-mixture angle-independent behaviour byte-for-byte.
 """
 
 from typing import NamedTuple
@@ -217,8 +218,8 @@ def angular_reflection(direction, normal, hit_sensor, refl_params, lam, key):
 # ---------------------------------------------------------------------------
 # Model registry — name → (reflection_fn, build_refl_params(detector_params)).
 # build_refl_params extracts the model's parameters from a DetectorParams pytree.
-# The scalar model is the byte-identical default; 'angular' needs per-photon λ
-# (wavelength_mode=True), threaded by the simulator.
+# 'scalar_mix' is the default; 'scalar' is the byte-identical legacy model; 'angular'
+# needs per-photon λ (wavelength_mode=True), threaded by the simulator.
 # ---------------------------------------------------------------------------
 
 def _build_scalar_params(detector_params):
