@@ -45,7 +45,7 @@ Notes / decisions per field:
 - **g, cathode_nk** are physical and fittable-in-principle but usually FROZEN (hard to measure) — present as fields,
   default just not in `trainable_fields` (SK fixes n_imag).
 - **reflection holds the SUPERSET** of model params; the chosen reflection model (an arg,
-  `reflection_model='scalar'|'angular'|'scalar_mix'`) reads the subset it needs (scalar → the rate constants;
+  `reflection_model='scalar_mix'` (default)`|'scalar'|'angular'`) reads the subset it needs (scalar → the rate constants;
   Schlick/Fresnel angular → `wall_R0`+`wall_p`, `cathode_nr`+`cathode_nk`; `*_fspec` for
   specular/diffuse direction). Unused fields stay frozen. One DetectorParams structure, the
   model selects — no per-model pytree variant.
