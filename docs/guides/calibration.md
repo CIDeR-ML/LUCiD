@@ -81,9 +81,9 @@ multilayer-Fresnel cathode), and the reflected *direction* is a specular/diffuse
 per-surface fractions `wall_fspec`/`sensor_fspec` (the discrete specular-vs-diffuse branch is
 carried by a DiCE score). The angular model reads the `DetectorParams.reflection` fields
 (`wall_R0`/`wall_p`/`wall_fspec`, `cathode_nr`/`cathode_nk`/`sensor_fspec`) and **requires
-`wavelength_mode=True`** for the λ-dependent magnitude; the `*_fspec` fields default to 0 (fully
-diffuse) and are inert under the default `reflection_model='scalar'`. A third model,
-`reflection_model='scalar_mix'`, keeps the scalar rate *magnitudes* but adds the same
+`wavelength_mode=True`** for the λ-dependent magnitude; the `*_fspec` fields default to the SK-lit
+specular fractions (wall 0.55, sensor 0.90). The **default** model is
+`reflection_model='scalar_mix'`, which keeps the scalar rate *magnitudes* but adds the
 specular/diffuse `*_fspec` direction split — so those fractions become fittable **without**
 `wavelength_mode`, which is the cheaper lever for a scalar calibration.
 
