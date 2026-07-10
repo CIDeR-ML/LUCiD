@@ -88,7 +88,7 @@ def main():
 
     sim_d = setup_event_simulator(GEOM, NPH, temperature=None, K=8, is_calibration=True,
                                   use_expected_value=False, hit_mode='realistic',
-                                  apply_smearing=False, wavelength_mode=False, **GK)
+                                  charge_resolution=None, wavelength_mode=False, **GK)
 
     # reference run (t0=0) characterises the detector/geometry response; data run (t0=true)
     # uses INDEPENDENT keys → t0 recovery is a genuine (non-circular) flash-noise-limited fit.

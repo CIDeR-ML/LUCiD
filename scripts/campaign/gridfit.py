@@ -118,7 +118,7 @@ def main():
     if SHOT:
         sim_data = setup_event_simulator(GEOM, NPH, temperature=None, K=K, is_calibration=True,
                                          use_expected_value=False, hit_mode='realistic',
-                                         apply_smearing=False, wavelength_mode=False, **GK)
+                                         charge_resolution=None, wavelength_mode=False, **GK)
         dpk = dp  # truth_k = ones here (focus on globals); could randomize
         rec = np.zeros((M, len(FIELDS)))
         for m in range(M):
@@ -145,7 +145,7 @@ def main():
             qe_corrections=jnp.asarray(ktrue))
         sim_data = setup_event_simulator(GEOM, NPH, temperature=None, K=K, is_calibration=True,
                                          use_expected_value=False, hit_mode='realistic',
-                                         apply_smearing=False, wavelength_mode=False, **GK)
+                                         charge_resolution=None, wavelength_mode=False, **GK)
         Qsum = np.zeros(NS); Msum = np.zeros(NS) + 1e-12
         for j, s in enumerate(srcs):
             Qsum += np.asarray(sim_data(s, dpk, jax.random.PRNGKey(11 + j))[0])

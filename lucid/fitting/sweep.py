@@ -98,7 +98,7 @@ def _make_engine(cfg):
     def build(particle, nph):
         data_sim = setup_event_simulator(geom, NBUF, temperature=None, K=K, is_data=True, hit_mode="realistic",
             physics_config=phys, default_detector_params=dp, particle=particle, wavelength_mode=True,
-            apply_smearing=False, max_candidates_per_ray=4)
+            charge_resolution=None, max_candidates_per_ray=4)
         pred = setup_event_simulator(geom, int(nph), temperature=0.1, K=K, hit_mode="per_photon",
             physics_config=phys, default_detector_params=True, particle=particle, wavelength_mode=True,
             pos_grad_threshold=K, n_grad_iters=K, cherenkov_emission_band=band, max_candidates_per_ray=4)

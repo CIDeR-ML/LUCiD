@@ -18,8 +18,10 @@ class SimConfig(NamedTuple):
         One of 'track', 'calibration', 'data'.
     use_expected_value : bool
         True → STE (differentiable), False → MC sampling.
-    apply_smearing : bool
-        Apply SK-like charge/time smearing in data mode.
+    charge_resolution : str or None
+        Per-sensor charge-resolution model in data mode: None (raw Poisson counts),
+        "Abe_2013" (SK fractional Gaussian), or "Bellamy_94" (per-photoelectron SPE
+        spectrum). Timing resolution is set solely by the per-photon TTS.
     n_grad_iters : int
         Iteration threshold for direction stop_gradient.
         Default derived from mode: track=K (gradient flows all bounces),
@@ -29,7 +31,7 @@ class SimConfig(NamedTuple):
     K: int = 7
     mode: str = 'track'
     use_expected_value: bool = True
-    apply_smearing: bool = True
+    charge_resolution: Optional[str] = None
     n_grad_iters: Optional[int] = None
 
     @property

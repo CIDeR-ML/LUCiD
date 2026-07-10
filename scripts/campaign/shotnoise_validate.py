@@ -64,7 +64,7 @@ def main():
                                       hit_mode='aggregated', wavelength_mode=False, **GK)
     sim_data = setup_event_simulator(GEOM, NPH, temperature=None, K=K, is_calibration=True,
                                      use_expected_value=False, hit_mode='realistic',
-                                     apply_smearing=False, wavelength_mode=False, **GK)
+                                     charge_resolution=None, wavelength_mode=False, **GK)
     srcs = [laser_source(position=[0., 0., H/2 - .1], intensity=NPH),
             isotropic_source(position=[0., 0., 0.], intensity=NPH)]
 

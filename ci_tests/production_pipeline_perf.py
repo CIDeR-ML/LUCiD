@@ -113,7 +113,7 @@ def main():
     event_simulator = setup_event_simulator(
         args.detector_json, 0, K=args.K,
         is_data=True, temperature=0.0,
-        apply_smearing=False,
+        charge_resolution=None,
         physics_config=args.physics_json,
         default_detector_params=True,
     )

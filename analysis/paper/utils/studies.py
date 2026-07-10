@@ -29,7 +29,7 @@ def default_root(particle: str, energy_mev: int, n_events: int, root_base: str) 
 
 def base_config(particle, energy_mev, n_rays, n_events, root_file, name,
                 study='nrays', geom_config='config/SK_like_geom_config.json',
-                time_weight=1.0, tts=TTS, gn=None):
+                time_weight=1.0, tts=TTS, charge_resolution=None, gn=None):
     """One reconstruction config (paper defaults)."""
     g = dict(GN if gn is None else gn)
     if time_weight != 1.0:
@@ -48,6 +48,8 @@ def base_config(particle, energy_mev, n_rays, n_events, root_file, name,
         'placement_seed_stride': 1000,
         'true_t0_range': [-15.0, 15.0],
         'tts': tts,
+        # data-sim charge-resolution model: None | "Abe_2013" | "Bellamy_94"
+        'charge_resolution': charge_resolution,
         'gn': g,
     }
 

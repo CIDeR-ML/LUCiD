@@ -61,6 +61,7 @@ DEFAULT_CONFIG = {
     'containment_margin': 0.95,          # accept a placement only if vertex + s_max(E)·dir is
                                          # inside this fraction of the detector (None disables)
     'tts': 2.5,                          # transit-time spread (ns) baked into the data sim
+    'charge_resolution': None,           # data-sim charge model: None | "Abe_2013" | "Bellamy_94"
     'grid': {'n_cap': 80, 'n_angular': 120, 'n_height': 80},
     'cherenkov_band': [274.91, 673.83],  # model λ band (nm); None disables
     'gn': {'nkeys': 4, 'niters': 250, 'lr': 8.0, 'fisher_mode': 'fd',
@@ -355,7 +356,7 @@ class TrackingPipeline:
         self.data_sim = setup_event_simulator(
             geom, config['nbuf'], temperature=None, K=K, is_data=True, hit_mode='realistic',
             physics_config=phys, default_detector_params=dp, particle=part,
-            wavelength_mode=True, apply_smearing=False, **grid)
+            wavelength_mode=True, charge_resolution=config.get('charge_resolution'), **grid)
 
         pred_kw = dict(temperature=config.get('pred_temperature', 0.1), K=K, hit_mode='per_photon', physics_config=phys,
                        default_detector_params=True, particle=part, wavelength_mode=True,

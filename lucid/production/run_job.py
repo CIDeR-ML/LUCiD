@@ -291,7 +291,7 @@ def _run_lucid(
         K=12,
         is_data=True,
         temperature=0.0,
-        apply_smearing=False,  # per-particle smearing off; PE-sum smearing applied below
+        charge_resolution=None,  # per-particle smearing off; PE-sum smearing applied below
         physics_config=physics_config_path,
         default_detector_params=True,
         hit_mode='per_segment',
@@ -772,7 +772,7 @@ def _main_pileup(args: argparse.Namespace, config: dict) -> int:
 
     simulate_event = setup_event_simulator(
         detector_config_path, 0, K=12, is_data=True, temperature=0.0,
-        apply_smearing=False, physics_config=physics_config_path,
+        charge_resolution=None, physics_config=physics_config_path,
         default_detector_params=True,
         hit_mode='per_segment',
     )

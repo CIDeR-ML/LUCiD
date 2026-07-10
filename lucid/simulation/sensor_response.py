@@ -2,7 +2,26 @@
 import jax
 import jax.numpy as jnp
 from functools import partial
-from lucid.utils import smear_times, smear_charges_SK_like
+from lucid.utils import smear_charges_SK_like, smear_charges_spe
+
+
+def _smear_charge(total_charge, charge_resolution, key):
+    """Apply the configured per-sensor charge-resolution model.
+
+    ``charge_resolution`` (config-driven; no boolean flags):
+      * ``None``          — no smearing (raw Poisson photoelectron counts).
+      * ``"Abe_2013"``    — SK charge-dependent fractional Gaussian (Abe 2013, Table 2).
+      * ``"Bellamy_94"``  — per-photoelectron SPE spectrum (WCSim SK PMT; Bellamy 1994).
+    """
+    if charge_resolution is None:
+        return total_charge
+    if charge_resolution == "Abe_2013":
+        return smear_charges_SK_like(total_charge, key=key)
+    if charge_resolution == "Bellamy_94":
+        return smear_charges_spe(total_charge, key=key)
+    raise ValueError(
+        "charge_resolution must be None|'Abe_2013'|'Bellamy_94', "
+        f"got {charge_resolution!r}")
 
 # ===================================================================
 # make_hits functions
@@ -178,14 +197,19 @@ def make_hits_moments(
 
 def make_hits_data(
         flat_weights, flat_indices, flat_times, num_detectors,
-        qe=0.2, qe_corrections=None, rng_key=None, threshold=1e-5, apply_smearing=False,
-        tts=0.0):
-    """Data-mode hits with Bernoulli QE, segment_min timing, and optional SK-like smearing.
+        qe=0.2, qe_corrections=None, rng_key=None, threshold=1e-5,
+        tts=0.0, charge_resolution=None):
+    """Data-mode hits with Bernoulli QE, segment_min timing, and configurable charge resolution.
 
     ``tts`` (ns) is the per-photon transit-time-spread sigma applied to each photon's
     time BEFORE the first-arrival segment_min (so the min carries the correct early
     bias). Passed via ``detector_params.response.tts`` at call time. ``tts=0`` ⇒ no
-    smear (byte-identical).
+    smear (byte-identical). Timing resolution comes solely from this per-photon TTS.
+
+    ``charge_resolution`` selects the per-sensor charge-resolution model:
+      * ``None``          — raw Poisson photoelectron counts (no charge smearing).
+      * ``"Abe_2013"``    — SK charge-dependent fractional Gaussian (Abe 2013, Table 2).
+      * ``"Bellamy_94"``  — per-photoelectron SPE spectrum (WCSim SK PMT; Bellamy 1994).
     """
     timing_mask = (flat_weights > threshold) & (flat_times > 0)
     filtered_times = jnp.where(timing_mask, flat_times, jnp.inf)
@@ -214,22 +238,14 @@ def make_hits_data(
     # CHARGE is gated on a valid first-arrival time (detector_mins>0 & finite).
     nonzero_mask = (total_charge > 1e-10) & (detector_mins > 0) & jnp.isfinite(detector_mins)
 
-    if apply_smearing:
-        # PER-SENSOR gate (was scalar jnp.any → empty sensors got smeared inf/1e6 garbage,
-        # PORT_PLAN §4.3): only lit sensors carry a time; empty sensors are exactly 0.
-        measured_time = jnp.where(
-            nonzero_mask,
-            smear_times(detector_mins, key=smear_time_key),
-            0.0
-        )
-        measured_charge = jnp.where(
-            nonzero_mask,
-            smear_charges_SK_like(total_charge, key=smear_counts_key),
-            0
-        )
-    else:
-        measured_time = jnp.where(nonzero_mask, detector_mins, 0.0)
-        measured_charge = jnp.where(nonzero_mask, total_charge, 0)
+    # TIME: first-arrival of the per-photon-TTS-smeared photons (no post-hoc smear).
+    # PER-SENSOR gate (was scalar jnp.any → empty sensors got smeared inf/1e6 garbage,
+    # PORT_PLAN §4.3): only lit sensors carry a time; empty sensors are exactly 0.
+    measured_time = jnp.where(nonzero_mask, detector_mins, 0.0)
+
+    # CHARGE: config-driven resolution model (None ⇒ raw Poisson counts).
+    smeared_charge = _smear_charge(total_charge, charge_resolution, smear_counts_key)
+    measured_charge = jnp.where(nonzero_mask, smeared_charge, 0)
 
     return measured_charge, measured_time
 
@@ -237,7 +253,7 @@ def make_hits_data(
 def make_hits_per_photon(
         flat_weights, flat_indices, flat_times, num_detectors,
         qe=0.2, qe_corrections=None, rng_key=None, threshold=1e-5,
-        apply_smearing=False, tts=0.0, flat_segment_idx=None):
+        tts=0.0, flat_segment_idx=None, charge_resolution=None):
     """Per-sensor totals PLUS pass-through per-photon arrays for host aggregation.
 
     The production 'hits' file needs a per-(segment, sensor) PE decomposition,
@@ -276,11 +292,8 @@ def make_hits_per_photon(
 
     nonzero_mask = ((total_charge > 1e-10) & (detector_mins_true > 0)
                     & jnp.isfinite(detector_mins_true))
-    if apply_smearing:
-        measured_charge = jnp.where(
-            nonzero_mask, smear_charges_SK_like(total_charge, key=smear_counts_key), 0.0)
-    else:
-        measured_charge = jnp.where(nonzero_mask, total_charge, 0.0)
+    smeared_charge = _smear_charge(total_charge, charge_resolution, smear_counts_key)
+    measured_charge = jnp.where(nonzero_mask, smeared_charge, 0.0)
     measured_time_true = jnp.where(nonzero_mask, detector_mins_true, 0.0)
     measured_time_reco = jnp.where(nonzero_mask, detector_mins_reco, 0.0)
 

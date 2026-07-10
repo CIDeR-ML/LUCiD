@@ -109,7 +109,7 @@ def main():
         K=12,
         is_data=True,
         temperature=0.0,
-        apply_smearing=False,  # per-particle smearing off; PE-sum smearing applied later
+        charge_resolution=None,  # per-particle smearing off; PE-sum smearing applied later
         physics_config=args.physics_config,
         default_detector_params=True,
         hit_mode='per_segment',  # mandatory for data mode (seg/sensor_hits/ ground truth)

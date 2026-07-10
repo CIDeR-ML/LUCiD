@@ -94,7 +94,7 @@ def main():
 
     sim_d = setup_event_simulator(GEOM, NPH, temperature=None, K=8, is_calibration=True,
                                   use_expected_value=False, hit_mode='realistic',
-                                  apply_smearing=False, wavelength_mode=False, **GK)
+                                  charge_resolution=None, wavelength_mode=False, **GK)
     t0 = time.time()
     ref_mean, ref_var, n_ref = _accumulate(sim_d, src, dp_tts, [jax.random.PRNGKey(i) for i in range(M)], np.zeros(NS))
     emit(f'  reference run done ({time.time()-t0:.0f}s)')

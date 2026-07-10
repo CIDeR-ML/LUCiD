@@ -286,7 +286,7 @@ def main():
                 pd['wavelengths'] = jnp.full(pd['N'], float(wl_override))
             sim = setup_event_simulator(
                 args.config, pd['N'], temperature=args.temperature, K=args.k_max,
-                is_data=True, apply_smearing=False,
+                is_data=True, charge_resolution=None,
                 physics_config=args.physics_config,
                 default_detector_params=dp_run, hit_mode='per_photon',
                 wavelength_mode=wl_mode, **grid_kw)

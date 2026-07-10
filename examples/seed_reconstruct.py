@@ -30,7 +30,7 @@ pred = setup_event_simulator(GEOM, 250_000, temperature=0.1, K=K, hit_mode='per_
 dp_data = load_detector_params(PHYS, num_sensors=ND)
 dp_data = dp_data._replace(response=dp_data.response._replace(tts=jnp.asarray(2.5)))
 data_sim = setup_event_simulator(GEOM, 250_000, temperature=None, K=K, use_expected_value=False,
-                                 hit_mode='realistic', apply_smearing=False, particle='muon',
+                                 hit_mode='realistic', charge_resolution=None, particle='muon',
                                  physics_config=PHYS, default_detector_params=dp_data,
                                  wavelength_mode=True, **GRID)
 
