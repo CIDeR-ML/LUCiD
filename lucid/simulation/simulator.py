@@ -70,7 +70,7 @@ def setup_event_simulator(
         overlap_st_width_frac=0.35,
         overlap_renorm=1.0,
         overlap_mode='interp',
-        reflection_model='scalar',
+        reflection_model='scalar_mix',
         reflection_wavelength=400.0,
         spectrum=None,
         cherenkov_emission_band=None,
@@ -146,10 +146,11 @@ def setup_event_simulator(
         linear) or ``'cubic'`` (C2 natural spline — correct curvature for the
         autodiff Hessian wrt photon→sensor distance).
     reflection_model : str
-        Reflection model: ``'scalar'`` (default, byte-identical — angle/λ-
-        independent wall/sensor rates, hard direction), ``'scalar_mix'`` (the
-        scalar rates plus a specular/diffuse direction mixture via
-        ``wall_fspec/sensor_fspec``, DiCE-scored — no per-photon λ needed), or
+        Reflection model: ``'scalar_mix'`` (DEFAULT — the scalar wall/sensor
+        rates plus a specular/diffuse direction mixture via
+        ``wall_fspec/sensor_fspec``, DiCE-scored, no per-photon λ needed),
+        ``'scalar'`` (the legacy angle/λ-independent rates with hard direction —
+        walls diffuse, sensors specular; byte-identical to the pre-mixture step), or
         ``'angular'`` (Schlick blacksheet wall + multilayer-Fresnel cathode
         sensor, with a specular/diffuse direction mixture). The angular model
         reads the ``DetectorParams.reflection`` fields ``wall_R0/wall_p/
@@ -250,7 +251,7 @@ def setup_event_simulator(
                 f"qe_corrections has {len(qe_corr)} elements "
                 f"but detector has {NUM_SENSORS} sensors")
 
-    # ---- Reflection model (pluggable; default 'scalar' = byte-identical) -----
+    # ---- Reflection model (pluggable; default 'scalar_mix'; 'scalar' = byte-identical legacy) -----
     # reflection_fn is captured statically in the differentiable step's closure;
     # build_refl_params packs the model's parameters out of DetectorParams.
     reflection_fn, build_refl_params = get_reflection_model(reflection_model)
@@ -527,8 +528,8 @@ def setup_event_simulator(
             Sensor response aggregation function.
         """
 
-        # Packed reflection params for the pluggable reflection model (default scalar →
-        # ScalarReflection(wall_rate, sensor_rate)). build_refl_params is chosen at setup.
+        # Packed reflection params for the pluggable reflection model (default scalar_mix →
+        # ScalarMixReflection(rates + fspec)). build_refl_params is chosen at setup.
         refl_params = build_refl_params(detector_params)
         # Wavelength fed to the reflection model. Scalar reflection ignores it; the angular
         # (Fresnel) model uses it for the cathode/glass dispersion. A scalar reflection
@@ -961,6 +962,7 @@ def setup_event_simulator(
             _sim_data_default.default_detector_params = _default_dp
             _sim_data_default.medium = det_geom.medium      # production introspection
             _sim_data_default.det_geom = det_geom           # (event_generation reads these)
+            _sim_data_default.reflection_model = reflection_model   # recorded in dataset provenance
             return _sim_data_default
         else:
             return _simulation_with_data_impl
@@ -972,6 +974,7 @@ def setup_event_simulator(
             _sim_calibration_default.default_detector_params = _default_dp
             _sim_calibration_default.medium = det_geom.medium
             _sim_calibration_default.det_geom = det_geom
+            _sim_calibration_default.reflection_model = reflection_model
             return _sim_calibration_default
         else:
             return _simulation_sensor_calibration_impl
@@ -1021,6 +1024,7 @@ def setup_event_simulator(
             _sim_track_default.default_detector_params = _default_dp
             _sim_track_default.medium = det_geom.medium
             _sim_track_default.det_geom = det_geom
+            _sim_track_default.reflection_model = reflection_model
             return _sim_track_default
         else:
             return partial(_simulation_without_data_impl, model_params=model_params)

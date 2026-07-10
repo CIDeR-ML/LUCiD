@@ -25,7 +25,9 @@ def photon_iteration_sample(
 
     Performs Monte Carlo sampling where photons make discrete choices
     (detect/reflect/scatter) rather than computing expected values.
-    Walls use diffuse reflection, sensors use specular reflection.
+    The reflected direction is delegated to ``reflection_fn`` (arg default ``scalar_reflection``;
+    the simulator's default is ``scalar_mix`` — a specular/diffuse mixture per ``wall_fspec``/
+    ``sensor_fspec``; the legacy ``scalar`` model uses hard diffuse walls / specular sensors).
 
     Parameters
     ----------
@@ -149,10 +151,14 @@ def photon_iteration_update_factors(
         hit_sensor, lam, rng_key, speed_of_light,
         reflection_fn=scalar_reflection):
     """
-    Expected-value photon update with Straight-Through Estimator (STE).
+    Expected-value ("implicit capture") photon update with DiCE score-function gradients.
 
-    Computes expected values for detect/reflect/scatter outcomes for full
-    differentiability. Walls use diffuse reflection, sensors use specular.
+    Deposits the expected detected charge every step without terminating the ray;
+    detection, absorption, and reflection continue as soft weights, so the whole step is
+    differentiable. The reflection direction is delegated to ``reflection_fn`` (default
+    ``scalar_reflection``; the ``scalar_mix`` model draws specular versus diffuse with the
+    fitted specular fraction). The stochastic scattering/reflection choices carry their
+    gradients through the accumulated log-score (DiCE), not a straight-through estimator.
 
     Parameters
     ----------
