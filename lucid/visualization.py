@@ -63,6 +63,8 @@ def create_detector_display(json_filename='../config/cyl_geom_config.json', spar
         colormap_norm=None,   # currently not used, kept for compatibility
         zero_color=np.array([0.9, 0.9, 0.9, 1.0]),
         show_colorbar=True,
+        colorbar_width='5%',
+        colorbar_label=None,
         external_legend=None,
     ):
         """
@@ -215,9 +217,10 @@ def create_detector_display(json_filename='../config/cyl_geom_config.json', spar
         # ------------------------
         if show_colorbar:
             divider = make_axes_locatable(ax)
-            cax = divider.append_axes("right", size="5%", pad=0.1)
+            cax = divider.append_axes("right", size=colorbar_width, pad=0.1)
             cbar = plt.colorbar(color_gradient, cax=cax)
-            value_label = 'Time (ns)' if plot_time else 'Photoelectron Count (a.u.)'
+            value_label = colorbar_label if colorbar_label is not None else (
+                'Time (ns)' if plot_time else 'Photoelectron Count (a.u.)')
             scale_label = ' (log scale)' if log_scale else ''
             cbar.set_label(f'{value_label}{scale_label}', color=barcolor, fontsize=14)
             cbar.ax.yaxis.set_tick_params(color=barcolor, labelcolor=barcolor)
