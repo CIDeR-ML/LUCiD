@@ -118,7 +118,7 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
     For each batch of events, writes four HDF5 files under ``output_dir``:
     ``sensor/wc_sensor_NNNN.h5``, ``hits/wc_hits_NNNN.h5``,
     ``step/wc_step_NNNN.h5``, ``labl/wc_labl_NNNN.h5``. See
-    ``docs/LUCID_DATASET.md`` for the full schema.
+    ``docs/reference/dataset-schema.md`` for the full schema.
 
     Parameters
     ----------
@@ -642,6 +642,7 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
             'n_sensors': n_sensors,
             'detector_type': detector_type,
             'material': material,
+            'reflection_model': str(getattr(event_simulator, 'reflection_model', 'scalar_mix')),
             'smearing_applied': bool(apply_smearing),
             'smearing_charge_function': 'SK_like' if apply_smearing else 'none',
             'smearing_time_function': 'SK_like' if apply_smearing else 'none',
@@ -1072,6 +1073,7 @@ def generate_events_from_photonsim_pileup(
             'n_sensors': n_sensors,
             'detector_type': detector_type,
             'material': material,
+            'reflection_model': str(getattr(event_simulator, 'reflection_model', 'scalar_mix')),
             'smearing_applied': bool(apply_smearing),
             'smearing_charge_function': 'SK_like' if apply_smearing else 'none',
             'smearing_time_function': 'SK_like' if apply_smearing else 'none',
@@ -1625,6 +1627,7 @@ def generate_events_from_photonsim_supernova(
         'n_sensors': n_sensors,
         'detector_type': detector_type,
         'material': material,
+        'reflection_model': str(getattr(event_simulator, 'reflection_model', 'scalar_mix')),
         'smearing_applied': bool(apply_smearing),
         'smearing_charge_function': 'SK_like' if apply_smearing else 'none',
         'smearing_time_function': 'SK_like' if apply_smearing else 'none',

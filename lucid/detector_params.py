@@ -89,9 +89,11 @@ class ReflectionParams(NamedTuple):
     cathode_nk : jnp.ndarray     PMT cathode imaginary index (absorption)
     sensor_fspec : jnp.ndarray   PMT specular fraction (1-fspec diffuse)
 
-    The first two drive the default ``scalar`` reflection model. The remaining six
-    parameterise the ``angular`` model (Schlick blacksheet + multilayer-Fresnel
-    cathode); they are inert unless ``reflection_model='angular'``.
+    The two rates drive every model. ``wall_fspec``/``sensor_fspec`` are the specular
+    fractions consumed by the DEFAULT ``scalar_mix`` model (and ``angular``); ``wall_R0/
+    wall_p`` and ``cathode_nr/cathode_nk`` parameterise the ``angular`` model (Schlick
+    blacksheet + multilayer-Fresnel cathode) and are inert unless ``reflection_model=
+    'angular'``. Only the two rates matter for the legacy ``scalar`` model.
     """
     wall_reflection_rate: jnp.ndarray
     sensor_reflection_rate: jnp.ndarray
@@ -496,10 +498,10 @@ def _scintillation_defaults_from_medium(medium_model_path):
 _ANGULAR_REFL_DEFAULTS = {
     "wall_R0": 0.05,
     "wall_p": 1.0,
-    "wall_fspec": 0.0,
+    "wall_fspec": 0.55,      # blacksheet specular fraction (SK lit ~0.55; 1-f diffuse)
     "cathode_nr": 2.8,
     "cathode_nk": 1.5,
-    "sensor_fspec": 0.0,
+    "sensor_fspec": 0.90,    # PMT glass/cathode near-specular (SK lit ~0.90)
 }
 
 
@@ -566,7 +568,10 @@ def _project_missing_scalars(kwargs, medium_path, qe_path, ref_wavelength_nm,
         if v.ndim == 0 and bool(jnp.isnan(v)):
             kwargs[field] = jnp.ones(_N_CTRL, dtype=jnp.float32)
 
-    # Angular-reflection scalars: physical defaults when absent (inert for scalar model).
+    # Angular/mixture-reflection scalars: physical defaults when absent. Inert for the
+    # legacy 'scalar' model; CONSUMED by 'angular' and by the DEFAULT 'scalar_mix' model.
+    # fspec defaults are the SK-lit specular fractions (wall 0.55, sensor 0.90); override
+    # per detector in the physics config (wall_fspec/sensor_fspec) if the surfaces differ.
     for field, default in _ANGULAR_REFL_DEFAULTS.items():
         v = kwargs[field]
         if v.ndim == 0 and bool(jnp.isnan(v)):

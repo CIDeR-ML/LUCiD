@@ -32,16 +32,17 @@ def test_run_job_cli_help():
 
 
 def test_dataprod_configs_well_formed():
-    files = sorted(glob.glob(os.path.join(CONFIGS, 'dataprod_*.json')))
-    assert len(files) >= 18, f"expected the dataprod_01..18 configs, found {len(files)}"
+    # configs live in block subdirectories (GeV/, SN/, Solar/, Test/) as NN_name.json
+    files = sorted(glob.glob(os.path.join(CONFIGS, '*', '[0-9][0-9]_*.json')))
+    assert len(files) >= 16, f"expected the block dataprod configs, found {len(files)}"
     for f in files:
         with open(f) as fh:
             cfg = json.load(fh)
         assert 'name' in cfg, f"{f}: missing 'name'"
         assert 'material' in cfg, f"{f}: missing 'material'"
-        # every config drives either particle-gun, GENIE, or pile-up
-        assert any(k in cfg for k in ('particles', 'genie', 'vertices', 'bombs')), \
-            f"{f}: no primary source (particles/genie/vertices/bombs)"
+        # every config drives a particle gun, GENIE, pile-up, a bomb, or a supernova burst
+        assert any(k in cfg for k in ('particles', 'genie', 'vertices', 'bomb', 'supernova')), \
+            f"{f}: no primary source (particles/genie/vertices/bomb/supernova)"
 
 
 def test_run_job_uses_modular_event_generation():

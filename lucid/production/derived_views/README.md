@@ -1,7 +1,7 @@
 # Derived views from a LUCiD dataset (no ROOT, no re-sim)
 
 A **derived view** is a new labeling/representation produced by re-aggregating or re-grouping the
-four stored v3 HDF5 files (`sensor`, `hits`, `step`, `labl`) only — no PhotonSim ROOT, no re-running
+four stored HDF5 files (`sensor`, `hits`, `step`, `labl`) only — no PhotonSim ROOT, no re-running
 the forward. This directory holds the ROOT-free transforms plus the non-obvious gotchas so they don't
 have to be re-discovered.
 
@@ -35,7 +35,7 @@ and how to **reduce** (PE→sum, T→min). (The `step` modality was formerly cal
 `edep` energy-deposit *value* dataset inside it is unchanged.)
 
 ## What drives each thing in the viewer (so you rewrite the right field)
-| To change… | Rewrite in the v3 files |
+| To change… | Rewrite in the dataset files |
 |---|---|
 | per-PMT Cherenkov vs scintillation | `hits/…/emission_process` and `step/…/sensor_hits/emission_process` (int8: 0=Cher, 1=scint) |
 | **Particle** label coloring (PMTs) | `labl/per_track/particle_idx` (viewer maps segment→track→particle via this) |

@@ -39,7 +39,7 @@ import os, json, time, subprocess
 DEFAULT_RECIPE = dict(lr=4.0, lr_final=1.5, ridge_i=0.1, lam=0.01,
                       nkeys=8, niters=150, refresh=8, time_weight=1.0, trust=3.0)
 POSE_STRIDE = 1000          # pose_seed = pose_seed_base + event*STRIDE + pose  (stable across configs)
-DEFAULT_DATA_ROOT = "/sdf/group/neutrino/omara/LUCiD_dlcheck/data/water/{particle}/{energy}MeV_100events.root"
+DEFAULT_DATA_ROOT = "data/water/{particle}/{energy}MeV_100events.root"
 DEFAULT_GEOM = "config/SK_like_geom_config.json"
 DEFAULT_PHYS = "config/SK_like_physics_config.json"
 DEFAULT_BAND = (274.91, 673.83)
@@ -219,6 +219,8 @@ def _run_shard(cfg, shard, nshards, out_dir):
         if (w["particle"], w["nph"]) != cur:                                  # (re)build sim on group change
             data_sim, pred, model = eng["build"](w["particle"], w["nph"]); cur = (w["particle"], w["nph"])
         rp = cfg["data_root"].format(particle=w["particle"], energy=w["energy"])
+        if not os.path.isabs(rp):  # resolve like geom/phys: repo root, not cwd
+            rp = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), rp)
         raw0 = _read_event(rp, w["event"])
         pose_seed = cfg["pose_seed_base"] + w["event"] * POSE_STRIDE + w["pose"]
         raw, vtx, dirt = _rand_tf(raw0, pose_seed, cfg["fidr"], cfg["fidz"])

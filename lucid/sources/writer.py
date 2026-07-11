@@ -37,7 +37,7 @@ __all__ = [
 
 # ---------------------------------------------------------------------------
 # format: four-file per-event-group HDF5 (sensor / hits / step / labl).
-# See docs/LUCID_DATASET.md for the full schema.
+# See docs/reference/dataset-schema.md for the full schema.
 # ---------------------------------------------------------------------------
 
 _GZIP_OPTS = dict(compression='gzip', compression_opts=4)
@@ -390,6 +390,7 @@ def _write_common_config_attrs(f, config_meta):
     # file is incomplete. Health checks gate on this, not on n_events.
     cfg.attrs['complete'] = False
     cfg.attrs['git_commit'] = str(config_meta.get('git_commit', 'unknown'))
+    cfg.attrs['reflection_model'] = str(config_meta.get('reflection_model', 'scalar_mix'))
     cfg.attrs['run_id'] = str(config_meta['run_id'])
     cfg.attrs['dataset_name'] = str(config_meta['dataset_name'])
     cfg.attrs['file_index'] = int(config_meta.get('file_index', 0))
