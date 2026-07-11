@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Synthesize a minimal v5 LUCiD dataset for viewer smoke tests.
 
-Produces four HDF5 files matching `docs/LUCID_DATASET.md` — sensor, hits,
+Produces four HDF5 files matching `docs/reference/dataset-schema.md` — sensor, hits,
 step, labl — with a small number of events and synthetic but reasonable
 content. Intended to exercise the browser viewer without running the
 full production pipeline. Emits the v5 schema: per_interaction/ with
@@ -458,7 +458,7 @@ def write_dataset(out_dir, geom, n_events, n_sensors, seed):
 
 
 def main():
-    ap = argparse.ArgumentParser(description='Synthesize a v3 LUCiD dataset for viewer testing.')
+    ap = argparse.ArgumentParser(description='Synthesize a stub LUCiD dataset for viewer testing.')
     ap.add_argument('--out', '-o', default='./test_data', help='Output directory')
     ap.add_argument('--geom', '-g', choices=('cylinder', 'box', 'sphere'), default='cylinder')
     ap.add_argument('--events', '-e', type=int, default=5)

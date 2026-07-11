@@ -29,7 +29,7 @@ class Cylinder(Detector):
     * The default :meth:`__init__` algorithmically tiles the barrel
       and end caps with ``n_sensors`` photosensors.
     * :meth:`from_pmt_file` instead loads measured PMT positions from
-      a `.npz` file (see ``PMT_NPZ_SCHEMA.md``) — used for SK, HK,
+      a `.npz` file (see ``docs/reference/pmt-npz-schema.md``) — used for SK, HK,
       WCTE, SK_official and any other geometry whose layout is given
       rather than computed.
     """
@@ -168,7 +168,7 @@ class Cylinder(Detector):
     @classmethod
     def from_pmt_file(cls, npz_file_path, snap_to_wall=True):
         """Build a :class:`Cylinder` whose PMT positions are read from
-        a unified-schema ``.npz`` file (see ``PMT_NPZ_SCHEMA.md``).
+        a unified-schema ``.npz`` file (see ``docs/reference/pmt-npz-schema.md``).
 
         Parameters
         ----------
@@ -200,7 +200,7 @@ class Cylinder(Detector):
             if key not in data.files:
                 raise KeyError(
                     f"PMT npz '{npz_file_path}' is missing required "
-                    f"key '{key}'. See lucid/geometry/PMT_NPZ_SCHEMA.md."
+                    f"key '{key}'. See docs/reference/pmt-npz-schema.md."
                 )
 
         positions_m = data['positions_mm'].astype(float) * _FROM_FILE_MM_TO_M

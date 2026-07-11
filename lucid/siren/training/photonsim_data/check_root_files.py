@@ -6,7 +6,7 @@ Scans `<data-dir>/<E>MeV/output.root` and reports missing, empty, corrupted,
 and good files (with the photon count from `PhotonHist_AngleDistanceNorm`).
 
 Used as a sanity check before invoking `lucid-build-photon-table`. See
-`docs/SIREN_TRAINING_INPUTS.md` for the full pipeline.
+`docs/guides/production/siren-training-inputs.md` for the full pipeline.
 """
 
 import uproot

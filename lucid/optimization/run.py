@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """``lucid-optimize`` — config-driven single-track reconstruction on PhotonSim ROOT events.
 
-The validated recon path (MAIN_BRANCH_PLAN U8): the retired 5-stage Adam ``pipeline.py`` is
+The validated recon path: the retired 5-stage Adam ``pipeline.py`` is
 replaced by the Fisher-Gauss-Newton two-start fit (``lucid.fitting.fit_track_multistart``):
 energy scan → charge-grid vertex ‖ time-multilateration vertex (each + a cone direction) →
 GN fit from both seeds, keep the lower-loss basin (1% margin). Reconstructs to ~12 cm / ~1.0°
-on 1 GeV muons (RESULTS in scripts/campaign_recon/). For the ≤20-line library form see
+on 1 GeV muons. For the ≤20-line library form see
 ``examples/hello_reconstruct.py``.
 
 Usage:  lucid-optimize <config.json>     (or  python -m lucid.optimization.run <config.json>)
@@ -100,7 +100,7 @@ def main():
                                                bounds, n_div=5, t0_n_div=5, levels=6, verbosity=0)
         seedA = make_seed(np.asarray(p1['best_position']), float(p1['best_t0']))
         seedB = make_seed(*seed_vertex_time(POS, oc, ot))
-        res, MS = fit_track_multistart(model, oc, ot, [seedA, seedB], nkeys=4, niters=250)
+        res, MS = fit_track_multistart(model, oc, ot, [seedA, seedB])
         np.savez(os.path.join(OUT, f'ev{ev:04d}.npz'), fit=res, direction=vec9_dir(res),
                  which=MS['which'], losses=np.array(MS['losses']),
                  n_hit=int((oc > 0).sum()), q_tot=float(oc.sum()), event=ev)

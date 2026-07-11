@@ -2,7 +2,7 @@
 import jax
 import jax.numpy as jnp
 from lucid.simulation.optics import (
-    normalize, compute_reflection_direction, sample_cosine_hemisphere,
+    normalize,
     sample_scatter_distance, compute_scatter_direction,
     create_local_frame, solve_rayleigh_inverse_cdf,
 )
@@ -18,13 +18,16 @@ def photon_iteration_sample(
         position, direction, time, surface_distance,
         normal, scatter_length, mie_scatter_length, g, refl_params,
         absorption_length,
-        hit_sensor, lam, rng_key, speed_of_light):
+        hit_sensor, lam, rng_key, speed_of_light,
+        reflection_fn=scalar_reflection):
     """
     Sampling version of photon iteration that makes binary decisions.
 
     Performs Monte Carlo sampling where photons make discrete choices
     (detect/reflect/scatter) rather than computing expected values.
-    Walls use diffuse reflection, sensors use specular reflection.
+    The reflected direction is delegated to ``reflection_fn`` (arg default ``scalar_reflection``;
+    the simulator's default is ``scalar_mix`` — a specular/diffuse mixture per ``wall_fspec``/
+    ``sensor_fspec``; the legacy ``scalar`` model uses hard diffuse walls / specular sensors).
 
     Parameters
     ----------
@@ -71,8 +74,14 @@ def photon_iteration_sample(
 
     k1, k2, k3, k4, k5, k6 = jax.random.split(rng_key, 6)
 
-    # MC path keeps inline scalar reflection (unpacks the packed refl_params); ``lam`` unused.
-    reflection_rate = jnp.where(hit_sensor, refl_params.sensor_rate, refl_params.wall_rate)
+    # Reflection is delegated to the SAME pluggable model the differentiable path uses, so the
+    # sampled (data/truth) forward and the expected-value forward agree on reflection physics
+    # (magnitude AND specular/diffuse direction) for every model — not just 'scalar'. The DiCE
+    # score (3rd return) is discarded: sampling is a real MC draw, not a soft expectation.
+    # k4 (the legacy inline-diffuse key) is passed in, so the default 'scalar' model reproduces
+    # the previous hard-coded walls-diffuse/sensors-specular behavior BIT-FOR-BIT.
+    reflection_rate, reflection_dir, _lr_unused = reflection_fn(
+        direction, normal, hit_sensor, refl_params, lam, k4)
     # Combine Rayleigh + Mie by RATES (NOT min): total scatter coeff = 1/L_R + 1/L_M.
     mie_safe = jnp.maximum(mie_scatter_length, 1e-6)
     inv_total = 1.0 / scatter_length + 1.0 / mie_safe
@@ -103,9 +112,6 @@ def photon_iteration_sample(
         position + surface_distance * normalize(direction) + epsilon * normalize(inward_normal),
     )
 
-    specular_dir = compute_reflection_direction(direction, normal)
-    diffuse_dir = sample_cosine_hemisphere(inward_normal, k4)
-    reflection_dir = jnp.where(hit_sensor, specular_dir, diffuse_dir)
     rayleigh_dir = compute_scatter_direction(direction, k3)
     mie_dir = compute_mie_scatter_direction(direction, k3, g)
     is_mie = jax.random.uniform(k5) < p_mie          # choose Mie vs Rayleigh per scatter (~5% Mie at physical L)
@@ -145,10 +151,14 @@ def photon_iteration_update_factors(
         hit_sensor, lam, rng_key, speed_of_light,
         reflection_fn=scalar_reflection):
     """
-    Expected-value photon update with Straight-Through Estimator (STE).
+    Expected-value ("implicit capture") photon update with DiCE score-function gradients.
 
-    Computes expected values for detect/reflect/scatter outcomes for full
-    differentiability. Walls use diffuse reflection, sensors use specular.
+    Deposits the expected detected charge every step without terminating the ray;
+    detection, absorption, and reflection continue as soft weights, so the whole step is
+    differentiable. The reflection direction is delegated to ``reflection_fn`` (default
+    ``scalar_reflection``; the ``scalar_mix`` model draws specular versus diffuse with the
+    fitted specular fraction). The stochastic scattering/reflection choices carry their
+    gradients through the accumulated log-score (DiCE), not a straight-through estimator.
 
     Parameters
     ----------
@@ -298,7 +308,7 @@ def make_photon_iteration_update_factors_safe(reflection_fn=scalar_reflection):
     → N_sensors outputs → forward-mode is the efficient, low-variance mode). Forward is
     byte-identical; the gradient/Hessian are now the true unbiased AD values. Verified
     NaN-free without the backstop across ~3·10⁴ grad/Hessian evals over random + on-surface
-    stress geometries (hessian_probe/recon_nan_thorough.py).
+    stress geometries.
     """
 
     def _step(position, direction, time, surface_distance,

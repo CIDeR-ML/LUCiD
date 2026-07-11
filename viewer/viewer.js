@@ -1,6 +1,6 @@
 // LUCiD Event Viewer — main module.
 //
-// Architecture modeled on the JAXTPC viewer: Three.js WebGL 3D panel +
+// Architecture: Three.js WebGL 3D panel +
 // Canvas2D unwrapped 2D panel, with h5wasm streaming in a worker. See
 // shaders.js (rendering), geometry_layout.js (unwrap math),
 // colormaps.js (palettes), h5_worker.js (I/O).

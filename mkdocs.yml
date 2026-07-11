@@ -1,0 +1,81 @@
+site_name: LUCiD
+site_description: Differentiable photon simulation for optical particle detectors
+site_url: https://cider-ml.github.io/LUCiD/docs/
+repo_url: https://github.com/CIDeR-ML/LUCiD
+repo_name: CIDeR-ML/LUCiD
+docs_dir: docs
+
+theme:
+  name: material
+  features:
+    - navigation.sections
+    - navigation.top
+    - content.code.copy
+    - content.code.annotate
+    - search.suggest
+    - search.highlight
+  palette:
+    - scheme: default
+      toggle: { icon: material/weather-night, name: Dark mode }
+    - scheme: slate
+      toggle: { icon: material/weather-sunny, name: Light mode }
+
+plugins:
+  - search
+
+# Clicking the logo/title returns to the project landing page (site root),
+# not the docs home, since the docs are served beneath it at /docs/.
+extra:
+  homepage: https://cider-ml.github.io/LUCiD/
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.highlight
+  - pymdownx.superfences
+  - pymdownx.arithmatex: { generic: true }
+  - tables
+  - toc: { permalink: true }
+
+extra_javascript:
+  - https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js
+
+# Kept in the repo for reference, not published:
+exclude_docs: |
+  internal/
+
+nav:
+  - Home: index.md
+  - Getting Started:
+      - Install: getting-started/install.md
+      - Quickstart: getting-started/quickstart.md
+      - Bundled detectors: getting-started/detectors.md
+  - Concepts:
+      - The photon pipeline: concepts/photon-pipeline.md
+      - Geometry & configuration: concepts/geometry.md
+      - Architecture: concepts/architecture.md
+      - Parameters (DetectorParams): concepts/detector-params-vs-args.md
+      - Wavelength physics: concepts/wavelength.md
+      - Materials (water / WbLS / ice): concepts/materials.md
+  - Guides:
+      - Reconstruction: guides/reconstruction.md
+      - Calibration: guides/calibration.md
+      - Model your own detector: guides/model-your-own-detector.md
+      - Producing datasets:
+          - Overview: guides/production/index.md
+          - Local (with PhotonSim): guides/production/local.md
+          - Docker: guides/production/docker.md
+          - Cluster deployment:
+              - How cluster targeting works: guides/production/cluster-abstraction.md
+              - S3DF (SLAC): guides/production/deploy-s3df.md
+              - NERSC (Perlmutter): guides/production/deploy-nersc.md
+              - LXPLUS (CERN): guides/production/deploy-lxplus.md
+          - Training the SIREN emitter: guides/production/siren-training-inputs.md
+  - Reference:
+      - CLI: reference/cli.md
+      - Configuration: reference/config.md
+      - Dataset schema: reference/dataset-schema.md
+      - Working with data: reference/working-with-data.md
+      - Digitizer & trigger: reference/digitizer-and-trigger.md
+      - PMT .npz schema: reference/pmt-npz-schema.md
+  - Contributing: https://github.com/CIDeR-ML/LUCiD/blob/main/CONTRIBUTING.md

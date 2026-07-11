@@ -2,9 +2,10 @@
 Batch cascade simulation using the full LUCiD simulator pipeline.
 
 Uses setup_event_simulator with the string propagator + volume photon step.
-Same output format as batch_cascades.py (events.json + detector.json).
+Writes events.json + detector.json + per-event .npz under output/cascades_sim/.
 
-Run: python string/batch_cascades_sim.py
+Run: python scripts/run_string_cascades.py --n-events 20
+(This is a heavy batch job: ~1M photons x K=20 per event.)
 """
 
 import sys
@@ -161,4 +162,11 @@ def main():
 
 
 if __name__ == "__main__":
+    import argparse
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument('--n-events', type=int, default=N_EVENTS,
+                    help='events per energy point (heavy: ~1M photons x K=20 each)')
+    args = ap.parse_args()
+    N_EVENTS = args.n_events
     main()

@@ -1,20 +1,19 @@
 # LUCiD Event Viewer
 
-Browser-based interactive viewer for LUCiD v3 production HDF5 output:
-raw PMT readout (`sensor`), per-particle decomposition (`inst`), Geant4
-truth segments (`seg`), and truth labels (`labl`). Supports cylinder,
+Browser-based interactive viewer for LUCiD production HDF5 output:
+raw PMT readout (`sensor`), per-particle decomposition (`hits`), Geant4
+truth segments (`step`), and truth labels (`labl`). Supports cylinder,
 box, and sphere geometries.
 
-Modeled on the [JAXTPC viewer](../../../JAXTPC/viewer/) — Three.js 3D +
-Canvas2D unwrapped 2D — adapted to water-Cherenkov PMT displays with
-particle-level correspondence.
+Three.js 3D + Canvas2D unwrapped 2D, adapted to water-Cherenkov PMT displays
+with particle-level correspondence.
 
 ## Files
 
 | File | Role |
 |---|---|
 | `serve_viewer.py`     | Local HTTP server with byte-range support |
-| `make_test_data.py`   | Stub v3 dataset generator (for pre-migration smoke tests) |
+| `make_test_data.py`   | Stub dataset generator (for smoke tests) |
 | `index.html`          | Viewer entry point |
 | `viewer.css`          | Styles |
 | `viewer.js`           | Main module (Three.js + Canvas2D + UI) |
@@ -31,11 +30,11 @@ particle-level correspondence.
 ## Quick start
 
 ```bash
-# Against a real v3 dataset (production output or regenerated sample)
+# Against a real dataset (production output or regenerated sample)
 python3 serve_viewer.py /path/to/dataset_root --open
 
 # Against the stub dataset in this repo
-python3 serve_viewer.py ./sample_v3 --port 8765 --open
+python3 serve_viewer.py ./sample_data --port 8765 --open
 ```
 
 Then open **http://127.0.0.1:8765/**. The page shows `html loaded, waiting for viewer.js...` while modules parse; proceeds to mount/fetch status; then drops you into the viewer.
@@ -51,7 +50,7 @@ Then open **http://127.0.0.1:8765/**. The page shows `html loaded, waiting for v
 - **HIT · `All | 1st | 2nd | …`** — only shown when the digitizer recorded more than one **digit** on some PMT (delayed coincidence, pile-up, dark noise → `sensor.h5` is a multi-row digit list). `All` (default) sums each PMT's digit charge at its first-arrival time — identical to the legacy one-digit-per-PMT look. `Nth` shows only the PMTs with ≥N digits, coloured by that digit's charge/time; both FIELD and LABEL re-aggregate to the selected digit (via the `digit_idx` FK from `hits.h5`), so stepping through hits reveals e.g. a muon's prompt digit vs its Michel-electron delayed digit. Resets to `All` automatically when navigating to an event with fewer digits.
 - **LABEL** — categorical override.
   - `None` (default): use FIELD (continuous).
-  - `Particle` — hashed hue per particle (PMTs via argmax over `inst.PE`; segs via `track → particle_idx`).
+  - `Particle` — hashed hue per particle (PMTs via argmax over `hits.PE`; segs via `track → particle_idx`).
   - `Category` — fixed hue per LUCiD category (Primary / DecayElec / SecPion / Gamma / …).
   - `Ancestor` — hashed hue per primary track_id (root of each track's parent chain, from `labl/per_track/ancestor`).
   - `Interaction` — hashed hue per interaction rank (`labl/per_track/interaction` — 0-based index among the event's primaries).
@@ -69,7 +68,7 @@ The sidebar contents depend on the current Label:
 Click a row to isolate that particle (or union of particles in the group): its PMT contributions pop at near-full brightness, non-contributors fade to ~8% alpha, and segments belonging to the selection stay bright. Click the same row again to deselect. Changing Label clears the selection.
 
 Below the event-meta block, the sidebar shows a **SELECTION** info card:
-- For a particle: category name, edep containment, Σ PE from inst, sensors hit, n tracks, n Cherenkov, max initial energy, PDG set, genealogy chain.
+- For a particle: category name, edep containment, Σ PE from hits, sensors hit, n tracks, n Cherenkov, max initial energy, PDG set, genealogy chain.
 - For a group: kind, id, particle IDs in the group, Σ PE, sensors hit, n tracks.
 
 ### Settings drawer
@@ -80,7 +79,7 @@ Below the event-meta block, the sidebar shows a **SELECTION** info card:
 
 ## Data contract
 
-Per [`docs/LUCID_DATASET.md`](../docs/LUCID_DATASET.md). The viewer reads:
+Per [`docs/reference/dataset-schema.md`](../docs/reference/dataset-schema.md). The viewer reads:
 
 **sensor.h5**
 - `config/attrs`: `n_events`, `n_sensors`, `detector_type`, `dataset_name`, provenance.
@@ -113,7 +112,7 @@ Cross-file integrity: `source_event_idx` is compared across all four files on ea
 These caught me out during development — documenting so they don't catch you:
 
 - **Sentinel rows in `sensor.h5`**. The writer emits a row per sensor-of-interest even when no real photon arrived, with `PE = 0` and `T = −t0` (i.e. shifted zero). The viewer filters these: a PMT is treated as "has signal" only if accumulated `PE > 0`. Sentinel sensors render as the gray silhouette.
-- **`t0` can be negative**. The writer jitters each event's emission time within roughly ±15 ns so the detector reads events at random clock phases (matches real-data triggering). Sensor/step/inst times are stored as `t − t0` (detector frame, t=0 = trigger moment); the raw truth `t0` lives in `labl/per_event/t0`.
+- **`t0` can be negative**. The writer jitters each event's emission time within roughly ±15 ns so the detector reads events at random clock phases (matches real-data triggering). Sensor/step/hits times are stored as `t − t0` (detector frame, t=0 = trigger moment); the raw truth `t0` lives in `labl/per_event/t0`.
 - **Units**. `sensor_positions` and all `step/*` coordinates are in **meters**. Times are in **ns**. Energies in MeV.
 - **Ancestor/interaction are per-track** and consistent across all tracks of a given particle. The viewer derives per-particle ancestor/interaction by picking any one of the particle's tracks.
 
@@ -146,6 +145,6 @@ python3 make_test_data.py --out /tmp/stub --geom cylinder --events 5
 python3 serve_viewer.py /tmp/stub --port 8766 --open
 ```
 
-The stub honors the v3 schema but has synthetic sensor hits/segments; won't match any real physics. For debugging the viewer shell it's sufficient.
+The stub honors the dataset schema but has synthetic sensor hits/segments; won't match any real physics. For debugging the viewer shell it's sufficient.
 
 Diagnostic logging is sprinkled through module init and worker startup; open DevTools → Console and look for lines prefixed `[viewer]` / `[h5_worker]`. On a JS parse error the page stalls on `html loaded, waiting for viewer.js...` — check the Console for the exception (that's how I caught the pdgName object-literal bug).
