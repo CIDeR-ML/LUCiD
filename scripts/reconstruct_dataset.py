@@ -84,7 +84,7 @@ def main():
     data_sim = setup_event_simulator(args.geom, args.nbuf, temperature=None, K=8, is_data=True,
                                      hit_mode='realistic', physics_config=args.physics,
                                      default_detector_params=dp_data, particle='muon',
-                                     wavelength_mode=True, apply_smearing=False, **GRID)
+                                     wavelength_mode=True, charge_resolution=None, **GRID)
     # Band-consistent recon: sample the model over the PhotonSim Cherenkov emission band
     # [274.91, 673.83] nm so QE applies to the true band (GEANT4-consistent; see campaign_recon
     # REVAL_RESULTS.md). Vertex/direction hit the SIREN-emitter floor (~15 cm / sub-degree);

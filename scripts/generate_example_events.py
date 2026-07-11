@@ -32,7 +32,7 @@ def main():
     dp = load_detector_params(args.physics, num_sensors=ND)
     dp = dp._replace(response=dp.response._replace(tts=jnp.asarray(args.tts)))
     sim = setup_event_simulator(args.geom, args.nbuf, temperature=None, K=8, is_data=True,
-                                hit_mode='realistic', apply_smearing=False, physics_config=args.physics,
+                                hit_mode='realistic', charge_resolution=None, physics_config=args.physics,
                                 default_detector_params=dp, particle='muon', wavelength_mode=True,
                                 n_cap=100, n_angular=150, n_height=100)
     dummy = track_from_vec9(jnp.asarray(vec9_from_track(1000., [0, 0, 0], [0, 0, 1], t0=0.)))
