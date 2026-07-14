@@ -60,11 +60,12 @@ def create_detector_display(json_filename='../config/cyl_geom_config.json', spar
         facecolor='white',
         barcolor='black',
         colormap=None,
-        colormap_norm=None,   # currently not used, kept for compatibility
+        colormap_norm=None,   # optional matplotlib norm (e.g. diverging TwoSlopeNorm); overrides the default
         zero_color=np.array([0.9, 0.9, 0.9, 1.0]),
         show_colorbar=True,
         colorbar_width='5%',
         colorbar_label=None,
+        colorbar_ticks=None,   # explicit tick values (data units); overrides the auto locator
         external_legend=None,
     ):
         """
@@ -134,9 +135,9 @@ def create_detector_display(json_filename='../config/cyl_geom_config.json', spar
         # If a custom colormap is provided, override cmap (but keep norm as-is)
         if colormap is not None:
             cmap = colormap
-            # If you ever want to use colormap_norm, uncomment:
-            # if colormap_norm is not None:
-            #     norm = colormap_norm
+        # If a custom norm is provided (e.g. a diverging TwoSlopeNorm), use it verbatim.
+        if colormap_norm is not None:
+            norm = colormap_norm
 
         color_gradient = plt.cm.ScalarMappable(norm=norm, cmap=cmap)
 
@@ -219,14 +220,21 @@ def create_detector_display(json_filename='../config/cyl_geom_config.json', spar
             divider = make_axes_locatable(ax)
             cax = divider.append_axes("right", size=colorbar_width, pad=0.1)
             cbar = plt.colorbar(color_gradient, cax=cax)
-            value_label = colorbar_label if colorbar_label is not None else (
-                'Time (ns)' if plot_time else 'Photoelectron Count (a.u.)')
-            scale_label = ' (log scale)' if log_scale else ''
-            cbar.set_label(f'{value_label}{scale_label}', color=barcolor, fontsize=14)
+            if colorbar_label is not None:               # explicit label -> use it verbatim
+                label_text = colorbar_label
+            else:
+                label_text = ('Time (ns)' if plot_time else 'Photoelectron Count (a.u.)') \
+                    + (' (log scale)' if log_scale else '')
+            cbar.set_label(label_text, color=barcolor, fontsize=14)
             cbar.ax.yaxis.set_tick_params(color=barcolor, labelcolor=barcolor)
             cbar.outline.set_edgecolor(barcolor)
 
-            if log_scale:
+            if colorbar_ticks is not None:
+                from matplotlib.ticker import FixedLocator, FormatStrFormatter
+                cbar.ax.yaxis.set_major_locator(FixedLocator(list(colorbar_ticks)))
+                cbar.ax.yaxis.set_minor_locator(FixedLocator([]))
+                cbar.ax.yaxis.set_major_formatter(FormatStrFormatter('%.0f'))
+            elif log_scale:
                 from matplotlib.ticker import LogLocator, LogFormatter
                 cbar.ax.yaxis.set_major_locator(LogLocator(numticks=10))
                 cbar.ax.yaxis.set_minor_locator(LogLocator(numticks=10, subs='auto'))
