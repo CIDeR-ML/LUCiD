@@ -1,6 +1,6 @@
 """Build tracking-study config dicts for the paper figures.
 
-These are ordinary ``analysis/tracking`` configs (the same schema ``run_study.py``
+These are ordinary ``analysis/paper`` configs (the same schema ``run_study.py``
 and ``submit_job.py`` consume) — just assembled programmatically so a figure can
 scale itself between a small local run and the full S3DF production by changing
 one argument (``n_events``).
@@ -83,7 +83,7 @@ def geom_configs(n_events, sensors=None, energy_mev=1000, n_rays=250000, particl
     root = default_root(particle, energy_mev, root_events, root_base)
     return [base_config(particle, energy_mev, n_rays, n_events, root, name=f'gscan_{N}',
                         study='geom',
-                        geom_config=f'analysis/tracking/geometries/SK_like_{N}_geom_config.json')
+                        geom_config=f'analysis/paper/geometries/SK_like_{N}_geom_config.json')
             for N in sensors]
 
 

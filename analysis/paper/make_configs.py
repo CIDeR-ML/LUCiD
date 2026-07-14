@@ -10,9 +10,9 @@ Three study axes, each for muon and electron:
 Writes ``configs/<study>/<particle>/config_NN.json`` next to this script. Each JSON is merged
 over pipeline.DEFAULT_CONFIG at load time, so only the study-varying keys are written.
 
-    python analysis/tracking/make_geometries.py        # first, for the geom study
-    python analysis/tracking/make_configs.py            # all studies, both particles
-    python analysis/tracking/make_configs.py --studies nrays --particles muon --n-events 50
+    python analysis/paper/make_geometries.py        # first, for the geom study
+    python analysis/paper/make_configs.py            # all studies, both particles
+    python analysis/paper/make_configs.py --studies nrays --particles muon --n-events 50
 """
 import argparse
 import json
@@ -100,7 +100,7 @@ def main():
             print(f"{study:6s} / {particle:8s}: {n} configs -> "
                   f"{(CONFIG_DIR / study / particle).relative_to(REPO_ROOT)}")
     print(f"\nDone. n_events={args.n_events} per config. "
-          f"(geom study requires: python analysis/tracking/make_geometries.py)")
+          f"(geom study requires: python analysis/paper/make_geometries.py)")
 
 
 if __name__ == '__main__':

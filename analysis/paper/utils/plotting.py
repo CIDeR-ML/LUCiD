@@ -1,4 +1,4 @@
-"""Thin wrappers over the ``analysis/tracking/ovv_plots`` plot modes.
+"""Thin wrappers over the ``analysis/paper/utils/ovv_plots`` plot modes.
 
 The paper figures reuse the exact plotting code that made the study figures; these
 helpers just assemble the argument namespace so a figure script stays a few lines.
@@ -6,7 +6,7 @@ helpers just assemble the argument namespace so a figure script stays a few line
 from pathlib import Path
 from types import SimpleNamespace
 
-from analysis.tracking import ovv_plots
+from analysis.paper.utils import ovv_plots
 
 
 def nrays_combined(mu_base, el_base, mass_mu, mass_el, out,

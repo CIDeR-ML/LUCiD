@@ -32,7 +32,7 @@ from pathlib import Path
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from analysis.tracking.pipeline import TrackingPipeline, load_config, vec9_to_phys  # noqa: E402
+from analysis.paper.utils.pipeline import TrackingPipeline, load_config, vec9_to_phys  # noqa: E402
 
 # notebook conventions ---------------------------------------------------------------------
 PHYS_NAMES = ['X', 'Y', 'Z', 't0', 'theta', 'phi', 'E']
