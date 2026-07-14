@@ -4,7 +4,7 @@ How to run the single-track reconstruction campaigns (the three-start Fisher-GN 
 [`lucid.fitting`](../lucid/fitting)) across the **nrays**, **energy**, and **geom** axes for
 **muon** and **electron**, on S3DF SLURM. All code lives in
 [`analysis/tracking/`](../analysis/tracking); this is the S3DF runbook — see also
-[`QUICKSTART_S3DF.md`](QUICKSTART_S3DF.md).
+the [S3DF deployment guide](guides/production/deploy-s3df.md).
 
 The reconstruction itself is the validated recipe from
 [`scripts/campaign_recon/`](../scripts/campaign_recon) (RESULTS.md): per event, load the
@@ -112,7 +112,7 @@ nrays and geom studies reuse the 1000 MeV file from this same tree.
 ## Initial-guess (seed) study
 
 A standalone study of the **seeder** alone — no Gauss-Newton — is
-[`seed_study.py`](../analysis/tracking/seed_study.py). The initial guess is three seeds: a
+[`seed_study.py`](https://github.com/CIDeR-ML/LUCiD/blob/main/analysis/tracking/seed_study.py). The initial guess is three seeds: a
 shared photon-count **energy scan**, two vertices (**charge-grid** ‖ **time-multilateration**)
 each with a forward-model **cone direction**, and their **fusion** (`pipeline.fuse_seeds`:
 transverse vertex from B, longitudinal from A along A's direction, averaged t0 — the opposite
