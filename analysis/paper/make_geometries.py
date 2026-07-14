@@ -3,12 +3,12 @@
 
 Copies ``config/SK_like_geom_config.json`` and overrides ``geometry_definitions.n_sensors``
 for each count in 2000..20000 step 1000, writing them next to this script under
-``analysis/tracking/geometries/SK_like_<N>_geom_config.json``.
+``analysis/paper/geometries/SK_like_<N>_geom_config.json``.
 
 The physics config is independent of PMT count, so every generated geometry reuses
 ``config/SK_like_physics_config.json`` (referenced from the study configs, not copied here).
 
-    python analysis/tracking/make_geometries.py
+    python analysis/paper/make_geometries.py
 """
 import json
 from pathlib import Path

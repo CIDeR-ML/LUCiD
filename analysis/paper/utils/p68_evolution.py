@@ -7,7 +7,7 @@ iteration the four errors vs truth — vertex distance (cm), direction (deg), |d
 the seed (iter 0), at each event's min-||g|| readout iterate (the actual fit readout), and at
 the final iterate.
 
-    python analysis/tracking/p68_evolution.py <run.h5> [--out DIR]
+    python analysis/paper/utils/p68_evolution.py <run.h5> [--out DIR]
 """
 import argparse
 import sys

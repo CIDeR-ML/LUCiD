@@ -5,8 +5,8 @@
     python fig_geometry_scan.py --plot-results
     python fig_geometry_scan.py --generate-data --backend s3df --events 100
 
-Needs the per-count geometry configs (analysis/tracking/geometries/SK_like_<N>_geom_config.json);
-generate any missing ones with analysis/tracking/make_geometries.py.
+Needs the per-count geometry configs (analysis/paper/geometries/SK_like_<N>_geom_config.json);
+generate any missing ones with analysis/paper/make_geometries.py.
 """
 import argparse
 import sys

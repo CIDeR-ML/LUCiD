@@ -2,7 +2,7 @@
   "name": "seed_val_geom4k",
   "particle": "muon",
   "study": "geom",
-  "geom_config": "analysis/tracking/geometries/SK_like_4000_geom_config.json",
+  "geom_config": "analysis/paper/geometries/SK_like_4000_geom_config.json",
   "phys_config": "config/SK_like_physics_config.json",
   "root_file": "data/water/muon/1000MeV_100events.root",
   "energy_nominal_MeV": 1000,

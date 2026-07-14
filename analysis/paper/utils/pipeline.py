@@ -20,7 +20,7 @@ sampled over the PhotonSim Cherenkov emission band so QE applies to the true ban
 
 Usage
 -----
-    from analysis.tracking.pipeline import TrackingPipeline, load_config
+    from analysis.paper.utils.pipeline import TrackingPipeline, load_config
     cfg  = load_config('config_00.json')
     pipe = TrackingPipeline(cfg)          # builds detector + simulators ONCE
     rec  = pipe.reconstruct(ev=0)         # dict of truth / seeds / trajectories / errors
@@ -33,7 +33,7 @@ import numpy as np
 import jax
 import jax.numpy as jnp
 
-REPO_ROOT = Path(__file__).resolve().parents[2]      # analysis/tracking/pipeline.py -> LUCiD/
+REPO_ROOT = Path(__file__).resolve().parents[3]      # analysis/paper/utils/pipeline.py -> LUCiD/
 
 # 9-vector physical-parameter order the studies log: [E, x,y,z, sinθ,cosθ, sinφ,cosφ, t0].
 # The user-facing tuple is (x, y, z, phi, theta, t0, E) — see vec9_to_phys.
@@ -226,7 +226,7 @@ def _dir_from_vec9(v):
     return np.array([st * cp, st * sp, ct])
 
 
-# per-seed error vector order stored by the seed study (see analysis/tracking/seed_study.py).
+# per-seed error vector order stored by the seed study.
 SEED_ERR_NAMES = ['vtx_cm', 'vtx_trans_cm', 'vtx_long_cm', 'dir_deg', 'dE_MeV', 'dt0_ns']
 
 

@@ -174,7 +174,11 @@ def plot_results(out):
                   L * nw / ext, lab, font, cap_px)
     out = Path(out); out.mkdir(parents=True, exist_ok=True)
     base = out / 'detector_gallery'
-    canvas.save(f'{base}.png'); canvas.save(f'{base}.pdf')
+    canvas.save(f'{base}.png')
+    import matplotlib.pyplot as plt                          # PDF via mpl (PIL lacks the JPEG codec)
+    fig = plt.figure(figsize=(canvas.width / 200, canvas.height / 200), dpi=200, facecolor='white')
+    ax = fig.add_axes([0, 0, 1, 1]); ax.imshow(np.asarray(canvas)); ax.axis('off')
+    fig.savefig(f'{base}.pdf', facecolor='white'); plt.close(fig)
     print(f'wrote {base}.pdf (+png)  ({canvas.width}x{canvas.height})')
 
 

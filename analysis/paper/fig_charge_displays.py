@@ -85,7 +85,7 @@ def _pad(raw, n_photons, rot_axis, rot_angle, translation=None):
     (metres; moves the vertex, applied after cm->m and after the rotation) are layered on top."""
     import types
     import jax.numpy as jnp
-    from analysis.tracking.pipeline import TrackingPipeline
+    from analysis.paper.utils.pipeline import TrackingPipeline
     pd = TrackingPipeline._pad_event(types.SimpleNamespace(cfg={'nbuf': n_photons}), raw)
     if rot_angle != 0.0:                                    # swing the true dir to (THETA, PHI)
         pd['apply_rotation'] = True
@@ -177,7 +177,7 @@ def generate_data(root, entry, n_photons, K, temperature, particle, theta, phi, 
     # data simulator expects); do NOT use lucid.sources.root_reader, which returns metres.
     from lucid.sources.event_io import read_photon_data_from_photonsim
     from lucid.fitting import track_from_vec9
-    from analysis.tracking.pipeline import truth9
+    from analysis.paper.utils.pipeline import truth9
 
     raw = read_photon_data_from_photonsim(str(root), entry)
     E = float(raw['energy'])

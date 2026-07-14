@@ -46,7 +46,7 @@ def pad_event(raw, n_photons, rot_axis=None, rot_angle=0.0, translation=None):
     the true direction onto the display direction) and a translation in metres (moving the
     vertex), applied by the simulator after the cm->m conversion, rotation before translation."""
     import jax.numpy as jnp
-    from analysis.tracking.pipeline import TrackingPipeline
+    from analysis.paper.utils.pipeline import TrackingPipeline
     pd = TrackingPipeline._pad_event(types.SimpleNamespace(cfg={'nbuf': n_photons}), raw)
     if rot_angle:
         pd['apply_rotation'] = True
@@ -62,6 +62,6 @@ def build_track(vertex, direction, energy_MeV, t0=0.0):
     """(vec9, track) for the given vertex/direction/energy via the pipeline's truth9."""
     import jax.numpy as jnp
     from lucid.fitting import track_from_vec9
-    from analysis.tracking.pipeline import truth9
+    from analysis.paper.utils.pipeline import truth9
     th9, _ = truth9(np.asarray(vertex, float), np.asarray(direction, float), energy_MeV, t0)
     return th9, track_from_vec9(jnp.asarray(th9))

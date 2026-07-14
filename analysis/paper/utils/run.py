@@ -2,7 +2,7 @@
 
 ``run_local`` reconstructs a handful of events in the current process (no SLURM,
 no site assumptions) and writes the same ``<name>.h5`` layout the plotting code
-expects. ``submit_s3df`` shells out to ``analysis/tracking/submit_job.py`` for
+expects. ``submit_s3df`` shells out to ``analysis/paper/submit_job.py`` for
 the full production. Both consume the ordinary study-config dicts from
 ``studies.py``.
 """
@@ -32,7 +32,7 @@ def run_local(config: dict, out_dir, events=None, verbose=True):
     ``events`` overrides the config's event range (default: first ``n_events``).
     """
     import h5py
-    from analysis.tracking.pipeline import TrackingPipeline  # local import: heavy (JAX)
+    from analysis.paper.utils.pipeline import TrackingPipeline  # local import: heavy (JAX)
 
     out_dir = Path(out_dir); out_dir.mkdir(parents=True, exist_ok=True)
     name = config['name']
@@ -64,7 +64,7 @@ def submit_s3df(config: dict, out_dir, config_dir, partition='ampere', time='20:
     config_dir = Path(config_dir); config_dir.mkdir(parents=True, exist_ok=True)
     cfg_path = config_dir / f"{config['name']}.json"
     cfg_path.write_text(json.dumps(config, indent=2))
-    cmd = [sys.executable, str(REPO_ROOT / 'analysis/tracking/submit_job.py'),
+    cmd = [sys.executable, str(REPO_ROOT / 'analysis/paper/submit_job.py'),
            '--config', str(cfg_path), '--output', str(out_dir),
            '--job-name', job_name or config['name'],
            '--partition', partition, '--time', time]

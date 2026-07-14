@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Run one tracking-study config: reconstruct its events and log everything to one HDF5.
 
-    python -m analysis.tracking.run_study --config config_00.json --output OUT_DIR
-    python analysis/tracking/run_study.py  --config config_00.json --output OUT_DIR [--events 0,3,7]
+    python -m analysis.paper.run_study --config config_00.json --output OUT_DIR
+    python analysis/paper/run_study.py  --config config_00.json --output OUT_DIR [--events 0,3,7]
 
 Writes ``<OUT_DIR>/<config-name>.h5`` with:
 
@@ -14,7 +14,7 @@ Writes ``<OUT_DIR>/<config-name>.h5`` with:
                  both seeds' full trajectories, gradient norms, per-seed errors, and metadata
                  (n_hit, q_tot, energy_true, winning seed, seconds).
 
-Designed to run inside the LUCiD container (see analysis/tracking/submit_job.py); on a GPU
+Designed to run inside the LUCiD container (see analysis/paper/submit_job.py); on a GPU
 node with the layered JAX-CUDA env the per-event fit runs on the GPU.
 """
 import argparse
@@ -28,7 +28,7 @@ from pathlib import Path
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))   # LUCiD/ on path
-from analysis.tracking.pipeline import TrackingPipeline, load_config, REPO_ROOT   # noqa: E402
+from analysis.paper.utils.pipeline import TrackingPipeline, load_config, REPO_ROOT   # noqa: E402
 
 
 # scalars stored as HDF5 group attrs; everything else in the result dict is a dataset.

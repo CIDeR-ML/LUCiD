@@ -22,7 +22,7 @@ from pathlib import Path
 
 import numpy as np
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 M_MU = 105.658
 TAGS = ['5k', '10k', '25k', '50k', '100k', '150k', '250k', '500k', '1M']
@@ -65,7 +65,7 @@ def _style():
 
 def event_metric_curves(h5):
     """(n_events, niters+1, 4): pos cm, dir deg, |t0| ns, mom %  along winning trajectories."""
-    from analysis.tracking.p68_evolution import _dirs_from_traj
+    from analysis.paper.utils.p68_evolution import _dirs_from_traj
     import h5py
     out = []
     with h5py.File(h5, 'r') as f:
