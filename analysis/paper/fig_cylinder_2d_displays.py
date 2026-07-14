@@ -67,7 +67,7 @@ def _predicted_time(lw, ft, fi, ND):
 
 # ------------------------------------------------------------------------------- simulate
 def generate_data(root, entry, n_photons, pred_photons, pred_runs, K, temperature, push_back,
-                  data_seed=0, reuse_pred=False):
+                  data_seed=0, reuse_pred=False, theta=None, phi=None):
     import jax
     import jax.numpy as jnp
     from lucid.geometry import generate_detector
@@ -75,7 +75,9 @@ def generate_data(root, entry, n_photons, pred_photons, pred_runs, K, temperatur
 
     det = generate_detector(GEOM); ND = len(det.all_points)
     raw, E, d0 = events.load_event(root, entry)
-    d1 = np.array(DIRECTION, float); d1 /= np.linalg.norm(d1)
+    d1 = (events.dir_from_angles(theta, phi) if theta is not None
+          else np.array(DIRECTION, float))
+    d1 /= np.linalg.norm(d1)
     axis, ang = events.rotation(d0, d1)                 # swing data photons d0 -> d1
     vertex = -push_back * d1                             # push the vertex back along the track
     _, track = events.build_track(vertex, d1, E)
@@ -130,19 +132,33 @@ def _scale(vals_list):
     return float(pos.min()), float(pos.max())
 
 
-def _panel(disp, charges, values, plot_time, log_scale, vmin, vmax, base, label=None):
+def _mode_time(vals, bins=60):
+    """The 'most common' hit time: centre of the busiest histogram bin over the lit times."""
+    pos = np.asarray(vals, float); pos = pos[pos > 0]
+    if pos.size == 0:
+        return 0.0
+    h, edges = np.histogram(pos, bins=bins)
+    i = int(np.argmax(h))
+    return float(0.5 * (edges[i] + edges[i + 1]))
+
+
+def _panel(disp, charges, values, plot_time, log_scale, vmin, vmax, base, label=None,
+           colormap=None, colormap_norm=None, colorbar_ticks=None):
     """One unfolded-cylinder display saved as its own PDF (+PNG)."""
     for ext in ('pdf', 'png'):
         disp(np.asarray(charges), np.asarray(values), plot_time=plot_time, log_scale=log_scale,
              vmin=vmin, vmax=vmax, show_colorbar=True, colorbar_width='2.5%',
-             colorbar_label=label, file_name=f'{base}.{ext}')
+             colorbar_label=label, file_name=f'{base}.{ext}',
+             colormap=colormap, colormap_norm=colormap_norm, colorbar_ticks=colorbar_ticks)
     import matplotlib.pyplot as plt
     plt.close('all')
     print(f'wrote {base}.pdf (+png)  [vmin={vmin:.3g} vmax={vmax:.3g}]')
 
 
-def plot_results(out, log_q, pred_threshold):
+def plot_results(out, log_q, pred_threshold, q_vmax=None, time_diverging=False,
+                 time_percentile=False, time_cmap='RdBu', q_cmap=None, q_clip=None, q_range=None):
     import matplotlib.pyplot as plt
+    from matplotlib.colors import TwoSlopeNorm, FuncNorm
     plt.rcParams['font.family'] = 'serif'
     from lucid.visualization import create_detector_display
     cf = _cache_file()
@@ -167,18 +183,60 @@ def plot_results(out, log_q, pred_threshold):
     # early direct-light region it is masked to; a shared scale would mislead one of them.
     # (name, charge_key, value_key, plot_time, log_scale, colorbar_label). Time panels use a
     # log scale (first hit referenced to 1 ns, so no log(0)); charge follows --log.
-    Q = 'Photoelectron Count'
+    Q = 'Charge'
+    T = 'Time (ns)'
     cases = [
         ('data_Q', 'data_q', 'data_q', False, log_q, Q),
-        ('data_T', 'data_q', 'data_t', True,  True,  None),
+        ('data_T', 'data_q', 'data_t', True,  True,  T),
         ('pred_Q', 'pred_q', 'pred_q', False, log_q, Q),
-        ('pred_T', 'pred_q', 'pred_t', True,  True,  None),
+        ('pred_T', 'pred_q', 'pred_t', True,  True,  T),
     ]
     for name, ck, vk, plot_time, log_s, label in cases:
         vals = arrays[vk]
         vmin, vmax = _scale([vals])                     # time: min = 1 (first hit), max = full
+        cmap = cnorm = None; cbticks = None
+        if plot_time and (time_percentile or time_diverging):
+            lit = np.asarray(vals)[np.asarray(vals) > 0]
+            if lit.size and lit.max() > lit.min():
+                cbticks = sorted({round(float(x))                     # ticks at 0/25/50/75/100 pct
+                                  for x in np.percentile(lit, [0, 25, 50, 75, 100])})
+                if time_percentile:
+                    # HISTOGRAM EQUALISATION: map each time to its percentile via the empirical
+                    # CDF, so colour contrast is uniform per unit *population* of hits (the dense
+                    # prompt peak gets most of the colour range, the sparse late tail little).
+                    uniq, cnts = np.unique(lit, return_counts=True)
+                    cdf = np.cumsum(cnts) / cnts.sum()
+                    qmid = 0.5 * (np.concatenate([[0.0], cdf[:-1]]) + cdf)   # midpoint quantile
+                    fwd = lambda v, x=uniq, y=qmid: np.interp(v, x, y)
+                    inv = lambda p, x=qmid, y=uniq: np.interp(p, x, y)
+                    cnorm = FuncNorm((fwd, inv), vmin=float(uniq[0]), vmax=float(uniq[-1]))
+                    vmin, vmax = float(uniq[0]), float(uniq[-1])
+                else:
+                    # linear diverging about the MODE (most common time)
+                    vlo, vhi = float(lit.min()), float(lit.max())
+                    vc = min(max(_mode_time(vals), vlo + 1e-6), vhi - 1e-6)
+                    cnorm = TwoSlopeNorm(vcenter=vc, vmin=vlo, vmax=vhi)
+                    vmin, vmax = vlo, vhi
+                cmap = plt.get_cmap(time_cmap); log_s = False   # e.g. RdBu (diverging) or viridis
+        elif not plot_time:
+            if q_cmap is not None:                      # e.g. 'plasma' (the viewer's charge cmap)
+                cmap = plt.get_cmap(q_cmap)
+            if q_range is not None:                     # absolute charge bounds [lo,hi] + log
+                vmin, vmax = float(q_range[0]), float(q_range[1])
+                log_s = True
+                cbticks = sorted({int(round(x)) for x in np.geomspace(vmin, vmax, 4)})
+            elif q_clip is not None:                     # VIEWER charge recipe: clip [lo,hi] pct + log
+                litq = np.asarray(vals)[np.asarray(vals) > 0]
+                if litq.size:
+                    vmin, vmax = (float(x) for x in np.percentile(litq, q_clip))
+                    log_s = True
+                    cbticks = sorted({round(float(x))
+                                      for x in np.percentile(litq, [q_clip[0], 50, q_clip[1]])})
+            elif q_vmax is not None:                    # cap the charge scale for contrast
+                vmax = q_vmax
         _panel(disp, arrays[ck], vals, plot_time, log_s, vmin, vmax,
-               str(out / f'cylinder_2d_{name}'), label=label)
+               str(out / f'cylinder_2d_{name}'), label=label,
+               colormap=cmap, colormap_norm=cnorm, colorbar_ticks=cbticks)
 
 
 def main():
@@ -205,14 +263,42 @@ def main():
     ap.add_argument('--pred-threshold', type=float, default=0.0,
                     help='PMTs with predicted charge (expected PE) below this render as no-hit '
                          '(gray) in the prediction panels; 0 = show every PMT (default)')
+    ap.add_argument('--q-vmax', type=float, default=None,
+                    help='cap the charge (Q) colour scale at this value for better contrast')
+    ap.add_argument('--time-diverging', action='store_true',
+                    help='render the time panels with a diverging red-white-blue map, white '
+                         'centred on the most common hit time (histogram mode)')
+    ap.add_argument('--time-percentile', action='store_true',
+                    help='time panels: percentile-equalised (histogram-equalised) map — '
+                         'colour contrast proportional to hit-time percentiles')
+    ap.add_argument('--time-cmap', default='RdBu',
+                    help="colormap for the diverging/percentile time panels (e.g. 'viridis_r')")
+    ap.add_argument('--q-cmap', default=None,
+                    help="colormap for the charge panels (viewer prescription: 'plasma')")
+    ap.add_argument('--q-clip', default=None, metavar='LO,HI',
+                    help="VIEWER charge recipe: clip charge to the [LO,HI] percentiles then LOG "
+                         "(e.g. '5,95'). Overrides --q-vmax.")
+    ap.add_argument('--q-range', default=None, metavar='LO,HI',
+                    help="absolute charge colour bounds in PE + LOG (e.g. '1,6'). Overrides --q-clip.")
+    ap.add_argument('--theta', type=float, default=None,
+                    help='track polar angle from +z (rad); default keeps the transverse [1,0,0]. '
+                         'The 3D charge-display default is pi/4.')
+    ap.add_argument('--phi', type=float, default=None,
+                    help='track azimuth (rad); the 3D charge-display default is pi/6')
     ap.add_argument('--out', default=None)
     a = ap.parse_args()
     both = not (a.generate_data or a.plot_results)
     if a.generate_data or both:
         generate_data(a.root, a.entry, a.n_photons, a.pred_photons, a.pred_runs, a.K,
-                      a.temperature, a.push_back, a.data_seed, a.reuse_pred)
+                      a.temperature, a.push_back, a.data_seed, a.reuse_pred,
+                      theta=a.theta, phi=a.phi)
     if a.plot_results or both:
-        plot_results(Path(a.out) if a.out else paths.figure_dir(), a.log, a.pred_threshold)
+        q_clip = tuple(float(x) for x in a.q_clip.split(',')) if a.q_clip else None
+        q_range = tuple(float(x) for x in a.q_range.split(',')) if a.q_range else None
+        plot_results(Path(a.out) if a.out else paths.figure_dir(), a.log, a.pred_threshold,
+                     q_vmax=a.q_vmax, time_diverging=a.time_diverging,
+                     time_percentile=a.time_percentile, time_cmap=a.time_cmap, q_cmap=a.q_cmap,
+                     q_clip=q_clip, q_range=q_range)
 
 
 if __name__ == '__main__':
