@@ -17,8 +17,10 @@ Physical parameter order mirrors the notebook: [X, Y, Z, t0, theta, phi, E].
 Scan pairs and half-ranges (centered on truth) as in the notebook:
   (X,Z) +-2 m | (Y,phi) | (phi,E) +-0.5 rad/+-100 MeV | (X,t0) +-4 ns | (t0,phi) | (t0,E)
 
-    python analysis/tracking/loss_landscape_2d.py --config <cfg.json> --output OUT
+    python analysis/paper/fig_loss_landscape.py --config <cfg.json> --output OUT
         [--event 1] [--n-scan 21] [--n-guesses 3]
+    # plotting-only from the cached h5 (no recompute):
+    python analysis/paper/fig_loss_landscape.py --replot OUT/loss_landscape_2d_ev1.h5 [--vmin 30]
 """
 import argparse
 import json
@@ -133,6 +135,19 @@ def main():
         scans.append(dict(i1=i1, i2=i2, v1=v1, v2=v2, L=L, G=G))
         print(f"scan ({PHYS_NAMES[i1]},{PHYS_NAMES[i2]}): {time.time()-t0s:.0f}s", flush=True)
 
+    # Cache the (expensive) scans IMMEDIATELY, before the optimizer fits, so a fit-time
+    # failure (e.g. GPU OOM) never discards the ~30 min of loss scans.
+    h5path = out_dir / f'loss_landscape_2d_ev{args.event}.h5'
+    with h5py.File(h5path, 'w') as h5:
+        h5.attrs['config_json'] = json.dumps(cfg); h5.attrs['event'] = args.event
+        h5.attrs['phys_order'] = ','.join(PHYS_NAMES)
+        h5.create_dataset('truth_phys', data=true_phys)
+        for si, sc in enumerate(scans):
+            g = h5.create_group(f'scan{si}_{PHYS_NAMES[sc["i1"]]}_{PHYS_NAMES[sc["i2"]]}')
+            for k in ('v1', 'v2', 'L', 'G'):
+                g.create_dataset(k, data=sc[k])
+    print(f"cached scans -> {h5path}", flush=True)
+
     # ---- 3 optimizations from notebook-style Gaussian guesses -----------------------------
     trajs = []
     for gi in range(args.n_guesses):
@@ -145,29 +160,21 @@ def main():
         trajs.append(dict(guess=gp, traj=tr_phys, fit=fit_phys))
         print(f"guess {gi}: start {np.round(gp,2)} -> fit {np.round(fit_phys,2)}", flush=True)
 
-    with h5py.File(out_dir / f'loss_landscape_2d_ev{args.event}.h5', 'w') as h5:
-        h5.attrs['config_json'] = json.dumps(cfg); h5.attrs['event'] = args.event
-        h5.attrs['phys_order'] = ','.join(PHYS_NAMES)
+    with h5py.File(h5path, 'a') as h5:                    # append trajectories to the cached scans
         h5.attrs['finished'] = datetime.now().isoformat()
-        h5.create_dataset('truth_phys', data=true_phys)
-        for si, sc in enumerate(scans):
-            g = h5.create_group(f'scan{si}_{PHYS_NAMES[sc["i1"]]}_{PHYS_NAMES[sc["i2"]]}')
-            for k in ('v1', 'v2', 'L', 'G'):
-                g.create_dataset(k, data=sc[k])
         for gi, t in enumerate(trajs):
             g = h5.create_group(f'traj{gi}')
             g.create_dataset('guess', data=t['guess'])
             g.create_dataset('traj', data=t['traj'])
             g.create_dataset('fit', data=t['fit'])
-    h5path = out_dir / f'loss_landscape_2d_ev{args.event}.h5'
-    print(f"cached {h5path}", flush=True)
+    print(f"cached trajectories -> {h5path}", flush=True)
     replot(str(h5path))
     return 0
 
 
 # ------------------------------------------------------------------ plotting (notebook style)
 
-def replot(h5_path, vmin=30.0, tag=''):
+def replot(h5_path, vmin=30.0, tag='', contour=False, n_levels=24, zoom_fac=6):
     """Re-make the figure from a cached h5 — EXACT aesthetics of the original notebook's
     LogNorm variant (grad_loss_and_opt_in_2D.ipynb cell 11, invoked as in cell 12:
     trajectory colors from 'Oranges', vmin=1e-1, vmax=95th pct of pooled dLoss)."""
@@ -176,6 +183,7 @@ def replot(h5_path, vmin=30.0, tag=''):
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
     from matplotlib.colors import LogNorm
+    import matplotlib.patheffects as pe
 
     plt.rcParams['text.usetex'] = False
     plt.rcParams['font.family'] = 'serif'
@@ -213,7 +221,7 @@ def replot(h5_path, vmin=30.0, tag=''):
 
     cmap = plt.get_cmap('Oranges')
     n_ev = len(trajs)
-    colors = [cmap(0.3 + 0.6 * (i / max(n_ev - 1, 1))) for i in range(n_ev)]
+    colors = [cmap(0.5 + 0.45 * (i / max(n_ev - 1, 1))) for i in range(n_ev)]   # stronger orange
 
     fig, axes = plt.subplots(2, 3, figsize=(12, 6))
     axes = axes.flatten()
@@ -237,18 +245,34 @@ def replot(h5_path, vmin=30.0, tag=''):
         nrm = np.sqrt(U**2 + V**2); nrm = np.where(nrm == 0, 1, nrm)
         U /= nrm; V /= nrm
 
-        im = ax.imshow(losses.T, extent=[p1[0], p1[-1], p2[0], p2[-1]],
-                       origin='lower', aspect='auto', cmap='viridis',
-                       norm=LogNorm(vmin=vmin, vmax=vmax))
+        if contour:
+            # smooth filled contours: cubic-interpolate the coarse NSxNS grid to a fine mesh,
+            # then draw log-spaced filled levels + light contour lines for the loss "topography".
+            from scipy.ndimage import zoom
+            Z = np.clip(zoom(losses.T, zoom_fac, order=3), vmin, None)
+            xf = np.linspace(p1[0], p1[-1], Z.shape[1])
+            yf = np.linspace(p2[0], p2[-1], Z.shape[0])
+            levels = np.logspace(np.log10(vmin), np.log10(vmax), n_levels)
+            im = ax.contourf(xf, yf, Z, levels=levels, cmap='viridis',
+                             norm=LogNorm(vmin=vmin, vmax=vmax), extend='both')
+            ax.contour(xf, yf, Z, levels=levels[::3], colors='white',
+                       linewidths=0.4, alpha=0.45, norm=LogNorm(vmin=vmin, vmax=vmax))
+            ax.set_aspect('auto')
+        else:
+            im = ax.imshow(losses.T, extent=[p1[0], p1[-1], p2[0], p2[-1]],
+                           origin='lower', aspect='auto', cmap='viridis',
+                           norm=LogNorm(vmin=vmin, vmax=vmax))
         img_handles.append(im)
         ax.streamplot(np.linspace(p1[0], p1[-1], len(p1)), np.linspace(p2[0], p2[-1], len(p2)),
-                      U, V, color='white', density=0.6, linewidth=1.3, arrowsize=1.1)
+                      U, V, color='white', density=0.6, linewidth=0.9, arrowsize=1.0)
         for t, color in zip(trajs, colors):
             xp, yp = t['traj'][:, idx[n1]], t['traj'][:, idx[n2]]
-            ax.plot(xp, yp, color=color, linewidth=2)
-            ax.scatter(xp, yp, color=color, s=10)
+            ax.plot(xp, yp, color=color, linewidth=3.6, zorder=90, solid_capstyle='round',
+                    path_effects=[pe.Stroke(linewidth=5.4, foreground='black', alpha=0.55),
+                                  pe.Normal()])
+            ax.scatter(xp, yp, color=color, s=24, zorder=91, edgecolors='black', linewidths=0.3)
             ax.plot(t['fit'][idx[n1]], t['fit'][idx[n2]], color='cyan', marker='x',
-                    markersize=14, zorder=100)
+                    markersize=16, markeredgewidth=3.2, zorder=100)
         ax.plot(truth[idx[n1]], truth[idx[n2]], color='deeppink', marker='*',
                 markersize=20, zorder=99)
         ax.set_xlabel(format_label(n1)); ax.set_ylabel(format_label(n2))
@@ -256,6 +280,7 @@ def replot(h5_path, vmin=30.0, tag=''):
 
     cbar_ax = fig.add_axes([0.92, 0.15, 0.015, 0.7])
     cbar = fig.colorbar(img_handles[0], cax=cbar_ax)
+    cbar.set_ticks([])                                    # no numeric ticks — just the label
     cbar.set_label('$\\Delta$ Loss (log scale)', fontsize=12)
     legend_elements = [
         plt.Line2D([], [], color=colors[-1], lw=2, label='Optimization paths'),
@@ -273,7 +298,11 @@ def replot(h5_path, vmin=30.0, tag=''):
 if __name__ == '__main__':
     if '--replot' in sys.argv:
         _vm = float(sys.argv[sys.argv.index('--vmin') + 1]) if '--vmin' in sys.argv else 30.0
-        replot(sys.argv[sys.argv.index('--replot') + 1], vmin=_vm,
-               tag=(f'_vmin{_vm:g}' if '--vmin' in sys.argv else ''))
+        _contour = '--contour' in sys.argv
+        _nl = int(sys.argv[sys.argv.index('--nlevels') + 1]) if '--nlevels' in sys.argv else 24
+        _tag = ('_contour' if _contour else '') + (f'_nl{_nl}' if '--nlevels' in sys.argv else '') \
+            + (f'_vmin{_vm:g}' if '--vmin' in sys.argv else '')
+        replot(sys.argv[sys.argv.index('--replot') + 1], vmin=_vm, tag=_tag, contour=_contour,
+               n_levels=_nl)
         sys.exit(0)
     sys.exit(main())
