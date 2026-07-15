@@ -11,7 +11,8 @@ they balance). Two plotly disc scenes side by side (data left, prediction right)
   * PREDICTION : forward sim of the same track, Cherenkov-only and scintillation-only, combined.
 
 The expensive per-process forward sims are cached, so layout/style can be iterated with
---plot-results alone. The S-yield figure (fig_juno_S_loss.py) reuses this same charge cache.
+--plot-results alone. The scintillation loss-scan figure (fig_juno_scint_loss.py) reuses this
+same charge cache for its injected data-mode.
 
     python analysis/paper/fig_juno_cher_scint_fraction.py                 # simulate + cache + plot
     python analysis/paper/fig_juno_cher_scint_fraction.py --generate-data
