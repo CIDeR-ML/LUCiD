@@ -47,7 +47,7 @@ def compute_rayleigh_scatter_direction(incident_dir, rng_key):
         cos_theta,
     ]))
     frame = create_local_frame(incident_dir)
-    return normalize(frame @ local_dir)
+    return normalize(frame.T @ local_dir)
 
 
 def hg_sample_cos_theta(u, g):
@@ -128,4 +128,4 @@ def compute_mie_scatter_direction(incident_dir, rng_key, g=0.95):
         cos_theta,
     ]))
     frame = create_local_frame(incident_dir)
-    return normalize(frame @ local_dir)
+    return normalize(frame.T @ local_dir)
