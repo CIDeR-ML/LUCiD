@@ -109,7 +109,7 @@ def photon_step_volume(
     sth = jnp.sqrt(jnp.clip(1.0 - cth ** 2, 0.0, 1.0))
     frame = create_local_frame(direction)
     local = jnp.array([sth * jnp.cos(phi), sth * jnp.sin(phi), cth])
-    new_direction = normalize(frame @ local)
+    new_direction = normalize(frame.T @ local)
 
     # Trajectory: detached free path → optical gradient rides the score, not the pathwise
     # route through the discrete DOM-candidate selection. direction LIVE → track gradient.

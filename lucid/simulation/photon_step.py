@@ -240,7 +240,7 @@ def photon_iteration_update_factors(
     sth = jnp.sqrt(jnp.clip(1.0 - cth**2, 0.0, 1.0))
     frame = create_local_frame(direction)
     local = jnp.array([sth * jnp.cos(phi), sth * jnp.sin(phi), cth])
-    scat_dir = normalize(frame @ local)
+    scat_dir = normalize(frame.T @ local)
 
     # Reflection — delegated to the pluggable model (default scalar_reflection, byte-identical).
     # The model returns (refl_prob, reflection_dir, lr_score): the angle/λ-dependent MAGNITUDE,
