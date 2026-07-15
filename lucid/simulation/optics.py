@@ -32,7 +32,13 @@ def sample_cosine_hemisphere(normal, rng_key):
 
 
 def create_local_frame(z):
-    """Create an orthonormal frame with *z* as the z-axis."""
+    """Create an orthonormal frame with *z* as the z-axis.
+
+    Returns ``stack([x, y, z])`` with the basis vectors as **rows**, so the
+    local→world map for a locally-sampled direction is ``frame.T @ local_dir``
+    (NOT ``frame @ local_dir`` — that is the inverse rotation and scatters
+    about the wrong axis, breaking azimuthal symmetry).
+    """
     z = normalize(z)
     t = jnp.where(
         jnp.abs(z[0]) < 0.9,
@@ -106,7 +112,7 @@ def compute_scatter_direction(incident_dir, rng_key):
         cos_theta,
     ]))
     frame = create_local_frame(incident_dir)
-    return normalize(frame @ local_dir)
+    return normalize(frame.T @ local_dir)
 
 
 # JAX-compatible rotation helpers (for data mode)
