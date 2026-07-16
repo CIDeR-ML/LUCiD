@@ -264,6 +264,7 @@ def check_independence(dataset: Path, out: Path, null_trials=100, nsigma=5.0):
     rng = np.random.default_rng(3)
     fails, rows = [], []
     uniq = {}
+    null_mu_tot = null_var_tot = 0.0
     for pid in np.unique(pdgs):
         a = ens[pdgs == pid].astype(np.float32)
         n = len(a)
@@ -274,14 +275,21 @@ def check_independence(dataset: Path, out: Path, null_trials=100, nsigma=5.0):
         null = [len(x := (lo + (hi - lo) * rng.random(n)).astype(np.float32))
                 - len(np.unique(x)) for _ in range(null_trials)]
         mu, sd = float(np.mean(null)), float(np.std(null)) or 1.0
+        null_mu_tot += mu
+        null_var_tot += sd * sd
         rows.append(f"pid{pid}:dup{exact}(null {mu:.0f}±{sd:.0f})")
         if exact > mu + nsigma * sd:
             fails.append(f"pid {pid}: {exact} exact dups vs null {mu:.1f}±{sd:.1f}")
         uniq[int(pid)] = a
+    # Event fingerprints can only collide when every (pdg, energy) matches, so
+    # the summed per-PID float32-birthday null upper-bounds the expectation
+    # (exact for single-particle datasets). A genuine seed collision sits far
+    # above it — and would also reproduce directions, worth checking by hand.
     n_dupe = len(fingerprints) - len(set(fingerprints))
-    rows.append(f"event-fingerprint dups={n_dupe}/{len(fingerprints)}")
-    if n_dupe > 5:
-        fails.append(f"{n_dupe} duplicate event fingerprints")
+    thr = null_mu_tot + nsigma * (null_var_tot ** 0.5)
+    rows.append(f"event-fingerprint dups={n_dupe}/{len(fingerprints)} (null<= {null_mu_tot:.0f})")
+    if n_dupe > thr:
+        fails.append(f"{n_dupe} duplicate event fingerprints vs null bound {thr:.0f}")
 
     cols = int(np.ceil(len(uniq) / 2)) or 1
     fig, ax = plt.subplots(2, cols, figsize=(3.2 * cols, 6), squeeze=False)
