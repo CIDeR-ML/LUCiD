@@ -48,10 +48,14 @@ def _path(dataset: Path, mod: str, fi: int) -> str:
 
 
 def check_integrity(dataset: Path):
-    """All shards readable, n_events attr == event groups, modalities agree."""
+    """All shards readable, n_events attr == event groups, modalities agree,
+    and the file_index sequence is gap-free (a missing shard means a job died
+    before its first write and left no file to flag)."""
     import h5py
+    present = _shards(dataset)
+    gaps = sorted(set(range(max(present) + 1)) - set(present)) if present else []
     corrupt, nev, commits = [], [], set()
-    for fi in _shards(dataset):
+    for fi in present:
         per, ok = {}, True
         for m in MODALITIES:
             try:
@@ -68,10 +72,11 @@ def check_integrity(dataset: Path):
             corrupt.append((fi, "inconsistent"))
         else:
             nev.append(per["sensor"][0])
-    passed = not corrupt and len(commits) == 1
+    passed = not corrupt and not gaps and len(commits) == 1
     detail = (f"{len(nev)} shards, {sum(nev)} events, commits={sorted(commits)}"
-              + (f", BAD={corrupt}" if corrupt else ""))
-    return passed, detail, {"n_events": nev, "corrupt": corrupt}
+              + (f", BAD={corrupt}" if corrupt else "")
+              + (f", MISSING file_indices={gaps}" if gaps else ""))
+    return passed, detail, {"n_events": nev, "corrupt": corrupt, "missing": gaps}
 
 
 def load_response_samples(dataset: Path, n_shards: int):
