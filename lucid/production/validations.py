@@ -313,7 +313,8 @@ def check_independence(dataset: Path, out: Path, null_trials=100, nsigma=5.0):
     # above it — and would also reproduce directions, worth checking by hand.
     n_dupe = len(fingerprints) - len(set(fingerprints))
     thr = null_mu_tot + nsigma * (null_var_tot ** 0.5)
-    rows.append(f"event-fingerprint dups={n_dupe}/{len(fingerprints)} (null<= {null_mu_tot:.0f})")
+    rows.append(f"event-fingerprint dups={n_dupe}/{len(fingerprints)} "
+                f"(null {null_mu_tot:.0f}, thr {thr:.0f})")
     if n_dupe > thr:
         fails.append(f"{n_dupe} duplicate event fingerprints vs null bound {thr:.0f}")
 
