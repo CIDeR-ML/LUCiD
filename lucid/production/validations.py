@@ -80,12 +80,25 @@ def check_integrity(dataset: Path):
 
 
 def load_response_samples(dataset: Path, n_shards: int):
-    """Per-digit (true_pe, reco_pe, time_residual), Cherenkov-only digits."""
+    """Per-digit (true_pe, reco_pe, time_residual), Cherenkov-only digits.
+
+    Unreadable shards are skipped: integrity already reports them, and the
+    response checks should still characterise the good data rather than die
+    on the first bad file.
+    """
     import h5py
     tp, reco, resid = [], [], []
-    for fi in _shards(dataset)[:n_shards]:
-        with h5py.File(_path(dataset, "sensor", fi), "r") as s, \
-             h5py.File(_path(dataset, "hits", fi), "r") as h:
+    taken = 0
+    for fi in _shards(dataset):
+        if taken >= n_shards:
+            break
+        try:
+            s = h5py.File(_path(dataset, "sensor", fi), "r")
+            h = h5py.File(_path(dataset, "hits", fi), "r")
+        except Exception:
+            continue
+        taken += 1
+        with s, h:
             for ev in s.keys():
                 if not ev.startswith("event_"):
                     continue
@@ -115,7 +128,11 @@ def load_sensor_sums(dataset: Path):
     import h5py
     sum_pe, pos, nev = None, None, 0
     for fi in _shards(dataset):
-        with h5py.File(_path(dataset, "sensor", fi), "r") as s:
+        try:
+            sf = h5py.File(_path(dataset, "sensor", fi), "r")
+        except Exception:
+            continue                      # unreadable shard: integrity reports it
+        with sf as s:
             if pos is None:
                 pos = s["config"]["sensor_positions"][:]
                 sum_pe = np.zeros(pos.shape[0], np.float64)
@@ -133,7 +150,11 @@ def load_primaries(dataset: Path):
     import h5py
     pdgs, ens, fingerprints = [], [], []
     for fi in _shards(dataset):
-        with h5py.File(_path(dataset, "labl", fi), "r") as f:
+        try:
+            lf = h5py.File(_path(dataset, "labl", fi), "r")
+        except Exception:
+            continue                      # unreadable shard: integrity reports it
+        with lf as f:
             for ev in f.keys():
                 if not ev.startswith("event_"):
                     continue
