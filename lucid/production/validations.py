@@ -105,27 +105,30 @@ def load_response_samples(dataset: Path, n_shards: int):
             continue
         taken += 1
         with s, h:
-            for ev in s.keys():
-                if not ev.startswith("event_"):
-                    continue
-                sPE = s[ev]["PE"][:]
-                sT = s[ev]["T"][:]
-                hPE = h[ev]["PE"][:]
-                hT = h[ev]["T"][:]
-                hDi = h[ev]["digit_idx"][:]
-                hEP = h[ev]["emission_process"][:]
-                nd = len(sPE)
-                true = np.zeros(nd)
-                dark = np.zeros(nd)
-                tt = np.full(nd, np.inf)
-                v = hDi >= 0
-                np.add.at(true, hDi[v], hPE[v])
-                np.add.at(dark, hDi[v], (hEP[v] == 2).astype(float))
-                np.minimum.at(tt, hDi[v], hT[v])
-                clean = (dark == 0) & (sPE > 0) & np.isfinite(tt)
-                tp.append(np.rint(true[clean]).astype(np.int16))
-                reco.append(sPE[clean].astype(np.float32))
-                resid.append((sT[clean] - tt[clean]).astype(np.float32))
+            try:
+                for ev in s.keys():
+                    if not ev.startswith("event_"):
+                        continue
+                    sPE = s[ev]["PE"][:]
+                    sT = s[ev]["T"][:]
+                    hPE = h[ev]["PE"][:]
+                    hT = h[ev]["T"][:]
+                    hDi = h[ev]["digit_idx"][:]
+                    hEP = h[ev]["emission_process"][:]
+                    nd = len(sPE)
+                    true = np.zeros(nd)
+                    dark = np.zeros(nd)
+                    tt = np.full(nd, np.inf)
+                    v = hDi >= 0
+                    np.add.at(true, hDi[v], hPE[v])
+                    np.add.at(dark, hDi[v], (hEP[v] == 2).astype(float))
+                    np.minimum.at(tt, hDi[v], hT[v])
+                    clean = (dark == 0) & (sPE > 0) & np.isfinite(tt)
+                    tp.append(np.rint(true[clean]).astype(np.int16))
+                    reco.append(sPE[clean].astype(np.float32))
+                    resid.append((sT[clean] - tt[clean]).astype(np.float32))
+            except Exception:
+                continue          # read error mid-shard (corrupt file / EOS I/O)
     return np.concatenate(tp), np.concatenate(reco), np.concatenate(resid)
 
 
@@ -139,15 +142,18 @@ def load_sensor_sums(dataset: Path):
         except Exception:
             continue                      # unreadable shard: integrity reports it
         with sf as s:
-            if pos is None:
-                pos = s["config"]["sensor_positions"][:]
-                sum_pe = np.zeros(pos.shape[0], np.float64)
-            for ev in s.keys():
-                if not ev.startswith("event_"):
-                    continue
-                np.add.at(sum_pe, s[ev]["sensor_idx"][:].astype(np.int64),
-                          s[ev]["PE"][:].astype(np.float64))
-                nev += 1
+            try:
+                if pos is None:
+                    pos = s["config"]["sensor_positions"][:]
+                    sum_pe = np.zeros(pos.shape[0], np.float64)
+                for ev in s.keys():
+                    if not ev.startswith("event_"):
+                        continue
+                    np.add.at(sum_pe, s[ev]["sensor_idx"][:].astype(np.int64),
+                              s[ev]["PE"][:].astype(np.float64))
+                    nev += 1
+            except Exception:
+                continue          # read error mid-shard (corrupt file / EOS I/O)
     return sum_pe, pos, nev
 
 
@@ -161,16 +167,19 @@ def load_primaries(dataset: Path):
         except Exception:
             continue                      # unreadable shard: integrity reports it
         with lf as f:
-            for ev in f.keys():
-                if not ev.startswith("event_"):
-                    continue
-                pi = f[ev]["per_interaction"]
-                p = np.asarray(pi["primary_pdgs_data"][:])
-                e = np.asarray(pi["primary_energies_data"][:], np.float32)
-                pdgs.append(p)
-                ens.append(e)
-                fingerprints.append((tuple(int(x) for x in p),
-                                     tuple(float(x) for x in e)))
+            try:
+                for ev in f.keys():
+                    if not ev.startswith("event_"):
+                        continue
+                    pi = f[ev]["per_interaction"]
+                    p = np.asarray(pi["primary_pdgs_data"][:])
+                    e = np.asarray(pi["primary_energies_data"][:], np.float32)
+                    pdgs.append(p)
+                    ens.append(e)
+                    fingerprints.append((tuple(int(x) for x in p),
+                                         tuple(float(x) for x in e)))
+            except Exception:
+                continue          # read error mid-shard (corrupt file / EOS I/O)
     return np.concatenate(pdgs), np.concatenate(ens), fingerprints
 
 
