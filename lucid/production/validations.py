@@ -72,11 +72,17 @@ def check_integrity(dataset: Path):
             corrupt.append((fi, "inconsistent"))
         else:
             nev.append(per["sensor"][0])
-    passed = not corrupt and not gaps and len(commits) == 1
+    # Multiple commits are reported but not failed: a long campaign legitimately
+    # spans commits (e.g. tooling fixes landing mid-run) and this check cannot
+    # tell a physics change from a script-only one. The list is always printed
+    # so a human can judge whether the spread matters.
+    passed = not corrupt and not gaps
     detail = (f"{len(nev)} shards, {sum(nev)} events, commits={sorted(commits)}"
+              + ("  [WARN: multiple commits]" if len(commits) > 1 else "")
               + (f", BAD={corrupt}" if corrupt else "")
               + (f", MISSING file_indices={gaps}" if gaps else ""))
-    return passed, detail, {"n_events": nev, "corrupt": corrupt, "missing": gaps}
+    return passed, detail, {"n_events": nev, "corrupt": corrupt, "missing": gaps,
+                            "commits": sorted(commits)}
 
 
 def load_response_samples(dataset: Path, n_shards: int):
