@@ -4,7 +4,7 @@ Five short runnable scripts against the **real, current** API — the fastest wa
 LUCiD does. They auto-detect the platform (GPU if present, else CPU) and write a figure or
 table. `hello_simulate` is quick anywhere (~15 s warm); `hello_calibrate` (1e6 photons +
 Fisher/CRB + 100 GN steps) and `hello_reconstruct` (100+-step Fisher-GN) are ~1–3 min on a
-GPU, much slower on CPU. They use a reduced detector grid for speed; production uses the full grid.
+GPU, much slower on CPU. Most use a reduced detector grid for speed; `hello_reconstruct` runs the full production grid so it matches the campaign recon.
 
 ```bash
 pip install -e .
@@ -47,8 +47,9 @@ reflectivity — the timing-observable frontier.)
   Poisson-charge + first-arrival **order-statistic-time** loss, run in SCALE9-preconditioned
   coordinates with finite-difference Jacobians (the DiCE `custom_vjp` blocks `jacfwd`, and the
   autodiff track-Hessian is indefinite, so a PSD Fisher metric is built and stepped against).
-  SK_like geometry, 1000 MeV, from an aggressive start (up to 3 m / 200 MeV / 10° / 3 ns off
-  truth). Two study axes, set by CLI:
+  SK_like geometry at the full production grid (80/120/80), 1000 MeV, from an aggressive start
+  (up to 3 m / 200 MeV / 10° / 3 ns off truth). The per-fit engine (`fit_track`) is the same as
+  the campaign recon — only the multi-start seeding differs. Two study axes, set by CLI:
 
   ```bash
   # closure (default): the "data" event is SIREN-generated, fit with the SIREN model.
