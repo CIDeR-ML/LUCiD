@@ -25,7 +25,7 @@ from lucid.detector_params import load_detector_params
 from lucid.fitting import ReconModel, fit_track, vec9_from_track, vec9_dir, track_from_vec9
 
 GEOM, PHYS, K = 'config/SK_like_geom_config.json', 'config/SK_like_physics_config.json', 8
-GRID = dict(n_cap=40, n_angular=80, n_height=40)
+GRID = dict(n_cap=80, n_angular=120, n_height=80)   # full production grid (matches campaign recon)
 E0 = 1000.0                                   # truth energy (MeV) for closure / fallback
 LONG = {'mu': 'muon', 'e': 'electron'}
 # aggressive from-scratch start: fail by up to these amounts, magnitude sampled uniformly
@@ -72,7 +72,7 @@ def make_data(mode, data_particle, hyp_particle, ND, dp_data, event):
         data_sim = setup_event_simulator(GEOM, 250_000, temperature=None, K=K, use_expected_value=False,
                                          hit_mode='realistic', charge_resolution=None, particle=data_particle,
                                          physics_config=PHYS, default_detector_params=dp_data,
-                                         wavelength_mode=True, **GRID)
+                                         wavelength_mode=True, cherenkov_emission_band=CH_BAND, **GRID)
         th9 = vec9_from_track(E0, position=[1.5, -0.8, 2.0], direction=[0.3, 0.1, 0.95], t0=0.)
         c, t = jax.lax.stop_gradient(data_sim(track_from_vec9(jnp.asarray(th9)), jax.random.PRNGKey(0)))
     else:  # data-fit: real GEANT4 photons for --data
@@ -111,17 +111,18 @@ def main():
     dp_data = load_detector_params(PHYS, num_sensors=ND)
     dp_data = dp_data._replace(response=dp_data.response._replace(tts=jnp.asarray(2.5)))
 
-    # hypothesis predictor (SOFT, differentiable). Band-consistent only for real GEANT4 data.
-    band = CH_BAND if mode == 'data-fit' else None
+    # hypothesis predictor (SOFT, differentiable). Cherenkov-band-consistent QE always — for
+    # data-fit it matches the GEANT4 emission band; for closure the SIREN data source uses the
+    # same band, so closure stays self-consistent.
     pred = setup_event_simulator(GEOM, 250_000, temperature=0.1, K=K, hit_mode='per_photon',
                                  physics_config=PHYS, default_detector_params=True, particle=hyp_p,
                                  wavelength_mode=True, pos_grad_threshold=K, n_grad_iters=K,
-                                 cherenkov_emission_band=band, **GRID)
+                                 cherenkov_emission_band=CH_BAND, **GRID)
     model = ReconModel(pred, ND, sigma=2.5, delta=1.0)
 
     oc, ot, th9 = make_data(mode, data_p, hyp_p, ND, dp_data, args.event)
     start = perturb(th9, np.random.default_rng(args.seed))
-    res = fit_track(model, oc, ot, start, nkeys=2, niters=args.niters)
+    res = fit_track(model, oc, ot, start, nkeys=4, niters=args.niters)
 
     td = vec9_dir(th9)
     sv = np.linalg.norm((start - th9)[1:4]) * 100; sd = np.degrees(np.arccos(np.clip(vec9_dir(start) @ td, -1, 1)))
