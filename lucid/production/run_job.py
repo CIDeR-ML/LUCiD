@@ -71,6 +71,14 @@ def _parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
         help="Override n_events_per_job from the config.",
     )
     parser.add_argument(
+        "--lucid-seed", type=int, default=None,
+        help="Seed for the LUCiD-side per-event draws (vertex translation, "
+             "optional rotation, t0, propagation, smearing). Defaults to "
+             "--master-seed. Set it to a different value to reuse the SAME "
+             "Geant4 sample (PhotonSim stays on --master-seed) under new "
+             "transforms — e.g. an SK set matching HK's events but "
+             "independently placed and oriented.")
+    parser.add_argument(
         "--master-seed", type=int, default=None,
         help="JAX PRNG seed for reproducibility. Default: random.",
     )
@@ -277,6 +285,9 @@ def _run_lucid(
     lucid_opts = config.get("lucid_options", {})
     apply_smearing = bool(lucid_opts.get("apply_smearing", True))
     apply_translation = bool(lucid_opts.get("apply_translation", True))
+    # Off by default — PhotonSim already throws isotropic directions. Enable to
+    # re-emit the same Geant4 events at new orientations (augmentation).
+    apply_rotation = bool(lucid_opts.get("apply_rotation", False))
     # step/event_NNN/sensor_hits/ is mandatory for data-mode datasets:
     # it's the per-(segment, sensor) ground truth that the hits file is now
     # aggregated from. Photon_SegmentIndex is unconditional in PhotonSim
@@ -363,7 +374,7 @@ def _run_lucid(
         master_seed=master_seed,
         job_id=job_id,
         apply_smearing=apply_smearing,
-        apply_rotation=False,  # PhotonSim already randomizes directions
+        apply_rotation=apply_rotation,
         apply_translation=apply_translation,
         dataset_name=config["name"],
         run_id=None,           # auto-UUID4
@@ -594,7 +605,10 @@ def main(argv: Optional[list[str]] = None) -> int:
             config=config,
             file_index=file_index,
             n_events=photonsim_events,
-            master_seed=args.master_seed,
+            # LUCiD-side draws only; PhotonSim keeps args.master_seed above, so
+            # a distinct --lucid-seed re-places/re-orients the same G4 sample.
+            master_seed=(args.lucid_seed if args.lucid_seed is not None
+                         else args.master_seed),
             job_id=args.job_id,
             detector=args.detector,
         )
@@ -795,7 +809,10 @@ def _main_pileup(args: argparse.Namespace, config: dict) -> int:
         # would produce far more events than --n-events / --test asked for.
         n_events=n_events,
         batch_size=n_events,
-        master_seed=args.master_seed,
+        # LUCiD-side draws only (see --lucid-seed); the per-vertex PhotonSim /
+        # GENIE seeds above stay on args.master_seed.
+        master_seed=(args.lucid_seed if args.lucid_seed is not None
+                     else args.master_seed),
         job_id=args.job_id,
         apply_smearing=apply_smearing,
         apply_translation=apply_translation,
