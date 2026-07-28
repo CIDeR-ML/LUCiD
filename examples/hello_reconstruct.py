@@ -66,19 +66,21 @@ def rand_tf(raw, ev, fidr, fidz):
     return raw, vtx_true, np.array([0., 0., 1.]) @ R.T
 
 
-def make_data(mode, data_particle, hyp_particle, ND, dp_data, event):
+def make_data(mode, data_particle, hyp_particle, ND, dp_data, event, nph):
     """Return (obs_counts, obs_times, truth_vec9). Builds the appropriate data source."""
     if mode == 'closure':
-        data_sim = setup_event_simulator(GEOM, 250_000, temperature=None, K=K, use_expected_value=False,
+        data_sim = setup_event_simulator(GEOM, nph, temperature=None, K=K, use_expected_value=False,
                                          hit_mode='realistic', charge_resolution=None, particle=data_particle,
                                          physics_config=PHYS, default_detector_params=dp_data,
                                          wavelength_mode=True, cherenkov_emission_band=CH_BAND, **GRID)
         th9 = vec9_from_track(E0, position=[1.5, -0.8, 2.0], direction=[0.3, 0.1, 0.95], t0=0.)
         c, t = jax.lax.stop_gradient(data_sim(track_from_vec9(jnp.asarray(th9)), jax.random.PRNGKey(0)))
-    else:  # data-fit: real GEANT4 photons for --data
+    else:  # data-fit: real GEANT4 photons for --data — the data event's photon count is fixed by
+           # the ROOT file, so --photons scales only the *model* (pred); the buffer just holds the event.
         from lucid.sources.event_io import read_photon_data_from_photonsim, pad_photon_data
         root = f'data/water/{data_particle}/1000MeV_100events.root'
-        data_sim = setup_event_simulator(GEOM, 400_000, temperature=None, K=K, is_data=True,
+        NBUF = 400_000
+        data_sim = setup_event_simulator(GEOM, NBUF, temperature=None, K=K, is_data=True,
                                          hit_mode='realistic', charge_resolution=None, particle=data_particle,
                                          physics_config=PHYS, default_detector_params=dp_data,
                                          wavelength_mode=True, **GRID)
@@ -86,7 +88,7 @@ def make_data(mode, data_particle, hyp_particle, ND, dp_data, event):
         energy = float(raw['energy']) if 'energy' in raw else E0
         raw, vtx_true, dir_true = rand_tf(raw, event, 12.0, 12.0)
         th9 = vec9_from_track(energy, vtx_true.tolist(), dir_true.tolist(), t0=0.)
-        pd, _ = pad_photon_data(raw, 400_000)
+        pd, _ = pad_photon_data(raw, NBUF)
         dummy = track_from_vec9(jnp.asarray(vec9_from_track(E0, [0, 0, 0], [0, 0, 1], t0=0.)))
         c, t = jax.lax.stop_gradient(data_sim(dummy, jax.random.PRNGKey(7000 + event), pd))
     oc = jnp.asarray(np.asarray(c)); ot = jnp.asarray(np.where(np.asarray(c) > 0, np.asarray(t), 0.))
@@ -103,6 +105,7 @@ def main():
     ap.add_argument('--event', type=int, default=0, help='ROOT event index (data-fit)')
     ap.add_argument('--seed', type=int, default=1, help='RNG seed for the start offset')
     ap.add_argument('--niters', type=int, default=130)
+    ap.add_argument('--photons', type=int, default=250_000, help='model photons (per forward pass)')
     args = ap.parse_args()
     mode = 'data-fit' if args.data_fit else 'closure'
     data_p, hyp_p = LONG[args.data], LONG[args.hypothesis]
@@ -114,23 +117,28 @@ def main():
     # hypothesis predictor (SOFT, differentiable). Cherenkov-band-consistent QE always — for
     # data-fit it matches the GEANT4 emission band; for closure the SIREN data source uses the
     # same band, so closure stays self-consistent.
-    pred = setup_event_simulator(GEOM, 250_000, temperature=0.1, K=K, hit_mode='per_photon',
+    pred = setup_event_simulator(GEOM, args.photons, temperature=0.1, K=K, hit_mode='per_photon',
                                  physics_config=PHYS, default_detector_params=True, particle=hyp_p,
                                  wavelength_mode=True, pos_grad_threshold=K, n_grad_iters=K,
                                  cherenkov_emission_band=CH_BAND, **GRID)
     model = ReconModel(pred, ND, sigma=2.5, delta=1.0)
 
-    oc, ot, th9 = make_data(mode, data_p, hyp_p, ND, dp_data, args.event)
+    oc, ot, th9 = make_data(mode, data_p, hyp_p, ND, dp_data, args.event, args.photons)
     start = perturb(th9, np.random.default_rng(args.seed))
     res = fit_track(model, oc, ot, start, nkeys=4, niters=args.niters)
+
+    # final data loss at the fit — the same metric the multistart uses to arbitrate;
+    # comparing it across hypotheses discriminates the particle (lower = better fit).
+    lkeys = [jax.random.PRNGKey(s) for s in range(4)]
+    floss = float(np.mean([float(model.loss(jnp.asarray(res), oc, ot, k)) for k in lkeys]))
 
     td = vec9_dir(th9)
     sv = np.linalg.norm((start - th9)[1:4]) * 100; sd = np.degrees(np.arccos(np.clip(vec9_dir(start) @ td, -1, 1)))
     fv = np.linalg.norm((res - th9)[1:4]) * 100; fd = np.degrees(np.arccos(np.clip(vec9_dir(res) @ td, -1, 1)))
     tag = f'{mode}  data={args.data}  hypothesis={args.hypothesis}'
-    print(f'[{tag}]  truth E {th9[0]:.0f} MeV')
+    print(f'[{tag}]  truth E {th9[0]:.0f} MeV   photons {args.photons:,}')
     print(f'  start  vtx {sv:6.1f} cm   E {start[0]-th9[0]:+7.0f} MeV   dir {sd:5.1f}°   t0 {start[8]-th9[8]:+5.2f} ns')
-    print(f'  fit    vtx {fv:6.1f} cm   E {res[0]-th9[0]:+7.1f} MeV   dir {fd:5.2f}°   t0 {res[8]-th9[8]:+5.2f} ns')
+    print(f'  fit    vtx {fv:6.1f} cm   E {res[0]-th9[0]:+7.1f} MeV   dir {fd:5.2f}°   t0 {res[8]-th9[8]:+5.2f} ns   loss {floss:.4e}')
 
 
 if __name__ == '__main__':
