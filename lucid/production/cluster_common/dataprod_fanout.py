@@ -415,6 +415,12 @@ def main(argv: Optional[List[str]] = None) -> int:
                     job_name = f"photonsim_{slug}_{sp_tag}{sub_label}{job_id}"
                 job_partition = wrr.next() if wrr is not None else partition
                 master_seed = (seed_base + j) if seed_base is not None else None
+                # Optional: decouple the LUCiD-side draws from the Geant4 seed.
+                # With `lucid_seed_base` set, PhotonSim still runs on master_seed
+                # (so the G4 sample matches a run without it) while the vertex /
+                # rotation / propagation draws come from a different stream.
+                lucid_seed = ((int(cfg["lucid_seed_base"]) + j)
+                              if cfg.get("lucid_seed_base") is not None else None)
                 # Supernova is one all-at-once burst per job — do NOT pass
                 # --n-events, or run_job would read it as the interaction cap and
                 # truncate the burst to n_events; let it use supernova.cap_events.
@@ -425,7 +431,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                     use_gpu=args.gpu, test=args.test, skip_lucid=skip_lucid_flag,
                     n_events=job_n_events, override_energy_mev=override_energy,
                     sn_model=sn_model, sn_ordering=sn_ordering,
-                    master_seed=master_seed,
+                    master_seed=master_seed, lucid_seed=lucid_seed,
                 )
                 sb_path = out_dir / f"submit_job_{job_id}.{adapter.submit_extension}"
                 sb_path.write_text(body)

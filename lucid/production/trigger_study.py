@@ -26,6 +26,21 @@ from lucid.simulation.trigger import TriggerConfig, find_trigger_gates, hits_in_
 from lucid.simulation.digitizer import EMISSION_PROCESS_DARK as DARK
 
 
+def _trigger_attrs_from_dataset(dataset_dir):
+    """Read the trigger provenance the writer stamped on sensor.h5 config/.
+
+    Lets the study default to the trigger the dataset was actually produced
+    with, instead of hardcoded values that may not match it.
+    """
+    try:
+        with h5py.File(_kind_file(dataset_dir, "sensor"), "r") as f:
+            a = f["config"].attrs
+            return {k[len("trigger_"):]: float(a[k]) if "ns" in k else int(a[k])
+                    for k in a if k.startswith("trigger_")}
+    except Exception:
+        return {}
+
+
 def _digit_is_physics(hits_grp, n_digits: int) -> np.ndarray:
     """Boolean per digit: True if it has any non-dark contribution in hits.h5."""
     di = hits_grp["digit_idx"][:]
@@ -59,7 +74,8 @@ def evaluate(dataset_dir: str, cfg: TriggerConfig):
 
 
 def print_report(rows, cfg: TriggerConfig):
-    print(f"trigger: W={cfg.window_ns:.0f}ns  N_thr={cfg.n_thr}  pad={cfg.pad_ns:.0f}ns\n")
+    print(f"trigger: W={cfg.window_ns:.0f}ns  N_thr={cfg.n_thr}  "
+          f"pad={cfg.pad_before_ns:.0f}/{cfg.pad_after_ns:.0f}ns\n")
     hdr = f"{'event':12} {'nDig':>6} {'phys':>6} {'dark':>6} {'gates':>5} {'gate_us':>7} {'physEff%':>8} {'darkKept%':>9}"
     print(hdr)
     for r in rows:
@@ -74,6 +90,7 @@ def make_plot(dataset_dir: str, cfg: TriggerConfig, events, out_path: str):
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
+    from matplotlib.patches import Patch
     sf = h5py.File(_kind_file(dataset_dir, "sensor"), "r")
     hf = h5py.File(_kind_file(dataset_dir, "hits"), "r")
 
@@ -97,13 +114,16 @@ def make_plot(dataset_dir: str, cfg: TriggerConfig, events, out_path: str):
         ax.axhline(cfg.n_thr, color="C1", ls="--", lw=1, label=f"N_thr={cfg.n_thr}")
         for s, en in gates:
             ax.axvspan(s / 1e3, en / 1e3, color="C2", alpha=0.15)
-        ax.axvspan(0, 0, color="C2", alpha=0.15, label="trigger gates")
         ax.plot(T[is_phys] / 1e3, np.full(int(is_phys.sum()), 0.62), "|", color="C0", ms=5, alpha=0.4)
         ax.plot(T[~is_phys] / 1e3, np.full(int((~is_phys).sum()), 0.45), "|", color="C3", ms=5, alpha=0.4)
         ax.set_title(f"{e}: {len(T)} digits, {gates.shape[0]} gates", fontsize=10)
         ax.set_ylabel("hits in W"); ax.set_xlabel("time [μs]")
         ax.set_yscale("log"); ax.set_ylim(0.38, None)
-        ax.legend(fontsize=7, ncol=3, frameon=False, loc="upper right")
+        # legend "trigger gates" via a proxy patch — never drawn on the axes,
+        # so only the real gate spans are shaded.
+        handles, _ = ax.get_legend_handles_labels()
+        handles.append(Patch(facecolor="C2", alpha=0.15, label="trigger gates"))
+        ax.legend(handles=handles, fontsize=7, ncol=3, frameon=False, loc="upper right")
     fig.suptitle("Sliding-window trigger: gates capture physics bursts, reject dark between", fontsize=12)
     fig.tight_layout()
     fig.savefig(out_path, dpi=130, bbox_inches="tight")
@@ -125,16 +145,34 @@ def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("dataset_dir", help="dataset root (with sensor/ hits/ subdirs)")
-    p.add_argument("-W", "--window-ns", type=float, default=200.0)
-    p.add_argument("-N", "--n-thr", type=int, default=30)
-    p.add_argument("--pad", "--pad-ns", dest="pad_ns", type=float, default=30.0)
+    # Defaults are taken from the dataset's own trigger provenance (config/
+    # attrs trigger*), so the study validates the trigger that was actually
+    # applied. Any flag given explicitly overrides it.
+    p.add_argument("-W", "--window-ns", type=float, default=None)
+    p.add_argument("-N", "--n-thr", type=int, default=None)
+    p.add_argument("--pad", "--pad-ns", dest="pad_ns", type=float, default=None,
+                   help="set both pads; --pad-before/--pad-after override individually")
+    p.add_argument("--pad-before", dest="pad_before_ns", type=float, default=None)
+    p.add_argument("--pad-after", dest="pad_after_ns", type=float, default=None)
     p.add_argument("--plot", metavar="OUT.png", default=None, help="write the diagnostic plot")
     p.add_argument("--plot-events", default=None,
                    help="comma list of event_NNN to plot (default: first 2)")
     p.add_argument("--no-report", action="store_true", help="skip the per-event table")
     args = p.parse_args(argv)
 
-    cfg = TriggerConfig(window_ns=args.window_ns, n_thr=args.n_thr, pad_ns=args.pad_ns)
+    stamped = _trigger_attrs_from_dataset(args.dataset_dir)
+    pad = args.pad_ns
+    cfg = TriggerConfig(
+        window_ns=args.window_ns if args.window_ns is not None
+                  else stamped.get("window_ns", 200.0),
+        n_thr=args.n_thr if args.n_thr is not None else stamped.get("n_thr", 30),
+        pad_before_ns=(args.pad_before_ns if args.pad_before_ns is not None
+                       else pad if pad is not None
+                       else stamped.get("pad_before_ns", 30.0)),
+        pad_after_ns=(args.pad_after_ns if args.pad_after_ns is not None
+                      else pad if pad is not None
+                      else stamped.get("pad_after_ns", 30.0)),
+    )
     if not args.no_report:
         print_report(evaluate(args.dataset_dir, cfg), cfg)
     if args.plot:

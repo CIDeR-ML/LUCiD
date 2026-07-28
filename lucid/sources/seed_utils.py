@@ -25,6 +25,7 @@ __all__ = [
 _SUBPROC_PHOTONSIM_TAG = 0xB107
 _SUBPROC_GENIE_TAG     = 0x6E1E
 _SUBPROC_SCINT_TAG     = 0x5C17
+_SUBPROC_ROT_TAG       = 0x4074
 
 # t0 draw half-window (ns). Applied symmetrically per interaction:
 # t0 ~ Uniform(-T0_HALF_WINDOW_NS, +T0_HALF_WINDOW_NS). Wide enough to
@@ -66,10 +67,15 @@ def derive_event_keys(master_seed, job_id, event_idx, interaction_idx=0):
     # split above) so the existing 4-way split's keys stay bit-identical for
     # Cherenkov-only datasets at the same master_seed.
     scint_key = jax.random.fold_in(interaction_key, _SUBPROC_SCINT_TAG)
+    # rot_seed drives the optional LUCiD-side random rotation. Folded off its
+    # own tag (not appended to the split above) so the existing keys stay
+    # bit-identical at a given master_seed whether or not rotation is used.
+    rot_key = jax.random.fold_in(interaction_key, _SUBPROC_ROT_TAG)
     return {
         'vertex_seed': int(jax.random.randint(vertex_key, (), 1, 2**31 - 1)),
         't0_seed':     int(jax.random.randint(t0_key,     (), 1, 2**31 - 1)),
         'scint_seed':  int(jax.random.randint(scint_key,  (), 1, 2**31 - 1)),
+        'rot_seed':    int(jax.random.randint(rot_key,    (), 1, 2**31 - 1)),
         'sim_key':     sim_key,
         'smear_key':   smear_key,
     }
