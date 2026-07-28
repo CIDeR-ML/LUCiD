@@ -32,9 +32,10 @@ def test_run_job_cli_help():
 
 
 def test_dataprod_configs_well_formed():
-    # configs live in block subdirectories (GeV/, SN/, Solar/, Test/) as NN_name.json
+    # configs live in block subdirectories (GeV/, SN/, Solar/, Test/) as NN_name.json.
+    # GeV is trimmed to the production set (01-06); with SN/Solar/Test that's 9 blocks.
     files = sorted(glob.glob(os.path.join(CONFIGS, '*', '[0-9][0-9]_*.json')))
-    assert len(files) >= 16, f"expected the block dataprod configs, found {len(files)}"
+    assert len(files) >= 9, f"expected the block dataprod configs, found {len(files)}"
     for f in files:
         with open(f) as fh:
             cfg = json.load(fh)
