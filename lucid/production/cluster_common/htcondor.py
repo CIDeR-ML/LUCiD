@@ -94,16 +94,30 @@ class HTCondorAdapter(ClusterAdapter):
         var in the bash shell that runs *inside* the container, which
         always works.
 
-        When PHOTONSIM_DEV_PATH is set, override PHOTONSIM_BIN to point
-        at the host's freshly-built binary via /afs (unconditionally
-        bound). This bypasses the nested-bind issue where HTCondor's
-        Singularity silently ignores `<host>:/opt/PhotonSim` once
-        `/afs` is already bound at the top level, leaving the image's
-        baked binary in effect.
+        Both overrides work around the same nested-bind issue: HTCondor's
+        Singularity silently ignores a `<host>:/opt/...` bind once `/afs`
+        is already bound at the top level, leaving the image's baked copy
+        in effect. We reach the host checkouts by absolute path via /afs
+        (unconditionally bound) instead of trusting the dropped bind:
+
+          * PHOTONSIM_DEV_PATH -> PHOTONSIM_BIN points run_job at the
+            host's freshly-built binary rather than baked /opt/PhotonSim.
+          * LUCID_DEV_PATH -> PYTHONPATH prepends the host LUCiD checkout
+            so the interpreter's PathFinder resolves `import lucid` to it
+            ahead of the container's editable-install meta-path finder
+            (which hard-maps `lucid` to the baked /opt/LUCiD).
         """
-        if not self.env.get("PHOTONSIM_DEV_PATH"):
-            return ""
-        return f"PHOTONSIM_BIN={self.env['PHOTONSIM_DEV_PATH']}/build/PhotonSim "
+        parts: List[str] = []
+        if self.env.get("LUCID_DEV_PATH"):
+            parts.append(
+                f"PYTHONPATH={self.env['LUCID_DEV_PATH']}"
+                "${PYTHONPATH:+:$PYTHONPATH}"
+            )
+        if self.env.get("PHOTONSIM_DEV_PATH"):
+            parts.append(
+                f"PHOTONSIM_BIN={self.env['PHOTONSIM_DEV_PATH']}/build/PhotonSim"
+            )
+        return (" ".join(parts) + " ") if parts else ""
 
     def _log_dir(self, cell_dir: Path) -> Path:
         """Where the .sub's `output =`, `error =`, `log =` files land.
@@ -203,7 +217,8 @@ class HTCondorAdapter(ClusterAdapter):
     def render_dataprod_job(self, *, cell_dir, config_path, detector, job_id,
                             job_name, partition, use_gpu, test, skip_lucid,
                             n_events, override_energy_mev,
-                            sn_model=None, sn_ordering=None, master_seed=None):
+                            sn_model=None, sn_ordering=None, master_seed=None,
+                            lucid_seed=None):
         cpus = self.env.get("DEFAULT_CPUS", "1")
         memory_mb = self.env.get("DEFAULT_MEMORY", "4000")
         gpus = "1" if use_gpu else self.env.get("DEFAULT_GPUS", "0")
@@ -225,6 +240,8 @@ class HTCondorAdapter(ClusterAdapter):
             flags.append(f"--sn-ordering {sn_ordering}")
         if master_seed is not None:
             flags.append(f"--master-seed {master_seed}")
+        if lucid_seed is not None:
+            flags.append(f"--lucid-seed {lucid_seed}")
         run_args = " ".join(flags)
         bash_cmd = (
             f"{self._env_prefix()}lucid-run-job --config {config_path} "

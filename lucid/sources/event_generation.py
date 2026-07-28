@@ -102,6 +102,74 @@ def _trigger_config_meta(cfg):
             'trigger_pad_after_ns': float(cfg.pad_after_ns)}
 
 
+def _random_rotation_matrix(rng):
+    """Uniform random proper rotation (Shoemake's quaternion method).
+
+    Uniform over SO(3) — unlike independent Euler angles, which bunch near the
+    poles. Returns a (3, 3) float64 matrix with det = +1.
+    """
+    u1, u2, u3 = rng.random(3)
+    s1, s2 = np.sqrt(1.0 - u1), np.sqrt(u1)
+    t1, t2 = 2.0 * np.pi * u2, 2.0 * np.pi * u3
+    w, x, y, z = s2 * np.cos(t2), s1 * np.sin(t1), s1 * np.cos(t1), s2 * np.sin(t2)
+    return np.array([
+        [1 - 2*(y*y + z*z),     2*(x*y - z*w),     2*(x*z + y*w)],
+        [    2*(x*y + z*w), 1 - 2*(x*x + z*z),     2*(y*z - x*w)],
+        [    2*(x*z - y*w),     2*(y*z + x*w), 1 - 2*(x*x + y*y)],
+    ], dtype=np.float64)
+
+
+def _rotate_event_raw(raw, R):
+    """Rotate every geometric quantity of a raw event about the origin, in place.
+
+    PhotonSim fires from (0,0,0), so rotating about the origin *is* rotating
+    about the vertex; this runs before translation. Distances from the vertex
+    and all relative angles are preserved, so photon emission times stay valid
+    and the photon<->segment correspondence is untouched.
+
+    Rotation is linear and unit-agnostic, so each array is rotated in whatever
+    units it arrives in (photon origins m, segment endpoints mm, track
+    positions as read from ROOT). Every geometric field must be transformed
+    together — segment and track *directions* come from their own ROOT branches,
+    not from the endpoints, so rotating positions alone would desynchronise them.
+    """
+    Rf = R.astype(np.float32)
+    raw['photon_origins'] = raw['photon_origins'].astype(np.float32, copy=False) @ Rf.T
+    raw['photon_directions'] = raw['photon_directions'].astype(np.float32, copy=False) @ Rf.T
+
+    seg = raw['segments_raw']
+    for pre in ('start', 'end'):
+        v = np.stack([seg[f'{pre}_x_mm'], seg[f'{pre}_y_mm'], seg[f'{pre}_z_mm']], axis=1) @ R.T
+        seg[f'{pre}_x_mm'], seg[f'{pre}_y_mm'], seg[f'{pre}_z_mm'] = v[:, 0], v[:, 1], v[:, 2]
+    d = np.stack([seg['dir_x'], seg['dir_y'], seg['dir_z']], axis=1) @ R.T
+    seg['dir_x'], seg['dir_y'], seg['dir_z'] = d[:, 0], d[:, 1], d[:, 2]
+
+    for tinfo in raw['track_info_dict'].values():
+        tinfo['position'] = R @ np.asarray(tinfo['position'], dtype=np.float64)
+        tinfo['direction'] = R @ np.asarray(tinfo['direction'], dtype=np.float64)
+    return raw
+
+
+# Fallback dark-noise readout pad (ns) when no trigger is configured — brackets
+# the physics envelope so single-window (min_physics_hits) events carry dark.
+_DARK_PAD_NO_TRIGGER_NS = 100.0
+
+
+def _dark_readout_pad_ns(trigger_cfg):
+    """Dark-noise pad (ns) so the *whole* trigger gate is populated with dark.
+
+    Dark is generated over ``[min(t_reco) - pad, max(t_reco) + pad]`` before the
+    trigger runs. A gate can open ``pad_before`` ns before the first physics hit
+    and close up to ``pad_after + window`` ns after the last, so the pad must be
+    at least ``max(pad_before, pad_after) + window`` for every gate edge to sit
+    inside the dark span; excess dark outside the gates is trigger-dropped. Not
+    hardcoded — it tracks the trigger config so future configs stay correct.
+    """
+    if trigger_cfg is None:
+        return _DARK_PAD_NO_TRIGGER_NS
+    return max(trigger_cfg.pad_before_ns, trigger_cfg.pad_after_ns) + trigger_cfg.window_ns
+
+
 def generate_events_from_photonsim_particles(event_simulator, root_file_path,
                                              sensor_positions, output_dir=None,
                                              n_events=None, batch_size=100, master_seed=None,
@@ -247,13 +315,12 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
         print(f"Trigger: W={trigger_cfg.window_ns}ns N_thr={trigger_cfg.n_thr} "
               f"pad={trigger_cfg.pad_before_ns}/{trigger_cfg.pad_after_ns}ns "
               f"(non-triggering events dropped)")
-    # Note: Rotation is not applied in this workflow because PhotonSim already generates
-    # primaries with random isotropic directions (/gun/randomDirection true). The photon
-    # and track data are already in randomized coordinate frames, so rotation in LUCiD
-    # would be redundant. Only translation is needed to place the vertex in the detector.
-    if apply_rotation:
-        print(f"WARNING: apply_rotation=True was passed but rotation is disabled in this workflow.")
-        print(f"         PhotonSim already generates tracks with random directions, so rotation is unnecessary.")
+    # Rotation is off by default: PhotonSim already throws isotropic primary
+    # directions, so a fresh event gains nothing from it. It exists for reusing
+    # one Geant4 event at several orientations (augmentation) — combine with
+    # --skip-photonsim and a different --master-seed to re-emit the same G4
+    # events under new (rotation, translation) draws.
+    print(f"Apply rotation: {apply_rotation}")
     print(f"Saving events to directory: {output_dir}")
 
     # Provenance + detector_bounds derived from the simulator's attached
@@ -390,6 +457,13 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
             photon_wavelengths_np  = raw['photon_wavelengths'].astype(np.float32, copy=False)
             photon_segment_index_raw = np.asarray(raw['photon_segment_index_raw'], dtype=np.int64)
 
+            # Rotate first (about the vertex at the origin), then translate.
+            if apply_rotation:
+                R = _random_rotation_matrix(np.random.default_rng(seed=event_keys['rot_seed']))
+                _rotate_event_raw(raw, R)
+                photon_origins_np    = raw['photon_origins'].astype(np.float32, copy=False)
+                photon_directions_np = raw['photon_directions'].astype(np.float32, copy=False)
+
             if apply_translation:
                 photon_origins_np = photon_origins_np + translation_vector[None, :]
                 seg = raw['segments_raw']
@@ -518,6 +592,7 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
                 emission_process=deposits['emission_process'],
                 n_sensors=int(n_sensors), model=digitizer_model, rng=digi_rng,
                 dark_rate_khz=float(digitizer_model.get('dark_rate_khz', 0.0)),
+                readout_pad_ns=_dark_readout_pad_ns(trigger_cfg),
                 apply_resolution=apply_smearing)
 
             # Shift G4/vertex-frame times into the absolute detector frame by
@@ -1030,6 +1105,7 @@ def generate_events_from_photonsim_pileup(
                 digitizer_model=digitizer_model,
                 digi_rng=np.random.default_rng([int(master_seed or 0), int(job_id), int(event_idx)]),
                 detector_bounds=detector_bounds,
+                readout_pad_ns=_dark_readout_pad_ns(trigger_cfg),
             )
             print(f"    [timing] merge {_time.time() - _t_merge:.3f}s", flush=True)
             merged['source_event_idx'] = int(event_idx)
@@ -1117,7 +1193,8 @@ def generate_events_from_photonsim_pileup(
 
 
 def _merge_pileup_streams(streams, *, n_sensors, apply_smearing,
-                          digitizer_model, digi_rng, detector_bounds):
+                          digitizer_model, digi_rng, detector_bounds,
+                          readout_pad_ns=_DARK_PAD_NO_TRIGGER_NS):
     """Merge per-vertex streams into a single event_dict.
 
     Per-interaction metadata (t0, vertex_xyz, source_type) is broadcast
@@ -1227,6 +1304,7 @@ def _merge_pileup_streams(streams, *, n_sensors, apply_smearing,
         t_ref=_catp('t_ref', np.float64),   # per-interaction late-light cap reference
         n_sensors=n_sensors, model=digitizer_model, rng=digi_rng,
         dark_rate_khz=float(digitizer_model.get('dark_rate_khz', 0.0)),
+        readout_pad_ns=readout_pad_ns,
         apply_resolution=apply_smearing)
 
     merged = {
@@ -1572,7 +1650,8 @@ def generate_events_from_photonsim_supernova(
             digitizer_model=digitizer_model,
             digi_rng=np.random.default_rng(
                 [int(master_seed), int(job_id), int(source_event_idx), int(cidx)]),
-            detector_bounds=detector_bounds)
+            detector_bounds=detector_bounds,
+            readout_pad_ns=_dark_readout_pad_ns(trigger_cfg))
 
         # Selection. Default (min_physics_hits): trigger-free truth cut — keep the
         # interaction as one readout window iff it has >= N physics hits, so the
