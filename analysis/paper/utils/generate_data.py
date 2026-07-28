@@ -13,9 +13,9 @@ macro (milano, mli:cider-ml). This mirrors the existing
 ``.../ROOT_files/LARGE_files/water/mu-/submit_gen.sh`` but adds electrons and the full sweep.
 
     # write macros + sbatch scripts, do NOT queue (inspect first)
-    python analysis/paper/data_generation/generate_data.py
+    python analysis/paper/utils/generate_data.py
     # write and queue everything (replacing stale files in BASE)
-    python analysis/paper/data_generation/generate_data.py --submit --clean
+    python analysis/paper/utils/generate_data.py --submit --clean
 
 muon macros disable the muon-decay processes for a clean single track; electrons are stable
 so that block is dropped (per project decision).

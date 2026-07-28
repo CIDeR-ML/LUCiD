@@ -5,14 +5,19 @@ and ``submit_job.py`` consume) — just assembled programmatically so a figure c
 scale itself between a small local run and the full S3DF production by changing
 one argument (``n_events``).
 
+The figure scripts build every config from the constants here, so this module defines
+the published working point once.
+
 The reconstruction settings below are the paper defaults: contained, random true
-t0 (+-15 ns), uncorrected, TTS = 2.0 ns with a matched likelihood kernel.
+t0 (+-15 ns), uncorrected, TTS = 2.1 ns with a matched likelihood kernel
+(``sigma == TTS``), and the ``Abe_2013`` per-PMT charge-resolution model.
 """
 from pathlib import Path
 
-# Paper-default reconstruction settings (see the TTS=2.0 final set).
-TTS = 2.0
-GN = {'fisher_mode': 'ad', 'lr': 4.0, 'nkeys': 8, 'niters': 150, 'sigma': 2.0}
+# Paper-default reconstruction settings (the TTS=2.1 / Abe_2013 published set).
+TTS = 2.1
+GN = {'fisher_mode': 'ad', 'lr': 4.0, 'nkeys': 8, 'niters': 150, 'sigma': 2.1}
+CHARGE_RESOLUTION = 'Abe_2013'
 
 # A muon at 1 GeV, water, SK-like geometry — the nominal working point.
 _PART_DIR = {'muon': 'mu-', 'electron': 'e-'}
@@ -29,7 +34,7 @@ def default_root(particle: str, energy_mev: int, n_events: int, root_base: str) 
 
 def base_config(particle, energy_mev, n_rays, n_events, root_file, name,
                 study='nrays', geom_config='config/SK_like_geom_config.json',
-                time_weight=1.0, tts=TTS, charge_resolution=None, gn=None):
+                time_weight=1.0, tts=TTS, charge_resolution=CHARGE_RESOLUTION, gn=None):
     """One reconstruction config (paper defaults)."""
     g = dict(GN if gn is None else gn)
     if time_weight != 1.0:

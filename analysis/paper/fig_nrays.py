@@ -19,7 +19,7 @@ Notes
   figure uses the S3DF backend with 500 events and all seven ray tags.
 * ``--root-base`` points at the directory holding ``<mu-|e->/<E>MeV_<N>events.root``
   PhotonSim inputs (default: the S3DF ROOT area). Local reproduction needs those
-  inputs present; generating them from scratch is ``data_generation/generate_data.py``.
+  inputs present; generating them from scratch is ``utils/generate_data.py``.
 """
 import argparse
 import sys
