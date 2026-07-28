@@ -9,10 +9,16 @@ the [S3DF deployment guide](../../docs/guides/production/deploy-s3df.md).
 The reconstruction itself is the validated recipe from
 [`scripts/campaign_recon/`](../scripts/campaign_recon) (RESULTS.md): per event, load the
 PhotonSim photons, place the gun randomly in the fiducial volume, make realistic per-PMT
-(charge, first-arrival time) with 2.5 ns TTS, seed from two complementary vertices plus their fusion
+(charge, first-arrival time) with **2.1 ns TTS** and the **`Abe_2013`** charge-resolution
+model, seed from two complementary vertices plus their fusion
 (charge-grid ‖ time-multilateration) each with a cone direction, then run
 `fit_track_multistart` keeping the full per-iteration trajectory. `tot_n_scale = 1.0` for both
 particles (no scalar charge norm).
+
+> **The recipe lives in exactly one place: [`utils/studies.py`](utils/studies.py).** The
+> figure scripts build every config from it at run time, so following this runbook
+> reproduces the published data by construction. Do not hand-write study configs —
+> that is how the campaigns drifted from the published set in the first place.
 
 ## What gets logged
 
@@ -32,50 +38,66 @@ One **HDF5 per config**, `<output>/<config-name>.h5`:
   seed (0=A, 1=B, 2=fused), `best_iter*`, `losses`, and metadata attrs (`energy_true`, `n_hit`,
   `q_tot`, `seconds`).
 
-Config knobs live in `pipeline.DEFAULT_CONFIG`; a study config only overrides what varies.
+Config knobs live in `utils/studies.py` (the recipe) and `utils/pipeline.py:DEFAULT_CONFIG`
+(the fallback for anything a study config omits).
 
 ## Output layout
 
+Each figure writes under its own data dir (`utils/paths.py`; the S3DF area is
+`/sdf/data/neutrino/cjesus/CIDER/LUCiD_tracking/paper/<figure>`):
+
 ```
-/sdf/data/neutrino/cjesus/CIDER/LUCiD_tracking/<particle>/<study>/
-├── config_00.h5 ...          # one HDF5 per config
+<data-dir>/
+├── configs/                  # the exact configs submitted (provenance)
+├── <config-name>/
+│   └── <config-name>.h5      # one HDF5 per config, e.g. nrays_mu_250k/
 ├── logs/                     # SLURM stdout/err
 └── slurm/                    # generated sbatch scripts
 ```
 
-## 1. Generate the study configs
+## 1. Run a campaign
+
+One command per study. It builds the configs from `utils/studies.py`, writes them next to
+the output for provenance, and queues one GPU job per config. Geometry configs for the
+geom axis are generated automatically — there is no prerequisite step.
 
 ```bash
 cd LUCiD
-python analysis/paper/make_geometries.py     # geom study: SK_like at 2k..20k PMTs (step 1k)
-python analysis/paper/make_configs.py         # all studies × {muon,electron}, 100 events/config
-# subset / override event count:
-python analysis/paper/make_configs.py --studies nrays --particles muon --n-events 50
+python analysis/paper/fig_nrays.py         --generate-data --backend s3df
+python analysis/paper/fig_energy_scan.py   --generate-data --backend s3df
+python analysis/paper/fig_geometry_scan.py --generate-data --backend s3df
 ```
 
-Configs land in `analysis/paper/configs/<study>/<particle>/config_NN.json`.
+Each defaults to the published sweep and event count:
 
-- **nrays** — sweeps predictor photon budget `n_rays` ∈ {5k,10k,25k,50k,100k,150k,250k} at
-  1000 MeV / SK_like.
-- **energy** — sweeps 300..2100 MeV (step 100); reads `<E>MeV_500events.root` (see §3).
-- **geom** — sweeps SK_like PMT count 2k..20k (step 1k) at 1000 MeV.
+- **nrays** — `n_rays` ∈ {5k,10k,25k,50k,100k,150k,250k,500k} at 1000 MeV / SK_like,
+  muon **and** electron, 500 events/point.
+- **energy** — 400..1800 MeV (step 100) at a flat 250k rays, muon, 100 events/point. Two
+  passes: `time_weight=1.0` throughout plus `0.75` at/above 1600 MeV (`studies.W_CROSSOVER`);
+  the figure draws each energy from the appropriate pass. Reads `<E>MeV_500events.root` (§3).
+- **geom** — SK_like PMT count 2k..18k (step 2k) at 1000 MeV, muon, 100 events/point.
 
-## 2. Submit the reconstruction jobs (GPU, `turing`)
-
-One GPU job per config. The container's baked jaxlib is CPU-only, so the CUDA build is layered
-in via `APPTAINERENV_PYTHONUSERBASE` + `--nv` (QUICKSTART_S3DF §"Running the JAX stack on a
-GPU"); the checkout's own `lucid` wins on `sys.path`.
+Narrow the scope with `--tags`, `--energies`, `--sensors`, `--events`, `--root-base`.
+Then plot:
 
 ```bash
-OUT=/sdf/data/neutrino/cjesus/CIDER/LUCiD_tracking
+python analysis/paper/fig_nrays.py --plot-results --backend s3df
+```
+
+## 2. Submitting configs by hand (debugging)
+
+The campaign commands above call this for you; reach for it directly only when
+re-submitting a single failed point. The container's baked jaxlib is CPU-only, so the CUDA
+build is layered in via `APPTAINERENV_PYTHONUSERBASE` + `--nv` (QUICKSTART_S3DF §"Running
+the JAX stack on a GPU"); the checkout's own `lucid` wins on `sys.path`.
+
+```bash
+D=/sdf/data/neutrino/cjesus/CIDER/LUCiD_tracking/paper/nrays
 # one config
-python analysis/paper/submit_job.py \
-    --config analysis/paper/configs/nrays/muon/config_00.json \
-    --output $OUT/muon/nrays --submit
+python analysis/paper/utils/submit_job.py \
+    --config $D/configs/nrays_mu_250k.json --output $D --submit
 # every config in a directory (one job each)
-python analysis/paper/submit_job.py \
-    --config analysis/paper/configs/nrays/muon \
-    --output $OUT/muon/nrays --submit
+python analysis/paper/utils/submit_job.py --config $D/configs --output $D --submit
 ```
 
 Omit `--submit` for a dry run (writes the sbatch scripts to `<output>/slurm/` without queuing).
@@ -87,22 +109,23 @@ Run one config locally (e.g. to debug), still inside the container:
 ```bash
 APPTAINERENV_PYTHONUSERBASE=/sdf/data/neutrino/cjesus/python_envs/lucid \
 apptainer exec --nv -B /sdf,/fs,/sdf/scratch,/lscratch,/cvmfs "$LUCID_IMAGE_PATH" \
-    /opt/conda/bin/python3 analysis/paper/run_study.py \
-        --config analysis/paper/configs/nrays/muon/config_06.json \
+    /opt/conda/bin/python3 analysis/paper/utils/run_study.py \
+        --config $D/configs/nrays_mu_250k.json \
         --output /tmp/trk_test --events 0,1
 ```
 
 ## 3. Generate the energy-sweep PhotonSim data (prerequisite for the energy study)
 
-The energy study needs `<E>MeV_500events.root` for 300..2100 MeV, both particles. These are made
+The energy study needs `<E>MeV_500events.root` for 400..1800 MeV (the generator covers
+300..2100), both particles. These are made
 by the PhotonSim monoenergetic / individual-photon recipe (the same one behind the distributed
 files), on CPU nodes (`milano`):
 
 ```bash
 # write macros + sbatch, inspect first
-python analysis/paper/data_generation/generate_data.py
+python analysis/paper/utils/generate_data.py
 # write + queue everything, dropping stale files in the target dir
-python analysis/paper/data_generation/generate_data.py --submit --clean
+python analysis/paper/utils/generate_data.py --submit --clean
 ```
 
 Output: `/sdf/data/neutrino/cjesus/CIDER/ROOT_files/LARGE_files/water/<mu-|e->/<E>MeV_500events.root`.
@@ -113,7 +136,7 @@ nrays and geom studies reuse the 1000 MeV file from this same tree.
 
 ```python
 import h5py, numpy as np
-with h5py.File('config_06.h5', 'r') as f:
+with h5py.File('nrays_mu_250k.h5', 'r') as f:
     print(dict(f.attrs))                      # config + provenance
     ev = f['events/ev0000']
     true  = ev['truth_phys'][:]               # (x,y,z,phi,theta,t0,E)
@@ -126,7 +149,7 @@ with h5py.File('config_06.h5', 'r') as f:
 
 ```bash
 apptainer exec -B /sdf,/fs,/sdf/scratch,/lscratch,/cvmfs "$LUCID_IMAGE_PATH" \
-    /opt/conda/bin/python3 analysis/paper/run_study.py \
+    /opt/conda/bin/python3 analysis/paper/utils/run_study.py \
         --config <small-config.json> --output /tmp/trk_smoke --events 0,1
 ```
 

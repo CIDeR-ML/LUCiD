@@ -60,12 +60,16 @@ DEFAULT_CONFIG = {
     'fidz': 12.0,                        # fiducial half-height (m)
     'containment_margin': 0.95,          # accept a placement only if vertex + s_max(E)·dir is
                                          # inside this fraction of the detector (None disables)
-    'tts': 2.5,                          # transit-time spread (ns) baked into the data sim
-    'charge_resolution': None,           # data-sim charge model: None | "Abe_2013" | "Bellamy_94"
+    # A study config only overrides what varies, so these fall-throughs must themselves be
+    # the published working point — keep them in step with utils/studies.py.
+    'tts': 2.1,                          # transit-time spread (ns) baked into the data sim
+    'charge_resolution': 'Abe_2013',     # data-sim charge model: None | "Abe_2013" | "Bellamy_94"
     'grid': {'n_cap': 80, 'n_angular': 120, 'n_height': 80},
     'cherenkov_band': [274.91, 673.83],  # model λ band (nm); None disables
-    'gn': {'nkeys': 4, 'niters': 250, 'lr': 8.0, 'fisher_mode': 'fd',
-           'sigma': 2.5, 'delta': 1.0, 'tot_n_scale': 1.0,
+    # fisher_mode and lr are a tuned pair; the legacy ('fd', lr=8.0) set is not
+    # interchangeable with ('ad', lr=4.0) — see fit_track in lucid/fitting/recon.py.
+    'gn': {'nkeys': 8, 'niters': 150, 'lr': 4.0, 'fisher_mode': 'ad',
+           'sigma': 2.1, 'delta': 1.0, 'tot_n_scale': 1.0,
            # energy_scale_mode (new-lib only): 'nphot' (DEFAULT since the paired 250k test:
            # physics identical to simtotal within 0.4 MeV p68 per event, 1.8x faster; single
            # pass, analytic nphot(E) scale, nphot_fn built from the emitter context) or

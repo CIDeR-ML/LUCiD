@@ -5,15 +5,15 @@
     python fig_geometry_scan.py --plot-results
     python fig_geometry_scan.py --generate-data --backend s3df --events 100
 
-Needs the per-count geometry configs (analysis/paper/geometries/SK_like_<N>_geom_config.json);
-generate any missing ones with analysis/paper/make_geometries.py.
+The per-count geometry configs (analysis/paper/geometries/SK_like_<N>_geom_config.json)
+are generated automatically for whatever sensor counts the run needs — no prerequisite step.
 """
 import argparse
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from analysis.paper.utils import paths, studies, run, plotting   # noqa: E402
+from analysis.paper.utils import paths, studies, run, plotting, make_geometries   # noqa: E402
 
 FIGURE = 'geometry'
 LOCAL_SENSORS = [4000, 10000, 16000]
@@ -22,6 +22,7 @@ LOCAL_SENSORS = [4000, 10000, 16000]
 def generate_data(backend, events, root_base, sensors):
     sensors = sensors or (studies.SENSORS if backend == 's3df' else LOCAL_SENSORS)
     n = events or (100 if backend == 's3df' else 20)
+    make_geometries.ensure(sensors)          # idempotent; no manual prerequisite step
     ddir = paths.data_dir(FIGURE, backend)
     for cfg in studies.geom_configs(n_events=n, sensors=sensors, root_base=root_base):
         per = ddir / cfg['name']

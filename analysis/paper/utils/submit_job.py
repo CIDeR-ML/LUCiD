@@ -2,11 +2,11 @@
 """Submit tracking-study configs to SLURM on S3DF — one GPU job per config.
 
     # single config
-    python analysis/paper/submit_job.py --config configs/nrays/muon/config_00.json \
+    python analysis/paper/utils/submit_job.py --config configs/nrays/nrays_mu_250k.json \
         --output /sdf/data/neutrino/cjesus/CIDER/LUCiD_tracking/muon/nrays --submit
 
     # every config in a directory (one job each)
-    python analysis/paper/submit_job.py --config configs/nrays/muon \
+    python analysis/paper/utils/submit_job.py --config configs/nrays \
         --output /sdf/data/neutrino/cjesus/CIDER/LUCiD_tracking/muon/nrays --submit
 
 Each job runs ``run_study.py`` inside the LUCiD container on a GPU node (default partition
@@ -23,8 +23,8 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-TRACKING_DIR = REPO_ROOT / 'analysis' / 'paper'
+REPO_ROOT = Path(__file__).resolve().parents[3]
+TRACKING_DIR = Path(__file__).resolve().parent          # analysis/paper/utils/ — holds run_study.py
 DEFAULT_IMAGE = os.environ.get('LUCID_IMAGE_PATH',
                                '/sdf/data/neutrino/cjesus/software/images/lucid.sif')
 DEFAULT_ENV_BASE = '/sdf/data/neutrino/cjesus/python_envs/lucid'
@@ -73,7 +73,7 @@ def main():
     ap.add_argument('--output', required=True, help='output dir for the HDF5 results')
     ap.add_argument('--job-name', default=None)
     ap.add_argument('--run-script', default='run_study.py',
-                    help="script in analysis/paper/ to run (default run_study.py)")
+                    help="script in analysis/paper/utils/ to run (default run_study.py)")
     ap.add_argument('--extra-args', default='',
                     help='extra CLI args appended to the run script invocation')
     ap.add_argument('--partition', default='turing', help='GPU partition (default turing)')
