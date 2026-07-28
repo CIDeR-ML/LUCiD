@@ -68,7 +68,22 @@ reflectivity — the timing-observable frontier.)
   wrong-particle hypothesis, or the real GEANT4-vs-SIREN emission mismatch, blows the vertex out
   to ~1 m and drifts t0 by several ns — so vertex and t0 discriminate μ/e. `--data-fit` needs the
   ROOT files (`./scripts/download_data.sh`); `--event N` selects the GEANT4 event, `--seed N` the
-  start offset.
+  start offset, `--photons N` the model ray count (default 250k; more sharpens the closure fit but
+  needs more GPU memory).
+- **Particle ID by likelihood.** Each run also prints the **final data loss** (the metric the
+  multistart uses to arbitrate), so reconstructing one event under both hypotheses is a μ/e test —
+  the correct hypothesis gives the lower loss. E.g. 5 electron GEANT4 events under both models:
+
+  ```bash
+  for ev in 0 1 2 3 4; do
+    for hyp in e mu; do
+      python examples/hello_reconstruct.py --data-fit --data e --hypothesis "$hyp" --event "$ev"
+    done
+  done
+  ```
+
+  On electron data the electron hypothesis wins the loss on every event, while the muon hypothesis
+  can't fit the shower (vertex ~1.5–2 m off, t0 drifting several ns).
 - The `fit(forward, residual=, solver=)` / `SimParams` / `Field` interface described in
   `docs/internal/MAIN_BRANCH_PLAN.md` is a **proposal**, not yet built. These examples call the
   canonical API that exists today.
