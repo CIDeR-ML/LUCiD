@@ -1,8 +1,11 @@
 {
   "scatter_length": 50.0,
   "absorption_length": 50.0,
-  "wall_reflection_rate": 0.2,
-  "sensor_reflection_rate": 0.2,
+  "_comment_reflection": "Placeholder surfaces matched to the SK-family model for consistency. wall: SK inner-detector black PET liner, total R~0.05, ~55% specular [Abe et al., NIM A737 (2014) 253, arXiv:1307.0162 Fig. 32]. sensor: PMT glass + bialkali photocathode from water, total R~0.25, specular-dominated [Motta & Schonert, NIM A539 (2005) 217]. Consumed by the default 'scalar_mix' model. Replace with measured values when this detector's real surfaces are characterized.",
+  "wall_reflection_rate": 0.05,
+  "wall_fspec": 0.55,
+  "sensor_reflection_rate": 0.25,
+  "sensor_fspec": 0.9,
   "qe": 0.2,
   "qe_corrections": 1.0
 }
