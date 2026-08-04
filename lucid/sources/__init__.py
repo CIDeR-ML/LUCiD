@@ -7,10 +7,14 @@ __all__ = [
     "predict_t0_wrapper",
     "IsotropicSource",
     "LaserSource",
+    "GaussianLaserSource",
     "isotropic_source",
     "laser_source",
+    "gaussian_laser_source",
     "get_isotropic_rays",
     "generate_laser_photons",
+    "gaussian_beam_theta",
+    "generate_gaussian_laser_photons",
     "setup_calibration_generator",
     "ShotgunSource",
     "shotgun_source",
@@ -26,10 +30,11 @@ from lucid.sources.siren_rays import (
     predict_t0_wrapper,
 )
 from lucid.sources.calibration_sources import (
-    IsotropicSource, LaserSource,
-    isotropic_source, laser_source,
+    IsotropicSource, LaserSource, GaussianLaserSource,
+    isotropic_source, laser_source, gaussian_laser_source,
     get_isotropic_rays,
-    generate_laser_photons,
+    generate_laser_photons, gaussian_beam_theta,
+    generate_gaussian_laser_photons,
     setup_calibration_generator,
 )
 from lucid.sources.shotgun_source import (
