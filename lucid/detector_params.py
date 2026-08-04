@@ -310,8 +310,8 @@ class JointParams(NamedTuple):
 # Re-exported here for backwards compatibility.
 # ---------------------------------------------------------------------------
 from lucid.sources.calibration_sources import (  # noqa: F401, E402
-    IsotropicSource, LaserSource,
-    isotropic_source, laser_source,
+    IsotropicSource, LaserSource, GaussianLaserSource,
+    isotropic_source, laser_source, gaussian_laser_source,
 )
 
 

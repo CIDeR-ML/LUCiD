@@ -145,6 +145,65 @@ def generate_laser_photons(fiber_position, fiber_direction, source_intensity, n_
     return ray_vectors, ray_origins, photon_weights
 
 
+def gaussian_beam_theta(key, beam_width_deg, shape=()):
+    """Sample polar angles from an empirical Gaussian calibration beam.
+
+    Twelve uniform variates provide the Gaussian approximation before the
+    empirical angular transform::
+
+        beam_width_rad = beam_width_deg * pi / 180
+        rnd = (sum(12 uniforms) - 6) * beam_width_rad
+        ang = sqrt(rnd**2 / 3610**2)
+        ang = sqrt(ang)
+        theta = atan(ang)
+
+    Parameters
+    ----------
+    key : jax.random.PRNGKey
+        Random key for JAX.
+    beam_width_deg : float or jnp.ndarray
+        Empirical beam-width input in degrees.
+    shape : tuple, optional
+        Shape of the returned angle array.
+    """
+    beam_width_rad = jnp.asarray(beam_width_deg, dtype=jnp.float32) * jnp.pi / 180.0
+    uniforms = random.uniform(key, shape=shape + (12,))
+    rnd = (jnp.sum(uniforms, axis=-1) - 6.0) * beam_width_rad
+    ang = jnp.sqrt((rnd * rnd) / (3610.0 ** 2))
+    ang = jnp.sqrt(ang)
+    return jnp.arctan(ang)
+
+
+@partial(jax.jit, static_argnums=(3,))
+def generate_gaussian_laser_photons(
+        fiber_position, fiber_direction, source_intensity, n_photons, key,
+        beam_width_deg=0.5):
+    """Generate laser photons with an empirical Gaussian angular profile.
+
+    The return value follows LUCiD's calibration-source contract:
+    ``(directions, origins, weights)``. Photon wavelength remains metadata on
+    :class:`GaussianLaserSource`, as it is for the existing laser source.
+    """
+    fiber_direction = normalize(fiber_direction)
+    theta_key, phi_key = random.split(key)
+
+    theta = gaussian_beam_theta(theta_key, beam_width_deg, shape=(n_photons,))
+    phi = random.uniform(phi_key, (n_photons,)) * 2.0 * jnp.pi
+
+    sin_theta = jnp.sin(theta)
+    local_directions = jnp.stack([
+        sin_theta * jnp.cos(phi),
+        sin_theta * jnp.sin(phi),
+        jnp.cos(theta),
+    ], axis=1)
+
+    basis = generate_orthonormal_basis(fiber_direction)
+    ray_vectors = jnp.einsum('ij,kj->ki', basis, local_directions)
+    ray_origins = jnp.tile(fiber_position[None, :], (n_photons, 1))
+    photon_weights = source_intensity * jnp.ones(n_photons) / n_photons
+    return ray_vectors, ray_origins, photon_weights
+
+
 def setup_calibration_generator(source_type='isotropic'):
     """
     Factory function that returns a configured calibration photon generator.
@@ -275,6 +334,22 @@ class LaserSource(NamedTuple):
         )
 
 
+class GaussianLaserSource(NamedTuple):
+    """Laser source using an empirical Gaussian angular profile."""
+    position: jnp.ndarray
+    intensity: jnp.ndarray
+    direction: jnp.ndarray
+    beam_width_deg: jnp.ndarray
+    wavelength: object = None
+
+    def __call__(self, n_photons, key, n_water=1.33):
+        del n_water  # Kept for compatibility with the calibration-source API.
+        return generate_gaussian_laser_photons(
+            self.position, self.direction, self.intensity,
+            n_photons, key, self.beam_width_deg,
+        )
+
+
 # --- Factory helpers with sensible defaults ---
 
 def isotropic_source(position, intensity=1_000_000, wavelength=None):
@@ -314,5 +389,28 @@ def laser_source(position, intensity=1_000_000, direction=None, fiber_NA=0.22,
         intensity=jnp.asarray(float(intensity), dtype=jnp.float32),
         direction=jnp.asarray(direction, dtype=jnp.float32),
         fiber_NA=jnp.asarray(float(fiber_NA), dtype=jnp.float32),
+        wavelength=wl,
+    )
+
+
+def gaussian_laser_source(position, intensity=1_000_000, direction=None,
+                          beam_width_deg=0.5, wavelength=None):
+    """Create a laser source with an empirical Gaussian angular profile.
+
+    Parameters
+    ----------
+    beam_width_deg : float
+        Empirical angular-profile width in degrees.
+    wavelength : float or None
+        Laser wavelength in nm.
+    """
+    if direction is None:
+        direction = [0.0, 0.0, -1.0]
+    wl = jnp.asarray(float(wavelength), dtype=jnp.float32) if wavelength is not None else None
+    return GaussianLaserSource(
+        position=jnp.asarray(position, dtype=jnp.float32),
+        intensity=jnp.asarray(float(intensity), dtype=jnp.float32),
+        direction=jnp.asarray(direction, dtype=jnp.float32),
+        beam_width_deg=jnp.asarray(float(beam_width_deg), dtype=jnp.float32),
         wavelength=wl,
     )

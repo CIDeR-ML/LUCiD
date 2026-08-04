@@ -21,13 +21,17 @@ from lucid.sources.calibration_sources import (  # noqa: F401
     get_isotropic_rays,
     get_isotropic_rays_random,
     generate_laser_photons,
+    gaussian_beam_theta,
+    generate_gaussian_laser_photons,
     setup_calibration_generator,
     generate_random_direction,
     generate_random_vertex,
     IsotropicSource,
     LaserSource,
+    GaussianLaserSource,
     isotropic_source,
     laser_source,
+    gaussian_laser_source,
 )
 
 # --- event_io ---
