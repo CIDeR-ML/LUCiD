@@ -189,10 +189,25 @@ def calculate_surface_normals(detector, sensor_indices):
     
     # Import here to avoid circular imports
     from .cylinder import Cylinder
+    from .polygon import PolygonalCylinder
     from .sphere import Sphere
     from .box import Box
-    
-    if isinstance(detector, Cylinder):
+
+    # PolygonalCylinder subclasses Cylinder, so it must be tested FIRST — otherwise a
+    # faceted barrel silently gets radial normals (wrong by up to dphi/2).
+    if isinstance(detector, PolygonalCylinder):
+        dphi = 2 * np.pi / detector.n_sides
+        for i, idx in enumerate(sensor_indices):
+            case = detector.ID_to_case[idx]
+            if case == 0:  # Barrel — normal is the panel normal, not radial
+                phi = np.arctan2(positions[i][1], positions[i][0]) % (2 * np.pi)
+                ang = (np.floor(phi / dphi) + 0.5) * dphi
+                normals[i] = np.array([np.cos(ang), np.sin(ang), 0.0])
+            elif case == 1:
+                normals[i] = np.array([0, 0, 1])
+            elif case == 2:
+                normals[i] = np.array([0, 0, -1])
+    elif isinstance(detector, Cylinder):
         for i, idx in enumerate(sensor_indices):
             pos = positions[i]
             case = detector.ID_to_case[idx]

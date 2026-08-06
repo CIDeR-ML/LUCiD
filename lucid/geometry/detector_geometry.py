@@ -63,9 +63,10 @@ class DetectorGeometry(NamedTuple):
         """
         # Normalize casing. 'string' = telescope / volume detector (IceCube-style).
         dt_key = detector_type.lower()
-        if dt_key not in ('cylinder', 'sphere', 'box', 'string'):
+        if dt_key not in ('cylinder', 'polygon_cylinder', 'sphere', 'box', 'string'):
             raise ValueError(
-                f"detector_type must be 'cylinder', 'sphere', 'box', or 'string', got {detector_type}")
+                f"detector_type must be 'cylinder', 'polygon_cylinder', 'sphere', "
+                f"'box', or 'string', got {detector_type}")
 
         # Material
         material = get_material_from_config(json_filename)

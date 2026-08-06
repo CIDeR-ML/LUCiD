@@ -1,7 +1,13 @@
 {
   "material": "water",
-  "detector_type": "cylinder",
+  "detector_type": "polygon_cylinder",
+  "_comment_shape": "SK inner detector as WCSim builds it (SetSuperKGeometry, G4Polyhedra): a regular 38-gon prism, n_sides = WCBarrelNumPMTHorizontal/WCPMTperCellHorizontal = 152/4. apothem = WCIDDiameter/2 = 33.6815/2 m (G4Polyhedra radii are inscribed-circle radii); height = WCIDHeight. Panel k spans azimuth [k*dphi, (k+1)*dphi], dphi = 2*pi/38, so panel normals sit at (k+1/2)*dphi. Circumradius 16.898467 m.",
+  "_comment_pmt": "expose_height = PMT20inch::GetExposeHeight(). With the aperture radius from the npz (0.254 m) it fixes the photocathode sphere: radius of curvature (expose^2+aperture^2)/(2*expose) = 0.269211 m, centred pmt_offset = 0.089211 m BEHIND the wall. That is exactly where geofile_SuperK.txt records each PMT, so the npz positions are used unshifted and verify to ~1e-11 m.",
   "geometry_definitions": {
-    "npz_file_path": "sk_geometry.npz"
+    "npz_file_path": "sk_geometry.npz",
+    "n_sides": 38,
+    "apothem": 16.84075,
+    "height": 36.2,
+    "expose_height": 0.18
   }
 }

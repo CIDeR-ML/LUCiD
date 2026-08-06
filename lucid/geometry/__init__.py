@@ -16,6 +16,7 @@ from .utils import (
 # Import detector classes
 from .base import Detector
 from .cylinder import Cylinder
+from .polygon import PolygonalCylinder
 from .sphere import Sphere
 from .box import Box
 
@@ -41,6 +42,7 @@ __all__ = [
     # Detector classes
     'Detector',
     'Cylinder',
+    'PolygonalCylinder',
     'Sphere',
     'Box',
 
