@@ -7,6 +7,7 @@ import os
 from .registry import get_detector_class
 # Import subclasses so their @register_detector decorators run
 from .cylinder import Cylinder  # noqa: F401
+from .polygon import PolygonalCylinder  # noqa: F401  (faceted barrel, e.g. real SK)
 from .sphere import Sphere      # noqa: F401
 from .box import Box            # noqa: F401
 from .string import StringTelescope  # noqa: F401  (telescope / volume detectors)
@@ -88,6 +89,12 @@ def load_detector_geom(file_path):
         return (detector_type, 'algorithmic',
                 geom_def['radius'], geom_def['height'],
                 geom_def['n_sensors'], geom_def['sensor_radius'])
+    elif detector_type == 'polygon_cylinder':
+        if 'npz_file_path' in geom_def:
+            return (detector_type, 'pmt_file', geom_def['npz_file_path'])
+        return (detector_type, 'algorithmic', geom_def['n_sides'],
+                geom_def['apothem'], geom_def['height'],
+                geom_def['n_sensors'], geom_def['sensor_radius'])
     elif detector_type == 'sphere':
         return (detector_type, geom_def['radius'], None,
                 geom_def['n_sensors'], geom_def['sensor_radius'])
@@ -120,7 +127,11 @@ def generate_detector(file_path):
 
     cls = get_detector_class(detector_type)
 
-    if cls is Cylinder:
+    if cls is PolygonalCylinder:
+        # Both paths need the polygon declared in the config (n_sides / apothem /
+        # height); the npz path then verifies the declaration against the positions.
+        return cls.from_config(file_path)
+    elif cls is Cylinder:
         if 'npz_file_path' in geom_def:
             config_dir = os.path.dirname(os.path.abspath(file_path))
             npz_path = os.path.join(config_dir, geom_def['npz_file_path'])
