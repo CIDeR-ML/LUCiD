@@ -36,5 +36,5 @@ Reconstruction / calibration at the single-event or single-config level: see
 
 `campaign_recon/` is git-ignored (personal research scratch); `campaign/` is tracked
 (its `grid_out/` results directory is not). Cluster
-deployment lives in `../lucid/production/jobs/` (portable SLURM/HTCondor/NERSC) and `../s3df_jobs/`
-(SLAC-specific).
+deployment lives in `../lucid/production/jobs/` (portable SLURM/HTCondor/NERSC); the
+S3DF tracking-study submission is `../analysis/paper/utils/submit_job.py`.
