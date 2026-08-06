@@ -535,11 +535,9 @@ def first_arrival_window_nll(log_w, flat_times, flat_indices, t_obs_per_sensor,
 # TAU_VTX PARAMETRIZATION
 # =============================================================================
 # Coefficients from weighted least-squares fit on tau hyperparameter scan.
-# To recalculate these parameters:
-#   1. Run: python s3df_jobs/submit_tau_hyperparameter_tuning_job.py --output output/tau_scan --submit
-#   2. Wait for job completion, results in output/tau_scan/result.csv
-#   3. Run analysis notebook: good_notebooks/analyze_tau_scan.ipynb
-#   4. Update coefficients below with new fit results
+# These came from a tau hyperparameter scan whose driver (s3df_jobs/) has since been
+# removed; recalculating them means re-running the scan over (n_rays, energy) and
+# refitting. good_notebooks/analyze_tau_scan.ipynb holds the fit.
 
 TAU_VTX_PARAM_A = 1.092557e-06  # coefficient for Nrays
 TAU_VTX_PARAM_B = 2.578522e-04  # coefficient for Energy (MeV)
