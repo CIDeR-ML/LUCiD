@@ -112,55 +112,33 @@ def _time_it(call, warmup, runs):
     return ts
 
 
-# ------------------------------------------------------------------- panel 1: ray tracing
-def _bench_forward(K_values, N_values, warmup, runs):
-    """Forward-only SIREN ray tracing with data-like (realistic) per-PMT Q/T output."""
-    import jax
-    import jax.numpy as jnp
-    from lucid.geometry import generate_detector
-    from lucid.simulation import setup_event_simulator
-    from lucid.fitting import track_from_vec9
-
-    ND = len(generate_detector(GEOM).all_points)
-    dp = _detector_params(jnp, ND)
-    t9 = _track9(jnp)
-    res = {K: {'N': [], 'runs': [], 'mode': []} for K in K_values}
-
-    for K in K_values:
-        for N in N_values:
-            sim = setup_event_simulator(
-                GEOM, N, temperature=None, K=K, hit_mode='realistic', physics_config=PHYS,
-                default_detector_params=dp, particle=PARTICLE, wavelength_mode=True,
-                charge_resolution=studies.CHARGE_RESOLUTION,
-                pos_grad_threshold=K, n_grad_iters=K, cherenkov_emission_band=BAND, **GRID)
-            sim_j = jax.jit(sim)
-            track = track_from_vec9(t9)
-
-            def call(i):
-                out = sim_j(track, jax.random.PRNGKey(i))
-                jax.tree.map(lambda x: x.block_until_ready(), out)
-
-            try:
-                ts = _time_it(call, warmup, runs)
-                m = half_sample_mode(ts)
-            except Exception as e:                       # OOM at the big corners
-                print(f"  fwd  K={K} N={N:>8}: FAILED ({type(e).__name__})", flush=True)
-                ts, m = None, None
-            res[K]['N'].append(N); res[K]['runs'].append(ts); res[K]['mode'].append(m)
-            if m is not None:
-                print(f"  fwd  K={K} N={N:>8}: {m * 1000:8.2f} ms", flush=True)
-    return res
+# ----------------------------------------------------------------- the three measurements
+PANELS = ('pred', 'grad', 'predgrad', 'fisher')
 
 
-# --------------------------------------------------- panel 2: one optimization step
-def _bench_step(K_values, N_values, warmup, runs):
-    """grad + Gauss-Newton metric (1 key) + damped SCALE9 solve -- one fit_track iteration."""
+def _bench_recon(K_values, N_values, warmup, runs, want=PANELS):
+    """Time the three reconstruction primitives on ONE ReconModel per (K, N).
+
+    All three share the same predictor and the same primal, so their costs decompose
+    cleanly rather than being three unrelated measurements:
+
+      pred   -- ReconModel.perpmt: the per-PMT prediction (mean charge mu, time NLL).
+      grad   -- ReconModel.grad: reverse-mode gradient of the recon NLL w.r.t. theta9.
+                NOTE reverse-mode must evaluate the primal to build the tape, so the forward
+                pass is already inside this number; jax.grad merely discards the loss value.
+      predgrad -- jax.value_and_grad of the same loss: the gradient AND the loss value, i.e.
+                what an optimizer that also wants the objective pays.
+      fisher -- ReconModel.fisher_ad: the Fisher/Gauss-Newton metric
+                Jmu^T diag(1/mu) Jmu + Jl^T Jl, by jacfwd of perpmt (9 tangents), one key.
+
+    Building the model once per grid point also means one set of compilations covers all
+    three, and every measurement sees identical detector, data and machine conditions.
+    """
     import jax
     import jax.numpy as jnp
     from lucid.geometry import generate_detector
     from lucid.simulation import setup_event_simulator
     from lucid.fitting import ReconModel, track_from_vec9
-    from lucid.fitting.recon import SCALE9
     from lucid.utils import unpack_siren_params
     from lucid.siren.core import build_cherenkov_context
     from lucid.siren.training.inference import SIRENPredictor
@@ -168,14 +146,14 @@ def _bench_step(K_values, N_values, warmup, runs):
     ND = len(generate_detector(GEOM).all_points)
     dp = _detector_params(jnp, ND)
     t9 = _track9(jnp)
-    S = SCALE9
 
     # nphot(E) from the emitter context -- the campaign's single-pass energy scale.
     scfg = unpack_siren_params(PARTICLE, 'water')
     ctx = build_cherenkov_context(SIRENPredictor(scfg['siren_model_path']), scfg['ray_sampling'])
 
     # Fixed pseudo-data (per-PMT Q, T) from one realistic forward -- the observed event the
-    # step is fitted against. Independent of the benchmark's N, so every point sees one dataset.
+    # model is evaluated against. Independent of the benchmark's N, so every point sees one
+    # dataset, and the data-like sim never enters the timings.
     data_sim = setup_event_simulator(
         GEOM, 250_000, temperature=None, K=8, hit_mode='realistic', physics_config=PHYS,
         default_detector_params=dp, particle=PARTICLE, wavelength_mode=True,
@@ -183,7 +161,7 @@ def _bench_step(K_values, N_values, warmup, runs):
     oc, ot = data_sim(track_from_vec9(t9), jax.random.PRNGKey(0))
     oc, ot = jnp.asarray(oc), jnp.asarray(ot)
 
-    res = {K: {'N': [], 'runs': [], 'mode': []} for K in K_values}
+    res = {p: {K: {'N': [], 'runs': [], 'mode': []} for K in K_values} for p in want}
     for K in K_values:
         for N in N_values:
             pred = setup_event_simulator(
@@ -194,30 +172,40 @@ def _bench_step(K_values, N_values, warmup, runs):
                                energy_from_scale=True, energy_scale_mode='nphot',
                                nphot_fn=ctx.n_photons_fn)
 
-            def call(i):
-                key = jax.random.PRNGKey(i)
-                g = np.asarray(model.grad(t9, oc, ot, key))          # reverse-mode gradient
-                F = model.fisher_ad(t9, oc, ot, [key], None)         # jacfwd GN metric, 1 key
-                Fs = S[:, None] * F * S[None, :]                     # SCALE9 preconditioning
-                gs = S * g
-                marq = np.diag(LAM * np.diag(Fs))
-                rI = RIDGE_I * np.median(np.clip(np.diag(Fs), 1e-12, None)) * np.eye(9)
-                du = -LR * np.linalg.solve(Fs + marq + rI + 1e-9 * np.eye(9), gs)
-                np.clip(du, -TRUST, TRUST)                           # trust-region clip
+            def _pred(i):
+                out = model.perpmt(t9, oc, ot, jax.random.PRNGKey(i))
+                jax.tree.map(lambda x: x.block_until_ready(), out)
 
-            try:
-                ts = _time_it(call, warmup, runs)
-                m = half_sample_mode(ts)
-            except Exception as e:                       # OOM: 9 tangents over K*4*N photons
-                print(f"  step K={K} N={N:>8}: FAILED ({type(e).__name__})", flush=True)
-                ts, m = None, None
-            res[K]['N'].append(N); res[K]['runs'].append(ts); res[K]['mode'].append(m)
-            if m is not None:
-                print(f"  step K={K} N={N:>8}: {m * 1000:8.2f} ms", flush=True)
+            def _grad(i):
+                g = model.grad(t9, oc, ot, jax.random.PRNGKey(i))
+                jax.tree.map(lambda x: x.block_until_ready(), g)
+
+            vg = jax.jit(jax.value_and_grad(model._loss))
+
+            def _predgrad(i):
+                out = vg(t9, oc, ot, jax.random.PRNGKey(i))
+                jax.tree.map(lambda x: x.block_until_ready(), out)
+
+            def _fisher(i):
+                # returns a numpy 9x9, so the host transfer already synchronises
+                model.fisher_ad(t9, oc, ot, [jax.random.PRNGKey(i)], None)
+
+            calls = {'pred': _pred, 'grad': _grad, 'predgrad': _predgrad, 'fisher': _fisher}
+            for name in want:
+                try:
+                    ts = _time_it(calls[name], warmup, runs)
+                    m = half_sample_mode(ts)
+                except Exception as e:            # OOM: 9 tangents over K*max_candidates*N
+                    print(f"  {name:6s} K={K} N={N:>8}: FAILED ({type(e).__name__})", flush=True)
+                    ts, m = None, None
+                r = res[name][K]
+                r['N'].append(N); r['runs'].append(ts); r['mode'].append(m)
+                if m is not None:
+                    print(f"  {name:6s} K={K} N={N:>8}: {m * 1000:8.2f} ms", flush=True)
     return res
 
 
-def generate_data(backend, full, warmup, runs, out_data, account='mli:cider-ml', panels=('fwd', 'step')):
+def generate_data(backend, full, warmup, runs, out_data, account='mli:cider-ml', panels=PANELS):
     K, N = (FULL_K, FULL_N) if full else (DEF_K, DEF_N)
     if backend == 's3df':
         script = Path(__file__).resolve()
@@ -241,18 +229,15 @@ def generate_data(backend, full, warmup, runs, out_data, account='mli:cider-ml',
         return
     print(f'[local] benchmarking {list(panels)} K={K} N={N} (warmup {warmup}, runs {runs})',
           flush=True)
-    # Merge into any existing results so one panel can be re-measured on its own (the two are
-    # independent measurements; the ray-tracing calls are cheap enough to want far more repeats).
+    # Merge into any existing results so a single panel can be re-measured on its own.
     results = json.loads(out_data.read_text()) if out_data.exists() else {}
     results.update({'K': K, 'N': N, 'tts': studies.TTS, 'sigma': studies.GN['sigma'],
                     'charge_resolution': studies.CHARGE_RESOLUTION, 'geom': Path(GEOM).name})
     results.setdefault('runs_per_point', {})
-    if 'fwd' in panels:
-        results['fwd'] = _bench_forward(K, N, warmup, runs)
-        results['runs_per_point']['fwd'] = runs
-    if 'step' in panels:
-        results['step'] = _bench_step(K, N, warmup, runs)
-        results['runs_per_point']['step'] = runs
+    measured = _bench_recon(K, N, warmup, runs, want=tuple(panels))
+    for name, r in measured.items():
+        results[name] = r
+        results['runs_per_point'][name] = runs
     out_data.parent.mkdir(parents=True, exist_ok=True)
     out_data.write_text(json.dumps(results))
     print(f'wrote {out_data}')
@@ -343,10 +328,14 @@ def plot_results(out_data, out, max_n=PLOT_MAX_N, est='mean', fit=True):
     r = json.loads(out_data.read_text())
     K = r['K']
     out = Path(out); out.mkdir(parents=True, exist_ok=True)
-    panels = (('fwd', 'Ray Tracing (data-like Q, T)', 'raytracing_timing'),
-              ('step', 'One Optimization Step (gradient + Gauss-Newton + solve)',
-               'optimization_step_timing'))
+    # Reverse-mode must evaluate the primal to build the tape, and jacfwd carries it along
+    # with the tangents, so the derivative panels include the forward pass by construction.
+    panels = (('pred', 'Prediction Only', 'prediction_timing'),
+              ('grad', 'Prediction and Gradient', 'gradient_timing'),
+              ('fisher', 'Prediction and Fisher Matrix', 'fisher_timing'))
     for key, title, name in panels:
+        if key not in r:
+            print(f'[skip] no {key!r} results in {out_data}'); continue
         fig, ax = plt.subplots(figsize=(6, 4))
         dropped, fits = _panel(ax, r[key], K, title, max_n=max_n, est=est, fit=fit)
         fig.tight_layout()
@@ -373,7 +362,7 @@ def main():
     ap.add_argument('--max-n', type=float, default=PLOT_MAX_N,
                     help='upper N limit for both panels (default 1e6); 0 = no limit')
     ap.add_argument('--no-fit', action='store_true', help='markers only, no linear fits')
-    ap.add_argument('--panels', nargs='+', choices=['fwd', 'step'], default=['fwd', 'step'],
+    ap.add_argument('--panels', nargs='+', choices=list(PANELS), default=list(PANELS),
                     help='which panel(s) to (re)measure; results are merged into the JSON')
     ap.add_argument('--estimator', choices=list(ESTIMATORS), default='mean',
                     help='per-point statistic over the timed runs. With 500 runs/point the '
