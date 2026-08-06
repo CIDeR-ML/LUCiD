@@ -78,16 +78,28 @@ def _detector_bounds_from_det_geom(det_geom):
         return None
     dt = str(det_geom.detector_type).lower()
     d = det_geom.detector
+    # NB the sensor radius attribute is S_radius. A previous `getattr(d, 'sensor_radius',
+    # 0.25)` here never resolved -- from_pmt_file keeps 'sensor_radius' in
+    # _FROM_FILE_RESERVED and never attaches it -- so every detector silently reported
+    # 0.25 m, including WCTE at 0.040 m. Every branch now supplies it explicitly.
     if dt == 'cylinder':
         return {'type': 'cylinder', 'radius': float(d.r), 'height': float(d.H),
-                'sensor_radius': float(getattr(d, 'sensor_radius', 0.25))}
+                'sensor_radius': float(d.S_radius)}
+    if dt == 'polygon_cylinder':
+        # Use the INSCRIBED cylinder (radius = apothem): every point it admits is inside
+        # the prism, so vertex sampling and containment can never claim otherwise. The
+        # cost is the corner slivers, 38*tan(pi/38)/pi = 0.23% of the cross-section.
+        return {'type': 'cylinder', 'radius': float(d.apothem), 'height': float(d.H),
+                'sensor_radius': float(d.S_radius)}
     if dt == 'sphere':
-        return {'type': 'sphere', 'radius': float(d.r)}
+        return {'type': 'sphere', 'radius': float(d.r),
+                'sensor_radius': float(d.S_radius)}
     if dt == 'box':
         return {'type': 'box',
                 'length': float(d.L),
                 'width':  float(d.W),
-                'height': float(d.H)}
+                'height': float(d.H),
+                'sensor_radius': float(d.S_radius)}
     return None
 
 
@@ -1629,7 +1641,9 @@ def generate_events_from_photonsim_supernova(
                 vtx = sample_translation_vector(
                     detector_bounds, np.random.default_rng(seed=ev_keys['vertex_seed']),
                     r_frac=0.995, z_frac=0.995, sensor_positions=sensor_positions_np,
-                    pmt_radius=detector_bounds.get('sensor_radius', 0.25))
+                    # no .get default: every _detector_bounds_from_det_geom branch supplies
+                    # this, and a silent 0.25 m fallback is what hid the bug before.
+                    pmt_radius=detector_bounds['sensor_radius'])
             else:
                 vtx = np.zeros(3, dtype=np.float32)
             raw = _read_event_raw(str(burst_root_file), entry, opened_file=burst_file)
