@@ -62,3 +62,9 @@ mie_hunter/
 
 # MkDocs build output
 site/
+
+# Trained SIREN surrogates under data/ — these are SYMLINKS into the data area, so no
+# trailing slash (a dir-only pattern cannot match a symlink), and they must come
+# after the `!data/**/` negation above, which would otherwise re-include them.
+data/*/*/siren_training
+data/*/*/dedx_siren_training
