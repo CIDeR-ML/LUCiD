@@ -62,6 +62,25 @@ class Detector(ABC):
         """
         raise NotImplementedError
 
+    def boundary_signed_distance(self, positions):
+        """Signed distance from each point to the detector boundary, positive inside.
+
+        Distance to the nearest bounding surface (exact for the convex primitives here).
+        Its sign must agree with :meth:`bounds_check`; it exists so the sensor-acceptance
+        cap gate in ``lucid/propagation/base.py`` has a smooth quantity to differentiate
+        instead of a boolean. Optional — geometries that don't implement it fall back to
+        the hard test.
+
+        Parameters
+        ----------
+        positions : jnp.ndarray, shape (n, 3)
+
+        Returns
+        -------
+        jnp.ndarray, shape (n,)
+        """
+        raise NotImplementedError
+
     def compute_normal(self, intersection_point, surface_info):
         """Compute outward surface normals at intersection points.
 
