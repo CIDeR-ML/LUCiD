@@ -108,6 +108,11 @@ class Sphere(Detector):
         import jax.numpy as jnp
         return jnp.linalg.norm(positions, axis=1) <= self.r
 
+    def boundary_signed_distance(self, positions):
+        """Distance to the shell, positive inside."""
+        import jax.numpy as jnp
+        return self.r - jnp.sqrt(jnp.sum(positions ** 2, axis=1) + 1e-12)
+
     # ── Propagation methods (Phase 9) ──────────────────────────────────
 
     def intersect_ray(self, origins, directions):

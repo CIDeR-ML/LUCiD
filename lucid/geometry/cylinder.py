@@ -485,6 +485,13 @@ class Cylinder(Detector):
         inside_z = (z >= -self.H / 2) & (z <= self.H / 2)
         return inside_xy & inside_z
 
+    def boundary_signed_distance(self, positions):
+        """Distance to the nearest of wall / caps, positive inside."""
+        import jax.numpy as jnp
+        x, y, z = positions[:, 0], positions[:, 1], positions[:, 2]
+        return jnp.minimum(self.r - jnp.sqrt(x ** 2 + y ** 2 + 1e-12),
+                           self.H / 2 - jnp.abs(z))
+
     # ── Propagation methods (Phase 9) ──────────────────────────────────
 
     def intersect_ray(self, origins, directions):

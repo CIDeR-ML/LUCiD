@@ -263,6 +263,14 @@ class Box(Detector):
                 (y >= -self.W / 2) & (y <= self.W / 2) &
                 (z >= -self.H / 2) & (z <= self.H / 2))
 
+    def boundary_signed_distance(self, positions):
+        """Distance to the nearest face, positive inside."""
+        import jax.numpy as jnp
+        x, y, z = positions[:, 0], positions[:, 1], positions[:, 2]
+        return jnp.minimum(jnp.minimum(self.L / 2 - jnp.abs(x),
+                                       self.W / 2 - jnp.abs(y)),
+                           self.H / 2 - jnp.abs(z))
+
     # ── Propagation methods (Phase 9) ──────────────────────────────────
 
     def intersect_ray(self, origins, directions):

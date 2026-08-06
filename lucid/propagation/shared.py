@@ -178,9 +178,17 @@ def create_propagator(detector, sensor_positions, sensor_radius,
             temperature * sensor_radius, sensor_radius,
             st_width_frac=overlap_st_width_frac, renorm=overlap_renorm, mode=overlap_mode)
 
-    # 6. Bounds check closure
+    # 6. Bounds check closure, plus the signed distance the cap gate differentiates.
+    # Geometries that don't implement boundary_signed_distance keep the hard gate.
     def bounds_check(positions):
         return detector.bounds_check(positions)
+
+    try:
+        detector.boundary_signed_distance(jnp.zeros((1, 3)))
+        boundary_sdf = detector.boundary_signed_distance
+    except NotImplementedError:
+        boundary_sdf = None
+    cap_st_width = overlap_st_width_frac * sensor_radius
 
     # 7. JIT-compiled propagation function
     @jax.jit
@@ -217,7 +225,9 @@ def create_propagator(detector, sensor_positions, sensor_radius,
             return compute_sensor_intersections_base(
                 slot_sensors, sensor_positions, sensor_radius,
                 photon_origins, photon_directions,
-                bounds_check, overlap_prob)
+                bounds_check, overlap_prob,
+                boundary_sdf=boundary_sdf, cap_st_width=cap_st_width,
+                wall_t=t_geometry, wall_point=intersection_point)
 
         (weights, sensor_times, sensor_indices,
          sensor_normals_all, inside_sensor,

@@ -194,6 +194,15 @@ class PolygonalCylinder(Cylinder):
         from lucid.propagation.polygon import polygon_bounds_check
         return polygon_bounds_check(positions, self.apothem, self.H, self.n_sides)
 
+    def boundary_signed_distance(self, positions):
+        """Distance to the nearest of panel / caps, positive inside."""
+        import jax.numpy as jnp
+        x, y, z = positions[:, 0], positions[:, 1], positions[:, 2]
+        phi = jnp.arctan2(y, x) % (2.0 * jnp.pi)
+        ang = (jnp.floor(phi / self.dphi) + 0.5) * self.dphi
+        perp = x * jnp.cos(ang) + y * jnp.sin(ang)
+        return jnp.minimum(self.apothem - perp, self.H / 2 - jnp.abs(z))
+
     def intersect_ray(self, origins, directions):
         from lucid.propagation.polygon import batch_intersect_polygon_with_grid
         (intersects, t, is_wall, is_top_cap, wall_indices, cap_indices,
