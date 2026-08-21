@@ -1,6 +1,6 @@
 # LUCiD hello-world examples
 
-Five short runnable scripts against the **real, current** API — the fastest way to see what
+Six short runnable scripts against the **real, current** API — the fastest way to see what
 LUCiD does. They auto-detect the platform (GPU if present, else CPU) and write a figure or
 table. `hello_simulate` is quick anywhere (~15 s warm); `hello_calibrate` (1e6 photons +
 Fisher/CRB + 100 GN steps) and `hello_reconstruct` (100+-step Fisher-GN) are ~1–3 min on a
@@ -13,6 +13,7 @@ python examples/hello_calibrate.py     # calibration: recover optical params + C
 python examples/hello_reconstruct.py   # reconstruction: 9-param track fit; --closure/--data-fit, --data/--hypothesis mu|e
 python examples/seed_reconstruct.py    # reconstruction from a data-driven seed (seed -> fit)
 python examples/hello_telescope.py     # neutrino telescope: muon track + cascade in an ice string array
+python examples/hello_multiparticle.py --split   # multi-particle GEANT4 event: 2 muons, one vertex
 ```
 
 Expected `hello_calibrate` output (7 globals recovered, all 10764 per-PMT gains marginalised):
@@ -37,6 +38,7 @@ reflectivity — the timing-observable frontier.)
 | `hello_calibrate.py` | the validated Gauss-Newton + per-PMT-Schur fit recovering optical scales from calibration sources, vs the Fisher/CRB bound | `lucid.fitting`: `build_calibration_problem`, `fit`, `crb` |
 | `hello_reconstruct.py` | 9-parameter track reconstruction (E, vertex, direction, t0) by Fisher-Gauss-Newton — muon **or** electron, closure (prediction-vs-prediction) or a real GEANT4 data fit, and cross-particle (fit an electron event with the muon model, etc.), all via CLI | `setup_event_simulator`, `lucid.fitting`: `ReconModel`, `fit_track` |
 | `seed_reconstruct.py` | the honest pipeline: a data-driven initial guess (energy scan → vertex/t0 grid → cone direction) from `lucid.optimization`, then refine with `fit_track` | `lucid.optimization.grid_search` / `utils.functions`, `lucid.fitting` |
+| `hello_multiparticle.py` | loading a **multi-particle** PhotonSim event (two muons sharing a vertex, independent isotropic directions): the truth per primary, the transport, and displays — combined, one per primary, and one coloured by which primary lit each PMT | `read_particle_data_from_photonsim`, `pad_photon_data`, `setup_event_simulator(is_data=True)`, `create_detector_display` / `unroll_layout` |
 | `hello_telescope.py` | a neutrino-telescope string array (IceCube, ice): a through-going muon **track** and a **cascade** shower, DOM counts for each | `setup_event_simulator(detector_type='string')`, `lucid.sources.cascade` |
 
 ## Notes
@@ -84,6 +86,13 @@ reflectivity — the timing-observable frontier.)
 
   On electron data the electron hypothesis wins the loss on every event, while the muon hypothesis
   can't fit the shower (vertex ~1.5–2 m off, t0 drifting several ns).
+- **Multi-particle events** are not a special case for the transport: `hello_multiparticle.py`
+  feeds the data path a flat photon list, so an event with N primaries costs what its photon
+  count costs. The reader is what makes the split possible — `particles[i]['photon_indices']`
+  partitions the event's photons by primary (exactly: no overlap, nothing dropped), so each
+  particle can be transported and drawn on its own. `--split` writes the per-primary displays
+  plus a per-particle colouring; `--file` takes any PhotonSim ROOT with >1 primary per event,
+  and `--event` picks the topology (93 back-to-back, 0 overlapping rings).
 - The `fit(forward, residual=, solver=)` / `SimParams` / `Field` interface described in
   `docs/internal/MAIN_BRANCH_PLAN.md` is a **proposal**, not yet built. These examples call the
   canonical API that exists today.
