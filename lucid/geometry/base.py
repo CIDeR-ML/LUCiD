@@ -24,8 +24,15 @@ class Detector(ABC):
         """
         self.C = np.array([0.0, 0.0, 0.0])  # Always centered at origin
         self.n_sensors = n_sensors
+        # Two radii, equal for every geometry whose sensor sphere is centred on the wall.
+        # They differ once a photocathode is modelled as an offset spherical cap (see
+        # PolygonalCylinder): S_radius becomes the sphere's radius of curvature, which is
+        # what the ray-sphere maths needs, while aperture_radius stays the rim where the
+        # sphere meets the wall — the footprint, and what coverage and drawing want.
         self.S_radius = sensor_radius
-        
+        self.aperture_radius = sensor_radius
+
+
         # These will be set by place_photosensors()
         self.all_points = None
         self.ID_to_position = None
@@ -234,7 +241,8 @@ class Detector(ABC):
         self._add_detector_surface(fig, surface_color)
         
         # Calculate disc radius based on sensor radius and marker_size scaling
-        disc_radius = self.S_radius * (marker_size / 6.0)  # Scale relative to default marker_size
+        # aperture, not the curvature radius: this draws the photocathode footprint
+        disc_radius = self.aperture_radius * (marker_size / 6.0)  # Scale relative to default marker_size
         
         # Show all sensors as red discs if requested
         if show_all_sensors:

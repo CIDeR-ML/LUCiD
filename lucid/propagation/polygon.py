@@ -155,13 +155,28 @@ def polygon_bounds_check(points, apothem, h, n_sides):
 
 @partial(jax.jit, static_argnums=(4, 5, 6, 7))
 def assign_sensors_to_polygon_grid(sensors, sensor_radius, apothem, h,
-                                   n_sides, n_u, n_height, n_cap):
+                                   n_sides, n_u, n_height, n_cap,
+                                   pmt_offset=0.0, footprint=None):
     """Sensor -> up to 4 overlapping grid cells, in the cylinder's (i, j, k) encoding.
 
     ``k`` is 0 for wall, 1 for top cap, 2 for bottom cap; for the wall ``i`` is the
     packed column ``panel * n_u + u_idx``, so the modular wraparound in ``i`` moves
     correctly across a panel edge into the neighbouring panel.
+
+    Two distinct roles that a single radius used to serve:
+
+    ``footprint`` is how far the sensor spreads ALONG the surface, so it sets which
+    neighbouring cells a sensor also occupies. That is the photocathode aperture, not the
+    sphere's curvature radius — the latter over-covers and inflates candidates per cell.
+    Defaults to ``sensor_radius`` so a centred sphere behaves as before.
+
+    ``pmt_offset`` is how far the sensor centre sits OUTSIDE the wall, which the
+    on-surface test must be centred on. A photocathode modelled as an offset spherical cap
+    has its centre of curvature behind the wall by construction, so testing
+    ``|perp - apothem| <= radius`` would be measuring against the wrong surface.
     """
+    if footprint is None:
+        footprint = sensor_radius
     dphi = 2.0 * jnp.pi / n_sides
     n_angular = n_sides * n_u
     width = 2.0 * apothem * jnp.tan(dphi / 2.0)
@@ -174,11 +189,12 @@ def assign_sensors_to_polygon_grid(sensors, sensor_radius, apothem, h,
         ang_p = (panel + 0.5) * dphi
         perp = x * jnp.cos(ang_p) + y * jnp.sin(ang_p)
 
-        # Sensor centres may sit off the wall by design: a real photocathode is a
-        # spherical cap whose centre of curvature is behind the blacksheet.
-        on_wall = jnp.abs(perp - apothem) <= sensor_radius
-        on_top = z > h / 2.0 - sensor_radius
-        on_bottom = z < -h / 2.0 + sensor_radius
+        # Centred on wall+pmt_offset, which is where the sphere centre belongs: a real
+        # photocathode is a spherical cap whose centre of curvature sits behind the
+        # blacksheet. Tolerance is the footprint, so an npz a few cm off still assigns.
+        on_wall = jnp.abs(perp - apothem - pmt_offset) <= footprint
+        on_top = z > h / 2.0 + pmt_offset - footprint
+        on_bottom = z < -h / 2.0 - pmt_offset + footprint
 
         def assign_wall():
             u = -x * jnp.sin(ang_p) + y * jnp.cos(ang_p)
@@ -192,10 +208,10 @@ def assign_sensors_to_polygon_grid(sensors, sensor_radius, apothem, h,
             cell_v = h / n_height
             u_frac = u_scaled % 1
             v_frac = v_scaled % 1
-            include_right = u_frac >= 1 - sensor_radius / cell_u
-            include_left = u_frac <= sensor_radius / cell_u
-            include_top = v_frac >= 1 - sensor_radius / cell_v
-            include_bottom = v_frac <= sensor_radius / cell_v
+            include_right = u_frac >= 1 - footprint / cell_u
+            include_left = u_frac <= footprint / cell_u
+            include_top = v_frac >= 1 - footprint / cell_v
+            include_bottom = v_frac <= footprint / cell_v
 
             row_up = jnp.clip(row + 1, 0, n_height - 1)
             row_down = jnp.clip(row - 1, 0, n_height - 1)
@@ -235,10 +251,10 @@ def assign_sensors_to_polygon_grid(sensors, sensor_radius, apothem, h,
             cell = 2.0 * rad / n_cap
             x_frac = x_scaled % 1
             y_frac = y_scaled % 1
-            include_right = x_frac >= 1 - sensor_radius / cell
-            include_left = x_frac <= sensor_radius / cell
-            include_top = y_frac >= 1 - sensor_radius / cell
-            include_bottom = y_frac <= sensor_radius / cell
+            include_right = x_frac >= 1 - footprint / cell
+            include_left = x_frac <= footprint / cell
+            include_top = y_frac >= 1 - footprint / cell
+            include_bottom = y_frac <= footprint / cell
 
             x_right = jnp.clip(x_idx + 1, 0, n_cap - 1)
             x_left = jnp.clip(x_idx - 1, 0, n_cap - 1)
