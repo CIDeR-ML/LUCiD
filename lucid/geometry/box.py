@@ -123,8 +123,8 @@ class Box(Detector):
             return np.array([]).reshape(0, 3)
             
         # Calculate effective dimensions (with margins)
-        dim1_eff = dim1 - 3 * self.S_radius
-        dim2_eff = dim2 - 3 * self.S_radius
+        dim1_eff = dim1 - 3 * self.aperture_radius
+        dim2_eff = dim2 - 3 * self.aperture_radius
         
         if dim1_eff <= 0 or dim2_eff <= 0:
             return np.array([]).reshape(0, 3)

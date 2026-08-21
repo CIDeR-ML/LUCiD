@@ -74,23 +74,31 @@ def get_detector_bounds(detector):
     from lucid.geometry.sphere import Sphere
     from lucid.geometry.box import Box
 
+    # sensor_radius is the ray-sphere radius (curvature radius when the photocathode is an
+    # offset cap), which is what origin_time_loss needs: stored positions are sphere centres,
+    # so distance-to-centre minus this radius is the distance to the sensor surface.
     if isinstance(detector, Cylinder):
+        # Covers PolygonalCylinder too (a subclass); detector.r is its apothem, i.e. the
+        # inscribed cylinder, so grid points stay inside the prism.
         return {
             'type': 'cylinder',
             'r': detector.r,
-            'H': detector.H
+            'H': detector.H,
+            'sensor_radius': float(detector.S_radius)
         }
     elif isinstance(detector, Sphere):
         return {
             'type': 'sphere',
-            'r': detector.r
+            'r': detector.r,
+            'sensor_radius': float(detector.S_radius)
         }
     elif isinstance(detector, Box):
         return {
             'type': 'box',
             'x': detector.L,
             'y': detector.W,
-            'z': detector.H
+            'z': detector.H,
+            'sensor_radius': float(detector.S_radius)
         }
     else:
         raise ValueError(f"Unknown detector type: {detector.__class__.__name__}")
@@ -130,7 +138,8 @@ def is_point_inside_detector(point, detector_bounds, fraction=1.0):
     return False
 
 
-def evaluate_loss_batch(positions, hit_detector_positions, observed_times, observed_charge, t0_fixed):
+def evaluate_loss_batch(positions, hit_detector_positions, observed_times, observed_charge,
+                        t0_fixed, photosensor_radius):
     """
     Vectorized batch evaluation of origin_time_loss for multiple positions.
 
@@ -150,7 +159,9 @@ def evaluate_loss_batch(positions, hit_detector_positions, observed_times, obser
     # Create vectorized version of origin_time_loss over the first argument (origin)
     # All other arguments are fixed
     vectorized_loss = jax.vmap(
-        lambda pos: grid_origin_time_loss(pos, hit_detector_positions, observed_times, observed_charge, t0_fixed)
+        lambda pos: grid_origin_time_loss(pos, hit_detector_positions, observed_times,
+                                          observed_charge, t0_fixed,
+                                          photosensor_radius=photosensor_radius)
     )
 
     return vectorized_loss(positions_jax)
@@ -344,7 +355,8 @@ def hierarchical_position_grid_search_4d(hit_detector_positions, observed_times,
             try:
                 # Evaluate origin_time_loss with this position and t0
                 loss = origin_time_loss(position, hit_detector_positions,
-                                      observed_times, observed_charge, t0)
+                                      observed_times, observed_charge, t0,
+                                      photosensor_radius=detector_bounds['sensor_radius'])
 
                 level_results.append({
                     'position': np.array(position),
@@ -474,7 +486,8 @@ def hierarchical_position_grid_search_3d(hit_detector_positions, observed_times,
 
         # Vectorized batch evaluation of all grid points
         losses = evaluate_loss_batch(pts, hit_detector_positions,
-                                     observed_times, observed_charge, t0_fixed)
+                                     observed_times, observed_charge, t0_fixed,
+                                     detector_bounds['sensor_radius'])
 
         # Find best position in this level
         best_idx = jnp.argmin(losses)

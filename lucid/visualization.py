@@ -41,7 +41,7 @@ def create_detector_display(json_filename='../config/cyl_geom_config.json', spar
     # Get geometry data from detector object
     radius = detector.r
     height = detector.H
-    sensor_radius = detector.S_radius
+    sensor_radius = detector.aperture_radius   # footprint, not the curvature radius
 
     # Set up detector information from detector object
     sensor_positions = np.array(detector.all_points)
@@ -286,7 +286,7 @@ def create_detector_comparison_display(json_filename='config/cyl_geom_config.jso
     # Get geometry data from detector object
     radius = detector.r
     height = detector.H
-    sensor_radius = detector.S_radius
+    sensor_radius = detector.aperture_radius   # footprint, not the curvature radius
 
     # Set up detector information
     sensor_positions = np.array(detector.all_points)

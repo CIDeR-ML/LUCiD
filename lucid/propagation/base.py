@@ -139,7 +139,7 @@ def calculate_hit_properties(ray_origins, ray_directions, t_geometry, inside_sen
 
 def compute_sensor_intersections_base(sensor_idx, sensor_positions, sensor_radius,
                                         ray_origins, ray_directions, geometry_bounds_check,
-                                        overlap_prob, boundary_sdf=None, cap_st_width=None,
+                                        overlap_prob, aperture_centers=None,
                                         wall_t=None, wall_point=None):
     """
     Base function to compute sensor intersections for any geometry.
@@ -223,58 +223,53 @@ def compute_sensor_intersections_base(sensor_idx, sensor_positions, sensor_radiu
     # Check if point is inside sensor (keep as boolean)
     inside_spherical_sensor = distance < sensor_radius
 
-    # REACHABILITY. A photon stops at the FIRST surface it meets, so a candidate sensor is
-    # only reachable if its sphere is met before the wall. The ray-sphere solve above treats
-    # the ray as an infinite LINE, so without this clip a photon can cross the wall, leave
-    # the detector, and then enter the part of a sensor sphere that sits outside it (every
-    # sensor sphere straddles the wall; an offset photocathode sits mostly outside).
-    # ``wall_t`` is the ray's own distance to the boundary, from detector.intersect_ray.
-    if wall_t is None:
-        # Legacy callers pass no wall distance. For a convex detector "the sphere hit is
-        # inside the volume" is equivalent, so use it as the fallback test.
-        reachable = intersects & geometry_bounds_check(intersection_points)
+    # Check if intersection point is within geometry bounds
+    inside_detector_volume = geometry_bounds_check(intersection_points)
+
+    # Final sensor condition - point must be inside both sensor and geometry
+    inside_sensor = inside_spherical_sensor & inside_detector_volume
+    intersects_and_inside = intersects & inside_sensor
+
+    # ---- charge -------------------------------------------------------------------
+    #
+    # The deposit variable is the IMPACT PARAMETER: `distance`, the closest approach of the
+    # ray's line to the sensor sphere centre, measured against the aperture radius. That is
+    # the only variable in which hard and soft are the same region: the accepted set is
+    # "lines passing within r of the centre", whose cross-section is the sphere's silhouette
+    # disc -- area pi*r^2 for EVERY ray direction -- and the soft weight is a convolution in
+    # that same transverse plane. Both integrate to pi*r^2 per direction with no angle
+    # dependence, which is why soft/hard closes to 1.001 rather than by luck.
+    #
+    # Measuring instead in the wall surface (contact point to aperture centre) is exact in
+    # hard mode but its soft counterpart smears in a different plane, and closure degrades to
+    # 1.024 on both geometries.
+    weights = jnp.where(valid, overlap_prob(distance), 0.0)
+
+    # ---- time and contact point ---------------------------------------------------
+    #
+    # A photon cannot be timed or placed beyond where it actually stopped, so both are clipped
+    # to the wall crossing. For a candidate the ray genuinely reaches, that is the sphere hit.
+    # For a NEAR MISS -- impact parameter just outside r, so it still carries soft charge --
+    # the closest-approach point lies beyond the wall, and clipping hands it the wall crossing
+    # instead. That clipped time is not a smooth continuation of the sphere-hit time: it steps
+    # at the acceptance edge, and letting the fit differentiate through it cost 2.3 cm and
+    # 0.08 deg over 500 events.
+    #
+    # So the near-miss branch is DETACHED. Those deposits keep their charge gradient (through
+    # `weights`, which is untouched) but contribute no time gradient, since there is no
+    # meaningful derivative of "when the photon passed a sensor it never reached".
+    if wall_t is None or wall_point is None:
+        # Legacy path (per-geometry factories): unclipped closest approach, as before.
+        t_fallback, p_fallback = t_closest, closest
     else:
-        reachable = intersects & (t_intersect <= wall_t)
+        t_fallback = jax.lax.stop_gradient(wall_t)[:, None]
+        p_fallback = jax.lax.stop_gradient(wall_point)
 
-    # CONTACT POINT. Where this photon actually stops, as far as this candidate is
-    # concerned: the sensor dome if it gets there first, otherwise the wall. Both lie on the
-    # detector boundary or inside it by construction, so the contact point is always
-    # physical -- never the closest-approach point to a sensor the photon never reached,
-    # which is what this used to fall back to and is what could land outside the detector.
-    if wall_point is None:
-        fallback_point, fallback_t = closest, t_closest
-    else:
-        fallback_point, fallback_t = wall_point, wall_t[:, None]
+    times   = jnp.where(intersects_and_inside[:, None], t_intersect[:, None], t_fallback)
+    points  = jnp.where(intersects_and_inside[:, None], intersection_points, p_fallback)
+    normals = jnp.where(intersects_and_inside[:, None], normals_intersect, normals_closest)
 
-    contact = jnp.where(reachable[:, None], intersection_points, fallback_point)
-
-    # Charge collected by this candidate. A photon that stopped at the wall deposits nothing
-    # on a sensor it never reached, so the deposit is gated on reachability. The gate's
-    # forward value is the hard test; boundary_sdf, when supplied, makes the BACKWARD pass
-    # differentiate a sigmoid of the contact point's signed distance to the boundary instead
-    # of a step (same straight-through construction as the hard overlap in overlap.py).
-    cap_hard = reachable.astype(ray_origins.dtype)
-    if boundary_sdf is None:
-        cap_gate = cap_hard
-    else:
-        width = cap_st_width if cap_st_width is not None else 0.35 * sensor_radius
-        cap_soft = jax.nn.sigmoid(boundary_sdf(contact) / width)
-        cap_gate = jax.lax.stop_gradient(cap_hard - cap_soft) + cap_soft
-
-    weights = jnp.where(valid, overlap_prob(distance) * cap_gate, 0.0)
-
-    # Sensor hit: reached before the wall, and within the photocathode.
-    inside_sensor = reachable & inside_spherical_sensor
-
-    # Contact point, its time, and its normal, consistently describing ONE event: the sensor
-    # dome when the photon reaches it first, the wall otherwise. `normals` for a non-hit is
-    # unused downstream (calculate_hit_properties substitutes the geometry normal whenever
-    # no sensor was hit, and the weighted average masks non-hits with inside_sensor).
-    times   = jnp.where(inside_sensor[:, None], t_intersect[:, None], fallback_t)
-    points  = contact
-    normals = jnp.where(inside_sensor[:, None], normals_intersect, normals_closest)
-
-    return weights, times, sensor_idx, normals, inside_sensor, points
+    return weights, times, sensor_idx, normals, intersects_and_inside, points
 
 
 @partial(jax.jit, static_argnums=(1,))

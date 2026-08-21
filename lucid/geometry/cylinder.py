@@ -110,11 +110,11 @@ class Cylinder(Detector):
             # vs floor of 40mm). When the floor activates, expect
             # some cells to exceed max_candidates_per_ray — the
             # validator in shared.py will emit a warning.
-            target = max(target, self.S_radius * scale)
+            target = max(target, self.aperture_radius * scale)
         else:
             # No sensors placed yet, or only one — fall back to a
             # sensor-size-based target so callers get something sane.
-            target = 2 * self.S_radius * scale
+            target = 2 * self.aperture_radius * scale
 
         self._n_angular = n_angular if n_angular is not None else max(
             10, int(math.ceil(2 * math.pi * self.r / target)))
@@ -320,7 +320,7 @@ class Cylinder(Detector):
             return np.array([]).reshape(0, 3)
             
         # Calculate effective dimensions (with margins)
-        height_eff = self.H - 3 * self.S_radius  # Top and bottom margins
+        height_eff = self.H - 3 * self.aperture_radius  # Top and bottom margins
         circumference_eff = 2 * np.pi * self.r
         
         # Find optimal rows and columns for approximately square spacing
@@ -356,7 +356,7 @@ class Cylinder(Detector):
             return np.array([]).reshape(0, 3)
             
         # Calculate effective radius (with margin)
-        radius_eff = self.r - 1.5 * self.S_radius
+        radius_eff = self.r - 1.5 * self.aperture_radius
         
         if radius_eff <= 0:
             return np.array([]).reshape(0, 3)

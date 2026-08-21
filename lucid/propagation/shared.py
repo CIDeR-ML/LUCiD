@@ -169,26 +169,36 @@ def create_propagator(detector, sensor_positions, sensor_radius,
     # 5. Overlap probability (shared)
     # temperature=None → step function (hard assignment, non-differentiable)
     # temperature=float → Gaussian kernel with sigma = temperature * sensor_radius
+    # Disc radius for the overlap is the photocathode APERTURE. It equals sensor_radius for
+    # every centred-sphere geometry; for an offset spherical cap it is the rim where the
+    # sphere meets the wall (SK: 0.254 m aperture vs 0.269 m radius of curvature), which is
+    # the physically right footprint and keeps sigma = temperature * aperture.
+    overlap_radius = float(getattr(detector, 'aperture_radius', sensor_radius))
+
+    # Aperture centres: the centre of the circle where each sensor sphere meets the wall.
+    # Equal to the sensor position for a sphere on the wall; pmt_offset inward along the
+    # sensor axis for an offset photocathode. This is the point charge is measured from.
+    from lucid.geometry.utils import calculate_surface_normals
+    _off = float(getattr(detector, 'pmt_offset', 0.0))
+    if _off == 0.0:
+        aperture_centers = sensor_positions
+    else:
+        _ax = jnp.asarray(calculate_surface_normals(detector, np.arange(num_sensors)),
+                          dtype=sensor_positions.dtype)
+        aperture_centers = sensor_positions - _off * _ax
     if temperature is None:
         overlap_prob = create_overlap_prob(
-            None, sensor_radius,
+            None, overlap_radius,
             st_width_frac=overlap_st_width_frac, renorm=overlap_renorm, mode=overlap_mode)
     else:
         overlap_prob = create_overlap_prob(
-            temperature * sensor_radius, sensor_radius,
+            temperature * overlap_radius, overlap_radius,
             st_width_frac=overlap_st_width_frac, renorm=overlap_renorm, mode=overlap_mode)
 
-    # 6. Bounds check closure, plus the signed distance the cap gate differentiates.
-    # Geometries that don't implement boundary_signed_distance keep the hard gate.
+    # 6. Bounds check closure, plus the per-sensor acceptance model.
     def bounds_check(positions):
         return detector.bounds_check(positions)
 
-    try:
-        detector.boundary_signed_distance(jnp.zeros((1, 3)))
-        boundary_sdf = detector.boundary_signed_distance
-    except NotImplementedError:
-        boundary_sdf = None
-    cap_st_width = overlap_st_width_frac * sensor_radius
 
     # 7. JIT-compiled propagation function
     @jax.jit
@@ -226,7 +236,7 @@ def create_propagator(detector, sensor_positions, sensor_radius,
                 slot_sensors, sensor_positions, sensor_radius,
                 photon_origins, photon_directions,
                 bounds_check, overlap_prob,
-                boundary_sdf=boundary_sdf, cap_st_width=cap_st_width,
+                aperture_centers=aperture_centers,
                 wall_t=t_geometry, wall_point=intersection_point)
 
         (weights, sensor_times, sensor_indices,

@@ -220,9 +220,12 @@ class PolygonalCylinder(Cylinder):
 
     def assign_sensor_to_cells(self, sensors, sensor_radius):
         from lucid.propagation.polygon import assign_sensors_to_polygon_grid
+        # The along-surface footprint is the aperture, not the curvature radius; the
+        # on-surface test is centred on wall + pmt_offset, where the sphere centre sits.
         return assign_sensors_to_polygon_grid(
             sensors, sensor_radius, self.apothem, self.H,
-            self.n_sides, self._n_u, self._n_height, self._n_cap)
+            self.n_sides, self._n_u, self._n_height, self._n_cap,
+            pmt_offset=self.pmt_offset, footprint=self.aperture_radius)
 
     def grid_cell_centers(self):
         from lucid.propagation.polygon import calculate_polygon_grid_centers
