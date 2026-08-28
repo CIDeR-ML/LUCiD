@@ -1,0 +1,9 @@
+{
+  "medium_model": "materials/juno_laser_labls.json",
+  "scatter_length": 87.0,
+  "absorption_length": 257.5,
+  "wall_reflection_rate": 0.2,
+  "sensor_reflection_rate": 0.2,
+  "qe": 1.0,
+  "qe_corrections": null
+}

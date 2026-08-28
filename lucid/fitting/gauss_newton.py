@@ -288,7 +288,8 @@ class ChargeTimeModel:
 def fit_charge_time(sources, truth_charge, truth_time, theta0, n_sensors, *,
                     wc=None, wt=None, lk0=None, t00=None, steps=300, refresh=15,
                     ridge=0.02, mu=0.3, eps=1e-8, step_max=0.08, kstep_max=0.3,
-                    t0step_max=2.0, w_time=1.0, fix=(), seed=0, nb_h=4):
+                    t0step_max=2.0, w_time=1.0, fix=(), seed=0, nb_h=4,
+                    bake_k=False):
     """Joint charge + first-arrival-time Gauss-Newton — the same recipe with a TIME residual.
 
     Adds the timing observable to the charge fit: the per-PMT QE factor ``k`` (multiplicative
@@ -300,6 +301,11 @@ def fit_charge_time(sources, truth_charge, truth_time, theta0, n_sensors, *,
 
     ``sources`` are :class:`ChargeTimeModel`. ``truth_time`` is the observed per-sensor first
     arrival; sensors with ``truth_time<=0`` are unlit and dropped from the time term.
+
+    ``bake_k`` replaces the free per-PMT charge factor Schur block with the pooled closed-form
+    estimate ``k[s] = sum_i truth_charge[i,s] / sum_i model_charge[i,s]`` at each iteration.
+    The time-offset ``t0`` block remains free and is still eliminated by its constrained Schur
+    complement. This matches the ``fit(..., bake_k=True)`` charge-only path.
     """
     S = len(sources)
     n_params = int(np.asarray(theta0).shape[0])
@@ -316,9 +322,23 @@ def fit_charge_time(sources, truth_charge, truth_time, theta0, n_sensors, *,
 
     history = np.zeros((steps, n_params))
     Jc_c = Jt_c = Htk = Htu = Minv_k = Minv_u = Pinv = None
+    _zns = jnp.zeros(n_sensors)
 
     for s in range(steps):
         kb = 1000 + 777 * seed + 13 * s
+        if bake_k:
+            # Estimate the shared per-PMT charge scale from all sources at the current globals.
+            # Use k=1 for the model charge, then apply the same mean(log k)=0 gauge as the
+            # free-Schur path. The time-offset block is independent and remains active below.
+            qsum = np.zeros(n_sensors)
+            msum = np.zeros(n_sensors) + 1e-12
+            for i in range(S):
+                model_charge, _ = sources[i].ct(lp, _zns, *_keys(kb + 7000 * i))
+                qsum += np.asarray(truth_charge[i], dtype=float)
+                msum += np.asarray(model_charge) ** 2
+            lkv = jnp.asarray(np.log(np.clip(qsum / msum, 1e-6, None)))
+            lkv = lkv - jnp.mean(lkv)
+
         rcA, mcA, rtA = [], [], []
         for i in range(S):
             mc, T = sources[i].ct(lp, lkv, *_keys(kb + 7000 * i))
@@ -348,10 +368,12 @@ def fit_charge_time(sources, truth_charge, truth_time, theta0, n_sensors, *,
                 Hkk += Wc * (Jk * Jk)
                 Huu += w_time * Wt[i]                              # diagonal time block
             Htt /= S; Htk /= S; Htu /= S; Hkk /= S; Huu /= S
-            Minv_k = make_constrained_schur(Hkk)
+            Minv_k = None if bake_k else make_constrained_schur(Hkk)
             Minv_u = make_constrained_schur(Huu)
-            Pinv = ridge_inverse(Htt - Htk @ Minv_k(Htk.T) - Htu @ Minv_u(Htu.T),
-                                 ridge=ridge, mu=mu)
+            Hglobal = Htt - Htu @ Minv_u(Htu.T)
+            if not bake_k:
+                Hglobal = Hglobal - Htk @ Minv_k(Htk.T)
+            Pinv = ridge_inverse(Hglobal, ridge=ridge, mu=mu)
 
         gt = np.zeros(n_params); gk = np.zeros(n_sensors); gu = np.zeros(n_sensors)
         for i in range(S):
@@ -359,16 +381,20 @@ def fit_charge_time(sources, truth_charge, truth_time, theta0, n_sensors, *,
             gk += Wc * (0.5 * mcA[i]) * rcA[i]
             gu += w_time * Wt[i] * rtA[i]
         gt /= S; gk /= S; gu /= S
-        geff = gt - Htk @ Minv_k(gk) - Htu @ Minv_u(gu)
+        geff = gt - Htu @ Minv_u(gu)
+        if not bake_k:
+            geff = geff - Htk @ Minv_k(gk)
         for i in fix:
             geff[i] = 0.0
         dth = -(Pinv @ geff)
         for i in fix:
             dth[i] = 0.0
-        dlk = -Minv_k(gk + Htk.T @ dth)
         dt0 = -Minv_u(gu + Htu.T @ dth)
         lp = lp + jnp.asarray(np.clip(dth, -step_max, step_max))
-        lkv = lkv + jnp.asarray(np.clip(dlk, -kstep_max, kstep_max)); lkv = lkv - jnp.mean(lkv)
+        if not bake_k:
+            dlk = -Minv_k(gk + Htk.T @ dth)
+            lkv = lkv + jnp.asarray(np.clip(dlk, -kstep_max, kstep_max))
+            lkv = lkv - jnp.mean(lkv)
         t0v = t0v + jnp.asarray(np.clip(dt0, -t0step_max, t0step_max)); t0v = t0v - jnp.mean(t0v)
         history[s] = np.array(jnp.exp(lp))
 

@@ -95,7 +95,13 @@ def fresnel_rr(ci, n_i, n_t):
     Returns (R, cos_transmit); total-internal-reflection clamps R→1.
     """
     s2t = (n_i / n_t) ** 2 * (1.0 - ci * ci)
-    ct = jnp.sqrt(jnp.clip(1.0 - s2t, 0.0, 1.0))
+    # Keep the square-root derivative finite at the critical angle/TIR boundary.
+    # ``sqrt(clip(x, 0))`` has an infinite derivative at x=0; when the selected
+    # branch is later masked by ``where(s2t >= 1, 1, R)``, reverse-mode AD can
+    # still evaluate the inactive NaN cotangent (0 * inf).  The tiny floor is
+    # below float32 transport precision and leaves the forward Fresnel values
+    # unchanged to the requested accuracy.
+    ct = jnp.sqrt(jnp.clip(1.0 - s2t, 0.0, 1.0) + 1e-12)
     rs = (n_i * ci - n_t * ct) / (n_i * ci + n_t * ct + 1e-12)
     rp = (n_t * ci - n_i * ct) / (n_t * ci + n_i * ct + 1e-12)
     R = 0.5 * (rs * rs + rp * rp)

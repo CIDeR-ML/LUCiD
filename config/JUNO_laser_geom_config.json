@@ -1,0 +1,14 @@
+{
+  "material": "juno_laser_labls",
+  "inner_material": "juno_laser_labls",
+  "outer_material": "juno_laser_water",
+  "detector_type": "nested_sphere",
+  "apply_angular_acceptance": true,
+  "geometry_definitions": {
+    "inner_radius": 17.7,
+    "outer_radius": 19.434,
+    "n_sensors": 17612,
+    "sensor_radius": 0.254,
+    "npz_file_path": "juno_pmt_positions.npz"
+  }
+}

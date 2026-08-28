@@ -129,6 +129,14 @@ def generate_detector(file_path):
         return cls(geom_def['radius'], geom_def['height'],
                    geom_def['n_sensors'], geom_def['sensor_radius'])
     elif cls is NestedSphere:
+        if 'npz_file_path' in geom_def:
+            config_dir = os.path.dirname(os.path.abspath(file_path))
+            npz_path = os.path.join(config_dir, geom_def['npz_file_path'])
+            return cls.from_pmt_file(
+                npz_path,
+                geom_def['inner_radius'],
+                geom_def['outer_radius'],
+                geom_def['sensor_radius'])
         return cls(geom_def['inner_radius'], geom_def['outer_radius'],
                    geom_def['n_sensors'], geom_def['sensor_radius'])
     elif cls is Sphere:

@@ -133,7 +133,9 @@ def make_photon_step(mode, has_interface, reflection_fn=scalar_reflection):
             cmie = hg_sample_cos_theta(ua, sg(g))
             cray = jnp.clip(solve_rayleigh_inverse_cdf(ua), -1.0, 1.0)
             cth = jnp.where(is_mie, cmie, cray)
-            sth = jnp.sqrt(jnp.clip(1.0 - cth**2, 0.0, 1.0))
+            # Avoid an infinite tangent at |cos(theta)|=1.  The branch is
+            # physically zero there; the tiny floor only regularizes its AD.
+            sth = jnp.sqrt(jnp.clip(1.0 - cth**2, 0.0, 1.0) + 1e-12)
             frame = create_local_frame(direction)
             local = jnp.array([sth * jnp.cos(phi), sth * jnp.sin(phi), cth])
             scat_dir = normalize(frame @ local)
