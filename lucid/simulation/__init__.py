@@ -1,5 +1,25 @@
-"""Simulation package — split from monolithic simulation.py."""
-from lucid.simulation.simulator import setup_event_simulator
+"""Simulation package — split from monolithic simulation.py.
+
+The general event simulator imports the optional SIREN/Flax stack.  Laser
+simulation and calibration use the lower-level optical modules directly, so
+keep that optional dependency lazy while preserving the public import
+``from lucid.simulation import setup_event_simulator``.
+"""
+
+
+def __getattr__(name):
+    """Resolve optional simulation entry points only when requested."""
+    if name == "setup_event_simulator":
+        from lucid.simulation.simulator import setup_event_simulator
+
+        globals()[name] = setup_event_simulator
+        return setup_event_simulator
+    raise AttributeError(f"module 'lucid.simulation' has no attribute {name!r}")
+
+
+def __dir__():
+    """Return public names, including the lazy simulator entry point."""
+    return sorted(set(globals()) | {"setup_event_simulator"})
 from lucid.simulation.optics import (
     normalize, jax_normalize, compute_reflection_direction,
     create_local_frame, sample_scatter_distance, solve_rayleigh_inverse_cdf,

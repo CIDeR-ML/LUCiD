@@ -51,3 +51,9 @@ lucid/production/jobs/user_paths.sh
 # Personal dev/research scratch (kept on disk, not tracked)
 hessian_probe/
 scripts/campaign_recon/
+
+# Project-local working instructions, proposal drafts, and debug runs
+/AGENTS.md
+/diffsim.tex
+/proposal.md
+/run/

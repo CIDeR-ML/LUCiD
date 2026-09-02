@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python
 """Simulate JUNO 532 nm isotropic laser flashes.
 
 This is the repository-facing JUNO adapter for the laser data format.

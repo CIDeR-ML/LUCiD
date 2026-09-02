@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python
 """Calibrate JUNO 532 nm optical parameters from per-PE laser data.
 
 This CLI is the repository-facing calibration entry point.  It consumes
