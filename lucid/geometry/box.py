@@ -3,7 +3,7 @@ Box (rectangular prism) detector geometry implementation.
 """
 
 import numpy as np
-import plotly.graph_objects as go
+# import plotly.graph_objects as go
 from .base import Detector
 from .registry import register_detector
 
@@ -167,6 +167,8 @@ class Box(Detector):
 
     def visualize_geometry_wireframe(self, show_sensors=True):
         """Visualize the box as a wireframe with detectors"""
+        import plotly.graph_objects as go
+
         fig = go.Figure()
 
         # Define box vertices

@@ -4,7 +4,7 @@ Base detector class with complex visualization methods.
 
 import numpy as np
 from abc import ABC, abstractmethod
-import plotly.graph_objects as go
+# import plotly.graph_objects as go
 from .utils import calculate_surface_normals, create_disc_mesh
 
 
@@ -183,6 +183,8 @@ class Detector(ABC):
         inactive_opacity : float, default=0.3
             Opacity for inactive sensor discs
         """
+        import plotly.graph_objects as go
+
         # Set color scheme based on theme
         if dark_theme:
             bg_color = 'black'
@@ -470,6 +472,8 @@ class Detector(ABC):
     
     def _add_cylinder_surface(self, fig, surface_color='gray'):
         """Add cylindrical surface to the plot with offset to avoid disc overlap"""
+        import plotly.graph_objects as go
+
         # Offset to avoid overlap with discs
         offset = 0.995
         
@@ -533,6 +537,8 @@ class Detector(ABC):
     
     def _add_sphere_surface(self, fig, surface_color='gray'):
         """Add spherical surface to the plot with offset to avoid disc overlap"""
+        import plotly.graph_objects as go
+
         # Offset to avoid overlap with discs
         offset = 0.995
         
@@ -557,6 +563,8 @@ class Detector(ABC):
     
     def _add_box_surface(self, fig, surface_color='gray'):
         """Add box surface to the plot with offset to avoid disc overlap"""
+        import plotly.graph_objects as go
+
         # Offset to avoid overlap with discs
         offset = 0.995
         
