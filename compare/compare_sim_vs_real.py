@@ -9,11 +9,15 @@ FSMP ``PEt`` is a list column.  Its values are converted to NumPy arrays and
 ``offset`` is added before subtracting the monitor time.  ``all`` mode keeps
 every PE in every stored row; ``first`` mode keeps the first PE per row.
 LUCiD simulation input uses the same ``eid``/``ch``/``offset``/``step``/``PEt``
-contract as FSMP.  Only consolidated Parquet input is accepted.
+contract as FSMP.  Only consolidated Parquet input is accepted; ``--sim-dir``
+may contain a shell-style wildcard for matching one source-position folder.
+When LUCiD data are present, FSMP loading stops after reaching the selected
+channel PE total from the LUCiD source, finishing the current file first.
 """
 
 import argparse
 import csv
+import glob
 import sys
 from pathlib import Path
 
@@ -111,14 +115,22 @@ def irf_config_string(hamamatsu_sigma, nnvt_sigma):
 
 
 def processing_string(
-    use_tts, hamamatsu_sigma, nnvt_sigma, dark_subtract, mode
+    use_tts,
+    hamamatsu_sigma,
+    nnvt_sigma,
+    dark_subtract,
+    mode,
+    target_pe=None,
 ):
     """Serialize all response-processing settings into a cache key."""
-    return (
+    value = (
         f"tts={int(use_tts)},"
         f"irf={irf_config_string(hamamatsu_sigma, nnvt_sigma)},"
         f"dark={int(dark_subtract)},fsmp={mode}"
     )
+    if target_pe is not None:
+        value += f",fsmp_target={int(target_pe)}"
+    return value
 
 
 def _arrow_pet_values(column):
@@ -205,7 +217,7 @@ def _append_fsmp_batch(
     monitor, valid_monitor = _monitor_match(eid, monitor_eid, monitor_time)
     valid_row = valid_pet & valid_monitor & (lengths > 0)
     if not np.any(valid_row):
-        return
+        return 0
 
     if mode == "first":
         first = _first_values(values, lengths)
@@ -219,7 +231,7 @@ def _append_fsmp_batch(
                     lengths[keep],
                 )
             )
-        return
+        return int(np.count_nonzero(keep))
 
     row_channel = np.repeat(channel, lengths)
     row_eid = np.repeat(eid, lengths)
@@ -237,6 +249,7 @@ def _append_fsmp_batch(
                 np.ones(np.count_nonzero(value_valid), dtype=np.int64),
             )
         )
+    return int(np.count_nonzero(value_valid))
 
 
 def read_fsmp_times_by_channel(
@@ -249,15 +262,25 @@ def read_fsmp_times_by_channel(
     time_mode="all",
     print_first_row=False,
     batch_size=250_000,
+    target_pe=None,
 ):
-    """Read FSMP Parquet with Arrow batches and return flat NumPy arrays."""
+    """Read FSMP Parquet until the selected-channel PE target is reached.
+
+    The current file is always read to completion. Once its accepted PE count
+    makes the cumulative total reach ``target_pe``, later files are skipped.
+    """
     if time_mode not in {"first", "all"}:
         raise ValueError(f"Unknown FSMP time mode: {time_mode}")
     if batch_size <= 0:
         raise ValueError("batch_size must be positive")
+    if target_pe is not None and target_pe < 0:
+        raise ValueError("target_pe must be non-negative")
+    if target_pe is not None:
+        target_pe = int(target_pe)
     channels = np.asarray(channels, dtype=np.int64)
     chunks = []
     readable = 0
+    loaded_pe = 0
     printed = False
     iterator = (
         fsmp_files
@@ -287,7 +310,7 @@ def read_fsmp_times_by_channel(
                     print(
                         "FSMP sample row:", selected.slice(0, 1).to_pylist()[0]
                     )
-                _append_fsmp_batch(
+                loaded_pe += _append_fsmp_batch(
                     chunks,
                     selected,
                     channels,
@@ -296,6 +319,8 @@ def read_fsmp_times_by_channel(
                     time_mode,
                 )
             readable += 1
+            if target_pe and loaded_pe >= target_pe:
+                break
         except (OSError, KeyError, ValueError, pa.ArrowException) as error:
             if file_limit is None:
                 raise
@@ -366,15 +391,24 @@ def _simulation_files(path, pattern):
 
 
 def iter_sim_files(sim_dir):
-    """Return consolidated LUCiD Parquet files."""
-    path = Path(sim_dir)
-    if path.is_file():
-        if path.suffix.lower() not in {".parquet", ".pq"}:
-            raise ValueError(f"LUCiD simulation input must be Parquet: {path}")
-        return [path]
-    files = _simulation_files(path, "*.parquet")
-    files.extend(_simulation_files(path, "*.pq"))
-    return files
+    """Return consolidated LUCiD Parquet files, expanding path wildcards."""
+    raw_path = str(sim_dir)
+    if any(token in raw_path for token in "*?["):
+        roots = [Path(value) for value in sorted(glob.glob(raw_path))]
+    else:
+        roots = [Path(sim_dir)]
+    files = []
+    for path in roots:
+        if path.is_file():
+            if path.suffix.lower() not in {".parquet", ".pq"}:
+                raise ValueError(
+                    f"LUCiD simulation input must be Parquet: {path}"
+                )
+            files.append(path)
+        elif path.is_dir():
+            files.extend(_simulation_files(path, "*.parquet"))
+            files.extend(_simulation_files(path, "*.pq"))
+    return list(dict.fromkeys(files))
 
 
 def iter_junosw_sim_files(sim_dir, file_glob="*.h5"):
@@ -536,6 +570,12 @@ def _compute_sim_cache(args, channels, kind):
 
 def compute_fsmp_data(args, channels, fsmp_files):
     """Build the FSMP cache from Arrow/NumPy arrays."""
+    target_pe = getattr(args, "fsmp_target_pe", None)
+    if target_pe is not None:
+        print(
+            "FSMP PE target from selected-channel LUCiD simulation: "
+            f"{int(target_pe)}"
+        )
     pmt_type, tts = read_pmt_info(channels, args.pmt_map, args.pmt)
     records = read_fsmp_times_by_channel(
         fsmp_files,
@@ -546,6 +586,7 @@ def compute_fsmp_data(args, channels, fsmp_files):
         BRIEF_FSMP_FILE_LIMIT if args.brief else None,
         args.fsmp_time_mode,
         args.print_fsmp_row,
+        target_pe=target_pe,
     )
     if not len(records["time"]):
         raise RuntimeError(
@@ -560,6 +601,9 @@ def compute_fsmp_data(args, channels, fsmp_files):
         "fsmp_time": records["time"],
         "fsmp_pe_count": records["pe_count"],
         "fsmp_time_mode": np.asarray(args.fsmp_time_mode),
+        "fsmp_target_pe": np.asarray(
+            -1 if target_pe is None else target_pe, dtype=np.int64
+        ),
     }
     args.fsmp_data.parent.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(args.fsmp_data, **data)
@@ -1322,7 +1366,7 @@ def parse_args(argv=None):
     return args
 
 
-def _load_matching_cache(path, channels, kind=None):
+def _load_matching_cache(path, channels, kind=None, target_pe=None):
     """Load a source cache only when its channel selection and kind match."""
     if not path.exists():
         return None
@@ -1334,6 +1378,16 @@ def _load_matching_cache(path, channels, kind=None):
         cached_kind = str(np.asarray(data.get("kind", "")).item())
         if cached_kind != kind:
             print(f"Cached source kind in {path} does not match; recomputing.")
+            return None
+    if target_pe is not None:
+        cached_target = int(
+            np.asarray(data.get("fsmp_target_pe", -1)).item()
+        )
+        if cached_target != int(target_pe):
+            print(
+                f"Cached FSMP PE target in {path} does not match; "
+                "recomputing."
+            )
             return None
     return data
 
@@ -1351,11 +1405,6 @@ def main(argv=None):
             sources.append(load_data(args.junosw_sim_data))
     else:
         channels, files = selected_channels(args)
-        fsmp_data = None
-        if not args.force:
-            fsmp_data = _load_matching_cache(args.fsmp_data, channels)
-        if fsmp_data is None:
-            fsmp_data = compute_fsmp_data(args, channels, files)
         sources = []
         if args.lucid_sim_dir is not None:
             source = None
@@ -1373,6 +1422,30 @@ def main(argv=None):
             sources.append(
                 source or _compute_sim_cache(args, channels, "junosw")
             )
+        lucid_sources = [
+            source for source in sources
+            if str(np.asarray(source.get("kind", "")).item()) == "lucid"
+        ]
+        lucid_source = lucid_sources[0] if lucid_sources else None
+        args.fsmp_target_pe = (
+            int(
+                np.asarray(
+                    lucid_source.get(
+                        "simulation_total_pe",
+                        lucid_source["simulation_entries"],
+                    )
+                ).sum()
+            )
+            if lucid_source is not None
+            else None
+        )
+        fsmp_data = None
+        if not args.force:
+            fsmp_data = _load_matching_cache(
+                args.fsmp_data, channels, target_pe=args.fsmp_target_pe
+            )
+        if fsmp_data is None:
+            fsmp_data = compute_fsmp_data(args, channels, files)
     if not sources:
         raise RuntimeError("No simulation source was loaded")
     fsmp_data = attach_pmt_coordinates(fsmp_data, args.pmt_map)
@@ -1383,6 +1456,11 @@ def main(argv=None):
         args.irf_sigma_nnvt,
         args.dark_subtract,
         args.fsmp_time_mode,
+        target_pe=getattr(
+            args,
+            "fsmp_target_pe",
+            fsmp_data.get("fsmp_target_pe"),
+        ),
     )
     data = None
     if args.aligned_data.exists() and not args.force:
@@ -1602,6 +1680,7 @@ def build_channel_histograms_multi(
                 irf_sigma_nnvt,
                 dark_subtract,
                 fsmp_data.get("fsmp_time_mode", "unknown"),
+                target_pe=fsmp_data.get("fsmp_target_pe"),
             )
         ),
         "fsmp_time_mode": np.asarray(
