@@ -113,7 +113,10 @@ def generate_detector(file_path):
       * Otherwise → algorithmic placement using
         ``radius / height / n_sensors / sensor_radius``.
 
-    The npz path is resolved relative to the config-file directory.
+    For ``detector_type: nested_sphere``, ``pmt_file_path`` points to the
+    JUNO PMT CSV and is resolved relative to the config-file directory.
+    The NPZ path used by cylinder configurations is also resolved relative
+    to the config-file directory.
     """
     config = load_detector_config(file_path)
     detector_type = config['detector_type']
@@ -129,11 +132,11 @@ def generate_detector(file_path):
         return cls(geom_def['radius'], geom_def['height'],
                    geom_def['n_sensors'], geom_def['sensor_radius'])
     elif cls is NestedSphere:
-        if 'npz_file_path' in geom_def:
+        if 'pmt_file_path' in geom_def:
             config_dir = os.path.dirname(os.path.abspath(file_path))
-            npz_path = os.path.join(config_dir, geom_def['npz_file_path'])
+            csv_path = os.path.join(config_dir, geom_def['pmt_file_path'])
             return cls.from_pmt_file(
-                npz_path,
+                csv_path,
                 geom_def['inner_radius'],
                 geom_def['outer_radius'],
                 geom_def['sensor_radius'])

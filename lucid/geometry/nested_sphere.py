@@ -10,6 +10,9 @@ where the two media meet.
 The matching propagator lives in :mod:`lucid.propagation.nested_sphere`.
 """
 
+import io
+from pathlib import Path
+
 import jax.numpy as jnp
 import numpy as np
 
@@ -43,27 +46,51 @@ class NestedSphere(Sphere):
         self.r_outer = outer_radius
 
     @classmethod
-    def from_pmt_file(cls, npz_file_path, inner_radius, outer_radius,
+    def from_pmt_file(cls, csv_file_path, inner_radius, outer_radius,
                       sensor_radius):
         """Build a nested sphere using externally supplied PMT positions.
 
-        The file must contain a ``pmt_positions`` array in metres with shape
+        The CSV must contain ``CopyNo X Y Z`` columns with coordinates in mm.
+        The returned detector stores the coordinates in metres with shape
         ``(n_sensors, 3)``.  This constructor preserves the regular
         :class:`Sphere` sensor maps while replacing only the placement, so the
         nested propagator can use measured JUNO coordinates without a runtime
         monkey patch.
         """
-        with np.load(npz_file_path, allow_pickle=False) as data:
-            if "pmt_positions" not in data.files:
-                raise KeyError(
-                    f"PMT file {npz_file_path!r} must contain 'pmt_positions'")
-            positions = np.asarray(data["pmt_positions"], dtype=np.float64)
+        csv_path = Path(csv_file_path)
+        if csv_path.suffix.lower() != ".csv":
+            raise ValueError(
+                f"PMT positions must be provided as CSV, got {csv_path!r}"
+            )
+
+        data_lines = []
+        with csv_path.open(encoding="utf-8") as stream:
+            for line in stream:
+                stripped = line.strip()
+                if stripped and not stripped.startswith(("#", '"')):
+                    data_lines.append(stripped)
+        if not data_lines:
+            raise ValueError(f"PMT CSV {csv_path!r} contains no data rows")
+        try:
+            positions_mm = np.loadtxt(
+                io.StringIO("\n".join(data_lines)),
+                dtype=np.float64,
+                usecols=(1, 2, 3),
+                ndmin=2,
+            )
+        except (OSError, ValueError) as error:
+            raise ValueError(
+                f"Could not parse PMT coordinates from {csv_path!r}"
+            ) from error
+        positions = positions_mm * 0.001
 
         if positions.ndim != 2 or positions.shape[1] != 3:
             raise ValueError(
                 f"PMT positions must have shape (n, 3), got {positions.shape}")
         if not np.all(np.isfinite(positions)):
-            raise ValueError(f"PMT positions in {npz_file_path!r} contain non-finite values")
+            raise ValueError(
+                f"PMT positions in {csv_path!r} contain non-finite values"
+            )
 
         instance = cls(inner_radius, outer_radius, len(positions), sensor_radius)
         instance.all_points = positions
@@ -71,7 +98,7 @@ class NestedSphere(Sphere):
             i: positions[i] for i in range(len(positions))
         }
         instance.ID_to_case = {i: 0 for i in range(len(positions))}
-        instance.npz_file_path = npz_file_path
+        instance.csv_file_path = csv_path
         return instance
 
     def bounds_check(self, positions):

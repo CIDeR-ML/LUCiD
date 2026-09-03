@@ -4,7 +4,7 @@
   "wavelength_nm": 532.0,
   "geometry_config": "JUNO_laser_geom_config.json",
   "physics_config": "JUNO_laser_physics_config.json",
-  "pmt_positions": "juno_pmt_positions.npz",
+  "pmt_positions": "PMTPos_CD_LPMT.csv",
   "materials": {
     "inner": "materials/juno_laser_labls.json",
     "outer": "materials/juno_laser_water.json"
