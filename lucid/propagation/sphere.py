@@ -36,36 +36,44 @@ def intersect_sphere(ray_origin, ray_direction, center, radius):
     tuple
         (bool, float) - (whether intersection exists, distance to intersection)
     """
+    dtype = ray_origin.dtype
     LARGE = 1e10
+    center = jnp.asarray(center, dtype=dtype)
+    radius = jnp.asarray(radius, dtype=dtype)
+    two = jnp.asarray(2.0, dtype=dtype)
+    epsilon = jnp.asarray(1e-6, dtype=dtype)
     
     # Vector from ray origin to sphere center
     oc = ray_origin - center
     
     # Quadratic equation coefficients for sphere intersection
     a = jnp.sum(ray_direction * ray_direction)
-    b = 2.0 * jnp.sum(oc * ray_direction)
+    b = two * jnp.sum(oc * ray_direction)
     c = jnp.sum(oc * oc) - radius**2
-    
+
     discriminant = b**2 - 4*a*c
-    epsilon = 1e-6
+    large_distance = jnp.asarray(LARGE, dtype=discriminant.dtype)
     
     def intersection_branch(_):
-        sqrt_disc = jnp.sqrt(jnp.maximum(0.0, discriminant))
-        t1 = (-b - sqrt_disc) / (2*a)
-        t2 = (-b + sqrt_disc) / (2*a)
+        sqrt_disc = jnp.sqrt(jnp.maximum(
+            jnp.zeros_like(discriminant), discriminant
+        ))
+        t1 = (-b - sqrt_disc) / (two * a)
+        t2 = (-b + sqrt_disc) / (two * a)
         
         # We want the intersection from inside the sphere going outward
         # So we take the positive t (exit point)
         t_candidate = jnp.maximum(t1, t2)
         
-        valid_t = t_candidate > 0
+        valid_t = t_candidate > jnp.zeros_like(t_candidate)
         intersects_ = (discriminant >= -epsilon) & valid_t
-        tval_ = jnp.where(intersects_, t_candidate, LARGE)
+        tval_ = jnp.where(intersects_, t_candidate, large_distance)
         
         return (intersects_, tval_)
     
     def no_intersection_branch(_):
-        return (False, jnp.array(LARGE, dtype=jnp.float32))
+        # return (False, jnp.array(LARGE, dtype=jnp.float32))
+        return (False, large_distance)
     
     has_intersection = discriminant >= -epsilon
     intersects, tval = lax.cond(has_intersection,

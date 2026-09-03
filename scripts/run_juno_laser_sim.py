@@ -215,8 +215,13 @@ def _make_forward(
             else:
                 positions, directions, times, survival, medium_id, key = carry
             hit = propagate(positions, directions)
+            # Keep scan carry precision stable when measured PMT coordinates
+            # or geometry constants arrive as float64 under X64 mode.
+            hit_positions = jnp.asarray(hit["positions"], dtype=positions.dtype)
+            hit_normals = jnp.asarray(hit["normals"], dtype=positions.dtype)
+            hit_times = jnp.asarray(hit["times"], dtype=positions.dtype)
             distances = jnp.sqrt(
-                jnp.sum((hit["positions"] - positions) ** 2, axis=1)
+                jnp.sum((hit_positions - positions) ** 2, axis=1)
                 + 1e-12
             ) - 1e-6
             hit_sensor = jnp.max(hit["inside_sensor"], axis=0)
@@ -240,7 +245,7 @@ def _make_forward(
                 directions,
                 times,
                 distances,
-                hit["normals"],
+                hit_normals,
                 scatter,
                 mie,
                 dp.scattering.g,
@@ -265,11 +270,15 @@ def _make_forward(
                 _,
                 new_medium,
             ) = result
+            new_pos = jnp.asarray(new_pos, dtype=positions.dtype)
+            new_dir = jnp.asarray(new_dir, dtype=directions.dtype)
+            new_time = jnp.asarray(new_time, dtype=times.dtype)
             inside = detector.bounds_check(new_pos)
             new_survival = survival * jnp.where(inside, cont, 0.0)
+            new_survival = jnp.asarray(new_survival, dtype=survival.dtype)
             weights = hit["sensor_weights"] * intensities[None, :] * survival
             weights = weights * detect[None, :] * reflect[None, :]
-            arrival = hit["times"] / speed[None, :, None] + times[:, None]
+            arrival = hit_times / speed[None, :, None] + times[:, None]
             if record_trajectories:
                 trajectory_positions = trajectory_positions.at[
                     step_index + 1
