@@ -323,7 +323,8 @@ def calculate_sphere_grid_centers(radius, n_divisions):
     return centers
 
 
-@partial(jax.jit, static_argnums=(2, 3, 4), device=jax.devices('cpu')[0])
+# @partial(jax.jit, static_argnums=(2, 3, 4), device=jax.devices('cpu')[0])
+@partial(jax.jit, static_argnums=(2, 3, 4))
 def create_inverted_sphere_sensor_map(assignments_geometric, assignments_distance, n_divisions,
                                        max_candidates_per_ray, num_sensors):
     """Create inverted sensor map for sphere prioritizing geometric intersections then closest sensors"""

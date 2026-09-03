@@ -157,7 +157,8 @@ def load_overlap_values(r: float, sigma: float) -> Optional[Tuple[jnp.ndarray, j
     return None
 
 
-@partial(jax.jit, device=jax.devices('cpu')[0])
+# @partial(jax.jit, device=jax.devices('cpu')[0])
+@jax.jit
 def integral_f_of_d(d: float, r: float, sigma: float,
                     theta_vals: jnp.ndarray, rho_vals: jnp.ndarray) -> float:
     """Computes the double integral of the Gaussian kernel over polar coordinates.

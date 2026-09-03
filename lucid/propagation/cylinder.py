@@ -527,7 +527,8 @@ def calculate_grid_centers(r, h, n_cap, n_angular, n_height):
     return jnp.concatenate([wall_centers, cap_centers], axis=0)
 
 
-@partial(jax.jit, static_argnums=(2, 3, 4, 5, 6), device=jax.devices('cpu')[0])
+# @partial(jax.jit, static_argnums=(2, 3, 4, 5, 6), device=jax.devices('cpu')[0])
+@partial(jax.jit, static_argnums=(2, 3, 4, 5, 6))
 def create_inverted_sensor_map(assignments_geometric, assignments_distance, n_cap, n_angular, n_height,
                                  max_candidates_per_ray, num_sensors):
     """Create inverted sensor map prioritizing geometric intersections then closest sensors"""
