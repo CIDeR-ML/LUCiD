@@ -78,6 +78,40 @@ class TestSplitPrefixInvariant:
             assert bool(jnp.array_equal(jax.random.split(k, 8), jax.random.split(k, 9)[:8]))
 
 
+class TestSampleReflectionModel:
+    """The sampled step must use the configured model and wavelength."""
+
+    def test_custom_model_receives_wavelength(self):
+        def wavelength_model(direction, normal, hit_sensor, params, lam, key):
+            del normal, hit_sensor, params, key
+            rate = jnp.where(lam == 532.0, 0.0, 1.0)
+            return rate, direction, jnp.zeros_like(rate)
+
+        step = make_photon_step(
+            "sample", False, reflection_fn=wavelength_model
+        )
+        args = (
+            jnp.zeros(3),
+            jnp.array([1.0, 0.0, 0.0]),
+            jnp.asarray(0.0),
+            jnp.asarray(1.0e-6),
+            jnp.array([1.0, 0.0, 0.0]),
+            jnp.asarray(1.0e9),
+            jnp.asarray(1.0e9),
+            jnp.asarray(0.0),
+            REFL,
+            jnp.asarray(1.0e9),
+            jnp.asarray(True),
+            jnp.asarray(532.0),
+            jax.random.PRNGKey(123),
+            jnp.asarray(0.225),
+        )
+        result_532 = step(*args)
+        result_400 = step(*args[:-3], jnp.asarray(400.0), *args[-2:])
+        assert float(result_532[3]) == 1.0
+        assert float(result_400[3]) == 0.0
+
+
 class TestSurfacesEquivalence:
     """surfaces.nearest_interface reproduces the legacy concentric two-sphere intersection."""
 

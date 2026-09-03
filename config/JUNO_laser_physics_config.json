@@ -4,6 +4,12 @@
   "absorption_length": 257.5,
   "wall_reflection_rate": 0.2,
   "sensor_reflection_rate": 0.2,
+  "wall_R0": 0.05,
+  "wall_p": 1.0,
+  "wall_fspec": 0.0,
+  "cathode_nr": 2.8,
+  "cathode_nk": 1.5,
+  "sensor_fspec": 0.0,
   "qe": 1.0,
   "qe_corrections": null
 }

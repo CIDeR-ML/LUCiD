@@ -41,9 +41,8 @@ def make_photon_step(mode, has_interface, reflection_fn=scalar_reflection):
                  hit_interface=None, medium_id=None, n_inner=None, n_outer=None):
             # 6 keys single-medium; +1 (k[6]) for the sampled interface transmit/reflect outcome.
             # JAX split-prefix (split(k,6)==split(k,7)[:6]) keeps k[0..5] — and thus the whole
-            # single-medium stream — byte-identical to the legacy 6-split. `lam` is unused (MC path).
+            # single-medium stream — byte-identical to the legacy 6-split.
             k = jax.random.split(rng_key, 7 if has_interface else 6)
-            reflection_rate = jnp.where(hit_sensor, refl_params.sensor_rate, refl_params.wall_rate)
             mie_safe = jnp.maximum(mie_scatter_length, 1e-6)
             inv_total = 1.0 / scatter_length + 1.0 / mie_safe
             scatter_length = 1.0 / inv_total
@@ -56,9 +55,9 @@ def make_photon_step(mode, has_interface, reflection_fn=scalar_reflection):
             scatters = ~reaches_surface
             epsilon = 1e-4
             inward_normal = -normal
-            specular_dir = compute_reflection_direction(direction, normal)
-            diffuse_dir = sample_cosine_hemisphere(inward_normal, k[3])
-            wall_refl_dir = jnp.where(hit_sensor, specular_dir, diffuse_dir)
+            reflection_rate, reflected_dir, _lr = reflection_fn(
+                direction, normal, hit_sensor, refl_params, lam, k[3]
+            )
             rayleigh_dir = compute_scatter_direction(direction, k[2])
             mie_dir = compute_mie_scatter_direction(direction, k[2], g)
             is_mie = jax.random.uniform(k[4]) < p_mie
@@ -70,7 +69,7 @@ def make_photon_step(mode, has_interface, reflection_fn=scalar_reflection):
                     dir_n, normal, medium_id, n_inner, n_outer, jax.random.uniform(k[6]))
                 detects = reaches_surface & (~hit_interface) & (u2 >= reflection_rate)
                 at_interface = reaches_surface & hit_interface
-                surf_dir = jnp.where(hit_interface, iface_dir, wall_refl_dir)
+                surf_dir = jnp.where(hit_interface, iface_dir, reflected_dir)
                 surf_pos = jnp.where(
                     hit_interface,
                     position + surface_distance * dir_n + epsilon * iface_dir,
@@ -86,7 +85,7 @@ def make_photon_step(mode, has_interface, reflection_fn=scalar_reflection):
                     position + scatter_distance * normalize(direction),
                     position + surface_distance * normalize(direction) + epsilon * normalize(inward_normal))
                 new_dir = jnp.where(
-                    reflects, wall_refl_dir,
+                    reflects, reflected_dir,
                     jnp.where(scatters, chosen_scatter_dir, direction))
 
             distance_traveled = jnp.where(scatters, scatter_distance, surface_distance)

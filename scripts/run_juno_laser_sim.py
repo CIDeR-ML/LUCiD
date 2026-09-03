@@ -79,6 +79,9 @@ def _simulation_metadata(
         ),
         "wavelength_nm": str(config["wavelength_nm"]),
         "max_scattering_steps": str(n_steps),
+        "reflection_model": str(
+            config.get("transport", {}).get("reflection_model", "scalar")
+        ),
         "seed": str(args.seed),
         "record_trajectories": str(bool(record_trajectories)),
         "pe_time_units": "ns",
@@ -149,7 +152,7 @@ def _lengths_at(material_dir: Path, wavelength_nm: float):
 
 def _make_forward(
     det_geom, dp, *, n_photons, n_steps, source, intensity, wavelength_nm,
-    record_trajectories=False,
+    reflection_model="scalar", record_trajectories=False,
 ):
     """Create a JIT nested-sphere forward returning raw hit arrays."""
     detector = det_geom.detector
@@ -164,8 +167,13 @@ def _make_forward(
     c_vacuum = float(det_geom.speed_of_light) * float(
         det_geom.medium.refractive_index
     )
-    refl_params = get_reflection_model("scalar")[1](dp)
-    photon_step = make_photon_step("sample", has_interface=True)
+    reflection_fn, build_reflection_params = get_reflection_model(
+        reflection_model
+    )
+    refl_params = build_reflection_params(dp)
+    photon_step = make_photon_step(
+        "sample", has_interface=True, reflection_fn=reflection_fn
+    )
     source = isotropic_source(
         source, intensity=intensity, wavelength=wavelength_nm
     )
@@ -252,7 +260,7 @@ def _make_forward(
                 refl_params,
                 absorb,
                 hit_sensor,
-                400.0,
+                wavelength_nm,
                 ray_keys,
                 speed,
                 hit["hit_interface"],
@@ -411,6 +419,9 @@ def simulate(args):
             "--source must contain three comma-separated coordinates"
         )
     n_steps = int(args.k or simulation["max_scattering_steps"])
+    reflection_model = config.get("transport", {}).get(
+        "reflection_model", "scalar"
+    )
     record_trajectories = bool(
         args.record_trajectories
         or simulation.get("record_trajectories", False)
@@ -426,6 +437,7 @@ def simulate(args):
         source=source_position,
         intensity=intensity,
         wavelength_nm=float(config["wavelength_nm"]),
+        reflection_model=reflection_model,
         record_trajectories=record_trajectories,
     )
     LOG.info(

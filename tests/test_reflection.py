@@ -76,6 +76,14 @@ class TestAngularModel:
         _, _, lr = angular_reflection(_DIR, _NORMAL, False, rp, jnp.asarray(400.0), _KEY)
         assert jnp.isfinite(lr)
 
+    def test_sensor_diffuse_reflection_returns_inward(self):
+        """PMT diffuse reflection follows the inward hemisphere."""
+        rp = self._params()._replace(fs=jnp.asarray(0.0))
+        _, reflected, _ = angular_reflection(
+            _DIR, _NORMAL, True, rp, jnp.asarray(532.0), _KEY
+        )
+        assert float(jnp.dot(reflected, _NORMAL)) < 0.0
+
 
 class TestRegistry:
     def test_scalar_and_angular_registered(self):
