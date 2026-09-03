@@ -62,7 +62,7 @@ def medium_lengths_at(material_paths: dict[str, Path], wavelength_nm: float):
 
 
 def truth_from_geometry(config: JunoLaserConfig, det_geom):
-    """Extract the v42 truth vector from geometry, physics and material files."""
+    """Extract the reference truth vector from geometry and material files."""
     with config.physics_path.open() as stream:
         physics = json.load(stream)
     lengths = medium_lengths_at(config.material_paths, config.wavelength_nm)
@@ -74,4 +74,3 @@ def truth_from_geometry(config: JunoLaserConfig, det_geom):
         "scat_water": float(lengths["outer"]["scat"]),
         "abs_water": float(lengths["outer"]["abs"]),
     }
-

@@ -14,6 +14,7 @@ dependencies = [
     "flax>=0.8.0",
     "optax>=0.1.7",
     "numpy>=1.24",
+    "pyarrow>=12.0",
     "scipy>=1.10",
     "h5py>=3.8",
     "tqdm>=4.60",

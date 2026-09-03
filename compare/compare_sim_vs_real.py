@@ -8,10 +8,13 @@ only the three-source orchestration and the FSMP-specific Arrow reader.
 FSMP ``PEt`` is a list column.  Its values are converted to NumPy arrays and
 ``offset`` is added before subtracting the monitor time.  ``all`` mode keeps
 every PE in every stored row; ``first`` mode keeps the first PE per row.
+LUCiD simulation input uses the same ``eid``/``ch``/``offset``/``step``/``PEt``
+contract as FSMP.  Only consolidated Parquet input is accepted.
 """
 
 import argparse
 import csv
+import sys
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -20,6 +23,12 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 from matplotlib.backends.backend_pdf import PdfPages
 from tqdm import tqdm
+
+# Make direct ``python compare/compare_sim_vs_real.py`` execution resolve the
+# repository package without requiring a caller-specific PYTHONPATH.
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 try:
     from . import compare_sim as base
@@ -356,10 +365,16 @@ def _simulation_files(path, pattern):
     return sorted(path.rglob(pattern))
 
 
-def iter_sim_files(sim_dir, file_glob="*_ev*.npz"):
-    """Return LUCiD event files, excluding trajectory helper files."""
-    files = _simulation_files(Path(sim_dir), file_glob)
-    return [path for path in files if "_traj_" not in path.name]
+def iter_sim_files(sim_dir):
+    """Return consolidated LUCiD Parquet files."""
+    path = Path(sim_dir)
+    if path.is_file():
+        if path.suffix.lower() not in {".parquet", ".pq"}:
+            raise ValueError(f"LUCiD simulation input must be Parquet: {path}")
+        return [path]
+    files = _simulation_files(path, "*.parquet")
+    files.extend(_simulation_files(path, "*.pq"))
+    return files
 
 
 def iter_junosw_sim_files(sim_dir, file_glob="*.h5"):
@@ -367,8 +382,56 @@ def iter_junosw_sim_files(sim_dir, file_glob="*.h5"):
     return _simulation_files(Path(sim_dir), file_glob)
 
 
+def _read_lucid_parquet(path, edges, chunk_size, channels, event_pairs):
+    """Accumulate one FSMP-style LUCiD Parquet file into histograms."""
+    parquet = pq.ParquetFile(path)
+    histogram = np.zeros((len(channels), len(edges) - 1), dtype=np.int64)
+    entries = np.zeros(len(channels), dtype=np.int64)
+    total_pe = np.zeros(len(channels), dtype=np.int64)
+    for batch in parquet.iter_batches(
+        batch_size=chunk_size,
+        columns=["eid", "ch", "offset", "PEt"],
+        use_threads=False,
+    ):
+        row_channel = batch.column("ch").to_numpy(zero_copy_only=False)
+        row_eid = batch.column("eid").to_numpy(zero_copy_only=False)
+        row_offset = batch.column("offset").to_numpy(zero_copy_only=False)
+        values, lengths, valid_pet = _arrow_pet_values(batch.column("PEt"))
+        row_index = np.searchsorted(channels, row_channel)
+        valid_row = valid_pet & (lengths > 0) & (row_index < len(channels))
+        valid_row[valid_row] = (
+            channels[row_index[valid_row]] == row_channel[valid_row]
+        )
+        if np.any(valid_row):
+            event_pairs.append(
+                np.column_stack(
+                    (row_index[valid_row], row_eid[valid_row])
+                ).astype(np.uint64, copy=False)
+            )
+        if not np.any(valid_row):
+            continue
+        flat_channel = np.repeat(row_channel, lengths)
+        flat_offset = np.repeat(row_offset, lengths)
+        flat_valid = np.repeat(valid_row, lengths)
+        if np.any(flat_valid):
+            flat_times = values + flat_offset
+            _accumulate_histogram(
+                flat_channel[flat_valid],
+                flat_times[flat_valid],
+                channels,
+                edges,
+                histogram,
+                entries,
+            )
+            valid_index = np.searchsorted(
+                channels, flat_channel[flat_valid]
+            )
+            np.add.at(total_pe, valid_index, 1)
+    return histogram, entries, total_pe
+
+
 def read_lucid_sim_histograms(sim_files, edges, chunk_size, channels):
-    """Read LUCiD event NPZ files into density and count arrays."""
+    """Read LUCiD Parquet files into density and count arrays."""
     if chunk_size <= 0:
         raise ValueError("--sim-chunk-size must be positive")
     channels = np.asarray(channels, dtype=np.int64)
@@ -376,76 +439,32 @@ def read_lucid_sim_histograms(sim_files, edges, chunk_size, channels):
     entries = np.zeros(len(channels), dtype=np.int64)
     total_pe = np.zeros(len(channels), dtype=np.int64)
     events = np.zeros(len(channels), dtype=np.int64)
+    event_pairs = []
     for path in tqdm(sim_files, desc="LUCiD simulation files"):
         try:
-            with np.load(path) as data:
-                pmt = np.asarray(data["hit_pmt_ids"], dtype=np.int64)
-                times = np.asarray(data["pe_hit_times"], dtype=np.float64)
-        except (OSError, KeyError, ValueError, TypeError) as error:
+            parquet_hist = _read_lucid_parquet(
+                path, edges, chunk_size, channels, event_pairs
+            )
+        except (
+            OSError,
+            KeyError,
+            ValueError,
+            TypeError,
+            pa.ArrowException,
+        ) as error:
             print(f"Skip invalid LUCiD file {path}: {error}")
             continue
-        if pmt.shape != times.shape:
-            raise ValueError(f"LUCiD arrays have different shapes in {path}")
-        index = np.searchsorted(channels, pmt)
-        valid = index < len(channels)
-        valid[valid] = channels[index[valid]] == pmt[valid]
-        if not np.any(valid):
-            continue
-        np.add.at(total_pe, index[valid], 1)
-        events[np.unique(index[valid])] += 1
-        _accumulate_histogram(pmt, times, channels, edges, histogram, entries)
+        histogram += parquet_hist[0]
+        entries += parquet_hist[1]
+        total_pe += parquet_hist[2]
+    if event_pairs:
+        unique_pairs = np.unique(np.concatenate(event_pairs), axis=0)
+        np.add.at(events, unique_pairs[:, 0].astype(np.int64), 1)
     return (
         _density_from_histogram(histogram, entries, edges),
         entries,
         total_pe,
         events,
-    )
-
-
-def read_lucid_sim_histograms_merged(path, edges, chunk_size, channels):
-    """Read a merged LUCiD NPZ through bounded memmap chunks."""
-    if chunk_size <= 0:
-        raise ValueError("--sim-chunk-size must be positive")
-    channels = np.asarray(channels, dtype=np.int64)
-    histogram = np.zeros((len(channels), len(edges) - 1), dtype=np.int64)
-    entries = np.zeros(len(channels), dtype=np.int64)
-    total_pe = np.zeros(len(channels), dtype=np.int64)
-    with np.load(path, mmap_mode="r") as data:
-        for start in range(0, len(data["pe_hit_times"]), chunk_size):
-            stop = min(start + chunk_size, len(data["pe_hit_times"]))
-            pmt = np.asarray(data["hit_pmt_ids"][start:stop], dtype=np.int64)
-            times = np.asarray(
-                data["pe_hit_times"][start:stop], dtype=np.float64
-            )
-            _accumulate_histogram(
-                pmt, times, channels, edges, histogram, entries
-            )
-            index = np.searchsorted(channels, pmt)
-            valid = index < len(channels)
-            valid[valid] = channels[index[valid]] == pmt[valid]
-            np.add.at(total_pe, index[valid], 1)
-    return (
-        _density_from_histogram(histogram, entries, edges),
-        entries,
-        total_pe,
-        np.full(len(channels), -1, dtype=np.int64),
-    )
-
-
-def merge_lucid_sim(sim_files, output):
-    """Merge event NPZ arrays for explicit, user-requested preprocessing."""
-    ids, times = [], []
-    for path in tqdm(sim_files, desc="Merging LUCiD NPZ"):
-        with np.load(path) as data:
-            ids.append(np.asarray(data["hit_pmt_ids"], dtype=np.int32))
-            times.append(np.asarray(data["pe_hit_times"], dtype=np.float64))
-    if not ids:
-        raise ValueError("no LUCiD event files to merge")
-    output.parent.mkdir(parents=True, exist_ok=True)
-    np.savez_compressed(
-        output,
-        hit_pmt_ids=np.concatenate(ids),
-        pe_hit_times=np.concatenate(times),
     )
 
 
@@ -472,21 +491,16 @@ def _compute_sim_cache(args, channels, kind):
     edges = np.linspace(args.data_range[0], args.data_range[1], args.bins + 1)
     centers = (edges[:-1] + edges[1:]) / 2.0
     if kind == "lucid":
-        if args.lucid_sim_npz is not None:
-            result = read_lucid_sim_histograms_merged(
-                args.lucid_sim_npz, edges, args.sim_chunk_size, channels
+        files = iter_sim_files(args.lucid_sim_dir)
+        if args.brief:
+            files = files[:BRIEF_SIM_FILE_LIMIT]
+        if not files:
+            raise FileNotFoundError(
+                f"No LUCiD Parquet files found in {args.lucid_sim_dir}"
             )
-        else:
-            files = iter_sim_files(args.lucid_sim_dir, args.sim_file_glob)
-            if args.brief:
-                files = files[:BRIEF_SIM_FILE_LIMIT]
-            if not files:
-                raise FileNotFoundError(
-                    f"No LUCiD NPZ files found in {args.lucid_sim_dir}"
-                )
-            result = read_lucid_sim_histograms(
-                files, edges, args.sim_chunk_size, channels
-            )
+        result = read_lucid_sim_histograms(
+            files, edges, args.sim_chunk_size, channels
+        )
         label, output = args.lucid_label, args.sim_data
     else:
         files = iter_junosw_sim_files(
@@ -1209,11 +1223,6 @@ def parse_args(argv=None):
     parser.add_argument(
         "--sim-dir", "--lucid-sim-dir", dest="lucid_sim_dir", type=Path
     )
-    parser.add_argument(
-        "--sim-npz", "--lucid-sim-npz", dest="lucid_sim_npz", type=Path
-    )
-    parser.add_argument("--merge-sim-to", type=Path)
-    parser.add_argument("--sim-file-glob", default="*_ev*.npz")
     parser.add_argument("--sim-chunk-size", type=int, default=10_000_000)
     parser.add_argument("--lucid-label", default=DEFAULT_LUCID_LABEL)
     parser.add_argument("--junosw-sim-dir", type=Path)
@@ -1280,11 +1289,7 @@ def parse_args(argv=None):
     if args.long:
         args.data_range = (args.data_range[0], 1000.0)
         args.plot_range = (args.plot_range[0], 1000.0)
-    if args.lucid_sim_dir is not None and args.lucid_sim_npz is not None:
-        parser.error("specify at most one LUCiD simulation input")
-    if args.merge_sim_to is not None and args.lucid_sim_dir is None:
-        parser.error("--merge-sim-to requires --sim-dir")
-    if not any((args.lucid_sim_dir, args.lucid_sim_npz, args.junosw_sim_dir)):
+    if not any((args.lucid_sim_dir, args.junosw_sim_dir)):
         parser.error("provide at least one simulation input")
     try:
         args.irf_sigma_hamamatsu, args.irf_sigma_nnvt = resolve_irf_sigmas(
@@ -1337,16 +1342,10 @@ def main(argv=None):
     """Compute/load caches and render the three-source comparison."""
     args = parse_args(argv)
     args.output_dir.mkdir(parents=True, exist_ok=True)
-    if args.merge_sim_to is not None:
-        merge_lucid_sim(
-            iter_sim_files(args.lucid_sim_dir, args.sim_file_glob),
-            args.merge_sim_to,
-        )
-        return
     if args.plot_only:
         fsmp_data = load_data(args.fsmp_data)
         sources = []
-        if args.lucid_sim_dir is not None or args.lucid_sim_npz is not None:
+        if args.lucid_sim_dir is not None:
             sources.append(load_data(args.sim_data))
         if args.junosw_sim_dir is not None:
             sources.append(load_data(args.junosw_sim_data))
@@ -1358,7 +1357,7 @@ def main(argv=None):
         if fsmp_data is None:
             fsmp_data = compute_fsmp_data(args, channels, files)
         sources = []
-        if args.lucid_sim_dir is not None or args.lucid_sim_npz is not None:
+        if args.lucid_sim_dir is not None:
             source = None
             if not args.force:
                 source = _load_matching_cache(args.sim_data, channels, "lucid")

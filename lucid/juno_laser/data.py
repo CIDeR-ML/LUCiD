@@ -1,12 +1,115 @@
-"""Input handling for JUNO laser per-PE calibration data."""
+"""Input handling for JUNO laser per-PE calibration data.
+
+The simulation output is one FSMP/BAPPE-compatible Parquet event table per
+source position.  Its rows retain ``eid``, ``ch``, ``step``, ``PEt`` and
+``nu_lc`` so the table can be consumed by the same reader contract as FSMP.
+"""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterator
 
 import numpy as np
+import pyarrow as pa
+import pyarrow.parquet as pq
+
+
+SIMULATION_SCHEMA = pa.schema(
+    [
+        pa.field("eid", pa.uint64()),
+        pa.field("ch", pa.uint16()),
+        pa.field("offset", pa.uint16()),
+        pa.field("step", pa.uint16()),
+        pa.field("PEt", pa.list_(pa.float64())),
+        pa.field("e", pa.list_(pa.int8())),
+        pa.field("q", pa.list_(pa.float64())),
+        pa.field("nu_lc", pa.float64()),
+    ]
+)
+
+
+def simulation_table(
+    event_id,
+    pmt_ids,
+    pe_times,
+    *,
+    n_channels: int | None = None,
+    nu_lc=None,
+):
+    """Build one FSMP-style Parquet batch for a simulated event.
+
+    Input ``pmt_ids`` and ``pe_times`` are flat accepted-PE arrays.  Output
+    rows are grouped by PMT, while the event axis remains explicit in
+    ``eid``.  ``offset`` and ``step`` are zero because this simulator has no
+    FSMP time offset or Markov-chain step.  When ``n_channels`` is supplied,
+    one row is emitted for every channel, including empty ``PEt`` lists as
+    required by the FSMP full-step contract.  ``nu_lc`` may be a scalar or a
+    per-channel array.
+    """
+    if int(event_id) < 0 or int(event_id) > np.iinfo(np.uint64).max:
+        raise ValueError("event_id does not fit the uint64 Parquet schema")
+    pmt_ids = np.asarray(pmt_ids, dtype=np.int64)
+    pe_times = np.asarray(pe_times, dtype=np.float64)
+    if pmt_ids.ndim != 1 or pe_times.ndim != 1:
+        raise ValueError("pmt_ids and pe_times must be one-dimensional")
+    if pmt_ids.shape != pe_times.shape:
+        raise ValueError("pmt_ids and pe_times must have matching lengths")
+    if np.any((pmt_ids < 0) | (pmt_ids > np.iinfo(np.uint16).max)):
+        raise ValueError("PMT ids do not fit the uint16 Parquet schema")
+
+    if n_channels is not None:
+        n_channels = int(n_channels)
+        if not 0 < n_channels <= np.iinfo(np.uint16).max + 1:
+            raise ValueError("n_channels must fit the uint16 channel schema")
+        if np.any(pmt_ids >= n_channels):
+            raise ValueError("PMT ids exceed n_channels")
+
+    order = np.argsort(pmt_ids, kind="mergesort")
+    sorted_pmts = pmt_ids[order]
+    unique_pmts, starts = np.unique(sorted_pmts, return_index=True)
+    stops = np.r_[starts[1:], len(sorted_pmts)]
+    pe_values = [
+        pe_times[order[start:stop]].tolist()
+        for start, stop in zip(starts, stops)
+    ]
+    if n_channels is not None:
+        grouped = [[] for _ in range(n_channels)]
+        for channel, values in zip(unique_pmts, pe_values):
+            grouped[int(channel)] = values
+        unique_pmts = np.arange(n_channels, dtype=np.int64)
+        pe_values = grouped
+
+    rows = len(unique_pmts)
+    if nu_lc is None:
+        nu_values = [np.nan] * rows
+    else:
+        nu_array = np.asarray(nu_lc, dtype=np.float64)
+        if nu_array.ndim == 0:
+            nu_values = [float(nu_array)] * rows
+        elif n_channels is not None and nu_array.shape == (n_channels,):
+            nu_values = nu_array.tolist()
+        elif n_channels is None and nu_array.shape == (rows,):
+            nu_values = nu_array.tolist()
+        else:
+            raise ValueError("nu_lc must be scalar or match output channels")
+    arrays = [
+        pa.array(np.full(rows, event_id, dtype=np.uint64), type=pa.uint64()),
+        pa.array(unique_pmts.astype(np.uint16), type=pa.uint16()),
+        pa.array(np.zeros(rows, dtype=np.uint16), type=pa.uint16()),
+        pa.array(np.zeros(rows, dtype=np.uint16), type=pa.uint16()),
+        pa.array(pe_values, type=pa.list_(pa.float64())),
+        pa.array(
+            [[None] * len(values) for values in pe_values],
+            type=pa.list_(pa.int8()),
+        ),
+        pa.array(
+            [[None] * len(values) for values in pe_values],
+            type=pa.list_(pa.float64()),
+        ),
+        pa.array(nu_values, type=pa.float64()),
+    ]
+    return pa.Table.from_arrays(arrays, schema=SIMULATION_SCHEMA)
 
 
 @dataclass(frozen=True)
@@ -29,38 +132,74 @@ class PerPeObservation:
         return int(self.counts.shape[1])
 
 
-def event_files(data_dir: str | Path, max_events: int = 0) -> list[Path]:
-    """Return sorted event NPZ files, excluding trajectory-only files."""
+def event_file(data_dir: str | Path) -> Path:
+    """Return the single consolidated Parquet event table for a source.
+
+    The returned path follows the FSMP/BAPPE full-step file contract.  Event
+    selection is applied after reading the table, rather than by selecting
+    individual files, because one table contains many event IDs.
+    """
     root = Path(data_dir).expanduser()
-    files = sorted(path for path in root.glob("*.npz")
-                   if "traj" not in path.name.lower())
-    if max_events > 0:
-        files = files[:max_events]
+    if root.is_file():
+        if root.suffix.lower() not in {".parquet", ".pq"}:
+            raise ValueError(f"simulation event file must be Parquet: {root}")
+        return root
+    files = sorted(root.glob("*.parquet"))
+    files.extend(sorted(root.glob("*.pq")))
     if not files:
-        raise FileNotFoundError(f"No event NPZ files found in {root}")
-    return files
+        raise FileNotFoundError(f"No simulation Parquet file found in {root}")
+    if len(files) > 1:
+        raise ValueError(
+            "expected one consolidated Parquet file in "
+            f"{root}, found {len(files)}"
+        )
+    return files[0]
 
 
-def _event_arrays(path: Path) -> tuple[np.ndarray, np.ndarray]:
-    with np.load(path, allow_pickle=False) as data:
-        missing = {name for name in ("hit_pmt_ids", "pe_hit_times") if name not in data.files}
-        if missing:
-            raise ValueError(f"{path} is missing required arrays: {sorted(missing)}")
-        ids = np.asarray(data["hit_pmt_ids"], dtype=np.int64)
-        times = np.asarray(data["pe_hit_times"], dtype=np.float64)
-    if ids.ndim != 1 or times.ndim != 1 or ids.shape != times.shape:
-        raise ValueError(f"{path}: hit_pmt_ids and pe_hit_times must be matching 1-D arrays")
-    return ids, times
+def _read_event_table(path: Path):
+    """Read the FSMP/BAPPE columns and restore absolute PE times."""
+    table = pq.read_table(
+        path,
+        columns=["eid", "ch", "offset", "step", "PEt", "nu_lc"],
+    )
+    frame = table.to_pandas()
+    frame["PEt"] = [
+        np.asarray([] if values is None else values, dtype=np.float64)
+        + float(offset)
+        for values, offset in zip(frame["PEt"], frame["offset"])
+    ]
+    return frame
 
 
-def load_per_pe_histogram(data_dir: str | Path, *, n_sensors: int,
-                          time_min_ns: float, time_max_ns: float,
-                          bin_width_ns: float, max_events: int = 0) -> PerPeObservation:
+def _event_arrays(frame):
+    """Flatten a BAPPE event table to channel IDs, times and event IDs."""
+    lengths = frame["PEt"].map(len).to_numpy(dtype=np.int64)
+    if lengths.sum():
+        times = np.concatenate(frame.loc[lengths > 0, "PEt"].to_numpy())
+        channels = np.repeat(
+            frame.loc[lengths > 0, "ch"].to_numpy(dtype=np.int64),
+            lengths[lengths > 0],
+        )
+    else:
+        times = np.empty(0, dtype=np.float64)
+        channels = np.empty(0, dtype=np.int64)
+    return frame["eid"].to_numpy(dtype=np.int64), channels, times
+
+
+def load_per_pe_histogram(
+    data_dir: str | Path,
+    *,
+    n_sensors: int,
+    time_min_ns: float,
+    time_max_ns: float,
+    bin_width_ns: float,
+    max_events: int = 0,
+) -> PerPeObservation:
     """Read PE sequences and accumulate a PMT/time-bin count histogram.
 
     The event axis is intentionally retained only through ``n_events``.  The
-    returned counts are sufficient for the binned Poisson likelihood used by
-    v42 while preserving every accepted PE and its time bin.
+    returned counts are sufficient for the current binned Poisson likelihood
+    while preserving every accepted PE and its time bin.
     """
     if n_sensors <= 0:
         raise ValueError("n_sensors must be positive")
@@ -70,19 +209,27 @@ def load_per_pe_histogram(data_dir: str | Path, *, n_sensors: int,
         raise ValueError("bin_width_ns must be positive")
     n_bins = int(np.ceil((time_max_ns - time_min_ns) / bin_width_ns))
     counts = np.zeros((n_sensors, n_bins), dtype=np.float64)
-    n_events = 0
-    n_pe = 0
-
-    for path in event_files(data_dir, max_events=max_events):
-        ids, times = _event_arrays(path)
-        bins = np.floor((times - time_min_ns) / bin_width_ns).astype(np.int64)
-        valid = ((ids >= 0) & (ids < n_sensors) & (bins >= 0) &
-                 (bins < n_bins) & np.isfinite(times))
-        linear = ids[valid] * n_bins + bins[valid]
-        if linear.size:
-            counts += np.bincount(linear, minlength=n_sensors * n_bins).reshape(counts.shape)
-        n_pe += int(valid.sum())
-        n_events += 1
+    frame = _read_event_table(event_file(data_dir))
+    event_ids = frame["eid"].drop_duplicates().to_numpy(dtype=np.int64)
+    if max_events > 0:
+        event_ids = event_ids[:max_events]
+        frame = frame[frame["eid"].isin(event_ids)]
+    _, ids, times = _event_arrays(frame)
+    bins = np.floor((times - time_min_ns) / bin_width_ns).astype(np.int64)
+    valid = (
+        (ids >= 0)
+        & (ids < n_sensors)
+        & (bins >= 0)
+        & (bins < n_bins)
+        & np.isfinite(times)
+    )
+    linear = ids[valid] * n_bins + bins[valid]
+    if linear.size:
+        counts += np.bincount(
+            linear, minlength=n_sensors * n_bins
+        ).reshape(counts.shape)
+    n_pe = int(valid.sum())
+    n_events = int(len(event_ids))
 
     return PerPeObservation(
         counts=counts,
@@ -92,4 +239,3 @@ def load_per_pe_histogram(data_dir: str | Path, *, n_sensors: int,
         time_max_ns=float(time_max_ns),
         bin_width_ns=float(bin_width_ns),
     )
-
