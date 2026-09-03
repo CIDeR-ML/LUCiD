@@ -2,6 +2,8 @@
 Sphere-specific photon propagation functions with indexing fixes.
 """
 
+import numpy as np
+
 import jax
 import jax.numpy as jnp
 from functools import partial
@@ -323,11 +325,13 @@ def calculate_sphere_grid_centers(radius, n_divisions):
     return centers
 
 
+# Legacy placement on CPU was retained for historical comparisons:
 # @partial(jax.jit, static_argnums=(2, 3, 4), device=jax.devices('cpu')[0])
 @partial(jax.jit, static_argnums=(2, 3, 4))
-def create_inverted_sphere_sensor_map(assignments_geometric, assignments_distance, n_divisions,
-                                       max_candidates_per_ray, num_sensors):
-    """Create inverted sensor map for sphere prioritizing geometric intersections then closest sensors"""
+def _create_inverted_sphere_sensor_map_jax_legacy(
+        assignments_geometric, assignments_distance, n_divisions,
+        max_candidates_per_ray, num_sensors):
+    """Legacy JAX nested-scan implementation kept for comparison."""
     n_theta = n_divisions
     n_phi = 2 * n_divisions
     total_cells = n_theta * n_phi
@@ -413,6 +417,68 @@ def create_inverted_sphere_sensor_map(assignments_geometric, assignments_distanc
     )
     
     return final_map
+
+
+def create_inverted_sphere_sensor_map(
+        assignments_geometric, assignments_distance, n_divisions,
+        max_candidates_per_ray, num_sensors):
+    """Build a sphere cell-to-sensor map with a NumPy reverse index.
+
+    Geometric assignments are inserted first in sensor order. The nearest
+    sensor list then fills remaining slots, preserving the previous ordering,
+    duplicate suppression, and candidate limit semantics.
+    """
+    geometric = np.asarray(assignments_geometric)
+    nearest = np.asarray(assignments_distance)
+    n_divisions = int(n_divisions)
+    n_phi = 2 * n_divisions
+    total_cells = n_divisions * n_phi
+    candidate_limit = int(max_candidates_per_ray)
+    sensor_count = int(num_sensors)
+
+    if geometric.ndim != 3 or geometric.shape[2] != 2:
+        raise ValueError(
+            "assignments_geometric must have shape (n_sensors, n, 2)"
+        )
+    if nearest.shape != (total_cells, candidate_limit):
+        raise ValueError(
+            "assignments_distance shape does not match sphere grid"
+        )
+
+    # Each sensor contributes to at most four cells, so reverse insertion is
+    # linear in the number of sensors rather than cell_count * sensor_count.
+    candidates = [[] for _ in range(total_cells)]
+    for sensor_idx, assignments in enumerate(geometric):
+        for theta_idx, phi_idx in assignments:
+            theta_idx = int(theta_idx)
+            phi_idx = int(phi_idx)
+            if not (0 <= theta_idx < n_divisions):
+                continue
+            if not (0 <= phi_idx < n_phi):
+                continue
+            cell_idx = theta_idx * n_phi + phi_idx
+            cell = candidates[cell_idx]
+            if sensor_idx not in cell and len(cell) < candidate_limit:
+                cell.append(sensor_idx)
+
+    for cell_idx, nearest_sensors in enumerate(nearest):
+        cell = candidates[cell_idx]
+        for sensor_idx in nearest_sensors:
+            sensor_idx = int(sensor_idx)
+            if not (0 <= sensor_idx < sensor_count):
+                continue
+            if sensor_idx in cell:
+                continue
+            if len(cell) >= candidate_limit:
+                break
+            cell.append(sensor_idx)
+
+    inverted_map = np.full(
+        (total_cells, candidate_limit), -1, dtype=np.int32
+    )
+    for cell_idx, sensor_indices in enumerate(candidates):
+        inverted_map[cell_idx, :len(sensor_indices)] = sensor_indices
+    return jnp.asarray(inverted_map, dtype=jnp.int32)
 
 
 def find_intersected_sphere_sensors_differentiable(ray_origins, ray_directions, sensor_positions, sensor_radius,

@@ -19,9 +19,12 @@ for the rays whose nearest surface is the inner interface. Outer-hit rays are th
 untouched relative to the single-sphere path.
 """
 
+from functools import partial
+import logging
+import time
+
 import jax
 import jax.numpy as jnp
-from functools import partial
 
 from .sphere import (
     find_intersected_sphere_sensors_differentiable,
@@ -33,6 +36,9 @@ from .sphere import (
 from .base import find_closest_sensors
 from .surfaces import sphere_forward_t, nearest_interface
 from ..overlap import create_overlap_prob
+
+
+LOG = logging.getLogger("lucid.propagation.nested_sphere")
 
 
 def _sphere_forward_t(origin, direction, radius):
@@ -153,17 +159,38 @@ def create_nested_sphere_propagator(sensor_positions, sensor_radius,
     single-sphere machinery at ``r_outer``. Returns the same dict as the single-sphere
     propagator plus a per-ray ``hit_interface`` flag.
     """
+    started = time.perf_counter()
     sensor_positions = jnp.asarray(sensor_positions)
+    LOG.info("sensor map: assigning geometric PMT candidates")
 
     assignments_geometric = assign_sensors_to_sphere_grid(
         sensor_positions, sensor_radius, r_outer, n_divisions)
-    _ = create_sensor_sphere_grid_map(assignments_geometric, n_divisions)
+    jax.block_until_ready(assignments_geometric)
+    LOG.info("sensor map: geometric candidates ready (%.2fs)",
+             time.perf_counter() - started)
+
+    LOG.info("sensor map: creating sphere-grid lookup")
+    sensor_grid_map = create_sensor_sphere_grid_map(
+        assignments_geometric, n_divisions)
+    jax.block_until_ready(sensor_grid_map)
+    LOG.info("sensor map: sphere-grid lookup ready (%.2fs)",
+             time.perf_counter() - started)
+
+    LOG.info("sensor map: finding nearest PMT candidates")
     assignments_distance = find_closest_sensors(
         calculate_sphere_grid_centers(r_outer, n_divisions),
         sensor_positions, max_candidates_per_ray)
+    jax.block_until_ready(assignments_distance)
+    LOG.info("sensor map: nearest candidates ready (%.2fs)",
+             time.perf_counter() - started)
+
+    LOG.info("sensor map: building inverted cell-to-PMT lookup")
     inverted_sensor_map = create_inverted_sphere_sensor_map(
         assignments_geometric, assignments_distance, n_divisions,
         max_candidates_per_ray, sensor_positions.shape[0])
+    jax.block_until_ready(inverted_sensor_map)
+    LOG.info("sensor map: inverted lookup ready (%.2fs total)",
+             time.perf_counter() - started)
 
     if temperature is None:
         overlap_prob = create_overlap_prob(
@@ -173,6 +200,9 @@ def create_nested_sphere_propagator(sensor_positions, sensor_radius,
         overlap_prob = create_overlap_prob(
             temperature * sensor_radius, sensor_radius,
             st_width_frac=overlap_st_width_frac, renorm=overlap_renorm, mode=overlap_mode)
+
+    LOG.info("sensor map: nested-sphere propagator ready (%.2fs total)",
+             time.perf_counter() - started)
 
     @jax.jit
     def propagate_photons(photon_origins, photon_directions):

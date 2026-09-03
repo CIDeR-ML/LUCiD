@@ -353,6 +353,7 @@ def _make_forward(
 
 
 def simulate(args):
+    """Run the configured laser simulation and write its PE table."""
     root = Path(args.config).resolve().parent
     with Path(args.config).open() as stream:
         config = json.load(stream)
@@ -365,6 +366,8 @@ def simulate(args):
         format="%(asctime)s %(levelname)s %(message)s",
     )
 
+    t0 = time.perf_counter()
+    LOG.info("building nested-sphere detector geometry from %s", geom_path)
     geom = DetectorGeometry.from_config(
         str(geom_path),
         temperature=None,
@@ -372,12 +375,21 @@ def simulate(args):
         detector_type="nested_sphere",
     )
     n_sensors = geom.num_sensors
+    LOG.info("detector geometry ready: %d PMTs (%.2fs)", n_sensors,
+             time.perf_counter() - t0)
+
+    t0 = time.perf_counter()
+    LOG.info(
+        "loading physics parameters from %s",
+        root / config["physics_config"],
+    )
     physics_path = root / config["physics_config"]
     dp, _, _ = load_physics_config(
         str(physics_path),
         num_sensors=n_sensors,
         scalar_ref_wavelength=config["wavelength_nm"],
     )
+    LOG.info("physics parameters ready (%.2fs)", time.perf_counter() - t0)
     n_photons = int(args.n_photons or simulation["n_photons"])
     intensity = float(
         args.intensity or config["source"]["default_intensity"]
@@ -395,6 +407,8 @@ def simulate(args):
         or simulation.get("record_trajectories", False)
         or config.get("transport", {}).get("record_trajectories", False)
     )
+    LOG.info("constructing forward function: events=%d, photons=%d, steps=%d",
+             int(args.n_events or simulation["n_events"]), n_photons, n_steps)
     forward = _make_forward(
         geom,
         dp,
@@ -404,6 +418,10 @@ def simulate(args):
         intensity=intensity,
         wavelength_nm=float(config["wavelength_nm"]),
         record_trajectories=record_trajectories,
+    )
+    LOG.info(
+        "forward function constructed; first event will trigger JIT "
+        "compilation"
     )
     base_key = jax.random.PRNGKey(args.seed)
     event_stats = []
@@ -437,9 +455,13 @@ def simulate(args):
         if record_trajectories
         else nullcontext()
     )
+    LOG.info("opening Parquet output: %s", output)
+    if record_trajectories:
+        LOG.info("opening trajectory output: %s", trajectory_output)
     with trajectory_context as trajectory_file, pq.ParquetWriter(
         output, schema=schema, compression="zstd"
     ) as writer:
+        LOG.info("output files opened; entering event loop")
         if trajectory_file is not None:
             trajectory_file.attrs["format"] = (
                 "lucid-juno-laser-trajectories"
@@ -450,6 +472,10 @@ def simulate(args):
         for event in range(n_events):
             seed = args.seed + event
             t0 = time.perf_counter()
+            if event == 0:
+                LOG.info("event 0: starting first forward call and JIT compilation")
+            else:
+                LOG.info("event %d: starting forward call", event)
             result = forward(
                 jax.random.fold_in(base_key, event),
                 jax.random.fold_in(
@@ -458,6 +484,7 @@ def simulate(args):
             )
             jax.block_until_ready(result)
             elapsed = time.perf_counter() - t0
+            LOG.info("event %d: forward result ready (%.2fs)", event, elapsed)
             if record_trajectories:
                 (
                     log_w,
@@ -528,6 +555,7 @@ def simulate(args):
                     nu_lc=nu_lc,
                 )
             )
+            LOG.info("event %d: Parquet rows written", event)
             stats = {
                 "event": event,
                 "seed": seed,
