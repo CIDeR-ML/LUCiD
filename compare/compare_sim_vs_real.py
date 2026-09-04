@@ -11,8 +11,10 @@ every PE in every stored row; ``first`` mode keeps the first PE per row.
 LUCiD simulation input uses the same ``eid``/``ch``/``offset``/``step``/``PEt``
 contract as FSMP.  Only consolidated Parquet input is accepted; ``--sim-dir``
 may contain a shell-style wildcard for matching one source-position folder.
-When LUCiD data are present, FSMP loading stops after reaching the selected
-channel PE total from the LUCiD source, finishing the current file first.
+The channel subset is selected before reading any source.  All three inputs
+are therefore restricted to the same reproducible channel subset, and FSMP
+loading stops after reaching that subset's first LUCiD PE total, finishing the
+current file first.
 """
 
 import argparse
@@ -41,7 +43,6 @@ except ImportError:  # Direct ``python compare/compare_sim_vs_real.py``.
 
 
 PMT_TYPE_NAME = base.PMT_TYPE_NAME
-FULL_CHANNEL_COUNT = base.FULL_CHANNEL_COUNT
 NORTH_CHANNEL_COUNT = base.NORTH_CHANNEL_COUNT
 METRIC_HISTOGRAM_BINS = base.METRIC_HISTOGRAM_BINS
 BRIEF_FSMP_FILE_LIMIT = base.BRIEF_FSMP_FILE_LIMIT
@@ -264,7 +265,7 @@ def read_fsmp_times_by_channel(
     batch_size=250_000,
     target_pe=None,
 ):
-    """Read FSMP Parquet until the selected-channel PE target is reached.
+    """Read FSMP Parquet until the detector-wide PE target is reached.
 
     The current file is always read to completion. Once its accepted PE count
     makes the cumulative total reach ``target_pe``, later files are skipped.
@@ -319,7 +320,7 @@ def read_fsmp_times_by_channel(
                     time_mode,
                 )
             readable += 1
-            if target_pe and loaded_pe >= target_pe:
+            if target_pe is not None and loaded_pe >= target_pe:
                 break
         except (OSError, KeyError, ValueError, pa.ArrowException) as error:
             if file_limit is None:
@@ -342,10 +343,10 @@ def read_fsmp_times_by_channel(
     }
 
 
-def selected_channels(args):
-    """Select reproducible channels and locate FSMP files."""
-    files = list(iter_fsmp_files(args.fsmp_dir))
-    if not files:
+def selected_channels(args, require_files=True, files=None):
+    """Select final plot channels and optionally locate FSMP files."""
+    files = list(iter_fsmp_files(args.fsmp_dir)) if files is None else files
+    if require_files and not files:
         raise FileNotFoundError(
             f"No FSMP Parquet files found in {args.fsmp_dir}"
         )
@@ -520,22 +521,23 @@ def _read_junosw_histograms(files, args, edges, channels):
     )
 
 
-def _compute_sim_cache(args, channels, kind):
+def _compute_sim_cache(args, channels, kind, sim_dir=None, label=None, output=None):
     """Build one simulation cache in the common source schema."""
     edges = np.linspace(args.data_range[0], args.data_range[1], args.bins + 1)
     centers = (edges[:-1] + edges[1:]) / 2.0
     if kind == "lucid":
-        files = iter_sim_files(args.lucid_sim_dir)
+        files = iter_sim_files(sim_dir if sim_dir is not None else args.lucid_sim_dir[0])
         if args.brief:
             files = files[:BRIEF_SIM_FILE_LIMIT]
         if not files:
             raise FileNotFoundError(
-                f"No LUCiD Parquet files found in {args.lucid_sim_dir}"
+                f"No LUCiD Parquet files found in {sim_dir}"
             )
         result = read_lucid_sim_histograms(
             files, edges, args.sim_chunk_size, channels
         )
-        label, output = args.lucid_label, args.sim_data
+        label = label if label is not None else args.lucid_label[0]
+        output = output if output is not None else args.sim_data[0]
     else:
         files = iter_junosw_sim_files(
             args.junosw_sim_dir, args.junosw_sim_file_glob
@@ -788,13 +790,19 @@ def _simulation_colors(data, labels):
         data.get("simulation_kinds", ["simulation"] * len(labels))
     ).astype(str)
     colors = []
+    lucid_count = 0  # 记录 LUCiD 源的数量
     for index, (kind, label) in enumerate(zip(kinds, labels)):
         key, text = kind.lower(), str(label).lower()
-        if key in SOURCE_COLORS:
-            colors.append(SOURCE_COLORS[key])
-        elif "lucid" in text:
-            colors.append(SOURCE_COLORS["lucid"])
-        elif "juno" in text:
+        if key == "lucid" or "lucid" in text:
+            if lucid_count == 0:
+                colors.append(SOURCE_COLORS["lucid"])
+            else:
+                # 第2个及之后的LUCiD使用备用颜色
+                colors.append(
+                    FALLBACK_SOURCE_COLORS[(lucid_count - 1) % len(FALLBACK_SOURCE_COLORS)]
+                )
+            lucid_count += 1
+        elif key == "junosw" or "juno" in text:
             colors.append(SOURCE_COLORS["junosw"])
         else:
             colors.append(
@@ -830,9 +838,25 @@ def _processing_title(data):
     )
 
 
-def write_channel_manifest(path, data, run, source_z):
-    """Write selected channel metadata as an inspectable CSV."""
+def write_channel_manifest(
+    path,
+    data,
+    run,
+    source_z,
+    irf_sigma_hamamatsu=0.0,
+    irf_sigma_nnvt=0.0,
+):
+    """Write selected channel metadata, including configured IRF widths."""
     channels = np.asarray(data["channels"], dtype=np.int64)
+    irf = np.asarray(
+        [
+            irf_sigma_for_pmt_type(
+                pmt_type, irf_sigma_hamamatsu, irf_sigma_nnvt
+            )
+            for pmt_type in data["pmt_type"]
+        ],
+        dtype=np.float64,
+    )
     fields = [
         "source_z_m",
         "run",
@@ -861,7 +885,7 @@ def write_channel_manifest(path, data, run, source_z):
                     "z_mm": float(data["z"][index]),
                     "theta_deg": float(data["theta"][index]),
                     "tts_ns": float(data["tts"][index]),
-                    "irf_sigma_ns": float(data["irf_sigma_by_channel"][index]),
+                    "irf_sigma_ns": float(irf[index]),
                 }
             )
     print(f"Wrote {path}")
@@ -1264,11 +1288,17 @@ def parse_args(argv=None):
     )
     parser.add_argument("--pmt-map", type=Path, default=Path(DEFAULT_PMT_MAP))
     parser.add_argument("--pmt", type=Path, default=Path(DEFAULT_PMT_FILE))
+    # 修改为支持多个 LUCiD 目录
     parser.add_argument(
-        "--sim-dir", "--lucid-sim-dir", dest="lucid_sim_dir", type=Path
+        "--sim-dir", "--lucid-sim-dir", dest="lucid_sim_dir", type=Path, 
+        nargs='+', help="LUCiD simulation directories (provide multiple for multiple sources)"
     )
     parser.add_argument("--sim-chunk-size", type=int, default=10_000_000)
-    parser.add_argument("--lucid-label", default=DEFAULT_LUCID_LABEL)
+    # 修改为支持多个 LUCiD 标签
+    parser.add_argument(
+        "--lucid-label", nargs='+', default=None,
+        help="Labels for LUCiD sources (must match number of --lucid-sim-dir)"
+    )
     parser.add_argument("--junosw-sim-dir", type=Path)
     parser.add_argument("--junosw-sim-group", default="Sim")
     parser.add_argument(
@@ -1355,8 +1385,24 @@ def parse_args(argv=None):
     args.fsmp_data = (
         args.output_dir / f"fsmp_data_{suffix}_{args.fsmp_time_mode}.npz"
     )
-    args.sim_data = args.output_dir / f"sim_data_{suffix}.npz"
-    args.junosw_sim_data = args.output_dir / f"junosw_sim_data_{suffix}.npz"
+
+    if args.lucid_sim_dir:
+        if args.lucid_label is None:
+            args.lucid_label = [
+                f"LUCiD {i + 1}" for i in range(len(args.lucid_sim_dir))
+            ]
+        elif len(args.lucid_label) != len(args.lucid_sim_dir):
+            parser.error("Number of --lucid-label must match --lucid-sim-dir")
+        args.sim_data = [
+            args.output_dir / f"sim_data_{suffix}_{i}.npz"
+            for i in range(len(args.lucid_sim_dir))
+        ]
+    else:
+        args.sim_data = []
+
+    args.junosw_sim_data = (
+        args.output_dir / f"junosw_sim_data_{suffix}.npz"
+    )
     args.aligned_data = args.output_dir / f"aligned_data_{suffix}.npz"
     args.stats_csv = args.output_dir / f"comparison_stats_{suffix}.csv"
     args.channel_manifest = (
@@ -1396,23 +1442,62 @@ def main(argv=None):
     """Compute/load caches and render the three-source comparison."""
     args = parse_args(argv)
     args.output_dir.mkdir(parents=True, exist_ok=True)
+    files = list(iter_fsmp_files(args.fsmp_dir))
+    if not args.plot_only and not files:
+        raise FileNotFoundError(
+            f"No FSMP Parquet files found in {args.fsmp_dir}"
+        )
+    channels, _ = selected_channels(
+        args, require_files=False, files=files
+    )
     if args.plot_only:
         fsmp_data = load_data(args.fsmp_data)
-        sources = []
-        if args.lucid_sim_dir is not None:
-            sources.append(load_data(args.sim_data))
-        if args.junosw_sim_dir is not None:
-            sources.append(load_data(args.junosw_sim_data))
-    else:
-        channels, files = selected_channels(args)
-        sources = []
-        if args.lucid_sim_dir is not None:
-            source = None
-            if not args.force:
-                source = _load_matching_cache(args.sim_data, channels, "lucid")
-            sources.append(
-                source or _compute_sim_cache(args, channels, "lucid")
+        if not np.array_equal(fsmp_data.get("channels"), channels):
+            raise ValueError(
+                "--plot-only requires a matching selected-channel FSMP cache; "
+                "recompute without --plot-only"
             )
+        sources = []
+        if args.lucid_sim_dir:
+            for index, _ in enumerate(args.lucid_sim_dir):
+                source = _load_matching_cache(
+                    args.sim_data[index], channels, "lucid"
+                )
+                if source is None:
+                    raise ValueError(
+                        "--plot-only requires matching selected-channel "
+                        "LUCiD caches"
+                    )
+                sources.append(source)
+        if args.junosw_sim_dir is not None:
+            source = _load_matching_cache(
+                args.junosw_sim_data, channels, "junosw"
+            )
+            if source is None:
+                raise ValueError(
+                    "--plot-only requires a matching selected-channel "
+                    "JUNOsw cache"
+                )
+            sources.append(source)
+    else:
+        sources = []
+        if args.lucid_sim_dir:
+            for index, sim_dir in enumerate(args.lucid_sim_dir):
+                source = None
+                if not args.force:
+                    source = _load_matching_cache(
+                        args.sim_data[index], channels, "lucid"
+                    )
+                if source is None:
+                    source = _compute_sim_cache(
+                        args,
+                        channels,
+                        "lucid",
+                        sim_dir=sim_dir,
+                        label=args.lucid_label[index],
+                        output=args.sim_data[index],
+                    )
+                sources.append(source)
         if args.junosw_sim_dir is not None:
             source = None
             if not args.force:
@@ -1422,12 +1507,13 @@ def main(argv=None):
             sources.append(
                 source or _compute_sim_cache(args, channels, "junosw")
             )
+        # Limit FSMP input using the selected-channel LUCiD PE count.
         lucid_sources = [
             source for source in sources
             if str(np.asarray(source.get("kind", "")).item()) == "lucid"
         ]
         lucid_source = lucid_sources[0] if lucid_sources else None
-        args.fsmp_target_pe = (
+        lucid_total_pe = (
             int(
                 np.asarray(
                     lucid_source.get(
@@ -1439,17 +1525,32 @@ def main(argv=None):
             if lucid_source is not None
             else None
         )
+        args.fsmp_target_pe = lucid_total_pe
+        if lucid_total_pe is not None:
+            print(
+                "FSMP target from selected-channel LUCiD simulation: "
+                f"{args.fsmp_target_pe} PE"
+            )
         fsmp_data = None
         if not args.force:
             fsmp_data = _load_matching_cache(
-                args.fsmp_data, channels, target_pe=args.fsmp_target_pe
+                args.fsmp_data,
+                channels,
+                target_pe=args.fsmp_target_pe,
             )
         if fsmp_data is None:
             fsmp_data = compute_fsmp_data(args, channels, files)
     if not sources:
         raise RuntimeError("No simulation source was loaded")
     fsmp_data = attach_pmt_coordinates(fsmp_data, args.pmt_map)
-    write_channel_manifest(args.channel_manifest, fsmp_data, args.run, args.z)
+    write_channel_manifest(
+        args.channel_manifest,
+        fsmp_data,
+        args.run,
+        args.z,
+        args.irf_sigma_hamamatsu,
+        args.irf_sigma_nnvt,
+    )
     processing = processing_string(
         not args.no_tts,
         args.irf_sigma_hamamatsu,
