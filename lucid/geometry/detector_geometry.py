@@ -22,13 +22,15 @@ class DetectorGeometry(NamedTuple):
     medium: MediumProperties                    # material physics (inner medium for nested)
     detector: object = None                     # the Detector instance
     propagator: Optional[Callable] = None       # JIT-compiled propagate_photons
-    # --- Two-medium (nested) extension. Appended LAST → single-medium construction
-    #     is unchanged; these stay None / defaults for every single-medium detector. ---
-    is_nested: bool = False                      # True for nested_sphere (two media + interface)
-    medium_outer: Optional[MediumProperties] = None   # outer (buffer/water) medium
+    # --- Nested extension. Appended LAST -> single-medium construction is unchanged. ---
+    is_nested: bool = False                      # nested sphere with interfaces
+    medium_outer: Optional[MediumProperties] = None   # outer water medium (legacy)
     speed_of_light_outer: Optional[float] = None      # m/ns in the outer medium
-    r_inner: Optional[float] = None                   # interface radius (m)
+    r_inner: Optional[float] = None                   # LS inner radius (m)
     r_outer: Optional[float] = None                   # outer/PMT radius (m)
+    medium_acrylic: Optional[MediumProperties] = None # optional shell (region 1)
+    speed_of_light_acrylic: Optional[float] = None    # m/ns in Acrylic
+    r_acrylic: Optional[float] = None                 # Acrylic outer radius (m)
 
     @staticmethod
     def from_config(json_filename: str,
@@ -101,6 +103,14 @@ class DetectorGeometry(NamedTuple):
             outer_material = _cfg.get('outer_material', 'water')
             medium_inner = make_medium(inner_material)
             medium_outer = make_medium(outer_material)
+            acrylic_material = _cfg.get('acrylic_material')
+            if detector.r_acrylic is not None and not acrylic_material:
+                raise ValueError(
+                    "acrylic_material is required when acrylic_radius is set")
+            medium_acrylic = (
+                make_medium(acrylic_material)
+                if detector.r_acrylic is not None else None
+            )
             grid_params.setdefault('max_candidates_per_ray', max_candidates_per_ray)
             detector.configure_grid(**grid_params)
             from lucid.propagation.nested_sphere import create_nested_sphere_propagator
@@ -110,7 +120,8 @@ class DetectorGeometry(NamedTuple):
                 temperature=temperature, max_candidates_per_ray=max_candidates_per_ray,
                 overlap_st_width_frac=overlap_st_width_frac,
                 overlap_renorm=overlap_renorm, overlap_mode=overlap_mode,
-                apply_angular_acceptance=_apply_cos)
+                apply_angular_acceptance=_apply_cos,
+                r_acrylic=detector.r_acrylic)
             return DetectorGeometry(
                 detector_type=actual_type, sensor_points=sensor_points,
                 sensor_radius=sensor_radius, num_sensors=num_sensors,
@@ -118,7 +129,11 @@ class DetectorGeometry(NamedTuple):
                 detector=detector, propagator=propagator,
                 is_nested=True, medium_outer=medium_outer,
                 speed_of_light_outer=medium_outer.speed_of_light,
-                r_inner=detector.r_inner, r_outer=detector.r_outer)
+                r_inner=detector.r_inner, r_outer=detector.r_outer,
+                medium_acrylic=medium_acrylic,
+                speed_of_light_acrylic=(medium_acrylic.speed_of_light
+                                        if medium_acrylic is not None else None),
+                r_acrylic=detector.r_acrylic)
 
         # Propagator — string telescopes use the volume (per-DOM) propagator;
         # surface detectors (cylinder/sphere/box) use the shared grid propagator.

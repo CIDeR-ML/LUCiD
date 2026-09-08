@@ -1,4 +1,4 @@
-"""Nested two-sphere detector geometry (JUNO-like).
+"""Nested concentric detector geometry (JUNO-like).
 
 An inner sphere (liquid-scintillator ↔ water optical interface) concentric with an
 outer sphere (the PMT surface + reflecting wall). Sensors live on the **outer** sphere,
@@ -22,9 +22,15 @@ from .registry import register_detector
 
 @register_detector('nested_sphere')
 class NestedSphere(Sphere):
-    """Two concentric spheres: inner optical interface + outer PMT/wall surface."""
+    """Two-layer detector, optionally extended with an Acrylic shell.
 
-    def __init__(self, inner_radius, outer_radius, n_sensors, sensor_radius):
+    With ``acrylic_radius=None`` this retains the historical two-medium
+    LS--Water geometry.  When supplied, the radii define three regions:
+    LS, Acrylic, and Water.
+    """
+
+    def __init__(self, inner_radius, outer_radius, n_sensors, sensor_radius,
+                 acrylic_radius=None):
         """
         Parameters
         ----------
@@ -36,6 +42,9 @@ class NestedSphere(Sphere):
             Number of photosensors on the outer surface.
         sensor_radius : float
             Radius of each sensor.
+        acrylic_radius : float, optional
+            Outer radius of the Acrylic shell (metres).  It must lie strictly
+            between ``inner_radius`` and ``outer_radius``.
         """
         if not (inner_radius < outer_radius):
             raise ValueError(
@@ -43,11 +52,17 @@ class NestedSphere(Sphere):
         # Sphere.__init__ places sensors on a sphere of radius=outer_radius (self.r).
         super().__init__(outer_radius, n_sensors, sensor_radius)
         self.r_inner = inner_radius
+        self.r_acrylic = acrylic_radius
         self.r_outer = outer_radius
+        if acrylic_radius is not None and not (
+                inner_radius < acrylic_radius < outer_radius):
+            raise ValueError(
+                "acrylic_radius must lie strictly between inner_radius and "
+                "outer_radius")
 
     @classmethod
     def from_pmt_file(cls, csv_file_path, inner_radius, outer_radius,
-                      sensor_radius):
+                      sensor_radius, acrylic_radius=None):
         """Build a nested sphere using externally supplied PMT positions.
 
         The CSV must contain ``CopyNo X Y Z`` columns with coordinates in mm.
@@ -92,7 +107,9 @@ class NestedSphere(Sphere):
                 f"PMT positions in {csv_path!r} contain non-finite values"
             )
 
-        instance = cls(inner_radius, outer_radius, len(positions), sensor_radius)
+        instance = cls(
+            inner_radius, outer_radius, len(positions), sensor_radius,
+            acrylic_radius=acrylic_radius)
         instance.all_points = positions
         instance.ID_to_position = {
             i: positions[i] for i in range(len(positions))
@@ -106,9 +123,18 @@ class NestedSphere(Sphere):
         return jnp.linalg.norm(positions, axis=1) <= self.r_outer
 
     def region_of(self, positions):
-        """Per-position medium id: 0 = inner medium (r < r_inner), 1 = outer medium.
+        """Return the optical medium id at each position.
 
-        Used to initialise each photon's ``medium_id`` from its emission point.
+        For the historical two-layer geometry, ids are ``0`` (inner) and
+        ``1`` (outer).  With an Acrylic shell, ids are ``0`` (LS), ``1``
+        (Acrylic), and ``2`` (Water).  Boundary points belong to the region
+        immediately outside the boundary.
         """
         r = jnp.linalg.norm(positions, axis=1)
-        return (r >= self.r_inner).astype(jnp.int32)
+        if self.r_acrylic is None:
+            return (r >= self.r_inner).astype(jnp.int32)
+        return jnp.where(
+            r >= self.r_acrylic,
+            2,
+            jnp.where(r >= self.r_inner, 1, 0),
+        ).astype(jnp.int32)

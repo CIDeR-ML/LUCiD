@@ -17,8 +17,8 @@ Example::
         --n-events 10
 
 The default configuration is ``config/JUNO_laser_config.json``.  The script
-does not alter the public simulator API; it only supplies the nested-sphere
-transport state required by the two-medium laser adapter.
+does not alter the public simulator API; it supplies the nested-sphere
+transport state required by the two- or three-medium laser adapter.
 """
 
 from __future__ import annotations
@@ -105,16 +105,19 @@ def _rotate_directions(directions, key):
     return directions @ _rotation_matrix(key, directions.dtype).T
 
 
-def _lengths_at(material_dir: Path, wavelength_nm: float):
-    """Evaluate scalar lengths at ``wavelength_nm``."""
+def _lengths_at(material_dir: Path, wavelength_nm: float,
+                filenames=None):
+    """Evaluate scalar optical lengths at ``wavelength_nm``.
+
+    ``filenames`` is ordered from the innermost to outermost transport
+    medium.  The default preserves the historical LS/Water configuration.
+    """
     values = {}
     wl = float(wavelength_nm)
-    for name in ("inner", "outer"):
-        filename = (
-            "juno_laser_labls.json"
-            if name == "inner"
-            else "juno_laser_water.json"
-        )
+    if filenames is None:
+        filenames = ("juno_laser_labls.json", "juno_laser_water.json")
+    for index, filename in enumerate(filenames):
+        name = str(index)
         with (material_dir / filename).open() as stream:
             data = json.load(stream)
         symmetric = data["scattering"]["symmetric"]
@@ -147,14 +150,19 @@ def _lengths_at(material_dir: Path, wavelength_nm: float):
             1 / max(alpha_abs, 1e-30),
             float(data["refractive_index"]),
         )
-    return values
+    return tuple(values[str(index)] for index in range(len(filenames)))
 
 
 def _make_forward(
     det_geom, dp, *, n_photons, n_steps, source, intensity, wavelength_nm,
     reflection_model="scalar", record_trajectories=False,
 ):
-    """Create a JIT nested-sphere forward returning raw hit arrays."""
+    """Create a JIT nested-sphere forward returning raw hit arrays.
+
+    The number of transport media is inferred from ``det_geom``.  A geometry
+    without ``medium_acrylic`` follows the legacy LS/Water path; a geometry
+    with it uses the LS/Acrylic/Water state machine.
+    """
     detector = det_geom.detector
     propagate = det_geom.propagator
     n_sensors = det_geom.num_sensors
@@ -164,29 +172,36 @@ def _make_forward(
     n_outer = jnp.asarray(
         det_geom.medium_outer.refractive_index, dtype=jnp.float32
     )
-    c_vacuum = float(det_geom.speed_of_light) * float(
-        det_geom.medium.refractive_index
-    )
+    has_acrylic = det_geom.medium_acrylic is not None
+    media = (det_geom.medium, det_geom.medium_acrylic,
+             det_geom.medium_outer) if has_acrylic else (
+                 det_geom.medium, det_geom.medium_outer)
+    refractive_indices = jnp.asarray(
+        [medium.refractive_index for medium in media], dtype=jnp.float32)
+    speed_values = jnp.asarray(
+        [medium.speed_of_light for medium in media], dtype=jnp.float32)
     reflection_fn, build_reflection_params = get_reflection_model(
         reflection_model
     )
     refl_params = build_reflection_params(dp)
     photon_step = make_photon_step(
-        "sample", has_interface=True, reflection_fn=reflection_fn
+        "sample", has_interface=True, reflection_fn=reflection_fn,
+        multi_interface=has_acrylic,
     )
     source = isotropic_source(
         source, intensity=intensity, wavelength=wavelength_nm
     )
     qc = dp.per_pmt.qe_corrections
     qe = float(dp.response.qe)
-    sl_in, ml_in, al_in, _ = _lengths_at(
-        Path(__file__).resolve().parents[1] / "config" / "materials",
-        wavelength_nm,
-    )["inner"]
-    sl_out, ml_out, al_out, _ = _lengths_at(
-        Path(__file__).resolve().parents[1] / "config" / "materials",
-        wavelength_nm,
-    )["outer"]
+    material_dir = Path(__file__).resolve().parents[1] / "config" / "materials"
+    filenames = tuple(f"{medium.material}.json" for medium in media)
+    lengths = _lengths_at(material_dir, wavelength_nm, filenames)
+    sl_values = [item[0] for item in lengths]
+    ml_values = [item[1] for item in lengths]
+    al_values = [item[2] for item in lengths]
+    scatter_lengths = jnp.asarray(sl_values, dtype=jnp.float32)
+    mie_scatter_lengths = jnp.asarray(ml_values, dtype=jnp.float32)
+    absorption_lengths = jnp.asarray(al_values, dtype=jnp.float32)
 
     @jax.jit
     def forward(key, source_key):
@@ -235,19 +250,18 @@ def _make_forward(
             hit_sensor = jnp.max(hit["inside_sensor"], axis=0)
             key, subkey = jax.random.split(key)
             ray_keys = jax.random.split(subkey, n_photons)
-            in_inner = medium_id == 0
-            scatter = jnp.where(in_inner, sl_in, sl_out)
-            mie = jnp.where(in_inner, ml_in, ml_out)
-            absorb = jnp.where(in_inner, al_in, al_out)
-            speed = jnp.where(
-                in_inner, c_vacuum / n_inner, c_vacuum / n_outer
-            )
+            scatter = scatter_lengths[medium_id]
+            mie = mie_scatter_lengths[medium_id]
+            absorb = absorption_lengths[medium_id]
+            speed = speed_values[medium_id]
+            interface_index = hit.get(
+                "interface_index", jnp.zeros_like(medium_id))
             result = jax.vmap(
                 photon_step,
                 in_axes=(0, 0, 0, 0, 0,
                          0, 0, None, None, 0,
-                         0, None, 0, 0,
-                         0, 0, None, None),
+                0, None, 0, 0,
+                         0, 0, None, None, 0, None),
             )(
                 positions,
                 directions,
@@ -267,6 +281,8 @@ def _make_forward(
                 medium_id,
                 n_inner,
                 n_outer,
+                interface_index,
+                refractive_indices,
             )
             (
                 new_pos,

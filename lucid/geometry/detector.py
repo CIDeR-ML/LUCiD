@@ -139,9 +139,11 @@ def generate_detector(file_path):
                 csv_path,
                 geom_def['inner_radius'],
                 geom_def['outer_radius'],
-                geom_def['sensor_radius'])
+                geom_def['sensor_radius'],
+                acrylic_radius=geom_def.get('acrylic_radius'))
         return cls(geom_def['inner_radius'], geom_def['outer_radius'],
-                   geom_def['n_sensors'], geom_def['sensor_radius'])
+                   geom_def['n_sensors'], geom_def['sensor_radius'],
+                   acrylic_radius=geom_def.get('acrylic_radius'))
     elif cls is Sphere:
         return cls(geom_def['radius'], geom_def['n_sensors'], geom_def['sensor_radius'])
     elif cls is Box:

@@ -89,6 +89,45 @@ def intersect_two_spheres_forward(origin, direction, r_inner, r_outer):
     return t_hit, hit_inner, point, normal
 
 
+def intersect_three_spheres_forward(origin, direction, r_ls, r_acrylic,
+                                    r_outer):
+    """Nearest forward surface for a three-layer concentric shell.
+
+    Parameters
+    ----------
+    origin, direction : jnp.ndarray
+        One ray origin and direction.  The direction need not be unit length.
+    r_ls, r_acrylic, r_outer : float
+        Increasing radii for the LS--Acrylic interface, Acrylic--Water
+        interface, and the outer instrumented surface.
+
+    Returns
+    -------
+    t_hit : float
+        Distance to the nearest strictly-forward surface.
+    surface_index : int
+        ``0`` for LS--Acrylic, ``1`` for Acrylic--Water, ``2`` for the
+        outer surface, or ``-1`` when no forward surface exists.
+    point, normal : jnp.ndarray
+        Hit point and outward radial normal.
+
+    This helper is intentionally independent of sensor lookup and photon
+    transport.  It provides the deterministic geometry contract used by the
+    later three-medium propagator.
+    """
+    radii = jnp.asarray([r_ls, r_acrylic, r_outer])
+    ts, valid = jax.vmap(
+        lambda radius: _sphere_forward_t(origin, direction, radius)
+    )(radii)
+    index = jnp.argmin(ts)
+    has_hit = jnp.any(valid)
+    surface_index = jnp.where(has_hit, index, -jnp.ones_like(index))
+    t_hit = ts[index]
+    point = origin + t_hit * direction
+    normal = point / (jnp.linalg.norm(point) + 1e-10)
+    return t_hit, surface_index, point, normal
+
+
 batch_intersect_two_spheres = jax.vmap(
     intersect_two_spheres_forward, in_axes=(0, 0, None, None))
 
@@ -97,12 +136,15 @@ def find_intersected_nested_sphere_sensors(ray_origins, ray_directions,
                                            sensor_positions, sensor_radius,
                                            r_inner, r_outer, n_divisions,
                                            inverted_sensor_map, temperature, overlap_prob,
-                                           apply_angular_acceptance=False):
+                                           apply_angular_acceptance=False,
+                                           r_acrylic=None):
     """Outer-sphere sensor lookup (reused) with inner-interface override.
 
     Computes the single-sphere result at ``r_outer`` (sensors), then for rays whose
-    nearest surface is the inner interface overrides positions/normals and zeroes
-    sensor weights, and tags ``hit_interface``.
+    nearest surface is an internal interface overrides positions/normals and zeroes
+    sensor weights.  With ``r_acrylic`` supplied, ``interface_index`` identifies
+    the crossed boundary: 0 for LS--Acrylic, 1 for Acrylic--Water, and -1 for
+    an outer-surface hit.  The historical two-layer call remains unchanged.
     """
     single_ray = ray_origins.ndim == 1
     if single_ray:
@@ -123,15 +165,20 @@ def find_intersected_nested_sphere_sensors(ray_origins, ray_directions,
     #    interface" only if it crosses that surface before the outer (sensor) sphere. This
     #    generalizes intersect_two_spheres_forward (offset / non-spherical inner) and reduces
     #    to it exactly for two concentric spheres (validated: 0 mismatches).
-    _inner_centers = jnp.zeros((1, 3))
-    _inner_radii = jnp.asarray([r_inner])
+    if r_acrylic is None:
+        _inner_radii = jnp.asarray([r_inner])
+    else:
+        _inner_radii = jnp.asarray([r_inner, r_acrylic])
+    _inner_centers = jnp.zeros((_inner_radii.shape[0], 3))
 
     def _interface_hit(o, d):
         t_out, _ = sphere_forward_t(o, d, jnp.zeros(3), r_outer)
-        _t, _which, hit, pt, nrm = nearest_interface(o, d, _inner_centers, _inner_radii, t_outer=t_out)
-        return hit, pt, nrm
+        _t, _which, hit, pt, nrm = nearest_interface(
+            o, d, _inner_centers, _inner_radii, t_outer=t_out)
+        return hit, _which, pt, nrm
 
-    hit_inner, inner_pts, inner_norms = jax.vmap(_interface_hit)(ray_origins, ray_directions)
+    hit_inner, interface_indices, inner_pts, inner_norms = jax.vmap(
+        _interface_hit)(ray_origins, ray_directions)
 
     # 3. Override geometry hit for interface rays; mask their sensor weights.
     hi = hit_inner[:, None]                                   # (n_rays, 1)
@@ -142,6 +189,9 @@ def find_intersected_nested_sphere_sensors(ray_origins, ray_directions,
     result['sensor_weights'] = result['sensor_weights'] * keep
     result['inside_sensor'] = result['inside_sensor'] & keep
     result['hit_interface'] = hit_inner                      # (n_rays,) bool
+    if r_acrylic is not None:
+        result['interface_index'] = jnp.where(
+            hit_inner, interface_indices, -1)
 
     if single_ray:
         result = jax.tree_map(lambda x: x[0], result)
@@ -152,12 +202,14 @@ def create_nested_sphere_propagator(sensor_positions, sensor_radius,
                                     r_inner, r_outer, n_divisions=50,
                                     temperature=0.2, max_candidates_per_ray=4,
                                     overlap_st_width_frac=0.35, overlap_renorm=1.0,
-                                    overlap_mode='interp', apply_angular_acceptance=False):
-    """JIT-compiled photon propagator for the nested two-sphere geometry.
+                                    overlap_mode='interp', apply_angular_acceptance=False,
+                                    r_acrylic=None):
+    """JIT-compiled photon propagator for nested sphere geometry.
 
     Sensors live on the outer sphere; the grid/sensor-map machinery is the
     single-sphere machinery at ``r_outer``. Returns the same dict as the single-sphere
-    propagator plus a per-ray ``hit_interface`` flag.
+    propagator plus a per-ray ``hit_interface`` flag. With ``r_acrylic`` supplied,
+    it also returns ``interface_index`` for the two internal boundaries.
     """
     started = time.perf_counter()
     sensor_positions = jnp.asarray(sensor_positions)
@@ -209,6 +261,8 @@ def create_nested_sphere_propagator(sensor_positions, sensor_radius,
         return find_intersected_nested_sphere_sensors(
             photon_origins, photon_directions, sensor_positions, sensor_radius,
             r_inner, r_outer, n_divisions, inverted_sensor_map,
-            temperature, overlap_prob, apply_angular_acceptance=apply_angular_acceptance)
+            temperature, overlap_prob,
+            apply_angular_acceptance=apply_angular_acceptance,
+            r_acrylic=r_acrylic)
 
     return propagate_photons

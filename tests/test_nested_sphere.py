@@ -1,8 +1,10 @@
-"""Phase 1 tests for the nested two-sphere (JUNO-like) geometry.
+"""Phase 1 tests for nested concentric JUNO-like geometry.
 
 Covers the geometry class, the forward ray/two-sphere intersection kernel, and the
 nested propagator (outer-sphere sensor lookup + inner-interface masking).
 """
+import json
+
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -13,8 +15,12 @@ from lucid.geometry import generate_detector, NestedSphere, Sphere, list_detecto
 from lucid.geometry.detector_geometry import DetectorGeometry
 from lucid.propagation.nested_sphere import (
     intersect_two_spheres_forward, batch_intersect_two_spheres,
+    intersect_three_spheres_forward,
 )
-from lucid.simulation.photon_step import _interface_refract_reflect
+from lucid.simulation.photon_step import (
+    _interface_refract_reflect,
+    _interface_refract_reflect_multi,
+)
 from lucid.simulation.reflection import fresnel_rr
 
 CONFIG = "config/JUNO_nested_geom_config.json"
@@ -41,6 +47,26 @@ class TestNestedSphereGeometry:
     def test_inner_lt_outer_enforced(self):
         with pytest.raises(ValueError, match="inner_radius"):
             NestedSphere(20.0, 19.5, 100, 0.25)
+
+    def test_acrylic_radius_order_enforced(self):
+        with pytest.raises(ValueError, match="acrylic_radius"):
+            NestedSphere(17.7, 19.5, 100, 0.25, acrylic_radius=17.6)
+
+    def test_three_layer_region_of(self):
+        det = NestedSphere(17.576, 19.434, 100, 0.25,
+                           acrylic_radius=17.7)
+        pts = jnp.array([
+            [0., 0., 0.],
+            [17.6, 0., 0.],
+            [17.8, 0., 0.],
+            [19.0, 0., 0.],
+        ])
+        npt.assert_array_equal(np.asarray(det.region_of(pts)), [0, 1, 2, 2])
+
+    def test_two_layer_region_of_remains_compatible(self):
+        det = NestedSphere(R_IN, R_OUT, 100, 0.25)
+        pts = jnp.array([[17.4, 0., 0.], [18.0, 0., 0.]])
+        npt.assert_array_equal(np.asarray(det.region_of(pts)), [0, 1])
 
     def test_region_of(self):
         det = generate_detector(CONFIG)
@@ -82,6 +108,52 @@ class TestTwoSphereIntersection:
         d = jnp.array([[1., 0., 0.], [-1., 0., 0.]])
         t, hi, p, n = f(o, d)
         npt.assert_array_equal(np.asarray(hi), [True, True])
+
+
+class TestThreeSphereIntersection:
+    """Pure geometry checks for the future LS/Acrylic/Water shell."""
+
+    RADII = (17.576, 17.700, 19.434)
+
+    def test_center_outward_hits_ls_acrylic_boundary(self):
+        t, surface, point, normal = intersect_three_spheres_forward(
+            jnp.array([0., 0., 0.]), jnp.array([1., 0., 0.]), *self.RADII)
+        assert int(surface) == 0
+        npt.assert_allclose(float(t), self.RADII[0], atol=1e-4)
+        npt.assert_allclose(np.asarray(point), [self.RADII[0], 0, 0], atol=1e-4)
+        npt.assert_allclose(np.asarray(normal), [1, 0, 0], atol=1e-4)
+
+    def test_acrylic_outward_hits_acrylic_water_boundary(self):
+        origin = jnp.array([17.65, 0., 0.])
+        t, surface, point, normal = intersect_three_spheres_forward(
+            origin, jnp.array([1., 0., 0.]), *self.RADII)
+        assert int(surface) == 1
+        npt.assert_allclose(float(t), self.RADII[1] - 17.65, atol=1e-4)
+
+    def test_acrylic_inward_hits_ls_acrylic_boundary(self):
+        origin = jnp.array([17.65, 0., 0.])
+        t, surface, point, normal = intersect_three_spheres_forward(
+            origin, jnp.array([-1., 0., 0.]), *self.RADII)
+        assert int(surface) == 0
+        npt.assert_allclose(float(t), 17.65 - self.RADII[0], atol=1e-4)
+
+    def test_water_outward_hits_outer_instrument_boundary(self):
+        origin = jnp.array([18.5, 0., 0.])
+        t, surface, point, normal = intersect_three_spheres_forward(
+            origin, jnp.array([1., 0., 0.]), *self.RADII)
+        assert int(surface) == 2
+        npt.assert_allclose(float(t), self.RADII[2] - 18.5, atol=1e-4)
+
+    def test_jit_and_vmap(self):
+        f = jax.jit(lambda o, d: jax.vmap(
+            intersect_three_spheres_forward,
+            in_axes=(0, 0, None, None, None),
+        )(o, d, *self.RADII))
+        out = f(
+            jnp.array([[0., 0., 0.], [17.65, 0., 0.], [18.5, 0., 0.]]),
+            jnp.array([[1., 0., 0.], [1., 0., 0.], [1., 0., 0.]]),
+        )
+        npt.assert_array_equal(np.asarray(out[1]), [0, 1, 2])
 
 
 class TestSingleMediumUnaffected:
@@ -165,8 +237,94 @@ class TestInterfacePhysics:
         npt.assert_allclose(float(new_dir[0]), -np.cos(ang), atol=1e-5)
         npt.assert_allclose(float(new_dir[1]), np.sin(ang), atol=1e-5)
 
+    def test_multi_transmission_across_both_interfaces(self):
+        indices = jnp.array([1.48, 1.50, 1.33])
+        radial = jnp.array([1.0, 0.0, 0.0])
+        outward_dir = jnp.array([1.0, 0.0, 0.0])
+        inward_dir = jnp.array([-1.0, 0.0, 0.0])
+
+        _, medium, _, transmit = _interface_refract_reflect_multi(
+            outward_dir, radial, 0, 0, indices, 0.0)
+        assert bool(transmit) is True
+        assert int(medium) == 1
+
+        _, medium, _, transmit = _interface_refract_reflect_multi(
+            outward_dir, radial, 1, 1, indices, 0.0)
+        assert bool(transmit) is True
+        assert int(medium) == 2
+
+        _, medium, _, transmit = _interface_refract_reflect_multi(
+            inward_dir, radial, 2, 1, indices, 0.0)
+        assert bool(transmit) is True
+        assert int(medium) == 1
+
+    def test_multi_tir_keeps_current_medium(self):
+        indices = jnp.array([1.48, 1.50, 1.33])
+        angle = np.deg2rad(75.0)
+        direction = jnp.array([
+            np.cos(angle), np.sin(angle), 0.0])
+        radial = jnp.array([1.0, 0.0, 0.0])
+        _, medium, _, transmit = _interface_refract_reflect_multi(
+            direction, radial, 1, 1, indices, 0.0)
+        assert bool(transmit) is False
+        assert int(medium) == 1
+
+    def test_multi_snell_angle(self):
+        indices = jnp.array([1.48, 1.50, 1.33])
+        angle = np.deg2rad(30.0)
+        direction = jnp.array([
+            np.cos(angle), np.sin(angle), 0.0])
+        radial = jnp.array([1.0, 0.0, 0.0])
+        new_dir, medium, _, transmit = _interface_refract_reflect_multi(
+            direction, radial, 1, 1, indices, 0.0)
+        assert bool(transmit) is True
+        assert int(medium) == 2
+        sin_out = (indices[1] / indices[2]) * np.sin(angle)
+        cos_out = np.sqrt(1.0 - float(sin_out) ** 2)
+        npt.assert_allclose(abs(float(jnp.dot(new_dir, radial))),
+                            cos_out, atol=1e-4)
+
+    def test_multi_medium_id_preserves_int32_dtype(self):
+        indices = jnp.array([1.48, 1.50, 1.33], dtype=jnp.float32)
+        direction = jnp.array([1.0, 0.0, 0.0], dtype=jnp.float32)
+        radial = jnp.array([1.0, 0.0, 0.0], dtype=jnp.float32)
+        medium_id = jnp.array(0, dtype=jnp.int32)
+        _, new_medium, _, _ = _interface_refract_reflect_multi(
+            direction, radial, medium_id, jnp.array(0, dtype=jnp.int32),
+            indices, jnp.array(0.0, dtype=jnp.float32))
+        assert new_medium.dtype == jnp.int32
+        assert int(new_medium) == 1
+
 
 class TestNestedPropagator:
+    def test_three_layer_detector_geometry_materials(self, tmp_path):
+        """DetectorGeometry carries the optional Acrylic shell material."""
+        import json
+
+        config = tmp_path / "three_layer.json"
+        config.write_text(json.dumps({
+            "material": "wbls",
+            "inner_material": "wbls",
+            "acrylic_material": "juno_laser_acrylic",
+            "outer_material": "water",
+            "detector_type": "nested_sphere",
+            "geometry_definitions": {
+                "inner_radius": 17.5,
+                "acrylic_radius": 17.7,
+                "outer_radius": 19.5,
+                "n_sensors": 16,
+                "sensor_radius": 0.25,
+            },
+        }))
+        dg = DetectorGeometry.from_config(str(config),
+                                          detector_type='nested_sphere')
+        assert dg.r_acrylic == 17.7
+        assert dg.medium_acrylic is not None
+        assert dg.speed_of_light_acrylic == dg.medium_acrylic.speed_of_light
+        result = dg.propagator(
+            jnp.array([[0., 0., 0.]]), jnp.array([[1., 0., 0.]]))
+        npt.assert_array_equal(np.asarray(result['interface_index']), [0])
+
     def test_build_and_dict_keys(self):
         dg = DetectorGeometry.from_config(CONFIG, detector_type='nested_sphere')
         assert dg.is_nested
@@ -176,6 +334,54 @@ class TestNestedPropagator:
         for k in ('sensor_weights', 'sensor_indices', 'times', 'positions',
                   'normals', 'inside_sensor', 'hit_interface'):
             assert k in res
+
+    def test_three_layer_detector_geometry_materials(self, tmp_path):
+        config = {
+            "material": "wbls",
+            "inner_material": "wbls",
+            "acrylic_material": "juno_laser_acrylic",
+            "outer_material": "water",
+            "detector_type": "nested_sphere",
+            "geometry_definitions": {
+                "inner_radius": 17.5,
+                "acrylic_radius": 17.7,
+                "outer_radius": 19.5,
+                "n_sensors": 32,
+                "sensor_radius": 0.25,
+            },
+        }
+        path = tmp_path / "three_layer.json"
+        path.write_text(json.dumps(config))
+        dg = DetectorGeometry.from_config(
+            str(path), temperature=None, n_divisions=8)
+        assert dg.r_acrylic == 17.7
+        assert dg.medium_acrylic.material == "juno_laser_acrylic"
+        npt.assert_allclose(
+            dg.medium_acrylic.refractive_index, 1.49545268, rtol=0,
+            atol=1e-8)
+        assert dg.speed_of_light_acrylic == dg.medium_acrylic.speed_of_light
+        result = dg.propagator(
+            jnp.array([[0., 0., 0.]]), jnp.array([[1., 0., 0.]]))
+        npt.assert_array_equal(np.asarray(result["interface_index"]), [0])
+
+    def test_three_layer_requires_acrylic_material(self, tmp_path):
+        config = {
+            "material": "wbls",
+            "inner_material": "wbls",
+            "outer_material": "water",
+            "detector_type": "nested_sphere",
+            "geometry_definitions": {
+                "inner_radius": 17.5,
+                "acrylic_radius": 17.7,
+                "outer_radius": 19.5,
+                "n_sensors": 32,
+                "sensor_radius": 0.25,
+            },
+        }
+        path = tmp_path / "missing_acrylic.json"
+        path.write_text(json.dumps(config))
+        with pytest.raises(ValueError, match="acrylic_material"):
+            DetectorGeometry.from_config(str(path), temperature=None)
 
     def test_interface_masks_sensors(self):
         dg = DetectorGeometry.from_config(CONFIG, detector_type='nested_sphere')
@@ -190,6 +396,35 @@ class TestNestedPropagator:
         assert w[1] > 0.0
         # interface rays' geometry hit is on the inner sphere
         npt.assert_allclose(np.linalg.norm(np.asarray(res['positions'])[0]), R_IN, atol=1e-3)
+
+    def test_three_layer_interface_indices(self):
+        from lucid.propagation.nested_sphere import create_nested_sphere_propagator
+
+        points = jnp.array([
+            [R_OUT, 0., 0.],
+            [-R_OUT, 0., 0.],
+            [0., R_OUT, 0.],
+            [0., -R_OUT, 0.],
+        ])
+        propagate = create_nested_sphere_propagator(
+            points, 0.25, R_IN, R_OUT, n_divisions=8,
+            temperature=None, max_candidates_per_ray=2,
+            r_acrylic=17.7)
+        result = propagate(
+            jnp.array([
+                [0., 0., 0.],
+                [17.6, 0., 0.],
+                [18.0, 0., 0.],
+            ]),
+            jnp.array([
+                [1., 0., 0.],
+                [1., 0., 0.],
+                [1., 0., 0.],
+            ]))
+        npt.assert_array_equal(
+            np.asarray(result['interface_index']), [0, 1, -1])
+        npt.assert_array_equal(
+            np.asarray(result['hit_interface']), [True, True, False])
 
 
 class TestNestedForward:

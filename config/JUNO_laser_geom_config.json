@@ -1,11 +1,14 @@
 {
   "material": "juno_laser_labls",
   "inner_material": "juno_laser_labls",
+  "acrylic_material": "juno_laser_acrylic",
   "outer_material": "juno_laser_water",
   "detector_type": "nested_sphere",
   "apply_angular_acceptance": true,
   "geometry_definitions": {
     "inner_radius": 17.7,
+    "acrylic_radius": 17.824,
+    "_comment_acrylic_radius": "JUNOSW J26.3.2 GDML sAcrylic radius; nominal CD thickness is 120 mm while GDML shell is 124 mm",
     "outer_radius": 19.434,
     "n_sensors": 17612,
     "sensor_radius": 0.254,

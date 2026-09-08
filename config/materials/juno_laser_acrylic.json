@@ -1,0 +1,32 @@
+{
+  "material": "juno_laser_acrylic",
+  "refractive_index": 1.49545268,
+  "_comment_refractive_index": "JUNOSW J26.3.2 geometry_acrylic.gdml RINDEX interpolation at 532 nm",
+  "_comment_group_velocity": "GDML GROUPVEL is about 196.27 mm/ns at 532 nm; LUCiD currently uses c/n (200.47 mm/ns), so group-index timing is a future separate change",
+  "speed_of_light_vacuum_m_per_ns": 0.299792,
+  "scattering": {
+    "source": "No RAYLEIGH or MIE property is defined for Acrylic in the JUNOSW GDML",
+    "symmetric": {
+      "description": "Scattering disabled through an effectively infinite Rayleigh length",
+      "P4": 1.0e-12,
+      "P5": 0.0
+    },
+    "asymmetric": {
+      "description": "Mie scattering disabled",
+      "P6": 0.0,
+      "P7": 0.0,
+      "P8": 392.0,
+      "default_asymmetry_g": 0.0
+    }
+  },
+  "absorption": {
+    "source": "JUNOSW J26.3.2 geometry_acrylic.gdml ABSLENGTH at 532 nm",
+    "description": "GDML value 8908 is interpreted as mm, giving 8.908 m",
+    "P0": 1.0,
+    "P1": 0.0,
+    "P2": 0.1122597665,
+    "P3": 0.0,
+    "pope_fry_wavelengths_nm": [464.0, 700.0],
+    "pope_fry_absorption_m_inv": [0.1122597665, 0.1122597665]
+  }
+}

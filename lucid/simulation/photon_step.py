@@ -32,6 +32,7 @@ def _interface_refract_reflect(direction_n, radial_normal, medium_id,
     transmit : bool           whether the sampled outcome was transmission
     """
     sg = jax.lax.stop_gradient
+    medium_id = jnp.asarray(medium_id)
     n_from = jnp.where(medium_id == 0, n_inner, n_outer)
     n_to = jnp.where(medium_id == 0, n_outer, n_inner)
     cos_inc = jnp.clip(jnp.abs(jnp.sum(direction_n * radial_normal)), 0.0, 1.0)
@@ -49,7 +50,78 @@ def _interface_refract_reflect(direction_n, radial_normal, medium_id,
 
     new_dir = jnp.where(transmit, refr_dir, refl_dir)
     new_medium_id = jnp.where(transmit, 1 - medium_id, medium_id)
+    new_medium_id = new_medium_id.astype(medium_id.dtype)
     score = jnp.where(transmit, jnp.log(sg(T) + 1e-12), jnp.log(sg(R) + 1e-12))
+    return new_dir, new_medium_id, score, transmit
+
+
+def _interface_refract_reflect_multi(direction_n, radial_normal, medium_id,
+                                     surface_index, refractive_indices,
+                                     u_sample):
+    """Snell/Fresnel/TIR transition at one interface of nested media.
+
+    ``surface_index`` identifies the boundary between media ``j`` and
+    ``j + 1``.  The outward radial normal is shared by all concentric
+    interfaces.  The incident direction selects the direction of travel, so
+    the function supports both outward and inward crossings without assuming
+    that the current medium is the lower-index side.
+
+    Parameters
+    ----------
+    direction_n : jnp.ndarray
+        Normalized incident direction.
+    radial_normal : jnp.ndarray
+        Outward radial normal at the interface.
+    medium_id : int
+        Current medium id, expected to be ``surface_index`` or ``surface_index
+        + 1``.
+    surface_index : int
+        Interface index in the ordered radius list.
+    refractive_indices : jnp.ndarray
+        Refractive indices ordered from the innermost to outermost medium.
+    u_sample : float
+        Uniform variate used for the detached transmission Bernoulli draw.
+
+    Returns
+    -------
+    new_dir, new_medium_id, score, transmit
+        Refracted or specular direction, updated medium id, detached DiCE
+        score, and whether transmission occurred.
+    """
+    sg = jax.lax.stop_gradient
+    medium_id = jnp.asarray(medium_id)
+    outward = jnp.sum(direction_n * radial_normal) >= 0.0
+    surface_index = jnp.asarray(surface_index, dtype=medium_id.dtype)
+    n_inner = refractive_indices[surface_index]
+    n_outer = refractive_indices[surface_index + 1]
+    n_from = jnp.where(outward, n_inner, n_outer)
+    n_to = jnp.where(outward, n_outer, n_inner)
+    cos_inc = jnp.clip(
+        jnp.abs(jnp.sum(direction_n * radial_normal)), 0.0, 1.0)
+    reflectance, cos_transmit = fresnel_rr(cos_inc, n_from, n_to)
+    transmission = 1.0 - reflectance
+    transmit = u_sample < sg(transmission)
+
+    # The normal points back toward the incident side for Snell's formula.
+    incident_side_normal = jnp.where(outward, -radial_normal, radial_normal)
+    eta = n_from / n_to
+    refr_dir = normalize(
+        eta * direction_n
+        + (eta * cos_inc - cos_transmit) * incident_side_normal)
+    refl_dir = compute_reflection_direction(direction_n, radial_normal)
+    new_dir = jnp.where(transmit, refr_dir, refl_dir)
+    medium_dtype = medium_id.dtype
+    surface_medium = surface_index.astype(medium_dtype)
+    transmitted_medium = jnp.where(
+        outward, surface_medium + jnp.asarray(1, medium_dtype),
+        surface_medium)
+    new_medium_id = jnp.where(transmit, transmitted_medium, medium_id)
+    new_medium_id = new_medium_id.astype(medium_dtype)
+    score = jnp.where(
+        transmit,
+        jnp.log(sg(transmission) + 1e-12),
+        jnp.log(sg(reflectance) + 1e-12),
+    )
     return new_dir, new_medium_id, score, transmit
 
 def photon_iteration_sample(

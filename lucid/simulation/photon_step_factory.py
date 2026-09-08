@@ -24,21 +24,28 @@ from lucid.wavelength.scattering import (
     compute_mie_scatter_direction, hg_sample_cos_theta, hg_logpdf, rayleigh_logpdf,
 )
 from lucid.simulation.reflection import scalar_reflection
-from lucid.simulation.photon_step import _interface_refract_reflect
+from lucid.simulation.photon_step import (
+    _interface_refract_reflect,
+    _interface_refract_reflect_multi,
+)
 
 
-def make_photon_step(mode, has_interface, reflection_fn=scalar_reflection):
+def make_photon_step(mode, has_interface, reflection_fn=scalar_reflection,
+                     multi_interface=False):
     """Return a per-photon step. ``mode`` ∈ {'sample','update_factors'}.
 
-    The step's positional signature is the legacy 14-arg one; when ``has_interface`` is True it
-    also takes ``(hit_interface, medium_id, n_inner, n_outer)`` and returns an 8-tuple (the
-    7-tuple + ``new_medium_id``).
+    The step's positional signature is the legacy 14-arg one; when
+    ``has_interface`` is True it also takes ``(hit_interface, medium_id,
+    n_inner, n_outer, interface_index, refractive_indices)`` and returns an
+    8-tuple (the 7-tuple + ``new_medium_id``).  ``multi_interface`` selects
+    the latter two arguments for an ordered three-medium interface list.
     """
     if mode == 'sample':
         def step(position, direction, time, surface_distance,
                  normal, scatter_length, mie_scatter_length, g, refl_params,
                  absorption_length, hit_sensor, lam, rng_key, speed_of_light,
-                 hit_interface=None, medium_id=None, n_inner=None, n_outer=None):
+                 hit_interface=None, medium_id=None, n_inner=None, n_outer=None,
+                 interface_index=None, refractive_indices=None):
             # 6 keys single-medium; +1 (k[6]) for the sampled interface transmit/reflect outcome.
             # JAX split-prefix (split(k,6)==split(k,7)[:6]) keeps k[0..5] — and thus the whole
             # single-medium stream — byte-identical to the legacy 6-split.
@@ -65,8 +72,17 @@ def make_photon_step(mode, has_interface, reflection_fn=scalar_reflection):
 
             if has_interface:
                 dir_n = normalize(direction)
-                iface_dir, iface_medium, _s, _t = _interface_refract_reflect(
-                    dir_n, normal, medium_id, n_inner, n_outer, jax.random.uniform(k[6]))
+                if multi_interface:
+                    safe_index = jnp.maximum(interface_index, 0)
+                    iface_dir, iface_medium, _s, _t = (
+                        _interface_refract_reflect_multi(
+                            dir_n, normal, medium_id, safe_index,
+                            refractive_indices, jax.random.uniform(k[6])))
+                else:
+                    iface_dir, iface_medium, _s, _t = (
+                        _interface_refract_reflect(
+                            dir_n, normal, medium_id, n_inner, n_outer,
+                            jax.random.uniform(k[6])))
                 detects = reaches_surface & (~hit_interface) & (u2 >= reflection_rate)
                 at_interface = reaches_surface & hit_interface
                 surf_dir = jnp.where(hit_interface, iface_dir, reflected_dir)
@@ -108,7 +124,8 @@ def make_photon_step(mode, has_interface, reflection_fn=scalar_reflection):
         def step(position, direction, time, surface_distance,
                  normal, scatter_length, mie_scatter_length, g, refl_params,
                  absorption_length, hit_sensor, lam, rng_key, speed_of_light,
-                 hit_interface=None, medium_id=None, n_inner=None, n_outer=None):
+                 hit_interface=None, medium_id=None, n_inner=None, n_outer=None,
+                 interface_index=None, refractive_indices=None):
             # 8 keys single-medium (k[6],k[7] unused, kept for split-prefix parity); +1 (k[8])
             # for the sampled interface outcome. Gradient design (PORT_PLAN): TRACK params flow
             # PATHWISE (Dd/positions/time LIVE); OPTICAL scatter params flow via the DiCE score
@@ -159,8 +176,17 @@ def make_photon_step(mode, has_interface, reflection_fn=scalar_reflection):
 
             if has_interface:
                 radial = sg(normal)
-                iface_dir, iface_medium, iface_score, _t = _interface_refract_reflect(
-                    dir_n, radial, medium_id, n_inner, n_outer, jax.random.uniform(k[8]))
+                if multi_interface:
+                    safe_index = jnp.maximum(interface_index, 0)
+                    iface_dir, iface_medium, iface_score, _t = (
+                        _interface_refract_reflect_multi(
+                            dir_n, radial, medium_id, safe_index,
+                            refractive_indices, jax.random.uniform(k[8])))
+                else:
+                    iface_dir, iface_medium, iface_score, _t = (
+                        _interface_refract_reflect(
+                            dir_n, radial, medium_id, n_inner, n_outer,
+                            jax.random.uniform(k[8])))
                 iface_pos = position + Dd * dir_n + epsilon * iface_dir
                 at_interface = hit_interface & (~is_scat)
                 surf_dir = jnp.where(hit_interface, iface_dir, reflection_dir)
