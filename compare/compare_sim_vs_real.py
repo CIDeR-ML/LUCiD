@@ -39,6 +39,7 @@ except ImportError:  # Direct ``python compare/compare_sim_vs_real.py``.
     import compare_sim as base
 
 from compare.laser_compare_metrics import (
+    JUNOSW_J26_3_2_EQUIVALENT_QE_532_NM,
     build_channel_histograms_multi,
     consensus_l1_alignment,
     density_hist,
@@ -619,6 +620,27 @@ def parse_args(argv=None):
     )
     parser.add_argument("--junosw-sim-file-glob", default="*.h5")
     parser.add_argument("--junosw-label", default=DEFAULT_JUNOSW_LABEL)
+    qe_group = parser.add_mutually_exclusive_group()
+    qe_group.add_argument(
+        "--lucid-qe-correction",
+        dest="apply_lucid_qe",
+        action="store_true",
+        default=True,
+        help="scale only LUCiD amplitudes by the common 532 nm QE (default)",
+    )
+    qe_group.add_argument(
+        "--no-lucid-qe-correction",
+        dest="apply_lucid_qe",
+        action="store_false",
+        help="leave LUCiD amplitudes at their raw QE=1 scale",
+    )
+    parser.add_argument(
+        "--lucid-qe-effective",
+        type=float,
+        default=JUNOSW_J26_3_2_EQUIVALENT_QE_532_NM,
+        metavar="QE",
+        help="common LUCiD-only QE factor; J26.3.2 gives 0.097 at 532 nm",
+    )
     parser.add_argument("-n", type=int, default=1000, dest="number")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--north", action="store_true")
@@ -697,6 +719,11 @@ def parse_args(argv=None):
         window = getattr(args, name)
         if not np.all(np.isfinite(window)) or window[1] <= window[0]:
             parser.error(f"--{name.replace('_', '-')} requires LOW < HIGH")
+    if (
+        not np.isfinite(args.lucid_qe_effective)
+        or not 0.0 < args.lucid_qe_effective <= 1.0
+    ):
+        parser.error("--lucid-qe-effective must be in (0, 1]")
     if not any((args.lucid_sim_dir, args.junosw_sim_dir)):
         parser.error("provide at least one simulation input")
     try:
@@ -959,7 +986,12 @@ def main(argv=None):
     plot_data(data, args.opt, args.plot_range, args.run)
     plot_summary_data(data, args.summary_opt, args.plot_range, args.run, args.z)
     plot_amplitude_data(
-        data, args.amplitude_opt, args.plot_range, args.run
+        data,
+        args.amplitude_opt,
+        args.plot_range,
+        args.run,
+        apply_lucid_qe=args.apply_lucid_qe,
+        lucid_qe_eff=args.lucid_qe_effective,
     )
     write_comparison_stats_csv(args.stats_csv, data, args.run, args.z)
 

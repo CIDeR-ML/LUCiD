@@ -374,3 +374,52 @@ def test_amplitude_title_shows_effective_gates_only(tmp_path, monkeypatch):
     assert "Effective gates:" in title
     assert "relative to" not in title
     assert "all-PE amplitude valid" not in title
+
+
+def test_lucid_qe_component_scales_only_lucid_sources():
+    """The optional 532 nm factor must leave JUNOsw unchanged."""
+    fsmp, lucid = _synthetic_inputs()
+    junosw = dict(lucid)
+    junosw["label"] = np.asarray("JUNOsw (J26.3.2)")
+    junosw["kind"] = np.asarray("junosw")
+    result = comparison.build_channel_histograms_multi(
+        fsmp,
+        [lucid, junosw],
+        alignment="l1",
+        use_tts=False,
+    )
+
+    scaled = plotting.amplitude_plot_arrays(
+        result,
+        apply_lucid_qe=True,
+        lucid_qe_eff=0.097,
+    )
+
+    np.testing.assert_allclose(scaled["source_factors"], [0.097, 1.0])
+    np.testing.assert_allclose(scaled["simulation_mean"][:, 0], [0.097, 1.0])
+    np.testing.assert_allclose(
+        scaled["simulation_density"][:, 0],
+        np.array([np.full(4, 0.02425), np.full(4, 0.25)]),
+    )
+
+    unscaled = plotting.amplitude_plot_arrays(
+        result,
+        apply_lucid_qe=False,
+        lucid_qe_eff=0.097,
+    )
+    np.testing.assert_allclose(unscaled["source_factors"], [1.0, 1.0])
+
+
+def test_cli_enables_common_lucid_qe(monkeypatch):
+    """CLI defaults enable QE scaling and preserve the amplitude filename."""
+    monkeypatch.setattr(comparison, "resolve_run", lambda *_: 15040)
+    args = comparison.parse_args(["--sim-dir", "simulation"])
+
+    assert args.apply_lucid_qe is True
+    assert args.lucid_qe_effective == 0.097
+    assert args.amplitude_opt.name == "compare_sim_1000_amplitude.pdf"
+
+    disabled = comparison.parse_args(
+        ["--sim-dir", "simulation", "--no-lucid-qe-correction"]
+    )
+    assert disabled.apply_lucid_qe is False

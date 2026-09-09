@@ -6,6 +6,7 @@ from matplotlib.backends.backend_pdf import PdfPages
 
 from . import compare_sim as base
 from .laser_compare_metrics import (
+    JUNOSW_J26_3_2_EQUIVALENT_QE_532_NM,
     _metric_arrays,
     _normalize_with_factor,
     _source_counts,
@@ -23,6 +24,53 @@ SOURCE_COLORS = {"lucid": "tab:orange", "junosw": "tab:green"}
 FALLBACK_SOURCE_COLORS = ("tab:red", "tab:purple", "tab:brown", "tab:pink")
 DIFFERENCE_AXIS_COLOR = "0.25"
 RATIO_AXIS_COLOR = "#7f3c8d"
+
+
+def amplitude_plot_arrays(
+    data,
+    apply_lucid_qe=True,
+    lucid_qe_eff=JUNOSW_J26_3_2_EQUIVALENT_QE_532_NM,
+):
+    """Return amplitude arrays with an optional LUCiD-only QE factor."""
+    if not np.isfinite(lucid_qe_eff) or not 0.0 < lucid_qe_eff <= 1.0:
+        raise ValueError("lucid_qe_eff must be finite and in (0, 1]")
+    labels = np.asarray(data["simulation_labels"]).astype(str)
+    kinds = np.asarray(
+        data.get("simulation_kinds", ["simulation"] * len(labels))
+    ).astype(str)
+    factors = np.ones(len(labels), dtype=np.float64)
+    if apply_lucid_qe:
+        factors[np.char.lower(kinds) == "lucid"] = lucid_qe_eff
+    return {
+        "source_factors": factors,
+        "simulation_density": np.asarray(
+            data["simulation_pe_per_event_density"]
+        )
+        * factors[:, None, None],
+        "simulation_mean": np.asarray(
+            data["simulation_mean_pe_per_event"]
+        )
+        * factors[:, None],
+        "simulation_prompt": np.asarray(
+            data["simulation_prompt_pe_per_event"]
+        )
+        * factors[:, None],
+        "simulation_late": np.asarray(
+            data["simulation_late_pe_per_event"]
+        )
+        * factors[:, None],
+    }
+
+
+def _lucid_qe_note(data, apply_lucid_qe, lucid_qe_eff):
+    """Describe the active common LUCiD QE approximation."""
+    kinds = np.asarray(data.get("simulation_kinds", [])).astype(str)
+    if apply_lucid_qe and np.any(np.char.lower(kinds) == "lucid"):
+        return (
+            "LUCiD-only equivalent QE at 532 nm="
+            f"{lucid_qe_eff:.6g} (JUNOsw J26.3.2)"
+        )
+    return "LUCiD QE correction disabled"
 
 
 def _simulation_colors(data, labels):
@@ -349,19 +397,32 @@ def plot_summary_data(data, output, plot_range, run, source_z):
     print(f"Wrote {output}")
 
 
-def plot_amplitude_data(data, output, plot_range, run):
+def plot_amplitude_data(
+    data,
+    output,
+    plot_range,
+    run,
+    apply_lucid_qe=True,
+    lucid_qe_eff=JUNOSW_J26_3_2_EQUIVALENT_QE_532_NM,
+):
     """Write per-channel PE/event spectra and channel-rate summaries."""
     configure_plot_style()
     labels = np.asarray(data["simulation_labels"]).astype(str)
     colors = _simulation_colors(data, labels)
     run_density = np.asarray(data["run_pe_per_event_density"])
-    sim_density = np.asarray(data["simulation_pe_per_event_density"])
     run_mean = np.asarray(data["run_mean_pe_per_event"])
-    sim_mean = np.asarray(data["simulation_mean_pe_per_event"])
     run_prompt = np.asarray(data["run_prompt_pe_per_event"])
-    sim_prompt = np.asarray(data["simulation_prompt_pe_per_event"])
     run_late = np.asarray(data["run_late_pe_per_event"])
-    sim_late = np.asarray(data["simulation_late_pe_per_event"])
+    amplitude = amplitude_plot_arrays(
+        data,
+        apply_lucid_qe=apply_lucid_qe,
+        lucid_qe_eff=lucid_qe_eff,
+    )
+    sim_density = amplitude["simulation_density"]
+    sim_mean = amplitude["simulation_mean"]
+    sim_prompt = amplitude["simulation_prompt"]
+    sim_late = amplitude["simulation_late"]
+    qe_note = _lucid_qe_note(data, apply_lucid_qe, lucid_qe_eff)
     prompt_low = np.asarray(data["prompt_window_effective_low_ns"])
     prompt_high = np.asarray(data["prompt_window_effective_high_ns"])
     late_low = np.asarray(data["late_window_effective_low_ns"])
@@ -375,7 +436,8 @@ def plot_amplitude_data(data, output, plot_range, run):
                 f"prompt=[{prompt_low[0,index]:.4g}, "
                 f"{prompt_high[0,index]:.4g}) ns; "
                 f"late=[{late_low[0,index]:.4g}, "
-                f"{late_high[0,index]:.4g}) ns"
+                f"{late_high[0,index]:.4g}) ns\n"
+                f"{qe_note}"
             )
             fig, ax = plt.subplots(figsize=FIGURE_SIZE)
             ax.step(
@@ -471,7 +533,7 @@ def plot_amplitude_data(data, output, plot_range, run):
                 ),
             )
         axes[0].set(
-            title="Mean PE per event by channel",
+            title=f"Mean PE per event by channel\n{qe_note}",
             ylabel="Mean PE / event",
             yscale="log",
         )
