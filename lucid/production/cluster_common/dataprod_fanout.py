@@ -167,6 +167,12 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     p.add_argument("-D", "--detector", type=str, default=None,
                    help="detector geometry (e.g. SK_WAND, HK_WAND). Required "
                         "unless the dataset config declares its own 'detector'.")
+    p.add_argument("--allow-any-detector", action="store_true",
+                   help="permit a non-WAND detector for a config that declares "
+                        "no 'detector' of its own. Such a config relies on the "
+                        "detector to supply the digitizer and trigger, which "
+                        "only the frozen *_WAND descriptions do — so this is an "
+                        "escape hatch for one-off studies, not for production.")
     p.add_argument("-j", "--job-id-start", type=int, default=1,
                    help="job_id offset (default: 1). Set to N+1 for a top-up "
                         "wave on a dataset that already has N sub-jobs.")
@@ -318,6 +324,20 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"Error: detector needs to be specified - the dataset config "
               f"{args.config} declares no 'detector' and no -D/--detector was "
               f"given (e.g. -D SK_WAND).", file=sys.stderr)
+        return 1
+    # A config with no 'detector' of its own carries no digitizer/trigger either:
+    # both are resolved from the detector physics config, and only the frozen
+    # *_WAND descriptions carry them. Any other detector would silently fall back
+    # to the 'basic' digitizer with the readout trigger off, which looks like a
+    # successful run and produces an unusable dataset.
+    if "detector" not in cfg and not detector.endswith("_WAND") \
+            and not args.allow_any_detector:
+        print(f"Error: {args.config} declares no 'detector', so its digitizer "
+              f"and trigger come from the detector config, but {detector!r} is "
+              f"not a frozen *_WAND description and supplies neither — the run "
+              f"would silently use the 'basic' digitizer with no trigger. Use "
+              f"-D {detector}_WAND (or another *_WAND detector), or pass "
+              f"--allow-any-detector to override.", file=sys.stderr)
         return 1
     print(f"=== lucid-run-job {adapter.name} fan-out ===\n")
     if new_style:
