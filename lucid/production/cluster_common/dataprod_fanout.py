@@ -164,8 +164,9 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
                         "jobs across targets, weighted by the optional :N.")
     p.add_argument("-o", "--output-base", type=Path, default=None,
                    help="override OUTPUT_BASE_PATH from user_paths.sh")
-    p.add_argument("-D", "--detector", type=str, default="SK_like",
-                   help="detector geometry (default: SK_like)")
+    p.add_argument("-D", "--detector", type=str, default=None,
+                   help="detector geometry (e.g. SK_WAND, HK_WAND). Required "
+                        "unless the dataset config declares its own 'detector'.")
     p.add_argument("-j", "--job-id-start", type=int, default=1,
                    help="job_id offset (default: 1). Set to N+1 for a top-up "
                         "wave on a dataset that already has N sub-jobs.")
@@ -310,7 +311,14 @@ def main(argv: Optional[List[str]] = None) -> int:
     multi_partition = len(parsed_parts) > 1
 
     # The dataset config owns its detector (new-style); --detector is the fallback.
+    # Neither is a silent default: picking the wrong detector changes the geometry,
+    # the digitizer and the trigger, so an unspecified detector is a hard error.
     detector = cfg.get("detector", args.detector)
+    if not detector:
+        print(f"Error: detector needs to be specified - the dataset config "
+              f"{args.config} declares no 'detector' and no -D/--detector was "
+              f"given (e.g. -D SK_WAND).", file=sys.stderr)
+        return 1
     print(f"=== lucid-run-job {adapter.name} fan-out ===\n")
     if new_style:
         print(f"Configuration: {name}  [{block}/config_{int(config_number):02d}]")
