@@ -1,0 +1,20 @@
+{
+  "_comment": "Frozen SK detector description for the WAND production. Pinned so edits to SK_physics_config.json cannot silently change the campaign. Values match those used for WAND/SK from 2026-07 onward; fspec is written out explicitly rather than inherited from detector_params._ANGULAR_REFL_DEFAULTS.",
+  "medium_model": "materials/water.json",
+  "qe_curve": "pmt/SK_QE.json",
+  "wall_reflection_rate": 0.2,
+  "sensor_reflection_rate": 0.2,
+  "wall_fspec": 0.55,
+  "sensor_fspec": 0.9,
+  "qe_corrections": 1.0,
+  "digitizer": {
+    "model": "ski"
+  },
+  "trigger": {
+    "_note": "SK trigger: HK's n_thr=45 scaled by the PMT ratio (11096/19746=0.562). Validated 2026-07-23 with lucid.production.trigger_study on WAND/SK/GeV config_06: 300 events, physics efficiency 100.0% on every event, 1-5 gates/event.",
+    "window_ns": 200.0,
+    "n_thr": 25,
+    "pad_before_ns": 300.0,
+    "pad_after_ns": 300.0
+  }
+}

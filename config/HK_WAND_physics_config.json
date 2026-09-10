@@ -1,0 +1,20 @@
+{
+  "_comment": "Frozen HK detector description for the WAND production. Pinned so edits to HK_physics_config.json cannot silently change the campaign. Values match those used for WAND/HK/GeV in 2026-07; fspec is written out explicitly rather than inherited from detector_params._ANGULAR_REFL_DEFAULTS.",
+  "medium_model": "materials/water.json",
+  "qe_curve": "pmt/HK_QE.json",
+  "wall_reflection_rate": 0.2,
+  "sensor_reflection_rate": 0.2,
+  "wall_fspec": 0.55,
+  "sensor_fspec": 0.9,
+  "qe_corrections": 1.0,
+  "digitizer": {
+    "model": "hk"
+  },
+  "trigger": {
+    "_note": "HK high-E real trigger - validated on muons (muon 99.9%, Michel 99.4% hits kept, 0 dark windows) and config_18 pile-up (99.97% physics hits kept, 0 dark windows).",
+    "window_ns": 200.0,
+    "n_thr": 45,
+    "pad_before_ns": 300.0,
+    "pad_after_ns": 300.0
+  }
+}

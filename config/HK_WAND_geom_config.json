@@ -1,0 +1,7 @@
+{
+  "material": "water",
+  "detector_type": "cylinder",
+  "geometry_definitions": {
+    "npz_file_path": "hk_geometry.npz"
+  }
+}
