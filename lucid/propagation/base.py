@@ -138,8 +138,12 @@ def calculate_hit_properties(ray_origins, ray_directions, t_geometry, inside_sen
 
 
 def compute_sensor_intersections_base(sensor_idx, sensor_positions, sensor_radius,
-                                        ray_origins, ray_directions, geometry_bounds_check,
-                                        overlap_prob, apply_angular_acceptance=False):
+                                      ray_origins, ray_directions,
+                                      geometry_bounds_check, overlap_prob,
+                                      apply_angular_acceptance=False,
+                                      sensor_inward_axes=None,
+                                      sensor_radial_radii=None,
+                                      sensor_axial_radii=None):
     """
     Base function to compute sensor intersections for any geometry.
 
@@ -169,6 +173,9 @@ def compute_sensor_intersections_base(sensor_idx, sensor_positions, sensor_radiu
         studies/sensor_detection_conservation.py). Default ``False`` keeps every existing
         caller byte-identical; opted in per detector via ``apply_angular_acceptance`` in the
         geometry config.
+    sensor_inward_axes, sensor_radial_radii, sensor_axial_radii : ndarray
+        Optional per-PMT ellipsoid-head geometry. When supplied, physical
+        head intersections replace the legacy spherical sensor volume.
 
     Returns
     -------
@@ -193,41 +200,54 @@ def compute_sensor_intersections_base(sensor_idx, sensor_positions, sensor_radiu
     # Raw to_sensor points from sensor center toward interior (inward); negating gives outward.
     normals_closest = -to_sensor / (jnp.linalg.norm(to_sensor, axis=1, keepdims=True) + 1e-10)
     
-    # Ray-sphere intersection coefficients
-    a = jnp.sum(ray_d * ray_d, axis=1)  # Should be 1 for normalized directions
-    b = 2.0 * jnp.sum(oc * ray_d, axis=1)
-    c = jnp.sum(oc * oc, axis=1) - sensor_radius ** 2
-    
-    # Discriminant determines if intersection exists
-    discriminant = b ** 2 - 4 * a * c
-    
-    # Calculate actual intersection for rays that hit the sensor
-    sqrt_term = jnp.sqrt(jnp.maximum(1e-10, discriminant))
-    
-    # Use numerically stable quadratic formula to prevent NaN gradients
-    q = jnp.where(
-        b > 0,
-        -0.5 * (b + sqrt_term),
-        -0.5 * (b - sqrt_term)
-    )
-    t1 = q / (a + 1e-10)
-    t2 = c / (q + jnp.sign(q) * 1e-10)
-    
-    t_intersect = jnp.where((t1 > 0) & (t2 > 0), 
-                    jnp.minimum(t1, t2),  # Both positive - take smaller
-                    jnp.where(t1 > 0, t1,  # Only t1 positive
-                           jnp.where(t2 > 0, t2, -1)))  # Only t2 positive or neither
-    
-    # Calculate intersection points
-    intersection_points = ray_origins + t_intersect[:, None] * ray_d
-    
-    # Calculate normals at intersection points
-    # Negate so normals point outward from detector wall (matching geometry normal convention).
-    to_intersection = intersection_points - sphere_centers
-    normals_intersect = -to_intersection / (jnp.linalg.norm(to_intersection, axis=1, keepdims=True) + 1e-10)
-    
-    # Determine if ray intersects with sensor (add small epsilon for stability)
-    intersects = (discriminant > 1e-6) & (t_intersect > 0)
+    if sensor_inward_axes is None:
+        # Ray-sphere intersection coefficients
+        a = jnp.sum(ray_d * ray_d, axis=1)
+        b = 2.0 * jnp.sum(oc * ray_d, axis=1)
+        c = jnp.sum(oc * oc, axis=1) - sensor_radius ** 2
+        discriminant = b ** 2 - 4 * a * c
+        sqrt_term = jnp.sqrt(jnp.maximum(1e-10, discriminant))
+        q = jnp.where(
+            b > 0,
+            -0.5 * (b + sqrt_term),
+            -0.5 * (b - sqrt_term)
+        )
+        t1 = q / (a + 1e-10)
+        t2 = c / (q + jnp.sign(q) * 1e-10)
+        t_intersect = jnp.where(
+            (t1 > 0) & (t2 > 0),
+            jnp.minimum(t1, t2),
+            jnp.where(t1 > 0, t1, jnp.where(t2 > 0, t2, -1)),
+        )
+        intersection_points = (
+            ray_origins + t_intersect[:, None] * ray_d
+        )
+        to_intersection = intersection_points - sphere_centers
+        normals_intersect = -to_intersection / (
+            jnp.linalg.norm(
+                to_intersection, axis=1, keepdims=True
+            ) + 1e-10
+        )
+        intersects = (discriminant > 1e-6) & (t_intersect > 0)
+    else:
+        from lucid.geometry.juno_pmt import intersect_ellipsoid_heads
+
+        safe_idx = jnp.where(valid, sensor_idx, 0)
+        pmt_axes = sensor_inward_axes[safe_idx]
+        pmt_radial = sensor_radial_radii[safe_idx]
+        pmt_axial = sensor_axial_radii[safe_idx]
+        pmt_hit = intersect_ellipsoid_heads(
+            ray_origins,
+            ray_d,
+            sphere_centers,
+            pmt_axes,
+            pmt_radial,
+            pmt_axial,
+        )
+        t_intersect = pmt_hit.distance_m
+        intersection_points = pmt_hit.points_m
+        normals_intersect = pmt_hit.detector_outward_normals
+        intersects = pmt_hit.valid & valid
    
     # Apply overlap function to get weights
     weights = jnp.where(valid, overlap_prob(distance), 0.0)
@@ -236,12 +256,16 @@ def compute_sensor_intersections_base(sensor_idx, sensor_positions, sensor_radiu
     # Restores conservation (detected fraction = coverage, incidence-independent); inert at
     # normal incidence. apply_angular_acceptance is a static bool, so the off path compiles
     # identically (the cosθ ops are not traced).
-    if apply_angular_acceptance:
+    if apply_angular_acceptance and sensor_inward_axes is None:
         snorm = sphere_centers / (jnp.linalg.norm(sphere_centers, axis=1, keepdims=True) + 1e-10)
         cos_inc = jnp.abs(jnp.sum(ray_d * snorm, axis=1))
         weights = weights * cos_inc
     # Check if point is inside sensor (keep as boolean)
-    inside_spherical_sensor = distance < sensor_radius
+    inside_spherical_sensor = jnp.where(
+        sensor_inward_axes is None,
+        distance < sensor_radius,
+        intersects,
+    )
     
     # Check if intersection point is within geometry bounds
     inside_detector_volume = geometry_bounds_check(intersection_points)

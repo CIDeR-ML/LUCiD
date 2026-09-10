@@ -16,7 +16,7 @@
     "default_intensity": 3000000.0
   },
   "transport": {
-    "max_scattering_steps": 32,
+    "max_scattering_steps": 64,
     "record_trajectories": false,
     "reflection_model": "angular",
     "wall_reflection_rate": 0.2,
@@ -26,7 +26,7 @@
   "simulation": {
     "n_photons": 3000000,
     "n_events": 1,
-    "max_scattering_steps": 32,
+    "max_scattering_steps": 64,
     "record_trajectories": false
   },
   "calibration": {

@@ -99,7 +99,7 @@ def load_detector_geom(file_path):
         raise ValueError(f"Unknown detector type: {detector_type}")
 
 
-def generate_detector(file_path):
+def generate_detector(file_path, pmt_geometry_enabled=None):
     """Generate a detector from a JSON config file using the geometry registry.
 
     The detector type in the config (e.g. 'cylinder', 'sphere', 'box') is
@@ -116,7 +116,9 @@ def generate_detector(file_path):
     For ``detector_type: nested_sphere``, ``pmt_file_path`` points to the
     JUNO PMT CSV and is resolved relative to the config-file directory.
     The NPZ path used by cylinder configurations is also resolved relative
-    to the config-file directory.
+    to the config-file directory. ``pmt_geometry_enabled`` optionally
+    overrides only the configured explicit PMT intersection geometry, for a
+    controlled geometry on/off ablation.
     """
     config = load_detector_config(file_path)
     detector_type = config['detector_type']
@@ -135,12 +137,31 @@ def generate_detector(file_path):
         if 'pmt_file_path' in geom_def:
             config_dir = os.path.dirname(os.path.abspath(file_path))
             csv_path = os.path.join(config_dir, geom_def['pmt_file_path'])
+            configured_geometry = geom_def.get('pmt_geometry')
+            if pmt_geometry_enabled is None:
+                pmt_geometry = configured_geometry
+            elif pmt_geometry_enabled:
+                if configured_geometry is None:
+                    raise ValueError(
+                        "PMT geometry was enabled but none is configured"
+                    )
+                pmt_geometry = configured_geometry
+            else:
+                pmt_geometry = None
+            type_path = (
+                geom_def.get('pmt_type_file_path')
+                if pmt_geometry is not None else None
+            )
+            if type_path is not None:
+                type_path = os.path.join(config_dir, type_path)
             return cls.from_pmt_file(
                 csv_path,
                 geom_def['inner_radius'],
                 geom_def['outer_radius'],
                 geom_def['sensor_radius'],
-                acrylic_radius=geom_def.get('acrylic_radius'))
+                acrylic_radius=geom_def.get('acrylic_radius'),
+                pmt_type_file_path=type_path,
+                pmt_geometry=pmt_geometry)
         return cls(geom_def['inner_radius'], geom_def['outer_radius'],
                    geom_def['n_sensors'], geom_def['sensor_radius'],
                    acrylic_radius=geom_def.get('acrylic_radius'))

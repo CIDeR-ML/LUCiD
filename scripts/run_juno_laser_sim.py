@@ -57,6 +57,13 @@ INVALID_LOG_WEIGHT = -1e10
 DEFAULT_OUTPUT_DIR = "/junofs/C/liukainan/LUCiD/outputs/juno_laser"
 
 
+def _pmt_geometry_override(request):
+    """Map the CLI ablation mode to the detector-loader override."""
+    if request == "config":
+        return None
+    return request == "on"
+
+
 def _simulation_metadata(
     args,
     config,
@@ -65,6 +72,8 @@ def _simulation_metadata(
     n_steps,
     n_channels,
     record_trajectories,
+    pmt_geometry_request,
+    pmt_geometry,
 ):
     """Return file metadata documenting the simulation provenance."""
     values = {
@@ -84,6 +93,8 @@ def _simulation_metadata(
         ),
         "seed": str(args.seed),
         "record_trajectories": str(bool(record_trajectories)),
+        "pmt_geometry_request": pmt_geometry_request,
+        "pmt_geometry": pmt_geometry,
         "pe_time_units": "ns",
         "offset_units": "ns",
     }
@@ -392,6 +403,7 @@ def simulate(args):
         config = json.load(stream)
     geom_path = root / config["geometry_config"]
     simulation = config["simulation"]
+    pmt_geometry_request = getattr(args, "pmt_geometry", "config")
     outdir = Path(args.outdir)
     outdir.mkdir(parents=True, exist_ok=True)
     logging.basicConfig(
@@ -406,10 +418,19 @@ def simulate(args):
         temperature=None,
         max_candidates_per_ray=4,
         detector_type="nested_sphere",
+        pmt_geometry_enabled=_pmt_geometry_override(
+            pmt_geometry_request
+        ),
     )
     n_sensors = geom.num_sensors
+    pmt_geometry = geom.detector.pmt_geometry or "legacy_sphere"
     LOG.info("detector geometry ready: %d PMTs (%.2fs)", n_sensors,
              time.perf_counter() - t0)
+    LOG.info(
+        "PMT geometry: request=%s, effective=%s",
+        pmt_geometry_request,
+        pmt_geometry,
+    )
 
     t0 = time.perf_counter()
     LOG.info(
@@ -485,6 +506,8 @@ def simulate(args):
             n_steps,
             n_sensors,
             record_trajectories,
+            pmt_geometry_request,
+            pmt_geometry,
         )
     )
     trajectory_context = (
@@ -616,6 +639,9 @@ def simulate(args):
                 "config": str(Path(args.config)),
                 "output": str(output),
                 "format_version": "lucid-juno-laser-pe-parquet",
+                "pmt_geometry_request": pmt_geometry_request,
+                "pmt_geometry": pmt_geometry,
+                "max_scattering_steps": n_steps,
                 "trajectory_output": (
                     str(trajectory_output)
                     if record_trajectories
@@ -653,6 +679,15 @@ def main():
         help="最大散射步数 (0=读取配置中的 simulation.max_scattering_steps)",
     )
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument(
+        "--pmt-geometry",
+        choices=("config", "on", "off"),
+        default="config",
+        help=(
+            "PMT 几何消融：config=遵循几何配置，on=显式前端，"
+            "off=旧球形接收面"
+        ),
+    )
     parser.add_argument(
         "--record-trajectories",
         "--record",

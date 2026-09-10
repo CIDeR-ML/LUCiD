@@ -16,6 +16,10 @@ from pathlib import Path
 import jax.numpy as jnp
 import numpy as np
 
+from .juno_pmt import (
+    build_juno_pmt_dimensions,
+    load_juno_pmt_layout,
+)
 from .sphere import Sphere
 from .registry import register_detector
 
@@ -54,6 +58,11 @@ class NestedSphere(Sphere):
         self.r_inner = inner_radius
         self.r_acrylic = acrylic_radius
         self.r_outer = outer_radius
+        self.pmt_geometry = None
+        self.pmt_copy_numbers = None
+        self.pmt_inward_axes = None
+        self.pmt_type_codes = None
+        self.pmt_dimensions = None
         if acrylic_radius is not None and not (
                 inner_radius < acrylic_radius < outer_radius):
             raise ValueError(
@@ -62,15 +71,16 @@ class NestedSphere(Sphere):
 
     @classmethod
     def from_pmt_file(cls, csv_file_path, inner_radius, outer_radius,
-                      sensor_radius, acrylic_radius=None):
+                      sensor_radius, acrylic_radius=None,
+                      pmt_type_file_path=None, pmt_geometry=None):
         """Build a nested sphere using externally supplied PMT positions.
 
-        The CSV must contain ``CopyNo X Y Z`` columns with coordinates in mm.
-        The returned detector stores the coordinates in metres with shape
-        ``(n_sensors, 3)``.  This constructor preserves the regular
-        :class:`Sphere` sensor maps while replacing only the placement, so the
-        nested propagator can use measured JUNO coordinates without a runtime
-        monkey patch.
+        The position CSV contains CopyNo, coordinates in mm, and orientation
+        angles. With ``pmt_geometry="juno_20inch_front"``, the type table is
+        joined by CopyNo and supplies the Hamamatsu/NNVT front-head shape.
+        The returned detector stores coordinates in metres. This constructor
+        preserves the regular :class:`Sphere` sensor maps while replacing
+        the placement and, when requested, the PMT intersection surface.
         """
         csv_path = Path(csv_file_path)
         if csv_path.suffix.lower() != ".csv":
@@ -78,26 +88,43 @@ class NestedSphere(Sphere):
                 f"PMT positions must be provided as CSV, got {csv_path!r}"
             )
 
-        data_lines = []
-        with csv_path.open(encoding="utf-8") as stream:
-            for line in stream:
-                stripped = line.strip()
-                if stripped and not stripped.startswith(("#", '"')):
-                    data_lines.append(stripped)
-        if not data_lines:
-            raise ValueError(f"PMT CSV {csv_path!r} contains no data rows")
-        try:
-            positions_mm = np.loadtxt(
-                io.StringIO("\n".join(data_lines)),
-                dtype=np.float64,
-                usecols=(1, 2, 3),
-                ndmin=2,
+        if pmt_geometry is None:
+            data_lines = []
+            with csv_path.open(encoding="utf-8") as stream:
+                for line in stream:
+                    stripped = line.strip()
+                    if stripped and not stripped.startswith(("#", '"')):
+                        data_lines.append(stripped)
+            if not data_lines:
+                raise ValueError(
+                    f"PMT CSV {csv_path!r} contains no data rows"
+                )
+            try:
+                positions_mm = np.loadtxt(
+                    io.StringIO("\n".join(data_lines)),
+                    dtype=np.float64,
+                    usecols=(1, 2, 3),
+                    ndmin=2,
+                )
+            except (OSError, ValueError) as error:
+                raise ValueError(
+                    f"Could not parse PMT coordinates from {csv_path!r}"
+                ) from error
+            positions = positions_mm * 0.001
+            layout = None
+            dimensions = None
+        elif pmt_geometry == "juno_20inch_front":
+            if pmt_type_file_path is None:
+                raise ValueError(
+                    "pmt_type_file_path is required for JUNO PMT geometry"
+                )
+            layout = load_juno_pmt_layout(
+                csv_path, Path(pmt_type_file_path)
             )
-        except (OSError, ValueError) as error:
-            raise ValueError(
-                f"Could not parse PMT coordinates from {csv_path!r}"
-            ) from error
-        positions = positions_mm * 0.001
+            dimensions = build_juno_pmt_dimensions(layout.type_codes)
+            positions = layout.positions_m
+        else:
+            raise ValueError(f"Unknown PMT geometry model {pmt_geometry!r}")
 
         if positions.ndim != 2 or positions.shape[1] != 3:
             raise ValueError(
@@ -116,6 +143,17 @@ class NestedSphere(Sphere):
         }
         instance.ID_to_case = {i: 0 for i in range(len(positions))}
         instance.csv_file_path = csv_path
+        instance.pmt_geometry = pmt_geometry
+        instance.pmt_copy_numbers = (
+            None if layout is None else layout.copy_numbers
+        )
+        instance.pmt_inward_axes = (
+            None if layout is None else layout.inward_axes
+        )
+        instance.pmt_type_codes = (
+            None if layout is None else layout.type_codes
+        )
+        instance.pmt_dimensions = dimensions
         return instance
 
     def bounds_check(self, positions):

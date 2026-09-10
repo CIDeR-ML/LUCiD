@@ -489,9 +489,21 @@ def create_inverted_sphere_sensor_map(
     return jnp.asarray(inverted_map, dtype=jnp.int32)
 
 
-def find_intersected_sphere_sensors_differentiable(ray_origins, ray_directions, sensor_positions, sensor_radius,
-                                                    radius, n_divisions, inverted_sensor_map,
-                                                    temperature, overlap_prob, apply_angular_acceptance=False):
+def find_intersected_sphere_sensors_differentiable(
+    ray_origins,
+    ray_directions,
+    sensor_positions,
+    sensor_radius,
+    radius,
+    n_divisions,
+    inverted_sensor_map,
+    temperature,
+    overlap_prob,
+    apply_angular_acceptance=False,
+    sensor_inward_axes=None,
+    sensor_radial_radii=None,
+    sensor_axial_radii=None,
+):
     """
     Finds sensors intersected by rays using a differentiable approximation with overlap-based weights.
 
@@ -527,7 +539,10 @@ def find_intersected_sphere_sensors_differentiable(ray_origins, ray_directions, 
         lambda det_idx: compute_sensor_intersections_base(
             det_idx, sensor_positions, sensor_radius,
             ray_origins, ray_directions, bounds_check, overlap_prob,
-            apply_angular_acceptance=apply_angular_acceptance
+            apply_angular_acceptance=apply_angular_acceptance,
+            sensor_inward_axes=sensor_inward_axes,
+            sensor_radial_radii=sensor_radial_radii,
+            sensor_axial_radii=sensor_axial_radii,
         )
     )(potential_sensors.T)
     

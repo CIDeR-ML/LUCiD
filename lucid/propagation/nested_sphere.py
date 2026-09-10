@@ -135,9 +135,13 @@ batch_intersect_two_spheres = jax.vmap(
 def find_intersected_nested_sphere_sensors(ray_origins, ray_directions,
                                            sensor_positions, sensor_radius,
                                            r_inner, r_outer, n_divisions,
-                                           inverted_sensor_map, temperature, overlap_prob,
+                                           inverted_sensor_map, temperature,
+                                           overlap_prob,
                                            apply_angular_acceptance=False,
-                                           r_acrylic=None):
+                                           r_acrylic=None,
+                                           sensor_inward_axes=None,
+                                           sensor_radial_radii=None,
+                                           sensor_axial_radii=None):
     """Outer-sphere sensor lookup (reused) with inner-interface override.
 
     Computes the single-sphere result at ``r_outer`` (sensors), then for rays whose
@@ -158,7 +162,10 @@ def find_intersected_nested_sphere_sensors(ray_origins, ray_directions,
     result = find_intersected_sphere_sensors_differentiable(
         ray_origins, ray_directions, sensor_positions, sensor_radius,
         r_outer, n_divisions, inverted_sensor_map, temperature, overlap_prob,
-        apply_angular_acceptance=apply_angular_acceptance)
+        apply_angular_acceptance=apply_angular_acceptance,
+        sensor_inward_axes=sensor_inward_axes,
+        sensor_radial_radii=sensor_radial_radii,
+        sensor_axial_radii=sensor_axial_radii)
 
     # 2. Inner interface vs the outer sphere, via the generic surface list. The inner region
     #    is ONE interface surface (a sphere at the origin, radius r_inner); a ray "hits the
@@ -201,18 +208,49 @@ def find_intersected_nested_sphere_sensors(ray_origins, ray_directions,
 def create_nested_sphere_propagator(sensor_positions, sensor_radius,
                                     r_inner, r_outer, n_divisions=50,
                                     temperature=0.2, max_candidates_per_ray=4,
-                                    overlap_st_width_frac=0.35, overlap_renorm=1.0,
-                                    overlap_mode='interp', apply_angular_acceptance=False,
-                                    r_acrylic=None):
+                                    overlap_st_width_frac=0.35,
+                                    overlap_renorm=1.0,
+                                    overlap_mode='interp',
+                                    apply_angular_acceptance=False,
+                                    r_acrylic=None,
+                                    sensor_inward_axes=None,
+                                    sensor_radial_radii=None,
+                                    sensor_axial_radii=None):
     """JIT-compiled photon propagator for nested sphere geometry.
 
-    Sensors live on the outer sphere; the grid/sensor-map machinery is the
-    single-sphere machinery at ``r_outer``. Returns the same dict as the single-sphere
-    propagator plus a per-ray ``hit_interface`` flag. With ``r_acrylic`` supplied,
-    it also returns ``interface_index`` for the two internal boundaries.
+    The outer sphere supplies the grid lookup. Optional per-sensor axes and
+    radii replace the legacy spherical receiver with detector-facing PMT
+    ellipsoid heads. The result includes a per-ray ``hit_interface`` flag;
+    with ``r_acrylic`` it also includes the internal ``interface_index``.
     """
     started = time.perf_counter()
     sensor_positions = jnp.asarray(sensor_positions)
+    pmt_geometry = (
+        sensor_inward_axes,
+        sensor_radial_radii,
+        sensor_axial_radii,
+    )
+    if any(value is None for value in pmt_geometry) and not all(
+        value is None for value in pmt_geometry
+    ):
+        raise ValueError(
+            "PMT axes, radial radii, and axial radii must be supplied together"
+        )
+    if sensor_inward_axes is not None:
+        sensor_inward_axes = jnp.asarray(sensor_inward_axes)
+        sensor_radial_radii = jnp.asarray(sensor_radial_radii)
+        sensor_axial_radii = jnp.asarray(sensor_axial_radii)
+        count = sensor_positions.shape[0]
+        if sensor_inward_axes.shape != (count, 3):
+            raise ValueError(
+                f"PMT axes must have shape ({count}, 3), got "
+                f"{sensor_inward_axes.shape}"
+            )
+        if (
+            sensor_radial_radii.shape != (count,)
+            or sensor_axial_radii.shape != (count,)
+        ):
+            raise ValueError("PMT radii must contain one value per sensor")
     LOG.info("sensor map: assigning geometric PMT candidates")
 
     assignments_geometric = assign_sensors_to_sphere_grid(
@@ -263,6 +301,9 @@ def create_nested_sphere_propagator(sensor_positions, sensor_radius,
             r_inner, r_outer, n_divisions, inverted_sensor_map,
             temperature, overlap_prob,
             apply_angular_acceptance=apply_angular_acceptance,
-            r_acrylic=r_acrylic)
+            r_acrylic=r_acrylic,
+            sensor_inward_axes=sensor_inward_axes,
+            sensor_radial_radii=sensor_radial_radii,
+            sensor_axial_radii=sensor_axial_radii)
 
     return propagate_photons

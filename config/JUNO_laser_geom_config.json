@@ -12,6 +12,9 @@
     "outer_radius": 19.434,
     "n_sensors": 17612,
     "sensor_radius": 0.254,
-    "pmt_file_path": "PMTPos_CD_LPMT.csv"
+    "pmt_file_path": "PMTPos_CD_LPMT.csv",
+    "pmt_type_file_path": "PMTType_CD_LPMT.csv",
+    "pmt_geometry": "juno_20inch_front",
+    "_comment_pmt_geometry": "JUNOSW J26.3.2 detector-facing front head; cos(theta) applies only when this explicit geometry is disabled"
   }
 }

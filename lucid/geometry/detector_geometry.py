@@ -40,6 +40,7 @@ class DetectorGeometry(NamedTuple):
                     overlap_st_width_frac: float = 0.35,
                     overlap_renorm: float = 1.0,
                     overlap_mode: str = 'interp',
+                    pmt_geometry_enabled=None,
                     **grid_params) -> 'DetectorGeometry':
         """Build a DetectorGeometry from a config JSON file.
 
@@ -63,6 +64,9 @@ class DetectorGeometry(NamedTuple):
             Soft-overlap renormalization constant C; default 1.0 = OFF.
         overlap_mode : str
             Soft-overlap lookup interpolation: 'interp' (default) or 'cubic'.
+        pmt_geometry_enabled : bool or None
+            Override explicit PMT geometry for a controlled ablation. None
+            follows the detector JSON configuration.
         **grid_params
             Geometry-specific grid parameters forwarded to ``create_propagator()``.
             Cylinder: n_cap, n_angular, n_height.
@@ -84,7 +88,10 @@ class DetectorGeometry(NamedTuple):
 
         # Geometry — the actual class is dispatched from the JSON's detector_type
         # (the detector_type arg may be the caller default 'Cylinder').
-        detector = generate_detector(json_filename)
+        detector = generate_detector(
+            json_filename,
+            pmt_geometry_enabled=pmt_geometry_enabled,
+        )
         import json as _json
         with open(json_filename) as _f:
             _cfg = _json.load(_f)
@@ -117,11 +124,24 @@ class DetectorGeometry(NamedTuple):
             propagator = create_nested_sphere_propagator(
                 sensor_points, sensor_radius,
                 detector.r_inner, detector.r_outer, detector._n_divisions,
-                temperature=temperature, max_candidates_per_ray=max_candidates_per_ray,
+                temperature=temperature,
+                max_candidates_per_ray=max_candidates_per_ray,
                 overlap_st_width_frac=overlap_st_width_frac,
-                overlap_renorm=overlap_renorm, overlap_mode=overlap_mode,
+                overlap_renorm=overlap_renorm,
+                overlap_mode=overlap_mode,
                 apply_angular_acceptance=_apply_cos,
-                r_acrylic=detector.r_acrylic)
+                r_acrylic=detector.r_acrylic,
+                sensor_inward_axes=detector.pmt_inward_axes,
+                sensor_radial_radii=(
+                    None
+                    if detector.pmt_dimensions is None
+                    else detector.pmt_dimensions.outer_radial_m
+                ),
+                sensor_axial_radii=(
+                    None
+                    if detector.pmt_dimensions is None
+                    else detector.pmt_dimensions.outer_axial_m
+                ))
             return DetectorGeometry(
                 detector_type=actual_type, sensor_points=sensor_points,
                 sensor_radius=sensor_radius, num_sensors=num_sensors,
