@@ -98,6 +98,38 @@ def get_cache_filename(r: float, sigma: float) -> str:
     return f"gaussian_overlap_r{r:.6f}_sigma{sigma:.6f}.json"
 
 
+_CACHE_SUBDIR = 'spatial_overlap_integrals'
+
+
+def _cache_dirs() -> list:
+    """Directories to search for cached overlap lookups, most-preferred first.
+
+    The install dir is the historical location and stays first, so a writable
+    checkout (or a shipped, pre-populated cache) behaves exactly as before. A
+    read-only install — a container image, a root-owned site-packages — falls
+    back to the user cache. ``LUCID_CACHE_DIR`` overrides both, which also lets
+    a site point every job at one warm shared cache.
+    """
+    env = os.environ.get('LUCID_CACHE_DIR')
+    if env:
+        return [os.path.join(env, _CACHE_SUBDIR)]
+    xdg = os.environ.get('XDG_CACHE_HOME') or os.path.expanduser('~/.cache')
+    return [os.path.join(base_dir_path(), _CACHE_SUBDIR),
+            os.path.join(xdg, 'lucid', _CACHE_SUBDIR)]
+
+
+def _writable_cache_dir() -> Optional[str]:
+    """First cache dir we can actually create/write, or None if none can be."""
+    for d in _cache_dirs():
+        try:
+            os.makedirs(d, exist_ok=True)
+            if os.access(d, os.W_OK):
+                return d
+        except OSError:
+            continue
+    return None
+
+
 def save_overlap_values(r: float, sigma: float, d_values: jnp.ndarray, f_values: jnp.ndarray) -> None:
     """Save overlap values to a cache file.
 
@@ -112,10 +144,12 @@ def save_overlap_values(r: float, sigma: float, d_values: jnp.ndarray, f_values:
     f_values : jnp.ndarray
         Array of overlap probabilities
     """
-    # Create cache directory if it doesn't exist
-    os.makedirs(base_dir_path()+'/spatial_overlap_integrals/', exist_ok=True)
+    # The cache is a pure function of (r, sigma), so failing to persist it costs
+    # recomputation, never correctness — a read-only install must not be fatal.
+    cache_dir = _writable_cache_dir()
+    if cache_dir is None:
+        return
 
-    # Convert to Python lists for JSON serialization
     cache_data = {
         'r': float(r),
         'sigma': float(sigma),
@@ -123,9 +157,12 @@ def save_overlap_values(r: float, sigma: float, d_values: jnp.ndarray, f_values:
         'f_values': f_values.tolist()
     }
 
-    filename = os.path.join(base_dir_path()+'/spatial_overlap_integrals/', get_cache_filename(r, sigma))
-    with open(filename, 'w') as f:
-        json.dump(cache_data, f)
+    filename = os.path.join(cache_dir, get_cache_filename(r, sigma))
+    try:
+        with open(filename, 'w') as f:
+            json.dump(cache_data, f)
+    except OSError:
+        pass
 
 
 def load_overlap_values(r: float, sigma: float) -> Optional[Tuple[jnp.ndarray, jnp.ndarray]]:
@@ -143,9 +180,11 @@ def load_overlap_values(r: float, sigma: float) -> Optional[Tuple[jnp.ndarray, j
     Optional[Tuple[jnp.ndarray, jnp.ndarray]]
         Cached values if they exist, None otherwise
     """
-    filename = os.path.join(base_dir_path()+'/spatial_overlap_integrals/', get_cache_filename(r, sigma))
+    name = get_cache_filename(r, sigma)
+    filename = next((c for c in (os.path.join(d, name) for d in _cache_dirs())
+                     if os.path.exists(c)), None)
 
-    if os.path.exists(filename):
+    if filename is not None:
         with open(filename, 'r') as f:
             cache_data = json.load(f)
 
