@@ -68,3 +68,12 @@ site/
 # after the `!data/**/` negation above, which would otherwise re-include them.
 data/*/*/siren_training
 data/*/*/dedx_siren_training
+
+# Kerberos credential caches. On LXPLUS a stray KRB5CCNAME lands a ccache named
+# after the user in whatever directory the job ran from; these hold live tickets
+# and must never be committed. Not *.cc — that would mask real C++ sources.
+cjesus.cc
+krb5cc_*
+
+# Core dumps from crashed batch jobs
+core.[0-9]*
