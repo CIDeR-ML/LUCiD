@@ -101,21 +101,32 @@ def get_cache_filename(r: float, sigma: float) -> str:
 _CACHE_SUBDIR = 'spatial_overlap_integrals'
 
 
+_CACHE_DIR_OVERRIDE = None
+
+
+def set_cache_dir(path: Optional[str]) -> None:
+    """Point the overlap cache at an explicit directory (None restores default).
+
+    The forward path reads no environment itself — see the B6 ratchet in
+    tests/test_unification_pins.py — so a site that wants one warm shared cache
+    sets it from the production/orchestration layer, which owns infra config.
+    """
+    global _CACHE_DIR_OVERRIDE
+    _CACHE_DIR_OVERRIDE = path
+
+
 def _cache_dirs() -> list:
     """Directories to search for cached overlap lookups, most-preferred first.
 
     The install dir is the historical location and stays first, so a writable
     checkout (or a shipped, pre-populated cache) behaves exactly as before. A
     read-only install — a container image, a root-owned site-packages — falls
-    back to the user cache. ``LUCID_CACHE_DIR`` overrides both, which also lets
-    a site point every job at one warm shared cache.
+    back to the user cache.
     """
-    env = os.environ.get('LUCID_CACHE_DIR')
-    if env:
-        return [os.path.join(env, _CACHE_SUBDIR)]
-    xdg = os.environ.get('XDG_CACHE_HOME') or os.path.expanduser('~/.cache')
+    if _CACHE_DIR_OVERRIDE:
+        return [os.path.join(_CACHE_DIR_OVERRIDE, _CACHE_SUBDIR)]
     return [os.path.join(base_dir_path(), _CACHE_SUBDIR),
-            os.path.join(xdg, 'lucid', _CACHE_SUBDIR)]
+            os.path.join(os.path.expanduser('~'), '.cache', 'lucid', _CACHE_SUBDIR)]
 
 
 def _writable_cache_dir() -> Optional[str]:

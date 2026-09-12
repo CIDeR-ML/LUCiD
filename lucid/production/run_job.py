@@ -391,6 +391,14 @@ def _run_lucid(
 def main(argv: Optional[list[str]] = None) -> int:
     args = _parse_args(argv)
 
+    # Infra config, so it is read here and not in the forward path (B6 ratchet).
+    # Lets a site point every job at one warm shared overlap cache; without it
+    # the lookup falls back to the install dir, then the user cache.
+    _cache_dir = os.environ.get("LUCID_CACHE_DIR")
+    if _cache_dir:
+        from lucid.overlap import set_cache_dir
+        set_cache_dir(_cache_dir)
+
     # 1. Load config
     try:
         config = _load_config(args.config)
