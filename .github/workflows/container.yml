@@ -9,6 +9,17 @@ on:
       - 'pyproject.toml'
       - '.github/workflows/container.yml'
   workflow_dispatch:
+    inputs:
+      photonsim_ref:
+        description: 'PhotonSim ref (tag or SHA) to build against'
+        required: false
+        default: ''
+
+# PhotonSim is a separate repo, so the image must pin it explicitly: cloning
+# main would make the C++ half of any release whatever happened to be on main
+# that day, unrecorded. Bump deliberately, alongside a LUCiD change that needs it.
+env:
+  PHOTONSIM_REF_DEFAULT: ff73224a669fdc3598dc2993a8763223b11a3e5b
 
 jobs:
   build:
@@ -22,8 +33,16 @@ jobs:
         with:
           path: LUCiD
 
-      - name: Clone PhotonSim sibling
-        run: git clone --depth 1 https://github.com/cesarjesusvalls/PhotonSim.git PhotonSim
+      - name: Clone PhotonSim at the pinned ref
+        run: |
+          REF="${{ github.event.inputs.photonsim_ref }}"
+          [ -n "$REF" ] || REF="${{ env.PHOTONSIM_REF_DEFAULT }}"
+          git clone https://github.com/cesarjesusvalls/PhotonSim.git PhotonSim
+          git -C PhotonSim checkout --detach "$REF"
+          echo "PHOTONSIM_REF=$REF" >> "$GITHUB_ENV"
+          echo "PHOTONSIM_SHA=$(git -C PhotonSim rev-parse HEAD)" >> "$GITHUB_ENV"
+          echo "BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_ENV"
+          git -C PhotonSim log --oneline -1
 
       - name: Set up QEMU (linux/amd64 under arm64 runners if needed)
         uses: docker/setup-qemu-action@v3
@@ -50,6 +69,11 @@ jobs:
           tags: |
             ghcr.io/cider-ml/lucid:latest
             ghcr.io/cider-ml/lucid:${{ github.sha }}
+          build-args: |
+            LUCID_SHA=${{ github.sha }}
+            PHOTONSIM_SHA=${{ env.PHOTONSIM_SHA }}
+            PHOTONSIM_REF=${{ env.PHOTONSIM_REF }}
+            BUILD_DATE=${{ env.BUILD_DATE }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 

@@ -130,8 +130,30 @@ ENV PHOTONSIM_BIN=/opt/PhotonSim/build/PhotonSim \
     G4REALSURFACEDATA=/opt/conda/share/Geant4/data/RealSurface2.2 \
     G4SAIDXSDATA=/opt/conda/share/Geant4/data/SAIDDATA2.0
 
+# -----------------------------------------------------------------------------
+# Build provenance. The build context excludes .git/, so without this an image
+# cannot say which sources it was built from — which is how a .sif drifted four
+# months behind the registry unnoticed. Recorded both as a file the image can
+# print about itself and as OCI labels readable without running it.
+# -----------------------------------------------------------------------------
+ARG LUCID_SHA=unknown
+ARG PHOTONSIM_SHA=unknown
+ARG PHOTONSIM_REF=unknown
+ARG BUILD_DATE=unknown
+RUN printf 'lucid_sha=%s\nlucid_source=%s\nphotonsim_sha=%s\nphotonsim_ref=%s\nphotonsim_source=%s\nbuild_date=%s\ngeant4=%s\n' \
+      "$LUCID_SHA" "https://github.com/CIDeR-ML/LUCiD" \
+      "$PHOTONSIM_SHA" "$PHOTONSIM_REF" "https://github.com/cesarjesusvalls/PhotonSim" \
+      "$BUILD_DATE" "$(/opt/conda/bin/geant4-config --version 2>/dev/null || echo unknown)" \
+      > /opt/VERSIONS \
+ && cat /opt/VERSIONS
+
 LABEL org.opencontainers.image.title="LUCiD" \
-      org.opencontainers.image.description="nuisancemc/tutorial:nuint2024 + conda GEANT4 11.3 + PhotonSim + LUCiD"
+      org.opencontainers.image.description="nuisancemc/tutorial:nuint2024 + conda GEANT4 11.3 + PhotonSim + LUCiD" \
+      org.opencontainers.image.source="https://github.com/CIDeR-ML/LUCiD" \
+      org.opencontainers.image.revision="${LUCID_SHA}" \
+      org.opencontainers.image.created="${BUILD_DATE}" \
+      ml.cider.photonsim.revision="${PHOTONSIM_SHA}" \
+      ml.cider.photonsim.ref="${PHOTONSIM_REF}"
 
 WORKDIR /work
 CMD ["bash"]
