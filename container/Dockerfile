@@ -90,6 +90,16 @@ RUN SETUPTOOLS_SCM_PRETEND_VERSION_FOR_LUCID_SIM=0.0.0+docker \
  && command -v lucid-run-job \
  && python3 -c "import lucid.production.run_job as m; print(m.__file__)"
 
+# Warm the overlap-integral lookup cache for the detectors we ship. The cache is
+# gitignored, so it is never in the build context; without this the first job on
+# a fresh install pays the recomputation. It also keeps a read-only install off
+# the write path entirely, since the loader finds the entry here.
+RUN python3 -c "\
+import glob; \
+from lucid.geometry.detector_geometry import DetectorGeometry; \
+[ (DetectorGeometry.from_config(f), print('warmed', f)) for f in sorted(glob.glob('/opt/LUCiD/config/*_WAND_geom_config.json')) ]" \
+ && ls -1 /opt/LUCiD/spatial_overlap_integrals/
+
 # -----------------------------------------------------------------------------
 # Runtime env. The base image already sets ROOTSYS, GENIE, GENIE_XSEC_DIR,
 # GENIE_XSEC_FILE, PYTHIA6, GXMLPATH, ROOT_INCLUDE_PATH, and all the right
