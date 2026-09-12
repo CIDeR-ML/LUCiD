@@ -11,12 +11,17 @@ per block):
 
 | block | contents | splits |
 |---|---|---|
-| `GeV` | single particles (01–05), particle-bomb (06), multiparticle (07–12), GENIE numu+nue (13) | 01–06 train+test (1M/50k); 07–13 **test-only** (50k) |
+| `GeV` | single particles (01–05), particle-bomb (06) | 01–05 **test-only** (50k); 06 train+test (1M/50k) |
 | `Solar` | low-energy e⁻ (01) | train+test (1M/50k) |
 | `SN` | supernova bursts (01) | flat |
 | `Test` | dev/scratch (pile-up bombs 01) | flat |
 
-Each config declares its `detector` and `nominal_train` / `nominal_test`; the
+The particle bomb is the training set: it spans the multiplicities and species
+a real event mixes, so the single-particle configs are kept test-only, for
+evaluating a model per species rather than training on one.
+
+A config declares `nominal_train` / `nominal_test`; the detector comes from
+`-D` (or the config's own `detector`, for the self-contained blocks). The
 fanout writes `OUTPUT_BASE/<detector>/<block>/[<split>]/config_NN/` and sizes jobs
 from `nominal / (target_seconds_per_job / seconds_per_event)`. Train/test datasets
 use disjoint master seeds. See
