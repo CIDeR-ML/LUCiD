@@ -7,10 +7,11 @@ detector-facing front head of the corresponding JUNO 20-inch PMT. It uses
 the installed CopyNo, position, orientation, and PMT technology. The PMT
 equator remains at the position supplied by the official placement table.
 
-This stage is geometry only. A photon reaching the outer glass surface is
-still treated by LUCiD as an ideal sensor with QE = 1. Glass propagation,
-thin-film ARC/photocathode response, vacuum propagation, and secondary
-internal paths are P1b work.
+The full-detector model treats the PMT as one effective surface. A photon
+reaching it is either captured with QE = 1 or reflected back into the
+detector. Glass propagation, thin-film ARC/photocathode response, vacuum
+propagation, and secondary internal paths are outside this model; they may
+later be studied with an independent single-PMT simulation.
 
 ## JUNOSW J26.3.2 inputs
 
@@ -39,9 +40,9 @@ table; `diff -w -B` reports no semantic difference.
 | Hamamatsu R12860 | 254 mm | 190 mm |
 | NNVT / High-QE NNVT | 254 mm | 184 mm |
 
-The glass inner surface uses JUNOSW's `inner_delta = -5 mm`, giving
-249 mm radial and 185/179 mm axial semi-axes. P1a stores this surface for
-the next optical stage but intersects photons only with the outer surface.
+The existing geometry metadata also stores the JUNOSW 5 mm inner offset,
+but full-detector transport intersects only the outer half-ellipsoid. The
+inner dimensions are inert and do not imply glass propagation.
 
 For PMT centre `c`, inward axis `a`, and point `x`, define
 
@@ -60,6 +61,25 @@ entry point. The geometry result retains both normal conventions:
 The transport/reflection API consumes `detector_outward_normals`. Therefore
 both specular and diffuse PMT reflections return to the detector interior.
 
+## Effective PMT surface
+
+The `pmt_surface` reflection model has only two PMT parameters:
+
+```text
+rho_pmt = P(reflection | PMT hit)
+f_spec  = P(specular | reflection)
+```
+
+A hit contributes to ideal capture with probability `1 - rho_pmt`, to
+specular reflection with probability `rho_pmt * f_spec`, and to diffuse
+reflection with probability `rho_pmt * (1 - f_spec)`. The initial baseline
+uses `rho_pmt = 0.2` and `f_spec = 0.5`. These are effective differentiable
+parameters rather than water--glass or photocathode optical constants.
+
+The LS--Acrylic and Acrylic--Water interfaces keep their explicit
+Snell/Fresnel/TIR treatment. Simplifying the PMT does not alter those medium
+boundaries.
+
 ## Configuration
 
 `config/JUNO_laser_geom_config.json` enables
@@ -70,6 +90,13 @@ this intersection model. When explicit geometry is enabled, the existing
 angular projection geometrically. When it is disabled, the legacy spherical
 receiver retains that factor, reproducing the pre-P1a angular baseline.
 
+`--reflection-model pmt_surface|angular|scalar|config` changes only the
+surface reflection rule. Keeping the same seed and selecting
+`PMT_GEOMETRY=on/off` isolates the geometry contribution; keeping the
+geometry on and selecting `REFLECTION_MODEL=pmt_surface/angular` isolates
+the PMT reflection-model contribution.
+
 The transport baseline is fixed in `config/JUNO_laser_config.json`:
 `K = 64`, Acrylic absorption active, and LS--Acrylic plus
-Acrylic--Water Snell/Fresnel/TIR optics active. No P0 on/off switches remain.
+Acrylic--Water Snell/Fresnel/TIR optics active. PMTs use the effective
+`pmt_surface` model. No P0 on/off switches remain.

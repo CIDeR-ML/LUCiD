@@ -19,7 +19,10 @@ from lucid.geometry.juno_pmt import (
 )
 from lucid.propagation.base import compute_sensor_intersections_base
 from lucid.propagation.nested_sphere import create_nested_sphere_propagator
-from lucid.simulation.reflection import AngularReflection, angular_reflection
+from lucid.simulation.reflection import (
+    PmtSurfaceReflection,
+    pmt_surface_reflection,
+)
 
 
 def _write_layout(tmp_path):
@@ -106,15 +109,14 @@ def test_pmt_diffuse_reflection_returns_to_detector_interior():
         0.254,
         0.190,
     )
-    params = AngularReflection(
-        R0w=jnp.asarray(0.05),
-        pw=jnp.asarray(1.5),
-        fw=jnp.asarray(0.1),
-        nr=jnp.asarray(2.8),
-        nk=jnp.asarray(1.5),
-        fs=jnp.asarray(0.0),
+    params = PmtSurfaceReflection(
+        wall_R0=jnp.asarray(0.05),
+        wall_p=jnp.asarray(1.5),
+        wall_fspec=jnp.asarray(0.1),
+        sensor_rate=jnp.asarray(0.2),
+        sensor_fspec=jnp.asarray(0.0),
     )
-    _, reflected, _ = angular_reflection(
+    _, reflected, _ = pmt_surface_reflection(
         jnp.array([0.0, 0.0, 1.0]),
         hit.detector_outward_normals[0],
         True,

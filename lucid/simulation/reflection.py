@@ -148,6 +148,21 @@ class AngularReflection(NamedTuple):
     fs: jnp.ndarray
 
 
+class PmtSurfaceReflection(NamedTuple):
+    """Parameters for a minimal whole-PMT surface model.
+
+    The wall retains the existing low-dimensional Schlick model. The PMT is
+    one effective boundary with a total reflection rate and a specular share;
+    no glass, photocathode, vacuum, or internal transport is represented.
+    """
+
+    wall_R0: jnp.ndarray
+    wall_p: jnp.ndarray
+    wall_fspec: jnp.ndarray
+    sensor_rate: jnp.ndarray
+    sensor_fspec: jnp.ndarray
+
+
 def angular_reflection(direction, normal, hit_sensor, refl_params, lam, key):
     """Schlick blacksheet (wall) + multilayer-Fresnel cathode (sensor) reflection.
 
@@ -174,6 +189,69 @@ def angular_reflection(direction, normal, hit_sensor, refl_params, lam, key):
     return refl_prob, refl_dir, lr_score
 
 
+def pmt_surface_reflection(
+    direction,
+    normal,
+    hit_sensor,
+    refl_params,
+    lam,
+    key,
+):
+    """Reflect from a wall or one effective whole-PMT surface.
+
+    PMT reflectance is the scalar ``sensor_rate``. Conditional on reflection,
+    ``sensor_fspec`` selects a mirror direction; the complementary branch is
+    cosine-weighted diffuse reflection back into the detector. ``lam`` is
+    accepted for the common reflection interface but deliberately unused.
+    """
+    del lam
+    normal_refl = sg(normal)
+    incidence = jnp.clip(
+        jnp.abs(jnp.sum(direction * normal_refl)), 0.0, 1.0
+    )
+    wall_rate = refl_params.wall_R0 + (
+        1.0 - refl_params.wall_R0
+    ) * (1.0 - incidence) ** jnp.clip(
+        refl_params.wall_p, 0.5, 12.0
+    )
+    reflectance = jnp.where(
+        hit_sensor,
+        refl_params.sensor_rate,
+        wall_rate,
+    )
+    reflectance = jnp.clip(reflectance, 0.0, 1.0)
+
+    diffuse_key, branch_key = jax.random.split(key)
+    specular_fraction = jnp.clip(
+        jnp.where(
+            hit_sensor,
+            refl_params.sensor_fspec,
+            refl_params.wall_fspec,
+        ),
+        0.0,
+        1.0,
+    )
+    is_specular = (
+        jax.random.uniform(branch_key) < sg(specular_fraction)
+    )
+    specular_direction = compute_reflection_direction(
+        direction, normal_refl
+    )
+    diffuse_direction = sample_cosine_hemisphere(
+        -normal_refl, diffuse_key
+    )
+    reflected_direction = jnp.where(
+        is_specular, specular_direction, diffuse_direction
+    )
+    selected_probability = jnp.where(
+        is_specular,
+        specular_fraction,
+        1.0 - specular_fraction,
+    )
+    score = jnp.log(jnp.maximum(selected_probability, 1e-12))
+    return reflectance, reflected_direction, score
+
+
 # ---------------------------------------------------------------------------
 # Model registry — name → (reflection_fn, build_refl_params(detector_params)).
 # build_refl_params extracts the model's parameters from a DetectorParams pytree.
@@ -194,9 +272,22 @@ def _build_angular_params(detector_params):
                              nr=r.cathode_nr, nk=r.cathode_nk, fs=r.sensor_fspec)
 
 
+def _build_pmt_surface_params(detector_params):
+    """Build the whole-PMT model from existing low-dimensional fields."""
+    reflection = detector_params.reflection
+    return PmtSurfaceReflection(
+        wall_R0=reflection.wall_R0,
+        wall_p=reflection.wall_p,
+        wall_fspec=reflection.wall_fspec,
+        sensor_rate=reflection.sensor_reflection_rate,
+        sensor_fspec=reflection.sensor_fspec,
+    )
+
+
 REFLECTION_MODELS = {
     'scalar': (scalar_reflection, _build_scalar_params),
     'angular': (angular_reflection, _build_angular_params),
+    'pmt_surface': (pmt_surface_reflection, _build_pmt_surface_params),
 }
 
 # Reflection models that require a per-photon wavelength (→ wavelength_mode=True).

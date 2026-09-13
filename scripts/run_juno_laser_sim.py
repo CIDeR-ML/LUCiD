@@ -46,7 +46,7 @@ import pyarrow.parquet as pq
 from lucid.detector_params import load_physics_config
 from lucid.geometry.detector_geometry import DetectorGeometry
 from lucid.simulation.photon_step_factory import make_photon_step
-from lucid.simulation.reflection import get_reflection_model
+from lucid.simulation.reflection import REFLECTION_MODELS, get_reflection_model
 from lucid.simulation.sensor_response import make_hits_likelihood
 from lucid.sources import isotropic_source
 from lucid.juno_laser.data import SIMULATION_SCHEMA, simulation_table
@@ -74,6 +74,8 @@ def _simulation_metadata(
     record_trajectories,
     pmt_geometry_request,
     pmt_geometry,
+    reflection_model_request,
+    reflection_model,
 ):
     """Return file metadata documenting the simulation provenance."""
     values = {
@@ -88,9 +90,8 @@ def _simulation_metadata(
         ),
         "wavelength_nm": str(config["wavelength_nm"]),
         "max_scattering_steps": str(n_steps),
-        "reflection_model": str(
-            config.get("transport", {}).get("reflection_model", "scalar")
-        ),
+        "reflection_model_request": reflection_model_request,
+        "reflection_model": reflection_model,
         "seed": str(args.seed),
         "record_trajectories": str(bool(record_trajectories)),
         "pmt_geometry_request": pmt_geometry_request,
@@ -456,9 +457,12 @@ def simulate(args):
             "--source must contain three comma-separated coordinates"
         )
     n_steps = int(args.k or simulation["max_scattering_steps"])
-    reflection_model = config.get("transport", {}).get(
-        "reflection_model", "scalar"
-    )
+    reflection_model_request = args.reflection_model
+    reflection_model = reflection_model_request
+    if reflection_model_request == "config":
+        reflection_model = config.get("transport", {}).get(
+            "reflection_model", "scalar"
+        )
     record_trajectories = bool(
         args.record_trajectories
         or simulation.get("record_trajectories", False)
@@ -508,6 +512,8 @@ def simulate(args):
             record_trajectories,
             pmt_geometry_request,
             pmt_geometry,
+            reflection_model_request,
+            reflection_model,
         )
     )
     trajectory_context = (
@@ -641,6 +647,8 @@ def simulate(args):
                 "format_version": "lucid-juno-laser-pe-parquet",
                 "pmt_geometry_request": pmt_geometry_request,
                 "pmt_geometry": pmt_geometry,
+                "reflection_model_request": reflection_model_request,
+                "reflection_model": reflection_model,
                 "max_scattering_steps": n_steps,
                 "trajectory_output": (
                     str(trajectory_output)
@@ -686,6 +694,15 @@ def main():
         help=(
             "PMT 几何消融：config=遵循几何配置，on=显式前端，"
             "off=旧球形接收面"
+        ),
+    )
+    parser.add_argument(
+        "--reflection-model",
+        choices=("config", *sorted(REFLECTION_MODELS)),
+        default="config",
+        help=(
+            "反射模型消融：config=遵循主配置；pmt_surface=整体 PMT；"
+            "angular=旧多层模型；scalar=旧标量模型"
         ),
     )
     parser.add_argument(

@@ -81,17 +81,17 @@ class ReflectionParams(NamedTuple):
     Fields
     ------
     wall_reflection_rate : jnp.ndarray   scalar, [0, 1] — scalar-model wall rate
-    sensor_reflection_rate : jnp.ndarray scalar, [0, 1] — scalar-model sensor rate
+    sensor_reflection_rate : jnp.ndarray scalar, [0, 1] — effective PMT rate
     wall_R0 : jnp.ndarray        blacksheet normal-incidence reflectance (Schlick)
     wall_p : jnp.ndarray         blacksheet Schlick angular exponent
     wall_fspec : jnp.ndarray     blacksheet specular fraction (1-fspec diffuse)
     cathode_nr : jnp.ndarray     PMT cathode real refractive index
     cathode_nk : jnp.ndarray     PMT cathode imaginary index (absorption)
-    sensor_fspec : jnp.ndarray   PMT specular fraction (1-fspec diffuse)
+    sensor_fspec : jnp.ndarray   effective PMT specular share
 
-    The first two drive the default ``scalar`` reflection model. The remaining six
-    parameterise the ``angular`` model (Schlick blacksheet + multilayer-Fresnel
-    cathode); they are inert unless ``reflection_model='angular'``.
+    ``pmt_surface`` uses the wall Schlick fields together with
+    ``sensor_reflection_rate`` and ``sensor_fspec``. ``angular`` additionally
+    uses the cathode indices for its legacy multilayer-Fresnel PMT response.
     """
     wall_reflection_rate: jnp.ndarray
     sensor_reflection_rate: jnp.ndarray

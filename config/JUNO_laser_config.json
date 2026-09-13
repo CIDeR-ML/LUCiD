@@ -18,7 +18,7 @@
   "transport": {
     "max_scattering_steps": 64,
     "record_trajectories": false,
-    "reflection_model": "angular",
+    "reflection_model": "pmt_surface",
     "wall_reflection_rate": 0.2,
     "sensor_reflection_rate": 0.2,
     "qe": 1.0
