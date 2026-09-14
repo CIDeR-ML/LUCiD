@@ -20,6 +20,7 @@ from .juno_pmt import (
     build_juno_pmt_dimensions,
     load_juno_pmt_layout,
 )
+from .juno_support import load_juno_support_layout
 from .sphere import Sphere
 from .registry import register_detector
 
@@ -63,6 +64,8 @@ class NestedSphere(Sphere):
         self.pmt_inward_axes = None
         self.pmt_type_codes = None
         self.pmt_dimensions = None
+        self.support_geometry = None
+        self.support_rods = None
         if acrylic_radius is not None and not (
                 inner_radius < acrylic_radius < outer_radius):
             raise ValueError(
@@ -72,7 +75,9 @@ class NestedSphere(Sphere):
     @classmethod
     def from_pmt_file(cls, csv_file_path, inner_radius, outer_radius,
                       sensor_radius, acrylic_radius=None,
-                      pmt_type_file_path=None, pmt_geometry=None):
+                      pmt_type_file_path=None, pmt_geometry=None,
+                      support_rod_file_path=None,
+                      support_geometry=None):
         """Build a nested sphere using externally supplied PMT positions.
 
         The position CSV contains CopyNo, coordinates in mm, and orientation
@@ -154,6 +159,19 @@ class NestedSphere(Sphere):
             None if layout is None else layout.type_codes
         )
         instance.pmt_dimensions = dimensions
+        if support_geometry is not None:
+            if support_geometry != "juno_radial_cylinders":
+                raise ValueError(
+                    f"Unknown support geometry {support_geometry!r}"
+                )
+            if support_rod_file_path is None:
+                raise ValueError(
+                    "support_rod_file_path is required for support geometry"
+                )
+            instance.support_rods = load_juno_support_layout(
+                support_rod_file_path
+            )
+        instance.support_geometry = support_geometry
         return instance
 
     def bounds_check(self, positions):

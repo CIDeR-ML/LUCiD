@@ -64,6 +64,13 @@ def _pmt_geometry_override(request):
     return request == "on"
 
 
+def _support_geometry_override(request):
+    """Map the support ablation mode to the detector-loader override."""
+    if request == "config":
+        return None
+    return request == "on"
+
+
 def _simulation_metadata(
     args,
     config,
@@ -74,6 +81,11 @@ def _simulation_metadata(
     record_trajectories,
     pmt_geometry_request,
     pmt_geometry,
+    support_geometry_request,
+    support_geometry,
+    support_count,
+    support_reflectance,
+    support_fspec,
     reflection_model_request,
     reflection_model,
 ):
@@ -96,6 +108,11 @@ def _simulation_metadata(
         "record_trajectories": str(bool(record_trajectories)),
         "pmt_geometry_request": pmt_geometry_request,
         "pmt_geometry": pmt_geometry,
+        "support_geometry_request": support_geometry_request,
+        "support_geometry": support_geometry,
+        "support_rod_count": str(support_count),
+        "support_reflectance": str(support_reflectance),
+        "support_fspec": str(support_fspec),
         "pe_time_units": "ns",
         "offset_units": "ns",
     }
@@ -168,6 +185,7 @@ def _lengths_at(material_dir: Path, wavelength_nm: float,
 def _make_forward(
     det_geom, dp, *, n_photons, n_steps, source, intensity, wavelength_nm,
     reflection_model="scalar", record_trajectories=False,
+    support_reflectance=0.535, support_fspec=0.5,
 ):
     """Create a JIT nested-sphere forward returning raw hit arrays.
 
@@ -185,6 +203,7 @@ def _make_forward(
         det_geom.medium_outer.refractive_index, dtype=jnp.float32
     )
     has_acrylic = det_geom.medium_acrylic is not None
+    has_support = detector.support_rods is not None
     media = (det_geom.medium, det_geom.medium_acrylic,
              det_geom.medium_outer) if has_acrylic else (
                  det_geom.medium, det_geom.medium_outer)
@@ -198,7 +217,7 @@ def _make_forward(
     refl_params = build_reflection_params(dp)
     photon_step = make_photon_step(
         "sample", has_interface=True, reflection_fn=reflection_fn,
-        multi_interface=has_acrylic,
+        multi_interface=has_acrylic, has_support=has_support,
     )
     source = isotropic_source(
         source, intensity=intensity, wavelength=wavelength_nm
@@ -272,9 +291,17 @@ def _make_forward(
                 photon_step,
                 in_axes=(0, 0, 0, 0, 0,
                          0, 0, None, None, 0,
-                0, None, 0, 0,
+                         0, None, 0, 0,
                          0, 0, None, None, 0, None),
-            )(
+            ) if not has_support else jax.vmap(
+                photon_step,
+                in_axes=(0, 0, 0, 0, 0,
+                         0, 0, None, None, 0,
+                         0, None, 0, 0,
+                         0, 0, None, None, 0, None,
+                         0, None, None),
+            )
+            result = result(
                 positions,
                 directions,
                 times,
@@ -295,7 +322,16 @@ def _make_forward(
                 n_outer,
                 interface_index,
                 refractive_indices,
+                *(
+                    (
+                        hit["hit_support"],
+                        support_reflectance,
+                        support_fspec,
+                    )
+                    if has_support else ()
+                ),
             )
+            base_result = result[:8]
             (
                 new_pos,
                 new_dir,
@@ -305,7 +341,7 @@ def _make_forward(
                 cont,
                 _,
                 new_medium,
-            ) = result
+            ) = base_result
             new_pos = jnp.asarray(new_pos, dtype=positions.dtype)
             new_dir = jnp.asarray(new_dir, dtype=directions.dtype)
             new_time = jnp.asarray(new_time, dtype=times.dtype)
@@ -345,11 +381,19 @@ def _make_forward(
                     new_medium,
                     key,
                 )
-            return new_carry, (
+            outputs = (
                 weights,
                 hit["sensor_indices"],
                 arrival.squeeze(-1),
             )
+            if has_support:
+                support_events = result[8]
+                alive = (survival > 0).astype(support_events.dtype)
+                support_counts = jnp.sum(
+                    support_events * alive[:, None], axis=0
+                )
+                outputs = outputs + (support_counts,)
+            return new_carry, outputs
 
         if record_trajectories:
             initial = (
@@ -372,8 +416,9 @@ def _make_forward(
                 medium_id,
                 key,
             )
-        final_carry, (weights, indices, times) = jax.lax.scan(
+        final_carry, scan_outputs = jax.lax.scan(
             step, initial, jnp.arange(n_steps))
+        weights, indices, times = scan_outputs[:3]
         log_w, safe_times, indices, total_charge = make_hits_likelihood(
             weights.reshape(-1),
             indices.reshape(-1),
@@ -383,7 +428,7 @@ def _make_forward(
             qe_corrections=qc,
         )
         if record_trajectories:
-            return (
+            outputs = (
                 log_w,
                 safe_times,
                 indices,
@@ -392,7 +437,11 @@ def _make_forward(
                 final_carry[7],
                 final_carry[8],
             )
-        return log_w, safe_times, indices, total_charge
+        else:
+            outputs = (log_w, safe_times, indices, total_charge)
+        if has_support:
+            outputs = outputs + (jnp.sum(scan_outputs[3], axis=0),)
+        return outputs
 
     return forward
 
@@ -405,6 +454,9 @@ def simulate(args):
     geom_path = root / config["geometry_config"]
     simulation = config["simulation"]
     pmt_geometry_request = getattr(args, "pmt_geometry", "config")
+    support_geometry_request = getattr(
+        args, "support_geometry", "config"
+    )
     outdir = Path(args.outdir)
     outdir.mkdir(parents=True, exist_ok=True)
     logging.basicConfig(
@@ -422,15 +474,31 @@ def simulate(args):
         pmt_geometry_enabled=_pmt_geometry_override(
             pmt_geometry_request
         ),
+        support_geometry_enabled=_support_geometry_override(
+            support_geometry_request
+        ),
     )
     n_sensors = geom.num_sensors
     pmt_geometry = geom.detector.pmt_geometry or "legacy_sphere"
+    support_geometry = (
+        geom.detector.support_geometry or "disabled"
+    )
+    support_count = (
+        0 if geom.detector.support_rods is None
+        else len(geom.detector.support_rods.centers_m)
+    )
     LOG.info("detector geometry ready: %d PMTs (%.2fs)", n_sensors,
              time.perf_counter() - t0)
     LOG.info(
         "PMT geometry: request=%s, effective=%s",
         pmt_geometry_request,
         pmt_geometry,
+    )
+    LOG.info(
+        "support geometry: request=%s, effective=%s, rods=%d",
+        support_geometry_request,
+        support_geometry,
+        support_count,
     )
 
     t0 = time.perf_counter()
@@ -444,6 +512,12 @@ def simulate(args):
         num_sensors=n_sensors,
         scalar_ref_wavelength=config["wavelength_nm"],
     )
+    with physics_path.open() as stream:
+        physics_config = json.load(stream)
+    support_reflectance = float(
+        physics_config.get("support_reflection_rate", 0.535)
+    )
+    support_fspec = float(physics_config.get("support_fspec", 0.5))
     LOG.info("physics parameters ready (%.2fs)", time.perf_counter() - t0)
     n_photons = int(args.n_photons or simulation["n_photons"])
     intensity = float(
@@ -480,6 +554,8 @@ def simulate(args):
         wavelength_nm=float(config["wavelength_nm"]),
         reflection_model=reflection_model,
         record_trajectories=record_trajectories,
+        support_reflectance=support_reflectance,
+        support_fspec=support_fspec,
     )
     LOG.info(
         "forward function constructed; first event will trigger JIT "
@@ -512,6 +588,11 @@ def simulate(args):
             record_trajectories,
             pmt_geometry_request,
             pmt_geometry,
+            support_geometry_request,
+            support_geometry,
+            support_count,
+            support_reflectance,
+            support_fspec,
             reflection_model_request,
             reflection_model,
         )
@@ -560,7 +641,7 @@ def simulate(args):
                     trajectory_positions,
                     trajectory_times,
                     trajectory_alive,
-                ) = result
+                ) = result[:7]
                 event_group = trajectory_file.create_group(
                     f"event_{event:06d}"
                 )
@@ -582,7 +663,11 @@ def simulate(args):
                 event_group.attrs["event"] = event
                 event_group.attrs["seed"] = seed
             else:
-                log_w, times, indices, total_charge = result
+                log_w, times, indices, total_charge = result[:4]
+            support_counts = (
+                np.asarray(result[-1], dtype=np.int64)
+                if support_count else None
+            )
             log_w, times, indices = (
                 np.asarray(value) for value in (log_w, times, indices)
             )
@@ -630,6 +715,19 @@ def simulate(args):
                 "mean_pe_per_pmt": float(pe_pmt.size / n_sensors),
                 "elapsed_s": float(elapsed),
             }
+            if support_counts is not None:
+                names = (
+                    "support_hits",
+                    "support_absorbed",
+                    "support_reflected",
+                    "support_specular",
+                    "support_diffuse",
+                )
+                stats.update({
+                    name: int(value)
+                    for name, value in zip(names, support_counts)
+                })
+                stats["support_blocked"] = stats["support_hits"]
             event_stats.append(stats)
             LOG.info(
                 "event %d: PE=%d, PMTs=%d, %.2fs",
@@ -647,6 +745,11 @@ def simulate(args):
                 "format_version": "lucid-juno-laser-pe-parquet",
                 "pmt_geometry_request": pmt_geometry_request,
                 "pmt_geometry": pmt_geometry,
+                "support_geometry_request": support_geometry_request,
+                "support_geometry": support_geometry,
+                "support_rod_count": support_count,
+                "support_reflection_rate": support_reflectance,
+                "support_fspec": support_fspec,
                 "reflection_model_request": reflection_model_request,
                 "reflection_model": reflection_model,
                 "max_scattering_steps": n_steps,
@@ -670,6 +773,15 @@ def main():
         "--output",
         default="simulation.parquet",
         help="single FSMP-style Parquet file name or path",
+    )
+    parser.add_argument(
+        "--support-geometry",
+        choices=("config", "on", "off"),
+        default="config",
+        help=(
+            "支撑杆几何消融：config=遵循几何配置，on=有效圆柱，"
+            "off=关闭支撑杆"
+        ),
     )
     parser.add_argument("--source", default="0,0,0", metavar="X,Y,Z")
     parser.add_argument(

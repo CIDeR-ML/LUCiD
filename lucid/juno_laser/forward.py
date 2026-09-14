@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import jax
@@ -56,7 +57,19 @@ def build_per_pe_forward(config: JunoLaserConfig, det_geom, physics_params: Dete
 
     reflection_fn, build_reflection_params = get_reflection_model("scalar")
     reflection_params = build_reflection_params(physics_params)
-    photon_step = make_photon_step("update_factors", has_interface=True, reflection_fn=reflection_fn)
+    has_support = detector.support_rods is not None
+    photon_step = make_photon_step(
+        "update_factors",
+        has_interface=True,
+        reflection_fn=reflection_fn,
+        has_support=has_support,
+    )
+    with config.physics_path.open() as stream:
+        fixed_physics = json.load(stream)
+    support_reflectance = float(
+        fixed_physics.get("support_reflection_rate", 0.535)
+    )
+    support_fspec = float(fixed_physics.get("support_fspec", 0.5))
     g = physics_params.scattering.g
     qe = physics_params.response.qe
     qe_corrections = physics_params.per_pmt.qe_corrections
@@ -111,16 +124,35 @@ def build_per_pe_forward(config: JunoLaserConfig, det_geom, physics_params: Dete
             mie = jnp.where(in_inner, mie_in, mie_out)
             absorb = jnp.where(in_inner, absorb_in, absorb_out)
             speed = jnp.where(in_inner, speed_in, speed_out)
-            result = jax.vmap(
+            vectorized_step = jax.vmap(
                 photon_step,
                 in_axes=(0, 0, 0, 0, 0,
                          0, 0, None, None, 0,
                          0, None, 0, 0,
                          0, 0, None, None),
-            )(positions, directions, times, surface_distance, normals,
+            ) if not has_support else jax.vmap(
+                photon_step,
+                in_axes=(0, 0, 0, 0, 0,
+                         0, 0, None, None, 0,
+                         0, None, 0, 0,
+                         0, 0, None, None, None, None,
+                         0, None, None),
+            )
+            result = vectorized_step(
+              positions, directions, times, surface_distance, normals,
               scatter, mie, g, reflection_params, absorb, hit_sensor, 400.0,
               ray_keys, speed, hit_interface, medium_id,
-              params.n_ls, params.n_water)
+              params.n_ls, params.n_water,
+              *(
+                  (
+                      None,
+                      None,
+                      prop["hit_support"],
+                      support_reflectance,
+                      support_fspec,
+                  )
+                  if has_support else ()
+              ))
             (new_positions, new_directions, new_times,
              detect_probs, reflection_attenuations,
              continuing_factors, logp_increment, new_medium_id) = result
@@ -154,4 +186,3 @@ def build_per_pe_forward(config: JunoLaserConfig, det_geom, physics_params: Dete
         return histogram, histogram.sum(axis=1)
 
     return forward
-

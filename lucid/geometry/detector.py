@@ -99,7 +99,8 @@ def load_detector_geom(file_path):
         raise ValueError(f"Unknown detector type: {detector_type}")
 
 
-def generate_detector(file_path, pmt_geometry_enabled=None):
+def generate_detector(file_path, pmt_geometry_enabled=None,
+                      support_geometry_enabled=None):
     """Generate a detector from a JSON config file using the geometry registry.
 
     The detector type in the config (e.g. 'cylinder', 'sphere', 'box') is
@@ -118,7 +119,8 @@ def generate_detector(file_path, pmt_geometry_enabled=None):
     The NPZ path used by cylinder configurations is also resolved relative
     to the config-file directory. ``pmt_geometry_enabled`` optionally
     overrides only the configured explicit PMT intersection geometry, for a
-    controlled geometry on/off ablation.
+    controlled geometry on/off ablation. ``support_geometry_enabled`` does
+    the same independently for the effective JUNO support rods.
     """
     config = load_detector_config(file_path)
     detector_type = config['detector_type']
@@ -154,6 +156,23 @@ def generate_detector(file_path, pmt_geometry_enabled=None):
             )
             if type_path is not None:
                 type_path = os.path.join(config_dir, type_path)
+            configured_support = geom_def.get('support_rod_geometry')
+            if support_geometry_enabled is None:
+                support_geometry = configured_support
+            elif support_geometry_enabled:
+                if configured_support is None:
+                    raise ValueError(
+                        "Support geometry was enabled but none is configured"
+                    )
+                support_geometry = configured_support
+            else:
+                support_geometry = None
+            support_path = (
+                geom_def.get('support_rod_file_path')
+                if support_geometry is not None else None
+            )
+            if support_path is not None:
+                support_path = os.path.join(config_dir, support_path)
             return cls.from_pmt_file(
                 csv_path,
                 geom_def['inner_radius'],
@@ -161,7 +180,9 @@ def generate_detector(file_path, pmt_geometry_enabled=None):
                 geom_def['sensor_radius'],
                 acrylic_radius=geom_def.get('acrylic_radius'),
                 pmt_type_file_path=type_path,
-                pmt_geometry=pmt_geometry)
+                pmt_geometry=pmt_geometry,
+                support_rod_file_path=support_path,
+                support_geometry=support_geometry)
         return cls(geom_def['inner_radius'], geom_def['outer_radius'],
                    geom_def['n_sensors'], geom_def['sensor_radius'],
                    acrylic_radius=geom_def.get('acrylic_radius'))

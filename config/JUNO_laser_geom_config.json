@@ -15,6 +15,9 @@
     "pmt_file_path": "PMTPos_CD_LPMT.csv",
     "pmt_type_file_path": "PMTType_CD_LPMT.csv",
     "pmt_geometry": "juno_20inch_front",
-    "_comment_pmt_geometry": "JUNOSW J26.3.2 detector-facing front head; cos(theta) applies only when this explicit geometry is disabled"
+    "_comment_pmt_geometry": "JUNOSW J26.3.2 detector-facing front head; cos(theta) applies only when this explicit geometry is disabled",
+    "support_rod_file_path": "JUNO_support_rods.csv",
+    "support_rod_geometry": "juno_radial_cylinders",
+    "_comment_support_rods": "590 J26.3.2 StrutSteel tubes represented as finite radial capped cylinders; ball heads and fixtures are excluded"
   }
 }

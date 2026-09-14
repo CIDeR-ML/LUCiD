@@ -24,6 +24,7 @@ from lucid.wavelength.scattering import (
     compute_mie_scatter_direction, hg_sample_cos_theta, hg_logpdf, rayleigh_logpdf,
 )
 from lucid.simulation.reflection import scalar_reflection
+from lucid.simulation.reflection import effective_surface_reflection
 from lucid.simulation.photon_step import (
     _interface_refract_reflect,
     _interface_refract_reflect_multi,
@@ -31,7 +32,7 @@ from lucid.simulation.photon_step import (
 
 
 def make_photon_step(mode, has_interface, reflection_fn=scalar_reflection,
-                     multi_interface=False):
+                     multi_interface=False, has_support=False):
     """Return a per-photon step. ``mode`` ∈ {'sample','update_factors'}.
 
     The step's positional signature is the legacy 14-arg one; when
@@ -45,7 +46,9 @@ def make_photon_step(mode, has_interface, reflection_fn=scalar_reflection,
                  normal, scatter_length, mie_scatter_length, g, refl_params,
                  absorption_length, hit_sensor, lam, rng_key, speed_of_light,
                  hit_interface=None, medium_id=None, n_inner=None, n_outer=None,
-                 interface_index=None, refractive_indices=None):
+                 interface_index=None, refractive_indices=None,
+                 hit_support=None, support_reflectance=None,
+                 support_fspec=None):
             # 6 keys single-medium; +1 (k[6]) for the sampled interface transmit/reflect outcome.
             # JAX split-prefix (split(k,6)==split(k,7)[:6]) keeps k[0..5] — and thus the whole
             # single-medium stream — byte-identical to the legacy 6-split.
@@ -65,6 +68,24 @@ def make_photon_step(mode, has_interface, reflection_fn=scalar_reflection,
             reflection_rate, reflected_dir, _lr = reflection_fn(
                 direction, normal, hit_sensor, refl_params, lam, k[3]
             )
+            support_is_specular = jnp.asarray(False)
+            if has_support:
+                support_result = effective_surface_reflection(
+                    direction,
+                    normal,
+                    support_reflectance,
+                    support_fspec,
+                    jax.random.fold_in(rng_key, 701),
+                )
+                support_rate, support_dir, _support_lr, support_is_specular = (
+                    support_result
+                )
+                reflection_rate = jnp.where(
+                    hit_support, support_rate, reflection_rate
+                )
+                reflected_dir = jnp.where(
+                    hit_support, support_dir, reflected_dir
+                )
             rayleigh_dir = compute_scatter_direction(direction, k[2])
             mie_dir = compute_mie_scatter_direction(direction, k[2], g)
             is_mie = jax.random.uniform(k[4]) < p_mie
@@ -117,7 +138,21 @@ def make_photon_step(mode, has_interface, reflection_fn=scalar_reflection,
 
             base = (new_pos, new_dir, new_time, detect_prob,
                     reflection_attenuation, continuing_factor, logp_increment)
-            return base + (new_medium_id,) if has_interface else base
+            if has_interface:
+                base = base + (new_medium_id,)
+            if has_support:
+                reflects = reaches_surface & (u2 < reflection_rate)
+                support_events = jnp.asarray([
+                    reaches_surface & hit_support,
+                    reaches_surface & hit_support & (~reflects),
+                    reaches_surface & hit_support & reflects,
+                    reaches_surface & hit_support & reflects
+                    & support_is_specular,
+                    reaches_surface & hit_support & reflects
+                    & (~support_is_specular),
+                ], dtype=jnp.float32)
+                base = base + (support_events,)
+            return base
         return step
 
     if mode == 'update_factors':
@@ -125,7 +160,9 @@ def make_photon_step(mode, has_interface, reflection_fn=scalar_reflection,
                  normal, scatter_length, mie_scatter_length, g, refl_params,
                  absorption_length, hit_sensor, lam, rng_key, speed_of_light,
                  hit_interface=None, medium_id=None, n_inner=None, n_outer=None,
-                 interface_index=None, refractive_indices=None):
+                 interface_index=None, refractive_indices=None,
+                 hit_support=None, support_reflectance=None,
+                 support_fspec=None):
             # 8 keys single-medium (k[6],k[7] unused, kept for split-prefix parity); +1 (k[8])
             # for the sampled interface outcome. Gradient design (PORT_PLAN): TRACK params flow
             # PATHWISE (Dd/positions/time LIVE); OPTICAL scatter params flow via the DiCE score
@@ -159,6 +196,22 @@ def make_photon_step(mode, has_interface, reflection_fn=scalar_reflection,
             inward_normal = -sg(normal)
             refl_prob, reflection_dir, lr = reflection_fn(
                 direction, normal, hit_sensor, refl_params, lam, k[5])
+            if has_support:
+                support_result = effective_surface_reflection(
+                    direction,
+                    normal,
+                    support_reflectance,
+                    support_fspec,
+                    jax.random.fold_in(rng_key, 701),
+                )
+                support_rate, support_dir, support_lr, _ = support_result
+                refl_prob = jnp.where(
+                    hit_support, support_rate, refl_prob
+                )
+                reflection_dir = jnp.where(
+                    hit_support, support_dir, reflection_dir
+                )
+                lr = jnp.where(hit_support, support_lr, lr)
             dir_n = normalize(direction)
             scatter_pos = position + d * dir_n
             surface_pos = position + Dd * dir_n + epsilon * normalize(inward_normal)

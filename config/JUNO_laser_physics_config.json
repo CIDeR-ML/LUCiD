@@ -10,6 +10,8 @@
   "cathode_nr": 2.8,
   "cathode_nk": 1.5,
   "sensor_fspec": 0.5,
+  "support_reflection_rate": 0.535,
+  "support_fspec": 0.5,
   "qe": 1.0,
   "qe_corrections": null
 }

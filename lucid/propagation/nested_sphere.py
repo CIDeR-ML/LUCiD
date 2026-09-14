@@ -36,6 +36,10 @@ from .sphere import (
 from .base import find_closest_sensors
 from .surfaces import sphere_forward_t, nearest_interface
 from ..overlap import create_overlap_prob
+from ..geometry.juno_support import (
+    build_support_candidate_map,
+    intersect_capped_cylinders,
+)
 
 
 LOG = logging.getLogger("lucid.propagation.nested_sphere")
@@ -141,7 +145,9 @@ def find_intersected_nested_sphere_sensors(ray_origins, ray_directions,
                                            r_acrylic=None,
                                            sensor_inward_axes=None,
                                            sensor_radial_radii=None,
-                                           sensor_axial_radii=None):
+                                           sensor_axial_radii=None,
+                                           support_rods=None,
+                                           support_candidate_map=None):
     """Outer-sphere sensor lookup (reused) with inner-interface override.
 
     Computes the single-sphere result at ``r_outer`` (sensors), then for rays whose
@@ -200,6 +206,88 @@ def find_intersected_nested_sphere_sensors(ray_origins, ray_directions,
         result['interface_index'] = jnp.where(
             hit_inner, interface_indices, -1)
 
+    # 4. Effective support rods compete with the already selected PMT,
+    # wall, or medium interface.  Candidate lookup uses both the crossing of
+    # the mean support radius and the current selected endpoint, covering
+    # outward and inward rays without constructing a (n_ray, 590) array.
+    hit_support = jnp.zeros(ray_origins.shape[0], dtype=bool)
+    support_index = jnp.full(
+        ray_origins.shape[0], -1, dtype=jnp.int32
+    )
+    if support_rods is not None:
+        n_theta = n_divisions
+        n_phi = 2 * n_divisions
+
+        def _cell_index(points):
+            radius = jnp.linalg.norm(points, axis=1)
+            theta = jnp.arccos(jnp.clip(
+                points[:, 2] / (radius + 1e-12), -1.0, 1.0
+            ))
+            phi = jnp.mod(jnp.arctan2(points[:, 1], points[:, 0]),
+                          2.0 * jnp.pi)
+            theta_index = jnp.clip(
+                jnp.floor(theta / jnp.pi * n_theta).astype(jnp.int32),
+                0, n_theta - 1,
+            )
+            phi_index = jnp.mod(
+                jnp.floor(phi / (2.0 * jnp.pi) * n_phi).astype(jnp.int32),
+                n_phi,
+            )
+            return theta_index * n_phi + phi_index
+
+        reference_radius = jnp.mean(jnp.linalg.norm(
+            jnp.asarray(support_rods.centers_m), axis=1
+        ))
+        reference = jax.vmap(
+            lambda origin, direction: _sphere_forward_t(
+                origin, direction, reference_radius
+            )
+        )(ray_origins, ray_directions)
+        reference_t, reference_valid = reference
+        reference_points = ray_origins + (
+            reference_t[:, None] * ray_directions
+        )
+        selected_points = result['positions']
+        query_points = jnp.where(
+            reference_valid[:, None], reference_points, selected_points
+        )
+        candidate_indices = jnp.concatenate([
+            support_candidate_map[_cell_index(query_points)],
+            support_candidate_map[_cell_index(selected_points)],
+        ], axis=1)
+        support_hit = intersect_capped_cylinders(
+            ray_origins, ray_directions, support_rods,
+            candidate_indices,
+        )
+        selected_distance = jnp.linalg.norm(
+            selected_points - ray_origins, axis=1
+        )
+        hit_support = (
+            support_hit.valid
+            & (support_hit.distance_m < selected_distance - 1e-6)
+        )
+        hs = hit_support[:, None]
+        result['positions'] = jnp.where(
+            hs, support_hit.positions, result['positions']
+        )
+        result['normals'] = jnp.where(
+            hs, support_hit.transport_normals, result['normals']
+        )
+        keep_support = (~hit_support)[None, :]
+        result['sensor_weights'] *= keep_support
+        result['inside_sensor'] &= keep_support
+        result['hit_interface'] &= ~hit_support
+        if 'interface_index' in result:
+            result['interface_index'] = jnp.where(
+                hit_support, -1, result['interface_index']
+            )
+        support_index = jnp.where(
+            hit_support, support_hit.rod_indices, -1
+        )
+
+    result['hit_support'] = hit_support
+    result['support_index'] = support_index
+
     if single_ray:
         result = jax.tree_map(lambda x: x[0], result)
     return result
@@ -215,7 +303,9 @@ def create_nested_sphere_propagator(sensor_positions, sensor_radius,
                                     r_acrylic=None,
                                     sensor_inward_axes=None,
                                     sensor_radial_radii=None,
-                                    sensor_axial_radii=None):
+                                    sensor_axial_radii=None,
+                                    support_rods=None,
+                                    support_candidates_per_cell=12):
     """JIT-compiled photon propagator for nested sphere geometry.
 
     The outer sphere supplies the grid lookup. Optional per-sensor axes and
@@ -294,6 +384,21 @@ def create_nested_sphere_propagator(sensor_positions, sensor_radius,
     LOG.info("sensor map: nested-sphere propagator ready (%.2fs total)",
              time.perf_counter() - started)
 
+    support_candidate_map = None
+    if support_rods is not None:
+        LOG.info(
+            "support map: indexing %d effective cylinders",
+            len(support_rods.centers_m),
+        )
+        support_candidate_map = build_support_candidate_map(
+            support_rods, n_divisions, support_candidates_per_cell
+        )
+        jax.block_until_ready(support_candidate_map)
+        LOG.info(
+            "support map: candidates ready (%.2fs total)",
+            time.perf_counter() - started,
+        )
+
     @jax.jit
     def propagate_photons(photon_origins, photon_directions):
         return find_intersected_nested_sphere_sensors(
@@ -304,6 +409,8 @@ def create_nested_sphere_propagator(sensor_positions, sensor_radius,
             r_acrylic=r_acrylic,
             sensor_inward_axes=sensor_inward_axes,
             sensor_radial_radii=sensor_radial_radii,
-            sensor_axial_radii=sensor_axial_radii)
+            sensor_axial_radii=sensor_axial_radii,
+            support_rods=support_rods,
+            support_candidate_map=support_candidate_map)
 
     return propagate_photons

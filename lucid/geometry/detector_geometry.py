@@ -41,6 +41,7 @@ class DetectorGeometry(NamedTuple):
                     overlap_renorm: float = 1.0,
                     overlap_mode: str = 'interp',
                     pmt_geometry_enabled=None,
+                    support_geometry_enabled=None,
                     **grid_params) -> 'DetectorGeometry':
         """Build a DetectorGeometry from a config JSON file.
 
@@ -67,6 +68,8 @@ class DetectorGeometry(NamedTuple):
         pmt_geometry_enabled : bool or None
             Override explicit PMT geometry for a controlled ablation. None
             follows the detector JSON configuration.
+        support_geometry_enabled : bool or None
+            Override the configured support cylinders independently.
         **grid_params
             Geometry-specific grid parameters forwarded to ``create_propagator()``.
             Cylinder: n_cap, n_angular, n_height.
@@ -91,6 +94,7 @@ class DetectorGeometry(NamedTuple):
         detector = generate_detector(
             json_filename,
             pmt_geometry_enabled=pmt_geometry_enabled,
+            support_geometry_enabled=support_geometry_enabled,
         )
         import json as _json
         with open(json_filename) as _f:
@@ -141,7 +145,8 @@ class DetectorGeometry(NamedTuple):
                     None
                     if detector.pmt_dimensions is None
                     else detector.pmt_dimensions.outer_axial_m
-                ))
+                ),
+                support_rods=detector.support_rods)
             return DetectorGeometry(
                 detector_type=actual_type, sensor_points=sensor_points,
                 sensor_radius=sensor_radius, num_sensors=num_sensors,
