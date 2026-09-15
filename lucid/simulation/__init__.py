@@ -18,3 +18,6 @@ from lucid.simulation.types import (
     PhotonRays, PropagationResult, PhotonStepResult, PhotonState,
 )
 from lucid.simulation.config import SimConfig
+from lucid.simulation.pmt_timing import (
+    apply_sk4_pmt_timing, get_pmt_timing_model, sample_sk4_time_offsets,
+)

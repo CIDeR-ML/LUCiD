@@ -36,6 +36,7 @@ from lucid.simulation.photon_step import (
     photon_iteration_sample, make_photon_iteration_update_factors_safe,
 )
 from lucid.simulation.reflection import get_reflection_model
+from lucid.simulation.pmt_timing import get_pmt_timing_model
 from lucid.simulation.sensor_response import (
     make_hits_simulation, make_hits_data, make_hits_likelihood, make_hits_moments,
     make_hits_per_photon,
@@ -74,6 +75,7 @@ def setup_event_simulator(
         reflection_wavelength=400.0,
         spectrum=None,
         cherenkov_emission_band=None,
+        pmt_timing_model=None,
         **grid_params):
     """
     Set up and return an event simulator using DetectorParams / ParticleParams.
@@ -162,6 +164,14 @@ def setup_event_simulator(
         Wavelength (nm) fed to the reflection model's dispersion (cathode/glass
         Fresnel). Exact for monochromatic-laser calibration; ignored by the
         scalar model. Default 400 nm.
+    pmt_timing_model : str or None
+        Optional per-photoelectron timing response applied after optical
+        propagation and before hit aggregation/digitization. ``None`` or
+        ``'none'`` preserves geometric arrival times and consumes no RNG.
+        ``'sk4'`` reproduces the non-Gaussian SK-IV timing mixture from
+        SKDetSim ``sgpmt.F``. This changes times only, never charge or sensor
+        assignment, and uses a dedicated RNG substream so later QE and charge
+        draws remain paired with a timing-disabled run. Default ``None``.
     spectrum : Spectrum or None
         Optional λ-sampling law (``lucid.wavelength`` Monochromatic / PowerLaw /
         QEWeighted). When given it supersedes ``wavelength_sampling`` for broadband
@@ -258,6 +268,7 @@ def setup_event_simulator(
     # reflection_fn is captured statically in the differentiable step's closure;
     # build_refl_params packs the model's parameters out of DetectorParams.
     reflection_fn, build_refl_params = get_reflection_model(reflection_model)
+    pmt_timing_fn = get_pmt_timing_model(pmt_timing_model)
 
     # ---- Select photon update function --------------------------------------
     # Both paths get the SAME reflection model. The sampling path (data / non-expected-value
@@ -691,6 +702,11 @@ def setup_event_simulator(
         flat_indices = all_indices.reshape(-1)
         flat_times = all_times.reshape(-1)
 
+        # Optional PMT transit/late/pre-pulse response. The model is resolved
+        # statically at setup. Every model uses a dedicated RNG substream and
+        # returns the key unchanged, so QE/charge draws remain paired.
+        flat_times, key = pmt_timing_fn(flat_times, key)
+
         # Tile per-photon QE to match flat shape.
         # all_weights shape: (K, max_candidates_per_ray, n_rays), C-order reshape
         # → photon index is i % n_rays
@@ -1032,5 +1048,3 @@ def setup_event_simulator(
             return _sim_track_default
         else:
             return partial(_simulation_without_data_impl, model_params=model_params)
-
-

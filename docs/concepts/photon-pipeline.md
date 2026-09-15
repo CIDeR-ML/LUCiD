@@ -47,7 +47,12 @@ dataset production), `waveform`/`waveform_expected` (time-binned waveforms), and
 
 Other important arguments: `n_photons`, `K` (scatter iterations), `temperature` (soft→hard),
 `wavelength_mode` (per-photon λ physics vs scalar), `default_detector_params` (bake the detector
-params in so the callable drops that argument), and `detector_type`.
+params in so the callable drops that argument), `detector_type`, and `pmt_timing_model`. The last
+option is disabled by default; `pmt_timing_model='sk4'` applies SKDetSim's SK-IV non-Gaussian
+transit/late/pre-pulse timing mixture after optical propagation and before hit aggregation. It
+changes timestamps only and uses a separate random stream, so a paired run does not reshuffle its
+QE or charge draws. Because this PMT response is already present in SKDetSim's `MCPHOTON` times,
+enable it when comparing LUCiD per-photon timing with that bank.
 
 Three more arguments are easy to miss but change the numbers you get out:
 
