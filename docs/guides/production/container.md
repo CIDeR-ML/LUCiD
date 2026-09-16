@@ -12,20 +12,27 @@ install without a container, see [local.md](local.md).
 
 Pick a release tag, not `latest`, so your data is traceable to a known build.
 
-**On CVMFS (no download, no build)** — the easiest route at CERN or any site
-with CVMFS. The image is unpacked and ready to use in place:
+**Download the prebuilt `.sif`** — the quickest route, and the one to use if
+you do not have ~30 GB of scratch. It is a plain HTTPS download from the CERNBox
+public share, no account or token needed:
 
 ```bash
-ls /cvmfs/unpacked.cern.ch/registry.hub.docker.com/ 2>/dev/null   # is CVMFS up?
-apptainer exec /cvmfs/unpacked.cern.ch/ghcr.io/cider-ml/lucid:v0.1.0 lucid-run-job --help
+curl -fSL --retry 3 -C - -o lucid_v0.1.0.sif \
+  https://cernbox.cern.ch/remote.php/dav/public-files/vOhH8P78hnSQKNZ/containers/lucid_v0.1.0.sif
 ```
 
-If that path does not exist, the tag has not been registered with
-`unpacked.cern.ch` yet — it syncs only images on its wishlist. Ask an admin to
-add `ghcr.io/cider-ml/lucid:v0.1.0` (the wishlist lives in the CERN
-`unpacked.cern.ch` configuration), or use one of the routes below meanwhile.
+`-C -` resumes a partial download, so an interrupted 3.4 GB transfer can be
+restarted with the same command. This is the same share
+`scripts/download_data.sh` uses for the example ROOT and SIREN files.
 
-**Build a `.sif` yourself** if CVMFS is unavailable:
+Check what you got against the published checksum:
+
+```bash
+curl -fsSL -O https://cernbox.cern.ch/remote.php/dav/public-files/vOhH8P78hnSQKNZ/containers/MD5SUMS.txt
+md5sum -c MD5SUMS.txt
+```
+
+**Or build the `.sif` yourself** from the published image:
 
 ```bash
 apptainer build lucid_v0.1.0.sif docker://ghcr.io/cider-ml/lucid:v0.1.0
