@@ -37,7 +37,7 @@ Usage:
 
 GENIE configs need ``GENIE_XSEC_FILE`` set in the environment to a
 spline matching the tune declared in the config; see
-``LUCiD/docs/guides/production/docker.md``. When the variable is unset the
+``LUCiD/docs/guides/production/container.md``. When the variable is unset the
 GENIE configs are silently skipped (with a note in the report).
 """
 
@@ -63,7 +63,6 @@ CONFIGS_DIR = REPO / "lucid" / "production" / "configs"
 DEFAULT_CONFIGS = [
     "GeV/02_mu.json",                 # single mu — baseline
     "Solar/01_e_low_energy.json",     # low-E electron — fast, EM-dominated
-    "GeV/13_genie_numu_nue.json",     # GENIE numu+nue on water (G18_10a_02_11b)
 ]
 
 # ── Stdout patterns from run_job.py + PhotonSim + LUCiD writer ────────

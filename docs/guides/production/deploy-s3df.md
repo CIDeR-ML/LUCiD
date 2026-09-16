@@ -2,7 +2,7 @@
 
 Concise runbook for the S3DF (SLAC) deployment. For a local-machine
 workflow with no cluster, see [local.md](local.md);
-for Docker on macOS/Linux, see [docker.md](docker.md);
+for Apptainer or Docker, see [container.md](container.md);
 for HTCondor on LXPLUS, see [deploy-lxplus.md](deploy-lxplus.md).
 The single code path that drives both batch deployments lives at
 `LUCiD/lucid/production/cluster_common/` — see
@@ -179,6 +179,7 @@ apptainer exec \
     -B "$PWD/PhotonSim:/opt/PhotonSim" \
     "$LUCID_IMAGE_PATH" \
     lucid-run-job --config /opt/LUCiD/lucid/production/configs/GeV/02_mu.json \
+                  --detector SK_WAND \
                   --output-dir /tmp/out --job-id 1 --test
 ```
 

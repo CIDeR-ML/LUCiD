@@ -1,7 +1,7 @@
 # Local production — produce events on any machine
 
 > **On macOS, or prefer a container?** See
-> [docker.md](docker.md) — one `docker build`,
+> [container.md](container.md) — one pull,
 > then one `docker run`, with GEANT4 + ROOT + GENIE already set up.
 
 Three steps to a working dataset with no S3DF, no SLURM, no
@@ -13,9 +13,8 @@ singularity.
   Linux, `conda install -c conda-forge geant4 root` is the fastest
   path.
 - **Python 3.9+**.
-- **GENIE v3** (only if you want neutrino-flux configs like
-  `GeV/13_genie_numu_nue.json`). Easiest: use the
-  unified container — see the bottom of this doc.
+- **GENIE v3** (only if you write a neutrino-flux config; none ship in the
+  repo today). Easiest: use the unified container — see the bottom of this doc.
 
 ## 1. Build PhotonSim (once)
 
@@ -51,6 +50,7 @@ CONFIG=$(python3 -c "from importlib.resources import files; \
 mkdir -p /tmp/my_dataset
 lucid-run-job \
     --config "$CONFIG" \
+    --detector SK_WAND \
     --output-dir /tmp/my_dataset \
     --job-id 1 \
     --test
@@ -84,7 +84,7 @@ count. Run one job per batch via shell loop:
 ```bash
 for i in {1..10}; do
     mkdir -p /tmp/my_dataset
-    lucid-run-job --config "$CONFIG" --output-dir /tmp/my_dataset \
+    lucid-run-job --config "$CONFIG" --detector SK_WAND --output-dir /tmp/my_dataset \
         --job-id $i --n-events 100
 done
 # → 10 parallel batches: wc_*_0000.h5 through wc_*_0009.h5 in each subdir.
@@ -95,8 +95,8 @@ For SLURM or HPC submission on S3DF, see
 
 ## Neutrino-flux configs (GENIE chain)
 
-Configs with `"primary_source": "genie"` (e.g. `GeV/13_genie_numu_nue.json`)
-chain **gevgen → gntpc → PhotonSim → LUCiD**
+A config with `"primary_source": "genie"` chains
+**gevgen → gntpc → PhotonSim → LUCiD**
 per job. Dependencies are GEANT4 + ROOT + GENIE v3 + the LUCiD Python
 env. The simplest way to cover all of those is the published container:
 
@@ -108,24 +108,26 @@ docker run --rm --platform linux/amd64 \
     -e GENIE_XSEC_FILE=/opt/genie_xsec/3_04_00/G18_10a_02_11b/gxspl-min.xml.gz \
     ghcr.io/cider-ml/lucid:latest \
     lucid-run-job \
-        --config /opt/LUCiD/lucid/production/configs/GeV/13_genie_numu_nue.json \
+        --config /path/to/your_genie_config.json \
+        --detector SK_WAND \
         --output-dir /out --job-id 1 --test
 
 # Apptainer
 apptainer pull lucid.sif docker://ghcr.io/cider-ml/lucid:latest
 apptainer exec lucid.sif lucid-run-job \
-    --config /opt/LUCiD/lucid/production/configs/GeV/13_genie_numu_nue.json \
+    --config /path/to/your_genie_config.json \
+    --detector SK_WAND \
     --output-dir /tmp/genie_test --job-id 1 --test
 ```
 
 The image ships PhotonSim pre-built, LUCiD pip-installed, and GENIE
 3.04 with xsec splines for the `AR23_20i_00_000`, `G18_10a_02_11b`,
 and `G21_11a_00_000` tunes pre-baked. All in-repo GENIE configs
-(`GeV/13_genie_numu_nue.json`, etc.) use
+use
 `G18_10a_02_11b` so they work in-container out of the box. For other
 tunes, point `GENIE_XSEC_FILE` at your own spline.
 
-See [docker.md](docker.md) for more Docker
+See [container.md](container.md) for more container
 details (bind-mount dev loop, Rosetta setup, etc.).
 
 ## Troubleshooting

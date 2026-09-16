@@ -61,8 +61,7 @@ nav:
       - Producing datasets:
           - Overview: guides/production/index.md
           - Local (with PhotonSim): guides/production/local.md
-          - Container (.sif / docker): guides/production/container.md
-          - Docker: guides/production/docker.md
+          - From the container (Apptainer / Docker): guides/production/container.md
           - Cluster deployment:
               - How cluster targeting works: guides/production/cluster-abstraction.md
               - S3DF (SLAC): guides/production/deploy-s3df.md

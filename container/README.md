@@ -12,7 +12,7 @@ Dockerfile adds conda GEANT4 11.3 + PhotonSim + LUCiD.
 ## Pull (default path)
 
 - Docker: `docker pull ghcr.io/cider-ml/lucid:latest` — see
-  [../docs/guides/production/docker.md](../docs/guides/production/docker.md).
+  [../docs/guides/production/container.md](../docs/guides/production/container.md).
 - Apptainer/S3DF:
   `apptainer pull lucid.sif docker://ghcr.io/cider-ml/lucid:latest` —
   see [../docs/guides/production/deploy-s3df.md](../docs/guides/production/deploy-s3df.md).
@@ -30,4 +30,4 @@ docker build --platform linux/amd64 --provenance=false --sbom=false \
 (ghcr.io has trouble with them for this package). Cold build is ~10 min
 on Apple Silicon. Editing LUCiD source retriggers only the last layer
 (~30 s). For a quicker dev loop without rebuilding, bind-mount the
-checkout — see docs/guides/production/docker.md §3.
+checkout — see docs/guides/production/container.md §6.
