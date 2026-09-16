@@ -102,6 +102,7 @@ _CACHE_SUBDIR = 'spatial_overlap_integrals'
 
 
 _CACHE_DIR_OVERRIDE = None
+_USER_CACHE_ROOT = None
 
 
 def set_cache_dir(path: Optional[str]) -> None:
@@ -115,6 +116,16 @@ def set_cache_dir(path: Optional[str]) -> None:
     _CACHE_DIR_OVERRIDE = path
 
 
+def set_user_cache_root(path: Optional[str]) -> None:
+    """Override the fallback root used when the install dir is not writable.
+
+    Same reason as ``set_cache_dir``: $XDG_CACHE_HOME is read by the caller,
+    not here. None restores ``~/.cache``.
+    """
+    global _USER_CACHE_ROOT
+    _USER_CACHE_ROOT = path
+
+
 def _cache_dirs() -> list:
     """Directories to search for cached overlap lookups, most-preferred first.
 
@@ -125,8 +136,9 @@ def _cache_dirs() -> list:
     """
     if _CACHE_DIR_OVERRIDE:
         return [os.path.join(_CACHE_DIR_OVERRIDE, _CACHE_SUBDIR)]
+    root = _USER_CACHE_ROOT or os.path.join(os.path.expanduser('~'), '.cache')
     return [os.path.join(base_dir_path(), _CACHE_SUBDIR),
-            os.path.join(os.path.expanduser('~'), '.cache', 'lucid', _CACHE_SUBDIR)]
+            os.path.join(root, 'lucid', _CACHE_SUBDIR)]
 
 
 def _writable_cache_dir() -> Optional[str]:

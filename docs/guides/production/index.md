@@ -23,6 +23,7 @@ those all consume the bundled SIREN weights already in `data/`.
 |---|---|
 | Run the tutorial notebooks | [Getting Started quickstart](../../getting-started/quickstart.md) |
 | Simulate an event and look at a display | [Getting Started quickstart](../../getting-started/quickstart.md) (`examples/hello_simulate.py`, `00_quickstart` notebook) |
+| Produce a WAND dataset from the release container | [Container production](container.md) |
 | Produce a labeled dataset on my own machine | [Local production](local.md) |
 | Produce a dataset with Docker (macOS or no Apptainer) | [Docker production](docker.md) |
 | Produce at scale on a cluster (S3DF / NERSC / LXPLUS) | [S3DF](deploy-s3df.md), [NERSC](deploy-nersc.md), [LXPLUS](deploy-lxplus.md) — see [how the cluster layer works](cluster-abstraction.md) |
