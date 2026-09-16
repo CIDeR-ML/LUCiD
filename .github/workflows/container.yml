@@ -8,6 +8,8 @@ on:
       - 'lucid/**'
       - 'pyproject.toml'
       - '.github/workflows/container.yml'
+  release:
+    types: [published]
   workflow_dispatch:
     inputs:
       photonsim_ref:
@@ -44,6 +46,15 @@ jobs:
           echo "BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_ENV"
           git -C PhotonSim log --oneline -1
 
+      - name: Resolve the version tag (releases only)
+        id: ver
+        run: |
+          if [ "${{ github.event_name }}" = "release" ]; then
+            echo "extra=ghcr.io/cider-ml/lucid:${{ github.event.release.tag_name }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "extra=" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Set up QEMU (linux/amd64 under arm64 runners if needed)
         uses: docker/setup-qemu-action@v3
 
@@ -69,6 +80,7 @@ jobs:
           tags: |
             ghcr.io/cider-ml/lucid:latest
             ghcr.io/cider-ml/lucid:${{ github.sha }}
+            ${{ steps.ver.outputs.extra }}
           build-args: |
             LUCID_SHA=${{ github.sha }}
             PHOTONSIM_SHA=${{ env.PHOTONSIM_SHA }}
