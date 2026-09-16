@@ -93,6 +93,6 @@ reflectivity — the timing-observable frontier.)
   particle can be transported and drawn on its own. `--split` writes the per-primary displays
   plus a per-particle colouring; `--file` takes any PhotonSim ROOT with >1 primary per event,
   and `--event` picks the topology (93 back-to-back, 0 overlapping rings).
-- The `fit(forward, residual=, solver=)` / `SimParams` / `Field` interface described in
-  `docs/internal/MAIN_BRANCH_PLAN.md` is a **proposal**, not yet built. These examples call the
-  canonical API that exists today.
+- A `fit(forward, residual=, solver=)` / `SimParams` / `Field` interface has been
+  proposed but is **not built**. These examples call the canonical API that exists
+  today.

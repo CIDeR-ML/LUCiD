@@ -40,9 +40,6 @@ markdown_extensions:
 extra_javascript:
   - https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js
 
-# Kept in the repo for reference, not published:
-exclude_docs: |
-  internal/
 
 nav:
   - Home: index.md
