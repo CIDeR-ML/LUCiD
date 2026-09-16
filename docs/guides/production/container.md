@@ -10,10 +10,25 @@ install without a container, see [local.md](local.md).
 
 ## 1. Get the image
 
-Pick a release tag, not `latest`, so your data is traceable to a known build:
+Pick a release tag, not `latest`, so your data is traceable to a known build.
+
+**On CVMFS (no download, no build)** — the easiest route at CERN or any site
+with CVMFS. The image is unpacked and ready to use in place:
 
 ```bash
-apptainer build lucid_v1.0.0.sif docker://ghcr.io/cider-ml/lucid:v1.0.0
+ls /cvmfs/unpacked.cern.ch/registry.hub.docker.com/ 2>/dev/null   # is CVMFS up?
+apptainer exec /cvmfs/unpacked.cern.ch/ghcr.io/cider-ml/lucid:v0.1.0 lucid-run-job --help
+```
+
+If that path does not exist, the tag has not been registered with
+`unpacked.cern.ch` yet — it syncs only images on its wishlist. Ask an admin to
+add `ghcr.io/cider-ml/lucid:v0.1.0` (the wishlist lives in the CERN
+`unpacked.cern.ch` configuration), or use one of the routes below meanwhile.
+
+**Build a `.sif` yourself** if CVMFS is unavailable:
+
+```bash
+apptainer build lucid_v0.1.0.sif docker://ghcr.io/cider-ml/lucid:v0.1.0
 ```
 
 Budget ~30 GB of scratch and a few tens of minutes: the layers unpack to ~27 GB
@@ -24,7 +39,7 @@ with that much room.
 needed):
 
 ```bash
-docker pull --platform linux/amd64 ghcr.io/cider-ml/lucid:v1.0.0
+docker pull --platform linux/amd64 ghcr.io/cider-ml/lucid:v0.1.0
 ```
 
 The image is `linux/amd64`; conda-forge ships no `geant4` for `linux-aarch64`.
@@ -36,14 +51,14 @@ of native speed — fine for test runs.
 The image can tell you what it is:
 
 ```bash
-apptainer exec lucid_v1.0.0.sif cat /opt/VERSIONS
+apptainer exec lucid_v0.1.0.sif cat /opt/VERSIONS
 ```
 
 ## 2. Run one job
 
 ```bash
 mkdir -p out
-apptainer exec -B "$PWD/out:/out" lucid_v1.0.0.sif \
+apptainer exec -B "$PWD/out:/out" lucid_v0.1.0.sif \
     lucid-run-job \
       --config /opt/LUCiD/lucid/production/configs/GeV/01_pbomb.json \
       --detector SK_WAND \
@@ -57,7 +72,7 @@ The Docker equivalent — same arguments, different mount syntax:
 
 ```bash
 docker run --rm --platform linux/amd64 -v "$PWD/out:/out" \
-    ghcr.io/cider-ml/lucid:v1.0.0 \
+    ghcr.io/cider-ml/lucid:v0.1.0 \
     lucid-run-job --config /opt/LUCiD/lucid/production/configs/GeV/01_pbomb.json \
                   --detector SK_WAND --output-dir /out --job-id 1 --n-events 20
 ```
@@ -120,10 +135,10 @@ trigger and you would get `basic` digitization with no readout trigger.
 - **Your own config**: copy one out of the image, edit, and bind it back in:
 
   ```bash
-  apptainer exec lucid_v1.0.0.sif \
+  apptainer exec lucid_v0.1.0.sif \
       cat /opt/LUCiD/lucid/production/configs/GeV/02_mu.json > mine.json
   # edit mine.json
-  apptainer exec -B "$PWD:/w" lucid_v1.0.0.sif \
+  apptainer exec -B "$PWD:/w" lucid_v0.1.0.sif \
       lucid-run-job --config /w/mine.json --detector SK_WAND \
         --output-dir /w/out --job-id 1 --n-events 20
   ```
@@ -142,7 +157,7 @@ trigger and you would get `basic` digitization with no readout trigger.
 To exercise local edits without rebuilding, bind your clone over `/opt/LUCiD`:
 
 ```bash
-apptainer exec -B "$PWD/LUCiD:/opt/LUCiD" -B "$PWD/out:/out" lucid_v1.0.0.sif \
+apptainer exec -B "$PWD/LUCiD:/opt/LUCiD" -B "$PWD/out:/out" lucid_v0.1.0.sif \
     lucid-run-job --config /opt/LUCiD/lucid/production/configs/GeV/02_mu.json \
       --detector SK_WAND --output-dir /out --job-id 1 --test
 ```
@@ -152,7 +167,7 @@ For a PhotonSim source edit, bind it too and rebuild in place; the baked
 
 ```bash
 apptainer exec -B "$PWD/PhotonSim:/opt/PhotonSim" -B "$PWD/out:/out" \
-    lucid_v1.0.0.sif bash -c \
+    lucid_v0.1.0.sif bash -c \
     "cmake --build /opt/PhotonSim/build -j && lucid-run-job ..."
 ```
 
@@ -217,7 +232,7 @@ layers, and editing LUCiD source retriggers only the last one.
   `HK`. Those carry no digitizer or trigger, so the run would silently produce
   undigitized, untriggered data. Use the `*_WAND` names.
 - **`Read-only file system: .../spatial_overlap_integrals`** — an image
-  predating v1.0.0. Either upgrade, or point `LUCID_OVERLAP_CACHE_DIR` at a
+  predating v0.1.0. Either upgrade, or point `LUCID_OVERLAP_CACHE_DIR` at a
   writable directory.
 - **BuildKit silence during source builds** — long compile steps buffer output;
   use `--progress=plain`.
