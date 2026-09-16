@@ -61,7 +61,7 @@ RUN_JOB = REPO / "lucid" / "production" / "run_job.py"
 CONFIGS_DIR = REPO / "lucid" / "production" / "configs"
 
 DEFAULT_CONFIGS = [
-    "GeV/01_mu.json",                 # single mu — baseline
+    "GeV/02_mu.json",                 # single mu — baseline
     "Solar/01_e_low_energy.json",     # low-E electron — fast, EM-dominated
     "GeV/13_genie_numu_nue.json",     # GENIE numu+nue on water (G18_10a_02_11b)
 ]

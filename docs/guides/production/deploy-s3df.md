@@ -105,7 +105,7 @@ Each job is **single-core** (`DEFAULT_CPUS=1` in `user_paths.sh`), so
 ~40 GB (`DEFAULT_MEMORY=39936`) and a 23 h wall ceiling (`DEFAULT_TIME`) per
 job — the ceiling, not the expected ~1 h runtime.
 
-Worked example — **`GeV/01_mu.json`, the 1,000,000-event train split**
+Worked example — **`GeV/02_mu.json`, the 1,000,000-event train split**
 (`seconds_per_event = 4.833`, `target_seconds_per_job = 3600`):
 
 ```
@@ -178,7 +178,7 @@ apptainer exec \
     -B "$PWD/LUCiD:/opt/LUCiD" \
     -B "$PWD/PhotonSim:/opt/PhotonSim" \
     "$LUCID_IMAGE_PATH" \
-    lucid-run-job --config /opt/LUCiD/lucid/production/configs/GeV/01_mu.json \
+    lucid-run-job --config /opt/LUCiD/lucid/production/configs/GeV/02_mu.json \
                   --output-dir /tmp/out --job-id 1 --test
 ```
 

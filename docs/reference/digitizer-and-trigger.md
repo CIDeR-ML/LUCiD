@@ -53,17 +53,14 @@ has it, digitizer defaults to `basic` and the trigger is off.
 key (e.g. `dark_rate_khz`, `threshold_pe`) is merged on top of the preset
 (`resolve_model_config` in `digitizer.py` does `dict(MODEL_PRESETS[name]).update(overrides)`).
 
-`lucid/production/configs/GeV/01_mu.json` (single muon, HK detector) enables the `hk` digitizer
-and a real readout trigger (excerpted — the file has the usual particle/energy/output keys too):
+The digitizer and trigger are detector properties, so the GeV dataset configs no
+longer carry them: they declare only the physics, and `-D` picks the detector,
+whose physics config supplies the readout. `config/HK_WAND_physics_config.json`:
 
 ```json
 {
-  "detector": "HK",
   "digitizer": {
     "model": "hk"
-  },
-  "selection": {
-    "mode": "trigger"
   },
   "trigger": {
     "window_ns": 200.0,
@@ -73,6 +70,10 @@ and a real readout trigger (excerpted — the file has the usual particle/energy
   }
 }
 ```
+
+The dataset config keeps only the selection mode, e.g.
+`lucid/production/configs/GeV/02_mu.json` has `"selection": {"mode": "trigger"}`.
+A dataset config may still override the block if it needs to.
 
 Note that this block's `n_thr: 45` and `pad_*: 300.0` **override** the `TriggerConfig` library
 defaults (`n_thr=30`, `pad_before_ns=pad_after_ns=30`, documented under [The trigger](#the-trigger)
