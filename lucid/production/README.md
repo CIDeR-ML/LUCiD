@@ -11,14 +11,17 @@ per block):
 
 | block | contents | splits |
 |---|---|---|
-| `GeV` | single particles (01–05), particle-bomb (06) | 01–05 **test-only** (50k); 06 train+test (1M/50k) |
+| `GeV` | particle-bomb (01), single particles (02–07) | 01 train+test (1M/50k); 02–07 **test-only** (50k) |
 | `Solar` | low-energy e⁻ (01) | train+test (1M/50k) |
 | `SN` | supernova bursts (01) | flat |
 | `Test` | dev/scratch (pile-up bombs 01) | flat |
 
-The particle bomb is the training set: it spans the multiplicities and species
-a real event mixes, so the single-particle configs are kept test-only, for
-evaluating a model per species rather than training on one.
+The particle bomb is config 01 because it is the training set: it spans the
+multiplicities and species a real event mixes, so the single-particle configs
+(02-07) are kept test-only, giving one evaluation cell per species in the pool,
+rather than training on any single species. Its pool is
+{e-, mu-, pi+, pi-, pi0, gamma}; e+ and mu+ are omitted as near-twins of their
+negative counterparts in the optical forward.
 
 A config declares `nominal_train` / `nominal_test`; the detector comes from
 `-D` (or the config's own `detector`, for the self-contained blocks). The

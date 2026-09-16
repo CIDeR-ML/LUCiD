@@ -1,0 +1,28 @@
+{
+  "name": "single gamma",
+  "description": "Single photon with LUCiD processing. Kinetic energy uniform in [1, 2130] MeV, matching the gamma entry in the config_01 bomb pool: the upper end is the endpoint for a gamma from a pi0 decay at the dataset's maximum pi0 energy ((E+p)/2 = 2132.8 MeV at KE = 2000 MeV), rounded down. A photon radiates no Cherenkov light itself - the light comes from the pair-production and Compton electrons it makes, which clear the 0.26 MeV electron threshold even at the bottom of the range.",
+  "material": "water",
+  "nominal_train": 0,
+  "nominal_test": 50000,
+  "seconds_per_event": 5.22,
+  "target_seconds_per_job": 3600,
+  "selection": {
+    "mode": "trigger"
+  },
+  "energy_distribution": "uniform",
+  "store_individual_photons": true,
+  "run_lucid": true,
+  "disable_decays": false,
+  "particles": [
+    {
+      "type": "gamma",
+      "energy_min_MeV": 1,
+      "energy_max_MeV": 2130
+    }
+  ],
+  "lucid_options": {
+    "apply_smearing": true,
+    "apply_translation": true
+  },
+  "cleanup_root_files": true
+}

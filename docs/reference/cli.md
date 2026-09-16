@@ -49,7 +49,7 @@ Single-job production: generates a GEANT4 macro, runs the external **PhotonSim**
 `gevgen`→`gntpc`. Configs live in block subdirectories (`GeV/`, `SN/`, `Solar/`, `Test/`).
 ```bash
 export PHOTONSIM_BIN=/path/to/PhotonSim/build/PhotonSim
-lucid-run-job --config lucid/production/configs/GeV/01_mu.json \
+lucid-run-job --config lucid/production/configs/GeV/02_mu.json \
               --n-events 1000 --job-id 1 --master-seed 42 --output-dir out/
 ```
 Writes `sensor/ hits/ step/ labl/` batch files under `--output-dir` (plus the intermediate

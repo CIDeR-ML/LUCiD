@@ -1,6 +1,6 @@
 {
   "name": "particle bomb (single vertex)",
-  "description": "Single 'particle bomb' interaction per event (no pile-up). Draws a per-event multiplicity N=Uniform(1,5), then samples N particles (with replacement) from the candidate pool {e-, e+, mu-, mu+, pi+, pi-, pi0}. Kinetic energies are uniform in [1, 2000] MeV for electrons and [200, 2000] MeV for the rest, isotropic direction. Same physics as config_18 but with a single vertex.",
+  "description": "Single 'particle bomb' interaction per event (no pile-up). Draws a per-event multiplicity N=Uniform(1,5), then samples N particles (with replacement) from the candidate pool {e-, mu-, pi+, pi-, pi0, gamma}. Kinetic energies are uniform in [1, 2000] MeV for e-, [200, 2000] MeV for mu-/pi+/pi-/pi0, and [1, 2130] MeV for gamma - the upper end is the endpoint for a gamma from a pi0 decay at the dataset's maximum pi0 energy ((E+p)/2 = 2132.8 MeV at KE = 2000 MeV), rounded down. Isotropic direction. This is the training set; the single-particle configs are test-only.",
   "material": "water",
   "nominal_train": 1000000,
   "nominal_test": 50000,
@@ -20,17 +20,7 @@
         "energy_max_MeV": 2000
       },
       {
-        "type": "e+",
-        "energy_min_MeV": 1,
-        "energy_max_MeV": 2000
-      },
-      {
         "type": "mu-",
-        "energy_min_MeV": 200,
-        "energy_max_MeV": 2000
-      },
-      {
-        "type": "mu+",
         "energy_min_MeV": 200,
         "energy_max_MeV": 2000
       },
@@ -48,6 +38,11 @@
         "type": "pi0",
         "energy_min_MeV": 200,
         "energy_max_MeV": 2000
+      },
+      {
+        "type": "gamma",
+        "energy_min_MeV": 1,
+        "energy_max_MeV": 2130
       }
     ]
   },

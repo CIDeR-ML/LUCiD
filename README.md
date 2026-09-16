@@ -84,7 +84,7 @@ chain, not for simulate/calibrate/reconstruct):
 
 ```bash
 export PHOTONSIM_BIN=/path/to/PhotonSim/build/PhotonSim
-lucid-run-job --config lucid/production/configs/GeV/01_mu.json \
+lucid-run-job --config lucid/production/configs/GeV/02_mu.json \
               --n-events 1000 --job-id 1 --master-seed 42 --output-dir out/
 ```
 

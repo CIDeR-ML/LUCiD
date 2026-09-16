@@ -45,7 +45,7 @@ export PHOTONSIM_BIN=/absolute/path/to/PhotonSim/build/PhotonSim
 
 # Pick any of the bundled configs:
 CONFIG=$(python3 -c "from importlib.resources import files; \
-    print(files('lucid.production.configs').joinpath('GeV/01_mu.json'))")
+    print(files('lucid.production.configs').joinpath('GeV/02_mu.json'))")
 
 # Run:
 mkdir -p /tmp/my_dataset
