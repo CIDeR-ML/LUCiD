@@ -2,10 +2,11 @@
 
 Everything needed to generate WAND events lives in one image: LUCiD, PhotonSim,
 Geant4 and the configs. You need the image and a writable output directory —
-nothing else, no checkout, no build.
+nothing else, no checkout, no build. Works with Apptainer (HPC) or Docker.
 
 This page is about producing data by hand. Driving a batch farm is a separate
-concern; see [deploy-lxplus.md](deploy-lxplus.md) and friends.
+concern; see [deploy-lxplus.md](deploy-lxplus.md) and friends. For a host-native
+install without a container, see [local.md](local.md).
 
 ## 1. Get the image
 
@@ -17,8 +18,20 @@ apptainer build lucid_v1.0.0.sif docker://ghcr.io/cider-ml/lucid:v1.0.0
 
 Budget ~30 GB of scratch and a few tens of minutes: the layers unpack to ~27 GB
 before being squashed back to ~3.5 GB. `APPTAINER_TMPDIR` must point somewhere
-with that much room. Docker/podman users can skip the build and
-`docker run ghcr.io/cider-ml/lucid:v1.0.0` directly.
+with that much room.
+
+**Docker/podman** skip the build entirely — pull and go (~4 GB, ~10 GB free
+needed):
+
+```bash
+docker pull --platform linux/amd64 ghcr.io/cider-ml/lucid:v1.0.0
+```
+
+The image is `linux/amd64`; conda-forge ships no `geant4` for `linux-aarch64`.
+On Apple Silicon install Rosetta 2
+(`softwareupdate --install-rosetta --agree-to-license`) and enable *Use Rosetta
+for x86/amd64 emulation* in Docker Desktop → Settings → General. Expect 70–80%
+of native speed — fine for test runs.
 
 The image can tell you what it is:
 
@@ -38,6 +51,15 @@ apptainer exec -B "$PWD/out:/out" lucid_v1.0.0.sif \
       --job-id 1 \
       --n-events 20 \
       --master-seed 12345
+```
+
+The Docker equivalent — same arguments, different mount syntax:
+
+```bash
+docker run --rm --platform linux/amd64 -v "$PWD/out:/out" \
+    ghcr.io/cider-ml/lucid:v1.0.0 \
+    lucid-run-job --config /opt/LUCiD/lucid/production/configs/GeV/01_pbomb.json \
+                  --detector SK_WAND --output-dir /out --job-id 1 --n-events 20
 ```
 
 It prints three stages — Geant4 macro, PhotonSim, LUCiD writer — and ends with a
@@ -115,7 +137,29 @@ trigger and you would get `basic` digitization with no readout trigger.
   `$LUCID_OVERLAP_CACHE_DIR` → install dir if writable →
   `$XDG_CACHE_HOME/lucid/spatial_overlap_integrals`.
 
-## 6. Where the output goes
+## 6. Dev loop — run your own checkout
+
+To exercise local edits without rebuilding, bind your clone over `/opt/LUCiD`:
+
+```bash
+apptainer exec -B "$PWD/LUCiD:/opt/LUCiD" -B "$PWD/out:/out" lucid_v1.0.0.sif \
+    lucid-run-job --config /opt/LUCiD/lucid/production/configs/GeV/02_mu.json \
+      --detector SK_WAND --output-dir /out --job-id 1 --test
+```
+
+For a PhotonSim source edit, bind it too and rebuild in place; the baked
+`/opt/PhotonSim/build` stays intact so incremental compiles take under a minute:
+
+```bash
+apptainer exec -B "$PWD/PhotonSim:/opt/PhotonSim" -B "$PWD/out:/out" \
+    lucid_v1.0.0.sif bash -c \
+    "cmake --build /opt/PhotonSim/build -j && lucid-run-job ..."
+```
+
+Note that a bind-mounted checkout is writable, so the overlap cache lands there
+rather than in the user cache — see §5.
+
+## 7. Where the output goes
 
 `--output-dir` is written directly, as four HDF5 files:
 
@@ -145,3 +189,36 @@ position, since two detectors drop different events.
 
 For what is inside each file, see
 [dataset-schema.md](../../reference/dataset-schema.md).
+
+## Building the image yourself
+
+Only needed if you are changing the `Dockerfile`. Clone LUCiD and PhotonSim as
+siblings and build from the parent directory:
+
+```bash
+mkdir lucid-work && cd lucid-work
+git clone https://github.com/CIDeR-ML/LUCiD.git
+git clone https://github.com/cesarjesusvalls/PhotonSim.git
+docker build --platform linux/amd64 --provenance=false --sbom=false \
+    -f LUCiD/container/Dockerfile -t lucid:dev .
+```
+
+`--provenance=false --sbom=false` suppresses BuildKit attestation manifests;
+ghcr.io stalls on them for this package. Expect ~10 min cold; rebuilds reuse
+layers, and editing LUCiD source retriggers only the last one.
+
+## Troubleshooting
+
+- **`exec /bin/bash: exec format error`** — Apple Silicon without Rosetta
+  enabled in Docker Desktop. See §1.
+- **`Error: detector needs to be specified`** — the GeV configs declare no
+  detector; pass `--detector SK_WAND` or `HK_WAND`.
+- **`is not a frozen *_WAND description`** — you passed `--detector SK` or
+  `HK`. Those carry no digitizer or trigger, so the run would silently produce
+  undigitized, untriggered data. Use the `*_WAND` names.
+- **`Read-only file system: .../spatial_overlap_integrals`** — an image
+  predating v1.0.0. Either upgrade, or point `LUCID_OVERLAP_CACHE_DIR` at a
+  writable directory.
+- **BuildKit silence during source builds** — long compile steps buffer output;
+  use `--progress=plain`.
+- **"No space left on device"** — `docker system prune -af` reclaims old layers.

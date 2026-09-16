@@ -23,9 +23,8 @@ those all consume the bundled SIREN weights already in `data/`.
 |---|---|
 | Run the tutorial notebooks | [Getting Started quickstart](../../getting-started/quickstart.md) |
 | Simulate an event and look at a display | [Getting Started quickstart](../../getting-started/quickstart.md) (`examples/hello_simulate.py`, `00_quickstart` notebook) |
-| Produce a WAND dataset from the release container | [Container production](container.md) |
+| Produce a dataset from the container (Apptainer or Docker) | [Container production](container.md) |
 | Produce a labeled dataset on my own machine | [Local production](local.md) |
-| Produce a dataset with Docker (macOS or no Apptainer) | [Docker production](docker.md) |
 | Produce at scale on a cluster (S3DF / NERSC / LXPLUS) | [S3DF](deploy-s3df.md), [NERSC](deploy-nersc.md), [LXPLUS](deploy-lxplus.md) — see [how the cluster layer works](cluster-abstraction.md) |
 | Train a new SIREN emitter from GEANT4 output | [SIREN training inputs](siren-training-inputs.md) |
 | Post-process a dataset I already produced | [Working with LUCiD data](../../reference/working-with-data.md) |
@@ -49,7 +48,7 @@ Every path in this section needs the **PhotonSim** binary (GEANT4-based photon
 transport) — either built locally against your own GEANT4 + ROOT install, or
 available pre-built inside the published container image. Pick
 [local](local.md) if you already have GEANT4/ROOT/GENIE installed and want to
-build PhotonSim yourself; pick [Docker](docker.md) if you are on macOS or don't
+build PhotonSim yourself; pick [the container](container.md) if you are on macOS or don't
 want to install those dependencies; pick a cluster runbook
 ([S3DF](deploy-s3df.md), [NERSC](deploy-nersc.md), [LXPLUS](deploy-lxplus.md))
 once you are ready to generate a full training or production dataset rather

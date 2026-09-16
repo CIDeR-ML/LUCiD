@@ -50,6 +50,7 @@ Single-job production: generates a GEANT4 macro, runs the external **PhotonSim**
 ```bash
 export PHOTONSIM_BIN=/path/to/PhotonSim/build/PhotonSim
 lucid-run-job --config lucid/production/configs/GeV/02_mu.json \
+              --detector SK_WAND \
               --n-events 1000 --job-id 1 --master-seed 42 --output-dir out/
 ```
 Writes `sensor/ hits/ step/ labl/` batch files under `--output-dir` (plus the intermediate
