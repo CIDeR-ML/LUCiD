@@ -55,3 +55,30 @@ region selection makes it useful as a forward-physics oracle, but unsuitable
 for gradient-based fitting. A later implementation can be tested against this
 oracle while replacing those discontinuous decisions with differentiable
 ones.
+
+## Differentiable surface roots
+
+`lucid.propagation.sk_pmt_jax` evaluates the same surface using JAX. It avoids
+constructing an arbitrary local transverse basis. Given the normalized inward
+PMT axis \(\hat a\) and a point relative to the PMT origin, it uses
+
+\[
+  z=p\mathbin{\cdot}\hat a,\qquad
+  p_\perp=p-z\hat a,\qquad
+  \rho=\lVert p_\perp\rVert.
+\]
+
+The spherical intersection is an analytic quadratic root. The toroidal
+intersection starts at the entry into the enclosing 25.4 cm sphere and applies
+16 fixed Newton iterations to the unsquared torus function. Differentiating
+those iterations gives the implicit surface-root derivative after convergence.
+The world-space intersection point and curved normal consequently retain
+gradients with respect to the ray and PMT geometry.
+
+This stage remains piecewise differentiable. Selecting sphere versus torus,
+rejecting a miss, and applying the inactive-band cut are Boolean operations.
+Away from those boundaries, the selected surface has the same forward value
+as the hard oracle and a finite physical gradient. Smooth geometric coverage
+will subsequently replace the discontinuous hit/miss boundary; it is kept
+separate so surface-root errors and acceptance-model errors can be tested
+independently.
