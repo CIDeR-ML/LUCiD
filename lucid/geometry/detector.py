@@ -7,6 +7,7 @@ import os
 from .registry import get_detector_class
 # Import subclasses so their @register_detector decorators run
 from .cylinder import Cylinder  # noqa: F401
+from .superk import SuperK      # noqa: F401
 from .sphere import Sphere      # noqa: F401
 from .box import Box            # noqa: F401
 from .string import StringTelescope  # noqa: F401  (telescope / volume detectors)
@@ -88,6 +89,10 @@ def load_detector_geom(file_path):
         return (detector_type, 'algorithmic',
                 geom_def['radius'], geom_def['height'],
                 geom_def['n_sensors'], geom_def['sensor_radius'])
+    elif detector_type == 'superk':
+        return (detector_type, geom_def['connection_table_path'],
+                geom_def['radius'], geom_def['height'],
+                geom_def['n_sensors'], geom_def['sensor_radius'])
     elif detector_type == 'sphere':
         return (detector_type, geom_def['radius'], None,
                 geom_def['n_sensors'], geom_def['sensor_radius'])
@@ -120,6 +125,20 @@ def generate_detector(file_path):
 
     cls = get_detector_class(detector_type)
 
+    if cls is SuperK:
+        config_dir = os.path.dirname(os.path.abspath(file_path))
+        connection_table_path = os.path.join(
+            config_dir, geom_def['connection_table_path'])
+        return cls(
+            connection_table_path=connection_table_path,
+            radius=geom_def['radius'],
+            height=geom_def['height'],
+            n_sensors=geom_def['n_sensors'],
+            sensor_radius=geom_def['sensor_radius'],
+            z_boundary=geom_def.get('z_boundary'),
+            tree_name=geom_def.get('tree_name', 'ConnectionTable'),
+            snap_to_wall=geom_def.get('snap_to_wall', True),
+        )
     if cls is Cylinder:
         if 'npz_file_path' in geom_def:
             config_dir = os.path.dirname(os.path.abspath(file_path))
