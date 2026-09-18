@@ -16,6 +16,7 @@ from . import cylinder, sphere, box
 from .cylinder import create_photon_propagator as create_cylinder_propagator, cylinder_bounds_check
 from .sphere import create_sphere_photon_propagator, sphere_bounds_check  
 from .box import create_box_photon_propagator, box_bounds_check
+from .sk_pmt import SK20InchPMTHit, intersect_sk20inch_pmt_hard
 
 # Main propagation function - unified interface
 def create_photon_propagator(detector_type, sensor_positions, sensor_radius, **detector_params):
@@ -70,6 +71,10 @@ __all__ = [
     'cylinder_bounds_check',
     'sphere_bounds_check',
     'box_bounds_check',
+
+    # Standalone Super-K PMT forward-geometry oracle
+    'SK20InchPMTHit',
+    'intersect_sk20inch_pmt_hard',
     
     # Unified interface
     'create_photon_propagator'
