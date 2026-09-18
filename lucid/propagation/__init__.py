@@ -18,6 +18,12 @@ from .sphere import create_sphere_photon_propagator, sphere_bounds_check
 from .box import create_box_photon_propagator, box_bounds_check
 from .sk_pmt import SK20InchPMTHit, intersect_sk20inch_pmt_hard
 from .sk_pmt_jax import JAXSK20InchPMTHit, intersect_sk20inch_pmt_jax
+from .sk_pmt_coverage import (
+    SKPMTSurfaceQuadrature,
+    create_sk20inch_surface_quadrature,
+    sk20inch_gaussian_coverage,
+    sk20inch_projected_area,
+)
 
 # Main propagation function - unified interface
 def create_photon_propagator(detector_type, sensor_positions, sensor_radius, **detector_params):
@@ -78,6 +84,10 @@ __all__ = [
     'intersect_sk20inch_pmt_hard',
     'JAXSK20InchPMTHit',
     'intersect_sk20inch_pmt_jax',
+    'SKPMTSurfaceQuadrature',
+    'create_sk20inch_surface_quadrature',
+    'sk20inch_gaussian_coverage',
+    'sk20inch_projected_area',
     
     # Unified interface
     'create_photon_propagator'
