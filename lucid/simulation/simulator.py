@@ -24,6 +24,7 @@ from lucid.wavelength.spectrum import (
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 from typing import Optional, Tuple
 import os
 from functools import partial
@@ -43,6 +44,37 @@ from lucid.simulation.sensor_response import (
     build_make_hits_waveform, build_make_hits_waveform_expected,
     build_make_hits_per_photon_shotgun,
 )
+
+
+def _sensor_outward_axes(detector, sensor_points):
+    """Return unit axes facing from each PMT toward the detector wall.
+
+    Measured detector files define ``pmt_directions`` as the inward-looking
+    optical axes. Negating those directions gives the axis against which an
+    arriving photon's direction is projected. Older cylinder geometries do
+    not carry PMT directions, so retain the nearest-surface construction as a
+    fallback.
+    """
+    if hasattr(detector, 'pmt_directions'):
+        axes = -np.asarray(detector.pmt_directions, dtype=float)
+    else:
+        sensor_xyz = np.asarray(sensor_points, dtype=float)
+        radial = np.linalg.norm(sensor_xyz[:, :2], axis=1)
+        wall_distance = np.abs(radial - float(detector.r))
+        top_distance = np.abs(sensor_xyz[:, 2] - float(detector.H) / 2.0)
+        bottom_distance = np.abs(sensor_xyz[:, 2] + float(detector.H) / 2.0)
+        surface = np.argmin(
+            np.stack([wall_distance, top_distance, bottom_distance]), axis=0)
+        axes = np.zeros_like(sensor_xyz)
+        axes[:, :2] = sensor_xyz[:, :2] / np.maximum(radial[:, None], 1e-12)
+        axes[surface == 1] = np.array([0.0, 0.0, 1.0])
+        axes[surface == 2] = np.array([0.0, 0.0, -1.0])
+
+    norms = np.linalg.norm(axes, axis=1, keepdims=True)
+    if np.any(norms == 0):
+        raise ValueError("PMT directions must have non-zero length")
+    return axes / norms
+
 
 # ===================================================================
 # Event simulator factory
@@ -73,6 +105,9 @@ def setup_event_simulator(
         overlap_mode='interp',
         reflection_model='scalar_mix',
         reflection_wavelength=400.0,
+        sensor_acceptance_model='sphere',
+        sensor_acceptance_power=1.0,
+        return_incidence_diagnostics=False,
         spectrum=None,
         cherenkov_emission_band=None,
         pmt_timing_model=None,
@@ -164,6 +199,15 @@ def setup_event_simulator(
         Wavelength (nm) fed to the reflection model's dispersion (cathode/glass
         Fresnel). Exact for monochromatic-laser calibration; ignored by the
         scalar model. Default 400 nm.
+    sensor_acceptance_model : {'sphere', 'cosine'}
+        ``'sphere'`` preserves the native spherical-sensor interception.
+        ``'cosine'`` multiplies deposits by the projected-area cosine relative
+        to the PMT's detector-surface axis. This is a flat-disc diagnostic.
+    sensor_acceptance_power : float
+        Power applied to the incidence cosine in the diagnostic model.
+    return_incidence_diagnostics : bool
+        Append the PMT-axis incidence cosine and propagation-step index for
+        every raw deposition slot. Intended for optical-validation plots.
     pmt_timing_model : str or None
         Optional per-photoelectron timing response applied after optical
         propagation and before hit aggregation/digitization. ``None`` or
@@ -250,6 +294,17 @@ def setup_event_simulator(
     NUM_SENSORS = det_geom.num_sensors
     Nphot = sim_config.n_photons
     propagate_photons = det_geom.propagator
+
+    if sensor_acceptance_model not in ('sphere', 'cosine'):
+        raise ValueError("sensor_acceptance_model must be 'sphere' or 'cosine'")
+    if sensor_acceptance_power < 0:
+        raise ValueError("sensor_acceptance_power must be non-negative")
+    if sensor_acceptance_model == 'cosine' or return_incidence_diagnostics:
+        if not hasattr(detector, 'r') or not hasattr(detector, 'H'):
+            raise ValueError("cosine sensor acceptance currently requires cylinder geometry")
+        sensor_axes = jnp.asarray(_sensor_outward_axes(detector, sensor_points))
+    else:
+        sensor_axes = jnp.zeros_like(sensor_points)
 
     # ---- Handle qe_corrections for baked-in detector params -----------------
     if _default_dp is not None:
@@ -566,6 +621,16 @@ def setup_event_simulator(
             depositions = prop_results['sensor_weights']
             sensor_indices = prop_results['sensor_indices']
             inside_sensor = prop_results['inside_sensor']
+            if sensor_acceptance_model == 'cosine' or return_incidence_diagnostics:
+                safe_indices = jnp.maximum(sensor_indices, 0)
+                candidate_axes = sensor_axes[safe_indices]
+                incidence_cosine = jnp.clip(
+                    jnp.sum(candidate_axes * state.directions[None, :, :], axis=-1),
+                    0.0, 1.0)
+                incidence_cosine = jnp.where(
+                    sensor_indices >= 0, incidence_cosine, 0.0)
+            if sensor_acceptance_model == 'cosine':
+                depositions = depositions * incidence_cosine ** sensor_acceptance_power
 
             if is_volume:
                 # ── Volume model (string telescope): per-DOM survival, NO reflection ──
@@ -609,6 +674,8 @@ def setup_event_simulator(
                     positions=next_pos, directions=next_dir, times=new_times,
                     survival=new_survival, key=key, log_p=new_log_p)
                 outputs = (updated_weights, sensor_indices, total_times.squeeze(-1))
+                if return_incidence_diagnostics:
+                    outputs = outputs + (incidence_cosine,)
                 return new_state, outputs
 
             # ── Surface model (cylinder/sphere/box) — UNCHANGED, byte-identical ──
@@ -683,6 +750,8 @@ def setup_event_simulator(
                 log_p=new_log_p,
             )
             outputs = (iter_weights, iter_indices, iter_times)
+            if return_incidence_diagnostics:
+                outputs = outputs + (incidence_cosine,)
             return new_state, outputs
 
         init_state = PhotonState(
@@ -695,8 +764,12 @@ def setup_event_simulator(
         )
         propagation_step_remat = jax.remat(propagation_step)
 
-        _, (all_weights, all_indices, all_times) = jax.lax.scan(
-            propagation_step_remat, init_state, jnp.arange(K))
+        scan_outputs = jax.lax.scan(
+            propagation_step_remat, init_state, jnp.arange(K))[1]
+        if return_incidence_diagnostics:
+            all_weights, all_indices, all_times, all_incidence_cosines = scan_outputs
+        else:
+            all_weights, all_indices, all_times = scan_outputs
 
         flat_weights = all_weights.reshape(-1)
         flat_indices = all_indices.reshape(-1)
@@ -721,9 +794,15 @@ def setup_event_simulator(
         # Per-photon segment id (per_segment mode), broadcast to flat shape via the
         # same i % n_rays trick as flat_qe. None for every other mode → byte-identical.
         flat_segment_idx = (segment_idx[photon_idx] if segment_idx is not None else None)
-        return make_hits_fn(
+        hit_output = make_hits_fn(
             flat_weights, flat_indices, flat_times, num_sensors, qe_key, flat_qe, qe_corrections,
             response, flat_segment_idx=flat_segment_idx)
+        if return_incidence_diagnostics:
+            flat_incidence_cosines = all_incidence_cosines.reshape(-1)
+            slots_per_step = max_candidates_per_ray * n_rays
+            flat_step_indices = jnp.repeat(jnp.arange(K), slots_per_step)
+            return hit_output + (flat_incidence_cosines, flat_step_indices)
+        return hit_output
 
     # ================================================================
     # Mode-specific simulation functions
