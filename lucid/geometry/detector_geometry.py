@@ -63,9 +63,12 @@ class DetectorGeometry(NamedTuple):
         """
         # Normalize casing. 'string' = telescope / volume detector (IceCube-style).
         dt_key = detector_type.lower()
+        if dt_key == 'superk':
+            dt_key = 'cylinder'
         if dt_key not in ('cylinder', 'sphere', 'box', 'string'):
             raise ValueError(
-                f"detector_type must be 'cylinder', 'sphere', 'box', or 'string', got {detector_type}")
+                f"detector_type must be 'cylinder', 'superk', 'sphere', "
+                f"'box', or 'string', got {detector_type}")
 
         # Material
         material = get_material_from_config(json_filename)
@@ -76,7 +79,10 @@ class DetectorGeometry(NamedTuple):
         detector = generate_detector(json_filename)
         import json as _json
         with open(json_filename) as _f:
-            actual_type = _json.load(_f).get('detector_type', detector_type)
+            configured_type = _json.load(_f).get('detector_type', detector_type)
+        # Specialized layouts such as SuperK still use a standard geometric
+        # family for containment and downstream event metadata.
+        actual_type = getattr(detector, 'geometry_type', configured_type)
         sensor_points = jnp.array(detector.all_points)
         sensor_radius = detector.S_radius
         num_sensors = len(sensor_points)
