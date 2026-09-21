@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LUCiD Geometry Viewer</title>
+  <link rel="stylesheet" href="geometry.css">
+</head>
+<body>
+  <div id="loading">
+    <div class="mark">LUCiD</div>
+    <div id="loadStatus">Loading effective geometry...</div>
+  </div>
+
+  <header>
+    <div class="brand">LUCiD <span>GEOMETRY</span></div>
+    <div id="summary">Connecting...</div>
+    <div class="header-actions">
+      <button id="resetCamera">RESET VIEW</button>
+      <button id="autoRotate">AUTO ROTATE</button>
+    </div>
+  </header>
+
+  <main>
+    <aside>
+      <section>
+        <h2>Optical boundaries</h2>
+        <div id="boundaryControls"></div>
+        <label class="range-label">Boundary opacity <output id="boundaryOpacityValue">0.10</output></label>
+        <input id="boundaryOpacity" type="range" min="0.02" max="0.35" value="0.10" step="0.01">
+      </section>
+
+      <section>
+        <h2>PMT geometry</h2>
+        <div id="pmtControls"></div>
+        <label class="range-label">PMT opacity <output id="pmtOpacityValue">1.00</output></label>
+        <input id="pmtOpacity" type="range" min="0.05" max="1" value="1" step="0.01">
+      </section>
+
+      <section id="supportSection">
+        <h2>Support geometry</h2>
+        <div id="supportControls"></div>
+      </section>
+
+      <section>
+        <h2>Section plane</h2>
+        <label class="check"><input id="clipEnabled" type="checkbox"> Clip along z</label>
+        <label class="range-label">z <output id="clipValue">0.0 m</output></label>
+        <input id="clipPosition" type="range" min="-20" max="20" value="0" step="0.1" disabled>
+      </section>
+
+      <section class="help">
+        <h2>Controls</h2>
+        <p>Left drag: orbit</p>
+        <p>Wheel: zoom</p>
+        <p>Right drag: pan</p>
+        <p>Hover: inspect PMT</p>
+      </section>
+    </aside>
+
+    <div id="viewport">
+      <div id="orientation">+z UP</div>
+      <div id="tooltip"></div>
+      <div id="renderStats"></div>
+    </div>
+  </main>
+
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+  <script type="module" src="geometry.js"></script>
+</body>
+</html>
