@@ -51,7 +51,9 @@ def processing_string(
     use_tts,
     hamamatsu_sigma,
     nnvt_sigma,
-    dark_subtract,
+    add_dark_to_simulation,
+    simulation_qe_factors=None,
+    source_intensity_scale=None,
     target_pe=None,
     prompt_window=(-10.0, 20.0),
     late_window=(20.0, 600.0),
@@ -59,14 +61,20 @@ def processing_string(
 ):
     """Serialize all response-processing settings into a cache key."""
     value = (
-        "metrics=4,"
+        "metrics=8,"
         f"tts={int(use_tts)},"
         f"irf={irf_config_string(hamamatsu_sigma, nnvt_sigma)},"
-        f"dark={int(dark_subtract)},fsmp=all,"
+        f"dark_to_sim={int(add_dark_to_simulation)},fsmp_dark=kept,"
         f"alignment=global_median_consensus_{alignment},"
         f"prompt={prompt_window[0]:g}:{prompt_window[1]:g},"
         f"late={late_window[0]:g}:{late_window[1]:g}"
     )
+    if simulation_qe_factors is not None:
+        factors = ":".join(f"{value:g}" for value in simulation_qe_factors)
+        value += f",qe_factors={factors}"
+    if source_intensity_scale is not None:
+        scales = ":".join(f"{value:g}" for value in source_intensity_scale)
+        value += f",source_scale={scales}"
     if target_pe is not None:
         value += f",fsmp_target={int(target_pe)}"
     return value
@@ -95,64 +103,75 @@ def _records_by_channel(data):
     }
 
 
-def estimate_dark_window(times, peak, margin_ns):
-    """Return the finite pre-peak interval used for dark-rate estimation."""
-    values = np.asarray(times, dtype=np.float64)
-    values = values[np.isfinite(values)]
-    if not len(values) or not np.isfinite(peak):
+def estimate_dark_window(edges, peak, margin_ns):
+    """Return the fixed histogram sideband before the direct-light peak."""
+    if not np.isfinite(peak) or margin_ns < 0.0:
         return None
-    low, high = float(np.min(values)), float(peak - margin_ns)
+    low = float(edges[0])
+    high = min(float(edges[-1]), float(peak - margin_ns))
     return None if high <= low else (low, high)
 
 
 def _empty_dark_stats():
     return {
         "prepeak_pe": 0,
-        "rate_per_ns": 0.0,
-        "expected_pe": 0.0,
-        "removed_pe": 0.0,
+        "aggregate_rate_pe_per_ns": 0.0,
+        "rate_pe_per_event_per_ns": 0.0,
+        "expected_pe_per_event_in_histogram": 0.0,
         "window_ns": 0.0,
         "window_low_ns": np.nan,
         "window_high_ns": np.nan,
-        "density_floor": 0.0,
-        "normalization_pe": 0,
+        "event_samples": 0,
     }
 
 
-def subtract_dark_noise(
-    times, density, edges, peak, margin_ns, normalization_count=None
-):
-    """Subtract a non-negative pre-peak density floor and return audit data."""
+def estimate_dark_noise(times, edges, peak, margin_ns, event_samples):
+    """Estimate one channel's constant dark density without changing FSMP."""
     stats = _empty_dark_stats()
-    window = estimate_dark_window(times, peak, margin_ns)
-    if window is None or density is None:
-        return density, stats
+    stats["event_samples"] = int(event_samples)
+    window = estimate_dark_window(edges, peak, margin_ns)
+    if window is None or event_samples <= 0:
+        return stats
     low, high = window
     width = high - low
     prepeak = int(np.count_nonzero((times >= low) & (times < high)))
     rate = prepeak / width
-    normalization_count = (
-        len(times) if normalization_count is None else int(normalization_count)
-    )
-    floor = rate / max(normalization_count, 1)
-    corrected = np.clip(density - floor, 0.0, None)
-    removed = np.clip(density - corrected, 0.0, None)
+    rate_per_event = rate / event_samples
     stats.update(
         {
             "prepeak_pe": prepeak,
-            "rate_per_ns": float(rate),
-            "expected_pe": float(rate * (edges[-1] - edges[0])),
-            "removed_pe": float(
-                np.sum(removed) * (edges[1] - edges[0]) * normalization_count
+            "aggregate_rate_pe_per_ns": float(rate),
+            "rate_pe_per_event_per_ns": float(rate_per_event),
+            "expected_pe_per_event_in_histogram": float(
+                rate_per_event * (edges[-1] - edges[0])
             ),
             "window_ns": float(width),
             "window_low_ns": low,
             "window_high_ns": high,
-            "density_floor": float(floor),
-            "normalization_pe": normalization_count,
+            "event_samples": int(event_samples),
         }
     )
-    return corrected, stats
+    return stats
+
+
+def simulation_qe_factors(
+    sim_data_list,
+    apply_lucid_qe=True,
+    lucid_qe_eff=JUNOSW_J26_3_2_EQUIVALENT_QE_532_NM,
+):
+    """Return simulation signal factors, applying QE only to LUCiD."""
+    if not np.isfinite(lucid_qe_eff) or not 0.0 < lucid_qe_eff <= 1.0:
+        raise ValueError("lucid_qe_eff must be finite and in (0, 1]")
+    factors = np.ones(len(sim_data_list), dtype=np.float64)
+    if apply_lucid_qe:
+        kinds = np.asarray(
+            [
+                str(np.asarray(item.get("kind", "")).item())
+                for item in sim_data_list
+            ]
+        )
+        factors[np.char.lower(kinds) == "lucid"] = lucid_qe_eff
+    return factors
 
 
 def _source_arrays(data):
@@ -251,6 +270,17 @@ def _normalize_with_factor(density, width):
     return np.asarray(density, dtype=np.float64) * factor, factor
 
 
+def _count_to_density_factor(count, width):
+    """Return C=1/(N*dt) for count-histogram to density conversion."""
+    count = np.asarray(count, dtype=np.float64)
+    return np.divide(
+        1.0,
+        count * width,
+        out=np.zeros_like(count),
+        where=count > 0.0,
+    )
+
+
 def consensus_l1_alignment(
     times,
     simulation_densities,
@@ -328,8 +358,10 @@ def build_channel_histograms_multi(
     use_tts=True,
     irf_sigma_hamamatsu=0.0,
     irf_sigma_nnvt=0.0,
-    dark_subtract=False,
-    dark_window=30.0,
+    add_dark_to_simulation=True,
+    dark_margin=30.0,
+    simulation_qe_factor=None,
+    simulation_source_scale=None,
     prompt_window=(-10.0, 20.0),
     late_window=(20.0, 600.0),
 ):
@@ -362,6 +394,30 @@ def build_channel_histograms_multi(
     width = float(edges[1] - edges[0])
     records = _records_by_channel(fsmp_data)
     n_sources = len(sim_data_list)
+    qe_factor = np.ones(n_sources, dtype=np.float64)
+    if simulation_qe_factor is not None:
+        qe_factor = np.asarray(
+            simulation_qe_factor, dtype=np.float64
+        )
+    if (
+        qe_factor.shape != (n_sources,)
+        or not np.all(np.isfinite(qe_factor))
+        or np.any(qe_factor < 0.0)
+    ):
+        raise ValueError("simulation_qe_factor must be non-negative per source")
+    source_scale = np.ones(n_sources, dtype=np.float64)
+    if simulation_source_scale is not None:
+        source_scale = np.asarray(
+            simulation_source_scale, dtype=np.float64
+        )
+    if (
+        source_scale.shape != (n_sources,)
+        or not np.all(np.isfinite(source_scale))
+        or np.any(source_scale <= 0.0)
+    ):
+        raise ValueError(
+            "simulation_source_scale must be positive per source"
+        )
     physical_events = int(
         np.asarray(
             fsmp_data.get(
@@ -370,9 +426,9 @@ def build_channel_histograms_multi(
             )
         ).item()
     )
-    event_samples = int(
-        np.asarray(fsmp_data.get("fsmp_event_samples", physical_events)).item()
-    )
+    amplitude_events = physical_events
+    if amplitude_events <= 0:
+        raise ValueError("FSMP cache has no monitor-matched physical events")
     values = {
         name: []
         for name in (
@@ -427,21 +483,23 @@ def build_channel_histograms_multi(
         times = np.asarray(record["time"], dtype=np.float64)
         peak_run = estimate_peak_from_times(times, len(edges) - 1)
         source_results = []
-        for source in sim_data_list:
+        for model_index, source in enumerate(sim_data_list):
             source_channels = np.asarray(source["channels"], dtype=np.int64)
-            source_index = np.searchsorted(source_channels, channel)
+            source_channel_index = np.searchsorted(source_channels, channel)
             if (
-                source_index >= len(source_channels)
-                or source_channels[source_index] != channel
+                source_channel_index >= len(source_channels)
+                or source_channels[source_channel_index] != channel
             ):
                 raw = np.zeros(len(edges) - 1)
                 entries = total = event_count = 0
             else:
                 raw = np.asarray(
                     source["simulation_raw_density"], dtype=np.float64
-                )[source_index]
+                )[source_channel_index]
                 entries = int(
-                    np.asarray(source["simulation_entries"])[source_index]
+                    np.asarray(source["simulation_entries"])[
+                        source_channel_index
+                    ]
                 )
                 total = int(
                     np.asarray(
@@ -449,30 +507,37 @@ def build_channel_histograms_multi(
                             "simulation_total_pe",
                             source["simulation_entries"],
                         )
-                    )[source_index]
+                    )[source_channel_index]
                 )
                 event_count = int(
-                    np.asarray(source["simulation_events"])[source_index]
+                    np.asarray(source["simulation_events"])[
+                        source_channel_index
+                    ]
                 )
             observed = (
                 convolve_density(raw, width, channel_tts) if use_tts else raw
             )
             if channel_irf > 0:
                 observed = convolve_density(observed, width, channel_irf)
-            shape, renorm = _normalize_with_factor(observed, width)
             if event_count > 0:
-                pe_density = observed * entries / event_count
+                signal_pe_density = (
+                    observed
+                    * entries
+                    / event_count
+                    * qe_factor[model_index]
+                    * source_scale[model_index]
+                )
             else:
-                pe_density = np.full_like(observed, np.nan)
+                signal_pe_density = np.full_like(observed, np.nan)
+            shape, _ = _normalize_with_factor(signal_pe_density, width)
             source_results.append(
                 {
                     "raw": raw,
                     "shape": shape,
-                    "pe_density": pe_density,
+                    "signal_pe_density": signal_pe_density,
                     "entries": entries,
                     "total": total,
                     "events": event_count,
-                    "renorm": renorm,
                 }
             )
         reference_peak, simulation_peaks = _median_simulation_peak(
@@ -539,21 +604,39 @@ def build_channel_histograms_multi(
         reference_peak = item["reference_peak"]
         simulation_peaks = item["simulation_peaks"]
         shift = global_shift
-        aligned = density_hist(times + shift, edges)
-        normalization = int(np.histogram(times + shift, bins=edges)[0].sum())
-        corrected, stats = (
-            subtract_dark_noise(
-                times, aligned, edges, peak_run, dark_window, normalization
-            )
-            if dark_subtract
-            else (aligned, _empty_dark_stats())
+        aligned_times = times + shift
+        aligned = density_hist(aligned_times, edges)
+        normalization = int(np.histogram(aligned_times, bins=edges)[0].sum())
+        stats = estimate_dark_noise(
+            aligned_times,
+            edges,
+            peak_run + shift,
+            dark_margin,
+            amplitude_events,
         )
-        run_shape, run_renorm = _normalize_with_factor(corrected, width)
+        dark_density = (
+            stats["rate_pe_per_event_per_ns"]
+            if add_dark_to_simulation
+            else 0.0
+        )
+        final_sources = []
+        for source in source_results:
+            pe_density = source["signal_pe_density"] + dark_density
+            shape, renorm = _normalize_with_factor(pe_density, width)
+            final_sources.append(
+                {
+                    **source,
+                    "pe_density": pe_density,
+                    "shape": shape,
+                    "renorm": renorm,
+                }
+            )
+        source_results = final_sources
+        run_pe_density = aligned * normalization / amplitude_events
+        run_shape, run_renorm = _normalize_with_factor(
+            run_pe_density, width
+        )
         aligned_run_peak = estimate_peak_from_density(centers, run_shape)
-        if event_samples > 0:
-            run_pe_density = corrected * normalization / event_samples
-        else:
-            run_pe_density = np.full_like(corrected, np.nan)
         run_mean = float(np.sum(run_pe_density) * width)
         run_prompt = _window_integral(
             run_pe_density, centers, width, prompt_window, reference_peak
@@ -618,7 +701,7 @@ def build_channel_histograms_multi(
             [item["entries"] for item in source_results]
         )
         values["run_events"].append([physical_events] * n_sources)
-        values["run_event_samples"].append([event_samples] * n_sources)
+        values["run_event_samples"].append([amplitude_events] * n_sources)
         values["run_total"].append(
             [int(np.sum(record["pe_count"]))] * n_sources
         )
@@ -674,6 +757,12 @@ def build_channel_histograms_multi(
         array = np.asarray(values[name], dtype=dtype)
         return array.transpose(1, 0, 2) if array.ndim == 3 else array.T
 
+    run_histogram_N = transpose("run_norm_pe", np.int64)
+    simulation_histogram_N = transpose("sim_norm_pe", np.int64)
+    run_shape_c = transpose("run_renorm")
+    simulation_shape_c = transpose("sim_renorm")
+    run_mean = transpose("run_mean")
+    simulation_mean = transpose("sim_mean")
     result = {
         "channels": channels,
         "pmt_type": pmt_type,
@@ -681,6 +770,10 @@ def build_channel_histograms_multi(
         "irf_sigma_by_channel": irf,
         "z": np.asarray(fsmp_data["z"], dtype=float),
         "theta": np.asarray(fsmp_data["theta"], dtype=float),
+        "phi": np.asarray(
+            fsmp_data.get("phi", np.full(len(channels), np.nan)),
+            dtype=float,
+        ),
         "edges": edges,
         "centers": centers,
         "run_density": transpose("run_density"),
@@ -706,14 +799,18 @@ def build_channel_histograms_multi(
         "run_total_pe": transpose("run_total", np.int64),
         "simulation_events": transpose("sim_events", np.int64),
         "simulation_total_pe": transpose("sim_total", np.int64),
-        "run_shape_normalization_pe": transpose("run_norm_pe", np.int64),
-        "simulation_shape_normalization_pe": transpose(
-            "sim_norm_pe", np.int64
+        "run_histogram_N_pe": run_histogram_N,
+        "simulation_histogram_N_pe": simulation_histogram_N,
+        "run_histogram_C_per_pe_per_ns": _count_to_density_factor(
+            run_histogram_N, width
         ),
-        "run_shape_renormalization": transpose("run_renorm"),
-        "simulation_shape_renormalization": transpose("sim_renorm"),
-        "run_mean_pe_per_event": transpose("run_mean"),
-        "simulation_mean_pe_per_event": transpose("sim_mean"),
+        "simulation_histogram_C_per_pe_per_ns": (
+            _count_to_density_factor(simulation_histogram_N, width)
+        ),
+        "run_shape_c_event_per_pe": run_shape_c,
+        "simulation_shape_c_event_per_pe": simulation_shape_c,
+        "run_mean_pe_per_event": run_mean,
+        "simulation_mean_pe_per_event": simulation_mean,
         "run_prompt_pe_per_event": transpose("run_prompt"),
         "simulation_prompt_pe_per_event": transpose("sim_prompt"),
         "run_late_pe_per_event": transpose("run_late"),
@@ -748,12 +845,17 @@ def build_channel_histograms_multi(
                 for source in sim_data_list
             ]
         ),
+        "simulation_qe_factor": qe_factor,
+        "simulation_applied_source_scale": source_scale,
+        "simulation_dark_added": np.asarray(add_dark_to_simulation),
         "processing": np.asarray(
             processing_string(
                 use_tts,
                 irf_sigma_hamamatsu,
                 irf_sigma_nnvt,
-                dark_subtract,
+                add_dark_to_simulation,
+                simulation_qe_factors=qe_factor,
+                source_intensity_scale=source_scale,
                 target_pe=fsmp_data.get("fsmp_target_pe"),
                 prompt_window=prompt_window,
                 late_window=late_window,
@@ -763,17 +865,16 @@ def build_channel_histograms_multi(
     }
     for key in (
         "prepeak_pe",
-        "rate_per_ns",
+        "aggregate_rate_pe_per_ns",
+        "rate_pe_per_event_per_ns",
+        "expected_pe_per_event_in_histogram",
         "window_ns",
         "window_low_ns",
         "window_high_ns",
-        "density_floor",
-        "normalization_pe",
-        "expected_pe",
-        "removed_pe",
+        "event_samples",
     ):
         item_values = np.asarray([item[key] for item in dark_stats])
-        integer = key in {"prepeak_pe", "normalization_pe"}
+        integer = key in {"prepeak_pe", "event_samples"}
         dtype = np.int64 if integer else float
         result[f"run_dark_{key}"] = np.repeat(
             item_values.astype(dtype)[None, :], n_sources, axis=0

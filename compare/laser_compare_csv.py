@@ -14,13 +14,6 @@ from .laser_compare_metrics import (
 PMT_TYPE_NAME = base.PMT_TYPE_NAME
 
 
-def _shape_coefficient(normalization_pe, bin_width_ns, renormalization):
-    """Return the final count-to-unit-area-density coefficient."""
-    if normalization_pe <= 0 or bin_width_ns <= 0.0:
-        return np.nan
-    return float(renormalization / (normalization_pe * bin_width_ns))
-
-
 def _processing_title(data):
     raw = str(np.asarray(data.get("processing", "")).item())
     flags = dict(item.split("=", 1) for item in raw.split(",") if "=" in item)
@@ -34,13 +27,14 @@ def _processing_title(data):
     else:
         irf_title = f"IRF sigma={irf} ns"
     tts = flags.get("tts", "unknown")
-    dark = flags.get("dark", "unknown")
+    dark = flags.get("dark_to_sim", "unknown")
     alignment = flags.get("alignment", "unknown").replace("_", " ")
     tts_text = "on" if tts == "1" else "off" if tts == "0" else tts
     dark_text = "on" if dark == "1" else "off" if dark == "0" else dark
     return (
         f"simulation TTS={tts_text}; {irf_title}; "
-        f"FSMP dark subtraction={dark_text}; alignment={alignment}"
+        f"FSMP dark kept; MC dark addition={dark_text}; "
+        f"alignment={alignment}"
     )
 
 
@@ -51,6 +45,7 @@ def write_channel_manifest(
     source_z,
     irf_sigma_hamamatsu=0.0,
     irf_sigma_nnvt=0.0,
+    selection_mode="unknown",
 ):
     """Write selected channel metadata, including configured IRF widths."""
     channels = np.asarray(data["channels"], dtype=np.int64)
@@ -66,11 +61,13 @@ def write_channel_manifest(
     fields = [
         "source_z_m",
         "run",
+        "selection_mode",
         "channel",
         "pmt_type",
         "pmt_type_name",
         "z_mm",
         "theta_deg",
+        "phi_deg",
         "tts_ns",
         "irf_sigma_ns",
     ]
@@ -83,6 +80,7 @@ def write_channel_manifest(
                 {
                     "source_z_m": float(source_z),
                     "run": int(run),
+                    "selection_mode": str(selection_mode),
                     "channel": int(channel),
                     "pmt_type": int(data["pmt_type"][index]),
                     "pmt_type_name": PMT_TYPE_NAME.get(
@@ -90,8 +88,50 @@ def write_channel_manifest(
                     ),
                     "z_mm": float(data["z"][index]),
                     "theta_deg": float(data["theta"][index]),
+                    "phi_deg": float(data["phi"][index]),
                     "tts_ns": float(data["tts"][index]),
                     "irf_sigma_ns": float(irf[index]),
+                }
+            )
+    print(f"Wrote {path}")
+
+
+def write_fsmp_file_manifest(path, data):
+    """Write the all-channel FSMP read order and per-file coverage audit."""
+    required = {
+        "fsmp_files_read",
+        "fsmp_file_selected_pe",
+        "fsmp_file_event_samples",
+        "fsmp_file_channels_seen",
+    }
+    if not required.issubset(data):
+        return
+    files = np.asarray(data["fsmp_files_read"]).astype(str)
+    selected_pe = np.asarray(data["fsmp_file_selected_pe"], dtype=np.int64)
+    exposure = np.asarray(data["fsmp_file_event_samples"], dtype=np.int64)
+    coverage = np.asarray(data["fsmp_file_channels_seen"], dtype=np.int64)
+    arrays = (selected_pe, exposure, coverage)
+    if not all(len(value) == len(files) for value in arrays):
+        raise ValueError("FSMP file-manifest arrays have inconsistent lengths")
+    fields = [
+        "file_index",
+        "path",
+        "selected_pe",
+        "monitor_matched_event_samples",
+        "channels_seen",
+    ]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", newline="") as stream:
+        writer = csv.DictWriter(stream, fieldnames=fields)
+        writer.writeheader()
+        for index, value in enumerate(files):
+            writer.writerow(
+                {
+                    "file_index": index,
+                    "path": value,
+                    "selected_pe": int(selected_pe[index]),
+                    "monitor_matched_event_samples": int(exposure[index]),
+                    "channels_seen": int(coverage[index]),
                 }
             )
     print(f"Wrote {path}")
@@ -111,13 +151,19 @@ def write_comparison_stats_csv(path, data, run, source_z):
         _source_counts(data, labels)
     )
     processing = _processing_title(data)
-    width = float(data["edges"][1] - data["edges"][0])
     prompt_window = np.asarray(data["prompt_window_relative_ns"])
     late_window = np.asarray(data["late_window_relative_ns"])
-    run_norm = np.asarray(data["run_shape_normalization_pe"])
-    sim_norm = np.asarray(data["simulation_shape_normalization_pe"])
-    run_renorm = np.asarray(data["run_shape_renormalization"])
-    sim_renorm = np.asarray(data["simulation_shape_renormalization"])
+    run_histogram_N = np.asarray(data["run_histogram_N_pe"])
+    sim_histogram_N = np.asarray(data["simulation_histogram_N_pe"])
+    run_histogram_C = np.asarray(
+        data["run_histogram_C_per_pe_per_ns"]
+    )
+    sim_histogram_C = np.asarray(
+        data["simulation_histogram_C_per_pe_per_ns"]
+    )
+    run_shape_c = np.asarray(data["run_shape_c_event_per_pe"])
+    sim_shape_c = np.asarray(data["simulation_shape_c_event_per_pe"])
+    source_scale = np.asarray(data["simulation_applied_source_scale"])
     fields = [
         "run",
         "source_z_m",
@@ -125,6 +171,7 @@ def write_comparison_stats_csv(path, data, run, source_z):
         "pmt_type",
         "z_mm",
         "theta_deg",
+        "phi_deg",
         "tts_ns",
         "irf_sigma_ns",
         "processing",
@@ -142,8 +189,9 @@ def write_comparison_stats_csv(path, data, run, source_z):
         "fsmp_prompt_pe_per_event",
         "fsmp_late_pe_per_event",
         "fsmp_prompt_late_ratio",
-        "fsmp_shape_normalization_pe",
-        "fsmp_shape_normalization_coefficient_per_pe_ns",
+        "fsmp_histogram_N_pe",
+        "fsmp_histogram_C_per_pe_per_ns",
+        "fsmp_shape_c_event_per_pe",
         "prompt_window_low_relative_ns",
         "prompt_window_high_relative_ns",
         "late_window_low_relative_ns",
@@ -161,13 +209,15 @@ def write_comparison_stats_csv(path, data, run, source_z):
                 f"{prefix}_events",
                 f"{prefix}_pe",
                 f"{prefix}_time_samples",
+                f"{prefix}_qe_factor",
                 f"{prefix}_mean_pe_per_event",
-                f"{prefix}_mean_pe_ratio_to_fsmp",
                 f"{prefix}_prompt_pe_per_event",
                 f"{prefix}_late_pe_per_event",
                 f"{prefix}_prompt_late_ratio",
-                f"{prefix}_shape_normalization_pe",
-                f"{prefix}_shape_normalization_coefficient_per_pe_ns",
+                f"{prefix}_histogram_N_pe",
+                f"{prefix}_histogram_C_per_pe_per_ns",
+                f"{prefix}_shape_c_event_per_pe",
+                f"{prefix}_applied_source_scale",
                 f"{prefix}_l1",
                 f"{prefix}_wasserstein_ns",
                 f"{prefix}_peak_ns",
@@ -178,14 +228,13 @@ def write_comparison_stats_csv(path, data, run, source_z):
         f"fsmp_dark_{key}"
         for key in (
             "prepeak_pe",
-            "rate_per_ns",
+            "aggregate_rate_pe_per_ns",
             "window_ns",
             "window_low_ns",
             "window_high_ns",
-            "density_floor",
-            "normalization_pe",
-            "expected_pe",
-            "removed_pe",
+            "rate_pe_per_event_per_ns",
+            "expected_pe_per_event_in_histogram",
+            "event_samples",
         )
     )
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -200,6 +249,7 @@ def write_comparison_stats_csv(path, data, run, source_z):
                 "pmt_type": int(data["pmt_type"][channel_index]),
                 "z_mm": float(data["z"][channel_index]),
                 "theta_deg": float(data["theta"][channel_index]),
+                "phi_deg": float(data["phi"][channel_index]),
                 "tts_ns": float(data["tts"][channel_index]),
                 "irf_sigma_ns": float(
                     data["irf_sigma_by_channel"][channel_index]
@@ -243,15 +293,14 @@ def write_comparison_stats_csv(path, data, run, source_z):
                 "fsmp_prompt_late_ratio": float(
                     data["run_prompt_late_ratio"][0, channel_index]
                 ),
-                "fsmp_shape_normalization_pe": int(
-                    run_norm[0, channel_index]
+                "fsmp_histogram_N_pe": int(
+                    run_histogram_N[0, channel_index]
                 ),
-                "fsmp_shape_normalization_coefficient_per_pe_ns": float(
-                    _shape_coefficient(
-                        run_norm[0, channel_index],
-                        width,
-                        run_renorm[0, channel_index],
-                    )
+                "fsmp_histogram_C_per_pe_per_ns": float(
+                    run_histogram_C[0, channel_index]
+                ),
+                "fsmp_shape_c_event_per_pe": float(
+                    run_shape_c[0, channel_index]
                 ),
                 "prompt_window_low_relative_ns": float(prompt_window[0]),
                 "prompt_window_high_relative_ns": float(prompt_window[1]),
@@ -284,24 +333,14 @@ def write_comparison_stats_csv(path, data, run, source_z):
                         f"{prefix}_time_samples": int(
                             sim_entries[index, channel_index]
                         ),
+                        f"{prefix}_qe_factor": float(
+                            data["simulation_qe_factor"][index]
+                        ),
                         f"{prefix}_mean_pe_per_event": float(
                             data["simulation_mean_pe_per_event"][
                                 index, channel_index
                             ]
                         ),
-                        f"{prefix}_mean_pe_ratio_to_fsmp": float(
-                            data["simulation_mean_pe_per_event"][
-                                index, channel_index
-                            ]
-                            / data["run_mean_pe_per_event"][
-                                0, channel_index
-                            ]
-                        )
-                        if data["run_mean_pe_per_event"][
-                            0, channel_index
-                        ]
-                        > 0.0
-                        else np.nan,
                         f"{prefix}_prompt_pe_per_event": float(
                             data["simulation_prompt_pe_per_event"][
                                 index, channel_index
@@ -317,18 +356,20 @@ def write_comparison_stats_csv(path, data, run, source_z):
                                 index, channel_index
                             ]
                         ),
-                        f"{prefix}_shape_normalization_pe": int(
-                            sim_norm[index, channel_index]
+                        f"{prefix}_histogram_N_pe": int(
+                            sim_histogram_N[index, channel_index]
                         ),
                         (
-                            f"{prefix}_shape_normalization_"
-                            "coefficient_per_pe_ns"
+                            f"{prefix}_histogram_C_"
+                            "per_pe_per_ns"
                         ): float(
-                            _shape_coefficient(
-                                sim_norm[index, channel_index],
-                                width,
-                                sim_renorm[index, channel_index],
-                            )
+                            sim_histogram_C[index, channel_index]
+                        ),
+                        f"{prefix}_shape_c_event_per_pe": float(
+                            sim_shape_c[index, channel_index]
+                        ),
+                        f"{prefix}_applied_source_scale": float(
+                            source_scale[index]
                         ),
                         f"{prefix}_l1": float(l1[index, channel_index]),
                         f"{prefix}_wasserstein_ns": float(
@@ -346,14 +387,13 @@ def write_comparison_stats_csv(path, data, run, source_z):
                 )
             for key in (
                 "prepeak_pe",
-                "rate_per_ns",
+                "aggregate_rate_pe_per_ns",
                 "window_ns",
                 "window_low_ns",
                 "window_high_ns",
-                "density_floor",
-                "normalization_pe",
-                "expected_pe",
-                "removed_pe",
+                "rate_pe_per_event_per_ns",
+                "expected_pe_per_event_in_histogram",
+                "event_samples",
             ):
                 row[f"fsmp_dark_{key}"] = np.asarray(data[f"run_dark_{key}"])[
                     0, channel_index

@@ -6,7 +6,6 @@ from matplotlib.backends.backend_pdf import PdfPages
 
 from . import compare_sim as base
 from .laser_compare_metrics import (
-    JUNOSW_J26_3_2_EQUIVALENT_QE_532_NM,
     _metric_arrays,
     _normalize_with_factor,
     _source_counts,
@@ -26,51 +25,82 @@ DIFFERENCE_AXIS_COLOR = "0.25"
 RATIO_AXIS_COLOR = "#7f3c8d"
 
 
-def amplitude_plot_arrays(
-    data,
-    apply_lucid_qe=True,
-    lucid_qe_eff=JUNOSW_J26_3_2_EQUIVALENT_QE_532_NM,
-):
-    """Return amplitude arrays with an optional LUCiD-only QE factor."""
-    if not np.isfinite(lucid_qe_eff) or not 0.0 < lucid_qe_eff <= 1.0:
-        raise ValueError("lucid_qe_eff must be finite and in (0, 1]")
-    labels = np.asarray(data["simulation_labels"]).astype(str)
-    kinds = np.asarray(
-        data.get("simulation_kinds", ["simulation"] * len(labels))
-    ).astype(str)
-    factors = np.ones(len(labels), dtype=np.float64)
-    if apply_lucid_qe:
-        factors[np.char.lower(kinds) == "lucid"] = lucid_qe_eff
+def amplitude_plot_arrays(data):
+    """Return physical amplitude arrays prepared by the metric pipeline."""
+    labels = np.asarray(data["simulation_labels"])
+    factors = np.asarray(
+        data.get("simulation_qe_factor", np.ones(len(labels))),
+        dtype=np.float64,
+    )
     return {
         "source_factors": factors,
         "simulation_density": np.asarray(
             data["simulation_pe_per_event_density"]
-        )
-        * factors[:, None, None],
-        "simulation_mean": np.asarray(
-            data["simulation_mean_pe_per_event"]
-        )
-        * factors[:, None],
+        ),
+        "simulation_mean": np.asarray(data["simulation_mean_pe_per_event"]),
         "simulation_prompt": np.asarray(
             data["simulation_prompt_pe_per_event"]
-        )
-        * factors[:, None],
+        ),
         "simulation_late": np.asarray(
             data["simulation_late_pe_per_event"]
-        )
-        * factors[:, None],
+        ),
     }
 
 
-def _lucid_qe_note(data, apply_lucid_qe, lucid_qe_eff):
+def _lucid_qe_note(data):
     """Describe the active common LUCiD QE approximation."""
     kinds = np.asarray(data.get("simulation_kinds", [])).astype(str)
-    if apply_lucid_qe and np.any(np.char.lower(kinds) == "lucid"):
+    factors = np.asarray(
+        data.get("simulation_qe_factor", np.ones(len(kinds))),
+        dtype=np.float64,
+    )
+    lucid = np.flatnonzero(np.char.lower(kinds) == "lucid")
+    if len(lucid) and not np.allclose(factors[lucid], 1.0):
         return (
             "LUCiD-only equivalent QE at 532 nm="
-            f"{lucid_qe_eff:.6g} (JUNOsw J26.3.2)"
+            f"{factors[lucid[0]]:.6g} (JUNOsw J26.3.2)"
         )
     return "LUCiD QE correction disabled"
+
+
+def _source_intensity_note(data):
+    """Describe non-unity source-intensity corrections on amplitude pages."""
+    labels = np.asarray(data.get("simulation_labels", [])).astype(str)
+    scales = np.asarray(
+        data.get("simulation_applied_source_scale", np.ones(len(labels))),
+        dtype=np.float64,
+    )
+    if len(scales) != len(labels) or np.allclose(scales, 1.0):
+        return ""
+    values = ", ".join(
+        f"{label}={scale:.6g}" for label, scale in zip(labels, scales)
+    )
+    return f"Source intensity scale: {values}"
+
+
+def _dark_note(data, channel_index):
+    """Describe the per-channel FSMP dark estimate applied to MC."""
+    enabled = bool(np.asarray(data.get("simulation_dark_added", False)).item())
+    if not enabled:
+        return "MC dark addition disabled"
+    rate = np.asarray(data["run_dark_rate_pe_per_event_per_ns"])[
+        0, channel_index
+    ]
+    return f"Dark added to MC={rate:.4e} PE/event/ns"
+
+
+def _shape_scale_note(data, channel_index, labels):
+    """Describe c=1/mu for every unit-area curve on one channel page."""
+    run_c = np.asarray(data["run_shape_c_event_per_pe"])[0, channel_index]
+    simulation_c = np.asarray(data["simulation_shape_c_event_per_pe"])[
+        :, channel_index
+    ]
+    lines = [r"$c=1/\mu$ [event/PE]", f"FSMP: {run_c:.4g}"]
+    lines.extend(
+        f"{label}: {value:.4g}"
+        for label, value in zip(labels, simulation_c)
+    )
+    return "\n".join(lines)
 
 
 def _simulation_colors(data, labels):
@@ -118,6 +148,7 @@ def plot_data(data, output, plot_range, run):
                 f"TTS={data['tts'][index]:.2f} ns; "
                 f"z={data['z'][index]:.2f} mm; "
                 f"theta={data['theta'][index]:.2f} deg\n"
+                f"{_dark_note(data, index)}"
                 # f"Alignment={alignment}; FSMP shift="
                 # f"{shift:.4g} ns"
             )
@@ -149,6 +180,20 @@ def plot_data(data, output, plot_range, run):
                 transform=ax.transAxes,
                 ha="right",
                 va="top",
+            )
+            ax.text(
+                0.02,
+                0.03,
+                _shape_scale_note(data, index, labels),
+                transform=ax.transAxes,
+                ha="left",
+                va="bottom",
+                fontsize="xx-small",
+                bbox={
+                    "facecolor": "white",
+                    "edgecolor": "0.8",
+                    "alpha": 0.85,
+                },
             )
             ax.set(
                 title=title,
@@ -234,11 +279,42 @@ def plot_data(data, output, plot_range, run):
 
 def pooled_group_shape(pe_density, mask, width):
     """Pool selected-channel PE spectra, then normalize the total shape."""
+    return pooled_group_shape_and_c(pe_density, mask, width)[0]
+
+
+def pooled_group_shape_and_c(pe_density, mask, width):
+    """Return a pooled unit-area shape and the coefficient used for it."""
     selected = np.asarray(pe_density, dtype=np.float64)[mask]
     if not len(selected):
-        return np.zeros(np.asarray(pe_density).shape[-1], dtype=np.float64)
+        return (
+            np.zeros(np.asarray(pe_density).shape[-1], dtype=np.float64),
+            0.0,
+        )
     pooled = np.nansum(selected, axis=0)
-    return _normalize_with_factor(pooled, width)[0]
+    shape, coefficient = _normalize_with_factor(pooled, width)
+    return shape, float(coefficient)
+
+
+def _theta_groups(theta, source_z, bin_width=10.0):
+    """Return (title, mask) theta groups for pooled summary pages.
+
+    Input: per-channel theta values, the source z position and bin width.
+    Output: one all-channel group for a centered source, else populated
+    10-degree bins so large panels keep useful per-bin statistics.
+    """
+    theta = np.asarray(theta, dtype=np.float64)
+    if np.isclose(source_z, 0.0):
+        return [("", np.ones(len(theta), dtype=bool))]
+    groups = []
+    for low in np.arange(0.0, 180.0, bin_width):
+        high = low + bin_width
+        if np.isclose(high, 180.0):
+            mask = (theta >= low) & (theta <= high)
+        else:
+            mask = (theta >= low) & (theta < high)
+        if np.any(mask):
+            groups.append((f"theta in [{low:.0f}, {high:.0f}) deg", mask))
+    return groups
 
 
 def plot_summary_data(data, output, plot_range, run, source_z):
@@ -253,13 +329,7 @@ def plot_summary_data(data, output, plot_range, run, source_z):
     alignment = str(
         np.asarray(data.get("alignment_method", "unknown")).item()
     ).replace("_", " ")
-    if np.isclose(source_z, 0.0):
-        theta_groups = [("", np.ones(len(data["theta"]), dtype=bool))]
-    else:
-        theta_groups = [
-            (f"theta={value:.2f} deg", np.isclose(data["theta"], value))
-            for value in np.unique(data["theta"][np.isfinite(data["theta"])])
-        ]
+    theta_groups = _theta_groups(data["theta"], source_z)
     with PdfPages(output) as pdf:
         for theta_title, theta_mask in theta_groups:
             for pmt_title, pmt_id in (
@@ -269,17 +339,21 @@ def plot_summary_data(data, output, plot_range, run, source_z):
                 mask = theta_mask & (data["pmt_type"] == pmt_id)
                 if not np.any(mask):
                     continue
-                pooled_run = pooled_group_shape(
+                pooled_run, pooled_run_c = pooled_group_shape_and_c(
                     run_pe_density[0], mask, width
                 )
-                pooled_sources = [
-                    (
-                        pooled_group_shape(sim_pe_density[i], mask, width)
-                        if np.any(mask & (sim_entries[i] > 0))
-                        else np.zeros(len(data["centers"]))
-                    )
-                    for i in range(len(labels))
-                ]
+                pooled_sources = []
+                pooled_source_c = []
+                for index in range(len(labels)):
+                    if np.any(mask & (sim_entries[index] > 0)):
+                        pooled, coefficient = pooled_group_shape_and_c(
+                            sim_pe_density[index], mask, width
+                        )
+                    else:
+                        pooled = np.zeros(len(data["centers"]))
+                        coefficient = 0.0
+                    pooled_sources.append(pooled)
+                    pooled_source_c.append(coefficient)
                 title = (
                     f"{theta_title + ', ' if theta_title else ''}{pmt_title}"
                 )
@@ -318,6 +392,29 @@ def plot_summary_data(data, output, plot_range, run, source_z):
                     transform=ax.transAxes,
                     ha="right",
                     va="top",
+                )
+                scale_lines = [
+                    r"$c=1/\mu_{\mathrm{pooled}}$ [event/PE]",
+                    f"N PMTs={np.count_nonzero(mask)}",
+                    f"FSMP: {pooled_run_c:.4g}",
+                ]
+                scale_lines.extend(
+                    f"{label}: {coefficient:.4g}"
+                    for label, coefficient in zip(labels, pooled_source_c)
+                )
+                ax.text(
+                    0.02,
+                    0.03,
+                    "\n".join(scale_lines),
+                    transform=ax.transAxes,
+                    ha="left",
+                    va="bottom",
+                    fontsize="xx-small",
+                    bbox={
+                        "facecolor": "white",
+                        "edgecolor": "0.8",
+                        "alpha": 0.85,
+                    },
                 )
                 ax.set(
                     title=(
@@ -402,8 +499,6 @@ def plot_amplitude_data(
     output,
     plot_range,
     run,
-    apply_lucid_qe=True,
-    lucid_qe_eff=JUNOSW_J26_3_2_EQUIVALENT_QE_532_NM,
 ):
     """Write per-channel PE/event spectra and channel-rate summaries."""
     configure_plot_style()
@@ -411,33 +506,21 @@ def plot_amplitude_data(
     colors = _simulation_colors(data, labels)
     run_density = np.asarray(data["run_pe_per_event_density"])
     run_mean = np.asarray(data["run_mean_pe_per_event"])
-    run_prompt = np.asarray(data["run_prompt_pe_per_event"])
-    run_late = np.asarray(data["run_late_pe_per_event"])
-    amplitude = amplitude_plot_arrays(
-        data,
-        apply_lucid_qe=apply_lucid_qe,
-        lucid_qe_eff=lucid_qe_eff,
-    )
+    amplitude = amplitude_plot_arrays(data)
     sim_density = amplitude["simulation_density"]
     sim_mean = amplitude["simulation_mean"]
-    sim_prompt = amplitude["simulation_prompt"]
-    sim_late = amplitude["simulation_late"]
-    qe_note = _lucid_qe_note(data, apply_lucid_qe, lucid_qe_eff)
-    prompt_low = np.asarray(data["prompt_window_effective_low_ns"])
-    prompt_high = np.asarray(data["prompt_window_effective_high_ns"])
-    late_low = np.asarray(data["late_window_effective_low_ns"])
-    late_high = np.asarray(data["late_window_effective_high_ns"])
+    qe_note = _lucid_qe_note(data)
+    source_note = _source_intensity_note(data)
+    calibration_note = (
+        qe_note if not source_note else f"{qe_note}\n{source_note}"
+    )
     with PdfPages(output) as pdf:
         for index, channel in enumerate(data["channels"]):
             pmt = PMT_TYPE_NAME.get(int(data["pmt_type"][index]), "Unknown")
             title = (
                 f"Channel {int(channel)} | {pmt} | PE/event timing spectrum\n"
-                "Effective gates: "
-                f"prompt=[{prompt_low[0,index]:.4g}, "
-                f"{prompt_high[0,index]:.4g}) ns; "
-                f"late=[{late_low[0,index]:.4g}, "
-                f"{late_high[0,index]:.4g}) ns\n"
-                f"{qe_note}"
+                f"{_dark_note(data, index)}\n"
+                f"{calibration_note}"
             )
             fig, ax = plt.subplots(figsize=FIGURE_SIZE)
             ax.step(
@@ -447,9 +530,8 @@ def plot_amplitude_data(
                 color=FSMP_COLOR,
                 linestyle="--",
                 label=(
-                    f"FSMP RUN {run}: mean={run_mean[0,index]:.6g}, "
-                    f"prompt={run_prompt[0,index]:.6g}, "
-                    f"late={run_late[0,index]:.6g} PE/event"
+                    f"FSMP RUN {run}: mean={run_mean[0,index]:.6g} "
+                    "PE/event"
                 ),
             )
             for source, (label, color) in enumerate(zip(labels, colors)):
@@ -459,27 +541,10 @@ def plot_amplitude_data(
                     where="mid",
                     color=color,
                     label=(
-                        f"{label}: mean={sim_mean[source,index]:.6g}, "
-                        f"prompt={sim_prompt[source,index]:.6g}, "
-                        f"late={sim_late[source,index]:.6g} PE/event"
+                        f"{label}: mean={sim_mean[source,index]:.6g} "
+                        "PE/event"
                     ),
                 )
-            boundaries = np.unique(
-                [
-                    prompt_low[0, index],
-                    prompt_high[0, index],
-                    late_low[0, index],
-                    late_high[0, index],
-                ]
-            )
-            for boundary in boundaries:
-                if np.isfinite(boundary):
-                    ax.axvline(
-                        boundary,
-                        color="0.6",
-                        linestyle=":",
-                        linewidth=0.8,
-                    )
             ax.set(
                 title=title,
                 xlim=plot_range,
@@ -533,7 +598,10 @@ def plot_amplitude_data(
                 ),
             )
         axes[0].set(
-            title=f"Mean PE per event by channel\n{qe_note}",
+            title=(
+                "Mean PE per event by channel\n"
+                f"{calibration_note}"
+            ),
             ylabel="Mean PE / event",
             yscale="log",
         )
