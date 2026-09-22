@@ -46,6 +46,9 @@ import pyarrow.parquet as pq
 from lucid.detector_params import load_physics_config
 from lucid.geometry.detector_geometry import DetectorGeometry
 from lucid.simulation.photon_step_factory import make_photon_step
+from lucid.simulation.engineering_surfaces import (
+    engineering_surface_parameters,
+)
 from lucid.simulation.reflection import REFLECTION_MODELS, get_reflection_model
 from lucid.simulation.sensor_response import make_hits_likelihood
 from lucid.sources import isotropic_source
@@ -71,6 +74,13 @@ def _support_geometry_override(request):
     return request == "on"
 
 
+def _component_geometry_override(request):
+    """Map an independent component-ablation request to an override."""
+    if request == "config":
+        return None
+    return request == "on"
+
+
 def _simulation_metadata(
     args,
     config,
@@ -86,6 +96,14 @@ def _simulation_metadata(
     support_count,
     support_reflectance,
     support_fspec,
+    chimney_geometry_request,
+    chimney_geometry,
+    acrylic_bowl_geometry_request,
+    acrylic_bowl_geometry,
+    acrylic_bowl_count,
+    surface_reflectances,
+    surface_transmittances,
+    surface_fspecs,
     reflection_model_request,
     reflection_model,
 ):
@@ -113,6 +131,18 @@ def _simulation_metadata(
         "support_rod_count": str(support_count),
         "support_reflectance": str(support_reflectance),
         "support_fspec": str(support_fspec),
+        "chimney_geometry_request": chimney_geometry_request,
+        "chimney_geometry": chimney_geometry,
+        "acrylic_bowl_geometry_request": acrylic_bowl_geometry_request,
+        "acrylic_bowl_geometry": acrylic_bowl_geometry,
+        "acrylic_bowl_count": str(acrylic_bowl_count),
+        "engineering_surface_reflectances": json.dumps(
+            list(surface_reflectances)
+        ),
+        "engineering_surface_transmittances": json.dumps(
+            list(surface_transmittances)
+        ),
+        "engineering_surface_fspecs": json.dumps(list(surface_fspecs)),
         "pe_time_units": "ns",
         "offset_units": "ns",
     }
@@ -185,7 +215,9 @@ def _lengths_at(material_dir: Path, wavelength_nm: float,
 def _make_forward(
     det_geom, dp, *, n_photons, n_steps, source, intensity, wavelength_nm,
     reflection_model="scalar", record_trajectories=False,
-    support_reflectance=0.535, support_fspec=0.5,
+    surface_reflectances=(0.535, 0.04, 0.4, 0.04),
+    surface_transmittances=(0.0, 0.94, 0.0, 0.94),
+    surface_fspecs=(0.5, 1.0, 0.5, 1.0),
 ):
     """Create a JIT nested-sphere forward returning raw hit arrays.
 
@@ -203,7 +235,11 @@ def _make_forward(
         det_geom.medium_outer.refractive_index, dtype=jnp.float32
     )
     has_acrylic = det_geom.medium_acrylic is not None
-    has_support = detector.support_rods is not None
+    has_engineering = any((
+        detector.support_rods is not None,
+        detector.chimney is not None,
+        detector.acrylic_bowls is not None,
+    ))
     media = (det_geom.medium, det_geom.medium_acrylic,
              det_geom.medium_outer) if has_acrylic else (
                  det_geom.medium, det_geom.medium_outer)
@@ -217,8 +253,12 @@ def _make_forward(
     refl_params = build_reflection_params(dp)
     photon_step = make_photon_step(
         "sample", has_interface=True, reflection_fn=reflection_fn,
-        multi_interface=has_acrylic, has_support=has_support,
+        multi_interface=has_acrylic,
+        has_engineering_surfaces=has_engineering,
     )
+    surface_reflectances = jnp.asarray(surface_reflectances)
+    surface_transmittances = jnp.asarray(surface_transmittances)
+    surface_fspecs = jnp.asarray(surface_fspecs)
     source = isotropic_source(
         source, intensity=intensity, wavelength=wavelength_nm
     )
@@ -293,13 +333,13 @@ def _make_forward(
                          0, 0, None, None, 0,
                          0, None, 0, 0,
                          0, 0, None, None, 0, None),
-            ) if not has_support else jax.vmap(
+            ) if not has_engineering else jax.vmap(
                 photon_step,
                 in_axes=(0, 0, 0, 0, 0,
                          0, 0, None, None, 0,
                          0, None, 0, 0,
                          0, 0, None, None, 0, None,
-                         0, None, None),
+                         0, 0, 0, 0),
             )
             result = result(
                 positions,
@@ -324,11 +364,18 @@ def _make_forward(
                 refractive_indices,
                 *(
                     (
-                        hit["hit_support"],
-                        support_reflectance,
-                        support_fspec,
+                        hit["engineering_surface_code"] >= 0,
+                        surface_reflectances[jnp.maximum(
+                            hit["engineering_surface_code"], 0
+                        )],
+                        surface_transmittances[jnp.maximum(
+                            hit["engineering_surface_code"], 0
+                        )],
+                        surface_fspecs[jnp.maximum(
+                            hit["engineering_surface_code"], 0
+                        )],
                     )
-                    if has_support else ()
+                    if has_engineering else ()
                 ),
             )
             base_result = result[:8]
@@ -386,13 +433,21 @@ def _make_forward(
                 hit["sensor_indices"],
                 arrival.squeeze(-1),
             )
-            if has_support:
-                support_events = result[8]
-                alive = (survival > 0).astype(support_events.dtype)
-                support_counts = jnp.sum(
-                    support_events * alive[:, None], axis=0
+            if has_engineering:
+                surface_events = result[8]
+                alive = (survival > 0).astype(surface_events.dtype)
+                codes = hit["engineering_surface_code"]
+                one_hot = jax.nn.one_hot(
+                    jnp.maximum(codes, 0), 4, dtype=surface_events.dtype
                 )
-                outputs = outputs + (support_counts,)
+                one_hot *= (codes >= 0)[:, None]
+                surface_counts = jnp.sum(
+                    one_hot[:, :, None]
+                    * surface_events[:, None, :]
+                    * alive[:, None, None],
+                    axis=0,
+                )
+                outputs = outputs + (surface_counts,)
             return new_carry, outputs
 
         if record_trajectories:
@@ -439,7 +494,7 @@ def _make_forward(
             )
         else:
             outputs = (log_w, safe_times, indices, total_charge)
-        if has_support:
+        if has_engineering:
             outputs = outputs + (jnp.sum(scan_outputs[3], axis=0),)
         return outputs
 
@@ -456,6 +511,12 @@ def simulate(args):
     pmt_geometry_request = getattr(args, "pmt_geometry", "config")
     support_geometry_request = getattr(
         args, "support_geometry", "config"
+    )
+    chimney_geometry_request = getattr(
+        args, "chimney_geometry", "config"
+    )
+    acrylic_bowl_geometry_request = getattr(
+        args, "acrylic_bowl_geometry", "config"
     )
     outdir = Path(args.outdir)
     outdir.mkdir(parents=True, exist_ok=True)
@@ -477,6 +538,12 @@ def simulate(args):
         support_geometry_enabled=_support_geometry_override(
             support_geometry_request
         ),
+        chimney_geometry_enabled=_component_geometry_override(
+            chimney_geometry_request
+        ),
+        acrylic_bowl_geometry_enabled=_component_geometry_override(
+            acrylic_bowl_geometry_request
+        ),
     )
     n_sensors = geom.num_sensors
     pmt_geometry = geom.detector.pmt_geometry or "legacy_sphere"
@@ -487,6 +554,19 @@ def simulate(args):
         0 if geom.detector.support_rods is None
         else len(geom.detector.support_rods.centers_m)
     )
+    chimney_geometry = geom.detector.chimney_geometry or "disabled"
+    acrylic_bowl_geometry = (
+        geom.detector.acrylic_bowl_geometry or "disabled"
+    )
+    acrylic_bowl_count = (
+        0 if geom.detector.acrylic_bowls is None
+        else len(geom.detector.acrylic_bowls.copy_numbers)
+    )
+    has_engineering = any((
+        support_count,
+        geom.detector.chimney is not None,
+        acrylic_bowl_count,
+    ))
     LOG.info("detector geometry ready: %d PMTs (%.2fs)", n_sensors,
              time.perf_counter() - t0)
     LOG.info(
@@ -499,6 +579,17 @@ def simulate(args):
         support_geometry_request,
         support_geometry,
         support_count,
+    )
+    LOG.info(
+        "chimney geometry: request=%s, effective=%s",
+        chimney_geometry_request,
+        chimney_geometry,
+    )
+    LOG.info(
+        "Acrylic-bowl geometry: request=%s, effective=%s, bowls=%d",
+        acrylic_bowl_geometry_request,
+        acrylic_bowl_geometry,
+        acrylic_bowl_count,
     )
 
     t0 = time.perf_counter()
@@ -518,6 +609,19 @@ def simulate(args):
         physics_config.get("support_reflection_rate", 0.535)
     )
     support_fspec = float(physics_config.get("support_fspec", 0.5))
+    required_surface_codes = []
+    if support_count:
+        required_surface_codes.append(0)
+    if geom.detector.chimney is not None:
+        required_surface_codes.extend((1, 2))
+    if acrylic_bowl_count:
+        required_surface_codes.append(3)
+    surface_parameters = engineering_surface_parameters(
+        physics_config, required_surface_codes
+    )
+    surface_reflectances, surface_transmittances, surface_fspecs = (
+        surface_parameters
+    )
     LOG.info("physics parameters ready (%.2fs)", time.perf_counter() - t0)
     n_photons = int(args.n_photons or simulation["n_photons"])
     intensity = float(
@@ -554,8 +658,9 @@ def simulate(args):
         wavelength_nm=float(config["wavelength_nm"]),
         reflection_model=reflection_model,
         record_trajectories=record_trajectories,
-        support_reflectance=support_reflectance,
-        support_fspec=support_fspec,
+        surface_reflectances=surface_reflectances,
+        surface_transmittances=surface_transmittances,
+        surface_fspecs=surface_fspecs,
     )
     LOG.info(
         "forward function constructed; first event will trigger JIT "
@@ -593,6 +698,14 @@ def simulate(args):
             support_count,
             support_reflectance,
             support_fspec,
+            chimney_geometry_request,
+            chimney_geometry,
+            acrylic_bowl_geometry_request,
+            acrylic_bowl_geometry,
+            acrylic_bowl_count,
+            surface_reflectances,
+            surface_transmittances,
+            surface_fspecs,
             reflection_model_request,
             reflection_model,
         )
@@ -664,9 +777,9 @@ def simulate(args):
                 event_group.attrs["seed"] = seed
             else:
                 log_w, times, indices, total_charge = result[:4]
-            support_counts = (
+            surface_counts = (
                 np.asarray(result[-1], dtype=np.int64)
-                if support_count else None
+                if has_engineering else None
             )
             log_w, times, indices = (
                 np.asarray(value) for value in (log_w, times, indices)
@@ -715,18 +828,25 @@ def simulate(args):
                 "mean_pe_per_pmt": float(pe_pmt.size / n_sensors),
                 "elapsed_s": float(elapsed),
             }
-            if support_counts is not None:
+            if surface_counts is not None:
                 names = (
-                    "support_hits",
-                    "support_absorbed",
-                    "support_reflected",
-                    "support_specular",
-                    "support_diffuse",
+                    "hits",
+                    "absorbed",
+                    "reflected",
+                    "specular",
+                    "diffuse",
+                    "transmitted",
                 )
-                stats.update({
-                    name: int(value)
-                    for name, value in zip(names, support_counts)
-                })
+                component_counts = {
+                    "support": surface_counts[0],
+                    "chimney": surface_counts[1] + surface_counts[2],
+                    "acrylic_bowl": surface_counts[3],
+                }
+                for component, counts in component_counts.items():
+                    stats.update({
+                        f"{component}_{name}": int(value)
+                        for name, value in zip(names, counts)
+                    })
                 stats["support_blocked"] = stats["support_hits"]
             event_stats.append(stats)
             LOG.info(
@@ -750,6 +870,20 @@ def simulate(args):
                 "support_rod_count": support_count,
                 "support_reflection_rate": support_reflectance,
                 "support_fspec": support_fspec,
+                "chimney_geometry_request": chimney_geometry_request,
+                "chimney_geometry": chimney_geometry,
+                "acrylic_bowl_geometry_request": (
+                    acrylic_bowl_geometry_request
+                ),
+                "acrylic_bowl_geometry": acrylic_bowl_geometry,
+                "acrylic_bowl_count": acrylic_bowl_count,
+                "engineering_surface_reflectances": (
+                    surface_reflectances.tolist()
+                ),
+                "engineering_surface_transmittances": (
+                    surface_transmittances.tolist()
+                ),
+                "engineering_surface_fspecs": surface_fspecs.tolist(),
                 "reflection_model_request": reflection_model_request,
                 "reflection_model": reflection_model,
                 "max_scattering_steps": n_steps,
@@ -781,6 +915,24 @@ def main():
         help=(
             "支撑杆几何消融：config=遵循几何配置，on=有效圆柱，"
             "off=关闭支撑杆"
+        ),
+    )
+    parser.add_argument(
+        "--chimney-geometry",
+        choices=("config", "on", "off"),
+        default="config",
+        help=(
+            "烟囱几何消融：config=遵循几何配置，on=有效下烟囱，"
+            "off=关闭烟囱"
+        ),
+    )
+    parser.add_argument(
+        "--acrylic-bowl-geometry",
+        choices=("config", "on", "off"),
+        default="config",
+        help=(
+            "亚克力碗消融：config=遵循几何配置，on=有效截锥，"
+            "off=关闭亚克力碗"
         ),
     )
     parser.add_argument("--source", default="0,0,0", metavar="X,Y,Z")

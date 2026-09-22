@@ -10,6 +10,9 @@ import jax.numpy as jnp
 
 from lucid.detector_params import DetectorParams
 from lucid.simulation.photon_step_factory import make_photon_step
+from lucid.simulation.engineering_surfaces import (
+    engineering_surface_parameters,
+)
 from lucid.simulation.reflection import get_reflection_model
 from lucid.sources import isotropic_source
 
@@ -57,19 +60,32 @@ def build_per_pe_forward(config: JunoLaserConfig, det_geom, physics_params: Dete
 
     reflection_fn, build_reflection_params = get_reflection_model("scalar")
     reflection_params = build_reflection_params(physics_params)
-    has_support = detector.support_rods is not None
+    has_engineering = any((
+        detector.support_rods is not None,
+        detector.chimney is not None,
+        detector.acrylic_bowls is not None,
+    ))
     photon_step = make_photon_step(
         "update_factors",
         has_interface=True,
         reflection_fn=reflection_fn,
-        has_support=has_support,
+        has_engineering_surfaces=has_engineering,
     )
     with config.physics_path.open() as stream:
         fixed_physics = json.load(stream)
-    support_reflectance = float(
-        fixed_physics.get("support_reflection_rate", 0.535)
+    required_surface_codes = []
+    if detector.support_rods is not None:
+        required_surface_codes.append(0)
+    if detector.chimney is not None:
+        required_surface_codes.extend((1, 2))
+    if detector.acrylic_bowls is not None:
+        required_surface_codes.append(3)
+    surface_values = engineering_surface_parameters(
+        fixed_physics, required_surface_codes
     )
-    support_fspec = float(fixed_physics.get("support_fspec", 0.5))
+    surface_reflectances = jnp.asarray(surface_values[0])
+    surface_transmittances = jnp.asarray(surface_values[1])
+    surface_fspecs = jnp.asarray(surface_values[2])
     g = physics_params.scattering.g
     qe = physics_params.response.qe
     qe_corrections = physics_params.per_pmt.qe_corrections
@@ -130,13 +146,13 @@ def build_per_pe_forward(config: JunoLaserConfig, det_geom, physics_params: Dete
                          0, 0, None, None, 0,
                          0, None, 0, 0,
                          0, 0, None, None),
-            ) if not has_support else jax.vmap(
+            ) if not has_engineering else jax.vmap(
                 photon_step,
                 in_axes=(0, 0, 0, 0, 0,
                          0, 0, None, None, 0,
                          0, None, 0, 0,
                          0, 0, None, None, None, None,
-                         0, None, None),
+                         0, 0, 0, 0),
             )
             result = vectorized_step(
               positions, directions, times, surface_distance, normals,
@@ -145,13 +161,18 @@ def build_per_pe_forward(config: JunoLaserConfig, det_geom, physics_params: Dete
               params.n_ls, params.n_water,
               *(
                   (
-                      None,
-                      None,
-                      prop["hit_support"],
-                      support_reflectance,
-                      support_fspec,
+                      prop["engineering_surface_code"] >= 0,
+                      surface_reflectances[jnp.maximum(
+                          prop["engineering_surface_code"], 0
+                      )],
+                      surface_transmittances[jnp.maximum(
+                          prop["engineering_surface_code"], 0
+                      )],
+                      surface_fspecs[jnp.maximum(
+                          prop["engineering_surface_code"], 0
+                      )],
                   )
-                  if has_support else ()
+                  if has_engineering else ()
               ))
             (new_positions, new_directions, new_times,
              detect_probs, reflection_attenuations,
