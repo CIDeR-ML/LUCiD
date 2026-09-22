@@ -11,18 +11,14 @@ stored row is retained.
 LUCiD simulation input uses the same ``eid``/``ch``/``offset``/``step``/``PEt``
 contract as FSMP.  Only consolidated Parquet input is accepted; ``--sim-dir``
 may contain a shell-style wildcard for matching one source-position folder.
-The default plot panel contains 72 fixed geometry-stratified PMTs; a larger
-seeded theta/type-stratified panel is available via --channel-mode
-stratified.  All inputs are restricted to that same subset.  FSMP dark noise
-is retained; its per-channel sideband estimate is added to every simulation
-source.  FSMP loading covers every input file once, and source caches are
-validated by content signature so unchanged FSMP/JUNOsw caches are reused
-when only the LUCiD source changes.
+The channel subset is selected before reading any source.  All three inputs
+are therefore restricted to the same reproducible channel subset, and FSMP
+loading stops after reaching that subset's first LUCiD PE total, finishing the
+current file first.
 """
 
 import argparse
 import glob
-import json
 import sys
 from pathlib import Path
 
@@ -50,16 +46,10 @@ from compare.laser_compare_metrics import (
     estimate_peak_from_density,
     processing_string,
     resolve_irf_sigmas,
-    simulation_qe_factors,
-)
-from compare.laser_compare_channels import (
-    representative_channels,
-    stratified_channels,
 )
 from compare.laser_compare_csv import (
     write_channel_manifest,
     write_comparison_stats_csv,
-    write_fsmp_file_manifest,
 )
 from compare.laser_compare_plotting import (
     plot_amplitude_data,
@@ -67,6 +57,8 @@ from compare.laser_compare_plotting import (
     plot_summary_data,
     pooled_group_shape,
 )
+
+
 NORTH_CHANNEL_COUNT = base.NORTH_CHANNEL_COUNT
 BRIEF_FSMP_FILE_LIMIT = base.BRIEF_FSMP_FILE_LIMIT
 BRIEF_SIM_FILE_LIMIT = base.BRIEF_SIM_FILE_LIMIT
@@ -80,7 +72,6 @@ DEFAULT_LUCID_LABEL = "LUCiD"
 DEFAULT_JUNOSW_LABEL = "JUNOsw (J26.3.2)"
 DEFAULT_IRF_SIGMA_HAMAMATSU = 1.3
 DEFAULT_IRF_SIGMA_NNVT = 7.0
-FSMP_CACHE_SCHEMA = 7
 
 resolve_run = base.resolve_run
 iter_fsmp_files = base.iter_fsmp_files
@@ -88,21 +79,8 @@ rtraw_path_for = base.rtraw_path_for
 read_monitor_times = base.read_monitor_times
 select_channels = base.select_channels
 read_pmt_info = base.read_pmt_info
+attach_pmt_coordinates = base.attach_pmt_coordinates
 load_data = base.load_data
-
-
-def attach_pmt_coordinates(fsmp_data, pmt_map_file):
-    """Attach detector z, theta and phi coordinates to selected PMTs."""
-    result = base.attach_pmt_coordinates(fsmp_data, pmt_map_file)
-    table = pq.read_table(pmt_map_file, columns=["copy_number", "phi"])
-    channel = table["copy_number"].to_numpy(zero_copy_only=False)
-    phi = table["phi"].to_numpy(zero_copy_only=False)
-    phi_by_channel = dict(zip(channel, phi))
-    result["phi"] = np.asarray(
-        [phi_by_channel.get(value, np.nan) for value in result["channels"]],
-        dtype=np.float64,
-    )
-    return result
 
 
 
@@ -169,13 +147,7 @@ def _monitor_match(eid, monitor_eid, monitor_time):
 
 
 def _append_fsmp_batch(
-    chunks,
-    batch,
-    channels,
-    monitor_eid,
-    monitor_time,
-    first_pe_only=False,
-    monitor_join=True,
+    chunks, batch, channels, monitor_eid, monitor_time
 ):
     """Convert one Arrow record batch to flat, monitor-corrected arrays."""
     eid = batch.column("eid").to_numpy(zero_copy_only=False).astype(np.int64)
@@ -184,31 +156,10 @@ def _append_fsmp_batch(
         batch.column("offset").to_numpy(zero_copy_only=False).astype(np.float64)
     )
     values, lengths, valid_pet = _arrow_pet_values(batch.column("PEt"))
-    if monitor_join:
-        monitor, valid_monitor = _monitor_match(
-            eid, monitor_eid, monitor_time
-        )
-    else:
-        monitor = np.zeros(len(eid), dtype=np.float64)
-        valid_monitor = np.ones(len(eid), dtype=bool)
+    monitor, valid_monitor = _monitor_match(eid, monitor_eid, monitor_time)
     valid_row = valid_pet & valid_monitor & (lengths > 0)
     if not np.any(valid_row):
         return 0
-
-    if first_pe_only:
-        row_start = np.cumsum(lengths, dtype=np.int64) - lengths
-        if np.any(valid_row):
-            chunks.append(
-                (
-                    channel[valid_row],
-                    eid[valid_row],
-                    values[row_start[valid_row]]
-                    + offset[valid_row]
-                    - monitor[valid_row],
-                    np.ones(np.count_nonzero(valid_row), dtype=np.int64),
-                )
-            )
-        return int(np.count_nonzero(valid_row))
 
     row_channel = np.repeat(channel, lengths)
     row_eid = np.repeat(eid, lengths)
@@ -239,8 +190,6 @@ def read_fsmp_times_by_channel(
     print_first_row=False,
     batch_size=250_000,
     target_pe=None,
-    first_pe_only=False,
-    monitor_join=True,
 ):
     """Read FSMP Parquet until the detector-wide PE target is reached.
 
@@ -269,13 +218,9 @@ def read_fsmp_times_by_channel(
         if file_limit is not None and readable >= file_limit:
             break
         try:
-            if monitor_join:
-                monitor_eid, monitor_time = _monitor_arrays(
-                    rtraw_path_for(path, fsmp_dir, rtraw_dir)
-                )
-            else:
-                monitor_eid = np.empty(0, dtype=np.int64)
-                monitor_time = np.empty(0, dtype=np.float64)
+            monitor_eid, monitor_time = _monitor_arrays(
+                rtraw_path_for(path, fsmp_dir, rtraw_dir)
+            )
             parquet = pq.ParquetFile(path)
             file_event_steps = set()
             for batch in parquet.iter_batches(
@@ -286,11 +231,7 @@ def read_fsmp_times_by_channel(
                 row_channel = batch.column("ch").to_numpy(zero_copy_only=False)
                 row_eid = batch.column("eid").to_numpy(zero_copy_only=False)
                 row_step = batch.column("step").to_numpy(zero_copy_only=False)
-                monitor_keep = (
-                    np.isin(row_eid, monitor_eid)
-                    if monitor_join
-                    else np.ones(len(row_eid), dtype=bool)
-                )
+                monitor_keep = np.isin(row_eid, monitor_eid)
                 if np.any(monitor_keep):
                     pairs = np.unique(
                         np.column_stack(
@@ -314,14 +255,8 @@ def read_fsmp_times_by_channel(
                     channels,
                     monitor_eid,
                     monitor_time,
-                    first_pe_only=first_pe_only,
-                    monitor_join=monitor_join,
                 )
-            physical_events += (
-                len(monitor_eid)
-                if monitor_join
-                else len(file_event_steps)
-            )
+            physical_events += len(monitor_eid)
             event_samples += len(file_event_steps)
             readable += 1
             if target_pe is not None and loaded_pe >= target_pe:
@@ -351,161 +286,6 @@ def read_fsmp_times_by_channel(
     }
 
 
-def read_fsmp_histograms_by_channel(
-    fsmp_files,
-    fsmp_dir,
-    rtraw_dir,
-    channels,
-    edges,
-    run,
-    file_limit=None,
-    batch_size=250_000,
-    target_pe=None,
-    first_pe_only=False,
-    monitor_join=True,
-):
-    """Stream FSMP into per-channel histograms for an all-channel cache.
-
-    This intentionally stores no PE-time list.  With ``first_pe_only``, one
-    PE is retained per nonempty PEt record, matching the reference counter.
-    """
-    if batch_size <= 0:
-        raise ValueError("batch_size must be positive")
-    channels = np.asarray(channels, dtype=np.int64)
-    histogram = np.zeros((len(channels), len(edges) - 1), dtype=np.int64)
-    entries = np.zeros(len(channels), dtype=np.int64)
-    total_pe = np.zeros(len(channels), dtype=np.int64)
-    physical_events = event_samples = loaded_pe = readable = 0
-    manifest_path, manifest_pe, manifest_exposure, manifest_coverage = (
-        [], [], [], []
-    )
-    iterator = (
-        fsmp_files
-        if file_limit is not None
-        else tqdm(fsmp_files, desc=f"RUN {run} FSMP files")
-    )
-    for path in iterator:
-        if file_limit is not None and readable >= file_limit:
-            break
-        try:
-            if monitor_join:
-                monitor_eid, monitor_time = _monitor_arrays(
-                    rtraw_path_for(path, fsmp_dir, rtraw_dir)
-                )
-            else:
-                monitor_eid = np.empty(0, dtype=np.int64)
-                monitor_time = np.empty(0, dtype=np.float64)
-            parquet = pq.ParquetFile(path)
-            file_event_steps, file_pe, seen = set(), 0, set()
-            for batch in parquet.iter_batches(
-                batch_size=batch_size,
-                columns=["eid", "ch", "offset", "step", "PEt"],
-                use_threads=False,
-            ):
-                row_channel = batch.column("ch").to_numpy(
-                    zero_copy_only=False
-                )
-                row_eid = batch.column("eid").to_numpy(zero_copy_only=False)
-                row_step = batch.column("step").to_numpy(
-                    zero_copy_only=False
-                )
-                monitor_keep = (
-                    np.isin(row_eid, monitor_eid)
-                    if monitor_join
-                    else np.ones(len(row_eid), dtype=bool)
-                )
-                if np.any(monitor_keep):
-                    pairs = np.unique(
-                        np.column_stack(
-                            (row_eid[monitor_keep], row_step[monitor_keep])
-                        ),
-                        axis=0,
-                    )
-                    file_event_steps.update(map(tuple, pairs.tolist()))
-                values, lengths, valid_pet = _arrow_pet_values(
-                    batch.column("PEt")
-                )
-                if monitor_join:
-                    monitor, valid_monitor = _monitor_match(
-                        row_eid, monitor_eid, monitor_time
-                    )
-                else:
-                    monitor = np.zeros(len(row_eid), dtype=np.float64)
-                    valid_monitor = np.ones(len(row_eid), dtype=bool)
-                row_index = np.searchsorted(channels, row_channel)
-                selected = valid_pet & valid_monitor & (lengths > 0)
-                selected &= row_index < len(channels)
-                selected[selected] = (
-                    channels[row_index[selected]] == row_channel[selected]
-                )
-                if not np.any(selected):
-                    continue
-                if first_pe_only:
-                    row_start = (
-                        np.cumsum(lengths, dtype=np.int64) - lengths
-                    )
-                    flat_channel = row_channel[selected]
-                    flat_time = (
-                        values[row_start[selected]]
-                        + batch.column("offset").to_numpy(
-                            zero_copy_only=False
-                        )[selected]
-                        - monitor[selected]
-                    )
-                else:
-                    flat_selected = np.repeat(selected, lengths)
-                    flat_channel = np.repeat(row_channel, lengths)[
-                        flat_selected
-                    ]
-                    flat_time = (
-                        values
-                        + np.repeat(
-                            batch.column("offset").to_numpy(
-                                zero_copy_only=False
-                            ),
-                            lengths,
-                        )
-                        - np.repeat(monitor, lengths)
-                    )[flat_selected]
-                _accumulate_histogram(
-                    flat_channel, flat_time, channels, edges, histogram, entries
-                )
-                flat_index = np.searchsorted(channels, flat_channel)
-                np.add.at(total_pe, flat_index, 1)
-                file_pe += int(len(flat_channel))
-                seen.update(np.unique(flat_channel).tolist())
-            physical_events += (
-                len(monitor_eid)
-                if monitor_join
-                else len(file_event_steps)
-            )
-            file_exposure = len(file_event_steps)
-            event_samples += file_exposure
-            manifest_path.append(str(path))
-            manifest_pe.append(file_pe)
-            manifest_exposure.append(file_exposure)
-            manifest_coverage.append(len(seen))
-            loaded_pe += file_pe
-            readable += 1
-            if target_pe is not None and loaded_pe >= target_pe:
-                break
-        except (OSError, KeyError, ValueError, pa.ArrowException) as error:
-            if file_limit is None:
-                raise
-            print(f"Skip unreadable FSMP file {path}: {error}")
-    return {
-        "histogram": histogram,
-        "histogram_entries": entries,
-        "total_pe": total_pe,
-        "physical_events": np.asarray(physical_events, dtype=np.int64),
-        "event_samples": np.asarray(event_samples, dtype=np.int64),
-        "files": np.asarray(manifest_path),
-        "file_selected_pe": np.asarray(manifest_pe, dtype=np.int64),
-        "file_event_samples": np.asarray(manifest_exposure, dtype=np.int64),
-        "file_channels_seen": np.asarray(manifest_coverage, dtype=np.int64),
-    }
-
-
 def selected_channels(args, require_files=True, files=None):
     """Select final plot channels and optionally locate FSMP files."""
     files = list(iter_fsmp_files(args.fsmp_dir)) if files is None else files
@@ -513,22 +293,11 @@ def selected_channels(args, require_files=True, files=None):
         raise FileNotFoundError(
             f"No FSMP Parquet files found in {args.fsmp_dir}"
         )
-    if args.north:
-        channels = np.arange(NORTH_CHANNEL_COUNT, dtype=np.int64)
-    elif args.channel_mode == "representative":
-        channels = representative_channels(args.pmt_map)
-    elif args.channel_mode == "stratified":
-        channels = stratified_channels(
-            args.pmt_map,
-            stratum_size=args.stratum_size,
-            seed=args.seed,
-        )
-    elif args.channel_mode == "all":
-        channels = np.arange(base.FULL_CHANNEL_COUNT, dtype=np.int64)
-    else:
-        channels = select_channels(args.number, args.seed)
-    mode = "north" if args.north else args.channel_mode
-    print(f"Channel mode: {mode}; selected {len(channels)} channels")
+    channels = (
+        np.arange(NORTH_CHANNEL_COUNT, dtype=np.int64)
+        if args.north
+        else select_channels(args.number, args.seed)
+    )
     print("Selected channels:", " ".join(map(str, channels)))
     return channels, files
 
@@ -589,47 +358,6 @@ def iter_sim_files(sim_dir):
 def iter_junosw_sim_files(sim_dir, file_glob="*.h5"):
     """Return JUNOsw HDF5 files from a file or directory."""
     return _simulation_files(Path(sim_dir), file_glob)
-
-
-def _source_signature(files):
-    """Return a JSON signature of path/size/mtime for cache validation."""
-    records = []
-    for path in files:
-        stat = Path(path).stat()
-        records.append(
-            {
-                "path": str(path),
-                "size": stat.st_size,
-                "mtime_ns": stat.st_mtime_ns,
-            }
-        )
-    return json.dumps(records)
-
-
-def _effective_fsmp_files(args, files):
-    """Return the FSMP files the reader will actually attempt."""
-    limit = args.fsmp_file_limit
-    if limit is None and args.brief:
-        limit = BRIEF_FSMP_FILE_LIMIT
-    return files if limit is None else files[:limit]
-
-
-def _planned_sim_files(args, kind, sim_dir=None):
-    """Return the simulation files a cache build would read."""
-    if kind == "lucid":
-        root = sim_dir if sim_dir is not None else args.lucid_sim_dir[0]
-        files = iter_sim_files(root)
-        limit = args.lucid_file_limit
-    else:
-        files = iter_junosw_sim_files(
-            args.junosw_sim_dir, args.junosw_sim_file_glob
-        )
-        limit = args.junosw_file_limit
-    if limit is not None:
-        files = files[:limit]
-    if args.brief:
-        files = files[:BRIEF_SIM_FILE_LIMIT]
-    return files
 
 
 def _read_lucid_parquet(path, edges, chunk_size, channels):
@@ -761,18 +489,30 @@ def _compute_sim_cache(
     """Build one simulation cache in the common source schema."""
     edges = np.linspace(args.data_range[0], args.data_range[1], args.bins + 1)
     centers = (edges[:-1] + edges[1:]) / 2.0
-    files = _planned_sim_files(args, kind, sim_dir=sim_dir)
-    if not files:
-        raise FileNotFoundError(
-            f"No {kind} simulation input files for a new cache"
-        )
     if kind == "lucid":
+        root = sim_dir if sim_dir is not None else args.lucid_sim_dir[0]
+        files = iter_sim_files(root)
+        if args.brief:
+            files = files[:BRIEF_SIM_FILE_LIMIT]
+        if not files:
+            raise FileNotFoundError(
+                f"No LUCiD Parquet files found in {sim_dir}"
+            )
         result = read_lucid_sim_histograms(
             files, edges, args.sim_chunk_size, channels
         )
         label = label if label is not None else args.lucid_label[0]
         output = output if output is not None else args.sim_data[0]
     else:
+        files = iter_junosw_sim_files(
+            args.junosw_sim_dir, args.junosw_sim_file_glob
+        )
+        if args.brief:
+            files = files[:BRIEF_SIM_FILE_LIMIT]
+        if not files:
+            raise FileNotFoundError(
+                f"No JUNOsw HDF5 files found in {args.junosw_sim_dir}"
+            )
         result = _read_junosw_histograms(files, args, edges, channels)
         label, output = args.junosw_label, args.junosw_sim_data
     density, entries, total_pe, events = result
@@ -786,10 +526,9 @@ def _compute_sim_cache(
         "simulation_entries": entries,
         "simulation_total_pe": total_pe,
         "simulation_events": events,
-        "amplitude_schema": np.asarray(3, dtype=np.int16),
+        "amplitude_schema": np.asarray(2, dtype=np.int16),
         "label": np.asarray(label),
         "kind": np.asarray(kind),
-        "source_signature": np.asarray(_source_signature(files)),
     }
     output.parent.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(output, **data)
@@ -800,95 +539,40 @@ def _compute_sim_cache(
 def compute_fsmp_data(args, channels, fsmp_files):
     """Build the FSMP cache from Arrow/NumPy arrays."""
     target_pe = getattr(args, "fsmp_target_pe", None)
-    monitor_join = True
-    signature = _source_signature(_effective_fsmp_files(args, fsmp_files))
     if target_pe is not None:
         print(
             "FSMP PE target from selected-channel LUCiD simulation: "
             f"{int(target_pe)}"
         )
     pmt_type, tts = read_pmt_info(channels, args.pmt_map, args.pmt)
-    if args.channel_mode == "all" and not args.north:
-        edges = np.linspace(
-            args.data_range[0], args.data_range[1], args.bins + 1
-        )
-        records = read_fsmp_histograms_by_channel(
-            fsmp_files,
-            args.fsmp_dir,
-            args.rtraw_dir,
-            channels,
-            edges,
-            args.run,
-            args.fsmp_file_limit
-            if args.fsmp_file_limit is not None
-            else (BRIEF_FSMP_FILE_LIMIT if args.brief else None),
-            target_pe=target_pe,
-            first_pe_only=False,
-            monitor_join=monitor_join,
-        )
-        if not np.any(records["total_pe"]):
-            raise RuntimeError(
-                f"No RUN {args.run} FSMP entries after input selection"
-            )
-        data = {
-            "channels": channels,
-            "pmt_type": pmt_type,
-            "tts": tts,
-            "fsmp_histogram": records["histogram"],
-            "fsmp_histogram_entries": records["histogram_entries"],
-            "fsmp_total_pe": records["total_pe"],
-            "fsmp_histogram_edges": edges,
-            "fsmp_physical_events": records["physical_events"],
-            "fsmp_event_samples": records["event_samples"],
-            "fsmp_files_read": records["files"],
-            "fsmp_file_selected_pe": records["file_selected_pe"],
-            "fsmp_file_event_samples": records["file_event_samples"],
-            "fsmp_file_channels_seen": records["file_channels_seen"],
-            "fsmp_cache_schema": np.asarray(
-                FSMP_CACHE_SCHEMA, dtype=np.int16
-            ),
-            "source_signature": np.asarray(signature),
-        }
-    else:
-        records = read_fsmp_times_by_channel(
-            fsmp_files,
-            args.fsmp_dir,
-            args.rtraw_dir,
-            channels,
-            args.run,
-            file_limit=args.fsmp_file_limit
-            if args.fsmp_file_limit is not None
-            else (BRIEF_FSMP_FILE_LIMIT if args.brief else None),
-            print_first_row=args.print_fsmp_row,
-            target_pe=target_pe,
-            first_pe_only=False,
-            monitor_join=monitor_join,
-        )
-        if not len(records["time"]):
-            raise RuntimeError(
-                f"No RUN {args.run} FSMP entries after monitor matching"
-            )
-        data = {
-            "channels": channels,
-            "pmt_type": pmt_type,
-            "tts": tts,
-            "fsmp_ch": records["ch"],
-            "fsmp_eid": records["eid"],
-            "fsmp_time": records["time"],
-            "fsmp_pe_count": records["pe_count"],
-            "fsmp_total_pe": np.bincount(
-                records["ch"], minlength=len(channels)
-            ),
-            "fsmp_physical_events": records["physical_events"],
-            "fsmp_event_samples": records["event_samples"],
-            "fsmp_cache_schema": np.asarray(
-                FSMP_CACHE_SCHEMA, dtype=np.int16
-            ),
-            "source_signature": np.asarray(signature),
-        }
-    data["fsmp_target_pe"] = np.asarray(
-        -1 if target_pe is None else target_pe, dtype=np.int64
+    records = read_fsmp_times_by_channel(
+        fsmp_files,
+        args.fsmp_dir,
+        args.rtraw_dir,
+        channels,
+        args.run,
+        BRIEF_FSMP_FILE_LIMIT if args.brief else None,
+        args.print_fsmp_row,
+        target_pe=target_pe,
     )
+    if not len(records["time"]):
+        raise RuntimeError(
+            f"No RUN {args.run} FSMP entries after monitor matching"
+        )
+    data = {
+        "channels": channels,
+        "pmt_type": pmt_type,
+        "tts": tts,
+        "fsmp_ch": records["ch"],
+        "fsmp_eid": records["eid"],
+        "fsmp_time": records["time"],
+        "fsmp_pe_count": records["pe_count"],
+        "fsmp_physical_events": records["physical_events"],
+        "fsmp_event_samples": records["event_samples"],
+        "fsmp_target_pe": np.asarray(
+            -1 if target_pe is None else target_pe, dtype=np.int64
+        ),
+    }
     args.fsmp_data.parent.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(args.fsmp_data, **data)
     print(f"Wrote {args.fsmp_data}")
@@ -897,6 +581,104 @@ def compute_fsmp_data(args, channels, fsmp_files):
 
 
 
+
+
+def _apply_cli_labels(sources, lucid_labels, junosw_label):
+    """Override cached source labels with the CLI-provided ones.
+
+    Input: loaded or computed source caches and the CLI label values.
+    Output: none; each source cache dict is updated in place so plots and
+    CSV exports carry the labels of the current invocation.
+    """
+    lucid_index = 0
+    for source in sources:
+        kind = str(np.asarray(source.get("kind", "")).item())
+        if kind == "lucid":
+            source["label"] = np.asarray(lucid_labels[lucid_index])
+            lucid_index += 1
+        elif kind == "junosw":
+            source["label"] = np.asarray(junosw_label)
+
+
+def source_amplitude_totals(sources):
+    """All-channel total MC amplitude (signal PE/event) per source.
+
+    Input: loaded simulation source caches with per-channel PE totals and
+    event counts.
+    Output: list of floats, one total amplitude per source.
+    """
+    totals = []
+    for source in sources:
+        total_pe = np.asarray(
+            source.get("simulation_total_pe", source["simulation_entries"]),
+            dtype=np.float64,
+        )
+        events = np.asarray(source["simulation_events"], dtype=np.float64)
+        mean_pe = np.divide(
+            total_pe, events, out=np.zeros_like(total_pe), where=events > 0
+        )
+        totals.append(float(np.sum(mean_pe)))
+    return totals
+
+
+def auto_source_intensity_scale(sources):
+    """Correction multipliers scaling LUCiD sources to the JUNOsw level.
+
+    Input: loaded simulation source caches; every LUCiD source is divided
+    by its LUCiD:JUNOsw total-amplitude ratio, the JUNOsw reference source
+    keeps multiplier 1.
+    Output: float64 ndarray of per-source multipliers; raises when no
+    usable JUNOsw source or non-positive totals are present.
+    """
+    totals = source_amplitude_totals(sources)
+    reference = next(
+        (
+            value
+            for source, value in zip(sources, totals)
+            if str(np.asarray(source.get("kind", "")).item()) == "junosw"
+        ),
+        None,
+    )
+    if reference is None or reference <= 0:
+        raise ValueError(
+            "auto source-intensity scale needs a JUNOsw source"
+        )
+    scales = np.ones(len(sources), dtype=np.float64)
+    for index, (source, value) in enumerate(zip(sources, totals)):
+        kind = str(np.asarray(source.get("kind", "")).item())
+        if kind != "lucid":
+            continue
+        if value <= 0:
+            raise ValueError(
+                "auto source-intensity scale needs positive MC totals"
+            )
+        scales[index] = reference / value
+    return scales
+
+
+def report_source_intensity(sources, source_scale, mode):
+    """Print totals, LUCiD:JUNOsw ratios and the applied multipliers.
+
+    Input: simulation sources, the resolved per-source multipliers and
+    the mode string ("auto" or "explicit").
+    Output: none; logs one line per source.
+    """
+    totals = source_amplitude_totals(sources)
+    reference = next(
+        (
+            value
+            for source, value in zip(sources, totals)
+            if str(np.asarray(source.get("kind", "")).item()) == "junosw"
+        ),
+        None,
+    )
+    for source, value, scale in zip(sources, totals, source_scale):
+        label = str(np.asarray(source.get("label", "Simulation")).item())
+        kind = str(np.asarray(source.get("kind", "")).item())
+        line = f"Total MC amplitude {label}: {value:.6g} PE/event"
+        if reference and kind != "junosw":
+            line += f"; LUCiD:JUNOsw = {value / reference:.6g}"
+        print(f"{line}; applied scale = {scale:.6g} ({mode})")
 
 
 def parse_args(argv=None):
@@ -957,46 +739,10 @@ def parse_args(argv=None):
         metavar="QE",
         help="common LUCiD-only QE factor; J26.3.2 gives 0.097 at 532 nm",
     )
-    parser.add_argument(
-        "--source-intensity-scale",
-        type=float,
-        nargs="+",
-        default=None,
-        metavar="SCALE",
-        help=(
-            "one global intensity scale per simulation source; "
-            "defaults to 1"
-        ),
-    )
-    parser.add_argument(
-        "--channel-mode",
-        choices=("representative", "random", "all", "stratified"),
-        default="representative",
-        help="channel panel; representative is the fixed default",
-    )
-    parser.add_argument(
-        "-n",
-        type=int,
-        default=1000,
-        dest="number",
-        help="number of channels when --channel-mode=random",
-    )
+    parser.add_argument("-n", type=int, default=1000, dest="number")
     parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument(
-        "--stratum-size",
-        type=int,
-        default=28,
-        help="PMTs per theta/type stratum for --channel-mode=stratified",
-    )
     parser.add_argument("--north", action="store_true")
     parser.add_argument("--bins", type=int, default=600)
-    parser.add_argument(
-        "--plot-components",
-        nargs="+",
-        choices=("time", "summary", "amplitude"),
-        default=("time", "summary", "amplitude"),
-        help="PDF components to render",
-    )
     parser.add_argument(
         "--data-range",
         type=float,
@@ -1056,40 +802,22 @@ def parse_args(argv=None):
         action="store_false",
         help="keep FSMP dark noise without adding it to MC",
     )
+    parser.add_argument("--dark-window", type=float, default=30.0)
     parser.add_argument(
-        "--dark-margin",
+        "--source-intensity-scale",
         type=float,
-        default=30.0,
-        help="signal-free margin before the FSMP peak in ns",
+        nargs="+",
+        default=None,
+        metavar="SCALE",
+        help=(
+            "one global intensity scale per simulation source; "
+            "default: auto JUNOsw/LUCiD total-amplitude ratio"
+        ),
     )
     parser.add_argument("--print-fsmp-row", action="store_true")
-    parser.add_argument(
-        "--fsmp-file-limit",
-        type=int,
-        default=None,
-        help="read at most this many FSMP parquet files (raw-data smoke only)",
-    )
-    parser.add_argument(
-        "--lucid-file-limit",
-        type=int,
-        default=None,
-        help="read at most this many LUCiD parquet files (raw-data smoke only)",
-    )
-    parser.add_argument(
-        "--junosw-file-limit",
-        type=int,
-        default=None,
-        help="read at most this many JUNOsw files (raw-data smoke only)",
-    )
     parser.add_argument("--force", action="store_true")
     parser.add_argument("--plot-only", action="store_true")
     parser.add_argument("--brief", action="store_true")
-    parser.add_argument(
-        "--cache-root",
-        type=Path,
-        default=None,
-        help="read plot-only source caches from a separate output root",
-    )
     parser.add_argument("--output-root", type=Path, default=Path("compare_sim"))
     parser.add_argument("--output-tag", default="")
     args = parser.parse_args(argv)
@@ -1105,30 +833,20 @@ def parse_args(argv=None):
         or not 0.0 < args.lucid_qe_effective <= 1.0
     ):
         parser.error("--lucid-qe-effective must be in (0, 1]")
-    if not np.isfinite(args.dark_margin) or args.dark_margin < 0.0:
-        parser.error("--dark-margin must be finite and non-negative")
-    for name in ("fsmp_file_limit", "lucid_file_limit", "junosw_file_limit"):
-        if getattr(args, name) is not None and getattr(args, name) <= 0:
-            parser.error(f"--{name.replace('_', '-')} must be positive")
-    if args.bins <= 0:
-        parser.error("--bins must be positive")
-    if args.stratum_size <= 0:
-        parser.error("--stratum-size must be positive")
-    if args.source_intensity_scale is not None and (
-        not np.all(np.isfinite(args.source_intensity_scale))
-        or np.any(np.asarray(args.source_intensity_scale) <= 0.0)
-    ):
-        parser.error("--source-intensity-scale values must be positive")
-    if args.cache_root is not None and not args.plot_only:
-        parser.error("--cache-root requires --plot-only")
-    args.plot_components = tuple(dict.fromkeys(args.plot_components))
-    if not args.plot_components:
-        parser.error("--plot-components requires at least one component")
-    if args.channel_mode == "all" and not args.north:
-        parser.error(
-            "--channel-mode all is provided by compare/plot_pe_scale.py; "
-            "the response comparison needs a smaller channel selection"
+    if args.source_intensity_scale is not None:
+        n_sources = len(args.lucid_sim_dir or []) + int(
+            args.junosw_sim_dir is not None
         )
+        scales = np.asarray(args.source_intensity_scale, dtype=np.float64)
+        if (
+            scales.shape != (n_sources,)
+            or not np.all(np.isfinite(scales))
+            or np.any(scales <= 0.0)
+        ):
+            parser.error(
+                "--source-intensity-scale needs one positive value per "
+                "simulation source"
+            )
     if not any((args.lucid_sim_dir, args.junosw_sim_dir)):
         parser.error("provide at least one simulation input")
     try:
@@ -1141,38 +859,17 @@ def parse_args(argv=None):
     args.fsmp_dir = args.fsmp_dir or Path(DEFAULT_FSMP_ROOT) / str(args.run)
     args.rtraw_dir = args.rtraw_dir / str(args.run)
     args.output_dir = args.output_root / str(args.run)
-    cache_root = args.cache_root or args.output_root
-    args.cache_dir = cache_root / str(args.run)
-    if args.north:
-        cache_suffix = "north"
-    elif args.channel_mode == "random":
-        cache_suffix = str(args.number)
-    elif args.channel_mode == "stratified":
-        cache_suffix = f"stratified{args.stratum_size}_seed{args.seed}"
-    else:
-        cache_suffix = args.channel_mode
+    suffix = "north" if args.north else str(args.number)
     if args.long:
-        cache_suffix += "_long"
-    limits = (
-        args.fsmp_file_limit,
-        args.lucid_file_limit,
-        args.junosw_file_limit,
-    )
-    if any(value is not None for value in limits):
-        cache_suffix += "_" + "_".join(
-            f"{name}{value if value is not None else 'all'}"
-            for name, value in zip(("fsmp", "lucid", "junosw"), limits)
-        )
+        suffix += "_long"
     tag = args.output_tag.strip().replace(" ", "_")
-    result_suffix = f"{cache_suffix}_{tag}" if tag else cache_suffix
-    args.opt = args.output_dir / f"compare_sim_{result_suffix}.pdf"
-    args.summary_opt = (
-        args.output_dir / f"compare_sim_{result_suffix}_summary.pdf"
-    )
+    suffix = f"{suffix}_{tag}" if tag else suffix
+    args.opt = args.output_dir / f"compare_sim_{suffix}.pdf"
+    args.summary_opt = args.output_dir / f"compare_sim_{suffix}_summary.pdf"
     args.amplitude_opt = (
-        args.output_dir / f"compare_sim_{result_suffix}_amplitude.pdf"
+        args.output_dir / f"compare_sim_{suffix}_amplitude.pdf"
     )
-    args.fsmp_data = args.cache_dir / f"fsmp_data_{cache_suffix}_all.npz"
+    args.fsmp_data = args.output_dir / f"fsmp_data_{suffix}_all.npz"
 
     if args.lucid_sim_dir:
         if args.lucid_label is None:
@@ -1182,26 +879,19 @@ def parse_args(argv=None):
         elif len(args.lucid_label) != len(args.lucid_sim_dir):
             parser.error("Number of --lucid-label must match --lucid-sim-dir")
         args.sim_data = [
-            args.cache_dir / f"sim_data_{cache_suffix}_{i}.npz"
+            args.output_dir / f"sim_data_{suffix}_{i}.npz"
             for i in range(len(args.lucid_sim_dir))
         ]
     else:
         args.sim_data = []
 
     args.junosw_sim_data = (
-        args.cache_dir / f"junosw_sim_data_{cache_suffix}.npz"
+        args.output_dir / f"junosw_sim_data_{suffix}.npz"
     )
-    args.aligned_data = (
-        args.output_dir / f"aligned_data_{result_suffix}.npz"
-    )
-    args.stats_csv = (
-        args.output_dir / f"comparison_stats_{result_suffix}.csv"
-    )
+    args.aligned_data = args.output_dir / f"aligned_data_{suffix}.npz"
+    args.stats_csv = args.output_dir / f"comparison_stats_{suffix}.csv"
     args.channel_manifest = (
-        args.output_dir / f"channel_selection_{result_suffix}_all.csv"
-    )
-    args.fsmp_file_manifest = (
-        args.output_dir / f"fsmp_file_manifest_{result_suffix}.csv"
+        args.output_dir / f"channel_selection_{suffix}_all.csv"
     )
     return args
 
@@ -1212,9 +902,8 @@ def _load_matching_cache(
     kind=None,
     target_pe=None,
     require_exposure=False,
-    signature=None,
 ):
-    """Load a source cache only when channels, kind and content match."""
+    """Load a source cache only when its channel selection and kind match."""
     if not path.exists():
         return None
     data = load_data(path)
@@ -1227,7 +916,7 @@ def _load_matching_cache(
             print(f"Cached source kind in {path} does not match; recomputing.")
             return None
         schema = int(np.asarray(data.get("amplitude_schema", 0)).item())
-        if schema != 3:
+        if schema != 2:
             print(f"Cached amplitude schema in {path} is stale; recomputing.")
             return None
     if require_exposure:
@@ -1238,10 +927,6 @@ def _load_matching_cache(
                 "recomputing."
             )
             return None
-        schema = int(np.asarray(data.get("fsmp_cache_schema", 0)).item())
-        if schema != FSMP_CACHE_SCHEMA:
-            print(f"Cached FSMP schema in {path} is stale; recomputing.")
-            return None
     if target_pe is not None:
         cached_target = int(
             np.asarray(data.get("fsmp_target_pe", -1)).item()
@@ -1250,16 +935,6 @@ def _load_matching_cache(
             print(
                 f"Cached FSMP PE target in {path} does not match; "
                 "recomputing."
-            )
-            return None
-    if signature is not None:
-        cached_signature = data.get("source_signature")
-        if cached_signature is None or str(
-            np.asarray(cached_signature).item()
-        ) != signature:
-            print(
-                f"Cached source files for {path} changed or lack a "
-                "signature; recomputing."
             )
             return None
     return data
@@ -1277,72 +952,24 @@ def main(argv=None):
     channels, _ = selected_channels(
         args, require_files=False, files=files
     )
-    fsmp_files_planned = _effective_fsmp_files(args, files)
-    fsmp_signature = (
-        _source_signature(fsmp_files_planned)
-        if fsmp_files_planned
-        else None
-    )
-    source_signatures = []
-    if args.lucid_sim_dir:
-        for sim_dir in args.lucid_sim_dir:
-            planned = _planned_sim_files(args, "lucid", sim_dir=sim_dir)
-            source_signatures.append(
-                _source_signature(planned) if planned else None
-            )
-    if args.junosw_sim_dir is not None:
-        planned = _planned_sim_files(args, "junosw")
-        source_signatures.append(
-            _source_signature(planned) if planned else None
-        )
-    combined_signatures = json.dumps(
-        {"fsmp": fsmp_signature, "sources": source_signatures}
-    )
     if args.plot_only:
         fsmp_data = load_data(args.fsmp_data)
-        cached_signature = fsmp_data.get("source_signature")
-        if fsmp_signature is not None and (
-            cached_signature is None
-            or str(np.asarray(cached_signature).item()) != fsmp_signature
-        ):
-            raise ValueError(
-                "--plot-only FSMP cache source signature mismatch; "
-                "recompute without --plot-only"
-            )
         required_fsmp = {"fsmp_physical_events", "fsmp_event_samples"}
         if not required_fsmp.issubset(fsmp_data):
             raise ValueError(
                 "--plot-only FSMP cache lacks amplitude exposure fields; "
                 "recompute without --plot-only"
             )
-        schema = int(np.asarray(fsmp_data.get("fsmp_cache_schema", 0)).item())
-        if schema != FSMP_CACHE_SCHEMA:
-            raise ValueError(
-                "--plot-only FSMP cache predates physical-event amplitude "
-                "normalization; recompute without --plot-only"
-            )
         if not np.array_equal(fsmp_data.get("channels"), channels):
             raise ValueError(
                 "--plot-only requires a matching selected-channel FSMP cache; "
                 "recompute without --plot-only"
             )
-        if (
-            args.channel_mode == "all"
-            and not args.north
-            and "fsmp_histogram" not in fsmp_data
-        ):
-            raise ValueError(
-                "--channel-mode all requires the new histogram FSMP cache; "
-                "recompute once without --plot-only"
-            )
         sources = []
         if args.lucid_sim_dir:
             for index, _ in enumerate(args.lucid_sim_dir):
                 source = _load_matching_cache(
-                    args.sim_data[index],
-                    channels,
-                    "lucid",
-                    signature=source_signatures[index],
+                    args.sim_data[index], channels, "lucid"
                 )
                 if source is None:
                     raise ValueError(
@@ -1352,10 +979,7 @@ def main(argv=None):
                 sources.append(source)
         if args.junosw_sim_dir is not None:
             source = _load_matching_cache(
-                args.junosw_sim_data,
-                channels,
-                "junosw",
-                signature=source_signatures[-1],
+                args.junosw_sim_data, channels, "junosw"
             )
             if source is None:
                 raise ValueError(
@@ -1370,10 +994,7 @@ def main(argv=None):
                 source = None
                 if not args.force:
                     source = _load_matching_cache(
-                        args.sim_data[index],
-                        channels,
-                        "lucid",
-                        signature=source_signatures[index],
+                        args.sim_data[index], channels, "lucid"
                     )
                 if source is None:
                     source = _compute_sim_cache(
@@ -1389,41 +1010,58 @@ def main(argv=None):
             source = None
             if not args.force:
                 source = _load_matching_cache(
-                    args.junosw_sim_data,
-                    channels,
-                    "junosw",
-                    signature=source_signatures[-1],
+                    args.junosw_sim_data, channels, "junosw"
                 )
             sources.append(
                 source or _compute_sim_cache(args, channels, "junosw")
             )
-        # FSMP reads every input file once; caches are reused by content
-        # signature so LUCiD iterations do not trigger FSMP/JUNOsw rereads.
-        args.fsmp_target_pe = None
+        # Limit FSMP input using the selected-channel LUCiD PE count.
+        lucid_sources = [
+            source for source in sources
+            if str(np.asarray(source.get("kind", "")).item()) == "lucid"
+        ]
+        lucid_source = lucid_sources[0] if lucid_sources else None
+        lucid_total_pe = (
+            int(
+                np.asarray(
+                    lucid_source.get(
+                        "simulation_total_pe",
+                        lucid_source["simulation_entries"],
+                    )
+                ).sum()
+            )
+            if lucid_source is not None
+            else None
+        )
+        args.fsmp_target_pe = lucid_total_pe
+        if lucid_total_pe is not None:
+            print(
+                "FSMP target from selected-channel LUCiD simulation: "
+                f"{args.fsmp_target_pe} PE"
+            )
         fsmp_data = None
         if not args.force:
             fsmp_data = _load_matching_cache(
                 args.fsmp_data,
                 channels,
+                target_pe=args.fsmp_target_pe,
                 require_exposure=True,
-                signature=fsmp_signature,
             )
-        if (
-            args.channel_mode == "all"
-            and not args.north
-            and fsmp_data is not None
-            and "fsmp_histogram" not in fsmp_data
-        ):
-            print("Existing all-channel FSMP cache is not histogram-based.")
-            fsmp_data = None
         if fsmp_data is None:
             fsmp_data = compute_fsmp_data(args, channels, files)
     if not sources:
         raise RuntimeError("No simulation source was loaded")
-    coordinate_fields = {"z", "theta", "phi"}
-    if not coordinate_fields.issubset(fsmp_data):
-        fsmp_data = attach_pmt_coordinates(fsmp_data, args.pmt_map)
-    selection_mode = "north" if args.north else args.channel_mode
+    _apply_cli_labels(sources, args.lucid_label, args.junosw_label)
+    if args.source_intensity_scale is None:
+        source_scale = auto_source_intensity_scale(sources)
+        scale_mode = "auto"
+    else:
+        source_scale = np.asarray(
+            args.source_intensity_scale, dtype=np.float64
+        )
+        scale_mode = "explicit"
+    report_source_intensity(sources, source_scale, scale_mode)
+    fsmp_data = attach_pmt_coordinates(fsmp_data, args.pmt_map)
     write_channel_manifest(
         args.channel_manifest,
         fsmp_data,
@@ -1431,36 +1069,12 @@ def main(argv=None):
         args.z,
         args.irf_sigma_hamamatsu,
         args.irf_sigma_nnvt,
-        selection_mode=selection_mode,
     )
-    write_fsmp_file_manifest(args.fsmp_file_manifest, fsmp_data)
-    qe_factors = simulation_qe_factors(
-        sources,
-        apply_lucid_qe=args.apply_lucid_qe,
-        lucid_qe_eff=args.lucid_qe_effective,
-    )
-    source_scale = (
-        np.ones(len(sources), dtype=np.float64)
-        if args.source_intensity_scale is None
-        else np.asarray(args.source_intensity_scale, dtype=np.float64)
-    )
-    if source_scale.shape != (len(sources),):
-        raise ValueError(
-            "--source-intensity-scale must provide one value per "
-            "simulation source"
-        )
-    if "fsmp_histogram" in fsmp_data:
-        raise ValueError(
-            "The all-channel FSMP cache is histogram-only. Use "
-            "compare/plot_pe_scale.py for PE-scale diagnostics."
-        )
     processing = processing_string(
         not args.no_tts,
         args.irf_sigma_hamamatsu,
         args.irf_sigma_nnvt,
         args.add_dark_to_simulation,
-        simulation_qe_factors=qe_factors,
-        source_intensity_scale=source_scale,
         target_pe=getattr(
             args,
             "fsmp_target_pe",
@@ -1469,6 +1083,7 @@ def main(argv=None):
         prompt_window=args.prompt_window,
         late_window=args.late_window,
         alignment=args.alignment,
+        source_intensity_scale=source_scale,
     )
     data = None
     if args.aligned_data.exists() and not args.force:
@@ -1485,8 +1100,6 @@ def main(argv=None):
             and np.array_equal(candidate.get("edges"), sources[0]["edges"])
             and np.array_equal(candidate.get("simulation_labels"), labels)
             and np.array_equal(candidate.get("simulation_kinds"), kinds)
-            and str(candidate.get("source_signatures", ""))
-            == combined_signatures
         ):
             data = candidate
     if data is None:
@@ -1497,29 +1110,24 @@ def main(argv=None):
             irf_sigma_hamamatsu=args.irf_sigma_hamamatsu,
             irf_sigma_nnvt=args.irf_sigma_nnvt,
             add_dark_to_simulation=args.add_dark_to_simulation,
-            dark_margin=args.dark_margin,
-            simulation_qe_factor=qe_factors,
-            simulation_source_scale=source_scale,
+            dark_window=args.dark_window,
             prompt_window=args.prompt_window,
             late_window=args.late_window,
             alignment=args.alignment,
+            simulation_source_scale=source_scale,
         )
-        data["source_signatures"] = np.asarray(combined_signatures)
         np.savez_compressed(args.aligned_data, **data)
         print(f"Wrote {args.aligned_data}")
-    if "time" in args.plot_components:
-        plot_data(data, args.opt, args.plot_range, args.run)
-    if "summary" in args.plot_components:
-        plot_summary_data(
-            data, args.summary_opt, args.plot_range, args.run, args.z
-        )
-    if "amplitude" in args.plot_components:
-        plot_amplitude_data(
-            data,
-            args.amplitude_opt,
-            args.plot_range,
-            args.run,
-        )
+    plot_data(data, args.opt, args.plot_range, args.run)
+    plot_summary_data(data, args.summary_opt, args.plot_range, args.run, args.z)
+    plot_amplitude_data(
+        data,
+        args.amplitude_opt,
+        args.plot_range,
+        args.run,
+        apply_lucid_qe=args.apply_lucid_qe,
+        lucid_qe_eff=args.lucid_qe_effective,
+    )
     write_comparison_stats_csv(args.stats_csv, data, args.run, args.z)
 
 
