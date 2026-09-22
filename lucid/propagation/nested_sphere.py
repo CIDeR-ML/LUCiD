@@ -40,6 +40,12 @@ from ..geometry.juno_support import (
     build_support_candidate_map,
     intersect_capped_cylinders,
 )
+from ..geometry.juno_structures import (
+    BOWL_INTERFACE_OFFSET_M,
+    build_bowl_candidate_map,
+    intersect_acrylic_bowls,
+    intersect_chimney,
+)
 
 
 LOG = logging.getLogger("lucid.propagation.nested_sphere")
@@ -147,7 +153,10 @@ def find_intersected_nested_sphere_sensors(ray_origins, ray_directions,
                                            sensor_radial_radii=None,
                                            sensor_axial_radii=None,
                                            support_rods=None,
-                                           support_candidate_map=None):
+                                           support_candidate_map=None,
+                                           chimney=None,
+                                           acrylic_bowls=None,
+                                           bowl_candidate_map=None):
     """Outer-sphere sensor lookup (reused) with inner-interface override.
 
     Computes the single-sphere result at ``r_outer`` (sensors), then for rays whose
@@ -186,6 +195,42 @@ def find_intersected_nested_sphere_sensors(ray_origins, ray_directions,
 
     def _interface_hit(o, d):
         t_out, _ = sphere_forward_t(o, d, jnp.zeros(3), r_outer)
+        if chimney is not None:
+            direction = d / (jnp.linalg.norm(d) + 1e-12)
+            t_out, _ = sphere_forward_t(
+                o, direction, jnp.zeros(3), r_outer
+            )
+            a = jnp.sum(direction * direction)
+            b = 2.0 * jnp.sum(o * direction)
+            c = jnp.sum(o * o) - _inner_radii**2
+            discriminant = b**2 - 4.0 * a * c
+            root = jnp.sqrt(jnp.maximum(discriminant, 0.0))
+            roots = jnp.stack([
+                (-b - root) / (2.0 * a),
+                (-b + root) / (2.0 * a),
+            ], axis=1)
+            points = o[None, None, :] + (
+                roots[:, :, None] * direction[None, None, :]
+            )
+            rho = jnp.linalg.norm(points[:, :, :2], axis=2)
+            in_aperture = (
+                (points[:, :, 2] > 0.0)
+                & (rho < chimney.aperture_radius_m)
+            )
+            valid = (
+                (discriminant[:, None] >= 0.0)
+                & (roots > 1e-6)
+                & (roots < t_out)
+                & (~in_aperture)
+            )
+            distances = jnp.where(valid, roots, 1e10)
+            flat = jnp.argmin(distances)
+            distance = distances.reshape(-1)[flat]
+            hit = distance < 1e10
+            which = flat // 2
+            point = o + distance * direction
+            normal = point / (jnp.linalg.norm(point) + 1e-12)
+            return hit, which, point, normal
         _t, _which, hit, pt, nrm = nearest_interface(
             o, d, _inner_centers, _inner_radii, t_outer=t_out)
         return hit, _which, pt, nrm
@@ -206,34 +251,65 @@ def find_intersected_nested_sphere_sensors(ray_origins, ray_directions,
         result['interface_index'] = jnp.where(
             hit_inner, interface_indices, -1)
 
-    # 4. Effective support rods compete with the already selected PMT,
-    # wall, or medium interface.  Candidate lookup uses both the crossing of
-    # the mean support radius and the current selected endpoint, covering
-    # outward and inward rays without constructing a (n_ray, 590) array.
-    hit_support = jnp.zeros(ray_origins.shape[0], dtype=bool)
+    # 4. Engineering structures compete with the selected PMT, wall, or
+    # medium interface.  Stable codes are support=0, chimney Acrylic=1,
+    # chimney steel=2, and Acrylic bowl=3.
+    surface_code = jnp.full(
+        ray_origins.shape[0], -1, dtype=jnp.int32
+    )
     support_index = jnp.full(
         ray_origins.shape[0], -1, dtype=jnp.int32
     )
-    if support_rods is not None:
-        n_theta = n_divisions
-        n_phi = 2 * n_divisions
+    bowl_index = jnp.full(
+        ray_origins.shape[0], -1, dtype=jnp.int32
+    )
+    n_theta = n_divisions
+    n_phi = 2 * n_divisions
 
-        def _cell_index(points):
-            radius = jnp.linalg.norm(points, axis=1)
-            theta = jnp.arccos(jnp.clip(
-                points[:, 2] / (radius + 1e-12), -1.0, 1.0
-            ))
-            phi = jnp.mod(jnp.arctan2(points[:, 1], points[:, 0]),
-                          2.0 * jnp.pi)
-            theta_index = jnp.clip(
-                jnp.floor(theta / jnp.pi * n_theta).astype(jnp.int32),
-                0, n_theta - 1,
+    def _cell_index(points):
+        radius = jnp.linalg.norm(points, axis=1)
+        theta = jnp.arccos(jnp.clip(
+            points[:, 2] / (radius + 1e-12), -1.0, 1.0
+        ))
+        phi = jnp.mod(
+            jnp.arctan2(points[:, 1], points[:, 0]), 2.0 * jnp.pi
+        )
+        theta_index = jnp.clip(
+            jnp.floor(theta / jnp.pi * n_theta).astype(jnp.int32),
+            0, n_theta - 1,
+        )
+        phi_index = jnp.mod(
+            jnp.floor(phi / (2.0 * jnp.pi) * n_phi).astype(jnp.int32),
+            n_phi,
+        )
+        return theta_index * n_phi + phi_index
+
+    def _select_engineering_hit(surface_hit):
+        selected_distance = jnp.linalg.norm(
+            result['positions'] - ray_origins, axis=1
+        )
+        wins = (
+            surface_hit.valid
+            & (surface_hit.distance_m < selected_distance - 1e-6)
+        )
+        choose = wins[:, None]
+        result['positions'] = jnp.where(
+            choose, surface_hit.positions, result['positions']
+        )
+        result['normals'] = jnp.where(
+            choose, surface_hit.transport_normals, result['normals']
+        )
+        keep_surface = (~wins)[None, :]
+        result['sensor_weights'] *= keep_surface
+        result['inside_sensor'] &= keep_surface
+        result['hit_interface'] &= ~wins
+        if 'interface_index' in result:
+            result['interface_index'] = jnp.where(
+                wins, -1, result['interface_index']
             )
-            phi_index = jnp.mod(
-                jnp.floor(phi / (2.0 * jnp.pi) * n_phi).astype(jnp.int32),
-                n_phi,
-            )
-            return theta_index * n_phi + phi_index
+        return wins
+
+    if support_rods is not None:
 
         reference_radius = jnp.mean(jnp.linalg.norm(
             jnp.asarray(support_rods.centers_m), axis=1
@@ -259,34 +335,68 @@ def find_intersected_nested_sphere_sensors(ray_origins, ray_directions,
             ray_origins, ray_directions, support_rods,
             candidate_indices,
         )
-        selected_distance = jnp.linalg.norm(
-            selected_points - ray_origins, axis=1
-        )
-        hit_support = (
-            support_hit.valid
-            & (support_hit.distance_m < selected_distance - 1e-6)
-        )
-        hs = hit_support[:, None]
-        result['positions'] = jnp.where(
-            hs, support_hit.positions, result['positions']
-        )
-        result['normals'] = jnp.where(
-            hs, support_hit.transport_normals, result['normals']
-        )
-        keep_support = (~hit_support)[None, :]
-        result['sensor_weights'] *= keep_support
-        result['inside_sensor'] &= keep_support
-        result['hit_interface'] &= ~hit_support
-        if 'interface_index' in result:
-            result['interface_index'] = jnp.where(
-                hit_support, -1, result['interface_index']
-            )
+        hit_support = _select_engineering_hit(support_hit)
+        surface_code = jnp.where(hit_support, 0, surface_code)
         support_index = jnp.where(
             hit_support, support_hit.rod_indices, -1
         )
 
-    result['hit_support'] = hit_support
-    result['support_index'] = support_index
+    if chimney is not None:
+        chimney_hit = intersect_chimney(
+            ray_origins, ray_directions, chimney
+        )
+        hit_chimney = _select_engineering_hit(chimney_hit)
+        surface_code = jnp.where(
+            hit_chimney, chimney_hit.surface_codes, surface_code
+        )
+
+    if acrylic_bowls is not None:
+        reference_radius = jnp.mean(jnp.linalg.norm(
+            jnp.asarray(acrylic_bowls.attachment_points_m), axis=1
+        ))
+        reference_t, reference_valid = jax.vmap(
+            lambda origin, direction: _sphere_forward_t(
+                origin, direction, reference_radius
+            )
+        )(ray_origins, ray_directions)
+        reference_points = ray_origins + (
+            reference_t[:, None] * ray_directions
+        )
+        selected_points = result['positions']
+        query_points = jnp.where(
+            reference_valid[:, None], reference_points, selected_points
+        )
+        candidate_indices = jnp.concatenate([
+            bowl_candidate_map[_cell_index(query_points)],
+            bowl_candidate_map[_cell_index(selected_points)],
+        ], axis=1)
+        bowl_hit = intersect_acrylic_bowls(
+            ray_origins,
+            ray_directions,
+            acrylic_bowls,
+            candidate_indices,
+            surface_offset_m=BOWL_INTERFACE_OFFSET_M,
+        )
+        hit_bowl = _select_engineering_hit(bowl_hit)
+        surface_code = jnp.where(
+            hit_bowl, bowl_hit.surface_codes, surface_code
+        )
+        bowl_index = jnp.where(
+            hit_bowl, bowl_hit.object_indices, -1
+        )
+
+    result['engineering_surface_code'] = surface_code
+    result['hit_support'] = surface_code == 0
+    result['support_index'] = jnp.where(
+        surface_code == 0, support_index, -1
+    )
+    result['hit_chimney'] = (
+        (surface_code == 1) | (surface_code == 2)
+    )
+    result['hit_acrylic_bowl'] = surface_code == 3
+    result['acrylic_bowl_index'] = jnp.where(
+        surface_code == 3, bowl_index, -1
+    )
 
     if single_ray:
         result = jax.tree_map(lambda x: x[0], result)
@@ -305,7 +415,10 @@ def create_nested_sphere_propagator(sensor_positions, sensor_radius,
                                     sensor_radial_radii=None,
                                     sensor_axial_radii=None,
                                     support_rods=None,
-                                    support_candidates_per_cell=12):
+                                    support_candidates_per_cell=12,
+                                    chimney=None,
+                                    acrylic_bowls=None,
+                                    bowl_candidates_per_cell=12):
     """JIT-compiled photon propagator for nested sphere geometry.
 
     The outer sphere supplies the grid lookup. Optional per-sensor axes and
@@ -399,6 +512,21 @@ def create_nested_sphere_propagator(sensor_positions, sensor_radius,
             time.perf_counter() - started,
         )
 
+    bowl_candidate_map = None
+    if acrylic_bowls is not None:
+        LOG.info(
+            "Acrylic-bowl map: indexing %d effective frusta",
+            len(acrylic_bowls.attachment_points_m),
+        )
+        bowl_candidate_map = build_bowl_candidate_map(
+            acrylic_bowls, n_divisions, bowl_candidates_per_cell
+        )
+        jax.block_until_ready(bowl_candidate_map)
+        LOG.info(
+            "Acrylic-bowl map: candidates ready (%.2fs total)",
+            time.perf_counter() - started,
+        )
+
     @jax.jit
     def propagate_photons(photon_origins, photon_directions):
         return find_intersected_nested_sphere_sensors(
@@ -411,6 +539,9 @@ def create_nested_sphere_propagator(sensor_positions, sensor_radius,
             sensor_radial_radii=sensor_radial_radii,
             sensor_axial_radii=sensor_axial_radii,
             support_rods=support_rods,
-            support_candidate_map=support_candidate_map)
+            support_candidate_map=support_candidate_map,
+            chimney=chimney,
+            acrylic_bowls=acrylic_bowls,
+            bowl_candidate_map=bowl_candidate_map)
 
     return propagate_photons

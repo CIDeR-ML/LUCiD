@@ -42,6 +42,8 @@ class DetectorGeometry(NamedTuple):
                     overlap_mode: str = 'interp',
                     pmt_geometry_enabled=None,
                     support_geometry_enabled=None,
+                    chimney_geometry_enabled=None,
+                    acrylic_bowl_geometry_enabled=None,
                     **grid_params) -> 'DetectorGeometry':
         """Build a DetectorGeometry from a config JSON file.
 
@@ -70,6 +72,10 @@ class DetectorGeometry(NamedTuple):
             follows the detector JSON configuration.
         support_geometry_enabled : bool or None
             Override the configured support cylinders independently.
+        chimney_geometry_enabled : bool or None
+            Override the configured lower-chimney geometry independently.
+        acrylic_bowl_geometry_enabled : bool or None
+            Override the configured Acrylic additions independently.
         **grid_params
             Geometry-specific grid parameters forwarded to ``create_propagator()``.
             Cylinder: n_cap, n_angular, n_height.
@@ -95,6 +101,8 @@ class DetectorGeometry(NamedTuple):
             json_filename,
             pmt_geometry_enabled=pmt_geometry_enabled,
             support_geometry_enabled=support_geometry_enabled,
+            chimney_geometry_enabled=chimney_geometry_enabled,
+            acrylic_bowl_geometry_enabled=acrylic_bowl_geometry_enabled,
         )
         import json as _json
         with open(json_filename) as _f:
@@ -146,7 +154,9 @@ class DetectorGeometry(NamedTuple):
                     if detector.pmt_dimensions is None
                     else detector.pmt_dimensions.outer_axial_m
                 ),
-                support_rods=detector.support_rods)
+                support_rods=detector.support_rods,
+                chimney=detector.chimney,
+                acrylic_bowls=detector.acrylic_bowls)
             return DetectorGeometry(
                 detector_type=actual_type, sensor_points=sensor_points,
                 sensor_radius=sensor_radius, num_sensors=num_sensors,
