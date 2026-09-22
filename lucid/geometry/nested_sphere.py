@@ -21,6 +21,10 @@ from .juno_pmt import (
     load_juno_pmt_layout,
 )
 from .juno_support import load_juno_support_layout
+from .juno_structures import (
+    ChimneyGeometry,
+    load_juno_acrylic_bowls,
+)
 from .sphere import Sphere
 from .registry import register_detector
 
@@ -66,6 +70,10 @@ class NestedSphere(Sphere):
         self.pmt_dimensions = None
         self.support_geometry = None
         self.support_rods = None
+        self.chimney_geometry = None
+        self.chimney = None
+        self.acrylic_bowl_geometry = None
+        self.acrylic_bowls = None
         if acrylic_radius is not None and not (
                 inner_radius < acrylic_radius < outer_radius):
             raise ValueError(
@@ -77,7 +85,10 @@ class NestedSphere(Sphere):
                       sensor_radius, acrylic_radius=None,
                       pmt_type_file_path=None, pmt_geometry=None,
                       support_rod_file_path=None,
-                      support_geometry=None):
+                      support_geometry=None,
+                      chimney_geometry=None,
+                      acrylic_bowl_file_path=None,
+                      acrylic_bowl_geometry=None):
         """Build a nested sphere using externally supplied PMT positions.
 
         The position CSV contains CopyNo, coordinates in mm, and orientation
@@ -172,6 +183,27 @@ class NestedSphere(Sphere):
                 support_rod_file_path
             )
         instance.support_geometry = support_geometry
+        if chimney_geometry is not None:
+            if chimney_geometry != "juno_lower_chimney":
+                raise ValueError(
+                    f"Unknown chimney geometry {chimney_geometry!r}"
+                )
+            instance.chimney = ChimneyGeometry.junosw_j26(outer_radius)
+        instance.chimney_geometry = chimney_geometry
+        if acrylic_bowl_geometry is not None:
+            if acrylic_bowl_geometry != "juno_addition_frusta":
+                raise ValueError(
+                    "Unknown Acrylic-bowl geometry "
+                    f"{acrylic_bowl_geometry!r}"
+                )
+            if acrylic_bowl_file_path is None:
+                raise ValueError(
+                    "acrylic_bowl_file_path is required for bowl geometry"
+                )
+            instance.acrylic_bowls = load_juno_acrylic_bowls(
+                acrylic_bowl_file_path
+            )
+        instance.acrylic_bowl_geometry = acrylic_bowl_geometry
         return instance
 
     def bounds_check(self, positions):
@@ -189,8 +221,16 @@ class NestedSphere(Sphere):
         r = jnp.linalg.norm(positions, axis=1)
         if self.r_acrylic is None:
             return (r >= self.r_inner).astype(jnp.int32)
-        return jnp.where(
+        region = jnp.where(
             r >= self.r_acrylic,
             2,
             jnp.where(r >= self.r_inner, 1, 0),
         ).astype(jnp.int32)
+        if self.chimney is None:
+            return region
+        rho = jnp.linalg.norm(positions[:, :2], axis=1)
+        in_bore = (
+            (rho < self.chimney.aperture_radius_m)
+            & (positions[:, 2] >= self.chimney.aperture_z_min_m)
+        )
+        return jnp.where(in_bore, 0, region)

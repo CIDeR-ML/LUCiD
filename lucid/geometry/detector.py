@@ -100,7 +100,9 @@ def load_detector_geom(file_path):
 
 
 def generate_detector(file_path, pmt_geometry_enabled=None,
-                      support_geometry_enabled=None):
+                      support_geometry_enabled=None,
+                      chimney_geometry_enabled=None,
+                      acrylic_bowl_geometry_enabled=None):
     """Generate a detector from a JSON config file using the geometry registry.
 
     The detector type in the config (e.g. 'cylinder', 'sphere', 'box') is
@@ -120,7 +122,8 @@ def generate_detector(file_path, pmt_geometry_enabled=None,
     to the config-file directory. ``pmt_geometry_enabled`` optionally
     overrides only the configured explicit PMT intersection geometry, for a
     controlled geometry on/off ablation. ``support_geometry_enabled`` does
-    the same independently for the effective JUNO support rods.
+    the same independently for the effective JUNO support rods.  The
+    chimney and Acrylic-bowl overrides are independent in the same way.
     """
     config = load_detector_config(file_path)
     detector_type = config['detector_type']
@@ -173,6 +176,35 @@ def generate_detector(file_path, pmt_geometry_enabled=None,
             )
             if support_path is not None:
                 support_path = os.path.join(config_dir, support_path)
+            configured_chimney = geom_def.get('chimney_geometry')
+            if chimney_geometry_enabled is None:
+                chimney_geometry = configured_chimney
+            elif chimney_geometry_enabled:
+                if configured_chimney is None:
+                    raise ValueError(
+                        "Chimney geometry was enabled but none is configured"
+                    )
+                chimney_geometry = configured_chimney
+            else:
+                chimney_geometry = None
+            configured_bowls = geom_def.get('acrylic_bowl_geometry')
+            if acrylic_bowl_geometry_enabled is None:
+                acrylic_bowl_geometry = configured_bowls
+            elif acrylic_bowl_geometry_enabled:
+                if configured_bowls is None:
+                    raise ValueError(
+                        "Acrylic-bowl geometry was enabled but none is "
+                        "configured"
+                    )
+                acrylic_bowl_geometry = configured_bowls
+            else:
+                acrylic_bowl_geometry = None
+            bowl_path = (
+                geom_def.get('acrylic_bowl_file_path')
+                if acrylic_bowl_geometry is not None else None
+            )
+            if bowl_path is not None:
+                bowl_path = os.path.join(config_dir, bowl_path)
             return cls.from_pmt_file(
                 csv_path,
                 geom_def['inner_radius'],
@@ -182,7 +214,10 @@ def generate_detector(file_path, pmt_geometry_enabled=None,
                 pmt_type_file_path=type_path,
                 pmt_geometry=pmt_geometry,
                 support_rod_file_path=support_path,
-                support_geometry=support_geometry)
+                support_geometry=support_geometry,
+                chimney_geometry=chimney_geometry,
+                acrylic_bowl_file_path=bowl_path,
+                acrylic_bowl_geometry=acrylic_bowl_geometry)
         return cls(geom_def['inner_radius'], geom_def['outer_radius'],
                    geom_def['n_sensors'], geom_def['sensor_radius'],
                    acrylic_radius=geom_def.get('acrylic_radius'))
