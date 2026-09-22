@@ -230,10 +230,11 @@ def test_support_step_reports_reflection_branch():
         jnp.asarray([1.5, 1.49, 1.33]),
         jnp.asarray(True),
         jnp.asarray(1.0),
+        jnp.asarray(0.0),
         jnp.asarray(1.0),
     )
 
     events = np.asarray(result[8], dtype=np.int32)
-    npt.assert_array_equal(events, [1, 0, 1, 1, 0])
+    npt.assert_array_equal(events, [1, 0, 1, 1, 0, 0])
     assert float(result[5]) == 1.0
     assert float(result[1][0]) < 0.0
