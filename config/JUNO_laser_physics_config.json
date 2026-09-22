@@ -11,7 +11,18 @@
   "cathode_nk": 1.5,
   "sensor_fspec": 0.5,
   "support_reflection_rate": 0.535,
+  "support_transmission_rate": 0.0,
   "support_fspec": 0.5,
+  "chimney_acrylic_reflection_rate": 0.04,
+  "chimney_acrylic_transmission_rate": 0.94,
+  "chimney_acrylic_fspec": 1.0,
+  "chimney_steel_reflection_rate": 0.4,
+  "chimney_steel_transmission_rate": 0.0,
+  "chimney_steel_fspec": 0.5,
+  "acrylic_bowl_reflection_rate": 0.04,
+  "acrylic_bowl_transmission_rate": 0.94,
+  "acrylic_bowl_fspec": 1.0,
+  "_comment_engineering_surfaces": "First-version effective 532 nm seeds; Acrylic R/T and steel R are calibration parameters, not precision JUNOSW copies",
   "qe": 1.0,
   "qe_corrections": null
 }
