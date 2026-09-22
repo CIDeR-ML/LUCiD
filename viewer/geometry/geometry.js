@@ -20,6 +20,7 @@ let pickPending = false;
 const boundaryObjects = [];
 const pmtObjects = [];
 const supportObjects = [];
+const knownStructureObjects = [];
 const clippingPlane = new THREE.Plane(new THREE.Vector3(0, 0, -1), 0);
 const raycaster = new THREE.Raycaster();
 raycaster.params.Points.threshold = 0.30;
@@ -70,9 +71,86 @@ function makeDiscGeometry() {
   return geometry;
 }
 
+function makeAnnularCylinderGeometry(
+  innerRadius, outerRadius, height, segments = 64,
+) {
+  const geometry = new THREE.BufferGeometry();
+  const positions = [];
+  const normals = [];
+  const indices = [];
+  const half = height / 2;
+
+  function addQuad(points, normal) {
+    const first = positions.length / 3;
+    for (const point of points) {
+      positions.push(point[0], point[1], point[2]);
+      normals.push(normal[0], normal[1], normal[2]);
+    }
+    indices.push(
+      first, first + 1, first + 2,
+      first, first + 2, first + 3,
+    );
+  }
+
+  for (let index = 0; index < segments; index += 1) {
+    const angle0 = (index / segments) * Math.PI * 2;
+    const angle1 = ((index + 1) / segments) * Math.PI * 2;
+    const c0 = Math.cos(angle0);
+    const s0 = Math.sin(angle0);
+    const c1 = Math.cos(angle1);
+    const s1 = Math.sin(angle1);
+    const outer0 = [outerRadius * c0, outerRadius * s0];
+    const outer1 = [outerRadius * c1, outerRadius * s1];
+    const inner0 = [innerRadius * c0, innerRadius * s0];
+    const inner1 = [innerRadius * c1, innerRadius * s1];
+    const mid = (angle0 + angle1) / 2;
+    const radial = [Math.cos(mid), Math.sin(mid), 0];
+
+    addQuad([
+      [outer0[0], outer0[1], -half],
+      [outer1[0], outer1[1], -half],
+      [outer1[0], outer1[1], half],
+      [outer0[0], outer0[1], half],
+    ], radial);
+    addQuad([
+      [inner1[0], inner1[1], -half],
+      [inner0[0], inner0[1], -half],
+      [inner0[0], inner0[1], half],
+      [inner1[0], inner1[1], half],
+    ], radial.map((value) => -value));
+    addQuad([
+      [inner0[0], inner0[1], half],
+      [outer0[0], outer0[1], half],
+      [outer1[0], outer1[1], half],
+      [inner1[0], inner1[1], half],
+    ], [0, 0, 1]);
+    addQuad([
+      [inner1[0], inner1[1], -half],
+      [outer1[0], outer1[1], -half],
+      [outer0[0], outer0[1], -half],
+      [inner0[0], inner0[1], -half],
+    ], [0, 0, -1]);
+  }
+  geometry.setAttribute(
+    'position',
+    new THREE.Float32BufferAttribute(positions, 3),
+  );
+  geometry.setAttribute(
+    'normal',
+    new THREE.Float32BufferAttribute(normals, 3),
+  );
+  geometry.setIndex(indices);
+  geometry.computeBoundingSphere();
+  return geometry;
+}
+
 async function fetchRows(group) {
   const response = await fetch(group.url);
-  if (!response.ok) throw new Error(`Failed to load ${group.url}: ${response.status}`);
+  if (!response.ok) {
+    throw new Error(
+      'Failed to load ' + group.url + ': ' + response.status,
+    );
+  }
   const values = new Float32Array(await response.arrayBuffer());
   if (values.length !== group.count * group.stride) {
     throw new Error(`Invalid instance buffer ${group.url}`);
@@ -95,8 +173,13 @@ function addControl(containerId, object, group, checked = true) {
   text.textContent = group.name;
   const count = document.createElement('span');
   count.className = 'count';
-  if (group.count !== undefined) count.textContent = group.count.toLocaleString();
-  else count.textContent = `R=${group.radius.toFixed(3)} m`;
+  if (group.count !== undefined) {
+    count.textContent = group.count.toLocaleString();
+  } else if (group.radius !== undefined) {
+    count.textContent = 'R=' + group.radius.toFixed(3) + ' m';
+  } else {
+    count.textContent = group.detail || '';
+  }
   label.append(input, swatch, text, count);
   container.append(label);
 }
@@ -130,7 +213,11 @@ async function addPmtGroup(group, sharedGeometry) {
   mesh.instanceMatrix.setUsage(THREE.StaticDrawUsage);
   for (let index = 0; index < group.count; index += 1) {
     const offset = index * group.stride;
-    setInstanceTransform(mesh, index, rows.subarray(offset, offset + group.stride));
+    setInstanceTransform(
+      mesh,
+      index,
+      rows.subarray(offset, offset + group.stride),
+    );
   }
   mesh.instanceMatrix.needsUpdate = true;
   scene.add(mesh);
@@ -145,7 +232,10 @@ async function addPmtGroup(group, sharedGeometry) {
     centres[target + 1] = rows[source + 1];
     centres[target + 2] = rows[source + 2];
   }
-  pickerGeometry.setAttribute('position', new THREE.BufferAttribute(centres, 3));
+  pickerGeometry.setAttribute(
+    'position',
+    new THREE.BufferAttribute(centres, 3),
+  );
   const picker = new THREE.Points(
     pickerGeometry,
     new THREE.PointsMaterial({
@@ -181,6 +271,60 @@ async function addSupportGroup(group, sharedGeometry) {
   addControl('supportControls', mesh, group);
 }
 
+function addChimneySegment(segment) {
+  const height = segment.z_max - segment.z_min;
+  const geometry = makeAnnularCylinderGeometry(
+    segment.inner_radius,
+    segment.outer_radius,
+    height,
+  );
+  const mesh = new THREE.Mesh(
+    geometry,
+    material(segment.color, 0.72, THREE.DoubleSide),
+  );
+  mesh.name = segment.name;
+  mesh.position.z = (segment.z_min + segment.z_max) / 2;
+  mesh.userData = { group: segment };
+  scene.add(mesh);
+  knownStructureObjects.push(mesh);
+  const details = {
+    ...segment,
+    detail: segment.z_min.toFixed(3)
+      + '-'
+      + segment.z_max.toFixed(3)
+      + ' m',
+  };
+  addControl('knownStructureControls', mesh, details);
+}
+
+async function addAcrylicBowlGroup(group) {
+  const rows = await fetchRows(group);
+  const geometry = new THREE.CylinderGeometry(
+    group.tip_ratio, 1, 2, 20, 1, false,
+  );
+  const mesh = new THREE.InstancedMesh(
+    geometry,
+    material(group.color, 0.72, THREE.DoubleSide),
+    group.count,
+  );
+  mesh.name = group.name;
+  mesh.userData = { group, rows };
+  mesh.instanceMatrix.setUsage(THREE.StaticDrawUsage);
+  for (let index = 0; index < group.count; index += 1) {
+    const offset = index * group.stride;
+    setInstanceTransform(
+      mesh,
+      index,
+      rows.subarray(offset, offset + group.stride),
+      true,
+    );
+  }
+  mesh.instanceMatrix.needsUpdate = true;
+  scene.add(mesh);
+  knownStructureObjects.push(mesh);
+  addControl('knownStructureControls', mesh, group);
+}
+
 function setupScene() {
   scene = new THREE.Scene();
   scene.background = new THREE.Color(0x080b0e);
@@ -189,7 +333,10 @@ function setupScene() {
   camera = new THREE.PerspectiveCamera(42, 1, 0.02, 250);
   camera.up.set(0, 0, 1);
 
-  renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+  renderer = new THREE.WebGLRenderer({
+    antialias: true,
+    powerPreference: 'high-performance',
+  });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   renderer.outputEncoding = THREE.sRGBEncoding;
   renderer.localClippingEnabled = true;
@@ -213,13 +360,27 @@ function setupScene() {
 }
 
 function resetCamera() {
-  camera.position.set(outerRadius * 1.65, -outerRadius * 1.65, outerRadius * 0.9);
+  camera.position.set(
+    outerRadius * 1.65,
+    -outerRadius * 1.65,
+    outerRadius * 0.9,
+  );
   controls.target.set(0, 0, 0);
+  controls.update();
+}
+
+function focusTopStructures() {
+  camera.position.set(5.0, -6.5, 21.5);
+  controls.target.set(0, 0, 18.2);
   controls.update();
 }
 
 function setupUi() {
   document.getElementById('resetCamera').addEventListener('click', resetCamera);
+  document.getElementById('focusTop').addEventListener(
+    'click',
+    focusTopStructures,
+  );
   const rotateButton = document.getElementById('autoRotate');
   rotateButton.addEventListener('click', () => {
     autoRotate = !autoRotate;
@@ -249,6 +410,20 @@ function setupUi() {
     }
   });
 
+  const structureOpacity = document.getElementById('structureOpacity');
+  structureOpacity.addEventListener('input', () => {
+    const value = Number(structureOpacity.value);
+    document.getElementById('structureOpacityValue').value = value.toFixed(2);
+    for (const object of knownStructureObjects) {
+      const transparent = value < 1;
+      const modeChanged = object.material.transparent !== transparent;
+      object.material.opacity = value;
+      object.material.transparent = transparent;
+      object.material.depthWrite = !transparent;
+      if (modeChanged) object.material.needsUpdate = true;
+    }
+  });
+
   const clipEnabled = document.getElementById('clipEnabled');
   const clipPosition = document.getElementById('clipPosition');
   clipPosition.min = (-outerRadius).toFixed(1);
@@ -259,7 +434,13 @@ function setupUi() {
     clipPosition.disabled = !enabled;
     document.getElementById('clipValue').value = `${value.toFixed(1)} m`;
     clippingPlane.constant = value;
-    for (const object of [...boundaryObjects, ...pmtObjects, ...supportObjects]) {
+    const objects = [
+      ...boundaryObjects,
+      ...pmtObjects,
+      ...supportObjects,
+      ...knownStructureObjects,
+    ];
+    for (const object of objects) {
       object.material.clippingPlanes = enabled ? [clippingPlane] : [];
       if (recompile) object.material.needsUpdate = true;
     }
@@ -282,7 +463,9 @@ function inspectPointer(event) {
   pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
   pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
   raycaster.setFromCamera(pointer, camera);
-  const visiblePickers = pmtPickers.filter((item) => item.userData.displayMesh.visible);
+  const visiblePickers = pmtPickers.filter(
+    (item) => item.userData.displayMesh.visible,
+  );
   const intersections = raycaster.intersectObjects(visiblePickers, false);
   if (!intersections.length) {
     tooltip.style.display = 'none';
@@ -298,8 +481,16 @@ function inspectPointer(event) {
     + `y ${rows[offset + 1].toFixed(3)} m<br>`
     + `z ${rows[offset + 2].toFixed(3)} m`;
   tooltip.style.display = 'block';
-  tooltip.style.left = `${Math.min(event.clientX - rect.left + 14, rect.width - 190)}px`;
-  tooltip.style.top = `${Math.min(event.clientY - rect.top + 14, rect.height - 125)}px`;
+  const left = Math.min(
+    event.clientX - rect.left + 14,
+    rect.width - 190,
+  );
+  const top = Math.min(
+    event.clientY - rect.top + 14,
+    rect.height - 125,
+  );
+  tooltip.style.left = left + 'px';
+  tooltip.style.top = top + 'px';
 }
 
 function queuePick(event) {
@@ -320,29 +511,54 @@ function animate() {
 
 async function init() {
   if (typeof THREE === 'undefined') {
-    throw new Error('Three.js failed to load. Check network access to jsDelivr.');
+    throw new Error(
+      'Three.js failed to load. Check network access to unpkg.',
+    );
   }
   setupScene();
   const response = await fetch('/geometry.json');
-  if (!response.ok) throw new Error(`Geometry manifest failed: ${response.status}`);
+  if (!response.ok) {
+    throw new Error(
+      'Geometry manifest failed: ' + response.status,
+    );
+  }
   manifest = await response.json();
   loadStatus.textContent = 'Building GPU instances...';
   addBoundaries();
 
   const pmtGeometry = manifest.pmt_shape === 'front_head'
     ? makeHemisphereGeometry() : makeDiscGeometry();
-  const supportGeometry = new THREE.CylinderGeometry(1, 1, 2, 12, 1, false);
+  const supportGeometry = new THREE.CylinderGeometry(
+    1, 1, 2, 12, 1, false,
+  );
+  for (const segment of manifest.chimney_segments) {
+    addChimneySegment(segment);
+  }
   await Promise.all([
     ...manifest.pmt_groups.map((group) => addPmtGroup(group, pmtGeometry)),
-    ...manifest.support_groups.map((group) => addSupportGroup(group, supportGeometry)),
+    ...manifest.support_groups.map(
+      (group) => addSupportGroup(group, supportGeometry),
+    ),
+    ...manifest.acrylic_bowl_groups.map(
+      (group) => addAcrylicBowlGroup(group),
+    ),
   ]);
 
   if (!manifest.support_groups.length) {
     document.getElementById('supportSection').style.display = 'none';
   }
-  summary.textContent = `${manifest.detector_type} | `
-    + `${manifest.pmt_count.toLocaleString()} PMTs | `
-    + `${manifest.support_count.toLocaleString()} supports`;
+  if (
+    !manifest.chimney_segments.length
+    && !manifest.acrylic_bowl_groups.length
+  ) {
+    document.getElementById('knownStructureSection').style.display = 'none';
+  }
+  summary.textContent = manifest.detector_type + ' | '
+    + manifest.pmt_count.toLocaleString() + ' PMTs | '
+    + manifest.support_count.toLocaleString() + ' supports | '
+    + manifest.chimney_segment_count.toLocaleString()
+    + ' chimney segments | '
+    + manifest.acrylic_bowl_count.toLocaleString() + ' bowls';
   setupUi();
   resetCamera();
   resize();
@@ -357,7 +573,10 @@ async function init() {
 
   window.setInterval(() => {
     const info = renderer.info.render;
-    renderStats.textContent = `${info.calls} draw calls | ${info.triangles.toLocaleString()} triangles`;
+    renderStats.textContent = info.calls
+      + ' draw calls | '
+      + info.triangles.toLocaleString()
+      + ' triangles';
   }, 500);
 }
 

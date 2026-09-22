@@ -34,6 +34,11 @@ SUPPORT_STYLES = {
     0: ("Main 85 mm struts", "#d1495b"),
     1: ("Secondary 60 mm struts", "#9d4edd"),
 }
+CHIMNEY_STYLES = {
+    1: ("Chimney Acrylic", "#00b4d8"),
+    2: ("Chimney steel", "#6c757d"),
+}
+BOWL_STYLE = ("Acrylic bowls", "#7b2cbf")
 
 
 def _packed_rows(*columns):
@@ -76,7 +81,9 @@ def build_geometry_payload(detector):
             continue
         url = f"/data/pmt_{code}.f32"
         payloads[url] = _packed_rows(
-            positions[selected, 0], positions[selected, 1], positions[selected, 2],
+            positions[selected, 0],
+            positions[selected, 1],
+            positions[selected, 2],
             np.asarray(axes)[selected, 0], np.asarray(axes)[selected, 1],
             np.asarray(axes)[selected, 2], radial[selected], axial[selected],
             np.asarray(copy_numbers)[selected],
@@ -115,6 +122,60 @@ def build_geometry_payload(detector):
                 "stride": 9,
             })
 
+    chimney_segments = []
+    chimney = getattr(detector, "chimney", None)
+    if chimney is not None:
+        for index, code in enumerate(chimney.surface_codes):
+            name, color = CHIMNEY_STYLES[int(code)]
+            chimney_segments.append({
+                "code": int(code),
+                "name": name,
+                "color": color,
+                "inner_radius": float(chimney.inner_radii_m[index]),
+                "outer_radius": float(chimney.outer_radii_m[index]),
+                "z_min": float(chimney.z_min_m[index]),
+                "z_max": float(chimney.z_max_m[index]),
+            })
+
+    acrylic_bowl_groups = []
+    bowls = getattr(detector, "acrylic_bowls", None)
+    bowl_count = 0 if bowls is None else len(bowls.copy_numbers)
+    if bowl_count:
+        ratios = np.asarray(
+            bowls.tip_radii_m / bowls.base_radii_m,
+            dtype=np.float64,
+        )
+        if not np.allclose(ratios, ratios[0]):
+            raise ValueError(
+                "Viewer requires one shared Acrylic-bowl tip/base ratio"
+            )
+        centres = (
+            bowls.attachment_points_m
+            + 0.5 * bowls.lengths_m[:, None] * bowls.outward_axes
+        )
+        url = "/data/acrylic_bowls.f32"
+        payloads[url] = _packed_rows(
+            centres[:, 0],
+            centres[:, 1],
+            centres[:, 2],
+            bowls.outward_axes[:, 0],
+            bowls.outward_axes[:, 1],
+            bowls.outward_axes[:, 2],
+            bowls.base_radii_m,
+            0.5 * bowls.lengths_m,
+            bowls.copy_numbers,
+        )
+        name, color = BOWL_STYLE
+        acrylic_bowl_groups.append({
+            "code": 3,
+            "name": name,
+            "color": color,
+            "count": bowl_count,
+            "url": url,
+            "stride": 9,
+            "tip_ratio": float(ratios[0]),
+        })
+
     boundaries = []
     boundary_specs = (
         ("r_inner", "LS-Acrylic boundary", "#f4d35e", True),
@@ -144,20 +205,32 @@ def build_geometry_payload(detector):
         "pmt_shape": "front_head" if explicit_front_heads else "disc",
         "pmt_count": count,
         "support_count": 0 if rods is None else len(rods.centers_m),
+        "chimney_segment_count": len(chimney_segments),
+        "acrylic_bowl_count": bowl_count,
         "boundaries": boundaries,
         "pmt_groups": pmt_groups,
         "support_groups": support_groups,
+        "chimney_segments": chimney_segments,
+        "acrylic_bowl_groups": acrylic_bowl_groups,
     }
     return manifest, payloads
 
 
 def make_handler(manifest, payloads):
-    manifest_bytes = json.dumps(manifest, separators=(",", ":")).encode("utf-8")
+    manifest_bytes = json.dumps(
+        manifest, separators=(",", ":")
+    ).encode("utf-8")
     static_files = {
         "/": (VIEWER_ROOT / "index.html", "text/html; charset=utf-8"),
         "/index.html": (VIEWER_ROOT / "index.html", "text/html; charset=utf-8"),
-        "/geometry.js": (VIEWER_ROOT / "geometry.js", "text/javascript; charset=utf-8"),
-        "/geometry.css": (VIEWER_ROOT / "geometry.css", "text/css; charset=utf-8"),
+        "/geometry.js": (
+            VIEWER_ROOT / "geometry.js",
+            "text/javascript; charset=utf-8",
+        ),
+        "/geometry.css": (
+            VIEWER_ROOT / "geometry.css",
+            "text/css; charset=utf-8",
+        ),
     }
 
     class GeometryHandler(BaseHTTPRequestHandler):
@@ -228,6 +301,8 @@ def main():
     print(f"Config:   {args.config}")
     print(f"PMTs:     {manifest['pmt_count']:,}")
     print(f"Supports: {manifest['support_count']:,}")
+    print(f"Chimney:  {manifest['chimney_segment_count']:,} segments")
+    print(f"Bowls:    {manifest['acrylic_bowl_count']:,}")
     print(f"Payload:  {binary_size / 1_000_000:.2f} MB")
     print(f"URL:      {url}")
     print("Ctrl+C to stop")
