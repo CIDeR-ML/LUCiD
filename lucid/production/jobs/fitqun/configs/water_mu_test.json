@@ -1,0 +1,9 @@
+{
+  "name": "fitqun_cprofile_mu_test",
+  "description": "Smoke test for the profile scan path: four momenta, 20 events each.",
+  "pdgs": [13],
+  "seed_base": 1000,
+  "momentum_list_MeV": [300, 600, 1200, 2400],
+  "n_events_per_job": 20,
+  "request_disk_mb": 8192
+}
