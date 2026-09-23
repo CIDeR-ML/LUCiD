@@ -85,6 +85,24 @@ load_data = base.load_data
 
 
 
+def _row_minima(values, lengths):
+    """Return per-row minima of ragged flat values, NaN for empty rows.
+
+    Input: flattened row values and the per-row lengths.
+    Output: float64 array with one earliest value per record; records
+    without any PE map to NaN.
+    """
+    lengths = np.asarray(lengths, dtype=np.int64)
+    minima = np.full(len(lengths), np.nan)
+    nonempty = lengths > 0
+    if not np.any(nonempty):
+        return minima
+    starts = np.zeros(len(lengths), dtype=np.int64)
+    starts[1:] = np.cumsum(lengths)[:-1]
+    minima[nonempty] = np.minimum.reduceat(values, starts[nonempty])
+    return minima
+
+
 def _arrow_pet_values(column):
     """Return flattened PE values and row lengths from an Arrow column."""
     if pa.types.is_list(column.type) or pa.types.is_large_list(column.type):
@@ -149,7 +167,13 @@ def _monitor_match(eid, monitor_eid, monitor_time):
 def _append_fsmp_batch(
     chunks, batch, channels, monitor_eid, monitor_time
 ):
-    """Convert one Arrow record batch to flat, monitor-corrected arrays."""
+    """Convert one Arrow batch to first-PE monitor-corrected rows.
+
+    Input: the chunk collector, one filtered Arrow record batch, the
+    selected channels and the monitor lookup arrays.
+    Output: the number of accepted records; every record contributes
+    only its earliest PE as one (channel, eid, time, pe_count=1) row.
+    """
     eid = batch.column("eid").to_numpy(zero_copy_only=False).astype(np.int64)
     channel = batch.column("ch").to_numpy(zero_copy_only=False).astype(np.int64)
     offset = (
@@ -161,23 +185,16 @@ def _append_fsmp_batch(
     if not np.any(valid_row):
         return 0
 
-    row_channel = np.repeat(channel, lengths)
-    row_eid = np.repeat(eid, lengths)
-    row_offset = np.repeat(offset, lengths)
-    row_monitor = np.repeat(monitor, lengths)
-    value_valid = np.repeat(valid_row, lengths)
-    if np.any(value_valid):
-        chunks.append(
-            (
-                row_channel[value_valid],
-                row_eid[value_valid],
-                values[value_valid]
-                + row_offset[value_valid]
-                - row_monitor[value_valid],
-                np.ones(np.count_nonzero(value_valid), dtype=np.int64),
-            )
+    first_pe = _row_minima(values, lengths)
+    chunks.append(
+        (
+            channel[valid_row],
+            eid[valid_row],
+            first_pe[valid_row] + offset[valid_row] - monitor[valid_row],
+            np.ones(np.count_nonzero(valid_row), dtype=np.int64),
         )
-    return int(np.count_nonzero(value_valid))
+    )
+    return int(np.count_nonzero(valid_row))
 
 
 def read_fsmp_times_by_channel(
@@ -361,7 +378,13 @@ def iter_junosw_sim_files(sim_dir, file_glob="*.h5"):
 
 
 def _read_lucid_parquet(path, edges, chunk_size, channels):
-    """Accumulate one FSMP-style LUCiD Parquet file into histograms."""
+    """Accumulate one LUCiD Parquet file into first-PE histograms.
+
+    Input: one Parquet path, the bin edges, the batch size and the
+    selected channels.
+    Output: (histogram, entries, total_pe, event_count) where every
+    record contributes only its earliest PE.
+    """
     parquet = pq.ParquetFile(path)
     histogram = np.zeros((len(channels), len(edges) - 1), dtype=np.int64)
     entries = np.zeros(len(channels), dtype=np.int64)
@@ -387,23 +410,17 @@ def _read_lucid_parquet(path, edges, chunk_size, channels):
         )
         if not np.any(valid_row):
             continue
-        flat_channel = np.repeat(row_channel, lengths)
-        flat_offset = np.repeat(row_offset, lengths)
-        flat_valid = np.repeat(valid_row, lengths)
-        if np.any(flat_valid):
-            flat_times = values + flat_offset
-            _accumulate_histogram(
-                flat_channel[flat_valid],
-                flat_times[flat_valid],
-                channels,
-                edges,
-                histogram,
-                entries,
-            )
-            valid_index = np.searchsorted(
-                channels, flat_channel[flat_valid]
-            )
-            np.add.at(total_pe, valid_index, 1)
+        first_times = _row_minima(values, lengths) + row_offset
+        _accumulate_histogram(
+            row_channel[valid_row],
+            first_times[valid_row],
+            channels,
+            edges,
+            histogram,
+            entries,
+        )
+        valid_index = np.searchsorted(channels, row_channel[valid_row])
+        np.add.at(total_pe, valid_index, 1)
     event_count = (
         int(metadata_events.decode())
         if metadata_events is not None
@@ -465,7 +482,11 @@ def _junosw_event_count(files, sim_group):
 
 
 def _read_junosw_histograms(files, args, edges, channels):
-    """Delegate JUNOsw Track/CDHit matching to the reference module."""
+    """Delegate JUNOsw Track/CDHit matching to the reference module.
+
+    Only the earliest corrected hit of every (event, PMT) waveform is
+    histogrammed (first_pe=True), matching the FSMP/LUCiD convention.
+    """
     density, entries = base.read_sim_histograms(
         files,
         args.junosw_sim_group,
@@ -473,6 +494,7 @@ def _read_junosw_histograms(files, args, edges, channels):
         args.sim_chunk_size,
         args.junosw_sim_match_mode,
         channels,
+        first_pe=True,
     )
     event_count = _junosw_event_count(files, args.junosw_sim_group)
     return (
@@ -529,6 +551,7 @@ def _compute_sim_cache(
         "amplitude_schema": np.asarray(2, dtype=np.int16),
         "label": np.asarray(label),
         "kind": np.asarray(kind),
+        "pe_selection": np.asarray("first"),
     }
     output.parent.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(output, **data)
@@ -563,6 +586,7 @@ def compute_fsmp_data(args, channels, fsmp_files):
         "channels": channels,
         "pmt_type": pmt_type,
         "tts": tts,
+        "pe_selection": np.asarray("first"),
         "fsmp_ch": records["ch"],
         "fsmp_eid": records["eid"],
         "fsmp_time": records["time"],
@@ -907,6 +931,10 @@ def _load_matching_cache(
     if not path.exists():
         return None
     data = load_data(path)
+    selection = str(np.asarray(data.get("pe_selection", "all")).item())
+    if selection != "first":
+        print(f"Cached PE selection in {path} is stale; recomputing.")
+        return None
     if not np.array_equal(data.get("channels"), channels):
         print(f"Cached channels in {path} do not match; recomputing.")
         return None
@@ -927,16 +955,13 @@ def _load_matching_cache(
                 "recomputing."
             )
             return None
-    if target_pe is not None:
-        cached_target = int(
-            np.asarray(data.get("fsmp_target_pe", -1)).item()
+    cached_target = int(np.asarray(data.get("fsmp_target_pe", -1)).item())
+    expected_target = -1 if target_pe is None else int(target_pe)
+    if cached_target != expected_target:
+        print(
+            f"Cached FSMP PE target in {path} does not match; recomputing."
         )
-        if cached_target != int(target_pe):
-            print(
-                f"Cached FSMP PE target in {path} does not match; "
-                "recomputing."
-            )
-            return None
+        return None
     return data
 
 
@@ -1033,11 +1058,13 @@ def main(argv=None):
             if lucid_source is not None
             else None
         )
-        args.fsmp_target_pe = lucid_total_pe
+        # First-PE experiment: load the full FSMP run without truncation;
+        # matching the LUCiD first-PE total left too little FSMP exposure.
+        args.fsmp_target_pe = None
         if lucid_total_pe is not None:
             print(
-                "FSMP target from selected-channel LUCiD simulation: "
-                f"{args.fsmp_target_pe} PE"
+                "LUCiD first-PE total over selected channels: "
+                f"{lucid_total_pe} PE (FSMP truncation disabled)"
             )
         fsmp_data = None
         if not args.force:

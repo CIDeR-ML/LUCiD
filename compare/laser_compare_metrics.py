@@ -62,6 +62,7 @@ def processing_string(
     value = (
         # aligned-cache schema version; bump when result fields change
         "metrics=6,"
+        "pe=first,"
         f"tts={int(use_tts)},"
         f"irf={irf_config_string(hamamatsu_sigma, nnvt_sigma)},"
         f"dark_to_sim={int(add_dark_to_simulation)},fsmp_dark=kept,"

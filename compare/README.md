@@ -6,12 +6,15 @@ diagnostic because they use different numerical definitions.
 
 `compare_sim.py`
 : Shared readers, time-histogram utilities, PMT metadata, and legacy
-  simulation comparison helpers. It is also a stand-alone legacy script.
+  simulation comparison helpers. It is also a stand-alone legacy
+  script. Histogram readers accept first_pe=True to keep only the
+  earliest PE of every (event, PMT) record.
 
 `compare_sim_vs_real.py`
 : Main response comparison. It reads the three sources, builds caches, and
   produces per-channel time, summary, and amplitude PDFs with automatic
-  source-intensity scaling.
+  source-intensity scaling. All three sources load only the first
+  (earliest) PE of every waveform record.
 
 `laser_compare_metrics.py`
 : Builds time-response metrics, alignment, TTS/IRF response, dark-noise
