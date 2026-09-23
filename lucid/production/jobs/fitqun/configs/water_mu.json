@@ -1,0 +1,13 @@
+{
+  "name": "fitqun_cprofile_mu",
+  "description": "Cherenkov profile scan for mu-, on the reference tune's momentum grid.",
+  "pdgs": [13],
+  "seed_base": 1000,
+  "events_schedule": {
+    "500": 400,
+    "1500": 200,
+    "4000": 100,
+    "1e9": 50
+  },
+  "request_disk_mb": 32768
+}
