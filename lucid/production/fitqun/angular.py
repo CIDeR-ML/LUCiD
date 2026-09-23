@@ -35,7 +35,7 @@ from typing import Optional
 
 import numpy as np
 
-from . import binning, rootio
+from . import rootio
 
 
 def cos_eta(source_pos: np.ndarray, sensor_pos: np.ndarray,
