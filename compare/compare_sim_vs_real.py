@@ -19,6 +19,7 @@ current file first.
 
 import argparse
 import glob
+import json
 import sys
 from pathlib import Path
 
@@ -46,6 +47,7 @@ from compare.laser_compare_metrics import (
     estimate_peak_from_density,
     processing_string,
     resolve_irf_sigmas,
+    simulation_qe_factors,
 )
 from compare.laser_compare_csv import (
     write_channel_manifest,
@@ -83,24 +85,6 @@ attach_pmt_coordinates = base.attach_pmt_coordinates
 load_data = base.load_data
 
 
-
-
-def _row_minima(values, lengths):
-    """Return per-row minima of ragged flat values, NaN for empty rows.
-
-    Input: flattened row values and the per-row lengths.
-    Output: float64 array with one earliest value per record; records
-    without any PE map to NaN.
-    """
-    lengths = np.asarray(lengths, dtype=np.int64)
-    minima = np.full(len(lengths), np.nan)
-    nonempty = lengths > 0
-    if not np.any(nonempty):
-        return minima
-    starts = np.zeros(len(lengths), dtype=np.int64)
-    starts[1:] = np.cumsum(lengths)[:-1]
-    minima[nonempty] = np.minimum.reduceat(values, starts[nonempty])
-    return minima
 
 
 def _arrow_pet_values(column):
@@ -167,13 +151,7 @@ def _monitor_match(eid, monitor_eid, monitor_time):
 def _append_fsmp_batch(
     chunks, batch, channels, monitor_eid, monitor_time
 ):
-    """Convert one Arrow batch to first-PE monitor-corrected rows.
-
-    Input: the chunk collector, one filtered Arrow record batch, the
-    selected channels and the monitor lookup arrays.
-    Output: the number of accepted records; every record contributes
-    only its earliest PE as one (channel, eid, time, pe_count=1) row.
-    """
+    """Convert one Arrow record batch to flat, monitor-corrected arrays."""
     eid = batch.column("eid").to_numpy(zero_copy_only=False).astype(np.int64)
     channel = batch.column("ch").to_numpy(zero_copy_only=False).astype(np.int64)
     offset = (
@@ -185,16 +163,23 @@ def _append_fsmp_batch(
     if not np.any(valid_row):
         return 0
 
-    first_pe = _row_minima(values, lengths)
-    chunks.append(
-        (
-            channel[valid_row],
-            eid[valid_row],
-            first_pe[valid_row] + offset[valid_row] - monitor[valid_row],
-            np.ones(np.count_nonzero(valid_row), dtype=np.int64),
+    row_channel = np.repeat(channel, lengths)
+    row_eid = np.repeat(eid, lengths)
+    row_offset = np.repeat(offset, lengths)
+    row_monitor = np.repeat(monitor, lengths)
+    value_valid = np.repeat(valid_row, lengths)
+    if np.any(value_valid):
+        chunks.append(
+            (
+                row_channel[value_valid],
+                row_eid[value_valid],
+                values[value_valid]
+                + row_offset[value_valid]
+                - row_monitor[value_valid],
+                np.ones(np.count_nonzero(value_valid), dtype=np.int64),
+            )
         )
-    )
-    return int(np.count_nonzero(valid_row))
+    return int(np.count_nonzero(value_valid))
 
 
 def read_fsmp_times_by_channel(
@@ -378,13 +363,7 @@ def iter_junosw_sim_files(sim_dir, file_glob="*.h5"):
 
 
 def _read_lucid_parquet(path, edges, chunk_size, channels):
-    """Accumulate one LUCiD Parquet file into first-PE histograms.
-
-    Input: one Parquet path, the bin edges, the batch size and the
-    selected channels.
-    Output: (histogram, entries, total_pe, event_count) where every
-    record contributes only its earliest PE.
-    """
+    """Accumulate one FSMP-style LUCiD Parquet file into histograms."""
     parquet = pq.ParquetFile(path)
     histogram = np.zeros((len(channels), len(edges) - 1), dtype=np.int64)
     entries = np.zeros(len(channels), dtype=np.int64)
@@ -410,17 +389,23 @@ def _read_lucid_parquet(path, edges, chunk_size, channels):
         )
         if not np.any(valid_row):
             continue
-        first_times = _row_minima(values, lengths) + row_offset
-        _accumulate_histogram(
-            row_channel[valid_row],
-            first_times[valid_row],
-            channels,
-            edges,
-            histogram,
-            entries,
-        )
-        valid_index = np.searchsorted(channels, row_channel[valid_row])
-        np.add.at(total_pe, valid_index, 1)
+        flat_channel = np.repeat(row_channel, lengths)
+        flat_offset = np.repeat(row_offset, lengths)
+        flat_valid = np.repeat(valid_row, lengths)
+        if np.any(flat_valid):
+            flat_times = values + flat_offset
+            _accumulate_histogram(
+                flat_channel[flat_valid],
+                flat_times[flat_valid],
+                channels,
+                edges,
+                histogram,
+                entries,
+            )
+            valid_index = np.searchsorted(
+                channels, flat_channel[flat_valid]
+            )
+            np.add.at(total_pe, valid_index, 1)
     event_count = (
         int(metadata_events.decode())
         if metadata_events is not None
@@ -482,11 +467,7 @@ def _junosw_event_count(files, sim_group):
 
 
 def _read_junosw_histograms(files, args, edges, channels):
-    """Delegate JUNOsw Track/CDHit matching to the reference module.
-
-    Only the earliest corrected hit of every (event, PMT) waveform is
-    histogrammed (first_pe=True), matching the FSMP/LUCiD convention.
-    """
+    """Delegate JUNOsw Track/CDHit matching to the reference module."""
     density, entries = base.read_sim_histograms(
         files,
         args.junosw_sim_group,
@@ -494,7 +475,6 @@ def _read_junosw_histograms(files, args, edges, channels):
         args.sim_chunk_size,
         args.junosw_sim_match_mode,
         channels,
-        first_pe=True,
     )
     event_count = _junosw_event_count(files, args.junosw_sim_group)
     return (
@@ -551,7 +531,6 @@ def _compute_sim_cache(
         "amplitude_schema": np.asarray(2, dtype=np.int16),
         "label": np.asarray(label),
         "kind": np.asarray(kind),
-        "pe_selection": np.asarray("first"),
     }
     output.parent.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(output, **data)
@@ -586,7 +565,6 @@ def compute_fsmp_data(args, channels, fsmp_files):
         "channels": channels,
         "pmt_type": pmt_type,
         "tts": tts,
-        "pe_selection": np.asarray("first"),
         "fsmp_ch": records["ch"],
         "fsmp_eid": records["eid"],
         "fsmp_time": records["time"],
@@ -625,7 +603,7 @@ def _apply_cli_labels(sources, lucid_labels, junosw_label):
 
 
 def source_amplitude_totals(sources):
-    """All-channel total MC amplitude (signal PE/event) per source.
+    """Selected-channel total MC amplitude (signal PE/event) per source.
 
     Input: loaded simulation source caches with per-channel PE totals and
     event counts.
@@ -633,10 +611,10 @@ def source_amplitude_totals(sources):
     """
     totals = []
     for source in sources:
-        total_pe = np.asarray(
-            source.get("simulation_total_pe", source["simulation_entries"]),
-            dtype=np.float64,
-        )
+        total_pe = source.get("simulation_total_pe")
+        if total_pe is None:
+            total_pe = source["simulation_entries"]
+        total_pe = np.asarray(total_pe, dtype=np.float64)
         events = np.asarray(source["simulation_events"], dtype=np.float64)
         mean_pe = np.divide(
             total_pe, events, out=np.zeros_like(total_pe), where=events > 0
@@ -645,20 +623,27 @@ def source_amplitude_totals(sources):
     return totals
 
 
-def auto_source_intensity_scale(sources):
+def auto_source_intensity_scale(sources, qe_factors=None):
     """Correction multipliers scaling LUCiD sources to the JUNOsw level.
 
-    Input: loaded simulation source caches; every LUCiD source is divided
-    by its LUCiD:JUNOsw total-amplitude ratio, the JUNOsw reference source
-    keeps multiplier 1.
+    Input: loaded simulation source caches and the per-source QE factors
+    matching the amplitude figure's display convention (LUCiD carries the
+    equivalent 532 nm QE, JUNOsw 1); every LUCiD source is divided by its
+    QE-weighted LUCiD:JUNOsw total-amplitude ratio over the selected
+    channels, the JUNOsw reference source keeps multiplier 1.
     Output: float64 ndarray of per-source multipliers; raises when no
     usable JUNOsw source or non-positive totals are present.
     """
     totals = source_amplitude_totals(sources)
+    if qe_factors is None:
+        qe_factors = np.ones(len(sources), dtype=np.float64)
+    weighted = [
+        factor * value for factor, value in zip(qe_factors, totals)
+    ]
     reference = next(
         (
             value
-            for source, value in zip(sources, totals)
+            for source, value in zip(sources, weighted)
             if str(np.asarray(source.get("kind", "")).item()) == "junosw"
         ),
         None,
@@ -668,7 +653,7 @@ def auto_source_intensity_scale(sources):
             "auto source-intensity scale needs a JUNOsw source"
         )
     scales = np.ones(len(sources), dtype=np.float64)
-    for index, (source, value) in enumerate(zip(sources, totals)):
+    for index, (source, value) in enumerate(zip(sources, weighted)):
         kind = str(np.asarray(source.get("kind", "")).item())
         if kind != "lucid":
             continue
@@ -680,29 +665,85 @@ def auto_source_intensity_scale(sources):
     return scales
 
 
-def report_source_intensity(sources, source_scale, mode):
-    """Print totals, LUCiD:JUNOsw ratios and the applied multipliers.
+def report_source_intensity(sources, source_scale, mode, qe_factors=None):
+    """Print totals, QE factors, weighted ratios and the multipliers.
 
-    Input: simulation sources, the resolved per-source multipliers and
-    the mode string ("auto" or "explicit").
+    Input: simulation sources, the resolved per-source multipliers, the
+    mode string ("auto" or "explicit") and the per-source QE factors used
+    by the amplitude figure.
     Output: none; logs one line per source.
     """
     totals = source_amplitude_totals(sources)
+    if qe_factors is None:
+        qe_factors = np.ones(len(sources), dtype=np.float64)
+    weighted = [
+        factor * value for factor, value in zip(qe_factors, totals)
+    ]
     reference = next(
         (
             value
-            for source, value in zip(sources, totals)
+            for source, value in zip(sources, weighted)
             if str(np.asarray(source.get("kind", "")).item()) == "junosw"
         ),
         None,
     )
-    for source, value, scale in zip(sources, totals, source_scale):
+    for source, value, qe, scale in zip(
+        sources, totals, qe_factors, source_scale
+    ):
         label = str(np.asarray(source.get("label", "Simulation")).item())
         kind = str(np.asarray(source.get("kind", "")).item())
         line = f"Total MC amplitude {label}: {value:.6g} PE/event"
+        if qe != 1.0:
+            line += f"; QE factor {qe:.6g}"
         if reference and kind != "junosw":
-            line += f"; LUCiD:JUNOsw = {value / reference:.6g}"
+            ratio = qe * value / reference
+            line += f"; QE-weighted LUCiD:JUNOsw = {ratio:.6g}"
         print(f"{line}; applied scale = {scale:.6g} ({mode})")
+
+
+def write_amplitude_intensity_scale(
+    path,
+    run,
+    sources,
+    source_scale,
+    qe_factors,
+    channel_count,
+    dark_window,
+):
+    """Record the amplitude-figure source-intensity scales as JSON.
+
+    Input: output path, run number, simulation sources, the applied
+    per-source multipliers and QE factors, the selected-channel count and
+    the dark sideband margin in ns.
+    Output: none; writes the JSON record next to the amplitude figure.
+    """
+    records = []
+    for source, scale, qe in zip(sources, source_scale, qe_factors):
+        records.append(
+            {
+                "kind": str(np.asarray(source.get("kind", "")).item()),
+                "label": str(
+                    np.asarray(source.get("label", "Simulation")).item()
+                ),
+                "qe_factor": float(qe),
+                "source_intensity_scale": float(scale),
+            }
+        )
+    reference = next(
+        (item["label"] for item in records if item["kind"] == "junosw"),
+        None,
+    )
+    payload = {
+        "run": int(run),
+        "reference_source": reference,
+        "common_valid_pmt_count": int(channel_count),
+        "dark_margin_ns": float(dark_window),
+        "sources": records,
+    }
+    path.write_text(
+        json.dumps(payload, indent=2) + "\n", encoding="utf-8"
+    )
+    print(f"Wrote {path}")
 
 
 def parse_args(argv=None):
@@ -931,10 +972,6 @@ def _load_matching_cache(
     if not path.exists():
         return None
     data = load_data(path)
-    selection = str(np.asarray(data.get("pe_selection", "all")).item())
-    if selection != "first":
-        print(f"Cached PE selection in {path} is stale; recomputing.")
-        return None
     if not np.array_equal(data.get("channels"), channels):
         print(f"Cached channels in {path} do not match; recomputing.")
         return None
@@ -955,13 +992,16 @@ def _load_matching_cache(
                 "recomputing."
             )
             return None
-    cached_target = int(np.asarray(data.get("fsmp_target_pe", -1)).item())
-    expected_target = -1 if target_pe is None else int(target_pe)
-    if cached_target != expected_target:
-        print(
-            f"Cached FSMP PE target in {path} does not match; recomputing."
+    if target_pe is not None:
+        cached_target = int(
+            np.asarray(data.get("fsmp_target_pe", -1)).item()
         )
-        return None
+        if cached_target != int(target_pe):
+            print(
+                f"Cached FSMP PE target in {path} does not match; "
+                "recomputing."
+            )
+            return None
     return data
 
 
@@ -1058,13 +1098,11 @@ def main(argv=None):
             if lucid_source is not None
             else None
         )
-        # First-PE experiment: load the full FSMP run without truncation;
-        # matching the LUCiD first-PE total left too little FSMP exposure.
-        args.fsmp_target_pe = None
+        args.fsmp_target_pe = lucid_total_pe
         if lucid_total_pe is not None:
             print(
-                "LUCiD first-PE total over selected channels: "
-                f"{lucid_total_pe} PE (FSMP truncation disabled)"
+                "FSMP target from selected-channel LUCiD simulation: "
+                f"{args.fsmp_target_pe} PE"
             )
         fsmp_data = None
         if not args.force:
@@ -1079,15 +1117,27 @@ def main(argv=None):
     if not sources:
         raise RuntimeError("No simulation source was loaded")
     _apply_cli_labels(sources, args.lucid_label, args.junosw_label)
+    qe_factors = simulation_qe_factors(
+        sources, args.apply_lucid_qe, args.lucid_qe_effective
+    )
     if args.source_intensity_scale is None:
-        source_scale = auto_source_intensity_scale(sources)
+        source_scale = auto_source_intensity_scale(sources, qe_factors)
         scale_mode = "auto"
     else:
         source_scale = np.asarray(
             args.source_intensity_scale, dtype=np.float64
         )
         scale_mode = "explicit"
-    report_source_intensity(sources, source_scale, scale_mode)
+    report_source_intensity(sources, source_scale, scale_mode, qe_factors)
+    write_amplitude_intensity_scale(
+        args.output_dir / "amplitude_intensity_scale.json",
+        args.run,
+        sources,
+        source_scale,
+        qe_factors,
+        len(channels),
+        args.dark_window,
+    )
     fsmp_data = attach_pmt_coordinates(fsmp_data, args.pmt_map)
     write_channel_manifest(
         args.channel_manifest,

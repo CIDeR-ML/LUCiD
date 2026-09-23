@@ -47,6 +47,31 @@ def irf_config_string(hamamatsu_sigma, nnvt_sigma):
     return f"hamamatsu:{hamamatsu_sigma:g}|nnvt:{nnvt_sigma:g}"
 
 
+def simulation_qe_factors(
+    sim_data_list,
+    apply_lucid_qe=True,
+    lucid_qe_eff=JUNOSW_J26_3_2_EQUIVALENT_QE_532_NM,
+):
+    """Return per-source signal factors, applying QE only to LUCiD.
+
+    Input: simulation source caches, the LUCiD QE toggle and the common
+    532 nm equivalent QE.  Output: float64 ndarray carrying lucid_qe_eff
+    on LUCiD sources when the correction is enabled, 1 elsewhere.
+    """
+    if not np.isfinite(lucid_qe_eff) or not 0.0 < lucid_qe_eff <= 1.0:
+        raise ValueError("lucid_qe_eff must be finite and in (0, 1]")
+    factors = np.ones(len(sim_data_list), dtype=np.float64)
+    if apply_lucid_qe:
+        kinds = np.asarray(
+            [
+                str(np.asarray(item.get("kind", "")).item())
+                for item in sim_data_list
+            ]
+        )
+        factors[np.char.lower(kinds) == "lucid"] = lucid_qe_eff
+    return factors
+
+
 def processing_string(
     use_tts,
     hamamatsu_sigma,
@@ -62,7 +87,6 @@ def processing_string(
     value = (
         # aligned-cache schema version; bump when result fields change
         "metrics=6,"
-        "pe=first,"
         f"tts={int(use_tts)},"
         f"irf={irf_config_string(hamamatsu_sigma, nnvt_sigma)},"
         f"dark_to_sim={int(add_dark_to_simulation)},fsmp_dark=kept,"

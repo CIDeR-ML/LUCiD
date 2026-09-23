@@ -472,6 +472,26 @@ def plot_summary_data(data, output, plot_range, run, source_z):
     print(f"Wrote {output}")
 
 
+def _amplitude_channel_title(channel, pmt, dark_rate, labels, scales,
+                             qe_note):
+    """Return the per-channel amplitude-page title.
+
+    Input: channel copy number, PMT type name, this channel's dark rate
+    added to MC in PE/event/ns, simulation labels, the applied source
+    intensity scales and the LUCiD QE note.  Output: the title string
+    carrying the dark rate and the per-source intensity scales.
+    """
+    scale_pairs = ", ".join(
+        f"{label}={scale:.6g}" for label, scale in zip(labels, scales)
+    )
+    return (
+        f"Channel {int(channel)} | {pmt} | PE/event timing spectrum\n"
+        f"Dark added to MC={dark_rate:.5g} PE/event/ns\n"
+        f"Source intensity scale: {scale_pairs}\n"
+        f"{qe_note}"
+    )
+
+
 def plot_amplitude_data(
     data,
     output,
@@ -486,8 +506,6 @@ def plot_amplitude_data(
     colors = _simulation_colors(data, labels)
     run_density = np.asarray(data["run_pe_per_event_density"])
     run_mean = np.asarray(data["run_mean_pe_per_event"])
-    run_prompt = np.asarray(data["run_prompt_pe_per_event"])
-    run_late = np.asarray(data["run_late_pe_per_event"])
     amplitude = amplitude_plot_arrays(
         data,
         apply_lucid_qe=apply_lucid_qe,
@@ -495,8 +513,6 @@ def plot_amplitude_data(
     )
     sim_density = amplitude["simulation_density"]
     sim_mean = amplitude["simulation_mean"]
-    sim_prompt = amplitude["simulation_prompt"]
-    sim_late = amplitude["simulation_late"]
     qe_note = _lucid_qe_note(data, apply_lucid_qe, lucid_qe_eff)
     prompt_low = np.asarray(data["prompt_window_effective_low_ns"])
     prompt_high = np.asarray(data["prompt_window_effective_high_ns"])
@@ -505,14 +521,16 @@ def plot_amplitude_data(
     with PdfPages(output) as pdf:
         for index, channel in enumerate(data["channels"]):
             pmt = PMT_TYPE_NAME.get(int(data["pmt_type"][index]), "Unknown")
-            title = (
-                f"Channel {int(channel)} | {pmt} | PE/event timing spectrum\n"
-                "Effective gates: "
-                f"prompt=[{prompt_low[0,index]:.4g}, "
-                f"{prompt_high[0,index]:.4g}) ns; "
-                f"late=[{late_low[0,index]:.4g}, "
-                f"{late_high[0,index]:.4g}) ns\n"
-                f"{qe_note}"
+            dark_rate = data["run_dark_rate_pe_per_event_per_ns"][
+                0, index
+            ]
+            title = _amplitude_channel_title(
+                channel,
+                pmt,
+                dark_rate,
+                labels,
+                data["simulation_applied_source_scale"],
+                qe_note,
             )
             fig, ax = plt.subplots(figsize=FIGURE_SIZE)
             ax.step(
@@ -522,9 +540,8 @@ def plot_amplitude_data(
                 color=FSMP_COLOR,
                 linestyle="--",
                 label=(
-                    f"FSMP RUN {run}: mean={run_mean[0,index]:.6g}, "
-                    f"prompt={run_prompt[0,index]:.6g}, "
-                    f"late={run_late[0,index]:.6g} PE/event"
+                    f"FSMP RUN {run}: mean={run_mean[0,index]:.6g}"
+                    " PE/event"
                 ),
             )
             for source, (label, color) in enumerate(zip(labels, colors)):
@@ -534,9 +551,8 @@ def plot_amplitude_data(
                     where="mid",
                     color=color,
                     label=(
-                        f"{label}: mean={sim_mean[source,index]:.6g}, "
-                        f"prompt={sim_prompt[source,index]:.6g}, "
-                        f"late={sim_late[source,index]:.6g} PE/event"
+                        f"{label}: mean={sim_mean[source,index]:.6g}"
+                        " PE/event"
                     ),
                 )
             boundaries = np.unique(

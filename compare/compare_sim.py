@@ -498,25 +498,7 @@ def add_times_to_channel_hist(hist, entries, channels, pmt_id, time, edges):
     np.add.at(entries, selected_idx, 1)
 
 
-def _first_hit_mask(event_id, pmt_id, time):
-    """Select the earliest hit of every (event, PMT) waveform.
-
-    Input: per-hit event ids, PMT ids and corrected hit times.
-    Output: boolean mask keeping exactly one earliest hit per waveform.
-    """
-    order = np.lexsort((time, pmt_id, event_id))
-    keep = np.ones(len(time), dtype=bool)
-    keep[1:] = (event_id[order[1:]] != event_id[order[:-1]]) | (
-        pmt_id[order[1:]] != pmt_id[order[:-1]]
-    )
-    mask = np.zeros(len(time), dtype=bool)
-    mask[order] = keep
-    return mask
-
-
-def fill_histogram_by_event_ranges(
-    hits, hit_ranges, track, track_ranges, edges, channels, first_pe=False
-):
+def fill_histogram_by_event_ranges(hits, hit_ranges, track, track_ranges, edges, channels):
     hist = np.zeros((len(channels), len(edges) - 1), dtype=np.int64)
     entries = np.zeros(len(channels), dtype=np.int64)
     unmatched = 0
@@ -547,20 +529,11 @@ def fill_histogram_by_event_ranges(
             continue
 
         time = event_hits["hit_time"][valid].astype(np.float64, copy=False) - unique_init_t[idx[valid]]
-        pmt_id = event_hits["pmt_id"][valid].astype(np.int64, copy=False)
-        if first_pe:
-            keep = _first_hit_mask(
-                event_hits["event_id"][valid].astype(np.int64, copy=False),
-                pmt_id,
-                time,
-            )
-            pmt_id = pmt_id[keep]
-            time = time[keep]
         add_times_to_channel_hist(
             hist,
             entries,
             channels,
-            pmt_id,
+            event_hits["pmt_id"][valid].astype(np.int64, copy=False),
             time,
             edges,
         )
@@ -568,9 +541,7 @@ def fill_histogram_by_event_ranges(
     return hist, entries, unmatched
 
 
-def fill_histogram_by_global_keys(
-    hits, track, edges, chunk_size, channels, first_pe=False
-):
+def fill_histogram_by_global_keys(hits, track, edges, chunk_size, channels):
     hist = np.zeros((len(channels), len(edges) - 1), dtype=np.int64)
     entries = np.zeros(len(channels), dtype=np.int64)
     hit_key = make_event_track_key(hits["event_id"], hits["track_id"])
@@ -585,20 +556,11 @@ def fill_histogram_by_global_keys(
     unmatched = int((~valid).sum())
     if np.any(valid):
         time = hits["hit_time"][valid].astype(np.float64, copy=False) - init_t[idx[valid]]
-        pmt_id = hits["pmt_id"][valid].astype(np.int64, copy=False)
-        if first_pe:
-            keep = _first_hit_mask(
-                hits["event_id"][valid].astype(np.int64, copy=False),
-                pmt_id,
-                time,
-            )
-            pmt_id = pmt_id[keep]
-            time = time[keep]
         add_times_to_channel_hist(
             hist,
             entries,
             channels,
-            pmt_id,
+            hits["pmt_id"][valid].astype(np.int64, copy=False),
             time,
             edges,
         )
@@ -606,10 +568,7 @@ def fill_histogram_by_global_keys(
     return hist, entries, unmatched
 
 
-def read_sim_histograms(
-    sim_files, sim_group, edges, chunk_size, match_mode, channels,
-    first_pe=False,
-):
+def read_sim_histograms(sim_files, sim_group, edges, chunk_size, match_mode, channels):
     channels = np.asarray(channels, dtype=np.int64)
     hist = np.zeros((len(channels), len(edges) - 1), dtype=np.int64)
     entries = np.zeros(len(channels), dtype=np.int64)
@@ -638,7 +597,6 @@ def read_sim_histograms(
                         track_ranges,
                         edges,
                         channels,
-                        first_pe=first_pe,
                     )
                     event_mode_used += 1
                 elif match_mode == "event":
@@ -651,7 +609,6 @@ def read_sim_histograms(
                     edges,
                     chunk_size,
                     channels,
-                    first_pe=first_pe,
                 )
                 global_mode_used += 1
 
