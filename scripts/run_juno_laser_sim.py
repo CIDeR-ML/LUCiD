@@ -45,6 +45,16 @@ import pyarrow.parquet as pq
 
 from lucid.detector_params import load_physics_config
 from lucid.geometry.detector_geometry import DetectorGeometry
+from lucid.geometry.juno_structures import (
+    BOWL_ARC_AXIAL_CENTRE_M,
+    BOWL_ARC_LENGTH_M,
+    BOWL_ARC_RADIAL_CENTRE_M,
+    BOWL_ARC_RADIUS_M,
+    BOWL_CANDIDATES_PER_CELL,
+    BOWL_NEWTON_MAX_STEP_M,
+    BOWL_NEWTON_RESIDUAL_M,
+    BOWL_NEWTON_STEPS,
+)
 from lucid.simulation.photon_step_factory import make_photon_step
 from lucid.simulation.engineering_surfaces import (
     engineering_surface_parameters,
@@ -136,6 +146,27 @@ def _simulation_metadata(
         "acrylic_bowl_geometry_request": acrylic_bowl_geometry_request,
         "acrylic_bowl_geometry": acrylic_bowl_geometry,
         "acrylic_bowl_count": str(acrylic_bowl_count),
+        "acrylic_bowl_arc_radius_m": str(BOWL_ARC_RADIUS_M),
+        "acrylic_bowl_arc_radial_centre_m": str(
+            BOWL_ARC_RADIAL_CENTRE_M
+        ),
+        "acrylic_bowl_arc_axial_centre_m": str(
+            BOWL_ARC_AXIAL_CENTRE_M
+        ),
+        "acrylic_bowl_arc_length_m": str(BOWL_ARC_LENGTH_M),
+        "acrylic_bowl_newton_steps": str(BOWL_NEWTON_STEPS),
+        "acrylic_bowl_newton_max_step_m": str(
+            BOWL_NEWTON_MAX_STEP_M
+        ),
+        "acrylic_bowl_newton_residual_m": str(
+            BOWL_NEWTON_RESIDUAL_M
+        ),
+        "acrylic_bowl_candidates_per_cell": str(
+            BOWL_CANDIDATES_PER_CELL
+        ),
+        "acrylic_bowl_max_candidates_per_ray": str(
+            2 * BOWL_CANDIDATES_PER_CELL
+        ),
         "engineering_surface_reflectances": json.dumps(
             list(surface_reflectances)
         ),
@@ -877,6 +908,27 @@ def simulate(args):
                 ),
                 "acrylic_bowl_geometry": acrylic_bowl_geometry,
                 "acrylic_bowl_count": acrylic_bowl_count,
+                "acrylic_bowl_arc_radius_m": BOWL_ARC_RADIUS_M,
+                "acrylic_bowl_arc_radial_centre_m": (
+                    BOWL_ARC_RADIAL_CENTRE_M
+                ),
+                "acrylic_bowl_arc_axial_centre_m": (
+                    BOWL_ARC_AXIAL_CENTRE_M
+                ),
+                "acrylic_bowl_arc_length_m": BOWL_ARC_LENGTH_M,
+                "acrylic_bowl_newton_steps": BOWL_NEWTON_STEPS,
+                "acrylic_bowl_newton_max_step_m": (
+                    BOWL_NEWTON_MAX_STEP_M
+                ),
+                "acrylic_bowl_newton_residual_m": (
+                    BOWL_NEWTON_RESIDUAL_M
+                ),
+                "acrylic_bowl_candidates_per_cell": (
+                    BOWL_CANDIDATES_PER_CELL
+                ),
+                "acrylic_bowl_max_candidates_per_ray": (
+                    2 * BOWL_CANDIDATES_PER_CELL
+                ),
                 "engineering_surface_reflectances": (
                     surface_reflectances.tolist()
                 ),
@@ -931,7 +983,7 @@ def main():
         choices=("config", "on", "off"),
         default="config",
         help=(
-            "亚克力碗消融：config=遵循几何配置，on=有效截锥，"
+            "亚克力碗消融：config=遵循几何配置，on=有效圆弧碗，"
             "off=关闭亚克力碗"
         ),
     )
