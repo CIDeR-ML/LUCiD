@@ -125,4 +125,10 @@ def photon_step_volume(
                    jnp.log1p(-p_mie) + rayleigh_logpdf(sg(cray)))
     logp_increment = lf + la
 
-    return new_position, new_direction, new_time, per_dom_charges, continuing_factor, logp_increment
+    # Tag parity with photon_step's 8th return. The volume model has no surface
+    # branch -- every step samples a free path and a new direction -- so a photon
+    # that takes a step has deviated by construction.
+    deviated = jnp.ones_like(new_time, dtype=bool)
+
+    return (new_position, new_direction, new_time, per_dom_charges,
+            continuing_factor, logp_increment, deviated)

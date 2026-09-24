@@ -264,3 +264,52 @@ def _run_all():
 
 if __name__ == "__main__":
     _run_all()
+
+
+# --- per-photon scatter tag (fiTQun scattering table) -------------------------
+
+def test_deviated_flag_is_reported_per_photon():
+    """photon_step's 8th return marks scatter-or-reflection.
+
+    The fiTQun scattering table is scattered light over direct light from one
+    MC pass, split by this flag -- the reference's `isct`. Both branches of the
+    step must report it, and it must be a boolean that costs the forward result
+    nothing (see the byte-parity check in the commit that added it).
+    """
+    import inspect
+    from lucid.simulation import photon_step as ps
+
+    src = inspect.getsource(ps)
+    # Both the sampling and the differentiable path return it.
+    assert src.count("deviated") >= 4
+    assert "deviated = scatters | reflects" in src   # sampling path
+    assert "deviated = is_scat" in src               # differentiable path
+
+
+def test_resolve_first_detection_tags_only_detected_photons():
+    """The tag is meaningful only where a photon was actually detected."""
+    import jax.numpy as jnp
+    import jax
+    from lucid.simulation.sensor_response import _resolve_first_detection
+
+    # Two photons, one slot each: the first is detectable, the second is not.
+    flat_weights = jnp.array([1.0, 0.0])
+    flat_indices = jnp.array([3, 7])
+    flat_times = jnp.array([5.0, 5.0])
+    qe = jnp.array([1.0, 1.0])
+    flat_deviated = jnp.array([True, True])
+
+    detected, sensor_id, hit_time, deviated = _resolve_first_detection(
+        flat_weights, flat_indices, flat_times, n_photons=2,
+        per_photon_qe=qe, qe_key=jax.random.PRNGKey(0), threshold=1e-10,
+        flat_deviated=flat_deviated)
+
+    assert bool(detected[0]) and not bool(detected[1])
+    # An undetected photon is never tagged, whatever the propagation said.
+    assert bool(deviated[0]) and not bool(deviated[1])
+
+    # Omitting the tag keeps the old 3-value behaviour, all-False.
+    *_, none_dev = _resolve_first_detection(
+        flat_weights, flat_indices, flat_times, n_photons=2,
+        per_photon_qe=qe, qe_key=jax.random.PRNGKey(0), threshold=1e-10)
+    assert not bool(none_dev.any())

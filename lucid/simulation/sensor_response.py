@@ -358,13 +358,15 @@ def make_hits_likelihood(
 
 def _resolve_first_detection(
         flat_weights, flat_indices, flat_times, n_photons,
-        per_photon_qe, qe_key, threshold):
+        per_photon_qe, qe_key, threshold, flat_deviated=None):
     """Compact flat propagation arrays to per-photon first-detection records.
 
     Returns arrays of length ``n_photons``:
     - detected : bool    — did this photon pass QE Bernoulli at any iteration?
     - sensor_id : int32  — sensor hit (first-detection), or -1 if not detected
     - hit_time : float32 — propagation time at first detection (0 if not detected)
+    - deviated : bool    — had it scattered or reflected before that detection?
+      All-False when ``flat_deviated`` is not supplied.
     """
     base_valid = (flat_weights > threshold) & (flat_times > 0) & jnp.isfinite(flat_times)
     detection_probs = jax.random.uniform(qe_key, shape=flat_weights.shape)
@@ -383,7 +385,11 @@ def _resolve_first_detection(
     detected = jnp.isfinite(first_time)
     sensor_id = jnp.where(detected, flat_indices[first_flat_idx], -1)
     hit_time = jnp.where(detected, first_time, 0.0)
-    return detected, sensor_id, hit_time
+    if flat_deviated is None:
+        deviated = jnp.zeros_like(detected)
+    else:
+        deviated = detected & flat_deviated[first_flat_idx]
+    return detected, sensor_id, hit_time, deviated
 
 
 def build_make_hits_waveform(
@@ -435,7 +441,7 @@ def build_make_hits_waveform(
         per_photon_qe = qe * qe_corrections[flat_indices]
         qe_key, tts_key, gain_key = jax.random.split(rng_key, 3)
 
-        detected, sensor_id, hit_time = _resolve_first_detection(
+        detected, sensor_id, hit_time, _ = _resolve_first_detection(
             flat_weights, flat_indices, flat_times, n_photons,
             per_photon_qe, qe_key, threshold)
 
@@ -571,7 +577,9 @@ def build_make_hits_per_photon_shotgun(
     """Factory: returns a ``make_hits_per_photon`` closure for shotgun mode.
 
     For each input photon, resolves the first-iteration detected slot (if any)
-    and returns (detected_flag, sensor_id, hit_time) arrays of length ``n_photons``.
+    and returns (detected_flag, sensor_id, hit_time, deviated) arrays of length
+    ``n_photons``. ``deviated`` marks light that scattered or reflected before
+    detection -- the direct/indirect split fiTQun's scattering table is built on.
 
     Must be used with the MC-sampling propagator so weights are binary.
 
@@ -590,18 +598,18 @@ def build_make_hits_per_photon_shotgun(
     @partial(jax.jit, static_argnames=('num_detectors',))
     def make_hits_per_photon(
             flat_weights, flat_indices, flat_times, num_detectors,
-            rng_key, qe, qe_corrections):
+            rng_key, qe, qe_corrections, flat_deviated=None):
         per_photon_qe = qe * qe_corrections[flat_indices]
         qe_key, tts_key = jax.random.split(rng_key)
 
-        detected, sensor_id, hit_time = _resolve_first_detection(
+        detected, sensor_id, hit_time, deviated = _resolve_first_detection(
             flat_weights, flat_indices, flat_times, n_photons,
-            per_photon_qe, qe_key, threshold)
+            per_photon_qe, qe_key, threshold, flat_deviated)
 
         if smear_time:
             noise = jax.random.normal(tts_key, shape=hit_time.shape) * tts_sigma_ns
             hit_time = jnp.where(detected, hit_time + noise, hit_time)
 
-        return detected, sensor_id, hit_time
+        return detected, sensor_id, hit_time, deviated
 
     return make_hits_per_photon
