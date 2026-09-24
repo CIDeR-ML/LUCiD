@@ -394,9 +394,12 @@ def plot_summary_data(data, output, plot_range, run, source_z):
                         "alpha": 0.85,
                     },
                 )
+                short_labels = ", ".join(
+                    short_source_label(label) for label in labels
+                )
                 ax.set(
                     title=(
-                        f"{title}\nFSMP RUN {run} vs {', '.join(labels)}; "
+                        f"{title}\nFSMP RUN {run} vs {short_labels}; "
                         # f"alignment={alignment}"
                     ),
                     xlim=plot_range,
@@ -472,6 +475,20 @@ def plot_summary_data(data, output, plot_range, run, source_z):
     print(f"Wrote {output}")
 
 
+def short_source_label(label):
+    """Compact a source label for dense title and annotation text.
+
+    Input: the full source label (e.g. "LUCiD (chimney off)" or
+    "JUNOsw (J26.3.2)").  Output: the compact form used in titles;
+    legends keep the full label.  The JUNOsw version tag is dropped
+    and the space before a variant parenthesis is removed.
+    """
+    text = str(label)
+    if text.startswith("JUNOsw"):
+        return "JUNOsw"
+    return text.replace(" (", "(")
+
+
 def _amplitude_channel_title(channel, pmt, dark_rate, labels, scales,
                              qe_note):
     """Return the per-channel amplitude-page title.
@@ -479,15 +496,26 @@ def _amplitude_channel_title(channel, pmt, dark_rate, labels, scales,
     Input: channel copy number, PMT type name, this channel's dark rate
     added to MC in PE/event/ns, simulation labels, the applied source
     intensity scales and the LUCiD QE note.  Output: the title string
-    carrying the dark rate and the per-source intensity scales.
+    carrying the dark rate and the per-source intensity scales with
+    shortened labels; the scale list wraps to a second aligned line
+    when a single line would exceed the page width.
     """
-    scale_pairs = ", ".join(
-        f"{label}={scale:.6g}" for label, scale in zip(labels, scales)
-    )
+    pairs = [
+        f"{short_source_label(label)}={scale:.6g}"
+        for label, scale in zip(labels, scales)
+    ]
+    prefix = "Source intensity scale: "
+    scale_line = prefix + ", ".join(pairs)
+    if len(scale_line) > 68 and len(pairs) > 1:
+        mid = (len(pairs) + 1) // 2
+        scale_line = (
+            prefix + ", ".join(pairs[:mid]) + ",\n"
+            + " " * len(prefix) + ", ".join(pairs[mid:])
+        )
     return (
         f"Channel {int(channel)} | {pmt} | PE/event timing spectrum\n"
         f"Dark added to MC={dark_rate:.5g} PE/event/ns\n"
-        f"Source intensity scale: {scale_pairs}\n"
+        f"{scale_line}\n"
         f"{qe_note}"
     )
 
