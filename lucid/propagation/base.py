@@ -42,12 +42,36 @@ def process_intersection_normals(ray_origins, ray_directions, intersection_point
         Contains hit positions and normals
     """
     # Calculate weighted sensor properties
+    # KEEP ONLY THE FIRST SENSOR ENTERED.
+    #
+    # `inside_sensor` is evaluated per candidate INDEPENDENTLY, so a ray threading several spheres
+    # sets several flags at once. The mask-mean in `calculate_weighted_sensor_properties` is a
+    # differentiable GATHER -- exact when one flag is set -- but with several it degrades to a
+    # genuine average, putting the photon's stopping point on no sensor's surface at all
+    # (measured: entries at t = 0.171 / 0.428 / 1.128 gave a stop at t = 0.576, 0.126 m from the
+    # nearest centre, INSIDE a sphere). That corrupts the leg length, hence attenuation, arrival
+    # time, the reflection normal, and the next leg's origin.
+    #
+    # The charge model commits to first-hit semantics -- `first_hit_survival` in shared.py,
+    # p_i * prod_{j before i}(1 - p_j), ordered by arrival time with ties broken by slot. This makes
+    # the GEOMETRY agree with it, and restores the gather's design assumption by construction.
+    #
+    # A HARD SELECTION: `argmin` over entry times. Its output feeds hit positions and normals,
+    # not the charge weights, and `hit_sensor = any(...)` is unchanged, since exactly one flag
+    # survives whenever any did.
+    _t_entry = jnp.sum((sensor_hit_positions - ray_origins[None, :, :])
+                       * ray_directions[None, :, :], axis=-1)          # (C, N)
+    _ordered = jnp.where(inside_sensor, _t_entry, jnp.inf)
+    _first = jnp.argmin(_ordered, axis=0)                              # (N,)
+    _slot = jnp.arange(inside_sensor.shape[0])[:, None]
+    inside_first = inside_sensor & (_slot == _first[None, :])
+
     weighted_sensor_normals, weighted_sensor_positions = calculate_weighted_sensor_properties(
-        sensor_normals, sensor_hit_positions, inside_sensor)
+        sensor_normals, sensor_hit_positions, inside_first)
 
     # Calculate final hit properties
     hit_positions, final_normals = calculate_hit_properties(
-        ray_origins, ray_directions, t_geometry, inside_sensor,
+        ray_origins, ray_directions, t_geometry, inside_first,
         weighted_sensor_normals, weighted_sensor_positions,
         geometry_normals)
     
@@ -259,8 +283,24 @@ def compute_sensor_intersections_base(sensor_idx, sensor_positions, sensor_radiu
     intersects = (discriminant > 1e-6) & (t_intersect > 0)
    
     # Apply overlap function to get weights
-    weights = jnp.where(valid, overlap_prob(distance), 0.0)    
+    # Only sensors AHEAD of the photon take CHARGE. `t_closest = -(oc . d_hat)` is the along-ray
+    # parameter of closest approach, so `t_closest <= 0` means the sensor is BEHIND -- its closest
+    # approach lies on the backward-extended ray line. Depositing there is unphysical: a photon
+    # emitted just past a sensor and moving away would otherwise collect a hit with a NEGATIVE
+    # transport time. The dominant victim is a photon that has just reflected off a PMT, which sits
+    # at that PMT moving away from it with impact parameter ~0 and would take a full spurious
+    # re-deposit on the tube it just bounced off.
+    _ahead = t_closest[:, 0] > 0.0
+    weights = jnp.where(valid & _ahead, overlap_prob(distance), 0.0)
     # Check if point is inside sensor (keep as boolean)
+    # NOT GATED by `_ahead`: the geometry flag uses the same distance as the weight above, but not
+    # the same gate. A behind candidate can still be flagged when the photon's ORIGIN lies inside
+    # its sphere -- the forward ray then exits with t > 0 -- carrying no charge. Measured on
+    # SK_like, 100k photons per population: 0 after a sensor reflection (photon_step nudges the
+    # next origin 1e-4 OUTSIDE the sphere, so it cannot re-enter), 0 for bulk emission, and it
+    # fires only for origins inside a PMT sphere -- a photon starting inside the PMT, which is
+    # already outside what the sphere model describes. Gating it would change what the reflection
+    # path computes for that region, so it is left as is and stated rather than implied.
     inside_spherical_sensor = distance < sensor_radius
     
     # Check if intersection point is within geometry bounds
