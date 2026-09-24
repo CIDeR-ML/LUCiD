@@ -299,9 +299,17 @@ function addChimneySegment(segment) {
 
 async function addAcrylicBowlGroup(group) {
   const rows = await fetchRows(group);
-  const geometry = new THREE.CylinderGeometry(
-    group.tip_ratio, 1, 2, 20, 1, false,
-  );
+  const baseRadius = group.profile[0][1];
+  const points = [new THREE.Vector2(0, -1)];
+  for (const sample of group.profile) {
+    points.push(new THREE.Vector2(
+      sample[1] / baseRadius,
+      2 * sample[0] - 1,
+    ));
+  }
+  points.push(new THREE.Vector2(0, 1));
+  const geometry = new THREE.LatheGeometry(points, 32);
+  geometry.computeVertexNormals();
   const mesh = new THREE.InstancedMesh(
     geometry,
     material(group.color, 0.72, THREE.DoubleSide),

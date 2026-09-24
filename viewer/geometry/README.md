@@ -7,7 +7,8 @@ LUCiD configuration. It currently includes:
 - PMT front heads grouped by PMT type;
 - effective support rods grouped by family;
 - the hollow Acrylic and stainless-steel chimney segments;
-- Acrylic bowl frusta attached to the PMT layout.
+- Acrylic bowls with the same sampled 776 mm circular-arc profile used by
+  photon transport.
 
 The viewer is a geometry inspection tool. It does not run photon transport
 or reproduce the full JUNOSW CAD geometry.

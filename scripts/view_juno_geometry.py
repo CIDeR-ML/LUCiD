@@ -23,6 +23,10 @@ from lucid.geometry.juno_pmt import (  # noqa: E402
     HIGH_QE_NNVT,
     NNVT,
 )
+from lucid.geometry.juno_structures import (  # noqa: E402
+    BOWL_ARC_LENGTH_M,
+    acrylic_bowl_radius,
+)
 
 
 PMT_STYLES = {
@@ -141,14 +145,13 @@ def build_geometry_payload(detector):
     bowls = getattr(detector, "acrylic_bowls", None)
     bowl_count = 0 if bowls is None else len(bowls.copy_numbers)
     if bowl_count:
-        ratios = np.asarray(
-            bowls.tip_radii_m / bowls.base_radii_m,
-            dtype=np.float64,
+        profile_axial = np.linspace(
+            0.0, BOWL_ARC_LENGTH_M, 33, dtype=np.float64
         )
-        if not np.allclose(ratios, ratios[0]):
-            raise ValueError(
-                "Viewer requires one shared Acrylic-bowl tip/base ratio"
-            )
+        profile_radii = np.asarray(
+            acrylic_bowl_radius(profile_axial), dtype=np.float64
+        )
+        profile_base = float(profile_radii[0])
         centres = (
             bowls.attachment_points_m
             + 0.5 * bowls.lengths_m[:, None] * bowls.outward_axes
@@ -161,7 +164,7 @@ def build_geometry_payload(detector):
             bowls.outward_axes[:, 0],
             bowls.outward_axes[:, 1],
             bowls.outward_axes[:, 2],
-            bowls.base_radii_m,
+            np.full(bowl_count, profile_base),
             0.5 * bowls.lengths_m,
             bowls.copy_numbers,
         )
@@ -173,7 +176,10 @@ def build_geometry_payload(detector):
             "count": bowl_count,
             "url": url,
             "stride": 9,
-            "tip_ratio": float(ratios[0]),
+            "profile": np.column_stack([
+                profile_axial / BOWL_ARC_LENGTH_M,
+                profile_radii,
+            ]).tolist(),
         })
 
     boundaries = []

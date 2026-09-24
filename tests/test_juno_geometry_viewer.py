@@ -58,8 +58,8 @@ def test_viewer_payload_contains_hollow_chimney_segments():
     )
 
 
-def test_viewer_payload_places_radial_bowl_frusta():
-    """Bowl instances are centred halfway along their outward radial axes."""
+def test_viewer_payload_places_radial_curved_bowls():
+    """Viewer instances use the same curved profile as photon transport."""
     bowls = AcrylicBowlLayout(
         copy_numbers=np.array([12, 13], dtype=np.int32),
         attachment_points_m=np.array([
@@ -84,7 +84,14 @@ def test_viewer_payload_places_radial_bowl_frusta():
     assert group["name"] == "Acrylic bowls"
     assert group["count"] == 2
     assert group["stride"] == 9
-    npt.assert_allclose(group["tip_ratio"], 0.20 / 0.45)
+    profile = np.asarray(group["profile"], dtype=float)
+    assert profile.shape == (33, 2)
+    npt.assert_allclose(profile[[0, -1], 0], [0.0, 1.0])
+    npt.assert_allclose(
+        profile[[0, 16, -1], 1],
+        [0.450013840033, 0.298417111001, 0.200006485152],
+        atol=1e-10,
+    )
     rows = np.frombuffer(
         payloads[group["url"]], dtype="<f4"
     ).reshape(group["count"], group["stride"])
@@ -97,7 +104,7 @@ def test_viewer_payload_places_radial_bowl_frusta():
         atol=1e-6,
     )
     npt.assert_allclose(rows[:, 3:6], bowls.outward_axes)
-    npt.assert_allclose(rows[:, 6], bowls.base_radii_m)
+    npt.assert_allclose(rows[:, 6], 0.450013840033, atol=1e-7)
     npt.assert_allclose(rows[:, 7], bowls.lengths_m / 2.0)
     npt.assert_array_equal(rows[:, 8], bowls.copy_numbers)
 
