@@ -13,7 +13,8 @@ the raw F is position-dominated (F_xx ~ 1e5 vs F_EE ~ 1) so energy freezes witho
 gradient ``g`` is reverse-mode autodiff (it DOES flow through the custom_vjp). Charge = Poisson
 NLL (un-normalised — carries E + longitudinal/transverse vertex); time = the windowed
 first-arrival ORDER-STATISTIC NLL (:func:`lucid.losses.first_arrival_window_nll` — carries
-direction, t0, transverse vertex), AMP_DETACH baked in. Readout = the min‖g‖ iterate.
+direction, t0, transverse vertex), AMP_DETACH baked in. Readout = the Polyak tail average
+by default (``readout='polyak'``); ``'ming'`` selects the min‖g‖ iterate instead.
 
 ``pred`` is a per-photon track simulator: ``setup_event_simulator(..., hit_mode='per_photon',
 pos_grad_threshold=K, n_grad_iters=K)`` returning ``(log_w, flat_times, flat_indices,
@@ -60,6 +61,49 @@ def vec9_dir(t9):
     nt = np.hypot(st, ct); npp = np.hypot(sp, cp)
     st, ct, sp, cp = st / nt, ct / nt, sp / npp, cp / npp
     return np.array([st * cp, st * sp, ct])
+
+
+def pick_by_margin(losses, prefer=0, margin=0.01):
+    """Index of the winning start under the margin gate: keep ``prefer`` unless beaten decisively.
+
+    A converged data loss is a noisy and slightly biased ranking of starts — the model is not
+    exactly at truth, so on easy events a forward-biased basin can score a marginally lower loss
+    and still give a worse vertex (28 of 100 events regressed by more than 5 cm at ``margin=0``).
+    The gate keeps the preferred start — the charge grid, which is longitudinally unbiased on the
+    bulk — unless another beats it by ``margin`` x |loss|. A 1% margin picks the time seed only
+    when it genuinely wins.
+
+    The rule is written once here because two callers need it: `fit_track_multistart`, which
+    chooses which converged fit to return, and any seed study that wants to report what that
+    choice WOULD have been without paying for the fits.
+    """
+    base = losses[prefer]
+    thr = base - margin * abs(base)
+    cand = [i for i in range(len(losses)) if i != prefer and losses[i] < thr]
+    return min(cand, key=lambda i: losses[i]) if cand else prefer
+
+
+def fuse_seeds(seed_a, seed_b, t0_mode='avg'):
+    """Combine two seeds by taking each one's strong component. No truth is used.
+
+    The two seeders fail in complementary directions, which is what makes fusing them worth
+    doing rather than picking one:
+
+    * time multilateration (``seed_b``) is excellent TRANSVERSE to the track and poor along it;
+    * the charge grid (``seed_a``) is longitudinally unbiased and gives the better direction.
+
+    So the vertex is assembled as ``vtx_b`` plus the longitudinal part of ``vtx_a - vtx_b``,
+    decomposed along **seed_a's** direction, and the direction and energy come from ``seed_a``.
+    Their ``t0`` biases have opposite sign — a early, b late — so the mean largely cancels;
+    ``t0_mode`` selects ``'avg'``, ``'A'`` or ``'B'``.
+    """
+    a = np.asarray(seed_a, float)
+    b = np.asarray(seed_b, float)
+    d = vec9_dir(a)
+    out = a.copy()                                    # direction, energy and sin/cos inherited
+    out[1:4] = b[1:4] + float(np.dot(a[1:4] - b[1:4], d)) * d
+    out[8] = {'avg': 0.5 * (a[8] + b[8]), 'A': a[8], 'B': b[8]}[t0_mode]
+    return out
 
 
 def vec9_from_track(energy, position, direction, t0=0.0):
@@ -111,6 +155,94 @@ class ReconProblem:
 
     def accumulate(self, theta, dtheta):
         return theta + dtheta
+
+
+class ProjectedReconProblem:
+    """Charge and time as two terms, with the time term projected off the soft direction.
+
+    Reconstruction has a measured near-degeneracy: moving the vertex ~0.285 m ALONG the current
+    direction while adding 1 ns of ``t0`` leaves the first-arrival pattern almost unchanged. The
+    time likelihood is therefore nearly flat along that ray while remaining sharp across it, and a
+    plain Gauss-Newton step lets time-term noise slide the fit up and down the degeneracy.
+
+    Projecting fixes that without discarding the term. With ``v̂`` the unit soft direction in
+    SCALE9 coordinates and ``P = I − v̂v̂ᵀ``::
+
+        g = S·g_Q + P (S·g_T)
+        H = S F_Q S + P (S F_T S) P
+
+    The charge term is untouched, so the length scale it does constrain is unaffected; the time
+    term keeps its full transverse, directional and stiff-``t0`` power and loses only its component
+    along the ray it cannot resolve.
+
+    This ran as a hand-written Gauss-Newton loop in ``analysis/paper/utils/pipeline.py`` — the
+    fourth copy of a loop this package now writes once. Its one genuine difference from
+    :class:`ReconProblem` is the projector, and a projector is a property of the PROBLEM, not of
+    the optimizer, which is why extracting it removes the copy rather than relocating it.
+
+    Two consequences of living behind the shared loop, both deliberate:
+
+    * **Scaling happens here, not in the loop.** ``P`` acts on the SCALED time gradient, and
+      projection does not commute with scaling, so this returns ``(g, H)`` already scaled and
+      projected and is driven with ``scale=None``. ``accumulate`` then applies ``S`` to the step,
+      which is exactly where the original loop applied it.
+    * **``gnorm`` is the PROJECTED gradient norm.** The original reported ``‖S(g_Q + g_T)‖``, the
+      unprojected sum. The projected one is the quantity the step is actually built from, so it is
+      the honest convergence diagnostic; it differs from the old number and ``readout='ming'``
+      would pick a different iterate.
+
+    Parameters
+    ----------
+    grads : callable
+        ``grads(theta) -> (g_Q, g_T)``, each ``(9,)`` in unscaled coordinates.
+    fishers : callable
+        ``fishers(theta) -> (F_Q, F_T)``, each ``(9, 9)`` in unscaled coordinates.
+    scale : array ``(9,)``
+        The preconditioner, normally :data:`SCALE9`.
+    soft_length : float
+        Metres along the current direction that pair with 1 ns of ``t0``. The measured value is
+        0.285; it is an argument because it is a property of the detector, not of the algorithm.
+    """
+
+    def __init__(self, grads, fishers, scale=None, soft_length=0.285):
+        self.grads = grads
+        self.fishers = fishers
+        self.S = SCALE9 if scale is None else np.asarray(scale, float)
+        self.soft_length = float(soft_length)
+        self._F = None
+
+    def soft_projector(self, theta):
+        """``I − v̂v̂ᵀ`` for the soft direction at ``theta``, in scaled coordinates.
+
+        The direction is rebuilt from the CURRENT iterate every step: the degenerate ray points
+        along the track, so it rotates as the fit turns. A projector fixed at the seed would stop
+        matching the degeneracy it exists to remove.
+        """
+        th = np.asarray(theta, float)
+        st, ct, sp, cp = th[4], th[5], th[6], th[7]
+        nt, npp = np.hypot(st, ct), np.hypot(sp, cp)
+        stn, ctn, spn, cpn = st / nt, ct / nt, sp / npp, cp / npp
+        u = np.array([stn * cpn, stn * spn, ctn])
+        v = np.zeros(9)
+        v[1:4] = self.soft_length * u
+        v[8] = 1.0
+        vs = v / self.S
+        vs = vs / np.linalg.norm(vs)
+        return np.eye(9) - np.outer(vs, vs)
+
+    def grad_metric_loss(self, theta, step, refresh=True):
+        gq, gt = self.grads(theta)
+        if refresh or self._F is None:
+            self._F = self.fishers(theta)
+        fq, ft = self._F
+        S, P = self.S, self.soft_projector(theta)
+        g = S * np.asarray(gq) + P @ (S * np.asarray(gt))
+        H = (S[:, None] * np.asarray(fq) * S[None, :]
+             + P @ (S[:, None] * np.asarray(ft) * S[None, :]) @ P)
+        return g, H, None
+
+    def accumulate(self, theta, dtheta):
+        return theta + self.S * dtheta
 
 
 def seed_vertex_time(pos, obs_counts, obs_times, *, vspeed=0.2167, vgrid=11, tankr=None,
@@ -390,11 +522,7 @@ def fit_track_multistart(model, obs_counts, obs_times, starts, *, nkeys=4, seed=
     per_seed = [fit_track(model, oc, ot, s, nkeys=nkeys, seed=seed, hist=True, verbose=verbose, **kw)
                 for s in starts]
     losses = [dloss(th) for th, _ in per_seed]
-    # margin gate: switch off the preferred seed only when another beats it DECISIVELY
-    base = losses[prefer]; thr = base - margin * abs(base); which = prefer
-    cand = [i for i in range(len(losses)) if i != prefer and losses[i] < thr]
-    if cand:
-        which = min(cand, key=lambda i: losses[i])
+    which = pick_by_margin(losses, prefer=prefer, margin=margin)
     if verbose:
         from . import report
         rows = [[f'seed {i}' + ('  ← kept' if i == which else ''), f'{losses[i]:.4e}']

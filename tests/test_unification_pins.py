@@ -12,7 +12,7 @@ def test_ridge_inverse_indefinite_pin():
 
     Captured 2026-06-11; defaults ridge=0.02, mu=0.3. numpy eigh ⇒ byte-stable on CPU.
     """
-    from lucid.fitting.gauss_newton import ridge_inverse
+    from lucid.fitting.schur_gn import ridge_inverse
     H = np.array([[2, 1, 0, 0], [1, -3, 1, 0], [0, 1, 5, 2], [0, 0, 2, 1]], float)
     R = ridge_inverse(H)
     expected = np.array([
@@ -152,12 +152,21 @@ def test_fitting_contracts_protocols():
     The two opaque fitting callables (calibration forward, recon per-photon predictor) are
     typed Protocols so they're grep/pyright/IDE-checkable. Pin that they import, are
     runtime_checkable, and a conforming callable satisfies them."""
+    import inspect
     from lucid.fitting import CalibForward, PerPhotonPredictor
     assert callable(getattr(CalibForward, '__instancecheck__', None))        # runtime_checkable
-    calib = lambda theta, ek, pk: None
-    pred = lambda track, key: (None, None, None, None)
-    assert isinstance(calib, CalibForward)
-    assert isinstance(pred, PerPhotonPredictor)
+
+    # NOTE (2026-08-13): the isinstance assertions this test used to make could not fail.
+    # runtime_checkable Protocols check METHOD PRESENCE, not signatures, so `dict`, `str.upper`
+    # and a zero-arg lambda all satisfy CalibForward — and CalibForward and PerPhotonPredictor
+    # accept exactly the same objects. The test asserted "callables are callable".
+    # Keep the cheap import/runtime_checkable check above, and assert the thing that carries the
+    # actual contract: the declared call signatures, which is what a reader or a static checker
+    # relies on and what a careless edit would change.
+    assert [p.name for p in inspect.signature(CalibForward.__call__).parameters.values()][1:] \
+        == ['theta', 'ek', 'pk']
+    assert [p.name for p in inspect.signature(PerPhotonPredictor.__call__).parameters.values()][1:] \
+        == ['track', 'key']
     assert not isinstance(42, CalibForward)                                  # non-callable rejected
 
 

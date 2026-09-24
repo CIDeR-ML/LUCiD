@@ -4,10 +4,11 @@ This is the piece calibration was missing. Reconstruction's forward has been a l
 (:class:`lucid.fitting.recon.ReconModel`) since the start; calibration's lived inside a figure
 script, which is why nothing importable could calibrate a detector.
 
-Extracted from the reference engine (``analysis/paper/utils/calib_fit.py``) and preserved
-expression for expression. The whole stack runs in float32 — ``jax_enable_x64`` is never enabled
-— so an equivalent but re-associated expression can move the result, and the engine is pinned
-bit-exactly by ``tests/reconciliation/test_calib_engine_pin.py``. Anything here that looks
+Extracted from the paper's reference calibration engine and preserved expression for expression.
+The whole stack runs in float32 — ``jax_enable_x64`` is never enabled — so an equivalent but
+re-associated expression can move the result. Its bit-exact agreement with that engine was
+verified when it was extracted; the engine is not in this repository and the check is not shipped.
+Anything here that looks
 gratuitously specific (the key arithmetic, the concatenate-then-transpose, the laser/isotropic
 split) is load-bearing for that reason.
 
@@ -15,6 +16,23 @@ Layout
 ------
 ``S = W * n_sources`` configurations, indexed ``g = wl * n_sources + s`` — wavelength-major, so
 each row of the returned ``(S, NS)`` array is one (wavelength, source) pair.
+
+Two dispatch routes
+-------------------
+Sources reach the simulator two ways, and the difference is not stylistic. The reference passes
+each source as a **pytree of arrays**, so one compiled program serves all of them with the source
+as a traced argument — that is what makes a ``pmap`` over sources possible at all. The field-based
+bridge (:func:`lucid.fitting.problem.build_calibration_problem`) instead hands over one **closure
+per source**, which cannot be traced and therefore gets its own compiled program.
+
+Both routes run the same key arithmetic, the same assembly, and the same estimator downstream.
+Only the compilation strategy differs — but this stack is float32, so that is not quite the same
+as saying the answer is identical. Measured on a stub: the forward agrees EXACTLY, and the
+Jacobian to 8.5e-08 relative, which is float32 epsilon from XLA folding a closed-over source as a
+constant where the other route carries it as a traced argument. Gated by
+``tests/test_fitting_calibrate.py::test_the_two_dispatch_routes_agree``. The traced route is the
+default and is what the bit-exact pin gates; the per-source route is selected by passing
+``predict``.
 
 Sharding
 --------
@@ -27,7 +45,8 @@ therefore the path the pin actually gates.
 import jax
 import jax.numpy as jnp
 
-__all__ = ['CalibrationForward']
+__all__ = ['CalibrationForward', 'CalibrationJacobian', 'CalibrationProblem',
+           'profile_gains', 'neyman_residual']
 
 
 class CalibrationForward:
@@ -41,22 +60,34 @@ class CalibrationForward:
     sources : sequence
         Calibration sources. Source 0 is treated as the "singleton" (the laser in the reference
         layout) and the rest as the mappable group — this only affects dispatch, not the result.
-    params : CalibrationParams
-        The theta -> DetectorParams map (:mod:`lucid.fitting.params`).
+    params : parameterisation, or None
+        Supplies ``W`` and ``to_dp`` (:mod:`lucid.fitting.params`). May be ``None`` only when
+        ``predict`` is given, in which case ``to_dp`` is never called and ``W`` defaults to 1.
     n_sensors : int
     map_fn : callable or None
         ``map_fn(fn, in_axes)`` returning a batched callable over the non-singleton sources.
         ``None`` (default) uses a serial loop that is numerically identical.
+    predict : callable or None
+        ``predict(theta, source, wl, gains, key) -> (n_sensors,)``, replacing the default
+        composition ``sim(source, params.to_dp(theta, wl, gains), key)[0]``. Giving it selects the
+        per-source route (see the module docstring): sources are then opaque Python objects rather
+        than traced pytrees, so each gets its own compiled program and ``map_fn`` does not apply.
+        This is how a list of ready-made forward closures is fitted.
     """
 
-    def __init__(self, sim, sources, params, n_sensors, map_fn=None):
+    def __init__(self, sim, sources, params, n_sensors, map_fn=None, predict=None):
         self.sim = sim
         self.sources = list(sources)
         self.params = params
         self.NS = int(n_sensors)
-        self.W = params.W
+        self.W = 1 if params is None else params.W
         self.n_sources = len(self.sources)
         self.S = self.W * self.n_sources
+        self._per_source = None
+
+        if predict is not None:
+            self._per_source = [self._compile_one(predict, src) for src in self.sources]
+            return
 
         def _mbody(theta, src, keys, gains):                      # (W, NS); vmap over wavelengths
             return jax.vmap(lambda wl, k: sim(src, params.to_dp(theta, wl, gains), k)[0])(
@@ -70,6 +101,14 @@ class CalibrationForward:
         # mapped call sees one batched argument rather than a Python list.
         self._group_stack = jax.tree_util.tree_map(
             lambda *xs: jnp.stack(xs), *self.sources[1:]) if self.n_sources > 1 else None
+
+    def _compile_one(self, predict, src):
+        """One compiled ``(theta, keys, gains) -> (W, NS)`` program with ``src`` closed over."""
+        W = self.W
+
+        def body(theta, keys, gains):
+            return jax.vmap(lambda wl, k: predict(theta, src, wl, gains, k))(jnp.arange(W), keys)
+        return jax.jit(body)
 
     def keys(self, key_base):
         """The reference's key arithmetic, reproduced exactly.
@@ -89,6 +128,11 @@ class CalibrationForward:
     def __call__(self, theta, key_base, gains):
         """-> ``(S, NS)`` mean charge, row ``g = wl * n_sources + s``."""
         ks, kg = self.keys(key_base)
+        if self._per_source is not None:
+            per = jnp.stack([self._per_source[0](theta, ks, gains)]
+                            + [self._per_source[s](theta, kg[s - 1], gains)
+                               for s in range(1, self.n_sources)])          # (n, W, NS)
+            return jnp.transpose(per, (1, 0, 2)).reshape(self.S, self.NS)
         ml = self._single(theta, self.sources[0], ks, gains)               # (W, NS)
         if self.n_sources == 1:
             per = ml[None]
@@ -137,15 +181,30 @@ class CalibrationJacobian:
     at 137σ of covariance — and carries the seed, so an ensemble can see its own spread.
     """
 
-    def __init__(self, sim, sources, params, n_sensors, key0=9_000_000, map_fn=None):
+    def __init__(self, sim, sources, params, n_sensors, key0=9_000_000, map_fn=None,
+                 predict=None):
         self.sim = sim
         self.sources = list(sources)
         self.params = params
         self.NS = int(n_sensors)
-        self.W = params.W
+        self.W = 1 if params is None else params.W
         self.n_sources = len(self.sources)
         self.S = self.W * self.n_sources
         self.key0 = int(key0)
+        self._per_source = None
+
+        if predict is not None:
+            # Per-source route (see the module docstring). The fused expression is rebuilt around
+            # `predict` rather than around `sim . to_dp` — same weighted model, same jacfwd.
+            def compile_one(src):
+                def body(theta, wl, lk, key, q_cfg, q_floor):
+                    def sm(th):
+                        mu = predict(th, src, wl, jnp.ones(self.NS), key)
+                        return jnp.exp(lk) * mu / jnp.sqrt(jnp.clip(q_cfg, q_floor, None))
+                    return jax.jacfwd(sm)(theta)
+                return jax.jit(body, static_argnums=(1,))
+            self._per_source = [compile_one(src) for src in self.sources]
+            return
 
         def _jbody(theta, src, wl, lk, key, q_cfg, q_floor):
             def sm(th):
@@ -183,6 +242,14 @@ class CalibrationJacobian:
         draws = tuple(draws)
         nh = len(draws)
         rows = []
+        if self._per_source is not None:
+            for wl in range(self.W):
+                base = wl * self.n_sources
+                rows.append(jnp.stack([
+                    sum(self._per_source[s](theta, wl, lk, self.key(step, s, wl, h),
+                                            data[base + s], q_floor) for h in draws) / nh
+                    for s in range(self.n_sources)]))
+            return jnp.concatenate(rows, axis=0)
         for wl in range(self.W):
             base = wl * self.n_sources
             jl = sum(self._single(theta, self.sources[0], wl, lk,
@@ -295,6 +362,16 @@ class CalibrationProblem:
         H = jnp.einsum('gnp,gnq->pq', J, J) / n
         loss = float(jnp.sum(r ** 2) / n)
         return g, H, loss
+
+    def gains(self, theta, step=0):
+        """The profiled per-PMT gains at ``theta`` — the nuisance, read out rather than fitted.
+
+        A detector calibration wants these: they are the per-sensor QE/gain map. They never enter
+        ``theta``, so a caller that only reads the fit vector would never see them.
+        """
+        ones = jnp.ones(self.data.shape[1])
+        mu = self.forward.average(theta, self.forward_key(step), ones, self.n_forward_draws)
+        return profile_gains(mu.sum(0) + 1e-12, self.data_sum, gauge=self.gauge)
 
 
 def _serial_map(fn, in_axes, n):

@@ -78,7 +78,7 @@ def main():
     start = prob['theta0'] + rng.uniform(-PERT, PERT, truth.shape)
     emit(f'GN fit of {FIELDS} …')
     res = fit(prob['source_models'], prob['truth_charge'], start, NS,
-              steps=STEPS, refresh=15, nb_h=NB_H)
+              steps=STEPS, refresh=15, jacobian_draws=NB_H)
     rec = res['theta']
     c = crb(prob['source_models'], prob['theta_true'], NS, nb_h=NB_H)
     sig = c['sigma']

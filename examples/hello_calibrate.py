@@ -33,7 +33,8 @@ FIELDS = ['g', 'scatter_length', 'mie_scatter_length', 'absorption_length',
 prob = build_calibration_problem(sim, sources, dp, FIELDS, key=jax.random.PRNGKey(1))
 sigma = crb(prob['source_models'], prob['theta_true'], NS)['sigma']           # Cramer-Rao bound
 start = prob['theta0'] + np.random.default_rng(0).uniform(-.15, .15, prob['theta0'].shape)
-res = fit(prob['source_models'], prob['truth_charge'], start, NS, steps=100, refresh=15, nb_h=2)
+res = fit(prob['source_models'], prob['truth_charge'], start, NS, steps=100, refresh=15,
+          jacobian_draws=2)
 
 truth = np.exp(prob['theta0'])
 print(f'{"param":22s}{"truth":>9s}{"start":>9s}{"fit":>9s}{"err":>8s}{"CRB":>7s}')

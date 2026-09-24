@@ -6,9 +6,14 @@ below are the contracts that otherwise live only in docstrings and drift. Typing
 nothing executes.
 
 Entry points (all in ``lucid.fitting``):
-  * calibration : ``fit(sources, truth_list, theta0, n_sensors, **CALIB_GN)`` ->
-                  fitted log-global ``DetectorParams`` (+ per-PMT ``k`` via the Schur nuisance);
-                  ``crb(sources, theta_true, n_sensors)`` -> covariance at truth (×√12 honest).
+  * calibration : ``calibrate(sim, sources, params, data, theta0)`` -> fitted parameters + the
+                  profiled per-PMT gain map; ``closure(...)`` for the same fit against data you
+                  generated. ``fit(sources, truth_list, theta0, n_sensors)`` is the field-bridge
+                  form. The per-PMT gains are PROFILED in closed form, not carried as a Schur
+                  nuisance — that changed when the estimator did.
+                  ``crb(sources, theta_true, n_sensors)`` -> covariance at truth (×√12 honest),
+                  and it DOES still marginalise the gains by Schur complement, because a bound
+                  must integrate over a nuisance where a fit may profile it.
   * recon       : ``fit_track(model, oc, ot, start, **RECON_GN)`` or
                   ``fit_track_multistart(model, oc, ot, [seedA, seedB], margin=0.01)`` ->
                   the 9-vector ``[E, x,y,z, sinθ,cosθ, sinφ,cosφ, t0]``.
@@ -21,8 +26,9 @@ form (√-MSE vs Poisson) — the GN loop never sees the form.
 
 Recon recipe knobs (the validated Fisher-GN recipe, matching ``fit_track``'s current
 defaults): ``nkeys=8, niters=150, lr=4.0, lr_final=1.5, ridge_i=0.1, lam=0.01, refresh=8,
-readout='polyak'``, SCALE9-preconditioned, AMP_DETACH in the time term. Calibration uses the
-GN+Schur defaults in ``gauss_newton.fit`` (``ridge``/``mu``/``eigen_clip=True``/``readout='last'``).
+readout='polyak'``, SCALE9-preconditioned, AMP_DETACH in the time term. Calibration runs the
+same loop (:func:`lucid.fitting.gn.gauss_newton`) with ``lam=0.01, mu=0.1, max_step=0.5`` and a
+Neyman residual; the published recipe is ``analysis/paper/utils/calibration.py:CALIB_RECIPE``.
 """
 from __future__ import annotations
 from typing import Protocol, Tuple, TYPE_CHECKING, runtime_checkable
@@ -38,7 +44,7 @@ class CalibForward(Protocol):
 
     ``theta`` are the log-global params; ``ek``/``pk`` are the engine + photon forward-noise
     keys (the expected-value engine is deterministic GIVEN its keys, so CRN finite differences
-    are clean). Wrapped by :class:`~lucid.fitting.gauss_newton.SourceModel` into the √(k·M)
+    are clean). Wrapped by :class:`~lucid.fitting.schur_gn.SourceModel` into the √(k·M)
     residual + a CRN-FD Jacobian.
     """
 
