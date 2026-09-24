@@ -6,10 +6,15 @@
 // here rather than in lucid/production/fitqun/scattable.py. Run it from the
 // fiTQun Utilities checkout, where TScatTable.cc and its LinkDef already live:
 //
-//   root -l -b -q 'h5_to_scattable.C("scattables.h5", "fiTQun_scattablesF_SK_WAND.root")'
+//   ./build_scattable_converter.sh <Utilities/scattable> in.h5 out.root
 //
-// Requires ROOT built with HDF5 headers available to the interpreter; if that
-// is not the case, dump the datasets to text with h5dump and adapt ReadFlat.
+// which builds the dictionary and invokes this with the include path hdf5.h
+// needs. The LUCiD container already carries ROOT and HDF5, so it runs there
+// as-is. Driving it by hand instead:
+//
+//   root -l -b -q -e '.L libTScatTableF.so' \
+//        -e 'gInterpreter->AddIncludePath("/opt/conda/include");' \
+//        'h5_to_scattable.C+("scattables.h5","fiTQun_scattablesF_SK_WAND.root")'
 
 #include <hdf5.h>
 
@@ -19,7 +24,7 @@
 
 #include "TFile.h"
 
-#include "TScatTableF.h"
+#include "TScatTableF.h"  // fiTQun's class; needs its dictionary loaded
 
 namespace {
 

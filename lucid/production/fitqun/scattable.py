@@ -20,10 +20,15 @@ class element for element.
 **Why this one does not write ROOT directly.** ``TScatTable`` is a user-defined
 class with its own dictionary, not a stock ROOT container; a file holding one
 carries the class's streamer info, which uproot cannot synthesise. So the table
-is written to HDF5 here and converted by ``tools/fitqun/h5_to_scattable.C``,
-which compiles against the ``TScatTable.cc`` already in the fiTQun Utilities
-checkout and emits ``fiTQun_scattablesF_<config>.root``. Conversion runs
-wherever fiTQun is built, which is where the tune is assembled anyway.
+is written to HDF5 here and converted by
+``tools/fitqun/build_scattable_converter.sh``, which builds the dictionary from
+the ``TScatTable`` sources in the fiTQun Utilities checkout and emits
+``fiTQun_scattablesF_<config>.root``. The LUCiD container already carries ROOT
+and HDF5, so the conversion runs there -- no separate fiTQun build needed.
+
+The round-trip is verified: element order and all six axis definitions survive,
+and ROOT's own ``GetIndex()`` agrees with the dimension-0-fastest convention
+:meth:`ScatTable.flat` writes.
 """
 from __future__ import annotations
 
