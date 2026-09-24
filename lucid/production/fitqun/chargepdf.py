@@ -96,9 +96,11 @@ def build(mu: float, *, n_pmt: int, n_events: int, model: Union[str, dict, None]
 
     q = sample_charges(mu, n_pmt, n_events, resolved, rng)
     counts, _ = np.histogram(q, bins=q_edges)
-    # Charges past the last edge are real hits and must stay in the
-    # normalisation: gen2d.cc reads the overflow bin explicitly.
+    # Charge above the last edge goes in the ROOT overflow bin, which
+    # gen2d.cc copies explicitly (for j=1; j<=nqbns+1). Dropping it would
+    # lose the high-charge tail and skew the GetEntries() normalisation.
     overflow = float((q >= q_edges[-1]).sum())
+    n_fills = float(counts.sum()) + overflow
 
     # hctr counts every PMT that could have fired, hit or not -- it is the
     # denominator of P(hit | mu).
@@ -109,24 +111,29 @@ def build(mu: float, *, n_pmt: int, n_events: int, model: Union[str, dict, None]
 
     objects = {}
     for name in ("hchpdf2", "hchpdf3"):
+        # Unit-weight fills, so Sumw2 equals the content -- matching what
+        # makeChargePDFplot.C's Sumw2() produces.
         objects[name] = rootio.th1(
             name, q_edges, counts.astype(np.float64), sumw2=counts.astype(np.float64),
-            title=f"Charge PDF at #mu = {mu}", xtitle="q (p.e.)")
+            title="Old PMT Charge PDF", xtitle="q (p.e.)",
+            overflow=overflow, sumw2_flow=(0.0, overflow), entries=n_fills)
+    # hctr is filled once per event with weight n_pmt, so its Sumw2 is
+    # n_events * n_pmt^2, not the content.
     objects["hctr"] = rootio.th1(
-        "hctr", np.linspace(0.5, 10.5, 11), ctr, title="Total # of active PMTs")
-    return {"objects": objects, "n_hits": float(counts.sum()) + overflow,
+        "hctr", np.linspace(0.5, 10.5, 11), ctr, sumw2=ctr * float(n_pmt),
+        title="Total # of active PMTs", entries=float(n_events))
+    return {"objects": objects, "n_hits": n_fills,
             "n_active": n_active, "overflow": overflow}
 
 
-def write_mu_point(out_dir, mu: float, **kwargs) -> Path:
+def write_mu_point(out_dir, mu: float, label: Optional[str] = None, **kwargs) -> Path:
     """Write ``<mu>_pdf.root`` for one mu, named as the reference chain expects."""
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     result = build(mu, **kwargs)
-    # gen2d.cc looks the files up by the literal text of mutbl.txt, so the
-    # filename has to carry the same spelling ("10", not "10.0").
-    label = f"{mu:g}"
-    path = out_dir / f"{label}_pdf.root"
+    # gen2d.cc opens the file by the literal token from mutbl.txt, so "1.0"
+    # must stay "1.0"; f"{mu:g}" would write "1" and the lookup would miss.
+    path = out_dir / f"{label or f'{mu:g}'}_pdf.root"
     rootio.write(path, result["objects"])
     return path
 
@@ -134,14 +141,19 @@ def write_mu_point(out_dir, mu: float, **kwargs) -> Path:
 def run_scan(out_dir, *, n_pmt: int, n_events: int, model, seed: int,
              mu_values: Optional[np.ndarray] = None, verbose: bool = True) -> list[Path]:
     """Write the whole mu scan. Each point gets its own seed stream."""
-    mu_values = binning.charge_mu_grid() if mu_values is None else np.asarray(mu_values)
+    if mu_values is None:
+        labels = binning.charge_mu_labels()
+        mu_values = np.array([float(t) for t in labels])
+    else:
+        mu_values = np.asarray(mu_values)
+        labels = [f"{m:g}" for m in mu_values]
     paths = []
-    for i, mu in enumerate(mu_values):
+    for i, (mu, label) in enumerate(zip(mu_values, labels)):
         # Fewer events suffice at large mu (every PMT fires); mirrors the
         # reference scan's 80 -> 20 event schedule at mu > 30.
         n = n_events if mu <= 30 else max(1, n_events // 4)
-        paths.append(write_mu_point(out_dir, float(mu), n_pmt=n_pmt, n_events=n,
-                                    model=model, seed=seed + i))
+        paths.append(write_mu_point(out_dir, float(mu), label=label, n_pmt=n_pmt,
+                                    n_events=n, model=model, seed=seed + i))
         if verbose:
             print(f"  mu={mu:<8g} -> {paths[-1].name}", flush=True)
     return paths

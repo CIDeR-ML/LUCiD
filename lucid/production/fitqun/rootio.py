@@ -58,21 +58,51 @@ def _axis(name: str, edges: np.ndarray, title: str = ""):
     )
 
 
-def _pad(values: np.ndarray) -> np.ndarray:
-    """Surround bin contents with the zero under/overflow ROOT expects."""
-    return np.pad(np.asarray(values), [(1, 1)] * values.ndim, mode="constant")
+def _pad(values: np.ndarray, under=0.0, over=0.0) -> np.ndarray:
+    """Surround bin contents with ROOT's under/overflow slots.
+
+    They are not decoration: ``gen2d.cc`` copies the charge PDF's overflow bin
+    explicitly (``for (j=1; j<=nqbns+1; j++)``), so charge above the last edge
+    has to be carried here rather than dropped.
+    """
+    values = np.asarray(values)
+    out = np.pad(values, [(1, 1)] * values.ndim, mode="constant")
+    if values.ndim == 1:
+        out[0], out[-1] = under, over
+    elif under or over:
+        raise ValueError("under/overflow is only supported for 1D histograms")
+    return out
 
 
 def th1(name: str, edges, values, *, sumw2=None, title: str = "",
-        xtitle: str = "", dtype=np.float64):
+        xtitle: str = "", dtype=np.float64, underflow: float = 0.0,
+        overflow: float = 0.0, entries: Optional[float] = None,
+        sumw2_flow=(0.0, 0.0)):
+    """A ``TH1`` whose storage class follows ``dtype`` (float64 -> TH1D, float32 -> TH1F).
+
+    The class is load-bearing: ``fit_cos.C`` reads the angular response with
+    ``GetObject(..., TH1F*)``, which type-checks and yields null on a mismatch,
+    while ``fiTQun_shared`` uses C-style casts that would silently reinterpret
+    the wrong storage width. Callers state the class they need.
+
+    ``entries`` is ROOT's ``fEntries`` -- a **count of Fill calls**, not the sum
+    of bin contents, and it includes the flow bins. ``gen2d.cc`` divides by
+    ``GetEntries()`` to normalise the charge PDF, so a caller that fills with
+    unit weight must pass the true hit count (flow included).
+    """
     values = np.asarray(values, dtype=dtype)
-    data = _pad(values).reshape(-1)
-    errs = _pad(np.asarray(sumw2, dtype=np.float64)).reshape(-1) if sumw2 is not None else None
+    data = _pad(values, underflow, overflow).reshape(-1)
+    if sumw2 is not None:
+        errs = _pad(np.asarray(sumw2, dtype=np.float64), *sumw2_flow).reshape(-1)
+    else:
+        errs = None
     centres = 0.5 * (np.asarray(edges)[1:] + np.asarray(edges)[:-1])
+    # fTsumw counts only the in-range bins, as ROOT does; fEntries counts fills.
     sumw = float(values.sum())
+    n_entries = sumw + underflow + overflow if entries is None else float(entries)
     return to_TH1x(
         fName=name, fTitle=title, data=data,
-        fEntries=sumw, fTsumw=sumw, fTsumw2=float((values**2).sum()),
+        fEntries=n_entries, fTsumw=sumw, fTsumw2=float((values**2).sum()),
         fTsumwx=float((values * centres).sum()),
         fTsumwx2=float((values * centres**2).sum()),
         fSumw2=errs, fXaxis=_axis("xaxis", edges, xtitle),
@@ -80,7 +110,8 @@ def th1(name: str, edges, values, *, sumw2=None, title: str = "",
 
 
 def th2(name: str, xedges, yedges, values, *, sumw2=None, title: str = "",
-        xtitle: str = "", ytitle: str = "", dtype=np.float64):
+        xtitle: str = "", ytitle: str = "", dtype=np.float64,
+        entries: Optional[float] = None):
     """``values`` is indexed ``[ix, iy]``; ROOT's global bin runs x fastest."""
     values = np.asarray(values, dtype=dtype)
     data = _pad(values).T.reshape(-1)
@@ -91,7 +122,7 @@ def th2(name: str, xedges, yedges, values, *, sumw2=None, title: str = "",
     wx, wy = values.sum(axis=1), values.sum(axis=0)
     return to_TH2x(
         fName=name, fTitle=title, data=data,
-        fEntries=sumw, fTsumw=sumw, fTsumw2=float((values**2).sum()),
+        fEntries=sumw if entries is None else float(entries), fTsumw=sumw, fTsumw2=float((values**2).sum()),
         fTsumwx=float((wx * xc).sum()), fTsumwx2=float((wx * xc**2).sum()),
         fTsumwy=float((wy * yc).sum()), fTsumwy2=float((wy * yc**2).sum()),
         fTsumwxy=float((values * xc[:, None] * yc[None, :]).sum()),

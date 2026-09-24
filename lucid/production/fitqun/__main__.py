@@ -21,7 +21,7 @@ from . import binning, chargepdf, cprofile
 def _cmd_cprofile_accumulate(args) -> int:
     cell = cprofile.accumulate(
         args.input, pdg=args.pdg, momentum_mev=args.momentum,
-        s_hi_cm=args.s_hi, s_max_cm=args.s_max, quantile=args.quantile)
+        s_max_cm=args.s_max, smax_floor_frac=args.smax_floor)
     out = cell.save(args.output)
     print(f"{out}: {cell.n_events} events, {cell.n_photons:.1f} photons/primary, "
           f"s_max = {cell.s_max_cm:.1f} cm")
@@ -70,14 +70,12 @@ def build_parser() -> argparse.ArgumentParser:
     acc.add_argument("--pdg", type=int, required=True, choices=sorted(binning.PDG_NAMES))
     acc.add_argument("--momentum", type=float, required=True, help="MeV/c")
     acc.add_argument("-o", "--output", type=Path, required=True, help="cell .npz")
-    acc.add_argument("--s-hi", type=float, default=100000.0,
-                     help="upper bound on track length for the fine grid, cm "
-                          "(default: %(default)s)")
     acc.add_argument("--s-max", type=float, default=None,
-                     help="pin s_max (cm) instead of taking it from the data; use "
-                          "this to keep split jobs of one cell consistent")
-    acc.add_argument("--quantile", type=float, default=0.9999,
-                     help="emission-distance quantile defining s_max (default: %(default)s)")
+                     help="pin gsthr (cm) instead of deriving it; use this to "
+                          "keep the split jobs of one cell consistent")
+    acc.add_argument("--smax-floor", type=float, default=1e-4,
+                     help="fraction of the peak an s bin must carry to count as "
+                          "emission when deriving gsthr (default: %(default)s)")
     acc.set_defaults(func=_cmd_cprofile_accumulate)
 
     bld = cp_actions.add_parser("build", help="merge cells into CProf_<pdg>_WCSim.root")

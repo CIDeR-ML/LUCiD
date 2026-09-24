@@ -71,8 +71,9 @@ void h5_to_scattable(const char* h5path, const char* outpath) {
 
   TFile out(outpath, "RECREATE");
 
-  // fiTQun looks these up by name in GetScatRatio; keep the spelling.
-  const char* surfaces[3] = {"side", "top", "bot"};
+  // fiTQun_shared.cc does GetObject("topscattable",...) etc. -- these exact
+  // names are the file contract; anything else returns a null pointer.
+  const char* surfaces[3] = {"topscattable", "botscattable", "sidescattable"};
   for (const char* surface : surfaces) {
     std::vector<int> nbins;
     std::vector<double> bounds, flat;

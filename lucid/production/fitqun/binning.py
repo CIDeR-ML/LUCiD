@@ -62,15 +62,26 @@ def charge_mu_grid() -> np.ndarray:
     return _read_floats(DATA_DIR / "charge_mu_bins.txt")
 
 
+def charge_mu_labels() -> list:
+    """The mu grid as the **literal text** of ``mutbl.txt``.
+
+    ``gen2d.cc`` opens ``Form("%s_pdf.root", mustr[i])`` with the token it read
+    straight from that file, so the filenames have to carry its exact spelling:
+    ``1.0``, not ``1``. Formatting the float instead loses the nine whole-number
+    entries and ``gen2d.cc`` then dereferences a null TFile.
+    """
+    return (DATA_DIR / "charge_mu_bins.txt").read_text().split()
+
+
 def charge_q_edges() -> np.ndarray:
     """Observed-charge bin edges for the per-mu charge histograms (p.e.).
 
-    The reference file ends at a 1500 sentinel that ``makeChargePDFplot.C``
-    stops on rather than using as an edge; it is dropped here for the same
-    reason, leaving the last real edge as the histogram's upper bound.
+    All 481 values are used, the trailing 1500 included. ``makeChargePDFplot.C``
+    breaks its read loop on 1500 *before* incrementing the index, so
+    ``nqbins=480`` while ``qbinEdg[480]=1500`` is still handed to the TH1D
+    constructor -- 480 bins spanning [0, 1500], last bin [1495, 1500].
     """
-    edges = _read_floats(DATA_DIR / "charge_q_bins.txt")
-    return edges[:-1] if edges[-1] == 1500.0 else edges
+    return _read_floats(DATA_DIR / "charge_q_bins.txt")
 
 
 def timepdf_momenta(pdg: int) -> np.ndarray:
@@ -80,28 +91,36 @@ def timepdf_momenta(pdg: int) -> np.ndarray:
 
 
 # --- Cherenkov-profile integral-table axes -----------------------------------
-# I_n(R0, cos(theta0); p) is tabulated on a uniform (R0, cos theta0) grid, both
-# axes shared across particle types — fiTQun_shared reads the binning off the
-# first table it loads and asserts the rest match, and interpolates linearly,
-# so the spacing must be uniform. R0 is the vertex-to-PMT distance in cm.
-R0_MIN_CM, R0_MAX_CM, N_R0_BINS = 0.0, 5000.0, 100
-COSTH0_MIN, COSTH0_MAX, N_COSTH0_BINS = -1.0, 1.0, 100
+# I_n(R0, cos(theta0); p) is evaluated on the grid the reference tune uses,
+# measured off CProf_{11,13,211}_fit_WCSim.root (identical for all three, so it
+# is a fixed shared grid): R0 401 points from 0 to 5000 cm in 12.5 cm steps,
+# cos(theta0) 201 points from -1 to +1 in 0.01 steps. fiTQun reads the values at
+# bin *low edges* and interpolates trilinearly between them.
+R0_MIN_CM, R0_MAX_CM, N_R0_POINTS = 0.0, 5000.0, 401
+COSTH0_MIN, COSTH0_MAX, N_COSTH0_POINTS = -1.0, 1.0, 201
 
 
-def r0_edges() -> np.ndarray:
-    return np.linspace(R0_MIN_CM, R0_MAX_CM, N_R0_BINS + 1)
+def r0_points() -> np.ndarray:
+    """The R0 values I_n is evaluated at (cm)."""
+    return np.linspace(R0_MIN_CM, R0_MAX_CM, N_R0_POINTS)
 
 
-def costh0_edges() -> np.ndarray:
-    return np.linspace(COSTH0_MIN, COSTH0_MAX, N_COSTH0_BINS + 1)
+def costh0_points() -> np.ndarray:
+    return np.linspace(COSTH0_MIN, COSTH0_MAX, N_COSTH0_POINTS)
 
 
 # --- Emission-profile (s, cos theta) accumulation grid -----------------------
-# rho(s, cos theta) is built in these bins and integrated along each (R0,
-# cos theta0) line of sight to give I_n. Finer than the I_n grid on purpose:
-# it is a pure reduction of the PhotonSim photon list and costs only memory.
-N_S_BINS = 500
+# The reference histograms the emission angle in 500 bins over [-1, 1] and the
+# flight distance in 2200 bins over [-500, 5000] cm -- a fixed axis, not one
+# adapted per momentum, and it deliberately keeps the negative-s region (light
+# emitted behind the vertex). 5500/2200 = 2.5 cm per bin, which is exactly the
+# quantisation the shipped gsthr values show.
+S_MIN_CM, S_MAX_CM, N_S_BINS = -500.0, 5000.0, 2200
 N_COSTH_BINS = 500
+
+
+def s_edges() -> np.ndarray:
+    return np.linspace(S_MIN_CM, S_MAX_CM, N_S_BINS + 1)
 
 
 def costh_edges() -> np.ndarray:
@@ -124,9 +143,10 @@ def tpdf_logmu_edges() -> np.ndarray:
 
 
 # --- Photosensor angular response --------------------------------------------
-# epsilon(cos eta) is fitted on [0, 1] (a PMT cannot see light from behind);
-# the reference angResp TF1 carries 6 parameters over that range.
-ANGRESP_N_BINS = 100
+# epsilon(cos eta) is histogrammed on [0, 1] (a PMT cannot see light from
+# behind) in 25 bins -- angularResponsePlotter.cc's nBins, confirmed by the
+# shipped angResp TF1's fNpfits = 25. fit_cos.C then fits 6 parameters.
+ANGRESP_N_BINS = 25
 
 
 def angresp_edges() -> np.ndarray:
