@@ -3,13 +3,13 @@
 ## Objective and data source
 
 This implementation transfers the principal engineering dimensions from
-JUNOSW J26.3.2 into LUCiD for component-wise ablation and optical-component
+JUNOSW into LUCiD for component-wise ablation and optical-component
 analysis. It does not reproduce the complete CAD model, and a reduction in
 the three-way discrepancy after a single change is not an acceptance
 criterion. The geometry source is:
 
 ~~~text
-/cvmfs/juno.ihep.ac.cn/el9_amd64_gcc11/Release/J26.3.2/
+/cvmfs/juno.ihep.ac.cn/el9_amd64_gcc11/Release/J26.5.1/
 data/Detector/Geometry/share/geometry_acrylic.gdml
 ~~~
 
@@ -45,22 +45,61 @@ surface interaction.
 
 JUNOSW places 590 Acrylic additions, named
 \`AdditionAcrylicConstruction\`, at support-joint positions on the
-17.824 m-radius shell. Each addition is approximated by a radial frustum:
+17.824 m-radius shell. LUCiD retains the nominal dimensions:
 
 - shell-side base radius: 0.450 m;
 - outward tip radius: 0.200 m;
 - radial length: 0.140 m;
 - orientation: the radial unit vector at the placement point.
 
-The intersection includes the frustum side and both caps, while omitting the
-central opening, eight bolt holes, and curved details created by Boolean
-subtractions. A ray already inside the effective solid does not interact with
-a second exit surface. This is equivalent to a single thin-surface response
-and avoids applying A/R/T twice without a complete Acrylic-volume medium
-state machine. To avoid numerical coincidence between the spherical
-interface and the bowl base, the effective bowl surface is shifted outward
-by 0.5 mm. This offset is only a numerical separation, not an additional
-engineering dimension.
+The former straight frustum side has been replaced by the dormant JUNOSW
+\`yumiao\` profile. In local outward axial coordinate \(s\), the radius is
+
+\[
+r(s)=0.69764-
+\sqrt{0.776^2-(0.73543-s)^2},
+\qquad 0\leq s\leq0.140\ {\rm m}.
+\]
+
+The side is one smooth surface in production. Two roots of the old straight
+frustum seed six bounded Newton updates. The updates evaluate the equivalent
+torus quartic with scalar Horner operations; they do not rebuild a 3D point or
+evaluate square roots at every iteration. The final physical-profile residual
+is checked before a hit is accepted. Surface normals use the analytic
+derivative of the circle, not a segmented-polycone approximation. A 33-point
+sampling of the same formula is used only for visualisation, never photon
+propagation.
+
+The browser viewer receives this sampled profile from
+`scripts/view_juno_geometry.py` and constructs one rotational surface with
+Three.js `LatheGeometry`. Reproducible static overview figures use the same
+production radius function:
+
+~~~sh
+JAX_PLATFORMS=cpu /opt/gentoo/opt/PyMC/bin/python \
+  scripts/render_juno_known_structures.py \
+  --output-dir geometry_render
+~~~
+
+The angular lookup retains twelve nearby bowls per cell. Reference-sphere and
+selected-surface lookups are both evaluated, giving at most twenty-four
+candidates per ray. A trial reduction to eight candidates per cell was
+rejected: although the centre-source bowl-hit loss was only 0.47%, the losses
+at source z=16.1 m and z=17.1 m were 16.8% and 12.6%, respectively. The
+24-candidate definition is therefore part of the clean geometry baseline.
+
+The intersection includes the circular-arc side and both flat caps. A ray
+already inside the effective solid does not interact with a second exit
+surface. This is equivalent to a single thin-surface response and avoids
+applying A/R/T twice without a complete Acrylic-volume medium state machine.
+To avoid numerical coincidence between the spherical interface and the bowl
+base, the effective bowl surface is shifted outward by 0.5 mm. This offset is
+only a numerical separation, not an additional engineering dimension.
+
+JUNOSW J26.5.1 still selects its three-plane \`simple\` profile by default;
+the C++ \`yumiao\` branch is present but dormant. LUCiD intentionally selects
+that branch's 776 mm circular arc to represent the known overall bowl
+curvature. This does not claim to reproduce the manufactured edge fillets.
 
 ## Effective surface optics
 
@@ -128,8 +167,10 @@ following are explicitly not implemented:
 - explicit refraction, path length, and absorption inside the chimney
   Acrylic wall;
 - the upper chimney beyond the PMT sphere, Tyvek, and external structures;
-- the physical bowl curvature, holes, fasteners, and secondary propagation
-  inside the Acrylic volume;
+- the short upper/lower edge fillets, sphere-subtracted attachment root,
+  holes, fasteners, and secondary propagation inside the Acrylic volume;
+- closed-form quartic root selection; bounded Newton updates of the exact
+  torus polynomial are used instead;
 - angle- or wavelength-dependent engineering-surface parameters.
 
 Additional geometry is justified only if ablation studies reveal stable,
