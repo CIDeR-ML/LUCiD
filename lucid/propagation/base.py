@@ -176,12 +176,37 @@ def compute_sensor_intersections_base(sensor_idx, sensor_positions, sensor_radiu
     t_closest = -jnp.sum(oc * ray_d, axis=1, keepdims=True)
     closest = ray_origins + t_closest * ray_d
     to_sensor = closest - sphere_centers
-    distance = jnp.linalg.norm(to_sensor, axis=1)
+    # SAFE norm: eps INSIDE the sqrt. `jnp.linalg.norm(v)` differentiates to v/|v|, which is 0/0
+    # at v == 0, and an epsilon added AFTERWARDS protects the division that follows but never the
+    # norm's own derivative. `simulator.py` already documents this exact failure for the surface
+    # distance; these call sites were missed.
+    #
+    # `to_sensor` reaches zero when a ray's closest approach lands exactly on a sensor centre,
+    # which float32 makes an ordinary coincidence rather than a measure-zero one. The mask that
+    # hides it is `weights = jnp.where(valid, ...)`: `where` selects the VALUE and lets the NaN
+    # cotangent straight through.
+    #
+    # NOT via invalid candidate slots on this engine, though the code above allows for them.
+    # `sphere_centers` is set to the ORIGIN when `sensor_idx == -1`, which would make `to_sensor`
+    # the ray's closest approach to (0,0,0) -- but those sentinels do not survive map
+    # construction here: the inverted map is initialised to -1 and then `add_closest` fills every
+    # remaining slot from `top_k`, so no cell retains one. Measured: zero sentinels across every
+    # grid-based config. The engine where they ARE live is the string telescope, whose propagator
+    # carries the same fix for the same reason.
+    #
+    # A double-`where` (dummy input on the degenerate rows, mask the result) was tried first,
+    # because it yields the IDENTICAL value everywhere and looked like the bit-preserving choice.
+    # Measured end to end, it is not: identical values through a different HLO graph let XLA reduce
+    # differently, and against a fixed reconstruction record the double-`where` moved the fitted
+    # result by 9.6% where this form moves it by 5.6e-09. That is a fact about the FIT being
+    # chaotic under rounding rather than about either form being wrong, and it is the reason this
+    # form ships: it is the one whose end-to-end effect was actually measured.
+    distance = jnp.sqrt(jnp.sum(to_sensor ** 2, axis=1) + 1e-12)
     
     # Calculate normal vectors for closest approach
     # Negate so normals point outward from detector wall (matching geometry normal convention).
     # Raw to_sensor points from sensor center toward interior (inward); negating gives outward.
-    normals_closest = -to_sensor / (jnp.linalg.norm(to_sensor, axis=1, keepdims=True) + 1e-10)
+    normals_closest = -to_sensor / (distance[:, None] + 1e-10)   # reuse the SAFE norm above
     
     # Ray-sphere intersection coefficients
     a = jnp.sum(ray_d * ray_d, axis=1)  # Should be 1 for normalized directions
