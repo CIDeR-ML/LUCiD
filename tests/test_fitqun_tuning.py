@@ -193,7 +193,7 @@ def test_angular_measure_keeps_only_the_shell(tmp_path):
 
     edges, counts, sumw2 = angular.measure(
         source, sensor, axis, shell_r_cm=100.0, shell_dr_cm=10.0,
-        det_radius_cm=400.0, det_halflength_cm=500.0, n_bins=25)
+        det_radius_cm=400.0, det_halfheight_cm=500.0, n_bins=25)
     assert counts.sum() == 3                              # 95, 100, 105
     assert counts[-1] == 3                                # all at cos eta = 1
 
@@ -212,7 +212,7 @@ def test_angular_rejects_inconsistent_detector_extent():
     source = np.array([[0.0, 0.0, 100.0]])
     with pytest.raises(ValueError, match="clear of both"):
         angular.measure(source, sensor, axis, shell_r_cm=100.0, shell_dr_cm=10.0,
-                        det_radius_cm=4000.0, det_halflength_cm=5000.0)
+                        det_radius_cm=4000.0, det_halfheight_cm=5000.0)
 
 
 # --- time PDF ----------------------------------------------------------------
@@ -554,3 +554,115 @@ def test_events_schedule_ladder():
     assert events_for(500, schedule) == 400      # inclusive upper bound
     assert events_for(501, schedule) == 200
     assert events_for(9000, schedule) == 50
+
+
+# --- angular-response driver --------------------------------------------------
+
+def test_sensor_axes_point_inward():
+    """A sensor's axis must face into the water, or every cos(eta) flips sign."""
+    from lucid.production.fitqun import angular_driver as ad
+
+    R, H = 1690.0, 1810.0
+    pos = np.array([
+        [R, 0.0, 0.0],        # barrel, +x wall  -> axis -x
+        [0.0, -R, 0.0],       # barrel, -y wall  -> axis +y
+        [100.0, 0.0, H],      # top cap          -> axis -z
+        [100.0, 0.0, -H],     # bottom cap       -> axis +z
+    ])
+    axes = ad.sensor_axes(pos, det_radius_cm=R, det_halfheight_cm=H)
+    np.testing.assert_allclose(axes[0], [-1, 0, 0], atol=1e-6)
+    np.testing.assert_allclose(axes[1], [0, 1, 0], atol=1e-6)
+    np.testing.assert_allclose(axes[2], [0, 0, -1], atol=1e-6)
+    np.testing.assert_allclose(axes[3], [0, 0, 1], atol=1e-6)
+
+
+def test_angular_driver_keeps_only_direct_light():
+    """The reference skips isct != 0; here that is the deviated flag."""
+    from lucid.production.fitqun import angular_driver as ad
+
+    R, H = 1690.0, 1810.0
+    sensors = np.array([[0.0, R, 0.0]])
+    # Four photons head-on at the shell radius; two of them scattered.
+    emission = np.tile([0.0, R - 100.0, 0.0], (4, 1))
+    chunk = {
+        "emission_pos": emission,
+        "sensor_id": np.zeros(4, dtype=int),
+        "detected": np.ones(4, dtype=bool),
+        "deviated": np.array([False, True, False, True]),
+    }
+    _, counts, _ = ad.accumulate(
+        [chunk], sensors, shell_r_cm=100.0, det_radius_cm=R,
+        det_halfheight_cm=H)
+    assert counts.sum() == 2                      # the two direct ones
+    assert counts[-1] == 2                        # head-on -> top cos(eta) bin
+
+    # Without the flag, asking for direct light is an error rather than a
+    # silent pass-through of indirect photons into the tune.
+    with pytest.raises(ValueError, match="deviated"):
+        ad.accumulate([{**chunk, "deviated": None}], sensors, shell_r_cm=100.0,
+                      det_radius_cm=R, det_halfheight_cm=H)
+
+
+# --- scattering-table driver --------------------------------------------------
+
+def test_scattable_delta_phi_wraps():
+    """ast and phi are TVector3::DeltaPhi differences, wrapped to (-pi, pi]."""
+    from lucid.production.fitqun import scattable_driver as sd
+    a = np.array([3.0, -3.0, 0.5])
+    b = np.array([-3.0, 3.0, 0.2])
+    d = sd._delta_phi(a, b)
+    assert np.all(np.abs(d) <= np.pi + 1e-12)
+    # 3 - (-3) = 6 rad wraps to 6 - 2pi, not 6.
+    np.testing.assert_allclose(d[0], 6.0 - 2 * np.pi, atol=1e-9)
+    np.testing.assert_allclose(d[2], 0.3, atol=1e-9)
+
+
+def test_scattable_pmt_coordinate_follows_its_surface():
+    """t is the PMT z on the barrel, its distance from the axis on a cap."""
+    from lucid.production.fitqun import scattable_driver as sd
+    src = np.zeros((2, 3))
+    sdir = np.tile([0.0, 0.0, 1.0], (2, 1))
+    pmt = np.array([[300.0, 400.0, 1000.0],     # barrel -> t = z = 1000
+                    [300.0, 400.0, 1800.0]])    # cap    -> t = rho = 500
+    zs, rs, t, ast, ct, phi = sd.coordinates(
+        src, sdir, pmt, is_cap=np.array([False, True]))
+    np.testing.assert_allclose(t, [1000.0, 500.0])
+    np.testing.assert_allclose(ct, [1.0, 1.0])
+
+
+def test_scattable_driver_splits_direct_from_indirect():
+    """One pass, split on the flag -- the reference never runs two productions."""
+    from lucid.production.fitqun import scattable_driver as sd
+
+    nb = {s: (4, 2, 2, 2, 2, 2) for s in scattable.SURFACES}
+    bd = {s: ((-2000.0, 2000.0), (0.0, 2000.0), (-2000.0, 2000.0),
+              (-np.pi, np.pi), (-1.0, 1.0), (-np.pi, np.pi))
+          for s in scattable.SURFACES}
+    tables = sd.make_tables(nb, bd)
+
+    pmt_positions = np.array([[1690.0, 0.0, 0.0]])       # one barrel PMT
+    pmt_dir_z = np.array([0.0])                          # barrel orientation
+    chunk = {
+        "emission_pos": np.zeros((4, 3)),
+        "emission_dir": np.tile([0.0, 0.0, 1.0], (4, 1)),
+        "sensor_id": np.zeros(4, dtype=int),
+        "detected": np.ones(4, dtype=bool),
+        "deviated": np.array([True, True, True, False]),
+    }
+    sd.fill(tables, chunk, pmt_positions=pmt_positions, pmt_dir_z=pmt_dir_z)
+
+    side = tables["sidescattable"]
+    assert side["scattered"].table.sum() == 3
+    assert side["direct"].table.sum() == 1
+    # The direct partner collapses the two direction axes -- that is what makes
+    # it the 4D table DivideUnnormalized4D expects.
+    assert side["direct"].nbins[4:] == (1, 1)
+
+    ratios = sd.finalise(tables)
+    assert set(ratios) == set(scattable.SURFACES)
+    assert np.isfinite(ratios["sidescattable"].table).all()
+
+    # Refuses to guess when the flag is absent.
+    with pytest.raises(ValueError, match="deviated"):
+        sd.fill(tables, {**chunk, "deviated": None},
+                pmt_positions=pmt_positions, pmt_dir_z=pmt_dir_z)

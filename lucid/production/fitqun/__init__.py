@@ -26,8 +26,9 @@ LUCiD detector/physics config pair, so the same code serves SK and HK.
 # where uproot and numpy need not be installed, and only needs `macros`.
 import importlib
 
-_SUBMODULES = ("angular", "binning", "chargepdf", "cprofile", "macros",
-               "particles", "rootio", "scattable", "timepdf")
+_SUBMODULES = ("angular", "angular_driver", "binning", "chargepdf", "cprofile",
+               "isotropic_sample", "macros", "scattable_driver", "particles", "rootio", "scattable",
+               "timepdf")
 
 __all__ = list(_SUBMODULES)
 
