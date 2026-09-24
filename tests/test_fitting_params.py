@@ -1,9 +1,9 @@
 """lucid.fitting.params.CalibrationParams — the theta <-> physical map.
 
-Extracted from the reference calibration engine, where it lived as `build_dp`/`to_real` inside a
-figure script. The engine pin (tests/reconciliation/test_calib_engine_pin.py) gates that the
-extraction is bit-identical in the fit; these tests gate the map's own properties, cheaply and
-without a simulator.
+Extracted from the paper's reference calibration engine, where it lived as `build_dp`/`to_real`
+inside a figure script. That the extraction reproduces the engine's fit was verified against the
+engine when it was extracted; that check is not shipped. These tests gate the map's own properties,
+cheaply and without a simulator.
 """
 import numpy as np
 import pytest
@@ -71,14 +71,14 @@ def test_reporting_basis_amplifies_the_diffuse_component():
 
 
 def test_matches_the_reference_engines_inline_construction():
-    """theta_from_physical reproduces what calib_fit.py built by hand.
+    """theta_from_physical reproduces what the frozen campaign engine built by hand.
 
     Guards the one part of the extraction the engine pin does NOT cover: the pin exercises to_dp
     and to_real through the fit, but the engine still builds theta0 inline, so an inconsistency
     here would go unnoticed until someone used the library helper and got a different start.
     """
     p = _params('rlogit')
-    # the engine's construction, transcribed from calib_fit.py:98-108
+    # the reference engine's construction, transcribed
     tvec_opt = []
     for t in PHYS:
         tvec_opt += [t['scatter_length'], t['absorption_length'], t['qe']]

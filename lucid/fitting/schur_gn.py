@@ -1,24 +1,43 @@
-"""Consistent fixed-dataset Gauss-Newton with a constrained per-PMT Schur block.
+"""The Schur-block sqrt-residual family: what the Neyman consolidation did not absorb.
 
-The unified calibration/reconstruction fitter (generalised from mie_hunter/gn_fast.py,
-off its hard-coded 7-vector + toy engine). The model is
+Everything here shares one shape — a ``sqrt``-transformed residual with the per-PMT nuisance
+carried as a Schur block, rather than the Neyman residual with the gains profiled that
+:mod:`lucid.fitting.calibrate` now runs. That is what the name says, and the name matters: this
+file used to be called ``gauss_newton.py``, which was wrong twice over. It has not contained the
+Gauss-Newton loop since the consolidation, and worse, importing it SHADOWED
+``lucid.fitting.gauss_newton`` — the package's headline export — so
+``from lucid.fitting import gauss_newton`` returned this module and could not be called.
 
-    predicted_charge_s = k[s] · M_s(theta)
+The calibration optimiser that used to live here is gone. It ran a sqrt-MSE residual with the
+per-PMT gains carried as a free Schur block, and both halves of that were the arm the calibration
+campaign rejected — a residual nonlinear in a re-drawn Monte-Carlo model has a permanently
+displaced fixed point, and a free per-sensor gain overfits a single noisy draw. Its replacement is
+:func:`lucid.fitting.calibrate.fit`, which runs the Neyman residual, profiles the gains in closed
+form, and steps with the loop reconstruction uses.
 
-where ``theta`` are the (log-space) GLOBAL parameters that enter the forward ``M``
-(optical lengths, reflection, response, λ-deviation curves, ...) and ``k`` is a
-per-PMT multiplicative factor (the QE/gain correction) — a large but DIAGONAL block
-that is marginalised analytically by a Schur complement with the gauge ``mean(log k)=0``.
+Three things stayed behind, for one reason each:
 
-Loss is the τ-less √-MSE residual ``r = √(k·M) − √(truth)`` (Poisson-NLL biases the
-optical scales ~1.3%; the √ transform is variance-stabilising and near-unbiased). The
-Jacobian ``J = ∂√(k·M)/∂theta`` is recomputed only every ``refresh`` steps and CACHED,
-then reused for BOTH the gradient ``Jᵀr`` and the Gauss-Newton Hessian ``JᵀJ`` so they
-stay consistently normalised (a single fixed dataset per step — re-drawing fresh keys
-each step is a Jensen-bias dead end). Damping = a median-diagonal ridge.
+``SourceModel``          the Fisher/CRB path (:mod:`lucid.fitting.fisher`) needs its
+                         ``ad_jacobian``, and that Jacobian is of ``sqrt(k*M)`` — the CRB is a
+                         property of the observable, not of the estimator that was retired.
+``make_constrained_schur``  the CRB still marginalises the per-PMT block by Schur complement,
+                         because it asks a different question than the fit does: the fit profiles
+                         the gains at a point, the bound must integrate over them.
+``ChargeTimeModel`` /    the joint charge + first-arrival-time fit, which carries a SECOND per-PMT
+``fit_charge_time``      block (an additive t0 alongside the multiplicative k) that the shared
+                         calibration problem does not yet model. Consolidating it needs the timing
+                         residual in :mod:`lucid.fitting.calib` first, so it is deferred rather
+                         than duplicated onto a residual that cannot express it.
 
-This module is the optimiser; the bridge from DetectorParams ↔ ``theta`` and the
-``M_s(theta)`` forwards lives in :mod:`lucid.fitting.problem`.
+``ridge_inverse`` remains as the damping those two use; :func:`lucid.fitting.gn.damped_matrix` is
+the one convention for everything that has been consolidated, and differs from it in documented
+ways (an eigen-floor here, provably inert whenever the Levenberg term is positive).
+
+``sqrt_residual`` is the fourth, and it is the exception: it has **no caller anywhere in the tree**.
+The two models above build their ``sqrt`` transform inline rather than calling it. It is kept, and
+still exported, because it names the residual the consolidation replaced — a reader comparing the
+two estimators can see the retired one written down in one line instead of reconstructing it from
+a diff. That is a documentation reason, not a code one, and it is the only thing holding it here.
 """
 
 import numpy as np
@@ -63,20 +82,6 @@ def ridge_inverse(H, ridge=0.02, mu=0.3):
     ev, V = np.linalg.eigh(A)
     ev = np.clip(ev, 0.5 * m, None)
     return V @ np.diag(1.0 / ev) @ V.T
-
-
-def _build_jacobian(predict_list, theta, lk, n_sensors, n_params, key_base, nb_h):
-    """Per-source forward-mode AD Jacobian Ji = ∂√(k·M_i)/∂theta (n_sensors, n_params),
-    averaged over ``nb_h`` forward-noise batches (the average tames the discrete scatter/mie/g
-    score variance; pathwise channels are key-deterministic). Done only on refresh."""
-    Js = []
-    for i, src in enumerate(predict_list):
-        Ji = np.zeros((n_sensors, n_params))
-        for h in range(nb_h):
-            ek, pk = _keys(key_base + 50000 + 1000 * i + h)
-            Ji += src.ad_jacobian(theta, lk, ek, pk)
-        Js.append(Ji / nb_h)
-    return Js
 
 
 def _keys(b0):
@@ -130,124 +135,6 @@ class SourceModel:
             pert = self.m(theta.at[d].add(h), lk, ek, pk)
             cols.append(np.array((pert - base) / h))
         return np.stack(cols, axis=1)
-
-
-def fit(sources, truth_list, theta0, n_sensors, *,
-        weights=None, lk0=None, steps=300, refresh=15, ridge=0.02, mu=0.3,
-        eps=1e-8, step_max=0.08, kstep_max=0.3, fix=(), seed=0, nb_r=3, nb_h=4,
-        gauge_k=True, polyak=0, bake_k=False):
-    """Run the constrained-Schur Gauss-Newton fit.
-
-    Parameters
-    ----------
-    sources : list[SourceModel]
-        One per calibration source; ``SourceModel.forward(theta, ek, pk)`` is the
-        per-sensor mean charge at log-global params ``theta`` and per-PMT factor 1.
-    truth_list : list[array (n_sensors,)]
-        Observed per-sensor charge for each source.
-    theta0 : array (n_params,)
-        Initial LOG global params.
-    n_sensors : int
-    weights : array (n_sensors,) or None
-        Per-sensor fit weight (e.g. a lit-PMT mask). Defaults to ones.
-    lk0 : array (n_sensors,) or None
-        Initial log per-PMT factor (defaults to zeros, i.e. k=1).
-    fix : iterable[int]
-        Indices of theta to hold fixed (zero gradient/step).
-    polyak : int
-        If >0, return the AVERAGE of the last ``polyak`` iterates (theta and k) instead of
-        the final one (Polyak/Ruppert iterate-averaging). Stabilises noisy/shot-noise fits;
-        default 0 = off (return the final iterate, byte-identical to before).
-    bake_k : bool
-        If True, replace the free per-PMT Schur block with the CLOSED-FORM pooled estimate
-        ``k = ΣQ / ΣM(theta)`` (re-baked each step from the data + current model), and run
-        Gauss-Newton on the GLOBALS ONLY. This is the shot-noise-robust per-PMT recipe (the
-        free Schur-k overfits a single noisy draw); default False = free Schur-k as before.
-
-    Returns
-    -------
-    dict with keys: ``theta`` (real-space global params), ``log_theta``,
-    ``k`` (per-PMT factor), ``history`` (per-step theta trajectory).
-    """
-    S = len(sources)
-    n_params = int(np.asarray(theta0).shape[0])
-    W = np.ones(n_sensors) if weights is None else np.asarray(weights, float)
-    t_sqrt = [jnp.sqrt(jnp.asarray(truth_list[i]) + eps) for i in range(S)]
-    t_data = [np.asarray(truth_list[i], float) for i in range(S)]
-    lp = jnp.asarray(theta0)
-    lkv = jnp.zeros(n_sensors) if lk0 is None else jnp.asarray(lk0)
-    fix = list(fix)
-    _zns = jnp.zeros(n_sensors)
-
-    history = np.zeros((steps, n_params))
-    lp_acc = np.zeros(n_params); lk_acc = np.zeros(n_sensors); n_acc = 0
-    Jcache = Htk = Minv = Pinv = None
-
-    for s in range(steps):
-        kb = 1000 + 777 * seed + 13 * s
-
-        if bake_k:
-            # closed-form pooled k = ΣQ / ΣM(theta) (M = model mean charge at k=1), gauged.
-            Qsum = np.zeros(n_sensors); Msum = np.zeros(n_sensors) + 1e-12
-            for i in range(S):
-                Mi = np.array(sg(sources[i].m(lp, _zns, *_keys(kb + 7000 * i)))) ** 2
-                Qsum += t_data[i]; Msum += Mi
-            lkv = jnp.asarray(np.log(np.clip(Qsum / Msum, 1e-6, None)))
-            if gauge_k:
-                lkv = lkv - jnp.mean(lkv)
-
-        # residuals on the fixed per-step dataset
-        rA, mA = [], []
-        for i in range(S):
-            mi = sources[i].m(lp, lkv, *_keys(kb + 7000 * i))
-            rA.append(np.array(sg(mi - t_sqrt[i])))
-            mA.append(np.array(sg(mi)))
-
-        if s % refresh == 0:
-            Jcache = _build_jacobian(sources, lp, lkv, n_sensors, n_params,
-                                     9_000_000 + 7 * s, nb_h)
-            Htt = np.zeros((n_params, n_params)); Htk = np.zeros((n_params, n_sensors))
-            Hkk = np.zeros(n_sensors) + 1e-12
-            for i in range(S):
-                Jk = 0.5 * mA[i]
-                Htt += (Jcache[i] * W[:, None]).T @ Jcache[i]
-                Htk += (Jcache[i] * W[:, None]).T * Jk[None, :]
-                Hkk += W * (Jk * Jk)
-            Htt /= S; Htk /= S; Hkk /= S
-            if bake_k:                                   # k is fixed → no Schur reduction
-                Minv = None
-                Pinv = ridge_inverse(Htt, ridge=ridge, mu=mu)
-            else:
-                Minv = make_constrained_schur(Hkk) if gauge_k else (lambda X: (1.0 / Hkk) * X if np.ndim(X) == 1 else (1.0 / Hkk)[:, None] * X)
-                Pinv = ridge_inverse(Htt - Htk @ Minv(Htk.T), ridge=ridge, mu=mu)
-
-        gt = np.zeros(n_params); gk = np.zeros(n_sensors)
-        for i in range(S):
-            gt += Jcache[i].T @ (W * rA[i])
-            gk += W * (0.5 * mA[i]) * rA[i]
-        gt /= S; gk /= S
-        geff = gt if bake_k else gt - Htk @ Minv(gk)
-        for i in fix:
-            geff[i] = 0.0
-        dth = -(Pinv @ geff)
-        for i in fix:
-            dth[i] = 0.0
-        lp = lp + jnp.asarray(np.clip(dth, -step_max, step_max))
-        if not bake_k:                                   # free Schur-k step
-            dlk = -Minv(gk + Htk.T @ dth)
-            lkv = lkv + jnp.asarray(np.clip(dlk, -kstep_max, kstep_max))
-            if gauge_k:
-                lkv = lkv - jnp.mean(lkv)
-        history[s] = np.array(jnp.exp(lp))
-        if polyak and s >= steps - polyak:               # accumulate the iterate tail
-            lp_acc += np.array(lp); lk_acc += np.array(lkv); n_acc += 1
-
-    if polyak and n_acc:
-        lp_out = lp_acc / n_acc; lk_out = lk_acc / n_acc
-    else:
-        lp_out = np.array(lp); lk_out = np.array(lkv)
-    return dict(theta=np.exp(lp_out), log_theta=lp_out,
-                k=np.clip(np.exp(lk_out), 1e-6, None), history=history)
 
 
 class ChargeTimeModel:

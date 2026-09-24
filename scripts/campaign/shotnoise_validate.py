@@ -33,7 +33,6 @@ K = int(os.environ.get('K', '8'))
 M = int(os.environ.get('M', '6'))
 STEPS = int(os.environ.get('STEPS', '50'))
 NB_H = int(os.environ.get('NB_H', '2'))
-BAKE_K = os.environ.get('BAKE_K', '0') == '1'
 POLYAK = int(os.environ.get('POLYAK', '0'))
 EPS = float(os.environ.get('EPS', '1e-8'))     # 0.375 = Anscombe √(x+3/8) (Poisson bias-correct)
 REPORT = os.path.join(_HERE, 'SHOTNOISE_RESULTS.md')
@@ -73,8 +72,10 @@ def main():
     emit(f'SK_like NS={NS}, N_photons={NPH:.0e} (intensity=NPH ⇒ integer-PE shots), K={K}, '
          f'grid={GK}, sources=[laser_down, iso], {M} noise seeds, {STEPS} steps/fit.')
     emit(f'DATA = sample-mode shot noise (use_expected_value=False); MODEL = expected forward.')
-    emit(f'Stabilizers: bake_k={BAKE_K} (closed-form k=ΣQ/ΣM, no free Schur-k), polyak={POLYAK} '
-         f'(iterate-averaging), eps={EPS} ({"ANSCOMBE √(x+3/8) Poisson-bias-correct" if EPS > 0.1 else "plain √-MSE"}).')
+    emit(f'Estimator: Neyman chi2 residual (k*M - Q)/sqrt(Q), gains profiled in closed form '
+         f'(k=sum Q / sum M), polyak={POLYAK} (iterate-averaging).')
+    emit(f'eps={EPS} reaches the CRB only: it is the sqrt-residual offset carried by SourceModel, '
+         f'and the fit no longer uses a sqrt residual.')
     emit('')
 
     prob = build_calibration_problem(sim_model, srcs, dp1, FIELDS, truth_k=k_true,
@@ -89,8 +90,8 @@ def main():
         truth_shot = [np.asarray(sim_data(s, dpk, jax.random.PRNGKey(100 + m * 17 + j))[0])
                       for j, s in enumerate(srcs)]
         res = fit(prob['source_models'], truth_shot, theta_true, NS,    # start AT truth → measure scatter
-                  steps=STEPS, refresh=max(20, STEPS // 2), nb_h=NB_H, seed=m,
-                  bake_k=BAKE_K, polyak=POLYAK, eps=EPS)
+                  steps=STEPS, refresh=max(20, STEPS // 2), jacobian_draws=NB_H, seed=m,
+                  polyak=POLYAK)
         rec[m] = res['theta']; krec[m] = res['k']
         emit(f'  seed {m} done ({time.time()-t0:.0f}s)')
 
@@ -113,16 +114,17 @@ def main():
          f'(truth spread 12%; per-seed corr median '
          f'{np.median([np.corrcoef(krec[m][klit], k_true[klit])[0,1] for m in range(M)]):.3f}).')
     emit('')
-    if BAKE_K or POLYAK:
-        emit('STABILIZERS ON (now IN fit_gn): the bare free-Schur-k GN diverges on a single '
-             'shot-noise draw (globals collapse, k overfits); bake_k (closed-form k=ΣQ/ΣM, no '
-             'free per-PMT block to overfit) + polyak (iterate-averaging) are the recipe '
-             'stabilizers. If the globals above are near truth (small bias) and realized σ ≈ '
-             'CRB, the recipe is shot-noise-robust and #4 is closed.')
+    if POLYAK:
+        emit('Iterate-averaging ON. The per-PMT gains are profiled in closed form by the fitter '
+             'itself now, so the free-Schur-k arm this study was written against no longer '
+             'exists — the remaining stabilizer is the polyak tail average. If the globals above '
+             'are near truth (small bias) and realized sigma is close to the CRB, the recipe is '
+             'shot-noise-robust.')
     else:
-        emit('FINDING (negative, NO stabilizers): the bare free-Schur-k GN DIVERGES on a '
-             'single-draw shot-noise dataset (globals collapse, k overfits) — run with '
-             'BAKE_K=1 POLYAK=10 for the stabilized recipe. Quote CRB×√12 as the honest bound.')
+        emit('Iterate-averaging OFF. A single-draw shot-noise fit wanders on the Monte-Carlo '
+             'noise floor, so the final iterate is one draw from a stationary distribution '
+             'rather than an estimate — run with POLYAK=10 to read the tail average instead. '
+             'Quote CRB x sqrt(12) as the honest bound.')
     emit('')
     emit(f'_Finished in {(time.time()-t0)/60:.1f} min._')
 

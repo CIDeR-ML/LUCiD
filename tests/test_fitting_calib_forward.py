@@ -1,9 +1,10 @@
-"""lucid.fitting.calib.CalibrationForward — the (source × wavelength) assembly.
+"""lucid.fitting.calib — the (source × wavelength) assembly, and the estimator's two functions.
 
 Scope: what the class ADDS on top of the simulator — the key arithmetic, the (S, NS) row
-ordering, draw averaging, and the equivalence of the serial and mapped dispatch. The physics is
-gated elsewhere, bit-exactly, by tests/reconciliation/test_calib_engine_pin.py, so these tests use
-a stub simulator and run in milliseconds.
+ordering, draw averaging, and the equivalence of the serial and mapped dispatch. The physics comes
+from the simulator and is not what is tested here -- the library's agreement with the paper's
+calibration engine was verified when it was extracted and is not continuously guarded -- so these tests
+use a stub simulator and run in milliseconds.
 
 The stub is deliberately sensitive to all three inputs the assembly must route correctly — source,
 wavelength (through the DetectorParams the parameterisation builds) and key. A stub that ignored
@@ -15,7 +16,7 @@ import jax.numpy as jnp
 import pytest
 
 from lucid.fitting.params import CalibrationParams
-from lucid.fitting.calib import CalibrationForward
+from lucid.fitting.calib import CalibrationForward, profile_gains, neyman_residual
 
 W, NS, NSRC = 3, 6, 4
 
@@ -140,3 +141,74 @@ def test_single_source_needs_no_grouped_dispatch():
     fwd = CalibrationForward(_stub_sim, _sources(1), p, NS)
     out = np.asarray(fwd(_theta(p), 5000, jnp.ones(NS)))
     assert out.shape == (W, NS)
+
+
+# --------------------------------------------------------------------------------------------
+# The estimator's two closed forms. Both are one line of arithmetic, and both are load-bearing:
+# the gauge is what makes the gains identifiable at all, and the Neyman weight is the whole reason
+# the fixed point sits at truth under a re-drawn Monte-Carlo model. Until now neither had a direct
+# test — they were gated only by the slow bit-exact engine pin, which cannot say WHICH property
+# broke when it moves.
+# --------------------------------------------------------------------------------------------
+
+def _gain_case():
+    """Model and observed sums whose ratio is deliberately NOT already gauged."""
+    model = jnp.asarray([1.0, 2.0, 4.0, 8.0, 5.0, 2.5])
+    ratio = jnp.asarray([0.7, 1.3, 2.0, 0.5, 1.1, 3.0])          # mean(log) != 0, mean != 1
+    return model, model * ratio, ratio
+
+
+def test_profile_gains_recovers_the_ratio_up_to_the_gauge():
+    model, observed, ratio = _gain_case()
+    k = profile_gains(model, observed, gauge='log')
+    r = np.asarray(k) / np.asarray(ratio)
+    assert float(np.std(np.log(r))) < 1e-6, 'k must equal sum(Q)/sum(M) up to one overall factor'
+
+
+def test_log_gauge_sets_mean_log_k_to_zero():
+    model, observed, _ = _gain_case()
+    k = np.asarray(profile_gains(model, observed, gauge='log'))
+    assert abs(float(np.mean(np.log(k)))) < 1e-6
+
+
+def test_linear_gauge_sets_mean_k_to_one():
+    model, observed, _ = _gain_case()
+    k = np.asarray(profile_gains(model, observed, gauge='linear'))
+    assert abs(float(np.mean(k)) - 1.0) < 1e-6
+
+
+def test_the_two_gauges_differ_on_a_spread_gain_map():
+    """They are different constraints, so on any non-degenerate map they give different k."""
+    model, observed, _ = _gain_case()
+    a = np.asarray(profile_gains(model, observed, gauge='log'))
+    b = np.asarray(profile_gains(model, observed, gauge='linear'))
+    assert np.abs(a - b).max() > 1e-3
+
+
+def test_unknown_gauge_raises():
+    model, observed, _ = _gain_case()
+    with pytest.raises(ValueError, match='gauge'):
+        profile_gains(model, observed, gauge='mean')
+
+
+def test_neyman_weight_uses_the_data_only():
+    """The denominator must not see the model. That is the entire reason this residual was chosen:
+    a weight involving a re-drawn Monte-Carlo model makes the residual nonlinear in it, which
+    displaces the fixed point permanently rather than merely adding noise."""
+    data = jnp.asarray([4.0, 9.0, 16.0, 25.0])
+    r1 = neyman_residual(jnp.asarray([4.0, 9.0, 16.0, 25.0]), data, 1e-6)
+    np.testing.assert_allclose(np.asarray(r1), 0.0, atol=1e-6)      # zero at the data
+
+    # doubling the model must change the residual by exactly model/sqrt(Q) — linear in the model
+    a = np.asarray(neyman_residual(jnp.asarray([1.0, 2.0, 3.0, 4.0]), data, 1e-6))
+    b = np.asarray(neyman_residual(jnp.asarray([2.0, 4.0, 6.0, 8.0]), data, 1e-6))
+    np.testing.assert_allclose(b - a, np.array([1.0, 2.0, 3.0, 4.0]) / np.sqrt([4, 9, 16, 25]),
+                               rtol=1e-6)
+
+
+def test_neyman_floor_bounds_the_weight_on_an_empty_sensor():
+    """1/sqrt(Q) diverges as Q -> 0; the floor is what stops a nearly unlit sensor dominating."""
+    data = jnp.asarray([0.0, 1.0])
+    r = np.asarray(neyman_residual(jnp.asarray([1.0, 1.0]), data, 0.25))
+    assert r[0] == pytest.approx(1.0 / 0.5)          # floored at 0.25 -> sqrt = 0.5
+    assert np.isfinite(r).all()

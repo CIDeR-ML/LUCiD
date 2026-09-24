@@ -86,7 +86,7 @@ def main():
     # --- recover + shot (tags rs_*) ---
     rs = sorted([(j['nph'], k, j) for k, j in d.items() if k.startswith('rs_')])
     if rs:
-        emit('## Recovery + shot-noise vs N (stabilized: bake_k+polyak+Anscombe)')
+        emit('## Recovery + shot-noise vs N (profiled gains + polyak tail average)')
         emit('')
         emit('| tag | N | param | CRB | implicit ferr | shot bias | shot σ | σ/CRB |')
         emit('|---|---|---|---|---|---|---|---|')

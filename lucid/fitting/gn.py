@@ -1,10 +1,35 @@
 """The damped Gauss-Newton loop, written once.
 
-Four copies of this loop exist in the tree — ``lucid/fitting/gauss_newton.py``,
-``lucid/fitting/recon.py``, ``analysis/paper/utils/calib_fit.py`` and an inline one at
-``analysis/paper/utils/pipeline.py:680``. They have already drifted apart in ways nobody
-intended: three different eigen-floor policies for the same damped inverse, and a default
-damping in the library that is the value the campaign measured as harmful.
+Four copies of this loop existed in the tree, and they had already drifted apart in ways nobody
+intended: three different eigen-floor policies for the same damped inverse, and a default damping
+in the library that was the value the campaign measured as harmful. All four are gone.
+
+===================================================  ==========================================
+was                                                  now
+===================================================  ==========================================
+``lucid/fitting/gauss_newton.py`` (the ``fit`` loop)  removed; ``lucid.fitting.calibrate.fit``
+``lucid/fitting/recon.py`` (``fit_track``)            delegates here, pinned bit-exactly
+``analysis/paper/utils/`` (the campaign engine)      superseded by ``utils/calib_run.py``,
+                                                      which delegates here; gated bit-exactly
+``analysis/paper/utils/pipeline.py`` (projected)      the projector became
+                                                      ``recon.ProjectedReconProblem`` and the
+                                                      loop is this one; gated at rtol=0,
+                                                      atol=0 against a transcription of the
+                                                      original
+===================================================  ==========================================
+
+Only ``fit_track`` and the projected fit are pinned bit-exactly against pre-delegation references;
+``lucid.fitting.calibrate.fit`` deliberately returns different numbers from the loop it replaced,
+because its ESTIMATOR changed at the same time.
+
+One damped Gauss-Newton loop remains anywhere in the tree, and it is not a copy of this one:
+:func:`lucid.fitting.schur_gn.fit_charge_time` carries TWO per-PMT blocks — a multiplicative gain
+and an additive ``t0`` — which the shared calibration problem cannot express, so it is deferred
+rather than folded onto a residual that could not hold it.
+
+``analysis/paper/utils/damping.py`` holds the 2-D loss-geometry figure's damped SOLVE, which is not
+a loop: one definition shared by that figure's two halves. It declines to call
+:func:`damped_matrix` for a documented and measured reason.
 
 The seam
 --------
@@ -29,7 +54,7 @@ Step application belongs to the problem
 ``jax_enable_x64`` is never enabled anywhere in this repo. Calibration therefore accumulates its
 iterate in **float32** and reconstruction in **float64** numpy. A shared ``theta += scale*du``
 would have to pick one and would silently change the other — and this is not a rounding nit: a
-4.4e-07 perturbation at step 0 has been measured growing to 1.6e-02 by step 5 on the calibration
+4.4e-07 perturbation at step 0 has been measured growing to 1.6e-02 by step 4 on the calibration
 problem. So ``Problem.accumulate`` owns it.
 """
 import numpy as np
@@ -85,7 +110,7 @@ def damped_matrix(H, *, lam, mu, jitter=0.0, median_floor=1e-12):
 def gauss_newton(problem, theta0, steps, *, lam, mu, max_step=None, jitter=0.0,
                  lr=1.0, lr_final=None, scale=None,
                  refresh=1, refresh_final=None, refresh_switch=0.5,
-                 readout='final', polyak=0, reject_nonfinite=False, on_step=None):
+                 readout='final', polyak=0, reject_nonfinite=False, fix=(), on_step=None):
     """Run the damped Gauss-Newton loop.
 
     Parameters
@@ -117,6 +142,12 @@ def gauss_newton(problem, theta0, steps, *, lam, mu, max_step=None, jitter=0.0,
         iterate with the smallest ``‖S·g‖``. The trajectory does not settle — it wanders on the
         Monte-Carlo noise floor — so a single iterate is a draw from a stationary distribution
         rather than an estimate, and ``'polyak'`` is usually the honest choice.
+    fix
+        Indices of ``theta`` held fixed: their gradient and their step are zeroed, so the solve
+        still sees the full coupled metric but the frozen directions cannot move. This is not the
+        same as dropping them from the problem — the remaining parameters are then fitted
+        CONDITIONAL on the frozen values, which is the point when one direction is known
+        independently or too weakly determined to leave free.
     reject_nonfinite
         Evaluate the gradient at the proposed iterate and refuse the step if either is
         non-finite. Large early steps can overshoot into a degenerate region where the next
@@ -131,6 +162,7 @@ def gauss_newton(problem, theta0, steps, *, lam, mu, max_step=None, jitter=0.0,
     theta = theta0
     P = int(np.asarray(theta0).shape[0])
     S = np.ones(P) if scale is None else np.asarray(scale, float)
+    fix = np.asarray(list(fix), dtype=int)
     sw = int(refresh_switch * steps)
     since = None                       # None => the metric has never been built
 
@@ -148,23 +180,32 @@ def gauss_newton(problem, theta0, steps, *, lam, mu, max_step=None, jitter=0.0,
     history = [np.asarray(theta)]
     gnorms = [_norm(np.asarray(g))]
     losses = np.zeros(steps)
-    best = (np.inf, np.asarray(theta))
+    # Seeded from the START's own gradient norm, not from inf: gnorms[0] is recorded and is a
+    # legitimate candidate, so seeding at inf silently excluded the one iterate the caller
+    # supplied. On a problem whose gradient grows monotonically, 'ming' returned the LAST
+    # iterate while argmin(gnorm) was 0.
+    best = (gnorms[0], np.asarray(theta))
 
     for step in range(steps):
         # dtype is preserved deliberately: the metric arrives as float32 and the damping is built
-        # from its diagonal, so promoting first shifts median(diag H) in the last bit — measured
-        # at 1.3e-07 on step 0, amplified to 3.9e-04 by step 3.
+        # from its diagonal, so promoting first shifts median(diag H) in the last bit. The
+        # amplification is the documented property of this stack (see the float32 note below); the
+        # specific step-by-step figures previously quoted here were not reproducible and are gone.
         g = np.asarray(g)
         H = np.asarray(H)
         losses[step] = float(loss) if loss is not None else np.nan
 
         Hs = H if scale is None else S[:, None] * H * S[None, :]
         gs = g if scale is None else S * g
+        if fix.size:
+            gs = np.array(gs); gs[fix] = 0.0
         A = damped_matrix(Hs, lam=lam, mu=mu, jitter=jitter)
         lr_it = lr if lr_final is None else lr + (lr_final - lr) * (step / max(1, steps - 1))
         du = -lr_it * np.linalg.solve(A, gs)
         if max_step is not None:
             du = np.clip(du, -max_step, max_step)
+        if fix.size:
+            du[fix] = 0.0
 
         theta_new = problem.accumulate(theta, du if scale is None else S * du)
 
@@ -191,7 +232,12 @@ def gauss_newton(problem, theta0, steps, *, lam, mu, max_step=None, jitter=0.0,
             on_step(step, theta, g, H, loss)
 
     if readout == 'polyak' and polyak:
-        out = np.mean(np.stack(history)[-polyak:], axis=0)
+        # history[1:] first: `history` includes the STARTING point, so a bare [-polyak:]
+        # averages the un-stepped start into the answer whenever polyak > steps. That is
+        # reachable — a shortened run (--steps 30 against the published polyak of 50) would
+        # silently report a number pulled toward its own perturbed start. Identical to
+        # [-polyak:] for polyak <= steps, which is every pinned configuration.
+        out = np.mean(np.stack(history[1:])[-polyak:], axis=0)
     elif readout == 'ming':
         out = best[1]
     else:

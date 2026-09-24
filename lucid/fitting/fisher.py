@@ -19,7 +19,7 @@ import numpy as np
 import jax
 import jax.numpy as jnp
 
-from lucid.fitting.gauss_newton import make_constrained_schur, _keys
+from lucid.fitting.schur_gn import make_constrained_schur, _keys
 
 SQRT12 = float(np.sqrt(12.0))
 
