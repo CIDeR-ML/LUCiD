@@ -32,6 +32,7 @@ class DetectorGeometry(NamedTuple):
                     overlap_st_width_frac: float = 0.35,
                     overlap_renorm: float = 1.0,
                     overlap_mode: str = 'interp',
+                    deposit_leg_bound: bool = False,
                     **grid_params) -> 'DetectorGeometry':
         """Build a DetectorGeometry from a config JSON file.
 
@@ -56,6 +57,11 @@ class DetectorGeometry(NamedTuple):
             Soft-overlap renormalization constant C; default 1.0 = OFF.
         overlap_mode : str
             Soft-overlap lookup interpolation: 'interp' (default) or 'cubic'.
+        deposit_leg_bound : bool
+            Bound the deposit to the travelled leg rather than the unbounded ray line. Default
+            False, bit-identical. Surface detectors only: a string telescope uses its own
+            propagator and deposit, and ignores it. See
+            :func:`lucid.propagation.shared.create_propagator`.
         **grid_params
             Geometry-specific grid parameters forwarded to ``create_propagator()``.
             Cylinder: n_cap, n_angular, n_height.
@@ -99,6 +105,7 @@ class DetectorGeometry(NamedTuple):
                 overlap_st_width_frac=overlap_st_width_frac,
                 overlap_renorm=overlap_renorm,
                 overlap_mode=overlap_mode,
+                deposit_leg_bound=deposit_leg_bound,
                 **grid_params)
 
         return DetectorGeometry(
