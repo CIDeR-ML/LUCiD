@@ -19,17 +19,25 @@ midpoint to the PMT, and ``n`` the water refractive index used for the
 time-of-flight subtraction. What is left is the physical spread: emission
 along the track, dispersion, and the PMT's transit-time jitter.
 
-Two deliberate differences from the reference chain, both consequences of this
-being a tune *to LUCiD*:
+Two things the caller owns:
 
-* **Direct light only** comes from running with scattering and reflection off
-  rather than from WCSim's ``/fqTune/mode killScatterRef``.
-* **The predicted charge on the y axis** is LUCiD's, not fiTQun's. The
-  reference links against fiTQun and calls ``Get1Rmudist``, which needs the
-  Cherenkov profile and charge PDF to have been tuned already. Taking LUCiD's
-  own expected charge makes the first pass self-consistent and removes the
-  circular dependency; if you want a second iteration indexed by the tuned
-  fiTQun's mu, pass it in as ``mu`` and everything else here is unchanged.
+* **Direct light only** comes from running with scattering and reflection off,
+  where the reference uses WCSim's ``/fqTune/mode killScatterRef``.
+* **mu is fiTQun's, not LUCiD's.** The reference calls ``Get1Rmudist`` after
+  putting fiTQun into a specific state -- ``SetScatflg(0)`` (direct light only),
+  ``SetWAttL(6800.)``, ``SetQEEff(0.1)`` and ``SetPhi0(-1., 1.)``. Those last
+  three deliberately pin the normalisation to canonical values so the tune does
+  not depend on constants that have not been tuned yet; the comment in the
+  reference reads "remove dependence on tuning const." This is therefore a
+  *sequencing* constraint, not a circular one: tune the Cherenkov profile and
+  charge PDF first, load them into fiTQun, then run fiTQun to produce the mu
+  this histogram is binned in. Substituting LUCiD's own expected charge would
+  put the table on a different axis from the one fiTQun looks up at
+  reconstruction time.
+
+Events are also selected the way the reference selects them: only those where
+the particle stays inside the detector (fiTQun's PC flag), so partially
+contained tracks do not contaminate the sample.
 """
 from __future__ import annotations
 
@@ -50,9 +58,24 @@ def corrected_time(hit_time_ns: np.ndarray, pmt_pos_cm: np.ndarray, *,
                    n_water: float = 1.38) -> np.ndarray:
     """``t_c`` for a set of hits from one track.
 
-    ``direction`` is the unit track direction; ``s_max_cm`` the track length the
-    Cherenkov profile is defined over (``gsthr`` in the profile file), so the
-    midpoint subtraction matches what fiTQun does at reconstruction time.
+    ``direction`` is the unit track direction; ``s_max_cm`` is ``gsthr`` from
+    the Cherenkov profile, so the midpoint subtraction matches what fiTQun does
+    at reconstruction time -- changing the gsthr rule shifts this whole axis.
+
+    ``t0_ns`` is the event's emission time, the analogue of the reference's
+    ``aSubToffs``. In WCSim that term is always ``950 - trigger_date``: the
+    "real" sub-trigger offset is only ever filled for sub-triggers above zero
+    and the tuning always reads sub-trigger 0, so the fallback branch is the
+    one that runs, and 950 ns is a digitisation-window constant of WCSim's
+    electronics rather than anything physical. LUCiD has no such window, so the
+    right value here is simply the interaction time its labels record
+    (``labl/event_NNN/per_event/t0``), which is 0 when times are already
+    referred to the vertex.
+
+    ``n_water`` is 1.38, the reference's constant. It is a convention shared
+    with fiTQun's own reconstruction-time TOF subtraction, not a measurement of
+    the simulated water (which is dispersive, n = 1.333-1.345), and the two
+    sides must use the same number.
     """
     vertex = np.asarray(vertex_cm, dtype=np.float64)
     u = np.asarray(direction, dtype=np.float64)
@@ -79,7 +102,13 @@ class TimePdfAccumulator:
 
     def fill(self, t_corrected: np.ndarray, mu: np.ndarray,
              weights: Optional[np.ndarray] = None) -> None:
-        """Add one event's hits. ``mu`` is the predicted charge at each hit PMT."""
+        """Add one event's hits.
+
+        ``mu`` is **fiTQun's** predicted charge at each hit PMT (see the module
+        docstring), and the hits are the digitised ones -- the reference loops
+        ``GetNcherenkovdigihits()``, so the widths fitted downstream include the
+        PMT transit-time spread and the digitiser's timing resolution.
+        """
         t = np.asarray(t_corrected, dtype=np.float64)
         m = np.asarray(mu, dtype=np.float64)
         # A PMT with zero predicted charge has no defined log10(mu); it is also
@@ -114,6 +143,28 @@ class TimePdfAccumulator:
         """Write ``<cell>_hist.root``, the name ``combhists``/``fittpdf`` expect."""
         rootio.write(path, {"htimepdf": self.to_root()})
         return Path(path)
+
+
+def read_schedule(path) -> list:
+    """Parse a reference ``chart_<pdg>.txt`` row set.
+
+    Columns are: (unused), n_jobs, n_events_per_job, then one or more momenta
+    for that row. This is the schedule the reference time-PDF scan runs on, so
+    the momentum grid and the statistics per point come from it rather than
+    from a guess.
+    """
+    rows = []
+    for line in Path(path).read_text().splitlines():
+        tok = line.split()
+        if len(tok) < 4:
+            continue
+        n_jobs, n_events = int(tok[1]), int(tok[2])
+        for m in tok[3:]:
+            p = float(m)
+            if p > 0:
+                rows.append({"momentum_mev": p, "n_jobs": n_jobs,
+                             "n_events_per_job": n_events})
+    return rows
 
 
 def cell_name(pdg: int, momentum_mev: float, subjob: int = 0) -> str:

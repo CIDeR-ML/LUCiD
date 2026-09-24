@@ -9,9 +9,9 @@ table (``fiTQun::GetScatRatio``), one table per surface the PMT sits on:
     rs    source distance from the detector axis (cm)
     t     the PMT coordinate that varies over that surface --
           z for the barrel, distance from the axis for the end caps
-    ast   azimuthal angle between source and PMT
-    ct    cosine of the source direction's polar angle
-    phi   azimuthal angle of the source direction about the source-to-PMT line
+    ast   TVector3::DeltaPhi between PMT and source, about the detector axis
+    ct    cosine of the source direction's polar angle (its z component)
+    phi   DeltaPhi between the source direction and the source-to-PMT vector
 
 Bins are uniform on every axis and the flat index runs ``zs`` fastest, matching
 ``TScatTable::GetIndex``/``fillbininfo`` so the array can be handed to that
@@ -41,8 +41,20 @@ import numpy as np
 DIM_NAMES = ("zs", "rs", "t", "ast", "ct", "phi")
 N_DIMS = len(DIM_NAMES)
 
-# The three surfaces a PMT can sit on; fiTQun picks between them by PMT z.
-SURFACES = ("side", "top", "bot")
+# The three surfaces, named as fiTQun looks them up: fiTQun_shared.cc does
+# GetObject("topscattable", ...) etc., so these names are the file contract.
+SURFACES = ("topscattable", "botscattable", "sidescattable")
+
+# fiTQun selects the table by PMT *orientation*, not position: fiTQun.cc's
+# live GetScatRatio uses PMTdir_z < -0.8 -> top, > 0.8 -> bot, else side. (A
+# position cut on |z| > 1800 appears nearby but is commented out.)
+SURFACE_DIRZ_CUT = 0.8
+
+# Bin counts are a fixed convention (measured off the shipped tables); only the
+# PMT-position axis differs, 8 bins for an mPMT end cap against 16 elsewhere.
+NBINS_SIDE = (35, 16, 16, 16, 16, 16)
+NBINS_CAP = (35, 16, 16, 16, 16, 16)
+NBINS_CAP_MPMT = (35, 16, 8, 16, 16, 16)
 
 
 @dataclass
@@ -99,17 +111,58 @@ class ScatTable:
         return self.table.ravel(order="F")
 
     def ratio_to(self, direct: "ScatTable") -> "ScatTable":
-        """Scattered/direct ratio, which is what fiTQun actually looks up."""
-        if self.nbins != direct.nbins:
-            raise ValueError("cannot take a ratio of tables with different binning")
+        """The scattered/direct ratio fiTQun looks up.
+
+        Mirrors ``TScatTable::DivideUnnormalized4D``: ``self`` is the 6D
+        scattered-photon count, ``direct`` the *4D* direct-photon count binned
+        only in (zs, rs, t, ast) -- direct light has no source-direction
+        dependence worth binning, so its count is spread uniformly over the
+        ``n_ct * n_phi`` direction cells before dividing. Bins with no direct
+        light are zeroed rather than left infinite.
+
+        ``direct`` may be passed either as a genuinely 4D table (ct and phi
+        collapsed to one bin) or as a 6D table whose direction axes are already
+        summed; both are reduced the same way.
+        """
+        if self.nbins[:4] != direct.nbins[:4]:
+            raise ValueError("scattered and direct tables differ in (zs, rs, t, ast)")
+        n_dir_cells = self.nbins[4] * self.nbins[5]
+        # Collapse the direction axes and spread the count over them.
+        direct4d = direct.table.sum(axis=(4, 5))[..., None, None] / n_dir_cells
         with np.errstate(divide="ignore", invalid="ignore"):
-            r = np.where(direct.table > 0, self.table / np.where(direct.table > 0, direct.table, 1.0), 0.0)
+            r = np.where(direct4d > 0, self.table / np.where(direct4d > 0, direct4d, 1.0), 0.0)
         return ScatTable(self.name, self.nbins, self.bounds, r)
 
     def __add__(self, other: "ScatTable") -> "ScatTable":
         if self.nbins != other.nbins or self.bounds != other.bounds:
             raise ValueError("cannot merge tables with different binning")
         return ScatTable(self.name, self.nbins, self.bounds, self.table + other.table)
+
+
+def axis_bounds(surface: str, *, det_radius_cm: float, det_halfheight_cm: float,
+                pmt_radius_cm: float) -> tuple:
+    """The six axis ranges, from ``scatTableLooper``'s geometry formula.
+
+    Source coordinates are bounded by the fiducial volume the PMTs enclose
+    (``R - r_pmt``, ``H/2 - r_pmt``); the PMT coordinate runs over the surface
+    it sits on -- z for the barrel, distance from the axis for an end cap. The
+    angles carry the reference's 1.00001 padding so a value exactly on the
+    boundary still lands in a bin.
+    """
+    rmax = det_radius_cm - pmt_radius_cm
+    zmax = det_halfheight_cm - pmt_radius_cm
+    t_range = (-zmax, zmax) if surface == "sidescattable" else (0.0, rmax)
+    pi = float(np.pi) * 1.00001
+    return ((-zmax, zmax), (0.0, rmax), t_range, (-pi, pi), (-1.00001, 1.00001), (-pi, pi))
+
+
+def surface_for(pmt_dir_z: np.ndarray) -> np.ndarray:
+    """Which table each PMT belongs to, by fiTQun's orientation cut."""
+    d = np.asarray(pmt_dir_z, dtype=np.float64)
+    out = np.full(d.shape, "sidescattable", dtype=object)
+    out[d < -SURFACE_DIRZ_CUT] = "topscattable"
+    out[d > SURFACE_DIRZ_CUT] = "botscattable"
+    return out
 
 
 def write_hdf5(path, tables: dict, metadata: Optional[dict] = None) -> Path:

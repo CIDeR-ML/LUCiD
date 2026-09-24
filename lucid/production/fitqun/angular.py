@@ -38,14 +38,19 @@ import numpy as np
 from . import rootio
 
 
-def cos_eta(source_pos: np.ndarray, sensor_pos: np.ndarray,
+def cos_eta(emission_pos: np.ndarray, sensor_pos: np.ndarray,
             sensor_dir: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    """``(R, cos eta)`` for photons travelling from source to sensor.
+    """``(R, cos eta)`` for photons travelling from emission point to sensor.
+
+    ``emission_pos`` is the **photon's emission point**, not the event vertex.
+    The reference is explicit about this -- it fills from ``oppos_`` and has the
+    ``srcpos_`` version commented out -- because the shell of fixed radius about
+    the sensor is only meaningful for the point the light actually left from.
 
     ``sensor_dir`` is the inward-facing sensor axis, so a photon arriving
-    head-on gives ``cos eta = 1``. All three arrays are per photon.
+    head-on gives ``cos eta = 1``. All arrays are per photon, in **cm**.
     """
-    rel = np.asarray(source_pos, dtype=np.float64) - np.asarray(sensor_pos, dtype=np.float64)
+    rel = np.asarray(emission_pos, dtype=np.float64) - np.asarray(sensor_pos, dtype=np.float64)
     R = np.linalg.norm(rel, axis=-1)
     with np.errstate(divide="ignore", invalid="ignore"):
         c = np.einsum("ij,ij->i", rel, np.asarray(sensor_dir, dtype=np.float64))
@@ -53,17 +58,22 @@ def cos_eta(source_pos: np.ndarray, sensor_pos: np.ndarray,
     return R, np.clip(c, -1.0, 1.0)
 
 
-def measure(source_pos: np.ndarray, sensor_pos: np.ndarray, sensor_dir: np.ndarray,
-            *, shell_r_cm: float, shell_dr_cm: float,
+def measure(emission_pos: np.ndarray, sensor_pos: np.ndarray, sensor_dir: np.ndarray,
+            *, shell_r_cm: float, shell_dr_cm: float = 50.0,
             det_radius_cm: float, det_halflength_cm: float,
             weights: Optional[np.ndarray] = None,
             n_bins: int = 25) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Histogram ``cos eta`` for detected direct photons in one spherical shell.
 
+    ``shell_dr_cm`` defaults to the reference's 50 cm (a superseded variant of
+    the plotter used 25; the macros that produced the shipped tune used 50).
+    ``n_bins`` is 25, the value ``fit_cos.C`` was tuned against -- confirmed by
+    the shipped ``angResp`` TF1 carrying ``fNpfits = 25``.
+
     Returns ``(edges, counts, sumw2)``, unnormalised — merging several scans
     means adding the counts, so normalisation is left to :func:`normalise`.
     """
-    R, c = cos_eta(source_pos, sensor_pos, sensor_dir)
+    R, c = cos_eta(emission_pos, sensor_pos, sensor_dir)
     w = np.ones_like(R) if weights is None else np.asarray(weights, dtype=np.float64)
 
     in_shell = (R >= shell_r_cm - shell_dr_cm) & (R < shell_r_cm + shell_dr_cm)
@@ -101,7 +111,9 @@ def write_angular_response(path, edges, counts, sumw2, *, shell_r_cm: float) -> 
     """Write the histogram under the name ``fit_cos.C`` looks up."""
     values, errs = normalise(counts, sumw2)
     name = f"angRespAll_{int(round(shell_r_cm))}"
+    # TH1F, not TH1D: fit_cos.C reads this with GetObject(..., TH1F*), which
+    # type-checks and leaves the pointer null on a mismatch.
     rootio.write(path, {name: rootio.th1(
-        name, edges, values, sumw2=errs,
+        name, edges, values, sumw2=errs, dtype=np.float32,
         title="Angular response function", xtitle="cos#eta")})
     return Path(path)

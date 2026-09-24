@@ -26,7 +26,7 @@ charge at a PMT seen from the vertex at distance ``R0`` and angle ``th0``
 
 so the tables are the moments of the profile along that line of sight:
 
-    I_n(R0, cos th0; p) = int_0^smax  ds  s^n  g(s, cos th(s))
+    I_n(R0, cos th0; p) = int  ds  s^n  g(s, cos th(s))
     R(s)^2   = R0^2 + s^2 - 2 R0 s cos th0
     cos th(s) = (R0 cos th0 - s) / R(s)
 
@@ -39,9 +39,12 @@ carries a bare ``j0`` where the direct one carries ``j0*I_0``):
 ``gNphot`` is the mean photon yield per primary and ``gsthr`` the track length
 the profile is defined over. Both are read back by ``fiTQun_shared::LoadProfiles``.
 
-The tables are evaluated at **bin low edges** on every axis, because that is
-where fiTQun reads them (``R0bins[j] = hI3d->GetXaxis()->GetBinLowEdge(j+1)``)
-and what its trilinear interpolation assumes.
+Axes follow the reference exactly: the profile is histogrammed in 500 angle
+bins over [-1, 1] and 2200 flight-distance bins over [-500, 5000] cm (2.5 cm
+each, negative s kept), and I_n is evaluated on a 401 x 201 (R0, cos th0) grid
+-- 0 to 5000 cm in 12.5 cm steps, -1 to +1 in 0.01. The tables are written so
+those evaluation points land on **bin low edges**, which is where fiTQun reads
+them (``R0bins[j] = hI3d->GetXaxis()->GetBinLowEdge(j+1)``).
 """
 from __future__ import annotations
 
@@ -54,17 +57,17 @@ import uproot
 
 from . import binning, rootio
 
-# s_max is not known until the photons have been looked at, and the profile's
-# s axis runs from 0 to s_max -- so the reduction is two passes over the file:
-# a cheap 1D pass in absolute s to find s_max, then the 2D pass on the final
-# grid. Binning the first pass onto a fixed generous range instead would alias
-# badly, since one grid has to cover both a 1 m and a 50 m track.
-_N_S_SCAN = 200_000
+# The profile is accumulated on the reference's fixed axes (see
+# binning.s_edges / costh_edges): 2200 x 2.5 cm bins over [-500, 5000] cm and
+# 500 angle bins over [-1, 1]. Because the axis is fixed, one streaming pass
+# suffices -- no adaptive range, and the negative-s region (light emitted
+# behind the vertex) is kept rather than cropped away.
 
-# s_max is the quantile of the emission-distance distribution that LUCiD
-# already uses for its own s_max parametrisation (PhotonSim/tools/smax), so the
-# two stay one definition rather than two that drift.
-_SMAX_QUANTILE = 0.9999
+# gsthr is reported as a *bin centre* of that 2.5 cm axis: every value in the
+# shipped CProf files satisfies (gsthr mod 2.5) == 1.25. The rule picking which
+# bin is not in the material we have, so it is taken as the last bin carrying a
+# non-negligible share of the emission, with the floor exposed below.
+_SMAX_FLOOR_FRAC = 1e-4
 
 
 @dataclass
@@ -122,52 +125,39 @@ class ProfileCell:
 
 
 def accumulate(photonsim_path, *, pdg: int, momentum_mev: float,
-               direction=(0.0, 0.0, 1.0), s_hi_cm: float = 100000.0,
-               n_s_bins: int = binning.N_S_BINS,
-               n_costh_bins: int = binning.N_COSTH_BINS,
-               s_max_cm: Optional[float] = None,
-               quantile: float = _SMAX_QUANTILE,
+               direction=(0.0, 0.0, 1.0), s_max_cm: Optional[float] = None,
+               smax_floor_frac: float = _SMAX_FLOOR_FRAC,
                step_size: str = "200 MB") -> ProfileCell:
-    """Reduce one PhotonSim file to a :class:`ProfileCell`.
+    """Reduce one PhotonSim file to a :class:`ProfileCell` on the reference axes.
 
     Reads ``OpticalPhotonsRaw`` in chunks, so a high-momentum sample never has
-    to fit in memory. ``s_hi_cm`` only has to be an upper bound on the track
-    length; the profile is cropped to the s_max derived from the data, or to
-    ``s_max_cm`` when the caller pins it (which also skips the scan pass, e.g.
-    to keep the split jobs of one cell consistent).
+    to fit in memory. ``s_max_cm`` pins gsthr instead of deriving it, which
+    keeps the split jobs of one cell consistent.
     """
     axis = np.asarray(direction, dtype=np.float64)
     axis /= np.linalg.norm(axis)
-    costh_edges = np.linspace(-1.0, 1.0, n_costh_bins + 1)
+    s_edges = binning.s_edges()
+    costh_edges = binning.costh_edges()
+    counts = np.zeros((len(s_edges) - 1, len(costh_edges) - 1), dtype=np.float64)
+    n_photons = 0
 
     with uproot.open(photonsim_path) as f:
         n_events = int(f["OpticalPhotons"].num_entries)
-        raw = f["OpticalPhotonsRaw"]
-
-        if s_max_cm is None:
-            scan_edges = np.linspace(0.0, s_hi_cm, _N_S_SCAN + 1)
-            scan = np.zeros(_N_S_SCAN, dtype=np.float64)
-            for s, _ in _iterate_photons(raw, axis, step_size, positions_only=True):
-                scan += np.histogram(s, bins=scan_edges)[0]
-            if scan.sum() == 0:
-                raise ValueError(f"{photonsim_path}: no Cherenkov photons found")
-            s_max_cm = _quantile_from_hist(scan, scan_edges, quantile)
-
-        s_edges = np.linspace(0.0, float(s_max_cm), n_s_bins + 1)
-        counts = np.zeros((n_s_bins, n_costh_bins), dtype=np.float64)
-        n_photons = 0
-        for s, costh in _iterate_photons(raw, axis, step_size):
+        for s, costh in _iterate_photons(f["OpticalPhotonsRaw"], axis, step_size):
             n_photons += s.size
             counts += np.histogram2d(s, costh, bins=[s_edges, costh_edges])[0]
 
     if n_photons == 0:
         raise ValueError(f"{photonsim_path}: no Cherenkov photons found")
 
+    if s_max_cm is None:
+        s_max_cm = _smax_from_hist(counts.sum(axis=1), s_edges, smax_floor_frac)
+
     ds = s_edges[1] - s_edges[0]
     dc = costh_edges[1] - costh_edges[0]
     norm = counts.sum() * ds * dc
     if norm <= 0:
-        raise ValueError(f"{photonsim_path}: no photons inside [0, s_max]")
+        raise ValueError(f"{photonsim_path}: empty profile")
 
     return ProfileCell(pdg=pdg, momentum_mev=float(momentum_mev),
                        s_edges=s_edges, costh_edges=costh_edges,
@@ -175,8 +165,7 @@ def accumulate(photonsim_path, *, pdg: int, momentum_mev: float,
                        n_photons=n_photons / max(n_events, 1), n_events=n_events)
 
 
-def _iterate_photons(raw, axis: np.ndarray, step_size: str,
-                     positions_only: bool = False):
+def _iterate_photons(raw, axis: np.ndarray, step_size: str):
     """Yield ``(s, cos theta)`` per chunk of the raw photon tree.
 
     ``s`` is the projection of the emission point onto the track axis and
@@ -185,31 +174,26 @@ def _iterate_photons(raw, axis: np.ndarray, step_size: str,
     """
     pos_branches = ["PhotonPosX", "PhotonPosY", "PhotonPosZ"]
     dir_branches = ["PhotonDirX", "PhotonDirY", "PhotonDirZ"]
-    branches = pos_branches if positions_only else pos_branches + dir_branches
-    for chunk in raw.iterate(branches, step_size=step_size, library="np"):
-        # Branches are jagged (one entry per chunk of photons); flatten.
+    for chunk in raw.iterate(pos_branches + dir_branches, step_size=step_size,
+                             library="np"):
         pos = np.stack([np.concatenate(chunk[b]) for b in pos_branches], axis=1)
-        s = (pos @ axis) * 0.1
-        if positions_only:
-            yield s, None
-            continue
         dirs = np.stack([np.concatenate(chunk[b]) for b in dir_branches], axis=1)
-        yield s, dirs @ axis
+        yield (pos @ axis) * 0.1, dirs @ axis
 
 
-def _quantile_from_hist(marginal: np.ndarray, edges: np.ndarray, q: float) -> float:
-    """Linear-interpolated quantile of a binned distribution."""
-    cdf = np.cumsum(marginal)
-    total = cdf[-1]
-    if total <= 0:
+def _smax_from_hist(marginal: np.ndarray, edges: np.ndarray, floor_frac: float) -> float:
+    """gsthr: the centre of the last s bin carrying real emission."""
+    if marginal.max() <= 0:
         raise ValueError("empty s distribution")
-    return float(np.interp(q * total, np.concatenate([[0.0], cdf]), edges))
+    occupied = np.flatnonzero(marginal > floor_frac * marginal.max())
+    last = int(occupied[-1])
+    return float(0.5 * (edges[last] + edges[last + 1]))
 
 
 def integral_tables(cells: list[ProfileCell], *,
-                    r0_edges: Optional[np.ndarray] = None,
-                    costh0_edges: Optional[np.ndarray] = None,
-                    chunk_r0: int = 10):
+                    r0: Optional[np.ndarray] = None,
+                    costh0: Optional[np.ndarray] = None,
+                    chunk_r0: int = 8):
     """I_n(R0, cos th0; p) for n = 0,1,2, plus the isotropic-source moments.
 
     Returns ``(I, iso1, iso2, r0_lo, costh0_lo, momenta)`` where ``I`` has shape
@@ -219,10 +203,8 @@ def integral_tables(cells: list[ProfileCell], *,
     cells = sorted(cells, key=lambda c: c.momentum_mev)
     if not cells:
         raise ValueError("no profile cells")
-    r0_edges = binning.r0_edges() if r0_edges is None else np.asarray(r0_edges)
-    costh0_edges = binning.costh0_edges() if costh0_edges is None else np.asarray(costh0_edges)
-    r0 = r0_edges[:-1]
-    c0 = costh0_edges[:-1]
+    r0 = binning.r0_points() if r0 is None else np.asarray(r0)
+    c0 = binning.costh0_points() if costh0 is None else np.asarray(costh0)
 
     n_mom = len(cells)
     out = np.zeros((3, len(r0), len(c0), n_mom), dtype=np.float64)

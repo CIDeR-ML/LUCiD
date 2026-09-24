@@ -69,11 +69,12 @@ def test_tgraph_rejects_mismatched_lengths():
 
 # --- Cherenkov profile -------------------------------------------------------
 
-def _uniform_cell(pdg=13, momentum=1000.0, s_max=100.0, n_s=200, n_c=200):
-    """A profile that is flat in s and in cos(theta): g = 1/(s_max * 2)."""
-    s_edges = np.linspace(0.0, s_max, n_s + 1)
+def _uniform_cell(pdg=13, momentum=1000.0, s_max=100.0, n_s=200, n_c=200,
+                  s_lo=0.0):
+    """A profile flat in s over [s_lo, s_max] and flat in cos(theta)."""
+    s_edges = np.linspace(s_lo, s_max, n_s + 1)
     c_edges = np.linspace(-1.0, 1.0, n_c + 1)
-    density = np.full((n_s, n_c), 1.0 / (s_max * 2.0))
+    density = np.full((n_s, n_c), 1.0 / ((s_max - s_lo) * 2.0))
     return cprofile.ProfileCell(
         pdg=pdg, momentum_mev=momentum, s_edges=s_edges, costh_edges=c_edges,
         density=density, s_max_cm=s_max, n_photons=1234.0, n_events=10)
@@ -86,7 +87,10 @@ def test_integral_tables_against_closed_form():
     = s_max^n / (2 (n+1)) independently of R0 and cos(theta0).
     """
     cell = _uniform_cell(s_max=100.0)
-    I, iso1, iso2, r0, c0, mom = cprofile.integral_tables([cell])
+    # A coarse grid keeps the closed-form check fast; the production grid is
+    # 401 x 201 (binning.r0_points / costh0_points).
+    I, iso1, iso2, r0, c0, mom = cprofile.integral_tables(
+        [cell], r0=np.linspace(0.0, 5000.0, 21), costh0=np.linspace(-1.0, 1.0, 21))
 
     assert I.shape == (3, len(r0), len(c0), 1)
     expected = [100.0**n / (2.0 * (n + 1)) for n in range(3)]
@@ -120,11 +124,9 @@ def test_integral_tables_pick_the_right_angle_slice():
                                 costh_edges=c_edges, density=density,
                                 s_max_cm=s_max, n_photons=1.0, n_events=1)
 
-    # Evaluation points are bin low edges, so these grids probe R0 = 5000 cm at
-    # cos theta0 = -1 (index 0) and +1 (index 1).
+    # Probe R0 = 5000 cm at cos theta0 = -1 (index 0) and +1 (index 1).
     I, _, _, _, _, _ = cprofile.integral_tables(
-        [cell], r0_edges=np.array([5000.0, 5001.0]),
-        costh0_edges=np.array([-1.0, 1.0, 3.0]))
+        [cell], r0=np.array([5000.0]), costh0=np.array([-1.0, 1.0]))
 
     upstream = I[0, 0, 0, 0]
     downstream = I[0, 0, 1, 0]
@@ -136,7 +138,8 @@ def test_integral_tables_pick_the_right_angle_slice():
 
 def test_cprofile_file_has_everything_fitqun_loads(tmp_path):
     """fiTQun_shared::LoadProfiles reads these objects by name; all must exist."""
-    cells = [_uniform_cell(momentum=p, s_max=0.2 * p) for p in (200.0, 500.0, 1000.0)]
+    cells = [_uniform_cell(momentum=p, s_max=0.2 * p, n_s=20, n_c=20)
+             for p in (200.0, 500.0, 1000.0)]
     path = tmp_path / "CProf_13_WCSim.root"
     cprofile.write_cprofile(path, 13, cells)
 
@@ -267,6 +270,51 @@ def test_scattable_index_order_is_dimension_zero_fastest():
     assert t.flat()[5] == 7.0
 
 
+def test_scattable_names_match_fitqun_lookup():
+    """fiTQun_shared.cc looks these up literally; short names return null."""
+    assert scattable.SURFACES == ("topscattable", "botscattable", "sidescattable")
+
+
+def test_scattable_surface_split_is_by_orientation():
+    """fiTQun's live GetScatRatio cuts on PMTdir_z, not PMT position."""
+    dirs = np.array([-0.95, -0.5, 0.0, 0.5, 0.95])
+    got = list(scattable.surface_for(dirs))
+    assert got == ["topscattable", "sidescattable", "sidescattable",
+                   "sidescattable", "botscattable"]
+
+
+def test_scattable_axis_bounds_follow_the_reference_formula():
+    side = scattable.axis_bounds("sidescattable", det_radius_cm=1690.0,
+                                 det_halfheight_cm=1810.0, pmt_radius_cm=25.4)
+    cap = scattable.axis_bounds("topscattable", det_radius_cm=1690.0,
+                                det_halfheight_cm=1810.0, pmt_radius_cm=25.4)
+    # source axes are the PMT-enclosed volume
+    assert side[0] == pytest.approx((-1784.6, 1784.6))
+    assert side[1] == pytest.approx((0.0, 1664.6))
+    # the PMT axis follows the surface: z on the barrel, radius on a cap
+    assert side[2] == pytest.approx((-1784.6, 1784.6))
+    assert cap[2] == pytest.approx((0.0, 1664.6))
+    # angles carry the reference's 1.00001 padding
+    assert side[4] == pytest.approx((-1.00001, 1.00001))
+    assert side[3][1] == pytest.approx(np.pi * 1.00001)
+
+
+def test_scattable_ratio_is_6d_over_spread_4d():
+    """DivideUnnormalized4D: direct light is 4D and spread over the
+    n_ct*n_phi direction cells before dividing -- not an elementwise 6D divide."""
+    nb = (2, 1, 1, 1, 2, 2)                      # 4 direction cells
+    bd = ((0.0, 2.0),) + ((0.0, 1.0),) * 5
+    scattered = scattable.ScatTable("s", nb, bd)
+    direct = scattable.ScatTable("d", nb, bd)
+    scattered.table[0, 0, 0, 0] = 1.0            # 1 in every direction cell
+    direct.table[0, 0, 0, 0] = 2.0               # 2 each -> 8 total direct
+    ratio = scattered.ratio_to(direct)
+    # direct4d = 8/4 = 2 per cell, so the ratio is 1/2 everywhere in that bin
+    np.testing.assert_allclose(ratio.table[0, 0, 0, 0], 0.5)
+    # a bin with no direct light is zeroed, not infinite
+    assert np.all(ratio.table[1] == 0.0)
+
+
 def test_scattable_fill_and_ratio():
     nbins = (4, 1, 1, 1, 1, 1)
     bounds = ((0.0, 4.0), (0.0, 1.0), (0.0, 1.0), (0.0, 1.0), (0.0, 1.0), (0.0, 1.0))
@@ -278,6 +326,7 @@ def test_scattable_fill_and_ratio():
     scattered.fill(np.array([0.5, 1.5, 2.5]), zeros, zeros, zeros, zeros, zeros,
                    weights=np.array([1.0, 2.0, 0.0]))
 
+    # One direction cell, so the 4D spread is a no-op and the ratio is plain.
     ratio = scattered.ratio_to(direct)
     np.testing.assert_allclose(ratio.table[:3, 0, 0, 0, 0, 0], [0.1, 0.1, 0.0])
     # An empty direct bin gives 0, not a division by zero.
@@ -311,9 +360,16 @@ def test_reference_grids_load():
     mu = binning.charge_mu_grid()
     assert mu[0] == 0.1 and np.all(np.diff(mu) > 0)
 
+    # 1500 is the real final edge: makeChargePDFplot.C breaks its read loop on
+    # it before incrementing, so nqbins=480 but qbinEdg[480]=1500 is still used.
     q = binning.charge_q_edges()
-    assert q[0] == 0.0 and q[-1] != 1500.0        # the sentinel is dropped
+    assert q[0] == 0.0 and q[-1] == 1500.0
+    assert len(q) - 1 == 480
     assert np.all(np.diff(q) > 0)
+
+    # gen2d.cc opens files by mutbl.txt's literal tokens, so "1.0" must survive.
+    labels = binning.charge_mu_labels()
+    assert len(labels) == len(mu) and "1.0" in labels and "0.1" in labels
 
     for pdg in (11, 13, 211):
         assert len(binning.timepdf_momenta(pdg)) > 40
@@ -434,14 +490,22 @@ def test_charge_pdf_rejects_a_model_without_an_spe_spectrum():
 
 
 def test_charge_pdf_filenames_match_the_reference_spelling(tmp_path):
-    """gen2d.cc opens '<mu>_pdf.root' using the literal text of mutbl.txt."""
+    """gen2d.cc opens '<mu>_pdf.root' using the literal text of mutbl.txt.
+
+    Nine entries are whole numbers written as "1.0".."9.0"; formatting the
+    float gives "1".."9" and gen2d.cc then opens a missing file and
+    dereferences the null TFile.
+    """
     from lucid.production.fitqun import chargepdf
-    p = chargepdf.write_mu_point(tmp_path, 10.0, n_pmt=50, n_events=2,
-                                 model="ski", seed=0)
-    assert p.name == "10_pdf.root"
-    p = chargepdf.write_mu_point(tmp_path, 0.1, n_pmt=50, n_events=2,
-                                 model="ski", seed=0)
-    assert p.name == "0.1_pdf.root"
+
+    for label in ("1.0", "0.1", "10", "1090"):
+        p = chargepdf.write_mu_point(tmp_path, float(label), label=label,
+                                     n_pmt=20, n_events=1, model="ski", seed=0)
+        assert p.name == f"{label}_pdf.root"
+
+    # Every label the scan would emit must round-trip to a real mutbl.txt token.
+    labels = set(binning.charge_mu_labels())
+    assert {"1.0", "2.0", "9.0"} <= labels
 
 
 # --- cluster fan-out ----------------------------------------------------------
