@@ -60,7 +60,7 @@ def cos_eta(emission_pos: np.ndarray, sensor_pos: np.ndarray,
 
 def measure(emission_pos: np.ndarray, sensor_pos: np.ndarray, sensor_dir: np.ndarray,
             *, shell_r_cm: float, shell_dr_cm: float = 50.0,
-            det_radius_cm: float, det_halflength_cm: float,
+            det_radius_cm: float, det_halfheight_cm: float,
             weights: Optional[np.ndarray] = None,
             n_bins: int = 25) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Histogram ``cos eta`` for detected direct photons in one spherical shell.
@@ -83,7 +83,7 @@ def measure(emission_pos: np.ndarray, sensor_pos: np.ndarray, sensor_dir: np.nda
     # clears the end caps, an end-cap sensor if it clears the barrel wall.
     reach = shell_r_cm + shell_dr_cm
     sensor_pos = np.asarray(sensor_pos, dtype=np.float64)
-    clear_z = np.abs(sensor_pos[:, 2]) + reach <= det_halflength_cm
+    clear_z = np.abs(sensor_pos[:, 2]) + reach <= det_halfheight_cm
     clear_r = np.hypot(sensor_pos[:, 0], sensor_pos[:, 1]) + reach <= det_radius_cm
     if np.any(clear_z & clear_r):
         raise ValueError(
