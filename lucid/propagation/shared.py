@@ -1,9 +1,13 @@
-"""Shared photon propagator factory using Detector abstract methods.
+"""The surface photon propagator: one factory for any Detector subclass.
 
-This replaces the 3 geometry-specific factories (create_photon_propagator,
-create_sphere_photon_propagator, create_box_photon_propagator) with a
-single function that works for any Detector subclass implementing the
-Phase 9 abstract methods.
+Replaced the three geometry-specific factories -- create_photon_propagator,
+create_sphere_photon_propagator, create_box_photon_propagator -- which have since been deleted.
+Geometry enters only through the Detector methods called below (configure_grid,
+assign_sensor_to_cells, grid_cell_centers, build_inverted_sensor_map, bounds_check,
+intersect_ray, point_to_grid_cell, compute_normal); everything else here is shape-agnostic.
+
+Not the only propagator: `lucid/propagation/string/` traverses a per-DOM volume rather than a
+surface grid, and carries its own deposit implementation.
 """
 import warnings
 
