@@ -139,8 +139,27 @@ jobs:
           if-no-files-found: error
 
   test:
-    # Unit / integration tests: runs the pytest suite (fast tests only;
-    # slow tests are skipped by default via conftest.py --slow mechanism).
+    # The WHOLE suite, --slow included.
+    #
+    # It used to be the fast tests only. conftest.py's pytest_ignore_collect drops 24 files
+    # unless --slow is passed, so those 24 never ran here, and this repo has now paid for that
+    # twice over with defects that sat red for months in a green pipeline:
+    #
+    #   * tests/test_containers.py asserted a value 968d11e changed on 2026-06-14. Red for three
+    #     months.
+    #   * tests/reconciliation/test_tripwire.py — the one instrument built to catch forward-model
+    #     drift — failed from b8c266e (2026-07-15) until 2026-09-23. Excluded from the only place
+    #     it would have been checked automatically.
+    #
+    # Also unrun in that set: the SK-scale integration tests and the propagation differentiability
+    # gates. Cheaper to pay the wall-clock than to keep discovering which gates were never running.
+    #
+    # Provenance for the tripwire's reference: tests/reconciliation/tripwire_water_ref.PROVENANCE.md
+    #
+    # Cost: 743 tests, about 23 minutes. That measurement was already CPU-only -- conftest.py
+    # forces JAX_PLATFORMS=cpu for the whole suite, so the GPU on the measuring node went unused.
+    # This runner will differ by CPU model and core count, not by device. If it becomes the
+    # bottleneck, split the job rather than narrowing what it collects.
     needs: build
     runs-on: ubuntu-latest
     permissions:
@@ -164,8 +183,15 @@ jobs:
       - name: Pull LUCiD container
         run: docker pull ${{ steps.img.outputs.image }}
 
-      - name: Run pytest
+      # -rs groups every skip with its reason. A bare skip count hides a gate that quietly stopped
+      # running, and this suite already has skips nobody sees: the two byte-identity tests gate on
+      # env vars CI never sets (tests/io/test_categorizer_byte_identity.py:147,
+      # tests/io/test_hits_byte_identity.py:208). The SIREN-gated tests will skip here too, since
+      # container/Dockerfile.dockerignore:42 excludes **/siren_training/ and those paths are
+      # symlinks into the data area, so they cannot be in the image. Naming a skip is what makes
+      # that a decision rather than an assumption.
+      - name: Run pytest (full suite, --slow)
         run: |
           docker run --rm \
             ${{ steps.img.outputs.image }} \
-            bash -c "cd /opt/LUCiD && python3 -m pytest tests/ -v --tb=short"
+            bash -c "cd /opt/LUCiD && python3 -m pytest tests/ --slow -v --tb=short -rs"
