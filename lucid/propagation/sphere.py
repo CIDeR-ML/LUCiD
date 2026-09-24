@@ -63,7 +63,11 @@ def intersect_sphere(ray_origin, ray_direction, center, radius):
         return (intersects_, tval_)
     
     def no_intersection_branch(_):
-        return (False, jnp.array(LARGE, dtype=jnp.float32))
+        # dtype FOLLOWS THE RAY, it is not pinned -- same defect as the cylinder's
+        # `parallel_side_branch`, and the same reasoning: `lax.cond` demands both branches agree,
+        # the other branch follows the input precision, and a hard float32 makes the library
+        # unrunnable under `jax_enable_x64`. Invisible at float32 and bit-identical there.
+        return (False, jnp.array(LARGE, dtype=ray_origin.dtype))
     
     has_intersection = discriminant >= -epsilon
     intersects, tval = lax.cond(has_intersection,

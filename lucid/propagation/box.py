@@ -371,7 +371,12 @@ def assign_sensors_to_box_grid(sensors, sensor_radius, length, width, height,
             jnp.abs(z + height/2)   # Bottom face
         ])
         
-        closest_face = jnp.argmin(dist_to_faces)
+        # .astype(int32) for the same reason cylinder.py and sphere.py cast their index
+        # components: this value is placed into `indices` beside x_idx/z_idx, which ARE cast, and
+        # `jnp.argmin` returns int64 once jax_enable_x64 is on. That promoted `indices` to int64
+        # while assign_off_surface below stays pinned int32, and `lax.cond` rejected the pair --
+        # so box geometries could not be built in double precision at all.
+        closest_face = jnp.argmin(dist_to_faces).astype(jnp.int32)
         min_distance = jnp.min(dist_to_faces)
         
         # Check if sensor is close enough to any face
