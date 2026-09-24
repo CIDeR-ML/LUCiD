@@ -36,6 +36,7 @@ import jax.numpy as jnp
 
 from lucid.detector_params import ParticleParams
 from lucid.losses import counts_loss, first_arrival_window_nll
+from lucid.fitting.gn import damped_matrix, gauss_newton
 
 # Natural per-parameter scales (RECO_PIPELINE §2): ~50 MeV, 0.2 m, 0.02 cos-units, 0.2 ns.
 SCALE9 = np.array([50., .2, .2, .2, .02, .02, .02, .02, .2])
@@ -68,6 +69,48 @@ def vec9_from_track(energy, position, direction, t0=0.0):
     p = np.asarray(position, float)
     return np.array([float(energy), p[0], p[1], p[2],
                      np.sin(pol), np.cos(pol), np.sin(az), np.cos(az), float(t0)])
+
+
+class ReconProblem:
+    """Wraps a :class:`ReconModel` for the shared loop in :mod:`lucid.fitting.gn`.
+
+    Reconstruction is a LIKELIHOOD problem: the gradient is reverse-mode AD of a scalar and the
+    metric is a separately-built PSD Fisher. There is no residual vector, which is why the shared
+    loop is written against ``(g, H, loss)`` rather than anything phrased in residuals — that is
+    the only interface both this and the least-squares calibration problem can satisfy.
+
+    Two policies live here rather than in the loop, and both are deliberate:
+
+    * **Keys are fixed across iterations.** The same ``nkeys`` draws are reused every step, so
+      ``grad`` is a deterministic function of ``theta`` — common random numbers, which removes the
+      step-to-step sampling noise that would otherwise swamp a converging fit. Calibration does
+      the opposite and redraws every step, because a residual linear in the model needs the
+      expected objective rather than one noisy realisation. Only the problem can hold both.
+    * **The iterate stays float64 numpy.** ``jax_enable_x64`` is never enabled, so a step applied
+      in the calibration problem's float32 would give a different trajectory.
+
+    ``loss`` is ``None``: the loop records it for diagnostics, and ``fit_track`` never evaluated a
+    scalar objective inside its iteration. ``readout='ming'`` uses ``‖S·g‖``, not the loss.
+    """
+
+    def __init__(self, model, obs_counts, obs_times, keys, fdh, fisher_mode='ad'):
+        self.model = model
+        self.oc = obs_counts
+        self.ot = obs_times
+        self.keys = list(keys)
+        self.fdh = fdh
+        self.fisher_fn = model.fisher_ad if fisher_mode == 'ad' else model.fisher
+        self._H = None
+
+    def grad_metric_loss(self, theta, step, refresh=True):
+        g = np.mean([np.asarray(self.model.grad(theta, self.oc, self.ot, k))
+                     for k in self.keys], 0)
+        if refresh or self._H is None:
+            self._H = self.fisher_fn(theta, self.oc, self.ot, self.keys, self.fdh)
+        return g, self._H, None
+
+    def accumulate(self, theta, dtheta):
+        return theta + dtheta
 
 
 def seed_vertex_time(pos, obs_counts, obs_times, *, vspeed=0.2167, vgrid=11, tankr=None,
@@ -293,49 +336,21 @@ def fit_track(model, obs_counts, obs_times, start, *, nkeys=8, niters=150, lr=4.
     def G(th):
         return np.mean([np.asarray(model.grad(th, oc, ot, k)) for k in keys], 0)
 
-    fisher_fn = model.fisher_ad if fisher_mode == 'ad' else model.fisher
-    th = np.asarray(start, float); best = (1e18, th.copy()); F = None
-    g = G(th); traj = [th.copy()]; gnorms = [float(np.linalg.norm(g * S))]
-    # Refresh-cadence schedule: recompute the Fisher every `refresh` iters early, then every
-    # `refresh_final` (smaller = fresher) after `refresh_switch·niters`. The ref2/ref1 resolution gain
-    # comes from a fresh metric in the LATE precision phase; spending it only there recovers most of the
-    # gain at far less cost than constant low refresh. refresh_final=None → constant `refresh` (unchanged).
-    sw = int(refresh_switch * niters); since = 0
-    pbar = report.progress(range(niters), desc='track fit', total=niters, verbose=verbose)
-    for it in pbar:
-        r_it = refresh if (refresh_final is None or it < sw) else refresh_final
-        if F is None or since >= r_it or (refresh_final is not None and it == sw):
-            F = fisher_fn(th, oc, ot, keys, fdh); since = 0
-        since += 1
-        Fs = S[:, None] * F * S[None, :]; gs = S * g                       # SCALE9 preconditioning
-        marq = np.diag(lam * np.diag(Fs))                                  # Marquardt: a true diagonal
-        rI = ridge_i * np.median(np.clip(np.diag(Fs), 1e-12, None)) * np.eye(9)  # additive Levenberg floor
-        # optional LR anneal lr->lr_final (linear): small late steps can't kick the fit OUT of a
-        # converged basin (the late-divergence failure mode), so the trajectory settles at the min.
-        lr_it = lr if lr_final is None else lr + (lr_final - lr) * (it / max(1, niters - 1))
-        du = -lr_it * np.linalg.solve(Fs + marq + rI + 1e-9 * np.eye(9), gs)
-        if trust is not None:                       # trust-region step clip (see trust='auto' above):
-            du = np.clip(du, -trust, trust)         # |Δθ_k| ≤ trust·SCALE9_k. Active by default only
-            #   for energy_from_scale models (else disabled → the plain recipe is byte-identical);
-            #   required once energy_from_scale steepens the energy gradient (else ~1/10 events run away).
-        th_new = th + S * du; g_new = G(th_new)
-        # NaN/Inf-reject trust guard: the big early steps of the annealed lr=4 occasionally overshoot
-        # into a degenerate region (~0.3% of events, seen at 250k) where the next gradient blows up.
-        # Reject any step that produces a non-finite θ/gradient (keep the previous iterate) so a single
-        # bad step can't poison the Polyak readout into NaN. Clean fits never trip this → resolution
-        # unchanged; would-be-divergent fits get a bounded result instead.
-        if np.isfinite(th_new).all() and np.isfinite(g_new).all():
-            th, g = th_new, g_new
-        gn = float(np.linalg.norm(g * S))
-        if gn < best[0]: best = (gn, th.copy())
-        traj.append(th.copy()); gnorms.append(gn)
-        pbar.set_postfix_str(f'‖g‖={gn:.2e}')
-    if readout == 'polyak':        # avg the last polyak_w iterates — robust to the floor wandering
-        out = np.mean(np.array(traj)[-polyak_w:], axis=0)   # (the ‖g‖ never vanishes at the biased
-    elif readout == 'ming':        # minimum, so a single iterate wanders; averaging settles it)
-        out = best[1]
-    else:
-        out = th
+    # The loop itself is lucid.fitting.gn.gauss_newton — the same one the calibration fit runs.
+    # ReconProblem supplies (g, H, loss) and owns the two policies the loop must not: keys fixed
+    # across iterations (common random numbers, the opposite of calibration's redraw-per-step) and
+    # a float64 numpy iterate. Everything below the seam — SCALE9 preconditioning, the Marquardt +
+    # Levenberg + jitter damping, the lr anneal, the trust clip, the refresh cadence with its
+    # mid-run switch, the non-finite reject and all three readouts — is shared, not duplicated.
+    prob = ReconProblem(model, oc, ot, keys, fdh, fisher_mode=fisher_mode)
+    res = gauss_newton(prob, np.asarray(start, float), niters,
+                       lam=lam, mu=ridge_i, jitter=1e-9,
+                       lr=lr, lr_final=lr_final, scale=S, max_step=trust,
+                       refresh=refresh, refresh_final=refresh_final,
+                       refresh_switch=refresh_switch,
+                       readout=readout, polyak=polyak_w, reject_nonfinite=True)
+    out = res['theta']
+    traj, gnorms = res['history'], res['gnorm']
     if verbose:
         report.emit(report.track_table(out, truth=truth, dir_of=vec9_dir))
     if hist:
