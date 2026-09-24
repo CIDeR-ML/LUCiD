@@ -8,7 +8,9 @@ Two output modes:
   which sparsifies and appends each chunk incrementally.
 
 * ``per_photon`` — dense ``(n_cases, n_photons)`` arrays of ``detected``,
-  ``sensor_id``, ``hit_time`` stored with chunked gzip.
+  ``sensor_id``, ``hit_time`` and ``deviated`` stored with chunked gzip.
+  ``deviated`` marks light that scattered or reflected before detection, which
+  is the direct/indirect split fiTQun's scattering table is built from.
 """
 from typing import Optional
 
@@ -172,6 +174,7 @@ def save_shotgun_per_photon(
     detected: np.ndarray,
     sensor_id: np.ndarray,
     hit_time: np.ndarray,
+    deviated: Optional[np.ndarray] = None,
     *,
     tts_sigma_ns: float,
     source: Optional[ShotgunSource] = None,
@@ -182,6 +185,8 @@ def save_shotgun_per_photon(
     det = np.atleast_2d(np.asarray(detected))
     sid = np.atleast_2d(np.asarray(sensor_id))
     ht = np.atleast_2d(np.asarray(hit_time))
+    dev = (np.zeros_like(det) if deviated is None
+           else np.atleast_2d(np.asarray(deviated)))
     n_cases, n_photons = det.shape
 
     with h5py.File(path, 'w') as f:
@@ -200,6 +205,8 @@ def save_shotgun_per_photon(
                           compression='gzip', compression_opts=4, chunks=True)
         pp.create_dataset('hit_time', data=ht.astype(np.float32),
                           compression='gzip', compression_opts=4, chunks=True)
+        pp.create_dataset('deviated', data=dev.astype(np.bool_),
+                          compression='gzip', compression_opts=4, chunks=True)
 
         if save_source:
             _write_source(f.create_group('source'), source)
@@ -213,6 +220,8 @@ def load_shotgun_per_photon(path: str) -> dict:
         out['detected'] = pp['detected'][:]
         out['sensor_id'] = pp['sensor_id'][:]
         out['hit_time'] = pp['hit_time'][:]
+        # Absent in files written before the flag existed.
+        out['deviated'] = pp['deviated'][:] if 'deviated' in pp else None
         out['source'] = _read_source(f['source']) if 'source' in f else None
     return out
 

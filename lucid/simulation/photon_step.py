@@ -141,7 +141,15 @@ def photon_iteration_sample(
     # carries no score -> 0.0 (keeps the shared scan-body step signature consistent).
     logp_increment = jnp.zeros_like(new_time)
 
-    return new_pos, new_dir, new_time, detect_prob, reflection_attenuation, continuing_factor, logp_increment
+    # 8th return: did this step deviate the photon from a straight line? Scatter
+    # and reflection both count, matching what the fiTQun tuning chain calls
+    # "indirect" (WCSim's isct flag / killScatterRef kill both). Boolean, carries
+    # no gradient, and nothing else reads it -- it exists so the scattering-table
+    # reduction can split direct from indirect light per photon.
+    deviated = scatters | reflects
+
+    return (new_pos, new_dir, new_time, detect_prob, reflection_attenuation,
+            continuing_factor, logp_increment, deviated)
 
 
 def photon_iteration_update_factors(
@@ -284,7 +292,13 @@ def photon_iteration_update_factors(
     distance_for_time = jnp.where(is_scat, d_live, Dd)
     new_time = time + distance_for_time / speed_of_light
 
-    return new_pos, new_dir, new_time, detect_prob, reflection_attenuation, continuing_factor, logp_increment
+    # See the sampling path: a boolean tag for the scattering-table reduction.
+    # This branch is a weighted/expectation step rather than a sampled one, so
+    # is_scat is the step's scatter decision; it carries no gradient either way.
+    deviated = is_scat
+
+    return (new_pos, new_dir, new_time, detect_prob, reflection_attenuation,
+            continuing_factor, logp_increment, deviated)
 
 
 # ===================================================================
