@@ -7,7 +7,8 @@ assign_sensor_to_cells, grid_cell_centers, build_inverted_sensor_map, bounds_che
 intersect_ray, point_to_grid_cell, compute_normal); everything else here is shape-agnostic.
 
 Not the only propagator: `lucid/propagation/string/` traverses a per-DOM volume rather than a
-surface grid, and carries its own deposit implementation.
+surface grid, and carries its own deposit implementation. The two have diverged: that one clamps
+the closest-approach parameter where this one gates on it, and has no first-hit survival product.
 """
 import warnings
 
@@ -21,6 +22,53 @@ from lucid.propagation.base import (
     find_closest_sensors,
 )
 from lucid.overlap import create_overlap_prob
+
+
+def first_hit_survival(weights, times):
+    """Cap the deposit at one photon: P(hit s_i) = p_i * prod_{j before i} (1 - p_j).
+
+    `overlap_prob` is applied INDEPENDENTLY per candidate, so nothing capped the total: at grazing
+    incidence a ray skimming the wall passes within r of a whole row and each sensor took full
+    weight (measured: 23 sensors, total 19.0, for a photon carrying 1). Physically the photon
+    deposits on the FIRST sensor it reaches, so with candidates ordered by arrival time and p_i the
+    conditional hit probability given the photon gets there, sum(P) = 1 - prod(1 - p_j) <= 1.
+    It splits weight smoothly between adjacent sensors (p1, p2*(1-p1)) and reduces to p_1 when
+    only one candidate is in range. Done in log space; gated-out candidates have p = 0 and
+    contribute exactly 1 to the product.
+
+    TIES ARE BROKEN BY SLOT. Two live candidates can arrive at EXACTLY the same time -- a ray
+    equidistant from two sensors -- and with a strict `t_j < t_i` neither counts as earlier, both
+    keep their full p, and the sum can exceed 1. Measured at 2-5 per 100k photons on SK_like. The
+    slot index orders them, so the cap holds by construction rather than almost always.
+
+    THE ORDERING IS A HARD COMPARISON. The product is smooth in the p's, but which p's multiply
+    which is decided by a threshold on arrival time, so when two candidates swap order the
+    per-sensor split jumps while the total stays put. Aggregate checks cannot see it; a
+    per-sensor gradient can.
+
+    Parameters
+    ----------
+    weights : (C, N) per-candidate overlap probabilities
+    times : (C, N) per-candidate arrival times
+
+    Returns
+    -------
+    (C, N) capped weights, summing to at most 1 over C for every photon.
+    """
+    # Clipped below 1 so log1p(-p) stays finite -- STRAIGHT-THROUGH, so the clip shapes only the
+    # forward value. A plain jnp.clip has zero derivative above its maximum and half at a tie with
+    # its minimum, and in step mode (temperature=None) the forward overlap is EXACTLY 1 inside a
+    # sphere and exactly 0 outside: a plain clip therefore zeroed the straight-through surrogate
+    # gradient for every candidate the ray passes inside, and halved it just outside, silently
+    # removing the gradient the hard step exists to keep. The forward is bit-identical either way.
+    p = weights + jax.lax.stop_gradient(jnp.clip(weights, 0.0, 1.0 - 1e-6) - weights)
+    slot = jnp.arange(p.shape[0])
+    # before[i, j, n]: candidate j reaches photon n's path before candidate i does
+    before = ((times[None, :, :] < times[:, None, :])
+              | ((times[None, :, :] == times[:, None, :])
+                 & (slot[None, :, None] < slot[:, None, None])))
+    log_survive = jnp.sum(before * jnp.log1p(-p)[None, :, :], axis=1)
+    return p * jnp.exp(log_survive)
 
 
 def validate_sensor_map(assignments_geometric, inverted_sensor_map, num_sensors,
@@ -227,6 +275,11 @@ def create_propagator(detector, sensor_positions, sensor_radius,
          sensor_normals_all, inside_sensor,
          sensor_hit_positions) = jax.vmap(
             compute_for_slot, in_axes=1, out_axes=0)(potential_sensors)
+
+        # First-hit semantics: the photon deposits on the first sensor it reaches. See
+        # `first_hit_survival` for the cap, its tie-break, and what its hard ordering costs.
+        weights = first_hit_survival(
+            weights, jnp.squeeze(sensor_times, -1) if sensor_times.ndim == 3 else sensor_times)
 
         # e. Compute geometry surface normals
         geometry_normals = detector.compute_normal(intersection_point, surface_info)

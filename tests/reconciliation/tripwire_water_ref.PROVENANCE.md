@@ -5,6 +5,56 @@ is the reason. **Append to it on every re-capture; do not overwrite.**
 
 ---
 
+## 2026-09-24 — re-captured for the first-hit deposit
+
+| | |
+|---|---|
+| device | **CPU**, pinned by `tripwire_capture.py` |
+| host | Intel Xeon Gold 5118 (host of a `turing` node) |
+| `scalar.q_l2` | 581.7201 → **540.6970** (−7.1%) |
+| `scalar.q_sum` | 17215.2617 → **15670.7793** (−9.0%) |
+| `wavelength.q_l2` | 771.2139 → **716.5498** |
+
+### What moved it
+
+The deposit gained three pieces of physics in one commit: an ahead gate (no charge on a sensor
+whose closest approach lies behind the photon), a first-hit survival product (a photon deposits at
+most once in total), and first-entry geometry (a ray threading several spheres stops at the first).
+Each was isolated by capturing the full change and the full change minus that one piece, every tree
+on the same node and CPU:
+
+| tree | `scalar.q_sum` | `scalar.q_l2` |
+|---|---|---|
+| before the deposit physics | 17215.2188 | 581.7166 |
+| full change | 15670.7793 | 540.6970 |
+| full minus the cap | 16295.4922 | 547.7850 |
+| full minus the gate | 16311.0723 | 565.8101 |
+| full minus first-entry | 15666.7891 | 540.4186 |
+
+Removing the gate or the cap alone restores about 3.9% of the charge each; first-entry is worth
+0.03%. Those leave-one-out effects sum to about 7.4%, against 9.0% for the whole change: the gate and
+the cap overlap, since both remove charge from the same over-counted photons. The "before" row
+reproduces the previous reference's 581.72 to the host difference measured in the 2026-09-23 entry,
+so nothing else moved.
+
+The 400-node overlap table that landed just before does not reach this path: the tripwire runs the
+step function (`temperature=None`), which never reads the table. The recapture on the final tree
+reads 540.6970, identical to the attribution run made before the table changed.
+
+### One side effect worth knowing
+
+The Fisher information on `sensor_reflection_rate` roughly **doubles**, 49.7 → 102.1, while the
+other columns fall 3–10% with the charge. Without the ahead gate, light reflected off a PMT was
+deposited on sensors BEHIND the photon -- the tube it just left and its neighbours; 38,447 such
+deposits in a 100k-photon sample leaving PMTs on SK_like -- which hid the reflection from the rest of
+the detector. With the gate the reflected light reaches the rest of the
+detector, and the calibration can see it.
+
+The per-column tolerances from the previous entry were set from cross-host floors, which are a
+property of the arithmetic rather than of the reference's values, so they are unchanged.
+
+---
+
 ## 2026-09-23 — re-captured, and the tolerance repaired
 
 | | |
