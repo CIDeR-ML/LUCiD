@@ -490,7 +490,7 @@ class Cylinder(Detector):
     def intersect_ray(self, origins, directions):
         """Batch ray-cylinder intersection with grid indexing."""
         from lucid.propagation.cylinder import batch_intersect_cylinder_with_grid
-        # Default grid params matching create_photon_propagator defaults
+        # Grid params as configured by configure_grid()
         n_cap = self._n_cap
         n_angular = self._n_angular
         n_height = self._n_height
