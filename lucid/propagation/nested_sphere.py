@@ -41,6 +41,7 @@ from ..geometry.juno_support import (
     intersect_capped_cylinders,
 )
 from ..geometry.juno_structures import (
+    BOWL_CANDIDATES_PER_CELL,
     BOWL_INTERFACE_OFFSET_M,
     build_bowl_candidate_map,
     intersect_acrylic_bowls,
@@ -418,7 +419,9 @@ def create_nested_sphere_propagator(sensor_positions, sensor_radius,
                                     support_candidates_per_cell=12,
                                     chimney=None,
                                     acrylic_bowls=None,
-                                    bowl_candidates_per_cell=12):
+                                    bowl_candidates_per_cell=(
+                                        BOWL_CANDIDATES_PER_CELL
+                                    )):
     """JIT-compiled photon propagator for nested sphere geometry.
 
     The outer sphere supplies the grid lookup. Optional per-sensor axes and
@@ -515,7 +518,7 @@ def create_nested_sphere_propagator(sensor_positions, sensor_radius,
     bowl_candidate_map = None
     if acrylic_bowls is not None:
         LOG.info(
-            "Acrylic-bowl map: indexing %d effective frusta",
+            "Acrylic-bowl map: indexing %d effective curved surfaces",
             len(acrylic_bowls.attachment_points_m),
         )
         bowl_candidate_map = build_bowl_candidate_map(

@@ -191,7 +191,7 @@ class NestedSphere(Sphere):
             instance.chimney = ChimneyGeometry.junosw_j26(outer_radius)
         instance.chimney_geometry = chimney_geometry
         if acrylic_bowl_geometry is not None:
-            if acrylic_bowl_geometry != "juno_addition_frusta":
+            if acrylic_bowl_geometry != "juno_addition_curved_arc":
                 raise ValueError(
                     "Unknown Acrylic-bowl geometry "
                     f"{acrylic_bowl_geometry!r}"

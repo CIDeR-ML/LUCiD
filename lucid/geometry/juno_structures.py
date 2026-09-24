@@ -1,6 +1,6 @@
 """Effective JUNO chimney and Acrylic-bowl geometry.
 
-The implementation keeps the main J26.3.2 positions and engineering scales
+The implementation keeps the main J26.5.1 positions and engineering scales
 while avoiding CAD-only bolt holes and coincident Boolean surfaces.  Lengths
 are expressed in metres.  Surface codes are stable simulation metadata:
 
@@ -23,6 +23,14 @@ CHIMNEY_ACRYLIC = 1
 CHIMNEY_STEEL = 2
 ACRYLIC_BOWL = 3
 BOWL_INTERFACE_OFFSET_M = 5e-4
+BOWL_ARC_RADIUS_M = 0.776
+BOWL_ARC_RADIAL_CENTRE_M = 0.69764
+BOWL_ARC_AXIAL_CENTRE_M = 0.73543
+BOWL_ARC_LENGTH_M = 0.140
+BOWL_NEWTON_STEPS = 6
+BOWL_NEWTON_MAX_STEP_M = 0.10
+BOWL_NEWTON_RESIDUAL_M = 1e-6
+BOWL_CANDIDATES_PER_CELL = 12
 
 
 class SurfaceHit(NamedTuple):
@@ -72,7 +80,7 @@ class ChimneyGeometry(NamedTuple):
 
 
 class AcrylicBowlLayout(NamedTuple):
-    """Radial truncated-cone approximations to Acrylic additions."""
+    """Radial placements of effective curved Acrylic additions."""
 
     copy_numbers: np.ndarray
     attachment_points_m: np.ndarray
@@ -83,7 +91,7 @@ class AcrylicBowlLayout(NamedTuple):
 
 
 def load_juno_acrylic_bowls(csv_file_path):
-    """Load the portable J26.3.2 Acrylic-addition placement table."""
+    """Load the portable J26.5.1 Acrylic-addition placement table."""
     path = Path(csv_file_path)
     data = np.genfromtxt(
         path, delimiter=",", names=True, dtype=None, encoding="utf-8"
@@ -108,6 +116,11 @@ def load_juno_acrylic_bowls(csv_file_path):
         raise ValueError(f"Acrylic-bowl CSV {path!r} has invalid positions")
     if np.any(~np.isfinite(dimensions)) or np.any(dimensions <= 0.0):
         raise ValueError("Acrylic-bowl dimensions must be positive")
+    nominal = np.array([0.450, 0.200, BOWL_ARC_LENGTH_M])
+    if not np.allclose(dimensions, nominal, atol=2e-5, rtol=0.0):
+        raise ValueError(
+            "Curved Acrylic bowls require the nominal JUNOSW dimensions"
+        )
     return AcrylicBowlLayout(
         copy_numbers=np.asarray(data["copy_no"], dtype=np.int32),
         attachment_points_m=points,
@@ -144,6 +157,52 @@ def _normalise(directions):
     return directions / (
         jnp.linalg.norm(directions, axis=1, keepdims=True) + 1e-12
     )
+
+
+def acrylic_bowl_radius(axial_m):
+    """Return the dormant JUNOSW ``yumiao`` side radius in metres."""
+    axial = jnp.asarray(axial_m)
+    relative = BOWL_ARC_AXIAL_CENTRE_M - axial
+    radicand = BOWL_ARC_RADIUS_M**2 - relative**2
+    return BOWL_ARC_RADIAL_CENTRE_M - jnp.sqrt(
+        jnp.maximum(radicand, 0.0)
+    )
+
+
+def acrylic_bowl_slope(axial_m):
+    """Return ``dr/ds`` for the smooth Acrylic-bowl side profile."""
+    axial = jnp.asarray(axial_m)
+    relative = BOWL_ARC_AXIAL_CENTRE_M - axial
+    denominator = jnp.sqrt(jnp.maximum(
+        BOWL_ARC_RADIUS_M**2 - relative**2,
+        1e-18,
+    ))
+    return -relative / denominator
+
+
+def _refine_bowl_torus_roots(roots, coefficients):
+    """Refine ray--torus roots using scalar quartic Horner updates."""
+    c0, c1, c2, c3, c4 = (
+        coefficient[:, :, None] for coefficient in coefficients
+    )
+    roots = jnp.maximum(roots, 0.0)
+    for _ in range(BOWL_NEWTON_STEPS):
+        residual = ((((c4 * roots + c3) * roots + c2)
+                     * roots + c1) * roots + c0)
+        derivative = (((4.0 * c4 * roots + 3.0 * c3)
+                       * roots + 2.0 * c2) * roots + c1)
+        safe_derivative = jnp.where(
+            jnp.abs(derivative) > 1e-9,
+            derivative,
+            jnp.where(derivative >= 0.0, 1e-9, -1e-9),
+        )
+        delta = jnp.clip(
+            residual / safe_derivative,
+            -BOWL_NEWTON_MAX_STEP_M,
+            BOWL_NEWTON_MAX_STEP_M,
+        )
+        roots = jnp.maximum(roots - delta, 0.0)
+    return roots
 
 
 def intersect_chimney(origins, directions, chimney):
@@ -263,7 +322,12 @@ def intersect_chimney(origins, directions, chimney):
 def intersect_acrylic_bowls(origins, directions, layout,
                              candidate_indices,
                              surface_offset_m=0.0):
-    """Intersect rays with candidate radial truncated-cone bowls."""
+    """Intersect rays with candidate smooth JUNOSW-arc bowls.
+
+    The current straight frustum supplies two deterministic Newton seeds.
+    Production intersection and normals use the single 776 mm ``yumiao``
+    surface; no segmented polycone is evaluated during propagation.
+    """
     origins = jnp.atleast_2d(origins)
     directions = _normalise(jnp.atleast_2d(directions))
     candidates = jnp.asarray(candidate_indices, dtype=jnp.int32)
@@ -271,8 +335,8 @@ def intersect_acrylic_bowls(origins, directions, layout,
     axes = jnp.asarray(layout.outward_axes)[safe]
     attach = jnp.asarray(layout.attachment_points_m)[safe]
     attach = attach + surface_offset_m * axes
-    base = jnp.asarray(layout.base_radii_m)[safe]
-    tip = jnp.asarray(layout.tip_radii_m)[safe]
+    nominal_base = jnp.asarray(layout.base_radii_m)[safe]
+    nominal_tip = jnp.asarray(layout.tip_radii_m)[safe]
     length = jnp.asarray(layout.lengths_m)[safe]
     offset = origins[:, None, :] - attach
     ray = directions[:, None, :]
@@ -280,20 +344,31 @@ def intersect_acrylic_bowls(origins, directions, layout,
     d_axial = jnp.sum(ray * axes, axis=2)
     o_perp = offset - o_axial[:, :, None] * axes
     d_perp = ray - d_axial[:, :, None] * axes
-    slope = (tip - base) / length
-    radius_at_origin = base + slope * o_axial
+    arc_base = jnp.broadcast_to(
+        acrylic_bowl_radius(0.0), nominal_base.shape
+    )
+    arc_tip = jnp.broadcast_to(
+        acrylic_bowl_radius(BOWL_ARC_LENGTH_M), nominal_tip.shape
+    )
+    seed_slope = (arc_tip - arc_base) / length
+    clipped_axial = jnp.clip(o_axial, 0.0, BOWL_ARC_LENGTH_M)
+    radius_at_origin = acrylic_bowl_radius(clipped_axial)
     inside = (
         (o_axial >= 0.0)
         & (o_axial <= length)
         & (jnp.sum(o_perp**2, axis=2) <= radius_at_origin**2)
     )
 
-    qa = jnp.sum(d_perp**2, axis=2) - (slope * d_axial) ** 2
+    qa = jnp.sum(d_perp**2, axis=2) - (
+        seed_slope * d_axial
+    ) ** 2
     qb = 2.0 * (
         jnp.sum(o_perp * d_perp, axis=2)
-        - radius_at_origin * slope * d_axial
+        - (arc_base + seed_slope * o_axial)
+        * seed_slope * d_axial
     )
-    qc = jnp.sum(o_perp**2, axis=2) - radius_at_origin**2
+    seed_radius = arc_base + seed_slope * o_axial
+    qc = jnp.sum(o_perp**2, axis=2) - seed_radius**2
     discriminant = qb**2 - 4.0 * qa * qc
     root = jnp.sqrt(jnp.maximum(discriminant, 0.0))
     denominator = jnp.where(jnp.abs(qa) > 1e-12, 2.0 * qa, 1.0)
@@ -301,15 +376,54 @@ def intersect_acrylic_bowls(origins, directions, layout,
         (-qb - root) / denominator,
         (-qb + root) / denominator,
     ], axis=2)
+    centred_axial = o_axial - BOWL_ARC_AXIAL_CENTRE_M
+    perpendicular_squared = jnp.sum(o_perp**2, axis=2)
+    perpendicular_dot = jnp.sum(o_perp * d_perp, axis=2)
+    perpendicular_direction_squared = jnp.sum(d_perp**2, axis=2)
+    direction_squared = (
+        d_axial**2 + perpendicular_direction_squared
+    )
+    q0 = (
+        centred_axial**2
+        + perpendicular_squared
+        + BOWL_ARC_RADIAL_CENTRE_M**2
+        - BOWL_ARC_RADIUS_M**2
+    )
+    q1 = 2.0 * (
+        centred_axial * d_axial + perpendicular_dot
+    )
+    q2 = direction_squared
+    h0 = perpendicular_squared
+    h1 = 2.0 * perpendicular_dot
+    h2 = perpendicular_direction_squared
+    radial_factor = 4.0 * BOWL_ARC_RADIAL_CENTRE_M**2
+    torus_coefficients = (
+        q0**2 - radial_factor * h0,
+        2.0 * q0 * q1 - radial_factor * h1,
+        q1**2 + 2.0 * q0 * q2 - radial_factor * h2,
+        2.0 * q1 * q2,
+        q2**2,
+    )
+    side_roots = _refine_bowl_torus_roots(
+        side_roots, torus_coefficients
+    )
+
     side_axial = o_axial[:, :, None] + (
         side_roots * d_axial[:, :, None]
     )
+    side_perp = o_perp[:, :, None, :] + (
+        side_roots[:, :, :, None] * d_perp[:, :, None, :]
+    )
+    side_rho = jnp.linalg.norm(side_perp, axis=3)
+    side_residual = side_rho - acrylic_bowl_radius(side_axial)
     side_valid = (
         (discriminant[:, :, None] >= 0.0)
         & (jnp.abs(qa[:, :, None]) > 1e-12)
         & (side_roots > 1e-6)
         & (side_axial >= -1e-7)
         & (side_axial <= length[:, :, None] + 1e-7)
+        & (jnp.abs(side_residual) <= BOWL_NEWTON_RESIDUAL_M)
+        & jnp.isfinite(side_roots)
         & (~inside[:, :, None])
     )
     side_distances = jnp.where(
@@ -324,11 +438,18 @@ def intersect_acrylic_bowls(origins, directions, layout,
     axial = jnp.sum(relative * axes, axis=2)
     radial = relative - axial[:, :, None] * axes
     radial /= jnp.linalg.norm(radial, axis=2, keepdims=True) + 1e-12
-    side_normal = radial - slope[:, :, None] * axes
+    exact_slope = acrylic_bowl_slope(axial)
+    side_normal = radial - exact_slope[:, :, None] * axes
     side_normal /= (
         jnp.linalg.norm(side_normal, axis=2, keepdims=True) + 1e-12
     )
 
+    base = jnp.broadcast_to(
+        acrylic_bowl_radius(0.0), length.shape
+    )
+    tip = jnp.broadcast_to(
+        acrylic_bowl_radius(BOWL_ARC_LENGTH_M), length.shape
+    )
     cap_distances = []
     cap_normals = []
     for axial_value, radius, sign in (

@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Extract JUNO Acrylic-addition placements from J26.3.2 GDML."""
+"""Extract JUNO Acrylic-addition placements from J26.5.1 GDML."""
 
 import argparse
 import csv
