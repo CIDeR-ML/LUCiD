@@ -185,7 +185,12 @@ def create_string_propagator(
         ov = jnp.where(valid, ov, 0.0)
 
         # ── 7. Sensor normals (outward from DOM center) ──
-        sensor_normals = -to_sensor / (jnp.linalg.norm(to_sensor, axis=-1, keepdims=True) + 1e-10)
+        # Reuse the SAFE perp_dist above rather than taking an unsafe norm a second time.
+        # `jnp.linalg.norm(v)` differentiates to v/|v|, which is 0/0 at v == 0, and an epsilon
+        # added afterwards protects the division but never the norm's own derivative. This engine
+        # is where a zero `to_sensor` is most reachable: `valid = cand_ids >= 0` right above shows
+        # it really does carry invalid candidate slots.
+        sensor_normals = -to_sensor / (perp_dist[..., None] + 1e-10)
 
         # ── 8. inside_sensor: overlap-based (volume model) ──
         has_weight = ov > 1e-10
