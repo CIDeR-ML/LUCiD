@@ -201,7 +201,21 @@ def compute_sensor_intersections_base(sensor_idx, sensor_positions, sensor_radiu
         -0.5 * (b - sqrt_term)
     )
     t1 = q / (a + 1e-10)
-    t2 = c / (q + jnp.sign(q) * 1e-10)
+    # LATENT, and NOT the source of the observed NaN gradient -- that was tested and it is not.
+    # `jnp.sign(0.0)` is 0.0, so `q + jnp.sign(q) * 1e-10` divides by ZERO at q == 0: the one
+    # division on this path whose epsilon is multiplied by a quantity that can itself vanish
+    # (`t1` above adds a bare constant, which cannot). Re-running the seed that produces a NaN
+    # gradient with this form in place still produced it, so this line is fixed on its own merits
+    # and claims nothing further.
+    #
+    # In situ q == 0 is currently UNREACHABLE, which is why this is latent rather than a live bug:
+    # `sqrt_term` is clamped to >= 1e-5 by the `jnp.maximum(1e-10, ...)` above, and q is
+    # -0.5*(b + sqrt_term) for b > 0 or -0.5*(b - sqrt_term) otherwise, so |q| >= 5e-6 either way.
+    # The guard is repaired because that clamp is the only thing standing between this line and a
+    # division by zero, and nothing here declares that dependency. `where(q < 0, -1, +1)` agrees with `sign` everywhere except at
+    # exactly zero -- differs at 2 of 20006 sampled values, both of them +-0.0 -- so the change is
+    # bit-identical wherever the old form was defined at all.
+    t2 = c / (q + jnp.where(q < 0, -1.0, 1.0) * 1e-10)
     
     t_intersect = jnp.where((t1 > 0) & (t2 > 0), 
                     jnp.minimum(t1, t2),  # Both positive - take smaller
