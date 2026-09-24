@@ -163,7 +163,7 @@ def calculate_hit_properties(ray_origins, ray_directions, t_geometry, inside_sen
 
 def compute_sensor_intersections_base(sensor_idx, sensor_positions, sensor_radius,
                                         ray_origins, ray_directions, geometry_bounds_check,
-                                        overlap_prob):
+                                        overlap_prob, t_geometry=None):
     """
     Base function to compute sensor intersections for any geometry.
     
@@ -184,6 +184,11 @@ def compute_sensor_intersections_base(sensor_idx, sensor_positions, sensor_radiu
     overlap_prob : callable
         Function that calculates overlap probability
         
+    t_geometry : array (N,) or None
+        Distance along each (unit) ray to where it leaves the detector. None, the default, leaves
+        the deposit on the unbounded ray line; an array bounds it to the travelled leg (see
+        `deposit_leg_bound` in shared.create_propagator).
+
     Returns
     -------
     tuple
@@ -291,9 +296,36 @@ def compute_sensor_intersections_base(sensor_idx, sensor_positions, sensor_radiu
     # at that PMT moving away from it with impact parameter ~0 and would take a full spurious
     # re-deposit on the tube it just bounced off.
     _ahead = t_closest[:, 0] > 0.0
-    weights = jnp.where(valid & _ahead, overlap_prob(distance), 0.0)
+
+    # OPTIONAL LEG BOUND (`t_geometry` not None), off by default.
+    #
+    # `distance` is the perpendicular distance from the photon's ray LINE, and that line does not
+    # stop at the wall. For a ray at incidence theta it continues outside the detector and passes
+    # within a sensor radius of sensors displaced ALONG the wall from where the photon landed.
+    # Writing the landing point E and a candidate centre C = E + a*t + b*s, the code sees
+    # perp^2 = a^2 cos^2(theta) + b^2 while the photon's closest approach on the path it travelled
+    # is sqrt(a^2 + b^2): the cos(theta) foreshortening makes a downstream sensor look nearer to the
+    # line than it ever was to the photon, over-counting hits by (1 - cos theta)/2 per ray.
+    #
+    # Bounding the deposit to the travelled leg [0, t_geometry] replaces `distance` with the closest
+    # approach over that segment. Only the FRONT end is clamped: `_ahead` already zeroes
+    # candidates behind the photon, so the back-end term of the segment distance is redundant.
+    #
+    # THE BRANCH IS ON A PYTHON `None`, NOT A TRACED PREDICATE, deliberately. With the bound off
+    # this emits `overlap_prob(distance)` verbatim -- the same operand, the same graph. A
+    # `jnp.where` would add a branch even when unused, and identical values through a different
+    # graph can reduce differently in XLA: a semantically identical rewrite of the safe norm above
+    # moved a fitted reconstruction by 9.6%. Off has to be bit-exact, not close.
+    if t_geometry is None:
+        d_eff = distance
+    else:
+        _past = jnp.maximum(t_closest[:, 0] - t_geometry, 0.0)
+        d_eff = jnp.sqrt(distance ** 2 + _past ** 2 + 1e-12)
+
+    weights = jnp.where(valid & _ahead, overlap_prob(d_eff), 0.0)
     # Check if point is inside sensor (keep as boolean)
-    # NOT GATED by `_ahead`: the geometry flag uses the same distance as the weight above, but not
+    # NOT GATED by `_ahead`: the geometry flag uses the same distance as the weight above --
+    # `d_eff`, so with the leg bound on, charge and geometry agree about the same photon -- but not
     # the same gate. A behind candidate can still be flagged when the photon's ORIGIN lies inside
     # its sphere -- the forward ray then exits with t > 0 -- carrying no charge. Measured on
     # SK_like, 100k photons per population: 0 after a sensor reflection (photon_step nudges the
@@ -301,7 +333,7 @@ def compute_sensor_intersections_base(sensor_idx, sensor_positions, sensor_radiu
     # fires only for origins inside a PMT sphere -- a photon starting inside the PMT, which is
     # already outside what the sphere model describes. Gating it would change what the reflection
     # path computes for that region, so it is left as is and stated rather than implied.
-    inside_spherical_sensor = distance < sensor_radius
+    inside_spherical_sensor = d_eff < sensor_radius
     
     # Check if intersection point is within geometry bounds
     inside_detector_volume = geometry_bounds_check(intersection_points)

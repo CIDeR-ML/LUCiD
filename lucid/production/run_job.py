@@ -38,6 +38,15 @@ EXIT_PHOTONSIM = 20
 EXIT_LUCID = 30
 EXIT_VERIFY = 40
 
+# Production generates events with the deposit bounded to the leg each photon actually travels
+# (lucid.propagation.shared.create_propagator, `deposit_leg_bound`). The library default stays off,
+# so nothing that does not opt in -- the paper analysis, SIREN table building -- changes.
+# Every production path reads this one switch -- regular and pile-up here, plus
+# generate_events_with_particles and the photon shotgun -- so they cannot drift apart. It affects
+# surface detectors only; a string telescope's propagator has its own deposit and ignores it.
+# REMOVE WHEN the leg bound becomes the library default: this line and its uses.
+DEPOSIT_LEG_BOUND = True
+
 
 def _parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -306,6 +315,7 @@ def _run_lucid(
         physics_config=physics_config_path,
         default_detector_params=True,
         hit_mode='per_segment',
+        deposit_leg_bound=DEPOSIT_LEG_BOUND,
     )
     # PAD_SIZE bucketing (see lucid/sources/event_io.py for the full rationale).
     # `None` -> module default; an explicit empty list opts back into the
@@ -798,6 +808,7 @@ def _main_pileup(args: argparse.Namespace, config: dict) -> int:
         charge_resolution=None, physics_config=physics_config_path,
         default_detector_params=True,
         hit_mode='per_segment',
+        deposit_leg_bound=DEPOSIT_LEG_BOUND,
     )
 
     lucid_opts = config.get("lucid_options", {})

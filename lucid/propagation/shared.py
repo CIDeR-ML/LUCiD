@@ -159,7 +159,7 @@ def validate_sensor_map(assignments_geometric, inverted_sensor_map, num_sensors,
 def create_propagator(detector, sensor_positions, sensor_radius,
                       temperature=0.2, max_candidates_per_ray=4,
                       overlap_st_width_frac=0.35, overlap_renorm=1.0,
-                      overlap_mode='interp',
+                      overlap_mode='interp', deposit_leg_bound=False,
                       **grid_params):
     """Build a JIT-compiled photon propagator using detector methods.
 
@@ -178,6 +178,16 @@ def create_propagator(detector, sensor_positions, sensor_radius,
         Soft-overlap renormalization constant C (default 1.0 = OFF).
     overlap_mode : str
         Soft-overlap lookup interpolation: 'interp' (default) or 'cubic'.
+    deposit_leg_bound : bool
+        Bound the deposit to the leg the photon actually travels, [0, t_geometry], instead of
+        weighting by distance from the unbounded ray LINE. Default False, bit-identical to the
+        behaviour without it: the switch is a Python bool resolved at trace time, so when off the
+        leg-bound arithmetic is absent from the graph rather than present and unused.
+
+        The line does not stop at the wall, so for a ray at incidence theta it passes within a
+        sensor radius of sensors displaced along the wall from the landing point, over-counting
+        hits by (1 - cos theta)/2 per ray. Normal incidence is unaffected. Switching it on
+        changes the forward model, and with it any energy scale calibrated without it.
     max_candidates_per_ray : int
     **grid_params
         Geometry-specific grid parameters passed to ``detector.configure_grid()``.
@@ -269,7 +279,10 @@ def create_propagator(detector, sensor_positions, sensor_radius,
             return compute_sensor_intersections_base(
                 slot_sensors, sensor_positions, sensor_radius,
                 photon_origins, photon_directions,
-                bounds_check, overlap_prob)
+                bounds_check, overlap_prob,
+                # A PYTHON bool: with the bound off, None removes the leg-bound code from the trace
+                # entirely rather than emitting an unused branch.
+                t_geometry=t_geometry if deposit_leg_bound else None)
 
         (weights, sensor_times, sensor_indices,
          sensor_normals_all, inside_sensor,

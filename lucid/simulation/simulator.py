@@ -67,6 +67,7 @@ def setup_event_simulator(
         overlap_st_width_frac=0.35,
         overlap_renorm=1.0,
         overlap_mode='interp',
+        deposit_leg_bound=False,
         reflection_model='scalar_mix',
         reflection_wavelength=400.0,
         spectrum=None,
@@ -141,6 +142,10 @@ def setup_event_simulator(
         Soft-overlap renormalization constant C = hard_total/soft_total
         (restores the ~1% total/energy lost to inter-sensor gaps without
         changing the gradient direction). Default 1.0 = OFF (byte-identical).
+    deposit_leg_bound : bool
+        Bound the deposit to the travelled leg instead of the unbounded ray line. Default False,
+        bit-identical to running without it. Surface detectors only; a string telescope's own
+        propagator ignores it. See :func:`lucid.propagation.shared.create_propagator`.
     overlap_mode : str
         Soft-overlap lookup interpolation: ``'interp'`` (default, piecewise
         linear) or ``'cubic'`` (C2 natural spline — correct curvature for the
@@ -216,6 +221,7 @@ def setup_event_simulator(
         overlap_st_width_frac=overlap_st_width_frac,
         overlap_renorm=overlap_renorm,
         overlap_mode=overlap_mode,
+        deposit_leg_bound=deposit_leg_bound,
         **grid_params)
 
     mode = 'data' if is_data else ('calibration' if is_calibration else 'track')
