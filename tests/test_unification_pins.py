@@ -183,6 +183,20 @@ def test_fitting_analysis_seam():
     s = resolution_stats(np.array([1., -2., 3., -4., 5.]))
     assert s['n'] == 5 and set(s) >= {'median', 'mean', 'rms', 'containment', 'median_ci'}
     np.testing.assert_allclose(s['rms'], np.sqrt((np.array([1, 4, 9, 16, 25])).mean()), rtol=1e-9)
+    # The CI must describe the estimate it is named after. It used to bootstrap |e| while the
+    # median was taken on e, so on signed input the interval could exclude its own median --
+    # [-5,-4,-3,3,4,5] gave median 0.0 with CI (3.5, 4.5). This assertion is the one that fails
+    # if that returns; the keys-and-rms checks above all passed throughout.
+    lo, hi = s['median_ci']
+    assert lo <= s['median'] <= hi, (
+        f'median {s["median"]} outside its own CI ({lo}, {hi}) -- CI computed on a different '
+        f'quantity than the median')
+    sym = resolution_stats(np.array([-5., -4., -3., 3., 4., 5.]))
+    lo, hi = sym['median_ci']
+    assert lo <= sym['median'] <= hi, f'symmetric case: median {sym["median"]} outside ({lo}, {hi})'
+    # Magnitude input is unaffected, which is why no published number moves.
+    mag = resolution_stats(np.array([1., 2., 3., 4., 5.]))
+    np.testing.assert_allclose(mag['median'], 3.0, rtol=1e-12)
 
 
 def test_no_env_reads_in_lucid_package():

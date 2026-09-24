@@ -1,6 +1,7 @@
 """9-parameter track reconstruction — the consistent Fisher-Gauss-Newton recipe.
 
-Ported from the recon study (``RECO_PIPELINE.md`` / ``gn_fisher_recon.py``): fit the track
+Ported from the recon study's ``gn_fisher_recon.py``, brought into the library in fa233b6
+(the study's own design notes are not part of this repository): fit the track
 ``θ = [E, x, y, z, sinθ, cosθ, sinφ, cosφ, t0]`` against the per-PMT (charge, first-arrival
 time) observables by Gauss-Newton on a PSD Fisher metric
 
@@ -39,7 +40,8 @@ from lucid.detector_params import ParticleParams
 from lucid.losses import counts_loss, first_arrival_window_nll
 from lucid.fitting.gn import damped_matrix, gauss_newton
 
-# Natural per-parameter scales (RECO_PIPELINE §2): ~50 MeV, 0.2 m, 0.02 cos-units, 0.2 ns.
+# Natural per-parameter scales, tuned in the recon study and ported in fa233b6:
+# ~50 MeV, 0.2 m, 0.02 cos-units, 0.2 ns.
 SCALE9 = np.array([50., .2, .2, .2, .02, .02, .02, .02, .2])
 PARAM_NAMES = ['E', 'x', 'y', 'z', 'sin_t', 'cos_t', 'sin_p', 'cos_p', 't0']
 
@@ -309,9 +311,17 @@ class ReconModel:
     Fisher-GN consumes, plus the assembled loss / gradient / FD Fisher metric.
 
     ``pred(track, key) -> (log_w, flat_times, flat_indices, total_charge)`` is a track
-    simulator from ``setup_event_simulator(..., hit_mode='per_photon')``. ``tot_n_scale`` is
-    the single charge calibration constant (RECO_PIPELINE §3.4; 0.982 for the SIREN muon
-    emitter, 1.0 for a self-consistent forward).
+    simulator from ``setup_event_simulator(..., hit_mode='per_photon')``.
+
+    ``tot_n_scale`` is a scalar charge normalisation, and **leave it at 1.0**. It exists because
+    an early SIREN muon emitter over-predicted total charge and was corrected by a fitted 0.982;
+    that value is obsolete, and quoting it here previously read as a knob worth tuning.
+
+    Measured on 30 paired events at the published working point: the constant moves ENERGY ALONE -- 63 sigma on energy, under
+    1.5 sigma on vertex, direction and t0 -- with slope -884 MeV per unit. At 1.0 the residual
+    energy bias is -0.72% of a 1 GeV muon, so the value that would zero it is 0.992: a 0.8%
+    correction, well inside the 2.2% energy resolution. The forward is self-consistent and 1.0 is
+    the right answer; anything else is fitting a scalar to noise.
     """
 
     def __init__(self, pred, num_detectors, sigma=2.5, delta=1.0, tot_n_scale=1.0,
@@ -367,8 +377,8 @@ class ReconModel:
                 lw, ft, fi, tot = pred(track_from_vec9(t9), key)
                 mu = jnp.maximum(tot * self.tot_n_scale, 1e-8)       # SCALED charge (carries energy)
             mu_surv = jnp.maximum(tot, 1e-8)                     # UNSCALED survival denom — must NOT
-            tobs = ot - t9[8]                                    # be scaled (else far-capture dies,
-            tnll = first_arrival_window_nll(lw, ft, fi, tobs, mu_surv, oc, self.ND,  # RECO_PIPELINE §3.4)
+            tobs = ot - t9[8]                                    # be scaled, else far-capture dies.
+            tnll = first_arrival_window_nll(lw, ft, fi, tobs, mu_surv, oc, self.ND,
                                             sigma=self.sigma, delta=self.delta)
             return mu, tnll
 
@@ -428,7 +438,7 @@ def fit_track(model, obs_counts, obs_times, start, *, nkeys=8, niters=150, lr=4.
               lr_final=1.5, ridge_i=0.1, lam=0.01, refresh=8, refresh_final=None, refresh_switch=0.5,
               seed=0, readout='polyak', polyak_w=40, hist=False, fisher_mode='ad',
               verbose=False, truth=None, trust='auto'):
-    """Consistent Fisher-Gauss-Newton track fit, SCALE9-preconditioned (RECO_PIPELINE §4).
+    """Consistent Fisher-Gauss-Newton track fit, SCALE9-preconditioned.
 
     Parameters mirror the finalized recipe. The step is solved in SCALE9-scaled coordinates
     (``Fs = S⊗F⊗S``, ``gs = S·g``) with a Marquardt term ``lam·diag(Fs)`` and an ADDITIVE
