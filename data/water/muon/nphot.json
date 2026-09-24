@@ -1,0 +1,27 @@
+{
+  "coeffs": [
+    13.683638397771084,
+    3.3508844082732128,
+    -0.24131270233093455,
+    0.31619080830137014,
+    -0.1908236659109564,
+    0.06863789197906409,
+    -0.16134104459374587,
+    0.12347982055303612
+  ],
+  "u0": 8.261780379533242,
+  "du": 3.2511450854369865,
+  "degree": 7,
+  "basis": "centred",
+  "logpoly_rms_frac": 0.000428266873692121,
+  "logpoly_max_frac": 0.0032265410507188452,
+  "fit_min_mev": 150,
+  "fit_max_mev": 100000,
+  "form": "logpoly",
+  "for_model_legacy": {
+    "a": 247.4010051706213,
+    "b": 0.9935065509021731,
+    "c": -32875.832377432474
+  },
+  "source": "fitted upstream against the water muon photon lookup table (photon_lookup_table.h5); that table is NOT in this repo, so these coefficients cannot be regenerated here. Verified on arrival: exp(u0-du)=150.0 and exp(u0+du)=100000 match fit_min/max_mev, and legacy/logpoly-1 is -70.2% at 150 MeV and +0.86% at 1000 MeV, reproducing the two independently recorded figures for this defect."
+}

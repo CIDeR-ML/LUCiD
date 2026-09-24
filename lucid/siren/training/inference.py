@@ -7,6 +7,7 @@ for photon density predictions with proper normalization handling.
 from __future__ import annotations
 
 import json
+import os
 import logging
 from pathlib import Path
 from typing import Dict, Tuple, Optional, Union
@@ -16,6 +17,51 @@ import jax.numpy as jnp
 from flax.core.frozen_dict import freeze
 
 logger = logging.getLogger(__name__)
+
+
+def repo_nphot_path(model_path):
+    """Where the shipped ``nphot.json`` for a trained Cherenkov model lives, or None.
+
+    The model sits at ``data/<material>/<particle>/siren_training/trained_model/<stem>``, so the
+    file, when there is one, is ``data/<material>/<particle>/nphot.json``. Two candidates, both
+    LEXICAL -- no absolute symlink is ever followed, so the answer does not depend on how the data
+    was installed and never reads outside the repository:
+
+    1. THE PATH AS GIVEN. With the default install ``siren_training`` is a real directory; with
+       ``download_data.sh --store-dir`` it is an ABSOLUTE link into the store, which holds no
+       ``nphot.json``. Resolving it would find the file on the first install and miss it on the
+       second.
+    2. ONE RELATIVE HOP. wbls and ice link their ``siren_training`` to
+       ``../../water/<particle>/siren_training`` on every install, because they run water's model
+       for now. Following that relative link, and only that, reaches water's file -- the
+       coefficients belong to the model, not to the directory the caller asked through.
+
+    CHERENKOV MODELS ONLY. The file belongs to the model reached through ``siren_training``. The
+    dE/dx model beside it (``dedx_siren_training``) shares the particle directory but not the
+    curve, and its context never reads nphot; keying on the directory alone handed it the
+    Cherenkov coefficients, which the mismatch check then refused, failing every dE/dx load.
+
+    The caller still checks the file against the model's own legacy a/b/c, so a wrong pairing
+    raises instead of being applied.
+    """
+    stem = Path(os.path.abspath(model_path))
+    try:
+        training = stem.parents[1]
+    except IndexError:
+        return None
+    if training.name != 'siren_training':
+        return None
+    candidate = training.parent / 'nphot.json'
+    if candidate.is_file():
+        return candidate
+    if training.is_symlink():
+        target = os.readlink(training)
+        if not os.path.isabs(target):
+            hop = Path(os.path.normpath(training.parent / target))
+            candidate = hop.parent / 'nphot.json'
+            if hop.name == 'siren_training' and candidate.is_file():
+                return candidate
+    return None
 
 
 class SIRENPredictor:
@@ -63,6 +109,8 @@ class SIRENPredictor:
         
         with open(metadata_path, 'r') as f:
             self.metadata = json.load(f)
+
+        self._apply_repo_nphot()
         
         # Load model weights
         weights_path = f"{self.model_path}_weights.npz"
@@ -178,6 +226,64 @@ class SIRENPredictor:
 
         logger.info(f"Distance range: {self.dataset_info['distance_range']} mm")
         
+    def _apply_repo_nphot(self):
+        """Overlay `data/<material>/<particle>/nphot.json` onto the `nphot` metadata block.
+
+        WHY THIS EXISTS. The trained models are fetched with `scripts/download_data.sh`, and
+        `data/*/*/siren_training/` is gitignored, so the model's own metadata is NOT in version
+        control. The log-log polynomial coefficients lived only there -- meaning a fresh clone
+        selected the legacy power law, which misses its own training table by rms 6.5% for the
+        muon and 10.5% for the electron, and by +0.9% across the 400-1800 MeV reconstruction
+        band. Shipping the coefficients in the repo is what makes the fix reach anyone who did
+        not happen to have the same local files.
+
+        THE REPO FILE IS THE ONLY COPY, deliberately -- the same arrangement as `t0.json`, whose
+        coefficients the model metadata also does not carry. The upstream `nphot` block holds
+        only `form`, `a`, `b`, `c`, `r_squared` and the fit range, and the coefficients were
+        previously hand-added to the FETCHED file. That is worse than duplication: it changes the
+        artefact's size, and `download_data.sh` decides whether to re-fetch by comparing size
+        against the remote, then resumes with `curl -C -` from an offset past the remote file's
+        end. So an edited metadata file breaks the downloader for that model.
+
+        Found from the MODEL PATH, not from a particle name -- see `repo_nphot_path`, including why
+        it looks where the caller asked before following symlinks. Nothing has to be told which
+        particle this is.
+
+        REFUSES A MISMATCHED PAIR. These coefficients were fitted to ONE table. If the downloaded
+        model is later replaced by one fitted to a different table, applying them would silently
+        rescale every reconstructed energy -- the failure would look like physics, not like a
+        stale file. So the shipped file records the legacy a/b/c it was found beside, and this
+        raises rather than overriding if the model no longer matches.
+        """
+        nphot = self.metadata.get('nphot')
+        if not isinstance(nphot, dict):
+            return
+        override_path = repo_nphot_path(self.model_path)
+        if override_path is None:
+            # No shipped polynomial for this model. Leave the block alone -- the legacy power law
+            # is what it has always used -- but record WHICH model, so the warning raised
+            # downstream can name it. With six (material, particle) bundles and a polynomial
+            # fitted for water only, "some model fell back" is not an actionable message.
+            nphot.setdefault('_origin', str(self.model_path))
+            return
+        with open(override_path, 'r') as f:
+            shipped = json.load(f)
+
+        expect = shipped.get('for_model_legacy')
+        if expect:
+            got = {k: nphot.get(k) for k in ('a', 'b', 'c')}
+            if any(expect[k] != got[k] for k in ('a', 'b', 'c')):
+                raise ValueError(
+                    f"{override_path} was fitted alongside a different model: it records legacy "
+                    f"a/b/c = {expect}, this model's metadata carries {got}. Applying it would "
+                    f"silently rescale every reconstructed energy. Re-fit the polynomial against "
+                    f"this model's table, or delete the file to fall back to its power law."
+                )
+        merged = {**nphot, **{k: v for k, v in shipped.items()
+                              if k not in ('for_model_legacy', 'source')}}
+        merged['_origin'] = str(override_path)
+        self.metadata['nphot'] = merged
+
     def _init_model(self):
         """Initialize the SIREN model architecture."""
         # Import SIREN model
