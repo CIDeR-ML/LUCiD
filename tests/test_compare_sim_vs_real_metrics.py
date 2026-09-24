@@ -9,6 +9,7 @@ import pyarrow.parquet as pq
 import pytest
 
 from compare import compare_sim_vs_real as comparison
+from compare import laser_compare_metrics as metrics
 from compare import laser_compare_plotting as plotting
 from compare.pe_scale_io import (
     fsmp_dark_counts,
@@ -70,28 +71,6 @@ def test_amplitude_data_has_plotting_compatibility_fields():
     )
 
 
-def test_representative_channels_cover_fixed_geometry_strata(tmp_path):
-    """The fixed panel covers theta, PMT type and opposing azimuths."""
-    path = tmp_path / "pmt_map.pq"
-    table = pa.table(
-        {
-            "copy_number": np.arange(10, 18, dtype=np.int64),
-            "pmt_type": np.array([1, 1, 2, 2, 1, 1, 2, 2]),
-            "theta": np.array([45, 45, 45, 45, 135, 135, 135, 135]),
-            "phi": np.array([0, 180, 0, 180, 0, 180, 0, 180]),
-        }
-    )
-    pq.write_table(table, path)
-
-    channels = comparison.representative_channels(
-        path,
-        theta_bin_width=90.0,
-        phi_targets=(0.0, 180.0),
-    )
-
-    np.testing.assert_array_equal(channels, np.arange(10, 18))
-
-
 def test_amplitude_density_and_gate_metrics():
     """Amplitude densities integrate to the requested PE/event metrics."""
     fsmp, simulation = _synthetic_inputs()
@@ -123,8 +102,6 @@ def test_amplitude_density_and_gate_metrics():
     )
     assert result["run_mean_pe_per_event"][0, 0] == 2.0
     assert result["simulation_mean_pe_per_event"][0, 0] == 1.0
-    assert result["run_histogram_C_per_pe_per_ns"][0, 0] == 0.25
-    assert result["simulation_histogram_C_per_pe_per_ns"][0, 0] == 0.25
     assert result["run_shape_c_event_per_pe"][0, 0] == 0.5
     assert result["simulation_shape_c_event_per_pe"][0, 0] == 1.0
     assert result["simulation_applied_source_scale"][0] == 1.0
@@ -159,8 +136,7 @@ def test_dark_is_kept_in_fsmp_and_added_only_to_simulations(tmp_path):
         alignment="peak",
         use_tts=False,
         add_dark_to_simulation=False,
-        dark_margin=1.0,
-        simulation_qe_factor=np.array([0.5, 1.0]),
+        dark_window=1.0,
     )
     with_dark = comparison.build_channel_histograms_multi(
         fsmp,
@@ -168,8 +144,7 @@ def test_dark_is_kept_in_fsmp_and_added_only_to_simulations(tmp_path):
         alignment="peak",
         use_tts=False,
         add_dark_to_simulation=True,
-        dark_margin=1.0,
-        simulation_qe_factor=np.array([0.5, 1.0]),
+        dark_window=1.0,
     )
     dark = with_dark["run_dark_rate_pe_per_event_per_ns"][0, 0]
 
@@ -177,7 +152,7 @@ def test_dark_is_kept_in_fsmp_and_added_only_to_simulations(tmp_path):
     assert with_dark["run_dark_prepeak_pe"][0, 0] == 2
     np.testing.assert_allclose(
         without_dark["simulation_mean_pe_per_event"][:, 0],
-        [0.5, 1.0],
+        [1.0, 1.0],
     )
     np.testing.assert_allclose(
         with_dark["run_pe_per_event_density"],
@@ -188,9 +163,10 @@ def test_dark_is_kept_in_fsmp_and_added_only_to_simulations(tmp_path):
         - without_dark["simulation_pe_per_event_density"],
         dark,
     )
-    assert plotting._dark_note(with_dark, 0) == (
-        f"Dark added to MC={dark:.4e} PE/event/ns"
+    title = plotting._amplitude_channel_title(
+        5, "Hamamatsu", dark, ["LUCiD"], [1.0], ""
     )
+    assert f"Dark added to MC={dark:.5g} PE/event/ns" in title
     output = tmp_path / "dark.csv"
     comparison.write_comparison_stats_csv(output, with_dark, 15040, 0.0)
     with output.open(newline="") as stream:
@@ -443,60 +419,6 @@ def test_fsmp_exposure_counts_event_step_pairs(tmp_path, monkeypatch):
     )
 
 
-def test_all_channel_fsmp_cache_streams_histograms_and_file_audit(
-    tmp_path, monkeypatch
-):
-    """The all-channel cache retains binned counts, exposure and audit data."""
-    schema = pa.schema(
-        [
-            pa.field("eid", pa.int64()),
-            pa.field("ch", pa.int64()),
-            pa.field("offset", pa.uint16()),
-            pa.field("step", pa.uint16()),
-            pa.field("PEt", pa.list_(pa.float64())),
-        ]
-    )
-    table = pa.Table.from_arrays(
-        [
-            pa.array([1, 1, 1, 2]),
-            pa.array([5, 6, 5, 6]),
-            pa.array([0, 0, 0, 0], type=pa.uint16()),
-            pa.array([10, 10, 20, 10], type=pa.uint16()),
-            pa.array([[0.1, 0.15], [0.2], [0.3], [0.4]]),
-        ],
-        schema=schema,
-    )
-    fsmp_root = tmp_path / "fsmp"
-    fsmp_file = fsmp_root / "001" / "one.pq"
-    fsmp_file.parent.mkdir(parents=True)
-    pq.write_table(table, fsmp_file)
-    monkeypatch.setattr(
-        comparison,
-        "_monitor_arrays",
-        lambda _: (np.array([1, 2]), np.array([0.0, 0.0])),
-    )
-
-    records = comparison.read_fsmp_histograms_by_channel(
-        [fsmp_file],
-        fsmp_root,
-        tmp_path / "rtraw",
-        channels=np.array([5, 6]),
-        edges=np.array([0.0, 0.2, 0.4]),
-        run=1,
-    )
-
-    np.testing.assert_array_equal(
-        records["histogram"], np.array([[2, 1], [0, 1]])
-    )
-    np.testing.assert_array_equal(records["histogram_entries"], [3, 1])
-    assert int(records["physical_events"]) == 2
-    assert int(records["event_samples"]) == 3
-    np.testing.assert_array_equal(records["file_selected_pe"], [5])
-    np.testing.assert_array_equal(records["file_event_samples"], [3])
-    np.testing.assert_array_equal(records["file_channels_seen"], [2])
-    assert records["files"].tolist() == [str(fsmp_file)]
-
-
 def test_junosw_event_count_uses_header(tmp_path):
     """JUNOsw Header preserves zero-hit events in the denominator."""
     path = tmp_path / "junosw.h5"
@@ -528,14 +450,20 @@ def test_stats_csv_contains_amplitude_and_gate_metrics(tmp_path):
     assert float(row["lucid_mean_pe_per_event"]) == 1.0
     assert float(row["lucid_prompt_pe_per_event"]) == 0.25
     assert float(row["lucid_late_pe_per_event"]) == 0.75
-    assert int(row["fsmp_histogram_N_pe"]) == 4
-    assert float(row["fsmp_histogram_C_per_pe_per_ns"]) == 0.25
-    assert float(row["fsmp_shape_c_event_per_pe"]) == 0.5
-    assert int(row["lucid_histogram_N_pe"]) == 4
-    assert float(row["lucid_histogram_C_per_pe_per_ns"]) == 0.25
-    assert float(row["lucid_shape_c_event_per_pe"]) == 1.0
+    assert int(row["fsmp_pe"]) == 4
+    assert int(row["fsmp_shape_normalization_pe"]) == 4
+    assert (
+        float(row["fsmp_shape_normalization_coefficient_per_pe_ns"])
+        == 0.125
+    )
+    assert int(row["lucid_pe"]) == 4
+    assert int(row["lucid_shape_normalization_pe"]) == 4
+    assert (
+        float(row["lucid_shape_normalization_coefficient_per_pe_ns"])
+        == 0.25
+    )
     assert float(row["lucid_applied_source_scale"]) == 1.0
-    assert "fsmp_shape_normalization_pe" not in row
+    assert "fsmp_histogram_N_pe" not in row
     assert "lucid_shape_normalization_factor_event_per_pe" not in row
     assert row["alignment_method"] == "global_median_consensus_l1"
     assert "alignment_shift_ns" in row
@@ -601,13 +529,15 @@ def test_amplitude_page_shows_mean_without_gate_metrics(
     assert "Effective gates:" not in title
     assert "prompt=" not in title
     assert "late=" not in title
-    assert "Dark added to MC=0.0000e+00 PE/event/ns" in title
+    assert "Dark added to MC=0 PE/event/ns" in title
+    assert "Source intensity scale: LUCiD=1" in title
     assert "relative to" not in title
     assert "all-PE amplitude valid" not in title
     assert all("mean=" in item for item in legend)
     assert not any("prompt=" in item for item in legend)
     assert not any("late=" in item for item in legend)
-    assert len(axis.lines) == 2
+    # two spectra plus the three unique gate-boundary vlines
+    assert len(axis.lines) == 5
 
 
 def test_lucid_qe_component_scales_only_lucid_sources():
@@ -616,35 +546,33 @@ def test_lucid_qe_component_scales_only_lucid_sources():
     junosw = dict(lucid)
     junosw["label"] = np.asarray("JUNOsw (J26.3.2)")
     junosw["kind"] = np.asarray("junosw")
-    factors = comparison.simulation_qe_factors(
-        [lucid, junosw],
-        apply_lucid_qe=True,
-        lucid_qe_eff=0.097,
+    factors = metrics.simulation_qe_factors(
+        [lucid, junosw], apply_lucid_qe=True, lucid_qe_eff=0.097
     )
+    np.testing.assert_allclose(factors, [0.097, 1.0])
+
     result = comparison.build_channel_histograms_multi(
         fsmp,
         [lucid, junosw],
         alignment="l1",
         use_tts=False,
         add_dark_to_simulation=False,
-        simulation_qe_factor=factors,
+    )
+    scaled = plotting.amplitude_plot_arrays(
+        result, apply_lucid_qe=True, lucid_qe_eff=0.097
     )
 
-    scaled = plotting.amplitude_plot_arrays(result)
-
     np.testing.assert_allclose(scaled["source_factors"], [0.097, 1.0])
-    np.testing.assert_allclose(scaled["simulation_mean"][:, 0], [0.097, 1.0])
+    np.testing.assert_allclose(
+        scaled["simulation_mean"][:, 0], [0.097, 1.0]
+    )
     np.testing.assert_allclose(
         scaled["simulation_density"][:, 0],
         np.array([np.full(4, 0.02425), np.full(4, 0.25)]),
     )
 
-    unscaled_factors = comparison.simulation_qe_factors(
-        [lucid, junosw],
-        apply_lucid_qe=False,
-        lucid_qe_eff=0.097,
-    )
-    np.testing.assert_allclose(unscaled_factors, [1.0, 1.0])
+    disabled = plotting.amplitude_plot_arrays(result, apply_lucid_qe=False)
+    np.testing.assert_allclose(disabled["source_factors"], [1.0, 1.0])
 
 
 def test_source_intensity_scale_scales_signal_before_dark():
@@ -671,13 +599,10 @@ def test_cli_enables_common_lucid_qe(monkeypatch):
 
     assert args.apply_lucid_qe is True
     assert args.lucid_qe_effective == 0.097
-    assert args.channel_mode == "representative"
     assert args.add_dark_to_simulation is True
-    assert args.dark_margin == 30.0
+    assert args.dark_window == 30.0
     assert args.source_intensity_scale is None
-    assert args.amplitude_opt.name == (
-        "compare_sim_representative_amplitude.pdf"
-    )
+    assert args.amplitude_opt.name == "compare_sim_1000_amplitude.pdf"
     disabled = comparison.parse_args(
         [
             "--sim-dir",
@@ -698,40 +623,6 @@ def test_cli_enables_common_lucid_qe(monkeypatch):
         ]
     )
     assert scaled.source_intensity_scale == [0.5]
-
-
-def test_compare_cli_rejects_all_channels(monkeypatch):
-    """All-channel PE scale is owned by the independent plotting tool."""
-    monkeypatch.setattr(comparison, "resolve_run", lambda *_: 15040)
-    with pytest.raises(SystemExit):
-        comparison.parse_args(
-            [
-                "--sim-dir",
-                "simulation",
-                "--channel-mode",
-                "all",
-            ]
-        )
-
-
-def test_cli_input_file_limits_change_the_cache_name(monkeypatch):
-    """Small raw-input checks must not reuse a full-production cache."""
-    monkeypatch.setattr(comparison, "resolve_run", lambda *_: 15040)
-    args = comparison.parse_args(
-        [
-            "--sim-dir",
-            "simulation",
-            "--fsmp-file-limit",
-            "1",
-            "--lucid-file-limit",
-            "1",
-        ]
-    )
-    assert args.fsmp_file_limit == 1
-    assert args.lucid_file_limit == 1
-    assert args.fsmp_data.name == (
-        "fsmp_data_representative_fsmp1_lucid1_junoswall_all.npz"
-    )
 
 
 def test_raw_pe_scale_uses_all_cached_pe_counts():

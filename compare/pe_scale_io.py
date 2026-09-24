@@ -4,7 +4,9 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
+import pyarrow as pa
 import pyarrow.parquet as pq
+from tqdm import tqdm
 
 from compare import compare_sim as base
 from compare import compare_sim_vs_real as response
@@ -88,6 +90,161 @@ def _write_raw_cache(path, data):
     print(f"Wrote {path}")
 
 
+def read_fsmp_histograms_by_channel(
+    fsmp_files,
+    fsmp_dir,
+    rtraw_dir,
+    channels,
+    edges,
+    run,
+    file_limit=None,
+    batch_size=250_000,
+    target_pe=None,
+    first_pe_only=False,
+    monitor_join=True,
+):
+    """Stream FSMP into per-channel histograms for an all-channel cache.
+
+    This intentionally stores no PE-time list.  With ``first_pe_only``, one
+    PE is retained per nonempty PEt record, matching the reference counter.
+    """
+    if batch_size <= 0:
+        raise ValueError("batch_size must be positive")
+    channels = np.asarray(channels, dtype=np.int64)
+    histogram = np.zeros((len(channels), len(edges) - 1), dtype=np.int64)
+    entries = np.zeros(len(channels), dtype=np.int64)
+    total_pe = np.zeros(len(channels), dtype=np.int64)
+    physical_events = event_samples = loaded_pe = readable = 0
+    manifest_path, manifest_pe, manifest_exposure, manifest_coverage = (
+        [], [], [], []
+    )
+    iterator = (
+        fsmp_files
+        if file_limit is not None
+        else tqdm(fsmp_files, desc=f"RUN {run} FSMP files")
+    )
+    for path in iterator:
+        if file_limit is not None and readable >= file_limit:
+            break
+        try:
+            if monitor_join:
+                monitor_eid, monitor_time = response._monitor_arrays(
+                    base.rtraw_path_for(path, fsmp_dir, rtraw_dir)
+                )
+            else:
+                monitor_eid = np.empty(0, dtype=np.int64)
+                monitor_time = np.empty(0, dtype=np.float64)
+            parquet = pq.ParquetFile(path)
+            file_event_steps, file_pe, seen = set(), 0, set()
+            for batch in parquet.iter_batches(
+                batch_size=batch_size,
+                columns=["eid", "ch", "offset", "step", "PEt"],
+                use_threads=False,
+            ):
+                row_channel = batch.column("ch").to_numpy(
+                    zero_copy_only=False
+                )
+                row_eid = batch.column("eid").to_numpy(zero_copy_only=False)
+                row_step = batch.column("step").to_numpy(
+                    zero_copy_only=False
+                )
+                monitor_keep = (
+                    np.isin(row_eid, monitor_eid)
+                    if monitor_join
+                    else np.ones(len(row_eid), dtype=bool)
+                )
+                if np.any(monitor_keep):
+                    pairs = np.unique(
+                        np.column_stack(
+                            (row_eid[monitor_keep], row_step[monitor_keep])
+                        ),
+                        axis=0,
+                    )
+                    file_event_steps.update(map(tuple, pairs.tolist()))
+                values, lengths, valid_pet = response._arrow_pet_values(
+                    batch.column("PEt")
+                )
+                if monitor_join:
+                    monitor, valid_monitor = response._monitor_match(
+                        row_eid, monitor_eid, monitor_time
+                    )
+                else:
+                    monitor = np.zeros(len(row_eid), dtype=np.float64)
+                    valid_monitor = np.ones(len(row_eid), dtype=bool)
+                row_index = np.searchsorted(channels, row_channel)
+                selected = valid_pet & valid_monitor & (lengths > 0)
+                selected &= row_index < len(channels)
+                selected[selected] = (
+                    channels[row_index[selected]] == row_channel[selected]
+                )
+                if not np.any(selected):
+                    continue
+                if first_pe_only:
+                    row_start = (
+                        np.cumsum(lengths, dtype=np.int64) - lengths
+                    )
+                    flat_channel = row_channel[selected]
+                    flat_time = (
+                        values[row_start[selected]]
+                        + batch.column("offset").to_numpy(
+                            zero_copy_only=False
+                        )[selected]
+                        - monitor[selected]
+                    )
+                else:
+                    flat_selected = np.repeat(selected, lengths)
+                    flat_channel = np.repeat(row_channel, lengths)[
+                        flat_selected
+                    ]
+                    flat_time = (
+                        values
+                        + np.repeat(
+                            batch.column("offset").to_numpy(
+                                zero_copy_only=False
+                            ),
+                            lengths,
+                        )
+                        - np.repeat(monitor, lengths)
+                    )[flat_selected]
+                response._accumulate_histogram(
+                    flat_channel, flat_time, channels, edges, histogram, entries
+                )
+                flat_index = np.searchsorted(channels, flat_channel)
+                np.add.at(total_pe, flat_index, 1)
+                file_pe += int(len(flat_channel))
+                seen.update(np.unique(flat_channel).tolist())
+            physical_events += (
+                len(monitor_eid)
+                if monitor_join
+                else len(file_event_steps)
+            )
+            file_exposure = len(file_event_steps)
+            event_samples += file_exposure
+            manifest_path.append(str(path))
+            manifest_pe.append(file_pe)
+            manifest_exposure.append(file_exposure)
+            manifest_coverage.append(len(seen))
+            loaded_pe += file_pe
+            readable += 1
+            if target_pe is not None and loaded_pe >= target_pe:
+                break
+        except (OSError, KeyError, ValueError, pa.ArrowException) as error:
+            if file_limit is None:
+                raise
+            print(f"Skip unreadable FSMP file {path}: {error}")
+    return {
+        "histogram": histogram,
+        "histogram_entries": entries,
+        "total_pe": total_pe,
+        "physical_events": np.asarray(physical_events, dtype=np.int64),
+        "event_samples": np.asarray(event_samples, dtype=np.int64),
+        "files": np.asarray(manifest_path),
+        "file_selected_pe": np.asarray(manifest_pe, dtype=np.int64),
+        "file_event_samples": np.asarray(manifest_exposure, dtype=np.int64),
+        "file_channels_seen": np.asarray(manifest_coverage, dtype=np.int64),
+    }
+
+
 def _build_fsmp_raw_cache(args, channels, edges, output):
     """Read all FSMP PEs without monitor joining into one raw cache.
 
@@ -100,7 +257,7 @@ def _build_fsmp_raw_cache(args, channels, edges, output):
             f"No FSMP Parquet files found in {args.fsmp_dir}"
         )
     pmt_type, tts = base.read_pmt_info(channels, args.pmt_map, args.pmt)
-    records = response.read_fsmp_histograms_by_channel(
+    records = read_fsmp_histograms_by_channel(
         files,
         args.fsmp_dir,
         args.rtraw_dir,
@@ -379,7 +536,8 @@ def raw_pe_scale_inputs(fsmp, simulations, lucid_qe_effective=0.097,
     ``dark_pe`` optionally holds per-channel dark counts subtracted from
     the FSMP numerator.
     Output: arrays with one all-PE count ratio per PMT and simulation source.  
-    This preserves raw-PDF definition: no monitor join, event normalization, peak
+    This preserves raw-PDF definition: no monitor join, event
+    normalization, peak
     gate, dark subtraction or source-intensity scale.  With
     ``dark_pe`` the corrected ratio is added as ``pe_scale_dark``;
     ``min_pe_per_event`` filters channels whose corrected FSMP counts
