@@ -12,6 +12,21 @@ scintillation/param-tree merge):
   - DetectorParams nested leaf-name/order (a wrong insertion silently corrupts every optimizer)
 """
 import os, sys, json
+# Pin the backend BEFORE jax is imported. The test path is already CPU-only -- tests/conftest.py
+# sets this and test_tripwire forwards os.environ into the subprocess -- but the documented
+# regeneration path (running this file directly) inherited nothing, so a capture taken on a GPU
+# node stored 581.2667 against a CPU test value of 581.7201: 7.8x the tolerance, a guaranteed
+# failure on the next run. The reference and the check have to agree on the backend.
+if os.environ.get('JAX_PLATFORMS', 'cpu') != 'cpu':
+    sys.stderr.write('tripwire: overriding JAX_PLATFORMS=%s with cpu (the reference is CPU-only)\n'
+                     % os.environ['JAX_PLATFORMS'])
+# All three lines, matching tests/conftest.py:11-13. Setting only the two JAX_PLATFORMS vars left
+# the direct run differing from the pytest run in exactly one variable -- the class of divergence
+# this block exists to remove -- and conftest attributes its anti-hang behaviour to hiding the
+# device as well: a driver probe can block the process in uninterruptible D-state.
+os.environ.setdefault('CUDA_VISIBLE_DEVICES', '')
+os.environ['JAX_PLATFORMS'] = 'cpu'
+os.environ['JAX_PLATFORM_NAME'] = 'cpu'  # back-compat with older jaxlib
 import numpy as np, jax, jax.numpy as jnp
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 from lucid.geometry import generate_detector
@@ -100,6 +115,36 @@ if __name__ == '__main__':
         assert f['leaf_order'] == rf['leaf_order'], 'DetectorParams LEAF ORDER changed!'
         for key in ['scalar.q_l2', 'scalar.adJ_l2', 'wavelength.q_l2', 'wavelength.adJ_l2']:
             assert abs(f[key] - rf[key]) <= 1e-4 * (abs(rf[key]) + 1e-9), f'{key} drift: {f[key]} vs {rf[key]}'
-        assert np.allclose(f['scalar.fisher_diag'], rf['scalar.fisher_diag'], rtol=1e-4), 'AD-Fisher diag drift'
+        # Per-column, not one blanket rtol. fisher_diag is (adJ**2).sum over 10764 sensors; a
+        # weakly-determined column is built from tiny per-sensor entries, so its float32 relative
+        # error is far larger than a well-determined one's -- the floor tracks column magnitude
+        # almost monotonically (mie F=1.95 -> 4.1e-4; qe F=4309 -> 4.6e-6). One number for all
+        # seven is therefore either too loose for qe or too tight for mie.
+        #
+        # Each bound is 20x that column's MEASURED cross-node floor: identical code and seeds,
+        # AMD (milano) vs the Intel Xeon Gold 5118 host of a turing node, both on CPU --
+        #   mie 4.1e-4, wall 3.4e-4, g 3.1e-4, sensor 1.3e-4, scatter 3.8e-5, abs 2.3e-5, qe 4.6e-6
+        # Core count is not the variable (1->32 cores leaves q_l2 bit-identical and fisher_diag
+        # inside 2e-5); the node is. A jaxlib/XLA upgrade was never probed and is the likeliest
+        # thing to eat this margin, so widen from a MEASUREMENT if that day comes, not by reflex.
+        #
+        # Sensitivity retained, against the isolated b8c266e A/B (ac8861c -> HEAD, same node):
+        # mie 5.0e-2, g 9.8e-3, sensor 4.3e-3, absorption 1.2e-3, wall 1.7e-3. Four of those trip
+        # their bounds -- mie, g, sensor and absorption -- and a single blanket 5e-3 would have
+        # caught only mie and g. Three of these bounds are individually LOOSER than 5e-3; the point
+        # is not that every bound is tighter but that the set detects strictly more on the one real
+        # change there is to test against.
+        # Each bound is that column's floor x20, rounded up to one significant figure (20.6-26.3x).
+        assert list(rf['meta.fields']) == FIELDS, 'FIELDS changed — fisher tolerances are keyed to them'
+        _tol = np.array([{'g': 7e-3, 'scatter_length': 1e-3, 'mie_scatter_length': 1e-2,
+                          'absorption_length': 5e-4, 'wall_reflection_rate': 7e-3,
+                          'sensor_reflection_rate': 3e-3, 'qe': 1e-4}[k] for k in FIELDS])
+        _new = np.asarray(f['scalar.fisher_diag']); _ref = np.asarray(rf['scalar.fisher_diag'])
+        _bad = np.abs(_new - _ref) > _tol * np.abs(_ref)
+        # Name the offending column: 'AD-Fisher diag drift' alone sent this investigation looking
+        # at the forward charge when the signal was in one Jacobian column.
+        assert not _bad.any(), 'AD-Fisher diag drift: ' + ', '.join(
+            '%s %.8g vs %.8g (rel %.2e > %.0e)' % (FIELDS[i], _new[i], _ref[i],
+                abs(_new[i] - _ref[i]) / abs(_ref[i]), _tol[i]) for i in np.nonzero(_bad)[0])
         assert not f['scalar.nan'] and not f['wavelength.nan'], 'NaN appeared'
         print('TRIPWIRE OK — all references match')
