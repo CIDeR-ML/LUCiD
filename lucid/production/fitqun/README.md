@@ -86,11 +86,32 @@ specific; the first two are not.
 
 ## Two choices worth reviewing
 
-**The charge-PDF discriminator.** LUCiD applies it to the integrated
-photoelectron count; WCSim applies it to the smeared charge. The difference is
-visible in the `P(unhit | mu)` coefficients `gen2d.cc` fits — with LUCiD's
-convention `P(hit) = 1 - exp(-mu)` exactly. This is left as LUCiD has it,
-because the point of the exercise is a fiTQun tuned to LUCiD's response.
+**The charge-PDF discriminator.** Both LUCiD and WCSim cut on the digitised
+charge, but WCSim uses a measured S-curve `P(fire | charge)` inherited from
+SKDETSIM's `skrn1pe`, with no derivation in its source and no PMT-type
+dependence — one SK-derived curve for SK, HK and mPMT alike. LUCiD keeps a
+single sharp threshold at that curve's 50% point (0.25 pe), applied on the
+same terms to SK and HK: these are SK-*like* detectors, not SK, and one
+explicit number beats an inherited calibration. The PMT dependence then
+enters only through the SPE spectrum, which is broad for SK and narrow for
+HK, so the same cut keeps ~77% of single-photoelectron hits in SK and ~92%
+in HK.
+
+That makes fiTQun's `P_unhit` term exact rather than degenerate. With
+`s_k` the probability that k photoelectrons clear the threshold,
+
+    P_unhit(mu) = e^-mu * [1 + sum_k (1 - s_k) mu^k / k!]
+
+which is precisely the form `gen2d.cc` fits, with `c_k = (1 - s_k)/k!`:
+
+| | c1 | c2 | c3 |
+|---|---|---|---|
+| SK | 0.2311 | 0.01994 | 0.00113 |
+| HK | 0.0761 | 0.00162 | 0.00002 |
+
+`gen2d.cc` should fit back these numbers from the generated `<mu>_pdf.root`
+files — a free end-to-end check on this stage. fiTQun truncates at k=3,
+which costs <0.1% below mu=2 and 1.6% of an already-tiny `P_unhit` at mu=5.
 
 **The time PDF's `log10(mu)` axis.** The reference links against fiTQun and
 calls `Get1Rmudist`, which needs the Cherenkov profile and charge PDF to have

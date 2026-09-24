@@ -368,44 +368,49 @@ def test_profile_macro_rejects_unknown_particle():
 
 # --- charge PDF ---------------------------------------------------------------
 
-def test_charge_pdf_reproduces_poisson_occupancy_and_unbiased_charge(tmp_path):
-    """Two properties the table must have, whatever the SPE shape is.
+def test_charge_pdf_occupancy_follows_poisson_times_the_discriminator(tmp_path):
+    """P(hit|mu) must sit *below* the Poisson curve by the discriminator loss.
 
-    LUCiD's discriminator acts on the photoelectron count, so a PMT fires iff
-    Poisson(mu) > 0 and P(hit) = 1 - exp(-mu). And the SPE spectrum is
-    normalised so mean reco charge equals the photoelectron count -- but the
-    histogram holds only PMTs that fired, so the mean it carries is the
-    zero-truncated one, mu / (1 - exp(-mu)).
+    A PMT fires if it gets at least one photoelectron AND the digitised charge
+    clears the threshold. If the cut were applied to the photoelectron count
+    instead, it would be inert and this would come out exactly 1 - exp(-mu) --
+    which is the bug this pins against.
     """
     from lucid.production.fitqun import chargepdf
+    from lucid.simulation.digitizer import _sample_spe_charge, resolve_model_config
 
+    model = resolve_model_config("ski")
+    rng = np.random.default_rng(11)
     for mu in (0.5, 5.0):
-        res = chargepdf.build(mu, n_pmt=4000, n_events=8, model="ski", seed=7)
-        p_hit = res["n_hits"] / res["n_active"]
-        assert p_hit == pytest.approx(1.0 - np.exp(-mu), abs=0.01)
+        # Independent expectation: Poisson occupancy times the SPE survival
+        # fraction at that photoelectron multiplicity.
+        n = rng.poisson(mu, 400_000)
+        q = np.zeros(n.size)
+        q[n > 0] = _sample_spe_charge(n[n > 0].astype(float), model["spe"], rng)
+        expected = (q >= model["threshold_pe"]).mean()
+        assert expected < 1.0 - np.exp(-mu)          # the cut really bites
 
-        path = chargepdf.write_mu_point(tmp_path, mu, n_pmt=4000, n_events=8,
-                                        model="ski", seed=7)
-        with uproot.open(path) as f:
-            h = f["hchpdf2"]
-            centres = 0.5 * (h.axis().edges()[1:] + h.axis().edges()[:-1])
-            values = h.values()
-            mean_q = (values * centres).sum() / values.sum()
-            assert mean_q == pytest.approx(mu / (1.0 - np.exp(-mu)), rel=0.05)
-            # hctr is the P(hit|mu) denominator gen2d.cc divides by.
-            ctr = f["hctr"].values()
-            assert ctr[1] == ctr[2] == 4000 * 8
-            assert ctr[9] == ctr[1] + ctr[2]
+        res = chargepdf.build(mu, n_pmt=4000, n_events=8, model="ski", seed=7)
+        assert res["n_hits"] / res["n_active"] == pytest.approx(expected, abs=0.01)
+
+    # Charges below the discriminator must not appear in the table at all.
+    path = chargepdf.write_mu_point(tmp_path, 0.5, n_pmt=4000, n_events=8,
+                                    model="ski", seed=7)
+    with uproot.open(path) as f:
+        h = f["hchpdf2"]
+        edges, values = h.axis().edges(), h.values()
+        assert values[edges[1:] <= model["threshold_pe"]].sum() == 0
+        ctr = f["hctr"].values()
+        assert ctr[1] == ctr[2] == 4000 * 8 and ctr[9] == ctr[1] + ctr[2]
 
 
 def test_charge_pdf_batching_preserves_the_distribution():
     """Batching bounds memory. It redraws rather than replaying, so the check
-    is that the occupancy still follows Poisson, not that the draws match."""
+    is that both give the same occupancy and mean, not the same draws."""
     from lucid.production.fitqun import chargepdf
 
     mu, n_pmt, n_events = 2.0, 500, 20
     model = chargepdf.resolve_model_config("ski")
-    expected = (1.0 - np.exp(-mu)) * n_pmt * n_events
 
     one_pass = chargepdf.sample_charges(mu, n_pmt, n_events,
                                         model, np.random.default_rng(3))
@@ -417,9 +422,9 @@ def test_charge_pdf_batching_preserves_the_distribution():
     finally:
         chargepdf._MAX_PE_PER_PASS = original
 
-    for sample in (one_pass, batched):
-        assert sample.size == pytest.approx(expected, rel=0.05)
-        assert sample.mean() == pytest.approx(mu / (1.0 - np.exp(-mu)), rel=0.05)
+    assert batched.size == pytest.approx(one_pass.size, rel=0.05)
+    assert batched.mean() == pytest.approx(one_pass.mean(), rel=0.05)
+    assert (batched >= model["threshold_pe"]).all()
 
 
 def test_charge_pdf_rejects_a_model_without_an_spe_spectrum():

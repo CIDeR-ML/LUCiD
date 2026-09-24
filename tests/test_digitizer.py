@@ -72,15 +72,56 @@ def test_multi_hit_and_deadtime_veto():
     assert r2.photon_digit_idx[2] == -1
 
 
-def test_threshold_drops_subthreshold_digit():
+def test_windowing_does_not_apply_the_discriminator():
+    """digitize_event windows; the discriminator is a readout stage.
+
+    A discriminator fires on the analogue pulse, so it has to run after the SPE
+    spectrum is sampled. Cutting here instead would act on the integrated
+    photoelectron count, where it is inert -- every hit sensor has at least one
+    photoelectron.
+    """
     model = resolve_model_config("ski")  # threshold 0.25 pe
     sensor = np.array([3, 3])
     times = np.array([500.0, 2000.0])
-    charges = np.array([0.1, 1.0])   # first digit below threshold, second above
+    charges = np.array([0.1, 1.0])
     r = digitize_event(sensor, times, charges, n_sensors=4, model=model)
-    assert r.n_digits == 1
-    np.testing.assert_allclose(r.digit_pe_true, [1.0])
-    assert r.photon_digit_idx[0] == -1 and r.photon_digit_idx[1] == 0
+    assert r.n_digits == 2
+    np.testing.assert_allclose(sorted(r.digit_pe_true), [0.1, 1.0])
+
+    # The cut lives here instead, on the digitised charge.
+    from lucid.simulation.digitizer import apply_discriminator
+    keep = apply_discriminator(np.array([0.1, 1.0]), model)
+    np.testing.assert_array_equal(keep, [False, True])
+    # basic has no discriminator, so nothing is ever dropped.
+    np.testing.assert_array_equal(
+        apply_discriminator(np.array([0.0, 0.1]), resolve_model_config("basic")),
+        [True, True])
+
+
+def test_discriminator_drops_digits_and_remaps_digit_idx():
+    """Surviving digits are renumbered and every deposit's digit_idx follows.
+
+    hits.h5 / step's digit_idx is a foreign key into sensor.h5; a stale index
+    after the cut would silently point at the wrong digit.
+    """
+    rng = _rng()
+    n = 400
+    sd, hits, seg = digitize_and_decompose(
+        sensor_idx=rng.integers(0, 30, size=n),
+        charge=np.ones(n), t_true=rng.uniform(0, 3000, size=n),
+        t_reco=rng.uniform(0, 3000, size=n),
+        particle_idx=np.zeros(n, np.int64), segment_idx=np.zeros(n, np.int64),
+        emission_process=np.zeros(n, np.int64),
+        n_sensors=30, model=resolve_model_config("ski"), rng=rng)
+
+    n_digits = sd["PE"].size
+    # Every surviving digit clears the threshold ...
+    assert (sd["PE"] >= 0.25).all()
+    # ... and every digit_idx still indexes a real digit.
+    for tbl in (hits, seg):
+        if tbl["digit_idx"].size:
+            assert tbl["digit_idx"].min() >= 0
+            assert tbl["digit_idx"].max() < n_digits
 
 
 def test_photon_digit_idx_conserves_charge():

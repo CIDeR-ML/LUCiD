@@ -13,12 +13,12 @@ calls the production digitizer rather than re-deriving it, so a change to the
 detector response shows up in the next tune instead of silently diverging
 from it.
 
-One consequence worth being explicit about: LUCiD applies the discriminator to
-the integrated **photoelectron count**, where WCSim applies it to the smeared
-charge. That difference is visible in the P(unhit | mu) coefficients
-``gen2d.cc`` fits. It is not a bug to paper over here — the point of the
-exercise is a fiTQun tuned to LUCiD's response, so the response is taken as it
-is.
+The discriminator is LUCiD's own: a single sharp threshold on the digitised
+charge, applied identically to SK and HK. WCSim instead uses an SK-specific
+measured S-curve; the deliberate difference is recorded in
+:mod:`lucid.simulation.digitizer`. What matters here is that the table
+describes the response LUCiD actually has, since that is what fiTQun is being
+tuned to.
 
 Output per mu, matching ``Utilities/chrgpdf/workdir/makeChargePDFplot.C`` so
 ``gen2d.cc`` and everything downstream run unchanged:
@@ -34,6 +34,7 @@ from typing import Optional, Union
 import numpy as np
 
 from lucid.simulation.digitizer import (  # noqa: F401  re-exported for tests
+    apply_discriminator,
     apply_readout_resolution,
     digitize_event,
     resolve_model_config,
@@ -77,7 +78,8 @@ def sample_charges(mu: float, n_pmt: int, n_events: int, model: dict,
         res = digitize_event(flat_sensor, zeros, np.ones_like(zeros),
                              n_sensors=n * n_pmt, model=model)
         q, _ = apply_readout_resolution(res.digit_pe_true, res.digit_time, model, rng)
-        out.append(np.asarray(q, dtype=np.float64))
+        q = np.asarray(q, dtype=np.float64)[apply_discriminator(q, model)]
+        out.append(q)
     return np.concatenate(out) if out else np.zeros(0, dtype=np.float64)
 
 
