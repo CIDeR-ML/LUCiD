@@ -53,7 +53,13 @@ class TestDetectorGeometry:
         dg = DetectorGeometry.from_config(
             small_cylinder_config, temperature=0.2,
             detector_type='Cylinder')
-        assert dg.detector_type == 'Cylinder'
+        # 'cylinder', not the 'Cylinder' passed in: since 968d11e the field has held the value
+        # the CONFIG carries, and all 18 shipped configs spell it lowercase. The argument is only
+        # validated (see test_invalid_detector_type) -- `generate_detector` takes the path alone
+        # and reads the class out of the JSON, so the argument never reaches the stored field.
+        # This assertion was left behind by that commit and has been red ever since, unnoticed
+        # because conftest's pytest_ignore_collect drops this whole file unless --slow is passed.
+        assert dg.detector_type == 'cylinder'
         assert dg.num_sensors == len(dg.sensor_points)
         assert dg.sensor_points.shape[1] == 3
         npt.assert_allclose(dg.speed_of_light, 0.299792 / 1.33, atol=1e-5)
