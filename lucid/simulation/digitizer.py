@@ -22,6 +22,9 @@ checkout. ``basic`` is the idealized passthrough (kept for backward parity);
     ski    window=200ns, deadtime=0, thr=0.25pe, dark=4.2kHz — SK 20" (WCSim PMT20inch)
     hk     window=200ns, deadtime=0, thr=0.25pe, dark=4.2kHz — HK 20" Box&Line (R12860)
 
+``thr`` is the discriminator, applied after charge smearing (see below), not
+during windowing.
+
 Provenance (all in ``WCSim/``, the checkout alongside LUCiD):
   * window 200 ns / deadtime 0 ns — ``include/WCSimWCDigitizer.hh:97-98`` (the
     only digitizer WCSim ships is SKI; there is no separate QBEE model).
@@ -33,6 +36,23 @@ Provenance (all in ``WCSim/``, the checkout alongside LUCiD):
     truncation (``WCSimWCDigitizer.hh:99``).
   * dark rate 4.2 kHz — ``src/WCSimPMTObject.cc:262`` (SK-I; WCSim uses the same
     value for the HK B&L PMT, ``:2295``).
+
+Discriminator. ``threshold_pe`` is applied to the **digitised** charge, after
+the SPE spectrum has been sampled — a discriminator fires on the analogue
+pulse, so a single photoelectron whose charge fluctuates low is genuinely
+lost. Ordering it the other way (cutting on the integrated photoelectron
+count) makes the cut inert, since any hit sensor has at least one
+photoelectron; that yields ``P(hit|mu) = 1 - exp(-mu)`` exactly and leaves
+~18% of digits below the nominal threshold.
+
+WCSim instead applies a measured S-curve ``P(fire | charge)``
+(``WCSimWCDigitizerSKI::Threshold``), an SK-specific calibration inherited
+from SKDETSIM's ``skrn1pe`` with no derivation in the source. We deliberately
+keep a single sharp threshold at its 50% point: these are SK-*like*
+detectors, not SK, and one explicit number applies on the same terms to SK
+and HK. The PMT dependence then enters only where it should — through the
+SPE spectrum, which is broad for SK and narrow for HK, so the same cut keeps
+~77% of single-photoelectron hits in SK and ~92% in HK.
 
 The model is chosen from the detector physics config (a ``"digitizer"`` block);
 absent ⇒ ``basic``. Dark noise is off by default; when enabled it is generated
@@ -200,7 +220,9 @@ def digitize_event(
     win_raw = model.get("integration_window_ns")
     window = np.inf if win_raw is None else float(win_raw)
     deadtime = float(model.get("deadtime_ns", 0.0))
-    threshold = float(model.get("threshold_pe", 0.0))
+    # Windowing only keeps out empty windows; the discriminator is a readout
+    # stage and runs on the smeared charge (:func:`apply_discriminator`).
+    threshold = 0.0
 
     photon_digit_idx = np.full(n_ph, -1, dtype=np.int32)
     if n_ph == 0:
@@ -337,6 +359,21 @@ def _sample_time_jitter(digit_time: np.ndarray, digit_pe: np.ndarray,
     if tdc > 0.0:
         t = np.round(t / tdc) * tdc
     return t
+
+
+def apply_discriminator(pe_reco: np.ndarray, model: dict) -> np.ndarray:
+    """Which digits survive the discriminator, given their **digitised** charge.
+
+    A discriminator fires on the analogue pulse, so this runs after the SPE
+    spectrum has been sampled -- see the module docstring for why the ordering
+    is load-bearing and why a single sharp threshold is preferred here over
+    WCSim's SK-specific S-curve.
+    """
+    threshold = float(model.get("threshold_pe", 0.0))
+    pe_reco = np.asarray(pe_reco)
+    if threshold <= 0.0:
+        return np.ones(pe_reco.shape, dtype=bool)
+    return pe_reco >= threshold
 
 
 def apply_readout_resolution(
@@ -508,13 +545,31 @@ def digitize_and_decompose(
         # digits carry true integrated charge and first-arrival time.
         pe_reco = res.digit_pe_true.astype(np.float32)
         t_reco_digit = res.digit_time.astype(_T_DTYPE)
+
+    # Discriminator: on the smeared charge, so a single photoelectron that
+    # fluctuates low is lost as it would be in hardware. Surviving digits are
+    # renumbered and every deposit's digit_idx remapped, so the decompositions
+    # below stay consistent foreign keys into sensor.h5.
+    keep = apply_discriminator(pe_reco, model)
+    digit_sensor = res.digit_sensor_idx
+    didx = res.photon_digit_idx
+    if not keep.all():
+        remap = np.full(keep.size, -1, dtype=np.int64)
+        remap[keep] = np.arange(int(keep.sum()), dtype=np.int64)
+        didx = didx.astype(np.int64).copy()
+        assigned = didx >= 0
+        didx[assigned] = remap[didx[assigned]]
+        didx = didx.astype(np.int32)
+        digit_sensor = digit_sensor[keep]
+        pe_reco = pe_reco[keep]
+        t_reco_digit = t_reco_digit[keep]
+
     sensor_digits = {
-        "sensor_idx": res.digit_sensor_idx.astype(np.uint16),
+        "sensor_idx": digit_sensor.astype(np.uint16),
         "PE": pe_reco,
         "T": t_reco_digit,
     }
 
-    didx = res.photon_digit_idx
     is_dark = emission_process == EMISSION_PROCESS_DARK
 
     # hits.h5: keep digit-assigned deposits with a real particle OR dark.
