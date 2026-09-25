@@ -492,9 +492,16 @@ def _scintillation_defaults_from_medium(medium_model_path):
     }
     return {k: v for k, v in out.items() if v is not None}
 
-# Angular-reflection-model scalars (Schlick blacksheet + multilayer-Fresnel cathode).
-# Inert unless reflection_model='angular'; configs omit them → filled with physical
-# defaults. Bialkali cathode ~ n_r=2.8, n_k=1.5; blacksheet near-diffuse low-R0.
+# Reflection scalars filled in when a config omits them.
+#
+# `wall_fspec` and `sensor_fspec` are NOT inert -- an earlier version of this comment said they
+# were "inert unless reflection_model='angular'", which stopped being true when `scalar_mix`
+# became the default: that model consumes both fractions on every reflection. A config that sets
+# a reflection RATE but no fraction therefore inherits Super-K's surface split silently, which is
+# why the shipped water-Cherenkov configs now state theirs explicitly.
+#
+# wall_R0/wall_p/cathode_nr/cathode_nk ARE angular-model only. Bialkali cathode ~ n_r=2.8,
+# n_k=1.5; blacksheet near-diffuse low-R0.
 _ANGULAR_REFL_DEFAULTS = {
     "wall_R0": 0.05,
     "wall_p": 1.0,
