@@ -269,9 +269,7 @@ def plot_scale_vs_z(rows, output, qe):
         axis.set_xlabel("Source z [m]")
         axis.set_ylabel("Source intensity scale")
         axis.set_title(
-            "Auto source-intensity scale vs source z\n"
-            f"(LUCiD-only equivalent QE={qe:g}, "
-            f"{int(rows[0]['channel_count'])} channels)"
+            "source-intensity scale vs source z\n"
         )
         axis.grid(alpha=0.3)
         axis.legend(loc="best")
