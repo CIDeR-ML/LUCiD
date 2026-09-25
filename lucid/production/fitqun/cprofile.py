@@ -64,10 +64,22 @@ from . import binning, rootio
 # behind the vertex) is kept rather than cropped away.
 
 # gsthr is reported as a *bin centre* of that 2.5 cm axis: every value in the
-# shipped CProf files satisfies (gsthr mod 2.5) == 1.25. The rule picking which
-# bin is not in the material we have, so it is taken as the last bin carrying a
-# non-negligible share of the emission, with the floor exposed below.
-_SMAX_FLOOR_FRAC = 1e-4
+# shipped CProf files satisfies (gsthr mod 2.5) == 1.25.
+#
+# Which bin was not documented anywhere we have, so it was measured. The
+# profile is detector independent, so the shipped WCTE tables are valid ground
+# truth for it: inverting their gsthr(p) against our own emission CDF puts it
+# at the ~90% point, consistently across momentum --
+#
+#     mu-   89.7% +- 0.7      pi+   90.7% +- 1.5      e-   86.2% +- 3.3
+#
+# so gsthr is the s below which ~90% of the light is emitted, not the end of
+# the distribution. Taking the last populated bin instead (an earlier guess
+# here) runs 22% long for muons and 2.4-3x long for electrons, because it
+# chases the delta-ray and bremsstrahlung tail. Electrons scatter more about
+# the 90% point than the heavier particles do, which is consistent with their
+# shower tail being the part most sensitive to the simulation details.
+_SMAX_QUANTILE = 0.90
 
 
 @dataclass
@@ -126,7 +138,7 @@ class ProfileCell:
 
 def accumulate(photonsim_path, *, pdg: int, momentum_mev: float,
                direction=(0.0, 0.0, 1.0), s_max_cm: Optional[float] = None,
-               smax_floor_frac: float = _SMAX_FLOOR_FRAC,
+               smax_quantile: float = _SMAX_QUANTILE,
                step_size: str = "200 MB") -> ProfileCell:
     """Reduce one PhotonSim file to a :class:`ProfileCell` on the reference axes.
 
@@ -151,7 +163,7 @@ def accumulate(photonsim_path, *, pdg: int, momentum_mev: float,
         raise ValueError(f"{photonsim_path}: no Cherenkov photons found")
 
     if s_max_cm is None:
-        s_max_cm = _smax_from_hist(counts.sum(axis=1), s_edges, smax_floor_frac)
+        s_max_cm = _smax_from_hist(counts.sum(axis=1), s_edges, smax_quantile)
 
     ds = s_edges[1] - s_edges[0]
     dc = costh_edges[1] - costh_edges[0]
@@ -181,13 +193,18 @@ def _iterate_photons(raw, axis: np.ndarray, step_size: str):
         yield (pos @ axis) * 0.1, dirs @ axis
 
 
-def _smax_from_hist(marginal: np.ndarray, edges: np.ndarray, floor_frac: float) -> float:
-    """gsthr: the centre of the last s bin carrying real emission."""
-    if marginal.max() <= 0:
+def _smax_from_hist(marginal: np.ndarray, edges: np.ndarray, quantile: float) -> float:
+    """gsthr: the bin centre at which the cumulative emission reaches ``quantile``.
+
+    Reported as a bin centre because that is what the shipped tables contain
+    (every value satisfies ``gsthr mod 2.5 == 1.25``).
+    """
+    total = marginal.sum()
+    if total <= 0:
         raise ValueError("empty s distribution")
-    occupied = np.flatnonzero(marginal > floor_frac * marginal.max())
-    last = int(occupied[-1])
-    return float(0.5 * (edges[last] + edges[last + 1]))
+    idx = int(np.searchsorted(np.cumsum(marginal) / total, quantile))
+    idx = min(idx, len(marginal) - 1)
+    return float(0.5 * (edges[idx] + edges[idx + 1]))
 
 
 def integral_tables(cells: list[ProfileCell], *,
