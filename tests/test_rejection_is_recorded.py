@@ -10,6 +10,7 @@ The chain is: `minimize` counts -> `fit_track` forwards -> the pipeline record c
 to check and the whole chain is worthless if any one is missing.
 """
 import numpy as np
+import pytest
 
 from lucid.fitting.minimize import minimize
 from lucid.fitting.transforms import damped_gauss_newton
@@ -60,14 +61,17 @@ def test_the_refused_step_index_is_recorded():
     assert all(isinstance(i, int) for i in res['rejected_steps'])
 
 
-def test_the_hdf5_writer_routes_it_to_an_ATTRIBUTE():
+@pytest.mark.parametrize('module', ['run', 'run_study'])
+def test_the_hdf5_writer_routes_it_to_an_ATTRIBUTE(module):
     """`_ATTR_KEYS` is a whitelist, and a scalar missing from it lands as a DATASET.
 
     Every reader here uses `attrs`, so an unlisted scalar reads as ABSENT rather than raising —
-    which is how a run with no instrumentation looks identical to a run with no rejections.
+    which is how a run with no instrumentation looks identical to a run with no rejections. Both
+    writers keep their own whitelist: `run` (local) and `run_study` (the SLURM worker).
     """
-    from analysis.paper.utils.run import _ATTR_KEYS
-    assert 'n_rejected' in _ATTR_KEYS
+    import importlib
+    keys = importlib.import_module(f'analysis.paper.utils.{module}')._ATTR_KEYS
+    assert 'n_rejected' in keys
 
 
 def test_the_published_record_builder_carries_it():

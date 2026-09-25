@@ -254,6 +254,30 @@ class IsotropicSource(NamedTuple):
         return get_isotropic_rays(self.position, self.intensity, n_photons, key)
 
 
+class IsotropicSourceRandom(NamedTuple):
+    """Isotropic point source with RANDOM (key-dependent) emission.
+
+    Identical fields and call signature to :class:`IsotropicSource`, but emits via
+    :func:`get_isotropic_rays_random`, so two different PRNG keys give two genuinely
+    different photon sets.
+
+    ``IsotropicSource`` uses a Fibonacci lattice that IGNORES its key: its directions are a
+    deterministic function of ``n_photons`` alone, so every "independent draw" shares the same
+    emission pattern (measured bit-identical across keys). That is the right choice for a
+    low-variance forward model, and the wrong one for generating TRUTH data that is supposed to
+    be an independent realisation -- with the lattice, the direct-light component of the
+    residual is exactly zero by construction rather than by fit quality.
+
+    Use this for truth generation; keep the lattice for the forward model.
+    """
+    position: jnp.ndarray     # (3,)
+    intensity: jnp.ndarray    # scalar
+    wavelength: object = None # scalar nm, or None for broadband
+
+    def __call__(self, n_photons, key, n_water=1.33):
+        return get_isotropic_rays_random(self.position, self.intensity, n_photons, key)
+
+
 class LaserSource(NamedTuple):
     """Laser fibre source -- callable JAX pytree.
 
@@ -289,6 +313,22 @@ def isotropic_source(position, intensity=1_000_000, wavelength=None):
     """
     wl = jnp.asarray(float(wavelength), dtype=jnp.float32) if wavelength is not None else None
     return IsotropicSource(
+        position=jnp.asarray(position, dtype=jnp.float32),
+        intensity=jnp.asarray(float(intensity), dtype=jnp.float32),
+        wavelength=wl,
+    )
+
+
+def isotropic_source_random(position, intensity=1_000_000, wavelength=None):
+    """Create an :class:`IsotropicSourceRandom` -- isotropic with KEY-DEPENDENT emission.
+
+    Same arguments as :func:`isotropic_source`. Use this when two different PRNG keys must give
+    two genuinely different photon sets (e.g. generating truth data that is meant to be an
+    independent realisation of the forward model). :func:`isotropic_source` emits on a
+    deterministic Fibonacci lattice and ignores its key.
+    """
+    wl = jnp.asarray(float(wavelength), dtype=jnp.float32) if wavelength is not None else None
+    return IsotropicSourceRandom(
         position=jnp.asarray(position, dtype=jnp.float32),
         intensity=jnp.asarray(float(intensity), dtype=jnp.float32),
         wavelength=wl,
