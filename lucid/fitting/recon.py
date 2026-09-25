@@ -520,20 +520,29 @@ def fit_track(model, obs_counts, obs_times, start, *, nkeys=8, niters=150, lr=4.
     # Levenberg + jitter damping, the lr anneal, the trust clip, the refresh cadence with its
     # mid-run switch, the non-finite reject and all three readouts — is shared, not duplicated.
     prob = ReconProblem(model, oc, ot, keys, fdh, fisher_mode=fisher_mode)
+    pbar = report.progress(range(niters), desc='track fit', total=niters, verbose=verbose)
+    ticks = iter(pbar)
+
+    def _tick(step, theta, g, H, loss):
+        next(ticks, None)
+        pbar.set_postfix_str(f'‖g‖={float(np.linalg.norm(np.asarray(g) * S)):.2e}')
+
     res = gauss_newton(prob, np.asarray(start, float), niters,
                        lam=lam, mu=ridge_i, jitter=1e-9,
                        lr=lr, lr_final=lr_final, scale=S, max_step=trust,
                        refresh=refresh, refresh_final=refresh_final,
                        refresh_switch=refresh_switch,
-                       readout=readout, polyak=polyak_w, reject_nonfinite=True)
+                       readout=readout, polyak=polyak_w, reject_nonfinite=True,
+                       on_step=_tick)
+    for _ in ticks:                     # exhausting the bar is what closes it
+        pass
     out = res['theta']
     traj, gnorms = res['history'], res['gnorm']
     if verbose:
         report.emit(report.track_table(out, truth=truth, dir_of=vec9_dir))
     if hist:
-        # n_rejected travels with the fit. A refused step is the trigger for the anneal defect
-        # in findings/14, and it used to leave no trace at all -- so how exposed the published
-        # events were could not be read off any output the campaign produced.
+        # n_rejected travels with the fit: a refused step used to leave no trace at all, so how
+        # often the guard fires on real events could not be read off any output.
         return out, dict(traj=np.array(traj), gnorm=np.array(gnorms),
                          best_iter=int(np.argmin(gnorms)),
                          n_rejected=int(res.get('n_rejected', 0)),

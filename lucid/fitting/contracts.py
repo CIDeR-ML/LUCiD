@@ -28,7 +28,7 @@ Recon recipe knobs (the validated Fisher-GN recipe, matching ``fit_track``'s cur
 defaults): ``nkeys=8, niters=150, lr=4.0, lr_final=1.5, ridge_i=0.1, lam=0.01, refresh=8,
 readout='polyak'``, SCALE9-preconditioned, AMP_DETACH in the time term. Calibration runs the
 same loop (:func:`lucid.fitting.gn.gauss_newton`) with ``lam=0.01, mu=0.1, max_step=0.5`` and a
-Neyman residual; the published recipe is ``analysis/paper/utils/calibration.py:CALIB_RECIPE``.
+Neyman residual.
 """
 from __future__ import annotations
 from typing import Protocol, Tuple, TYPE_CHECKING, runtime_checkable

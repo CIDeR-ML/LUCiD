@@ -1,38 +1,17 @@
 """The damped Gauss-Newton loop, written once.
 
-Four copies of this loop existed in the tree, and they had already drifted apart in ways nobody
-intended: three different eigen-floor policies for the same damped inverse, and a default damping
-in the library that was the value the campaign measured as harmful. All four are gone.
+Two copies of this loop existed in the package — the calibration ``fit`` loop in
+``lucid/fitting/gauss_newton.py`` and the one written into ``fit_track`` — and they had already
+drifted apart in ways nobody intended: different eigen-floor policies for the same damped inverse,
+and a default damping in the library that was the value the campaign measured as harmful. Both now
+run this loop. ``fit_track`` reproduces its old trajectory to the float32 solve (about 1e-6
+relative on the analytic test problem); :func:`lucid.fitting.calibrate.fit` deliberately returns
+different numbers, because its ESTIMATOR changed at the same time.
 
-===================================================  ==========================================
-was                                                  now
-===================================================  ==========================================
-``lucid/fitting/gauss_newton.py`` (the ``fit`` loop)  removed; ``lucid.fitting.calibrate.fit``
-``lucid/fitting/recon.py`` (``fit_track``)            delegates here, pinned bit-exactly
-``analysis/paper/utils/`` (the campaign engine)      superseded by ``utils/calib_run.py``,
-                                                      which delegates here; gated bit-exactly
-``analysis/paper/utils/pipeline.py`` (projected)      the projector became
-                                                      ``recon.ProjectedReconProblem`` and the
-                                                      loop is this one; gated at rtol=0,
-                                                      atol=0 against a transcription of the
-                                                      original
-===================================================  ==========================================
-
-Only ``fit_track`` and the projected fit are pinned bit-exactly against pre-delegation references;
-``lucid.fitting.calibrate.fit`` deliberately returns different numbers from the loop it replaced,
-because its ESTIMATOR changed at the same time.
-
-One damped Gauss-Newton loop remains anywhere in the tree, and it is not a copy of this one:
+One damped Gauss-Newton loop remains in the package, and it is not a copy of this one:
 :func:`lucid.fitting.schur_gn.fit_charge_time` carries TWO per-PMT blocks — a multiplicative gain
 and an additive ``t0`` — which the shared calibration problem cannot express, so it is deferred
 rather than folded onto a residual that could not hold it.
-
-``analysis/paper/utils/damping.py`` holds the 2-D loss-geometry figure's damped SOLVE, which is not
-a loop: one definition shared by that figure's two halves. It is a numpy transcription of
-:func:`lucid.fitting.transforms.damped_matrix` rather than a call to it, for a MEASURED reason —
-importing anything from ``lucid.fitting`` runs this package's ``__init__``, which costs 9 seconds
-and pulls jax into a module that otherwise only reads ``.npz`` files and draws. The conventions are
-identical and ``tests/test_paper_damping.py`` holds them in step.
 
 The seam
 --------

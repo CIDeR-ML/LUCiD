@@ -94,20 +94,18 @@ specular/diffuse `*_fspec` direction split — so those fractions become fittabl
    an isotropic volume source. Diversity breaks the key degeneracies — `L_M↔k`, `L_abs↔qe`,
    wall↔sensor reflectivity — and makes the scattering lengths measurable with a plain charge
    loss.
-2. **Globals: a smoothed square-root-MSE loss**, not Poisson-NLL (the NLL's weighting biases
-   the absorption/QE point at finite photon counts). The spatial smoothing acts as a frequency
-   projector: smooth optical fields are low-frequency across the sensor array while per-PMT `k`
-   is white, so smoothing isolates the globals. Optimizer: a consistent fixed-dataset
-   Gauss-Newton with an additive ridge (optional Polyak tail-averaging of the iterates).
-3. **per-PMT `k`: closed-form `k = Q/M`** — the ratio of observed to predicted charge per
-   sensor under an isotropic source.
-4. **One bake alternation.** Without baking the estimated `k̂` back into the forward, white
-   per-PMT variation leaks into the flattest global direction (typically a reflectivity) and
-   inflates its uncertainty; one alternation restores it. Fix the gauge with `mean(log k)=0`,
-   otherwise a global QE↔mean(k) offset is unconstrained. A **smooth, position-correlated QE
-   trend is the dangerous case** — it mimics the optical fields, and if ignored it drags the
-   reflectivities away; the per-sensor `k̂=Q/M` step captures it, but needs a bootstrap `k̂`
-   from a rough global fit first.
+2. **Globals: a Neyman χ² residual**, `(k·M − Q)/√max(Q, q_floor)`. Its weight depends on the
+   data alone, so the residual stays linear in the Monte-Carlo forward, which is redrawn every
+   step; see *A residual that is not linear in the model* below. Optimizer: the damped
+   Gauss-Newton shared with reconstruction (Marquardt `lam`, Levenberg `mu`), with optional Polyak
+   tail-averaging of the iterates (`polyak=`).
+3. **per-PMT `k`: profiled, `k = ΣQ/ΣM`**, solved in closed form at every step and gauged to
+   `mean(log k)=0` (`gauge='linear'` for `mean(k)=1`). The gains never enter the optimizer. The
+   profiled gain is nonlinear in the forward, so it carries a bias that grows with the forward's
+   Monte-Carlo noise; averaging forward draws (`n_forward_draws`) reduces it
+   (`tests/test_fitting_estimator_unbiased.py` measures it).
+4. **A smooth, position-correlated QE trend is the dangerous case.** It mimics the optical
+   fields, and if ignored it drags the reflectivities away.
 
 ## Observable complementarity
 

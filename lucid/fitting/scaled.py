@@ -28,8 +28,8 @@ problem — a far tighter statement than any statistical gate, and the one
 ``tests/test_fitting_scaled.py`` asserts.
 
 This is deliberately a WRAPPER rather than an edit to the existing problems. ``ReconProblem`` and
-``CalibrationProblem`` keep their raw iterates and their bit-exact pins; nothing that produced a
-published number changes. A caller opts in.
+``CalibrationProblem`` keep their raw iterates, and nothing in the package uses this wrapper:
+``fit_track`` and ``calibrate`` run exactly as before. A caller opts in.
 """
 import numpy as np
 

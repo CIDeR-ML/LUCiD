@@ -107,7 +107,7 @@ DEFAULT_CONFIG = {
     'force_seed': None,
     'placement_seed_base': 100003,
     # placement rng seed = base + event * stride. stride=1 is OUR historical scheme; stride=1000
-    # matches the upstream sweep's pose_seed (lucid/fitting/sweep.py POSE_STRIDE, pose=0).
+    # matches the upstream sweep's pose_seed (POSE_STRIDE=1000, pose=0).
     # To reproduce the upstream truth treatment EXACTLY set, per config:
     #   {"placement_seed_stride": 1000, "containment_margin": null, "true_t0_range": [0, 0]}
     # and to come back to ours simply omit them (defaults: stride 1, containment 0.95,

@@ -24,8 +24,9 @@ One estimator serves all three, and it is the one the calibration campaign selec
 * **Neyman χ²** residual ``(k·M − Q)/√Q``. The weight depends on the data alone. That is not a
   detail — the forward is a Monte-Carlo estimate redrawn every step, so any weight involving the
   model makes the residual nonlinear in it and permanently displaces the fixed point.
-* **Profiled gains.** The per-PMT factor has an exact minimiser given the model, so it is solved
-  each step rather than fitted. Order 10^4 nuisance parameters never enter the optimizer.
+* **Profiled gains.** The per-PMT factor is solved in closed form each step (``k = ΣQ/ΣM``,
+  see :func:`lucid.fitting.calib.profile_gains` for how that differs from the Neyman minimiser)
+  rather than fitted. Order 10^4 nuisance parameters never enter the optimizer.
 * **Damped Gauss-Newton**, shared with reconstruction (:mod:`lucid.fitting.gn`).
 
 The earlier arm — a √-MSE residual with the gains carried as a free Schur block — is gone. It was
@@ -163,8 +164,8 @@ def calibrate(sim, sources, params, data, theta0, *,
                               forward_key0=fkey)
     th0 = jnp.asarray(theta0, dtype=jnp.float32)
     if tx is None:
-        # The published path, byte for byte. `tx=None` must reach exactly this call or the
-        # bit-exact pins in tests/reconciliation/ stop meaning anything.
+        # The published path. `tx=None` must reach exactly this call: it is the configuration
+        # every published calibration ran.
         res = gauss_newton(prob, th0, steps,
                            lam=lam, mu=mu, max_step=max_step, jitter=jitter,
                            lr=lr, lr_final=lr_final, scale=scale,
@@ -202,8 +203,8 @@ def closure_data(forward, theta_true, gains=None, *, n_draws=8, key_base=5000):
     in the data is noise in the weight. Pass ``1`` to model a single real exposure — but then read
     the answer as one draw, not as a measurement of the estimator.
 
-    The default is a round number, not a measured optimum: the published run uses 8
-    (``CALIB_RECIPE['BTRUTH']``), and no sweep in this tree identifies a best value.
+    The default is a round number, not a measured optimum: the published run uses 8, and no sweep
+    in this tree identifies a best value.
     """
     g = jnp.ones(forward.NS) if gains is None else jnp.asarray(gains)
     return forward.average(jnp.asarray(theta_true, dtype=jnp.float32), key_base, g, n_draws)
@@ -278,6 +279,9 @@ _RETIRED = {
              'live, so carrying the old value across is a behaviour change, not a rename',
     'nb_h': 'renamed jacobian_draws',
     'step_max': 'renamed max_step',
+    'weights': 'the per-sensor weight (e.g. a lit-PMT mask) has no counterpart: every sensor enters '
+               'the Neyman residual with weight 1/sqrt(max(Q, q_floor)), so an unlit sensor is '
+               'kept at the floor weight, not removed',
 }
 
 

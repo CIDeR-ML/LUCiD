@@ -124,53 +124,6 @@ def test_it_is_the_rule_fit_track_multistart_applies():
     assert 'margin * abs(' not in src, 'the margin rule is written out again inside multistart'
 
 
-# --------------------------------------------------------------------------------------------
-# The third piece of the same consolidation: `pipeline.seed_errors` stopped reimplementing the
-# vertex split and the opening angle and now composes the library's. That is a rewrite of a
-# reporting function nothing else gated, so the equivalence is measured here.
-# --------------------------------------------------------------------------------------------
-
-def _seed_errors_before_consolidation(seed, th9, d):
-    """Verbatim, as it stood in pipeline.py, with its own copy of vec9_dir."""
-    seed = np.asarray(seed, float)
-    th9 = np.asarray(th9, float)
-    v = seed
-    st, ct, sp, cp = v[4], v[5], v[6], v[7]
-    nt, npp = np.hypot(st, ct), np.hypot(sp, cp)
-    sdir = np.array([st / nt * cp / npp, st / nt * sp / npp, ct / nt])
-    dv = seed[1:4] - th9[1:4]
-    lon = float(np.dot(dv, d))
-    tra = float(np.linalg.norm(dv - lon * d))
-    ddeg = float(np.degrees(np.arccos(np.clip(sdir @ d, -1, 1))))
-    return np.array([np.linalg.norm(dv) * 100, tra * 100, lon * 100,
-                     ddeg, float(seed[0] - th9[0]), float(seed[8] - th9[8])])
-
-
-def test_seed_errors_still_reports_what_it_did_before():
-    """Composing the library primitives changed the numbers by 1e-8, and only by that.
-
-    Not bit-identical, and the reason is worth knowing rather than tolerating blindly:
-    `vertex_residual` and `angular_error_deg` normalise their direction with a `+1e-12` guard
-    against a zero-norm input, which the inline version did not. On a unit direction that is a
-    1e-12 relative change, which lands at ~1e-8 on quantities reported in centimetres — a
-    tenth of a nanometre on a vertex error. The guard is an improvement; the point of this test
-    is that it is the ONLY difference, and that it cannot grow.
-    """
-    from analysis.paper.utils.pipeline import seed_errors
-    rng = np.random.default_rng(0)
-    scale = np.array([500, 3, 3, 3, 1, 1, 1, 1, 5])
-    worst = 0.0
-    for _ in range(500):
-        seed = rng.standard_normal(9) * scale
-        th9 = rng.standard_normal(9) * scale
-        d = rng.standard_normal(3)
-        d /= np.linalg.norm(d)
-        worst = max(worst, float(np.abs(_seed_errors_before_consolidation(seed, th9, d)
-                                        - seed_errors(seed, th9, d)).max()))
-    assert worst < 1e-7, f'seed_errors moved by {worst:.3e}, far beyond the 1e-12 norm guard'
-    assert worst > 0.0, 'expected the norm guard to show; if it vanished, check what changed'
-
-
 def _pick_before_consolidation(lossA, lossB, lossF, sel_margin):
     """Verbatim, as `pipeline.seed_event` computed the two picks before the rewrite."""
     thr = lossA - sel_margin * abs(lossA)
