@@ -1,0 +1,21 @@
+{
+  "name": "fitqun_sample_sk_wand",
+  "_comment": "Isotropic sample behind the angular response and the indirect-light tables. Photon count, not event count: cases x photons is what the tables bin.",
+  "geometry": "/afs/cern.ch/work/c/cjesus/DIFFSIM/LUCiD/config/sk_geometry.npz",
+  "detector_config": "/afs/cern.ch/work/c/cjesus/DIFFSIM/LUCiD/config/SK_WAND_geom_config.json",
+  "physics_config": "/afs/cern.ch/work/c/cjesus/DIFFSIM/LUCiD/config/SK_WAND_physics_config.json",
+  "n_jobs": 320,
+  "cases_per_job": 5000,
+  "photons_per_case": 40000,
+  "position_fraction": 0.9,
+  "shell_radii_cm": [
+    100.0,
+    200.0,
+    400.0,
+    800.0,
+    1200.0
+  ],
+  "seed_base": 70000000,
+  "request_disk_mb": 8192,
+  "_sizing": "2e8 photons/job: ~2.3 h at the measured 23.7k photons/s/CPU, ~6.3 GB of scratch for the propagated list before it is reduced and deleted. Both fit inside workday and request_disk_mb."
+}
