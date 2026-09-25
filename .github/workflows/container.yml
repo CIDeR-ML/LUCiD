@@ -156,8 +156,8 @@ jobs:
     #
     # Provenance for the tripwire's reference: tests/reconciliation/tripwire_water_ref.PROVENANCE.md
     #
-    # Cost: 743 tests, about 23 minutes. That measurement was already CPU-only -- conftest.py
-    # forces JAX_PLATFORMS=cpu for the whole suite, so the GPU on the measuring node went unused.
+    # Cost: roughly 20-25 minutes on CPU when last measured. conftest.py forces JAX_PLATFORMS=cpu
+    # for the whole suite, so a GPU on the runner would go unused.
     # This runner will differ by CPU model and core count, not by device. If it becomes the
     # bottleneck, split the job rather than narrowing what it collects.
     needs: build
@@ -185,9 +185,10 @@ jobs:
 
       # -rs groups every skip with its reason. A bare skip count hides a gate that quietly stopped
       # running, and this suite already has skips nobody sees: the two byte-identity tests gate on
-      # env vars CI never sets (tests/io/test_categorizer_byte_identity.py:147,
-      # tests/io/test_hits_byte_identity.py:208). The SIREN-gated tests will skip here too, since
-      # container/Dockerfile.dockerignore:42 excludes **/siren_training/ and those paths are
+      # env vars CI never sets (the skipif on the ROOT-file variable in
+      # tests/io/test_categorizer_byte_identity.py and tests/io/test_hits_byte_identity.py). The
+      # SIREN-gated tests will skip here too, since container/Dockerfile.dockerignore excludes
+      # **/siren_training/ and those paths are
       # symlinks into the data area, so they cannot be in the image. Naming a skip is what makes
       # that a decision rather than an assumption.
       - name: Run pytest (full suite, --slow)

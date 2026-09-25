@@ -5,6 +5,7 @@ from jax import vmap, jit
 from functools import partial
 import os
 import json
+import tempfile
 import numpy as np
 from lucid.utils import base_dir_path
 
@@ -238,12 +239,18 @@ def save_overlap_values(r: float, sigma: float, d_values: jnp.ndarray, f_values:
         'f_values': f_values.tolist()
     }
 
+    # Written to a temporary file and moved into place, so a reader never sees a half-written table:
+    # parallel jobs sharing a cold cache all build the same table and all write it.
     filename = os.path.join(cache_dir, get_cache_filename(r, sigma))
+    tmp = None
     try:
-        with open(filename, 'w') as f:
+        with tempfile.NamedTemporaryFile('w', dir=cache_dir, suffix='.tmp', delete=False) as f:
+            tmp = f.name
             json.dump(cache_data, f)
+        os.replace(tmp, filename)
     except OSError:
-        pass
+        if tmp is not None and os.path.exists(tmp):
+            os.remove(tmp)
 
 
 def load_overlap_values(r: float, sigma: float) -> Optional[Tuple[jnp.ndarray, jnp.ndarray]]:
@@ -265,16 +272,14 @@ def load_overlap_values(r: float, sigma: float) -> Optional[Tuple[jnp.ndarray, j
     filename = next((c for c in (os.path.join(d, name) for d in _cache_dirs())
                      if os.path.exists(c)), None)
 
-    if filename is not None:
+    if filename is None:
+        return None
+    try:
         with open(filename, 'r') as f:
             cache_data = json.load(f)
-
-        # Convert back to jnp arrays
-        d_values = jnp.array(cache_data['d_values'])
-        f_values = jnp.array(cache_data['f_values'])
-        return d_values, f_values
-
-    return None
+        return jnp.array(cache_data['d_values']), jnp.array(cache_data['f_values'])
+    except (OSError, ValueError, KeyError):
+        return None        # unreadable or partial: rebuild it, as if it were not cached
 
 
 @partial(jax.jit, device=jax.devices('cpu')[0])

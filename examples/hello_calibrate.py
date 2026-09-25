@@ -5,7 +5,7 @@ The validated recipe (the one the calibration campaign ran on): build_calibratio
 from a perturbed start while all 10764 per-PMT QE/gain factors are profiled in closed form at
 every step. Reports the fit error against the Cramer-Rao bound.
 
-Fast on GPU (~1 min); on CPU it is much slower — set JAX_PLATFORM_NAME if needed.
+About 4 min on one GPU; much slower on CPU — set JAX_PLATFORM_NAME if needed.
 Run:  python examples/hello_calibrate.py
 """
 import jax, jax.numpy as jnp, numpy as np

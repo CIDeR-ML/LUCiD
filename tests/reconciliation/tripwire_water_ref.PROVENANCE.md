@@ -10,7 +10,7 @@ is the reason. **Append to it on every re-capture; do not overwrite.**
 | | |
 |---|---|
 | device | **CPU**, pinned by `tripwire_capture.py` |
-| host | Intel Xeon Gold 5118 (host of a `turing` node) |
+| host | Intel Xeon Gold 5118 |
 | `scalar.q_l2` | 581.7201 → **540.6970** (−7.1%) |
 | `scalar.q_sum` | 17215.2617 → **15670.7793** (−9.0%) |
 | `wavelength.q_l2` | 771.2139 → **716.5498** |
@@ -60,7 +60,7 @@ property of the arithmetic rather than of the reference's values, so they are un
 | | |
 |---|---|
 | device | **CPU** — forced by `tripwire_capture.py` before importing jax |
-| host | AMD (`milano`); see the portability section, which is why the host is recorded at all |
+| host | AMD EPYC; see the portability section, which is why the host is recorded at all |
 | `scalar.q_l2` | 581.5638 → **581.7201** (+0.027%) |
 | `scalar.q_sum` | 17206.0586 → **17215.2617** |
 
@@ -115,8 +115,8 @@ Two candidates, one refuted and one confirmed, both by measurement:
 
 * **Thread count — refuted.** 1, 2, 4, 8, 16, 32 cores on one node: `q_l2` bit-identical at every
   count, `fisher_diag` spread ≤ 2e-5.
-* **CPU architecture — confirmed.** Identical code and seeds, AMD (`milano`) vs the Intel Xeon Gold
-  5118 host of a `turing` node, both on CPU:
+* **CPU architecture — confirmed.** Identical code and seeds, an AMD EPYC node vs an Intel Xeon Gold
+  5118 node, both on CPU:
 
   | column | cross-host relative difference |
   |---|---|

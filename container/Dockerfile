@@ -90,10 +90,11 @@ RUN SETUPTOOLS_SCM_PRETEND_VERSION_FOR_LUCID_SIM=0.0.0+docker \
  && command -v lucid-run-job \
  && python3 -c "import lucid.production.run_job as m; print(m.__file__)"
 
-# Warm the overlap-integral lookup cache for the detectors we ship. The cache is
-# gitignored, so it is never in the build context; without this the first job on
-# a fresh install pays the recomputation. It also keeps a read-only install off
-# the write path entirely, since the loader finds the entry here.
+# Warm the overlap-integral lookup cache for the detectors we ship, at the library's default
+# temperature (0.2). The cache is gitignored, so it is never in the build context. Production jobs
+# run at temperature 0 (the hard step) and never read these tables; the warm entries serve
+# interactive use of the image at the default temperature, keeping a read-only install off the
+# write path. Each table takes about a minute to build (float64, 400 dense nodes).
 RUN python3 -c "\
 import glob; \
 from lucid.geometry.detector_geometry import DetectorGeometry; \

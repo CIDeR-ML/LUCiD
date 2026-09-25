@@ -1,6 +1,6 @@
 """Phase-0 reconciliation TRIPWIRE — capture water-mode reference tensors that every
 unification↔refactor-v2 merge phase must preserve. Run with CAPTURE=1 to (re)generate the
-reference npz; run without to ASSERT against it. See docs/RECONCILIATION_PLAN.md Phase 0.
+reference npz; run without to ASSERT against it. See docs/concepts/architecture.md.
 
 Pins, on the real lucid.fitting calibration path (the path most threatened by the optics/
 scintillation/param-tree merge):
@@ -122,7 +122,7 @@ if __name__ == '__main__':
         # seven is therefore either too loose for qe or too tight for mie.
         #
         # Each bound is 20x that column's MEASURED cross-node floor: identical code and seeds,
-        # AMD (milano) vs the Intel Xeon Gold 5118 host of a turing node, both on CPU --
+        # an AMD EPYC node vs an Intel Xeon Gold 5118 node, both on CPU --
         #   mie 4.1e-4, wall 3.4e-4, g 3.1e-4, sensor 1.3e-4, scatter 3.8e-5, abs 2.3e-5, qe 4.6e-6
         # Core count is not the variable (1->32 cores leaves q_l2 bit-identical and fisher_diag
         # inside 2e-5); the node is. A jaxlib/XLA upgrade was never probed and is the likeliest
