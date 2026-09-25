@@ -2,8 +2,8 @@
 
 The validated recipe (the one the calibration campaign ran on): build_calibration_problem
 -> Fisher/CRB at truth -> Gauss-Newton fit. Seven global optical parameters are recovered
-from a perturbed start while all 10764 per-PMT QE/gain factors are marginalised analytically
-by a Schur complement. Reports the fit error against the Cramer-Rao bound.
+from a perturbed start while all 10764 per-PMT QE/gain factors are profiled in closed form at
+every step. Reports the fit error against the Cramer-Rao bound.
 
 Fast on GPU (~1 min); on CPU it is much slower — set JAX_PLATFORM_NAME if needed.
 Run:  python examples/hello_calibrate.py

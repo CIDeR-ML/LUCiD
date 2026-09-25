@@ -1,17 +1,16 @@
 """One loop, any optax optimizer — including the damped Gauss-Newton one.
 
-:func:`lucid.fitting.gn.gauss_newton` is the numpy loop that produced every published number and
-has the damped solve written into its body. It stays exactly as it is. This is the same loop with
-that solve replaced by an :class:`optax.GradientTransformation`, so the choice of optimizer stops
-being a property of the driver and becomes an argument to it::
+:func:`lucid.fitting.gn.gauss_newton` is this loop configured with the damped Gauss-Newton
+transformation. The loop does not know which rule it runs: the step is an
+:class:`optax.GradientTransformation`, so the choice of optimizer is an argument to the driver
+rather than a property of it::
 
     minimize(problem, theta0, steps, tx=damped_gauss_newton(lam=0.01, mu=0.1, learning_rate=4.0))
     minimize(problem, theta0, steps, tx=optax.adam(1e-3), needs_metric=False)
 
-The equivalence is not asserted, it is tested: with the Gauss-Newton transformation this
-reproduces ``gauss_newton``'s whole trajectory to the float32-solve floor
-(``tests/test_fitting_minimize.py``). That is what makes it a refactor of the optimizer choice
-rather than a second optimizer to keep in step with the first.
+With the Gauss-Newton transformation it reproduces the loop ``fit_track`` ran before the two were
+merged, trajectory and refused steps included, to the float32 solve
+(``tests/test_fit_track_matches_main_loop.py``).
 
 What stays in the driver, and why
 ---------------------------------
@@ -130,7 +129,7 @@ def minimize(problem, theta0, steps, tx, *, needs_metric=True, scale=None, max_s
         # `iteration` is the RAW loop index, and it is passed because a transformation's own
         # state counter is NOT the same thing. On a refused step the state is restored
         # below, which correctly discards a momentum buffer but would also rewind a
-        # schedule counter -- and the reference loop's lr anneal is driven by this index,
+        # schedule counter -- and fit_track's lr anneal has always been driven by this index,
         # which advances whether or not the step was accepted. Without this, a fit that
         # rejects one step anneals on a different schedule from the published one.
         extra = ({'metric': Hs, 'iteration': step}
@@ -140,8 +139,8 @@ def minimize(problem, theta0, steps, tx, *, needs_metric=True, scale=None, max_s
         # The jax -> numpy crossing. See the module docstring: letting a jax float32 array reach
         # `accumulate` silently downcasts AND retypes a float64 numpy iterate, permanently.
         # `np.asarray` IS the guard -- it always returns a numpy array, including from a jax one.
-        # An assertion after it could never fire, so the one that used to sit here asserted
-        # nothing; the dtype is gated for real by tests/test_gn_delegation.py's float32 case.
+        # An assertion after it could never fire, so none sits here; the dtype is gated by
+        # tests/test_fitting_minimize.py::test_nothing_jax_typed_reaches_accumulate.
         du = np.asarray(du)
 
         if max_step is not None:
@@ -161,14 +160,17 @@ def minimize(problem, theta0, steps, tx, *, needs_metric=True, scale=None, max_s
         if reject_nonfinite and nxt is not None and not (
                 np.isfinite(np.asarray(theta_new)).all()
                 and np.isfinite(np.asarray(nxt[0])).all()):
-            # COUNT the refusal. A rejected step used to leave no trace anywhere -- not in the
-            # result, not in the campaign logs -- so how often this branch runs on real events was
-            # unmeasurable from any output the fit produced. That silence is why the anneal defect
-            # this branch triggers (findings/14) went unnoticed: the only figure available for how
-            # exposed the published fits were came from a docstring, at a different working point.
-            # Diagnostic only; it changes no number.
+            # COUNT the refusal, so how often it happens can be read off the result rather than
+            # guessed. Diagnostic only; it changes no number.
             rejected.append(step)
             state = prev_state                  # do NOT keep the moments from a refused step
+            if due and step + 1 < steps:
+                # The look-ahead call refreshed the metric at the REFUSED point, and a problem
+                # that caches its metric hands that one back on every later non-refresh step. A
+                # non-finite one then refuses every step after it and the fit freezes. Rebuild it
+                # at the iterate that was kept, which is where main's fit_track built it: the
+                # cadence and the step index are unchanged, and `g` stays the kept one.
+                H = problem.grad_metric_loss(theta, step + 1, refresh=True)[1]
         else:
             theta = theta_new
             if nxt is not None:

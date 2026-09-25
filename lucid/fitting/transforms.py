@@ -1,7 +1,7 @@
 """Gauss-Newton as an optax transformation, in JAX.
 
-``lucid.fitting.gn`` owns the numpy loop that produced every published number, and it stays the
-reference. This module is the other half of the same idea: the damped Gauss-Newton STEP expressed
+``lucid.fitting.gn`` configures the shared loop in :mod:`lucid.fitting.minimize`; this module is
+the step that loop runs: the damped Gauss-Newton STEP expressed
 as an :class:`optax.GradientTransformationExtraArgs`, so that curvature-aware optimisation stops
 being a special case the framework works around and becomes a transformation that composes with
 everything else optax offers.
@@ -13,7 +13,7 @@ is exactly the hook a second-order method needs: the metric arrives as ``metric=
 gradient. That one signature buys, for free and without any of it being written here:
 
 * ``optax.chain`` — compose with clipping, weight decay, anything;
-* ``optax.inject_hyperparams`` — schedule the MARQUARDT DAMPING, which the numpy loop cannot do
+* ``optax.inject_hyperparams`` — schedule the MARQUARDT DAMPING, which ``gn.gauss_newton`` cannot
   (``lam`` is a fixed scalar there);
 * ``optax.MultiSteps`` — microbatched gradient accumulation. This is the one that does NOT work
   with a numpy implementation: ``MultiSteps`` jits internally, and ``np.linalg.solve`` on a traced
@@ -158,7 +158,7 @@ def damped_gauss_newton(lam, mu, learning_rate=1.0, jitter=0.0, rel_cutoff=1e-12
     than 1.5 -- a 1.1% error on the final learning rate, four orders above the float32 agreement
     this module otherwise argues about. With ``transition_steps=steps-1`` the two agree to
     2.3e-07, which is the float32 figure quoted above. ``lam`` and ``mu`` are scalars here; to schedule the DAMPING as well,
-    wrap with ``optax.inject_hyperparams`` — a capability the numpy loop does not have::
+    wrap with ``optax.inject_hyperparams`` — a capability ``gn.gauss_newton`` does not have::
 
         tx = optax.inject_hyperparams(damped_gauss_newton)(
             lam=optax.linear_schedule(0.1, 0.001, 500), mu=0.1)
@@ -166,6 +166,15 @@ def damped_gauss_newton(lam, mu, learning_rate=1.0, jitter=0.0, rel_cutoff=1e-12
     The update returned is the thing ADDED to the parameters, matching optax throughout and
     matching ``gn.py``'s ``du``, so no sign flip is needed anywhere.
     """
+    # A SCHEDULE reads the driver's iteration rather than optax's own counter. `minimize` restores
+    # the optimiser state on a refused step, which would rewind a counted schedule and spend an
+    # iteration's learning rate twice; see `scale_by_driver_schedule`. A constant needs no count.
+    if callable(learning_rate):
+        return optax.chain(
+            scale_by_damped_gauss_newton(lam, mu, jitter=jitter, rel_cutoff=rel_cutoff),
+            scale_by_driver_schedule(learning_rate),
+            optax.scale(-1.0),
+        )
     return optax.chain(
         scale_by_damped_gauss_newton(lam, mu, jitter=jitter, rel_cutoff=rel_cutoff),
         optax.scale_by_learning_rate(learning_rate),

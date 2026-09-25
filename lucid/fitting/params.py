@@ -14,7 +14,7 @@ coordinates reviewable instead of incidental — and the choice matters:
   ``d log(1−f)/d log f = −f/(1−f) = −9``, so a small fractional error on ``f`` is amplified
   ninefold in the reported diffuse component. (The campaign's measured pair is 0.4% on the fitted
   parameter against −2.6% reported — smaller than −9 × 0.4% because the two are not the same
-  perturbation; see analysis/paper/CALIBRATION_STUDIES.md.) Owning ``to_real`` here is what stops
+  perturbation.) Owning ``to_real`` here is what stops
   each analysis script re-deriving that factor and getting a different answer.
 
 Three parameterisations ship, and they answer different questions.

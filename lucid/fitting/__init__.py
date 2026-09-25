@@ -86,7 +86,7 @@ __all__ = [
     'calibrate', 'closure', 'closure_data', 'fit', 'build_calibration_problem',
     'CalibrationForward', 'CalibrationJacobian', 'CalibrationProblem',
     'profile_gains', 'neyman_residual',
-    # the shared optimiser: the numpy loop, and the same step as an optax transformation
+    # the shared optimiser: the damped Gauss-Newton configuration, its optax pieces, the driver
     'gauss_newton',
     'damped_gauss_newton', 'scale_by_damped_gauss_newton', 'minimize', 'ScaledProblem',
     # reconstruction

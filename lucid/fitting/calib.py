@@ -31,8 +31,7 @@ as saying the answer is identical. Measured on a stub: the forward agrees EXACTL
 Jacobian to 8.5e-08 relative, which is float32 epsilon from XLA folding a closed-over source as a
 constant where the other route carries it as a traced argument. Gated by
 ``tests/test_fitting_calibrate.py::test_the_two_dispatch_routes_agree``. The traced route is the
-default and is what the bit-exact pin gates; the per-source route is selected by passing
-``predict``.
+default; the per-source route is selected by passing ``predict``.
 
 Sharding
 --------
@@ -104,8 +103,8 @@ class CalibrationForward:
         # way from overlapped to serial, with 45% of every forward wasted; and on a 10-GPU node
         # devices 7, 8 and 9 sat idle for the whole run. The reference engine placed it on
         # `DEVS[min(7, len(DEVS)-1)]` and measured 0.631 s on eight cards, 1.78x faster.
-        # Placement is value-neutral -- the engine and this class were bit-identical on all six
-        # pinned fields while placing this source on different devices -- so it buys wall clock
+        # Placement is value-neutral -- when this class was extracted it and the engine agreed
+        # bit for bit while placing this source on different devices -- so it buys wall clock
         # and moves no number. `laser_device` overrides; None picks the first card outside the
         # mapped range, falling back to the last available when there is none.
         self._laser_dev = laser_device
@@ -224,7 +223,7 @@ class CalibrationForward:
         module performs BEFORE forming the residual -- the profiled gain ``k = ΣQ/ΣM`` is
         nonlinear in ``M``, so its expectation moves with the forward's variance, and that shift
         propagates into the residual. The bias and its scaling with forward noise are measured in
-        the repo ledger.
+        ``tests/test_fitting_estimator_unbiased.py``.
         """
         acc = jnp.zeros((self.S, self.NS))
         for b in range(n_draws):
