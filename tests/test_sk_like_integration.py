@@ -18,6 +18,16 @@ pytestmark = pytest.mark.slow
 GEOM = os.path.join(os.path.dirname(__file__), '..', 'config', 'SK_like_geom_config.json')
 GRID_KW = dict(n_cap=150, n_angular=250, n_height=150)
 
+# The track-mode tests need the trained SIREN emitter, which is a DOWNLOAD
+# (./scripts/download_data.sh), not part of the checkout. Without it these raised
+# FileNotFoundError — six errors that read like defects on a fresh clone, or in any git worktree
+# (data/ is gitignored, so a worktree materialises almost none of it). Skip with a reason instead.
+_SIREN_DIR = os.path.join(os.path.dirname(__file__), '..', 'data', 'water', 'muon',
+                          'siren_training', 'trained_model')
+requires_siren = pytest.mark.skipif(
+    not os.path.isdir(_SIREN_DIR),
+    reason=f'trained SIREN emitter not present ({_SIREN_DIR}) — run ./scripts/download_data.sh')
+
 
 @pytest.fixture(scope="module")
 def detector():
@@ -124,6 +134,7 @@ class TestCalibrationSources:
 
 # ── Track mode (SIREN/Cherenkov) with K convergence ────────────────
 
+@requires_siren
 class TestTrackModeKConvergence:
     """Test Cherenkov simulation via SIREN and analyze per-iteration charge."""
 
