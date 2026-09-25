@@ -1,6 +1,6 @@
 """9-parameter track reconstruction — the consistent Fisher-Gauss-Newton recipe.
 
-Ported from the recon study (``RECO_PIPELINE.md`` / ``gn_fisher_recon.py``): fit the track
+Ported from the recon study's ``gn_fisher_recon.py``: fit the track
 ``θ = [E, x, y, z, sinθ, cosθ, sinφ, cosφ, t0]`` against the per-PMT (charge, first-arrival
 time) observables by Gauss-Newton on a PSD Fisher metric
 
@@ -13,7 +13,8 @@ the raw F is position-dominated (F_xx ~ 1e5 vs F_EE ~ 1) so energy freezes witho
 gradient ``g`` is reverse-mode autodiff (it DOES flow through the custom_vjp). Charge = Poisson
 NLL (un-normalised — carries E + longitudinal/transverse vertex); time = the windowed
 first-arrival ORDER-STATISTIC NLL (:func:`lucid.losses.first_arrival_window_nll` — carries
-direction, t0, transverse vertex), AMP_DETACH baked in. Readout = the min‖g‖ iterate.
+direction, t0, transverse vertex), AMP_DETACH baked in. Readout = the Polyak tail average
+by default (``readout='polyak'``); ``'ming'`` selects the min‖g‖ iterate instead.
 
 ``pred`` is a per-photon track simulator: ``setup_event_simulator(..., hit_mode='per_photon',
 pos_grad_threshold=K, n_grad_iters=K)`` returning ``(log_w, flat_times, flat_indices,
@@ -28,7 +29,10 @@ slowest cell's P90 + the last-40 Polyak window; ``readout='polyak'`` (median tie
 noise fluctuations where the vtx is far; the last-40 average suppresses that). The ~15cm vertex floor
 is SIREN-emitter-bias-limited (readout-probe-proven: min-data-loss readout = Polyak = the loss
 minimum; the ~4cm "oracle" is an unreachable fluctuation toward truth), NOT optimizer-limited.
-SIGMA=2.5(=TTS), DELTA=1.0.
+DELTA=1.0. SIGMA is the per-photon time resolution and must match the TTS of the data: the paper
+pipeline uses ``tts=2.1`` with ``sigma=2.1`` (``analysis/paper/utils/pipeline.py`` DEFAULT_CONFIG
+and its ``gn`` block). The constructor default of 2.5 is kept so callers that omit sigma do not
+change behaviour, but it is NOT the published value: pass sigma for the tts you are simulating.
 """
 import numpy as np
 import jax
@@ -36,10 +40,29 @@ import jax.numpy as jnp
 
 from lucid.detector_params import ParticleParams
 from lucid.losses import counts_loss, first_arrival_window_nll
+from lucid.fitting.gn import gauss_newton
 
-# Natural per-parameter scales (RECO_PIPELINE §2): ~50 MeV, 0.2 m, 0.02 cos-units, 0.2 ns.
+# Natural per-parameter scales: ~50 MeV, 0.2 m, 0.02 cos-units, 0.2 ns.
 SCALE9 = np.array([50., .2, .2, .2, .02, .02, .02, .02, .2])
 PARAM_NAMES = ['E', 'x', 'y', 'z', 'sin_t', 'cos_t', 'sin_p', 'cos_p', 't0']
+
+# The validated Fisher-GN recipe for :func:`fit_track`, as a dict for callers that want to pass it
+# through rather than restate nine keyword arguments (`tutorials/track_optimization.ipynb` uses it).
+#
+# NOT simply `fit_track`'s defaults as data; the two differences are why a test guards it:
+#
+#   * `trust=3.0` deliberately PINS what the signature leaves as `'auto'`;
+#   * `time_weight` is NOT a `fit_track` argument at all -- it configures the MODEL's time term.
+#     A caller must therefore split the dict, which is what the tutorial does:
+#     `fit_track(..., **{k: v for k, v in RECIPE.items() if k != 'time_weight'})`.
+#     Splatting the whole thing raises TypeError.
+#
+# `tests/test_recon_default_recipe.py` holds both halves: every other key must remain a real
+# `fit_track` parameter, and `time_weight` must remain absent from it. If a rename breaks the
+# first, or someone "tidies" `time_weight` into the signature and invalidates the second, the
+# tutorial breaks silently and only the test says so.
+DEFAULT_RECIPE = dict(lr=4.0, lr_final=1.5, ridge_i=0.1, lam=0.01,
+                      nkeys=8, niters=150, refresh=8, time_weight=1.0, trust=3.0)
 
 
 def track_from_vec9(t9):
@@ -61,6 +84,49 @@ def vec9_dir(t9):
     return np.array([st * cp, st * sp, ct])
 
 
+def pick_by_margin(losses, prefer=0, margin=0.01):
+    """Index of the winning start under the margin gate: keep ``prefer`` unless beaten decisively.
+
+    A converged data loss is a noisy and slightly biased ranking of starts — the model is not
+    exactly at truth, so on easy events a forward-biased basin can score a marginally lower loss
+    and still give a worse vertex (28 of 100 events regressed by more than 5 cm at ``margin=0``).
+    The gate keeps the preferred start — the charge grid, which is longitudinally unbiased on the
+    bulk — unless another beats it by ``margin`` x |loss|. A 1% margin picks the time seed only
+    when it genuinely wins.
+
+    The rule is written once here because two callers need it: `fit_track_multistart`, which
+    chooses which converged fit to return, and any seed study that wants to report what that
+    choice WOULD have been without paying for the fits.
+    """
+    base = losses[prefer]
+    thr = base - margin * abs(base)
+    cand = [i for i in range(len(losses)) if i != prefer and losses[i] < thr]
+    return min(cand, key=lambda i: losses[i]) if cand else prefer
+
+
+def fuse_seeds(seed_a, seed_b, t0_mode='avg'):
+    """Combine two seeds by taking each one's strong component. No truth is used.
+
+    The two seeders fail in complementary directions, which is what makes fusing them worth
+    doing rather than picking one:
+
+    * time multilateration (``seed_b``) is excellent TRANSVERSE to the track and poor along it;
+    * the charge grid (``seed_a``) is longitudinally unbiased and gives the better direction.
+
+    So the vertex is assembled as ``vtx_b`` plus the longitudinal part of ``vtx_a - vtx_b``,
+    decomposed along **seed_a's** direction, and the direction and energy come from ``seed_a``.
+    Their ``t0`` biases have opposite sign — a early, b late — so the mean largely cancels;
+    ``t0_mode`` selects ``'avg'``, ``'A'`` or ``'B'``.
+    """
+    a = np.asarray(seed_a, float)
+    b = np.asarray(seed_b, float)
+    d = vec9_dir(a)
+    out = a.copy()                                    # direction, energy and sin/cos inherited
+    out[1:4] = b[1:4] + float(np.dot(a[1:4] - b[1:4], d)) * d
+    out[8] = {'avg': 0.5 * (a[8] + b[8]), 'A': a[8], 'B': b[8]}[t0_mode]
+    return out
+
+
 def vec9_from_track(energy, position, direction, t0=0.0):
     """Build the 9-vector from physical ``(energy, position, direction, t0)``."""
     d = np.asarray(direction, float); d = d / (np.linalg.norm(d) + 1e-12)
@@ -68,6 +134,129 @@ def vec9_from_track(energy, position, direction, t0=0.0):
     p = np.asarray(position, float)
     return np.array([float(energy), p[0], p[1], p[2],
                      np.sin(pol), np.cos(pol), np.sin(az), np.cos(az), float(t0)])
+
+
+class ReconProblem:
+    """Wraps a :class:`ReconModel` for the shared loop in :mod:`lucid.fitting.gn`.
+
+    Reconstruction is a LIKELIHOOD problem: the gradient is reverse-mode AD of a scalar and the
+    metric is a separately-built PSD Fisher. There is no residual vector, which is why the shared
+    loop is written against ``(g, H, loss)`` rather than anything phrased in residuals — that is
+    the only interface both this and the least-squares calibration problem can satisfy.
+
+    Two policies live here rather than in the loop, and both are deliberate:
+
+    * **Keys are fixed across iterations.** The same ``nkeys`` draws are reused every step, so
+      ``grad`` is a deterministic function of ``theta`` — common random numbers, which removes the
+      step-to-step sampling noise that would otherwise swamp a converging fit. Calibration does
+      the opposite and redraws every step, because a residual linear in the model needs the
+      expected objective rather than one noisy realisation. Only the problem can hold both.
+    * **The iterate stays float64 numpy.** ``jax_enable_x64`` is never enabled, so a step applied
+      in the calibration problem's float32 would give a different trajectory.
+
+    ``loss`` is ``None``: the loop only records it for diagnostics, so no scalar objective needs
+    to be evaluated here. ``readout='ming'`` uses ``‖S·g‖``, not the loss.
+    """
+
+    def __init__(self, model, obs_counts, obs_times, keys, fdh, fisher_mode='ad'):
+        self.model = model
+        self.oc = obs_counts
+        self.ot = obs_times
+        self.keys = list(keys)
+        self.fdh = fdh
+        self.fisher_fn = model.fisher_ad if fisher_mode == 'ad' else model.fisher
+        self._H = None
+
+    def grad_metric_loss(self, theta, step, refresh=True):
+        g = np.mean([np.asarray(self.model.grad(theta, self.oc, self.ot, k))
+                     for k in self.keys], 0)
+        if refresh or self._H is None:
+            self._H = self.fisher_fn(theta, self.oc, self.ot, self.keys, self.fdh)
+        return g, self._H, None
+
+    def accumulate(self, theta, dtheta):
+        return theta + dtheta
+
+
+class ProjectedReconProblem:
+    """Charge and time as two terms, with the time term projected off the soft direction.
+
+    Reconstruction has a measured near-degeneracy: moving the vertex ~0.285 m ALONG the current
+    direction while adding 1 ns of ``t0`` leaves the first-arrival pattern almost unchanged. The
+    time likelihood is therefore nearly flat along that ray while remaining sharp across it, and a
+    plain Gauss-Newton step lets time-term noise slide the fit up and down the degeneracy.
+
+    Projecting fixes that without discarding the term. With ``v̂`` the unit soft direction in
+    SCALE9 coordinates and ``P = I − v̂v̂ᵀ``::
+
+        g = S·g_Q + P (S·g_T)
+        H = S F_Q S + P (S F_T S) P
+
+    The charge term is untouched, so the length scale it does constrain is unaffected; the time
+    term keeps its full transverse, directional and stiff-``t0`` power and loses only its component
+    along the ray it cannot resolve.
+
+    Its one difference from :class:`ReconProblem` is the projector, a property of the problem
+    rather than the optimizer. Two consequences of living behind the shared loop, both deliberate:
+
+    * **Scaling happens here, not in the loop.** ``P`` acts on the SCALED time gradient, and
+      projection does not commute with scaling, so this returns ``(g, H)`` already scaled and
+      projected and is driven with ``scale=None``. ``accumulate`` then applies ``S`` to the step.
+    * **``gnorm`` is the PROJECTED gradient norm**, the quantity the step is built from, not the
+      unprojected ``‖S(g_Q + g_T)‖``; ``readout='ming'`` selects on it.
+
+    Parameters
+    ----------
+    grads : callable
+        ``grads(theta) -> (g_Q, g_T)``, each ``(9,)`` in unscaled coordinates.
+    fishers : callable
+        ``fishers(theta) -> (F_Q, F_T)``, each ``(9, 9)`` in unscaled coordinates.
+    scale : array ``(9,)``
+        The preconditioner, normally :data:`SCALE9`.
+    soft_length : float
+        Metres along the current direction that pair with 1 ns of ``t0``. The measured value is
+        0.285; it is an argument because it is a property of the detector, not of the algorithm.
+    """
+
+    def __init__(self, grads, fishers, scale=None, soft_length=0.285):
+        self.grads = grads
+        self.fishers = fishers
+        self.S = SCALE9 if scale is None else np.asarray(scale, float)
+        self.soft_length = float(soft_length)
+        self._F = None
+
+    def soft_projector(self, theta):
+        """``I − v̂v̂ᵀ`` for the soft direction at ``theta``, in scaled coordinates.
+
+        The direction is rebuilt from the CURRENT iterate every step: the degenerate ray points
+        along the track, so it rotates as the fit turns. A projector fixed at the seed would stop
+        matching the degeneracy it exists to remove.
+        """
+        th = np.asarray(theta, float)
+        st, ct, sp, cp = th[4], th[5], th[6], th[7]
+        nt, npp = np.hypot(st, ct), np.hypot(sp, cp)
+        stn, ctn, spn, cpn = st / nt, ct / nt, sp / npp, cp / npp
+        u = np.array([stn * cpn, stn * spn, ctn])
+        v = np.zeros(9)
+        v[1:4] = self.soft_length * u
+        v[8] = 1.0
+        vs = v / self.S
+        vs = vs / np.linalg.norm(vs)
+        return np.eye(9) - np.outer(vs, vs)
+
+    def grad_metric_loss(self, theta, step, refresh=True):
+        gq, gt = self.grads(theta)
+        if refresh or self._F is None:
+            self._F = self.fishers(theta)
+        fq, ft = self._F
+        S, P = self.S, self.soft_projector(theta)
+        g = S * np.asarray(gq) + P @ (S * np.asarray(gt))
+        H = (S[:, None] * np.asarray(fq) * S[None, :]
+             + P @ (S[:, None] * np.asarray(ft) * S[None, :]) @ P)
+        return g, H, None
+
+    def accumulate(self, theta, dtheta):
+        return theta + self.S * dtheta
 
 
 def seed_vertex_time(pos, obs_counts, obs_times, *, vspeed=0.2167, vgrid=11, tankr=None,
@@ -134,11 +323,16 @@ class ReconModel:
     Fisher-GN consumes, plus the assembled loss / gradient / FD Fisher metric.
 
     ``pred(track, key) -> (log_w, flat_times, flat_indices, total_charge)`` is a track
-    simulator from ``setup_event_simulator(..., hit_mode='per_photon')``. ``tot_n_scale`` is
-    the single charge calibration constant (RECO_PIPELINE §3.4; 0.982 for the SIREN muon
-    emitter, 1.0 for a self-consistent forward).
+    simulator from ``setup_event_simulator(..., hit_mode='per_photon')``.
+
+    ``tot_n_scale`` is a scalar charge normalisation; **leave it at 1.0**. It moves the fitted
+    energy alone (about -884 MeV per unit; vertex, direction and t0 barely change), and at 1.0 the
+    residual energy bias (-0.72% at 1 GeV) is well inside the 2.2% energy resolution. The forward
+    is self-consistent, so tuning it fits a scalar to noise.
     """
 
+    # sigma=2.5 is a legacy default, not the published 2.1 (see the module docstring): pass the
+    # tts being simulated rather than inherit it.
     def __init__(self, pred, num_detectors, sigma=2.5, delta=1.0, tot_n_scale=1.0,
                  time_weight=1.0, energy_from_scale=True, nphot_fn=None,
                  energy_scale_mode='simtotal'):
@@ -192,8 +386,8 @@ class ReconModel:
                 lw, ft, fi, tot = pred(track_from_vec9(t9), key)
                 mu = jnp.maximum(tot * self.tot_n_scale, 1e-8)       # SCALED charge (carries energy)
             mu_surv = jnp.maximum(tot, 1e-8)                     # UNSCALED survival denom — must NOT
-            tobs = ot - t9[8]                                    # be scaled (else far-capture dies,
-            tnll = first_arrival_window_nll(lw, ft, fi, tobs, mu_surv, oc, self.ND,  # RECO_PIPELINE §3.4)
+            tobs = ot - t9[8]                                    # be scaled, else far-capture dies.
+            tnll = first_arrival_window_nll(lw, ft, fi, tobs, mu_surv, oc, self.ND,
                                             sigma=self.sigma, delta=self.delta)
             return mu, tnll
 
@@ -253,7 +447,7 @@ def fit_track(model, obs_counts, obs_times, start, *, nkeys=8, niters=150, lr=4.
               lr_final=1.5, ridge_i=0.1, lam=0.01, refresh=8, refresh_final=None, refresh_switch=0.5,
               seed=0, readout='polyak', polyak_w=40, hist=False, fisher_mode='ad',
               verbose=False, truth=None, trust='auto'):
-    """Consistent Fisher-Gauss-Newton track fit, SCALE9-preconditioned (RECO_PIPELINE §4).
+    """Consistent Fisher-Gauss-Newton track fit, SCALE9-preconditioned.
 
     Parameters mirror the finalized recipe. The step is solved in SCALE9-scaled coordinates
     (``Fs = S⊗F⊗S``, ``gs = S·g``) with a Marquardt term ``lam·diag(Fs)`` and an ADDITIVE
@@ -272,9 +466,9 @@ def fit_track(model, obs_counts, obs_times, start, *, nkeys=8, niters=150, lr=4.
     diagonal is inflated by per-sensor estimation variance ∝ 1/nkeys) and ~2.8× faster, and is
     PSD by construction (NOT the indefinite raw autodiff Hessian). ``'fd'`` keeps the legacy central
     finite-difference metric (``ReconModel.fisher``). ⚠️ The AD metric is ~1–137× SMALLER per param
-    than FD, so the FD-tuned ``lr=8`` OVERSHOOTS with ``'ad'`` — retune the step/damping
-    (``lr``/``lr_final``/``ridge_i``) for AD (rough validated point: ``lr≈1``). With AD the metric is
-    cheap+low-variance, so ``refresh=1`` (recompute every step) is affordable.
+    than FD, so the FD-tuned ``lr=8`` OVERSHOOTS with ``'ad'``; this function's defaults
+    (``lr=4.0``, ``lr_final=1.5``, ``refresh=8``) are the AD-tuned recipe named in the module
+    docstring.
 
     ``verbose=True`` shows a live ‖g‖ progress bar and prints a result table (pass ``truth`` — a
     9-vector — to include per-parameter errors).
@@ -293,53 +487,35 @@ def fit_track(model, obs_counts, obs_times, start, *, nkeys=8, niters=150, lr=4.
     def G(th):
         return np.mean([np.asarray(model.grad(th, oc, ot, k)) for k in keys], 0)
 
-    fisher_fn = model.fisher_ad if fisher_mode == 'ad' else model.fisher
-    th = np.asarray(start, float); best = (1e18, th.copy()); F = None
-    g = G(th); traj = [th.copy()]; gnorms = [float(np.linalg.norm(g * S))]
-    # Refresh-cadence schedule: recompute the Fisher every `refresh` iters early, then every
-    # `refresh_final` (smaller = fresher) after `refresh_switch·niters`. The ref2/ref1 resolution gain
-    # comes from a fresh metric in the LATE precision phase; spending it only there recovers most of the
-    # gain at far less cost than constant low refresh. refresh_final=None → constant `refresh` (unchanged).
-    sw = int(refresh_switch * niters); since = 0
+    # The loop is lucid.fitting.gn.gauss_newton, shared with the calibration fit. ReconProblem
+    # supplies (g, H, loss) and owns the recon-specific policies (fixed keys, float64 iterate).
+    prob = ReconProblem(model, oc, ot, keys, fdh, fisher_mode=fisher_mode)
     pbar = report.progress(range(niters), desc='track fit', total=niters, verbose=verbose)
-    for it in pbar:
-        r_it = refresh if (refresh_final is None or it < sw) else refresh_final
-        if F is None or since >= r_it or (refresh_final is not None and it == sw):
-            F = fisher_fn(th, oc, ot, keys, fdh); since = 0
-        since += 1
-        Fs = S[:, None] * F * S[None, :]; gs = S * g                       # SCALE9 preconditioning
-        marq = np.diag(lam * np.diag(Fs))                                  # Marquardt: a true diagonal
-        rI = ridge_i * np.median(np.clip(np.diag(Fs), 1e-12, None)) * np.eye(9)  # additive Levenberg floor
-        # optional LR anneal lr->lr_final (linear): small late steps can't kick the fit OUT of a
-        # converged basin (the late-divergence failure mode), so the trajectory settles at the min.
-        lr_it = lr if lr_final is None else lr + (lr_final - lr) * (it / max(1, niters - 1))
-        du = -lr_it * np.linalg.solve(Fs + marq + rI + 1e-9 * np.eye(9), gs)
-        if trust is not None:                       # trust-region step clip (see trust='auto' above):
-            du = np.clip(du, -trust, trust)         # |Δθ_k| ≤ trust·SCALE9_k. Active by default only
-            #   for energy_from_scale models (else disabled → the plain recipe is byte-identical);
-            #   required once energy_from_scale steepens the energy gradient (else ~1/10 events run away).
-        th_new = th + S * du; g_new = G(th_new)
-        # NaN/Inf-reject trust guard: the big early steps of the annealed lr=4 occasionally overshoot
-        # into a degenerate region (~0.3% of events, seen at 250k) where the next gradient blows up.
-        # Reject any step that produces a non-finite θ/gradient (keep the previous iterate) so a single
-        # bad step can't poison the Polyak readout into NaN. Clean fits never trip this → resolution
-        # unchanged; would-be-divergent fits get a bounded result instead.
-        if np.isfinite(th_new).all() and np.isfinite(g_new).all():
-            th, g = th_new, g_new
-        gn = float(np.linalg.norm(g * S))
-        if gn < best[0]: best = (gn, th.copy())
-        traj.append(th.copy()); gnorms.append(gn)
-        pbar.set_postfix_str(f'‖g‖={gn:.2e}')
-    if readout == 'polyak':        # avg the last polyak_w iterates — robust to the floor wandering
-        out = np.mean(np.array(traj)[-polyak_w:], axis=0)   # (the ‖g‖ never vanishes at the biased
-    elif readout == 'ming':        # minimum, so a single iterate wanders; averaging settles it)
-        out = best[1]
-    else:
-        out = th
+    ticks = iter(pbar)
+
+    def _tick(step, theta, g, H, loss):
+        next(ticks, None)
+        pbar.set_postfix_str(f'‖g‖={float(np.linalg.norm(np.asarray(g) * S)):.2e}')
+
+    res = gauss_newton(prob, np.asarray(start, float), niters,
+                       lam=lam, mu=ridge_i, jitter=1e-9,
+                       lr=lr, lr_final=lr_final, scale=S, max_step=trust,
+                       refresh=refresh, refresh_final=refresh_final,
+                       refresh_switch=refresh_switch,
+                       readout=readout, polyak=polyak_w, reject_nonfinite=True,
+                       on_step=_tick)
+    for _ in ticks:                     # exhausting the bar is what closes it
+        pass
+    out = res['theta']
+    traj, gnorms = res['history'], res['gnorm']
     if verbose:
         report.emit(report.track_table(out, truth=truth, dir_of=vec9_dir))
     if hist:
-        return out, dict(traj=np.array(traj), gnorm=np.array(gnorms), best_iter=int(np.argmin(gnorms)))
+        # n_rejected: how often the non-finite guard refused a step, otherwise invisible.
+        return out, dict(traj=np.array(traj), gnorm=np.array(gnorms),
+                         best_iter=int(np.argmin(gnorms)),
+                         n_rejected=int(res.get('n_rejected', 0)),
+                         rejected_steps=tuple(res.get('rejected_steps', ())))
     return out
 
 
@@ -375,11 +551,7 @@ def fit_track_multistart(model, obs_counts, obs_times, starts, *, nkeys=4, seed=
     per_seed = [fit_track(model, oc, ot, s, nkeys=nkeys, seed=seed, hist=True, verbose=verbose, **kw)
                 for s in starts]
     losses = [dloss(th) for th, _ in per_seed]
-    # margin gate: switch off the preferred seed only when another beats it DECISIVELY
-    base = losses[prefer]; thr = base - margin * abs(base); which = prefer
-    cand = [i for i in range(len(losses)) if i != prefer and losses[i] < thr]
-    if cand:
-        which = min(cand, key=lambda i: losses[i])
+    which = pick_by_margin(losses, prefer=prefer, margin=margin)
     if verbose:
         from . import report
         rows = [[f'seed {i}' + ('  ← kept' if i == which else ''), f'{losses[i]:.4e}']

@@ -67,8 +67,10 @@ Short, copy-paste **scripts** live in [`examples/`](examples/):
 - **`lucid/wavelength/`** — wavelength-dependent optics (`medium`, `spectrum`, `optical_model`).
 - **`lucid/siren/`** — SIREN surrogate for Cherenkov/dE-dx emission (trained on PhotonSim tables).
 - **`lucid/sources/`** — track/cascade/calibration emitters and dataset event I/O.
-- **`lucid/fitting/`** — the Gauss-Newton engine: reconstruction (`ReconModel`,
-  `fit_track_multistart`) and calibration (`build_calibration_problem`, `fit`, `crb`).
+- **`lucid/fitting/`** — one damped Gauss-Newton loop (`gauss_newton`) serving both problems:
+  calibration (`closure` to validate a setup, then `calibrate`; `CalibrationParams` for the
+  published estimand or `FieldParams` for any `DetectorParams` leaves) and reconstruction
+  (`ReconModel`, `fit_track`, `fit_track_multistart`). `crb` gives the Cramer-Rao bound.
 - **`lucid/optimization/`** — hierarchical seed search + the `lucid-optimize` driver.
 - **`lucid/gradient_analysis/`** — 1D/2D loss-landscape sweeps.
 - **`lucid/production/`** — PhotonSim/GENIE → HDF5 dataset chain and cluster deployment.

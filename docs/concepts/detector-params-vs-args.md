@@ -49,7 +49,7 @@ Notes / decisions per field:
   Schlick/Fresnel angular → `wall_R0`+`wall_p`, `cathode_nr`+`cathode_nk`; `*_fspec` for
   specular/diffuse direction). Unused fields stay frozen. One DetectorParams structure, the
   model selects — no per-model pytree variant.
-- **per_pmt** are all `(NS,)`; the fitter Schur-marginalizes this group structurally (gauge-fixed). `qe_corrections`=rate
+- **per_pmt** are all `(NS,)`, gauge-fixed. The calibration fit (`lucid.fitting.fit`) profiles the gains in closed form each step; the joint charge-and-time fit (`fit_charge_time`) and the CRB carry the group as a Schur block. `qe_corrections`=rate
   efficiency, `gain`=charge-per-PE, `t0`=offset, `walk`=TQ-map slope.
 
 ## Args (config / runtime — NOT in any fit pytree)
@@ -89,7 +89,7 @@ Notes / decisions per field:
 
 - A leaf belongs in a fit pytree **iff some run might calibrate it**.
 - `DetectorParams` = the detector's physical + response degrees of freedom, nested by physics
-  (`per_pmt` is the Schur block; `tts`/`spe_width` are real fields; reflection is a superset
+  (`per_pmt` is the per-sensor nuisance: profiled by the fit, a Schur block in the CRB; `tts`/`spe_width` are real fields; reflection is a superset
   the chosen model picks from).
 - Everything else — geometry, medium reference shapes, `control_λ`, the source setup, the
   reflection-model choice, `N`/`K`/`temperature`, the overlap correction, the medium light speed

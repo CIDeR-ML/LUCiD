@@ -40,7 +40,8 @@ A detector is defined by a **geometry** config and a **physics** config:
 independently a scalar or a wavelength-dependent curve:
 ```json
 { "scatter_length": 50.0, "absorption_length": 50.0,
-  "wall_reflection_rate": 0.2, "sensor_reflection_rate": 0.2,
+  "wall_reflection_rate": 0.05, "wall_fspec": 0.55,
+  "sensor_reflection_rate": 0.25, "sensor_fspec": 0.90,
   "qe": 0.2, "qe_corrections": 1.0 }
 ```
 Each value may be: a **number** (scalar); a **list** (inline array); `null`/missing (projected

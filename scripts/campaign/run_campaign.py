@@ -154,7 +154,11 @@ def main():
         steps = 50 if QUICK else 120
         t0 = time.time()
         res = fit(prob['source_models'], prob['truth_charge'], start, NS,
-                  steps=steps, refresh=12, nb_r=2, nb_h=nb_h, seed=0, fix=(0,))  # fix g (loose)
+                  steps=steps, refresh=12, jacobian_draws=nb_h,
+                  seed=0, fix=(0,))                                   # fix g (loose)
+        # The old `nb_r=2` here was INERT: it appeared only in fit()'s signature and was never
+        # read. Carrying it over as `n_forward_draws=2` would have doubled the per-step forward
+        # cost and halved the residual's Monte-Carlo variance, i.e. changed the run.
         truth = np.exp(prob['theta0'])
         emit(f'fit {steps} steps in {time.time()-t0:.0f}s')
         emit('')

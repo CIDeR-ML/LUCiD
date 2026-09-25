@@ -1,10 +1,13 @@
-"""Wavelength-dependent scattering phase functions.
+"""Scattering phase functions: the Mie/Rayleigh mixture the propagation loop samples from.
 
-Rayleigh (symmetric) and Henyey-Greenstein / Mie (asymmetric) scattering
-direction samplers. These are ported from the ``wavelength_dependency``
-branch and available for external use. They are NOT currently called in the
-main simulation propagation loop (which uses the Rayleigh sampler from
-``lucid.simulation.optics``).
+``lucid.simulation.photon_step`` uses ``compute_mie_scatter_direction``, ``hg_sample_cos_theta``,
+``hg_logpdf`` and ``rayleigh_logpdf``; ``photon_step_volume`` uses the last three. The two
+log-pdfs make the discrete Mie/Rayleigh choice differentiable: its gradient arrives through the
+DiCE score ``log p_mie + hg_logpdf`` versus ``log(1 - p_mie) + rayleigh_logpdf``, not pathwise.
+
+``compute_rayleigh_scatter_direction`` has no caller in the package: the loop takes its Rayleigh
+direction from :func:`lucid.simulation.optics.compute_scatter_direction`, which builds the same
+sample from ``solve_rayleigh_inverse_cdf``. Only that function is unused; the Mie channel is live.
 """
 import jax
 import jax.numpy as jnp

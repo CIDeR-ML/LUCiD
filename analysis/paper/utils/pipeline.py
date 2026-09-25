@@ -107,7 +107,9 @@ DEFAULT_CONFIG = {
     'force_seed': None,
     'placement_seed_base': 100003,
     # placement rng seed = base + event * stride. stride=1 is OUR historical scheme; stride=1000
-    # matches the upstream sweep's pose_seed (lucid/fitting/sweep.py POSE_STRIDE, pose=0).
+    # reproduces the upstream characterisation sweep's convention
+    # `pose_seed = pose_seed_base + event*1000 + pose` (pose=0), which keeps seeds stable as
+    # configurations change.
     # To reproduce the upstream truth treatment EXACTLY set, per config:
     #   {"placement_seed_stride": 1000, "containment_margin": null, "true_t0_range": [0, 0]}
     # and to come back to ours simply omit them (defaults: stride 1, containment 0.95,
@@ -217,50 +219,57 @@ def vec9_to_phys(v):
     return np.array([v[1], v[2], v[3], phi, theta, v[8], v[0]])
 
 
+def phys_to_vec9(p, xp=np):
+    """``[x, y, z, phi, theta, t0, E]`` -> 9-vector ``[E, x,y,z, sinθ,cosθ, sinφ,cosφ, t0]``.
+
+    The exact inverse of :func:`vec9_to_phys`, and it exists because anything that wants to
+    differentiate the loss with respect to the PHYSICAL parameters -- an angle, not a sin/cos
+    pair -- has to build the 9-vector from them.
+
+    THIS PACKAGE HAS TWO PHYSICAL ORDERINGS and they differ by exactly one transposition. This
+    one is ``[x, y, z, phi, theta, t0, E]``. `analysis/paper/fig_loss_landscape.py` keeps the
+    notebook's ``[X, Y, Z, t0, theta, phi, E]`` because its scan pairs, ranges and labels are all
+    indexed in it, and carries its own matched pair (`phys_from_vec9` / `vec9_from_phys`). Both
+    are internally consistent; mixing them swaps phi with t0.
+
+    The mix is silent: the model is evaluated at the wrong point while every derivative still
+    comes out of the coordinate its label claims. Use the inverse that belongs to the forward map
+    you used, never a hand-rolled one. `tests/test_phys_vec9_roundtrip.py` pins both pairs and
+    asserts they differ.
+
+    ``xp`` selects the array module: numpy by default, pass ``jax.numpy`` to stay traceable.
+    """
+    return xp.stack([p[6], p[0], p[1], p[2],
+                     xp.sin(p[4]), xp.cos(p[4]),        # theta  <- index 4
+                     xp.sin(p[3]), xp.cos(p[3]),        # phi    <- index 3
+                     p[5]])                             # t0     <- index 5
+
+
 def traj_to_phys(traj):
     """Convert a ``(niters+1, 9)`` trajectory to ``(niters+1, 7)`` physical params."""
     return np.stack([vec9_to_phys(v) for v in np.asarray(traj)])
-
-
-def _dir_from_vec9(v):
-    """Unit direction (numpy, no JAX) from a 9-vector — mirrors lucid.fitting.vec9_dir."""
-    v = np.asarray(v, float); st, ct, sp, cp = v[4], v[5], v[6], v[7]
-    nt = np.hypot(st, ct); npp = np.hypot(sp, cp)
-    st, ct, sp, cp = st / nt, ct / nt, sp / npp, cp / npp
-    return np.array([st * cp, st * sp, ct])
 
 
 # per-seed error vector order stored by the seed study.
 SEED_ERR_NAMES = ['vtx_cm', 'vtx_trans_cm', 'vtx_long_cm', 'dir_deg', 'dE_MeV', 'dt0_ns']
 
 
-def fuse_seeds(seedA, seedB, t0_mode='avg'):
-    """Fuse the two seeds to get the best of both — all from seed-available quantities (no truth).
-
-    Vertex: TRANSVERSE component from seedB (time-multilateration is transverse-excellent),
-    LONGITUDINAL component from seedA (charge-grid is longitudinally unbiased), decomposed along
-    **seedA's direction** ``dA``:  ``vtx = vtxB + ((vtxA - vtxB)·dA) dA``. Direction + energy
-    from seedA (the better direction). t0 = mean of the two (their biases are opposite — seedA
-    early, seedB late — so the average largely cancels): ``t0_mode`` ``'avg'`` | ``'A'`` | ``'B'``.
-    """
-    a = np.asarray(seedA, float); b = np.asarray(seedB, float)
-    dA = _dir_from_vec9(a)
-    vf = b[1:4] + float(np.dot(a[1:4] - b[1:4], dA)) * dA
-    out = a.copy(); out[1:4] = vf                          # direction/energy/sincos inherited from A
-    out[8] = {'avg': 0.5 * (a[8] + b[8]), 'A': a[8], 'B': b[8]}[t0_mode]
-    return out
-
-
 def seed_errors(seed, th9, d):
-    """Per-component seed errors vs truth. Vertex split transverse/longitudinal along truth dir
-    ``d`` (longitudinal is SIGNED: + = ahead of the true vertex along the track). Returns an
-    array in :data:`SEED_ERR_NAMES` order."""
+    """Per-component seed errors vs truth, in :data:`SEED_ERR_NAMES` order.
+
+    Truth-referenced, so it stays here rather than in the library; the transverse/longitudinal
+    vertex split and the opening angle come from ``lucid.fitting.analysis``.
+
+    Longitudinal is SIGNED: positive means ahead of the true vertex along the track.
+    """
+    from lucid.fitting import vec9_dir
+    from lucid.fitting.analysis import vertex_residual, angular_error_deg
     seed = np.asarray(seed, float); th9 = np.asarray(th9, float)
-    dv = seed[1:4] - th9[1:4]                              # meters
-    long = float(np.dot(dv, d)); trans = float(np.linalg.norm(dv - long * d))
-    ddeg = float(np.degrees(np.arccos(np.clip(_dir_from_vec9(seed) @ d, -1, 1))))
-    return np.array([np.linalg.norm(dv) * 100, trans * 100, long * 100,
-                     ddeg, float(seed[0] - th9[0]), float(seed[8] - th9[8])])
+    lon, tra = vertex_residual(seed[1:4], th9[1:4], d)
+    dv = float(np.linalg.norm(seed[1:4] - th9[1:4]))
+    return np.array([dv * 100, tra * 100, lon * 100,
+                     angular_error_deg(vec9_dir(seed), d),
+                     float(seed[0] - th9[0]), float(seed[8] - th9[8])])
 
 
 class _FixedParamsModel:
@@ -308,6 +317,12 @@ class TrackingPipeline:
         from lucid.fitting import ReconModel
         from lucid.optimization.grid_search import get_detector_bounds
 
+        # Merge DEFAULT_CONFIG here rather than in each caller: run_local() (the default backend of
+        # every fig_*.py) passes studies.base_config(), which omits keys such as 'grid' and 'K'.
+        # Updated IN PLACE, not copied: __init__ resolves 'nbuf' into the caller's dict and
+        # run_local records that same dict as the run's provenance, so a copy would silently
+        # drop the resolved value from the saved config.
+        config.update(_deep_merge(DEFAULT_CONFIG, config))
         self.cfg = config
         geom = str(_resolve(config['geom_config'])); phys = str(_resolve(config['phys_config']))
         grid = config['grid']; K = config['K']; part = config['particle']
@@ -595,6 +610,7 @@ class TrackingPipeline:
         loss at each seed, and the loss-based pick — plain argmin and the margin-gated rule
         ``fit_track_multistart`` uses (prefer seedA unless seedB beats it by ``sel_margin``·|loss|).
         """
+        from lucid.fitting import fuse_seeds, pick_by_margin
         gn = self.cfg['gn']
         P = self._prepare_event(ev)
         seedF = fuse_seeds(P['seedA'], P['seedB'])                    # fused (transverse-B + long-A, t0 avg)
@@ -605,12 +621,10 @@ class TrackingPipeline:
         lossA, lossB, lossF = dloss(P['seedA']), dloss(P['seedB']), dloss(seedF)
 
         # margin-gated pick, prefer seedA; 2-way (A vs B, as fit_track_multistart today) and
-        # 3-way (A vs B vs fused) — does adding the fused start change the selection?
-        thr = lossA - sel_margin * abs(lossA)
-        pick_gated = 1 if lossB < thr else 0
-        losses3 = [lossA, lossB, lossF]
-        cand = [i for i in (1, 2) if losses3[i] < thr]
-        pick3 = min(cand, key=lambda i: losses3[i]) if cand else 0   # 0=A, 1=B, 2=fused
+        # 3-way (A vs B vs fused) — does adding the fused start change the selection? The rule
+        # itself is fit_track_multistart's, imported rather than restated so the two cannot drift.
+        pick_gated = pick_by_margin([lossA, lossB], prefer=0, margin=sel_margin)
+        pick3 = pick_by_margin([lossA, lossB, lossF], prefer=0, margin=sel_margin)  # 0=A,1=B,2=F
         return dict(
             ev=P['ev'], energy_true=P['energy_true'],
             truth_vec9=P['th9'], truth_phys=vec9_to_phys(P['th9']), tdir=P['d'],
@@ -669,13 +683,22 @@ class TrackingPipeline:
     def _fit_track_projected(self, oc, ot, start):
         """fit_track (ad recipe) with the TIME term's soft-mode component projected out.
 
-        Soft mode v = (0.285 m along the CURRENT direction, +1 ns of t0) in SCALE9 coords --
-        the measured vertex-t0 degeneracy. Per iteration: g = gQ + P gT, F = FQ + P FT P with
-        P = I - vv^T. The time term keeps full transverse/direction/stiff-t0 power but cannot
-        pull along the degeneracy. Recipe knobs mirror fit_track (lr 4->1.5, lam .01,
-        ridge_i .1, refresh 8, trust 3, NaN guard, Polyak-40).
+        Soft mode v = (0.285 m along the CURRENT direction, +1 ns of t0) in SCALE9 coords -- the
+        measured vertex-t0 degeneracy. Per iteration: g = gQ + P gT, F = FQ + P FT P with
+        P = I - vv^T. The time term keeps full transverse/direction/stiff-t0 power but cannot pull
+        along the degeneracy. Recipe knobs mirror fit_track (lr 4->1.5, lam .01, ridge_i .1,
+        refresh 8, trust 3, NaN guard, Polyak-40).
+
+        The projector is a property of the problem, not the optimizer, so it lives in
+        lucid.fitting.recon.ProjectedReconProblem; this method supplies the two per-term
+        (gradient, Fisher) builders. tests/test_recon_projected_problem.py gates it exactly
+        (rtol=0, atol=0) against a reference transcription of the loop.
+
+        `gnorm` is the PROJECTED gradient norm (the quantity the step is built from), not the
+        unprojected ||S(gQ+gT)||, and `best_iter` is chosen from it.
         """
-        from lucid.fitting.recon import SCALE9
+        from lucid.fitting import gauss_newton
+        from lucid.fitting.recon import ProjectedReconProblem, SCALE9
         gn = self.cfg['gn']
         nkeys, niters = gn['nkeys'], gn['niters']
         lr, lr_final, lam, ridge_i, refresh = float(gn['lr']), 1.5, 0.01, 0.1, 8
@@ -683,7 +706,6 @@ class TrackingPipeline:
         F = self._split_fns()
         ocj, otj = jnp.asarray(oc), jnp.asarray(ot)
         keys = [jax.random.PRNGKey(s) for s in range(nkeys)]
-        S = SCALE9
 
         def grads(th):
             t9 = jnp.asarray(th)
@@ -702,40 +724,18 @@ class TrackingPipeline:
                 FT += np.asarray(Jl).T @ np.asarray(Jl)
             return FQ / nkeys, FT / nkeys
 
-        def soft_P(th):
-            st, ct, sp, cp = th[4], th[5], th[6], th[7]
-            nt = np.hypot(st, ct); npp = np.hypot(sp, cp)
-            stn, ctn, spn, cpn = st / nt, ct / nt, sp / npp, cp / npp
-            u = np.array([stn * cpn, stn * spn, ctn])
-            v = np.zeros(9); v[1:4] = 0.285 * u; v[8] = 1.0
-            vs = v / S; vs = vs / np.linalg.norm(vs)
-            return np.eye(9) - np.outer(vs, vs)
-
-        th = np.asarray(start, float)
-        gq, gt = grads(th)
-        traj = [th.copy()]; gnorms = []
-        FQ = FT = None; since = 0
-        for it in range(niters):
-            if FQ is None or since >= refresh:
-                FQ, FT = fishers(th); since = 0
-            since += 1
-            P = soft_P(th)
-            gs = S * gq + P @ (S * gt)
-            Fs = (S[:, None] * FQ * S[None, :]) + P @ (S[:, None] * FT * S[None, :]) @ P
-            marq = np.diag(lam * np.diag(Fs))
-            rI = ridge_i * np.median(np.clip(np.diag(Fs), 1e-12, None)) * np.eye(9)
-            lr_it = lr + (lr_final - lr) * (it / max(1, niters - 1))
-            du = -lr_it * np.linalg.solve(Fs + marq + rI + 1e-9 * np.eye(9), gs)
-            du = np.clip(du, -trust, trust)
-            th_new = th + S * du
-            gq_n, gt_n = grads(th_new)
-            if np.isfinite(th_new).all() and np.isfinite(gq_n).all() and np.isfinite(gt_n).all():
-                th, gq, gt = th_new, gq_n, gt_n
-            gn_ = float(np.linalg.norm(S * (gq + gt)))
-            traj.append(th.copy()); gnorms.append(gn_)
-        out = np.mean(np.array(traj)[-polyak_w:], axis=0)
-        return out, dict(traj=np.array(traj), gnorm=np.array(gnorms),
-                         best_iter=int(np.argmin(gnorms)))
+        prob = ProjectedReconProblem(grads, fishers, scale=SCALE9)
+        res = gauss_newton(prob, np.asarray(start, float), niters,
+                           lam=lam, mu=ridge_i, jitter=1e-9, lr=lr, lr_final=lr_final,
+                           scale=None, max_step=trust, refresh=refresh,
+                           readout='polyak', polyak=polyak_w, reject_nonfinite=True)
+        gnorms = res['gnorm'][1:]                  # drop the start: one entry per iteration
+        # +1 because `gnorms` dropped the start and `traj` did NOT. best_iter indexes curves built
+        # from the TRAJECTORY (niters+1 rows, e.g. p68_evolution.py), so without the shift the
+        # min-gradient iterate is read one step too early.
+        return res['theta'], dict(traj=res['history'], gnorm=gnorms,
+                                  best_iter=int(np.argmin(gnorms)) + 1,
+                                  n_rejected=int(res.get('n_rejected', -1)))
 
     def reconstruct_free_E(self, ev):
         """Diagnostic: geometry+t0 pinned at TRUTH, only E free — single GN start from truth."""
@@ -759,6 +759,8 @@ class TrackingPipeline:
             fit_vec9=np.asarray(res), fit_phys=vec9_to_phys(res),
             traj_win=H['traj'], traj_win_phys=traj_to_phys(H['traj']),
             gnorm_win=H['gnorm'], best_iter_win=int(H['best_iter']), which=0,
+            # Steps this event refused (-1 = not reported by the fitter).
+            n_rejected=int(H.get('n_rejected', -1)),
             fit_err=_errs(res), n_hit=P['n_hit'], q_tot=P['q_tot'],
             seconds=P['seed_seconds'] + float(time.time() - t_start))
 
@@ -797,7 +799,7 @@ class TrackingPipeline:
         (50-event seed studies): best-or-equal vertex in every regime, t0 RMS ~7 ns -> ~2 ns, and
         the post-GN margin-gated loss pick (prefer=A) rescues the rare fusion failures (JUNO).
         """
-        from lucid.fitting import fit_track, fit_track_multistart, vec9_dir
+        from lucid.fitting import fit_track, fit_track_multistart, vec9_dir, fuse_seeds
         if self.cfg.get('fix_geometry'):
             return self.reconstruct_free_E(ev)
         gn = self.cfg['gn']
@@ -876,5 +878,9 @@ class TrackingPipeline:
             fit_vec9=np.asarray(res), fit_phys=vec9_to_phys(res), fit_err=_errs(res),
             traj_win=H['traj'], traj_win_phys=traj_to_phys(H['traj']),
             gnorm_win=H['gnorm'], best_iter_win=int(H['best_iter']),
+            # Refused steps on the WINNING fit. -1 means the producer did not report it, which is
+            # deliberately distinct from 0: a missing count and a genuine zero are opposite
+            # findings, and conflating them would make an uninstrumented run look like a clean one.
+            n_rejected=int(H.get('n_rejected', -1)),
             seconds=P['seed_seconds'] + float(time.time() - t_start))
         return rec

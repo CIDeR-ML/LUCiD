@@ -53,7 +53,7 @@ def main():
         start = prob['theta0'] + np.random.default_rng(i).uniform(-args.perturb, args.perturb,
                                                                   prob['theta0'].shape)
         res = fit(prob['source_models'], prob['truth_charge'], start, NS,
-                  steps=args.steps, refresh=15, nb_h=2)
+                  steps=args.steps, refresh=15, jacobian_draws=2)
         fits.append(res['theta'])
         print(f'  start {i+1}/{args.n_init} done', flush=True)
     fits = np.array(fits)                                   # (n_init, n_param)

@@ -1,11 +1,11 @@
 # calibration/ — detector calibration
 
 Fit detector properties from controlled sources. **Canonical API:
-`lucid.fitting.build_calibration_problem` → `fit` / `crb`** (Gauss-Newton + per-PMT Schur,
+`lucid.fitting.build_calibration_problem` → `fit` / `crb`** (Gauss-Newton, Neyman chi2, per-PMT gains profiled,
 ×√12-honest CRB).
 
 - **calibrate_optics** ⭐ — START HERE. The canonical notebook on the new API: 7 global optical
-  params + per-PMT QE (Schur) recovered from a 4-source set; `build_calibration_problem` → `crb` →
+  params + per-PMT QE (profiled) recovered from a 4-source set; `build_calibration_problem` → `crb` →
   `fit`, with fit-vs-CRB plot. GPU-validated.
 - **grad_param_calibration_multi_init_no_qe** — 4 global scalars (scatter, wall/sensor reflection, absorption), single laser, multi-start.
 - **detector_grad_qe_convergence_multi_source** — per-PMT QE map (~11k-dim) from 15 isotropic sources (geometric diversity breaks degeneracy).

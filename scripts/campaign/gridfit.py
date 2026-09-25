@@ -3,7 +3,9 @@
 Env:
   NPH (photons), K, GRID(1=full/0=reduced), SRC (source-combo key), INTENS,
   RECOVER(1: implicit-engine recovery fit), SHOT(1: shot-noise scatter, M seeds),
-  M, STEPS, NB_H, EPS(0.375=Anscombe), BAKE_K, POLYAK, TAG (output filename stem).
+  M, STEPS, NB_H, EPS(0.375=Anscombe), POLYAK, TAG (output filename stem).
+  EPS reaches the CRB only: the fit runs the Neyman residual, which has no sqrt offset.
+  BAKE_K is gone — the gains are always profiled in closed form now.
 Writes grid_out/<TAG>.json with {nph, src, crb:{param:sigma}, recover:{...}, shot:{...}}.
 """
 import os, sys, json, time
@@ -34,7 +36,6 @@ M = int(os.environ.get('M', '4'))
 STEPS = int(os.environ.get('STEPS', '100'))
 NB_H = int(os.environ.get('NB_H', '2'))
 EPS = float(os.environ.get('EPS', '1e-8'))
-BAKE_K = os.environ.get('BAKE_K', '0') == '1'
 POLYAK = int(os.environ.get('POLYAK', '0'))
 PERT = float(os.environ.get('PERT', '0.15'))
 KPMT = os.environ.get('KPMT', '0') == '1'        # per-PMT QE-map k=Q/M recovery (shot)
@@ -109,7 +110,7 @@ def main():
         rng = np.random.default_rng(0)
         start = prob['theta0'] + rng.uniform(-PERT, PERT, prob['theta0'].shape)
         res = fit(prob['source_models'], prob['truth_charge'], start, NS,
-                  steps=STEPS, refresh=15, nb_h=NB_H, bake_k=BAKE_K, polyak=POLYAK)
+                  steps=STEPS, refresh=15, jacobian_draws=NB_H, polyak=POLYAK)
         truth = np.exp(prob['theta0'])
         out['recover'] = {LABEL[i]: dict(truth=float(truth[i]), rec=float(res['theta'][i]),
                                          ferr=float(abs(res['theta'][i]/truth[i]-1)))
@@ -125,8 +126,7 @@ def main():
             tshot = [np.asarray(sim_data(s, dpk, jax.random.PRNGKey(100 + m * 17 + j))[0])
                      for j, s in enumerate(srcs)]
             r = fit(prob['source_models'], tshot, prob['theta_true'], NS, steps=STEPS,
-                    refresh=max(20, STEPS // 2), nb_h=NB_H, seed=m,
-                    bake_k=BAKE_K, polyak=POLYAK, eps=EPS)
+                    refresh=max(20, STEPS // 2), jacobian_draws=NB_H, seed=m, polyak=POLYAK)
             rec[m] = r['theta']
         truth = np.exp(prob['theta0'])
         out['shot'] = {LABEL[i]: dict(bias=float(rec[:, i].mean()/truth[i]-1),

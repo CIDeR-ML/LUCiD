@@ -7,11 +7,6 @@ import jax.numpy as jnp
 from functools import partial
 from jax import lax
 
-from .base import (
-    process_intersection_normals, compute_sensor_intersections_base,
-    find_closest_sensors
-)
-from ..overlap import create_overlap_prob
 from .geometry import ray_box_intersection_vectorized
 
 
@@ -371,7 +366,10 @@ def assign_sensors_to_box_grid(sensors, sensor_radius, length, width, height,
             jnp.abs(z + height/2)   # Bottom face
         ])
         
-        closest_face = jnp.argmin(dist_to_faces)
+        # Cast to int32 like x_idx/z_idx (and the index components in cylinder.py and sphere.py):
+        # under jax_enable_x64 `jnp.argmin` returns int64, which would promote `indices` to int64
+        # while assign_off_surface stays int32, and `lax.cond` rejects the mismatched branches.
+        closest_face = jnp.argmin(dist_to_faces).astype(jnp.int32)
         min_distance = jnp.min(dist_to_faces)
         
         # Check if sensor is close enough to any face
@@ -606,100 +604,6 @@ def calculate_box_grid_centers(length, width, height, n_x, n_y, n_z):
     return jnp.concatenate(centers, axis=0)
 
 
-def find_intersected_box_sensors_differentiable(ray_origins, ray_directions, sensor_positions, sensor_radius,
-                                                  length, width, height, n_x, n_y, n_z, 
-                                                  inverted_sensor_map, temperature, overlap_prob):
-    """
-    Finds sensors intersected by rays using a differentiable approximation with overlap-based weights.
-    """
-    single_ray = ray_origins.ndim == 1
-    if single_ray:
-        ray_origins = ray_origins[None, :]
-        ray_directions = ray_directions[None, :]
-
-    # Get box intersection points and grid indices
-    intersects, t_box, face_indices, grid_indices, intersection_point = (
-        batch_intersect_box_with_grid(ray_origins, ray_directions, length, width, height, n_x, n_y, n_z))
-
-    def calculate_linear_index(face_indices, grid_indices):
-        front_back_cells = n_x * n_z
-        left_right_cells = n_y * n_z
-        top_bottom_cells = n_x * n_y
-        
-        # Calculate linear index based on face
-        front_back_idx = grid_indices[:, 0] * n_z + grid_indices[:, 1]
-        left_right_idx = grid_indices[:, 0] * n_z + grid_indices[:, 1]
-        top_bottom_idx = grid_indices[:, 0] * n_y + grid_indices[:, 1]
-        
-        face_offsets = jnp.array([
-            0,  # Front
-            front_back_cells,  # Back
-            2 * front_back_cells,  # Left
-            2 * front_back_cells + left_right_cells,  # Right
-            2 * (front_back_cells + left_right_cells),  # Top
-            2 * (front_back_cells + left_right_cells) + top_bottom_cells  # Bottom
-        ])
-        
-        idx = jnp.where(
-            face_indices <= 1,  # Front/Back
-            face_offsets[face_indices] + front_back_idx,
-            jnp.where(
-                face_indices <= 3,  # Left/Right
-                face_offsets[face_indices] + left_right_idx,
-                face_offsets[face_indices] + top_bottom_idx  # Top/Bottom
-            )
-        )
-        
-        total_cells = 2 * (front_back_cells + left_right_cells + top_bottom_cells)
-        return jnp.clip(idx, 0, total_cells - 1)
-
-    idx = calculate_linear_index(face_indices, grid_indices)
-    potential_sensors = jax.lax.stop_gradient(inverted_sensor_map[idx])
-
-    # Create bounds check function
-    bounds_check = lambda points: box_bounds_check(points, length, width, height)
-
-    # Process all potential sensors
-    sensor_results = jax.vmap(
-        lambda det_idx: compute_sensor_intersections_base(
-            det_idx, sensor_positions, sensor_radius,
-            ray_origins, ray_directions, bounds_check, overlap_prob
-        )
-    )(potential_sensors.T)
-    
-    weights = sensor_results[0]
-    sensor_times = sensor_results[1]
-    sensor_indices = sensor_results[2]
-    sensor_normals = sensor_results[3]
-    inside_sensor = sensor_results[4]
-    sensor_hit_positions = sensor_results[5]
-
-    # Calculate box face normals
-    box_normals = calculate_box_normals(face_indices)
-
-    intersection_results = process_intersection_normals(
-        ray_origins, ray_directions, intersection_point,
-        t_box, sensor_normals, sensor_hit_positions,
-        inside_sensor, box_normals
-    )
-
-    hit_positions = intersection_results['positions']
-    final_normals = intersection_results['normals']
-
-    result = {
-        'times': sensor_times,
-        'sensor_weights': weights,
-        'sensor_indices': sensor_indices,
-        'per_sensor_positions': sensor_hit_positions,
-        'positions': hit_positions,
-        'normals': final_normals,
-        'sensor_normals': sensor_normals,
-        'inside_sensor': inside_sensor
-    }
-
-    return result if not single_ray else jax.tree_map(lambda x: x[0], result)
-
-
 def create_inverted_box_sensor_map(assignments_geometric, assignments_distance, 
                                     n_x, n_y, n_z, max_candidates_per_ray):
     """Create inverted sensor map for box geometry with proper grid indexing."""
@@ -817,45 +721,3 @@ def create_inverted_box_sensor_map(assignments_geometric, assignments_distance,
     )
     
     return final_map
-
-
-def create_box_photon_propagator(sensor_positions, sensor_radius, length=4.0, width=4.0, height=6.0,
-                                 n_x=125, n_y=125, n_z=125, temperature=0.2, max_candidates_per_ray=4):
-    """
-    Creates a JIT-compiled function for efficient photon propagation simulation in box geometry with optimizations.
-    """
-    
-    if temperature is None:
-        overlap_prob = create_overlap_prob(temperature, sensor_radius)
-    else:
-        overlap_prob = create_overlap_prob(temperature * sensor_radius, sensor_radius)
-
-    # Convert sensor positions to JAX array
-    sensor_positions_jax = jnp.array(sensor_positions)
-    
-    # Create sensor grid assignments
-    assignments_geometric = assign_sensors_to_box_grid(
-        sensor_positions_jax, sensor_radius, length, width, height, n_x, n_y, n_z
-    )
-    
-    # Calculate grid centers for distance-based assignment
-    grid_centers = calculate_box_grid_centers(length, width, height, n_x, n_y, n_z)
-    assignments_distance = find_closest_sensors(grid_centers, sensor_positions_jax, max_candidates_per_ray)
-    
-    # Create inverted sensor map
-    inverted_sensor_map = create_inverted_box_sensor_map(
-        assignments_geometric, assignments_distance, n_x, n_y, n_z, max_candidates_per_ray
-    )
-
-    @jax.jit
-    def propagate_photons(photon_origins, photon_directions):
-        """
-        Box propagation using optimized vectorized intersection and proper grid-based sensor lookup.
-        """
-        return find_intersected_box_sensors_differentiable(
-            photon_origins, photon_directions, sensor_positions_jax, sensor_radius,
-            length, width, height, n_x, n_y, n_z,
-            inverted_sensor_map, temperature, overlap_prob
-        )
-
-    return propagate_photons

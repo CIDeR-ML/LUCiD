@@ -126,9 +126,22 @@ def mode_iters(args):
                      color='pink', alpha=0.4, edgecolor='black', linewidth=0.5)
         hist_ax.axhline(y=p68[-1], color=col_p68, lw=lw, linestyle='-')
         hist_ax.axhline(y=p90[-1], color=col_p90, lw=lw, linestyle='--')
-        hist_ax.axhline(y=worst[-1], color='gray', lw=1, linestyle='-')
-        hist_ax.text(0.9, worst[-1], 'worst event', color='gray', ha='right', va='top',
-                     fontsize=8, transform=hist_ax.get_yaxis_transform())
+        # The worst event can exceed the panel's fixed range (e.g. position and direction on
+        # the muon sample), and a line drawn outside the axes silently vanishes. The ranges are
+        # deliberate: widening them would compress the region the figure exists to show. So the
+        # marker is clamped to the top edge and its label carries the true value.
+        _w = float(worst[-1])
+        _off = _w > max_y
+        hist_ax.axhline(y=min(_w, max_y), color='gray', lw=1,
+                        linestyle=(0, (2, 2)) if _off else '-')
+        hist_ax.text(0.9, min(_w, max_y),
+                     f'worst event {_w:.3g} (off scale)' if _off else 'worst event',
+                     color='gray', ha='right', va='top', fontsize=8,
+                     transform=hist_ax.get_yaxis_transform())
+        if _off:
+            # An overflow arrow, so the clamp cannot be mistaken for the value itself.
+            hist_ax.plot([0.5], [max_y], marker='^', color='gray', ms=5, clip_on=False,
+                         transform=hist_ax.get_yaxis_transform())
         hist_ax.set_yticks([]); hist_ax.set_xticks([])
         hist_ax.set_ylim(ax.get_ylim())
         try:
