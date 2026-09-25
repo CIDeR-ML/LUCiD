@@ -50,10 +50,97 @@ def pytest_addoption(parser):
                      help="Include slow tests (detector/propagator/simulation)")
 
 
+# Files actually skipped this run, so the terminal summary can SAY SO. Without this the suite
+# reports a count with no indication that 23 files were never collected -- which is precisely the
+# failure mode the data-skip banner below was built to fix, left unfixed for the larger case.
+# Measured: a default run collects 786 tests and `--slow` collects 993, so the default silently
+# omits 207 tests, 21% of the suite, including test_tripwire.py.
+_IGNORED = set()
+
 def pytest_ignore_collect(collection_path, config):
     if config.getoption("--slow", default=False):
         return False
-    return collection_path.name in _SLOW_FILES
+    if collection_path.name in _SLOW_FILES:
+        _IGNORED.add(collection_path.name)
+        return True
+    return False
+
+
+# --------------------------------------------------------------------------------------------
+# Skips that mean "the data is missing", reported loudly.
+#
+# `data/` is gitignored, so a fresh clone and EVERY git worktree materialise almost none of it.
+# Tests that need a downloaded asset therefore skip — correctly, since erroring would read like a
+# defect — but pytest prints only a count. For an entire restructure of this package, eight
+# SK-like integration tests skipped silently in exactly the area least covered by anything else,
+# and the suite reported a smaller number and looked green. That is the same failure mode that let
+# the water-mode tripwire sit unnoticed for a month.
+#
+# So: a banner at the end of the run naming what was skipped and what would restore it, and
+# LUCID_REQUIRE_DATA=1 to turn those skips into failures for a CI job that is supposed to have the
+# data. Nothing here changes which tests run by default.
+# --------------------------------------------------------------------------------------------
+_DATA_HINTS = ('not present', 'download_data', 'no wbls', 'not found', 'missing')
+
+
+def _is_data_skip(reason):
+    r = str(reason).lower()
+    return any(h in r for h in _DATA_HINTS)
+
+
+def pytest_terminal_summary(terminalreporter, exitstatus, config):
+    # --- files that were never COLLECTED -------------------------------------------------
+    # Reported first and unconditionally: a green count is misleading in proportion to what it
+    # left out, and a fifth of the suite is not a footnote.
+    if _IGNORED:
+        w = terminalreporter
+        w.write_sep('=', f'{len(_IGNORED)} FILE(S) NOT COLLECTED (slow) — pass --slow to include',
+                    yellow=True, bold=True)
+        for name in sorted(_IGNORED):
+            w.write_line(f'  {name}')
+        w.write_line('  These did NOT run. A green suite here does not cover them.')
+
+    skipped = terminalreporter.stats.get('skipped', [])
+    data_skips = {}
+    for rep in skipped:
+        reason = rep.longrepr[2] if isinstance(rep.longrepr, tuple) else str(rep.longrepr)
+        if _is_data_skip(reason):
+            data_skips.setdefault(reason.replace('Skipped: ', ''), []).append(rep.nodeid)
+    if not data_skips:
+        return
+    n = sum(len(v) for v in data_skips.values())
+    w = terminalreporter
+    w.write_sep('=', f'{n} test(s) SKIPPED because data is missing', red=True, bold=True)
+    for reason, nodes in sorted(data_skips.items()):
+        w.write_line(f'  {len(nodes)} test(s): {reason}')
+        for nid in nodes[:3]:
+            w.write_line(f'      {nid}')
+        if len(nodes) > 3:
+            w.write_line(f'      ... and {len(nodes) - 3} more')
+    w.write_line('')
+    w.write_line('  These did NOT run. A green suite here does not cover them.')
+    w.write_line('  Set LUCID_REQUIRE_DATA=1 to make missing data a FAILURE instead.')
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_makereport(item, call):
+    """With LUCID_REQUIRE_DATA=1, a data skip becomes a failure.
+
+    A hookwrapper that rewrites the finished report, NOT a `pytest.fail()` inside the hook: this
+    hook's job is to build the report, and raising from it aborts the whole session with
+    INTERNALERROR rather than failing the test. (Measured — the first version did exactly that.)
+    """
+    outcome = yield
+    if os.environ.get('LUCID_REQUIRE_DATA') != '1':
+        return
+    rep = outcome.get_result()
+    if not rep.skipped:
+        return
+    reason = rep.longrepr[2] if isinstance(rep.longrepr, tuple) else str(rep.longrepr)
+    if _is_data_skip(reason):
+        rep.outcome = 'failed'
+        rep.longrepr = (f'LUCID_REQUIRE_DATA=1 and the data this test needs is missing.\n'
+                        f'{reason.replace("Skipped: ", "")}')
 
 
 @pytest.fixture(scope="session")

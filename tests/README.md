@@ -3,15 +3,28 @@
 ## Running tests
 
 ```bash
-# Fast only — pure math, no JIT (~10s)
+# Fast only — pure math, no JIT (~10s).
+# Every reproduction gate in the repo is marked slow (the tripwire included), so this command
+# runs the unit tests and none of the guarantees.
 pytest tests/ -m "not slow"
 
-# All tests (~15-20 min)
+# The default. Collects 786 tests and NEVER COLLECTS the 23 files listed in conftest's
+# _SLOW_FILES: 207 tests, a fifth of the suite, including test_tripwire.py. The terminal banner
+# names what was dropped.
 pytest tests/
 
-# Slow tests only
-pytest tests/ -m slow
+# EVERYTHING: 993 tests. This is the one to run before believing the suite is green.
+pytest tests/ --slow
 ```
+
+Two independent mechanisms hide tests here, and they are easy to confuse. `pytest.mark.slow`
+DESELECTS (the test is collected, then filtered out by `-m`). `_SLOW_FILES` in `conftest.py`
+makes `pytest_ignore_collect` refuse to collect the file at all, `-m` or no `-m`. The second is
+why a plain `pytest tests/` is not the whole suite.
+
+Tests that need downloaded data (`data/` is gitignored, so a fresh clone or worktree lacks it)
+skip rather than fail, and the end-of-run banner lists them. Set `LUCID_REQUIRE_DATA=1` to make a
+missing-data skip a failure, for a job that is supposed to have the data.
 
 ## Test categories
 

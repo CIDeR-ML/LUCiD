@@ -141,8 +141,8 @@ jobs:
   test:
     # The WHOLE suite, --slow included.
     #
-    # It used to be the fast tests only. conftest.py's pytest_ignore_collect drops 24 files
-    # unless --slow is passed, so those 24 never ran here, and this repo has now paid for that
+    # It used to be the fast tests only. conftest.py's pytest_ignore_collect drops 23 files
+    # unless --slow is passed, so those 23 never ran here, and this repo has now paid for that
     # twice over with defects that sat red for months in a green pipeline:
     #
     #   * tests/test_containers.py asserted a value 968d11e changed on 2026-06-14. Red for three
