@@ -107,24 +107,46 @@ def photonsim_macro(*, output_path, n_events: int, seed: int) -> str:
 
 
 def translate_uniform(origins: np.ndarray, rng, *, det_radius_cm: float,
-                      det_halfheight_cm: float,
+                      det_halfheight_cm: float, event_id: Optional[np.ndarray] = None,
                       fiducial_fraction: float = 1.0) -> np.ndarray:
-    """Shift a photon list to a uniformly sampled vertex in the cylinder.
+    """Shift photons to uniformly sampled vertices in the cylinder.
+
+    ``event_id`` gives each photon's event, and every event gets its **own**
+    vertex. Passing it is effectively mandatory for the tables built on this
+    sample: the spherical-shell construction behind the angular response is
+    only valid when sources are uniform in the volume around each PMT, because
+    that is what makes the source distribution flat in cos(eta). Shifting a
+    whole chunk by one draw collapses thousands of events onto a single vertex
+    and the measured spectrum then reflects those few positions, not the
+    photosensor. Omitting it keeps the old single-shift behaviour, which is
+    only meaningful when the array really is one event.
 
     Uniform in volume means uniform in r^2, not in r -- sampling r linearly
-    would pile events toward the axis and bias every table built from them.
+    would pile events toward the axis.
     """
     r = det_radius_cm * fiducial_fraction
     hz = det_halfheight_cm * fiducial_fraction
-    rho = r * np.sqrt(rng.random())
-    phi = 2.0 * np.pi * rng.random()
-    shift = np.array([rho * np.cos(phi), rho * np.sin(phi),
-                      hz * (2.0 * rng.random() - 1.0)], dtype=np.float32)
-    return origins + shift
+
+    def _draw(n):
+        rho = r * np.sqrt(rng.random(n))
+        phi = 2.0 * np.pi * rng.random(n)
+        return np.stack([rho * np.cos(phi), rho * np.sin(phi),
+                         hz * (2.0 * rng.random(n) - 1.0)], axis=1).astype(np.float32)
+
+    if event_id is None:
+        return origins + _draw(1)[0]
+
+    event_id = np.asarray(event_id)
+    uniq, inverse = np.unique(event_id, return_inverse=True)
+    return origins + _draw(uniq.size)[inverse]
 
 
 def load_photons(photonsim_path, step_size: str = "200 MB"):
-    """Stream ``(origins, directions)`` in cm from a PhotonSim file.
+    """Stream ``(origins, directions, event_id)`` in cm from a PhotonSim file.
+
+    The event id travels with the photons because the vertex has to be drawn
+    per event (see :func:`translate_uniform`); flattening it away is what
+    silently reduces a large sample to a handful of source positions.
 
     These are the per-photon emission points and directions the shotgun needs,
     and the emission point is what the angular response measures its shell
@@ -137,10 +159,13 @@ def load_photons(photonsim_path, step_size: str = "200 MB"):
     dir_branches = ["PhotonDirX", "PhotonDirY", "PhotonDirZ"]
     with uproot.open(photonsim_path) as f:
         raw = f["OpticalPhotonsRaw"]
-        for chunk in raw.iterate(pos_branches + dir_branches,
+        for chunk in raw.iterate(pos_branches + dir_branches + ["EventID"],
                                  step_size=step_size, library="np"):
+            per_entry = [len(v) for v in chunk["PhotonPosX"]]
+            event_id = np.repeat(np.asarray(chunk["EventID"]), per_entry)
             origins = np.stack(
                 [np.concatenate(chunk[b]) for b in pos_branches], axis=1) * 0.1
             directions = np.stack(
                 [np.concatenate(chunk[b]) for b in dir_branches], axis=1)
-            yield origins.astype(np.float32), directions.astype(np.float32)
+            yield (origins.astype(np.float32), directions.astype(np.float32),
+                   event_id)
