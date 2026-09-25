@@ -7,7 +7,7 @@ Two variants share one base:
   * `DedxLookupBuilder`    → `dedx_lookup_table.h5`    (energy loss:    dE/dx × s/s_max)
 
 Both read per-cell `<data-dir>/<material>/<particle>/<E>MeV/photonsim.root` files
-emitted by `lucid/production/s3df_jobs/siren_inputs/`. The 3rd axis is now the
+emitted by `lucid/production/jobs/siren_inputs/`. The 3rd axis is now the
 dimensionless `s / s_max(E)` with `s_max(E) = A · E^B` fit per (material,
 particle); the fit comes from `PhotonSim/data/<m>/<p>/smax_fit.csv` and is
 welded into the .h5's `metadata.attrs` so downstream LUCiD code (training,

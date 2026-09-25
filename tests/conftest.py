@@ -19,7 +19,6 @@ import jax.numpy as jnp
 # Files marked @pytest.mark.slow — skip importing them unless --slow is passed.
 _SLOW_FILES = [
     "test_containers.py",
-    "test_e2e_wavelength.py",
     "test_integration.py",
     "test_optics_physics.py",
     "test_photon_step.py",
