@@ -62,13 +62,6 @@ These build detectors, compile propagators, or run full simulations.
 | test_sk_like_integration.py | 11 | SK_like simulator: laser, isotropic, SIREN track; K convergence; gradients |
 | test_wavelength_integration.py | 13 | Wavelength-mode simulation: scalar vs wavelength; QE weighting; physics consistency |
 
-### Broken / disabled
-
-Old debugging scripts with no `test_` functions:
-test_all_fixes.py, test_combined_real_sensors.py, test_multibounce_jacobian.py,
-test_normalize_fix.py, test_s1_bounce.py, test_s1b_hk.py, test_s2_tangent.py,
-test_s3_combined.py, test_tangent_gradients.py
-
 ## Fixtures (conftest.py)
 
 | Fixture | Scope | What it provides |

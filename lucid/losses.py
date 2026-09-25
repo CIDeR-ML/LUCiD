@@ -534,12 +534,16 @@ def first_arrival_window_nll(log_w, flat_times, flat_indices, t_obs_per_sensor,
 # =============================================================================
 # TAU_VTX PARAMETRIZATION
 # =============================================================================
-# Coefficients from weighted least-squares fit on tau hyperparameter scan.
-# To recalculate these parameters:
-#   1. Run: python s3df_jobs/submit_tau_hyperparameter_tuning_job.py --output output/tau_scan --submit
-#   2. Wait for job completion, results in output/tau_scan/result.csv
-#   3. Run analysis notebook: good_notebooks/analyze_tau_scan.ipynb
-#   4. Update coefficients below with new fit results
+# Coefficients from a weighted least-squares fit on a tau hyperparameter scan over
+# (n_rays, energy). The scan driver was `s3df_jobs/submit_tau_hyperparameter_tuning_job.py`,
+# removed with the rest of `s3df_jobs/` once `analysis/paper` superseded it; recover it from git
+# history (`git log --diff-filter=D -- s3df_jobs/`) if these need regenerating. Do not treat the
+# old four-step recipe as runnable: it ended at `good_notebooks/analyze_tau_scan.ipynb`, which has
+# not existed for as long as the reference has, so the documented path was already broken.
+#
+# What regenerating actually requires: a scan over the two axes, the same weighted least-squares
+# fit of tau_vtx = a*n_rays + b*E + c, and these three constants updated together. They are a
+# fitted TRIPLE and mixing one new value with two old ones is not a valid parametrisation.
 
 TAU_VTX_PARAM_A = 1.092557e-06  # coefficient for Nrays
 TAU_VTX_PARAM_B = 2.578522e-04  # coefficient for Energy (MeV)
