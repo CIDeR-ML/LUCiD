@@ -126,9 +126,28 @@ def mode_iters(args):
                      color='pink', alpha=0.4, edgecolor='black', linewidth=0.5)
         hist_ax.axhline(y=p68[-1], color=col_p68, lw=lw, linestyle='-')
         hist_ax.axhline(y=p90[-1], color=col_p90, lw=lw, linestyle='--')
-        hist_ax.axhline(y=worst[-1], color='gray', lw=1, linestyle='-')
-        hist_ax.text(0.9, worst[-1], 'worst event', color='gray', ha='right', va='top',
-                     fontsize=8, transform=hist_ax.get_yaxis_transform())
+        # The worst event can exceed the panel's fixed range, and then both the line and its
+        # label were drawn at a data coordinate OUTSIDE the axes and simply vanished -- the one
+        # event a reader most wants to see was the one silently omitted. Measured on the 250k
+        # muon run, in the units this panel plots: worst 1.87 m against a 1.5 m cap on position
+        # and 44.4 deg against 15 on direction. t0 and momentum are inside their ranges -- an
+        # earlier note here said t0 was off scale too, which came from reading
+        # p68_evolution.event_err_curves rather than the event_metric_curves this figure uses.
+        # The ranges are deliberate (inherited from the notebook) and widening them would
+        # compress the region the figure exists to show, so the marker is clamped to the top
+        # edge instead and carries its true value.
+        _w = float(worst[-1])
+        _off = _w > max_y
+        hist_ax.axhline(y=min(_w, max_y), color='gray', lw=1,
+                        linestyle=(0, (2, 2)) if _off else '-')
+        hist_ax.text(0.9, min(_w, max_y),
+                     f'worst event {_w:.3g} (off scale)' if _off else 'worst event',
+                     color='gray', ha='right', va='top', fontsize=8,
+                     transform=hist_ax.get_yaxis_transform())
+        if _off:
+            # An overflow arrow, so the clamp cannot be mistaken for the value itself.
+            hist_ax.plot([0.5], [max_y], marker='^', color='gray', ms=5, clip_on=False,
+                         transform=hist_ax.get_yaxis_transform())
         hist_ax.set_yticks([]); hist_ax.set_xticks([])
         hist_ax.set_ylim(ax.get_ylim())
         try:
