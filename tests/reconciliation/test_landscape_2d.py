@@ -1,29 +1,17 @@
-"""The 2-D loss-geometry figure's data pipeline — the only published path with no numerical gate.
+"""Data pipeline of the 2-D loss-geometry calibration figure.
 
-`compute_2d_neyman.py` -> `combine_2d.py` -> `calib_plots.loss_geometry` produces one of the two
-calibration figures, and until now nothing tested any of it. The restructure touched this path
-twice (closing an environment leak, and consolidating the damped step both halves share), which is
-an uncomfortable place to have zero coverage.
+`compute_2d_neyman.py` -> `combine_2d.py` -> `calib_plots.loss_geometry`. The published surface is
+computed in shards, each filling its own round-robin slice (`idx % NSHARDS == SHARD`) and leaving
+zeros elsewhere; `combine_2d` then SUMS the partials. That is exact only while the slices are
+disjoint: a point claimed by two shards would be silently doubled. So sharded must equal
+unsharded, exactly.
 
-The property worth gating hardest is the SHARDING. The published surface is computed by 10
-processes, each filling its own round-robin slice (`idx % NSHARDS == SHARD`) and leaving zeros
-elsewhere; `combine_2d` then SUMS the partials. That is exact only while the slices are disjoint.
-If any point were ever claimed by two shards, the sum would silently double it — no error, no
-warning, just a wrong surface in a published figure. So: sharded must equal unsharded, exactly.
+Not asserted: "the minimum sits at truth". Truth data and model use independent key streams, so
+the minimum displaces by residual noise that grows as the photon budget shrinks; at this test's
+N_PH it can sit in a grid corner. The properties below are budget-independent instead.
 
-WHAT IS NOT ASSERTED, and why. The obvious claim — "the minimum sits at truth" — is not testable
-at a cost a gate can pay. The truth data and the model are drawn from INDEPENDENT key streams (the
-script says so: no common random numbers, "so the min displaces by the residual noise"), and that
-displacement scales with the photon budget. Measured here at N_PH=1e5 against the published 2e6,
-the minimum sits in a grid CORNER. Asserting it near truth with a tolerance loose enough to pass
-would be a test that passes for the wrong reason and keeps passing if the surface is genuinely
-broken. The properties below are budget-independent instead.
-
-No downloaded data: this path uses laser sources and the in-repo geometry, not the SIREN emitter,
-so unlike the reconstruction gate it runs on a fresh clone.
-
-COST: three subprocess runs of a reduced grid (the grid POINTS are nearly free — compile and
-detector construction dominate, measured 32 s of a 66 s run for 9 points).
+Needs no downloaded data (laser sources and in-repo geometry, not the SIREN emitter). Runs three
+subprocesses on a reduced grid; compile and detector construction dominate, not the grid points.
 """
 import os
 import subprocess
@@ -41,7 +29,7 @@ COMBINE = REPO / 'analysis' / 'paper' / 'utils' / 'combine_2d.py'
 FIGURE = 'calib_loss_geometry'
 
 # Reduced from LANDSCAPE_RECIPE: enough grid to have interior points and a Fisher at each, cheap
-# enough to run. Every knob the path reads is pinned, including the four that used to leak.
+# enough to run. Every knob the path reads is pinned so nothing leaks in from the environment.
 SETTINGS = {'NGRID': '5', 'HWF': '0.4', 'K': '3', 'N_PH': '1e5',
             'NK_TRUTH': '2', 'NK_SIM': '2',
             'INTEN': '1e8', 'NCAP': '100', 'NANG': '150', 'NHGT': '100'}

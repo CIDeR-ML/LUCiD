@@ -1,10 +1,8 @@
 """`ScaledProblem` against the REAL `ReconProblem`, not a toy.
 
-`tests/test_fitting_scaled.py` establishes the equivalence on a problem written for the purpose.
-That leaves the claim the module exists for untested where it matters: `ReconProblem` is the thing
-that carries a float64 numpy iterate, and it does so because energy is raw MeV at ~1000, where
-float32 spacing is 6.1e-5 and 200 steps of 1e-6 leave the value EXACTLY unchanged. Whether scaled
-coordinates make float32 adequate THERE is what decides if the module is useful or merely correct.
+`tests/test_fitting_scaled.py` checks the equivalence on a purpose-built problem. `ReconProblem` is
+where it matters: it carries a float64 numpy iterate because energy is raw MeV at ~1000, where
+float32 spacing is 6.1e-5 and small late steps vanish.
 
 Three claims, in order of what they would cost to be wrong:
 
@@ -12,12 +10,11 @@ Three claims, in order of what they would cost to be wrong:
                scale=S -- on the real problem class, at float64 round-off.
   RESOLUTION   in scaled coordinates float32 tracks float64; in raw coordinates it does not.
   PLUMBING     it composes with the shared driver and with an optax transformation, since
-               `gauss_newton` now delegates to `minimize` and everything goes through it.
+               `gauss_newton` delegates to `minimize`.
 
-The model is analytic. `ReconProblem` needs exactly `grad`, `fisher_ad` and the iterate policy
-from it, so supplying those in closed form exercises the REAL problem wrapper -- its key handling,
-its metric caching, its `accumulate` -- with no simulator, no SIREN weights and no GPU. What is
-under test is the coordinate change, not the physics.
+The model is analytic: `ReconProblem` needs only `grad`, `fisher_ad` and the iterate policy from
+it, so closed forms exercise the real wrapper (key handling, metric caching, `accumulate`) with no
+simulator, SIREN weights or GPU. What is under test is the coordinate change, not the physics.
 """
 import numpy as np
 import pytest
@@ -36,9 +33,9 @@ LAM, MU = 0.01, 0.1
 class Analytic:
     """Nonlinear least squares wearing `ReconModel`'s interface.
 
-    `grad` is the gradient of a scalar; `fisher_ad` builds a PSD metric separately -- which is the
-    real problem's structure too, and the reason a first-order rule could ever be cheaper on
-    reconstruction where it cannot be on calibration.
+    `grad` is the gradient of a scalar; `fisher_ad` builds a PSD metric separately, matching the
+    real problem's structure -- the split that lets a first-order rule be cheaper on reconstruction
+    than it can be on calibration.
     """
 
     energy_from_scale = True
@@ -69,7 +66,7 @@ KW = dict(lam=LAM, mu=MU, max_step=3.0, lr=1.0, refresh=2, readout='final')
 
 
 def _raw(dtype=np.float64, steps=30, noise=0.0):
-    """The status quo: raw iterate, driver-side scale=SCALE9."""
+    """Reference: raw iterate, driver-side scale=SCALE9."""
     p = ReconProblem(Analytic(noise), None, None, KEYS, None)
     p.accumulate = lambda t, dt: np.asarray(np.asarray(t) + np.asarray(dt), dtype=dtype)
     res = gauss_newton(p, np.asarray(START, dtype=dtype), steps, scale=SCALE9, **KW)
@@ -77,7 +74,7 @@ def _raw(dtype=np.float64, steps=30, noise=0.0):
 
 
 def _scaled(dtype=np.float64, steps=30, noise=0.0):
-    """The proposal: iterate in scaled coordinates, no driver-side scale."""
+    """Iterate in scaled coordinates through ScaledProblem, no driver-side scale."""
     inner = ReconProblem(Analytic(noise), None, None, KEYS, None)
     p = ScaledProblem(inner, SCALE9, origin=START.copy(), dtype=dtype)
     res = gauss_newton(p, np.asarray(p.to_scaled(START), dtype=dtype), steps, scale=None, **KW)
@@ -125,22 +122,12 @@ def test_scaled_float32_tracks_float64_where_raw_float32_does_not():
 
 
 def test_where_this_file_CANNOT_speak_for_the_float32_claim():
-    """An honest boundary, asserted rather than left implicit.
+    """Boundary marker: this analytic problem cannot exercise the float32 energy mechanism.
 
-    The mechanism the module exists for is energy carried at ~1000 MeV, where float32 spacing is
-    6.1e-5 and a small late step vanishes. This analytic problem cannot demonstrate it, and the
-    reason is worth pinning down rather than tuning around: it is NOISELESS and its minimiser is
-    TRUTH[0] = 1000.0 exactly, which float32 represents exactly. Both precisions converge onto the
-    same representable value, so raw-float32 loses nothing on energy however long the fit runs --
-    at 30 steps and at 180.
-
-    That was found by a vacuity check that FAILED, which is the only reason the ordering test
-    above is not quietly passing on an unrelated component.
-
-    The claim itself is measured elsewhere, on an instrument built for it:
-    `tests/test_float32_is_adequate.py` site 3, where raw-float32 stalls at 1.9e-5 against
-    raw-float64's 3.3e-14 and scaled-float32 is exact. What THIS file establishes is the
-    equivalence and the plumbing on the real `ReconProblem`; the resolution claim it inherits.
+    It is noiseless and its minimiser TRUTH[0] = 1000.0 is float32-exact, so raw-float32 converges
+    onto the same representable value and loses nothing on energy however long the fit runs. The
+    resolution claim is tested in `tests/test_float32_is_adequate.py` (site 3); this file covers
+    the equivalence and the plumbing on the real `ReconProblem`.
     """
     ref, _ = _raw(np.float64, steps=180)
     raw32, _ = _raw(np.float32, steps=180)

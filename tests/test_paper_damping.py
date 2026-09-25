@@ -1,25 +1,13 @@
-"""The 2-D loss-geometry figure's damped step, and why it is not the library's.
+"""The 2-D loss-geometry figure's damped step, kept equal to the library's.
 
-``analysis/paper/utils/damping.py`` holds one definition shared by the figure's two halves — the
-streamline field and the trajectory overlaid on it — which is what makes "the GN arm takes the
-same step the joint fit takes" true by construction rather than by two files restating the same
-arithmetic.
+``analysis/paper/utils/damping.py`` holds one definition shared by the figure's two halves (the
+streamline field and the trajectory overlaid on it), so the GN arm takes the same step the joint
+fit takes by construction.
 
-It does not call :func:`lucid.fitting.transforms.damped_matrix`, and the reason is now purely a packaging
-one: importing it runs ``lucid/fitting/__init__.py``, which pulls jax and the detector geometry
-into what is otherwise a numpy plotting dependency.
-
-The CONVENTIONS no longer differ, and this file used to say they did. The library floored the
-Levenberg median at 1e-12 where the figure filtered to the entries carrying curvature, which made
-them disagree by exactly a factor of two on a 2x2 with a null direction. The library has since
-adopted the filter — a floor is not invariant to adding an unconstrained parameter, and collapses
-once half the diagonal sits at it — so the tests below pin the two as EQUAL, and one of them says
-in its own name that it used to assert the opposite.
-
-What the tests here are for, then, is keeping a transcription in step with the thing it
-transcribes. That is a weaker guarantee than having one implementation, and it is worth being
-honest that it exists because of an import boundary rather than because two conventions are
-genuinely wanted.
+It does not call :func:`lucid.fitting.transforms.damped_matrix` because importing it runs
+``lucid/fitting/__init__.py``, which pulls jax and the detector geometry into what is otherwise a
+numpy plotting dependency. Both use the same convention (the Levenberg median is filtered to the
+entries carrying curvature), and these tests keep the numpy transcription equal to the library.
 """
 import numpy as np
 import pytest
@@ -31,16 +19,10 @@ from lucid.fitting.transforms import damped_matrix as _damped_matrix_jax
 
 LAM, MU = 0.01, 0.1
 
-# The library implementation is JAX and this repo never enables x64, so it computes in float32
-# where `damping.py` is float64. The comparison is therefore at float32 tolerance, NOT exact --
-# and that is a deliberate loosening from the `rtol=0` this file used to assert against the numpy
-# implementation that has since been deleted.
-#
-# It costs nothing the test was actually for. A CONVENTION divergence is a factor of two on the
-# Levenberg base (which is what the null-direction case measured before the library adopted the
-# filter); float32 noise is ~1e-7. Six orders separate the thing being caught from the thing being
-# tolerated, and `test_the_tolerance_can_still_catch_a_convention_change` holds that claim rather
-# than leaving it as an assertion in prose.
+# The library is JAX and this repo never enables x64, so it computes in float32 where `damping.py`
+# is float64: comparisons are at float32 tolerance, not exact. A convention change is a factor of
+# two on the Levenberg base while float32 noise is ~1e-7;
+# `test_the_tolerance_can_still_catch_a_convention_change` checks the bound still separates them.
 RTOL = 2e-6
 
 
@@ -65,26 +47,16 @@ def test_agrees_with_the_library_wherever_the_diagonal_is_positive():
             assert np.diag(f).min() > 1e-12          # the condition under which they coincide
             lib = np.linalg.solve(damped_matrix(f, lam=LAM, mu=MU), g)
             fig = damped_step(f, g, LAM, MU)
-            # NORM-relative. An absolute difference here compares a float32 rounding error against
-            # a tolerance expressed as a fraction, which is a units error -- it read 8.1e-06 on
-            # steps of order one and looked like a failure when it was 1e-6 relative.
+            # Norm-relative: RTOL is a fraction, so it must be compared with a relative error.
             worst = max(worst, float(np.linalg.norm(fig - lib) / np.linalg.norm(lib)))
     assert worst < RTOL, f"conventions disagree on a positive diagonal by {worst:.3e} relative"
 
 
 def test_they_now_AGREE_on_a_null_direction():
-    """This test used to assert the opposite, and the change is the point.
+    """Both exclude a direction with no curvature from the Levenberg base.
 
-    The figure filtered the Levenberg median to the entries carrying curvature while the library
-    floored it at 1e-12, so a direction with no curvature made the library's base the mean of the
-    surviving entry and the floor — half the figure's — and the step along the null direction
-    differed by exactly two. The library has since adopted the filter, for reasons recorded in
-    :func:`lucid.fitting.transforms.damped_matrix`, so the divergence is gone.
-
-    ``damping.py`` remains a separate module, but no longer because it disagrees: importing
-    ``lucid.fitting.gn`` runs ``lucid/fitting/__init__.py``, which pulls jax and the detector
-    geometry into what is otherwise a numpy plotting dependency. This test is now the guard that
-    the two stay in step.
+    This is the case that distinguishes the conventions: a floored median would halve the base on
+    this 2x2 and double the step along the null direction.
     """
     f = np.array([[1.0, 0.0], [0.0, 0.0]])
     g = np.array([1.0, 1.0])
@@ -100,21 +72,13 @@ def test_a_fully_degenerate_metric_still_solves():
     np.testing.assert_allclose(out, np.ones(3) / MU, rtol=1e-9)
 
 
-# A CAPTURED REAL Fisher diagonal, not a synthetic one. Order: E, x, y, z, sin/cos(theta),
-# sin/cos(phi), t0. Measured on a real muon
-# event at the published nrays working point (250k rays, SK geometry, 11,096 PMTs), at the seed
-# and again at truth.
+# A real Fisher diagonal captured from a muon event at the published nrays working point (250k
+# rays, SK geometry), at the seed and at truth. Order: E, x, y, z, sin/cos(theta), sin/cos(phi), t0.
 #
-# WHY CAPTURED RATHER THAN GENERATED. The tests above build matrices as `a.T @ a` from Gaussian
-# entries, whose diagonal spans a ratio of roughly 0.006-0.3 — a well-conditioned ensemble that
-# never approaches the degenerate regime the Levenberg term exists for, and that cannot reproduce
-# what makes the real problem hard: these fits run in SCALE9 coordinates, so the diagonal carries
-# DIFFERENT UNITS per parameter. The real spectrum spans 2.8e-03 to 2.6e+06 — a factor of 9e8,
-# with the energy direction sitting 4e6 below the median. No random PSD generator produces that,
-# which is why an audit found this case genuinely uncovered by the tests above.
-#
-# Regenerating: run the tool and paste the printed diagonals. It needs a GPU and a PhotonSim ROOT
-# file outside the repo, which is exactly why the NUMBERS are captured here and the RUN is not.
+# Captured rather than generated: the fits run in SCALE9 coordinates, so the diagonal carries
+# different units per parameter and spans 2.8e-03 to 2.6e+06 (a factor of 9e8), a range the
+# Gaussian `a.T @ a` matrices above never reach. Regenerating it needs a GPU and a PhotonSim ROOT
+# file outside the repo, which is why the numbers are stored here.
 REAL_FISHER_DIAG = {
     'seed': np.array([2.793e-03, 1.084e+04, 8.324e+03, 1.182e+04, 2.631e+06,
                       1.953e+05, 9.316e+03, 1.460e+05, 1.087e+03]),
@@ -125,13 +89,7 @@ REAL_FISHER_DIAG = {
 
 @pytest.mark.parametrize('where', ['seed', 'truth'])
 def test_the_two_conventions_agree_on_a_REAL_fisher_spectrum(where):
-    """The gap the synthetic matrices above cannot reach.
-
-    Floor and filter diverge only once a large fraction of the diagonal sits at or below the
-    cutoff. On this problem nothing comes close — the smallest entry is ~1e9x the old 1e-12 floor
-    — so the two forms return the same ``base`` and the change of convention was inert. That
-    inertness is the claim `lucid/fitting/gn.py` makes, and this is what holds it.
-    """
+    """The two agree on a real, badly scaled spectrum that the synthetic matrices above cannot reach."""
     d = REAL_FISHER_DIAG[where]
     H = np.diag(d)
     lib = np.linalg.solve(damped_matrix(H, lam=LAM, mu=MU), np.ones(9))
@@ -163,12 +121,9 @@ def test_the_real_problem_stays_far_from_the_regime_where_they_diverge(where):
     assert n_below < len(d) // 2, (
         'more than half the diagonal sits at the cutoff — the median IS the cutoff and the '
         'isotropic damping has collapsed, which is the failure the filter convention prevents')
-    # 100x, against a measured 1062x (seed) and 2736x (truth). NOTE these are margins against the
-    # RELATIVE cutoff, which is 1e-12*max(diag) = ~2.6e-06 here — NOT the 2.8e9x quoted in
-    # `gn.py`, which is the margin against the old ABSOLUTE 1e-12 floor. The two differ by
-    # max(diag), six orders of magnitude, and conflating them is easy: the first draft of this
-    # assertion demanded 1e6x and failed, because it was asserting the absolute-floor margin
-    # against the relative cutoff.
+    # 100x, against a measured 1062x (seed) and 2736x (truth). This is the margin against the
+    # RELATIVE cutoff (1e-12*max(diag), ~2.6e-06 here), not against an absolute 1e-12 floor; the
+    # two differ by max(diag), six orders of magnitude.
     assert d.min() / cutoff > 100, (
         f'smallest curvature {d.min():.3e} is only {d.min() / cutoff:.0f}x the relative cutoff '
         f'{cutoff:.3e}; the conventions are no longer comfortably interchangeable here')
@@ -194,18 +149,14 @@ def test_the_real_spectrum_is_something_the_random_generator_cannot_produce():
 
 
 def test_the_tolerance_can_still_catch_a_convention_change():
-    """The control on RTOL, promised where it is defined.
+    """RTOL still rejects a convention change, not just float32 noise.
 
-    Comparing a float64 transcription against a float32 implementation costs exactness, so the
-    comparisons above loosened from `rtol=0` to 2e-6. That is only acceptable if the loosened
-    bound still rejects the thing it exists to reject — a change in the CONVENTION, not in the
-    arithmetic. Here that is the old floored median on a null direction, which is exactly the
-    divergence this file used to assert and now asserts the absence of; it must fail the bound by
-    orders of magnitude, not squeak past it.
+    The floored-median convention on a null direction must miss the bound by orders of magnitude,
+    otherwise the tolerance used above could hide a real divergence.
     """
     f = np.array([[1.0, 0.0], [0.0, 0.0]])
     g = np.array([1.0, 1.0])
-    # The pre-change convention: floor the diagonal at 1e-12 and take the median over ALL entries,
+    # The floored convention: floor the diagonal at 1e-12 and take the median over ALL entries,
     # so the null direction halves the Levenberg base instead of being excluded from it.
     dg = np.clip(np.diag(f), 0.0, None)
     floored_base = float(np.median(np.clip(np.diag(f), 1e-12, None)))

@@ -107,11 +107,9 @@ DEFAULT_CONFIG = {
     'force_seed': None,
     'placement_seed_base': 100003,
     # placement rng seed = base + event * stride. stride=1 is OUR historical scheme; stride=1000
-    # reproduces the seed convention of the upstream characterisation sweep, which keyed
-    # `pose_seed = pose_seed_base + event*1000 + pose` so that seeds stay stable as configurations
-    # change. That sweep (`lucid/fitting/sweep.py`) has been removed -- it had no caller and none
-    # of the paper's numbers came through it -- so the constant is written out here rather than
-    # cited; recover the module from git history if the full convention is ever needed again.
+    # reproduces the upstream characterisation sweep's convention
+    # `pose_seed = pose_seed_base + event*1000 + pose` (pose=0), which keeps seeds stable as
+    # configurations change.
     # To reproduce the upstream truth treatment EXACTLY set, per config:
     #   {"placement_seed_stride": 1000, "containment_margin": null, "true_t0_range": [0, 0]}
     # and to come back to ours simply omit them (defaults: stride 1, containment 0.95,
@@ -234,12 +232,10 @@ def phys_to_vec9(p, xp=np):
     indexed in it, and carries its own matched pair (`phys_from_vec9` / `vec9_from_phys`). Both
     are internally consistent; mixing them swaps phi with t0.
 
-    Mixing them is not hypothetical and is not loud. Three gradient probes paired the figure's
-    inverse with this module's forward map, which EVALUATES THE MODEL AT THE WRONG POINT --
-    azimuth set to the t0 value, t0 to the azimuth -- while every derivative still comes out of
-    the coordinate its label claims and every control still passes. Nothing in the output can
-    show it. So: use the inverse that belongs to the forward map you used, never a hand-rolled
-    one. `tests/test_phys_vec9_roundtrip.py` pins both pairs and asserts they really do differ.
+    The mix is silent: the model is evaluated at the wrong point while every derivative still
+    comes out of the coordinate its label claims. Use the inverse that belongs to the forward map
+    you used, never a hand-rolled one. `tests/test_phys_vec9_roundtrip.py` pins both pairs and
+    asserts they differ.
 
     ``xp`` selects the array module: numpy by default, pass ``jax.numpy`` to stay traceable.
     """
@@ -261,10 +257,8 @@ SEED_ERR_NAMES = ['vtx_cm', 'vtx_trans_cm', 'vtx_long_cm', 'dir_deg', 'dE_MeV', 
 def seed_errors(seed, th9, d):
     """Per-component seed errors vs truth, in :data:`SEED_ERR_NAMES` order.
 
-    Truth-referenced, so it stays here rather than in the library — but the two pieces of it that
-    are NOT study-specific do not: the transverse/longitudinal vertex split and the opening angle
-    come from ``lucid.fitting.analysis``, which had both already. This function used to
-    reimplement them, along with a numpy copy of ``vec9_dir``.
+    Truth-referenced, so it stays here rather than in the library; the transverse/longitudinal
+    vertex split and the opening angle come from ``lucid.fitting.analysis``.
 
     Longitudinal is SIGNED: positive means ahead of the true vertex along the track.
     """
@@ -323,15 +317,10 @@ class TrackingPipeline:
         from lucid.fitting import ReconModel
         from lucid.optimization.grid_search import get_detector_bounds
 
-        # Merge DEFAULT_CONFIG HERE rather than relying on each caller to do it. run_study.py
-        # (the SLURM worker, --backend s3df) goes through load_config() and was safe; run_local()
-        # — the DEFAULT backend of every fig_*.py, and the documented way to reproduce a figure
-        # on a laptop — passed studies.base_config() straight through. That supplies 15 keys and
-        # omits 'grid' and 'K', so the next line raised KeyError and the documented reproduce
-        # path could not run at all. Doing it in the constructor makes both callers safe and
-        # stops a third from reintroducing it.
-        # Updated IN PLACE, not copied: __init__ already resolves 'nbuf' into the caller's dict
-        # and run_local records that same dict as the run's provenance, so a copy would silently
+        # Merge DEFAULT_CONFIG here rather than in each caller: run_local() (the default backend of
+        # every fig_*.py) passes studies.base_config(), which omits keys such as 'grid' and 'K'.
+        # Updated IN PLACE, not copied: __init__ resolves 'nbuf' into the caller's dict and
+        # run_local records that same dict as the run's provenance, so a copy would silently
         # drop the resolved value from the saved config.
         config.update(_deep_merge(DEFAULT_CONFIG, config))
         self.cfg = config
@@ -700,15 +689,13 @@ class TrackingPipeline:
         along the degeneracy. Recipe knobs mirror fit_track (lr 4->1.5, lam .01, ridge_i .1,
         refresh 8, trust 3, NaN guard, Polyak-40).
 
-        The loop itself was hand-written here — the fourth copy in the tree — until the projector
-        moved into lucid.fitting.recon.ProjectedReconProblem, which is where it belongs: it is a
-        property of the problem, not of the optimizer. What is left is the study-specific part,
-        the two per-term (gradient, Fisher) builders. The move is gated at rtol=0, atol=0 against
-        a transcription of the original loop in tests/test_recon_projected_problem.py.
+        The projector is a property of the problem, not the optimizer, so it lives in
+        lucid.fitting.recon.ProjectedReconProblem; this method supplies the two per-term
+        (gradient, Fisher) builders. tests/test_recon_projected_problem.py gates it exactly
+        (rtol=0, atol=0) against a reference transcription of the loop.
 
-        One reported quantity changed: `gnorm` is now the PROJECTED gradient norm rather than the
-        unprojected ||S(gQ+gT)||, so `best_iter` can select a different iterate. The projected norm
-        is the quantity the step is built from; the readout is Polyak-averaged either way.
+        `gnorm` is the PROJECTED gradient norm (the quantity the step is built from), not the
+        unprojected ||S(gQ+gT)||, and `best_iter` is chosen from it.
         """
         from lucid.fitting import gauss_newton
         from lucid.fitting.recon import ProjectedReconProblem, SCALE9
@@ -742,12 +729,10 @@ class TrackingPipeline:
                            lam=lam, mu=ridge_i, jitter=1e-9, lr=lr, lr_final=lr_final,
                            scale=None, max_step=trust, refresh=refresh,
                            readout='polyak', polyak=polyak_w, reject_nonfinite=True)
-        gnorms = res['gnorm'][1:]                  # drop the start, to match the old shape
-        # +1 because `gnorms` dropped the start and `traj` did NOT. best_iter is consumed as an
-        # index into a curve built from the TRAJECTORY (p68_evolution.py: c has niters+1 rows and
-        # is indexed by this value), so without the shift the reported min-gradient error is read
-        # one iterate too early. recon.py's fit_track keeps both arrays untruncated and is
-        # already consistent; only this projected path truncates one of the two.
+        gnorms = res['gnorm'][1:]                  # drop the start: one entry per iteration
+        # +1 because `gnorms` dropped the start and `traj` did NOT. best_iter indexes curves built
+        # from the TRAJECTORY (niters+1 rows, e.g. p68_evolution.py), so without the shift the
+        # min-gradient iterate is read one step too early.
         return res['theta'], dict(traj=res['history'], gnorm=gnorms,
                                   best_iter=int(np.argmin(gnorms)) + 1,
                                   n_rejected=int(res.get('n_rejected', -1)))
@@ -774,8 +759,7 @@ class TrackingPipeline:
             fit_vec9=np.asarray(res), fit_phys=vec9_to_phys(res),
             traj_win=H['traj'], traj_win_phys=traj_to_phys(H['traj']),
             gnorm_win=H['gnorm'], best_iter_win=int(H['best_iter']), which=0,
-            # How many steps this event REFUSED. Recorded per event so the exposure of the
-            # rejection branch is a measurement rather than a docstring figure.
+            # Steps this event refused (-1 = not reported by the fitter).
             n_rejected=int(H.get('n_rejected', -1)),
             fit_err=_errs(res), n_hit=P['n_hit'], q_tot=P['q_tot'],
             seconds=P['seed_seconds'] + float(time.time() - t_start))

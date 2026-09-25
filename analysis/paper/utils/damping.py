@@ -1,28 +1,13 @@
 """The damped Gauss-Newton step used by the 2-D loss-geometry figure.
 
-Both halves of that figure claim to take the step the joint fit takes. The streamlines are meant
-to show the optimizer's actual field, and the trajectory overlaid on them is meant to be the same
-arm — a claim each file used to state in a comment and back with its own copy of the arithmetic.
-One definition, so the claim holds by construction.
+The streamlines (``calib_plots.py``) and the overlaid trajectory (``traj_2d_neyman.py``) must both
+take the step the joint fit takes; one shared definition makes that hold by construction.
 
-Numpy only, and that is the reason this is its own module rather than a function in
-``calibration.py``: ``calib_plots.py`` is plot-only by design and reads nothing but saved ``.npz``,
-so importing the calibration setup there would pull jax and the detector geometry into a rendering
-module. ``traj_2d_neyman.py`` is a compute script and equally has no use for matplotlib.
-
-The CONVENTION here is the library's: :func:`lucid.fitting.transforms.damped_matrix` filters the Levenberg
-median to the entries carrying curvature, exactly as this does. That was not always true — the
-library used to FLOOR the median at ``1e-12``, which on a 2x2 with one null direction halved the
-base and doubled the step along it, and this module was kept separate to protect the figure from
-that. The library adopted the filter (see its docstring for why flooring is wrong under model
-extension), so the disagreement is gone and ``tests/test_paper_damping.py`` now pins the two as
-EQUAL rather than as differing by two.
-
-What remains is a packaging reason, not a numerical one: ``from lucid.fitting.gn import
-damped_matrix`` runs ``lucid/fitting/__init__.py``, which imports the recon and calibration
-modules and therefore jax. ``calib_plots.py`` is plot-only and reads nothing but saved ``.npz``, so
-that import does not belong in its dependency chain. Hence a numpy transcription, gated against
-the library rather than diverging from it.
+This is a numpy transcription of :func:`lucid.fitting.transforms.damped_matrix` (same convention:
+the Levenberg median is taken over the diagonal entries carrying curvature), and
+``tests/test_paper_damping.py`` pins the two as equal. It is not imported from the library because
+importing any ``lucid.fitting`` submodule runs ``lucid/fitting/__init__.py``, which pulls in jax,
+and ``calib_plots.py`` is plot-only and reads nothing but saved ``.npz``.
 """
 import numpy as np
 

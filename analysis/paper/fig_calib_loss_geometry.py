@@ -11,7 +11,7 @@ field and the overlaid optimizer paths:
 
 The Neyman chi-square surface is a razor valley, so raw descent crawls along it while the
 Fisher preconditioner turns the valley into a bowl and the step goes almost straight to the
-minimum. Measured: GD takes 278 and 152 iterations from the two starts; GN takes 25 and 19.
+minimum.
 
     python fig_calib_loss_geometry.py                  # compute surface + paths, then plot
     python fig_calib_loss_geometry.py --generate-data  # just compute
@@ -30,8 +30,8 @@ process, which is correct but slow. Stage 3 MUST carry the same K / N_PH / NK_* 
 which is why both read them from ``utils/calibration.py:LANDSCAPE_RECIPE`` rather than from
 flags.
 
-``XLA_PYTHON_CLIENT_MEM_FRACTION=0.95`` is required, not optional: JAX's 0.75 default leaves
-~8.4 GiB of an 11.26 GiB card against a 9.51 GiB peak and every shard OOMs. It is set here.
+``XLA_PYTHON_CLIENT_MEM_FRACTION=0.95`` is required: at JAX's 0.75 default a shard's 9.51 GiB
+peak does not fit an 11.26 GiB card. ``calibration.LANDSCAPE_ENV`` sets it for every stage.
 """
 import argparse
 import os
@@ -42,12 +42,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))   # LUCiD/
 
-# This process is a LAUNCHER: every GPU stage below runs in a subprocess. Importing `calibration`
-# initialises JAX, and on a GPU node that preallocates a large fraction of device 0 -- the card
-# shard 0 is then given. The shard needs 9.51 GiB of an 11.26 GiB card, so it OOMs while shards
-# 1..9 succeed, which is exactly the failure signature observed: "shards [0] failed".
-# So the parent is pinned to CPU BEFORE the import, and the children get the real allocation back
-# through `_env` below. The capture must happen first -- children inherit what is captured here.
+# This process is a LAUNCHER: every GPU stage runs in a subprocess. Importing `calibration`
+# initialises JAX, which on a GPU node preallocates device 0 -- the card shard 0 is given -- and
+# shard 0 then OOMs. So the parent is pinned to CPU BEFORE the import, and `_env` restores the
+# real CUDA_VISIBLE_DEVICES for the children; it must be captured before the pin.
 _REAL_CUDA = os.environ.get('CUDA_VISIBLE_DEVICES')
 os.environ['CUDA_VISIBLE_DEVICES'] = ''
 os.environ['JAX_PLATFORMS'] = 'cpu'
@@ -97,7 +95,7 @@ def generate_data(shards, ddir):
         raise SystemExit(f'[{FIGURE}] shards {failed} failed — see {ddir}/shard_*.log. '
                          f'NOT combining; any existing landscape npz is left untouched.')
 
-    # The count+freshness guard, carried over from shard_2d_hi.sh.
+    # Every shard must have written a partial since launch (see the stamp above).
     parts = sorted(ddir.glob('landscape2d_neyman_part*.npz'))
     fresh = [p for p in parts if p.stat().st_mtime >= stamp]
     if len(parts) != shards or len(fresh) != shards:

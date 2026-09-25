@@ -1,21 +1,13 @@
 """Scattering phase functions: the Mie/Rayleigh mixture the propagation loop samples from.
 
-Four of the five functions here ARE the main loop's angular scattering. ``lucid.simulation.
-photon_step`` imports ``compute_mie_scatter_direction``, ``hg_sample_cos_theta``, ``hg_logpdf``
-and ``rayleigh_logpdf``; ``photon_step_volume`` imports the latter three. The pair of log-pdfs is
-what makes the Mie/Rayleigh choice differentiable — the branch is discrete, so its gradient
-arrives through the DiCE score ``log p_mie + hg_logpdf`` versus ``log(1 - p_mie) +
-rayleigh_logpdf`` rather than pathwise.
+``lucid.simulation.photon_step`` uses ``compute_mie_scatter_direction``, ``hg_sample_cos_theta``,
+``hg_logpdf`` and ``rayleigh_logpdf``; ``photon_step_volume`` uses the last three. The two
+log-pdfs make the discrete Mie/Rayleigh choice differentiable: its gradient arrives through the
+DiCE score ``log p_mie + hg_logpdf`` versus ``log(1 - p_mie) + rayleigh_logpdf``, not pathwise.
 
-``compute_rayleigh_scatter_direction`` is the exception: it has NO caller anywhere in the package.
-The loop takes its Rayleigh direction from
-:func:`lucid.simulation.optics.compute_scatter_direction` instead, which builds the same sample
-from ``solve_rayleigh_inverse_cdf``. It is kept as the
-wavelength-module counterpart, not because anything runs it.
-
-That distinction is the whole point of this docstring. It previously read "They are NOT currently
-called in the main simulation propagation loop", which was true of one function and false of the
-other four — an invitation to delete the Mie channel.
+``compute_rayleigh_scatter_direction`` has no caller in the package: the loop takes its Rayleigh
+direction from :func:`lucid.simulation.optics.compute_scatter_direction`, which builds the same
+sample from ``solve_rayleigh_inverse_cdf``. Only that function is unused; the Mie channel is live.
 """
 import jax
 import jax.numpy as jnp

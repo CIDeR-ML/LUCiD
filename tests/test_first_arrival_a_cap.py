@@ -1,21 +1,13 @@
-"""Where the first-arrival time NLL's saturation cap actually lives.
+"""The first-arrival time NLL's saturation cap lives in `_log1mexp`, at -1e-7.
 
-`first_arrival_window_nll` used to clamp its order-statistic exponent at the call site::
+`first_arrival_window_nll` passes its order-statistic exponent to `_log1mexp` unclamped, so that
+cap is the term's only saturation point. A caller-side clamp closer to zero than -1e-7 (e.g.
+-1e-9) would be dead code that advertises the wrong number, since `_log1mexp`'s own cap always
+dominates. The cap is active, not a formality: -1e-7 and -1e-9 differ by log(100) = 4.6 nats on
+every PMT that sits on it.
 
-    a = jnp.minimum(n * (jnp.log(Shi) - jnp.log(Slo)), -1e-9)
-
-and `_log1mexp` then clamped the same quantity again, to -1e-7. The second clamp is a hundred
-times larger, so it always won: the call-site line was dead and the operative saturation point
-was never the one the code advertised. Anyone reading the term — or tuning that constant — would
-have had the wrong number.
-
-It matters because the cap is ACTIVE, not a formality. The two caps differ by
-log(1e-7 / 1e-9) = 4.6 nats on every PMT that sits on one, and a rebuild of this loss honouring
-the written -1e-9 came out 1.4% above the library's own value on a real SK-like event.
-
-The clamp is gone and the removal is bit-identical, which is what these tests pin: the
-equivalence that licensed the deletion, and the cap's real location and value so a future edit to
-`_log1mexp` cannot move it silently.
+These tests pin that equivalence and the cap's location and value, so an edit to `_log1mexp`
+cannot move it silently.
 """
 import jax.numpy as jnp
 import numpy as np
@@ -27,7 +19,7 @@ CAP = -1e-7          # the cap `_log1mexp` applies, and therefore the term's rea
 
 
 def test_the_removed_clamp_was_redundant():
-    """min(min(x, -1e-9), -1e-7) == min(x, -1e-7), which is why deleting it changed nothing."""
+    """min(min(x, -1e-9), -1e-7) == min(x, -1e-7): a caller-side -1e-9 clamp is a no-op."""
     x = jnp.asarray(np.concatenate([
         np.linspace(-50.0, 0.0, 20001),
         [-1e-5, -1e-6, -1e-7, -1e-8, -1e-9, -1e-10, -0.0, 0.0, 1e-9, 1e-3, 5.0]]))
@@ -37,10 +29,10 @@ def test_the_removed_clamp_was_redundant():
 
 
 def test_log1mexp_saturates_at_1e_minus_7_not_1e_minus_9():
-    """The value that a reader of the call site would have predicted is NOT the one produced."""
+    """`_log1mexp` saturates at log(1e-7), not at the log(1e-9) a -1e-9 clamp would suggest."""
     got = float(_log1mexp(jnp.asarray(-1e-9)))
     assert got == pytest.approx(float(np.log(1e-7)), abs=1e-4)      # -16.12, the real cap
-    assert abs(got - float(np.log(1e-9))) > 4.0                     # -20.72, the advertised one
+    assert abs(got - float(np.log(1e-9))) > 4.0                     # -20.72, what a -1e-9 cap would give
 
 
 @pytest.mark.parametrize('a', [-1e-6, -1e-8, -1e-9, -1e-12, 0.0])
@@ -52,7 +44,7 @@ def test_log1mexp_is_finite_and_monotone_through_the_cap(a):
 
 
 def test_the_term_still_computes_on_a_small_hand_case():
-    """A end-to-end guard so a refactor of the clamp cannot break the caller's shape/finiteness.
+    """End-to-end guard: a refactor of the cap must not break the caller's shape or finiteness.
 
     Two sensors, three photons. Sensor 0 is lit and its window straddles the predicted arrivals;
     sensor 1 is unlit and must contribute exactly zero.

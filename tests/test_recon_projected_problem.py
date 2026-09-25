@@ -1,33 +1,23 @@
-"""The projected reconstruction fit, moved onto the shared loop without changing what it computes.
+"""ProjectedReconProblem on the shared Gauss-Newton loop reproduces the hand-written projected fit.
 
-``analysis/paper/utils/pipeline.py`` carried a hand-written damped Gauss-Newton loop —
-`_fit_track_projected`, the fourth copy in the tree — whose only genuine difference from
-``fit_track`` was a projector applied to the time term. A projector is a property of the PROBLEM,
-so the copy came out as :class:`lucid.fitting.recon.ProjectedReconProblem` and the loop is now the
-shared one.
+``_original`` below is a transcription of the damped Gauss-Newton loop that ``_fit_track_projected``
+in ``analysis/paper/utils/pipeline.py`` used to carry, differing from ``fit_track`` only by a
+projector on the time term. It is the reference the library composition
+(:class:`lucid.fitting.recon.ProjectedReconProblem` + ``gauss_newton``) must reproduce, kept here
+so a reviewer can read both. The problem is analytic (no simulator, detector or SIREN weights), so
+the test runs in CI.
 
-This file is the gate for that move. It transcribes the ORIGINAL loop verbatim as a reference
-implementation and requires the library composition to reproduce it exactly, on a problem posed
-analytically — no simulator, no detector, no SIREN weights, so it runs in CI, which is where the
-tripwire's lesson says a gate has to run.
+Design notes, each guarding against a comparison that passes vacuously:
 
-The reference is kept in this file on purpose. The original will be deleted from `pipeline.py`, and
-a gate that compares the new code against nothing is not a gate; a gate that compares it against a
-copy of the old code, written down where a reviewer can read both, is.
-
-Design notes, each of which is a way this could have been useless:
-
-* the model is posed in the same SCALE9-scaled spirit as ``tests/_recon_analytic_model.py``: the projector is
-  built in scaled coordinates, so a problem posed directly in theta-space would exercise a
-  projector pointing somewhere else;
+* the model is posed in SCALE9-scaled coordinates, as in ``tests/_recon_analytic_model.py``: the
+  projector is built in scaled coordinates, so a problem posed directly in theta-space would
+  exercise a projector pointing somewhere else;
 * the Fishers are PSD by construction. The original damps with ``lam * np.diag(Fs)`` UNCLIPPED
-  while :func:`lucid.fitting.transforms.damped_matrix` clips the Marquardt diagonal at zero — identical
-  for any PSD metric, which is what a Gauss-Newton Fisher is, and the difference would otherwise
-  be attributed to the refactor rather than to the damping convention;
-* the charge and time Fishers DIFFER, and the time one is deliberately near-singular along the
-  soft direction. If they were equal, or if the time term were well conditioned in that direction,
-  the projector would have almost nothing to do and the comparison would pass with it removed —
-  ``test_the_projector_actually_bites`` is the guard against exactly that.
+  while :func:`lucid.fitting.transforms.damped_matrix` clips the Marquardt diagonal at zero; the
+  two agree only for a PSD metric, so a non-PSD one would test the damping convention instead;
+* the charge and time Fishers DIFFER, and the time one is near-singular along the soft direction.
+  Otherwise the projector would have almost nothing to do and the comparison would pass with it
+  removed; ``test_the_projector_actually_bites`` guards against that.
 """
 import numpy as np
 import pytest
@@ -98,7 +88,7 @@ def _soft_P(th):
 
 def _original(start, niters=NITERS, refresh=REFRESH, polyak_w=POLYAK,
               lr=LR, lr_final=LR_FINAL, lam=LAM, ridge_i=RIDGE_I, trust=TRUST):
-    """`_fit_track_projected` as it stood, verbatim but for the injected grads/fishers."""
+    """The original hand-written `_fit_track_projected` loop, verbatim but for the injected grads/fishers."""
     S = SCALE9
     th = np.asarray(start, float)
     gq, gt = _grads(th)
@@ -139,15 +129,10 @@ def _library(start, **kw):
     return res['theta'], res['history']
 
 
-# `_original` is a float64 numpy transcription of the pre-move loop. The library's step is now the
-# float32 JAX transformation, so the comparison is at float32 tolerance rather than exact --
-# MEASURED at 3.82e-06 on this problem, bounded here at 1e-5.
-#
-# What the comparison is for has not changed: it asks whether moving the projector into
-# `ProjectedReconProblem` preserved the ALGORITHM, and a difference of 4e-06 over 24 steps is the
-# arithmetic, not the algorithm. A projector applied in the wrong place, or a Fisher assembled in
-# the wrong order, moves the trajectory by far more than this -- which is what
-# `test_the_projector_actually_bites` demonstrates by removing it and watching the answer change.
+# `_original` is float64 numpy; the library's step is float32 JAX, so the comparison is at float32
+# tolerance (measured 3.8e-06 on this problem). That is arithmetic, not algorithm: a projector
+# applied in the wrong place or a Fisher assembled in the wrong order moves the trajectory by far
+# more, as `test_the_projector_actually_bites` shows by removing the projector.
 ORIGINAL_RTOL = 1e-5
 
 
@@ -171,7 +156,7 @@ def test_it_reproduces_across_cadences(niters, refresh, polyak_w):
 
 
 def test_the_comparison_could_have_failed():
-    """The fit must actually move, or exact equality is a statement about two static arrays."""
+    """The fit must actually move, or agreement is a statement about two static arrays."""
     _, traj = _original(_START)
     assert np.abs(np.diff(traj, axis=0)).max() > 1e-6
     assert np.abs(traj[-1] - traj[0]).max() > 1e-3

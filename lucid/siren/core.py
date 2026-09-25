@@ -259,25 +259,23 @@ def make_power_law_fn(nphot: dict) -> Callable:
 
     Two forms:
 
-    ``'A*E^B+C'`` (default) -- the shipped fit. It came from an UNWEIGHTED least squares on RAW
-      COUNTS over a 667x energy span, which leaves the 400-1800 MeV analysis band with ~0.006% of
-      the squared weight. Measured against its own training table it is rms 6.5% and **-70% at
-      150 MeV**, and it crosses zero near 137 MeV -- hence the clamp.
+    ``'A*E^B+C'`` (default) -- an UNWEIGHTED least squares on RAW COUNTS, so it is set by the
+      high-energy end of the table and can be badly wrong at low energy. It crosses zero near
+      137 MeV, hence the clamp at 0.
 
     ``'logpoly'`` -- ``N = exp(sum_k c_k t^k)``, ``t = (ln E - u0)/du``, degree 7. Fitted with
-      equal FRACTIONAL weight at every energy, so it is accurate where the analysis lives: rms
-      0.043%, band 0.034%. Strictly positive and C-infinity, so it needs no clamp and is safe to
-      differentiate twice.
+      equal FRACTIONAL weight at every energy. Strictly positive and C-infinity, so it needs no
+      clamp and is safe to differentiate twice.
 
-    THE CENTRED BASIS IS LOAD-BEARING. In a raw ``ln E`` basis the coefficients span 4.5e6 and
-    Horner sums terms of magnitude ~2000 to produce ``lnN ~ 12``, losing ~0.092% to float32
-    cancellation -- the whole error budget. Centred, float32 matches float64.
+    THE CENTRED BASIS IS LOAD-BEARING. In a raw ``ln E`` basis Horner sums large terms of
+    alternating sign to produce ``lnN ~ 12``, and float32 cancellation then costs more than the
+    fit error. Centred, float32 matches float64.
 
     SELECTED BY THE PRESENCE OF ``coeffs``, not by the metadata's ``form`` field. The downloaded
     model metadata does not carry them: the two water models get theirs from the repository's
     ``data/water/<particle>/nphot.json``, overlaid by ``SIRENPredictor`` at load. A model with no
-    such file -- a third-party table, or any non-water material -- loads on the power law as it
-    always did, with a warning.
+    such file -- a third-party table, or any non-water material -- loads on the power law, with a
+    warning.
     """
     form = str(nphot.get('form', 'A*E^B+C'))
     if 'coeffs' in nphot:
@@ -298,13 +296,9 @@ def make_power_law_fn(nphot: dict) -> Callable:
         return _logpoly
 
     if form == 'A*E^B+C':
-        # LOUD, not silent. This is the unweighted raw-counts curve_fit, which on the water muon
-        # table missed its own training data by rms 6.5% -- 70% at 150 MeV, +0.86% across the
-        # analysis band -- and crossed zero at 137 MeV. A model reaching it is either one with no
-        # shipped nphot.json (any non-water material, or a third-party table), or a water model
-        # whose shipped file was not found -- and in that case the run silently loses a
-        # correction it was supposed to have. Warned rather than raised, because a model with no
-        # coefficients to offer must still load; warned once per MODEL, not per process, so a
+        # Warn: a water model landing here means its shipped nphot.json was not found and the run
+        # would otherwise silently lose the logpoly correction. Warned rather than raised, because
+        # a model with no coefficients must still load; once per MODEL, not per process, so a
         # second model falling back is still named.
         who = nphot.get('_origin', 'this model')
         if who not in _WARNED_LEGACY_NPHOT:

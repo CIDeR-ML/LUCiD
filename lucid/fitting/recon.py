@@ -1,7 +1,6 @@
 """9-parameter track reconstruction — the consistent Fisher-Gauss-Newton recipe.
 
-Ported from the recon study's ``gn_fisher_recon.py``, brought into the library in fa233b6
-(the study's own design notes are not part of this repository): fit the track
+Ported from the recon study's ``gn_fisher_recon.py``: fit the track
 ``θ = [E, x, y, z, sinθ, cosθ, sinφ, cosφ, t0]`` against the per-PMT (charge, first-arrival
 time) observables by Gauss-Newton on a PSD Fisher metric
 
@@ -30,12 +29,10 @@ slowest cell's P90 + the last-40 Polyak window; ``readout='polyak'`` (median tie
 noise fluctuations where the vtx is far; the last-40 average suppresses that). The ~15cm vertex floor
 is SIREN-emitter-bias-limited (readout-probe-proven: min-data-loss readout = Polyak = the loss
 minimum; the ~4cm "oracle" is an unreachable fluctuation toward truth), NOT optimizer-limited.
-DELTA=1.0. SIGMA is the per-photon time resolution and SHOULD TRACK THE TTS OF THE DATA: the
-paper pipeline ships ``tts=2.1`` and passes ``sigma=2.1`` (``pipeline.py`` DEFAULT_CONFIG and its
-``gn`` block), so 2.1 is the published value. This docstring read "SIGMA=2.5(=TTS)" and the
-constructor still defaults to 2.5, from an earlier TTS; the default is kept because changing it
-would move every caller that does not pass sigma explicitly, but it is NOT what the paper ran.
-Pass sigma with the tts you are actually simulating.
+DELTA=1.0. SIGMA is the per-photon time resolution and must match the TTS of the data: the paper
+pipeline uses ``tts=2.1`` with ``sigma=2.1`` (``analysis/paper/utils/pipeline.py`` DEFAULT_CONFIG
+and its ``gn`` block). The constructor default of 2.5 is kept so callers that omit sigma do not
+change behaviour, but it is NOT the published value: pass sigma for the tts you are simulating.
 """
 import numpy as np
 import jax
@@ -45,21 +42,14 @@ from lucid.detector_params import ParticleParams
 from lucid.losses import counts_loss, first_arrival_window_nll
 from lucid.fitting.gn import gauss_newton
 
-# Natural per-parameter scales, tuned in the recon study and ported in fa233b6:
-# ~50 MeV, 0.2 m, 0.02 cos-units, 0.2 ns.
+# Natural per-parameter scales: ~50 MeV, 0.2 m, 0.02 cos-units, 0.2 ns.
 SCALE9 = np.array([50., .2, .2, .2, .02, .02, .02, .02, .2])
 PARAM_NAMES = ['E', 'x', 'y', 'z', 'sin_t', 'cos_t', 'sin_p', 'cos_p', 't0']
 
 # The validated Fisher-GN recipe for :func:`fit_track`, as a dict for callers that want to pass it
-# through rather than restate nine keyword arguments.
+# through rather than restate nine keyword arguments (`tutorials/track_optimization.ipynb` uses it).
 #
-# It lived in `lucid/fitting/sweep.py`, a characterisation driver with no caller in the repo and no
-# published number behind it, which was removed. The recipe was the one part of that module
-# anything actually used -- `tutorials/track_optimization.ipynb` imported it and nothing else --
-# so it moves here, beside the function it configures, rather than going with the driver.
-#
-# NOT simply `fit_track`'s defaults as data, and the two differences are the reason this needs a
-# test rather than a comment:
+# NOT simply `fit_track`'s defaults as data; the two differences are why a test guards it:
 #
 #   * `trust=3.0` deliberately PINS what the signature leaves as `'auto'`;
 #   * `time_weight` is NOT a `fit_track` argument at all -- it configures the MODEL's time term.
@@ -164,8 +154,8 @@ class ReconProblem:
     * **The iterate stays float64 numpy.** ``jax_enable_x64`` is never enabled, so a step applied
       in the calibration problem's float32 would give a different trajectory.
 
-    ``loss`` is ``None``: the loop records it for diagnostics, and ``fit_track`` never evaluated a
-    scalar objective inside its iteration. ``readout='ming'`` uses ``‖S·g‖``, not the loss.
+    ``loss`` is ``None``: the loop only records it for diagnostics, so no scalar objective needs
+    to be evaluated here. ``readout='ming'`` uses ``‖S·g‖``, not the loss.
     """
 
     def __init__(self, model, obs_counts, obs_times, keys, fdh, fisher_mode='ad'):
@@ -206,21 +196,14 @@ class ProjectedReconProblem:
     term keeps its full transverse, directional and stiff-``t0`` power and loses only its component
     along the ray it cannot resolve.
 
-    This ran as a hand-written Gauss-Newton loop in ``analysis/paper/utils/pipeline.py`` — the
-    fourth copy of a loop this package now writes once. Its one genuine difference from
-    :class:`ReconProblem` is the projector, and a projector is a property of the PROBLEM, not of
-    the optimizer, which is why extracting it removes the copy rather than relocating it.
-
-    Two consequences of living behind the shared loop, both deliberate:
+    Its one difference from :class:`ReconProblem` is the projector, a property of the problem
+    rather than the optimizer. Two consequences of living behind the shared loop, both deliberate:
 
     * **Scaling happens here, not in the loop.** ``P`` acts on the SCALED time gradient, and
       projection does not commute with scaling, so this returns ``(g, H)`` already scaled and
-      projected and is driven with ``scale=None``. ``accumulate`` then applies ``S`` to the step,
-      which is exactly where the original loop applied it.
-    * **``gnorm`` is the PROJECTED gradient norm.** The original reported ``‖S(g_Q + g_T)‖``, the
-      unprojected sum. The projected one is the quantity the step is actually built from, so it is
-      the honest convergence diagnostic; it differs from the old number and ``readout='ming'``
-      would pick a different iterate.
+      projected and is driven with ``scale=None``. ``accumulate`` then applies ``S`` to the step.
+    * **``gnorm`` is the PROJECTED gradient norm**, the quantity the step is built from, not the
+      unprojected ``‖S(g_Q + g_T)‖``; ``readout='ming'`` selects on it.
 
     Parameters
     ----------
@@ -342,21 +325,14 @@ class ReconModel:
     ``pred(track, key) -> (log_w, flat_times, flat_indices, total_charge)`` is a track
     simulator from ``setup_event_simulator(..., hit_mode='per_photon')``.
 
-    ``tot_n_scale`` is a scalar charge normalisation, and **leave it at 1.0**. It exists because
-    an early SIREN muon emitter over-predicted total charge and was corrected by a fitted 0.982;
-    that value is obsolete, and quoting it here previously read as a knob worth tuning.
-
-    Measured on 30 paired events at the published working point: the constant moves ENERGY ALONE -- 63 sigma on energy, under
-    1.5 sigma on vertex, direction and t0 -- with slope -884 MeV per unit. At 1.0 the residual
-    energy bias is -0.72% of a 1 GeV muon, so the value that would zero it is 0.992: a 0.8%
-    correction, well inside the 2.2% energy resolution. The forward is self-consistent and 1.0 is
-    the right answer; anything else is fitting a scalar to noise.
+    ``tot_n_scale`` is a scalar charge normalisation; **leave it at 1.0**. It moves the fitted
+    energy alone (about -884 MeV per unit; vertex, direction and t0 barely change), and at 1.0 the
+    residual energy bias (-0.72% at 1 GeV) is well inside the 2.2% energy resolution. The forward
+    is self-consistent, so tuning it fits a scalar to noise.
     """
 
-    # NOTE: sigma=2.5 is a LEGACY default, not the published value. The paper pipeline passes
-    # sigma=2.1 to match its own tts=2.1; see the module docstring. Left as 2.5 so callers that
-    # never pass sigma keep their current behaviour, but a new caller should pass the tts it is
-    # simulating rather than inherit this.
+    # sigma=2.5 is a legacy default, not the published 2.1 (see the module docstring): pass the
+    # tts being simulated rather than inherit it.
     def __init__(self, pred, num_detectors, sigma=2.5, delta=1.0, tot_n_scale=1.0,
                  time_weight=1.0, energy_from_scale=True, nphot_fn=None,
                  energy_scale_mode='simtotal'):
@@ -490,11 +466,9 @@ def fit_track(model, obs_counts, obs_times, start, *, nkeys=8, niters=150, lr=4.
     diagonal is inflated by per-sensor estimation variance ∝ 1/nkeys) and ~2.8× faster, and is
     PSD by construction (NOT the indefinite raw autodiff Hessian). ``'fd'`` keeps the legacy central
     finite-difference metric (``ReconModel.fisher``). ⚠️ The AD metric is ~1–137× SMALLER per param
-    than FD, so the FD-tuned ``lr=8`` OVERSHOOTS with ``'ad'`` and the step/damping had to be
-    retuned for AD. That retuning is DONE and is what this function's defaults already are:
-    ``lr=4.0``, ``lr_final=1.5``, ``refresh=8``, the recipe named in the module docstring. The
-    ``lr≈1`` and ``refresh=1`` figures below were waypoints from that exercise, not
-    recommendations -- following them moves off the published working point.
+    than FD, so the FD-tuned ``lr=8`` OVERSHOOTS with ``'ad'``; this function's defaults
+    (``lr=4.0``, ``lr_final=1.5``, ``refresh=8``) are the AD-tuned recipe named in the module
+    docstring.
 
     ``verbose=True`` shows a live ‖g‖ progress bar and prints a result table (pass ``truth`` — a
     9-vector — to include per-parameter errors).
@@ -513,12 +487,8 @@ def fit_track(model, obs_counts, obs_times, start, *, nkeys=8, niters=150, lr=4.
     def G(th):
         return np.mean([np.asarray(model.grad(th, oc, ot, k)) for k in keys], 0)
 
-    # The loop itself is lucid.fitting.gn.gauss_newton — the same one the calibration fit runs.
-    # ReconProblem supplies (g, H, loss) and owns the two policies the loop must not: keys fixed
-    # across iterations (common random numbers, the opposite of calibration's redraw-per-step) and
-    # a float64 numpy iterate. Everything below the seam — SCALE9 preconditioning, the Marquardt +
-    # Levenberg + jitter damping, the lr anneal, the trust clip, the refresh cadence with its
-    # mid-run switch, the non-finite reject and all three readouts — is shared, not duplicated.
+    # The loop is lucid.fitting.gn.gauss_newton, shared with the calibration fit. ReconProblem
+    # supplies (g, H, loss) and owns the recon-specific policies (fixed keys, float64 iterate).
     prob = ReconProblem(model, oc, ot, keys, fdh, fisher_mode=fisher_mode)
     pbar = report.progress(range(niters), desc='track fit', total=niters, verbose=verbose)
     ticks = iter(pbar)
@@ -541,8 +511,7 @@ def fit_track(model, obs_counts, obs_times, start, *, nkeys=8, niters=150, lr=4.
     if verbose:
         report.emit(report.track_table(out, truth=truth, dir_of=vec9_dir))
     if hist:
-        # n_rejected travels with the fit: a refused step used to leave no trace at all, so how
-        # often the guard fires on real events could not be read off any output.
+        # n_rejected: how often the non-finite guard refused a step, otherwise invisible.
         return out, dict(traj=np.array(traj), gnorm=np.array(gnorms),
                          best_iter=int(np.argmin(gnorms)),
                          n_rejected=int(res.get('n_rejected', 0)),

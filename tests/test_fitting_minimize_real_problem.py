@@ -1,21 +1,16 @@
 """`minimize` against `gauss_newton` on the REAL CalibrationProblem, not a toy.
 
-The toy in `test_fitting_minimize.py` establishes that the two drivers are the same optimizer.
-It cannot establish that they stay the same when the problem is the real one, because the toy
-hands back float64 numpy and the real problem does not. `CalibrationProblem` returns `jnp`
-einsums, keeps a float32 iterate, profiles the per-PMT gains inside `grad_metric_loss`, and draws
-its forward at a key that depends on the STEP INDEX. Every one of those is a place the new driver
-could differ while the toy stayed green:
+The toy in `test_fitting_minimize.py` hands back float64 numpy; `CalibrationProblem` returns `jnp`
+arrays, keeps a float32 iterate, profiles the per-PMT gains inside `grad_metric_loss`, and draws
+its forward at a key that depends on the STEP INDEX. Each is a place the drivers could differ
+while the toy agrees:
 
-* jnp arrays crossing the seam — the hazard the driver asserts against, since a jax float32 array
-  reaching `accumulate` downcasts and retypes a numpy iterate absorbingly;
-* a float32 iterate, where the ~2.8e-07 float32 solve floor is not obviously negligible;
-* `forward_key(step)` — if the two drivers request different step indices they fit different
-  photon draws, and no comparison of the ANSWER would tell you why.
+* a jax float32 array reaching `accumulate` downcasts and retypes a numpy iterate absorbingly;
+* a float32 iterate, whose solve floor is not obviously negligible;
+* `forward_key(step)`: different step indices fit different photon draws, which no comparison of
+  the ANSWER would explain.
 
-The forward here is an analytic stub rather than the photon simulator, so this runs on CPU in
-seconds. What is real is everything between the forward and the iterate, which is where the
-drivers could diverge.
+The forward is an analytic stub so this runs on CPU; everything between forward and iterate is real.
 """
 import numpy as np
 import jax

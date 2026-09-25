@@ -2,9 +2,8 @@
 
 Scope: what the class ADDS on top of the simulator — the key arithmetic, the (S, NS) row
 ordering, draw averaging, and the equivalence of the serial and mapped dispatch. The physics comes
-from the simulator and is not what is tested here -- the library's agreement with the paper's
-calibration engine was verified when it was extracted and is not continuously guarded -- so these tests
-use a stub simulator and run in milliseconds.
+from the simulator and is not tested here, so these tests use a stub simulator and run in
+milliseconds.
 
 The stub is deliberately sensitive to all three inputs the assembly must route correctly — source,
 wavelength (through the DetectorParams the parameterisation builds) and key. A stub that ignored
@@ -80,9 +79,7 @@ def test_shape_and_row_ordering():
 def test_key_arithmetic_matches_the_reference_scheme():
     """Singleton: PRNGKey(kb + wl). Grouped source s: PRNGKey(kb + 1000*s + wl).
 
-    Pinned because the whole reproducibility story rests on keys being pure functions of the base
-    and the indices — and because a per-seed offset was once missing from exactly this kind of
-    stream, leaving an ensemble blind to its own error.
+    Pinned because reproducibility rests on keys being pure functions of the base and the indices.
     """
     fwd, _ = _forward()
     single, group = fwd.keys(5000)
@@ -124,9 +121,8 @@ def test_single_draw_average_is_the_draw():
 def test_serial_and_mapped_dispatch_agree():
     """The dispatch strategy is an execution choice and must not change the answer.
 
-    The campaign shards seven isotropic sources across GPUs; off that node the same code takes a
-    serial path. If those disagreed, a result would depend on how many devices happened to be
-    visible.
+    Multi-device runs shard sources across GPUs; a single device takes the serial path. If those
+    disagreed, a result would depend on how many devices happened to be visible.
     """
     ser, p = _forward(map_fn=None)
     vmapped, _ = _forward(map_fn=lambda fn, ax: jax.vmap(fn, in_axes=ax))
@@ -146,9 +142,8 @@ def test_single_source_needs_no_grouped_dispatch():
 # --------------------------------------------------------------------------------------------
 # The estimator's two closed forms. Both are one line of arithmetic, and both are load-bearing:
 # the gauge is what makes the gains identifiable at all, and the Neyman weight is the whole reason
-# the fixed point sits at truth under a re-drawn Monte-Carlo model. Until now neither had a direct
-# test — they were gated only by the slow bit-exact engine pin, which cannot say WHICH property
-# broke when it moves.
+# the fixed point sits at truth under a re-drawn Monte-Carlo model. They are tested directly here
+# because the slow bit-exact engine pin cannot say WHICH property broke when it moves.
 # --------------------------------------------------------------------------------------------
 
 def _gain_case():

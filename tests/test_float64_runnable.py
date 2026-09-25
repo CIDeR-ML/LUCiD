@@ -1,24 +1,10 @@
 """The propagation primitives must run under `jax_enable_x64`, not only at float32.
 
-Why this exists
----------------
-`jax_enable_x64` is never switched on in this repository, so every gradient the reconstruction
-takes is float32. That is a performance choice, not a correctness one -- and it hid a defect that
-made float64 IMPOSSIBLE rather than merely unused:
-
-    lucid/propagation/cylinder.py   parallel_side_branch  -> jnp.array(LARGE, dtype=jnp.float32)
-    lucid/propagation/sphere.py     no_intersection_branch -> jnp.array(LARGE, dtype=jnp.float32)
-
-`lax.cond` requires both branches to return identical types. The sibling branch's `tval_` follows
-the input precision. With x64 off everything is float32 and the two agree by accident; with x64 on
-the sibling becomes float64 and JAX raises
-
-    TypeError: true_fun output and false_fun output must have identical types,
-               got ... float32[] vs. float64[]
-
-It surfaced while trying to compare a gradient at float32 against the same gradient at float64 --
-the direct test of whether float32 cancellation was corrupting it. The comparison could not run at
-all, which is a poor reason not to be able to check your own arithmetic.
+`lax.cond` requires both branches to return identical types. x64 is off in normal use, so a branch
+that hard-codes a float32 (or int32) result agrees with its sibling only by accident; with x64 on
+the sibling widens and JAX raises a type-mismatch `TypeError`. That would make it impossible to
+check a float32 gradient against the same gradient at float64. Each test drives the branch that
+returns a constant and the one that computes, and checks both come back in the same precision.
 
 These tests set x64 in a SUBPROCESS. The flag is process-global and must be set before jax touches
 an array, so it cannot be toggled inside a session that has already imported and used jax without
@@ -54,10 +40,10 @@ def _run_x64(body: str):
 
 
 def test_cylinder_wall_intersection_runs_at_float64():
-    """The branch that used to pin float32. A ray along +z takes the parallel branch."""
+    """Both branches of `intersect_cylinder_wall` return float64 under x64; a ray along +z takes the parallel branch."""
     _run_x64("""
         from lucid.propagation.cylinder import intersect_cylinder_wall
-        # purely axial: |a| < 1e-12 selects parallel_side_branch, the one that was pinned
+        # purely axial: |a| < 1e-12 selects parallel_side_branch, which returns the LARGE constant
         o = jnp.array([0.0, 0.0, -5.0]); d = jnp.array([0.0, 0.0, 1.0])
         hit, t = intersect_cylinder_wall(o, d, 5.0, 20.0)
         assert t.dtype == jnp.float64, t.dtype
@@ -70,11 +56,11 @@ def test_cylinder_wall_intersection_runs_at_float64():
 
 
 def test_sphere_intersection_runs_at_float64():
-    """The same defect in the sphere primitive; a miss takes the pinned branch."""
+    """Both branches of `intersect_sphere` return float64 under x64; a miss takes the constant branch."""
     _run_x64("""
         from lucid.propagation.sphere import intersect_sphere
         c = jnp.array([0.0, 0.0, 0.0])
-        # a MISS takes `no_intersection_branch`, the one that was pinned
+        # a MISS takes `no_intersection_branch`, which returns the LARGE constant
         o = jnp.array([0.0, 0.0, -50.0]); d = jnp.array([1.0, 0.0, 0.0])
         hit, t = intersect_sphere(o, d, c, 5.0)
         assert t.dtype == jnp.float64, t.dtype
@@ -88,12 +74,11 @@ def test_sphere_intersection_runs_at_float64():
 
 
 def test_box_grid_assignment_runs_at_float64():
-    """The third pin of the same class, and the one that made the fix incomplete.
+    """Box grid assignment builds under x64: both `lax.cond` branches return int32.
 
-    `assign_off_surface` returns int32 while its sibling builds `indices` around
-    `jnp.argmin(...)`, which is int64 once x64 is on -- so `lax.cond` rejected the pair and box
-    geometries could not be built in double precision at all. Unlike the cylinder and sphere
-    versions of the same pin, which survive because every index component is cast to int32.
+    `assign_off_surface` returns int32 while its sibling builds indices from `jnp.argmin(...)`,
+    which is int64 once x64 is on, so the sibling must cast to int32 or box geometries cannot be
+    built in double precision.
     """
     _run_x64("""
         from lucid.geometry import generate_detector
@@ -110,7 +95,7 @@ def test_box_grid_assignment_runs_at_float64():
 
 
 def test_float32_is_unchanged_by_the_dtype_fix():
-    """The fix must be invisible at float32, which is the precision everything actually runs in."""
+    """The dtype fix must be invisible at float32, the precision production actually runs at: the parallel branch still returns a finite float32 miss."""
     import jax.numpy as jnp
     import numpy as np
 

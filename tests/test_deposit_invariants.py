@@ -1,11 +1,10 @@
 """Invariants of the surface deposit that no aggregate check can see.
 
-Each test here was shown to FAIL on a tree with its piece removed before it was trusted. On SK_like
-at 100k photons per population: without the survival product 67,337 grazing photons deposit more
-than they carry; without the ahead gate, photons leaving a PMT put 38,447 deposits on sensors behind
-them (the tube they left and its neighbours); without first-entry 25,021 grazing photons stop on no
-sensor's surface. These tests use fewer photons and the smaller WCTE_like tank so they stay cheap,
-and each checks its population is non-empty so a geometry change cannot make it pass vacuously.
+Each propagator test guards one piece of the deposit: without the first-hit survival product,
+grazing photons deposit more than they carry; without the ahead gate, a photon leaving a PMT
+deposits on sensors behind it (the tube it left and its neighbours); without first-entry, a
+grazing photon stops on no sensor's surface. They use the small WCTE_like tank to stay cheap, and
+each checks its population is non-empty so a geometry change cannot make it pass vacuously.
 """
 import os
 
@@ -43,7 +42,7 @@ def test_exact_time_tie_still_caps_at_one():
 def test_step_mode_gradient_survives_the_cap():
     """In step mode a candidate the ray passes inside has forward overlap EXACTLY 1, and its gradient
     comes from the straight-through surrogate. The cap clips p below 1 to keep log1p finite; a plain
-    jnp.clip has zero derivative there and silently zeroed that gradient. d(total)/dp must be 1."""
+    jnp.clip has zero derivative there and would zero that gradient. d(total)/dp must be 1."""
     import jax
     w = jnp.array([[1.0], [0.0]]); t = jnp.array([[1.0], [2.0]])
     g = np.asarray(jax.grad(lambda w_: first_hit_survival(w_, t).sum())(w))

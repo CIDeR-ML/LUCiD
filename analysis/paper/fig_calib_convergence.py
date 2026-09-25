@@ -15,14 +15,6 @@ into typed arguments by ``utils/calib_run.py``, which fits every seed in this pr
 ``lucid.fitting``. Every run records the settings it used into its ``.npz``, so a saved run can be
 checked without trusting this script.
 
-This replaced a subprocess-per-seed launch of the campaign's engine, configured by building an
-environment. Two things were wrong with that and neither was fixable from here: the environment
-was a partial description of the run: of the 38 variables it read across two modules the recipe
-named 22, and the other 16 came from the caller's shell — four of them changing the estimator
-rather than a cost. And each seed re-traced and re-compiled
-the whole forward. The new path was verified bit-for-bit against the engine when it replaced
-it; the engine and that check are not in this repository.
-
 Cost warning: the published run is 3 seeds x 600 Gauss-Newton iterations on the full SK-like
 geometry. Use ``--steps`` to shorten it for a smoke test; the figure will not be the paper's.
 
@@ -43,15 +35,8 @@ FIGURE = 'calib_convergence'
 def generate_data(seeds, steps, out_data):
     """Fit every seed in this process, through the library, and write one .npz each.
 
-    Was: one subprocess per seed against the campaign's engine, configured by building an
-    environment. That is gone. The environment could only ever be a partial description: of the
-    38 variables the run read, the recipe named 22 and the other 16 came from the caller's shell,
-    four of them changing the estimator rather than a cost. And a subprocess per seed meant
-    re-tracing and re-compiling the entire forward for every one of them.
-
-    Now the configuration is typed arguments and the seeds share a compiled forward. This path was
-    verified bit-for-bit against the engine when it replaced it, on the trajectory, the readout,
-    the objective and the gain map; that check is not shipped.
+    The configuration comes only from ``CALIB_RECIPE`` as typed arguments, and every seed shares
+    one simulator, so the forward is traced and compiled once.
     """
     import numpy as np
     from analysis.paper.utils import calib_run

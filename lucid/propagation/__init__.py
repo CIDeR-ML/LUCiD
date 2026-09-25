@@ -12,9 +12,8 @@ from .geometry import (
 # Import detector-specific propagation functions
 from . import cylinder, sphere, box
 
-# Bounds checks are still used; the three geometry-specific propagator factories they used to
-# sit beside are gone -- `lucid.propagation.shared.create_propagator` replaced them, as that
-# module's docstring always said it would.
+# Propagators for every geometry are built by `lucid.propagation.shared.create_propagator`;
+# only the per-geometry bounds checks are re-exported here.
 from .cylinder import cylinder_bounds_check
 from .sphere import sphere_bounds_check
 from .box import box_bounds_check

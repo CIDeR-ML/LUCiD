@@ -1,9 +1,6 @@
 """lucid.fitting.params.CalibrationParams — the theta <-> physical map.
 
-Extracted from the paper's reference calibration engine, where it lived as `build_dp`/`to_real`
-inside a figure script. That the extraction reproduces the engine's fit was verified against the
-engine when it was extracted; that check is not shipped. These tests gate the map's own properties,
-cheaply and without a simulator.
+These tests check the map's own properties, cheaply and without a simulator.
 """
 import numpy as np
 import pytest
@@ -11,7 +8,7 @@ import pytest
 from lucid.fitting.params import CalibrationParams
 
 W = 5
-WALL_R, WALL_F = 0.05, 0.55          # literature-anchored values the campaign uses
+WALL_R, WALL_F = 0.05, 0.55          # literature-anchored values
 SENS_R, SENS_F = 0.25, 0.90
 PHYS = [{'scatter_length': 100.0 + 10 * i,
          'absorption_length': 300.0 + 20 * i,
@@ -51,7 +48,7 @@ def test_bases_agree_on_physical_content():
 
 
 def test_reporting_basis_amplifies_the_diffuse_component():
-    """The ×9 lever, asserted rather than left as folklore.
+    """The fit-to-report basis change amplifies errors in the diffuse component ~9x at f = 0.90.
 
     We fit (log R, logit f) and report R·f and R·(1−f). Since
     d log(1−f)/d log f = −f/(1−f) = −9 at f = 0.90, a small error in the FITTED parameter shows up
@@ -71,14 +68,12 @@ def test_reporting_basis_amplifies_the_diffuse_component():
 
 
 def test_matches_the_reference_engines_inline_construction():
-    """theta_from_physical reproduces what the frozen campaign engine built by hand.
-
-    Guards the one part of the extraction the engine pin does NOT cover: the pin exercises to_dp
-    and to_real through the fit, but the engine still builds theta0 inline, so an inconsistency
-    here would go unnoticed until someone used the library helper and got a different start.
+    """theta_from_physical equals the hand-built theta: log of each (scatter, absorption, qe)
+    triple, then log R and logit f for wall and sensor. Exact equality catches any change of
+    ordering or transform, which would silently change every fit's starting point.
     """
     p = _params('rlogit')
-    # the reference engine's construction, transcribed
+    # the construction, written out by hand
     tvec_opt = []
     for t in PHYS:
         tvec_opt += [t['scatter_length'], t['absorption_length'], t['qe']]

@@ -8,9 +8,8 @@ rather than a property of it::
     minimize(problem, theta0, steps, tx=damped_gauss_newton(lam=0.01, mu=0.1, learning_rate=4.0))
     minimize(problem, theta0, steps, tx=optax.adam(1e-3), needs_metric=False)
 
-With the Gauss-Newton transformation it reproduces the loop ``fit_track`` ran before the two were
-merged, trajectory and refused steps included, to the float32 solve
-(``tests/test_fit_track_matches_main_loop.py``).
+With the Gauss-Newton transformation it reproduces ``fit_track``'s reference loop, trajectory and
+refused steps included, to the float32 solve (``tests/test_fit_track_matches_main_loop.py``).
 
 What stays in the driver, and why
 ---------------------------------
@@ -40,7 +39,8 @@ Two hazards this loop is written around
 jax float32 array, and since the iterate is reassigned each step the corruption is absorbing: one
 step and a float64 numpy iterate is gone for the run. ``optax.apply_updates`` does not save you —
 with ``jax_enable_x64`` off it casts to float32 too. Every update crosses back through
-``np.asarray`` here, and an assertion holds that.
+``np.asarray`` here, gated by
+``tests/test_fitting_minimize.py::test_nothing_jax_typed_reaches_accumulate``.
 
 **A rejected step must not poison the optimizer state.** With a stateful rule the transformation
 has already folded the bad gradient into its moments by the time ``reject_nonfinite`` decides. The
@@ -82,11 +82,9 @@ def minimize(problem, theta0, steps, tx, *, needs_metric=True, scale=None, max_s
     theta = theta0
     P = int(np.asarray(theta0).shape[0])
     S = np.ones(P) if scale is None else np.asarray(scale, float)
-    # A BOOLEAN mask is a mask, not a list of indices. `np.asarray(list(fix), dtype=int)` turned
-    # [True, False, True] into [1, 0, 1] -- freezing parameters 0 and 1 and leaving free exactly
-    # the ones the caller asked to freeze, with no error and a plausible-looking fit. Both
-    # conventions are now honoured explicitly, and they cannot collide: an all-bool sequence is
-    # unambiguous, and integer indices never carry dtype bool.
+    # `fix` is a boolean mask or a list of indices. A mask must not be cast straight to int:
+    # [True, False, True] would become indices [1, 0, 1] and silently freeze the wrong
+    # parameters. The two cannot collide: integer indices never carry dtype bool.
     fix = np.asarray(list(fix))
     fix = (np.flatnonzero(fix) if fix.dtype == bool else fix.astype(int))
     sw = int(refresh_switch * steps)
@@ -126,21 +124,16 @@ def minimize(problem, theta0, steps, tx, *, needs_metric=True, scale=None, max_s
             gs[fix] = 0.0
 
         prev_state = state                      # optax states are immutable pytrees
-        # `iteration` is the RAW loop index, and it is passed because a transformation's own
-        # state counter is NOT the same thing. On a refused step the state is restored
-        # below, which correctly discards a momentum buffer but would also rewind a
-        # schedule counter -- and fit_track's lr anneal has always been driven by this index,
-        # which advances whether or not the step was accepted. Without this, a fit that
-        # rejects one step anneals on a different schedule from the published one.
+        # `iteration` is the RAW loop index, which advances whether or not the step is accepted.
+        # A transformation's own state counter is NOT the same thing: restoring the state on a
+        # refused step (below) correctly discards momentum but would also rewind a schedule
+        # counter, so the lr anneal is driven by this index to stay on fit_track's schedule.
         extra = ({'metric': Hs, 'iteration': step}
                  if (needs_metric and Hs is not None) else {})
         du, state = tx.update(gs, state, np.asarray(theta), **extra)
 
-        # The jax -> numpy crossing. See the module docstring: letting a jax float32 array reach
-        # `accumulate` silently downcasts AND retypes a float64 numpy iterate, permanently.
-        # `np.asarray` IS the guard -- it always returns a numpy array, including from a jax one.
-        # An assertion after it could never fire, so none sits here; the dtype is gated by
-        # tests/test_fitting_minimize.py::test_nothing_jax_typed_reaches_accumulate.
+        # The jax -> numpy crossing (see the module docstring). `np.asarray` IS the guard: it
+        # always returns a numpy array, including from a jax one.
         du = np.asarray(du)
 
         if max_step is not None:
@@ -160,16 +153,15 @@ def minimize(problem, theta0, steps, tx, *, needs_metric=True, scale=None, max_s
         if reject_nonfinite and nxt is not None and not (
                 np.isfinite(np.asarray(theta_new)).all()
                 and np.isfinite(np.asarray(nxt[0])).all()):
-            # COUNT the refusal, so how often it happens can be read off the result rather than
-            # guessed. Diagnostic only; it changes no number.
+            # Recorded for diagnostics only; it changes no number.
             rejected.append(step)
             state = prev_state                  # do NOT keep the moments from a refused step
             if due and step + 1 < steps:
                 # The look-ahead call refreshed the metric at the REFUSED point, and a problem
                 # that caches its metric hands that one back on every later non-refresh step. A
                 # non-finite one then refuses every step after it and the fit freezes. Rebuild it
-                # at the iterate that was kept, which is where main's fit_track built it: the
-                # cadence and the step index are unchanged, and `g` stays the kept one.
+                # at the kept iterate: the cadence and the step index are unchanged, and `g`
+                # stays the kept one.
                 H = problem.grad_metric_loss(theta, step + 1, refresh=True)[1]
         else:
             theta = theta_new

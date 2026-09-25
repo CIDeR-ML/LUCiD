@@ -66,9 +66,8 @@ analysis/paper/
     calibration.py      ★ single source of truth for the CALIBRATION campaign: detector,
                           truth model, source layout, CALIB_RECIPE, LANDSCAPE_RECIPE
     calib_run.py        ★ runs one seed of the 19-parameter joint optical fit, through
-                          lucid.fitting. Typed arguments, no environment, and the seeds
-                          share a compiled forward. Verified bit-for-bit against the engine
-                          it replaced when it landed (that check is not shipped).
+                          lucid.fitting. Typed arguments, no environment variables; the
+                          seeds share one compiled forward.
     calib_plots.py      rendering for both calibration figures (plot-only)
     damping.py          the damped GN step the 2D loss-geometry figure's two halves share
                           (numpy only; see tests/test_paper_damping.py for why it is not

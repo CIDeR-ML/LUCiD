@@ -1,19 +1,16 @@
 """`ScaledProblem` must be the SAME optimisation, not merely a similar one.
 
-The claim it rests on is exact: moving the driver's coordinate preconditioner into the
-parameterisation changes where a multiply happens, not what is computed. So
+Moving the driver's coordinate preconditioner into the parameterisation changes where a multiply
+happens, not what is computed. So
 
     ScaledProblem(inner, S)  driven with scale=None
     inner                    driven with scale=S
 
-must agree to float64 round-off on a deterministic problem. That is a far stronger statement than
-"the answers are statistically compatible", and it is what makes the reparameterisation safe to
-adopt before anything moves to JAX -- it is the last change the existing float64 machinery can
-police to round-off.
+must agree to float64 round-off on a deterministic problem, a far stronger check than
+"the answers are statistically compatible".
 
-The payoff is separate and is measured elsewhere (`tests/test_float32_is_adequate.py`): once
-the iterate is O(1), float32 carries it as well as float64 carries the raw one. Here the float32
-arm is asserted only to be no worse than raw float32, because a toy cannot settle production.
+The float32 payoff (an O(1) iterate) is tested in `tests/test_float32_is_adequate.py`. Here the
+float32 arm is asserted only to be no worse than raw float32, because a toy cannot settle production.
 """
 import numpy as np
 import pytest
@@ -57,8 +54,7 @@ KW = dict(lam=LAM, mu=MU, max_step=3.0, lr=1.0, refresh=1, readout='final')
 
 # Compare TRAJECTORIES, not endpoints. Damping changes the path, not the fixed point, so after
 # enough steps both arms land on the same minimiser and an endpoint comparison passes even when
-# the scaling is wrong -- measured: a deliberate 5% scale error gave a difference of EXACTLY zero.
-# The trajectory is what the reparameterisation actually has to reproduce.
+# the scaling is wrong.
 def _raw_arm(steps=40, scale=SCALE):
     res = gauss_newton(Raw(), START.copy(), steps, scale=scale, **KW)
     return np.asarray(res['theta']), np.asarray(res['history'])
@@ -86,15 +82,9 @@ def test_scaled_coordinates_are_the_same_optimisation():
 def test_that_equivalence_test_can_fail():
     """Control: a WRONG scale must be rejected, or the test above proves nothing.
 
-    Two near-misses are folded into this control, and both had to be measured rather than
-    reasoned about:
-
-    * On the ENDPOINT a scale error is invisible (measured: exactly 0.0). Damping moves the path,
-      not the minimiser, and 40 steps is enough for both arms to arrive. Hence the trajectory.
-    * A UNIFORM rescale S -> cS is invisible even on the trajectory, because damped Gauss-Newton
-      is genuinely invariant to it: in `D A^-1 D` the c^2 from `median(diag S'HS')` cancels the
-      c^-2 from `D^-2`, leaving `[M + mu·b·diag(1/S^2)]^-1 g`. So the perturbation must be
-      NON-UNIFORM to be an error at all.
+    The perturbation must be NON-UNIFORM: damped Gauss-Newton is invariant to S -> cS (in
+    `D A^-1 D` the c^2 from `median(diag S'HS')` cancels the c^-2 from `D^-2`, leaving
+    `[M + mu·b·diag(1/S^2)]^-1 g`), so a uniform rescale is not an error at all.
     """
     bad = SCALE.copy()
     bad[0] *= 1.05                      # one component only -- see above

@@ -1,10 +1,9 @@
 """The photon-yield curve nphot(E) and how it reaches the emitter.
 
 nphot(E) is the absolute scale of the SIREN emission model, and the reconstruction differentiates
-through it. The fit that shipped with the models is an unweighted power law on raw counts that
-misses its own training table by 70% at 150 MeV; the log-log polynomial replacing it is shipped in
-the repository as data/water/<particle>/nphot.json and overlaid onto the downloaded metadata at
-load. These tests pin each step of that: which form is selected, what the shipped coefficients
+through it. The legacy power law in the downloaded metadata misfits its own training table, so a
+log-log polynomial is shipped in the repository as data/water/<particle>/nphot.json and overlaid
+onto the downloaded metadata at load. These tests pin each step of that: which form is selected, what the shipped coefficients
 evaluate to, that the file is FOUND on every supported directory layout, and that a file fitted to
 a different model is refused rather than applied.
 """
@@ -22,7 +21,7 @@ from lucid.siren.training.inference import SIRENPredictor, repo_nphot_path
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SHIPPED = {p: os.path.join(ROOT, 'data', 'water', p, 'nphot.json') for p in ('muon', 'electron')}
-# Photon yield at 1 GeV from the shipped polynomials, as recorded when the coefficients arrived.
+# Photon yield at 1 GeV from the shipped polynomials, used to pin the coefficients below.
 YIELD_1GEV = {'muon': 201927.7, 'electron': 214863.8}
 
 
@@ -139,8 +138,8 @@ def test_same_answer_for_other_materials_on_a_store_install(tmp_path):
 
 def test_the_dedx_model_beside_it_is_not_given_the_cherenkov_curve(tmp_path):
     """nphot.json belongs to the Cherenkov model (siren_training). The dE/dx model in the same
-    particle directory has its own, different nphot block; keying on the directory alone handed it
-    the Cherenkov coefficients, which the mismatch check refused -- failing every dE/dx load."""
+    particle directory has its own, different nphot block; keying on the directory alone would hand it
+    the Cherenkov coefficients, which the mismatch check refuses, failing every dE/dx load."""
     _model_tree(tmp_path)
     (tmp_path / 'data' / 'water' / 'muon' / 'nphot.json').write_text(json.dumps(
         {'coeffs': [1.0], 'for_model_legacy': {'a': 247.4, 'b': 0.99, 'c': -3.2e4}}))

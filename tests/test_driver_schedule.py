@@ -3,17 +3,10 @@
 `optax.scale_by_schedule` keeps the step count in its state. That is correct for a momentum
 buffer and wrong for an anneal as soon as the driver can REJECT a step: `minimize` restores the
 previous optimiser state on a rejection, which rewinds the counter, so the schedule spends the
-same iteration twice and the anneal runs slow.
-
-This is not hypothetical. The numpy step had exactly this defect; on a real reconstructed event
-the rewind moved the fitted energy by 2.41 MeV. `scale_by_driver_schedule` fixes it by READING
-`iteration` out of optax's extra arguments — which `minimize` supplies — instead of counting.
-
-The tests below pin three things, and the middle one is the whole point:
-  * the schedule tracks the driver's index when it is supplied;
-  * a REJECTED step does not rewind it, which is what a stateful counter would do;
-  * the internal counter still works when no driver supplies an index, so this composes with a
-    plain optax loop that knows nothing about the convention.
+same iteration twice and the anneal runs slow. `scale_by_driver_schedule` avoids this by reading
+`iteration` out of optax's extra arguments, which `minimize` supplies, instead of counting; it
+falls back to its own counter when no index is supplied. The tests also pin the endpoint and
+clamping of `annealed_learning_rate`.
 """
 import numpy as np
 import jax.numpy as jnp
@@ -37,9 +30,8 @@ def test_it_follows_the_iteration_it_is_given():
 def test_a_repeated_iteration_does_not_advance_it():
     """THE DEFECT. A rejected step re-runs the same driver iteration; the anneal must not move.
 
-    With a stateful counter the second call would return a LATER schedule value, which is the
-    rewind-and-repeat that cost 2.41 MeV. Here the value is a function of the index alone, so
-    calling twice at the same index is idempotent by construction.
+    With a stateful counter the second call would return a later schedule value; here the value
+    is a function of the index alone, so calling twice at the same index must give the same value.
     """
     tx = scale_by_driver_schedule(lambda s: 10.0 - s)
     st = tx.init(jnp.ones(1))
@@ -79,10 +71,9 @@ def test_it_is_stateless_in_the_sense_that_matters():
 def test_the_anneal_ends_exactly_on_lr_final():
     """`transition_steps` must be steps-1, and this is where that bites.
 
-    `optax.linear_schedule` divides by `transition_steps` while the loop being reproduced divides
-    by `steps-1`. The obvious `linear_schedule(4.0, 1.5, steps)` ends at 1.5167, a 1.1% error on
-    the final learning rate — four orders above the float32 agreement the module otherwise argues
-    about, and invisible unless the endpoint is checked.
+    `optax.linear_schedule` divides by `transition_steps` while the anneal divides by `steps-1`,
+    so the obvious `linear_schedule(4.0, 1.5, steps)` ends at 1.5167 instead of 1.5, an error that
+    is invisible unless the endpoint is checked.
     """
     steps = 150
     sched = annealed_learning_rate(4.0, 1.5, steps)

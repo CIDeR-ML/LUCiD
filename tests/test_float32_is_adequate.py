@@ -1,42 +1,23 @@
-"""Is float32 adequate where going jax-native would change the numerics? Asserted, not printed.
+"""Is float32 adequate where going jax-native (``jnp`` everywhere, ``x64`` off) changes the numerics?
 
-Four production docstrings and four test files quote numbers from this measurement -- "2.8e-07
-relative at cond(H)=6800", "scaled-float32 matches raw-float64 to four digits", "raw-float32
-stalls at 1.9e-5". Until this file existed, ALL of them deferred to a measurement script with no
-assertion, not collected by pytest and not run in CI.
-``tests/test_fitting_scaled_real_problem.py`` even carries a test named
-``test_where_this_file_CANNOT_speak_for_the_float32_claim`` pointing at it. So the suite knew it
-could not verify the claim, said so by name, and pointed at something that could not fail.
+Production docstrings and ``tests/test_fitting_scaled_real_problem.py`` quote the float32 numbers
+asserted here; this file is what fails if they stop being true. The arithmetic changes at three
+separable sites, each tested with its own control:
 
-The numbers were re-measured when this file was written and had NOT drifted. That is the reason
-to gate them now rather than to re-derive them: the claim is true today, and nothing would say so
-if it stopped being true.
-
-THREE SEPARABLE SITES. Going jax-native (``jnp`` everywhere, ``x64`` off) changes the arithmetic
-in exactly three places, and conflating them is how "float32 is probably fine" gets asserted
-without evidence:
-
-  SITE 1  the linear solve. It IS float32 now — ``lucid.fitting`` has one damped-matrix
-          implementation and it is JAX. The float64 arm here is a reference built inside this
-          file, not a second library path. cond(H) ~ 6800 is the published 19-parameter
-          calibration matrix.
-  SITE 2  the Levenberg median, and which side of a float32/float64 boundary it falls on. This
-          was written when the rewrite was still prospective; the rewrite has since landed, so
-          the test now guards that the choice REMAINS inert rather than clearing it in advance.
-  SITE 3  the iterate. Reconstruction carries float64 because energy is raw MeV at ~1000, where
-          float32 spacing is 6.1e-5 -- a measured freeze, not a rounding nit. The fix is to carry
-          the iterate in SCALED coordinates (every component O(1)), which is what
+  SITE 1  the linear solve. ``lucid.fitting`` has one damped-matrix implementation, in JAX, so it
+          runs in float32; the float64 arm is a reference built in this file. cond(H) ~ 6800 is
+          the published 19-parameter calibration matrix.
+  SITE 2  the Levenberg median, and which side of a float32/float64 boundary it is taken on; the
+          test guards that this choice stays inert.
+  SITE 3  the iterate. Energy is raw MeV at ~1000, where float32 spacing is 6.1e-5, so a raw
+          float32 iterate freezes; carrying it in SCALED coordinates (every component O(1)) is what
           ``lucid.fitting.scaled.ScaledProblem`` exists for.
 
-EVERY SITE CARRIES A CONTROL, and site 3's control is on the control: it is not enough that
-scaled-float32 tracks raw-float64, because a test where every arm agrees measures nothing. Raw
-float32 must be visibly WORSE, or the instrument cannot tell the representations apart and its
-null result is vacuous. Two earlier toys in this project produced plausible numbers that measured
-nothing (a diverged fit; a "fit error" whose truth was not the minimiser), which is why the
-discipline is written into the assertions rather than into a comment.
+Site 3's control is on the control: raw float32 must be visibly WORSE than raw float64, or the
+instrument cannot tell the representations apart and the scaled-float32 null result is vacuous.
 
-Numpy only -- ``lucid.fitting.gn`` imports nothing else -- so this is CPU, deterministic and a
-few seconds. It is a real regression gate, not a benchmark.
+``lucid.fitting.gn`` is numpy only, so this is CPU, deterministic and a regression gate, not a
+benchmark.
 """
 import numpy as np
 import pytest
@@ -50,12 +31,9 @@ from lucid.fitting.transforms import damped_matrix as _damped_matrix
 def damped_matrix(H, *, lam, mu):
     """The library's damped matrix in whatever precision ``H`` arrives in.
 
-    The float64 REFERENCE below is built inline rather than taken from the library, because the
-    library no longer has a float64 path — ``lucid.fitting`` has exactly one damped-matrix
-    implementation and it is JAX, which computes in float32 while ``x64`` is off. That is the
-    situation this file exists to justify, so constructing the reference here is not a shortcut:
-    the question "is float32 adequate" is a question about the ARITHMETIC, and it needs a float64
-    answer to compare against that does not itself depend on the thing under test.
+    The float64 reference (``damped_matrix_f64``) is built in this file because the library's only
+    implementation is JAX, which computes in float32 while ``x64`` is off, and the reference must
+    not depend on the thing under test.
     """
     return np.asarray(_damped_matrix(jnp.asarray(H), lam=lam, mu=mu))
 
@@ -112,8 +90,8 @@ def test_the_float32_solve_is_far_below_the_damping_it_competes_with(cond):
 
     The comparison is not against zero -- a Gauss-Newton step is damped by construction. Marquardt
     ``lam=0.01`` perturbs the same direction by ~1e-2 deliberately, so a float32 error two orders
-    below that cannot change any decision the step feeds. Measured at the published conditioning:
-    2.8e-07, which is ~360x under this bound.
+    below that cannot change any decision the step feeds (measured 2.8e-07 at the published
+    conditioning).
     """
     _, rel, _ = _solve_error(cond)
     assert rel < 0.01 * LAM, (
@@ -140,8 +118,8 @@ def test_the_float32_solve_barely_rotates_the_step_at_the_published_conditioning
 def test_the_levenberg_median_may_fall_on_either_side_of_the_promotion(cond):
     """Taking median(diag) in float32 or float64 must not change the step.
 
-    If this ever fails, a jax-native rewrite is NOT free to reorder the median against the
-    promotion, and the in-loop comment saying so becomes load-bearing rather than cautious.
+    If this fails, the order of the median against the float32/float64 promotion matters and has
+    to become a deliberate choice.
     """
     H32 = spd(19, cond, 2).astype(np.float32)
     g = np.random.default_rng(3).standard_normal(19)
@@ -179,9 +157,8 @@ class _LSQ:
 
     def grad_metric_loss(self, theta, step, refresh=True):
         # The gradient is w.r.t. the ITERATE, not w.r.t. u. In raw coordinates u=(theta-truth)/S,
-        # so dr/dtheta = A/S and the chain-rule factor cannot be dropped -- omitting it made both
-        # raw arms return an identical value, which is impossible when the dtype is what is under
-        # test, and is how the original instrument was caught measuring nothing.
+        # so dr/dtheta = A/S. Dropping the 1/S factor makes both raw arms identical and the dtype
+        # comparison vacuous.
         u = self._u(theta)
         r = self.A @ u + self.noise * self.rng.standard_normal(40)
         J = self.A if self.scaled else self.A / SCALE9[None, :]
@@ -220,7 +197,7 @@ def arms():
 
 @pytest.mark.parametrize('noise', [0.0, 1e-4, 1e-2])
 def test_the_scaled_float32_iterate_reaches_the_float64_noise_floor(arms, noise):
-    """The claim four docstrings rest on: scaled-float32 costs nothing against raw-float64.
+    """The claim the production docstrings rest on: scaled-float32 costs nothing against raw-float64.
 
     Judged against the SEED SPREAD of the float64 arm, not against zero -- the fit wanders on a
     Monte-Carlo floor, so its own run-to-run scatter is the smallest difference this problem can
@@ -239,10 +216,9 @@ def test_the_scaled_float32_iterate_reaches_the_float64_noise_floor(arms, noise)
 def test_the_instrument_can_tell_the_representations_apart(arms, noise):
     """The control ON the control, and the reason the null result above is not vacuous.
 
-    If raw-float32 also matched raw-float64, this file would be measuring nothing at all and its
-    passing would mean nothing. Raw float32 must be visibly worse -- it carries energy at ~1000
-    MeV where float32 spacing is 6.1e-5, so small steps there are silently lost. Measured at zero
-    noise: raw-float32 stalls at 1.9e-5 against raw-float64's 3.3e-14.
+    If raw-float32 also matched raw-float64, the scaled-float32 test above would pass vacuously.
+    Raw float32 must be visibly worse: it carries energy at ~1000 MeV where float32 spacing is
+    6.1e-5, so small steps there are silently lost (at zero noise it stalls near 1.9e-5).
 
     Only the low-noise arms can show this. At noise 1e-2 the Monte-Carlo floor is far above
     float32 resolution and legitimately hides the difference, which is itself the finding: the

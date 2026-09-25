@@ -156,13 +156,9 @@ def test_fitting_contracts_protocols():
     from lucid.fitting import CalibForward, PerPhotonPredictor
     assert callable(getattr(CalibForward, '__instancecheck__', None))        # runtime_checkable
 
-    # NOTE (2026-08-13): the isinstance assertions this test used to make could not fail.
-    # runtime_checkable Protocols check METHOD PRESENCE, not signatures, so `dict`, `str.upper`
-    # and a zero-arg lambda all satisfy CalibForward — and CalibForward and PerPhotonPredictor
-    # accept exactly the same objects. The test asserted "callables are callable".
-    # Keep the cheap import/runtime_checkable check above, and assert the thing that carries the
-    # actual contract: the declared call signatures, which is what a reader or a static checker
-    # relies on and what a careless edit would change.
+    # runtime_checkable Protocols check METHOD PRESENCE, not signatures, so isinstance accepts
+    # any callable (`dict`, a zero-arg lambda) and cannot tell CalibForward from
+    # PerPhotonPredictor. The declared call signatures carry the contract, so pin those.
     assert [p.name for p in inspect.signature(CalibForward.__call__).parameters.values()][1:] \
         == ['theta', 'ek', 'pk']
     assert [p.name for p in inspect.signature(PerPhotonPredictor.__call__).parameters.values()][1:] \
@@ -183,10 +179,9 @@ def test_fitting_analysis_seam():
     s = resolution_stats(np.array([1., -2., 3., -4., 5.]))
     assert s['n'] == 5 and set(s) >= {'median', 'mean', 'rms', 'containment', 'median_ci'}
     np.testing.assert_allclose(s['rms'], np.sqrt((np.array([1, 4, 9, 16, 25])).mean()), rtol=1e-9)
-    # The CI must describe the estimate it is named after. It used to bootstrap |e| while the
-    # median was taken on e, so on signed input the interval could exclude its own median --
-    # [-5,-4,-3,3,4,5] gave median 0.0 with CI (3.5, 4.5). This assertion is the one that fails
-    # if that returns; the keys-and-rms checks above all passed throughout.
+    # The CI must bracket the median it is named after. Bootstrapping |e| while taking the
+    # median of e lets the interval exclude its own median on signed input
+    # ([-5,-4,-3,3,4,5]: median 0.0, CI (3.5, 4.5)).
     lo, hi = s['median_ci']
     assert lo <= s['median'] <= hi, (
         f'median {s["median"]} outside its own CI ({lo}, {hi}) -- CI computed on a different '
@@ -194,7 +189,7 @@ def test_fitting_analysis_seam():
     sym = resolution_stats(np.array([-5., -4., -3., 3., 4., 5.]))
     lo, hi = sym['median_ci']
     assert lo <= sym['median'] <= hi, f'symmetric case: median {sym["median"]} outside ({lo}, {hi})'
-    # Magnitude input is unaffected, which is why no published number moves.
+    # Non-negative (magnitude) input has |e| == e, so this case is unaffected by the fix.
     mag = resolution_stats(np.array([1., 2., 3., 4., 5.]))
     np.testing.assert_allclose(mag['median'], 3.0, rtol=1e-12)
 

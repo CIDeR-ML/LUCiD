@@ -1,11 +1,10 @@
-"""Neyman variant of the 2D loss-geometry figure: SAME single laser source & scalar_mix as compute_surf,
-but loss = Neyman chi^2 on charge  sum (M-Q)^2/Q, and the preconditioner uses the Fisher / Gauss-Newton
+"""Neyman variant of the 2D loss-geometry figure: single laser source & scalar_mix detector,
+loss = Neyman chi^2 on charge  sum (M-Q)^2/Q, and the preconditioner uses the Fisher / Gauss-Newton
 matrix  F = 2 sum (dM/dtheta)^2 / Q  per grid point (from the AD Jacobian) -- as in the calibration fit,
 not the finite-diff 2x2 estimate. Linear grid in actual metres.
 Saves X, Y, L, Gx, Gy, and the per-point Fisher (Fxx, Fxy, Fyy)."""
 import os, sys, time
 from pathlib import Path
-# Repo-relative (was a hardcoded absolute path before the 2026-08-12 move into analysis/paper).
 REPO = str(Path(__file__).resolve().parents[3]); sys.path.insert(0, REPO); os.chdir(REPO)
 import numpy as np, jax, jax.numpy as jnp
 from analysis.paper.utils import calibration as C
@@ -70,9 +69,7 @@ def main():
     print(f"[neyman] shard {SHARD} saved {len(mine)} pts ({time.time()-t0:.0f}s)", flush=True)
 
 
-# GUARDED: without this, IMPORTING this module ran the full scan. It is invoked by
-# `fig_calib_loss_geometry` as `subprocess.run([sys.executable, compute_2d_neyman.py])`,
-# which is unchanged -- but an import from any tool started a 625-point Neyman scan, which
-# is what happened to a dependency check and had to be killed mid-run.
+# Guarded so that importing this module does not start the full grid scan;
+# `fig_calib_loss_geometry` runs this file as a subprocess.
 if __name__ == "__main__":
     main()

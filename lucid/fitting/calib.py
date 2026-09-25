@@ -1,16 +1,12 @@
 """Calibration forward model: predicted per-sensor charge for every source × wavelength.
 
-This is the piece calibration was missing. Reconstruction's forward has been a library object
-(:class:`lucid.fitting.recon.ReconModel`) since the start; calibration's lived inside a figure
-script, which is why nothing importable could calibrate a detector.
+The calibration counterpart of :class:`lucid.fitting.recon.ReconModel`.
 
-Extracted from the paper's reference calibration engine and preserved expression for expression.
-The whole stack runs in float32 — ``jax_enable_x64`` is never enabled — so an equivalent but
-re-associated expression can move the result. Its bit-exact agreement with that engine was
-verified when it was extracted; the engine is not in this repository and the check is not shipped.
-Anything here that looks
-gratuitously specific (the key arithmetic, the concatenate-then-transpose, the laser/isotropic
-split) is load-bearing for that reason.
+Preserved expression for expression from the paper's reference calibration engine. The whole
+stack runs in float32 (``jax_enable_x64`` is never enabled), so an equivalent but re-associated
+expression can move the result. The reference engine is not in this repository, so no shipped
+test gates that agreement. Anything here that looks gratuitously specific (the key arithmetic,
+the concatenate-then-transpose, the laser/isotropic split) is load-bearing for that reason.
 
 Layout
 ------
@@ -26,20 +22,18 @@ bridge (:func:`lucid.fitting.problem.build_calibration_problem`) instead hands o
 per source**, which cannot be traced and therefore gets its own compiled program.
 
 Both routes run the same key arithmetic, the same assembly, and the same estimator downstream.
-Only the compilation strategy differs — but this stack is float32, so that is not quite the same
-as saying the answer is identical. Measured on a stub: the forward agrees EXACTLY, and the
-Jacobian to 8.5e-08 relative, which is float32 epsilon from XLA folding a closed-over source as a
-constant where the other route carries it as a traced argument. Gated by
+Only the compilation strategy differs, but in float32 that does not make the answers identical:
+the forward agrees exactly, while the Jacobian differs at float32 epsilon because XLA folds a
+closed-over source as a constant where the other route carries it as a traced argument. Gated by
 ``tests/test_fitting_calibrate.py::test_the_two_dispatch_routes_agree``. The traced route is the
 default; the per-source route is selected by passing ``predict``.
 
 Sharding
 --------
 The reference dispatches source 0 (a collimated laser) to one device and the remaining isotropic
-sources to a ``pmap``, because the campaign ran on a 10-GPU node. That is an execution strategy,
-not physics, so it is injected via ``map_fn`` rather than baked in. The default is a serial loop
-over sources — which is also what the reference itself falls back to below 7 devices, and
-therefore the path the pin actually gates.
+sources to a ``pmap``. That is an execution strategy, not physics, so it is injected via
+``map_fn`` rather than baked in. The default is a serial loop over sources, which is also what
+the reference itself falls back to below 7 devices.
 """
 import jax
 import jax.numpy as jnp
@@ -96,38 +90,26 @@ class CalibrationForward:
 
         self._mbody = _mbody
         self._single = jax.jit(_mbody)
-        # WHERE the singleton source runs. `map_fn` pmaps the grouped sources over devices
-        # 0..n_group-1, and an un-placed `_single` runs on JAX's default device -- device 0 --
-        # so the laser SERIALISES behind pmap shard 0 instead of overlapping it. Measured at the
-        # published recipe: forward 1.121 s against 0.612 s for the group alone, i.e. 104% of the
-        # way from overlapped to serial, with 45% of every forward wasted; and on a 10-GPU node
-        # devices 7, 8 and 9 sat idle for the whole run. The reference engine placed it on
-        # `DEVS[min(7, len(DEVS)-1)]` and measured 0.631 s on eight cards, 1.78x faster.
-        # Placement is value-neutral -- when this class was extracted it and the engine agreed
-        # bit for bit while placing this source on different devices -- so it buys wall clock
-        # and moves no number. `laser_device` overrides; None picks the first card outside the
-        # mapped range, falling back to the last available when there is none.
+        # Where the singleton source runs. `map_fn` pmaps the grouped sources over devices
+        # 0..n_group-1, and an un-placed `_single` runs on JAX's default device (device 0), so
+        # the laser would serialise behind pmap shard 0 instead of overlapping it. Placement is
+        # value-neutral: it buys wall clock and moves no number. `laser_device` overrides; None
+        # picks the first card outside the mapped range, falling back to the last available when
+        # there is none.
         self._laser_dev = laser_device
         if self._laser_dev is None and self.n_sources > 1:
             devs = jax.devices()
             self._laser_dev = devs[min(self.n_sources - 1, len(devs) - 1)]
-        # ARBITRARY source layouts. Sources are grouped by PYTREE STRUCTURE and each group is
-        # mapped over its own stack; singletons are called directly. The previous scheme stacked
-        # `sources[1:]` unconditionally, which required every source after the first to share a
-        # structure -- so a `LaserSource` (5 fields) beside an `IsotropicSource` (3) raised
-        # `Named tuple arity mismatch: 3 != 5` from three frames down. That forbade exactly the
-        # source DIVERSITY the calibration guide names as the most important lever, and it
-        # admitted only one shape of layout: one arbitrary source followed by N identical ones.
-        #
-        # The published layout IS that shape, so it still resolves to one singleton (the laser)
-        # plus one mapped group of seven -- the same two calls, in the same order, on the same
-        # keys. Bit-exactness is by construction, not by tolerance.
+        # Sources are grouped by pytree structure and each group is mapped over its own stack;
+        # singletons are called directly. This admits mixed layouts (e.g. a `LaserSource` beside
+        # `IsotropicSource`s), which source diversity in calibration needs. The published layout
+        # still resolves to one singleton (the laser) plus one mapped group of seven: the same two
+        # calls, in the same order, on the same keys, so it is bit-exact by construction.
         self._groups = _group_by_structure(self.sources)
-        # ONE RULE: parts get disjoint devices. A part of one source is executed unstacked (no
-        # reason to stack a single item) and takes a card outside the mapped range, so it runs
-        # ALONGSIDE the mapped parts rather than queueing behind one of their shards. In the
-        # published layout that is the laser, which is where the 1.76x came from -- but nothing
-        # here knows what a laser is.
+        # Parts get disjoint devices. A single-source part runs unstacked on a card outside the
+        # mapped range, so it runs alongside the mapped parts rather than queueing behind one of
+        # their shards. In the published layout that part is the laser, but nothing here knows
+        # what a laser is.
         self._placed = next((ix[0] for ix, _ in self._groups if len(ix) == 1), None)
         self._largest = max((len(ix) for ix, _ in self._groups), default=0)
         self._group_fns, self._group_stacks = [], []
@@ -142,11 +124,9 @@ class CalibrationForward:
     def _make_map(self, fn, in_axes, n):
         """A mapped callable over `n` items, honouring a caller-supplied `map_fn`.
 
-        `map_fn(fn, in_axes)` is the established two-argument contract and the frozen reference
-        engine passes exactly that. A `pmap` built from it maps over whatever leading axis it is
-        handed, so it serves any group; only a SERIAL fallback needs to know the count, which is
-        why `make_map_fn`'s fallback now infers it from the batched argument instead of closing
-        over one size.
+        `map_fn(fn, in_axes)` is the established two-argument contract. A `pmap` built from it
+        maps over whatever leading axis it is handed, so it serves any group; only the serial
+        fallback needs the count `n`.
         """
         if self.map_fn is None:
             return _serial_map(fn, in_axes, n)
@@ -193,8 +173,8 @@ class CalibrationForward:
         for (idx, _), fn, stack in zip(self._groups, self._group_fns, self._group_stacks):
             if fn is None:                                   # singleton
                 i = idx[0]
-                # Put a singleton on its own card so it OVERLAPS a grouped pmap rather than
-                # queueing behind shard 0. See __init__ for the measurement.
+                # Put a singleton on its own card so it overlaps a grouped pmap rather than
+                # queueing behind shard 0 (see __init__).
                 d = self._laser_dev if i == self._placed else None
                 if d is None:
                     slots[i] = self._single(theta, self.sources[i], allk[i], gains)
@@ -216,13 +196,11 @@ class CalibrationForward:
 
         The draw offset is ``131*b``, matching the reference.
 
-        Averaging reduces the Monte-Carlo variance of the forward. Note that LINEARITY is the
-        reason averaging is not needed for the fixed point, not the reason it is: if the residual
-        were linear in ``M`` then ``E[r(M)] = r(E[M])`` at any variance, and the fixed point would
-        sit at truth however noisy each draw was. What makes ``n_draws`` matter is the step this
-        module performs BEFORE forming the residual -- the profiled gain ``k = ΣQ/ΣM`` is
-        nonlinear in ``M``, so its expectation moves with the forward's variance, and that shift
-        propagates into the residual. The bias and its scaling with forward noise are measured in
+        Averaging reduces the forward's Monte-Carlo variance. Were the residual linear in ``M``,
+        ``E[r(M)] = r(E[M])`` and the fixed point would sit at truth at any variance. What makes
+        ``n_draws`` matter is the profiled gain ``k = ΣQ/ΣM``: it is nonlinear in ``M``, so its
+        expectation shifts with the forward's variance, and that shift propagates into the
+        residual. The bias and its scaling with forward noise are measured in
         ``tests/test_fitting_estimator_unbiased.py``.
         """
         acc = jnp.zeros((self.S, self.NS))
@@ -234,9 +212,8 @@ class CalibrationForward:
 class CalibrationJacobian:
     """``∂r/∂θ`` for the Neyman residual — differentiated as ONE fused expression.
 
-    This is the subtlety that decides whether an extraction is correct. The reference does not
-    compute ``∂μ/∂θ`` and then apply the ``1/√Q`` weight; it runs ``jacfwd`` over the *already
-    weighted* model::
+    It does not compute ``∂μ/∂θ`` and then apply the ``1/√Q`` weight; it runs ``jacfwd`` over the
+    *already weighted* model::
 
         sm(θ) = exp(lk) · sim(src, dp(θ), key) / √clip(Q, floor)
         J     = jacfwd(sm)(θ)
@@ -254,8 +231,7 @@ class CalibrationJacobian:
       even though their photon streams are disjoint. It vanishes exactly when the gains are held
       fixed. The magnitude of the residual coupling has not been measured; do not assume it small.
 
-    The key stream is independent of the residual's by construction — sharing them was measured
-    at 137σ of covariance — and carries the seed, so an ensemble can see its own spread.
+    The key stream is independent of the residual's and carries the seed (see :meth:`key`).
     """
 
     def __init__(self, sim, sources, params, n_sensors, key0=9_000_000, map_fn=None,
@@ -291,12 +267,10 @@ class CalibrationJacobian:
 
         self._jbody = _jbody
         self._single = jax.jit(_jbody)
-        # Same placement as CalibrationForward, and for the same measured reason: an un-placed
-        # `_single` runs on device 0, which `map_fn` is already using for shard 0, so the laser
-        # column serialises behind an isotropic one. The reference engine places the Jacobian's
-        # laser inputs too (`lp_l = jax.device_put(lp, LASER_DEV)` and the key and data row with
-        # it), so this restores parity rather than inventing anything. Value-neutral: placement
-        # changes where arithmetic happens, not what it produces.
+        # Same placement as CalibrationForward: an un-placed `_single` runs on device 0, which
+        # `map_fn` already uses for shard 0, so the laser column would serialise behind an
+        # isotropic one. The reference engine places the Jacobian's laser inputs the same way.
+        # Value-neutral: placement changes where arithmetic happens, not what it produces.
         self._laser_dev = laser_device
         if self._laser_dev is None and self.n_sources > 1:
             devs = jax.devices()
@@ -405,8 +379,7 @@ def profile_gains(model_charge, observed_sum, gauge='log', clip_min=1e-6):
     ``'log'``    ``mean(log k) = 0``  — what the published run used.
     ``'linear'`` ``mean(k) = 1``      — ``k̂ = ΣQ/ΣM`` is linear in the data and therefore
                  unbiased, whereas taking its log first incurs a Jensen shift that is larger on
-                 dim sensors. Measured on a minimal toy: log gauge +0.402%, linear +0.068%.
-                 Not the published choice; adopting it would move published numbers.
+                 dim sensors. Not the published choice; adopting it would move published numbers.
     """
     k = jnp.clip(observed_sum / model_charge, clip_min, None)
     if gauge == 'linear':
@@ -438,10 +411,8 @@ class CalibrationProblem:
     Three things this class owns that the loop must not:
 
     * **The keys.** The residual's forward is redrawn every step from one stream; the Jacobian
-      draws from another, which must be independent (sharing them was measured at 137σ of
-      covariance) and must carry the seed (without it, every member of an ensemble draws the same
-      Jacobian noise, so any fixed point it displaces moves them all alike — the error shows up as
-      bias and contributes nothing to the spread).
+      draws from another, which must be independent of it (shared keys correlate J with r) and
+      must carry the seed (see :meth:`CalibrationJacobian.key`).
     * **The nuisance.** Per-PMT gains are profiled in closed form each step, so they never enter
       the optimizer. This is why calibration needs no Schur block in the fitter, and therefore why
       one loop can serve both problems at all.
@@ -503,9 +474,9 @@ class CalibrationProblem:
 def _group_by_structure(sources):
     """-> [(indices, stacked_pytree_or_None)], sources grouped by PYTREE STRUCTURE.
 
-    Groups appear in order of first appearance and indices are ascending within a group, so the
-    grouping of a homogeneous tail is exactly the old `sources[1:]` stack and the published layout
-    resolves to [([0], None), ([1..7], stack)] -- the same two calls the previous code made.
+    Groups appear in order of first appearance and indices are ascending within a group, so a
+    homogeneous tail groups as one `sources[1:]` stack and the published layout resolves to
+    [([0], None), ([1..7], stack)].
 
     Grouping by structure rather than by type is what admits an arbitrary layout: two sources can
     be mapped together precisely when they can be stacked, which is a property of their pytree,
@@ -532,8 +503,7 @@ def _serial_map(fn, in_axes, n):
     """Serial stand-in for a mapped call: same per-item computation, results stacked.
 
     Numerically identical to a ``pmap``/``vmap`` over the leading axis for this use, and the only
-    path available when fewer devices are present than sources — which is the common case off the
-    campaign's node, and the one the engine pin exercises.
+    path available when fewer devices are present than sources.
     """
     jf = jax.jit(fn)
 

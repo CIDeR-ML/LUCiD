@@ -59,13 +59,13 @@ def test_charge_only_where_the_travelled_leg_reaches_the_sensor():
     o, d = _grazing(dg_on)
 
     # The leg the code bounds to ends at the WALL -- t_geometry, from the same intersect_ray the
-    # propagator calls -- not at a sensor the photon may enter first. (A first draft used the hit
-    # position, which is the sensor entry for photons that hit one, and so flagged sensors that
-    # legitimately lie on the travelled leg.)
+    # propagator calls -- not at a sensor the photon may enter first; ending it at the sensor entry
+    # would wrongly flag sensors that lie on the travelled leg.
     t_land = np.asarray(dg_on.detector.intersect_ray(jnp.asarray(o), jnp.asarray(d))[1]).reshape(-1)
 
     def reach(out):
-        """(charged candidates the leg does NOT reach, uncharged candidates it DOES reach)."""
+        """(charged candidates the leg does NOT reach, candidates it DOES reach, how many of those
+        are uncharged)."""
         w = out['sensor_weights']; idx = np.clip(out['sensor_indices'], 0, len(S) - 1)
         c = S[idx]                                                      # (C, N, 3)
         t_c = np.sum((c - o[None]) * d[None], -1)                       # closest approach on line

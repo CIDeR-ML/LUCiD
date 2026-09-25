@@ -1,24 +1,14 @@
 """`DEFAULT_RECIPE` must stay splattable into `fit_track` — minus the one key that is not its own.
 
-The recipe used to live in `lucid/fitting/sweep.py`, a characterisation driver with no caller in
-the repo and no published number behind it. The driver was removed; the recipe moved to
-`lucid.fitting.recon`, beside the function it configures, because one thing did consume it:
-`tutorials/track_optimization.ipynb` imports it and nothing else from that module.
+`tutorials/track_optimization.ipynb` calls
+`fit_track(..., **{k: v for k, v in RECIPE.items() if k != 'time_weight'})`, and the suite does
+not run notebooks, so these tests are the only check on that call. The recipe is not a copy of
+`fit_track`'s defaults:
 
-The contract is not "these are fit_track's defaults". Two keys make it more specific than that:
-
-  * `trust=3.0` PINS what `fit_track`'s signature leaves as `'auto'` — so the recipe is a
-    deliberate configuration, not a restatement, and comparing the two for equality would be
-    wrong.
-  * `time_weight` is NOT a `fit_track` argument. It configures the MODEL's time term, so a caller
-    has to split the dict. The tutorial does exactly that:
-    `fit_track(..., **{k: v for k, v in RECIPE.items() if k != 'time_weight'})`.
-
-Both halves are load-bearing and fail in opposite directions. If a `fit_track` parameter is
-renamed, the splat raises TypeError in a shipped tutorial that CI never executes. If someone
-"tidies" `time_weight` into the signature, the tutorial's filter becomes wrong in the other
-direction — it would then be dropping a real argument, silently reverting the time weight to a
-default. Neither shows up anywhere else: notebooks are not run by the suite.
+  * `trust=3.0` pins what the signature leaves as `'auto'`, so it is a deliberate configuration.
+  * `time_weight` configures the model's time term and is NOT a `fit_track` argument. Renaming a
+    `fit_track` parameter makes the splat raise TypeError; adding `time_weight` to the signature
+    makes the tutorial's filter silently drop it, so the fit runs at the default time weight.
 """
 import inspect
 
@@ -52,11 +42,9 @@ def test_time_weight_is_still_NOT_a_fit_track_parameter():
 
 
 def test_the_recipe_is_a_configuration_not_a_copy_of_the_defaults():
-    """Guards the comment as much as the code.
+    """`trust` is pinned at 3.0 against a signature default of 'auto'.
 
-    `trust` is pinned at 3.0 against a signature default of 'auto'. If someone ever makes the two
-    agree, the recipe stops being a deliberate choice and the docstring above becomes wrong — so
-    this asserts the disagreement rather than assuming it.
+    If the two ever agree, the recipe is no longer a deliberate choice and the module docstring is wrong.
     """
     sig = inspect.signature(fit_track).parameters
     assert DEFAULT_RECIPE['trust'] == 3.0
@@ -66,10 +54,9 @@ def test_the_recipe_is_a_configuration_not_a_copy_of_the_defaults():
 
 
 def test_the_tutorial_still_imports_it_from_here():
-    """The move is only complete if the consumer follows it.
+    """The tutorial imports the recipe from here, not from the removed `lucid.fitting.sweep`.
 
-    Read as text -- notebooks are JSON and the suite does not execute them, so this is the only
-    cheap way to notice that a shipped tutorial still points at the deleted module.
+    Read as text because the suite does not execute notebooks.
     """
     from pathlib import Path
     nb = Path(__file__).resolve().parents[1] / 'tutorials' / 'track_optimization.ipynb'
