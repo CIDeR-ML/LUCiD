@@ -8,8 +8,8 @@ Two output modes:
   which sparsifies and appends each chunk incrementally.
 
 * ``per_photon`` — dense ``(n_cases, n_photons)`` arrays of ``detected``,
-  ``sensor_id``, ``hit_time`` and ``deviated`` stored with chunked gzip.
-  ``deviated`` marks light that scattered or reflected before detection, which
+  ``sensor_id``, ``hit_time`` and ``indirect`` stored with chunked gzip.
+  ``indirect`` marks light that scattered or reflected before detection, which
   is the direct/indirect split fiTQun's scattering table is built from.
 """
 from typing import Optional
@@ -174,7 +174,7 @@ def save_shotgun_per_photon(
     detected: np.ndarray,
     sensor_id: np.ndarray,
     hit_time: np.ndarray,
-    deviated: Optional[np.ndarray] = None,
+    indirect: Optional[np.ndarray] = None,
     *,
     tts_sigma_ns: float,
     source: Optional[ShotgunSource] = None,
@@ -185,8 +185,8 @@ def save_shotgun_per_photon(
     det = np.atleast_2d(np.asarray(detected))
     sid = np.atleast_2d(np.asarray(sensor_id))
     ht = np.atleast_2d(np.asarray(hit_time))
-    dev = (np.zeros_like(det) if deviated is None
-           else np.atleast_2d(np.asarray(deviated)))
+    dev = (np.zeros_like(det) if indirect is None
+           else np.atleast_2d(np.asarray(indirect)))
     n_cases, n_photons = det.shape
 
     with h5py.File(path, 'w') as f:
@@ -205,7 +205,7 @@ def save_shotgun_per_photon(
                           compression='gzip', compression_opts=4, chunks=True)
         pp.create_dataset('hit_time', data=ht.astype(np.float32),
                           compression='gzip', compression_opts=4, chunks=True)
-        pp.create_dataset('deviated', data=dev.astype(np.bool_),
+        pp.create_dataset('indirect', data=dev.astype(np.bool_),
                           compression='gzip', compression_opts=4, chunks=True)
 
         if save_source:
@@ -221,7 +221,7 @@ def load_shotgun_per_photon(path: str) -> dict:
         out['sensor_id'] = pp['sensor_id'][:]
         out['hit_time'] = pp['hit_time'][:]
         # Absent in files written before the flag existed.
-        out['deviated'] = pp['deviated'][:] if 'deviated' in pp else None
+        out['indirect'] = pp['indirect'][:] if 'indirect' in pp else None
         out['source'] = _read_source(f['source']) if 'source' in f else None
     return out
 
@@ -430,6 +430,12 @@ class StreamingPerPhotonWriter:
             'hit_time', shape=(0, n_photons), maxshape=(None, n_photons),
             chunks=(chunk_cases, n_photons), dtype=np.float32,
             compression='gzip', compression_opts=4)
+        # Direct/indirect split: the reductions built on this sample refuse to
+        # run without it rather than fold scattered light into a direct tune.
+        self._indirect = pp.create_dataset(
+            'indirect', shape=(0, n_photons), maxshape=(None, n_photons),
+            chunks=(chunk_cases, n_photons), dtype=np.bool_,
+            compression='gzip', compression_opts=4)
 
         self._source_grp = None
         self._src_origins = self._src_directions = None
@@ -459,19 +465,21 @@ class StreamingPerPhotonWriter:
                 dtype=np.float32, compression='gzip', compression_opts=4)
         self._source_grp = grp
 
-    def append(self, detected, sensor_id, hit_time,
+    def append(self, detected, sensor_id, hit_time, indirect=None,
                source_chunk: Optional[ShotgunSource] = None):
         det = np.atleast_2d(np.asarray(detected))
         sid = np.atleast_2d(np.asarray(sensor_id))
         ht = np.atleast_2d(np.asarray(hit_time))
+        ind = (np.zeros_like(det, dtype=np.bool_) if indirect is None
+               else np.atleast_2d(np.asarray(indirect)))
         n_cases = det.shape[0]
         cur = self._detected.shape[0]
-        self._detected.resize(cur + n_cases, axis=0)
-        self._sensor_id.resize(cur + n_cases, axis=0)
-        self._hit_time.resize(cur + n_cases, axis=0)
+        for d in (self._detected, self._sensor_id, self._hit_time, self._indirect):
+            d.resize(cur + n_cases, axis=0)
         self._detected[cur:cur + n_cases] = det.astype(np.bool_)
         self._sensor_id[cur:cur + n_cases] = sid.astype(np.int32)
         self._hit_time[cur:cur + n_cases] = ht.astype(np.float32)
+        self._indirect[cur:cur + n_cases] = ind.astype(np.bool_)
 
         if self.save_source and source_chunk is not None:
             if self._source_grp is None:
@@ -592,4 +600,5 @@ def merge_per_photon_shards(shard_paths: list, output_path: str):
         for p in shard_paths:
             shard = load_shotgun_per_photon(p)
             w.append(shard['detected'], shard['sensor_id'], shard['hit_time'],
+                     shard['indirect'],
                      source_chunk=shard['source'] if w.save_source else None)

@@ -358,15 +358,15 @@ def make_hits_likelihood(
 
 def _resolve_first_detection(
         flat_weights, flat_indices, flat_times, n_photons,
-        per_photon_qe, qe_key, threshold, flat_deviated=None):
+        per_photon_qe, qe_key, threshold, flat_indirect=None):
     """Compact flat propagation arrays to per-photon first-detection records.
 
     Returns arrays of length ``n_photons``:
     - detected : bool    — did this photon pass QE Bernoulli at any iteration?
     - sensor_id : int32  — sensor hit (first-detection), or -1 if not detected
     - hit_time : float32 — propagation time at first detection (0 if not detected)
-    - deviated : bool    — had it scattered or reflected before that detection?
-      All-False when ``flat_deviated`` is not supplied.
+    - indirect : bool    — had it scattered or reflected before that detection?
+      All-False when ``flat_indirect`` is not supplied.
     """
     base_valid = (flat_weights > threshold) & (flat_times > 0) & jnp.isfinite(flat_times)
     detection_probs = jax.random.uniform(qe_key, shape=flat_weights.shape)
@@ -385,11 +385,11 @@ def _resolve_first_detection(
     detected = jnp.isfinite(first_time)
     sensor_id = jnp.where(detected, flat_indices[first_flat_idx], -1)
     hit_time = jnp.where(detected, first_time, 0.0)
-    if flat_deviated is None:
-        deviated = jnp.zeros_like(detected)
+    if flat_indirect is None:
+        indirect = jnp.zeros_like(detected)
     else:
-        deviated = detected & flat_deviated[first_flat_idx]
-    return detected, sensor_id, hit_time, deviated
+        indirect = detected & flat_indirect[first_flat_idx]
+    return detected, sensor_id, hit_time, indirect
 
 
 def build_make_hits_waveform(
@@ -577,8 +577,8 @@ def build_make_hits_per_photon_shotgun(
     """Factory: returns a ``make_hits_per_photon`` closure for shotgun mode.
 
     For each input photon, resolves the first-iteration detected slot (if any)
-    and returns (detected_flag, sensor_id, hit_time, deviated) arrays of length
-    ``n_photons``. ``deviated`` marks light that scattered or reflected before
+    and returns (detected_flag, sensor_id, hit_time, indirect) arrays of length
+    ``n_photons``. ``indirect`` marks light that scattered or reflected before
     detection -- the direct/indirect split fiTQun's scattering table is built on.
 
     Must be used with the MC-sampling propagator so weights are binary.
@@ -598,18 +598,18 @@ def build_make_hits_per_photon_shotgun(
     @partial(jax.jit, static_argnames=('num_detectors',))
     def make_hits_per_photon(
             flat_weights, flat_indices, flat_times, num_detectors,
-            rng_key, qe, qe_corrections, flat_deviated=None):
+            rng_key, qe, qe_corrections, flat_indirect=None):
         per_photon_qe = qe * qe_corrections[flat_indices]
         qe_key, tts_key = jax.random.split(rng_key)
 
-        detected, sensor_id, hit_time, deviated = _resolve_first_detection(
+        detected, sensor_id, hit_time, indirect = _resolve_first_detection(
             flat_weights, flat_indices, flat_times, n_photons,
-            per_photon_qe, qe_key, threshold, flat_deviated)
+            per_photon_qe, qe_key, threshold, flat_indirect)
 
         if smear_time:
             noise = jax.random.normal(tts_key, shape=hit_time.shape) * tts_sigma_ns
             hit_time = jnp.where(detected, hit_time + noise, hit_time)
 
-        return detected, sensor_id, hit_time, deviated
+        return detected, sensor_id, hit_time, indirect
 
     return make_hits_per_photon

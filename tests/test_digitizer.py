@@ -268,7 +268,7 @@ if __name__ == "__main__":
 
 # --- per-photon scatter tag (fiTQun scattering table) -------------------------
 
-def test_deviated_flag_is_reported_per_photon():
+def test_indirect_flag_is_reported_per_photon():
     """photon_step's 8th return marks scatter-or-reflection.
 
     The fiTQun scattering table is scattered light over direct light from one
@@ -281,9 +281,9 @@ def test_deviated_flag_is_reported_per_photon():
 
     src = inspect.getsource(ps)
     # Both the sampling and the differentiable path return it.
-    assert src.count("deviated") >= 4
-    assert "deviated = scatters | reflects" in src   # sampling path
-    assert "deviated = is_scat" in src               # differentiable path
+    assert src.count("indirect") >= 4
+    assert "indirect = scatters | reflects" in src   # sampling path
+    assert "indirect = is_scat" in src               # differentiable path
 
 
 def test_resolve_first_detection_tags_only_detected_photons():
@@ -297,16 +297,16 @@ def test_resolve_first_detection_tags_only_detected_photons():
     flat_indices = jnp.array([3, 7])
     flat_times = jnp.array([5.0, 5.0])
     qe = jnp.array([1.0, 1.0])
-    flat_deviated = jnp.array([True, True])
+    flat_indirect = jnp.array([True, True])
 
-    detected, sensor_id, hit_time, deviated = _resolve_first_detection(
+    detected, sensor_id, hit_time, indirect = _resolve_first_detection(
         flat_weights, flat_indices, flat_times, n_photons=2,
         per_photon_qe=qe, qe_key=jax.random.PRNGKey(0), threshold=1e-10,
-        flat_deviated=flat_deviated)
+        flat_indirect=flat_indirect)
 
     assert bool(detected[0]) and not bool(detected[1])
     # An undetected photon is never tagged, whatever the propagation said.
-    assert bool(deviated[0]) and not bool(deviated[1])
+    assert bool(indirect[0]) and not bool(indirect[1])
 
     # Omitting the tag keeps the old 3-value behaviour, all-False.
     *_, none_dev = _resolve_first_detection(

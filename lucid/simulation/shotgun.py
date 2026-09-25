@@ -43,7 +43,7 @@ def setup_shotgun_simulator(
         Photons per case (baked into the JIT cache key).
     output_mode : {'waveform', 'per_photon'}
         ``'waveform'`` → dense ``(num_sensors, n_time_bins)`` + drop/detected counters.
-        ``'per_photon'`` → ``(detected, sensor_id, hit_time)`` arrays length n_photons.
+        ``'per_photon'`` → ``(detected, sensor_id, hit_time, indirect)`` arrays length n_photons.
     K : int
         Max scattering iterations; default 12 (covers tail for all detectors).
     temperature : float or None

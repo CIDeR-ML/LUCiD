@@ -577,7 +577,7 @@ def test_sensor_axes_point_inward():
 
 
 def test_angular_driver_keeps_only_direct_light():
-    """The reference skips isct != 0; here that is the deviated flag."""
+    """The reference skips isct != 0; here that is the indirect flag."""
     from lucid.production.fitqun import angular_driver as ad
 
     R, H = 1690.0, 1810.0
@@ -590,7 +590,7 @@ def test_angular_driver_keeps_only_direct_light():
         "emission_pos": emission,
         "sensor_id": np.zeros(4, dtype=int),
         "detected": np.ones(4, dtype=bool),
-        "deviated": np.array([False, True, False, True]),
+        "indirect": np.array([False, True, False, True]),
     }
     _, counts, _ = ad.accumulate(
         [chunk], sensors, shell_r_cm=100.0, det_radius_cm=R,
@@ -600,8 +600,8 @@ def test_angular_driver_keeps_only_direct_light():
 
     # Without the flag, asking for direct light is an error rather than a
     # silent pass-through of indirect photons into the tune.
-    with pytest.raises(ValueError, match="deviated"):
-        ad.accumulate([{**chunk, "deviated": None}], sensors, shell_r_cm=100.0,
+    with pytest.raises(ValueError, match="indirect"):
+        ad.accumulate([{**chunk, "indirect": None}], sensors, shell_r_cm=100.0,
                       det_radius_cm=R, det_halfheight_cm=H)
 
 
@@ -650,7 +650,7 @@ def test_scattable_driver_splits_direct_from_indirect():
         "emission_dir": np.tile([0.0, 0.0, 1.0], (4, 1)),
         "sensor_id": np.zeros(4, dtype=int),
         "detected": np.ones(4, dtype=bool),
-        "deviated": np.array([True, True, True, False]),
+        "indirect": np.array([True, True, True, False]),
     }
     sd.fill(tables, chunk, pmt_positions_m=pmt_positions_m, pmt_dir_z=pmt_dir_z)
 
@@ -666,6 +666,6 @@ def test_scattable_driver_splits_direct_from_indirect():
     assert np.isfinite(ratios["sidescattable"].table).all()
 
     # Refuses to guess when the flag is absent.
-    with pytest.raises(ValueError, match="deviated"):
-        sd.fill(tables, {**chunk, "deviated": None},
+    with pytest.raises(ValueError, match="indirect"):
+        sd.fill(tables, {**chunk, "indirect": None},
                 pmt_positions_m=pmt_positions_m, pmt_dir_z=pmt_dir_z)

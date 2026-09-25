@@ -11,7 +11,7 @@ left to the caller:
 
 * **Direct light only.** ``angularResponsePlotter.cc`` skips every photon with
   ``isct != 0``. LUCiD now reports the same thing per photon, so the cut is
-  ``~deviated`` -- no second production, no physics-config gymnastics.
+  ``~indirect`` -- no second production, no physics-config gymnastics.
 * **The shell.** Only photons whose emission point lies in a thin spherical
   shell about the sensor are kept, so ``Omega(R)`` and ``T(R)`` are common to
   every entry and the cos(eta) spectrum is the angular response alone.
@@ -65,7 +65,7 @@ def accumulate(chunks: Iterable[dict], sensor_positions_m: np.ndarray, *,
     are converted here to the cm that fiTQun's grids and the ``angResp_<r>``
     filenames are expressed in. Each chunk is a dict with ``emission_pos``
     (n, 3) in meters, ``sensor_id`` (n,), ``detected`` (n,) and optionally
-    ``deviated`` (n,). Returns ``(edges, counts, sumw2)``, ready for
+    ``indirect`` (n,). Returns ``(edges, counts, sumw2)``, ready for
     :func:`angular.write_angular_response`.
     """
     sensor_positions = np.asarray(sensor_positions_m, dtype=np.float64) * M_TO_CM
@@ -80,10 +80,10 @@ def accumulate(chunks: Iterable[dict], sensor_positions_m: np.ndarray, *,
         # rather than masking in place.
         keep = np.array(chunk["detected"], dtype=bool)
         if direct_only:
-            dev = chunk.get("deviated")
+            dev = chunk.get("indirect")
             if dev is None:
                 raise ValueError(
-                    "direct_only needs the per-photon 'deviated' flag; the "
+                    "direct_only needs the per-photon 'indirect' flag; the "
                     "sample predates it or was written without it")
             keep = keep & ~np.asarray(dev, dtype=bool)
         if not keep.any():
@@ -122,8 +122,8 @@ def run(shotgun_files: Iterable[str], sensor_positions_m: np.ndarray, *,
                 "emission_pos": np.asarray(src.origins).reshape(-1, 3),
                 "sensor_id": np.asarray(d["sensor_id"]).reshape(-1),
                 "detected": np.asarray(d["detected"]).reshape(-1),
-                "deviated": (None if d.get("deviated") is None
-                             else np.asarray(d["deviated"]).reshape(-1)),
+                "indirect": (None if d.get("indirect") is None
+                             else np.asarray(d["indirect"]).reshape(-1)),
             }
 
     edges, counts, sumw2 = accumulate(

@@ -94,10 +94,10 @@ def fill(tables: dict, chunk: dict, *, pmt_positions_m: np.ndarray,
     detected = np.asarray(chunk["detected"], dtype=bool)
     if not detected.any():
         return
-    dev = chunk.get("deviated")
+    dev = chunk.get("indirect")
     if dev is None:
         raise ValueError(
-            "the scattering table needs the per-photon 'deviated' flag to "
+            "the scattering table needs the per-photon 'indirect' flag to "
             "separate indirect from direct light in a single pass")
     dev = np.asarray(dev, dtype=bool)[detected]
 

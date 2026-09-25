@@ -20,7 +20,7 @@ reductions. The pieces that make that possible:
   :func:`lucid.sources.shotgun_source.shotgun_source`, which accepts per-photon
   origins and directions.
 * The propagation now reports, per detected photon, whether it scattered or
-  reflected on the way (``per_photon/deviated``). That is the reference's
+  reflected on the way (``per_photon/indirect``). That is the reference's
   ``isct`` flag, and it is what splits direct from indirect light in a single
   pass -- the reference never runs two productions.
 
