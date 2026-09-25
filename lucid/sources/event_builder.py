@@ -246,7 +246,10 @@ def _trace_event_bucketed(
     zero_translation = jnp.zeros(3, dtype=jnp.float32)
     track_params = _get_zero_track_params()
 
-    po = np.ascontiguousarray(photon_origins_np,    dtype=np.float32)
+    # Unify-on-cm at the kernel boundary: the simulator's data impl divides
+    # photon_origins by 100 (cm->m, the recon pad_photon_data convention),
+    # while root_reader / event_generation work in METERS throughout.
+    po = np.ascontiguousarray(photon_origins_np, dtype=np.float32) * 100.0
     pd = np.ascontiguousarray(photon_directions_np, dtype=np.float32)
     pt = np.ascontiguousarray(photon_times_np,      dtype=np.float32)
     pw = np.ascontiguousarray(photon_wavelengths_np, dtype=np.float32)
