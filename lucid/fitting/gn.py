@@ -28,8 +28,11 @@ and an additive ``t0`` — which the shared calibration problem cannot express, 
 rather than folded onto a residual that could not hold it.
 
 ``analysis/paper/utils/damping.py`` holds the 2-D loss-geometry figure's damped SOLVE, which is not
-a loop: one definition shared by that figure's two halves. It declines to call
-:func:`damped_matrix` for a documented and measured reason.
+a loop: one definition shared by that figure's two halves. It is a numpy transcription of
+:func:`lucid.fitting.transforms.damped_matrix` rather than a call to it, for a MEASURED reason —
+importing anything from ``lucid.fitting`` runs this package's ``__init__``, which costs 9 seconds
+and pulls jax into a module that otherwise only reads ``.npz`` files and draws. The conventions are
+identical and ``tests/test_paper_damping.py`` holds them in step.
 
 The seam
 --------
@@ -59,52 +62,7 @@ problem. So ``Problem.accumulate`` owns it.
 """
 import numpy as np
 
-__all__ = ['damped_matrix', 'gauss_newton']
-
-
-def damped_matrix(H, *, lam, mu, jitter=0.0, median_floor=1e-12):
-    """``A = H + lam·diag(H) + mu·median(diag H)·I + jitter·I``.
-
-    Two damping terms with different jobs, and the distinction matters:
-
-    * **Marquardt** ``lam·diag(H)`` scales with each parameter's own curvature, so it damps
-      without freezing the weakly-determined directions;
-    * **Levenberg** ``mu·median(diag H)·I`` is isotropic. It costs the soft directions, but it is
-      the only guarantee of a non-singular solve: for PSD ``H`` it shifts every eigenvalue by
-      exactly ``mu·base``, so ``lambda_min >= mu·base > 0``.
-
-    Because of that shift, an eigen-floor on top is provably inert whenever ``mu > 0`` — and was
-    measured never to engage: 0 of 19 directions, margin 3.7-15x. It is therefore not offered
-    here. A *relative* eigen-floor is also the recorded cause of an earlier defect in this
-    project, where it clipped a low-curvature direction and inflated a quoted uncertainty.
-
-    One convention, chosen rather than parameterised. The call sites this replaces disagreed in
-    two details that are invisible until you diff them:
-
-    ===================  =====================  ==============================================
-    was                  Marquardt diagonal     median of diag taken over
-    ===================  =====================  ==============================================
-    calibration          clipped to >= 0        entries strictly > 0        (filtered)
-    reconstruction       not clipped            all entries, floored at 1e-12  (clipped)
-    ===================  =====================  ==============================================
-
-    Both differences are taken the safer way here: the Marquardt diagonal IS clipped, because a
-    negative curvature entry would otherwise *reduce* the damping in that direction; and the
-    Levenberg median is FLOORED rather than filtered, so ``base > 0`` holds even when every
-    diagonal entry is zero, where filtering would fall back to an arbitrary 1.0.
-
-    The two forms coincide whenever every diagonal entry exceeds ``median_floor``, which is the
-    case for both callers today — so unifying them changes nothing measurable, and the pins on
-    both sides say so. The point is that the convention is now stated in one place instead of
-    differing silently across files.
-    """
-    n = H.shape[0]
-    dg = np.clip(np.diag(H), 0, None)
-    base = np.median(np.clip(np.diag(H), median_floor, None))
-    A = H + lam * np.diag(dg) + mu * base * np.eye(n)
-    if jitter:
-        A = A + jitter * np.eye(n)
-    return A
+__all__ = ['gauss_newton']
 
 
 def gauss_newton(problem, theta0, steps, *, lam, mu, max_step=None, jitter=0.0,
@@ -118,16 +76,27 @@ def gauss_newton(problem, theta0, steps, *, lam, mu, max_step=None, jitter=0.0,
     problem
         Supplies ``grad_metric_loss(theta, step, refresh) -> (g, H, loss)`` and
         ``accumulate(theta, dtheta) -> theta``. On a non-refresh step it may return a metric
-        cached from the last refresh — so ``g`` is at the current iterate while ``H`` may be at
-        an earlier one. That is intended: the metric is a preconditioner and cannot move the
-        fixed point, so a stale one costs convergence rate, not accuracy.
+        cached from the last refresh. For :class:`~lucid.fitting.recon.ReconModel` that means
+        ``g`` is at the current iterate while ``H`` may be at an earlier one, which is intended:
+        the metric is a preconditioner and cannot move the fixed point, so a stale one costs
+        convergence rate, not accuracy.
+
+        That reasoning does NOT extend to calibration, and the difference matters when tuning
+        ``refresh``. :class:`~lucid.fitting.calib.CalibrationProblem` forms its gradient as
+        ``J^T r`` from the SAME cached ``J``, so on a non-refresh step only ``r`` is at the
+        current iterate and the search DIRECTION is stale too, not merely its preconditioner. At
+        the published ``REFRESH=20`` that is 19 steps in 20. The fixed point still survives
+        (``E[r] = 0`` at truth for any ``J``), so this is a convergence-path property and not a
+        bias -- but raising ``refresh`` is not free in the way this paragraph would otherwise
+        suggest.
     lr, lr_final
         Step scale, annealed linearly if ``lr_final`` is given. ``lr > 1`` is meaningful when the
         metric systematically under-estimates the curvature, which is the reconstruction case.
     scale
         Coordinate preconditioner: the step is solved as ``S·H·S``, ``S·g`` and applied as
-        ``S·du``. ``None`` genuinely SKIPS the multiply — multiplying a float32 metric by a
-        float64 ones-vector promotes it, and the damping is then built from a float64 diagonal.
+        ``S·du``. ``None`` genuinely SKIPS the multiply rather than multiplying by ones — a
+        no-op scaling would still change the dtype the damping is built from, and "does nothing"
+        should mean it.
     max_step
         Per-component clip on the scaled step. Units are per-problem: for a track fit ``3.0`` is
         150 MeV on the energy component; for calibration ``0.5`` is +65% in log space.
@@ -159,88 +128,40 @@ def gauss_newton(problem, theta0, steps, *, lam, mu, max_step=None, jitter=0.0,
     """
     if readout not in ('final', 'polyak', 'ming'):
         raise ValueError(f"readout must be 'final', 'polyak' or 'ming', got {readout!r}")
-    theta = theta0
-    P = int(np.asarray(theta0).shape[0])
-    S = np.ones(P) if scale is None else np.asarray(scale, float)
-    fix = np.asarray(list(fix), dtype=int)
-    sw = int(refresh_switch * steps)
-    since = None                       # None => the metric has never been built
+    # ONE loop AND ONE STEP. This function is the damped-Gauss-Newton CONFIGURATION of the shared
+    # driver, and the step it configures is the optax transformation in `lucid.fitting.transforms`
+    # -- there is no second, numpy implementation of the damped solve any more.
+    #
+    # There was, and deleting it is the point. `exact_damped_gauss_newton` re-did `damped_matrix`
+    # and `np.linalg.solve` in float64 so the delegation could be bit-exact against the loop it
+    # replaced. That bought pins, and cost a duplicated convention: the Levenberg-base fix earlier
+    # in this work had to be written twice and gated by a test whose only job was keeping the two
+    # copies in step. A test is how you verify an implementation, not a reason to keep one alive.
+    #
+    # MEASURED before switching, on the delegation test's own problem: without the anneal the two
+    # steps agree to 3.4e-09; with the published `lr 4->1.5` over 150 steps they differ by 1.4e-03
+    # in units of SCALE9 -- 0.07 MeV of energy and 0.3 mm of position, against a ~15 cm vertex
+    # resolution and a Monte-Carlo loss whose own run-to-run spread is far larger. The JAX arm
+    # reached the LOWER final loss (3.8e-11 against 6.3e-10), so this is not a precision
+    # concession.
+    #
+    # The anneal is `scale_by_driver_schedule`, which reads the driver's iteration instead of
+    # counting its own steps -- necessary because `minimize` restores optimiser state on a refused
+    # step, which would rewind a stateful schedule and repeat an iteration.
+    from lucid.fitting.minimize import minimize as _minimize
+    from lucid.fitting.transforms import (scale_by_damped_gauss_newton, scale_by_driver_schedule,
+                                          annealed_learning_rate)
+    import optax as _optax
+    tx = _optax.chain(
+        scale_by_damped_gauss_newton(lam, mu, jitter=jitter),
+        scale_by_driver_schedule(annealed_learning_rate(lr, lr_final, steps)),
+        _optax.scale(-1.0),                      # direction -> descent step
+    )
+    return _minimize(
+        problem, theta0, steps, tx,
+        needs_metric=True, scale=scale, max_step=max_step,
+        refresh=refresh, refresh_final=refresh_final, refresh_switch=refresh_switch,
+        readout=readout, polyak=polyak, reject_nonfinite=reject_nonfinite,
+        fix=fix, on_step=on_step)
 
-    def _due(step):
-        if since is None:
-            return True
-        r_it = refresh if (refresh_final is None or step < sw) else refresh_final
-        return since >= r_it or (refresh_final is not None and step == sw)
 
-    def _norm(gv):
-        return float(np.linalg.norm(gv if scale is None else S * gv))
-
-    g, H, loss = problem.grad_metric_loss(theta, 0, refresh=_due(0))
-    since = 1
-    history = [np.asarray(theta)]
-    gnorms = [_norm(np.asarray(g))]
-    losses = np.zeros(steps)
-    # Seeded from the START's own gradient norm, not from inf: gnorms[0] is recorded and is a
-    # legitimate candidate, so seeding at inf silently excluded the one iterate the caller
-    # supplied. On a problem whose gradient grows monotonically, 'ming' returned the LAST
-    # iterate while argmin(gnorm) was 0.
-    best = (gnorms[0], np.asarray(theta))
-
-    for step in range(steps):
-        # dtype is preserved deliberately: the metric arrives as float32 and the damping is built
-        # from its diagonal, so promoting first shifts median(diag H) in the last bit. The
-        # amplification is the documented property of this stack (see the float32 note below); the
-        # specific step-by-step figures previously quoted here were not reproducible and are gone.
-        g = np.asarray(g)
-        H = np.asarray(H)
-        losses[step] = float(loss) if loss is not None else np.nan
-
-        Hs = H if scale is None else S[:, None] * H * S[None, :]
-        gs = g if scale is None else S * g
-        if fix.size:
-            gs = np.array(gs); gs[fix] = 0.0
-        A = damped_matrix(Hs, lam=lam, mu=mu, jitter=jitter)
-        lr_it = lr if lr_final is None else lr + (lr_final - lr) * (step / max(1, steps - 1))
-        du = -lr_it * np.linalg.solve(A, gs)
-        if max_step is not None:
-            du = np.clip(du, -max_step, max_step)
-        if fix.size:
-            du[fix] = 0.0
-
-        theta_new = problem.accumulate(theta, du if scale is None else S * du)
-
-        nxt = None
-        if step + 1 < steps or reject_nonfinite:
-            due = _due(step + 1)
-            nxt = problem.grad_metric_loss(theta_new, step + 1, refresh=due)
-            since = 1 if due else since + 1
-
-        if reject_nonfinite and nxt is not None and not (
-                np.isfinite(np.asarray(theta_new)).all() and np.isfinite(np.asarray(nxt[0])).all()):
-            pass                                   # keep theta, g, H, loss — the step is refused
-        else:
-            theta = theta_new
-            if nxt is not None:
-                g, H, loss = nxt
-
-        gn = _norm(np.asarray(g))
-        if gn < best[0]:
-            best = (gn, np.asarray(theta))
-        history.append(np.asarray(theta))
-        gnorms.append(gn)
-        if on_step is not None:
-            on_step(step, theta, g, H, loss)
-
-    if readout == 'polyak' and polyak:
-        # history[1:] first: `history` includes the STARTING point, so a bare [-polyak:]
-        # averages the un-stepped start into the answer whenever polyak > steps. That is
-        # reachable — a shortened run (--steps 30 against the published polyak of 50) would
-        # silently report a number pulled toward its own perturbed start. Identical to
-        # [-polyak:] for polyak <= steps, which is every pinned configuration.
-        out = np.mean(np.stack(history[1:])[-polyak:], axis=0)
-    elif readout == 'ming':
-        out = best[1]
-    else:
-        out = np.asarray(theta)
-    return dict(theta=out, history=np.stack(history), gnorm=np.array(gnorms),
-                loss=losses, n_steps=steps)

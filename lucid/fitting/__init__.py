@@ -49,7 +49,7 @@ from lucid.fitting.calib import (
     CalibrationForward, CalibrationJacobian, CalibrationProblem,
     profile_gains, neyman_residual,
 )
-from lucid.fitting.gn import gauss_newton, damped_matrix
+from lucid.fitting.gn import gauss_newton
 from lucid.fitting.calibrate import calibrate, closure, closure_data, fit
 from lucid.fitting.schur_gn import (
     SourceModel, sqrt_residual, make_constrained_schur, ridge_inverse,
@@ -61,13 +61,23 @@ from lucid.fitting.timing import calibrate_timing
 from lucid.fitting.recon import (
     ReconModel, ReconProblem, ProjectedReconProblem, fit_track, fit_track_multistart,
     track_from_vec9, vec9_from_track, vec9_dir, SCALE9, seed_vertex_time,
-    fuse_seeds, pick_by_margin,
+    fuse_seeds, pick_by_margin, DEFAULT_RECIPE,
 )
 from lucid.fitting import report
 from lucid.fitting.contracts import CalibForward, PerPhotonPredictor
 from lucid.fitting.analysis import (
     bootstrap_ci, resolution_stats, vertex_residual, angular_error_deg,
 )
+# The TRANSFORMATIONS are re-exported; `damped_matrix` is not, and now there is only one of it.
+# `gn.damped_matrix` was a second, numpy implementation of the same convention, kept so the
+# delegation could be pinned bit-exactly against the loop it replaced. It had no production caller
+# once `gauss_newton` moved onto the optax step, and a convention with two implementations is one
+# that has to be fixed twice -- which it was, earlier in this work. Reach the surviving one
+# explicitly: `from lucid.fitting.transforms import damped_matrix`.
+from lucid.fitting.transforms import (damped_gauss_newton, scale_by_damped_gauss_newton,
+                                      scale_by_driver_schedule, annealed_learning_rate)
+from lucid.fitting.minimize import minimize
+from lucid.fitting.scaled import ScaledProblem
 
 __all__ = [
     # parameterisations
@@ -76,10 +86,11 @@ __all__ = [
     'calibrate', 'closure', 'closure_data', 'fit', 'build_calibration_problem',
     'CalibrationForward', 'CalibrationJacobian', 'CalibrationProblem',
     'profile_gains', 'neyman_residual',
-    # the shared optimiser
-    'gauss_newton', 'damped_matrix',
+    # the shared optimiser: the numpy loop, and the same step as an optax transformation
+    'gauss_newton',
+    'damped_gauss_newton', 'scale_by_damped_gauss_newton', 'minimize', 'ScaledProblem',
     # reconstruction
-    'ReconModel', 'ReconProblem', 'ProjectedReconProblem', 'fit_track',
+    'ReconModel', 'ReconProblem', 'ProjectedReconProblem', 'fit_track', 'DEFAULT_RECIPE',
     'fit_track_multistart', 'seed_vertex_time',
     'track_from_vec9', 'vec9_from_track', 'vec9_dir', 'SCALE9',
     'fuse_seeds', 'pick_by_margin',

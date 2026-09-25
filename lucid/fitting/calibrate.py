@@ -39,6 +39,7 @@ from lucid.fitting.calib import (
     CalibrationForward, CalibrationJacobian, CalibrationProblem,
 )
 from lucid.fitting.gn import gauss_newton
+from lucid.fitting.minimize import minimize
 from lucid.fitting.params import LogParams
 
 __all__ = ['calibrate', 'closure', 'closure_data', 'fit']
@@ -62,7 +63,8 @@ def calibrate(sim, sources, params, data, theta0, *,
               n_forward_draws=1, jacobian_draws=2,
               q_floor=None, q_floor_frac=0.01, gauge='log', fix=(), seed=0,
               lr=1.0, lr_final=None, scale=None, readout='final', polyak=0,
-              map_fn=None, predict=None, forward=None, on_step=None):
+              map_fn=None, predict=None, forward=None, on_step=None,
+              tx=None, needs_metric=True):
     """Fit detector parameters to observed per-sensor charge.
 
     Parameters
@@ -83,10 +85,24 @@ def calibrate(sim, sources, params, data, theta0, *,
         Starting fit vector.
     steps, lam, mu, max_step, refresh, lr, scale, readout, polyak, fix
         Passed through to :func:`lucid.fitting.gn.gauss_newton`; see it for the conventions.
+    tx : optax.GradientTransformation or None
+        None (the default) runs the published damped Gauss-Newton path unchanged, byte for byte.
+        Supplying a transformation routes the same problem through
+        :func:`lucid.fitting.minimize.minimize` instead, so any optax optimiser can fit this
+        problem -- including the Gauss-Newton one, as
+        ``damped_gauss_newton(lam, mu, learning_rate=...)``. ``lam``/``mu``/``jitter``/``lr``
+        configure the Gauss-Newton STEP, so passing them alongside ``tx`` raises rather than
+        silently double-applying or ignoring them.
+    needs_metric : bool
+        Whether ``tx`` consumes the metric. Leave True for curvature-aware transformations. Note
+        that False does not avoid building it here: this problem's gradient IS ``Jᵀr``, so there
+        is no gradient without the Jacobian and a first-order rule saves nothing on calibration.
     n_forward_draws : int
         Forward draws averaged into the residual each step. Averaging reduces the Monte-Carlo
-        variance of the model, which is what a residual linear in the model needs for its fixed
-        point to sit at truth.
+        variance of the model. Linearity in ``M`` is what makes averaging UNNECESSARY for the
+        fixed point, not what makes it necessary -- the mechanism that makes this knob matter is
+        the profiled gain ``k = ΣQ/ΣM``, which is nonlinear in ``M``. See
+        :func:`~lucid.fitting.calib.profile_gains`.
     jacobian_draws : int
         Jacobian draws averaged per refresh, on a stream independent of the residual's.
     q_floor, q_floor_frac
@@ -118,8 +134,24 @@ def calibrate(sim, sources, params, data, theta0, *,
 
     fwd = forward if forward is not None else CalibrationForward(
         sim, sources, params, n_sensors, map_fn=map_fn, predict=predict)
-    if forward is not None and fwd.NS != n_sensors:
-        raise ValueError(f'the supplied forward has {fwd.NS} sensors but data has {n_sensors}')
+    if forward is not None:
+        # Shape agreement is NOT agreement. The Jacobian below is built from the ARGUMENTS
+        # (params, sources, predict), never from `fwd`, so a forward carrying a different
+        # parameterisation of the same width passes every size check while the residual and the
+        # Jacobian then describe different models -- a fit that runs to completion and returns
+        # nonsense on the block where the two bases disagree. The published driver passes the
+        # very object it built from these arguments, so identity is the right test and costs it
+        # nothing.
+        if fwd.NS != n_sensors:
+            raise ValueError(f'the supplied forward has {fwd.NS} sensors but data has {n_sensors}')
+        if fwd.params is not params:
+            raise ValueError(
+                'the supplied forward was built with a different CalibrationParams object; the '
+                'Jacobian is built from `params`, so reusing a forward from another '
+                'parameterisation silently fits one model with another model\'s gradient')
+        if fwd.n_sources != len(sources):
+            raise ValueError(f'the supplied forward has {fwd.n_sources} sources but {len(sources)} '
+                             f'were passed')
     jac = CalibrationJacobian(sim, sources, params, n_sensors, key0=jkey,
                               map_fn=map_fn, predict=predict)
     if data.shape[0] != fwd.S:
@@ -129,9 +161,31 @@ def calibrate(sim, sources, params, data, theta0, *,
     prob = CalibrationProblem(fwd, jac, params, data, q_floor, gauge=gauge,
                               n_forward_draws=n_forward_draws, jacobian_draws=jacobian_draws,
                               forward_key0=fkey)
-    res = gauss_newton(prob, jnp.asarray(theta0, dtype=jnp.float32), steps,
-                       lam=lam, mu=mu, max_step=max_step, jitter=jitter,
-                       lr=lr, lr_final=lr_final, scale=scale,
+    th0 = jnp.asarray(theta0, dtype=jnp.float32)
+    if tx is None:
+        # The published path, byte for byte. `tx=None` must reach exactly this call or the
+        # bit-exact pins in tests/reconciliation/ stop meaning anything.
+        res = gauss_newton(prob, th0, steps,
+                           lam=lam, mu=mu, max_step=max_step, jitter=jitter,
+                           lr=lr, lr_final=lr_final, scale=scale,
+                           refresh=refresh, refresh_final=refresh_final,
+                           refresh_switch=refresh_switch,
+                           readout=readout, polyak=polyak, fix=fix, on_step=on_step)
+    else:
+        # An explicit optax transformation carries its own step size, so lam/mu/jitter/lr belong
+        # to it and passing them here would either double-apply or be silently ignored -- the
+        # failure `_RETIRED` exists to prevent. Refuse rather than pick one.
+        bad = [n for n, v, d in (('lam', lam, 0.01), ('mu', mu, 0.1), ('jitter', jitter, 0.0),
+                                 ('lr', lr, 1.0), ('lr_final', lr_final, None))
+               if v != d]
+        if bad:
+            raise TypeError(
+                f'calibrate() got {", ".join(bad)} together with tx=. Those configure the '
+                f'Gauss-Newton step, so with an explicit transformation they belong inside it: '
+                f'damped_gauss_newton(lam, mu, learning_rate=...). A driver-side step size would '
+                f'double-apply.')
+        res = minimize(prob, th0, steps, tx, needs_metric=needs_metric,
+                       max_step=max_step, scale=scale,
                        refresh=refresh, refresh_final=refresh_final,
                        refresh_switch=refresh_switch,
                        readout=readout, polyak=polyak, fix=fix, on_step=on_step)
@@ -219,7 +273,7 @@ _RETIRED = {
     'kstep_max': 'there is no per-PMT iterate to clip; the gains are solved, not stepped',
     'lk0': 'there is no per-PMT iterate to initialise',
     'gauge_k': "replaced by gauge='log' or 'linear'",
-    'ridge': 'renamed lam, the Marquardt term of lucid.fitting.gn.damped_matrix',
+    'ridge': 'renamed lam, the Marquardt term of lucid.fitting.transforms.damped_matrix',
     'nb_r': 'was INERT: declared in the old signature and never read. n_forward_draws IS '
              'live, so carrying the old value across is a behaviour change, not a rename',
     'nb_h': 'renamed jacobian_draws',

@@ -29,7 +29,7 @@ Three things stayed behind, for one reason each:
                          residual in :mod:`lucid.fitting.calib` first, so it is deferred rather
                          than duplicated onto a residual that cannot express it.
 
-``ridge_inverse`` remains as the damping those two use; :func:`lucid.fitting.gn.damped_matrix` is
+``ridge_inverse`` remains as the damping those two use; :func:`lucid.fitting.transforms.damped_matrix` is
 the one convention for everything that has been consolidated, and differs from it in documented
 ways (an eigen-floor here, provably inert whenever the Levenberg term is positive).
 

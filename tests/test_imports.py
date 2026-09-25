@@ -77,6 +77,10 @@ def test_every_public_name_resolves_to_what_it_claims_to_be():
         f'{shadowed} resolve to MODULES, not to the objects __all__ advertises — a submodule of '
         f'the same name has shadowed them')
 
-    for name in ('gauss_newton', 'damped_matrix', 'calibrate', 'closure', 'closure_data', 'fit',
+    # `damped_matrix` is deliberately NOT here. It is reached as
+    # `lucid.fitting.transforms.damped_matrix`, not off the package, and there is only one of it
+    # now — the numpy twin that used to share the name was deleted. Re-exporting it would put the
+    # name back on the package it was removed from.
+    for name in ('gauss_newton', 'calibrate', 'closure', 'closure_data', 'fit',
                  'fit_track', 'crb', 'profile_gains', 'neyman_residual'):
         assert callable(getattr(F, name)), f'lucid.fitting.{name} is not callable'
