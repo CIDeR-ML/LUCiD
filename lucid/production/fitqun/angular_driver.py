@@ -69,14 +69,16 @@ def accumulate(chunks: Iterable[dict], sensor_positions: np.ndarray, *,
     sumw2 = np.zeros(n_bins)
 
     for chunk in chunks:
-        keep = np.asarray(chunk["detected"], dtype=bool)
+        # np.asarray on a JAX output can be read-only, so build a new array
+        # rather than masking in place.
+        keep = np.array(chunk["detected"], dtype=bool)
         if direct_only:
             dev = chunk.get("deviated")
             if dev is None:
                 raise ValueError(
                     "direct_only needs the per-photon 'deviated' flag; the "
                     "sample predates it or was written without it")
-            keep &= ~np.asarray(dev, dtype=bool)
+            keep = keep & ~np.asarray(dev, dtype=bool)
         if not keep.any():
             continue
 
