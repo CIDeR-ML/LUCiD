@@ -106,8 +106,8 @@ def photonsim_macro(*, output_path, n_events: int, seed: int) -> str:
     ]) + "\n"
 
 
-def translate_uniform(origins: np.ndarray, rng, *, det_radius_cm: float,
-                      det_halfheight_cm: float, event_id: Optional[np.ndarray] = None,
+def translate_uniform(origins: np.ndarray, rng, *, det_radius_m: float,
+                      det_halfheight_m: float, event_id: Optional[np.ndarray] = None,
                       fiducial_fraction: float = 1.0) -> np.ndarray:
     """Shift photons to uniformly sampled vertices in the cylinder.
 
@@ -122,10 +122,11 @@ def translate_uniform(origins: np.ndarray, rng, *, det_radius_cm: float,
     only meaningful when the array really is one event.
 
     Uniform in volume means uniform in r^2, not in r -- sampling r linearly
-    would pile events toward the axis.
+    would pile events toward the axis. Dimensions are in meters, matching
+    :func:`load_photons` and the propagation it feeds.
     """
-    r = det_radius_cm * fiducial_fraction
-    hz = det_halfheight_cm * fiducial_fraction
+    r = det_radius_m * fiducial_fraction
+    hz = det_halfheight_m * fiducial_fraction
 
     def _draw(n):
         rho = r * np.sqrt(rng.random(n))
@@ -142,7 +143,12 @@ def translate_uniform(origins: np.ndarray, rng, *, det_radius_cm: float,
 
 
 def load_photons(photonsim_path, step_size: str = "200 MB"):
-    """Stream ``(origins, directions, event_id)`` in cm from a PhotonSim file.
+    """Stream ``(origins, directions, event_id)`` in METERS from a PhotonSim file.
+
+    Meters, not fiTQun's cm: these photons are fed to
+    :func:`lucid.sources.shotgun_source.shotgun_source`, and every LUCiD
+    propagation input is in meters. The reductions convert to cm themselves,
+    at the point where fiTQun's binning is applied.
 
     The event id travels with the photons because the vertex has to be drawn
     per event (see :func:`translate_uniform`); flattening it away is what
@@ -164,7 +170,7 @@ def load_photons(photonsim_path, step_size: str = "200 MB"):
             per_entry = [len(v) for v in chunk["PhotonPosX"]]
             event_id = np.repeat(np.asarray(chunk["EventID"]), per_entry)
             origins = np.stack(
-                [np.concatenate(chunk[b]) for b in pos_branches], axis=1) * 0.1
+                [np.concatenate(chunk[b]) for b in pos_branches], axis=1) * 0.001
             directions = np.stack(
                 [np.concatenate(chunk[b]) for b in dir_branches], axis=1)
             yield (origins.astype(np.float32), directions.astype(np.float32),
