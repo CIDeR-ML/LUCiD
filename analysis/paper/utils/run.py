@@ -16,8 +16,11 @@ import numpy as np
 REPO_ROOT = Path(__file__).resolve().parents[3]      # LUCiD/
 sys.path.insert(0, str(REPO_ROOT))
 
+# Scalars listed here become HDF5 ATTRIBUTES; everything else becomes a dataset. The list is a
+# whitelist, so a new scalar that is not added lands as a dataset and every `attrs`-based reader
+# sees it as absent rather than as an error.
 _ATTR_KEYS = {'ev', 'energy_true', 'which', 'best_iterA', 'best_iterB', 'best_iterF',
-              'best_iter_win', 'n_hit', 'q_tot', 'seconds'}
+              'best_iter_win', 'n_hit', 'q_tot', 'seconds', 'n_rejected'}
 
 
 def _write_event(grp, rec):
