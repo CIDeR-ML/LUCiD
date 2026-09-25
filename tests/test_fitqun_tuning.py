@@ -581,9 +581,11 @@ def test_angular_driver_keeps_only_direct_light():
     from lucid.production.fitqun import angular_driver as ad
 
     R, H = 1690.0, 1810.0
-    sensors = np.array([[0.0, R, 0.0]])
+    # Positions go in as meters (LUCiD's convention); the cm grid args are
+    # fiTQun's and stay as they are.
+    sensors = np.array([[0.0, R, 0.0]]) / 100.0
     # Four photons head-on at the shell radius; two of them scattered.
-    emission = np.tile([0.0, R - 100.0, 0.0], (4, 1))
+    emission = np.tile([0.0, (R - 100.0) / 100.0, 0.0], (4, 1))
     chunk = {
         "emission_pos": emission,
         "sensor_id": np.zeros(4, dtype=int),
@@ -640,7 +642,8 @@ def test_scattable_driver_splits_direct_from_indirect():
           for s in scattable.SURFACES}
     tables = sd.make_tables(nb, bd)
 
-    pmt_positions = np.array([[1690.0, 0.0, 0.0]])       # one barrel PMT
+    # fill() takes meters, as LUCiD propagation reports them.
+    pmt_positions_m = np.array([[1690.0, 0.0, 0.0]]) / 100.0   # one barrel PMT
     pmt_dir_z = np.array([0.0])                          # barrel orientation
     chunk = {
         "emission_pos": np.zeros((4, 3)),
@@ -649,7 +652,7 @@ def test_scattable_driver_splits_direct_from_indirect():
         "detected": np.ones(4, dtype=bool),
         "deviated": np.array([True, True, True, False]),
     }
-    sd.fill(tables, chunk, pmt_positions=pmt_positions, pmt_dir_z=pmt_dir_z)
+    sd.fill(tables, chunk, pmt_positions_m=pmt_positions_m, pmt_dir_z=pmt_dir_z)
 
     side = tables["sidescattable"]
     assert side["scattered"].table.sum() == 3
@@ -665,4 +668,4 @@ def test_scattable_driver_splits_direct_from_indirect():
     # Refuses to guess when the flag is absent.
     with pytest.raises(ValueError, match="deviated"):
         sd.fill(tables, {**chunk, "deviated": None},
-                pmt_positions=pmt_positions, pmt_dir_z=pmt_dir_z)
+                pmt_positions_m=pmt_positions_m, pmt_dir_z=pmt_dir_z)

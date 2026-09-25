@@ -33,6 +33,9 @@ import numpy as np
 
 from . import scattable
 
+# LUCiD propagation reports positions in meters; fiTQun's tables are in cm.
+M_TO_CM = 100.0
+
 
 def _delta_phi(a: np.ndarray, b: np.ndarray) -> np.ndarray:
     """``TVector3::DeltaPhi`` semantics: the difference wrapped to (-pi, pi]."""
@@ -81,9 +84,13 @@ def make_tables(nbins: dict, bounds: dict) -> dict:
     return out
 
 
-def fill(tables: dict, chunk: dict, *, pmt_positions: np.ndarray,
+def fill(tables: dict, chunk: dict, *, pmt_positions_m: np.ndarray,
          pmt_dir_z: np.ndarray) -> None:
-    """Add one propagated chunk to the tables, split on the scatter flag."""
+    """Add one propagated chunk to the tables, split on the scatter flag.
+
+    Positions arrive in METERS, as LUCiD propagation reports them, and are
+    converted here to the cm that ``scatTableLooper``'s coordinates use.
+    """
     detected = np.asarray(chunk["detected"], dtype=bool)
     if not detected.any():
         return
@@ -95,8 +102,9 @@ def fill(tables: dict, chunk: dict, *, pmt_positions: np.ndarray,
     dev = np.asarray(dev, dtype=bool)[detected]
 
     sid = np.asarray(chunk["sensor_id"])[detected]
-    src_pos = np.asarray(chunk["emission_pos"])[detected]
+    src_pos = np.asarray(chunk["emission_pos"])[detected] * M_TO_CM
     src_dir = np.asarray(chunk["emission_dir"])[detected]
+    pmt_positions = np.asarray(pmt_positions_m, dtype=np.float64) * M_TO_CM
 
     surface = scattable.surface_for(pmt_dir_z[sid])
     is_cap = surface != "sidescattable"

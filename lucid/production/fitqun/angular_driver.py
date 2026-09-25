@@ -30,6 +30,9 @@ import numpy as np
 
 from . import angular
 
+# LUCiD propagation reports positions in meters; fiTQun's tables are in cm.
+M_TO_CM = 100.0
+
 
 def sensor_axes(sensor_positions: np.ndarray, *, det_radius_cm: float,
                 det_halfheight_cm: float, tol_cm: float = 1.0) -> np.ndarray:
@@ -52,16 +55,20 @@ def sensor_axes(sensor_positions: np.ndarray, *, det_radius_cm: float,
     return axes
 
 
-def accumulate(chunks: Iterable[dict], sensor_positions: np.ndarray, *,
+def accumulate(chunks: Iterable[dict], sensor_positions_m: np.ndarray, *,
                shell_r_cm: float, det_radius_cm: float, det_halfheight_cm: float,
                shell_dr_cm: float = 50.0, n_bins: int = 25,
                direct_only: bool = True):
     """Histogram cos(eta) over a stream of propagated photon chunks.
 
-    Each chunk is a dict with ``emission_pos`` (n, 3) in cm, ``sensor_id`` (n,),
-    ``detected`` (n,) and optionally ``deviated`` (n,). Returns
-    ``(edges, counts, sumw2)``, ready for :func:`angular.write_angular_response`.
+    Positions arrive in METERS -- that is what LUCiD propagation emits -- and
+    are converted here to the cm that fiTQun's grids and the ``angResp_<r>``
+    filenames are expressed in. Each chunk is a dict with ``emission_pos``
+    (n, 3) in meters, ``sensor_id`` (n,), ``detected`` (n,) and optionally
+    ``deviated`` (n,). Returns ``(edges, counts, sumw2)``, ready for
+    :func:`angular.write_angular_response`.
     """
+    sensor_positions = np.asarray(sensor_positions_m, dtype=np.float64) * M_TO_CM
     axes = sensor_axes(sensor_positions, det_radius_cm=det_radius_cm,
                        det_halfheight_cm=det_halfheight_cm)
     edges = np.linspace(0.0, 1.0, n_bins + 1)
@@ -83,7 +90,7 @@ def accumulate(chunks: Iterable[dict], sensor_positions: np.ndarray, *,
             continue
 
         sid = np.asarray(chunk["sensor_id"])[keep]
-        emission = np.asarray(chunk["emission_pos"])[keep]
+        emission = np.asarray(chunk["emission_pos"])[keep] * M_TO_CM
         _, c, s2 = angular.measure(
             emission, sensor_positions[sid], axes[sid],
             shell_r_cm=shell_r_cm, shell_dr_cm=shell_dr_cm,
@@ -95,10 +102,13 @@ def accumulate(chunks: Iterable[dict], sensor_positions: np.ndarray, *,
     return edges, counts, sumw2
 
 
-def run(shotgun_files: Iterable[str], sensor_positions: np.ndarray, *,
+def run(shotgun_files: Iterable[str], sensor_positions_m: np.ndarray, *,
         output, shell_r_cm: float, det_radius_cm: float,
         det_halfheight_cm: float, **kwargs) -> Path:
-    """End to end: shotgun outputs in, ``angRespAll_<r>.root`` out."""
+    """End to end: shotgun outputs in, ``angRespAll_<r>.root`` out.
+
+    ``sensor_positions_m`` is in meters, as LUCiD reports it.
+    """
     from lucid.production.photon_shotgun.io import load_shotgun_per_photon
 
     def _chunks():
@@ -117,7 +127,7 @@ def run(shotgun_files: Iterable[str], sensor_positions: np.ndarray, *,
             }
 
     edges, counts, sumw2 = accumulate(
-        _chunks(), sensor_positions, shell_r_cm=shell_r_cm,
+        _chunks(), sensor_positions_m, shell_r_cm=shell_r_cm,
         det_radius_cm=det_radius_cm, det_halfheight_cm=det_halfheight_cm,
         **kwargs)
     return angular.write_angular_response(output, edges, counts, sumw2,
