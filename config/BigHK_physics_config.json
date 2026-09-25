@@ -1,7 +1,10 @@
 {
   "medium_model": "materials/water.json",
   "qe_curve": "pmt/HK_QE.json",
-  "wall_reflection_rate": 0.2,
-  "sensor_reflection_rate": 0.2,
+  "_comment_reflection": "wall: SK inner-detector black PET liner, total R~0.05, ~55% specular [Abe et al., NIM A737 (2014) 253, arXiv:1307.0162 Fig. 32; WCSim UNIFIED groundfrontpainted 0.50 spec + 0.20 backscatter + 0.30 diffuse]. sensor: PMT front glass + bialkali photocathode viewed from water, total R~0.25, specular-dominated [Motta & Schonert, NIM A539 (2005) 217; WCSim rgcff=0.32; SKDETSIM ~0.21]. Consumed by the default 'scalar_mix' reflection model; f_spec<1 keeps a genuine mixture (micro-roughness).",
+  "wall_reflection_rate": 0.05,
+  "wall_fspec": 0.55,
+  "sensor_reflection_rate": 0.25,
+  "sensor_fspec": 0.9,
   "qe_corrections": 1.0
 }

@@ -188,8 +188,10 @@ styles already in the repo:
 {
   "scatter_length": 50.0,
   "absorption_length": 50.0,
-  "wall_reflection_rate": 0.2,
-  "sensor_reflection_rate": 0.2,
+  "wall_reflection_rate": 0.05,
+  "wall_fspec": 0.55,
+  "sensor_reflection_rate": 0.25,
+  "sensor_fspec": 0.90,
   "qe": 0.2,
   "qe_corrections": 1.0
 }
@@ -199,11 +201,20 @@ styles already in the repo:
 {
   "medium_model": "materials/water.json",
   "qe_curve": "pmt/SK_QE.json",
-  "wall_reflection_rate": 0.2,
-  "sensor_reflection_rate": 0.2,
+  "wall_reflection_rate": 0.05,
+  "wall_fspec": 0.55,
+  "sensor_reflection_rate": 0.25,
+  "sensor_fspec": 0.90,
   "qe_corrections": 1.0
 }
 ```
+
+!!! note "Give every reflecting surface a specular fraction"
+    The default reflection model is `scalar_mix`, which needs **four** numbers: a rate and a
+    specular fraction for each of the wall and the sensor. Omit a fraction and it is filled from
+    a Super-K default — so a detector can silently inherit SK's blacksheet optics. Write both.
+    The values above are SK's: a black PET liner reflects ~5% and a PMT face ~25%, which is why
+    they are not equal. A surface with rate `0` never reflects, so its fraction is unused.
 
 The second style omits `scatter_length`, `absorption_length`, and `qe` entirely — they
 get **projected** from the referenced curves (`medium_model`, `qe_curve`) at a reference
