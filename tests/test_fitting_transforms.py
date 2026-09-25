@@ -1,31 +1,14 @@
-"""The JAX Gauss-Newton transformation: its conventions, and that it actually composes.
-
-`lucid.fitting.transforms` holds THE damped Gauss-Newton step — singular, now. There used to be a
-second one, `gn.damped_matrix` plus `exact_damped_gauss_newton`, a float64 numpy transcription
-kept so `gauss_newton`'s delegation could be pinned bit-exactly against the loop it replaced. Half
-of this file was that comparison, and it is gone with its subject.
-
-That deletion is the point rather than a side effect. A convention with two implementations is a
-convention that has to be fixed twice: when the Levenberg base moved from a floor to a filter
-earlier in this work, the change had to be written into both copies and a test updated whose only
-job was keeping them in step. Tests verify an implementation; they are not a reason to keep one.
-
-What remains is the two things worth asserting about a single implementation:
+"""The JAX damped Gauss-Newton transformation in `lucid.fitting.transforms`.
 
   CONVENTIONS   the clipped Marquardt diagonal, the filtered Levenberg median, and the refusal to
-                invent a base when nothing carries curvature. Asserted DIRECTLY on the JAX
-                function now, not by agreement with a second one — a comparison can only ever say
-                the two agree, never that either is right.
+                invent a base when nothing carries curvature, asserted directly on the values.
 
-  COMPOSITION   chain, scheduled damping, gradient accumulation, jit and vmap. The last three are
-                what a numpy implementation could not have had: `optax.MultiSteps` jits
-                internally and `np.linalg.solve` on a traced array raises
-                TracerArrayConversionError. Being in JAX is the reason this module exists, so it
-                is tested rather than assumed.
+  COMPOSITION   chain, scheduled damping, gradient accumulation, jit and vmap. The last three need
+                a traceable solve (`optax.MultiSteps` jits internally), which is why the step is
+                written in JAX, so they are tested rather than assumed.
 
-The float32-adequacy question — whether a float32 solve is good enough at the published
-conditioning — lives in `tests/test_float32_is_adequate.py`. It is a different question from
-anything here, and easy to confuse with the old equivalence tests because both used cond(H)=6800.
+Whether a float32 solve is accurate enough at the published conditioning is tested separately in
+`tests/test_float32_is_adequate.py`.
 """
 import numpy as np
 import jax
@@ -53,8 +36,7 @@ def test_the_marquardt_diagonal_is_clipped():
     """A negative curvature entry must contribute NO damping, not negative damping.
 
     Unclipped, `lam*diag(H)` on a negative entry SUBTRACTS from the damping in exactly the
-    direction that most needs it. Reconstruction's loop used to do this before the conventions
-    were unified.
+    direction that most needs it.
     """
     H = np.diag(np.array([-1.0, 2.0, 4.0], dtype=np.float32))
     A = np.asarray(damped_matrix(jnp.asarray(H), lam=LAM, mu=MU))
@@ -69,7 +51,7 @@ def test_the_levenberg_median_is_filtered_not_floored():
 
     Flooring at 1e-12 would give median(1e-12, 2, 4) = 2; filtering gives median(2, 4) = 3. The
     difference is a factor of 1.5 in the isotropic damping on this matrix, and grows to a total
-    collapse once more than half the diagonal is flat — which is why the convention changed.
+    collapse once more than half the diagonal is flat.
     """
     flat = np.diag(np.array([0.0, 2.0, 4.0], dtype=np.float32))
     A = np.asarray(damped_matrix(jnp.asarray(flat), lam=LAM, mu=MU))
@@ -77,11 +59,10 @@ def test_the_levenberg_median_is_filtered_not_floored():
 
 
 def test_nothing_carrying_curvature_yields_NaN_rather_than_a_fabricated_base():
-    """The traced mirror of the numpy version's `raise`.
+    """With no positive curvature anywhere the Gauss-Newton step is undefined.
 
-    A Hessian with no positive curvature anywhere means the Gauss-Newton step is not defined. A
-    traced function cannot raise, so it must not quietly substitute a number either — the old
-    floor returned a numerically singular `A` built from 1e-12 and said nothing.
+    A traced function cannot raise, so it must return NaN rather than a numerically singular `A`
+    built from a tiny floor that looks usable.
     """
     Z = np.zeros((3, 3), dtype=np.float32)
     A = np.asarray(damped_matrix(jnp.asarray(Z), lam=LAM, mu=MU))
@@ -121,7 +102,7 @@ def test_it_is_stateless():
     np.testing.assert_array_equal(np.asarray(d1), np.asarray(d2))
 
 
-# --------------------------------------------------------------- composition: the actual point
+# --------------------------------------------------------------- composition
 
 def test_it_chains_with_other_transformations():
     """extra_args must survive optax.chain, or the metric cannot reach a composed optimiser."""
@@ -137,7 +118,7 @@ def test_it_chains_with_other_transformations():
 
 
 def test_the_damping_itself_can_be_scheduled():
-    """A capability the numpy loop does not have: `lam` is a fixed scalar there."""
+    """`lam` can be driven by an optax schedule; annealing it toward 0 must grow the step."""
     H, g = spd(6, 1e3, seed=5), jnp.ones(6)
     tx = optax.inject_hyperparams(damped_gauss_newton)(
         lam=optax.linear_schedule(1.0, 0.0, 4), mu=MU)
@@ -150,11 +131,10 @@ def test_the_damping_itself_can_be_scheduled():
 
 
 def test_gradient_accumulation_works_and_numpy_could_not_do_it():
-    """optax.MultiSteps — the lever for a photon budget larger than the card holds.
+    """optax.MultiSteps: the lever for a photon budget larger than the card holds.
 
-    This is the capability that fails outright on a numpy implementation: MultiSteps jits its
-    inner update, and `np.linalg.solve` on a traced array raises TracerArrayConversionError. It
-    passing here is the concrete payoff of being in JAX.
+    MultiSteps jits its inner update, so this needs a traceable solve (`np.linalg.solve` on a
+    traced array raises TracerArrayConversionError).
     """
     H, g = spd(6, 1e3, seed=6), jnp.ones(6)
     every = 4
@@ -183,7 +163,7 @@ def test_it_jits():
 
 
 def test_it_vmaps_over_a_batch_of_problems():
-    """Batching: many independent fits stepped at once — impossible with the numpy solve."""
+    """Batching: many independent fits stepped at once must match stepping each alone."""
     B, P = 5, 6
     Hs = jnp.stack([jnp.asarray(spd(P, 1e3, seed=s)) for s in range(B)])
     gs = jnp.asarray(np.random.default_rng(8).standard_normal((B, P)), dtype=jnp.float32)

@@ -76,14 +76,9 @@ def intersect_cylinder_wall(ray_origin, ray_direction, r, h):
 
     def parallel_side_branch(_):
         # Direction is purely along z => no side intersection.
-        # dtype FOLLOWS THE RAY, it is not pinned. `lax.cond` requires both branches to return
-        # identical types, and the other branch's `tval_` is whatever precision the inputs carry.
-        # Hard-coding float32 here is invisible while `jax_enable_x64` is off -- everything is
-        # float32 -- and makes the library UNRUNNABLE in float64: enabling x64 raised
-        # "true_fun output and false_fun output must have identical types, got float32 vs
-        # float64" from this line. That blocked a float32-vs-float64 gradient comparison, which
-        # is a thing a differentiable simulator should be able to do. Bit-identical at float32,
-        # since `ray_origin.dtype` IS float32 there.
+        # dtype must follow the ray, not be pinned: `lax.cond` requires both branches to return
+        # identical types, and the other branch's `tval_` carries the input precision. A hard-coded
+        # float32 breaks the library under `jax_enable_x64`.
         return (False, jnp.array(LARGE, dtype=ray_origin.dtype))
 
     use_parallel = jnp.abs(a) < 1e-12

@@ -38,8 +38,8 @@ def repo_nphot_path(model_path):
 
     CHERENKOV MODELS ONLY. The file belongs to the model reached through ``siren_training``. The
     dE/dx model beside it (``dedx_siren_training``) shares the particle directory but not the
-    curve, and its context never reads nphot; keying on the directory alone handed it the
-    Cherenkov coefficients, which the mismatch check then refused, failing every dE/dx load.
+    curve, and its context never reads nphot. Keying on the particle directory alone would hand it
+    the Cherenkov coefficients, and the mismatch check would then fail every dE/dx load.
 
     The caller still checks the file against the model's own legacy a/b/c, so a wrong pairing
     raises instead of being applied.
@@ -231,19 +231,15 @@ class SIRENPredictor:
 
         WHY THIS EXISTS. The trained models are fetched with `scripts/download_data.sh`, and
         `data/*/*/siren_training/` is gitignored, so the model's own metadata is NOT in version
-        control. The log-log polynomial coefficients lived only there -- meaning a fresh clone
-        selected the legacy power law, which misses its own training table by rms 6.5% for the
-        muon and 10.5% for the electron, and by +0.9% across the 400-1800 MeV reconstruction
-        band. Shipping the coefficients in the repo is what makes the fix reach anyone who did
-        not happen to have the same local files.
+        control. Shipping the log-log polynomial coefficients in the repo is what lets a fresh
+        clone use them instead of the legacy power law, which misfits its own training table.
 
-        THE REPO FILE IS THE ONLY COPY, deliberately -- the same arrangement as `t0.json`, whose
-        coefficients the model metadata also does not carry. The upstream `nphot` block holds
-        only `form`, `a`, `b`, `c`, `r_squared` and the fit range, and the coefficients were
-        previously hand-added to the FETCHED file. That is worse than duplication: it changes the
-        artefact's size, and `download_data.sh` decides whether to re-fetch by comparing size
-        against the remote, then resumes with `curl -C -` from an offset past the remote file's
-        end. So an edited metadata file breaks the downloader for that model.
+        THE REPO FILE IS THE ONLY COPY, deliberately -- the same arrangement as `t0.json`. The
+        upstream `nphot` block holds only `form`, `a`, `b`, `c`, `r_squared` and the fit range.
+        Do not add the coefficients to the FETCHED file instead: that changes the artefact's size,
+        and `download_data.sh` decides whether to re-fetch by comparing size against the remote,
+        then resumes with `curl -C -` from an offset past the remote file's end, so an edited
+        metadata file breaks the downloader for that model.
 
         Found from the MODEL PATH, not from a particle name -- see `repo_nphot_path`, including why
         it looks where the caller asked before following symlinks. Nothing has to be told which
@@ -260,10 +256,8 @@ class SIRENPredictor:
             return
         override_path = repo_nphot_path(self.model_path)
         if override_path is None:
-            # No shipped polynomial for this model. Leave the block alone -- the legacy power law
-            # is what it has always used -- but record WHICH model, so the warning raised
-            # downstream can name it. With six (material, particle) bundles and a polynomial
-            # fitted for water only, "some model fell back" is not an actionable message.
+            # No shipped polynomial for this model: keep the legacy power law, but record WHICH
+            # model so the downstream fallback warning can name it.
             nphot.setdefault('_origin', str(self.model_path))
             return
         with open(override_path, 'r') as f:

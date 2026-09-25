@@ -1,21 +1,20 @@
 """Two random-start optimization trajectories to overlay on the Neyman 2D loss surface.
 
-Re-evaluates the SAME Neyman chi^2 loss, keys (PRNGKey(3)/PRNGKey(101), NK=8/8), and per-point
-Fisher F = 2 sum (dM/dtheta)^2 / Q as compute_2d_neyman.py, so each iterate sits on the exact
-surface that make_2d_neyman.py plots (the paths follow the shown streamlines by construction).
+Re-evaluates the SAME Neyman chi^2 loss, keys (PRNGKey(3)/PRNGKey(101), NK_TRUTH/NK_SIM), and
+per-point Fisher F = 2 sum (dM/dtheta)^2 / Q as compute_2d_neyman.py, so each iterate sits on the
+exact surface that make_2d_neyman.py plots.
 
-  - GD  (left  panel): backtracking-line-search steepest descent  x <- x - t grad L, run to convergence.
+  - GD  (left  panel): fixed-step gradient descent  x <- x - eta grad L, run to convergence.
   - GN  (right panel): DAMPED Fisher step (Marquardt lam*diag(F) + Levenberg mu*median(diag F),
                        plain solve, no eigen-floor) x <- x - F^-1 grad L, run to convergence.
-                       lam/mu come from CALIB_RECIPE and the step from utils/damping.py, so
-                       this arm takes the same step the joint fit takes by construction.
+                       lam/mu come from CALIB_RECIPE and the step from utils/damping.py, the
+                       same step the joint fit takes.
 
 Both converge to the realized minimum (the cyan X, displaced from truth by the independent-key noise).
 Saves data/traj2d_neyman.npz : starts(2,2), min(2), gd0,gd1,gn0,gn1 (each (T,2) in metres).
 """
 import os, sys, time
 from pathlib import Path
-# Repo-relative (was a hardcoded absolute path before the 2026-08-12 move into analysis/paper).
 REPO = str(Path(__file__).resolve().parents[3]); sys.path.insert(0, REPO); os.chdir(REPO)
 import numpy as np, jax, jax.numpy as jnp
 from analysis.paper.utils import calibration as C, damping
@@ -58,9 +57,8 @@ Lg = jax.jit(jax.value_and_grad(L))
 Jf = jax.jit(jax.jacfwd(M_fn))
 def fisher(v):
     J = np.asarray(Jf(v)); return 2.0 * np.einsum("np,nq,n->pq", J, J, Wn)  # GN / Fisher matrix
-# The campaign's damping, read from the recipe rather than restated, and applied through the one
-# definition this figure's two halves share — so "the GN arm takes the same step the joint fit
-# takes" holds by construction instead of by two files spelling out the same arithmetic.
+# Damping read from CALIB_RECIPE and applied through utils/damping.py, so the GN arm takes the
+# same step as the joint fit.
 LAM, MU = float(C.CALIB_RECIPE['LAM']), float(C.CALIB_RECIPE['MU'])
 def finv_g(F, g):
     return damping.damped_step(F, g, LAM, MU)

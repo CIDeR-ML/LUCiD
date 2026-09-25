@@ -1,18 +1,9 @@
 """Contract tests for the shared propagator.
 
-This file used to assert that `create_propagator` was bit-identical to the three
-geometry-specific factories it replaced -- `create_photon_propagator`,
-`create_sphere_photon_propagator`, `create_box_photon_propagator`. Those factories have been
-deleted, so there is no longer a second implementation to compare against and the three
-`test_matches_existing` cases went with them.
-
-They passed right up to deletion, which is the point: a parity test between two copies of the
-same code proves the copies agree, not that either is right, and it forces every future physics
-change to be made twice or to fail here. `shared.py` has said since it was written that it
-replaced those factories; nothing on main called them.
-
-What remains checks the surviving propagator against itself: its output contract and its
-determinism.
+There is no parity test against a second implementation: comparing two copies of the
+same physics only proves they agree, not that either is correct, and it forces every
+future change to be made twice. This checks the propagator against itself instead --
+its output-key contract and its determinism.
 """
 import jax.numpy as jnp
 import numpy.testing as npt

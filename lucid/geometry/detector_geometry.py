@@ -59,7 +59,7 @@ class DetectorGeometry(NamedTuple):
             Soft-overlap lookup interpolation: 'interp' (default) or 'cubic'.
         deposit_leg_bound : bool
             Bound the deposit to the travelled leg rather than the unbounded ray line. Default
-            False, bit-identical. Surface detectors only: a string telescope uses its own
+            False (unbounded ray line). Surface detectors only: a string telescope uses its own
             propagator and deposit, and ignores it. See
             :func:`lucid.propagation.shared.create_propagator`.
         **grid_params

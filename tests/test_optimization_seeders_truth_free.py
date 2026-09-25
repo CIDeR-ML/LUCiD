@@ -1,26 +1,16 @@
 """The direction and energy seeders: they take a truth argument, and must not use it.
 
-`tests/test_optimization_seeder.py` establishes this for the POSITION seeder, where the truth
-argument is real and feeds the reported errors. The other two stages of the seeding chain have the
-same shape and neither had a test:
+`tests/test_optimization_seeder.py` covers the POSITION seeder. This file covers the other two:
 
     hierarchical_direction_search_cone(pred, position, t0, hits, times, charge, true_data, ...)
     energy_scan_optimization(pred, position, theta, phi, t0, hits, times, charge, true_data, ...)
 
-Here `true_data` is worse than unused — it is a LEFTOVER. The commented-out block inside the
-direction search shows what happened: scoring used to go through `combined_product_loss(...,
-true_data, detector_params, key)` and now goes through `counts_loss(observed_charge,
-total_charge)`. The parameter outlived the function that read it, and so did
-`hit_detector_positions` and `observed_times`.
+In both, `true_data` is an unused leftover parameter (scoring uses only `counts_loss` on the
+observed charge). It must stay unused: a seeder that reads truth is an oracle.
 
-That is the reassuring reading and the worrying one at once. Nothing leaks today — verified by AST
-sweep and by these tests — but an argument named `true_data`, sitting unused in the signature of a
-seeder, is an invitation. The production caller already passes the OBSERVED data into it
-(`pipeline.py` hands it `(ocf, otf)`), which is a different thing again from what the name says.
-
-The stub simulator is the whole reason these run in CI: the seeders need only
-``pred(track, key) -> (log_w, times, indices, total_charge)``, so a closed-form charge pattern
-peaked at a known direction stands in for the photon forward.
+The seeders need only ``pred(track, key) -> (log_w, times, indices, total_charge)``, so a
+closed-form charge pattern peaked at a known direction stands in for the photon forward and
+lets these run in CI.
 """
 import numpy as np
 import jax.numpy as jnp
@@ -116,11 +106,9 @@ class TestEnergySeeder:
 
 
 def test_the_truth_parameters_are_genuinely_dead():
-    """Asserted on the source, so the day someone starts reading `true_data` this fails.
+    """`true_data` is not referenced in either seeder's source at all.
 
-    A behavioural test can only show that today's inputs do not change today's output. This says
-    the parameter is not referenced at all — which is the property that makes the seeder
-    structurally incapable of becoming an oracle.
+    The behavioural tests only cover today's inputs; this fails as soon as the parameter is read.
     """
     import ast
     import inspect

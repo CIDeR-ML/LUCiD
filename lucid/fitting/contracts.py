@@ -9,11 +9,10 @@ Entry points (all in ``lucid.fitting``):
   * calibration : ``calibrate(sim, sources, params, data, theta0)`` -> fitted parameters + the
                   profiled per-PMT gain map; ``closure(...)`` for the same fit against data you
                   generated. ``fit(sources, truth_list, theta0, n_sensors)`` is the field-bridge
-                  form. The per-PMT gains are PROFILED in closed form, not carried as a Schur
-                  nuisance — that changed when the estimator did.
-                  ``crb(sources, theta_true, n_sensors)`` -> covariance at truth (×√12 honest),
-                  and it DOES still marginalise the gains by Schur complement, because a bound
-                  must integrate over a nuisance where a fit may profile it.
+                  form. The fit PROFILES the per-PMT gains in closed form.
+                  ``crb(sources, theta_true, n_sensors)`` -> covariance at truth (×√12 honest);
+                  it MARGINALISES the gains by Schur complement instead, because a bound must
+                  integrate over a nuisance where a fit may profile it.
   * recon       : ``fit_track(model, oc, ot, start, **RECON_GN)`` or
                   ``fit_track_multistart(model, oc, ot, [seedA, seedB], margin=0.01)`` ->
                   the 9-vector ``[E, x,y,z, sinθ,cosθ, sinφ,cosφ, t0]``.

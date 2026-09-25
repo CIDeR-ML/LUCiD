@@ -1,36 +1,21 @@
-"""The singleton source must get a device OUTSIDE the mapped range. Asserted, not profiled.
+"""The singleton source must get a device OUTSIDE the `pmap`-ed range.
 
-`CalibrationForward` maps its grouped sources over devices 0..n-1 with `pmap`. A source that is
-alone in its structure group is called directly instead, and if it is left on JAX's default
-device -- device 0 -- it SERIALISES behind pmap shard 0 rather than running alongside it.
+`CalibrationForward` maps its grouped sources over devices 0..n-1 with `pmap`. A source alone in
+its structure group is called directly; left on JAX's default device 0 it serialises behind pmap
+shard 0 instead of running alongside it. Placement (`self._laser_dev` and the `jax.device_put`
+calls in `__call__`) is value-neutral, so no numerical test can catch a regression.
 
-That is not hypothetical. It shipped: measured at the published recipe, the forward took 1.121 s
-against 0.612 s for the mapped group alone, 45% of every forward wasted, and on a ten-GPU node
-devices 7, 8 and 9 sat idle for an entire campaign. The fix (`self._laser_dev`, and the
-`jax.device_put` calls in `__call__`) is worth 1.76x on the forward and moves no number --
-placement is value-neutral, and the engine and this class were bit-identical on all six pinned
-fields while placing this source differently.
+`tests/conftest.py` sets `JAX_PLATFORMS=cpu`, so the main suite sees ONE device, where the rule
+`devs[min(n_sources - 1, len(devs) - 1)]` resolves to that device and every `device_put` is a
+no-op. This file therefore forces eight CPU devices in a SUBPROCESS: `XLA_FLAGS` must be set
+before JAX initialises, and conftest has already initialised it, so an in-process
+`monkeypatch.setenv` would silently do nothing.
 
-WHY THIS TEST DID NOT EXIST, which is the interesting part. `tests/conftest.py` sets
-`JAX_PLATFORMS=cpu` for the whole suite, so every test sees exactly ONE device. With one device
-the placement rule `devs[min(n_sources - 1, len(devs) - 1)]` resolves to that same device and
-every `jax.device_put` is a no-op. The existing equivalence tests DO construct a
-`CalibrationForward` with the real 1-laser + 7-isotropic layout, so this code runs in CI --
-it just cannot fail there. A regression reverting the placement would have been invisible to the
-entire suite, and the only thing that would have caught it is re-running a profiler by hand.
-
-So this file forces eight CPU devices in a SUBPROCESS. `XLA_FLAGS` must be set before JAX
-initialises, and conftest has already initialised it by the time any test body runs, so an
-in-process `monkeypatch.setenv` would silently do nothing -- itself an instance of the failure
-mode this file exists to catch.
-
-WHAT IT COVERS: the selection rule, on a real `CalibrationForward` built with a stub simulator
-(cheap -- `sim` is only referenced inside a lazily-jitted body, so no photons are simulated), and
-that `device_put` genuinely commits on this backend. WHAT IT DOES NOT COVER: that the jitted
-singleton's computation physically executes on that card. Under `jit` the operand devices are not
-introspectable from inside the trace, and asserting on the output's device after `jnp.stack` would
-be asserting on the stack, not the placement. Wall-clock overlap remains a profiler question, and
-is not tested here.
+Covered: the selection rule on a real `CalibrationForward` with a stub simulator (`sim` is only
+referenced inside a lazily-jitted body, so no photons are simulated), and that `device_put`
+commits on this backend. Not covered: that the jitted singleton physically executes on that
+device (operand devices are not introspectable under `jit`, and the output's device after
+`jnp.stack` reflects the stack, not the placement); wall-clock overlap is a profiler question.
 """
 import os
 import subprocess
@@ -106,19 +91,14 @@ def placed():
 
 def test_the_forced_device_count_actually_took(placed):
     """The control. If the flag were ignored the child would see one device and everything below
-    would pass vacuously -- which is precisely how this gap survived in the main suite."""
+    would pass vacuously."""
     assert placed['n_devices'] == 8
 
 
 def test_the_singleton_source_is_the_one_that_gets_placed(placed):
-    """`_placed` must identify the structurally-distinct source, not simply index 0.
-
-    The rule is about GROUP SIZE, not about being first or being a laser: a source alone in its
-    structure group is executed unstacked, so it is the one that needs a card of its own. The
-    published layout happens to put the laser first, which makes "index 0" and "the singleton"
-    coincide and would let a wrong rule pass unnoticed here -- so the assertion is written against
-    the group structure, and `largest_group` is checked to confirm the other seven really did
-    group together rather than each becoming its own singleton.
+    """`_placed` must identify the source alone in its structure group (it runs unstacked, so it
+    needs its own device). `largest_group` confirms the other seven really grouped together, since
+    in this layout the singleton is also index 0.
     """
     assert placed['placed_index'] == 0
     assert placed['largest_group'] == 7, (
@@ -127,12 +107,9 @@ def test_the_singleton_source_is_the_one_that_gets_placed(placed):
 
 
 def test_the_singleton_gets_a_device_outside_the_mapped_range(placed):
-    """THE REGRESSION. `pmap` over the group of seven occupies devices 0..6; the singleton must
-    not land on any of them, or it queues behind a shard instead of overlapping it.
-
-    Device 7 specifically, from `devs[min(n_sources - 1, len(devs) - 1)]` with 8 sources and 8
-    devices. The bug this replaces left it unset, so it ran on JAX's default -- device 0, i.e.
-    exactly on top of pmap shard 0.
+    """`pmap` over the group of seven occupies devices 0..6; the singleton must not land on any of
+    them, or it queues behind a shard. Expected: device 7, from
+    `devs[min(n_sources - 1, len(devs) - 1)]` with 8 sources and 8 devices.
     """
     assert placed['laser_dev_id'] is not None, 'no device was chosen for the singleton source'
     assert placed['laser_dev_id'] >= placed['largest_group'], (

@@ -28,10 +28,7 @@ def main():
           f"L range [{acc['L'].min():.3g}, {acc['L'].max():.3g}]")
 
 
-# GUARDED so that IMPORTING this module does not do the work. `fig_calib_loss_geometry` invokes
-# it with `subprocess.run([sys.executable, combine_2d.py])`, which is unchanged -- but without the
-# guard any tool that merely imports it (a test collector, a dependency scan) performs the
-# combine as a side effect. Its two sibling stages had the same defect; compute_2d_neyman's was
-# worse, since importing it started a 625-point scan.
+# Guarded so that importing this module (a test collector, a dependency scan) does not run the
+# combine as a side effect; `fig_calib_loss_geometry` runs it as a script via subprocess.
 if __name__ == "__main__":
     main()

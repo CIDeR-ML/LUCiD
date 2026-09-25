@@ -1,29 +1,22 @@
 """The 9-vector <-> physical-parameter maps must be exact inverses.
 
-Why this exists
----------------
-`vec9_to_phys` returns `[x, y, z, phi, theta, t0, E]`. Read quickly it looks like
+`vec9_to_phys` returns `[x, y, z, phi, theta, t0, E]`, which is easy to misread as
 `[x, y, z, t0, theta, phi, E]` -- the angles bracket a scalar either way, and both readings put
-theta in the middle. Three separate gradient probes hand-rolled the inverse and all three made
-the same swap, putting the t0 value into the azimuth slot and the azimuth into t0.
-
-The failure is invisible from the outside, which is what makes it worth a test. Perturbing the
-coordinate still moves exactly the physical quantity its label names, so every control passes and
-every derivative is a real derivative of the thing it claims. What silently moves is the POINT:
-the model gets evaluated with an azimuth 0.84 rad from truth and a t0 0.84 ns from truth, and a
-result reported "at truth" is not.
+theta in the middle. A hand-rolled inverse with that swap puts t0 into the azimuth slot and the
+azimuth into t0, and nothing else catches it: perturbing a coordinate still moves the quantity its
+label names, so every derivative is correct, but it is taken at the wrong POINT and a result
+reported "at truth" is not.
 
 So the inverse lives once, beside the forward map, and this pins the round trip in both
-directions. Pure numpy: no ROOT input, no SIREN weights, no GPU -- a gate that needs downloaded
-data does not get run.
+directions. Pure numpy (no ROOT input, SIREN weights or GPU), so it always runs.
 """
 import numpy as np
 import pytest
 
 from analysis.paper.utils.pipeline import phys_to_vec9, truth9, vec9_to_phys
 
-# (vertex, unit direction, energy MeV, t0 ns). The third case is the one that started this: an
-# azimuth and a t0 of similar magnitude and opposite sign, where a swap stays plausible-looking.
+# (vertex, unit direction, energy MeV, t0 ns). The third case has an azimuth and a t0 of similar
+# magnitude and opposite sign, where a swap stays plausible-looking.
 CASES = [
     ((1.0, 2.0, 3.0), (0.0, 0.0, 1.0), 1000.0, 0.0),
     ((-4.5, 0.25, -8.0), (0.6, -0.8, 0.0), 500.0, 3.75),
@@ -62,16 +55,15 @@ def test_the_physical_slots_are_where_the_docstring_says():
 
 
 def test_swapping_phi_and_t0_is_detected():
-    """The exact mistake the probes made must fail the round trip, not slip through.
+    """A phi<->t0-swapped inverse must fail the round trip, not slip through.
 
-    Without this the test above only proves the two functions agree with each other; the point is
-    that the WRONG inverse is caught. A t0 numerically close to the azimuth would round-trip under
-    the swap, so the case used here keeps them well apart.
+    The round-trip tests alone only prove the two functions agree with each other. t0 is kept well
+    away from the azimuth, since a t0 close to it would round-trip under the swap.
     """
     v9, _ = truth9(np.array([1.0, 2.0, 3.0]), _unit((0.6, -0.8, 0.0)), 750.0, t0=4.25)
     p = vec9_to_phys(v9)
 
-    def swapped(q):                                   # what three probes wrote, verbatim in effect
+    def swapped(q):                                   # inverse with phi and t0 swapped
         return np.stack([q[6], q[0], q[1], q[2],
                          np.sin(q[4]), np.cos(q[4]), np.sin(q[5]), np.cos(q[5]), q[3]])
 
@@ -96,7 +88,7 @@ def test_the_two_conventions_are_not_interchangeable():
     """Crossing the pair boundary must produce a DIFFERENT 9-vector, or none of this matters."""
     from analysis.paper.fig_loss_landscape import phys_from_vec9, vec9_from_phys
     v9, _ = truth9(np.array([1.0, 2.0, 3.0]), _unit((0.6, -0.8, 0.0)), 750.0, t0=4.25)
-    # notebook inverse fed the pipeline's physical vector — the probes' mistake, exactly
+    # notebook inverse fed the pipeline's physical vector
     assert not np.allclose(vec9_from_phys(vec9_to_phys(v9)), v9, rtol=0, atol=1e-8)
     # and the mirror image
     assert not np.allclose(phys_to_vec9(phys_from_vec9(v9)), v9, rtol=0, atol=1e-8)

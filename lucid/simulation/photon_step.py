@@ -203,8 +203,7 @@ def photon_iteration_update_factors(
 
     # Ported from mie_hunter/implicit_engine_lik.py (per-photon body; the function is vmapped
     # over photons in the scan). Analog two-channel free path + Mie/Rayleigh Bernoulli + DiCE
-    # score + implicit-capture deposit. Gradient design, stated in full here because
-    # the sandbox it was ported from is not part of this repository:
+    # score + implicit-capture deposit. Gradient design:
     #   • TRACK params flow PATHWISE — geometry (surface_distance Dd, direction, per-sensor
     #     distances) kept LIVE → `reach`, positions and time carry the track gradient.
     #   • OPTICAL scatter-rate/angle params flow through the DiCE score `lf`/`la`; `d` and `Dd`

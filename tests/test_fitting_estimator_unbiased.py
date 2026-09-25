@@ -1,40 +1,18 @@
-"""The claim the calibration consolidation rests on, measured — and the one place it does not hold.
+"""The Neyman residual is unbiased at truth under a redrawn Monte-Carlo forward; profiled gains are not.
 
-The Neyman residual was chosen over the sqrt-MSE one for a reason stated in three docstrings and
-until now tested nowhere: the forward is a Monte-Carlo estimate REDRAWN EVERY STEP,
-so a residual nonlinear in the model has `E[f(M)] != f(E[M])` and its fixed point is permanently
-displaced. Neyman is the member of the chi-square family whose weight depends on the data alone,
-so it stays linear in the model.
+The calibration forward is a Monte-Carlo estimate REDRAWN EVERY STEP, so a residual nonlinear in
+the model has `E[f(M)] != f(E[M])` and a displaced fixed point. Neyman weights by the data alone,
+so it stays linear in the model; the sqrt residual does not. Profiling the gains,
+`k = sum(Q)/sum(M)`, is nonlinear through `1/sum(M)` and reintroduces a bias that grows with the
+forward noise (the same Jensen family `profile_gains`' docstring records).
 
-Every other calibration gate here is a deterministic stub, where any consistent estimator
-converges, so none of them can see this.
+The test checks the FIXED-POINT CONDITION directly: the expected gradient at truth must vanish.
+Running fits would be slower, noisier, and confound the estimator with the optimizer. The other
+calibration gates use deterministic stubs, where any consistent estimator converges, so they
+cannot see this.
 
-The test is the FIXED-POINT CONDITION directly: a fit sits at truth exactly when the expected
-gradient vanishes there. Running fits instead would be slower, noisier, and would confound the
-estimator's fixed point with the optimizer's convergence.
-
-WHAT THE MEASUREMENT SHOWED, including the part that was not expected. Worst-parameter z of the
-gradient at truth, 1200 draws:
-
-    forward noise   neyman/fixed-gains   sqrt/fixed-gains   neyman/PROFILED-gains
-        0.25              0.21                3.06                 23.63
-        0.10              0.52                1.02                 10.05
-        0.05              0.63                0.36                  5.03
-
-The residual behaves exactly as claimed: with the gains held fixed, the Neyman gradient is
-consistent with zero at every noise level. But PROFILING the gains reintroduces a bias, because
-`k = sum(Q)/sum(M)` depends on `1/sum(M)`, which is nonlinear in the model — so the linearity
-argument covers the residual and not the profiling step that follows it. The bias scales with the
-forward noise, which is what identifies the mechanism.
-
-That is consistent with what was already known rather than a contradiction: `profile_gains`'
-own docstring records a Jensen effect in the same family (log gauge +0.402%, linear +0.068%).
-
-WHAT THIS DOES NOT SAY: that the published calibration is biased. The toy runs at 5-25% per-sensor
-forward noise; the published configuration uses N_PH=1e6 with far less, averages the truth over
-BTRUTH=8 draws, and reproduced the paper's numbers in a production comparison. Extrapolating a
-toy's Jensen term to that budget would be exactly the kind of unearned claim this suite exists to
-prevent. What is measured here is the mechanism and its direction, not its size in production.
+The toy runs at 5-25% per-sensor forward noise, far above the published configuration: it measures
+the mechanism and its direction, not its size in production.
 """
 import numpy as np
 import jax
@@ -61,10 +39,9 @@ _base = toy.charge
 def _make_noisy(noise):
     """Forward whose draws scatter around the truth model, LOGNORMAL and mean-preserving.
 
-    Not `1 + sigma*z`: that goes negative about 3e-5 of the time, and this test draws tens of
-    thousands of multipliers, so a negative charge is EXPECTED and makes `sqrt(k*M)` NaN — which
-    took out the whole comparison on the first run. `exp(sigma*z - sigma^2/2)` is positive and has
-    mean exactly 1, so any bias measured is the estimator's and not the toy's.
+    Not `1 + sigma*z`: that goes negative about 3e-5 of the time, and over tens of thousands of
+    multipliers a negative charge is expected and makes `sqrt(k*M)` NaN. `exp(sigma*z - sigma^2/2)`
+    is positive and has mean exactly 1, so any bias measured is the estimator's and not the toy's.
     """
     def sim(source, dp, key):
         z = jax.random.normal(key, (NS,))
@@ -133,8 +110,8 @@ def test_the_neyman_residual_is_unbiased_at_truth(z_scores):
 def test_the_instrument_can_detect_a_displaced_fixed_point(z_scores):
     """The control. Without it, "consistent with zero" could be a statement about a blind test.
 
-    Uses the PROFILED-gain arm rather than the sqrt residual, because it is decisive here (24
-    sigma against 3) — the sqrt arm's displacement is real but weak at this ensemble size.
+    Uses the PROFILED-gain arm rather than the sqrt residual because it is decisive at this
+    ensemble size, while the sqrt arm's displacement is real but weak.
     """
     z = z_scores[(NOISE_HI, 'neyman', 'profiled')]
     assert z > 8.0, (f'no arm of this test shows bias ({z:.1f} sigma), so the null result above '
@@ -156,11 +133,9 @@ def test_the_profiling_bias_scales_with_forward_noise(z_scores):
 
 
 def test_the_sqrt_residuals_displacement_grows_with_noise(z_scores):
-    """The historically rejected arm, confirmed directionally.
+    """The sqrt residual's fixed-point displacement grows with forward noise.
 
-    Weak on purpose-built evidence: 3 sigma at 25% noise and below 1 at 5%, so this asserts the
-    ORDERING rather than a threshold. The strong statement about the sqrt arm is the campaign's,
-    made on the real forward; this only shows the toy reproduces its direction.
+    The effect is weak in this toy, so this asserts the ORDERING rather than a threshold.
     """
     hi = z_scores[(NOISE_HI, 'sqrt', 'fixed')]
     lo = z_scores[(NOISE_LO, 'sqrt', 'fixed')]

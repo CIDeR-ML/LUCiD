@@ -18,10 +18,9 @@ pytestmark = pytest.mark.slow
 GEOM = os.path.join(os.path.dirname(__file__), '..', 'config', 'SK_like_geom_config.json')
 GRID_KW = dict(n_cap=150, n_angular=250, n_height=150)
 
-# The track-mode tests need the trained SIREN emitter, which is a DOWNLOAD
-# (./scripts/download_data.sh), not part of the checkout. Without it these raised
-# FileNotFoundError — six errors that read like defects on a fresh clone, or in any git worktree
-# (data/ is gitignored, so a worktree materialises almost none of it). Skip with a reason instead.
+# The track-mode tests need the trained SIREN emitter, a download (./scripts/download_data.sh)
+# that is not part of the checkout: data/ is gitignored, so fresh clones and git worktrees lack it.
+# Skip with a reason rather than fail with FileNotFoundError, which would read like a defect.
 _SIREN_DIR = os.path.join(os.path.dirname(__file__), '..', 'data', 'water', 'muon',
                           'siren_training', 'trained_model')
 requires_siren = pytest.mark.skipif(

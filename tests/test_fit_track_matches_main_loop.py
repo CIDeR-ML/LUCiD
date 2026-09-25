@@ -1,29 +1,21 @@
-"""fit_track against the loop it ran before it moved onto the shared driver.
+"""fit_track against a transcription of its original standalone loop.
 
-`fit_track` now delegates to `lucid.fitting.gn.gauss_newton`, so a test that compares the two can
-no longer fail (`tests/test_recon_shared_loop.py` says so at the top). The discriminating
-comparison is against the ORIGINAL loop, transcribed below from main's `fit_track` statement for
-statement: the numpy float64 damped solve, the refresh cadence, the anneal, the trust clip and the
-non-finite refusal. The READOUT is not main's: at the edges (a Polyak window of 0 or longer than
-the run, a 'ming' minimum at the start) the shared loop deliberately changed it, so the
-transcription reads out with the shared loop's convention and those cases check that instead.
+`fit_track` delegates to `lucid.fitting.gn.gauss_newton`, so comparing the two cannot fail
+(`tests/test_recon_shared_loop.py`). The reference here is the original loop ("main" in the
+assertion messages), transcribed statement for statement: the float64 damped solve, the refresh
+cadence, the anneal, the trust clip and the non-finite refusal. It reads out with the shared
+loop's convention, which differs at the edges (a Polyak window of 0 or longer than the run, a
+'ming' minimum at the start).
 
-Two things differ by design and are not what this file tests. The damped solve is float32 on the
-shared driver, so trajectories agree to the float32 floor rather than bit for bit. And the
-Levenberg base is the median of the diagonal entries ABOVE a relative cutoff where main floored
-every entry at 1e-12; the problems here have no near-zero diagonal, so the two coincide.
+Two differences are by design and not tested: the shared solve is float32, so trajectories agree
+to the float32 floor (TOL); and the shared Levenberg base is the median of the diagonal entries
+above a relative cutoff rather than of every entry floored at 1e-12, which coincides here because
+no diagonal entry is near zero.
 
-What it does test, and why each case is here:
-
-* a clean fit, for every readout, with the Polyak window shorter than, longer than and equal to
-  zero against the run: the start is not an iterate, so it is never averaged, and a window of 0
-  means no averaging;
-* refused steps. The shared driver refreshes the metric at the PROPOSED point, before it knows
-  whether the step is kept. A problem that caches its metric then held the metric of a refused
-  point, and every later non-refresh step reused it; with a non-finite one the fit froze. Main
-  built the metric at the kept iterate. The refusal cases run at several refresh cadences, because
-  refresh=1 never exposed it;
-* a learning-rate SCHEDULE handed to `damped_gauss_newton` must not be rewound by a refusal.
+Cases: a clean fit for every readout and Polyak window (the start is never averaged; a window of
+0 means no averaging); refused steps at several refresh cadences, because a cached metric must be
+the kept iterate's, not the refused proposal's, and refresh=1 cannot tell the two apart; and a
+learning-rate schedule in `damped_gauss_newton`, which a refusal must not rewind.
 """
 import numpy as np
 import pytest
@@ -35,7 +27,7 @@ TOL = 1e-4          # SCALE9 units, on the whole trajectory; the float32 solve g
 
 def _main_fit_track(model, start, *, nkeys, niters, lr, lr_final, ridge_i, lam, refresh,
                     refresh_final, refresh_switch, seed, readout, polyak_w, trust):
-    """main's fit_track loop, transcribed, with the shared loop's readout; returns
+    """The original fit_track loop, transcribed, with the shared loop's readout; returns
     (out, traj, gnorms, n_rejected)."""
     import jax
     from lucid.fitting import SCALE9
@@ -86,7 +78,7 @@ class CliffModel:
     published lr=4 then overshoots the target past the cliff, the step is refused, and the fit
     comes back only once the anneal has shrunk the step enough -- the situation the refusal guard
     exists for. Deterministic, so a disagreement cannot be Monte-Carlo noise or chaos.
-    (The analytic model is no use here: at lr=4 its exact metric makes main's own loop diverge.)
+    (The analytic model is no use here: at lr=4 its exact metric makes the reference loop diverge.)
     """
     CLIFF = 1.5                     # SCALE9 units of energy above truth
     energy_from_scale = False

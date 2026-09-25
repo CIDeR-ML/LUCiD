@@ -101,14 +101,10 @@ def convergence(data_dir, out_dir, polyak_window=150, xzoom=100, stem="calib_con
                     loc="lower right", framealpha=0.92)
 
     # --- reflectivity combined; colour = wall/sensor, line style = seed ---
-    # Wall/sensor colours are chosen AGAINST the top row's `turbo` wavelength ramp, not in isolation.
-    # turbo runs dark-blue -> blue -> cyan -> green -> yellow -> orange -> red, so the previous
-    # "#1f77b4 / #2ca02c" (tab blue / tab green) sat INSIDE that gamut: the same two hues carried two
-    # different meanings in one figure. PURPLE is the one family turbo never visits, so the wall curve
-    # gets a hue that cannot be read as a wavelength. Pairing it with a dark ochre gives the
-    # ColorBrewer PuOr endpoints -- a standard colourblind-safe diverging pair, dark and muted against
-    # turbo's high-saturation neon (so the row reads as its own family), and separated in LIGHTNESS
-    # (rel. luminance ~0.24 vs ~0.35) so the two survive greyscale printing.
+    # Wall/sensor colours are chosen AGAINST the top row's `turbo` wavelength ramp: blue/green hues
+    # would also read as wavelengths. PURPLE is the one family turbo never visits; paired with a dark
+    # ochre it gives the ColorBrewer PuOr endpoints -- colourblind-safe, muted against turbo's neon,
+    # and separated in lightness (rel. luminance ~0.24 vs ~0.35) so the two survive greyscale printing.
     wcol, scol = "#542788", "#B35806"
 
     def refl_panel(a, jw, js, lw_lab, ls_lab, ylab):
@@ -173,15 +169,13 @@ def loss_geometry(data_dir, out_dir, lam=0.01, mu=0.1, stem="calib_loss_geometry
     Fxx, Fxy, Fyy = d["Fxx"], d["Fxy"], d["Fyy"]
     tx, ty, wl = float(d["truth_x"]), float(d["truth_y"]), int(d["wl"])
     XX, YY = np.meshgrid(X, Y)
-    LAM, MU = lam, mu     # the campaign's damping (CALIB_RECIPE, and traj_2d_neyman.py)
+    LAM, MU = lam, mu     # the joint fit's damping (CALIB_RECIPE, and traj_2d_neyman.py)
 
     def finv_g(fxx, fxy, fyy, gx, gy):                             # damped F^-1 g, per point
         # Marquardt lam*diag(F) + Levenberg mu*median(diag F)*I, then a plain solve -- IDENTICAL to the
-        # step the joint fit takes, so the streamlines show the actual optimizer field.
-        # Previously this eigen-floored the inverse (clip ev at 1e-3*ev_max), which is the LEGACY solver
-        # that SOLVER=solve replaced. That floor engaged at 132/2601 grid points and tilted the field by a
-        # median 22.4 deg (max 73.4) versus the damped step, so the plotted streamlines disagreed with the
-        # GN trajectory overlaid on them -- which traj_2d_neyman.py had already switched to the damping.
+        # step the joint fit takes, so the streamlines show the actual optimizer field and agree with
+        # the GN trajectory from traj_2d_neyman.py overlaid on them. Do not eigen-floor the inverse
+        # instead: that tilts the field away from the damped step.
         F = np.array([[fxx, fxy], [fxy, fyy]]); g = np.array([gx, gy])
         return damping.damped_step(F, g, LAM, MU)    # one definition, shared with traj_2d_neyman
 

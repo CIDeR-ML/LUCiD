@@ -1,38 +1,17 @@
-"""The sensor deposit must have a FINITE GRADIENT when a ray passes through a sphere centre.
+"""The sensor deposit must have a finite gradient when a ray passes through a sphere centre.
 
-Why this exists
----------------
-A gradient census over 960 PRNG keys found one that produced `nan` in every geometry component of
-the reconstruction gradient -- X, Y, Z, phi, theta -- while t0, E and the LOSS ITSELF stayed
-finite. Finite forward, non-finite backward is the signature of a value that is masked out by a
-`jnp.where` after it has already gone bad: `where` selects the value, it does not stop the
-cotangent, so the branch that was not taken is still differentiated.
+`compute_sensor_intersections_base` feeds `|to_sensor|` into the overlap kernel. `jnp.linalg.norm(v)`
+differentiates to `v / |v|`, which is 0/0 at `v == 0`, and the later `jnp.where(valid, ...)` mask
+selects the value but still passes the NaN cotangent: the loss stays finite while the geometry
+gradient is `nan`. The epsilon must sit INSIDE the sqrt, not after the norm -- the same convention
+`simulator.py` documents for the surface-distance norm.
 
-The source is the norm feeding the deposit weight:
+`to_sensor == 0` is reached by a ray aimed at a real sensor's centre, or by an invalid slot
+(`sensor_idx == -1`, whose sphere centre is set to the origin) on a ray through the origin. One such
+draw is enough to break a fit, because `grad_metric_loss` averages the gradient over `nkeys` draws.
 
-    distance = jnp.linalg.norm(to_sensor, axis=1)        # -> overlap_prob(distance) -> deposit
-
-`jnp.linalg.norm(v)` differentiates to `v / |v|`, which is 0/0 at `v == 0`. Adding an epsilon
-AFTERWARDS -- as the neighbouring lines do -- protects the division that follows and never the
-norm's own derivative. `simulator.py` already documents this exact trap for the surface distance
-("SAFE norm: eps INSIDE the sqrt"); these call sites were missed.
-
-`to_sensor == 0` is reachable two ways, and the second is the one that bites:
-
-  * a ray aimed exactly at a real sensor's centre;
-  * an INVALID candidate slot. `compute_sensor_intersections_base` sets `sphere_centers` to the
-    ORIGIN for `sensor_idx == -1`, so `to_sensor` becomes the ray's closest approach to (0,0,0) --
-    and a ray through the detector centre is an ordinary thing for a track to emit. The weight is
-    then discarded by `jnp.where(valid, ...)`, which is exactly the mask that hides the value and
-    passes the NaN.
-
-It was rare -- 1 key in 960 at 0.84 rad off truth in azimuth, 0 in 960 at truth -- and fatal
-where it landed, because `ReconProblem.grad_metric_loss` averages the gradient over `nkeys` draws
-and steps on the mean, so a single poisoned draw makes the whole Gauss-Newton step `nan`.
-
-These tests construct the degenerate geometry directly instead of hunting for the seed again, and
-the last one asserts that the OLD form really did fail, so the test is known to be able to catch
-the bug rather than merely passing.
+The tests build the degenerate geometry directly; the last one checks that the unsafe norm does
+produce NaN, so these tests can detect the bug.
 """
 import jax
 import jax.numpy as jnp
@@ -82,12 +61,12 @@ def test_deposit_gradient_is_finite_at_zero_distance(label, idx, pos, origin, di
 
 @pytest.mark.parametrize('label,idx,pos,origin,direction', CASES)
 def test_the_forward_value_was_never_the_problem(label, idx, pos, origin, direction):
-    """Finite forward, non-finite backward was the whole difficulty — pin the forward half."""
+    """The failure mode is finite forward, non-finite backward; pin the forward half."""
     assert np.isfinite(float(_deposit(origin, direction, idx, pos)))
 
 
 def test_a_generic_ray_still_differentiates():
-    """The guard must not have flattened the gradient everywhere it used to work."""
+    """The guard must not zero the gradient for an ordinary, non-degenerate ray."""
     origin = jnp.array([[0.1, -0.2, 0.0]])
     direction = jnp.array([[0.02, 0.03, 1.0]])
     pos = jnp.array([[0.0, 0.0, 5.0]])
@@ -98,14 +77,9 @@ def test_a_generic_ray_still_differentiates():
 
 
 def test_the_unsafe_norm_really_does_produce_nan():
-    """Control: the form that shipped must FAIL, or these tests prove nothing.
-
-    Without this, the tests above only show that the current code is finite — they would pass
-    just as happily against an implementation that never had the bug, and could not tell anyone
-    what they are for.
-    """
+    """Control: the unguarded norm must give a NaN gradient at zero, or the tests above prove nothing."""
     def unsafe(v):
-        return jnp.sum(jnp.linalg.norm(v, axis=1))          # eps outside, or absent, as shipped
+        return jnp.sum(jnp.linalg.norm(v, axis=1))          # eps outside the sqrt, or absent
 
     def safe(v):
         return jnp.sum(jnp.sqrt(jnp.sum(v ** 2, axis=1) + 1e-12))

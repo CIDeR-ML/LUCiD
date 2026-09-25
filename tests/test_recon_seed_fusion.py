@@ -1,17 +1,11 @@
-"""Seed fusion and the margin gate: the two seeding rules the library now owns.
+"""Seed fusion and the margin gate: the two seeding rules in `lucid.fitting`.
 
-Both lived in `analysis/paper/utils/pipeline.py` and both were duplicates. `fuse_seeds` carried
-its own numpy copy of `vec9_dir`; the margin pick restated, in a second place, the rule
-`fit_track_multistart` applies internally. Neither had a test anywhere, which is uncomfortable for
-`fuse_seeds` in particular: it encodes a physical claim about WHICH seeder is trustworthy in WHICH
-direction, and getting the decomposition backwards would produce a seed that looks reasonable and
-is systematically worse.
-
-That claim is: time multilateration is excellent transverse to the track and poor along it, while
-the charge grid is longitudinally unbiased and gives the better direction. The fused seed must
-therefore take the transverse part from the time seed and the longitudinal part from the charge
-seed — and the tests below check exactly that, rather than checking that the function returns
-something of the right shape.
+`fuse_seeds` encodes a physical claim about WHICH seeder is trustworthy in WHICH direction: time
+multilateration is excellent transverse to the track and poor along it, while the charge grid is
+longitudinally unbiased and gives the better direction. The fused seed must therefore take the
+transverse part from the time seed and the longitudinal part from the charge seed. Getting the
+decomposition backwards gives a seed that looks reasonable and is systematically worse, so the
+tests check the decomposition itself, not the output shape.
 """
 import numpy as np
 import pytest
@@ -112,11 +106,8 @@ class TestPickByMargin:
 
 
 def test_it_is_the_rule_fit_track_multistart_applies():
-    """The point of extracting it: one rule, not two that agree today.
-
-    Asserted on the source — `fit_track_multistart` must CALL it rather than restate it, which is
-    the only way the two cannot drift.
-    """
+    """`fit_track_multistart` must CALL `pick_by_margin` rather than restate the rule, so the two
+    cannot drift. Asserted on the source."""
     import inspect
     from lucid.fitting import fit_track_multistart
     src = inspect.getsource(fit_track_multistart)
@@ -125,9 +116,8 @@ def test_it_is_the_rule_fit_track_multistart_applies():
 
 
 # --------------------------------------------------------------------------------------------
-# The third piece of the same consolidation: `pipeline.seed_errors` stopped reimplementing the
-# vertex split and the opening angle and now composes the library's. That is a rewrite of a
-# reporting function nothing else gated, so the equivalence is measured here.
+# `pipeline.seed_errors` and `pipeline.seed_event` compose the library's primitives; nothing
+# else gates them, so each is checked against the inline implementation it replaced.
 # --------------------------------------------------------------------------------------------
 
 def _seed_errors_before_consolidation(seed, th9, d):
@@ -147,14 +137,11 @@ def _seed_errors_before_consolidation(seed, th9, d):
 
 
 def test_seed_errors_still_reports_what_it_did_before():
-    """Composing the library primitives changed the numbers by 1e-8, and only by that.
+    """`seed_errors` matches the inline reference except for the library's `+1e-12` norm guard.
 
-    Not bit-identical, and the reason is worth knowing rather than tolerating blindly:
-    `vertex_residual` and `angular_error_deg` normalise their direction with a `+1e-12` guard
-    against a zero-norm input, which the inline version did not. On a unit direction that is a
-    1e-12 relative change, which lands at ~1e-8 on quantities reported in centimetres — a
-    tenth of a nanometre on a vertex error. The guard is an improvement; the point of this test
-    is that it is the ONLY difference, and that it cannot grow.
+    `vertex_residual` and `angular_error_deg` add that guard against a zero-norm direction; on a
+    unit direction it moves the centimetre-valued outputs by ~1e-8. The test asserts it is the
+    ONLY difference and cannot grow.
     """
     from analysis.paper.utils.pipeline import seed_errors
     rng = np.random.default_rng(0)
@@ -182,13 +169,11 @@ def _pick_before_consolidation(lossA, lossB, lossF, sel_margin):
 
 
 def test_the_seed_event_pick_rewrite_is_equivalent():
-    """`seed_event` stopped restating the margin rule and now calls `pick_by_margin`.
+    """`pick_by_margin` reproduces `seed_event`'s inline 2-way (A vs B) and 3-way (A vs B vs
+    fused) picks, negative losses included.
 
-    That call site cannot be exercised end to end here — it needs PhotonSim ROOT input and the
-    trained SIREN weights, neither of which ships with the repo — so the rewrite is verified the
-    only way it can be: against the code it replaced, over the space of loss triples it sees.
-    Both the 2-way pick (A vs B, what fit_track_multistart does today) and the 3-way (A vs B vs
-    the fused seed) are covered, including negative losses.
+    `seed_event` needs PhotonSim ROOT input and trained SIREN weights, neither of which ships with
+    the repo, so the call is checked against the code it replaced over random loss triples.
     """
     rng = np.random.default_rng(11)
     for _ in range(20000):

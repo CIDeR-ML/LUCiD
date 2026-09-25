@@ -1,9 +1,8 @@
 """Parameterisation: the map between a fit vector ``theta`` and physical detector parameters.
 
-Every fit in this package needs one, and until now each wrote its own. Calibration's lived as
-``build_dp``/``to_real`` inside a figure script; reconstruction's is ``track_from_vec9`` /
-``SCALE9`` in :mod:`lucid.fitting.recon`. Giving the concept a name is what makes the choice of
-coordinates reviewable instead of incidental — and the choice matters:
+Every fit needs one (reconstruction's is ``track_from_vec9`` / ``SCALE9`` in
+:mod:`lucid.fitting.recon`). Naming it makes the choice of coordinates reviewable, and the choice
+matters:
 
 * the fit runs in **log** space for positive quantities, so steps are multiplicative and the
   parameters stay positive without a constraint;
@@ -12,20 +11,17 @@ coordinates reviewable instead of incidental — and the choice matters:
   anti-correlation;
 * reporting inverts the map, and that inversion is **not** neutral. At ``f_s = 0.90``,
   ``d log(1−f)/d log f = −f/(1−f) = −9``, so a small fractional error on ``f`` is amplified
-  ninefold in the reported diffuse component. (The campaign's measured pair is 0.4% on the fitted
-  parameter against −2.6% reported — smaller than −9 × 0.4% because the two are not the same
-  perturbation.) Owning ``to_real`` here is what stops
-  each analysis script re-deriving that factor and getting a different answer.
+  ninefold in the reported diffuse component. Owning ``to_real`` here stops each analysis script
+  re-deriving that factor and getting a different answer.
 
 Three parameterisations ship, and they answer different questions.
 
 ``CalibrationParams`` is the published estimand: a fixed layout of per-wavelength optics plus
-shared reflection, in the coordinates the campaign chose. It is a byte-for-byte extraction of the
-paper's reference calibration engine's ``build_dp``/``to_real``, preserved expression for
-expression — the whole stack runs in float32 (``jax_enable_x64`` is never enabled), so
-re-associating even an equivalent expression can move the result. Its bit-exact agreement with that
-engine was verified when it was extracted; the engine is not in this repository and the check is not
-shipped.
+shared reflection. Its expressions match the paper's reference calibration engine term for term;
+keep them that way, because the whole stack runs in float32 (``jax_enable_x64`` is never enabled)
+and re-associating even an equivalent expression can move the result. That match was verified
+directly against the reference engine; the engine itself is not in this repository, so the check
+is not shipped here.
 
 ``FieldParams`` is the general one: name any leaf fields of a ``DetectorParams`` and fit those.
 It is what lets somebody calibrate a quantity the paper never fitted without writing a new
@@ -73,7 +69,7 @@ class CalibrationParams:
 
     ``'rlogit'``   ``[log R_w, logit f_w, log R_s, logit f_s]`` — the published choice.
     ``'specdiff'`` ``log`` of the four ``(spec, diff)`` components directly; ``R`` and ``f`` are
-                   then derived. Kept because it is what the earlier campaigns ran.
+                   then derived. Kept for comparison with fits run in that basis.
 
     Mie is frozen (``mie_scatter_length=1e6``, ``g=0.9``): the fitted ``scatter_length`` is
     Rayleigh-only and the asymmetric channel is dropped, not folded in. It is a constructor

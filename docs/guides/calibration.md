@@ -147,10 +147,10 @@ become systematics-limited rather than photon-limited.
   diversity**. A single source leaves `L_M↔k`, `L_abs↔qe`, and wall↔sensor reflectivity
   degenerate; mixing wall lasers (several positions/wavelengths) with an isotropic flasher breaks
   them and makes the scattering lengths measurable.
-- **per-PMT `k` runs away** (a global QE↔mean-`k` offset drifts) — this cannot happen in the
-  fitter any more: the gains are *profiled*, solved in closed form as `k = ΣQ/ΣM` each step and
-  gauged to `mean(log k)=0` (`gauge='linear'` for `mean(k)=1` instead). They never enter the
-  optimizer, so there is no per-PMT iterate to run away. The `crb` bound still carries them as a
+- **per-PMT `k` runs away** (a global QE↔mean-`k` offset drifts) — the fitter cannot do this:
+  the gains are *profiled*, solved in closed form as `k = ΣQ/ΣM` each step and gauged to
+  `mean(log k)=0` (`gauge='linear'` for `mean(k)=1` instead). They never enter the optimizer,
+  so there is no per-PMT iterate to run away. The `crb` bound still carries them as a
   free Schur block, because a bound must integrate over a nuisance where a fit may profile it.
 - **CRB disagrees with a sim toy-MC** — expected: the expected-value (implicit-capture) engine is
   quieter than real Poisson shot noise (the `crb` bound carries a ×√12 honesty factor). Validate
@@ -158,8 +158,7 @@ become systematics-limited rather than photon-limited.
 - **A residual that is not linear in the model** — the forward is a Monte-Carlo estimate redrawn
   every step, so any residual nonlinear in it has `E[f(M)] ≠ f(E[M])` and a permanently displaced
   fixed point; no amount of iteration recovers. The fitter therefore runs the **Neyman** χ²,
-  `(k·M − Q)/√Q`, the member of the family whose weight depends on the data alone. The earlier
-  square-root-MSE loss was the arm this replaced.
+  `(k·M − Q)/√Q`, the member of the family whose weight depends on the data alone.
 
 ## Frontier
 

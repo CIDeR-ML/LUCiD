@@ -4,18 +4,12 @@ This is the calibration counterpart to ``studies.py``: it defines the detector, 
 model, the source layout and the fit recipe **once**, and every calibration figure builds
 from it. Nothing else may define a recipe value.
 
-Consistency (referee IV.1 + II.C.3): the detector medium is the SK-calibration-paper
-wavelength-dependent water model (``config/materials/water.json``) — the SAME model the
-tracking section uses (``wavelength_mode=True``). Calibration is done the way real SK does
-it: monochromatic lasers at several wavelengths, recovering the EFFECTIVE optical parameters
-at each wavelength (L_s(λ)=1/scatter_coeff, L_a(λ)=1/absorption_coeff, QE(λ)), fit as scalars.
-The recovered points trace out the water.json curves.
-
-Not ported: the six ``compute_*``/``plot_*`` figure pairs, the 7-parameter Mie variants
-(``effective_truth7``, ``_dp7``), ``_wall_sources``, ``_truth_sim``, ``_load_truth`` and
-``_crb_honesty``, which belong to calibration figures outside the current scope, and
-``compute_conv`` / ``_mgpu_joint_fit`` / ``conv_combine``, the older joint fit that
-``calib_run.py`` replaces.
+The detector medium is the SK-calibration-paper wavelength-dependent water model
+(``config/materials/water.json``), the SAME model the tracking section uses
+(``wavelength_mode=True``). Calibration follows SK: monochromatic lasers at several
+wavelengths, recovering the EFFECTIVE optical parameters at each wavelength
+(L_s(λ)=1/scatter_coeff, L_a(λ)=1/absorption_coeff, QE(λ)), fit as scalars. The recovered
+points trace out the water.json curves.
 """
 import os
 import sys
@@ -57,8 +51,8 @@ WALL_FSPEC, SENSOR_FSPEC = 0.55, 0.90    # specular fraction (1-fspec diffuse)
 WAVELENGTHS = [337, 375, 405, 445, 473]  # SK water-calibration laser wavelengths (arXiv:1307.0162)
 REP_WL = 405                             # representative wavelength
 
-# INTENSITY is the essential fix (was 1e6 -> 100x under-photoned): sets the photon/charge
-# scale and hence the CRB, at zero compute cost. Rays/K/grid drive RUNTIME, so keep them lean:
+# INTEN sets the photon/charge scale and hence the CRB, at zero compute cost (1e6 would
+# under-photon the sources 100x). Rays/K/grid drive RUNTIME, so keep them lean:
 # K=8 is the >99.8%-intensity convergence criterion, and the fit is self-consistent with truth
 # at the same settings, so 1e6 rays is plenty once the intensity (shot-noise) is realistic.
 N_PH = int(float(os.environ.get('N_PH', '1e6')))
@@ -75,11 +69,9 @@ PTS = jnp.asarray(_det.all_points)
 
 # Realistic per-PMT gain/QE spread baked into the wavelength-scan truth: a fixed ~5% log-normal
 # (physical PMT manufacturing/aging spread), gauged to mean(log k)=0 so it doesn't collide with
-# the base-QE amplitude. The fit recovers ALL NS gains simultaneously by PROFILING
-# them in closed form (`profile_gains`, k = SQ/SM under this same mean(log k)=0 gauge) --
-# NOT through a Schur or `bake_k` block: `bake_k` is retired and CalibrationProblem needs no
-# Schur block in the fitter. The gains are still all recovered; the mechanism named was stale
-# alongside the per-λ optics + reflection mixture -- the honest, fully-loaded calibration.
+# the base-QE amplitude. The fit recovers ALL NS gains alongside the per-λ optics and the
+# reflection mixture by PROFILING them in closed form (`profile_gains`, k = SQ/SM under this
+# same mean(log k)=0 gauge).
 QE_SPREAD = 0.05
 _tk = np.exp(np.random.default_rng(12345).normal(0.0, QE_SPREAD, NS))
 TRUTH_K = _tk / np.exp(np.mean(np.log(_tk)))
@@ -89,9 +81,8 @@ TRUTH_K = _tk / np.exp(np.mean(np.log(_tk)))
 # The published fit recipe. Defined ONCE here; calib_run.recipe_to_kwargs translates it
 # into the typed arguments the fit takes.
 # ----------------------------------------------------------------------------------------
-# Provenance: this is the knob set of the campaign's `steps600.sh` driver (not in this
-# repository), behind the paper's convergence figure. It is also recorded inside every run's own .npz, so a
-# saved run is self-describing and can be checked against this table.
+# This is the knob set behind the paper's convergence figure. It is also recorded inside every
+# run's own .npz, so a saved run is self-describing and can be checked against this table.
 #
 # Why each choice:
 #   LOSS=neyman     the only member of the chi-square family LINEAR in the noisy forward
@@ -104,8 +95,8 @@ TRUTH_K = _tk / np.exp(np.mean(np.log(_tk)))
 #   JKEY_SEED=1     decorrelates the Jacobian key stream per seed. With the default 0 the
 #                   stream is IDENTICAL in every seed, so Jacobian-noise displacement shows
 #                   up as an apparent bias the ensemble s.e.m. cannot see.
-#   SOLVER=solve    plain damped solve (reconstruction's structure). The legacy eigen-floor
-#                   was measured never to engage: 0 of 19 directions, margin 3.7-15x.
+#   SOLVER=solve    plain damped solve (reconstruction's structure); an eigenvalue floor
+#                   never engages on this problem, so it would add nothing.
 #   MU=0.1          load-bearing. MU=0.3 over-damps the soft reflection directions
 #                   (Rs_diff reaches +11.2% with a sign flip); MU=0.03 is mixed.
 #   LAM=0.01        measured INERT (LAM=0 is indistinguishable from baseline), retained
@@ -117,16 +108,12 @@ TRUTH_K = _tk / np.exp(np.mean(np.log(_tk)))
 #                   vs 3.43% mean worst-parameter error). This is a READOUT ONLY and can be
 #                   recomputed from the saved `hist` without re-running.
 #
-# COMPLETENESS IS THE POINT, not tidiness. The convergence figure no longer builds an
-# environment at all — `calib_run.recipe_to_kwargs` translates this dict into typed arguments —
-# but the recipe is still the single description of the published run, and the 2-D figure DOES
-# still build a subprocess environment from LANDSCAPE_RECIPE below.
-#
-# This named 22 of the 38 knobs the run read across the campaign's engine and this module; the other 16
-# were inherited from whatever happened to be exported. HCORR, METRIC, TAU and GAUGE change the
-# ESTIMATOR rather than a cost, and INTEN sets the photon budget of every source — an exported
-# `HCORR=1` or `INTEN=1e6` would have silently published a different run. Each is now set to the
-# reading site's own default, so completing it is inert on a clean shell.
+# COMPLETENESS IS THE POINT, not tidiness: every knob the run reads is pinned, because an
+# unpinned one inherits whatever the shell exported. HCORR, METRIC, TAU and GAUGE change the
+# ESTIMATOR rather than a cost, and INTEN sets the photon budget of every source, so an
+# exported `HCORR=1` or `INTEN=1e6` would silently publish a different run. Each is set to the
+# reading site's own default, so pinning it is inert on a clean shell. The 2-D figure builds a
+# subprocess environment from LANDSCAPE_RECIPE below.
 CALIB_RECIPE = {
     # --- estimator ---
     'SAMPLE_TRUTH': '0', 'COMPUTE_CRB': '0',
@@ -143,10 +130,9 @@ CALIB_RECIPE = {
     # --- damping and step ---
     'LAM': '0.01', 'MU': '0.1', 'STEP_MAX': '0.5', 'FLOOR': '1e-5',
     # --- cost ---
-    # INTEN is read by THIS module, not by the engine, so a scan of the engine alone misses it.
-    # It sets the photon budget of every calibration source: an exported 1e6 under-photons the
-    # published run by 100x, silently. NCAP/NANG/NHGT build GRID, which reaches the simulator only
-    # when GRID_MANUAL=1, but are pinned for the same reason.
+    # INTEN is read by THIS module, not by the engine, and sets every source's photon budget.
+    # NCAP/NANG/NHGT build GRID, which reaches the simulator only when GRID_MANUAL=1, but are
+    # pinned for the same reason.
     'INTEN': '1e8', 'NCAP': '100', 'NANG': '150', 'NHGT': '100',
     'K': '12', 'N_PH': '1e6', 'BTRUTH': '8', 'NB_RES': '1', 'NBH': '8',
     'STEPS': '600', 'REFRESH': '20', 'POLYAK': '50', 'JKEY_SEED': '1',
@@ -159,14 +145,11 @@ POLYAK_PLOT_WINDOW = 150     # the window the FIGURE smooths with (see calib_plo
 LANDSCAPE_RECIPE = {
     'NGRID': '51', 'HWF': '0.55', 'K': '8', 'N_PH': '2e6',
     'NK_TRUTH': '8', 'NK_SIM': '4',
-    # Read by THIS module, not by the 2-D scripts, and therefore missed by a scan of them. The
-    # leak is worse here than on the convergence path: `_cal_sim` passes **GRID UNCONDITIONALLY,
-    # with no GRID_MANUAL gate, so NCAP/NANG/NHGT reach the simulator; and the 2-D scripts call
-    # `_laser_sources()` with no intensity, so INTEN sets the photon budget of the source that
-    # builds the surface. An exported INTEN=1e6 under-photons the published landscape 100-fold,
-    # which moves the surface height, the Neyman weight 1/Q, the noise floor and the realized
-    # minimum the figure marks. Values are the reading site's own defaults, so pinning them is
-    # inert on a clean shell.
+    # Read by THIS module, not by the 2-D scripts. `_cal_sim` passes **GRID with no GRID_MANUAL
+    # gate, so NCAP/NANG/NHGT reach the simulator; and the 2-D scripts call `_laser_sources()`
+    # with no intensity, so INTEN sets the photon budget of the surface, moving its height, the
+    # Neyman weight 1/Q, the noise floor and the marked minimum. Values are the reading site's
+    # own defaults, so pinning them is inert on a clean shell.
     'INTEN': '1e8', 'NCAP': '100', 'NANG': '150', 'NHGT': '100',
 }
 LANDSCAPE_SHARDS = 10

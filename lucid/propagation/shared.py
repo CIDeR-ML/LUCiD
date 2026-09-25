@@ -1,7 +1,5 @@
 """The surface photon propagator: one factory for any Detector subclass.
 
-Replaced the three geometry-specific factories -- create_photon_propagator,
-create_sphere_photon_propagator, create_box_photon_propagator -- which have since been deleted.
 Geometry enters only through the Detector methods called below (configure_grid,
 assign_sensor_to_cells, grid_cell_centers, build_inverted_sensor_map, bounds_check,
 intersect_ray, point_to_grid_cell, compute_normal); everything else here is shape-agnostic.
@@ -27,9 +25,9 @@ from lucid.overlap import create_overlap_prob
 def first_hit_survival(weights, times):
     """Cap the deposit at one photon: P(hit s_i) = p_i * prod_{j before i} (1 - p_j).
 
-    `overlap_prob` is applied INDEPENDENTLY per candidate, so nothing capped the total: at grazing
-    incidence a ray skimming the wall passes within r of a whole row and each sensor took full
-    weight (measured: 23 sensors, total 19.0, for a photon carrying 1). Physically the photon
+    `overlap_prob` is applied INDEPENDENTLY per candidate, so on its own it leaves the total uncapped:
+    at grazing incidence a ray skimming the wall passes within r of a whole row of sensors and each
+    takes full weight. Physically the photon
     deposits on the FIRST sensor it reaches, so with candidates ordered by arrival time and p_i the
     conditional hit probability given the photon gets there, sum(P) = 1 - prod(1 - p_j) <= 1.
     It splits weight smoothly between adjacent sensors (p1, p2*(1-p1)) and reduces to p_1 when
@@ -38,8 +36,7 @@ def first_hit_survival(weights, times):
 
     TIES ARE BROKEN BY SLOT. Two live candidates can arrive at EXACTLY the same time -- a ray
     equidistant from two sensors -- and with a strict `t_j < t_i` neither counts as earlier, both
-    keep their full p, and the sum can exceed 1. Measured at 2-5 per 100k photons on SK_like. The
-    slot index orders them, so the cap holds by construction rather than almost always.
+    keep their full p, and the sum can exceed 1. The slot index orders them, so the cap holds by construction rather than almost always.
 
     THE ORDERING IS A HARD COMPARISON. The product is smooth in the p's, but which p's multiply
     which is decided by a threshold on arrival time, so when two candidates swap order the
@@ -56,11 +53,11 @@ def first_hit_survival(weights, times):
     (C, N) capped weights, summing to at most 1 over C for every photon.
     """
     # Clipped below 1 so log1p(-p) stays finite -- STRAIGHT-THROUGH, so the clip shapes only the
-    # forward value. A plain jnp.clip has zero derivative above its maximum and half at a tie with
-    # its minimum, and in step mode (temperature=None) the forward overlap is EXACTLY 1 inside a
-    # sphere and exactly 0 outside: a plain clip therefore zeroed the straight-through surrogate
-    # gradient for every candidate the ray passes inside, and halved it just outside, silently
-    # removing the gradient the hard step exists to keep. The forward is bit-identical either way.
+    # forward value (bit-identical to a plain clip). Must not be a plain jnp.clip for the
+    # gradient: in step mode (temperature=None) the forward overlap is EXACTLY 1 inside a
+    # sphere and 0 outside, where a plain clip has zero derivative (above its maximum) or half
+    # (at a tie with its minimum), which would remove the straight-through surrogate gradient
+    # the hard step exists to keep.
     p = weights + jax.lax.stop_gradient(jnp.clip(weights, 0.0, 1.0 - 1e-6) - weights)
     slot = jnp.arange(p.shape[0])
     # before[i, j, n]: candidate j reaches photon n's path before candidate i does
@@ -180,9 +177,9 @@ def create_propagator(detector, sensor_positions, sensor_radius,
         Soft-overlap lookup interpolation: 'interp' (default) or 'cubic'.
     deposit_leg_bound : bool
         Bound the deposit to the leg the photon actually travels, [0, t_geometry], instead of
-        weighting by distance from the unbounded ray LINE. Default False, bit-identical to the
-        behaviour without it: the switch is a Python bool resolved at trace time, so when off the
-        leg-bound arithmetic is absent from the graph rather than present and unused.
+        weighting by distance from the unbounded ray LINE. Default False; a Python bool
+        resolved at trace time, so when off the leg-bound arithmetic is absent from the graph
+        rather than present and unused, and the result is bit-identical to the behaviour without it.
 
         The line does not stop at the wall, so for a ray at incidence theta it passes within a
         sensor radius of sensors displaced along the wall from the landing point, over-counting
@@ -280,8 +277,7 @@ def create_propagator(detector, sensor_positions, sensor_radius,
                 slot_sensors, sensor_positions, sensor_radius,
                 photon_origins, photon_directions,
                 bounds_check, overlap_prob,
-                # A PYTHON bool: with the bound off, None removes the leg-bound code from the trace
-                # entirely rather than emitting an unused branch.
+                # None when off drops the leg-bound code from the trace; see `deposit_leg_bound`.
                 t_geometry=t_geometry if deposit_leg_bound else None)
 
         (weights, sensor_times, sensor_indices,

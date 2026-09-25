@@ -8,9 +8,9 @@ elsewhere (``tests/reconciliation/``).
 
 The stub depends on the source, on every fitted field, and on the gains, because a stub that
 ignored one of them would let a dropped argument pass unnoticed. Each source carries its OWN
-per-sensor response matrix, which is not decoration: sources whose patterns differ by a scalar
-alone are degenerate under profiled gains — the gains absorb the whole shared pattern and the
-parameters become unidentifiable, exactly as a single source is. Source diversity is the lever.
+per-sensor response matrix: sources whose patterns differ only by a scalar are degenerate under
+profiled gains (the gains absorb the shared pattern and the parameters become unidentifiable,
+as with a single source).
 """
 import numpy as np
 import jax.numpy as jnp
@@ -140,13 +140,11 @@ class TestCalibrate:
         assert res['loss'].shape == (7,)
 
     def test_seed_moves_both_key_streams(self):
-        """Named for what it checks. The stub is key-INDEPENDENT, so the fit is byte-identical
-        across seeds here (measured) — what this asserts is that both stream bases move.
+        """Both key-stream bases (forward and Jacobian) move with the seed. The stub is
+        key-independent, so this checks the bases, not the fit; the next test checks the fit.
 
-        Without a seed term in the JACOBIAN's base, every ensemble member draws the same Jacobian
-        noise: anything it displaces biases them all alike and never appears in the spread, so the
-        ensemble's own error bar is blind to it. The next test is the one that shows the seed
-        actually reaching the answer.
+        Without a seed term in the Jacobian's base, every ensemble member draws the same Jacobian
+        noise, so any bias it causes is shared and the ensemble's spread is blind to it.
         """
         params, theta_true = _setup()
         fwd = CalibrationForward(_stub_sim, _sources(), params, NS)

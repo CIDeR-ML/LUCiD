@@ -50,11 +50,8 @@ def pytest_addoption(parser):
                      help="Include slow tests (detector/propagator/simulation)")
 
 
-# Files actually skipped this run, so the terminal summary can SAY SO. Without this the suite
-# reports a count with no indication that 23 files were never collected -- which is precisely the
-# failure mode the data-skip banner below was built to fix, left unfixed for the larger case.
-# Measured: a default run collects 786 tests and `--slow` collects 993, so the default silently
-# omits 207 tests, 21% of the suite, including test_tripwire.py.
+# Slow files skipped this run, so the terminal summary can name them. Otherwise the suite reports
+# a pass count with no sign that whole files (test_tripwire.py among them) were never collected.
 _IGNORED = set()
 
 def pytest_ignore_collect(collection_path, config):
@@ -71,10 +68,7 @@ def pytest_ignore_collect(collection_path, config):
 #
 # `data/` is gitignored, so a fresh clone and EVERY git worktree materialise almost none of it.
 # Tests that need a downloaded asset therefore skip — correctly, since erroring would read like a
-# defect — but pytest prints only a count. For an entire restructure of this package, eight
-# SK-like integration tests skipped silently in exactly the area least covered by anything else,
-# and the suite reported a smaller number and looked green. That is the same failure mode that let
-# the water-mode tripwire sit unnoticed for a month.
+# defect — but pytest prints only a count, and a suite with silently skipped tests looks green.
 #
 # So: a banner at the end of the run naming what was skipped and what would restore it, and
 # LUCID_REQUIRE_DATA=1 to turn those skips into failures for a CI job that is supposed to have the
@@ -91,7 +85,7 @@ def _is_data_skip(reason):
 def pytest_terminal_summary(terminalreporter, exitstatus, config):
     # --- files that were never COLLECTED -------------------------------------------------
     # Reported first and unconditionally: a green count is misleading in proportion to what it
-    # left out, and a fifth of the suite is not a footnote.
+    # left out.
     if _IGNORED:
         w = terminalreporter
         w.write_sep('=', f'{len(_IGNORED)} FILE(S) NOT COLLECTED (slow) — pass --slow to include',
@@ -128,7 +122,7 @@ def pytest_runtest_makereport(item, call):
 
     A hookwrapper that rewrites the finished report, NOT a `pytest.fail()` inside the hook: this
     hook's job is to build the report, and raising from it aborts the whole session with
-    INTERNALERROR rather than failing the test. (Measured — the first version did exactly that.)
+    INTERNALERROR rather than failing the test.
     """
     outcome = yield
     if os.environ.get('LUCID_REQUIRE_DATA') != '1':

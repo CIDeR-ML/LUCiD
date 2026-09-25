@@ -1,10 +1,5 @@
 """A refused step must survive all the way to the stored record.
 
-This exists because it did not. `n_rejected` was added to `minimize` and to `fit_track`, and a
-100-event GPU campaign then reported "NOT RECORDED" for every event: the count was written into a
-record builder the published config does not use, and the live one dropped it. Thirty-three
-minutes on ten GPUs to discover a plumbing gap that costs nothing to test.
-
 The chain is: `minimize` counts -> `fit_track` forwards -> the pipeline record carries ->
 `_ATTR_KEYS` routes it to an HDF5 attribute -> the aggregator reads `attrs`. Every link is cheap
 to check and the whole chain is worthless if any one is missing.
@@ -75,7 +70,7 @@ def test_the_hdf5_writer_routes_it_to_an_ATTRIBUTE(module):
 
 
 def test_the_published_record_builder_carries_it():
-    """Guards the specific gap that cost a campaign: the LIVE builder must include the key.
+    """The LIVE record builder (the one the published config runs) must include the key.
 
     Checked on the source rather than by running the pipeline, which needs a detector, a ROOT file
     and a GPU. The point is that the key appears in the record the published config writes.
@@ -92,18 +87,12 @@ def test_the_published_record_builder_carries_it():
 
 
 def test_a_NONZERO_count_survives_a_real_hdf5_round_trip(tmp_path):
-    """The link the rest of this file asserts about but never exercises.
+    """Exercises `_write_event`'s attribute-versus-dataset dispatch, which the whitelist and
+    source-text tests above do not execute.
 
-    `test_the_hdf5_writer_routes_it_to_an_ATTRIBUTE` checks that `n_rejected` is IN `_ATTR_KEYS`,
-    and `test_the_published_record_builder_carries_it` reads the builder's source text. Neither
-    calls `_write_event`, so the dispatch itself — the conditional deciding attribute versus
-    dataset — was never executed by any test. A break there would leave both of them passing.
-
-    The value written here is deliberately NONZERO. Every artifact this project has round-tripped
-    so far records `n_rejected = 0` (measured: 0 of 100 published events ever refuse a step), so a
-    test built on the real data would have confirmed nothing — zero is also what an absent key
-    reads back as once a caller applies a default. Only a nonzero value distinguishes "written and
-    read back" from "never written at all", which is precisely the failure that cost the campaign.
+    The value is deliberately NONZERO: real runs almost always record 0, and 0 is also what an
+    absent key reads back as once a caller applies a default, so only a nonzero value tells
+    "written and read back" from "never written".
     """
     import h5py
     from analysis.paper.utils.run import _write_event

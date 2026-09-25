@@ -1,9 +1,8 @@
 """Calibrating a detector: the one call, and the closure that tells you whether to trust it.
 
-The pieces below this module — a parameterisation, a forward, a Jacobian, a problem, a loop —
-are each separately reviewable, which is why they are separate. But assembling five objects
-before a first fit is a real cost, and a newcomer who pays it by copying a figure script inherits
-whatever that script happened to do. So the assembly is written once, here.
+The parameterisation, forward, Jacobian, problem and loop are separate objects so that each can
+be reviewed alone. This module assembles them once, so a first fit does not start from a copied
+figure script and inherit whatever that script happened to do.
 
 Two entry points, and the order matters:
 
@@ -19,7 +18,7 @@ Two entry points, and the order matters:
 
 The estimator
 -------------
-One estimator serves all three, and it is the one the calibration campaign selected:
+One estimator serves all three:
 
 * **Neyman χ²** residual ``(k·M − Q)/√Q``. The weight depends on the data alone. That is not a
   detail — the forward is a Monte-Carlo estimate redrawn every step, so any weight involving the
@@ -28,10 +27,6 @@ One estimator serves all three, and it is the one the calibration campaign selec
   see :func:`lucid.fitting.calib.profile_gains` for how that differs from the Neyman minimiser)
   rather than fitted. Order 10^4 nuisance parameters never enter the optimizer.
 * **Damped Gauss-Newton**, shared with reconstruction (:mod:`lucid.fitting.gn`).
-
-The earlier arm — a √-MSE residual with the gains carried as a free Schur block — is gone. It was
-the arm the campaign rejected: a residual nonlinear in a re-drawn model, and a free per-sensor
-gain that overfits a single noisy draw.
 """
 import numpy as np
 import jax.numpy as jnp
@@ -49,8 +44,8 @@ __all__ = ['calibrate', 'closure', 'closure_data', 'fit']
 def _seeded_keys(seed):
     """The reference engine's per-seed key bases, so an ensemble is reproducible from its seed.
 
-    The Jacobian's stream must be independent of the residual's — sharing them was measured at
-    137 sigma of covariance — and must carry the seed. Without a seed term every ensemble member
+    The Jacobian's stream must be independent of the residual's (a shared stream correlates the
+    two) and must carry the seed. Without a seed term every ensemble member
     draws the SAME Jacobian noise, so any fixed point it displaces moves them all alike: the error
     appears as bias and contributes nothing to the spread, leaving the ensemble's own error bar
     blind to it.
@@ -100,10 +95,9 @@ def calibrate(sim, sources, params, data, theta0, *,
         is no gradient without the Jacobian and a first-order rule saves nothing on calibration.
     n_forward_draws : int
         Forward draws averaged into the residual each step. Averaging reduces the Monte-Carlo
-        variance of the model. Linearity in ``M`` is what makes averaging UNNECESSARY for the
-        fixed point, not what makes it necessary -- the mechanism that makes this knob matter is
-        the profiled gain ``k = ΣQ/ΣM``, which is nonlinear in ``M``. See
-        :func:`~lucid.fitting.calib.profile_gains`.
+        variance of the model. The Neyman residual is linear in ``M``, so on its own averaging
+        would not move the fixed point; the knob matters because the profiled gain
+        ``k = ΣQ/ΣM`` is nonlinear in ``M``. See :func:`~lucid.fitting.calib.profile_gains`.
     jacobian_draws : int
         Jacobian draws averaged per refresh, on a stream independent of the residual's.
     q_floor, q_floor_frac
@@ -203,8 +197,7 @@ def closure_data(forward, theta_true, gains=None, *, n_draws=8, key_base=5000):
     in the data is noise in the weight. Pass ``1`` to model a single real exposure — but then read
     the answer as one draw, not as a measurement of the estimator.
 
-    The default is a round number, not a measured optimum: the published run uses 8, and no sweep
-    in this tree identifies a best value.
+    The default 8 is the published run's value, not a measured optimum.
     """
     g = jnp.ones(forward.NS) if gains is None else jnp.asarray(gains)
     return forward.average(jnp.asarray(theta_true, dtype=jnp.float32), key_base, g, n_draws)
@@ -296,10 +289,8 @@ def fit(sources, truth_list, theta0, n_sensors, *, steps=300, refresh=15,
         prob = build_calibration_problem(sim, sources, dp_true, ['scatter_length', ...])
         res  = fit(prob['source_models'], prob['truth_charge'], prob['theta0'], prob['num_sensors'])
 
-    What changed is underneath: the residual is Neyman, the gains are profiled, and the loop is the
-    one reconstruction uses. The numbers this returns therefore differ from the pre-consolidation
-    ``fit`` — deliberately, since that residual was nonlinear in a re-drawn Monte-Carlo model and
-    the free per-sensor gain block overfitted a single noisy draw.
+    Underneath, the residual is Neyman, the gains are profiled, and the loop is the one
+    reconstruction uses.
 
     Retired keyword arguments raise rather than being quietly ignored, because each named a piece
     of machinery that no longer exists; silently accepting them would let a caller believe a knob
@@ -312,11 +303,9 @@ def fit(sources, truth_list, theta0, n_sensors, *, steps=300, refresh=15,
     ``theta`` in physical units — the keys the bridge's callers read.
 
     .. warning::
-       ``history`` kept its name and changed its meaning, which is the one migration hazard here
-       that does not announce itself. It was the LINEAR trajectory with one row per step; it is now
-       the LOG-space trajectory INCLUDING the starting point, so it has ``steps + 1`` rows. Code
-       that plotted it directly will now plot log values as if they were physical, silently. Use
-       ``np.exp(res['history'][1:])`` for the old quantity.
+       ``history`` is the LOG-space trajectory INCLUDING the starting point, so it has
+       ``steps + 1`` rows; plotting it directly shows log values as if they were physical, with
+       no error. Use ``np.exp(res['history'][1:])`` for the physical per-step trajectory.
     """
     for k in retired:
         why = _RETIRED.get(k, 'no longer part of the calibration estimator')

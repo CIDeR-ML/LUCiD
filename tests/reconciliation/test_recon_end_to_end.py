@@ -1,30 +1,17 @@
-"""The reconstruction chain, executed. Not a resolution measurement — a wiring gate.
+"""The reconstruction chain, executed end to end. A wiring gate, not a resolution measurement.
 
-Everything on the live recon path is verified as a FUNCTION: `fuse_seeds` was moved verbatim,
-`seed_errors` matches its predecessor to 9.7e-09, `pick_by_margin` matches over 20,000 loss
-triples, `ProjectedReconProblem` reproduces the loop it replaced to 1e-5. None of that executes
-the CHAIN — `_prepare_event` -> data simulation -> both seeders -> `fuse_seeds` -> the margin pick
--> `fit_track_multistart` -> reported errors — where a wrong argument order, a renamed dict key or
-a `None` slipping through would live.
+The recon functions are tested individually elsewhere; this runs the CHAIN — `_prepare_event` ->
+data simulation -> both seeders -> `fuse_seeds` -> the margin pick -> `fit_track_multistart` ->
+reported errors — where a wrong argument order, a renamed dict key or a `None` slipping through
+would live.
 
-That gap was real: during the restructure, three functions on this path were changed and the only
-thing that ever ran the chain was a scratch script, once, by hand.
+It asserts structure and sanity, not physics. The settings are far below the published working
+point (5k rays against 250k, 8 iterations against 150, one key against eight) because the point
+is to reach every line, not to converge: a poor reconstruction is expected, and asserting a good
+one would fail for reasons unrelated to correctness.
 
-WHAT THIS ASSERTS is structure and sanity, not physics. The settings below are deliberately far
-below the published working point (5k rays against 250k, 8 iterations against 150, one key against
-eight), because the point is to reach every line, not to converge. A reconstruction from this
-configuration is EXPECTED to be poor; asserting a good one would make the test fail for a reason
-that has nothing to do with correctness. The published performance is measured elsewhere, on GPU,
-at the real working point: vertex 12.60 cm and direction 0.89 deg over 15 events, against the
-documented ~12 cm / ~1.0 deg.
-
-COST: roughly 5-10 minutes, CPU-only. `conftest.py` hides the GPU before importing jax — a wedged
-NVIDIA driver once put the whole suite into uninterruptible sleep — so this cannot use the card
-even when one is present. That is the price of the only test that runs this path at all.
-
-DATA: needs the trained SIREN emitter and a PhotonSim ROOT, neither of which is in the checkout
-(`data/` is gitignored, so every worktree lacks them). It skips when they are absent, and
-`conftest.py` prints a banner naming what was skipped rather than letting the count pass quietly.
+Slow and CPU-only by default (`conftest.py` hides the GPU before importing jax). Needs the trained
+SIREN emitter and a PhotonSim ROOT under the gitignored `data/`; skips when they are absent.
 """
 import os
 from pathlib import Path
@@ -96,10 +83,8 @@ class TestTheChainRuns:
         assert np.abs(starts - fit[None, :]).max() > 1e-6, 'the fit never moved off a seed'
 
     def test_the_reported_errors_are_finite_and_not_absurd(self, record):
-        """Sanity, not resolution. The bands are wide on purpose — at 5k rays and 8 iterations a
-        poor fit is the expected outcome, and a tight band here would fail for the wrong reason.
-        What these catch is a broken coordinate transform or a unit error, which lands orders of
-        magnitude out, not tens of percent."""
+        """Sanity, not resolution: the bands are wide on purpose (a poor fit is expected here) and
+        catch a broken coordinate transform or unit error, which lands orders of magnitude out."""
         vtx_cm, dir_deg, dE_MeV, dt0_ns = record['fit_err'][:4]
         assert np.isfinite(record['fit_err']).all()
         assert 0.0 <= vtx_cm < 2000.0, f'vertex error {vtx_cm} cm is outside the detector'

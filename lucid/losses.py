@@ -527,16 +527,9 @@ def first_arrival_window_nll(log_w, flat_times, flat_indices, t_obs_per_sensor,
     Slo = jnp.clip((muS - Rlo) / muS, 1e-12, 1.)
     Shi = jnp.clip((muS - Rhi) / muS, 1e-12, 1.)
     n = jnp.maximum(obs_counts, 0.)
-    # No clamp here. There used to be a `jnp.minimum(..., -1e-9)`, and it was DEAD CODE:
-    # `_log1mexp` clamps its own argument to -1e-7, a hundred times larger, so the second clamp
-    # always won and the operative cap was never the one written at the call site. Removing it is
-    # bit-identical -- min(min(x,-1e-9),-1e-7) == min(x,-1e-7) for every x -- and stops the code
-    # advertising a saturation point it does not use. `tests/test_first_arrival_a_cap.py` pins
-    # both the equivalence and where the cap really lives.
-    #
-    # Found by rebuilding this loss outside the library and failing to reproduce it: a rebuild
-    # honouring the -1e-9 came out 1.4% high, because the two caps differ by log(1e-7/1e-9) = 4.6
-    # nats on every PMT that sits on them, and enough do. The cap is ACTIVE, not a formality.
+    # No clamp here: the only saturation cap on `a` is the -1e-7 inside `_log1mexp`. That cap is
+    # active on many PMTs, so a reimplementation must use -1e-7 (a -1e-9 cap differs by 4.6 nats
+    # per saturated PMT). `tests/test_first_arrival_a_cap.py` pins where the cap lives.
     a = n * (jnp.log(Shi) - jnp.log(Slo))
     return jnp.where(obs_counts > 0, -n * jnp.log(Slo) - _log1mexp(a), 0.)
 
@@ -544,16 +537,11 @@ def first_arrival_window_nll(log_w, flat_times, flat_indices, t_obs_per_sensor,
 # =============================================================================
 # TAU_VTX PARAMETRIZATION
 # =============================================================================
-# Coefficients from a weighted least-squares fit on a tau hyperparameter scan over
-# (n_rays, energy). The scan driver was `s3df_jobs/submit_tau_hyperparameter_tuning_job.py`,
-# removed with the rest of `s3df_jobs/` once `analysis/paper` superseded it; recover it from git
-# history (`git log --diff-filter=D -- s3df_jobs/`) if these need regenerating. Do not treat the
-# old four-step recipe as runnable: it ended at `good_notebooks/analyze_tau_scan.ipynb`, which has
-# not existed for as long as the reference has, so the documented path was already broken.
-#
-# What regenerating actually requires: a scan over the two axes, the same weighted least-squares
-# fit of tau_vtx = a*n_rays + b*E + c, and these three constants updated together. They are a
-# fitted TRIPLE and mixing one new value with two old ones is not a valid parametrisation.
+# Coefficients from a weighted least-squares fit of tau_vtx = a*n_rays + b*E + c on a tau
+# hyperparameter scan over (n_rays, energy). The scan driver
+# (`s3df_jobs/submit_tau_hyperparameter_tuning_job.py`) is no longer in the tree; recover it with
+# `git log --diff-filter=D -- s3df_jobs/`. The three constants are a fitted TRIPLE: regenerate and
+# update them together, never one alone.
 
 TAU_VTX_PARAM_A = 1.092557e-06  # coefficient for Nrays
 TAU_VTX_PARAM_B = 2.578522e-04  # coefficient for Energy (MeV)

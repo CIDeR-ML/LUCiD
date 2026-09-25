@@ -1,21 +1,15 @@
 """The paper figures' config contract: what TrackingPipeline needs, the study configs must supply.
 
-Why this exists
----------------
-`python analysis/paper/fig_nrays.py` — the documented way to reproduce a tracking figure, with
-`--backend local` as the default — raised `KeyError: 'grid'` and could not run at all.
+Two callers build the same pipeline:
 
-Two callers build the same pipeline and only one merged the defaults:
+  run_study.py  (SLURM worker, --backend s3df)  load_config() -> _deep_merge
+  run.py        (run_local,   --backend local)  the raw study dict straight through
 
-  run_study.py  (SLURM worker, --backend s3df)  load_config() -> _deep_merge -> safe
-  run.py        (run_local,   --backend local)  the raw dict straight through -> KeyError
+so TrackingPipeline.__init__ must merge DEFAULT_CONFIG itself, or the default `--backend local`
+path raises KeyError on the first key the study config does not supply.
 
-The published figures were produced on the s3df backend, so the production path always worked and
-the laptop path never did — which is exactly the path an outside reader takes first.
-
-These tests assert the contract statically, so they need no PhotonSim ROOT input, no SIREN weights
-and no GPU. That matters: a gate requiring downloaded data does not get run, which is how the
-tripwire went a month unnoticed.
+These tests check the contract statically, so they need no PhotonSim ROOT input, no SIREN weights
+and no GPU: a gate that requires downloaded data does not get run.
 """
 import ast
 import re
@@ -61,10 +55,7 @@ def _study_configs():
 
 @pytest.mark.parametrize('name', list(_study_configs()))
 def test_pipeline_defaults_cover_study_configs(name):
-    """Every key the pipeline indexes must exist after the constructor's merge.
-
-    This is the assertion that would have caught the KeyError before it shipped.
-    """
+    """Every key the pipeline indexes must exist after the constructor's merge."""
     import sys
     sys.path.insert(0, str(PAPER.parents[1]))
     from analysis.paper.utils.pipeline import DEFAULT_CONFIG, _deep_merge
@@ -94,14 +85,9 @@ def test_raw_study_config_alone_is_insufficient():
 def test_pipeline_merges_defaults_before_reading_config():
     """TrackingPipeline.__init__ must apply the merge BEFORE its first `config[...]` read.
 
-    This is the test that actually gates the fix, and it exists because the two above do not:
-    they check that DEFAULT_CONFIG *covers* the required keys, which was true before the bug was
-    fixed and stayed true after. The defect was never a missing default — it was a caller that
-    never applied the merge. Verified by deleting the merge line and watching those two still
-    pass.
-
-    Structural rather than behavioural on purpose: exercising __init__ for real needs a PhotonSim
-    ROOT file and the SIREN weights, and a gate that needs downloaded data does not get run.
+    The two tests above only check that DEFAULT_CONFIG covers the required keys; they still pass
+    if the constructor never applies the merge. Structural rather than behavioural because running
+    __init__ for real needs a PhotonSim ROOT file and the SIREN weights.
     """
     tree = ast.parse(PIPELINE.read_text())
     cls = next(n for n in ast.walk(tree)
@@ -129,8 +115,8 @@ def test_pipeline_merges_defaults_before_reading_config():
 def test_run_local_does_not_merge_defaults_itself():
     """run_local must NOT re-implement the merge; the constructor owns it.
 
-    Recorded as a test because the tempting fix was to patch run_local — which would have left
-    the same trap for the next caller of TrackingPipeline.
+    Merging in run_local instead would leave the same KeyError for every other caller of
+    TrackingPipeline.
     """
     src = (PAPER / 'utils' / 'run.py').read_text()
     assert 'DEFAULT_CONFIG' not in src, (

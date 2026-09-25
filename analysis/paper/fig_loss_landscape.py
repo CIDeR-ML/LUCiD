@@ -50,12 +50,8 @@ def phys_from_vec9(v):
     the notebook's ``[X, Y, Z, t0, theta, phi, E]`` because `PHYS_NAMES`, `HALF_RANGE` and
     `SCAN_PAIRS` are all indexed in it. Both are internally consistent; MIXING them swaps phi
     with t0, which evaluates the model at the wrong point while every label still names the right
-    coordinate. Three gradient probes did exactly that by pairing this file's inline
-    `t9_of_phys` with the pipeline's `vec9_to_phys`.
-
-    So this file now carries a NAMED inverse (:func:`vec9_from_phys`) rather than an anonymous
-    inline one, and `tests/test_phys_vec9_roundtrip.py` pins both conventions and asserts they
-    are genuinely different.
+    coordinate. Use :func:`vec9_from_phys` as the inverse, never the pipeline's;
+    `tests/test_phys_vec9_roundtrip.py` pins both conventions and asserts they differ.
     """
     x, y, z, phi, theta, t0, E = vec9_to_phys(v)
     return np.array([x, y, z, t0, theta, phi, E])
@@ -128,8 +124,7 @@ def main():
           flush=True)
 
     # ---- the actual reconstruction loss, as a function of the PHYSICAL params -------------
-    # NOTEBOOK order throughout this figure, so the inverse must be the notebook one. It is
-    # named rather than inlined because the pipeline's ordering differs by a phi<->t0 swap.
+    # NOTEBOOK order throughout this figure; the pipeline's order differs by a phi<->t0 swap.
     def t9_of_phys(p):
         return vec9_from_phys(p, xp=jnp)
 

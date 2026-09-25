@@ -42,23 +42,17 @@ def process_intersection_normals(ray_origins, ray_directions, intersection_point
         Contains hit positions and normals
     """
     # Calculate weighted sensor properties
-    # KEEP ONLY THE FIRST SENSOR ENTERED.
+    # Keep only the first sensor entered. `inside_sensor` is evaluated per candidate
+    # independently, so a ray threading several spheres sets several flags. The mask-mean in
+    # `calculate_weighted_sensor_properties` is an exact gather only when one flag is set; with
+    # several it averages the entry points, putting the stop on no sensor's surface (possibly
+    # inside a sphere) and corrupting the leg length, attenuation, arrival time, reflection normal
+    # and next origin. Taking the earliest entry makes the geometry match the first-hit semantics
+    # of `first_hit_survival` in shared.py (ordered by arrival time, ties broken by slot).
     #
-    # `inside_sensor` is evaluated per candidate INDEPENDENTLY, so a ray threading several spheres
-    # sets several flags at once. The mask-mean in `calculate_weighted_sensor_properties` is a
-    # differentiable GATHER -- exact when one flag is set -- but with several it degrades to a
-    # genuine average, putting the photon's stopping point on no sensor's surface at all
-    # (measured: entries at t = 0.171 / 0.428 / 1.128 gave a stop at t = 0.576, 0.126 m from the
-    # nearest centre, INSIDE a sphere). That corrupts the leg length, hence attenuation, arrival
-    # time, the reflection normal, and the next leg's origin.
-    #
-    # The charge model commits to first-hit semantics -- `first_hit_survival` in shared.py,
-    # p_i * prod_{j before i}(1 - p_j), ordered by arrival time with ties broken by slot. This makes
-    # the GEOMETRY agree with it, and restores the gather's design assumption by construction.
-    #
-    # A HARD SELECTION: `argmin` over entry times. Its output feeds hit positions and normals,
-    # not the charge weights, and `hit_sensor = any(...)` is unchanged, since exactly one flag
-    # survives whenever any did.
+    # A hard selection (`argmin` over entry times): it feeds hit positions and normals only, not
+    # the charge weights, and `hit_sensor = any(...)` is unchanged since exactly one flag survives
+    # whenever any did.
     _t_entry = jnp.sum((sensor_hit_positions - ray_origins[None, :, :])
                        * ray_directions[None, :, :], axis=-1)          # (C, N)
     _ordered = jnp.where(inside_sensor, _t_entry, jnp.inf)
@@ -205,31 +199,20 @@ def compute_sensor_intersections_base(sensor_idx, sensor_positions, sensor_radiu
     t_closest = -jnp.sum(oc * ray_d, axis=1, keepdims=True)
     closest = ray_origins + t_closest * ray_d
     to_sensor = closest - sphere_centers
-    # SAFE norm: eps INSIDE the sqrt. `jnp.linalg.norm(v)` differentiates to v/|v|, which is 0/0
-    # at v == 0, and an epsilon added AFTERWARDS protects the division that follows but never the
-    # norm's own derivative. `simulator.py` already documents this exact failure for the surface
-    # distance; these call sites were missed.
+    # Safe norm: eps inside the sqrt. `jnp.linalg.norm(v)` differentiates to v/|v|, which is 0/0 at
+    # v == 0, and an epsilon added afterwards protects the division that follows but not the norm's
+    # own derivative (the same failure is documented for the surface distance in simulator.py).
+    # `to_sensor` is zero when a ray's closest approach lands exactly on a sensor centre, an
+    # ordinary coincidence in float32. The later `jnp.where(valid, ...)` masks the value but lets
+    # the NaN cotangent through.
     #
-    # `to_sensor` reaches zero when a ray's closest approach lands exactly on a sensor centre,
-    # which float32 makes an ordinary coincidence rather than a measure-zero one. The mask that
-    # hides it is `weights = jnp.where(valid, ...)`: `where` selects the VALUE and lets the NaN
-    # cotangent straight through.
+    # Sentinel slots (`sensor_idx == -1`, centre at the origin) do not occur on this engine: map
+    # construction fills every slot via `add_closest`. The string propagator, where they do occur,
+    # carries the same fix.
     #
-    # NOT via invalid candidate slots on this engine, though the code above allows for them.
-    # `sphere_centers` is set to the ORIGIN when `sensor_idx == -1`, which would make `to_sensor`
-    # the ray's closest approach to (0,0,0) -- but those sentinels do not survive map
-    # construction here: the inverted map is initialised to -1 and then `add_closest` fills every
-    # remaining slot from `top_k`, so no cell retains one. Measured: zero sentinels across every
-    # grid-based config. The engine where they ARE live is the string telescope, whose propagator
-    # carries the same fix for the same reason.
-    #
-    # A double-`where` (dummy input on the degenerate rows, mask the result) was tried first,
-    # because it yields the IDENTICAL value everywhere and looked like the bit-preserving choice.
-    # Measured end to end, it is not: identical values through a different HLO graph let XLA reduce
-    # differently, and against a fixed reconstruction record the double-`where` moved the fitted
-    # result by 9.6% where this form moves it by 5.6e-09. That is a fact about the FIT being
-    # chaotic under rounding rather than about either form being wrong, and it is the reason this
-    # form ships: it is the one whose end-to-end effect was actually measured.
+    # Not a double-`where`: it gives identical values through a different HLO graph, which XLA can
+    # reduce differently, and the reconstruction fit is chaotic under rounding (a double-`where`
+    # moved a fitted result by 9.6%, this form by 5.6e-09).
     distance = jnp.sqrt(jnp.sum(to_sensor ** 2, axis=1) + 1e-12)
     
     # Calculate normal vectors for closest approach
@@ -255,20 +238,10 @@ def compute_sensor_intersections_base(sensor_idx, sensor_positions, sensor_radiu
         -0.5 * (b - sqrt_term)
     )
     t1 = q / (a + 1e-10)
-    # LATENT, and NOT the source of the observed NaN gradient -- that was tested and it is not.
-    # `jnp.sign(0.0)` is 0.0, so `q + jnp.sign(q) * 1e-10` divides by ZERO at q == 0: the one
-    # division on this path whose epsilon is multiplied by a quantity that can itself vanish
-    # (`t1` above adds a bare constant, which cannot). Re-running the seed that produces a NaN
-    # gradient with this form in place still produced it, so this line is fixed on its own merits
-    # and claims nothing further.
-    #
-    # In situ q == 0 is currently UNREACHABLE, which is why this is latent rather than a live bug:
-    # `sqrt_term` is clamped to >= 1e-5 by the `jnp.maximum(1e-10, ...)` above, and q is
-    # -0.5*(b + sqrt_term) for b > 0 or -0.5*(b - sqrt_term) otherwise, so |q| >= 5e-6 either way.
-    # The guard is repaired because that clamp is the only thing standing between this line and a
-    # division by zero, and nothing here declares that dependency. `where(q < 0, -1, +1)` agrees with `sign` everywhere except at
-    # exactly zero -- differs at 2 of 20006 sampled values, both of them +-0.0 -- so the change is
-    # bit-identical wherever the old form was defined at all.
+    # The epsilon's sign must not vanish: `jnp.sign(0.0)` is 0.0, so `q + jnp.sign(q) * 1e-10` would
+    # divide by zero at q == 0. q == 0 is currently unreachable (`sqrt_term` is clamped to >= 1e-5
+    # by the `jnp.maximum(1e-10, ...)` above, so |q| >= 5e-6), but that clamp is otherwise the only
+    # guard. `where(q < 0, -1, +1)` equals `sign` everywhere except at +-0.0.
     t2 = c / (q + jnp.where(q < 0, -1.0, 1.0) * 1e-10)
     
     t_intersect = jnp.where((t1 > 0) & (t2 > 0), 
@@ -311,11 +284,10 @@ def compute_sensor_intersections_base(sensor_idx, sensor_positions, sensor_radiu
     # approach over that segment. Only the FRONT end is clamped: `_ahead` already zeroes
     # candidates behind the photon, so the back-end term of the segment distance is redundant.
     #
-    # THE BRANCH IS ON A PYTHON `None`, NOT A TRACED PREDICATE, deliberately. With the bound off
-    # this emits `overlap_prob(distance)` verbatim -- the same operand, the same graph. A
-    # `jnp.where` would add a branch even when unused, and identical values through a different
-    # graph can reduce differently in XLA: a semantically identical rewrite of the safe norm above
-    # moved a fitted reconstruction by 9.6%. Off has to be bit-exact, not close.
+    # The branch is on a Python `None`, not a traced predicate, so with the bound off the graph is
+    # exactly `overlap_prob(distance)`. A `jnp.where` would change the graph even when unused, and
+    # a different graph can reduce differently in XLA (see the safe norm above). Off must be
+    # bit-exact, not close.
     if t_geometry is None:
         d_eff = distance
     else:
@@ -324,15 +296,13 @@ def compute_sensor_intersections_base(sensor_idx, sensor_positions, sensor_radiu
 
     weights = jnp.where(valid & _ahead, overlap_prob(d_eff), 0.0)
     # Check if point is inside sensor (keep as boolean)
-    # NOT GATED by `_ahead`: the geometry flag uses the same distance as the weight above --
-    # `d_eff`, so with the leg bound on, charge and geometry agree about the same photon -- but not
-    # the same gate. A behind candidate can still be flagged when the photon's ORIGIN lies inside
-    # its sphere -- the forward ray then exits with t > 0 -- carrying no charge. Measured on
-    # SK_like, 100k photons per population: 0 after a sensor reflection (photon_step nudges the
-    # next origin 1e-4 OUTSIDE the sphere, so it cannot re-enter), 0 for bulk emission, and it
-    # fires only for origins inside a PMT sphere -- a photon starting inside the PMT, which is
-    # already outside what the sphere model describes. Gating it would change what the reflection
-    # path computes for that region, so it is left as is and stated rather than implied.
+    # Not gated by `_ahead`: the geometry flag uses the same distance `d_eff` as the weight above (so
+    # with the leg bound on, charge and geometry agree), but not the same gate. A behind candidate
+    # can still be flagged, carrying no charge, when the photon's origin lies inside its sphere (the
+    # forward ray exits with t > 0). This does not arise after a sensor reflection (photon_step
+    # nudges the next origin 1e-4 outside the sphere) or for bulk emission, only for origins inside
+    # a PMT, which the sphere model does not describe. Gating it would change the reflection path's
+    # result there, so it is left ungated.
     inside_spherical_sensor = d_eff < sensor_radius
     
     # Check if intersection point is within geometry bounds

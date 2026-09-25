@@ -1,28 +1,17 @@
 """Run one seed of the published calibration, through the library.
 
-The replacement for the campaign's engine (not in this repository). That engine executed at module level and read 38
-environment variables across two modules, so it has to be launched as a subprocess per seed.
-Everything it does that is *fitting* now lives in :mod:`lucid.fitting`, so what is left here is the
-study: which sources, which wavelengths, what truth, where to start, and how to shard the forward
-across the devices this machine happens to have.
+This replaces the campaign's engine (not in this repository) with :mod:`lucid.fitting`. The
+damped Gauss-Newton loop, damping convention, step clip and Polyak readout come from
+:mod:`lucid.fitting.gn`; this module holds the study -- which sources, which wavelengths, what
+truth, where to start, and how to shard the forward across the available devices. Arguments are
+typed and explicit, so nothing is read from the environment and a variable exported in the
+caller's shell cannot change the estimator. Several seeds can run in one process and share one
+compiled forward.
 
-Three things improve by construction, not by care:
-
-* **No environment.** Arguments are typed and explicit, so a variable exported in the caller's
-  shell cannot change the estimator. That was a live defect: of the 38 knobs the run read, 16
-  were inherited — four estimator-changing, plus `INTEN`, which sets the photon budget of every
-  source.
-* **One process.** The seeds share a compiled forward instead of paying a fresh trace per
-  subprocess.
-* **One fitter.** The damped Gauss-Newton loop, the damping convention, the step clip and the
-  Polyak readout come from :mod:`lucid.fitting.gn`, rather than being a fourth hand-written copy
-  that has to be kept in step with the others by reading them.
-
-What is preserved exactly, because the published numbers depend on it: the key arithmetic (truth
-at ``5000 + 131*b``, residual at ``1000 + 777*seed + 13*step``, Jacobian at
-``9_000_000 + 1_234_567*seed + ...``), the three-stage start perturbation and the order its random
-draws are taken in, the gain readout at forward key 999, and the ``(S, NS)`` row layout. This was
-verified bit-for-bit against the engine when it replaced it; that check is not shipped.
+The published numbers depend on these being preserved exactly: the key arithmetic (truth at
+``5000 + 131*b``, residual at ``1000 + 777*seed + 13*step``, Jacobian at
+``9_000_000 + 1_234_567*seed + ...``), the three-stage start perturbation and the order of its
+random draws, the gain readout at forward key 999, and the ``(S, NS)`` row layout.
 """
 import time
 
@@ -40,20 +29,10 @@ __all__ = ['make_map_fn', 'build_start', 'run_seed', 'recipe_to_kwargs']
 def make_map_fn(n_group=7):
     """``map_fn`` for the forward: pmap across devices when there are enough, else a serial loop.
 
-    The campaign ran on a 10-GPU node and dispatched the seven isotropic sources across it. With
-    fewer devices than sources a pmap would crash, so the fallback runs the same per-source
-    computation serially and stacks the results.
-
-    That fallback is NOT numerically identical to the pmap, as this docstring used to claim.
-    Measured at the published recipe, same allocation, same seed, only the visible device count
-    differing (measured once): the trajectories part by ~1e-3
-    relative (hist 8.7e-4, fit 5.4e-4, khat 1.3e-3). What holds is the weaker and sufficient
-    statement — the PHYSICS agrees. Worst-parameter 2.07% on one device against 2.74% on seven is
-    0.54x the published arm's own seed-to-seed spread, gain RMS is 0.88% either way, and both sit
-    inside the engine's observed range across seeds. So one card reproduces the published numbers
-    to within run-to-run noise, not bit for bit.
-
-    Seven devices is also 3.5x faster: 22.7 min against 78.7 for the same fit.
+    With fewer devices than ``n_group`` a pmap would fail, so the fallback runs the same
+    per-source computation serially and stacks the results. The fallback is NOT bit-identical to
+    the pmap: trajectories differ at ~1e-3 relative, well inside the published seed-to-seed spread,
+    so one device reproduces the published numbers to within run-to-run noise, not bit for bit.
     """
     devices = jax.devices()
 
@@ -62,11 +41,9 @@ def make_map_fn(n_group=7):
             pm = jax.pmap(fn, in_axes=in_axes)
 
             def mapped(*args):
-                # CHUNK when the group is larger than the device count. `pmap` demands one device
-                # per element, so a group of 9 on 8 cards raises "requires 9 logical devices" --
-                # at CALL time, minutes into a fit. That is reachable by any layout with more
-                # structurally-identical sources than cards; the published layout has seven, so
-                # it takes the single-shot path below exactly as before.
+                # Chunk when the group is larger than the device count: `pmap` needs one device
+                # per element and otherwise raises at call time, minutes into a fit. The
+                # published layout (seven sources) takes the single-shot path.
                 d = len(devices)
                 n = next((int(jax.tree_util.tree_leaves(a)[0].shape[0])
                           for a, ax in zip(args, in_axes) if ax == 0), 1)
@@ -81,11 +58,9 @@ def make_map_fn(n_group=7):
         jf = jax.jit(fn)
 
         def serial(*args):
-            # Infer the count from the batched argument rather than closing over `n_group`.
-            # CalibrationForward now groups sources by pytree structure and may map over a group
-            # of any size, so a fallback fixed at one size would iterate the wrong number of
-            # times on any layout but the published one. For that layout the leading axis IS
-            # n_group, so this changes nothing there.
+            # Infer the count from the batched argument rather than using `n_group`:
+            # CalibrationForward groups sources by pytree structure and may map over a group of
+            # any size.
             n = n_group
             for arg, ax in zip(args, in_axes):
                 if ax == 0:
@@ -138,9 +113,8 @@ def run_seed(seed, *, steps=600, n_ph=int(1e6), k=12, btruth=8, nb_res=1, nbh=8,
     published values so that calling this with only a seed reproduces the paper.
 
     ``progress_every`` prints the step, the objective and the worst parameter every N steps, and
-    ``on_step`` forwards a callback to the loop. A published run is 600 steps over more than an
-    hour, and without either of these it reports twice — once when the truth is built and once
-    when it is over — which is not enough to tell a slow run from a stuck one.
+    ``on_step`` forwards a callback to the loop. Without either, a run reports only when the truth
+    is built and when it finishes, which cannot tell a slow run from a stuck one.
 
     Returns a dict with ``truth``, ``theta0``, ``hist``, ``fit``, ``fit_rlogit``, ``chi2``,
     ``khat``, ``truth_k`` and the settings the run used.
@@ -160,11 +134,9 @@ def run_seed(seed, *, steps=600, n_ph=int(1e6), k=12, btruth=8, nb_res=1, nbh=8,
                                     reflection_model='scalar_mix',
                                     deposit_leg_bound=deposit_leg_bound)
     if sources is None:
-        # `intensity` defaults to the published VALUE, not to `calibration.INTEN`. That global is
-        # a module-level environment read, and running in-process means it has already happened by
-        # the time this function is called — so defaulting to it would leave exactly one argument
-        # whose default came from the caller's shell, making the docstring's promise that a bare
-        # `run_seed(seed)` reproduces the paper false on a dirty shell.
+        # `intensity` defaults to the published value, not to `calibration.INTEN`: that global is
+        # read from the environment at import, so defaulting to it would let the caller's shell
+        # change what a bare `run_seed(seed)` computes.
         sources = C._laser_sources(intensity=intensity)
 
     truths = [C.effective_truth(w) for w in C.WAVELENGTHS]
@@ -197,10 +169,9 @@ def run_seed(seed, *, steps=600, n_ph=int(1e6), k=12, btruth=8, nb_res=1, nbh=8,
                 on_step(step, theta, g, H, loss)
 
     # `tx` routes the SAME problem through an optax transformation instead of the damped
-    # Gauss-Newton solve. None -- the default, and what every published figure uses -- reaches the
-    # untouched path, so the bit-exact pins in tests/reconciliation/ still hold. lam/mu are
-    # forwarded only in that case; with a transformation they belong inside it and calibrate()
-    # raises rather than double-apply them.
+    # Gauss-Newton solve. None (the default, used by every published figure) takes the damped
+    # Gauss-Newton path. lam/mu are forwarded only in that case; with a transformation they belong
+    # inside it and calibrate() raises rather than double-apply them.
     step_kw = {} if tx is not None else dict(lam=lam, mu=mu)
     res = calibrate(sim, sources, params, data, start, steps=steps,
                     max_step=step_max, refresh=refresh, n_forward_draws=nb_res,
@@ -214,17 +185,14 @@ def run_seed(seed, *, steps=600, n_ph=int(1e6), k=12, btruth=8, nb_res=1, nbh=8,
     # Gains at the answer, from a SINGLE forward draw at a key outside the fit's stream, so the
     # reported map is not the one the last step happened to be conditioned on.
     #
-    # Done in numpy, not jnp, and that is not stylistic: `profile_gains` reduces with jnp, whose
-    # summation order differs from numpy's, and the two disagree at float32 epsilon (measured
-    # 4.8e-07 relative). The engine's readout is the numpy one, so reproducing the published gain
-    # map exactly means reducing the same way. `data.sum(0)` stays a jnp reduction because that is
-    # where the engine performs it.
+    # Done in numpy, not jnp: jnp's summation order (as in `profile_gains`) differs from numpy's at
+    # float32 epsilon, and the published gain map was reduced in numpy. `data.sum(0)` stays a jnp
+    # reduction for the same reason: that is how the published readout computed it.
     m_final = np.asarray(fwd(jnp.asarray(theta_fit, dtype=jnp.float32), gain_key, jnp.ones(NS)))
     khat = np.clip(np.asarray(data.sum(0)) / (m_final.sum(0) + 1e-12), 1e-6, None)
     khat = khat / np.mean(khat) if gauge == 'linear' else khat / np.exp(np.mean(np.log(khat)))
-    # From C.TRUTH_K directly, NOT from the float32 `truth_k` cast used for the forward. The engine
-    # gauges the reported truth map in float64; going through the forward's cast rounds it to ~1e-7,
-    # and neither pin covers this — the archived reference has no `truth_k` key.
+    # From C.TRUTH_K directly, NOT from the float32 `truth_k` cast used for the forward: the
+    # reported truth map is gauged in float64, and the cast would round it at ~1e-7.
     tk = np.asarray(C.TRUTH_K, dtype=float)
     tk = tk / np.mean(tk) if gauge == 'linear' else tk / np.exp(np.mean(np.log(tk)))
 
@@ -246,8 +214,7 @@ def run_seed(seed, *, steps=600, n_ph=int(1e6), k=12, btruth=8, nb_res=1, nbh=8,
 
     # The record is meant to be self-describing: a saved run must state the ESTIMATOR it used, not
     # only its cost knobs, or it cannot be checked against the recipe without trusting the driver
-    # that wrote it. The engine recorded `loss`, `gauge` and `hcorr` for that reason; this driver
-    # implements one arm, so it records that arm explicitly rather than dropping the fields.
+    # that wrote it. This driver implements one arm, so it records that arm's settings explicitly.
     return dict(seed=seed, truth=tvec, theta0=np.asarray(theta_true), hist=hist,
                 fit=np.asarray(res['real']), fit_rlogit=theta_fit, chi2=np.asarray(res['loss']),
                 khat=khat, truth_k=tk, W=W, NG=params.NG, P=params.P, N_PH=n_ph,
@@ -266,13 +233,7 @@ def run_seed(seed, *, steps=600, n_ph=int(1e6), k=12, btruth=8, nb_res=1, nbh=8,
 
 
 def build_shared(n_ph, k, intensity=None, deposit_leg_bound=False):
-    """The simulator and sources, built once so several seeds share one compiled forward.
-
-    Each seed used to be its own subprocess, which meant tracing and compiling the whole forward
-    from scratch every time. Nothing about the fit required that — it was a consequence of the
-    engine executing at module level and reading its configuration from the environment, so there
-    was no way to run it twice in one process.
-    """
+    """The simulator and sources, built once so several seeds share one compiled forward."""
     sim = setup_event_simulator(C.GEOM, n_ph, temperature=None, K=k, is_calibration=True,
                                 hit_mode='aggregated', wavelength_mode=False,
                                 reflection_model='scalar_mix',
@@ -301,9 +262,8 @@ def recipe_to_kwargs(recipe):
 
     Narrow by design: every key must be either translated or explicitly pinned, and anything else
     RAISES. Ignoring what it does not understand is how a configuration silently stops meaning what
-    it says, which is the defect this module exists to remove — and an earlier version of this
-    function had exactly that bug for six keys, `GRID_MANUAL` among them. That one is genuinely
-    reachable: under it the engine applies a manual photon grid, and this driver cannot.
+    it says (e.g. under `GRID_MANUAL` the engine applies a manual photon grid, which this driver
+    cannot).
 
     Note what ``_REQUIRED`` pins: the value of the PUBLISHED arm, which for `LOSS`, `SOLVER` and
     `JKEY_SEED` is NOT the engine's own default. It states what this driver implements, not what
@@ -326,9 +286,8 @@ def recipe_to_kwargs(recipe):
     if bad:
         raise ValueError(f'calib_run implements the published arm only; these differ: {bad}')
 
-    # Truth is generated at the fitted photon count. Compared NUMERICALLY and unconditionally: a
-    # string compare would fire spuriously on '1e6' vs '1000000', and gating it on N_PH being
-    # present let a lone TRUTH_NPH through to be silently ignored.
+    # Truth is generated at the fitted photon count. Compared NUMERICALLY, so '1e6' equals
+    # '1000000', and unconditionally, so a lone TRUTH_NPH is not silently ignored.
     t_nph = float(recipe.get('TRUTH_NPH', recipe.get('N_PH', 0)))
     n_ph_v = float(recipe.get('N_PH', 0))
     if t_nph != n_ph_v:

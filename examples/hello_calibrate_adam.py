@@ -22,7 +22,7 @@ When to move to ``hello_calibrate.py`` instead: scattering, more parameters, fre
 the stiff directions (Mie, ``g``, the reflectivities). Adam has no curvature, so it crawls along
 those; the recipe there uses Gauss-Newton with profiled gains, the one the paper runs.
 
-Run:  python examples/hello_calibrate_adam.py      (about 1.5 min on one GPU, compile included)
+Run:  python examples/hello_calibrate_adam.py      (one GPU)
 """
 import jax, jax.numpy as jnp, numpy as np, optax
 from lucid.geometry import generate_detector

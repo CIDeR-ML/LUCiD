@@ -1,13 +1,8 @@
 """Calibration accepts an ARBITRARY source layout, not one privileged shape.
 
-`CalibrationForward` used to stack `sources[1:]` unconditionally, which required every source
-after the first to share a pytree structure. A `LaserSource` (5 fields) beside an
-`IsotropicSource` (3) raised `Named tuple arity mismatch: 3 != 5` from inside `tree_map`, three
-frames below the call. So the only admissible layout was one arbitrary source followed by N
-identical ones -- which is the paper's, and which forbade exactly the source DIVERSITY
-`docs/guides/calibration.md` names as the most important calibration lever.
-
-Sources are now grouped by pytree structure, mapped within each group, and scattered back into
+Source diversity is the calibration lever `docs/guides/calibration.md` ranks first, so sources of
+different pytree structure (a `LaserSource` has 5 fields, an `IsotropicSource` 3) must coexist.
+Sources are grouped by pytree structure, mapped within each group, and scattered back into
 source order. Grouping by STRUCTURE rather than by class is the point: two sources can be mapped
 together precisely when they can be stacked, which is a property of their pytree.
 
@@ -15,7 +10,7 @@ What these tests hold:
 
   ADMISSIBILITY   every layout constructs -- mixed, reversed, interleaved, singleton, uniform.
   PARTITION       the grouping is by structure, contiguous runs are not assumed, and the
-                  published layout still resolves to the SAME two calls it always did.
+                  published layout resolves to one solo call plus one stacked group.
   ORDER           row `g = wl*n_sources + s` still belongs to source `s`. This is the one that
                   matters: a grouping that scattered results back wrongly would produce a
                   perfectly shaped, entirely misattributed forward.
@@ -38,8 +33,7 @@ P = CalibrationParams(n_wavelengths=W, basis='rlogit')
 
 def L(x):
     # x is DISTINCT per source and is what the stubs below report, so a swap WITHIN a
-    # group is visible. The first version of this file placed both lasers at x=0, where an
-    # intra-group swap could not have been detected even on the right code path.
+    # group is visible; two sources at the same x would hide an intra-group swap.
     return laser_source(position=[x, 0, 15], direction=[0, 0, -1], intensity=1e7)
 
 
@@ -65,7 +59,7 @@ def test_every_layout_constructs(name):
 
 
 def test_the_published_layout_still_resolves_to_one_solo_plus_one_group():
-    """The shape the paper runs must take the path it always took, or bit-exactness is luck."""
+    """The published layout must take the solo-plus-stacked path that `tests/reconciliation/` holds bit-exact."""
     fwd = CalibrationForward(None, LAYOUTS['published_1_laser_then_iso'], P, 32)
     idx = [ix for ix, _ in fwd._groups]
     assert idx == [[0], [1, 2, 3]], idx
@@ -95,11 +89,9 @@ def test_rows_are_attributed_to_the_RIGHT_source():
     shape with every row belonging to the wrong source, and every downstream residual, gain and
     Jacobian column would inherit the misattribution silently.
 
-    This must run the TRACED route. An earlier version passed `predict=`, which returns from
-    `__init__` before the partition is ever built (`calib.py`: the per-source branch), so it
-    exercised a path whose ordering is trivially [0..n-1] and proved nothing about the scatter.
-    A `sim` stub reporting the source's own x keeps it simulator-free while staying on the real
-    path.
+    This must run the TRACED route: `predict=` returns from `__init__` before the partition is
+    built (`calib.py`: the per-source branch), so its ordering is trivially [0..n-1]. A `sim` stub
+    reporting the source's own x keeps it simulator-free while staying on the real path.
     """
     srcs = LAYOUTS['interleaved']
     NS = 8
@@ -165,6 +157,6 @@ def test_a_sources_keys_do_not_depend_on_the_partition():
 
 
 def test_a_layout_that_used_to_raise():
-    """The regression itself, named so it cannot come back quietly."""
+    """Mixed pytree arities (laser 5 fields, isotropic 3) must construct, not fail inside `tree_map`."""
     fwd = CalibrationForward(None, [L(15), L(-15), I(0)], P, 32)
     assert fwd.S == W * 3

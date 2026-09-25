@@ -1,12 +1,11 @@
 """`minimize` must BE `gauss_newton` when handed the Gauss-Newton transformation.
 
-If that holds, the optimizer stopped being a property of the driver and became an argument to it,
-and there is one loop rather than two to keep in step. If it does not hold, this is a second
-optimizer wearing the same name, which is the drift the fitting restructure existed to end.
+If that holds, the optimizer is an argument to the driver and there is one loop rather than two
+to keep in step. If it does not, this is a second optimizer wearing the same name.
 
 The comparison is on the whole TRAJECTORY, not the endpoint. Damping moves the path and not the
-minimiser, so a converged endpoint comparison passes even when the step rule is wrong -- measured
-in `tests/test_fitting_scaled.py`, where a deliberate 5% error showed as exactly 0.0.
+minimiser, so a converged endpoint comparison passes even when the step rule is wrong (see
+`tests/test_fitting_scaled.py`, where a deliberate 5% error showed as exactly 0.0).
 
 Beyond equivalence, this file gates the two hazards the driver is written around: the jax->numpy
 crossing (a float32 jax update silently downcasts AND retypes a float64 numpy iterate,
@@ -110,7 +109,7 @@ def test_every_readout_matches(readout, polyak):
 @pytest.mark.parametrize('tx', [optax.sgd(1e-2), optax.adam(3e-2),
                                 optax.chain(optax.clip(10.0), optax.sgd(1e-2))])
 def test_first_order_rules_run_and_descend(tx):
-    """The capability the exercise is for: an optimizer that needs no curvature at all."""
+    """First-order rules need no curvature: each must run with needs_metric=False and descend."""
     p = Quad()
     res = minimize(p, START.copy(), 60, tx, needs_metric=False, **COMMON)
     assert np.isfinite(res['history']).all()
@@ -198,12 +197,12 @@ def test_microbatched_accumulation_equals_one_full_batch_step():
 
     Accumulating k microbatch gradients must give the step one full-batch gradient would have
     given. If it merely approximates, it trades memory for an unquantified bias rather than for
-    time, and the production OOM it exists to solve would be solved dishonestly.
+    time.
 
-    Note MultiSteps averages the accumulated GRADIENTS and knows nothing about extra_args, so the
-    metric is whatever arrived last. Here the metric is held fixed to isolate the accumulation
-    itself. Measured with the two varying together on the real forward, it was found that microbatching by N_PH is invalid for this simulator for a reason
-    that has nothing to do with optax -- see transforms.py.
+    MultiSteps averages the accumulated GRADIENTS and knows nothing about extra_args, so the
+    metric is whatever arrived last; here the metric is held fixed to isolate the accumulation.
+    Microbatching by N_PH is invalid for this simulator for a reason unrelated to optax -- see
+    lucid/fitting/transforms.py.
     """
     p = Quad()
     g, H, _ = p.grad_metric_loss(START.copy(), 0)
@@ -213,9 +212,8 @@ def test_microbatched_accumulation_equals_one_full_batch_step():
     tx = damped_gauss_newton(LAM, MU, learning_rate=LR)
     full, _ = tx.update(gs, tx.init(gs), None, metric=Hs)
 
-    # DISTINCT microbatches whose mean is `gs`. The first version of this test fed k IDENTICAL
-    # ones, which made "last metric" and "mean metric" the same array and the batches noiseless --
-    # it certified the arithmetic while being blind to the property the real use depends on.
+    # DISTINCT microbatches whose mean is `gs`: identical ones would make "last metric" and
+    # "mean metric" the same array and the batches noiseless, hiding the property real use needs.
     k = 4
     rng = np.random.default_rng(3)
     parts = rng.standard_normal((k, gs.size)) * np.abs(gs).mean()

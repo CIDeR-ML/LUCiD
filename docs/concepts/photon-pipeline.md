@@ -73,8 +73,7 @@ Four more arguments are easy to miss but change the numbers you get out:
   segment the photon actually travelled, instead of from the photon's infinite ray line, which at
   grazing incidence passes near sensors further along the wall than the photon ever reached.
   **Production sets it `True`** (`DEPOSIT_LEG_BOUND` in `lucid/production/run_job.py`), so
-  production data carry about 12% less deposited charge than the library default gives on an
-  SK-like detector. The string (telescope) propagator has its own deposit and ignores it.
+  production data carry noticeably less deposited charge than the library default gives. The string (telescope) propagator has its own deposit and ignores it.
 
 ### Choosing `n_photons`, `K`, `temperature`
 

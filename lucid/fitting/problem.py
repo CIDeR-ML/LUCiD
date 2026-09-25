@@ -4,17 +4,17 @@ Names a set of ``DetectorParams`` leaf fields as the free parameters and builds 
 rest of the package needs from them: the parameterisation, one forward per source, the truth
 observables, and the starting vector.
 
-Two consumers, and they want different things from it:
+Two consumers:
 
-* :func:`lucid.fitting.calibrate.fit` wants the forwards and the truth charge. It fits them with
+* :func:`lucid.fitting.calibrate.fit` uses the forwards and the truth charge, fitting them with
   the Neyman residual and profiled gains, on the shared Gauss-Newton loop.
-* :func:`lucid.fitting.crb` wants the same forwards wrapped as ``SourceModel``, because the bound
-  is a property of the OBSERVABLE rather than of the estimator: it differentiates ``sqrt(k*M)``
-  and marginalises the per-PMT block by Schur complement instead of profiling it.
+* :func:`lucid.fitting.crb` uses the same forwards wrapped as ``SourceModel``, because the bound
+  is a property of the observable, not the estimator: it differentiates ``sqrt(k*M)`` and
+  marginalises the per-PMT block by Schur complement instead of profiling it.
 
-The parameterisation itself is :class:`lucid.fitting.params.FieldParams` — log space, everything
-not named held at its truth value, the per-PMT factor excluded from ``theta`` because there is one
-per sensor and profiling it costs a division where fitting it would cost the fit.
+The parameterisation is :class:`lucid.fitting.params.FieldParams`: log space, unnamed fields held
+at truth, and the per-PMT factor kept out of ``theta`` because there is one per sensor and
+profiling it costs a division where fitting it would cost the fit.
 """
 
 import numpy as np
@@ -51,8 +51,8 @@ def build_calibration_problem(sim, sources, dp_true, trainable_fields,
         Truth per-PMT factor (defaults ones).
     eps : float
         The ``sqrt``-residual offset carried by ``SourceModel``, and therefore by the CRB, whose
-        Jacobian is of ``sqrt(k*M)``. It no longer reaches the fit: that runs the Neyman residual,
-        whose weight is floored by ``q_floor`` instead.
+        Jacobian is of ``sqrt(k*M)``. It does not reach the fit, which uses the Neyman residual
+        with its weight floored by ``q_floor``.
 
     Returns
     -------
@@ -75,9 +75,8 @@ def build_calibration_problem(sim, sources, dp_true, trainable_fields,
     def unravel(theta_log, k_value=1.0):
         """DetectorParams from the log-global vector, per-PMT field set to ``k_value``.
 
-        Kept as a returned callable because analysis scripts use it to inspect a fitted point;
-        it is exactly ``params.to_dp`` with the wavelength index the field parameterisation
-        does not have.
+        Returned so analysis scripts can inspect a fitted point. Equivalent to
+        ``params.to_dp`` with the wavelength index (ignored by ``FieldParams``) set to 0.
         """
         return params.to_dp(jnp.asarray(theta_log), 0, jnp.asarray(k_value))
 

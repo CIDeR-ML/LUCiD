@@ -77,11 +77,10 @@ class TestRecovery:
     def test_single_source_is_degenerate(self):
         """One source: the profiled gains absorb the per-sensor pattern, so theta is not recovered.
 
-        The residual is NOT flat and the fit does not stall — it converges, driving the loss to
-        ~1e-14, but to the WRONG theta. The ``mean(log k) = 0`` gauge leaves the overall
-        normalisation determined, so there is a well-defined minimum; what a single source cannot
-        do is separate the global parameters from a free per-sensor gain. Both halves are asserted,
-        because "far from truth" alone is also satisfied by a fit that never moved.
+        The fit still converges (loss ~0) to the WRONG theta rather than sitting flat: the
+        ``mean(log k) = 0`` gauge fixes the overall normalisation even though theta and the
+        per-sensor gain are not separately identifiable. Convergence and movement are asserted
+        too, because "far from truth" alone is also passed by a fit that never moved.
         """
         res = fit(_sources()[:1], _truth_charges()[:1], START, NS,
                   **{**FIT_KW, 'steps': 120, 'lam': 1e-3, 'mu': 0.05})
@@ -99,8 +98,7 @@ class TestFix:
 
     # COUPLED, not diagonal. On a diagonal metric, zeroing the gradient and zeroing the step are
     # the same operation, so a test built on one cannot tell them apart — dropping the gradient
-    # mask passes. Production uses `fix` on a coupled 7-parameter metric
-    # (scripts/campaign/run_campaign.py freezes g), which is exactly the untestable case.
+    # mask passes. Production uses `fix` on a coupled metric, so the toy must be coupled too.
     _A = np.array([[3.0, 1.2, 0.7], [1.2, 2.0, 0.9], [0.7, 0.9, 4.0]])
 
     class _Coupled:
@@ -142,8 +140,8 @@ class TestRetiredKnobs:
 
     Matching on the knob NAME is not a gate: delete the whole `**retired` mechanism and Python
     raises `TypeError: fit() got an unexpected keyword argument 'eps'` all by itself, which
-    contains the name. Measured — all nine passed against that mutation. So each case asserts the
-    REPLACEMENT text, which only the curated table can produce.
+    contains the name. So each case asserts the REPLACEMENT text, which only the curated table
+    can produce.
     """
 
     @pytest.mark.parametrize('knob,expect', [

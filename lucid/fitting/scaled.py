@@ -1,35 +1,24 @@
 """Carry the iterate in SCALED coordinates instead of preconditioning around a raw one.
 
-The driver already has a coordinate preconditioner: ``gauss_newton(..., scale=S)`` solves the step
-as ``S·H·S``, ``S·g`` and applies ``S·du``, while the iterate itself stays in raw physical units.
-That works, and it is what produced every published number. It also has one consequence that only
-shows up in float32: the iterate's absolute magnitude sets its resolution. Reconstruction carries
-energy in MeV at ~1000, where float32 spacing is 6.1e-5, and 200 steps of 1e-6 there leave the
-value *exactly* unchanged — a parameter silently frozen, looking like convergence.
+``gauss_newton(..., scale=S)`` preconditions the step (``S·H·S``, ``S·g``, applied as ``S·du``) but
+keeps the iterate in raw physical units, so in float32 the iterate's magnitude sets its resolution:
+energy in MeV at ~1000 has float32 spacing 6.1e-5, and steps of 1e-6 leave it exactly unchanged,
+a silently frozen parameter that looks like convergence. :class:`ScaledProblem` moves the scaling
+into the parameterisation, ``u = (theta − origin)/S``, so every component is O(1) and float32
+resolution is uniform across parameters (checked against raw float64 in
+``tests/test_float32_is_adequate.py``).
 
-:class:`ScaledProblem` moves the same scaling one level down, into the parameterisation, so the
-iterate is ``u = (theta − origin)/S`` with every component O(1) and float32 resolution uniform
-across parameters. Measured in ``tests/test_float32_is_adequate.py``: scaled-float32 matches
-raw-float64 to four digits at every noise level and is exact at zero noise, inside a control that
-does separate raw-float32. So this is not a precision compromise — it is the reason a precision
-compromise is not needed.
-
-The equivalence that makes it safe
-----------------------------------
 ``ScaledProblem(inner, S)`` driven with ``scale=None`` is the SAME optimisation as ``inner`` driven
-with ``scale=S``. The chain rule is the whole content:
+with ``scale=S``, by the chain rule:
 
     u = (theta − origin)/S      theta = origin + S·u
     dL/du = S · dL/dtheta       H_u   = S · H_theta · S
 
-which is exactly the ``S·g`` and ``S·H·S`` the driver forms. Moving it here changes WHERE the
-multiply happens, not what is computed, so the two agree to float64 round-off on a deterministic
-problem — a far tighter statement than any statistical gate, and the one
-``tests/test_fitting_scaled.py`` asserts.
+which is exactly the ``S·g`` and ``S·H·S`` the driver forms, so the two agree to float64 round-off
+on a deterministic problem (asserted in ``tests/test_fitting_scaled.py``).
 
-This is deliberately a WRAPPER rather than an edit to the existing problems. ``ReconProblem`` and
-``CalibrationProblem`` keep their raw iterates, and nothing in the package uses this wrapper:
-``fit_track`` and ``calibrate`` run exactly as before. A caller opts in.
+It is an opt-in wrapper: ``ReconProblem`` and ``CalibrationProblem`` keep their raw iterates, and
+``fit_track`` and ``calibrate`` do not use it.
 """
 import numpy as np
 
@@ -49,18 +38,13 @@ class ScaledProblem:
         ``gauss_newton(scale=...)`` — e.g. :data:`lucid.fitting.recon.SCALE9`.
     origin
         Offset subtracted before scaling. Defaults to zeros. Supplying the start point makes the
-        iterate begin at exactly ``0``, which is the representation float32 handles best and is
-        why the zero-noise case in the viability measurement came out exact rather than merely
-        close.
+        iterate begin at exactly ``0``, the representation float32 handles best.
     dtype
         dtype the iterate is carried in. ``None`` leaves this wrapper's own ``accumulate``
         unconverted, which is NOT the same as deferring to the inner problem -- ``inner.accumulate``
-        is never called at all (see Notes), so the iterate follows whatever the step's dtype is.
-        The Gauss-Newton step is now JAX and returns float32, so ``dtype=None`` follows it; when
-        the step was a float64 numpy one (``exact_damped_gauss_newton``, since deleted) the same
-        default silently PROMOTED a problem that deliberately carries float32. Either way the
-        hazard is the same and it is why this argument exists: the iterate's dtype must be the
-        PROBLEM's choice, not a consequence of which step happens to be configured.
+        is never called at all (see Notes), so the iterate follows whatever the step's dtype is
+        (float32 from the JAX Gauss-Newton step). This argument exists because the iterate's dtype
+        must be the PROBLEM's choice, not a consequence of which step happens to be configured.
         :class:`~lucid.fitting.calib.CalibrationProblem` is exactly that case: its ``accumulate``
         keeps a float32 jnp iterate on purpose, and wrapping it with ``dtype=None`` moves the
         calibration trajectory. Pass the inner problem's own dtype to preserve it, or

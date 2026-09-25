@@ -68,12 +68,9 @@ from lucid.fitting.contracts import CalibForward, PerPhotonPredictor
 from lucid.fitting.analysis import (
     bootstrap_ci, resolution_stats, vertex_residual, angular_error_deg,
 )
-# The TRANSFORMATIONS are re-exported; `damped_matrix` is not, and now there is only one of it.
-# `gn.damped_matrix` was a second, numpy implementation of the same convention, kept so the
-# delegation could be pinned bit-exactly against the loop it replaced. It had no production caller
-# once `gauss_newton` moved onto the optax step, and a convention with two implementations is one
-# that has to be fixed twice -- which it was, earlier in this work. Reach the surviving one
-# explicitly: `from lucid.fitting.transforms import damped_matrix`.
+# The optax transformations are re-exported; `damped_matrix` deliberately is not. It is the single
+# implementation of the damping convention, so a fix lands in one place; import it explicitly with
+# `from lucid.fitting.transforms import damped_matrix`.
 from lucid.fitting.transforms import (damped_gauss_newton, scale_by_damped_gauss_newton,
                                       scale_by_driver_schedule, annealed_learning_rate)
 from lucid.fitting.minimize import minimize
