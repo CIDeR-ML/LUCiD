@@ -293,28 +293,28 @@ def setup_event_simulator(
     # ---- make_hits wrapper selection ----------------------------------------
     # Every wrapper accepts a trailing ``response`` bundle (gain, t0, spe_width, tts)
     # built from DetectorParams at call time; only the moments mode consumes it.
-    def _make_hits_aggregated(flat_weights, flat_indices, flat_times, num_sensors, qe_key, qe, qe_corrections, response=None, flat_segment_idx=None, flat_deviated=None):
+    def _make_hits_aggregated(flat_weights, flat_indices, flat_times, num_sensors, qe_key, qe, qe_corrections, response=None, flat_segment_idx=None, flat_indirect=None):
         return make_hits_simulation(flat_weights, flat_indices, flat_times, num_sensors,
                                     qe=qe, qe_corrections=qe_corrections)
 
-    def _make_hits_per_photon(flat_weights, flat_indices, flat_times, num_sensors, qe_key, qe, qe_corrections, response=None, flat_segment_idx=None, flat_deviated=None):
+    def _make_hits_per_photon(flat_weights, flat_indices, flat_times, num_sensors, qe_key, qe, qe_corrections, response=None, flat_segment_idx=None, flat_indirect=None):
         return make_hits_likelihood(flat_weights, flat_indices, flat_times, num_sensors,
                                     qe=qe, qe_corrections=qe_corrections)
 
-    def _make_hits_realistic(flat_weights, flat_indices, flat_times, num_sensors, qe_key, qe, qe_corrections, response=None, flat_segment_idx=None, flat_deviated=None):
+    def _make_hits_realistic(flat_weights, flat_indices, flat_times, num_sensors, qe_key, qe, qe_corrections, response=None, flat_segment_idx=None, flat_indirect=None):
         tts = 0.0 if response is None else response[3]
         return make_hits_data(flat_weights, flat_indices, flat_times, num_sensors,
                               qe=qe, qe_corrections=qe_corrections,
                               rng_key=qe_key, tts=tts,
                               charge_resolution=sim_config.charge_resolution)
 
-    def _make_hits_moments(flat_weights, flat_indices, flat_times, num_sensors, qe_key, qe, qe_corrections, response=None, flat_segment_idx=None, flat_deviated=None):
+    def _make_hits_moments(flat_weights, flat_indices, flat_times, num_sensors, qe_key, qe, qe_corrections, response=None, flat_segment_idx=None, flat_indirect=None):
         gain, t0, spe_width, tts = response
         return make_hits_moments(flat_weights, flat_indices, flat_times, num_sensors,
                                  qe=qe, qe_corrections=qe_corrections,
                                  gain=gain, spe_width=spe_width, t0=t0, tts=tts)
 
-    def _make_hits_per_segment(flat_weights, flat_indices, flat_times, num_sensors, qe_key, qe, qe_corrections, response=None, flat_segment_idx=None, flat_deviated=None):
+    def _make_hits_per_segment(flat_weights, flat_indices, flat_times, num_sensors, qe_key, qe, qe_corrections, response=None, flat_segment_idx=None, flat_indirect=None):
         # Production: per-sensor totals + per-photon pass-through arrays (incl the
         # per-photon segment index) for the host-side per-(segment, sensor) groupby.
         tts = 0.0 if response is None else response[3]
@@ -333,7 +333,7 @@ def setup_event_simulator(
     if hit_mode == 'waveform':
         _wf_fn = build_make_hits_waveform(n_photons=n_photons, **_wf_cfg)
         def _make_hits_waveform(flat_weights, flat_indices, flat_times, num_sensors,
-                                qe_key, qe, qe_corrections, response=None, flat_segment_idx=None, flat_deviated=None):
+                                qe_key, qe, qe_corrections, response=None, flat_segment_idx=None, flat_indirect=None):
             return _wf_fn(flat_weights, flat_indices, flat_times, num_sensors,
                           qe_key, qe, qe_corrections)
     elif hit_mode == 'waveform_expected':
@@ -343,7 +343,7 @@ def setup_event_simulator(
         _wf_exp_fn = build_make_hits_waveform_expected(
             n_photons=n_photons, **_wf_exp_cfg)
         def _make_hits_waveform_expected(flat_weights, flat_indices, flat_times, num_sensors,
-                                         qe_key, qe, qe_corrections, response=None, flat_segment_idx=None, flat_deviated=None):
+                                         qe_key, qe, qe_corrections, response=None, flat_segment_idx=None, flat_indirect=None):
             return _wf_exp_fn(flat_weights, flat_indices, flat_times, num_sensors,
                               qe_key, qe, qe_corrections)
     elif hit_mode == 'shotgun_per_photon':
@@ -352,9 +352,9 @@ def setup_event_simulator(
             tts_sigma_ns=_wf_cfg['tts_sigma_ns'],
             smear_time=_wf_cfg['smear_time'])
         def _make_hits_shotgun_pp(flat_weights, flat_indices, flat_times, num_sensors,
-                                  qe_key, qe, qe_corrections, response=None, flat_segment_idx=None, flat_deviated=None):
+                                  qe_key, qe, qe_corrections, response=None, flat_segment_idx=None, flat_indirect=None):
             return _pp_fn(flat_weights, flat_indices, flat_times, num_sensors,
-                          qe_key, qe, qe_corrections, flat_deviated)
+                          qe_key, qe, qe_corrections, flat_indirect)
 
     _make_hits_fn = {
         'aggregated': _make_hits_aggregated,
@@ -572,7 +572,7 @@ def setup_event_simulator(
                 rng_keys = jax.random.split(subkey, n_rays)
                 (new_positions, new_directions, new_times,
                  per_dom_charges, continuing_factors, logp_increments,
-                 step_deviated) = jax.vmap(
+                 step_indirect) = jax.vmap(
                     photon_step_volume,
                     in_axes=(0, 0, 0, 1, 1, 0, 0, 0, 0, 0, None, None)
                 )(state.positions, state.directions, state.times,
@@ -601,7 +601,7 @@ def setup_event_simulator(
                 # Same 4-tuple shape as the surface branch: the scan unpacks one
                 # output signature for both models.
                 outputs = (updated_weights, sensor_indices,
-                           total_times.squeeze(-1), step_deviated)
+                           total_times.squeeze(-1), step_indirect)
                 return new_state, outputs
 
             # ── Surface model (cylinder/sphere/box) — UNCHANGED, byte-identical ──
@@ -627,7 +627,7 @@ def setup_event_simulator(
             # step, 0.0 for the sampling step). PRE-step log_p drives the implicit deposit.
             (new_positions, new_directions, new_times,
              detect_probs, reflection_attenuations,
-             continuing_factors, logp_increments, step_deviated) = jax.vmap(
+             continuing_factors, logp_increments, step_indirect) = jax.vmap(
                 photon_update_fn,
                 in_axes=(0, 0, 0, 0, 0,
                          0, 0, None, None, 0,
@@ -675,12 +675,12 @@ def setup_event_simulator(
                 key=key,
                 log_p=new_log_p,
             )
-            # step_deviated is a scan OUTPUT, not part of the carry: keeping it
+            # step_indirect is a scan OUTPUT, not part of the carry: keeping it
             # out of PhotonState leaves the carry pytree, its remat and the
             # gradient path exactly as they were. A cumulative OR along the
-            # iteration axis afterwards gives "had already deviated", which is
+            # iteration axis afterwards gives "had already indirect", which is
             # what the scattering table's direct/indirect split needs.
-            outputs = (iter_weights, iter_indices, iter_times, step_deviated)
+            outputs = (iter_weights, iter_indices, iter_times, step_indirect)
             return new_state, outputs
 
         init_state = PhotonState(
@@ -693,7 +693,7 @@ def setup_event_simulator(
         )
         propagation_step_remat = jax.remat(propagation_step)
 
-        _, (all_weights, all_indices, all_times, all_deviated) = jax.lax.scan(
+        _, (all_weights, all_indices, all_times, all_indirect) = jax.lax.scan(
             propagation_step_remat, init_state, jnp.arange(K))
 
         flat_weights = all_weights.reshape(-1)
@@ -701,16 +701,16 @@ def setup_event_simulator(
         flat_times = all_times.reshape(-1)
 
         # Per-deposit "this photon had already left the straight line". A deposit
-        # made at step k belongs to a photon that deviated during steps 0..k-1,
+        # made at step k belongs to a photon that indirect during steps 0..k-1,
         # so this is the EXCLUSIVE prefix OR along the iteration axis -- inclusive
         # would wrongly tag the step on which a photon both scattered and was
         # detected. Broadcast over the candidate axis to match all_weights'
         # (K, max_candidates, n_rays) layout before the same C-order reshape.
-        prior_deviated = jnp.concatenate(
-            [jnp.zeros((1,) + all_deviated.shape[1:], dtype=bool),
-             jnp.cumsum(all_deviated, axis=0)[:-1] > 0], axis=0)
-        flat_deviated = jnp.broadcast_to(
-            prior_deviated[:, None, :], all_weights.shape).reshape(-1)
+        prior_indirect = jnp.concatenate(
+            [jnp.zeros((1,) + all_indirect.shape[1:], dtype=bool),
+             jnp.cumsum(all_indirect, axis=0)[:-1] > 0], axis=0)
+        flat_indirect = jnp.broadcast_to(
+            prior_indirect[:, None, :], all_weights.shape).reshape(-1)
 
         # Tile per-photon QE to match flat shape.
         # all_weights shape: (K, max_candidates_per_ray, n_rays), C-order reshape
@@ -728,7 +728,7 @@ def setup_event_simulator(
         flat_segment_idx = (segment_idx[photon_idx] if segment_idx is not None else None)
         return make_hits_fn(
             flat_weights, flat_indices, flat_times, num_sensors, qe_key, flat_qe, qe_corrections,
-            response, flat_segment_idx=flat_segment_idx, flat_deviated=flat_deviated)
+            response, flat_segment_idx=flat_segment_idx, flat_indirect=flat_indirect)
 
     # ================================================================
     # Mode-specific simulation functions

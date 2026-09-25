@@ -234,9 +234,9 @@ def main(argv=None):
                 total_det += int(np.asarray(ndet).sum())
                 total_drop += int(np.asarray(nd).sum())
             else:
-                det, sid, ht = out
+                det, sid, ht, ind = out
                 writer.append(np.asarray(det), np.asarray(sid), np.asarray(ht),
-                              source_chunk=src_chunk)
+                              np.asarray(ind), source_chunk=src_chunk)
                 total_det += int(np.asarray(det).sum())
             dt = time.time() - t0
             print(f"[shotgun] {hi}/{args.n_cases} cases  "
