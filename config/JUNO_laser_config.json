@@ -11,8 +11,17 @@
     "outer": "materials/juno_laser_water.json"
   },
   "source": {
-    "model": "isotropic",
-    "rotate_each_event": true,
+    "model": "juno_diffuser_ball",
+    "axis": [0.0, 0.0, 1.0],
+    "radius_m": 0.01,
+    "time_sigma_ns": 0.23,
+    "angular_parameterization": "bernstein3",
+    "angular_weights": [
+      0.28182463805722086,
+      0.2170696740847002,
+      0.35391735883294184,
+      0.14718832902513695
+    ],
     "default_intensity": 3000000.0
   },
   "transport": {

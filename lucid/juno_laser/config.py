@@ -40,6 +40,30 @@ class JunoLaserConfig:
         if missing:
             raise ValueError(f"JUNO laser config missing fields: {', '.join(missing)}")
 
+        source = data["source"]
+        source_model = source.get("model", "isotropic")
+        if source_model not in {"isotropic", "juno_diffuser_ball"}:
+            raise ValueError(
+                f"unsupported JUNO laser source model: {source_model!r}"
+            )
+        if source_model == "juno_diffuser_ball":
+            axis = source.get("axis")
+            weights = source.get("angular_weights")
+            if not isinstance(axis, list) or len(axis) != 3:
+                raise ValueError("source.axis must contain three values")
+            if not isinstance(weights, list) or len(weights) != 4:
+                raise ValueError(
+                    "source.angular_weights must contain four values"
+                )
+            if any(float(value) <= 0.0 for value in weights):
+                raise ValueError("source.angular_weights must be positive")
+            if float(source.get("radius_m", 0.0)) <= 0.0:
+                raise ValueError("source.radius_m must be positive")
+            if float(source.get("time_sigma_ns", -1.0)) < 0.0:
+                raise ValueError(
+                    "source.time_sigma_ns must be non-negative"
+                )
+
         calibration = data["calibration"]
         if calibration.get("mode") != "per_pe":
             raise ValueError("JUNO laser calibration mode must be 'per_pe'")
@@ -51,7 +75,10 @@ class JunoLaserConfig:
         bounds = calibration.get("parameter_bounds", {})
         for name in PARAMETER_NAMES:
             if name not in bounds or len(bounds[name]) != 2:
-                raise ValueError(f"Missing two-sided bounds for calibration parameter {name!r}")
+                raise ValueError(
+                    "Missing two-sided bounds for calibration parameter "
+                    f"{name!r}"
+                )
             lo, hi = (float(value) for value in bounds[name])
             if not 0 < lo < hi:
                 raise ValueError(f"Invalid bounds for {name!r}: {bounds[name]!r}")
@@ -85,7 +112,10 @@ class JunoLaserConfig:
 
     @property
     def material_paths(self) -> dict[str, Path]:
-        return {name: self.resolve(path) for name, path in self.data["materials"].items()}
+        return {
+            name: self.resolve(path)
+            for name, path in self.data["materials"].items()
+        }
 
     @property
     def wavelength_nm(self) -> float:
@@ -94,11 +124,15 @@ class JunoLaserConfig:
     @property
     def parameter_bounds(self) -> dict[str, tuple[float, float]]:
         return {
-            name: tuple(float(value) for value in self.data["calibration"]["parameter_bounds"][name])
+            name: tuple(
+                float(value)
+                for value in self.data["calibration"][
+                    "parameter_bounds"
+                ][name]
+            )
             for name in PARAMETER_NAMES
         }
 
     @property
     def calibration(self) -> Mapping[str, Any]:
         return self.data["calibration"]
-

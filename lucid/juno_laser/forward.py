@@ -14,33 +14,26 @@ from lucid.simulation.engineering_surfaces import (
     engineering_surface_parameters,
 )
 from lucid.simulation.reflection import get_reflection_model
-from lucid.sources import isotropic_source
+from lucid.sources import sample_source
 
 from .config import JunoLaserConfig
 from .histogram import weighted_time_histogram
 from .parameters import CalibParams
+from .source import rotate_source_directions
 
 
-def _rotation_matrix(key, dtype):
-    q = jax.random.normal(key, (4,), dtype=dtype)
-    q = q / (jnp.linalg.norm(q) + 1e-12)
-    w, x, y, z = q
-    return jnp.array([
-        [1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)],
-        [2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)],
-        [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)],
-    ], dtype=dtype)
-
-
-def rotate_directions(directions, key):
-    """Apply the same event-specific uniform rotation as the laser simulator."""
-    return directions @ _rotation_matrix(key, directions.dtype).T
-
-
-def build_per_pe_forward(config: JunoLaserConfig, det_geom, physics_params: DetectorParams,
-                         *, n_photons: int, k: int, intensity: float | None = None,
-                         fit_amp: bool = False, time_window_ns=None,
-                         time_bin_ns: float | None = None):
+def build_per_pe_forward(
+    config: JunoLaserConfig,
+    det_geom,
+    physics_params: DetectorParams,
+    *,
+    n_photons: int,
+    k: int,
+    intensity: float | None = None,
+    fit_amp: bool = False,
+    time_window_ns=None,
+    time_bin_ns: float | None = None,
+):
     """Build ``forward(source, params, key) -> (histogram, charge)``.
 
     The returned function is JIT compiled.  ``params`` is a :class:`CalibParams`
@@ -104,8 +97,13 @@ def build_per_pe_forward(config: JunoLaserConfig, det_geom, physics_params: Dete
     @jax.jit
     def forward(source, params: CalibParams, key):
         key, source_key = jax.random.split(key)
-        directions, positions, intensities = source(n_photons, source_key)
-        directions = rotate_directions(directions, source_key)
+        source_batch = sample_source(source, n_photons, source_key)
+        directions = rotate_source_directions(
+            source, source_batch.directions, source_key
+        )
+        positions = source_batch.positions
+        intensities = source_batch.weights
+        emission_times = source_batch.times
         medium_id0 = detector.region_of(positions)
 
         c_in = jnp.asarray(c_vacuum / params.n_ls, dtype=jnp.float32)
@@ -199,7 +197,7 @@ def build_per_pe_forward(config: JunoLaserConfig, det_geom, physics_params: Dete
             return next_carry, index
 
         histogram0 = jnp.zeros((n_sensors, n_bins), dtype=jnp.float32)
-        carry0 = (positions, directions, jnp.zeros(n_photons, dtype=jnp.float32),
+        carry0 = (positions, directions, emission_times,
                   jnp.ones(n_photons, dtype=jnp.float32), medium_id0, key,
                   jnp.zeros(n_photons, dtype=jnp.float32), histogram0)
         final_carry, _ = jax.lax.scan(jax.remat(step), carry0, jnp.arange(k))

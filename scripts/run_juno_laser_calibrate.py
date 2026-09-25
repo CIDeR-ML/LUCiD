@@ -35,7 +35,6 @@ import numpy as np
 
 from lucid.detector_params import load_physics_config
 from lucid.geometry.detector_geometry import DetectorGeometry
-from lucid.sources import isotropic_source
 from lucid.juno_laser.config import JunoLaserConfig, PARAMETER_NAMES
 from lucid.juno_laser.data import load_per_pe_histogram
 from lucid.juno_laser.forward import build_per_pe_forward
@@ -45,6 +44,7 @@ from lucid.juno_laser.optimizer import (
     make_per_pe_objective,
 )
 from lucid.juno_laser.parameters import truth_from_geometry
+from lucid.juno_laser.source import build_juno_laser_source
 
 
 LOG = logging.getLogger("lucid.juno_laser.calibrate")
@@ -145,9 +145,15 @@ def calibrate(args):
     intensity = float(
         args.intensity or config.data["source"]["default_intensity"]
     )
-    sources = tuple(isotropic_source(position, intensity=intensity,
-                                     wavelength=config.wavelength_nm)
-                    for position, _ in source_defs)
+    sources = tuple(
+        build_juno_laser_source(
+            config.data["source"],
+            position,
+            intensity=intensity,
+            wavelength_nm=config.wavelength_nm,
+        )
+        for position, _ in source_defs
+    )
     n_photons = int(args.n_photons or calibration["n_photons"])
     n_steps = int(args.k or config.data["transport"]["max_scattering_steps"])
     forward = build_per_pe_forward(

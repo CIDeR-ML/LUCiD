@@ -61,7 +61,12 @@ from lucid.simulation.engineering_surfaces import (
 )
 from lucid.simulation.reflection import REFLECTION_MODELS, get_reflection_model
 from lucid.simulation.sensor_response import make_hits_likelihood
-from lucid.sources import isotropic_source
+from lucid.sources import sample_source
+from lucid.juno_laser.source import (
+    SOURCE_MODELS,
+    build_juno_laser_source,
+    rotate_source_directions,
+)
 from lucid.juno_laser.data import SIMULATION_SCHEMA, simulation_table
 
 
@@ -122,6 +127,24 @@ def _simulation_metadata(
         "format_version": "lucid-juno-laser-pe-parquet",
         "config": str(Path(args.config).resolve()),
         "source": args.source,
+        "source_model_request": args.source_model,
+        "source_model": str(
+            args.source_model
+            if args.source_model != "config"
+            else config["source"]["model"]
+        ),
+        "diffuser_radius_m": str(
+            config["source"].get("radius_m", 0.010)
+        ),
+        "diffuser_axis": json.dumps(
+            config["source"].get("axis", [0.0, 0.0, 1.0])
+        ),
+        "diffuser_time_sigma_ns": str(
+            config["source"].get("time_sigma_ns", 0.23)
+        ),
+        "diffuser_angular_weights": json.dumps(
+            config["source"].get("angular_weights", [])
+        ),
         "n_events": str(n_events),
         "n_channels": str(n_channels),
         "n_photons": str(n_photons),
@@ -180,21 +203,6 @@ def _simulation_metadata(
     return {key.encode(): value.encode() for key, value in values.items()}
 
 
-def _rotation_matrix(key, dtype):
-    q = jax.random.normal(key, (4,), dtype=dtype)
-    q = q / (jnp.linalg.norm(q) + 1e-12)
-    w, x, y, z = q
-    return jnp.array([
-        [1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)],
-        [2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)],
-        [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)],
-    ], dtype=dtype)
-
-
-def _rotate_directions(directions, key):
-    return directions @ _rotation_matrix(key, directions.dtype).T
-
-
 def _lengths_at(material_dir: Path, wavelength_nm: float,
                 filenames=None):
     """Evaluate scalar optical lengths at ``wavelength_nm``.
@@ -244,7 +252,7 @@ def _lengths_at(material_dir: Path, wavelength_nm: float,
 
 
 def _make_forward(
-    det_geom, dp, *, n_photons, n_steps, source, intensity, wavelength_nm,
+    det_geom, dp, *, n_photons, n_steps, source_model, wavelength_nm,
     reflection_model="scalar", record_trajectories=False,
     surface_reflectances=(0.535, 0.04, 0.4, 0.04),
     surface_transmittances=(0.0, 0.94, 0.0, 0.94),
@@ -290,9 +298,7 @@ def _make_forward(
     surface_reflectances = jnp.asarray(surface_reflectances)
     surface_transmittances = jnp.asarray(surface_transmittances)
     surface_fspecs = jnp.asarray(surface_fspecs)
-    source = isotropic_source(
-        source, intensity=intensity, wavelength=wavelength_nm
-    )
+    source = source_model
     qc = dp.per_pmt.qe_corrections
     qe = float(dp.response.qe)
     material_dir = Path(__file__).resolve().parents[1] / "config" / "materials"
@@ -307,8 +313,13 @@ def _make_forward(
 
     @jax.jit
     def forward(key, source_key):
-        directions, positions, intensities = source(n_photons, source_key)
-        directions = _rotate_directions(directions, source_key)
+        source_batch = sample_source(source, n_photons, source_key)
+        directions = rotate_source_directions(
+            source, source_batch.directions, source_key
+        )
+        positions = source_batch.positions
+        intensities = source_batch.weights
+        emission_times = source_batch.times
         medium_id = detector.region_of(positions)
 
         if record_trajectories:
@@ -322,6 +333,7 @@ def _make_forward(
                 (n_steps + 1, n_photons), dtype=positions.dtype
             )
             trajectory_positions = trajectory_positions.at[0].set(positions)
+            trajectory_times = trajectory_times.at[0].set(emission_times)
             trajectory_alive = trajectory_alive.at[0].set(1.0)
 
         def step(carry, step_index):
@@ -485,7 +497,7 @@ def _make_forward(
             initial = (
                 positions,
                 directions,
-                jnp.zeros(n_photons),
+                emission_times,
                 jnp.ones(n_photons),
                 medium_id,
                 key,
@@ -497,7 +509,7 @@ def _make_forward(
             initial = (
                 positions,
                 directions,
-                jnp.zeros(n_photons),
+                emission_times,
                 jnp.ones(n_photons),
                 medium_id,
                 key,
@@ -665,6 +677,23 @@ def simulate(args):
         raise ValueError(
             "--source must contain three comma-separated coordinates"
         )
+    source_model_name = (
+        config["source"]["model"]
+        if args.source_model == "config"
+        else args.source_model
+    )
+    source_model = build_juno_laser_source(
+        config["source"],
+        source_position,
+        intensity=intensity,
+        wavelength_nm=float(config["wavelength_nm"]),
+        model=source_model_name,
+    )
+    LOG.info(
+        "laser source: request=%s, effective=%s",
+        args.source_model,
+        source_model_name,
+    )
     n_steps = int(args.k or simulation["max_scattering_steps"])
     reflection_model_request = args.reflection_model
     reflection_model = reflection_model_request
@@ -684,8 +713,7 @@ def simulate(args):
         dp,
         n_photons=n_photons,
         n_steps=n_steps,
-        source=source_position,
-        intensity=intensity,
+        source_model=source_model,
         wavelength_nm=float(config["wavelength_nm"]),
         reflection_model=reflection_model,
         record_trajectories=record_trajectories,
@@ -767,11 +795,12 @@ def simulate(args):
                 LOG.info("event 0: starting first forward call and JIT compilation")
             else:
                 LOG.info("event %d: starting forward call", event)
+            source_event_key = jax.random.fold_in(
+                jax.random.PRNGKey(args.seed + 1_000_000), event
+            )
             result = forward(
                 jax.random.fold_in(base_key, event),
-                jax.random.fold_in(
-                    jax.random.PRNGKey(args.seed + 1_000_000), event
-                ),
+                source_event_key,
             )
             jax.block_until_ready(result)
             elapsed = time.perf_counter() - t0
@@ -802,6 +831,24 @@ def simulate(args):
                 event_group.create_dataset(
                     "alive",
                     data=np.asarray(trajectory_alive, dtype=np.uint8),
+                    compression="gzip",
+                )
+                source_batch = sample_source(
+                    source_model, n_photons, source_event_key
+                )
+                source_directions = rotate_source_directions(
+                    source_model,
+                    source_batch.directions,
+                    source_event_key,
+                )
+                event_group.create_dataset(
+                    "initial_directions",
+                    data=np.asarray(source_directions, dtype=np.float32),
+                    compression="gzip",
+                )
+                event_group.create_dataset(
+                    "source_weights",
+                    data=np.asarray(source_batch.weights, dtype=np.float32),
                     compression="gzip",
                 )
                 event_group.attrs["event"] = event
@@ -894,6 +941,22 @@ def simulate(args):
                 "config": str(Path(args.config)),
                 "output": str(output),
                 "format_version": "lucid-juno-laser-pe-parquet",
+                "source_model_request": args.source_model,
+                "source_model": source_model_name,
+                "source_position_m": source_position.tolist(),
+                "source_intensity": intensity,
+                "diffuser_radius_m": config["source"].get(
+                    "radius_m", 0.010
+                ),
+                "diffuser_axis": config["source"].get(
+                    "axis", [0.0, 0.0, 1.0]
+                ),
+                "diffuser_time_sigma_ns": config["source"].get(
+                    "time_sigma_ns", 0.23
+                ),
+                "diffuser_angular_weights": config["source"].get(
+                    "angular_weights", []
+                ),
                 "pmt_geometry_request": pmt_geometry_request,
                 "pmt_geometry": pmt_geometry,
                 "support_geometry_request": support_geometry_request,
@@ -988,6 +1051,15 @@ def main():
         ),
     )
     parser.add_argument("--source", default="0,0,0", metavar="X,Y,Z")
+    parser.add_argument(
+        "--source-model",
+        choices=("config", *SOURCE_MODELS),
+        default="config",
+        help=(
+            "光源消融：config=遵循主配置；isotropic=旧数学点源；"
+            "juno_diffuser_ball=J26.5.1有效漫射球发射"
+        ),
+    )
     parser.add_argument(
         "--n-events",
         type=int,

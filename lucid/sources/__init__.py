@@ -12,6 +12,10 @@ __all__ = [
     "get_isotropic_rays",
     "generate_laser_photons",
     "setup_calibration_generator",
+    "DiffuserBallSource",
+    "SourceBatch",
+    "diffuser_ball_source",
+    "sample_source",
     "ShotgunSource",
     "shotgun_source",
     "stack_shotgun_sources",
@@ -31,6 +35,12 @@ from lucid.sources.calibration_sources import (
     get_isotropic_rays,
     generate_laser_photons,
     setup_calibration_generator,
+)
+from lucid.sources.diffuser_ball import (
+    DiffuserBallSource,
+    SourceBatch,
+    diffuser_ball_source,
+    sample_source,
 )
 from lucid.sources.shotgun_source import (
     ShotgunSource,
