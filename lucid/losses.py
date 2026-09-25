@@ -486,7 +486,7 @@ def first_arrival_window_nll(log_w, flat_times, flat_indices, t_obs_per_sensor,
                              sigma=2.5, delta=1.0):
     """Windowed first-arrival ORDER-STATISTIC time NLL — the reconstruction time term.
 
-    Mean-field-correct first arrival (the recon recipe, RECO_PIPELINE §3.2). The
+    Mean-field-correct first arrival (the recon recipe). The
     expected-value engine cannot represent a model ``min`` (an order statistic), so instead
     build ``R(t) = Σ wᵢ·½(1+erf((t−tᵢ)/(σ√2)))`` = the expected cumulative photon count before
     ``t`` (a MEAN, hence engine-exact), the analytic survival ``S(t) = (μ − R(t))/μ``, and the
@@ -507,7 +507,7 @@ def first_arrival_window_nll(log_w, flat_times, flat_indices, t_obs_per_sensor,
     mu_total : (num_detectors,) predicted per-PMT total ``μ`` — the survival denominator
         ``S=(μ−R)/μ``. Pass the UNSCALED engine total (NOT a ``tot_n_scale``-scaled charge):
         scaling the survival denominator corrupts ``S`` and collapses far-capture (the recon
-        recipe keeps it unscaled — RECO_PIPELINE §3.4). It is ``stop_gradient``'d here anyway.
+        recipe keeps it unscaled). It is ``stop_gradient``'d here anyway.
     obs_counts : (num_detectors,) observed per-PMT count ``n``.
     num_detectors : int.
     sigma : per-photon time resolution (= TTS), ns. delta : window width, ns.
@@ -527,7 +527,17 @@ def first_arrival_window_nll(log_w, flat_times, flat_indices, t_obs_per_sensor,
     Slo = jnp.clip((muS - Rlo) / muS, 1e-12, 1.)
     Shi = jnp.clip((muS - Rhi) / muS, 1e-12, 1.)
     n = jnp.maximum(obs_counts, 0.)
-    a = jnp.minimum(n * (jnp.log(Shi) - jnp.log(Slo)), -1e-9)
+    # No clamp here. There used to be a `jnp.minimum(..., -1e-9)`, and it was DEAD CODE:
+    # `_log1mexp` clamps its own argument to -1e-7, a hundred times larger, so the second clamp
+    # always won and the operative cap was never the one written at the call site. Removing it is
+    # bit-identical -- min(min(x,-1e-9),-1e-7) == min(x,-1e-7) for every x -- and stops the code
+    # advertising a saturation point it does not use. `tests/test_first_arrival_a_cap.py` pins
+    # both the equivalence and where the cap really lives.
+    #
+    # Found by rebuilding this loss outside the library and failing to reproduce it: a rebuild
+    # honouring the -1e-9 came out 1.4% high, because the two caps differ by log(1e-7/1e-9) = 4.6
+    # nats on every PMT that sits on them, and enough do. The cap is ACTIVE, not a formality.
+    a = n * (jnp.log(Shi) - jnp.log(Slo))
     return jnp.where(obs_counts > 0, -n * jnp.log(Slo) - _log1mexp(a), 0.)
 
 
