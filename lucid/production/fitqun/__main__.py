@@ -15,7 +15,7 @@ from pathlib import Path
 
 import numpy as np
 
-from . import binning, chargepdf, cprofile
+from . import angular, binning, chargepdf, cprofile, scattable
 
 
 def _cmd_cprofile_accumulate(args) -> int:
@@ -44,6 +44,69 @@ def _cmd_cprofile_build(args) -> int:
           f"({min(cells):g}-{max(cells):g} MeV/c)", flush=True)
     cprofile.write_cprofile(out, args.pdg, list(cells.values()))
     print(f"wrote {out}")
+    return 0
+
+
+def _cmd_sample_accumulate(args) -> int:
+    from . import sample_reduce
+
+    g = np.load(args.geometry)
+    shard = sample_reduce.reduce_shard(
+        args.input,
+        pmt_positions_m=g["positions_mm"] / 1000.0,
+        pmt_dir_z=g["directions"][:, 2],
+        det_radius_cm=float(g["radius"]) * 100.0,
+        det_halfheight_cm=float(g["height"]) * 100.0 / 2.0,
+        pmt_radius_cm=float(g["sensor_radius"]) * 100.0,
+        shell_radii_cm=args.shells)
+    out = shard.save(args.output)
+    occ = max(c.occupancy for c in shard.scattered.values())
+    print(f"{out}: {shard.n_detected:,} detected of {shard.n_photons:,} "
+          f"({shard.n_indirect:,} indirect), peak occupancy {100 * occ:.2f}%")
+    return 0
+
+
+def _cmd_sample_build(args) -> int:
+    from . import sample_reduce
+
+    total = None
+    for path in args.shards:
+        shard = sample_reduce.SampleShard.load(path)
+        total = shard if total is None else total + shard
+    if total is None:
+        raise SystemExit("no shards given")
+
+    outdir = Path(args.output)
+    (outdir / "angular").mkdir(parents=True, exist_ok=True)
+    ratios = {name: total.scattered[name].to_dense().ratio_to(
+                        total.direct[name].to_dense())
+              for name in total.scattered}
+    sca = scattable.write_hdf5(outdir / "scattables.h5", ratios,
+                               {"n_detected": total.n_detected,
+                                "n_indirect": total.n_indirect,
+                                "shards": len(args.shards)})
+    print(f"wrote {sca} from {len(args.shards)} shards "
+          f"({total.n_detected:,} detected, {total.n_indirect:,} indirect)")
+
+    edges = np.linspace(0.0, 1.0, len(next(iter(total.angular_counts.values()))) + 1)
+    written = 0
+    for r, counts in sorted(total.angular_counts.items()):
+        # fit_cos.C normalises to normal incidence, so a shell whose top bin is
+        # empty has no table to write. Report it and keep going: at reduced
+        # statistics the outer shells fill long before the inner ones, and
+        # losing the whole merge over one thin shell helps nobody.
+        if counts[-1] <= 0:
+            print(f"  angResp_{r:g}: SKIPPED, {counts.sum():.0f} entries but none "
+                  f"at normal incidence -- needs more statistics")
+            continue
+        p = angular.write_angular_response(
+            outdir / "angular" / f"angResp_{r:g}.root", edges, counts,
+            total.angular_sumw2[r], shell_r_cm=r)
+        print(f"  {p}: {counts.sum():.0f} entries")
+        written += 1
+    if written == 0:
+        print("  no angular shell had enough statistics to normalise", file=sys.stderr)
+        return 1
     return 0
 
 
@@ -83,6 +146,25 @@ def build_parser() -> argparse.ArgumentParser:
     bld.add_argument("--pdg", type=int, required=True, choices=sorted(binning.PDG_NAMES))
     bld.add_argument("-o", "--output", type=Path, default=None)
     bld.set_defaults(func=_cmd_cprofile_build)
+
+    sa = stages.add_parser(
+        "sample", help="isotropic sample -> angular response + indirect-light tables")
+    sa_actions = sa.add_subparsers(dest="action", required=True)
+
+    sacc = sa_actions.add_parser("accumulate", help="reduce one propagated shard")
+    sacc.add_argument("input", type=Path, help="photon-shotgun per-photon HDF5")
+    sacc.add_argument("-o", "--output", type=Path, required=True, help="shard .npz")
+    sacc.add_argument("--geometry", type=Path, required=True,
+                      help="detector geometry .npz (positions_mm, directions, ...)")
+    sacc.add_argument("--shells", type=float, nargs="+",
+                      default=[100.0, 200.0, 400.0, 800.0, 1200.0],
+                      help="angular-response shell radii in cm (default: %(default)s)")
+    sacc.set_defaults(func=_cmd_sample_accumulate)
+
+    sbld = sa_actions.add_parser("build", help="merge shards into the tuning inputs")
+    sbld.add_argument("shards", nargs="+", type=Path)
+    sbld.add_argument("-o", "--output", type=Path, required=True, help="output directory")
+    sbld.set_defaults(func=_cmd_sample_build)
 
     ch = stages.add_parser("chargepdf", help="photosensor charge response f(q|mu)")
     ch_actions = ch.add_subparsers(dest="action", required=True)
