@@ -4,12 +4,6 @@ This is the calibration counterpart to ``studies.py``: it defines the detector, 
 model, the source layout and the fit recipe **once**, and every calibration figure builds
 from it. Nothing else may define a recipe value.
 
-Ported from ``paper_figures/calibration_figures.py`` (2026-08-12). Two changes were forced
-by the move and are the only intentional differences:
-
-* the repo root is now ``parents[3]`` (the module sits at ``analysis/paper/utils/``),
-* outputs route through ``utils.paths`` instead of a directory beside the script.
-
 Consistency (referee IV.1 + II.C.3): the detector medium is the SK-calibration-paper
 wavelength-dependent water model (``config/materials/water.json``) — the SAME model the
 tracking section uses (``wavelength_mode=True``). Calibration is done the way real SK does
@@ -19,10 +13,9 @@ The recovered points trace out the water.json curves.
 
 Not ported: the six ``compute_*``/``plot_*`` figure pairs, the 7-parameter Mie variants
 (``effective_truth7``, ``_dp7``), ``_wall_sources``, ``_truth_sim``, ``_load_truth`` and
-``_crb_honesty``. Those belong to calibration figures outside the current scope and are
-still in ``paper_figures/calibration_figures.py`` and in the 2026-08-12 backup. Also not
-ported: ``compute_conv`` / ``_mgpu_joint_fit`` / ``conv_combine`` — the older in-repo joint
-fit, superseded by ``calib_run.py`` (see CALIBRATION_STUDIES.md).
+``_crb_honesty``, which belong to calibration figures outside the current scope, and
+``compute_conv`` / ``_mgpu_joint_fit`` / ``conv_combine``, the older joint fit that
+``calib_run.py`` replaces.
 """
 import os
 import sys
@@ -100,7 +93,7 @@ TRUTH_K = _tk / np.exp(np.mean(np.log(_tk)))
 # repository), behind the paper's convergence figure. It is also recorded inside every run's own .npz, so a
 # saved run is self-describing and can be checked against this table.
 #
-# Why each choice — see CALIBRATION_STUDIES.md for the measurements behind them:
+# Why each choice:
 #   LOSS=neyman     the only member of the chi-square family LINEAR in the noisy forward
 #                   model M, hence the only one with an unbiased fixed point. M is redrawn
 #                   every step, so any nonlinearity (log M, sqrt M, M in the weight)

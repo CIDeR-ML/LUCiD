@@ -28,7 +28,7 @@ geometry. Use ``--steps`` to shorten it for a smoke test; the figure will not be
 
 Note on the readout: the trajectories are smoothed at PLOT time with a proportional Polyak
 window (``--polyak-window``, default 150). The reported tail-average optimum is nearer W=200.
-That is a readout choice only and needs no re-running — see CALIBRATION_STUDIES.md.
+That is a readout choice only and needs no re-running.
 """
 import argparse
 import sys

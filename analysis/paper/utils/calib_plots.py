@@ -1,15 +1,6 @@
 """Rendering for the two calibration figures. Plot-only: every function reads saved ``.npz``
-and writes a PDF+PNG pair. No simulation, no fitting.
-
-Ported 2026-08-12 from the revision campaign's convergence and 2-D Neyman renderers (not part of
-this repository) — the surviving renderers of their respective families.
-The module-level scripts became functions taking (data_dir, out_dir); the plotting bodies are
-otherwise unchanged, including the styling rationale in the comments, which encodes decisions
-that were made deliberately and should not be re-litigated by accident.
-
-Superseded and NOT ported: ``make_convergence600{,_raw,_prop,_final}.py`` (four earlier
-renderings of the same ``long600`` run) and ``make_2d.py`` (the pre-Neyman loss surface).
-All are in the 2026-08-12 backup.
+and writes a PDF+PNG pair. No simulation, no fitting. The styling comments record deliberate
+choices; keep them in step with any change to the plots.
 """
 import glob
 import os

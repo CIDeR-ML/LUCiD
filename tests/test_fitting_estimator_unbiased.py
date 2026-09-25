@@ -41,29 +41,21 @@ import jax
 import jax.numpy as jnp
 import pytest
 
-from lucid.detector_params import DetectorParams, _flatten_detector_params
 from lucid.fitting import FieldParams, profile_gains
 from lucid.fitting.calib import CalibrationForward, CalibrationJacobian, CalibrationProblem
+from tests import _calib_toy as toy
+from tests._calib_toy import FIELDS
 
 NS = 40
-FIELDS = ['scatter_length', 'absorption_length', 'qe']
 NOISE_HI, NOISE_LO = 0.25, 0.05
 N_DRAWS = 800                       # z scales as sqrt(N); 800 keeps the contrast decisive
-_rng = np.random.default_rng(17)
-_RA = jnp.asarray(np.linspace(0.2, 1.0, NS)[:, None] * np.cos(np.arange(3) + 1.0))
-_RB = jnp.asarray(_rng.standard_normal((NS, 3)) * 0.5)
 
 
 def _dp_true():
-    return DetectorParams.from_flat(
-        scatter_length=30.0, absorption_length=80.0, qe=0.25,
-        wall_reflection_rate=0.4, sensor_reflection_rate=0.2, qe_corrections=np.ones(NS))
+    return toy.dp_true(NS)
 
 
-def _base(source, dp):
-    f = _flatten_detector_params(dp)
-    logs = jnp.stack([jnp.log(jnp.asarray(f[k]).reshape(())) for k in FIELDS])
-    return jnp.exp(source['resp'] @ logs) * source['scale'] * jnp.asarray(f['qe_corrections'])
+_base = toy.charge
 
 
 def _make_noisy(noise):
@@ -85,7 +77,7 @@ def _clean(source, dp, key):
 
 
 def _sources():
-    return [{'resp': _RA, 'scale': jnp.asarray(1.0)}, {'resp': _RB, 'scale': jnp.asarray(2.3)}]
+    return toy.sources(NS, seed=17, b_spread=0.5, b_scale=2.3)
 
 
 @pytest.fixture(scope='module')
