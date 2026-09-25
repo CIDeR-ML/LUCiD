@@ -22,37 +22,29 @@ import jax
 import jax.numpy as jnp
 import pytest
 
-from lucid.detector_params import DetectorParams, _flatten_detector_params
 from lucid.fitting import gauss_newton, FieldParams
 from lucid.fitting.calib import CalibrationForward, CalibrationJacobian, CalibrationProblem
 from lucid.fitting.minimize import minimize
 from lucid.fitting.transforms import damped_gauss_newton
 
+from tests import _calib_toy as toy
+from tests._calib_toy import FIELDS
+
 NS = 32
-FIELDS = ['scatter_length', 'absorption_length', 'qe']
 LAM, MU, LR = 0.01, 0.1, 1.0
-_rng = np.random.default_rng(11)
-_RA = jnp.asarray(np.linspace(0.2, 1.0, NS)[:, None] * np.cos(np.arange(3) + 1.0))
-_RB = jnp.asarray(_rng.standard_normal((NS, 3)) * 0.4)
 
 
 def _dp():
-    return DetectorParams.from_flat(
-        scatter_length=30.0, absorption_length=80.0, qe=0.25,
-        wall_reflection_rate=0.4, sensor_reflection_rate=0.2, qe_corrections=np.ones(NS))
+    return toy.dp_true(NS)
 
 
 def _sim(source, dp, key):
     """Analytic stand-in for the photon forward: smooth, positive, theta-dependent."""
-    f = _flatten_detector_params(dp)
-    logs = jnp.stack([jnp.log(jnp.asarray(f[k]).reshape(())) for k in FIELDS])
-    mu = jnp.exp(source['resp'] @ logs) * source['scale'] * jnp.asarray(f['qe_corrections'])
-    return mu, jnp.zeros(NS)
+    return toy.charge(source, dp), jnp.zeros(NS)
 
 
 def _sources():
-    return [{'resp': _RA, 'scale': jnp.asarray(1.0)},
-            {'resp': _RB, 'scale': jnp.asarray(2.1)}]
+    return toy.sources(NS, seed=11, b_spread=0.4, b_scale=2.1)
 
 
 def _problem(record=None):

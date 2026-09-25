@@ -16,35 +16,27 @@ import numpy as np
 import jax.numpy as jnp
 import pytest
 
-from lucid.detector_params import DetectorParams, _flatten_detector_params
 from lucid.fitting import FieldParams, LogParams, calibrate, closure, closure_data
 from lucid.fitting.calib import CalibrationForward, CalibrationJacobian
 
+from tests import _calib_toy as toy
+from tests._calib_toy import FIELDS
+
 NS = 24
-FIELDS = ['scatter_length', 'absorption_length', 'qe']
-_rng = np.random.default_rng(11)
-_RESP_A = jnp.asarray(np.linspace(0.2, 1.0, NS)[:, None] * np.cos(np.arange(len(FIELDS)) + 1.0))
-_RESP_B = jnp.asarray(_rng.standard_normal((NS, len(FIELDS))) * 0.5)
 
 
 def _dp_true():
-    return DetectorParams.from_flat(
-        scatter_length=30.0, absorption_length=80.0, qe=0.25,
-        wall_reflection_rate=0.4, sensor_reflection_rate=0.2, qe_corrections=np.ones(NS))
+    return toy.dp_true(NS)
 
 
 def _stub_sim(source, dp, key):
-    """Deterministic per-sensor charge: log-linear in the fitted fields, through this source's
-    own response matrix. Reads the gains too, so a forward that dropped them would show up."""
-    f = _flatten_detector_params(dp)
-    logs = jnp.stack([jnp.log(jnp.asarray(f[k]).reshape(())) for k in FIELDS])
-    q = jnp.exp(source['resp'] @ logs) * source['scale'] * jnp.asarray(f['qe_corrections'])
-    return q, jnp.zeros(NS)
+    """Deterministic per-sensor charge. Reads the gains too, so a forward that dropped them would
+    show up."""
+    return toy.charge(source, dp), jnp.zeros(NS)
 
 
 def _sources():
-    return [{'resp': _RESP_A, 'scale': jnp.asarray(1.0)},
-            {'resp': _RESP_B, 'scale': jnp.asarray(2.3)}]
+    return toy.sources(NS, seed=11, b_spread=0.5, b_scale=2.3)
 
 
 def _noisy_sim(source, dp, key):
