@@ -4,7 +4,12 @@ Generalised from mie_hunter/fisher_wl2.py. The per-PMT (QE/gain) block is margin
 by the same gauge-constrained Schur complement as the optimiser, and the global Fisher is
 the photon-count-scaled Poisson information
 
-    F = 4 · Σ_sources Nphot_s · (Jᵀ W J − Jᵀ W Jk · Minv · (Jᵀ W Jk)ᵀ)
+    F = 4 · (Σ_s Jᵀ W_s J − (Σ_s Jᵀ W_s Jk) · Minv · (Σ_s Jᵀ W_s Jk)ᵀ),   W_s = Nphot_s · W
+
+The sum is INSIDE: the three blocks are accumulated over every source first and ONE Schur
+complement is taken. That is not a detail of implementation -- the per-PMT gains are SHARED
+across sources, so marginalising them per source (the reading the sum-outside form invites)
+would remove the same nuisance repeatedly and overstate the information.
 
 with ``J = ∂√M/∂theta`` evaluated at the truth. The covariance ``F⁻¹`` gives σ on the
 log-parameters = the FRACTIONAL σ.

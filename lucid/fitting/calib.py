@@ -75,7 +75,8 @@ class CalibrationForward:
         This is how a list of ready-made forward closures is fitted.
     """
 
-    def __init__(self, sim, sources, params, n_sensors, map_fn=None, predict=None):
+    def __init__(self, sim, sources, params, n_sensors, map_fn=None, predict=None,
+                 laser_device=None):
         self.sim = sim
         self.sources = list(sources)
         self.params = params
@@ -85,6 +86,7 @@ class CalibrationForward:
         self.S = self.W * self.n_sources
         self._per_source = None
 
+        self.map_fn = map_fn
         if predict is not None:
             self._per_source = [self._compile_one(predict, src) for src in self.sources]
             return
@@ -95,12 +97,61 @@ class CalibrationForward:
 
         self._mbody = _mbody
         self._single = jax.jit(_mbody)
-        self._group = (map_fn(_mbody, (None, 0, 0, None)) if map_fn is not None
-                       else _serial_map(_mbody, (None, 0, 0, None), self.n_sources - 1))
-        # The grouped sources are stacked once into a single pytree, as the reference does, so the
-        # mapped call sees one batched argument rather than a Python list.
-        self._group_stack = jax.tree_util.tree_map(
-            lambda *xs: jnp.stack(xs), *self.sources[1:]) if self.n_sources > 1 else None
+        # WHERE the singleton source runs. `map_fn` pmaps the grouped sources over devices
+        # 0..n_group-1, and an un-placed `_single` runs on JAX's default device -- device 0 --
+        # so the laser SERIALISES behind pmap shard 0 instead of overlapping it. Measured at the
+        # published recipe: forward 1.121 s against 0.612 s for the group alone, i.e. 104% of the
+        # way from overlapped to serial, with 45% of every forward wasted; and on a 10-GPU node
+        # devices 7, 8 and 9 sat idle for the whole run. The reference engine placed it on
+        # `DEVS[min(7, len(DEVS)-1)]` and measured 0.631 s on eight cards, 1.78x faster.
+        # Placement is value-neutral -- the engine and this class were bit-identical on all six
+        # pinned fields while placing this source on different devices -- so it buys wall clock
+        # and moves no number. `laser_device` overrides; None picks the first card outside the
+        # mapped range, falling back to the last available when there is none.
+        self._laser_dev = laser_device
+        if self._laser_dev is None and self.n_sources > 1:
+            devs = jax.devices()
+            self._laser_dev = devs[min(self.n_sources - 1, len(devs) - 1)]
+        # ARBITRARY source layouts. Sources are grouped by PYTREE STRUCTURE and each group is
+        # mapped over its own stack; singletons are called directly. The previous scheme stacked
+        # `sources[1:]` unconditionally, which required every source after the first to share a
+        # structure -- so a `LaserSource` (5 fields) beside an `IsotropicSource` (3) raised
+        # `Named tuple arity mismatch: 3 != 5` from three frames down. That forbade exactly the
+        # source DIVERSITY the calibration guide names as the most important lever, and it
+        # admitted only one shape of layout: one arbitrary source followed by N identical ones.
+        #
+        # The published layout IS that shape, so it still resolves to one singleton (the laser)
+        # plus one mapped group of seven -- the same two calls, in the same order, on the same
+        # keys. Bit-exactness is by construction, not by tolerance.
+        self._groups = _group_by_structure(self.sources)
+        # ONE RULE: parts get disjoint devices. A part of one source is executed unstacked (no
+        # reason to stack a single item) and takes a card outside the mapped range, so it runs
+        # ALONGSIDE the mapped parts rather than queueing behind one of their shards. In the
+        # published layout that is the laser, which is where the 1.76x came from -- but nothing
+        # here knows what a laser is.
+        self._placed = next((ix[0] for ix, _ in self._groups if len(ix) == 1), None)
+        self._largest = max((len(ix) for ix, _ in self._groups), default=0)
+        self._group_fns, self._group_stacks = [], []
+        for idx, stack in self._groups:
+            if len(idx) == 1:
+                self._group_fns.append(None)            # singleton: use self._single
+                self._group_stacks.append(None)
+                continue
+            self._group_fns.append(self._make_map(_mbody, (None, 0, 0, None), len(idx)))
+            self._group_stacks.append(stack)
+
+    def _make_map(self, fn, in_axes, n):
+        """A mapped callable over `n` items, honouring a caller-supplied `map_fn`.
+
+        `map_fn(fn, in_axes)` is the established two-argument contract and the frozen reference
+        engine passes exactly that. A `pmap` built from it maps over whatever leading axis it is
+        handed, so it serves any group; only a SERIAL fallback needs to know the count, which is
+        why `make_map_fn`'s fallback now infers it from the batched argument instead of closing
+        over one size.
+        """
+        if self.map_fn is None:
+            return _serial_map(fn, in_axes, n)
+        return self.map_fn(fn, in_axes)
 
     def _compile_one(self, predict, src):
         """One compiled ``(theta, keys, gains) -> (W, NS)`` program with ``src`` closed over."""
@@ -133,20 +184,47 @@ class CalibrationForward:
                             + [self._per_source[s](theta, kg[s - 1], gains)
                                for s in range(1, self.n_sources)])          # (n, W, NS)
             return jnp.transpose(per, (1, 0, 2)).reshape(self.S, self.NS)
-        ml = self._single(theta, self.sources[0], ks, gains)               # (W, NS)
-        if self.n_sources == 1:
-            per = ml[None]
-        else:
-            mi = self._group(theta, self._group_stack, kg, gains)          # (n-1, W, NS)
-            per = jnp.concatenate([jnp.asarray(ml)[None], mi], axis=0)     # (n, W, NS)
+        # Every source's keys, indexed by its ABSOLUTE position, so a source's random stream does
+        # not depend on how the layout happens to be grouped. `ks` is source 0's and `kg[s-1]` is
+        # source s's, which is the reference's arithmetic (`kb + 1000*s + wl`, and `kb + wl` at
+        # s=0) written once.
+        allk = [ks] + [kg[s - 1] for s in range(1, self.n_sources)]
+
+        slots = [None] * self.n_sources
+        for (idx, _), fn, stack in zip(self._groups, self._group_fns, self._group_stacks):
+            if fn is None:                                   # singleton
+                i = idx[0]
+                # Put a singleton on its own card so it OVERLAPS a grouped pmap rather than
+                # queueing behind shard 0. See __init__ for the measurement.
+                d = self._laser_dev if i == self._placed else None
+                if d is None:
+                    slots[i] = self._single(theta, self.sources[i], allk[i], gains)
+                else:
+                    slots[i] = self._single(jax.device_put(theta, d),
+                                            jax.device_put(self.sources[i], d),
+                                            jax.device_put(allk[i], d),
+                                            jax.device_put(gains, d))
+                continue
+            gk = jnp.stack([allk[i] for i in idx])
+            out = fn(theta, stack, gk, gains)                # (len(idx), W, NS)
+            for j, i in enumerate(idx):
+                slots[i] = out[j]
+        per = jnp.stack([jnp.asarray(v) for v in slots])      # (n, W, NS), SOURCE order
         return jnp.transpose(per, (1, 0, 2)).reshape(self.S, self.NS)
 
     def average(self, theta, key_base, gains, n_draws):
         """Mean over ``n_draws`` independent forward draws.
 
-        The draw offset is ``131*b``, matching the reference. Averaging reduces the Monte-Carlo
-        variance of the forward, which is what a residual linear in the model needs in order for
-        its fixed point to sit at truth.
+        The draw offset is ``131*b``, matching the reference.
+
+        Averaging reduces the Monte-Carlo variance of the forward. Note that LINEARITY is the
+        reason averaging is not needed for the fixed point, not the reason it is: if the residual
+        were linear in ``M`` then ``E[r(M)] = r(E[M])`` at any variance, and the fixed point would
+        sit at truth however noisy each draw was. What makes ``n_draws`` matter is the step this
+        module performs BEFORE forming the residual -- the profiled gain ``k = ΣQ/ΣM`` is
+        nonlinear in ``M``, so its expectation moves with the forward's variance, and that shift
+        propagates into the residual. The bias and its scaling with forward noise are measured in
+        the repo ledger.
         """
         acc = jnp.zeros((self.S, self.NS))
         for b in range(n_draws):
@@ -182,7 +260,7 @@ class CalibrationJacobian:
     """
 
     def __init__(self, sim, sources, params, n_sensors, key0=9_000_000, map_fn=None,
-                 predict=None):
+                 predict=None, laser_device=None):
         self.sim = sim
         self.sources = list(sources)
         self.params = params
@@ -214,11 +292,32 @@ class CalibrationJacobian:
 
         self._jbody = _jbody
         self._single = jax.jit(_jbody)
-        self._group = (map_fn(_jbody, (None, 0, None, None, 0, 0, None)) if map_fn is not None
-                       else _serial_map(_jbody, (None, 0, None, None, 0, 0, None),
-                                        self.n_sources - 1))
-        self._group_stack = jax.tree_util.tree_map(
-            lambda *xs: jnp.stack(xs), *self.sources[1:]) if self.n_sources > 1 else None
+        # Same placement as CalibrationForward, and for the same measured reason: an un-placed
+        # `_single` runs on device 0, which `map_fn` is already using for shard 0, so the laser
+        # column serialises behind an isotropic one. The reference engine places the Jacobian's
+        # laser inputs too (`lp_l = jax.device_put(lp, LASER_DEV)` and the key and data row with
+        # it), so this restores parity rather than inventing anything. Value-neutral: placement
+        # changes where arithmetic happens, not what it produces.
+        self._laser_dev = laser_device
+        if self._laser_dev is None and self.n_sources > 1:
+            devs = jax.devices()
+            self._laser_dev = devs[min(self.n_sources - 1, len(devs) - 1)]
+        # Same arbitrary-layout grouping as CalibrationForward, and it must be the SAME grouping:
+        # the Jacobian's rows are assembled in source order to match the forward's, so a
+        # different partition here would silently pair row `g` with another source's column.
+        self.map_fn = map_fn
+        self._groups = _group_by_structure(self.sources)
+        self._placed = next((ix[0] for ix, _ in self._groups if len(ix) == 1), None)
+        self._group_fns, self._group_stacks = [], []
+        AX = (None, 0, None, None, 0, 0, None)
+        for idx, stack in self._groups:
+            if len(idx) == 1:
+                self._group_fns.append(None)
+                self._group_stacks.append(None)
+                continue
+            self._group_fns.append(map_fn(_jbody, AX) if map_fn is not None
+                                   else _serial_map(_jbody, AX, len(idx)))
+            self._group_stacks.append(stack)
 
     def key(self, step, source, wl, draw):
         """``key0 + 7·step + 1000·source + wl + 50000·draw`` — the reference's arithmetic.
@@ -252,17 +351,31 @@ class CalibrationJacobian:
             return jnp.concatenate(rows, axis=0)
         for wl in range(self.W):
             base = wl * self.n_sources
-            jl = sum(self._single(theta, self.sources[0], wl, lk,
-                                  self.key(step, 0, wl, h), data[base], q_floor)
-                     for h in draws) / nh
-            rows.append(jnp.asarray(jl)[None])
-            if self.n_sources > 1:
-                ji = sum(self._group(theta, self._group_stack, wl, lk,
-                                     jnp.stack([self.key(step, s, wl, h)
-                                                for s in range(1, self.n_sources)]),
-                                     data[base + 1: base + self.n_sources], q_floor)
-                         for h in draws) / nh
-                rows.append(ji)
+            slots = [None] * self.n_sources
+            for (idx, _), fn, stack in zip(self._groups, self._group_fns, self._group_stacks):
+                if fn is None:                                   # singleton
+                    i = idx[0]
+                    d = self._laser_dev if i == self._placed else None
+                    if d is None:
+                        slots[i] = sum(self._single(theta, self.sources[i], wl, lk,
+                                                    self.key(step, i, wl, h), data[base + i],
+                                                    q_floor) for h in draws) / nh
+                    else:
+                        th_l, lk_l = jax.device_put(theta, d), jax.device_put(lk, d)
+                        src_l = jax.device_put(self.sources[i], d)
+                        q_l = jax.device_put(data[base + i], d)
+                        slots[i] = sum(self._single(
+                            th_l, src_l, wl, lk_l,
+                            jax.device_put(self.key(step, i, wl, h), d), q_l, q_floor)
+                            for h in draws) / nh
+                    continue
+                out = sum(fn(theta, stack, wl, lk,
+                             jnp.stack([self.key(step, i, wl, h) for i in idx]),
+                             jnp.stack([data[base + i] for i in idx]), q_floor)
+                          for h in draws) / nh
+                for j, i in enumerate(idx):
+                    slots[i] = out[j]
+            rows.append(jnp.stack([jnp.asarray(v) for v in slots]))       # (n, NS, P)
         return jnp.concatenate(rows, axis=0)
 
 
@@ -271,7 +384,21 @@ def profile_gains(model_charge, observed_sum, gauge='log', clip_min=1e-6):
 
     There is one gain per sensor (order 10^4 of them). Fitting them jointly would swamp the
     handful of optical parameters that are actually of interest, so they are profiled out at every
-    step: given the current model they have an exact minimiser, and it costs one division.
+    step in closed form, at the cost of one division.
+
+    ``ΣQ/ΣM`` is the exact minimiser of an UNWEIGHTED least squares (equivalently the Poisson
+    scale MLE). It is NOT the minimiser of the Neyman chi-square this module actually forms in
+    :func:`neyman_residual`, which is ``ΣM / Σ(M²/Q)``. Worked example: ``M=(1,10)``, ``Q=(2,10)``
+    gives ``k=1.0909`` and ``chi2=0.4959`` here against ``k=1.0476`` and ``chi2=0.4762`` at the
+    true Neyman minimum -- 4.1% higher. Two consequences follow and neither is cosmetic. The
+    reported ``loss`` is not the profiled minimum; and since ``dchi2/dk = +0.909 != 0`` at this
+    ``k``, the envelope theorem does NOT hold, so dropping ``dk/dtheta`` from the Jacobian (a
+    deliberate choice, documented at :class:`CalibrationJacobian`) omits a genuinely non-zero
+    term rather than a vanishing one.
+
+    This is the published estimator and it is consistent -- ``E[r] = 0`` at truth for any gain
+    map -- so the discrepancy is recorded rather than fixed. Changing ``k`` would move every
+    published number.
 
     The gauge removes the exact degeneracy between a global gain and the overall light yield —
     without it the two directions are unidentifiable.
@@ -372,6 +499,34 @@ class CalibrationProblem:
         ones = jnp.ones(self.data.shape[1])
         mu = self.forward.average(theta, self.forward_key(step), ones, self.n_forward_draws)
         return profile_gains(mu.sum(0) + 1e-12, self.data_sum, gauge=self.gauge)
+
+
+def _group_by_structure(sources):
+    """-> [(indices, stacked_pytree_or_None)], sources grouped by PYTREE STRUCTURE.
+
+    Groups appear in order of first appearance and indices are ascending within a group, so the
+    grouping of a homogeneous tail is exactly the old `sources[1:]` stack and the published layout
+    resolves to [([0], None), ([1..7], stack)] -- the same two calls the previous code made.
+
+    Grouping by structure rather than by type is what admits an arbitrary layout: two sources can
+    be mapped together precisely when they can be stacked, which is a property of their pytree,
+    not of their class.
+    """
+    groups = []                       # [(treedef, [indices])]
+    for i, src in enumerate(sources):
+        td = jax.tree_util.tree_structure(src)
+        for g_td, ix in groups:
+            if g_td == td:
+                ix.append(i)
+                break
+        else:
+            groups.append((td, [i]))
+    out = []
+    for _, ix in groups:
+        stack = (jax.tree_util.tree_map(lambda *xs: jnp.stack(xs), *[sources[i] for i in ix])
+                 if len(ix) > 1 else None)
+        out.append((ix, stack))
+    return out
 
 
 def _serial_map(fn, in_axes, n):

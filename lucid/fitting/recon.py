@@ -30,7 +30,12 @@ slowest cell's P90 + the last-40 Polyak window; ``readout='polyak'`` (median tie
 noise fluctuations where the vtx is far; the last-40 average suppresses that). The ~15cm vertex floor
 is SIREN-emitter-bias-limited (readout-probe-proven: min-data-loss readout = Polyak = the loss
 minimum; the ~4cm "oracle" is an unreachable fluctuation toward truth), NOT optimizer-limited.
-SIGMA=2.5(=TTS), DELTA=1.0.
+DELTA=1.0. SIGMA is the per-photon time resolution and SHOULD TRACK THE TTS OF THE DATA: the
+paper pipeline ships ``tts=2.1`` and passes ``sigma=2.1`` (``pipeline.py`` DEFAULT_CONFIG and its
+``gn`` block), so 2.1 is the published value. This docstring read "SIGMA=2.5(=TTS)" and the
+constructor still defaults to 2.5, from an earlier TTS; the default is kept because changing it
+would move every caller that does not pass sigma explicitly, but it is NOT what the paper ran.
+Pass sigma with the tts you are actually simulating.
 """
 import numpy as np
 import jax
@@ -38,12 +43,36 @@ import jax.numpy as jnp
 
 from lucid.detector_params import ParticleParams
 from lucid.losses import counts_loss, first_arrival_window_nll
-from lucid.fitting.gn import damped_matrix, gauss_newton
+from lucid.fitting.gn import gauss_newton
 
 # Natural per-parameter scales, tuned in the recon study and ported in fa233b6:
 # ~50 MeV, 0.2 m, 0.02 cos-units, 0.2 ns.
 SCALE9 = np.array([50., .2, .2, .2, .02, .02, .02, .02, .2])
 PARAM_NAMES = ['E', 'x', 'y', 'z', 'sin_t', 'cos_t', 'sin_p', 'cos_p', 't0']
+
+# The validated Fisher-GN recipe for :func:`fit_track`, as a dict for callers that want to pass it
+# through rather than restate nine keyword arguments.
+#
+# It lived in `lucid/fitting/sweep.py`, a characterisation driver with no caller in the repo and no
+# published number behind it, which was removed. The recipe was the one part of that module
+# anything actually used -- `tutorials/track_optimization.ipynb` imported it and nothing else --
+# so it moves here, beside the function it configures, rather than going with the driver.
+#
+# NOT simply `fit_track`'s defaults as data, and the two differences are the reason this needs a
+# test rather than a comment:
+#
+#   * `trust=3.0` deliberately PINS what the signature leaves as `'auto'`;
+#   * `time_weight` is NOT a `fit_track` argument at all -- it configures the MODEL's time term.
+#     A caller must therefore split the dict, which is what the tutorial does:
+#     `fit_track(..., **{k: v for k, v in RECIPE.items() if k != 'time_weight'})`.
+#     Splatting the whole thing raises TypeError.
+#
+# `tests/test_recon_default_recipe.py` holds both halves: every other key must remain a real
+# `fit_track` parameter, and `time_weight` must remain absent from it. If a rename breaks the
+# first, or someone "tidies" `time_weight` into the signature and invalidates the second, the
+# tutorial breaks silently and only the test says so.
+DEFAULT_RECIPE = dict(lr=4.0, lr_final=1.5, ridge_i=0.1, lam=0.01,
+                      nkeys=8, niters=150, refresh=8, time_weight=1.0, trust=3.0)
 
 
 def track_from_vec9(t9):
@@ -324,6 +353,10 @@ class ReconModel:
     the right answer; anything else is fitting a scalar to noise.
     """
 
+    # NOTE: sigma=2.5 is a LEGACY default, not the published value. The paper pipeline passes
+    # sigma=2.1 to match its own tts=2.1; see the module docstring. Left as 2.5 so callers that
+    # never pass sigma keep their current behaviour, but a new caller should pass the tts it is
+    # simulating rather than inherit this.
     def __init__(self, pred, num_detectors, sigma=2.5, delta=1.0, tot_n_scale=1.0,
                  time_weight=1.0, energy_from_scale=True, nphot_fn=None,
                  energy_scale_mode='simtotal'):
@@ -457,9 +490,11 @@ def fit_track(model, obs_counts, obs_times, start, *, nkeys=8, niters=150, lr=4.
     diagonal is inflated by per-sensor estimation variance ∝ 1/nkeys) and ~2.8× faster, and is
     PSD by construction (NOT the indefinite raw autodiff Hessian). ``'fd'`` keeps the legacy central
     finite-difference metric (``ReconModel.fisher``). ⚠️ The AD metric is ~1–137× SMALLER per param
-    than FD, so the FD-tuned ``lr=8`` OVERSHOOTS with ``'ad'`` — retune the step/damping
-    (``lr``/``lr_final``/``ridge_i``) for AD (rough validated point: ``lr≈1``). With AD the metric is
-    cheap+low-variance, so ``refresh=1`` (recompute every step) is affordable.
+    than FD, so the FD-tuned ``lr=8`` OVERSHOOTS with ``'ad'`` and the step/damping had to be
+    retuned for AD. That retuning is DONE and is what this function's defaults already are:
+    ``lr=4.0``, ``lr_final=1.5``, ``refresh=8``, the recipe named in the module docstring. The
+    ``lr≈1`` and ``refresh=1`` figures below were waypoints from that exercise, not
+    recommendations -- following them moves off the published working point.
 
     ``verbose=True`` shows a live ‖g‖ progress bar and prints a result table (pass ``truth`` — a
     9-vector — to include per-parameter errors).
@@ -496,7 +531,13 @@ def fit_track(model, obs_counts, obs_times, start, *, nkeys=8, niters=150, lr=4.
     if verbose:
         report.emit(report.track_table(out, truth=truth, dir_of=vec9_dir))
     if hist:
-        return out, dict(traj=np.array(traj), gnorm=np.array(gnorms), best_iter=int(np.argmin(gnorms)))
+        # n_rejected travels with the fit. A refused step is the trigger for the anneal defect
+        # in findings/14, and it used to leave no trace at all -- so how exposed the published
+        # events were could not be read off any output the campaign produced.
+        return out, dict(traj=np.array(traj), gnorm=np.array(gnorms),
+                         best_iter=int(np.argmin(gnorms)),
+                         n_rejected=int(res.get('n_rejected', 0)),
+                         rejected_steps=tuple(res.get('rejected_steps', ())))
     return out
 
 

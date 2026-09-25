@@ -148,7 +148,20 @@ def _rand_tf(raw, pose_seed, fidr, fidz):
 
 def _pad(raw, nbuf):
     import numpy as np, jax.numpy as jnp
-    n = int(raw["photon_origins"].shape[0]); reps = int(np.ceil(nbuf / n))
+    n = int(raw["photon_origins"].shape[0])
+    # REFUSE to truncate. With n > nbuf, reps collapses to 1 and the [:nbuf] slice below silently
+    # DROPS n-nbuf photons while N below still declares the full n -- so the event is simulated
+    # with less light than its recorded energy implies, and the energy resolution comes out
+    # biased low with no error and no warning. The sibling path already resolves nbuf from the
+    # ROOT (analysis/paper/utils/pipeline.py, nbuf='auto'); this one never got the guard. Safe at
+    # the published grid, where the largest event is ~208k photons against nbuf=600k -- which is
+    # why nothing has hit it, not why it is fine.
+    if n > nbuf:
+        raise ValueError(
+            f'event has {n:,} photons but nbuf={nbuf:,}; padding would silently truncate to '
+            f'{nbuf:,} while still reporting N={n:,}. Raise nbuf (the max over the ROOT is the '
+            f'right value) rather than letting the fit see less light than the energy implies.')
+    reps = int(np.ceil(nbuf / n))
     tl = lambda a: jnp.asarray(np.tile(np.asarray(a), (reps,) + (1,) * (np.asarray(a).ndim - 1))[:nbuf])
     return dict(photon_origins=tl(raw["photon_origins"]), photon_directions=tl(raw["photon_directions"]),
                 photon_times=tl(raw["photon_times"]), N=jnp.asarray(n), apply_rotation=False,
