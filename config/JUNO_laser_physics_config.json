@@ -22,7 +22,16 @@
   "acrylic_bowl_reflection_rate": 0.04,
   "acrylic_bowl_transmission_rate": 0.94,
   "acrylic_bowl_fspec": 1.0,
-  "_comment_engineering_surfaces": "First-version effective 532 nm seeds; Acrylic R/T and steel R are calibration parameters, not precision JUNOSW copies",
+  "diffuser_ptfe_reflection_rate": 0.95,
+  "diffuser_ptfe_transmission_rate": 0.0,
+  "diffuser_ptfe_fspec": 1.0,
+  "diffuser_peek_reflection_rate": 0.5,
+  "diffuser_peek_transmission_rate": 0.0,
+  "diffuser_peek_fspec": 0.0,
+  "diffuser_fiber_reflection_rate": 0.1,
+  "diffuser_fiber_transmission_rate": 0.0,
+  "diffuser_fiber_fspec": 0.0,
+  "_comment_engineering_surfaces": "First-version effective 532 nm seeds; diffuser PEEK/fibre R follow J26.5.1 laserdiffuser.gdml, PTFE R=0.95 follows JUNO calibration-source fallback GDML; fspec is an effective polished/ground mapping",
   "qe": 1.0,
   "qe_corrections": null
 }

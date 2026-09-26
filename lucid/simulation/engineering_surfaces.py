@@ -8,6 +8,9 @@ SURFACE_NAMES = (
     "chimney_acrylic",
     "chimney_steel",
     "acrylic_bowl",
+    "diffuser_ptfe",
+    "diffuser_peek",
+    "diffuser_fiber",
 )
 
 

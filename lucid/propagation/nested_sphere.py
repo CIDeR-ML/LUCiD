@@ -40,6 +40,7 @@ from ..geometry.juno_support import (
     build_support_candidate_map,
     intersect_capped_cylinders,
 )
+from ..geometry.juno_diffuser import intersect_diffuser_hardware
 from ..geometry.juno_structures import (
     BOWL_CANDIDATES_PER_CELL,
     BOWL_INTERFACE_OFFSET_M,
@@ -157,7 +158,10 @@ def find_intersected_nested_sphere_sensors(ray_origins, ray_directions,
                                            support_candidate_map=None,
                                            chimney=None,
                                            acrylic_bowls=None,
-                                           bowl_candidate_map=None):
+                                           bowl_candidate_map=None,
+                                           diffuser_hardware=None,
+                                           diffuser_center=None,
+                                           diffuser_axis=None):
     """Outer-sphere sensor lookup (reused) with inner-interface override.
 
     Computes the single-sphere result at ``r_outer`` (sensors), then for rays whose
@@ -386,6 +390,19 @@ def find_intersected_nested_sphere_sensors(ray_origins, ray_directions,
             hit_bowl, bowl_hit.object_indices, -1
         )
 
+    if diffuser_hardware is not None:
+        diffuser_hit = intersect_diffuser_hardware(
+            ray_origins,
+            ray_directions,
+            diffuser_hardware,
+            diffuser_center,
+            diffuser_axis,
+        )
+        hit_diffuser = _select_engineering_hit(diffuser_hit)
+        surface_code = jnp.where(
+            hit_diffuser, diffuser_hit.surface_codes, surface_code
+        )
+
     result['engineering_surface_code'] = surface_code
     result['hit_support'] = surface_code == 0
     result['support_index'] = jnp.where(
@@ -397,6 +414,9 @@ def find_intersected_nested_sphere_sensors(ray_origins, ray_directions,
     result['hit_acrylic_bowl'] = surface_code == 3
     result['acrylic_bowl_index'] = jnp.where(
         surface_code == 3, bowl_index, -1
+    )
+    result['hit_diffuser_hardware'] = (
+        (surface_code >= 4) & (surface_code <= 6)
     )
 
     if single_ray:
@@ -421,7 +441,8 @@ def create_nested_sphere_propagator(sensor_positions, sensor_radius,
                                     acrylic_bowls=None,
                                     bowl_candidates_per_cell=(
                                         BOWL_CANDIDATES_PER_CELL
-                                    )):
+                                    ),
+                                    diffuser_hardware=None):
     """JIT-compiled photon propagator for nested sphere geometry.
 
     The outer sphere supplies the grid lookup. Optional per-sensor axes and
@@ -531,7 +552,8 @@ def create_nested_sphere_propagator(sensor_positions, sensor_radius,
         )
 
     @jax.jit
-    def propagate_photons(photon_origins, photon_directions):
+    def _propagate(photon_origins, photon_directions, diffuser_center,
+                   diffuser_axis):
         return find_intersected_nested_sphere_sensors(
             photon_origins, photon_directions, sensor_positions, sensor_radius,
             r_inner, r_outer, n_divisions, inverted_sensor_map,
@@ -545,6 +567,49 @@ def create_nested_sphere_propagator(sensor_positions, sensor_radius,
             support_candidate_map=support_candidate_map,
             chimney=chimney,
             acrylic_bowls=acrylic_bowls,
-            bowl_candidate_map=bowl_candidate_map)
+            bowl_candidate_map=bowl_candidate_map,
+            diffuser_hardware=diffuser_hardware,
+            diffuser_center=diffuser_center,
+            diffuser_axis=diffuser_axis)
+
+    if diffuser_hardware is None:
+        @jax.jit
+        def propagate_photons(photon_origins, photon_directions):
+            return find_intersected_nested_sphere_sensors(
+                photon_origins,
+                photon_directions,
+                sensor_positions,
+                sensor_radius,
+                r_inner,
+                r_outer,
+                n_divisions,
+                inverted_sensor_map,
+                temperature,
+                overlap_prob,
+                apply_angular_acceptance=apply_angular_acceptance,
+                r_acrylic=r_acrylic,
+                sensor_inward_axes=sensor_inward_axes,
+                sensor_radial_radii=sensor_radial_radii,
+                sensor_axial_radii=sensor_axial_radii,
+                support_rods=support_rods,
+                support_candidate_map=support_candidate_map,
+                chimney=chimney,
+                acrylic_bowls=acrylic_bowls,
+                bowl_candidate_map=bowl_candidate_map)
+        return propagate_photons
+
+    def propagate_photons(photon_origins, photon_directions,
+                          diffuser_center=None, diffuser_axis=None):
+        """Propagate with the runtime source-attached hardware pose."""
+        if diffuser_center is None or diffuser_axis is None:
+            raise ValueError(
+                "Diffuser hardware requires a source center and axis"
+            )
+        return _propagate(
+            photon_origins,
+            photon_directions,
+            diffuser_center,
+            diffuser_axis,
+        )
 
     return propagate_photons

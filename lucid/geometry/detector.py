@@ -102,7 +102,8 @@ def load_detector_geom(file_path):
 def generate_detector(file_path, pmt_geometry_enabled=None,
                       support_geometry_enabled=None,
                       chimney_geometry_enabled=None,
-                      acrylic_bowl_geometry_enabled=None):
+                      acrylic_bowl_geometry_enabled=None,
+                      diffuser_hardware_enabled=None):
     """Generate a detector from a JSON config file using the geometry registry.
 
     The detector type in the config (e.g. 'cylinder', 'sphere', 'box') is
@@ -123,7 +124,8 @@ def generate_detector(file_path, pmt_geometry_enabled=None,
     overrides only the configured explicit PMT intersection geometry, for a
     controlled geometry on/off ablation. ``support_geometry_enabled`` does
     the same independently for the effective JUNO support rods.  The
-    chimney and Acrylic-bowl overrides are independent in the same way.
+    chimney, Acrylic-bowl, and source-attached diffuser-hardware overrides are
+    independent in the same way.
     """
     config = load_detector_config(file_path)
     detector_type = config['detector_type']
@@ -205,6 +207,19 @@ def generate_detector(file_path, pmt_geometry_enabled=None,
             )
             if bowl_path is not None:
                 bowl_path = os.path.join(config_dir, bowl_path)
+            configured_diffuser = geom_def.get(
+                'diffuser_hardware_geometry'
+            )
+            if diffuser_hardware_enabled is None:
+                diffuser_hardware_geometry = configured_diffuser
+            elif diffuser_hardware_enabled:
+                if configured_diffuser is None:
+                    raise ValueError(
+                        "Diffuser hardware was enabled but none is configured"
+                    )
+                diffuser_hardware_geometry = configured_diffuser
+            else:
+                diffuser_hardware_geometry = None
             return cls.from_pmt_file(
                 csv_path,
                 geom_def['inner_radius'],
@@ -217,7 +232,8 @@ def generate_detector(file_path, pmt_geometry_enabled=None,
                 support_geometry=support_geometry,
                 chimney_geometry=chimney_geometry,
                 acrylic_bowl_file_path=bowl_path,
-                acrylic_bowl_geometry=acrylic_bowl_geometry)
+                acrylic_bowl_geometry=acrylic_bowl_geometry,
+                diffuser_hardware_geometry=diffuser_hardware_geometry)
         return cls(geom_def['inner_radius'], geom_def['outer_radius'],
                    geom_def['n_sensors'], geom_def['sensor_radius'],
                    acrylic_radius=geom_def.get('acrylic_radius'))

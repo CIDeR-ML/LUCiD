@@ -44,6 +44,7 @@ class DetectorGeometry(NamedTuple):
                     support_geometry_enabled=None,
                     chimney_geometry_enabled=None,
                     acrylic_bowl_geometry_enabled=None,
+                    diffuser_hardware_enabled=None,
                     **grid_params) -> 'DetectorGeometry':
         """Build a DetectorGeometry from a config JSON file.
 
@@ -76,6 +77,8 @@ class DetectorGeometry(NamedTuple):
             Override the configured lower-chimney geometry independently.
         acrylic_bowl_geometry_enabled : bool or None
             Override the configured Acrylic additions independently.
+        diffuser_hardware_enabled : bool or None
+            Override the source-attached PTFE/PEEK/fibre hardware.
         **grid_params
             Geometry-specific grid parameters forwarded to ``create_propagator()``.
             Cylinder: n_cap, n_angular, n_height.
@@ -103,6 +106,7 @@ class DetectorGeometry(NamedTuple):
             support_geometry_enabled=support_geometry_enabled,
             chimney_geometry_enabled=chimney_geometry_enabled,
             acrylic_bowl_geometry_enabled=acrylic_bowl_geometry_enabled,
+            diffuser_hardware_enabled=diffuser_hardware_enabled,
         )
         import json as _json
         with open(json_filename) as _f:
@@ -156,7 +160,8 @@ class DetectorGeometry(NamedTuple):
                 ),
                 support_rods=detector.support_rods,
                 chimney=detector.chimney,
-                acrylic_bowls=detector.acrylic_bowls)
+                acrylic_bowls=detector.acrylic_bowls,
+                diffuser_hardware=detector.diffuser_hardware)
             return DetectorGeometry(
                 detector_type=actual_type, sensor_points=sensor_points,
                 sensor_radius=sensor_radius, num_sensors=num_sensors,

@@ -20,6 +20,7 @@ from .juno_pmt import (
     build_juno_pmt_dimensions,
     load_juno_pmt_layout,
 )
+from .juno_diffuser import DiffuserHardware
 from .juno_support import load_juno_support_layout
 from .juno_structures import (
     ChimneyGeometry,
@@ -74,6 +75,8 @@ class NestedSphere(Sphere):
         self.chimney = None
         self.acrylic_bowl_geometry = None
         self.acrylic_bowls = None
+        self.diffuser_hardware_geometry = None
+        self.diffuser_hardware = None
         if acrylic_radius is not None and not (
                 inner_radius < acrylic_radius < outer_radius):
             raise ValueError(
@@ -88,7 +91,8 @@ class NestedSphere(Sphere):
                       support_geometry=None,
                       chimney_geometry=None,
                       acrylic_bowl_file_path=None,
-                      acrylic_bowl_geometry=None):
+                      acrylic_bowl_geometry=None,
+                      diffuser_hardware_geometry=None):
         """Build a nested sphere using externally supplied PMT positions.
 
         The position CSV contains CopyNo, coordinates in mm, and orientation
@@ -204,6 +208,14 @@ class NestedSphere(Sphere):
                 acrylic_bowl_file_path
             )
         instance.acrylic_bowl_geometry = acrylic_bowl_geometry
+        if diffuser_hardware_geometry is not None:
+            if diffuser_hardware_geometry != "juno_ls_diffuser_hardware":
+                raise ValueError(
+                    "Unknown diffuser hardware geometry "
+                    f"{diffuser_hardware_geometry!r}"
+                )
+            instance.diffuser_hardware = DiffuserHardware.junosw_j26_ls()
+        instance.diffuser_hardware_geometry = diffuser_hardware_geometry
         return instance
 
     def bounds_check(self, positions):
