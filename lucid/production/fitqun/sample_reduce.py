@@ -91,6 +91,69 @@ def _coalesce(index: np.ndarray, count: np.ndarray):
     return uniq.astype(np.int64), np.bincount(inv, weights=count).astype(np.float64)
 
 
+class DenseAccumulator:
+    """Sums many :class:`SparseCounts` into one dense table.
+
+    ``SparseCounts.__add__`` re-sorts the running total for every addition, so
+    merging hundreds of shards costs O(n_shards * N log N) once the total
+    saturates. Scattering into a preallocated array is O(entries) with no sort,
+    at the price of holding one dense table (a few hundred MB) in the merge
+    process -- which has to be materialised for the output anyway.
+    """
+
+    def __init__(self, name: str, nbins: tuple, bounds: tuple):
+        self.name, self.nbins, self.bounds = name, tuple(nbins), tuple(bounds)
+        self.table = np.zeros(int(np.prod(nbins)), dtype=np.float64)
+
+    def add(self, counts: "SparseCounts") -> "DenseAccumulator":
+        if tuple(counts.nbins) != self.nbins or tuple(counts.bounds) != self.bounds:
+            raise ValueError("cannot merge counts with different binning")
+        np.add.at(self.table, counts.index, counts.count)
+        return self
+
+    def to_table(self) -> ScatTable:
+        return ScatTable(self.name, self.nbins, self.bounds,
+                         self.table.reshape(self.nbins))
+
+
+def merge_shards(paths) -> "SampleShard":
+    """Sum shard files, densifying the scattering counts as they stream in."""
+    acc_s, acc_d, ang_c, ang_s = {}, {}, {}, {}
+    n_photons = n_detected = n_indirect = 0
+    for path in paths:
+        shard = SampleShard.load(path)
+        for name, c in shard.scattered.items():
+            acc_s.setdefault(name, DenseAccumulator(name, c.nbins, c.bounds)).add(c)
+        for name, c in shard.direct.items():
+            acc_d.setdefault(name, DenseAccumulator(name, c.nbins, c.bounds)).add(c)
+        for r, c in shard.angular_counts.items():
+            ang_c[r] = ang_c.get(r, 0) + c
+            ang_s[r] = ang_s.get(r, 0) + shard.angular_sumw2[r]
+        n_photons += shard.n_photons
+        n_detected += shard.n_detected
+        n_indirect += shard.n_indirect
+    return MergedSample(
+        scattered={k: v.to_table() for k, v in acc_s.items()},
+        direct={k: v.to_table() for k, v in acc_d.items()},
+        angular_counts=ang_c, angular_sumw2=ang_s,
+        n_photons=n_photons, n_detected=n_detected, n_indirect=n_indirect)
+
+
+@dataclass
+class MergedSample:
+    """The summed sample: scattering tables already dense, angular histograms."""
+    scattered: dict                      # surface -> ScatTable
+    direct: dict                         # surface -> ScatTable
+    angular_counts: dict
+    angular_sumw2: dict
+    n_photons: int = 0
+    n_detected: int = 0
+    n_indirect: int = 0
+
+    def ratios(self) -> dict:
+        return {n: self.scattered[n].ratio_to(self.direct[n]) for n in self.scattered}
+
+
 @dataclass
 class SampleShard:
     """What one job contributes: sparse scattering counts plus angular histograms."""
@@ -155,71 +218,106 @@ class SampleShard:
         )
 
 
-def reduce_shard(shotgun_path, *, pmt_positions_m: np.ndarray, pmt_dir_z: np.ndarray,
-                 det_radius_cm: float, det_halfheight_cm: float, pmt_radius_cm: float,
-                 shell_radii_cm: Sequence[float], shell_dr_cm: float = 50.0,
-                 n_angular_bins: int = 25) -> SampleShard:
-    """Read one shotgun output and reduce it to a :class:`SampleShard`."""
+class ShardBuilder:
+    """Reduces propagated photons into a :class:`SampleShard`, chunk by chunk.
+
+    The reduction is incremental so the per-photon arrays never have to exist
+    all at once, on disk or in memory. A job propagates a group, folds it in
+    here, and drops it.
+    """
+
+    def __init__(self, *, pmt_positions_m: np.ndarray, pmt_dir_z: np.ndarray,
+                 det_radius_cm: float, det_halfheight_cm: float,
+                 pmt_radius_cm: float, shell_radii_cm: Sequence[float],
+                 shell_dr_cm: float = 50.0, n_angular_bins: int = 25):
+        from .angular_driver import sensor_axes
+
+        self.pmt_pos_cm = np.asarray(pmt_positions_m, dtype=np.float64) * M_TO_CM
+        self.pmt_dir_z = np.asarray(pmt_dir_z)
+        self.det_radius_cm = det_radius_cm
+        self.det_halfheight_cm = det_halfheight_cm
+        self.shell_radii_cm = [float(r) for r in shell_radii_cm]
+        self.shell_dr_cm = shell_dr_cm
+        self.n_angular_bins = n_angular_bins
+        self.axes = sensor_axes(self.pmt_pos_cm, det_radius_cm=det_radius_cm,
+                                det_halfheight_cm=det_halfheight_cm)
+        self.nbins, self.bounds = {}, {}
+        for name in scattable.SURFACES:
+            self.nbins[name] = (scattable.NBINS_SIDE if name == "sidescattable"
+                                else scattable.NBINS_CAP)
+            self.bounds[name] = scattable.axis_bounds(
+                name, det_radius_cm=det_radius_cm,
+                det_halfheight_cm=det_halfheight_cm, pmt_radius_cm=pmt_radius_cm)
+        self.shard = SampleShard(
+            scattered={n: SparseCounts(n, self.nbins[n], self.bounds[n])
+                       for n in scattable.SURFACES},
+            direct={n: SparseCounts(n, self.nbins[n][:4] + (1, 1), self.bounds[n])
+                    for n in scattable.SURFACES},
+            angular_counts={r: np.zeros(n_angular_bins) for r in self.shell_radii_cm},
+            angular_sumw2={r: np.zeros(n_angular_bins) for r in self.shell_radii_cm})
+
+    def add(self, *, detected, sensor_id, indirect, emission_pos_m, emission_dir):
+        """Fold one propagated group in. Arrays are flat, one entry per photon."""
+        det = np.asarray(detected, dtype=bool).reshape(-1)
+        self.shard.n_photons += int(det.size)
+        if not det.any():
+            return self
+        sid = np.asarray(sensor_id).reshape(-1)[det]
+        ind = np.asarray(indirect, dtype=bool).reshape(-1)[det]
+        src_pos_cm = np.asarray(emission_pos_m).reshape(-1, 3)[det] * M_TO_CM
+        src_dir = np.asarray(emission_dir).reshape(-1, 3)[det]
+        self.shard.n_detected += int(det.sum())
+        self.shard.n_indirect += int(ind.sum())
+
+        surface = scattable.surface_for(self.pmt_dir_z[sid])
+        coords = coordinates(src_pos_cm, src_dir, self.pmt_pos_cm[sid],
+                             is_cap=surface != "sidescattable")
+        for name in scattable.SURFACES:
+            on = surface == name
+            if not on.any():
+                continue
+            self.shard.scattered[name] = self.shard.scattered[name] + \
+                SparseCounts.from_values(name, self.nbins[name], self.bounds[name],
+                                         [c[on & ind] for c in coords])
+            # The direct partner collapses the two source-direction axes; that
+            # is what makes it the 4D table DivideUnnormalized4D expects.
+            self.shard.direct[name] = self.shard.direct[name] + \
+                SparseCounts.from_values(name, self.nbins[name][:4] + (1, 1),
+                                         self.bounds[name],
+                                         [c[on & ~ind] for c in coords])
+
+        keep = ~ind                               # direct light only, as isct==0
+        if keep.any():
+            for r in self.shell_radii_cm:
+                _, c, s2 = angular.measure(
+                    src_pos_cm[keep], self.pmt_pos_cm[sid[keep]],
+                    self.axes[sid[keep]], shell_r_cm=r,
+                    shell_dr_cm=self.shell_dr_cm,
+                    det_radius_cm=self.det_radius_cm,
+                    det_halfheight_cm=self.det_halfheight_cm,
+                    n_bins=self.n_angular_bins)
+                self.shard.angular_counts[r] += c
+                self.shard.angular_sumw2[r] += s2
+        return self
+
+    def result(self) -> SampleShard:
+        return self.shard
+
+
+def reduce_shard(shotgun_path, **kwargs) -> SampleShard:
+    """Reduce a saved per-photon file. Kept for shards already on disk."""
     import h5py
-    from .angular_driver import sensor_axes
 
     with h5py.File(str(shotgun_path), "r") as f:
         pp = f["per_photon"]
-        detected = pp["detected"][:].reshape(-1)
-        sensor_id = pp["sensor_id"][:].reshape(-1)
         if "indirect" not in pp:
             raise ValueError(
                 f"{shotgun_path}: no per-photon 'indirect' flag; the direct/"
                 "indirect split both tables rest on cannot be recovered")
-        indirect = pp["indirect"][:].reshape(-1)
         if "source" not in f:
             raise ValueError(f"{shotgun_path}: no source block; emission points lost")
-        emission_m = f["source/origins"][:].reshape(-1, 3)
-        emit_dir = f["source/directions"][:].reshape(-1, 3)
-
-    n_photons = int(detected.size)
-    det = detected.astype(bool)
-    sid = sensor_id[det]
-    ind = indirect[det].astype(bool)
-    src_pos_cm = emission_m[det] * M_TO_CM
-    src_dir = emit_dir[det]
-    pmt_pos_cm = np.asarray(pmt_positions_m, dtype=np.float64) * M_TO_CM
-
-    # --- indirect-light tables ------------------------------------------------
-    surface = scattable.surface_for(pmt_dir_z[sid])
-    is_cap = surface != "sidescattable"
-    coords = coordinates(src_pos_cm, src_dir, pmt_pos_cm[sid], is_cap=is_cap)
-
-    scattered, direct = {}, {}
-    for name in scattable.SURFACES:
-        nb = (scattable.NBINS_SIDE if name == "sidescattable"
-              else scattable.NBINS_CAP)
-        bd = scattable.axis_bounds(name, det_radius_cm=det_radius_cm,
-                                   det_halfheight_cm=det_halfheight_cm,
-                                   pmt_radius_cm=pmt_radius_cm)
-        on = surface == name
-        scattered[name] = SparseCounts.from_values(
-            name, nb, bd, [c[on & ind] for c in coords])
-        # The direct partner collapses the two source-direction axes; that is
-        # what makes it the 4D table DivideUnnormalized4D expects.
-        direct[name] = SparseCounts.from_values(
-            name, nb[:4] + (1, 1), bd, [c[on & ~ind] for c in coords])
-
-    # --- angular response -----------------------------------------------------
-    axes = sensor_axes(pmt_pos_cm, det_radius_cm=det_radius_cm,
-                       det_halfheight_cm=det_halfheight_cm)
-    ang_c, ang_s = {}, {}
-    keep = ~ind                                   # direct light only, as isct==0
-    for r in shell_radii_cm:
-        _, c, s2 = angular.measure(
-            src_pos_cm[keep], pmt_pos_cm[sid[keep]], axes[sid[keep]],
-            shell_r_cm=float(r), shell_dr_cm=shell_dr_cm,
-            det_radius_cm=det_radius_cm, det_halfheight_cm=det_halfheight_cm,
-            n_bins=n_angular_bins)
-        ang_c[float(r)] = c
-        ang_s[float(r)] = s2
-
-    return SampleShard(scattered=scattered, direct=direct,
-                       angular_counts=ang_c, angular_sumw2=ang_s,
-                       n_photons=n_photons, n_detected=int(det.sum()),
-                       n_indirect=int(ind.sum()))
+        return ShardBuilder(**kwargs).add(
+            detected=pp["detected"][:], sensor_id=pp["sensor_id"][:],
+            indirect=pp["indirect"][:],
+            emission_pos_m=f["source/origins"][:],
+            emission_dir=f["source/directions"][:]).result()

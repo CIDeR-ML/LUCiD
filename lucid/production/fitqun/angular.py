@@ -72,6 +72,21 @@ def measure(emission_pos: np.ndarray, sensor_pos: np.ndarray, sensor_dir: np.nda
 
     Returns ``(edges, counts, sumw2)``, unnormalised — merging several scans
     means adding the counts, so normalisation is left to :func:`normalise`.
+
+    **Shells are not expected to agree with one another.** The containment cut
+    below keeps a shell only around sensors clear of the surface that would
+    clip it, so a small shell survives at few sensors and reaches few grazing
+    geometries: in SK geometry r = 100 cm ends up empty and r = 200 cm is
+    truncated below cos(eta) ~ 0.65, while 800 and 1200 nearly agree. That is
+    the reference's own behaviour -- ``angularResponsePlotter_v1.C`` applies
+    the identical cut -- and it is why ``fit_cos.C`` fits each radius
+    separately and the reference ships one ``angResp_<r>`` per shell.
+
+    Entries are per photon with unit weight, as the reference fills them
+    (``totalPe`` is hardcoded to 1 there). Photons from one event that land on
+    one sensor share a cos(eta) exactly, so they are one correlated lump and
+    sqrt(N) understates the error -- measured at 3.6-8.5x on the 1e8-electron
+    sample. That is a property of the method, not of this implementation.
     """
     R, c = cos_eta(emission_pos, sensor_pos, sensor_dir)
     w = np.ones_like(R) if weights is None else np.asarray(weights, dtype=np.float64)

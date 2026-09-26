@@ -82,9 +82,11 @@ def photonsim_macro(*, output_path, n_events: int, seed: int) -> str:
     WAND production uses. :func:`translate_uniform` applies it to the photon
     list when this sample is driven directly.
 
-    Unlike the Cherenkov-profile scan this keeps the full physics: there is no
-    single track to isolate, and the light wanted here is whatever a 3 MeV
-    electron actually produces.
+    Multiple scattering is inactivated, as ``scattab_nuPRISM_mPMT.mac`` does.
+    That is a choice of the reference tune, not an optimisation: it keeps the
+    3 MeV electron's path straight so the emission stays point-like, which is
+    what the source binning of both tables assumes. Decays and the rest of the
+    physics stay on -- the light wanted here is whatever the electron produces.
     """
     return "\n".join([
         f"# Isotropic {SOURCE_KINETIC_MEV:g} MeV electron sample "
@@ -99,6 +101,9 @@ def photonsim_macro(*, output_path, n_events: int, seed: int) -> str:
         f"/gun/energy {SOURCE_KINETIC_MEV:g} MeV",
         "/gun/position 0 0 0 cm",
         "/gun/randomDirection true",
+        "",
+        # The reference inactivates multiple scattering for this sample.
+        "/process/inactivate msc",
         "",
         f"/random/setSeeds {seed} {seed + 1}",
         "",
