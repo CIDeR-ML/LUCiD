@@ -2,10 +2,16 @@
 
 ## Scope
 
-The clean LUCiD baseline uses the effective LS-phase emission implemented by
-JUNOSW J26.5.1 `GtOpScintTool`.  It does not simulate transport inside the
-optical fibre or the PTFE diffuser.  External PTFE, PEEK, and fibre collision
-geometry remains a separate `diffuser_hardware` component.
+The clean LUCiD baseline separates two independently switchable components:
+
+- `diffuser_emission` reproduces the effective LS-phase emission implemented
+  by JUNOSW J26.5.1 `GtOpScintTool`;
+- `diffuser_hardware` lets already-emitted or returning photons collide with
+  the PTFE ball, PEEK upper tube, and PE fibre.
+
+The hardware never generates the theta-intensity distribution and does not
+simulate microscopic transport inside the diffuser.  This avoids applying the
+effective internal-scattering response twice.
 
 ## Emission model
 
@@ -52,6 +58,43 @@ Set `SOURCE_MODEL=juno_diffuser_ball` for the new baseline or
 the group's existing shared-account submission command.  This document does
 not introduce a new submission wrapper.
 
+Set `DIFFUSER_HARDWARE=config`, `on`, or `off` in the existing local run
+script.  The checked-in geometry selects `juno_ls_diffuser_hardware`, so
+`config` and `on` enable the component.  `off` preserves the finite emission
+model but removes all three collision objects.  The assembly centre always
+follows `--source`; its local axis follows the configured diffuser axis.
+
+## Hardware geometry and optical seeds
+
+The effective solids reproduce the main dimensions in the J26.5.1
+`CalibUnit/share/laserdiffuser.gdml` LS configuration:
+
+| Part | Effective LUCiD geometry | Axial placement |
+|---|---|---|
+| PTFE ball | sphere, radius 10 mm | centre at source position |
+| PEEK upper tube | capped cylinder, radius 2 mm, length 8 mm | centre at +10 mm |
+| PE fibre | capped cylinder, radius 0.5 mm, length 200 mm | centre at +110 mm |
+
+The PEEK and fibre reflectances are the GDML values 0.5 and 0.1.  Their
+`finish=3` surfaces are represented by the first-version diffuse branch.  The
+PTFE surface uses a 0.95 polished/specular seed, matching the fallback optical
+surface used by JUNO calibration-source GDML files; the production JUNOSW
+surface obtains its wavelength table from `Material.TeflonMirror.REFLECTIVITY`.
+All three surfaces are opaque in this effective model, so non-reflected
+photons are absorbed.
+
+These values are explicit baseline parameters, not precision material claims.
+The current implementation omits refraction and volume absorption inside the
+three solids, fine connectors, the source weight, and cable details.
+
+## Hardware diagnostics
+
+`results_summary.json` records `hits`, `absorbed`, `reflected`, `specular`,
+`diffuse`, and `transmitted` counts for the combined `diffuser_hardware`
+component and separately for `diffuser_ptfe`, `diffuser_peek`, and
+`diffuser_fiber`.  The Parquet metadata records the selected geometry mode and
+the complete seven-surface R/T/specular arrays.
+
 When trajectory recording is enabled, the HDF5 event group also stores
 `initial_directions` and `source_weights`.  Initial positions and emission
 times remain the zeroth entries of `positions` and `times`.
@@ -69,3 +112,8 @@ The deterministic tests check:
 - fixed-key reproducibility;
 - finite non-zero gradients with respect to angular logits;
 - zero emission times for legacy three-array sources.
+
+Hardware tests additionally check the GDML dimensions, translated and rotated
+source poses, finite-cylinder caps, absence of an immediate outward PTFE
+self-hit, nearest-surface competition, independent on/off loading, and the
+three optical parameter rows.
