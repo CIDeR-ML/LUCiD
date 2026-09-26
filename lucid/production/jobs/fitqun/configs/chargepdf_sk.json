@@ -1,0 +1,9 @@
+{
+  "name": "fitqun_chargepdf_sk",
+  "description": "Charge PDF f(q|mu) on the reference's 202-point mu grid, against LUCiD's SK digitizer. No geometry or propagation - the response is a property of the photosensor and its electronics.",
+  "n_pmt": 11096,
+  "n_events": 200,
+  "model": "ski",
+  "seed_base": 1,
+  "request_disk_mb": 2048
+}
