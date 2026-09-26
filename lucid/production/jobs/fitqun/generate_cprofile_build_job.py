@@ -2,10 +2,11 @@
 """Submit the Cherenkov-profile merge as a batch job.
 
 ``cprofile build`` reads every cell of one PDG and writes the single
-``CProf_<pdg>_WCSim.root`` that ``fiTQun_shared::LoadProfiles`` reads. With the
-reference's grid that is 551 cells per particle, each holding the I_n integrals
-on a 401 x 201 x 2200 axis set, so the merge is minutes of solid CPU and tens
-of GB of transient memory -- a batch job, not something to run on a login node.
+``CProf_<pdg>_WCSim.root`` that ``fiTQun_shared::LoadProfiles`` reads. The
+reference's grid is per particle -- 659 cells for e-, 551 for mu-, 532 for pi+ --
+each holding the I_n integrals on a 401 x 201 axis set, so the merge is minutes
+of solid CPU and tens of GB of transient memory: a batch job, not something to
+run on a login node.
 
 One job covers all three PDGs in sequence rather than three jobs, because the
 merge is IO-bound on EOS and running them concurrently only contends.

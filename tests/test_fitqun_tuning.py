@@ -354,7 +354,7 @@ def test_scattable_hdf5_round_trip(tmp_path):
 # --- binning provenance ------------------------------------------------------
 
 def test_reference_grids_load():
-    mom, reps = cprofile.binning.cprofile_momenta()
+    mom, reps = cprofile.binning.cprofile_momentum_reps()
     assert mom[0] > 0 and np.all(np.diff(mom) > 0) and reps.sum() > 0
 
     mu = binning.charge_mu_grid()

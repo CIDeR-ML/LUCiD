@@ -4,11 +4,13 @@ Every grid here is the one the reference WCTE tune was built on, kept as a
 data file next to this module rather than transcribed, so the provenance is
 checkable by diff:
 
-    data/cprofile_momenta.dat   Utilities/cprofile/CprofileMomRepList.dat
-    data/charge_mu_bins.txt     Utilities/chrgpdf/workdir/mutbl.txt
-    data/charge_q_bins.txt      Utilities/chrgpdf/workdir/qbins_sk1.txt
-    data/timepdf_momenta.json   recovered from the per-cell job directories
-                                under WCSim_v1.12.19/Utilities/TuningFiles/timepdf
+    data/cprofile_momenta.dat        Utilities/cprofile/CprofileMomRepList.dat
+    data/cprofile_momenta_<pdg>.txt  the tune's own CProf_<pdg>_fit_WCSim.root,
+                                     whose gNphot carries one point per cell
+    data/charge_mu_bins.txt          Utilities/chrgpdf/workdir/mutbl.txt
+    data/charge_q_bins.txt           Utilities/chrgpdf/workdir/qbins_sk1.txt
+    data/timepdf_momenta.json        recovered from the per-cell job directories
+                                     under WCSim_v1.12.19/Utilities/TuningFiles/timepdf
 
 fiTQun indexes particle types by PDG code and works in **momentum** (MeV/c)
 throughout; the generators convert to kinetic energy per particle when they
@@ -43,11 +45,24 @@ def _read_floats(path: Path) -> np.ndarray:
     return np.array([float(tok) for tok in path.read_text().split()], dtype=np.float64)
 
 
-def cprofile_momenta() -> tuple[np.ndarray, np.ndarray]:
-    """Cherenkov-profile momentum grid as ``(momenta, reps)``, sorted by momentum.
+def cprofile_momenta(pdg: int) -> np.ndarray:
+    """Cherenkov-profile momentum grid for one PDG (MeV/c), ascending.
 
-    The reference file is a ``<reps> <momentum>`` table where ``reps`` is the
-    relative statistics weight of that point; duplicated momenta are summed.
+    The grid is **per particle**, and each starts at that particle's Cherenkov
+    threshold -- fiTQun's own ``pCherenkovThr`` with ``nphase = 1.334`` puts it
+    at 0.6 / 120 / 158 MeV/c for e- / mu- / pi+, and the grids start at 1 / 120 /
+    156. Sharing one list across PDGs costs the electron every cell below
+    120 MeV/c, where it has 108 of its 659 points.
+    """
+    return _read_floats(DATA_DIR / f"cprofile_momenta_{int(pdg)}.txt")
+
+
+def cprofile_momentum_reps() -> tuple[np.ndarray, np.ndarray]:
+    """``(momenta, reps)`` from ``CprofileMomRepList.dat`` -- the mu- grid only.
+
+    ``reps`` is the relative statistics weight the reference gave each point
+    (duplicated momenta are summed). It drives how many events a cell gets, not
+    which cells exist; the grid itself comes from :func:`cprofile_momenta`.
     """
     toks = _read_floats(DATA_DIR / "cprofile_momenta.dat").reshape(-1, 2)
     reps, mom = toks[:, 0], toks[:, 1]
@@ -91,11 +106,12 @@ def timepdf_momenta(pdg: int) -> np.ndarray:
 
 
 # --- Cherenkov-profile integral-table axes -----------------------------------
-# I_n(R0, cos(theta0); p) is evaluated on the grid the reference tune uses,
-# measured off CProf_{11,13,211}_fit_WCSim.root (identical for all three, so it
-# is a fixed shared grid): R0 401 points from 0 to 5000 cm in 12.5 cm steps,
-# cos(theta0) 201 points from -1 to +1 in 0.01 steps. fiTQun reads the values at
-# bin *low edges* and interpolates trilinearly between them.
+# Utilities/cprofile/integcprofile.cc: nR0bin=401, nth0bin=201, R0max=5000, with
+# edges R0binEdgs[i]=i*R0max/(nR0bin-1) and th0binEdgs[i]=i*2/(nth0bin-1)-1 --
+# so 12.5 cm and 0.01 steps, and one extra edge closing each axis at 5012.5 and
+# 1.01 (which is what the shipped tables carry). fiTQun reads the values at bin
+# *low edges* and interpolates trilinearly between them. The same file switches
+# to nR0bin=1201, nth0bin=101, R0max=30000 when called with its HK flag.
 R0_MIN_CM, R0_MAX_CM, N_R0_POINTS = 0.0, 5000.0, 401
 COSTH0_MIN, COSTH0_MAX, N_COSTH0_POINTS = -1.0, 1.0, 201
 
@@ -110,11 +126,15 @@ def costh0_points() -> np.ndarray:
 
 
 # --- Emission-profile (s, cos theta) accumulation grid -----------------------
-# The reference histograms the emission angle in 500 bins over [-1, 1] and the
-# flight distance in 2200 bins over [-500, 5000] cm -- a fixed axis, not one
-# adapted per momentum, and it deliberately keeps the negative-s region (light
-# emitted behind the vertex). 5500/2200 = 2.5 cm per bin, which is exactly the
-# quantisation the shipped gsthr values show.
+# The emission angle is histogrammed in 500 bins over [-1, 1] and the flight
+# distance in 2200 bins over [-500, 5000] cm -- a fixed axis, not one adapted per
+# momentum, keeping the negative-s region (light emitted behind the vertex).
+#
+# The 2.5 cm bin width is pinned: genhist.cc reports s_max as a bin *centre*, and
+# every gsthr value in the shipped tables is an odd multiple of 1.25 cm. The
+# range endpoints are not -- the raw (s, cos theta) histogram is filled inside
+# skdetsim, which is not part of the tuning repo. They only need to cover the
+# profile (the largest shipped s_max is 3736 cm) and leave the width at 2.5.
 S_MIN_CM, S_MAX_CM, N_S_BINS = -500.0, 5000.0, 2200
 N_COSTH_BINS = 500
 
@@ -147,6 +167,13 @@ def tpdf_logmu_edges() -> np.ndarray:
 # behind) in 25 bins -- angularResponsePlotter.cc's nBins, confirmed by the
 # shipped angResp TF1's fNpfits = 25. fit_cos.C then fits 6 parameters.
 ANGRESP_N_BINS = 25
+
+# Shell radii and half-width, from angularResponsePlotter_v1.C's !isNuPRISM
+# branch. A NuPRISM-shaped detector takes the other branch instead, which is a
+# different list, not a scaling of this one.
+ANGRESP_SHELL_DR_CM = 50.0
+ANGRESP_SHELL_RADII_CM = tuple(float(r) for r in range(100, 1501, 100))
+ANGRESP_SHELL_RADII_NUPRISM_CM = tuple(float(r) for r in range(50, 301, 50))
 
 
 def angresp_edges() -> np.ndarray:
