@@ -5,23 +5,27 @@ The reference builds both tables from one production of 3 MeV electrons spread
 uniformly through the detector, so this stage produces that sample once and
 reduces it for both.
 
-**No PhotonSim.** The reference fires electrons because WCSim can only make
-light that way; what the tables actually bin is the photon's emission point and
-direction, and the shotgun samples both directly -- uniform in the volume,
-isotropic in direction. Every axis of both tables sees the same distribution,
-and a 3 MeV electron's ~1.5 cm range is negligible against ``zs`` bins ~1 m
-wide. Dropping the electron stage removes a Geant4 pass and the terabytes of
-intermediate ROOT that went with it.
+This follows ``scattab_nuPRISM_mPMT.mac``: a 3 MeV electron bomb, one electron
+per event, isotropic, with multiple scattering inactivated. The tables are
+generated the way the reference generates them.
+
+Letting the shotgun sample its own photons instead is *not* equivalent. It
+emits one direction per case, so a case lands on a single sensor and yields one
+(source, sensor) geometry, whereas an electron emits a Cherenkov cone across a
+ring of sensors. The marginal distributions agree; the correlation structure
+does not, and the angular response is built out of the correlation structure. A
+6.4e10-photon run done that way gave an angular response 3-10x noisier than
+Poisson whose shells refused to overlay.
 
 Each job is a chain, the way the Cherenkov-profile cells are:
 
-    photon shotgun -> reduce to a shard -> delete the propagated photons
+    PhotonSim -> propagate and reduce in one pass -> delete the ROOT
 
-The reduce happens *inside* the job on purpose. The propagated photon list for
-the full sample is terabytes; reduced to sparse counts it is a few gigabytes,
-and only the reduced form has to survive until the merge. Chaining with ``&&``
-also means the shard's input is deleted only once the shard exists, so a failed
-job leaves it behind to debug with.
+Propagation and reduction are one step because the per-photon arrays for a job
+are several GB and nothing needs them afterwards. Writing them out only to read
+them back cost that much I/O per job and, with a few hundred jobs doing it at
+once, failed outright: EOS returned ``errno 121`` mid-write for ~4% of a
+250-job run. Now the only thing a job writes is its shard.
 
 Run it like its sibling:
 
@@ -50,24 +54,29 @@ from lucid.production.cluster_common.user_paths import load_user_paths  # noqa: 
 
 
 def job_command(*, job_dir: Path, geometry: Path, detector: Path, physics: Path,
-                n_cases: int, n_photons: int, seed: int, shells,
+                n_photons: int, seed: int, shells,
                 position_fraction: float) -> str:
-    """The one-liner a shard job runs inside the container."""
-    shotgun = job_dir / "shotgun.h5"
+    """The one-liner a shard job runs inside the container.
+
+    The macro is written host-side at submit time, so this stays free of nested
+    quoting. The && chain deletes the ROOT and the propagated photons only once
+    the shard exists, leaving both to debug with when a step fails.
+    """
+    macro = job_dir / "photonsim.mac"
+    root = job_dir / "photonsim.root"
     shard = job_dir / "shard.npz"
     shell_args = " ".join(f"{float(r):g}" for r in shells)
 
-    propagate = (
-        f"python -m lucid.production.photon_shotgun.run "
-        f"--detector {detector} --physics-config {physics} "
-        f"--n-cases {n_cases} --n-photons {n_photons} "
-        f"--position-mode uniform --position-fraction {position_fraction:g} "
-        f"--direction-mode isotropic "
-        f"--output-mode per_photon --save-source --seed {seed} -o {shotgun}")
-    reduce_ = (f"python -m lucid.production.fitqun sample accumulate {shotgun} "
-               f"--geometry {geometry} --shells {shell_args} -o {shard}")
-    cleanup = f"rm -f {shotgun}"
-    return " && ".join([propagate, reduce_, cleanup])
+    # PHOTONSIM_BIN is inlined by the HTCondor adapter when a dev checkout is
+    # configured; fall back to the image's binary otherwise.
+    run = f"${{PHOTONSIM_BIN:-/opt/PhotonSim/build/PhotonSim}} {macro}"
+    reduce_ = (f"python -m lucid.production.fitqun sample run {root} "
+               f"--geometry {geometry} --detector-config {detector} "
+               f"--physics-config {physics} --n-photons {n_photons} "
+               f"--shells {shell_args} "
+               f"--fiducial-fraction {position_fraction:g} --seed {seed} -o {shard}")
+    cleanup = f"rm -f {root}"
+    return " && ".join([run, reduce_, cleanup])
 
 
 def parse_args(argv=None):
@@ -115,11 +124,18 @@ def main(argv=None) -> int:
             continue
         job_dir.mkdir(parents=True, exist_ok=True)
 
+        # Deferred: the macro builder needs only the numpy-free half of the
+        # package, so a bare submit host is still enough.
+        from lucid.production.fitqun import isotropic_sample as iso
+        (job_dir / "photonsim.mac").write_text(iso.photonsim_macro(
+            output_path=job_dir / "photonsim.root",
+            n_events=int(cfg["events_per_job"]),
+            seed=int(cfg.get("seed_base", 0)) + job_id))
+
         body = adapter.render_command_job(
             command=job_command(
                 job_dir=job_dir, geometry=geometry, detector=detector,
-                physics=physics, n_cases=int(cfg["cases_per_job"]),
-                n_photons=int(cfg["photons_per_case"]),
+                physics=physics, n_photons=int(cfg["photons_per_group"]),
                 seed=int(cfg.get("seed_base", 0)) + job_id, shells=shells,
                 position_fraction=float(cfg.get("position_fraction", 0.9))),
             cell_dir=job_dir, job_name=f"{cfg['name']}_{job_id:06d}",

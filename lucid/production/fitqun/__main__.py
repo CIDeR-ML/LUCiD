@@ -47,6 +47,18 @@ def _cmd_cprofile_build(args) -> int:
     return 0
 
 
+def _cmd_sample_run(args) -> int:
+    from . import sample_propagate
+
+    sample_propagate.propagate_and_reduce(
+        args.input, args.output, geometry=args.geometry,
+        detector_config=str(args.detector_config),
+        physics_config=str(args.physics_config),
+        shell_radii_cm=args.shells, n_photons=args.n_photons, K=args.K,
+        seed=args.seed, fiducial_fraction=args.fiducial_fraction)
+    return 0
+
+
 def _cmd_sample_accumulate(args) -> int:
     from . import sample_reduce
 
@@ -69,18 +81,13 @@ def _cmd_sample_accumulate(args) -> int:
 def _cmd_sample_build(args) -> int:
     from . import sample_reduce
 
-    total = None
-    for path in args.shards:
-        shard = sample_reduce.SampleShard.load(path)
-        total = shard if total is None else total + shard
-    if total is None:
+    if not args.shards:
         raise SystemExit("no shards given")
+    total = sample_reduce.merge_shards(args.shards)
 
     outdir = Path(args.output)
     (outdir / "angular").mkdir(parents=True, exist_ok=True)
-    ratios = {name: total.scattered[name].to_dense().ratio_to(
-                        total.direct[name].to_dense())
-              for name in total.scattered}
+    ratios = total.ratios()
     sca = scattable.write_hdf5(outdir / "scattables.h5", ratios,
                                {"n_detected": total.n_detected,
                                 "n_indirect": total.n_indirect,
@@ -150,6 +157,22 @@ def build_parser() -> argparse.ArgumentParser:
     sa = stages.add_parser(
         "sample", help="isotropic sample -> angular response + indirect-light tables")
     sa_actions = sa.add_subparsers(dest="action", required=True)
+
+    sprop = sa_actions.add_parser(
+        "run", help="propagate the electron bomb and reduce it in one pass")
+    sprop.add_argument("input", type=Path, help="PhotonSim output ROOT file")
+    sprop.add_argument("-o", "--output", type=Path, required=True, help="shard .npz")
+    sprop.add_argument("--shells", type=float, nargs="+",
+                       default=[100.0, 200.0, 400.0, 800.0, 1200.0])
+    sprop.add_argument("--geometry", type=Path, required=True)
+    sprop.add_argument("--detector-config", type=Path, required=True)
+    sprop.add_argument("--physics-config", type=Path, required=True)
+    sprop.add_argument("--n-photons", type=int, default=20000,
+                       help="photons per kernel call; a batching unit only")
+    sprop.add_argument("--K", type=int, default=12)
+    sprop.add_argument("--seed", type=int, default=0)
+    sprop.add_argument("--fiducial-fraction", type=float, default=0.9)
+    sprop.set_defaults(func=_cmd_sample_run)
 
     sacc = sa_actions.add_parser("accumulate", help="reduce one propagated shard")
     sacc.add_argument("input", type=Path, help="photon-shotgun per-photon HDF5")
