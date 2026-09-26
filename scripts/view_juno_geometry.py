@@ -43,6 +43,26 @@ CHIMNEY_STYLES = {
     2: ("Chimney steel", "#6c757d"),
 }
 BOWL_STYLE = ("Acrylic bowls", "#7b2cbf")
+DIFFUSER_STYLES = (
+    ("PTFE diffuser ball", "sphere", "#f5f3e7"),
+    ("PEEK tube", "cylinder", "#c9833e"),
+    ("PE fibre", "cylinder", "#45b7b0"),
+)
+
+
+def parse_vector3(value):
+    """Parse three comma-separated finite coordinates for a CLI argument."""
+    try:
+        vector = np.asarray(value.split(","), dtype=np.float64)
+    except (AttributeError, ValueError) as error:
+        raise ValueError(
+            f"expected three comma-separated numbers, got {value!r}"
+        ) from error
+    if vector.shape != (3,) or not np.all(np.isfinite(vector)):
+        raise ValueError(
+            f"expected three finite comma-separated numbers, got {value!r}"
+        )
+    return vector
 
 
 def _packed_rows(*columns):
@@ -50,8 +70,12 @@ def _packed_rows(*columns):
     return np.column_stack(columns).astype("<f4", copy=False).tobytes()
 
 
-def build_geometry_payload(detector):
-    """Return a JSON manifest and binary instance buffers for a detector."""
+def build_geometry_payload(
+    detector,
+    source_position=(0.0, 0.0, 0.0),
+    source_axis=(0.0, 0.0, 1.0),
+):
+    """Return a geometry manifest at the requested source pose."""
     positions = np.asarray(detector.all_points, dtype=np.float32)
     count = len(positions)
     copy_numbers = getattr(detector, "pmt_copy_numbers", None)
@@ -182,6 +206,52 @@ def build_geometry_payload(detector):
             ]).tolist(),
         })
 
+    diffuser_hardware = None
+    hardware = getattr(detector, "diffuser_hardware", None)
+    if hardware is not None:
+        center = np.asarray(source_position, dtype=np.float64)
+        direction = np.asarray(source_axis, dtype=np.float64)
+        if center.shape != (3,) or not np.all(np.isfinite(center)):
+            raise ValueError("source_position must contain three finite values")
+        norm = np.linalg.norm(direction)
+        if (
+            direction.shape != (3,)
+            or not np.all(np.isfinite(direction))
+            or norm <= 0.0
+        ):
+            raise ValueError("source_axis must be a finite non-zero vector")
+        direction /= norm
+        parts = [
+            {
+                "name": DIFFUSER_STYLES[0][0],
+                "kind": DIFFUSER_STYLES[0][1],
+                "color": DIFFUSER_STYLES[0][2],
+                "radius": float(hardware.ball_radius_m),
+                "center_axial": 0.0,
+            },
+            {
+                "name": DIFFUSER_STYLES[1][0],
+                "kind": DIFFUSER_STYLES[1][1],
+                "color": DIFFUSER_STYLES[1][2],
+                "radius": float(hardware.peek_radius_m),
+                "half_length": float(hardware.peek_half_length_m),
+                "center_axial": float(hardware.peek_center_axial_m),
+            },
+            {
+                "name": DIFFUSER_STYLES[2][0],
+                "kind": DIFFUSER_STYLES[2][1],
+                "color": DIFFUSER_STYLES[2][2],
+                "radius": float(hardware.fiber_radius_m),
+                "half_length": float(hardware.fiber_half_length_m),
+                "center_axial": float(hardware.fiber_center_axial_m),
+            },
+        ]
+        diffuser_hardware = {
+            "center": center.tolist(),
+            "axis": direction.tolist(),
+            "parts": parts,
+        }
+
     boundaries = []
     boundary_specs = (
         ("r_inner", "LS-Acrylic boundary", "#f4d35e", True),
@@ -218,6 +288,7 @@ def build_geometry_payload(detector):
         "support_groups": support_groups,
         "chimney_segments": chimney_segments,
         "acrylic_bowl_groups": acrylic_bowl_groups,
+        "diffuser_hardware": diffuser_hardware,
     }
     return manifest, payloads
 
@@ -286,6 +357,20 @@ def parse_args():
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8766)
     parser.add_argument(
+        "--source",
+        type=parse_vector3,
+        default=np.asarray([0.0, 0.0, 0.0]),
+        metavar="X,Y,Z",
+        help="diffuser center in metres (default: 0,0,0)",
+    )
+    parser.add_argument(
+        "--source-axis",
+        type=parse_vector3,
+        default=np.asarray([0.0, 0.0, 1.0]),
+        metavar="X,Y,Z",
+        help="diffuser hardware axis (default: 0,0,1)",
+    )
+    parser.add_argument(
         "--open",
         action=argparse.BooleanOptionalAction,
         default=True,
@@ -297,7 +382,11 @@ def parse_args():
 def main():
     args = parse_args()
     detector = generate_detector(args.config)
-    manifest, payloads = build_geometry_payload(detector)
+    manifest, payloads = build_geometry_payload(
+        detector,
+        source_position=args.source,
+        source_axis=args.source_axis,
+    )
     server = ThreadingHTTPServer(
         (args.host, args.port), make_handler(manifest, payloads)
     )
@@ -309,6 +398,10 @@ def main():
     print(f"Supports: {manifest['support_count']:,}")
     print(f"Chimney:  {manifest['chimney_segment_count']:,} segments")
     print(f"Bowls:    {manifest['acrylic_bowl_count']:,}")
+    if manifest["diffuser_hardware"] is not None:
+        center = manifest["diffuser_hardware"]["center"]
+        axis = manifest["diffuser_hardware"]["axis"]
+        print(f"Diffuser: center={center} m, axis={axis}")
     print(f"Payload:  {binary_size / 1_000_000:.2f} MB")
     print(f"URL:      {url}")
     print("Ctrl+C to stop")

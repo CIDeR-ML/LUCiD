@@ -9,10 +9,14 @@ from lucid.geometry.juno_structures import (
     AcrylicBowlLayout,
     ChimneyGeometry,
 )
-from scripts.view_juno_geometry import build_geometry_payload
+from lucid.geometry.juno_diffuser import DiffuserHardware
+from scripts.view_juno_geometry import (
+    build_geometry_payload,
+    parse_vector3,
+)
 
 
-def _detector(chimney=None, bowls=None):
+def _detector(chimney=None, bowls=None, diffuser_hardware=None):
     """Return a minimal detector carrying optional engineering structures."""
     return SimpleNamespace(
         all_points=np.empty((0, 3), dtype=float),
@@ -20,6 +24,7 @@ def _detector(chimney=None, bowls=None):
         support_rods=None,
         chimney=chimney,
         acrylic_bowls=bowls,
+        diffuser_hardware=diffuser_hardware,
         r_inner=17.7,
         r_acrylic=17.824,
         r_outer=19.434,
@@ -117,4 +122,61 @@ def test_viewer_payload_uses_empty_structure_groups_when_disabled():
     assert manifest["chimney_segment_count"] == 0
     assert manifest["acrylic_bowl_groups"] == []
     assert manifest["acrylic_bowl_count"] == 0
+    assert manifest["diffuser_hardware"] is None
     assert payloads == {}
+
+
+def test_viewer_payload_places_source_attached_diffuser_hardware():
+    """The viewer uses the runtime source pose and transport dimensions."""
+    detector = _detector(
+        diffuser_hardware=DiffuserHardware.junosw_j26_ls()
+    )
+
+    manifest, payloads = build_geometry_payload(
+        detector,
+        source_position=[1.0, -2.0, 17.1],
+        source_axis=[0.0, 3.0, 4.0],
+    )
+
+    assert payloads == {}
+    hardware = manifest["diffuser_hardware"]
+    npt.assert_allclose(hardware["center"], [1.0, -2.0, 17.1])
+    npt.assert_allclose(hardware["axis"], [0.0, 0.6, 0.8])
+    assert hardware["parts"] == [
+        {
+            "name": "PTFE diffuser ball",
+            "kind": "sphere",
+            "color": "#f5f3e7",
+            "radius": 0.010,
+            "center_axial": 0.0,
+        },
+        {
+            "name": "PEEK tube",
+            "kind": "cylinder",
+            "color": "#c9833e",
+            "radius": 0.002,
+            "half_length": 0.004,
+            "center_axial": 0.010,
+        },
+        {
+            "name": "PE fibre",
+            "kind": "cylinder",
+            "color": "#45b7b0",
+            "radius": 0.0005,
+            "half_length": 0.100,
+            "center_axial": 0.110,
+        },
+    ]
+
+
+def test_viewer_vector_parser_requires_three_finite_values():
+    """Source pose CLI vectors use an explicit comma-separated contract."""
+    npt.assert_allclose(parse_vector3("0,0,17.1"), [0.0, 0.0, 17.1])
+
+    for invalid in ("0,0", "0,0,1,2", "0,nan,1", "zero,0,1"):
+        try:
+            parse_vector3(invalid)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"accepted invalid vector: {invalid}")

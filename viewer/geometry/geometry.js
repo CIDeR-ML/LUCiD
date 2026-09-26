@@ -21,6 +21,7 @@ const boundaryObjects = [];
 const pmtObjects = [];
 const supportObjects = [];
 const knownStructureObjects = [];
+const diffuserObjects = [];
 const clippingPlane = new THREE.Plane(new THREE.Vector3(0, 0, -1), 0);
 const raycaster = new THREE.Raycaster();
 raycaster.params.Points.threshold = 0.30;
@@ -176,7 +177,8 @@ function addControl(containerId, object, group, checked = true) {
   if (group.count !== undefined) {
     count.textContent = group.count.toLocaleString();
   } else if (group.radius !== undefined) {
-    count.textContent = 'R=' + group.radius.toFixed(3) + ' m';
+    const digits = group.radius < 0.01 ? 4 : 3;
+    count.textContent = 'R=' + group.radius.toFixed(digits) + ' m';
   } else {
     count.textContent = group.detail || '';
   }
@@ -297,6 +299,41 @@ function addChimneySegment(segment) {
   addControl('knownStructureControls', mesh, details);
 }
 
+function addDiffuserHardware(hardware) {
+  const center = new THREE.Vector3(...hardware.center);
+  const direction = new THREE.Vector3(...hardware.axis).normalize();
+  for (const part of hardware.parts) {
+    let geometry;
+    if (part.kind === 'sphere') {
+      geometry = new THREE.SphereGeometry(part.radius, 40, 20);
+    } else {
+      geometry = new THREE.CylinderGeometry(
+        part.radius,
+        part.radius,
+        2 * part.half_length,
+        32,
+        1,
+        false,
+      );
+    }
+    const mesh = new THREE.Mesh(
+      geometry,
+      material(part.color, 0.96, THREE.DoubleSide),
+    );
+    mesh.name = part.name;
+    mesh.position.copy(center).addScaledVector(
+      direction, part.center_axial,
+    );
+    if (part.kind === 'cylinder') {
+      mesh.quaternion.setFromUnitVectors(unitY, direction);
+    }
+    mesh.userData = { group: part };
+    scene.add(mesh);
+    diffuserObjects.push(mesh);
+    addControl('diffuserControls', mesh, part);
+  }
+}
+
 async function addAcrylicBowlGroup(group) {
   const rows = await fetchRows(group);
   const baseRadius = group.profile[0][1];
@@ -368,6 +405,8 @@ function setupScene() {
 }
 
 function resetCamera() {
+  camera.near = 0.02;
+  camera.updateProjectionMatrix();
   camera.position.set(
     outerRadius * 1.65,
     -outerRadius * 1.65,
@@ -378,8 +417,23 @@ function resetCamera() {
 }
 
 function focusTopStructures() {
+  camera.near = 0.02;
+  camera.updateProjectionMatrix();
   camera.position.set(5.0, -6.5, 21.5);
   controls.target.set(0, 0, 18.2);
+  controls.update();
+}
+
+function focusSourceHardware() {
+  const hardware = manifest.diffuser_hardware;
+  if (!hardware) return;
+  const center = new THREE.Vector3(...hardware.center);
+  const direction = new THREE.Vector3(...hardware.axis).normalize();
+  const target = center.clone().addScaledVector(direction, 0.10);
+  camera.near = 0.0002;
+  camera.updateProjectionMatrix();
+  camera.position.copy(target).add(new THREE.Vector3(0.24, -0.32, 0.16));
+  controls.target.copy(target);
   controls.update();
 }
 
@@ -388,6 +442,10 @@ function setupUi() {
   document.getElementById('focusTop').addEventListener(
     'click',
     focusTopStructures,
+  );
+  document.getElementById('focusSource').addEventListener(
+    'click',
+    focusSourceHardware,
   );
   const rotateButton = document.getElementById('autoRotate');
   rotateButton.addEventListener('click', () => {
@@ -447,6 +505,7 @@ function setupUi() {
       ...pmtObjects,
       ...supportObjects,
       ...knownStructureObjects,
+      ...diffuserObjects,
     ];
     for (const object of objects) {
       object.material.clippingPlanes = enabled ? [clippingPlane] : [];
@@ -542,6 +601,9 @@ async function init() {
   for (const segment of manifest.chimney_segments) {
     addChimneySegment(segment);
   }
+  if (manifest.diffuser_hardware) {
+    addDiffuserHardware(manifest.diffuser_hardware);
+  }
   await Promise.all([
     ...manifest.pmt_groups.map((group) => addPmtGroup(group, pmtGeometry)),
     ...manifest.support_groups.map(
@@ -561,12 +623,20 @@ async function init() {
   ) {
     document.getElementById('knownStructureSection').style.display = 'none';
   }
+  if (!manifest.diffuser_hardware) {
+    document.getElementById('diffuserSection').style.display = 'none';
+    document.getElementById('focusSource').style.display = 'none';
+  }
   summary.textContent = manifest.detector_type + ' | '
     + manifest.pmt_count.toLocaleString() + ' PMTs | '
     + manifest.support_count.toLocaleString() + ' supports | '
     + manifest.chimney_segment_count.toLocaleString()
     + ' chimney segments | '
-    + manifest.acrylic_bowl_count.toLocaleString() + ' bowls';
+    + manifest.acrylic_bowl_count.toLocaleString() + ' bowls | '
+    + (manifest.diffuser_hardware ? 'diffuser at '
+      + manifest.diffuser_hardware.center.map(
+        (value) => Number(value).toFixed(2),
+      ).join(',') + ' m' : 'no diffuser hardware');
   setupUi();
   resetCamera();
   resize();
