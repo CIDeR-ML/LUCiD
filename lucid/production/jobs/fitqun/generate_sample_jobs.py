@@ -15,7 +15,7 @@ emits one direction per case, so a case lands on a single sensor and yields one
 ring of sensors. The marginal distributions agree; the correlation structure
 does not, and the angular response is built out of the correlation structure. A
 6.4e10-photon run done that way gave an angular response 3-10x noisier than
-Poisson whose shells refused to overlay.
+Poisson.
 
 Each job is a chain, the way the Cherenkov-profile cells are:
 
@@ -54,8 +54,7 @@ from lucid.production.cluster_common.user_paths import load_user_paths  # noqa: 
 
 
 def job_command(*, job_dir: Path, geometry: Path, detector: Path, physics: Path,
-                n_photons: int, seed: int, shells,
-                position_fraction: float) -> str:
+                n_photons: int, seed: int, shells) -> str:
     """The one-liner a shard job runs inside the container.
 
     The macro is written host-side at submit time, so this stays free of nested
@@ -73,8 +72,7 @@ def job_command(*, job_dir: Path, geometry: Path, detector: Path, physics: Path,
     reduce_ = (f"python -m lucid.production.fitqun sample run {root} "
                f"--geometry {geometry} --detector-config {detector} "
                f"--physics-config {physics} --n-photons {n_photons} "
-               f"--shells {shell_args} "
-               f"--fiducial-fraction {position_fraction:g} --seed {seed} -o {shard}")
+               f"--shells {shell_args} --seed {seed} -o {shard}")
     cleanup = f"rm -f {root}"
     return " && ".join([run, reduce_, cleanup])
 
@@ -108,7 +106,10 @@ def main(argv=None) -> int:
         raise SystemExit("no partition/flavour: pass -P or set it in user_paths.sh")
 
     n_jobs = int(args.n_jobs or cfg["n_jobs"])
-    shells = cfg.get("shell_radii_cm", [100.0, 200.0, 400.0, 800.0, 1200.0])
+    shells = cfg.get("shell_radii_cm")
+    if shells is None:
+        from lucid.production.fitqun import binning
+        shells = list(binning.ANGRESP_SHELL_RADII_CM)
     geometry = Path(cfg["geometry"])
     detector = Path(cfg["detector_config"])
     physics = Path(cfg["physics_config"])
@@ -136,8 +137,7 @@ def main(argv=None) -> int:
             command=job_command(
                 job_dir=job_dir, geometry=geometry, detector=detector,
                 physics=physics, n_photons=int(cfg["photons_per_group"]),
-                seed=int(cfg.get("seed_base", 0)) + job_id, shells=shells,
-                position_fraction=float(cfg.get("position_fraction", 0.9))),
+                seed=int(cfg.get("seed_base", 0)) + job_id, shells=shells),
             cell_dir=job_dir, job_name=f"{cfg['name']}_{job_id:06d}",
             log_stem=f"job_{job_id:06d}", partition=partition,
             # Only the propagated photon list needs scratch; it is deleted as

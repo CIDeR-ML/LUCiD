@@ -7,7 +7,7 @@ everything that depends on the angle of incidence — the projection of the face
 onto the line of sight and whatever the photocathode does to light arriving
 off-normal.
 
-The reference measurement (``Utilities/angular/angularResponsePlotter.cc``)
+The reference measurement (``Utilities/angular/angularResponsePlotter_v1.C``)
 isolates it by taking direct photons only and keeping just those whose source
 sits in a thin spherical shell of radius ``r`` about the sensor: at fixed ``R``
 both ``Omega(R)`` and ``T(R)`` are constant, so the ``cos eta`` spectrum of
@@ -73,14 +73,16 @@ def measure(emission_pos: np.ndarray, sensor_pos: np.ndarray, sensor_dir: np.nda
     Returns ``(edges, counts, sumw2)``, unnormalised — merging several scans
     means adding the counts, so normalisation is left to :func:`normalise`.
 
-    **Shells are not expected to agree with one another.** The containment cut
-    below keeps a shell only around sensors clear of the surface that would
-    clip it, so a small shell survives at few sensors and reaches few grazing
-    geometries: in SK geometry r = 100 cm ends up empty and r = 200 cm is
-    truncated below cos(eta) ~ 0.65, while 800 and 1200 nearly agree. That is
-    the reference's own behaviour -- ``angularResponsePlotter_v1.C`` applies
-    the identical cut -- and it is why ``fit_cos.C`` fits each radius
-    separately and the reference ships one ``angResp_<r>`` per shell.
+    The containment cut below keeps a shell only around sensors clear of the
+    surface that would clip it, so each radius is measured at its own subset of
+    sensors and carries its own statistics. That does not change *what* is
+    measured: epsilon is a property of the sensor, so the radii should agree
+    within errors. A radius that comes out empty or truncated means the sources
+    never reached it -- which is a bug in the sample, not a property of the
+    method. ``fit_cos.C`` fits a single hardcoded ``angRespAll_100``, so the
+    100 cm shell in particular has to be populated; that is what requires the
+    sources to fill the volume out to the sensor faces (see
+    :func:`lucid.production.fitqun.isotropic_sample.translate_uniform`).
 
     Entries are per photon with unit weight, as the reference fills them
     (``totalPe`` is hardcoded to 1 there). Photons from one event that land on

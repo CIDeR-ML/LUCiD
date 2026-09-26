@@ -45,7 +45,7 @@ def _chunks(origins: np.ndarray, directions: np.ndarray,
 def propagate_and_reduce(
         photonsim_root, shard_out, *, detector_config: str, physics_config: str,
         geometry, shell_radii_cm, n_photons: int = 20000, K: int = 12,
-        seed: int = 0, fiducial_fraction: float = 0.9, batch: int = 8,
+        seed: int = 0, batch: int = 8,
         detector_type: str = "Cylinder", tts_sigma_ns: float = 1.0,
         wavelength_sampling: str = "cherenkov") -> Path:
     """PhotonSim photons in, reduced shard out -- nothing in between.
@@ -101,8 +101,8 @@ def propagate_and_reduce(
         # Each event gets its own vertex, as /gps/pos/type Volume does.
         origins_m = isotropic_sample.translate_uniform(
             origins_m, rng, det_radius_m=float(g["radius"]),
-            det_halfheight_m=float(g["height"]) / 2.0, event_id=event_id,
-            fiducial_fraction=fiducial_fraction)
+            det_halfheight_m=float(g["height"]) / 2.0,
+            pmt_radius_m=float(g["sensor_radius"]), event_id=event_id)
         carry_o = np.concatenate([carry_o, origins_m])
         carry_d = np.concatenate([carry_d, directions])
         used = 0

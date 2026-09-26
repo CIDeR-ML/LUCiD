@@ -112,8 +112,8 @@ def photonsim_macro(*, output_path, n_events: int, seed: int) -> str:
 
 
 def translate_uniform(origins: np.ndarray, rng, *, det_radius_m: float,
-                      det_halfheight_m: float, event_id: Optional[np.ndarray] = None,
-                      fiducial_fraction: float = 1.0) -> np.ndarray:
+                      det_halfheight_m: float, pmt_radius_m: float,
+                      event_id: Optional[np.ndarray] = None) -> np.ndarray:
     """Shift photons to uniformly sampled vertices in the cylinder.
 
     ``event_id`` gives each photon's event, and every event gets its **own**
@@ -126,12 +126,23 @@ def translate_uniform(origins: np.ndarray, rng, *, det_radius_m: float,
     photosensor. Omitting it keeps the old single-shift behaviour, which is
     only meaningful when the array really is one event.
 
+    The volume is the one both tables are binned on, so there is no fiducial
+    margin to choose: ``scatTableLooper.C`` sets ``rmax = cylRadius - tuberadius``
+    and ``zmax = tubezpos - tuberadius``, filling the cylinder right up to the
+    sensor faces. Holding sources further in is not the conservative choice it
+    looks like -- it empties the small angular-response shells, and ``fit_cos.C``
+    fits the 100 cm one.
+
     Uniform in volume means uniform in r^2, not in r -- sampling r linearly
     would pile events toward the axis. Dimensions are in meters, matching
     :func:`load_photons` and the propagation it feeds.
     """
-    r = det_radius_m * fiducial_fraction
-    hz = det_halfheight_m * fiducial_fraction
+    r = det_radius_m - pmt_radius_m
+    hz = det_halfheight_m - pmt_radius_m
+    if not (r > 0.0 and hz > 0.0):
+        raise ValueError(
+            f"a {pmt_radius_m} m sensor leaves no source volume in a "
+            f"{det_radius_m} x {det_halfheight_m} m half-cylinder")
 
     def _draw(n):
         rho = r * np.sqrt(rng.random(n))

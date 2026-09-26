@@ -55,7 +55,7 @@ def _cmd_sample_run(args) -> int:
         detector_config=str(args.detector_config),
         physics_config=str(args.physics_config),
         shell_radii_cm=args.shells, n_photons=args.n_photons, K=args.K,
-        seed=args.seed, fiducial_fraction=args.fiducial_fraction)
+        seed=args.seed)
     return 0
 
 
@@ -163,7 +163,7 @@ def build_parser() -> argparse.ArgumentParser:
     sprop.add_argument("input", type=Path, help="PhotonSim output ROOT file")
     sprop.add_argument("-o", "--output", type=Path, required=True, help="shard .npz")
     sprop.add_argument("--shells", type=float, nargs="+",
-                       default=[100.0, 200.0, 400.0, 800.0, 1200.0])
+                       default=list(binning.ANGRESP_SHELL_RADII_CM))
     sprop.add_argument("--geometry", type=Path, required=True)
     sprop.add_argument("--detector-config", type=Path, required=True)
     sprop.add_argument("--physics-config", type=Path, required=True)
@@ -171,7 +171,6 @@ def build_parser() -> argparse.ArgumentParser:
                        help="photons per kernel call; a batching unit only")
     sprop.add_argument("--K", type=int, default=12)
     sprop.add_argument("--seed", type=int, default=0)
-    sprop.add_argument("--fiducial-fraction", type=float, default=0.9)
     sprop.set_defaults(func=_cmd_sample_run)
 
     sacc = sa_actions.add_parser("accumulate", help="reduce one propagated shard")
@@ -180,7 +179,7 @@ def build_parser() -> argparse.ArgumentParser:
     sacc.add_argument("--geometry", type=Path, required=True,
                       help="detector geometry .npz (positions_mm, directions, ...)")
     sacc.add_argument("--shells", type=float, nargs="+",
-                      default=[100.0, 200.0, 400.0, 800.0, 1200.0],
+                      default=list(binning.ANGRESP_SHELL_RADII_CM),
                       help="angular-response shell radii in cm (default: %(default)s)")
     sacc.set_defaults(func=_cmd_sample_accumulate)
 

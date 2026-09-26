@@ -99,15 +99,19 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     out_base = args.output_base or Path(env["OUTPUT_BASE_PATH"]) / "fitqun_cprofile"
     schedule = cfg.get("events_schedule", {"1e9": cfg.get("n_events_per_job", 200)})
-    momenta = cfg.get("momentum_list_MeV")
-    if momenta is None:
-        # Deferred: reading the reference grid needs numpy, which the submit
-        # host may not have. A config that names its own grid never touches it.
-        from lucid.production.fitqun import binning
-        momenta = [float(m) for m in binning.cprofile_momenta()[0]]
+    momenta_cfg = cfg.get("momentum_list_MeV")
 
     submitted = 0
     for pdg in cfg["pdgs"]:
+        if momenta_cfg is not None:
+            momenta = [float(m) for m in momenta_cfg]
+        else:
+            # Deferred: reading the reference grid needs numpy, which the submit
+            # host may not have. A config naming its own grid never touches it.
+            # The grid is per particle -- each starts at its own Cherenkov
+            # threshold, so this has to be resolved inside the PDG loop.
+            from lucid.production.fitqun import binning
+            momenta = [float(m) for m in binning.cprofile_momenta(int(pdg))]
         for momentum in momenta:
             cell_dir = out_base / str(pdg) / f"{momentum:g}MeV"
             if (cell_dir / "cell.npz").exists() and not args.no_skip_existing:

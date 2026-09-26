@@ -50,10 +50,13 @@ SURFACES = ("topscattable", "botscattable", "sidescattable")
 # position cut on |z| > 1800 appears nearby but is commented out.)
 SURFACE_DIRZ_CUT = 0.8
 
-# Bin counts are a fixed convention (measured off the shipped tables); only the
-# PMT-position axis differs, 8 bins for an mPMT end cap against 16 elsewhere.
-NBINS_SIDE = (35, 16, 16, 16, 16, 16)
+# Bin counts, from scatTableLooper.C: nzbinss=35, nrbinss=16, nangbins=16,
+# nctbins=16, and for the PMT-position axis (dimension 2) nzbinst=35 on the
+# barrel against nrbinst=16 on an end cap. An mPMT geometry halves that axis to
+# 16 and 8 respectively -- the only difference between the two sets.
+NBINS_SIDE = (35, 16, 35, 16, 16, 16)
 NBINS_CAP = (35, 16, 16, 16, 16, 16)
+NBINS_SIDE_MPMT = (35, 16, 16, 16, 16, 16)
 NBINS_CAP_MPMT = (35, 16, 8, 16, 16, 16)
 
 

@@ -1,6 +1,6 @@
 {
   "name": "fitqun_sample_sk_wand",
-  "_comment": "3 MeV electron bomb, per scattab_nuPRISM_mPMT.mac. One electron per event, isotropic, msc inactivated, vertex uniform in the cylinder. Feeds BOTH the angular response and the indirect-light tables, as the reference reuses one production for both.",
+  "_comment": "3 MeV electron bomb, per scattab_nuPRISM_mPMT.mac. One electron per event, isotropic, msc inactivated, vertex uniform in the cylinder out to R - r_pmt (scatTableLooper's table domain). Feeds BOTH the angular response and the indirect-light tables, as the reference reuses one production for both.",
   "_reference": "WCSim_v1.12.15/fiTQunTuning/Utilities/scattable/scattab_nuPRISM_mPMT.mac (1e6 events/file x 90 files ~ 9e7 events)",
   "_sizing": "250 jobs x 400k events = 1e8 electrons, matching the reference. ~3.5 h/job (53 min PhotonSim + 2.6 h propagation) at the measured 8 ms/event and 23.7k photons/s, and ~7 GB of scratch for the ROOT, deleted once the shard exists.",
   "geometry": "/afs/cern.ch/work/c/cjesus/DIFFSIM/LUCiD/config/sk_geometry.npz",
@@ -9,8 +9,7 @@
   "n_jobs": 250,
   "events_per_job": 400000,
   "photons_per_group": 20000,
-  "position_fraction": 0.9,
-  "shell_radii_cm": [100.0, 200.0, 400.0, 800.0, 1200.0],
+  "shell_radii_cm": [100.0, 200.0, 300.0, 400.0, 500.0, 600.0, 700.0, 800.0, 900.0, 1000.0, 1100.0, 1200.0, 1300.0, 1400.0, 1500.0],
   "seed_base": 80000000,
   "request_disk_mb": 16384
 }

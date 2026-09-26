@@ -63,22 +63,21 @@ from . import binning, rootio
 # suffices -- no adaptive range, and the negative-s region (light emitted
 # behind the vertex) is kept rather than cropped away.
 
-# gsthr is reported as a *bin centre* of that 2.5 cm axis: every value in the
-# shipped CProf files satisfies (gsthr mod 2.5) == 1.25.
+# gsthr is the s below which 90% of the light is emitted, reported as a *bin
+# centre* of that 2.5 cm axis. Utilities/cprofile/genhist.cc accumulates the
+# normalised 1-D profile bin by bin and takes
 #
-# Which bin was not documented anywhere we have, so it was measured. The
-# profile is detector independent, so the shipped WCTE tables are valid ground
-# truth for it: inverting their gsthr(p) against our own emission CDF puts it
-# at the ~90% point, consistently across momentum --
+#     if (Itmp>0.9) { thrs[nmom]=hprj->GetXaxis()->GetBinCenter(i); break; }
+#
+# naming the graph "Length of track". Inverting the shipped gsthr(p) against our
+# own emission CDF lands in the same place --
 #
 #     mu-   89.7% +- 0.7      pi+   90.7% +- 1.5      e-   86.2% +- 3.3
 #
-# so gsthr is the s below which ~90% of the light is emitted, not the end of
-# the distribution. Taking the last populated bin instead (an earlier guess
-# here) runs 22% long for muons and 2.4-3x long for electrons, because it
-# chases the delta-ray and bremsstrahlung tail. Electrons scatter more about
-# the 90% point than the heavier particles do, which is consistent with their
-# shower tail being the part most sensitive to the simulation details.
+# which is worth keeping as a check that our profile reproduces the reference's.
+# Taking the last populated bin instead (an earlier guess here) runs 22% long
+# for muons and 2.4-3x long for electrons, because it chases the delta-ray and
+# bremsstrahlung tail.
 _SMAX_QUANTILE = 0.90
 
 
@@ -196,8 +195,10 @@ def _iterate_photons(raw, axis: np.ndarray, step_size: str):
 def _smax_from_hist(marginal: np.ndarray, edges: np.ndarray, quantile: float) -> float:
     """gsthr: the bin centre at which the cumulative emission reaches ``quantile``.
 
-    Reported as a bin centre because that is what the shipped tables contain
-    (every value satisfies ``gsthr mod 2.5 == 1.25``).
+    fiTQun spends it on the span of its three-point parabolic fit of the
+    geometric factor J (sampled at s = 0, smax/2, smax) and on ``smid = smax/2``,
+    the emission centroid the time residual is measured from -- so it sets an
+    axis of the time PDF, not just an integration range.
     """
     total = marginal.sum()
     if total <= 0:
@@ -286,7 +287,7 @@ def write_cprofile(path, pdg: int, cells: list[ProfileCell], **kwargs) -> None:
     # evaluation points with one extra edge to close the last bin.
     r0_ax = _edges_from_low(r0)
     c0_ax = _edges_from_low(c0)
-    mom_ax = _edges_from_low(momenta)
+    mom_ax = _edges_from_low(momenta, close=1.0)
 
     objects = {}
     for n in range(3):
@@ -308,10 +309,18 @@ def write_cprofile(path, pdg: int, cells: list[ProfileCell], **kwargs) -> None:
     rootio.write(path, objects)
 
 
-def _edges_from_low(low: np.ndarray) -> np.ndarray:
-    """Turn evaluation points (read by ROOT as bin low edges) into bin edges."""
+def _edges_from_low(low: np.ndarray, close: Optional[float] = None) -> np.ndarray:
+    """Turn evaluation points (read by ROOT as bin low edges) into bin edges.
+
+    One extra edge closes the last bin. On the uniform R0 and cos(theta0) axes
+    the reference continues the step, which is what integcprofile.cc's edge
+    formulas give (5012.5 and 1.01); on the non-uniform momentum axis it adds
+    exactly 1 (``mombEdgs[nmom]=mombEdgs[nmom-1]+1.``). fiTQun reads only low
+    edges, so ``close`` is about matching the reference's files byte for byte.
+    """
     low = np.asarray(low, dtype=np.float64)
+    if close is not None:
+        return np.concatenate([low, [low[-1] + close]])
     if len(low) == 1:
         return np.array([low[0], low[0] + 1.0])
-    last = low[-1] + (low[-1] - low[-2])
-    return np.concatenate([low, [last]])
+    return np.concatenate([low, [low[-1] + (low[-1] - low[-2])]])
