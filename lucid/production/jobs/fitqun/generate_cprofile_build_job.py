@@ -69,18 +69,16 @@ def main(argv=None) -> int:
     if not partition:
         raise SystemExit("no partition/flavour: pass -P or set it in user_paths.sh")
 
+    # The merge holds a full I_n table in memory; the adapter's default is the
+    # per-event production figure and is not enough here.
     body = adapter.render_command_job(
         command=build_command(cell_root), cell_dir=cell_root,
         job_name="fitqun_cprofile_build", log_stem="cprofile_build",
-        partition=partition, request_disk_mb=8192)
-    # The merge holds a full I_n table in memory; the adapter's default is the
-    # per-event production figure and is not enough here.
-    body = body.replace("request_memory            = 12000",
-                        f"request_memory            = {args.request_memory_mb}")
-    body = body.replace("request_memory          = 12000",
-                        f"request_memory          = {args.request_memory_mb}")
+        partition=partition, request_disk_mb=8192,
+        request_memory_mb=args.request_memory_mb)
 
     sub = cell_root / f"cprofile_build.{adapter.submit_extension}"
+    sub.parent.mkdir(parents=True, exist_ok=True)
     sub.write_text(body)
     sub.chmod(0o755)
     print(f"[PREPARED] {sub}")

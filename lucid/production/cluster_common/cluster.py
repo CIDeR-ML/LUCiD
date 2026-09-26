@@ -95,13 +95,17 @@ class ClusterAdapter(ABC):
     @abstractmethod
     def render_command_job(self, *, command: str, cell_dir: Path, job_name: str,
                            log_stem: str, partition: str, use_gpu: bool = False,
-                           request_disk_mb: int = 4096) -> str:
+                           request_disk_mb: int = 4096,
+                           request_memory_mb: int = 0) -> str:
         """Submit description for an arbitrary command run inside the container.
 
         The stage-specific renderers above each bake in one entry point. Some
         work is a short pipeline instead (the fiTQun Cherenkov-profile scan runs
         PhotonSim on a generated macro, reduces the output, then deletes it),
         which is a shell command, not a `lucid-run-job` invocation.
+
+        ``request_memory_mb`` overrides the cluster default for the merges that
+        hold a whole dense table in memory; 0 keeps the default.
         """
         raise NotImplementedError
 
@@ -276,13 +280,15 @@ class SlurmAdapter(ClusterAdapter):
         return header + body
 
     def render_command_job(self, *, command, cell_dir, job_name, log_stem,
-                           partition, use_gpu=False, request_disk_mb=4096):
+                           partition, use_gpu=False, request_disk_mb=4096,
+                           request_memory_mb=0):
         header = self._common_header(
             partition=partition, job_name=job_name, cell_dir=cell_dir,
             log_stem=log_stem,
             cpus=self.env.get("DEFAULT_CPUS", "1"),
             gpus="1" if use_gpu else self.env.get("DEFAULT_GPUS", "0"),
-            memory=self.env.get("DEFAULT_MEMORY", "16000"),
+            memory=(str(request_memory_mb) if request_memory_mb
+                    else self.env.get("DEFAULT_MEMORY", "16000")),
             time=self.env.get("DEFAULT_TIME", "08:00:00"),
         )
         return header + (
