@@ -57,7 +57,13 @@ def build_per_pe_forward(
         detector.support_rods is not None,
         detector.chimney is not None,
         detector.acrylic_bowls is not None,
+        detector.diffuser_hardware is not None,
     ))
+    has_diffuser_hardware = detector.diffuser_hardware is not None
+    diffuser_axis_default = jnp.asarray(
+        config.data["source"].get("axis", [0.0, 0.0, 1.0]),
+        dtype=jnp.float32,
+    )
     photon_step = make_photon_step(
         "update_factors",
         has_interface=True,
@@ -73,6 +79,8 @@ def build_per_pe_forward(
         required_surface_codes.extend((1, 2))
     if detector.acrylic_bowls is not None:
         required_surface_codes.append(3)
+    if has_diffuser_hardware:
+        required_surface_codes.extend((4, 5, 6))
     surface_values = engineering_surface_parameters(
         fixed_physics, required_surface_codes
     )
@@ -120,7 +128,25 @@ def build_per_pe_forward(
 
         def step(carry, index):
             positions, directions, times, survival, medium_id, key, log_p, hist = carry
-            prop = propagate(positions, directions)
+            if has_diffuser_hardware:
+                diffuser_center = (
+                    source.center
+                    if hasattr(source, "center")
+                    else source.position
+                )
+                diffuser_axis = (
+                    source.axis
+                    if hasattr(source, "axis")
+                    else diffuser_axis_default
+                )
+                prop = propagate(
+                    positions,
+                    directions,
+                    diffuser_center,
+                    diffuser_axis,
+                )
+            else:
+                prop = propagate(positions, directions)
             depositions = prop["sensor_weights"]
             sensor_indices = prop["sensor_indices"]
             hit_positions = prop["positions"]

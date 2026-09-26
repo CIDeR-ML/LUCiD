@@ -22,7 +22,7 @@
       0.35391735883294184,
       0.14718832902513695
     ],
-    "default_intensity": 3000000.0
+    "default_intensity": 1000000.0
   },
   "transport": {
     "max_scattering_steps": 64,

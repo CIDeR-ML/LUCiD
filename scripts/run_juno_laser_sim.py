@@ -57,6 +57,7 @@ from lucid.geometry.juno_structures import (
 )
 from lucid.simulation.photon_step_factory import make_photon_step
 from lucid.simulation.engineering_surfaces import (
+    SURFACE_NAMES,
     engineering_surface_parameters,
 )
 from lucid.simulation.reflection import REFLECTION_MODELS, get_reflection_model
@@ -116,6 +117,9 @@ def _simulation_metadata(
     acrylic_bowl_geometry_request,
     acrylic_bowl_geometry,
     acrylic_bowl_count,
+    diffuser_hardware_request,
+    diffuser_hardware_geometry,
+    diffuser_hardware,
     surface_reflectances,
     surface_transmittances,
     surface_fspecs,
@@ -169,6 +173,8 @@ def _simulation_metadata(
         "acrylic_bowl_geometry_request": acrylic_bowl_geometry_request,
         "acrylic_bowl_geometry": acrylic_bowl_geometry,
         "acrylic_bowl_count": str(acrylic_bowl_count),
+        "diffuser_hardware_request": diffuser_hardware_request,
+        "diffuser_hardware_geometry": diffuser_hardware_geometry,
         "acrylic_bowl_arc_radius_m": str(BOWL_ARC_RADIUS_M),
         "acrylic_bowl_arc_radial_centre_m": str(
             BOWL_ARC_RADIAL_CENTRE_M
@@ -200,6 +206,24 @@ def _simulation_metadata(
         "pe_time_units": "ns",
         "offset_units": "ns",
     }
+    if diffuser_hardware is not None:
+        values.update({
+            "diffuser_ball_radius_m": str(
+                diffuser_hardware.ball_radius_m
+            ),
+            "diffuser_peek_radius_m": str(
+                diffuser_hardware.peek_radius_m
+            ),
+            "diffuser_peek_length_m": str(
+                2.0 * diffuser_hardware.peek_half_length_m
+            ),
+            "diffuser_fiber_radius_m": str(
+                diffuser_hardware.fiber_radius_m
+            ),
+            "diffuser_fiber_length_m": str(
+                2.0 * diffuser_hardware.fiber_half_length_m
+            ),
+        })
     return {key.encode(): value.encode() for key, value in values.items()}
 
 
@@ -278,7 +302,19 @@ def _make_forward(
         detector.support_rods is not None,
         detector.chimney is not None,
         detector.acrylic_bowls is not None,
+        detector.diffuser_hardware is not None,
     ))
+    has_diffuser_hardware = detector.diffuser_hardware is not None
+    diffuser_center = (
+        source_model.center
+        if hasattr(source_model, "center")
+        else source_model.position
+    )
+    diffuser_axis = (
+        source_model.axis
+        if hasattr(source_model, "axis")
+        else jnp.asarray([0.0, 0.0, 1.0], dtype=diffuser_center.dtype)
+    )
     media = (det_geom.medium, det_geom.medium_acrylic,
              det_geom.medium_outer) if has_acrylic else (
                  det_geom.medium, det_geom.medium_outer)
@@ -351,7 +387,15 @@ def _make_forward(
                 ) = carry
             else:
                 positions, directions, times, survival, medium_id, key = carry
-            hit = propagate(positions, directions)
+            if has_diffuser_hardware:
+                hit = propagate(
+                    positions,
+                    directions,
+                    diffuser_center,
+                    diffuser_axis,
+                )
+            else:
+                hit = propagate(positions, directions)
             # Keep scan carry precision stable when measured PMT coordinates
             # or geometry constants arrive as float64 under X64 mode.
             hit_positions = jnp.asarray(hit["positions"], dtype=positions.dtype)
@@ -481,7 +525,9 @@ def _make_forward(
                 alive = (survival > 0).astype(surface_events.dtype)
                 codes = hit["engineering_surface_code"]
                 one_hot = jax.nn.one_hot(
-                    jnp.maximum(codes, 0), 4, dtype=surface_events.dtype
+                    jnp.maximum(codes, 0),
+                    len(SURFACE_NAMES),
+                    dtype=surface_events.dtype,
                 )
                 one_hot *= (codes >= 0)[:, None]
                 surface_counts = jnp.sum(
@@ -561,6 +607,9 @@ def simulate(args):
     acrylic_bowl_geometry_request = getattr(
         args, "acrylic_bowl_geometry", "config"
     )
+    diffuser_hardware_request = getattr(
+        args, "diffuser_hardware", "config"
+    )
     outdir = Path(args.outdir)
     outdir.mkdir(parents=True, exist_ok=True)
     logging.basicConfig(
@@ -587,6 +636,9 @@ def simulate(args):
         acrylic_bowl_geometry_enabled=_component_geometry_override(
             acrylic_bowl_geometry_request
         ),
+        diffuser_hardware_enabled=_component_geometry_override(
+            diffuser_hardware_request
+        ),
     )
     n_sensors = geom.num_sensors
     pmt_geometry = geom.detector.pmt_geometry or "legacy_sphere"
@@ -605,10 +657,14 @@ def simulate(args):
         0 if geom.detector.acrylic_bowls is None
         else len(geom.detector.acrylic_bowls.copy_numbers)
     )
+    diffuser_hardware_geometry = (
+        geom.detector.diffuser_hardware_geometry or "disabled"
+    )
     has_engineering = any((
         support_count,
         geom.detector.chimney is not None,
         acrylic_bowl_count,
+        geom.detector.diffuser_hardware is not None,
     ))
     LOG.info("detector geometry ready: %d PMTs (%.2fs)", n_sensors,
              time.perf_counter() - t0)
@@ -633,6 +689,11 @@ def simulate(args):
         acrylic_bowl_geometry_request,
         acrylic_bowl_geometry,
         acrylic_bowl_count,
+    )
+    LOG.info(
+        "diffuser hardware: request=%s, effective=%s",
+        diffuser_hardware_request,
+        diffuser_hardware_geometry,
     )
 
     t0 = time.perf_counter()
@@ -659,6 +720,8 @@ def simulate(args):
         required_surface_codes.extend((1, 2))
     if acrylic_bowl_count:
         required_surface_codes.append(3)
+    if geom.detector.diffuser_hardware is not None:
+        required_surface_codes.extend((4, 5, 6))
     surface_parameters = engineering_surface_parameters(
         physics_config, required_surface_codes
     )
@@ -762,6 +825,9 @@ def simulate(args):
             acrylic_bowl_geometry_request,
             acrylic_bowl_geometry,
             acrylic_bowl_count,
+            diffuser_hardware_request,
+            diffuser_hardware_geometry,
+            geom.detector.diffuser_hardware,
             surface_reflectances,
             surface_transmittances,
             surface_fspecs,
@@ -919,7 +985,17 @@ def simulate(args):
                     "support": surface_counts[0],
                     "chimney": surface_counts[1] + surface_counts[2],
                     "acrylic_bowl": surface_counts[3],
+                    "diffuser_hardware": (
+                        surface_counts[4]
+                        + surface_counts[5]
+                        + surface_counts[6]
+                    ),
                 }
+                component_counts.update({
+                    "diffuser_ptfe": surface_counts[4],
+                    "diffuser_peek": surface_counts[5],
+                    "diffuser_fiber": surface_counts[6],
+                })
                 for component, counts in component_counts.items():
                     stats.update({
                         f"{component}_{name}": int(value)
@@ -971,6 +1047,35 @@ def simulate(args):
                 ),
                 "acrylic_bowl_geometry": acrylic_bowl_geometry,
                 "acrylic_bowl_count": acrylic_bowl_count,
+                "diffuser_hardware_request": diffuser_hardware_request,
+                "diffuser_hardware_geometry": (
+                    diffuser_hardware_geometry
+                ),
+                "diffuser_hardware_dimensions_m": (
+                    None
+                    if geom.detector.diffuser_hardware is None
+                    else {
+                        "ball_radius": (
+                            geom.detector.diffuser_hardware.ball_radius_m
+                        ),
+                        "peek_radius": (
+                            geom.detector.diffuser_hardware.peek_radius_m
+                        ),
+                        "peek_length": (
+                            2.0
+                            * geom.detector.diffuser_hardware
+                            .peek_half_length_m
+                        ),
+                        "fiber_radius": (
+                            geom.detector.diffuser_hardware.fiber_radius_m
+                        ),
+                        "fiber_length": (
+                            2.0
+                            * geom.detector.diffuser_hardware
+                            .fiber_half_length_m
+                        ),
+                    }
+                ),
                 "acrylic_bowl_arc_radius_m": BOWL_ARC_RADIUS_M,
                 "acrylic_bowl_arc_radial_centre_m": (
                     BOWL_ARC_RADIAL_CENTRE_M
@@ -1048,6 +1153,15 @@ def main():
         help=(
             "亚克力碗消融：config=遵循几何配置，on=有效圆弧碗，"
             "off=关闭亚克力碗"
+        ),
+    )
+    parser.add_argument(
+        "--diffuser-hardware",
+        choices=("config", "on", "off"),
+        default="config",
+        help=(
+            "漫射球硬件消融：config=遵循几何配置，on=PTFE球/PEEK管/"
+            "PE光纤，off=只保留发射模型"
         ),
     )
     parser.add_argument("--source", default="0,0,0", metavar="X,Y,Z")
