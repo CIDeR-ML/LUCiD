@@ -39,6 +39,25 @@ def _cmd_cprofile_build(args) -> int:
     if not cells:
         raise SystemExit("no cells given")
 
+    # write_cprofile takes the momentum axis from the cells it is handed, so a
+    # cell left over from a superseded grid does not raise -- it quietly moves
+    # the axis off the reference's. Drop those unless asked not to, and say how
+    # much of the grid is actually covered.
+    grid = [round(float(m), 6) for m in binning.cprofile_momenta(args.pdg)]
+    if not args.keep_off_grid:
+        off = sorted(m for m in cells if round(float(m), 6) not in set(grid))
+        if off:
+            print(f"dropping {len(off)} cell(s) off the reference grid "
+                  f"({min(off):g}-{max(off):g} MeV/c); "
+                  f"pass --keep-off-grid to build on them anyway", flush=True)
+            for m in off:
+                del cells[m]
+        if not cells:
+            raise SystemExit("no cells left on the reference grid")
+    missing = len(grid) - sum(1 for m in grid if m in {round(float(k), 6) for k in cells})
+    if missing:
+        print(f"note: {missing} of {len(grid)} grid points have no cell", flush=True)
+
     out = Path(args.output or f"CProf_{args.pdg}_WCSim.root")
     print(f"building {out} from {len(cells)} momentum points "
           f"({min(cells):g}-{max(cells):g} MeV/c)", flush=True)
@@ -151,6 +170,9 @@ def build_parser() -> argparse.ArgumentParser:
     bld = cp_actions.add_parser("build", help="merge cells into CProf_<pdg>_WCSim.root")
     bld.add_argument("cells", nargs="+", type=Path)
     bld.add_argument("--pdg", type=int, required=True, choices=sorted(binning.PDG_NAMES))
+    bld.add_argument("--keep-off-grid", action="store_true",
+                     help="build on cells whose momentum is not on the "
+                          "reference grid for this PDG (default: drop them)")
     bld.add_argument("-o", "--output", type=Path, default=None)
     bld.set_defaults(func=_cmd_cprofile_build)
 

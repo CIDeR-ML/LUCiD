@@ -269,7 +269,8 @@ class HTCondorAdapter(ClusterAdapter):
         )
 
     def render_command_job(self, *, command, cell_dir, job_name, log_stem,
-                           partition, use_gpu=False, request_disk_mb=4096):
+                           partition, use_gpu=False, request_disk_mb=4096,
+                           request_memory_mb=0):
         gpus = "1" if use_gpu else self.env.get("DEFAULT_GPUS", "0")
         log_dir = self._log_dir(cell_dir)
         # The env prefix carries the dev-checkout overrides HTCondor's
@@ -292,7 +293,8 @@ class HTCondorAdapter(ClusterAdapter):
             f"MY.SingularityBind      = \"{self._binds_for_classad()}\"\n"
             f"+JobBatchName           = \"{job_name}\"\n"
             f"request_cpus            = {self.env.get('DEFAULT_CPUS', '1')}\n"
-            f"request_memory          = {self.env.get('DEFAULT_MEMORY', '4000')}\n"
+            f"request_memory          = "
+            f"{request_memory_mb or self.env.get('DEFAULT_MEMORY', '4000')}\n"
             f"request_disk            = {request_disk_mb}\n"
             f"{self._gpu_lines(gpus)}"
             f"+JobFlavour             = \"{partition if partition else self._flavour()}\"\n"

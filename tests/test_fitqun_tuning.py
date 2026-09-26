@@ -669,3 +669,36 @@ def test_scattable_driver_splits_direct_from_indirect():
     with pytest.raises(ValueError, match="indirect"):
         sd.fill(tables, {**chunk, "indirect": None},
                 pmt_positions_m=pmt_positions_m, pmt_dir_z=pmt_dir_z)
+
+
+def test_cprofile_build_drops_cells_off_the_reference_grid(tmp_path):
+    """A cell from a superseded grid must not reach the momentum axis.
+
+    ``write_cprofile`` takes the axis from the cells it is handed, so a stale
+    cell does not raise -- it silently moves the table off the reference's
+    grid. pi+ is the live case: its grid starts at 156 MeV/c, but cells at
+    120-155 exist from when every PDG shared the muon list.
+    """
+    from lucid.production.fitqun.__main__ import main
+
+    s_e, c_e = binning.s_edges(), binning.costh_edges()
+    ds, dc = s_e[1] - s_e[0], c_e[1] - c_e[0]
+    paths = []
+    for mom in (120.0, 156.0):                     # 120 is not on the pi+ grid
+        density = np.zeros((len(s_e) - 1, len(c_e) - 1))
+        density[200, 250] = 1.0 / (ds * dc)
+        cell = cprofile.ProfileCell(
+            pdg=211, momentum_mev=mom, s_edges=s_e, costh_edges=c_e,
+            density=density, s_max_cm=1.25, n_photons=10.0, n_events=1)
+        paths.append(str(cell.save(tmp_path / f"{mom:g}" / "cell.npz")))
+
+    out = tmp_path / "CProf_211.root"
+    assert main(["cprofile", "build", *paths, "--pdg", "211", "-o", str(out)]) == 0
+    with uproot.open(out) as f:
+        assert list(f["hI3d_0"].axis(2).edges()) == [156.0, 157.0]
+
+    keep = tmp_path / "CProf_211_keep.root"
+    assert main(["cprofile", "build", *paths, "--pdg", "211",
+                 "--keep-off-grid", "-o", str(keep)]) == 0
+    with uproot.open(keep) as f:
+        assert list(f["hI3d_0"].axis(2).edges()) == [120.0, 156.0, 157.0]
