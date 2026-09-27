@@ -84,7 +84,10 @@ def propagate_and_reduce(
 
     atten = {"all": np.zeros(attenlength.N_R_BINS),
              "direct": np.zeros(attenlength.N_R_BINS)}
-    scat3d_i, scat3d_d = scattable3d.empty()
+    # A dict, not two names: `_flush` is nested, and an augmented assignment
+    # to an enclosing name would rebind it as a local (UnboundLocalError).
+    _i, _d = scattable3d.empty()
+    scat3d = {"indirect": _i, "direct": _d}
     rng = np.random.default_rng(seed)
     key = jax.random.PRNGKey(seed)
     n_groups = 0
@@ -120,8 +123,8 @@ def propagate_and_reduce(
                     atten["direct"] += hd
                 if scat3d_out is not None:
                     h3, h2 = scattable3d.histograms(R, costh, dwall, ind)
-                    scat3d_i += h3
-                    scat3d_d += h2
+                    scat3d["indirect"] += h3
+                    scat3d["direct"] += h2
         return key
 
     carry_o = np.zeros((0, 3), dtype=np.float32)
@@ -156,9 +159,10 @@ def propagate_and_reduce(
     if scat3d_out is not None:
         er, ew, ec = scattable3d.edges()
         np.savez_compressed(scat3d_out, r_edges=er, wall_edges=ew, costh_edges=ec,
-                            hsct3d=scat3d_i, hdir2d=scat3d_d)
+                            hsct3d=scat3d["indirect"], hdir2d=scat3d["direct"])
         print(f"{scat3d_out}: 3D scattering table, "
-              f"{scat3d_i.sum():,.0f} indirect / {scat3d_d.sum():,.0f} direct")
+              f"{scat3d['indirect'].sum():,.0f} indirect / "
+              f"{scat3d['direct'].sum():,.0f} direct")
 
     shard = builder.result()
     out = shard.save(shard_out)
