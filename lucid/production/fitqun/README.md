@@ -153,3 +153,21 @@ carries the same list for changes that live in the reference tree.
 Source and logs on AFS, container image and all ROOT output on EOS. Standard
 LXPLUS schedds reject `/eos` paths in a submit file's `output`/`error`/`log`, so
 logs must land on AFS while `--output-dir` stays on EOS.
+
+## `gNphot` is band-specific — do not "correct" it
+
+`gNphot` counts Cherenkov photons over the band the simulation actually emits
+into, which for PhotonSim is 275-674 nm (where `RINDEX` is defined; Geant4
+radiates nowhere else). The reference tune's is ~13.5% lower purely because
+`WCSimFQTunerCherenkovProfile.cc:133` cuts photons outside 300-700 nm before
+recording them -- Frank-Tamm over the two bands predicts +13.3%.
+
+This is not a defect and must not be rescaled. `gNphot` and `QEEff` enter the
+predicted charge only as a product, and `QEEff` is fitted on our own data, so it
+has already absorbed the mean QE over our band. Changing one without the other
+breaks the tune; changing both is a no-op.
+
+Delta rays are included in both chains -- neither profile filler looks at the
+photon's parent. WCSim cuts electrons at 1 mm (~350 keV), just above water's
+261 keV Cherenkov threshold, while PhotonSim cuts at 0.01 mm, so WCSim misses a
+sliver of barely-radiating deltas worth about 0.10%.
