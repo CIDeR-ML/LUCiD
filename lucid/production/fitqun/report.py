@@ -78,9 +78,15 @@ def main(argv=None) -> None:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("manifest", type=Path)
     p.add_argument("--json", type=Path, help="also write the plot-page data here")
+    p.add_argument("--plots", type=Path, help="render each input's figure here")
     a = p.parse_args(argv)
     m = M.load(a.manifest)
     print(text(m))
+    if a.plots:
+        from . import plots as P
+        made = P.render(m, a.plots)
+        n = sum(len(v) for v in made.values())
+        print(f"\n{n} figures -> {a.plots}")
     if a.json:
         a.json.write_text(json.dumps(data(m), indent=2) + "\n")
         print(f"\nplot data -> {a.json}")
