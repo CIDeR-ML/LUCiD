@@ -49,6 +49,19 @@
 
 namespace {
 
+/// WCSim's trigger frame, WCSimWCTrigger.hh:107-115 and .cc:330-454. A WCSim
+/// digit time is `t_hit + offset - triggertime`, with `triggertime` the
+/// threshold-th digit of the gate snapped down to `kStep`. That self-centring
+/// is why fiTQun's default 900-1400 ns window sits where it does and why
+/// makehistWCSim can hardcode `aSubToffs = 950`.
+///
+/// LUCiD already runs the same NDigits trigger (200 ns / 25 hits) and stores
+/// its gates in labl/event_NNN/per_window; what it does not do is reference
+/// times to the trigger or split gates into subevents. Both are done here.
+constexpr int    kNDigitsThreshold = 25;
+constexpr int    kStep             = 5;     ///< ns, trigger-time granularity
+
+
 /// One truth primary, as tools/../truth.py writes it (cm, MeV/c, ns).
 struct Track {
   int event = 0, pdg = 0;
@@ -208,6 +221,9 @@ int main(int argc, char** argv) {
     tgeo.Fill();
     tgeo.Write();
 
+    const char* gates_path = Arg(argc, argv, "--gates");
+    hid_t gates_h5 = gates_path
+        ? H5Fopen(gates_path, H5F_ACC_RDONLY, H5P_DEFAULT) : (hid_t)-1;
     hid_t h5 = H5Fopen(sensor_path, H5F_ACC_RDONLY, H5P_DEFAULT);
     if (h5 < 0) throw std::runtime_error(std::string("cannot open ") + sensor_path);
     std::vector<std::string> groups = EventGroups(h5);
@@ -221,26 +237,57 @@ int main(int argc, char** argv) {
 
     long total_digits = 0, n_tracks = 0;
     long n_hits_total = 0, n_hits_in_window = 0;
+    long n_untriggered = 0, n_gates_thin = 0, n_subevents = 0;
+    std::vector<size_t> first_order;
     for (size_t iev = 0; iev < groups.size(); ++iev) {
       auto pe = ReadVec<float>(h5, groups[iev] + "/PE", H5T_NATIVE_FLOAT);
       auto t = ReadVec<double>(h5, groups[iev] + "/T", H5T_NATIVE_DOUBLE);
       auto idx = ReadVec<unsigned short>(h5, groups[iev] + "/sensor_idx",
                                         H5T_NATIVE_USHORT);
 
+      // LUCiD's own trigger gates. digit_offsets is CSR-style over this event's
+      // digit arrays, so gate g owns [digit_offsets[g], digit_offsets[g+1]).
+      std::vector<int> gate_off;
+      if (gates_h5 >= 0)
+        gate_off = ReadVec<int>(gates_h5, groups[iev] + "/per_window/digit_offsets",
+                                H5T_NATIVE_INT);
+      if (gate_off.size() < 2) gate_off = {0, (int)t.size()};   // one gate, all digits
+      const size_t n_gates = gate_off.size() - 1;
+
       event.ReInitialize();
-      WCSimRootTrigger* trig = event.GetTrigger(0);
-      trig->SetHeader((int)iev, 0, 0, 1);
-      trig->SetMode(0);
-      // One digit per (event, sensor): LUCiD has already integrated the
-      // waveform, which is what a WCSim digit is.
-      std::vector<size_t> order(t.size());
-      for (size_t i = 0; i < order.size(); ++i) order[i] = i;
-      std::sort(order.begin(), order.end(),
-                [&t](size_t a, size_t b) { return t[a] < t[b]; });
       std::vector<int> no_photons;
-      for (size_t j : order)
-        trig->AddCherenkovDigiHit(pe[j], t[j] + t_offset, (int)idx[j] + 1, 0, 0,
-                                  no_photons);
+      int isub = 0;
+      for (size_t g = 0; g < n_gates; ++g) {
+        // Digits of this gate, time-ordered.
+        std::vector<size_t> order;
+        for (int i = gate_off[g]; i < gate_off[g + 1] && i < (int)t.size(); ++i)
+          order.push_back((size_t)i);
+        std::sort(order.begin(), order.end(),
+                  [&t](size_t a, size_t b) { return t[a] < t[b]; });
+        if ((int)order.size() <= kNDigitsThreshold) { ++n_gates_thin; continue; }
+
+        // Trigger time the way WCSim defines it, within this gate.
+        double trig_time = t[order[kNDigitsThreshold]];
+        trig_time -= std::fmod(trig_time, (double)kStep);
+
+        if (isub > 0) event.AddSubEvent();
+        WCSimRootTrigger* tg = event.GetTrigger(isub);
+        tg->SetHeader((int)iev, 0, 0, isub + 1);
+        tg->SetMode(0);
+        for (size_t j : order) {
+          const double th = t[j] + t_offset - trig_time;
+          ++n_hits_total;
+          if (th >= 900. && th <= 1400.) ++n_hits_in_window;
+          tg->AddCherenkovDigiHit(pe[j], th, (int)idx[j] + 1, 0, 0, no_photons);
+        }
+        tg->SetNumDigitizedTubes((int)order.size());
+        total_digits += (long)order.size();
+        if (isub == 0) first_order.swap(order);
+        ++isub;
+      }
+      if (isub == 0) { ++n_untriggered; continue; }
+      WCSimRootTrigger* trig = event.GetTrigger(0);
+      std::vector<size_t>& order = first_order;
       // Truth primary. makehistWCSim reads Ipnu/P/Dir/Start off this, so a file
       // written without it can carry a reconstruction but not a time-PDF tune.
       //
@@ -289,8 +336,7 @@ int main(int argc, char** argv) {
                        std::vector<double>(), std::vector<int>());
         ++n_tracks;
       }
-      trig->SetNumDigitizedTubes((int)order.size());
-      total_digits += (long)order.size();
+      n_subevents += isub;
 
       // Contract check, per event. Every field below is read by a tool that
       // does NOT complain when it is missing -- it takes a default and produces
@@ -312,32 +358,24 @@ int main(int argc, char** argv) {
           if (std::fabs(vtx[k] - prim->GetStart(k)) > 1e-3)
             throw std::runtime_error("trigger vertex disagrees with track 2");
       }
-      // Count hits inside fiTQun's window rather than asserting per event.
-      // Individual events legitimately sit outside it -- the hit-time
-      // distribution is much wider than the 500 ns window -- so the meaningful
-      // check is over the whole file, reported after the loop.
-      for (size_t j : order) {
-        const double th = t[j] + t_offset;
-        ++n_hits_total;
-        if (th >= 900. && th <= 1400.) ++n_hits_in_window;
-      }
-
       tev.Fill();
     }
     H5Fclose(h5);
+    if (gates_h5 >= 0) H5Fclose(gates_h5);
 
     tev.Write();
     out.Close();
     std::cout << out_path << ": " << groups.size() << " events, " << total_digits
               << " digits, " << n_tracks << " truth tracks, " << g.n_pmt
-              << " PMTs, hit times shifted by +" << t_offset << " ns" << std::endl;
+              << " PMTs, " << n_subevents << " subevents (one per LUCiD trigger "
+              << "gate), times referenced to each gate's trigger + " << t_offset
+              << " ns" << std::endl;
     const double frac = n_hits_total ? (double)n_hits_in_window / n_hits_total : 0.;
     std::cout << "  " << n_hits_in_window << "/" << n_hits_total << " hits ("
-              << (int)(100 * frac + 0.5) << "%) inside fiTQun's 900-1400 ns "
-              << "window; the rest are discarded by the fitter" << std::endl;
-    if (frac < 0.30)
-      throw std::runtime_error("under 30% of hits land in fiTQun's time window "
-                               "-- check --time-offset-ns");
+              << (int)(100 * frac + 0.5) << "%) inside fiTQun's 900-1400 ns window";
+    if (n_untriggered) std::cout << "; " << n_untriggered << " events had no gate";
+    if (n_gates_thin)  std::cout << "; " << n_gates_thin << " gates under threshold";
+    std::cout << std::endl;
   } catch (const std::exception& e) {
     std::cerr << e.what() << std::endl;
     return 1;
