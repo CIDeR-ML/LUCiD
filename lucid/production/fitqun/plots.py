@@ -38,11 +38,14 @@ def _save(fig, out: Path) -> Path:
 
 
 def plot_time_pdf(path: str, out_dir: Path, label: str) -> list[Path]:
-    """Fitted mean and width against momentum.
+    """The fitted Gaussian in corrected hit time, against predicted charge.
 
-    The momentum grid is in the object names (``hmean_<p>``), so this also shows
-    the range the file was tuned over -- which is how a borrowed tune gives
-    itself away.
+    The file stores, per momentum node, the mean and width of ``t_c`` as a
+    function of ``log10(mu)`` over 125 bins on [-2, 3] -- the same axis
+    ``makehistWCSim.cc:155`` filled. ``htpdfinfo`` carries the momentum validity
+    range in bins 5 and 6, which is the number that matters: ``GetTimeCoeff``
+    (``fiTQun_shared.cc:1967``) *clamps* momentum into that range, so above pmax
+    every track is evaluated with the pmax coefficients rather than extrapolated.
     """
     import numpy as np
     import uproot
@@ -51,20 +54,46 @@ def plot_time_pdf(path: str, out_dir: Path, label: str) -> list[Path]:
                        if (m := re.match(r"hmean_(\d+)", k))})
         if not moms:
             return []
-        mean, sigm = [], []
-        for p in moms:
-            hm, hs = f[f"hmean_{p}"].values(), f[f"hsigm_{p}"].values()
-            ok_m, ok_s = hm[hm != 0], hs[hs != 0]
-            mean.append(np.median(ok_m) if ok_m.size else np.nan)
-            sigm.append(np.median(ok_s) if ok_s.size else np.nan)
-    fig, ax = _fig("momentum (MeV/c)", "ns", f"{label}: fitted time PDF")
-    ax.plot(moms, mean, "o-", ms=3, label="median fitted mean")
-    ax.plot(moms, sigm, "s-", ms=3, label="median fitted width")
-    ax.set_xscale("log")
-    ax.legend(fontsize=8)
-    ax.annotate(f"{len(moms)} momenta, {min(moms)}-{max(moms)} MeV/c",
-                (.02, .04), xycoords="axes fraction", fontsize=8)
-    return [_save(fig, out_dir / f"{label}_time_pdf.png")]
+        info = f["htpdfinfo"].values() if "htpdfinfo" in [k.split(";")[0]
+                                                          for k in f.keys()] else None
+        pmin, pmax = (info[4], info[5]) if info is not None else (min(moms), max(moms))
+        series = []
+        for p_mev in moms:
+            hm, hs = f[f"hmean_{p_mev}"], f[f"hsigm_{p_mev}"]
+            edges = hm.axis().edges()
+            x = .5 * (edges[1:] + edges[:-1])
+            series.append((p_mev, x, hm.values(), hs.values()))
+
+    import matplotlib.pyplot as plt
+    fig, axes = plt.subplots(1, 2, figsize=(10.4, 4.0), dpi=DPI)
+    cmap = plt.get_cmap("viridis")
+    for i, (p_mev, x, mean, sig) in enumerate(series):
+        c = cmap(i / max(len(series) - 1, 1))
+        ok = sig != 0
+        axes[0].plot(x[ok], mean[ok], "-", lw=1.1, color=c)
+        axes[1].plot(x[ok], sig[ok], "-", lw=1.1, color=c,
+                     label=f"{p_mev}" if i in (0, len(series) - 1) else None)
+    for ax, yl, ti in ((axes[0], "fitted mean of $t_c$ (ns)", "time PDF centre"),
+                       (axes[1], "fitted width of $t_c$ (ns)", "time PDF width")):
+        ax.set_xlabel(r"$\log_{10}(\mu)$   (predicted charge, p.e.)")
+        ax.set_ylabel(yl)
+        ax.set_title(f"{label}: {ti}", fontsize=10)
+        ax.grid(alpha=.25, linewidth=.6)
+    # The per-bin fits go wild where a bin has too few hits -- below ~0.1 p.e.
+    # and at the top of the range -- so clip to the region that carries the
+    # likelihood rather than letting the failures set the scale.
+    axes[0].set_ylim(-8, 8)
+    axes[1].set_ylim(0, 8)
+    axes[1].legend(fontsize=8, title="MeV/c", title_fontsize=8)
+    axes[0].annotate(f"{len(series)} momentum nodes\nvalid {pmin:g}-{pmax:g} MeV/c"
+                     f"\n(clamped outside)",
+                     (.03, .05), xycoords="axes fraction", fontsize=8)
+    fig.tight_layout()
+    out = out_dir / f"{label}_time_pdf.png"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out)
+    plt.close(fig)
+    return [out]
 
 
 def plot_charge_pdf(path: str, out_dir: Path, label: str) -> list[Path]:
