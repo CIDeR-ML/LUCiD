@@ -7,9 +7,11 @@
 # Then combhists stacks the per-momentum 2D histograms into a TH3D over
 # momentum, and fittpdf parameterises it.
 #
-# nwtr is LUCiD's phase index, not makehistWCSim's 1.38 default: LUCiD
-# propagates photons at c/1.33, and the argument is the index used for the TOF
-# subtraction. Worth ~1 ns on the residual.
+# nwtr is read from the tune's own fiTQun.WaterRefractiveIndex rather than
+# hardcoded. makehistWCSim's nwtr and the fitter's WaterRefractiveIndex are
+# SEPARATE constants that both happen to default to 1.38, so hardcoding either
+# one lets them drift apart -- and a PDF built at one index while the fitter
+# subtracts TOF at another carries a systematic nothing else will reveal.
 set -euo pipefail
 PDG=${1:?usage: build_timepdf.sh <pdg> <grid-root> <work-dir>}
 GRID=${2:?missing grid root}
@@ -18,7 +20,9 @@ W=${3:?missing work dir}
 L=/afs/cern.ch/work/c/cjesus/DIFFSIM/LUCiD
 F=/afs/cern.ch/work/c/cjesus/DIFFSIM/fitqun
 E=/eos/project-n/neutrino-generators/cjesus/fitqun
-NWTR=1.33
+NWTR=$(grep -oP "fiTQun.WaterRefractiveIndex\\s*=\\s*\\K[0-9.]+" "$F/fitqun_SK_WAND.parameters.dat")
+[ -n "$NWTR" ] || { echo "tune does not set fiTQun.WaterRefractiveIndex"; exit 1; }
+echo "using nwtr=$NWTR (from the tune, matching the fitter)"
 
 export PYTHONPATH=$L FITQUN_ROOT=$F/fiTQun
 export LD_LIBRARY_PATH=$F/wcsim_build/lib:${LD_LIBRARY_PATH:-}
