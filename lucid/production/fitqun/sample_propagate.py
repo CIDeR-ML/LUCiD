@@ -24,7 +24,7 @@ from typing import Iterator, Optional
 
 import numpy as np
 
-from . import isotropic_sample
+from . import attenlength, isotropic_sample
 
 
 def _chunks(origins: np.ndarray, directions: np.ndarray,
@@ -45,7 +45,7 @@ def _chunks(origins: np.ndarray, directions: np.ndarray,
 def propagate_and_reduce(
         photonsim_root, shard_out, *, detector_config: str, physics_config: str,
         geometry, shell_radii_cm, n_photons: int = 20000, K: int = 12,
-        seed: int = 0, batch: int = 8,
+        seed: int = 0, batch: int = 8, atten_out=None,
         detector_type: str = "Cylinder", tts_sigma_ns: float = 1.0,
         wavelength_sampling: str = "cherenkov") -> Path:
     """PhotonSim photons in, reduced shard out -- nothing in between.
@@ -56,6 +56,12 @@ def propagate_and_reduce(
     mid-write for ~4% of a 250-job run. Folding each propagated group into the
     shard as it is produced means the big arrays never leave memory, and the
     only thing written is the shard itself.
+    """
+    """``atten_out`` additionally writes the water attenuation-length histograms.
+
+    They are kept in a side file rather than in the shard because the shard
+    format is already consumed by the verified scattering-table build, and the
+    per-photon distances these need exist only inside this loop.
     """
     import jax
     from lucid.simulation.shotgun import setup_shotgun_simulator
@@ -76,6 +82,8 @@ def propagate_and_reduce(
         output_mode="per_photon", K=K, detector_type=detector_type,
         tts_sigma_ns=tts_sigma_ns, wavelength_sampling=wavelength_sampling)
 
+    atten = {"all": np.zeros(attenlength.N_R_BINS),
+             "direct": np.zeros(attenlength.N_R_BINS)}
     rng = np.random.default_rng(seed)
     key = jax.random.PRNGKey(seed)
     n_groups = 0
@@ -88,10 +96,24 @@ def propagate_and_reduce(
         batched = stack_shotgun_sources(pending)
         keys = jax.random.split(sub, len(pending))
         det, sid, ht, ind = sim.batch(batched, keys)
-        builder.add(detected=np.asarray(det), sensor_id=np.asarray(sid),
-                    indirect=np.asarray(ind),
-                    emission_pos_m=np.asarray(batched.origins),
+        det_np, sid_np, ind_np = np.asarray(det), np.asarray(sid), np.asarray(ind)
+        origins_np = np.asarray(batched.origins)
+        builder.add(detected=det_np, sensor_id=sid_np, indirect=ind_np,
+                    emission_pos_m=origins_np,
                     emission_dir=np.asarray(batched.directions))
+        if atten_out is not None:
+            d = det_np.reshape(-1).astype(bool)
+            if d.any():
+                src = origins_np.reshape(-1, 3)[d] * 100.0          # cm
+                pmt = builder.pmt_pos_cm[sid_np.reshape(-1)[d]]
+                R = np.linalg.norm(pmt - src, axis=1)
+                dwall = np.minimum(
+                    builder.det_radius_cm - np.hypot(src[:, 0], src[:, 1]),
+                    builder.det_halfheight_cm - np.abs(src[:, 2]))
+                _, ha, hd = attenlength.histograms(
+                    R, ind_np.reshape(-1)[d].astype(bool), dwall)
+                atten["all"] += ha
+                atten["direct"] += hd
         return key
 
     carry_o = np.zeros((0, 3), dtype=np.float32)
@@ -115,6 +137,13 @@ def propagate_and_reduce(
                 pending = []
         carry_o, carry_d = carry_o[used:], carry_d[used:]
     _flush(pending, key)
+
+    if atten_out is not None:
+        edges = np.linspace(0.0, attenlength.R_MAX_CM, attenlength.N_R_BINS + 1)
+        np.savez_compressed(atten_out, edges=edges,
+                            h_all=atten["all"], h_direct=atten["direct"])
+        print(f"{atten_out}: attenuation histograms, "
+              f"{atten['all'].sum():,.0f} photons ({atten['direct'].sum():,.0f} direct)")
 
     shard = builder.result()
     out = shard.save(shard_out)
