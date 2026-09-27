@@ -248,6 +248,14 @@ int main(int argc, char** argv) {
         double pdir[3] = {tk.p * tk.dx, tk.p * tk.dy, tk.p * tk.dz};
         double start[3] = {tk.x, tk.y, tk.z};
         double stop[3] = {tk.x, tk.y, tk.z};
+        // The trigger's own vertex, which is a SEPARATE field from the tracks.
+        // makehistWCSim.cc:197 builds the predicted charge from trigger->GetVtx(),
+        // not from the track, so leaving it at its default puts every predicted
+        // track at the detector centre: mu comes out ~100x too small and the
+        // TOF-subtracted time residual is meaningless. Reconstruction never
+        // reads it, so this is invisible until the tuning chain runs.
+        for (int k = 0; k < 3; ++k) trig->SetVtx(k, start[k]);
+        trig->SetVtxvol(0);
         // track 0: beam. WCSim gives it the gun's own pdg/direction, zero mass,
         // and a start 100 m back along the direction for the event display.
         double beam_start[3] = {tk.x - 10000.0 * tk.dx, tk.y - 10000.0 * tk.dy,
