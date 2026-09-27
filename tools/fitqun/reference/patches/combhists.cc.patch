@@ -1,0 +1,8 @@
+--- a/timepdf/combhists.cc
++++ b/timepdf/combhists.cc
+@@ -55,4 +55,5 @@
+   
+   delete fout;
+   
++  return 0;
+ }
