@@ -157,3 +157,67 @@ def test_angular_response_shells():
     assert binning.ANGRESP_SHELL_RADII_NUPRISM_CM == tuple(float(r) for r in range(50, 301, 50))
     e = binning.angresp_edges()
     assert (e[0], e[-1], len(e)) == (0.0, 1.0, 26)
+
+
+# --- fiTQun's naming contract ------------------------------------------------
+
+def test_names_reproduce_the_shipped_tune():
+    """The reference tune's own file names, rebuilt from config + PMT type.
+
+    These strings are the only check on names read out of fiTQun's C++: if a
+    generated name is wrong fiTQun falls back silently or segfaults rather than
+    saying which file it wanted. The shipped WCTE tune supplies the ground truth.
+    """
+    from lucid.production.fitqun import names
+
+    cfg, pmt = "nuPRISMBeamTest_16cShort_mPMT", "3inchPMTR12199_02"
+    assert names.charge_pdf(pmt) == "cPDFpar_3inchPMTR12199_02.root"
+    assert names.angular_response(cfg, pmt) == (
+        "angResp_nuPRISMBeamTest_16cShort_mPMT_3inchPMTR12199_02.root")
+    assert names.scattable_6d(cfg) == (
+        "fiTQun_scattablesF_nuPRISMBeamTest_16cShort_mPMT.root")
+    assert names.time_pdf(13, cfg, pmt) == (
+        "13_tpdfpar_nuPRISMBeamTest_16cShort_mPMT_3inchPMTR12199_02.root")
+    assert names.cprofile(13) == "CProf_13_WCSim.root"
+    assert names.cprofile(13, fitted=True) == "CProf_13_fit_WCSim.root"
+
+    # The hypothesis axis of every fq1r* array: mu- is 2, not 1.
+    assert names.pid_index(13) == 2 and names.pid_index(11) == 1
+    assert names.PID_ORDER[:4] == (22, 11, 13, 211)
+
+    # All 15 scalars fiTQun demands, suffixed literally with WCSim.
+    assert len(names.SCALAR_KEYS) == 15
+    assert names.scalar_key("WaterAttenuationLength") == "fiTQun.WaterAttenuationLengthWCSim"
+
+    # Every file fiTQun opens, once each.
+    req = names.required_files("SK_WAND", "PMT20inch")
+    assert len(req) == len(set(req)) == 2 + 1 + 2 * 3
+
+
+# --- attenuation length ------------------------------------------------------
+
+def test_attenuation_fit_recovers_a_known_length():
+    """Closure test: photons thrown with a known L must fit back to it.
+
+    The fit is the reference's (AttenLLooper + fit_AttenL): direct/all versus
+    source-PMT distance, fitted as a0*exp(-R/L) with sources kept away from the
+    wall. Injecting the answer is the only way to know the estimator is unbiased,
+    since the quantity has no closed form from the optical model.
+    """
+    from lucid.production.fitqun import attenlength
+
+    rng = np.random.default_rng(7)
+    n = 400_000
+    L_true, a0_true = 7200.0, 0.93
+    R = rng.uniform(0.0, attenlength.R_MAX_CM, n)
+    survives = rng.random(n) < a0_true * np.exp(-R / L_true)
+    dwall = rng.uniform(0.0, 1500.0, n)          # some sources inside the cut
+
+    got = attenlength.measure(R, ~survives, dwall)
+    assert abs(got.length_cm - L_true) / L_true < 0.05, got
+    assert abs(got.a0 - a0_true) < 0.05, got
+
+    # The wall cut must actually remove photons, or it is not being applied.
+    _, h_all, _ = attenlength.histograms(R, ~survives, dwall)
+    assert h_all.sum() < n
+    assert attenlength.DWALL_MIN_CM == 200.0 and attenlength.R_MAX_CM == 5000.0

@@ -77,3 +77,8 @@ krb5cc_*
 
 # Core dumps from crashed batch jobs
 core.[0-9]*
+
+# ROOT interpreter history and local build artifacts
+.root_hist
+*.o
+tools/sadqun/sadqun
