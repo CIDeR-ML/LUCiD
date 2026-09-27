@@ -137,3 +137,24 @@ file to that name. Install the result as `CProf_<pdg>_fit_WCSim.root`, the name
 `fiTQun_shared.cc:1683` builds when `WCSimConfig` is set. Stopping at step 2 is
 what forces a tune to carry `UseFitCProfile = 0`, and `runfiTQunWC` never
 complains because reconstruction does not read the fitted profile.
+
+## `cprofile/writecprof.cc` — 1 declaration added
+
+Step 4 of the Cherenkov profile chain aborts under ROOT 6.30 with
+
+    error: use of undeclared identifier 'fconn'
+
+five times over. `FitConPoly` does `fconn = new TF1(...)` with no declaration,
+relying on CINT creating a global from a bare assignment. Modern cling does not,
+the same failure as `plotChrgPDF.cc`. Declared it `TF1 *fconn`; it is used only
+inside that function.
+
+Worth knowing because the failure is *silent in the pipeline*: `fitcprofile`
+(step 3) takes ~93 min and succeeds, writing a multi-GB `_fit_out` file, and
+only then does step 4 fall over — so a driver that runs both in one job appears
+to do 93 minutes of useful work and produce nothing.
+
+**Run the CProf chain on EOS, not AFS.** `CProf_<pdg>_fit_out.root` is ~2.8 GB
+per particle, against an AFS work quota of ~100 GB that also holds the
+checkouts. The final `CProf_<pdg>_fit.root` is ~50 MB and is the only one worth
+keeping; delete the intermediates once step 4 has run.
