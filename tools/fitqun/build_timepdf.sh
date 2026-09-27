@@ -51,8 +51,21 @@ PY
 done
 echo "histogrammed $n momentum points"
 
-# combhists and fittpdf expect the per-momentum files in the cwd, named by the
-# grid's own convention, so stage them there before running.
+# combhists.cc:22 opens <pdg>_<imom>_hist_sum.root from the cwd and takes imom
+# from the FILENAME as the momentum axis coordinate (armom[nmom]=imom), so the
+# per-point histograms have to be staged under that name. Range points get
+# their band midpoint, which is the only single momentum they can carry.
+for O in "$W"/${PDG}_p*; do
+    [ -s "$O/events_hist.root" ] || continue
+    B=$(basename "$O"); MOM=${B#${PDG}_p}
+    case "$MOM" in
+        *_*) LO=${MOM%%_*}; HI=${MOM##*_}; IMOM=$(( (LO + HI) / 2 )) ;;
+        *)   IMOM=$MOM ;;
+    esac
+    cp "$O/events_hist.root" "$W/${PDG}_${IMOM}_hist_sum.root"
+done
+echo "staged $(ls "$W"/${PDG}_*_hist_sum.root 2>/dev/null | wc -l) momentum points for combhists"
+
 cd "$W"
 root -l -b -q "$F/timepdf_work/combhists.cc($PDG)"
 [ -s "${PDG}_tpdfhist.root" ] || { echo "combhists produced nothing"; exit 1; }
