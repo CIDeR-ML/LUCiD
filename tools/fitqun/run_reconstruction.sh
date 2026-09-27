@@ -45,12 +45,17 @@ python tools/sadqun/export_geometry.py config/sk_geometry.npz \
     --sensor "$SENSOR" -o "$W/geom.txt"
 need "$W/geom.txt"
 
-"$E"/bin/lucid_to_wcsim --geometry "$W/geom.txt" --sensor "$SENSOR" \
-    --truth "$W/truth.txt" -o "$W/events.root" -n "$NEV"
+# --gates reuses LUCiD's own trigger gates and writes one subevent per gate in
+# WCSim's time frame; without it every gate is merged and the prompt peak lands
+# wherever the generator's t=0 put it.
+GATES=$(ls "$SAMPLE"/labl/wc_labl_*.h5 2>/dev/null | head -1)
+"$E"/bin/lucid_to_wcsim.new --geometry "$W/geom.txt" --sensor "$SENSOR" \
+    --gates "$GATES" --truth "$W/truth.txt" -o "$W/events.root" -n "$NEV"
 need "$W/events.root"
 
 cd "$F/fiTQun"
-./runfiTQunWC -p "$F/fitqun_SK_WAND.parameters.dat" -n "$NEV" \
+PARS=${PARFILE:-$F/fitqun_SK_WAND.parameters.dat}
+./runfiTQunWC -p "$PARS" -n "$NEV" \
     -r "$W/fq.root" "$W/events.root" > "$W/fq.log" 2>&1
 need "$W/fq.root"
 
