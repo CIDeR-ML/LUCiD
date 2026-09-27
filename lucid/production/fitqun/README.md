@@ -1,137 +1,155 @@
-# Tuning fiTQun to LUCiD
+# Tuning fiTQun for a LUCiD detector
 
-fiTQun reconstructs a water-Cherenkov event by comparing it against an
-analytic prediction of the charge and time at every PMT. That prediction is
-driven by five tuned tables. This package produces the LUCiD-derived inputs to
-each of them, so fiTQun can be tuned to LUCiD's detector response the same way
-it is normally tuned to WCSim's.
+fiTQun needs nine files and fifteen scalars before it will reconstruct anything,
+and every one of them is detector- and water-model-specific. This directory
+generates them from LUCiD output for *any* detector, so bringing up a new one is
+a matter of running the pipeline rather than rediscovering the reference chain.
 
-## Where the boundary is
+Nothing here is a one-off measurement. If you find yourself hard-coding a number
+for a specific detector, that number belongs in the manifest instead.
 
-Each module writes the file the corresponding stage of `fiTQun/Utilities`
-already reads. The fitting code that turns those histograms into fiTQun's
-parametrised `const/` files stays where it is — it is the part the
-collaboration has validated, and re-implementing it would only add a second
-thing to keep in step.
+## How it fits together
 
-| Table | What LUCiD writes | Consumed by |
-|---|---|---|
-| Cherenkov profile | `CProf_<pdg>_WCSim.root` | `fiTQun_shared::LoadProfiles` directly |
-| Charge PDF | `<mu>_pdf.root` per mu | `chrgpdf/gen2d.cc` → `fitpdf` → `MakecPDFparFile.cc` |
-| Angular response | `angRespAll_<r>` histogram | `angular/fit_cos.C` |
-| Direct time PDF | `<cell>_hist.root` | `timepdf/combhists.cc` → `fittpdf.cc` |
-| Indirect light | `scattables.h5` | `tools/fitqun/h5_to_scattable.C` → fiTQun |
-
-`rootio.py` is the seam that lets a non-ROOT codebase write those files. It
-covers `TH1D`/`TH2D`/`TH3F` through uproot and adds a `TGraph` writer, which
-uproot does not have. The one thing it cannot do is `TScatTable`, a
-user-defined class whose streamer info uproot cannot synthesise — hence the
-HDF5 hand-off for the scattering tables.
-
-## Three things to know before running any of this
-
-**Momentum, not energy.** fiTQun's grids are momentum grids. PhotonSim takes
-`/gun/momentumAmp`, provided by G4's own particle-gun messenger and the same
-command WCSim's tuning macros use, so the grids transfer unchanged. No
-PhotonSim change is needed for any of this.
-
-**Never copy process *numbers* between physics lists.** The reference WCSim
-macros disable processes `7` and `8` for `mu-`, which there are decay and
-capture. In PhotonSim's list index 8 is **`Cerenkov`**, so the same macro
-deletes the muon's own light and leaves only delta-ray light: a profile with
-the wrong angle and a sixth of the yield, which looks perfectly plausible.
-`macros.py` names processes instead, and a test asserts nothing it generates
-switches Cerenkov off.
-
-**Direct light comes from configuration, not a special build.** The reference
-uses a WCSim fork (`/fqTune/mode killScatterRef`) to kill scattered and
-reflected photons. The LUCiD equivalent is to run with scattering and
-reflection off in the physics config.
-
-## Running it
-
-### Cherenkov profile — particle and water only, no detector
-
-```bash
-# Fan out one job per (particle, momentum) cell; run from the submit host.
-python3 lucid/production/jobs/fitqun/generate_jobs.py \
-    -c lucid/production/jobs/fitqun/configs/water_mu.json -s
-
-# Then merge the cells into the table fiTQun loads.
-python -m lucid.production.fitqun cprofile build \
-    $OUTPUT_BASE_PATH/fitqun_cprofile/13/*/cell.npz \
-    --pdg 13 -o CProf_13_WCSim.root
+```
+LUCiD sample (HTCondor)                  the four generators
+  |                                        |
+  |  sensor/hits/labl/step .h5             | names.py   -- what fiTQun calls each file
+  +--> sample_propagate --> shard.npz -----+ manifest.py -- what we produced, and its status
+  |                                        |
+  +--> truth.py --> truth.txt              v
+  |                                   tune_manifest_<detector>.json
+  +--> lucid_to_wcsim --> events.root      |
+                                           +--> report.py  -- tables and plots
+                                           +--> install     -- copy to fiTQun's const/
+                                           +--> overrides   -- the .parameters.dat scalars
 ```
 
-Each job deletes its raw photon list as soon as the reduction succeeds: a
-high-momentum cell is hundreds of MB of photons and a few tens of kB reduced.
+Three modules carry the contract, and everything else is replaceable:
 
-### Charge PDF — digitizer only, no geometry
-
-```bash
-python -m lucid.production.fitqun chargepdf scan \
-    -o chrgpdf_out --n-pmt 2000 --n-events 80 --model ski
-```
-
-Runs in one process. It drives `lucid.simulation.digitizer` rather than
-re-deriving the response, so a change to the detector electronics shows up in
-the next tune instead of silently diverging from it.
-
-### Angular response, time PDF, indirect light
-
-These three need LUCiD simulation output and are reductions over it
-(`angular.measure`, `timepdf.TimePdfAccumulator`, `scattable.ScatTable`),
-driven from the usual detector + physics config pair. They are detector
-specific; the first two are not.
-
-## Two choices worth reviewing
-
-**The charge-PDF discriminator.** Both LUCiD and WCSim cut on the digitised
-charge, but WCSim uses a measured S-curve `P(fire | charge)` inherited from
-SKDETSIM's `skrn1pe`, with no derivation in its source and no PMT-type
-dependence — one SK-derived curve for SK, HK and mPMT alike. LUCiD keeps a
-single sharp threshold at that curve's 50% point (0.25 pe), applied on the
-same terms to SK and HK: these are SK-*like* detectors, not SK, and one
-explicit number beats an inherited calibration. The PMT dependence then
-enters only through the SPE spectrum, which is broad for SK and narrow for
-HK, so the same cut keeps ~77% of single-photoelectron hits in SK and ~92%
-in HK.
-
-That makes fiTQun's `P_unhit` term exact rather than degenerate. With
-`s_k` the probability that k photoelectrons clear the threshold,
-
-    P_unhit(mu) = e^-mu * [1 + sum_k (1 - s_k) mu^k / k!]
-
-which is precisely the form `gen2d.cc` fits, with `c_k = (1 - s_k)/k!`:
-
-| | c1 | c2 | c3 |
-|---|---|---|---|
-| SK | 0.2311 | 0.01994 | 0.00113 |
-| HK | 0.0761 | 0.00162 | 0.00002 |
-
-`gen2d.cc` should fit back these numbers from the generated `<mu>_pdf.root`
-files — a free end-to-end check on this stage. fiTQun truncates at k=3,
-which costs <0.1% below mu=2 and 1.6% of an already-tiny `P_unhit` at mu=5.
-
-**The time PDF's `log10(mu)` axis.** The reference links against fiTQun and
-calls `Get1Rmudist`, which needs the Cherenkov profile and charge PDF to have
-been tuned already. `timepdf` takes LUCiD's own expected charge instead, which
-makes the first pass self-consistent and removes the circular dependency. For
-a second iteration indexed by the tuned fiTQun's mu, pass that in as `mu` and
-nothing else changes.
-
-## Provenance
-
-The grids are the reference tune's, kept as data files rather than
-transcribed:
-
-| File | Source |
+| module | answers |
 |---|---|
-| `data/cprofile_momenta.dat` | `Utilities/cprofile/CprofileMomRepList.dat` |
-| `data/charge_mu_bins.txt` | `Utilities/chrgpdf/workdir/mutbl.txt` |
-| `data/charge_q_bins.txt` | `Utilities/chrgpdf/workdir/qbins_sk1.txt` |
-| `data/timepdf_momenta.json` | recovered from `WCSim_v1.12.19/Utilities/TuningFiles/timepdf` |
+| `names.py` | what fiTQun *requires*, and exactly what each file must be called |
+| `manifest.py` | what we *produced*, where it is, and whether it can be trusted |
+| `report.py` | renders the manifest as tables and plots; knows nothing about physics |
 
-The reference tune itself (code, worked example, and the finished WCTE
-`const/` files) is at
-`/eos/project/n/neutrino-generators/cjesus/fitqun_inputs/`.
+**Every generator records its own product in the manifest.** That is the rule
+that keeps this working. Knowledge about an input exists at the moment it is
+produced -- how many events, which config, what was cross-checked -- and it is
+either written down then or lost. Do not add a script that scans directories
+afterwards trying to guess what is there.
+
+## Status is data, not a comment
+
+A real tune is never simply "done": it carries borrowed files and untuned scalars
+for a long time. `manifest.Artifact.status` records that, so the set of known
+compromises is queryable instead of living in someone's memory:
+
+| status | meaning |
+|---|---|
+| `adopted` | measured here, in use |
+| `borrowed` | in use, but produced for another detector or photosensor -- replace next |
+| `measured_not_adopted` | measured here, measurement sound, deliberately not used. `note` **must** say why |
+| `reference_default` | taken from the reference tune, no measurement of our own |
+| `missing` | fiTQun requires it and we have nothing |
+
+`manifest.verify()` compares the manifest against `names.required_files()` and
+returns exactly this breakdown. If it reports `unused`, some generator built a
+filename by hand instead of through `names.py`.
+
+## Bringing up a new detector
+
+```bash
+source lucid/production/jobs/user_paths.sh
+M=$FITQUN/tune_manifest_<DET>.json
+
+# 1. Samples. One electron bomb feeds the angular response and both scattering
+#    tables; muon/electron momentum grids feed the time PDF.
+python3 -m lucid.production.jobs.fitqun.generate_sample_jobs \
+        -c lucid/production/jobs/fitqun/configs/sample_<det>.json -s
+python3 tools/fitqun/make_timepdf_grid.py \
+        --chart $FITQUN/Utilities/timepdf/chart_13.txt --pdg 13 --scale 0.085 \
+        -o lucid/production/configs/GeV/tpdf
+
+# 2. Inputs, in dependency order. Each records itself in $M.
+#    cprofile: genhist -> integcprofile -> fitcprofile -> writecprof  (FOUR steps)
+#    charge PDF, angular response, 6D scattering table, then the time PDF.
+
+# 3. Check what you have before trying to reconstruct.
+python3 -m lucid.production.fitqun.report $M
+
+# 4. Install and reconstruct.
+bash tools/fitqun/run_reconstruction.sh <sample-dir> <n-events> <tag>
+python3 tools/fitqun/fq_resolution.py --fq <fq.root> --labl ... --step ... \
+        --pdg 13 --require-fc
+```
+
+Always score with `--require-fc` and quote the event count. Sanity-check before
+believing a number: a vertex resolution near the detector size, a direction
+resolution near 90 deg, or a large momentum bias means the fit is broken, not
+that performance is poor.
+
+## Things that cost days to find
+
+Each of these fails silently or misleadingly. `tools/fitqun/reference/PATCHES.md`
+carries the same list for changes that live in the reference tree.
+
+**Sample and geometry**
+
+- `sensor_idx` indexes the sensor file's own `config/sensor_positions`, which is a
+  *different permutation* from `sk_geometry.npz` -- 0 of 11096 rows in common.
+  Export the geometry with `export_geometry.py --sensor` or every hit is
+  attributed to an unrelated PMT. The symptom is a charge-weighted `<cos>` of
+  about -0.87 where the geometry requires about +0.7.
+- The primary is `track_idx == 0`; `primary_track_ids_data` points at a delta ray.
+  `primary_energies_data` is **kinetic**.
+
+**Writing the WCSim file**
+
+- Hit times must be shifted into the trigger frame (`--time-offset-ns`, default
+  950). fiTQun fits a 900-1400 ns window and silently discards everything
+  outside it.
+- WCSim reserves tracks 0 and 1 for the beam and target, so the primary must be
+  **track 2** (`makehistWCSim.cc:34`). Writing only the primary segfaults the
+  tuning chain on `At(2)`, while reconstruction -- which never reads truth --
+  works fine.
+
+**The tuning chain**
+
+- The Cherenkov profile chain has **four** steps, not two. `makehistWCSim.cc:127`
+  hardcodes `fFitCProf=true`, so it needs `CProf_<pdg>_fit_WCSim.root` from steps
+  3-4 and ignores `fiTQun.UseFitCProfile`. Stopping at step 2 is what forces a
+  tune to carry `UseFitCProfile = 0`.
+- `makehistWCSim` shipped with `SetWAttL(6800.)` and `SetQEEff(0.1)` overwriting
+  the parameter file. Removed -- otherwise the time PDF is trained at SK's optics
+  whatever the tune says.
+- `isct = nScatter + 1000*nReflection`. `AttenL` cuts `isct < 1000`, i.e. it
+  **excludes reflected photons**, so run its sample with reflections off. The
+  scattering table splits on `isct != 0`, so it **includes** them -- LUCiD's
+  `indirect = scatters | reflects` matches it directly.
+- `fitpdf.cc:52` requires every charge-range boundary to fall exactly on a bin
+  centre, so the q axis cannot be rebinned freely.
+- `QEEffCorr` is assigned only inside `if(IsItRealData())`, so it cannot correct a
+  simulated sample. The MC charge scale has to go in `QEEff`.
+
+**Cost and scheduling**
+
+- Histogram statistics are **additive**: `mergehists.pl` sums and `combhists`
+  re-bins the sum. So generate the *full momentum range* at shallow depth first
+  and top up by resubmitting the same configs. Momentum gaps cannot be patched
+  later; depth can.
+- The reference time PDF trains on 840k mu + 860k e over 130-7000 MeV/c, which is
+  about 5700 CPU-h at LUCiD's measured 12.1 s/event. The reference's own charts
+  imply 12.6-15.9 s/event, so this is the intrinsic cost of the product, not
+  LUCiD overhead.
+- Submit on `workday`. `condor_qedit MaxRuntime` does **not** lift the limit a
+  running job was matched with -- jobs die at the original cap with exit 143.
+- Size jobs from the measured 12.1 s/event. A config claiming 4.833 undersizes
+  them by 2.5x.
+- Pass `dataprod_fanout -c` an **absolute** config path; a relative one does not
+  resolve inside the container and every job dies in 25 s.
+
+## Layout on LXPLUS
+
+Source and logs on AFS, container image and all ROOT output on EOS. Standard
+LXPLUS schedds reject `/eos` paths in a submit file's `output`/`error`/`log`, so
+logs must land on AFS while `--output-dir` stays on EOS.

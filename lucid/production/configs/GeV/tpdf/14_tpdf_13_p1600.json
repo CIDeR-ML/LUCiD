@@ -1,0 +1,28 @@
+{
+  "name": "time-PDF training, mu- p1600",
+  "description": "Reference time-PDF grid point p1600 MeV/c, 1700 of the reference's 20000 events (scale=0.085). Statistics are additive -- top up by resubmitting this config.",
+  "material": "water",
+  "nominal_train": 0,
+  "nominal_test": 1700,
+  "seconds_per_event": 12.1,
+  "target_seconds_per_job": 6050.0,
+  "selection": {
+    "mode": "trigger"
+  },
+  "energy_distribution": "uniform",
+  "store_individual_photons": true,
+  "run_lucid": true,
+  "disable_decays": false,
+  "particles": [
+    {
+      "type": "mu-",
+      "energy_min_MeV": 1497.826,
+      "energy_max_MeV": 1497.826
+    }
+  ],
+  "lucid_options": {
+    "apply_smearing": true,
+    "apply_translation": true
+  },
+  "cleanup_root_files": true
+}
