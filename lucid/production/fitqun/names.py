@@ -102,13 +102,23 @@ def scalar_key(name: str) -> str:
 
 
 def required_files(config: str, pmt_type: str, *, pdgs=TUNED_PDGS,
-                   with_3d: bool = False) -> list:
-    """Every file fiTQun opens for this tune, in the order it opens them."""
+                   with_3d: bool = False,
+                   with_fitted_cprofile: bool = False) -> list:
+    """Every file fiTQun opens for this tune, in the order it opens them.
+
+    ``with_fitted_cprofile`` adds the momentum-fitted profiles *alongside* the
+    raw ones rather than instead of them, because a complete tune needs both:
+    reconstruction reads whichever ``fiTQun.UseFitCProfile`` selects, while the
+    time-PDF chain always reads the fitted form (``makehistWCSim.cc:127`` passes
+    ``fFitCProf=true`` regardless of the parameter).
+    """
     files = [charge_pdf(pmt_type), scattable_6d(config)]
     if with_3d:
         files.append(scattable_3d(config))
     files.append(angular_response(config, pmt_type))
     for pdg in pdgs:
         files.append(cprofile(pdg))
+        if with_fitted_cprofile:
+            files.append(cprofile(pdg, fitted=True))
         files.append(time_pdf(pdg, config, pmt_type))
     return files
