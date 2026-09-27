@@ -24,7 +24,7 @@ from typing import Iterator, Optional
 
 import numpy as np
 
-from . import attenlength, isotropic_sample
+from . import attenlength, isotropic_sample, scattable3d
 
 
 def _chunks(origins: np.ndarray, directions: np.ndarray,
@@ -45,7 +45,7 @@ def _chunks(origins: np.ndarray, directions: np.ndarray,
 def propagate_and_reduce(
         photonsim_root, shard_out, *, detector_config: str, physics_config: str,
         geometry, shell_radii_cm, n_photons: int = 20000, K: int = 12,
-        seed: int = 0, batch: int = 8, atten_out=None,
+        seed: int = 0, batch: int = 8, atten_out=None, scat3d_out=None,
         detector_type: str = "Cylinder", tts_sigma_ns: float = 1.0,
         wavelength_sampling: str = "cherenkov") -> Path:
     """PhotonSim photons in, reduced shard out -- nothing in between.
@@ -84,6 +84,7 @@ def propagate_and_reduce(
 
     atten = {"all": np.zeros(attenlength.N_R_BINS),
              "direct": np.zeros(attenlength.N_R_BINS)}
+    scat3d_i, scat3d_d = scattable3d.empty()
     rng = np.random.default_rng(seed)
     key = jax.random.PRNGKey(seed)
     n_groups = 0
@@ -101,19 +102,26 @@ def propagate_and_reduce(
         builder.add(detected=det_np, sensor_id=sid_np, indirect=ind_np,
                     emission_pos_m=origins_np,
                     emission_dir=np.asarray(batched.directions))
-        if atten_out is not None:
+        # Both side outputs need the same per-photon geometry, which exists
+        # only here, so compute it once and fan out.
+        if atten_out is not None or scat3d_out is not None:
             d = det_np.reshape(-1).astype(bool)
             if d.any():
                 src = origins_np.reshape(-1, 3)[d] * 100.0          # cm
+                sdir = np.asarray(batched.directions).reshape(-1, 3)[d]
                 pmt = builder.pmt_pos_cm[sid_np.reshape(-1)[d]]
-                R = np.linalg.norm(pmt - src, axis=1)
-                dwall = np.minimum(
-                    builder.det_radius_cm - np.hypot(src[:, 0], src[:, 1]),
-                    builder.det_halfheight_cm - np.abs(src[:, 2]))
-                _, ha, hd = attenlength.histograms(
-                    R, ind_np.reshape(-1)[d].astype(bool), dwall)
-                atten["all"] += ha
-                atten["direct"] += hd
+                ind = ind_np.reshape(-1)[d].astype(bool)
+                R, costh, dwall = scattable3d.observables(
+                    src, sdir, pmt, det_radius_cm=builder.det_radius_cm,
+                    det_halfheight_cm=builder.det_halfheight_cm)
+                if atten_out is not None:
+                    _, ha, hd = attenlength.histograms(R, ind, dwall)
+                    atten["all"] += ha
+                    atten["direct"] += hd
+                if scat3d_out is not None:
+                    h3, h2 = scattable3d.histograms(R, costh, dwall, ind)
+                    scat3d_i += h3
+                    scat3d_d += h2
         return key
 
     carry_o = np.zeros((0, 3), dtype=np.float32)
@@ -144,6 +152,13 @@ def propagate_and_reduce(
                             h_all=atten["all"], h_direct=atten["direct"])
         print(f"{atten_out}: attenuation histograms, "
               f"{atten['all'].sum():,.0f} photons ({atten['direct'].sum():,.0f} direct)")
+
+    if scat3d_out is not None:
+        er, ew, ec = scattable3d.edges()
+        np.savez_compressed(scat3d_out, r_edges=er, wall_edges=ew, costh_edges=ec,
+                            hsct3d=scat3d_i, hdir2d=scat3d_d)
+        print(f"{scat3d_out}: 3D scattering table, "
+              f"{scat3d_i.sum():,.0f} indirect / {scat3d_d.sum():,.0f} direct")
 
     shard = builder.result()
     out = shard.save(shard_out)
