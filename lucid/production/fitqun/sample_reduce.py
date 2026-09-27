@@ -118,9 +118,13 @@ class DenseAccumulator:
 
 def merge_shards(paths) -> "SampleShard":
     """Sum shard files, densifying the scattering counts as they stream in."""
+    from . import progress
+
     acc_s, acc_d, ang_c, ang_s = {}, {}, {}, {}
     n_photons = n_detected = n_indirect = 0
-    for path in paths:
+    paths = list(paths)
+    for i, path in enumerate(paths, start=1):
+        progress.emit(i, len(paths))
         shard = SampleShard.load(path)
         for name, c in shard.scattered.items():
             acc_s.setdefault(name, DenseAccumulator(name, c.nbins, c.bounds)).add(c)

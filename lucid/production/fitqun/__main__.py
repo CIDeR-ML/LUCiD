@@ -74,7 +74,7 @@ def _cmd_sample_run(args) -> int:
         detector_config=str(args.detector_config),
         physics_config=str(args.physics_config),
         shell_radii_cm=args.shells, n_photons=args.n_photons, K=args.K,
-        seed=args.seed)
+        seed=args.seed, atten_out=args.atten_out)
     return 0
 
 
@@ -193,6 +193,9 @@ def build_parser() -> argparse.ArgumentParser:
                        help="photons per kernel call; a batching unit only")
     sprop.add_argument("--K", type=int, default=12)
     sprop.add_argument("--seed", type=int, default=0)
+    sprop.add_argument("--atten-out", type=Path, default=None,
+                       help="also write the water attenuation-length histograms "
+                            "(direct/all vs source-PMT distance) to this .npz")
     sprop.set_defaults(func=_cmd_sample_run)
 
     sacc = sa_actions.add_parser("accumulate", help="reduce one propagated shard")
