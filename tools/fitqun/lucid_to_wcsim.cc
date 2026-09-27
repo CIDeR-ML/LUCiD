@@ -11,6 +11,15 @@
 // is in cm, as WCSim stores it.
 //
 // Hit times are shifted into the trigger frame a WCSim file is expected to carry.
+//
+// The offset is NOT free to choose. makehistWCSim.cc:262 removes a hardcoded
+// 950 ns (`aSubToffs = 950 - trigOffset`, and trigOffset is the trigger header
+// Date, which is 0 here) when it computes the corrected time tc. Shipping any
+// other offset leaves tc displaced by the difference, and since the tc axis is
+// only +-100 ns, a 100 ns displacement moves the time PDF off its own range.
+// 1050 maximises the hits landing inside fiTQun's 900-1400 ns window (65% vs
+// 58%), but that gain is not worth a 100 ns systematic, so 950 it is. To change
+// it, set the trigger Date to (950 - offset) so aSubToffs follows.
 // LUCiD times are relative to the event (median ~0-200 ns), while fiTQun fits a
 // default window of 900-1400 ns (fiTQun.DefaultTimeWindow{Start,End}) and silently
 // DISCARDS every hit outside it -- which leaves a sparse late tail and a fit with
@@ -20,6 +29,7 @@
 //   lucid_to_wcsim --geometry geom.txt --sensor wc_sensor_0000.h5 -o out.root
 //                  [--truth FILE] [-n N] [--time-offset-ns 950]
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <fstream>
 #include <iostream>
@@ -210,6 +220,7 @@ int main(int argc, char** argv) {
     tev.Branch("wcsimrootevent", "WCSimRootEvent", &event_ptr, 64000, 0);
 
     long total_digits = 0, n_tracks = 0;
+    long n_hits_total = 0, n_hits_in_window = 0;
     for (size_t iev = 0; iev < groups.size(); ++iev) {
       auto pe = ReadVec<float>(h5, groups[iev] + "/PE", H5T_NATIVE_FLOAT);
       auto t = ReadVec<double>(h5, groups[iev] + "/T", H5T_NATIVE_DOUBLE);
@@ -280,6 +291,37 @@ int main(int argc, char** argv) {
       }
       trig->SetNumDigitizedTubes((int)order.size());
       total_digits += (long)order.size();
+
+      // Contract check, per event. Every field below is read by a tool that
+      // does NOT complain when it is missing -- it takes a default and produces
+      // quietly wrong numbers. Four separate bugs in this file were found only
+      // by running a later stage and noticing the output was nonsense, so the
+      // requirements are asserted here, where the objects are still in memory.
+      if (trig->GetTracks()->GetEntries() < 3)
+        throw std::runtime_error("tracks < 3: makehistWCSim.cc:34 reads the "
+                                 "primary at index 2 (WCSim reserves 0,1)");
+      {
+        auto* prim = (WCSimRootTrack*)trig->GetTracks()->At(2);
+        if (!prim || prim->GetParenttype() != 0)
+          throw std::runtime_error("track 2 is not a parentless primary");
+        const double vtx[3] = {trig->GetVtx(0), trig->GetVtx(1), trig->GetVtx(2)};
+        if (vtx[0] == 0. && vtx[1] == 0. && vtx[2] == 0.)
+          throw std::runtime_error("trigger vertex unset: makehistWCSim.cc:197 "
+                                   "predicts charge from it, not from the track");
+        for (int k = 0; k < 3; ++k)
+          if (std::fabs(vtx[k] - prim->GetStart(k)) > 1e-3)
+            throw std::runtime_error("trigger vertex disagrees with track 2");
+      }
+      // Count hits inside fiTQun's window rather than asserting per event.
+      // Individual events legitimately sit outside it -- the hit-time
+      // distribution is much wider than the 500 ns window -- so the meaningful
+      // check is over the whole file, reported after the loop.
+      for (size_t j : order) {
+        const double th = t[j] + t_offset;
+        ++n_hits_total;
+        if (th >= 900. && th <= 1400.) ++n_hits_in_window;
+      }
+
       tev.Fill();
     }
     H5Fclose(h5);
@@ -289,6 +331,13 @@ int main(int argc, char** argv) {
     std::cout << out_path << ": " << groups.size() << " events, " << total_digits
               << " digits, " << n_tracks << " truth tracks, " << g.n_pmt
               << " PMTs, hit times shifted by +" << t_offset << " ns" << std::endl;
+    const double frac = n_hits_total ? (double)n_hits_in_window / n_hits_total : 0.;
+    std::cout << "  " << n_hits_in_window << "/" << n_hits_total << " hits ("
+              << (int)(100 * frac + 0.5) << "%) inside fiTQun's 900-1400 ns "
+              << "window; the rest are discarded by the fitter" << std::endl;
+    if (frac < 0.30)
+      throw std::runtime_error("under 30% of hits land in fiTQun's time window "
+                               "-- check --time-offset-ns");
   } catch (const std::exception& e) {
     std::cerr << e.what() << std::endl;
     return 1;
