@@ -1,0 +1,21 @@
+--- a/timepdf/makehistWCSim.cc
++++ b/timepdf/makehistWCSim.cc
+@@ -126,13 +126,11 @@
+   
+   thefit->ReadSharedParams(iScat,fLoadflg,true,true,1);
+ 
+-  //  fiTQun_shared::Get()->SetWAttL(6800.);
+-
+-  //  thefit->SetWAttL(6800.); // comented out by tyoshida
+-  fqshared->SetWAttL(6800.); //tyoshida
+-
+-  //  thefit->SetQEEff(0.1); // comented out by tyoshida
+-  fqshared->SetQEEff(0.1); // comented out by tyoshida
++  // Attenuation length and QE normalisation deliberately NOT overridden here.
++  // fiTQun_shared's ctor already reads them from the parameter override file
++  // (fiTQun_shared.cc:264,291, via the <key><DetName> lookup), so the values the
++  // time PDF is built with are the tune's own rather than SK's 6800 cm / 0.1.
++  // fiTQun.cc:99 comments out the same overwrite for exactly this reason.
+ 
+   //  thefit->SetPhi0(-1,1.);//remove dependence on tuning const. // comented out by tyoshida
+   fqshared->SetPhi0(-1.,1.);

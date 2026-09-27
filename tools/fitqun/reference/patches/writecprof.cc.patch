@@ -1,0 +1,11 @@
+--- a/cprofile/writecprof.cc
++++ b/cprofile/writecprof.cc
+@@ -203,7 +203,7 @@
+     delete func[isect];
+   }
+   
+-  fconn = new TF1(Form("func_%s",gtmp->GetName()),fconpolywrap,xbounds[0],xbounds[nsect],nparnum);
++  TF1 *fconn = new TF1(Form("func_%s",gtmp->GetName()),fconpolywrap,xbounds[0],xbounds[nsect],nparnum);
+   fconn->SetLineColor(2);
+   //  fconn->SetNpx(1000);
+   for (int i=0; i<=nsect; i++) {

@@ -1,0 +1,48 @@
+--- a/timepdf/fittpdf.cc
++++ b/timepdf/fittpdf.cc
+@@ -4,6 +4,7 @@
+ #include <stdio.h>
+ #include <stdlib.h>
+ 
++#include <algorithm>
+ #include <TH1D.h>
+ #include <TH2D.h>
+ #include <TH3D.h>
+@@ -116,9 +117,11 @@
+   
+   
+   int nmom=h3d->GetNbinsZ();
+-  if (PID==13) nmom = 24;
+-  if (PID==211) nmom = 24;
++  // Upstream forces 24 for mu/pi, which over-runs a histogram built from fewer
++  // momentum points. Clamp to what is actually there.
++  if (PID==13 || PID==211) nmom = std::min(nmom, 24);
+ 
++  int ntmp=0;// hoisted: declared inside this loop upstream, used after it
+   for (int k=0; k<nmom; k++) {
+     int imom=(int)(h3d->GetZaxis()->GetBinLowEdge(k+1)+0.5);
+     cout << imom << endl;
+@@ -130,7 +133,7 @@
+     hmeantmp = (TH1D*)gDirectory->Get("hist_tpdf_yx_1");
+     hsigmtmp = (TH1D*)gDirectory->Get("hist_tpdf_yx_2");
+     hchi2tmp = (TH1D*)gDirectory->Get("hist_tpdf_yx_chi2");
+-    int ntmp=hmeantmp->GetNbinsX();
++    ntmp=hmeantmp->GetNbinsX();
+ 
+     if(useFitSlices){
+       for (int muBin = 1; muBin <= ntmp; muBin++){
+@@ -173,7 +176,7 @@
+ 	  double lowRange = tcmin;
+ 	  double hiRange = timeResFitPointer->Parameter(1)+1.0*timeResFitPointer->Parameter(2);
+ 	  
+-	  std::cout << "Shifting left. New fit range: " << lowRange < < " " << hiRange << std::endl;
++	  std::cout << "Shifting left. New fit range: " << lowRange << " " << hiRange << std::endl;
+ 	  
+ 	  timeResFitPointer = hist1d->Fit("myGausfit", "S", "", lowRange, hiRange);
+ 
+@@ -353,4 +356,5 @@
+   
+   delete fitmp;
+ 
++  return 0;
+ }

@@ -172,11 +172,33 @@ The shipped file does not compile under ROOT 6.30.
   which over-runs a `hist_tpdf` built from fewer points -- which is what a
   partial grid produces. Clamped with `std::min(nmom, 24)`.
 
-## What lives where
+## What lives where, and how to re-apply it
 
-These sources are **vendored copies**: the files that actually run live in the
-fiTQun checkout (`$FITQUN/timepdf_work`, `$FITQUN/cprofile_fit`,
-`$FITQUN/Utilities`), which is not a git repository. Editing a reference macro
-there and not copying it here loses the fix the moment that tree is re-cloned.
-`fitqun_SK_WAND.parameters.dat` is our own tune file and is vendored for the
-same reason.
+**We have no push access to fiTQun, so these fixes are ours to carry
+indefinitely.** They live as patches in `patches/`, generated against pinned
+upstream commits, with `patches/apply.sh` to re-apply them to a fresh checkout:
+
+    tools/fitqun/reference/patches/apply.sh /path/to/fitqun-tree
+
+Patches rather than whole-file copies, for three reasons: the diff *is* the
+documentation of what we changed and why; a copy silently reverts an upstream
+improvement while a patch conflicts loudly; and 88 lines of patch is reviewable
+where four whole files are not.
+
+Pinned upstream commits (`apply.sh` warns if the checkout has moved):
+
+| repo | commit |
+|---|---|
+| `fiTQun/Utilities` | `c0a0916` |
+| `fiTQun/WCSimFQTuner` | `bfd18d3` |
+| `fiTQun/fiTQun` | `752bfb6` |
+
+Upstream sources use CRLF and the patches are LF-normalised, so `apply.sh`
+converts each target before matching -- `patch -l` alone does not reconcile
+CRLF context lines.
+
+Verified: applying all four patches to pristine upstream reproduces our working
+copies byte for byte.
+
+The `.cc` files alongside this document are the *resulting* sources, kept for
+reading. `fitqun_SK_WAND.parameters.dat` is our own tune file, not a patch.
