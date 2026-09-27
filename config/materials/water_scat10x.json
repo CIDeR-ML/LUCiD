@@ -1,0 +1,83 @@
+{
+  "material": "water",
+  "refractive_index": 1.33,
+  "speed_of_light_vacuum_m_per_ns": 0.299792,
+  "scattering": {
+    "source": "SK calibration paper (arXiv:1307.0162), Eqs. 16-17, Table 3",
+    "symmetric": {
+      "description": "Rayleigh + symmetric Mie: alpha_sym = P4/lambda^4 * (1 + P5/lambda^2)",
+      "P4": 851000000.0,
+      "P5": 114000.0
+    },
+    "asymmetric": {
+      "description": "Forward Mie: alpha_asym = P6 * (1 + P7/lambda^4 * (lambda - P8)^2)",
+      "P6": 0.001,
+      "P7": 4620000.0,
+      "P8": 392.0,
+      "default_asymmetry_g": 0.95
+    }
+  },
+  "absorption": {
+    "source": "SK calibration paper (arXiv:1307.0162), Eqs. 14-15, Table 3 + Pope & Fry (1997)",
+    "description": "alpha_abs = P0*P1/lambda^4 + C(lambda); C = power law (<464nm) or Pope&Fry (>=464nm). Pope&Fry knots corrected 2026-07 to the authoritative omlc.org/spectra/water/data/pope97.txt values (converted 1/cm -> 1/m); the previous table was mistranscribed (blue knots ~2x low, red knots 10-20% high, discontinuity at the 464nm splice). First knot is Pope&Fry's 465nm sample (their grid has no 464nm point); the power-law/Pope&Fry blend stays centered at 464nm.",
+    "P0": 0.624,
+    "P1": 29600000.0,
+    "P2": 0.0324,
+    "P3": 10.9,
+    "pope_fry_wavelengths_nm": [
+      465,
+      470,
+      480,
+      490,
+      500,
+      510,
+      520,
+      530,
+      540,
+      550,
+      560,
+      570,
+      580,
+      590,
+      600,
+      610,
+      620,
+      630,
+      640,
+      650,
+      660,
+      670,
+      680,
+      690,
+      700
+    ],
+    "pope_fry_absorption_m_inv": [
+      0.01011,
+      0.0106,
+      0.0127,
+      0.015,
+      0.0204,
+      0.0325,
+      0.0409,
+      0.0434,
+      0.0474,
+      0.0565,
+      0.0619,
+      0.0695,
+      0.0896,
+      0.1351,
+      0.2224,
+      0.2644,
+      0.2755,
+      0.2916,
+      0.3108,
+      0.34,
+      0.41,
+      0.439,
+      0.465,
+      0.516,
+      0.624
+    ]
+  },
+  "_comment": "DIAGNOSTIC ONLY -- water.json with the scattering coefficients x10. Used to test whether the AttenL direct-fraction fit responds to a known change in scattering length; not a physics model."
+}
