@@ -158,3 +158,25 @@ to do 93 minutes of useful work and produce nothing.
 per particle, against an AFS work quota of ~100 GB that also holds the
 checkouts. The final `CProf_<pdg>_fit.root` is ~50 MB and is the only one worth
 keeping; delete the intermediates once step 4 has run.
+
+## `timepdf/fittpdf.cc` — 3 fixes
+
+The shipped file does not compile under ROOT 6.30.
+
+* **line 176 is a literal typo**: `<< lowRange < < " " << hiRange`. Two separate
+  `<` characters where `<<` was meant. Nothing about this is ROOT-version
+  specific -- the file as distributed cannot compile.
+* `ntmp` is declared inside the momentum loop (`int ntmp=hmeantmp->GetNbinsX()`)
+  and used after it, at line 255. Hoisted to the enclosing scope.
+* `if (PID==13) nmom = 24;` hardcodes the momentum-point count for mu and pi,
+  which over-runs a `hist_tpdf` built from fewer points -- which is what a
+  partial grid produces. Clamped with `std::min(nmom, 24)`.
+
+## What lives where
+
+These sources are **vendored copies**: the files that actually run live in the
+fiTQun checkout (`$FITQUN/timepdf_work`, `$FITQUN/cprofile_fit`,
+`$FITQUN/Utilities`), which is not a git repository. Editing a reference macro
+there and not copying it here loses the fix the moment that tree is re-cloned.
+`fitqun_SK_WAND.parameters.dat` is our own tune file and is vendored for the
+same reason.
