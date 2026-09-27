@@ -1,0 +1,143 @@
+*****************************************************************************************
+ fiTQun parameter overrides for LUCiD's SK_WAND geometry
+*****************************************************************************************
+
+  Tune file lookup. WCSimPMTType names the photosensor and appears in every
+  per-PMT file name (cPDFpar_<type>.root, angResp_<config>_<type>.root,
+  <pdg>_tpdfpar_<config>_<type>.root); WCSimConfig names the detector and gives
+  fiTQun_scattablesF_<config>.root.
+
+     < fiTQun.WCSimPMTType = PMT20inch >
+     < fiTQun.WCSimConfig = SK_WAND >
+
+  Scalar parameters. fiTQun builds these names as <key>WCSim, and the shipped
+  parameters file defines only the SK<n> variants, so a WCSim tune must supply all
+  of them -- step 5 ("tuning the scalar parameters") of the reference procedure,
+  which has NOT been done for this detector.
+
+    WaterAttenuationLength. LUCiD's water is the SK calibration parameterisation
+      (evaluated as lucid/wavelength/medium.py implements it), and a single
+      effective length is convention dependent: 1/<alpha> = 6516 cm, <1/alpha> =
+      8705 cm, and fitting one exponential to the spectrum-averaged transmission
+      gives 6810 cm at R = 5 m rising to 7718 cm at 40 m as the spectrum hardens.
+      Over the source-PMT distances that dominate SK geometry this lands on
+      ~7000-7500 cm, so SK-IV's 7496.46 is kept -- it is the fitted value at
+      R ~ 30 m. Per-wavelength lengths peak at 121 m near 400 nm.
+
+    QEEff. Cannot be pinned from the QE curve alone: it converts *emitted*
+      photons (our gNphot) into detected ones, so it depends on the emission band
+      PhotonSim used. The same curve gives <QE> = 16.3% over 300-500 nm, 12.8%
+      over the QE knot range 294-648 nm, and 6.7% over 200-700 nm. 0.1278 is the
+      knot-range value, which is also LUCiD's own default sampling band. This is
+      provisional: simulator.py notes that treating all nphot as detectable
+      over-counts charge by ~17% and drives recon dE ~ -13%, and our gNphot runs
+      ~14% above the reference tune's. The residual belongs in QEEffCorr, which a
+      real scalar tune fits against observed charge; it is left at unity here.
+
+     < fiTQun.PeakThrWCSim = 9. >
+     < fiTQun.GainCorrFactWCSim = 1.0 >
+     < fiTQun.WaterAttenuationLengthWCSim = 7496.46 >
+     < fiTQun.DarkRateWCSim = 4.2 >
+     < fiTQun.QEEffWCSim = 0.02278 >
+  ^ MEASURED charge scale, not a QE value, obtained by iteration on 20 muons of
+  322-2046 MeV/c. The first estimate (0.0319) was fitted while hits were being
+  attributed to the wrong PMTs and is void. On correct geometry, QEEff = 0.0319
+  gave p_reco/p_true = 0.714 with totq/totmu = 1.008 -- the fit reproduces the
+  observed charge but at 0.71x the true momentum, so the light-per-MeV is high by
+  that factor: 0.0319 x 0.714 = 0.02278.
+  This is step 5 of the reference procedure (tuning the scalar parameters), and
+  QEEff is where it has to go for MC: QEEffCorr, the knob that looks made for it,
+  is assigned only inside if(IsItRealData()) (fiTQun.cc:685-700) and is forced to
+  1 otherwise, so it cannot correct a simulated sample.
+  The factor is larger than any plausible mean QE (6.7-16.3% over the curve,
+  depending on PhotonSim's emission band), so it is absorbing the whole
+  normalisation chain -- Phi0_local, the nphot convention, and the ~14% by which
+  our gNphot exceeds the reference tune's -- not QE alone. Re-measure whenever the
+  photon yield, QE curve or digitizer changes.
+     < fiTQun.QEEffCorrWCSim = 1. >
+  p_reco/p_true = 0.2494 (16-84%: 0.204-0.429) over 20 muons of 322-2046 MeV/c,
+  i.e. fiTQun predicted 4.01x more light than LUCiD produced, so the fit bought
+  agreement by shrinking the momentum. Predicted charge is linear in this factor,
+  so scaling it by the measured ratio is the first-order scalar tune (step 5 of
+  the reference procedure). It absorbs whatever QEEff cannot be derived for:
+  PhotonSim's emission band is unknown, and <QE> over the QE curve ranges from
+  6.7% (200-700nm) to 16.3% (300-500nm) depending on it. Re-measure this whenever
+  the photon yield, QE curve or digitizer changes.
+     < fiTQun.QmuConvFactWCSim = 1.0 >
+
+  PID and ring-counting discriminant cut lines. These affect only the reported
+  classification, not the fits themselves; SK-IV's values.
+
+     < fiTQun.PIDCutEPipa0WCSim = -10. >
+     < fiTQun.PIDCutEPipa1WCSim = 0. >
+     < fiTQun.PIDCutMuPip0WCSim = 20. >
+     < fiTQun.PIDCutMuPip1WCSim = 0.2 >
+     < fiTQun.RCCut1Ea0WCSim = 87.5 >
+     < fiTQun.RCCut1Mua0WCSim = 140. >
+     < fiTQun.RCCuta0WCSim = 70. >
+     < fiTQun.RCCuta1WCSim = 0. >
+
+  Our Cherenkov profiles are the raw tables (hI3d_*), not the momentum-fitted
+  form, so the fitted branch of LoadProfiles must be off or it looks for
+  CProf_<pdg>_fit_WCSim.root. The time profile stays fitted: tpdfpar IS the
+  fitted parameterisation and that is the file we supply.
+
+  Refractive index the fitter assumes when subtracting time of flight. This is
+  not an effective average: LUCiD's refractive_index is a plain scalar 1.33
+  (config/materials/water.json -- its scattering and absorption are
+  wavelength-dependent, the index is not), so every photon propagates at c/1.33
+  and the fitter assuming 1.33 reproduces that exactly, with no residual.
+  fiTQun ships 1.38, SK's GROUP index, which is the physically right choice for
+  real water but the wrong one for reconstructing this simulation. The tune has
+  to match the simulation, not the physics.
+  This MUST match the nwtr passed to makehistWCSim when the time PDF is built --
+  they are separate constants that merely share a default, so changing one alone
+  silently biases the PDF against the fitter.
+     < fiTQun.WaterRefractiveIndex = 1.33 >
+     < fiTQun.UseFitCProfile = 0 >
+
+  Scattered light from the 6D table only. fiTQun's default UseScatteredLight=4
+  means "6D for the 1R fit, 3D otherwise", which demands
+  fiTQun_scattable3d_<config>.root -- a separate reference product
+  (Utilities/scattable/scattable3d) that this tune does not yet build. 1 selects
+  the 6D table everywhere, which is the table we do produce.
+
+     < fiTQun.UseScatteredLight = 1 >
+
+  Which single-ring hypotheses to fit. The shipped defaults enable the proton
+  (DoProton1RFit = 2, upstream track), which makes LoadProfiles demand
+  CProf_2212_WCSim.root and abort when it is absent -- and no WCSim tune ships a
+  proton profile, ours or the reference's (only the SK-era tune does). The
+  enabled set must match the profiles the tune actually provides: e, mu, pi+.
+
+     < fiTQun.DoProton1RFit = 0 >
+     < fiTQun.DoKaonPlus1RFit = 0 >
+     < fiTQun.DoGamma1RFit = 0 >
+
+  The pion is fitted as an upstream track (DoPionPlus1RFit = 2), and that fit
+  segfaults in SetOneRingSeed/GetOneRngnglogL on this tune -- the upstream-track
+  seed depends on the time PDF, which is still a bootstrap from a different
+  detector (nuPRISM/WCTE), so its seed lands out of range. Disabled until our own
+  time PDF exists; the electron and muon fits run to completion without it.
+
+     < fiTQun.DoPionPlus1RFit = 0 >
+
+  Single-ring fits only, for this demonstration. Everything downstream of the 1R
+  fits -- multi-segment, multi-ring, pi0, mu/gamma decay -- builds on the same
+  time PDF and multi-ring machinery, and DoMSFit segfaults in GetMRnglogL on the
+  bootstrap tune. The quantity being measured here is the 1R muon fit, so the
+  rest are off; they should be re-enabled once the time PDF is our own.
+
+     < fiTQun.DoMSFit = 0 >
+     < fiTQun.DoMRFit = 0 >
+     < fiTQun.DoMoreMRFit = 0 >
+     < fiTQun.DoPi0Fit = 0 >
+     < fiTQun.DoPDK_MuGammaFit = 0 >
+     < fiTQun.DoInGateDcyeFit = 0 >
+
+  fiTQun ships DoBiasCorrection = 1, which applies EMPIRICAL bias corrections
+  derived for Super-K to the fit results. Those corrections are not justified for
+  a different detector and silently shift every reconstructed quantity, so they
+  are off here. Turn them back on only with corrections derived for this geometry.
+
+     < fiTQun.DoBiasCorrection = 0 >
