@@ -135,6 +135,44 @@ def test_shared_propagator_reaches_curved_pmt_before_wall(tmp_path):
     npt.assert_allclose(result["normals"][0], [1.0, 0.0, 0.0], atol=2e-6)
 
 
+def test_smooth_shared_propagator_supports_forward_and_reverse_autodiff(
+    tmp_path, lookup,
+):
+    """The integrated production path differentiates the forward value."""
+    detector = _one_pmt_detector(tmp_path)
+    propagator = create_propagator(
+        detector,
+        jnp.asarray(detector.all_points),
+        detector.S_radius,
+        temperature=float(lookup.sigma) / detector.S_radius,
+        sensor_shape="sk20inch",
+        sk_pmt_lookup=lookup,
+        max_candidates_per_ray=1,
+    )
+
+    def deposited_weight(offset):
+        result = propagator(
+            jnp.array([[0.0, offset, 0.0]]),
+            jnp.array([[1.0, 0.0, 0.0]]),
+        )
+        return jnp.sum(result["sensor_weights"])
+
+    offset = 0.24
+    reverse = jax.grad(deposited_weight)(offset)
+    forward = jax.jvp(deposited_weight, (offset,), (1.0,))[1]
+    step = 1e-4
+    finite_difference = (
+        deposited_weight(offset + step)
+        - deposited_weight(offset - step)
+    ) / (2.0 * step)
+
+    assert np.isfinite(float(reverse))
+    assert abs(float(reverse)) > 1.0
+    assert float(reverse) == pytest.approx(float(forward), rel=2e-6)
+    assert float(reverse) == pytest.approx(
+        float(finite_difference), rel=2e-4, abs=2e-3)
+
+
 def test_sk_shape_requires_measured_axes_and_surfaces():
     detector = Cylinder(1.0, 2.0, 20, 0.10)
     with pytest.raises(ValueError, match="pmt_directions"):
