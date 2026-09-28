@@ -36,5 +36,7 @@ Reconstruction / calibration at the single-event or single-config level: see
 
 `campaign_recon/` is git-ignored (personal research scratch); `campaign/` is tracked
 (its `grid_out/` results directory is not). Cluster
-deployment lives in `../lucid/production/jobs/` (portable SLURM/HTCondor/NERSC) and `../s3df_jobs/`
-(SLAC-specific).
+deployment lives in `../lucid/production/jobs/` (portable SLURM/HTCondor/NERSC). The SLAC-specific
+`../s3df_jobs/` is gone: its three scan-config generators produced the same nrays / energy
+(400-1800 MeV) / sensor-count scans that `analysis/paper/utils/studies.py` now generates, and its
+`submit_job.py` was an earlier draft of `analysis/paper/utils/submit_job.py`.

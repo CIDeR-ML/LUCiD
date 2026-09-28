@@ -1,0 +1,27 @@
+{
+  "coeffs": [
+    11.128077550907758,
+    5.743465877143831,
+    0.03523105960970567,
+    -0.06893586548010988,
+    0.05839131942320894,
+    0.20016611143497137,
+    -0.4630865558226625,
+    0.2511937902690403
+  ],
+  "u0": 5.756462732485114,
+  "du": 5.756462732485114,
+  "degree": 7,
+  "basis": "centred",
+  "logpoly_rms_frac": 0.000673554224785007,
+  "logpoly_max_frac": 0.007004839364665116,
+  "fit_min_mev": 1,
+  "fit_max_mev": 100000,
+  "form": "logpoly",
+  "for_model_legacy": {
+    "a": 214.77452430615435,
+    "b": 1.0000232960278297,
+    "c": 72.23764137813576
+  },
+  "source": "fitted upstream against the water electron photon lookup table (photon_lookup_table.h5); that table is NOT in this repo, so these coefficients cannot be regenerated here. Verified on arrival: exp(u0-du)=1.0 and exp(u0+du)=100000 match fit_min/max_mev. Unlike the muon, the legacy power law was already accurate across the 400-1800 MeV paper band (-0.01% at 400/600/1000/1400/1800 MeV, 0.065% rms over 100-2000 MeV), so this changes no paper number; it is here because that same power law is wrong by +180.65% at 1 MeV, +56.75% at 2 MeV and +13.38% at 5 MeV -- 10.5% rms over the full 1 MeV-100 GeV table against 0.067% for the polynomial."
+}

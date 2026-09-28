@@ -185,7 +185,10 @@ def create_string_propagator(
         ov = jnp.where(valid, ov, 0.0)
 
         # ── 7. Sensor normals (outward from DOM center) ──
-        sensor_normals = -to_sensor / (jnp.linalg.norm(to_sensor, axis=-1, keepdims=True) + 1e-10)
+        # Divide by perp_dist, whose epsilon sits inside the sqrt, not by jnp.linalg.norm:
+        # the norm differentiates to v/|v|, which is 0/0 (NaN) at to_sensor == 0, and an epsilon
+        # added after the norm protects the division but not the norm's own derivative.
+        sensor_normals = -to_sensor / (perp_dist[..., None] + 1e-10)
 
         # ── 8. inside_sensor: overlap-based (volume model) ──
         has_weight = ov > 1e-10

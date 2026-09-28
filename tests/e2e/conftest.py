@@ -1,6 +1,6 @@
 """Shared constants and helpers for e2e tests.
 
-Split from the original test_e2e_wavelength.py.
+One module per scenario; this file holds what they share.
 """
 import os
 import sys
