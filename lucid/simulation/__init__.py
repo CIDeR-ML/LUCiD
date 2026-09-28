@@ -21,3 +21,8 @@ from lucid.simulation.config import SimConfig
 from lucid.simulation.pmt_timing import (
     apply_sk4_pmt_timing, get_pmt_timing_model, sample_sk4_time_offsets,
 )
+from lucid.simulation.pmt_detection import (
+    TabulatedPmtDetectionResponse,
+    load_pmt_detection_response,
+    make_tabulated_pmt_detection_response,
+)

@@ -186,3 +186,54 @@ Combining `sensor_shape="sk20inch"` with the older diagnostic
 `sensor_acceptance_model="cosine"` is rejected because that would apply an
 extra angular response. Acrylic transmission and photocathode optical response
 are still separate physics and are not included here.
+
+## Local-incidence detection response
+
+The optional `pmt_detection_model` adds the photocathode conversion
+probability after geometric interception. It accepts a portable `.npz` table
+of relative efficiency versus the local incidence cosine:
+
+```python
+sim = setup_event_simulator(
+    "config/SK_geom_config.json",
+    sensor_shape="sk20inch",
+    pmt_detection_model="sk4_pmt_absorptance_405nm.npz",
+    # other simulation options...
+)
+```
+
+For the SK comparison table, `scripts/convert_sk_pmt_absorptance.py` reads
+SKDetSim's `reflect.dec12.dat`, reproduces the wavelength-bin selection in
+`RFPMSG`, averages the s- and p-polarized absorptances, and divides by the
+normal-incidence absorptance. The converter stores the source SHA-256 and
+selected table wavelength in the artifact. At a requested 405 nm, SKDetSim's
+integer lookup selects the table block labelled 405.5 nm.
+
+For a hit with incoming direction \(\hat d\), the production propagator's
+curved normal \(\hat n_{out}\) points out of the detector water volume. The
+response stage evaluates
+
+\[
+  \mu_{local}=\max(0,\hat d\mathbin{\cdot}\hat n_{out}),\qquad
+  q=w_{geometry}\,QE_0\,q_i\,R(\mu_{local}).
+\]
+
+No extra cosine appears in this expression: `w_geometry` already includes
+the curved projected area. The relative response `R` may exceed one. Expected
+value modes preserve that enhancement; stochastic modes clip only the final
+product `QE * R` to a valid Bernoulli probability.
+
+The linear table interpolation, curved-surface root, hit position, and local
+normal all use JAX. Forward-mode and reverse-mode derivatives agree with a
+finite difference away from the physical piece boundaries. As with the PMT
+geometry itself, sphere/torus selection, active-band selection, and exact
+hit/miss decisions remain piecewise differentiable.
+
+For finite-temperature Gaussian coverage, the response currently uses the
+exact central ray's local normal. If the central ray misses while its Gaussian
+bundle overlaps the PMT, it uses the PMT-axis normal as a stable fallback. A
+future response-weighted coverage table should integrate `R(mu_local)` over
+the curved surface together with the Gaussian footprint. That gives the most
+faithful smooth forward value and its exact gradient. A SIREN is useful later
+as a learned residual for effects such as bulb position, azimuth, and magnetic
+field; it should not replace the measured one-dimensional optical table.

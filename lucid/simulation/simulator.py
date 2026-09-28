@@ -38,6 +38,10 @@ from lucid.simulation.photon_step import (
 )
 from lucid.simulation.reflection import get_reflection_model
 from lucid.simulation.pmt_timing import get_pmt_timing_model
+from lucid.simulation.pmt_detection import (
+    TabulatedPmtDetectionResponse,
+    load_pmt_detection_response,
+)
 from lucid.simulation.sensor_response import (
     make_hits_simulation, make_hits_data, make_hits_likelihood, make_hits_moments,
     make_hits_per_photon,
@@ -114,6 +118,7 @@ def setup_event_simulator(
         spectrum=None,
         cherenkov_emission_band=None,
         pmt_timing_model=None,
+        pmt_detection_model=None,
         **grid_params):
     """
     Set up and return an event simulator using DetectorParams / ParticleParams.
@@ -230,6 +235,12 @@ def setup_event_simulator(
         SKDetSim ``sgpmt.F``. This changes times only, never charge or sensor
         assignment, and uses a dedicated RNG substream so later QE and charge
         draws remain paired with a timing-disabled run. Default ``None``.
+    pmt_detection_model : TabulatedPmtDetectionResponse, path-like, or None
+        Optional local-incidence detection response. For ``sensor_shape='sk20inch'``,
+        this multiplies the ordinary QE by a table evaluated at the cosine
+        between the incoming ray and the curved photocathode normal. The table
+        is a relative response and may exceed one; stochastic hit modes clip
+        only the final QE probability. ``None`` preserves the previous result.
     spectrum : Spectrum or None
         Optional λ-sampling law (``lucid.wavelength`` Monochromatic / PowerLaw /
         QEWeighted). When given it supersedes ``wavelength_sampling`` for broadband
@@ -322,6 +333,22 @@ def setup_event_simulator(
     Nphot = sim_config.n_photons
     propagate_photons = det_geom.propagator
 
+    if pmt_detection_model is None:
+        _pmt_detection_response = None
+    elif isinstance(pmt_detection_model, TabulatedPmtDetectionResponse):
+        _pmt_detection_response = pmt_detection_model
+    else:
+        _pmt_detection_response = load_pmt_detection_response(
+            pmt_detection_model)
+    if _pmt_detection_response is not None:
+        if _is_volume:
+            raise ValueError(
+                "pmt_detection_model is only supported for surface detectors")
+        if sensor_shape != 'sk20inch':
+            raise ValueError(
+                "pmt_detection_model requires sensor_shape='sk20inch' so the "
+                "response is evaluated with a physical curved-surface normal")
+
     if sensor_acceptance_model == 'cosine' or return_incidence_diagnostics:
         if not hasattr(detector, 'r') or not hasattr(detector, 'H'):
             raise ValueError("cosine sensor acceptance currently requires cylinder geometry")
@@ -382,35 +409,40 @@ def setup_event_simulator(
     # ---- make_hits wrapper selection ----------------------------------------
     # Every wrapper accepts a trailing ``response`` bundle (gain, t0, spe_width, tts)
     # built from DetectorParams at call time; only the moments mode consumes it.
-    def _make_hits_aggregated(flat_weights, flat_indices, flat_times, num_sensors, qe_key, qe, qe_corrections, response=None, flat_segment_idx=None):
+    def _make_hits_aggregated(flat_weights, flat_indices, flat_times, num_sensors, qe_key, qe, qe_corrections, response=None, flat_segment_idx=None, pmt_response_factor=None):
         return make_hits_simulation(flat_weights, flat_indices, flat_times, num_sensors,
-                                    qe=qe, qe_corrections=qe_corrections)
+                                    qe=qe, qe_corrections=qe_corrections,
+                                    pmt_response_factor=pmt_response_factor)
 
-    def _make_hits_per_photon(flat_weights, flat_indices, flat_times, num_sensors, qe_key, qe, qe_corrections, response=None, flat_segment_idx=None):
+    def _make_hits_per_photon(flat_weights, flat_indices, flat_times, num_sensors, qe_key, qe, qe_corrections, response=None, flat_segment_idx=None, pmt_response_factor=None):
         return make_hits_likelihood(flat_weights, flat_indices, flat_times, num_sensors,
-                                    qe=qe, qe_corrections=qe_corrections)
+                                    qe=qe, qe_corrections=qe_corrections,
+                                    pmt_response_factor=pmt_response_factor)
 
-    def _make_hits_realistic(flat_weights, flat_indices, flat_times, num_sensors, qe_key, qe, qe_corrections, response=None, flat_segment_idx=None):
+    def _make_hits_realistic(flat_weights, flat_indices, flat_times, num_sensors, qe_key, qe, qe_corrections, response=None, flat_segment_idx=None, pmt_response_factor=None):
         tts = 0.0 if response is None else response[3]
         return make_hits_data(flat_weights, flat_indices, flat_times, num_sensors,
                               qe=qe, qe_corrections=qe_corrections,
                               rng_key=qe_key, tts=tts,
-                              charge_resolution=sim_config.charge_resolution)
+                              charge_resolution=sim_config.charge_resolution,
+                              pmt_response_factor=pmt_response_factor)
 
-    def _make_hits_moments(flat_weights, flat_indices, flat_times, num_sensors, qe_key, qe, qe_corrections, response=None, flat_segment_idx=None):
+    def _make_hits_moments(flat_weights, flat_indices, flat_times, num_sensors, qe_key, qe, qe_corrections, response=None, flat_segment_idx=None, pmt_response_factor=None):
         gain, t0, spe_width, tts = response
         return make_hits_moments(flat_weights, flat_indices, flat_times, num_sensors,
                                  qe=qe, qe_corrections=qe_corrections,
-                                 gain=gain, spe_width=spe_width, t0=t0, tts=tts)
+                                 gain=gain, spe_width=spe_width, t0=t0, tts=tts,
+                                 pmt_response_factor=pmt_response_factor)
 
-    def _make_hits_per_segment(flat_weights, flat_indices, flat_times, num_sensors, qe_key, qe, qe_corrections, response=None, flat_segment_idx=None):
+    def _make_hits_per_segment(flat_weights, flat_indices, flat_times, num_sensors, qe_key, qe, qe_corrections, response=None, flat_segment_idx=None, pmt_response_factor=None):
         # Production: per-sensor totals + per-photon pass-through arrays (incl the
         # per-photon segment index) for the host-side per-(segment, sensor) groupby.
         tts = 0.0 if response is None else response[3]
         return make_hits_per_photon(flat_weights, flat_indices, flat_times, num_sensors,
                                     qe=qe, qe_corrections=qe_corrections,
                                     rng_key=qe_key, tts=tts, flat_segment_idx=flat_segment_idx,
-                                    charge_resolution=sim_config.charge_resolution)
+                                    charge_resolution=sim_config.charge_resolution,
+                                    pmt_response_factor=pmt_response_factor)
 
     # Shotgun hit modes (waveform + per-photon). Defaults match SK-realistic
     # PMT behaviour; override via ``waveform_config``.
@@ -422,9 +454,9 @@ def setup_event_simulator(
     if hit_mode == 'waveform':
         _wf_fn = build_make_hits_waveform(n_photons=n_photons, **_wf_cfg)
         def _make_hits_waveform(flat_weights, flat_indices, flat_times, num_sensors,
-                                qe_key, qe, qe_corrections, response=None, flat_segment_idx=None):
+                                qe_key, qe, qe_corrections, response=None, flat_segment_idx=None, pmt_response_factor=None):
             return _wf_fn(flat_weights, flat_indices, flat_times, num_sensors,
-                          qe_key, qe, qe_corrections)
+                          qe_key, qe, qe_corrections, pmt_response_factor)
     elif hit_mode == 'waveform_expected':
         # Expected-value waveform: no Bernoulli, no gain smear — those do not
         # exist when every slot deposits a continuous weight.
@@ -432,18 +464,18 @@ def setup_event_simulator(
         _wf_exp_fn = build_make_hits_waveform_expected(
             n_photons=n_photons, **_wf_exp_cfg)
         def _make_hits_waveform_expected(flat_weights, flat_indices, flat_times, num_sensors,
-                                         qe_key, qe, qe_corrections, response=None, flat_segment_idx=None):
+                                         qe_key, qe, qe_corrections, response=None, flat_segment_idx=None, pmt_response_factor=None):
             return _wf_exp_fn(flat_weights, flat_indices, flat_times, num_sensors,
-                              qe_key, qe, qe_corrections)
+                              qe_key, qe, qe_corrections, pmt_response_factor)
     elif hit_mode == 'shotgun_per_photon':
         _pp_fn = build_make_hits_per_photon_shotgun(
             n_photons=n_photons,
             tts_sigma_ns=_wf_cfg['tts_sigma_ns'],
             smear_time=_wf_cfg['smear_time'])
         def _make_hits_shotgun_pp(flat_weights, flat_indices, flat_times, num_sensors,
-                                  qe_key, qe, qe_corrections, response=None, flat_segment_idx=None):
+                                  qe_key, qe, qe_corrections, response=None, flat_segment_idx=None, pmt_response_factor=None):
             return _pp_fn(flat_weights, flat_indices, flat_times, num_sensors,
-                          qe_key, qe, qe_corrections)
+                          qe_key, qe, qe_corrections, pmt_response_factor)
 
     _make_hits_fn = {
         'aggregated': _make_hits_aggregated,
@@ -644,6 +676,23 @@ def setup_event_simulator(
             depositions = prop_results['sensor_weights']
             sensor_indices = prop_results['sensor_indices']
             inside_sensor = prop_results['inside_sensor']
+            if _pmt_detection_response is None:
+                pmt_response_factor = jnp.ones_like(depositions)
+            else:
+                # ``sensor_normals`` use the detector-outward convention, as
+                # does the incoming ray direction at a PMT. Their dot product
+                # is therefore the local incidence cosine. For lookup-only
+                # bundle overlap where the central ray misses the bulb, the
+                # propagator supplies the PMT-axis fallback normal.
+                local_normals = prop_results['sensor_normals']
+                local_incidence_cosine = jnp.clip(
+                    jnp.sum(
+                        local_normals * state.directions[None, :, :], axis=-1),
+                    0.0, 1.0)
+                pmt_response_factor = _pmt_detection_response.factor(
+                    local_incidence_cosine)
+                pmt_response_factor = jnp.where(
+                    sensor_indices >= 0, pmt_response_factor, 1.0)
             if sensor_acceptance_model == 'cosine' or return_incidence_diagnostics:
                 safe_indices = jnp.maximum(sensor_indices, 0)
                 candidate_axes = sensor_axes[safe_indices]
@@ -696,7 +745,9 @@ def setup_event_simulator(
                 new_state = PhotonState(
                     positions=next_pos, directions=next_dir, times=new_times,
                     survival=new_survival, key=key, log_p=new_log_p)
-                outputs = (updated_weights, sensor_indices, total_times.squeeze(-1))
+                outputs = (
+                    updated_weights, sensor_indices, total_times.squeeze(-1),
+                    pmt_response_factor)
                 if return_incidence_diagnostics:
                     outputs = outputs + (incidence_cosine,)
                 return new_state, outputs
@@ -772,7 +823,8 @@ def setup_event_simulator(
                 key=key,
                 log_p=new_log_p,
             )
-            outputs = (iter_weights, iter_indices, iter_times)
+            outputs = (
+                iter_weights, iter_indices, iter_times, pmt_response_factor)
             if return_incidence_diagnostics:
                 outputs = outputs + (incidence_cosine,)
             return new_state, outputs
@@ -790,13 +842,16 @@ def setup_event_simulator(
         scan_outputs = jax.lax.scan(
             propagation_step_remat, init_state, jnp.arange(K))[1]
         if return_incidence_diagnostics:
-            all_weights, all_indices, all_times, all_incidence_cosines = scan_outputs
+            (all_weights, all_indices, all_times, all_pmt_response_factors,
+             all_incidence_cosines) = scan_outputs
         else:
-            all_weights, all_indices, all_times = scan_outputs
+            (all_weights, all_indices, all_times,
+             all_pmt_response_factors) = scan_outputs
 
         flat_weights = all_weights.reshape(-1)
         flat_indices = all_indices.reshape(-1)
         flat_times = all_times.reshape(-1)
+        flat_pmt_response_factors = all_pmt_response_factors.reshape(-1)
 
         # Optional PMT transit/late/pre-pulse response. The model is resolved
         # statically at setup. Every model uses a dedicated RNG substream and
@@ -819,7 +874,8 @@ def setup_event_simulator(
         flat_segment_idx = (segment_idx[photon_idx] if segment_idx is not None else None)
         hit_output = make_hits_fn(
             flat_weights, flat_indices, flat_times, num_sensors, qe_key, flat_qe, qe_corrections,
-            response, flat_segment_idx=flat_segment_idx)
+            response, flat_segment_idx=flat_segment_idx,
+            pmt_response_factor=flat_pmt_response_factors)
         if return_incidence_diagnostics:
             flat_incidence_cosines = all_incidence_cosines.reshape(-1)
             slots_per_step = max_candidates_per_ray * n_rays
