@@ -93,7 +93,7 @@ def place_box(n_sensors, L, W, H):
 
 
 def write_common_config(cfg_grp, n_events, provenance_extras=None):
-    cfg_grp.attrs['format_version'] = 5
+    cfg_grp.attrs['format_version'] = 6
     cfg_grp.attrs['n_events'] = n_events
     cfg_grp.attrs['git_commit'] = 'test-stub'
     cfg_grp.attrs['run_id'] = 'test-stub-000'
@@ -184,6 +184,16 @@ def gen_event(rng, n_sensors, sensor_positions, n_particles=6):
     track_rows = np.array(track_rows, dtype=[
         ('track_id', 'i4'), ('parent_id', 'i4'), ('pdg', 'i2'),
         ('init_e', 'f4'), ('n_cher', 'i4'), ('particle_idx', 'i4')])
+
+    # v6 per_track direction: the earliest-time segment of each track, the same
+    # rule the real writer uses (lucid/sources/writer.py).
+    track_dir = np.zeros((len(track_rows), 3), dtype=np.float32)
+    for i, tid in enumerate(track_rows['track_id']):
+        sel = np.flatnonzero(edep_rows['track_idx'] == tid)
+        if sel.size:
+            j = sel[np.argmin(edep_rows['time'][sel])]
+            track_dir[i] = (edep_rows['dir_x'][j], edep_rows['dir_y'][j],
+                            edep_rows['dir_z'][j])
 
     # labl: categories and genealogy stubs.
     categories = rng.integers(0, 4, size=n_particles, endpoint=False).astype(np.uint8)
@@ -310,6 +320,9 @@ def gen_event(rng, n_sensors, sensor_positions, n_particles=6):
                              'parent_id': track_rows['parent_id'],
                              'pdg': track_rows['pdg'],
                              'initial_energy': track_rows['init_e'],
+                             'dir_x': track_dir[:, 0],
+                             'dir_y': track_dir[:, 1],
+                             'dir_z': track_dir[:, 2],
                              'n_cherenkov': track_rows['n_cher'],
                              'particle_idx': track_rows['particle_idx'],
                              'ancestor': track_ancestor,
