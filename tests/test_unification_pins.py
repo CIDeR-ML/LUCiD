@@ -12,7 +12,7 @@ def test_ridge_inverse_indefinite_pin():
 
     Captured 2026-06-11; defaults ridge=0.02, mu=0.3. numpy eigh ⇒ byte-stable on CPU.
     """
-    from lucid.fitting.gauss_newton import ridge_inverse
+    from lucid.fitting.schur_gn import ridge_inverse
     H = np.array([[2, 1, 0, 0], [1, -3, 1, 0], [0, 1, 5, 2], [0, 0, 2, 1]], float)
     R = ridge_inverse(H)
     expected = np.array([
@@ -152,12 +152,17 @@ def test_fitting_contracts_protocols():
     The two opaque fitting callables (calibration forward, recon per-photon predictor) are
     typed Protocols so they're grep/pyright/IDE-checkable. Pin that they import, are
     runtime_checkable, and a conforming callable satisfies them."""
+    import inspect
     from lucid.fitting import CalibForward, PerPhotonPredictor
     assert callable(getattr(CalibForward, '__instancecheck__', None))        # runtime_checkable
-    calib = lambda theta, ek, pk: None
-    pred = lambda track, key: (None, None, None, None)
-    assert isinstance(calib, CalibForward)
-    assert isinstance(pred, PerPhotonPredictor)
+
+    # runtime_checkable Protocols check METHOD PRESENCE, not signatures, so isinstance accepts
+    # any callable (`dict`, a zero-arg lambda) and cannot tell CalibForward from
+    # PerPhotonPredictor. The declared call signatures carry the contract, so pin those.
+    assert [p.name for p in inspect.signature(CalibForward.__call__).parameters.values()][1:] \
+        == ['theta', 'ek', 'pk']
+    assert [p.name for p in inspect.signature(PerPhotonPredictor.__call__).parameters.values()][1:] \
+        == ['track', 'key']
     assert not isinstance(42, CalibForward)                                  # non-callable rejected
 
 
@@ -174,6 +179,19 @@ def test_fitting_analysis_seam():
     s = resolution_stats(np.array([1., -2., 3., -4., 5.]))
     assert s['n'] == 5 and set(s) >= {'median', 'mean', 'rms', 'containment', 'median_ci'}
     np.testing.assert_allclose(s['rms'], np.sqrt((np.array([1, 4, 9, 16, 25])).mean()), rtol=1e-9)
+    # The CI must bracket the median it is named after. Bootstrapping |e| while taking the
+    # median of e lets the interval exclude its own median on signed input
+    # ([-5,-4,-3,3,4,5]: median 0.0, CI (3.5, 4.5)).
+    lo, hi = s['median_ci']
+    assert lo <= s['median'] <= hi, (
+        f'median {s["median"]} outside its own CI ({lo}, {hi}) -- CI computed on a different '
+        f'quantity than the median')
+    sym = resolution_stats(np.array([-5., -4., -3., 3., 4., 5.]))
+    lo, hi = sym['median_ci']
+    assert lo <= sym['median'] <= hi, f'symmetric case: median {sym["median"]} outside ({lo}, {hi})'
+    # Non-negative (magnitude) input has |e| == e, so this case is unaffected by the fix.
+    mag = resolution_stats(np.array([1., 2., 3., 4., 5.]))
+    np.testing.assert_allclose(mag['median'], 3.0, rtol=1e-12)
 
 
 def test_no_env_reads_in_lucid_package():

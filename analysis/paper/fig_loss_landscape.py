@@ -43,9 +43,29 @@ GUESS_SEED0 = 42
 
 
 def phys_from_vec9(v):
-    """vec9 -> notebook order [X, Y, Z, t0, theta, phi, E]."""
+    """vec9 -> NOTEBOOK order ``[X, Y, Z, t0, theta, phi, E]`` — NOT the pipeline's order.
+
+    Two orderings live in this package and they differ by exactly one transposition:
+    :func:`pipeline.vec9_to_phys` returns ``[x, y, z, phi, theta, t0, E]``, and this figure keeps
+    the notebook's ``[X, Y, Z, t0, theta, phi, E]`` because `PHYS_NAMES`, `HALF_RANGE` and
+    `SCAN_PAIRS` are all indexed in it. Both are internally consistent; MIXING them swaps phi
+    with t0, which evaluates the model at the wrong point while every label still names the right
+    coordinate. Use :func:`vec9_from_phys` as the inverse, never the pipeline's;
+    `tests/test_phys_vec9_roundtrip.py` pins both conventions and asserts they differ.
+    """
     x, y, z, phi, theta, t0, E = vec9_to_phys(v)
     return np.array([x, y, z, t0, theta, phi, E])
+
+
+def vec9_from_phys(p, xp=np):
+    """NOTEBOOK order ``[X, Y, Z, t0, theta, phi, E]`` -> vec9. Exact inverse of the above.
+
+    ``xp`` selects the array module: numpy by default, pass ``jax.numpy`` to stay traceable.
+    """
+    return xp.stack([p[6], p[0], p[1], p[2],
+                     xp.sin(p[4]), xp.cos(p[4]),        # theta <- index 4
+                     xp.sin(p[5]), xp.cos(p[5]),        # phi   <- index 5 (notebook order)
+                     p[3]])                             # t0    <- index 3
 
 
 def notebook_guess(true_phys, bounds, seed):
@@ -104,9 +124,9 @@ def main():
           flush=True)
 
     # ---- the actual reconstruction loss, as a function of the PHYSICAL params -------------
+    # NOTEBOOK order throughout this figure; the pipeline's order differs by a phi<->t0 swap.
     def t9_of_phys(p):
-        return jnp.array([p[6], p[0], p[1], p[2],
-                          jnp.sin(p[4]), jnp.cos(p[4]), jnp.sin(p[5]), jnp.cos(p[5]), p[3]])
+        return vec9_from_phys(p, xp=jnp)
 
     def loss_phys(p, key):
         return pipe.model._loss(t9_of_phys(p), oc, ot, key)

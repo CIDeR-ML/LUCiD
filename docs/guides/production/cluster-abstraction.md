@@ -157,8 +157,6 @@ No other files change.
 - `jobs/utils/{copy,clean}_output_data.sh` — hardcode `/sdf/...` paths
   and aren't part of the production loop. Duplicate them for a new
   cluster if anyone needs them.
-- The top-level `LUCiD/s3df_jobs/` (track-optimization scans) —
-  different workflow, separate concern.
 - Per-cluster timing-model defaults
   (`siren_planning.DEFAULT_TIME_MODEL`, dataprod `seconds_per_event`).
   These were fit on S3DF runs and may need re-fitting after the first

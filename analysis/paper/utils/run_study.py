@@ -33,7 +33,7 @@ from analysis.paper.utils.pipeline import TrackingPipeline, load_config, REPO_RO
 
 # scalars stored as HDF5 group attrs; everything else in the result dict is a dataset.
 _ATTR_KEYS = {'ev', 'energy_true', 'which', 'best_iterA', 'best_iterB', 'best_iterF',
-              'best_iter_win', 'n_hit', 'q_tot', 'seconds'}
+              'best_iter_win', 'n_hit', 'q_tot', 'seconds', 'n_rejected'}
 
 
 def _git_commit():

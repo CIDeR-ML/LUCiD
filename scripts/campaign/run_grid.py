@@ -70,7 +70,7 @@ def grid(phase):
             for n in ['1e5', '3e5', '1e6', '3e6']:
                 out.append(J(f'rs_{s}_N{n}', NPH=n, INTENS=n, SRC=s, GRID='0', NB_H='2',
                              RECOVER='1', SHOT='1', M=msd, STEPS='60',
-                             BAKE_K='1', POLYAK='12', EPS='0.375'))
+                             POLYAK='12', EPS='0.375'))
         return out
     raise SystemExit(f'unknown phase {phase}')
 

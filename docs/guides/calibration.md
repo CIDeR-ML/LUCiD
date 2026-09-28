@@ -43,13 +43,14 @@ sources = [laser_source(position=[0, 0, top], direction=[0, 0, -1], intensity=1e
 sim = setup_event_simulator(GEOM, 1_000_000, temperature=None, K=8, is_calibration=True,
                             hit_mode='aggregated', wavelength_mode=False)
 
-# globals to recover; the ~10^4 per-PMT k are marginalized analytically (Schur complement)
+# globals to recover; the ~10^4 per-PMT k are profiled in closed form each step (k = sum Q / sum M)
 FIELDS = ['g', 'scatter_length', 'mie_scatter_length', 'absorption_length',
           'wall_reflection_rate', 'sensor_reflection_rate', 'qe']
 prob  = build_calibration_problem(sim, sources, dp, FIELDS, key=jax.random.PRNGKey(1))
 sigma = crb(prob['source_models'], prob['theta_true'], NS)['sigma']       # Cramer-Rao bound, per field
 start = prob['theta0'] + np.random.default_rng(0).uniform(-.15, .15, prob['theta0'].shape)
-res   = fit(prob['source_models'], prob['truth_charge'], start, NS, steps=100, refresh=15, nb_h=2)
+res   = fit(prob['source_models'], prob['truth_charge'], start, NS,
+            steps=100, refresh=15, jacobian_draws=2)
 # res['theta'] = fitted globals; compare to np.exp(prob['theta0']) (truth) and sigma (the bound).
 # theta0/theta_true are in log space; res['k'] holds the recovered per-PMT map.
 ```
@@ -93,20 +94,18 @@ specular/diffuse `*_fspec` direction split — so those fractions become fittabl
    an isotropic volume source. Diversity breaks the key degeneracies — `L_M↔k`, `L_abs↔qe`,
    wall↔sensor reflectivity — and makes the scattering lengths measurable with a plain charge
    loss.
-2. **Globals: a smoothed square-root-MSE loss**, not Poisson-NLL (the NLL's weighting biases
-   the absorption/QE point at finite photon counts). The spatial smoothing acts as a frequency
-   projector: smooth optical fields are low-frequency across the sensor array while per-PMT `k`
-   is white, so smoothing isolates the globals. Optimizer: a consistent fixed-dataset
-   Gauss-Newton with an additive ridge (optional Polyak tail-averaging of the iterates).
-3. **per-PMT `k`: closed-form `k = Q/M`** — the ratio of observed to predicted charge per
-   sensor under an isotropic source.
-4. **One bake alternation.** Without baking the estimated `k̂` back into the forward, white
-   per-PMT variation leaks into the flattest global direction (typically a reflectivity) and
-   inflates its uncertainty; one alternation restores it. Fix the gauge with `mean(log k)=0`,
-   otherwise a global QE↔mean(k) offset is unconstrained. A **smooth, position-correlated QE
-   trend is the dangerous case** — it mimics the optical fields, and if ignored it drags the
-   reflectivities away; the per-sensor `k̂=Q/M` step captures it, but needs a bootstrap `k̂`
-   from a rough global fit first.
+2. **Globals: a Neyman χ² residual**, `(k·M − Q)/√max(Q, q_floor)`. Its weight depends on the
+   data alone, so the residual stays linear in the Monte-Carlo forward, which is redrawn every
+   step; see *A residual that is not linear in the model* below. Optimizer: the damped
+   Gauss-Newton shared with reconstruction (Marquardt `lam`, Levenberg `mu`), with optional Polyak
+   tail-averaging of the iterates (`polyak=`).
+3. **per-PMT `k`: profiled, `k = ΣQ/ΣM`**, solved in closed form at every step and gauged to
+   `mean(log k)=0` (`gauge='linear'` for `mean(k)=1`). The gains never enter the optimizer. The
+   profiled gain is nonlinear in the forward, so it carries a bias that grows with the forward's
+   Monte-Carlo noise; averaging forward draws (`n_forward_draws`) reduces it
+   (`tests/test_fitting_estimator_unbiased.py` measures it).
+4. **A smooth, position-correlated QE trend is the dangerous case.** It mimics the optical
+   fields, and if ignored it drags the reflectivities away.
 
 ## Observable complementarity
 
@@ -148,16 +147,18 @@ become systematics-limited rather than photon-limited.
   diversity**. A single source leaves `L_M↔k`, `L_abs↔qe`, and wall↔sensor reflectivity
   degenerate; mixing wall lasers (several positions/wavelengths) with an isotropic flasher breaks
   them and makes the scattering lengths measurable.
-- **per-PMT `k` runs away** (a global QE↔mean-`k` offset drifts) — fix the gauge with
-  `mean(log k)=0` (the `gauge_k` step, on by default). If white per-PMT variation is leaking into
-  the flattest global (usually a reflectivity), run **one bake alternation** (`bake_k=True`) to
-  fold `k̂` back into the forward.
+- **per-PMT `k` runs away** (a global QE↔mean-`k` offset drifts) — the fitter cannot do this:
+  the gains are *profiled*, solved in closed form as `k = ΣQ/ΣM` each step and gauged to
+  `mean(log k)=0` (`gauge='linear'` for `mean(k)=1` instead). They never enter the optimizer,
+  so there is no per-PMT iterate to run away. The `crb` bound still carries them as a
+  free Schur block, because a bound must integrate over a nuisance where a fit may profile it.
 - **CRB disagrees with a sim toy-MC** — expected: the expected-value (implicit-capture) engine is
   quieter than real Poisson shot noise (the `crb` bound carries a ×√12 honesty factor). Validate
   with sampled per-photon quanta (`use_expected_value=False`), or just quote the CRB.
-- **Poisson-NLL biases `L_abs`/`qe`** — use the smoothed square-root-MSE loss instead (the NLL's
-  finite-count weighting biases the absorption/QE point); the smoothing also isolates the
-  low-frequency globals from the white per-PMT `k`.
+- **A residual that is not linear in the model** — the forward is a Monte-Carlo estimate redrawn
+  every step, so any residual nonlinear in it has `E[f(M)] ≠ f(E[M])` and a permanently displaced
+  fixed point; no amount of iteration recovers. The fitter therefore runs the **Neyman** χ²,
+  `(k·M − Q)/√Q`, the member of the family whose weight depends on the data alone.
 
 ## Frontier
 

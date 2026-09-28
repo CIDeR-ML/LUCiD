@@ -28,6 +28,7 @@ REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO))
 
 from lucid.simulation import setup_event_simulator
+from lucid.production.run_job import DEPOSIT_LEG_BOUND
 from lucid.detector_params import ParticleParams
 from lucid.sources.event_io import (
     read_particle_data_from_photonsim,
@@ -114,6 +115,7 @@ def main():
         args.detector_json, 0, K=args.K,
         is_data=True, temperature=0.0,
         charge_resolution=None,
+        deposit_leg_bound=DEPOSIT_LEG_BOUND,   # as production runs it
         physics_config=args.physics_json,
         default_detector_params=True,
     )

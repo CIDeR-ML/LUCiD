@@ -14,7 +14,8 @@ class DetectorGeometry(NamedTuple):
     Built once via ``from_config()`` and reused across different SimConfig /
     ParticleModel combinations.
     """
-    detector_type: str                          # 'Cylinder', 'Sphere', 'Box'
+    detector_type: str                          # as written in the geometry JSON, NOT normalised:
+                                                # 'cylinder', 'sphere', 'box' or 'string'
     sensor_points: jnp.ndarray                  # (num_sensors, 3)
     sensor_radius: float
     num_sensors: int
@@ -31,6 +32,7 @@ class DetectorGeometry(NamedTuple):
                     overlap_st_width_frac: float = 0.35,
                     overlap_renorm: float = 1.0,
                     overlap_mode: str = 'interp',
+                    deposit_leg_bound: bool = False,
                     **grid_params) -> 'DetectorGeometry':
         """Build a DetectorGeometry from a config JSON file.
 
@@ -47,13 +49,19 @@ class DetectorGeometry(NamedTuple):
         max_candidates_per_ray : int
             Grid cell sensor limit.
         detector_type : str
-            'Cylinder', 'Sphere', or 'Box'.
+            'cylinder', 'sphere', 'box' or 'string'; case-insensitive. Validated only -- the
+            class is dispatched from the JSON's own detector_type, not from this argument.
         overlap_st_width_frac : float
             Straight-through overlap surrogate width (fraction of r); default 0.35.
         overlap_renorm : float
             Soft-overlap renormalization constant C; default 1.0 = OFF.
         overlap_mode : str
             Soft-overlap lookup interpolation: 'interp' (default) or 'cubic'.
+        deposit_leg_bound : bool
+            Bound the deposit to the travelled leg rather than the unbounded ray line. Default
+            False (unbounded ray line). Surface detectors only: a string telescope uses its own
+            propagator and deposit, and ignores it. See
+            :func:`lucid.propagation.shared.create_propagator`.
         **grid_params
             Geometry-specific grid parameters forwarded to ``create_propagator()``.
             Cylinder: n_cap, n_angular, n_height.
@@ -97,6 +105,7 @@ class DetectorGeometry(NamedTuple):
                 overlap_st_width_frac=overlap_st_width_frac,
                 overlap_renorm=overlap_renorm,
                 overlap_mode=overlap_mode,
+                deposit_leg_bound=deposit_leg_bound,
                 **grid_params)
 
         return DetectorGeometry(

@@ -7,11 +7,6 @@ import jax.numpy as jnp
 from functools import partial
 from jax import lax
 
-from .base import (
-    process_intersection_normals, compute_sensor_intersections_base,
-    find_closest_sensors
-)
-from ..overlap import create_overlap_prob
 
 # Grazing-ray sqrt regularization for the wall-intersection discriminant. 0 -> legacy hard floor
 # sqrt(max(disc, 1e-6)) (C0 kink at the threshold + near-divergent 2nd derivative just above it,
@@ -80,8 +75,11 @@ def intersect_cylinder_wall(ray_origin, ray_direction, r, h):
         return (intersects_, tval_)
 
     def parallel_side_branch(_):
-        # Direction is purely along z => no side intersection
-        return (False, jnp.array(LARGE, dtype=jnp.float32))
+        # Direction is purely along z => no side intersection.
+        # dtype must follow the ray, not be pinned: `lax.cond` requires both branches to return
+        # identical types, and the other branch's `tval_` carries the input precision. A hard-coded
+        # float32 breaks the library under `jax_enable_x64`.
+        return (False, jnp.array(LARGE, dtype=ray_origin.dtype))
 
     use_parallel = jnp.abs(a) < 1e-12
     intersects, tval = lax.cond(use_parallel,
@@ -632,118 +630,3 @@ def create_inverted_sensor_map(assignments_geometric, assignments_distance, n_ca
     )
 
     return final_map
-
-
-def find_intersected_sensors_differentiable(ray_origins, ray_directions, sensor_positions, sensor_radius, r, h,
-                                           n_cap, n_angular, n_height, inverted_sensor_map,
-                                           temperature, overlap_prob):
-    """
-    Finds sensors intersected by rays using a differentiable approximation with overlap-based weights.
-    """
-    single_ray = ray_origins.ndim == 1
-    if single_ray:
-        ray_origins = ray_origins[None, :]
-        ray_directions = ray_directions[None, :]
-
-    # Get cylinder intersection points and grid indices
-    intersects, t_cylinder, is_wall, is_top_cap, wall_indices, cap_indices, intersection_point = (
-        batch_intersect_cylinder_with_grid(ray_origins, ray_directions, r, h, n_cap, n_angular, n_height))
-
-    def calculate_linear_index(wall_indices, cap_indices, is_wall, is_top_cap):
-        wall_linear = jnp.clip(wall_indices[:, 0] * n_height + wall_indices[:, 1],
-                               0, n_angular * n_height - 1)
-        cap_linear = jnp.clip(cap_indices[:, 0] * n_cap + cap_indices[:, 1],
-                              0, n_cap * n_cap - 1)
-        idx = jnp.where(is_wall,
-                        wall_linear,
-                        jnp.where(is_top_cap,
-                                  n_angular * n_height + cap_linear,
-                                  n_angular * n_height + n_cap * n_cap + cap_linear))
-        total_cells = n_angular * n_height + 2 * n_cap * n_cap
-        return jnp.clip(idx, 0, total_cells - 1)
-
-    idx = calculate_linear_index(wall_indices, cap_indices, is_wall, is_top_cap)
-    potential_sensors = jax.lax.stop_gradient(inverted_sensor_map[idx])
-
-    # Create bounds check function
-    bounds_check = lambda points: cylinder_bounds_check(points, r, h)
-
-    # Process all potential sensors
-    sensor_results = jax.vmap(
-        lambda det_idx: compute_sensor_intersections_base(
-            det_idx, sensor_positions, sensor_radius,
-            ray_origins, ray_directions, bounds_check, overlap_prob
-        )
-    )(potential_sensors.T)
-    
-    weights = sensor_results[0]
-    sensor_times = sensor_results[1]
-    sensor_indices = sensor_results[2]
-    sensor_normals = sensor_results[3]
-    inside_sensor = sensor_results[4]
-    sensor_hit_positions = sensor_results[5]
-
-    # Calculate cylinder normals
-    cylinder_normals = calculate_cylinder_normals(intersection_point, is_wall, is_top_cap)
-
-    intersection_results = process_intersection_normals(
-        ray_origins, ray_directions, intersection_point,
-        t_cylinder, sensor_normals, sensor_hit_positions,
-        inside_sensor, cylinder_normals
-    )
-
-    hit_positions = intersection_results['positions']
-    final_normals = intersection_results['normals']
-
-    result = {
-        'times': sensor_times,
-        'sensor_weights': weights,
-        'sensor_indices': sensor_indices,
-        'per_sensor_positions': sensor_hit_positions,
-        'positions': hit_positions,
-        'normals': final_normals,
-        'sensor_normals': sensor_normals,
-        'inside_sensor': inside_sensor
-    }
-
-    return result if not single_ray else jax.tree_map(lambda x: x[0], result)
-
-
-def create_photon_propagator(sensor_positions, sensor_radius, r=4.0, h=6.0, n_cap=150, n_angular=250, n_height=150,
-                           temperature=0.2, max_candidates_per_ray=4):
-    """
-    Creates a JIT-compiled function for efficient photon propagation simulation with overlap-based weights.
-    """
-    assignments_geometric = assign_sensors_to_grid(
-        sensor_positions, sensor_radius, r, h, n_cap, n_angular, n_height)
-
-    sensor_grid_map = create_sensor_grid_map(
-        assignments_geometric, n_cap, n_angular, n_height)
-
-    assignments_distance = find_closest_sensors(
-        calculate_grid_centers(r, h, n_cap, n_angular, n_height),
-        sensor_positions,
-        max_candidates_per_ray
-    )
-
-    inverted_sensor_map = create_inverted_sensor_map(
-        assignments_geometric,
-        assignments_distance,
-        n_cap, n_angular, n_height,
-        max_candidates_per_ray, sensor_positions.shape[0]
-    )
-
-    if temperature is None:
-        overlap_prob = create_overlap_prob(temperature, sensor_radius)
-    else:
-        # Create overlap probability function
-        overlap_prob = create_overlap_prob(temperature * sensor_radius, sensor_radius)
-
-    @jax.jit
-    def propagate_photons(photon_origins, photon_directions):
-        return find_intersected_sensors_differentiable(
-            photon_origins, photon_directions, sensor_positions, sensor_radius,
-            r, h, n_cap, n_angular, n_height, inverted_sensor_map,
-            temperature, overlap_prob)
-
-    return propagate_photons

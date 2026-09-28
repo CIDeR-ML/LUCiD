@@ -103,6 +103,7 @@ def main():
     # simulator.py:174-183 before the closure is built.
     print(f"\nSetting up event simulator with baked-in detector params")
     print(f"  Physics config: {args.physics_config}")
+    from lucid.production.run_job import DEPOSIT_LEG_BOUND
     simulate_event = setup_event_simulator(
         args.config,
         0,  # n_photons irrelevant in data mode — driven by ROOT
@@ -113,6 +114,7 @@ def main():
         physics_config=args.physics_config,
         default_detector_params=True,
         hit_mode='per_segment',  # mandatory for data mode (seg/sensor_hits/ ground truth)
+        deposit_leg_bound=DEPOSIT_LEG_BOUND,  # the production switch, shared with run_job
     )
     dp = simulate_event.default_detector_params
     print(f"  Wall reflection rate: {float(dp.reflection.wall_reflection_rate):.3f}")

@@ -3,15 +3,26 @@
 ## Running tests
 
 ```bash
-# Fast only — pure math, no JIT (~10s)
+# Fast only — pure math, no JIT (~10s).
+# Every reproduction gate in the repo is marked slow (the tripwire included), so this command
+# runs the unit tests and none of the guarantees.
 pytest tests/ -m "not slow"
 
-# All tests (~15-20 min)
+# The default. NEVER COLLECTS the files listed in conftest's _SLOW_FILES (test_tripwire.py
+# among them), so it is not the whole suite. The terminal banner names what was dropped.
 pytest tests/
 
-# Slow tests only
-pytest tests/ -m slow
+# EVERYTHING. This is the one to run before believing the suite is green.
+pytest tests/ --slow
 ```
+
+Two independent mechanisms hide tests here, and they are easy to confuse. `pytest.mark.slow`
+DESELECTS (the test is collected, then filtered out by `-m`). `_SLOW_FILES` in `conftest.py`
+makes `pytest_ignore_collect` refuse to collect the file at all, `-m` or no `-m`.
+
+Tests that need downloaded data (`data/` is gitignored, so a fresh clone or worktree lacks it)
+skip rather than fail, and the end-of-run banner lists them. Set `LUCID_REQUIRE_DATA=1` to make a
+missing-data skip a failure, for a job that is supposed to have the data.
 
 ## Test categories
 
@@ -61,13 +72,6 @@ These build detectors, compile propagators, or run full simulations.
 |------|-------|----------------|
 | test_sk_like_integration.py | 11 | SK_like simulator: laser, isotropic, SIREN track; K convergence; gradients |
 | test_wavelength_integration.py | 13 | Wavelength-mode simulation: scalar vs wavelength; QE weighting; physics consistency |
-
-### Broken / disabled
-
-Old debugging scripts with no `test_` functions:
-test_all_fixes.py, test_combined_real_sensors.py, test_multibounce_jacobian.py,
-test_normalize_fix.py, test_s1_bounce.py, test_s1b_hk.py, test_s2_tangent.py,
-test_s3_combined.py, test_tangent_gradients.py
 
 ## Fixtures (conftest.py)
 

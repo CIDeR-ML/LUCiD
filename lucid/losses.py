@@ -486,7 +486,7 @@ def first_arrival_window_nll(log_w, flat_times, flat_indices, t_obs_per_sensor,
                              sigma=2.5, delta=1.0):
     """Windowed first-arrival ORDER-STATISTIC time NLL — the reconstruction time term.
 
-    Mean-field-correct first arrival (the recon recipe, RECO_PIPELINE §3.2). The
+    Mean-field-correct first arrival (the recon recipe). The
     expected-value engine cannot represent a model ``min`` (an order statistic), so instead
     build ``R(t) = Σ wᵢ·½(1+erf((t−tᵢ)/(σ√2)))`` = the expected cumulative photon count before
     ``t`` (a MEAN, hence engine-exact), the analytic survival ``S(t) = (μ − R(t))/μ``, and the
@@ -507,7 +507,7 @@ def first_arrival_window_nll(log_w, flat_times, flat_indices, t_obs_per_sensor,
     mu_total : (num_detectors,) predicted per-PMT total ``μ`` — the survival denominator
         ``S=(μ−R)/μ``. Pass the UNSCALED engine total (NOT a ``tot_n_scale``-scaled charge):
         scaling the survival denominator corrupts ``S`` and collapses far-capture (the recon
-        recipe keeps it unscaled — RECO_PIPELINE §3.4). It is ``stop_gradient``'d here anyway.
+        recipe keeps it unscaled). It is ``stop_gradient``'d here anyway.
     obs_counts : (num_detectors,) observed per-PMT count ``n``.
     num_detectors : int.
     sigma : per-photon time resolution (= TTS), ns. delta : window width, ns.
@@ -527,19 +527,21 @@ def first_arrival_window_nll(log_w, flat_times, flat_indices, t_obs_per_sensor,
     Slo = jnp.clip((muS - Rlo) / muS, 1e-12, 1.)
     Shi = jnp.clip((muS - Rhi) / muS, 1e-12, 1.)
     n = jnp.maximum(obs_counts, 0.)
-    a = jnp.minimum(n * (jnp.log(Shi) - jnp.log(Slo)), -1e-9)
+    # No clamp here: the only saturation cap on `a` is the -1e-7 inside `_log1mexp`. That cap is
+    # active on many PMTs, so a reimplementation must use -1e-7 (a -1e-9 cap differs by 4.6 nats
+    # per saturated PMT). `tests/test_first_arrival_a_cap.py` pins where the cap lives.
+    a = n * (jnp.log(Shi) - jnp.log(Slo))
     return jnp.where(obs_counts > 0, -n * jnp.log(Slo) - _log1mexp(a), 0.)
 
 
 # =============================================================================
 # TAU_VTX PARAMETRIZATION
 # =============================================================================
-# Coefficients from weighted least-squares fit on tau hyperparameter scan.
-# To recalculate these parameters:
-#   1. Run: python s3df_jobs/submit_tau_hyperparameter_tuning_job.py --output output/tau_scan --submit
-#   2. Wait for job completion, results in output/tau_scan/result.csv
-#   3. Run analysis notebook: good_notebooks/analyze_tau_scan.ipynb
-#   4. Update coefficients below with new fit results
+# Coefficients from a weighted least-squares fit of tau_vtx = a*n_rays + b*E + c on a tau
+# hyperparameter scan over (n_rays, energy). The scan driver
+# (`s3df_jobs/submit_tau_hyperparameter_tuning_job.py`) is no longer in the tree; recover it with
+# `git log --diff-filter=D -- s3df_jobs/`. The three constants are a fitted TRIPLE: regenerate and
+# update them together, never one alone.
 
 TAU_VTX_PARAM_A = 1.092557e-06  # coefficient for Nrays
 TAU_VTX_PARAM_B = 2.578522e-04  # coefficient for Energy (MeV)
