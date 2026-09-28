@@ -8,10 +8,20 @@ each holding the I_n integrals on a 401 x 201 axis set, so the merge is minutes
 of solid CPU and tens of GB of transient memory: a batch job, not something to
 run on a login node.
 
-One job covers all three PDGs in sequence rather than three jobs, because the
-merge is IO-bound on EOS and running them concurrently only contends.
+ONE JOB PER PDG. They were chained into a single job on the assumption that the
+merge is IO-bound on EOS and concurrency would only contend -- but the jobs land
+on different worker nodes reading disjoint cell sets, so any contention is
+server-side, and the measured cost of chaining is concrete: the merge was the
+whole tail of its stage at 4.2 h, against 23.5 min for the slowest of the 1778
+scan jobs feeding it. One job per PDG puts the stage's critical path at the
+slowest single PDG instead of the sum of all three.
 
-    ./generate_cprofile_build_job.py -s
+``--pdgs`` selects which to build. A tune only needs the hypotheses it fits, and
+the cells for the others stay on disk, so they can be built later without
+re-running the scan:
+
+    ./generate_cprofile_build_job.py --pdgs 13 -s     # muon tune only
+    ./generate_cprofile_build_job.py -s               # all three, in parallel
 """
 from __future__ import annotations
 
@@ -35,15 +45,11 @@ from lucid.production.cluster_common.user_paths import load_user_paths  # noqa: 
 PDGS = (11, 13, 211)
 
 
-def build_command(cell_root: Path) -> str:
-    """Merge each PDG's cells, chained so a failure stops the rest."""
-    steps = []
-    for pdg in PDGS:
-        steps.append(
-            f"python -m lucid.production.fitqun cprofile build "
+def build_command(cell_root: Path, pdg: int) -> str:
+    """Merge one PDG's cells into the file ``LoadProfiles`` reads."""
+    return (f"python -m lucid.production.fitqun cprofile build "
             f"{cell_root}/{pdg}/*/cell.npz --pdg {pdg} "
             f"-o {cell_root}/CProf_{pdg}_WCSim.root")
-    return " && ".join(steps)
 
 
 def parse_args(argv=None):
@@ -52,6 +58,9 @@ def parse_args(argv=None):
     p.add_argument("-s", "--submit", action="store_true")
     p.add_argument("-o", "--output-base", type=Path, default=None,
                    help="cell root (default: <OUTPUT_BASE_PATH>/fitqun_full/cprofile)")
+    p.add_argument("--pdgs", type=str, default=",".join(str(p) for p in PDGS),
+                   help="comma list of PDGs to build, one job each "
+                        "(default: all three)")
     p.add_argument("-P", "--partition", type=str, default="")
     p.add_argument("--request-memory-mb", type=int, default=32768)
     p.add_argument("--user-paths", type=Path, default=USER_PATHS_DEFAULT)
@@ -69,23 +78,30 @@ def main(argv=None) -> int:
     if not partition:
         raise SystemExit("no partition/flavour: pass -P or set it in user_paths.sh")
 
-    # The merge holds a full I_n table in memory; the adapter's default is the
-    # per-event production figure and is not enough here.
-    body = adapter.render_command_job(
-        command=build_command(cell_root), cell_dir=cell_root,
-        job_name="fitqun_cprofile_build", log_stem="cprofile_build",
-        partition=partition, request_disk_mb=8192,
-        request_memory_mb=args.request_memory_mb)
+    pdgs = [int(x) for x in args.pdgs.split(",") if x.strip()]
+    unknown = [p for p in pdgs if p not in PDGS]
+    if unknown:
+        raise SystemExit(f"no cells are scanned for PDG {unknown}; known: {list(PDGS)}")
 
-    sub = cell_root / f"cprofile_build.{adapter.submit_extension}"
-    sub.parent.mkdir(parents=True, exist_ok=True)
-    sub.write_text(body)
-    sub.chmod(0o755)
-    print(f"[PREPARED] {sub}")
+    for pdg in pdgs:
+        # The merge holds a full I_n table in memory; the adapter's default is
+        # the per-event production figure and is not enough here.
+        body = adapter.render_command_job(
+            command=build_command(cell_root, pdg), cell_dir=cell_root,
+            job_name=f"fitqun_cprofile_build_{pdg}",
+            log_stem=f"cprofile_build_{pdg}",
+            partition=partition, request_disk_mb=8192,
+            request_memory_mb=args.request_memory_mb)
 
-    if args.submit:
-        subprocess.run([adapter.submit_cmd, str(sub)], check=True)
-        print(f"submitted {sub}")
+        sub = cell_root / f"cprofile_build_{pdg}.{adapter.submit_extension}"
+        sub.parent.mkdir(parents=True, exist_ok=True)
+        sub.write_text(body)
+        sub.chmod(0o755)
+        print(f"[PREPARED] {sub}")
+
+        if args.submit:
+            subprocess.run([adapter.submit_cmd, str(sub)], check=True)
+            print(f"submitted {sub}")
     return 0
 
 
