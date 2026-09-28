@@ -33,6 +33,8 @@ declare -A TARGET=(
   [fittpdf.cc]=Utilities/timepdf/fittpdf.cc
   [combhists.cc]=Utilities/timepdf/combhists.cc
   [writecprof.cc]=Utilities/cprofile/writecprof.cc
+  [runfiTQun.cc]=fiTQun/runfiTQun.cc
+  [fiTQun.cc]=fiTQun/fiTQun.cc
 )
 for p in "$HERE"/*.patch; do
   n=$(basename "$p" .patch)

@@ -172,6 +172,51 @@ The shipped file does not compile under ROOT 6.30.
   which over-runs a `hist_tpdf` built from fewer points -- which is what a
   partial grid produces. Clamped with `std::min(nmom, 24)`.
 
+## `fiTQun/runfiTQun.cc` — truth seeding for WCSim input
+
+`TuningMode != 0` is supposed to pin all eight track parameters at truth, so the
+charge scale cannot be absorbed into momentum. On WCSim input it did not: the
+`NOSKLIBRARIES` branch was left stubbed at vertex `(0,0,0)` and momentum
+`(350,350,350)`, i.e. `|p| = 606.2 MeV/c`, `theta = acos(1/sqrt3)`, `phi = pi/4`
+-- the same fictitious track for **every event**. Truth seeding was only ever
+wired to SKDETSIM's `vcwork_` common block. Every `QEEff` measured this way is
+meaningless, and nothing warns.
+
+Two fixes, both mirroring what `makehistWCSim.cc` already does:
+
+* **Position and momentum** from the WCSim primary. WCSim reserves tracks 0 and
+  1 for beam and target, so the primary is `GetTracks()->At(2)`
+  (`makehistWCSim.cc:87,140,214`), and the vertex comes from the *trigger*, not
+  the track (`makehistWCSim.cc:197`). Bails out loudly if no truth track exists.
+* **Track time in the hits' frame**: `GetTime() + 950. - GetHeader()->GetDate()`,
+  as `makehistWCSim.cc:276` does. WCSim splits the time frame three ways -- the
+  track carries its raw time, digits carry the sub-event shift, the trigger
+  header's `Date` reconciles them. Without this the truth track sits ~950 ns
+  before its own hits (measured median residual +927 ns), and since
+  `FitQEEffWrapper` minimises the **full** likelihood including time, the fitted
+  `QEEff` is wrong rather than merely noisy.
+
+This depends on the converter writing the trigger time into the header `Date`
+field; `tools/fitqun/lucid_to_wcsim.cc` wrote `0` there until it was fixed.
+
+## `fiTQun/fiTQun.cc` — per-PMT prediction dump
+
+Nothing exposed fiTQun's predicted charge per PMT, only event-level aggregates,
+and `mutot` (all PMTs + dark) is not comparable to `fqtotq` (hit PMTs only) --
+which is how earlier diagnoses went wrong. Gated on `FITQUN_PMT_DUMP`, `FitQEEff`
+now writes one row per PMT per event:
+
+    event icab flgHit flgMask R_cm costheta0 mu muscat chrg tHit tau tres qeeff
+
+`mu` (direct) and `muscat` (indirect) stay separate so a run can be split by
+which term dominates without re-running. This is what `tools/fitqun/ablate.sh`
+and `ablation_report.py` consume to test the closure identity `E[q] = mu`
+differentially -- **the committed harness does not function without this patch.**
+
+Known limitation: `mu_dark` is added at `fiTQun.cc:617` (`mutmp += mu_dark`) and
+never stored in the `mu`/`muscat` arrays, so the dump understates the prediction
+on near-zero-`mu` PMTs.
+
 ## What lives where, and how to re-apply it
 
 **We have no push access to fiTQun, so these fixes are ours to carry
@@ -182,8 +227,8 @@ upstream commits, with `patches/apply.sh` to re-apply them to a fresh checkout:
 
 Patches rather than whole-file copies, for three reasons: the diff *is* the
 documentation of what we changed and why; a copy silently reverts an upstream
-improvement while a patch conflicts loudly; and 88 lines of patch is reviewable
-where four whole files are not.
+improvement while a patch conflicts loudly; and ~160 lines of patch is reviewable
+where six whole files are not.
 
 Pinned upstream commits (`apply.sh` warns if the checkout has moved):
 
@@ -197,8 +242,11 @@ Upstream sources use CRLF and the patches are LF-normalised, so `apply.sh`
 converts each target before matching -- `patch -l` alone does not reconcile
 CRLF context lines.
 
-Verified: applying all four patches to pristine upstream reproduces our working
+Verified: applying all six patches to pristine upstream reproduces our working
 copies byte for byte.
 
 The `.cc` files alongside this document are the *resulting* sources, kept for
 reading. `fitqun_SK_WAND.parameters.dat` is our own tune file, not a patch.
+`runfiTQun.cc` and `fiTQun.cc` are deliberately **not** vendored -- at 43 KB and
+191 KB they would dominate the directory, and their patches are small and
+self-contained enough to read on their own.

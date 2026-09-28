@@ -1,0 +1,62 @@
+--- a/runfiTQun.cc
++++ b/runfiTQun.cc
+@@ -703,21 +703,57 @@ int main(int argc, char* argv[]){
+ #else
+           pidtmp = 13;
+ #endif
+           
+           snglTrkParams[3]=trgofst;//time
+           double momtmp[3],trkdir[3];
++#ifdef NOSKLIBRARIES
++          // Upstream leaves this branch stubbed: vertex (0,0,0) and momentum
++          // (350,350,350), i.e. |p|=606.2, theta=acos(1/sqrt3), phi=pi/4, the
++          // SAME fictitious track for every event. Truth seeding was only ever
++          // wired to SKDETSIM's vcwork_. Any TuningMode!=0 run on WCSim input
++          // therefore fits at that dummy track -- which silently invalidates
++          // FitQEEff, since the whole point is to pin the track at truth so the
++          // charge scale cannot be absorbed into momentum.
++          //
++          // Read the primary from the WCSim truth instead, exactly as
++          // makehistWCSim.cc:87,140,214 does: WCSim reserves tracks 0 and 1 for
++          // the beam and target, so the primary is At(2). The vertex comes from
++          // the trigger, not the track (makehistWCSim.cc:197).
++          const int kWCSimPrimary = 2;
++          WCSimRootTrigger *trigTru = WCSimWrap::Get()->SubEvt(0);
++          WCSimRootTrack *trkTru = NULL;
++          if (trigTru && trigTru->GetNtrack() > kWCSimPrimary)
++            trkTru = (WCSimRootTrack*)trigTru->GetTracks()->At(kWCSimPrimary);
++          if (!trkTru) {
++            std::cout << "TuningMode: no WCSim truth track at index "
++                      << kWCSimPrimary << " -- cannot seed from truth" << std::endl;
++            break;
++          }
++          pidtmp = abs(trkTru->GetIpnu());
++#endif
+           for (int j=0; j<3; j++) {
+ #ifndef NOSKLIBRARIES
+             snglTrkParams[j]=vcwork_.posivc[iVctTmp][j];//vertex
+             momtmp[j]=vcwork_.pvc[iVctTmp][j];//momentum (MeV/c)
+ #else
+-            snglTrkParams[j]=0.0;//vcwork_.posivc[0][j];//vertex
+-            momtmp[j]=350.0;//vcwork_.pvc[0][j];//momentum (MeV/c)
++            snglTrkParams[j]=trigTru->GetVtx(j);//vertex
++            momtmp[j]=trkTru->GetP()*trkTru->GetDir(j);//momentum (MeV/c)
+ #endif
+           }
++#ifdef NOSKLIBRARIES
++          // The track time must be put in the SAME frame as the hits. WCSim
++          // convention: the track carries its raw time, digit times carry the
++          // sub-event shift, and the trigger header's Date holds the trigger
++          // time so the two can be reconciled -- makehistWCSim.cc:276 does
++          // exactly this as (950 - trigOffset). Without it the truth track sits
++          // ~950 ns before its own hits, and since FitQEEff minimises the FULL
++          // likelihood including time, every QEEff fitted this way is wrong.
++          snglTrkParams[3] = trkTru->GetTime()
++                           + 950. - (double)trigTru->GetHeader()->GetDate();
++#endif
+           snglTrkParams[6]=sqrt(momtmp[0]*momtmp[0]+momtmp[1]*momtmp[1]+momtmp[2]*momtmp[2]);
+           for (int j=0; j<3; j++) trkdir[j]=momtmp[j]/snglTrkParams[6];
+           snglTrkParams[4]=acos(trkdir[2]);//theta
+           snglTrkParams[5]=atan2(trkdir[1],trkdir[0]);
+           if (fiTQun_shared::PIDarr[iPID]==48) snglTrkParams[6]/=10.;
+           snglTrkParams[7]=0.;//should be different for pi+
