@@ -56,7 +56,7 @@ def test_config_present_in_all_files(batch):
     for name, path in paths.items():
         with h5py.File(path, 'r') as f:
             assert 'config' in f, f"{name} missing config group"
-            assert f['config'].attrs['format_version'] == 5
+            assert f['config'].attrs['format_version'] == 6
             assert f['config'].attrs['run_id'].decode() == cfg['run_id'] \
                 if isinstance(f['config'].attrs['run_id'], bytes) \
                 else f['config'].attrs['run_id'] == cfg['run_id']
@@ -193,3 +193,39 @@ def test_source_event_idx_matches_across_files(batch):
     for path in paths.values():
         with h5py.File(path, 'r') as f:
             assert f['event_000'].attrs['source_event_idx'] == ev['source_event_idx']
+
+
+def test_per_track_initial_direction(batch):
+    """v6 labels the initial direction next to initial_energy.
+
+    Without it nothing can regress direction from ``labl`` alone: the only other
+    copy is per-segment in ``step``, so a consumer would have to join modalities
+    and re-derive which segment a track starts on. The direction is taken from
+    the track's earliest-time segment, so it must agree with that segment's dir
+    rather than with whichever segment happens to be stored first.
+    """
+    paths, _, ev, _ = batch
+    seg = ev['segments']
+    with h5py.File(paths['labl'], 'r') as f:
+        pt = f['event_000/per_track']
+        for name in ('dir_x', 'dir_y', 'dir_z'):
+            assert name in pt, f"per_track missing {name}"
+        got = np.stack([pt['dir_x'][:], pt['dir_y'][:], pt['dir_z'][:]], axis=1)
+        n_tracks = len(pt['initial_energy'])
+
+    assert got.shape == (n_tracks, 3)
+    n_seg = np.array([int(t.get('n_segments', 0))
+                      for t in ev['meaningful_tracks'].values()], dtype=np.int64)
+    off = np.concatenate(([0], np.cumsum(n_seg)))
+    t_arr = np.asarray(seg['time'])
+    for i in range(n_tracks):
+        a, b = int(off[i]), int(min(off[i + 1], t_arr.size))
+        if b == a:
+            # No segments: a zero vector, never a stale or guessed direction.
+            assert np.array_equal(got[i], np.zeros(3, dtype=np.float32))
+            continue
+        j = a + int(np.argmin(t_arr[a:b]))
+        expect = np.array([seg['dir_x'][j], seg['dir_y'][j], seg['dir_z'][j]],
+                          dtype=np.float32)
+        assert np.allclose(got[i], expect, atol=1e-6)
+        assert abs(np.linalg.norm(got[i]) - 1.0) < 1e-3

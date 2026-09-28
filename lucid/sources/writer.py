@@ -41,7 +41,7 @@ __all__ = [
 # ---------------------------------------------------------------------------
 
 _GZIP_OPTS = dict(compression='gzip', compression_opts=4)
-_FORMAT_VERSION = 5
+_FORMAT_VERSION = 6
 # All absolute times are stored float64: a supernova burst spans seconds
 # (~1e9-1e10 ns) while the light timing is sub-ns, which float32 cannot hold
 # jointly. The extra width compresses away (the low mantissa bits are ~zero).
@@ -753,6 +753,38 @@ def save_step_event(f, event_dict, seq_idx):
         grp.attrs['has_segment_sensor_map'] = True
 
 
+def _initial_direction_per_track(event_dict, mt):
+    """Each track's initial direction, as an (n_tracks, 3) float32 unit vector.
+
+    The direction belongs next to ``initial_energy``: both describe the track
+    where it starts, and without it no consumer can regress direction from
+    ``labl`` alone -- it would have to join ``step`` and repeat this selection,
+    which is how the fiTQun truth reader had to do it.
+
+    Taken from the track's EARLIEST-TIME segment rather than its first in array
+    order, because segment order within a track is not guaranteed to be sorted
+    by time. A track with no segments keeps (0, 0, 0); there is no direction to
+    report and a zero vector cannot be mistaken for one.
+    """
+    n_tracks = len(mt)
+    out = np.zeros((n_tracks, 3), dtype=np.float32)
+    seg = event_dict.get('segments') or {}
+    t_arr = np.asarray(seg.get('time', ()))
+    if n_tracks == 0 or t_arr.size == 0:
+        return out
+
+    dx, dy, dz = (np.asarray(seg[k]) for k in ('dir_x', 'dir_y', 'dir_z'))
+    n_seg = np.fromiter((int(t.get('n_segments', 0)) for t in mt.values()),
+                        dtype=np.int64, count=n_tracks)
+    off = np.concatenate(([0], np.cumsum(n_seg)))
+    for i in range(n_tracks):
+        a, b = int(off[i]), int(min(off[i + 1], t_arr.size))
+        if b > a:
+            j = a + int(np.argmin(t_arr[a:b]))
+            out[i] = (dx[j], dy[j], dz[j])
+    return out
+
+
 def save_labl_event(f, event_dict, seq_idx):
     """Write a single event_NNN/ group to an already-open labl file.
 
@@ -897,6 +929,9 @@ def save_labl_event(f, event_dict, seq_idx):
     pt_grp.create_dataset('parent_id', data=parent_id, **_GZIP_OPTS)
     pt_grp.create_dataset('pdg', data=pdg, **_GZIP_OPTS)
     pt_grp.create_dataset('initial_energy', data=initial_energy, **_GZIP_OPTS)
+    for name, col in zip(('dir_x', 'dir_y', 'dir_z'),
+                         _initial_direction_per_track(event_dict, mt).T):
+        pt_grp.create_dataset(name, data=col, **_GZIP_OPTS)
     pt_grp.create_dataset('n_cherenkov', data=n_ch, **_GZIP_OPTS)
     pt_grp.create_dataset('particle_idx', data=particle_idx, **_GZIP_OPTS)
     pt_grp.create_dataset('ancestor', data=ancestor, **_GZIP_OPTS)

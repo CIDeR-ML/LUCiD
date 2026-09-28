@@ -3,7 +3,8 @@
 LUCiD splits truth across two modalities, and neither alone is enough:
 
 * ``labl`` carries the interaction vertex, the primary PDG codes and the primary
-  energies, but no direction.
+  energies. Format v6 adds ``per_track/dir_{x,y,z}``; this reader still derives
+  direction from ``step`` so it works on v5 datasets too.
 * ``step`` carries per-segment ``start``/``dir``/``beta_start`` and a track index,
   but no PDG.
 

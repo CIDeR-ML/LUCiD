@@ -257,7 +257,8 @@ labl.h5
         ├── track_id            (n_tracks,) int32   — Geant4 track ID (truth metadata)
         ├── parent_id           (n_tracks,) int32
         ├── pdg                 (n_tracks,) int32   — raw PDG code (nuclear PDGs ~1e9 do not fit in int16)
-        ├── initial_energy      (n_tracks,) float32 — MeV
+        ├── initial_energy      (n_tracks,) float32 — MeV (kinetic)
+        ├── dir_x, dir_y, dir_z (n_tracks,) float32 — initial direction, unit; (0,0,0) if the track has no segments
         ├── n_cherenkov         (n_tracks,) int32   — total Cherenkov for this track
         ├── particle_idx        (n_tracks,) int32   — FK to per_particle row
         ├── ancestor            (n_tracks,) int32   — primary track_id at root of parent chain
