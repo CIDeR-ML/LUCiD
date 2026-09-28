@@ -23,16 +23,31 @@ def _smear_charge(total_charge, charge_resolution, key):
         "charge_resolution must be None|'Abe_2013'|'Bellamy_94', "
         f"got {charge_resolution!r}")
 
+
+def _pmt_response_factor(flat_weights, response_factor):
+    """Return a non-negative relative PMT response with unity as neutral.
+
+    This factor is allowed to exceed one.  The portable LUCiD table normalizes
+    SKDetSim's angular absorptance by its normal-incidence value, and that
+    ratio is greater than one over part of the angular range. Bernoulli modes
+    clip only the final QE times response probability.
+    """
+    if response_factor is None:
+        return jnp.ones_like(flat_weights)
+    return jnp.maximum(jnp.asarray(response_factor), 0.0)
+
 # ===================================================================
 # make_hits functions
 # ===================================================================
 
 def make_hits_simulation(
         flat_weights, flat_indices, flat_times, num_detectors,
-        qe=0.2, qe_corrections=None, threshold=1e-10, temperature=0.1):
+        qe=0.2, qe_corrections=None, threshold=1e-10, temperature=0.1,
+        pmt_response_factor=None):
     """Differentiable soft-min first-arrival timing with per-sensor QE corrections."""
     per_photon_qe = qe * qe_corrections[flat_indices]
-    qe_weights = flat_weights * per_photon_qe
+    qe_weights = flat_weights * per_photon_qe * _pmt_response_factor(
+        flat_weights, pmt_response_factor)
 
     valid_mask = (qe_weights > threshold) & (flat_times > 0) & jnp.isfinite(flat_times)
     filtered_times = jnp.where(valid_mask, flat_times, jnp.inf)
@@ -139,7 +154,7 @@ def _occ_bias_var(mu):
 def make_hits_moments(
         flat_weights, flat_indices, flat_times, num_detectors,
         qe=0.2, qe_corrections=None, gain=None, spe_width=0.0, t0=None, tts=0.0,
-        threshold=1e-10):
+        threshold=1e-10, pmt_response_factor=None):
     """Compound-Poisson charge MOMENTS + first-arrival time, per sensor.
 
     The per-PMT charge is compound-Poisson: rate ``μ[s] = Σ flat_weights·qe·qe_corr``
@@ -167,7 +182,8 @@ def make_hits_moments(
     mean_charge, var_charge, measured_time : each (num_detectors,)
     """
     per_photon_qe = qe * qe_corrections[flat_indices]
-    qe_weights = flat_weights * per_photon_qe
+    qe_weights = flat_weights * per_photon_qe * _pmt_response_factor(
+        flat_weights, pmt_response_factor)
 
     valid_mask = (qe_weights > threshold) & (flat_times > 0) & jnp.isfinite(flat_times)
     filtered_times = jnp.where(valid_mask, flat_times, jnp.inf)
@@ -198,7 +214,7 @@ def make_hits_moments(
 def make_hits_data(
         flat_weights, flat_indices, flat_times, num_detectors,
         qe=0.2, qe_corrections=None, rng_key=None, threshold=1e-5,
-        tts=0.0, charge_resolution=None):
+        tts=0.0, charge_resolution=None, pmt_response_factor=None):
     """Data-mode hits with Bernoulli QE, segment_min timing, and configurable charge resolution.
 
     ``tts`` (ns) is the per-photon transit-time-spread sigma applied to each photon's
@@ -223,7 +239,11 @@ def make_hits_data(
     # Bernoulli QE sampling — when qe >= 1.0, uniform(0,1) < qe
     # is always true so all photons pass.  Avoids Python `if` on traced values.
     detection_probs = jax.random.uniform(qe_key, shape=flat_weights.shape)
-    detected_mask = detection_probs < per_photon_qe
+    effective_qe = jnp.clip(
+        per_photon_qe * _pmt_response_factor(
+            flat_weights, pmt_response_factor),
+        0.0, 1.0)
+    detected_mask = detection_probs < effective_qe
     qe_weights = flat_weights * detected_mask.astype(jnp.float32)
     # PER-PHOTON TTS: smear each detected photon's time BEFORE the first-arrival min.
     # Driven by the dp.response.tts field. Applied unconditionally scaled by tts (0 ⇒ no
@@ -253,7 +273,8 @@ def make_hits_data(
 def make_hits_per_photon(
         flat_weights, flat_indices, flat_times, num_detectors,
         qe=0.2, qe_corrections=None, rng_key=None, threshold=1e-5,
-        tts=0.0, flat_segment_idx=None, charge_resolution=None):
+        tts=0.0, flat_segment_idx=None, charge_resolution=None,
+        pmt_response_factor=None):
     """Per-sensor totals PLUS pass-through per-photon arrays for host aggregation.
 
     The production 'hits' file needs a per-(segment, sensor) PE decomposition,
@@ -277,7 +298,11 @@ def make_hits_per_photon(
     timing_mask = (flat_weights > threshold) & (flat_times > 0)
     per_photon_qe = qe * qe_corrections[flat_indices] if qe_corrections is not None else qe
     detection_probs = jax.random.uniform(qe_key, shape=flat_weights.shape)
-    detected_mask = detection_probs < per_photon_qe
+    effective_qe = jnp.clip(
+        per_photon_qe * _pmt_response_factor(
+            flat_weights, pmt_response_factor),
+        0.0, 1.0)
+    detected_mask = detection_probs < effective_qe
     qe_weights = flat_weights * detected_mask.astype(jnp.float32)
 
     # First-arrival WITHOUT TTS (true) and WITH per-photon TTS (reco).
@@ -304,7 +329,8 @@ def make_hits_per_photon(
 
 def make_hits_likelihood(
         flat_weights, flat_indices, flat_times, num_detectors,
-        qe=0.2, qe_corrections=None, threshold=1e-10):
+        qe=0.2, qe_corrections=None, threshold=1e-10,
+        pmt_response_factor=None):
     """Likelihood mode: return per-photon log-weights and per-sensor total charge.
 
     Instead of aggregating times to per-sensor first-arrival values, this
@@ -340,7 +366,8 @@ def make_hits_likelihood(
         Predicted total charge per sensor (num_detectors,).
     """
     per_photon_qe = qe * qe_corrections[flat_indices]
-    qe_weights = flat_weights * per_photon_qe
+    qe_weights = flat_weights * per_photon_qe * _pmt_response_factor(
+        flat_weights, pmt_response_factor)
 
     valid_mask = (qe_weights > threshold) & (flat_times > 0) & jnp.isfinite(flat_times)
     safe_weights = jnp.where(valid_mask, qe_weights, 0.0)
@@ -358,7 +385,7 @@ def make_hits_likelihood(
 
 def _resolve_first_detection(
         flat_weights, flat_indices, flat_times, n_photons,
-        per_photon_qe, qe_key, threshold):
+        per_photon_qe, qe_key, threshold, pmt_response_factor=None):
     """Compact flat propagation arrays to per-photon first-detection records.
 
     Returns arrays of length ``n_photons``:
@@ -368,7 +395,11 @@ def _resolve_first_detection(
     """
     base_valid = (flat_weights > threshold) & (flat_times > 0) & jnp.isfinite(flat_times)
     detection_probs = jax.random.uniform(qe_key, shape=flat_weights.shape)
-    detected_flat = base_valid & (detection_probs < per_photon_qe)
+    effective_qe = jnp.clip(
+        per_photon_qe * _pmt_response_factor(
+            flat_weights, pmt_response_factor),
+        0.0, 1.0)
+    detected_flat = base_valid & (detection_probs < effective_qe)
 
     photon_idx = jnp.arange(flat_weights.shape[0]) % n_photons
 
@@ -431,13 +462,13 @@ def build_make_hits_waveform(
     @partial(jax.jit, static_argnames=('num_detectors',))
     def make_hits_waveform(
             flat_weights, flat_indices, flat_times, num_detectors,
-            rng_key, qe, qe_corrections):
+            rng_key, qe, qe_corrections, pmt_response_factor=None):
         per_photon_qe = qe * qe_corrections[flat_indices]
         qe_key, tts_key, gain_key = jax.random.split(rng_key, 3)
 
         detected, sensor_id, hit_time = _resolve_first_detection(
             flat_weights, flat_indices, flat_times, n_photons,
-            per_photon_qe, qe_key, threshold)
+            per_photon_qe, qe_key, threshold, pmt_response_factor)
 
         if smear_time:
             noise = jax.random.normal(tts_key, shape=hit_time.shape) * tts_sigma_ns
@@ -522,9 +553,12 @@ def build_make_hits_waveform_expected(
     @partial(jax.jit, static_argnames=('num_detectors',))
     def make_hits_waveform_expected(
             flat_weights, flat_indices, flat_times, num_detectors,
-            rng_key, qe, qe_corrections):
+            rng_key, qe, qe_corrections, pmt_response_factor=None):
         per_slot_qe = qe * qe_corrections[flat_indices]
-        slot_charge = flat_weights * per_slot_qe
+        slot_charge = (
+            flat_weights * per_slot_qe
+            * _pmt_response_factor(flat_weights, pmt_response_factor)
+        )
 
         if smear_time:
             noise = jax.random.normal(rng_key, shape=flat_times.shape) * tts_sigma_ns
@@ -590,13 +624,13 @@ def build_make_hits_per_photon_shotgun(
     @partial(jax.jit, static_argnames=('num_detectors',))
     def make_hits_per_photon(
             flat_weights, flat_indices, flat_times, num_detectors,
-            rng_key, qe, qe_corrections):
+            rng_key, qe, qe_corrections, pmt_response_factor=None):
         per_photon_qe = qe * qe_corrections[flat_indices]
         qe_key, tts_key = jax.random.split(rng_key)
 
         detected, sensor_id, hit_time = _resolve_first_detection(
             flat_weights, flat_indices, flat_times, n_photons,
-            per_photon_qe, qe_key, threshold)
+            per_photon_qe, qe_key, threshold, pmt_response_factor)
 
         if smear_time:
             noise = jax.random.normal(tts_key, shape=hit_time.shape) * tts_sigma_ns
