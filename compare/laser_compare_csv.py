@@ -8,7 +8,6 @@ from . import compare_sim as base
 from .laser_compare_metrics import (
     _metric_arrays,
     _source_counts,
-    irf_sigma_for_pmt_type,
 )
 
 PMT_TYPE_NAME = base.PMT_TYPE_NAME
@@ -25,7 +24,13 @@ def _processing_title(data):
     raw = str(np.asarray(data.get("processing", "")).item())
     flags = dict(item.split("=", 1) for item in raw.split(",") if "=" in item)
     irf = flags.get("irf", "unknown")
-    if "|" in irf:
+    if irf.startswith("file:"):
+        parts = irf.split(":")
+        irf_title = (
+            f"measured per-channel IRF ({parts[1]}, "
+            f"{parts[2][2:]} channels)"
+        )
+    elif "|" in irf:
         values = dict(item.split(":", 1) for item in irf.split("|"))
         irf_title = (
             f"IRF sigma: Hamamatsu={values.get('hamamatsu', '?')} ns, "
@@ -49,18 +54,18 @@ def write_channel_manifest(
     data,
     run,
     source_z,
-    irf_sigma_hamamatsu=0.0,
-    irf_sigma_nnvt=0.0,
+    irf_fwhm_by_channel=None,
 ):
-    """Write selected channel metadata, including configured IRF widths."""
+    """Write selected channel metadata, including the applied IRF FWHM.
+
+    Input: output path, FSMP data, run/source identifiers and the
+    per-channel kernel FWHM mapping (empty when the IRF is off).
+    Output: none (CSV written).
+    """
     channels = np.asarray(data["channels"], dtype=np.int64)
+    fwhm = irf_fwhm_by_channel or {}
     irf = np.asarray(
-        [
-            irf_sigma_for_pmt_type(
-                pmt_type, irf_sigma_hamamatsu, irf_sigma_nnvt
-            )
-            for pmt_type in data["pmt_type"]
-        ],
+        [fwhm.get(int(channel), 0.0) for channel in channels],
         dtype=np.float64,
     )
     fields = [
@@ -72,7 +77,7 @@ def write_channel_manifest(
         "z_mm",
         "theta_deg",
         "tts_ns",
-        "irf_sigma_ns",
+        "irf_fwhm_ns",
     ]
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", newline="") as stream:
@@ -91,7 +96,7 @@ def write_channel_manifest(
                     "z_mm": float(data["z"][index]),
                     "theta_deg": float(data["theta"][index]),
                     "tts_ns": float(data["tts"][index]),
-                    "irf_sigma_ns": float(irf[index]),
+                    "irf_fwhm_ns": float(irf[index]),
                 }
             )
     print(f"Wrote {path}")
@@ -126,7 +131,7 @@ def write_comparison_stats_csv(path, data, run, source_z):
         "z_mm",
         "theta_deg",
         "tts_ns",
-        "irf_sigma_ns",
+        "irf_fwhm_ns",
         "processing",
         "alignment_method",
         "alignment_shift_ns",
@@ -201,8 +206,8 @@ def write_comparison_stats_csv(path, data, run, source_z):
                 "z_mm": float(data["z"][channel_index]),
                 "theta_deg": float(data["theta"][channel_index]),
                 "tts_ns": float(data["tts"][channel_index]),
-                "irf_sigma_ns": float(
-                    data["irf_sigma_by_channel"][channel_index]
+                "irf_fwhm_ns": float(
+                    data["irf_fwhm_by_channel"][channel_index]
                 ),
                 "processing": processing,
                 "alignment_method": str(

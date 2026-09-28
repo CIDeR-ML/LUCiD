@@ -256,6 +256,16 @@ def select_channels(number, seed):
     return selected.astype(np.int64)
 
 
+def load_channel_selection(path):
+    """Fixed channel list from a channel-selection CSV.
+
+    Input: CSV path with a ``channel`` column.
+    Output: sorted int64 ndarray of channel ids.
+    """
+    frame = pd.read_csv(path)
+    return np.sort(frame["channel"].to_numpy(dtype=np.int64))
+
+
 def selected_channels(args):
     fsmp_files = list(iter_fsmp_files(args.fsmp_dir))
     if not fsmp_files:
@@ -701,13 +711,22 @@ def local_l1_alignment(times, sim_density, edges, coarse_shift, window=10.0):
     return best_shift, best_density, best_l1
 
 
+def convolve_kernel(density, kernel):
+    """Convolve a density with a unit-sum kernel, then renormalize.
+
+    Input: density values on a uniform grid and the unit-sum kernel.
+    Output: the convolved density, normalized back to unit area.
+    """
+    conv = np.convolve(density, kernel, mode="same")
+    total = conv.sum()
+    if total > 0:
+        conv = conv / total
+    return conv
+
+
 def convolve_density(density, bin_width, sigma):
     kernel = gaussian_kernel(bin_width, sigma)
-    conv = np.convolve(density, kernel, mode="same")
-    area = conv.sum() * bin_width
-    if area > 0:
-        conv = conv / area
-    return conv
+    return convolve_kernel(density, kernel)
 
 
 def times_by_channel(fsmp_ch, fsmp_time):

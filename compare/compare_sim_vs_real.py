@@ -22,6 +22,7 @@ import glob
 import json
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pyarrow as pa
@@ -39,6 +40,10 @@ try:
 except ImportError:  # Direct ``python compare/compare_sim_vs_real.py``.
     import compare_sim as base
 
+from compare.laser_compare_irf import (
+    build_channel_kernels,
+    irf_descriptor,
+)
 from compare.laser_compare_metrics import (
     JUNOSW_J26_3_2_EQUIVALENT_QE_532_NM,
     build_channel_histograms_multi,
@@ -46,7 +51,6 @@ from compare.laser_compare_metrics import (
     density_hist,
     estimate_peak_from_density,
     processing_string,
-    resolve_irf_sigmas,
     simulation_qe_factors,
 )
 from compare.laser_compare_csv import (
@@ -80,6 +84,7 @@ iter_fsmp_files = base.iter_fsmp_files
 rtraw_path_for = base.rtraw_path_for
 read_monitor_times = base.read_monitor_times
 select_channels = base.select_channels
+load_channel_selection = base.load_channel_selection
 read_pmt_info = base.read_pmt_info
 attach_pmt_coordinates = base.attach_pmt_coordinates
 load_data = base.load_data
@@ -295,11 +300,12 @@ def selected_channels(args, require_files=True, files=None):
         raise FileNotFoundError(
             f"No FSMP Parquet files found in {args.fsmp_dir}"
         )
-    channels = (
-        np.arange(NORTH_CHANNEL_COUNT, dtype=np.int64)
-        if args.north
-        else select_channels(args.number, args.seed)
-    )
+    if args.channel_selection is not None:
+        channels = load_channel_selection(args.channel_selection)
+    elif args.north:
+        channels = np.arange(NORTH_CHANNEL_COUNT, dtype=np.int64)
+    else:
+        channels = select_channels(args.number, args.seed)
     print("Selected channels:", " ".join(map(str, channels)))
     return channels, files
 
@@ -746,8 +752,12 @@ def write_amplitude_intensity_scale(
     print(f"Wrote {path}")
 
 
-def parse_args(argv=None):
-    """Parse the three-source comparison command line."""
+def build_parser():
+    """Build the argument parser shared by the comparison CLIs.
+
+    Input: none.  Output: the argparse.ArgumentParser (the TTS-vs-IRF
+    check adds its own flags on top before parsing).
+    """
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("-z", type=float, default=0.0, dest="z")
     parser.add_argument(
@@ -807,6 +817,12 @@ def parse_args(argv=None):
     parser.add_argument("-n", type=int, default=1000, dest="number")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--north", action="store_true")
+    parser.add_argument(
+        "--channel-selection",
+        type=Path,
+        default=None,
+        help="CSV with a `channel` column; overrides -n/--seed/--north",
+    )
     parser.add_argument("--bins", type=int, default=600)
     parser.add_argument(
         "--data-range",
@@ -850,9 +866,14 @@ def parse_args(argv=None):
         action="store_true",
         help="disable the default simulation-side per-PMT TTS convolution",
     )
-    parser.add_argument("--irf-sigma", type=float, default=0.0)
-    parser.add_argument("--irf-sigma-hamamatsu", type=float, default=None)
-    parser.add_argument("--irf-sigma-nnvt", type=float, default=None)
+    parser.add_argument(
+        "--irf-h5",
+        type=Path,
+        default=None,
+        help="measured per-channel IRF kernel file; enabling it "
+        "replaces the per-PMT TTS convolution (the IRF contains "
+        "the TTS)",
+    )
     dark_group = parser.add_mutually_exclusive_group()
     dark_group.add_argument(
         "--add-dark-to-simulation",
@@ -885,6 +906,18 @@ def parse_args(argv=None):
     parser.add_argument("--brief", action="store_true")
     parser.add_argument("--output-root", type=Path, default=Path("compare_sim"))
     parser.add_argument("--output-tag", default="")
+    return parser
+
+
+def parse_args(argv=None, parser=None):
+    """Parse the three-source comparison command line.
+
+    Input: optional argv and an optional pre-built parser (used by the
+    TTS-vs-IRF check to add its own flags).
+    Output: the finalized namespace.
+    """
+    if parser is None:
+        parser = build_parser()
     args = parser.parse_args(argv)
     if args.long:
         args.data_range = (args.data_range[0], 1000.0)
@@ -914,17 +947,16 @@ def parse_args(argv=None):
             )
     if not any((args.lucid_sim_dir, args.junosw_sim_dir)):
         parser.error("provide at least one simulation input")
-    try:
-        args.irf_sigma_hamamatsu, args.irf_sigma_nnvt = resolve_irf_sigmas(
-            args.irf_sigma, args.irf_sigma_hamamatsu, args.irf_sigma_nnvt
-        )
-    except ValueError as error:
-        parser.error(str(error))
     args.run = resolve_run(args.z, args.run_table)
     args.fsmp_dir = args.fsmp_dir or Path(DEFAULT_FSMP_ROOT) / str(args.run)
     args.rtraw_dir = args.rtraw_dir / str(args.run)
     args.output_dir = args.output_root / str(args.run)
-    suffix = "north" if args.north else str(args.number)
+    if args.channel_selection is not None:
+        suffix = args.channel_selection.stem
+    elif args.north:
+        suffix = "north"
+    else:
+        suffix = str(args.number)
     if args.long:
         suffix += "_long"
     tag = args.output_tag.strip().replace(" ", "_")
@@ -1005,9 +1037,36 @@ def _load_matching_cache(
     return data
 
 
-def main(argv=None):
-    """Compute/load caches and render the three-source comparison."""
-    args = parse_args(argv)
+def expected_source_labels(sources, smearing_variants=False):
+    """Expected source label/kind arrays for the aligned-cache check.
+
+    Input: simulation sources; smearing_variants appends the (TTS) and
+    (IRF) suffixes used by the TTS-vs-IRF check.
+    Output: (labels, kinds) numpy arrays.
+    """
+    labels = [
+        str(np.asarray(source["label"]).item()) for source in sources
+    ]
+    kinds = [
+        str(np.asarray(source["kind"]).item()) for source in sources
+    ]
+    if smearing_variants:
+        labels = [
+            f"{label} ({variant})"
+            for label in labels
+            for variant in ("TTS", "IRF")
+        ]
+        kinds = [kind for kind in kinds for _ in ("TTS", "IRF")]
+    return np.asarray(labels), np.asarray(kinds)
+
+
+def prepare_inputs(args):
+    """Load channels, FSMP data, simulation sources and smearing inputs.
+
+    Input: parsed arguments.  Output: SimpleNamespace with fsmp_data,
+    sources, channels, source_scale, use_tts, irf_kernels,
+    irf_fwhm_by_channel and irf_description.
+    """
     args.output_dir.mkdir(parents=True, exist_ok=True)
     files = list(iter_fsmp_files(args.fsmp_dir))
     if not args.plot_only and not files:
@@ -1139,63 +1198,67 @@ def main(argv=None):
         args.dark_window,
     )
     fsmp_data = attach_pmt_coordinates(fsmp_data, args.pmt_map)
+    use_tts = not args.no_tts
+    irf_kernels = None
+    irf_fwhm_by_channel = {}
+    irf_description = "0"
+    if args.irf_h5 is not None:
+        bin_width = float(
+            sources[0]["edges"][1] - sources[0]["edges"][0]
+        )
+        irf_kernels, irf_meta, irf_orphans = build_channel_kernels(
+            args.irf_h5, args.pmt_map, bin_width
+        )
+        irf_fwhm_by_channel = {
+            channel: info["fwhm"] for channel, info in irf_meta.items()
+        }
+        irf_description = irf_descriptor(args.irf_h5, irf_kernels)
+        missing = [
+            int(channel)
+            for channel in fsmp_data["channels"]
+            if int(channel) not in irf_kernels
+        ]
+        print(
+            f"Measured IRF: kernels for {len(irf_kernels)} channels; "
+            f"{len(missing)} selected channels have no measured "
+            f"kernel; {len(irf_orphans)} IRF serials are not in "
+            "the PMT map"
+        )
+        if use_tts:
+            print("Measured IRF enabled: TTS convolution disabled")
+            use_tts = False
     write_channel_manifest(
         args.channel_manifest,
         fsmp_data,
         args.run,
         args.z,
-        args.irf_sigma_hamamatsu,
-        args.irf_sigma_nnvt,
+        irf_fwhm_by_channel=irf_fwhm_by_channel,
     )
-    processing = processing_string(
-        not args.no_tts,
-        args.irf_sigma_hamamatsu,
-        args.irf_sigma_nnvt,
-        args.add_dark_to_simulation,
-        target_pe=getattr(
-            args,
-            "fsmp_target_pe",
-            fsmp_data.get("fsmp_target_pe"),
-        ),
-        prompt_window=args.prompt_window,
-        late_window=args.late_window,
-        alignment=args.alignment,
-        source_intensity_scale=source_scale,
+    return SimpleNamespace(
+        fsmp_data=fsmp_data,
+        sources=sources,
+        channels=channels,
+        source_scale=source_scale,
+        use_tts=use_tts,
+        irf_kernels=irf_kernels,
+        irf_fwhm_by_channel=irf_fwhm_by_channel,
+        irf_description=irf_description,
     )
-    data = None
-    if args.aligned_data.exists() and not args.force:
-        candidate = load_data(args.aligned_data)
-        labels = np.asarray(
-            [str(np.asarray(source["label"]).item()) for source in sources]
-        )
-        kinds = np.asarray(
-            [str(np.asarray(source["kind"]).item()) for source in sources]
-        )
-        if (
-            str(candidate.get("processing", "")) == processing
-            and np.array_equal(candidate.get("channels"), fsmp_data["channels"])
-            and np.array_equal(candidate.get("edges"), sources[0]["edges"])
-            and np.array_equal(candidate.get("simulation_labels"), labels)
-            and np.array_equal(candidate.get("simulation_kinds"), kinds)
-        ):
-            data = candidate
-    if data is None:
-        data = build_channel_histograms_multi(
-            fsmp_data,
-            sources,
-            use_tts=not args.no_tts,
-            irf_sigma_hamamatsu=args.irf_sigma_hamamatsu,
-            irf_sigma_nnvt=args.irf_sigma_nnvt,
-            add_dark_to_simulation=args.add_dark_to_simulation,
-            dark_window=args.dark_window,
-            prompt_window=args.prompt_window,
-            late_window=args.late_window,
-            alignment=args.alignment,
-            simulation_source_scale=source_scale,
-        )
-        np.savez_compressed(args.aligned_data, **data)
-        print(f"Wrote {args.aligned_data}")
-    plot_data(data, args.opt, args.plot_range, args.run)
+
+
+def emit_results(args, data, time_difference_panels=True):
+    """Render all figures and write the comparison statistics CSV.
+
+    Input: parsed arguments, the aligned metrics dictionary and the
+    difference-panel switch.  Output: none (files written).
+    """
+    plot_data(
+        data,
+        args.opt,
+        args.plot_range,
+        args.run,
+        time_difference_panels=time_difference_panels,
+    )
     plot_summary_data(data, args.summary_opt, args.plot_range, args.run, args.z)
     plot_amplitude_data(
         data,
@@ -1207,6 +1270,59 @@ def main(argv=None):
     )
     write_comparison_stats_csv(args.stats_csv, data, args.run, args.z)
 
+
+def main(argv=None):
+    """Compute/load caches and render the three-source comparison."""
+    args = parse_args(argv)
+    prepared = prepare_inputs(args)
+    processing = processing_string(
+        prepared.use_tts,
+        prepared.irf_description,
+        args.add_dark_to_simulation,
+        target_pe=getattr(
+            args,
+            "fsmp_target_pe",
+            prepared.fsmp_data.get("fsmp_target_pe"),
+        ),
+        prompt_window=args.prompt_window,
+        late_window=args.late_window,
+        alignment=args.alignment,
+        source_intensity_scale=prepared.source_scale,
+    )
+    data = None
+    if args.aligned_data.exists() and not args.force:
+        candidate = load_data(args.aligned_data)
+        labels, kinds = expected_source_labels(prepared.sources)
+        if (
+            str(candidate.get("processing", "")) == processing
+            and np.array_equal(
+                candidate.get("channels"), prepared.fsmp_data["channels"]
+            )
+            and np.array_equal(
+                candidate.get("edges"), prepared.sources[0]["edges"]
+            )
+            and np.array_equal(candidate.get("simulation_labels"), labels)
+            and np.array_equal(candidate.get("simulation_kinds"), kinds)
+        ):
+            data = candidate
+    if data is None:
+        data = build_channel_histograms_multi(
+            prepared.fsmp_data,
+            prepared.sources,
+            use_tts=prepared.use_tts,
+            irf_kernels=prepared.irf_kernels,
+            irf_fwhm_by_channel=prepared.irf_fwhm_by_channel,
+            irf_description=prepared.irf_description,
+            add_dark_to_simulation=args.add_dark_to_simulation,
+            dark_window=args.dark_window,
+            prompt_window=args.prompt_window,
+            late_window=args.late_window,
+            alignment=args.alignment,
+            simulation_source_scale=prepared.source_scale,
+        )
+        np.savez_compressed(args.aligned_data, **data)
+        print(f"Wrote {args.aligned_data}")
+    emit_results(args, data)
 
 
 

@@ -30,6 +30,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from compare.compare_sim import load_channel_selection
 from compare import compare_sim_vs_real as response
 from compare import laser_compare_metrics as metrics
 
@@ -95,16 +96,6 @@ def paired_z_directories(lucid_root, junosw_root):
         if entry.is_dir() and z_m is not None and z_m in lucid:
             pairs.append((z_m, lucid[z_m], entry))
     return sorted(pairs)
-
-
-def load_channel_selection(path):
-    """Fixed channel list from a channel-selection CSV.
-
-    Input: CSV path with a ``channel`` column.
-    Output: sorted int64 ndarray of channel ids.
-    """
-    frame = pd.read_csv(path)
-    return np.sort(frame["channel"].to_numpy(dtype=np.int64))
 
 
 def lucid_amplitude(sim_dir, channels, edges, chunk_size):
@@ -244,6 +235,119 @@ def write_scale_csv(path, rows):
     print(f"Wrote {path}")
 
 
+def read_scale_csv(path):
+    """Read a source_scale_vs_z CSV back into row dictionaries.
+
+    Input: CSV path written by write_scale_csv.
+    Output: list of dicts with float z_m and source_intensity_scale.
+    """
+    rows = []
+    with path.open(newline="") as stream:
+        for row in csv.DictReader(stream):
+            rows.append(
+                {
+                    "z_m": float(row["z_m"]),
+                    "source_intensity_scale": float(
+                        row["source_intensity_scale"]
+                    ),
+                }
+            )
+    return rows
+
+
+def parse_compare_csv_specs(specs):
+    """Parse repeated PATH=LABEL --compare-csv options.
+
+    Input: list of "PATH=LABEL" strings.
+    Output: list of (Path, label) tuples.
+    """
+    parsed = []
+    for spec in specs:
+        path, sep, label = spec.partition("=")
+        if not sep or not path or not label:
+            raise ValueError(
+                f"--compare-csv expects PATH=LABEL, got {spec!r}"
+            )
+        parsed.append((Path(path), label))
+    return parsed
+
+
+def write_scale_comparison_csv(path, series):
+    """Write the overlaid series as one long table for transparency.
+
+    Input: output CSV path and the (label, rows) list.
+    Output: None (writes z_m, series, source_intensity_scale rows).
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", newline="") as stream:
+        writer = csv.writer(stream)
+        writer.writerow(["z_m", "series", "source_intensity_scale"])
+        for label, rows in series:
+            for row in rows:
+                writer.writerow(
+                    [row["z_m"], label, row["source_intensity_scale"]]
+                )
+    print(f"Wrote {path}")
+
+
+SCALE_SERIES_COLORS = ("#3969ac", "#e0672f", "#3d9b57", "#7b5aa6")
+
+
+def _draw_scale_series(axis, z_m, scale, label, color):
+    """Plot one scale-vs-z series with per-point value annotations.
+
+    Input: axes, z array, scale array, legend label and line color.
+    Output: None.
+    """
+    axis.plot(z_m, scale, "o-", color=color, label=label)
+    for x, y in zip(z_m, scale):
+        axis.annotate(
+            f"{y:.4f}",
+            (x, y),
+            textcoords="offset points",
+            xytext=(0, 6),
+            ha="center",
+            fontsize=7,
+        )
+
+
+def _finish_scale_figure(axis, figure):
+    """Apply the shared axis labels, title, grid and legend.
+
+    Input: axes and figure of a scale-vs-z plot.  Output: None.
+    """
+    axis.set_xlabel("Source z [m]")
+    axis.set_ylabel("Source intensity scale")
+    axis.set_title("source-intensity scale vs source z\n")
+    axis.grid(alpha=0.3)
+    axis.legend(loc="best")
+    figure.tight_layout()
+
+
+def plot_scale_comparison(series, output):
+    """Overlay scale-vs-z series from different source models.
+
+    Input: list of (label, rows) tuples and the output PDF path.
+    Output: None (writes the PDF).
+    """
+    output.parent.mkdir(parents=True, exist_ok=True)
+    with PdfPages(output) as pdf:
+        figure, axis = plt.subplots(figsize=(7, 4.5))
+        for index, (label, rows) in enumerate(series):
+            z_m = np.array([row["z_m"] for row in rows])
+            scale = np.array(
+                [row["source_intensity_scale"] for row in rows]
+            )
+            color = SCALE_SERIES_COLORS[
+                index % len(SCALE_SERIES_COLORS)
+            ]
+            _draw_scale_series(axis, z_m, scale, label, color)
+        _finish_scale_figure(axis, figure)
+        pdf.savefig(figure)
+        plt.close(figure)
+    print(f"Wrote {output}")
+
+
 def plot_scale_vs_z(rows, output, qe):
     """Vector PDF of the source-intensity scale versus source z.
 
@@ -256,24 +360,10 @@ def plot_scale_vs_z(rows, output, qe):
     output.parent.mkdir(parents=True, exist_ok=True)
     with PdfPages(output) as pdf:
         figure, axis = plt.subplots(figsize=(7, 4.5))
-        axis.plot(z_m, scale, "o-", color="#3969ac", label="LUCiD vs JUNOsw")
-        for x, y in zip(z_m, scale):
-            axis.annotate(
-                f"{y:.4f}",
-                (x, y),
-                textcoords="offset points",
-                xytext=(0, 6),
-                ha="center",
-                fontsize=7,
-            )
-        axis.set_xlabel("Source z [m]")
-        axis.set_ylabel("Source intensity scale")
-        axis.set_title(
-            "source-intensity scale vs source z\n"
+        _draw_scale_series(
+            axis, z_m, scale, "LUCiD vs JUNOsw", "#3969ac"
         )
-        axis.grid(alpha=0.3)
-        axis.legend(loc="best")
-        figure.tight_layout()
+        _finish_scale_figure(axis, figure)
         pdf.savefig(figure)
         plt.close(figure)
     print(f"Wrote {output}")
@@ -327,6 +417,14 @@ def parse_args(argv=None):
         default=metrics.JUNOSW_J26_3_2_EQUIVALENT_QE_532_NM,
     )
     parser.add_argument("--force", action="store_true")
+    parser.add_argument(
+        "--compare-csv",
+        action="append",
+        default=None,
+        metavar="PATH=LABEL",
+        help="skip the scan and overlay existing source_scale_vs_z CSV "
+        "series; repeat once per series as PATH=LABEL",
+    )
     return parser.parse_args(argv)
 
 
@@ -336,6 +434,18 @@ def main(argv=None):
     Input: optional argument list. Output: process exit code.
     """
     args = parse_args(argv)
+    if args.compare_csv:
+        series = [
+            (label, read_scale_csv(path))
+            for path, label in parse_compare_csv_specs(args.compare_csv)
+        ]
+        write_scale_comparison_csv(
+            args.output_dir / "source_scale_compare.csv", series
+        )
+        plot_scale_comparison(
+            series, args.output_dir / "source_scale_compare.pdf"
+        )
+        return 0
     channels = load_channel_selection(args.channel_selection)
     pairs = paired_z_directories(args.lucid_root, args.junosw_root)
     if not pairs:

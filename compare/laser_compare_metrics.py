@@ -16,35 +16,7 @@ density_hist = base.density_hist
 l1_distance = base.l1_distance
 wasserstein_distance = base.wasserstein_distance
 convolve_density = base.convolve_density
-
-
-def resolve_irf_sigmas(global_sigma=0.0, hamamatsu_sigma=None, nnvt_sigma=None):
-    """Resolve the Gaussian IRF placeholder width for both PMT types."""
-    values = {
-        "global": global_sigma,
-        "hamamatsu": (
-            global_sigma if hamamatsu_sigma is None else hamamatsu_sigma
-        ),
-        "nnvt": global_sigma if nnvt_sigma is None else nnvt_sigma,
-    }
-    for name, value in values.items():
-        if not np.isfinite(value) or value < 0.0:
-            raise ValueError(f"IRF sigma for {name} must be finite and >= 0 ns")
-    return float(values["hamamatsu"]), float(values["nnvt"])
-
-
-def irf_sigma_for_pmt_type(pmt_type, hamamatsu_sigma, nnvt_sigma):
-    """Return the configured IRF sigma for one PMT type."""
-    return {1: float(hamamatsu_sigma), 2: float(nnvt_sigma)}.get(
-        int(pmt_type), 0.0
-    )
-
-
-def irf_config_string(hamamatsu_sigma, nnvt_sigma):
-    """Serialize type-dependent IRF settings for a cache key."""
-    if np.isclose(hamamatsu_sigma, nnvt_sigma, rtol=0.0, atol=1e-12):
-        return f"{hamamatsu_sigma:g}"
-    return f"hamamatsu:{hamamatsu_sigma:g}|nnvt:{nnvt_sigma:g}"
+convolve_kernel = base.convolve_kernel
 
 
 def simulation_qe_factors(
@@ -74,8 +46,7 @@ def simulation_qe_factors(
 
 def processing_string(
     use_tts,
-    hamamatsu_sigma,
-    nnvt_sigma,
+    irf,
     add_dark_to_simulation,
     target_pe=None,
     prompt_window=(-10.0, 20.0),
@@ -83,12 +54,17 @@ def processing_string(
     alignment="l1",
     source_intensity_scale=None,
 ):
-    """Serialize all response-processing settings into a cache key."""
+    """Serialize all response-processing settings into a cache key.
+
+    Input: the effective TTS toggle and the IRF descriptor ("0" when
+    the measured IRF is off, otherwise the file-based descriptor).
+    Output: the aligned-cache processing key.
+    """
     value = (
         # aligned-cache schema version; bump when result fields change
-        "metrics=6,"
+        "metrics=7,"
         f"tts={int(use_tts)},"
-        f"irf={irf_config_string(hamamatsu_sigma, nnvt_sigma)},"
+        f"irf={irf},"
         f"dark_to_sim={int(add_dark_to_simulation)},fsmp_dark=kept,"
         f"alignment=global_median_consensus_{alignment},"
         f"prompt={prompt_window[0]:g}:{prompt_window[1]:g},"
@@ -353,15 +329,22 @@ def build_channel_histograms_multi(
     sim_data_list,
     alignment="l1",
     use_tts=True,
-    irf_sigma_hamamatsu=0.0,
-    irf_sigma_nnvt=0.0,
+    irf_kernels=None,
+    irf_fwhm_by_channel=None,
+    irf_description="0",
     add_dark_to_simulation=True,
     dark_window=30.0,
     prompt_window=(-10.0, 20.0),
     late_window=(20.0, 600.0),
     simulation_source_scale=None,
 ):
-    """Build diagnostics after applying one robust shift to every channel."""
+    """Build diagnostics after applying one robust shift to every channel.
+
+    Input: FSMP/simulation caches; when irf_kernels (channel ->
+    unit-sum kernel) is given, the per-PMT TTS convolution is disabled
+    because the measured IRF already contains the TTS.  Output: the
+    aligned per-channel metrics dictionary.
+    """
     if alignment not in {"l1", "peak"} or not sim_data_list:
         raise ValueError(
             "alignment must be l1/peak and at least one source is required"
@@ -372,13 +355,13 @@ def build_channel_histograms_multi(
     channels = np.asarray(fsmp_data["channels"], dtype=np.int64)
     pmt_type = np.asarray(fsmp_data["pmt_type"], dtype=np.int16)
     tts = np.asarray(fsmp_data["tts"], dtype=np.float64)
+    if irf_kernels is not None:
+        # The measured IRF kernels already contain the TTS.
+        use_tts = False
+    fwhm_by_channel = irf_fwhm_by_channel or {}
     irf = np.asarray(
-        [
-            irf_sigma_for_pmt_type(
-                value, irf_sigma_hamamatsu, irf_sigma_nnvt
-            )
-            for value in pmt_type
-        ]
+        [fwhm_by_channel.get(int(value), 0.0) for value in channels],
+        dtype=np.float64,
     )
     edges = np.asarray(sim_data_list[0]["edges"], dtype=np.float64)
     centers = np.asarray(sim_data_list[0]["centers"], dtype=np.float64)
@@ -461,12 +444,19 @@ def build_channel_histograms_multi(
         "pe_count": np.empty(0),
     }
     prepared = []
+    unsmoothed = []
     for channel, channel_tts, channel_irf in tqdm(
-        list(zip(channels, tts, irf)), desc="Prepare channel models"
+        list(zip(channels, tts, irf)),
+        desc="Prepare channel models",
     ):
         record = records.get(int(channel), empty_record)
         times = np.asarray(record["time"], dtype=np.float64)
         peak_run = estimate_peak_from_times(times, len(edges) - 1)
+        kernel = None
+        if not use_tts and irf_kernels is not None:
+            kernel = irf_kernels.get(int(channel))
+            if kernel is None:
+                unsmoothed.append(int(channel))
         source_results = []
         for model_index, source in enumerate(sim_data_list):
             source_channels = np.asarray(source["channels"], dtype=np.int64)
@@ -495,11 +485,11 @@ def build_channel_histograms_multi(
                 event_count = int(
                     np.asarray(source["simulation_events"])[source_index]
                 )
-            observed = (
-                convolve_density(raw, width, channel_tts) if use_tts else raw
-            )
-            if channel_irf > 0:
-                observed = convolve_density(observed, width, channel_irf)
+            observed = raw
+            if use_tts:
+                observed = convolve_density(observed, width, channel_tts)
+            elif kernel is not None:
+                observed = convolve_kernel(observed, kernel)
             shape, renorm = _normalize_with_factor(observed, width)
             if event_count > 0:
                 pe_density = (
@@ -552,6 +542,11 @@ def build_channel_histograms_multi(
             }
         )
 
+    if irf_kernels is not None and unsmoothed:
+        print(
+            f"IRF: {len(unsmoothed)} channels without a measured "
+            "kernel left unsmoothed"
+        )
     candidate_shifts = np.asarray(
         [item["candidate_shift"] for item in prepared], dtype=np.float64
     )
@@ -738,7 +733,7 @@ def build_channel_histograms_multi(
         "channels": channels,
         "pmt_type": pmt_type,
         "tts": tts,
-        "irf_sigma_by_channel": irf,
+        "irf_fwhm_by_channel": irf,
         "z": np.asarray(fsmp_data["z"], dtype=float),
         "theta": np.asarray(fsmp_data["theta"], dtype=float),
         "edges": edges,
@@ -815,8 +810,7 @@ def build_channel_histograms_multi(
         "processing": np.asarray(
             processing_string(
                 use_tts,
-                irf_sigma_hamamatsu,
-                irf_sigma_nnvt,
+                irf_description,
                 add_dark_to_simulation,
                 target_pe=fsmp_data.get("fsmp_target_pe"),
                 prompt_window=prompt_window,
@@ -843,3 +837,105 @@ def build_channel_histograms_multi(
             item_values.astype(dtype)[None, :], n_sources, axis=0
         )
     return result
+
+
+def merge_smearing_variants(tts_data, irf_data, processing=None):
+    """Merge TTS/IRF builds of the same sources into one dictionary.
+
+    Input: two results of build_channel_histograms_multi computed on
+    the same FSMP data and simulation sources, the first with TTS and
+    the second with measured-IRF smearing; and the processing string
+    to stamp on the merged result.
+    Output: merged metrics dictionary; every simulation-side source
+    axis carries, per original source, the TTS variant then the IRF
+    variant; run-side and channel-level fields come from the TTS
+    build.
+    """
+    tts_labels = [
+        str(np.asarray(label).item())
+        for label in np.atleast_1d(tts_data["simulation_labels"])
+    ]
+    irf_labels = [
+        str(np.asarray(label).item())
+        for label in np.atleast_1d(irf_data["simulation_labels"])
+    ]
+    if tts_labels != irf_labels:
+        raise ValueError("TTS and IRF builds describe different sources")
+    if not np.array_equal(tts_data["channels"], irf_data["channels"]):
+        raise ValueError("TTS and IRF builds use different channels")
+    if not np.array_equal(tts_data["edges"], irf_data["edges"]):
+        raise ValueError("TTS and IRF builds use different edges")
+    n_sources = len(tts_labels)
+
+    def _interleave(first, second):
+        """Stack [first_i, second_i] pairs along a new source axis.
+
+        Input: two arrays whose first axis counts the sources.
+        Output: one array with 2 * n_sources rows, TTS then IRF.
+        """
+        parts = []
+        for index in range(n_sources):
+            parts.append(np.asarray(first[index]))
+            parts.append(np.asarray(second[index]))
+        return np.asarray(parts)
+
+    variant_keys = {
+        "l1_distance",
+        "wasserstein_distance",
+        "gate_reference_peak_ns",
+        "fsmp_peak_unaligned_ns",
+        "aligned_fsmp_peak_ns",
+        "prompt_window_effective_low_ns",
+        "prompt_window_effective_high_ns",
+        "late_window_effective_low_ns",
+        "late_window_effective_high_ns",
+    }
+    copied_arrays = {
+        "channels",
+        "pmt_type",
+        "z",
+        "theta",
+        "tts",
+        "irf_fwhm_by_channel",
+        "edges",
+        "centers",
+        "channel_alignment_candidate_shift_ns",
+        "alignment_pmt_types",
+        "alignment_pmt_type_candidate_median_ns",
+        "prompt_window_relative_ns",
+        "late_window_relative_ns",
+    }
+    merged = {}
+    for key, value in tts_data.items():
+        array = np.asarray(value)
+        is_variant_axis = (
+            (key.startswith(("simulation_", "run_")) or key in variant_keys)
+            and array.ndim >= 1
+            and array.shape[0] == n_sources
+        )
+        if key == "simulation_labels":
+            merged[key] = np.asarray(
+                [
+                    f"{label} ({variant})"
+                    for label in tts_labels
+                    for variant in ("TTS", "IRF")
+                ]
+            )
+        elif key == "processing":
+            merged[key] = np.asarray(
+                processing if processing is not None else value
+            )
+        elif is_variant_axis:
+            merged[key] = _interleave(array, np.asarray(irf_data[key]))
+        else:
+            if (
+                array.ndim >= 1
+                and array.shape[0] == n_sources
+                and key not in copied_arrays
+            ):
+                raise ValueError(
+                    "merge_smearing_variants: no merge rule for "
+                    f"source-axis key {key!r}"
+                )
+            merged[key] = value
+    return merged

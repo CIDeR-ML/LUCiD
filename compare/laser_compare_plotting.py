@@ -98,30 +98,45 @@ def _simulation_colors(data, labels):
     ).astype(str)
     colors = []
     lucid_count = 0  # 记录 LUCiD 源的数量
+    junosw_count = 0  # 记录 JUNOsw 源的数量
+    fallback_index = 0  # 同类第二个及之后的源依次使用备用颜色
     for index, (kind, label) in enumerate(zip(kinds, labels)):
         key, text = kind.lower(), str(label).lower()
         if key == "lucid" or "lucid" in text:
             if lucid_count == 0:
                 colors.append(SOURCE_COLORS["lucid"])
-            else:
-                # 第2个及之后的LUCiD使用备用颜色
-                colors.append(
-                    FALLBACK_SOURCE_COLORS[
-                        (lucid_count - 1) % len(FALLBACK_SOURCE_COLORS)
-                    ]
-                )
+                lucid_count += 1
+                continue
             lucid_count += 1
         elif key == "junosw" or "juno" in text:
-            colors.append(SOURCE_COLORS["junosw"])
+            if junosw_count == 0:
+                colors.append(SOURCE_COLORS["junosw"])
+                junosw_count += 1
+                continue
+            junosw_count += 1
         else:
             colors.append(
                 FALLBACK_SOURCE_COLORS[index % len(FALLBACK_SOURCE_COLORS)]
             )
+            continue
+        colors.append(
+            FALLBACK_SOURCE_COLORS[
+                fallback_index % len(FALLBACK_SOURCE_COLORS)
+            ]
+        )
+        fallback_index += 1
     return colors
 
 
-def plot_data(data, output, plot_range, run):
-    """Write per-channel three-way density, residual and metric pages."""
+def plot_data(data, output, plot_range, run, time_difference_panels=True):
+    """Write per-channel three-way density, residual and metric pages.
+
+    Input: metrics dictionary, output path, time axis range, run number
+    and the difference-panel switch; time_difference_panels=False skips
+    the per-channel difference/ratio page and every L1/Wasserstein
+    display (annotation and distribution pages).
+    Output: none (PDF written).
+    """
     configure_plot_style()
     labels, run_density, sim_density, l1, wasserstein = _metric_arrays(data)
     colors = _simulation_colors(data, labels)
@@ -132,9 +147,20 @@ def plot_data(data, output, plot_range, run):
     with PdfPages(output) as pdf:
         for index, channel in enumerate(data["channels"]):
             pmt = PMT_TYPE_NAME.get(int(data["pmt_type"][index]), "Unknown")
+            processing = str(
+                np.asarray(data.get("processing", "")).item()
+            )
+            smear = f"TTS={data['tts'][index]:.2f} ns; "
+            irf_fwhm = data.get("irf_fwhm_by_channel")
+            if "mode=tts_vs_irf" in processing:
+                smear = "TTS vs measured per-channel IRF; "
+            elif "irf=file:" in processing and irf_fwhm is not None:
+                smear = (
+                    f"IRF FWHM={irf_fwhm[index]:.2f} ns (TTS off); "
+                )
             title = (
                 f"Channel {int(channel)} | {pmt}\n"
-                f"TTS={data['tts'][index]:.2f} ns; "
+                f"{smear}"
                 f"z={data['z'][index]:.2f} mm; "
                 f"theta={data['theta'][index]:.2f} deg\n"
                 # f"Alignment={alignment}; FSMP shift="
@@ -157,18 +183,19 @@ def plot_data(data, output, plot_range, run):
                     color=color,
                     label=str(label),
                 )
-            ax.text(
-                0.98,
-                0.98,
-                "\n".join(
-                    f"{label}: L1={l1[i,index]:.4g}, "
-                    f"W={wasserstein[i,index]:.4g} ns"
-                    for i, label in enumerate(labels)
-                ),
-                transform=ax.transAxes,
-                ha="right",
-                va="top",
-            )
+            if time_difference_panels:
+                ax.text(
+                    0.98,
+                    0.98,
+                    "\n".join(
+                        f"{label}: L1={l1[i,index]:.4g}, "
+                        f"W={wasserstein[i,index]:.4g} ns"
+                        for i, label in enumerate(labels)
+                    ),
+                    transform=ax.transAxes,
+                    ha="right",
+                    va="top",
+                )
             ax.text(
                 0.98,
                 0.03,
@@ -195,6 +222,9 @@ def plot_data(data, output, plot_range, run):
             fig.tight_layout()
             pdf.savefig(fig)
             plt.close(fig)
+
+            if not time_difference_panels:
+                continue
 
             fig, difference = plt.subplots(figsize=FIGURE_SIZE)
             lines = []
@@ -253,6 +283,8 @@ def plot_data(data, output, plot_range, run):
             ("All PMTs", np.ones(len(data["channels"]), dtype=bool)),
         ):
             for source, label in enumerate(labels):
+                if not time_difference_panels:
+                    continue
                 plot_metric_distribution(
                     pdf, l1[source, mask], f"{name} {label} L1", "L1 distance"
                 )

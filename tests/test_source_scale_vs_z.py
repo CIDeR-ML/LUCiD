@@ -95,3 +95,70 @@ def test_csv_and_pdf_outputs(tmp_path):
     assert float(table[0]["source_intensity_scale"]) == 0.1563
     assert int(table[0]["channel_count"]) == 100
     assert pdf_path.read_bytes().startswith(b"%PDF")
+
+
+def test_read_scale_csv_round_trip(tmp_path):
+    """read_scale_csv restores float z and scale values."""
+    rows = [
+        _row(0.0, 36.5, 0.5533, 0.1563),
+        _row(3.0, 40.0, 0.5800, 0.1495),
+    ]
+    csv_path = tmp_path / "source_scale_vs_z.csv"
+    scan.write_scale_csv(csv_path, rows)
+    loaded = scan.read_scale_csv(csv_path)
+    assert [row["z_m"] for row in loaded] == [0.0, 3.0]
+    assert loaded[0]["source_intensity_scale"] == pytest.approx(0.1563)
+
+
+def test_parse_compare_csv_specs():
+    """PATH=LABEL specs split on the first equals sign only."""
+    specs = scan.parse_compare_csv_specs(
+        ["/a/b.csv=iso model", "relative.csv=diffuser"]
+    )
+    assert specs[0][1] == "iso model"
+    assert specs[1][1] == "diffuser"
+    with pytest.raises(ValueError):
+        scan.parse_compare_csv_specs(["no-label.csv"])
+
+
+def test_plot_scale_comparison_overlays_series(tmp_path):
+    """The comparison PDF carries one legend entry per series."""
+    rows_a = [
+        {"z_m": 0.0, "source_intensity_scale": 0.156},
+        {"z_m": 16.1, "source_intensity_scale": 0.126},
+    ]
+    rows_b = [
+        {"z_m": 0.0, "source_intensity_scale": 0.157},
+        {"z_m": 16.1, "source_intensity_scale": 0.130},
+    ]
+    output = tmp_path / "source_scale_compare.pdf"
+    scan.plot_scale_comparison(
+        [("isotropic point source", rows_a), ("diffuser ball", rows_b)],
+        output,
+    )
+    assert output.read_bytes().startswith(b"%PDF")
+
+
+def test_main_compare_csv_mode_skips_the_scan(tmp_path):
+    """--compare-csv overlays existing CSVs without simulation input."""
+    csv_a = tmp_path / "a.csv"
+    csv_b = tmp_path / "b.csv"
+    scan.write_scale_csv(csv_a, [_row(0.0, 36.5, 0.5533, 0.156)])
+    scan.write_scale_csv(csv_b, [_row(0.0, 36.5, 0.5533, 0.157)])
+    out_dir = tmp_path / "out"
+    scan.main(
+        [
+            "--compare-csv", f"{csv_a}=isotropic point source",
+            "--compare-csv", f"{csv_b}=diffuser ball",
+            "--output-dir", str(out_dir),
+        ]
+    )
+    merged = out_dir / "source_scale_compare.csv"
+    assert (out_dir / "source_scale_compare.pdf").exists()
+    with merged.open(newline="") as stream:
+        table = list(csv.DictReader(stream))
+    assert [row["series"] for row in table] == [
+        "isotropic point source",
+        "diffuser ball",
+    ]
+    assert all(row["z_m"] == "0.0" for row in table)

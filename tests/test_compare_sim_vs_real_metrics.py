@@ -301,6 +301,88 @@ def test_shape_plot_displays_amplitude_normalization_c(
     assert "kappa" not in scale_note
 
 
+def test_time_difference_panels_switch_skips_pages_and_annotation(
+    tmp_path, monkeypatch
+):
+    """Disabling the panels drops residual/metric pages and L1/W text."""
+    fsmp, simulation = _synthetic_inputs()
+    result = comparison.build_channel_histograms_multi(
+        fsmp, [simulation], alignment="l1", use_tts=False
+    )
+
+    class CapturePdf:
+        """Capture figures passed to the PDF writer."""
+
+        figures = []
+
+        def __init__(self, _):
+            self.figures = []
+            CapturePdf.figures = self.figures
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return False
+
+        def savefig(self, figure):
+            self.figures.append(figure)
+
+    monkeypatch.setattr(plotting, "PdfPages", CapturePdf)
+    comparison.plot_data(
+        result,
+        tmp_path / "off.pdf",
+        (0.0, 4.0),
+        15040,
+        time_difference_panels=False,
+    )
+    # one density page per channel; no residual or metric pages
+    assert len(CapturePdf.figures) == 1
+    texts = [
+        item.get_text()
+        for figure in CapturePdf.figures
+        for axis in figure.axes
+        for item in axis.texts
+    ]
+    assert not any("L1=" in text for text in texts)
+
+    comparison.plot_data(result, tmp_path / "on.pdf", (0.0, 4.0), 15040)
+    # default: density + residual pages per channel plus 3x1x2 metrics
+    assert len(CapturePdf.figures) == 8
+    texts = [
+        item.get_text()
+        for figure in CapturePdf.figures
+        for axis in figure.axes
+        for item in axis.texts
+    ]
+    assert any("L1=" in text for text in texts)
+
+
+def test_simulation_colors_distinguish_repeated_kinds():
+    """TTS/IRF variants of one source kind get distinct colors."""
+    kinds = np.asarray(["lucid", "lucid", "junosw", "junosw"])
+    colors = plotting._simulation_colors(
+        {"simulation_kinds": kinds}, ["a", "b", "c", "d"]
+    )
+    assert len(set(colors)) == 4
+    assert colors[0] == "tab:orange"
+    assert colors[2] == "tab:green"
+    legacy = plotting._simulation_colors(
+        {"simulation_kinds": kinds[:3]}, ["a", "b", "c"]
+    )
+    assert legacy == ["tab:orange", "tab:red", "tab:green"]
+
+
+def test_main_cli_has_no_time_difference_panel_switch():
+    """The production CLI always draws the full pages (no switch)."""
+    args = comparison.parse_args(["--lucid-sim-dir", "/x"])
+    assert not hasattr(args, "time_difference_panels")
+    with pytest.raises(SystemExit):
+        comparison.parse_args(
+            ["--lucid-sim-dir", "/x", "--no-time-difference-panels"]
+        )
+
+
 def test_pmt_summary_pools_pe_before_normalizing():
     """PMT summaries weight channels by their PE contribution."""
     pe_density = np.array([[1.0, 0.0], [0.0, 9.0]])
