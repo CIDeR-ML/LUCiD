@@ -1,0 +1,51 @@
+--- a/fiTQun.cc
++++ b/fiTQun.cc
+@@ -4836,13 +4836,47 @@ void fiTQun::FitQEEff(int iPDG, double *X){
+     std::cout << "MINUIT did not converge!!! n_Iter=" << nIter << std::endl;
+     //    return 1e100;
+   }
+   
+   double totmu=GetTotmu();
+   fqshared->SaveDefaultSnglTrkFit(X,0,0,iPID,totmu,QEEff_best,PCflg);
+-  
++
++  // Per-PMT dump of predicted vs observed charge at the TRUTH track. totmu and
++  // fqtotq are not comparable -- totmu sums mu over hit AND unhit PMTs and adds
++  // mu_dark to every one of them, while fqtotq sums observed charge over hit
++  // PMTs only -- so the only clean test of the light model is per PMT, on one
++  // population. GetOneRngnglogL above has just refilled mu/muscat at QEEff_best.
++  // Off unless FITQUN_PMT_DUMP is set, so production runs are unaffected.
++  {
++    const char *dumpf = getenv("FITQUN_PMT_DUMP");
++    if (dumpf) {
++      static FILE *fp = NULL;
++      if (!fp) {
++        fp = fopen(dumpf, "w");
++        if (fp) fprintf(fp, "# event icab flgHit flgMask R_cm costheta0 mu muscat chrg tHit tau tres qeeff\n");
++      }
++      if (fp) {
++        for (int i = 0; i < fNPMT; i++) {
++          double dx = fqshared->PMTpos[i][0] - X[0];
++          double dy = fqshared->PMTpos[i][1] - X[1];
++          double dz = fqshared->PMTpos[i][2] - X[2];
++          // tau is fiTQun's predicted arrival time and tHit the observed one;
++          // tres = tHit - tau is the residual its own time PDF is written in.
++          fprintf(fp, "%d %d %d %d %.2f %.5f %.6g %.6g %.6g %.4f %.4f %.4f %.6g\n",
++                  ievent, i, fiTQun_shared::flgHit[i], fiTQun_shared::flgMask[i],
++                  sqrt(dx*dx+dy*dy+dz*dz), fiTQun_shared::costheta0[i],
++                  fiTQun_shared::mu[0][i], fiTQun_shared::muscat[0][i],
++                  fiTQun_shared::chrg[i], fiTQun_shared::tHit[i],
++                  fiTQun_shared::tau[0][i],
++                  fiTQun_shared::tHit[i]-fiTQun_shared::tau[0][i], QEEff_best);
++        }
++        fflush(fp);
++      }
++    }
++  }
++
+   std::cout << " Best fit QEEff=" << QEEff_best << std::endl;
+   
+   fqshared->SetFullScatflg(false);
+ }
+ 
+ void fiTQun::FitQEEffWrapper(int& nDim, double* gout, double& result, double par[], int flg){
