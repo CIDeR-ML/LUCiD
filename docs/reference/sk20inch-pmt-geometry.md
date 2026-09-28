@@ -237,3 +237,12 @@ the curved surface together with the Gaussian footprint. That gives the most
 faithful smooth forward value and its exact gradient. A SIREN is useful later
 as a learned residual for effects such as bulb position, azimuth, and magnetic
 field; it should not replace the measured one-dimensional optical table.
+
+For monochromatic timing comparisons, `setup_event_simulator` also accepts
+`propagation_speed_m_per_ns`. The current generic water material uses the
+constant phase-velocity approximation `c / 1.33`. SKDetSim transports 405 nm
+light with its dispersive group index, `n_group = n - lambda*dn/dlambda`, which
+gives approximately `0.21729 m/ns`. Supplying that value isolates the timing
+effect without changing charge, scattering distances, or PMT response.
+Broadband production should eventually carry a group-velocity curve per
+photon rather than use this monochromatic override.

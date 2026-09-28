@@ -119,6 +119,7 @@ def setup_event_simulator(
         cherenkov_emission_band=None,
         pmt_timing_model=None,
         pmt_detection_model=None,
+        propagation_speed_m_per_ns=None,
         **grid_params):
     """
     Set up and return an event simulator using DetectorParams / ParticleParams.
@@ -241,6 +242,10 @@ def setup_event_simulator(
         between the incoming ray and the curved photocathode normal. The table
         is a relative response and may exceed one; stochastic hit modes clip
         only the final QE probability. ``None`` preserves the previous result.
+    propagation_speed_m_per_ns : float or None
+        Optional fixed photon propagation speed. This is useful for a
+        monochromatic calibration that must use a wavelength-specific group
+        velocity. ``None`` uses the detector material's configured speed.
     spectrum : Spectrum or None
         Optional λ-sampling law (``lucid.wavelength`` Monochromatic / PowerLaw /
         QEWeighted). When given it supersedes ``wavelength_sampling`` for broadband
@@ -322,7 +327,13 @@ def setup_event_simulator(
 
     # ---- Extract fields from containers ------------------------------------
     material = det_geom.medium.material
-    SPEED_OF_LIGHT_MATERIAL = det_geom.speed_of_light
+    SPEED_OF_LIGHT_MATERIAL = (
+        det_geom.speed_of_light
+        if propagation_speed_m_per_ns is None
+        else float(propagation_speed_m_per_ns)
+    )
+    if not np.isfinite(SPEED_OF_LIGHT_MATERIAL) or SPEED_OF_LIGHT_MATERIAL <= 0:
+        raise ValueError("propagation_speed_m_per_ns must be finite and positive")
     detector = det_geom.detector
     # String telescopes use the volume (per-DOM, no-reflection) photon step; all
     # surface geometries (cylinder/sphere/box) keep the byte-identical surface step.
