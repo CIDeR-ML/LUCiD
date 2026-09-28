@@ -1,4 +1,4 @@
-"""Smoke-test: import every module in lucid/ without error."""
+"""Smoke-test: import every module in lucid/, and check the public surface is usable."""
 import importlib
 import pytest
 
@@ -54,3 +54,29 @@ MODULES = [
 @pytest.mark.parametrize("module", MODULES)
 def test_import(module):
     importlib.import_module(module)
+
+
+def test_every_public_name_resolves_to_what_it_claims_to_be():
+    """A name in `__all__` must be the OBJECT it advertises, not merely present.
+
+    A submodule with the same name as an exported function (e.g. `gauss_newton`) can shadow it, so
+    `from lucid.fitting import gauss_newton` returns the module. The shadowing is silent and
+    import-order dependent, and tests that import from the submodule path do not catch it.
+    """
+    import types
+    import lucid.fitting as F
+
+    for name in F.__all__:
+        assert hasattr(F, name), f'{name} is in __all__ but not on the package'
+
+    shadowed = [n for n in F.__all__
+                if isinstance(getattr(F, n), types.ModuleType) and n != 'report']
+    assert not shadowed, (
+        f'{shadowed} resolve to MODULES, not to the objects __all__ advertises — a submodule of '
+        f'the same name has shadowed them')
+
+    # `damped_matrix` is deliberately NOT here: it is reached as
+    # `lucid.fitting.transforms.damped_matrix` and is not re-exported from the package.
+    for name in ('gauss_newton', 'calibrate', 'closure', 'closure_data', 'fit',
+                 'fit_track', 'crb', 'profile_gains', 'neyman_residual'):
+        assert callable(getattr(F, name)), f'lucid.fitting.{name} is not callable'

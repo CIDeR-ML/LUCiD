@@ -7,11 +7,6 @@ import jax.numpy as jnp
 from functools import partial
 from jax import lax
 
-from .base import (
-    process_intersection_normals, compute_sensor_intersections_base,
-    find_closest_sensors
-)
-from ..overlap import create_overlap_prob
 
 
 @jax.jit
@@ -63,7 +58,10 @@ def intersect_sphere(ray_origin, ray_direction, center, radius):
         return (intersects_, tval_)
     
     def no_intersection_branch(_):
-        return (False, jnp.array(LARGE, dtype=jnp.float32))
+        # dtype follows the ray, not a pinned float32 (as in cylinder.py's `parallel_side_branch`):
+        # `lax.cond` requires both branches to agree, the other branch follows the input
+        # precision, and a hard float32 would break the library under `jax_enable_x64`.
+        return (False, jnp.array(LARGE, dtype=ray_origin.dtype))
     
     has_intersection = discriminant >= -epsilon
     intersects, tval = lax.cond(has_intersection,
@@ -412,113 +410,3 @@ def create_inverted_sphere_sensor_map(assignments_geometric, assignments_distanc
     )
     
     return final_map
-
-
-def find_intersected_sphere_sensors_differentiable(ray_origins, ray_directions, sensor_positions, sensor_radius,
-                                                    radius, n_divisions, inverted_sensor_map,
-                                                    temperature, overlap_prob):
-    """
-    Finds sensors intersected by rays using a differentiable approximation with overlap-based weights.
-    """
-    single_ray = ray_origins.ndim == 1
-    if single_ray:
-        ray_origins = ray_origins[None, :]
-        ray_directions = ray_directions[None, :]
-
-    # Get sphere intersection points and grid indices
-    center = jnp.array([0.0, 0.0, 0.0])
-    intersects, t_sphere, theta_idx, phi_idx, intersection_point = (
-        batch_intersect_sphere_with_grid(ray_origins, ray_directions, radius, n_divisions))
-
-    def calculate_linear_index(theta_idx, phi_idx):
-        n_theta = n_divisions
-        n_phi = 2 * n_divisions
-        idx = theta_idx * n_phi + phi_idx
-        total_cells = n_theta * n_phi
-        return jnp.clip(idx, 0, total_cells - 1)
-
-    idx = calculate_linear_index(theta_idx, phi_idx)
-    potential_sensors = jax.lax.stop_gradient(inverted_sensor_map[idx])
-
-    # Create bounds check function
-    bounds_check = lambda points: sphere_bounds_check(points, radius)
-
-    # Process all potential sensors
-    sensor_results = jax.vmap(
-        lambda det_idx: compute_sensor_intersections_base(
-            det_idx, sensor_positions, sensor_radius,
-            ray_origins, ray_directions, bounds_check, overlap_prob
-        )
-    )(potential_sensors.T)
-    
-    weights = sensor_results[0]
-    sensor_times = sensor_results[1]
-    sensor_indices = sensor_results[2]
-    sensor_normals = sensor_results[3]
-    inside_sensor = sensor_results[4]
-    sensor_hit_positions = sensor_results[5]
-
-    # Calculate sphere surface normals
-    sphere_normals = calculate_sphere_normals(intersection_point)
-
-    intersection_results = process_intersection_normals(
-        ray_origins, ray_directions, intersection_point,
-        t_sphere, sensor_normals, sensor_hit_positions,
-        inside_sensor, sphere_normals
-    )
-
-    hit_positions = intersection_results['positions']
-    final_normals = intersection_results['normals']
-
-    result = {
-        'times': sensor_times,
-        'sensor_weights': weights,
-        'sensor_indices': sensor_indices,
-        'per_sensor_positions': sensor_hit_positions,
-        'positions': hit_positions,
-        'normals': final_normals,
-        'sensor_normals': sensor_normals,
-        'inside_sensor': inside_sensor
-    }
-
-    return result if not single_ray else jax.tree_map(lambda x: x[0], result)
-
-
-def create_sphere_photon_propagator(sensor_positions, sensor_radius, sphere_radius=4.0, n_divisions=50,
-                                   temperature=0.2, max_candidates_per_ray=4):
-    """
-    Creates a JIT-compiled function for efficient photon propagation simulation in sphere geometry.
-    """
-
-    assignments_geometric = assign_sensors_to_sphere_grid(
-        sensor_positions, sensor_radius, sphere_radius, n_divisions)
-
-    sensor_grid_map = create_sensor_sphere_grid_map(
-        assignments_geometric, n_divisions)
-
-    assignments_distance = find_closest_sensors(
-        calculate_sphere_grid_centers(sphere_radius, n_divisions),
-        sensor_positions,
-        max_candidates_per_ray
-    )
-
-    inverted_sensor_map = create_inverted_sphere_sensor_map(
-        assignments_geometric,
-        assignments_distance,
-        n_divisions,
-        max_candidates_per_ray, sensor_positions.shape[0]
-    )
-
-    if temperature is None:
-        overlap_prob = create_overlap_prob(temperature, sensor_radius)
-    else:
-        overlap_prob = create_overlap_prob(temperature * sensor_radius, sensor_radius)
-
-    @jax.jit
-    def propagate_photons(photon_origins, photon_directions):
-        return find_intersected_sphere_sensors_differentiable(
-            photon_origins, photon_directions, sensor_positions, sensor_radius,
-            sphere_radius, n_divisions, inverted_sensor_map,
-            temperature, overlap_prob)
-
-    return propagate_photons

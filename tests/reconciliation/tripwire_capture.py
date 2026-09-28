@@ -1,6 +1,6 @@
 """Phase-0 reconciliation TRIPWIRE — capture water-mode reference tensors that every
 unification↔refactor-v2 merge phase must preserve. Run with CAPTURE=1 to (re)generate the
-reference npz; run without to ASSERT against it. See docs/RECONCILIATION_PLAN.md Phase 0.
+reference npz; run without to ASSERT against it. See docs/concepts/architecture.md.
 
 Pins, on the real lucid.fitting calibration path (the path most threatened by the optics/
 scintillation/param-tree merge):
@@ -12,6 +12,18 @@ scintillation/param-tree merge):
   - DetectorParams nested leaf-name/order (a wrong insertion silently corrupts every optimizer)
 """
 import os, sys, json
+# Pin the backend BEFORE jax is imported. Under pytest, tests/conftest.py sets this and
+# test_tripwire forwards os.environ into the subprocess; running this file directly to regenerate
+# the reference inherits nothing, and a GPU capture differs from the CPU check by several times
+# the tolerance. The reference and the check must agree on the backend.
+if os.environ.get('JAX_PLATFORMS', 'cpu') != 'cpu':
+    sys.stderr.write('tripwire: overriding JAX_PLATFORMS=%s with cpu (the reference is CPU-only)\n'
+                     % os.environ['JAX_PLATFORMS'])
+# Same three variables as tests/conftest.py, so the direct run matches the pytest run. Hiding the
+# device also avoids a driver probe that can block the process in uninterruptible D-state.
+os.environ.setdefault('CUDA_VISIBLE_DEVICES', '')
+os.environ['JAX_PLATFORMS'] = 'cpu'
+os.environ['JAX_PLATFORM_NAME'] = 'cpu'  # back-compat with older jaxlib
 import numpy as np, jax, jax.numpy as jnp
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 from lucid.geometry import generate_detector
@@ -100,6 +112,26 @@ if __name__ == '__main__':
         assert f['leaf_order'] == rf['leaf_order'], 'DetectorParams LEAF ORDER changed!'
         for key in ['scalar.q_l2', 'scalar.adJ_l2', 'wavelength.q_l2', 'wavelength.adJ_l2']:
             assert abs(f[key] - rf[key]) <= 1e-4 * (abs(rf[key]) + 1e-9), f'{key} drift: {f[key]} vs {rf[key]}'
-        assert np.allclose(f['scalar.fisher_diag'], rf['scalar.fisher_diag'], rtol=1e-4), 'AD-Fisher diag drift'
+        # Per-column, not one blanket rtol. fisher_diag is (adJ**2).sum over sensors; a
+        # weakly-determined column is built from tiny per-sensor entries, so its float32 relative
+        # error is far larger than a well-determined one's (mie F~2 vs qe F~4300). One number for
+        # all seven is either too loose for qe or too tight for mie.
+        #
+        # Each bound is 20x that column's measured cross-CPU floor (AMD EPYC vs Intel Xeon, same
+        # code and seeds), rounded up to one significant figure:
+        #   mie 4.1e-4, wall 3.4e-4, g 3.1e-4, sensor 1.3e-4, scatter 3.8e-5, abs 2.3e-5, qe 4.6e-6
+        # Core count does not move these; the CPU model does. A jaxlib/XLA upgrade may eat this
+        # margin: widen from a new measurement, not by reflex.
+        assert list(rf['meta.fields']) == FIELDS, 'FIELDS changed — fisher tolerances are keyed to them'
+        _tol = np.array([{'g': 7e-3, 'scatter_length': 1e-3, 'mie_scatter_length': 1e-2,
+                          'absorption_length': 5e-4, 'wall_reflection_rate': 7e-3,
+                          'sensor_reflection_rate': 3e-3, 'qe': 1e-4}[k] for k in FIELDS])
+        _new = np.asarray(f['scalar.fisher_diag']); _ref = np.asarray(rf['scalar.fisher_diag'])
+        _bad = np.abs(_new - _ref) > _tol * np.abs(_ref)
+        # Name the offending column, so a failure points at the Jacobian column that drifted
+        # rather than at the forward charge.
+        assert not _bad.any(), 'AD-Fisher diag drift: ' + ', '.join(
+            '%s %.8g vs %.8g (rel %.2e > %.0e)' % (FIELDS[i], _new[i], _ref[i],
+                abs(_new[i] - _ref[i]) / abs(_ref[i]), _tol[i]) for i in np.nonzero(_bad)[0])
         assert not f['scalar.nan'] and not f['wavelength.nan'], 'NaN appeared'
         print('TRIPWIRE OK — all references match')

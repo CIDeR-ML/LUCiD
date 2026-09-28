@@ -49,7 +49,7 @@ Other important arguments: `n_photons`, `K` (scatter iterations), `temperature` 
 `wavelength_mode` (per-photon λ physics vs scalar), `default_detector_params` (bake the detector
 params in so the callable drops that argument), and `detector_type`.
 
-Three more arguments are easy to miss but change the numbers you get out:
+Four more arguments are easy to miss but change the numbers you get out:
 
 - **`use_expected_value`** (default `True`) — `True` runs the *mean-field* forward: each photon
   carries a deterministic soft weight, so the output is the expected charge/time with **no shot
@@ -69,6 +69,11 @@ Three more arguments are easy to miss but change the numbers you get out:
   time smearing applied inside the realistic (`is_data=True`) hit-maker. `False` returns the raw
   hard first-arrival time and summed charge (Bernoulli-QE-sampled but un-smeared) — useful when you
   want data-mode sampling without the electronics resolution folded in.
+- **`deposit_leg_bound`** (default `False`) — weights a sensor candidate by its distance from the
+  segment the photon actually travelled, instead of from the photon's infinite ray line, which at
+  grazing incidence passes near sensors further along the wall than the photon ever reached.
+  **Production sets it `True`** (`DEPOSIT_LEG_BOUND` in `lucid/production/run_job.py`), so
+  production data carry noticeably less deposited charge than the library default gives. The string (telescope) propagator has its own deposit and ignores it.
 
 ### Choosing `n_photons`, `K`, `temperature`
 

@@ -93,8 +93,8 @@ Moyal spectrum) that WbLS inherits.
 
 - **Inference / calibration** (`lucid/fitting/`, `lucid/optimization/`): build the
   simulator, take gradients of a loss (Poisson NLL, likelihood, factored) w.r.t.
-  `DetectorParams` / `ParticleParams`, solve with Gauss-Newton+Schur / Adam. Fisher/CRB from
-  autodiff. The data path loads ROOT photons via `pad_photon_data` (origins in **cm**, the
+  `DetectorParams` / `ParticleParams`, solve with a damped Gauss-Newton (per-PMT gains profiled
+  in closed form) or any optax optimizer such as Adam. Fisher/CRB from autodiff. The data path loads ROOT photons via `pad_photon_data` (origins in **cm**, the
   simulator divides by 100).
 - **Production** (`lucid/production/`): `lucid-run-job` drives GENIE → Geant4 macro →
   PhotonSim subprocess (`$PHOTONSIM_BIN`) → the LUCiD writer. `event_generation.py` reads

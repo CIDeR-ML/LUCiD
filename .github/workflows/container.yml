@@ -139,8 +139,14 @@ jobs:
           if-no-files-found: error
 
   test:
-    # Unit / integration tests: runs the pytest suite (fast tests only;
-    # slow tests are skipped by default via conftest.py --slow mechanism).
+    # The whole suite, --slow included. conftest.py's pytest_ignore_collect skips the slow files
+    # unless --slow is passed, and those include tests/reconciliation/test_tripwire.py (the
+    # forward-model drift check; reference provenance in
+    # tests/reconciliation/tripwire_water_ref.PROVENANCE.md), the SK-scale integration tests and
+    # the propagation differentiability gates. A test CI never collects can stay red unnoticed.
+    #
+    # conftest.py forces JAX_PLATFORMS=cpu for the whole suite, so a GPU runner would not help.
+    # If this job becomes the bottleneck, split it rather than narrowing what it collects.
     needs: build
     runs-on: ubuntu-latest
     permissions:
@@ -164,8 +170,13 @@ jobs:
       - name: Pull LUCiD container
         run: docker pull ${{ steps.img.outputs.image }}
 
-      - name: Run pytest
+      # -rs lists every skip with its reason, so a gate that silently stopped running shows up.
+      # Expected skips here: the byte-identity tests in tests/io/test_categorizer_byte_identity.py
+      # and tests/io/test_hits_byte_identity.py need a ROOT-file env var CI does not set, and the
+      # SIREN-gated tests need **/siren_training/, which container/Dockerfile.dockerignore
+      # excludes because those paths are symlinks into the data area.
+      - name: Run pytest (full suite, --slow)
         run: |
           docker run --rm \
             ${{ steps.img.outputs.image }} \
-            bash -c "cd /opt/LUCiD && python3 -m pytest tests/ -v --tb=short"
+            bash -c "cd /opt/LUCiD && python3 -m pytest tests/ --slow -v --tb=short -rs"
