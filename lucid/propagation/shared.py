@@ -17,6 +17,9 @@ from lucid.propagation.base import (
     find_closest_sensors,
 )
 from lucid.overlap import create_overlap_prob
+from lucid.propagation.sk_pmt_sensor import (
+    compute_sk20inch_sensor_intersections,
+)
 
 
 def validate_sensor_map(assignments_geometric, inverted_sensor_map, num_sensors,
@@ -108,6 +111,8 @@ def create_propagator(detector, sensor_positions, sensor_radius,
                       temperature=0.2, max_candidates_per_ray=4,
                       overlap_st_width_frac=0.35, overlap_renorm=1.0,
                       overlap_mode='interp',
+                      sensor_shape='sphere', sk_pmt_lookup=None,
+                      sk_pmt_lookup_options=None,
                       **grid_params):
     """Build a JIT-compiled photon propagator using detector methods.
 
@@ -126,6 +131,14 @@ def create_propagator(detector, sensor_positions, sensor_radius,
         Soft-overlap renormalization constant C (default 1.0 = OFF).
     overlap_mode : str
         Soft-overlap lookup interpolation: 'interp' (default) or 'cubic'.
+    sensor_shape : {'sphere', 'sk20inch'}
+        Candidate-sensor geometry. ``'sphere'`` preserves the legacy model.
+        ``'sk20inch'`` uses the measured PMT axes and SKDONUTS bulb shape.
+    sk_pmt_lookup : SKPMTCoverageLookup or None
+        Optional prebuilt smooth-coverage table, primarily for tests or reuse.
+    sk_pmt_lookup_options : dict or None
+        Options forwarded to ``build_sk20inch_coverage_lookup`` when a finite
+        temperature requires a table.
     max_candidates_per_ray : int
     **grid_params
         Geometry-specific grid parameters passed to ``detector.configure_grid()``.
@@ -140,6 +153,53 @@ def create_propagator(detector, sensor_positions, sensor_radius,
     """
     sensor_positions = jnp.array(sensor_positions)
     num_sensors = len(sensor_positions)
+    if sensor_shape not in ('sphere', 'sk20inch'):
+        raise ValueError("sensor_shape must be 'sphere' or 'sk20inch'")
+
+    sensor_directions = None
+    sensor_is_barrel = None
+    coverage_lookup = None
+    if sensor_shape == 'sk20inch':
+        if not hasattr(detector, 'pmt_directions') or not hasattr(detector, 'surfaces'):
+            raise ValueError(
+                "sensor_shape='sk20inch' requires measured pmt_directions "
+                "and per-PMT surfaces")
+        directions_array = np.asarray(detector.pmt_directions)
+        surfaces_array = np.asarray(detector.surfaces)
+        sensor_directions = jnp.asarray(directions_array)
+        sensor_is_barrel = jnp.asarray(surfaces_array == 'barrel')
+        if sensor_directions.shape != sensor_positions.shape:
+            raise ValueError(
+                "pmt_directions shape must match sensor_positions")
+        if surfaces_array.shape != (num_sensors,):
+            raise ValueError("surfaces shape must match sensor_positions")
+        unknown_surfaces = set(np.unique(surfaces_array)) - {
+            'barrel', 'top', 'bottom'}
+        if unknown_surfaces:
+            raise ValueError(
+                f"unknown PMT surface labels: {sorted(unknown_surfaces)}")
+        if (not np.all(np.isfinite(directions_array))
+                or np.any(np.linalg.norm(directions_array, axis=1) == 0.0)):
+            raise ValueError("pmt_directions must be finite and non-zero")
+        if temperature is not None:
+            expected_sigma = float(temperature) * float(sensor_radius)
+            if sk_pmt_lookup is None:
+                from .sk_pmt_lookup import build_sk20inch_coverage_lookup
+                lookup_options = dict(sk_pmt_lookup_options or {})
+                if 'sigma' in lookup_options:
+                    raise ValueError(
+                        "sk_pmt_lookup_options must not set sigma; it is "
+                        "temperature * sensor_radius")
+                coverage_lookup = build_sk20inch_coverage_lookup(
+                    expected_sigma, **lookup_options)
+            else:
+                if not np.isclose(
+                        float(sk_pmt_lookup.sigma), expected_sigma,
+                        rtol=1e-6, atol=1e-9):
+                    raise ValueError(
+                        "sk_pmt_lookup sigma does not match "
+                        "temperature * sensor_radius")
+                coverage_lookup = sk_pmt_lookup
 
     # Configure grid on detector — caller passes geometry-specific params.
     # max_candidates_per_ray is always forwarded so auto-derivation can
@@ -169,14 +229,17 @@ def create_propagator(detector, sensor_positions, sensor_radius,
     # 5. Overlap probability (shared)
     # temperature=None → step function (hard assignment, non-differentiable)
     # temperature=float → Gaussian kernel with sigma = temperature * sensor_radius
-    if temperature is None:
-        overlap_prob = create_overlap_prob(
-            None, sensor_radius,
-            st_width_frac=overlap_st_width_frac, renorm=overlap_renorm, mode=overlap_mode)
+    if sensor_shape == 'sphere':
+        if temperature is None:
+            overlap_prob = create_overlap_prob(
+                None, sensor_radius,
+                st_width_frac=overlap_st_width_frac, renorm=overlap_renorm, mode=overlap_mode)
+        else:
+            overlap_prob = create_overlap_prob(
+                temperature * sensor_radius, sensor_radius,
+                st_width_frac=overlap_st_width_frac, renorm=overlap_renorm, mode=overlap_mode)
     else:
-        overlap_prob = create_overlap_prob(
-            temperature * sensor_radius, sensor_radius,
-            st_width_frac=overlap_st_width_frac, renorm=overlap_renorm, mode=overlap_mode)
+        overlap_prob = None
 
     # 6. Bounds check closure
     def bounds_check(positions):
@@ -214,6 +277,16 @@ def create_propagator(detector, sensor_positions, sensor_radius,
 
         # d. Compute sensor intersections (shared, vmapped over sensor slots)
         def compute_for_slot(slot_sensors):
+            if sensor_shape == 'sk20inch':
+                return compute_sk20inch_sensor_intersections(
+                    slot_sensors,
+                    sensor_positions,
+                    sensor_directions,
+                    sensor_is_barrel,
+                    photon_origins,
+                    photon_directions,
+                    coverage_lookup,
+                )
             return compute_sensor_intersections_base(
                 slot_sensors, sensor_positions, sensor_radius,
                 photon_origins, photon_directions,

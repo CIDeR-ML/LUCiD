@@ -103,6 +103,9 @@ def setup_event_simulator(
         overlap_st_width_frac=0.35,
         overlap_renorm=1.0,
         overlap_mode='interp',
+        sensor_shape='sphere',
+        sk_pmt_lookup=None,
+        sk_pmt_lookup_options=None,
         reflection_model='scalar_mix',
         reflection_wavelength=400.0,
         sensor_acceptance_model='sphere',
@@ -185,6 +188,16 @@ def setup_event_simulator(
         Soft-overlap lookup interpolation: ``'interp'`` (default, piecewise
         linear) or ``'cubic'`` (C2 natural spline — correct curvature for the
         autodiff Hessian wrt photon→sensor distance).
+    sensor_shape : {'sphere', 'sk20inch'}
+        PMT interception geometry. ``'sphere'`` preserves the legacy LUCiD
+        sensor model. ``'sk20inch'`` uses the SKDONUTS sphere-plus-torus bulb,
+        the measured PMT axes, and the barrel inactive-band cut.
+    sk_pmt_lookup : SKPMTCoverageLookup or None
+        Optional prebuilt smooth SK PMT coverage table. This is mainly useful
+        for tests and for sharing one table across simulator instances.
+    sk_pmt_lookup_options : dict or None
+        Options used to build the cached SK PMT coverage table. The Gaussian
+        width is fixed by ``temperature * sensor_radius``.
     reflection_model : str
         Reflection model: ``'scalar_mix'`` (DEFAULT — the scalar wall/sensor
         rates plus a specular/diffuse direction mixture via
@@ -200,7 +213,8 @@ def setup_event_simulator(
         Fresnel). Exact for monochromatic-laser calibration; ignored by the
         scalar model. Default 400 nm.
     sensor_acceptance_model : {'sphere', 'cosine'}
-        ``'sphere'`` preserves the native spherical-sensor interception.
+        ``'sphere'`` applies no additional angular multiplier (and therefore
+        preserves native spherical interception when ``sensor_shape='sphere'``).
         ``'cosine'`` multiplies deposits by the projected-area cosine relative
         to the PMT's detector-surface axis. This is a flat-disc diagnostic.
     sensor_acceptance_power : float
@@ -266,6 +280,16 @@ def setup_event_simulator(
     from lucid.geometry.detector_geometry import DetectorGeometry
     from lucid.simulation.config import SimConfig
 
+    if sensor_acceptance_model not in ('sphere', 'cosine'):
+        raise ValueError("sensor_acceptance_model must be 'sphere' or 'cosine'")
+    if sensor_acceptance_power < 0:
+        raise ValueError("sensor_acceptance_power must be non-negative")
+    if sensor_shape == 'sk20inch' and sensor_acceptance_model == 'cosine':
+        raise ValueError(
+            "sensor_acceptance_model='cosine' cannot be combined with "
+            "sensor_shape='sk20inch': the curved PMT coverage already includes "
+            "projected-area angular acceptance")
+
     det_geom = DetectorGeometry.from_config(
         json_filename, temperature=temperature,
         max_candidates_per_ray=max_candidates_per_ray,
@@ -273,6 +297,9 @@ def setup_event_simulator(
         overlap_st_width_frac=overlap_st_width_frac,
         overlap_renorm=overlap_renorm,
         overlap_mode=overlap_mode,
+        sensor_shape=sensor_shape,
+        sk_pmt_lookup=sk_pmt_lookup,
+        sk_pmt_lookup_options=sk_pmt_lookup_options,
         **grid_params)
 
     mode = 'data' if is_data else ('calibration' if is_calibration else 'track')
@@ -295,10 +322,6 @@ def setup_event_simulator(
     Nphot = sim_config.n_photons
     propagate_photons = det_geom.propagator
 
-    if sensor_acceptance_model not in ('sphere', 'cosine'):
-        raise ValueError("sensor_acceptance_model must be 'sphere' or 'cosine'")
-    if sensor_acceptance_power < 0:
-        raise ValueError("sensor_acceptance_power must be non-negative")
     if sensor_acceptance_model == 'cosine' or return_incidence_diagnostics:
         if not hasattr(detector, 'r') or not hasattr(detector, 'H'):
             raise ValueError("cosine sensor acceptance currently requires cylinder geometry")

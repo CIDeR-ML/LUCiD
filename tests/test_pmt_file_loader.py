@@ -122,6 +122,8 @@ def test_active_block_reordered_to_barrel_top_bottom(tmp_path):
     assert det.ID_to_case[0] == 0 and det.ID_to_case[1] == 0  # barrel
     assert det.ID_to_case[2] == 1                              # top
     assert det.ID_to_case[3] == 2                              # bottom
+    npt.assert_array_equal(
+        det.surfaces, ['barrel', 'barrel', 'top', 'bottom'])
 
 
 def test_per_pmt_metadata_reordered(tmp_path):
