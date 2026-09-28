@@ -1,8 +1,11 @@
 {
   "scatter_length": 50.0,
   "absorption_length": 50.0,
-  "wall_reflection_rate": 0.2,
-  "sensor_reflection_rate": 0.2,
+  "_comment_reflection": "wall: SK black PET liner, R~0.05, ~55% specular [Abe et al., NIM A737 (2014) 253]. sensor: PMT glass + bialkali photocathode from water, R~0.25, ~90% specular [Motta & Schonert, NIM A539 (2005) 217].",
+  "wall_reflection_rate": 0.05,
+  "wall_fspec": 0.55,
+  "sensor_reflection_rate": 0.25,
+  "sensor_fspec": 0.9,
   "qe": 0.2,
   "qe_corrections": 1.0
 }

@@ -239,8 +239,8 @@ def make_hits_data(
     nonzero_mask = (total_charge > 1e-10) & (detector_mins > 0) & jnp.isfinite(detector_mins)
 
     # TIME: first-arrival of the per-photon-TTS-smeared photons (no post-hoc smear).
-    # PER-SENSOR gate (was scalar jnp.any → empty sensors got smeared inf/1e6 garbage,
-    # PORT_PLAN §4.3): only lit sensors carry a time; empty sensors are exactly 0.
+    # PER-SENSOR gate: only lit sensors carry a time; empty sensors are exactly 0
+    # (their segment_min is inf, which must not reach the output).
     measured_time = jnp.where(nonzero_mask, detector_mins, 0.0)
 
     # CHARGE: config-driven resolution model (None ⇒ raw Poisson counts).

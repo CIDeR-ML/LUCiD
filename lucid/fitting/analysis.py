@@ -19,9 +19,14 @@ def resolution_stats(err, ci=68.0, seed=0):
     """median / mean / RMS / ``ci``%-containment of an error array, plus a bootstrap CI on the median.
 
     ``err`` is a 1-D array of per-event errors (signed or magnitude). Returns a dict.
+
+    ``median``, ``mean`` and ``median_ci`` describe the array AS GIVEN, so on a signed array they
+    measure bias; ``containment`` is a magnitude by definition and is always taken on ``|err|``.
+    The bootstrap must use the same array as ``median``, or on signed input the CI need not
+    contain the median it is reported with.
     """
     e = np.asarray(err, float)
-    blo, bhi = bootstrap_ci(np.abs(e), ci, seed=seed)
+    blo, bhi = bootstrap_ci(e, ci, seed=seed)
     return dict(median=float(np.median(e)), mean=float(e.mean()),
                 rms=float(np.sqrt((e ** 2).mean())),
                 containment=float(np.percentile(np.abs(e), ci)),

@@ -1,9 +1,12 @@
-"""Shared photon propagator factory using Detector abstract methods.
+"""The surface photon propagator: one factory for any Detector subclass.
 
-This replaces the 3 geometry-specific factories (create_photon_propagator,
-create_sphere_photon_propagator, create_box_photon_propagator) with a
-single function that works for any Detector subclass implementing the
-Phase 9 abstract methods.
+Geometry enters only through the Detector methods called below (configure_grid,
+assign_sensor_to_cells, grid_cell_centers, build_inverted_sensor_map, bounds_check,
+intersect_ray, point_to_grid_cell, compute_normal); everything else here is shape-agnostic.
+
+Not the only propagator: `lucid/propagation/string/` traverses a per-DOM volume rather than a
+surface grid, and carries its own deposit implementation. The two have diverged: that one clamps
+the closest-approach parameter where this one gates on it, and has no first-hit survival product.
 """
 import warnings
 
@@ -17,6 +20,52 @@ from lucid.propagation.base import (
     find_closest_sensors,
 )
 from lucid.overlap import create_overlap_prob
+
+
+def first_hit_survival(weights, times):
+    """Cap the deposit at one photon: P(hit s_i) = p_i * prod_{j before i} (1 - p_j).
+
+    `overlap_prob` is applied INDEPENDENTLY per candidate, so on its own it leaves the total uncapped:
+    at grazing incidence a ray skimming the wall passes within r of a whole row of sensors and each
+    takes full weight. Physically the photon
+    deposits on the FIRST sensor it reaches, so with candidates ordered by arrival time and p_i the
+    conditional hit probability given the photon gets there, sum(P) = 1 - prod(1 - p_j) <= 1.
+    It splits weight smoothly between adjacent sensors (p1, p2*(1-p1)) and reduces to p_1 when
+    only one candidate is in range. Done in log space; gated-out candidates have p = 0 and
+    contribute exactly 1 to the product.
+
+    TIES ARE BROKEN BY SLOT. Two live candidates can arrive at EXACTLY the same time -- a ray
+    equidistant from two sensors -- and with a strict `t_j < t_i` neither counts as earlier, both
+    keep their full p, and the sum can exceed 1. The slot index orders them, so the cap holds by construction rather than almost always.
+
+    THE ORDERING IS A HARD COMPARISON. The product is smooth in the p's, but which p's multiply
+    which is decided by a threshold on arrival time, so when two candidates swap order the
+    per-sensor split jumps while the total stays put. Aggregate checks cannot see it; a
+    per-sensor gradient can.
+
+    Parameters
+    ----------
+    weights : (C, N) per-candidate overlap probabilities
+    times : (C, N) per-candidate arrival times
+
+    Returns
+    -------
+    (C, N) capped weights, summing to at most 1 over C for every photon.
+    """
+    # Clipped below 1 so log1p(-p) stays finite -- STRAIGHT-THROUGH, so the clip shapes only the
+    # forward value (bit-identical to a plain clip). Must not be a plain jnp.clip for the
+    # gradient: in step mode (temperature=None) the forward overlap is EXACTLY 1 inside a
+    # sphere and 0 outside, where a plain clip has zero derivative (above its maximum) or half
+    # (at a tie with its minimum), which would remove the straight-through surrogate gradient
+    # the hard step exists to keep.
+    p = weights + jax.lax.stop_gradient(jnp.clip(weights, 0.0, 1.0 - 1e-6) - weights)
+    slot = jnp.arange(p.shape[0])
+    # before[i, j, n]: candidate j reaches photon n's path before candidate i does
+    before = ((times[None, :, :] < times[:, None, :])
+              | ((times[None, :, :] == times[:, None, :])
+                 & (slot[None, :, None] < slot[:, None, None])))
+    log_survive = jnp.sum(before * jnp.log1p(-p)[None, :, :], axis=1)
+    return p * jnp.exp(log_survive)
 
 
 def validate_sensor_map(assignments_geometric, inverted_sensor_map, num_sensors,
@@ -107,7 +156,7 @@ def validate_sensor_map(assignments_geometric, inverted_sensor_map, num_sensors,
 def create_propagator(detector, sensor_positions, sensor_radius,
                       temperature=0.2, max_candidates_per_ray=4,
                       overlap_st_width_frac=0.35, overlap_renorm=1.0,
-                      overlap_mode='interp',
+                      overlap_mode='interp', deposit_leg_bound=False,
                       **grid_params):
     """Build a JIT-compiled photon propagator using detector methods.
 
@@ -126,6 +175,16 @@ def create_propagator(detector, sensor_positions, sensor_radius,
         Soft-overlap renormalization constant C (default 1.0 = OFF).
     overlap_mode : str
         Soft-overlap lookup interpolation: 'interp' (default) or 'cubic'.
+    deposit_leg_bound : bool
+        Bound the deposit to the leg the photon actually travels, [0, t_geometry], instead of
+        weighting by distance from the unbounded ray LINE. Default False; a Python bool
+        resolved at trace time, so when off the leg-bound arithmetic is absent from the graph
+        rather than present and unused, and the result is bit-identical to the behaviour without it.
+
+        The line does not stop at the wall, so for a ray at incidence theta it passes within a
+        sensor radius of sensors displaced along the wall from the landing point, over-counting
+        hits by (1 - cos theta)/2 per ray. Normal incidence is unaffected. Switching it on
+        changes the forward model, and with it any energy scale calibrated without it.
     max_candidates_per_ray : int
     **grid_params
         Geometry-specific grid parameters passed to ``detector.configure_grid()``.
@@ -217,12 +276,19 @@ def create_propagator(detector, sensor_positions, sensor_radius,
             return compute_sensor_intersections_base(
                 slot_sensors, sensor_positions, sensor_radius,
                 photon_origins, photon_directions,
-                bounds_check, overlap_prob)
+                bounds_check, overlap_prob,
+                # None when off drops the leg-bound code from the trace; see `deposit_leg_bound`.
+                t_geometry=t_geometry if deposit_leg_bound else None)
 
         (weights, sensor_times, sensor_indices,
          sensor_normals_all, inside_sensor,
          sensor_hit_positions) = jax.vmap(
             compute_for_slot, in_axes=1, out_axes=0)(potential_sensors)
+
+        # First-hit semantics: the photon deposits on the first sensor it reaches. See
+        # `first_hit_survival` for the cap, its tie-break, and what its hard ordering costs.
+        weights = first_hit_survival(
+            weights, jnp.squeeze(sensor_times, -1) if sensor_times.ndim == 3 else sensor_times)
 
         # e. Compute geometry surface normals
         geometry_normals = detector.compute_normal(intersection_point, surface_info)

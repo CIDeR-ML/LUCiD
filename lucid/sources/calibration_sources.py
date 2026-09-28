@@ -254,6 +254,26 @@ class IsotropicSource(NamedTuple):
         return get_isotropic_rays(self.position, self.intensity, n_photons, key)
 
 
+class IsotropicSourceRandom(NamedTuple):
+    """Isotropic point source with random (key-dependent) emission.
+
+    Same fields and call signature as :class:`IsotropicSource`, but emits via
+    :func:`get_isotropic_rays_random`, so different PRNG keys give different photon sets.
+
+    ``IsotropicSource`` emits on a Fibonacci lattice that ignores its key (directions depend
+    on ``n_photons`` alone). That suits a low-variance forward model but not truth data meant
+    to be an independent realisation: the direct-light component of the residual would be
+    zero by construction rather than by fit quality. Use this for truth generation; keep the
+    lattice for the forward model.
+    """
+    position: jnp.ndarray     # (3,)
+    intensity: jnp.ndarray    # scalar
+    wavelength: object = None # scalar nm, or None for broadband
+
+    def __call__(self, n_photons, key, n_water=1.33):
+        return get_isotropic_rays_random(self.position, self.intensity, n_photons, key)
+
+
 class LaserSource(NamedTuple):
     """Laser fibre source -- callable JAX pytree.
 
@@ -289,6 +309,21 @@ def isotropic_source(position, intensity=1_000_000, wavelength=None):
     """
     wl = jnp.asarray(float(wavelength), dtype=jnp.float32) if wavelength is not None else None
     return IsotropicSource(
+        position=jnp.asarray(position, dtype=jnp.float32),
+        intensity=jnp.asarray(float(intensity), dtype=jnp.float32),
+        wavelength=wl,
+    )
+
+
+def isotropic_source_random(position, intensity=1_000_000, wavelength=None):
+    """Create an :class:`IsotropicSourceRandom` (isotropic, key-dependent emission).
+
+    Same arguments as :func:`isotropic_source`. Use it for truth data that must be an
+    independent realisation; :func:`isotropic_source` emits on a deterministic lattice and
+    ignores its key (see :class:`IsotropicSourceRandom`).
+    """
+    wl = jnp.asarray(float(wavelength), dtype=jnp.float32) if wavelength is not None else None
+    return IsotropicSourceRandom(
         position=jnp.asarray(position, dtype=jnp.float32),
         intensity=jnp.asarray(float(intensity), dtype=jnp.float32),
         wavelength=wl,

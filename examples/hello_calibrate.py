@@ -2,10 +2,10 @@
 
 The validated recipe (the one the calibration campaign ran on): build_calibration_problem
 -> Fisher/CRB at truth -> Gauss-Newton fit. Seven global optical parameters are recovered
-from a perturbed start while all 10764 per-PMT QE/gain factors are marginalised analytically
-by a Schur complement. Reports the fit error against the Cramer-Rao bound.
+from a perturbed start while all 10764 per-PMT QE/gain factors are profiled in closed form at
+every step. Reports the fit error against the Cramer-Rao bound.
 
-Fast on GPU (~1 min); on CPU it is much slower — set JAX_PLATFORM_NAME if needed.
+About 4 min on one GPU; much slower on CPU — set JAX_PLATFORM_NAME if needed.
 Run:  python examples/hello_calibrate.py
 """
 import jax, jax.numpy as jnp, numpy as np
@@ -32,8 +32,13 @@ FIELDS = ['g', 'scatter_length', 'mie_scatter_length', 'absorption_length',
           'wall_reflection_rate', 'sensor_reflection_rate', 'qe']
 prob = build_calibration_problem(sim, sources, dp, FIELDS, key=jax.random.PRNGKey(1))
 sigma = crb(prob['source_models'], prob['theta_true'], NS)['sigma']           # Cramer-Rao bound
+# The data: the truth averaged over 8 simulator draws, as the paper's calibration does. The
+# Neyman residual weights each sensor by its observed charge, so a single noisy draw at ~1.6 PE per
+# sensor biases the fit; averaging brings it to within the bound.
+data = [np.mean([np.asarray(sim(s, dp, jax.random.PRNGKey(5000 + b))[0]) for b in range(8)], 0)
+        for s in sources]
 start = prob['theta0'] + np.random.default_rng(0).uniform(-.15, .15, prob['theta0'].shape)
-res = fit(prob['source_models'], prob['truth_charge'], start, NS, steps=100, refresh=15, nb_h=2)
+res = fit(prob['source_models'], data, start, NS, steps=100, refresh=15, jacobian_draws=2)
 
 truth = np.exp(prob['theta0'])
 print(f'{"param":22s}{"truth":>9s}{"start":>9s}{"fit":>9s}{"err":>8s}{"CRB":>7s}')

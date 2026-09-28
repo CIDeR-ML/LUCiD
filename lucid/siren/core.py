@@ -1,12 +1,17 @@
 from __future__ import annotations
 
+import warnings
+
 import jax
 import jax.numpy as jnp
 from jax import random
 import flax.linen as nn
+
 import numpy as np
 from typing import Sequence, Callable, Any, NamedTuple, Optional
 from flax.core.frozen_dict import freeze
+
+_WARNED_LEGACY_NPHOT = set()          # origins already warned about, one warning per model
 
 __all__ = [
     'SineLayer', 'SIREN',
@@ -246,14 +251,70 @@ def make_smax_fn(smax: dict) -> Callable:
 
 
 def make_power_law_fn(nphot: dict) -> Callable:
-    """Build a jittable ``N_photons(E_mev)`` closure from a trained-model
-    ``nphot`` metadata block (form ``'A*E^B+C'``).
+    """Build a jittable ``N_photons(E_mev)`` closure from a trained-model ``nphot`` block.
 
-    Clamped at 0 — the ``a*E^b+c`` fit can dip slightly negative below the
-    Cherenkov threshold.
+    ``nphot(E)`` is the ABSOLUTE SCALE of the SIREN emission model: the net supplies a normalised
+    PMF, this scalar supplies the magnitude. The reconstruction differentiates through it
+    (``energy_scale_mode='nphot'``), so its shape matters as much as its value.
+
+    Two forms:
+
+    ``'A*E^B+C'`` (default) -- an UNWEIGHTED least squares on RAW COUNTS, so it is set by the
+      high-energy end of the table and can be badly wrong at low energy. It crosses zero near
+      137 MeV, hence the clamp at 0.
+
+    ``'logpoly'`` -- ``N = exp(sum_k c_k t^k)``, ``t = (ln E - u0)/du``, degree 7. Fitted with
+      equal FRACTIONAL weight at every energy. Strictly positive and C-infinity, so it needs no
+      clamp and is safe to differentiate twice.
+
+    THE CENTRED BASIS IS LOAD-BEARING. In a raw ``ln E`` basis Horner sums large terms of
+    alternating sign to produce ``lnN ~ 12``, and float32 cancellation then costs more than the
+    fit error. Centred, float32 matches float64.
+
+    SELECTED BY THE PRESENCE OF ``coeffs``, not by the metadata's ``form`` field. The downloaded
+    model metadata does not carry them: the two water models get theirs from the repository's
+    ``data/water/<particle>/nphot.json``, overlaid by ``SIRENPredictor`` at load. A model with no
+    such file -- a third-party table, or any non-water material -- loads on the power law, with a
+    warning.
     """
-    a, b, c = float(nphot['a']), float(nphot['b']), float(nphot['c'])
-    return lambda E: jnp.maximum(a * E ** b + c, 0.0)
+    form = str(nphot.get('form', 'A*E^B+C'))
+    if 'coeffs' in nphot:
+        form = 'logpoly'
+
+    if form == 'logpoly':
+        co = jnp.asarray([float(v) for v in nphot['coeffs']])       # ASCENDING, centred basis
+        u0 = float(nphot.get('u0', 0.0))
+        du = float(nphot.get('du', 1.0))
+
+        def _logpoly(E):
+            t = (jnp.log(E) - u0) / du
+            acc = co[-1]
+            for k in range(co.shape[0] - 2, -1, -1):                # Horner, descending
+                acc = acc * t + co[k]
+            return jnp.exp(acc)
+
+        return _logpoly
+
+    if form == 'A*E^B+C':
+        # Warn: a water model landing here means its shipped nphot.json was not found and the run
+        # would otherwise silently lose the logpoly correction. Warned rather than raised, because
+        # a model with no coefficients must still load; once per MODEL, not per process, so a
+        # second model falling back is still named.
+        who = nphot.get('_origin', 'this model')
+        if who not in _WARNED_LEGACY_NPHOT:
+            _WARNED_LEGACY_NPHOT.add(who)
+            warnings.warn(
+                f"nphot has no 'coeffs' for {who}: using the legacy power law a*E^b+c. That fit "
+                "is an unweighted least squares on RAW COUNTS, so over a table spanning orders "
+                "of magnitude it is set by the high-energy end and can be badly wrong lower "
+                "down -- how wrong depends on the table and is not known for every model. A "
+                "log-log polynomial is fitted and shipped for WATER only, as "
+                "data/<material>/<particle>/nphot.json; no other material has one, and "
+                "build_tables.py does not fit one -- it emits the power law only.",
+                RuntimeWarning, stacklevel=2)
+        a, b, c = float(nphot['a']), float(nphot['b']), float(nphot['c'])
+        return lambda E: jnp.maximum(a * E ** b + c, 0.0)
+    raise ValueError(f"unknown nphot form: {form!r}")
 
 
 # Defaults for the ray-sampling knobs when `siren_params.json` omits them.
