@@ -55,7 +55,7 @@ from lucid.production.cluster_common.user_paths import load_user_paths  # noqa: 
 
 def job_command(*, job_dir: Path, geometry: Path, detector: Path, physics: Path,
                 n_photons: int, seed: int, shells,
-                atten: bool = False) -> str:
+                atten: bool = False, scat3d: bool = False) -> str:
     """The one-liner a shard job runs inside the container.
 
     The macro is written host-side at submit time, so this stays free of nested
@@ -74,7 +74,8 @@ def job_command(*, job_dir: Path, geometry: Path, detector: Path, physics: Path,
                f"--geometry {geometry} --detector-config {detector} "
                f"--physics-config {physics} --n-photons {n_photons} "
                f"--shells {shell_args} --seed {seed} -o {shard}"
-               + (f" --atten-out {job_dir / 'atten.npz'}" if atten else ""))
+               + (f" --atten-out {job_dir / 'atten.npz'}" if atten else "")
+               + (f" --scattable3d-out {job_dir / 'scat3d.npz'}" if scat3d else ""))
     cleanup = f"rm -f {root}"
     return " && ".join([run, reduce_, cleanup])
 
@@ -140,7 +141,8 @@ def main(argv=None) -> int:
                 job_dir=job_dir, geometry=geometry, detector=detector,
                 physics=physics, n_photons=int(cfg["photons_per_group"]),
                 seed=int(cfg.get("seed_base", 0)) + job_id, shells=shells,
-                atten=bool(cfg.get("write_attenuation", False))),
+                atten=bool(cfg.get("write_attenuation", False)),
+                scat3d=bool(cfg.get("write_scattable3d", False))),
             cell_dir=job_dir, job_name=f"{cfg['name']}_{job_id:06d}",
             log_stem=f"job_{job_id:06d}", partition=partition,
             # Only the propagated photon list needs scratch; it is deleted as

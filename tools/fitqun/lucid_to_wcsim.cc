@@ -59,6 +59,7 @@ namespace {
 /// its gates in labl/event_NNN/per_window; what it does not do is reference
 /// times to the trigger or split gates into subevents. Both are done here.
 constexpr int    kNDigitsThreshold = 25;
+constexpr double kNDigitsWindow    = 200.;  ///< ns, coincidence window
 constexpr int    kStep             = 5;     ///< ns, trigger-time granularity
 
 
@@ -266,13 +267,45 @@ int main(int argc, char** argv) {
                   [&t](size_t a, size_t b) { return t[a] < t[b]; });
         if ((int)order.size() <= kNDigitsThreshold) { ++n_gates_thin; continue; }
 
-        // Trigger time the way WCSim defines it, within this gate.
-        double trig_time = t[order[kNDigitsThreshold]];
-        trig_time -= std::fmod(trig_time, (double)kStep);
+        // Trigger time the way WCSim defines it (WCSimWCTrigger.cc:300-333):
+        // slide a 200 ns window in 5 ns steps until MORE than the threshold of
+        // digits fall inside, then take the threshold-th of THOSE, snapped down
+        // to a 5 ns multiple.
+        //
+        // Not the threshold-th digit of the whole gate: LUCiD opens its gate
+        // 300 ns before the light (pad_before_ns) and dark noise fills that
+        // pre-pad with ~8-10 hits, so counting from the start of the gate fires
+        // early -- measured 18 ns early at 150 MeV/c, ~1 ns above 300 MeV/c.
+        double trig_time = 0.;
+        bool fired = false;
+        {
+          const double t_first = t[order.front()], t_last = t[order.back()];
+          for (double w = std::floor(t_first / kStep) * kStep; w <= t_last;
+               w += kStep) {
+            // order is time-sorted, so the in-window digits are contiguous.
+            size_t lo = 0, hi = 0;
+            while (lo < order.size() && t[order[lo]] < w) ++lo;
+            hi = lo;
+            while (hi < order.size() && t[order[hi]] <= w + kNDigitsWindow) ++hi;
+            if ((int)(hi - lo) > kNDigitsThreshold) {
+              trig_time = t[order[lo + kNDigitsThreshold]];
+              trig_time -= std::fmod(trig_time, (double)kStep);
+              fired = true;
+              break;
+            }
+          }
+        }
+        if (!fired) { ++n_gates_thin; continue; }
 
         if (isub > 0) event.AddSubEvent();
         WCSimRootTrigger* tg = event.GetTrigger(isub);
-        tg->SetHeader((int)iev, 0, 0, isub + 1);
+        // fDate is "Time (ns)" -- the trigger time. Writing 0 here left every
+        // consumer unable to recover the frame: hits are written at
+        // t + 950 - trig_time, and makehistWCSim.cc:276 reconstructs the shift
+        // as (950 - trigOffset), which is only right when trigOffset IS
+        // trig_time. With 0 it was off by trig_time (~20 ns) in the time PDF,
+        // and runfiTQun's truth seeding was off by the full ~950 ns.
+        tg->SetHeader((int)iev, 0, (int64_t)llround(trig_time), isub + 1);
         tg->SetMode(0);
         for (size_t j : order) {
           const double th = t[j] + t_offset - trig_time;

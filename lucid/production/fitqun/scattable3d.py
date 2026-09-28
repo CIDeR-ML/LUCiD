@@ -60,3 +60,46 @@ def histograms(R, costh, dwall, indirect):
 def empty() -> tuple[np.ndarray, np.ndarray]:
     return (np.zeros((N_R_BINS, N_WALL_BINS, N_COSTH_BINS)),
             np.zeros((N_R_BINS, N_WALL_BINS)))
+
+
+#: MakeScatTable3d.C:45 -- cells whose isotropic reference is thinner than this
+#: are zeroed rather than divided, to keep the ratio from exploding.
+MIN_ISO_PER_BIN = 10.0
+
+
+def build(shards, out_path, *, object_name: str = "hscattable3D"):
+    """Merge per-job shards into fiTQun's 3D scattering table.
+
+    Reproduces ``MakeScatTable3d.C``: sum the indirect 3D and direct 2D
+    histograms over shards, then divide each (R, dwall) cell's angular
+    distribution by the direct count spread evenly over the angle bins. The
+    result is an indirect/direct ratio per solid angle, which is what fiTQun
+    multiplies its direct-light prediction by.
+    """
+    import uproot
+
+    tot_i = tot_d = None
+    edges = None
+    for path in shards:
+        with np.load(path) as z:
+            if tot_i is None:
+                tot_i = z["hsct3d"].astype(np.float64)
+                tot_d = z["hdir2d"].astype(np.float64)
+                edges = (z["r_edges"], z["wall_edges"], z["costh_edges"])
+            else:
+                tot_i += z["hsct3d"]
+                tot_d += z["hdir2d"]
+    if tot_i is None:
+        raise ValueError("no shards given")
+
+    n_theta = tot_i.shape[2]
+    iso = tot_d / n_theta                                   # per angle bin
+    ok = iso > MIN_ISO_PER_BIN
+    out = np.zeros_like(tot_i)
+    np.divide(tot_i, iso[:, :, None], out=out, where=ok[:, :, None])
+
+    with uproot.recreate(out_path) as f:
+        f[object_name] = (out, *edges)
+    return {"path": str(out_path), "cells_filled": int(ok.sum()),
+            "cells_total": int(ok.size), "indirect": float(tot_i.sum()),
+            "direct": float(tot_d.sum())}

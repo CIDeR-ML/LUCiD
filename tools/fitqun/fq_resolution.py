@@ -47,6 +47,11 @@ def main(argv=None) -> int:
     p.add_argument("--pdg", type=int, default=13, help="hypothesis to score (default mu-)")
     p.add_argument("--require-contained", action="store_true",
                    help="keep only events LUCiD marks as contained")
+    p.add_argument("--bootstrap", type=int, default=0, metavar="N",
+                   help="resample the scored events N times to put an error on "
+                        "each width; a few hundred events gives tens of cm on "
+                        "the vertex, so a difference between arms is only real "
+                        "if it clears this")
     p.add_argument("--require-fc", action="store_true",
                    help="keep only events fiTQun fits as fully contained "
                         "(fq1rpcflg==0). Resolutions are conventionally quoted "
@@ -98,10 +103,26 @@ def main(argv=None) -> int:
           f"({n_pc} flagged not fully contained)")
     if not len(dv):
         return 1
-    print(f"  vertex     68% = {pct68(dv):8.1f} cm     median {np.median(dv):8.1f} cm")
-    print(f"  direction  68% = {pct68(dth):8.2f} deg    median {np.median(dth):8.2f} deg")
-    print(f"  momentum   68% = {pct68(frac)*100:8.2f} %      median bias "
-          f"{np.median(frac)*100:+7.2f} %")
+    err = {}
+    if a.bootstrap:
+        rng = np.random.default_rng(0)
+        n = len(dv)
+        draws = {k: [] for k in ("v", "th", "p", "bias")}
+        for _ in range(a.bootstrap):
+            i = rng.integers(0, n, n)
+            draws["v"].append(pct68(dv[i]))
+            draws["th"].append(pct68(dth[i]))
+            draws["p"].append(pct68(frac[i]) * 100)
+            draws["bias"].append(np.median(frac[i]) * 100)
+        err = {k: float(np.std(v)) for k, v in draws.items()}
+
+    def pm(key):
+        return f" +- {err[key]:.1f}" if key in err else ""
+
+    print(f"  vertex     68% = {pct68(dv):8.1f}{pm('v')} cm     median {np.median(dv):8.1f} cm")
+    print(f"  direction  68% = {pct68(dth):8.2f}{pm('th')} deg    median {np.median(dth):8.2f} deg")
+    print(f"  momentum   68% = {pct68(frac)*100:8.2f}{pm('p')} %      median bias "
+          f"{np.median(frac)*100:+7.2f}{pm('bias')} %")
     print(f"  truth momentum range: {min(t.momentum_mev for t in tracks):.0f}"
           f"-{max(t.momentum_mev for t in tracks):.0f} MeV/c")
     return 0
