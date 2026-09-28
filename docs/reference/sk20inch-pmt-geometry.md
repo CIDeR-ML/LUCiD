@@ -136,8 +136,53 @@ forward value with a substituted straight-through gradient. Tests establish:
   PMT silhouette; and
 - autodiff gradients agree with finite differences of forward values.
 
-The direct surface quadrature is a validation reference rather than the final
-production algorithm. A 48 by 96 configuration evaluates 13,824 surface
-nodes per ray/PMT pair. Production integration should use a validated compact
-lookup or quadrature reduction while preserving this reference value and its
-derivatives.
+The direct surface quadrature is a validation reference rather than the
+production algorithm. A 48 by 96 configuration evaluates 13,824 surface nodes
+per ray/PMT pair.
+
+## Production propagator integration
+
+`lucid.propagation.sk_pmt_lookup` reduces the reference integral to a compact
+three-dimensional table. Its coordinates are the incidence cosine, the signed
+ray offset parallel to the projected PMT axis, and the absolute perpendicular
+offset. Separate cap and barrel tables preserve the barrel's inactive 2 cm
+band. Each table is made by antialiased rasterization of the exact JAX
+silhouette followed by the same Gaussian convolution represented by the
+surface integral. Runtime evaluation uses differentiable trilinear
+interpolation.
+
+The incidence cosine is used directly instead of evaluating `acos`. This
+avoids the singular derivative of `acos` at normal incidence. A stable
+world-space basis converts each ray/PMT pair to the two offset coordinates;
+rotating the complete geometry leaves those coordinates and the coverage
+unchanged.
+
+Enable the geometry through the normal simulator entry point:
+
+```python
+sim = setup_event_simulator(
+    "config/SK_geom_config.json",
+    sensor_shape="sk20inch",
+    temperature=0.2,
+    # other simulation options...
+)
+```
+
+For finite `temperature`, the lookup's Gaussian width is
+`temperature * sensor_radius`. Tables are cached under
+`spatial_overlap_integrals`; the standard SK table is about 0.6 MB. Passing
+`temperature=None` bypasses the lookup and uses the exact hard photocathode
+decision. The legacy default remains `sensor_shape="sphere"`.
+
+The exact central ray still supplies the physical intersection position,
+travel distance, and curved normal. The PMT oracle's normal points from the
+glass into water, so the propagator reverses it to match LUCiD's established
+"out of the water volume" transport convention. This sign does not change a
+specular reflection, but it is required for diffuse reflection and the
+post-surface displacement.
+
+The curved coverage already contains projected-area angular acceptance.
+Combining `sensor_shape="sk20inch"` with the older diagnostic
+`sensor_acceptance_model="cosine"` is rejected because that would apply an
+extra angular response. Acrylic transmission and photocathode optical response
+are still separate physics and are not included here.

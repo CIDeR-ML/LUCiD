@@ -24,6 +24,13 @@ from .sk_pmt_coverage import (
     sk20inch_gaussian_coverage,
     sk20inch_projected_area,
 )
+from .sk_pmt_lookup import (
+    SKPMTCoverageLookup,
+    build_sk20inch_coverage_lookup,
+    sk20inch_lookup_coordinates,
+    sk20inch_lookup_coverage,
+)
+from .sk_pmt_sensor import compute_sk20inch_sensor_intersections
 
 # Main propagation function - unified interface
 def create_photon_propagator(detector_type, sensor_positions, sensor_radius, **detector_params):
@@ -88,6 +95,11 @@ __all__ = [
     'create_sk20inch_surface_quadrature',
     'sk20inch_gaussian_coverage',
     'sk20inch_projected_area',
+    'SKPMTCoverageLookup',
+    'build_sk20inch_coverage_lookup',
+    'sk20inch_lookup_coordinates',
+    'sk20inch_lookup_coverage',
+    'compute_sk20inch_sensor_intersections',
     
     # Unified interface
     'create_photon_propagator'
