@@ -77,9 +77,15 @@ def propagate_and_reduce(
         pmt_radius_cm=float(g["sensor_radius"]) * 100.0,
         shell_radii_cm=shell_radii_cm)
 
+    # The tune describes the light PRODUCTION writes, so this must propagate
+    # photons the same way: read the one production switch rather than inherit
+    # the library default, which is off.
+    from lucid.production.run_job import DEPOSIT_LEG_BOUND
+
     sim = setup_shotgun_simulator(
         detector_config, physics_config=physics_config, n_photons=n_photons,
         output_mode="per_photon", K=K, detector_type=detector_type,
+        deposit_leg_bound=DEPOSIT_LEG_BOUND,
         tts_sigma_ns=tts_sigma_ns, wavelength_sampling=wavelength_sampling)
 
     atten = {"all": np.zeros(attenlength.N_R_BINS),
