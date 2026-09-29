@@ -252,7 +252,10 @@ def test_6_incidence_diagnostics_do_not_change_default_response():
     np.testing.assert_array_equal(plain_out[1], diagnostic_out[1])
     cosines = np.asarray(diagnostic_out[2])
     steps = np.asarray(diagnostic_out[3])
+    local_cosines = np.asarray(diagnostic_out[4])
     assert cosines.shape == (2 * 4 * 500,)
     assert steps.shape == cosines.shape
+    assert local_cosines.shape == cosines.shape
     assert np.all((cosines >= 0.0) & (cosines <= 1.0))
+    assert np.all((local_cosines >= 0.0) & (local_cosines <= 1.0))
     np.testing.assert_array_equal(np.unique(steps), [0, 1])

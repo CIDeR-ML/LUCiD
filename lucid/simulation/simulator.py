@@ -226,8 +226,9 @@ def setup_event_simulator(
     sensor_acceptance_power : float
         Power applied to the incidence cosine in the diagnostic model.
     return_incidence_diagnostics : bool
-        Append the PMT-axis incidence cosine and propagation-step index for
-        every raw deposition slot. Intended for optical-validation plots.
+        Append the PMT-axis incidence cosine, propagation-step index, and
+        curved-surface local-incidence cosine for every raw deposition slot.
+        Intended for optical-validation plots.
     pmt_timing_model : str or None
         Optional per-photoelectron timing response applied after optical
         propagation and before hit aggregation/digitization. ``None`` or
@@ -687,8 +688,9 @@ def setup_event_simulator(
             depositions = prop_results['sensor_weights']
             sensor_indices = prop_results['sensor_indices']
             inside_sensor = prop_results['inside_sensor']
-            if _pmt_detection_response is None:
+            if _pmt_detection_response is None and not return_incidence_diagnostics:
                 pmt_response_factor = jnp.ones_like(depositions)
+                local_incidence_cosine = jnp.ones_like(depositions)
             else:
                 # ``sensor_normals`` use the detector-outward convention, as
                 # does the incoming ray direction at a PMT. Their dot product
@@ -700,10 +702,13 @@ def setup_event_simulator(
                     jnp.sum(
                         local_normals * state.directions[None, :, :], axis=-1),
                     0.0, 1.0)
-                pmt_response_factor = _pmt_detection_response.factor(
-                    local_incidence_cosine)
-                pmt_response_factor = jnp.where(
-                    sensor_indices >= 0, pmt_response_factor, 1.0)
+                if _pmt_detection_response is None:
+                    pmt_response_factor = jnp.ones_like(depositions)
+                else:
+                    pmt_response_factor = _pmt_detection_response.factor(
+                        local_incidence_cosine)
+                    pmt_response_factor = jnp.where(
+                        sensor_indices >= 0, pmt_response_factor, 1.0)
             if sensor_acceptance_model == 'cosine' or return_incidence_diagnostics:
                 safe_indices = jnp.maximum(sensor_indices, 0)
                 candidate_axes = sensor_axes[safe_indices]
@@ -760,7 +765,8 @@ def setup_event_simulator(
                     updated_weights, sensor_indices, total_times.squeeze(-1),
                     pmt_response_factor)
                 if return_incidence_diagnostics:
-                    outputs = outputs + (incidence_cosine,)
+                    outputs = outputs + (
+                        incidence_cosine, local_incidence_cosine)
                 return new_state, outputs
 
             # ── Surface model (cylinder/sphere/box) — UNCHANGED, byte-identical ──
@@ -837,7 +843,8 @@ def setup_event_simulator(
             outputs = (
                 iter_weights, iter_indices, iter_times, pmt_response_factor)
             if return_incidence_diagnostics:
-                outputs = outputs + (incidence_cosine,)
+                outputs = outputs + (
+                    incidence_cosine, local_incidence_cosine)
             return new_state, outputs
 
         init_state = PhotonState(
@@ -854,7 +861,7 @@ def setup_event_simulator(
             propagation_step_remat, init_state, jnp.arange(K))[1]
         if return_incidence_diagnostics:
             (all_weights, all_indices, all_times, all_pmt_response_factors,
-             all_incidence_cosines) = scan_outputs
+             all_incidence_cosines, all_local_incidence_cosines) = scan_outputs
         else:
             (all_weights, all_indices, all_times,
              all_pmt_response_factors) = scan_outputs
@@ -889,9 +896,12 @@ def setup_event_simulator(
             pmt_response_factor=flat_pmt_response_factors)
         if return_incidence_diagnostics:
             flat_incidence_cosines = all_incidence_cosines.reshape(-1)
+            flat_local_incidence_cosines = all_local_incidence_cosines.reshape(-1)
             slots_per_step = max_candidates_per_ray * n_rays
             flat_step_indices = jnp.repeat(jnp.arange(K), slots_per_step)
-            return hit_output + (flat_incidence_cosines, flat_step_indices)
+            return hit_output + (
+                flat_incidence_cosines, flat_step_indices,
+                flat_local_incidence_cosines)
         return hit_output
 
     # ================================================================
