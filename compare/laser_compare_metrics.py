@@ -6,8 +6,9 @@ from tqdm import tqdm
 from . import compare_sim as base
 
 # J26.3.2 QE_shape(532 nm) times effective CE, weighted by installed CD-LPMT
-# categories, is 0.0967717. Keep three significant figures for this temporary
-# common factor until LUCiD supplies per-PMT QE.
+# categories, is 0.0967717 (the QE_shape curve is unchanged in J26.5.0).
+# Keep three significant figures for this temporary common factor until
+# LUCiD supplies per-PMT QE.
 JUNOSW_J26_3_2_EQUIVALENT_QE_532_NM = 0.097
 
 estimate_peak_from_density = base.estimate_peak_from_density

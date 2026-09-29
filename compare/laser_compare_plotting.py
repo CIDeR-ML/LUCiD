@@ -68,7 +68,7 @@ def _lucid_qe_note(data, apply_lucid_qe, lucid_qe_eff):
     if apply_lucid_qe and np.any(np.char.lower(kinds) == "lucid"):
         return (
             "LUCiD-only equivalent QE at 532 nm="
-            f"{lucid_qe_eff:.6g} (JUNOsw J26.3.2)"
+            f"{lucid_qe_eff:.6g} (JUNOsw J26.5.0)"
         )
     return "LUCiD QE correction disabled"
 
@@ -511,7 +511,7 @@ def short_source_label(label):
     """Compact a source label for dense title and annotation text.
 
     Input: the full source label (e.g. "LUCiD (chimney off)" or
-    "JUNOsw (J26.3.2)").  Output: the compact form used in titles;
+    "JUNOsw (J26.5.0)").  Output: the compact form used in titles;
     legends keep the full label.  The JUNOsw version tag is dropped
     and the space before a variant parenthesis is removed.
     """

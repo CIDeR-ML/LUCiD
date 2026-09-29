@@ -222,7 +222,7 @@ def parse_args(argv=None):
     )
     parser.add_argument("--junosw-sim-file-glob", default="*.h5")
     parser.add_argument("--lucid-label", default="LUCiD (basis)")
-    parser.add_argument("--junosw-label", default="JUNOsw (J26.3.2)")
+    parser.add_argument("--junosw-label", default="JUNOsw (J26.5.0)")
     parser.add_argument("--fsmp-file-limit", type=int, default=None)
     parser.add_argument("--lucid-file-limit", type=int, default=None)
     parser.add_argument("--junosw-file-limit", type=int, default=None)
