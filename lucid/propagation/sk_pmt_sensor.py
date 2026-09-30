@@ -15,6 +15,7 @@ def compute_sk20inch_sensor_intersections(
     ray_origins,
     ray_directions,
     coverage_lookup=None,
+    return_active=False,
 ):
     """Evaluate one candidate-sensor slot for a batch of rays.
 
@@ -76,7 +77,7 @@ def compute_sk20inch_sensor_intersections(
         )(ray_origins, ray_directions, positions, axes, barrel)
     weights = jnp.where(valid, weights, 0.0)
 
-    return (
+    result = (
         weights,
         sensor_times,
         sensor_indices,
@@ -84,6 +85,9 @@ def compute_sk20inch_sensor_intersections(
         geometric_hit,
         hit_positions,
     )
+    if return_active:
+        return result + (valid & hits.active,)
+    return result
 
 
 __all__ = ["compute_sk20inch_sensor_intersections"]

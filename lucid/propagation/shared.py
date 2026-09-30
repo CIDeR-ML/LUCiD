@@ -113,6 +113,7 @@ def create_propagator(detector, sensor_positions, sensor_radius,
                       overlap_mode='interp',
                       sensor_shape='sphere', sk_pmt_lookup=None,
                       sk_pmt_lookup_options=None,
+                      sensor_candidate_selection='all',
                       **grid_params):
     """Build a JIT-compiled photon propagator using detector methods.
 
@@ -139,6 +140,12 @@ def create_propagator(detector, sensor_positions, sensor_radius,
     sk_pmt_lookup_options : dict or None
         Options forwarded to ``build_sk20inch_coverage_lookup`` when a finite
         temperature requires a table.
+    sensor_candidate_selection : {'all', 'wall'}
+        ``'all'`` evaluates every PMT associated with the wall grid cell.
+        ``'wall'`` assigns the ray to the candidate PMT whose center is closest
+        to the nominal wall crossing, then applies the exact PMT intersection
+        only to that assignment in the forward pass.  With finite temperature,
+        gradients retain the smooth all-candidate coverage surrogate.
     max_candidates_per_ray : int
     **grid_params
         Geometry-specific grid parameters passed to ``detector.configure_grid()``.
@@ -155,6 +162,12 @@ def create_propagator(detector, sensor_positions, sensor_radius,
     num_sensors = len(sensor_positions)
     if sensor_shape not in ('sphere', 'sk20inch'):
         raise ValueError("sensor_shape must be 'sphere' or 'sk20inch'")
+    if sensor_candidate_selection not in ('all', 'wall'):
+        raise ValueError("sensor_candidate_selection must be 'all' or 'wall'")
+    if sensor_candidate_selection == 'wall' and sensor_shape != 'sk20inch':
+        raise ValueError(
+            "sensor_candidate_selection='wall' requires "
+            "sensor_shape='sk20inch'")
 
     sensor_directions = None
     sensor_is_barrel = None
@@ -286,16 +299,44 @@ def create_propagator(detector, sensor_positions, sensor_radius,
                     photon_origins,
                     photon_directions,
                     coverage_lookup,
+                    return_active=True,
                 )
-            return compute_sensor_intersections_base(
+            result = compute_sensor_intersections_base(
                 slot_sensors, sensor_positions, sensor_radius,
                 photon_origins, photon_directions,
                 bounds_check, overlap_prob)
+            return result + (result[4],)
 
         (weights, sensor_times, sensor_indices,
          sensor_normals_all, inside_sensor,
-         sensor_hit_positions) = jax.vmap(
+         sensor_hit_positions, active_sensor) = jax.vmap(
             compute_for_slot, in_axes=1, out_axes=0)(potential_sensors)
+
+        if sensor_candidate_selection == 'wall':
+            # SKDetSim first routes a boundary crossing to one wall PMT cell,
+            # then asks whether that PMT's curved photocathode was intersected.
+            # Approximate that cell routing with the candidate center nearest to
+            # the nominal detector-wall crossing.  The stop-gradient selection
+            # gives the exact discrete forward result while preserving the
+            # smooth all-candidate coverage derivative used for calibration.
+            valid_candidates = potential_sensors >= 0
+            safe_candidates = jnp.maximum(potential_sensors, 0)
+            candidate_positions = sensor_positions[safe_candidates]
+            distance2 = jnp.sum(
+                (candidate_positions - intersection_point[:, None, :]) ** 2,
+                axis=-1,
+            )
+            distance2 = jnp.where(valid_candidates, distance2, jnp.inf)
+            wall_slot = jnp.argmin(distance2, axis=1)
+            has_candidate = jnp.any(valid_candidates, axis=1)
+            wall_mask = (
+                jnp.arange(potential_sensors.shape[1])[:, None]
+                == wall_slot[None, :]
+            ) & has_candidate[None, :]
+
+            hard_weights = (active_sensor & wall_mask).astype(weights.dtype)
+            weights = weights + jax.lax.stop_gradient(hard_weights - weights)
+            inside_sensor = inside_sensor & wall_mask
 
         # e. Compute geometry surface normals
         geometry_normals = detector.compute_normal(intersection_point, surface_info)

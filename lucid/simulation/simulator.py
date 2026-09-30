@@ -110,6 +110,7 @@ def setup_event_simulator(
         sensor_shape='sphere',
         sk_pmt_lookup=None,
         sk_pmt_lookup_options=None,
+        sensor_candidate_selection='all',
         reflection_model='scalar_mix',
         reflection_wavelength=400.0,
         sensor_acceptance_model='sphere',
@@ -205,6 +206,11 @@ def setup_event_simulator(
     sk_pmt_lookup_options : dict or None
         Options used to build the cached SK PMT coverage table. The Gaussian
         width is fixed by ``temperature * sensor_radius``.
+    sensor_candidate_selection : {'all', 'wall'}
+        Candidate PMT routing. ``'all'`` preserves the existing LUCiD behavior.
+        ``'wall'`` assigns each nominal wall crossing to the nearest candidate
+        PMT before applying the exact SK sphere-plus-torus intersection. Its
+        hard forward choice uses the smooth all-candidate coverage derivative.
     reflection_model : str
         Reflection model: ``'scalar_mix'`` (DEFAULT — the scalar wall/sensor
         rates plus a specular/diffuse direction mixture via
@@ -323,6 +329,7 @@ def setup_event_simulator(
         sensor_shape=sensor_shape,
         sk_pmt_lookup=sk_pmt_lookup,
         sk_pmt_lookup_options=sk_pmt_lookup_options,
+        sensor_candidate_selection=sensor_candidate_selection,
         **grid_params)
 
     mode = 'data' if is_data else ('calibration' if is_calibration else 'track')
