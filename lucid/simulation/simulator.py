@@ -115,6 +115,7 @@ def setup_event_simulator(
         sensor_acceptance_model='sphere',
         sensor_acceptance_power=1.0,
         return_incidence_diagnostics=False,
+        return_transport_diagnostics=False,
         spectrum=None,
         cherenkov_emission_band=None,
         pmt_timing_model=None,
@@ -229,6 +230,11 @@ def setup_event_simulator(
         Append the PMT-axis incidence cosine, propagation-step index, and
         curved-surface local-incidence cosine for every raw deposition slot.
         Intended for optical-validation plots.
+    return_transport_diagnostics : bool
+        Append per-step photon states for transport validation: position and
+        direction before and after the step, continuation factor, and distance
+        to the detector surface. The arrays have leading shape ``(K, n_photons)``
+        and do not alter the simulated charge.
     pmt_timing_model : str or None
         Optional per-photoelectron timing response applied after optical
         propagation and before hit aggregation/digitization. ``None`` or
@@ -340,6 +346,9 @@ def setup_event_simulator(
     # surface geometries (cylinder/sphere/box) keep the byte-identical surface step.
     from lucid.geometry.string import StringTelescope
     _is_volume = isinstance(detector, StringTelescope)
+    if return_transport_diagnostics and _is_volume:
+        raise ValueError(
+            "return_transport_diagnostics currently supports surface detectors only")
     sensor_points = det_geom.sensor_points
     NUM_SENSORS = det_geom.num_sensors
     Nphot = sim_config.n_photons
@@ -845,6 +854,11 @@ def setup_event_simulator(
             if return_incidence_diagnostics:
                 outputs = outputs + (
                     incidence_cosine, local_incidence_cosine)
+            if return_transport_diagnostics:
+                outputs = outputs + (
+                    state.positions, state.directions,
+                    new_positions, new_directions,
+                    continuing_factors, surface_distances)
             return new_state, outputs
 
         init_state = PhotonState(
@@ -859,12 +873,18 @@ def setup_event_simulator(
 
         scan_outputs = jax.lax.scan(
             propagation_step_remat, init_state, jnp.arange(K))[1]
+        all_weights, all_indices, all_times, all_pmt_response_factors = (
+            scan_outputs[:4])
+        output_offset = 4
         if return_incidence_diagnostics:
-            (all_weights, all_indices, all_times, all_pmt_response_factors,
-             all_incidence_cosines, all_local_incidence_cosines) = scan_outputs
-        else:
-            (all_weights, all_indices, all_times,
-             all_pmt_response_factors) = scan_outputs
+            all_incidence_cosines, all_local_incidence_cosines = (
+                scan_outputs[output_offset:output_offset + 2])
+            output_offset += 2
+        if return_transport_diagnostics:
+            (all_pre_positions, all_pre_directions,
+             all_post_positions, all_post_directions,
+             all_continuing_factors, all_surface_distances) = (
+                scan_outputs[output_offset:output_offset + 6])
 
         flat_weights = all_weights.reshape(-1)
         flat_indices = all_indices.reshape(-1)
@@ -894,15 +914,21 @@ def setup_event_simulator(
             flat_weights, flat_indices, flat_times, num_sensors, qe_key, flat_qe, qe_corrections,
             response, flat_segment_idx=flat_segment_idx,
             pmt_response_factor=flat_pmt_response_factors)
+        diagnostic_output = ()
         if return_incidence_diagnostics:
             flat_incidence_cosines = all_incidence_cosines.reshape(-1)
             flat_local_incidence_cosines = all_local_incidence_cosines.reshape(-1)
             slots_per_step = max_candidates_per_ray * n_rays
             flat_step_indices = jnp.repeat(jnp.arange(K), slots_per_step)
-            return hit_output + (
+            diagnostic_output = diagnostic_output + (
                 flat_incidence_cosines, flat_step_indices,
                 flat_local_incidence_cosines)
-        return hit_output
+        if return_transport_diagnostics:
+            diagnostic_output = diagnostic_output + (
+                all_pre_positions, all_pre_directions,
+                all_post_positions, all_post_directions,
+                all_continuing_factors, all_surface_distances)
+        return hit_output + diagnostic_output
 
     # ================================================================
     # Mode-specific simulation functions

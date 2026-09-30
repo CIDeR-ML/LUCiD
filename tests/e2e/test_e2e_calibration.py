@@ -220,8 +220,8 @@ def test_5_sk4_pmt_timing_changes_only_per_photon_times():
     )
 
 
-def test_6_incidence_diagnostics_do_not_change_default_response():
-    """Requesting PMT angles only appends diagnostics to the same event."""
+def test_6_optical_diagnostics_do_not_change_default_response():
+    """Requesting PMT and transport state only appends diagnostics."""
     from lucid.simulation import setup_event_simulator
     from lucid.sources import laser_source
 
@@ -245,8 +245,12 @@ def test_6_incidence_diagnostics_do_not_change_default_response():
     plain = setup_event_simulator(**common)
     diagnostic = setup_event_simulator(
         **common, return_incidence_diagnostics=True)
+    combined = setup_event_simulator(
+        **common, return_incidence_diagnostics=True,
+        return_transport_diagnostics=True)
     plain_out = plain(source, KEY)
     diagnostic_out = diagnostic(source, KEY)
+    combined_out = combined(source, KEY)
 
     np.testing.assert_array_equal(plain_out[0], diagnostic_out[0])
     np.testing.assert_array_equal(plain_out[1], diagnostic_out[1])
@@ -259,3 +263,15 @@ def test_6_incidence_diagnostics_do_not_change_default_response():
     assert np.all((cosines >= 0.0) & (cosines <= 1.0))
     assert np.all((local_cosines >= 0.0) & (local_cosines <= 1.0))
     np.testing.assert_array_equal(np.unique(steps), [0, 1])
+
+    assert len(combined_out) == 11
+    np.testing.assert_array_equal(plain_out[0], combined_out[0])
+    np.testing.assert_array_equal(plain_out[1], combined_out[1])
+    for incidence_only, with_transport in zip(
+            diagnostic_out[2:5], combined_out[2:5]):
+        np.testing.assert_array_equal(incidence_only, with_transport)
+    for array in combined_out[5:9]:
+        assert np.asarray(array).shape == (2, 500, 3)
+    for array in combined_out[9:11]:
+        assert np.asarray(array).shape == (2, 500)
+    assert np.all(np.asarray(combined_out[10]) >= -1e-6)
