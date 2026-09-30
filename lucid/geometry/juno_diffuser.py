@@ -217,4 +217,6 @@ def intersect_diffuser_hardware(origins, directions, hardware, center,
         surface_codes=jnp.where(valid, surface_codes, -1),
         positions=positions,
         transport_normals=-outward,
+        outward_normals=outward,
+        inside_before=jnp.zeros_like(valid),
     )

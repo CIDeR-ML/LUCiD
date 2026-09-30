@@ -278,18 +278,28 @@ def test_curved_bowl_matches_random_quartic_reference():
         jnp.zeros((count, 1), dtype=jnp.int32),
     )
     expected_valid = np.isfinite(expected)
+    axial = origins[:, 0]
+    radial = np.linalg.norm(origins[:, 1:], axis=1)
+    started_inside = (
+        (axial >= 0.0)
+        & (axial <= 0.14)
+        & (radial <= np.asarray(acrylic_bowl_radius(axial)))
+    )
 
-    npt.assert_array_equal(hit.valid, expected_valid)
+    npt.assert_array_equal(
+        np.asarray(hit.valid)[~started_inside],
+        expected_valid[~started_inside],
+    )
     npt.assert_allclose(
-        np.asarray(hit.distance_m)[expected_valid],
-        expected[expected_valid],
+        np.asarray(hit.distance_m)[expected_valid & ~started_inside],
+        expected[expected_valid & ~started_inside],
         atol=2e-6,
         rtol=0.0,
     )
 
 
-def test_axis_ray_hits_bowl_tip_and_inside_ray_is_ignored():
-    """The effective curved bowl is hit once, then treated as a thin surface."""
+def test_axis_ray_hits_bowl_tip_from_both_sides():
+    """The closed bowl returns entry and exit intersections."""
     bowls = _nominal_bowl()
     candidates = jnp.array([[0]], dtype=jnp.int32)
     hit = intersect_acrylic_bowls(
@@ -308,7 +318,9 @@ def test_axis_ray_hits_bowl_tip_and_inside_ray_is_ignored():
     npt.assert_allclose(hit.distance_m, [0.86], atol=1e-6)
     npt.assert_array_equal(hit.valid, [True])
     npt.assert_allclose(hit.transport_normals[0], [-1.0, 0.0, 0.0])
-    assert not bool(inside.valid[0])
+    npt.assert_allclose(inside.distance_m, [0.07], atol=1e-6)
+    npt.assert_array_equal(inside.valid, [True])
+    npt.assert_array_equal(inside.inside_before, [True])
 
     after_sphere = intersect_acrylic_bowls(
         jnp.array([[5.0001, 0.0, 0.0]]),
@@ -333,6 +345,66 @@ def test_chimney_inner_wall_and_material_code():
     npt.assert_array_equal(hit.valid, [True])
     npt.assert_array_equal(hit.surface_codes, [1])
     npt.assert_allclose(hit.transport_normals[0], [1.0, 0.0, 0.0])
+    npt.assert_array_equal(hit.inside_before, [False])
+
+
+def test_chimney_acrylic_origin_reaches_outer_exit():
+    """A ray in the chimney wall receives an Acrylic exit boundary."""
+    chimney = ChimneyGeometry.junosw_j26(outer_limit_m=19.434)
+    hit = intersect_chimney(
+        jnp.array([[0.45, 0.0, 18.0]]),
+        jnp.array([[1.0, 0.0, 0.0]]),
+        chimney,
+    )
+
+    npt.assert_allclose(hit.distance_m, [0.074], atol=1e-6)
+    npt.assert_array_equal(hit.valid, [True])
+    npt.assert_array_equal(hit.inside_before, [True])
+    npt.assert_allclose(hit.outward_normals[0], [1.0, 0.0, 0.0])
+
+
+def test_bowl_acrylic_origin_reaches_curved_exit():
+    """A ray in one bowl receives the curved Acrylic exit boundary."""
+    bowls = _nominal_bowl()
+    candidates = jnp.array([[0]], dtype=jnp.int32)
+    hit = intersect_acrylic_bowls(
+        jnp.array([[5.07, 0.0, 0.0]]),
+        jnp.array([[0.0, 1.0, 0.0]]),
+        bowls,
+        candidates,
+    )
+
+    npt.assert_array_equal(hit.valid, [True])
+    npt.assert_array_equal(hit.inside_before, [True])
+    assert 0.2 < float(hit.distance_m[0]) < 0.5
+
+
+def test_transparent_chimney_reports_acrylic_target_medium(tmp_path):
+    """The propagator labels entry and exit media for chimney Acrylic."""
+    geometry = DetectorGeometry.from_config(
+        str(_write_minimal_config(tmp_path)),
+        detector_type="nested_sphere",
+        temperature=None,
+        max_candidates_per_ray=1,
+        n_divisions=8,
+        chimney_geometry_enabled=True,
+        acrylic_bowl_geometry_enabled=False,
+    )
+    entering = geometry.propagator(
+        jnp.array([[0.0, 0.0, 18.0]]),
+        jnp.array([[1.0, 0.0, 0.0]]),
+    )
+    exiting = geometry.propagator(
+        jnp.array([[0.45, 0.0, 18.0]]),
+        jnp.array([[1.0, 0.0, 0.0]]),
+    )
+
+    npt.assert_array_equal(entering["hit_interface"], [True])
+    npt.assert_array_equal(entering["engineering_entering"], [True])
+    npt.assert_array_equal(entering["interface_target_medium_id"], [1])
+    npt.assert_array_equal(exiting["hit_interface"], [True])
+    npt.assert_array_equal(exiting["engineering_entering"], [False])
+    npt.assert_array_equal(exiting["interface_target_medium_id"], [2])
 
 
 def _write_minimal_config(tmp_path):
@@ -506,5 +578,93 @@ def test_transparent_engineering_surface_continues_without_detection():
         npt.assert_allclose(result[1], [1.0, 0.0, 0.0], atol=1e-6)
     npt.assert_array_equal(
         np.asarray(results["sample"][8], dtype=np.int32),
-        [1, 0, 0, 0, 0, 1],
+        [1, 0, 0, 0, 0, 1, 0, 0, 0, 0],
     )
+
+
+def test_acrylic_interface_transmits_to_explicit_target_medium():
+    """An engineering interface updates the medium without surface loss."""
+    step = make_photon_step(
+        "sample",
+        has_interface=True,
+        multi_interface=True,
+        has_engineering_surfaces=True,
+    )
+    result = step(
+        jnp.array([0.0, 0.0, 0.0]),
+        jnp.array([1.0, 0.0, 0.0]),
+        jnp.asarray(0.0),
+        jnp.asarray(1.0),
+        jnp.array([1.0, 0.0, 0.0]),
+        jnp.asarray(1e12),
+        jnp.asarray(1e12),
+        jnp.asarray(0.0),
+        ScalarReflection(jnp.asarray(0.0), jnp.asarray(0.0)),
+        jnp.asarray(1e12),
+        jnp.asarray(False),
+        jnp.asarray(532.0),
+        jax.random.PRNGKey(37),
+        jnp.asarray(0.225),
+        jnp.asarray(True),
+        jnp.asarray(2, dtype=jnp.int32),
+        jnp.asarray(1.5),
+        jnp.asarray(1.5),
+        jnp.asarray(-1, dtype=jnp.int32),
+        jnp.asarray([1.5, 1.5, 1.5]),
+        jnp.asarray(True),
+        jnp.asarray(0.0),
+        jnp.asarray(1.0),
+        jnp.asarray(1.0),
+        jnp.asarray(1, dtype=jnp.int32),
+        jnp.asarray(True),
+        jnp.asarray(-1, dtype=jnp.int32),
+    )
+
+    npt.assert_array_equal(result[7], 1)
+    npt.assert_array_equal(
+        np.asarray(result[8], dtype=np.int32),
+        [1, 0, 0, 0, 0, 1, 1, 0, 0, 0],
+    )
+
+
+def test_acrylic_volume_reports_bulk_absorption_and_path():
+    """A terminated in-volume step records bulk rather than surface loss."""
+    step = make_photon_step(
+        "sample",
+        has_interface=True,
+        multi_interface=True,
+        has_engineering_surfaces=True,
+    )
+    result = step(
+        jnp.array([0.0, 0.0, 0.0]),
+        jnp.array([1.0, 0.0, 0.0]),
+        jnp.asarray(0.0),
+        jnp.asarray(0.2),
+        jnp.array([1.0, 0.0, 0.0]),
+        jnp.asarray(1e12),
+        jnp.asarray(1e12),
+        jnp.asarray(0.0),
+        ScalarReflection(jnp.asarray(0.0), jnp.asarray(0.0)),
+        jnp.asarray(1e-9),
+        jnp.asarray(False),
+        jnp.asarray(532.0),
+        jax.random.PRNGKey(41),
+        jnp.asarray(0.2),
+        jnp.asarray(True),
+        jnp.asarray(1, dtype=jnp.int32),
+        jnp.asarray(1.5),
+        jnp.asarray(1.33),
+        jnp.asarray(-1, dtype=jnp.int32),
+        jnp.asarray([1.5, 1.5, 1.5]),
+        jnp.asarray(True),
+        jnp.asarray(0.0),
+        jnp.asarray(1.0),
+        jnp.asarray(1.0),
+        jnp.asarray(2, dtype=jnp.int32),
+        jnp.asarray(False),
+        jnp.asarray(3, dtype=jnp.int32),
+    )
+
+    events = np.asarray(result[8])
+    npt.assert_allclose(events[8], 1.0)
+    npt.assert_allclose(events[9], 0.2, atol=1e-6)

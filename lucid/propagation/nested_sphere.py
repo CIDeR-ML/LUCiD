@@ -262,6 +262,15 @@ def find_intersected_nested_sphere_sensors(ray_origins, ray_directions,
     surface_code = jnp.full(
         ray_origins.shape[0], -1, dtype=jnp.int32
     )
+    interface_target_medium_id = jnp.full(
+        ray_origins.shape[0], -1, dtype=jnp.int32
+    )
+    engineering_entering = jnp.zeros(
+        ray_origins.shape[0], dtype=bool
+    )
+    engineering_acrylic_inside = jnp.zeros(
+        ray_origins.shape[0], dtype=bool
+    )
     support_index = jnp.full(
         ray_origins.shape[0], -1, dtype=jnp.int32
     )
@@ -314,6 +323,60 @@ def find_intersected_nested_sphere_sensors(ray_origins, ray_directions,
             )
         return wins
 
+    def _ambient_medium(points):
+        """Classify the concentric medium outside an added solid."""
+        radius = jnp.linalg.norm(points, axis=1)
+        if r_acrylic is None:
+            medium = jnp.where(radius < r_inner, 0, 1)
+        else:
+            medium = jnp.where(
+                radius < r_inner,
+                0,
+                jnp.where(radius < r_acrylic, 1, 2),
+            )
+        if chimney is not None:
+            rho = jnp.linalg.norm(points[:, :2], axis=1)
+            in_bore = (
+                (points[:, 2] >= chimney.aperture_z_min_m)
+                & (rho < chimney.aperture_radius_m)
+            )
+            medium = jnp.where(in_bore, 0, medium)
+        return medium.astype(jnp.int32)
+
+    def _set_acrylic_interface(surface_hit, wins):
+        """Promote an effective Acrylic hit to a material boundary."""
+        nonlocal interface_target_medium_id
+        nonlocal engineering_entering
+        nonlocal engineering_acrylic_inside
+        entering = ~surface_hit.inside_before
+        outside_point = (
+            surface_hit.positions
+            + 2e-4 * surface_hit.outward_normals
+        )
+        exit_medium = _ambient_medium(outside_point)
+        target = jnp.where(entering, 1, exit_medium)
+        result['normals'] = jnp.where(
+            wins[:, None], surface_hit.outward_normals,
+            result['normals'],
+        )
+        result['hit_interface'] = jnp.where(
+            wins, True, result['hit_interface']
+        )
+        if 'interface_index' in result:
+            result['interface_index'] = jnp.where(
+                wins, -1, result['interface_index']
+            )
+        interface_target_medium_id = jnp.where(
+            wins, target, interface_target_medium_id
+        )
+        engineering_entering = jnp.where(
+            wins, entering, engineering_entering
+        )
+        engineering_acrylic_inside = jnp.where(
+            wins, surface_hit.inside_before,
+            engineering_acrylic_inside,
+        )
+
     if support_rods is not None:
 
         reference_radius = jnp.mean(jnp.linalg.norm(
@@ -354,6 +417,10 @@ def find_intersected_nested_sphere_sensors(ray_origins, ray_directions,
         surface_code = jnp.where(
             hit_chimney, chimney_hit.surface_codes, surface_code
         )
+        hit_chimney_acrylic = (
+            hit_chimney & (chimney_hit.surface_codes == 1)
+        )
+        _set_acrylic_interface(chimney_hit, hit_chimney_acrylic)
 
     if acrylic_bowls is not None:
         reference_radius = jnp.mean(jnp.linalg.norm(
@@ -389,6 +456,7 @@ def find_intersected_nested_sphere_sensors(ray_origins, ray_directions,
         bowl_index = jnp.where(
             hit_bowl, bowl_hit.object_indices, -1
         )
+        _set_acrylic_interface(bowl_hit, hit_bowl)
 
     if diffuser_hardware is not None:
         diffuser_hit = intersect_diffuser_hardware(
@@ -404,6 +472,13 @@ def find_intersected_nested_sphere_sensors(ray_origins, ray_directions,
         )
 
     result['engineering_surface_code'] = surface_code
+    result['interface_target_medium_id'] = (
+        interface_target_medium_id
+    )
+    result['engineering_entering'] = engineering_entering
+    result['engineering_acrylic_inside'] = (
+        engineering_acrylic_inside
+    )
     result['hit_support'] = surface_code == 0
     result['support_index'] = jnp.where(
         surface_code == 0, support_index, -1

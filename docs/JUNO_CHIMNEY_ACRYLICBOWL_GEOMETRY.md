@@ -36,10 +36,12 @@ a genuine geometric opening rather than a decorative cylinder superimposed
 on an intact spherical shell.
 
 The chimney walls are represented by coaxial finite annular cylinders. The
-inner wall, outer wall, and end caps are intersected explicitly. The current
-model does not propagate refracted paths through the physical Acrylic wall;
-instead, it applies one effective absorption/reflection/transmission (A/R/T)
-surface interaction.
+inner wall, outer wall, and end caps are intersected explicitly. The Acrylic
+segment is a closed transparent volume. At entry and exit, the target medium
+is determined from the crossed face and Snell/Fresnel/TIR transport is
+applied. While the photon is in the wall, its time, scattering and bulk
+attenuation use the Acrylic material parameters. The steel segment remains
+an opaque effective surface.
 
 ## Acrylic-bowl component
 
@@ -88,12 +90,13 @@ rejected: although the centre-source bowl-hit loss was only 0.47%, the losses
 at source z=16.1 m and z=17.1 m were 16.8% and 12.6%, respectively. The
 24-candidate definition is therefore part of the clean geometry baseline.
 
-The intersection includes the circular-arc side and both flat caps. A ray
-already inside the effective solid does not interact with a second exit
-surface. This is equivalent to a single thin-surface response and avoids
-applying A/R/T twice without a complete Acrylic-volume medium state machine.
-To avoid numerical coincidence between the spherical interface and the bowl
-base, the effective bowl surface is shifted outward by 0.5 mm. This offset is
+The intersection includes the circular-arc side and both flat caps. These
+surfaces now close one transparent Acrylic volume: a ray can enter through
+the curved wall or attachment cap, propagate with Acrylic optical parameters,
+and leave through the next boundary. The flat base is the current effective
+shell-connection inner wall; it is not yet the exact sphere-subtracted CAD
+root. To avoid numerical coincidence between the spherical interface and the
+bowl base, the effective bowl is shifted outward by 0.5 mm. This offset is
 only a numerical separation, not an additional engineering dimension.
 
 JUNOSW J26.5.1 still selects its three-plane \`simple\` profile by default;
@@ -101,38 +104,48 @@ the C++ \`yumiao\` branch is present but dormant. LUCiD intentionally selects
 that branch's 776 mm circular arc to represent the known overall bowl
 curvature. This does not claim to reproduce the manufactured edge fillets.
 
-## Effective surface optics
+## Transparent Acrylic optics
 
-Engineering surfaces satisfy
-
-\[
-P_{\rm abs}+P_{\rm refl}+P_{\rm trans}=1,
-\]
-
-where \(P_{\rm refl}\) is the total reflection probability,
-\(P_{\rm trans}\) is the straight-through probability, and the remainder is
-the effective absorption probability. Conditional on reflection,
-\(f_{\rm spec}\) selects specular reflection and \(1-f_{\rm spec}\) selects a
-cosine-weighted diffuse direction.
-
-The initial Acrylic values in the current configuration are
+The chimney Acrylic and Acrylic bowls no longer use a fixed A/R/T surface.
+For each boundary crossing, LUCiD evaluates Snell's law, Fresnel reflection
+and total internal reflection from the incident and target refractive
+indices. A transmitted photon changes its material state. Its survival over
+an Acrylic path of length \(d\) is
 
 \[
-(P_{\rm refl},P_{\rm trans},P_{\rm abs})=(0.04,0.94,0.02),
+P_{\rm survive}=\exp(-d/L_{\rm abs}^{\rm Acrylic}),
 \]
 
-and the initial values for the steel segment are \((0.40,0,0.60)\). These are
-interpretable starting values, not a claim of JUNOSW-level optical precision.
-They should later be constrained with 532 nm data from multiple source
-positions.
+with the 532 nm baseline
+\(L_{\rm abs}^{\rm Acrylic}=8.908\,\mathrm{m}\). Acrylic scattering remains
+disabled through the material file's effectively infinite scattering length.
+
+The legacy Acrylic surface values are consequently set to
+
+\[
+(P_{\rm refl},P_{\rm trans},P_{\rm abs})=(0,1,0).
+\]
+
+They are inert compatibility entries rather than physical probabilities;
+Fresnel reflection and bulk absorption are applied by the material-interface
+path. This prevents the old 2% surface loss from being counted a second time.
+The steel segment retains its effective values \((0.40,0,0.60)\), with
+specular/diffuse splitting controlled by \(f_{\rm spec}\).
 
 Stable surface codes are 0 for support rods, 1 for chimney Acrylic, 2 for
 chimney steel, and 3 for Acrylic bowls. For each surface class,
 \`results_summary.json\` records the following per-event quantities:
 
 ~~~text
-hits, absorbed, reflected, specular, diffuse, transmitted
+hits, surface_absorbed, reflected, specular, diffuse, transmitted,
+entered, exited, bulk_absorbed, acrylic_path_m
 ~~~
+
+The summary separately records `chimney_acrylic` and `chimney_steel`; their
+sum remains available as `chimney`. This separation is needed because only
+the Acrylic segment has material entry/exit and bulk-path diagnostics.
+The backward-compatible `absorbed` field is the sum of `surface_absorbed`
+and `bulk_absorbed`.
 
 ## Independent ablation
 
@@ -161,14 +174,12 @@ not required to move closer to JUNOSW or data after every component is added.
 
 The current implementation satisfies the near-term requirements in
 \`diffsim.tex\` and \`AGENTS.md\` for principal positions, dimensions and
-shapes, independent ablation, and diagnosable optical components. The
-following are explicitly not implemented:
+shapes, transparent Acrylic path transport, independent ablation, and
+diagnosable optical components. The following are explicitly not implemented:
 
-- explicit refraction, path length, and absorption inside the chimney
-  Acrylic wall;
 - the upper chimney beyond the PMT sphere, Tyvek, and external structures;
-- the short upper/lower edge fillets, sphere-subtracted attachment root,
-  holes, fasteners, and secondary propagation inside the Acrylic volume;
+- the short upper/lower edge fillets, exact sphere-subtracted attachment
+  root, holes, and fasteners;
 - closed-form quartic root selection; bounded Newton updates of the exact
   torus polynomial are used instead;
 - angle- or wavelength-dependent engineering-surface parameters.

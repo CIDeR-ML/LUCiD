@@ -235,6 +235,9 @@ def test_support_step_reports_reflection_branch():
     )
 
     events = np.asarray(result[8], dtype=np.int32)
-    npt.assert_array_equal(events, [1, 0, 1, 1, 0, 0])
+    npt.assert_array_equal(
+        events,
+        [1, 0, 1, 1, 0, 0, 0, 0, 0, 0],
+    )
     assert float(result[5]) == 1.0
     assert float(result[1][0]) < 0.0

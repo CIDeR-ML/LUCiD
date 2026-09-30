@@ -18,7 +18,7 @@ from lucid.sources import sample_source
 
 from .config import JunoLaserConfig
 from .histogram import weighted_time_histogram
-from .parameters import CalibParams
+from .parameters import CalibParams, medium_lengths_at
 from .source import rotate_source_directions
 
 
@@ -68,8 +68,15 @@ def build_per_pe_forward(
         "update_factors",
         has_interface=True,
         reflection_fn=reflection_fn,
+        multi_interface=det_geom.medium_acrylic is not None,
         has_engineering_surfaces=has_engineering,
     )
+    acrylic_path = config.material_paths.get("acrylic")
+    fixed_lengths = medium_lengths_at(
+        {} if acrylic_path is None else {"acrylic": acrylic_path},
+        config.wavelength_nm,
+    )
+    acrylic = fixed_lengths.get("acrylic")
     with config.physics_path.open() as stream:
         fixed_physics = json.load(stream)
     required_surface_codes = []
@@ -116,15 +123,32 @@ def build_per_pe_forward(
 
         c_in = jnp.asarray(c_vacuum / params.n_ls, dtype=jnp.float32)
         c_out = jnp.asarray(c_vacuum / params.n_water, dtype=jnp.float32)
-        speed_in = jnp.full(n_photons, c_in)
-        speed_out = jnp.full(n_photons, c_out)
-        scatter_in = jnp.full(n_photons, params.scat_ls)
-        scatter_out = jnp.full(n_photons, params.scat_water)
-        absorb_in = jnp.full(n_photons, params.abs_ls)
-        absorb_out = jnp.full(n_photons, params.abs_water)
-        # The JUNO laser materials have no Mie component at 532 nm.
-        mie_in = jnp.full(n_photons, 1.0e9)
-        mie_out = jnp.full(n_photons, 1.0e9)
+        if acrylic is None:
+            refractive_indices = jnp.asarray(
+                [params.n_ls, params.n_water]
+            )
+            scatter_values = jnp.asarray(
+                [params.scat_ls, params.scat_water]
+            )
+            mie_values = jnp.asarray([1.0e9, 1.0e9])
+            absorb_values = jnp.asarray(
+                [params.abs_ls, params.abs_water]
+            )
+            speed_values = jnp.asarray([c_in, c_out])
+        else:
+            refractive_indices = jnp.asarray([
+                params.n_ls, acrylic["n"], params.n_water
+            ])
+            scatter_values = jnp.asarray([
+                params.scat_ls, acrylic["scat"], params.scat_water
+            ])
+            mie_values = jnp.asarray([
+                1.0e9, acrylic["mie"], 1.0e9
+            ])
+            absorb_values = jnp.asarray([
+                params.abs_ls, acrylic["abs"], params.abs_water
+            ])
+            speed_values = c_vacuum / refractive_indices
 
         def step(carry, index):
             positions, directions, times, survival, medium_id, key, log_p, hist = carry
@@ -159,30 +183,33 @@ def build_per_pe_forward(
 
             key, subkey = jax.random.split(key)
             ray_keys = jax.random.split(subkey, n_photons)
-            in_inner = medium_id == 0
-            scatter = jnp.where(in_inner, scatter_in, scatter_out)
-            mie = jnp.where(in_inner, mie_in, mie_out)
-            absorb = jnp.where(in_inner, absorb_in, absorb_out)
-            speed = jnp.where(in_inner, speed_in, speed_out)
+            scatter = scatter_values[medium_id]
+            mie = mie_values[medium_id]
+            absorb = absorb_values[medium_id]
+            speed = speed_values[medium_id]
+            interface_index = prop.get(
+                "interface_index", jnp.zeros_like(medium_id)
+            )
             vectorized_step = jax.vmap(
                 photon_step,
                 in_axes=(0, 0, 0, 0, 0,
                          0, 0, None, None, 0,
                          0, None, 0, 0,
-                         0, 0, None, None),
+                         0, 0, None, None, 0, None),
             ) if not has_engineering else jax.vmap(
                 photon_step,
                 in_axes=(0, 0, 0, 0, 0,
                          0, 0, None, None, 0,
                          0, None, 0, 0,
                          0, 0, None, None, None, None,
-                         0, 0, 0, 0),
+                         0, 0, 0, 0, 0, 0, 0),
             )
             result = vectorized_step(
               positions, directions, times, surface_distance, normals,
               scatter, mie, g, reflection_params, absorb, hit_sensor, 400.0,
               ray_keys, speed, hit_interface, medium_id,
               params.n_ls, params.n_water,
+              interface_index, refractive_indices,
               *(
                   (
                       prop["engineering_surface_code"] >= 0,
@@ -195,6 +222,13 @@ def build_per_pe_forward(
                       surface_fspecs[jnp.maximum(
                           prop["engineering_surface_code"], 0
                       )],
+                      prop["interface_target_medium_id"],
+                      prop["engineering_entering"],
+                      jnp.where(
+                          prop["engineering_acrylic_inside"],
+                          prop["engineering_surface_code"],
+                          -1,
+                      ),
                   )
                   if has_engineering else ()
               ))

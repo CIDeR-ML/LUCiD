@@ -124,6 +124,41 @@ def _interface_refract_reflect_multi(direction_n, radial_normal, medium_id,
     )
     return new_dir, new_medium_id, score, transmit
 
+
+def _interface_refract_reflect_target(
+        direction_n, surface_normal, medium_id, target_medium_id,
+        refractive_indices, u_sample):
+    """Apply Snell/Fresnel transport to an explicit target medium."""
+    sg = jax.lax.stop_gradient
+    medium_id = jnp.asarray(medium_id)
+    target = jnp.asarray(target_medium_id, dtype=medium_id.dtype)
+    n_from = refractive_indices[medium_id]
+    n_to = refractive_indices[target]
+    cosine = jnp.clip(
+        jnp.abs(jnp.sum(direction_n * surface_normal)), 0.0, 1.0
+    )
+    reflectance, cosine_transmit = fresnel_rr(cosine, n_from, n_to)
+    transmission = 1.0 - reflectance
+    transmit = u_sample < sg(transmission)
+    sign = jnp.sign(jnp.sum(direction_n * surface_normal))
+    incident_normal = -sign * surface_normal
+    eta = n_from / n_to
+    refracted = normalize(
+        eta * direction_n
+        + (eta * cosine - cosine_transmit) * incident_normal
+    )
+    reflected = compute_reflection_direction(
+        direction_n, surface_normal
+    )
+    new_direction = jnp.where(transmit, refracted, reflected)
+    new_medium = jnp.where(transmit, target, medium_id)
+    score = jnp.where(
+        transmit,
+        jnp.log(sg(transmission) + 1e-12),
+        jnp.log(sg(reflectance) + 1e-12),
+    )
+    return new_direction, new_medium, score, transmit
+
 def photon_iteration_sample(
         position, direction, time, surface_distance,
         normal, scatter_length, mie_scatter_length, g, refl_params,

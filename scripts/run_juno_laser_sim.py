@@ -124,6 +124,7 @@ def _simulation_metadata(
     surface_reflectances,
     surface_transmittances,
     surface_fspecs,
+    acrylic_absorption_length_m,
     reflection_model_request,
     reflection_model,
 ):
@@ -204,6 +205,10 @@ def _simulation_metadata(
             list(surface_transmittances)
         ),
         "engineering_surface_fspecs": json.dumps(list(surface_fspecs)),
+        "engineering_acrylic_transport": "finite_volume_snell_fresnel",
+        "engineering_acrylic_absorption_length_m": str(
+            acrylic_absorption_length_m
+        ),
         "pe_time_units": "ns",
         "offset_units": "ns",
     }
@@ -327,8 +332,8 @@ def _lengths_at(material_dir: Path, wavelength_nm: float,
 def _make_forward(
     det_geom, dp, *, n_photons, n_steps, source_model, wavelength_nm,
     reflection_model="scalar", record_trajectories=False,
-    surface_reflectances=(0.535, 0.04, 0.4, 0.04),
-    surface_transmittances=(0.0, 0.94, 0.0, 0.94),
+    surface_reflectances=(0.535, 0.0, 0.4, 0.0),
+    surface_transmittances=(0.0, 1.0, 0.0, 1.0),
     surface_fspecs=(0.5, 1.0, 0.5, 1.0),
 ):
     """Create a JIT nested-sphere forward returning raw hit arrays.
@@ -475,7 +480,7 @@ def _make_forward(
                          0, 0, None, None, 0,
                          0, None, 0, 0,
                          0, 0, None, None, 0, None,
-                         0, 0, 0, 0),
+                         0, 0, 0, 0, 0, 0, 0),
             )
             result = result(
                 positions,
@@ -510,6 +515,13 @@ def _make_forward(
                         surface_fspecs[jnp.maximum(
                             hit["engineering_surface_code"], 0
                         )],
+                        hit["interface_target_medium_id"],
+                        hit["engineering_entering"],
+                        jnp.where(
+                            hit["engineering_acrylic_inside"],
+                            hit["engineering_surface_code"],
+                            -1,
+                        ),
                     )
                     if has_engineering else ()
                 ),
@@ -792,6 +804,12 @@ def simulate(args):
     surface_reflectances, surface_transmittances, surface_fspecs = (
         surface_parameters
     )
+    acrylic_material = Path(config["materials"]["acrylic"]).name
+    acrylic_absorption_length_m = _lengths_at(
+        PROJECT_ROOT / "config" / "materials",
+        float(config["wavelength_nm"]),
+        (acrylic_material,),
+    )[0][2]
     LOG.info("physics parameters ready (%.2fs)", time.perf_counter() - t0)
     n_photons = int(args.n_photons or simulation["n_photons"])
     intensity = float(
@@ -896,6 +914,7 @@ def simulate(args):
             surface_reflectances,
             surface_transmittances,
             surface_fspecs,
+            acrylic_absorption_length_m,
             reflection_model_request,
             reflection_model,
         )
@@ -987,7 +1006,7 @@ def simulate(args):
             else:
                 log_w, times, indices, total_charge = result[:4]
             surface_counts = (
-                np.asarray(result[-1], dtype=np.int64)
+                np.asarray(result[-1], dtype=np.float64)
                 if has_engineering else None
             )
             log_w, times, indices = (
@@ -1040,15 +1059,21 @@ def simulate(args):
             if surface_counts is not None:
                 names = (
                     "hits",
-                    "absorbed",
+                    "surface_absorbed",
                     "reflected",
                     "specular",
                     "diffuse",
                     "transmitted",
+                    "entered",
+                    "exited",
+                    "bulk_absorbed",
+                    "acrylic_path_m",
                 )
                 component_counts = {
                     "support": surface_counts[0],
                     "chimney": surface_counts[1] + surface_counts[2],
+                    "chimney_acrylic": surface_counts[1],
+                    "chimney_steel": surface_counts[2],
                     "acrylic_bowl": surface_counts[3],
                     "diffuser_hardware": (
                         surface_counts[4]
@@ -1062,10 +1087,17 @@ def simulate(args):
                     "diffuser_fiber": surface_counts[6],
                 })
                 for component, counts in component_counts.items():
-                    stats.update({
-                        f"{component}_{name}": int(value)
-                        for name, value in zip(names, counts)
-                    })
+                    for name, value in zip(names, counts):
+                        key = f"{component}_{name}"
+                        stats[key] = (
+                            float(value)
+                            if name == "acrylic_path_m"
+                            else int(value)
+                        )
+                    stats[f"{component}_absorbed"] = (
+                        stats[f"{component}_surface_absorbed"]
+                        + stats[f"{component}_bulk_absorbed"]
+                    )
                 stats["support_blocked"] = stats["support_hits"]
             event_stats.append(stats)
             LOG.info(
@@ -1170,6 +1202,12 @@ def simulate(args):
                     surface_transmittances.tolist()
                 ),
                 "engineering_surface_fspecs": surface_fspecs.tolist(),
+                "engineering_acrylic_transport": (
+                    "finite_volume_snell_fresnel"
+                ),
+                "engineering_acrylic_absorption_length_m": (
+                    acrylic_absorption_length_m
+                ),
                 "reflection_model_request": reflection_model_request,
                 "reflection_model": reflection_model,
                 "max_scattering_steps": n_steps,

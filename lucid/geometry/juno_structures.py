@@ -42,6 +42,8 @@ class SurfaceHit(NamedTuple):
     surface_codes: jnp.ndarray
     positions: jnp.ndarray
     transport_normals: jnp.ndarray
+    outward_normals: jnp.ndarray
+    inside_before: jnp.ndarray
 
 
 class ChimneyGeometry(NamedTuple):
@@ -206,12 +208,7 @@ def _refine_bowl_torus_roots(roots, coefficients):
 
 
 def intersect_chimney(origins, directions, chimney):
-    """Intersect rays with the two annular lower-chimney wall segments.
-
-    Origins already inside a wall segment are ignored.  This gives each
-    transparent effective wall a single surface interaction rather than an
-    artificial second interaction at the exit face.
-    """
+    """Intersect rays with the closed lower-chimney wall volumes."""
     origins = jnp.atleast_2d(origins)
     directions = _normalise(jnp.atleast_2d(directions))
     inner = jnp.asarray(chimney.inner_radii_m)[None, :]
@@ -251,7 +248,6 @@ def intersect_chimney(origins, directions, chimney):
             & (roots > 1e-6)
             & (z_hit >= z_min[:, :, None] - 1e-7)
             & (z_hit <= z_max[:, :, None] + 1e-7)
-            & (~inside[:, :, None])
         )
         distances = jnp.where(valid, roots, LARGE_DISTANCE)
         chosen = jnp.argmin(distances, axis=2)
@@ -287,7 +283,6 @@ def intersect_chimney(origins, directions, chimney):
             & (distance > 1e-6)
             & (cap_rho2 >= inner**2)
             & (cap_rho2 <= outer**2)
-            & (~inside)
         )
         cap_distances.append(
             jnp.where(valid, distance, LARGE_DISTANCE)
@@ -309,6 +304,7 @@ def intersect_chimney(origins, directions, chimney):
     positions = origins + nearest[:, None] * directions
     outward = per_normal[ray_rows, segment]
     codes = jnp.asarray(chimney.surface_codes)[segment]
+    inside_selected = inside[ray_rows, segment]
     return SurfaceHit(
         distance_m=nearest,
         valid=valid,
@@ -316,6 +312,8 @@ def intersect_chimney(origins, directions, chimney):
         surface_codes=jnp.where(valid, codes, -1),
         positions=positions,
         transport_normals=-outward,
+        outward_normals=outward,
+        inside_before=inside_selected & valid,
     )
 
 
@@ -424,7 +422,6 @@ def intersect_acrylic_bowls(origins, directions, layout,
         & (side_axial <= length[:, :, None] + 1e-7)
         & (jnp.abs(side_residual) <= BOWL_NEWTON_RESIDUAL_M)
         & jnp.isfinite(side_roots)
-        & (~inside[:, :, None])
     )
     side_distances = jnp.where(
         side_valid, side_roots, LARGE_DISTANCE
@@ -466,7 +463,6 @@ def intersect_acrylic_bowls(origins, directions, layout,
             (jnp.abs(d_axial) > 1e-12)
             & (distance > 1e-6)
             & (jnp.sum(point_perp**2, axis=2) <= radius**2)
-            & (~inside)
         )
         cap_distances.append(
             jnp.where(valid, distance, LARGE_DISTANCE)
@@ -492,6 +488,7 @@ def intersect_acrylic_bowls(origins, directions, layout,
     index = jnp.where(valid, candidates[ray_rows, selected], -1)
     positions = origins + nearest[:, None] * directions
     outward = per_normal[ray_rows, selected]
+    inside_selected = inside[ray_rows, selected]
     return SurfaceHit(
         distance_m=nearest,
         valid=valid,
@@ -499,4 +496,6 @@ def intersect_acrylic_bowls(origins, directions, layout,
         surface_codes=jnp.where(valid, ACRYLIC_BOWL, -1),
         positions=positions,
         transport_normals=-outward,
+        outward_normals=outward,
+        inside_before=inside_selected & valid,
     )
