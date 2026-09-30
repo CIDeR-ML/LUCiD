@@ -100,6 +100,7 @@ def _component_geometry_override(request):
 def _simulation_metadata(
     args,
     config,
+    ls_provenance,
     n_events,
     n_photons,
     n_steps,
@@ -206,6 +207,7 @@ def _simulation_metadata(
         "pe_time_units": "ns",
         "offset_units": "ns",
     }
+    values.update(ls_provenance)
     if diffuser_hardware is not None:
         values.update({
             "diffuser_ball_radius_m": str(
@@ -224,7 +226,67 @@ def _simulation_metadata(
                 2.0 * diffuser_hardware.fiber_half_length_m
             ),
         })
-    return {key.encode(): value.encode() for key, value in values.items()}
+    return {
+        key.encode(): str(value).encode() for key, value in values.items()
+    }
+
+
+def _absorption_length_at(absorption, wavelength_nm):
+    """Evaluate one material's absorption length in metres.
+
+    JUNO's laser-specific LS material is deliberately monochromatic.  Other
+    materials retain the historical wavelength-table parameterisation.
+    """
+    if absorption.get("model") == "monochromatic_reference":
+        reference = float(absorption["reference_wavelength_nm"])
+        if not np.isclose(wavelength_nm, reference, rtol=0.0, atol=1e-9):
+            raise ValueError(
+                "monochromatic absorption material is defined only at "
+                f"{reference:g} nm, not {wavelength_nm:g} nm"
+            )
+        return float(absorption["reference_absorption_length_m"])
+
+    table_wl = np.asarray(
+        absorption["pope_fry_wavelengths_nm"], dtype=float
+    )
+    table_alpha = np.asarray(
+        absorption["pope_fry_absorption_m_inv"], dtype=float
+    )
+    if wavelength_nm <= 464:
+        alpha_continuum = absorption["P0"] * absorption["P2"] * (
+            wavelength_nm / 500.0
+        ) ** absorption["P3"]
+    else:
+        alpha_continuum = float(
+            np.interp(wavelength_nm, table_wl, table_alpha)
+        )
+    alpha_abs = (
+        absorption["P0"] * absorption["P1"] / wavelength_nm**4
+        + alpha_continuum
+    )
+    return 1 / max(alpha_abs, 1e-30)
+
+
+def _ls_optical_provenance(physics_config, absorption_length_m):
+    """Validate and return the LS optical-model provenance metadata."""
+    declared = float(physics_config["absorption_length"])
+    if not np.isclose(
+        declared, absorption_length_m, rtol=0.0, atol=1e-9
+    ):
+        raise ValueError(
+            "LS absorption mismatch between physics config "
+            f"({declared} m) and transported material "
+            f"({absorption_length_m} m)"
+        )
+    return {
+        "ls_optical_model": physics_config["ls_optical_model"],
+        "ls_absorption_table": physics_config["ls_absorption_table"],
+        "ls_absorption_scale": physics_config["ls_absorption_scale"],
+        "ls_absorption_reference": physics_config[
+            "ls_absorption_reference"
+        ],
+        "ls_absorption_length_532_m": float(absorption_length_m),
+    }
 
 
 def _lengths_at(material_dir: Path, wavelength_nm: float,
@@ -250,26 +312,13 @@ def _lengths_at(material_dir: Path, wavelength_nm: float,
         alpha_mie = asymmetric["P6"] * (
             1 + asymmetric["P7"] / wl**4 * (wl - asymmetric["P8"]) ** 2
         )
-        absorption = data["absorption"]
-        table_wl = np.asarray(
-            absorption["pope_fry_wavelengths_nm"], dtype=float
-        )
-        table_alpha = np.asarray(
-            absorption["pope_fry_absorption_m_inv"], dtype=float
-        )
-        if wl <= 464:
-            alpha_continuum = absorption["P0"] * absorption["P2"] * (
-                wl / 500.0
-            ) ** absorption["P3"]
-        else:
-            alpha_continuum = float(np.interp(wl, table_wl, table_alpha))
-        alpha_abs = (
-            absorption["P0"] * absorption["P1"] / wl**4 + alpha_continuum
+        absorption_length = _absorption_length_at(
+            data["absorption"], wl
         )
         values[name] = (
             1 / alpha_rayleigh,
             1 / max(alpha_mie, 1e-30),
-            1 / max(alpha_abs, 1e-30),
+            absorption_length,
             float(data["refractive_index"]),
         )
     return tuple(values[str(index)] for index in range(len(filenames)))
@@ -709,6 +758,21 @@ def simulate(args):
     )
     with physics_path.open() as stream:
         physics_config = json.load(stream)
+    inner_material = Path(config["materials"]["inner"]).name
+    ls_absorption_length_m = _lengths_at(
+        PROJECT_ROOT / "config" / "materials",
+        float(config["wavelength_nm"]),
+        (inner_material,),
+    )[0][2]
+    ls_provenance = _ls_optical_provenance(
+        physics_config, ls_absorption_length_m
+    )
+    LOG.info(
+        "LS absorption baseline: model=%s, table=%s, L_abs=%.6f m",
+        ls_provenance["ls_optical_model"],
+        ls_provenance["ls_absorption_table"],
+        ls_absorption_length_m,
+    )
     support_reflectance = float(
         physics_config.get("support_reflection_rate", 0.535)
     )
@@ -808,6 +872,7 @@ def simulate(args):
         _simulation_metadata(
             args,
             config,
+            ls_provenance,
             n_events,
             n_photons,
             n_steps,
@@ -1021,6 +1086,7 @@ def simulate(args):
                 "source_model": source_model_name,
                 "source_position_m": source_position.tolist(),
                 "source_intensity": intensity,
+                **ls_provenance,
                 "diffuser_radius_m": config["source"].get(
                     "radius_m", 0.010
                 ),

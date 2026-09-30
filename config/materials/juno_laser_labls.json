@@ -1,6 +1,7 @@
 {
   "material": "labls",
-  "_comment_composition": "JUNO v3.1 (J26.4.0 \u5df2\u9a8c\u8bc1): LAB \u57fa\u6db2\u95ea\u3002\u6563\u5c04/\u5438\u6536\u53c2\u6570\u6309 junosw OpticalProperty.icc (GdLSRayLength 42m@430nm/100m@550nm \u62df\u5408 + GdLSABSLength_new \u5149\u8c31\u8868) \u751f\u6210\uff0c\u975e\u65e7\u4ed3\u5e93 28.2m@430 \u5047\u8bbe\u3002",
+  "_comment_current_baseline": "JUNO 532 nm laser LABLS; absorption matches the J26.5.0 old-LS-model reference jobs used by the three-way comparison.",
+  "_legacy_comment_composition": "JUNO J26.4.0 \u5df2\u9a8c\u8bc1: LAB \u57fa\u6db2\u95ea\u3002\u6563\u5c04/\u5438\u6536\u53c2\u6570\u6309 junosw OpticalProperty.icc (GdLSRayLength 42m@430nm/100m@550nm \u62df\u5408 + GdLSABSLength_new \u5149\u8c31\u8868) \u751f\u6210\uff0c\u975e\u65e7\u4ed3\u5e93 28.2m@430 \u5047\u8bbe\u3002",
   "refractive_index": 1.487,
   "_comment_refractive_index": "junosw GdLSRINDEX @532nm = 1.487 (J26.4.0 \u6838\u9a8c); \u4e34\u754c\u89d2 arcsin(1.347/1.487)=64.94\u00b0",
   "speed_of_light_vacuum_m_per_ns": 0.299792,
@@ -20,8 +21,13 @@
     }
   },
   "absorption": {
-    "source": "junosw GdLSABSLength_new[601] (OpticalProperty.icc, \u5355\u4f4d m) \u5728 464-700nm \u7f51\u683c\u63d2\u503c -> alpha=1/L_abs\u3002532nm \u5904 L_abs=257.5m (v3.1 \u6838\u9a8c)\u3002",
-    "description": "alpha_abs = P0*P1/wl^4 + C; C = P0*P2*(wl/500)^P3 (wl<=464, \u5e73\u76f4\u63a5\u7eed 464nm \u8868\u503c) \u6216 pope_fry \u63d2\u503c (wl>464)\u3002",
+    "model": "monochromatic_reference",
+    "reference_wavelength_nm": 532.0,
+    "reference_absorption_length_m": 85.26179771369235,
+    "source": "JUNOSW J26.5.0 reference jobs: UseLSOpticalModel=old; Material.LS.ABSLENGTH_v1 scaled by 86.5/26.0; Geant4 linear interpolation in photon energy at 532 nm.",
+    "description": "Monochromatic 532 nm clean-baseline value. Legacy GdLSABSLength_new arrays below are provenance only and are not used by transport.",
+    "_legacy_source": "junosw GdLSABSLength_new[601] (OpticalProperty.icc, \u5355\u4f4d m) \u5728 464-700nm \u7f51\u683c\u63d2\u503c -> alpha=1/L_abs\u3002532nm \u5904 L_abs=257.5m \u6838\u9a8c)\u3002",
+    "_legacy_description": "alpha_abs = P0*P1/wl^4 + C; C = P0*P2*(wl/500)^P3 (wl<=464, \u5e73\u76f4\u63a5\u7eed 464nm \u8868\u503c) \u6216 pope_fry \u63d2\u503c (wl>464)\u3002",
     "P0": 1.0,
     "P1": 0.0,
     "P2": 0.005577718054411246,

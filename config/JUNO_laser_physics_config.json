@@ -1,7 +1,11 @@
 {
   "medium_model": "materials/juno_laser_labls.json",
   "scatter_length": 87.0,
-  "absorption_length": 257.5,
+  "absorption_length": 85.26179771369235,
+  "ls_optical_model": "old",
+  "ls_absorption_table": "ABSLENGTH_v1",
+  "ls_absorption_scale": "86.5/26.0",
+  "ls_absorption_reference": "JUNOSW J26.5.0 532 nm reference-job runtime log and central dbdata",
   "wall_reflection_rate": 0.2,
   "sensor_reflection_rate": 0.2,
   "wall_R0": 0.05,
