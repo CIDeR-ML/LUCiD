@@ -34,6 +34,7 @@ class DetectorGeometry(NamedTuple):
                     sensor_shape: str = 'sphere',
                     sk_pmt_lookup=None,
                     sk_pmt_lookup_options=None,
+                    sensor_candidate_selection: str = 'all',
                     **grid_params) -> 'DetectorGeometry':
         """Build a DetectorGeometry from a config JSON file.
 
@@ -59,6 +60,9 @@ class DetectorGeometry(NamedTuple):
             Soft-overlap lookup interpolation: 'interp' (default) or 'cubic'.
         sensor_shape : {'sphere', 'sk20inch'}
             PMT interception geometry. Default preserves legacy spheres.
+        sensor_candidate_selection : {'all', 'wall'}
+            Candidate routing rule. ``'wall'`` selects one nominal wall PMT
+            before applying the curved SK 20-inch geometry.
         **grid_params
             Geometry-specific grid parameters forwarded to ``create_propagator()``.
             Cylinder: n_cap, n_angular, n_height.
@@ -119,6 +123,7 @@ class DetectorGeometry(NamedTuple):
                 sensor_shape=sensor_shape,
                 sk_pmt_lookup=sk_pmt_lookup,
                 sk_pmt_lookup_options=sk_pmt_lookup_options,
+                sensor_candidate_selection=sensor_candidate_selection,
                 **grid_params)
 
         return DetectorGeometry(

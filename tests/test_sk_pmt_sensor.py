@@ -112,6 +112,27 @@ def _one_pmt_detector(tmp_path):
     return Cylinder.from_pmt_file(path)
 
 
+def _two_overlapping_pmt_detector(tmp_path):
+    path = tmp_path / "two_overlapping_pmts.npz"
+    np.savez(
+        path,
+        positions_mm=np.array([
+            [1000.0, -150.0, 0.0],
+            [1000.0, 150.0, 0.0],
+        ]),
+        directions=np.array([
+            [-1.0, 0.0, 0.0],
+            [-1.0, 0.0, 0.0],
+        ]),
+        surfaces=np.array(["barrel", "barrel"]),
+        pmt_id=np.array([1, 2]),
+        radius=np.asarray(1.0),
+        height=np.asarray(2.0),
+        sensor_radius=np.asarray(0.254),
+    )
+    return Cylinder.from_pmt_file(path)
+
+
 def test_shared_propagator_reaches_curved_pmt_before_wall(tmp_path):
     detector = _one_pmt_detector(tmp_path)
     assert detector.surfaces.tolist() == ["barrel"]
@@ -133,6 +154,35 @@ def test_shared_propagator_reaches_curved_pmt_before_wall(tmp_path):
     # PMT local apex is 18.8 cm inward from its wall-mounted origin.
     npt.assert_allclose(result["positions"][0], [0.812, 0.0, 0.0], atol=2e-6)
     npt.assert_allclose(result["normals"][0], [1.0, 0.0, 0.0], atol=2e-6)
+
+
+def test_wall_routing_selects_one_pmt_before_curved_intersection(tmp_path):
+    origin = jnp.array([[0.0, -0.03, 0.0]])
+    direction = jnp.array([[1.0, 0.0, 0.0]])
+
+    outputs = {}
+    for mode in ("all", "wall"):
+        detector = _two_overlapping_pmt_detector(tmp_path)
+        propagator = create_propagator(
+            detector,
+            jnp.asarray(detector.all_points),
+            detector.S_radius,
+            temperature=None,
+            sensor_shape="sk20inch",
+            sensor_candidate_selection=mode,
+            max_candidates_per_ray=2,
+        )
+        outputs[mode] = propagator(origin, direction)
+
+    # Both curved bulbs intercept the ray in the legacy all-candidate mode.
+    assert float(jnp.sum(outputs["all"]["sensor_weights"])) == 2.0
+    # The nominal wall crossing is closer to PMT 0, so wall routing deposits
+    # only there even though the ray also intersects PMT 1's bulb.
+    wall = outputs["wall"]
+    assert float(jnp.sum(wall["sensor_weights"])) == 1.0
+    nonzero_slot = int(jnp.argmax(wall["sensor_weights"][:, 0]))
+    assert int(wall["sensor_indices"][nonzero_slot, 0]) == 0
+    assert int(jnp.sum(wall["inside_sensor"])) == 1
 
 
 def test_smooth_shared_propagator_supports_forward_and_reverse_autodiff(
@@ -173,6 +223,39 @@ def test_smooth_shared_propagator_supports_forward_and_reverse_autodiff(
         float(finite_difference), rel=2e-4, abs=2e-3)
 
 
+def test_wall_routing_has_hard_forward_and_smooth_backward(tmp_path, lookup):
+    detector = _two_overlapping_pmt_detector(tmp_path)
+    propagator = create_propagator(
+        detector,
+        jnp.asarray(detector.all_points),
+        detector.S_radius,
+        temperature=float(lookup.sigma) / detector.S_radius,
+        sensor_shape="sk20inch",
+        sk_pmt_lookup=lookup,
+        sensor_candidate_selection="wall",
+        max_candidates_per_ray=2,
+    )
+
+    def deposited_weight(offset):
+        result = propagator(
+            jnp.array([[0.0, offset, 0.0]]),
+            jnp.array([[1.0, 0.0, 0.0]]),
+        )
+        return jnp.sum(result["sensor_weights"])
+
+    offset = -0.03
+    value = deposited_weight(offset)
+    reverse = jax.grad(deposited_weight)(offset)
+    forward = jax.jvp(deposited_weight, (offset,), (1.0,))[1]
+
+    # The discrete wall assignment is exact in the forward pass, while the
+    # lookup coverage still supplies a useful derivative in both AD modes.
+    assert float(value) == 1.0
+    assert np.isfinite(float(reverse))
+    assert abs(float(reverse)) > 0.1
+    assert float(reverse) == pytest.approx(float(forward), rel=1e-5)
+
+
 def test_sk_shape_requires_measured_axes_and_surfaces():
     detector = Cylinder(1.0, 2.0, 20, 0.10)
     with pytest.raises(ValueError, match="pmt_directions"):
@@ -193,6 +276,30 @@ def test_unknown_sensor_shape_is_rejected(tmp_path):
             jnp.asarray(detector.all_points),
             detector.S_radius,
             sensor_shape="disc",
+        )
+
+
+def test_unknown_candidate_selection_is_rejected(tmp_path):
+    detector = _one_pmt_detector(tmp_path)
+    with pytest.raises(ValueError, match="sensor_candidate_selection"):
+        create_propagator(
+            detector,
+            jnp.asarray(detector.all_points),
+            detector.S_radius,
+            sensor_shape="sk20inch",
+            sensor_candidate_selection="nearest-ish",
+        )
+
+
+def test_wall_candidate_selection_requires_sk_shape(tmp_path):
+    detector = _one_pmt_detector(tmp_path)
+    with pytest.raises(ValueError, match="requires"):
+        create_propagator(
+            detector,
+            jnp.asarray(detector.all_points),
+            detector.S_radius,
+            sensor_shape="sphere",
+            sensor_candidate_selection="wall",
         )
 
 
