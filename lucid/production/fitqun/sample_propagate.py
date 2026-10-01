@@ -47,7 +47,8 @@ def propagate_and_reduce(
         geometry, shell_radii_cm, n_photons: int = 20000, K: int = 12,
         seed: int = 0, batch: int = 8, atten_out=None, scat3d_out=None,
         detector_type: str = "Cylinder", tts_sigma_ns: float = 1.0,
-        wavelength_sampling: str = "cherenkov") -> Path:
+        wavelength_sampling: str = "cherenkov",
+        shell_placement_cm=None) -> Path:
     """PhotonSim photons in, reduced shard out -- nothing in between.
 
     The per-photon arrays for one job are several GB. Writing them out only to
@@ -135,13 +136,35 @@ def propagate_and_reduce(
 
     carry_o = np.zeros((0, 3), dtype=np.float32)
     carry_d = np.zeros((0, 3), dtype=np.float32)
+    # Shell placement concentrates the vertices where one angular-response shell
+    # can see them, which is the only thing such a run is for: the scattering
+    # tables in the same shard are then meaningless, so keep those outputs apart
+    # from a volume-uniform production's.
+    axes_m = None
+    if shell_placement_cm is not None:
+        from .angular_driver import sensor_axes
+        axes_m = sensor_axes(
+            builder.pmt_pos_cm,
+            det_radius_cm=builder.det_radius_cm,
+            det_halfheight_cm=builder.det_halfheight_cm)
+
     for origins_m, directions, event_id in isotropic_sample.load_photons(
             photonsim_root):
-        # Each event gets its own vertex, as /gps/pos/type Volume does.
-        origins_m = isotropic_sample.translate_uniform(
-            origins_m, rng, det_radius_m=float(g["radius"]),
-            det_halfheight_m=float(g["height"]) / 2.0,
-            pmt_radius_m=float(g["sensor_radius"]), event_id=event_id)
+        if shell_placement_cm is not None:
+            origins_m = isotropic_sample.translate_shell(
+                origins_m, rng, pmt_pos_m=builder.pmt_pos_cm / 100.0,
+                pmt_axes=axes_m,
+                shell_r_cm=float(shell_placement_cm[0]),
+                shell_dr_cm=float(shell_placement_cm[1]),
+                det_radius_m=float(g["radius"]),
+                det_halfheight_m=float(g["height"]) / 2.0,
+                pmt_radius_m=float(g["sensor_radius"]), event_id=event_id)
+        else:
+            # Each event gets its own vertex, as /gps/pos/type Volume does.
+            origins_m = isotropic_sample.translate_uniform(
+                origins_m, rng, det_radius_m=float(g["radius"]),
+                det_halfheight_m=float(g["height"]) / 2.0,
+                pmt_radius_m=float(g["sensor_radius"]), event_id=event_id)
         carry_o = np.concatenate([carry_o, origins_m])
         carry_d = np.concatenate([carry_d, directions])
         used = 0

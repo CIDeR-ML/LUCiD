@@ -75,7 +75,8 @@ def _cmd_sample_run(args) -> int:
         physics_config=str(args.physics_config),
         shell_radii_cm=args.shells, n_photons=args.n_photons, K=args.K,
         seed=args.seed, atten_out=args.atten_out,
-        scat3d_out=args.scattable3d_out)
+        scat3d_out=args.scattable3d_out,
+        shell_placement_cm=args.shell_placement)
     return 0
 
 
@@ -200,6 +201,13 @@ def build_parser() -> argparse.ArgumentParser:
     sprop.add_argument("--scattable3d-out", type=Path, default=None,
                        help="also write fiTQun's 3D scattering table histograms "
                             "(hsct3d / hdir2d) to this .npz")
+    sprop.add_argument("--shell-placement", type=float, nargs=2,
+                       metavar=("R_CM", "DR_CM"), default=None,
+                       help="draw each event's vertex inside the [R-DR, R+DR) "
+                            "shell of one sensor instead of uniformly in the "
+                            "volume. ~100x the in-shell yield for the angular "
+                            "response; makes the scattering tables in the same "
+                            "shard meaningless, so keep those runs separate")
     sprop.set_defaults(func=_cmd_sample_run)
 
     sacc = sa_actions.add_parser("accumulate", help="reduce one propagated shard")
