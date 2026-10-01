@@ -1,0 +1,12 @@
+# The compact simulation inputs can be hundreds of MB and may contain
+# collaboration-only SKDetSim products. Keep only scripts, reports, and small
+# numerical summaries in Git.
+*.npz
+*.npy
+*.root
+*.hbook
+*.zbs
+*.dat
+*.log
+runs/
+raw/

@@ -1,0 +1,80 @@
+{
+  "B3": {
+    "peak_bin_ns": [
+      1370.0,
+      1380.0
+    ],
+    "5k_8m": {
+      "sk_fraction_total_pe_per_bin": 8.426154906068074e-05,
+      "lucid_fraction_total_pe_per_bin": 6.164698941636882e-05,
+      "sk_minus_lucid": 2.2614559644311915e-05,
+      "relative_to_mean_percent": 30.998267655006405,
+      "section_tv": 2.5223788995290846e-05,
+      "sk_peak_bin_ns": [
+        1370.0,
+        1380.0
+      ],
+      "lucid_peak_bin_ns": [
+        1360.0,
+        1370.0
+      ]
+    },
+    "20k_32m": {
+      "sk_fraction_total_pe_per_bin": 8.185854797475062e-05,
+      "lucid_fraction_total_pe_per_bin": 7.447089328317804e-05,
+      "sk_minus_lucid": 7.387654691572577e-06,
+      "relative_to_mean_percent": 9.451392689856355,
+      "section_tv": 1.5176522786995316e-05,
+      "sk_peak_bin_ns": [
+        1370.0,
+        1380.0
+      ],
+      "lucid_peak_bin_ns": [
+        1360.0,
+        1370.0
+      ]
+    },
+    "residual_change_factor": 0.32667691999170734
+  },
+  "B4": {
+    "peak_bin_ns": [
+      1410.0,
+      1420.0
+    ],
+    "5k_8m": {
+      "sk_fraction_total_pe_per_bin": 0.00012214893622825303,
+      "lucid_fraction_total_pe_per_bin": 8.871104643267662e-05,
+      "sk_minus_lucid": 3.343788979557641e-05,
+      "relative_to_mean_percent": 31.715728488269608,
+      "section_tv": 4.104045047314858e-05,
+      "sk_peak_bin_ns": [
+        1410.0,
+        1420.0
+      ],
+      "lucid_peak_bin_ns": [
+        1420.0,
+        1430.0
+      ]
+    },
+    "20k_32m": {
+      "sk_fraction_total_pe_per_bin": 0.00011176985828929872,
+      "lucid_fraction_total_pe_per_bin": 0.00010037601521378347,
+      "sk_minus_lucid": 1.1393843075515247e-05,
+      "relative_to_mean_percent": 10.741517510921287,
+      "section_tv": 1.883564975710851e-05,
+      "sk_peak_bin_ns": [
+        1410.0,
+        1420.0
+      ],
+      "lucid_peak_bin_ns": [
+        1410.0,
+        1420.0
+      ]
+    },
+    "residual_change_factor": 0.3407464748873767
+  },
+  "detector_tof_tv": {
+    "5k_8m": 0.001158693116330162,
+    "20k_32m": 0.0012182110193310158
+  }
+}
