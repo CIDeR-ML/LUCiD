@@ -25,7 +25,7 @@ W=$E/work/$TAG
 mkdir -p "$W"
 
 export PYTHONPATH=$L
-export FITQUN_ROOT=$F/fiTQun
+export FITQUN_ROOT=${FITQUN_ROOT_OVERRIDE:-$F/fiTQun}
 export LD_LIBRARY_PATH=$F/wcsim_build/lib:$LD_LIBRARY_PATH
 
 need() { [ -s "$1" ] || { echo "MISSING $1 -- stopping"; exit 1; }; }
@@ -47,7 +47,7 @@ need "$W/truth.txt"
 # The geometry MUST be exported in the sensor file's sensor_idx order; the
 # sk_geometry.npz order is a different permutation and mapping hits through it
 # attributes every hit to an unrelated PMT.
-python tools/sadqun/export_geometry.py config/sk_geometry.npz \
+python tools/fitqun/export_geometry.py config/sk_geometry.npz \
     --sensor "$SENSOR" -o "$W/geom.txt"
 need "$W/geom.txt"
 

@@ -6,7 +6,7 @@
 // rotation branches it falls back to the identity without. This writes those
 // and nothing else -- it is a format adapter, not a WCSim emulation.
 //
-// The geometry comes from tools/sadqun/export_geometry.py's text form, which
+// The geometry comes from tools/fitqun/export_geometry.py's text form, which
 // already carries everything fiTQun reads off a WCSimRootGeom. Everything here
 // is in cm, as WCSim stores it.
 //

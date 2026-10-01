@@ -34,7 +34,7 @@ E=/eos/project-n/neutrino-generators/cjesus/fitqun
 W=$E/work/abl_$NAME
 rm -rf "$W"; mkdir -p "$W"
 
-export PYTHONPATH=$L FITQUN_ROOT=$F/fiTQun
+export PYTHONPATH=$L FITQUN_ROOT=${FITQUN_ROOT_OVERRIDE:-$F/fiTQun}
 export LD_LIBRARY_PATH=$F/wcsim_build/lib:${LD_LIBRARY_PATH:-}
 need() { [ -s "$1" ] || { echo "MISSING $1 -- stopping"; exit 1; }; }
 
@@ -51,7 +51,7 @@ truth.write_text(t, "$W/truth.txt")
 print(f"truth: {len(t)} events")
 PY
 need "$W/truth.txt"
-python tools/sadqun/export_geometry.py config/sk_geometry.npz --sensor "$SENSOR" -o "$W/geom.txt"
+python tools/fitqun/export_geometry.py config/sk_geometry.npz --sensor "$SENSOR" -o "$W/geom.txt"
 need "$W/geom.txt"
 "$E"/bin/lucid_to_wcsim.new --geometry "$W/geom.txt" --sensor "$SENSOR" \
     --gates "$LABL" --truth "$W/truth.txt" -o "$W/events.root" -n "$NEV"
@@ -60,7 +60,8 @@ need "$W/events.root"
 # Apply the overrides to a copy of the LIVE tune, so the only differences from
 # the baseline are the ones named on the command line.
 PARS=$W/ablation.parameters.dat
-sed -e 's/^\( *< *fiTQun.TuningMode *= *\).*$/\1 4 >/' "$F/fitqun_SK_WAND.parameters.dat" > "$PARS"
+SRCPARS=${PARFILE:-$F/fitqun_SK_WAND.parameters.dat}
+sed -e 's/^\( *< *fiTQun.TuningMode *= *\).*$/\1 4 >/' "$SRCPARS" > "$PARS"
 grep -q "fiTQun.TuningMode" "$PARS" || echo "     < fiTQun.TuningMode = 4 >" >> "$PARS"
 for kv in "$@"; do
     k=${kv%%=*}; v=${kv#*=}

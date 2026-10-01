@@ -61,7 +61,7 @@ W=$E/work/$TAG
 mkdir -p "$W"
 
 export PYTHONPATH=$L
-export FITQUN_ROOT=$F/fiTQun
+export FITQUN_ROOT=${FITQUN_ROOT_OVERRIDE:-$F/fiTQun}
 export LD_LIBRARY_PATH=$F/wcsim_build/lib:${LD_LIBRARY_PATH:-}
 need() { [ -s "$1" ] || { echo "MISSING $1 -- stopping"; exit 1; }; }
 
@@ -80,7 +80,7 @@ print(f"truth: {len(t)} events (need {$TOT} to cover skip+n)")
 PY
 need "$W/truth.txt"
 
-python tools/sadqun/export_geometry.py config/sk_geometry.npz --sensor "$SENSOR" -o "$W/geom.txt"
+python tools/fitqun/export_geometry.py config/sk_geometry.npz --sensor "$SENSOR" -o "$W/geom.txt"
 need "$W/geom.txt"
 
 "$E"/bin/lucid_to_wcsim.new --geometry "$W/geom.txt" --sensor "$SENSOR" \
