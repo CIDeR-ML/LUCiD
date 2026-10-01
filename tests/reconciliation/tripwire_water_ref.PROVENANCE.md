@@ -5,6 +5,64 @@ is the reason. **Append to it on every re-capture; do not overwrite.**
 
 ---
 
+## 2026-10-01 — re-captured because the old values were reproducible by nothing we build
+
+| | |
+|---|---|
+| device | **CPU**, pinned by `tripwire_capture.py` |
+| host | AMD EPYC-Milan (lxplus) — see below, the host turned out not to matter |
+| jax / jaxlib | **0.4.38** / 0.4.38, numpy 2.4.3 |
+| image | `/eos/user/c/cjesus/DIFFSIM/containers/lucid.sif`, built from `container/Dockerfile` |
+| `scalar.q_l2` | 540.6970 → **539.9145** (-0.145%) |
+| `scalar.q_sum` | 15670.7793 → **15687.9219** |
+| `wavelength.q_l2` | 716.5498 → **716.1226** |
+| tolerances | **unchanged** |
+
+### Why, and what the drift is not
+
+CI had failed this test since the 2026-09-28 merge. The previous values are not stale physics and
+not a regression: **nothing the project can build reproduces them.**
+
+| measured on | `scalar.q_l2` |
+|---|---|
+| Intel Xeon E5-2630 v4 (Broadwell) | 539.9145 |
+| Intel Xeon Silver 4216 (Cascade Lake, AVX-512) | 539.9145 |
+| AMD EPYC-Milan | 539.9145 |
+| GitHub Actions runner, container built fresh from the Dockerfile | 539.9145 |
+| **stored reference** | **540.6970** |
+
+Four CPUs across two vendors and three microarchitectures, and two independently built containers,
+all agree to seven digits. The CPU vendor is not the lever the 2026-09-23 entry worried it might
+be. Both container builds resolved jax 0.4.38, so the toolchain is not the difference between them
+either -- which leaves the old values having come from an environment outside the container, and
+the entries above record the host but never the jax/jaxlib version or the image. That omission is
+why this took a bisect to understand, and it is why those three rows are now in the table.
+
+Checked and excluded along the way, so the next person does not repeat it:
+
+* **Not a code change.** `4e604cc` is the commit that *wrote* the previous reference, so the
+  comparison is internal to one commit: checking out `4e604cc` and running its own code gives
+  539.9145, against the 540.6970 its own `.npz` carries. `f3e4344^`, `f3e4344` and HEAD all give
+  539.9145 too.
+* **The physics change at `4e604cc` is real and was tracked correctly.** Its parent `14a9f5b`
+  reads 581.1609, so the first-hit deposit moved `q_l2` by about -7%, as the 2026-09-24 entry
+  describes. The residual 0.145% is the environment, not that change.
+* **Not a reason to widen a bound.** A `q_l2` tolerance of 5e-3 was tried and reverted. With
+  `fisher_diag` failing on 6 of 7 columns -- `qe` by 30x its bound -- passing by tolerance would
+  have meant raising all of them and ending the instrument's usefulness, which is what this file
+  forbids.
+
+### The fix that matters more than the numbers
+
+`container/Dockerfile` pinned `jax=0.4`, resolved fresh on every image build, while this reference
+pins float32 reductions to seven digits. Any rebuild could move the digest past the `1e-4` bound
+with nothing to attribute it to. Now pinned to `jax=0.4.38`, the version both reproducible
+environments carry. **A toolchain bump from here requires a re-capture under the new pin, recorded
+as a row in this table.** 0.4.38 is what agrees today, not a judgement that it is the right version
+to be on.
+
+---
+
 ## 2026-09-24 — re-captured for the first-hit deposit
 
 | | |

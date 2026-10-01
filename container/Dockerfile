@@ -40,7 +40,7 @@ RUN mamba install -y -n base -c conda-forge \
         geant4=11.3 \
         python=3.11 \
         cmake make \
-        jax=0.4 flax optax numpy scipy h5py uproot awkward matplotlib \
+        jax=0.4.38 flax optax numpy scipy h5py uproot awkward matplotlib \
         pandas seaborn plotly ipython ipywidgets scikit-learn pillow \
         pytest tqdm pyyaml \
  && mamba clean -afy
