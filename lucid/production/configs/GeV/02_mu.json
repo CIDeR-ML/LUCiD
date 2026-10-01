@@ -1,6 +1,6 @@
 {
-  "name": "single mu-",
-  "description": "Single muon with LUCiD processing",
+  "name": "single mu-/mu+",
+  "description": "One muon per event, charge drawn per event from {mu-, mu+} with equal probability. Kinetic energy uniform in [200, 2000] MeV, isotropic direction. The two charges are NOT equivalent here even though the Cherenkov light is: mu- captures on oxygen, mu+ does not, so a stopping mu+ always yields its decay electron while a stopping mu- sometimes loses it. A single-charge test set therefore misstates how often the delayed signal is present. Expressed through the bomb source with min_particles = max_particles = 1 -- a two-entry `particles` list would put BOTH charges in every event (generate_macro.py emits one /gun/addPrimary per entry), which is not the same sample.",
   "material": "water",
   "nominal_train": 0,
   "nominal_test": 50000,
@@ -9,17 +9,26 @@
   "selection": {
     "mode": "trigger"
   },
-  "energy_distribution": "uniform",
+  "primary_source": "bomb",
+  "bomb": {
+    "min_particles": 1,
+    "max_particles": 1,
+    "candidates": [
+      {
+        "type": "mu-",
+        "energy_min_MeV": 200,
+        "energy_max_MeV": 2000
+      },
+      {
+        "type": "mu+",
+        "energy_min_MeV": 200,
+        "energy_max_MeV": 2000
+      }
+    ]
+  },
   "store_individual_photons": true,
   "run_lucid": true,
   "disable_decays": false,
-  "particles": [
-    {
-      "type": "mu-",
-      "energy_min_MeV": 200,
-      "energy_max_MeV": 2000
-    }
-  ],
   "lucid_options": {
     "apply_smearing": true,
     "apply_translation": true

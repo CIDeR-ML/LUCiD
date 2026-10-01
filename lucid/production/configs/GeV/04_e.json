@@ -1,6 +1,6 @@
 {
-  "name": "single e-",
-  "description": "Single electron with LUCiD processing",
+  "name": "single e-/e+",
+  "description": "One electron per event, charge drawn per event from {e-, e+} with equal probability. Kinetic energy uniform in [1, 2000] MeV, isotropic direction. Charge is sampled rather than fixed because water Cherenkov light carries no charge information: e- and e+ of the same momentum are indistinguishable up to annihilation at rest, so a test set of one charge only measures half of what reconstruction is asked to do. Expressed through the bomb source with min_particles = max_particles = 1 -- a two-entry `particles` list would put BOTH charges in every event (generate_macro.py emits one /gun/addPrimary per entry), which is not the same sample.",
   "material": "water",
   "nominal_train": 0,
   "nominal_test": 50000,
@@ -9,17 +9,26 @@
   "selection": {
     "mode": "trigger"
   },
-  "energy_distribution": "uniform",
+  "primary_source": "bomb",
+  "bomb": {
+    "min_particles": 1,
+    "max_particles": 1,
+    "candidates": [
+      {
+        "type": "e-",
+        "energy_min_MeV": 1,
+        "energy_max_MeV": 2000
+      },
+      {
+        "type": "e+",
+        "energy_min_MeV": 1,
+        "energy_max_MeV": 2000
+      }
+    ]
+  },
   "store_individual_photons": true,
   "run_lucid": true,
   "disable_decays": false,
-  "particles": [
-    {
-      "type": "e-",
-      "energy_min_MeV": 1,
-      "energy_max_MeV": 2000
-    }
-  ],
   "lucid_options": {
     "apply_smearing": true,
     "apply_translation": true

@@ -1,6 +1,6 @@
 {
   "name": "particle bomb (single vertex)",
-  "description": "Single 'particle bomb' interaction per event (no pile-up). Draws a per-event multiplicity N=Uniform(1,5), then samples N particles (with replacement) from the candidate pool {e-, mu-, pi+, pi-, pi0, gamma}. Kinetic energies are uniform in [1, 2000] MeV for e-, [200, 2000] MeV for mu-/pi+/pi-/pi0, and [1, 2130] MeV for gamma - the upper end is the endpoint for a gamma from a pi0 decay at the dataset's maximum pi0 energy ((E+p)/2 = 2132.8 MeV at KE = 2000 MeV), rounded down. Isotropic direction. This is the training set; the single-particle configs are test-only.",
+  "description": "Single 'particle bomb' interaction per event (no pile-up). Draws a per-event multiplicity N=Uniform(1,5), then samples N particles (with replacement) from the candidate pool {e-, e+, mu-, mu+, pi+, pi-, pi0, gamma}. Both lepton charges are in the pool: a reconstruction that never sees e+ or mu+ in training has no way to learn that it cannot tell them from e- and mu- by their light, and mu+ in particular has no mu- capture channel, so its decay electron is always there. Kinetic energies are uniform in [1, 2000] MeV for e-/e+, [200, 2000] MeV for mu-/mu+/pi+/pi-/pi0, and [1, 2130] MeV for gamma - the upper end is the endpoint for a gamma from a pi0 decay at the dataset's maximum pi0 energy ((E+p)/2 = 2132.8 MeV at KE = 2000 MeV), rounded down. Isotropic direction. This is the training set; the single-particle configs are test-only.",
   "material": "water",
   "nominal_train": 1000000,
   "nominal_test": 50000,
@@ -20,7 +20,17 @@
         "energy_max_MeV": 2000
       },
       {
+        "type": "e+",
+        "energy_min_MeV": 1,
+        "energy_max_MeV": 2000
+      },
+      {
         "type": "mu-",
+        "energy_min_MeV": 200,
+        "energy_max_MeV": 2000
+      },
+      {
+        "type": "mu+",
         "energy_min_MeV": 200,
         "energy_max_MeV": 2000
       },

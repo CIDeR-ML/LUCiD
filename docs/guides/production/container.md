@@ -99,17 +99,30 @@ Two arguments are not optional in practice:
 
 | config | contents | energies (kinetic) | split |
 |---|---|---|---|
-| `GeV/01_pbomb.json` | 1–5 particles from {e-, mu-, pi+, pi-, pi0, gamma} at one vertex | 1–2000 e-, 200–2000 mu/pi, 1–2130 gamma | train + test |
-| `GeV/02_mu.json` | single mu- | 200–2000 | test |
-| `GeV/03_pi_plus.json` | single pi+ | 200–2000 | test |
-| `GeV/04_e.json` | single e- | 1–2000 | test |
-| `GeV/05_pi_minus.json` | single pi- | 200–2000 | test |
+| `GeV/01_pbomb.json` | 1–5 particles from {e-, e+, mu-, mu+, pi+, pi-, pi0, gamma} at one vertex | 1–2000 e, 200–2000 mu/pi, 1–2130 gamma | train + test |
+| `GeV/02_mu.json` | single mu, charge sampled per event from {mu-, mu+} | 200–2000 | test |
+| `GeV/03_pi.json` | single charged pi, charge sampled per event from {pi+, pi-} | 200–2000 | test |
+| `GeV/04_e.json` | single e, charge sampled per event from {e-, e+} | 1–2000 | test |
 | `GeV/06_pi0.json` | single pi0 | 200–2000 | test |
 | `GeV/07_gamma.json` | single gamma | 1–2130 | test |
 
 01 is the training set — it mixes species and multiplicities the way a real
 interaction does. 02–07 are one-species evaluation sets, one per member of the
 01 pool.
+
+Both lepton and pion charges are in the pool, and the single-species sets sample
+the charge per event rather than fixing it. Cherenkov light carries no charge
+information, so a set of one charge only measures half of what reconstruction is
+asked to do — and the charges are not interchangeable at the end of the range:
+mu- captures on oxygen while mu+ always yields its decay electron, and pi- is
+captured by a nucleus while pi+ decays to mu+ nu. The charge-sampled sets are
+what state how often each signature appears.
+
+Sampling is expressed through the bomb source with `min_particles =
+max_particles = 1`, not through a two-entry `particles` list: `generate_macro.py`
+emits one `/gun/addPrimary` per list entry, so a list of {e-, e+} would put
+*both* charges in every event. `03_pi.json` replaces the former
+`03_pi_plus.json` / `05_pi_minus.json` pair.
 
 Blocks other than `GeV` exist (`Solar`, `SN`, `Test`); those declare their own
 detector and are not part of WAND.
