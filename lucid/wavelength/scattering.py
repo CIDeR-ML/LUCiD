@@ -1,10 +1,8 @@
 """Wavelength-dependent scattering phase functions.
 
-Rayleigh (symmetric) and Henyey-Greenstein / Mie (asymmetric) scattering
-direction samplers. These are ported from the ``wavelength_dependency``
-branch and available for external use. They are NOT currently called in the
-main simulation propagation loop (which uses the Rayleigh sampler from
-``lucid.simulation.optics``).
+Rayleigh and selectable asymmetric/Mie direction samplers used by the surface
+and volume propagation loops.  The generic model is Henyey-Greenstein; the
+``sk4`` model reproduces SKDetSim's SK-II-and-later ``SGMIES`` table.
 """
 import jax
 import jax.numpy as jnp
@@ -97,8 +95,52 @@ def rayleigh_logpdf(mu):
     return jnp.log(3.0 / 8.0) + jnp.log(1.0 + mu**2)
 
 
-def compute_mie_scatter_direction(incident_dir, rng_key, g=0.95):
-    """Mie (Henyey-Greenstein) scattering direction.
+def sk_mie_sample_cos_theta(u, g=None):
+    """Sample the SK-II-and-later ``SGMIES`` phase function.
+
+    SKDetSim linearly interpolates the relative intensity from zero at
+    ``cos(theta)=0`` to one at ``cos(theta)=1`` and rejects the backward
+    hemisphere.  The normalized density is therefore ``p(mu)=2*mu`` on
+    ``0 <= mu <= 1``, with inverse CDF ``mu=sqrt(u)``. ``g`` is accepted only
+    to share the Henyey-Greenstein sampler interface; this SK phase function
+    has no asymmetry parameter.
+    """
+    del g
+    u = jnp.asarray(u)
+    # Avoid the infinite derivative of sqrt(u) at the finite-precision PRNG
+    # endpoint u=0, and the zero-angle endpoint passed to the direction frame.
+    # The clamp changes the inverse CDF by at most sqrt(eps) in cosine and has
+    # negligible probability mass while keeping both JVP and VJP finite.
+    eps = jnp.finfo(u.dtype).eps
+    return jnp.sqrt(jnp.clip(u, eps, 1.0 - eps))
+
+
+def sk_mie_logpdf(mu, g=None):
+    """Log-density of the SK-II-and-later ``SGMIES`` phase function."""
+    del g
+    mu = jnp.asarray(mu)
+    safe_mu = jnp.maximum(mu, jnp.finfo(mu.dtype).tiny)
+    return jnp.where(
+        (mu >= 0.0) & (mu <= 1.0),
+        jnp.log(2.0) + jnp.log(safe_mu),
+        -jnp.inf,
+    )
+
+
+def get_mie_phase_model(model):
+    """Return cosine sampler and log-density for a named Mie phase model."""
+    if model in (None, "hg", "henyey-greenstein"):
+        return hg_sample_cos_theta, hg_logpdf
+    if model in ("sk", "sk4", "sgmies"):
+        return sk_mie_sample_cos_theta, sk_mie_logpdf
+    raise ValueError(
+        f"Unknown Mie phase model {model!r}; choices are 'hg' and 'sk4'")
+
+
+def compute_mie_scatter_direction(
+    incident_dir, rng_key, g=0.95, cosine_sampler=hg_sample_cos_theta,
+):
+    """Sample a Mie scattering direction using ``cosine_sampler``.
 
     Parameters
     ----------
@@ -106,8 +148,10 @@ def compute_mie_scatter_direction(incident_dir, rng_key, g=0.95):
         (3,) current photon direction (unit vector).
     rng_key : jax.random.PRNGKey
     g : float
-        HG asymmetry parameter. Default 0.95 (strongly forward-peaked,
-        consistent with SK water Mie scattering).
+        Phase-model parameter.  For the default Henyey-Greenstein sampler this
+        is the asymmetry parameter; the SK4 sampler deliberately ignores it.
+    cosine_sampler : callable
+        Inverse-CDF sampler with signature ``sampler(uniform, g)``.
 
     Returns
     -------
@@ -119,7 +163,7 @@ def compute_mie_scatter_direction(incident_dir, rng_key, g=0.95):
     u1 = jax.random.uniform(k1)
     u2 = jax.random.uniform(k2)
 
-    cos_theta = hg_sample_cos_theta(u1, g)
+    cos_theta = cosine_sampler(u1, g)
     sin_theta = jnp.sqrt(jnp.maximum(1.0 - cos_theta ** 2, 0.0))
     phi = 2 * jnp.pi * u2
     local_dir = normalize(jnp.array([

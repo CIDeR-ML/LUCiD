@@ -65,6 +65,8 @@ def photon_step_volume(
     rng_key,
     speed_of_light,
     g,
+    mie_cosine_sampler=hg_sample_cos_theta,
+    mie_logpdf_fn=hg_logpdf,
 ):
     """Single volume photon step with per-DOM survival (DiCE Rayleigh+Mie scatter).
 
@@ -103,7 +105,7 @@ def photon_step_volume(
     is_mie = jax.random.uniform(k[1]) < sg(p_mie)
     ua = jax.random.uniform(k[2])
     phi = jax.random.uniform(k[3]) * 2.0 * jnp.pi
-    cmie = hg_sample_cos_theta(ua, sg(g))
+    cmie = mie_cosine_sampler(ua, sg(g))
     cray = jnp.clip(solve_rayleigh_inverse_cdf(ua), -1.0, 1.0)
     cth = jnp.where(is_mie, cmie, cray)
     sth = jnp.sqrt(jnp.clip(1.0 - cth ** 2, 0.0, 1.0))
@@ -121,7 +123,7 @@ def photon_step_volume(
     # via the live mu_tot / p_mie / g coefficients (never a track gradient).
     lf = jnp.log(mu_tot) - mu_tot * d - jnp.log1p(-jnp.exp(-mu_tot * sg(segment_length)))
     la = jnp.where(is_mie,
-                   jnp.log(p_mie) + hg_logpdf(sg(cmie), g),
+                   jnp.log(p_mie) + mie_logpdf_fn(sg(cmie), g),
                    jnp.log1p(-p_mie) + rayleigh_logpdf(sg(cray)))
     logp_increment = lf + la
 

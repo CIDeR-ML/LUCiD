@@ -13,6 +13,7 @@ from lucid.wavelength.scattering import (
     compute_rayleigh_scatter_direction,
     hg_sample_cos_theta,
     compute_mie_scatter_direction,
+    sk_mie_sample_cos_theta,
 )
 
 
@@ -146,6 +147,41 @@ class TestScattering:
         inc = jnp.array([1.0, 0.0, 0.0])
         result = compute_mie_scatter_direction(inc, key, g=0.95)
         npt.assert_allclose(jnp.linalg.norm(result), 1.0, atol=1e-5)
+
+    def test_sk_mie_phase_matches_sgmies_inverse_cdf(self):
+        eps = jnp.finfo(jnp.float32).eps
+        u = jnp.linspace(eps, 1.0 - eps, 10001)
+        mu = jax.vmap(sk_mie_sample_cos_theta)(u)
+        npt.assert_allclose(mu, jnp.sqrt(u), atol=1e-7)
+        npt.assert_allclose(jnp.mean(mu), 2.0 / 3.0, atol=1e-4)
+        assert bool(jnp.all((mu >= 0.0) & (mu <= 1.0)))
+
+    def test_sk_mie_direction_preserves_sampled_angle_for_oblique_ray(self):
+        incident = jnp.array([0.31, -0.27, 0.91])
+        incident /= jnp.linalg.norm(incident)
+        key = jax.random.PRNGKey(20261001)
+        angle_key, _ = jax.random.split(key)
+        expected_mu = sk_mie_sample_cos_theta(jax.random.uniform(angle_key))
+        scattered = compute_mie_scatter_direction(
+            incident, key, cosine_sampler=sk_mie_sample_cos_theta)
+        npt.assert_allclose(jnp.dot(incident, scattered), expected_mu,
+                            atol=2e-6)
+
+    def test_sk_mie_phase_supports_forward_and_reverse_autodiff(self):
+        u = jnp.asarray(0.37)
+        expected = 0.5 / jnp.sqrt(u)
+        reverse = jax.grad(sk_mie_sample_cos_theta)(u)
+        _, forward = jax.jvp(sk_mie_sample_cos_theta, (u,), (jnp.ones_like(u),))
+        npt.assert_allclose(reverse, expected, rtol=1e-6)
+        npt.assert_allclose(forward, expected, rtol=1e-6)
+
+        for endpoint in (jnp.asarray(0.0), jnp.asarray(1.0)):
+            reverse = jax.grad(sk_mie_sample_cos_theta)(endpoint)
+            _, forward = jax.jvp(
+                sk_mie_sample_cos_theta,
+                (endpoint,), (jnp.ones_like(endpoint),))
+            assert bool(jnp.isfinite(reverse))
+            assert bool(jnp.isfinite(forward))
 
 
 class TestQECurve:
