@@ -187,6 +187,26 @@ class TestCosineHemispherePhysics:
 class TestScatterDirectionPhysics:
     """Verify Rayleigh scattering direction sampling."""
 
+    def test_oblique_incident_ray_preserves_sampled_scatter_angle(self):
+        """The local-to-world transform must rotate about the incident ray.
+
+        An axis-aligned incident ray cannot distinguish ``frame @ local`` from
+        ``frame.T @ local``.  This oblique case is a regression test for the
+        transpose bug that produced a detector-fixed scattering anisotropy.
+        """
+        incident = normalize(jnp.array([0.31, -0.27, 0.91]))
+        keys = jax.random.split(jax.random.PRNGKey(20261001), 256)
+        scattered = jax.vmap(
+            lambda key: compute_scatter_direction(incident, key))(keys)
+
+        def sampled_cosine(key):
+            angle_key, _ = jax.random.split(key)
+            return solve_rayleigh_inverse_cdf(jax.random.uniform(angle_key))
+
+        expected_cosines = jax.vmap(sampled_cosine)(keys)
+        actual_cosines = scattered @ incident
+        npt.assert_allclose(actual_cosines, expected_cosines, atol=2e-6)
+
     def test_mean_cos_theta_matches_rayleigh(self):
         """E[cosθ] for Rayleigh P(μ)∝(1+μ²) should be 0 (symmetric distribution)."""
         key = jax.random.PRNGKey(42)

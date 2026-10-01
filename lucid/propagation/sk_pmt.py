@@ -152,6 +152,37 @@ def _torus_candidates(origin, direction, min_distance):
     return candidates
 
 
+def _bounded_torus_candidates(origin, direction, min_distance):
+    """Solve the torus after shifting to the nearby GEANT PMT boundary.
+
+    The detector-scale ray origin can be tens of metres from a 20-inch PMT.
+    Building the torus quartic in that coordinate system is ill-conditioned.
+    SKDONUTS begins its millimetre march at the PMT boundary; shifting the
+    polynomial origin there leaves the physical ray unchanged and gives the
+    same numerical scale.
+    """
+    roots = _quadratic_roots(
+        float(np.dot(direction, direction)),
+        2.0 * float(np.dot(origin, direction)),
+        float(np.dot(origin, origin) - GEANT_PMT_RADIUS**2),
+    )
+    if not roots:
+        return []
+    lower = max(min(roots), min_distance)
+    upper = max(roots)
+    if upper < lower:
+        return []
+    shifted_origin = origin + lower * direction
+    local_candidates = _torus_candidates(
+        shifted_origin, direction, 0.0)
+    interval = upper - lower
+    return [
+        (lower + distance, surface, point)
+        for distance, surface, point in local_candidates
+        if distance <= interval + _CUT_TOL
+    ]
+
+
 def _local_surface_normal(point, surface):
     if surface == "sphere":
         normal = point - np.array([0.0, 0.0, SPHERE_CENTER_Z])
@@ -227,7 +258,7 @@ def intersect_sk20inch_pmt_hard(
 
     candidates = _sphere_candidates(
         local_origin, local_direction, min_distance)
-    candidates.extend(_torus_candidates(
+    candidates.extend(_bounded_torus_candidates(
         local_origin, local_direction, min_distance))
     if not candidates:
         return _miss()

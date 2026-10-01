@@ -137,6 +137,23 @@ def test_torus_newton_root_gradient_matches_implicit_derivative():
     assert float(derivative) == pytest.approx(expected, rel=3e-5, abs=3e-5)
 
 
+def test_long_baseline_torus_ray_matches_hard_oracle_and_has_gradient():
+    """Detector-scale origins retain the centimetre-scale torus root."""
+    origin = np.array([0.24, 0.0, 36.0])
+    hard = intersect_sk20inch_pmt_hard(
+        origin, np.asarray(DIRECTION), np.asarray(ORIGIN), np.asarray(AXIS))
+    differentiable = intersect_sk20inch_pmt_jax(
+        jnp.asarray(origin), DIRECTION, ORIGIN, AXIS)
+
+    assert hard.active and hard.surface == "torus"
+    assert bool(differentiable.active)
+    assert int(differentiable.surface) == SK_PMT_SURFACE_TORUS
+    assert float(differentiable.distance) == pytest.approx(
+        hard.distance, abs=2e-5)
+    derivative = jax.grad(_vertical_distance)(0.24)
+    assert np.isfinite(derivative)
+
+
 def test_position_and_normal_jacobians_are_finite_on_both_surfaces():
     def position_and_normal(x):
         hit = intersect_sk20inch_pmt_jax(

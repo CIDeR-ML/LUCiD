@@ -26,7 +26,9 @@ SK_PMT_SURFACE_MISS = 0
 SK_PMT_SURFACE_SPHERE = 1
 SK_PMT_SURFACE_TORUS = 2
 
-_NEWTON_ITERATIONS = 16
+_TORUS_BRACKET_SAMPLES = 16
+_TORUS_BISECTION_ITERATIONS = 8
+_ROOT_REFINEMENT_ITERATIONS = 8
 _DERIVATIVE_EPS = 1e-10
 _ROOT_RESIDUAL_TOL = 2e-7
 _CUT_TOL = 1e-9
@@ -55,14 +57,17 @@ def _safe_normalize(vector):
 
 
 def _ray_sphere_roots(relative_origin, direction, radius):
-    """Return ordered roots and the unclipped discriminant."""
+    """Return ordered roots using a stable closest-approach construction."""
     a = jnp.dot(direction, direction)
-    b = 2.0 * jnp.dot(relative_origin, direction)
-    c = jnp.dot(relative_origin, relative_origin) - radius**2
-    discriminant = b * b - 4.0 * a * c
-    root = jnp.sqrt(jnp.maximum(discriminant, 0.0))
-    return ((-b - root) / (2.0 * a),
-            (-b + root) / (2.0 * a),
+    center_distance = -jnp.dot(relative_origin, direction) / a
+    closest = relative_origin + center_distance * direction
+    perpendicular2 = jnp.dot(closest, closest)
+    radial2 = radius**2 - perpendicular2
+    half_chord = jnp.sqrt(jnp.maximum(radial2 / a, 0.0))
+    # Preserve the old discriminant sign/API for downstream hit tests.
+    discriminant = 4.0 * a * radial2
+    return (center_distance - half_chord,
+            center_distance + half_chord,
             discriminant)
 
 
@@ -83,11 +88,48 @@ def _torus_implicit(relative_position, axis):
     return value
 
 
-def _torus_root_newton(relative_origin, direction, axis, lower, upper):
-    """Find the first torus root after entry into its bounding sphere."""
-    initial = lower
+def _torus_root_sampled(relative_origin, direction, axis, upper):
+    """Bracket the first physical-branch root and refine it with Newton.
 
-    def iteration(_, distance):
+    Return the local hit position as well as the distance.  Reconstructing it
+    later from a detector-scale origin and distance loses the centimetre-scale
+    torus coordinates in float32.
+    """
+    sample_fraction = jnp.linspace(
+        1.0 / _TORUS_BRACKET_SAMPLES, 1.0,
+        _TORUS_BRACKET_SAMPLES, dtype=relative_origin.dtype)
+    sample_distance = upper * sample_fraction
+    sample_positions = (
+        relative_origin[None, :]
+        + sample_distance[:, None] * direction)
+    sample_values = jax.vmap(
+        lambda position: _torus_implicit(position, axis))(
+            sample_positions)
+    inside = sample_values <= 0.0
+    first_inside = jnp.argmax(inside)
+    found = jnp.any(inside)
+    bracket_inside = sample_distance[first_inside]
+    bracket_outside = jnp.where(
+        first_inside > 0,
+        sample_distance[jnp.maximum(first_inside - 1, 0)],
+        0.0,
+    )
+
+    def bisection_iteration(_, bounds):
+        outside, inside_distance = bounds
+        middle = 0.5 * (outside + inside_distance)
+        value = _torus_implicit(
+            relative_origin + middle * direction, axis)
+        middle_inside = value <= 0.0
+        return (jnp.where(middle_inside, outside, middle),
+                jnp.where(middle_inside, middle, inside_distance))
+
+    bracket_outside, bracket_inside = jax.lax.fori_loop(
+        0, _TORUS_BISECTION_ITERATIONS, bisection_iteration,
+        (bracket_outside, bracket_inside))
+    traced = 0.5 * (bracket_outside + bracket_inside)
+
+    def refine_iteration(_, distance):
         relative_position = relative_origin + distance * direction
         axial, transverse, radial = _axial_and_transverse(
             relative_position, axis)
@@ -108,10 +150,21 @@ def _torus_root_newton(relative_origin, direction, axis, lower, upper):
             jnp.where(derivative >= 0.0,
                       _DERIVATIVE_EPS, -_DERIVATIVE_EPS),
         )
-        proposal = distance - value / safe_derivative
-        return jnp.clip(proposal, lower, upper)
+        return jnp.clip(
+            distance - value / safe_derivative, 0.0, upper)
 
-    return jax.lax.fori_loop(0, _NEWTON_ITERATIONS, iteration, initial)
+    root = jax.lax.fori_loop(
+        0, _ROOT_REFINEMENT_ITERATIONS, refine_iteration, traced)
+    position = relative_origin + root * direction
+    axial, _, _ = _axial_and_transverse(position, axis)
+    residual = _torus_implicit(position, axis)
+    valid = (
+        found
+        & (jnp.abs(residual) <= _ROOT_RESIDUAL_TOL)
+        & (axial >= -_CUT_TOL)
+        & (axial < SPHERE_TO_TORUS_Z + _CUT_TOL)
+    )
+    return root, position, valid
 
 
 def intersect_sk20inch_pmt_jax(
@@ -171,14 +224,60 @@ def intersect_sk20inch_pmt_jax(
         (bound_discriminant >= 0.0)
         & (bound_far >= bound_lower)
     )
-    torus_distance_raw = _torus_root_newton(
-        relative_origin, direction, axis, bound_lower, bound_far)
-    torus_position_raw = relative_origin + torus_distance_raw * direction
+    # Rebase the torus solve at the nearby GEANT PMT boundary.  Direct laser
+    # rays begin tens of metres away, and evaluating metre-scale origins while
+    # solving a centimetre-scale torus loses enough float32 precision to miss
+    # grazing roots.  The global distance remains differentiable because the
+    # entry distance and local root are both carried through JAX.
+    torus_bound_origin = relative_origin + bound_lower * direction
+    torus_bound_interval = jnp.maximum(bound_far - bound_lower, 0.0)
+    # The full spindle torus has mathematical roots outside the physical SK
+    # branch. Restrict tracing to 0 <= axial < sphere/torus join so it cannot
+    # stop on one of those discarded roots.
+    bound_axial = jnp.dot(torus_bound_origin, axis)
+    axial_direction = jnp.dot(direction, axis)
+    safe_axial_direction = jnp.where(
+        jnp.abs(axial_direction) >= _DERIVATIVE_EPS,
+        axial_direction,
+        jnp.where(axial_direction >= 0.0,
+                  _DERIVATIVE_EPS, -_DERIVATIVE_EPS),
+    )
+    axial_zero_distance = -bound_axial / safe_axial_direction
+    axial_join_distance = (
+        SPHERE_TO_TORUS_Z - bound_axial) / safe_axial_direction
+    axial_slab_lower = jnp.maximum(
+        0.0, jnp.minimum(axial_zero_distance, axial_join_distance))
+    axial_slab_upper = jnp.minimum(
+        torus_bound_interval,
+        jnp.maximum(axial_zero_distance, axial_join_distance))
+    parallel_inside_slab = (
+        (bound_axial >= -_CUT_TOL)
+        & (bound_axial < SPHERE_TO_TORUS_Z + _CUT_TOL)
+    )
+    nonparallel = jnp.abs(axial_direction) >= _DERIVATIVE_EPS
+    axial_slab_lower = jnp.where(nonparallel, axial_slab_lower, 0.0)
+    axial_slab_upper = jnp.where(
+        nonparallel, axial_slab_upper,
+        jnp.where(parallel_inside_slab, torus_bound_interval, -1.0))
+    axial_slab_valid = axial_slab_upper >= axial_slab_lower
+    torus_origin = (
+        torus_bound_origin + axial_slab_lower * direction)
+    torus_interval = jnp.maximum(
+        axial_slab_upper - axial_slab_lower, 0.0)
+    torus_local_distance, torus_slab_position, torus_crosses = (
+        _torus_root_sampled(
+            torus_origin, direction, axis, torus_interval)
+    )
+    torus_distance_raw = (
+        bound_lower + axial_slab_lower + torus_local_distance)
+    torus_position_raw = torus_slab_position
     torus_axial_raw, _, _ = _axial_and_transverse(
         torus_position_raw, axis)
     torus_residual = _torus_implicit(torus_position_raw, axis)
     torus_valid = (
         bound_valid
+        & axial_slab_valid
+        & torus_crosses
         & (torus_distance_raw >= min_distance)
         & (torus_axial_raw >= -_CUT_TOL)
         & (torus_axial_raw < SPHERE_TO_TORUS_Z + _CUT_TOL)
@@ -190,7 +289,9 @@ def intersect_sk20inch_pmt_jax(
     distance = jnp.minimum(sphere_distance, torus_distance)
     intersects = jnp.isfinite(distance)
     safe_distance = jnp.where(intersects, distance, 0.0)
-    relative_position = relative_origin + safe_distance * direction
+    sphere_relative_position = relative_origin + safe_distance * direction
+    relative_position = jnp.where(
+        use_sphere, sphere_relative_position, torus_position_raw)
     axial, transverse, radial = _axial_and_transverse(
         relative_position, axis)
 
