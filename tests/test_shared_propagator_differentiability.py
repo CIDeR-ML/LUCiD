@@ -98,7 +98,7 @@ class TestFullPipelineGradients:
             keys = jax.random.split(key, 5)
             refl_params = ScalarReflection(wall_rate=jnp.asarray(0.5),
                                            sensor_rate=jnp.asarray(0.3))
-            _, _, _, detect_probs, refl_attens, _, _ = jax.vmap(
+            _, _, _, detect_probs, refl_attens, _, _, _ = jax.vmap(
                 photon_iteration_update_factors_safe,
                 in_axes=(0, 0, 0, 0, 0, None, None, None, None, None, 0, None, 0, None)
             )(origins, dirs, jnp.zeros(5), surface_distances, normals,

@@ -159,7 +159,10 @@ def test_it_jits():
 
     d, _ = one(g, st, jnp.asarray(H))
     ref, _ = tx.update(g, st, None, metric=jnp.asarray(H))
-    np.testing.assert_allclose(np.asarray(d), np.asarray(ref), rtol=1e-6, atol=0)
+    # 1e-5 for the same reason as the vmap case below: jit fuses and reassociates
+    # the solve's reductions, and 1e-6 is only ~8x float32 eps. Bounds jit
+    # consistency, not physics.
+    np.testing.assert_allclose(np.asarray(d), np.asarray(ref), rtol=1e-5, atol=0)
 
 
 def test_it_vmaps_over_a_batch_of_problems():
@@ -173,4 +176,10 @@ def test_it_vmaps_over_a_batch_of_problems():
     batched = jax.vmap(lambda g_, H_: tx.update(g_, st, None, metric=H_)[0])(gs, Hs)
     for i in range(B):
         one, _ = tx.update(gs[i], st, None, metric=Hs[i])
-        np.testing.assert_allclose(np.asarray(batched[i]), np.asarray(one), rtol=1e-6, atol=0)
+        # 1e-5, not 1e-6. Both sides are the same float32 arithmetic, but vmap
+        # reassociates the Cholesky solve's reductions, and float32 eps is 1.2e-7 --
+        # 1e-6 is ~8 eps, which a 6-parameter solve can exceed on its own. Seen at
+        # 1.004e-6, i.e. passing on luck rather than on a margin. This bounds
+        # batching consistency, not physics: a real batching bug moves these by
+        # orders of magnitude, not by eps.
+        np.testing.assert_allclose(np.asarray(batched[i]), np.asarray(one), rtol=1e-5, atol=0)

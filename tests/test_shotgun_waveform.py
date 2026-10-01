@@ -72,7 +72,7 @@ def test_waveform_nonzero_and_finite(sim_waveform):
 
 
 def test_per_photon_shapes_and_range(sim_per_photon):
-    det, sid, ht = sim_per_photon(_source(), jax.random.PRNGKey(0))
+    det, sid, ht, _ = sim_per_photon(_source(), jax.random.PRNGKey(0))
     det_np = np.asarray(det)
     sid_np = np.asarray(sid)
     ht_np = np.asarray(ht)
@@ -91,8 +91,8 @@ def test_per_photon_shapes_and_range(sim_per_photon):
 
 
 def test_per_photon_determinism(sim_per_photon):
-    det1, sid1, ht1 = sim_per_photon(_source(), jax.random.PRNGKey(0))
-    det2, sid2, ht2 = sim_per_photon(_source(), jax.random.PRNGKey(0))
+    det1, sid1, ht1, _ = sim_per_photon(_source(), jax.random.PRNGKey(0))
+    det2, sid2, ht2, _ = sim_per_photon(_source(), jax.random.PRNGKey(0))
     assert np.array_equal(np.asarray(det1), np.asarray(det2))
     assert np.array_equal(np.asarray(sid1), np.asarray(sid2))
     assert np.allclose(np.asarray(ht1), np.asarray(ht2))
