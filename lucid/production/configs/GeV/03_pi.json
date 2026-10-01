@@ -1,0 +1,37 @@
+{
+  "name": "single pi+/pi-",
+  "description": "One charged pion per event, charge drawn per event from {pi+, pi-} with equal probability. Kinetic energy uniform in [200, 2000] MeV, isotropic direction. Replaces the former 03_pi_plus / 05_pi_minus pair, matching 02_mu and 04_e: one config per species, charge sampled. Note the two charges are LESS alike than for mu: pi+ at rest decays to mu+ nu, while pi- is captured by a nucleus and its rest mass goes into nuclear fragments and secondary pions rather than a clean decay chain. The Cherenkov light along the track is identical, so reconstruction cannot pick the charge, but the end-of-range signature differs and the mixed set is what states how often each appears. Expressed through the bomb source with min_particles = max_particles = 1 -- a two-entry `particles` list would put BOTH charges in every event (generate_macro.py emits one /gun/addPrimary per entry), which is not the same sample.",
+  "material": "water",
+  "nominal_train": 0,
+  "nominal_test": 50000,
+  "seconds_per_event": 3.273,
+  "target_seconds_per_job": 3600,
+  "selection": {
+    "mode": "trigger"
+  },
+  "primary_source": "bomb",
+  "bomb": {
+    "min_particles": 1,
+    "max_particles": 1,
+    "candidates": [
+      {
+        "type": "pi+",
+        "energy_min_MeV": 200,
+        "energy_max_MeV": 2000
+      },
+      {
+        "type": "pi-",
+        "energy_min_MeV": 200,
+        "energy_max_MeV": 2000
+      }
+    ]
+  },
+  "store_individual_photons": true,
+  "run_lucid": true,
+  "disable_decays": false,
+  "lucid_options": {
+    "apply_smearing": true,
+    "apply_translation": true
+  },
+  "cleanup_root_files": true
+}
