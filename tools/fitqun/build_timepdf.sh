@@ -29,7 +29,11 @@ export LD_LIBRARY_PATH=$F/wcsim_build/lib:${LD_LIBRARY_PATH:-}
 mkdir -p "$W"; cd "$L"
 
 n=0
-for D in "$GRID"/${PDG}_p*/SK_WAND/tpdf/config_*; do
+# The grid root holds one directory per momentum point. Two layouts exist: the
+# original <pdg>_p<mom>/SK_WAND/tpdf/config_NN, and the dataprod fan-out's
+# NN_tpdf_<pdg>_p<mom>/SK_WAND/<config-dir>/config_NN. Match both -- the TAG
+# below carries the momentum either way.
+for D in "$GRID"/*${PDG}_p*/*/*/config_*; do
     # A point that was never produced (deliberately capped momenta, or a culled
     # submission) leaves an empty sensor/ behind, so testing the directory is not
     # enough -- test for shards. Missing outright is a skip; shards that exist
@@ -58,7 +62,7 @@ from lucid.production.fitqun import truth
 t = truth.read_tracks("$LABL", "$STEP")
 truth.write_text(t, "$O/truth_$IDX.txt")
 PY
-        python tools/sadqun/export_geometry.py config/sk_geometry.npz \
+        python tools/fitqun/export_geometry.py config/sk_geometry.npz \
             --sensor "$SENSOR" -o "$O/geom_$IDX.txt"
         "$E"/bin/lucid_to_wcsim.new --geometry "$O/geom_$IDX.txt" --sensor "$SENSOR" \
             --truth "$O/truth_$IDX.txt" -o "$O/events_$IDX.root"
@@ -83,9 +87,11 @@ echo "histogrammed $n momentum points"
 # from the FILENAME as the momentum axis coordinate (armom[nmom]=imom), so the
 # per-point histograms have to be staged under that name. Range points get
 # their band midpoint, which is the only single momentum they can carry.
-for O in "$W"/${PDG}_p*; do
+for O in "$W"/*${PDG}_p*; do
     [ -s "$O/events_hist.root" ] || continue
-    B=$(basename "$O"); MOM=${B#${PDG}_p}
+    # Take everything after the LAST _p, so both tag forms work:
+    # 13_p130_190 -> 130_190 (a band), 01_tpdf_13_p130 -> 130 (a point).
+    B=$(basename "$O"); MOM=${B##*_p}
     case "$MOM" in
         *_*) LO=${MOM%%_*}; HI=${MOM##*_}; IMOM=$(( (LO + HI) / 2 )) ;;
         *)   IMOM=$MOM ;;
