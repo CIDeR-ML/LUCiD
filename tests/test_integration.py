@@ -46,7 +46,7 @@ class TestOpticsToPhotonStep:
                                          sensor_rate=jnp.asarray(0.3)),
             absorption_length=100.0,
             hit_sensor=True, lam=jnp.asarray(0.0), rng_key=k2, speed_of_light=0.2253)
-        new_pos, new_dir2, new_time, dp, ra, cf, logp = result
+        new_pos, new_dir2, new_time, dp, ra, cf, logp, _ = result
         assert jnp.all(jnp.isfinite(new_pos))
         assert jnp.all(jnp.isfinite(new_dir2))
         assert jnp.isfinite(new_time)
@@ -105,7 +105,7 @@ class TestGradientFlowEndToEnd:
         key = jax.random.PRNGKey(42)
 
         def loss_fn(position):
-            _, _, _, detect_prob, _, _, _ = photon_iteration_update_factors_safe(
+            _, _, _, detect_prob, _, _, _, _ = photon_iteration_update_factors_safe(
                 position=position, direction=jnp.array([0., 0., 1.]),
                 time=0.0, surface_distance=2.0,
                 normal=jnp.array([0., 0., -1.]),
