@@ -307,11 +307,6 @@ def create_propagator(detector, sensor_positions, sensor_radius,
                 bounds_check, overlap_prob)
             return result + (result[4],)
 
-        (weights, sensor_times, sensor_indices,
-         sensor_normals_all, inside_sensor,
-         sensor_hit_positions, active_sensor) = jax.vmap(
-            compute_for_slot, in_axes=1, out_axes=0)(potential_sensors)
-
         if sensor_candidate_selection == 'wall':
             # SKDetSim first routes a boundary crossing to one wall PMT cell,
             # then asks whether that PMT's curved photocathode was intersected.
@@ -329,14 +324,39 @@ def create_propagator(detector, sensor_positions, sensor_radius,
             distance2 = jnp.where(valid_candidates, distance2, jnp.inf)
             wall_slot = jnp.argmin(distance2, axis=1)
             has_candidate = jnp.any(valid_candidates, axis=1)
-            wall_mask = (
-                jnp.arange(potential_sensors.shape[1])[:, None]
-                == wall_slot[None, :]
-            ) & has_candidate[None, :]
 
-            hard_weights = (active_sensor & wall_mask).astype(weights.dtype)
-            weights = weights + jax.lax.stop_gradient(hard_weights - weights)
-            inside_sensor = inside_sensor & wall_mask
+        if sensor_candidate_selection == 'wall' and coverage_lookup is None:
+            # Hard forward simulation needs only the PMT selected at the wall.
+            # Tracing every grid candidate and masking seven of eight results
+            # afterwards made the exact SK surface unnecessarily expensive.
+            # Keep a length-one sensor axis so the rest of propagation retains
+            # its usual (candidate, ray, ...) array convention.
+            wall_sensor = jnp.take_along_axis(
+                potential_sensors, wall_slot[:, None], axis=1)[:, 0]
+            wall_sensor = jnp.where(has_candidate, wall_sensor, -1)
+            selected = compute_for_slot(wall_sensor)
+            (weights, sensor_times, sensor_indices,
+             sensor_normals_all, inside_sensor,
+             sensor_hit_positions, active_sensor) = jax.tree.map(
+                lambda value: value[None, ...], selected)
+        else:
+            (weights, sensor_times, sensor_indices,
+             sensor_normals_all, inside_sensor,
+             sensor_hit_positions, active_sensor) = jax.vmap(
+                compute_for_slot, in_axes=1, out_axes=0)(potential_sensors)
+
+            if sensor_candidate_selection == 'wall':
+                # Smooth calibration retains all-candidate lookup gradients;
+                # only its exact forward value is replaced by wall assignment.
+                wall_mask = (
+                    jnp.arange(potential_sensors.shape[1])[:, None]
+                    == wall_slot[None, :]
+                ) & has_candidate[None, :]
+                hard_weights = (
+                    active_sensor & wall_mask).astype(weights.dtype)
+                weights = weights + jax.lax.stop_gradient(
+                    hard_weights - weights)
+                inside_sensor = inside_sensor & wall_mask
 
         # e. Compute geometry surface normals
         geometry_normals = detector.compute_normal(intersection_point, surface_info)

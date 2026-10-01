@@ -179,6 +179,9 @@ def test_wall_routing_selects_one_pmt_before_curved_intersection(tmp_path):
     # The nominal wall crossing is closer to PMT 0, so wall routing deposits
     # only there even though the ray also intersects PMT 1's bulb.
     wall = outputs["wall"]
+    # Hard wall routing traces only its selected PMT.  The leading sensor axis
+    # remains present so downstream propagation keeps the standard layout.
+    assert wall["sensor_weights"].shape == (1, 1)
     assert float(jnp.sum(wall["sensor_weights"])) == 1.0
     nonzero_slot = int(jnp.argmax(wall["sensor_weights"][:, 0]))
     assert int(wall["sensor_indices"][nonzero_slot, 0]) == 0
@@ -244,6 +247,13 @@ def test_wall_routing_has_hard_forward_and_smooth_backward(tmp_path, lookup):
         return jnp.sum(result["sensor_weights"])
 
     offset = -0.03
+    smooth_result = propagator(
+        jnp.array([[0.0, offset, 0.0]]),
+        jnp.array([[1.0, 0.0, 0.0]]),
+    )
+    # The differentiable lookup path intentionally retains both candidates;
+    # their smooth coverage supplies the straight-through derivative.
+    assert smooth_result["sensor_weights"].shape == (2, 1)
     value = deposited_weight(offset)
     reverse = jax.grad(deposited_weight)(offset)
     forward = jax.jvp(deposited_weight, (offset,), (1.0,))[1]
