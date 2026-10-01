@@ -108,7 +108,7 @@ class TestPhotonStepGradientFlow:
         Gradient should be positive."""
         key = jax.random.PRNGKey(42)
         def loss(scatter_length):
-            _, _, _, detect_prob, _, _, _ = photon_iteration_update_factors_safe(
+            _, _, _, detect_prob, _, _, _, _ = photon_iteration_update_factors_safe(
                 position=jnp.zeros(3), direction=jnp.array([0., 0., 1.]),
                 time=0.0, surface_distance=2.0,
                 normal=jnp.array([0., 0., -1.]),
@@ -128,7 +128,7 @@ class TestPhotonStepGradientFlow:
         Gradient should be negative."""
         key = jax.random.PRNGKey(42)
         def loss(sensor_refl):
-            _, _, _, detect_prob, _, _, _ = photon_iteration_update_factors_safe(
+            _, _, _, detect_prob, _, _, _, _ = photon_iteration_update_factors_safe(
                 position=jnp.zeros(3), direction=jnp.array([0., 0., 1.]),
                 time=0.0, surface_distance=2.0,
                 normal=jnp.array([0., 0., -1.]),
@@ -151,7 +151,7 @@ class TestPhotonStepGradientFlow:
         """
         key = jax.random.PRNGKey(42)
         def loss(abs_length):
-            _, _, _, detect_prob, _, _, _ = photon_iteration_update_factors_safe(
+            _, _, _, detect_prob, _, _, _, _ = photon_iteration_update_factors_safe(
                 position=jnp.zeros(3), direction=jnp.array([0., 0., 1.]),
                 time=0.0, surface_distance=2.0,
                 normal=jnp.array([0., 0., -1.]),
@@ -170,7 +170,7 @@ class TestPhotonStepGradientFlow:
         """The custom VJP should produce finite gradients even with degenerate inputs."""
         key = jax.random.PRNGKey(42)
         def loss(pos):
-            _, _, _, dp, _, _, _ = photon_iteration_update_factors_safe(
+            _, _, _, dp, _, _, _, _ = photon_iteration_update_factors_safe(
                 position=pos, direction=jnp.array([0., 0., 1.]),
                 time=0.0, surface_distance=1e-8,  # degenerate: nearly zero distance
                 normal=jnp.array([0., 0., -1.]),
