@@ -132,7 +132,13 @@ int main(int argc, char* argv[]){
   // time PDF is built with are the tune's own rather than SK's 6800 cm / 0.1.
   // fiTQun.cc:99 comments out the same overwrite for exactly this reason.
 
-  //  thefit->SetPhi0(-1,1.);//remove dependence on tuning const. // comented out by tyoshida
+  // QEEff=0.1 and Phi0=1 are a NORMALISATION CONVENTION, not SK physics: the
+  // charge axis is filled as log10(Phi0*QEEff*nphot), and fiTQun.cc:466 divides
+  // the real Phi0*QEEff*QEEffCorr back out when it evaluates the PDF. Building
+  // with the tune's own QEEff (0.02006) while evaluating against 0.1 shifts the
+  // axis by log10(0.02006/0.1) = -0.70, i.e. a factor 5 in charge. Both must be
+  // set, exactly as the reference does (makehist.cc:120-121).
+  fqshared->SetQEEff(0.1);
   fqshared->SetPhi0(-1.,1.);
 
 
@@ -153,6 +159,22 @@ int main(int argc, char* argv[]){
   std::cout << "p=" << mom << "MeV/c, smid: " << smid << std::endl;
   
   TH2D htimepdf("htimepdf","",400,-100,100,125,-2.,3.);
+  double qR_R, qR_mu, qR_q, qR_mom, qR_cos;
+  // Unbiased charge-vs-distance: sum observed and predicted charge over EVERY
+  // PMT in each R bin. Restricting to hit PMTs biases the ratio upward with R,
+  // because at large R only upward fluctuations fire while the prediction still
+  // counts the PMTs that did not.
+  TH1D hsum_q ("hsum_q" ,"sum observed q vs R" ,60,0.,6000.);
+  TH1D hsum_mu("hsum_mu","sum predicted mu vs R",60,0.,6000.);
+  // Same sums restricted to PMTs the track actually illuminates. Without a cut
+  // the ratio is swamped at large R by the dark-noise floor, which every PMT
+  // collects and the model correctly does not predict.
+  TH1D hsig_q ("hsig_q" ,"sum q, mu>0.5 pe" ,60,0.,6000.);
+  TH1D hsig_mu("hsig_mu","sum mu, mu>0.5 pe",60,0.,6000.);
+  std::vector<double> qobs;
+  TTree *qrtree = new TTree("qR","predicted vs observed charge against distance");
+  qrtree->Branch("R",&qR_R); qrtree->Branch("mu",&qR_mu);
+  qrtree->Branch("q",&qR_q); qrtree->Branch("mom",&qR_mom); qrtree->Branch("cos",&qR_cos);
 
   htimepdf.Sumw2();
 
@@ -230,6 +252,8 @@ int main(int argc, char* argv[]){
     double muarr[nPMT_max];
     int PCflg = thefit->Get1Rmudist(iPID,TrkParam,muarr);
 
+    qobs.assign(wc->NPMT(), 0.);
+
     double trigOffset = trigWCSim->GetHeader()->GetDate();
 
     //    std::cout << "PCflg" << PCflg << " fPCflcgut" << fPCflcgut << std::endl;
@@ -257,12 +281,40 @@ int main(int argc, char* argv[]){
 	
 	if (!aSubToffs) aSubToffs = 950 - trigOffset;
 
-	double tc = digiHit->GetT() - aSubToffs - RmidPMT*nwtr/c0 - smid/c0;
+	double tc = digiHit->GetT() - aSubToffs - TrkParam[3] - RmidPMT*nwtr/c0 - smid/c0;// TrkParam[3] = truth interaction time: the reference subtracts it (makehist.cc:199) for samples not generated at t=0; LUCiD randomises it per event.
 
 	// Fill histogram
 	//	std::cout << "tc" << tc <<" logmu" << log10(muarr[icab]) << std::endl;
 
 	htimepdf.Fill(tc,log10(muarr[icab]));
+
+	// charge-vs-distance calibration: everything needed to set WAttenL by
+	// matching prediction to observation, which is the only thing it controls.
+	qR_R    = RmidPMT;
+	qR_mu   = muarr[icab];
+	qR_q    = digiHit->GetQ();
+	qR_mom  = TrkParam[6];
+	qR_cos  = 0.;
+	qrtree->Fill();
+	hsum_q.Fill(RmidPMT, digiHit->GetQ());
+	qobs[icab] += digiHit->GetQ();
+      }
+
+      // Now that qobs holds this event's observed charge, compare it with the
+      // prediction over EVERY PMT. hsum_* is the unrestricted ratio; hsig_* is
+      // restricted to illuminated PMTs, because the dark floor dominates the
+      // unrestricted ratio at large R and the model rightly does not predict it.
+      for (int ip = 0; ip < wc->NPMT(); ip++) {
+        WCSimRootPMT pm = geomWCSim->GetPMT(ip);
+        TVector3 pv(pm.GetPosition(0), pm.GetPosition(1), pm.GetPosition(2));
+        TVector3 pg = fiTQun_shared::Get()->TfmDetToGlblCoord(pv, true, true);
+        double dR = sqrt(pow(pg.X()-midpos[0],2)+pow(pg.Y()-midpos[1],2)
+                        +pow(pg.Z()-midpos[2],2));
+        hsum_mu.Fill(dR, muarr[ip]);
+        if (muarr[ip] > 0.5) {
+          hsig_mu.Fill(dR, muarr[ip]);
+          hsig_q .Fill(dR, qobs[ip]);
+        }
       }
     }
     else {
@@ -274,6 +326,11 @@ int main(int argc, char* argv[]){
 
   TFile *ofile = new TFile(ntplFile + "_hist.root", "RECREATE");
   htimepdf.Write();
+  qrtree->Write();
+  hsum_q.Write();
+  hsum_mu.Write();
+  hsig_q.Write();
+  hsig_mu.Write();
   delete ofile;
 
 

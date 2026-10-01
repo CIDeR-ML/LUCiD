@@ -93,21 +93,63 @@ the symptom of an empty `cPDFpar`.
 It also copies the range index `nRang` *inclusive*, because the loader's loop is
 `for (iRang = 0; iRang <= nRang; ...)`.
 
-## `timepdf/makehistWCSim.cc` — 2 lines removed
+## `timepdf/makehistWCSim.cc` — 1 line removed, 2 kept deliberately
 
 Directly after `ReadSharedParams`, the upstream macro does
 
     fqshared->SetWAttL(6800.);
     fqshared->SetQEEff(0.1);
+    fqshared->SetPhi0(-1.,1.);
 
-which overwrites the two values `fiTQun_shared`'s constructor has just read from
-the parameter override file (`fiTQun_shared.cc:264,291`, via the
-`<key><DetName>` lookup). Left in, every time PDF is built at SK's attenuation
-length and charge scale whatever the tune says — so a tune for another detector
-or water model would be trained against the wrong optics and no log line would
-say so. `fiTQun.cc:99` comments out the identical overwrite for this reason.
+Only the first is wrong for us. It overwrites the attenuation length
+`fiTQun_shared`'s constructor has just read from the parameter override file
+(`fiTQun_shared.cc:264`, via the `<key><DetName>` lookup), so every time PDF
+would be built at SK's 6800 cm whatever the tune says, and no log line would
+say so. **`SetWAttL` is deleted. `SetQEEff(0.1)` and `SetPhi0(-1.,1.)` must
+stay.**
 
-Both lines are deleted so the values come from the tune. Nothing else reads them.
+The reason they stay is that they are not physics, they are the **normalisation
+convention of the charge axis**. The histogram is filled in
+`log10(Phi0*QEEff*nphot)`, and `fiTQun.cc:466` (`ftdir`, the direct-light time
+likelihood) divides the real normalisation back out and multiplies the same
+literal `0.1` back in when it looks the PDF up:
+
+    double logmu = logfunc(mu[iring][icab]*0.1
+                     /(Phi0_local[PID]*fqshared->GetQEEff()*QEEffCorr))*ln10recp;
+
+So building with the tune's own QEEff is the bug, not the fix: it shifts the
+axis by `log10(QEEff_tune/0.1)` against the axis fiTQun evaluates on — for our
+0.01556 that is -0.81 decades, a factor 6.4 in charge, silently.
+
+Two consequences worth stating. `fiTQun.cc:99`'s commented-out
+`SetQEEff(0.1086)` is a *different* quantity, the absolute charge scale of the
+forward model, which does correctly come from the parameter file; it is not the
+same override and does not argue for deleting this one. And because the fitted
+QEEff is divided out at evaluation time, **a time PDF stays valid across QEEff
+refits** — rebuilding it after a refit is unnecessary.
+
+### Time origin — two terms added to `tc`
+
+The corrected hit time the PDF is binned in must be measured from the photon's
+emission, so everything between the generator's clock and the PMT has to come
+off. Upstream subtracts the trigger offset and the times of flight; two terms
+are missing for a LUCiD sample:
+
+    if (!aSubToffs) aSubToffs = 950 - trigOffset;
+    double tc = digiHit->GetT() - aSubToffs - TrkParam[3]
+                - RmidPMT*nwtr/c0 - smid/c0;
+
+* `aSubToffs` comes from `wc->GetTOffset()`, which is 0 when the converter
+  writes a single gate per event. Falling back to `950 - trigOffset` puts the
+  origin at the same place the multi-gate path does — 950 ns is the offset
+  `lucid_to_wcsim` references every gate to.
+* `TrkParam[3]` is the true interaction time. The reference subtracts it
+  (`makehist.cc:199`) for samples not generated at t=0, and LUCiD randomises it
+  per event, so leaving it in smears the PDF by the full gate width.
+
+Without both, the time PDF is sharp but offset, and the resulting vertex
+resolution is roughly 6x worse (182 cm against 31 cm on a 1 GeV mu- sample)
+with nothing in the fit output indicating why.
 
 ## Building `makehistWCSim` against a standalone `libWCSimRoot`
 
@@ -171,6 +213,41 @@ The shipped file does not compile under ROOT 6.30.
 * `if (PID==13) nmom = 24;` hardcodes the momentum-point count for mu and pi,
   which over-runs a `hist_tpdf` built from fewer points -- which is what a
   partial grid produces. Clamped with `std::min(nmom, 24)`.
+
+### Bad per-slice Gaussian fits are now dropped
+
+Upstream has the cut written and commented out. It is enabled, and extended to
+clear the width histogram as well as the mean:
+
+    if (!(dtmp>tcmin && dtmp<tcmax) || chi2tmp > 20) {
+      hmeantmp->SetBinContent(ibin,0.); hmeantmp->SetBinError(ibin,0.);
+      hsigmtmp->SetBinContent(ibin,0.); hsigmtmp->SetBinError(ibin,0.);
+    }
+
+Each log10(mu) slice is fitted with a Gaussian; a slice with too few entries
+returns a nonsense mean and width with small errors, which then pulls the
+polynomial in mu. Clearing only the mean (as upstream would) leaves the bad
+width in place.
+
+### Momentum fit ignores the per-node errors by default
+
+The signature is
+
+    int fittpdf(int PID, bool flogfit=false, bool fNoErrorbars=true)
+
+and `build_timepdf.sh` / `tpdf_combine.sh` both call `fittpdf.cc($PDG,0,1)`, so
+the third argument is 1 and the momentum graphs are built with NULL errors even
+though `arparerr[][][]` already holds each node's Gaussian-fit error. Passing 0
+uses them.
+
+Measured: on a 14-node grid it changes nothing, because that fit is singular
+rather than merely ill-weighted (`TDecompChol::Decompose: matrix not positive
+definite`, `TLinearFitter::Eval: Matrix inversion failed`) -- 14 points against
+the 10 coefficients `ntpdfppar` hardcodes. The outputs are bit-identical with
+errors on and off, and `gtcsgpar_0` (the Gaussian width at 1 pe) comes out
+negative at 3 of the 14 nodes. Weighting is worth switching on, but it is not a
+substitute for enough momentum nodes; see `check_tpdfpar.C`, which now refuses
+both conditions.
 
 ## `fiTQun/runfiTQun.cc` — truth seeding for WCSim input
 

@@ -11,6 +11,7 @@
 #include <TGraphErrors.h>
 #include <TFile.h>
 #include <TMath.h>
+#include <cmath>
 
 using namespace std;
 
@@ -28,13 +29,23 @@ Double_t emg(Double_t *x, Double_t *par){
   double sigma = par[2];
   double lambda = par[3];
   
-  return k*lambda/2 * TMath::Exp(lambda/2*(2*mu+lambda*pow(sigma,2)-2*xx)) * TMath::Erfc( (mu + lambda*pow(sigma,2) - xx) / (sqrt(2)*sigma) );
+  // pow()/sqrt() are unresolved in the ROOT interpreter, which is how this macro
+  // is run (root -l -b -q fittpdf.cc(...)). They returned garbage and every fit
+  // parameter came back NaN, silently, with the macro still exiting 0.
+  const double s2 = sigma*sigma;
+  return k*lambda/2 * TMath::Exp(lambda/2*(2*mu+lambda*s2-2*xx)) * TMath::Erfc( (mu + lambda*s2 - xx) / (TMath::Sqrt2()*sigma) );
 }
 
 TString PolyFormula(int nord) {
+  // Explicit products rather than x^i: TFormula rewrites '^' as pow(), which this
+  // ROOT build cannot resolve in the linear-fitter path ("pow is unknown."). The
+  // fit then returns NaN for every coefficient -- silently, with the macro still
+  // exiting 0 and writing a full-size but useless tpdfpar file.
   TString strPoly="1++x";
   for (int i=2; i<=nord; i++) {
-    strPoly+=Form("++x^%d",i);
+    TString term="x";
+    for (int j=1; j<i; j++) term+="*x";
+    strPoly+="++"+term;
   }
   
   return strPoly;
@@ -221,9 +232,17 @@ int fittpdf(int PID, bool flogfit=false, bool fNoErrorbars=true){
       double dtmp=hmeantmp->GetBinContent(ibin);
       double chi2tmp=hchi2tmp->GetBinContent(ibin);
       //      if (!(dtmp>tcmin && dtmp<tcmax) || chi2tmp > 20) {
-      if (!(dtmp>tcmin && dtmp<tcmax)) {
+      // Reject a slice on the per-slice fit quality, not just on the mean
+      // lying inside the histogram: at very low predicted charge there is no
+      // prompt peak, and the Gaussian returns mean~30ns / sigma~25ns with a
+      // SMALL error, so the weighted polynomial trusts the junk over the real
+      // bins and rings. The chi2 cut is the reference's own (was commented out).
+      // The width histogram must be cleaned with the mean -- it was not.
+      if (!(dtmp>tcmin && dtmp<tcmax) || chi2tmp > 20) {
         hmeantmp->SetBinContent(ibin,0.);
         hmeantmp->SetBinError(ibin,0.);
+        hsigmtmp->SetBinContent(ibin,0.);
+        hsigmtmp->SetBinError(ibin,0.);
       }
     }
     hmnsg[0][k] = new TH1D(*hmeantmp);
