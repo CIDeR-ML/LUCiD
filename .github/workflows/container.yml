@@ -6,6 +6,7 @@ on:
     paths:
       - 'container/**'
       - 'lucid/**'
+      - 'tests/**'
       - 'pyproject.toml'
       - '.github/workflows/container.yml'
   release:
