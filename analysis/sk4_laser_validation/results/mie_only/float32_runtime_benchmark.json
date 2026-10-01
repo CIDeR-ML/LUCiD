@@ -1,0 +1,168 @@
+{
+  "pre_a": {
+    "all_seconds": [
+      4.2882296169991605,
+      2.3552649290068075,
+      2.540079254016746,
+      2.2873190329992212,
+      2.4303116599912755,
+      2.2397433340083808,
+      2.3455947549664415,
+      2.3739189059706405,
+      2.379646432993468
+    ],
+    "warm_median_seconds": 2.364591917488724,
+    "warm_mean_seconds": 2.3689847879941226
+  },
+  "pre_b": {
+    "all_seconds": [
+      4.292251202976331,
+      2.3991043340065517,
+      2.17942319100257,
+      2.238682080991566,
+      2.319060904032085,
+      2.3099177359836176,
+      2.2515443160082214,
+      2.3337735750246793,
+      2.2711871350184083
+    ],
+    "warm_median_seconds": 2.290552435501013,
+    "warm_mean_seconds": 2.2878366590084624
+  },
+  "post_a": {
+    "all_seconds": [
+      5.299849329981953,
+      3.391095416038297,
+      3.570141740026884,
+      3.8852180300164036,
+      3.195890065981075,
+      3.5395350289763883,
+      3.5734845740371384,
+      3.203421506972518,
+      3.225326572021004
+    ],
+    "warm_median_seconds": 3.4653152225073427,
+    "warm_mean_seconds": 3.4480141167587135
+  },
+  "post_b": {
+    "all_seconds": [
+      5.863262462022249,
+      3.8769084110390395,
+      3.2674317809869535,
+      3.194693896046374,
+      3.367411869985517,
+      3.868369268020615,
+      3.635038127016742,
+      3.709241852047853,
+      3.3276000900077634
+    ],
+    "warm_median_seconds": 3.5012249985011294,
+    "warm_mean_seconds": 3.530836911893857
+  },
+  "pre_combined": {
+    "n_warm_batches": 16,
+    "median_seconds_per_500k": 2.326417239528382,
+    "mean_seconds_per_500k": 2.3284107235012925,
+    "throughput_rays_per_second_from_median": 214922.75396882865
+  },
+  "post_combined": {
+    "n_warm_batches": 16,
+    "median_seconds_per_500k": 3.4653152225073427,
+    "mean_seconds_per_500k": 3.4894255143262853,
+    "throughput_rays_per_second_from_median": 144287.01803301548
+  },
+  "comparison": {
+    "post_over_pre_runtime": 1.4895501819827646,
+    "runtime_increase_percent": 48.955018198276456,
+    "throughput_change_percent": -32.86563876157005
+  },
+  "wall_selected_forward": {
+    "all_seconds": [
+      2.844091308012139,
+      0.7447615870041773,
+      0.7931419619708322,
+      0.7264442750019953,
+      0.7331158249871805,
+      0.7341312150238082,
+      0.7057717590359971,
+      0.741924474015832,
+      0.7294284499948844
+    ],
+    "warm_seconds": [
+      0.7447615870041773,
+      0.7931419619708322,
+      0.7264442750019953,
+      0.7331158249871805,
+      0.7341312150238082,
+      0.7057717590359971,
+      0.741924474015832,
+      0.7294284499948844
+    ],
+    "n_warm_batches": 8,
+    "median_seconds_per_500k": 0.7336235200054944,
+    "mean_seconds_per_500k": 0.7385899433793384,
+    "throughput_rays_per_second_from_median": 681548.4868809213,
+    "speedup_vs_stable": 4.723560692930605,
+    "runtime_reduction_vs_stable_percent": 78.82952998790459,
+    "speedup_vs_pre_fix": 3.1711322989085176,
+    "runtime_reduction_vs_pre_fix_percent": 68.46552254082262,
+    "note": "Same no-water benchmark; stable 16-sample/8-bisection/8-Newton solver retained. Hard wall routing intersects only the selected PMT."
+  },
+  "wall_selected_forward_mie": {
+    "all_seconds": [
+      2.721829295041971,
+      0.7724568539997563,
+      0.7663369650254026,
+      0.7471094579668716,
+      0.752317866019439,
+      0.736738890002016,
+      0.8034279830171727,
+      0.7505618609720841,
+      0.7212756489752792
+    ],
+    "warm_seconds": [
+      0.7724568539997563,
+      0.7663369650254026,
+      0.7471094579668716,
+      0.752317866019439,
+      0.736738890002016,
+      0.8034279830171727,
+      0.7505618609720841,
+      0.7212756489752792
+    ],
+    "n_warm_batches": 8,
+    "median_seconds_per_500k": 0.7514398634957615,
+    "mean_seconds_per_500k": 0.7562781907472527,
+    "throughput_rays_per_second_from_median": 665389.2404296438,
+    "note": "Representative Mie-only SK4 phase benchmark with the same stable PMT solver."
+  },
+  "same_run_selected_pmt_comparison": {
+    "all_candidate_all_seconds": [
+      5.704724228009582,
+      3.8205893320264295,
+      3.8211088549578562,
+      3.4783100170316175,
+      3.700464715017006,
+      3.1547574659925885,
+      3.1456304220482707,
+      3.391996102000121,
+      3.1736615099944174
+    ],
+    "all_candidate_warm_median_seconds_per_500k": 3.4351530595158692,
+    "selected_pmt_all_seconds": [
+      2.844091308012139,
+      0.7447615870041773,
+      0.7931419619708322,
+      0.7264442750019953,
+      0.7331158249871805,
+      0.7341312150238082,
+      0.7057717590359971,
+      0.741924474015832,
+      0.7294284499948844
+    ],
+    "selected_pmt_warm_median_seconds_per_500k": 0.7336235200054944,
+    "speedup": 4.682446739834816,
+    "runtime_reduction_percent": 78.64364389897412,
+    "note": "Exact same stable 16-sample/8-bisection/8-Newton solver and fixed seeds; only order of wall selection and intersection differs."
+  }
+}

@@ -1,0 +1,137 @@
+{
+  "sk_events": 20000,
+  "lucid_batches": 32,
+  "lucid_rays_per_batch": 1000000,
+  "weighting": "LUCiD bin contents are sums of deposition weights; SEM uses independent weighted batches and the normalized-ratio delta method",
+  "sk_prompt_ns": 147.0,
+  "lucid_prompt_ns": 147.0,
+  "sk_total_pe_per_pulse": 668.25555,
+  "sk_total_pe_sem": 0.17554664064295578,
+  "lucid_total_pe_per_pulse": 728.9510896140978,
+  "lucid_total_pe_sem": 0.17784735846202473,
+  "sections": {
+    "Top": {
+      "defined_bins": 47,
+      "rms_pull": 1.9085620412616697,
+      "max_absolute_pull": 6.325996263262179,
+      "bins_above_3sigma": 1,
+      "above_3sigma": [
+        {
+          "time_bin_ns": [
+            1180.0,
+            1190.0
+          ],
+          "pull": 6.325996263262179,
+          "sk_fraction": 0.00046613903917445954,
+          "lucid_fraction": 0.00041448661494627006,
+          "combined_sem": 8.165105080468929e-06
+        }
+      ]
+    },
+    "B1": {
+      "defined_bins": 44,
+      "rms_pull": 1.151725347103417,
+      "max_absolute_pull": 2.6265658970408476,
+      "bins_above_3sigma": 0,
+      "above_3sigma": []
+    },
+    "B2": {
+      "defined_bins": 38,
+      "rms_pull": 1.0277016220888076,
+      "max_absolute_pull": 2.5372275338655665,
+      "bins_above_3sigma": 0,
+      "above_3sigma": []
+    },
+    "B3": {
+      "defined_bins": 33,
+      "rms_pull": 0.9545505241431769,
+      "max_absolute_pull": 2.1793529900881956,
+      "bins_above_3sigma": 0,
+      "above_3sigma": []
+    },
+    "B4": {
+      "defined_bins": 28,
+      "rms_pull": 1.5091007707750463,
+      "max_absolute_pull": 4.048256311434814,
+      "bins_above_3sigma": 1,
+      "above_3sigma": [
+        {
+          "time_bin_ns": [
+            1510.0,
+            1520.0
+          ],
+          "pull": -4.048256311434814,
+          "sk_fraction": 0.0005899689123419925,
+          "lucid_fraction": 0.0006274030127704102,
+          "combined_sem": 9.246968953690088e-06
+        }
+      ]
+    },
+    "B5": {
+      "defined_bins": 24,
+      "rms_pull": 1.3658897459362662,
+      "max_absolute_pull": 3.360574392791762,
+      "bins_above_3sigma": 1,
+      "above_3sigma": [
+        {
+          "time_bin_ns": [
+            1520.0,
+            1530.0
+          ],
+          "pull": -3.360574392791762,
+          "sk_fraction": 0.0005236769077338752,
+          "lucid_fraction": 0.0005526894952396358,
+          "combined_sem": 8.633222810954869e-06
+        }
+      ]
+    },
+    "Bottom": {
+      "defined_bins": 20,
+      "rms_pull": 2.0266300812871205,
+      "max_absolute_pull": 5.148610132920833,
+      "bins_above_3sigma": 4,
+      "above_3sigma": [
+        {
+          "time_bin_ns": [
+            1460.0,
+            1470.0
+          ],
+          "pull": -3.2465682328818404,
+          "sk_fraction": 0.0015711803665528854,
+          "lucid_fraction": 0.0016205107634717727,
+          "combined_sem": 1.5194628105844182e-05
+        },
+        {
+          "time_bin_ns": [
+            1470.0,
+            1480.0
+          ],
+          "pull": -3.3983359978636525,
+          "sk_fraction": 0.003135926069001597,
+          "lucid_fraction": 0.0032126988883982607,
+          "combined_sem": 2.259129745997064e-05
+        },
+        {
+          "time_bin_ns": [
+            1490.0,
+            1500.0
+          ],
+          "pull": 5.148610132920833,
+          "sk_fraction": 0.2765401649114624,
+          "lucid_fraction": 0.275740700911391,
+          "combined_sem": 0.00015527763404719465
+        },
+        {
+          "time_bin_ns": [
+            1510.0,
+            1520.0
+          ],
+          "pull": -3.2344954467105653,
+          "sk_fraction": 0.11605934286666231,
+          "lucid_fraction": 0.11645313052204813,
+          "combined_sem": 0.00012174623890297879
+        }
+      ]
+    }
+  }
+}
