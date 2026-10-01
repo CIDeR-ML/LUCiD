@@ -21,6 +21,7 @@ from lucid.wavelength.optical_model import evaluate_optical_model, OpticalArrays
 from lucid.wavelength.spectrum import (
     sample_cherenkov_wavelengths, build_qe_weighted_cherenkov_sampler,
 )
+from lucid.wavelength.scattering import get_mie_phase_model
 
 import jax
 import jax.numpy as jnp
@@ -111,6 +112,7 @@ def setup_event_simulator(
         sk_pmt_lookup=None,
         sk_pmt_lookup_options=None,
         sensor_candidate_selection='all',
+        mie_phase_model='hg',
         reflection_model='scalar_mix',
         reflection_wavelength=400.0,
         sensor_acceptance_model='sphere',
@@ -211,6 +213,12 @@ def setup_event_simulator(
         ``'wall'`` assigns each nominal wall crossing to the nearest candidate
         PMT before applying the exact SK sphere-plus-torus intersection. Its
         hard forward choice uses the smooth all-candidate coverage derivative.
+    mie_phase_model : {'hg', 'sk4'}
+        Angular distribution for asymmetric/Mie scattering. ``'hg'`` preserves
+        the generic Henyey-Greenstein model controlled by
+        ``detector_params.scattering.g``. ``'sk4'`` reproduces the SK-II-and-
+        later ``SGMIES`` distribution, ``p(cos(theta))=2*cos(theta)`` on the
+        forward hemisphere, and has no free ``g`` parameter.
     reflection_model : str
         Reflection model: ``'scalar_mix'`` (DEFAULT — the scalar wall/sensor
         rates plus a specular/diffuse direction mixture via
@@ -401,6 +409,7 @@ def setup_event_simulator(
     # reflection_fn is captured statically in the differentiable step's closure;
     # build_refl_params packs the model's parameters out of DetectorParams.
     reflection_fn, build_refl_params = get_reflection_model(reflection_model)
+    mie_cosine_sampler, mie_logpdf_fn = get_mie_phase_model(mie_phase_model)
     pmt_timing_fn = get_pmt_timing_model(pmt_timing_model)
 
     # ---- Select photon update function --------------------------------------
@@ -409,12 +418,17 @@ def setup_event_simulator(
     # differentiable forward whenever reflection_model != 'scalar'; binding reflection_fn here
     # keeps the truth generator and the expected-value model consistent.
     if sim_config.is_data:
-        photon_update_fn = partial(photon_iteration_sample, reflection_fn=reflection_fn)
+        photon_update_fn = partial(
+            photon_iteration_sample, reflection_fn=reflection_fn,
+            mie_cosine_sampler=mie_cosine_sampler)
     elif sim_config.use_expected_value is False:
-        photon_update_fn = partial(photon_iteration_sample, reflection_fn=reflection_fn)
+        photon_update_fn = partial(
+            photon_iteration_sample, reflection_fn=reflection_fn,
+            mie_cosine_sampler=mie_cosine_sampler)
     else:
         photon_update_fn = jax.remat(
-            make_photon_iteration_update_factors_safe(reflection_fn))
+            make_photon_iteration_update_factors_safe(
+                reflection_fn, mie_cosine_sampler, mie_logpdf_fn))
 
     # ---- Geometry bounds check (delegates to detector method) ----------------
     def get_inside_detector_flag(positions):
@@ -746,13 +760,18 @@ def setup_event_simulator(
                 # NOT the high-variance pathwise route through the discrete DOM-candidate
                 # selection. Track params flow pathwise; λ_abs flows pathwise (deterministic).
                 from lucid.simulation.photon_step_volume import photon_step_volume
+                volume_step = partial(
+                    photon_step_volume,
+                    mie_cosine_sampler=mie_cosine_sampler,
+                    mie_logpdf_fn=mie_logpdf_fn,
+                )
                 sensor_distances = prop_results['sensor_distances']     # (n_cand, n_rays, 1)
                 seg_lengths = jnp.maximum(prop_results['envelope_exit_t'], 1.0)   # (n_rays,)
                 key, subkey = jax.random.split(key)
                 rng_keys = jax.random.split(subkey, n_rays)
                 (new_positions, new_directions, new_times,
                  per_dom_charges, continuing_factors, logp_increments) = jax.vmap(
-                    photon_step_volume,
+                    volume_step,
                     in_axes=(0, 0, 0, 1, 1, 0, 0, 0, 0, 0, None, None)
                 )(state.positions, state.directions, state.times,
                   sensor_distances.squeeze(-1), depositions,

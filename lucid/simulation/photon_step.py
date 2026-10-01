@@ -19,7 +19,8 @@ def photon_iteration_sample(
         normal, scatter_length, mie_scatter_length, g, refl_params,
         absorption_length,
         hit_sensor, lam, rng_key, speed_of_light,
-        reflection_fn=scalar_reflection):
+        reflection_fn=scalar_reflection,
+        mie_cosine_sampler=hg_sample_cos_theta):
     """
     Sampling version of photon iteration that makes binary decisions.
 
@@ -113,7 +114,8 @@ def photon_iteration_sample(
     )
 
     rayleigh_dir = compute_scatter_direction(direction, k3)
-    mie_dir = compute_mie_scatter_direction(direction, k3, g)
+    mie_dir = compute_mie_scatter_direction(
+        direction, k3, g, cosine_sampler=mie_cosine_sampler)
     is_mie = jax.random.uniform(k5) < p_mie          # choose Mie vs Rayleigh per scatter (~5% Mie at physical L)
     chosen_scatter_dir = jnp.where(is_mie, mie_dir, rayleigh_dir)
 
@@ -149,7 +151,9 @@ def photon_iteration_update_factors(
         normal, scatter_length, mie_scatter_length, g, refl_params,
         absorption_length,
         hit_sensor, lam, rng_key, speed_of_light,
-        reflection_fn=scalar_reflection):
+        reflection_fn=scalar_reflection,
+        mie_cosine_sampler=hg_sample_cos_theta,
+        mie_logpdf_fn=hg_logpdf):
     """
     Expected-value ("implicit capture") photon update with DiCE score-function gradients.
 
@@ -234,7 +238,7 @@ def photon_iteration_update_factors(
     is_mie = jax.random.uniform(k[2]) < sg(p_mie)
     ua = jax.random.uniform(k[3])
     phi = jax.random.uniform(k[4]) * 2.0 * jnp.pi
-    cmie = hg_sample_cos_theta(ua, sg(g))
+    cmie = mie_cosine_sampler(ua, sg(g))
     cray = jnp.clip(solve_rayleigh_inverse_cdf(ua), -1.0, 1.0)
     cth = jnp.where(is_mie, cmie, cray)
     sth = jnp.sqrt(jnp.clip(1.0 - cth**2, 0.0, 1.0))
@@ -265,7 +269,7 @@ def photon_iteration_update_factors(
     lf = jnp.where(is_scat, jnp.log(mu_tot) - mu_tot * sg(d), -mu_tot * sg(Dd))
     la = jnp.where(is_scat,
                    jnp.where(is_mie,
-                             jnp.log(p_mie) + hg_logpdf(sg(cmie), g),
+                             jnp.log(p_mie) + mie_logpdf_fn(sg(cmie), g),
                              jnp.log1p(-p_mie) + rayleigh_logpdf(sg(cray))),
                    0.0)
     logp_increment = lf + la + lr
@@ -295,7 +299,10 @@ def photon_iteration_update_factors(
 # custom_vjp signature stays fixed (refl_params is a single packed pytree arg) —
 # a new reflection model never reshapes _fwd/_bwd residuals or cotangents.
 
-def make_photon_iteration_update_factors_safe(reflection_fn=scalar_reflection):
+def make_photon_iteration_update_factors_safe(
+        reflection_fn=scalar_reflection,
+        mie_cosine_sampler=hg_sample_cos_theta,
+        mie_logpdf_fn=hg_logpdf):
     """Build the expected-value step closed over ``reflection_fn`` (a static model choice).
 
     Historically this wrapped the step in a ``jax.custom_vjp`` whose backward scrubbed
@@ -318,7 +325,9 @@ def make_photon_iteration_update_factors_safe(reflection_fn=scalar_reflection):
             position, direction, time, surface_distance,
             normal, scatter_length, mie_scatter_length, g, refl_params,
             absorption_length, hit_sensor, lam, rng_key, speed_of_light,
-            reflection_fn=reflection_fn)
+            reflection_fn=reflection_fn,
+            mie_cosine_sampler=mie_cosine_sampler,
+            mie_logpdf_fn=mie_logpdf_fn)
 
     return _step
 
