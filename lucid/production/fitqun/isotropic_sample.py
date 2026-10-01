@@ -111,6 +111,85 @@ def photonsim_macro(*, output_path, n_events: int, seed: int) -> str:
     ]) + "\n"
 
 
+def translate_shell(origins: np.ndarray, rng, *, pmt_pos_m: np.ndarray,
+                    pmt_axes: np.ndarray, shell_r_cm: float, shell_dr_cm: float,
+                    det_radius_m: float, det_halfheight_m: float,
+                    pmt_radius_m: float,
+                    event_id: Optional[np.ndarray] = None) -> np.ndarray:
+    """Shift photons to vertices inside one sensor's angular-response shell.
+
+    :func:`translate_uniform` throws almost everything away for this purpose:
+    only ~8 in 100000 direct detected photons were emitted within 150 cm of the
+    sensor they hit, because volume-uniform vertices send most light to sensors
+    too far off to lie in any shell. Drawing the vertex inside the shell raises
+    the in-shell yield by ~100x for the same photon count.
+
+    The draw is uniform in shell VOLUME over the sensor's inward hemisphere, and
+    vertices outside the region :func:`translate_uniform` samples are rejected --
+    so this reproduces what uniform placement would have put in that shell, only
+    far more often. The measured cos(eta) shape is therefore unchanged, including
+    its depletion edge, which is geometry rather than statistics and so does not
+    fill in with more events.
+
+    Sensors whose shell would leave the detector are dropped exactly as
+    :func:`lucid.production.fitqun.angular.measure` drops them, so both ends of
+    the chain agree on which shells are usable.
+    """
+    pmt_pos_m = np.asarray(pmt_pos_m, dtype=np.float64)
+    pmt_axes = np.asarray(pmt_axes, dtype=np.float64)
+    r_lo = (shell_r_cm - shell_dr_cm) / 100.0
+    r_hi = (shell_r_cm + shell_dr_cm) / 100.0
+    if not (0.0 <= r_lo < r_hi):
+        raise ValueError(f"bad shell [{r_lo}, {r_hi}) m")
+
+    from .angular import contained_sensors
+    eligible = np.flatnonzero(contained_sensors(
+        pmt_pos_m, reach=r_hi,
+        det_radius=det_radius_m, det_halfheight=det_halfheight_m))
+    if eligible.size == 0:
+        raise ValueError(
+            f"no sensor can hold a {shell_r_cm}+-{shell_dr_cm} cm shell")
+
+    r_max = det_radius_m - pmt_radius_m
+    hz_max = det_halfheight_m - pmt_radius_m
+
+    def _draw(n):
+        out = np.empty((n, 3), dtype=np.float64)
+        todo = np.arange(n)
+        while todo.size:
+            m = todo.size
+            isens = eligible[rng.integers(0, eligible.size, m)]
+            c = pmt_pos_m[isens]
+            ax = pmt_axes[isens]
+            r = np.cbrt(r_lo ** 3 + rng.random(m) * (r_hi ** 3 - r_lo ** 3))
+            ceta = rng.random(m)
+            seta = np.sqrt(1.0 - ceta ** 2)
+            phi = 2.0 * np.pi * rng.random(m)
+            # an orthonormal frame with the sensor axis as polar axis
+            helper = np.zeros_like(ax)
+            helper[:, 0] = 1.0
+            flip = np.abs(ax[:, 0]) > 0.9
+            helper[flip] = np.array([0.0, 1.0, 0.0])
+            e1 = np.cross(ax, helper)
+            e1 /= np.linalg.norm(e1, axis=1, keepdims=True)
+            e2 = np.cross(ax, e1)
+            d = (ceta[:, None] * ax
+                 + (seta * np.cos(phi))[:, None] * e1
+                 + (seta * np.sin(phi))[:, None] * e2)
+            v = c + r[:, None] * d
+            ok = ((np.hypot(v[:, 0], v[:, 1]) <= r_max)
+                  & (np.abs(v[:, 2]) <= hz_max))
+            out[todo[ok]] = v[ok]
+            todo = todo[~ok]
+        return out.astype(np.float32)
+
+    if event_id is None:
+        return origins + _draw(1)[0]
+    event_id = np.asarray(event_id)
+    uniq, inverse = np.unique(event_id, return_inverse=True)
+    return origins + _draw(uniq.size)[inverse]
+
+
 def translate_uniform(origins: np.ndarray, rng, *, det_radius_m: float,
                       det_halfheight_m: float, pmt_radius_m: float,
                       event_id: Optional[np.ndarray] = None) -> np.ndarray:

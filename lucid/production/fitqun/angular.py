@@ -96,24 +96,41 @@ def measure(emission_pos: np.ndarray, sensor_pos: np.ndarray, sensor_dir: np.nda
     in_shell = (R >= shell_r_cm - shell_dr_cm) & (R < shell_r_cm + shell_dr_cm)
 
     # The shell must be fully inside the detector in at least one of the two
-    # directions that can clip it -- a barrel sensor is safe if the shell
-    # clears the end caps, an end-cap sensor if it clears the barrel wall.
-    reach = shell_r_cm + shell_dr_cm
-    sensor_pos = np.asarray(sensor_pos, dtype=np.float64)
-    clear_z = np.abs(sensor_pos[:, 2]) + reach <= det_halfheight_cm
-    clear_r = np.hypot(sensor_pos[:, 0], sensor_pos[:, 1]) + reach <= det_radius_cm
-    if np.any(clear_z & clear_r):
-        raise ValueError(
-            "some sensors sit clear of both the barrel wall and the end caps, "
-            "which no sensor of a cylindrical detector can -- check that the "
-            "detector extent passed here matches the geometry the photons came from")
-    contained = clear_z | clear_r
+    # directions that can clip it -- see :func:`contained_sensors`.
+    contained = contained_sensors(
+        sensor_pos, reach=shell_r_cm + shell_dr_cm,
+        det_radius=det_radius_cm, det_halfheight=det_halfheight_cm)
 
     keep = in_shell & contained
     edges = np.linspace(0.0, 1.0, n_bins + 1)
     counts, _ = np.histogram(c[keep], bins=edges, weights=w[keep])
     sumw2, _ = np.histogram(c[keep], bins=edges, weights=w[keep] ** 2)
     return edges, counts, sumw2
+
+
+def contained_sensors(sensor_pos: np.ndarray, *, reach: float,
+                      det_radius: float, det_halfheight: float) -> np.ndarray:
+    """Which sensors can hold a shell of this reach, as the reference decides it.
+
+    A shell is usable only where it lies inside the detector in at least one of
+    the two directions that can clip it -- a barrel sensor is safe if the shell
+    clears the end caps, an end-cap sensor if it clears the barrel wall
+    (``inFiducialZ || inFiducialR``). Units are the caller's, as long as all
+    four arguments share them.
+
+    This is the one place the rule lives: the measurement and any generator that
+    places sources in a shell have to agree on which shells exist, or they
+    describe different things.
+    """
+    sensor_pos = np.asarray(sensor_pos, dtype=np.float64)
+    clear_z = np.abs(sensor_pos[:, 2]) + reach <= det_halfheight
+    clear_r = np.hypot(sensor_pos[:, 0], sensor_pos[:, 1]) + reach <= det_radius
+    if np.any(clear_z & clear_r):
+        raise ValueError(
+            "some sensors sit clear of both the barrel wall and the end caps, "
+            "which no sensor of a cylindrical detector can -- check that the "
+            "detector extent passed here matches the geometry the photons came from")
+    return clear_z | clear_r
 
 
 def normalise(counts: np.ndarray, sumw2: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
