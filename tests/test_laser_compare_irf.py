@@ -9,9 +9,9 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from compare import compare_sim_vs_real as comparison
-from compare import laser_compare_irf as irf_mod
-from compare import laser_compare_metrics as metrics
+from compare_lucid_sim import compare_sim_vs_real as comparison
+from compare_lucid_sim import laser_compare_irf as irf_mod
+from compare_lucid_sim import laser_compare_metrics as metrics
 
 
 def _row(sn, load, fwhm, peak_bin, n_bins=40):
@@ -156,7 +156,7 @@ def test_tts_irf_autofills_channel_selection_from_irf_h5(
     irf_files, tmp_path
 ):
     """TTS-vs-IRF derives irf125.csv from the IRF h5 and PMT map."""
-    from compare import plot_tts_vs_irf as tts_irf
+    from compare_lucid_sim import plot_tts_vs_irf as tts_irf
 
     args = SimpleNamespace(
         channel_selection=None,
@@ -172,7 +172,7 @@ def test_tts_irf_autofills_channel_selection_from_irf_h5(
 
 def test_tts_irf_keeps_explicit_channel_selection(tmp_path):
     """An explicit --channel-selection path is left untouched."""
-    from compare import plot_tts_vs_irf as tts_irf
+    from compare_lucid_sim import plot_tts_vs_irf as tts_irf
 
     explicit = tmp_path / "custom.csv"
     args = SimpleNamespace(

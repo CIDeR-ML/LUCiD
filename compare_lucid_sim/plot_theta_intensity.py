@@ -6,7 +6,7 @@ mean PE counts, each normalized so the PMT-count-weighted mean of its 18
 group means is one ("line mean = 1"), with mean +/- SEM error bars.  The
 three panels
 are stacked in a single PDF, mirroring the reference style of
-/mnt/stage/liukainan/examples/run15040_theta.png: grid lines, theta 0-180
+/mnt/stage/liukainan/examples/theta_intensity.png: grid lines, theta 0-180
 degrees with 20-degree major ticks, per-panel title and legend.  All
 plotted numbers are written to a CSV next to the PDF for inspection.
 """
@@ -23,7 +23,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from compare import compare_sim as base
+from compare_lucid_sim import compare_sim as base
 
 THETA_STEP_DEG = 10.0
 DATA_ROOT = Path("/junofs/C/liukainan/LUCiD/simulation_updated_SupportRods")

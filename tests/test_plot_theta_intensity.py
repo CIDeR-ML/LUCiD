@@ -1,9 +1,9 @@
-"""Tests for compare/plot_run15040_theta.py normalization."""
+"""Tests for compare_lucid_sim/plot_theta_intensity.py normalization."""
 
 import numpy as np
 import pytest
 
-from compare.plot_run15040_theta import (
+from compare_lucid_sim.plot_theta_intensity import (
     group_mean_sem,
     pmt_weighted_reference,
 )

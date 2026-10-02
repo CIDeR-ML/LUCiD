@@ -24,12 +24,13 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from compare import compare_sim_vs_real as pipeline
-from compare.laser_compare_metrics import (
+from compare_lucid_sim import compare_sim_vs_real as pipeline
+from compare_lucid_sim.laser_compare_metrics import (
     build_channel_histograms_multi,
     merge_smearing_variants,
     processing_string,
 )
+from compare_lucid_sim.laser_compare_irf import characterized_channels
 
 
 def parse_args(argv=None):
@@ -56,12 +57,43 @@ def parse_args(argv=None):
     return args
 
 
+def resolve_channel_selection(args):
+    """Fill in args.channel_selection from the characterized IRF set.
+
+    Input: parsed arguments.  Output: none; without an explicit
+    selection the characterized channels (IRF h5 serials mapped to CD
+    copy numbers via the PMT map) are written to
+    ``<output_root>/irf125.csv`` and the path is stored back on args,
+    keeping the ``irf125`` cache filename suffix.  An explicit
+    ``--channel-selection`` is left untouched.
+    """
+    if args.channel_selection is not None:
+        return
+    channels = characterized_channels(args.irf_h5, args.pmt_map)
+    if not channels:
+        raise ValueError(
+            f"no characterized CD channels found in {args.irf_h5}"
+        )
+    args.output_root.mkdir(parents=True, exist_ok=True)
+    selection = args.output_root / "irf125.csv"
+    with selection.open("w") as stream:
+        stream.write("channel\n")
+        for channel in channels:
+            stream.write(f"{channel}\n")
+    args.channel_selection = selection
+    print(
+        f"Selected {len(channels)} characterized channels "
+        f"-> {selection}"
+    )
+
+
 def main(argv=None):
     """Build both smearing variants of every source and render them.
 
     Input: optional argv list.  Output: none (figures and CSVs written).
     """
     args = parse_args(argv)
+    resolve_channel_selection(args)
     prepared = pipeline.prepare_inputs(args)
     processing = processing_string(
         True,
@@ -76,6 +108,9 @@ def main(argv=None):
         late_window=args.late_window,
         alignment=args.alignment,
         source_intensity_scale=prepared.source_scale,
+        lucid_qe=(
+            args.lucid_qe_effective if args.apply_lucid_qe else None
+        ),
     )
     processing += ",mode=tts_vs_irf"
     aligned_path = args.aligned_data.with_name(
@@ -107,6 +142,7 @@ def main(argv=None):
             "late_window": args.late_window,
             "alignment": args.alignment,
             "simulation_source_scale": prepared.source_scale,
+            "lucid_qe_factors": prepared.qe_factors,
         }
         tts_data = build_channel_histograms_multi(
             prepared.fsmp_data, prepared.sources, use_tts=True, **common

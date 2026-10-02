@@ -5,8 +5,8 @@ import csv
 import numpy as np
 import pytest
 
-from compare import compare_sim_vs_real as comparison
-from compare.laser_compare_csv import write_comparison_stats_csv
+from compare_lucid_sim import compare_sim_vs_real as comparison
+from compare_lucid_sim.laser_compare_csv import write_comparison_stats_csv
 
 
 def _inputs():

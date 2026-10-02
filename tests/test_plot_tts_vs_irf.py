@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from compare import plot_tts_vs_irf
+from compare_lucid_sim import plot_tts_vs_irf
 
 
 def test_cli_requires_irf_h5():

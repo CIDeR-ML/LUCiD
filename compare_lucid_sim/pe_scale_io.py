@@ -8,8 +8,8 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 from tqdm import tqdm
 
-from compare import compare_sim as base
-from compare import compare_sim_vs_real as response
+from compare_lucid_sim import compare_sim as base
+from compare_lucid_sim import compare_sim_vs_real as response
 
 
 RAW_CACHE_SCHEMA = 1

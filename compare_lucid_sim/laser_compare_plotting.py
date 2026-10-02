@@ -31,41 +31,80 @@ def amplitude_plot_arrays(
     apply_lucid_qe=True,
     lucid_qe_eff=JUNOSW_J26_3_2_EQUIVALENT_QE_532_NM,
 ):
-    """Return amplitude arrays with an optional LUCiD-only QE factor."""
+    """Return amplitude arrays with an optional LUCiD-only QE factor.
+
+    Input: the aligned-data mapping.  When dark noise was added to the
+    simulation densities (``simulation_dark_added``), the dark plateau
+    is subtracted before the QE scaling and added back afterwards,
+    because dark counts are a detector-side rate that never crosses
+    the optical chain.  Output: plotting arrays for the amplitude
+    pages.
+    """
     if not np.isfinite(lucid_qe_eff) or not 0.0 < lucid_qe_eff <= 1.0:
-        raise ValueError("lucid_qe_eff must be finite and in (0, 1]")
+        raise ValueError("lucid_qe_eff must be finite in (0, 1]")
     labels = np.asarray(data["simulation_labels"]).astype(str)
     kinds = np.asarray(
         data.get("simulation_kinds", ["simulation"] * len(labels))
     ).astype(str)
     factors = np.ones(len(labels), dtype=np.float64)
     if apply_lucid_qe:
-        factors[np.char.lower(kinds) == "lucid"] = lucid_qe_eff
+        lowered = np.array([value.lower() for value in kinds])
+        factors[lowered == "lucid"] = lucid_qe_eff
+    density = np.asarray(data["simulation_pe_per_event_density"])
+    mean = np.asarray(data["simulation_mean_pe_per_event"])
+    prompt = np.asarray(data["simulation_prompt_pe_per_event"])
+    late = np.asarray(data["simulation_late_pe_per_event"])
+    dark_added = bool(
+        np.asarray(data.get("simulation_dark_added", False)).item()
+    )
+    if dark_added:
+        dark = np.asarray(
+            data["run_dark_rate_pe_per_event_per_ns"], dtype=np.float64
+        )
+        if dark.ndim == 2:
+            dark = dark[0]
+        span = float(data["edges"][-1] - data["edges"][0])
+        prompt_length = np.asarray(
+            data["prompt_window_effective_high_ns"], dtype=np.float64
+        ) - np.asarray(
+            data["prompt_window_effective_low_ns"], dtype=np.float64
+        )
+        late_length = np.asarray(
+            data["late_window_effective_high_ns"], dtype=np.float64
+        ) - np.asarray(
+            data["late_window_effective_low_ns"], dtype=np.float64
+        )
+        dark_mean = dark * span
+        dark_prompt = dark * prompt_length
+        dark_late = dark * late_length
+        scale = factors[:, None]
+        density = (density - dark[None, :, None]) * factors[:, None, None]
+        density = density + dark[None, :, None]
+        mean = (mean - dark_mean[None, :]) * scale + dark_mean[None, :]
+        prompt = (
+            (prompt - dark_prompt[None, :]) * scale
+            + dark_prompt[None, :]
+        )
+        late = (late - dark_late[None, :]) * scale + dark_late[None, :]
+    else:
+        density = density * factors[:, None, None]
+        mean = mean * factors[:, None]
+        prompt = prompt * factors[:, None]
+        late = late * factors[:, None]
     return {
         "source_factors": factors,
-        "simulation_density": np.asarray(
-            data["simulation_pe_per_event_density"]
-        )
-        * factors[:, None, None],
-        "simulation_mean": np.asarray(
-            data["simulation_mean_pe_per_event"]
-        )
-        * factors[:, None],
-        "simulation_prompt": np.asarray(
-            data["simulation_prompt_pe_per_event"]
-        )
-        * factors[:, None],
-        "simulation_late": np.asarray(
-            data["simulation_late_pe_per_event"]
-        )
-        * factors[:, None],
+        "simulation_density": density,
+        "simulation_mean": mean,
+        "simulation_prompt": prompt,
+        "simulation_late": late,
     }
 
 
 def _lucid_qe_note(data, apply_lucid_qe, lucid_qe_eff):
     """Describe the active common LUCiD QE approximation."""
     kinds = np.asarray(data.get("simulation_kinds", [])).astype(str)
-    if apply_lucid_qe and np.any(np.char.lower(kinds) == "lucid"):
+    lowered = {value.lower() for value in kinds}
+    if apply_lucid_qe and "lucid" in lowered:
         return (
             "LUCiD-only equivalent QE at 532 nm="
             f"{lucid_qe_eff:.6g} (JUNOsw J26.5.0)"
@@ -128,7 +167,14 @@ def _simulation_colors(data, labels):
     return colors
 
 
-def plot_data(data, output, plot_range, run, time_difference_panels=True):
+def plot_data(
+    data,
+    output,
+    plot_range,
+    run,
+    time_difference_panels=True,
+    channel_indices=None,
+):
     """Write per-channel three-way density, residual and metric pages.
 
     Input: metrics dictionary, output path, time axis range, run number
@@ -144,8 +190,14 @@ def plot_data(data, output, plot_range, run, time_difference_panels=True):
         np.asarray(data.get("alignment_method", "unknown")).item()
     ).replace("_", " ")
     shift = float(np.asarray(data.get("alignment_shift_ns", 0.0)).item())
+    indices = (
+        range(len(data["channels"]))
+        if channel_indices is None
+        else channel_indices
+    )
     with PdfPages(output) as pdf:
-        for index, channel in enumerate(data["channels"]):
+        for index in indices:
+            channel = data["channels"][index]
             pmt = PMT_TYPE_NAME.get(int(data["pmt_type"][index]), "Unknown")
             processing = str(
                 np.asarray(data.get("processing", "")).item()
@@ -321,25 +373,58 @@ def pooled_group_shape_and_c(pe_density, mask, width):
     return shape, float(coefficient)
 
 
+def _pooled_density_view(data):
+    """Return per-source PE/event densities for the summary pages.
+
+    Input: the aligned-data mapping.  Output: the QE-corrected density
+    recovered as ``shape / renormalization`` -- the same convention as
+    the time pages, so the dark plateau is not scaled by the
+    LUCiD-only QE factor.  Caches without the renormalization field
+    fall back to the stored (uncorrected) PE/event density.
+    """
+    renorm = data.get("simulation_shape_renormalization")
+    if renorm is None:
+        return np.asarray(data["simulation_pe_per_event_density"])
+    return (
+        np.asarray(data["simulation_density"])
+        / np.asarray(renorm)[:, :, None]
+    )
+
+
+def summary_theta_groups(theta, source_z, bin_deg=10.0):
+    """Return (title, mask) pairs grouping channels by theta bin.
+
+    Input: per-channel theta values in degrees and the source z
+    position; a central source (z = 0) is not split.  Output: one
+    group per populated ``bin_deg``-wide bin, titled
+    ``theta in [LOW, HIGH) deg``.
+    """
+    theta = np.asarray(theta, dtype=np.float64)
+    if np.isclose(source_z, 0.0):
+        return [("", np.ones(len(theta), dtype=bool))]
+    bin_low = np.floor(theta / bin_deg) * bin_deg
+    return [
+        (
+            f"theta in [{value:.0f}, {value + bin_deg:.0f}) deg",
+            np.isclose(bin_low, value),
+        )
+        for value in np.unique(bin_low[np.isfinite(theta)])
+    ]
+
+
 def plot_summary_data(data, output, plot_range, run, source_z):
     """Write PMT-type/theta summary pages for all simulation sources."""
     configure_plot_style()
     labels, _, _, _, _ = _metric_arrays(data)
     _, _, _, sim_entries, _, _ = _source_counts(data, labels)
     run_pe_density = np.asarray(data["run_pe_per_event_density"])
-    sim_pe_density = np.asarray(data["simulation_pe_per_event_density"])
+    sim_pe_density = _pooled_density_view(data)
     colors = _simulation_colors(data, labels)
     width = float(data["edges"][1] - data["edges"][0])
     alignment = str(
         np.asarray(data.get("alignment_method", "unknown")).item()
     ).replace("_", " ")
-    if np.isclose(source_z, 0.0):
-        theta_groups = [("", np.ones(len(data["theta"]), dtype=bool))]
-    else:
-        theta_groups = [
-            (f"theta={value:.2f} deg", np.isclose(data["theta"], value))
-            for value in np.unique(data["theta"][np.isfinite(data["theta"])])
-        ]
+    theta_groups = summary_theta_groups(data["theta"], source_z)
     with PdfPages(output) as pdf:
         for theta_title, theta_mask in theta_groups:
             for pmt_title, pmt_id in (
@@ -559,6 +644,7 @@ def plot_amplitude_data(
     run,
     apply_lucid_qe=True,
     lucid_qe_eff=JUNOSW_J26_3_2_EQUIVALENT_QE_532_NM,
+    channel_indices=None,
 ):
     """Write per-channel PE/event spectra and channel-rate summaries."""
     configure_plot_style()
@@ -578,8 +664,14 @@ def plot_amplitude_data(
     prompt_high = np.asarray(data["prompt_window_effective_high_ns"])
     late_low = np.asarray(data["late_window_effective_low_ns"])
     late_high = np.asarray(data["late_window_effective_high_ns"])
+    indices = (
+        range(len(data["channels"]))
+        if channel_indices is None
+        else channel_indices
+    )
     with PdfPages(output) as pdf:
-        for index, channel in enumerate(data["channels"]):
+        for index in indices:
+            channel = data["channels"][index]
             pmt = PMT_TYPE_NAME.get(int(data["pmt_type"][index]), "Unknown")
             dark_rate = data["run_dark_rate_pe_per_event_per_ns"][
                 0, index

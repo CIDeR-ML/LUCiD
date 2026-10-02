@@ -4,8 +4,8 @@ import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from compare import compare_sim_vs_real as response
-from compare import pe_scale_io
+from compare_lucid_sim import compare_sim_vs_real as response
+from compare_lucid_sim import pe_scale_io
 
 
 def test_all_channel_fsmp_cache_streams_histograms_and_file_audit(

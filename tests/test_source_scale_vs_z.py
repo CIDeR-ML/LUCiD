@@ -5,7 +5,7 @@ import csv
 import numpy as np
 import pytest
 
-from compare import plot_source_scale_vs_z as scan
+from compare_lucid_sim import plot_source_scale_vs_z as scan
 
 
 def test_lucid_z_dir_names_encode_centimeter_units():

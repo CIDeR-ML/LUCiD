@@ -5,11 +5,11 @@ import json
 import numpy as np
 import pytest
 
-from compare.compare_sim_vs_real import (
+from compare_lucid_sim.compare_sim_vs_real import (
     auto_source_intensity_scale,
     write_amplitude_intensity_scale,
 )
-from compare.laser_compare_metrics import simulation_qe_factors
+from compare_lucid_sim.laser_compare_metrics import simulation_qe_factors
 
 
 def _source(kind, total, events=10):

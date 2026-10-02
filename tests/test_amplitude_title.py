@@ -1,6 +1,6 @@
 """Tests for compare/laser_compare_plotting.py amplitude-page title."""
 
-from compare.laser_compare_plotting import (
+from compare_lucid_sim.laser_compare_plotting import (
     _amplitude_channel_title,
     short_source_label,
 )

@@ -29,22 +29,24 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 from tqdm import tqdm
 
-# Make direct ``python compare/compare_sim_vs_real.py`` execution resolve the
-# repository package without requiring a caller-specific PYTHONPATH.
+# Direct ``python compare_lucid_sim/compare_sim_vs_real.py`` support.
+# Append (not insert(0)) so the script directory keeps priority: a
+# legacy top-level compare_sim.py (other repos) then cannot shadow
+# this package's own module.
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
+    sys.path.append(str(PROJECT_ROOT))
 
 try:
     from . import compare_sim as base
-except ImportError:  # Direct ``python compare/compare_sim_vs_real.py``.
+except ImportError:  # Direct ``python compare_lucid_sim/compare_sim_vs_real.py``.
     import compare_sim as base
 
-from compare.laser_compare_irf import (
+from compare_lucid_sim.laser_compare_irf import (
     build_channel_kernels,
     irf_descriptor,
 )
-from compare.laser_compare_metrics import (
+from compare_lucid_sim.laser_compare_metrics import (
     JUNOSW_J26_3_2_EQUIVALENT_QE_532_NM,
     build_channel_histograms_multi,
     consensus_l1_alignment,
@@ -53,11 +55,11 @@ from compare.laser_compare_metrics import (
     processing_string,
     simulation_qe_factors,
 )
-from compare.laser_compare_csv import (
+from compare_lucid_sim.laser_compare_csv import (
     write_channel_manifest,
     write_comparison_stats_csv,
 )
-from compare.laser_compare_plotting import (
+from compare_lucid_sim.laser_compare_plotting import (
     plot_amplitude_data,
     plot_data,
     plot_summary_data,
@@ -544,6 +546,36 @@ def _compute_sim_cache(
     return data
 
 
+def scaled_fsmp_target_pe(lucid_total_pe, pe_scale):
+    """Return the FSMP PE target scaled by the requested factor.
+
+    Input: selected-channel LUCiD total PE (None when unavailable) and a
+    positive multiplicative scale. Output: integer PE target, or None.
+    """
+    if pe_scale <= 0:
+        raise ValueError("fsmp_pe_scale must be positive")
+    if lucid_total_pe is None:
+        return None
+    return int(round(lucid_total_pe * pe_scale))
+
+
+def page_channel_indices(n_channels, page_channel_count, seed):
+    """Return sorted channel row indices for the per-channel pages.
+
+    Input: number of available channels, the requested page count
+    (None draws every channel) and the CLI seed.  Output: sorted
+    index array; the derived fixed sub-seed keeps the page subsample
+    reproducible and independent of the channel-selection draw.
+    """
+    if page_channel_count is None:
+        return None
+    if page_channel_count < 1:
+        raise ValueError("page_channel_count must be positive")
+    count = min(page_channel_count, n_channels)
+    rng = np.random.default_rng((seed, 0x5EED))
+    return np.sort(rng.choice(n_channels, size=count, replace=False))
+
+
 def compute_fsmp_data(args, channels, fsmp_files):
     """Build the FSMP cache from Arrow/NumPy arrays."""
     target_pe = getattr(args, "fsmp_target_pe", None)
@@ -890,6 +922,24 @@ def build_parser():
     )
     parser.add_argument("--dark-window", type=float, default=30.0)
     parser.add_argument(
+        "--fsmp-pe-scale",
+        type=float,
+        default=1.0,
+        help=(
+            "multiply the automatic FSMP PE target (selected-channel "
+            "LUCiD total) by this factor to read more FSMP data"
+        ),
+    )
+    parser.add_argument(
+        "--page-channel-count",
+        type=int,
+        default=None,
+        help=(
+            "draw per-channel amplitude/time pages for this many "
+            "randomly subsampled channels (default: all selected)"
+        ),
+    )
+    parser.add_argument(
         "--source-intensity-scale",
         type=float,
         nargs="+",
@@ -1157,7 +1207,9 @@ def prepare_inputs(args):
             if lucid_source is not None
             else None
         )
-        args.fsmp_target_pe = lucid_total_pe
+        args.fsmp_target_pe = scaled_fsmp_target_pe(
+            lucid_total_pe, args.fsmp_pe_scale
+        )
         if lucid_total_pe is not None:
             print(
                 "FSMP target from selected-channel LUCiD simulation: "
@@ -1239,6 +1291,7 @@ def prepare_inputs(args):
         sources=sources,
         channels=channels,
         source_scale=source_scale,
+        qe_factors=qe_factors,
         use_tts=use_tts,
         irf_kernels=irf_kernels,
         irf_fwhm_by_channel=irf_fwhm_by_channel,
@@ -1252,12 +1305,18 @@ def emit_results(args, data, time_difference_panels=True):
     Input: parsed arguments, the aligned metrics dictionary and the
     difference-panel switch.  Output: none (files written).
     """
+    page_indices = page_channel_indices(
+        len(data["channels"]),
+        getattr(args, "page_channel_count", None),
+        getattr(args, "seed", 0),
+    )
     plot_data(
         data,
         args.opt,
         args.plot_range,
         args.run,
         time_difference_panels=time_difference_panels,
+        channel_indices=page_indices,
     )
     plot_summary_data(data, args.summary_opt, args.plot_range, args.run, args.z)
     plot_amplitude_data(
@@ -1267,6 +1326,7 @@ def emit_results(args, data, time_difference_panels=True):
         args.run,
         apply_lucid_qe=args.apply_lucid_qe,
         lucid_qe_eff=args.lucid_qe_effective,
+        channel_indices=page_indices,
     )
     write_comparison_stats_csv(args.stats_csv, data, args.run, args.z)
 
@@ -1288,6 +1348,9 @@ def main(argv=None):
         late_window=args.late_window,
         alignment=args.alignment,
         source_intensity_scale=prepared.source_scale,
+        lucid_qe=(
+            args.lucid_qe_effective if args.apply_lucid_qe else None
+        ),
     )
     data = None
     if args.aligned_data.exists() and not args.force:
@@ -1319,6 +1382,7 @@ def main(argv=None):
             late_window=args.late_window,
             alignment=args.alignment,
             simulation_source_scale=prepared.source_scale,
+            lucid_qe_factors=prepared.qe_factors,
         )
         np.savez_compressed(args.aligned_data, **data)
         print(f"Wrote {args.aligned_data}")

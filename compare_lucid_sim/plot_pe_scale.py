@@ -23,9 +23,9 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from compare import compare_sim as base
-from compare import compare_sim_vs_real as response
-from compare.pe_scale_io import (
+from compare_lucid_sim import compare_sim as base
+from compare_lucid_sim import compare_sim_vs_real as response
+from compare_lucid_sim.pe_scale_io import (
     ensure_raw_pe_scale_caches,
     fsmp_dark_counts,
     load_fsmp_raw_cache,

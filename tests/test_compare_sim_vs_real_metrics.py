@@ -8,10 +8,10 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
-from compare import compare_sim_vs_real as comparison
-from compare import laser_compare_metrics as metrics
-from compare import laser_compare_plotting as plotting
-from compare.pe_scale_io import (
+from compare_lucid_sim import compare_sim_vs_real as comparison
+from compare_lucid_sim import laser_compare_metrics as metrics
+from compare_lucid_sim import laser_compare_plotting as plotting
+from compare_lucid_sim.pe_scale_io import (
     fsmp_dark_counts,
     raw_pe_scale_inputs,
     valid_raw_pe_scale_cache,
@@ -652,6 +652,43 @@ def test_pmt_summary_pools_pe_before_normalizing():
         pe_density, np.array([True, True]), 1.0
     )
     np.testing.assert_allclose(pooled, np.array([0.1, 0.9]))
+
+
+def test_summary_density_recovers_qe_corrected_pe():
+    """Summary pages pool shape/renorm = the QE-corrected density.
+
+    The pooled view matches the time-page convention: the LUCiD signal
+    is scaled by the QE factor while the dark plateau is not, making
+    the two sources' dark plateaus equal before pooling.
+    """
+    fsmp, lucid, junosw = _qe_shape_inputs()
+    result = comparison.build_channel_histograms_multi(
+        fsmp,
+        [lucid, junosw],
+        alignment="l1",
+        use_tts=False,
+        add_dark_to_simulation=True,
+        lucid_qe_factors=np.array([0.097, 1.0]),
+    )
+    view = plotting._pooled_density_view(result)
+    pe = result["simulation_pe_per_event_density"]
+    dark = result["run_dark_rate_pe_per_event_per_ns"][0, 0]
+    np.testing.assert_allclose(
+        view[0, 0], (pe[0, 0] - dark) * 0.097 + dark, rtol=1e-12
+    )
+    np.testing.assert_allclose(view[1, 0], pe[1, 0], rtol=1e-12)
+    centers = result["centers"]
+    pre = (centers >= -100) & (centers <= 0)
+    np.testing.assert_allclose(view[0, 0][pre], view[1, 0][pre])
+
+
+def test_summary_density_falls_back_without_renormalization():
+    """Caches without the renormalization field keep the PE density."""
+    data = {
+        "simulation_pe_per_event_density": np.full((1, 1, 4), 0.3),
+    }
+    view = plotting._pooled_density_view(data)
+    np.testing.assert_allclose(view, 0.3)
 
 
 def test_pmt_summary_displays_pooled_normalization_c(tmp_path, monkeypatch):

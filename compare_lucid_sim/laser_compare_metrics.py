@@ -41,7 +41,10 @@ def simulation_qe_factors(
                 for item in sim_data_list
             ]
         )
-        factors[np.char.lower(kinds) == "lucid"] = lucid_qe_eff
+        # np.char was removed in NumPy 2.x;
+        # lowercase with plain Python instead
+        lowered = np.array([value.lower() for value in kinds])
+        factors[lowered == "lucid"] = lucid_qe_eff
     return factors
 
 
@@ -54,6 +57,7 @@ def processing_string(
     late_window=(20.0, 600.0),
     alignment="l1",
     source_intensity_scale=None,
+    lucid_qe=None,
 ):
     """Serialize all response-processing settings into a cache key.
 
@@ -61,12 +65,14 @@ def processing_string(
     the measured IRF is off, otherwise the file-based descriptor).
     Output: the aligned-cache processing key.
     """
+    qe_text = "off" if lucid_qe is None else f"{lucid_qe:.6g}"
     value = (
         # aligned-cache schema version; bump when result fields change
-        "metrics=7,"
+        "metrics=8,"
         f"tts={int(use_tts)},"
         f"irf={irf},"
         f"dark_to_sim={int(add_dark_to_simulation)},fsmp_dark=kept,"
+        f"qe={qe_text},"
         f"alignment=global_median_consensus_{alignment},"
         f"prompt={prompt_window[0]:g}:{prompt_window[1]:g},"
         f"late={late_window[0]:g}:{late_window[1]:g}"
@@ -338,8 +344,15 @@ def build_channel_histograms_multi(
     prompt_window=(-10.0, 20.0),
     late_window=(20.0, 600.0),
     simulation_source_scale=None,
+    lucid_qe_factors=None,
 ):
     """Build diagnostics after applying one robust shift to every channel.
+
+    The per-source shapes and the L1/Wasserstein distances derive from
+    the QE-corrected density: the LUCiD-only QE factor scales the
+    signal while the added dark rate stays unscaled, keeping the dark
+    plateau equal across sources.  The stored PE/event densities are
+    left uncorrected for the amplitude pages.
 
     Input: FSMP/simulation caches; when irf_kernels (channel ->
     unit-sum kernel) is given, the per-PMT TTS convolution is disabled
@@ -386,6 +399,18 @@ def build_channel_histograms_multi(
         ):
             raise ValueError(
                 "simulation_source_scale must be positive per source"
+            )
+    if lucid_qe_factors is None:
+        qe_factors = np.ones(n_sources, dtype=np.float64)
+    else:
+        qe_factors = np.asarray(lucid_qe_factors, dtype=np.float64)
+        if (
+            qe_factors.shape != (n_sources,)
+            or not np.all(np.isfinite(qe_factors))
+            or np.any(qe_factors <= 0.0)
+        ):
+            raise ValueError(
+                "lucid_qe_factors must be positive per source"
             )
     physical_events = int(
         np.asarray(
@@ -592,9 +617,13 @@ def build_channel_histograms_multi(
             else 0.0
         )
         final_sources = []
-        for source in source_results:
+        for model_index, source in enumerate(source_results):
             pe_density = source["pe_density"] + dark_density
-            shape, renorm = _normalize_with_factor(pe_density, width)
+            corrected = (
+                source["pe_density"] * qe_factors[model_index]
+                + dark_density
+            )
+            shape, renorm = _normalize_with_factor(corrected, width)
             final_sources.append(
                 {
                     **source,

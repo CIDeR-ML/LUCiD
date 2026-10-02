@@ -30,9 +30,9 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from compare.compare_sim import load_channel_selection
-from compare import compare_sim_vs_real as response
-from compare import laser_compare_metrics as metrics
+from compare_lucid_sim.compare_sim import load_channel_selection
+from compare_lucid_sim import compare_sim_vs_real as response
+from compare_lucid_sim import laser_compare_metrics as metrics
 
 LUCID_DIR_PATTERN = re.compile(r"^z(\d+)$")
 JUNOSW_DIR_PATTERN = re.compile(r"^(\d+)$")
