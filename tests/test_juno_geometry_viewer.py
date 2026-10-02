@@ -1,5 +1,6 @@
 """Deterministic tests for the browser JUNO geometry payload."""
 
+from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
@@ -7,6 +8,7 @@ import numpy.testing as npt
 
 from lucid.geometry.juno_structures import (
     AcrylicBowlLayout,
+    BottomChimneyGeometry,
     ChimneyGeometry,
 )
 from lucid.geometry.juno_diffuser import DiffuserHardware
@@ -16,13 +18,22 @@ from scripts.view_juno_geometry import (
 )
 
 
-def _detector(chimney=None, bowls=None, diffuser_hardware=None):
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def _detector(
+    chimney=None,
+    bottom_chimney=None,
+    bowls=None,
+    diffuser_hardware=None,
+):
     """Return a minimal detector carrying optional engineering structures."""
     return SimpleNamespace(
         all_points=np.empty((0, 3), dtype=float),
         S_radius=0.254,
         support_rods=None,
         chimney=chimney,
+        bottom_chimney=bottom_chimney,
         acrylic_bowls=bowls,
         diffuser_hardware=diffuser_hardware,
         r_inner=17.7,
@@ -43,8 +54,8 @@ def test_viewer_payload_contains_hollow_chimney_segments():
     assert manifest["chimney_segment_count"] == 2
     segments = manifest["chimney_segments"]
     assert [item["name"] for item in segments] == [
-        "Chimney Acrylic",
-        "Chimney steel",
+        "Chimney Acrylic volume",
+        "Chimney steel surface",
     ]
     npt.assert_allclose(
         [
@@ -86,7 +97,7 @@ def test_viewer_payload_places_radial_curved_bowls():
 
     assert manifest["acrylic_bowl_count"] == 2
     [group] = manifest["acrylic_bowl_groups"]
-    assert group["name"] == "Acrylic bowls"
+    assert group["name"] == "Acrylic bowl volumes"
     assert group["count"] == 2
     assert group["stride"] == 9
     profile = np.asarray(group["profile"], dtype=float)
@@ -114,12 +125,60 @@ def test_viewer_payload_places_radial_curved_bowls():
     npt.assert_array_equal(rows[:, 8], bowls.copy_numbers)
 
 
+def test_viewer_payload_contains_bottom_chimney_volume_and_steel_bowl():
+    """The viewer exports the same south-pole envelope as transport."""
+    bottom = BottomChimneyGeometry.junosw_j26()
+
+    manifest, payloads = build_geometry_payload(
+        _detector(bottom_chimney=bottom)
+    )
+
+    assert payloads == {}
+    exported = manifest["bottom_chimney"]
+    assert manifest["bottom_chimney_segment_count"] == 4
+    assert [item["code"] for item in exported["segments"]] == [
+        7,
+        7,
+        8,
+        8,
+    ]
+    npt.assert_allclose(
+        [
+            [
+                item["inner_radius"],
+                item["outer_radius"],
+                item["z_min"],
+                item["z_max"],
+            ]
+            for item in exported["segments"]
+        ],
+        [
+            [0.500, 0.580, -18.700, -17.700],
+            [0.580, 0.675, -18.700, -18.600],
+            [0.500, 0.506, -18.765, -18.700],
+            [0.506, 0.675, -18.750, -18.700],
+        ],
+    )
+    assert exported["steel_bowl"] == {
+        "name": "Bottom chimney steel bowl",
+        "color": "#6c757d",
+        "center_z": -18.765,
+        "inner_radial": 0.500,
+        "inner_axial": 0.250,
+        "outer_radial": 0.502,
+        "outer_axial": 0.255,
+        "detail": "lower-half ellipsoidal shell",
+    }
+
+
 def test_viewer_payload_uses_empty_structure_groups_when_disabled():
     """A detector without the components produces no viewer layers."""
     manifest, payloads = build_geometry_payload(_detector())
 
     assert manifest["chimney_segments"] == []
     assert manifest["chimney_segment_count"] == 0
+    assert manifest["bottom_chimney"] is None
+    assert manifest["bottom_chimney_segment_count"] == 0
     assert manifest["acrylic_bowl_groups"] == []
     assert manifest["acrylic_bowl_count"] == 0
     assert manifest["diffuser_hardware"] is None
@@ -180,3 +239,14 @@ def test_viewer_vector_parser_requires_three_finite_values():
             pass
         else:
             raise AssertionError(f"accepted invalid vector: {invalid}")
+
+
+def test_viewer_front_end_wires_bottom_chimney_and_detail_view():
+    """The static client renders the payload and exposes a south view."""
+    javascript = (ROOT / "viewer/geometry/geometry.js").read_text()
+    html = (ROOT / "viewer/geometry/index.html").read_text()
+
+    assert "makeLowerEllipsoidShellGeometry" in javascript
+    assert "addBottomChimney(manifest.bottom_chimney)" in javascript
+    assert "focusBottomStructures" in javascript
+    assert 'id="focusBottom"' in html

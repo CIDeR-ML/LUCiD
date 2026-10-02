@@ -39,10 +39,14 @@ SUPPORT_STYLES = {
     1: ("Secondary 60 mm struts", "#9d4edd"),
 }
 CHIMNEY_STYLES = {
-    1: ("Chimney Acrylic", "#00b4d8"),
-    2: ("Chimney steel", "#6c757d"),
+    1: ("Chimney Acrylic volume", "#00b4d8"),
+    2: ("Chimney steel surface", "#6c757d"),
 }
-BOWL_STYLE = ("Acrylic bowls", "#7b2cbf")
+BOTTOM_CHIMNEY_STYLES = {
+    7: ("Bottom chimney Acrylic volume", "#00b4d8"),
+    8: ("Bottom chimney steel surface", "#6c757d"),
+}
+BOWL_STYLE = ("Acrylic bowl volumes", "#7b2cbf")
 DIFFUSER_STYLES = (
     ("PTFE diffuser ball", "sphere", "#f5f3e7"),
     ("PEEK tube", "cylinder", "#c9833e"),
@@ -165,6 +169,40 @@ def build_geometry_payload(
                 "z_max": float(chimney.z_max_m[index]),
             })
 
+    bottom_chimney = None
+    bottom = getattr(detector, "bottom_chimney", None)
+    if bottom is not None:
+        bottom_segments = []
+        for geometry in (bottom.acrylic, bottom.steel_upper):
+            for index, code in enumerate(geometry.surface_codes):
+                name, color = BOTTOM_CHIMNEY_STYLES[int(code)]
+                bottom_segments.append({
+                    "code": int(code),
+                    "name": name,
+                    "color": color,
+                    "inner_radius": float(
+                        geometry.inner_radii_m[index]
+                    ),
+                    "outer_radius": float(
+                        geometry.outer_radii_m[index]
+                    ),
+                    "z_min": float(geometry.z_min_m[index]),
+                    "z_max": float(geometry.z_max_m[index]),
+                })
+        bottom_chimney = {
+            "segments": bottom_segments,
+            "steel_bowl": {
+                "name": "Bottom chimney steel bowl",
+                "color": BOTTOM_CHIMNEY_STYLES[8][1],
+                "center_z": float(bottom.steel_centre_z_m),
+                "inner_radial": float(bottom.steel_inner_axes_m[0]),
+                "inner_axial": float(bottom.steel_inner_axes_m[1]),
+                "outer_radial": float(bottom.steel_outer_axes_m[0]),
+                "outer_axial": float(bottom.steel_outer_axes_m[1]),
+                "detail": "lower-half ellipsoidal shell",
+            },
+        }
+
     acrylic_bowl_groups = []
     bowls = getattr(detector, "acrylic_bowls", None)
     bowl_count = 0 if bowls is None else len(bowls.copy_numbers)
@@ -282,11 +320,16 @@ def build_geometry_payload(
         "pmt_count": count,
         "support_count": 0 if rods is None else len(rods.centers_m),
         "chimney_segment_count": len(chimney_segments),
+        "bottom_chimney_segment_count": (
+            0 if bottom_chimney is None
+            else len(bottom_chimney["segments"])
+        ),
         "acrylic_bowl_count": bowl_count,
         "boundaries": boundaries,
         "pmt_groups": pmt_groups,
         "support_groups": support_groups,
         "chimney_segments": chimney_segments,
+        "bottom_chimney": bottom_chimney,
         "acrylic_bowl_groups": acrylic_bowl_groups,
         "diffuser_hardware": diffuser_hardware,
     }
@@ -397,6 +440,10 @@ def main():
     print(f"PMTs:     {manifest['pmt_count']:,}")
     print(f"Supports: {manifest['support_count']:,}")
     print(f"Chimney:  {manifest['chimney_segment_count']:,} segments")
+    print(
+        "Bottom:   "
+        f"{manifest['bottom_chimney_segment_count']:,} segments"
+    )
     print(f"Bowls:    {manifest['acrylic_bowl_count']:,}")
     if manifest["diffuser_hardware"] is not None:
         center = manifest["diffuser_hardware"]["center"]

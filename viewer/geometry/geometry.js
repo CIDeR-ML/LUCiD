@@ -145,6 +145,79 @@ function makeAnnularCylinderGeometry(
   return geometry;
 }
 
+function makeLowerEllipsoidShellGeometry(shell, segments = 64, stacks = 16) {
+  const geometry = new THREE.BufferGeometry();
+  const positions = [];
+  const normals = [];
+  const indices = [];
+
+  function addSurface(radial, axial, inner) {
+    const first = positions.length / 3;
+    for (let stack = 0; stack <= stacks; stack += 1) {
+      const theta = Math.PI / 2
+        + (stack / stacks) * Math.PI / 2;
+      const rho = radial * Math.sin(theta);
+      const z = axial * Math.cos(theta);
+      for (let segment = 0; segment <= segments; segment += 1) {
+        const phi = (segment / segments) * Math.PI * 2;
+        const x = rho * Math.cos(phi);
+        const y = rho * Math.sin(phi);
+        let nx = x / (radial * radial);
+        let ny = y / (radial * radial);
+        let nz = z / (axial * axial);
+        const norm = Math.hypot(nx, ny, nz) || 1;
+        const sign = inner ? -1 : 1;
+        nx = sign * nx / norm;
+        ny = sign * ny / norm;
+        nz = sign * nz / norm;
+        positions.push(x, y, z);
+        normals.push(nx, ny, nz);
+      }
+    }
+    for (let stack = 0; stack < stacks; stack += 1) {
+      for (let segment = 0; segment < segments; segment += 1) {
+        const a = first + stack * (segments + 1) + segment;
+        const b = a + segments + 1;
+        if (inner) {
+          indices.push(a, a + 1, b + 1, a, b + 1, b);
+        } else {
+          indices.push(a, b + 1, a + 1, a, b, b + 1);
+        }
+      }
+    }
+  }
+
+  addSurface(shell.outer_radial, shell.outer_axial, false);
+  addSurface(shell.inner_radial, shell.inner_axial, true);
+
+  const rimFirst = positions.length / 3;
+  for (let segment = 0; segment <= segments; segment += 1) {
+    const phi = (segment / segments) * Math.PI * 2;
+    const c = Math.cos(phi);
+    const s = Math.sin(phi);
+    positions.push(shell.inner_radial * c, shell.inner_radial * s, 0);
+    normals.push(0, 0, 1);
+    positions.push(shell.outer_radial * c, shell.outer_radial * s, 0);
+    normals.push(0, 0, 1);
+  }
+  for (let segment = 0; segment < segments; segment += 1) {
+    const a = rimFirst + 2 * segment;
+    indices.push(a, a + 1, a + 3, a, a + 3, a + 2);
+  }
+
+  geometry.setAttribute(
+    'position',
+    new THREE.Float32BufferAttribute(positions, 3),
+  );
+  geometry.setAttribute(
+    'normal',
+    new THREE.Float32BufferAttribute(normals, 3),
+  );
+  geometry.setIndex(indices);
+  geometry.computeBoundingSphere();
+  return geometry;
+}
+
 async function fetchRows(group) {
   const response = await fetch(group.url);
   if (!response.ok) {
@@ -299,6 +372,22 @@ function addChimneySegment(segment) {
   addControl('knownStructureControls', mesh, details);
 }
 
+function addBottomChimney(bottom) {
+  for (const segment of bottom.segments) addChimneySegment(segment);
+  const shell = bottom.steel_bowl;
+  const geometry = makeLowerEllipsoidShellGeometry(shell);
+  const mesh = new THREE.Mesh(
+    geometry,
+    material(shell.color, 0.72, THREE.DoubleSide),
+  );
+  mesh.name = shell.name;
+  mesh.position.z = shell.center_z;
+  mesh.userData = { group: shell };
+  scene.add(mesh);
+  knownStructureObjects.push(mesh);
+  addControl('knownStructureControls', mesh, shell);
+}
+
 function addDiffuserHardware(hardware) {
   const center = new THREE.Vector3(...hardware.center);
   const direction = new THREE.Vector3(...hardware.axis).normalize();
@@ -424,6 +513,14 @@ function focusTopStructures() {
   controls.update();
 }
 
+function focusBottomStructures() {
+  camera.near = 0.02;
+  camera.updateProjectionMatrix();
+  camera.position.set(4.2, -5.5, -21.0);
+  controls.target.set(0, 0, -18.5);
+  controls.update();
+}
+
 function focusSourceHardware() {
   const hardware = manifest.diffuser_hardware;
   if (!hardware) return;
@@ -442,6 +539,10 @@ function setupUi() {
   document.getElementById('focusTop').addEventListener(
     'click',
     focusTopStructures,
+  );
+  document.getElementById('focusBottom').addEventListener(
+    'click',
+    focusBottomStructures,
   );
   document.getElementById('focusSource').addEventListener(
     'click',
@@ -601,6 +702,9 @@ async function init() {
   for (const segment of manifest.chimney_segments) {
     addChimneySegment(segment);
   }
+  if (manifest.bottom_chimney) {
+    addBottomChimney(manifest.bottom_chimney);
+  }
   if (manifest.diffuser_hardware) {
     addDiffuserHardware(manifest.diffuser_hardware);
   }
@@ -619,6 +723,7 @@ async function init() {
   }
   if (
     !manifest.chimney_segments.length
+    && !manifest.bottom_chimney
     && !manifest.acrylic_bowl_groups.length
   ) {
     document.getElementById('knownStructureSection').style.display = 'none';
@@ -627,11 +732,16 @@ async function init() {
     document.getElementById('diffuserSection').style.display = 'none';
     document.getElementById('focusSource').style.display = 'none';
   }
+  if (!manifest.bottom_chimney) {
+    document.getElementById('focusBottom').style.display = 'none';
+  }
   summary.textContent = manifest.detector_type + ' | '
     + manifest.pmt_count.toLocaleString() + ' PMTs | '
     + manifest.support_count.toLocaleString() + ' supports | '
     + manifest.chimney_segment_count.toLocaleString()
     + ' chimney segments | '
+    + manifest.bottom_chimney_segment_count.toLocaleString()
+    + ' bottom segments | '
     + manifest.acrylic_bowl_count.toLocaleString() + ' bowls | '
     + (manifest.diffuser_hardware ? 'diffuser at '
       + manifest.diffuser_hardware.center.map(

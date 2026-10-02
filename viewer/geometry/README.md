@@ -6,9 +6,11 @@ LUCiD configuration. It currently includes:
 - LS--Acrylic, Acrylic--Water, and PMT-equator boundaries;
 - PMT front heads grouped by PMT type;
 - effective support rods grouped by family;
-- the hollow Acrylic and stainless-steel chimney segments;
-- Acrylic bowls with the same sampled 776 mm circular-arc profile used by
-  photon transport.
+- the hollow transparent-Acrylic and opaque-steel top-chimney volumes;
+- closed Acrylic-bowl volumes with the same sampled 776 mm circular-arc
+  profile and flat end caps used by photon transport;
+- the bottom-chimney Acrylic tube and flange, steel neck and flange, and
+  lower-half ellipsoidal steel shell;
 - source-attached PTFE diffuser ball, PEEK tube, and PE fibre using the same
   effective dimensions as photon transport.
 
@@ -21,7 +23,8 @@ From the repository root, run:
 
 ```sh
 /opt/gentoo/startprefix
-/opt/gentoo/opt/PyMC/bin/python scripts/view_juno_geometry.py \
+source run/env.sh
+JAX_PLATFORMS=cpu "$LUCID_PY" scripts/view_juno_geometry.py \
   --config config/JUNO_laser_geom_config.json \
   --source 0,0,17.1 \
   --source-axis 0,0,1 \
@@ -43,6 +46,7 @@ network access to `unpkg.com` to load Three.js.
 
 - `RESET VIEW` restores the whole-detector view.
 - `TOP DETAIL` focuses on the chimney and nearby top-region structures.
+- `BOTTOM DETAIL` focuses on the south-pole opening and bottom chimney.
 - `SOURCE DETAIL` focuses on the millimetre-scale diffuser hardware at the
   source position selected on the command line.
 - `AUTO ROTATE` starts or stops automatic rotation.
@@ -51,8 +55,13 @@ network access to `unpkg.com` to load Three.js.
 - The z section plane provides a clipped detector view.
 - Left drag orbits, the wheel zooms, and right drag pans.
 
-For a clear top-region demonstration, select `TOP DETAIL`, reduce PMT opacity
-to about 0.2--0.4, and raise structure opacity to about 0.8--1.0.
+For a clear top- or bottom-region demonstration, select the corresponding
+detail view, reduce PMT opacity to about 0.2--0.4, and raise structure opacity
+to about 0.8--1.0.
+
+The viewer displays the finite Acrylic geometry used by transport, but it is
+not an optical-event viewer: Snell/Fresnel/TIR decisions, material state, and
+bulk absorption diagnostics remain outputs of the forward simulation.
 
 The diffuser hardware follows `--source` and `--source-axis`. For example,
 use `--source 0,0,0`, `--source 0,0,16.1`, or `--source 0,0,17.1` to match a
