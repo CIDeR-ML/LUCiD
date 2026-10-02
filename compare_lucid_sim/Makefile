@@ -20,7 +20,7 @@ export MPLCONFIGDIR
 
 # ---- data paths (reproduction entry points) -----------------------
 DATA_ROOT    ?= \
-    /junofs/C/liukainan/LUCiD/simulation_updated_diffuserHardware
+    /junofs/C/liukainan/LUCiD/simulation_CleanBasisModel
 FSMP_ROOT    ?= /junofs/C/PE
 JUNOSW_ROOT  ?= /mnt/stage/haoch/junores/laser/532
 PMT_MAP      ?= /junofs/C/junoid_J25.7.3.pq
@@ -48,9 +48,10 @@ LUCID_LABEL   ?= LUCiD (diffuser)
 JUNOSW_LABEL  ?= JUNOsw (J26.5.0)
 TAG           ?= tts_dark_on_irf_off
 PE_SCALE_BINS ?= 100
+args          ?=
 
 # ---- output roots (caches live beside the PDFs) --------------------
-DIFFUSER_OUT ?= $(DATA_ROOT)/compare_sim-diffuser
+DIFFUSER_OUT ?= $(DATA_ROOT)/compare_sim
 IRF125_OUT   ?= $(DATA_ROOT)/compare_sim-irf125
 PE_SCALE_OUT ?= $(DATA_ROOT)/compare_sim-pe_scale
 SCALE_Z_OUT  ?= $(DATA_ROOT)/compare_sim-scale_vs_z_all_channels
@@ -101,7 +102,7 @@ define COMPARE_RECIPE
 	    -n $(CHANNEL_COUNT) --seed $(SEED) \
 	    $(PAGE_COUNT_ARG) \
 	    --output-root $(DIFFUSER_OUT) --output-tag $(TAG) \
-	    --add-dark-to-simulation --lucid-qe-correction
+	    --add-dark-to-simulation --lucid-qe-correction $(args)
 endef
 
 # TTS-vs-IRF five-curve comparison over the 125 characterized
@@ -120,7 +121,7 @@ define TTS_IRF_RECIPE
 	    --no-time-difference-panels \
 	    --add-dark-to-simulation --lucid-qe-correction \
 	    --bins $(BINS) --fsmp-pe-scale $(FSMP_PE_SCALE) \
-	    --output-root $(IRF125_OUT)
+	    --output-root $(IRF125_OUT) $(args)
 endef
 
 # All-channel raw PE-scale comparison PDF.  --build-missing fills any
@@ -147,12 +148,16 @@ define PE_SCALE_RECIPE
 	    --fsmp-dir $(4) --lucid-sim-dir $(2) \
 	    --junosw-sim-dir $(3) \
 	    --lucid-label "$(LUCID_LABEL)" \
-	    --junosw-label "$(JUNOSW_LABEL)"
+	    --junosw-label "$(JUNOSW_LABEL)" $(args)
 endef
 
 SCALE_Z_CSV := $(SCALE_Z_OUT)/channel_selection_all_17612.csv
 
 # ---- targets --------------------------------------------------------
+# compare-z: run is looked up from Z via run_532.csv; the FSMP
+# directory uses the script default root (/junofs/C/PE).
+Z ?= 0
+
 COMPARE_TARGETS  := $(addprefix compare-,$(RUNS))
 TTS_IRF_TARGETS  := $(addprefix tts-irf-,$(RUNS))
 PE_SCALE_TARGETS := $(addprefix pe-scale-,$(RUNS))
@@ -163,7 +168,7 @@ THETA_TARGETS := $(addprefix theta-intensity-,$(RUNS))
 define THETA_INTENSITY_RECIPE
 	cd $(PROJECT_ROOT) && $(PYTHON) -u \
 	    compare_lucid_sim/plot_theta_intensity.py \
-	    --run $(1) --cache-root $(PE_SCALE_OUT)/$(1)
+	    --run $(1) --cache-root $(PE_SCALE_OUT)/$(1) $(args)
 endef
 
 .PHONY: help all compare-all tts-irf-all pe-scale-all scale-vs-z \
@@ -188,6 +193,22 @@ compare-15022:
 compare-15012:
 	$(call COMPARE_RECIPE,$(Z_15012),$(LUCID_15012),\
 	    $(JUNOSW_15012),$(FSMP_15012))
+
+compare-z:
+	@mkdir -p $(MPLCONFIGDIR)
+	cd $(PROJECT_ROOT) && $(PYTHON) -u \
+	    compare_lucid_sim/compare_sim_vs_real.py \
+	    -z $(Z) \
+	    --lucid-sim-dir $(DATA_ROOT)/z$(shell awk \
+	        "BEGIN{printf \"%d\", $(Z)*100}") \
+	    --lucid-label "$(LUCID_LABEL)" \
+	    --junosw-sim-dir $(JUNOSW_ROOT)/$(shell awk \
+	        "BEGIN{printf \"%d\", $(Z)*1000}") \
+	    --junosw-label "$(JUNOSW_LABEL)" \
+	    -n $(CHANNEL_COUNT) --seed $(SEED) \
+	    $(PAGE_COUNT_ARG) \
+	    --output-root $(DIFFUSER_OUT) --output-tag $(TAG) \
+	    --add-dark-to-simulation --lucid-qe-correction $(args)
 
 compare-all: $(COMPARE_TARGETS)
 
@@ -252,7 +273,7 @@ scale-vs-z:
 	    --lucid-root $(DATA_ROOT) \
 	    --junosw-root $(JUNOSW_ROOT) \
 	    --channel-selection $(SCALE_Z_CSV) \
-	    --output-dir $(SCALE_Z_OUT)
+	    --output-dir $(SCALE_Z_OUT) $(args)
 
 all: compare-all tts-irf-all pe-scale-all scale-vs-z theta-intensity-all
 
@@ -282,7 +303,8 @@ SUBMIT_VARS = \
     LUCID_LABEL='$(LUCID_LABEL)' JUNOSW_LABEL='$(JUNOSW_LABEL)' \
     TAG='$(TAG)' PE_SCALE_BINS='$(PE_SCALE_BINS)' \
     DIFFUSER_OUT='$(DIFFUSER_OUT)' IRF125_OUT='$(IRF125_OUT)' \
-    PE_SCALE_OUT='$(PE_SCALE_OUT)' SCALE_Z_OUT='$(SCALE_Z_OUT)'
+    PE_SCALE_OUT='$(PE_SCALE_OUT)' SCALE_Z_OUT='$(SCALE_Z_OUT)' \
+    args='$(args)'
 
 submit-%:
 	@mkdir -p $(SLURM_LOG_DIR)
@@ -293,40 +315,38 @@ submit-%:
 	    --wrap "$(MAKE_PROG) -C $(COMPARE_DIR) $* $(SUBMIT_VARS)"
 
 help:
-	@echo "532 nm laser three-way comparison reproduction"
-	@echo ""
-	@echo "targets:"
-	@echo "  compare-<run> / compare-all      time+summary+amplitude"
-	@echo "                                   PDFs + CSV (runs $(RUNS))"
-	@echo "  tts-irf-<run> / tts-irf-all      TTS-vs-IRF five-curve"
-	@echo "                                   pages (irf125 channels)"
-	@echo "  pe-scale-<run> / pe-scale-all    all-channel PE-scale PDF"
-	@echo "  theta-intensity-<run>/-all    per-PMT PE vs theta"
-	@echo "  scale-vs-z                       source-scale vs z PDF"
-	@echo "  all                              everything"
-	@echo ""
-	@echo "submit-<target> runs as a Slurm job; four jobs:"
-	@echo "  make -C compare_lucid_sim submit-compare-15040 submit-compare-15030"
-	@echo "      submit-compare-15022 submit-compare-15012"
-	@echo "  (SBATCH / SBATCH_OPTS / SLURM_LOG_DIR overridable)"
-	@echo ""
-	@echo "data-path variables (override as needed):"
-	@echo "  DATA_ROOT    = $(DATA_ROOT)"
-	@echo "  FSMP_ROOT    = $(FSMP_ROOT)"
-	@echo "  JUNOSW_ROOT  = $(JUNOSW_ROOT)"
-	@echo "  PMT_MAP      = $(PMT_MAP)"
-	@echo "  IRF_H5       = $(IRF_H5)"
-	@echo "  CHANNEL_SELECTION = $(CHANNEL_SELECTION)"
-	@echo "                     (empty: derived from IRF_H5+PMT_MAP)"
-	@echo "outputs: DIFFUSER_OUT/IRF125_OUT/PE_SCALE_OUT/SCALE_Z_OUT,"
-	@echo "         all under \$$(DATA_ROOT) by default --"
-	@echo "         override DATA_ROOT or your runs write into"
-	@echo "         the author's directory above"
-	@echo ""
-	@echo "settings: CHANNEL_COUNT=$(CHANNEL_COUNT) SEED=$(SEED) \
-	BINS=$(BINS) FSMP_PE_SCALE=$(FSMP_PE_SCALE) QE=$(QE)"
-	@echo "          PAGE_CHANNEL_COUNT=$(PAGE_CHANNEL_COUNT)"
-	@echo "          (empty: per-channel pages draw all)"
-	@echo "example: make -C compare_lucid_sim compare-all FSMP_ROOT=/path/PE \
-	JUNOSW_ROOT=/path/junores"
+	@printf '%s\n' \
+	  '532 nm laser three-way comparison (LUCiD / JUNOsw / FSMP)' \
+	  '' \
+	  'targets:' \
+	  '  compare-<run> / compare-all    time+summary+amplitude PDFs' \
+	  '                                 (runs $(RUNS))' \
+	  '  compare-z Z=16.1               same, run looked up from z' \
+	  '  tts-irf-<run> / tts-irf-all    TTS-vs-IRF pages (irf125)' \
+	  '  pe-scale-<run> / pe-scale-all  all-channel PE-scale PDF' \
+	  '  theta-intensity-<run>/-all     per-PMT PE vs theta' \
+	  '  scale-vs-z                     source-scale vs z PDF' \
+	  '  all                            everything' \
+	  '' \
+	  'submit-<target>                  run as a Slurm job, e.g. four' \
+	  '  jobs: submit-compare-15040 .. submit-compare-15012' \
+	  '' \
+	  'data paths (override!):' \
+	  '  DATA_ROOT   = $(DATA_ROOT)' \
+	  '  FSMP_ROOT   = $(FSMP_ROOT)' \
+	  '  JUNOSW_ROOT = $(JUNOSW_ROOT)' \
+	  '  PMT_MAP     = $(PMT_MAP)' \
+	  '  IRF_H5      = $(IRF_H5)' \
+	  '  CHANNEL_SELECTION = $(CHANNEL_SELECTION)' \
+	  '    (empty: derived from IRF_H5 + PMT_MAP)' \
+	  'outputs: DIFFUSER/IRF125/PE_SCALE/SCALE_Z_OUT, all under' \
+	  '  $$(DATA_ROOT) -- override DATA_ROOT or your runs write' \
+	  '  into the author'"'"'s directory above' \
+	  '' \
+	  'settings: CHANNEL_COUNT=$(CHANNEL_COUNT) SEED=$(SEED)' \
+	  '  BINS=$(BINS) FSMP_PE_SCALE=$(FSMP_PE_SCALE) QE=$(QE)' \
+	  '  PAGE_CHANNEL_COUNT=$(PAGE_CHANNEL_COUNT) (empty: draw all)' \
+	  'args="$(args)" passes extra script flags to any target' \
+	  'example: make -C compare_lucid_sim compare-z Z=16.1' \
+	  '          DATA_ROOT=/path/to/data'
 
