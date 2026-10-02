@@ -56,6 +56,7 @@ def build_per_pe_forward(
     has_engineering = any((
         detector.support_rods is not None,
         detector.chimney is not None,
+        detector.bottom_chimney is not None,
         detector.acrylic_bowls is not None,
         detector.diffuser_hardware is not None,
     ))
@@ -84,6 +85,8 @@ def build_per_pe_forward(
         required_surface_codes.append(0)
     if detector.chimney is not None:
         required_surface_codes.extend((1, 2))
+    if detector.bottom_chimney is not None:
+        required_surface_codes.extend((7, 8))
     if detector.acrylic_bowls is not None:
         required_surface_codes.append(3)
     if has_diffuser_hardware:

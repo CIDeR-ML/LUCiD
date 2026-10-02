@@ -383,6 +383,268 @@ def test_main_cli_has_no_time_difference_panel_switch():
         )
 
 
+def test_main_cli_fsmp_pe_scale_default_and_value():
+    """--fsmp-pe-scale defaults to 1.0 and accepts a numeric factor."""
+    args = comparison.parse_args(["--lucid-sim-dir", "/x"])
+    assert args.fsmp_pe_scale == 1.0
+    args = comparison.parse_args(
+        ["--lucid-sim-dir", "/x", "--fsmp-pe-scale", "10"]
+    )
+    assert args.fsmp_pe_scale == 10.0
+
+
+def test_scaled_fsmp_target_pe_multiplies_lucid_total():
+    """The FSMP PE target scales the selected-channel LUCiD total."""
+    assert comparison.scaled_fsmp_target_pe(22_595_480, 1.0) == 22_595_480
+    assert comparison.scaled_fsmp_target_pe(22_595_480, 10.0) == 225_954_800
+    assert comparison.scaled_fsmp_target_pe(None, 10.0) is None
+    with pytest.raises(ValueError):
+        comparison.scaled_fsmp_target_pe(100, 0.0)
+
+
+def test_amplitude_plot_arrays_keeps_dark_outside_qe():
+    """The LUCiD QE factor scales the signal but never the added dark.
+
+    Dark noise is a detector-side rate and must not be scaled by the
+    optical QE factor; both sources keep the same dark plateau.
+    """
+    edges = np.arange(5.0)
+    dark = np.array([[0.02], [0.02]])
+    signal = np.array([0.0, 0.1, 0.2, 0.1])
+    pe = np.stack(
+        [signal + dark[0, 0], 2.0 * signal + dark[0, 0]]
+    )[:, None, :]
+    data = {
+        "simulation_labels": np.array(["LUCiD", "JUNOsw"]),
+        "simulation_kinds": np.array(["lucid", "junosw"]),
+        "simulation_pe_per_event_density": pe,
+        "simulation_dark_added": np.asarray(True),
+        "run_dark_rate_pe_per_event_per_ns": dark,
+        "edges": edges,
+        "simulation_mean_pe_per_event": pe.sum(axis=2),
+        "simulation_prompt_pe_per_event": pe[..., :2].sum(axis=2),
+        "simulation_late_pe_per_event": pe[..., 2:].sum(axis=2),
+        "prompt_window_effective_low_ns": np.array([0.0]),
+        "prompt_window_effective_high_ns": np.array([2.0]),
+        "late_window_effective_low_ns": np.array([2.0]),
+        "late_window_effective_high_ns": np.array([4.0]),
+    }
+    arrays = plotting.amplitude_plot_arrays(data, lucid_qe_eff=0.5)
+    # JUNOsw (factor 1) is returned unchanged.
+    np.testing.assert_allclose(arrays["simulation_density"][1], pe[1])
+    # LUCiD: signal halved, dark plateau untouched.
+    np.testing.assert_allclose(
+        arrays["simulation_density"][0, 0], signal * 0.5 + 0.02
+    )
+    # Mean/prompt/late: dark contribution excluded from the QE scaling.
+    dark_total = 0.02 * 4.0
+    np.testing.assert_allclose(
+        arrays["simulation_mean"][:, 0],
+        [(0.4 + dark_total - dark_total) * 0.5 + dark_total,
+         0.8 + dark_total],
+    )
+    np.testing.assert_allclose(
+        arrays["simulation_prompt"][:, 0],
+        [(0.1 + 0.04 - 0.04) * 0.5 + 0.04, 0.2 + 0.04],
+    )
+    np.testing.assert_allclose(
+        arrays["simulation_late"][:, 0],
+        [(0.3 + 0.04 - 0.04) * 0.5 + 0.04, 0.6 + 0.04],
+    )
+
+
+def test_amplitude_plot_arrays_without_dark_added_unchanged():
+    """Caches built without dark keep the legacy whole-curve scaling."""
+    pe = np.full((1, 1, 4), 0.3)
+    data = {
+        "simulation_labels": np.array(["LUCiD"]),
+        "simulation_kinds": np.array(["lucid"]),
+        "simulation_pe_per_event_density": pe,
+        "simulation_dark_added": np.asarray(False),
+        "simulation_mean_pe_per_event": pe.sum(axis=2),
+        "simulation_prompt_pe_per_event": np.full((1, 1), np.nan),
+        "simulation_late_pe_per_event": np.full((1, 1), np.nan),
+    }
+    arrays = plotting.amplitude_plot_arrays(data, lucid_qe_eff=0.5)
+    np.testing.assert_allclose(arrays["simulation_density"], pe * 0.5)
+    np.testing.assert_allclose(
+        arrays["simulation_mean"], pe.sum(axis=2) * 0.5
+    )
+
+
+def test_summary_theta_groups_ten_degree_bins():
+    """Summary grouping uses 10 deg bins; nearby latitudes share a bin."""
+    theta = np.array([5.0, 15.0, 35.53, 35.91, 105.0, np.nan])
+    groups = plotting.summary_theta_groups(theta, source_z=15.0)
+    titles = [title for title, _ in groups]
+    assert titles == [
+        "theta in [0, 10) deg",
+        "theta in [10, 20) deg",
+        "theta in [30, 40) deg",
+        "theta in [100, 110) deg",
+    ]
+    mask_30 = groups[2][1]
+    np.testing.assert_array_equal(
+        mask_30, [False, False, True, True, False, False]
+    )
+    central = plotting.summary_theta_groups(theta, source_z=0.0)
+    assert len(central) == 1 and central[0][0] == ""
+    assert central[0][1].all()
+
+
+def test_main_cli_page_channel_count_default_none():
+    """--page-channel-count defaults to drawing every selected channel."""
+    args = comparison.parse_args(["--lucid-sim-dir", "/x"])
+    assert args.page_channel_count is None
+    args = comparison.parse_args(
+        ["--lucid-sim-dir", "/x", "--page-channel-count", "100"]
+    )
+    assert args.page_channel_count == 100
+
+
+def test_page_channel_indices_reproducible_and_clipped():
+    """The page subsample is seed-reproducible and clipped to available."""
+    a = comparison.page_channel_indices(1000, 100, 0)
+    b = comparison.page_channel_indices(1000, 100, 0)
+    np.testing.assert_array_equal(a, b)
+    assert len(a) == 100 and np.all(np.diff(a) > 0)
+    assert a.min() >= 0 and a.max() < 1000
+    assert comparison.page_channel_indices(100, None, 0) is None
+    clipped = comparison.page_channel_indices(50, 100, 0)
+    assert len(clipped) == 50
+    with pytest.raises(ValueError):
+        comparison.page_channel_indices(100, 0, 0)
+
+
+def _qe_shape_inputs(signal_ratio=0.097):
+    """Two identical-shape sources; LUCiD carries no built-in QE.
+
+    Input: the JUNOsw-to-LUCiD signal ratio (the QE factor).  Output:
+    FSMP/simulation inputs whose FSMP times fill the dark sideband so
+    the dark rate is nonzero, plus a sharp peak near 10 ns.
+    """
+    edges = np.arange(-250.0, 260.0, 5.0)
+    dark_times = np.linspace(-240.0, -40.0, 40)
+    peak_times = np.array([10.0, 11.0, 12.0, 13.0])
+    times = np.concatenate([dark_times, peak_times])
+    n = len(times)
+    fsmp = {
+        "channels": np.array([5]),
+        "pmt_type": np.array([1]),
+        "tts": np.array([0.0]),
+        "z": np.array([1.0]),
+        "theta": np.array([2.0]),
+        "fsmp_ch": np.full(n, 5),
+        "fsmp_eid": np.arange(n) % 8,
+        "fsmp_time": times,
+        "fsmp_pe_count": np.ones(n, dtype=np.int64),
+        "fsmp_physical_events": np.array(8),
+        "fsmp_event_samples": np.array(8),
+        "fsmp_target_pe": np.asarray(-1),
+    }
+
+    def sim(label, kind, scale):
+        raw = np.zeros(len(edges) - 1)
+        peak_bin = int(np.searchsorted(edges, 10.0)) - 1
+        raw[peak_bin] = 40.0 * scale
+        return {
+            "channels": np.array([5]),
+            "edges": edges,
+            "centers": (edges[:-1] + edges[1:]) / 2.0,
+            "simulation_raw_density": raw[None, :],
+            "simulation_entries": np.array([40]),
+            "simulation_total_pe": np.array([40]),
+            "simulation_events": np.array([40]),
+            "label": np.asarray(label),
+            "kind": np.asarray(kind),
+        }
+
+    lucid = sim("LUCiD", "lucid", 1.0)
+    junosw = sim("JUNOsw", "junosw", signal_ratio)
+    return fsmp, lucid, junosw
+
+
+def test_shape_uses_qe_corrected_density_dark_unscaled():
+    """Shapes come from QE-corrected density with dark left unscaled.
+
+    With LUCiD lacking the built-in QE, correcting its signal by the QE
+    factor makes both source shapes identical, dark plateau included;
+    the stored PE/event density stays uncorrected for the amplitude
+    pages.
+    """
+    fsmp, lucid, junosw = _qe_shape_inputs()
+    result = comparison.build_channel_histograms_multi(
+        fsmp,
+        [lucid, junosw],
+        alignment="l1",
+        use_tts=False,
+        add_dark_to_simulation=True,
+        lucid_qe_factors=np.array([0.097, 1.0]),
+    )
+    shape_l, shape_j = result["simulation_density"][:, 0]
+    np.testing.assert_allclose(shape_l, shape_j, rtol=1e-12)
+    # The dark plateau dominates the pre-peak bins of both shapes.
+    centers = result["centers"]
+    pre = (centers >= -100) & (centers <= 0)
+    assert np.all(shape_l[pre] > 0)
+    # PE/event densities keep the uncorrected (signal + dark) meaning.
+    pe_l, pe_j = result["simulation_pe_per_event_density"][:, 0]
+    assert pe_l.sum() > 5.0 * pe_j.sum()
+    # Dark rate is positive and identical for the shared FSMP channel.
+    dark = result["run_dark_rate_pe_per_event_per_ns"][:, 0]
+    assert dark[0] > 0 and dark[0] == dark[1]
+
+
+def test_shape_legacy_when_qe_factors_unity():
+    """Unit QE factors reproduce the pre-fix shape exactly."""
+    fsmp, lucid, junosw = _qe_shape_inputs()
+    result = comparison.build_channel_histograms_multi(
+        fsmp,
+        [lucid, junosw],
+        alignment="l1",
+        use_tts=False,
+        add_dark_to_simulation=True,
+        lucid_qe_factors=np.array([1.0, 1.0]),
+    )
+    shape_l, shape_j = result["simulation_density"][:, 0]
+    pe_l, pe_j = result["simulation_pe_per_event_density"][:, 0]
+    width = float(result["edges"][1] - result["edges"][0])
+    np.testing.assert_allclose(shape_l, pe_l / (pe_l.sum() * width))
+    np.testing.assert_allclose(shape_j, pe_j / (pe_j.sum() * width))
+
+
+def test_build_rejects_bad_qe_factors():
+    """lucid_qe_factors must be positive with one entry per source."""
+    fsmp, lucid, junosw = _qe_shape_inputs()
+    with pytest.raises(ValueError):
+        comparison.build_channel_histograms_multi(
+            fsmp,
+            [lucid, junosw],
+            use_tts=False,
+            lucid_qe_factors=np.array([0.097]),
+        )
+    with pytest.raises(ValueError):
+        comparison.build_channel_histograms_multi(
+            fsmp,
+            [lucid, junosw],
+            use_tts=False,
+            lucid_qe_factors=np.array([0.0, 1.0]),
+        )
+
+
+def test_processing_string_records_qe_and_schema_bump():
+    """The aligned-cache key carries the QE setting and schema 8."""
+    value = metrics.processing_string(
+        True, "0", True, lucid_qe=0.097
+    )
+    assert value.startswith("metrics=8,")
+    assert "qe=0.097" in value
+    value_off = metrics.processing_string(
+        True, "0", True, lucid_qe=None
+    )
+    assert "qe=off" in value_off
+
+
 def test_pmt_summary_pools_pe_before_normalizing():
     """PMT summaries weight channels by their PE contribution."""
     pe_density = np.array([[1.0, 0.0], [0.0, 9.0]])

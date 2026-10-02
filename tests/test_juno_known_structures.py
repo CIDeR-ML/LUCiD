@@ -11,13 +11,17 @@ from lucid.geometry.detector import generate_detector
 from lucid.geometry.detector_geometry import DetectorGeometry
 from lucid.geometry.juno_structures import (
     AcrylicBowlLayout,
+    BOTTOM_CHIMNEY_ACRYLIC,
+    BOTTOM_CHIMNEY_STEEL,
     BOWL_CANDIDATES_PER_CELL,
     BOWL_INTERFACE_OFFSET_M,
+    BottomChimneyGeometry,
     ChimneyGeometry,
     acrylic_bowl_radius,
     acrylic_bowl_slope,
     build_bowl_candidate_map,
     intersect_acrylic_bowls,
+    intersect_bottom_chimney,
     intersect_chimney,
     load_juno_acrylic_bowls,
 )
@@ -363,6 +367,106 @@ def test_chimney_acrylic_origin_reaches_outer_exit():
     npt.assert_allclose(hit.outward_normals[0], [1.0, 0.0, 0.0])
 
 
+def test_bottom_chimney_matches_junosw_principal_dimensions():
+    """The south opening retains the J26.5.1 bore and flange scales."""
+    bottom = BottomChimneyGeometry.junosw_j26()
+
+    npt.assert_allclose(bottom.aperture_radii_m, [0.500, 0.580])
+    npt.assert_allclose(
+        bottom.acrylic.inner_radii_m,
+        [0.500, 0.580],
+    )
+    npt.assert_allclose(
+        bottom.acrylic.outer_radii_m,
+        [0.580, 0.675],
+    )
+    npt.assert_allclose(bottom.acrylic.z_min_m, [-18.700, -18.700])
+    npt.assert_allclose(bottom.acrylic.z_max_m, [-17.700, -18.600])
+    npt.assert_allclose(bottom.steel_upper.inner_radii_m, [0.500, 0.506])
+    npt.assert_allclose(bottom.steel_upper.outer_radii_m, [0.506, 0.675])
+    npt.assert_allclose(bottom.steel_upper.z_min_m, [-18.765, -18.750])
+    npt.assert_allclose(bottom.steel_upper.z_max_m, [-18.700, -18.700])
+    npt.assert_allclose(bottom.steel_centre_z_m, -18.765)
+    npt.assert_allclose(bottom.steel_inner_axes_m, [0.500, 0.250])
+    npt.assert_allclose(bottom.steel_outer_axes_m, [0.502, 0.255])
+
+
+def test_bottom_chimney_acrylic_wall_is_transparent_interface():
+    """A bore-side ray first enters the bottom Acrylic tube wall."""
+    bottom = BottomChimneyGeometry.junosw_j26()
+    hit = intersect_bottom_chimney(
+        jnp.array([[0.0, 0.0, -18.0]]),
+        jnp.array([[1.0, 0.0, 0.0]]),
+        bottom,
+    )
+
+    npt.assert_array_equal(hit.valid, [True])
+    npt.assert_allclose(hit.distance_m, [0.500], atol=1e-7)
+    npt.assert_array_equal(hit.surface_codes, [BOTTOM_CHIMNEY_ACRYLIC])
+    npt.assert_array_equal(hit.inside_before, [False])
+
+
+def test_bottom_chimney_intersection_is_jittable_and_differentiable():
+    """The effective south wall preserves a local origin gradient."""
+    bottom = BottomChimneyGeometry.junosw_j26()
+
+    @jax.jit
+    def distance(x_position):
+        hit = intersect_bottom_chimney(
+            jnp.array([[x_position, 0.0, -18.0]]),
+            jnp.array([[1.0, 0.0, 0.0]]),
+            bottom,
+        )
+        return hit.distance_m[0]
+
+    npt.assert_allclose(distance(0.100), 0.400, atol=1e-7)
+    npt.assert_allclose(jax.grad(distance)(0.100), -1.0, atol=1e-7)
+
+
+def test_bottom_chimney_axis_reaches_steel_enclosure():
+    """The open south axis terminates on the effective steel bowl."""
+    bottom = BottomChimneyGeometry.junosw_j26()
+    hit = intersect_bottom_chimney(
+        jnp.array([[0.0, 0.0, -18.0]]),
+        jnp.array([[0.0, 0.0, -1.0]]),
+        bottom,
+    )
+
+    npt.assert_array_equal(hit.valid, [True])
+    npt.assert_allclose(hit.positions[0, 2], -19.015, atol=1e-6)
+    npt.assert_array_equal(hit.surface_codes, [BOTTOM_CHIMNEY_STEEL])
+
+
+def test_bottom_chimney_acrylic_union_has_no_internal_end_cap():
+    """The tube wall continues through the flange without a fake face."""
+    bottom = BottomChimneyGeometry.junosw_j26()
+    hit = intersect_bottom_chimney(
+        jnp.array([[0.540, 0.0, -18.500]]),
+        jnp.array([[0.0, 0.0, -1.0]]),
+        bottom,
+    )
+
+    npt.assert_array_equal(hit.valid, [True])
+    npt.assert_allclose(hit.positions[0, 2], -18.700, atol=1e-7)
+    npt.assert_array_equal(hit.surface_codes, [BOTTOM_CHIMNEY_ACRYLIC])
+    npt.assert_array_equal(hit.inside_before, [True])
+
+
+def test_bottom_chimney_acrylic_union_skips_shared_radial_face():
+    """The tube/flange partition is not reported as an optical interface."""
+    bottom = BottomChimneyGeometry.junosw_j26()
+    hit = intersect_bottom_chimney(
+        jnp.array([[0.540, 0.0, -18.650]]),
+        jnp.array([[1.0, 0.0, 0.0]]),
+        bottom,
+    )
+
+    npt.assert_array_equal(hit.valid, [True])
+    npt.assert_allclose(hit.positions[0, 0], 0.675, atol=1e-7)
+    npt.assert_array_equal(hit.surface_codes, [BOTTOM_CHIMNEY_ACRYLIC])
+    npt.assert_array_equal(hit.inside_before, [True])
+
+
 def test_bowl_acrylic_origin_reaches_curved_exit():
     """A ray in one bowl receives the curved Acrylic exit boundary."""
     bowls = _nominal_bowl()
@@ -435,6 +539,7 @@ def _write_minimal_config(tmp_path):
             "sensor_radius": 0.254,
             "pmt_file_path": positions.name,
             "chimney_geometry": "juno_lower_chimney",
+            "bottom_chimney_geometry": "juno_bottom_chimney",
             "acrylic_bowl_file_path": bowls.name,
             "acrylic_bowl_geometry": "juno_addition_curved_arc",
         },
@@ -463,6 +568,28 @@ def test_detector_loader_independent_structure_overrides(tmp_path):
     assert chimney_only.acrylic_bowls is None
     assert bowls_only.chimney is None
     assert bowls_only.acrylic_bowls is not None
+
+
+def test_bottom_chimney_has_independent_loader_override(tmp_path):
+    """The south opening can be ablated without changing the top chimney."""
+    path = _write_minimal_config(tmp_path)
+    enabled = generate_detector(
+        path,
+        chimney_geometry_enabled=False,
+        bottom_chimney_geometry_enabled=True,
+        acrylic_bowl_geometry_enabled=False,
+    )
+    disabled = generate_detector(
+        path,
+        chimney_geometry_enabled=True,
+        bottom_chimney_geometry_enabled=False,
+        acrylic_bowl_geometry_enabled=False,
+    )
+
+    assert enabled.chimney is None
+    assert enabled.bottom_chimney is not None
+    assert disabled.chimney is not None
+    assert disabled.bottom_chimney is None
 
 
 def test_chimney_opens_top_spherical_interfaces(tmp_path):
@@ -512,6 +639,33 @@ def test_chimney_region_is_ls_inside_bore(tmp_path):
     ]))
 
     npt.assert_array_equal(regions, [0, 2])
+
+
+def test_bottom_chimney_opens_south_spherical_interfaces(tmp_path):
+    """An axial LS ray reaches the steel bowl through the south opening."""
+    path = _write_minimal_config(tmp_path)
+    geometry = DetectorGeometry.from_config(
+        str(path),
+        detector_type="nested_sphere",
+        temperature=None,
+        max_candidates_per_ray=1,
+        n_divisions=8,
+        chimney_geometry_enabled=False,
+        bottom_chimney_geometry_enabled=True,
+        acrylic_bowl_geometry_enabled=False,
+    )
+    result = geometry.propagator(
+        jnp.array([[0.0, 0.0, 0.0]]),
+        jnp.array([[0.0, 0.0, -1.0]]),
+    )
+
+    npt.assert_array_equal(result["hit_interface"], [False])
+    npt.assert_array_equal(result["hit_bottom_chimney"], [True])
+    npt.assert_array_equal(
+        result["engineering_surface_code"],
+        [BOTTOM_CHIMNEY_STEEL],
+    )
+    npt.assert_allclose(result["positions"][0, 2], -19.015, atol=1e-5)
 
 
 def test_bowl_competes_after_acrylic_water_interface(tmp_path):

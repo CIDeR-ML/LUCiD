@@ -6,7 +6,7 @@ This implementation transfers the principal engineering dimensions from
 JUNOSW into LUCiD for component-wise ablation and optical-component
 analysis. It does not reproduce the complete CAD model, and a reduction in
 the three-way discrepancy after a single change is not an acceptance
-criterion. The geometry source is:
+criterion. The Acrylic-bowl placement source is:
 
 ~~~text
 /cvmfs/juno.ihep.ac.cn/el9_amd64_gcc11/Release/J26.5.1/
@@ -16,7 +16,13 @@ data/Detector/Geometry/share/geometry_acrylic.gdml
 The extraction script \`scripts/extract_juno_acrylic_bowls.py\` generates the
 portable \`config/JUNO_acrylic_bowls.csv\` file from this GDML input.
 Production simulation therefore does not require CVMFS to be mounted on the
-worker node.
+worker node. The bottom-chimney dimensions are additionally traced to:
+
+~~~text
+/cvmfs/juno.ihep.ac.cn/el9_amd64_gcc11/Release/J26.5.1/junosw/
+Simulation/DetSimV2/CentralDetector/src/DetSim1Construction.cc
+Simulation/DetSimV2/CentralDetector/src/RoundBottomFlaskSolidMaker.cc
+~~~
 
 ## Chimney component
 
@@ -42,6 +48,59 @@ is determined from the crossed face and Snell/Fresnel/TIR transport is
 applied. While the photon is in the wall, its time, scattering and bulk
 attenuation use the Acrylic material parameters. The steel segment remains
 an opaque effective surface.
+
+## Bottom-chimney component
+
+JUNOSW J26.5.1 constructs the south-pole opening in
+`DetSim1Construction.cc` with `RoundBottomFlaskSolidMaker`: the LS sphere,
+Acrylic sphere and coaxial tubes are Boolean unions. The steel enclosure is
+then built separately from a four-plane polycone, a lower-half ellipsoid and
+a fine lower pipe. LUCiD keeps the principal optical envelope:
+
+| Part | z range [m] | Inner radius [m] | Outer radius [m] |
+|---|---:|---:|---:|
+| Acrylic tube wall | -18.700 to -17.700 | 0.500 | 0.580 |
+| Acrylic flange ring | -18.700 to -18.600 | 0.580 | 0.675 |
+| Steel neck | -18.765 to -18.700 | 0.500 | 0.506 |
+| Steel flange ring | -18.750 to -18.700 | 0.506 | 0.675 |
+
+The steel bowl below the flange is a lower-half ellipsoidal shell centred at
+`z=-18.765 m`. Its inner radial/axial semiaxes are `(0.500, 0.250) m`, and
+its outer semiaxes are `(0.502, 0.255) m`. The two Acrylic pieces are stored
+as a non-overlapping union. Shared faces inside that union are skipped and
+therefore do not become optical material boundaries.
+
+The LS--Acrylic sphere is opened for south-going intersections with
+`rho < 0.500 m`; the Acrylic--Water sphere is opened for `rho < 0.580 m`.
+The bore therefore remains LS and reaches the steel enclosure instead of
+crossing an intact spherical boundary. The Acrylic wall is transparent:
+entry and exit use the same Snell/Fresnel/TIR and Acrylic bulk-absorption
+state machine as the top chimney and Acrylic bowls. The steel neck and bowl
+remain an opaque effective surface with configurable absorption, specular
+reflection and diffuse reflection.
+
+This clean model intentionally omits the 62 mm-bore fine lower pipe, bolts,
+flexible coupling and edge fillets. These parts lie below the principal
+enclosure and can be added only if a component ablation demonstrates an
+identifiable optical contribution.
+
+The component has an independent switch:
+
+~~~text
+--bottom-chimney-geometry config|on|off
+BOTTOM_CHIMNEY_GEOMETRY=config|on|off
+~~~
+
+Surface codes 7 and 8 denote bottom-chimney Acrylic and steel. Their
+per-event hit, reflection, transmission, material entry/exit, bulk
+absorption and Acrylic path-length diagnostics are written separately in
+`results_summary.json`. Reproducible PDF and PNG figures are generated with:
+
+~~~sh
+JAX_PLATFORMS=cpu /opt/gentoo/usr/bin/python \
+  scripts/render_juno_bottom_chimney.py \
+  --output-dir geometry_render/bottom_chimney
+~~~
 
 ## Acrylic-bowl component
 
@@ -133,7 +192,8 @@ The steel segment retains its effective values \((0.40,0,0.60)\), with
 specular/diffuse splitting controlled by \(f_{\rm spec}\).
 
 Stable surface codes are 0 for support rods, 1 for chimney Acrylic, 2 for
-chimney steel, and 3 for Acrylic bowls. For each surface class,
+chimney steel, 3 for Acrylic bowls, 7 for bottom-chimney Acrylic and 8 for
+bottom-chimney steel. For each surface class,
 \`results_summary.json\` records the following per-event quantities:
 
 ~~~text
@@ -149,15 +209,17 @@ and `bulk_absorbed`.
 
 ## Independent ablation
 
-Two command-line options control the new components independently:
+Three command-line options control the components independently:
 
 ~~~text
 --chimney-geometry config|on|off
+--bottom-chimney-geometry config|on|off
 --acrylic-bowl-geometry config|on|off
 ~~~
 
 The corresponding batch-script environment variables are
-\`CHIMNEY_GEOMETRY\` and \`ACRYLIC_BOWL_GEOMETRY\`. The support-rod switch,
+\`CHIMNEY_GEOMETRY\`, \`BOTTOM_CHIMNEY_GEOMETRY\` and
+\`ACRYLIC_BOWL_GEOMETRY\`. The support-rod switch,
 \`SUPPORT_GEOMETRY\`, remains independent. With the same random seed, compare
 at least:
 

@@ -11,6 +11,8 @@ SURFACE_NAMES = (
     "diffuser_ptfe",
     "diffuser_peek",
     "diffuser_fiber",
+    "bottom_chimney_acrylic",
+    "bottom_chimney_steel",
 )
 
 

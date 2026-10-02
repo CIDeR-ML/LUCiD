@@ -4,8 +4,10 @@ The implementation keeps the main J26.5.1 positions and engineering scales
 while avoiding CAD-only bolt holes and coincident Boolean surfaces.  Lengths
 are expressed in metres.  Surface codes are stable simulation metadata:
 
-``1`` lower-chimney Acrylic, ``2`` lower-chimney steel, and ``3`` Acrylic
-addition bowl.  Code ``0`` remains reserved for support rods.
+``1`` lower-chimney Acrylic, ``2`` lower-chimney steel, ``3`` Acrylic
+addition bowl, ``7`` bottom-chimney Acrylic, and ``8`` bottom-chimney
+steel.  Code ``0`` remains reserved for support rods and codes ``4--6``
+for diffuser hardware.
 """
 
 from pathlib import Path
@@ -22,6 +24,8 @@ LARGE_DISTANCE = 1e10
 CHIMNEY_ACRYLIC = 1
 CHIMNEY_STEEL = 2
 ACRYLIC_BOWL = 3
+BOTTOM_CHIMNEY_ACRYLIC = 7
+BOTTOM_CHIMNEY_STEEL = 8
 BOWL_INTERFACE_OFFSET_M = 5e-4
 BOWL_ARC_RADIUS_M = 0.776
 BOWL_ARC_RADIAL_CENTRE_M = 0.69764
@@ -79,6 +83,80 @@ class ChimneyGeometry(NamedTuple):
             aperture_radius_m=0.400,
             aperture_z_min_m=17.7,
         )
+
+
+class BottomChimneyGeometry(NamedTuple):
+    """Effective south-pole chimney from JUNOSW J26.5.1.
+
+    The transparent Acrylic extension is represented by two adjoining
+    annular cylinders: the 80 mm tube wall and its outer flange ring.  The
+    opaque steel enclosure keeps the short upper annulus and the principal
+    lower-half ellipsoidal bowl.  Small pipes, bolts, and flange fillets are
+    outside this clean geometry baseline.
+    """
+
+    acrylic: ChimneyGeometry
+    steel_upper: ChimneyGeometry
+    aperture_radii_m: np.ndarray
+    aperture_z_max_m: float
+    steel_centre_z_m: float
+    steel_inner_axes_m: np.ndarray
+    steel_outer_axes_m: np.ndarray
+
+    @classmethod
+    def junosw_j26(cls):
+        """Build the principal J26.5.1 bottom-chimney dimensions."""
+        acrylic = ChimneyGeometry(
+            # This union equals a 0.500--0.580 m tube plus the wider
+            # 0.500--0.675 m flange, without an internal cap at -18.600 m.
+            inner_radii_m=np.array([0.500, 0.580]),
+            outer_radii_m=np.array([0.580, 0.675]),
+            z_min_m=np.array([-18.700, -18.700]),
+            z_max_m=np.array([-17.700, -18.600]),
+            surface_codes=np.array(
+                [BOTTOM_CHIMNEY_ACRYLIC] * 2, dtype=np.int8
+            ),
+            aperture_radius_m=0.500,
+            aperture_z_min_m=-np.inf,
+        )
+        steel_upper = ChimneyGeometry(
+            # Equivalent union of the 6 mm steel neck and the outer
+            # 675 mm flange ring in the J26.5.1 four-plane polycone.
+            inner_radii_m=np.array([0.500, 0.506]),
+            outer_radii_m=np.array([0.506, 0.675]),
+            z_min_m=np.array([-18.765, -18.750]),
+            z_max_m=np.array([-18.700, -18.700]),
+            surface_codes=np.array(
+                [BOTTOM_CHIMNEY_STEEL] * 2, dtype=np.int8
+            ),
+            aperture_radius_m=0.500,
+            aperture_z_min_m=-np.inf,
+        )
+        return cls(
+            acrylic=acrylic,
+            steel_upper=steel_upper,
+            aperture_radii_m=np.array([0.500, 0.580]),
+            aperture_z_max_m=-17.700,
+            steel_centre_z_m=-18.765,
+            steel_inner_axes_m=np.array([0.500, 0.250]),
+            steel_outer_axes_m=np.array([0.502, 0.255]),
+        )
+
+    def acrylic_contains(self, points):
+        """Return whether points lie in the effective Acrylic extension."""
+        points = jnp.atleast_2d(points)
+        rho2 = jnp.sum(points[:, :2] ** 2, axis=1, keepdims=True)
+        inner = jnp.asarray(self.acrylic.inner_radii_m)[None, :]
+        outer = jnp.asarray(self.acrylic.outer_radii_m)[None, :]
+        z_min = jnp.asarray(self.acrylic.z_min_m)[None, :]
+        z_max = jnp.asarray(self.acrylic.z_max_m)[None, :]
+        inside = (
+            (rho2 >= inner**2)
+            & (rho2 <= outer**2)
+            & (points[:, 2:3] >= z_min)
+            & (points[:, 2:3] <= z_max)
+        )
+        return jnp.any(inside, axis=1)
 
 
 class AcrylicBowlLayout(NamedTuple):
@@ -235,7 +313,8 @@ def intersect_chimney(origins, directions, chimney):
     for radius, sign in ((inner, -1.0), (outer, 1.0)):
         qc = ox**2 + oy**2 - radius**2
         discriminant = qb**2 - 4.0 * qa * qc
-        root = jnp.sqrt(jnp.maximum(discriminant, 0.0))
+        # Keep rejected tangencies from injecting an infinite derivative.
+        root = jnp.sqrt(jnp.maximum(discriminant, 1e-24))
         denominator = jnp.where(qa > 1e-12, 2.0 * qa, 1.0)
         roots = jnp.stack([
             (-qb - root) / denominator,
@@ -315,6 +394,184 @@ def intersect_chimney(origins, directions, chimney):
         outward_normals=outward,
         inside_before=inside_selected & valid,
     )
+
+
+def _intersect_lower_ellipsoid_shell(origins, directions, bottom):
+    """Intersect the effective steel bowl below the bottom flange."""
+    origins = jnp.atleast_2d(origins)
+    directions = _normalise(jnp.atleast_2d(directions))
+    centre = jnp.array([0.0, 0.0, bottom.steel_centre_z_m])
+    relative = origins - centre
+    distances = []
+    normals = []
+    inside_outer = None
+    inside_inner = None
+    for axes, sign in (
+        (bottom.steel_outer_axes_m, 1.0),
+        (bottom.steel_inner_axes_m, -1.0),
+    ):
+        radial = jnp.asarray(axes[0])
+        axial = jnp.asarray(axes[1])
+        a = (
+            jnp.sum(directions[:, :2] ** 2, axis=1) / radial**2
+            + directions[:, 2] ** 2 / axial**2
+        )
+        b = 2.0 * (
+            jnp.sum(relative[:, :2] * directions[:, :2], axis=1)
+            / radial**2
+            + relative[:, 2] * directions[:, 2] / axial**2
+        )
+        c = (
+            jnp.sum(relative[:, :2] ** 2, axis=1) / radial**2
+            + relative[:, 2] ** 2 / axial**2
+            - 1.0
+        )
+        discriminant = b**2 - 4.0 * a * c
+        # A strictly positive inactive branch prevents ``sqrt(0)`` from
+        # injecting an infinite derivative into a rejected ellipsoid hit.
+        root = jnp.sqrt(jnp.maximum(discriminant, 1e-24))
+        roots = jnp.stack([
+            (-b - root) / (2.0 * a + 1e-12),
+            (-b + root) / (2.0 * a + 1e-12),
+        ], axis=1)
+        z_relative = relative[:, 2:3] + roots * directions[:, 2:3]
+        valid = (
+            (discriminant[:, None] >= 0.0)
+            & (roots > 1e-6)
+            & (z_relative <= 1e-7)
+            & (z_relative >= -axial - 1e-7)
+        )
+        candidate = jnp.where(valid, roots, LARGE_DISTANCE)
+        points = origins[:, None, :] + (
+            candidate[:, :, None] * directions[:, None, :]
+        )
+        hit_relative = points - centre
+        gradient = jnp.stack([
+            hit_relative[:, :, 0] / radial**2,
+            hit_relative[:, :, 1] / radial**2,
+            hit_relative[:, :, 2] / axial**2,
+        ], axis=2)
+        gradient /= (
+            jnp.linalg.norm(gradient, axis=2, keepdims=True) + 1e-12
+        )
+        distances.append(candidate)
+        normals.append(sign * gradient)
+        contains = c <= 0.0
+        if sign > 0.0:
+            inside_outer = contains
+        else:
+            inside_inner = contains
+
+    all_distances = jnp.concatenate(distances, axis=1)
+    all_normals = jnp.concatenate(normals, axis=1)
+    choice = jnp.argmin(all_distances, axis=1)
+    rows = jnp.arange(origins.shape[0])
+    nearest = all_distances[rows, choice]
+    valid = nearest < LARGE_DISTANCE
+    outward = all_normals[rows, choice]
+    positions = origins + nearest[:, None] * directions
+    inside = (
+        inside_outer
+        & (~inside_inner)
+        & (relative[:, 2] <= 0.0)
+    )
+    return SurfaceHit(
+        distance_m=nearest,
+        valid=valid,
+        object_indices=jnp.where(valid, 0, -1),
+        surface_codes=jnp.where(valid, BOTTOM_CHIMNEY_STEEL, -1),
+        positions=positions,
+        transport_normals=-outward,
+        outward_normals=outward,
+        inside_before=inside & valid,
+    )
+
+
+def _nearest_surface_hit(hits):
+    """Select the nearest valid hit from a short component tuple."""
+    distances = jnp.stack([
+        jnp.where(hit.valid, hit.distance_m, LARGE_DISTANCE)
+        for hit in hits
+    ], axis=1)
+    choice = jnp.argmin(distances, axis=1)
+    rows = jnp.arange(distances.shape[0])
+    nearest = distances[rows, choice]
+    valid = nearest < LARGE_DISTANCE
+
+    def select(name):
+        values = jnp.stack([getattr(hit, name) for hit in hits], axis=1)
+        return values[rows, choice]
+
+    return SurfaceHit(
+        distance_m=nearest,
+        valid=valid,
+        object_indices=jnp.where(valid, select("object_indices"), -1),
+        surface_codes=jnp.where(valid, select("surface_codes"), -1),
+        positions=select("positions"),
+        transport_normals=select("transport_normals"),
+        outward_normals=select("outward_normals"),
+        inside_before=select("inside_before") & valid,
+    )
+
+
+def intersect_bottom_chimney(origins, directions, bottom):
+    """Intersect the transparent south tube and opaque steel enclosure."""
+    origins = jnp.atleast_2d(origins)
+    directions = _normalise(jnp.atleast_2d(directions))
+    acrylic = intersect_chimney(origins, directions, bottom.acrylic)
+    step_m = 2e-6
+    before = acrylic.positions - step_m * directions
+    after = acrylic.positions + step_m * directions
+    internal = (
+        acrylic.valid
+        & bottom.acrylic_contains(before)
+        & bottom.acrylic_contains(after)
+    )
+    next_acrylic = intersect_chimney(
+        after, directions, bottom.acrylic
+    )
+    use_next = internal & next_acrylic.valid
+    acrylic = SurfaceHit(
+        distance_m=jnp.where(
+            use_next,
+            acrylic.distance_m + step_m + next_acrylic.distance_m,
+            acrylic.distance_m,
+        ),
+        valid=jnp.where(internal, next_acrylic.valid, acrylic.valid),
+        object_indices=jnp.where(
+            use_next,
+            next_acrylic.object_indices,
+            acrylic.object_indices,
+        ),
+        surface_codes=jnp.where(
+            use_next,
+            next_acrylic.surface_codes,
+            acrylic.surface_codes,
+        ),
+        positions=jnp.where(
+            use_next[:, None],
+            next_acrylic.positions,
+            acrylic.positions,
+        ),
+        transport_normals=jnp.where(
+            use_next[:, None],
+            next_acrylic.transport_normals,
+            acrylic.transport_normals,
+        ),
+        outward_normals=jnp.where(
+            use_next[:, None],
+            next_acrylic.outward_normals,
+            acrylic.outward_normals,
+        ),
+        inside_before=bottom.acrylic_contains(origins),
+    )
+    steel_upper = intersect_chimney(
+        origins, directions, bottom.steel_upper
+    )
+    steel_bowl = _intersect_lower_ellipsoid_shell(
+        origins, directions, bottom
+    )
+    return _nearest_surface_hit((acrylic, steel_upper, steel_bowl))
 
 
 def intersect_acrylic_bowls(origins, directions, layout,

@@ -46,6 +46,7 @@ from ..geometry.juno_structures import (
     BOWL_INTERFACE_OFFSET_M,
     build_bowl_candidate_map,
     intersect_acrylic_bowls,
+    intersect_bottom_chimney,
     intersect_chimney,
 )
 
@@ -157,6 +158,7 @@ def find_intersected_nested_sphere_sensors(ray_origins, ray_directions,
                                            support_rods=None,
                                            support_candidate_map=None,
                                            chimney=None,
+                                           bottom_chimney=None,
                                            acrylic_bowls=None,
                                            bowl_candidate_map=None,
                                            diffuser_hardware=None,
@@ -200,7 +202,7 @@ def find_intersected_nested_sphere_sensors(ray_origins, ray_directions,
 
     def _interface_hit(o, d):
         t_out, _ = sphere_forward_t(o, d, jnp.zeros(3), r_outer)
-        if chimney is not None:
+        if chimney is not None or bottom_chimney is not None:
             direction = d / (jnp.linalg.norm(d) + 1e-12)
             t_out, _ = sphere_forward_t(
                 o, direction, jnp.zeros(3), r_outer
@@ -218,10 +220,23 @@ def find_intersected_nested_sphere_sensors(ray_origins, ray_directions,
                 roots[:, :, None] * direction[None, None, :]
             )
             rho = jnp.linalg.norm(points[:, :, :2], axis=2)
-            in_aperture = (
-                (points[:, :, 2] > 0.0)
-                & (rho < chimney.aperture_radius_m)
-            )
+            in_aperture = jnp.zeros_like(rho, dtype=bool)
+            if chimney is not None:
+                in_aperture |= (
+                    (points[:, :, 2] > 0.0)
+                    & (rho < chimney.aperture_radius_m)
+                )
+            if bottom_chimney is not None:
+                aperture_radii = jnp.asarray(
+                    bottom_chimney.aperture_radii_m
+                )[:_inner_radii.shape[0]]
+                in_aperture |= (
+                    (
+                        points[:, :, 2]
+                        <= bottom_chimney.aperture_z_max_m + 1e-6
+                    )
+                    & (rho < aperture_radii[:, None])
+                )
             valid = (
                 (discriminant[:, None] >= 0.0)
                 & (roots > 1e-6)
@@ -341,6 +356,19 @@ def find_intersected_nested_sphere_sensors(ray_origins, ray_directions,
                 & (rho < chimney.aperture_radius_m)
             )
             medium = jnp.where(in_bore, 0, medium)
+        if bottom_chimney is not None:
+            rho = jnp.linalg.norm(points[:, :2], axis=1)
+            in_bore = (
+                (
+                    points[:, 2]
+                    <= bottom_chimney.aperture_z_max_m
+                )
+                & (rho < bottom_chimney.aperture_radii_m[0])
+            )
+            medium = jnp.where(in_bore, 0, medium)
+            medium = jnp.where(
+                bottom_chimney.acrylic_contains(points), 1, medium
+            )
         return medium.astype(jnp.int32)
 
     def _set_acrylic_interface(surface_hit, wins):
@@ -422,6 +450,19 @@ def find_intersected_nested_sphere_sensors(ray_origins, ray_directions,
         )
         _set_acrylic_interface(chimney_hit, hit_chimney_acrylic)
 
+    if bottom_chimney is not None:
+        bottom_hit = intersect_bottom_chimney(
+            ray_origins, ray_directions, bottom_chimney
+        )
+        hit_bottom = _select_engineering_hit(bottom_hit)
+        surface_code = jnp.where(
+            hit_bottom, bottom_hit.surface_codes, surface_code
+        )
+        hit_bottom_acrylic = (
+            hit_bottom & (bottom_hit.surface_codes == 7)
+        )
+        _set_acrylic_interface(bottom_hit, hit_bottom_acrylic)
+
     if acrylic_bowls is not None:
         reference_radius = jnp.mean(jnp.linalg.norm(
             jnp.asarray(acrylic_bowls.attachment_points_m), axis=1
@@ -486,6 +527,9 @@ def find_intersected_nested_sphere_sensors(ray_origins, ray_directions,
     result['hit_chimney'] = (
         (surface_code == 1) | (surface_code == 2)
     )
+    result['hit_bottom_chimney'] = (
+        (surface_code == 7) | (surface_code == 8)
+    )
     result['hit_acrylic_bowl'] = surface_code == 3
     result['acrylic_bowl_index'] = jnp.where(
         surface_code == 3, bowl_index, -1
@@ -513,6 +557,7 @@ def create_nested_sphere_propagator(sensor_positions, sensor_radius,
                                     support_rods=None,
                                     support_candidates_per_cell=12,
                                     chimney=None,
+                                    bottom_chimney=None,
                                     acrylic_bowls=None,
                                     bowl_candidates_per_cell=(
                                         BOWL_CANDIDATES_PER_CELL
@@ -641,6 +686,7 @@ def create_nested_sphere_propagator(sensor_positions, sensor_radius,
             support_rods=support_rods,
             support_candidate_map=support_candidate_map,
             chimney=chimney,
+            bottom_chimney=bottom_chimney,
             acrylic_bowls=acrylic_bowls,
             bowl_candidate_map=bowl_candidate_map,
             diffuser_hardware=diffuser_hardware,
@@ -669,6 +715,7 @@ def create_nested_sphere_propagator(sensor_positions, sensor_radius,
                 support_rods=support_rods,
                 support_candidate_map=support_candidate_map,
                 chimney=chimney,
+                bottom_chimney=bottom_chimney,
                 acrylic_bowls=acrylic_bowls,
                 bowl_candidate_map=bowl_candidate_map)
         return propagate_photons

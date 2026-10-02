@@ -35,7 +35,13 @@
   "diffuser_fiber_reflection_rate": 0.1,
   "diffuser_fiber_transmission_rate": 0.0,
   "diffuser_fiber_fspec": 0.0,
-  "_comment_engineering_surfaces": "Chimney and bowl Acrylic use explicit Snell/Fresnel interfaces plus bulk absorption, so their legacy 2% surface loss is disabled; diffuser PEEK/fibre R follow J26.5.1 laserdiffuser.gdml, PTFE R=0.95 follows JUNO calibration-source fallback GDML; fspec is an effective polished/ground mapping",
+  "bottom_chimney_acrylic_reflection_rate": 0.0,
+  "bottom_chimney_acrylic_transmission_rate": 1.0,
+  "bottom_chimney_acrylic_fspec": 1.0,
+  "bottom_chimney_steel_reflection_rate": 0.4,
+  "bottom_chimney_steel_transmission_rate": 0.0,
+  "bottom_chimney_steel_fspec": 0.5,
+  "_comment_engineering_surfaces": "Top/bottom chimney and bowl Acrylic use explicit Snell/Fresnel interfaces plus bulk absorption, so their legacy surface loss is disabled; diffuser PEEK/fibre R follow J26.5.1 laserdiffuser.gdml, PTFE R=0.95 follows JUNO calibration-source fallback GDML; fspec is an effective polished/ground mapping",
   "qe": 1.0,
   "qe_corrections": null
 }

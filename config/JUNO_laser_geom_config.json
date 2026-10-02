@@ -21,9 +21,11 @@
     "_comment_support_rods": "590 J26.3.2 StrutSteel tubes represented as finite radial capped cylinders; ball heads and fixtures are excluded",
     "chimney_geometry": "juno_lower_chimney",
     "_comment_chimney": "J26.3.2 lower chimney: 400 mm LS bore, 524 mm Acrylic wall to z=18.424 m, then 405 mm steel wall, clipped at the PMT boundary",
+    "bottom_chimney_geometry": "juno_bottom_chimney",
+    "_comment_bottom_chimney": "J26.5.1 south opening: 500 mm LS bore, 80 mm Acrylic wall, 675 mm flange and effective steel ellipsoidal enclosure at z=-18.7 m",
     "acrylic_bowl_file_path": "JUNO_acrylic_bowls.csv",
     "acrylic_bowl_geometry": "juno_addition_curved_arc",
-    "_comment_acrylic_bowls": "590 J26.5.1 AdditionAcrylic placements with the dormant yumiao 776 mm circular-arc side; edge fillets, sphere subtraction, bolt holes and volume transport are excluded",
+    "_comment_acrylic_bowls": "590 J26.5.1 AdditionAcrylic placements represented as transparent volumes with the dormant yumiao 776 mm circular-arc side; edge fillets, exact sphere subtraction and bolt holes are excluded",
     "diffuser_hardware_geometry": "juno_ls_diffuser_hardware",
     "_comment_diffuser_hardware": "Source-attached J26.5.1 LS diffuser: 10 mm PTFE ball, 2 mm radius x 8 mm PEEK tube, and 0.5 mm radius x 200 mm PE fibre"
   }

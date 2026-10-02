@@ -23,6 +23,7 @@ from .juno_pmt import (
 from .juno_diffuser import DiffuserHardware
 from .juno_support import load_juno_support_layout
 from .juno_structures import (
+    BottomChimneyGeometry,
     ChimneyGeometry,
     load_juno_acrylic_bowls,
 )
@@ -73,6 +74,8 @@ class NestedSphere(Sphere):
         self.support_rods = None
         self.chimney_geometry = None
         self.chimney = None
+        self.bottom_chimney_geometry = None
+        self.bottom_chimney = None
         self.acrylic_bowl_geometry = None
         self.acrylic_bowls = None
         self.diffuser_hardware_geometry = None
@@ -90,6 +93,7 @@ class NestedSphere(Sphere):
                       support_rod_file_path=None,
                       support_geometry=None,
                       chimney_geometry=None,
+                      bottom_chimney_geometry=None,
                       acrylic_bowl_file_path=None,
                       acrylic_bowl_geometry=None,
                       diffuser_hardware_geometry=None):
@@ -194,6 +198,14 @@ class NestedSphere(Sphere):
                 )
             instance.chimney = ChimneyGeometry.junosw_j26(outer_radius)
         instance.chimney_geometry = chimney_geometry
+        if bottom_chimney_geometry is not None:
+            if bottom_chimney_geometry != "juno_bottom_chimney":
+                raise ValueError(
+                    "Unknown bottom-chimney geometry "
+                    f"{bottom_chimney_geometry!r}"
+                )
+            instance.bottom_chimney = BottomChimneyGeometry.junosw_j26()
+        instance.bottom_chimney_geometry = bottom_chimney_geometry
         if acrylic_bowl_geometry is not None:
             if acrylic_bowl_geometry != "juno_addition_curved_arc":
                 raise ValueError(
@@ -238,11 +250,25 @@ class NestedSphere(Sphere):
             2,
             jnp.where(r >= self.r_inner, 1, 0),
         ).astype(jnp.int32)
-        if self.chimney is None:
-            return region
         rho = jnp.linalg.norm(positions[:, :2], axis=1)
-        in_bore = (
-            (rho < self.chimney.aperture_radius_m)
-            & (positions[:, 2] >= self.chimney.aperture_z_min_m)
-        )
-        return jnp.where(in_bore, 0, region)
+        if self.chimney is not None:
+            in_bore = (
+                (rho < self.chimney.aperture_radius_m)
+                & (positions[:, 2] >= self.chimney.aperture_z_min_m)
+            )
+            region = jnp.where(in_bore, 0, region)
+        if self.bottom_chimney is not None:
+            in_bore = (
+                (rho < self.bottom_chimney.aperture_radii_m[0])
+                & (
+                    positions[:, 2]
+                    <= self.bottom_chimney.aperture_z_max_m
+                )
+            )
+            region = jnp.where(in_bore, 0, region)
+            region = jnp.where(
+                self.bottom_chimney.acrylic_contains(positions),
+                1,
+                region,
+            )
+        return region

@@ -43,6 +43,7 @@ class DetectorGeometry(NamedTuple):
                     pmt_geometry_enabled=None,
                     support_geometry_enabled=None,
                     chimney_geometry_enabled=None,
+                    bottom_chimney_geometry_enabled=None,
                     acrylic_bowl_geometry_enabled=None,
                     diffuser_hardware_enabled=None,
                     **grid_params) -> 'DetectorGeometry':
@@ -75,6 +76,8 @@ class DetectorGeometry(NamedTuple):
             Override the configured support cylinders independently.
         chimney_geometry_enabled : bool or None
             Override the configured lower-chimney geometry independently.
+        bottom_chimney_geometry_enabled : bool or None
+            Override the south-pole bottom chimney independently.
         acrylic_bowl_geometry_enabled : bool or None
             Override the configured Acrylic additions independently.
         diffuser_hardware_enabled : bool or None
@@ -105,6 +108,9 @@ class DetectorGeometry(NamedTuple):
             pmt_geometry_enabled=pmt_geometry_enabled,
             support_geometry_enabled=support_geometry_enabled,
             chimney_geometry_enabled=chimney_geometry_enabled,
+            bottom_chimney_geometry_enabled=(
+                bottom_chimney_geometry_enabled
+            ),
             acrylic_bowl_geometry_enabled=acrylic_bowl_geometry_enabled,
             diffuser_hardware_enabled=diffuser_hardware_enabled,
         )
@@ -160,6 +166,7 @@ class DetectorGeometry(NamedTuple):
                 ),
                 support_rods=detector.support_rods,
                 chimney=detector.chimney,
+                bottom_chimney=detector.bottom_chimney,
                 acrylic_bowls=detector.acrylic_bowls,
                 diffuser_hardware=detector.diffuser_hardware)
             return DetectorGeometry(

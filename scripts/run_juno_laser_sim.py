@@ -115,6 +115,8 @@ def _simulation_metadata(
     support_fspec,
     chimney_geometry_request,
     chimney_geometry,
+    bottom_chimney_geometry_request,
+    bottom_chimney_geometry,
     acrylic_bowl_geometry_request,
     acrylic_bowl_geometry,
     acrylic_bowl_count,
@@ -172,6 +174,10 @@ def _simulation_metadata(
         "support_fspec": str(support_fspec),
         "chimney_geometry_request": chimney_geometry_request,
         "chimney_geometry": chimney_geometry,
+        "bottom_chimney_geometry_request": (
+            bottom_chimney_geometry_request
+        ),
+        "bottom_chimney_geometry": bottom_chimney_geometry,
         "acrylic_bowl_geometry_request": acrylic_bowl_geometry_request,
         "acrylic_bowl_geometry": acrylic_bowl_geometry,
         "acrylic_bowl_count": str(acrylic_bowl_count),
@@ -355,6 +361,7 @@ def _make_forward(
     has_engineering = any((
         detector.support_rods is not None,
         detector.chimney is not None,
+        detector.bottom_chimney is not None,
         detector.acrylic_bowls is not None,
         detector.diffuser_hardware is not None,
     ))
@@ -665,6 +672,9 @@ def simulate(args):
     chimney_geometry_request = getattr(
         args, "chimney_geometry", "config"
     )
+    bottom_chimney_geometry_request = getattr(
+        args, "bottom_chimney_geometry", "config"
+    )
     acrylic_bowl_geometry_request = getattr(
         args, "acrylic_bowl_geometry", "config"
     )
@@ -694,6 +704,9 @@ def simulate(args):
         chimney_geometry_enabled=_component_geometry_override(
             chimney_geometry_request
         ),
+        bottom_chimney_geometry_enabled=_component_geometry_override(
+            bottom_chimney_geometry_request
+        ),
         acrylic_bowl_geometry_enabled=_component_geometry_override(
             acrylic_bowl_geometry_request
         ),
@@ -711,6 +724,9 @@ def simulate(args):
         else len(geom.detector.support_rods.centers_m)
     )
     chimney_geometry = geom.detector.chimney_geometry or "disabled"
+    bottom_chimney_geometry = (
+        geom.detector.bottom_chimney_geometry or "disabled"
+    )
     acrylic_bowl_geometry = (
         geom.detector.acrylic_bowl_geometry or "disabled"
     )
@@ -724,6 +740,7 @@ def simulate(args):
     has_engineering = any((
         support_count,
         geom.detector.chimney is not None,
+        geom.detector.bottom_chimney is not None,
         acrylic_bowl_count,
         geom.detector.diffuser_hardware is not None,
     ))
@@ -744,6 +761,11 @@ def simulate(args):
         "chimney geometry: request=%s, effective=%s",
         chimney_geometry_request,
         chimney_geometry,
+    )
+    LOG.info(
+        "bottom-chimney geometry: request=%s, effective=%s",
+        bottom_chimney_geometry_request,
+        bottom_chimney_geometry,
     )
     LOG.info(
         "Acrylic-bowl geometry: request=%s, effective=%s, bowls=%d",
@@ -794,6 +816,8 @@ def simulate(args):
         required_surface_codes.append(0)
     if geom.detector.chimney is not None:
         required_surface_codes.extend((1, 2))
+    if geom.detector.bottom_chimney is not None:
+        required_surface_codes.extend((7, 8))
     if acrylic_bowl_count:
         required_surface_codes.append(3)
     if geom.detector.diffuser_hardware is not None:
@@ -905,6 +929,8 @@ def simulate(args):
             support_fspec,
             chimney_geometry_request,
             chimney_geometry,
+            bottom_chimney_geometry_request,
+            bottom_chimney_geometry,
             acrylic_bowl_geometry_request,
             acrylic_bowl_geometry,
             acrylic_bowl_count,
@@ -1080,6 +1106,11 @@ def simulate(args):
                         + surface_counts[5]
                         + surface_counts[6]
                     ),
+                    "bottom_chimney": (
+                        surface_counts[7] + surface_counts[8]
+                    ),
+                    "bottom_chimney_acrylic": surface_counts[7],
+                    "bottom_chimney_steel": surface_counts[8],
                 }
                 component_counts.update({
                     "diffuser_ptfe": surface_counts[4],
@@ -1140,6 +1171,10 @@ def simulate(args):
                 "support_fspec": support_fspec,
                 "chimney_geometry_request": chimney_geometry_request,
                 "chimney_geometry": chimney_geometry,
+                "bottom_chimney_geometry_request": (
+                    bottom_chimney_geometry_request
+                ),
+                "bottom_chimney_geometry": bottom_chimney_geometry,
                 "acrylic_bowl_geometry_request": (
                     acrylic_bowl_geometry_request
                 ),
@@ -1248,6 +1283,15 @@ def main():
         help=(
             "烟囱几何消融：config=遵循几何配置，on=有效下烟囱，"
             "off=关闭烟囱"
+        ),
+    )
+    parser.add_argument(
+        "--bottom-chimney-geometry",
+        choices=("config", "on", "off"),
+        default="config",
+        help=(
+            "南极底部烟囱消融：config=遵循几何配置，"
+            "on=启用 Acrylic/steel 有效几何，off=关闭"
         ),
     )
     parser.add_argument(

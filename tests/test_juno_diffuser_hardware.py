@@ -161,7 +161,9 @@ def test_diffuser_surface_parameters_are_complete():
         physics, required_codes=(4, 5, 6)
     )
 
-    assert len(SURFACE_NAMES) == 7
-    npt.assert_allclose(reflectance[4:], [0.95, 0.5, 0.1])
-    npt.assert_allclose(transmission[4:], [0.0, 0.0, 0.0])
-    npt.assert_allclose(fspec[4:], [1.0, 0.0, 0.0])
+    assert SURFACE_NAMES[4:7] == (
+        "diffuser_ptfe", "diffuser_peek", "diffuser_fiber"
+    )
+    npt.assert_allclose(reflectance[4:7], [0.95, 0.5, 0.1])
+    npt.assert_allclose(transmission[4:7], [0.0, 0.0, 0.0])
+    npt.assert_allclose(fspec[4:7], [1.0, 0.0, 0.0])

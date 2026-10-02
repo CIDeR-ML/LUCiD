@@ -102,6 +102,7 @@ def load_detector_geom(file_path):
 def generate_detector(file_path, pmt_geometry_enabled=None,
                       support_geometry_enabled=None,
                       chimney_geometry_enabled=None,
+                      bottom_chimney_geometry_enabled=None,
                       acrylic_bowl_geometry_enabled=None,
                       diffuser_hardware_enabled=None):
     """Generate a detector from a JSON config file using the geometry registry.
@@ -189,6 +190,20 @@ def generate_detector(file_path, pmt_geometry_enabled=None,
                 chimney_geometry = configured_chimney
             else:
                 chimney_geometry = None
+            configured_bottom_chimney = geom_def.get(
+                'bottom_chimney_geometry'
+            )
+            if bottom_chimney_geometry_enabled is None:
+                bottom_chimney_geometry = configured_bottom_chimney
+            elif bottom_chimney_geometry_enabled:
+                if configured_bottom_chimney is None:
+                    raise ValueError(
+                        "Bottom-chimney geometry was enabled but none is "
+                        "configured"
+                    )
+                bottom_chimney_geometry = configured_bottom_chimney
+            else:
+                bottom_chimney_geometry = None
             configured_bowls = geom_def.get('acrylic_bowl_geometry')
             if acrylic_bowl_geometry_enabled is None:
                 acrylic_bowl_geometry = configured_bowls
@@ -231,6 +246,7 @@ def generate_detector(file_path, pmt_geometry_enabled=None,
                 support_rod_file_path=support_path,
                 support_geometry=support_geometry,
                 chimney_geometry=chimney_geometry,
+                bottom_chimney_geometry=bottom_chimney_geometry,
                 acrylic_bowl_file_path=bowl_path,
                 acrylic_bowl_geometry=acrylic_bowl_geometry,
                 diffuser_hardware_geometry=diffuser_hardware_geometry)
