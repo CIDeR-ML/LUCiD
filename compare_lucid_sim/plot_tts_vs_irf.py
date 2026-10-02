@@ -51,40 +51,53 @@ def parse_args(argv=None):
         "L1/Wasserstein displays; "
         "disable with --no-time-difference-panels",
     )
-    args = pipeline.parse_args(argv, parser=parser)
+    args = pipeline.parse_args(
+        ensure_channel_selection(argv), parser=parser
+    )
     if args.irf_h5 is None:
         parser.error("the TTS-vs-IRF check requires --irf-h5")
     return args
 
 
-def resolve_channel_selection(args):
-    """Fill in args.channel_selection from the characterized IRF set.
+def ensure_channel_selection(argv):
+    """Inject a derived --channel-selection into argv when absent.
 
-    Input: parsed arguments.  Output: none; without an explicit
-    selection the characterized channels (IRF h5 serials mapped to CD
-    copy numbers via the PMT map) are written to
-    ``<output_root>/irf125.csv`` and the path is stored back on args,
-    keeping the ``irf125`` cache filename suffix.  An explicit
-    ``--channel-selection`` is left untouched.
+    Input: optional argv list.  Output: the argv list; when no explicit
+    selection is given, the characterized channels (IRF h5 serials
+    mapped to CD copy numbers via the PMT map) are written to
+    ``<output_root>/irf125.csv`` and appended as --channel-selection,
+    keeping the ``irf125`` cache filename suffix.  Runs before the full
+    parse because the cache suffix is finalized during parsing.
     """
-    if args.channel_selection is not None:
-        return
-    channels = characterized_channels(args.irf_h5, args.pmt_map)
+    pre = argparse.ArgumentParser(add_help=False)
+    pre.add_argument("--channel-selection", type=Path, default=None)
+    pre.add_argument("--irf-h5", type=Path, default=None)
+    pre.add_argument(
+        "--pmt-map", type=Path, default=Path(pipeline.DEFAULT_PMT_MAP)
+    )
+    pre.add_argument(
+        "--output-root", type=Path, default=Path("compare_sim")
+    )
+    known, _ = pre.parse_known_args(argv)
+    if known.channel_selection is not None or known.irf_h5 is None:
+        return argv
+    channels = characterized_channels(known.irf_h5, known.pmt_map)
     if not channels:
         raise ValueError(
-            f"no characterized CD channels found in {args.irf_h5}"
+            f"no characterized CD channels found in {known.irf_h5}"
         )
-    args.output_root.mkdir(parents=True, exist_ok=True)
-    selection = args.output_root / "irf125.csv"
+    known.output_root.mkdir(parents=True, exist_ok=True)
+    selection = known.output_root / "irf125.csv"
     with selection.open("w") as stream:
         stream.write("channel\n")
         for channel in channels:
             stream.write(f"{channel}\n")
-    args.channel_selection = selection
     print(
         f"Selected {len(channels)} characterized channels "
         f"-> {selection}"
     )
+    base = list(sys.argv[1:] if argv is None else argv)
+    return base + ["--channel-selection", str(selection)]
 
 
 def main(argv=None):
@@ -93,7 +106,6 @@ def main(argv=None):
     Input: optional argv list.  Output: none (figures and CSVs written).
     """
     args = parse_args(argv)
-    resolve_channel_selection(args)
     prepared = pipeline.prepare_inputs(args)
     processing = processing_string(
         True,

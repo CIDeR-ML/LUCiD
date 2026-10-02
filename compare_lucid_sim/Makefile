@@ -9,7 +9,9 @@
 #   make all                      everything above
 #
 # Run from anywhere: make -C compare_lucid_sim <target>; prepend
-# submit- to run as a Slurm job.  Override paths: DATA_ROOT=... etc.
+# submit- to run as a Slurm job.  Paths default to the author's
+# directories and outputs follow DATA_ROOT -- always override
+# DATA_ROOT=... before running your own comparisons.
 COMPARE_DIR  := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 PROJECT_ROOT := $(abspath $(COMPARE_DIR)/..)
 PYTHON       ?= /opt/gentoo/usr/bin/python3
@@ -40,7 +42,7 @@ PAGE_COUNT_ARG := \
         --page-channel-count $(PAGE_CHANNEL_COUNT),)
 SEED          ?= 0
 BINS          ?= 600
-FSMP_PE_SCALE ?= 1
+FSMP_PE_SCALE ?= 10
 QE            ?= 0.097
 LUCID_LABEL   ?= LUCiD (diffuser)
 JUNOSW_LABEL  ?= JUNOsw (J26.5.0)
@@ -316,6 +318,10 @@ help:
 	@echo "  IRF_H5       = $(IRF_H5)"
 	@echo "  CHANNEL_SELECTION = $(CHANNEL_SELECTION)"
 	@echo "                     (empty: derived from IRF_H5+PMT_MAP)"
+	@echo "outputs: DIFFUSER_OUT/IRF125_OUT/PE_SCALE_OUT/SCALE_Z_OUT,"
+	@echo "         all under \$$(DATA_ROOT) by default --"
+	@echo "         override DATA_ROOT or your runs write into"
+	@echo "         the author's directory above"
 	@echo ""
 	@echo "settings: CHANNEL_COUNT=$(CHANNEL_COUNT) SEED=$(SEED) \
 	BINS=$(BINS) FSMP_PE_SCALE=$(FSMP_PE_SCALE) QE=$(QE)"

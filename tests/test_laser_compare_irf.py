@@ -155,34 +155,37 @@ def test_characterized_channels(irf_files):
 def test_tts_irf_autofills_channel_selection_from_irf_h5(
     irf_files, tmp_path
 ):
-    """TTS-vs-IRF derives irf125.csv from the IRF h5 and PMT map."""
+    """TTS-vs-IRF injects a derived irf125.csv into the argv list."""
     from compare_lucid_sim import plot_tts_vs_irf as tts_irf
 
-    args = SimpleNamespace(
-        channel_selection=None,
-        irf_h5=Path(irf_files[0]),
-        pmt_map=Path(irf_files[1]),
-        output_root=tmp_path / "out",
-    )
-    tts_irf.resolve_channel_selection(args)
-    assert args.channel_selection == tmp_path / "out" / "irf125.csv"
-    channels = np.loadtxt(args.channel_selection, skiprows=1, dtype=int)
+    out = tmp_path / "out"
+    argv = [
+        "--irf-h5", str(irf_files[0]),
+        "--pmt-map", str(irf_files[1]),
+        "--output-root", str(out),
+    ]
+    result = tts_irf.ensure_channel_selection(argv)
+    selection = out / "irf125.csv"
+    assert result[-2:] == ["--channel-selection", str(selection)]
+    channels = np.loadtxt(selection, skiprows=1, dtype=int)
     np.testing.assert_array_equal(channels, [100, 200, 300])
 
 
 def test_tts_irf_keeps_explicit_channel_selection(tmp_path):
-    """An explicit --channel-selection path is left untouched."""
+    """An explicit --channel-selection keeps the argv list unchanged."""
     from compare_lucid_sim import plot_tts_vs_irf as tts_irf
 
-    explicit = tmp_path / "custom.csv"
-    args = SimpleNamespace(
-        channel_selection=explicit,
-        irf_h5=None,
-        pmt_map=None,
-        output_root=tmp_path / "out",
-    )
-    tts_irf.resolve_channel_selection(args)
-    assert args.channel_selection == explicit
+    argv = ["--channel-selection", str(tmp_path / "custom.csv")]
+    assert tts_irf.ensure_channel_selection(argv) is argv
+    assert not (tmp_path / "out").exists()
+
+
+def test_tts_irf_without_irf_h5_keeps_argv(tmp_path):
+    """Without --irf-h5 the argv list is left unchanged."""
+    from compare_lucid_sim import plot_tts_vs_irf as tts_irf
+
+    argv = ["--output-root", str(tmp_path / "out")]
+    assert tts_irf.ensure_channel_selection(argv) is argv
     assert not (tmp_path / "out").exists()
 
 

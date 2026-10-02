@@ -34,6 +34,9 @@ def test_cli_parses_check_flags(tmp_path):
 def test_cli_panels_default_on():
     """The difference panels stay enabled by default."""
     args = plot_tts_vs_irf.parse_args(
-        ["--lucid-sim-dir", "/x", "--irf-h5", "kernels.h5"]
+        [
+            "--lucid-sim-dir", "/x", "--irf-h5", "kernels.h5",
+            "--channel-selection", "sel.csv",
+        ]
     )
     assert args.time_difference_panels
