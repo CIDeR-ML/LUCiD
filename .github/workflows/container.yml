@@ -22,7 +22,7 @@ on:
 # main would make the C++ half of any release whatever happened to be on main
 # that day, unrecorded. Bump deliberately, alongside a LUCiD change that needs it.
 env:
-  PHOTONSIM_REF_DEFAULT: v1.0.0
+  PHOTONSIM_REF_DEFAULT: v1.0.2
 
 jobs:
   build:
