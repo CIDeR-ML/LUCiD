@@ -111,7 +111,8 @@ class ResponseParams(NamedTuple):
     Fields
     ------
     qe : jnp.ndarray         scalar, quantum efficiency at the scalar reference
-                             wavelength (400 nm) [0, 1]
+                             wavelength (400 nm) [0, 1], per photon arriving at a
+                             PMT (its reflection included, as PMT QE is quoted)
     spe_width : jnp.ndarray  scalar, single-photoelectron charge resolution (default 0.0)
     tts : jnp.ndarray        scalar, transit-time spread, ns (default 0.0)
     qe_dev : jnp.ndarray     (n_ctrl,) QE λ-deviation curve, default ones (≡1)
@@ -121,7 +122,10 @@ class ResponseParams(NamedTuple):
     ``make_hits`` is a later step. Scalar mode applies ``qe`` to every photon; wavelength
     mode applies ``qe * qe_fn(λ) / qe_fn(400 nm)``, which is ``qe_fn(λ)`` itself when ``qe``
     was projected from the curve. ``qe_dev`` multiplies that per-photon weight in
-    wavelength mode (≡1 default; see ``ScatteringParams``).
+    wavelength mode (≡1 default; see ``ScatteringParams``). The photon step reflects part
+    of the light reaching a sensor and deposits the rest, so a deposit converts at that
+    QE / (1 - R0), R0 the sensor reflectance at normal incidence; ``qe * qe_corrections``
+    must therefore not exceed ``1 - R0``.
     """
     qe: jnp.ndarray
     spe_width: jnp.ndarray

@@ -5,6 +5,56 @@ is the reason. **Append to it on every re-capture; do not overwrite.**
 
 ---
 
+## 2026-10-05 — re-captured because QE now counts photons arriving at the PMT
+
+| | |
+|---|---|
+| device | **CPU**, pinned by `tripwire_capture.py` |
+| host | Intel Xeon Silver 4216 (lxbatch) |
+| jax / jaxlib | **0.4.38** / 0.4.38, numpy 2.4.6 |
+| image | `/eos/user/c/cjesus/DIFFSIM/containers/lucid_v0.3.0.sif`, built from `container/Dockerfile` |
+| `scalar.q_l2` | 539.9145 → **674.8932** (+25.0%) |
+| `scalar.q_sum` | 15687.9219 → **19609.9062** |
+| `wavelength.q_l2` | 716.1226 → **895.1533** |
+| tolerances | **unchanged** |
+
+### What moved it
+
+A photon deposited on a PMT now converts at QE / (1 - R0), R0 the reflection model's sensor
+reflectance at normal incidence, instead of at QE. A quoted QE counts photons arriving at the PMT,
+so the photons its surface reflects are already among its misses, and reflecting them first charged
+that loss twice. Under the default `scalar_mix` model R0 is the configured rate, here
+`sensor_reflection_rate=.2`, so every sensor deposit gains exactly 1/(1 - 0.2) = 1.25 and nothing
+else changes.
+
+Both trees were measured in one job on one node:
+
+| | before | after | ratio |
+|---|---|---|---|
+| `scalar.q_sum` | 15687.9219 | 19609.9062 | 1.2500002 |
+| `scalar.q_l2` | 539.9145 | 674.8932 | 1.2500003 |
+| `wavelength.q_sum` | 18345.1016 | 22931.3770 | 1.2500000 |
+| `wavelength.q_l2` | 716.1226 | 895.1533 | 1.2500001 |
+| `scalar.q_nlit` | 10764 | 10764 | 1 |
+| `scalar.m_l2` | 125.0484 | 139.8084 | 1.1180340, i.e. √1.25 |
+
+On that node the tree before the change reproduces the stored reference exactly: `q_sum`, `q_l2`,
+`adJ_l2` and all seven `fisher_diag` columns to the last digit. The environment therefore
+contributes nothing. The lit-sensor count does not move because no random stream moved: the
+conversion evaluates the model's reflectance with a fixed key and consumes none of the
+simulation's.
+
+### One side effect worth knowing
+
+Six `fisher_diag` columns scale by exactly 1.25, the charge scale entering J² through the √(k·M)
+residual. `sensor_reflection_rate` instead falls 103.594 → 97.020 (×0.937): light arriving at a PMT
+is now detected at the QE whatever R is, so only the light reflected off PMTs informs R.
+
+The per-column tolerances are a property of the arithmetic rather than of the values, so they are
+unchanged.
+
+---
+
 ## 2026-10-01 — re-captured because the old values were reproducible by nothing we build
 
 | | |

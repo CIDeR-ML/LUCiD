@@ -14,7 +14,7 @@ from lucid.utils import (
 )
 from lucid.detector_params import DetectorParams, ParticleParams, load_detector_params, load_physics_config
 from lucid.wavelength import DEFAULT_WAVELENGTH_NM
-from lucid.wavelength.medium import make_medium, load_qe_curve, qe_curve_bounds, _MATERIALS_DIR
+from lucid.wavelength.medium import make_medium, load_qe_curve, qe_curve_bounds, qe_curve_peak, _MATERIALS_DIR
 from lucid.wavelength.optical_model import evaluate_optical_model, OpticalArrays
 from lucid.wavelength.spectrum import (
     sample_cherenkov_wavelengths, build_qe_weighted_cherenkov_sampler,
@@ -33,7 +33,7 @@ from lucid.simulation.optics import (
 from lucid.simulation.photon_step import (
     photon_iteration_sample, make_photon_iteration_update_factors_safe,
 )
-from lucid.simulation.reflection import get_reflection_model
+from lucid.simulation.reflection import get_reflection_model, sensor_normal_reflectance
 from lucid.simulation.sensor_response import (
     make_hits_simulation, make_hits_data, make_hits_likelihood, make_hits_moments,
     make_hits_per_photon,
@@ -460,6 +460,23 @@ def setup_event_simulator(
             "A QE-weighted spectrum needs the physics_config's qe_curve: response.qe is "
             f"the QE at {DEFAULT_WAVELENGTH_NM} nm, read off that curve.")
 
+    # A deposited photon converts at QE / (1 - R0) (see _common_propagation), a probability
+    # only while QE <= 1 - R0: QE counts photons arriving at the PMT, so it cannot exceed the
+    # fraction that is not reflected. Checkable here when the parameters are baked in.
+    if _default_dp is not None and not _is_volume:
+        _r0 = float(sensor_normal_reflectance(
+            reflection_fn, build_refl_params(_default_dp), jnp.asarray(reflection_wavelength)))
+        _qe_peak = (float(_default_dp.response.qe)
+                    * float(jnp.max(_default_dp.per_pmt.qe_corrections)))
+        if wavelength_mode and _qe_fn is not None:
+            _qe_peak *= (qe_curve_peak(_qe_curve_path) / _qe_ref
+                         * float(jnp.max(_default_dp.response.qe_dev)))
+        if not _qe_peak <= 1.0 - _r0:
+            raise ValueError(
+                f"Peak QE {_qe_peak:.4f} exceeds 1 - R0 = {1.0 - _r0:.4f}, R0 being the "
+                f"{reflection_model!r} sensor reflectance at normal incidence: QE counts "
+                "photons arriving at the PMT, so it cannot exceed the fraction not reflected.")
+
     def _get_optical_arrays(n, detector_params, key, wavelengths=None):
         """Compute per-photon (n,) scatter/absorption arrays and QE weights.
 
@@ -550,7 +567,8 @@ def setup_event_simulator(
         absorption_lengths : jnp.ndarray
             Per-photon absorption lengths, shape (n_rays,).
         qe_per_photon : jnp.ndarray
-            Per-photon quantum efficiency, shape (n_rays,).
+            Per-photon quantum efficiency for light arriving at a sensor, its reflection
+            included, shape (n_rays,).
         pos_grad_threshold : int
             Iteration threshold for position stop_gradient.
         make_hits_fn : callable
@@ -565,6 +583,13 @@ def setup_event_simulator(
         # wavelength is exact for monochromatic-laser calibration (the validated case); a
         # per-photon λ array can be threaded here later for broadband sources.
         refl_lam = jnp.asarray(reflection_wavelength)
+        # QE is per photon arriving at a PMT, its reflection included, as quoted at normal
+        # incidence. The photon step reflects first and deposits the rest, so a deposited
+        # photon converts at QE / (1 - R0), R0 the model's sensor reflectance at normal
+        # incidence. String telescopes have no reflection.
+        if not is_volume:
+            qe_per_photon = qe_per_photon / (
+                1.0 - sensor_normal_reflectance(reflection_fn, refl_params, refl_lam))
         qe_corrections = detector_params.per_pmt.qe_corrections
         g = detector_params.scattering.g
 

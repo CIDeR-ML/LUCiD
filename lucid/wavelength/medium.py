@@ -89,6 +89,14 @@ def qe_curve_bounds(json_path):
     return float(wavelengths.min()), float(wavelengths.max())
 
 
+def qe_curve_peak(json_path):
+    """Return the largest QE (fraction) of a QE-curve JSON file: the curve's maximum,
+    since ``load_qe_curve`` interpolates linearly between knots."""
+    with open(json_path) as f:
+        data = json.load(f)
+    return float(np.max(data["qe_percent"])) / 100.0
+
+
 # ---------------------------------------------------------------------------
 # Factory
 # ---------------------------------------------------------------------------

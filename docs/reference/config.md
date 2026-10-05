@@ -35,7 +35,7 @@ Common keys:
 | `wall_reflection_rate`, `sensor_reflection_rate` | scalar reflectivities |
 | `wall_R0`, `wall_p`, `wall_fspec` | angular wall-reflection model (Schlick base reflectivity, exponent, specular fraction) — used when `reflection_model='angular'`; `'scalar_mix'` combines the scalar rates with the `*_fspec` specular/diffuse split |
 | `cathode_nr`, `cathode_nk`, `sensor_fspec` | angular sensor/cathode reflection (Fresnel n, k; specular fraction) |
-| `qe` | global quantum efficiency |
+| `qe` | global quantum efficiency, per photon arriving at a PMT with its reflection included (as PMT QE is quoted); at most `1 − R0`, the sensor's non-reflected fraction at normal incidence |
 | `qe_corrections`, `gain`, `t0`, `walk` | per-PMT response arrays (QE multiplier, charge gain, time offset, TQ-walk slope) |
 | `spe_width`, `tts` | single-photoelectron charge width; transit-time spread (per-PMT timing jitter, ns) |
 | `S`, `kB`, `C`, `tau_rise`, `tau_fall`, `moyal_*` | scintillation block (usually inherited from the material JSON — see [materials](../concepts/materials.md)) |
