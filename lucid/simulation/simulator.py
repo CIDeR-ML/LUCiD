@@ -13,6 +13,7 @@ from lucid.utils import (
     smear_times, smear_charges_SK_like,
 )
 from lucid.detector_params import DetectorParams, ParticleParams, load_detector_params, load_physics_config
+from lucid.wavelength import DEFAULT_WAVELENGTH_NM
 from lucid.wavelength.medium import make_medium, load_qe_curve, qe_curve_bounds, _MATERIALS_DIR
 from lucid.wavelength.optical_model import evaluate_optical_model, OpticalArrays
 from lucid.wavelength.spectrum import (
@@ -440,6 +441,25 @@ def setup_event_simulator(
         _qe_sampler = None
         _mean_qe_c = None
 
+    # response.qe is the QE at the scalar reference wavelength: the value scalar mode
+    # applies to every photon, and the one _project_missing_scalars reads off the curve
+    # when a config gives no scalar. In wavelength mode the curve supplies only the
+    # wavelength dependence around it, so _get_optical_arrays divides the QE weights by
+    # qe_fn(λ_ref) and the call sites multiply by response.qe. A photon at λ is then
+    # detected with response.qe * qe_fn(λ) / qe_fn(λ_ref): exactly qe_fn(λ) for the
+    # projected scalar, and the two modes agree at λ_ref for any scalar.
+    _qe_ref = None
+    if _qe_fn is not None:
+        _qe_ref = float(_qe_fn(DEFAULT_WAVELENGTH_NM))
+        if not _qe_ref > 0.0:
+            raise ValueError(
+                f"QE curve {_qe_curve_path} is zero at the scalar reference wavelength "
+                f"({DEFAULT_WAVELENGTH_NM} nm), so response.qe cannot be anchored to it.")
+    elif wavelength_mode and spectrum is not None and spectrum.mean_qe is not None:
+        raise ValueError(
+            "A QE-weighted spectrum needs the physics_config's qe_curve: response.qe is "
+            f"the QE at {DEFAULT_WAVELENGTH_NM} nm, read off that curve.")
+
     def _get_optical_arrays(n, detector_params, key, wavelengths=None):
         """Compute per-photon (n,) scatter/absorption arrays and QE weights.
 
@@ -447,7 +467,7 @@ def setup_event_simulator(
         When wavelength_mode=False: broadcasts DetectorParams scalars.
 
         Returns (scatter_lengths, absorption_lengths, qe_weights, key).
-        qe_weights is (n,) or None.
+        qe_weights is (n,) relative to the QE at λ_ref (see _qe_ref), or None.
         """
         if wavelength_mode and _medium_wl is None:
             raise RuntimeError(
@@ -499,6 +519,8 @@ def setup_event_simulator(
                         if (spectrum is not None and spectrum.mean_qe is not None)
                         else _mean_qe_c)
         qe_weights = jnp.full(n, _collapse_qe) if sampled_via_qe_importance else oa.qe
+        if qe_weights is not None:
+            qe_weights = qe_weights / _qe_ref
         return oa.scatter_len, oa.mie_len, oa.abs_len, qe_weights, key
 
     # ================================================================
@@ -801,7 +823,7 @@ def setup_event_simulator(
         data_wavelengths = photon_data.get('wavelengths', None)
         scatter_lengths, mie_scatter_lengths, absorption_lengths, qe_weights, key = _get_optical_arrays(
             n_rays, detector_params, key, wavelengths=data_wavelengths)
-        # Per-photon QE: wavelength curve * scalar qe (passed to make_hits, not baked into weights)
+        # Per-photon QE: response.qe x the curve relative to λ_ref (passed to make_hits, not baked into weights)
         if qe_weights is not None:
             qe_per_photon = qe_weights * detector_params.response.qe
         else:
@@ -938,7 +960,7 @@ def setup_event_simulator(
         scatter_lengths, mie_scatter_lengths, absorption_lengths, qe_weights, key = _get_optical_arrays(
             Nphot, detector_params, opt_key)
 
-        # Per-photon QE: wavelength curve * scalar qe (passed to make_hits, not baked into weights)
+        # Per-photon QE: response.qe x the curve relative to λ_ref (passed to make_hits, not baked into weights)
         if qe_weights is not None:
             qe_per_photon = qe_weights * detector_params.response.qe
         else:
@@ -966,7 +988,7 @@ def setup_event_simulator(
         scatter_lengths, mie_scatter_lengths, absorption_lengths, qe_weights, key = _get_optical_arrays(
             Nphot, detector_params, opt_key, wavelengths=wavelengths)
 
-        # Per-photon QE: wavelength curve * scalar qe (passed to make_hits, not baked into weights)
+        # Per-photon QE: response.qe x the curve relative to λ_ref (passed to make_hits, not baked into weights)
         if qe_weights is not None:
             qe_per_photon = qe_weights * detector_params.response.qe
         else:

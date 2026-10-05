@@ -54,9 +54,11 @@ calibration fits *departures* from known physics rather than refitting the physi
 
 ## QE and Cherenkov sampling
 
-- **QE**: in wavelength mode each photon is weighted by `qe_fn(λ)` built from the PMT's
-  measured QE curve (`config/pmt/`; e.g. the bundled SK curve spans ≈294–648 nm); in scalar mode a single QE
-  enters at hit-making instead.
+- **QE**: the `qe` scalar in `DetectorParams` is the QE at the scalar reference wavelength
+  (400 nm). In scalar mode it enters at hit-making for every photon; in wavelength mode each
+  photon is weighted by `qe × qe_fn(λ) / qe_fn(400 nm)`, built from the PMT's measured QE curve
+  (`config/pmt/`; e.g. the bundled SK curve spans ≈294–648 nm). That is exactly `qe_fn(λ)` when
+  `qe` was projected from the curve, and an explicit or fitted `qe` rescales both modes alike.
 - **Cherenkov spectrum**: track sources sample the 1/λ² Cherenkov spectrum over the physical
   emission band (`cherenkov_emission_band` on `setup_event_simulator`). Photons outside the
   QE knots or medium grid contribute nothing, which is exactly the physical statement that
