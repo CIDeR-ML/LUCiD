@@ -168,6 +168,14 @@ class TestQECurve:
         # QE should decrease from blue to red
         assert float(result[1]) > float(result[3])
 
+    def test_peak_is_the_curve_maximum(self):
+        from lucid.wavelength.medium import qe_curve_bounds, qe_curve_peak
+        lo, hi = qe_curve_bounds(_SK_QE_PATH)
+        values = load_qe_curve(_SK_QE_PATH)(jnp.linspace(lo, hi, 2001))
+        peak = qe_curve_peak(_SK_QE_PATH)
+        assert float(jnp.max(values)) <= peak + 1e-7
+        npt.assert_allclose(float(jnp.max(values)), peak, rtol=1e-3)
+
     def test_returns_fraction_not_percent(self):
         qe_fn = load_qe_curve(_SK_QE_PATH)
         # All values should be < 1.0 (fractions, not percent)

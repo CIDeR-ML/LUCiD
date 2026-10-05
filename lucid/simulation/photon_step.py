@@ -96,6 +96,8 @@ def photon_iteration_sample(
 
     u2 = jax.random.uniform(k2)
     reflects = reaches_surface & (u2 < reflection_rate)
+    # Not reflected -> deposited; make_hits converts it at QE / (1 - R0), since QE counts
+    # photons arriving at the PMT (see simulator._common_propagation).
     detects = reaches_surface & (u2 >= reflection_rate)
     scatters = ~reaches_surface
 
@@ -280,7 +282,8 @@ def photon_iteration_update_factors(
 
     # Implicit-capture deposit factor (expected detected charge, Rao-Blackwellised over the
     # free-path decision). Dd LIVE → pathwise track gradient through `reach`/`atten_surf`.
-    # No qe (applied in make_hits); no dice_dep (the scan body multiplies it from PRE-step log_p).
+    # No qe (make_hits applies QE / (1 - R0), see simulator._common_propagation); no dice_dep
+    # (the scan body multiplies it from PRE-step log_p).
     reach = jnp.exp(-mu_tot * Dd)
     atten_surf = jnp.exp(-Dd / absorption_length)
     detect_prob = reach * (1.0 - refl_prob) * atten_surf

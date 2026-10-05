@@ -7,7 +7,7 @@ from lucid.simulation.reflection import (
     ScalarReflection, scalar_reflection,
     ScalarMixReflection, scalar_mix_reflection,
     AngularReflection, angular_reflection,
-    pmt_reflectance, get_reflection_model,
+    pmt_reflectance, get_reflection_model, sensor_normal_reflectance,
 )
 from lucid.detector_params import create_default_detector_params
 
@@ -213,3 +213,23 @@ class TestSamplePathHonorsModel:
         d_mix_diff = photon_iteration_sample(**self._reflect_args(mix_diff, k),
                                              reflection_fn=scalar_mix_reflection)[1]
         assert not bool(jnp.allclose(d_mix_diff, specular, atol=1e-3))
+
+
+class TestSensorNormalReflectance:
+    """The reflection a quoted QE already contains: each model's sensor value at normal incidence."""
+
+    def test_scalar_models_give_the_sensor_rate(self):
+        lam = jnp.asarray(400.0)
+        rp = ScalarReflection(wall_rate=jnp.asarray(0.5), sensor_rate=jnp.asarray(0.3))
+        npt.assert_allclose(sensor_normal_reflectance(scalar_reflection, rp, lam), 0.3)
+        rpm = ScalarMixReflection(wall_rate=jnp.asarray(0.5), sensor_rate=jnp.asarray(0.3),
+                                  wall_fspec=jnp.asarray(0.5), sensor_fspec=jnp.asarray(0.9))
+        npt.assert_allclose(sensor_normal_reflectance(scalar_mix_reflection, rpm, lam), 0.3)
+
+    def test_angular_model_gives_its_fresnel_value(self):
+        lam = jnp.asarray(405.0)
+        rp = AngularReflection(R0w=jnp.asarray(0.05), pw=jnp.asarray(1.5),
+                               fw=jnp.asarray(0.1), nr=jnp.asarray(2.8),
+                               nk=jnp.asarray(1.5), fs=jnp.asarray(0.2))
+        npt.assert_allclose(sensor_normal_reflectance(angular_reflection, rp, lam),
+                            pmt_reflectance(jnp.asarray(1.0), lam, rp.nr, rp.nk), atol=1e-6)

@@ -18,7 +18,9 @@ where
 and returns
 
 - ``refl_prob`` : reflection probability (used as ``1 - refl_prob`` in the implicit-capture
-                  deposit and ``refl_prob`` in the continuation weight)
+                  deposit and ``refl_prob`` in the continuation weight; its sensor value at
+                  normal incidence also sets how QE converts a deposit, see
+                  ``sensor_normal_reflectance``)
 - ``refl_dir``  : the post-reflection direction
 - ``lr_score``  : a DiCE score increment for any DISCRETE reflection branch — 0.0 for the
                   scalar model; the specular/diffuse-mix log-prob for angular models
@@ -258,3 +260,15 @@ def get_reflection_model(name):
         raise ValueError(
             f"Unknown reflection model {name!r}; available: {sorted(REFLECTION_MODELS)}")
     return REFLECTION_MODELS[name]
+
+
+def sensor_normal_reflectance(reflection_fn, refl_params, lam):
+    """Sensor reflection probability at normal incidence under ``reflection_fn``.
+
+    PMT QE is quoted per photon arriving at normal incidence, so this is the reflection loss
+    a quoted QE already contains. The key only drives the reflected direction, which is unused.
+    """
+    normal = jnp.array([0.0, 0.0, 1.0])
+    refl_prob, _, _ = reflection_fn(-normal, normal, True, refl_params, lam,
+                                    jax.random.PRNGKey(0))
+    return refl_prob
