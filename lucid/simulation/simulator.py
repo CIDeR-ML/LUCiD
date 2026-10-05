@@ -595,7 +595,11 @@ def setup_event_simulator(
 
         from lucid.simulation.types import PhotonState
 
-        initial_survival = jnp.ones(n_rays)
+        # The surface detectors are closed (the ID blacksheet), so light emitted outside never
+        # reaches an ID sensor; a vertex shift, or a track's range, can put emission there.
+        # String telescopes are open media.
+        initial_survival = (jnp.ones(n_rays) if is_volume
+                            else get_inside_detector_flag(positions).astype(jnp.float32))
 
         def propagation_step(carry, i):
             state = carry

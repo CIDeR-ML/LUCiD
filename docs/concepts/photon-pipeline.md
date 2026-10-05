@@ -12,7 +12,9 @@ sources  →  propagation  →  photon_step (× K)  →  sensor_response
 - **`lucid/sources/`** emits photon rays — from the SIREN track/cascade emitter, or from
   calibration sources (laser, isotropic), or from PhotonSim data.
 - **`lucid/propagation/`** intersects rays with the detector geometry and iterates `K` scatter
-  bounces.
+  bounces. In the closed surface detectors a photon emitted outside the detector volume, for
+  instance by a track that leaves it, carries no weight: the inner detector is optically sealed.
+  String telescopes are open media and keep every photon.
 - **`lucid/simulation/photon_step.py`** does the per-step physics — scatter, reflect, absorb —
   with *soft* weights (a `temperature` controls the softness) so the whole thing is
   differentiable rather than a hard Monte-Carlo branch. Where a branch stays genuinely
