@@ -191,6 +191,28 @@ def test_apply_readout_resolution():
     assert not np.allclose(pr2, pe_true) and (pr2 >= 0).all()
 
 
+def test_time_jitter_follows_the_digitised_charge():
+    """A photoelectron is timed by the pulse it produced: the jitter is evaluated on the
+    digitised charge (floored at the model's jitter_floor_pe), the charge the discriminator sees."""
+    model = resolve_model_config({"model": "ski", "tdc_ns": 0.0})
+    n = 400_000
+    q, t = apply_readout_resolution(np.ones(n), np.zeros(n), model, _rng())
+    q = q.astype(np.float64)
+    sigma = np.maximum(0.58, 0.33 + np.sqrt(10.0 / np.maximum(q, model["jitter_floor_pe"])))
+    for lo, hi in ((0.25, 0.5), (1.0, 1.5), (2.0, 3.0)):
+        m = (q >= lo) & (q < hi)
+        assert abs(np.std(t[m] / sigma[m]) - 1.0) < 0.02, (lo, hi, np.std(t[m] / sigma[m]))
+
+
+def test_single_pe_that_digitises_higher_is_timed_better():
+    n = 400_000
+    for name in ("ski", "hk"):
+        model = resolve_model_config({"model": name, "tdc_ns": 0.0})
+        q, t = apply_readout_resolution(np.ones(n), np.zeros(n), model, _rng())
+        low, high = t[(q >= 0.25) & (q < 0.5)], t[(q >= 2.0) & (q < 3.0)]
+        assert np.std(low) > 1.1 * np.std(high), (name, np.std(low), np.std(high))
+
+
 def test_decompose_basic_single_digit_and_conserves():
     # basic: one digit per sensor; hits/seg decomposition sums to the digit.
     sensor = np.array([0, 0, 1])

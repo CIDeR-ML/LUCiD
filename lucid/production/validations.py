@@ -249,7 +249,7 @@ def check_time(dataset: Path, out: Path, n_shards: int, tol_ns=0.1):
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
-    from lucid.simulation.digitizer import _sample_time_jitter
+    from lucid.simulation.digitizer import apply_discriminator, apply_readout_resolution
 
     name, model = _digitizer_model(dataset)
     tp, _, resid = load_response_samples(dataset, n_shards)
@@ -257,8 +257,11 @@ def check_time(dataset: Path, out: Path, n_shards: int, tol_ns=0.1):
     tdc = float(model.get("tdc_ns", 0.0)) or 1e-9
 
     def model_resid(N, n=300000):
+        # The digitizer's own readout, as the data saw it: the charge N p.e. digitise to, the
+        # jitter that charge gets, and only the digits the discriminator keeps.
         u = rng.uniform(0.0, tdc, n)
-        return _sample_time_jitter(u, np.full(n, float(N)), model, rng) - u
+        q, t = apply_readout_resolution(np.full(n, float(N)), u, model, rng)
+        return (t - u)[apply_discriminator(q, model)]
 
     fig, ax = plt.subplots(2, 3, figsize=(13, 7.6))
     fig.suptitle(f"time residual vs TTS model ({name})", fontweight="bold")
