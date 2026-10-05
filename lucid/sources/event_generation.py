@@ -685,6 +685,7 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
 
             # Store for batch processing
             extended_info['source_event_idx'] = int(event_number)
+            _drop_unwritten(extended_info)
             batch_data.append(extended_info)
             batch_indices.append(event_number)
 
@@ -772,6 +773,19 @@ def generate_events_from_photonsim_particles(event_simulator, root_file_path,
         print(f"Average event processing time: {avg_time:.3f}s")
 
     return saved_files
+
+
+def _drop_unwritten(extended_info):
+    """Drop the parts of an event record that no writer reads.
+
+    Records wait in memory until the end-of-job write, and each particle's
+    'photon_indices' and the full 'track_info_dict' are most of their size. The
+    writers read 'meaningful_tracks' and each particle's 'track_info', 'genealogy'
+    and 'extended_genealogy' instead.
+    """
+    for particle in extended_info.get('particles') or []:
+        particle.pop('photon_indices', None)
+    extended_info.pop('track_info_dict', None)
 
 
 def _offset_track_ids_raw(raw, offset):
