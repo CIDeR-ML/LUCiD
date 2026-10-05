@@ -286,6 +286,43 @@ class TestQEHandling:
             f"Peak QE charge ({float(jnp.sum(c_peak)):.0f}) should exceed " \
             f"low QE charge ({float(jnp.sum(c_low)):.0f})"
 
+    @staticmethod
+    def _laser_charge(detector, dp, wavelength_mode):
+        from lucid.simulation import setup_event_simulator
+        from lucid.sources import laser_source
+
+        sim = setup_event_simulator(
+            GEOM, 100000, temperature=None, K=4,
+            is_calibration=True, default_detector_params=dp,
+            physics_config=PHYSICS, wavelength_mode=wavelength_mode)
+        source = laser_source(position=[0., 0., detector.H / 2 - 0.1],
+                              intensity=1e8, wavelength=400.0)
+        charges, _ = sim(source, jax.random.PRNGKey(7))
+        return float(jnp.sum(charges))
+
+    def test_modes_agree_at_reference_wavelength(self, detector):
+        """QE enters once in both modes, so a 400 nm laser gives the same charge.
+
+        Scalar mode uses the scalars projected from the curves at 400 nm and wavelength
+        mode evaluates those curves at 400 nm. Counting QE twice in wavelength mode would
+        scale its charge by qe_fn(400 nm) ~ 0.23.
+        """
+        from lucid.detector_params import load_physics_config
+        dp, _, _ = load_physics_config(PHYSICS, num_sensors=len(detector.all_points))
+        scalar = self._laser_charge(detector, dp, wavelength_mode=False)
+        per_photon = self._laser_charge(detector, dp, wavelength_mode=True)
+        assert scalar > 0
+        assert abs(per_photon / scalar - 1.0) < 0.03, (scalar, per_photon)
+
+    def test_explicit_qe_rescales_wavelength_mode(self, detector):
+        """In wavelength mode qe is still the QE at 400 nm: halving it halves the charge."""
+        from lucid.detector_params import load_physics_config
+        dp, _, _ = load_physics_config(PHYSICS, num_sensors=len(detector.all_points))
+        half = dp._replace(response=dp.response._replace(qe=dp.response.qe * 0.5))
+        full = self._laser_charge(detector, dp, wavelength_mode=True)
+        halved = self._laser_charge(detector, half, wavelength_mode=True)
+        assert abs(halved / full - 0.5) < 0.05, (full, halved)
+
 
 # ── Physics consistency ────────────────────────────────────────────
 

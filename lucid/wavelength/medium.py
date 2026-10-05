@@ -279,7 +279,9 @@ def compute_effective_properties(detector_params, medium, wavelengths=None,
     eff_mie_scatter = detector_params.scattering.mie_scatter_length * mie_scatter_correction
 
     if qe_curve is not None:
-        eff_qe = detector_params.response.qe * qe_curve(wavelengths)
+        # response.qe is the QE at ref_wl; the curve supplies the shape around it,
+        # as the scattering and absorption corrections above do.
+        eff_qe = detector_params.response.qe * qe_curve(wavelengths) / qe_curve(ref_wl)
     else:
         eff_qe = detector_params.response.qe
 
