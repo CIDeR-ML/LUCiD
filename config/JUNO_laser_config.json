@@ -16,6 +16,7 @@
     "radius_m": 0.01,
     "time_sigma_ns": 0.23,
     "angular_parameterization": "bernstein3",
+    "importance_normalization": "self_normalized",
     "angular_weights": [
       0.28182463805722086,
       0.2170696740847002,
@@ -41,31 +42,40 @@
   "calibration": {
     "mode": "per_pe",
     "parameters": [
-      "n_ls",
       "scat_ls",
       "abs_ls",
-      "n_water",
-      "scat_water",
-      "abs_water"
+      "lsphase_shape_0",
+      "lsphase_shape_1",
+      "lsphase_shape_2"
     ],
     "parameter_bounds": {
-      "n_ls": [1.2, 1.6],
       "scat_ls": [20.0, 400.0],
       "abs_ls": [50.0, 1200.0],
-      "n_water": [1.2, 1.5],
-      "scat_water": [200.0, 4000.0],
-      "abs_water": [5.0, 100.0]
+      "lsphase_shape_0": [-3.0, 3.0],
+      "lsphase_shape_1": [-3.0, 3.0],
+      "lsphase_shape_2": [-3.0, 3.0]
+    },
+    "irf": {
+      "mode": "pmt_type_average",
+      "path": "/junofs/PmtCharacterization/IRF/jpwaptool_ser_baseline.h5",
+      "pmt_map": "/junofs/C/junoid_J25.7.3.pq",
+      "interpolation_sigma_ns": 0.25
     },
     "time_window_ns": [0.0, 1000.0],
-    "time_bin_ns": 2.0,
+    "time_bin_ns": 0.5,
     "n_photons": 400000,
     "train_ensemble_size": 16,
-    "validation_ensemble_size": 16,
+    "mc_validation_ensemble_size": 16,
     "learning_rate": 0.001,
     "optimizer": "adam",
+    "stage_steps": {
+      "ls_lengths": 64,
+      "diffuser_angular_shape": 64,
+      "joint": 64
+    },
     "stages": [
-      "prompt_refractive_index",
-      "lengths",
+      "ls_lengths",
+      "diffuser_angular_shape",
       "joint"
     ]
   }

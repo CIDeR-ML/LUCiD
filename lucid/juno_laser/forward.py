@@ -20,6 +20,7 @@ from .config import JunoLaserConfig
 from .histogram import weighted_time_histogram
 from .parameters import CalibParams, medium_lengths_at
 from .source import rotate_source_directions
+from .time_grid import TimeGrid
 
 
 def build_per_pe_forward(
@@ -31,8 +32,7 @@ def build_per_pe_forward(
     k: int,
     intensity: float | None = None,
     fit_amp: bool = False,
-    time_window_ns=None,
-    time_bin_ns: float | None = None,
+    time_grid: TimeGrid | None = None,
 ):
     """Build ``forward(source, params, key) -> (histogram, charge)``.
 
@@ -51,7 +51,12 @@ def build_per_pe_forward(
     n_outer_reference = float(det_geom.medium_outer.refractive_index)
     del n_outer_reference  # kept in geometry for validation/documentation
 
-    reflection_fn, build_reflection_params = get_reflection_model("scalar")
+    reflection_name = config.data["transport"].get(
+        "reflection_model", "scalar"
+    )
+    reflection_fn, build_reflection_params = get_reflection_model(
+        reflection_name
+    )
     reflection_params = build_reflection_params(physics_params)
     has_engineering = any((
         detector.support_rods is not None,
@@ -94,21 +99,32 @@ def build_per_pe_forward(
     surface_values = engineering_surface_parameters(
         fixed_physics, required_surface_codes
     )
-    surface_reflectances = jnp.asarray(surface_values[0])
-    surface_transmittances = jnp.asarray(surface_values[1])
-    surface_fspecs = jnp.asarray(surface_values[2])
-    g = physics_params.scattering.g
-    qe = physics_params.response.qe
-    qe_corrections = physics_params.per_pmt.qe_corrections
+    transport_dtype = jnp.float32
+    surface_reflectances = jnp.asarray(
+        surface_values[0], dtype=transport_dtype
+    )
+    surface_transmittances = jnp.asarray(
+        surface_values[1], dtype=transport_dtype
+    )
+    surface_fspecs = jnp.asarray(
+        surface_values[2], dtype=transport_dtype
+    )
+    g = jnp.asarray(physics_params.scattering.g, dtype=transport_dtype)
+    qe = jnp.asarray(physics_params.response.qe, dtype=transport_dtype)
+    wavelength = jnp.asarray(
+        config.wavelength_nm, dtype=transport_dtype
+    )
+    qe_corrections = jnp.asarray(
+        physics_params.per_pmt.qe_corrections,
+        dtype=transport_dtype,
+    )
     if qe_corrections.ndim == 0:
         qe_corrections = jnp.ones(n_sensors, dtype=jnp.float32) * qe_corrections
 
-    calibration = config.calibration
-    window = (calibration["time_window_ns"] if time_window_ns is None
-              else time_window_ns)
-    t_min, t_max = (float(window[0]), float(window[1]))
-    t_bin = float(calibration["time_bin_ns"] if time_bin_ns is None else time_bin_ns)
-    n_bins = int((t_max - t_min + t_bin - 1e-12) // t_bin)
+    time_grid = config.time_grid if time_grid is None else time_grid
+    if not isinstance(time_grid, TimeGrid):
+        raise TypeError("time_grid must be a TimeGrid")
+    n_bins = time_grid.n_bins
     source_intensity = (float(config.data["source"]["default_intensity"])
                         if intensity is None else float(intensity))
 
@@ -124,37 +140,54 @@ def build_per_pe_forward(
         emission_times = source_batch.times
         medium_id0 = detector.region_of(positions)
 
-        c_in = jnp.asarray(c_vacuum / params.n_ls, dtype=jnp.float32)
-        c_out = jnp.asarray(c_vacuum / params.n_water, dtype=jnp.float32)
+        dtype = positions.dtype
+        vacuum_speed = jnp.asarray(c_vacuum, dtype=dtype)
+        c_in = vacuum_speed / params.n_ls
+        c_out = vacuum_speed / params.n_water
         if acrylic is None:
-            refractive_indices = jnp.asarray(
-                [params.n_ls, params.n_water]
-            )
-            scatter_values = jnp.asarray(
-                [params.scat_ls, params.scat_water]
-            )
-            mie_values = jnp.asarray([1.0e9, 1.0e9])
-            absorb_values = jnp.asarray(
-                [params.abs_ls, params.abs_water]
-            )
-            speed_values = jnp.asarray([c_in, c_out])
+            refractive_indices = jnp.stack(
+                (params.n_ls, params.n_water)
+            ).astype(dtype)
+            scatter_values = jnp.stack(
+                (params.scat_ls, params.scat_water)
+            ).astype(dtype)
+            mie_values = jnp.asarray((1.0e9, 1.0e9), dtype=dtype)
+            absorb_values = jnp.stack(
+                (params.abs_ls, params.abs_water)
+            ).astype(dtype)
+            speed_values = jnp.stack((c_in, c_out)).astype(dtype)
         else:
-            refractive_indices = jnp.asarray([
-                params.n_ls, acrylic["n"], params.n_water
-            ])
-            scatter_values = jnp.asarray([
-                params.scat_ls, acrylic["scat"], params.scat_water
-            ])
-            mie_values = jnp.asarray([
-                1.0e9, acrylic["mie"], 1.0e9
-            ])
-            absorb_values = jnp.asarray([
-                params.abs_ls, acrylic["abs"], params.abs_water
-            ])
-            speed_values = c_vacuum / refractive_indices
+            acrylic_n = jnp.asarray(acrylic["n"], dtype=dtype)
+            acrylic_scat = jnp.asarray(acrylic["scat"], dtype=dtype)
+            acrylic_mie = jnp.asarray(acrylic["mie"], dtype=dtype)
+            acrylic_abs = jnp.asarray(acrylic["abs"], dtype=dtype)
+            refractive_indices = jnp.stack(
+                (params.n_ls, acrylic_n, params.n_water)
+            ).astype(dtype)
+            scatter_values = jnp.stack(
+                (params.scat_ls, acrylic_scat, params.scat_water)
+            ).astype(dtype)
+            mie_values = jnp.stack(
+                (jnp.asarray(1.0e9, dtype=dtype),
+                 acrylic_mie,
+                 jnp.asarray(1.0e9, dtype=dtype))
+            )
+            absorb_values = jnp.stack(
+                (params.abs_ls, acrylic_abs, params.abs_water)
+            ).astype(dtype)
+            speed_values = vacuum_speed / refractive_indices
 
         def step(carry, index):
-            positions, directions, times, survival, medium_id, key, log_p, hist = carry
+            (
+                positions,
+                directions,
+                times,
+                survival,
+                medium_id,
+                key,
+                log_p,
+                hist,
+            ) = carry
             if has_diffuser_hardware:
                 diffuser_center = (
                     source.center
@@ -174,14 +207,28 @@ def build_per_pe_forward(
                 )
             else:
                 prop = propagate(positions, directions)
-            depositions = prop["sensor_weights"]
+            depositions = jnp.asarray(
+                prop["sensor_weights"], dtype=positions.dtype
+            )
             sensor_indices = prop["sensor_indices"]
-            hit_positions = prop["positions"]
-            hit_times_meters = prop["times"]
-            normals = jax.lax.stop_gradient(prop["normals"])
+            hit_positions = jnp.asarray(
+                prop["positions"], dtype=positions.dtype
+            )
+            hit_times_meters = jnp.asarray(
+                prop["times"], dtype=times.dtype
+            )
+            normals = jax.lax.stop_gradient(jnp.asarray(
+                prop["normals"], dtype=directions.dtype
+            ))
             hit_interface = prop["hit_interface"]
-            surface_distance = jnp.sqrt(
-                jnp.sum((hit_positions - positions) ** 2, axis=1) + 1e-12) - 1e-6
+            surface_distance = (
+                jnp.sqrt(
+                    jnp.sum(
+                        (hit_positions - positions) ** 2, axis=1
+                    ) + 1e-12
+                )
+                - 1e-6
+            )
             hit_sensor = jnp.max(prop["inside_sensor"], axis=0)
 
             key, subkey = jax.random.split(key)
@@ -204,12 +251,13 @@ def build_per_pe_forward(
                 in_axes=(0, 0, 0, 0, 0,
                          0, 0, None, None, 0,
                          0, None, 0, 0,
-                         0, 0, None, None, None, None,
+                         0, 0, None, None, 0, None,
                          0, 0, 0, 0, 0, 0, 0),
             )
             result = vectorized_step(
               positions, directions, times, surface_distance, normals,
-              scatter, mie, g, reflection_params, absorb, hit_sensor, 400.0,
+              scatter, mie, g, reflection_params, absorb, hit_sensor,
+              wavelength,
               ray_keys, speed, hit_interface, medium_id,
               params.n_ls, params.n_water,
               interface_index, refractive_indices,
@@ -238,6 +286,15 @@ def build_per_pe_forward(
             (new_positions, new_directions, new_times,
              detect_probs, reflection_attenuations,
              continuing_factors, logp_increment, new_medium_id) = result
+            new_positions = new_positions.astype(positions.dtype)
+            new_directions = new_directions.astype(directions.dtype)
+            new_times = new_times.astype(times.dtype)
+            detect_probs = detect_probs.astype(survival.dtype)
+            reflection_attenuations = reflection_attenuations.astype(
+                survival.dtype
+            )
+            continuing_factors = continuing_factors.astype(survival.dtype)
+            logp_increment = logp_increment.astype(log_p.dtype)
             inside = detector.bounds_check(new_positions)
             new_survival = survival * jnp.where(inside, continuing_factors, 0.0)
 
@@ -247,16 +304,27 @@ def build_per_pe_forward(
                                * detect_probs[None, :]
                                * reflection_attenuations[None, :]
                                * dice_deposit[None, :])
-            total_times = hit_times_meters / speed[None, :, None] + times[:, None]
+            total_times = (
+                hit_times_meters / speed[None, :, None]
+                + times[:, None]
+            )
             step_hist = weighted_time_histogram(
                 updated_weights.reshape(-1), sensor_indices.reshape(-1),
                 total_times.squeeze(-1).reshape(-1), n_sensors=n_sensors,
-                time_min_ns=t_min, time_max_ns=t_max, bin_width_ns=t_bin,
+                time_grid=time_grid,
                 qe=qe, qe_corrections=qe_corrections)
             if fit_amp:
                 step_hist = step_hist * params.amp
-            next_carry = (new_positions, new_directions, new_times, new_survival,
-                          new_medium_id, key, log_p + logp_increment, hist + step_hist)
+            next_carry = (
+                new_positions,
+                new_directions,
+                new_times,
+                new_survival,
+                new_medium_id,
+                key,
+                log_p + logp_increment,
+                hist + step_hist,
+            )
             return next_carry, index
 
         histogram0 = jnp.zeros((n_sensors, n_bins), dtype=jnp.float32)

@@ -7,15 +7,17 @@ import json
 from pathlib import Path
 from typing import Any, Mapping
 
+from .time_grid import TimeGrid
+from .source import LSPHASE_SHAPE_NAMES
+
 
 PARAMETER_NAMES = (
-    "n_ls",
     "scat_ls",
     "abs_ls",
-    "n_water",
-    "scat_water",
-    "abs_water",
+    *LSPHASE_SHAPE_NAMES,
 )
+
+POSITIVE_PARAMETER_NAMES = frozenset(("scat_ls", "abs_ls"))
 
 
 @dataclass(frozen=True)
@@ -32,13 +34,19 @@ class JunoLaserConfig:
         with config_path.open() as stream:
             data = json.load(stream)
         if not isinstance(data, dict):
-            raise ValueError(f"JUNO laser config must be a JSON object: {config_path}")
+            raise ValueError(
+                "JUNO laser config must be a JSON object: "
+                f"{config_path}"
+            )
 
         required = ("geometry_config", "physics_config", "pmt_positions",
                     "materials", "source", "transport", "calibration")
         missing = [key for key in required if key not in data]
         if missing:
-            raise ValueError(f"JUNO laser config missing fields: {', '.join(missing)}")
+            raise ValueError(
+                "JUNO laser config missing fields: "
+                + ", ".join(missing)
+            )
 
         source = data["source"]
         source_model = source.get("model", "isotropic")
@@ -63,6 +71,13 @@ class JunoLaserConfig:
                 raise ValueError(
                     "source.time_sigma_ns must be non-negative"
                 )
+            if source.get(
+                "importance_normalization", "self_normalized"
+            ) not in {"analytic", "self_normalized"}:
+                raise ValueError(
+                    "source.importance_normalization must be analytic or "
+                    "self_normalized"
+                )
 
         calibration = data["calibration"]
         if calibration.get("mode") != "per_pe":
@@ -80,16 +95,63 @@ class JunoLaserConfig:
                     f"{name!r}"
                 )
             lo, hi = (float(value) for value in bounds[name])
-            if not 0 < lo < hi:
-                raise ValueError(f"Invalid bounds for {name!r}: {bounds[name]!r}")
+            if lo >= hi:
+                raise ValueError(
+                    f"Invalid bounds for {name!r}: {bounds[name]!r}"
+                )
+            if name in POSITIVE_PARAMETER_NAMES and lo <= 0:
+                raise ValueError(
+                    f"Positive parameter {name!r} requires a positive bound"
+                )
 
         time_window = calibration.get("time_window_ns")
         if not isinstance(time_window, (list, tuple)) or len(time_window) != 2:
-            raise ValueError("calibration.time_window_ns must contain [min, max]")
+            raise ValueError(
+                "calibration.time_window_ns must contain [min, max]"
+            )
         if float(time_window[1]) <= float(time_window[0]):
             raise ValueError("calibration.time_window_ns must be increasing")
         if float(calibration.get("time_bin_ns", 0.0)) <= 0:
             raise ValueError("calibration.time_bin_ns must be positive")
+        TimeGrid(
+            float(time_window[0]),
+            float(time_window[1]),
+            float(calibration["time_bin_ns"]),
+        )
+        required_stages = (
+            "ls_lengths",
+            "diffuser_angular_shape",
+            "joint",
+        )
+        if tuple(calibration.get("stages", ())) != required_stages:
+            raise ValueError(
+                "calibration stages must be ordered as "
+                + ", ".join(required_stages)
+            )
+        stage_steps = calibration.get("stage_steps", {})
+        if any(int(stage_steps.get(name, 0)) <= 0 for name in required_stages):
+            raise ValueError("each calibration stage requires positive steps")
+        ensemble_fields = (
+            "train_ensemble_size",
+            "mc_validation_ensemble_size",
+        )
+        if any(
+            int(calibration.get(name, 0)) <= 0 for name in ensemble_fields
+        ):
+            raise ValueError(
+                "train and MC-validation ensembles must be positive"
+            )
+        irf = calibration.get("irf", {})
+        if irf.get("mode") != "pmt_type_average":
+            raise ValueError(
+                "calibration.irf.mode must be 'pmt_type_average'"
+            )
+        if not irf.get("path") or not irf.get("pmt_map"):
+            raise ValueError("calibration.irf requires path and pmt_map")
+        if float(irf.get("interpolation_sigma_ns", 0.0)) <= 0.0:
+            raise ValueError(
+                "calibration.irf interpolation sigma must be positive"
+            )
 
         return cls(path=config_path, root=config_path.parent, data=data)
 
@@ -136,3 +198,33 @@ class JunoLaserConfig:
     @property
     def calibration(self) -> Mapping[str, Any]:
         return self.data["calibration"]
+
+    @property
+    def irf(self) -> Mapping[str, Any]:
+        """Return the validated measured-IRF configuration."""
+        return self.calibration["irf"]
+
+    @property
+    def irf_path(self) -> Path:
+        """Return the configured campaign IRF HDF5 path."""
+        return self.resolve(self.irf["path"])
+
+    @property
+    def irf_pmt_map_path(self) -> Path:
+        """Return the configured serial-to-PMT-family table path."""
+        return self.resolve(self.irf["pmt_map"])
+
+    @property
+    def interpolation_sigma_ns(self) -> float:
+        """Return the non-physical continuous interpolation width."""
+        return float(self.irf["interpolation_sigma_ns"])
+
+    @property
+    def time_grid(self) -> TimeGrid:
+        """Return the single validated calibration time grid."""
+        time_min_ns, time_max_ns = self.calibration["time_window_ns"]
+        return TimeGrid(
+            time_min_ns,
+            time_max_ns,
+            self.calibration["time_bin_ns"],
+        )

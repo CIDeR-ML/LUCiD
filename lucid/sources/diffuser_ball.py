@@ -24,6 +24,13 @@ JUNO_LS_PHASE_WEIGHTS = (
     0.35391735883294184,
     0.14718832902513695,
 )
+IMPORTANCE_NORMALIZATION_MODES = (
+    "analytic",
+    "self_normalized",
+)
+_IMPORTANCE_NORMALIZATION_CODES = {
+    name: index for index, name in enumerate(IMPORTANCE_NORMALIZATION_MODES)
+}
 
 
 class SourceBatch(NamedTuple):
@@ -71,6 +78,7 @@ class DiffuserBallSource(NamedTuple):
     time_sigma: jnp.ndarray
     angular_logits: jnp.ndarray
     wavelength: object = None
+    importance_normalization: object = 1
 
     def __call__(self, n_photons, key, n_water=1.33):
         """Sample proposal rays and attach differentiable shape weights."""
@@ -139,7 +147,12 @@ class DiffuserBallSource(NamedTuple):
             cos_theta, self.angular_logits
         )
         importance = 2.0 * density
-        importance /= jnp.mean(importance)
+        sample_normalized = importance / jnp.mean(importance)
+        importance = jnp.where(
+            jnp.asarray(self.importance_normalization) == 1,
+            sample_normalized,
+            importance,
+        )
         weights = self.intensity * importance / n_photons
         times = self.time_sigma * jax.random.normal(
             key_time, (n_photons,), dtype=dtype
@@ -166,6 +179,7 @@ def diffuser_ball_source(
     time_sigma=0.23,
     angular_weights=JUNO_LS_PHASE_WEIGHTS,
     wavelength=532.0,
+    importance_normalization="self_normalized",
 ):
     """Construct the nominal J26.5.1 LSPhase effective diffuser source."""
     center_array = np.asarray(center, dtype=float)
@@ -179,6 +193,11 @@ def diffuser_ball_source(
         raise ValueError("angular_weights must contain four positive values")
     if float(radius) <= 0.0 or float(time_sigma) < 0.0:
         raise ValueError("radius must be positive and time_sigma non-negative")
+    if importance_normalization not in _IMPORTANCE_NORMALIZATION_CODES:
+        choices = ", ".join(IMPORTANCE_NORMALIZATION_MODES)
+        raise ValueError(
+            "importance_normalization must be one of " + choices
+        )
     weights_array /= weights_array.sum()
     wavelength_value = None
     if wavelength is not None:
@@ -193,4 +212,7 @@ def diffuser_ball_source(
             jnp.asarray(weights_array, dtype=jnp.float32)
         ),
         wavelength=wavelength_value,
+        importance_normalization=_IMPORTANCE_NORMALIZATION_CODES[
+            importance_normalization
+        ],
     )

@@ -7,12 +7,14 @@ source position.  Its rows retain ``eid``, ``ch``, ``step``, ``PEt`` and
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
+
+from .time_grid import TimeGrid
+from .eventwise import EventwisePeObservation
 
 
 SIMULATION_SCHEMA = pa.schema(
@@ -112,26 +114,6 @@ def simulation_table(
     return pa.Table.from_arrays(arrays, schema=SIMULATION_SCHEMA)
 
 
-@dataclass(frozen=True)
-class PerPeObservation:
-    """Binned PE observations for one source position."""
-
-    counts: np.ndarray
-    n_events: int
-    n_pe: int
-    time_min_ns: float
-    time_max_ns: float
-    bin_width_ns: float
-
-    @property
-    def n_sensors(self) -> int:
-        return int(self.counts.shape[0])
-
-    @property
-    def n_bins(self) -> int:
-        return int(self.counts.shape[1])
-
-
 def event_file(data_dir: str | Path) -> Path:
     """Return the single consolidated Parquet event table for a source.
 
@@ -172,70 +154,132 @@ def _read_event_table(path: Path):
 
 
 def _event_arrays(frame):
-    """Flatten a BAPPE event table to channel IDs, times and event IDs."""
+    """Flatten selected BAPPE rows to per-PE event, channel and time arrays."""
     lengths = frame["PEt"].map(len).to_numpy(dtype=np.int64)
     if lengths.sum():
         times = np.concatenate(frame.loc[lengths > 0, "PEt"].to_numpy())
+        events = np.repeat(
+            frame.loc[lengths > 0, "eid"].to_numpy(dtype=np.int64),
+            lengths[lengths > 0],
+        )
         channels = np.repeat(
             frame.loc[lengths > 0, "ch"].to_numpy(dtype=np.int64),
             lengths[lengths > 0],
         )
     else:
+        events = np.empty(0, dtype=np.int64)
         times = np.empty(0, dtype=np.float64)
         channels = np.empty(0, dtype=np.int64)
-    return frame["eid"].to_numpy(dtype=np.int64), channels, times
+    return events, channels, times
 
 
-def load_per_pe_histogram(
+def _select_fsmp_step(frame, *, posterior_step: int, max_events: int):
+    """Select one prescribed FSMP posterior state for each physical event."""
+    if posterior_step < 0:
+        raise ValueError("posterior_step must be non-negative")
+    event_labels = frame["eid"].drop_duplicates().to_numpy(dtype=np.int64)
+    if max_events > 0:
+        event_labels = event_labels[:max_events]
+    selected = frame[
+        frame["eid"].isin(event_labels) & (frame["step"] == posterior_step)
+    ].copy()
+    present = set(selected["eid"].unique().tolist())
+    missing = [int(item) for item in event_labels if int(item) not in present]
+    if missing:
+        preview = missing[:5]
+        raise ValueError(
+            f"posterior step {posterior_step} is missing for physical "
+            f"event IDs {preview}"
+        )
+    duplicate = selected.duplicated(subset=["eid", "ch", "step"])
+    if duplicate.any():
+        raise ValueError(
+            "FSMP input has duplicate rows for the same (eid, ch, step)"
+        )
+    return selected, event_labels
+
+
+def load_eventwise_pe_observation(
     data_dir: str | Path,
     *,
     n_sensors: int,
-    time_min_ns: float,
-    time_max_ns: float,
-    bin_width_ns: float,
+    time_grid: TimeGrid,
+    posterior_step: int,
+    event_exposure,
+    event_time_offset_ns=0.0,
     max_events: int = 0,
-) -> PerPeObservation:
-    """Read PE sequences and accumulate a PMT/time-bin count histogram.
+) -> EventwisePeObservation:
+    """Load one FSMP posterior step while retaining physical zero-PE events.
 
-    The event axis is intentionally retained only through ``n_events``.  The
-    returned counts are sufficient for the current binned Poisson likelihood
-    while preserving every accepted PE and its time bin.
+    ``eid`` is the physical laser-event ledger.  ``step`` indexes posterior
+    samples within that event and is therefore not counted as an independent
+    exposure.  This prototype selects one prescribed step for every retained
+    event; it does not marginalize over posterior samples.  ``event_exposure``
+    is an externally measured or explicitly fixed laser normalization.  The
+    FSMP ``nu_lc`` column is not interpreted as exposure.
     """
     if n_sensors <= 0:
         raise ValueError("n_sensors must be positive")
-    if time_max_ns <= time_min_ns:
-        raise ValueError("time_max_ns must exceed time_min_ns")
-    if bin_width_ns <= 0:
-        raise ValueError("bin_width_ns must be positive")
-    n_bins = int(np.ceil((time_max_ns - time_min_ns) / bin_width_ns))
-    counts = np.zeros((n_sensors, n_bins), dtype=np.float64)
+    if not isinstance(time_grid, TimeGrid):
+        raise TypeError("time_grid must be a TimeGrid")
     frame = _read_event_table(event_file(data_dir))
-    event_ids = frame["eid"].drop_duplicates().to_numpy(dtype=np.int64)
-    if max_events > 0:
-        event_ids = event_ids[:max_events]
-        frame = frame[frame["eid"].isin(event_ids)]
-    _, ids, times = _event_arrays(frame)
-    bins = np.floor((times - time_min_ns) / bin_width_ns).astype(np.int64)
-    valid = (
-        (ids >= 0)
-        & (ids < n_sensors)
-        & (bins >= 0)
-        & (bins < n_bins)
-        & np.isfinite(times)
+    frame, event_labels = _select_fsmp_step(
+        frame, posterior_step=posterior_step, max_events=max_events
     )
-    linear = ids[valid] * n_bins + bins[valid]
-    if linear.size:
-        counts += np.bincount(
-            linear, minlength=n_sensors * n_bins
-        ).reshape(counts.shape)
-    n_pe = int(valid.sum())
-    n_events = int(len(event_ids))
-
-    return PerPeObservation(
-        counts=counts,
-        n_events=n_events,
-        n_pe=n_pe,
-        time_min_ns=float(time_min_ns),
-        time_max_ns=float(time_max_ns),
-        bin_width_ns=float(bin_width_ns),
+    exposures = np.asarray(event_exposure, dtype=np.float64)
+    if exposures.ndim == 0:
+        exposures = np.full(len(event_labels), float(exposures))
+    if exposures.shape != (len(event_labels),):
+        raise ValueError(
+            "event exposure must be scalar or match retained events"
+        )
+    if np.any(~np.isfinite(exposures)) or np.any(exposures <= 0.0):
+        raise ValueError("event exposures must be finite and positive")
+    time_offsets = np.asarray(event_time_offset_ns, dtype=np.float64)
+    if time_offsets.ndim == 0:
+        time_offsets = np.full(len(event_labels), float(time_offsets))
+    if time_offsets.shape != (len(event_labels),):
+        raise ValueError(
+            "event time offset must be scalar or match retained events"
+        )
+    if np.any(~np.isfinite(time_offsets)):
+        raise ValueError("event time offsets must be finite")
+    invalid_channel = (frame["ch"] < 0) | (frame["ch"] >= n_sensors)
+    rows_per_event = frame.groupby("eid", sort=False).size()
+    incomplete = rows_per_event[rows_per_event != n_sensors].index.tolist()
+    if invalid_channel.any():
+        incomplete.extend(frame.loc[invalid_channel, "eid"].unique().tolist())
+    incomplete = sorted({int(label) for label in incomplete})
+    if incomplete:
+        raise ValueError(
+            "FSMP full-step contract requires one row per channel; "
+            f"incomplete physical event IDs {incomplete[:5]}"
+        )
+    events, channels, times = _event_arrays(frame)
+    event_lookup = {
+        int(label): index for index, label in enumerate(event_labels)
+    }
+    remapped_events = np.fromiter(
+        (event_lookup[int(item)] for item in events),
+        dtype=np.int32,
+        count=len(events),
+    )
+    valid = (
+        (channels >= 0)
+        & (channels < n_sensors)
+        & np.isfinite(times)
+        & (times >= time_grid.time_min_ns)
+        & (times < time_grid.time_max_ns)
+    )
+    return EventwisePeObservation(
+        event_ids=remapped_events[valid],
+        pmt_ids=channels[valid],
+        pe_times_ns=times[valid],
+        n_events=len(event_labels),
+        n_sensors=n_sensors,
+        time_grid=time_grid,
+        event_exposures=exposures,
+        event_time_offsets_ns=time_offsets,
+        event_labels=event_labels,
+        posterior_step=posterior_step,
     )

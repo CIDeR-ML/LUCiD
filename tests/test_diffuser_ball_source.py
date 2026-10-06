@@ -63,6 +63,54 @@ def test_diffuser_sampling_is_reproducible():
         np.testing.assert_array_equal(left, right)
 
 
+def test_importance_normalizations_share_proposal_rays():
+    """A/B modes must differ only in weights for a common random key."""
+    key = jax.random.PRNGKey(71)
+    analytic = diffuser_ball_source(
+        [0.0, 0.0, 0.0],
+        importance_normalization="analytic",
+    )(256, key)
+    normalized = diffuser_ball_source(
+        [0.0, 0.0, 0.0],
+        importance_normalization="self_normalized",
+    )(256, key)
+    np.testing.assert_array_equal(analytic.positions, normalized.positions)
+    np.testing.assert_array_equal(analytic.directions, normalized.directions)
+    np.testing.assert_array_equal(analytic.times, normalized.times)
+    assert not np.allclose(analytic.weights, normalized.weights)
+
+
+def test_analytic_importance_is_unbiased_but_not_fixed_per_sample():
+    """Analytic weights converge to intensity without forcing exact equality."""
+    intensity = 2.5e6
+    source = diffuser_ball_source(
+        [0.0, 0.0, 0.0],
+        intensity=intensity,
+        importance_normalization="analytic",
+    )
+    totals = np.asarray([
+        np.sum(np.asarray(source(4096, jax.random.PRNGKey(seed)).weights))
+        for seed in range(12)
+    ])
+    assert np.std(totals) > 0.0
+    np.testing.assert_allclose(np.mean(totals), intensity, rtol=6e-3)
+
+
+def test_self_normalized_importance_fixes_each_sample_total():
+    """Legacy self-normalization fixes total source weight in every batch."""
+    intensity = 2.5e6
+    source = diffuser_ball_source(
+        [0.0, 0.0, 0.0],
+        intensity=intensity,
+        importance_normalization="self_normalized",
+    )
+    for seed in range(4):
+        batch = source(257, jax.random.PRNGKey(seed))
+        np.testing.assert_allclose(
+            np.sum(np.asarray(batch.weights)), intensity, rtol=2e-6
+        )
+
+
 def test_diffuser_phase_space_remains_float32_with_x64_enabled():
     """The source must not promote the full transport chain to float64."""
     assert jax.config.x64_enabled
