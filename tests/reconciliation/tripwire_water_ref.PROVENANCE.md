@@ -5,6 +5,55 @@ is the reason. **Append to it on every re-capture; do not overwrite.**
 
 ---
 
+## 2026-10-06 — re-captured because sensor hit points no longer suffer float32 cancellation
+
+| | |
+|---|---|
+| device | **CPU**, pinned by `tripwire_capture.py` |
+| host | Intel Xeon Silver 4216 (lxbatch) |
+| jax / jaxlib | **0.4.38** / 0.4.38, numpy 2.4.6 |
+| image | `/eos/user/c/cjesus/DIFFSIM/containers/lucid_v0.4.0.sif`, built from `container/Dockerfile` |
+| `scalar.q_l2` | 674.8932 → **673.2465** (-0.244%) |
+| `scalar.q_sum` | 19609.9062 → **19588.0410** |
+| `wavelength.q_l2` | 895.1533 → **892.7308** |
+| tolerances | **unchanged** |
+
+### What moved it
+
+`compute_sensor_intersections_base` took the sphere discriminant as `b**2 - 4*a*c`. At detector
+distances both terms are ~|oc|² while their difference is ~4r², so in float32 the hit point could
+land up to millimetres inside the PMT, deeper than the 1e-4 nudge `photon_step` applies after a
+reflection, and the reflected photon then met the same PMT again for a second reflect-or-detect
+decision. The discriminant now comes from the closest-approach distance the function already
+computes, `4a(r² - d²)`, identical in exact arithmetic (audit `audit_wc_20261006`, item 8).
+
+Both trees were measured in one job on one node:
+
+| | before | after | ratio |
+|---|---|---|---|
+| `scalar.q_sum` | 19609.9062 | 19588.0410 | 0.9988850 |
+| `scalar.q_l2` | 674.8932 | 673.2465 | 0.9975599 |
+| `wavelength.q_sum` | 22931.3770 | 22906.6758 | 0.9989228 |
+| `wavelength.q_l2` | 895.1533 | 892.7308 | 0.9972937 |
+| `scalar.q_nlit` | 10764 | 10764 | 1 |
+| `scalar.m_l2` | 139.8084 | 139.7326 | 0.9994580 |
+| `scalar.adJ_l2` | 93.7375 | 93.6860 | 0.9994508 |
+
+On that node the tree before the change reproduces the stored reference exactly: `q_sum`, `q_l2`,
+`adJ_l2` and all seven `fisher_diag` columns to the last digit, so the environment contributes
+nothing.
+
+### One side effect worth knowing
+
+The reflection columns move most, since the change acts on photons that reflect off a PMT:
+`sensor_reflection_rate` falls 97.0198 → 95.8775 (×0.988) and `wall_reflection_rate` rises
+95.5086 → 96.4284 (×1.010). The other five columns move by 0.02-0.32%.
+
+The per-column tolerances are a property of the arithmetic rather than of the values, so they are
+unchanged.
+
+---
+
 ## 2026-10-05 — re-captured because QE now counts photons arriving at the PMT
 
 | | |

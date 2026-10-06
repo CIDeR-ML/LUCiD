@@ -225,8 +225,11 @@ def compute_sensor_intersections_base(sensor_idx, sensor_positions, sensor_radiu
     b = 2.0 * jnp.sum(oc * ray_d, axis=1)
     c = jnp.sum(oc * oc, axis=1) - sensor_radius ** 2
     
-    # Discriminant determines if intersection exists
-    discriminant = b ** 2 - 4 * a * c
+    # Discriminant determines if intersection exists. Not `b**2 - 4*a*c`: at detector distances both
+    # terms are ~|oc|^2 while their difference is ~4 r^2, so float32 cancellation puts hit points
+    # up to mm off, deeper than the 1e-4 nudge that lifts a reflected photon off its sensor. The
+    # closest-approach distance gives the same quantity without the cancellation.
+    discriminant = 4 * a * (sensor_radius ** 2 - distance ** 2)
     
     # Calculate actual intersection for rays that hit the sensor
     sqrt_term = jnp.sqrt(jnp.maximum(1e-10, discriminant))
