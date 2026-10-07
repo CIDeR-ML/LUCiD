@@ -97,11 +97,15 @@ FISHER_ENSEMBLE ?= $(QUAL_FIT_ENSEMBLE)
 FISHER_N_EVENTS ?= $(FORMAL_N_EVENTS)
 FISHER_K ?= $(QUAL_K)
 FISHER_SLURM_JOB ?= $(PROJECT_ROOT)/run/run_juno_synthetic_fisher.sh
+CLOSURE_RESULT ?= $(OUTDIR)/closure_result.json
+CLOSURE_DIAGNOSTICS_PDF ?= $(OUTDIR)/closure_diagnostics.pdf
+CLOSURE_DIAGNOSTICS_JSON ?= $(OUTDIR)/closure_diagnostics.json
 
 .PHONY: help test run smoke qualification-one qualification-five \
 	submit-one submit-five submit-custom submit-fit-only \
 	submit-five-fit-only \
 	submit-one-fisher submit-five-fisher \
+	closure-diagnostics \
 	grid-convergence key-comparison \
 	importance-audit credibility-scan fisher heldout-smoke
 
@@ -117,6 +121,8 @@ OUTDIR=/junofs/... OBSERVATION_ROOT=/junofs/.../generation"
 OUTDIR=/junofs/... OBSERVATION_ROOT=/junofs/.../generation"
 	@echo "  make -C synthetic_closure submit-one-fisher \
 FISHER_OUTDIR=/junofs/..."
+	@echo "  make -C synthetic_closure closure-diagnostics \
+OUTDIR=/junofs/.../completed-closure"
 	@echo "  make -C synthetic_closure submit-custom SOURCES='...' ..."
 	@echo "Override SOURCES='x,y,z ...' for an arbitrary source set."
 
@@ -292,6 +298,14 @@ INTENSITY='$(QUAL_INTENSITY)' ENSEMBLE_SIZE='$(FISHER_ENSEMBLE)' \
 BACKGROUND_RATE_HZ='$(FISHER_BACKGROUND_RATE_HZ)' \
 TIME_MAX_NS='$(QUAL_TIME_MAX_NS)' TIME_BIN_NS='$(QUAL_TIME_BIN_NS)' \
 bash $(FISHER_SLURM_JOB)"
+
+closure-diagnostics:
+	test -f "$(CLOSURE_RESULT)"
+	cd "$(PROJECT_ROOT)"; source run/env.sh; \
+	"$$LUCID_PY" scripts/plot_juno_closure_result.py \
+		--result "$(CLOSURE_RESULT)" \
+		--output "$(CLOSURE_DIAGNOSTICS_PDF)" \
+		--summary "$(CLOSURE_DIAGNOSTICS_JSON)"
 
 grid-convergence:
 	$(MAKE_PROG) -f "$(CLOSURE_DIR)/Makefile" smoke \

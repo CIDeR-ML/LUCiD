@@ -137,6 +137,22 @@ def test_worker_renders_closure_diagnostics_after_success() -> None:
     assert "closure_diagnostics.pdf" in worker
 
 
+def test_closure_diagnostics_target_is_read_only_postprocessing() -> None:
+    '''Existing closure JSON can be rendered without rerunning transport.'''
+    output = _dry_run(
+        "closure-diagnostics",
+        "OUTDIR=/tmp/lucid-completed-closure",
+    )
+    assert "scripts/plot_juno_closure_result.py" in output
+    assert (
+        "/tmp/lucid-completed-closure/closure_result.json" in output
+    )
+    assert (
+        "/tmp/lucid-completed-closure/closure_diagnostics.pdf" in output
+    )
+    assert "run_juno_full_geometry_closure.py" not in output
+
+
 def test_submit_one_fisher_uses_formal_transport_configuration() -> None:
     '''The one-source Fisher job uses the formal optical baseline.'''
     output = _dry_run(

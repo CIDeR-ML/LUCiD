@@ -206,6 +206,17 @@ make -C synthetic_closure test
 - `checkpoint_STAGE.npz`：周期恢复点；
 - Slurm 日志：编译时间、逐步运行时间、错误与资源诊断。
 
+若较早完成的 closure 目录缺少自动报告，可只读取已有 JSON 重新生成，
+不会提交作业，也不会重新运行 photon transport：
+
+```bash
+make -C synthetic_closure closure-diagnostics \
+    OUTDIR=/junofs/C/liukainan/LUCiD/closure_formal_100events/one_source
+```
+
+该目标以 `OUTDIR/closure_result.json` 为输入，输出同目录中的
+`closure_diagnostics.pdf` 和 `closure_diagnostics.json`。
+
 Jacobian/Fisher 使用独立作业，避免诊断失败破坏 closure 主结果：
 
 ```bash
