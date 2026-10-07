@@ -164,3 +164,44 @@ def test_submit_one_fisher_uses_formal_transport_configuration() -> None:
     assert "N_EVENTS='100'" in output
     assert "K='32'" in output
     assert "run_juno_synthetic_fisher.sh" in output
+
+
+def test_full_score_fixed_five_uses_isolated_formal_output() -> None:
+    '''The accepted scatter fix gets a reproducible full-geometry target.'''
+    output = _dry_run(
+        "submit-full-score-fixed-five",
+        "FULL_SCORE_FIXED_ROOT=/tmp/lucid-full-score-fixed",
+    )
+    expected = "/tmp/lucid-full-score-fixed/five_sources"
+    assert f"OUTDIR='{expected}'" in output
+    assert "N_EVENTS='100'" in output
+    assert "JOINT_STEPS='300'" in output
+    assert "OBJECTIVE_EXECUTION='per-source'" in output
+    assert "K='32'" in output
+    assert "/LUCiD/ closure_" not in output
+
+
+def test_full_score_fixed_fisher_uses_matching_sources_and_output() -> None:
+    '''The matching Fisher target must use the same five-source baseline.'''
+    output = _dry_run(
+        "submit-full-score-fixed-five-fisher",
+        "FULL_SCORE_FIXED_ROOT=/tmp/lucid-full-score-fixed",
+    )
+    expected = "/tmp/lucid-full-score-fixed/five_sources_fisher"
+    sources = "0,0,0 0,0,9 0,0,15 0,0,16.1 0,0,17.1"
+    assert f"OUTDIR='{expected}'" in output
+    assert f"SOURCES='{sources}'" in output
+    assert "N_EVENTS='100'" in output
+    assert "K='32'" in output
+
+
+def test_full_score_fixed_diagnostics_are_read_only() -> None:
+    '''The combined report target must not rerun photon transport.'''
+    output = _dry_run(
+        "full-score-fixed-five-diagnostics",
+        "FULL_SCORE_FIXED_ROOT=/tmp/lucid-full-score-fixed",
+    )
+    assert "scripts/plot_juno_closure_result.py" in output
+    assert "scripts/plot_juno_synthetic_fisher.py" in output
+    assert "run_juno_full_geometry_closure.py" not in output
+    assert "check_juno_synthetic_fisher.py" not in output

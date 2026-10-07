@@ -31,6 +31,27 @@ from lucid.simulation.photon_step import (
 )
 
 
+def free_path_log_probability(
+    is_scatter,
+    total_scatter_rate,
+    scatter_distance,
+    surface_distance,
+):
+    """Return the censored exponential free-path log probability.
+
+    A scattering branch contributes ``log(mu) - mu*d``.  A ray reaching the
+    surface contributes the survival log probability ``-mu*D``.  Distances
+    are detached so this expression is a score-function term only.
+    """
+    stop = jax.lax.stop_gradient
+    return jnp.where(
+        is_scatter,
+        jnp.log(total_scatter_rate)
+        - total_scatter_rate * stop(scatter_distance),
+        -total_scatter_rate * stop(surface_distance),
+    )
+
+
 def make_photon_step(mode, has_interface, reflection_fn=scalar_reflection,
                      multi_interface=False, has_support=False,
                      has_engineering_surfaces=False):
@@ -41,6 +62,10 @@ def make_photon_step(mode, has_interface, reflection_fn=scalar_reflection,
     n_inner, n_outer, interface_index, refractive_indices)`` and returns an
     8-tuple (the 7-tuple + ``new_medium_id``).  ``multi_interface`` selects
     the latter two arguments for an ordered three-medium interface list.
+
+    The sampled free path is detached from both position and accumulated
+    arrival time.  Its scattering-length derivative is represented once by
+    the DiCE score, avoiding a second partial pathwise contribution in time.
     """
     use_engineering = has_support or has_engineering_surfaces
     if use_engineering and not has_interface:
@@ -285,11 +310,9 @@ def make_photon_step(mode, has_interface, reflection_fn=scalar_reflection,
                  interface_target_medium_id=None,
                  engineering_entering=None,
                  engineering_volume_code=None):
-            # 8 keys single-medium (k[6],k[7] unused, kept for split-prefix parity); +1 (k[8])
-            # for the sampled interface outcome. Gradient design (PORT_PLAN): TRACK params flow
-            # PATHWISE (Dd/positions/time LIVE); OPTICAL scatter params flow via the DiCE score
-            # lf/la with d,Dd,cmie,cray STOP-GRADIENT'd inside it (no double count with the
-            # pathwise `reach`); the optical time gradient rides the LIVE reparam free path d_live.
+            # Geometry distances remain pathwise.  Optical free-path and
+            # scattering draws use DiCE scores, with sampled values detached
+            # from the propagated position and time to avoid double counting.
             k = jax.random.split(rng_key, 9 if has_interface else 8)
             engineering_hit = (
                 hit_engineering if use_engineering else jnp.asarray(False)
@@ -350,7 +373,7 @@ def make_photon_step(mode, has_interface, reflection_fn=scalar_reflection,
             dir_n = normalize(direction)
             scatter_pos = position + d * dir_n
             surface_pos = position + Dd * dir_n + epsilon * normalize(inward_normal)
-            lf = jnp.where(is_scat, jnp.log(mu_tot) - mu_tot * sg(d), -mu_tot * sg(Dd))
+            lf = free_path_log_probability(is_scat, mu_tot, d, Dd)
             la = jnp.where(is_scat,
                            jnp.where(is_mie,
                                      jnp.log(p_mie) + hg_logpdf(sg(cmie), g),
@@ -358,7 +381,10 @@ def make_photon_step(mode, has_interface, reflection_fn=scalar_reflection,
                            0.0)
             reach = jnp.exp(-mu_tot * Dd)
             atten_surf = jnp.exp(-Dd / absorption_length)
-            distance_for_time = jnp.where(is_scat, d_live, Dd)
+            # ``lf`` carries the free-path derivative.  Reusing ``d_live``
+            # here would add a second, partial pathwise time derivative while
+            # the sampled scattering position already uses detached ``d``.
+            distance_for_time = jnp.where(is_scat, d, Dd)
             new_time = time + distance_for_time / speed_of_light
             reflection_attenuation = jnp.ones_like(reach)
 

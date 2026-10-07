@@ -100,12 +100,23 @@ FISHER_SLURM_JOB ?= $(PROJECT_ROOT)/run/run_juno_synthetic_fisher.sh
 CLOSURE_RESULT ?= $(OUTDIR)/closure_result.json
 CLOSURE_DIAGNOSTICS_PDF ?= $(OUTDIR)/closure_diagnostics.pdf
 CLOSURE_DIAGNOSTICS_JSON ?= $(OUTDIR)/closure_diagnostics.json
+FISHER_RESULT ?= $(FISHER_OUTDIR)/fisher_result.json
+FISHER_DIAGNOSTICS_PDF ?= $(FISHER_OUTDIR)/fisher_diagnostics.pdf
+JUNO_OUTPUT_ROOT ?= /junofs/C/liukainan/LUCiD
+FULL_SCORE_FIXED_TAG ?= closure_full_geometry_scatter_score_fixed
+FULL_SCORE_FIXED_ROOT ?= $(JUNO_OUTPUT_ROOT)/$(FULL_SCORE_FIXED_TAG)
+FULL_SCORE_FIXED_OUTDIR ?= $(FULL_SCORE_FIXED_ROOT)/five_sources
+FULL_SCORE_FIXED_FISHER_OUTDIR ?= \
+	$(FULL_SCORE_FIXED_ROOT)/five_sources_fisher
 
 .PHONY: help test run smoke qualification-one qualification-five \
 	submit-one submit-five submit-custom submit-fit-only \
 	submit-five-fit-only \
 	submit-one-fisher submit-five-fisher \
-	closure-diagnostics \
+	submit-full-score-fixed-five \
+	submit-full-score-fixed-five-fisher \
+	closure-diagnostics fisher-diagnostics \
+	full-score-fixed-five-diagnostics \
 	grid-convergence key-comparison \
 	importance-audit credibility-scan fisher heldout-smoke
 
@@ -123,6 +134,11 @@ OUTDIR=/junofs/... OBSERVATION_ROOT=/junofs/.../generation"
 FISHER_OUTDIR=/junofs/..."
 	@echo "  make -C synthetic_closure closure-diagnostics \
 OUTDIR=/junofs/.../completed-closure"
+	@echo "  make -C synthetic_closure submit-full-score-fixed-five"
+	@echo "  make -C synthetic_closure \
+submit-full-score-fixed-five-fisher"
+	@echo "  make -C synthetic_closure \
+full-score-fixed-five-diagnostics"
 	@echo "  make -C synthetic_closure submit-custom SOURCES='...' ..."
 	@echo "Override SOURCES='x,y,z ...' for an arbitrary source set."
 
@@ -130,6 +146,7 @@ test:
 	cd "$(PROJECT_ROOT)"; source run/env.sh; \
 	export JAX_PLATFORMS=cpu JAX_ENABLE_X64=true; \
 		"$$LUCID_PY" -m pytest -q \
+			tests/test_free_path_score_gradient.py \
 			tests/test_juno_eventwise_likelihood.py \
 			tests/test_juno_closure_plot.py \
 			tests/test_juno_closure_cli.py \
@@ -299,6 +316,14 @@ BACKGROUND_RATE_HZ='$(FISHER_BACKGROUND_RATE_HZ)' \
 TIME_MAX_NS='$(QUAL_TIME_MAX_NS)' TIME_BIN_NS='$(QUAL_TIME_BIN_NS)' \
 bash $(FISHER_SLURM_JOB)"
 
+submit-full-score-fixed-five: override OUTDIR = \
+	$(FULL_SCORE_FIXED_OUTDIR)
+submit-full-score-fixed-five: submit-five
+
+submit-full-score-fixed-five-fisher: override FISHER_OUTDIR = \
+	$(FULL_SCORE_FIXED_FISHER_OUTDIR)
+submit-full-score-fixed-five-fisher: submit-five-fisher
+
 closure-diagnostics:
 	test -f "$(CLOSURE_RESULT)"
 	cd "$(PROJECT_ROOT)"; source run/env.sh; \
@@ -306,6 +331,19 @@ closure-diagnostics:
 		--result "$(CLOSURE_RESULT)" \
 		--output "$(CLOSURE_DIAGNOSTICS_PDF)" \
 		--summary "$(CLOSURE_DIAGNOSTICS_JSON)"
+
+fisher-diagnostics:
+	test -f "$(FISHER_RESULT)"
+	cd "$(PROJECT_ROOT)"; source run/env.sh; \
+	"$$LUCID_PY" scripts/plot_juno_synthetic_fisher.py \
+		--result "$(FISHER_RESULT)" \
+		--output "$(FISHER_DIAGNOSTICS_PDF)"
+
+full-score-fixed-five-diagnostics: override OUTDIR = \
+	$(FULL_SCORE_FIXED_OUTDIR)
+full-score-fixed-five-diagnostics: override FISHER_OUTDIR = \
+	$(FULL_SCORE_FIXED_FISHER_OUTDIR)
+full-score-fixed-five-diagnostics: closure-diagnostics fisher-diagnostics
 
 grid-convergence:
 	$(MAKE_PROG) -f "$(CLOSURE_DIR)/Makefile" smoke \

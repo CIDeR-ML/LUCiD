@@ -5,22 +5,6 @@
 chimneys、acrylic bowls 和 diffuser ball。观测端使用 event-wise、
 unbinned Poisson point-process likelihood。
 
-## 组账号提交入口
-
-`SBATCH=/path/to/group/sbatch-proxy` 是此前说明中用来表示“组内统一提交
-入口”的占位文本，并不指向仓库中的真实文件，因此不应原样执行。本项目
-已有的 `compare_lucid_sim/Makefile` 使用组账号命令，本工作流与它保持
-一致，默认直接执行：
-
-```text
-sudo -u#35905 sbatch
-```
-
-也就是说，`make submit-*` 会以课题组统一账号提交 Slurm 作业。Makefile
-使用 `sbatch --wrap` 把配置写入作业命令，再执行
-`run/run_juno_full_geometry_closure.sh`，避免依赖 `sudo` 是否保留调用者的
-环境变量。若只需在当前账号测试，可显式覆盖 `SBATCH=sbatch`。
-
 ## 固定的资格测试配置
 
 `qualification-one` 和 `qualification-five` 共用以下配置：
@@ -230,6 +214,48 @@ make -C synthetic_closure submit-five-fisher \
 输出 `fisher_result.json` 和 `fisher_diagnostics.pdf`。这里计算的是
 IRF-convolved numerical-time-basis expected Poisson Fisher，可用于初步
 identifiability 判断，但还不是 continuous-time unbinned PPP Fisher。
+
+## 全几何散射 score 修复后的五源复核
+
+`log_scat_ls` 的自由程采样现在采用一致的 DiCE score estimator：采样
+距离对传播位置和到达时间都停止梯度，散射长度导数只由 censored
+exponential 的 score 项承担。该修复不改变固定随机种子下的前向位置、
+时间或权重数值，只修正反向导数，避免“位置使用 detached distance、时间
+使用 live distance”造成的混合估计器。
+
+为避免覆盖旧版全几何结果，以下目标默认写入独立目录：
+
+```text
+/junofs/C/liukainan/LUCiD/
+  closure_full_geometry_scatter_score_fixed/
+    five_sources/
+    five_sources_fisher/
+```
+
+提交前先展开检查命令：
+
+```bash
+make -n -C synthetic_closure submit-full-score-fixed-five
+make -n -C synthetic_closure submit-full-score-fixed-five-fisher
+```
+
+确认后依次提交五源 formal closure 和匹配的 Fisher 作业：
+
+```bash
+make -C synthetic_closure submit-full-score-fixed-five
+make -C synthetic_closure submit-full-score-fixed-five-fisher
+```
+
+两个作业完成后，可仅从 JSON 重绘两份 PDF，不会重新运行 transport：
+
+```bash
+make -C synthetic_closure full-score-fixed-five-diagnostics
+```
+
+验收结论必须限定为：五源全几何联合 PPP 梯度可以计算，并可通过
+`OBJECTIVE_EXECUTION=per-source` 重复迭代而不触发已知 ROCm 多源重放
+崩溃。loss、梯度、参数轨迹和 Fisher 图是数值稳定性与初步可辨识性诊断，
+不能单独证明参数能够无偏恢复到 truth。
 
 提交前应保存当前 Git commit 和 `make -n` 展开的完整命令；分析结果时应
 同时核查有限梯度、MC-validation、checkpoint 状态和逐 source 贡献。
