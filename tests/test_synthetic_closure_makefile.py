@@ -33,7 +33,7 @@ def test_submit_one_uses_group_account_and_worker() -> None:
     assert "sudo -u#35905 sbatch" in output
     assert "SOURCES='0,0,17.1'" in output
     assert "N_EVENTS='100'" in output
-    assert "JOINT_STEPS='300'" in output
+    assert "JOINT_STEPS='600'" in output
     assert "AD_FD_RELATIVE_STEP='0.001'" in output
     assert "CLOSURE_MODE='full'" in output
     assert "run/run_juno_full_geometry_closure.sh" in output
@@ -49,7 +49,7 @@ def test_submit_five_preserves_requested_nested_sources() -> None:
     assert "K='32'" in output
     assert "OBJECTIVE_EXECUTION='per-source'" in output
     assert "N_EVENTS='100'" in output
-    assert "JOINT_STEPS='300'" in output
+    assert "JOINT_STEPS='600'" in output
     assert "AD_FD_RELATIVE_STEP='0.001'" in output
 
 
@@ -153,6 +153,17 @@ def test_closure_diagnostics_target_is_read_only_postprocessing() -> None:
     assert "run_juno_full_geometry_closure.py" not in output
 
 
+def test_closure_diagnostics_accepts_matching_fisher_result() -> None:
+    '''The closure report can add CRB values from a completed Fisher job.'''
+    output = _dry_run(
+        "closure-diagnostics",
+        "OUTDIR=/tmp/lucid-completed-closure",
+        "FISHER_OUTDIR=/tmp/lucid-completed-fisher",
+    )
+    assert "--fisher-result" in output
+    assert "/tmp/lucid-completed-fisher/fisher_result.json" in output
+
+
 def test_submit_one_fisher_uses_formal_transport_configuration() -> None:
     '''The one-source Fisher job uses the formal optical baseline.'''
     output = _dry_run(
@@ -175,7 +186,7 @@ def test_full_score_fixed_five_uses_isolated_formal_output() -> None:
     expected = "/tmp/lucid-full-score-fixed/five_sources"
     assert f"OUTDIR='{expected}'" in output
     assert "N_EVENTS='100'" in output
-    assert "JOINT_STEPS='300'" in output
+    assert "JOINT_STEPS='600'" in output
     assert "OBJECTIVE_EXECUTION='per-source'" in output
     assert "K='32'" in output
     assert "/LUCiD/ closure_" not in output

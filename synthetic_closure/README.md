@@ -35,7 +35,7 @@ unbinned Poisson point-process likelihood。
 | Formal item | Value |
 |---|---:|
 | Events per source | 100 |
-| Joint optimizer steps | 300 |
+| Joint optimizer steps | 600 |
 | Objective execution | `per-source` |
 | AD--FD relative step | `1e-3` |
 
@@ -184,8 +184,10 @@ make -C synthetic_closure test
 - `generation/source_XX/closure_observations.h5`：每源独立生成片段；
 - `generation/source_XX/generation_result.json`：每源生成状态与计时；
 - `closure_observations.h5`：fit 进程校验后合并的 event-wise 输入；
-- `closure_result.json`：配置、优化轨迹、梯度和验证量；
-- `closure_diagnostics.pdf`：train/MC loss、梯度、计时和参数轨迹；
+- `closure_result.json`：配置、优化轨迹、truth/start/fit、truth loss、
+  LSPhase 曲线、梯度和验证量；
+- `closure_diagnostics.pdf`：独立 train/MC-validation loss 页、梯度、
+  计时、参数轨迹、参数表和 LSPhase 曲线；
 - `closure_diagnostics.json`：best-step 等机器可读摘要；
 - `checkpoint_STAGE.npz`：周期恢复点；
 - Slurm 日志：编译时间、逐步运行时间、错误与资源诊断。
@@ -199,7 +201,9 @@ make -C synthetic_closure closure-diagnostics \
 ```
 
 该目标以 `OUTDIR/closure_result.json` 为输入，输出同目录中的
-`closure_diagnostics.pdf` 和 `closure_diagnostics.json`。
+`closure_diagnostics.pdf` 和 `closure_diagnostics.json`。若同时指定的
+`FISHER_OUTDIR/fisher_result.json` 已存在，参数表还会加入匹配的
+`CRB(σ)`；否则该列显示 `N/A`。
 
 Jacobian/Fisher 使用独立作业，避免诊断失败破坏 closure 主结果：
 
@@ -227,7 +231,7 @@ exponential 的 score 项承担。该修复不改变固定随机种子下的前�
 
 ```text
 /junofs/C/liukainan/LUCiD/
-  closure_full_geometry_scatter_score_fixed/
+  closure_full_geometry_scatter_score_fixed_s600/
     five_sources/
     five_sources_fisher/
 ```

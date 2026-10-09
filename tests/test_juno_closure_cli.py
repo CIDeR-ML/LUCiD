@@ -9,7 +9,9 @@ from lucid.juno_laser.eventwise import EventwisePeObservation
 from lucid.juno_laser.irf import IrfKernelBank
 from lucid.juno_laser.time_grid import TimeGrid
 from scripts.run_juno_full_geometry_closure import (
+    checkpoint_metadata,
     checkpoint_writer,
+    evaluate_reference_objective_losses,
     optimization_stages,
     partition_source_indices,
     read_observation_fragments,
@@ -37,6 +39,46 @@ def test_joint_only_plan_has_one_all_parameter_stage():
         stage3_steps=5,
     )
     assert optimization_stages(args) == (("joint", 17, PARAMETER_NAMES),)
+
+
+def test_reference_losses_evaluate_truth_on_each_objective():
+    """Truth losses are explicit train, validation and held-out values."""
+    def objective(theta, keys):
+        return np.sum((np.asarray(theta) - np.asarray(keys)) ** 2)
+
+    losses = evaluate_reference_objective_losses(
+        objective,
+        np.asarray([1.0, 2.0]),
+        np.asarray([1.0, 1.0]),
+        np.asarray([0.0, 0.0]),
+        heldout_objective=objective,
+        heldout_keys=np.asarray([2.0, 2.0]),
+    )
+    assert losses == {
+        "truth_train_loss_per_pe": 1.0,
+        "truth_mc_validation_loss_per_pe": 5.0,
+        "truth_heldout_loss_per_pe": 1.0,
+    }
+
+
+def test_checkpoint_metadata_matches_automatic_stage_selection():
+    """The reported marker describes the checkpoint used downstream."""
+    result = {
+        "best_step": 3,
+        "best_loss": 2.0,
+        "best_coordinates": np.zeros(1),
+        "best_mc_validation_step": 5,
+        "best_mc_validation_loss": 1.8,
+        "best_mc_validation_coordinates": np.ones(1),
+        "best_heldout_validation_step": None,
+        "best_heldout_validation_loss": None,
+        "best_heldout_validation_coordinates": None,
+    }
+    assert checkpoint_metadata(result) == {
+        "kind": "mc-validation-best",
+        "step": 5,
+        "loss_per_pe": 1.8,
+    }
 
 
 def test_staged_plan_remains_an_explicit_optional_strategy():

@@ -78,7 +78,7 @@ QUAL_SOURCE_CHUNK_SIZE ?= 0
 QUAL_OBJECTIVE_EXECUTION ?= per-source
 QUAL_CHECKPOINT_EVERY ?= 4
 FORMAL_N_EVENTS ?= 100
-FORMAL_JOINT_STEPS ?= 300
+FORMAL_JOINT_STEPS ?= 600
 FORMAL_AD_FD_RELATIVE_STEP ?= 0.001
 SUBMIT_N_EVENTS ?= $(FORMAL_N_EVENTS)
 SUBMIT_JOINT_STEPS ?= $(FORMAL_JOINT_STEPS)
@@ -103,7 +103,7 @@ CLOSURE_DIAGNOSTICS_JSON ?= $(OUTDIR)/closure_diagnostics.json
 FISHER_RESULT ?= $(FISHER_OUTDIR)/fisher_result.json
 FISHER_DIAGNOSTICS_PDF ?= $(FISHER_OUTDIR)/fisher_diagnostics.pdf
 JUNO_OUTPUT_ROOT ?= /junofs/C/liukainan/LUCiD
-FULL_SCORE_FIXED_TAG ?= closure_full_geometry_scatter_score_fixed
+FULL_SCORE_FIXED_TAG ?= closure_full_geometry_scatter_score_fixed_s600
 FULL_SCORE_FIXED_ROOT ?= $(JUNO_OUTPUT_ROOT)/$(FULL_SCORE_FIXED_TAG)
 FULL_SCORE_FIXED_OUTDIR ?= $(FULL_SCORE_FIXED_ROOT)/five_sources
 FULL_SCORE_FIXED_FISHER_OUTDIR ?= \
@@ -327,10 +327,15 @@ submit-full-score-fixed-five-fisher: submit-five-fisher
 closure-diagnostics:
 	test -f "$(CLOSURE_RESULT)"
 	cd "$(PROJECT_ROOT)"; source run/env.sh; \
+	FISHER_ARGS=(); \
+	if [[ -f "$(FISHER_RESULT)" ]]; then \
+		FISHER_ARGS+=(--fisher-result "$(FISHER_RESULT)"); \
+	fi; \
 	"$$LUCID_PY" scripts/plot_juno_closure_result.py \
 		--result "$(CLOSURE_RESULT)" \
 		--output "$(CLOSURE_DIAGNOSTICS_PDF)" \
-		--summary "$(CLOSURE_DIAGNOSTICS_JSON)"
+		--summary "$(CLOSURE_DIAGNOSTICS_JSON)" \
+		"$${FISHER_ARGS[@]}"
 
 fisher-diagnostics:
 	test -f "$(FISHER_RESULT)"

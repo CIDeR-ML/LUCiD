@@ -119,6 +119,37 @@ def json_value(value):
     return value
 
 
+def checkpoint_metadata(result):
+    """Describe the checkpoint selected by the current automatic policy."""
+    if result.get("best_heldout_validation_coordinates") is not None:
+        return {
+            "kind": "heldout-best",
+            "step": int(result["best_heldout_validation_step"]),
+            "loss_per_pe": float(
+                result["best_heldout_validation_loss"]
+            ),
+        }
+    if result.get("best_mc_validation_coordinates") is not None:
+        return {
+            "kind": "mc-validation-best",
+            "step": int(result["best_mc_validation_step"]),
+            "loss_per_pe": float(result["best_mc_validation_loss"]),
+        }
+    return {
+        "kind": "train-best",
+        "step": int(result["best_step"]),
+        "loss_per_pe": float(result["best_loss"]),
+    }
+
+
+def lsphase_curve(coefficients, n_points=181):
+    """Evaluate one JUNOSW-convention LSPhase polynomial curve."""
+    theta = np.linspace(0.0, 180.0, n_points)
+    cos_theta = np.cos(np.deg2rad(theta))
+    values = np.polynomial.polynomial.polyval(cos_theta, coefficients)
+    return theta, values
+
+
 def write_observations(
     path,
     observations,
@@ -432,6 +463,32 @@ def evaluate_value_and_gradient(objective, theta, keys):
     value, gradient = jax.value_and_grad(objective)(theta, keys)
     value.block_until_ready()
     return value, gradient
+
+
+def evaluate_reference_objective_losses(
+    objective,
+    truth_coordinates,
+    fit_keys,
+    mc_validation_keys,
+    *,
+    heldout_objective=None,
+    heldout_keys=None,
+):
+    """Evaluate truth coordinates under each configured objective."""
+    losses = {
+        "truth_train_loss_per_pe": float(
+            objective(truth_coordinates, fit_keys)
+        ),
+        "truth_mc_validation_loss_per_pe": float(
+            objective(truth_coordinates, mc_validation_keys)
+        ),
+        "truth_heldout_loss_per_pe": None,
+    }
+    if heldout_objective is not None:
+        losses["truth_heldout_loss_per_pe"] = float(
+            heldout_objective(truth_coordinates, heldout_keys)
+        )
+    return losses
 
 
 def optimization_stages(args):
@@ -826,6 +883,14 @@ def run_closure(args):
             ),
             args.fit_ensemble_size,
         )
+    reference_losses = evaluate_reference_objective_losses(
+        objective,
+        truth_coordinates,
+        fit_keys,
+        mc_validation_keys,
+        heldout_objective=heldout_objective,
+        heldout_keys=heldout_keys,
+    )
     theta = parameter_start(truth, args.start_fraction, args.seed + 2)
     if args.restart_checkpoint is not None:
         if args.optimization_plan != "joint-only":
@@ -991,6 +1056,7 @@ def run_closure(args):
         stage_results.append(
             {
                 "name": name,
+                "selected_checkpoint": checkpoint_metadata(result),
                 **{
                     key: json_value(value)
                     for key, value in result.items()
@@ -1023,8 +1089,14 @@ def run_closure(args):
         )
         heldout_final_loss = float(heldout_objective(theta, heldout_keys))
     fit_values = np.asarray(decode_calibration_array(theta), dtype=np.float64)
+    initial_values = np.asarray(
+        decode_calibration_array(initial_theta), dtype=np.float64
+    )
     truth_source = set_diffuser_angular_shape(
         fit_sources[0], np.zeros(3, dtype=np.float32)
+    )
+    initial_source = set_diffuser_angular_shape(
+        fit_sources[0], initial_values[2:5]
     )
     fit_source = set_diffuser_angular_shape(
         fit_sources[0], fit_values[2:5]
@@ -1033,9 +1105,15 @@ def run_closure(args):
     truth_coefficients = np.asarray(
         lsphase_polynomial_coefficients(truth_source.angular_logits)
     )
+    initial_coefficients = np.asarray(
+        lsphase_polynomial_coefficients(initial_source.angular_logits)
+    )
     fit_coefficients = np.asarray(
         lsphase_polynomial_coefficients(fit_source.angular_logits)
     )
+    theta_degrees, truth_curve = lsphase_curve(truth_coefficients)
+    _, initial_curve = lsphase_curve(initial_coefficients)
+    _, fit_curve = lsphase_curve(fit_coefficients)
     result = {
         "schema": "lucid_full_geometry_eventwise_closure_v1",
         "completed": completed,
@@ -1107,13 +1185,24 @@ def run_closure(args):
         "parameter_names": list(PARAMETER_NAMES),
         "optimizer_coordinate_names": list(OPTIMIZER_COORDINATE_NAMES),
         "truth": {name: float(truth[name]) for name in PARAMETER_NAMES},
+        "start": dict(zip(PARAMETER_NAMES, initial_values.tolist())),
         "fit": dict(zip(PARAMETER_NAMES, fit_values.tolist())),
         "lsphase_polynomial_coefficients": {
             "gauge": "fixed nominal integral",
             "truth": dict(zip(
                 coefficient_names, truth_coefficients.tolist()
             )),
+            "start": dict(zip(
+                coefficient_names, initial_coefficients.tolist()
+            )),
             "fit": dict(zip(coefficient_names, fit_coefficients.tolist())),
+        },
+        "lsphase_theta_curve": {
+            "definition": "JUNOSW pol3 evaluated at cos(theta)",
+            "theta_degrees": theta_degrees.tolist(),
+            "truth": truth_curve.tolist(),
+            "start": initial_curve.tolist(),
+            "fit": fit_curve.tolist(),
         },
         "irf": {
             **irf_metadata,
@@ -1122,6 +1211,7 @@ def run_closure(args):
         },
         "initial_loss_per_pe": float(initial_loss),
         "final_loss_per_pe": float(final_loss),
+        **reference_losses,
         "mc_validation_initial_loss_per_pe": (
             mc_validation_initial_loss
         ),
