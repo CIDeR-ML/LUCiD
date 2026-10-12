@@ -41,11 +41,13 @@ from lucid.juno_laser.eventwise import (
     gaussian_window_diagnostics,
     make_chunked_gaussian_eventwise_objective,
     make_host_accumulated_gaussian_eventwise_objective,
+    pe_support_summary,
     require_positive_pe_support,
     sample_gaussian_mixture_events,
 )
 from lucid.juno_laser.forward import build_per_pe_forward
 from lucid.juno_laser.irf import (
+    IrfKernelBank,
     load_type_average_irf,
     make_irf_response_forward,
     resample_irf_bank,
@@ -68,6 +70,7 @@ from lucid.juno_laser.source import (
     set_diffuser_angular_shape,
 )
 from lucid.juno_laser.time_grid import TimeGrid
+from lucid.juno_laser.zero_support import render_zero_support_example
 from lucid.sources.diffuser_ball import IMPORTANCE_NORMALIZATION_MODES
 
 
@@ -77,6 +80,40 @@ OPTIMIZER_COORDINATE_NAMES = (
     "log_abs_ls",
     *LSPHASE_SHAPE_NAMES,
 )
+MODEL_PROFILES = ("full", "minimal")
+
+
+def model_profile_settings(name):
+    """Return the explicit physical and statistical profile contract."""
+    if name == "full":
+        return {
+            "source_model": None,
+            "use_physical_irf": True,
+            "fit_diffuser_shape": True,
+            "geometry_overrides": {},
+        }
+    if name == "minimal":
+        return {
+            "source_model": "isotropic",
+            "use_physical_irf": False,
+            "fit_diffuser_shape": False,
+            "geometry_overrides": {
+                "support_geometry_enabled": False,
+                "chimney_geometry_enabled": False,
+                "bottom_chimney_geometry_enabled": False,
+                "acrylic_bowl_geometry_enabled": False,
+                "diffuser_hardware_enabled": False,
+            },
+        }
+    raise ValueError(f"unknown model profile {name!r}")
+
+
+def active_parameter_names(model_profile):
+    """Return optimizer fields allowed to vary in one model profile."""
+    if model_profile == "minimal":
+        return ("scat_ls", "abs_ls")
+    model_profile_settings(model_profile)
+    return PARAMETER_NAMES
 
 
 def parse_position(text):
@@ -162,8 +199,17 @@ def write_observations(
     """Write event-wise synthetic data and truth predictions to HDF5."""
     with h5py.File(path, "w") as output:
         output.attrs["schema"] = "lucid_eventwise_closure_v1"
-        output.attrs["likelihood"] = "measured_irf_mixture"
+        output.attrs["model_profile"] = args.model_profile
+        output.attrs["likelihood"] = (
+            "measured_irf_mixture"
+            if args.model_profile == "full"
+            else "identity_irf_continuous_ppp"
+        )
         output.attrs["time_bin_ns"] = args.time_bin_ns
+        if getattr(args, "interpolation_sigma_ns", None) is not None:
+            output.attrs["interpolation_sigma_ns"] = (
+                args.interpolation_sigma_ns
+            )
         output.attrs["truncate_sigma"] = args.truncate_sigma
         output.attrs["event_exposure"] = args.event_exposure
         output.attrs["event_time_offset_ns"] = args.event_time_offset_ns
@@ -184,7 +230,10 @@ def write_observations(
         output.attrs["time_max_ns"] = args.time_max_ns
         output.attrs["source_count"] = len(positions)
         irf_group = output.create_group("irf")
-        irf_group.attrs["granularity"] = "pmt_type_average"
+        irf_group.attrs["granularity"] = (
+            "pmt_type_average"
+            if args.model_profile == "full" else "identity"
+        )
         irf_group.attrs["bin_width_ns"] = irf_bank.bin_width_ns
         irf_group.create_dataset(
             "family_kernel_mass", data=np.asarray(irf_bank.kernels)
@@ -257,6 +306,18 @@ def read_observation_fragments(
             _require_matching_attr(
                 source_file, "schema", "lucid_eventwise_closure_v1"
             )
+            saved_profile = source_file.attrs.get("model_profile")
+            if saved_profile is None:
+                if args.model_profile != "full":
+                    raise ValueError(
+                        "legacy observation without model_profile may only "
+                        "be reused by the full profile"
+                    )
+            elif saved_profile != args.model_profile:
+                raise ValueError(
+                    "observation model_profile is "
+                    f"{saved_profile!r}, expected {args.model_profile!r}"
+                )
             expected_attrs = {
                 "time_bin_ns": time_grid.bin_width_ns,
                 "time_min_ns": time_grid.time_min_ns,
@@ -276,6 +337,12 @@ def read_observation_fragments(
             }
             for name, expected in expected_attrs.items():
                 _require_matching_attr(source_file, name, expected)
+            if "interpolation_sigma_ns" in source_file.attrs:
+                _require_matching_attr(
+                    source_file,
+                    "interpolation_sigma_ns",
+                    args.interpolation_sigma_ns,
+                )
             saved_kernel = np.asarray(
                 source_file["irf/family_kernel_mass"]
             )
@@ -354,12 +421,15 @@ def read_observation_fragments(
     return tuple(observations), tuple(predictions)
 
 
-def parameter_start(truth, fraction, seed):
+def parameter_start(truth, fraction, seed, active_fields=PARAMETER_NAMES):
     """Return a reproducibly perturbed start in optimizer coordinates."""
     start = np.asarray(encode_calibration_values(truth), dtype=np.float32)
     rng = np.random.default_rng(seed)
     shift = rng.uniform(-fraction, fraction, size=start.shape)
-    return start + shift.astype(np.float32)
+    active = np.asarray(
+        [name in frozenset(active_fields) for name in PARAMETER_NAMES]
+    )
+    return start + np.where(active, shift, 0.0).astype(np.float32)
 
 
 def source_config_with_normalization(config, selected):
@@ -368,6 +438,15 @@ def source_config_with_normalization(config, selected):
     if selected != "config":
         source_config["importance_normalization"] = selected
     return source_config
+
+
+def source_importance_mode(source):
+    """Return diffuser importance mode or mark an ideal source as N/A."""
+    if not hasattr(source, "importance_normalization"):
+        return "not_applicable"
+    return IMPORTANCE_NORMALIZATION_MODES[
+        int(source.importance_normalization)
+    ]
 
 
 def partition_source_indices(indices, chunk_size):
@@ -393,6 +472,8 @@ def build_response_chunks(
     fixed,
     pmt_types,
     irf_bank,
+    *,
+    fit_diffuser_shape=True,
 ):
     """Build one IRF-convolved ensemble forward per source chunk."""
     responses = []
@@ -406,6 +487,7 @@ def build_response_chunks(
             hist_shape,
             fixed_params=fixed,
             source_indices=absolute_indices,
+            fit_diffuser_shape=fit_diffuser_shape,
         )
         responses.append(
             make_irf_response_forward(optical, pmt_types, irf_bank)
@@ -493,8 +575,11 @@ def evaluate_reference_objective_losses(
 
 def optimization_stages(args):
     """Return the requested staged or all-parameter optimization plan."""
+    active = active_parameter_names(getattr(args, "model_profile", "full"))
+    if getattr(args, "model_profile", "full") == "minimal":
+        return (("joint", args.joint_steps, active),)
     if args.optimization_plan == "joint-only":
-        return (("joint", args.joint_steps, PARAMETER_NAMES),)
+        return (("joint", args.joint_steps, active),)
     return (
         ("ls_lengths", args.stage1_steps, ("scat_ls", "abs_ls")),
         (
@@ -530,6 +615,9 @@ def support_diagnostics(
     background_rate_per_ns,
     *,
     label,
+    reference_predictions=None,
+    diagnostic_prefix=None,
+    raise_on_failure=True,
 ):
     """Check that every observed PE has strictly positive model support."""
     summaries = []
@@ -544,13 +632,33 @@ def support_diagnostics(
             background_rate_per_ns=background_rate_per_ns,
         )
         terms.pe_rate.block_until_ready()
-        summaries.append(
-            require_positive_pe_support(
+        summary = pe_support_summary(
+            terms.pe_rate,
+            low_rate_threshold=args.low_rate_threshold,
+        )
+        if (
+            summary["n_nonpositive_pe_rate"]
+            and reference_predictions is not None
+            and diagnostic_prefix is not None
+        ):
+            render_zero_support_example(
+                observation,
+                reference_predictions[index],
+                prediction,
+                terms.pe_rate,
+                sigma_ns=sigma_ns,
+                truncate_sigma=args.truncate_sigma,
+                background_rate_per_ns=background_rate_per_ns,
+                output_prefix=diagnostic_prefix,
+                label=f"{label}, source-local index {index}",
+            )
+        if raise_on_failure:
+            summary = require_positive_pe_support(
                 terms.pe_rate,
                 context=f"{label} source {index}",
                 low_rate_threshold=args.low_rate_threshold,
             )
-        )
+        summaries.append(summary)
     return summaries
 
 
@@ -568,6 +676,7 @@ def run_closure(args):
         ],
     )
     config = JunoLaserConfig.from_file(args.config)
+    profile = model_profile_settings(args.model_profile)
     calibration = config.data["calibration"]
     legacy_photons = args.n_photons
     args.data_n_photons = int(
@@ -592,6 +701,7 @@ def run_closure(args):
         temperature=None,
         max_candidates_per_ray=4,
         detector_type="nested_sphere",
+        **profile["geometry_overrides"],
     )
     physics, _, _ = load_physics_config(
         str(config.physics_path),
@@ -618,6 +728,7 @@ def run_closure(args):
             position,
             intensity=args.intensity,
             wavelength_nm=config.wavelength_nm,
+            model=profile["source_model"],
         )
         for position in positions
     )
@@ -627,6 +738,7 @@ def run_closure(args):
             position,
             intensity=args.intensity,
             wavelength_nm=config.wavelength_nm,
+            model=profile["source_model"],
         )
         for position in positions
     )
@@ -640,11 +752,24 @@ def run_closure(args):
     hist_shape = (geometry.num_sensors, time_grid.n_bins)
     pmt_types = geometry.detector.pmt_type_codes
     if pmt_types is None:
-        raise ValueError("measured IRF response requires JUNO PMT types")
-    native_irf, irf_metadata = load_type_average_irf(
-        config.irf_path, config.irf_pmt_map_path
-    )
-    irf_bank = resample_irf_bank(native_irf, time_grid.bin_width_ns)
+        raise ValueError("JUNO PMT type metadata is required")
+    if profile["use_physical_irf"]:
+        native_irf, irf_metadata = load_type_average_irf(
+            config.irf_path, config.irf_pmt_map_path
+        )
+        irf_bank = resample_irf_bank(
+            native_irf, time_grid.bin_width_ns
+        )
+    else:
+        irf_bank = IrfKernelBank(
+            kernels=np.ones((2, 1), dtype=np.float32),
+            bin_width_ns=time_grid.bin_width_ns,
+        )
+        irf_metadata = {
+            "selection": "identity response; physical IRF disabled",
+            "irf_path": None,
+            "pmt_map_path": None,
+        }
     source_indices = tuple(args.source_index) or tuple(
         range(len(positions))
     )
@@ -660,7 +785,12 @@ def run_closure(args):
     heldout_index_chunks = partition_source_indices(
         heldout_indices, effective_chunk_size
     )
-    sigma_ns = config.interpolation_sigma_ns
+    sigma_ns = (
+        config.interpolation_sigma_ns
+        if args.interpolation_sigma_ns is None
+        else float(args.interpolation_sigma_ns)
+    )
+    args.interpolation_sigma_ns = sigma_ns
     background_rate_per_ns = args.background_rate_hz * 1.0e-9
     truth_coordinates = encode_calibration_values(truth)
     if args.phase == "fit":
@@ -707,6 +837,7 @@ def run_closure(args):
             fixed,
             pmt_types,
             irf_bank,
+            fit_diffuser_shape=profile["fit_diffuser_shape"],
         )
         data_keys = jax.random.split(
             jax.random.PRNGKey(args.seed), args.data_ensemble_size
@@ -780,6 +911,7 @@ def run_closure(args):
             "schema": "lucid_closure_generation_v1",
             "completed": True,
             "phase": "generate",
+            "model_profile": args.model_profile,
             "source_positions_m": [list(item) for item in positions],
             "source_indices": list(source_indices),
             "n_pe": [item.n_pe for item in observations],
@@ -823,6 +955,7 @@ def run_closure(args):
         fixed,
         pmt_types,
         irf_bank,
+        fit_diffuser_shape=profile["fit_diffuser_shape"],
     )
     heldout_responses = build_response_chunks(
         fit_forward,
@@ -833,6 +966,7 @@ def run_closure(args):
         fixed,
         pmt_types,
         irf_bank,
+        fit_diffuser_shape=profile["fit_diffuser_shape"],
     )
     timings["fit_forward_build_seconds"] = (
         time.perf_counter() - fit_forward_build_started
@@ -883,15 +1017,23 @@ def run_closure(args):
             ),
             args.fit_ensemble_size,
         )
-    reference_losses = evaluate_reference_objective_losses(
-        objective,
-        truth_coordinates,
-        fit_keys,
-        mc_validation_keys,
-        heldout_objective=heldout_objective,
-        heldout_keys=heldout_keys,
+    reference_losses = None
+    if not args.support_diagnostic_only:
+        reference_losses = evaluate_reference_objective_losses(
+            objective,
+            truth_coordinates,
+            fit_keys,
+            mc_validation_keys,
+            heldout_objective=heldout_objective,
+            heldout_keys=heldout_keys,
+        )
+    active_parameters = active_parameter_names(args.model_profile)
+    theta = parameter_start(
+        truth,
+        args.start_fraction,
+        args.seed + 2,
+        active_fields=active_parameters,
     )
-    theta = parameter_start(truth, args.start_fraction, args.seed + 2)
     if args.restart_checkpoint is not None:
         if args.optimization_plan != "joint-only":
             raise ValueError(
@@ -909,6 +1051,9 @@ def run_closure(args):
     train_observations = tuple(
         observations[index] for index in train_indices
     )
+    train_truth_predictions = tuple(
+        truth_predictions[index] for index in train_indices
+    )
     initial_support = support_diagnostics(
         train_observations,
         initial_predictions,
@@ -916,7 +1061,38 @@ def run_closure(args):
         sigma_ns,
         background_rate_per_ns,
         label="initial fit",
+        reference_predictions=train_truth_predictions,
+        diagnostic_prefix=(
+            args.outdir / "zero_support_initial_fit"
+        ),
+        raise_on_failure=not args.support_diagnostic_only,
     )
+    if args.support_diagnostic_only:
+        result = {
+            "schema": "lucid_ppp_support_diagnostic_v1",
+            "completed": True,
+            "model_profile": args.model_profile,
+            "source_positions_m": [list(item) for item in positions],
+            "support_diagnostics": initial_support,
+            "has_zero_support": any(
+                item["n_nonpositive_pe_rate"] > 0
+                for item in initial_support
+            ),
+            "example_pdf": (
+                "zero_support_initial_fit.pdf"
+                if any(
+                    item["n_nonpositive_pe_rate"] > 0
+                    for item in initial_support
+                )
+                else None
+            ),
+        }
+        with (args.outdir / "support_diagnostic_result.json").open(
+            "w"
+        ) as stream:
+            json.dump(result, stream, indent=2, allow_nan=False)
+        LOG.info("support-only diagnostic completed: %s", args.outdir)
+        return result
     heldout_support = None
     mc_validation_predictions = evaluate_response_chunks(
         train_responses, theta, mc_validation_keys
@@ -928,6 +1104,10 @@ def run_closure(args):
         sigma_ns,
         background_rate_per_ns,
         label="initial MC-validation fit",
+        reference_predictions=train_truth_predictions,
+        diagnostic_prefix=(
+            args.outdir / "zero_support_initial_mc_validation"
+        ),
     )
     if heldout_responses:
         heldout_predictions = evaluate_response_chunks(
@@ -970,7 +1150,7 @@ def run_closure(args):
         raise FloatingPointError("initial closure loss or gradient is invalid")
     zero_gradient = [
         name for name, value in zip(PARAMETER_NAMES, initial_gradient)
-        if value == 0.0
+        if name in active_parameters and value == 0.0
     ]
     if zero_gradient:
         raise FloatingPointError(
@@ -1092,43 +1272,73 @@ def run_closure(args):
     initial_values = np.asarray(
         decode_calibration_array(initial_theta), dtype=np.float64
     )
-    truth_source = set_diffuser_angular_shape(
-        fit_sources[0], np.zeros(3, dtype=np.float32)
-    )
-    initial_source = set_diffuser_angular_shape(
-        fit_sources[0], initial_values[2:5]
-    )
-    fit_source = set_diffuser_angular_shape(
-        fit_sources[0], fit_values[2:5]
-    )
-    coefficient_names = ("c0", "c1", "c2", "c3")
-    truth_coefficients = np.asarray(
-        lsphase_polynomial_coefficients(truth_source.angular_logits)
-    )
-    initial_coefficients = np.asarray(
-        lsphase_polynomial_coefficients(initial_source.angular_logits)
-    )
-    fit_coefficients = np.asarray(
-        lsphase_polynomial_coefficients(fit_source.angular_logits)
-    )
-    theta_degrees, truth_curve = lsphase_curve(truth_coefficients)
-    _, initial_curve = lsphase_curve(initial_coefficients)
-    _, fit_curve = lsphase_curve(fit_coefficients)
+    coefficient_report = None
+    curve_report = None
+    if profile["fit_diffuser_shape"]:
+        truth_source = set_diffuser_angular_shape(
+            fit_sources[0], np.zeros(3, dtype=np.float32)
+        )
+        initial_source = set_diffuser_angular_shape(
+            fit_sources[0], initial_values[2:5]
+        )
+        fit_source = set_diffuser_angular_shape(
+            fit_sources[0], fit_values[2:5]
+        )
+        coefficient_names = ("c0", "c1", "c2", "c3")
+        truth_coefficients = np.asarray(
+            lsphase_polynomial_coefficients(truth_source.angular_logits)
+        )
+        initial_coefficients = np.asarray(
+            lsphase_polynomial_coefficients(initial_source.angular_logits)
+        )
+        fit_coefficients = np.asarray(
+            lsphase_polynomial_coefficients(fit_source.angular_logits)
+        )
+        theta_degrees, truth_curve = lsphase_curve(truth_coefficients)
+        _, initial_curve = lsphase_curve(initial_coefficients)
+        _, fit_curve = lsphase_curve(fit_coefficients)
+        coefficient_report = {
+            "gauge": "fixed nominal integral",
+            "truth": dict(zip(
+                coefficient_names, truth_coefficients.tolist()
+            )),
+            "start": dict(zip(
+                coefficient_names, initial_coefficients.tolist()
+            )),
+            "fit": dict(zip(
+                coefficient_names, fit_coefficients.tolist()
+            )),
+        }
+        curve_report = {
+            "definition": "JUNOSW pol3 evaluated at cos(theta)",
+            "theta_degrees": theta_degrees.tolist(),
+            "truth": truth_curve.tolist(),
+            "start": initial_curve.tolist(),
+            "fit": fit_curve.tolist(),
+        }
     result = {
-        "schema": "lucid_full_geometry_eventwise_closure_v1",
+        "schema": "lucid_eventwise_closure_v2",
+        "model_profile": args.model_profile,
         "completed": completed,
         "scope": {
             "eventwise_pe": True,
             "continuous_time_unbinned": True,
-            "time_model": "measured_pmt_family_irf",
+            "time_model": (
+                "measured_pmt_family_irf"
+                if profile["use_physical_irf"]
+                else "identity_irf_plus_numerical_interpolation_kernel"
+            ),
             "interpolation_sigma_ns": sigma_ns,
             "interpolation_sigma_is_physical_tts_irf": False,
             "synthetic_event_exposure_fixed": True,
             "synthetic_event_time_offset_fixed": True,
             "monitor_exposure_measurement_used": False,
             "exposure_nuisance_fitted": False,
-            "tts_irf_convolution": True,
-            "irf_granularity": "pmt_type_average",
+            "tts_irf_convolution": profile["use_physical_irf"],
+            "irf_granularity": (
+                "pmt_type_average"
+                if profile["use_physical_irf"] else "identity"
+            ),
             "channel_time_offsets": False,
             "dark_noise_background": args.background_rate_hz > 0.0,
             "mc_validation": True,
@@ -1172,38 +1382,22 @@ def run_closure(args):
         "fit_seed_offset": args.fit_seed_offset,
         "mc_validation_seed_offset": args.mc_validation_seed_offset,
         "heldout_seed_offset": args.heldout_seed_offset,
-        "data_importance_normalization": (
-            IMPORTANCE_NORMALIZATION_MODES[
-                int(data_sources[0].importance_normalization)
-            ]
+        "data_importance_normalization": source_importance_mode(
+            data_sources[0]
         ),
-        "fit_importance_normalization": (
-            IMPORTANCE_NORMALIZATION_MODES[
-                int(fit_sources[0].importance_normalization)
-            ]
+        "fit_importance_normalization": source_importance_mode(
+            fit_sources[0]
         ),
-        "parameter_names": list(PARAMETER_NAMES),
-        "optimizer_coordinate_names": list(OPTIMIZER_COORDINATE_NAMES),
+        "parameter_names": list(active_parameters),
+        "active_parameter_names": list(active_parameters),
+        "optimizer_coordinate_names": list(
+            OPTIMIZER_COORDINATE_NAMES[:len(active_parameters)]
+        ),
         "truth": {name: float(truth[name]) for name in PARAMETER_NAMES},
         "start": dict(zip(PARAMETER_NAMES, initial_values.tolist())),
         "fit": dict(zip(PARAMETER_NAMES, fit_values.tolist())),
-        "lsphase_polynomial_coefficients": {
-            "gauge": "fixed nominal integral",
-            "truth": dict(zip(
-                coefficient_names, truth_coefficients.tolist()
-            )),
-            "start": dict(zip(
-                coefficient_names, initial_coefficients.tolist()
-            )),
-            "fit": dict(zip(coefficient_names, fit_coefficients.tolist())),
-        },
-        "lsphase_theta_curve": {
-            "definition": "JUNOSW pol3 evaluated at cos(theta)",
-            "theta_degrees": theta_degrees.tolist(),
-            "truth": truth_curve.tolist(),
-            "start": initial_curve.tolist(),
-            "fit": fit_curve.tolist(),
-        },
+        "lsphase_polynomial_coefficients": coefficient_report,
+        "lsphase_theta_curve": curve_report,
         "irf": {
             **irf_metadata,
             "resampled_bin_width_ns": irf_bank.bin_width_ns,
@@ -1276,6 +1470,15 @@ def main():
         "--config", type=Path, default="config/JUNO_laser_config.json"
     )
     parser.add_argument(
+        "--model-profile",
+        choices=MODEL_PROFILES,
+        default="full",
+        help=(
+            "full keeps all migrated geometry, diffuser and measured IRF; "
+            "minimal keeps three media, interfaces, LS transport and PMTs"
+        ),
+    )
+    parser.add_argument(
         "--source-position", action="append", required=True,
         metavar="X,Y,Z",
     )
@@ -1319,10 +1522,19 @@ def main():
     parser.add_argument("--time-min-ns", type=float, default=0.0)
     parser.add_argument("--time-max-ns", type=float, default=300.0)
     parser.add_argument("--time-bin-ns", type=float, default=10.0)
+    parser.add_argument(
+        "--interpolation-sigma-ns",
+        type=float,
+        default=None,
+        help=(
+            "numerical Gaussian width used to turn time-basis masses "
+            "into a continuous rate; default: config value"
+        ),
+    )
     parser.add_argument("--truncate-sigma", type=float, default=5.0)
     parser.add_argument(
         "--ad-fd-relative-step", type=float, default=0.0,
-        help="positive value enables a five-parameter centered FD audit",
+        help="positive value enables a centered finite-difference audit",
     )
     parser.add_argument(
         "--ad-fd-minimum-step", type=float, default=1.0e-4
@@ -1411,6 +1623,11 @@ def main():
     parser.add_argument(
         "--low-rate-threshold", type=float, default=1.0e-12
     )
+    parser.add_argument(
+        "--support-diagnostic-only",
+        action="store_true",
+        help="render one initial zero-support example and skip Adam",
+    )
     parser.add_argument("--start-fraction", type=float, default=0.1)
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
@@ -1483,12 +1700,24 @@ def main():
         parser.error("--restart-checkpoint must name an existing file")
     if args.time_max_ns <= args.time_min_ns or args.time_bin_ns <= 0.0:
         parser.error("invalid time window or bin width")
+    if (
+        args.interpolation_sigma_ns is not None
+        and args.interpolation_sigma_ns <= 0.0
+    ):
+        parser.error("interpolation sigma must be positive")
     if args.truncate_sigma <= 0.0:
         parser.error("Gaussian truncation must be positive")
     if args.ad_fd_relative_step < 0.0 or args.ad_fd_minimum_step <= 0.0:
         parser.error("AD-FD relative step must be >=0 and minimum step >0")
     if args.background_rate_hz < 0.0:
         parser.error("background rate must be non-negative")
+    if args.model_profile == "minimal":
+        if args.event_exposure != 1.0:
+            parser.error("minimal profile requires fixed exposure 1")
+        if args.event_time_offset_ns != 0.0:
+            parser.error("minimal profile requires zero time offset")
+        if args.optimization_plan != "joint-only":
+            parser.error("minimal profile requires joint-only optimization")
     if (
         args.ad_fd_background_rate_hz is not None
         and args.ad_fd_background_rate_hz < 0.0

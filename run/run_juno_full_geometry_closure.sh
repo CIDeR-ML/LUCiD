@@ -52,6 +52,7 @@ export PYTHONPATH="$WORK${PYTHONPATH:+:$PYTHONPATH}"
 cd "$WORK"
 
 N_EVENTS=${N_EVENTS:-2}
+MODEL_PROFILE=${MODEL_PROFILE:-full}
 DATA_N_PHOTONS=${DATA_N_PHOTONS:-400000}
 FIT_N_PHOTONS=${FIT_N_PHOTONS:-100000}
 K=${K:-64}
@@ -62,6 +63,7 @@ BACKGROUND_RATE_HZ=${BACKGROUND_RATE_HZ:-30000}
 TIME_MIN_NS=${TIME_MIN_NS:-0}
 TIME_MAX_NS=${TIME_MAX_NS:-1000}
 TIME_BIN_NS=${TIME_BIN_NS:-2}
+INTERPOLATION_SIGMA_NS=${INTERPOLATION_SIGMA_NS:-}
 WINDOW_EXPANSION_NS=${WINDOW_EXPANSION_NS:-50}
 TRUNCATE_SIGMA=${TRUNCATE_SIGMA:-5}
 OPTIMIZATION_PLAN=${OPTIMIZATION_PLAN:-joint-only}
@@ -91,6 +93,7 @@ FIT_IMPORTANCE=${FIT_IMPORTANCE:-config}
 RESTART_CHECKPOINT=${RESTART_CHECKPOINT:-}
 HELDOUT_SOURCE_INDICES=${HELDOUT_SOURCE_INDICES:-}
 SCRIPT_ARGS=${SCRIPT_ARGS:-}
+SUPPORT_DIAGNOSTIC_ONLY=${SUPPORT_DIAGNOSTIC_ONLY:-0}
 
 read -r -a SOURCE_ITEMS <<< "$SOURCES"
 read -r -a HELDOUT_ITEMS <<< "$HELDOUT_SOURCE_INDICES"
@@ -115,6 +118,7 @@ fi
 echo "=== synthetic closure start: $(hostname) $(date) ==="
 echo "sources=${SOURCE_ITEMS[*]}"
 echo "mode=$CLOSURE_MODE outdir=$OUTDIR"
+echo "model_profile=$MODEL_PROFILE"
 echo "plan=$OPTIMIZATION_PLAN K=$K"
 echo "events=$N_EVENTS data_photons=$DATA_N_PHOTONS \
 fit_photons=$FIT_N_PHOTONS source_chunk=$SOURCE_CHUNK_SIZE"
@@ -132,6 +136,7 @@ print("jax devices:", jax.devices())'
 
 COMMON_ARGS=(
     --config config/JUNO_laser_config.json \
+    --model-profile "$MODEL_PROFILE" \
     --n-events "$N_EVENTS" \
     --data-n-photons "$DATA_N_PHOTONS" \
     --fit-n-photons "$FIT_N_PHOTONS" \
@@ -170,6 +175,12 @@ COMMON_ARGS=(
     --data-importance-normalization "$DATA_IMPORTANCE" \
     --fit-importance-normalization "$FIT_IMPORTANCE"
 )
+if [[ -n "$INTERPOLATION_SIGMA_NS" ]]; then
+    COMMON_ARGS+=(--interpolation-sigma-ns "$INTERPOLATION_SIGMA_NS")
+fi
+if [[ "$SUPPORT_DIAGNOSTIC_ONLY" == "1" ]]; then
+    COMMON_ARGS+=(--support-diagnostic-only)
+fi
 
 OBSERVATION_ARGS=()
 if [[ "$CLOSURE_MODE" == "full" ]]; then
@@ -226,6 +237,11 @@ echo "=== fit all ${#SOURCE_ITEMS[@]} source(s) in a fresh process ==="
     "${HELDOUT_ARGS[@]}" \
     "${RESTART_ARGS[@]}" \
     "${EXTRA_ARGS[@]}"
+
+if [[ "$SUPPORT_DIAGNOSTIC_ONLY" == "1" ]]; then
+    echo "=== support-only diagnostic done: $(date) ==="
+    exit 0
+fi
 
 echo "=== render closure diagnostics ==="
 "$LUCID_PY" scripts/plot_juno_closure_result.py \

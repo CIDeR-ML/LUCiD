@@ -115,6 +115,18 @@ def test_render_writes_nonempty_vector_pdf(tmp_path):
     assert output.stat().st_size > 1000
 
 
+def test_render_accepts_two_parameter_minimal_profile(tmp_path):
+    """Minimal-profile reports must omit frozen LSPhase coordinates."""
+    result = _result()
+    result["model_profile"] = "minimal"
+    result["parameter_names"] = ["scat_ls", "abs_ls"]
+    result["lsphase_theta_curve"] = None
+    output = tmp_path / "minimal_diagnostics.pdf"
+    render(result, output)
+    assert output.read_bytes().startswith(b"%PDF")
+    assert output.stat().st_size > 1000
+
+
 def test_parameter_rows_include_error_and_physical_crb():
     """Fisher coordinate errors are reported with physical parameters."""
     fisher = {

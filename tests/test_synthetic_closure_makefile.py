@@ -45,12 +45,27 @@ def test_submit_five_preserves_requested_nested_sources() -> None:
     sources = "0,0,0 0,0,9 0,0,15 0,0,16.1 0,0,17.1"
     assert f"SOURCES='{sources}'" in output
     assert "DATA_N_PHOTONS='400000'" in output
-    assert "FIT_N_PHOTONS='100000'" in output
+    assert "FIT_N_PHOTONS='400000'" in output
     assert "K='32'" in output
     assert "OBJECTIVE_EXECUTION='per-source'" in output
     assert "N_EVENTS='100'" in output
     assert "JOINT_STEPS='600'" in output
     assert "AD_FD_RELATIVE_STEP='0.001'" in output
+
+
+def test_submit_minimal_five_enforces_minimal_profile() -> None:
+    '''Minimal submission fixes the requested fine numerical time basis.'''
+    output = _dry_run("submit-minimal-five")
+    sources = "0,0,0 0,0,9 0,0,15 0,0,16.1 0,0,17.1"
+    assert f"SOURCES='{sources}'" in output
+    assert "MODEL_PROFILE='minimal'" in output
+    assert "BACKGROUND_RATE_HZ='0'" in output
+    assert "TIME_MAX_NS='1000'" in output
+    assert "TIME_BIN_NS='0.5'" in output
+    assert "INTERPOLATION_SIGMA_NS='0.5'" in output
+    assert "N_EVENTS='100'" in output
+    assert "JOINT_STEPS='600'" in output
+    assert "K='32'" in output
 
 
 def test_closure_worker_disables_xla_command_buffer() -> None:
@@ -109,7 +124,7 @@ def test_submit_fit_only_reuses_existing_observation_fragments() -> None:
     assert "CLOSURE_MODE='fit-only'" in output
     assert f"OBSERVATION_ROOT='{observation_root}'" in output
     assert "FIT_ENSEMBLE='1'" in output
-    assert "N_EVENTS='2'" in output
+    assert "N_EVENTS='100'" in output
     assert "JOINT_STEPS='128'" in output
 
 
@@ -124,7 +139,7 @@ def test_submit_five_fit_only_uses_all_sources_and_split_objective() -> None:
     assert f"SOURCES='{sources}'" in output
     assert "CLOSURE_MODE='fit-only'" in output
     assert "OBJECTIVE_EXECUTION='per-source'" in output
-    assert "N_EVENTS='2'" in output
+    assert "N_EVENTS='100'" in output
     assert "JOINT_STEPS='128'" in output
 
 
@@ -135,6 +150,20 @@ def test_worker_renders_closure_diagnostics_after_success() -> None:
     ).read_text()
     assert "scripts/plot_juno_closure_result.py" in worker
     assert "closure_diagnostics.pdf" in worker
+
+
+def test_support_diagnostic_reuses_five_source_observations() -> None:
+    '''The zero-support report must skip generation and Adam.'''
+    observation_root = "/tmp/lucid-zero-support-observations"
+    output = _dry_run(
+        "submit-five-support-diagnostic",
+        f"OBSERVATION_ROOT={observation_root}",
+    )
+    assert "CLOSURE_MODE='fit-only'" in output
+    assert "MODEL_PROFILE='minimal'" in output
+    assert "SUPPORT_DIAGNOSTIC_ONLY='1'" in output
+    assert "TIME_BIN_NS='0.5'" in output
+    assert "INTERPOLATION_SIGMA_NS='0.5'" in output
 
 
 def test_closure_diagnostics_target_is_read_only_postprocessing() -> None:
@@ -171,7 +200,7 @@ def test_submit_one_fisher_uses_formal_transport_configuration() -> None:
         "FISHER_OUTDIR=/tmp/lucid-fisher-contract",
     )
     assert "SOURCES='0,0,17.1'" in output
-    assert "N_PHOTONS='100000'" in output
+    assert "N_PHOTONS='400000'" in output
     assert "N_EVENTS='100'" in output
     assert "K='32'" in output
     assert "run_juno_synthetic_fisher.sh" in output

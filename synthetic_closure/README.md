@@ -5,9 +5,46 @@
 chimneys、acrylic bowls 和 diffuser ball。观测端使用 event-wise、
 unbinned Poisson point-process likelihood。
 
-## 固定的资格测试配置
+## Full 与 minimal 模型档位
 
-`qualification-one` 和 `qualification-five` 共用以下配置：
+同一个 closure 入口通过 `MODEL_PROFILE=full|minimal` 选择模型，truth
+观测生成和 start/fit 预测始终使用同一档位，禁止混合配置。
+
+- `full`：使用 532 nm JUNO diffuser emission/hardware、support rods、
+  top/bottom chimney、acrylic bowls、PMT surface 和两类 PMT 平均实测
+  IRF；默认拟合两项 LS 长度与三个 LSPhase shape 坐标。
+- `minimal`：保留 LS--Acrylic--Water 三介质、Snell/Fresnel/TIR、LS
+  absorption/scattering、17,612 个 PMT layout 及当前 PMT 有效表面；使用
+  固定位置、固定强度、固定时刻、各向同性理想点源；显式关闭全部已知工程
+  结构和 diffuser hardware，以单位响应替代物理 IRF，并强制 background=0、
+  exposure=1、time offset=0。仅 `scat_ls` 和 `abs_ls` 参与优化，三个
+  LSPhase 坐标固定为 truth。
+
+`minimal` 的插值高斯只把离散数值时间基连续化，使 exact PE time 的
+PPP 强度可求值，不代表 PMT TTS/电子学 IRF。`submit-minimal-*` 目标使用
+0.5 ns 时间 bin（[0, 1000] ns 共 2000 bin）和
+`interpolation_sigma_ns=0.5 ns`；本地 `minimal-smoke` 沿用冒烟时间基。
+
+本地最小回归：
+
+```bash
+make -C synthetic_closure minimal-smoke \
+    OUTDIR=/tmp/lucid-minimal-smoke
+```
+
+正式提交入口（本命令才会申请 GPU）：
+
+```bash
+make -C synthetic_closure submit-minimal-one \
+    OUTDIR=/junofs/C/liukainan/LUCiD/closure_minimal/one_source
+
+make -C synthetic_closure submit-minimal-five \
+    OUTDIR=/junofs/C/liukainan/LUCiD/closure_minimal/five_sources
+```
+
+## 提交族默认配置（QUAL_*）
+
+submit-* 提交族默认使用以下 QUAL_* 配置（命令行可覆盖）：
 
 | Item | Value |
 |---|---:|
@@ -175,10 +212,6 @@ CPU 单元测试：
 make -C synthetic_closure test
 ```
 
-其余目标 `grid-convergence`、`key-comparison`、`importance-audit`、
-`credibility-scan`、`fisher` 和 `heldout-smoke` 用于专项检查，不属于本次
-1/5-source 正式资格作业的必要步骤。
-
 ## 主要输出
 
 - `generation/source_XX/closure_observations.h5`：每源独立生成片段；
@@ -191,6 +224,25 @@ make -C synthetic_closure test
 - `closure_diagnostics.json`：best-step 等机器可读摘要；
 - `checkpoint_STAGE.npz`：周期恢复点；
 - Slurm 日志：编译时间、逐步运行时间、错误与资源诊断。
+
+若初始模型在任意观测 PE 处给出严格零率，fit 会在抛出
+`PPP support failure` 之前额外写出：
+
+- `zero_support_initial_fit.json`：首个反例的 source-local index、event、
+  PMT、PE 时间、truth/fit 率和核参数；
+- `zero_support_initial_fit.pdf`：同一 event/PMT 上 truth 与 initial-fit
+  的连续强度（线性/对数纵轴）、观测 PE rug 和零率位置局部放大图。
+
+该诊断只读取并展示原始强度，不添加 `rate_floor`，也不改变似然。
+可复用已经生成的五源 observation，仅重跑 initial-fit forward：
+
+```bash
+make -C synthetic_closure submit-five-support-diagnostic \
+    OUTDIR=/junofs/C/liukainan/LUCiD/closure_minimal/zero_example \
+    OBSERVATION_ROOT=/path/to/completed/generation
+```
+
+该目标生成反例后正常退出，不执行 Adam 优化。
 
 若较早完成的 closure 目录缺少自动报告，可只读取已有 JSON 重新生成，
 不会提交作业，也不会重新运行 photon transport：

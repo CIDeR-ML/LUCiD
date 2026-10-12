@@ -69,6 +69,13 @@ from lucid.juno_laser.source import (
     rotate_source_directions,
 )
 from lucid.juno_laser.data import SIMULATION_SCHEMA, simulation_table
+from lucid.juno_laser.eventwise import sample_gaussian_mixture_events
+from lucid.juno_laser.histogram import weighted_time_histogram
+from lucid.juno_laser.sampling_comparison import (
+    sample_direct_weighted_hits,
+    write_sampling_comparison,
+)
+from lucid.juno_laser.time_grid import TimeGrid
 
 
 LOG = logging.getLogger("lucid.juno_laser")
@@ -665,6 +672,7 @@ def simulate(args):
         config = json.load(stream)
     geom_path = root / config["geometry_config"]
     simulation = config["simulation"]
+    calibration = config.get("calibration", {})
     pmt_geometry_request = getattr(args, "pmt_geometry", "config")
     support_geometry_request = getattr(
         args, "support_geometry", "config"
@@ -897,6 +905,30 @@ def simulate(args):
     base_key = jax.random.PRNGKey(args.seed)
     event_stats = []
     n_events = int(args.n_events or simulation["n_events"])
+    sampling_comparison_events = int(args.sampling_comparison_events)
+    sampling_time_window = calibration.get(
+        "time_window_ns", (0.0, 1000.0)
+    )
+    sampling_time_min_ns = (
+        float(sampling_time_window[0])
+        if args.sampling_time_min_ns is None
+        else float(args.sampling_time_min_ns)
+    )
+    sampling_time_max_ns = (
+        float(sampling_time_window[1])
+        if args.sampling_time_max_ns is None
+        else float(args.sampling_time_max_ns)
+    )
+    sampling_time_bin_ns = (
+        float(calibration.get("time_bin_ns", 0.5))
+        if args.sampling_time_bin_ns is None
+        else float(args.sampling_time_bin_ns)
+    )
+    sampling_time_grid = TimeGrid(
+        sampling_time_min_ns,
+        sampling_time_max_ns,
+        sampling_time_bin_ns,
+    )
     output = Path(args.output)
     if not output.is_absolute():
         output = outdir / output
@@ -968,7 +1000,9 @@ def simulate(args):
             seed = args.seed + event
             t0 = time.perf_counter()
             if event == 0:
-                LOG.info("event 0: starting first forward call and JIT compilation")
+                LOG.info(
+                    "event 0: starting first forward call and JIT compilation"
+                )
             else:
                 LOG.info("event %d: starting forward call", event)
             source_event_key = jax.random.fold_in(
@@ -1048,6 +1082,94 @@ def simulate(args):
             expected = np.exp(log_w[valid])
             hit_indices = indices[valid].astype(np.int32)
             hit_times = times[valid].astype(np.float64)
+            if event == 0 and sampling_comparison_events > 0:
+                comparison_valid = (
+                    (expected > 1.0e-10)
+                    & (hit_times >= sampling_time_grid.time_min_ns)
+                    & (hit_times < sampling_time_grid.time_max_ns)
+                )
+                comparison_expected = expected[comparison_valid]
+                comparison_pmts = hit_indices[comparison_valid]
+                comparison_times = hit_times[comparison_valid]
+                comparison_histogram = weighted_time_histogram(
+                    jnp.asarray(comparison_expected, dtype=jnp.float32),
+                    jnp.asarray(comparison_pmts, dtype=jnp.int32),
+                    jnp.asarray(comparison_times, dtype=jnp.float32),
+                    n_sensors=n_sensors,
+                    time_grid=sampling_time_grid,
+                )
+                comparison_histogram = np.asarray(
+                    comparison_histogram, dtype=np.float64
+                )
+                direct_observation = sample_direct_weighted_hits(
+                    comparison_expected,
+                    comparison_pmts,
+                    comparison_times,
+                    n_events=sampling_comparison_events,
+                    n_sensors=n_sensors,
+                    time_grid=sampling_time_grid,
+                    sigma_ns=args.sampling_jitter_ns,
+                    seed=args.seed + 2_000_001,
+                )
+                binned_observation = sample_gaussian_mixture_events(
+                    comparison_histogram,
+                    n_events=sampling_comparison_events,
+                    time_grid=sampling_time_grid,
+                    sigma_ns=args.sampling_jitter_ns,
+                    seed=args.seed + 3_000_001,
+                    background_rate_per_ns=0.0,
+                )
+                comparison_output = Path(
+                    args.sampling_comparison_output
+                )
+                if not comparison_output.is_absolute():
+                    comparison_output = outdir / comparison_output
+                write_sampling_comparison(
+                    comparison_output,
+                    raw_weights=comparison_expected,
+                    raw_pmt_ids=comparison_pmts,
+                    raw_times_ns=comparison_times,
+                    bin_masses=comparison_histogram,
+                    direct=direct_observation,
+                    binned=binned_observation,
+                    metadata={
+                        "source_position_m": source_position.tolist(),
+                        "source_model": source_model_name,
+                        "transport_seed": int(args.seed),
+                        "direct_sampling_seed": int(
+                            args.seed + 2_000_001
+                        ),
+                        "binned_sampling_seed": int(
+                            args.seed + 3_000_001
+                        ),
+                        "n_photons": n_photons,
+                        "k": n_steps,
+                        "intensity": intensity,
+                        "n_events": sampling_comparison_events,
+                        "n_sensors": n_sensors,
+                        "time_min_ns": sampling_time_grid.time_min_ns,
+                        "time_max_ns": sampling_time_grid.time_max_ns,
+                        "time_bin_ns": sampling_time_grid.bin_width_ns,
+                        "jitter_sigma_ns": args.sampling_jitter_ns,
+                        "irf_enabled": False,
+                        "background_rate_hz": 0.0,
+                        "raw_basis_event": 0,
+                        "geometry": {
+                            "pmt": pmt_geometry,
+                            "support": support_geometry,
+                            "chimney": chimney_geometry,
+                            "bottom_chimney": bottom_chimney_geometry,
+                            "acrylic_bowl": acrylic_bowl_geometry,
+                            "diffuser_hardware": (
+                                diffuser_hardware_geometry
+                            ),
+                        },
+                    },
+                )
+                LOG.info(
+                    "paired PE sampling comparison written to %s",
+                    comparison_output,
+                )
             rng = np.random.default_rng(seed + 100_000)
             multiplicity = rng.poisson(expected)
             keep = multiplicity > 0
@@ -1338,6 +1460,25 @@ def main():
     )
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument(
+        "--sampling-comparison-events",
+        type=int,
+        default=0,
+        help=(
+            "sample this many paired pseudo-events from event-0 raw hits; "
+            "zero disables the diagnostic"
+        ),
+    )
+    parser.add_argument(
+        "--sampling-comparison-output",
+        default="pe_sampling_comparison.h5",
+    )
+    parser.add_argument("--sampling-time-min-ns", type=float)
+    parser.add_argument("--sampling-time-max-ns", type=float)
+    parser.add_argument("--sampling-time-bin-ns", type=float)
+    parser.add_argument(
+        "--sampling-jitter-ns", type=float, default=0.25
+    )
+    parser.add_argument(
         "--pmt-geometry",
         choices=("config", "on", "off"),
         default="config",
@@ -1368,8 +1509,16 @@ def main():
         help="debug trajectory HDF5 path (used with --record-trajectories)",
     )
     args = parser.parse_args()
-    if args.n_events < 0 or args.n_photons < 0 or args.k < 0:
-        parser.error("--n-events, --n-photons and --k must be non-negative")
+    if (
+        args.n_events < 0
+        or args.n_photons < 0
+        or args.k < 0
+        or args.sampling_comparison_events < 0
+        or args.sampling_jitter_ns <= 0.0
+    ):
+        parser.error(
+            "counts must be non-negative and sampling jitter must be positive"
+        )
     simulate(args)
 
 

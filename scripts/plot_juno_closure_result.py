@@ -324,7 +324,11 @@ def _plot_parameter_page(pdf, result):
             values = values[1:]
         histories.append(values)
     history = np.concatenate(histories, axis=0)
-    figure, axes = plt.subplots(3, 2, figsize=(10.0, 9.0))
+    n_columns = 2
+    n_rows = max(1, int(np.ceil(len(names) / n_columns)))
+    figure, axes = plt.subplots(
+        n_rows, n_columns, figsize=(10.0, 3.0 * n_rows), squeeze=False
+    )
     for index, (axis, name) in enumerate(zip(axes.flat, names)):
         axis.plot(history[:, index], color="#1f77b4")
         axis.axhline(truth[name], color="#d62728", linestyle="--")
@@ -344,17 +348,31 @@ def _plot_checkpoint_page(pdf, result):
     """Compare initial, selected, last and truth parameter states."""
     stage = result["stages"][-1]
     names = tuple(result["parameter_names"])
+    all_names = tuple(result["truth"])
+    last_by_name = dict(zip(all_names, stage["last_values"]))
     states = {
-        "Initial": np.asarray(result["stages"][0]["history"][0]),
+        "Initial": np.asarray([result["start"][name] for name in names]),
         "Selected": np.asarray([result["fit"][name] for name in names]),
-        "Last": np.asarray(stage["last_values"]),
+        "Last": np.asarray([last_by_name[name] for name in names]),
         "Truth": np.asarray([result["truth"][name] for name in names]),
     }
-    figure, axes = plt.subplots(1, 2, figsize=(11.0, 4.2))
-    for axis, indices, title in (
-        (axes[0], (0, 1), "LS lengths"),
-        (axes[1], (2, 3, 4), "LSPhase shape coordinates"),
-    ):
+    groups = []
+    length_indices = tuple(
+        index for index, name in enumerate(names)
+        if name in ("scat_ls", "abs_ls")
+    )
+    shape_indices = tuple(
+        index for index, name in enumerate(names)
+        if name.startswith("lsphase_shape_")
+    )
+    if length_indices:
+        groups.append((length_indices, "LS lengths"))
+    if shape_indices:
+        groups.append((shape_indices, "LSPhase shape coordinates"))
+    figure, axes = plt.subplots(
+        1, len(groups), figsize=(5.5 * len(groups), 4.2), squeeze=False
+    )
+    for axis, (indices, title) in zip(axes.flat, groups):
         x = np.arange(len(indices), dtype=np.float64)
         width = 0.18
         for state_index, (label, values) in enumerate(states.items()):
@@ -367,8 +385,8 @@ def _plot_checkpoint_page(pdf, result):
         axis.set_xticks(x, [names[index] for index in indices])
         axis.set_title(title)
         axis.grid(axis="y", alpha=0.25)
-    axes[0].set_ylabel("Physical parameter value")
-    axes[1].legend(fontsize=8)
+    axes.flat[0].set_ylabel("Physical parameter value")
+    axes.flat[-1].legend(fontsize=8)
     figure.suptitle("Checkpoint comparison")
     figure.tight_layout()
     pdf.savefig(figure)

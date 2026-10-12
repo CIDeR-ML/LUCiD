@@ -28,8 +28,13 @@ def make_ensemble_forward(
     *,
     fixed_params,
     source_indices=None,
+    fit_diffuser_shape=True,
 ):
-    """Average fixed-key predictions using stable absolute source indices."""
+    """Average fixed-key predictions using stable absolute source indices.
+
+    ``fit_diffuser_shape=False`` preserves an ideal source exactly and keeps
+    the three LSPhase coordinates outside the active computation graph.
+    """
     sources = tuple(sources)
     hist_shape = tuple(hist_shape)
     if source_indices is None:
@@ -53,8 +58,10 @@ def make_ensemble_forward(
 
         def predict_source(inputs):
             source_index, source = inputs
-            varied_source = set_diffuser_angular_shape(
-                source, shape_coordinates
+            varied_source = (
+                set_diffuser_angular_shape(source, shape_coordinates)
+                if fit_diffuser_shape
+                else source
             )
 
             def accumulate(histogram, key):

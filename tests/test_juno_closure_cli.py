@@ -2,17 +2,22 @@
 
 from types import SimpleNamespace
 
+import h5py
 import numpy as np
+import pytest
 
 from lucid.juno_laser.config import PARAMETER_NAMES
 from lucid.juno_laser.eventwise import EventwisePeObservation
 from lucid.juno_laser.irf import IrfKernelBank
 from lucid.juno_laser.time_grid import TimeGrid
 from scripts.run_juno_full_geometry_closure import (
+    active_parameter_names,
     checkpoint_metadata,
     checkpoint_writer,
     evaluate_reference_objective_losses,
+    model_profile_settings,
     optimization_stages,
+    parameter_start,
     partition_source_indices,
     read_observation_fragments,
     write_observations,
@@ -37,6 +42,7 @@ def test_joint_only_plan_has_one_all_parameter_stage():
         stage1_steps=3,
         stage2_steps=4,
         stage3_steps=5,
+        model_profile="full",
     )
     assert optimization_stages(args) == (("joint", 17, PARAMETER_NAMES),)
 
@@ -89,6 +95,7 @@ def test_staged_plan_remains_an_explicit_optional_strategy():
         stage1_steps=3,
         stage2_steps=4,
         stage3_steps=5,
+        model_profile="full",
     )
     stages = optimization_stages(args)
     assert [item[0] for item in stages] == [
@@ -97,6 +104,56 @@ def test_staged_plan_remains_an_explicit_optional_strategy():
         "joint",
     ]
     assert [item[1] for item in stages] == [3, 4, 5]
+
+
+def test_minimal_profile_disables_engineering_and_response_components():
+    """The minimal profile must be one explicit, inspectable contract."""
+    settings = model_profile_settings("minimal")
+    assert settings["source_model"] == "isotropic"
+    assert settings["use_physical_irf"] is False
+    assert settings["fit_diffuser_shape"] is False
+    assert settings["geometry_overrides"] == {
+        "support_geometry_enabled": False,
+        "chimney_geometry_enabled": False,
+        "bottom_chimney_geometry_enabled": False,
+        "acrylic_bowl_geometry_enabled": False,
+        "diffuser_hardware_enabled": False,
+    }
+    assert active_parameter_names("minimal") == ("scat_ls", "abs_ls")
+
+
+def test_minimal_plan_and_start_change_only_two_ls_lengths():
+    """Minimal closure must freeze all three diffuser-shape coordinates."""
+    args = SimpleNamespace(
+        optimization_plan="joint-only",
+        joint_steps=17,
+        stage1_steps=3,
+        stage2_steps=4,
+        stage3_steps=5,
+        model_profile="minimal",
+    )
+    assert optimization_stages(args) == (
+        ("joint", 17, ("scat_ls", "abs_ls")),
+    )
+    truth = {
+        "scat_ls": 87.0,
+        "abs_ls": 85.2618,
+        "lsphase_shape_0": 0.0,
+        "lsphase_shape_1": 0.0,
+        "lsphase_shape_2": 0.0,
+    }
+    start = parameter_start(
+        truth,
+        0.1,
+        42,
+        active_fields=("scat_ls", "abs_ls"),
+    )
+    truth_coordinates = np.asarray(
+        [np.log(87.0), np.log(85.2618), 0.0, 0.0, 0.0],
+        dtype=np.float32,
+    )
+    assert not np.allclose(start[:2], truth_coordinates[:2])
+    np.testing.assert_array_equal(start[2:], truth_coordinates[2:])
 
 
 def test_checkpoint_writer_atomically_replaces_recovery_snapshot(tmp_path):
@@ -148,6 +205,7 @@ def test_observation_fragments_roundtrip_by_absolute_source_index(tmp_path):
         intensity=1000.0,
         optimization_plan="joint-only",
         background_rate_hz=0.0,
+        model_profile="full",
     )
     paths = []
     records = (
@@ -190,3 +248,26 @@ def test_observation_fragments_roundtrip_by_absolute_source_index(tmp_path):
         [3.0],
     ]
     assert [float(item[0, 0]) for item in predictions] == [3.0, 8.0]
+
+    with h5py.File(paths[0], "r+") as legacy:
+        del legacy.attrs["model_profile"]
+    read_observation_fragments(
+        paths,
+        positions,
+        (3, 8),
+        grid,
+        2,
+        args,
+        irf,
+    )
+    args.model_profile = "minimal"
+    with pytest.raises(ValueError, match="legacy observation"):
+        read_observation_fragments(
+            paths,
+            positions,
+            (3, 8),
+            grid,
+            2,
+            args,
+            irf,
+        )
