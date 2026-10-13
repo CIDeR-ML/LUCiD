@@ -13,7 +13,7 @@ are written to a separate HDF5 file when explicitly enabled.
 Example::
 
     python scripts/run_juno_laser_sim.py \
-        --outdir /junofs/C/liukainan/LUCiD/outputs/juno_laser_center \
+        --outdir output/juno_laser_center \
         --n-events 10
 
 The default configuration is ``config/JUNO_laser_config.json``.  The script
@@ -73,7 +73,7 @@ from lucid.juno_laser.data import SIMULATION_SCHEMA, simulation_table
 
 LOG = logging.getLogger("lucid.juno_laser")
 INVALID_LOG_WEIGHT = -1e10
-DEFAULT_OUTPUT_DIR = "/junofs/C/liukainan/LUCiD/outputs/juno_laser"
+DEFAULT_OUTPUT_DIR = "output/juno_laser"
 
 
 def _pmt_geometry_override(request):
@@ -968,7 +968,9 @@ def simulate(args):
             seed = args.seed + event
             t0 = time.perf_counter()
             if event == 0:
-                LOG.info("event 0: starting first forward call and JIT compilation")
+                LOG.info(
+                    "event 0: starting first forward call and JIT compilation"
+                )
             else:
                 LOG.info("event %d: starting forward call", event)
             source_event_key = jax.random.fold_in(

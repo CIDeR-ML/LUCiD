@@ -37,36 +37,5 @@
     "n_events": 1,
     "max_scattering_steps": 64,
     "record_trajectories": false
-  },
-  "calibration": {
-    "mode": "per_pe",
-    "parameters": [
-      "n_ls",
-      "scat_ls",
-      "abs_ls",
-      "n_water",
-      "scat_water",
-      "abs_water"
-    ],
-    "parameter_bounds": {
-      "n_ls": [1.2, 1.6],
-      "scat_ls": [20.0, 400.0],
-      "abs_ls": [50.0, 1200.0],
-      "n_water": [1.2, 1.5],
-      "scat_water": [200.0, 4000.0],
-      "abs_water": [5.0, 100.0]
-    },
-    "time_window_ns": [0.0, 1000.0],
-    "time_bin_ns": 2.0,
-    "n_photons": 400000,
-    "train_ensemble_size": 16,
-    "validation_ensemble_size": 16,
-    "learning_rate": 0.001,
-    "optimizer": "adam",
-    "stages": [
-      "prompt_refractive_index",
-      "lengths",
-      "joint"
-    ]
   }
 }

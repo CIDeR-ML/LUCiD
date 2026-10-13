@@ -1,5 +1,6 @@
 """Deterministic tests for the JUNO green diffuser-ball source."""
 
+import json
 from pathlib import Path
 
 import jax
@@ -17,7 +18,6 @@ from lucid.juno_laser.source import (
     build_juno_laser_source,
     rotate_source_directions,
 )
-from lucid.juno_laser.config import JunoLaserConfig
 
 
 def test_nominal_diffuser_matches_junosw_moments():
@@ -141,7 +141,7 @@ def test_juno_source_factory_and_rotation_policy():
 def test_repository_config_selects_diffuser_baseline():
     """The production JUNO laser config enables the new source baseline."""
     root = Path(__file__).resolve().parents[1]
-    config = JunoLaserConfig.from_file(
-        root / "config" / "JUNO_laser_config.json"
-    )
-    assert config.data["source"]["model"] == "juno_diffuser_ball"
+    path = root / "config" / "JUNO_laser_config.json"
+    with path.open(encoding="utf-8") as stream:
+        config = json.load(stream)
+    assert config["source"]["model"] == "juno_diffuser_ball"

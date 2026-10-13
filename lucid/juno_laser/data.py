@@ -1,4 +1,4 @@
-"""Input handling for JUNO laser per-PE calibration data.
+"""Build FSMP-compatible Parquet output for JUNO laser simulation.
 
 The simulation output is one FSMP/BAPPE-compatible Parquet event table per
 source position.  Its rows retain ``eid``, ``ch``, ``step``, ``PEt`` and
@@ -7,12 +7,8 @@ source position.  Its rows retain ``eid``, ``ch``, ``step``, ``PEt`` and
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from pathlib import Path
-
 import numpy as np
 import pyarrow as pa
-import pyarrow.parquet as pq
 
 
 SIMULATION_SCHEMA = pa.schema(
@@ -110,132 +106,3 @@ def simulation_table(
         pa.array(nu_values, type=pa.float64()),
     ]
     return pa.Table.from_arrays(arrays, schema=SIMULATION_SCHEMA)
-
-
-@dataclass(frozen=True)
-class PerPeObservation:
-    """Binned PE observations for one source position."""
-
-    counts: np.ndarray
-    n_events: int
-    n_pe: int
-    time_min_ns: float
-    time_max_ns: float
-    bin_width_ns: float
-
-    @property
-    def n_sensors(self) -> int:
-        return int(self.counts.shape[0])
-
-    @property
-    def n_bins(self) -> int:
-        return int(self.counts.shape[1])
-
-
-def event_file(data_dir: str | Path) -> Path:
-    """Return the single consolidated Parquet event table for a source.
-
-    The returned path follows the FSMP/BAPPE full-step file contract.  Event
-    selection is applied after reading the table, rather than by selecting
-    individual files, because one table contains many event IDs.
-    """
-    root = Path(data_dir).expanduser()
-    if root.is_file():
-        if root.suffix.lower() not in {".parquet", ".pq"}:
-            raise ValueError(f"simulation event file must be Parquet: {root}")
-        return root
-    files = sorted(root.glob("*.parquet"))
-    files.extend(sorted(root.glob("*.pq")))
-    if not files:
-        raise FileNotFoundError(f"No simulation Parquet file found in {root}")
-    if len(files) > 1:
-        raise ValueError(
-            "expected one consolidated Parquet file in "
-            f"{root}, found {len(files)}"
-        )
-    return files[0]
-
-
-def _read_event_table(path: Path):
-    """Read the FSMP/BAPPE columns and restore absolute PE times."""
-    table = pq.read_table(
-        path,
-        columns=["eid", "ch", "offset", "step", "PEt", "nu_lc"],
-    )
-    frame = table.to_pandas()
-    frame["PEt"] = [
-        np.asarray([] if values is None else values, dtype=np.float64)
-        + float(offset)
-        for values, offset in zip(frame["PEt"], frame["offset"])
-    ]
-    return frame
-
-
-def _event_arrays(frame):
-    """Flatten a BAPPE event table to channel IDs, times and event IDs."""
-    lengths = frame["PEt"].map(len).to_numpy(dtype=np.int64)
-    if lengths.sum():
-        times = np.concatenate(frame.loc[lengths > 0, "PEt"].to_numpy())
-        channels = np.repeat(
-            frame.loc[lengths > 0, "ch"].to_numpy(dtype=np.int64),
-            lengths[lengths > 0],
-        )
-    else:
-        times = np.empty(0, dtype=np.float64)
-        channels = np.empty(0, dtype=np.int64)
-    return frame["eid"].to_numpy(dtype=np.int64), channels, times
-
-
-def load_per_pe_histogram(
-    data_dir: str | Path,
-    *,
-    n_sensors: int,
-    time_min_ns: float,
-    time_max_ns: float,
-    bin_width_ns: float,
-    max_events: int = 0,
-) -> PerPeObservation:
-    """Read PE sequences and accumulate a PMT/time-bin count histogram.
-
-    The event axis is intentionally retained only through ``n_events``.  The
-    returned counts are sufficient for the current binned Poisson likelihood
-    while preserving every accepted PE and its time bin.
-    """
-    if n_sensors <= 0:
-        raise ValueError("n_sensors must be positive")
-    if time_max_ns <= time_min_ns:
-        raise ValueError("time_max_ns must exceed time_min_ns")
-    if bin_width_ns <= 0:
-        raise ValueError("bin_width_ns must be positive")
-    n_bins = int(np.ceil((time_max_ns - time_min_ns) / bin_width_ns))
-    counts = np.zeros((n_sensors, n_bins), dtype=np.float64)
-    frame = _read_event_table(event_file(data_dir))
-    event_ids = frame["eid"].drop_duplicates().to_numpy(dtype=np.int64)
-    if max_events > 0:
-        event_ids = event_ids[:max_events]
-        frame = frame[frame["eid"].isin(event_ids)]
-    _, ids, times = _event_arrays(frame)
-    bins = np.floor((times - time_min_ns) / bin_width_ns).astype(np.int64)
-    valid = (
-        (ids >= 0)
-        & (ids < n_sensors)
-        & (bins >= 0)
-        & (bins < n_bins)
-        & np.isfinite(times)
-    )
-    linear = ids[valid] * n_bins + bins[valid]
-    if linear.size:
-        counts += np.bincount(
-            linear, minlength=n_sensors * n_bins
-        ).reshape(counts.shape)
-    n_pe = int(valid.sum())
-    n_events = int(len(event_ids))
-
-    return PerPeObservation(
-        counts=counts,
-        n_events=n_events,
-        n_pe=n_pe,
-        time_min_ns=float(time_min_ns),
-        time_max_ns=float(time_max_ns),
-        bin_width_ns=float(bin_width_ns),
-    )
