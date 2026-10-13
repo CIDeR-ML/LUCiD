@@ -1,3 +1,24 @@
+from typing import NamedTuple
+
+import jax.numpy as jnp
+
+
+class SourceBatch(NamedTuple):
+    """Time-aware photon samples used by calibration forward models."""
+
+    directions: jnp.ndarray
+    positions: jnp.ndarray
+    weights: jnp.ndarray
+    times: jnp.ndarray
+
+
+def sample_source(source, n_photons, key):
+    """Adapt a legacy source callable to a time-aware source batch."""
+    directions, positions, weights = source(n_photons, key)
+    times = jnp.zeros((n_photons,), dtype=positions.dtype)
+    return SourceBatch(directions, positions, weights, times)
+
+
 __all__ = [
     "make_cherenkov_surrogate_fn",
     "make_scintillation_surrogate_fn",
@@ -12,9 +33,7 @@ __all__ = [
     "get_isotropic_rays",
     "generate_laser_photons",
     "setup_calibration_generator",
-    "DiffuserBallSource",
     "SourceBatch",
-    "diffuser_ball_source",
     "sample_source",
     "ShotgunSource",
     "shotgun_source",
@@ -35,12 +54,6 @@ from lucid.sources.calibration_sources import (
     get_isotropic_rays,
     generate_laser_photons,
     setup_calibration_generator,
-)
-from lucid.sources.diffuser_ball import (
-    DiffuserBallSource,
-    SourceBatch,
-    diffuser_ball_source,
-    sample_source,
 )
 from lucid.sources.shotgun_source import (
     ShotgunSource,

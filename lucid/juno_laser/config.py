@@ -8,14 +8,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from .time_grid import TimeGrid
-from .source import LSPHASE_SHAPE_NAMES
-
-
-PARAMETER_NAMES = (
-    "scat_ls",
-    "abs_ls",
-    *LSPHASE_SHAPE_NAMES,
-)
+PARAMETER_NAMES = ("scat_ls", "abs_ls")
 
 POSITIVE_PARAMETER_NAMES = frozenset(("scat_ls", "abs_ls"))
 
@@ -50,34 +43,10 @@ class JunoLaserConfig:
 
         source = data["source"]
         source_model = source.get("model", "isotropic")
-        if source_model not in {"isotropic", "juno_diffuser_ball"}:
+        if source_model != "isotropic":
             raise ValueError(
                 f"unsupported JUNO laser source model: {source_model!r}"
             )
-        if source_model == "juno_diffuser_ball":
-            axis = source.get("axis")
-            weights = source.get("angular_weights")
-            if not isinstance(axis, list) or len(axis) != 3:
-                raise ValueError("source.axis must contain three values")
-            if not isinstance(weights, list) or len(weights) != 4:
-                raise ValueError(
-                    "source.angular_weights must contain four values"
-                )
-            if any(float(value) <= 0.0 for value in weights):
-                raise ValueError("source.angular_weights must be positive")
-            if float(source.get("radius_m", 0.0)) <= 0.0:
-                raise ValueError("source.radius_m must be positive")
-            if float(source.get("time_sigma_ns", -1.0)) < 0.0:
-                raise ValueError(
-                    "source.time_sigma_ns must be non-negative"
-                )
-            if source.get(
-                "importance_normalization", "self_normalized"
-            ) not in {"analytic", "self_normalized"}:
-                raise ValueError(
-                    "source.importance_normalization must be analytic or "
-                    "self_normalized"
-                )
 
         calibration = data["calibration"]
         if calibration.get("mode") != "per_pe":
@@ -118,11 +87,7 @@ class JunoLaserConfig:
             float(time_window[1]),
             float(calibration["time_bin_ns"]),
         )
-        required_stages = (
-            "ls_lengths",
-            "diffuser_angular_shape",
-            "joint",
-        )
+        required_stages = ("joint",)
         if tuple(calibration.get("stages", ())) != required_stages:
             raise ValueError(
                 "calibration stages must be ordered as "
@@ -140,17 +105,6 @@ class JunoLaserConfig:
         ):
             raise ValueError(
                 "train and MC-validation ensembles must be positive"
-            )
-        irf = calibration.get("irf", {})
-        if irf.get("mode") != "pmt_type_average":
-            raise ValueError(
-                "calibration.irf.mode must be 'pmt_type_average'"
-            )
-        if not irf.get("path") or not irf.get("pmt_map"):
-            raise ValueError("calibration.irf requires path and pmt_map")
-        if float(irf.get("interpolation_sigma_ns", 0.0)) <= 0.0:
-            raise ValueError(
-                "calibration.irf interpolation sigma must be positive"
             )
 
         return cls(path=config_path, root=config_path.parent, data=data)
@@ -200,24 +154,9 @@ class JunoLaserConfig:
         return self.data["calibration"]
 
     @property
-    def irf(self) -> Mapping[str, Any]:
-        """Return the validated measured-IRF configuration."""
-        return self.calibration["irf"]
-
-    @property
-    def irf_path(self) -> Path:
-        """Return the configured campaign IRF HDF5 path."""
-        return self.resolve(self.irf["path"])
-
-    @property
-    def irf_pmt_map_path(self) -> Path:
-        """Return the configured serial-to-PMT-family table path."""
-        return self.resolve(self.irf["pmt_map"])
-
-    @property
     def interpolation_sigma_ns(self) -> float:
-        """Return the non-physical continuous interpolation width."""
-        return float(self.irf["interpolation_sigma_ns"])
+        """Return the numerical continuous-intensity kernel width."""
+        return float(self.calibration["interpolation_sigma_ns"])
 
     @property
     def time_grid(self) -> TimeGrid:

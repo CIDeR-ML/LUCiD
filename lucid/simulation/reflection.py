@@ -252,32 +252,6 @@ def pmt_surface_reflection(
     return reflectance, reflected_direction, score
 
 
-def effective_surface_reflection(direction, normal, reflectance,
-                                 specular_fraction, key):
-    """Return an effective opaque surface's reflection outcome.
-
-    This small interface is used for known engineering structures.  It keeps
-    total reflectance separate from the conditional mirror/diffuse mixture
-    and returns the sampled branch for transparent diagnostics.
-    """
-    normal_refl = sg(normal)
-    diffuse_key, branch_key = jax.random.split(key)
-    fraction = jnp.clip(specular_fraction, 0.0, 1.0)
-    is_specular = jax.random.uniform(branch_key) < sg(fraction)
-    specular_direction = compute_reflection_direction(
-        direction, normal_refl
-    )
-    diffuse_direction = sample_cosine_hemisphere(
-        -normal_refl, diffuse_key
-    )
-    direction_out = jnp.where(
-        is_specular, specular_direction, diffuse_direction
-    )
-    selected = jnp.where(is_specular, fraction, 1.0 - fraction)
-    score = jnp.log(jnp.maximum(selected, 1e-12))
-    return jnp.clip(reflectance, 0.0, 1.0), direction_out, score, is_specular
-
-
 # ---------------------------------------------------------------------------
 # Model registry — name → (reflection_fn, build_refl_params(detector_params)).
 # build_refl_params extracts the model's parameters from a DetectorParams pytree.

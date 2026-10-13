@@ -28,7 +28,6 @@ def test_zero_support_report_preserves_exact_zero(tmp_path):
         np.asarray([0.0]),
         sigma_ns=0.1,
         truncate_sigma=5.0,
-        background_rate_per_ns=0.0,
         output_prefix=prefix,
         label="test",
     )

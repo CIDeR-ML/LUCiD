@@ -15,8 +15,6 @@ from typing import NamedTuple, Sequence
 import jax
 import jax.numpy as jnp
 import numpy as np
-from scipy.special import ndtr
-
 from .time_grid import TimeGrid
 
 
@@ -30,10 +28,6 @@ class EventwisePeObservation:
     n_events: int
     n_sensors: int
     time_grid: TimeGrid
-    event_exposures: np.ndarray | None = None
-    event_time_offsets_ns: np.ndarray | None = None
-    event_labels: np.ndarray | None = None
-    posterior_step: int | None = None
 
     def __post_init__(self):
         """Normalize dtypes and validate the event-wise data contract."""
@@ -61,38 +55,9 @@ class EventwisePeObservation:
         )
         if times.size and np.any(outside):
             raise ValueError("PE times are outside the observation window")
-        labels = self.event_labels
-        if labels is None:
-            labels = np.arange(self.n_events, dtype=np.int64)
-        labels = np.asarray(labels, dtype=np.int64)
-        if labels.shape != (self.n_events,) or np.unique(labels).size != len(
-            labels
-        ):
-            raise ValueError("event labels must be unique and match n_events")
-        if self.posterior_step is not None and self.posterior_step < 0:
-            raise ValueError("posterior step must be non-negative")
-        exposures = self.event_exposures
-        if exposures is None:
-            exposures = np.ones(self.n_events, dtype=np.float32)
-        exposures = np.asarray(exposures, dtype=np.float32)
-        if exposures.shape != (self.n_events,):
-            raise ValueError("event exposures must match n_events")
-        if np.any(~np.isfinite(exposures)) or np.any(exposures <= 0.0):
-            raise ValueError("event exposures must be finite and positive")
-        time_offsets = self.event_time_offsets_ns
-        if time_offsets is None:
-            time_offsets = np.zeros(self.n_events, dtype=np.float32)
-        time_offsets = np.asarray(time_offsets, dtype=np.float32)
-        if time_offsets.shape != (self.n_events,):
-            raise ValueError("event time offsets must match n_events")
-        if np.any(~np.isfinite(time_offsets)):
-            raise ValueError("event time offsets must be finite")
         object.__setattr__(self, "event_ids", events)
         object.__setattr__(self, "pmt_ids", sensors)
         object.__setattr__(self, "pe_times_ns", times)
-        object.__setattr__(self, "event_labels", labels)
-        object.__setattr__(self, "event_exposures", exposures)
-        object.__setattr__(self, "event_time_offsets_ns", time_offsets)
 
     @property
     def n_pe(self) -> int:
@@ -111,7 +76,7 @@ class EventwisePeObservation:
 
 
 class EventwisePoissonTerms(NamedTuple):
-    """Separate exposure and observed-event terms of the likelihood."""
+    """Separate integral and observed-event terms of the likelihood."""
 
     integral: jnp.ndarray
     negative_log_rate: jnp.ndarray
@@ -156,23 +121,6 @@ def require_positive_pe_support(
             "non-positive predicted rate"
         )
     return summary
-
-
-def _background_terms(observation, background_rate_per_ns, dtype):
-    """Return per-PE background rates and one-event background mass."""
-    rates = jnp.asarray(background_rate_per_ns, dtype=dtype)
-    if rates.ndim == 0:
-        rates = jnp.full((observation.n_sensors,), rates, dtype=dtype)
-    if rates.shape != (observation.n_sensors,):
-        raise ValueError(
-            "background rate must be scalar or have one value per sensor"
-        )
-    if isinstance(background_rate_per_ns, (int, float)):
-        if background_rate_per_ns < 0.0:
-            raise ValueError("background rate must be non-negative")
-    sensors = jnp.asarray(observation.pmt_ids, dtype=jnp.int32)
-    duration = observation.time_max_ns - observation.time_min_ns
-    return rates[sensors], jnp.sum(rates) * duration
 
 
 def gaussian_mixture_rate(
@@ -282,55 +230,6 @@ def gaussian_window_probability(
     return jax.scipy.special.ndtr(upper) - jax.scipy.special.ndtr(lower)
 
 
-def _event_weighted_window_probability(
-    observation: EventwisePeObservation,
-    sigma_ns,
-    *,
-    dtype,
-    window_min_ns: float | None = None,
-    window_max_ns: float | None = None,
-):
-    """Precompute exposure-weighted window acceptance for all events."""
-    sigma_values = np.asarray(sigma_ns, dtype=np.float64)
-    if sigma_values.ndim == 0:
-        sigma_values = np.full(
-            observation.n_sensors, float(sigma_values)
-        )
-    if (
-        sigma_values.shape != (observation.n_sensors,)
-        or np.any(sigma_values <= 0.0)
-    ):
-        raise ValueError("sigma must be positive and scalar or per-sensor")
-    unique_sigma, inverse = np.unique(sigma_values, return_inverse=True)
-    centers = observation.time_grid.centers[None, :]
-    offsets = np.asarray(
-        observation.event_time_offsets_ns, dtype=np.float64
-    )[:, None]
-    exposures = np.asarray(
-        observation.event_exposures, dtype=np.float64
-    )[:, None]
-    lower_edge = (
-        observation.time_min_ns
-        if window_min_ns is None
-        else float(window_min_ns)
-    )
-    upper_edge = (
-        observation.time_max_ns
-        if window_max_ns is None
-        else float(window_max_ns)
-    )
-    if upper_edge <= lower_edge:
-        raise ValueError("integration window must be increasing")
-    by_sigma = []
-    for sigma in unique_sigma:
-        lower = (lower_edge - offsets - centers) / sigma
-        upper = (upper_edge - offsets - centers) / sigma
-        probability = ndtr(upper) - ndtr(lower)
-        by_sigma.append(np.sum(exposures * probability, axis=0))
-    weighted = np.asarray(by_sigma, dtype=np.float64)[inverse]
-    return jnp.asarray(weighted, dtype=dtype)
-
-
 def gaussian_window_diagnostics(
     bin_masses,
     *,
@@ -359,37 +258,45 @@ def gaussian_window_diagnostics(
             window_max_ns=time_grid.time_max_ns + expansion_ns,
             dtype=masses.dtype,
         )
-        exposure_sum = 1.0
+        event_count = 1
     else:
         if observation.time_grid != time_grid:
             raise ValueError("diagnostic observation must share the time grid")
         if observation.n_sensors != masses.shape[0]:
             raise ValueError("diagnostic observation must share the sensors")
-        current = _event_weighted_window_probability(
-            observation, sigma_ns, dtype=masses.dtype
-        )
-        expanded = _event_weighted_window_probability(
-            observation,
-            sigma_ns,
+        current = gaussian_window_probability(
+            time_grid=time_grid,
+            sigma_ns=sigma_ns,
+            n_sensors=masses.shape[0],
             dtype=masses.dtype,
+        )
+        expanded = gaussian_window_probability(
+            time_grid=time_grid,
+            sigma_ns=sigma_ns,
+            n_sensors=masses.shape[0],
             window_min_ns=time_grid.time_min_ns - expansion_ns,
             window_max_ns=time_grid.time_max_ns + expansion_ns,
+            dtype=masses.dtype,
         )
-        exposure_sum = float(np.sum(observation.event_exposures))
+        event_count = observation.n_events
     full_mass = jnp.sum(masses)
     current_mass = jnp.sum(masses * current)
     expanded_mass = jnp.sum(masses * expanded)
     denominator = jnp.maximum(
-        exposure_sum * full_mass, jnp.finfo(masses.dtype).tiny
+        event_count * full_mass, jnp.finfo(masses.dtype).tiny
     )
     return {
-        "full_axis_mass": float(exposure_sum * full_mass),
-        "current_window_mass": float(current_mass),
-        "current_window_fraction": float(current_mass / denominator),
-        "expanded_window_mass": float(expanded_mass),
-        "expanded_window_fraction": float(expanded_mass / denominator),
+        "full_axis_mass": float(event_count * full_mass),
+        "current_window_mass": float(event_count * current_mass),
+        "current_window_fraction": float(
+            event_count * current_mass / denominator
+        ),
+        "expanded_window_mass": float(event_count * expanded_mass),
+        "expanded_window_fraction": float(
+            event_count * expanded_mass / denominator
+        ),
         "expanded_minus_current_fraction": float(
-            (expanded_mass - current_mass) / denominator
+            event_count * (expanded_mass - current_mass) / denominator
         ),
         "expansion_ns": float(expansion_ns),
     }
@@ -401,45 +308,27 @@ def gaussian_eventwise_poisson_terms(
     *,
     sigma_ns: float,
     truncate_sigma: float = 5.0,
-    background_rate_per_ns=0.0,
 ):
     """Evaluate an unbinned PPP likelihood using a fixed Gaussian kernel."""
     masses = jnp.asarray(bin_masses)
     if masses.ndim != 2 or masses.shape[0] != observation.n_sensors:
         raise ValueError("bin masses must match the observation sensors")
     observation.time_grid.validate_mass_shape(masses)
-    event_ids = jnp.asarray(observation.event_ids, dtype=jnp.int32)
-    time_offsets = jnp.asarray(
-        observation.event_time_offsets_ns, dtype=masses.dtype
-    )
-    corrected_times = (
-        jnp.asarray(observation.pe_times_ns, dtype=masses.dtype)
-        - time_offsets[event_ids]
-    )
-    signal_rate = gaussian_mixture_rate(
+    pe_rate = gaussian_mixture_rate(
         masses,
         observation.pmt_ids,
-        corrected_times,
+        observation.pe_times_ns,
         time_grid=observation.time_grid,
         sigma_ns=sigma_ns,
         truncate_sigma=truncate_sigma,
     )
-    background_rate, background_mass = _background_terms(
-        observation, background_rate_per_ns, masses.dtype
-    )
-    exposures = jnp.asarray(
-        observation.event_exposures, dtype=masses.dtype
-    )
-    pe_rate = exposures[event_ids] * signal_rate + background_rate
-    weighted_window_probability = _event_weighted_window_probability(
-        observation,
-        sigma_ns,
+    window_probability = gaussian_window_probability(
+        time_grid=observation.time_grid,
+        sigma_ns=sigma_ns,
+        n_sensors=observation.n_sensors,
         dtype=masses.dtype,
     )
-    signal_window_mass = jnp.sum(masses * weighted_window_probability)
-    integral = (
-        signal_window_mass + observation.n_events * background_mass
-    )
+    integral = observation.n_events * jnp.sum(masses * window_probability)
     negative_log_rate = -jnp.sum(jnp.log(pe_rate))
     return EventwisePoissonTerms(
         integral=integral,
@@ -455,7 +344,6 @@ def make_gaussian_eventwise_objective(
     *,
     sigma_ns: float,
     truncate_sigma: float = 5.0,
-    background_rate_per_ns=0.0,
     normalize: bool = True,
 ):
     """Build a continuous-time fixed-kernel multi-source PE objective."""
@@ -474,7 +362,6 @@ def make_gaussian_eventwise_objective(
                 prediction,
                 sigma_ns=sigma_ns,
                 truncate_sigma=truncate_sigma,
-                background_rate_per_ns=background_rate_per_ns,
             )
             total += terms.nll
         return total / denominator if normalize else total
@@ -488,7 +375,6 @@ def make_chunked_gaussian_eventwise_objective(
     *,
     sigma_ns: float,
     truncate_sigma: float = 5.0,
-    background_rate_per_ns=0.0,
 ):
     """Build one globally normalized PPP objective from source chunks.
 
@@ -514,7 +400,6 @@ def make_chunked_gaussian_eventwise_objective(
             chunk,
             sigma_ns=sigma_ns,
             truncate_sigma=truncate_sigma,
-            background_rate_per_ns=background_rate_per_ns,
             normalize=False,
         )
         for forward, chunk in zip(forwards, chunks)
@@ -585,7 +470,6 @@ def make_host_accumulated_gaussian_eventwise_objective(
     *,
     sigma_ns: float,
     truncate_sigma: float = 5.0,
-    background_rate_per_ns=0.0,
 ):
     """Build a joint PPP evaluated as independent one-source modules."""
     forwards = tuple(ensemble_forwards)
@@ -605,7 +489,6 @@ def make_host_accumulated_gaussian_eventwise_objective(
             chunk,
             sigma_ns=sigma_ns,
             truncate_sigma=truncate_sigma,
-            background_rate_per_ns=background_rate_per_ns,
             normalize=False,
         )
         for forward, chunk in zip(forwards, chunks)
@@ -621,11 +504,8 @@ def sample_gaussian_mixture_events(
     sigma_ns: float,
     seed: int,
     truncate_sigma: float = 5.0,
-    event_exposure=1.0,
-    event_time_offset_ns=0.0,
-    background_rate_per_ns=0.0,
 ) -> EventwisePeObservation:
-    """Sample signal and explicit background event-wise PPP processes."""
+    """Sample fixed-exposure, zero-offset signal-only event-wise PEs."""
     masses = np.asarray(bin_masses, dtype=np.float64)
     if masses.ndim != 2 or masses.shape[1] < 1:
         raise ValueError("bin masses must have shape (n_sensors, n_bins)")
@@ -642,36 +522,6 @@ def sample_gaussian_mixture_events(
         or truncate_sigma <= 0.0
     ):
         raise ValueError("event count and time-kernel scales must be positive")
-    exposures = np.asarray(event_exposure, dtype=np.float64)
-    if exposures.ndim == 0:
-        exposures = np.full(n_events, float(exposures))
-    if exposures.shape != (n_events,):
-        raise ValueError("event exposure must be scalar or match n_events")
-    if np.any(~np.isfinite(exposures)) or np.any(exposures <= 0.0):
-        raise ValueError("event exposures must be finite and positive")
-    time_offsets = np.asarray(event_time_offset_ns, dtype=np.float64)
-    if time_offsets.ndim == 0:
-        time_offsets = np.full(n_events, float(time_offsets))
-    if time_offsets.shape != (n_events,):
-        raise ValueError("event time offset must be scalar or match n_events")
-    if np.any(~np.isfinite(time_offsets)):
-        raise ValueError("event time offsets must be finite")
-    background_rates = np.asarray(
-        background_rate_per_ns, dtype=np.float64
-    )
-    if background_rates.ndim == 0:
-        background_rates = np.full(
-            masses.shape[0], float(background_rates)
-        )
-    if (
-        background_rates.shape != (masses.shape[0],)
-        or np.any(~np.isfinite(background_rates))
-        or np.any(background_rates < 0.0)
-    ):
-        raise ValueError(
-            "background rate must be non-negative, finite and scalar or "
-            "one value per sensor"
-        )
     time_grid.validate_mass_shape(masses)
     rng = np.random.default_rng(seed)
     sigma_per_sensor = (
@@ -680,7 +530,7 @@ def sample_gaussian_mixture_events(
         else sigma_values
     )
     total_full_mass = float(np.sum(masses))
-    counts = rng.poisson(exposures * total_full_mass)
+    counts = rng.poisson(total_full_mass, size=n_events)
     candidate_events = np.repeat(
         np.arange(n_events, dtype=np.int32), counts
     )
@@ -703,7 +553,7 @@ def sample_gaussian_mixture_events(
             time_bins + 0.5
         ) * time_grid.bin_width_ns
         times = rng.normal(
-            centers + time_offsets[candidate_events], selected_sigma
+            centers, selected_sigma
         )
         retained = (
             (times >= time_grid.time_min_ns)
@@ -716,29 +566,6 @@ def sample_gaussian_mixture_events(
         event_ids = np.empty(0, dtype=np.int32)
         pmt_ids = np.empty(0, dtype=np.int32)
         times = np.empty(0, dtype=np.float64)
-    total_background_rate = float(np.sum(background_rates))
-    window_ns = time_grid.time_max_ns - time_grid.time_min_ns
-    background_counts = rng.poisson(
-        total_background_rate * window_ns, size=n_events
-    )
-    n_background = int(np.sum(background_counts))
-    if n_background:
-        background_events = np.repeat(
-            np.arange(n_events, dtype=np.int32), background_counts
-        )
-        background_pmts = rng.choice(
-            masses.shape[0],
-            size=n_background,
-            p=background_rates / total_background_rate,
-        ).astype(np.int32)
-        background_times = rng.uniform(
-            time_grid.time_min_ns,
-            time_grid.time_max_ns,
-            size=n_background,
-        )
-        event_ids = np.concatenate((event_ids, background_events))
-        pmt_ids = np.concatenate((pmt_ids, background_pmts))
-        times = np.concatenate((times, background_times))
     times = np.asarray(times, dtype=np.float32)
     return EventwisePeObservation(
         event_ids=event_ids,
@@ -747,6 +574,4 @@ def sample_gaussian_mixture_events(
         n_events=n_events,
         n_sensors=masses.shape[0],
         time_grid=time_grid,
-        event_exposures=exposures,
-        event_time_offsets_ns=time_offsets,
     )

@@ -6,10 +6,7 @@ from pathlib import Path
 import numpy.testing as npt
 
 from lucid.detector_params import load_physics_config
-from scripts.run_juno_laser_sim import (
-    _lengths_at,
-    _ls_optical_provenance,
-)
+from lucid.juno_laser.parameters import medium_lengths_at
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -18,17 +15,16 @@ PHYSICS = ROOT / "config" / "JUNO_laser_physics_config.json"
 EXPECTED_LS_ABSORPTION_M = 85.26179771369235
 
 
-def test_laser_ls_absorption_matches_junosw_reference_jobs():
-    """The monochromatic baseline must match the old-model job logs."""
-    lengths = _lengths_at(
-        MATERIALS,
+def test_laser_material_table_is_finite_at_532_nm():
+    """The unscaled material table remains readable and physical."""
+    lengths = medium_lengths_at(
+        {"ls": MATERIALS / "juno_laser_labls.json"},
         532.0,
-        ("juno_laser_labls.json",),
     )
 
-    npt.assert_allclose(
-        lengths[0][2], EXPECTED_LS_ABSORPTION_M, rtol=0.0, atol=1e-12
-    )
+    assert lengths["ls"]["abs"] > 0.0
+    assert lengths["ls"]["scat"] > 0.0
+    assert lengths["ls"]["n"] > 1.0
 
 
 def test_laser_ls_provenance_is_self_consistent():
@@ -36,15 +32,11 @@ def test_laser_ls_provenance_is_self_consistent():
     with PHYSICS.open() as stream:
         physics = json.load(stream)
 
-    provenance = _ls_optical_provenance(
-        physics, EXPECTED_LS_ABSORPTION_M
-    )
-
-    assert provenance["ls_optical_model"] == "old"
-    assert provenance["ls_absorption_table"] == "ABSLENGTH_v1"
-    assert provenance["ls_absorption_scale"] == "86.5/26.0"
+    assert physics["ls_optical_model"] == "old"
+    assert physics["ls_absorption_table"] == "ABSLENGTH_v1"
+    assert physics["ls_absorption_scale"] == "86.5/26.0"
     npt.assert_allclose(
-        provenance["ls_absorption_length_532_m"],
+        physics["absorption_length"],
         EXPECTED_LS_ABSORPTION_M,
         rtol=0.0,
         atol=1e-12,

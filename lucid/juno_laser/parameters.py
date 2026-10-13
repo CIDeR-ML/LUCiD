@@ -14,7 +14,6 @@ from .config import (
     PARAMETER_NAMES,
     POSITIVE_PARAMETER_NAMES,
 )
-from .source import LSPHASE_SHAPE_NAMES
 
 
 class CalibParams(NamedTuple):
@@ -106,10 +105,7 @@ def unpack_params(theta, fixed_params):
         scat_ls=values["scat_ls"],
         abs_ls=values["abs_ls"],
     )
-    shape_coordinates = jnp.stack(
-        tuple(values[name] for name in LSPHASE_SHAPE_NAMES)
-    )
-    return params, shape_coordinates
+    return params
 
 
 def medium_lengths_at(material_paths: dict[str, Path], wavelength_nm: float):
@@ -161,5 +157,4 @@ def truth_from_geometry(config: JunoLaserConfig, det_geom):
         "n_water": float(det_geom.medium_outer.refractive_index),
         "scat_water": float(lengths["outer"]["scat"]),
         "abs_water": float(lengths["outer"]["abs"]),
-        **{name: 0.0 for name in LSPHASE_SHAPE_NAMES},
     }

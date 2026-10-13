@@ -11,18 +11,7 @@
     "outer": "materials/juno_laser_water.json"
   },
   "source": {
-    "model": "juno_diffuser_ball",
-    "axis": [0.0, 0.0, 1.0],
-    "radius_m": 0.01,
-    "time_sigma_ns": 0.23,
-    "angular_parameterization": "bernstein3",
-    "importance_normalization": "self_normalized",
-    "angular_weights": [
-      0.28182463805722086,
-      0.2170696740847002,
-      0.35391735883294184,
-      0.14718832902513695
-    ],
+    "model": "isotropic",
     "default_intensity": 1000000.0
   },
   "transport": {
@@ -43,24 +32,13 @@
     "mode": "per_pe",
     "parameters": [
       "scat_ls",
-      "abs_ls",
-      "lsphase_shape_0",
-      "lsphase_shape_1",
-      "lsphase_shape_2"
+      "abs_ls"
     ],
     "parameter_bounds": {
       "scat_ls": [20.0, 400.0],
-      "abs_ls": [50.0, 1200.0],
-      "lsphase_shape_0": [-3.0, 3.0],
-      "lsphase_shape_1": [-3.0, 3.0],
-      "lsphase_shape_2": [-3.0, 3.0]
+      "abs_ls": [50.0, 1200.0]
     },
-    "irf": {
-      "mode": "pmt_type_average",
-      "path": "/junofs/PmtCharacterization/IRF/jpwaptool_ser_baseline.h5",
-      "pmt_map": "/junofs/C/junoid_J25.7.3.pq",
-      "interpolation_sigma_ns": 0.25
-    },
+    "interpolation_sigma_ns": 0.5,
     "time_window_ns": [0.0, 1000.0],
     "time_bin_ns": 0.5,
     "n_photons": 400000,
@@ -69,13 +47,9 @@
     "learning_rate": 0.001,
     "optimizer": "adam",
     "stage_steps": {
-      "ls_lengths": 64,
-      "diffuser_angular_shape": 64,
       "joint": 64
     },
     "stages": [
-      "ls_lengths",
-      "diffuser_angular_shape",
       "joint"
     ]
   }

@@ -4,7 +4,6 @@ from lucid.sources.siren_rays import (
     make_scintillation_surrogate_fn,
     predict_t0,
 )
-from lucid.sources.diffuser_ball import sample_source
 from lucid.siren.core import build_cherenkov_context, build_dedx_context
 from lucid.propagation.cylinder import create_photon_propagator
 from lucid.propagation.box import create_box_photon_propagator, box_bounds_check
@@ -1033,11 +1032,8 @@ def setup_event_simulator(
         optics are evaluated at the same wavelengths.
         """
         key, source_key, opt_key = jax.random.split(key, 3)
-        source_batch = sample_source(source, Nphot, source_key)
-        photon_directions = source_batch.directions
-        photon_origins = source_batch.positions
-        photon_intensities = source_batch.weights
-        photon_times = source_batch.times
+        photon_directions, photon_origins, photon_intensities = source(Nphot, source_key)
+        photon_times = jnp.zeros((Nphot,))
 
         # Source wavelength can be None (→ Cherenkov), scalar, or (Nphot,) array;
         # the optical-array helpers normalize the shape.
@@ -1154,4 +1150,3 @@ def setup_event_simulator(
             return _sim_track_default
         else:
             return partial(_simulation_without_data_impl, model_params=model_params)
-

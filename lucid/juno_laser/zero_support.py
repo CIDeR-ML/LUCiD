@@ -23,24 +23,20 @@ def _mixture_rate(
     *,
     sigma_ns,
     truncate_sigma,
-    exposure,
-    time_offset_ns,
-    background_rate_per_ns,
 ):
     """Evaluate the same truncated Gaussian mixture used by the PPP."""
     masses = np.asarray(masses, dtype=np.float64)
     times = np.asarray(times_ns, dtype=np.float64)
     centers = np.asarray(centers_ns, dtype=np.float64)
-    result = np.full(times.shape, background_rate_per_ns)
+    result = np.zeros(times.shape, dtype=np.float64)
     normalization = 1.0 / (math.sqrt(2.0 * math.pi) * sigma_ns)
     for mass, center in zip(masses, centers):
         if mass == 0.0:
             continue
-        z = (times - time_offset_ns - center) / sigma_ns
+        z = (times - center) / sigma_ns
         selected = np.abs(z) <= truncate_sigma
         result[selected] += (
-            exposure
-            * mass
+            mass
             * normalization
             * np.exp(-0.5 * z[selected] ** 2)
         )
@@ -55,7 +51,6 @@ def render_zero_support_example(
     *,
     sigma_ns,
     truncate_sigma,
-    background_rate_per_ns,
     output_prefix,
     label,
 ):
@@ -68,8 +63,6 @@ def render_zero_support_example(
     event_id = int(observation.event_ids[pe_index])
     pmt_id = int(observation.pmt_ids[pe_index])
     pe_time_ns = float(observation.pe_times_ns[pe_index])
-    exposure = float(observation.event_exposures[event_id])
-    time_offset_ns = float(observation.event_time_offsets_ns[event_id])
     same_event_pmt = (
         (observation.event_ids == event_id)
         & (observation.pmt_ids == pmt_id)
@@ -95,9 +88,6 @@ def render_zero_support_example(
         common = {
             "sigma_ns": sigma_ns,
             "truncate_sigma": truncate_sigma,
-            "exposure": exposure,
-            "time_offset_ns": time_offset_ns,
-            "background_rate_per_ns": background_rate_per_ns,
         }
         return (
             _mixture_rate(truth_masses, times, centers, **common),
@@ -112,9 +102,6 @@ def render_zero_support_example(
         centers,
         sigma_ns=sigma_ns,
         truncate_sigma=truncate_sigma,
-        exposure=exposure,
-        time_offset_ns=time_offset_ns,
-        background_rate_per_ns=background_rate_per_ns,
     )[0]
     fit_at_pe = float(fit_pe_rate[pe_index])
     prefix = Path(output_prefix)
@@ -128,12 +115,9 @@ def render_zero_support_example(
         "pe_time_ns": pe_time_ns,
         "truth_rate_at_pe_per_ns": float(truth_at_pe),
         "fit_rate_at_pe_per_ns": fit_at_pe,
-        "event_exposure": exposure,
-        "event_time_offset_ns": time_offset_ns,
         "sigma_ns": float(sigma_ns),
         "truncate_sigma": float(truncate_sigma),
         "kernel_half_width_ns": float(sigma_ns * truncate_sigma),
-        "background_rate_per_ns": float(background_rate_per_ns),
         "n_observed_pe_same_event_pmt": int(observed_times.size),
         "truth_pmt_mass": float(np.sum(truth_masses)),
         "fit_pmt_mass": float(np.sum(fit_masses)),

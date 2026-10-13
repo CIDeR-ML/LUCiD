@@ -24,10 +24,9 @@ from lucid.wavelength.scattering import (
     compute_mie_scatter_direction, hg_sample_cos_theta, hg_logpdf, rayleigh_logpdf,
 )
 from lucid.simulation.reflection import scalar_reflection
-from lucid.simulation.reflection import effective_surface_reflection
 from lucid.simulation.photon_step import (
     _interface_refract_reflect,
-    _interface_refract_reflect_target,
+    _interface_refract_reflect_multi,
 )
 
 
@@ -37,12 +36,7 @@ def free_path_log_probability(
     scatter_distance,
     surface_distance,
 ):
-    """Return the censored exponential free-path log probability.
-
-    A scattering branch contributes ``log(mu) - mu*d``.  A ray reaching the
-    surface contributes the survival log probability ``-mu*D``.  Distances
-    are detached so this expression is a score-function term only.
-    """
+    """Return the censored exponential free-path log probability."""
     stop = jax.lax.stop_gradient
     return jnp.where(
         is_scatter,
@@ -53,8 +47,7 @@ def free_path_log_probability(
 
 
 def make_photon_step(mode, has_interface, reflection_fn=scalar_reflection,
-                     multi_interface=False, has_support=False,
-                     has_engineering_surfaces=False):
+                     multi_interface=False):
     """Return a per-photon step. ``mode`` ∈ {'sample','update_factors'}.
 
     The step's positional signature is the legacy 14-arg one; when
@@ -62,51 +55,17 @@ def make_photon_step(mode, has_interface, reflection_fn=scalar_reflection,
     n_inner, n_outer, interface_index, refractive_indices)`` and returns an
     8-tuple (the 7-tuple + ``new_medium_id``).  ``multi_interface`` selects
     the latter two arguments for an ordered three-medium interface list.
-
-    The sampled free path is detached from both position and accumulated
-    arrival time.  Its scattering-length derivative is represented once by
-    the DiCE score, avoiding a second partial pathwise contribution in time.
     """
-    use_engineering = has_support or has_engineering_surfaces
-    if use_engineering and not has_interface:
-        raise ValueError(
-            "Engineering surfaces currently require nested interfaces"
-        )
     if mode == 'sample':
         def step(position, direction, time, surface_distance,
                  normal, scatter_length, mie_scatter_length, g, refl_params,
                  absorption_length, hit_sensor, lam, rng_key, speed_of_light,
                  hit_interface=None, medium_id=None, n_inner=None, n_outer=None,
-                 interface_index=None, refractive_indices=None,
-                 hit_engineering=None, engineering_reflectance=None,
-                 engineering_transmittance=None,
-                 engineering_fspec=None,
-                 interface_target_medium_id=None,
-                 engineering_entering=None,
-                 engineering_volume_code=None):
+                 interface_index=None, refractive_indices=None):
             # 6 keys single-medium; +1 (k[6]) for the sampled interface transmit/reflect outcome.
             # JAX split-prefix (split(k,6)==split(k,7)[:6]) keeps k[0..5] — and thus the whole
             # single-medium stream — byte-identical to the legacy 6-split.
             k = jax.random.split(rng_key, 7 if has_interface else 6)
-            engineering_hit = (
-                hit_engineering if use_engineering else jnp.asarray(False)
-            )
-            interface_target_medium_id = jnp.asarray(
-                -1 if interface_target_medium_id is None
-                else interface_target_medium_id
-            )
-            engineering_entering = jnp.asarray(
-                False if engineering_entering is None
-                else engineering_entering
-            )
-            engineering_volume_code = jnp.asarray(
-                -1 if engineering_volume_code is None
-                else engineering_volume_code
-            )
-            opaque_engineering_hit = (
-                engineering_hit & (~hit_interface)
-                if use_engineering else jnp.asarray(False)
-            )
             mie_safe = jnp.maximum(mie_scatter_length, 1e-6)
             inv_total = 1.0 / scatter_length + 1.0 / mie_safe
             scatter_length = 1.0 / inv_total
@@ -122,29 +81,6 @@ def make_photon_step(mode, has_interface, reflection_fn=scalar_reflection,
             reflection_rate, reflected_dir, _lr = reflection_fn(
                 direction, normal, hit_sensor, refl_params, lam, k[3]
             )
-            engineering_is_specular = jnp.asarray(False)
-            if use_engineering:
-                engineering_result = effective_surface_reflection(
-                    direction,
-                    normal,
-                    engineering_reflectance,
-                    engineering_fspec,
-                    jax.random.fold_in(rng_key, 701),
-                )
-                engineering_rate, engineering_dir, _, is_specular = (
-                    engineering_result
-                )
-                reflection_rate = jnp.where(
-                    opaque_engineering_hit,
-                    engineering_rate,
-                    reflection_rate,
-                )
-                reflected_dir = jnp.where(
-                    opaque_engineering_hit,
-                    engineering_dir,
-                    reflected_dir,
-                )
-                engineering_is_specular = is_specular
             rayleigh_dir = compute_scatter_direction(direction, k[2])
             mie_dir = compute_mie_scatter_direction(direction, k[2], g)
             is_mie = jax.random.uniform(k[4]) < p_mie
@@ -154,78 +90,22 @@ def make_photon_step(mode, has_interface, reflection_fn=scalar_reflection,
                 dir_n = normalize(direction)
                 if multi_interface:
                     safe_index = jnp.maximum(interface_index, 0)
-                    safe_target = jnp.maximum(
-                        interface_target_medium_id, 0
-                    )
-                    outward = jnp.sum(dir_n * normal) >= 0.0
-                    nested_target = jnp.where(
-                        outward, safe_index + 1, safe_index
-                    )
-                    target = jnp.where(
-                        interface_target_medium_id >= 0,
-                        safe_target,
-                        nested_target,
-                    )
-                    iface_result = _interface_refract_reflect_target(
-                        dir_n,
-                        normal,
-                        medium_id,
-                        target,
-                        refractive_indices,
-                        jax.random.uniform(k[6]),
-                    )
-                    iface_dir = iface_result[0]
-                    iface_medium = iface_result[1]
-                    iface_transmit = iface_result[3]
+                    iface_dir, iface_medium, _s, _t = (
+                        _interface_refract_reflect_multi(
+                            dir_n, normal, medium_id, safe_index,
+                            refractive_indices, jax.random.uniform(k[6])))
                 else:
-                    iface_dir, iface_medium, _s, iface_transmit = (
+                    iface_dir, iface_medium, _s, _t = (
                         _interface_refract_reflect(
                             dir_n, normal, medium_id, n_inner, n_outer,
                             jax.random.uniform(k[6])))
-                detects = (
-                    reaches_surface
-                    & (~hit_interface)
-                    & (~engineering_hit)
-                    & (u2 >= reflection_rate)
-                )
+                detects = reaches_surface & (~hit_interface) & (u2 >= reflection_rate)
                 at_interface = reaches_surface & hit_interface
                 surf_dir = jnp.where(hit_interface, iface_dir, reflected_dir)
                 surf_pos = jnp.where(
                     hit_interface,
                     position + surface_distance * dir_n + epsilon * iface_dir,
                     position + surface_distance * dir_n + epsilon * normalize(inward_normal))
-                if use_engineering:
-                    outcome = jax.random.uniform(
-                        jax.random.fold_in(rng_key, 702)
-                    )
-                    engineering_reflects = (
-                        outcome < engineering_reflectance
-                    )
-                    engineering_transmits = (
-                        (outcome >= engineering_reflectance)
-                        & (outcome < engineering_reflectance
-                           + engineering_transmittance)
-                    )
-                    engineering_survives = (
-                        engineering_reflects | engineering_transmits
-                    )
-                    engineering_dir = jnp.where(
-                        engineering_transmits, dir_n, reflected_dir
-                    )
-                    engineering_pos = (
-                        position + surface_distance * dir_n
-                        + epsilon * jnp.where(
-                            engineering_transmits,
-                            dir_n,
-                            normalize(inward_normal),
-                        )
-                    )
-                    surf_dir = jnp.where(
-                        opaque_engineering_hit, engineering_dir, surf_dir
-                    )
-                    surf_pos = jnp.where(
-                        opaque_engineering_hit, engineering_pos, surf_pos
-                    )
                 new_dir = jnp.where(scatters, chosen_scatter_dir, surf_dir)
                 new_pos = jnp.where(scatters, position + scatter_distance * dir_n, surf_pos)
                 new_medium_id = jnp.where(at_interface, iface_medium, medium_id)
@@ -249,53 +129,11 @@ def make_photon_step(mode, has_interface, reflection_fn=scalar_reflection,
             detect_prob = detects.astype(jnp.float32)
             reflection_attenuation = attenuation
             continuing_factor = jnp.where(detects, 0.0, attenuation)
-            if use_engineering:
-                continuing_factor = jnp.where(
-                    reaches_surface & opaque_engineering_hit,
-                    attenuation * engineering_survives,
-                    continuing_factor,
-                )
             logp_increment = jnp.zeros_like(new_time)
 
             base = (new_pos, new_dir, new_time, detect_prob,
                     reflection_attenuation, continuing_factor, logp_increment)
-            if has_interface:
-                base = base + (new_medium_id,)
-            if use_engineering:
-                hit_surface = reaches_surface & engineering_hit
-                interface_reflects = (
-                    hit_surface & hit_interface & (~iface_transmit)
-                )
-                interface_transmits = (
-                    hit_surface & hit_interface & iface_transmit
-                )
-                volume_active = engineering_volume_code >= 0
-                engineering_events = jnp.asarray([
-                    hit_surface,
-                    hit_surface & opaque_engineering_hit
-                    & (~engineering_survives),
-                    interface_reflects
-                    | (hit_surface & opaque_engineering_hit
-                       & engineering_reflects),
-                    interface_reflects
-                    | (hit_surface & opaque_engineering_hit
-                       & engineering_reflects
-                       & engineering_is_specular),
-                    hit_surface & opaque_engineering_hit
-                    & engineering_reflects
-                    & (~engineering_is_specular),
-                    interface_transmits
-                    | (hit_surface & opaque_engineering_hit
-                       & engineering_transmits),
-                    interface_transmits & engineering_entering,
-                    interface_transmits & (~engineering_entering),
-                    volume_active & (attenuation <= 0.0),
-                    jnp.where(
-                        volume_active, distance_traveled, 0.0
-                    ),
-                ], dtype=jnp.float32)
-                base = base + (engineering_events,)
-            return base
+            return base + (new_medium_id,) if has_interface else base
         return step
 
     if mode == 'update_factors':
@@ -303,28 +141,13 @@ def make_photon_step(mode, has_interface, reflection_fn=scalar_reflection,
                  normal, scatter_length, mie_scatter_length, g, refl_params,
                  absorption_length, hit_sensor, lam, rng_key, speed_of_light,
                  hit_interface=None, medium_id=None, n_inner=None, n_outer=None,
-                 interface_index=None, refractive_indices=None,
-                 hit_engineering=None, engineering_reflectance=None,
-                 engineering_transmittance=None,
-                 engineering_fspec=None,
-                 interface_target_medium_id=None,
-                 engineering_entering=None,
-                 engineering_volume_code=None):
-            # Geometry distances remain pathwise.  Optical free-path and
-            # scattering draws use DiCE scores, with sampled values detached
-            # from the propagated position and time to avoid double counting.
+                 interface_index=None, refractive_indices=None):
+            # 8 keys single-medium (k[6],k[7] unused, kept for split-prefix parity); +1 (k[8])
+            # for the sampled interface outcome. Gradient design (PORT_PLAN): TRACK params flow
+            # PATHWISE (Dd/positions/time LIVE); OPTICAL scatter params flow via the DiCE score
+            # lf/la with d,Dd,cmie,cray STOP-GRADIENT'd inside it (no double count with the
+            # pathwise `reach`); the optical time gradient rides the LIVE reparam free path d_live.
             k = jax.random.split(rng_key, 9 if has_interface else 8)
-            engineering_hit = (
-                hit_engineering if use_engineering else jnp.asarray(False)
-            )
-            interface_target_medium_id = jnp.asarray(
-                -1 if interface_target_medium_id is None
-                else interface_target_medium_id
-            )
-            opaque_engineering_hit = (
-                engineering_hit & (~hit_interface)
-                if use_engineering else jnp.asarray(False)
-            )
             sg = jax.lax.stop_gradient
             mie_safe = jnp.maximum(mie_scatter_length, 1e-6)
             mu_tot = 1.0 / scatter_length + 1.0 / mie_safe
@@ -352,24 +175,6 @@ def make_photon_step(mode, has_interface, reflection_fn=scalar_reflection,
             inward_normal = -sg(normal)
             refl_prob, reflection_dir, lr = reflection_fn(
                 direction, normal, hit_sensor, refl_params, lam, k[5])
-            if use_engineering:
-                engineering_result = effective_surface_reflection(
-                    direction,
-                    normal,
-                    engineering_reflectance,
-                    engineering_fspec,
-                    jax.random.fold_in(rng_key, 701),
-                )
-                surface_rate, surface_dir, surface_lr, _ = (
-                    engineering_result
-                )
-                refl_prob = jnp.where(
-                    opaque_engineering_hit, surface_rate, refl_prob
-                )
-                reflection_dir = jnp.where(
-                    opaque_engineering_hit, surface_dir, reflection_dir
-                )
-                lr = jnp.where(opaque_engineering_hit, surface_lr, lr)
             dir_n = normalize(direction)
             scatter_pos = position + d * dir_n
             surface_pos = position + Dd * dir_n + epsilon * normalize(inward_normal)
@@ -381,9 +186,8 @@ def make_photon_step(mode, has_interface, reflection_fn=scalar_reflection,
                            0.0)
             reach = jnp.exp(-mu_tot * Dd)
             atten_surf = jnp.exp(-Dd / absorption_length)
-            # ``lf`` carries the free-path derivative.  Reusing ``d_live``
-            # here would add a second, partial pathwise time derivative while
-            # the sampled scattering position already uses detached ``d``.
+            # The DiCE score above carries the free-path derivative.  Keep
+            # position and time on the same detached sampled distance.
             distance_for_time = jnp.where(is_scat, d, Dd)
             new_time = time + distance_for_time / speed_of_light
             reflection_attenuation = jnp.ones_like(reach)
@@ -392,29 +196,10 @@ def make_photon_step(mode, has_interface, reflection_fn=scalar_reflection,
                 radial = sg(normal)
                 if multi_interface:
                     safe_index = jnp.maximum(interface_index, 0)
-                    safe_target = jnp.maximum(
-                        interface_target_medium_id, 0
-                    )
-                    outward = jnp.sum(dir_n * radial) >= 0.0
-                    nested_target = jnp.where(
-                        outward, safe_index + 1, safe_index
-                    )
-                    target = jnp.where(
-                        interface_target_medium_id >= 0,
-                        safe_target,
-                        nested_target,
-                    )
-                    iface_result = _interface_refract_reflect_target(
-                        dir_n,
-                        radial,
-                        medium_id,
-                        target,
-                        refractive_indices,
-                        jax.random.uniform(k[8]),
-                    )
-                    iface_dir = iface_result[0]
-                    iface_medium = iface_result[1]
-                    iface_score = iface_result[2]
+                    iface_dir, iface_medium, iface_score, _t = (
+                        _interface_refract_reflect_multi(
+                            dir_n, radial, medium_id, safe_index,
+                            refractive_indices, jax.random.uniform(k[8])))
                 else:
                     iface_dir, iface_medium, iface_score, _t = (
                         _interface_refract_reflect(
@@ -424,36 +209,6 @@ def make_photon_step(mode, has_interface, reflection_fn=scalar_reflection,
                 at_interface = hit_interface & (~is_scat)
                 surf_dir = jnp.where(hit_interface, iface_dir, reflection_dir)
                 surf_pos = jnp.where(hit_interface, iface_pos, surface_pos)
-                if use_engineering:
-                    outcome = jax.random.uniform(
-                        jax.random.fold_in(rng_key, 702)
-                    )
-                    surface_reflects = outcome < engineering_reflectance
-                    surface_transmits = (
-                        (outcome >= engineering_reflectance)
-                        & (outcome < engineering_reflectance
-                           + engineering_transmittance)
-                    )
-                    surface_survives = (
-                        surface_reflects | surface_transmits
-                    )
-                    surface_dir = jnp.where(
-                        surface_transmits, dir_n, reflection_dir
-                    )
-                    surface_pos = (
-                        position + Dd * dir_n
-                        + epsilon * jnp.where(
-                            surface_transmits,
-                            dir_n,
-                            normalize(inward_normal),
-                        )
-                    )
-                    surf_dir = jnp.where(
-                        opaque_engineering_hit, surface_dir, surf_dir
-                    )
-                    surf_pos = jnp.where(
-                        opaque_engineering_hit, surface_pos, surf_pos
-                    )
                 new_dir = jnp.where(is_scat, scat_dir, surf_dir)
                 new_pos = jnp.where(is_scat, scatter_pos, surf_pos)
                 new_medium_id = jnp.where(at_interface, iface_medium, medium_id)
@@ -463,15 +218,6 @@ def make_photon_step(mode, has_interface, reflection_fn=scalar_reflection,
                                         reach * (1.0 - refl_prob) * atten_surf)
                 cont_surface = jnp.where(hit_interface, atten, refl_prob * atten)
                 continuing_factor = jnp.where(is_scat, atten, cont_surface)
-                if use_engineering:
-                    detect_prob = jnp.where(
-                        engineering_hit, 0.0, detect_prob
-                    )
-                    continuing_factor = jnp.where(
-                        (~is_scat) & opaque_engineering_hit,
-                        atten * surface_survives,
-                        continuing_factor,
-                    )
             else:
                 new_dir = jnp.where(is_scat, scat_dir, reflection_dir)
                 new_pos = jnp.where(is_scat, scatter_pos, surface_pos)

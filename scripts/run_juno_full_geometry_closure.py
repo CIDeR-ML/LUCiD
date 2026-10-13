@@ -1,12 +1,11 @@
 #!/usr/bin/env python
-"""Run a minimal event-wise synthetic closure with full JUNO geometry.
+"""Run the minimal JUNO event-wise synthetic closure.
 
-The script deliberately omits Monitor-PMT corrections, exposure variation
-and channel offsets.  An optional explicit uniform PMT background is sampled
-and fitted with the same PPP model; it is never a numerical rate floor.
-Forward PMT-by-time-cell masses are convolved with measured PMT-family IRFs
-before constructing a continuous intensity.  Synthetic PEs retain event ID,
-PMT ID and exact timestamps.
+The model contains only LS--Acrylic--Water transport, the JUNO PMT front
+surface, and a fixed isotropic point source.  A numerical Gaussian kernel
+turns PMT-by-time-cell masses into the continuous intensity evaluated at each
+exact synthetic PE timestamp.  Exposure is one, time offset and background
+are zero, and only log LS scattering and absorption lengths are fitted.
 """
 
 from __future__ import annotations
@@ -31,10 +30,7 @@ import numpy as np
 from lucid.detector_params import load_physics_config
 from lucid.geometry.detector_geometry import DetectorGeometry
 from lucid.juno_laser.config import JunoLaserConfig, PARAMETER_NAMES
-from lucid.juno_laser.diagnostics import (
-    objective_ad_fd_comparison,
-    split_source_indices,
-)
+from lucid.juno_laser.diagnostics import objective_ad_fd_comparison
 from lucid.juno_laser.eventwise import (
     EventwisePeObservation,
     gaussian_eventwise_poisson_terms,
@@ -46,12 +42,7 @@ from lucid.juno_laser.eventwise import (
     sample_gaussian_mixture_events,
 )
 from lucid.juno_laser.forward import build_per_pe_forward
-from lucid.juno_laser.irf import (
-    IrfKernelBank,
-    load_type_average_irf,
-    make_irf_response_forward,
-    resample_irf_bank,
-)
+from lucid.juno_laser.irf import make_identity_response_forward
 from lucid.juno_laser.optimizer import (
     adam_stage,
     make_ensemble_forward,
@@ -63,59 +54,16 @@ from lucid.juno_laser.parameters import (
     fixed_params_from_geometry,
     truth_from_geometry,
 )
-from lucid.juno_laser.source import (
-    LSPHASE_SHAPE_NAMES,
-    build_juno_laser_source,
-    lsphase_polynomial_coefficients,
-    set_diffuser_angular_shape,
-)
+from lucid.juno_laser.source import build_juno_laser_source
 from lucid.juno_laser.time_grid import TimeGrid
 from lucid.juno_laser.zero_support import render_zero_support_example
-from lucid.sources.diffuser_ball import IMPORTANCE_NORMALIZATION_MODES
 
 
-LOG = logging.getLogger("lucid.juno_laser.full_geometry_closure")
+LOG = logging.getLogger("lucid.juno_laser.minimal_closure")
 OPTIMIZER_COORDINATE_NAMES = (
     "log_scat_ls",
     "log_abs_ls",
-    *LSPHASE_SHAPE_NAMES,
 )
-MODEL_PROFILES = ("full", "minimal")
-
-
-def model_profile_settings(name):
-    """Return the explicit physical and statistical profile contract."""
-    if name == "full":
-        return {
-            "source_model": None,
-            "use_physical_irf": True,
-            "fit_diffuser_shape": True,
-            "geometry_overrides": {},
-        }
-    if name == "minimal":
-        return {
-            "source_model": "isotropic",
-            "use_physical_irf": False,
-            "fit_diffuser_shape": False,
-            "geometry_overrides": {
-                "support_geometry_enabled": False,
-                "chimney_geometry_enabled": False,
-                "bottom_chimney_geometry_enabled": False,
-                "acrylic_bowl_geometry_enabled": False,
-                "diffuser_hardware_enabled": False,
-            },
-        }
-    raise ValueError(f"unknown model profile {name!r}")
-
-
-def active_parameter_names(model_profile):
-    """Return optimizer fields allowed to vary in one model profile."""
-    if model_profile == "minimal":
-        return ("scat_ls", "abs_ls")
-    model_profile_settings(model_profile)
-    return PARAMETER_NAMES
-
-
 def parse_position(text):
     """Parse one comma-separated source position in metres."""
     values = tuple(float(value) for value in text.split(","))
@@ -158,14 +106,6 @@ def json_value(value):
 
 def checkpoint_metadata(result):
     """Describe the checkpoint selected by the current automatic policy."""
-    if result.get("best_heldout_validation_coordinates") is not None:
-        return {
-            "kind": "heldout-best",
-            "step": int(result["best_heldout_validation_step"]),
-            "loss_per_pe": float(
-                result["best_heldout_validation_loss"]
-            ),
-        }
     if result.get("best_mc_validation_coordinates") is not None:
         return {
             "kind": "mc-validation-best",
@@ -179,14 +119,6 @@ def checkpoint_metadata(result):
     }
 
 
-def lsphase_curve(coefficients, n_points=181):
-    """Evaluate one JUNOSW-convention LSPhase polynomial curve."""
-    theta = np.linspace(0.0, 180.0, n_points)
-    cos_theta = np.cos(np.deg2rad(theta))
-    values = np.polynomial.polynomial.polyval(cos_theta, coefficients)
-    return theta, values
-
-
 def write_observations(
     path,
     observations,
@@ -194,50 +126,26 @@ def write_observations(
     positions,
     source_indices,
     args,
-    irf_bank,
 ):
     """Write event-wise synthetic data and truth predictions to HDF5."""
     with h5py.File(path, "w") as output:
-        output.attrs["schema"] = "lucid_eventwise_closure_v1"
-        output.attrs["model_profile"] = args.model_profile
-        output.attrs["likelihood"] = (
-            "measured_irf_mixture"
-            if args.model_profile == "full"
-            else "identity_irf_continuous_ppp"
-        )
+        output.attrs["schema"] = "lucid_minimal_closure_observations_v1"
+        output.attrs["likelihood"] = "identity_response_continuous_ppp"
         output.attrs["time_bin_ns"] = args.time_bin_ns
         if getattr(args, "interpolation_sigma_ns", None) is not None:
             output.attrs["interpolation_sigma_ns"] = (
                 args.interpolation_sigma_ns
             )
         output.attrs["truncate_sigma"] = args.truncate_sigma
-        output.attrs["event_exposure"] = args.event_exposure
-        output.attrs["event_time_offset_ns"] = args.event_time_offset_ns
         output.attrs["seed"] = args.seed
         output.attrs["data_n_photons"] = args.data_n_photons
         output.attrs["data_ensemble_size"] = args.data_ensemble_size
-        output.attrs["data_importance_normalization"] = (
-            args.data_importance_normalization
-        )
         output.attrs["fit_n_photons"] = args.fit_n_photons
         output.attrs["k"] = args.k
         output.attrs["intensity"] = args.intensity
-        output.attrs["optimization_plan"] = args.optimization_plan
-        output.attrs["background_rate_hz_per_pmt"] = (
-            args.background_rate_hz
-        )
         output.attrs["time_min_ns"] = args.time_min_ns
         output.attrs["time_max_ns"] = args.time_max_ns
         output.attrs["source_count"] = len(positions)
-        irf_group = output.create_group("irf")
-        irf_group.attrs["granularity"] = (
-            "pmt_type_average"
-            if args.model_profile == "full" else "identity"
-        )
-        irf_group.attrs["bin_width_ns"] = irf_bank.bin_width_ns
-        irf_group.create_dataset(
-            "family_kernel_mass", data=np.asarray(irf_bank.kernels)
-        )
         items = zip(
             observations, predictions, positions, source_indices
         )
@@ -257,16 +165,6 @@ def write_observations(
             group.create_dataset(
                 "pe_time_ns",
                 data=observation.pe_times_ns,
-                compression="gzip",
-            )
-            group.create_dataset(
-                "event_exposure",
-                data=observation.event_exposures,
-                compression="gzip",
-            )
-            group.create_dataset(
-                "event_time_offset_ns",
-                data=observation.event_time_offsets_ns,
                 compression="gzip",
             )
             group.create_dataset(
@@ -297,43 +195,26 @@ def read_observation_fragments(
     time_grid,
     n_sensors,
     args,
-    irf_bank,
 ):
     """Read and validate independently generated source observations."""
     records = {}
     for path in paths:
         with h5py.File(path, "r") as source_file:
             _require_matching_attr(
-                source_file, "schema", "lucid_eventwise_closure_v1"
+                source_file,
+                "schema",
+                "lucid_minimal_closure_observations_v1",
             )
-            saved_profile = source_file.attrs.get("model_profile")
-            if saved_profile is None:
-                if args.model_profile != "full":
-                    raise ValueError(
-                        "legacy observation without model_profile may only "
-                        "be reused by the full profile"
-                    )
-            elif saved_profile != args.model_profile:
-                raise ValueError(
-                    "observation model_profile is "
-                    f"{saved_profile!r}, expected {args.model_profile!r}"
-                )
             expected_attrs = {
                 "time_bin_ns": time_grid.bin_width_ns,
                 "time_min_ns": time_grid.time_min_ns,
                 "time_max_ns": time_grid.time_max_ns,
-                "event_exposure": args.event_exposure,
-                "event_time_offset_ns": args.event_time_offset_ns,
                 "seed": args.seed,
                 "data_n_photons": args.data_n_photons,
                 "data_ensemble_size": args.data_ensemble_size,
-                "data_importance_normalization": (
-                    args.data_importance_normalization
-                ),
                 "k": args.k,
                 "intensity": args.intensity,
                 "truncate_sigma": args.truncate_sigma,
-                "background_rate_hz_per_pmt": args.background_rate_hz,
             }
             for name, expected in expected_attrs.items():
                 _require_matching_attr(source_file, name, expected)
@@ -343,15 +224,6 @@ def read_observation_fragments(
                     "interpolation_sigma_ns",
                     args.interpolation_sigma_ns,
                 )
-            saved_kernel = np.asarray(
-                source_file["irf/family_kernel_mass"]
-            )
-            np.testing.assert_allclose(
-                saved_kernel,
-                np.asarray(irf_bank.kernels),
-                rtol=1e-6,
-                atol=1e-7,
-            )
             groups = sorted(
                 name for name in source_file if name.startswith("source_")
             )
@@ -385,10 +257,6 @@ def read_observation_fragments(
                     n_events=int(group.attrs["n_events"]),
                     n_sensors=n_sensors,
                     time_grid=time_grid,
-                    event_exposures=group["event_exposure"][...],
-                    event_time_offsets_ns=(
-                        group["event_time_offset_ns"][...]
-                    ),
                 )
                 if observation.n_events != args.n_events:
                     raise ValueError(
@@ -432,23 +300,6 @@ def parameter_start(truth, fraction, seed, active_fields=PARAMETER_NAMES):
     return start + np.where(active, shift, 0.0).astype(np.float32)
 
 
-def source_config_with_normalization(config, selected):
-    """Return a source config with an optional importance-mode override."""
-    source_config = dict(config.data["source"])
-    if selected != "config":
-        source_config["importance_normalization"] = selected
-    return source_config
-
-
-def source_importance_mode(source):
-    """Return diffuser importance mode or mark an ideal source as N/A."""
-    if not hasattr(source, "importance_normalization"):
-        return "not_applicable"
-    return IMPORTANCE_NORMALIZATION_MODES[
-        int(source.importance_normalization)
-    ]
-
-
 def partition_source_indices(indices, chunk_size):
     """Partition absolute source indices without changing their identity."""
     indices = tuple(int(index) for index in indices)
@@ -470,12 +321,8 @@ def build_response_chunks(
     absolute_source_indices,
     hist_shape,
     fixed,
-    pmt_types,
-    irf_bank,
-    *,
-    fit_diffuser_shape=True,
 ):
-    """Build one IRF-convolved ensemble forward per source chunk."""
+    """Build one identity-response ensemble forward per source chunk."""
     responses = []
     for indices in source_index_chunks:
         absolute_indices = tuple(
@@ -487,11 +334,8 @@ def build_response_chunks(
             hist_shape,
             fixed_params=fixed,
             source_indices=absolute_indices,
-            fit_diffuser_shape=fit_diffuser_shape,
         )
-        responses.append(
-            make_irf_response_forward(optical, pmt_types, irf_bank)
-        )
+        responses.append(make_identity_response_forward(optical))
     return tuple(responses)
 
 
@@ -521,7 +365,6 @@ def build_joint_objective(
     *,
     sigma_ns,
     truncate_sigma,
-    background_rate_per_ns,
 ):
     """Build either a fused or host-accumulated joint PPP objective."""
     factory = (
@@ -534,7 +377,6 @@ def build_joint_objective(
         chunks,
         sigma_ns=sigma_ns,
         truncate_sigma=truncate_sigma,
-        background_rate_per_ns=background_rate_per_ns,
     )
 
 
@@ -552,9 +394,6 @@ def evaluate_reference_objective_losses(
     truth_coordinates,
     fit_keys,
     mc_validation_keys,
-    *,
-    heldout_objective=None,
-    heldout_keys=None,
 ):
     """Evaluate truth coordinates under each configured objective."""
     losses = {
@@ -564,31 +403,13 @@ def evaluate_reference_objective_losses(
         "truth_mc_validation_loss_per_pe": float(
             objective(truth_coordinates, mc_validation_keys)
         ),
-        "truth_heldout_loss_per_pe": None,
     }
-    if heldout_objective is not None:
-        losses["truth_heldout_loss_per_pe"] = float(
-            heldout_objective(truth_coordinates, heldout_keys)
-        )
     return losses
 
 
 def optimization_stages(args):
-    """Return the requested staged or all-parameter optimization plan."""
-    active = active_parameter_names(getattr(args, "model_profile", "full"))
-    if getattr(args, "model_profile", "full") == "minimal":
-        return (("joint", args.joint_steps, active),)
-    if args.optimization_plan == "joint-only":
-        return (("joint", args.joint_steps, active),)
-    return (
-        ("ls_lengths", args.stage1_steps, ("scat_ls", "abs_ls")),
-        (
-            "diffuser_shape",
-            args.stage2_steps,
-            LSPHASE_SHAPE_NAMES,
-        ),
-        ("joint", args.stage3_steps, PARAMETER_NAMES),
-    )
+    """Return the single two-parameter optimization stage."""
+    return (("joint", args.joint_steps, PARAMETER_NAMES),)
 
 
 def checkpoint_writer(outdir, stage_name):
@@ -612,7 +433,6 @@ def support_diagnostics(
     predictions,
     args,
     sigma_ns,
-    background_rate_per_ns,
     *,
     label,
     reference_predictions=None,
@@ -629,7 +449,6 @@ def support_diagnostics(
             prediction,
             sigma_ns=sigma_ns,
             truncate_sigma=args.truncate_sigma,
-            background_rate_per_ns=background_rate_per_ns,
         )
         terms.pe_rate.block_until_ready()
         summary = pe_support_summary(
@@ -648,7 +467,6 @@ def support_diagnostics(
                 terms.pe_rate,
                 sigma_ns=sigma_ns,
                 truncate_sigma=args.truncate_sigma,
-                background_rate_per_ns=background_rate_per_ns,
                 output_prefix=diagnostic_prefix,
                 label=f"{label}, source-local index {index}",
             )
@@ -676,17 +494,13 @@ def run_closure(args):
         ],
     )
     config = JunoLaserConfig.from_file(args.config)
-    profile = model_profile_settings(args.model_profile)
     calibration = config.data["calibration"]
-    legacy_photons = args.n_photons
     args.data_n_photons = int(
         args.data_n_photons
-        or legacy_photons
         or calibration["n_photons"]
     )
     args.fit_n_photons = int(
         args.fit_n_photons
-        or legacy_photons
         or calibration["n_photons"]
     )
     args.mc_validation_ensemble_size = int(
@@ -701,7 +515,6 @@ def run_closure(args):
         temperature=None,
         max_candidates_per_ray=4,
         detector_type="nested_sphere",
-        **profile["geometry_overrides"],
     )
     physics, _, _ = load_physics_config(
         str(config.physics_path),
@@ -709,36 +522,23 @@ def run_closure(args):
         scalar_ref_wavelength=config.wavelength_nm,
     )
     positions = tuple(parse_position(text) for text in args.source_position)
-    if args.heldout_source_index:
-        train_indices, heldout_indices = split_source_indices(
-            len(positions), args.heldout_source_index
-        )
-    else:
-        train_indices = tuple(range(len(positions)))
-        heldout_indices = ()
-    data_source_config = source_config_with_normalization(
-        config, args.data_importance_normalization
-    )
-    fit_source_config = source_config_with_normalization(
-        config, args.fit_importance_normalization
-    )
+    train_indices = tuple(range(len(positions)))
+    source_config = config.data["source"]
     data_sources = tuple(
         build_juno_laser_source(
-            data_source_config,
+            source_config,
             position,
             intensity=args.intensity,
             wavelength_nm=config.wavelength_nm,
-            model=profile["source_model"],
         )
         for position in positions
     )
     fit_sources = tuple(
         build_juno_laser_source(
-            fit_source_config,
+            source_config,
             position,
             intensity=args.intensity,
             wavelength_nm=config.wavelength_nm,
-            model=profile["source_model"],
         )
         for position in positions
     )
@@ -750,26 +550,6 @@ def run_closure(args):
         args.time_bin_ns,
     )
     hist_shape = (geometry.num_sensors, time_grid.n_bins)
-    pmt_types = geometry.detector.pmt_type_codes
-    if pmt_types is None:
-        raise ValueError("JUNO PMT type metadata is required")
-    if profile["use_physical_irf"]:
-        native_irf, irf_metadata = load_type_average_irf(
-            config.irf_path, config.irf_pmt_map_path
-        )
-        irf_bank = resample_irf_bank(
-            native_irf, time_grid.bin_width_ns
-        )
-    else:
-        irf_bank = IrfKernelBank(
-            kernels=np.ones((2, 1), dtype=np.float32),
-            bin_width_ns=time_grid.bin_width_ns,
-        )
-        irf_metadata = {
-            "selection": "identity response; physical IRF disabled",
-            "irf_path": None,
-            "pmt_map_path": None,
-        }
     source_indices = tuple(args.source_index) or tuple(
         range(len(positions))
     )
@@ -782,16 +562,12 @@ def run_closure(args):
     train_index_chunks = partition_source_indices(
         train_indices, effective_chunk_size
     )
-    heldout_index_chunks = partition_source_indices(
-        heldout_indices, effective_chunk_size
-    )
     sigma_ns = (
         config.interpolation_sigma_ns
         if args.interpolation_sigma_ns is None
         else float(args.interpolation_sigma_ns)
     )
     args.interpolation_sigma_ns = sigma_ns
-    background_rate_per_ns = args.background_rate_hz * 1.0e-9
     truth_coordinates = encode_calibration_values(truth)
     if args.phase == "fit":
         loading_started = time.perf_counter()
@@ -802,7 +578,6 @@ def run_closure(args):
             time_grid,
             geometry.num_sensors,
             args,
-            irf_bank,
         )
         timings["observation_loading_seconds"] = (
             time.perf_counter() - loading_started
@@ -835,9 +610,6 @@ def run_closure(args):
             source_indices,
             hist_shape,
             fixed,
-            pmt_types,
-            irf_bank,
-            fit_diffuser_shape=profile["fit_diffuser_shape"],
         )
         data_keys = jax.random.split(
             jax.random.PRNGKey(args.seed), args.data_ensemble_size
@@ -860,9 +632,6 @@ def run_closure(args):
                 seed=args.seed + 1000 + source_index,
                 sigma_ns=sigma_ns,
                 truncate_sigma=args.truncate_sigma,
-                event_exposure=args.event_exposure,
-                event_time_offset_ns=args.event_time_offset_ns,
-                background_rate_per_ns=background_rate_per_ns,
             )
             for source_index, prediction in zip(
                 source_indices, truth_predictions
@@ -894,7 +663,6 @@ def run_closure(args):
         truth_predictions,
         args,
         sigma_ns,
-        background_rate_per_ns,
         label="synthetic truth",
     )
     write_observations(
@@ -904,14 +672,12 @@ def run_closure(args):
         positions,
         source_indices,
         args,
-        irf_bank,
     )
     if args.phase == "generate":
         result = {
             "schema": "lucid_closure_generation_v1",
             "completed": True,
             "phase": "generate",
-            "model_profile": args.model_profile,
             "source_positions_m": [list(item) for item in positions],
             "source_indices": list(source_indices),
             "n_pe": [item.n_pe for item in observations],
@@ -953,20 +719,6 @@ def run_closure(args):
         source_indices,
         hist_shape,
         fixed,
-        pmt_types,
-        irf_bank,
-        fit_diffuser_shape=profile["fit_diffuser_shape"],
-    )
-    heldout_responses = build_response_chunks(
-        fit_forward,
-        fit_sources,
-        heldout_index_chunks,
-        source_indices,
-        hist_shape,
-        fixed,
-        pmt_types,
-        irf_bank,
-        fit_diffuser_shape=profile["fit_diffuser_shape"],
     )
     timings["fit_forward_build_seconds"] = (
         time.perf_counter() - fit_forward_build_started
@@ -974,27 +726,13 @@ def run_closure(args):
     train_observation_chunks = observation_chunks(
         observations, train_index_chunks
     )
-    heldout_observation_chunks = observation_chunks(
-        observations, heldout_index_chunks
-    )
     objective = build_joint_objective(
         args.objective_execution,
         train_responses,
         train_observation_chunks,
         sigma_ns=sigma_ns,
         truncate_sigma=args.truncate_sigma,
-        background_rate_per_ns=background_rate_per_ns,
     )
-    heldout_objective = None
-    if heldout_responses:
-        heldout_objective = build_joint_objective(
-            args.objective_execution,
-            heldout_responses,
-            heldout_observation_chunks,
-            sigma_ns=sigma_ns,
-            truncate_sigma=args.truncate_sigma,
-            background_rate_per_ns=background_rate_per_ns,
-        )
     fit_keys = jax.random.split(
         jax.random.PRNGKey(args.seed + args.fit_seed_offset),
         args.fit_ensemble_size,
@@ -1007,27 +745,13 @@ def run_closure(args):
         ),
         args.mc_validation_ensemble_size,
     )
-    heldout_keys = None
-    if heldout_objective is not None:
-        heldout_keys = jax.random.split(
-            jax.random.PRNGKey(
-                args.seed
-                + args.fit_seed_offset
-                + args.heldout_seed_offset
-            ),
-            args.fit_ensemble_size,
-        )
-    reference_losses = None
-    if not args.support_diagnostic_only:
-        reference_losses = evaluate_reference_objective_losses(
-            objective,
-            truth_coordinates,
-            fit_keys,
-            mc_validation_keys,
-            heldout_objective=heldout_objective,
-            heldout_keys=heldout_keys,
-        )
-    active_parameters = active_parameter_names(args.model_profile)
+    reference_losses = evaluate_reference_objective_losses(
+        objective,
+        truth_coordinates,
+        fit_keys,
+        mc_validation_keys,
+    )
+    active_parameters = PARAMETER_NAMES
     theta = parameter_start(
         truth,
         args.start_fraction,
@@ -1035,10 +759,6 @@ def run_closure(args):
         active_fields=active_parameters,
     )
     if args.restart_checkpoint is not None:
-        if args.optimization_plan != "joint-only":
-            raise ValueError(
-                "checkpoint restart currently requires joint-only"
-            )
         with np.load(args.restart_checkpoint) as checkpoint:
             theta = np.asarray(checkpoint["coordinates"], dtype=np.float32)
         if theta.shape != (len(PARAMETER_NAMES),):
@@ -1059,41 +779,12 @@ def run_closure(args):
         initial_predictions,
         args,
         sigma_ns,
-        background_rate_per_ns,
         label="initial fit",
         reference_predictions=train_truth_predictions,
         diagnostic_prefix=(
             args.outdir / "zero_support_initial_fit"
         ),
-        raise_on_failure=not args.support_diagnostic_only,
     )
-    if args.support_diagnostic_only:
-        result = {
-            "schema": "lucid_ppp_support_diagnostic_v1",
-            "completed": True,
-            "model_profile": args.model_profile,
-            "source_positions_m": [list(item) for item in positions],
-            "support_diagnostics": initial_support,
-            "has_zero_support": any(
-                item["n_nonpositive_pe_rate"] > 0
-                for item in initial_support
-            ),
-            "example_pdf": (
-                "zero_support_initial_fit.pdf"
-                if any(
-                    item["n_nonpositive_pe_rate"] > 0
-                    for item in initial_support
-                )
-                else None
-            ),
-        }
-        with (args.outdir / "support_diagnostic_result.json").open(
-            "w"
-        ) as stream:
-            json.dump(result, stream, indent=2, allow_nan=False)
-        LOG.info("support-only diagnostic completed: %s", args.outdir)
-        return result
-    heldout_support = None
     mc_validation_predictions = evaluate_response_chunks(
         train_responses, theta, mc_validation_keys
     )
@@ -1102,28 +793,12 @@ def run_closure(args):
         mc_validation_predictions,
         args,
         sigma_ns,
-        background_rate_per_ns,
         label="initial MC-validation fit",
         reference_predictions=train_truth_predictions,
         diagnostic_prefix=(
             args.outdir / "zero_support_initial_mc_validation"
         ),
     )
-    if heldout_responses:
-        heldout_predictions = evaluate_response_chunks(
-            heldout_responses, theta, heldout_keys
-        )
-        heldout_observations = tuple(
-            observations[index] for index in heldout_indices
-        )
-        heldout_support = support_diagnostics(
-            heldout_observations,
-            heldout_predictions,
-            args,
-            sigma_ns,
-            background_rate_per_ns,
-            label="initial held-out fit",
-        )
     window_diagnostics = [
         gaussian_window_diagnostics(
             prediction,
@@ -1160,20 +835,12 @@ def run_closure(args):
         )
     ad_fd = None
     if args.ad_fd_relative_step > 0.0:
-        audit_background_rate_hz = (
-            args.background_rate_hz
-            if args.ad_fd_background_rate_hz is None
-            else args.ad_fd_background_rate_hz
-        )
         audit_objective = build_joint_objective(
             args.objective_execution,
             train_responses,
             train_observation_chunks,
             sigma_ns=sigma_ns,
             truncate_sigma=args.truncate_sigma,
-            background_rate_per_ns=(
-                audit_background_rate_hz * 1.0e-9
-            ),
         )
         audit = objective_ad_fd_comparison(
             audit_objective,
@@ -1202,9 +869,6 @@ def run_closure(args):
             )
             for key, value in audit.items()
         }
-        ad_fd["diagnostic_background_rate_hz_per_pmt"] = (
-            audit_background_rate_hz
-        )
     stages = optimization_stages(args)
     stage_results = []
     for name, steps, active in stages:
@@ -1220,8 +884,6 @@ def run_closure(args):
             grad_clip=args.grad_clip,
             mc_validation_objective=objective,
             mc_validation_keys=mc_validation_keys,
-            heldout_validation_objective=heldout_objective,
-            heldout_validation_keys=heldout_keys,
             validation_every=(
                 args.validation_every
             ),
@@ -1255,94 +917,29 @@ def run_closure(args):
     )
     if not completed:
         raise FloatingPointError("final closure loss or gradient is invalid")
-    heldout_initial_loss = None
-    heldout_final_loss = None
     mc_validation_initial_loss = float(
         objective(initial_theta, mc_validation_keys)
     )
     mc_validation_final_loss = float(
         objective(theta, mc_validation_keys)
     )
-    if heldout_objective is not None:
-        heldout_initial_loss = float(
-            heldout_objective(initial_theta, heldout_keys)
-        )
-        heldout_final_loss = float(heldout_objective(theta, heldout_keys))
     fit_values = np.asarray(decode_calibration_array(theta), dtype=np.float64)
     initial_values = np.asarray(
         decode_calibration_array(initial_theta), dtype=np.float64
     )
-    coefficient_report = None
-    curve_report = None
-    if profile["fit_diffuser_shape"]:
-        truth_source = set_diffuser_angular_shape(
-            fit_sources[0], np.zeros(3, dtype=np.float32)
-        )
-        initial_source = set_diffuser_angular_shape(
-            fit_sources[0], initial_values[2:5]
-        )
-        fit_source = set_diffuser_angular_shape(
-            fit_sources[0], fit_values[2:5]
-        )
-        coefficient_names = ("c0", "c1", "c2", "c3")
-        truth_coefficients = np.asarray(
-            lsphase_polynomial_coefficients(truth_source.angular_logits)
-        )
-        initial_coefficients = np.asarray(
-            lsphase_polynomial_coefficients(initial_source.angular_logits)
-        )
-        fit_coefficients = np.asarray(
-            lsphase_polynomial_coefficients(fit_source.angular_logits)
-        )
-        theta_degrees, truth_curve = lsphase_curve(truth_coefficients)
-        _, initial_curve = lsphase_curve(initial_coefficients)
-        _, fit_curve = lsphase_curve(fit_coefficients)
-        coefficient_report = {
-            "gauge": "fixed nominal integral",
-            "truth": dict(zip(
-                coefficient_names, truth_coefficients.tolist()
-            )),
-            "start": dict(zip(
-                coefficient_names, initial_coefficients.tolist()
-            )),
-            "fit": dict(zip(
-                coefficient_names, fit_coefficients.tolist()
-            )),
-        }
-        curve_report = {
-            "definition": "JUNOSW pol3 evaluated at cos(theta)",
-            "theta_degrees": theta_degrees.tolist(),
-            "truth": truth_curve.tolist(),
-            "start": initial_curve.tolist(),
-            "fit": fit_curve.tolist(),
-        }
     result = {
-        "schema": "lucid_eventwise_closure_v2",
-        "model_profile": args.model_profile,
+        "schema": "lucid_minimal_closure_v1",
         "completed": completed,
         "scope": {
             "eventwise_pe": True,
             "continuous_time_unbinned": True,
-            "time_model": (
-                "measured_pmt_family_irf"
-                if profile["use_physical_irf"]
-                else "identity_irf_plus_numerical_interpolation_kernel"
-            ),
+            "response": "identity",
+            "time_model": "numerical_gaussian_interpolation_kernel",
             "interpolation_sigma_ns": sigma_ns,
-            "interpolation_sigma_is_physical_tts_irf": False,
-            "synthetic_event_exposure_fixed": True,
-            "synthetic_event_time_offset_fixed": True,
-            "monitor_exposure_measurement_used": False,
-            "exposure_nuisance_fitted": False,
-            "tts_irf_convolution": profile["use_physical_irf"],
-            "irf_granularity": (
-                "pmt_type_average"
-                if profile["use_physical_irf"] else "identity"
-            ),
-            "channel_time_offsets": False,
-            "dark_noise_background": args.background_rate_hz > 0.0,
+            "event_exposure": 1.0,
+            "event_time_offset_ns": 0.0,
+            "background_rate_hz_per_pmt": 0.0,
             "mc_validation": True,
-            "heldout_validation": bool(heldout_indices),
         },
         "git": git_metadata(),
         "backend": jax.default_backend(),
@@ -1351,8 +948,6 @@ def run_closure(args):
         "execution_phase": args.phase,
         "source_positions_m": [list(item) for item in positions],
         "source_indices": list(source_indices),
-        "train_source_indices": list(train_indices),
-        "heldout_source_indices": list(heldout_indices),
         "n_events": args.n_events,
         "n_pe": [item.n_pe for item in observations],
         "n_photons": args.fit_n_photons,
@@ -1360,9 +955,6 @@ def run_closure(args):
         "fit_n_photons": args.fit_n_photons,
         "k": args.k,
         "intensity": args.intensity,
-        "event_exposure": args.event_exposure,
-        "event_time_offset_ns": args.event_time_offset_ns,
-        "background_rate_hz_per_pmt": args.background_rate_hz,
         "time_window_ns": [args.time_min_ns, args.time_max_ns],
         "time_bin_ns": args.time_bin_ns,
         "truncate_sigma": args.truncate_sigma,
@@ -1370,7 +962,6 @@ def run_closure(args):
             "truth": truth_support,
             "initial_fit": initial_support,
             "initial_mc_validation_fit": mc_validation_support,
-            "initial_heldout_fit": heldout_support,
         },
         "window_stability_diagnostics": window_diagnostics,
         "data_ensemble_size": args.data_ensemble_size,
@@ -1381,13 +972,6 @@ def run_closure(args):
         "seed": args.seed,
         "fit_seed_offset": args.fit_seed_offset,
         "mc_validation_seed_offset": args.mc_validation_seed_offset,
-        "heldout_seed_offset": args.heldout_seed_offset,
-        "data_importance_normalization": source_importance_mode(
-            data_sources[0]
-        ),
-        "fit_importance_normalization": source_importance_mode(
-            fit_sources[0]
-        ),
         "parameter_names": list(active_parameters),
         "active_parameter_names": list(active_parameters),
         "optimizer_coordinate_names": list(
@@ -1396,13 +980,6 @@ def run_closure(args):
         "truth": {name: float(truth[name]) for name in PARAMETER_NAMES},
         "start": dict(zip(PARAMETER_NAMES, initial_values.tolist())),
         "fit": dict(zip(PARAMETER_NAMES, fit_values.tolist())),
-        "lsphase_polynomial_coefficients": coefficient_report,
-        "lsphase_theta_curve": curve_report,
-        "irf": {
-            **irf_metadata,
-            "resampled_bin_width_ns": irf_bank.bin_width_ns,
-            "resampled_n_bins": int(irf_bank.kernels.shape[1]),
-        },
         "initial_loss_per_pe": float(initial_loss),
         "final_loss_per_pe": float(final_loss),
         **reference_losses,
@@ -1410,8 +987,6 @@ def run_closure(args):
             mc_validation_initial_loss
         ),
         "mc_validation_final_loss_per_pe": mc_validation_final_loss,
-        "heldout_initial_loss_per_pe": heldout_initial_loss,
-        "heldout_final_loss_per_pe": heldout_final_loss,
         "initial_gradient": dict(
             zip(PARAMETER_NAMES, initial_gradient.tolist())
         ),
@@ -1419,15 +994,11 @@ def run_closure(args):
             zip(PARAMETER_NAMES, final_gradient.tolist())
         ),
         "ad_fd_audit_at_initial_coordinates": ad_fd,
-        "optimization_plan": args.optimization_plan,
         "optimizer": {
             "learning_rate": args.learning_rate,
             "grad_clip": args.grad_clip,
             "start_fraction": args.start_fraction,
             "joint_steps": args.joint_steps,
-            "stage1_steps": args.stage1_steps,
-            "stage2_steps": args.stage2_steps,
-            "stage3_steps": args.stage3_steps,
             "validation_every": args.validation_every,
             "early_stopping_patience": args.early_stopping_patience,
             "min_improvement": args.min_improvement,
@@ -1470,15 +1041,6 @@ def main():
         "--config", type=Path, default="config/JUNO_laser_config.json"
     )
     parser.add_argument(
-        "--model-profile",
-        choices=MODEL_PROFILES,
-        default="full",
-        help=(
-            "full keeps all migrated geometry, diffuser and measured IRF; "
-            "minimal keeps three media, interfaces, LS transport and PMTs"
-        ),
-    )
-    parser.add_argument(
         "--source-position", action="append", required=True,
         metavar="X,Y,Z",
     )
@@ -1498,27 +1060,10 @@ def main():
     )
     parser.add_argument("--outdir", type=Path, required=True)
     parser.add_argument("--n-events", type=int, default=2)
-    parser.add_argument(
-        "--n-photons",
-        type=int,
-        default=None,
-        help="deprecated compatibility alias setting both photon budgets",
-    )
     parser.add_argument("--data-n-photons", type=int, default=None)
     parser.add_argument("--fit-n-photons", type=int, default=None)
     parser.add_argument("--k", type=int, default=64)
     parser.add_argument("--intensity", type=float, default=1000.0)
-    parser.add_argument("--event-exposure", type=float, default=1.0)
-    parser.add_argument("--event-time-offset-ns", type=float, default=0.0)
-    parser.add_argument(
-        "--background-rate-hz",
-        type=float,
-        default=0.0,
-        help=(
-            "explicit uniform background per PMT, sampled and fitted in "
-            "both PPP terms"
-        ),
-    )
     parser.add_argument("--time-min-ns", type=float, default=0.0)
     parser.add_argument("--time-max-ns", type=float, default=300.0)
     parser.add_argument("--time-bin-ns", type=float, default=10.0)
@@ -1540,29 +1085,12 @@ def main():
         "--ad-fd-minimum-step", type=float, default=1.0e-4
     )
     parser.add_argument(
-        "--ad-fd-background-rate-hz", type=float, default=None,
-        help=(
-            "optional AD-FD-only background override; by default use "
-            "--background-rate-hz"
-        ),
-    )
-    parser.add_argument(
         "--window-stability-expansion-ns", type=float, default=50.0
     )
     parser.add_argument("--data-ensemble-size", type=int, default=1)
     parser.add_argument("--fit-ensemble-size", type=int, default=1)
     parser.add_argument(
         "--mc-validation-ensemble-size", type=int, default=None
-    )
-    parser.add_argument(
-        "--data-importance-normalization",
-        choices=("config", "analytic", "self_normalized"),
-        default="config",
-    )
-    parser.add_argument(
-        "--fit-importance-normalization",
-        choices=("config", "analytic", "self_normalized"),
-        default="config",
     )
     parser.add_argument(
         "--fit-seed-offset",
@@ -1573,26 +1101,10 @@ def main():
     parser.add_argument(
         "--mc-validation-seed-offset", type=int, default=2000003
     )
-    parser.add_argument(
-        "--heldout-source-index",
-        action="append",
-        type=int,
-        default=[],
-        help="zero-based source index excluded from training and validation",
-    )
-    parser.add_argument("--heldout-seed-offset", type=int, default=0)
     parser.add_argument("--validation-every", type=int, default=1)
     parser.add_argument("--early-stopping-patience", type=int, default=0)
     parser.add_argument("--min-improvement", type=float, default=1.0e-4)
-    parser.add_argument(
-        "--optimization-plan",
-        choices=("joint-only", "staged"),
-        default="joint-only",
-    )
     parser.add_argument("--joint-steps", type=int, default=None)
-    parser.add_argument("--stage1-steps", type=int, default=64)
-    parser.add_argument("--stage2-steps", type=int, default=64)
-    parser.add_argument("--stage3-steps", type=int, default=64)
     parser.add_argument(
         "--source-chunk-size",
         type=int,
@@ -1623,11 +1135,6 @@ def main():
     parser.add_argument(
         "--low-rate-threshold", type=float, default=1.0e-12
     )
-    parser.add_argument(
-        "--support-diagnostic-only",
-        action="store_true",
-        help="render one initial zero-support example and skip Adam",
-    )
     parser.add_argument("--start-fraction", type=float, default=0.1)
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
@@ -1652,7 +1159,6 @@ def main():
         parser.error(f"missing observation input: {missing_inputs[0]}")
     configured_photons = tuple(
         value for value in (
-            args.n_photons,
             args.data_n_photons,
             args.fit_n_photons,
         )
@@ -1671,22 +1177,8 @@ def main():
         args.mc_validation_ensemble_size <= 0
     ):
         parser.error("MC-validation ensemble must be positive")
-    selected_steps = (
-        (args.joint_steps,)
-        if args.optimization_plan == "joint-only"
-        and args.joint_steps is not None
-        else (
-            args.stage1_steps,
-            args.stage2_steps,
-            args.stage3_steps,
-        )
-        if args.optimization_plan == "staged"
-        else ()
-    )
-    if any(value <= 0 for value in selected_steps):
-        parser.error("selected optimizer stage steps must be positive")
-    if args.heldout_source_index and args.validation_every <= 0:
-        parser.error("held-out validation requires --validation-every > 0")
+    if args.joint_steps is not None and args.joint_steps <= 0:
+        parser.error("joint optimizer steps must be positive")
     if args.early_stopping_patience < 0 or args.min_improvement < 0.0:
         parser.error("early-stopping controls must be non-negative")
     if args.validation_every <= 0:
@@ -1709,29 +1201,10 @@ def main():
         parser.error("Gaussian truncation must be positive")
     if args.ad_fd_relative_step < 0.0 or args.ad_fd_minimum_step <= 0.0:
         parser.error("AD-FD relative step must be >=0 and minimum step >0")
-    if args.background_rate_hz < 0.0:
-        parser.error("background rate must be non-negative")
-    if args.model_profile == "minimal":
-        if args.event_exposure != 1.0:
-            parser.error("minimal profile requires fixed exposure 1")
-        if args.event_time_offset_ns != 0.0:
-            parser.error("minimal profile requires zero time offset")
-        if args.optimization_plan != "joint-only":
-            parser.error("minimal profile requires joint-only optimization")
-    if (
-        args.ad_fd_background_rate_hz is not None
-        and args.ad_fd_background_rate_hz < 0.0
-    ):
-        parser.error("AD-FD background rate must be non-negative")
     if args.low_rate_threshold <= 0.0:
         parser.error("--low-rate-threshold must be positive")
-    if (
-        not np.isfinite(args.event_exposure)
-        or args.event_exposure <= 0.0
-        or not np.isfinite(args.event_time_offset_ns)
-        or args.window_stability_expansion_ns <= 0.0
-    ):
-        parser.error("exposure and window expansion must be positive")
+    if args.window_stability_expansion_ns <= 0.0:
+        parser.error("window expansion must be positive")
     span = (args.time_max_ns - args.time_min_ns) / args.time_bin_ns
     if not np.isclose(span, round(span)):
         parser.error("the time window must contain an integer number of bins")

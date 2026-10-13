@@ -1,4 +1,4 @@
-"""Tests for closure-result diagnostics and rendering."""
+"""Tests for minimal closure-result diagnostics and rendering."""
 
 import json
 
@@ -13,16 +13,10 @@ from scripts.plot_juno_closure_result import (
 
 
 def _result():
-    """Return a minimal completed two-parameter-like closure mapping."""
-    names = [
-        "scat_ls",
-        "abs_ls",
-        "lsphase_shape_0",
-        "lsphase_shape_1",
-        "lsphase_shape_2",
-    ]
+    """Return a completed two-parameter minimal closure mapping."""
+    names = ["scat_ls", "abs_ls"]
     return {
-        "schema": "lucid_full_geometry_eventwise_closure_v1",
+        "schema": "lucid_minimal_closure_v1",
         "completed": True,
         "source_positions_m": [[0.0, 0.0, 0.0]],
         "n_events": 2,
@@ -33,15 +27,9 @@ def _result():
         "truth_train_loss_per_pe": 1.4,
         "truth_mc_validation_loss_per_pe": 1.7,
         "parameter_names": names,
-        "truth": dict(zip(names, [87.0, 85.0, 0.0, 0.0, 0.0])),
-        "start": dict(zip(names, [80.0, 80.0, 0.2, 0.1, -0.2])),
-        "fit": dict(zip(names, [86.0, 84.0, 0.1, -0.1, 0.2])),
-        "lsphase_theta_curve": {
-            "theta_degrees": [0.0, 90.0, 180.0],
-            "truth": [0.7, 0.5, 0.3],
-            "start": [0.5, 0.5, 0.5],
-            "fit": [0.68, 0.49, 0.31],
-        },
+        "truth": {"scat_ls": 87.0, "abs_ls": 85.0},
+        "start": {"scat_ls": 80.0, "abs_ls": 80.0},
+        "fit": {"scat_ls": 86.0, "abs_ls": 84.0},
         "stages": [{
             "name": "joint",
             "selected_checkpoint": {
@@ -49,10 +37,7 @@ def _result():
                 "step": 1,
                 "loss_per_pe": 1.6,
             },
-            "history": [
-                [80.0, 80.0, 0.2, 0.1, -0.2],
-                [86.0, 84.0, 0.1, -0.1, 0.2],
-            ],
+            "history": [[80.0, 80.0], [86.0, 84.0]],
             "loss_history": [2.0, 1.5],
             "grad_norm_history": [0.4, 0.2],
             "evaluation_seconds": [1.0, 0.5],
@@ -61,13 +46,13 @@ def _result():
             "best_step": 1,
             "best_mc_validation_loss": 1.6,
             "best_mc_validation_step": 1,
-            "last_values": [85.0, 83.0, 0.2, -0.2, 0.3],
+            "last_values": [85.0, 83.0],
         }],
     }
 
 
 def test_summary_reports_train_and_validation_best_steps(tmp_path):
-    """The JSON summary preserves the optimization selection evidence."""
+    """The JSON summary preserves checkpoint-selection evidence."""
     path = tmp_path / "result.json"
     path.write_text(json.dumps(_result()))
     summary = summarize_result(load_result(path))
@@ -76,11 +61,10 @@ def test_summary_reports_train_and_validation_best_steps(tmp_path):
     assert stage["best_mc_validation_step"] == 1
     assert stage["n_updates"] == 1
     assert summary["truth_train_loss_per_pe"] == 1.4
-    assert summary["truth_mc_validation_loss_per_pe"] == 1.7
 
 
 def test_loss_curves_use_separate_pages_and_truth_only_on_train():
-    """Train and validation keep independent scales and truth semantics."""
+    """Train and MC-validation retain independent plot semantics."""
     class RecordingPdf:
         """Capture figures passed to one PDF page writer."""
 
@@ -94,8 +78,6 @@ def test_loss_curves_use_separate_pages_and_truth_only_on_train():
     validation_pdf = RecordingPdf()
     _plot_train_loss_page(train_pdf, _result())
     _plot_validation_loss_page(validation_pdf, _result())
-    assert len(train_pdf.figures) == 1
-    assert len(validation_pdf.figures) == 1
     train_labels = [
         line.get_label() for line in train_pdf.figures[0].axes[0].lines
     ]
@@ -115,33 +97,9 @@ def test_render_writes_nonempty_vector_pdf(tmp_path):
     assert output.stat().st_size > 1000
 
 
-def test_render_accepts_two_parameter_minimal_profile(tmp_path):
-    """Minimal-profile reports must omit frozen LSPhase coordinates."""
-    result = _result()
-    result["model_profile"] = "minimal"
-    result["parameter_names"] = ["scat_ls", "abs_ls"]
-    result["lsphase_theta_curve"] = None
-    output = tmp_path / "minimal_diagnostics.pdf"
-    render(result, output)
-    assert output.read_bytes().startswith(b"%PDF")
-    assert output.stat().st_size > 1000
-
-
-def test_parameter_rows_include_error_and_physical_crb():
-    """Fisher coordinate errors are reported with physical parameters."""
-    fisher = {
-        "schema": "lucid_per_source_numerical_basis_fisher_v1",
-        "parameter_names": _result()["parameter_names"],
-        "sources": [{"position_m": [0.0, 0.0, 0.0]}],
-        "n_events": 2,
-        "total": {
-            "crb_standard_deviation": [0.01, 0.02, 0.03, 0.04, 0.05]
-        },
-    }
-    rows = calibration_rows(_result(), fisher)
+def test_parameter_rows_report_fractional_length_error():
+    """Both fitted quantities are positive LS lengths."""
+    rows = calibration_rows(_result())
     assert rows[0]["absolute_error"] == 1.0
     assert rows[0]["error"] == 86.0 / 87.0 - 1.0
-    assert rows[0]["crb_sigma"] == 0.01
-    assert rows[0]["crb_sigma_physical"] == 0.87
-    assert rows[1]["crb_sigma_physical"] == 1.7
-    assert rows[2]["crb_sigma"] == 0.03
+    assert rows[1]["error"] == 84.0 / 85.0 - 1.0

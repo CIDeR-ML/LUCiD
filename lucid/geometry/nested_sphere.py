@@ -20,13 +20,6 @@ from .juno_pmt import (
     build_juno_pmt_dimensions,
     load_juno_pmt_layout,
 )
-from .juno_diffuser import DiffuserHardware
-from .juno_support import load_juno_support_layout
-from .juno_structures import (
-    BottomChimneyGeometry,
-    ChimneyGeometry,
-    load_juno_acrylic_bowls,
-)
 from .sphere import Sphere
 from .registry import register_detector
 
@@ -70,16 +63,6 @@ class NestedSphere(Sphere):
         self.pmt_inward_axes = None
         self.pmt_type_codes = None
         self.pmt_dimensions = None
-        self.support_geometry = None
-        self.support_rods = None
-        self.chimney_geometry = None
-        self.chimney = None
-        self.bottom_chimney_geometry = None
-        self.bottom_chimney = None
-        self.acrylic_bowl_geometry = None
-        self.acrylic_bowls = None
-        self.diffuser_hardware_geometry = None
-        self.diffuser_hardware = None
         if acrylic_radius is not None and not (
                 inner_radius < acrylic_radius < outer_radius):
             raise ValueError(
@@ -89,14 +72,7 @@ class NestedSphere(Sphere):
     @classmethod
     def from_pmt_file(cls, csv_file_path, inner_radius, outer_radius,
                       sensor_radius, acrylic_radius=None,
-                      pmt_type_file_path=None, pmt_geometry=None,
-                      support_rod_file_path=None,
-                      support_geometry=None,
-                      chimney_geometry=None,
-                      bottom_chimney_geometry=None,
-                      acrylic_bowl_file_path=None,
-                      acrylic_bowl_geometry=None,
-                      diffuser_hardware_geometry=None):
+                      pmt_type_file_path=None, pmt_geometry=None):
         """Build a nested sphere using externally supplied PMT positions.
 
         The position CSV contains CopyNo, coordinates in mm, and orientation
@@ -178,56 +154,6 @@ class NestedSphere(Sphere):
             None if layout is None else layout.type_codes
         )
         instance.pmt_dimensions = dimensions
-        if support_geometry is not None:
-            if support_geometry != "juno_radial_cylinders":
-                raise ValueError(
-                    f"Unknown support geometry {support_geometry!r}"
-                )
-            if support_rod_file_path is None:
-                raise ValueError(
-                    "support_rod_file_path is required for support geometry"
-                )
-            instance.support_rods = load_juno_support_layout(
-                support_rod_file_path
-            )
-        instance.support_geometry = support_geometry
-        if chimney_geometry is not None:
-            if chimney_geometry != "juno_lower_chimney":
-                raise ValueError(
-                    f"Unknown chimney geometry {chimney_geometry!r}"
-                )
-            instance.chimney = ChimneyGeometry.junosw_j26(outer_radius)
-        instance.chimney_geometry = chimney_geometry
-        if bottom_chimney_geometry is not None:
-            if bottom_chimney_geometry != "juno_bottom_chimney":
-                raise ValueError(
-                    "Unknown bottom-chimney geometry "
-                    f"{bottom_chimney_geometry!r}"
-                )
-            instance.bottom_chimney = BottomChimneyGeometry.junosw_j26()
-        instance.bottom_chimney_geometry = bottom_chimney_geometry
-        if acrylic_bowl_geometry is not None:
-            if acrylic_bowl_geometry != "juno_addition_curved_arc":
-                raise ValueError(
-                    "Unknown Acrylic-bowl geometry "
-                    f"{acrylic_bowl_geometry!r}"
-                )
-            if acrylic_bowl_file_path is None:
-                raise ValueError(
-                    "acrylic_bowl_file_path is required for bowl geometry"
-                )
-            instance.acrylic_bowls = load_juno_acrylic_bowls(
-                acrylic_bowl_file_path
-            )
-        instance.acrylic_bowl_geometry = acrylic_bowl_geometry
-        if diffuser_hardware_geometry is not None:
-            if diffuser_hardware_geometry != "juno_ls_diffuser_hardware":
-                raise ValueError(
-                    "Unknown diffuser hardware geometry "
-                    f"{diffuser_hardware_geometry!r}"
-                )
-            instance.diffuser_hardware = DiffuserHardware.junosw_j26_ls()
-        instance.diffuser_hardware_geometry = diffuser_hardware_geometry
         return instance
 
     def bounds_check(self, positions):
@@ -245,30 +171,8 @@ class NestedSphere(Sphere):
         r = jnp.linalg.norm(positions, axis=1)
         if self.r_acrylic is None:
             return (r >= self.r_inner).astype(jnp.int32)
-        region = jnp.where(
+        return jnp.where(
             r >= self.r_acrylic,
             2,
             jnp.where(r >= self.r_inner, 1, 0),
         ).astype(jnp.int32)
-        rho = jnp.linalg.norm(positions[:, :2], axis=1)
-        if self.chimney is not None:
-            in_bore = (
-                (rho < self.chimney.aperture_radius_m)
-                & (positions[:, 2] >= self.chimney.aperture_z_min_m)
-            )
-            region = jnp.where(in_bore, 0, region)
-        if self.bottom_chimney is not None:
-            in_bore = (
-                (rho < self.bottom_chimney.aperture_radii_m[0])
-                & (
-                    positions[:, 2]
-                    <= self.bottom_chimney.aperture_z_max_m
-                )
-            )
-            region = jnp.where(in_bore, 0, region)
-            region = jnp.where(
-                self.bottom_chimney.acrylic_contains(positions),
-                1,
-                region,
-            )
-        return region

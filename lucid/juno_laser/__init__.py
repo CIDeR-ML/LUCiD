@@ -5,12 +5,6 @@ from .config import (
     PARAMETER_NAMES,
     POSITIVE_PARAMETER_NAMES,
 )
-from .data import (
-    SIMULATION_SCHEMA,
-    event_file,
-    load_eventwise_pe_observation,
-    simulation_table,
-)
 from .eventwise import (
     EventwisePeObservation,
     gaussian_mixture_rate,
@@ -31,13 +25,7 @@ from .parameters import (
     medium_lengths_at,
     truth_from_geometry,
 )
-from .irf import (
-    IrfKernelBank,
-    convolve_irf_masses,
-    load_type_average_irf,
-    make_irf_response_forward,
-    resample_irf_bank,
-)
+from .irf import make_identity_response_forward
 from .time_grid import TimeGrid
 
 __all__ = [
@@ -45,10 +33,6 @@ __all__ = [
     "PARAMETER_NAMES",
     "POSITIVE_PARAMETER_NAMES",
     "EventwisePeObservation",
-    "SIMULATION_SCHEMA",
-    "event_file",
-    "load_eventwise_pe_observation",
-    "simulation_table",
     "CalibParams",
     "decode_calibration_array",
     "decode_calibration_vector",
@@ -56,11 +40,7 @@ __all__ = [
     "fixed_params_from_geometry",
     "medium_lengths_at",
     "truth_from_geometry",
-    "IrfKernelBank",
-    "convolve_irf_masses",
-    "load_type_average_irf",
-    "make_irf_response_forward",
-    "resample_irf_bank",
+    "make_identity_response_forward",
     "TimeGrid",
     "gaussian_mixture_rate",
     "gaussian_window_diagnostics",

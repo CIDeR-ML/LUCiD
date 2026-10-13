@@ -41,11 +41,6 @@ class DetectorGeometry(NamedTuple):
                     overlap_renorm: float = 1.0,
                     overlap_mode: str = 'interp',
                     pmt_geometry_enabled=None,
-                    support_geometry_enabled=None,
-                    chimney_geometry_enabled=None,
-                    bottom_chimney_geometry_enabled=None,
-                    acrylic_bowl_geometry_enabled=None,
-                    diffuser_hardware_enabled=None,
                     **grid_params) -> 'DetectorGeometry':
         """Build a DetectorGeometry from a config JSON file.
 
@@ -72,16 +67,6 @@ class DetectorGeometry(NamedTuple):
         pmt_geometry_enabled : bool or None
             Override explicit PMT geometry for a controlled ablation. None
             follows the detector JSON configuration.
-        support_geometry_enabled : bool or None
-            Override the configured support cylinders independently.
-        chimney_geometry_enabled : bool or None
-            Override the configured lower-chimney geometry independently.
-        bottom_chimney_geometry_enabled : bool or None
-            Override the south-pole bottom chimney independently.
-        acrylic_bowl_geometry_enabled : bool or None
-            Override the configured Acrylic additions independently.
-        diffuser_hardware_enabled : bool or None
-            Override the source-attached PTFE/PEEK/fibre hardware.
         **grid_params
             Geometry-specific grid parameters forwarded to ``create_propagator()``.
             Cylinder: n_cap, n_angular, n_height.
@@ -106,13 +91,6 @@ class DetectorGeometry(NamedTuple):
         detector = generate_detector(
             json_filename,
             pmt_geometry_enabled=pmt_geometry_enabled,
-            support_geometry_enabled=support_geometry_enabled,
-            chimney_geometry_enabled=chimney_geometry_enabled,
-            bottom_chimney_geometry_enabled=(
-                bottom_chimney_geometry_enabled
-            ),
-            acrylic_bowl_geometry_enabled=acrylic_bowl_geometry_enabled,
-            diffuser_hardware_enabled=diffuser_hardware_enabled,
         )
         import json as _json
         with open(json_filename) as _f:
@@ -163,12 +141,7 @@ class DetectorGeometry(NamedTuple):
                     None
                     if detector.pmt_dimensions is None
                     else detector.pmt_dimensions.outer_axial_m
-                ),
-                support_rods=detector.support_rods,
-                chimney=detector.chimney,
-                bottom_chimney=detector.bottom_chimney,
-                acrylic_bowls=detector.acrylic_bowls,
-                diffuser_hardware=detector.diffuser_hardware)
+                ))
             return DetectorGeometry(
                 detector_type=actual_type, sensor_points=sensor_points,
                 sensor_radius=sensor_radius, num_sensors=num_sensors,

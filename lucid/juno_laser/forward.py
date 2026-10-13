@@ -2,17 +2,11 @@
 
 from __future__ import annotations
 
-import json
-from pathlib import Path
-
 import jax
 import jax.numpy as jnp
 
 from lucid.detector_params import DetectorParams
 from lucid.simulation.photon_step_factory import make_photon_step
-from lucid.simulation.engineering_surfaces import (
-    engineering_surface_parameters,
-)
 from lucid.simulation.reflection import get_reflection_model
 from lucid.sources import sample_source
 
@@ -58,24 +52,11 @@ def build_per_pe_forward(
         reflection_name
     )
     reflection_params = build_reflection_params(physics_params)
-    has_engineering = any((
-        detector.support_rods is not None,
-        detector.chimney is not None,
-        detector.bottom_chimney is not None,
-        detector.acrylic_bowls is not None,
-        detector.diffuser_hardware is not None,
-    ))
-    has_diffuser_hardware = detector.diffuser_hardware is not None
-    diffuser_axis_default = jnp.asarray(
-        config.data["source"].get("axis", [0.0, 0.0, 1.0]),
-        dtype=jnp.float32,
-    )
     photon_step = make_photon_step(
         "update_factors",
         has_interface=True,
         reflection_fn=reflection_fn,
         multi_interface=det_geom.medium_acrylic is not None,
-        has_engineering_surfaces=has_engineering,
     )
     acrylic_path = config.material_paths.get("acrylic")
     fixed_lengths = medium_lengths_at(
@@ -83,32 +64,7 @@ def build_per_pe_forward(
         config.wavelength_nm,
     )
     acrylic = fixed_lengths.get("acrylic")
-    with config.physics_path.open() as stream:
-        fixed_physics = json.load(stream)
-    required_surface_codes = []
-    if detector.support_rods is not None:
-        required_surface_codes.append(0)
-    if detector.chimney is not None:
-        required_surface_codes.extend((1, 2))
-    if detector.bottom_chimney is not None:
-        required_surface_codes.extend((7, 8))
-    if detector.acrylic_bowls is not None:
-        required_surface_codes.append(3)
-    if has_diffuser_hardware:
-        required_surface_codes.extend((4, 5, 6))
-    surface_values = engineering_surface_parameters(
-        fixed_physics, required_surface_codes
-    )
     transport_dtype = jnp.float32
-    surface_reflectances = jnp.asarray(
-        surface_values[0], dtype=transport_dtype
-    )
-    surface_transmittances = jnp.asarray(
-        surface_values[1], dtype=transport_dtype
-    )
-    surface_fspecs = jnp.asarray(
-        surface_values[2], dtype=transport_dtype
-    )
     g = jnp.asarray(physics_params.scattering.g, dtype=transport_dtype)
     qe = jnp.asarray(physics_params.response.qe, dtype=transport_dtype)
     wavelength = jnp.asarray(
@@ -188,25 +144,7 @@ def build_per_pe_forward(
                 log_p,
                 hist,
             ) = carry
-            if has_diffuser_hardware:
-                diffuser_center = (
-                    source.center
-                    if hasattr(source, "center")
-                    else source.position
-                )
-                diffuser_axis = (
-                    source.axis
-                    if hasattr(source, "axis")
-                    else diffuser_axis_default
-                )
-                prop = propagate(
-                    positions,
-                    directions,
-                    diffuser_center,
-                    diffuser_axis,
-                )
-            else:
-                prop = propagate(positions, directions)
+            prop = propagate(positions, directions)
             depositions = jnp.asarray(
                 prop["sensor_weights"], dtype=positions.dtype
             )
@@ -246,13 +184,6 @@ def build_per_pe_forward(
                          0, 0, None, None, 0,
                          0, None, 0, 0,
                          0, 0, None, None, 0, None),
-            ) if not has_engineering else jax.vmap(
-                photon_step,
-                in_axes=(0, 0, 0, 0, 0,
-                         0, 0, None, None, 0,
-                         0, None, 0, 0,
-                         0, 0, None, None, 0, None,
-                         0, 0, 0, 0, 0, 0, 0),
             )
             result = vectorized_step(
               positions, directions, times, surface_distance, normals,
@@ -260,29 +191,7 @@ def build_per_pe_forward(
               wavelength,
               ray_keys, speed, hit_interface, medium_id,
               params.n_ls, params.n_water,
-              interface_index, refractive_indices,
-              *(
-                  (
-                      prop["engineering_surface_code"] >= 0,
-                      surface_reflectances[jnp.maximum(
-                          prop["engineering_surface_code"], 0
-                      )],
-                      surface_transmittances[jnp.maximum(
-                          prop["engineering_surface_code"], 0
-                      )],
-                      surface_fspecs[jnp.maximum(
-                          prop["engineering_surface_code"], 0
-                      )],
-                      prop["interface_target_medium_id"],
-                      prop["engineering_entering"],
-                      jnp.where(
-                          prop["engineering_acrylic_inside"],
-                          prop["engineering_surface_code"],
-                          -1,
-                      ),
-                  )
-                  if has_engineering else ()
-              ))
+              interface_index, refractive_indices)
             (new_positions, new_directions, new_times,
              detect_probs, reflection_attenuations,
              continuing_factors, logp_increment, new_medium_id) = result

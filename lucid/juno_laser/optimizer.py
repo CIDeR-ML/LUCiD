@@ -1,4 +1,4 @@
-"""Ensemble objectives and staged Adam for JUNO laser calibration."""
+"""Ensemble forward and Adam optimizer for minimal JUNO closure."""
 
 from __future__ import annotations
 
@@ -15,7 +15,6 @@ from .parameters import (
     optimization_bounds,
     unpack_params,
 )
-from .source import set_diffuser_angular_shape
 
 
 LOG = logging.getLogger("lucid.juno_laser.optimizer")
@@ -28,12 +27,11 @@ def make_ensemble_forward(
     *,
     fixed_params,
     source_indices=None,
-    fit_diffuser_shape=True,
 ):
     """Average fixed-key predictions using stable absolute source indices.
 
-    ``fit_diffuser_shape=False`` preserves an ideal source exactly and keeps
-    the three LSPhase coordinates outside the active computation graph.
+    The source is fixed; only the two optical lengths encoded by ``theta``
+    enter the forward model.
     """
     sources = tuple(sources)
     hist_shape = tuple(hist_shape)
@@ -54,15 +52,11 @@ def make_ensemble_forward(
 
     @jax.jit
     def ensemble(theta, keys):
-        params, shape_coordinates = unpack_params(theta, fixed_params)
+        params = unpack_params(theta, fixed_params)
 
         def predict_source(inputs):
             source_index, source = inputs
-            varied_source = (
-                set_diffuser_angular_shape(source, shape_coordinates)
-                if fit_diffuser_shape
-                else source
-            )
+            varied_source = source
 
             def accumulate(histogram, key):
                 prediction, _ = forward(
@@ -87,11 +81,8 @@ def make_ensemble_forward(
 
 
 def select_stage_coordinates(result):
-    """Choose held-out, MC-validation or train-best coordinates."""
-    heldout = result.get("best_heldout_validation_coordinates")
+    """Choose MC-validation-best or train-best coordinates."""
     mc = result.get("best_mc_validation_coordinates")
-    if heldout is not None:
-        return np.asarray(heldout)
     if mc is not None:
         return np.asarray(mc)
     return np.asarray(result["coordinates"])
@@ -110,8 +101,6 @@ def adam_stage(
     grad_clip: float = 1e4,
     mc_validation_objective=None,
     mc_validation_keys=None,
-    heldout_validation_objective=None,
-    heldout_validation_keys=None,
     validation_every: int = 0,
     early_stopping_patience: int = 0,
     min_improvement: float = 1e-4,
@@ -124,7 +113,6 @@ def adam_stage(
     Inactive coordinates are held exactly at their incoming values.  Train
     keys remain fixed to give a common-random-number optimization path.
     MC validation uses the same data with independent transport keys, while
-    held-out validation may use different events, PMTs or source positions.
     Early-stopping patience counts validation evaluations, not Adam updates.
     """
     fields = tuple(fields)
@@ -139,24 +127,11 @@ def adam_stage(
         or checkpoint_every < 0
     ):
         raise ValueError("validation controls must be non-negative")
-    validations = (
-        ("mc", mc_validation_objective, mc_validation_keys),
-        (
-            "heldout",
-            heldout_validation_objective,
-            heldout_validation_keys,
-        ),
-    )
-    for name, validation_objective, validation_keys in validations:
-        if (validation_objective is None) != (validation_keys is None):
-            raise ValueError(
-                f"{name} validation objective and keys must be paired"
-            )
-    stopping_name = (
-        "heldout"
-        if heldout_validation_objective is not None
-        else "mc" if mc_validation_objective is not None else None
-    )
+    if (mc_validation_objective is None) != (
+        mc_validation_keys is None
+    ):
+        raise ValueError("MC-validation objective and keys must be paired")
+    stopping_name = "mc" if mc_validation_objective is not None else None
     if early_stopping_patience and stopping_name is None:
         raise ValueError("early stopping requires a validation objective")
     if stopping_name is not None and validation_every <= 0:
@@ -180,7 +155,7 @@ def adam_stage(
     history, coordinate_history = [], []
     losses, grad_norms = [], []
     evaluation_seconds = []
-    mc_validation_history, heldout_validation_history = [], []
+    mc_validation_history = []
     active_array = np.asarray(active, dtype=np.float64)
 
     def evaluate(current, step):
@@ -228,12 +203,6 @@ def adam_stage(
             "best_step": None,
             "history": mc_validation_history,
         },
-        "heldout": {
-            "best_loss": np.inf,
-            "best_coordinates": None,
-            "best_step": None,
-            "history": heldout_validation_history,
-        },
     }
     patience_reference_loss = np.inf
     stale_validation_evaluations = 0
@@ -245,22 +214,22 @@ def adam_stage(
         nonlocal stale_validation_evaluations
         nonlocal validation_evaluations
         losses_by_name = {}
-        for name, validation_objective, validation_keys in validations:
-            if validation_objective is None:
-                continue
-            value = float(validation_objective(current, validation_keys))
+        if mc_validation_objective is not None:
+            value = float(
+                mc_validation_objective(current, mc_validation_keys)
+            )
             if not np.isfinite(value):
                 raise FloatingPointError(
-                    f"non-finite {name} validation objective at optimizer "
+                    "non-finite MC-validation objective at optimizer "
                     f"step {step}: {value}"
                 )
-            state = validation_state[name]
+            state = validation_state["mc"]
             state["history"].append((step, value))
             if value < state["best_loss"]:
                 state["best_loss"] = value
                 state["best_coordinates"] = np.asarray(current)
                 state["best_step"] = step
-            losses_by_name[name] = value
+            losses_by_name["mc"] = value
         if stopping_name is not None:
             validation_evaluations += 1
             stopping_loss = losses_by_name[stopping_name]
@@ -368,17 +337,5 @@ def adam_stage(
             "best_coordinates"
         ],
         "mc_validation_history": mc_validation_history,
-        "best_heldout_validation_loss": (
-            None
-            if not np.isfinite(validation_state["heldout"]["best_loss"])
-            else float(validation_state["heldout"]["best_loss"])
-        ),
-        "best_heldout_validation_step": validation_state["heldout"][
-            "best_step"
-        ],
-        "best_heldout_validation_coordinates": validation_state[
-            "heldout"
-        ]["best_coordinates"],
-        "heldout_validation_history": heldout_validation_history,
         "active_fields": sorted(active_fields),
     }

@@ -99,12 +99,7 @@ def load_detector_geom(file_path):
         raise ValueError(f"Unknown detector type: {detector_type}")
 
 
-def generate_detector(file_path, pmt_geometry_enabled=None,
-                      support_geometry_enabled=None,
-                      chimney_geometry_enabled=None,
-                      bottom_chimney_geometry_enabled=None,
-                      acrylic_bowl_geometry_enabled=None,
-                      diffuser_hardware_enabled=None):
+def generate_detector(file_path, pmt_geometry_enabled=None):
     """Generate a detector from a JSON config file using the geometry registry.
 
     The detector type in the config (e.g. 'cylinder', 'sphere', 'box') is
@@ -123,10 +118,7 @@ def generate_detector(file_path, pmt_geometry_enabled=None,
     The NPZ path used by cylinder configurations is also resolved relative
     to the config-file directory. ``pmt_geometry_enabled`` optionally
     overrides only the configured explicit PMT intersection geometry, for a
-    controlled geometry on/off ablation. ``support_geometry_enabled`` does
-    the same independently for the effective JUNO support rods.  The
-    chimney, Acrylic-bowl, and source-attached diffuser-hardware overrides are
-    independent in the same way.
+    controlled geometry on/off ablation.
     """
     config = load_detector_config(file_path)
     detector_type = config['detector_type']
@@ -162,79 +154,6 @@ def generate_detector(file_path, pmt_geometry_enabled=None,
             )
             if type_path is not None:
                 type_path = os.path.join(config_dir, type_path)
-            configured_support = geom_def.get('support_rod_geometry')
-            if support_geometry_enabled is None:
-                support_geometry = configured_support
-            elif support_geometry_enabled:
-                if configured_support is None:
-                    raise ValueError(
-                        "Support geometry was enabled but none is configured"
-                    )
-                support_geometry = configured_support
-            else:
-                support_geometry = None
-            support_path = (
-                geom_def.get('support_rod_file_path')
-                if support_geometry is not None else None
-            )
-            if support_path is not None:
-                support_path = os.path.join(config_dir, support_path)
-            configured_chimney = geom_def.get('chimney_geometry')
-            if chimney_geometry_enabled is None:
-                chimney_geometry = configured_chimney
-            elif chimney_geometry_enabled:
-                if configured_chimney is None:
-                    raise ValueError(
-                        "Chimney geometry was enabled but none is configured"
-                    )
-                chimney_geometry = configured_chimney
-            else:
-                chimney_geometry = None
-            configured_bottom_chimney = geom_def.get(
-                'bottom_chimney_geometry'
-            )
-            if bottom_chimney_geometry_enabled is None:
-                bottom_chimney_geometry = configured_bottom_chimney
-            elif bottom_chimney_geometry_enabled:
-                if configured_bottom_chimney is None:
-                    raise ValueError(
-                        "Bottom-chimney geometry was enabled but none is "
-                        "configured"
-                    )
-                bottom_chimney_geometry = configured_bottom_chimney
-            else:
-                bottom_chimney_geometry = None
-            configured_bowls = geom_def.get('acrylic_bowl_geometry')
-            if acrylic_bowl_geometry_enabled is None:
-                acrylic_bowl_geometry = configured_bowls
-            elif acrylic_bowl_geometry_enabled:
-                if configured_bowls is None:
-                    raise ValueError(
-                        "Acrylic-bowl geometry was enabled but none is "
-                        "configured"
-                    )
-                acrylic_bowl_geometry = configured_bowls
-            else:
-                acrylic_bowl_geometry = None
-            bowl_path = (
-                geom_def.get('acrylic_bowl_file_path')
-                if acrylic_bowl_geometry is not None else None
-            )
-            if bowl_path is not None:
-                bowl_path = os.path.join(config_dir, bowl_path)
-            configured_diffuser = geom_def.get(
-                'diffuser_hardware_geometry'
-            )
-            if diffuser_hardware_enabled is None:
-                diffuser_hardware_geometry = configured_diffuser
-            elif diffuser_hardware_enabled:
-                if configured_diffuser is None:
-                    raise ValueError(
-                        "Diffuser hardware was enabled but none is configured"
-                    )
-                diffuser_hardware_geometry = configured_diffuser
-            else:
-                diffuser_hardware_geometry = None
             return cls.from_pmt_file(
                 csv_path,
                 geom_def['inner_radius'],
@@ -242,14 +161,7 @@ def generate_detector(file_path, pmt_geometry_enabled=None,
                 geom_def['sensor_radius'],
                 acrylic_radius=geom_def.get('acrylic_radius'),
                 pmt_type_file_path=type_path,
-                pmt_geometry=pmt_geometry,
-                support_rod_file_path=support_path,
-                support_geometry=support_geometry,
-                chimney_geometry=chimney_geometry,
-                bottom_chimney_geometry=bottom_chimney_geometry,
-                acrylic_bowl_file_path=bowl_path,
-                acrylic_bowl_geometry=acrylic_bowl_geometry,
-                diffuser_hardware_geometry=diffuser_hardware_geometry)
+                pmt_geometry=pmt_geometry)
         return cls(geom_def['inner_radius'], geom_def['outer_radius'],
                    geom_def['n_sensors'], geom_def['sensor_radius'],
                    acrylic_radius=geom_def.get('acrylic_radius'))
