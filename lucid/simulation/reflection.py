@@ -249,7 +249,7 @@ class PmtOpticalTable(NamedTuple):
 
 
 class PmtOpticalOutcome(NamedTuple):
-    """Mutually exclusive probabilities used by ``SGREFPMT``."""
+    """Mutually exclusive SK-like PMT optical-outcome probabilities."""
     reflectance: jnp.ndarray
     absorptance: jnp.ndarray
     transmittance: jnp.ndarray
@@ -264,7 +264,7 @@ def _load_pmt_optical_table_cached(path):
             "expected (21600, 8)")
     data = data.reshape(108, 200, 8)
     # Columns: wavelength, angle, Rs, Rp, Ts, Tp, As, Ap. Preserve the
-    # component reflectances as well as RFPMSG's ipol=0 averages.
+    # component reflectances as well as their unpolarized averages.
     averages = tuple(
         np.asarray(0.5 * (data[:, :, a] + data[:, :, b]), dtype=np.float32)
         for a, b in ((2, 3), (4, 5), (6, 7)))
@@ -275,10 +275,12 @@ def _load_pmt_optical_table_cached(path):
 
 
 def load_pmt_optical_table(path=None):
-    """Load SK's unpolarised reflectance, transmittance and absorptance.
+    """Load user-supplied SK-like PMT reflectance, transmittance and absorptance.
 
     Pass ``path`` explicitly or set ``LUCID_PMT_REFLECTANCE_TABLE``. The
-    expected format is SKDetSim's ``reflect.dec12.dat``.
+    expected format is a whitespace-delimited table on a 108-wavelength by
+    200-angle grid, ordered by wavelength then angle. Each row contains eight
+    columns: wavelength, angle, Rs, Rp, Ts, Tp, As, Ap.
     """
     if path is None:
         env_path = os.environ.get("LUCID_PMT_REFLECTANCE_TABLE")
@@ -387,17 +389,16 @@ def tuned_blacksheet_reflectance(
 def _pmt_table_lookup(cth_inc, lam, table, *, sk_forward=True):
     """Evaluate one SK PMT table component with useful forward/reverse AD.
 
-    ``sk_forward=True`` exactly reproduces RFPMSG's hard bin in the numerical
+    ``sk_forward=True`` uses the SK-like hard-bin lookup in the numerical
     forward pass, but uses a bilinear surrogate derivative. The expression
     ``smooth + stop_gradient(hard-smooth)`` gives the same finite derivative
-    to JAX forward-mode JVP and reverse-mode VJP without changing SK's value.
+    to JAX forward-mode JVP and reverse-mode VJP without changing the hard-bin value.
     ``sk_forward=False`` returns ordinary bilinear interpolation.
     """
     cth_inc = jnp.clip(cth_inc, 0.0, 1.0)
     angle_deg = jnp.arccos(cth_inc) * (180.0 / jnp.pi)
 
-    # Exact zero-based translation of RFPMSG:
-    # iwav=int(lambda-336), iang=int(theta*200/90)+1 in Fortran.
+    # SK-like hard bins: 1 nm in wavelength and 0.45 degrees in angle.
     wi_hard = jnp.clip(jnp.floor(lam - 337.0).astype(jnp.int32), 0, 107)
     ai_hard = jnp.clip(jnp.floor(angle_deg / 0.45).astype(jnp.int32), 0, 199)
     hard = table[wi_hard, ai_hard]
@@ -418,9 +419,9 @@ def _pmt_table_lookup(cth_inc, lam, table, *, sk_forward=True):
 
 
 def tabulated_pmt_reflectance(cth_inc, lam, table, *, sk_forward=True):
-    """Evaluate unpolarised PMT reflectance from SK's regular table.
+    """Evaluate unpolarised PMT reflectance from an SK-like regular table.
 
-    By default, the value is exactly the RFPMSG bin and the derivative is the
+    By default, the value is the SK-like hard-bin value and the derivative is the
     local bilinear-table slope; see :func:`_pmt_table_lookup`.
     """
     return jnp.clip(_pmt_table_lookup(
@@ -428,12 +429,12 @@ def tabulated_pmt_reflectance(cth_inc, lam, table, *, sk_forward=True):
 
 
 def tabulated_pmt_optical_outcome(cth_inc, lam, table, *, sk_forward=True):
-    """Return the SKDetSim PMT reflection/absorption/transmission budget.
+    """Return the SK-like PMT reflection/absorption/transmission budget.
 
-    ``SGREFPMT`` branches on tabulated ``R`` and ``A`` and assigns the
-    remaining probability to transmission. We therefore calculate ``T`` as
-    ``1-R-A`` for exact branching parity. The separately tabulated
-    transmittance remains available in :class:`PmtOpticalTable` for closure
+    The SK-like model treats tabulated ``R`` and ``A`` as separate outcomes
+    and assigns the remaining probability to transmission. We calculate
+    ``T`` as ``1-R-A`` to conserve the probability budget. The separately
+    tabulated transmittance remains available in :class:`PmtOpticalTable` for closure
     diagnostics.
     """
     reflection = tabulated_pmt_reflectance(
@@ -663,7 +664,7 @@ WAVELENGTH_REFLECTION_MODELS = frozenset({
     'tabulated_pmt_only', 'tuned_wall_only',
 })
 
-# SGREFPMT treats photocathode absorption (direct PE response) and reflection
+# The SK-like model treats photocathode absorption (direct PE response) and reflection
 # as separate outcomes.  For this model, pmt_detection.py applies A(theta)
 # per candidate PMT while photon transport independently continues R(theta).
 INDEPENDENT_SENSOR_DETECTION_MODELS = frozenset({

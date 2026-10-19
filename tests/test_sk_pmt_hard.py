@@ -128,7 +128,7 @@ def test_roots_behind_ray_are_rejected():
 
 
 def _skdpoint(origin, direction, center, radius):
-    """Independent translation of SKDONUTS' SKDPOINT helper."""
+    """Independent analytic entry point for a ray and sphere."""
     relative = center - origin
     along = float(np.dot(direction, relative))
     closest = origin + along * direction
@@ -139,8 +139,8 @@ def _skdpoint(origin, direction, center, radius):
             distance)
 
 
-def _skdonuts_millimetre_reference(origin, direction):
-    """Return SKDONUTS' hit and local point before reflection handling."""
+def _stepped_pmt_reference(origin, direction):
+    """Return the SK-like stepped-surface hit and local intersection point."""
     large_center = np.array([0.0, 0.0, SPHERE_CENTER_Z])
     point, line_distance = _skdpoint(
         origin, direction, large_center, SPHERE_RADIUS)
@@ -192,7 +192,7 @@ def _skdonuts_millimetre_reference(origin, direction):
     return False, None
 
 
-def test_oracle_matches_skdonuts_millimetre_search_for_oblique_rays():
+def test_reference_matches_stepped_surface_for_oblique_rays():
     rng = np.random.default_rng(20260918)
     compared_hits = 0
     for _ in range(500):
@@ -208,7 +208,7 @@ def test_oracle_matches_skdonuts_millimetre_search_for_oblique_rays():
         ])
         direction /= np.linalg.norm(direction)
 
-        reference_hit, reference_point = _skdonuts_millimetre_reference(
+        reference_hit, reference_point = _stepped_pmt_reference(
             origin, direction)
         oracle = intersect_pmt_reference(
             origin, direction, ORIGIN, AXIS)
@@ -216,7 +216,7 @@ def test_oracle_matches_skdonuts_millimetre_search_for_oblique_rays():
         assert oracle.intersects == reference_hit
         if reference_hit:
             compared_hits += 1
-            # SKDONUTS accepts the first 1 mm step inside the torus; sphere
+            # The stepped reference accepts the first 1 mm step inside the torus; sphere
             # hits are analytic. The exact oracle must therefore lie no more
             # than one step behind the reported SK point along the ray.
             along_ray = np.dot(reference_point - oracle.local_position,

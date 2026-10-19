@@ -51,9 +51,9 @@ class MediumProperties(NamedTuple):
 # Refractive-index dispersion and group velocity
 # ---------------------------------------------------------------------------
 
-# SKDetSim REFSG/DREFSG coefficients. REFSG is the phase refractive index of
-# water at 13 C and 1.01325 bar; EFFNSG = REFSG - lambda*DREFSG is the group
-# refractive index used for every optical time-of-flight update in SKDetSim.
+# SK-like water dispersion at 13 C and 1.01325 bar. The phase index n
+# determines the group index n_g = n - lambda * dn/dlambda used for optical
+# time-of-flight updates.
 _SK4_TEMP_C = 13.0
 _SK4_PRESSURE_BAR = 1.01325
 _SK4_TEMP_REF_C = 19.993
@@ -68,10 +68,10 @@ _SK4_C = (8.419632e-6, 1.941681e-5, -7.762524e-8,
 
 
 def sk4_water_refractive_index(wavelength_nm):
-    """SKDetSim ``REFSG`` phase refractive index for water.
+    """SK-like phase refractive index for water at 13 C and 1.01325 bar.
 
-    This follows ``refsg.F`` at SK's fixed 13 C and 1.01325 bar. It uses only
-    JAX operations, so wavelength derivatives work in forward and reverse mode.
+    Uses only JAX operations, so wavelength derivatives work in forward
+    and reverse mode.
     """
     wl = jnp.asarray(wavelength_nm) / 1000.0  # nm -> micrometres
     a1, a2, a3, a4, a5 = _SK4_A
@@ -95,7 +95,7 @@ def sk4_water_refractive_index(wavelength_nm):
 
 
 def sk4_water_refractive_index_derivative(wavelength_nm):
-    """Analytic ``dn/dlambda`` from SKDetSim ``DREFSG`` (per nm)."""
+    """Analytic derivative of the SK-like water phase index, ``dn/dlambda`` per nm."""
     wl = jnp.asarray(wavelength_nm) / 1000.0
     a1, _, a3, a4, a5 = _SK4_A
     _, b2, b3, _, b5, b6, _, b8, b9 = _SK4_B
@@ -124,7 +124,7 @@ def sk4_water_refractive_index_derivative(wavelength_nm):
 
 
 def sk4_water_group_refractive_index(wavelength_nm):
-    """SKDetSim ``EFFNSG``: ``n_g = n - lambda * dn/dlambda``."""
+    """SK-like water group index: ``n_g = n - lambda * dn/dlambda``."""
     wavelength_nm = jnp.asarray(wavelength_nm)
     return (sk4_water_refractive_index(wavelength_nm)
             - wavelength_nm * sk4_water_refractive_index_derivative(wavelength_nm))

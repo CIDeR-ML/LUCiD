@@ -1,8 +1,8 @@
 """Differentiable SK-IV acrylic-cover transport.
 
 The SK 20-inch PMT is covered by a 13 mm spherical acrylic shell.  The trace
-contains the directly transmitted path plus the two leading reflected paths
-used by production SKDetSim: reflection from the outer water/acrylic face and
+contains the directly transmitted path plus two leading SK-like reflected
+paths: reflection from the outer water/acrylic face and
 reflection from the inner acrylic/water face followed by escape into the ID.
 The simulator can either sample those paths or deliberately absorb them for
 the historical ballistic diagnostic.
@@ -25,7 +25,7 @@ from lucid.wavelength.medium import (
 from .sk_pmt_jax import intersect_sk20inch_pmt_jax
 
 
-# guskge.h, converted from centimetres to metres.
+# SK-like cover geometry in metres.
 SK_ACRYLIC_RADIUS = 0.3165
 SK_ACRYLIC_THICKNESS = 0.013
 SK_ACRYLIC_OUTER_RADIUS = SK_ACRYLIC_RADIUS + SK_ACRYLIC_THICKNESS / 2.0
@@ -273,9 +273,9 @@ def trace_sk4_acrylic_to_pmt(
         * return_survival * third_transmission,
         0.0)
     total_distance = outer_distance + acrylic_distance + pmt_hit.distance
-    # The simulator converts this value with the water group velocity.  SK uses
-    # ACRNSG for the acrylic segment and EFFNSG for water, so encode the small
-    # material-delay correction as an equivalent water-path distance.
+    # The simulator converts this value with the water group velocity.
+    # Use the acrylic phase index for the cover segment and the water group
+    # index for water, encoding the delay as an equivalent water-path distance.
     time_distance = total_distance + acrylic_distance * (
         optics.refractive_index / optics.water_group_refractive_index - 1.0)
     cover_time_distance = outer_distance + acrylic_distance + acrylic_distance * (

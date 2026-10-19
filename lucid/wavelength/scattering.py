@@ -2,7 +2,7 @@
 
 Rayleigh and selectable asymmetric/Mie direction samplers used by the surface
 and volume propagation loops.  The generic model is Henyey-Greenstein; the
-``sk4`` model reproduces SKDetSim's SK-II-and-later ``SGMIES`` table.
+``sk4`` model uses an SK-like linear forward-hemisphere phase function.
 
 ``lucid.simulation.photon_step`` uses ``compute_mie_scatter_direction``, ``hg_sample_cos_theta``,
 ``hg_logpdf`` and ``rayleigh_logpdf``; ``photon_step_volume`` uses the last three. The two
@@ -60,9 +60,9 @@ def compute_rayleigh_scatter_direction(incident_dir, rng_key):
 def sample_transverse_polarization(direction, rng_key):
     """Sample a unit linear-polarization vector perpendicular to ``direction``.
 
-    This is the differentiable equivalent of SKDetSim's
-    ``rncone(phdir, 90., spdir)`` laser initialization.  The PRNG draw is
-    parameter independent; derivatives flow through the local frame.
+    The SK-like laser initialization draws a uniform orientation in the
+    transverse plane. The PRNG draw is parameter independent; derivatives
+    flow through the local frame.
     """
     from lucid.simulation.optics import create_local_frame
     phase = 2.0 * jnp.pi * jax.random.uniform(rng_key)
@@ -98,9 +98,8 @@ def compute_polarized_rayleigh_scatter(
 
     In a frame with the incident polarization along x, the outgoing density is
     ``1-x^2``.  After sampling the outgoing direction, the electric field is
-    its incident value projected onto the new transverse plane.  This is the
-    coordinate-free form of the direction and polarization update in
-    SKDetSim's ``sgabsc.F``.
+    its incident value projected onto the new transverse plane. This gives
+    a coordinate-free direction and polarization update.
     """
     kx, kphi = jax.random.split(rng_key)
     direction = normalize(incident_dir)
@@ -164,10 +163,10 @@ def rayleigh_logpdf(mu):
 
 
 def sk_mie_sample_cos_theta(u, g=None):
-    """Sample the SK-II-and-later ``SGMIES`` phase function.
+    """Sample the SK-like forward-hemisphere Mie phase function.
 
-    SKDetSim linearly interpolates the relative intensity from zero at
-    ``cos(theta)=0`` to one at ``cos(theta)=1`` and rejects the backward
+    The SK-like relative intensity increases linearly from zero at
+    ``cos(theta)=0`` to one at ``cos(theta)=1`` and excludes the backward
     hemisphere.  The normalized density is therefore ``p(mu)=2*mu`` on
     ``0 <= mu <= 1``, with inverse CDF ``mu=sqrt(u)``. ``g`` is accepted only
     to share the Henyey-Greenstein sampler interface; this SK phase function
@@ -184,7 +183,7 @@ def sk_mie_sample_cos_theta(u, g=None):
 
 
 def sk_mie_logpdf(mu, g=None):
-    """Log-density of the SK-II-and-later ``SGMIES`` phase function."""
+    """Log-density of the SK-like forward-hemisphere Mie phase function."""
     del g
     mu = jnp.asarray(mu)
     safe_mu = jnp.maximum(mu, jnp.finfo(mu.dtype).tiny)

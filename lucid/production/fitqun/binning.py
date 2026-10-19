@@ -132,9 +132,8 @@ def costh0_points() -> np.ndarray:
 #
 # The 2.5 cm bin width is pinned: genhist.cc reports s_max as a bin *centre*, and
 # every gsthr value in the shipped tables is an odd multiple of 1.25 cm. The
-# range endpoints are not -- the raw (s, cos theta) histogram is filled inside
-# skdetsim, which is not part of the tuning repo. They only need to cover the
-# profile (the largest shipped s_max is 3736 cm) and leave the width at 2.5.
+# range endpoints only need to cover the SK-like emission profile (the
+# largest shipped s_max is 3736 cm) while preserving the 2.5 cm bin width.
 S_MIN_CM, S_MAX_CM, N_S_BINS = -500.0, 5000.0, 2200
 N_COSTH_BINS = 500
 

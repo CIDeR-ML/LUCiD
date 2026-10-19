@@ -63,7 +63,7 @@ def test_sk4_polarized_response_uses_legacy_swapped_sp_labels(tmp_path):
     response = load_pmt_detection_response(path)
     direction = jnp.array([[0.0, 0.0, -1.0]])
     normal = jnp.array([[[0.0, 1.0, 0.0]]])
-    # The physical s axis is +x. SK-IV maps that state to RFPMSG's p column.
+    # The physical s axis is +x; the SK-like convention uses the table's p column.
     physical_s = jnp.array([[1.0, 0.0, 0.0]])
     physical_p = jnp.array([[0.0, 1.0, 0.0]])
     s_factor = response.polarized_factor(

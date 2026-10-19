@@ -12,8 +12,8 @@ import jax
 import jax.numpy as jnp
 
 
-# SK-IV timing mixture copied from SKDetSim ``sgpmt.F``.  The original code
-# draws one uniform number and applies the first cumulative threshold passed:
+# SK-like timing mixture. A uniform draw selects the first cumulative
+# probability threshold passed:
 #
 #   <0.01400  N(111.5, 7.0)
 #   <0.02700  N( 39.0, 5.0)
@@ -22,14 +22,13 @@ import jax.numpy as jnp
 #   <0.06100  N( 15.0, 4.5)
 #   otherwise 0
 #
-# Values are nanoseconds.  This is the SK_GEOMETRY>=3 / non-legacy-unitune
-# branch used by the SK-IV laser sample.
+# Component means and widths are in nanoseconds.
 SK4_COMPONENT_PROBABILITIES = jnp.asarray(
     [0.01400, 0.01300, 0.02375, 0.00025, 0.01000, 0.93900]
 )
 SK4_COMPONENT_MEANS_NS = jnp.asarray([111.5, 39.0, 80.0, -47.0, 15.0, 0.0])
 SK4_COMPONENT_SIGMAS_NS = jnp.asarray([7.0, 5.0, 25.0, 8.0, 4.5, 0.0])
-# Only the five explicit SKDetSim thresholds are needed. Leaving the final
+# Only the five explicit cumulative thresholds are needed. Leaving the final
 # component implicit guarantees ``searchsorted`` always returns an in-bounds
 # component even if the probabilities are represented in float32.
 SK4_CUMULATIVE_PROBABILITIES = jnp.cumsum(SK4_COMPONENT_PROBABILITIES[:-1])
@@ -42,11 +41,7 @@ _SK4_RNG_STREAM_ID = 0x534B3454  # ASCII-ish "SK4T"
 
 
 def sample_sk4_time_offsets(key, shape) -> jnp.ndarray:
-    """Sample the SK-IV ``sgpmt.F`` accepted-PE timing offset in ns.
-
-    The generated distribution matches SKDetSim statistically; it does not try
-    to reproduce SKDetSim's generator state or individual random draws.
-    """
+    """Sample the SK-like accepted-photoelectron timing mixture in ns."""
     timing_key = jax.random.fold_in(key, _SK4_RNG_STREAM_ID)
     component_key, gaussian_key = jax.random.split(timing_key)
     uniform = jax.random.uniform(component_key, shape=shape)
@@ -78,7 +73,7 @@ def get_pmt_timing_model(
     """Resolve a setup-time PMT timing model name.
 
     ``None`` and ``"none"`` preserve the historical LUCiD output and do not
-    consume random numbers.  ``"sk4"`` selects the SK-IV ``sgpmt.F`` mixture.
+    consume random numbers.  ``"sk4"`` selects the SK-like timing mixture.
     """
     if model is None or model == "none":
         return identity_pmt_timing

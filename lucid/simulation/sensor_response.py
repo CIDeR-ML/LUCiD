@@ -28,7 +28,7 @@ def _pmt_response_factor(flat_weights, response_factor):
     """Return a non-negative relative PMT response with unity as neutral.
 
     This factor is allowed to exceed one.  The portable LUCiD table normalizes
-    SKDetSim's angular absorptance by its normal-incidence value, and that
+    the SK-like angular absorptance by its normal-incidence value, and that
     ratio is greater than one over part of the angular range. Bernoulli modes
     clip only the final QE times response probability.
     """

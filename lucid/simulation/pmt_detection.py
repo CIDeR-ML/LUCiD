@@ -60,10 +60,9 @@ class TabulatedPmtDetectionResponse:
         s_axis = s_axis_raw / jnp.sqrt(s_norm2[..., None] + 1e-12)
         s_weight = jnp.sum(polarization[None, :, :] * s_axis, axis=-1) ** 2
         s_weight = jnp.where(s_norm2 > 1e-10, jnp.clip(s_weight, 0.0, 1.0), 0.5)
-        # SK-IV's legacy SGREFPMT branch assigns physical p polarization to
-        # RFPMSG ipol=2 (the s table column), and physical s to ipol=1 (the p
-        # column).  SK-V later fixed this convention.  Preserve the SK-IV swap
-        # here because this response is explicitly the SK4 comparison model.
+        # The SK-like response convention assigns physical p polarization
+        # to the table's s column and physical s to its p column. Preserve
+        # that column swap when weighting the supplied optical response.
         return s_weight * p_response + (1.0 - s_weight) * s_response
 
 

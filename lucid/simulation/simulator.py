@@ -224,7 +224,7 @@ def setup_event_simulator(
         autodiff Hessian wrt photon→sensor distance).
     sensor_shape : {'sphere', 'sk20inch'}
         PMT interception geometry. ``'sphere'`` preserves the legacy LUCiD
-        sensor model. ``'sk20inch'`` uses the SKDONUTS sphere-plus-torus bulb,
+        sensor model. ``'sk20inch'`` uses the SK-like sphere-plus-torus bulb,
         the measured PMT axes, and the barrel inactive-band cut.
     sk_pmt_lookup : SKPMTCoverageLookup or None
         Optional prebuilt smooth SK PMT coverage table. This is mainly useful
@@ -247,7 +247,7 @@ def setup_event_simulator(
         blacksheet.
     pmt_gap_recovery : bool
         Recover PMT intersections behind the blacksheet plane using the full
-        25.4 cm sphere, matching the essential ``SGGAPEDGE`` construction.
+        25.4 cm sphere, using SK-like gap recovery.
     pmt_gap_recovery_radius : float
         Radius in metres of the inner water-gap region. The SK-IV value is
         0.2673032 m; the annulus out to the 0.285 m blacksheet hole is acrylic.
@@ -276,8 +276,8 @@ def setup_event_simulator(
     mie_phase_model : {'hg', 'sk4'}
         Angular distribution for asymmetric/Mie scattering. ``'hg'`` preserves
         the generic Henyey-Greenstein model controlled by
-        ``detector_params.scattering.g``. ``'sk4'`` reproduces the SK-II-and-
-        later ``SGMIES`` distribution, ``p(cos(theta))=2*cos(theta)`` on the
+        ``detector_params.scattering.g``. ``'sk4'`` uses the SK-like
+        distribution ``p(cos(theta))=2*cos(theta)`` on the
         forward hemisphere, and has no free ``g`` parameter.
     reflection_model : str
         Reflection model: ``'scalar_mix'`` (DEFAULT — the scalar wall/sensor
@@ -319,8 +319,8 @@ def setup_event_simulator(
         Optional per-photoelectron timing response applied after optical
         propagation and before hit aggregation/digitization. ``None`` or
         ``'none'`` preserves geometric arrival times and consumes no RNG.
-        ``'sk4'`` reproduces the non-Gaussian SK-IV timing mixture from
-        SKDetSim ``sgpmt.F``. This changes times only, never charge or sensor
+        ``'sk4'`` applies the non-Gaussian SK-like timing mixture.
+        This changes times only, never charge or sensor
         assignment, and uses a dedicated RNG substream so later QE and charge
         draws remain paired with a timing-disabled run. Default ``None``.
     pmt_detection_model : TabulatedPmtDetectionResponse, path-like, or None
@@ -1058,7 +1058,7 @@ def setup_event_simulator(
             if blacksheet_hole_radius is None:
                 surface_reflection_scale = jnp.ones_like(hit_sensor, dtype=jnp.float32)
             else:
-                # SK's SGHOLEBST applies blacksheet reflection only outside a
+                # SK-like blacksheet reflection applies only outside a
                 # 28.5 cm hole centered on the PMT axis.  The selected wall PMT
                 # is the length-one candidate in the hard SK routing path.
                 assigned = sensor_indices[0]
@@ -1120,8 +1120,8 @@ def setup_event_simulator(
                     prop_results['acrylic_cover_reflections'])
 
                 if sk_acrylic_reflection_mode == 'first_order':
-                    # Production SKDetSim makes a discrete Fresnel decision at
-                    # each acrylic boundary. Sample the same leading paths.
+                    # Sample a discrete Fresnel outcome at each acrylic
+                    # boundary to follow the leading SK-like paths.
                     # The probability ratio has forward value one and carries
                     # the live Fresnel derivative in both AD directions.
                     branch_uniform = jax.random.uniform(

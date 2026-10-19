@@ -69,7 +69,7 @@ class TestMediumProperties:
         assert make_medium("water").emission_processes == ("cherenkov",)
 
     def test_sk4_water_group_velocity_matches_effnsg(self):
-        """405-nm values reproduce SKDetSim REFSG/DREFSG/EFFNSG."""
+        """Check the SK-like water phase index, derivative, and group velocity at 405 nm."""
         medium = make_medium("water", wavelength_grid=jnp.linspace(300., 700., 200))
         wavelength = jnp.asarray(405.0)
         npt.assert_allclose(sk4_water_refractive_index(wavelength),

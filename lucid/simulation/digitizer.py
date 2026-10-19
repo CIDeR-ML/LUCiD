@@ -48,11 +48,9 @@ photoelectron; that yields ``P(hit|mu) = 1 - exp(-mu)`` exactly and leaves
 digitised charge, so a pulse that fluctuates low is also timed as one.
 
 WCSim instead applies a measured S-curve ``P(fire | charge)``
-(``WCSimWCDigitizerSKI::Threshold``), an SK-specific calibration inherited
-from SKDETSIM's ``skrn1pe`` with no derivation in the source. We deliberately
-keep a single sharp threshold at its 50% point: these are SK-*like*
-detectors, not SK, and one explicit number applies on the same terms to SK
-and HK. The PMT dependence then enters only where it should — through the
+(``WCSimWCDigitizerSKI::Threshold``), an SK-specific calibration. The
+SK-like model uses a single sharp threshold at its 50% point, with the same
+parameter applied to SK-like and HK-like detectors. The PMT dependence then enters only where it should — through the
 SPE spectrum, which is broad for SK and narrow for HK, so the same cut keeps
 ~77% of single-photoelectron hits in SK and ~92% in HK.
 

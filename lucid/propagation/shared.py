@@ -34,7 +34,7 @@ from lucid.propagation.sk_acrylic import (
 def _build_sk_wall_cell_assignment(detector):
     """Build SK-IV's logical boundary-cell -> active PMT assignment.
 
-    This mirrors ``SGHOLEBST``: 150 x 51 barrel cells and 48 x 48 cap
+    The SK-like layout uses 150 x 51 barrel cells and 48 x 48 cap
     grids with 70.7 cm pitch.  Empty cap cells remain -1 instead of being
     silently redirected to the nearest active tube.
     """
@@ -72,7 +72,7 @@ def _build_sk_wall_cell_assignment(detector):
     barrel = jnp.asarray(barrel)
     top = jnp.asarray(top)
     bottom = jnp.asarray(bottom)
-    # SGHOLEBST divides the original ID height (the PMT-centre planes), not
+    # SK-like wall cells divide the original ID height (the PMT-centre planes), not
     # the inward-shifted blacksheet height.  Measured cap positions retain
     # that original plane even when the cylinder boundary is moved inward.
     cap_z = np.abs(points[surfaces != 'barrel', 2])
@@ -110,8 +110,8 @@ def _build_sk_seam_candidate_assignment(detector):
 
     Near either barrel/end-cap seam, the nominal cylinder is sometimes the
     first blacksheet plane even though an end-cap PMT bulb is reached before
-    that plane. GEANT follows the physical PMT volumes and therefore calls
-    ``SGPMT`` for the cap tube first. The ordinary SK wall-cell lookup cannot
+    that plane. The SK-like geometry must test the protruding cap PMT
+    before the wall. The ordinary wall-cell lookup cannot
     express that case because it commits to the cylinder cell up front.
 
     For each barrel-first ray, inspect the local 5 x 5 cap-cell neighbourhood
@@ -421,7 +421,7 @@ def create_propagator(detector, sensor_positions, sensor_radius,
         Soft-overlap lookup interpolation: 'interp' (default) or 'cubic'.
     sensor_shape : {'sphere', 'sk20inch'}
         Candidate-sensor geometry. ``'sphere'`` preserves the legacy model.
-        ``'sk20inch'`` uses the measured PMT axes and SKDONUTS bulb shape.
+        ``'sk20inch'`` uses the measured PMT axes and SK-like sphere-plus-torus bulb shape.
     sk_pmt_lookup : SKPMTCoverageLookup or None
         Optional prebuilt smooth-coverage table, primarily for tests or reuse.
     sk_pmt_lookup_options : dict or None
@@ -676,7 +676,7 @@ def create_propagator(detector, sensor_positions, sensor_radius,
                 ))
 
         if sensor_candidate_selection == 'wall':
-            # SKDetSim first routes a boundary crossing to one wall PMT cell,
+            # SK-like routing first assigns a boundary crossing to one wall PMT cell,
             # then asks whether that PMT's curved photocathode was intersected.
             # Approximate that cell routing with the candidate center nearest to
             # the nominal detector-wall crossing.  The stop-gradient selection
@@ -910,7 +910,7 @@ def create_propagator(detector, sensor_positions, sensor_radius,
                     first_cover)
 
             if pmt_gap_recovery:
-                # SGGAPEDGE tests the continuation of a ray through the PMT
+                # SK-like gap recovery tests the continuation of a ray through the PMT
                 # opening against the full 25.4 cm PMT sphere.  This recovers
                 # rays whose sphere intersection lies behind the inward-shifted
                 # blacksheet plane; all other hole misses terminate later via
@@ -944,7 +944,7 @@ def create_propagator(detector, sensor_positions, sensor_radius,
                     # A ray that has just crossed the cover must first enter
                     # the water gap with its refracted direction.  Recovering
                     # the straight pre-cover ray here bypasses precisely the
-                    # acrylic routing that SGGAPEDGE is meant to follow.
+                    # acrylic routing that gap recovery is meant to follow.
                     gap_hit = gap_hit & (~cover_intersections[0])
                 gap_position = intersection_point + gap_distance[:, None] * unit_dir
                 sphere_water_normal = (
