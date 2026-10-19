@@ -89,3 +89,34 @@ def test_setup_bounds_qe_by_the_non_reflected_fraction(beam):
     _simulator(default_detector_params=_params(det, 0.25, qe=0.75))
     with pytest.raises(ValueError, match="1 - R0"):
         _simulator(default_detector_params=_params(det, 0.25, qe=0.8))
+
+
+def test_sk_independent_absorption_does_not_apply_reflection_correction_twice(tmp_path, monkeypatch):
+    from lucid.geometry.cylinder import Cylinder
+    from lucid.geometry import detector_geometry
+    from lucid.simulation import reflection, setup_event_simulator
+    from lucid.simulation.pmt_detection import make_tabulated_pmt_detection_response
+    from lucid.sources import laser_source
+    # A synthetic curved PMT and optical table exercise the SK absorption branch
+    # without collaboration-only detector inputs.
+    path = tmp_path / "one_pmt.npz"
+    np.savez(path, positions_mm=np.array([[1000.0, 0.0, 0.0]]),
+             directions=np.array([[-1.0, 0.0, 0.0]]),
+             surfaces=np.array(["barrel"]), pmt_id=np.array([1]),
+             radius=np.asarray(1.0), height=np.asarray(2.0),
+             sensor_radius=np.asarray(0.254))
+    det = Cylinder.from_pmt_file(path)
+    monkeypatch.setattr(detector_geometry, 'generate_detector', lambda _: det)
+    table = jnp.full((108, 200), 0.25)
+    monkeypatch.setattr(reflection, 'load_pmt_optical_table', lambda: reflection.PmtOpticalTable(
+        table, table, table, table, table))
+    response = make_tabulated_pmt_detection_response(
+        [0.0, 1.0], [1.0, 1.0], wavelength_nm=405)
+    sim = setup_event_simulator(
+        GEOM, 1024, temperature=None, K=1, is_calibration=True,
+        wavelength_mode=False, sensor_shape='sk20inch', max_candidates_per_ray=1,
+        reflection_model='tabulated_tuned', pmt_detection_model=response)
+    source = laser_source(position=[0.0, 0.0, 0.0], direction=[1.0, 0.0, 0.0],
+                          intensity=1024, fiber_NA=1e-6)
+    charge, _ = sim(source, _params(det, 0.25), jax.random.PRNGKey(3))
+    np.testing.assert_allclose(float(jnp.sum(charge)), 1024 * QE, rtol=1e-3)

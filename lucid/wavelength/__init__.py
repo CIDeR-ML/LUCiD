@@ -6,7 +6,11 @@ Submodules:
     spectrum      — Cherenkov wavelength sampling
     scattering    — Rayleigh and Mie/HG phase function samplers
 """
-from lucid.wavelength.medium import MediumProperties, make_medium, compute_effective_properties, load_qe_curve
+from lucid.wavelength.medium import (
+    MediumProperties, make_medium, compute_effective_properties, load_qe_curve,
+    sk4_water_refractive_index, sk4_water_refractive_index_derivative,
+    sk4_water_group_refractive_index, group_velocity_m_per_ns,
+)
 from lucid.wavelength.optical_model import evaluate_optical_model, OpticalArrays
 from lucid.wavelength.spectrum import (
     sample_cherenkov_wavelengths, Monochromatic, PowerLaw, QEWeighted,

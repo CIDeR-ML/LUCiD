@@ -19,9 +19,13 @@ from lucid.wavelength.optical_model import evaluate_optical_model, OpticalArrays
 from lucid.wavelength.spectrum import (
     sample_cherenkov_wavelengths, build_qe_weighted_cherenkov_sampler,
 )
+from lucid.wavelength.scattering import (
+    get_mie_phase_model, sample_transverse_polarization,
+)
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 from typing import Optional, Tuple
 import os
 from functools import partial
@@ -33,13 +37,56 @@ from lucid.simulation.optics import (
 from lucid.simulation.photon_step import (
     photon_iteration_sample, make_photon_iteration_update_factors_safe,
 )
-from lucid.simulation.reflection import get_reflection_model, sensor_normal_reflectance
+from lucid.simulation.reflection import (
+    INDEPENDENT_SENSOR_DETECTION_MODELS,
+    get_reflection_model, sensor_normal_reflectance,
+)
+from lucid.simulation.pmt_timing import get_pmt_timing_model
+from lucid.simulation.pmt_detection import (
+    TabulatedPmtDetectionResponse,
+    load_pmt_detection_response,
+)
+from lucid.simulation.pmt_siren import (
+    PmtSirenResponse, build_pmt_frames, load_pmt_siren_response,
+    pmt_siren_inputs,
+)
 from lucid.simulation.sensor_response import (
     make_hits_simulation, make_hits_data, make_hits_likelihood, make_hits_moments,
     make_hits_per_photon,
     build_make_hits_waveform, build_make_hits_waveform_expected,
     build_make_hits_per_photon_shotgun,
 )
+
+
+def _sensor_outward_axes(detector, sensor_points):
+    """Return unit axes facing from each PMT toward the detector wall.
+
+    Measured detector files define ``pmt_directions`` as the inward-looking
+    optical axes. Negating those directions gives the axis against which an
+    arriving photon's direction is projected. Older cylinder geometries do
+    not carry PMT directions, so retain the nearest-surface construction as a
+    fallback.
+    """
+    if hasattr(detector, 'pmt_directions'):
+        axes = -np.asarray(detector.pmt_directions, dtype=float)
+    else:
+        sensor_xyz = np.asarray(sensor_points, dtype=float)
+        radial = np.linalg.norm(sensor_xyz[:, :2], axis=1)
+        wall_distance = np.abs(radial - float(detector.r))
+        top_distance = np.abs(sensor_xyz[:, 2] - float(detector.H) / 2.0)
+        bottom_distance = np.abs(sensor_xyz[:, 2] + float(detector.H) / 2.0)
+        surface = np.argmin(
+            np.stack([wall_distance, top_distance, bottom_distance]), axis=0)
+        axes = np.zeros_like(sensor_xyz)
+        axes[:, :2] = sensor_xyz[:, :2] / np.maximum(radial[:, None], 1e-12)
+        axes[surface == 1] = np.array([0.0, 0.0, 1.0])
+        axes[surface == 2] = np.array([0.0, 0.0, -1.0])
+
+    norms = np.linalg.norm(axes, axis=1, keepdims=True)
+    if np.any(norms == 0):
+        raise ValueError("PMT directions must have non-zero length")
+    return axes / norms
+
 
 # ===================================================================
 # Event simulator factory
@@ -68,11 +115,35 @@ def setup_event_simulator(
         overlap_st_width_frac=0.35,
         overlap_renorm=1.0,
         overlap_mode='interp',
+        sensor_shape='sphere',
+        sk_pmt_lookup=None,
+        sk_pmt_lookup_options=None,
+        sensor_candidate_selection='all',
+        sensor_wall_assignment='nearest',
+        pmt_gap_recovery=False,
+        pmt_gap_recovery_radius=0.2673031986340605,
+        sk_acrylic_model='off',
+        sk_acrylic_wavelength=None,
+        sk_acrylic_table=None,
+        sk_acrylic_block_misses=False,
+        sk_acrylic_reflection_mode='absorb',
+        mie_phase_model='hg',
         deposit_leg_bound=False,
         reflection_model='scalar_mix',
         reflection_wavelength=400.0,
+        sensor_acceptance_model='sphere',
+        sensor_acceptance_power=1.0,
+        return_incidence_diagnostics=False,
+        return_transport_diagnostics=False,
         spectrum=None,
         cherenkov_emission_band=None,
+        pmt_timing_model=None,
+        pmt_detection_model=None,
+        pmt_response_model=None,
+        propagation_speed_m_per_ns=None,
+        polarization_model='none',
+        blacksheet_hole_radius=None,
+        blacksheet_hole_edge_width=0.005,
         **grid_params):
     """
     Set up and return an event simulator using DetectorParams / ParticleParams.
@@ -151,6 +222,63 @@ def setup_event_simulator(
         Soft-overlap lookup interpolation: ``'interp'`` (default, piecewise
         linear) or ``'cubic'`` (C2 natural spline — correct curvature for the
         autodiff Hessian wrt photon→sensor distance).
+    sensor_shape : {'sphere', 'sk20inch'}
+        PMT interception geometry. ``'sphere'`` preserves the legacy LUCiD
+        sensor model. ``'sk20inch'`` uses the SKDONUTS sphere-plus-torus bulb,
+        the measured PMT axes, and the barrel inactive-band cut.
+    sk_pmt_lookup : SKPMTCoverageLookup or None
+        Optional prebuilt smooth SK PMT coverage table. This is mainly useful
+        for tests and for sharing one table across simulator instances.
+    sk_pmt_lookup_options : dict or None
+        Options used to build the cached SK PMT coverage table. The Gaussian
+        width is fixed by ``temperature * sensor_radius``.
+    sensor_candidate_selection : {'all', 'wall'}
+        Candidate PMT routing. ``'all'`` preserves the existing LUCiD behavior.
+        ``'wall'`` assigns each nominal wall crossing to the nearest candidate
+        PMT before applying the exact SK sphere-plus-torus intersection. Its
+        hard forward choice uses the smooth all-candidate coverage derivative.
+    sensor_wall_assignment : {'nearest', 'sk'}
+        Assignment used with wall routing. ``'sk'`` reproduces the SK-IV
+        150x51 barrel and 48x48 cap cell maps, including empty cap cells.
+    blacksheet_hole_radius : float or None
+        Radius in metres of the non-blacksheet opening around an assigned PMT.
+        The forward mask is hard; ``blacksheet_hole_edge_width`` supplies its
+        smooth backward derivative. ``None`` treats the whole boundary as
+        blacksheet.
+    pmt_gap_recovery : bool
+        Recover PMT intersections behind the blacksheet plane using the full
+        25.4 cm sphere, matching the essential ``SGGAPEDGE`` construction.
+    pmt_gap_recovery_radius : float
+        Radius in metres of the inner water-gap region. The SK-IV value is
+        0.2673032 m; the annulus out to the 0.285 m blacksheet hole is acrylic.
+    sk_acrylic_model : {'off', 'sk4'}
+        Optional transmitted-branch model of the SK-IV spherical acrylic PMT
+        cover. ``'sk4'`` applies both Fresnel interfaces, acrylic absorption,
+        refraction, and the material-specific time delay.
+    sk_acrylic_wavelength : float or None
+        Monochromatic wavelength used for acrylic optics. ``None`` uses
+        ``reflection_wavelength``.
+    sk_acrylic_table : path-like or None
+        User-supplied acrylic optical JSON table; when omitted, read
+        ``LUCID_SK4_ACRYLIC_TABLE``. No detector table is bundled.
+        See ``load_sk4_acrylic_optics`` for the schema and range behavior.
+    sk_acrylic_block_misses : bool
+        Diagnostic upper bound that terminates rays which traverse a cover but
+        miss its PMT. The production SK path continues them into the gap; this
+        switch is used only to measure that route's contribution.
+    sk_acrylic_reflection_mode : {'absorb', 'first_order'}
+        Treatment of Fresnel-reflected photons at the acrylic cover. ``'absorb'``
+        preserves the historical ballistic diagnostic. ``'first_order'``
+        samples the outer-interface reflection and the inner-interface
+        reflection that escapes back into the ID. The selected branch carries
+        a live-probability/stop-gradient-probability importance factor, so its
+        expected charge and both JVP/VJP derivatives retain the Fresnel weight.
+    mie_phase_model : {'hg', 'sk4'}
+        Angular distribution for asymmetric/Mie scattering. ``'hg'`` preserves
+        the generic Henyey-Greenstein model controlled by
+        ``detector_params.scattering.g``. ``'sk4'`` reproduces the SK-II-and-
+        later ``SGMIES`` distribution, ``p(cos(theta))=2*cos(theta)`` on the
+        forward hemisphere, and has no free ``g`` parameter.
     reflection_model : str
         Reflection model: ``'scalar_mix'`` (DEFAULT — the scalar wall/sensor
         rates plus a specular/diffuse direction mixture via
@@ -158,13 +286,54 @@ def setup_event_simulator(
         ``'scalar'`` (the legacy angle/λ-independent rates with hard direction —
         walls diffuse, sensors specular; byte-identical to the pre-mixture step), or
         ``'angular'`` (Schlick blacksheet wall + multilayer-Fresnel cathode
-        sensor, with a specular/diffuse direction mixture). The angular model
+        sensor, with a specular/diffuse direction mixture), or
+        ``'tabulated_tuned'`` (tuned black-sheet reflectance, an externally
+        supplied PMT reflectance table, and a Lambert/Phong/specular wall
+        direction mixture), or ``'tabulated_scaled'`` (the same SK-derived
+        model multiplied by the differentiable ``wall_reflection_rate`` and
+        ``sensor_reflection_rate`` scale factors; one reproduces the fixed
+        model). The angular model
         reads the ``DetectorParams.reflection`` fields ``wall_R0/wall_p/
         wall_fspec`` and ``cathode_nr/cathode_nk/sensor_fspec``.
     reflection_wavelength : float
         Wavelength (nm) fed to the reflection model's dispersion (cathode/glass
         Fresnel). Exact for monochromatic-laser calibration; ignored by the
         scalar model. Default 400 nm.
+    sensor_acceptance_model : {'sphere', 'cosine'}
+        ``'sphere'`` applies no additional angular multiplier (and therefore
+        preserves native spherical interception when ``sensor_shape='sphere'``).
+        ``'cosine'`` multiplies deposits by the projected-area cosine relative
+        to the PMT's detector-surface axis. This is a flat-disc diagnostic.
+    sensor_acceptance_power : float
+        Power applied to the incidence cosine in the diagnostic model.
+    return_incidence_diagnostics : bool
+        Append the PMT-axis incidence cosine, propagation-step index, and
+        curved-surface local-incidence cosine for every raw deposition slot.
+        Intended for optical-validation plots.
+    return_transport_diagnostics : bool
+        Append per-step photon states for transport validation: position and
+        direction before and after the step, continuation factor, and distance
+        to the detector surface. The arrays have leading shape ``(K, n_photons)``
+        and do not alter the simulated charge.
+    pmt_timing_model : str or None
+        Optional per-photoelectron timing response applied after optical
+        propagation and before hit aggregation/digitization. ``None`` or
+        ``'none'`` preserves geometric arrival times and consumes no RNG.
+        ``'sk4'`` reproduces the non-Gaussian SK-IV timing mixture from
+        SKDetSim ``sgpmt.F``. This changes times only, never charge or sensor
+        assignment, and uses a dedicated RNG substream so later QE and charge
+        draws remain paired with a timing-disabled run. Default ``None``.
+    pmt_detection_model : TabulatedPmtDetectionResponse, path-like, or None
+        Optional local-incidence detection response. For ``sensor_shape='sk20inch'``,
+        this multiplies the ordinary QE by a table evaluated at the cosine
+        between the incoming ray and the curved photocathode normal. The table
+        is a relative response and may exceed one; stochastic hit modes clip
+        only the final QE probability. ``None`` preserves the previous result.
+    propagation_speed_m_per_ns : float or None
+        Optional fixed photon propagation speed. This overrides dispersion for
+        validation or legacy monochromatic runs. With ``None``, wavelength mode
+        uses the material's per-photon group velocity and scalar mode uses the
+        detector material's configured fixed speed.
     spectrum : Spectrum or None
         Optional λ-sampling law (``lucid.wavelength`` Monochromatic / PowerLaw /
         QEWeighted). When given it supersedes ``wavelength_sampling`` for broadband
@@ -215,6 +384,58 @@ def setup_event_simulator(
     from lucid.geometry.detector_geometry import DetectorGeometry
     from lucid.simulation.config import SimConfig
 
+    if sensor_acceptance_model not in ('sphere', 'cosine'):
+        raise ValueError("sensor_acceptance_model must be 'sphere' or 'cosine'")
+    if sensor_acceptance_power < 0:
+        raise ValueError("sensor_acceptance_power must be non-negative")
+    if sensor_shape == 'sk20inch' and sensor_acceptance_model == 'cosine':
+        raise ValueError(
+            "sensor_acceptance_model='cosine' cannot be combined with "
+            "sensor_shape='sk20inch': the curved PMT coverage already includes "
+            "projected-area angular acceptance")
+    if blacksheet_hole_radius is not None:
+        if blacksheet_hole_radius <= 0:
+            raise ValueError("blacksheet_hole_radius must be positive or None")
+        if blacksheet_hole_edge_width <= 0:
+            raise ValueError("blacksheet_hole_edge_width must be positive")
+        if sensor_shape != 'sk20inch' or sensor_candidate_selection != 'wall':
+            raise ValueError(
+                "blacksheet holes require sensor_shape='sk20inch' and "
+                "sensor_candidate_selection='wall'")
+    if sk_acrylic_model not in ('off', 'sk4'):
+        raise ValueError("sk_acrylic_model must be 'off' or 'sk4'")
+    if sk_acrylic_model == 'sk4':
+        if sensor_shape != 'sk20inch' or sensor_candidate_selection != 'wall':
+            raise ValueError(
+                "sk_acrylic_model='sk4' requires SK20-inch wall routing")
+        from lucid.propagation.sk_acrylic import load_sk4_acrylic_optics
+        acrylic_wavelength = (reflection_wavelength
+                              if sk_acrylic_wavelength is None
+                              else sk_acrylic_wavelength)
+        sk_acrylic_optics = load_sk4_acrylic_optics(
+            acrylic_wavelength, sk_acrylic_table)
+        if use_expected_value is False or is_data:
+            raise ValueError(
+                "sk_acrylic_model='sk4' currently requires the "
+                "average-response estimator")
+        if temperature is not None:
+            raise ValueError(
+                "sk_acrylic_model='sk4' currently requires hard PMT routing "
+                "with temperature=None")
+    else:
+        sk_acrylic_optics = None
+    if sk_acrylic_block_misses and sk_acrylic_optics is None:
+        raise ValueError(
+            "sk_acrylic_block_misses requires sk_acrylic_model='sk4'")
+    if sk_acrylic_reflection_mode not in ('absorb', 'first_order'):
+        raise ValueError(
+            "sk_acrylic_reflection_mode must be 'absorb' or 'first_order'")
+    if (sk_acrylic_reflection_mode != 'absorb'
+            and sk_acrylic_optics is None):
+        raise ValueError(
+            "sk_acrylic_reflection_mode='first_order' requires "
+            "sk_acrylic_model='sk4'")
+
     det_geom = DetectorGeometry.from_config(
         json_filename, temperature=temperature,
         max_candidates_per_ray=max_candidates_per_ray,
@@ -222,6 +443,14 @@ def setup_event_simulator(
         overlap_st_width_frac=overlap_st_width_frac,
         overlap_renorm=overlap_renorm,
         overlap_mode=overlap_mode,
+        sensor_shape=sensor_shape,
+        sk_pmt_lookup=sk_pmt_lookup,
+        sk_pmt_lookup_options=sk_pmt_lookup_options,
+        sensor_candidate_selection=sensor_candidate_selection,
+        sensor_wall_assignment=sensor_wall_assignment,
+        pmt_gap_recovery=pmt_gap_recovery,
+        pmt_gap_recovery_hole_radius=pmt_gap_recovery_radius,
+        sk_acrylic_optics=sk_acrylic_optics,
         deposit_leg_bound=deposit_leg_bound,
         **grid_params)
 
@@ -234,16 +463,82 @@ def setup_event_simulator(
 
     # ---- Extract fields from containers ------------------------------------
     material = det_geom.medium.material
-    SPEED_OF_LIGHT_MATERIAL = det_geom.speed_of_light
+    _fixed_propagation_speed = (
+        None if propagation_speed_m_per_ns is None
+        else float(propagation_speed_m_per_ns))
+    _speed_to_validate = (det_geom.speed_of_light if _fixed_propagation_speed is None
+                          else _fixed_propagation_speed)
+    if not np.isfinite(_speed_to_validate) or _speed_to_validate <= 0:
+        raise ValueError("propagation_speed_m_per_ns must be finite and positive")
     detector = det_geom.detector
     # String telescopes use the volume (per-DOM, no-reflection) photon step; all
     # surface geometries (cylinder/sphere/box) keep the byte-identical surface step.
     from lucid.geometry.string import StringTelescope
+    if polarization_model not in ('none', 'sk4'):
+        raise ValueError(
+            "polarization_model must be 'none' or 'sk4'; "
+            f"got {polarization_model!r}")
     _is_volume = isinstance(detector, StringTelescope)
+    if polarization_model == 'sk4' and _is_volume:
+        raise ValueError("polarization_model='sk4' currently supports surface detectors")
+    if return_transport_diagnostics and _is_volume:
+        raise ValueError(
+            "return_transport_diagnostics currently supports surface detectors only")
     sensor_points = det_geom.sensor_points
     NUM_SENSORS = det_geom.num_sensors
     Nphot = sim_config.n_photons
     propagate_photons = det_geom.propagator
+
+    if pmt_detection_model is None:
+        _pmt_detection_response = None
+    elif isinstance(pmt_detection_model, TabulatedPmtDetectionResponse):
+        _pmt_detection_response = pmt_detection_model
+    else:
+        _pmt_detection_response = load_pmt_detection_response(
+            pmt_detection_model)
+    if _pmt_detection_response is not None:
+        if _is_volume:
+            raise ValueError(
+                "pmt_detection_model is only supported for surface detectors")
+        if sensor_shape != 'sk20inch':
+            raise ValueError(
+                "pmt_detection_model requires sensor_shape='sk20inch' so the "
+                "response is evaluated with a physical curved-surface normal")
+
+    # Optional learned position/incidence response. This is independent of the
+    # tabulated local-angle response above; when both are supplied their
+    # efficiencies multiply, while the SK20-inch propagator supplies the same
+    # curved hit position and local surface normal to both models.
+    if pmt_response_model is None:
+        _pmt_siren_response = None
+        _pmt_frames = None
+    else:
+        if _is_volume:
+            raise ValueError(
+                "pmt_response_model is only supported for surface detectors")
+        _pmt_siren_response = (
+            pmt_response_model
+            if isinstance(pmt_response_model, PmtSirenResponse)
+            else load_pmt_siren_response(pmt_response_model)
+        )
+        sensor_directions = getattr(detector, 'pmt_directions', None)
+        sensor_cases = None
+        if sensor_directions is None and hasattr(detector, 'ID_to_case'):
+            sensor_cases = jnp.asarray([
+                detector.ID_to_case[i] for i in range(NUM_SENSORS)
+            ])
+        _pmt_frames = build_pmt_frames(
+            sensor_points, sensor_directions=sensor_directions,
+            sensor_cases=sensor_cases)
+
+    if (sensor_acceptance_model == 'cosine' or return_incidence_diagnostics
+            or blacksheet_hole_radius is not None
+            or sk_acrylic_optics is not None):
+        if not hasattr(detector, 'r') or not hasattr(detector, 'H'):
+            raise ValueError("cosine sensor acceptance currently requires cylinder geometry")
+        sensor_axes = jnp.asarray(_sensor_outward_axes(detector, sensor_points))
+    else:
+        sensor_axes = jnp.zeros_like(sensor_points)
 
     # ---- Handle qe_corrections for baked-in detector params -----------------
     if _default_dp is not None:
@@ -262,6 +557,20 @@ def setup_event_simulator(
     # reflection_fn is captured statically in the differentiable step's closure;
     # build_refl_params packs the model's parameters out of DetectorParams.
     reflection_fn, build_refl_params = get_reflection_model(reflection_model)
+    independent_sensor_detection = (
+        reflection_model in INDEPENDENT_SENSOR_DETECTION_MODELS)
+    if independent_sensor_detection and _pmt_detection_response is None:
+        raise ValueError(
+            "tabulated SK reflection models require pmt_detection_model "
+            "so A(theta) supplies direct PE response independently of R(theta)")
+    if independent_sensor_detection and (
+            sim_config.is_data or sim_config.use_expected_value is False):
+        raise ValueError(
+            "tabulated SK reflection models currently require "
+            "use_expected_value=True; sampled R/A/T branching is not yet "
+            "implemented")
+    mie_cosine_sampler, mie_logpdf_fn = get_mie_phase_model(mie_phase_model)
+    pmt_timing_fn = get_pmt_timing_model(pmt_timing_model)
 
     # ---- Select photon update function --------------------------------------
     # Both paths get the SAME reflection model. The sampling path (data / non-expected-value
@@ -269,12 +578,18 @@ def setup_event_simulator(
     # differentiable forward whenever reflection_model != 'scalar'; binding reflection_fn here
     # keeps the truth generator and the expected-value model consistent.
     if sim_config.is_data:
-        photon_update_fn = partial(photon_iteration_sample, reflection_fn=reflection_fn)
+        photon_update_fn = partial(
+            photon_iteration_sample, reflection_fn=reflection_fn,
+            mie_cosine_sampler=mie_cosine_sampler)
     elif sim_config.use_expected_value is False:
-        photon_update_fn = partial(photon_iteration_sample, reflection_fn=reflection_fn)
+        photon_update_fn = partial(
+            photon_iteration_sample, reflection_fn=reflection_fn,
+            mie_cosine_sampler=mie_cosine_sampler)
     else:
         photon_update_fn = jax.remat(
-            make_photon_iteration_update_factors_safe(reflection_fn))
+            make_photon_iteration_update_factors_safe(
+                reflection_fn, mie_cosine_sampler, mie_logpdf_fn,
+                independent_sensor_detection=independent_sensor_detection))
 
     # ---- Geometry bounds check (delegates to detector method) ----------------
     def get_inside_detector_flag(positions):
@@ -297,35 +612,40 @@ def setup_event_simulator(
     # ---- make_hits wrapper selection ----------------------------------------
     # Every wrapper accepts a trailing ``response`` bundle (gain, t0, spe_width, tts)
     # built from DetectorParams at call time; only the moments mode consumes it.
-    def _make_hits_aggregated(flat_weights, flat_indices, flat_times, num_sensors, qe_key, qe, qe_corrections, response=None, flat_segment_idx=None, flat_indirect=None):
+    def _make_hits_aggregated(flat_weights, flat_indices, flat_times, num_sensors, qe_key, qe, qe_corrections, response=None, flat_segment_idx=None, pmt_response_factor=None, flat_indirect=None):
         return make_hits_simulation(flat_weights, flat_indices, flat_times, num_sensors,
-                                    qe=qe, qe_corrections=qe_corrections)
+                                    qe=qe, qe_corrections=qe_corrections,
+                                    pmt_response_factor=pmt_response_factor)
 
-    def _make_hits_per_photon(flat_weights, flat_indices, flat_times, num_sensors, qe_key, qe, qe_corrections, response=None, flat_segment_idx=None, flat_indirect=None):
+    def _make_hits_per_photon(flat_weights, flat_indices, flat_times, num_sensors, qe_key, qe, qe_corrections, response=None, flat_segment_idx=None, pmt_response_factor=None, flat_indirect=None):
         return make_hits_likelihood(flat_weights, flat_indices, flat_times, num_sensors,
-                                    qe=qe, qe_corrections=qe_corrections)
+                                    qe=qe, qe_corrections=qe_corrections,
+                                    pmt_response_factor=pmt_response_factor)
 
-    def _make_hits_realistic(flat_weights, flat_indices, flat_times, num_sensors, qe_key, qe, qe_corrections, response=None, flat_segment_idx=None, flat_indirect=None):
+    def _make_hits_realistic(flat_weights, flat_indices, flat_times, num_sensors, qe_key, qe, qe_corrections, response=None, flat_segment_idx=None, pmt_response_factor=None, flat_indirect=None):
         tts = 0.0 if response is None else response[3]
         return make_hits_data(flat_weights, flat_indices, flat_times, num_sensors,
                               qe=qe, qe_corrections=qe_corrections,
                               rng_key=qe_key, tts=tts,
-                              charge_resolution=sim_config.charge_resolution)
+                              charge_resolution=sim_config.charge_resolution,
+                              pmt_response_factor=pmt_response_factor)
 
-    def _make_hits_moments(flat_weights, flat_indices, flat_times, num_sensors, qe_key, qe, qe_corrections, response=None, flat_segment_idx=None, flat_indirect=None):
+    def _make_hits_moments(flat_weights, flat_indices, flat_times, num_sensors, qe_key, qe, qe_corrections, response=None, flat_segment_idx=None, pmt_response_factor=None, flat_indirect=None):
         gain, t0, spe_width, tts = response
         return make_hits_moments(flat_weights, flat_indices, flat_times, num_sensors,
                                  qe=qe, qe_corrections=qe_corrections,
-                                 gain=gain, spe_width=spe_width, t0=t0, tts=tts)
+                                 gain=gain, spe_width=spe_width, t0=t0, tts=tts,
+                                 pmt_response_factor=pmt_response_factor)
 
-    def _make_hits_per_segment(flat_weights, flat_indices, flat_times, num_sensors, qe_key, qe, qe_corrections, response=None, flat_segment_idx=None, flat_indirect=None):
+    def _make_hits_per_segment(flat_weights, flat_indices, flat_times, num_sensors, qe_key, qe, qe_corrections, response=None, flat_segment_idx=None, pmt_response_factor=None, flat_indirect=None):
         # Production: per-sensor totals + per-photon pass-through arrays (incl the
         # per-photon segment index) for the host-side per-(segment, sensor) groupby.
         tts = 0.0 if response is None else response[3]
         return make_hits_per_photon(flat_weights, flat_indices, flat_times, num_sensors,
                                     qe=qe, qe_corrections=qe_corrections,
                                     rng_key=qe_key, tts=tts, flat_segment_idx=flat_segment_idx,
-                                    charge_resolution=sim_config.charge_resolution)
+                                    charge_resolution=sim_config.charge_resolution,
+                                    pmt_response_factor=pmt_response_factor)
 
     # Shotgun hit modes (waveform + per-photon). Defaults match SK-realistic
     # PMT behaviour; override via ``waveform_config``.
@@ -337,9 +657,9 @@ def setup_event_simulator(
     if hit_mode == 'waveform':
         _wf_fn = build_make_hits_waveform(n_photons=n_photons, **_wf_cfg)
         def _make_hits_waveform(flat_weights, flat_indices, flat_times, num_sensors,
-                                qe_key, qe, qe_corrections, response=None, flat_segment_idx=None, flat_indirect=None):
+                                qe_key, qe, qe_corrections, response=None, flat_segment_idx=None, pmt_response_factor=None, flat_indirect=None):
             return _wf_fn(flat_weights, flat_indices, flat_times, num_sensors,
-                          qe_key, qe, qe_corrections)
+                          qe_key, qe, qe_corrections, pmt_response_factor)
     elif hit_mode == 'waveform_expected':
         # Expected-value waveform: no Bernoulli, no gain smear — those do not
         # exist when every slot deposits a continuous weight.
@@ -347,18 +667,20 @@ def setup_event_simulator(
         _wf_exp_fn = build_make_hits_waveform_expected(
             n_photons=n_photons, **_wf_exp_cfg)
         def _make_hits_waveform_expected(flat_weights, flat_indices, flat_times, num_sensors,
-                                         qe_key, qe, qe_corrections, response=None, flat_segment_idx=None, flat_indirect=None):
+                                         qe_key, qe, qe_corrections, response=None, flat_segment_idx=None, pmt_response_factor=None, flat_indirect=None):
             return _wf_exp_fn(flat_weights, flat_indices, flat_times, num_sensors,
-                              qe_key, qe, qe_corrections)
+                              qe_key, qe, qe_corrections, pmt_response_factor)
     elif hit_mode == 'shotgun_per_photon':
         _pp_fn = build_make_hits_per_photon_shotgun(
             n_photons=n_photons,
             tts_sigma_ns=_wf_cfg['tts_sigma_ns'],
             smear_time=_wf_cfg['smear_time'])
         def _make_hits_shotgun_pp(flat_weights, flat_indices, flat_times, num_sensors,
-                                  qe_key, qe, qe_corrections, response=None, flat_segment_idx=None, flat_indirect=None):
+                                  qe_key, qe, qe_corrections, response=None, flat_segment_idx=None, pmt_response_factor=None, flat_indirect=None):
             return _pp_fn(flat_weights, flat_indices, flat_times, num_sensors,
-                          qe_key, qe, qe_corrections, flat_indirect)
+                          qe_key, qe, qe_corrections,
+                          pmt_response_factor=pmt_response_factor,
+                          flat_indirect=flat_indirect)
 
     _make_hits_fn = {
         'aggregated': _make_hits_aggregated,
@@ -463,7 +785,7 @@ def setup_event_simulator(
     # A deposited photon converts at QE / (1 - R0) (see _common_propagation), a probability
     # only while QE <= 1 - R0: QE counts photons arriving at the PMT, so it cannot exceed the
     # fraction that is not reflected. Checkable here when the parameters are baked in.
-    if _default_dp is not None and not _is_volume:
+    if _default_dp is not None and not _is_volume and not independent_sensor_detection:
         _r0 = float(sensor_normal_reflectance(
             reflection_fn, build_refl_params(_default_dp), jnp.asarray(reflection_wavelength)))
         _qe_peak = (float(_default_dp.response.qe)
@@ -478,13 +800,14 @@ def setup_event_simulator(
                 "photons arriving at the PMT, so it cannot exceed the fraction not reflected.")
 
     def _get_optical_arrays(n, detector_params, key, wavelengths=None):
-        """Compute per-photon (n,) scatter/absorption arrays and QE weights.
+        """Compute per-photon optical arrays, group speeds, and QE weights.
 
         When wavelength_mode=True: uses medium coefficients at given wavelengths.
         When wavelength_mode=False: broadcasts DetectorParams scalars.
 
-        Returns (scatter_lengths, absorption_lengths, qe_weights, key).
-        qe_weights is (n,) relative to the QE at λ_ref (see _qe_ref), or None.
+        Returns (scatter_lengths, mie_lengths, absorption_lengths, qe_weights,
+        propagation_speeds, key).
+        qe_weights is (n,) or None.
         """
         if wavelength_mode and _medium_wl is None:
             raise RuntimeError(
@@ -494,7 +817,11 @@ def setup_event_simulator(
             # Monochromatic / scalar mode: the pure optical model broadcasts the
             # DetectorParams scalars (wavelengths=None path).
             oa = evaluate_optical_model(detector_params, None, _medium_wl, n)
-            return (oa.scatter_len, oa.mie_len, oa.abs_len, oa.qe, key)
+            speed = (det_geom.speed_of_light if _fixed_propagation_speed is None
+                     else _fixed_propagation_speed)
+            propagation_speeds = jnp.full(n, speed)
+            return (oa.scatter_len, oa.mie_len, oa.abs_len, oa.qe,
+                    propagation_speeds, key)
 
         # --- λ sampling (a SOURCE concern; the optical model only evaluates) ---
         # Normalize wavelength input to per-photon array:
@@ -538,7 +865,12 @@ def setup_event_simulator(
         qe_weights = jnp.full(n, _collapse_qe) if sampled_via_qe_importance else oa.qe
         if qe_weights is not None:
             qe_weights = qe_weights / _qe_ref
-        return oa.scatter_len, oa.mie_len, oa.abs_len, qe_weights, key
+        propagation_speeds = (
+            oa.propagation_speed
+            if _fixed_propagation_speed is None
+            else jnp.full(n, _fixed_propagation_speed))
+        return (oa.scatter_len, oa.mie_len, oa.abs_len, qe_weights,
+                propagation_speeds, key)
 
     # ================================================================
     # Core propagation (shared by all modes)
@@ -551,7 +883,7 @@ def setup_event_simulator(
     def _common_propagation(
             positions, directions, intensities, times,
             scatter_lengths, mie_scatter_lengths, absorption_lengths,
-            qe_per_photon,
+            qe_per_photon, propagation_speeds,
             n_rays, detector_params, key,
             num_sensors, K, n_grad_iters, max_candidates_per_ray,
             propagate_fn, photon_update_fn,
@@ -567,8 +899,9 @@ def setup_event_simulator(
         absorption_lengths : jnp.ndarray
             Per-photon absorption lengths, shape (n_rays,).
         qe_per_photon : jnp.ndarray
-            Per-photon quantum efficiency for light arriving at a sensor, its reflection
-            included, shape (n_rays,).
+            Per-photon quantum efficiency, shape (n_rays,).
+        propagation_speeds : jnp.ndarray
+            Per-photon group velocity in m/ns, shape (n_rays,).
         pos_grad_threshold : int
             Iteration threshold for position stop_gradient.
         make_hits_fn : callable
@@ -587,7 +920,7 @@ def setup_event_simulator(
         # incidence. The photon step reflects first and deposits the rest, so a deposited
         # photon converts at QE / (1 - R0), R0 the model's sensor reflectance at normal
         # incidence. String telescopes have no reflection.
-        if not is_volume:
+        if not is_volume and not independent_sensor_detection:
             qe_per_photon = qe_per_photon / (
                 1.0 - sensor_normal_reflectance(reflection_fn, refl_params, refl_lam))
         qe_corrections = detector_params.per_pmt.qe_corrections
@@ -609,6 +942,52 @@ def setup_event_simulator(
             depositions = prop_results['sensor_weights']
             sensor_indices = prop_results['sensor_indices']
             inside_sensor = prop_results['inside_sensor']
+            if _pmt_detection_response is None and not return_incidence_diagnostics:
+                pmt_response_factor = jnp.ones_like(depositions)
+                local_incidence_cosine = jnp.ones_like(depositions)
+            else:
+                # ``sensor_normals`` use the detector-outward convention, as
+                # does the incoming ray direction at a PMT. Their dot product
+                # is therefore the local incidence cosine. For lookup-only
+                # bundle overlap where the central ray misses the bulb, the
+                # propagator supplies the PMT-axis fallback normal.
+                local_normals = prop_results['sensor_normals']
+                local_directions = prop_results['sensor_directions']
+                local_incidence_cosine = jnp.clip(
+                    jnp.sum(
+                        local_normals * local_directions, axis=-1),
+                    0.0, 1.0)
+                if _pmt_detection_response is None:
+                    pmt_response_factor = jnp.ones_like(depositions)
+                else:
+                    if polarization_model == 'sk4':
+                        pmt_response_factor = _pmt_detection_response.polarized_factor(
+                            local_incidence_cosine, local_directions,
+                            state.polarizations, local_normals)
+                    else:
+                        pmt_response_factor = _pmt_detection_response.factor(
+                            local_incidence_cosine)
+                    pmt_response_factor = jnp.where(
+                        sensor_indices >= 0, pmt_response_factor, 1.0)
+            if _pmt_siren_response is not None:
+                siren_inputs = pmt_siren_inputs(
+                    prop_results['per_sensor_positions'],
+                    prop_results['sensor_directions'],
+                    sensor_indices, sensor_points, _pmt_frames)
+                siren_factor = _pmt_siren_response.efficiency(siren_inputs)
+                siren_factor = jnp.where(
+                    sensor_indices >= 0, siren_factor, 1.0)
+                pmt_response_factor = pmt_response_factor * siren_factor
+            if sensor_acceptance_model == 'cosine' or return_incidence_diagnostics:
+                safe_indices = jnp.maximum(sensor_indices, 0)
+                candidate_axes = sensor_axes[safe_indices]
+                incidence_cosine = jnp.clip(
+                    jnp.sum(candidate_axes * prop_results['sensor_directions'], axis=-1),
+                    0.0, 1.0)
+                incidence_cosine = jnp.where(
+                    sensor_indices >= 0, incidence_cosine, 0.0)
+            if sensor_acceptance_model == 'cosine':
+                depositions = depositions * incidence_cosine ** sensor_acceptance_power
 
             if is_volume:
                 # ── Volume model (string telescope): per-DOM survival, NO reflection ──
@@ -620,6 +999,11 @@ def setup_event_simulator(
                 # NOT the high-variance pathwise route through the discrete DOM-candidate
                 # selection. Track params flow pathwise; λ_abs flows pathwise (deterministic).
                 from lucid.simulation.photon_step_volume import photon_step_volume
+                volume_step = partial(
+                    photon_step_volume,
+                    mie_cosine_sampler=mie_cosine_sampler,
+                    mie_logpdf_fn=mie_logpdf_fn,
+                )
                 sensor_distances = prop_results['sensor_distances']     # (n_cand, n_rays, 1)
                 seg_lengths = jnp.maximum(prop_results['envelope_exit_t'], 1.0)   # (n_rays,)
                 key, subkey = jax.random.split(key)
@@ -627,12 +1011,12 @@ def setup_event_simulator(
                 (new_positions, new_directions, new_times,
                  per_dom_charges, continuing_factors, logp_increments,
                  step_indirect) = jax.vmap(
-                    photon_step_volume,
-                    in_axes=(0, 0, 0, 1, 1, 0, 0, 0, 0, 0, None, None)
+                    volume_step,
+                    in_axes=(0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, None)
                 )(state.positions, state.directions, state.times,
                   sensor_distances.squeeze(-1), depositions,
                   scatter_lengths, mie_scatter_lengths, absorption_lengths, seg_lengths,
-                  rng_keys, SPEED_OF_LIGHT_MATERIAL, g)
+                  rng_keys, propagation_speeds, g)
 
                 inside_detector = get_inside_detector_flag(new_positions)
                 safe_continuing = jnp.where(inside_detector, continuing_factors, 0.0)
@@ -644,18 +1028,23 @@ def setup_event_simulator(
                 dice_dep = jnp.exp(state.log_p - jax.lax.stop_gradient(state.log_p))   # (n_rays,)
                 physical_intensities = intensities * state.survival * dice_dep
                 updated_weights = per_dom_charges.T * physical_intensities[None, :]
-                total_times = sensor_distances / SPEED_OF_LIGHT_MATERIAL + state.times[:, None]
+                total_times = (
+                    sensor_distances / propagation_speeds[None, :, None]
+                    + state.times[:, None])
 
                 next_pos = jnp.where(i < pos_grad_threshold, new_positions, jax.lax.stop_gradient(new_positions))
                 next_dir = jnp.where(i < n_grad_iters, new_directions, jax.lax.stop_gradient(new_directions))
                 new_log_p = state.log_p + logp_increments   # accumulate optical score for FUTURE deposits
                 new_state = PhotonState(
                     positions=next_pos, directions=next_dir, times=new_times,
-                    survival=new_survival, key=key, log_p=new_log_p)
-                # Same 4-tuple shape as the surface branch: the scan unpacks one
-                # output signature for both models.
-                outputs = (updated_weights, sensor_indices,
-                           total_times.squeeze(-1), step_indirect)
+                    survival=new_survival, key=key, log_p=new_log_p,
+                    polarizations=state.polarizations)
+                outputs = (
+                    updated_weights, sensor_indices, total_times.squeeze(-1),
+                    pmt_response_factor, step_indirect)
+                if return_incidence_diagnostics:
+                    outputs = outputs + (
+                        incidence_cosine, local_incidence_cosine)
                 return new_state, outputs
 
             # ── Surface model (cylinder/sphere/box) — UNCHANGED, byte-identical ──
@@ -666,31 +1055,297 @@ def setup_event_simulator(
             normals = jax.lax.stop_gradient(normals)   # detach the reflection normal (Igehy 1/r curvature term compounds across bounces)
 
             hit_sensor = jnp.max(inside_sensor, axis=0)
+            if blacksheet_hole_radius is None:
+                surface_reflection_scale = jnp.ones_like(hit_sensor, dtype=jnp.float32)
+            else:
+                # SK's SGHOLEBST applies blacksheet reflection only outside a
+                # 28.5 cm hole centered on the PMT axis.  The selected wall PMT
+                # is the length-one candidate in the hard SK routing path.
+                assigned = sensor_indices[0]
+                safe_assigned = jnp.maximum(assigned, 0)
+                assigned_centers = sensor_points[safe_assigned]
+                assigned_axes = sensor_axes[safe_assigned]
+                center_delta = hit_positions - assigned_centers
+                tangent_delta = center_delta - (
+                    jnp.sum(center_delta * assigned_axes, axis=1, keepdims=True)
+                    * assigned_axes)
+                hole_distance = jnp.sqrt(
+                    jnp.sum(tangent_delta * tangent_delta, axis=1) + 1e-12)
+                soft_coverage = jax.nn.sigmoid(
+                    (hole_distance - blacksheet_hole_radius)
+                    / blacksheet_hole_edge_width)
+                hard_coverage = (hole_distance > blacksheet_hole_radius).astype(
+                    soft_coverage.dtype)
+                # Exact SK-style hard forward classification with the smooth
+                # sigmoid derivative used only in the backward pass.
+                surface_reflection_scale = soft_coverage + jax.lax.stop_gradient(
+                    hard_coverage - soft_coverage)
+                surface_reflection_scale = jnp.where(
+                    assigned >= 0, surface_reflection_scale, 1.0)
+            if sk_acrylic_optics is None:
+                effective_hit_positions = hit_positions
+                cover_passthrough = jnp.zeros_like(hit_sensor, dtype=bool)
+                cover_passthrough_factor = jnp.ones_like(
+                    hit_sensor, dtype=hit_positions.dtype)
+                cover_time_distance = jnp.zeros_like(
+                    hit_sensor, dtype=hit_positions.dtype)
+                physics_surface_directions = state.directions
+            else:
+                cover_slot = jnp.argmax(
+                    prop_results['acrylic_cover_intersections'], axis=0)
+                crossed_cover = jnp.any(
+                    prop_results['acrylic_cover_intersections'], axis=0)
+                cover_position = jnp.take_along_axis(
+                    prop_results['acrylic_cover_positions'],
+                    cover_slot[None, :, None], axis=0)[0]
+                cover_direction = jnp.take_along_axis(
+                    prop_results['sensor_directions'],
+                    cover_slot[None, :, None], axis=0)[0]
+                cover_time_distance = jnp.take_along_axis(
+                    prop_results['acrylic_cover_time_distances'],
+                    cover_slot[None, :], axis=0)[0]
+                cover_passthrough_factor = jnp.take_along_axis(
+                    prop_results['acrylic_cover_transmissions'],
+                    cover_slot[None, :], axis=0)[0]
+                def take_cover_branch(value):
+                    index = cover_slot.reshape(
+                        (1, cover_slot.shape[0])
+                        + (1,) * (value.ndim - 2))
+                    index = jnp.broadcast_to(
+                        index, (1,) + value.shape[1:])
+                    return jnp.take_along_axis(value, index, axis=0)[0]
+
+                cover_reflections = jax.tree.map(
+                    take_cover_branch,
+                    prop_results['acrylic_cover_reflections'])
+
+                if sk_acrylic_reflection_mode == 'first_order':
+                    # Production SKDetSim makes a discrete Fresnel decision at
+                    # each acrylic boundary. Sample the same leading paths.
+                    # The probability ratio has forward value one and carries
+                    # the live Fresnel derivative in both AD directions.
+                    branch_uniform = jax.random.uniform(
+                        prop_key, shape=(n_rays,))
+                    outer_probability = jnp.clip(
+                        cover_reflections.outer_probability, 0.0, 1.0)
+                    inner_probability = jnp.clip(
+                        cover_reflections.inner_exit_probability,
+                        0.0, 1.0 - outer_probability)
+                    transmitted_probability = jnp.clip(
+                        cover_passthrough_factor,
+                        0.0, 1.0 - outer_probability - inner_probability)
+                    outer_limit = jax.lax.stop_gradient(
+                        outer_probability)
+                    inner_limit = outer_limit + jax.lax.stop_gradient(
+                        inner_probability)
+                    transmitted_limit = inner_limit + jax.lax.stop_gradient(
+                        transmitted_probability)
+                    cover_outer_reflected = (
+                        crossed_cover & (branch_uniform < outer_limit))
+                    cover_inner_reflected = (
+                        crossed_cover & (branch_uniform >= outer_limit)
+                        & (branch_uniform < inner_limit))
+                    cover_transmitted = (
+                        crossed_cover & (branch_uniform >= inner_limit)
+                        & (branch_uniform < transmitted_limit))
+                    selected_probability = jnp.where(
+                        cover_outer_reflected, outer_probability,
+                        jnp.where(
+                            cover_inner_reflected, inner_probability,
+                            jnp.where(
+                                cover_transmitted,
+                                transmitted_probability, 0.0)))
+                    detached_probability = jax.lax.stop_gradient(
+                        selected_probability)
+                    cover_branch_ratio = jnp.where(
+                        selected_probability > 0.0,
+                        selected_probability
+                        / jnp.maximum(detached_probability, 1e-12),
+                        0.0)
+
+                    # The propagator's PMT weight already contains P(transmit).
+                    # Once transmission is sampled, divide by its detached
+                    # probability so the ensemble mean remains unchanged while
+                    # retaining the derivative of P(transmit).
+                    transmitted_weights = depositions / jnp.maximum(
+                        jax.lax.stop_gradient(transmitted_probability)[None, :],
+                        1e-12)
+                    depositions = jnp.where(
+                        crossed_cover[None, :],
+                        jnp.where(
+                            cover_transmitted[None, :],
+                            transmitted_weights, 0.0),
+                        depositions)
+                    inside_sensor = inside_sensor & (
+                        (~crossed_cover) | cover_transmitted)[None, :]
+                    hit_sensor = jnp.max(inside_sensor, axis=0)
+
+                    cover_position = jnp.where(
+                        cover_outer_reflected[:, None],
+                        cover_reflections.outer_position,
+                        jnp.where(
+                            cover_inner_reflected[:, None],
+                            cover_reflections.inner_exit_position,
+                            cover_position))
+                    cover_direction = jnp.where(
+                        cover_outer_reflected[:, None],
+                        cover_reflections.outer_direction,
+                        jnp.where(
+                            cover_inner_reflected[:, None],
+                            cover_reflections.inner_exit_direction,
+                            cover_direction))
+                    cover_time_distance = jnp.where(
+                        cover_outer_reflected,
+                        cover_reflections.outer_time_distance,
+                        jnp.where(
+                            cover_inner_reflected,
+                            cover_reflections.inner_exit_time_distance,
+                            cover_time_distance))
+                    # A non-transmitted choice is a physical acrylic reflection
+                    # when one of the two masks is true; the remainder is loss
+                    # in acrylic or an omitted O(R^2) internal bounce.
+                    cover_passthrough_factor = cover_branch_ratio
+                else:
+                    cover_transmitted = crossed_cover
+                    cover_outer_reflected = jnp.zeros_like(
+                        crossed_cover, dtype=bool)
+                    cover_inner_reflected = jnp.zeros_like(
+                        crossed_cover, dtype=bool)
+                    cover_branch_ratio = cover_passthrough_factor
+
+                cover_passthrough = crossed_cover & (~hit_sensor)
+                effective_hit_positions = jnp.where(
+                    cover_passthrough[:, None], cover_position, hit_positions)
+
             # SAFE norm: eps INSIDE the sqrt so the gradient is finite when a photon sits on a surface
             # (hit==pos -> |Δ|=0 -> jnp.linalg.norm has a 0/0 NaN gradient). This is the 2nd-order-AD NaN.
-            surface_distances = jnp.sqrt(jnp.sum((hit_positions - state.positions)**2, axis=1) + 1e-12) - 1e-6
+            surface_distances = jnp.sqrt(jnp.sum(
+                (effective_hit_positions - state.positions)**2,
+                axis=1) + 1e-12) - 1e-6
+
+            if sk_acrylic_optics is None:
+                physics_surface_positions = (
+                    state.positions
+                    + surface_distances[:, None] * normalize(state.directions))
+            else:
+                selected_slot = jnp.argmax(inside_sensor, axis=0)
+                physics_surface_directions = jnp.take_along_axis(
+                    prop_results['sensor_directions'],
+                    selected_slot[None, :, None], axis=0)[0]
+                physics_surface_directions = jnp.where(
+                    hit_sensor[:, None], physics_surface_directions,
+                    state.directions)
+                physics_surface_directions = jnp.where(
+                    cover_passthrough[:, None], cover_direction,
+                    physics_surface_directions)
+                physics_surface_positions = effective_hit_positions
 
             key, subkey = jax.random.split(key)
             rng_keys = jax.random.split(subkey, n_rays)
 
-            # vmap: 14 args — per-photon scatter/absorption, scalar g, packed refl_params
+            # vmap: per-photon scatter/absorption and surface coverage; scalar
+            # g and packed refl_params.
             # pytree (broadcast, in_axes None), per-photon hit_sensor + rng, scalar lam
             # (a wavelength placeholder for scalar reflection; per-photon λ is threaded when
             # a wavelength-dependent reflection model is used). Step returns a 7-tuple; the
             # 7th is the per-photon DiCE score increment (lf+la+lr for the differentiable
             # step, 0.0 for the sampling step). PRE-step log_p drives the implicit deposit.
-            (new_positions, new_directions, new_times,
-             detect_probs, reflection_attenuations,
-             continuing_factors, logp_increments, step_indirect) = jax.vmap(
-                photon_update_fn,
-                in_axes=(0, 0, 0, 0, 0,
-                         0, 0, None, None, 0,
-                         0, None, 0, None)
-            )(state.positions, state.directions, state.times,
-              surface_distances, normals,
-              scatter_lengths, mie_scatter_lengths, g, refl_params,
-              absorption_lengths,
-              hit_sensor, refl_lam, rng_keys, SPEED_OF_LIGHT_MATERIAL)
+            if polarization_model == 'sk4':
+                (new_positions, new_directions, new_times,
+                 detect_probs, reflection_attenuations,
+                 continuing_factors, logp_increments, step_indirect,
+                 new_polarizations) = jax.vmap(
+                    photon_update_fn,
+                    in_axes=(0, 0, 0, 0, 0,
+                             0, 0, None, None, 0,
+                             0, None, 0, 0, 0, 0, 0, 0, 0, 0)
+                )(state.positions, state.directions, state.times,
+                  surface_distances, normals,
+                  scatter_lengths, mie_scatter_lengths, g, refl_params,
+                  absorption_lengths,
+                  hit_sensor, refl_lam, rng_keys, propagation_speeds,
+                  surface_reflection_scale, physics_surface_directions,
+                  physics_surface_positions, cover_passthrough,
+                  cover_passthrough_factor, state.polarizations)
+            else:
+                (new_positions, new_directions, new_times,
+                 detect_probs, reflection_attenuations,
+                 continuing_factors, logp_increments, step_indirect) = jax.vmap(
+                    photon_update_fn,
+                    in_axes=(0, 0, 0, 0, 0,
+                             0, 0, None, None, 0,
+                             0, None, 0, 0, 0, 0, 0, 0, 0)
+                )(state.positions, state.directions, state.times,
+                  surface_distances, normals,
+                  scatter_lengths, mie_scatter_lengths, g, refl_params,
+                  absorption_lengths,
+                  hit_sensor, refl_lam, rng_keys, propagation_speeds,
+                  surface_reflection_scale, physics_surface_directions,
+                  physics_surface_positions, cover_passthrough,
+                  cover_passthrough_factor)
+                new_polarizations = None
+
+            if sk_acrylic_optics is not None:
+                from lucid.propagation.sk_acrylic import (
+                    trace_sk4_acrylic_from_pmt,
+                )
+                safe_selected_slot = jnp.argmax(inside_sensor, axis=0)
+                selected_sensor_indices = jnp.take_along_axis(
+                    sensor_indices, safe_selected_slot[None, :], axis=0)[0]
+                safe_sensor_indices = jnp.maximum(selected_sensor_indices, 0)
+                selected_centers = sensor_points[safe_sensor_indices]
+                selected_axes = -sensor_axes[safe_sensor_indices]
+                exit_trace = jax.vmap(
+                    lambda origin, direction, center, axis:
+                    trace_sk4_acrylic_from_pmt(
+                        origin, direction, center, axis,
+                        sk_acrylic_optics)
+                )(hit_positions, new_directions,
+                  selected_centers, selected_axes)
+                surface_sensor_event = hit_sensor & (~step_indirect)
+                valid_exit_event = surface_sensor_event & exit_trace.valid
+                if sk_acrylic_reflection_mode == 'first_order':
+                    entry_transmission = jnp.where(
+                        crossed_cover, cover_branch_ratio, 1.0)
+                else:
+                    entry_transmission = jnp.max(depositions, axis=0)
+                cover_continuation = jnp.where(
+                    surface_sensor_event,
+                    entry_transmission * exit_trace.transmission,
+                    1.0)
+                continuing_factors = continuing_factors * cover_continuation
+                new_positions = jnp.where(
+                    valid_exit_event[:, None],
+                    exit_trace.position + 1e-4 * exit_trace.direction,
+                    new_positions)
+                new_directions = jnp.where(
+                    valid_exit_event[:, None],
+                    exit_trace.direction, new_directions)
+                selected_time_distance = jnp.take_along_axis(
+                    hit_times_meters[..., 0],
+                    safe_selected_slot[None, :], axis=0)[0]
+                reflected_time = state.times + (
+                    selected_time_distance + exit_trace.time_distance
+                ) / propagation_speeds
+                new_times = jnp.where(
+                    valid_exit_event, reflected_time, new_times)
+
+                passthrough_event = cover_passthrough & (~step_indirect)
+                new_positions = jnp.where(
+                    passthrough_event[:, None],
+                    cover_position + 1e-4 * cover_direction,
+                    new_positions)
+                new_directions = jnp.where(
+                    passthrough_event[:, None], cover_direction,
+                    new_directions)
+                passthrough_time = (
+                    state.times + cover_time_distance / propagation_speeds)
+                new_times = jnp.where(
+                    passthrough_event, passthrough_time, new_times)
+                if sk_acrylic_block_misses:
+                    continuing_factors = jnp.where(
+                        passthrough_event & cover_transmitted,
+                        0.0, continuing_factors)
 
             inside_detector = get_inside_detector_flag(new_positions)
             safe_continuing = jnp.where(inside_detector, continuing_factors, 0.0)
@@ -704,7 +1359,7 @@ def setup_event_simulator(
             dice_dep = jnp.exp(state.log_p - jax.lax.stop_gradient(state.log_p))   # (n_rays,)
             detected_factors = detect_probs * reflection_attenuations * dice_dep
             updated_weights = depositions * physical_intensities[None, :] * detected_factors[None, :]
-            times_ns = hit_times_meters / SPEED_OF_LIGHT_MATERIAL
+            times_ns = hit_times_meters / propagation_speeds[:, None]
             total_times = times_ns + state.times[:, None]
 
             iter_weights = updated_weights
@@ -728,15 +1383,34 @@ def setup_event_simulator(
                 survival=new_survival,
                 key=key,
                 log_p=new_log_p,
+                polarizations=new_polarizations,
             )
-            # step_indirect is a scan OUTPUT, not part of the carry: keeping it
-            # out of PhotonState leaves the carry pytree, its remat and the
-            # gradient path exactly as they were. A cumulative OR along the
-            # iteration axis afterwards gives "had already indirect", which is
-            # what the scattering table's direct/indirect split needs.
-            outputs = (iter_weights, iter_indices, iter_times, step_indirect)
+            # Keep step_indirect outside PhotonState so it does not alter the
+            # scan carry or its differentiation path.  It is converted to an
+            # exclusive cumulative flag after the scan.
+            outputs = (
+                iter_weights, iter_indices, iter_times,
+                pmt_response_factor, step_indirect)
+            if return_incidence_diagnostics:
+                outputs = outputs + (
+                    incidence_cosine, local_incidence_cosine)
+            if return_transport_diagnostics:
+                outputs = outputs + (
+                    state.positions, state.directions,
+                    new_positions, new_directions,
+                    continuing_factors, surface_distances)
             return new_state, outputs
 
+        if polarization_model == 'sk4':
+            # Derive a separate stream without advancing the transport key, so
+            # polarized/unpolarized validation runs retain common random
+            # numbers for free paths, surface branches, and timing.
+            polarization_key = jax.random.fold_in(key, 0x504F4C)
+            polarization_keys = jax.random.split(polarization_key, n_rays)
+            initial_polarizations = jax.vmap(sample_transverse_polarization)(
+                directions, polarization_keys)
+        else:
+            initial_polarizations = None
         init_state = PhotonState(
             positions=positions,
             directions=directions,
@@ -744,15 +1418,34 @@ def setup_event_simulator(
             survival=initial_survival,
             key=key,
             log_p=jnp.zeros(n_rays),
+            polarizations=initial_polarizations,
         )
         propagation_step_remat = jax.remat(propagation_step)
 
-        _, (all_weights, all_indices, all_times, all_indirect) = jax.lax.scan(
-            propagation_step_remat, init_state, jnp.arange(K))
+        scan_outputs = jax.lax.scan(
+            propagation_step_remat, init_state, jnp.arange(K))[1]
+        (all_weights, all_indices, all_times,
+         all_pmt_response_factors, all_indirect) = scan_outputs[:5]
+        output_offset = 5
+        if return_incidence_diagnostics:
+            all_incidence_cosines, all_local_incidence_cosines = (
+                scan_outputs[output_offset:output_offset + 2])
+            output_offset += 2
+        if return_transport_diagnostics:
+            (all_pre_positions, all_pre_directions,
+             all_post_positions, all_post_directions,
+             all_continuing_factors, all_surface_distances) = (
+                scan_outputs[output_offset:output_offset + 6])
 
         flat_weights = all_weights.reshape(-1)
         flat_indices = all_indices.reshape(-1)
         flat_times = all_times.reshape(-1)
+        flat_pmt_response_factors = all_pmt_response_factors.reshape(-1)
+
+        # Optional PMT transit/late/pre-pulse response. The model is resolved
+        # statically at setup. Every model uses a dedicated RNG substream and
+        # returns the key unchanged, so QE/charge draws remain paired.
+        flat_times, key = pmt_timing_fn(flat_times, key)
 
         # Per-deposit "this photon had already left the straight line". A deposit
         # made at step k belongs to a photon that indirect during steps 0..k-1,
@@ -780,9 +1473,32 @@ def setup_event_simulator(
         # Per-photon segment id (per_segment mode), broadcast to flat shape via the
         # same i % n_rays trick as flat_qe. None for every other mode → byte-identical.
         flat_segment_idx = (segment_idx[photon_idx] if segment_idx is not None else None)
-        return make_hits_fn(
+        hit_output = make_hits_fn(
             flat_weights, flat_indices, flat_times, num_sensors, qe_key, flat_qe, qe_corrections,
-            response, flat_segment_idx=flat_segment_idx, flat_indirect=flat_indirect)
+            response, flat_segment_idx=flat_segment_idx,
+            pmt_response_factor=flat_pmt_response_factors,
+            flat_indirect=flat_indirect)
+        diagnostic_output = ()
+        if return_incidence_diagnostics:
+            flat_incidence_cosines = all_incidence_cosines.reshape(-1)
+            flat_local_incidence_cosines = all_local_incidence_cosines.reshape(-1)
+            # Hard wall-routed SK PMTs collapse the candidate axis to one,
+            # while the configured lookup map can still contain (for example)
+            # eight candidates. Derive the diagnostic length from the array
+            # actually returned by the propagator so step labels stay aligned
+            # with flattened hits in both paths.
+            slots_per_step = flat_incidence_cosines.size // K
+            flat_step_indices = jnp.repeat(jnp.arange(K), slots_per_step)
+            diagnostic_output = diagnostic_output + (
+                flat_incidence_cosines, flat_step_indices,
+                flat_local_incidence_cosines)
+        if return_transport_diagnostics:
+            diagnostic_output = diagnostic_output + (
+                all_pre_positions, all_pre_directions,
+                all_post_positions, all_post_directions,
+                all_continuing_factors, all_surface_distances,
+                all_indirect)
+        return hit_output + diagnostic_output
 
     # ================================================================
     # Mode-specific simulation functions
@@ -850,7 +1566,8 @@ def setup_event_simulator(
 
         # Per-photon optical properties — use PhotonSim wavelengths if available
         data_wavelengths = photon_data.get('wavelengths', None)
-        scatter_lengths, mie_scatter_lengths, absorption_lengths, qe_weights, key = _get_optical_arrays(
+        (scatter_lengths, mie_scatter_lengths, absorption_lengths, qe_weights,
+         propagation_speeds, key) = _get_optical_arrays(
             n_rays, detector_params, key, wavelengths=data_wavelengths)
         # Per-photon QE: response.qe x the curve relative to λ_ref (passed to make_hits, not baked into weights)
         if qe_weights is not None:
@@ -866,7 +1583,7 @@ def setup_event_simulator(
         return _common_propagation(
             final_origins, final_directions, photon_intensities, photon_times,
             scatter_lengths, mie_scatter_lengths, absorption_lengths,
-            qe_per_photon,
+            qe_per_photon, propagation_speeds,
             n_rays, detector_params, key, NUM_SENSORS, sim_config.K, sim_config.effective_n_grad_iters, max_candidates_per_ray,
             propagate_photons, photon_update_fn,
             pos_grad_threshold=_pgt, make_hits_fn=_make_hits_fn, is_volume=_is_volume,
@@ -957,7 +1674,8 @@ def setup_event_simulator(
             photon_times = jnp.concatenate(parts_times)
             wavelengths = jnp.concatenate(parts_wls)
 
-            scatter_lengths, mie_scatter_lengths, absorption_lengths, qe_weights, key = _get_optical_arrays(
+            (scatter_lengths, mie_scatter_lengths, absorption_lengths, qe_weights,
+             propagation_speeds, key) = _get_optical_arrays(
                 _n_total, detector_params, opt_key, wavelengths=wavelengths)
             if qe_weights is not None:
                 qe_per_photon = qe_weights * detector_params.response.qe
@@ -966,7 +1684,7 @@ def setup_event_simulator(
             return _common_propagation(
                 photon_origins, photon_directions, photon_intensities, photon_times,
                 scatter_lengths, mie_scatter_lengths, absorption_lengths,
-                qe_per_photon,
+                qe_per_photon, propagation_speeds,
                 _n_total, detector_params, key, NUM_SENSORS, sim_config.K, sim_config.effective_n_grad_iters, max_candidates_per_ray,
                 propagate_photons, photon_update_fn,
                 pos_grad_threshold=_pgt, make_hits_fn=_make_hits_fn, is_volume=_is_volume)
@@ -986,7 +1704,8 @@ def setup_event_simulator(
                                         jnp.asarray(a_c), jnp.asarray(l_c), jnp.asarray(b_c)))
 
         # Per-photon optical properties (Cherenkov spectrum when wavelength_mode)
-        scatter_lengths, mie_scatter_lengths, absorption_lengths, qe_weights, key = _get_optical_arrays(
+        (scatter_lengths, mie_scatter_lengths, absorption_lengths, qe_weights,
+         propagation_speeds, key) = _get_optical_arrays(
             Nphot, detector_params, opt_key)
 
         # Per-photon QE: response.qe x the curve relative to λ_ref (passed to make_hits, not baked into weights)
@@ -998,7 +1717,7 @@ def setup_event_simulator(
         return _common_propagation(
             photon_origins, photon_directions, photon_intensities, photon_times + t0,
             scatter_lengths, mie_scatter_lengths, absorption_lengths,
-            qe_per_photon,
+            qe_per_photon, propagation_speeds,
             Nphot, detector_params, key, NUM_SENSORS, sim_config.K, sim_config.effective_n_grad_iters, max_candidates_per_ray,
             propagate_photons, photon_update_fn,
             pos_grad_threshold=_pgt, make_hits_fn=_make_hits_fn, is_volume=_is_volume)
@@ -1014,7 +1733,8 @@ def setup_event_simulator(
         # Source wavelength can be None (→ Cherenkov), scalar, or (Nphot,) array;
         # _get_optical_arrays normalizes the shape.
         wavelengths = getattr(source, 'wavelength', None)
-        scatter_lengths, mie_scatter_lengths, absorption_lengths, qe_weights, key = _get_optical_arrays(
+        (scatter_lengths, mie_scatter_lengths, absorption_lengths, qe_weights,
+         propagation_speeds, key) = _get_optical_arrays(
             Nphot, detector_params, opt_key, wavelengths=wavelengths)
 
         # Per-photon QE: response.qe x the curve relative to λ_ref (passed to make_hits, not baked into weights)
@@ -1027,7 +1747,7 @@ def setup_event_simulator(
         return _common_propagation(
             photon_origins, photon_directions, photon_intensities, photon_times,
             scatter_lengths, mie_scatter_lengths, absorption_lengths,
-            qe_per_photon,
+            qe_per_photon, propagation_speeds,
             Nphot, detector_params, key, NUM_SENSORS, sim_config.K, sim_config.effective_n_grad_iters, max_candidates_per_ray,
             propagate_photons, photon_update_fn,
             pos_grad_threshold=_pgt, make_hits_fn=_make_hits_fn, is_volume=_is_volume)
@@ -1107,5 +1827,3 @@ def setup_event_simulator(
             return _sim_track_default
         else:
             return partial(_simulation_without_data_impl, model_params=model_params)
-
-

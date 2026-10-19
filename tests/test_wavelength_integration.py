@@ -12,6 +12,7 @@ import os
 import pytest
 import jax
 import jax.numpy as jnp
+import numpy.testing as npt
 from jax import value_and_grad, jit
 
 pytestmark = pytest.mark.slow
@@ -173,6 +174,66 @@ class TestMonochromaticLaser:
         # Very different physics: 350nm has L_scat≈91m, L_abs≈608m
         # while 500nm has L_scat≈504m, L_abs≈39m
         assert float(jnp.sum(c_350)) != float(jnp.sum(c_500))
+
+
+class TestGroupVelocityTiming:
+    """Per-photon SK water group velocity reaches the propagation loop."""
+
+    def test_dispersion_changes_time_but_not_charge(self, detector, base_dp):
+        from lucid.simulation import setup_event_simulator
+        from lucid.sources import laser_source
+
+        common = dict(
+            json_filename=GEOM, n_photons=256, temperature=None, K=2,
+            is_calibration=True, default_detector_params=base_dp,
+            physics_config=PHYSICS, wavelength_mode=True)
+        sim_dispersive = setup_event_simulator(**common)
+        # 405-nm SK group speed. At 337 nm water is more dispersive and photons
+        # propagate more slowly; fixing this value isolates the timing effect.
+        sim_fixed_405 = setup_event_simulator(
+            **common, propagation_speed_m_per_ns=0.21728951)
+        source = laser_source(
+            position=[0., 0., detector.H / 2 - 0.1], intensity=1e8,
+            wavelength=337.0)
+        key = jax.random.PRNGKey(42)
+
+        charges, times = sim_dispersive(source, key)
+        fixed_charges, fixed_times = sim_fixed_405(source, key)
+
+        # Velocity changes no transport probability or PMT assignment.
+        assert float(jnp.max(jnp.abs(charges - fixed_charges))) == 0.0
+        hit = (charges > 0.0) & jnp.isfinite(times) & jnp.isfinite(fixed_times)
+        assert bool(jnp.any(hit))
+        # v_g(337 nm)=0.21307011 m/ns < v_g(405 nm), so every finite hit is later.
+        assert bool(jnp.all(times[hit] > fixed_times[hit]))
+
+    def test_arrival_time_supports_forward_and_reverse_wavelength_gradients(
+            self, detector, base_dp):
+        """JVP and VJP pass through dispersion and the full propagation loop."""
+        from lucid.simulation import setup_event_simulator
+        from lucid.sources import laser_source
+
+        sim = setup_event_simulator(
+            GEOM, 64, temperature=None, K=1, is_calibration=True,
+            default_detector_params=base_dp, physics_config=PHYSICS,
+            wavelength_mode=True)
+        source = laser_source(
+            position=[0., 0., detector.H / 2 - 0.1], intensity=1e8,
+            wavelength=405.0)
+        key = jax.random.PRNGKey(42)
+
+        def charge_weighted_time(wavelength):
+            charges, times = sim(source._replace(wavelength=wavelength), key)
+            return jnp.sum(charges * times) / (jnp.sum(charges) + 1e-12)
+
+        wavelength = jnp.asarray(405.0)
+        reverse = jax.grad(charge_weighted_time)(wavelength)
+        _, forward = jax.jvp(
+            charge_weighted_time, (wavelength,), (jnp.ones_like(wavelength),))
+        assert jnp.isfinite(reverse)
+        assert jnp.isfinite(forward)
+        assert float(jnp.abs(reverse)) > 0.0
+        npt.assert_allclose(forward, reverse, rtol=2e-5, atol=1e-7)
 
 
 # ── Gradient tests ─────────────────────────────────────────────────

@@ -8,6 +8,7 @@ from lucid.simulation.optics import (
 )
 from lucid.wavelength.scattering import (
     compute_mie_scatter_direction, hg_sample_cos_theta, hg_logpdf, rayleigh_logpdf,
+    compute_polarized_rayleigh_scatter, project_polarization,
 )
 from lucid.simulation.reflection import scalar_reflection
 
@@ -19,7 +20,14 @@ def photon_iteration_sample(
         normal, scatter_length, mie_scatter_length, g, refl_params,
         absorption_length,
         hit_sensor, lam, rng_key, speed_of_light,
-        reflection_fn=scalar_reflection):
+        surface_reflection_scale=1.0,
+        surface_direction=None,
+        surface_position=None,
+        surface_passthrough=False,
+        surface_passthrough_factor=1.0,
+        reflection_fn=scalar_reflection,
+        mie_cosine_sampler=hg_sample_cos_theta,
+        polarization=None):
     """
     Sampling version of photon iteration that makes binary decisions.
 
@@ -80,8 +88,30 @@ def photon_iteration_sample(
     # score (3rd return) is discarded: sampling is a real MC draw, not a soft expectation.
     # k4 (the legacy inline-diffuse key) is passed in, so the default 'scalar' model reproduces
     # the previous hard-coded walls-diffuse/sensors-specular behavior BIT-FOR-BIT.
+    if surface_direction is None:
+        surface_direction = direction
+    if surface_position is None:
+        surface_position = position + surface_distance * normalize(direction)
+    interaction_direction = jnp.where(
+        hit_sensor, surface_direction, direction)
     reflection_rate, reflection_dir, _lr_unused = reflection_fn(
-        direction, normal, hit_sensor, refl_params, lam, k4)
+        interaction_direction, normal, hit_sensor, refl_params, lam, k4,
+        polarization=polarization)
+    reflection_rate = jnp.where(
+        surface_passthrough, surface_passthrough_factor, reflection_rate)
+    reflection_dir = jnp.where(
+        surface_passthrough, surface_direction, reflection_dir)
+    # A geometric surface classifier can suppress wall reflection in openings
+    # such as the 28.5 cm holes around SK PMTs.  PMT reflection is unchanged.
+    # Acrylic transport is represented as a surface passthrough. It occurs at
+    # the cover itself and must not inherit the blacksheet coverage of the
+    # nominal detector wall behind it (inside a PMT hole that coverage is
+    # exactly zero). Only genuine wall interactions receive the mask.
+    wall_reflection_scale = jnp.where(
+        surface_passthrough, 1.0, surface_reflection_scale)
+    reflection_rate = jnp.where(
+        hit_sensor, reflection_rate,
+        reflection_rate * wall_reflection_scale)
     # Combine Rayleigh + Mie by RATES (NOT min): total scatter coeff = 1/L_R + 1/L_M.
     mie_safe = jnp.maximum(mie_scatter_length, 1e-6)
     inv_total = 1.0 / scatter_length + 1.0 / mie_safe
@@ -95,10 +125,9 @@ def photon_iteration_sample(
     reaches_surface = u1 < reach_surface_prob
 
     u2 = jax.random.uniform(k2)
-    reflects = reaches_surface & (u2 < reflection_rate)
-    # Not reflected -> deposited; make_hits converts it at QE / (1 - R0), since QE counts
-    # photons arriving at the PMT (see simulator._common_propagation).
-    detects = reaches_surface & (u2 >= reflection_rate)
+    reflects = reaches_surface & (
+        surface_passthrough | (u2 < reflection_rate))
+    detects = reaches_surface & (~surface_passthrough) & (u2 >= reflection_rate)
     scatters = ~reaches_surface
 
     # The fraction of 'errors' for a given epsilon change with the detector size.
@@ -111,18 +140,23 @@ def photon_iteration_sample(
     new_pos = jnp.where(
         scatters,
         position + scatter_distance * normalize(direction),
-        position + surface_distance * normalize(direction) + epsilon * normalize(inward_normal),
+        surface_position + epsilon * normalize(inward_normal),
     )
 
-    rayleigh_dir = compute_scatter_direction(direction, k3)
-    mie_dir = compute_mie_scatter_direction(direction, k3, g)
+    if polarization is None:
+        rayleigh_dir = compute_scatter_direction(direction, k3)
+    else:
+        rayleigh_dir, _ = compute_polarized_rayleigh_scatter(
+            direction, polarization, k3)
+    mie_dir = compute_mie_scatter_direction(
+        direction, k3, g, cosine_sampler=mie_cosine_sampler)
     is_mie = jax.random.uniform(k5) < p_mie          # choose Mie vs Rayleigh per scatter (~5% Mie at physical L)
     chosen_scatter_dir = jnp.where(is_mie, mie_dir, rayleigh_dir)
 
     new_dir = jnp.where(
         reflects,
         reflection_dir,
-        jnp.where(scatters, chosen_scatter_dir, direction),
+        jnp.where(scatters, chosen_scatter_dir, interaction_direction),
     )
 
     distance_traveled = jnp.where(scatters, scatter_distance, surface_distance)
@@ -149,9 +183,14 @@ def photon_iteration_sample(
     # no gradient, and nothing else reads it -- it exists so the scattering-table
     # reduction can split direct from indirect light per photon.
     indirect = scatters | reflects
-
-    return (new_pos, new_dir, new_time, detect_prob, reflection_attenuation,
-            continuing_factor, logp_increment, indirect)
+    result = (new_pos, new_dir, new_time, detect_prob, reflection_attenuation,
+              continuing_factor, logp_increment, indirect)
+    if polarization is None:
+        return result
+    new_polarization = jnp.where(
+        (scatters | reflects)[..., None],
+        project_polarization(polarization, new_dir), polarization)
+    return result + (new_polarization,)
 
 
 def photon_iteration_update_factors(
@@ -159,7 +198,16 @@ def photon_iteration_update_factors(
         normal, scatter_length, mie_scatter_length, g, refl_params,
         absorption_length,
         hit_sensor, lam, rng_key, speed_of_light,
-        reflection_fn=scalar_reflection):
+        surface_reflection_scale=1.0,
+        surface_direction=None,
+        surface_position=None,
+        surface_passthrough=False,
+        surface_passthrough_factor=1.0,
+        reflection_fn=scalar_reflection,
+        mie_cosine_sampler=hg_sample_cos_theta,
+        mie_logpdf_fn=hg_logpdf,
+        independent_sensor_detection=False,
+        polarization=None):
     """
     Expected-value ("implicit capture") photon update with DiCE score-function gradients.
 
@@ -244,13 +292,25 @@ def photon_iteration_update_factors(
     is_mie = jax.random.uniform(k[2]) < sg(p_mie)
     ua = jax.random.uniform(k[3])
     phi = jax.random.uniform(k[4]) * 2.0 * jnp.pi
-    cmie = hg_sample_cos_theta(ua, sg(g))
+    cmie = mie_cosine_sampler(ua, sg(g))
     cray = jnp.clip(solve_rayleigh_inverse_cdf(ua), -1.0, 1.0)
     cth = jnp.where(is_mie, cmie, cray)
     sth = jnp.sqrt(jnp.clip(1.0 - cth**2, 0.0, 1.0))
     frame = create_local_frame(direction)
     local = jnp.array([sth * jnp.cos(phi), sth * jnp.sin(phi), cth])
-    scat_dir = normalize(frame.T @ local)
+    unpolarized_scat_dir = normalize(frame.T @ local)
+    if polarization is None:
+        scat_dir = unpolarized_scat_dir
+    else:
+        polarized_rayleigh_dir, _ = compute_polarized_rayleigh_scatter(
+            direction, polarization, k[3])
+        mie_local = jnp.array([
+            jnp.sqrt(jnp.clip(1.0 - cmie**2, 0.0, 1.0)) * jnp.cos(phi),
+            jnp.sqrt(jnp.clip(1.0 - cmie**2, 0.0, 1.0)) * jnp.sin(phi),
+            cmie,
+        ])
+        mie_dir = normalize(frame.T @ mie_local)
+        scat_dir = jnp.where(is_mie, mie_dir, polarized_rayleigh_dir)
 
     # Reflection — delegated to the pluggable model (default scalar_reflection, byte-identical).
     # The model returns (refl_prob, reflection_dir, lr_score): the angle/λ-dependent MAGNITUDE,
@@ -259,14 +319,34 @@ def photon_iteration_update_factors(
     # normal internally (Igehy 1999 curvature term compounds ~1/r_sensor across K bounces).
     epsilon = 1e-4
     inward_normal = -sg(normal)
+    if surface_direction is None:
+        surface_direction = direction
+    if surface_position is None:
+        surface_position = position + surface_distance * normalize(direction)
+    interaction_direction = jnp.where(
+        hit_sensor, surface_direction, direction)
     refl_prob, reflection_dir, lr = reflection_fn(
-        direction, normal, hit_sensor, refl_params, lam, k[5])
+        interaction_direction, normal, hit_sensor, refl_params, lam, k[5],
+        polarization=polarization)
+    refl_prob = jnp.where(
+        surface_passthrough, surface_passthrough_factor, refl_prob)
+    reflection_dir = jnp.where(
+        surface_passthrough, surface_direction, reflection_dir)
+    lr = jnp.where(surface_passthrough, 0.0, lr)
+    # A cover crossing is acrylic transport, not a blacksheet interaction at
+    # the wall behind the cover. Applying the hole mask here used to turn its
+    # continuation probability into zero precisely inside PMT openings.
+    wall_reflection_scale = jnp.where(
+        surface_passthrough, 1.0, surface_reflection_scale)
+    refl_prob = jnp.where(
+        hit_sensor, refl_prob,
+        refl_prob * wall_reflection_scale)
     new_dir = jnp.where(is_scat, scat_dir, reflection_dir)
 
     # Positions (hard, detached free path d): scatter point vs surface point.
     dir_n = normalize(direction)
     scatter_pos = position + d * dir_n
-    surface_pos = position + Dd * dir_n + epsilon * normalize(inward_normal)
+    surface_pos = surface_position + epsilon * normalize(inward_normal)
     new_pos = jnp.where(is_scat, scatter_pos, surface_pos)
 
     # DiCE scores — d, Dd, cmie, cray, p_mie, g-sample DETACHED so the score carries OPTICAL
@@ -275,7 +355,7 @@ def photon_iteration_update_factors(
     lf = jnp.where(is_scat, jnp.log(mu_tot) - mu_tot * sg(d), -mu_tot * sg(Dd))
     la = jnp.where(is_scat,
                    jnp.where(is_mie,
-                             jnp.log(p_mie) + hg_logpdf(sg(cmie), g),
+                             jnp.log(p_mie) + mie_logpdf_fn(sg(cmie), g),
                              jnp.log1p(-p_mie) + rayleigh_logpdf(sg(cray))),
                    0.0)
     logp_increment = lf + la + lr
@@ -286,7 +366,17 @@ def photon_iteration_update_factors(
     # (the scan body multiplies it from PRE-step log_p).
     reach = jnp.exp(-mu_tot * Dd)
     atten_surf = jnp.exp(-Dd / absorption_length)
-    detect_prob = reach * (1.0 - refl_prob) * atten_surf
+    # In the SK tabulated PMT model, direct photocathode absorption and
+    # reflection are independent contributions to the expected response.
+    # A(theta) is applied per candidate PMT later; do not multiply it by a
+    # second (1-R) factor here.  Wall deposits retain the legacy factor.
+    surface_deposit_factor = 1.0 - refl_prob
+    if independent_sensor_detection:
+        surface_deposit_factor = jnp.where(
+            hit_sensor, jnp.ones_like(refl_prob), surface_deposit_factor)
+    surface_deposit_factor = jnp.where(
+        surface_passthrough, 0.0, surface_deposit_factor)
+    detect_prob = reach * surface_deposit_factor * atten_surf
     reflection_attenuation = jnp.ones_like(detect_prob)           # folded into detect_prob
     continuing_factor = jnp.where(is_scat, atten, refl_prob * atten)
 
@@ -299,9 +389,14 @@ def photon_iteration_update_factors(
     # This branch is a weighted/expectation step rather than a sampled one, so
     # is_scat is the step's scatter decision; it carries no gradient either way.
     indirect = is_scat
-
-    return (new_pos, new_dir, new_time, detect_prob, reflection_attenuation,
-            continuing_factor, logp_increment, indirect)
+    result = (new_pos, new_dir, new_time, detect_prob, reflection_attenuation,
+              continuing_factor, logp_increment, indirect)
+    if polarization is None:
+        return result
+    new_polarization = jnp.where(
+        (is_scat | (~is_scat & (refl_prob > 0.0)))[..., None],
+        project_polarization(polarization, new_dir), polarization)
+    return result + (new_polarization,)
 
 
 # ===================================================================
@@ -312,7 +407,11 @@ def photon_iteration_update_factors(
 # custom_vjp signature stays fixed (refl_params is a single packed pytree arg) —
 # a new reflection model never reshapes _fwd/_bwd residuals or cotangents.
 
-def make_photon_iteration_update_factors_safe(reflection_fn=scalar_reflection):
+def make_photon_iteration_update_factors_safe(
+        reflection_fn=scalar_reflection,
+        mie_cosine_sampler=hg_sample_cos_theta,
+        mie_logpdf_fn=hg_logpdf,
+        independent_sensor_detection=False):
     """Build the expected-value step closed over ``reflection_fn`` (a static model choice).
 
     Historically this wrapped the step in a ``jax.custom_vjp`` whose backward scrubbed
@@ -330,12 +429,24 @@ def make_photon_iteration_update_factors_safe(reflection_fn=scalar_reflection):
 
     def _step(position, direction, time, surface_distance,
               normal, scatter_length, mie_scatter_length, g, refl_params,
-              absorption_length, hit_sensor, lam, rng_key, speed_of_light):
+              absorption_length, hit_sensor, lam, rng_key, speed_of_light,
+              surface_reflection_scale=1.0, surface_direction=None,
+              surface_position=None, surface_passthrough=False,
+              surface_passthrough_factor=1.0, polarization=None):
         return photon_iteration_update_factors(
             position, direction, time, surface_distance,
             normal, scatter_length, mie_scatter_length, g, refl_params,
             absorption_length, hit_sensor, lam, rng_key, speed_of_light,
-            reflection_fn=reflection_fn)
+            surface_reflection_scale=surface_reflection_scale,
+            surface_direction=surface_direction,
+            surface_position=surface_position,
+            surface_passthrough=surface_passthrough,
+            surface_passthrough_factor=surface_passthrough_factor,
+            reflection_fn=reflection_fn,
+            mie_cosine_sampler=mie_cosine_sampler,
+            mie_logpdf_fn=mie_logpdf_fn,
+            independent_sensor_detection=independent_sensor_detection,
+            polarization=polarization)
 
     return _step
 

@@ -32,6 +32,14 @@ class DetectorGeometry(NamedTuple):
                     overlap_st_width_frac: float = 0.35,
                     overlap_renorm: float = 1.0,
                     overlap_mode: str = 'interp',
+                    sensor_shape: str = 'sphere',
+                    sk_pmt_lookup=None,
+                    sk_pmt_lookup_options=None,
+                    sensor_candidate_selection: str = 'all',
+                    sensor_wall_assignment: str = 'nearest',
+                    pmt_gap_recovery: bool = False,
+                    pmt_gap_recovery_hole_radius: float = 0.285,
+                    sk_acrylic_optics=None,
                     deposit_leg_bound: bool = False,
                     **grid_params) -> 'DetectorGeometry':
         """Build a DetectorGeometry from a config JSON file.
@@ -57,6 +65,11 @@ class DetectorGeometry(NamedTuple):
             Soft-overlap renormalization constant C; default 1.0 = OFF.
         overlap_mode : str
             Soft-overlap lookup interpolation: 'interp' (default) or 'cubic'.
+        sensor_shape : {'sphere', 'sk20inch'}
+            PMT interception geometry. Default preserves legacy spheres.
+        sensor_candidate_selection : {'all', 'wall'}
+            Candidate routing rule. ``'wall'`` selects one nominal wall PMT
+            before applying the curved SK 20-inch geometry.
         deposit_leg_bound : bool
             Bound the deposit to the travelled leg rather than the unbounded ray line. Default
             False (unbounded ray line). Surface detectors only: a string telescope uses its own
@@ -69,11 +82,17 @@ class DetectorGeometry(NamedTuple):
             Box: n_x, n_y, n_z.
             If not provided, auto-derived from detector geometry.
         """
+        if sensor_shape not in ('sphere', 'sk20inch'):
+            raise ValueError("sensor_shape must be 'sphere' or 'sk20inch'")
+
         # Normalize casing. 'string' = telescope / volume detector (IceCube-style).
         dt_key = detector_type.lower()
+        if dt_key == 'superk':
+            dt_key = 'cylinder'
         if dt_key not in ('cylinder', 'sphere', 'box', 'string'):
             raise ValueError(
-                f"detector_type must be 'cylinder', 'sphere', 'box', or 'string', got {detector_type}")
+                f"detector_type must be 'cylinder', 'superk', 'sphere', "
+                f"'box', or 'string', got {detector_type}")
 
         # Material
         material = get_material_from_config(json_filename)
@@ -84,7 +103,11 @@ class DetectorGeometry(NamedTuple):
         detector = generate_detector(json_filename)
         import json as _json
         with open(json_filename) as _f:
-            actual_type = _json.load(_f).get('detector_type', detector_type)
+            configured_type = _json.load(_f).get('detector_type', detector_type)
+        # Specialized layouts such as SuperK still use a standard geometric
+        # family for containment and downstream event metadata.
+        actual_type = str(
+            getattr(detector, 'geometry_type', configured_type)).capitalize()
         sensor_points = jnp.array(detector.all_points)
         sensor_radius = detector.S_radius
         num_sensors = len(sensor_points)
@@ -93,6 +116,10 @@ class DetectorGeometry(NamedTuple):
         # surface detectors (cylinder/sphere/box) use the shared grid propagator.
         from lucid.geometry.string import StringTelescope
         if isinstance(detector, StringTelescope):
+            if sensor_shape != 'sphere':
+                raise ValueError(
+                    "sensor_shape='sk20inch' is only available for measured "
+                    "surface-detector PMTs")
             from lucid.propagation.string.string_propagator import create_string_propagator
             propagator = create_string_propagator(
                 detector, sensor_radius, temperature=temperature,
@@ -105,6 +132,14 @@ class DetectorGeometry(NamedTuple):
                 overlap_st_width_frac=overlap_st_width_frac,
                 overlap_renorm=overlap_renorm,
                 overlap_mode=overlap_mode,
+                sensor_shape=sensor_shape,
+                sk_pmt_lookup=sk_pmt_lookup,
+                sk_pmt_lookup_options=sk_pmt_lookup_options,
+                sensor_candidate_selection=sensor_candidate_selection,
+                sensor_wall_assignment=sensor_wall_assignment,
+                pmt_gap_recovery=pmt_gap_recovery,
+                pmt_gap_recovery_hole_radius=pmt_gap_recovery_hole_radius,
+                sk_acrylic_optics=sk_acrylic_optics,
                 deposit_leg_bound=deposit_leg_bound,
                 **grid_params)
 

@@ -2,6 +2,11 @@
   "material": "water",
   "refractive_index": 1.33,
   "speed_of_light_vacuum_m_per_ns": 0.299792,
+  "dispersion": {
+    "model": "sk4_water",
+    "source": "SKDetSim REFSG, DREFSG, and EFFNSG; water at 13 C and 1.01325 bar",
+    "description": "Phase index n(lambda)=REFSG(lambda); group index n_g=n-lambda*dn/dlambda; group velocity v_g=c/n_g"
+  },
   "scattering": {
     "source": "SK calibration paper (arXiv:1307.0162), Eqs. 16-17, Table 3",
     "symmetric": {

@@ -60,6 +60,8 @@ class TestWavelengthMode:
         npt.assert_allclose(oa.scatter_len, 1.0 / (sc + 1e-30), rtol=1e-6)
         npt.assert_allclose(oa.abs_len, 1.0 / (ac + 1e-30), rtol=1e-6)
         npt.assert_allclose(oa.mie_len, 1.0 / (asym + 1e-30), rtol=1e-6)
+        assert oa.propagation_speed.shape == wavelengths.shape
+        assert bool(jnp.all(jnp.diff(oa.propagation_speed) > 0.0))
         assert oa.qe is None
 
     def test_clamps_to_grid(self):

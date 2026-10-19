@@ -13,6 +13,7 @@ sys.path.insert(0, BASE)
 os.environ.setdefault("JAX_PLATFORMS", "cpu")
 
 import jax.numpy as jnp
+import numpy as np
 
 from tests.e2e.conftest import (
     WCTE_GEOM, WCTE_PHYS, SK_LIKE_GEOM, SK_LIKE_PHYS,
@@ -171,3 +172,109 @@ def test_4_calibration_scalar_forced():
     report("4_calibration_scalar_forced",
            ok,
            f"total_charge={float(jnp.sum(charges)):.2f} (scalar scatter_length=50 used)")
+
+
+# ===================================================================
+# 5. SK-IV accepted-PE timing response
+# ===================================================================
+def test_5_sk4_pmt_timing_changes_only_per_photon_times():
+    """Paired simulator runs retain weights, sensors, and charge exactly."""
+    from lucid.simulation import setup_event_simulator
+    from lucid.sources import laser_source
+
+    common = dict(
+        json_filename=SK_LIKE_GEOM,
+        n_photons=2_000,
+        temperature=None,
+        K=1,
+        is_calibration=True,
+        hit_mode="per_photon",
+        physics_config=SK_LIKE_PHYS,
+        default_detector_params=True,
+        wavelength_mode=False,
+        reflection_model="scalar",
+        max_candidates_per_ray=4,
+    )
+    source = laser_source(
+        position=[0.0, 0.0, 18.0], direction=[0.0, 0.0, -1.0],
+        intensity=8090.0, fiber_NA=0.05, wavelength=405.0,
+    )
+
+    plain = setup_event_simulator(**common, pmt_timing_model=None)
+    timed = setup_event_simulator(**common, pmt_timing_model="sk4")
+    plain_out = [np.asarray(x) for x in plain(source, KEY)]
+    timed_out = [np.asarray(x) for x in timed(source, KEY)]
+
+    np.testing.assert_array_equal(plain_out[0], timed_out[0])  # log weights
+    np.testing.assert_array_equal(plain_out[2], timed_out[2])  # sensor IDs
+    np.testing.assert_array_equal(plain_out[3], timed_out[3])  # PMT charge map
+    valid = plain_out[0] > -1e9
+    offsets = timed_out[1][valid] - plain_out[1][valid]
+    assert valid.sum() > 100
+    assert np.any(offsets != 0.0)
+
+    report(
+        "5_sk4_pmt_timing_time_only",
+        True,
+        f"valid={valid.sum()}, shifted_fraction={np.mean(offsets != 0.0):.3f}",
+    )
+
+
+def test_6_optical_diagnostics_do_not_change_default_response():
+    """Requesting PMT and transport state only appends diagnostics."""
+    from lucid.simulation import setup_event_simulator
+    from lucid.sources import laser_source
+
+    common = dict(
+        json_filename=SK_LIKE_GEOM,
+        n_photons=500,
+        temperature=None,
+        K=2,
+        is_calibration=True,
+        physics_config=SK_LIKE_PHYS,
+        default_detector_params=True,
+        wavelength_mode=False,
+        reflection_model="scalar",
+        max_candidates_per_ray=4,
+    )
+    source = laser_source(
+        position=[0.0, 0.0, 18.0], direction=[0.0, 0.0, -1.0],
+        intensity=8090.0, fiber_NA=0.05, wavelength=405.0,
+    )
+
+    plain = setup_event_simulator(**common)
+    diagnostic = setup_event_simulator(
+        **common, return_incidence_diagnostics=True)
+    combined = setup_event_simulator(
+        **common, return_incidence_diagnostics=True,
+        return_transport_diagnostics=True)
+    plain_out = plain(source, KEY)
+    diagnostic_out = diagnostic(source, KEY)
+    combined_out = combined(source, KEY)
+
+    np.testing.assert_array_equal(plain_out[0], diagnostic_out[0])
+    np.testing.assert_array_equal(plain_out[1], diagnostic_out[1])
+    cosines = np.asarray(diagnostic_out[2])
+    steps = np.asarray(diagnostic_out[3])
+    local_cosines = np.asarray(diagnostic_out[4])
+    assert cosines.shape == (2 * 4 * 500,)
+    assert steps.shape == cosines.shape
+    assert local_cosines.shape == cosines.shape
+    assert np.all((cosines >= 0.0) & (cosines <= 1.0))
+    assert np.all((local_cosines >= 0.0) & (local_cosines <= 1.0))
+    np.testing.assert_array_equal(np.unique(steps), [0, 1])
+
+    assert len(combined_out) == 12
+    np.testing.assert_array_equal(plain_out[0], combined_out[0])
+    np.testing.assert_array_equal(plain_out[1], combined_out[1])
+    for incidence_only, with_transport in zip(
+            diagnostic_out[2:5], combined_out[2:5]):
+        np.testing.assert_array_equal(incidence_only, with_transport)
+    for array in combined_out[5:9]:
+        assert np.asarray(array).shape == (2, 500, 3)
+    for array in combined_out[9:11]:
+        assert np.asarray(array).shape == (2, 500)
+    assert np.all(np.asarray(combined_out[10]) >= -1e-6)
+    scatter_flags = np.asarray(combined_out[11])
+    assert scatter_flags.shape == (2, 500)
+    assert scatter_flags.dtype == np.bool_

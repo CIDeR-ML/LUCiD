@@ -67,3 +67,4 @@ class PhotonState(NamedTuple):
     survival: jnp.ndarray           # (n_rays,)
     key: jnp.ndarray                # PRNGKey
     log_p: jnp.ndarray              # (n_rays,)
+    polarizations: Optional[jnp.ndarray] = None  # (n_rays, 3), optional

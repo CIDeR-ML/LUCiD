@@ -255,6 +255,7 @@ class Cylinder(Detector):
 
         n_barrel = int(np.sum(surfaces == 'barrel'))
         n_top    = int(np.sum(surfaces == 'top'))
+        instance.surfaces = surfaces[order]
         instance.all_points = positions_ord
         instance.barr_points = positions_ord[:n_barrel]
         instance.tcap_points = positions_ord[n_barrel:n_barrel + n_top]

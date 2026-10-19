@@ -13,10 +13,25 @@ from .geometry import (
 from . import cylinder, sphere, box
 
 # Propagators for every geometry are built by `lucid.propagation.shared.create_propagator`;
-# only the per-geometry bounds checks are re-exported here.
+# only the per-geometry bounds checks and standalone SK PMT helpers are re-exported here.
 from .cylinder import cylinder_bounds_check
 from .sphere import sphere_bounds_check
 from .box import box_bounds_check
+from .sk_pmt import SK20InchPMTHit, intersect_sk20inch_pmt_hard
+from .sk_pmt_jax import JAXSK20InchPMTHit, intersect_sk20inch_pmt_jax
+from .sk_pmt_coverage import (
+    SKPMTSurfaceQuadrature,
+    create_sk20inch_surface_quadrature,
+    sk20inch_gaussian_coverage,
+    sk20inch_projected_area,
+)
+from .sk_pmt_lookup import (
+    SKPMTCoverageLookup,
+    build_sk20inch_coverage_lookup,
+    sk20inch_lookup_coordinates,
+    sk20inch_lookup_coverage,
+)
+from .sk_pmt_sensor import compute_sk20inch_sensor_intersections
 
 __all__ = [
     # Geometry functions
@@ -34,4 +49,18 @@ __all__ = [
     'cylinder_bounds_check',
     'sphere_bounds_check',
     'box_bounds_check',
+    # Standalone Super-K PMT forward-geometry oracle
+    'SK20InchPMTHit',
+    'intersect_sk20inch_pmt_hard',
+    'JAXSK20InchPMTHit',
+    'intersect_sk20inch_pmt_jax',
+    'SKPMTSurfaceQuadrature',
+    'create_sk20inch_surface_quadrature',
+    'sk20inch_gaussian_coverage',
+    'sk20inch_projected_area',
+    'SKPMTCoverageLookup',
+    'build_sk20inch_coverage_lookup',
+    'sk20inch_lookup_coordinates',
+    'sk20inch_lookup_coverage',
+    'compute_sk20inch_sensor_intersections',
 ]

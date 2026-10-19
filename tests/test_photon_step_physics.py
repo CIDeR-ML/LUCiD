@@ -130,6 +130,41 @@ class TestDetectionProbability:
         _, _, _, detect_prob, _, _, _, _ = photon_iteration_update_factors(**args)
         npt.assert_allclose(detect_prob, 0.0, atol=1e-5)
 
+    def test_surface_scale_suppresses_only_wall_reflection_and_is_differentiable(self):
+        key = jax.random.PRNGKey(42)
+
+        def wall_continuation(scale):
+            args = _base_args(
+                key, wall_reflection_rate=0.5, hit_sensor=False,
+                surface_reflection_scale=scale, scatter_length=1e20,
+                mie_scatter_length=1e20, absorption_length=1e20)
+            return photon_iteration_update_factors(**args)[5]
+
+        value = wall_continuation(jnp.asarray(0.2))
+        reverse = jax.grad(wall_continuation)(jnp.asarray(0.2))
+        forward = jax.jvp(
+            wall_continuation, (jnp.asarray(0.2),), (jnp.asarray(1.0),))[1]
+        npt.assert_allclose(value, 0.1, rtol=1e-6)
+        npt.assert_allclose(reverse, 0.5, rtol=1e-6)
+        npt.assert_allclose(forward, reverse, rtol=1e-6)
+
+        sensor_args = _base_args(
+            key, sensor_reflection_rate=0.3, hit_sensor=True,
+            surface_reflection_scale=0.0, scatter_length=1e20,
+            mie_scatter_length=1e20, absorption_length=1e20)
+        sensor_continuation = photon_iteration_update_factors(**sensor_args)[5]
+        npt.assert_allclose(sensor_continuation, 0.3, rtol=1e-6)
+
+    def test_acrylic_passthrough_bypasses_blacksheet_hole_mask(self):
+        key = jax.random.PRNGKey(42)
+        args = _base_args(
+            key, hit_sensor=False, surface_passthrough=True,
+            surface_passthrough_factor=0.7,
+            surface_reflection_scale=0.0, scatter_length=1e20,
+            mie_scatter_length=1e20, absorption_length=1e20)
+        continuation = photon_iteration_update_factors(**args)[5]
+        npt.assert_allclose(continuation, 0.7, rtol=1e-6)
+
 
 class TestTimeOfFlight:
     """Time should advance by distance / speed_of_light."""

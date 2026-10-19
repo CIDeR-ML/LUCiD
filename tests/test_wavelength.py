@@ -5,14 +5,20 @@ import numpy.testing as npt
 
 import os
 
-from lucid.wavelength.medium import MediumProperties, make_medium, compute_effective_properties, load_qe_curve
+from lucid.wavelength.medium import (
+    MediumProperties, make_medium, compute_effective_properties, load_qe_curve,
+    sk4_water_refractive_index, sk4_water_refractive_index_derivative,
+    sk4_water_group_refractive_index, group_velocity_m_per_ns,
+)
 from lucid.wavelength.spectrum import sample_cherenkov_wavelengths
 
 _SK_QE_PATH = os.path.join(os.path.dirname(__file__), '..', 'config', 'pmt', 'SK_QE.json')
 from lucid.wavelength.scattering import (
     compute_rayleigh_scatter_direction,
+    compute_polarized_rayleigh_scatter,
     hg_sample_cos_theta,
     compute_mie_scatter_direction,
+    sk_mie_sample_cos_theta,
 )
 
 
@@ -61,6 +67,45 @@ class TestMediumProperties:
         assert make_medium("ice").refractive_index == 1.309
         assert "scintillation" in make_medium("wbls").emission_processes
         assert make_medium("water").emission_processes == ("cherenkov",)
+
+    def test_sk4_water_group_velocity_matches_effnsg(self):
+        """405-nm values reproduce SKDetSim REFSG/DREFSG/EFFNSG."""
+        medium = make_medium("water", wavelength_grid=jnp.linspace(300., 700., 200))
+        wavelength = jnp.asarray(405.0)
+        npt.assert_allclose(sk4_water_refractive_index(wavelength),
+                            1.3437421, rtol=2e-7)
+        npt.assert_allclose(sk4_water_refractive_index_derivative(wavelength),
+                            -8.875816e-5, rtol=2e-6)
+        npt.assert_allclose(sk4_water_group_refractive_index(wavelength),
+                            1.3796892, rtol=2e-7)
+        npt.assert_allclose(group_velocity_m_per_ns(wavelength, medium),
+                            0.21728952, rtol=2e-7)
+
+    def test_group_velocity_is_wavelength_dependent(self):
+        medium = make_medium("water", wavelength_grid=jnp.linspace(300., 700., 200))
+        speeds = group_velocity_m_per_ns(jnp.array([337., 405., 500.]), medium)
+        npt.assert_allclose(speeds, [0.21307011, 0.21728951, 0.22013153],
+                            rtol=2e-7)
+        assert bool(jnp.all(jnp.diff(speeds) > 0.0))
+
+    def test_group_velocity_supports_forward_and_reverse_autodiff(self):
+        """The dispersion path must remain differentiable in both AD modes."""
+        medium = make_medium("water", wavelength_grid=jnp.linspace(300., 700., 200))
+        velocity = lambda wavelength: group_velocity_m_per_ns(wavelength, medium)
+        wavelength = jnp.asarray(405.0)
+        reverse = jax.grad(velocity)(wavelength)
+        _, forward = jax.jvp(
+            velocity, (wavelength,), (jnp.ones_like(wavelength),))
+        assert jnp.isfinite(reverse)
+        assert jnp.isfinite(forward)
+        npt.assert_allclose(forward, reverse, rtol=2e-6)
+
+        # Also check that the hand-transcribed SK derivative agrees with JAX's
+        # derivative of the phase-index expression itself.
+        autodiff_dndl = jax.grad(sk4_water_refractive_index)(wavelength)
+        npt.assert_allclose(
+            sk4_water_refractive_index_derivative(wavelength), autodiff_dndl,
+            rtol=2e-6)
 
 
 class TestEffectiveProperties:
@@ -127,6 +172,37 @@ class TestScattering:
         result = compute_rayleigh_scatter_direction(inc, key)
         npt.assert_allclose(jnp.linalg.norm(result), 1.0, atol=1e-5)
 
+    def test_polarized_rayleigh_dipole_law_and_transverse_field(self):
+        keys = jax.random.split(jax.random.PRNGKey(337), 30000)
+        direction = jnp.array([0.0, 0.0, 1.0])
+        polarization = jnp.array([1.0, 0.0, 0.0])
+        outgoing, electric = jax.vmap(
+            lambda key: compute_polarized_rayleigh_scatter(
+                direction, polarization, key))(keys)
+        # For density 1-(E.k')^2, E[(E.k')^2] = 1/5.
+        projected = outgoing[:, 0]
+        npt.assert_allclose(jnp.mean(projected), 0.0, atol=0.015)
+        npt.assert_allclose(jnp.mean(projected ** 2), 0.2, atol=0.01)
+        npt.assert_allclose(jnp.linalg.norm(outgoing, axis=1), 1.0, atol=2e-6)
+        npt.assert_allclose(jnp.sum(outgoing * electric, axis=1), 0.0, atol=2e-6)
+
+    def test_polarized_rayleigh_supports_forward_and_reverse_autodiff(self):
+        key = jax.random.PRNGKey(19)
+        polarization = jnp.array([1.0, 0.0, 0.0])
+
+        def observable(z_component):
+            direction = jnp.array([0.2, -0.1, z_component])
+            outgoing, electric = compute_polarized_rayleigh_scatter(
+                direction, polarization, key)
+            return outgoing[1] + 0.1 * electric[2]
+
+        value = jnp.asarray(0.97)
+        reverse = jax.grad(observable)(value)
+        _, forward = jax.jvp(observable, (value,), (jnp.ones_like(value),))
+        assert bool(jnp.isfinite(reverse))
+        assert bool(jnp.isfinite(forward))
+        npt.assert_allclose(reverse, forward, rtol=2e-5, atol=2e-6)
+
     def test_hg_isotropic_at_g_near_zero(self):
         """For g~0, HG reduces to nearly isotropic."""
         keys = jax.random.split(jax.random.PRNGKey(0), 10000)
@@ -146,6 +222,41 @@ class TestScattering:
         inc = jnp.array([1.0, 0.0, 0.0])
         result = compute_mie_scatter_direction(inc, key, g=0.95)
         npt.assert_allclose(jnp.linalg.norm(result), 1.0, atol=1e-5)
+
+    def test_sk_mie_phase_matches_sgmies_inverse_cdf(self):
+        eps = jnp.finfo(jnp.float32).eps
+        u = jnp.linspace(eps, 1.0 - eps, 10001)
+        mu = jax.vmap(sk_mie_sample_cos_theta)(u)
+        npt.assert_allclose(mu, jnp.sqrt(u), atol=1e-7)
+        npt.assert_allclose(jnp.mean(mu), 2.0 / 3.0, atol=1e-4)
+        assert bool(jnp.all((mu >= 0.0) & (mu <= 1.0)))
+
+    def test_sk_mie_direction_preserves_sampled_angle_for_oblique_ray(self):
+        incident = jnp.array([0.31, -0.27, 0.91])
+        incident /= jnp.linalg.norm(incident)
+        key = jax.random.PRNGKey(20261001)
+        angle_key, _ = jax.random.split(key)
+        expected_mu = sk_mie_sample_cos_theta(jax.random.uniform(angle_key))
+        scattered = compute_mie_scatter_direction(
+            incident, key, cosine_sampler=sk_mie_sample_cos_theta)
+        npt.assert_allclose(jnp.dot(incident, scattered), expected_mu,
+                            atol=2e-6)
+
+    def test_sk_mie_phase_supports_forward_and_reverse_autodiff(self):
+        u = jnp.asarray(0.37)
+        expected = 0.5 / jnp.sqrt(u)
+        reverse = jax.grad(sk_mie_sample_cos_theta)(u)
+        _, forward = jax.jvp(sk_mie_sample_cos_theta, (u,), (jnp.ones_like(u),))
+        npt.assert_allclose(reverse, expected, rtol=1e-6)
+        npt.assert_allclose(forward, expected, rtol=1e-6)
+
+        for endpoint in (jnp.asarray(0.0), jnp.asarray(1.0)):
+            reverse = jax.grad(sk_mie_sample_cos_theta)(endpoint)
+            _, forward = jax.jvp(
+                sk_mie_sample_cos_theta,
+                (endpoint,), (jnp.ones_like(endpoint),))
+            assert bool(jnp.isfinite(reverse))
+            assert bool(jnp.isfinite(forward))
 
 
 class TestQECurve:
