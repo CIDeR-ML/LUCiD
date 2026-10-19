@@ -6,7 +6,7 @@ import numpy as np
 import numpy.testing as npt
 import pytest
 
-from lucid.propagation.sk_pmt import intersect_sk20inch_pmt_hard
+from tests._sk_pmt_reference import intersect_pmt_reference
 from lucid.propagation.sk_pmt_jax import (
     SK_PMT_SURFACE_MISS,
     SK_PMT_SURFACE_SPHERE,
@@ -33,7 +33,7 @@ DIRECTION = jnp.array([0.0, 0.0, -1.0])
 )
 def test_known_forward_values_match_hard_oracle(x, expected_surface):
     ray_origin = np.array([x, 0.0, 1.0])
-    hard = intersect_sk20inch_pmt_hard(
+    hard = intersect_pmt_reference(
         ray_origin, DIRECTION, ORIGIN, AXIS)
     differentiable = intersect_sk20inch_pmt_jax(
         ray_origin, DIRECTION, ORIGIN, AXIS)
@@ -72,7 +72,7 @@ def test_jit_and_vmap_match_hard_oracle_for_random_oblique_rays():
     jax_hits = batched_intersection(
         jnp.asarray(origins), jnp.asarray(directions))
     hard_hits = [
-        intersect_sk20inch_pmt_hard(origin, direction, np.zeros(3),
+        intersect_pmt_reference(origin, direction, np.zeros(3),
                                     np.array([0.0, 0.0, 1.0]))
         for origin, direction in zip(origins, directions)
     ]
@@ -140,7 +140,7 @@ def test_torus_newton_root_gradient_matches_implicit_derivative():
 def test_long_baseline_torus_ray_matches_hard_oracle_and_has_gradient():
     """Detector-scale origins retain the centimetre-scale torus root."""
     origin = np.array([0.24, 0.0, 36.0])
-    hard = intersect_sk20inch_pmt_hard(
+    hard = intersect_pmt_reference(
         origin, np.asarray(DIRECTION), np.asarray(ORIGIN), np.asarray(AXIS))
     differentiable = intersect_sk20inch_pmt_jax(
         jnp.asarray(origin), DIRECTION, ORIGIN, AXIS)

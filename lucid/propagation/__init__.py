@@ -17,7 +17,6 @@ from . import cylinder, sphere, box
 from .cylinder import cylinder_bounds_check
 from .sphere import sphere_bounds_check
 from .box import box_bounds_check
-from .sk_pmt import SK20InchPMTHit, intersect_sk20inch_pmt_hard
 from .sk_pmt_jax import JAXSK20InchPMTHit, intersect_sk20inch_pmt_jax
 from .sk_pmt_coverage import (
     SKPMTSurfaceQuadrature,
@@ -49,9 +48,7 @@ __all__ = [
     'cylinder_bounds_check',
     'sphere_bounds_check',
     'box_bounds_check',
-    # Standalone Super-K PMT forward-geometry oracle
-    'SK20InchPMTHit',
-    'intersect_sk20inch_pmt_hard',
+    # SK-like PMT propagation and smooth coverage
     'JAXSK20InchPMTHit',
     'intersect_sk20inch_pmt_jax',
     'SKPMTSurfaceQuadrature',

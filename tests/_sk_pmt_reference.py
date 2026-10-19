@@ -1,35 +1,29 @@
-"""Hard ray-intersection oracle for the SK 20-inch PMT surface.
+"""NumPy reference intersections used only by PMT geometry tests.
 
-This module is a NumPy reference implementation of the geometry encoded by
-``SKDONUTS`` in SKDetSim.  It intentionally uses hard root selection and
-Boolean surface cuts.  The production JAX propagator does not call it; its
-purpose is to define and test the forward geometry before a differentiable
-version is introduced.
+This independent quartic solver checks forward values from the production
+JAX implementation. It is not part of the installed LUCiD library or its API.
 """
 
 from typing import NamedTuple
 
 import numpy as np
 
-
-# SKDONUTS constants converted from centimetres to metres.
-SPHERE_CENTER_Z = -0.127
-SPHERE_RADIUS = 0.315
-TORUS_MAJOR_RADIUS = 0.104
-TORUS_MINOR_RADIUS = 0.150
-GEANT_PMT_RADIUS = 0.254
-SPHERE_TO_TORUS_Z = (
-    TORUS_MINOR_RADIUS * -SPHERE_CENTER_Z
-    / (SPHERE_RADIUS - TORUS_MINOR_RADIUS)
+from lucid.propagation.sk_pmt_geometry import (
+    BARREL_INACTIVE_BAND_Z,
+    GEANT_PMT_RADIUS,
+    SPHERE_CENTER_Z,
+    SPHERE_RADIUS,
+    SPHERE_TO_TORUS_Z,
+    TORUS_MAJOR_RADIUS,
+    TORUS_MINOR_RADIUS,
 )
-BARREL_INACTIVE_BAND_Z = 0.020
 
 _ROOT_IMAG_TOL = 1e-7
 _SURFACE_TOL = 1e-8
 _CUT_TOL = 1e-10
 
 
-class SK20InchPMTHit(NamedTuple):
+class ReferencePMTHit(NamedTuple):
     """Result of one hard ray/PMT query.
 
     ``intersects`` includes the inactive two-centimetre barrel band. ``active``
@@ -130,7 +124,7 @@ def _torus_polynomial(origin, direction):
 def _torus_candidates(origin, direction, min_distance):
     # The standard quartic is a squared form of the radial equation. For the
     # SK spindle torus it can contain roots from the unwanted squared branch,
-    # so every numerical root is checked against SKDDONUTS itself below.
+    # so every numerical root is checked against the unsquared surface below.
     coefficients = _torus_polynomial(origin, direction)
     roots = np.roots(coefficients[::-1])
     candidates = []
@@ -157,9 +151,8 @@ def _bounded_torus_candidates(origin, direction, min_distance):
 
     The detector-scale ray origin can be tens of metres from a 20-inch PMT.
     Building the torus quartic in that coordinate system is ill-conditioned.
-    SKDONUTS begins its millimetre march at the PMT boundary; shifting the
-    polynomial origin there leaves the physical ray unchanged and gives the
-    same numerical scale.
+    Shifting the polynomial origin to the SK-like PMT boundary leaves the
+    physical ray unchanged and keeps the coefficients on the local PMT scale.
     """
     roots = _quadratic_roots(
         float(np.dot(direction, direction)),
@@ -201,7 +194,7 @@ def _local_surface_normal(point, surface):
 
 def _miss():
     missing = np.full(3, np.nan)
-    return SK20InchPMTHit(
+    return ReferencePMTHit(
         intersects=False,
         active=False,
         distance=np.inf,
@@ -214,7 +207,7 @@ def _miss():
     )
 
 
-def intersect_sk20inch_pmt_hard(
+def intersect_pmt_reference(
     ray_origin,
     ray_direction,
     pmt_position,
@@ -223,7 +216,7 @@ def intersect_sk20inch_pmt_hard(
     barrel=False,
     min_distance=1e-9,
 ):
-    """Intersect one ray with the SKDetSim 20-inch PMT surface.
+    """Intersect one ray with the SK-like 20-inch PMT surface.
 
     Parameters
     ----------
@@ -231,19 +224,18 @@ def intersect_sk20inch_pmt_hard(
         World-space ray. The direction is normalized internally, so the
         returned distance is in metres.
     pmt_position : array-like, shape (3,)
-        World-space origin of the SK local PMT coordinates.
+        World-space origin of the SK-like PMT local coordinates.
     pmt_direction : array-like, shape (3,)
-        Inward-looking PMT axis; this becomes local ``+z`` as in SKDONUTS.
+        Inward-looking PMT axis; this defines local ``+z``.
     barrel : bool
-        Apply SKDONUTS' inactive base-band rule for a barrel PMT.
+        Apply the SK-like inactive base-band cut for a barrel PMT.
     min_distance : float
         Reject roots closer than this forward distance.
 
     Notes
     -----
-    SKDONUTS approaches the toroidal transition in 1 mm steps. This oracle
-    instead solves the same implicit surface as a quartic and therefore
-    removes that stepping error while retaining the hard SK region cuts.
+    The toroidal intersection is solved as a quartic rather than by discrete
+    stepping, while retaining the hard SK-like surface-region cuts.
     It is deliberately NumPy-only and is not differentiable.
     """
     world_origin = _as_vector3(ray_origin, "ray_origin")
@@ -272,7 +264,7 @@ def intersect_sk20inch_pmt_hard(
     active = not (bool(barrel)
                   and local_position[2] <= BARREL_INACTIVE_BAND_Z + _CUT_TOL)
 
-    return SK20InchPMTHit(
+    return ReferencePMTHit(
         intersects=True,
         active=active,
         distance=distance,
@@ -283,16 +275,3 @@ def intersect_sk20inch_pmt_hard(
         surface=surface,
         incidence_cosine=incidence_cosine,
     )
-
-
-__all__ = [
-    "BARREL_INACTIVE_BAND_Z",
-    "GEANT_PMT_RADIUS",
-    "SK20InchPMTHit",
-    "SPHERE_CENTER_Z",
-    "SPHERE_RADIUS",
-    "SPHERE_TO_TORUS_Z",
-    "TORUS_MAJOR_RADIUS",
-    "TORUS_MINOR_RADIUS",
-    "intersect_sk20inch_pmt_hard",
-]

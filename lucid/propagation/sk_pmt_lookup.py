@@ -9,7 +9,7 @@ import numpy as np
 
 from lucid.utils import base_dir_path
 
-from .sk_pmt import BARREL_INACTIVE_BAND_Z, GEANT_PMT_RADIUS
+from .sk_pmt_geometry import BARREL_INACTIVE_BAND_Z, GEANT_PMT_RADIUS
 from .sk_pmt_jax import intersect_sk20inch_pmt_jax
 
 

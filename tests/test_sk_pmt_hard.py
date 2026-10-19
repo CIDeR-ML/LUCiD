@@ -4,8 +4,8 @@ import numpy as np
 import numpy.testing as npt
 import pytest
 
-from lucid.propagation import intersect_sk20inch_pmt_hard
-from lucid.propagation.sk_pmt import (
+from tests._sk_pmt_reference import intersect_pmt_reference
+from lucid.propagation.sk_pmt_geometry import (
     BARREL_INACTIVE_BAND_Z,
     SPHERE_CENTER_Z,
     SPHERE_RADIUS,
@@ -20,7 +20,7 @@ AXIS = np.array([0.0, 0.0, 1.0])
 
 
 def _vertical_ray(x, y=0.0):
-    return intersect_sk20inch_pmt_hard(
+    return intersect_pmt_reference(
         [x, y, 1.0], [0.0, 0.0, -1.0], ORIGIN, AXIS)
 
 
@@ -80,11 +80,11 @@ def test_outer_edge_hits_toroidal_transition():
 def test_two_centimetre_band_is_inactive_only_for_barrel_pmts():
     # Near the 25.4 cm rim, the torus height is below the SK barrel band cut.
     x = 0.253
-    barrel_hit = intersect_sk20inch_pmt_hard(
+    barrel_hit = intersect_pmt_reference(
         [x, 0.0, 1.0], [0.0, 0.0, -1.0], ORIGIN, AXIS,
         barrel=True,
     )
-    cap_hit = intersect_sk20inch_pmt_hard(
+    cap_hit = intersect_pmt_reference(
         [x, 0.0, 1.0], [0.0, 0.0, -1.0], ORIGIN, AXIS,
         barrel=False,
     )
@@ -107,7 +107,7 @@ def test_ray_outside_25_4_cm_envelope_misses():
 
 def test_world_transform_uses_inward_pmt_axis():
     # A PMT whose inward axis is world -x has its apex at x=-18.8 cm.
-    hit = intersect_sk20inch_pmt_hard(
+    hit = intersect_pmt_reference(
         ray_origin=[-1.0, 2.0, 3.0],
         ray_direction=[1.0, 0.0, 0.0],
         pmt_position=[0.0, 2.0, 3.0],
@@ -122,7 +122,7 @@ def test_world_transform_uses_inward_pmt_axis():
 
 
 def test_roots_behind_ray_are_rejected():
-    hit = intersect_sk20inch_pmt_hard(
+    hit = intersect_pmt_reference(
         [0.0, 0.0, 1.0], [0.0, 0.0, 1.0], ORIGIN, AXIS)
     assert not hit.intersects
 
@@ -210,7 +210,7 @@ def test_oracle_matches_skdonuts_millimetre_search_for_oblique_rays():
 
         reference_hit, reference_point = _skdonuts_millimetre_reference(
             origin, direction)
-        oracle = intersect_sk20inch_pmt_hard(
+        oracle = intersect_pmt_reference(
             origin, direction, ORIGIN, AXIS)
 
         assert oracle.intersects == reference_hit
@@ -247,4 +247,4 @@ def test_invalid_vectors_are_rejected(argument, value, error):
     }
     inputs[argument] = value
     with pytest.raises(ValueError, match=error):
-        intersect_sk20inch_pmt_hard(**inputs)
+        intersect_pmt_reference(**inputs)

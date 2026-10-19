@@ -1,7 +1,7 @@
 """Piecewise-differentiable JAX intersections for the SK 20-inch PMT.
 
-The hard NumPy oracle in :mod:`lucid.propagation.sk_pmt` defines the forward
-geometry. This module evaluates the same sphere/torus surface with JAX. Root
+This module evaluates the SK-like sphere/torus geometry defined in
+:mod:`lucid.propagation.sk_pmt_geometry` using JAX. Root
 positions and normals are differentiable within a selected surface branch;
 the hit/miss and branch selections remain hard until the smooth-coverage stage.
 """
@@ -11,7 +11,7 @@ from typing import NamedTuple
 import jax
 import jax.numpy as jnp
 
-from .sk_pmt import (
+from .sk_pmt_geometry import (
     BARREL_INACTIVE_BAND_Z,
     GEANT_PMT_RADIUS,
     SPHERE_CENTER_Z,

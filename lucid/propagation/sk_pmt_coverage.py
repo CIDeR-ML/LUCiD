@@ -11,7 +11,7 @@ from typing import NamedTuple
 import jax.numpy as jnp
 import numpy as np
 
-from .sk_pmt import (
+from .sk_pmt_geometry import (
     BARREL_INACTIVE_BAND_Z,
     SPHERE_CENTER_Z,
     SPHERE_RADIUS,
@@ -48,7 +48,7 @@ def create_sk20inch_surface_quadrature(
     """Build fixed quadrature nodes for the active SK photocathode.
 
     ``n_polar`` nodes are used independently on the sphere and torus patches.
-    For barrel PMTs, the torus interval begins above SKDONUTS' inactive 2 cm
+    For barrel PMTs, the torus interval begins above the SK-like inactive 2 cm
     base band. The returned arrays can be closed over by a jitted/vmapped JAX
     function.
     """
@@ -77,7 +77,7 @@ def create_sk20inch_surface_quadrature(
 
     # The visible envelope switches at the sphere's radial coordinate at the
     # SK z threshold. The torus lies about 1 mm behind it at this seam because
-    # SKDONUTS' historical constants are rounded.
+    # the SK-like geometry constants are rounded.
     radial_at_join = (
         SPHERE_RADIUS * np.sin(sphere_angle_max)
     )
@@ -99,7 +99,7 @@ def create_sk20inch_surface_quadrature(
         TORUS_MINOR_RADIUS * torus_radial * torus_weight
     )
 
-    # The rounded SKDONUTS constants leave a roughly 1 mm axial mismatch at
+    # The rounded SK-like geometry constants leave a roughly 1 mm axial mismatch at
     # the sphere/torus switch. The outer boundary of the piecewise solid has a
     # narrow cylindrical seam joining those two curves. It projects to zero
     # area at normal incidence but closes the small oblique-incidence gap.

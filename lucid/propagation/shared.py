@@ -23,7 +23,7 @@ from lucid.overlap import create_overlap_prob
 from lucid.propagation.sk_pmt_sensor import (
     compute_sk20inch_sensor_intersections,
 )
-from lucid.propagation.sk_pmt import GEANT_PMT_RADIUS
+from lucid.propagation.sk_pmt_geometry import GEANT_PMT_RADIUS
 from lucid.propagation.sk_acrylic import (
     SK_ACRYLIC_OUTER_RADIUS,
     SK_ACRYLIC_THICKNESS,
