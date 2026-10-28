@@ -144,8 +144,8 @@ std::vector<T> ReadVec(hid_t file, const std::string& name, hid_t mem_type) {
   hsize_t dims[1] = {0};
   H5Sget_simple_extent_dims(space, dims, nullptr);
   std::vector<T> out(dims[0]);
-  if (dims[0] > 0)
-    H5Dread(ds, mem_type, H5S_ALL, H5S_ALL, H5P_DEFAULT, out.data());
+  if (dims[0] > 0 && H5Dread(ds, mem_type, H5S_ALL, H5S_ALL, H5P_DEFAULT, out.data()) < 0)
+    throw std::runtime_error("cannot read dataset " + name);
   H5Sclose(space);
   H5Dclose(ds);
   return out;
@@ -225,6 +225,8 @@ int main(int argc, char** argv) {
     const char* gates_path = Arg(argc, argv, "--gates");
     hid_t gates_h5 = gates_path
         ? H5Fopen(gates_path, H5F_ACC_RDONLY, H5P_DEFAULT) : (hid_t)-1;
+    // A gates file that fails to open must not fall back to "all digits, one gate".
+    if (gates_path && gates_h5 < 0) throw std::runtime_error(std::string("cannot open ") + gates_path);
     hid_t h5 = H5Fopen(sensor_path, H5F_ACC_RDONLY, H5P_DEFAULT);
     if (h5 < 0) throw std::runtime_error(std::string("cannot open ") + sensor_path);
     std::vector<std::string> groups = EventGroups(h5);
@@ -238,8 +240,9 @@ int main(int argc, char** argv) {
 
     long total_digits = 0, n_tracks = 0;
     long n_hits_total = 0, n_hits_in_window = 0;
-    long n_untriggered = 0, n_gates_thin = 0, n_subevents = 0;
+    long n_untriggered = 0, n_gates_thin = 0, n_subevents = 0, n_later_dropped = 0;
     std::vector<size_t> first_order;
+    std::vector<char> seen(65536, 0);   // indexed by sensor_idx (uint16)
     for (size_t iev = 0; iev < groups.size(); ++iev) {
       auto pe = ReadVec<float>(h5, groups[iev] + "/PE", H5T_NATIVE_FLOAT);
       auto t = ReadVec<double>(h5, groups[iev] + "/T", H5T_NATIVE_DOUBLE);
@@ -253,6 +256,8 @@ int main(int argc, char** argv) {
         gate_off = ReadVec<int>(gates_h5, groups[iev] + "/per_window/digit_offsets",
                                 H5T_NATIVE_INT);
       if (gate_off.size() < 2) gate_off = {0, (int)t.size()};   // one gate, all digits
+      if (gate_off.back() > (int)t.size())
+        throw std::runtime_error(groups[iev] + ": gate digit offsets run past the digit arrays");
       const size_t n_gates = gate_off.size() - 1;
 
       event.ReInitialize();
@@ -261,7 +266,7 @@ int main(int argc, char** argv) {
       for (size_t g = 0; g < n_gates; ++g) {
         // Digits of this gate, time-ordered.
         std::vector<size_t> order;
-        for (int i = gate_off[g]; i < gate_off[g + 1] && i < (int)t.size(); ++i)
+        for (int i = gate_off[g]; i < gate_off[g + 1]; ++i)
           order.push_back((size_t)i);
         std::sort(order.begin(), order.end(),
                   [&t](size_t a, size_t b) { return t[a] < t[b]; });
@@ -307,18 +312,32 @@ int main(int argc, char** argv) {
         // and runfiTQun's truth seeding was off by the full ~950 ns.
         tg->SetHeader((int)iev, 0, (int64_t)llround(trig_time), isub + 1);
         tg->SetMode(0);
-        for (size_t j : order) {
+        // Only each sensor's first digit of the gate: fiTQun's WCSim reader
+        // keeps whichever digit of a PMT it reads last (fQEventManager.cc),
+        // where its SK path keeps the earliest.
+        std::vector<size_t> first_hits;
+        for (size_t j : order)
+          if (!seen[idx[j]]) { seen[idx[j]] = 1; first_hits.push_back(j); }
+        for (size_t j : first_hits) seen[idx[j]] = 0;
+        for (size_t j : first_hits) {
           const double th = t[j] + t_offset - trig_time;
           ++n_hits_total;
           if (th >= 900. && th <= 1400.) ++n_hits_in_window;
           tg->AddCherenkovDigiHit(pe[j], th, (int)idx[j] + 1, 0, 0, no_photons);
         }
-        tg->SetNumDigitizedTubes((int)order.size());
-        total_digits += (long)order.size();
-        if (isub == 0) first_order.swap(order);
+        n_later_dropped += (long)(order.size() - first_hits.size());
+        tg->SetNumDigitizedTubes((int)first_hits.size());
+        total_digits += (long)first_hits.size();
+        if (isub == 0) first_order.swap(first_hits);
         ++isub;
       }
-      if (isub == 0) { ++n_untriggered; continue; }
+      // An event without a usable gate is still written, with no digits: fiTQun's
+      // output has no event number, so downstream tools pair entries by position.
+      if (isub == 0) {
+        ++n_untriggered;
+        event.GetTrigger(0)->SetHeader((int)iev, 0, 0, 1);
+        event.GetTrigger(0)->SetMode(0);
+      }
       WCSimRootTrigger* trig = event.GetTrigger(0);
       std::vector<size_t>& order = first_order;
       // Truth primary. makehistWCSim reads Ipnu/P/Dir/Start off this, so a file
@@ -383,13 +402,13 @@ int main(int argc, char** argv) {
         auto* prim = (WCSimRootTrack*)trig->GetTracks()->At(2);
         if (!prim || prim->GetParenttype() != 0)
           throw std::runtime_error("track 2 is not a parentless primary");
+        // Compared against the primary's start rather than tested for zero: an
+        // unset vertex keeps WCSim's (0,0,0) default, which is also a valid vertex.
         const double vtx[3] = {trig->GetVtx(0), trig->GetVtx(1), trig->GetVtx(2)};
-        if (vtx[0] == 0. && vtx[1] == 0. && vtx[2] == 0.)
-          throw std::runtime_error("trigger vertex unset: makehistWCSim.cc:197 "
-                                   "predicts charge from it, not from the track");
         for (int k = 0; k < 3; ++k)
           if (std::fabs(vtx[k] - prim->GetStart(k)) > 1e-3)
-            throw std::runtime_error("trigger vertex disagrees with track 2");
+            throw std::runtime_error("trigger vertex disagrees with track 2 (unset?): "
+                                     "makehistWCSim.cc:197 predicts charge from it");
       }
       tev.Fill();
     }
@@ -406,8 +425,9 @@ int main(int argc, char** argv) {
     const double frac = n_hits_total ? (double)n_hits_in_window / n_hits_total : 0.;
     std::cout << "  " << n_hits_in_window << "/" << n_hits_total << " hits ("
               << (int)(100 * frac + 0.5) << "%) inside fiTQun's 900-1400 ns window";
-    if (n_untriggered) std::cout << "; " << n_untriggered << " events had no gate";
+    if (n_untriggered) std::cout << "; " << n_untriggered << " events had no gate (written without digits)";
     if (n_gates_thin)  std::cout << "; " << n_gates_thin << " gates under threshold";
+    if (n_later_dropped) std::cout << "; " << n_later_dropped << " later digits on already-hit PMTs dropped";
     std::cout << std::endl;
   } catch (const std::exception& e) {
     std::cerr << e.what() << std::endl;
