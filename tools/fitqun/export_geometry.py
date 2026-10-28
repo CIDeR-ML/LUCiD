@@ -32,6 +32,9 @@ def main() -> int:
                    help="a LUCiD wc_sensor_*.h5 whose sensor_idx ordering the "
                         "output must follow (required if hits will be mapped)")
     p.add_argument("--match-tol-cm", type=float, default=5.0)
+    p.add_argument("--radial-normals", action="store_true",
+                   help="barrel PMTs face the axis and caps face along -z/+z, the normals LUCiD's "
+                        "propagation uses (the npz directions follow flat wall panels, 1-4 deg off)")
     a = p.parse_args()
 
     g = np.load(a.npz)
@@ -55,6 +58,11 @@ def main() -> int:
         print(f"{a.sensor.name}: reordered to the sensor file's sensor_idx "
               f"(max position difference {dist.max():.2f} cm)")
         pos_cm, dirs = sensor_cm, dirs[idx]
+    if a.radial_normals:
+        barrel = np.abs(dirs[:, 2]) < 0.5
+        rho = np.hypot(pos_cm[:, 0], pos_cm[:, 1])
+        dirs = np.where(barrel[:, None], np.column_stack([-pos_cm[:, 0] / rho, -pos_cm[:, 1] / rho, np.zeros(len(rho))]),
+                        np.column_stack([np.zeros(len(rho)), np.zeros(len(rho)), -np.sign(pos_cm[:, 2])]))
     qe = g["PMTQE"] if "PMTQE" in g.files else np.ones(len(pos_cm))
 
     lines = [
