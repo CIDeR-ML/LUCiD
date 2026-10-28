@@ -76,7 +76,7 @@ def _cmd_sample_run(args) -> int:
         shell_radii_cm=args.shells, n_photons=args.n_photons, K=args.K,
         seed=args.seed, atten_out=args.atten_out,
         scat3d_out=args.scattable3d_out,
-        shell_placement_cm=args.shell_placement)
+        shell_placement_cm=args.shell_placement, table_source=args.table_source)
     return 0
 
 
@@ -208,6 +208,10 @@ def build_parser() -> argparse.ArgumentParser:
                             "volume. ~100x the in-shell yield for the angular "
                             "response; makes the scattering tables in the same "
                             "shard meaningless, so keep those runs separate")
+    sprop.add_argument("--table-source", choices=["parent", "photon"], default="parent",
+                       help="scattering-table source coordinates: the emitting track's "
+                            "start vertex and direction (sttree srcpos/srcdir; default) "
+                            "or each photon's emission point and direction")
     sprop.set_defaults(func=_cmd_sample_run)
 
     sacc = sa_actions.add_parser("accumulate", help="reduce one propagated shard")

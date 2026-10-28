@@ -237,8 +237,45 @@ def translate_uniform(origins: np.ndarray, rng, *, det_radius_m: float,
     return origins + _draw(uniq.size)[inverse]
 
 
-def load_photons(photonsim_path, step_size: str = "200 MB"):
+def _event_parents(tree, step_size: str):
+    """Yield ``(event_id, parent_pos_m, parent_dir)`` per event of the OpticalPhotons tree.
+
+    One row per photon of the event, in emission order: the start vertex and start
+    direction of the track that emitted it (Photon_SegmentIndex -> Segment_TrackID ->
+    TrackInfo). These are what WCSimFQTuner's sttree records as srcpos/srcdir, the
+    source coordinates of the scattering table. Untagged photons (segment index -1)
+    get NaN rows.
+    """
+    branches = ["EventID", "Photon_SegmentIndex", "Segment_TrackID", "TrackInfo_TrackID",
+                "TrackInfo_PosX", "TrackInfo_PosY", "TrackInfo_PosZ",
+                "TrackInfo_DirX", "TrackInfo_DirY", "TrackInfo_DirZ"]
+    for chunk in tree.iterate(branches, step_size=step_size, library="np"):
+        for i in range(len(chunk["EventID"])):
+            seg = np.asarray(chunk["Photon_SegmentIndex"][i], dtype=np.int64)
+            seg_tid = np.asarray(chunk["Segment_TrackID"][i], dtype=np.int64)
+            tid = np.asarray(chunk["TrackInfo_TrackID"][i], dtype=np.int64)
+            ok = seg >= 0
+            parent = np.full(seg.size, -1, dtype=np.int64)
+            parent[ok] = seg_tid[seg[ok]]
+            order = np.argsort(tid)
+            row = order[np.clip(np.searchsorted(tid, parent, sorter=order), 0, tid.size - 1)]
+            ok &= tid[row] == parent
+            pos = np.stack([np.asarray(chunk[f"TrackInfo_Pos{c}"][i]) for c in "XYZ"], axis=1)[row]
+            dirs = np.stack([np.asarray(chunk[f"TrackInfo_Dir{c}"][i]) for c in "XYZ"], axis=1)[row]
+            pos = (pos * 0.001).astype(np.float32)
+            dirs = dirs.astype(np.float32)
+            pos[~ok] = np.nan
+            dirs[~ok] = np.nan
+            yield int(chunk["EventID"][i]), pos, dirs
+
+
+def load_photons(photonsim_path, step_size: str = "200 MB", with_parent: bool = False):
     """Stream ``(origins, directions, event_id)`` in METERS from a PhotonSim file.
+
+    ``with_parent`` appends ``(parent_pos, parent_dir)``: per photon, the start vertex
+    (meters) and start direction of the track that emitted it (see
+    :func:`_event_parents`). The raw photon chunks are matched to their event by
+    EventID, and each event's photon count is checked against its segment index.
 
     Meters, not fiTQun's cm: these photons are fed to
     :func:`lucid.sources.shotgun_source.shotgun_source`, and every LUCiD
@@ -260,6 +297,29 @@ def load_photons(photonsim_path, step_size: str = "200 MB"):
     dir_branches = ["PhotonDirX", "PhotonDirY", "PhotonDirZ"]
     with uproot.open(photonsim_path) as f:
         raw = f["OpticalPhotonsRaw"]
+        parents = _event_parents(f["OpticalPhotons"], step_size) if with_parent else None
+        cur = None                     # (event_id, parent_pos, parent_dir, photons consumed)
+
+        def _parent_slice(ev, n):
+            nonlocal cur
+            if cur is None or cur[0] != ev:
+                if cur is not None and cur[3] != len(cur[1]):
+                    raise ValueError(f"event {cur[0]}: {cur[3]} raw photons vs "
+                                     f"{len(cur[1])} segment indices")
+                for e, p, d in parents:
+                    if e == ev:
+                        cur = [e, p, d, 0]
+                        break
+                    if len(p):         # only photon-less events may be skipped
+                        raise ValueError(f"event {e} has {len(p)} photons but no raw photons")
+                else:
+                    raise ValueError(f"event {ev} has raw photons but no parent record")
+            lo = cur[3]
+            cur[3] += n
+            if cur[3] > len(cur[1]):
+                raise ValueError(f"event {ev}: more raw photons than segment indices")
+            return cur[1][lo:lo + n], cur[2][lo:lo + n]
+
         for chunk in raw.iterate(pos_branches + dir_branches + ["EventID"],
                                  step_size=step_size, library="np"):
             per_entry = [len(v) for v in chunk["PhotonPosX"]]
@@ -268,5 +328,14 @@ def load_photons(photonsim_path, step_size: str = "200 MB"):
                 [np.concatenate(chunk[b]) for b in pos_branches], axis=1) * 0.001
             directions = np.stack(
                 [np.concatenate(chunk[b]) for b in dir_branches], axis=1)
-            yield (origins.astype(np.float32), directions.astype(np.float32),
-                   event_id)
+            out = (origins.astype(np.float32), directions.astype(np.float32), event_id)
+            if with_parent:
+                pp, pd = zip(*[_parent_slice(int(ev), n)
+                               for ev, n in zip(chunk["EventID"], per_entry)]) \
+                    if per_entry else ((), ())
+                out += (np.concatenate(pp) if pp else np.zeros((0, 3), np.float32),
+                        np.concatenate(pd) if pd else np.zeros((0, 3), np.float32))
+            yield out
+        if with_parent and cur is not None and cur[3] != len(cur[1]):
+            raise ValueError(f"event {cur[0]}: {cur[3]} raw photons vs "
+                             f"{len(cur[1])} segment indices")

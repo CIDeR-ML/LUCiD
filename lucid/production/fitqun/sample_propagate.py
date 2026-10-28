@@ -48,7 +48,7 @@ def propagate_and_reduce(
         seed: int = 0, batch: int = 8, atten_out=None, scat3d_out=None,
         detector_type: str = "Cylinder", tts_sigma_ns: float = 1.0,
         wavelength_sampling: str = "cherenkov",
-        shell_placement_cm=None) -> Path:
+        shell_placement_cm=None, table_source: str = "parent") -> Path:
     """PhotonSim photons in, reduced shard out -- nothing in between.
 
     The per-photon arrays for one job are several GB. Writing them out only to
@@ -57,6 +57,12 @@ def propagate_and_reduce(
     mid-write for ~4% of a 250-job run. Folding each propagated group into the
     shard as it is produced means the big arrays never leave memory, and the
     only thing written is the shard itself.
+    """
+    """``table_source="parent"`` bins the scattering tables on the emitting track's start
+    vertex and direction (sttree's srcpos/srcdir, what fiTQun looks the table up with);
+    ``"photon"`` bins them on each photon's emission point and direction, as before.
+    Propagation always uses the photon's own origin and direction. Shell-placement runs
+    (whose tables are not used) always use ``"photon"``.
     """
     """``atten_out`` additionally writes the water attenuation-length histograms.
 
@@ -99,6 +105,10 @@ def propagate_and_reduce(
     key = jax.random.PRNGKey(seed)
     n_groups = 0
     pending: list = []
+    if table_source not in ("parent", "photon"):
+        raise ValueError(f"table_source must be 'parent' or 'photon', not {table_source!r}")
+    use_parent = table_source == "parent" and shell_placement_cm is None
+    pending_src: list = []         # parent (pos, dir) per pending group, same order
 
     def _flush(pending, key):
         if not pending:
@@ -109,9 +119,13 @@ def propagate_and_reduce(
         det, sid, ht, ind = sim.batch(batched, keys)
         det_np, sid_np, ind_np = np.asarray(det), np.asarray(sid), np.asarray(ind)
         origins_np = np.asarray(batched.origins)
+        src_kw = {}
+        if use_parent:
+            src_kw = dict(source_pos_m=np.concatenate([p for p, _ in pending_src]),
+                          source_dir=np.concatenate([d for _, d in pending_src]))
         builder.add(detected=det_np, sensor_id=sid_np, indirect=ind_np,
                     emission_pos_m=origins_np,
-                    emission_dir=np.asarray(batched.directions))
+                    emission_dir=np.asarray(batched.directions), **src_kw)
         # Both side outputs need the same per-photon geometry, which exists
         # only here, so compute it once and fan out.
         if atten_out is not None or scat3d_out is not None:
@@ -136,6 +150,8 @@ def propagate_and_reduce(
 
     carry_o = np.zeros((0, 3), dtype=np.float32)
     carry_d = np.zeros((0, 3), dtype=np.float32)
+    carry_po = np.zeros((0, 3), dtype=np.float32)
+    carry_pd = np.zeros((0, 3), dtype=np.float32)
     # Shell placement concentrates the vertices where one angular-response shell
     # can see them, which is the only thing such a run is for: the scattering
     # tables in the same shard are then meaningless, so keep those outputs apart
@@ -148,8 +164,8 @@ def propagate_and_reduce(
             det_radius_cm=builder.det_radius_cm,
             det_halfheight_cm=builder.det_halfheight_cm)
 
-    for origins_m, directions, event_id in isotropic_sample.load_photons(
-            photonsim_root):
+    for photons in isotropic_sample.load_photons(photonsim_root, with_parent=use_parent):
+        origins_m, directions, event_id = photons[:3]
         if shell_placement_cm is not None:
             origins_m = isotropic_sample.translate_shell(
                 origins_m, rng, pmt_pos_m=builder.pmt_pos_cm / 100.0,
@@ -160,22 +176,34 @@ def propagate_and_reduce(
                 det_halfheight_m=float(g["height"]) / 2.0,
                 pmt_radius_m=float(g["sensor_radius"]), event_id=event_id)
         else:
-            # Each event gets its own vertex, as /gps/pos/type Volume does.
-            origins_m = isotropic_sample.translate_uniform(
-                origins_m, rng, det_radius_m=float(g["radius"]),
+            # Each event gets its own vertex, as /gps/pos/type Volume does. The shift is
+            # drawn once (same draws as shifting the photons directly) and applied to the
+            # photons and to their parents' vertices alike.
+            shift = isotropic_sample.translate_uniform(
+                np.zeros_like(origins_m), rng, det_radius_m=float(g["radius"]),
                 det_halfheight_m=float(g["height"]) / 2.0,
                 pmt_radius_m=float(g["sensor_radius"]), event_id=event_id)
+            origins_m = origins_m + shift
+            if use_parent:
+                carry_po = np.concatenate([carry_po, photons[3] + shift])
+                carry_pd = np.concatenate([carry_pd, photons[4]])
         carry_o = np.concatenate([carry_o, origins_m])
         carry_d = np.concatenate([carry_d, directions])
         used = 0
         for o, d in _chunks(carry_o, carry_d, n_photons):
             pending.append(shotgun_source(o, d, n_photons=n_photons))
+            if use_parent:
+                pending_src.append((carry_po[used:used + n_photons],
+                                    carry_pd[used:used + n_photons]))
             used += n_photons
             n_groups += 1
             if len(pending) == batch:
                 key = _flush(pending, key)
                 pending = []
+                pending_src = []
         carry_o, carry_d = carry_o[used:], carry_d[used:]
+        if use_parent:
+            carry_po, carry_pd = carry_po[used:], carry_pd[used:]
     _flush(pending, key)
 
     if atten_out is not None:

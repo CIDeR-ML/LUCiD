@@ -260,8 +260,16 @@ class ShardBuilder:
             angular_counts={r: np.zeros(n_angular_bins) for r in self.shell_radii_cm},
             angular_sumw2={r: np.zeros(n_angular_bins) for r in self.shell_radii_cm})
 
-    def add(self, *, detected, sensor_id, indirect, emission_pos_m, emission_dir):
-        """Fold one propagated group in. Arrays are flat, one entry per photon."""
+    def add(self, *, detected, sensor_id, indirect, emission_pos_m, emission_dir,
+            source_pos_m=None, source_dir=None):
+        """Fold one propagated group in. Arrays are flat, one entry per photon.
+
+        ``source_pos_m``/``source_dir`` are the scattering-table source coordinates:
+        the emitting track's start vertex and direction, as sttree's srcpos/srcdir
+        (fiTQun looks the table up with the track direction). Without them the photon
+        emission point and direction are used. The angular response always uses the
+        photon emission point (the reference's oppos).
+        """
         det = np.asarray(detected, dtype=bool).reshape(-1)
         self.shard.n_photons += int(det.size)
         if not det.any():
@@ -273,8 +281,13 @@ class ShardBuilder:
         self.shard.n_detected += int(det.sum())
         self.shard.n_indirect += int(ind.sum())
 
+        if source_pos_m is not None:
+            tab_pos_cm = np.asarray(source_pos_m).reshape(-1, 3)[det] * M_TO_CM
+            tab_dir = np.asarray(source_dir).reshape(-1, 3)[det]
+        else:
+            tab_pos_cm, tab_dir = src_pos_cm, src_dir
         surface = scattable.surface_for(self.pmt_dir_z[sid])
-        coords = coordinates(src_pos_cm, src_dir, self.pmt_pos_cm[sid],
+        coords = coordinates(tab_pos_cm, tab_dir, self.pmt_pos_cm[sid],
                              is_cap=surface != "sidescattable")
         for name in scattable.SURFACES:
             on = surface == name
