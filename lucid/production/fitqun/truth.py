@@ -80,7 +80,7 @@ def read_tracks(labl_path, step_path, *, max_events=None,
 
     out = []
     with h5py.File(labl_path, "r") as fl, h5py.File(step_path, "r") as fs:
-        keys = sorted(k for k in fl if k.startswith("event_"))
+        keys = sorted((k for k in fl if k.startswith("event_")), key=lambda k: int(k.split("_")[1]))   # numeric: event_1000 after event_999
         if max_events is not None:
             keys = keys[:max_events]
         for iev, key in enumerate(keys):
