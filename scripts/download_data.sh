@@ -115,23 +115,28 @@ dav_get() {
 }
 FAILED_GETS=0
 
-# List every file (not dir) under a remote dir; prints paths relative to share root.
+# List regular files only; WebDAV collections can have a content length.
 dav_list() {
     curl -fsSL --retry 3 -X PROPFIND -H "Depth: infinity" -u "${SHARE_TOKEN}:" "${DAV_BASE}/$1/" \
     | python3 -c '
-import sys, re, os, urllib.parse as up
-tok = os.environ["SHARE_TOKEN"]
-prefix = "/remote.php/dav/public-files/" + tok
-xml = sys.stdin.read()
-for resp in re.findall(r"<d:response>(.*?)</d:response>", xml, re.S):
-    href = re.search(r"<d:href>(.*?)</d:href>", resp, re.S)
-    size = re.search(r"<d:getcontentlength>(.*?)</d:getcontentlength>", resp, re.S)
-    if not href or size is None:
-        continue                      # directory entry -> skip
-    p = up.unquote(href.group(1))
-    if p.startswith(prefix):
-        p = p[len(prefix):]
-    print(p.lstrip("/"))
+import os
+import sys
+from urllib.parse import unquote, urlsplit
+from xml.etree import ElementTree as ET
+dav = "{DAV:}"
+prefix = "/remote.php/dav/public-files/" + os.environ["SHARE_TOKEN"] + "/"
+root = ET.parse(sys.stdin).getroot()
+for resp in root.findall(dav + "response"):
+    href = resp.findtext(dav + "href")
+    if not href:
+        continue
+    resource_types = resp.findall(".//" + dav + "resourcetype")
+    if any(rt.find(dav + "collection") is not None for rt in resource_types):
+        continue
+    path = unquote(urlsplit(href).path)
+    if path.endswith("/") or not path.startswith(prefix):
+        continue
+    print(path[len(prefix):])
 '
 }
 
@@ -139,6 +144,17 @@ for resp in re.findall(r"<d:response>(.*?)</d:response>", xml, re.S):
 drop_symlink() {
     if [[ -L "$1" ]]; then echo "  [rm  ] stale symlink ${1#"$LUCID_ROOT"/}"; rm -f "$1"; fi
     return 0
+}
+
+link_entry() {
+    local target="$1" dest="$2"
+    if [[ -L "$dest" ]]; then
+        rm -f "$dest"
+    elif [[ -e "$dest" ]]; then
+        echo "Error: refusing to replace real data: $dest" >&2
+        return 1
+    fi
+    ln -s "$target" "$dest"
 }
 
 # --- verify bookkeeping ------------------------------------------------------
@@ -154,6 +170,7 @@ fetch_particle() {
     local data="${DATA_DIR}/water/${repo}" store wbls="${DATA_DIR}/wbls/${repo}"
     if [[ -n "$STORE_DIR" ]]; then store="${STORE_DIR}/water/${repo}"; else store="$data"; fi
     mkdir -p "$store"
+    local -a expected_files=()
 
     echo "--------------------------------------"
     echo "water/${repo}  (CERNBox: ${cb})"
@@ -170,6 +187,7 @@ fetch_particle() {
     local E fname
     for E in "${ENERGIES[@]}"; do
         fname="${E}MeV_100events.root"
+        expected_files+=("${data}/${fname}")
         drop_symlink "${store}/${fname}"
         dav_get "ROOT_files/water/${cb}/${fname}" "${store}/${fname}" || true
     done
@@ -188,6 +206,7 @@ fetch_particle() {
             dedx/*)      dest_sub="dedx_siren_training/${sub#dedx/}" ;;
             *)           dest_sub="$sub" ;;
         esac
+        expected_files+=("${data}/${dest_sub}")
         dav_get "$rel" "${store}/${dest_sub}" || true
     done < "$siren_tmp"
     rm -f "$siren_tmp"
@@ -201,8 +220,7 @@ fetch_particle() {
         echo "Linking data/water/${repo} -> store..."
         mkdir -p "$data"
         for entry in "${entries[@]}"; do
-            rm -rf "${data:?}/${entry}"
-            ln -s "${store}/${entry}" "${data}/${entry}"
+            link_entry "${store}/${entry}" "${data}/${entry}"
         done
     fi
 
@@ -210,8 +228,7 @@ fetch_particle() {
     echo "Wiring up data/wbls/${repo} -> water (symlinks)..."
     mkdir -p "$wbls"
     for entry in "${entries[@]}"; do
-        rm -rf "${wbls:?}/${entry}"
-        ln -s "../../water/${repo}/${entry}" "${wbls}/${entry}"
+        link_entry "../../water/${repo}/${entry}" "${wbls}/${entry}"
     done
 
     # 6. ice reuses water SIREN models (siren_params.json and t0.json are tracked in git)
@@ -219,13 +236,13 @@ fetch_particle() {
     echo "Wiring up data/ice/${repo} model dirs -> water (symlinks)..."
     mkdir -p "$ice"
     for entry in siren_training dedx_siren_training; do
-        rm -rf "${ice:?}/${entry}"
-        ln -s "../../water/${repo}/${entry}" "${ice}/${entry}"
+        link_entry "../../water/${repo}/${entry}" "${ice}/${entry}"
     done
 
     # 7. verify
     echo ""
     echo "Verifying water/${repo}..."
+    for entry in "${expected_files[@]}"; do check "$entry"; done
     check "${data}/siren_training/trained_model/photonsim_siren_weights.npz"
     check "${data}/dedx_siren_training/trained_model/dedx_siren_weights.npz"
     check "${wbls}/siren_training/trained_model/photonsim_siren_weights.npz"
@@ -242,7 +259,7 @@ for spec in "${PARTICLES[@]}"; do
     fetch_particle ${spec}
 done
 
-if [[ "$ok" == 1 ]]; then
+if [[ "$ok" == 1 && "$FAILED_GETS" -eq 0 ]]; then
     echo "======================================"
     echo "Download complete."
     for spec in "${PARTICLES[@]}"; do
@@ -253,6 +270,6 @@ if [[ "$ok" == 1 ]]; then
     done
     echo "======================================"
 else
-    echo "Some files are missing - see MISS lines above." >&2
+    echo "Download verification failed: ${FAILED_GETS} transfer errors; see FAIL and MISS lines." >&2
     exit 1
 fi
