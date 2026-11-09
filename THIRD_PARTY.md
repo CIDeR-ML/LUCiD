@@ -19,8 +19,13 @@ beside it, and every CDN `<script src>` or import-map entry carries an
 
 | component | version | origin | licence | in-tree licence text? | why it is here |
 |---|---|---|---|---|---|
-| fiTQun / WCSimFQTuner reference C++ (12 files, 2,773 lines), its 6 patches + `apply.sh`, `fitqun_SK_WAND.parameters.dat` (SK-IV fitted constants), and the reference grids transcribed from fiTQun `Utilities` | upstream, unversioned | Super-Kamiokande collaboration software, not publicly released | **NONE — and none exists** | the reference the fiTQun tuning chain is checked against | **Removed from the tip**: moved with their history to the separate repository `LUCiD-fitqun`, with the no-licence record. **Still in LUCiD's history** under `tools/fitqun/reference/` and `lucid/production/fitqun/data/`, so this stays **BLOCKING** until a history rewrite drops them; the tip alone is cosmetic |
 | `viewer/colormaps.js` | matplotlib viridis / plasma / inferno, 7 hex stops each | https://matplotlib.org | **CC0-1.0** (the viridis family was public-domain-dedicated by its authors) | [`LICENSES/CC0-1.0.txt`](LICENSES/CC0-1.0.txt) | perceptually uniform colour ramps in the WebGL viewer | **no obligation.** Recorded so it is not re-litigated: seven stops are not a substantial reproduction, and CC0 requires nothing anyway |
+
+The fiTQun / WCSimFQTuner reference C++, its patches and `fitqun_SK_WAND.parameters.dat`
+(Super-Kamiokande collaboration material with no licence) are no longer in the tree: they moved,
+with their history, to the separate fiTQun repository. They remain in this repository's git
+history under `tools/fitqun/reference/` and `lucid/production/fitqun/data/`; that history is
+not being rewritten.
 
 ## 2. Loaded at runtime from a CDN — **not one carries an `integrity=` hash**
 
@@ -86,11 +91,11 @@ and do not appear above.
 ## 5. Fetched data
 
 `scripts/download_data.py` installs the `lucid-data-v1` GitHub release asset: the
-trained SIREN weights and a slice of PhotonSim (Geant4) output, both produced by
-the project, with a sha256 for every file in `data/MANIFEST.sha256`. The asset
-carries **no licence yet**, like the repository; recorded here because "where did
-this input come from, and may we redistribute it" is the same question this file
-answers for code.
+trained SIREN weights, slices of PhotonSim (Geant4) output and the overlap tables,
+all produced by the project, with a sha256 for every file in `data/MANIFEST.sha256`;
+with `--paper` it installs `lucid-paper-results-v1`, the paper figures' inputs
+(`analysis/paper/RESULTS.sha256`). Every release asset is under CC BY 4.0, stated in
+its `INDEX.md`; the code stays under `LICENSE`.
 
 The fitted artefacts under `data/` (the `emitter.json` files) are first-party,
 so no third-party obligation attaches.
