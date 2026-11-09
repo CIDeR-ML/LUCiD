@@ -1,10 +1,16 @@
+"""Photon sources and event input.
+
+The SIREN track emitters (``siren_rays``, exported here with the calibration and shotgun
+sources), the scintillation photons (``scintillation_photons``), the cascade source
+(``cascade``), the PhotonSim ROOT reader (``root_reader``), the data-event helpers
+(``placement``, ``data_event``, ``interaction``) and the per-event key derivation
+(``seed_utils``).
+"""
 __all__ = [
     "make_cherenkov_surrogate_fn",
     "make_scintillation_surrogate_fn",
-    "evaluate_siren_lhs",
     "latin_hypercube_2d",
     "predict_t0",
-    "predict_t0_wrapper",
     "IsotropicSource",
     "IsotropicSourceRandom",
     "LaserSource",
@@ -13,7 +19,6 @@ __all__ = [
     "laser_source",
     "get_isotropic_rays",
     "generate_laser_photons",
-    "setup_calibration_generator",
     "ShotgunSource",
     "shotgun_source",
     "stack_shotgun_sources",
@@ -22,17 +27,14 @@ __all__ = [
 from lucid.sources.siren_rays import (
     make_cherenkov_surrogate_fn,
     make_scintillation_surrogate_fn,
-    evaluate_siren_lhs,
     latin_hypercube_2d,
     predict_t0,
-    predict_t0_wrapper,
 )
 from lucid.sources.calibration_sources import (
     IsotropicSource, IsotropicSourceRandom, LaserSource,
     isotropic_source, isotropic_source_random, laser_source,
     get_isotropic_rays,
     generate_laser_photons,
-    setup_calibration_generator,
 )
 from lucid.sources.shotgun_source import (
     ShotgunSource,

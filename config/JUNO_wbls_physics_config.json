@@ -2,6 +2,8 @@
   "medium_model": "materials/wbls.json",
   "wall_reflection_rate": 0.2,
   "sensor_reflection_rate": 0.2,
+  "wall_fspec": 0.55,
+  "sensor_fspec": 0.9,
   "qe": 0.065,
   "qe_corrections": "pmt_qe_corrections/JUNO_qe_corrections.json"
 }

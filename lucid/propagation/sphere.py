@@ -7,6 +7,7 @@ import jax.numpy as jnp
 from functools import partial
 from jax import lax
 
+from lucid.propagation.sensor_map import grid_face_cells
 
 
 @jax.jit
@@ -144,27 +145,6 @@ def calculate_sphere_normals(intersection_point):
     return normals
 
 
-def sphere_bounds_check(points, radius):
-    """
-    Check if points are within sphere bounds.
-    
-    Parameters
-    ----------
-    points : ndarray
-        Points to check [x, y, z]
-    radius : float
-        Sphere radius
-        
-    Returns
-    -------
-    ndarray
-        Boolean array indicating which points are inside sphere
-    """
-    center = jnp.array([0.0, 0.0, 0.0])
-    distances = jnp.linalg.norm(points - center, axis=1)
-    return distances <= radius
-
-
 @partial(jax.jit, static_argnums=(2, 3))
 def assign_sensors_to_sphere_grid(sensors, sensor_radius, radius, n_divisions):
     """Assign sensors to spherical grid cells, handling overlap across cell boundaries.
@@ -183,7 +163,7 @@ def assign_sensors_to_sphere_grid(sensors, sensor_radius, radius, n_divisions):
     Returns
     -------
     jnp.ndarray
-        Array of shape (n_sensors, 4, 2) containing up to 4 grid cell assignments
+        Array of shape (n_sensors, 9, 2) containing up to 9 grid cell assignments
         per sensor. -1 indicates no assignment.
     """
     
@@ -214,13 +194,16 @@ def assign_sensors_to_sphere_grid(sensors, sensor_radius, radius, n_divisions):
             theta_cell_size = jnp.pi / n_theta
             phi_cell_size = 2 * jnp.pi / n_phi
             
-            # Approximate angular size of sensor on sphere surface
+            # Angular reach of the sensor disk: r_s / R in theta, and r_s / (R sin theta) in phi,
+            # since a circle of latitude has radius R sin theta. Capped at 1 rad near the poles,
+            # more than any cell.
             angular_size = sensor_radius / radius
+            phi_reach = angular_size / jnp.maximum(jnp.sin(theta), angular_size)
             
             include_theta_up = theta_frac >= 1 - angular_size / theta_cell_size
             include_theta_down = theta_frac <= angular_size / theta_cell_size
-            include_phi_right = phi_frac >= 1 - angular_size / phi_cell_size
-            include_phi_left = phi_frac <= angular_size / phi_cell_size
+            include_phi_right = phi_frac >= 1 - phi_reach / phi_cell_size
+            include_phi_left = phi_frac <= phi_reach / phi_cell_size
             
             # Fixed: Handle boundaries correctly for theta (can't wrap) and phi (wraps)
             theta_up = jnp.clip(theta_idx + 1, 0, n_theta - 1)
@@ -254,41 +237,14 @@ def assign_sensors_to_sphere_grid(sensors, sensor_radius, radius, n_divisions):
             
             sorted_indices = indices[jnp.argsort(-selection)]
             
-            return jnp.where(jnp.arange(4)[:, None] < jnp.sum(selection), sorted_indices[:4], -1)
+            return jnp.where(jnp.arange(9)[:, None] < jnp.sum(selection), sorted_indices, -1)
         
         def assign_off_surface():
-            return jnp.full((4, 2), -1, dtype=jnp.int32)
+            return jnp.full((9, 2), -1, dtype=jnp.int32)
         
         return lax.cond(on_surface, assign_surface, assign_off_surface)
     
     return jax.vmap(assign_single_sensor)(sensors)
-
-
-@partial(jax.jit, static_argnums=(1,))
-def create_sensor_sphere_grid_map(assignments, n_divisions):
-    """
-    Creates a grid map counting the number of sensors in each cell of the spherical sensor grid.
-    """
-    n_theta = n_divisions
-    n_phi = 2 * n_divisions
-    total_cells = n_theta * n_phi
-    grid = jnp.zeros(total_cells, dtype=jnp.int32)
-    
-    def update_grid(sensor_assignments):
-        def update_cell(cell, g):
-            theta_idx, phi_idx = cell
-            is_valid = (theta_idx != -1) & (phi_idx != -1)
-            
-            # Calculate linear index
-            idx = theta_idx * n_phi + phi_idx
-            
-            return g.at[idx].add(is_valid)
-        
-        return jax.lax.fori_loop(0, sensor_assignments.shape[0], 
-                                lambda i, g: update_cell(sensor_assignments[i], g), grid)
-    
-    all_updates = jax.vmap(update_grid)(assignments)
-    return all_updates.sum(axis=0)
 
 
 @partial(jax.jit, static_argnums=(1,))
@@ -321,92 +277,7 @@ def calculate_sphere_grid_centers(radius, n_divisions):
     return centers
 
 
-@partial(jax.jit, static_argnums=(2, 3, 4), device=jax.devices('cpu')[0])
-def create_inverted_sphere_sensor_map(assignments_geometric, assignments_distance, n_divisions,
-                                       max_candidates_per_ray, num_sensors):
-    """Create inverted sensor map for sphere prioritizing geometric intersections then closest sensors"""
-    n_theta = n_divisions
-    n_phi = 2 * n_divisions
-    total_cells = n_theta * n_phi
-    
-    # Initialize map
-    inverted_map = jnp.full((total_cells, max_candidates_per_ray), -1, dtype=jnp.int32)
-    
-    def update_cell(carry, i):
-        inv_map = carry
-        
-        def add_geometric(carry, j):
-            curr_map, curr_count = carry
-            
-            # Convert linear index i back to theta, phi coordinates
-            theta_idx = i // n_phi
-            phi_idx = i % n_phi
-            
-            # Check if sensor j intersects with this cell
-            sensor_assignments = assignments_geometric[j]
-            matches = (sensor_assignments[:, 0] == theta_idx) & \
-                     (sensor_assignments[:, 1] == phi_idx)
-            
-            cell_matches = jnp.any(matches)
-            should_add = cell_matches & (curr_count < max_candidates_per_ray)
-            
-            new_map = jnp.where(
-                should_add,
-                curr_map.at[i, curr_count].set(j),
-                curr_map
-            )
-            
-            return (new_map, curr_count + should_add), None
-        
-        # Add geometric intersections
-        (new_map, geom_count), _ = jax.lax.scan(
-            add_geometric,
-            (inv_map, 0),
-            jnp.arange(len(assignments_geometric))
-        )
-        
-        # Get closest sensors for this cell
-        closest = assignments_distance[i]
-        
-        # Add closest sensors if there's room
-        def add_closest(carry, j):
-            curr_map, curr_count = carry
-            sensor_idx = closest[j]
-            
-            # Check for duplicates
-            def check_duplicate(k, is_dup):
-                return is_dup | (curr_map[i, k] == sensor_idx)
-            
-            is_duplicate = jax.lax.fori_loop(
-                0, curr_count,
-                check_duplicate,
-                False
-            )
-            
-            # Add if not duplicate and have space
-            should_add = (~is_duplicate) & (curr_count < max_candidates_per_ray)
-            
-            new_map = jnp.where(
-                should_add,
-                curr_map.at[i, curr_count].set(sensor_idx),
-                curr_map
-            )
-            
-            return (new_map, curr_count + should_add), None
-        
-        # Fill remaining slots with closest sensors
-        (final_map, _), _ = jax.lax.scan(
-            add_closest,
-            (new_map, geom_count),
-            jnp.arange(len(closest))
-        )
-        
-        return final_map, None
-    
-    final_map, _ = jax.lax.scan(
-        update_cell,
-        inverted_map,
-        jnp.arange(total_cells)
-    )
-    
-    return final_map
+def sphere_grid_cells(n_divisions):
+    """Grid coordinates (theta, phi) of every sphere cell, by linear index:
+    (2 * n_divisions**2, 2) int32, the convention of :func:`assign_sensors_to_sphere_grid`."""
+    return grid_face_cells(n_divisions, 2 * n_divisions)

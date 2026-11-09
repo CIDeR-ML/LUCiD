@@ -10,7 +10,7 @@ Two regimes, one return type (:class:`OpticalArrays`):
 
 - ``wavelengths is None`` — monochromatic / scalar mode: broadcast the (fittable)
   ``DetectorParams`` optical scalars to all photons. QE weight is ``None`` (the scalar
-  QE enters in ``make_hits``).
+  QE enters in the hits).
 - ``wavelengths`` an ``(n,)`` array — wavelength mode: evaluate the medium reference
   curves at each photon's λ (``length = 1 / coeff(λ)``) and, if a ``qe_fn`` is given,
   the per-photon QE weight ``qe_fn(λ)``.
@@ -106,7 +106,7 @@ def evaluate_optical_model(detector_params, wavelengths, medium, n_photons,
 
     if wavelengths is None:
         # Monochromatic / scalar mode: the fittable DetectorParams scalars,
-        # broadcast to every photon. QE weight is None (scalar QE → make_hits).
+        # broadcast to every photon. QE weight is None (scalar QE → the hits).
         return OpticalArrays(
             scatter_len=jnp.full(n_photons, sp.scatter_length),
             mie_len=jnp.full(n_photons, sp.mie_scatter_length),

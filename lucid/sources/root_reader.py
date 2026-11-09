@@ -2,7 +2,7 @@
 
 Functions that read photon, particle, and segment data from PhotonSim
 ROOT files. The full wrapper ``read_particle_data_from_photonsim``
-calls into ``event_builder._derive_views_from_segments`` for
+calls into ``interaction._derive_views_from_segments`` for
 categorization.
 """
 from __future__ import annotations
@@ -11,8 +11,10 @@ import jax.numpy as jnp
 import numpy as np
 
 __all__ = [
+    "read_event_raw",
     "get_max_photons_per_particle",
     "read_photon_data_from_photonsim",
+    "read_primary",
     "read_event_data_from_photonsim",
     "read_particle_data_from_photonsim",
 ]
@@ -22,7 +24,7 @@ def read_event_data_from_photonsim(root_file_path, entry_index,
                                    emission_processes=("cherenkov",),
                                    medium_params=None, rng=None):
     """Read injectable per-photon arrays for one event, for the requested
-    emission processes, ready to feed the ``is_data`` simulator.
+    emission processes, ready to feed the ``source='photons'`` simulator.
 
     This is the data-mode analogue of the forward Cherenkov+scintillation path:
     Cherenkov photons are loaded from ``OpticalPhotonsRaw`` and scintillation
@@ -49,9 +51,9 @@ def read_event_data_from_photonsim(root_file_path, entry_index,
     Returns
     -------
     dict
-        Combined per-photon arrays, in the SAME metre convention as
-        :func:`read_photon_data_from_photonsim` (the caller applies the
-        m->cm boundary and any rotation/translation exactly as for Cherenkov):
+        Combined per-photon arrays, in metres like
+        :func:`read_photon_data_from_photonsim` (the caller places them, e.g.
+        with :func:`lucid.sources.data_event.place_photons`):
 
         - ``photon_origins``           : (N, 3) float32, meters
         - ``photon_directions``        : (N, 3) float32, unit vectors
@@ -63,8 +65,7 @@ def read_event_data_from_photonsim(root_file_path, entry_index,
         - ``energy``                   : float, primary energy (MeV)
     """
     from lucid.sources.scintillation_photons import expand_segments_to_photons
-    from lucid.sources.writer import (
-        EMISSION_PROCESS_CHERENKOV, EMISSION_PROCESS_SCINTILLATION)
+    from lucid.dataset.schema import EMISSION_PROCESS_CHERENKOV
 
     procs = tuple(emission_processes)
     valid = {"cherenkov", "scintillation"}
@@ -75,7 +76,7 @@ def read_event_data_from_photonsim(root_file_path, entry_index,
     if not procs:
         raise ValueError("emission_processes must be non-empty")
 
-    raw = _read_event_raw(root_file_path, entry_index)
+    raw = read_event_raw(root_file_path, entry_index)
 
     O, D, T, W, P = [], [], [], [], []
     if "cherenkov" in procs:
@@ -226,7 +227,6 @@ def read_photon_data_from_photonsim(root_file_path, entry_index):
         Dictionary containing photon_origins, photon_directions, and energy
     """
     import uproot
-    import numpy as np
     import jax.numpy as jnp
 
     # Open the ROOT file
@@ -264,7 +264,30 @@ def read_photon_data_from_photonsim(root_file_path, entry_index):
 
     return result
 
-def _read_event_raw(root_file_path, entry_index, opened_file=None):
+def read_primary(root_file_path, entry_index):
+    """The primary track of a single-primary event, as Geant4 recorded it.
+
+    Returns ``(position_m, direction)``: the start point (metres) and unit direction of the one
+    ``TrackInfo`` track with ``ParentTrackID == 0``. An event with no primary, or with several,
+    raises -- "the primary" is not defined for it.
+    """
+    import uproot
+    names = ['TrackInfo_ParentTrackID', 'TrackInfo_PosX', 'TrackInfo_PosY', 'TrackInfo_PosZ',
+             'TrackInfo_DirX', 'TrackInfo_DirY', 'TrackInfo_DirZ']
+    with uproot.open(root_file_path) as f:
+        t = f['OpticalPhotons'].arrays(names, entry_start=entry_index,
+                                       entry_stop=entry_index + 1, library='np')
+    primaries = np.flatnonzero(np.asarray(t['TrackInfo_ParentTrackID'][0]) == 0)
+    if primaries.size != 1:
+        raise ValueError(f'{root_file_path} entry {entry_index} has {primaries.size} primary '
+                         f'tracks (ParentTrackID == 0); read_primary needs exactly one')
+    i = primaries[0]
+    pos = np.array([t[f'TrackInfo_Pos{a}'][0][i] for a in 'XYZ'], dtype=np.float64) / 1000.0
+    d = np.array([t[f'TrackInfo_Dir{a}'][0][i] for a in 'XYZ'], dtype=np.float64)
+    return pos, d / np.linalg.norm(d)
+
+
+def read_event_raw(root_file_path, entry_index, opened_file=None):
     """Read one PhotonSim event from ROOT into a raw dict — no categorization.
 
     This is the I/O-only half of the legacy ``read_particle_data_from_photonsim``.
@@ -436,16 +459,15 @@ def _read_event_raw(root_file_path, entry_index, opened_file=None):
 
 
 def read_particle_data_from_photonsim(root_file_path, entry_index):
-    """Backward-compatible wrapper: read raw + derive views without per-segment data.
+    """Read one entry and derive its particle views, with each particle's photons.
 
-    Equivalent to the legacy implementation; preserves the exact return-dict
-    shape for any external caller. The data-mode driver no longer routes
-    through this wrapper — it calls :func:`_read_event_raw`,
-    :func:`_trace_event_bucketed`, and :func:`_derive_views_from_segments`
-    directly so the per-(segment, sensor) tensor that the kernel emits can
-    flow downstream.
+    The view of :func:`_derive_views_from_segments` (no kernel records) plus, per particle,
+    ``photon_indices``: the ids of the photons it emitted, in ascending order.
     """
-    from lucid.sources.event_builder import _derive_views_from_segments
+    from lucid.sources.interaction import _derive_views_from_segments
 
-    raw = _read_event_raw(root_file_path, entry_index)
-    return _derive_views_from_segments(raw, photon_records=None)
+    view = _derive_views_from_segments(read_event_raw(root_file_path, entry_index))
+    owner = np.asarray(view['photon_particle_idx'], dtype=np.int64)
+    for i, particle in enumerate(view['particles']):
+        particle['photon_indices'] = np.flatnonzero(owner == i).tolist()
+    return view

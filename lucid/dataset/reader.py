@@ -1,6 +1,6 @@
-"""four-file HDF5 readers (sensor / hits / step / labl).
+"""The dataset reader: events of the four files, in their written order.
 
-Standalone module — no internal LUCiD dependencies beyond ``h5py``.
+Needs only ``h5py`` and numpy.
 """
 from __future__ import annotations
 
@@ -8,12 +8,25 @@ import h5py
 import numpy as np
 
 __all__ = [
+    "iter_events",
     "list_events",
     "read_sensor_event",
     "read_hits_event",
     "read_step_event",
     "read_labl_event",
 ]
+
+
+def iter_events(filename):
+    """``(seq_idx, group_name)`` of every ``event_NNN`` group in ``filename``, in numeric order.
+
+    The groups are named ``event_{i:03d}``, so past 999 events a lexicographic sort puts
+    ``event_1000`` before ``event_101``; this one does not.
+    """
+    with h5py.File(filename, 'r') as f:
+        names = [k for k in f.keys() if k.startswith('event_')]
+    for name in sorted(names, key=lambda k: int(k[len('event_'):])):
+        yield int(name[len('event_'):]), name
 
 
 def list_events(filename):
@@ -53,34 +66,13 @@ def read_sensor_event(filename, event_idx):
 
 
 def read_hits_event(filename, event_idx):
-    """Read event ``event_idx`` from a hits file.
-
-    Backward-compat: pre-Phase-0 datasets (no ``emission_process`` column)
-    get an all-zeros (Cherenkov) default of length ``n_particle_hits`` so
-    consumers can group/filter by emission process without a presence check.
-    """
-    out = _read_event(filename, event_idx)
-    if 'emission_process' not in out and 'particle_idx' in out:
-        out['emission_process'] = np.zeros(
-            len(out['particle_idx']), dtype=np.int8)
-    return out
+    """Read event ``event_idx`` from a hits file."""
+    return _read_event(filename, event_idx)
 
 
 def read_step_event(filename, event_idx):
-    """Read event ``event_idx`` from a step file.
-
-    Backward-compat: pre-Phase-0 ``sensor_hits/`` subgroups (when present
-    but lacking the ``emission_process`` column) get an all-zeros default
-    of length ``n_segment_hits``.
-    """
-    out = _read_event(filename, event_idx)
-    sh = out.get('sensor_hits')
-    if (isinstance(sh, dict)
-            and 'emission_process' not in sh
-            and 'segment_idx' in sh):
-        sh['emission_process'] = np.zeros(
-            len(sh['segment_idx']), dtype=np.int8)
-    return out
+    """Read event ``event_idx`` from a step file."""
+    return _read_event(filename, event_idx)
 
 
 def read_labl_event(filename, event_idx):

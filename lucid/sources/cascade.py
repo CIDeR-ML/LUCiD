@@ -21,9 +21,9 @@ hit patterns, and reconstruction pipelines.
 
 import jax
 import jax.numpy as jnp
-import numpy as np
-from functools import partial
 from typing import NamedTuple
+
+from lucid.utils import create_local_frame
 
 
 # Cherenkov yield: ~340 photons per cm per MeV of track in water at 400nm
@@ -71,7 +71,7 @@ def generate_cascade_photons(
     energy_mev,
     n_photons,
     key,
-    n_medium=1.33,
+    n_medium,
     x0=X0_WATER,
     ec=EC_WATER,
     is_hadronic=False,
@@ -143,14 +143,7 @@ def _cone_to_world(axis, theta, phi):
     -------
     dirs : (n, 3)          unit vectors in world frame
     """
-    # Build orthonormal frame: axis, u, v
-    # Pick a vector not parallel to axis
-    ref = jnp.where(jnp.abs(axis[0]) < 0.9,
-                    jnp.array([1.0, 0.0, 0.0]),
-                    jnp.array([0.0, 1.0, 0.0]))
-    u = jnp.cross(axis, ref)
-    u = u / (jnp.linalg.norm(u) + 1e-30)
-    v = jnp.cross(axis, u)
+    u, v, _ = create_local_frame(axis)
 
     # Spherical to Cartesian in local frame, then rotate to world
     sin_t = jnp.sin(theta)
@@ -169,25 +162,25 @@ def _cone_to_world(axis, theta, phi):
 class CascadeSource(NamedTuple):
     """Cascade photon source -- callable JAX pytree.
 
-    Usage: ``source(n_photons, key)`` → ``(directions, origins, weights)``.
-    Compatible with ``setup_event_simulator(is_calibration=True)``.
+    Usage: ``source(n_photons, key, n_medium)`` → ``(directions, origins, weights)``; the
+    simulator passes the medium's refractive index. Compatible with
+    ``setup_event_simulator(source='light_source')``.
     """
     position: jnp.ndarray
     direction: jnp.ndarray
     energy_mev: jnp.ndarray
-    n_medium: jnp.ndarray
     is_hadronic: jnp.ndarray
     wavelength: object = None
 
-    def __call__(self, n_photons, key, n_water=1.33):
+    def __call__(self, n_photons, key, n_medium):
         origins, directions, weights = generate_cascade_photons(
             self.position, self.direction, self.energy_mev,
-            n_photons, key, n_medium=self.n_medium,
+            n_photons, key, n_medium=n_medium,
             is_hadronic=self.is_hadronic)
         return directions, origins, weights
 
 
-def cascade_source(position, direction, energy_mev, n_medium=1.33,
+def cascade_source(position, direction, energy_mev,
                    is_hadronic=False, wavelength=None):
     """Create a CascadeSource with sensible defaults."""
     if direction is None:
@@ -197,7 +190,6 @@ def cascade_source(position, direction, energy_mev, n_medium=1.33,
         position=jnp.asarray(position, dtype=jnp.float32),
         direction=jnp.asarray(direction, dtype=jnp.float32),
         energy_mev=jnp.asarray(float(energy_mev), dtype=jnp.float32),
-        n_medium=jnp.asarray(float(n_medium), dtype=jnp.float32),
         is_hadronic=jnp.asarray(bool(is_hadronic)),
         wavelength=wl,
     )
