@@ -1,238 +1,87 @@
-# Digitizer & trigger
+# Digitizer and trigger
 
-The [photon pipeline](../concepts/photon-pipeline.md) is differentiable end to end, but that
-pipeline stops at the hits (`lucid/simulation/hits.py`): a per-PMT charge and first-arrival
-time. Real front-end electronics don't record that directly — they integrate charge in time windows, apply
-a threshold, and a separate DAQ decides whether to read the event out at all. `lucid/simulation/digitizer.py`
-and `lucid/simulation/trigger.py` model that stage. They are plain NumPy (no JAX, no gradients)
-and only run in the production path ([`lucid-run-job`](cli.md#lucid-run-job-produce-a-dataset),
-see also the [local production guide](../guides/production/local.md)), not in the reconstruction
-or calibration forward model.
+Dataset production (`lucid-run-job`) turns the simulated photon deposits into what a detector's
+electronics record. Two NumPy stages, with no gradients, run after the simulator:
+`lucid.simulation.digitizer` (charge integration, single-photoelectron charge, time jitter, dark
+noise) and `lucid.simulation.trigger` (a sliding-window multiplicity trigger). Reconstruction
+and calibration do not use them.
 
-## The digitizer models
+## Where the settings come from
 
-`digitizer.py` turns a flat per-photon list `(sensor_idx, time, charge)` into **digits** — recorded
-hits, one row per integration window that clears threshold. A sensor can produce more than one
-digit per event if light arrives in separated time clusters (delayed coincidence, pile-up, dark
-noise). Every model shares the same windowing code path; `basic` is not special-cased, it is
-simply the preset with an infinite integration window, so every sensor collapses to exactly one
-digit (one hit per sensor).
+Two top-level blocks, `"digitizer"` and `"trigger"`. Each is taken from the dataset config when
+it has the key (`null` included), otherwise from the detector's physics config. A block in
+neither stops the job before PhotonSim runs.
 
-The three presets, from `MODEL_PRESETS` in `lucid/simulation/digitizer.py`:
+Only `config/SK_WAND_physics_config.json` and `config/HK_WAND_physics_config.json` carry the
+blocks, so a `GeV` dataset config (which states none) runs only with `--detector SK_WAND` or
+`HK_WAND`. To use another detector, state the readout in the dataset config:
+`"digitizer": "basic"` (or `"ski"`, `"hk"`) and `"trigger": null` (or a block).
+`"digitizer": null` is refused. The `Solar`, `SN` and `Test` configs state their own.
 
-| model | integration window | deadtime | threshold | charge model | time model | dark rate | WCSim provenance |
-|-------|---------------------|----------|-----------|--------------|------------|-----------|-------------------|
-| `basic` | infinite (`None`) | 0 ns | 0 pe | `legacy` (the historical `sk_like` fractional smear) | `none` | 0 kHz | none — idealized passthrough, kept for parity |
-| `ski` | 200 ns | 0 ns | 0.25 pe | `spe` (sampled SK SPE spectrum) | `sk_gauss` | 4.2 kHz | `WCSimWCDigitizer.hh:97-98` (window/deadtime), `WCSimPMTObject.cc` `Getqpe` + HitTimeSmearing `:88-99` (SK charge/time), `:262` (dark rate) |
-| `hk` | 200 ns | 0 ns | 0.25 pe | `spe` (sampled HK SPE spectrum) | `hk_emg` | 4.2 kHz | same digitizer as `ski` (WCSim ships one digitizer, SKI — there is no separate QBEE model); `WCSimPMTObject.cc` HitTimeSmearing `:2124-2138` (HK Box&Line time response, `R12860`), `:2295` (dark rate) |
+The shipped blocks:
 
-Both `ski` and `hk` also apply a 0.4 ns TDC truncation after the time-jitter model (WCSim SKI
-timing precision, `WCSimWCDigitizer.hh:99`), and sample charge from a fitted Gaussian+exponential
-single-photoelectron spectrum (Bellamy et al. 1994, NIM A 339 468) rather than a Gaussian
-resolution function. `ski`'s SPE fit and `hk`'s SPE fit differ (`_SPE_SK` vs `_SPE_HK` in the
-module) — `hk`'s HitTimeSmearing is also a different functional form (exponentially-modified
-Gaussian vs pure Gaussian for `ski`).
+| detector | `digitizer` | `trigger` |
+|---|---|---|
+| `SK_WAND` | `{"model": "ski"}` | `window_ns` 200, `n_thr` 25, `pad_before_ns` 300, `pad_after_ns` 300 |
+| `HK_WAND` | `{"model": "hk"}` | `window_ns` 200, `n_thr` 45, `pad_before_ns` 300, `pad_after_ns` 300 |
 
-Algorithm, per sensor (`digitize_event`, mirroring WCSim's SKI integrator): sort hits by time,
-open an integration window at the first hit, sum charge over `[t0, t0+window]`, emit a digit if
-the integrated charge clears `threshold`, veto hits for the following `deadtime`, and repeat from
-the next surviving hit. `window=None` makes every group "simple" (fits in one window), which is
-what makes `basic` collapse to one digit per sensor.
+## Digitizer
 
-## Config keys
+`"digitizer"` is a model name, or `{"model": name, ...}` where any other key overrides that
+preset value (for example `"dark_rate_khz"` or `"threshold_pe"`).
 
-The digitizer and trigger are set by two top-level blocks, `"digitizer"` and `"trigger"`,
-resolved by `resolve_readout_blocks` in `lucid/production/dataprod/run_job.py` (the fan-out uses
-the same function). A key in the dataset config (the JSON passed to `lucid-run-job --config ...`)
-is used if present, `null` included; otherwise the block comes from the detector's
-`*_physics_config.json` (see the [config reference](config.md) for that file's other keys). A
-block in neither is an error, raised before PhotonSim runs. Only the frozen `SK_WAND` and
-`HK_WAND` physics configs carry the blocks, so a GeV config on any other detector is refused
-unless the dataset config states its readout; `"digitizer": "basic"` and `"trigger": null` are
-the explicit opt-outs (`"digitizer": null` is refused). A `"selection"` of `min_physics_hits`
-replaces the trigger, so it must come with `"trigger": null`.
+| model | window | threshold | charge | time | TDC step | dark rate |
+|---|---|---|---|---|---|---|
+| `basic` | infinite | 0 pe | SK-like fractional smearing | none | none | 0 |
+| `ski` | 200 ns | 0.25 pe | sampled SK single-photoelectron spectrum | SK Gaussian jitter | 0.4 ns | 4.2 kHz |
+| `hk` | 200 ns | 0.25 pe | sampled HK single-photoelectron spectrum | HK exponentially modified Gaussian | 0.4 ns | 4.2 kHz |
 
-`"digitizer"` may be a bare model name or a dict with a `"model"` key plus overrides — any extra
-key (e.g. `dark_rate_khz`, `threshold_pe`) is merged on top of the preset
-(`resolve_model_config` in `digitizer.py` does `dict(MODEL_PRESETS[name]).update(overrides)`).
+Dead time is 0 in all three. `ski` and `hk` follow WCSim's SKI digitizer and its SK and HK PMT
+models; `basic` is an idealised pass-through with one digit per hit PMT.
 
-The digitizer and trigger are detector properties, so the GeV dataset configs do not carry
-them: they declare only the physics, and `-D` picks the detector, whose physics config supplies
-the readout. `config/HK_WAND_physics_config.json`:
+Per sensor: sort the hits by time, open a window at the first, sum the charge in it, record a
+digit if the sum clears the threshold, then repeat from the next hit after the window (and dead
+time). A digit's time is its first hit's. A sensor can therefore record several digits per
+event.
 
-```json
-{
-  "digitizer": {
-    "model": "hk"
-  },
-  "trigger": {
-    "window_ns": 200.0,
-    "n_thr": 45,
-    "pad_before_ns": 300.0,
-    "pad_after_ns": 300.0
-  }
-}
-```
+Dark noise: a Poisson number of 1 pe hits per sensor at `dark_rate_khz`, uniform over the span
+of the event's real hits, added before windowing. The span is padded on each side by
+`max(pad_before_ns, pad_after_ns) + window_ns` of the trigger (500 ns for the WAND blocks), so
+every possible gate is filled with dark noise, or by 100 ns without a trigger. Dark hits are labelled
+`emission_process = 2` with `particle_idx = -1` in `hits/`. An event with no detected photons
+gets no dark hits.
 
-The dataset config keeps only the selection mode, e.g.
-`lucid/production/dataprod/configs/GeV/02_mu.json` has `"selection": {"mode": "trigger"}`.
-A dataset config may still override the block if it needs to.
+Deposits later than 100 μs after the event start (late neutron-capture or de-excitation light)
+are dropped before digitizing.
 
-Note that this block's `n_thr: 45` and `pad_*: 300.0` **override** the `TriggerConfig` library
-defaults (`n_thr=30`, `pad_before_ns=pad_after_ns=30`, documented under [The trigger](#the-trigger)
-below). That is deliberate: the bundled HK configs ship a *tuned* trigger for that detector, so the
-class defaults are a neutral fallback, not the operating point any shipped config runs at — read the
-config block, not the dataclass, to know what a given dataset used.
+## Trigger
 
-The `Solar`, `SN` and `Test` configs declare their own `detector` and carry their own
-`digitizer` / `trigger` blocks.
+`"trigger"`: `window_ns`, `n_thr`, `pad_before_ns`, `pad_after_ns` (or `pad_ns` for both).
+Omitted keys take the `TriggerConfig` defaults: 200 ns, 30, 30 ns, 30 ns. `null` turns the
+trigger off.
 
-The `"selection"` block is a separate, truth-level knob (`_read_min_physics_hits` in
-`run_job.py`) that decides which interactions are written at all: `{"mode": "min_physics_hits",
-"n": N}` keeps interactions with at least `N` real (non-dark) hits — a cheap stand-in trigger that
-doesn't touch digits — while `{"mode": "trigger"}` defers entirely to the real readout trigger
-below (in which case `_read_min_physics_hits` returns `None` and the digit-level gate is the only
-filter).
+The trigger counts digits in a trailing window over the whole detector. A gate opens where the
+count reaches `n_thr` (moved earlier by `pad_before_ns`) and closes where it drops below
+(moved later by `pad_after_ns`); overlapping gates merge. Only digits inside a gate are kept.
+An event with no gate is dropped from the dataset entirely, leaving a gap in
+`source_event_idx`. Gates are written to `labl/.../per_window`
+([schema](dataset-schema.md)).
 
-## The trigger
+Digit times are rounded to the 0.4 ns TDC step, and 200 ns is a multiple of it, so an event
+exactly at `n_thr` can flip on a one-tick change in one arrival.
 
-`trigger.py` implements a sliding-window hit-sum trigger over the detector-wide digit times — the
-SK-like N200 trigger, applied after digitization rather than to raw photon hits. `TriggerConfig`
-holds four fields:
+## Selection
 
-- `window_ns` — the coincidence window width (SK-like default 200 ns; distinct from the
-  digitizer's own per-sensor integration window).
-- `n_thr` — the detector-wide hit multiplicity that must be reached inside the window to fire
-  (default 30).
-- `pad_before_ns` / `pad_after_ns` — how far the recorded gate extends before the up-crossing and
-  after the down-crossing (default 30 ns each; a config may also set a single symmetric `pad_ns`,
-  which `TriggerConfig.from_block` expands to both).
+The dataset config's `"selection"` block decides which interactions are written:
 
-`find_trigger_gates` computes a trailing-window multiplicity `m(t) = #hits in (t-window, t]`,
-opens a gate when it crosses `n_thr` **up** (minus `pad_before_ns`), closes it on the following
-down-crossing (plus `pad_after_ns`), and merges overlapping gates. `apply_trigger` keeps only
-in-gate digits, canonically re-sorts them by `(window, sensor_idx, T)`, remaps the `digit_idx`
-foreign keys in the hits/segment decompositions, and returns the per-window gate list alongside
-the filtered digits — or `None` if nothing in the event crossed threshold.
+- `{"mode": "trigger"}`: those the trigger keeps (all `GeV` configs and `Test`).
+- `{"mode": "min_physics_hits", "n": N}`: those with at least `N` real (non-dark) hits, a
+  cheap truth-level cut that takes precedence over the trigger (`Solar`, `SN`, which set
+  `"trigger": null`). A supernova config must use it.
 
-Selection interacts with the trigger at the event level, not just the digit level: when a config
-sets `"selection": {"mode": "trigger"}`, an event that never crosses `n_thr` produces no windows
-at all, and `apply_trigger` returning `None` means the whole event is dropped from the dataset —
-it doesn't appear as an empty entry, it is simply **absent**, leaving gaps in the batch's
-`source_event_idx`. The recorded per-window gates themselves (`window_start`, `window_end`, and
-the CSR `digit_offsets` into the sensor digit list) are written to `labl.h5`'s `per_window` group
-— see the [dataset schema](dataset-schema.md) for the exact layout rather than duplicating it
-here.
+## Choosing
 
-## Dark noise
-
-Dark counts are generated directly in `digitizer.py` (`generate_dark_noise`): a Poisson number of
-hits per sensor with mean `rate_khz · Δt · 1e-6` (rate in kHz, `Δt` in ns — the `1e-6` converts
-kHz·ns to a count), spread uniformly across the event's readout span (the time range of the real
-hits, padded by `readout_pad_ns`, default 100 ns), each worth `charge_pe=1.0` p.e. before the
-digitizer sees it.
-These synthetic hits are concatenated onto the real photon list before windowing, so a dark hit
-can extend a digit's integration window or is absorbed into one if it falls inside a real pulse.
-
-Dark digits are labelled in the `hits.h5` decomposition, not hidden: `digitize_and_decompose`
-tags every dark-noise row with `emission_process = EMISSION_PROCESS_DARK` (value `2`, alongside
-`0` = Cherenkov and `1` = scintillation) and `particle_idx = -1` / `segment_idx = -1` (no owning
-particle or track), so `sensor.h5` stays a clean `(sensor_idx, PE, T)` list while `hits.h5` still
-records which contribution was noise.
-
-Real deposits pass through a readout time cap before dark generation: anything later than
-`_MAX_DIGIT_TIME_NS = 1e5` ns (100 μs) relative to the event's reference time is dropped
-before windowing. The cap exists for late nuclear-channel light (neutron capture,
-de-excitation), which can legitimately arrive ms–s after the primary interaction — far
-outside anything a real detector reads out. Since the dark-noise window is then built from
-the surviving hits' time range, the dark counts are bounded by construction too.
-
-## Try it without PhotonSim
-
-The digitizer and trigger are NumPy functions over `(sensor_idx, time, charge)` arrays, so you
-can exercise them on a synthetic event without running PhotonSim. (Importing
-`lucid.simulation.digitizer` still imports JAX, through the `lucid.simulation` package.)
-
-```python
-import numpy as np
-from lucid.simulation.digitizer import resolve_model_config, digitize_and_decompose
-from lucid.simulation.trigger import TriggerConfig, apply_trigger
-
-rng = np.random.default_rng(0)
-
-# A synthetic "event": 40 photon hits on distinct PMTs (of 5000 in the detector),
-# arriving in a fast ~15 ns burst around t=1000 ns, one photoelectron each, all
-# from the same truth particle/segment.
-n_sensors = 5000
-n_hits = 40
-sensor_idx = np.arange(n_hits)
-t_true = 1000.0 + rng.uniform(0, 15, n_hits)
-t_reco = t_true.copy()               # no TTS in this toy example
-charge = np.ones(n_hits)
-particle_idx = np.zeros(n_hits, dtype=np.int64)
-segment_idx = np.zeros(n_hits, dtype=np.int64)
-emission_process = np.zeros(n_hits, dtype=np.int64)   # 0 = Cherenkov
-
-model = resolve_model_config("hk")   # HK preset: 200 ns window, 0.25 pe thr, 4.2 kHz dark
-
-sensor_digits, hits_sparse, seg_hits = digitize_and_decompose(
-    sensor_idx=sensor_idx, charge=charge, t_true=t_true, t_reco=t_reco,
-    particle_idx=particle_idx, segment_idx=segment_idx, emission_process=emission_process,
-    n_sensors=n_sensors, model=model, rng=rng,
-    dark_rate_khz=model["dark_rate_khz"], readout_pad_ns=100.0)
-
-n_dark = int((hits_sparse["emission_process"] == 2).sum())
-print(f"digits: {sensor_digits['sensor_idx'].shape[0]} "
-      f"(physics hits: {n_hits}, dark-tagged hit rows: {n_dark})")
-print(f"mean digit charge: {sensor_digits['PE'].mean():.3f} pe "
-      f"(sample sigma: {sensor_digits['PE'].std():.3f})")
-
-trig_cfg = TriggerConfig()  # window_ns=200, n_thr=30, pad_before/after=30 ns
-result = apply_trigger(sensor_digits, hits_sparse, seg_hits, trig_cfg)
-if result is None:
-    print("no trigger fired")
-else:
-    triggered_sd, triggered_hits, triggered_seg, per_window = result
-    print(f"trigger fired: {per_window['window_start'].shape[0]} window(s), "
-          f"kept {triggered_sd['sensor_idx'].shape[0]}/{sensor_digits['sensor_idx'].shape[0]} digits")
-    print(f"window: [{per_window['window_start'][0]:.1f}, {per_window['window_end'][0]:.1f}] ns")
-```
-
-Output (seeded, deterministic):
-
-```
-digits: 42 (physics hits: 40, dark-tagged hit rows: 4)
-mean digit charge: 1.027 pe (sample sigma: 0.406)
-trigger fired: 1 window(s), kept 40/42 digits
-window: [983.6, 1237.2] ns
-```
-
-The 4.2 kHz dark rate over the ~215 ns readout span across 5000 sensors adds 4 single-pe dark
-digits, and 2 of the 40 physics hits sample an SPE charge below the 0.25 pe threshold and record
-no digit: 38 + 4 = 42. The trigger's default `n_thr=30` clears easily on the burst and produces
-one gate; the 2 dark digits that fell before it (at ~920 and ~975 ns) are dropped.
-
-## Known behaviors
-
-Two edge cases worth knowing when interpreting datasets:
-
-- **Dark noise needs at least one real hit.** The dark-noise window is derived from the
-  event's real-hit time range, so an event with zero detected physics photons produces zero
-  dark digits (it cannot dark-trigger on its own).
-- **Trigger decisions are grid-sensitive at exact ties.** Digit times are TDC-rounded
-  (0.4 ns) and the default 200 ns window is an exact multiple of that grid, so a hit landing
-  on the same tick as another hit's window expiration can momentarily satisfy the threshold —
-  a 1 ns shift in one arrival can toggle a marginal trigger. Only relevant for events sitting
-  exactly at `n_thr`.
-
-## Choosing a model
-
-Use `basic` for anything where the electronics response itself isn't the point — quick
-turnaround datasets, ML training sets where you want the historical one-hit-per-sensor charge/time
-pair, or comparisons against older LUCiD datasets. Switch to `ski` or `hk` when you need the SPE
-charge resolution, PMT time jitter, and TDC granularity that a real SK- or HK-like readout
-contributes, e.g. when validating against WCSim or characterizing low-charge/near-threshold
-behavior. Only turn on the trigger block if you specifically care about DAQ acceptance and
-dark-noise-driven false triggers; if you just want to drop low-activity interactions, the cheaper
-`selection.mode = "min_physics_hits"` truth-level cut avoids running the digit-level trigger
-machinery entirely.
+Use `basic` with no trigger when the electronics are not the point, or to compare with
+one-hit-per-PMT datasets. Use `ski` or `hk` for realistic charge resolution, time jitter, TDC
+granularity and dark noise. Add a trigger when acceptance and dark-noise triggers matter; to
+only drop near-empty interactions, `min_physics_hits` is cheaper.

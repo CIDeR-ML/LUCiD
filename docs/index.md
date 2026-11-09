@@ -1,32 +1,31 @@
-# Documentation
+# LUCiD
 
-Welcome to the LUCiD docs. For the project overview, see the
-[LUCiD home page](../); this section is the technical documentation — install,
-concepts, guides, and reference.
+LUCiD (Light-based Unified Calibration and trackIng Differentiable simulation) is a
+differentiable photon simulator for optical particle detectors: water Cherenkov tanks,
+water-based liquid scintillator (WbLS) and ice. It is written in JAX, so the gradient of a loss
+on the sensor output flows back through emission, propagation, scattering and sensor response.
+Calibration and track reconstruction are then gradient-based fits on the same forward model.
+Light emission comes from SIREN emitters, small neural networks trained on GEANT4 photon tables.
 
-**Light-based Unified Calibration and trackIng Differentiable simulation** — the first end-to-end
-*differentiable* optical particle-detector simulator. Gradients flow through emission,
-propagation, scattering, and sensor response, so **calibration** and **track reconstruction**
-become gradient-based optimization in one JAX framework, with a **SIREN** surrogate (a small
-neural net trained on GEANT4 photon tables) supplying the light emission. Units are **meters,
-nanoseconds, MeV**. Eighteen detector configurations ship in-tree, from Super-Kamiokande to
-IceCube — see the [bundled detectors](getting-started/detectors.md).
+Units are metres, nanoseconds and MeV throughout.
 
-Accompanies the paper *"End-to-end Differentiable Calibration and Reconstruction for Optical
-Particle Detectors"* — [arXiv:2602.24129](https://arxiv.org/abs/2602.24129).
+The method and its results are in *End-to-end Differentiable Calibration and Reconstruction for
+Optical Particle Detectors*, [arXiv:2602.24129](https://arxiv.org/abs/2602.24129). The project
+has a [home page](../).
 
-## What can I do with it?
+## Where to start
 
-| I want to… | Start here |
-|------------|-----------|
-| See something work in a few minutes | [Install](getting-started/install.md) → [quickstart](getting-started/quickstart.md) (`examples/hello_simulate.py`) |
-| Understand the forward model | Concepts: [the photon pipeline](concepts/photon-pipeline.md), [architecture](concepts/architecture.md) |
-| Reconstruct a track | [Reconstruction](guides/reconstruction.md); `examples/seed_reconstruct.py`; `analysis/paper/utils/run_study.py` for many events |
-| Calibrate optical parameters | [Calibration](guides/calibration.md); `examples/hello_calibrate.py` |
-| Model a specific detector | [Model your own detector](guides/model-your-own-detector.md); [configuration reference](reference/config.md) |
-| Produce a dataset (GEANT4/PhotonSim) | [Producing datasets](guides/production/index.md); [dataset schema](reference/dataset-schema.md) |
+| I want to | Read |
+|---|---|
+| install it and see an event | [Install](getting-started/install.md), then the [quickstart](getting-started/quickstart.md) |
+| run it on my detector | [Model your own detector](guides/model-your-own-detector.md) and the [bundled detectors](getting-started/detectors.md) |
+| reconstruct a track | [Reconstruction](guides/reconstruction.md) |
+| calibrate optical parameters | [Calibration](guides/calibration.md) |
+| redraw the paper's figures | [Paper figures](guides/paper.md) |
+| produce a labelled GEANT4 dataset | [Producing datasets](guides/production/index.md) |
+| look up an argument, config key or output field | [Reference](reference/simulator.md) |
 
 ## Cite
 
-If you use LUCiD, please cite the paper above; [`CITATION.cff`](https://github.com/CIDeR-ML/LUCiD/blob/main/CITATION.cff)
-has the reference.
+If you use LUCiD, cite the paper above.
+[`CITATION.cff`](https://github.com/CIDeR-ML/LUCiD/blob/main/CITATION.cff) has the reference.

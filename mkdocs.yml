@@ -45,34 +45,33 @@ extra_javascript:
 
 nav:
   - Home: index.md
-  - Getting Started:
+  - Getting started:
       - Install: getting-started/install.md
       - Quickstart: getting-started/quickstart.md
       - Bundled detectors: getting-started/detectors.md
-  - Concepts:
-      - The photon pipeline: concepts/photon-pipeline.md
-      - Architecture: concepts/architecture.md
-      - Parameters (DetectorParams): concepts/detector-params-vs-args.md
-      - Wavelength physics: concepts/wavelength.md
-      - Materials (water / WbLS / ice): concepts/materials.md
   - Guides:
+      - Model your own detector: guides/model-your-own-detector.md
       - Reconstruction: guides/reconstruction.md
       - Calibration: guides/calibration.md
-      - Model your own detector: guides/model-your-own-detector.md
-      - Producing datasets:
-          - Overview: guides/production/index.md
-          - Local (with PhotonSim): guides/production/local.md
-          - From the container (Apptainer / Docker): guides/production/container.md
-          - Cluster deployment:
-              - How cluster targeting works: guides/production/cluster-abstraction.md
-              - S3DF, NERSC, LXPLUS: guides/production/clusters.md
-          - Training the SIREN emitter: guides/production/siren-training-inputs.md
+      - Paper figures: guides/paper.md
+  - Producing datasets:
+      - Overview: guides/production/index.md
+      - On your machine: guides/production/local.md
+      - From the container: guides/production/container.md
+      - On a cluster (S3DF, NERSC, LXPLUS): guides/production/clusters.md
+      - How cluster targeting works: guides/production/cluster-abstraction.md
+      - Training a SIREN emitter: guides/production/siren-training-inputs.md
+  - Concepts:
+      - How the simulator works: concepts/architecture.md
+      - "Optics: media and wavelength": concepts/optics.md
   - Reference:
-      - CLI: reference/cli.md
-      - Configuration: reference/config.md
+      - Simulator: reference/simulator.md
+      - Parameters: reference/detector-params.md
+      - Configuration files: reference/config.md
+      - Command-line tools: reference/cli.md
       - Dataset schema: reference/dataset-schema.md
-      - Digitizer & trigger: reference/digitizer-and-trigger.md
-      - PMT .npz schema: reference/pmt-npz-schema.md
+      - Digitizer and trigger: reference/digitizer-and-trigger.md
+      - Sensor position files: reference/pmt-npz-schema.md
   - Development:
       - Development: development.md
       - Studies and archives: studies.md

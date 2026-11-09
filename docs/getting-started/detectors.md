@@ -1,72 +1,52 @@
 # Bundled detectors
 
-A detector in LUCiD is configuration, not code: a `*_geom_config.json` (shape,
-sensor placement) plus a `*_physics_config.json` (optical properties) is enough
-to point the same simulation engine at a different tank, sphere, box, or
-neutrino telescope. See [model your own detector](../guides/model-your-own-detector.md)
-for how the two files are read and for writing a new pair, and the
-[configuration reference](../reference/config.md) for every key.
+A detector is two JSON files in `config/`: `<name>_geom_config.json` (shape and sensors) and
+`<name>_physics_config.json` (optical properties). Pass their paths to
+`setup_event_simulator(geom, ..., physics_config=phys)`. To add one, see
+[Model your own detector](../guides/model-your-own-detector.md); every key is in the
+[configuration reference](../reference/config.md).
 
-## The list
+| name | shape | sensors | placement | medium |
+|---|---|--:|---|---|
+| `SK` | cylinder | 11096 | measured (`sk_geometry.npz`) | water |
+| `SK_WAND` | cylinder | 11096 | measured (`sk_geometry.npz`) | water |
+| `SK_like` | cylinder | 10764 | generated | water |
+| `SK_like_wbls` | cylinder | 10764 | generated | WbLS |
+| `HK` | cylinder | 19746 | measured (`hk_geometry.npz`) | water |
+| `HK_WAND` | cylinder | 19746 | measured (`hk_geometry.npz`) | water |
+| `BigHK` | cylinder | 19650 | generated | water |
+| `WCTE` | cylinder | 1995 | measured (`wcte_geometry.npz`) | water |
+| `WCTE_like` | cylinder | 2444 | generated | water |
+| `IWCD` | cylinder | 6892 | generated | water |
+| `EOS` | cylinder | 194 | generated | water |
+| `JUNO` | sphere | 10000 | generated | water |
+| `JUNO_wbls` | sphere | 10000 | generated | WbLS |
+| `TAO` | sphere | 4000 | generated | water |
+| `MidBox` | box | 8932 | generated | water |
+| `nuSCOPE` | box | 4928 | generated | water |
+| `IceCube86_full` | string | 5160 | measured (`icecube86_full.npz`) | ice |
+| `IceCube86_simple` | string | 4680 | measured (`icecube86_simple.npz`) | water |
 
-| Name | Geometry class | Sensor placement | Material(s) | Config pair |
-|------|----------------|-------------------|-------------|--------------|
-| `SK` | cylinder | measured PMT positions (`.npz`) | water | `SK_geom_config.json` / `SK_physics_config.json` |
-| `SK_like` | cylinder | algorithmic | water | `SK_like_geom_config.json` / `SK_like_physics_config.json` |
-| `SK_like_wbls` | cylinder | algorithmic | WbLS | `SK_like_wbls_geom_config.json` / `SK_like_wbls_physics_config.json` |
-| `HK` | cylinder | measured PMT positions (`.npz`) | water | `HK_geom_config.json` / `HK_physics_config.json` |
-| `SK_WAND` | cylinder | measured PMT positions (`.npz`) | water | `SK_WAND_geom_config.json` / `SK_WAND_physics_config.json` |
-| `HK_WAND` | cylinder | measured PMT positions (`.npz`) | water | `HK_WAND_geom_config.json` / `HK_WAND_physics_config.json` |
-| `BigHK` | cylinder | algorithmic | water | `BigHK_geom_config.json` / `BigHK_physics_config.json` |
-| `WCTE` | cylinder | measured PMT positions (`.npz`) | water | `WCTE_geom_config.json` / `WCTE_physics_config.json` |
-| `WCTE_like` | cylinder | algorithmic | water | `WCTE_like_geom_config.json` / `WCTE_like_physics_config.json` |
-| `IWCD` | cylinder | algorithmic | water | `IWCD_geom_config.json` / `IWCD_physics_config.json` |
-| `JUNO` | sphere | algorithmic | water | `JUNO_geom_config.json` / `JUNO_physics_config.json` |
-| `JUNO_wbls` | sphere | algorithmic | WbLS | `JUNO_wbls_geom_config.json` / `JUNO_wbls_physics_config.json` |
-| `TAO` | sphere | algorithmic | water | `TAO_geom_config.json` / `TAO_physics_config.json` |
-| `IceCube86_full` | string | measured DOM positions (`.npz`) | ice | `IceCube86_full_geom_config.json` / `IceCube86_ice_physics_config.json` |
-| `IceCube86_simple` | string | measured DOM positions (`.npz`) | water | `IceCube86_simple_geom_config.json` / `IceCube86_physics_config.json` |
-| `MidBox` | box | algorithmic | water | `MidBox_geom_config.json` / `MidBox_physics_config.json` |
-| `EOS` | cylinder | algorithmic | water | `EOS_geom_config.json` / `EOS_physics_config.json` |
-| `nuSCOPE` | box | algorithmic | water | `nuSCOPE_geom_config.json` / `nuSCOPE_physics_config.json` |
+The config pair of each is `config/<name>_geom_config.json` and
+`config/<name>_physics_config.json`, except `IceCube86_full`, whose physics config is
+`config/IceCube86_ice_physics_config.json`.
 
-`SK_WAND` and `HK_WAND` are the frozen detector descriptions of the WAND production, and the
-only configs that carry a readout (`digitizer` and `trigger` blocks), which `lucid-run-job` needs
-unless the dataset config states one ([digitizer & trigger](../reference/digitizer-and-trigger.md)).
+"Generated" placement tiles sensors from a few numbers (radius, height, sensor count, sensor
+radius); "measured" reads sensor positions from a `.npz` file converted from a survey or WCSim
+geometry. Generated placement places a little fewer sensors than the config asks for.
 
-All config pairs live under `config/` at the repo root. "Algorithmic" sensor
-placement means the sensor positions are generated from a few numbers (radius,
-height, sensor count, ...) in `geometry_definitions`; "measured" means the
-positions are read from a `.npz` geometry file (real PMT or DOM survey data
-converted to LUCiD's schema).
+Notes on the names:
 
-A few notes on the real-experiment names above:
-
-- **SK** = Super-Kamiokande, **HK** = Hyper-Kamiokande — large cylindrical
-  water-Cherenkov detectors in Japan. `SK_like` reproduces their scale
-  algorithmically (no PMT survey file needed); `SK` and `HK` use the real
-  measured PMT layouts.
-- **WCTE** = Water Cherenkov Test Experiment, a smaller test-bench tank used to
-  validate water-Cherenkov reconstruction techniques; `WCTE` uses the real
-  measured PMT layout, `WCTE_like` an algorithmic stand-in of similar scale.
-- **JUNO** = Jiangmen Underground Neutrino Observatory, a large spherical
-  liquid-scintillator detector; **TAO** is its companion near detector.
-  `JUNO_wbls` swaps in water-based liquid scintillator (WbLS) instead of pure
-  water, and `SK_like_wbls` does the same for the SK-like cylinder.
-- **IceCube** is the cubic-kilometre neutrino telescope at the South Pole:
-  strings of **DOMs** (digital optical modules) frozen into the ice.
-  `IceCube86_full` uses the real 86-string DOM layout in an ice medium;
-  `IceCube86_simple` is a lighter-weight string layout used for propagator
-  cross-checks, run in a water medium.
-
-`IWCD`, `EOS` and `nuSCOPE` are named after real or proposed experiments (the
-Intermediate Water Cherenkov Detector, the EOS water-based-scintillator
-demonstrator, nuSCOPE), but here they are scale stand-ins with algorithmic
-placement, not models of those detectors. `BigHK` (an algorithmic cylinder at Hyper-K scale)
-and `MidBox` are synthetic tanks for testing and demos.
-
-## What the examples use
-
-`SK_like` (cylinder, water, algorithmic) is the default across almost every `examples/hello_*.py`
-script. `examples/hello_telescope.py` uses `IceCube86_full` with the ice physics config as the
-neutrino-telescope entry point.
+- `SK` (Super-Kamiokande) and `HK` (Hyper-Kamiokande) use the real PMT layouts; `SK_like` is a
+  generated tank at SK scale and is what most examples use.
+- `SK_WAND` and `HK_WAND` are fixed descriptions for dataset production. They are the only
+  configs with a readout (`digitizer` and `trigger` blocks), which `lucid-run-job` needs
+  ([digitizer and trigger](../reference/digitizer-and-trigger.md)).
+- `WCTE` is the Water Cherenkov Test Experiment layout; `WCTE_like` a generated tank of similar
+  size.
+- `JUNO_wbls` and `SK_like_wbls` fill the JUNO-sized sphere and the SK-sized tank with WbLS.
+  `JUNO` and `TAO` are spheres at JUNO and TAO scale filled with water.
+- `IWCD`, `EOS` and `nuSCOPE` are generated tanks at the scale of those experiments, not models
+  of them. `BigHK` and `MidBox` are synthetic.
+- `IceCube86_full` is the 86-string IceCube DOM layout in ice (used by
+  `examples/hello_telescope.py`). `IceCube86_simple` is a lighter string layout in water.

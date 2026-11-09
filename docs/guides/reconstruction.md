@@ -1,21 +1,19 @@
 # Reconstruction
 
-How LUCiD reconstructs a track `(energy, vertex, direction, t0)` from per-PMT charge + first
-hit times. Runnable entry point: `examples/seed_reconstruct.py`; many events:
-`analysis/paper/utils/run_study.py` (the paper's studies) or the loop below.
+LUCiD reconstructs a track (energy, vertex, direction, t0) from the per-PMT charge and
+first-hit time of one event. Seeds are built from the data, then a Gauss-Newton fit on the
+differentiable forward model refines all nine parameters together, using exact autodiff
+derivatives.
 
-Because the forward model is differentiable, the refinement step optimizes against **exact
-autodiff derivatives** of the loss — not finite differences, and not a library of precomputed
-templates — so all nine parameters move together under Gauss-Newton curvature (the coarse grid
-below is only a *seed* for this gradient fit, not the fit itself).
+Runnable: `examples/seed_reconstruct.py`. It is meant for a GPU: about 8 minutes on an RTX
+2080 Ti, which needs `XLA_PYTHON_CLIENT_MEM_FRACTION=.95` to fit in its 11 GB.
 
 ## Minimal fit
 
-The whole flow — seed from the data, refine with Fisher-Gauss-Newton, read out a track. The
-model and the reconstruction, included from `examples/seed_reconstruct.py`, where `GEOM`, `PHYS`
-and `GRID` are SK_like's configs and propagation grid, `TTS = 2.1`, `PARTICLE[hypothesis]` is
-`'muon'` or `'electron'`, `seed` is `SEED_RECIPE` and `fit` is `FIT_RECIPE` (`--quick` and
-`--steps` change them for a smoke run), and `oc`, `ot` are the observed event:
+From `examples/seed_reconstruct.py`, where `GEOM` and `PHYS` are the `SK_like` configs, `GRID`
+the propagation grid (`n_cap=80, n_angular=120, n_height=80, max_candidates_per_ray=8`),
+`TTS = 2.1` ns, `PARTICLE[hypothesis]` is `'muon'` or `'electron'`, `seed` is `SEED_RECIPE`
+and `fit` is `FIT_RECIPE`:
 
 ```python
 --8<-- "examples/seed_reconstruct.py:model"
@@ -25,12 +23,14 @@ and `GRID` are SK_like's configs and propagation grid, `TTS = 2.1`, `PARTICLE[hy
 --8<-- "examples/seed_reconstruct.py:reconstruct"
 ```
 
-The detector (sensors, volume, light speed) is the predictor's own, `model.pred.det_geom`. The
-example fits a SIREN-sampled event by default, or with `--geant4` a GEANT4 event of the bundled
-1 GeV muon slice; `--particle` and `--hypothesis` (`mu` or `e`) choose the event's particle (a GEANT4
-event is a muon) and the model.
-Its last line is the data loss at the fit, so one event fitted under both hypotheses is a μ/e
-test (the lower loss names the particle):
+`oc` and `ot` are the observed charge and first-hit time per PMT (zero time on an unhit PMT),
+arrays of length `model.pred.det_geom.num_sensors`. The example makes them from a
+SIREN-sampled track by default, or from a GEANT4 event of the bundled 1 GeV muon file with
+`--geant4` (`--event 0..4`). `--particle` sets the event's particle and `--hypothesis` the model
+(`mu` or `e`); `--quick` and `--steps` make a smoke run.
+
+The last line printed is the data loss at the fit. Fitting one event under both hypotheses is a
+muon/electron test, since the lower loss names the particle:
 
 ```bash
 for hyp in e mu; do
@@ -38,119 +38,90 @@ for hyp in e mu; do
 done
 ```
 
-Many events are a loop over the observables, each event's keys folded from its index, so no
-two events share draws and an event reconstructs the same way whatever else is in the loop:
+For many events, give each event its own keys so no two events share random draws:
 
 ```python
-for i, (oc, ot) in enumerate(events):                # (counts, first-hit times) per event
+for i, (oc, ot) in enumerate(events):
     res, info = reconstruct(model, oc, ot, seed=SEED_RECIPE, fit=FIT_RECIPE,
                             seed_key=jax.random.fold_in(jax.random.PRNGKey(1), i),
                             fit_key=jax.random.fold_in(jax.random.PRNGKey(2), i))
 ```
 
-`reconstruct` is the published method: seeds A, B and F from the data, a pre-fit pick, one
-`fit_track`. To fit from a start of your own, call
-`fit_track(model, oc, ot, start, FIT_RECIPE, key=fit_key)`;
-it returns `(theta, history)`, the trajectory included. Change one knob with
-`dataclasses.replace`, e.g. `replace(FIT_RECIPE, nkeys=4)`.
+`res` is the 9-vector `[E, x, y, z, sinθ, cosθ, sinφ, cosφ, t0]`; `track_from_vec9(res)` turns
+it into a `ParticleParams` and `vec9_dir(res)` into a unit direction. `info` holds the three
+seeds (`info['seeds']`), their pre-fit losses, which one was fitted (`info['which']`) and the fit
+history. To fit from your own start, call `fit_track(model, oc, ot, start, FIT_RECIPE,
+key=fit_key)`, which returns `(theta, history)`.
 
-What each knob configures (the published values are `FIT_RECIPE`, `MODEL_RECIPE` and
-`SEED_RECIPE` in `lucid.fitting`; `ReconModel(pred, sigma=..., nphot_fn=...)` takes a
-predictor of your own):
+The data side must match the model: the same detector, `wavelength_mode=True`, the physics
+config given to both, and a TTS equal to the model's `sigma`.
 
-- **Energy from the charge scale** (`ReconModel`) — the charge term's *energy* gradient flows
-  through the **total predicted charge**, decoupling the energy scale from small emission-shape
-  mismatch.
-- **SCALE9 preconditioning** — the GN step is solved in per-parameter units
-  `[50 MeV, 0.2 m ×3, 0.02 ×4 dir cosines, 0.2 ns]` (the `SCALE9` vector), so one step can move
-  the MeV-scale energy and the direction cosines together.
-- **Fisher metric** — the PSD Gauss-Newton / Fisher metric is built by forward-mode autodiff.
-  `max_step=3.0` clips each scaled step.
-- **lr schedule `lr=4.0` → `lr_final=1.5`** — big early steps settle to small late ones
-  (converges ~2× faster than a constant step and avoids late divergence). `mu` is an
-  additive Levenberg floor (`mu=0` is forbidden — it runs `t0` away).
-- **Polyak readout** — the fit returns the mean of the last `polyak=40` iterates, robust
-  to the noise-floor wandering (‖g‖ never fully vanishes at the biased minimum).
-- **`nkeys` / `steps`** — PRNG keys averaged per gradient step / Gauss-Newton iterations; the
-  keys are `FIT_RECIPE.keys(fit_key)`, split from the event's own fit key, and the pre-fit pick
-  scores the starts with the same keys.
-- **The seed recipe** (`SEED_RECIPE`, every value stated; nothing has a default) — the energy
-  window, the first-light grid's t0 range and levels, the multilateration settings, the cone
-  search, and `pick_margin`: a start replaces seed A only if its pre-fit data loss is lower by
-  that fraction. Widen `t0_min`/`t0_max` if your events' true t0 lies outside ±20 ns; the energy
-  window covers 200–3000 MeV.
-- **`seed_key` / `fit_key`** — the event's two random streams: the energy scan and the cone
-  searches at A and at B each take an independent key split from `seed_key`, the fit its `nkeys`
-  keys from `fit_key`. The paper takes them from the event's `derive_event_keys(...)`
-  (`'seed_key'`, `'fit_key'`).
+## The method
 
-## Pipeline
+All names are in `lucid.fitting`.
 
-`lucid.fitting` fits a 9-vector `t9 = [E, x, y, z, sinθ, cosθ, sinφ, cosφ, t0]`:
+1. **Energy seed**: a scan of the total predicted charge along a probe track through the
+   detector centre.
+2. **Seed A**, first-light grid: a hierarchical vertex and t0 grid on arrival-time residuals,
+   then a cone search for the direction.
+3. **Seed B**, time multilateration (`seed_vertex_time`), then a cone search.
+4. **Seed F** (`fuse_seeds`): B's transverse vertex, A's longitudinal vertex and direction, and
+   their mean t0.
+5. **Pick**: A, unless B or F has a data loss lower by `pick_margin` (`pick_by_margin`).
+6. **Fit** (`fit_track`): Fisher-Gauss-Newton on the loss, a Poisson charge likelihood plus a
+   first-arrival time likelihood.
 
-- **Forward**: `setup_event_simulator(..., source='particle')` (`hits='photon_list'`) →
-  per-photon log-weights, times and sensor indices, and the per-PMT expected charge; `ReconModel`
-  turns them into the loss, a Poisson charge NLL plus a first-arrival-window time NLL.
-- **Fit**: `fit_track`, the Fisher-Gauss-Newton loop whose knobs are listed above.
-- **Seeding** (`lucid.fitting.seed`): an energy scan along a probe track; seed A, the
-  **first-light grid** (a hierarchical vertex/t0 grid on arrival-time residuals,
-  `first_light_grid`); seed B, time multilateration (`seed_vertex_time`); a cone direction
-  search for each (`cone_direction`); seed F, their fusion (`fuse_seeds`: B's transverse vertex,
-  A's longitudinal vertex and direction, the mean t0). `reconstruct` scores A, B and F by the
-  data loss, keeps A unless another wins by `pick_margin` (`pick_by_margin`), and fits once.
+The model (`ReconModel`) predicts with `hits='photon_list'` and takes the energy scale from the
+emitter's photon yield, so the energy gradient acts through the total charge only. There is no
+charge-normalisation factor to tune.
 
-## Wavelength-consistent forward (use this)
+## Settings
 
-The recon forward must be **wavelength-consistent** with the data; with that in place, no
-scalar photon-yield normalization is needed.
+The published values are `MODEL_RECIPE`, `SEED_RECIPE` and `FIT_RECIPE`. Change one with
+`dataclasses.replace`, for example `replace(FIT_RECIPE, nkeys=4)`.
 
-1. **Data ROOT with per-photon `PhotonWavelength`.** The data path QE-weights each photon by
-   its true λ; without it (older ROOT files), photons outside the QE-sensitive band get counted
-   as detectable and inflate the apparent charge.
-2. **The emitter's emission band.** The SIREN emitter's `nphot(E)` counts photons over the
-   PhotonSim Cherenkov emission band [274.91, 673.83] nm (4.51 down to 1.84 eV), recorded as
-   `emission_band_nm` in its `emitter.json`; the track mode samples the model λ over that band
-   by default (`cherenkov_emission_band` on `setup_event_simulator` overrides it). The
-   out-of-band fringe is then inert — `qe_fn(λ)` is zero outside the QE knots and the medium
-   curves clamp — so detected charge uses the correct in-band fraction.
-3. **Emitter sampling**: the default SIREN emitter uses importance seed-sampling over the full
-   emission profile, so the low-density longitudinal tail and wide-angle shoulders are kept
-   without any tuning.
-4. `wavelength_mode=True`, a realistic per-photon transit-time spread
-   (`DetectorParams.response.tts`; the paper simulates 2.1 ns), and `K≥8` scatter iterations.
+`MODEL_RECIPE`: `n_rays=250_000`, `K=8`, `temperature=0.1`, first-arrival window `delta=1.0` ns,
+`time_weight=1.0`, `energy_scale='nphot'`.
 
-`cherenkov_emission_band` is a wavelength band, not a scaling factor: the forward has no photon-
-yield or track-length normalization to tune.
+`FIT_RECIPE`:
+
+| field | value | meaning |
+|---|---|---|
+| `steps` | 150 | Gauss-Newton iterations |
+| `nkeys` | 8 | random keys averaged per step, fixed through the fit, split from `fit_key` |
+| `lr`, `lr_final` | 4.0, 1.5 | step scale, annealed linearly |
+| `lam` | 0.01 | Marquardt damping on the Fisher diagonal |
+| `mu` | 0.1 | Levenberg floor; `mu=0` lets t0 run away |
+| `refresh` | 8 | steps between Fisher-matrix rebuilds |
+| `max_step` | 3.0 | clip on each component of the scaled step |
+| `polyak` | 40 | the result is the mean of the last 40 iterates |
+
+Steps are taken in units of `SCALE9 = [50 MeV, 0.2 m ×3, 0.02 ×4, 0.2 ns]`, so one step can
+move the energy, the vertex and the direction cosines together.
+
+`SEED_RECIPE` sets the energy scan (`energy_center=1600`, `energy_delta=1400` MeV, so 200 to
+3000 MeV), the first-light grid (`t0_min=-20`, `t0_max=20` ns and its levels), the
+multilateration and the cone search. Every field must be given. Widen `t0_min` and `t0_max` if
+your events' true t0 can fall outside ±20 ns.
 
 ## What constrains what
 
-- **Charge** carries the energy scale and the longitudinal vertex information; its quality is
-  limited by the fidelity of the emission model's charge shape.
-- **Timing** carries the transverse vertex, direction, and `t0`; its quality is set by the
-  per-PMT time resolution (TTS).
-- Angles enter through direction cosines whose raw gradients can be kinky — this is why the
-  optimizer is Fisher-driven rather than raw-gradient-driven, and why the start matters for
-  events far from the seed.
+- Charge sets the energy and the vertex along the track.
+- Timing sets the transverse vertex, the direction and t0; its precision is set by the TTS.
 
 ## If the fit misbehaves
 
-- **Diverging or wandering vertex** — a bad start (a mis-multilaterated `t0` dropping the fit
-  into the wrong basin) is the usual cause. Use `reconstruct` rather than a single hand-made
-  seed: the fused seed F carries the time seed's transverse vertex, which is what rescues
-  inward-pointing tracks, and `info['seeds']` shows whether the seeds agree.
-- **Energy frozen or runs away** — a preconditioning problem. SCALE9 scaling is required (an
-  unscaled step cannot move the MeV-scale energy against a metre-scale position), and `mu=0`
-  is forbidden. Also confirm **both** the predictor and the data forward were given
-  `physics_config` — a dropped one mis-normalizes the wavelength QE (data ≫ model) and the energy
-  runs away.
-- **Biased energy** — use the wavelength-consistent forward above (the emitter's emission band,
-  `wavelength_mode=True`); a band narrower than the emitter's makes out-of-band photons count as
-  detectable, inflates the apparent charge, and biases the energy scale.
-- **Too slow** — lower `nkeys`/`steps`, coarsen the seed search (`grid_levels`, `cone_levels`
-  in the seed recipe; the grid params on `setup_event_simulator`), or run on GPU (JAX uses it automatically). At the defaults the fit takes about 7–8 min on an
-  RTX 2080 Ti, and an 11 GB card needs `XLA_PYTHON_CLIENT_MEM_FRACTION=.95`.
+- The vertex wanders or diverges: usually a bad start. Use `reconstruct` rather than one
+  hand-made start, and check whether `info['seeds']` agree.
+- The energy runs away: check that both the model and the data simulator were given the physics
+  config, and that `mu > 0`.
+- The energy is biased: the data must carry per-photon wavelengths (PhotonSim's
+  `PhotonWavelength`) and be simulated with `wavelength_mode=True`. Do not narrow
+  `cherenkov_emission_band` below the emitter's band.
+- It is too slow: lower `nkeys` or `steps`, coarsen the seed search (`grid_levels`,
+  `cone_levels`), or use a GPU.
 
 ## Known limitation
 
-The electron emission surrogate slightly under-predicts charge relative to muons, giving a small
-positive electron energy bias.
+The electron emitter slightly under-predicts charge relative to muons, which gives a small
+positive energy bias for electrons.

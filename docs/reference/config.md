@@ -1,75 +1,85 @@
-# Configuration reference
+# Configuration files
 
-Each detector is defined by two JSON files in `config/`. They are parsed by
-`lucid/detector_params.py` (`load_detector_params`, `load_physics_config`) and
-`lucid/geometry/` (`DetectorGeometry.from_config`).
+A detector is a geometry config and a physics config in `config/`. Paths inside either file
+(`npz_file_path`, `medium_model`, `qe_curve`, `"file.json"` values) are resolved relative to the
+file's own directory. Lengths are in metres; there is no unit field.
 
-## Geometry config — `*_geom_config.json`
+## Geometry config
 
-| key | meaning |
-|-----|---------|
-| `material` | `"water"`, `"wbls"`, `"ice"`, … — selects the medium model and the SIREN emitter path |
-| `detector_type` | `cylinder` / `sphere` / `box` / `string` — selects the registry class |
-| `geometry_definitions` | shape & sensor placement (fields depend on `detector_type`) |
+`<name>_geom_config.json`, read by `lucid.geometry.generate_detector(path)`:
 
-`geometry_definitions` by type:
-
-- **cylinder**: `radius`, `height`, `n_sensors`, `sensor_radius` (algorithmic), or
-  `npz_file_path` (a measured PMT array)
-- **sphere**: `radius`, `n_sensors`, `sensor_radius`
-- **box**: `length`, `width`, `height`, `n_sensors`, `sensor_radius`
-- **string**: `npz_file_path` (DOM positions; see the [PMT `.npz` schema](pmt-npz-schema.md))
-
-Measured cylinders (SK/HK/WCTE) come from a PMT-array `.npz` via `Cylinder.from_pmt_file` — see
-the [PMT `.npz` schema](pmt-npz-schema.md).
-
-## Physics config — `*_physics_config.json`
-
-A **flat** set of optical properties, keyed by `DetectorParams` leaf name. The loader is strict:
-a key it does not know raises (naming the closest known key), and so does a required key left
-out. `_`-prefixed keys are comments.
+```json
+{
+  "material": "water",
+  "detector_type": "cylinder",
+  "geometry_definitions": {"radius": 16.9, "height": 36.2, "n_sensors": 11000, "sensor_radius": 0.25}
+}
+```
 
 | key | meaning |
-|-----|---------|
-| `scalar_mode` | a block holding `scatter_length`, `absorption_length`, `mie_scatter_length` (Rayleigh / Mie scattering and absorption lengths, m). Only scalar mode (`wavelength_mode=False`) reads them — wavelength mode evaluates the medium's curves — so they are not accepted at the top level |
-| `g` | Mie asymmetry parameter |
-| `wall_reflection_rate`, `sensor_reflection_rate` | scalar reflectivities (required) |
-| `wall_fspec`, `sensor_fspec` | wall / sensor specular fraction (required): the default `'scalar_mix'` reflection combines the scalar rates with this specular/diffuse split |
-| `angular_reflection` | a block holding `wall_R0`, `wall_p` (Schlick wall reflectance at normal incidence, exponent) and `cathode_nr`, `cathode_nk` (the PMT cathode's complex index). Only `reflection_model='angular'` reads them, so they are not accepted at the top level; it requires all four when it runs on params baked from this config. Without the block they hold reference values no other model reads |
-| `qe` | global quantum efficiency, per photon arriving at a PMT with its reflection included (as PMT QE is quoted); at most `1 − R0`, the sensor's non-reflected fraction at normal incidence |
-| `qe_corrections`, `t0` | per-PMT response arrays (QE multiplier, first-arrival time offset, not yet applied by the hits); `qe_corrections` is required |
-| `tts` | transit-time spread (per-PMT timing jitter, ns) |
-| `S`, `kB`, `C`, `tau_rise`, `tau_fall` | scintillation block (usually inherited from the material JSON — see [materials](../concepts/materials.md)) |
-| `digitizer`, `trigger` | production's readout blocks (electronics/DAQ, not `DetectorParams`); `lucid-run-job` reads them, the simulator does not. Of the bundled detectors only `SK_WAND` and `HK_WAND` carry them — see [digitizer & trigger](digitizer-and-trigger.md) |
+|---|---|
+| `material` | `water`, `wbls` or `ice`: the medium file `config/materials/<material>.json` and its SIREN emitters |
+| `detector_type` | `cylinder`, `sphere`, `box` or `string` |
+| `geometry_definitions` | the shape and sensors, by type (below) |
 
-Deviation-curve leaves (`rayleigh_dev`, `mie_dev`, `abs_dev`, `qe_dev`) are normally left at
-their neutral defaults here and fitted by calibration — see
-[wavelength physics](../concepts/wavelength.md).
+| `detector_type` | `geometry_definitions` |
+|---|---|
+| `cylinder` | `radius`, `height`, `n_sensors`, `sensor_radius`; or `npz_file_path` alone, for measured PMT positions ([PMT `.npz`](pmt-npz-schema.md)) |
+| `sphere` | `radius`, `n_sensors`, `sensor_radius` |
+| `box` | `length`, `width`, `height`, `n_sensors`, `sensor_radius` |
+| `string` | `npz_file_path`, the DOM positions ([string `.npz`](pmt-npz-schema.md#string-detectors)) |
 
-Production dataset configs (`lucid/production/dataprod/configs/`) carry a `selection` block, and
-may carry their own `digitizer` and `trigger` blocks, which then win over the detector's (the
-`Solar`, `SN` and `Test` configs do; the `GeV` configs take them from the detector); see
-[digitizer & trigger](digitizer-and-trigger.md). The `selection` block picks an event-keeping
-`mode`: `"trigger"` defers to the real readout trigger, while `"min_physics_hits"` (with `"n": N`)
-is a cheap truth-level cut keeping interactions with at least `N` real hits.
+The cylinder axis is `z`, with caps at `z = ±height/2`. `n_sensors` is a target: generated
+placement rounds down per surface, so `SK_like` asks for 11000 and gets 10764. Read the real
+count from `len(generate_detector(path).all_points)`.
 
-**How each value is interpreted:**
+## Physics config
 
-- a **number** → scalar;
-- a **list** → inline per-element array;
-- `"path/to/file.json"` → loaded from JSON;
-- omitted → `scatter_length`, `absorption_length`, `mie_scatter_length` and `g` are *projected*
-  from the `medium_model` at the scalar reference wavelength (400 nm), and `qe` from the
-  `qe_curve`; with nothing to project from, loading raises. The other optional leaves take
-  their identity value (no TTS smearing, zero offset, no λ deviation; the
-  scintillation values come from a scintillating material, else zero). `null` is not a value.
+`<name>_physics_config.json`, read by `lucid.detector_params.load_physics_config` and
+`load_detector_params`. Keys are `DetectorParams` field names
+([parameters](detector-params.md)) plus the blocks below. An unknown key raises, naming the
+closest known one; keys starting with `_` are comments.
 
-Two extra keys are resolved relative to the config directory (and reference model files rather
-than being stored on `DetectorParams`); each file is read once per load:
+```json
+{
+  "medium_model": "materials/water.json",
+  "qe_curve": "pmt/SK_QE.json",
+  "wall_reflection_rate": 0.05,
+  "wall_fspec": 0.55,
+  "sensor_reflection_rate": 0.25,
+  "sensor_fspec": 0.90,
+  "qe_corrections": 1.0
+}
+```
 
-- `medium_model` → a medium-model JSON (e.g. under `config/materials/`)
-- `qe_curve` → a PMT QE-curve JSON (e.g. under `config/pmt/`)
+| key | meaning |
+|---|---|
+| `wall_reflection_rate`, `sensor_reflection_rate` | required. Reflectance of the wall and a sensor |
+| `wall_fspec`, `sensor_fspec` | required. Specular fraction of each reflection |
+| `qe_corrections` | required. Per-sensor efficiency multiplier: a number (all sensors) or a list or file of `n_sensors` values |
+| `medium_model` | a material file, e.g. `materials/water.json`, of the geometry's `material` (a mismatch raises). The scalar optics are projected from it at 400 nm when omitted |
+| `qe_curve` | a PMT QE curve, e.g. `pmt/SK_QE.json`; `qe` is projected from it at 400 nm when omitted |
+| `scalar_mode` | block with `scatter_length`, `absorption_length`, `mie_scatter_length` (m). Read only when `wavelength_mode=False`; these keys are refused at the top level |
+| `g` | Mie asymmetry |
+| `qe` | QE at 400 nm, at most `1 − R0` (the sensor's normal-incidence non-reflected fraction) |
+| `tts` | transit-time spread, ns (default 0) |
+| `t0` | per-sensor time offset, ns (default 0) |
+| `angular_reflection` | block with all four of `wall_R0`, `wall_p`, `cathode_nr`, `cathode_nk`. Required by `reflection_model='angular'`; these keys are refused at the top level |
+| `rayleigh_dev`, `mie_dev`, `abs_dev`, `qe_dev` | deviation curves, 5 values (default all ones) |
+| `S`, `kB`, `C`, `tau_rise`, `tau_fall` | scintillation; default from a scintillating material, else 0 |
+| `digitizer`, `trigger` | readout blocks read by `lucid-run-job`, not by the simulator ([digitizer and trigger](digitizer-and-trigger.md)) |
 
-These configs map onto the `DetectorParams` pytree — see
-[DetectorParams vs args](../concepts/detector-params-vs-args.md) for which fields are fittable and how the
-scalar/wavelength choice is represented in code.
+A value is a number, an inline list, or a `"file.json"` holding a list. `null` is not accepted.
+
+`scatter_length`, `absorption_length`, `mie_scatter_length` and `g` must each be given or be
+projectable from `medium_model`, and `qe` given or projectable from `qe_curve`; otherwise loading
+raises and names the missing fields. Wavelength mode takes the scattering and absorption from
+the medium curves (`medium_model`, else the geometry's `material`); the `scalar_mode` numbers do
+not enter it.
+
+## Material and QE files
+
+`config/materials/<material>.json` holds a medium: refractive index, the scattering and
+absorption parametrisations, the emitter set to use (`"siren"`), and for WbLS a
+`scintillation` block ([optics](../concepts/optics.md)). `config/pmt/*.json` holds QE curves as
+`wavelengths_nm` and `qe_percent`.

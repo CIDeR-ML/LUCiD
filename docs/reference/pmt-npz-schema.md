@@ -1,129 +1,70 @@
-# Unified PMT-array `.npz` schema
+# Sensor position files (`.npz`)
 
-A cylindrical detector whose PMT positions come from an external file
-(measured layout, WCSim geofile export, ROOT TTree, …) is stored on
-disk as a NumPy `.npz` whose contents follow the schema described
-here. `lucid.geometry.Cylinder.from_pmt_file` reads any
-file that conforms to this schema; conversion scripts that produce
-new files (the portable converter is `scripts/geofile_to_npz.py`) must respect it.
+Measured sensor layouts are NumPy `.npz` files named by `npz_file_path` in a geometry config.
+Cylinders and strings use different layouts and different units.
 
-## Coordinate convention
+## Cylinder PMT arrays
 
-* All positions are in **millimetres**.
-* `z` is the **vertical** axis; `(x, y)` is the cylinder cross-section.
-* The cylinder is centred at the origin: caps at `z = ±height/2`,
-  barrel at `r_xy = radius`.
-* `directions` are unit 3-vectors pointing in the PMT viewing
-  direction. For an inward-facing barrel PMT this is the inward
-  radial direction; for an inward-facing top-cap PMT it is `-ẑ`.
+Read by `lucid.geometry.Cylinder.from_pmt_file(path, snap_to_wall=True)`.
+`scripts/geofile_to_npz.py` writes this layout from a WCSim geofile.
 
-## Required arrays — active sensors
+Coordinates: positions in **millimetres**, `z` vertical, the cylinder centred at the origin
+(caps at `z = ±height/2`, barrel at `r_xy = radius`). Directions are unit vectors along the PMT's
+viewing direction (inward radial for a barrel PMT, `-z` for a top-cap PMT).
 
-These define the photosensors that participate in propagation. They
-must all be present and aligned (`positions_mm[i]`, `directions[i]`,
-`surfaces[i]`, `pmt_id[i]` all describe the same PMT). `N` is the
-number of active sensors.
+Required, aligned per active PMT (`N` of them):
 
-| Key             | Shape    | dtype       | Meaning                                                  |
-|-----------------|----------|-------------|----------------------------------------------------------|
-| `positions_mm`  | `(N, 3)` | `float64`   | PMT positions, mm, z-vertical                            |
-| `directions`    | `(N, 3)` | `float64`   | PMT viewing-direction unit vectors                       |
-| `surfaces`      | `(N,)`   | unicode str | One of `'barrel'`, `'top'`, `'bottom'`                   |
-| `pmt_id`        | `(N,)`   | `int32/64`  | Unique PMT identifier (cable id, sequential, …)          |
+| key | shape | dtype | meaning |
+|---|---|---|---|
+| `positions_mm` | `(N, 3)` | float64 | PMT positions, mm |
+| `directions` | `(N, 3)` | float64 | viewing-direction unit vectors |
+| `surfaces` | `(N,)` | str | `'barrel'`, `'top'` or `'bottom'` |
+| `pmt_id` | `(N,)` | int | unique PMT identifier |
 
-## Required scalars — cylinder envelope
+Required scalars, in **metres**:
 
-| Key             | Shape  | dtype     | Meaning                                |
-|-----------------|--------|-----------|----------------------------------------|
-| `radius`        | scalar | `float64` | Cylinder wall radius (m)               |
-| `height`        | scalar | `float64` | Cylinder height (m)                    |
-| `sensor_radius` | scalar | `float64` | Active-PMT radius (m)                  |
+| key | meaning |
+|---|---|
+| `radius` | wall radius |
+| `height` | cylinder height |
+| `sensor_radius` | PMT radius |
 
-## Optional — inactive PMTs
+With `snap_to_wall=True` (the default), barrel PMTs are moved onto `r_xy = radius` and cap PMTs
+onto `z = ±height/2`; geofiles often leave them a few cm off the surface.
 
-Some geofiles include PMTs that are *not* active sensors (e.g. HK's
-mPMT sub-PMTs and OD PMTs are kept in the source for reference but
-not used in propagation). When present they live under the
-`inactive_` prefix and are loaded as opaque attributes on the
-detector instance — they are *not* used by the propagator.
+Optional:
 
-| Key                        | Shape    | dtype     | Meaning                              |
-|----------------------------|----------|-----------|--------------------------------------|
-| `inactive_positions_mm`    | `(M, 3)` | `float64` | Inactive PMT positions, mm           |
-| `inactive_directions`      | `(M, 3)` | `float64` | Inactive PMT directions              |
-| `inactive_surfaces`        | `(M,)`   | str       | `'barrel'/'top'/'bottom'` (or other) |
-| `inactive_pmt_id`          | `(M,)`   | int       | Inactive PMT ids                     |
-| `inactive_<anything-else>` | `(M, …)` | any       | Opaque per-inactive-PMT metadata     |
+- `inactive_positions_mm`, `inactive_directions`, `inactive_surfaces`, `inactive_pmt_id` and any
+  other `inactive_*` array (`M` rows): PMTs kept for reference (for example HK's outer-detector
+  PMTs). They are stored on the detector object and not simulated.
+- any other array of length `N`: per-PMT metadata, reordered like the sensors (barrel, top cap,
+  bottom cap) and stored as an attribute of the same name. The shipped files carry `mpmt_id` and
+  `pmt_id_in_mpmt` (`config/wcte_geometry.npz`) and `pmt_type` (`config/sk_geometry.npz`,
+  `config/hk_geometry.npz`).
+- anything else is stored as-is.
 
-`M` need not equal `N`. If no inactive block is present the loader
-exposes nothing and the detector behaves as if every PMT in the file
-is active.
+Metadata keys must not reuse these attribute names: `all_points`, `barr_points`,
+`tcap_points`, `bcap_points`, `ID_to_position`, `ID_to_case`, `pmt_id_to_idx`,
+`pmt_directions`, `raw_positions`, `r`, `H`, `S_radius`, `n_sensors`, `C`, `npz_file_path`,
+`snap_to_wall`.
 
-## Optional — per-detector metadata
+`scripts/geofile_to_npz.py` handles single-PMT-type geofiles such as SK's. It does not write the
+`inactive_*` arrays that HK and WCTE (multi-PMT modules, outer detector) need; their files ship
+pre-built in `config/`. The WCSim geofiles behind the shipped files are the
+`detector-geometry-sources` release asset ([studies and archives](../studies.md)).
 
-Any additional array whose first dimension equals `N` is treated as
-per-active-PMT metadata: it is reordered to match `all_points`
-(barrel → top cap → bottom cap) and exposed as an instance attribute
-named after the key.
+## String detectors
 
-The tracked files carry:
+Read by `lucid.geometry.StringTelescope.from_npz(path)`. Positions in **metres**.
 
-| File                         | Key                  | Meaning                                         |
-|------------------------------|----------------------|-------------------------------------------------|
-| `config/wcte_geometry.npz`   | `mpmt_id`            | mPMT module index (0..105)                      |
-| `config/wcte_geometry.npz`   | `pmt_id_in_mpmt`     | PMT slot within the dome (0..18; 0 = central)   |
-| `config/sk_geometry.npz`, `config/hk_geometry.npz` | `pmt_type` | WCSim type code (0 for standard ID PMT) |
+| key | shape | meaning |
+|---|---|---|
+| `dom_xyz` | `(N_str, max_dom, 3)` | DOM positions per string, NaN-padded to the longest string |
+| `n_dom_per_str` | `(N_str,)` | DOMs on each string |
+| `sensor_radius` | scalar | DOM radius |
+| `envelope_radius` | scalar | radius of the bounding cylinder used to clip rays |
+| `envelope_z_min`, `envelope_z_max` | scalar | bottom and top of the bounding cylinder |
 
-Files built outside the repo can carry others the same way (for example an
-official SK table's `pmtflag`, `hutnum`, `group`, `oldhv`).
-
-Scalars and arrays whose first dimension is anything other than `N`
-or `M` are stored on the instance as-is (no reordering).
-
-## Reserved attribute names
-
-The loader sets the following on the returned `Cylinder` instance,
-so per-detector metadata keys **must not collide with**:
-
-```
-all_points, barr_points, tcap_points, bcap_points,
-ID_to_position, ID_to_case, pmt_id_to_idx,
-pmt_directions, raw_positions,
-r, H, S_radius, n_sensors, C, npz_file_path, snap_to_wall
-```
-
-## String / DOM detectors — a separate `.npz` layout
-
-String telescopes (`detector_type: "string"`, IceCube-like) use a **different**
-`.npz` schema, read by `lucid.geometry.StringTelescope.from_npz`
-(`lucid/geometry/string.py`). It stores per-DOM positions grouped by string
-rather than a flat PMT list, and — unlike the cylinder schema above — its
-positions are in **metres**, not millimetres. There is no `positions_mm`-style
-suffix precisely because the units differ; do not mix the two conventions.
-
-### Required arrays / scalars
-
-| Key              | Shape                  | dtype       | Units | Meaning                                                       |
-|------------------|------------------------|-------------|-------|---------------------------------------------------------------|
-| `dom_xyz`        | `(N_str, max_dom, 3)`  | `float64`   | m     | Per-DOM positions, grouped by string; **NaN-padded** to `max_dom` |
-| `n_dom_per_str`  | `(N_str,)`             | `int32`     | —     | Actual DOM count on each string (rows past this are the NaN pad) |
-| `sensor_radius`  | scalar                 | `float64`   | m     | DOM glass-sphere radius                                       |
-| `envelope_radius`| scalar                 | `float64`   | m     | Radius of the bounding cylinder used for ray entry/exit clipping |
-| `envelope_z_min` | scalar                 | `float64`   | m     | Bottom of the bounding cylinder (`z`)                        |
-| `envelope_z_max` | scalar                 | `float64`   | m     | Top of the bounding cylinder (`z`)                          |
-
-`N_str` is the number of strings, `max_dom` the longest string's DOM count
-(shorter strings are NaN-padded to it). There is no closed detector surface —
-the envelope cylinder is only a clipping/inside-detector volume, not a
-reflective wall.
-
-Files in the repo may also carry informational scalars such as `n_strings`,
-`max_dom_per_str`, and `total_doms`; the loader does **not** read them (they are
-derivable from `dom_xyz` / `n_dom_per_str`) and they can be omitted.
-
-### No converter script yet
-
-The cylinder path has a portable converter (`scripts/geofile_to_npz.py`); there
-is **no equivalent string-npz generator** in the repo yet. String `.npz` files
-(e.g. `config/icecube86_simple.npz`) are produced ad hoc — write the six keys
-above directly with `numpy.savez`.
+The bounding cylinder only limits the volume; it is not a reflecting wall. Extra keys
+(`n_strings`, `max_dom_per_str`, `total_doms` in the shipped files) are ignored. There is no
+converter: write the keys with `numpy.savez`.
