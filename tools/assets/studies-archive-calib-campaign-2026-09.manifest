@@ -4,6 +4,7 @@
 # the campaign parts are taken from the recorded commit; schur_gn.py and the
 # portable driver are taken from eaf2e89f, where they are also unchanged.
 tag: studies-archive-calib-campaign-2026-09
+release: lucid-archives
 commit: 71f00e49
 summary: the 2026-09 calibration estimator campaign + the `schur_gn` arm it is the only user of
 size: 195 KB

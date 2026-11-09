@@ -1,6 +1,7 @@
 # studies-archive-method-ab-2026 (A7) -- the expected-value vs sampled forward
 # A/B driver.  One file, unchanged since eaf2e89f, with no caller anywhere.
 tag: studies-archive-method-ab-2026
+release: lucid-archives
 commit: eaf2e89f
 summary: the expected-vs-sampled A/B driver
 size: 6 KB

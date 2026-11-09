@@ -4,6 +4,7 @@
 # module travels whole and the INDEX names which four names are the study half.
 # Nothing here is deleted by the unit that built this asset.
 tag: studies-archive-adam-optimizer
+release: lucid-archives
 commit: eaf2e89f
 summary: the retired 5-stage Adam recon pipeline, its 3-D displays and its composite losses
 size: 36 KB + notebooks

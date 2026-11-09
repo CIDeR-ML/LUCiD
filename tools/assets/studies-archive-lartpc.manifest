@@ -4,6 +4,7 @@
 # lucid/simulation/simulator.py that this cleanup does not land, which is why
 # it is an asset and a V2-scope question rather than a port.
 tag: studies-archive-lartpc
+release: lucid-archives
 commit: 85545f72
 summary: the LArTPC optical package and its calibration arc
 size: 2.9 MB

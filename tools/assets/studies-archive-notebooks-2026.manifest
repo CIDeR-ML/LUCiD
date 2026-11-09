@@ -17,6 +17,7 @@
 #
 # good_notebooks/figures/*.gif travel in studies-archive-gifs-2026, not here.
 tag: studies-archive-notebooks-2026
+release: lucid-archives
 commit: eaf2e89f
 summary: the S-class half of `good_notebooks/` + the tutorials + `s3df_jobs/`
 size: 1.5 MB

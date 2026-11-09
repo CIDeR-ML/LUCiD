@@ -9,6 +9,7 @@
 # this manifest builds.  `85e98bd1` is also the tag
 # `studies/geometry-v2-2026-10`.
 tag: studies-archive-geometry-v2-2026-10
+release: lucid-archives
 commit: 85e98bd1
 summary: the V2/CSG research record -- the gradient ladder, the benchmarks, the NaN audit, the diaries
 size: 4.6 MB in 520 files (1.7 MB gzipped)

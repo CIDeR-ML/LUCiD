@@ -4,6 +4,7 @@
 # viewer leave.  Parts come from the recorded commit, so the asset is still
 # buildable after they are deleted.
 tag: studies-archive-string-telescope-2026
+release: lucid-archives
 commit: eaf2e89f
 summary: the string event producers + the standalone three.js viewer
 size: 56 KB

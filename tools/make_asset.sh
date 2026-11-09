@@ -6,7 +6,8 @@
 #
 # A manifest is tools/assets/<tag>.manifest:
 #
-#     tag: overlap-tables                  # the release tag
+#     tag: overlap-tables                  # the asset's name (its tarball is <tag>.tar.gz)
+#     release: lucid-archives              # the GitHub release carrying it (default: the tag)
 #     commit: eaf2e89f                     # the commit the material ran against
 #     summary: the warm overlap cache      # the docs/studies.md cell
 #     size: 60 KB                          # the docs/studies.md cell
@@ -88,7 +89,7 @@ REPO_ROOT="$(git -C "$(dirname "$MANIFEST")" rev-parse --show-toplevel)"
 # --- parse the manifest -----------------------------------------------------
 # Header keys, then `part:`/`extern:` lines, then everything after the INDEX
 # marker verbatim.
-TAG=""; COMMIT=""; SUMMARY=""; SIZE=""; EXTERN_ROOT_VAR=""
+TAG=""; RELEASE=""; COMMIT=""; SUMMARY=""; SIZE=""; EXTERN_ROOT_VAR=""
 PARTS=()
 ORIGINS=()
 INDEX_BODY=""
@@ -104,6 +105,7 @@ while IFS= read -r line || [[ -n "$line" ]]; do
         '#'*|'')          ;;
         'tag: '*)         TAG="${line#tag: }" ;;
         'commit: '*)      COMMIT="${line#commit: }" ;;
+        'release: '*)     RELEASE="${line#release: }" ;;
         'summary: '*)     SUMMARY="${line#summary: }" ;;
         'size: '*)        SIZE="${line#size: }" ;;
         'extern-root: '*) EXTERN_ROOT_VAR="${line#extern-root: }" ;;
@@ -230,6 +232,5 @@ cp -f -- "$ROOT/MANIFEST.sha256" "$OUT_DIR/$TAG.MANIFEST.sha256"
 printf '%s  %s\n' "$(du -h "$TARBALL" | cut -f1)" "$TARBALL"
 printf 'docs/studies.md row:\n'
 printf '| %s | %s | %s | %s |\n' "$TAG" "${SUMMARY:-—}" "${SIZE:-—}" "${COMMIT:0:8}"
-printf '\nPublish by hand (nothing above touched a remote):\n'
-printf '  gh release create %s %s --title %s --notes-file %s/%s/INDEX.md\n' \
-    "$TAG" "$TARBALL" "'$TAG'" '<extracted>' "$TAG"
+printf '\nPublish with tools/publish_assets.sh %s (release %s; nothing above touched a remote)\n' \
+    "$OUT_DIR" "${RELEASE:-$TAG}"

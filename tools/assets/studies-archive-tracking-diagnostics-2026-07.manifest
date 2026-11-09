@@ -7,6 +7,7 @@
 # cleanup.  Two parts share the path analysis/tracking/pipeline.py, so only the
 # later one (252f89b8, a superset of 58af5a4c's) is taken.
 tag: studies-archive-tracking-diagnostics-2026-07
+release: lucid-archives
 commit: 252f89b8
 summary: the 2026-07 track-fit diagnostics and the TrackingPipeline branches they drove
 size: 225 KB

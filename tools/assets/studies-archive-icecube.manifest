@@ -13,6 +13,7 @@
 # The other three studies directories (ppc_jax, icecube_reform, icecube_mc)
 # are source and markdown only -- 1.2 MB -- so they travel whole.
 tag: studies-archive-icecube
+release: lucid-archives
 commit: 958807f6
 summary: the IceCube/`ppc` measurement programme + the legacy string engine + the sizing maths
 size: 3.7 MB (plus 144 MB of run outputs on /sdf/data, not in the tarball)

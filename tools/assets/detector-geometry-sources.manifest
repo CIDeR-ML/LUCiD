@@ -3,6 +3,7 @@
 # taken from the recorded commit, not the worktree, so the asset is still
 # buildable after the geofiles leave the tree.
 tag: detector-geometry-sources
+release: lucid-archives
 commit: eaf2e89f
 summary: the WCSim geofile dumps behind the tracked npz
 size: 5.5 MB

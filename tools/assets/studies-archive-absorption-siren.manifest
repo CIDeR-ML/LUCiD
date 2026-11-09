@@ -7,6 +7,7 @@
 # rebases their two unique library commits onto the rewritten base.  This
 # asset is a copy, never a licence to delete the branch.
 tag: studies-archive-absorption-siren
+release: lucid-archives
 commit: 97c9076a
 summary: the student's SIREN-as-absorption-field project and its merged-quality twin
 size: 6.3 MB

@@ -10,6 +10,7 @@
 # paper-rerun worktree has since modified both files further; that delta is
 # uncommitted by owner decision and is NOT in this asset.
 tag: studies-archive-calib-closure-2026-10
+release: lucid-archives
 commit: 2b03c27b
 summary: the calibration-closure figure and its plot module, as committed on paper-rerun-qe
 size: 21 KB

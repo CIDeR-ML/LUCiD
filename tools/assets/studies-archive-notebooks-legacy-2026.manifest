@@ -6,6 +6,7 @@
 # This asset exists so the history purge can drop 18 MB of saved output
 # without losing the record of what was explored.  Nothing in it runs.
 tag: studies-archive-notebooks-legacy-2026
+release: lucid-archives
 commit: c799b404
 summary: the 24 pre-rename `notebooks/` + `wcte_bldg157.geo`
 size: 18.3 MB

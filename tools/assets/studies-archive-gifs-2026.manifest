@@ -3,6 +3,7 @@
 # notebooks that produced them are 1.5 MB of text and these are binary output
 # nobody needs in order to read them.
 tag: studies-archive-gifs-2026
+release: lucid-archives
 commit: eaf2e89f
 summary: the three event/optimisation animations
 size: 13.2 MB

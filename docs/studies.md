@@ -5,11 +5,14 @@ Each asset is one tarball whose extracted root carries an `INDEX.md` (what the
 material was for, the commit it ran against, how to run it, and every known
 defect), a `PROVENANCE.txt` and a `MANIFEST.sha256`. Each is built from one
 manifest under `tools/assets/`; see "Rebuilding an asset" below.
+The two the installer reads, `lucid-data-v1` and `lucid-paper-results-v1`, are GitHub
+releases of their own; every other asset is a file of the
+[`lucid-archives`](https://github.com/CIDeR-ML/LUCiD/releases/tag/lucid-archives) release.
 Every asset is under CC BY 4.0 (its `INDEX.md` says so); the code in this
 repository is under the terms of `LICENSE`.
 
 No path inside an asset may be cited from `lucid/`, `analysis/` or `tests/` —
-a citation names the asset tag and this page instead. If you came here from a
+a citation names the asset and this page instead. If you came here from a
 code comment or a docstring, the row below is where that material went.
 
 Every row is what `tools/make_asset.sh --row <manifest>` prints
@@ -57,11 +60,12 @@ The script refuses to build an asset whose manifest carries no `INDEX.md`
 body, and refuses one whose `commit:` does not resolve — a study tarball with
 no provenance is worse than a deleted directory, because it looks runnable.
 The script touches no remote. `tools/publish_assets.sh <dir>` then publishes
-every built asset in `<dir>`: it checks each tarball against its `.sha256` and
-the two installer assets against `data/MANIFEST.sha256` and
-`analysis/paper/RESULTS.sha256`, prints one `gh release create` per asset
-(a dry run), and with `--go` creates the releases on `main`, skipping any that
-exist. A published asset is never replaced; a changed one is a new tag.
+every built asset in `<dir>` to the release its manifest's `release:` names (the
+asset's own name when there is none): it checks each tarball against its
+`.sha256` and the two installer assets against `data/MANIFEST.sha256` and
+`analysis/paper/RESULTS.sha256`, prints what it would do (a dry run), and with
+`--go` creates the missing releases on `main` and attaches the missing files.
+A published file is never replaced; a changed asset is a new tag.
 
 `lucid-data-v1` and `lucid-paper-results-v1` carry material that is on no git
 ref: the trained SIREN weights, the PhotonSim ROOT slices, the git-ignored

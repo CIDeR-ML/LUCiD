@@ -3,6 +3,7 @@
 # code is deleted from the tree (R2.IO.2 / WU-15): that ordering is a
 # correctness requirement, not tidiness.
 tag: legacy-io-archive
+release: lucid-archives
 commit: eaf2e89f
 summary: read HDF5 files written before format 6
 size: 176 KB
