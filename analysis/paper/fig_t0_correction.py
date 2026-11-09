@@ -4,7 +4,7 @@
 Two ingredients, deliberately separated for reproducibility:
 
   * LINES  — the t0 parametrization that SHIPS with LUCiD
-             (``data/<material>/<particle>/t0.json``), evaluated via
+             (``data/<material>/<particle>/cherenkov/emitter.json``), evaluated via
              ``predict_t0`` over 0..s_max(E). A plain clone reproduces these.
   * POINTS — raw PhotonSim timing (``PhotonHist_TimeDistanceNorm``), which is NOT
              shipped. ``--generate-data`` makes a minimal 5-events/energy sample
@@ -32,46 +32,34 @@ from matplotlib.colors import LogNorm
 
 REPO_ROOT = Path(__file__).resolve().parents[2]        # LUCiD/
 sys.path.insert(0, str(REPO_ROOT))
-from analysis.paper.utils import paths                  # noqa: E402
+from analysis.paper.utils import paths, provenance      # noqa: E402
 
 plt.rcParams['font.family'] = 'serif'
 plt.rcParams['font.size'] = 12
 
 MATERIAL = 'water'
 G4NAME = {'muon': 'mu-', 'electron': 'e-'}
-C_MM_PER_NS = 299.792
 # defaults = the paper configuration
-D_ENERGY_MIN, D_ENERGY_MAX, D_SPACING_M, D_DELAY_CAP = 500.0, 10000.0, 2.0, 0.25
+D_ENERGY_MIN, D_ENERGY_MAX, D_SPACING_M = 500.0, 10000.0, 2.0
+DELAY_CAP = 0.25           # y-axis top (ns)
+MARKER_SPACING_NS = 0.01   # raw points are thinned to one per this step in delay
 
 
 # ------------------------------------------------------------ shipped parametrization
-def _shipped(particle):
-    """(t0 coeffs, s_max_fn[mm]) — both from the LUCiD-bundled model. No raw data."""
-    from lucid.utils import unpack_t0_params, unpack_siren_params
-    from lucid.siren.core import build_cherenkov_context
-    from lucid.siren.training.inference import SIRENPredictor
-    coeffs = unpack_t0_params(particle, MATERIAL)
-    scfg = unpack_siren_params(particle, MATERIAL)
-    ctx = build_cherenkov_context(SIRENPredictor(scfg['siren_model_path']),
-                                  dict(scfg['ray_sampling']))
-    return coeffs, ctx.s_max_fn
-
-
-def _delay_line(E, coeffs, smax_fn):
-    """Model delay (ns) vs distance (mm) over 0..s_max(E), from predict_t0."""
+def _delay_line(E, emitter):
+    """Model delay t - d/c (ns) vs distance d (m) over 0..s_max(E), from predict_t0."""
     from lucid.sources.siren_rays import predict_t0
-    smax = float(smax_fn(E))
-    d = np.linspace(0.0, smax, 300)
-    t = np.asarray(predict_t0(d, float(E), *coeffs))
-    return d, t - d / C_MM_PER_NS
+    d = np.linspace(0.0, emitter.s_max_m(E), 300)
+    t = np.asarray(predict_t0(d, float(E), emitter.t0, emitter.c_mm_per_ns))
+    return d, t - d * 1000.0 / emitter.c_mm_per_ns           # d/c in the fit's mm and mm/ns
 
 
-def select_energies(smax_fn, e_min, e_max, spacing_m):
+def select_energies(emitter, e_min, e_max, spacing_m):
     """Energies whose s_max steps by ~spacing_m metres across [e_min, e_max]."""
     grid = np.arange(e_min, e_max + 1, 50.0)
     out, last = [], None
     for E in grid:
-        s_m = float(smax_fn(E)) / 1000.0
+        s_m = emitter.s_max_m(E)
         if last is None or (s_m - last) >= spacing_m:
             out.append(float(E)); last = s_m
     return out
@@ -80,8 +68,10 @@ def select_energies(smax_fn, e_min, e_max, spacing_m):
 # ------------------------------------------------------------------ optional raw points
 def _load_points(E, data_dir, smax_mm):
     """(d_mm, delay) from the nearest-energy sample ROOT, or None. Needs PhotonSim's reader."""
-    import glob
-    cands = glob.glob(f'{data_dir}/*{int(E)}MeV*.root')
+    import glob, re
+    # anchored: '100MeV' must not match '1100MeV_...'
+    cands = sorted(c for c in glob.glob(f'{data_dir}/*MeV*.root')
+                   if re.search(rf'(?<![0-9]){int(E)}MeV', os.path.basename(c)))
     if not cands:
         return None
     sys.path.insert(0, str(_photonsim_dir() / 'tools' / 't0_correction'))
@@ -134,8 +124,7 @@ def generate_sample(particle, energies, n_events, out_dir):
 
 
 # --------------------------------------------------------------------------------- figure
-def make_figure(particle, energies, coeffs, smax_fn, data_dir, delay_cap,
-                marker_spacing_ns, out):
+def make_figure(particle, energies, emitter, data_dir, out):
     gev = np.array(energies) / 1000.0
     vmax = max(gev.max(), D_ENERGY_MAX / 1000.0)
     norm = LogNorm(vmin=gev.min(), vmax=vmax)
@@ -144,17 +133,17 @@ def make_figure(particle, energies, coeffs, smax_fn, data_dir, delay_cap,
     fig, ax = plt.subplots(figsize=(5.2, 2.6))
     for E in energies:
         c = cmap(norm(E / 1000.0))
-        d, delay = _delay_line(E, coeffs, smax_fn)          # shipped parametrization
-        ax.plot(d / 1000.0, delay, '-', color=c, lw=1.8, alpha=0.8, zorder=2)
-        if data_dir:                                        # optional raw points
-            pts = _load_points(E, data_dir, float(smax_fn(E)))
+        d, delay = _delay_line(E, emitter)                  # shipped parametrization
+        ax.plot(d, delay, '-', color=c, lw=1.8, alpha=0.8, zorder=2)
+        if data_dir:                                        # optional raw points (PhotonSim: mm)
+            pts = _load_points(E, data_dir, emitter.s_max_m(E) * 1000.0)
             if pts is not None:
                 dp, dyp = pts
-                idx = _decimate(dyp, marker_spacing_ns)[1:]
+                idx = _decimate(dyp, MARKER_SPACING_NS)[1:]
                 ax.plot(dp[idx] / 1000.0, dyp[idx], 'o', ms=3.0, alpha=0.95,
                         color=c, zorder=3)
     ax.axhline(0, color='grey', lw=0.4)
-    ax.set_xlim(0, None); ax.set_ylim(0, delay_cap)
+    ax.set_xlim(0, None); ax.set_ylim(0, DELAY_CAP)
     ax.set_xlabel('Distance from Origin (m)')
     ax.set_ylabel(r'$t_0$ Correction (ns)')
 
@@ -187,24 +176,25 @@ def main():
     ap.add_argument('--energy-min', type=float, default=D_ENERGY_MIN)
     ap.add_argument('--energy-max', type=float, default=D_ENERGY_MAX)
     ap.add_argument('--spacing-m', type=float, default=D_SPACING_M)
-    ap.add_argument('--delay-cap', type=float, default=D_DELAY_CAP)
-    ap.add_argument('--marker-spacing-ns', type=float, default=0.01)
     ap.add_argument('--out', default=None)
     a = ap.parse_args()
     out = Path(a.out) if a.out else paths.figure_dir()
 
     for particle in a.particles.split(','):
         particle = particle.strip()
-        coeffs, smax_fn = _shipped(particle)
-        energies = select_energies(smax_fn, a.energy_min, a.energy_max, a.spacing_m)
+        from lucid.siren.emitter import load_emitter
+        emitter = load_emitter(particle, MATERIAL, 'cherenkov')    # the LUCiD-bundled fit
+        energies = select_energies(emitter, a.energy_min, a.energy_max, a.spacing_m)
         print(f'{particle}: {len(energies)} energies '
               f'({energies[0]:.0f}-{energies[-1]:.0f} MeV), ~{a.spacing_m} m spacing')
         sample_dir = paths.data_dir('t0_correction', 'local') / particle
         if a.generate_data:
             generate_sample(particle, energies, a.events, sample_dir)
         data_dir = a.data_dir or (str(sample_dir) if sample_dir.exists() else None)
-        make_figure(particle, energies, coeffs, smax_fn, data_dir,
-                    a.delay_cap, a.marker_spacing_ns, out)
+        make_figure(particle, energies, emitter, data_dir, out)
+    if a.generate_data:
+        provenance.write_run_record(paths.data_dir('t0_correction', 'local'), __file__, a)
+    provenance.write_run_record(out, __file__, a)
 
 
 if __name__ == '__main__':

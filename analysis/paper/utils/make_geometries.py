@@ -27,10 +27,11 @@ def geom_path(n):
 
 
 def ensure(sensors=None, verbose=True):
-    """Write any MISSING geometry configs for ``sensors``; return the paths.
+    """Write the geometry configs for ``sensors`` from the current base geometry; return the paths.
 
-    Idempotent, so ``fig_geometry_scan.py`` can call it unconditionally — the geom
-    study then works from a fresh clone with no manual prerequisite step.
+    Idempotent, so ``fig_geometry_scan.py`` can call it unconditionally — the geom study then
+    works from a fresh clone with no manual prerequisite step. A file whose content no longer
+    matches the base geometry is rewritten, so a changed base never leaves stale inputs behind.
     """
     sensors = SENSOR_COUNTS if sensors is None else sensors
     base = json.loads(BASE_GEOM.read_text())
@@ -39,14 +40,15 @@ def ensure(sensors=None, verbose=True):
     for n in sensors:
         out = geom_path(n)
         paths.append(out)
-        if out.exists():
-            continue
         cfg = json.loads(json.dumps(base))          # deep copy
         cfg['geometry_definitions']['n_sensors'] = n
-        out.write_text(json.dumps(cfg, indent=2))
+        text = json.dumps(cfg, indent=2)
+        if out.exists() and out.read_text() == text:
+            continue
+        out.write_text(text)
         made.append(n)
     if verbose and made:
-        print(f"[geometries] wrote {len(made)} missing geometry config(s) "
+        print(f"[geometries] wrote {len(made)} new or stale geometry config(s) "
               f"({', '.join(str(n) for n in made)}) in {OUT_DIR.relative_to(REPO_ROOT)}")
     return paths
 

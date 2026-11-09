@@ -13,7 +13,8 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from analysis.paper.utils import paths, studies, run, plotting, make_geometries   # noqa: E402
+from analysis.paper.utils import (  # noqa: E402
+    make_geometries, paths, plotting, provenance, run, studies)
 
 FIGURE = 'geometry'
 LOCAL_SENSORS = [4000, 10000, 16000]
@@ -35,7 +36,7 @@ def generate_data(backend, events, root_base, sensors):
 def plot_results(backend, out, sensors):
     sensors = sensors or (studies.SENSORS if backend == 's3df' else LOCAL_SENSORS)
     ddir = paths.data_dir(FIGURE, backend)
-    pdf = plotting.sensors(base=ddir / 'gscan_', out=out, max_sensors=max(sensors))
+    pdf = plotting.sensors(base=ddir / 'gscan_', out=out, sensors=sensors)
     print(f'wrote {pdf}')
 
 
@@ -55,7 +56,9 @@ def main():
     if a.generate_data or both:
         generate_data(a.backend, a.events, a.root_base, sensors)
     if a.plot_results or both:
-        plot_results(a.backend, Path(a.out) if a.out else paths.figure_dir(), sensors)
+        out = Path(a.out) if a.out else paths.figure_dir()
+        plot_results(a.backend, out, sensors)
+        provenance.write_run_record(out, __file__, a)
 
 
 if __name__ == '__main__':

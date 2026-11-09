@@ -3,15 +3,15 @@
 
 Two figures, one per particle: the trained SIREN Cherenkov model evaluated over the
 (opening angle, distance-along-track) plane at a set of energies. Uses the validation
-suite's energy study (lucid.siren.validate.PhotonSimValidator.energy_study) and names
+suite's energy study (lucid.siren.training.validate.PhotonSimValidator.energy_study) and names
 the output per particle so muon and electron don't overwrite each other.
 
     python fig_siren_profile.py                              # muon + electron, default energies
     python fig_siren_profile.py --particles muon --energies 500,1000,1500,2000
-    python fig_siren_profile.py --threshold 0.005 --out <dir>
+    python fig_siren_profile.py --out <dir>
 
 Model-only (no PhotonSim ROOT needed): reads the bundled SIREN models under
-data/<material>/<particle>/siren_training/.
+data/<material>/<particle>/cherenkov/.
 """
 import argparse
 import shutil
@@ -23,25 +23,25 @@ matplotlib.use('Agg')
 
 REPO_ROOT = Path(__file__).resolve().parents[2]        # LUCiD/
 sys.path.insert(0, str(REPO_ROOT))
-from analysis.paper.utils import paths                  # noqa: E402
+from analysis.paper.utils import paths, provenance      # noqa: E402
 
 MATERIAL = 'water'
 DEFAULT_ENERGIES = [500, 1000, 1500]
-DEFAULT_THRESHOLD = 0.005                               # LogNorm vmin (masks the low tail)
+THRESHOLD = 0.005                                       # LogNorm vmin (masks the low tail)
 
 
-def make_profile(particle, energies, threshold, out):
+def make_profile(particle, energies, out):
     """Render one particle's SIREN profile figure -> <out>/<particle>_siren_cherenkov_profile."""
-    from lucid.siren.validate import PhotonSimValidator
+    from lucid.siren.training.validate import PhotonSimValidator
     out = Path(out); out.mkdir(parents=True, exist_ok=True)
     tmp = paths.data_dir('siren_profile', 'local') / particle
     tmp.mkdir(parents=True, exist_ok=True)
 
     v = PhotonSimValidator(material=MATERIAL, particle=particle)
-    v.energy_study(energies=list(energies), threshold=threshold,
+    v.energy_study(energies=list(energies), threshold=THRESHOLD,
                    output_dir=str(tmp), fmt='png')
     for ext in ('png', 'pdf'):
-        src = tmp / f'energy_study_threshold_{threshold}.{ext}'
+        src = tmp / f'energy_study_threshold_{THRESHOLD}.{ext}'
         # energy_study writes png; re-save the same figure as pdf too if only png exists
         if not src.exists() and ext == 'pdf':
             continue
@@ -57,13 +57,13 @@ def main():
     ap.add_argument('--particles', default='muon,electron',
                     help='comma list (default: muon,electron)')
     ap.add_argument('--energies', default=None, help='comma list in MeV')
-    ap.add_argument('--threshold', type=float, default=DEFAULT_THRESHOLD)
     ap.add_argument('--out', default=None)
     a = ap.parse_args()
     energies = [float(x) for x in a.energies.split(',')] if a.energies else DEFAULT_ENERGIES
     out = Path(a.out) if a.out else paths.figure_dir()
     for particle in a.particles.split(','):
-        make_profile(particle.strip(), energies, a.threshold, out)
+        make_profile(particle.strip(), energies, out)
+    provenance.write_run_record(out, __file__, a)
 
 
 if __name__ == '__main__':
