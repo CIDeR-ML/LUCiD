@@ -2,10 +2,18 @@
 Box (rectangular prism) detector geometry implementation.
 """
 
+from typing import NamedTuple
+
 import numpy as np
-import plotly.graph_objects as go
 from .base import Detector
 from .registry import register_detector
+
+
+class BoxGrid(NamedTuple):
+    """The propagation grid, frozen: cells along x, y and z."""
+    n_x: int
+    n_y: int
+    n_z: int
 
 
 @register_detector('box')
@@ -33,30 +41,25 @@ class Box(Detector):
         self.L = length
         self.W = width
         self.H = height
-        self._n_x = None
-        self._n_y = None
-        self._n_z = None
         self.place_photosensors()
 
-    def configure_grid(self, n_x=None, n_y=None, n_z=None,
-                        max_candidates_per_ray=4):
-        """Set grid parameters for propagation methods.
+    @classmethod
+    def from_config(cls, geometry, config_dir):
+        """Algorithmic layout from ``length / width / height / n_sensors / sensor_radius``."""
+        return cls(geometry['length'], geometry['width'], geometry['height'],
+                   geometry['n_sensors'], geometry['sensor_radius'])
 
-        If not provided, defaults are derived from detector dimensions to
-        ensure no cell exceeds ``max_candidates_per_ray`` sensors.
+    def make_grid(self, n_x=None, n_y=None, n_z=None, max_candidates_per_ray=4):
+        """The propagation grid for this layout, as a :class:`BoxGrid`.
+
+        Defaults follow the nearest-neighbour rule of :meth:`Detector._grid_cell_target`, as for
+        the cylinder; explicit arguments win.
         """
         import math
-        n_placed = len(self.all_points) if self.all_points is not None else self.n_sensors
-        total_area = 2 * (self.L * self.W + self.L * self.H + self.W * self.H)
-        # Target cell size from: n_placed / max_candidates_per_ray × safety
-        safety = 2.0
-        target_cells = n_placed / max_candidates_per_ray * safety
-        cell_size = math.sqrt(total_area / max(1, target_cells))
-
-        self._n_x = n_x if n_x is not None else max(10, int(self.L / cell_size))
-        self._n_y = n_y if n_y is not None else max(10, int(self.W / cell_size))
-        self._n_z = n_z if n_z is not None else max(10, int(self.H / cell_size))
-
+        target = self._grid_cell_target(max_candidates_per_ray)
+        return BoxGrid(n_x=n_x if n_x is not None else max(10, int(math.ceil(self.L / target))),
+                       n_y=n_y if n_y is not None else max(10, int(math.ceil(self.W / target))),
+                       n_z=n_z if n_z is not None else max(10, int(math.ceil(self.H / target))))
 
     def place_photosensors(self):
         """Position the photo sensor centers proportionally by surface area."""
@@ -100,9 +103,7 @@ class Box(Detector):
         n_left = len(self.left_points)
         n_right = len(self.right_points)
         n_top = len(self.top_points)
-        n_bottom = len(self.bottom_points)
         
-        cumulative = 0
         for i in range(len(self.all_points)):
             if i < n_front:
                 self.ID_to_case[i] = 0
@@ -165,114 +166,23 @@ class Box(Detector):
         
         return np.array(points[:n_sensors])  # Trim to exact count
 
-    def visualize_geometry_wireframe(self, show_sensors=True):
-        """Visualize the box as a wireframe with detectors"""
-        fig = go.Figure()
-
-        # Define box vertices
-        x_min, x_max = -self.L/2 + self.C[0], self.L/2 + self.C[0]
-        y_min, y_max = -self.W/2 + self.C[1], self.W/2 + self.C[1]
-        z_min, z_max = -self.H/2 + self.C[2], self.H/2 + self.C[2]
-        
-        # Create box edges
-        edges = [
-            # Bottom face edges
-            [[x_min, x_max], [y_min, y_min], [z_min, z_min]],
-            [[x_max, x_max], [y_min, y_max], [z_min, z_min]],
-            [[x_max, x_min], [y_max, y_max], [z_min, z_min]],
-            [[x_min, x_min], [y_max, y_min], [z_min, z_min]],
-            # Top face edges
-            [[x_min, x_max], [y_min, y_min], [z_max, z_max]],
-            [[x_max, x_max], [y_min, y_max], [z_max, z_max]],
-            [[x_max, x_min], [y_max, y_max], [z_max, z_max]],
-            [[x_min, x_min], [y_max, y_min], [z_max, z_max]],
-            # Vertical edges
-            [[x_min, x_min], [y_min, y_min], [z_min, z_max]],
-            [[x_max, x_max], [y_min, y_min], [z_min, z_max]],
-            [[x_max, x_max], [y_max, y_max], [z_min, z_max]],
-            [[x_min, x_min], [y_max, y_max], [z_min, z_max]],
-        ]
-        
-        # Add edges as lines
-        for edge in edges:
-            fig.add_trace(go.Scatter3d(
-                x=edge[0], y=edge[1], z=edge[2],
-                mode='lines',
-                line=dict(color='gray', width=2),
-                showlegend=False
-            ))
-
-        # Add semi-transparent faces
-        face_colors = ['lightblue', 'lightblue', 'lightgreen', 'lightgreen', 'lightcoral', 'lightcoral']
-        face_names = ['Front', 'Back', 'Left', 'Right', 'Top', 'Bottom']
-        
-        # Front face (+y)
-        x_face = [x_min, x_max, x_max, x_min, x_min]
-        z_face = [z_min, z_min, z_max, z_max, z_min]
-        fig.add_trace(go.Scatter3d(
-            x=x_face, y=[y_max]*5, z=z_face,
-            mode='lines', fill='toself',
-            line=dict(color='lightblue', width=1),
-            opacity=0.1, name='Front Face'
-        ))
-        
-        # Back face (-y)
-        fig.add_trace(go.Scatter3d(
-            x=x_face, y=[y_min]*5, z=z_face,
-            mode='lines', fill='toself',
-            line=dict(color='lightblue', width=1),
-            opacity=0.1, name='Back Face'
-        ))
-
-        if show_sensors:
-            # Color code sensors by face
-            colors = ['blue', 'darkblue', 'green', 'darkgreen', 'red', 'darkred']
-            face_names_full = ['Front', 'Back', 'Left', 'Right', 'Top', 'Bottom']
-            
-            for case in range(6):
-                indices = [i for i, c in self.ID_to_case.items() if c == case]
-                if indices:
-                    face_points = self.all_points[indices]
-                    fig.add_trace(go.Scatter3d(
-                        x=face_points[:, 0], 
-                        y=face_points[:, 1], 
-                        z=face_points[:, 2],
-                        mode='markers',
-                        marker=dict(size=4, color=colors[case], opacity=0.8),
-                        name=f'{face_names_full[case]} Sensors ({len(indices)})'
-                    ))
-
-        fig.update_layout(
-            scene=dict(
-                xaxis_title='X',
-                yaxis_title='Y',
-                zaxis_title='Z',
-                aspectmode='data'
-            ),
-            title=f'Box Detector Geometry (L={self.L}, W={self.W}, H={self.H})',
-            height=800
-        )
-
-        fig.show()
+    @property
+    def volume(self):
+        """The instrumented volume (:mod:`lucid.geometry.volume`)."""
+        from lucid.geometry.volume import BoxVolume
+        return BoxVolume(self.L / 2, self.W / 2, self.H / 2)
 
     def bounds_check(self, positions):
         """Test whether positions are inside the box."""
-        import jax.numpy as jnp
-        x, y, z = positions[:, 0], positions[:, 1], positions[:, 2]
-        return ((x >= -self.L / 2) & (x <= self.L / 2) &
-                (y >= -self.W / 2) & (y <= self.W / 2) &
-                (z >= -self.H / 2) & (z <= self.H / 2))
+        return self.volume.contains(positions)
 
     # ── Propagation methods (Phase 9) ──────────────────────────────────
 
-    def intersect_ray(self, origins, directions):
+    def intersect_ray(self, origins, directions, grid):
         """Batch ray-box intersection with grid indexing."""
         from lucid.propagation.box import batch_intersect_box_with_grid
-        n_x = self._n_x
-        n_y = self._n_y
-        n_z = self._n_z
         results = batch_intersect_box_with_grid(
-            origins, directions, self.L, self.W, self.H, n_x, n_y, n_z)
+            origins, directions, self.L, self.W, self.H, grid.n_x, grid.n_y, grid.n_z)
         intersects, t, face_indices, grid_indices, intersection_point = results
         grid_info = (face_indices, grid_indices)
         surface_info = face_indices
@@ -283,13 +193,11 @@ class Box(Detector):
         from lucid.propagation.box import calculate_box_normals
         return calculate_box_normals(surface_info)  # surface_info = face_indices
 
-    def point_to_grid_cell(self, grid_info):
+    def point_to_grid_cell(self, grid_info, grid):
         """Map box intersection to linear grid cell index."""
         import jax.numpy as jnp
         face_indices, grid_indices = grid_info
-        n_x = self._n_x
-        n_y = self._n_y
-        n_z = self._n_z
+        n_x, n_y, n_z = grid
 
         fb_cells = n_x * n_z           # front/back face cells
         lr_cells = n_y * n_z           # left/right face cells
@@ -314,87 +222,39 @@ class Box(Detector):
         idx = offsets[face_indices] + local_idx
         return jnp.clip(idx, 0, total_cells - 1)
 
-    def assign_sensor_to_cells(self, sensors, sensor_radius):
+    def assign_sensor_to_cells(self, sensors, sensor_radius, grid):
         """Map sensors to overlapping box grid cells."""
         from lucid.propagation.box import assign_sensors_to_box_grid
-        n_x = self._n_x
-        n_y = self._n_y
-        n_z = self._n_z
         return assign_sensors_to_box_grid(
-            sensors, sensor_radius, self.L, self.W, self.H, n_x, n_y, n_z)
+            sensors, sensor_radius, self.L, self.W, self.H, grid.n_x, grid.n_y, grid.n_z)
 
-    def grid_cell_centers(self):
+    def grid_cell_centers(self, grid):
         """Compute centers of all box grid cells."""
         from lucid.propagation.box import calculate_box_grid_centers
-        n_x = self._n_x
-        n_y = self._n_y
-        n_z = self._n_z
-        return calculate_box_grid_centers(self.L, self.W, self.H, n_x, n_y, n_z)
+        return calculate_box_grid_centers(self.L, self.W, self.H, grid.n_x, grid.n_y, grid.n_z)
 
-    def total_grid_cells(self):
-        n_x = self._n_x
-        n_y = self._n_y
-        n_z = self._n_z
+    def total_grid_cells(self, grid):
+        n_x, n_y, n_z = grid
         return 2 * (n_x * n_z + n_y * n_z + n_x * n_y)
 
-    def cell_index_to_coords(self, linear_idx):
-        """Decode linear index to (cell_i, cell_j, face_idx) for box."""
-        import jax.numpy as jnp
-        n_x = self._n_x
-        n_y = self._n_y
-        n_z = self._n_z
-        fb = n_x * n_z
-        lr = n_y * n_z
-        tb = n_x * n_y
-
-        is_fb = linear_idx < 2 * fb
-        is_lr = (linear_idx >= 2 * fb) & (linear_idx < 2 * fb + 2 * lr)
-
-        # Front/Back
-        fb_face = jnp.where(linear_idx < fb, 0, 1)
-        fb_local = linear_idx % fb
-        fb_i = fb_local // n_z
-        fb_j = fb_local % n_z
-
-        # Left/Right
-        lr_offset = linear_idx - 2 * fb
-        lr_face = jnp.where(lr_offset < lr, 2, 3)
-        lr_local = lr_offset % lr
-        lr_i = lr_local // n_z
-        lr_j = lr_local % n_z
-
-        # Top/Bottom
-        tb_offset = linear_idx - 2 * fb - 2 * lr
-        tb_face = jnp.where(tb_offset < tb, 4, 5)
-        tb_local = tb_offset % tb
-        tb_i = tb_local // n_y
-        tb_j = tb_local % n_y
-
-        cell_i = jnp.where(is_fb, fb_i, jnp.where(is_lr, lr_i, tb_i))
-        cell_j = jnp.where(is_fb, fb_j, jnp.where(is_lr, lr_j, tb_j))
-        face_idx = jnp.where(is_fb, fb_face, jnp.where(is_lr, lr_face, tb_face))
-        return cell_i, cell_j, face_idx
-
-    def point_to_grid_cell_from_coords(self, coords):
+    def point_to_grid_cell_from_coords(self, coords, grid):
         """Convert grid coordinates to linear index.
 
         For box: coords = [cell_i, cell_j, face_idx].
         """
         cell_i, cell_j, face_idx = int(coords[0]), int(coords[1]), int(coords[2])
-        fb = self._n_x * self._n_z
-        lr = self._n_y * self._n_z
-        tb = self._n_x * self._n_y
+        fb = grid.n_x * grid.n_z
+        lr = grid.n_y * grid.n_z
+        tb = grid.n_x * grid.n_y
         offsets = [0, fb, 2*fb, 2*fb+lr, 2*(fb+lr), 2*(fb+lr)+tb]
-        second_dim = self._n_z if face_idx <= 3 else self._n_y
+        second_dim = grid.n_z if face_idx <= 3 else grid.n_y
         return offsets[face_idx] + cell_i * second_dim + cell_j
 
     def build_inverted_sensor_map(self, assignments_geometric, assignments_distance,
-                                   max_candidates_per_ray, num_sensors):
+                                   max_candidates_per_ray, grid):
         """Build cell→sensor lookup table for box."""
-        from lucid.propagation.box import create_inverted_box_sensor_map
-        n_x = self._n_x
-        n_y = self._n_y
-        n_z = self._n_z
-        return create_inverted_box_sensor_map(
+        from lucid.propagation.box import box_grid_cells
+        from lucid.propagation.sensor_map import build_inverted_sensor_map
+        return build_inverted_sensor_map(
             assignments_geometric, assignments_distance,
-            n_x, n_y, n_z, max_candidates_per_ray)
+            box_grid_cells(grid.n_x, grid.n_y, grid.n_z), max_candidates_per_ray)

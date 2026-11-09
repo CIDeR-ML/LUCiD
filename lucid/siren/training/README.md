@@ -1,229 +1,100 @@
 # SIREN Training Module
 
-This module provides a refactored, notebook-friendly interface for training JAXSiren networks on PhotonSim data.
+Training and validation of the SIREN emitters on PhotonSim lookup tables. Nothing here is on
+the forward path: a simulation loads trained emitters through `lucid.siren.emitter`.
 
 ## Overview
 
-The training module is organized into several key components:
+- **`train.py`**: the `lucid-train-siren` CLI (`python -m lucid.siren.training.train`)
+- **`validate.py`**: validation suite for trained emitters (`python -m lucid.siren.training.validate`)
+- **`trainer.py`**: `Recipe` and `SIRENTrainer`; **`nominal.json`**: the committed recipe
+- **`dataset.py`**: `PhotonSimDataset`, the lookup table and its batching
+- **`monitor.py`**: `TrainingMonitor` and `LiveTrainingCallback`, live progress plots
+- **`prediction_plot.py`**: `PredictionComparisonCallback`, in-training prediction-vs-truth PDFs
+- **`analyzer.py`**: `TrainingAnalyzer`, post-training evaluation
+- **`photonsim_data/`**: the lookup-table builders (`lucid-build-photon-table`,
+  `lucid-build-dedx-table`)
 
-- **`trainer.py`**: Main `SIRENTrainer` class with configurable training
-- **`dataset.py`**: Data loading and management for PhotonSim data
-- **`monitor.py`**: Real-time training monitoring and visualization
-- **`analyzer.py`**: Post-training analysis and evaluation
-- **Moved training scripts**: Legacy scripts moved here for reference
+The training workflow, validation and the table's s/s_max axis are in [`../README.md`](../README.md);
+the CLI's flags in `lucid-train-siren --help`.
+
+The package `__init__` imports nothing; import the module you need.
 
 ## Quick Start
 
 ```python
-from siren.training import SIRENTrainer, TrainingConfig, PhotonSimDataset
+from lucid.siren.training.dataset import PhotonSimDataset
+from lucid.siren.training.trainer import Recipe, SIRENTrainer
 
-# Load data
-dataset = PhotonSimDataset('path/to/photon_lookup_table.h5')
-
-# Configure training
-config = TrainingConfig(
-    hidden_features=256,
-    num_steps=5000,
-    learning_rate=1e-4
-)
-
-# Train model
-trainer = SIRENTrainer(dataset, config, output_dir='output/training')
+recipe = Recipe.load(num_steps=5000)            # nominal.json with overrides
+dataset = PhotonSimDataset('path/to/photon_lookup_table.h5', val_split=recipe.val_split,
+                           zero_threshold=recipe.zero_threshold,
+                           zero_keep_frac=recipe.zero_keep_frac,
+                           energy_balance=recipe.energy_balance,
+                           target_importance=recipe.target_importance)
+trainer = SIRENTrainer(dataset, recipe, output_dir='output/training')
 history = trainer.train()
-```
-
-## Module Structure
-
-```
-siren/training/
-├── __init__.py                 # Main imports
-├── trainer.py                  # SIRENTrainer class
-├── dataset.py                  # PhotonSimDataset classes
-├── monitor.py                  # TrainingMonitor and callbacks
-├── analyzer.py                 # TrainingAnalyzer class
-├── README.md                   # This file
-├── photonsim_data/            # Dataset creation utilities
-│   ├── create_siren_dataset.py
-│   └── inspect_siren_dataset.py
-└── [legacy scripts]           # Moved from scripts/ and tools/
-    ├── train_photonsim_h5.py
-    ├── monitor_training.py
-    ├── analyze_trained_siren.py
-    ├── train_photonsim_siren.py
-    └── photonsim_h5_dataset.py
+trainer.save_emitter('output/training')         # emitter.json + weights.npz
 ```
 
 ## Key Classes
 
+### Recipe
+
+The working point as a frozen dataclass, read from a JSON file (default
+[`nominal.json`](nominal.json), the recipe of every shipped emitter: network size, optimiser,
+schedule, batch, steps and the dataset knobs below). Unknown or missing fields raise. It is
+recorded into every emitter it trains (`emitter.json` `training.recipe`).
+
 ### SIRENTrainer
 
-Main training class with features:
-- Configurable model architecture and training parameters
-- Automatic checkpointing and logging
-- JAX/Flax-based implementation
-- Callback system for monitoring
-- Built-in validation
-
-### TrainingConfig
-
-Dataclass for training configuration:
-```python
-config = TrainingConfig(
-    # Model architecture
-    hidden_features=256,
-    hidden_layers=4,
-    w0=30.0,
-    
-    # Training parameters
-    learning_rate=1e-4,
-    batch_size=16384,
-    num_steps=10000,
-    
-    # Monitoring
-    log_every=100,
-    checkpoint_every=1000
-)
-```
+An MSE loss on log-normalized targets with the recipe's optimiser (`adam`, `adamw`, `sgd`) and,
+when `use_patience_scheduler`, a patience-based learning-rate schedule; `init=` starts from a
+`weights.npz` (warm start), `checkpoint_every=` writes `checkpoint_step_<N>.npz`, and callbacks
+(`add_callback(fn)`, called as `fn(trainer, step)`). `save_emitter(dir)` writes the emitter
+through `lucid.siren.emitter.write_emitter`, the loader's own schema.
 
 ### PhotonSimDataset
 
-Dataset loader supporting:
-- HDF5 lookup tables from PhotonSim
-- Pre-sampled dataset directories
-- Automatic normalization
-- Train/validation splits
-- Batch generation with JAX compatibility
+Loads a photon or dE/dx lookup table (`.h5`, auto-detected from `data/photon_table_average`
+or `data/dedx_table_average`), normalizes inputs to [-1, 1] and log-normalizes targets to
+[0, 1], keeps a fraction of the near-zero bins (`zero_threshold`, `zero_keep_frac`), splits
+train/validation, and draws batches, optionally weighted across energies
+(`energy_balance`) and by target value (`target_importance`).
 
 ### TrainingMonitor
 
-Real-time monitoring with:
-- Live plotting in notebooks
-- Progress tracking
-- Time estimation
-- Metric logging
-- Export capabilities
+Reads `training_history.json` from a training directory and plots progress with a time
+estimate; `LiveTrainingCallback` refreshes it during training.
 
 ### TrainingAnalyzer
 
-Post-training analysis including:
-- Comprehensive evaluation metrics
-- Error pattern analysis
-- Visualization plots
-- Model comparison
-- Results export
+Post-training evaluation of a trainer and its dataset:
 
-## Usage Examples
-
-### Basic Training
 ```python
-from siren.training import *
+from lucid.siren.training.analyzer import TrainingAnalyzer
 
-# Load data
-dataset = PhotonSimDataset('photon_lookup_table.h5', val_split=0.1)
-
-# Configure training
-config = TrainingConfig(num_steps=5000, learning_rate=1e-4)
-
-# Train
-trainer = SIRENTrainer(dataset, config)
-history = trainer.train()
-```
-
-### With Monitoring
-```python
-# Set up monitoring
-monitor = TrainingMonitor('output/training', live_plotting=True)
-callback = LiveTrainingCallback(monitor, update_every=100)
-
-# Add to trainer
-trainer.add_callback(callback)
-
-# Training will now show live plots
-history = trainer.train()
-```
-
-### Analysis
-```python
-# Analyze results
 analyzer = TrainingAnalyzer(trainer, dataset)
-results = analyzer.evaluate_model(n_samples=50000)
-analyzer.plot_comparison()
-
-# Error analysis
-error_analysis = analyzer.analyze_error_patterns()
-```
-
-### Custom Callbacks
-```python
-def custom_callback(trainer, step):
-    if step % 500 == 0:
-        print(f"Custom callback at step {step}")
-
-trainer.add_callback(custom_callback)
+results = analyzer.evaluate_model(n_samples=50000)       # R², RMSE, MAE, percentiles per split
+error_analysis = analyzer.analyze_error_patterns()       # errors binned by each input
+analyzer.plot_comparison()                               # 3x4 summary figure
 ```
 
 ## Data Format
 
-The module expects PhotonSim data in either:
-
-1. **HDF5 format** (preferred):
-   - Path to `.h5` file with PhotonSim lookup table
-   - Automatically handles normalization and coordinate grids
-
-2. **Sampled dataset format**:
-   - Directory containing `inputs.npy`, `targets.npy`
-   - Optional `metadata.json` and `normalization_bounds.npz`
-
-## Configuration Options
-
-### Model Architecture
-- `hidden_features`: Number of hidden units (default: 256)
-- `hidden_layers`: Number of hidden layers (default: 3)
-- `w0`: SIREN frequency parameter (default: 30.0)
-
-### Training Parameters
-- `learning_rate`: Initial learning rate (default: 1e-4)
-- `batch_size`: Training batch size (default: 16384)
-- `num_steps`: Total training steps (default: 10000)
-- `weight_decay`: L2 regularization (default: 0.0)
-
-### Learning Rate Schedule
-- `scheduler_step_size`: Steps between LR decay (default: 2000)
-- `scheduler_gamma`: LR decay factor (default: 0.1)
-
-### Monitoring
-- `log_every`: Steps between logging (default: 100)
-- `val_every`: Steps between validation (default: 100)
-- `checkpoint_every`: Steps between checkpoints (default: 1000)
-
-## Dependencies
-
-- JAX and Flax for neural networks
-- NumPy for data handling
-- Matplotlib for visualization
-- H5py for data loading
-- Optax for optimization
-- SciPy for analysis
-
-## Example Notebook
-
-See `../notebooks/siren_training_example.ipynb` for a complete workflow example.
-
-## Migration from Legacy Scripts
-
-The legacy training scripts have been moved to this directory but are deprecated. Use the new classes instead:
-
-| Legacy Script | New Class | Usage |
-|---------------|-----------|-------|
-| `train_photonsim_h5.py` | `SIRENTrainer` | `trainer = SIRENTrainer(dataset, config)` |
-| `monitor_training.py` | `TrainingMonitor` | `monitor = TrainingMonitor(output_dir)` |
-| `analyze_trained_siren.py` | `TrainingAnalyzer` | `analyzer = TrainingAnalyzer(trainer, dataset)` |
+An HDF5 lookup table as written by `photonsim_data/build_tables.py`: the average table under
+`data/`, the bin centers under `coordinates/`, and the s_max and N_photons fits as `metadata`
+attributes (carried into the emitter's `emitter.json`; the s_max forms are described in
+[`../README.md`](../README.md)).
 
 ## Output Files
 
-Training produces:
-- `final_model.npz`: Trained model parameters
-- `config.json`: Training configuration
-- `training_history.json`: Loss and metrics history
-- `*.png`: Visualization plots
-- Checkpoint files during training
+Under `output_dir` (`lucid-train-siren`):
+
+- `emitter.json` + `weights.npz`: the emitter, with its domain, decoding, the s_max and
+  N_photons fits from the table, the recipe, the losses and the commit
+- `recipe.json`: the resolved recipe (written at the start, for `TrainingMonitor`)
+- `training_history.json`: train/val loss, learning rate and step
+- `checkpoint_step_<N>.npz`: with `--checkpoint-every`
+- `final_training_progress.pdf`, `prediction_plots/` (what the plots show: the
+  `prediction_plot.py` module docstring)

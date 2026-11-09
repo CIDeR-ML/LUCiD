@@ -127,14 +127,15 @@ class StringTelescope(Detector):
         self.all_points = self._all_positions
         self.ID_to_position = {i: self.all_points[i] for i in range(self.n_sensors)}
 
+    @property
+    def volume(self):
+        """The cylindrical envelope (:mod:`lucid.geometry.volume`)."""
+        from lucid.geometry.volume import CylinderVolume
+        return CylinderVolume(self.envelope_radius, self.envelope_z_min, self.envelope_z_max)
+
     def bounds_check(self, positions):
         """Check if points are inside the cylindrical envelope."""
-        xy_dist_sq = positions[..., 0]**2 + positions[..., 1]**2
-        r_sq = self.envelope_radius**2
-        in_barrel = xy_dist_sq <= r_sq
-        in_z = (positions[..., 2] >= self.envelope_z_min) & \
-               (positions[..., 2] <= self.envelope_z_max)
-        return in_barrel & in_z
+        return self.volume.contains(positions)
 
     def get_jax_tables(self):
         """Convert tables to JAX arrays for the propagator."""
@@ -168,103 +169,27 @@ class StringTelescope(Detector):
         )
 
     @classmethod
-    def from_config(cls, config_path):
-        """Load from a JSON config that points to an NPZ file."""
-        import json
-        config_dir = os.path.dirname(os.path.abspath(config_path))
-        with open(config_path) as f:
-            config = json.load(f)
-        npz_path = os.path.join(config_dir, config['geometry_definitions']['npz_file_path'])
-        return cls.from_npz(npz_path)
+    def from_config(cls, geometry, config_dir):
+        """Per-DOM positions from the NPZ that ``geometry['npz_file_path']`` names."""
+        return cls.from_npz(os.path.join(config_dir, geometry['npz_file_path']))
 
-    # ── Phase 9 abstract methods (not used — string propagator bypasses) ──
+    # ── The surface-propagator interface: unused, strings have their own propagator ──
 
-    def intersect_ray(self, origins, directions):
-        raise NotImplementedError("StringTelescope uses create_fast_string_simulator, not create_propagator")
+    def intersect_ray(self, origins, directions, grid):
+        raise NotImplementedError("StringTelescope uses create_string_propagator, not create_propagator")
 
     def compute_normal(self, point, surface_info):
-        raise NotImplementedError("StringTelescope uses create_fast_string_simulator, not create_propagator")
+        raise NotImplementedError("StringTelescope uses create_string_propagator, not create_propagator")
 
-    def point_to_grid_cell(self, grid_info):
-        raise NotImplementedError("StringTelescope uses create_fast_string_simulator, not create_propagator")
+    def point_to_grid_cell(self, grid_info, grid):
+        raise NotImplementedError("StringTelescope uses create_string_propagator, not create_propagator")
 
-    def assign_sensor_to_cells(self, sensors, sensor_radius):
-        raise NotImplementedError("StringTelescope uses create_fast_string_simulator, not create_propagator")
+    def assign_sensor_to_cells(self, sensors, sensor_radius, grid):
+        raise NotImplementedError("StringTelescope uses create_string_propagator, not create_propagator")
 
-    def grid_cell_centers(self):
-        raise NotImplementedError("StringTelescope uses create_fast_string_simulator, not create_propagator")
+    def grid_cell_centers(self, grid):
+        raise NotImplementedError("StringTelescope uses create_string_propagator, not create_propagator")
 
-    def total_grid_cells(self):
-        raise NotImplementedError("StringTelescope uses create_fast_string_simulator, not create_propagator")
+    def total_grid_cells(self, grid):
+        raise NotImplementedError("StringTelescope uses create_string_propagator, not create_propagator")
 
-    def visualize_geometry_wireframe(self, show_sensors=True, show_strings=True,
-                                     show_envelope=True, dom_size=2,
-                                     string_color='gray', dom_color='blue',
-                                     title=None):
-        """Visualize the string telescope as vertical lines with DOMs.
-
-        Parameters
-        ----------
-        show_sensors : bool     show individual DOM markers
-        show_strings : bool     show string axis lines
-        show_envelope : bool    show bounding cylinder wireframe
-        dom_size : int          marker size for DOMs
-        string_color : str      color for string lines
-        dom_color : str         color for DOM markers
-        title : str or None     plot title (auto-generated if None)
-        """
-        import plotly.graph_objects as go
-
-        fig = go.Figure()
-
-        if show_envelope:
-            theta = np.linspace(0, 2 * np.pi, 50)
-            z_env = np.array([self.envelope_z_min, self.envelope_z_max])
-            theta_mesh, z_mesh = np.meshgrid(theta, z_env)
-            x_env = self.envelope_radius * np.cos(theta_mesh)
-            y_env = self.envelope_radius * np.sin(theta_mesh)
-
-            fig.add_trace(go.Surface(
-                x=x_env, y=y_env, z=z_mesh,
-                opacity=0.05, showscale=False,
-                colorscale=[[0, 'lightblue'], [1, 'lightblue']],
-                name='Envelope'
-            ))
-
-        if show_strings:
-            for i in range(self.n_str):
-                n = self.n_dom_per_str_np[i]
-                bottom = self.string_anchors[i]
-                top = self.string_tops[i]
-                fig.add_trace(go.Scatter3d(
-                    x=[bottom[0], top[0]],
-                    y=[bottom[1], top[1]],
-                    z=[bottom[2], top[2]],
-                    mode='lines',
-                    line=dict(color=string_color, width=1),
-                    showlegend=(i == 0),
-                    name=f'Strings ({self.n_str})' if i == 0 else None,
-                ))
-
-        if show_sensors:
-            pts = self.all_points
-            fig.add_trace(go.Scatter3d(
-                x=pts[:, 0], y=pts[:, 1], z=pts[:, 2],
-                mode='markers',
-                marker=dict(size=dom_size, color=dom_color, opacity=0.6),
-                name=f'DOMs ({self.n_sensors})'
-            ))
-
-        if title is None:
-            title = (f'String Telescope: {self.n_str} strings, '
-                     f'{self.n_sensors} DOMs, R_env={self.envelope_radius:.0f}m')
-
-        fig.update_layout(
-            scene=dict(
-                xaxis_title='X (m)', yaxis_title='Y (m)', zaxis_title='Z (m)',
-                aspectmode='data',
-            ),
-            title=title,
-            height=800,
-        )
-        return fig

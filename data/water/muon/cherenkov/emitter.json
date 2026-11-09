@@ -1,0 +1,138 @@
+{
+ "schema": 1,
+ "kind": "cherenkov",
+ "net": {
+  "hidden_features": 256,
+  "hidden_layers": 3,
+  "w0": 30.0
+ },
+ "domain": {
+  "energy_mev": [
+   150.0,
+   100000.0
+  ],
+  "angle_rad": [
+   0.0031415926535897933,
+   3.1384510609362035
+  ],
+  "s_over_smax": [
+   0.001,
+   0.999
+  ]
+ },
+ "target": {
+  "log10_min": -3.000000238418579,
+  "log10_max": 4.438080787658691,
+  "offset": 0.001
+ },
+ "grid_bins": 250,
+ "s_max_mm": {
+  "form": "A*E^B",
+  "params": {
+   "A": 6.122104,
+   "B": 0.978952
+  },
+  "fit_min_mev": 500,
+  "fit_max_mev": 50000,
+  "quantile": 0.9999,
+  "quantile_multiplier": 1.1,
+  "generated_at_utc": "2026-05-13T11:14:34+00:00"
+ },
+ "n_photons": {
+  "form": "logpoly",
+  "coeffs": [
+   13.683638397771084,
+   3.3508844082732128,
+   -0.24131270233093455,
+   0.31619080830137014,
+   -0.1908236659109564,
+   0.06863789197906409,
+   -0.16134104459374587,
+   0.12347982055303612
+  ],
+  "u0": 8.261780379533242,
+  "du": 3.2511450854369865,
+  "fit_min_mev": 150,
+  "fit_max_mev": 100000,
+  "rms_frac": 0.000428266873692121,
+  "max_frac": 0.0032265410507188452
+ },
+ "t0": {
+  "form": "stretched_exp_delay",
+  "c_mm_per_ns": 299.792,
+  "log10_A": [
+   -1.1413985390790495,
+   -0.0011668309968835447,
+   -0.0686782496860596,
+   0.0030851333761081207
+  ],
+  "log10_lambda_mm": [
+   -0.511328234243701,
+   1.0056354608899198,
+   0.16246432315097153,
+   -0.026539761397066784
+  ],
+  "beta": [
+   11.557064373395278,
+   -11.460626157203176,
+   3.8278235678067194,
+   -0.3852743551667546
+  ],
+  "source": {
+   "scan_dir": "/sdf/data/neutrino/cjesus/CIDER/SIREN_files/t0_parametrization/water/mu-/inputs",
+   "n_energies": 307,
+   "energy_range_mev": [
+    150,
+    100000
+   ],
+   "tool": "PhotonSim/tools/t0_correction/calculate_t0.py"
+  }
+ },
+ "emission_band_nm": [
+  274.91,
+  673.83
+ ],
+ "provenance": {
+  "material": "water",
+  "particle": "mu-",
+  "emission": "cherenkov",
+  "data_type": "photon",
+  "selected_from_scan": "water_mu_seed_scan_p100_ti02_n150k",
+  "selected_seed": "seed1",
+  "selection_criterion": "lowest final val_loss across 10-seed scan",
+  "num_steps": 150000,
+  "losses": {
+   "final_train": 0.017735,
+   "final_val": 0.018217,
+   "best_val": 0.016985
+  },
+  "trained_against_h5": "/sdf/home/c/cjesus/REFACTORED/LUCiD/data/water/muon/photon_lookup_table.h5",
+  "source_scan_dir": "/sdf/data/neutrino/cjesus/SIREN_files/training_tests/water_mu_seed_scan_p100_ti02_n150k/seed1",
+  "promoted_at_utc": "2026-05-22T06:49:29.056196+00:00"
+ },
+ "training": {
+  "recipe": {
+   "hidden_features": 256,
+   "hidden_layers": 3,
+   "w0": 30.0,
+   "optimizer": "adam",
+   "learning_rate": 0.0001,
+   "weight_decay": 0.0,
+   "grad_clip_norm": 1.0,
+   "use_patience_scheduler": true,
+   "patience": 100,
+   "lr_reduction_factor": 0.5,
+   "min_lr": 5e-07,
+   "batch_size": 25000,
+   "num_steps": 150000,
+   "val_every": 50,
+   "zero_threshold": 0.001,
+   "zero_keep_frac": 0.5,
+   "energy_balance": "uniform",
+   "target_importance": 0.2,
+   "val_split": 0.01,
+   "seed": 1
+  },
+  "recipe_note": "the recipe is lucid/siren/training/nominal.json with this seed; zero_threshold, zero_keep_frac, energy_balance, target_importance and val_split are the production nominal recipe and agree with target.log10_min = log10(1e-3), and the run itself did not record them (the trainer overwrote config.json); the other fields are the run's config.json"
+ }
+}
