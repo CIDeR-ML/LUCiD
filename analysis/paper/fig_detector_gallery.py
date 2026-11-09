@@ -12,11 +12,10 @@ labels (10 m vs 200 m) convey the true size differences.
     python fig_detector_gallery.py --plot-results    # just montage existing panels
 
 Plotly image export needs the kaleido env layered on; run inside the container as:
-    APPTAINERENV_PYTHONUSERBASE=$LUCID_ENV_BASE apptainer exec ... \
+    APPTAINERENV_PYTHONUSERBASE=<paths.S3DF_ENV_BASE> apptainer exec ... \
         /opt/conda/bin/python3 analysis/paper/fig_detector_gallery.py
 """
 import argparse
-import os
 import sys
 from pathlib import Path
 
@@ -24,11 +23,12 @@ import numpy as np
 
 REPO_ROOT = Path(__file__).resolve().parents[2]        # LUCiD/
 sys.path.insert(0, str(REPO_ROOT))
-from analysis.paper.utils import paths                  # noqa: E402
+from analysis.paper.utils import paths, provenance      # noqa: E402
 
 CONFIG = REPO_ROOT / 'config'
 FIGURE = 'detector_gallery'
-SURFACE = os.environ.get('SURFACE', 'black')
+SURFACE = 'black'          # detector shell colour of the plotly panels
+FILL = 0.82                # fraction of a montage cell a panel fills
 
 # (config, scale-bar length [m], label, zoom multiplier)
 DISC_DETS = [
@@ -53,10 +53,11 @@ def _hextent(cfg):
 
 def _disc_png(cfg, out_png):
     from lucid.geometry import generate_detector
+    from lucid.visualization import event_display_3d
     det = generate_detector(str(CONFIG / cfg))
     n = len(det.all_points)
-    det.visualize_event_data_plotly_discs(
-        np.arange(n), np.ones(n), np.zeros(n),
+    event_display_3d(
+        det, np.arange(n), np.ones(n), np.zeros(n),
         show_all_sensors=True, log_scale=False, show_colorbar=False,
         dark_theme=False, plot_time=False, colorscale='plasma',
         surface_color=SURFACE, figname=out_png)
@@ -154,7 +155,6 @@ def plot_results(out):
         panels.append((d / f"panel_{cfg.split('_geom')[0]}.png", _hextent(cfg), L, lab, zm))
     panels.append((d / 'panel_telescope.png', _hextent(TELE_CFG), *TELE_BAR))
 
-    fill = float(os.environ.get('FILL', 0.82))
     cells = [(_autocrop(_load_rgb(p)), ext, L, lab, zm) for p, ext, L, lab, zm in panels]
     cw = max(c.width for c, *_ in cells)
     ch = max(c.height for c, *_ in cells)
@@ -164,7 +164,7 @@ def plot_results(out):
     canvas = Image.new('RGB', (2 * cw, 2 * ch), 'white')
     for k, (c, ext, L, lab, zm) in enumerate(cells):
         row, col = divmod(k, 2)
-        sc = min(cw / c.width, (ch - bmar) / c.height) * fill * zm
+        sc = min(cw / c.width, (ch - bmar) / c.height) * FILL * zm
         nw, nh = int(c.width * sc), int(c.height * sc)
         c = c.resize((nw, nh))
         px = col * cw + (cw - nw) // 2
@@ -192,8 +192,11 @@ def main():
     both = not (a.generate_data or a.plot_results)
     if a.generate_data or both:
         generate_data()
+        provenance.write_run_record(_panels_dir(), __file__, a)
     if a.plot_results or both:
-        plot_results(Path(a.out) if a.out else paths.figure_dir())
+        out = Path(a.out) if a.out else paths.figure_dir()
+        plot_results(out)
+        provenance.write_run_record(out, __file__, a)
 
 
 if __name__ == '__main__':

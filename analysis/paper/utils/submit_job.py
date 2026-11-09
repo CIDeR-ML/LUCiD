@@ -3,11 +3,11 @@
 
     # single config
     python analysis/paper/utils/submit_job.py --config configs/nrays/nrays_mu_250k.json \
-        --output /sdf/data/neutrino/cjesus/CIDER/LUCiD_tracking/muon/nrays --submit
+        --output <S3DF_DATA>/muon/nrays --submit
 
     # every config in a directory (one job each)
     python analysis/paper/utils/submit_job.py --config configs/nrays \
-        --output /sdf/data/neutrino/cjesus/CIDER/LUCiD_tracking/muon/nrays --submit
+        --output <S3DF_DATA>/muon/nrays --submit
 
 Each job runs ``run_study.py`` inside the LUCiD container on a GPU node (default partition
 ``turing``). Per QUICKSTART_S3DF §"Running the JAX stack on a GPU", the baked jaxlib is
@@ -17,18 +17,16 @@ checkout's own ``lucid`` wins because run_study.py inserts the repo root first o
 Without ``--submit`` the sbatch scripts are written (to ``<output>/slurm/``) but not queued.
 """
 import argparse
-import os
 import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
+sys.path.insert(0, str(REPO_ROOT))
+from analysis.paper.utils import paths                  # noqa: E402
+
 TRACKING_DIR = Path(__file__).resolve().parent          # analysis/paper/utils/ — holds run_study.py
-DEFAULT_IMAGE = os.environ.get('LUCID_IMAGE_PATH',
-                               '/sdf/data/neutrino/cjesus/software/images/lucid.sif')
-DEFAULT_ENV_BASE = '/sdf/data/neutrino/cjesus/python_envs/lucid'
-BINDS = '/sdf,/fs,/sdf/scratch,/lscratch,/cvmfs'
 
 
 def sbatch_text(cfg_path, out_dir, log_dir, a):
@@ -56,7 +54,7 @@ nvidia-smi -L || true
 
 APPTAINERENV_PYTHONUSERBASE={a.env_base} \\
 APPTAINERENV_PYTHONPATH="" \\
-apptainer exec --nv -B {BINDS} \\
+apptainer exec --nv -B {paths.S3DF_BINDS} \\
     {a.image} \\
     /opt/conda/bin/python3 {run_script} \\
         --config {cfg_path} \\
@@ -78,8 +76,8 @@ def main():
                     help='extra CLI args appended to the run script invocation')
     ap.add_argument('--partition', default='turing', help='GPU partition (default turing)')
     ap.add_argument('--account', default='mli:cider-ml')
-    ap.add_argument('--image', default=DEFAULT_IMAGE)
-    ap.add_argument('--env-base', default=DEFAULT_ENV_BASE,
+    ap.add_argument('--image', default=paths.S3DF_IMAGE)
+    ap.add_argument('--env-base', default=paths.S3DF_ENV_BASE,
                     help='PYTHONUSERBASE layered in for the CUDA jax wheels')
     ap.add_argument('--gpus', default='1')
     ap.add_argument('--cpus', default='4')

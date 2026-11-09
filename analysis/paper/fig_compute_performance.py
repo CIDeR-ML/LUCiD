@@ -4,19 +4,19 @@
 Two independent statements, one figure each:
 
   raytracing_timing        forward only, data-like output. The SIREN ray tracer with
-                           ``hit_mode='realistic'`` (Bernoulli QE, hard-min first-arrival,
-                           TTS smearing, Abe_2013 charge model) -- i.e. what data mode
-                           produces, driven by the SIREN emitter instead of photon-by-photon
+                           ``hits='first_arrival', detection='sampled'`` (Bernoulli QE,
+                           hard-min first-arrival, TTS smearing, Abe_2013 charge model) --
+                           i.e. what the given-photons simulator produces, driven by the SIREN emitter instead of photon-by-photon
                            injection. How fast we predict per-PMT Q and T.
 
   optimization_step_timing one full reconstruction step: the reverse-mode gradient of the
                            recon NLL, the forward-mode Gauss-Newton/Fisher metric
-                           ``Jmu^T diag(1/mu) Jmu + Jl^T Jl`` (jacfwd of ReconModel._perpmt,
+                           ``Jmu^T diag(1/mu) Jmu + Jl^T Jl`` (jacfwd of ReconModel.perpmt,
                            ONE key), and the SCALE9-preconditioned damped 9x9 solve --
                            exactly what fit_track pays per iteration when the metric refreshes.
 
 Both use the published tracking working point (SK_like 11k sensors, sigma = TTS = 2.1 ns,
-energy_scale_mode='nphot'); see analysis/paper/utils/studies.py.
+MODEL_RECIPE: energy_scale='nphot'); see analysis/paper/utils/studies.py.
 
 This is a live GPU benchmark, so it follows the generate/plot split:
 
@@ -42,12 +42,12 @@ import numpy as np
 
 REPO_ROOT = Path(__file__).resolve().parents[2]        # LUCiD/
 sys.path.insert(0, str(REPO_ROOT))
-from analysis.paper.utils import paths, studies         # noqa: E402
+from analysis.paper.utils import paths, provenance, studies   # noqa: E402
+from lucid.fitting import MODEL_RECIPE, bootstrap        # noqa: E402
 
 GEOM = str(REPO_ROOT / 'config' / 'SK_like_geom_config.json')
 PHYS = str(REPO_ROOT / 'config' / 'SK_like_physics_config.json')
-GRID = {'n_cap': 80, 'n_angular': 120, 'n_height': 80}
-BAND = (274.91, 673.83)
+GRID = studies.PIPELINE['grid']
 PARTICLE = 'muon'
 
 DEF_K, DEF_N = [1, 3], [10000, 100000, 200000]
@@ -56,22 +56,9 @@ DEF_K, DEF_N = [1, 3], [10000, 100000, 200000]
 # A100 above 1M rays (measured: OOM at 1.5M for every K>=3, at 2M for K=1). Both panels
 # therefore share one N range.
 PLOT_MAX_N = 1_000_000
+FIT = True                 # draw the linear time = slope*N + intercept fit per K
 FULL_K = [1, 3, 5, 7, 9]
 FULL_N = [10000, 100000, 250000, 500000, 750000, 1000000]
-
-IMAGE = '/sdf/data/neutrino/cjesus/software/images/lucid.sif'
-BINDS = '/sdf,/fs,/sdf/scratch,/lscratch,/cvmfs'
-ENV_BASE = '/sdf/data/neutrino/cjesus/python_envs/lucid'   # CUDA jaxlib layered over the image
-
-# fit_track's step knobs at the published working point (lucid/fitting/recon.py).
-LR, LAM, RIDGE_I, TRUST = 4.0, 0.01, 0.1, 3.0
-
-
-def _track9(jnp):
-    """A 1 GeV muon at the centre: theta9 = (E, x, y, z, sin/cos theta, sin/cos phi, t0)."""
-    th, ph = np.pi / 3, np.pi / 4
-    return jnp.asarray([1000.0, 0.0, 0.0, 0.0,
-                        np.sin(th), np.cos(th), np.sin(ph), np.cos(ph), 0.0], dtype=float)
 
 
 def _detector_params(jnp, ND):
@@ -134,43 +121,38 @@ def _bench_recon(K_values, N_values, warmup, runs, want=PANELS):
     Building the model once per grid point also means one set of compilations covers all
     three, and every measurement sees identical detector, data and machine conditions.
     """
+    from dataclasses import replace
     import jax
     import jax.numpy as jnp
-    from lucid.geometry import generate_detector
     from lucid.simulation import setup_event_simulator
-    from lucid.fitting import ReconModel, track_from_vec9
-    from lucid.utils import unpack_siren_params
-    from lucid.siren.core import build_cherenkov_context
-    from lucid.siren.training.inference import SIRENPredictor
+    from lucid.fitting import ReconModel, track_from_vec9, vec9_from_track
+    from lucid.utils import spherical_to_cartesian
 
-    ND = len(generate_detector(GEOM).all_points)
-    dp = _detector_params(jnp, ND)
-    t9 = _track9(jnp)
+    # A 1 GeV muon at the centre, polar angle pi/3 and azimuth pi/4.
+    t9 = jnp.asarray(vec9_from_track(1000.0, [0.0, 0.0, 0.0],
+                                     spherical_to_cartesian(np.pi / 3, np.pi / 4, np)), dtype=float)
 
-    # nphot(E) from the emitter context -- the campaign's single-pass energy scale.
-    scfg = unpack_siren_params(PARTICLE, 'water')
-    ctx = build_cherenkov_context(SIRENPredictor(scfg['siren_model_path']), scfg['ray_sampling'])
-
-    # Fixed pseudo-data (per-PMT Q, T) from one realistic forward -- the observed event the
-    # model is evaluated against. Independent of the benchmark's N, so every point sees one
-    # dataset, and the data-like sim never enters the timings.
-    data_sim = setup_event_simulator(
-        GEOM, 250_000, temperature=None, K=8, hit_mode='realistic', physics_config=PHYS,
-        default_detector_params=dp, particle=PARTICLE, wavelength_mode=True,
-        charge_resolution=studies.CHARGE_RESOLUTION, cherenkov_emission_band=BAND, **GRID)
-    oc, ot = data_sim(track_from_vec9(t9), jax.random.PRNGKey(0))
-    oc, ot = jnp.asarray(oc), jnp.asarray(ot)
+    def pseudo_data(n_sensors):
+        """Fixed pseudo-data (per-PMT Q, T) from one realistic forward -- the observed event the
+        model is evaluated against. Independent of the benchmark's N, so every point sees one
+        dataset, and the data-like sim never enters the timings."""
+        data_sim = setup_event_simulator(
+            GEOM, 250_000, source='particle', detection='sampled', hits='first_arrival',
+            temperature=None, K=8, physics_config=PHYS,
+            default_detector_params=_detector_params(jnp, n_sensors), particle=PARTICLE,
+            wavelength_mode=True, charge_resolution=studies.CHARGE_RESOLUTION, **GRID)
+        oc, ot = data_sim(track_from_vec9(t9), jax.random.PRNGKey(0))
+        return jnp.asarray(oc), jnp.asarray(ot)
 
     res = {p: {K: {'N': [], 'runs': [], 'mode': []} for K in K_values} for p in want}
+    oc = None
     for K in K_values:
         for N in N_values:
-            pred = setup_event_simulator(
-                GEOM, N, temperature=0.1, K=K, hit_mode='per_photon', physics_config=PHYS,
-                default_detector_params=True, particle=PARTICLE, wavelength_mode=True,
-                pos_grad_threshold=K, n_grad_iters=K, cherenkov_emission_band=BAND, **GRID)
-            model = ReconModel(pred, ND, sigma=studies.GN['sigma'], delta=1.0, tot_n_scale=1.0,
-                               energy_from_scale=True, energy_scale_mode='nphot',
-                               nphot_fn=ctx.n_photons_fn)
+            # the published model (energy scale 'nphot': the emitter's nphot(E), single pass)
+            model = ReconModel.build(GEOM, PHYS, PARTICLE, sigma=studies.TTS,
+                                     recipe=replace(MODEL_RECIPE, n_rays=N, K=K), grid=GRID)
+            if oc is None:                  # the data needs the sensor count the model carries
+                oc, ot = pseudo_data(model.pred.det_geom.num_sensors)
 
             def _pred(i):
                 out = model.perpmt(t9, oc, ot, jax.random.PRNGKey(i))
@@ -180,7 +162,7 @@ def _bench_recon(K_values, N_values, warmup, runs, want=PANELS):
                 g = model.grad(t9, oc, ot, jax.random.PRNGKey(i))
                 jax.tree.map(lambda x: x.block_until_ready(), g)
 
-            vg = jax.jit(jax.value_and_grad(model._loss))
+            vg = jax.jit(jax.value_and_grad(model.loss))
 
             def _predgrad(i):
                 out = vg(t9, oc, ot, jax.random.PRNGKey(i))
@@ -188,7 +170,7 @@ def _bench_recon(K_values, N_values, warmup, runs, want=PANELS):
 
             def _fisher(i):
                 # returns a numpy 9x9, so the host transfer already synchronises
-                model.fisher_ad(t9, oc, ot, [jax.random.PRNGKey(i)], None)
+                model.fisher_ad(t9, oc, ot, [jax.random.PRNGKey(i)])
 
             calls = {'pred': _pred, 'grad': _grad, 'predgrad': _predgrad, 'fisher': _fisher}
             for name in want:
@@ -196,6 +178,8 @@ def _bench_recon(K_values, N_values, warmup, runs, want=PANELS):
                     ts = _time_it(calls[name], warmup, runs)
                     m = half_sample_mode(ts)
                 except Exception as e:            # OOM: 9 tangents over K*max_candidates*N
+                    if 'RESOURCE_EXHAUSTED' not in str(e):
+                        raise                     # only an out-of-memory point is a result
                     print(f"  {name:6s} K={K} N={N:>8}: FAILED ({type(e).__name__})", flush=True)
                     ts, m = None, None
                 r = res[name][K]
@@ -209,8 +193,9 @@ def generate_data(backend, full, warmup, runs, out_data, account='mli:cider-ml',
     K, N = (FULL_K, FULL_N) if full else (DEF_K, DEF_N)
     if backend == 's3df':
         script = Path(__file__).resolve()
-        cmd = (f"APPTAINERENV_PYTHONUSERBASE={ENV_BASE} APPTAINERENV_PYTHONPATH='' "
-               f"apptainer exec --nv -B {BINDS} {IMAGE} /opt/conda/bin/python3 {script} "
+        cmd = (f"APPTAINERENV_PYTHONUSERBASE={paths.S3DF_ENV_BASE} APPTAINERENV_PYTHONPATH='' "
+               f"apptainer exec --nv -B {paths.S3DF_BINDS} {paths.S3DF_IMAGE} "
+               f"/opt/conda/bin/python3 {script} "
                f"--generate-data --backend local {'--full' if full else ''} "
                f"--warmup {warmup} --runs {runs} --out-data {out_data}")
         sb = out_data.parent / 'compute_benchmark.sh'
@@ -231,7 +216,7 @@ def generate_data(backend, full, warmup, runs, out_data, account='mli:cider-ml',
           flush=True)
     # Merge into any existing results so a single panel can be re-measured on its own.
     results = json.loads(out_data.read_text()) if out_data.exists() else {}
-    results.update({'K': K, 'N': N, 'tts': studies.TTS, 'sigma': studies.GN['sigma'],
+    results.update({'K': K, 'N': N, 'tts': studies.TTS, 'sigma': studies.TTS,
                     'charge_resolution': studies.CHARGE_RESOLUTION, 'geom': Path(GEOM).name})
     results.setdefault('runs_per_point', {})
     measured = _bench_recon(K, N, warmup, runs, want=tuple(panels))
@@ -248,23 +233,16 @@ ESTIMATORS = {'mode': half_sample_mode, 'median': np.median,
               'min': np.min, 'mean': np.mean}
 
 
-def bootstrap_se(xs, est, n_boot=400, seed=0):
-    """Standard error of the point estimator, by resampling the timed calls.
-
-    The mode has no closed-form standard error (sigma/sqrt(n) is the SE of the MEAN), so
-    resample with replacement and take the spread of the recomputed estimator.
-    """
-    xs = np.asarray(xs, float)
-    rng = np.random.default_rng(seed)
-    idx = rng.integers(0, len(xs), size=(n_boot, len(xs)))
-    return float(np.std([ESTIMATORS[est](xs[i]) for i in idx]))
-
-
 def _estimate_se(d, est):
-    """Per-point standard error in ms (NaN where raw samples were not stored)."""
+    """Per-point standard error in ms (NaN where raw samples were not stored).
+
+    The mode has no closed-form standard error (sigma/sqrt(n) is the SE of the MEAN), so it is
+    the spread of the estimator over 400 bootstrap resamples of the timed calls.
+    """
     if 'runs' not in d:
         return np.full(len(d['N']), np.nan)
-    return np.array([np.nan if r is None else bootstrap_se(r, est) * 1000
+    return np.array([np.nan if r is None else
+                     bootstrap(r, ESTIMATORS[est], n_boot=400, seed=0).std() * 1000
                      for r in d['runs']])
 
 
@@ -317,7 +295,7 @@ def _panel(ax, res, K_values, title, max_n=None, est='mean', fit=True):
     return dropped, fits
 
 
-def plot_results(out_data, out, max_n=PLOT_MAX_N, est='mean', fit=True):
+def plot_results(out_data, out, est='mean'):
     import matplotlib
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
@@ -337,7 +315,7 @@ def plot_results(out_data, out, max_n=PLOT_MAX_N, est='mean', fit=True):
         if key not in r:
             print(f'[skip] no {key!r} results in {out_data}'); continue
         fig, ax = plt.subplots(figsize=(6, 4))
-        dropped, fits = _panel(ax, r[key], K, title, max_n=max_n, est=est, fit=fit)
+        dropped, fits = _panel(ax, r[key], K, title, max_n=PLOT_MAX_N, est=est, fit=FIT)
         fig.tight_layout()
         for ext in ('png', 'pdf'):
             fig.savefig(out / f'{name}.{ext}', dpi=200, bbox_inches='tight')
@@ -359,14 +337,11 @@ def main():
     ap.add_argument('--runs', type=int, default=30)
     ap.add_argument('--out', default=None, help='figure output dir')
     ap.add_argument('--out-data', default=None, help='benchmark results JSON')
-    ap.add_argument('--max-n', type=float, default=PLOT_MAX_N,
-                    help='upper N limit for both panels (default 1e6); 0 = no limit')
-    ap.add_argument('--no-fit', action='store_true', help='markers only, no linear fits')
     ap.add_argument('--panels', nargs='+', choices=list(PANELS), default=list(PANELS),
                     help='which panel(s) to (re)measure; results are merged into the JSON')
     ap.add_argument('--estimator', choices=list(ESTIMATORS), default='mean',
                     help='per-point statistic over the timed runs. With 500 runs/point the '
-                         'mean and the mode agree to <1%; at low run counts prefer mode, '
+                         'mean and the mode agree to <1%%; at low run counts prefer mode, '
                          'which rejects the one-sided slow outliers.')
     ap.add_argument('--account', default='mli:cider-ml',
                     help='SLURM account for --backend s3df (the ampere partition is fixed: '
@@ -378,9 +353,10 @@ def main():
     both = not (a.generate_data or a.plot_results)
     if a.generate_data or both:
         generate_data(a.backend, a.full, a.warmup, a.runs, out_data, a.account, tuple(a.panels))
+        provenance.write_run_record(out_data.parent, __file__, a)
     if (a.plot_results or both) and a.backend != 's3df':
-        plot_results(out_data, out_fig, max_n=(a.max_n or None), est=a.estimator,
-                     fit=not a.no_fit)
+        plot_results(out_data, out_fig, est=a.estimator)
+        provenance.write_run_record(out_fig, __file__, a)
 
 
 if __name__ == '__main__':

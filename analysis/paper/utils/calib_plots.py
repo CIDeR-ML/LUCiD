@@ -12,7 +12,6 @@ import matplotlib.pyplot as plt        # noqa: E402
 import matplotlib.cm as cm             # noqa: E402
 import matplotlib.patheffects as pe    # noqa: E402
 
-from analysis.paper.utils import damping   # noqa: E402  (numpy only — keeps this module plot-only)
 import matplotlib.ticker as mticker    # noqa: E402
 from matplotlib.lines import Line2D    # noqa: E402
 
@@ -41,7 +40,7 @@ def convergence(data_dir, out_dir, polyak_window=150, xzoom=100, stem="calib_con
 
     Publication style: thick lines, large fonts, descriptive y-axis labels (no panel titles,
     no suptitle). Fast panels zoomed to the first ``xzoom`` iterations; the diffuse panel keeps
-    the full range, because the diffuse pair is the only reason the run goes to 600.
+    the full range, because the diffuse pair is the only reason the run goes to 1200.
     colour = wavelength (optics) / wall-sensor (reflectivity); LINE STYLE = seed; dotted = truth.
     """
     plt.rcParams.update({"font.size": 26, "axes.labelsize": 30, "xtick.labelsize": 23,
@@ -69,7 +68,7 @@ def convergence(data_dir, out_dir, polyak_window=150, xzoom=100, stem="calib_con
 
     H = [polyak(h) for h in raw]; nseed = len(H)
     SEED_LS = ["-", "--", "-.", (0, (5, 2)), (0, (1, 1))][:max(nseed, 1)]
-    wls = list(np.asarray(fs[0]["wls"])) if "wls" in fs[0] else [337, 375, 405, 445, 473]
+    wls = list(np.asarray(fs[0]["wls"]))
     wlmap = _get_cmap("turbo"); wlcol = [wlmap(0.08 + 0.84 * i / 4) for i in range(5)]
     XZOOM = xzoom                                  # fast panels: show only where the action is
     LWT, LWTR = 4.6, 3.0                           # trajectory / truth line widths
@@ -153,7 +152,7 @@ def convergence(data_dir, out_dir, polyak_window=150, xzoom=100, stem="calib_con
 # ==========================================================================================
 # FIGURE A -- 2D loss geometry, raw descent vs Fisher-preconditioned
 # ==========================================================================================
-def loss_geometry(data_dir, out_dir, lam=0.01, mu=0.1, stem="calib_loss_geometry"):
+def loss_geometry(data_dir, out_dir, *, lam, mu, stem="calib_loss_geometry"):
     """Neyman + Fisher 2D loss-geometry figure. Data = ``landscape2d_neyman.npz``
     (single laser, scalar_mix, Neyman chi^2 loss, AD gradient, per-point Fisher/GN matrix
     F = 2 sum J^T J / Q).
@@ -169,28 +168,24 @@ def loss_geometry(data_dir, out_dir, lam=0.01, mu=0.1, stem="calib_loss_geometry
     Fxx, Fxy, Fyy = d["Fxx"], d["Fxy"], d["Fyy"]
     tx, ty, wl = float(d["truth_x"]), float(d["truth_y"]), int(d["wl"])
     XX, YY = np.meshgrid(X, Y)
-    LAM, MU = lam, mu     # the joint fit's damping (CALIB_RECIPE, and traj_2d_neyman.py)
+    LAM, MU = lam, mu     # the joint fit's damping (calibration.LANDSCAPE, and traj_2d_neyman.py)
 
-    def finv_g(fxx, fxy, fyy, gx, gy):                             # damped F^-1 g, per point
-        # Marquardt lam*diag(F) + Levenberg mu*median(diag F)*I, then a plain solve -- IDENTICAL to the
-        # step the joint fit takes, so the streamlines show the actual optimizer field and agree with
-        # the GN trajectory from traj_2d_neyman.py overlaid on them. Do not eigen-floor the inverse
-        # instead: that tilts the field away from the damped step.
-        F = np.array([[fxx, fxy], [fxy, fyy]]); g = np.array([gx, gy])
-        return damping.damped_step(F, g, LAM, MU)    # one definition, shared with traj_2d_neyman
-
-    Px = np.zeros_like(Gx); Py = np.zeros_like(Gy)
-    for i in range(X.size):
-        for j in range(Y.size):
-            Px[i, j], Py[i, j] = finv_g(Fxx[i, j], Fxy[i, j], Fyy[i, j], Gx[i, j], Gy[i, j])
+    # The damped step the joint fit takes, per point (the same function traj_2d_neyman.py steps
+    # with), so the streamlines show the actual optimizer field and agree with the GN trajectory
+    # overlaid on them. Do not eigen-floor the inverse instead: that tilts the field away from it.
+    import jax
+    from analysis.paper.utils.landscape import gauss_newton_step
+    Fs = np.stack([np.stack([Fxx, Fxy], -1), np.stack([Fxy, Fyy], -1)], -2)
+    P = np.asarray(jax.vmap(jax.vmap(lambda f, g: gauss_newton_step(f, g, LAM, MU)))(
+        Fs, np.stack([Gx, Gy], -1)), float)
+    Px, Py = P[..., 0], P[..., 1]
     # cond of Fisher at the minimum
     i0 = int(np.argmin(np.abs(X - tx))); j0 = int(np.argmin(np.abs(Y - ty)))
     ev0 = np.linalg.eigvalsh(np.array([[Fxx[i0, j0], Fxy[i0, j0]], [Fxy[i0, j0], Fyy[i0, j0]]]))
     cond = ev0.max() / max(ev0.min(), 1e-30)
 
     # --- optimization trajectories (two random starts), overlaid on top of each panel ---
-    _TPATH = os.path.join(str(data_dir), "traj2d_neyman.npz")
-    TRAJ = np.load(_TPATH) if os.path.exists(_TPATH) else None
+    TRAJ = np.load(os.path.join(str(data_dir), "traj2d_neyman.npz"))
     TCOL = ["#ff7f0e", "#ff2ec4"]                          # start 1 = orange, start 2 = magenta
 
     def _trim(p, tol=1.5):                                 # drop the jitter tail clustered at the min
@@ -219,9 +214,8 @@ def loss_geometry(data_dir, out_dir, lam=0.01, mu=0.1, stem="calib_loss_geometry
         mag = np.hypot(U, VV) + 1e-30
         a.streamplot(X, Y, U / mag, VV / mag, color="w", density=1.3, linewidth=1.5,
                      arrowsize=1.8, zorder=2)
-        if TRAJ is not None:                        # gradient descent (left), Gauss-Newton (right)
-            overlay(a, [TRAJ["gd0"], TRAJ["gd1"]] if k == 0 else [TRAJ["gn0"], TRAJ["gn1"]],
-                    label_starts=(k == 0))
+        overlay(a, [TRAJ["gd0"], TRAJ["gd1"]] if k == 0 else [TRAJ["gn0"], TRAJ["gn1"]],
+                label_starts=(k == 0))           # gradient descent (left), Gauss-Newton (right)
         a.plot(tx, ty, marker="*", ms=44, color="red", mec="k", mew=1.8, zorder=9, ls="none",
                label="truth")
         a.set(xlabel=r"scattering length  $\lambda_s$  [m]", xlim=(X.min(), X.max()),

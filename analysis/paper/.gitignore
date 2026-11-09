@@ -3,7 +3,7 @@ __pycache__/
 output/
 
 # Everything below is GENERATED — regenerate it, never commit it.
-# configs/    : written at run time by the fig_*.py scripts (via utils/studies.py)
+# configs/    : nothing writes it today (study configs go to <data-dir>/configs/)
 # geometries/ : written by utils/make_geometries.py (auto-called by fig_geometry_scan.py)
 configs/
 geometries/
