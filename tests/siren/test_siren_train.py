@@ -126,3 +126,16 @@ def test_every_shipped_emitter_records_the_nominal_recipe_with_its_seed(emitter)
     recipe = json.loads(emitter.read_text())['training']['recipe']
     assert recipe == {**json.loads(NOMINAL.read_text()), 'seed': recipe['seed']}
     Recipe.load(NOMINAL, seed=recipe['seed'])
+
+
+def test_a_table_from_the_old_builder_is_refused_before_training(table, tmp_path):
+    """An N_photons(E) fit in the old A*E^B+C form (S3DF's 2026-07-01 tables) cannot make an
+    emitter; the trainer says so at load, not after the GPU time is spent."""
+    from lucid.siren.training.dataset import PhotonSimDataset
+    with h5py.File(table, 'a') as f:
+        m = f['metadata'].attrs
+        for k in [k for k in m if k.startswith('nphot_')]:
+            del m[k]
+        m.update({'nphot_form': 'A*E^B+C', 'nphot_a': 247.3, 'nphot_b': 0.99, 'nphot_c': -3.3e4})
+    with pytest.raises(ValueError, match="'logpoly'.*Rebuild it"):
+        PhotonSimDataset(table)

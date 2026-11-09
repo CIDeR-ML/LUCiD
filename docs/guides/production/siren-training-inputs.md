@@ -78,17 +78,23 @@ the CSV again, except promotion, which checks the run against it.
 
 ## Stage 2: build the tables
 
-Each table holds every energy of the scan in memory; build it in a batch job:
+Each table holds every energy of the scan in memory; build it in a batch job. The commands here
+run this checkout's modules (`python3 -m`, with the checkout bound at `/opt/LUCiD` and first on
+`PYTHONPATH`): an image's console scripts are as old as the image.
 
 ```bash
 T=$SIREN_OUTPUT_BASE_PATH/training_inputs
-srun --partition milano --account "$SLURM_ACCOUNT" --mem 32G --time 02:00:00 \
-    apptainer exec -B "$APPTAINER_BINDS" "$LUCID_IMAGE_PATH" \
-    lucid-build-photon-table --data-dir "$T" --material water --particle mu- \
+srun --partition milano --account "$SLURM_ACCOUNT" --qos "${SLURM_QOS:-normal}" --mem 32G --time 02:00:00 \
+    apptainer exec -B "$APPTAINER_BINDS" -B "$(git rev-parse --show-toplevel):/opt/LUCiD" \
+    --env PYTHONPATH=/opt/LUCiD "$LUCID_IMAGE_PATH" \
+    /opt/conda/bin/python3 -m lucid.siren.training.photonsim_data.build_tables photon \
+        --data-dir "$T" --material water --particle mu- \
         --photonsim-dir "$PHOTONSIM_DEV_PATH" --output "$T/water/lookup_tables/muon/photon_lookup_table.h5"
 ```
 
-and `lucid-build-dedx-table` likewise into `dedx_lookup_table.h5`. Every `<E>MeV` directory under
+and `build_tables dedx` likewise into `dedx_lookup_table.h5` (`lucid-build-photon-table` and
+`lucid-build-dedx-table` are the same commands). A Cherenkov table from an older builder, with an
+`N_photons(E)` fit not in `logpoly` form, is refused by the trainer: rebuild it. Every `<E>MeV` directory under
 `<data-dir>/<material>/<particle>/` is used. Flags:
 [command-line tools](../../reference/cli.md#lucid-build-photon-table-lucid-build-dedx-table).
 After writing, the builder re-reads the table and checks the required keys, that the distance
@@ -159,8 +165,9 @@ A material without emitters of its own runs another set: `"siren": "<material>"`
 ## Stage 6: validate
 
 ```bash
-srun --partition milano --account "$SLURM_ACCOUNT" --mem 32G --time 01:00:00 \
-    apptainer exec -B "$APPTAINER_BINDS" -B "$(git rev-parse --show-toplevel):/opt/LUCiD" "$LUCID_IMAGE_PATH" \
+srun --partition milano --account "$SLURM_ACCOUNT" --qos "${SLURM_QOS:-normal}" --mem 32G --time 01:00:00 \
+    apptainer exec -B "$APPTAINER_BINDS" -B "$(git rev-parse --show-toplevel):/opt/LUCiD" \
+    --env PYTHONPATH=/opt/LUCiD "$LUCID_IMAGE_PATH" \
     /opt/conda/bin/python3 -m lucid.siren.training.validate all --material water --particle muon \
         --h5-path $SIREN_OUTPUT_BASE_PATH/training_inputs/water/lookup_tables/muon/photon_lookup_table.h5 --save
 ```
@@ -180,7 +187,7 @@ them, or pass the paths to stage 2 and 5. Each shipped `emitter.json` names its 
 |---|---|
 | 0 | `smax_parametrization/water/{mu-,e-}/<E>MeV/` |
 | 1 | `training_inputs/water/{mu-,e-}/<E>MeV/photonsim.root` |
-| 2 | `training_inputs/water/lookup_tables/{muon,electron}/{photon,dedx}_lookup_table.h5` (rebuilt 2026-07-01, after the shipped emitters were trained) |
+| 2 | `training_inputs/water/lookup_tables/{muon,electron}/{photon,dedx}_lookup_table.h5` (rebuilt 2026-07-01, after the shipped emitters were trained; their `N_photons(E)` fit predates the `logpoly` form, so rebuild them before training) |
 | 3 | `t0_parametrization/water/mu-/timing_parameters.json`, `t0_parametrization/water/e-/inputs/timing_parameters.json` (inputs: links into stage 1) |
 | 4 | `training_tests/<scan>/seed<N>/` |
 

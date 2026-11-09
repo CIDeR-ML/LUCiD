@@ -633,8 +633,11 @@ def main_dedx(argv: Optional[List[str]] = None) -> int:
 
 
 if __name__ == "__main__":
-    # `python -m lucid.siren.training.photonsim_data.build_tables --kind photon ...`
-    raise SystemExit(
-        "Invoke via the console scripts `lucid-build-photon-table` or "
-        "`lucid-build-dedx-table`."
-    )
+    # `python -m lucid.siren.training.photonsim_data.build_tables photon|dedx <flags>`: the
+    # same as the two console scripts, for an image whose scripts are older than the checkout.
+    import sys
+    kinds = {"photon": main_photon, "dedx": main_dedx}
+    if len(sys.argv) < 2 or sys.argv[1] not in kinds:
+        raise SystemExit("usage: python -m lucid.siren.training.photonsim_data.build_tables "
+                         "photon|dedx <flags>  (or lucid-build-photon-table / lucid-build-dedx-table)")
+    raise SystemExit(kinds[sys.argv[1]](sys.argv[2:]))

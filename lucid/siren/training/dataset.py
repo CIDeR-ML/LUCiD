@@ -162,6 +162,15 @@ class PhotonSimDataset:
         # Store metadata
         self.metadata = metadata
         self.kind = 'dedx' if self.table_type == 'dedx' else 'cherenkov'      # the emitter kind
+        if self.kind == 'cherenkov':
+            # The emitter's N_photons(E) is the table's fit; check it before any training, not
+            # when the finished run is written.
+            form = _attr(metadata.get('nphot_form', b''))
+            if form != 'logpoly':
+                raise ValueError(
+                    f"{self.data_path}: its N_photons(E) fit has form {form!r}, but an emitter needs "
+                    "'logpoly'; the table predates the current builder. Rebuild it with "
+                    "lucid-build-photon-table (stage 2).")
         self.energy_range = (energy_centers.min(), energy_centers.max())
         self.distance_range = (distance_centers.min(), distance_centers.max())
         # The input domain (bin-centre ranges): the emitter's normalisation bounds.
