@@ -125,3 +125,39 @@ def test_manifest_rows_are_well_formed(manifest):
         assert re.fullmatch(r'[0-9a-f]{64}', digest), row
         assert not path.startswith('/') and '..' not in path.split('/'), row
     assert len({path for _, path in rows}) == len(rows)
+
+
+def _module():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location('download_data', REPO / 'scripts' / 'download_data.py')
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_fetch_retries_a_server_error_and_not_a_missing_release(monkeypatch, tmp_path):
+    """A 504 (GitHub's release downloads give some) is retried; a 404 fails at once."""
+    import urllib.error
+    mod = _module()
+    calls = []
+
+    def flaky(link, dest):
+        calls.append(link)
+        if len(calls) < 3:
+            raise urllib.error.HTTPError(link, 504, 'Gateway Time-out', None, None)
+        dest.write_bytes(b'ok')
+
+    monkeypatch.setattr(mod.urllib.request, 'urlretrieve', flaky)
+    monkeypatch.setattr(mod.time, 'sleep', lambda s: None)
+    mod.fetch('https://example/x', tmp_path / 'x')
+    assert len(calls) == 3 and (tmp_path / 'x').read_bytes() == b'ok'
+
+    def missing(link, dest):
+        calls.append(link)
+        raise urllib.error.HTTPError(link, 404, 'Not Found', None, None)
+
+    calls.clear()
+    monkeypatch.setattr(mod.urllib.request, 'urlretrieve', missing)
+    with pytest.raises(urllib.error.HTTPError):
+        mod.fetch('https://example/y', tmp_path / 'y')
+    assert len(calls) == 1

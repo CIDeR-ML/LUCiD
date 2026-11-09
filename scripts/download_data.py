@@ -24,6 +24,8 @@ import shutil
 import sys
 import tarfile
 import tempfile
+import time
+import urllib.error
 import urllib.request
 import zlib
 from pathlib import Path
@@ -49,6 +51,28 @@ def target(rel, release=RELEASE):
     if release == PAPER_RELEASE:
         return PAPER_DATA / rel
     return (REPO if rel.startswith(TABLES) else DATA) / rel
+
+
+def fetch(link, dest, attempts=6, wait=2.0):
+    """Download ``link`` to ``dest``, retrying a server error or a dropped connection.
+
+    GitHub's release downloads answer 504 to a share of requests at times; each retry waits twice
+    as long as the last. A client error (404: the release is not there) is not retried.
+    """
+    for i in range(attempts):
+        try:
+            urllib.request.urlretrieve(link, dest)
+            return
+        except urllib.error.HTTPError as err:
+            if err.code < 500 or i == attempts - 1:
+                raise
+            reason = f'HTTP {err.code}'
+        except (urllib.error.URLError, ConnectionError, TimeoutError) as err:
+            if i == attempts - 1:
+                raise
+            reason = str(getattr(err, 'reason', err))
+        print(f'  {reason}; retrying in {wait * 2 ** i:.0f} s', file=sys.stderr)
+        time.sleep(wait * 2 ** i)
 
 
 def read_manifest(path):
@@ -139,7 +163,7 @@ def main(argv=None):
         else:
             with tempfile.TemporaryDirectory(dir=DATA, prefix='.download-') as tmp:
                 print(f'fetching {url(release)}')
-                urllib.request.urlretrieve(url(release), Path(tmp) / asset)
+                fetch(url(release), Path(tmp) / asset)
                 install(Path(tmp) / asset, todo, release)
     except (OSError, EOFError, ValueError, tarfile.TarError, zlib.error) as err:
         print(f'error: {err}; nothing was installed', file=sys.stderr)
